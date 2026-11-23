@@ -102,7 +102,8 @@ const addRoom = (state: SfuState, id: string): Room => {
     workerPid: null,
     router: router as unknown as Router,
   });
-  room.hostUserKey = HOST;
+  room.grantHost(HOST, "fallback");
+  room.makePrimaryHost(HOST);
   state.rooms.set(room.channelId, room);
   return room;
 };

@@ -883,35 +883,19 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         const hostsUnclaimedRoom = isAdminJoin && room.awaitingOpener !== null;
         if (hostsUnclaimedRoom) room.awaitingOpener = null;
         if (isAdminJoin) {
-          room.registerAdminUserKey(userKey);
+          room.grantHost(
+            userKey,
+            isCodeOwner
+              ? "owner"
+              : hostRequested && (clientPolicy.allowHostJoin || forcedHostJoin)
+                ? "promoted"
+                : "fallback",
+          );
+          if (!room.hostUserKey) room.makePrimaryHost(userKey);
         }
-        if (isAdminJoin && !room.hostUserKey) {
-          room.hostUserKey = userKey;
-        }
-        // Someone who hosts only because they opened the room (or took it
-        // once a lost call's time ran out) while the code's owner was away
-        // holds a temporary seat. A recorded host or co-host does not.
-        if (
-          isAdminJoin &&
-          !isCodeOwner &&
-          room.ownerEmail &&
-          !isReturningPrimaryHost &&
-          !isPersistedAdminForExistingRoom &&
-          (createdRoom || restorerState === "lapsed")
-        ) {
-          room.temporaryHostUserKey = userKey;
-        }
-        // The owner is back: it hosts, and the temporary seat, if any, goes
-        // back to being a participant's, once. A block or removal of the
-        // owner does not hold against it.
         let demotedForOwner: Client[] = [];
         if (isAdminJoin && isCodeOwner) {
-          const temporary = room.temporaryHostUserKey;
-          room.temporaryHostUserKey = null;
-          if (temporary && temporary !== userKey) {
-            demotedForOwner = room.demoteToParticipant(temporary);
-          }
-          room.hostUserKey = userKey;
+          demotedForOwner = room.welcomeOwner(userKey);
           if (room.isBlocked(userKey) || room.needsReadmission(userKey)) {
             room.allowLockedUser(userKey);
           }

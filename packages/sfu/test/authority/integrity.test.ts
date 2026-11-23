@@ -355,7 +355,7 @@ describe("a replacement that arrives in parts", () => {
     });
     const hostTab = await room.open(host, probeContract);
     const raviTab = await room.open(ravi, probeContract);
-    room.room.promoteClientToAdmin(raviTab.seat.id);
+    room.room.promoteClientToAdmin(raviTab.seat.id, "promoted");
     for (let index = 0; index < 5; index += 1) {
       await hostTab.act("put", { id: `n${index}`, text: `${index}`.repeat(200) });
     }

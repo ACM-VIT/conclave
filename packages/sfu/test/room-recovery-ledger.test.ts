@@ -2,8 +2,10 @@ import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { HostReason } from "../config/classes/Room.js";
 import {
   createFileRoomRecoveryStore,
+  createMemoryRoomRecoveryStore,
   createRoomRecoveryLedger,
 } from "../server/roomRecoveryLedger.js";
 import { Logger } from "../utilities/loggers.js";
@@ -17,7 +19,10 @@ const room = {
   incarnationId: "room-1",
   takesOverRecordOf: null,
   ownerEmail: null,
-  temporaryHostUserKey: null,
+  hostReasons: new Map<string, HostReason>([
+    ["host@example.com", "opener"],
+    ["guest-cohost", "cohost"],
+  ]),
   hostUserKey: "host@example.com",
   adminUserKeys: new Set(["host@example.com", "guest-cohost"]),
   usersNeedingReadmission: ["guest-removed"],
@@ -46,14 +51,35 @@ describe("what the SFU remembers about a room across a restart", () => {
       lost: {
         hostUserKey: "host@example.com",
         adminUserKeys: ["host@example.com", "guest-cohost"],
+        coHostUserKeys: ["guest-cohost"],
         readmissionRequiredUserKeys: ["guest-removed"],
-        temporaryHostUserKey: null,
         claimableUntil: Date.now() + 7 * MINUTE_MS,
       },
       passesVoidUntil: null,
       lastWriter: "room-1",
       owner: GUEST_MADE,
     });
+  });
+
+  it("takes every host but the temporary one as a co-host in a record an earlier build wrote", async () => {
+    const store = createMemoryRoomRecoveryStore();
+    await store.write(
+      CHANNEL,
+      {
+        liveAt: Date.now(),
+        hostUserKey: "guest-opener",
+        adminUserKeys: ["guest-opener", "guest-cohost"],
+        readmissionRequiredUserKeys: [],
+        overAt: null,
+        writer: "earlier-build",
+        ownerEmail: "owner@example.com",
+        temporaryHostUserKey: "guest-opener",
+      } as unknown as Parameters<typeof store.write>[1],
+      null,
+    );
+
+    const recalled = await createRoomRecoveryLedger(store).recall(CHANNEL);
+    expect(recalled.lost?.coHostUserKeys).toEqual(["guest-cohost"]);
   });
 
   it("knows nothing of a code that never had a room", async () => {

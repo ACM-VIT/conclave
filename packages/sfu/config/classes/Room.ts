@@ -204,30 +204,15 @@ const verifyInviteCodeHash = (
   return timingSafeEqual(expected, candidate);
 };
 
-class ObservedSet<T> extends Set<T> {
-  constructor(private readonly changed: () => void) {
-    super();
-  }
+export type HostReason = "owner" | "cohost" | "temporary" | "opener";
+export type HostBasis = "owner" | "promoted" | "fallback";
 
-  add(value: T): this {
-    const isNew = !this.has(value);
-    super.add(value);
-    if (isNew) this.changed();
-    return this;
-  }
-
-  delete(value: T): boolean {
-    const removed = super.delete(value);
-    if (removed) this.changed();
-    return removed;
-  }
-
-  clear(): void {
-    const hadAny = this.size > 0;
-    super.clear();
-    if (hadAny) this.changed();
-  }
-}
+const HOST_REASON_RANK: Record<HostReason, number> = {
+  opener: 0,
+  temporary: 0,
+  cohost: 1,
+  owner: 2,
+};
 
 /**
  * `membership`: a seat was added, removed, replaced or promoted.
@@ -251,19 +236,6 @@ export class Room {
   // The signed-in account this room's code belongs to (who booked it, or who
   // made it), which hosts whenever it is here. Null for a code a guest made.
   public ownerEmail: string | null = null;
-  // Someone who hosts only because they opened the room while its owner was
-  // away. The owner takes that seat back when it arrives, once. Written to
-  // the recovery record with the hosts, so a restart does not make it a
-  // seat of their own.
-  private temporaryHost: string | null = null;
-  get temporaryHostUserKey(): string | null {
-    return this.temporaryHost;
-  }
-  set temporaryHostUserKey(userKey: string | null) {
-    if (this.temporaryHost === userKey) return;
-    this.temporaryHost = userKey;
-    this.onRecoverableChange?.();
-  }
   // Set when this code was ended for everyone a moment ago: recovery passes
   // signed up to then are from the ended meeting, not from this one.
   public recoveryPassesVoidUntil: number | null = null;
@@ -283,11 +255,7 @@ export class Room {
   public currentScreenShareProducerId: string | null = null;
   public currentQuality: VideoQuality = "standard";
   public userKeysById: Map<string, string> = new Map();
-  // Who hosts is written to the recovery ledger the moment it changes, so
-  // every change has to be seen: the set and `hostUserKey` both report it.
-  public readonly adminUserKeys: Set<string> = new ObservedSet<string>(() =>
-    this.onRecoverableChange?.(),
-  );
+  private readonly hostReasonsByKey = new Map<string, HostReason>();
   public displayNamesByKey: Map<string, string> = new Map();
   public handRaisedByUserId: Set<string> = new Set();
   private recentChatMessages: ChatMessage[] = [];
@@ -2010,8 +1978,54 @@ export class Room {
     return userIds;
   }
 
-  registerAdminUserKey(userKey: string): void {
-    this.adminUserKeys.add(userKey);
+  get adminUserKeys(): ReadonlySet<string> {
+    return new Set(this.hostReasonsByKey.keys());
+  }
+
+  get hostReasons(): ReadonlyMap<string, HostReason> {
+    return new Map(this.hostReasonsByKey);
+  }
+
+  hostReasonOf(userKey: string): HostReason | null {
+    return this.hostReasonsByKey.get(userKey) ?? null;
+  }
+
+  private hostReasonFor(userKey: string, basis: HostBasis): HostReason {
+    if (basis === "owner" || (this.ownerEmail !== null && userKey === this.ownerEmail)) {
+      return "owner";
+    }
+    if (basis === "promoted") return "cohost";
+    return this.ownerEmail ? "temporary" : "opener";
+  }
+
+  grantHost(userKey: string, basis: HostBasis): void {
+    const reason = this.hostReasonFor(userKey, basis);
+    const held = this.hostReasonsByKey.get(userKey);
+    if (held && HOST_REASON_RANK[held] >= HOST_REASON_RANK[reason]) return;
+    this.hostReasonsByKey.set(userKey, reason);
+    this.onRecoverableChange?.();
+  }
+
+  makePrimaryHost(userKey: string): void {
+    if (!this.hostReasonsByKey.has(userKey) || this.primaryHostUserKey === userKey) return;
+    this.primaryHostUserKey = userKey;
+    this.onRecoverableChange?.();
+  }
+
+  private revokeHost(userKey: string): void {
+    const held = this.hostReasonsByKey.delete(userKey);
+    const primary = this.primaryHostUserKey === userKey;
+    if (primary) this.primaryHostUserKey = null;
+    if (held || primary) this.onRecoverableChange?.();
+  }
+
+  welcomeOwner(ownerKey: string): Client[] {
+    const demoted: Client[] = [];
+    for (const [userKey, reason] of [...this.hostReasonsByKey]) {
+      if (reason === "temporary") demoted.push(...this.demoteToParticipant(userKey));
+    }
+    this.makePrimaryHost(ownerKey);
+    return demoted;
   }
 
   // Someone who is in this meeting, hosts it, or was let in. Only they may
@@ -2020,7 +2034,7 @@ export class Room {
     if (this.blockedUsers.has(userKey)) return false;
     if (
       this.hostUserKey === userKey ||
-      this.adminUserKeys.has(userKey) ||
+      this.hostReasonsByKey.has(userKey) ||
       this.allowedUsers.has(userKey) ||
       this.lockedAllowedUsers.has(userKey)
     ) {
@@ -2033,10 +2047,10 @@ export class Room {
   }
 
   isAdminUserKey(userKey: string): boolean {
-    return this.adminUserKeys.has(userKey);
+    return this.hostReasonsByKey.has(userKey);
   }
 
-  promoteClientToAdmin(userId: string): Admin | null {
+  promoteClientToAdmin(userId: string, basis: Exclude<HostBasis, "owner">): Admin | null {
     const client = this.clients.get(userId);
     if (!client || client.isWebinarAttendee) {
       return null;
@@ -2045,11 +2059,7 @@ export class Room {
       Object.setPrototypeOf(client, Admin.prototype);
     }
     const userKey = this.userKeysById.get(userId);
-    if (userKey) {
-      this.adminUserKeys.add(userKey);
-      // A host who promotes them makes them a host in their own right.
-      if (this.temporaryHostUserKey === userKey) this.temporaryHostUserKey = null;
-    }
+    if (userKey) this.grantHost(userKey, basis);
     this.notifyLifecycle("membership");
     return client as Admin;
   }
@@ -2560,7 +2570,8 @@ export class Room {
       this.router.close();
     }
     this.userKeysById.clear();
-    this.adminUserKeys.clear();
+    this.hostReasonsByKey.clear();
+    this.primaryHostUserKey = null;
     this.displayNamesByKey.clear();
     this.blockedUsers.clear();
     this.webinarActiveSpeakerUserId = null;
@@ -2701,12 +2712,6 @@ export class Room {
     return this.primaryHostUserKey;
   }
 
-  set hostUserKey(userKey: string | null) {
-    if (userKey === this.primaryHostUserKey) return;
-    this.primaryHostUserKey = userKey;
-    this.onRecoverableChange?.();
-  }
-
   markEnded() {
     this.endedForEveryone = true;
   }
@@ -2764,9 +2769,8 @@ export class Room {
     this.lostCallEnded = true;
     const report = this.onRecoverableChange;
     this.onRecoverableChange = null;
-    this.hostUserKey = null;
-    this.adminUserKeys.clear();
-    this.temporaryHostUserKey = null;
+    this.primaryHostUserKey = null;
+    this.hostReasonsByKey.clear();
     this.readmissionRequiredUserKeys.clear();
     this.blockedUsers.clear();
     this.onRecoverableChange = report;
@@ -2784,28 +2788,18 @@ export class Room {
   // Puts back what the ledger held of the call this room recreates: who has
   // to be let in again, then its hosts, less anyone among those. It reports
   // nothing: none of this is news to the ledger.
-  restoreLostCall(lost: {
-    hostUserKey: string | null;
-    adminUserKeys: string[];
-    readmissionRequiredUserKeys: string[];
-    temporaryHostUserKey: string | null;
-  }) {
+  restoreLostCall(lost: LostRoom) {
     const report = this.onRecoverableChange;
     this.onRecoverableChange = null;
     for (const userKey of lost.readmissionRequiredUserKeys) {
       this.readmissionRequiredUserKeys.add(userKey);
     }
-    const mayHost = (userKey: string) => !this.needsReadmission(userKey);
-    this.hostUserKey =
-      lost.hostUserKey && mayHost(lost.hostUserKey) ? lost.hostUserKey : null;
-    for (const userKey of lost.adminUserKeys.filter(mayHost)) {
-      this.adminUserKeys.add(userKey);
+    const coHosts = new Set(lost.coHostUserKeys);
+    for (const userKey of lost.adminUserKeys) {
+      if (this.needsReadmission(userKey)) continue;
+      this.grantHost(userKey, coHosts.has(userKey) ? "promoted" : "fallback");
     }
-    const temporary = lost.temporaryHostUserKey;
-    this.temporaryHostUserKey =
-      temporary && (this.hostUserKey === temporary || this.adminUserKeys.has(temporary))
-        ? temporary
-        : null;
+    if (lost.hostUserKey) this.makePrimaryHost(lost.hostUserKey);
     this.onRecoverableChange = report;
   }
 
@@ -2844,9 +2838,7 @@ export class Room {
     this.setReadmissionRequired(userKey, true);
     this.allowedUsers.delete(userKey);
     this.lockedAllowedUsers.delete(userKey);
-    this.adminUserKeys.delete(userKey);
-    if (this.hostUserKey === userKey) this.hostUserKey = null;
-    if (this.temporaryHostUserKey === userKey) this.temporaryHostUserKey = null;
+    this.revokeHost(userKey);
     this.webinarPromotedUserKeys.delete(userKey);
   }
 
@@ -2871,8 +2863,7 @@ export class Room {
   // stay in it as admitted participants. Returns those who had them.
   demoteToParticipant(userKey: string): Client[] {
     this.keepAdmitted(userKey);
-    this.adminUserKeys.delete(userKey);
-    if (this.hostUserKey === userKey) this.hostUserKey = null;
+    this.revokeHost(userKey);
     const demoted: Client[] = [];
     for (const [userId, key] of this.userKeysById) {
       const client = this.clients.get(userId);

@@ -43,9 +43,8 @@ export type RoomRecoveryRecord = {
   // The signed-in account the code belongs to, which hosts whenever it is
   // there. Null for a code a guest made. Kept when a meeting is over.
   ownerEmail: string | null;
-  // A host who holds the seat only because they opened the room while its
-  // owner was away (Room.temporaryHostUserKey). Null when there is none.
   temporaryHostUserKey: string | null;
+  coHostUserKeys: string[];
 };
 
 /**
@@ -69,8 +68,8 @@ export type RoomRecoveryStore = {
 export type LostRoom = {
   hostUserKey: string | null;
   adminUserKeys: string[];
+  coHostUserKeys: string[];
   readmissionRequiredUserKeys: string[];
-  temporaryHostUserKey: string | null;
   // After this no pass from the lost call can still be good, so the room is
   // anyone's to open again.
   claimableUntil: number;
@@ -95,7 +94,7 @@ type LedgerRoom = Pick<
   | "adminUserKeys"
   | "usersNeedingReadmission"
   | "recoveryPassesVoidUntil"
-  | "temporaryHostUserKey"
+  | "hostReasons"
 >;
 
 export type RoomRecoveryLedger = {
@@ -121,6 +120,7 @@ const parseRoomRecoveryRecord = (raw: unknown): RoomRecoveryRecord | null => {
     writer,
     ownerEmail,
     temporaryHostUserKey = null,
+    coHostUserKeys,
   } = raw as Record<string, unknown>;
   if (liveAt !== null && typeof liveAt !== "number") return null;
   if (overAt !== null && typeof overAt !== "number") return null;
@@ -132,6 +132,7 @@ const parseRoomRecoveryRecord = (raw: unknown): RoomRecoveryRecord | null => {
   if (hostUserKey !== null && typeof hostUserKey !== "string") return null;
   if (!isStringList(adminUserKeys)) return null;
   if (!isStringList(readmissionRequiredUserKeys)) return null;
+  if (coHostUserKeys !== undefined && !isStringList(coHostUserKeys)) return null;
   return {
     liveAt,
     hostUserKey,
@@ -141,6 +142,8 @@ const parseRoomRecoveryRecord = (raw: unknown): RoomRecoveryRecord | null => {
     writer,
     ownerEmail,
     temporaryHostUserKey,
+    coHostUserKeys:
+      coHostUserKeys ?? adminUserKeys.filter((userKey) => userKey !== temporaryHostUserKey),
   };
 };
 
@@ -269,7 +272,11 @@ export const createRoomRecoveryLedger = (
         overAt: stillVoids(room.recoveryPassesVoidUntil),
         writer: room.incarnationId,
         ownerEmail: room.ownerEmail,
-        temporaryHostUserKey: room.temporaryHostUserKey,
+        temporaryHostUserKey:
+          [...room.hostReasons].find(([, reason]) => reason === "temporary")?.[0] ?? null,
+        coHostUserKeys: [...room.hostReasons]
+          .filter(([, reason]) => reason === "cohost")
+          .map(([userKey]) => userKey),
       }),
     noteOver: (room) => {
       save(room, {
@@ -281,6 +288,7 @@ export const createRoomRecoveryLedger = (
         writer: room.incarnationId,
         ownerEmail: room.ownerEmail,
         temporaryHostUserKey: null,
+        coHostUserKeys: [],
       });
       noteFinished(room.incarnationId);
     },
@@ -298,8 +306,8 @@ export const createRoomRecoveryLedger = (
             ? {
                 hostUserKey: record.hostUserKey,
                 adminUserKeys: record.adminUserKeys,
+                coHostUserKeys: record.coHostUserKeys,
                 readmissionRequiredUserKeys: record.readmissionRequiredUserKeys,
-                temporaryHostUserKey: record.temporaryHostUserKey,
                 claimableUntil: liveAt + LOST_ROOM_WINDOW_MS,
               }
             : null,

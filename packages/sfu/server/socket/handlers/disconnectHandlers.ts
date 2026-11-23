@@ -19,7 +19,7 @@ const promoteNextAdmin = (room: Room): Admin | null => {
     if (client instanceof Admin || client.isObserver) {
       continue;
     }
-    const promoted = room.promoteClientToAdmin(client.id);
+    const promoted = room.promoteClientToAdmin(client.id, "fallback");
     if (promoted) {
       return promoted;
     }

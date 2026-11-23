@@ -122,7 +122,8 @@ describe("host roster on join", () => {
     state.rooms.set(room.channelId, room);
     const host = new Admin({ id: "host#h", socket: makeSocket("host-socket").socket });
     room.setUserIdentity(host.id, "host", "Host");
-    room.hostUserKey = "host";
+    room.grantHost("host", "fallback");
+    room.makePrimaryHost("host");
     room.addClient(host);
     broadcast.mockClear();
 
@@ -170,7 +171,8 @@ describe("host roster on join", () => {
       socket: makeSocket("first-host").socket,
     });
     room.setUserIdentity(first.id, "alice", "Alice");
-    room.hostUserKey = "alice";
+    room.grantHost("alice", "fallback");
+    room.makePrimaryHost("alice");
     room.addClient(first);
     const fallback = await join(state, "fallback-host", {
       userId: "bob", clientId: "conclave", sessionId: "b", isForcedHost: true,
@@ -220,7 +222,8 @@ describe("reconnect grace timer", () => {
     state.rooms.set(room.channelId, room);
     const host = new Admin({ id: "host#h", socket: makeSocket("host-socket").socket });
     room.setUserIdentity(host.id, "host@example.com", "Host");
-    room.hostUserKey = "host@example.com";
+    room.grantHost("host@example.com", "fallback");
+    room.makePrimaryHost("host@example.com");
     room.addClient(host);
     const oldSocket = makeSocket("old-guest-socket").socket;
     (oldSocket as { connected: boolean }).connected = false;

@@ -59,7 +59,8 @@ const setup = () => {
   const seat = new Client({ id: "guest-in#s", socket: { id: "s" } as Socket });
   room.setUserIdentity(seat.id, "guest-in", "In");
   room.addClient(seat);
-  room.hostUserKey = "host@example.com";
+  room.grantHost("host@example.com", "fallback");
+  room.makePrimaryHost("host@example.com");
   room.allowLockedUser("guest-admitted");
   return state;
 };

@@ -293,8 +293,8 @@ describe("kick and admission", () => {
 
   it("revokes a kicked host's retained host rights and stage invite", () => {
     const h = makeHarness({ targetClaims: {}, targetAdmin: true });
-    h.room.registerAdminUserKey("admin@example.com");
-    h.room.hostUserKey = "admin@example.com";
+    h.room.grantHost("admin@example.com", "promoted");
+    h.room.makePrimaryHost("admin@example.com");
     h.room.promoteWebinarUserKey("admin@example.com");
     expect(h.invoke("kickUser", { userId: "target" })).toHaveBeenCalledWith({ success: true });
     expect(h.room.isAdminUserKey("admin@example.com")).toBe(false);

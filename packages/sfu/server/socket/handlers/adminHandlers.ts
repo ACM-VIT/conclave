@@ -716,7 +716,7 @@ export const registerAdminHandlers = (
     }
 
     const alreadyAdmin = targetClient instanceof Admin;
-    const promoted = currentRoom.promoteClientToAdmin(normalizedTargetId);
+    const promoted = currentRoom.promoteClientToAdmin(normalizedTargetId, "promoted");
     if (!promoted) {
       respond(cb, { error: "Failed to promote user" });
       return;
@@ -778,13 +778,13 @@ export const registerAdminHandlers = (
     }
 
     const alreadyAdmin = targetClient instanceof Admin;
-    const promoted = currentRoom.promoteClientToAdmin(normalizedTargetId);
+    const promoted = currentRoom.promoteClientToAdmin(normalizedTargetId, "promoted");
     if (!promoted) {
       respond(cb, { error: "Failed to promote user" });
       return;
     }
 
-    currentRoom.hostUserKey = targetUserKey;
+    currentRoom.makePrimaryHost(targetUserKey);
 
     if (!alreadyAdmin) {
       activatePromotedAdmin(context, promoted, currentRoom.id);

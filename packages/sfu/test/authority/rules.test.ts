@@ -149,7 +149,7 @@ describe("polls", () => {
     ).toEqual([true, 1]);
 
     // Promotion: the same seat, a new audience, a fresh view.
-    room.room.promoteClientToAdmin(raviTab.seat.id);
+    room.room.promoteClientToAdmin(raviTab.seat.id, "promoted");
     await room.deliver();
     expect(
       at(raviTab.row("polls", pollId), "results", "voterCount"),
