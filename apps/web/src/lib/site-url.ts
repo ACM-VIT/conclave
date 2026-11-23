@@ -47,3 +47,12 @@ export const getAuthBaseUrl = (): string =>
       process.env.VERCEL_URL,
     ),
   ) ?? defaultSiteUrl;
+
+export const getMeetingLinkHosts = (): string[] => {
+  const hosts = new Set([
+    new URL(DEFAULT_PRODUCTION_SITE_URL).host,
+    new URL(getPublicSiteUrl()).host,
+  ]);
+  if (typeof window !== "undefined") hosts.add(window.location.host);
+  return [...hosts];
+};

@@ -1,96 +1,169 @@
 import { describe, expect, it } from "vitest";
-import { parseCodeFieldPaste } from "../src/app/lib/utils";
+import { parseCodeFieldPaste, sanitizeRoomCode } from "../src/app/lib/utils";
+
+const KNOWN_HOSTS = ["conclave.acmvit.in", "localhost:3615"];
+
+const parse = (text: string) => parseCodeFieldPaste(text, KNOWN_HOSTS);
 
 const linkCode = (text: string) => {
-  const paste = parseCodeFieldPaste(text);
+  const paste = parse(text);
   return paste?.kind === "replace" ? paste.code : null;
 };
 
+const APP_PAGES = new Set([
+  "null",
+  "undefined",
+  "delete-account",
+  "privacy",
+  "schedule",
+  "sfu-admin",
+  "sign-in",
+]);
+
+const expectedReplacement = (text: string): string | null => {
+  const trimmed = text.trim();
+  const scheme = /^https?:\/\//i.exec(trimmed);
+  const rest = scheme ? trimmed.slice(scheme[0].length) : trimmed;
+  const slash = rest.indexOf("/");
+  if (slash <= 0) return null;
+  const host = rest.slice(0, slash);
+  if (!scheme && !KNOWN_HOSTS.includes(host.toLowerCase())) return null;
+  const path = rest.slice(slash).split(/[?#]/)[0];
+  const segment = /^\/([^/]+)\/?$/.exec(path)?.[1];
+  if (!segment) return null;
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(segment);
+  } catch {
+    return null;
+  }
+  if (!/^[a-z0-9-]+$/i.test(decoded)) return null;
+  const code = decoded.toLowerCase();
+  return !APP_PAGES.has(code) && sanitizeRoomCode(code) === code ? code : null;
+};
+
+const seededRandom = (seed: number) => () => {
+  seed = (seed * 1103515245 + 12345) % 2147483648;
+  return seed / 2147483648;
+};
+
+const PIECES = [
+  "11", "23", "2026", "11/23", "2026/11/23", "11/23/2026", "1/2", "100/abc",
+  "10.0.0.1", "127.0.0.1:3005", "999.999.999.999", "[::1]", "[:::]",
+  "m\u00fcnchen.example", "xn--mnchen-3ya.example", "meet.example", "conclave.app",
+  "conclave.acmvit.in", "Conclave.ACMVIT.in", "localhost:3615", "localhost:3005", "localhost",
+  "abc-defg-hij", "WXYZ", "new-", "-abc", "sign-in", "null", "w",
+  "%2F", "%41bc", "%E0%A4%A", "%2e%2e",
+  " ", "  ", "\n", "\t",
+  "http:", "https:", "http:/", "https://", "http://", "//", "www.", "javascript:", "mailto:",
+  "/", "/", "/", "?", "#", ".", "..", ":", "@", "\\", "?ref=chat", "#top",
+  "\u212A",
+];
+
+const SCHEMES = ["", "", "", "https://", "http://", "HTTPS://", "//", "http:/", "javascript:", "ftp://", " "];
+const HOSTS = [
+  "conclave.acmvit.in", "Conclave.ACMVIT.in", "localhost:3615", "localhost:3005", "localhost",
+  "11", "2026", "10.0.0.1", "127.0.0.1:3005", "[::1]", "m\u00fcnchen.example", "meet.example",
+  "conclave.app", "999.999.999.999", "user@meet.example", "", " ",
+];
+const SEGMENTS = [
+  "abc-defg-hij", "23", "WXYZ", "sign-in", "null", "w/public-slug", "abc%2Ddefg", "%2F", "%E0%A4%A",
+  "", "abc--defg", "\u212A-abc", "abc_defg", "a b",
+];
+const SUFFIXES = ["", "", "", "/", "?ref=chat", "#top", "//", " ", "\\", "\n"];
+
 describe("pasting into the join code field", () => {
-  it("keeps the room code from a full link", () => {
+  it("replaces the field with the code from an explicit http or https link", () => {
     expect(linkCode("https://meet.example.com/abc-defg-hij")).toBe("abc-defg-hij");
     expect(linkCode("http://localhost:3005/abc-defg-hij/")).toBe("abc-defg-hij");
-    expect(linkCode("//meet.example.com/abc-defg-hij")).toBe("abc-defg-hij");
-    expect(linkCode("  HTTPS://Meet.Example.com/Abc-Defg-Hij  ")).toBe(
-      "abc-defg-hij",
-    );
-  });
-
-  it("ignores the query and hash", () => {
-    expect(linkCode("https://meet.example.com/abc-defg-hij?ref=chat#top")).toBe(
-      "abc-defg-hij",
-    );
-  });
-
-  it("accepts a link without a scheme", () => {
-    expect(linkCode("conclave.app/abc-defg-hij?ref=chat")).toBe("abc-defg-hij");
-    expect(linkCode("localhost:3005/abc-defg-hij")).toBe("abc-defg-hij");
-    expect(linkCode("[::1]/abc-defg-hij")).toBe("abc-defg-hij");
-    expect(linkCode("[::1]:3005/abc-defg-hij")).toBe("abc-defg-hij");
-    expect(linkCode("/abc-defg-hij")).toBe("abc-defg-hij");
-  });
-
-  it("decodes the code once", () => {
-    expect(linkCode("conclave.app/abc%2Ddefg")).toBe("abc-defg");
-    expect(linkCode("conclave.app/abc%2Fdefg")).toBeNull();
-    expect(linkCode("conclave.app/abc%E0%A4%A")).toBeNull();
-  });
-
-  it("finds no code in a link that has none", () => {
-    expect(linkCode("https://meet.example.com/")).toBeNull();
-    expect(linkCode("conclave.app/")).toBeNull();
-    expect(linkCode("conclave.app/?code=abc-defg-hij")).toBeNull();
-  });
-
-  it("finds no code in a link to another page", () => {
-    expect(linkCode("https://meet.example.com/w/public-slug")).toBeNull();
-    expect(linkCode("https://meet.example.com/w/%2e%2e/abc-defg-hij")).toBeNull();
-    expect(linkCode("https://meet.example.com//abc-defg-hij")).toBeNull();
-    expect(linkCode("/abc-defg-hij//")).toBeNull();
-    expect(linkCode("conclave.app/abc_defg")).toBeNull();
-    expect(linkCode("abc/defg")).toBeNull();
-  });
-
-  it("finds no code in a link to an app page or a placeholder", () => {
-    expect(linkCode("https://conclave.app/sign-in")).toBeNull();
-    expect(linkCode("conclave.app/privacy")).toBeNull();
-    expect(linkCode("/null")).toBeNull();
-    expect(linkCode("/undefined")).toBeNull();
-  });
-
-  it("accepts any host a browser can open after an explicit prefix", () => {
-    expect(linkCode("https://devbox/abc-defg-hij")).toBe("abc-defg-hij");
-    expect(linkCode("//devbox/abc-defg-hij")).toBe("abc-defg-hij");
+    expect(linkCode("  HTTPS://Meet.Example.com/Abc-Defg-Hij  ")).toBe("abc-defg-hij");
+    expect(linkCode("https://meet.example.com/abc-defg-hij?ref=chat#top")).toBe("abc-defg-hij");
+    expect(linkCode("https://m\u00fcnchen.example/abc-defg-hij")).toBe("abc-defg-hij");
     expect(linkCode("https://devbox:3005/abc-defg-hij")).toBe("abc-defg-hij");
-    expect(linkCode("https://conclave.app./abc-defg-hij")).toBe("abc-defg-hij");
-    expect(linkCode("conclave.app./abc-defg-hij")).toBe("abc-defg-hij");
-  });
-
-  it("rejects hosts a browser could not open", () => {
-    expect(linkCode("https://[:::]/abc-defg-hij")).toBeNull();
-    expect(linkCode("https://999.999.999.999/abc-defg-hij")).toBeNull();
     expect(linkCode("https://127.0.0.1:3005/abc-defg-hij")).toBe("abc-defg-hij");
   });
 
-  it("only reads web links", () => {
-    expect(linkCode("javascript:/abc-defg-hij")).toBeNull();
-    expect(linkCode("javascript://meet.example.com/abc-defg-hij")).toBeNull();
-    expect(linkCode("ftp://meet.example.com/abc-defg-hij")).toBeNull();
-    expect(linkCode("https://user@meet.example.com/abc-defg-hij")).toBeNull();
-    expect(linkCode("localhost:65536/abc-defg-hij")).toBeNull();
-    expect(linkCode("javascript:123/abc-defg-hij")).toBeNull();
-    expect(linkCode("ftp:21/abc-defg-hij")).toBeNull();
-    expect(linkCode("devbox:3005/abc-defg-hij")).toBeNull();
+  it("replaces the field from a Conclave link without a scheme", () => {
+    expect(linkCode("conclave.acmvit.in/abc-defg-hij?ref=chat")).toBe("abc-defg-hij");
+    expect(linkCode("Conclave.ACMVIT.in/abc-defg-hij")).toBe("abc-defg-hij");
+    expect(linkCode("localhost:3615/abc-defg-hij")).toBe("abc-defg-hij");
+    expect(linkCode("conclave.acmvit.in/abc%2Ddefg")).toBe("abc-defg");
+  });
+
+  it("never treats other text with a slash as a link", () => {
+    for (const text of [
+      "11/23",
+      "2026/11/23",
+      "1/2",
+      "10.0.0.1/abc-defg-hij",
+      "conclave.app/abc-defg-hij",
+      "meet.example/abc-defg-hij",
+      "m\u00fcnchen.example/abc-defg-hij",
+      "xn--mnchen-3ya.example/abc-defg-hij",
+      "[::1]/abc-defg-hij",
+      "devbox:3005/abc-defg-hij",
+      "localhost:3005/abc-defg-hij",
+      "//meet.example.com/abc-defg-hij",
+      "/abc-defg-hij",
+      "abc/defg",
+      "javascript:/abc-defg-hij",
+      "javascript://meet.example.com/abc-defg-hij",
+      "javascript:123/abc-defg-hij",
+      "ftp://meet.example.com/abc-defg-hij",
+      "https://user@meet.example.com/abc-defg-hij",
+    ]) {
+      expect(parse(text), JSON.stringify(text)).toBeNull();
+    }
+  });
+
+  it("finds no code in a link that has none or points elsewhere", () => {
+    for (const text of [
+      "https://meet.example.com/",
+      "conclave.acmvit.in/",
+      "conclave.acmvit.in/?code=abc-defg-hij",
+      "https://meet.example.com/w/public-slug",
+      "https://meet.example.com/w/%2e%2e/abc-defg-hij",
+      "https://meet.example.com//abc-defg-hij",
+      "conclave.acmvit.in/abc-defg-hij//",
+      "conclave.acmvit.in/abc_defg",
+      "conclave.acmvit.in/abc%2Fdefg",
+      "conclave.acmvit.in/abc%E0%A4%A",
+      "https://conclave.acmvit.in/sign-in",
+      "conclave.acmvit.in/privacy",
+      "conclave.acmvit.in/null",
+      "https://meet.example/\u212A-abc",
+    ]) {
+      expect(parse(text), JSON.stringify(text)).toBeNull();
+    }
+  });
+
+  it("rejects links a browser could not open", () => {
+    for (const text of [
+      "https://[:::]/abc-defg-hij",
+      "https://999.999.999.999/abc-defg-hij",
+      "https://meet..example/abc-defg-hij",
+      "https://./abc-defg-hij",
+      "https://localhost:65536/abc-defg-hij",
+      "https://meet.example/abc-defg-hij?ref=a\\b",
+      `https://${"a".repeat(64)}.example/abc-defg-hij`,
+      `https://${"a".repeat(100_000)}.example/abc`,
+    ]) {
+      expect(parse(text), JSON.stringify(text).slice(0, 80)).toBeNull();
+    }
+    const longestName = [61, 63, 63, 63].map((n) => "a".repeat(n)).join(".");
+    expect(longestName).toHaveLength(253);
+    expect(linkCode(`https://${longestName}./abc-defg-hij`)).toBe("abc-defg-hij");
+    expect(linkCode(`https://a${longestName}/abc-defg-hij`)).toBeNull();
   });
 
   it("inserts pasted room code characters where the cursor is", () => {
-    expect(parseCodeFieldPaste("abc-defg-hij")).toEqual({ kind: "insert", text: "abc-defg-hij" });
-    expect(parseCodeFieldPaste("  WXYZ \n")).toEqual({ kind: "insert", text: "wxyz" });
-    expect(parseCodeFieldPaste("new-")).toEqual({ kind: "insert", text: "new-" });
-    expect(parseCodeFieldPaste("-abc")).toEqual({ kind: "insert", text: "-abc" });
+    expect(parse("abc-defg-hij")).toEqual({ kind: "insert", text: "abc-defg-hij" });
+    expect(parse("  WXYZ \n")).toEqual({ kind: "insert", text: "wxyz" });
+    expect(parse("new-")).toEqual({ kind: "insert", text: "new-" });
+    expect(parse("-abc")).toEqual({ kind: "insert", text: "-abc" });
   });
 
-  it("ignores text that is neither a room code nor a meeting link", () => {
+  it("ignores text that is neither room code characters nor a Conclave link", () => {
     for (const text of [
       "",
       "   ",
@@ -101,42 +174,28 @@ describe("pasting into the join code field", () => {
       "see you at the standup",
       "meet.example\\abc-defg-hij",
       "\u212A-abc",
-      "meet.example/\u212A-abc",
     ]) {
-      expect(parseCodeFieldPaste(text), JSON.stringify(text)).toBeNull();
+      expect(parse(text), JSON.stringify(text)).toBeNull();
     }
   });
 
-  it("reads internationalized hosts", () => {
-    expect(linkCode("m\u00fcnchen.example/abc-defg-hij")).toBe("abc-defg-hij");
-    expect(linkCode("https://m\u00fcnchen.example/abc-defg-hij")).toBe("abc-defg-hij");
-    expect(linkCode("xn--mnchen-3ya.example/abc-defg-hij")).toBe("abc-defg-hij");
-  });
-
-  it("rejects backslashes anywhere and empty host labels", () => {
-    expect(linkCode("https://meet.example/abc-defg-hij?ref=a\\b")).toBeNull();
-    expect(linkCode("//meet.example/abc-defg-hij#a\\b")).toBeNull();
-    expect(linkCode("meet..example/abc-defg-hij")).toBeNull();
-    expect(linkCode(".example/abc-defg-hij")).toBeNull();
-    expect(linkCode("https://./abc-defg-hij")).toBeNull();
-  });
-
-  it("lets the URL parser judge bare ports", () => {
-    expect(linkCode("meet.example:000443/abc-defg-hij")).toBe("abc-defg-hij");
-    expect(linkCode("meet.example:/abc-defg-hij")).toBe("abc-defg-hij");
-    expect(linkCode("[::1]:000443/abc-defg-hij")).toBe("abc-defg-hij");
-  });
-
-  it("rejects hosts longer than DNS allows", () => {
-    expect(linkCode(`https://${"a".repeat(64)}.example/abc-defg-hij`)).toBeNull();
-    expect(
-      linkCode(`${Array.from({ length: 5 }, () => "a".repeat(60)).join(".")}.example/abc`),
-    ).toBeNull();
-    expect(linkCode(`https://${"a".repeat(100_000)}.example/abc`)).toBeNull();
-    const longestName = [61, 63, 63, 63].map((n) => "a".repeat(n)).join(".");
-    expect(longestName).toHaveLength(253);
-    expect(linkCode(`${longestName}/abc-defg-hij`)).toBe("abc-defg-hij");
-    expect(linkCode(`${longestName}./abc-defg-hij`)).toBe("abc-defg-hij");
-    expect(linkCode(`a${longestName}/abc-defg-hij`)).toBeNull();
+  it("only replaces the field when the text is unambiguously a Conclave meeting link", () => {
+    const random = seededRandom(310);
+    let replacements = 0;
+    const pick = (items: readonly string[]) => items[Math.floor(random() * items.length)];
+    for (let run = 0; run < 20_000; run += 1) {
+      let text = "";
+      if (random() < 0.5) {
+        text = `${pick(SCHEMES)}${pick(HOSTS)}/${pick(SEGMENTS)}${pick(SUFFIXES)}`;
+      } else {
+        const count = 1 + Math.floor(random() * 6);
+        for (let i = 0; i < count; i += 1) text += pick(PIECES);
+      }
+      const paste = parse(text);
+      if (paste?.kind !== "replace") continue;
+      replacements += 1;
+      expect(expectedReplacement(text), JSON.stringify(text)).toBe(paste.code);
+    }
+    expect(replacements).toBeGreaterThan(500);
   });
 });

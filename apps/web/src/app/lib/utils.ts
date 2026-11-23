@@ -152,7 +152,7 @@ export type CodeFieldPaste =
 
 const ROOM_CODE_TEXT = /^[a-z0-9-]+$/i;
 const MEETING_LINK = new RegExp(
-  String.raw`^(?:(?:https?:)?\/\/(?<prefixed>[^\/?#\\\s@]+)|(?<bare>(?:\[[0-9a-f:.]+\]|[^\/?#\\\s@:\[\]]+)(?::\d*)?))?\/(?<segment>[^\/?#\\\s]+)\/?(?:[?#]\S*)?$`,
+  String.raw`^(?:(?<scheme>https?):\/\/)?(?<authority>[^\/?#\\\s@]+)\/(?<segment>[^\/?#\\\s]+)\/?(?:[?#]\S*)?$`,
   "i",
 );
 const NOT_ROOM_CODES = new Set([
@@ -194,20 +194,19 @@ const linkRoomCode = (segment: string) => {
   return !NOT_ROOM_CODES.has(code) && sanitizeRoomCode(code) === code ? code : null;
 };
 
-export function parseCodeFieldPaste(text: string): CodeFieldPaste | null {
+export function parseCodeFieldPaste(
+  text: string,
+  conclaveHosts: readonly string[],
+): CodeFieldPaste | null {
   const trimmed = text.trim();
   if (ROOM_CODE_TEXT.test(trimmed)) return { kind: "insert", text: trimmed.toLowerCase() };
   if (trimmed.includes("\\")) return null;
-  const { prefixed, bare, segment } = MEETING_LINK.exec(trimmed)?.groups ?? {};
-  if (!segment) return null;
-  const authority = prefixed ?? bare;
-  if (authority) {
-    const hostname = linkHostname(authority);
-    if (!hostname || !fitsDns(hostname)) return null;
-    const bareLooksLikeHost =
-      hostname === "localhost" || hostname.startsWith("[") || hostname.includes(".");
-    if (bare && !bareLooksLikeHost) return null;
-  }
+  const { scheme, authority, segment } = MEETING_LINK.exec(trimmed)?.groups ?? {};
+  if (!authority || !segment) return null;
+  const typedHost = authority.toLowerCase();
+  if (!scheme && !conclaveHosts.some((host) => host.toLowerCase() === typedHost)) return null;
+  const hostname = linkHostname(authority);
+  if (!hostname || !fitsDns(hostname)) return null;
   const code = linkRoomCode(segment);
   return code ? { kind: "replace", code } : null;
 }

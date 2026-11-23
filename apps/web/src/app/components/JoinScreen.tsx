@@ -24,6 +24,7 @@ import { prefetchConclaveLock } from "../lib/conclaveSound";
 import type { Dispatch, SetStateAction } from "react";
 import { Avatar } from "@conclave/ui-tokens/web";
 import { signOut, useSession } from "@/lib/auth-client";
+import { getMeetingLinkHosts } from "@/lib/site-url";
 import type { RoomInfo } from "@/lib/sfu-types";
 import type {
   ConnectionState,
@@ -1565,7 +1566,7 @@ function JoinScreen({
                     onPaste={(e) => {
                       if (isRoutedRoom) return;
                       const text = e.clipboardData.getData("text");
-                      const paste = parseCodeFieldPaste(text);
+                      const paste = parseCodeFieldPaste(text, getMeetingLinkHosts());
                       if (paste?.kind === "insert" && paste.text === text) return;
                       e.preventDefault();
                       if (paste?.kind === "replace") onCodeChange(paste.code);
