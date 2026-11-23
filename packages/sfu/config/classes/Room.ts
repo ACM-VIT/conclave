@@ -203,7 +203,6 @@ const verifyInviteCodeHash = (
   return timingSafeEqual(expected, candidate);
 };
 
-// A set that tells its owner whenever its contents change.
 class ObservedSet<T> extends Set<T> {
   constructor(private readonly changed: () => void) {
     super();
@@ -228,6 +227,12 @@ class ObservedSet<T> extends Set<T> {
     if (hadAny) this.changed();
   }
 }
+
+/**
+ * `membership`: a seat was added, removed, replaced or promoted.
+ * `closed`: the room is being torn down.
+ */
+export type RoomLifecycleEvent = "membership" | "closed";
 
 export class Room {
   public readonly id: string;
@@ -384,6 +389,9 @@ export class Room {
     WebcamReceiverCapacityProofCoordinator;
 
   private readonly webcamVp9Enabled: boolean;
+  private readonly lifecycleListeners = new Set<
+    (event: RoomLifecycleEvent) => void
+  >();
 
   constructor(options: RoomOptions) {
     this.id = options.id;
@@ -418,6 +426,25 @@ export class Room {
     return this.router.rtpCapabilities;
   }
 
+  /**
+   * Lets room-scoped state that lives outside this class, such as the apps
+   * authority runtime, follow who is in the room and when it closes.
+   */
+  onLifecycle(listener: (event: RoomLifecycleEvent) => void): () => void {
+    this.lifecycleListeners.add(listener);
+    return () => this.lifecycleListeners.delete(listener);
+  }
+
+  private notifyLifecycle(event: RoomLifecycleEvent): void {
+    for (const listener of this.lifecycleListeners) {
+      try {
+        listener(event);
+      } catch (error) {
+        Logger.warn(`Room ${this.id}: a lifecycle listener failed`, error);
+      }
+    }
+  }
+
   get activeSpeakerUserId(): string | null {
     return this.meetingActiveSpeakerUserId;
   }
@@ -448,6 +475,7 @@ export class Room {
     this.refreshWebcamReceiverCapacityProofs();
     this.cancelWebcamCodecPolicyUpgrade();
     this.reconcileWebcamCodecPolicy();
+    this.notifyLifecycle("membership");
   }
 
   get webcamCodecPolicy(): WebcamCodecPolicy {
@@ -877,6 +905,7 @@ export class Room {
     if (this.webinarDominantSpeakerUserId === clientId) {
       this.webinarDominantSpeakerUserId = null;
     }
+    this.notifyLifecycle("membership");
     return client;
   }
 
@@ -2019,6 +2048,7 @@ export class Room {
       // A host who promotes them makes them a host in their own right.
       if (this.temporaryHostUserKey === userKey) this.temporaryHostUserKey = null;
     }
+    this.notifyLifecycle("membership");
     return client as Admin;
   }
 
@@ -2479,13 +2509,14 @@ export class Room {
   }
 
   close(): void {
-    // Closing empties the room. That is not a change to the call.
     this.onRecoverableChange = null;
     this.onReadmissionChange = null;
     if (this.restorerLapseTimer) {
       clearTimeout(this.restorerLapseTimer);
       this.restorerLapseTimer = null;
     }
+    this.notifyLifecycle("closed");
+    this.lifecycleListeners.clear();
     this.aiCredentials.clear();
     this.stopCleanupTimer();
     this.cancelWebcamCodecPolicyUpgrade();

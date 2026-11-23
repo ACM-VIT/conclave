@@ -32,6 +32,7 @@ import {
   admitPendingUser,
   denyPendingUser,
 } from "../lib/admissions";
+import PanelNoticeSlot from "./PanelNoticeSlot";
 
 interface ParticipantsPanelProps {
   participants: Map<string, Participant>;
@@ -349,6 +350,7 @@ function ParticipantsPanel({
           <X size={ICON} strokeWidth={STROKE} />
         </button>
       </header>
+      <PanelNoticeSlot />
 
       {isAdmin && (
         <section className="border-b border-white/10 px-4 py-3">

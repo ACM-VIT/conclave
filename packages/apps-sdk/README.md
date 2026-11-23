@@ -94,8 +94,21 @@ const pollApp = defineApp({
 
 Details: [docs/reference/socket-events-and-sync.md](./docs/reference/socket-events-and-sync.md)
 
+## Two Kinds of App
+
+| | Collaborative (Yjs doc) | Authority |
+| --- | --- | --- |
+| State lives | in every client and the SFU relay | on the SFU only |
+| Who can write | any eligible editor, anything | only what an action's rules allow |
+| Who can read | everyone, everything | each connection, only its own view |
+| Use it for | strokes, notes, shared playback | votes, hidden answers, draws, one-per-person rules |
+| Start with | `new:app <id>` | `new:app <id> --runtime authority` |
+
+An authority app has a contract in `core`, rules in `server` that only the SFU loads, and a panel in `web` that reads the app through `useAuthority(contract)`. See [Build an Authority App](./docs/guides/build-an-authority-app.md) and the [Authority Runtime](./docs/reference/authority-runtime.md) reference.
+
 ## Data Placement Rules
 
+- Put anything a participant must not forge or read in an authority app.
 - Put durable collaborative content in Yjs doc.
 - Put ephemeral cursor/selection/presence in awareness.
 - Put purely local UI state (open panels, hover state) in component state.
