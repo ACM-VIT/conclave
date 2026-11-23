@@ -1039,6 +1039,7 @@ class VideoRenderingTests {
     @Test fun aReleasedSurfaceTileIgnoresLateFrames() {
         val host = surfaceHost(overlay = true)
         host.surfaceAvailable("window")
+        backend.settle()
         host.release()
         host.sink.onFrame(frame())
         backend.settle()
@@ -1391,6 +1392,7 @@ class VideoRenderingTests {
         val host = textureHost()
         val texture = CountingTexture()
         host.onSurfaceTextureAvailable(texture, 320, 180)
+        backend.settle()
         host.release()
         backend.settle()
         shadowOf(Looper.getMainLooper()).idle()
