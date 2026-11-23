@@ -546,12 +546,9 @@ struct STG2TileTests {
 @Suite(.serialized)
 struct STG2PinViewModelTests {
     private static let viewModeKey = "conclave.meetView.viewMode"
-    private static let preferenceKeys = ["conclave.meetView.viewMode", "conclave.meetView.viewMaxTiles",
-                                         "conclave.meetView.hideTilesWithoutVideo", "conclave.meetView.selfViewMode",
-                                         "conclave.meetView.selfViewCorner"]
 
-    private func makeJoinedViewModel() -> MeetingViewModel {
-        let viewModel = MeetingViewModel()
+    private func makeJoinedViewModel(defaults: UserDefaults) -> MeetingViewModel {
+        let viewModel = MeetingViewModel(defaults: defaults)
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"
@@ -563,51 +560,36 @@ struct STG2PinViewModelTests {
         return viewModel
     }
 
-    private func withSavedPreferences(_ body: () -> Void) {
-        let defaults = UserDefaults.standard
-        var saved: [String: Any] = [:]
-        for key in Self.preferenceKeys {
-            if let value = defaults.object(forKey: key) { saved[key] = value }
-        }
-        body()
-        for key in Self.preferenceKeys {
-            if let value = saved[key] { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
-        }
-    }
-
     @Test func pinThenChangingMaximumTilesLeavesThePersistedViewModeUnchanged() {
-        withSavedPreferences {
-            let viewModel = makeJoinedViewModel()
-            viewModel.state.viewMode = .auto
-            viewModel.togglePin("remote@example.com#remote-session")
-            #expect(viewModel.state.pinnedUserId == "remote@example.com#remote-session")
-            #expect(viewModel.state.viewMode == .auto)
+        let defaults = MemoryDefaults()
+        let viewModel = makeJoinedViewModel(defaults: defaults)
+        viewModel.state.viewMode = .auto
+        viewModel.togglePin("remote@example.com#remote-session")
+        #expect(viewModel.state.pinnedUserId == "remote@example.com#remote-session")
+        #expect(viewModel.state.viewMode == .auto)
 
-            #expect(viewModel.state.resolvedViewMode == .spotlight)
-            viewModel.setViewMaxTiles(9)
-            #expect(UserDefaults.standard.string(forKey: Self.viewModeKey) == "auto")
-            viewModel.togglePin("remote@example.com#remote-session")
-            #expect(viewModel.state.pinnedUserId == nil && viewModel.state.viewMode == .auto)
-            viewModel.togglePin("remote@example.com#remote-session")
-            viewModel.clearPin()
-            #expect(viewModel.state.pinnedUserId == nil && viewModel.state.viewMode == .auto)
-        }
+        #expect(viewModel.state.resolvedViewMode == .spotlight)
+        viewModel.setViewMaxTiles(9)
+        #expect(defaults.string(forKey: Self.viewModeKey) == "auto")
+        viewModel.togglePin("remote@example.com#remote-session")
+        #expect(viewModel.state.pinnedUserId == nil && viewModel.state.viewMode == .auto)
+        viewModel.togglePin("remote@example.com#remote-session")
+        viewModel.clearPin()
+        #expect(viewModel.state.pinnedUserId == nil && viewModel.state.viewMode == .auto)
     }
 
     @Test func choosingTiledEndsThePinAndKeepsTheSelfViewPreference() {
-        withSavedPreferences {
-            let viewModel = makeJoinedViewModel()
-            viewModel.state.viewMode = .auto
-            viewModel.state.selfViewMode = .floating
-            viewModel.togglePin("remote@example.com#remote-session")
+        let viewModel = makeJoinedViewModel(defaults: MemoryDefaults())
+        viewModel.state.viewMode = .auto
+        viewModel.state.selfViewMode = .floating
+        viewModel.togglePin("remote@example.com#remote-session")
 
-            viewModel.state.viewMode = .sidebar
-            #expect(viewModel.state.resolvedViewMode == .spotlight)
-            viewModel.setViewMode(.tiled)
-            #expect(viewModel.state.pinnedUserId == nil)
-            #expect(viewModel.state.selfViewMode == .floating)
-            #expect(viewModel.state.resolvedViewMode == .tiled)
-        }
+        viewModel.state.viewMode = .sidebar
+        #expect(viewModel.state.resolvedViewMode == .spotlight)
+        viewModel.setViewMode(.tiled)
+        #expect(viewModel.state.pinnedUserId == nil)
+        #expect(viewModel.state.selfViewMode == .floating)
+        #expect(viewModel.state.resolvedViewMode == .tiled)
     }
 }
 #endif

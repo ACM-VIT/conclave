@@ -21,8 +21,7 @@ private enum MeetingViewPreferences {
     private static let selfViewCornerKey = "\(keyPrefix)selfViewCorner"
 
     @MainActor
-    static func apply(to state: MeetingState) {
-        let defaults = UserDefaults.standard
+    static func apply(to state: MeetingState, defaults: UserDefaults) {
         if let rawMode = defaults.string(forKey: viewModeKey),
            let mode = MeetingViewMode(rawValue: rawMode) {
             state.viewMode = mode
@@ -44,8 +43,7 @@ private enum MeetingViewPreferences {
     }
 
     @MainActor
-    static func save(from state: MeetingState) {
-        let defaults = UserDefaults.standard
+    static func save(from state: MeetingState, defaults: UserDefaults) {
         defaults.set(state.viewMode.rawValue, forKey: viewModeKey)
         defaults.set(MeetingViewConstants.clampTiles(state.viewMaxTiles), forKey: viewMaxTilesKey)
         defaults.set(state.hideTilesWithoutVideo, forKey: hideTilesWithoutVideoKey)
@@ -440,6 +438,7 @@ final class MeetingViewModel {
 
     private(set) var versionGate = VersionGateState.open
     @ObservationIgnored var versionGateFetch: () async -> VersionGateFetch = { await VersionGateService.fetch() }
+    let defaults: UserDefaults
     @ObservationIgnored var versionGateDefaults: UserDefaults = UserDefaults.standard
     @ObservationIgnored var currentAppVersion: () -> String = { VersionGateService.currentAppVersion() }
     @ObservationIgnored var versionGateNowMillis: () -> Double = { Date().timeIntervalSince1970 * 1000.0 }
@@ -1017,17 +1016,17 @@ final class MeetingViewModel {
             isMuted: state.isMuted,
             isCameraOff: state.isCameraOff,
             savedAt: Date()
-        ))
+        ), defaults: defaults)
     }
 
     private func clearMeetingResumeSnapshot() {
-        MeetingResumeStore.clear()
+        MeetingResumeStore.clear(defaults: defaults)
         clearMeetingResumeMarker()
     }
 
     private func clearMeetingResumeMarker() {
         guard !isHandlingAppTermination else { return }
-        MeetingResumeMarker.clear()
+        MeetingResumeMarker.clear(defaults: defaults)
     }
 
     private func beginResumeInFlight(roomId: String) {
@@ -1044,8 +1043,8 @@ final class MeetingViewModel {
 
     func handleAppWillTerminate() {
         isHandlingAppTermination = true
-        MeetingResumeMarker.write()
-        MeetingResumeStore.clear()
+        MeetingResumeMarker.write(defaults: defaults)
+        MeetingResumeStore.clear(defaults: defaults)
         endResumeInFlight()
         switch state.connectionState {
         case .disconnected, .error:
@@ -1060,7 +1059,8 @@ final class MeetingViewModel {
         guard !didAttemptPersistedMeetingResume else { return false }
         didAttemptPersistedMeetingResume = true
         guard state.connectionState == .disconnected, lastJoinContext == nil,
-              let snapshot = MeetingResumeStore.load(markerMillis: MeetingResumeMarker.read()) else { return false }
+              let snapshot = MeetingResumeStore.load(markerMillis: MeetingResumeMarker.read(defaults: defaults),
+                                                     defaults: defaults) else { return false }
         #if SKIP
         ProcessExitReasonBridge.recordUserRequestedExit(snapshotSavedAtMillis: MeetingResumePolicy.savedAtMillis(snapshot))
         #endif
@@ -1069,9 +1069,9 @@ final class MeetingViewModel {
             hasLiveJoinContext: lastJoinContext != nil,
             alreadyAttempted: false,
             snapshot: snapshot,
-            markerMillis: MeetingResumeMarker.read()
+            markerMillis: MeetingResumeMarker.read(defaults: defaults)
         ) else {
-            MeetingResumeStore.clear()
+            MeetingResumeStore.clear(defaults: defaults)
             return false
         }
 
@@ -1215,7 +1215,8 @@ final class MeetingViewModel {
         return allowed.contains(character)
     }
 
-    init() {
+    init(defaults: UserDefaults = UserDefaults.standard) {
+        self.defaults = defaults
         let shellPresenter = MeetingShellPresenter()
         let stagePresenter = StagePresenter(shell: shellPresenter)
         shell = shellPresenter
@@ -1223,7 +1224,7 @@ final class MeetingViewModel {
         controls = CallControlsPresenter(shell: shellPresenter, stage: stagePresenter)
         people = PeoplePresenter(shell: shellPresenter, stage: stagePresenter)
         activitySession = ActivitySession(shell: shellPresenter, stage: stagePresenter)
-        MeetingViewPreferences.apply(to: state)
+        MeetingViewPreferences.apply(to: state, defaults: defaults)
 
         screenShare = ScreenSharePhasePolicy.withCapability(screenShare, canShareDeviceAudio: screenShareDeviceAudioCapability())
         #if SKIP
@@ -10692,7 +10693,7 @@ final class MeetingViewModel {
         state.activeSpeakerId = nil
         state.ttsSpeakerId = nil
         state.pinnedUserId = nil
-        MeetingViewPreferences.apply(to: state)
+        MeetingViewPreferences.apply(to: state, defaults: defaults)
         state.unreadChatCount = 0
         state.waitingMessage = nil
         state.joinFormErrorMessage = nil
@@ -15897,7 +15898,7 @@ final class MeetingViewModel {
 
             state.pinnedUserId = nil
         }
-        MeetingViewPreferences.save(from: state)
+        MeetingViewPreferences.save(from: state, defaults: defaults)
         scheduleRemoteConsumerBandwidthPolicyUpdate()
     }
 
@@ -15905,7 +15906,7 @@ final class MeetingViewModel {
         let clamped = MeetingViewConstants.clampTiles(maxTiles)
         guard state.viewMaxTiles != clamped else { return }
         state.viewMaxTiles = clamped
-        MeetingViewPreferences.save(from: state)
+        MeetingViewPreferences.save(from: state, defaults: defaults)
         scheduleRemoteConsumerBandwidthPolicyUpdate()
     }
 
@@ -15915,20 +15916,20 @@ final class MeetingViewModel {
 
     func toggleHideTilesWithoutVideo() {
         state.hideTilesWithoutVideo = !state.hideTilesWithoutVideo
-        MeetingViewPreferences.save(from: state)
+        MeetingViewPreferences.save(from: state, defaults: defaults)
         scheduleRemoteConsumerBandwidthPolicyUpdate()
     }
 
     func setSelfViewMode(_ mode: MeetingSelfViewMode) {
         guard state.selfViewMode != mode else { return }
         state.selfViewMode = mode
-        MeetingViewPreferences.save(from: state)
+        MeetingViewPreferences.save(from: state, defaults: defaults)
     }
 
     func setSelfViewCorner(_ corner: MeetingSelfViewCorner) {
         guard state.selfViewCorner != corner else { return }
         state.selfViewCorner = corner
-        MeetingViewPreferences.save(from: state)
+        MeetingViewPreferences.save(from: state, defaults: defaults)
     }
 
     func togglePin(_ userId: String) {

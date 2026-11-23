@@ -99,7 +99,7 @@ struct S6CReviewRegressionTests {
     }
 
     private func gatedViewModel() -> MeetingViewModel {
-        let viewModel = MeetingViewModel()
+        let viewModel = MeetingViewModel(defaults: MemoryDefaults())
         viewModel.testDetachHostNetworkMonitor()
         viewModel.versionGateDefaults = UserDefaults(suiteName: "s6c.version." + UUID().uuidString)!
         viewModel.currentAppVersion = { "2.0.0" }

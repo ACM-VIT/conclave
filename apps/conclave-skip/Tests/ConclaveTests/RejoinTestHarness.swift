@@ -5,15 +5,11 @@ import Testing
 
 @MainActor
 final class RejoinHarness {
-    private static let resumeKey = "conclave.activeMeetingResume.v1"
-    private static let markerKey = MeetingResumeMarker.key
-
     private static let joinTeardown = "cleanup(notifyLocalState: false)"
 
-    let viewModel = MeetingViewModel()
+    let defaults = MemoryDefaults()
+    let viewModel: MeetingViewModel
     let calls = HeldStubCalls()
-    private let savedResumeSnapshot: Any?
-    private let savedResumeMarker: Any?
     private var endedToggles: [String] = []
     private var handledReports = 0
 
@@ -22,9 +18,7 @@ final class RejoinHarness {
     var generation: Int { media.configurationGeneration }
 
     init() {
-        savedResumeSnapshot = UserDefaults.standard.object(forKey: Self.resumeKey)
-        savedResumeMarker = UserDefaults.standard.object(forKey: Self.markerKey)
-
+        viewModel = MeetingViewModel(defaults: defaults)
         viewModel.testDetachHostNetworkMonitor()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         let calls = self.calls
@@ -118,11 +112,11 @@ final class RejoinHarness {
     var joinAttemptCount: Int { calls.count(Self.joinTeardown) }
 
     func clearResumeSnapshot() {
-        UserDefaults.standard.removeObject(forKey: Self.resumeKey)
+        defaults.removeObject(forKey: MeetingResumeStore.key)
     }
 
     func clearResumeMarker() {
-        UserDefaults.standard.removeObject(forKey: Self.markerKey)
+        defaults.removeObject(forKey: MeetingResumeMarker.key)
     }
 
     func scriptJoinFailures(_ error: Error) {
@@ -251,16 +245,26 @@ final class RejoinHarness {
         viewModel.testLocalToggleEnded = nil
         viewModel.testLocalMediaReportHandled = nil
         viewModel.testJoinFetch = nil
-        if let savedResumeSnapshot {
-            UserDefaults.standard.set(savedResumeSnapshot, forKey: Self.resumeKey)
-        } else {
-            UserDefaults.standard.removeObject(forKey: Self.resumeKey)
-        }
-        if let savedResumeMarker {
-            UserDefaults.standard.set(savedResumeMarker, forKey: Self.markerKey)
-        } else {
-            UserDefaults.standard.removeObject(forKey: Self.markerKey)
-        }
+    }
+}
+
+final class MemoryDefaults: UserDefaults, @unchecked Sendable {
+    private var values: [String: Any] = [:]
+
+    init() {
+        super.init(suiteName: nil)!
+    }
+
+    override func object(forKey defaultName: String) -> Any? {
+        values[defaultName]
+    }
+
+    override func set(_ value: Any?, forKey defaultName: String) {
+        values[defaultName] = value
+    }
+
+    override func removeObject(forKey defaultName: String) {
+        values.removeValue(forKey: defaultName)
     }
 }
 
