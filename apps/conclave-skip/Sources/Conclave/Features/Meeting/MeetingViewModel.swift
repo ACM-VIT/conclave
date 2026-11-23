@@ -2511,6 +2511,15 @@ final class MeetingViewModel {
             }
         }
 
+        socketManager.onWebinarStageInviteUsed = { [weak self] notification in
+            guard let self = self else { return }
+            let eventContext = self.currentSocketEventContext()
+            Task { @MainActor in
+                guard self.isCurrentSocketEvent(eventContext, roomId: notification.roomId) else { return }
+                self.applyStageInvitesUsed(invitedUserKeys: notification.invitedUserKeys ?? [])
+            }
+        }
+
         socketManager.onWebinarDemoted = { [weak self] notification in
             guard let self = self else { return }
             let eventContext = self.currentSocketEventContext()
@@ -4174,17 +4183,24 @@ final class MeetingViewModel {
         let added = ensureParticipantPresent(userId)
 
         if !state.webinarStageInvites.isEmpty {
-            let next = WebinarStageInvitePolicy.afterPanelistJoin(state.webinarStageInvites, joinedUserId: userId)
-            if next.count != state.webinarStageInvites.count {
-                var joinedName = ""
-                for (id, name) in state.webinarStageInvites {
-                    if next[id] == nil { joinedName = name }
-                }
-                state.webinarStageInvites = next
-                if !joinedName.isEmpty { stage.announce(kind: PeopleAnnouncementKind.joinedStage, name: joinedName) }
-            }
+            settleStageInvites(WebinarStageInvitePolicy.afterPanelistJoin(state.webinarStageInvites, joinedUserId: userId))
         }
         return added
+    }
+
+    func applyStageInvitesUsed(invitedUserKeys: [String]) {
+        if state.webinarStageInvites.isEmpty { return }
+        settleStageInvites(WebinarStageInvitePolicy.afterInvitesUsed(state.webinarStageInvites, invitedUserKeys: invitedUserKeys))
+    }
+
+    private func settleStageInvites(_ next: [String: String]) {
+        if next.count == state.webinarStageInvites.count { return }
+        var joinedName = ""
+        for (id, name) in state.webinarStageInvites {
+            if next[id] == nil { joinedName = name }
+        }
+        state.webinarStageInvites = next
+        if !joinedName.isEmpty { stage.announce(kind: PeopleAnnouncementKind.joinedStage, name: joinedName) }
     }
 
     func markRemoteParticipantDeparted(_ userId: String) {

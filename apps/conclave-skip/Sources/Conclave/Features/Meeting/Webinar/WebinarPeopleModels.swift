@@ -167,6 +167,17 @@ enum WebinarStageInvitePolicy {
         return next
     }
 
+    /// The invites a join used: the server names them by the keys the hosts
+    /// invited, which a guest's stage seat does not share.
+    static func afterInvitesUsed(_ invites: [String: String], invitedUserKeys: [String]) -> [String: String] {
+        if invitedUserKeys.isEmpty { return invites }
+        var next = invites
+        for id in invites.keys {
+            if invitedUserKeys.contains(userKeyPart(id)) { next[id] = nil }
+        }
+        return next
+    }
+
     static func afterWebinarMode(_ invites: [String: String], isWebinarEnabled: Bool) -> [String: String] {
         isWebinarEnabled ? invites : [:]
     }
