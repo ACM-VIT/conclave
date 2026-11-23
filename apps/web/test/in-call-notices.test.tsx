@@ -314,6 +314,37 @@ describe("in-call notices", () => {
     panel.remove();
   });
 
+  it("keeps focus on one disclosure toggle and tabs into the revealed actions", async () => {
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(60);
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
+    await render(
+      ["Camera is blocked", "Your browser paused audio", "Audio-only mode is on"].map((text) => (
+        <InCallNotice key={text} show>
+          <InCallNoticeCard icon={Headphones} title={text} actionLabel="Fix" onAction={() => {}} />
+        </InCallNotice>
+      )),
+    );
+    await waitOutExit();
+    const toggle = slot()?.querySelector<HTMLButtonElement>("[data-notice-toggle]");
+    expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+    toggle?.focus();
+    await act(async () => toggle?.click());
+    await waitOutExit();
+    expect(slot()?.querySelector("[data-notice-toggle]")).toBe(toggle);
+    expect(document.activeElement).toBe(toggle);
+    expect(toggle?.getAttribute("aria-expanded")).toBe("true");
+    const actions = [...(slot()?.querySelectorAll("[data-in-call-notice] button") ?? [])];
+    expect(actions.length).toBe(3);
+    for (const action of actions) {
+      expect(toggle!.compareDocumentPosition(action) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    await act(async () => toggle?.click());
+    await waitOutExit();
+    expect(slot()?.querySelector("[data-notice-toggle]")).toBe(toggle);
+    expect(document.activeElement).toBe(toggle);
+    expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+  });
+
   it("resumes paused audio from a click anywhere on the notice, once per click", async () => {
     const onResume = vi.fn();
     await render(

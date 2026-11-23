@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -208,6 +209,7 @@ export default function InCallNoticeSlot({
   const columnRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const sheetRef = useRef<HTMLDialogElement>(null);
+  const listId = useId();
   const refocusRef = useRef(false);
   const [host, setHost] = useState<HTMLDivElement | null>(null);
   const [lane, setLane] = useState<LaneState>(EMPTY_LANE);
@@ -571,63 +573,55 @@ export default function InCallNoticeSlot({
   };
 
   const inlineCount = more > 0 && compact && !isExpanded && !chip;
-  const footer =
-    more > 0 && !inlineCount && !inSheet && !chip ? (
-      <button
-        type="button"
-        data-notice-toggle
-        onClick={toggleExpanded}
-        aria-expanded={isExpanded}
-        aria-label={isExpanded ? "Collapse notices" : `Show ${more} more notices`}
-        className="pointer-events-auto mt-2 inline-flex h-7 shrink-0 items-center rounded-full px-3 text-[12px] font-medium text-[#fafafa]/60 transition-colors duration-100 hover:text-[#fafafa]"
-      >
-        {isExpanded ? "Show less" : `+${more} more`}
-      </button>
+  const toggle =
+    more > 0 && !inSheet && !chip ? (
+      <div className={inlineCount ? "order-last shrink-0" : "order-last flex basis-full justify-center"}>
+        <button
+          type="button"
+          data-notice-toggle
+          onClick={toggleExpanded}
+          aria-expanded={isExpanded}
+          aria-controls={listId}
+          aria-label={isExpanded ? "Collapse notices" : `Show ${more} more notices`}
+          className={`pointer-events-auto inline-flex shrink-0 items-center text-[12px] font-medium text-[#fafafa]/60 transition-colors duration-100 hover:text-[#fafafa] ${
+            inlineCount ? "h-11 rounded-xl px-2 tabular-nums" : "mt-1 h-7 rounded-full px-3"
+          }`}
+        >
+          {isExpanded ? "Show less" : inlineCount ? `+${more}` : `+${more} more`}
+        </button>
+      </div>
     ) : null;
 
   const laneContent = (
-    <>
+    <div
+      inert={chip ? true : undefined}
+      className={`${chip ? "invisible absolute" : "relative"} flex w-full max-w-[560px] flex-wrap items-start gap-1`}
+      style={
+        lane.narrow && !inSheet
+          ? {
+              marginTop: lane.offset,
+              alignSelf: "flex-start",
+              marginLeft: lane.narrow.left,
+              width: lane.narrow.width,
+            }
+          : { marginTop: inSheet ? 0 : lane.offset }
+      }
+    >
+      {toggle}
       <div
-        inert={chip ? true : undefined}
-        className={`${chip ? "invisible absolute" : "relative"} flex w-full max-w-[560px] items-start gap-1`}
+        ref={listRef}
+        id={listId}
+        onClick={expandFromPeek}
+        className="relative min-w-0 flex-1 overscroll-contain [&>*]:absolute [&>*]:inset-x-0 [&>*]:top-0 [&>*]:origin-top [&>*]:transition-[translate,scale] [&>*]:duration-[120ms] [&>*]:ease-out motion-reduce:[&>*]:transition-none [&>[data-peek]]:cursor-pointer [&>[data-peek]_[data-in-call-notice]>*]:invisible"
         style={
-          lane.narrow && !inSheet
-            ? {
-                marginTop: lane.offset,
-                alignSelf: "flex-start",
-                marginLeft: lane.narrow.left,
-                width: lane.narrow.width,
-              }
-            : { marginTop: inSheet ? 0 : lane.offset }
+          isExpanded && lane.room > 0
+            ? { maxHeight: lane.room, overflowY: "auto" }
+            : undefined
         }
       >
-        <div
-          ref={listRef}
-          onClick={expandFromPeek}
-          className="relative min-w-0 flex-1 overscroll-contain [&>*]:absolute [&>*]:inset-x-0 [&>*]:top-0 [&>*]:origin-top [&>*]:transition-[translate,scale] [&>*]:duration-[120ms] [&>*]:ease-out motion-reduce:[&>*]:transition-none [&>[data-peek]]:cursor-pointer [&>[data-peek]_[data-in-call-notice]>*]:invisible"
-          style={
-            isExpanded && lane.room > 0
-              ? { maxHeight: lane.room, overflowY: "auto" }
-              : undefined
-          }
-        >
-          {children}
-        </div>
-        {inlineCount ? (
-          <button
-            type="button"
-            data-notice-toggle
-            onClick={toggleExpanded}
-            aria-expanded={false}
-            aria-label={`Show ${more} more notices`}
-            className="pointer-events-auto inline-flex h-11 shrink-0 items-center rounded-xl px-2 text-[12px] font-medium tabular-nums text-[#fafafa]/60 transition-colors duration-100 hover:text-[#fafafa]"
-          >
-            +{more}
-          </button>
-        ) : null}
+        {children}
       </div>
-      {footer}
-    </>
+    </div>
   );
 
   const ChipIcon = chip?.urgent ? AlertCircle : Bell;
