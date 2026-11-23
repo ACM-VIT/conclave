@@ -38,7 +38,7 @@ struct CTL2LeaveEndTests {
         var tickets: [MeetingActionTicket] = []
 
         init(_ inputs: MeetingShellInputs, admitFirst: MeetingShellInputs? = nil, publishHook: Bool = true) {
-            let owner = MeetingShellPresenter()
+            let owner = MeetingShellPresenter(defaults: IsolatedDefaults.make())
             let stagePresenter = StagePresenter(shell: owner)
             shell = owner
             stage = stagePresenter

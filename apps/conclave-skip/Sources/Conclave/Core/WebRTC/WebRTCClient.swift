@@ -2524,7 +2524,7 @@ final class WebRTCClient: NSObject, ObservableObject {
 
     private func createMicrophoneAudioTrack() -> (source: RTCAudioSource, track: RTCAudioTrack) {
 
-        createMicrophoneAudioTrack(noiseSuppression: SettingsPreferences.noiseSuppression())
+        createMicrophoneAudioTrack(noiseSuppression: SettingsPreferences.noiseSuppression(defaults: UserDefaults.standard))
     }
 
     private func createMicrophoneAudioTrack(noiseSuppression: Bool) -> (source: RTCAudioSource, track: RTCAudioTrack) {

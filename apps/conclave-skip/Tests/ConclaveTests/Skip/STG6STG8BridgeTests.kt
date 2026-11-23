@@ -131,7 +131,7 @@ class STG6STG8BridgeTests {
     }
 
     @Test fun liveAnnouncementOnceAndDemotionOnce() {
-        val stage = StagePresenter(shell = MeetingShellPresenter())
+        val stage = StagePresenter(shell = MeetingShellPresenter(defaults = IsolatedDefaults.make()))
         val waiting = StageFixtureScript.inputs(StageFixtureState.attendeeWaiting128)
         val live = StageFixtureScript.inputs(StageFixtureState.attendeeLive)
         stage.apply(waiting)
@@ -143,7 +143,7 @@ class STG6STG8BridgeTests {
             if (entry.startsWith(AttendeeViewerPolicy.webinarLiveAnnouncement + ":")) count += 1
         }
         assertEquals(1, count)
-        val demoted = StagePresenter(shell = MeetingShellPresenter())
+        val demoted = StagePresenter(shell = MeetingShellPresenter(defaults = IsolatedDefaults.make()))
         demoted.apply(StageFixtureScript.base(count = 3))
         demoted.apply(StageFixtureScript.copy(StageFixtureScript.base(count = 3), isWebinarAttendee = true))
         assertTrue(demoted.announcementLog.contains(AttendeeViewerPolicy.demotedAnnouncement + ":"))

@@ -21,7 +21,7 @@ struct SYS16VersionGateTests {
     }
 
     private func viewModel(defaults: UserDefaults, version: String) -> MeetingViewModel {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.versionGateDefaults = defaults
         viewModel.currentAppVersion = { version }
         return viewModel

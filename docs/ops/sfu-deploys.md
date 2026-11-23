@@ -102,7 +102,10 @@ Before anything changes, each service's own image name must exist: on a host
 whose running images carry other names (another `COMPOSE_PROJECT_NAME`, or
 images from before the compose file named them), it is tagged from the
 instance's last-known-good image, so a plain `docker compose up` never builds
-the checkout. A drain request that fails is undone, and the instance's journal
+the checkout. Tags are checked again once the run's repair has put instances
+back into service, before the first drain: on a first upgrade where an older
+deploy left every instance drained, none of them serves at the first check,
+so each is tagged from the image it serves on once it is back. A drain request that fails is undone, and the instance's journal
 leaves the drained phase only once its `/status` confirms the drain state it
 had before.
 

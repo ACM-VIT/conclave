@@ -268,7 +268,7 @@ struct MeetingErrorClassifierTests {
 @Suite(.serialized)
 struct MeetingErrorClassifierViewModelTests {
     @Test func serverDisconnectIsRecordedOnceWithTheConnectionLostToken() async {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"
@@ -302,7 +302,7 @@ struct MeetingErrorClassifierViewModelTests {
     }
 
     @Test func aRawSocketErrorNoLongerReachesTheBanner() async {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.roomId = "room-a"
         viewModel.state.connectionState = ConnectionState.joined

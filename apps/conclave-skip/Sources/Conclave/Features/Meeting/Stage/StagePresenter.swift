@@ -47,7 +47,7 @@ final class StagePresenter {
 
     @ObservationIgnored let layoutPanel = LayoutPanelPresenter()
 
-    @ObservationIgnored let effects = EffectsPresenter(scope: EffectsScope.call)
+    @ObservationIgnored let effects: EffectsPresenter
 
     @ObservationIgnored var effectsPlatform: EffectsPlatform = EffectsPlatform.current
 
@@ -60,11 +60,11 @@ final class StagePresenter {
     @ObservationIgnored var onWatchTogetherHiddenChanged: ((Bool) -> Void)? = nil
 
     @ObservationIgnored var onNoticeCommand: ((NoticeCommand) -> Void)? = nil
-    @ObservationIgnored var dismissNotificationsPrime: () -> Void = { SystemNotifications.shared.dismissPriming() }
+    @ObservationIgnored var dismissNotificationsPrime: () -> Void = {}
 
     @ObservationIgnored weak var people: PeoplePresenter? = nil
 
-    @ObservationIgnored var chatPreviewsEnabled: () -> Bool = { VoicePreferences.showsChatPreviews() }
+    @ObservationIgnored var chatPreviewsEnabled: () -> Bool
 
     @ObservationIgnored var now: () -> Double = { Date().timeIntervalSince1970 * 1000.0 }
     @ObservationIgnored var sleep: (Double) async -> Void = { millis in
@@ -135,6 +135,9 @@ final class StagePresenter {
 
     init(shell: MeetingShellPresenter) {
         self.shell = shell
+        let defaults = shell.defaults
+        effects = EffectsPresenter(scope: EffectsScope.call, defaults: defaults)
+        chatPreviewsEnabled = { VoicePreferences.showsChatPreviews(defaults: defaults) }
     }
 
     func apply(_ next: StageInputs) {

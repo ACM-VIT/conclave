@@ -75,18 +75,18 @@ enum MeetingResumeMarker {
         return "\(millis)"
     }
 
-    static func write(now: Date = Date(), defaults: UserDefaults = .standard) {
+    static func write(now: Date = Date(), defaults: UserDefaults) {
         defaults.set(encode(now), forKey: key)
     }
 
-    static func read(defaults: UserDefaults = .standard) -> Double? {
+    static func read(defaults: UserDefaults) -> Double? {
         guard let value = defaults.string(forKey: key),
               let millis = Double(value),
               millis > 0.0 else { return nil }
         return millis
     }
 
-    static func clear(defaults: UserDefaults = .standard) {
+    static func clear(defaults: UserDefaults) {
         guard defaults.object(forKey: key) != nil else { return }
         defaults.removeObject(forKey: key)
     }
@@ -95,25 +95,25 @@ enum MeetingResumeMarker {
 enum MeetingResumeStore {
     static let key = "conclave.activeMeetingResume.v1"
 
-    static func save(_ snapshot: MeetingResumeSnapshot) {
+    static func save(_ snapshot: MeetingResumeSnapshot, defaults: UserDefaults) {
         guard let data = try? JSONEncoder().encode(snapshot),
               let value = String(data: data, encoding: .utf8) else { return }
-        UserDefaults.standard.set(value, forKey: key)
+        defaults.set(value, forKey: key)
     }
 
-    static func load(now: Date = Date(), markerMillis: Double? = nil) -> MeetingResumeSnapshot? {
-        guard let value = UserDefaults.standard.string(forKey: key) else { return nil }
+    static func load(now: Date = Date(), markerMillis: Double? = nil, defaults: UserDefaults) -> MeetingResumeSnapshot? {
+        guard let value = defaults.string(forKey: key) else { return nil }
         guard let data = value.data(using: .utf8),
               let snapshot = try? JSONDecoder().decode(MeetingResumeSnapshot.self, from: data),
               MeetingResumePolicy.isFresh(snapshot, now: now),
               !MeetingResumePolicy.isRefusedByMarker(snapshot, markerMillis: markerMillis) else {
-            clear()
+            clear(defaults: defaults)
             return nil
         }
         return snapshot
     }
 
-    static func clear() {
-        UserDefaults.standard.removeObject(forKey: key)
+    static func clear(defaults: UserDefaults) {
+        defaults.removeObject(forKey: key)
     }
 }

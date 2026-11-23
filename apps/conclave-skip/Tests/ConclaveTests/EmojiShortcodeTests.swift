@@ -84,7 +84,7 @@ struct EmojiShortcodeTests {
 @MainActor
 struct EmojiShortcodeSendTests {
     private func joinedViewModel() -> MeetingViewModel {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.displayName = "Local"

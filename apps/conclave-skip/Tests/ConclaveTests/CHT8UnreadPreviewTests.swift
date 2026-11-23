@@ -36,7 +36,7 @@ struct CHT8UnreadPreviewTests {
     }
 
     private func presenter(_ clock: Clock, previews: Bool = true) -> StagePresenter {
-        let stage = StagePresenter(shell: MeetingShellPresenter())
+        let stage = StagePresenter(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()))
         stage.now = { clock.millis }
         stage.sleep = CHT8UnreadPreviewTests.longSleep
         stage.captions.sleep = CHT8UnreadPreviewTests.longSleep
