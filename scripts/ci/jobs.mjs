@@ -132,9 +132,12 @@ export function expandScript(dir, script, args = [], packages = workspacePackage
 export function runStepProblems(workflow) {
   const problems = [];
   if (/^ {4}(if|continue-on-error):/m.test(workflow)) problems.push("the ci job has a job-level if or continue-on-error");
-  const runSteps = workflow.split(/\n(?= {6}- )/).filter((step) => /^ {6}- (?:.*\n)*? {8}run: node scripts\/ci\/run\.mjs /m.test(step) || /^ {6}- run: node scripts\/ci\/run\.mjs /m.test(step));
+  const runSteps = workflow.split(/\n(?= {6}- )/).filter((step) => /^(?: {6}- | {8})run: node scripts\/ci\/run\.mjs\b/m.test(step));
   if (runSteps.length !== 1) problems.push(`expected one step running scripts/ci/run.mjs, found ${runSteps.length}`);
   for (const step of runSteps) {
+    if (!/^(?: {6}- | {8})run: node scripts\/ci\/run\.mjs \$\{\{ matrix\.job \}\}$/m.test(step)) {
+      problems.push("the run step must be exactly: node scripts/ci/run.mjs ${{ matrix.job }}");
+    }
     if (/^ {6}- if:|^ {8}if:/m.test(step)) problems.push("the run step has an if");
     if (/^ {6}- continue-on-error:|^ {8}continue-on-error:/m.test(step)) problems.push("the run step has continue-on-error");
   }

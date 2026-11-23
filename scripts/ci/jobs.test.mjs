@@ -59,6 +59,12 @@ test("the workflow guard rejects a run step that can be skipped or ignored", () 
   assert.deepEqual(runStepProblems(job(`      - continue-on-error: true\n        ${run}`)), ["the run step has continue-on-error"]);
   assert.deepEqual(runStepProblems(`jobs:\n  ci:\n    continue-on-error: true\n    steps:\n      - id: run\n        ${run}\n`), ["the ci job has a job-level if or continue-on-error"]);
   assert.deepEqual(runStepProblems(job("      - run: echo nothing")), ["expected one step running scripts/ci/run.mjs, found 0"]);
+  const exact = "the run step must be exactly: node scripts/ci/run.mjs ${{ matrix.job }}";
+  assert.deepEqual(runStepProblems(job("      - run: node scripts/ci/run.mjs ${{ matrix.job }}")), []);
+  assert.deepEqual(runStepProblems(job("      - id: run\n        run: node scripts/ci/run.mjs lint")), [exact]);
+  assert.deepEqual(runStepProblems(job(`      - id: run\n        ${run} || true`)), [exact]);
+  assert.deepEqual(runStepProblems(job(`      - id: run\n        ${run}; exit 0`)), [exact]);
+  assert.deepEqual(runStepProblems(job("      - run: node scripts/ci/run.mjs")), [exact]);
 });
 
 test("pre and post hooks of an expanded script are CI steps too", async () => {
