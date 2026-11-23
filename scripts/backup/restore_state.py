@@ -48,6 +48,7 @@ from statelib import (  # noqa: E402
     archive_problems,
     at,
     chain_problems,
+    configured_stores,
     database_paths,
     docker_containers,
     folded,
@@ -640,72 +641,113 @@ def run_cli(args, stdin=None, password=""):
     return result.stdout
 
 
-def restore_redis(work_real, archive, target, pattern):
-    """Loads the snapshot into a throwaway server, copies the matching keys
-    into the live one with MIGRATE COPY REPLACE, then deletes the live keys in
-    that pattern the snapshot does not have. The SFUs prefer a Redis key over
-    the restored SQLite copy, so a key written after the backup would
-    otherwise outlive the restore. Keys outside the pattern are left alone."""
-    live = ["-h", target["host"], "-p", str(target["port"]), "-n", target["db"], "--no-auth-warning"]
-    if target["user"]:
-        live += ["--user", target["user"]]
-    scratch = os.path.join(work_real, "redis")
-    os.mkdir(scratch, 0o700)
-    shutil.copyfile(os.path.join(archive.payload, "redis", "dump.rdb"), os.path.join(scratch, "dump.rdb"))
-    socket = os.path.join(scratch, "redis.sock")
-    server_log = open(os.path.join(scratch, "server.log"), "w")
-    container = None
-    server = None
-    try:
+class RedisRestore:
+    """The Redis step in two halves. prepare(), before the first rename:
+    the live Redis answers and takes this restore's credentials, and the
+    snapshot loads into a throwaway server. migrate(), after the files: the
+    matching keys are copied into the live Redis with MIGRATE COPY REPLACE,
+    and the live keys in that pattern the snapshot does not have are deleted.
+    The SFUs prefer a Redis key over the restored SQLite copy, so a key
+    written after the backup would otherwise outlive the restore. Keys outside
+    the pattern are left alone."""
+
+    def __init__(self, work_real, archive, target, pattern):
+        self.target = target
+        self.pattern = pattern
+        self.where = f"{target['host']}:{target['port']}"
+        self.live = ["-h", target["host"], "-p", str(target["port"]), "-n", target["db"], "--no-auth-warning"]
+        if target["user"]:
+            self.live += ["--user", target["user"]]
+        self.scratch = os.path.join(work_real, "redis")
+        self.dump = os.path.join(archive.payload, "redis", "dump.rdb")
+        self.socket = os.path.join(self.scratch, "redis.sock")
+        self.snapshot = ["-s", self.socket, "-n", target["db"]]
+        self.server = None
+        self.container = None
+        self.server_log = None
+
+    def prepare(self):
+        env = dict(os.environ)
+        env.pop("REDISCLI_AUTH", None)
+        if self.target["password"]:
+            env["REDISCLI_AUTH"] = self.target["password"]
+        try:
+            answer = subprocess.run(["redis-cli", *self.live, "PING"], capture_output=True, text=True, env=env, timeout=15)
+            said = (answer.stdout + answer.stderr).strip()
+        except subprocess.TimeoutExpired:
+            said = "no answer in 15 s"
+        if said != "PONG":
+            if any(word in said for word in ("NOAUTH", "WRONGPASS", "NOPERM", "invalid password")):
+                raise Refused(f"the Redis at {self.where} refused this restore ({said}); check the user and password in its URL; nothing was changed")
+            raise Refused(f"cannot reach the Redis at {self.where} ({said or 'no answer'}); nothing was changed")
+        os.mkdir(self.scratch, 0o700)
+        shutil.copyfile(self.dump, os.path.join(self.scratch, "dump.rdb"))
+        self.server_log = open(os.path.join(self.scratch, "server.log"), "w")
         if shutil.which("redis-server"):
-            server = subprocess.Popen(
-                ["redis-server", "--port", "0", "--unixsocket", socket, "--dir", scratch, "--dbfilename", "dump.rdb",
+            self.server = subprocess.Popen(
+                ["redis-server", "--port", "0", "--unixsocket", self.socket, "--dir", self.scratch, "--dbfilename", "dump.rdb",
                  "--save", "", "--appendonly", "no", "--daemonize", "no"],
-                stdout=server_log, stderr=subprocess.STDOUT)
+                stdout=self.server_log, stderr=subprocess.STDOUT)
         else:
-            info = run_cli(live + ["INFO", "server"], password=target["password"])
+            info = run_cli(self.live + ["INFO", "server"], password=self.target["password"])
             version = re.search(r"^redis_version:(\d+\.\d+)", info, re.M)
             if not version:
-                raise Refused("cannot tell the live Redis version to load the snapshot with")
-            container = f"conclave-restore-redis-{os.getpid()}"
+                raise Refused("cannot tell the live Redis version to load the snapshot with; nothing was changed")
+            self.container = f"conclave-restore-redis-{os.getpid()}"
             subprocess.run(
-                ["docker", "run", "--rm", "-d", "--name", container, "--network", "host", "-v", f"{scratch}:/data",
+                ["docker", "run", "--rm", "-d", "--name", self.container, "--network", "host", "-v", f"{self.scratch}:/data",
                  f"redis:{version.group(1)}", "redis-server", "--port", "0", "--unixsocket", "/data/redis.sock",
                  "--unixsocketperm", "777", "--dir", "/data", "--dbfilename", "dump.rdb", "--save", "", "--appendonly", "no"],
                 check=True, capture_output=True)
-        snapshot = ["-s", socket, "-n", target["db"]]
         for _ in range(60):
-            if os.path.exists(socket) and subprocess.run(["redis-cli", "-s", socket, "PING"], capture_output=True, text=True).stdout.strip() == "PONG":
+            if self.server is not None and self.server.poll() is not None:
                 break
+            if os.path.exists(self.socket) and subprocess.run(["redis-cli", "-s", self.socket, "PING"], capture_output=True, text=True).stdout.strip() == "PONG":
+                return
             time.sleep(0.5)
-        else:
-            server_log.flush()
-            with open(os.path.join(scratch, "server.log"), encoding="utf-8", errors="replace") as handle:
-                raise Refused(f"the snapshot did not load: {handle.read()[-2000:]}")
-        keys = [key for key in run_cli(snapshot + ["--scan", "--pattern", pattern]).splitlines() if key]
+        self.server_log.flush()
+        with open(os.path.join(self.scratch, "server.log"), encoding="utf-8", errors="replace") as handle:
+            tail = " ".join(handle.read().split())[-600:]
+        raise Refused(f"the Redis snapshot in the backup does not load ({tail or 'the scratch server never answered'}); nothing was changed")
+
+    def migrate(self):
+        target = self.target
+        keys = [key for key in run_cli(self.snapshot + ["--scan", "--pattern", self.pattern]).splitlines() if key]
         auth = ["AUTH2", target["user"], target["password"]] if target["user"] else (["AUTH", target["password"]] if target["password"] else [])
         host = "127.0.0.1" if target["host"] == "localhost" else target["host"]
         for i in range(0, len(keys), 200):
             command = ["MIGRATE", host, str(target["port"]), "", target["db"], "10000", "COPY", "REPLACE", *auth, "KEYS", *keys[i:i + 200]]
-            reply = run_cli(snapshot, stdin=quote_args(command) + "\n").strip()
+            reply = run_cli(self.snapshot, stdin=quote_args(command) + "\n").strip()
             if reply != "OK":
                 raise Refused(f"MIGRATE into {host}:{target['port']} failed: {reply}")
-        log(f"Restored {len(keys)} Redis keys matching {pattern}")
+        log(f"Restored {len(keys)} Redis keys matching {self.pattern}")
         backed_up = set(keys)
-        stale = sorted(key for key in run_cli(live + ["--scan", "--pattern", pattern], password=target["password"]).splitlines() if key and key not in backed_up)
+        stale = sorted(key for key in run_cli(self.live + ["--scan", "--pattern", self.pattern], password=target["password"]).splitlines() if key and key not in backed_up)
         for i in range(0, len(stale), 200):
-            reply = run_cli(live, stdin=quote_args(["DEL", *stale[i:i + 200]]) + "\n", password=target["password"]).strip()
+            reply = run_cli(self.live, stdin=quote_args(["DEL", *stale[i:i + 200]]) + "\n", password=target["password"]).strip()
             if not reply.isdigit():
                 raise Refused(f"deleting keys the backup does not have failed: {reply}")
-        log(f"Deleted {len(stale)} Redis keys matching {pattern} that the backup does not have")
-        subprocess.run(["redis-cli", "-s", socket, "SHUTDOWN", "NOSAVE"], capture_output=True)
-    finally:
-        if server is not None:
-            server.terminate()
-            server.wait(10)
-        if container is not None:
-            subprocess.run(["docker", "rm", "-f", container], capture_output=True)
-        server_log.close()
+        log(f"Deleted {len(stale)} Redis keys matching {self.pattern} that the backup does not have")
+        subprocess.run(["redis-cli", "-s", self.socket, "SHUTDOWN", "NOSAVE"], capture_output=True)
+
+    def stop(self):
+        if self.server is not None and self.server.poll() is None:
+            self.server.terminate()
+            self.server.wait(10)
+        if self.container is not None:
+            subprocess.run(["docker", "rm", "-f", self.container], capture_output=True)
+        if self.server_log is not None:
+            self.server_log.close()
+
+
+def coverage_problems(archive, state, container):
+    """Every store's database (by its precedence, from the host config and
+    each SFU container's env) must be in the archive, or that store would
+    come back empty while the others are restored."""
+    covered = {start for start, _ in archive.chains} | set(archive.databases)
+    stores = configured_stores(state, container, state_mounts(docker_containers(), state))
+    return [f"the backup has no copy of {store['rel']}, the database {store['variable']} ({store['where']}) names, so that store would come back empty"
+            for store in stores if store["rel"] not in covered]
 
 
 def parse_owner(value):
@@ -745,11 +787,24 @@ def restore(args):
         for line in handle:
             print(f"  {line.rstrip()}")
 
+    # Everything the restore needs is settled here or before the first rename
+    # below: what a store opens that the archive lacks, and whether Redis can
+    # take the snapshot, refuse before anything changes.
     sqlite = "sqlite" in wants
-    redis = redis_target() if "redis" in wants and archive.has_redis else None
+    if sqlite:
+        missing = coverage_problems(archive, args.state, args.container)
+        if missing:
+            raise Refused("\n".join(missing + ["use a backup that has it, or leave SQLite out with --only redis,files (or --only files); nothing was changed"]))
+    redis = None
+    if "redis" in wants:
+        if os.environ.get("REDIS_SOURCE_URL") and not archive.has_redis:
+            raise Refused("Redis is configured (REDIS_SOURCE_URL) but this backup has no Redis snapshot, so the persistence keys written since it was taken would outlive the restore and shadow the restored databases; pass --only sqlite,files to leave Redis out; nothing was changed")
+        if archive.has_redis:
+            redis = redis_target()
     writes = restore_writes(archive, sqlite, "files" in wants)
     sides = side_files(database_paths(archive)) if sqlite else set()
     state = StateDir(args.state)
+    redis_step = None
     try:
         problems = state.live_problems(writes, sides)
         if sqlite and not problems:
@@ -762,6 +817,9 @@ def restore(args):
             return
         refuse_live_sfus(state, archive)
         owner = parse_owner(args.owner)
+        if redis:
+            redis_step = RedisRestore(work_real, archive, redis, os.environ.get("REDIS_KEY_PATTERN", "conclave:sfu:persistence*"))
+            redis_step.prepare()
         if writes:
             aside = apply_restore(state, archive, writes, sides, roots, args.stamp, owner, sqlite)
             for rel, kind in writes:
@@ -775,11 +833,16 @@ def restore(args):
                 log(f"The entries the restore replaced are kept in {aside}")
             if owner:
                 log(f"Gave the restored files in {args.state} to {owner[0]}:{owner[1]}, the user the SFU runs as")
+        if redis_step:
+            try:
+                redis_step.migrate()
+            except Refused as refused:
+                raise Refused(f"the files are restored, but the Redis step failed after its checks passed: {refused}; rerun with --only redis once that is fixed")
     finally:
         if state.fd is not None:
             os.close(state.fd)
-    if redis:
-        restore_redis(work_real, archive, redis, os.environ.get("REDIS_KEY_PATTERN", "conclave:sfu:persistence*"))
+        if redis_step:
+            redis_step.stop()
     print("")
     print("Restore applied. Start the SFUs again (docker compose -f docker-compose.sfu.yml up -d sfu-a sfu-b)")
     print("and check that the scheduled meetings and webinars are back.")
