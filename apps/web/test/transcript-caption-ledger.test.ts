@@ -739,6 +739,39 @@ describe("Sarvam: speech evidence belongs to its own turn", () => {
     expect(speakers(room.segments)).toEqual([["First.", "ada"], [GAP, "ada"], [GAP, "grace"]]);
   });
 
+  it("two turns before a delayed speech signal each keep their own audio, so the first final leaves the second's to replay", async () => {
+    vi.useFakeTimers();
+    quiet();
+    const { room, providerSockets, start, speak, endTurn } = await rig(SARVAM);
+    await start("hi");
+    const [socket] = providerSockets();
+    await speak(grace);
+    socket.emit(sarvamSpeechStart());
+    await endTurn(grace);
+    socket.emit(sarvamFinal("zero", "First."));
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    await speak(ada);
+    await endTurn(ada);
+    await vi.advanceTimersByTimeAsync(300);
+    await speak(ada);
+    await endTurn(ada);
+    await vi.advanceTimersByTimeAsync(400);
+    socket.emit(sarvamSpeechStart());
+    socket.emit(sarvamSpeechStart());
+    socket.emit(sarvamFinal("one", "Ada one."));
+    await settle();
+
+    socket.disconnect();
+    await settle();
+    const replacement = providerSockets().at(-1)!;
+    expect(speechSent(replacement)).toBe(1);
+    replacement.emit(sarvamSpeechStart());
+    replacement.emit(sarvamFinal("two", "Ada two."));
+    await vi.advanceTimersByTimeAsync(DEADLINE + 100);
+    expect(speakers(room.segments)).toEqual([["First.", "grace"], ["Ada one.", "ada"], ["Ada two.", "ada"]]);
+  });
+
   it("an end-of-speech signal that comes after the next turn's audio leaves that turn its speech", async () => {
     vi.useFakeTimers();
     quiet();

@@ -889,6 +889,44 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         await endTurn(utterance.speaker);
         if (sarvamSignalsSpeech) live.socket.emit(sarvamSpeechEnd());
       },
+      async lateTurns() {
+        if (live.provider !== "sarvam" || !sarvamSignalsSpeech) return moves.utter();
+        await vi.advanceTimersByTimeAsync(1_600);
+        const first = newUtterance(false);
+        const second = newUtterance(false);
+        if (random() < 0.5) second.speaker = first.speaker;
+        for (const utterance of [first, second]) {
+          await speak(utterance.speaker);
+          place(utterance);
+          await endTurn(utterance.speaker);
+          await vi.advanceTimersByTimeAsync(100 + random() * 200);
+        }
+        await vi.advanceTimersByTimeAsync(200 + random() * 400);
+        for (const utterance of [first, second]) {
+          live.socket.emit(sarvamSpeechStart());
+          utterance.deadlineAt = Date.now() + DEADLINE;
+          live.awaiting.push(utterance);
+        }
+      },
+      async lateEnd() {
+        if (live.provider !== "sarvam" || !sarvamSignalsSpeech) return moves.utter();
+        await vi.advanceTimersByTimeAsync(1_600);
+        const first = newUtterance(false);
+        await speak(first.speaker);
+        live.socket.emit(sarvamSpeechStart());
+        place(first);
+        live.awaiting.push(first);
+        await endTurn(first.speaker);
+        await vi.advanceTimersByTimeAsync(100 + random() * 400);
+        const second = newUtterance(false);
+        await speak(second.speaker);
+        await endTurn(second.speaker);
+        live.socket.emit(sarvamSpeechEnd());
+        await vi.advanceTimersByTimeAsync(random() * 300);
+        live.socket.emit(sarvamSpeechStart());
+        place(second);
+        live.awaiting.push(second);
+      },
       async crosstalk() {
         if (live.provider !== "sarvam" || !sarvamSignalsSpeech) return moves.utter();
         await vi.advanceTimersByTimeAsync(1_600);
@@ -1121,6 +1159,8 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
       ["signalEarly", 3],
       ["monologue", 2],
       ["crosstalk", 3],
+      ["lateTurns", 3],
+      ["lateEnd", 3],
       ["turnPair", 4],
       ["lateAck", 3],
       ["itemFails", 3],
