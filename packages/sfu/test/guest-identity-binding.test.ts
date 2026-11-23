@@ -2743,6 +2743,32 @@ describe("what a refused join leaves behind", () => {
       expect((await join(state, guestHost)).ack).toHaveBeenCalledWith(joined);
     });
   });
+
+  it("counts a tab that moves from the audience to the meeting against the meeting's limit (Greptile)", async () => {
+    await withLimits({ seats: 2 }, async () => {
+      const state = makeState();
+      await join(state, guestHost);
+      const room = state.rooms.get("conclave:room")!;
+      const config = getOrCreateWebinarRoomConfig(state.webinarConfigs, room.channelId);
+      config.enabled = true;
+      config.publicAccess = true;
+      setCustomWebinarLinkSlug({
+        webinarConfig: config,
+        webinarLinks: state.webinarLinks,
+        room: { channelId: room.channelId, id: room.id, clientId: room.clientId },
+        slug: "launch",
+      });
+      expect((await join(state, guestOf("seat-a"))).ack).toHaveBeenCalledWith(joined);
+      const account = { email: "alice@example.com", userId: "alice@example.com", clientId: "conclave", sessionId: "alice-1" } satisfies SfuAuthPayload;
+      const watching = await join(state, { ...account, joinMode: "webinar_attendee" }, "launch");
+      expect(watching.ack).toHaveBeenCalledWith(expect.objectContaining({ status: "joined", webinarRole: "attendee" }));
+
+      const toTheMeeting = await join(state, account);
+
+      expect(toTheMeeting.ack).toHaveBeenCalledWith({ error: "This meeting is full." });
+      expect(room.clients.size - room.getWebinarAttendeeCount()).toBe(2);
+    });
+  });
 });
 
 describe("a host action when the decision record is full of refusals (Astra)", () => {

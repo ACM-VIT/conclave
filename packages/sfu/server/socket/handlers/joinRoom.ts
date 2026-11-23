@@ -588,6 +588,12 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         const wasReconnecting = room.hasPendingDisconnect(userId);
         const isReplacingExistingSeat =
           Boolean(existingClient) || staleSameIdentitySeats.length > 0;
+        // Only a join that takes the place of a meeting seat keeps the
+        // meeting's seat count as it was. One that replaces this tab's
+        // audience seat adds a meeting seat.
+        const isReplacingMeetingSeat =
+          (existingClient !== undefined && !existingClient.isWebinarAttendee) ||
+          staleSameIdentitySeats.some((seat) => !seat.isWebinarAttendee);
         const isSameSessionMeetingParticipantRejoin =
           !isWebinarAttendeeJoin &&
           Boolean(
@@ -888,7 +894,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         if (
           !isWebinarAttendeeJoin &&
           !hasPrivilegedJoinAccess &&
-          !isReplacingExistingSeat &&
+          !isReplacingMeetingSeat &&
           room.clients.size - room.getWebinarAttendeeCount() >=
             config.meetingSeatLimit
         ) {
