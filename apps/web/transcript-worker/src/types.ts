@@ -74,7 +74,6 @@ export type PersistedSnapshot = {
   sequence: number;
   serviceVersion?: TranscriptServiceVersion;
   transcriptionConfig?: PersistedTranscriptionConfig;
-  /** The exact language code the session's provider is sent, decided when the session was accepted. */
   providerLanguage?: string;
 };
 
@@ -93,9 +92,7 @@ export type ClientEnvelope =
       transcriptModel?: string;
       qaModel?: string;
       transportMode?: TranscriptTransportMode;
-      /** A language code; null asks for the deployment default, and none keeps a resumed session's. */
       language?: string | null;
-      /** The exact code to send the provider, as the client's picker shows it. */
       providerLanguage?: string;
       delay?: string;
       requestId?: string;

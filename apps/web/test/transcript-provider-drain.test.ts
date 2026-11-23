@@ -71,7 +71,6 @@ async function fixture(transcriptModel: string, env: Partial<Env> = {}) {
   });
   const snapshots: { segments: { text: string }[] }[] = [];
   let heldWrites: Promise<void> | null = null;
-  /** Holds every snapshot write until the returned release is called, as a slow storage write would. */
   const holdWrites = () => {
     let release = () => {};
     heldWrites = new Promise<void>((resolve) => {

@@ -67,11 +67,8 @@ export interface TranscriptSessionState {
   qaModel: string;
   transportMode: TranscriptTransportMode;
   language?: string;
-  /** The exact code the session's caption provider is sent; `language` is how it shows. */
   providerLanguage?: string;
-  /** True when a participant picked the language, not the deployment default. */
   languageChosen?: boolean;
-  /** The client request that started this session, echoed so it can tell its own outcome. */
   requestId?: string;
   keySource?: TranscriptOpenAiKeySource | null;
   startedAt: number | null;

@@ -141,12 +141,9 @@ type ProviderDrain = {
   session: LiveTranscriptionSession;
   epoch: number;
   partials: Map<string, TranscriptSegment>;
-  // Places taken in commit order for lines with no text yet.
   reserved: Map<string, TranscriptSegment>;
   unfinalizedItems: Set<string>;
   pendingCommits: number;
-  // OpenAI acknowledges each commit, so it is done once nothing is owed.
-  // Sarvam acknowledges nothing, so it drains to its deadline.
   settlesOnAcks: boolean;
   speakers: TranscriptSpeakerAttribution;
   latestSpeaker: TranscriptSpeaker | null;
@@ -162,14 +159,9 @@ export class TranscriptRoom {
   private readonly loaded: Promise<void>;
   private readonly viewers = new Map<WebSocket, Viewer>();
   private readonly partialSegments = new Map<string, TranscriptSegment>();
-  // A line's place is fixed when its audio is committed, before any of its
-  // text: finals and partials then keep commit order whatever order they
-  // arrive in, across a provider switch too.
   private readonly committedPlaces = new Map<string, { sequence: number; startMs: number }>();
   private speakerAttribution = new TranscriptSpeakerAttribution();
   private latestSpeaker: TranscriptSpeaker | null = null;
-  // Work the current provider owes us: committed items without a final, and
-  // whether it has heard audio since its last final.
   private readonly unfinalizedItems = new Set<string>();
   private audioSinceLastFinal = false;
   private lastAudioAt = 0;
@@ -180,8 +172,6 @@ export class TranscriptRoom {
   private segments: TranscriptSegment[] = [];
   private minutes: TranscriptMinutesSnapshot = createEmptyMinutes();
   private sequence = 0;
-  // The exact language code this session's provider is sent, fixed when the
-  // session is accepted and saved with it, so a restore resends it unchanged.
   private sessionProviderLanguage: string | undefined;
   private responseApiKey: string | null = null;
   private responseEnvironment: Env | null = null;
@@ -389,20 +379,11 @@ export class TranscriptRoom {
     }
   }
 
-  /**
-   * What a saved session was connected with, from any snapshot layout: the
-   * exact provider code on the session (current), at the snapshot root
-   * (earlier builds of this change), or, for staging's snapshots that saved
-   * none, the code staging itself resolves from the saved connection.
-   */
   private savedTranscription(snapshot: PersistedSnapshot) {
     const provider = getTranscriptTranscriptionProvider(
       normalizeRealtimeTranscriptModel(snapshot.session.transcriptModel, DEFAULT_TRANSCRIPT_MODEL),
     );
     const savedConfig = snapshot.transcriptionConfig;
-    // A pick resumes as picked, the session's newest one first. Without one,
-    // resume exactly as before picks existed: the saved connection's
-    // language, else the deployment's, never the language the session reports.
     const languageChosen = snapshot.session.language
       ? snapshot.session.languageChosen === true
       : savedConfig?.languageChosen === true;
@@ -451,8 +432,6 @@ export class TranscriptRoom {
     if (!transcriptionKey.ok || !responseKey.ok) return;
 
     const wasPaused = snapshot.session.status === "paused";
-    // A saved session resends the code it was sent, whatever the environment
-    // is now; only a snapshot without one resolves it from its saved config.
     const { config, providerLanguage } = this.savedTranscription(snapshot);
     this.sessionProviderLanguage = providerLanguage;
     this.responseApiKey = responseKey.apiKey;
@@ -608,7 +587,6 @@ export class TranscriptRoom {
     return getTranscriptServiceVersion(this.env);
   }
 
-  /** Per provider, the exact code its provider is sent when nobody picks a language. */
   private captionLanguageDefaults(): Record<"openai" | "sarvam", string> {
     const unpicked = {
       language: normalizeLanguage(this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE),
@@ -997,9 +975,6 @@ export class TranscriptRoom {
     const deploymentLanguage = normalizeLanguage(
       this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE,
     );
-    // Only a pick names a language: this request's, or the resumed session's.
-    // Without one the provider gets exactly what it did before picks existed,
-    // the deployment language, never the language the session reports.
     const keepsPick =
       message.language === undefined && takeover && this.session?.languageChosen === true;
     const pickedLanguage = message.language || (keepsPick ? this.session?.language : undefined);
@@ -1016,8 +991,6 @@ export class TranscriptRoom {
       return;
     }
     const locale = normalizeLocale(this.env.TRANSCRIPT_TRANSCRIPTION_LOCALE);
-    // A client that shows a language sends the exact code it shows, and that
-    // code is used as it is; only a request with none resolves one here.
     const sentProviderLanguage = message.providerLanguage?.trim();
     if (
       sentProviderLanguage &&
@@ -1684,12 +1657,6 @@ export class TranscriptRoom {
     } catch {}
   }
 
-  /**
-   * Keeps a provider that is being replaced open until it finishes the speech
-   * it already has: its partials, committed items and audio not yet final.
-   * Each replaced provider drains on its own; a later switch never cuts an
-   * earlier drain short.
-   */
   private drainTranscriptionProvider(): void {
     const session = this.transcriptionSession;
     if (!session) return;
@@ -1702,8 +1669,6 @@ export class TranscriptRoom {
     }
     const now = Date.now();
     const settlesOnAcks = session.provider === "openai";
-    // Sarvam never says what it still owes, so any Sarvam connection that
-    // heard audio in the last 10 seconds drains until 10 seconds after it.
     const owesWork = settlesOnAcks
       ? this.partialSegments.size > 0 ||
         this.unfinalizedItems.size > 0 ||
@@ -1763,11 +1728,6 @@ export class TranscriptRoom {
     }
   }
 
-  /**
-   * Saves the drained lines still on screen, unless a final already landed,
-   * and lets the drain go at once; the one snapshot write that keeps those
-   * lines finishes on its own, so a slow write never holds the old socket.
-   */
   private async finishProviderDrain(drain: ProviderDrain): Promise<void> {
     if (this.providerDrains.get(drain.epoch) !== drain) return;
     let saved = false;
@@ -1782,11 +1742,6 @@ export class TranscriptRoom {
     }
   }
 
-  /**
-   * Finals plus the lines a replaced provider is still finishing, saved as
-   * finals: a restarted or rolled-back worker cannot resume a drain, and
-   * would otherwise drop words already on screen.
-   */
   private segmentsForSnapshot(): TranscriptSegment[] {
     const draining = this.drainedPartials()
       .filter(({ itemId, text }) => text.trim() && !this.hasFinalSegment(itemId))
@@ -1811,16 +1766,6 @@ export class TranscriptRoom {
     return [...this.partialSegments.values(), ...this.drainedPartials()];
   }
 
-  /**
-   * Takes the next place in the drain's reserved block for a line with no
-   * text yet, in commit order, so speech from before the switch stays ahead
-   * of the new provider's and in the order it was spoken.
-   */
-  /**
-   * Holds a drained line's place: the one its commit took, or for audio the
-   * old provider acknowledges only after the switch, the next place in the
-   * drain's block, which sits ahead of the new provider's lines.
-   */
   private reserveDrainedSegment(
     drain: ProviderDrain,
     itemId: string,
@@ -1877,8 +1822,6 @@ export class TranscriptRoom {
       updatedAt: now,
     };
     drain.partials.set(itemId, next);
-    // The snapshot write starts first, so the output gate holds this delta
-    // until a restarted worker would still have its words.
     void this.persist();
     this.broadcast({
       type: "segment.delta",
@@ -2374,7 +2317,6 @@ export class TranscriptRoom {
     this.scheduleMinutes();
   }
 
-  /** Puts a final in its place and shows it; false when nothing changed. */
   private recordFinalSegment(
     segment: TranscriptSegment,
     transcript: string,
@@ -2385,7 +2327,6 @@ export class TranscriptRoom {
       (candidate) => candidate.itemId === segment.itemId,
     );
     const existing = existingIndex >= 0 ? this.segments[existingIndex] : null;
-    // A repeated final changes nothing; a corrected one keeps its place.
     if (existing?.text === text) return false;
 
     const now = Date.now();

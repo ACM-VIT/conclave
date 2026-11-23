@@ -5,10 +5,6 @@ type MeetingLinkInput = {
   clientId?: string | null;
 };
 
-/**
- * A meeting link always names its tenant: a bare link means the server's
- * default for bookings and the browser's default for rooms, which can differ.
- */
 export const buildMeetingPath = (meeting: MeetingLinkInput): string => {
   const path = `/${encodeURIComponent(meeting.roomCode)}`;
   const clientId = canonicalizeSfuClientId(meeting.clientId);

@@ -38,8 +38,6 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-// The language each provider connection was really given, named as the
-// picker names languages.
 function providerConnections() {
   const used: string[] = [];
   const codes: (string | null)[] = [];
@@ -345,8 +343,6 @@ describe("whatever the environment did since, resuming sends exactly what the se
 
 describe("a snapshot from any earlier build resumes with the code it was sent", () => {
   type Layout = "current" | "ebfacc3d" | "staging";
-  // How each build stored the code: on the session and at the root (now), at
-  // the root only (ebfacc3d), or not at all (staging, which saved its config).
   const inLayout = (snapshot: PersistedSnapshot, layout: Layout): PersistedSnapshot => {
     const copy = structuredClone(snapshot) as PersistedSnapshot & {
       session: TranscriptSessionState & { providerLanguage?: string; language?: string; languageChosen?: boolean };
@@ -362,8 +358,6 @@ describe("a snapshot from any earlier build resumes with the code it was sent", 
   };
   const before = { TRANSCRIPT_SARVAM_LANGUAGE_CODE: "od-IN" };
   const after = { TRANSCRIPT_SARVAM_LANGUAGE_CODE: "unknown" };
-  // Staging saved no code, so its sessions resume as staging resumes them:
-  // from the saved connection, with the environment of the restart.
   const expectedCode = (layout: Layout) => (layout === "staging" ? "unknown" : "od-IN");
 
   it.each(["current", "ebfacc3d", "staging"] as const)("a %s snapshot restores the same code after the environment changed", async (layout) => {

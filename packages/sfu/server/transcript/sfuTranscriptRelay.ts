@@ -46,8 +46,6 @@ export class SfuTranscriptRelay implements TranscriptAudioBatchSink {
   private commitTimer: NodeJS.Timeout | null = null;
   private lastWorkerSendWarnAt = 0;
   private started = false;
-  // A close is final: a start still awaiting when it lands tears down what
-  // it creates afterwards instead of leaving untracked media running.
   private closed = false;
 
   constructor(

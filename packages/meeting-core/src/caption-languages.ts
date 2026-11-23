@@ -7,11 +7,6 @@ export interface CaptionLanguage {
   sarvam: boolean;
 }
 
-/**
- * One table for every caption language, keyed by the code clients pick and
- * show. Providers' own codes, such as Sarvam's "od-IN" or a deployment
- * language like "ta-IN", map to these through captionLanguageCode().
- */
 export const CAPTION_LANGUAGES: readonly CaptionLanguage[] = [
   { code: "en", label: "English", openai: true, sarvam: true },
   { code: "hi", label: "Hindi", openai: true, sarvam: true },
@@ -58,11 +53,6 @@ export const captionLanguagesFor = (
     provider === "sarvam" ? language.sarvam : language.openai,
   );
 
-/**
- * The picker code for a code a provider or session reports: "ta-IN" and
- * "ta" are Tamil. A code the table does not know stays as it is, and none,
- * or Sarvam's "unknown", means auto-detect.
- */
 export const captionLanguageCode = (
   code: string | null | undefined,
 ): string | undefined => {
@@ -72,16 +62,11 @@ export const captionLanguageCode = (
   return CAPTION_LANGUAGES.find((language) => language.code === base)?.code ?? trimmed;
 };
 
-/**
- * The exact code a provider is sent for a language picked from the table:
- * Sarvam takes the regional code ("hi-IN"), OpenAI the language code.
- */
 export const captionProviderCode = (
   provider: TranscriptTranscriptionProvider,
   code: string,
 ): string => (provider === "sarvam" ? `${code}-IN` : code);
 
-/** What to call a reported code: its language, or the code itself; undefined is auto-detect. */
 export const captionLanguageLabel = (
   code: string | null | undefined,
 ): string | undefined => {

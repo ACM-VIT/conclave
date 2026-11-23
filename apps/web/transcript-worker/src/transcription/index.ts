@@ -28,7 +28,6 @@ export const canTranscribeLanguage = (
 ): boolean =>
   provider !== "sarvam" || sarvamCanTranscribe(language, languageChosen, env);
 
-/** The exact language code a provider connection is sent. */
 export const transcriptionProviderLanguage = (
   provider: TranscriptTranscriptionProvider,
   options: {
@@ -39,7 +38,6 @@ export const transcriptionProviderLanguage = (
   },
 ): string => (provider === "sarvam" ? sarvamProviderLanguage(options) : options.language);
 
-/** Whether a code a client sent can be given to the provider as it is. */
 export const isTranscriptionProviderLanguage = (
   provider: TranscriptTranscriptionProvider,
   code: string,
@@ -48,10 +46,6 @@ export const isTranscriptionProviderLanguage = (
     ? SARVAM_SUPPORTED_LANGUAGE_CODES.has(code)
     : normalizeLanguage(code) === code;
 
-/**
- * The language a session shows, derived only from the code its provider is
- * sent, through the shared caption language table.
- */
 export const shownTranscriptionLanguage = (
   providerLanguage: string,
 ): string | undefined => captionLanguageCode(providerLanguage);

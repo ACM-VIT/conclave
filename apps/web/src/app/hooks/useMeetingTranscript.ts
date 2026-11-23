@@ -81,9 +81,7 @@ interface StartTranscriptOptions {
   transcriptModel?: string;
   qaModel?: string;
   transportMode?: TranscriptTransportMode;
-  /** A language code; null asks for the worker's default, and none keeps a resumed session's. */
   language?: string | null;
-  /** The exact code the provider is to be sent, as the picker shows it. */
   providerLanguage?: string;
 }
 
@@ -154,7 +152,6 @@ type SessionRequestOutcome =
   | { kind: "replaced" }
   | { kind: "timeout" };
 
-/** Per provider, the exact code its provider is sent when nobody picks a language. */
 export type CaptionLanguageDefaults = Partial<
   Record<"openai" | "sarvam", string | null>
 >;
@@ -651,8 +648,6 @@ export function useMeetingTranscript({
       ) {
         cancelPendingQuestions();
       }
-      // A relay token is tied to one session: once that session ends or a
-      // new one starts, an identical token is a new relay, not a repeat.
       if (["starting", "idle", "error", "takeover_needed"].includes(nextSession.status)) {
         startedRelayTokensRef.current.clear();
       }
@@ -677,8 +672,6 @@ export function useMeetingTranscript({
       for (const waiter of waiters) {
         const echoed = nextSession.requestId;
         if (echoed !== undefined && echoed !== waiter.requestId) {
-          // A newer request of ours took over the session: this one was
-          // replaced, not refused. An older one's echo settles nothing here.
           const echoedWaiter = waiters.find((other) => other.requestId === echoed);
           if (echoedWaiter && echoedWaiter.order > waiter.order) {
             replacedRequestIdsRef.current.add(waiter.requestId);
@@ -689,8 +682,6 @@ export function useMeetingTranscript({
         if (echoed !== undefined) {
           waiter.accepted = true;
         } else if (waiters.length === 1 && (fromSnapshot || nextSession.status === "starting")) {
-          // Older workers echo no request id. Trust their "starting", or a
-          // reconnect snapshot, only when one request is pending.
           waiter.accepted = true;
         }
         if (nextSession.status === "starting") continue;
@@ -709,8 +700,6 @@ export function useMeetingTranscript({
     sessionWaitersRef.current.clear();
   }, []);
 
-  // A refusal of a request that a newer one of ours replaced, or is about
-  // to, answers nothing anyone still waits on: it settles as replaced.
   const settleSupersededRefusal = useCallback((requestId?: string): boolean => {
     if (!requestId) return false;
     if (replacedRequestIdsRef.current.has(requestId)) return true;
@@ -1078,8 +1067,6 @@ export function useMeetingTranscript({
       setError("Transcript worker did not authorize the SFU relay.");
       return false;
     }
-    // A token can reach both a pending request and the automatic recovery
-    // path; only the first one starts a relay with it.
     if (startedRelayTokensRef.current.has(relayStartToken.token)) return true;
     startedRelayTokensRef.current.add(relayStartToken.token);
     let relayStart: TranscriptSfuRelayStartResponse | null = null;
@@ -1242,8 +1229,6 @@ export function useMeetingTranscript({
       }
       let relayToken: TranscriptSfuRelayStartToken | undefined;
       if (outcome.viaSnapshot) {
-        // After a reconnect the worker sends a token only if no relay is
-        // connected, so no token means the running relay carried on.
         const token = await waitForSfuRelayStartToken();
         if (!token) return true;
         relayToken = token;

@@ -14,8 +14,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-// Staging's resolution (72a53ccc), copied so this test can compare against it:
-// transcript-worker/src/utils.ts, constants.ts and transcription/sarvam.ts.
 const BASE_SARVAM_CODES = new Set([
   "unknown", "en-IN", "hi-IN", "bn-IN", "gu-IN", "kn-IN", "ml-IN", "mr-IN", "od-IN", "pa-IN",
   "ta-IN", "te-IN", "as-IN", "ur-IN", "ne-IN", "kok-IN", "ks-IN", "sd-IN", "sa-IN", "sat-IN",
@@ -95,7 +93,6 @@ async function worker(env: Partial<Env>, saved?: Snapshot) {
   };
 }
 
-// What a code sent to Sarvam means, named the way the picker names it.
 const spoken = (code: string | null | undefined) => captionLanguageLabel(code) ?? "Auto-detect";
 
 function providerCodes() {

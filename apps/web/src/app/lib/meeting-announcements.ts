@@ -19,8 +19,6 @@ export function rosterOf(
   for (const participant of participants.values()) {
     if (participant.userId === currentUserId) continue;
     if (isSystemUserId(participant.userId)) continue;
-    // Someone marked as leaving has left: their name can be gone before
-    // their tile is, so the roster drops them while it still knows them.
     if (participant.isLeaving) continue;
     roster.set(participant.userId, {
       name: nameOf(participant.userId),

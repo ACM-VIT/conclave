@@ -262,7 +262,6 @@ describe("requests that are replaced or recovered", () => {
     expiresAt: Date.now() + 60_000,
     ...(automatic ? { automatic: true } : {}),
   });
-  // The worker rebinds the controller to the new connection on reconnect.
   const rebound = { userId: "host", connectionId: "conn-2" };
   const dropAndReconnect = async (socket: FakeSocket) => {
     await act(async () => socket.close());
