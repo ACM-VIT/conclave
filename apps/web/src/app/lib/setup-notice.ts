@@ -40,25 +40,25 @@ export function hiddenSetupView({
   isLoading: boolean;
 }): HiddenSetupView {
   if (notice?.kind === "rejected") {
-    return { headline: "you weren't let in", body: notice.message, action: "retry", busy: false };
+    return { headline: "You weren't let in", body: notice.message, action: "retry", busy: false };
   }
   if (notice?.kind === "ended") {
     return { headline: "Webinar ended", body: notice.message, action: "home", busy: false };
   }
   const isWaitingForHost = WAITING_FOR_HOST.test(errorMessage);
   if (errorMessage && !isWaitingForHost) {
-    return { headline: "we hit a snag", body: errorMessage, action: "retry", busy: false };
+    return { headline: "We hit a snag", body: errorMessage, action: "retry", busy: false };
   }
   if (isWaitingForHost) {
     return {
-      headline: "waiting for the host to start",
+      headline: "Waiting for the host to start",
       body: "Hang tight. This page will refresh on its own the moment the host opens the room.",
       action: null,
       busy: false,
     };
   }
   return {
-    headline: isLoading ? "getting you in" : "almost there",
+    headline: isLoading ? "Getting you in" : "Almost there",
     body: "Sit tight. Getting the room ready in a moment.",
     action: null,
     busy: true,

@@ -36,7 +36,7 @@ describe("a waiting guest the host rejects", () => {
       errorMessage: rejected.meetError.message,
       isLoading: false,
     });
-    expect(view.headline).not.toMatch(/ended/i);
+    expect(view.headline).toBe("You weren't let in");
     expect(view.body).toBe(JOIN_REJECTED_MESSAGE);
     expect(view.action).toBe("retry");
     expect(view.busy).toBe(false);
@@ -46,5 +46,19 @@ describe("a waiting guest the host rejects", () => {
     expect(
       hiddenSetupView({ notice: endedNotice("The webinar has ended."), errorMessage: "", isLoading: false }),
     ).toMatchObject({ headline: "Webinar ended", body: "The webinar has ended.", action: "home" });
+  });
+
+  it("uses sentence case for every hidden setup heading", () => {
+    const headlines = [
+      hiddenSetupView({ notice: joinRejectedUpdate().setupNotice, errorMessage: "", isLoading: false }).headline,
+      hiddenSetupView({ notice: endedNotice("The webinar has ended."), errorMessage: "", isLoading: false }).headline,
+      hiddenSetupView({ notice: null, errorMessage: "Something broke", isLoading: false }).headline,
+      hiddenSetupView({ notice: null, errorMessage: "Room is not live yet", isLoading: false }).headline,
+      hiddenSetupView({ notice: null, errorMessage: "", isLoading: true }).headline,
+      hiddenSetupView({ notice: null, errorMessage: "", isLoading: false }).headline,
+    ];
+    for (const headline of headlines) {
+      expect(headline.charAt(0)).toBe(headline.charAt(0).toUpperCase());
+    }
   });
 });
