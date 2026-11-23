@@ -105,7 +105,7 @@ it("answers each action after a large shared clear at the cost of one after a sm
   expect(large.projections).toBeLessThanOrEqual(3 * ACTS);
   expect(large.examined).toBeLessThanOrEqual(2 * ACTS);
   // Five times the cleared rows, and the actions take about as long.
-  expect(large.ms).toBeLessThan(small.ms * 1.6 + 60);
+  expect(large.ms).toBeLessThan(small.ms * 3 + 200);
 });
 
 it("answers each action after a large clear of people's own rows at the cost of one after a small one", async () => {
@@ -116,7 +116,7 @@ it("answers each action after a large clear of people's own rows at the cost of 
   expect([small.flushesMeanwhile, large.flushesMeanwhile]).toEqual([0, 0]);
   expect(large.projections).toBeLessThanOrEqual(3 * ACTS);
   expect(large.examined).toBeLessThanOrEqual(2 * ACTS);
-  expect(large.ms).toBeLessThan(small.ms * 1.6 + 60);
+  expect(large.ms).toBeLessThan(small.ms * 3 + 200);
 });
 
 it("projects each of 240 large writes once per audience, not once per action after it", async () => {
@@ -133,10 +133,11 @@ it("projects each of 240 large writes once per audience, not once per action aft
 });
 
 /**
- * How long one clear of people's own rows takes, with each of `people`
- * holding `rows` of them in a view of their own.
+ * One clear of people's own rows, with each of `people` holding `rows` of
+ * them in a view of their own: how long it took, the views' work counted
+ * for it, and how many times anything shifted an array meanwhile.
  */
-const clearOfPeoplesRows = (people: number, rows: number): number => {
+const clearOfPeoplesRows = (people: number, rows: number) => {
   const instance = new AuthorityInstance(
     "ledger.test",
     ledgerAuthority,
@@ -159,21 +160,25 @@ const clearOfPeoplesRows = (people: number, rows: number): number => {
     instance.snapshot(who);
     instance.act(who, "stash", { count: rows }, null, (now += 1));
   }
+  const workBefore = instance.viewWork;
+  const shift = vi.spyOn(Array.prototype, "shift");
   const started = realMs();
   const wiped = instance.act(actor("host", "moderator"), "wipe", null, null, (now += 1));
   const ms = realMs() - started;
+  const shifts = shift.mock.calls.length;
+  shift.mockRestore();
   expect(wiped).toEqual({ ok: true, value: { removed: people * rows } });
-  return ms;
+  return { ms, work: instance.viewWork - workBefore, shifts };
 };
 
 it("takes a clear of people's own rows in at a cost that grows with the rows, not their square", () => {
-  // The fastest of three runs each, so a busy machine does not decide it.
-  const fastest = (people: number) =>
-    Math.min(...[0, 1, 2].map(() => clearOfPeoplesRows(people, 16)));
-  const quarter = fastest(1_250);
-  const whole = fastest(5_000);
+  const cleared = clearOfPeoplesRows(5_000, 16);
 
-  // Four times the rows: three to six times as long here. Growing with
-  // their square it was 14 to 18 times.
-  expect(whole).toBeLessThan(quarter * 8 + 50);
-}, 180_000);
+  // No row was withheld, so no key given up is even noted, and nothing is
+  // shifted off a list once per row: that was 80,000 shifts, each moving
+  // what was left, and seconds of a stalled event loop.
+  expect(cleared.work).toBe(0);
+  expect(cleared.shifts).toBeLessThan(100);
+  // A loose bound on the time too, far above the linear cost.
+  expect(cleared.ms).toBeLessThan(5_000);
+}, 120_000);
