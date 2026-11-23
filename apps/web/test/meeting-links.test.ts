@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildMeetingPath } from "../src/lib/meeting-links";
+import { buildMeetingPath, crossTenantJoinPath, parseMeetingInput } from "../src/lib/meeting-links";
 import {
   canonicalizeSfuClientId,
   findScheduledMeetingForLink,
@@ -140,3 +140,31 @@ describe("meeting links", () => {
   });
 });
 
+describe("a pasted meeting link", () => {
+  it("joins its own room, whatever the link's host and query", () => {
+    expect(parseMeetingInput("https://conclave.acmvit.in/rose-sora-luffy?clientId=conclave")).toEqual({
+      roomCode: "rose-sora-luffy",
+      clientId: "conclave",
+    });
+    expect(parseMeetingInput("conclave.acmvit.in/rose-sora-luffy")).toEqual({
+      roomCode: "rose-sora-luffy",
+      clientId: null,
+    });
+    expect(parseMeetingInput("http://localhost:3000/abc-defg-hij?clientId=acme#x")).toEqual({
+      roomCode: "abc-defg-hij",
+      clientId: "acme",
+    });
+  });
+
+  it("leaves a code being typed as it is typed", () => {
+    expect(parseMeetingInput("rose-sora-")).toEqual({ roomCode: "rose-sora-", clientId: null });
+    expect(parseMeetingInput("Rose Sora")).toEqual({ roomCode: "rose-sora", clientId: null });
+  });
+
+  it("opens a link that names another tenant in that tenant, and keeps one in this tenant here", () => {
+    expect(crossTenantJoinPath("abc-defg-hij", "acme", "conclave")).toBe("/abc-defg-hij?clientId=acme");
+    expect(crossTenantJoinPath("abc-defg-hij", "conclave", "conclave")).toBeNull();
+    expect(crossTenantJoinPath("abc-defg-hij", "default", "conclave")).toBeNull();
+    expect(crossTenantJoinPath("abc-defg-hij", null, "conclave")).toBeNull();
+  });
+});
