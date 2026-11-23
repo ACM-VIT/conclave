@@ -12,6 +12,7 @@ const repoDir = path.resolve(packageDir, "..", "..");
 const swiftProtocolPath = path.join(repoDir, "apps", "conclave-skip", "Sources", "Conclave", "Core", "Models", "AppBridgeProtocol.swift");
 
 const protocol = await import(pathToFileURL(path.join(embedDir, "protocol.ts")).href);
+const limits = await import(pathToFileURL(path.join(packageDir, "src", "sdk", "limits.ts")).href);
 const fixtures = JSON.parse(readFileSync(path.join(embedDir, "contract-fixtures.json"), "utf8"));
 
 const envelope = (type, payload, overrides = {}) =>
@@ -149,6 +150,13 @@ const makeRoom = (mod, context) => {
   const { Y } = mod;
   const room = new Y.Doc();
   const clients = [];
+  context.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const settle = async () => {
+    for (let round = 0; round < 3; round += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+      context.mock.timers.tick(1_000);
+    }
+  };
   context.after(() => {
     for (const client of clients) {
       client.session.close();
@@ -175,10 +183,11 @@ const makeRoom = (mod, context) => {
       stateVector: mod.base64FromBytes(Y.encodeStateVector(room)),
     }, requestId);
   };
-  const pump = () => {
+  const pump = async () => {
     let moved = true;
     while (moved) {
       moved = false;
+      await settle();
       for (const client of clients) {
         while (client.outbox.length > 0) {
           moved = true;
@@ -209,7 +218,7 @@ const makeRoom = (mod, context) => {
       }
     }
   };
-  const join = (name, host = {}) => {
+  const join = async (name, host = {}) => {
     const outbox = [];
     const client = {
       name,
@@ -218,12 +227,16 @@ const makeRoom = (mod, context) => {
       outbox,
       received: [],
       acks: [],
+      updatesPostedAt: [],
       requestNumber: 0,
       handler: () => "none",
     };
     const transport = {
       platform: "ios",
-      post: (message) => outbox.push(message),
+      post: (message) => {
+        outbox.push(message);
+        if (JSON.parse(message).type === "update") client.updatesPostedAt.push(Date.now());
+      },
       onMessage: (next) => {
         client.handler = next;
       },
@@ -231,7 +244,7 @@ const makeRoom = (mod, context) => {
     client.session = new mod.NativeEmbedSession(transport, client.scope, new Y.Doc());
     clients.push(client);
     client.session.start();
-    pump();
+    await pump();
     return client;
   };
   return { Y, room, roomUpdates, join, pump, deliver };
@@ -239,52 +252,70 @@ const makeRoom = (mod, context) => {
 
 const text = (Y, doc) => doc.getMap("whiteboard").toJSON();
 
-test("two embeds converge: snapshot first, then only what the room lacks", { skip: skipConvergence }, (context) => {
+test("two embeds converge: snapshot first, then only what the room lacks", { skip: skipConvergence }, async (context) => {
   const harness = makeRoom(sessionModule, context);
-  const ada = harness.join("ada");
+  const ada = await harness.join("ada");
   assert.ok(ada.session.isSynced);
   ada.session.doc.getMap("whiteboard").set("stroke-1", "ada");
-  harness.pump();
+  await harness.pump();
   assert.equal(harness.roomUpdates.length, 1);
-  const ben = harness.join("ben");
+  const ben = await harness.join("ben");
   assert.deepEqual(text(harness.Y, ben.session.doc), { "stroke-1": "ada" });
   ben.session.doc.getMap("whiteboard").set("stroke-2", "ben");
-  harness.pump();
+  await harness.pump();
   assert.deepEqual(text(harness.Y, ada.session.doc), { "stroke-1": "ada", "stroke-2": "ben" });
   assert.deepEqual(text(harness.Y, harness.room), { "stroke-1": "ada", "stroke-2": "ben" });
 });
 
-test("a reconnect resyncs and sends nothing twice", { skip: skipConvergence }, (context) => {
+test("a reconnect resyncs and sends nothing twice", { skip: skipConvergence }, async (context) => {
   const harness = makeRoom(sessionModule, context);
-  const ada = harness.join("ada");
-  const ben = harness.join("ben");
+  const ada = await harness.join("ada");
+  const ben = await harness.join("ben");
   ada.host = { ...ada.host, connection: "reconnecting" };
   harness.deliver(ada, "status", ada.host);
   ada.session.doc.getMap("whiteboard").set("offline", "drawn while reconnecting");
-  harness.pump();
+  await harness.pump();
   assert.equal(harness.roomUpdates.length, 0, "nothing leaves while reconnecting");
   ada.host = { ...ada.host, connection: "live" };
   harness.deliver(ada, "status", ada.host);
   harness.deliver(ada, "resync", {});
-  harness.pump();
+  await harness.pump();
   assert.equal(harness.roomUpdates.length, 1, "the post-snapshot diff carries the offline edit exactly once");
   assert.deepEqual(text(harness.Y, ben.session.doc), { offline: "drawn while reconnecting" });
   harness.deliver(ada, "resync", {});
-  harness.pump();
+  await harness.pump();
   assert.equal(harness.roomUpdates.length, 1, "a second resync with nothing new sends nothing");
 });
 
-test("read-only embeds draw nothing into the room", { skip: skipConvergence }, (context) => {
+test("a fast stroke leaves the embed no faster than the server refills, and lands whole", { skip: skipConvergence }, async (context) => {
   const harness = makeRoom(sessionModule, context);
-  const viewer = harness.join("viewer", { readOnly: true });
+  const ada = await harness.join("ada");
+  const ben = await harness.join("ben");
+  for (let step = 1; step <= 375; step += 1) {
+    ada.session.doc.getMap("whiteboard").set("stroke", step);
+    await new Promise((resolve) => setImmediate(resolve));
+    context.mock.timers.tick(8);
+  }
+  await harness.pump();
+
+  const times = ada.updatesPostedAt;
+  const busiest = Math.max(...times.map((start) => times.filter((time) => time >= start && time < start + 1_000).length));
+  assert.ok(busiest <= limits.APP_DOCUMENT_UPLOADS_PER_SECOND, `${busiest} updates in one second`);
+  assert.deepEqual(text(harness.Y, harness.room), { stroke: 375 });
+  assert.deepEqual(text(harness.Y, ben.session.doc), { stroke: 375 });
+});
+
+test("read-only embeds draw nothing into the room", { skip: skipConvergence }, async (context) => {
+  const harness = makeRoom(sessionModule, context);
+  const viewer = await harness.join("viewer", { readOnly: true });
   viewer.session.doc.getMap("whiteboard").set("blocked", "x");
-  harness.pump();
+  await harness.pump();
   assert.equal(harness.roomUpdates.length, 0);
 });
 
-test("hostile host messages are dropped and counted by reason", { skip: skipConvergence }, (context) => {
+test("hostile host messages are dropped and counted by reason", { skip: skipConvergence }, async (context) => {
   const harness = makeRoom(sessionModule, context);
-  const ada = harness.join("ada");
+  const ada = await harness.join("ada");
   const stale = JSON.stringify({ v: 1, type: "update", callSessionId: ada.scope.callSessionId, appSessionId: "app-old", requestId: "n-90", payload: { update: "AQID" } });
   assert.equal(ada.handler(stale), "staleAppSession");
   const unknown = JSON.stringify({ v: 1, type: "navigate", callSessionId: ada.scope.callSessionId, appSessionId: ada.scope.appSessionId, requestId: "n-91", payload: {} });
@@ -294,23 +325,23 @@ test("hostile host messages are dropped and counted by reason", { skip: skipConv
   assert.ok(ada.session.rejections.includes("staleAppSession"));
 });
 
-test("commands answer with an ack carrying their request id", { skip: skipConvergence }, (context) => {
+test("commands answer with an ack carrying their request id", { skip: skipConvergence }, async (context) => {
   const harness = makeRoom(sessionModule, context);
-  const ada = harness.join("ada");
+  const ada = await harness.join("ada");
   ada.session.setCommandHandler((command) => ({ ok: command.type === "setTool" }));
   harness.deliver(ada, "setTool", { tool: "eraser" }, "h-1");
   harness.deliver(ada, "undo", {}, "h-2");
-  harness.pump();
+  await harness.pump();
   assert.deepEqual(ada.acks.map((ack) => [ack.requestId, ack.payload.ok]), [["h-1", true], ["h-2", false]]);
 });
 
-test("close invalidates the session for good", { skip: skipConvergence }, (context) => {
+test("close invalidates the session for good", { skip: skipConvergence }, async (context) => {
   const harness = makeRoom(sessionModule, context);
-  const ada = harness.join("ada");
+  const ada = await harness.join("ada");
   harness.deliver(ada, "close", {});
   assert.ok(ada.session.isClosed);
   ada.session.doc.getMap("whiteboard").set("after-close", "x");
-  harness.pump();
+  await harness.pump();
   assert.equal(harness.roomUpdates.length, 0);
   assert.equal(harness.deliver(ada, "update", { update: "AQID" }), "staleAppSession");
 });

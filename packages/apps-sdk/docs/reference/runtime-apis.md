@@ -63,6 +63,34 @@ Returns the full runtime context:
 `documents.version` changes whenever the provider replaces a document (a refused
 change is rebuilt from the server), and hosts remount the app on that change.
 
+### Uploads and refusals
+
+Every change an app makes reaches the server through one paced upload path:
+`AppsProvider` on the web, and the native embed session on iOS and Android.
+
+- Uploads leave at most `APP_DOCUMENT_UPLOADS_PER_SECOND` times a second (20),
+  two thirds of the rate the server refills its per-socket budget at. Both read
+  `APP_DOCUMENT_UPDATE_BUDGET` from `@conclave/apps-sdk/limits`, so a client
+  that only uses this path is never refused for its rate.
+- Changes made between uploads wait and are merged into the next one. Nothing
+  is dropped, and no merged upload grows past `APP_DOCUMENT_UPDATE_MAX_BYTES`.
+  While the socket is down, changes wait and leave as one upload when it
+  connects.
+- A refusal for a passing reason (`rate-limited`, `timed-out`, `queue-full`,
+  `missing-dependency` and the like) keeps the live copy. The provider syncs
+  with the server and sends everything the server lacks, the refused change and
+  anything not yet sent included, under a fresh copy id. Changes made during that
+  sync go out with it.
+- A refusal because the document is full, locked or invalid, or a fourth passing
+  refusal within 30 seconds, rebuilds the copy from the server. Anything built on
+  the refused change goes with it, because the server can never accept it, and
+  the host shows the reason.
+
+Make each logical change in one transaction (`doc.transact`), so the server keeps
+all of it or none of it: a replace that deletes and inserts, an action that
+updates two maps, a pointer event. The same test file below fails when a
+function in any app can make more than one separate change on one path.
+
 ### `documents.writeOnce(appId, key, write)`
 
 The only way for an app to change its document without a user action: from a
@@ -85,6 +113,10 @@ timer, an effect, a promise, a media event, or code that runs on mount.
 
 A test in `apps/web/test/app-automatic-writes.test.ts` fails when an app writes
 its document anywhere else outside a user event handler.
+
+`writeOnce` changes ride the same uploads. After a passing refusal they are sent
+again as they were, not run again, since the live copy still holds them; the
+rules above about running again apply after a rebuild.
 
 Ack behavior:
 
@@ -276,6 +308,7 @@ and mutation helpers lazily create the shared types they write.
 - Keep app id consistent across app definition, controls, and hooks.
 - Always gate write mutations using lock/admin state.
 - Write only from user event handlers or through `documents.writeOnce`.
+- Make each logical change in one `doc.transact`.
 - Avoid calling control methods before socket connect.
 - Use `useGame` for server-authoritative games where the server must own rules or hidden information.
 

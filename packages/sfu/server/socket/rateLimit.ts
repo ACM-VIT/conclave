@@ -1,4 +1,5 @@
 import type { Socket } from "socket.io";
+import { APP_DOCUMENT_UPDATE_BUDGET } from "@conclave/apps-sdk/limits";
 
 /**
  * A small, dependency-free token-bucket rate limiter applied per-socket.
@@ -102,7 +103,7 @@ export const RATE_LIMITS = {
   // Full Yjs sync can encode a large document; keep request bursts modest.
   appsYjsSync: { capacity: 10, refillPerSec: 2 },
   // Yjs document updates: bursty while typing, so allow a generous burst.
-  appsYjsUpdate: { capacity: 60, refillPerSec: 30 },
+  appsYjsUpdate: APP_DOCUMENT_UPDATE_BUDGET,
   // Chat messages: ~5/s sustained, small burst.
   chat: { capacity: 10, refillPerSec: 5 },
   // Image uploads are much heavier than text messages; authorize a small burst.

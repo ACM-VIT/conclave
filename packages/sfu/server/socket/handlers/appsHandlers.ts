@@ -1,3 +1,4 @@
+import { APP_DOCUMENT_UPDATE_MAX_BYTES } from "@conclave/apps-sdk/limits";
 import type {
   AppsAwarenessData,
   AppsCloseResponse,
@@ -21,7 +22,6 @@ import { RATE_LIMITS, takeToken } from "../rateLimit.js";
 import { respond } from "./ack.js";
 
 const MAX_APPS_SYNC_BYTES = 64 * 1024;
-const MAX_APPS_UPDATE_BYTES = 256 * 1024;
 const MAX_APPS_AWARENESS_BYTES = 64 * 1024;
 const MAX_REPLICA_ID_LENGTH = 64;
 const REMEMBERED_REFUSED_REPLICAS = 16;
@@ -373,7 +373,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       signalRefused(appId, replicaId, "invalid");
       return;
     }
-    if (update.length > MAX_APPS_UPDATE_BYTES) {
+    if (update.length > APP_DOCUMENT_UPDATE_MAX_BYTES) {
       signalRefused(appId, replicaId, "too-large");
       return;
     }

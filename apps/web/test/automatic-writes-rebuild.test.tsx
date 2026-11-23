@@ -13,6 +13,7 @@ import { addEntry, createWheelDoc, getEntries, getHistory, setRemoveWinnerOnDone
 import { useSyncedPlayback } from "../../../packages/apps-sdk/src/apps/watch/web/hooks/useSyncedPlayback";
 import { createWatchDoc, enqueue, getPlayback, getQueue, getVideoId, setVideo, writePlayback } from "../../../packages/apps-sdk/src/apps/watch/core/doc/index";
 import type { AppsContextValue } from "../../../packages/apps-sdk/src/sdk/types";
+import { APP_DOCUMENT_UPLOAD_INTERVAL_MS } from "../../../packages/apps-sdk/src/sdk/limits";
 import MeetingAppLayout from "../src/app/components/MeetingAppLayout";
 
 type Listener = (...args: unknown[]) => void;
@@ -66,6 +67,9 @@ const fakeSfu = (appId: string, serverDoc: Y.Doc) => {
       state.refusals.push({ reason, matches });
     },
     deliverRefusals: async () => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(APP_DOCUMENT_UPLOAD_INTERVAL_MS);
+      });
       const deliveries = pendingRefusals.splice(0);
       state.refusalsSent += deliveries.length;
       await act(async () => {
@@ -196,12 +200,26 @@ const WHEEL_SWEEP: Array<{ point: string; run: WheelStep; saved: 0 | 1 }> = [
     },
   },
   {
-    point: "while the reveal timer fires and the rebuild is still waiting",
+    point: "while the reveal timer fires and the resend is still waiting",
     saved: 1,
     run: async (sfu) => {
       await advance(SPIN_MS + 100);
       sfu.state.holdSyncs = true;
       await refuseAnUnrelatedEdit(sfu, "timed-out");
+      await sfu.deliverRefusals();
+      await advance(2_000);
+      expect(ctx.isRebuilding).toBe(false);
+      await sfu.releaseSyncs();
+      await advance(100);
+    },
+  },
+  {
+    point: "while the reveal timer fires and the rebuild is still waiting",
+    saved: 1,
+    run: async (sfu) => {
+      await advance(SPIN_MS + 100);
+      sfu.state.holdSyncs = true;
+      await refuseAnUnrelatedEdit(sfu, "too-large");
       await sfu.deliverRefusals();
       await advance(2_000);
       expect(ctx.isRebuilding).toBe(true);
@@ -406,10 +424,12 @@ describe("automatic writes decided against an older state", () => {
     setVideo(server, "first", { play: true });
     const sfu = fakeSfu("watch", server);
     await mount(sfu.socket, WatchPlayer, [{ id: "watch", name: "Watch" } as never]);
-    sfu.state.holdSyncs = true;
-    sfu.refuseNext("timed-out");
+    for (let refusal = 0; refusal < 4; refusal += 1) sfu.refuseNext("timed-out");
     await act(async () => player.onEnded());
+    for (let refusal = 0; refusal < 3; refusal += 1) await sfu.deliverRefusals();
+    sfu.state.holdSyncs = true;
     await sfu.deliverRefusals();
+    expect(ctx.isRebuilding).toBe(true);
     await advance(1_000);
     writePlayback(server, { state: "playing", positionSeconds: 0 });
 

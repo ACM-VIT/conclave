@@ -80,7 +80,7 @@ it("ignores undo on the whiteboard while it is rebuilt from the server", async (
 
   await act(async () => addPage(doc, { id: "kept", name: "Kept" }));
   const replicaId = uploads.at(-1)!.replicaId!;
-  await act(async () => listeners.get("apps:yjs:refused")?.forEach((listener) => listener({ appId: "whiteboard", replicaId, reason: "timed-out" })));
+  await act(async () => listeners.get("apps:yjs:refused")?.forEach((listener) => listener({ appId: "whiteboard", replicaId, reason: "too-large" })));
   expect(ctx.isRebuilding).toBe(true);
   await pressUndo();
 

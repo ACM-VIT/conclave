@@ -11,6 +11,7 @@ import { useApps } from "../../../packages/apps-sdk/src/sdk/hooks/useApps";
 import { wheelApp } from "../../../packages/apps-sdk/src/apps/wheel/web/index";
 import { addEntry, createWheelDoc, getEntries, getHistory, startSpin } from "../../../packages/apps-sdk/src/apps/wheel/core/doc/index";
 import type { AppsContextValue } from "../../../packages/apps-sdk/src/sdk/types";
+import { APP_DOCUMENT_UPLOAD_INTERVAL_MS } from "../../../packages/apps-sdk/src/sdk/limits";
 import MeetingAppLayout from "../src/app/components/MeetingAppLayout";
 
 type Listener = (...args: unknown[]) => void;
@@ -81,9 +82,16 @@ const mount = async (activeAppId: string, app: ComponentType, apps = [{ id: acti
   );
 };
 
-const refuseLastChange = async (appId: string) => {
+const letUploadsOut = async () => {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(APP_DOCUMENT_UPLOAD_INTERVAL_MS);
+  });
+};
+
+const refuseLastChange = async (appId: string, reason = "too-large") => {
+  await letUploadsOut();
   const replicaId = uploads.at(-1)!.replicaId!;
-  await act(async () => listeners.get("apps:yjs:refused")?.forEach((listener) => listener({ appId, replicaId, reason: "timed-out" })));
+  await act(async () => listeners.get("apps:yjs:refused")?.forEach((listener) => listener({ appId, replicaId, reason })));
 };
 
 beforeEach(() => {
@@ -149,6 +157,8 @@ it("runs an automatic write on the live copy, and waits while the app is being r
   expect(uploads).toHaveLength(uploadsWhileRebuilding);
   await act(async () => pendingSyncs.shift()!(contentOf(serverDoc)));
 
+  await letUploadsOut();
+
   expect(ctx.getDoc("board")).not.toBe(refused);
   expect(ctx.getDoc("board").getText("t").toString()).toContain("second ");
   expect(uploads.length).toBeGreaterThan(uploadsWhileRebuilding);
@@ -196,7 +206,7 @@ it("leaves another participant's unrecorded spin to them", async () => {
   expect(getHistory(ctx.getDoc("wheel"))).toEqual([]);
 });
 
-it("runs each automatic write once per activation, again only after a passing refusal, and fresh after a reopen", async () => {
+it("runs each automatic write once per activation, resends it after a passing refusal, and runs it fresh after a reopen", async () => {
   await mount("board", () => null);
   let runs = 0;
   const reveal = () => ctx.documents.writeOnce("board", "reveal", (live) => {
@@ -207,13 +217,36 @@ it("runs each automatic write once per activation, again only after a passing re
   await act(async () => reveal());
   expect(runs).toBe(1);
 
-  await refuseLastChange("board");
-  expect(runs).toBe(2);
+  const refusedReplica = uploads.at(-1)!.replicaId;
+  await refuseLastChange("board", "timed-out");
+  await letUploadsOut();
+  expect(runs).toBe(1);
+  const resent = new Y.Doc();
+  Y.applyUpdate(resent, uploads.at(-1)!.update);
+  expect(uploads.at(-1)!.replicaId).not.toBe(refusedReplica);
+  expect(resent.getMap("m").get("reveal")).toBe(1);
   await act(async () => reveal());
-  expect(runs).toBe(2);
+  expect(runs).toBe(1);
   await act(async () => listeners.get("apps:state")?.forEach((listener) => listener({ activeAppId: null, locked: false })));
   await act(async () => listeners.get("apps:state")?.forEach((listener) => listener({ activeAppId: "board", locked: false })));
   await act(async () => reveal());
+
+  expect(runs).toBe(2);
+});
+
+it("runs an automatic write again only when a rebuild lost it, and gives up after three attempts", async () => {
+  await mount("board", () => null);
+  let runs = 0;
+  await act(async () =>
+    ctx.documents.writeOnce("board", "stubborn", (live) => {
+      runs += 1;
+      live.getMap("m").set("try", runs);
+    }),
+  );
+
+  for (let refusal = 0; refusal < 3; refusal += 1) await refuseLastChange("board", "timed-out");
+  expect(runs).toBe(1);
+  for (let refusal = 0; refusal < 5; refusal += 1) await refuseLastChange("board", "timed-out");
 
   expect(runs).toBe(3);
 });
@@ -278,19 +311,4 @@ it("waits while the app is locked for someone who is not a host, and runs once i
 
   expect(ctx.getDoc("board").getText("t").toString()).toBe("later ");
   expect(uploads).toHaveLength(1);
-});
-
-it("gives up on an automatic write after three attempts refused for passing reasons", async () => {
-  await mount("board", () => null);
-  let runs = 0;
-  await act(async () =>
-    ctx.documents.writeOnce("board", "stubborn", (live) => {
-      runs += 1;
-      live.getMap("m").set("try", runs);
-    }),
-  );
-
-  for (let refusal = 0; refusal < 5; refusal += 1) await refuseLastChange("board");
-
-  expect(runs).toBe(3);
 });

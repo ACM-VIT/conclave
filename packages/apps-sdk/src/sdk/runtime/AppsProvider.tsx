@@ -27,6 +27,7 @@ import type {
   AppUser,
 } from "../types/index";
 import { classifySyncReply } from "./syncReply";
+import { createUploadQueue } from "./uploadQueue";
 
 export const AppsContext = createContext<AppsContextValue | null>(null);
 
@@ -45,6 +46,8 @@ const SYNC_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 4_000];
 const SYNC_GIVE_UP_MS = 30_000;
 const MAX_AUTOMATIC_WRITE_ATTEMPTS = 3;
 const FINAL_REFUSALS = new Set(["too-large", "locked", "invalid"]);
+const MAX_CATCH_UPS = 3;
+const CATCH_UP_WINDOW_MS = 30_000;
 
 type AutomaticWrite = {
   write: (doc: Y.Doc) => void;
@@ -74,6 +77,7 @@ type SyncRun = {
   appId: string;
   doc: Y.Doc;
   replaces: boolean;
+  catchesUp: boolean;
   startedAt: number;
   attempt: number;
   timer?: ReturnType<typeof setTimeout>;
@@ -193,7 +197,6 @@ export function AppsProvider({
 
   const docsRef = useRef<Map<string, Y.Doc>>(new Map());
   const awarenessRef = useRef<Map<string, Awareness>>(new Map());
-  const pendingInitialUpdatesRef = useRef<Map<string, Uint8Array>>(new Map());
   const initialUpdateSentRef = useRef<Set<string>>(new Set());
   const docHandlersRef = useRef<Map<string, (update: Uint8Array, origin: unknown) => void>>(
     new Map()
@@ -205,6 +208,16 @@ export function AppsProvider({
   const staleAppsRef = useRef<Set<string>>(new Set());
   const unsentAppsRef = useRef<Set<string>>(new Set());
   const syncedAppsRef = useRef<Set<string>>(new Set());
+  const catchUpsRef = useRef<Map<string, number[]>>(new Map());
+  const [uploads] = useState(() =>
+    createUploadQueue((appId, replicaId, update) => {
+      const currentSocket = socketRef.current;
+      if (!currentSocket?.connected) return false;
+      const payload: AppsUpdatePayload = { appId, update, replicaId };
+      currentSocket.emit("apps:yjs:update", payload);
+      return true;
+    })
+  );
   const automaticWritesRef = useRef<Map<string, Map<string, AutomaticWrite>>>(new Map());
   const socketRef = useRef<Socket | null>(null);
   const isReadOnlyRef = useRef(isReadOnly);
@@ -261,7 +274,8 @@ export function AppsProvider({
     awarenessRef.current.clear();
     docHandlersRef.current.clear();
     awarenessHandlersRef.current.clear();
-    pendingInitialUpdatesRef.current.clear();
+    uploads.clear();
+    catchUpsRef.current.clear();
     initialUpdateSentRef.current.clear();
     replicaIdsRef.current.clear();
     staleAppsRef.current.clear();
@@ -274,7 +288,7 @@ export function AppsProvider({
     setRejectedChange(null);
     setIsRebuilding(false);
     setDocsVersion((version) => version + 1);
-  }, [stopSync]);
+  }, [stopSync, uploads]);
 
   useEffect(() => {
     if (socketRef.current !== socket) {
@@ -314,43 +328,41 @@ export function AppsProvider({
     awarenessRef.current.delete(appId);
     docHandlersRef.current.delete(appId);
     awarenessHandlersRef.current.delete(appId);
-    pendingInitialUpdatesRef.current.delete(appId);
+    uploads.drop(appId);
     initialUpdateSentRef.current.delete(appId);
     replicaIdsRef.current.delete(appId);
     staleAppsRef.current.delete(appId);
     unsentAppsRef.current.delete(appId);
     syncedAppsRef.current.delete(appId);
     setDocsVersion((version) => version + 1);
-  }, []);
+  }, [uploads]);
 
   const registerDocHandlers = useCallback((appId: string, doc: Y.Doc) => {
     if (docHandlersRef.current.has(appId)) return;
 
-    const replicaId = newReplicaId();
     const handler = (update: Uint8Array, origin: unknown) => {
       if (origin === "remote") return;
       if (!canWrite()) {
         unsentAppsRef.current.add(appId);
         return;
       }
-      const currentSocket = socketRef.current;
-      if (!currentSocket) return;
-      const payload: AppsUpdatePayload = { appId, update, replicaId };
-      currentSocket.emit("apps:yjs:update", payload);
+      const run = syncRunRef.current;
+      if (run?.catchesUp && run.appId === appId) return;
+      uploads.add(appId, replicaIdsRef.current.get(appId), update);
     };
 
     doc.on("update", handler);
     docHandlersRef.current.set(appId, handler);
-    replicaIdsRef.current.set(appId, replicaId);
-  }, [canWrite]);
+    replicaIdsRef.current.set(appId, newReplicaId());
+  }, [canWrite, uploads]);
 
   const detachDoc = useCallback((appId: string) => {
     const handler = docHandlersRef.current.get(appId);
     if (handler) docsRef.current.get(appId)?.off("update", handler);
     docHandlersRef.current.delete(appId);
     replicaIdsRef.current.delete(appId);
-    pendingInitialUpdatesRef.current.delete(appId);
-  }, []);
+    uploads.drop(appId);
+  }, [uploads]);
 
   const queueInitialUpdate = useCallback((appId: string, doc: Y.Doc) => {
     if (initialUpdateSentRef.current.has(appId)) return;
@@ -362,17 +374,9 @@ export function AppsProvider({
       return;
     }
 
-    const currentSocket = socketRef.current;
-    if (currentSocket && currentSocket.connected) {
-      const payload: AppsUpdatePayload = { appId, update, replicaId: replicaIdsRef.current.get(appId) };
-      currentSocket.emit("apps:yjs:update", payload);
-      initialUpdateSentRef.current.add(appId);
-      pendingInitialUpdatesRef.current.delete(appId);
-      return;
-    }
-
-    pendingInitialUpdatesRef.current.set(appId, update);
-  }, [canWrite]);
+    uploads.add(appId, replicaIdsRef.current.get(appId), update);
+    initialUpdateSentRef.current.add(appId);
+  }, [canWrite, uploads]);
 
   const registerAwarenessHandlers = useCallback((appId: string, awareness: Awareness) => {
     if (awarenessHandlersRef.current.has(appId)) return;
@@ -492,7 +496,7 @@ export function AppsProvider({
   );
 
   const applySync = useCallback(
-    (run: SyncRun, response: AppsSyncResponse, currentSocket: Socket): boolean => {
+    (run: SyncRun, response: AppsSyncResponse): boolean => {
       const update = toUint8Array(response.syncMessage);
       if (!update) return false;
       try {
@@ -527,12 +531,7 @@ export function AppsProvider({
           if (serverLacksSome && !canWrite()) {
             unsentAppsRef.current.add(run.appId);
           } else if (serverLacksSome) {
-            const payload: AppsUpdatePayload = {
-              appId: run.appId,
-              update: updateForServer,
-              replicaId: replicaIdsRef.current.get(run.appId),
-            };
-            currentSocket.emit("apps:yjs:update", payload);
+            uploads.add(run.appId, replicaIdsRef.current.get(run.appId), updateForServer);
           }
         } catch (err) {
           console.warn("[Apps] Failed to read the server state vector", err);
@@ -542,7 +541,7 @@ export function AppsProvider({
       runAutomaticWrites(run.appId);
       return true;
     },
-    [adoptReplacement, getAwareness, canWrite, runAutomaticWrites]
+    [adoptReplacement, getAwareness, canWrite, runAutomaticWrites, uploads]
   );
 
   const attemptSync = useCallback(
@@ -581,7 +580,7 @@ export function AppsProvider({
         const reply = classifySyncReply(response);
         if (reply.kind === "synced") {
           syncRunRef.current = null;
-          const synced = applySync(run, reply.response, currentSocket);
+          const synced = applySync(run, reply.response);
           if (!synced && run.replaces) run.doc.destroy();
           setSyncStatus(synced ? "synced" : "failed");
         } else if (reply.kind === "retry") {
@@ -599,13 +598,13 @@ export function AppsProvider({
   );
 
   const startSync = useCallback(
-    (appId: string) => {
+    (appId: string, catchesUp = false) => {
       if (disposedRef.current) return;
       stopSync();
       const replaces = staleAppsRef.current.has(appId);
       const doc = replaces ? new Y.Doc() : getDoc(appId);
       if (!replaces) getAwareness(appId);
-      const run: SyncRun = { appId, doc, replaces, startedAt: Date.now(), attempt: 0 };
+      const run: SyncRun = { appId, doc, replaces, catchesUp: catchesUp && !replaces, startedAt: Date.now(), attempt: 0 };
       syncRunRef.current = run;
       setSyncStatus("syncing");
       attemptSync(run);
@@ -624,6 +623,34 @@ export function AppsProvider({
       startSync(appId);
     },
     [settleAutomaticWrites, detachDoc, startSync]
+  );
+
+  const catchUp = useCallback(
+    (appId: string, refusedReplica: string) => {
+      const replicaId = newReplicaId();
+      replicaIdsRef.current.set(appId, replicaId);
+      for (const entry of automaticWritesRef.current.get(appId)?.values() ?? []) {
+        if (entry.state === "written" && entry.writtenOn === refusedReplica) entry.writtenOn = replicaId;
+      }
+      uploads.drop(appId);
+      startSync(appId, true);
+    },
+    [startSync, uploads]
+  );
+
+  const recoverFromRefusal = useCallback(
+    (appId: string, replicaId: string, reason: string) => {
+      const now = Date.now();
+      const recent = (catchUpsRef.current.get(appId) ?? []).filter((at) => now - at < CATCH_UP_WINDOW_MS);
+      if (FINAL_REFUSALS.has(reason) || recent.length >= MAX_CATCH_UPS) {
+        catchUpsRef.current.set(appId, recent);
+        rebuildApp(appId, { reason });
+        return;
+      }
+      catchUpsRef.current.set(appId, [...recent, now]);
+      catchUp(appId, replicaId);
+    },
+    [rebuildApp, catchUp]
   );
 
   const resumeWrites = useCallback(() => {
@@ -652,6 +679,7 @@ export function AppsProvider({
         if (previous) {
           discardLocalApp(previous);
           automaticWritesRef.current.delete(previous);
+          catchUpsRef.current.delete(previous);
         }
         if (next.activeAppId) startSync(next.activeAppId);
         else setSyncStatus("idle");
@@ -716,9 +744,10 @@ export function AppsProvider({
       if (!appId || appId !== serverActiveAppIdRef.current) return;
       const replicaId = replicaIdsRef.current.get(appId);
       if (!replicaId || replicaId !== payload.replicaId) return;
-      rebuildApp(appId, { reason: typeof payload.reason === "string" ? payload.reason : "refused" });
+      recoverFromRefusal(appId, replicaId, typeof payload.reason === "string" ? payload.reason : "refused");
     };
 
+    socket.on("connect", uploads.wake);
     socket.on("apps:state", handleState);
     socket.on("apps:yjs:update", handleUpdate);
     socket.on("apps:awareness", handleAwareness);
@@ -731,31 +760,9 @@ export function AppsProvider({
       socket.off("apps:yjs:update", handleUpdate);
       socket.off("apps:awareness", handleAwareness);
       socket.off("apps:yjs:refused", handleRefused);
+      socket.off("connect", uploads.wake);
     };
-  }, [socket, getDoc, getAwareness, refreshState, applyServerAppsState, rebuildApp]);
-
-  useEffect(() => {
-    if (!socket) return;
-
-    const flushPending = () => {
-      if (!canWrite()) return;
-      const pending = pendingInitialUpdatesRef.current;
-      if (pending.size === 0) return;
-
-      for (const [appId, update] of pending.entries()) {
-        const payload: AppsUpdatePayload = { appId, update, replicaId: replicaIdsRef.current.get(appId) };
-        socket.emit("apps:yjs:update", payload);
-        initialUpdateSentRef.current.add(appId);
-        pending.delete(appId);
-      }
-    };
-
-    flushPending();
-    socket.on("connect", flushPending);
-    return () => {
-      socket.off("connect", flushPending);
-    };
-  }, [socket, canWrite]);
+  }, [socket, getDoc, getAwareness, refreshState, applyServerAppsState, recoverFromRefusal, uploads]);
 
   useEffect(() => {
     resumeWrites();

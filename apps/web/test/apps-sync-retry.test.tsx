@@ -10,6 +10,7 @@ import {
   AppsProvider,
 } from "../../../packages/apps-sdk/src/sdk/runtime/AppsProvider";
 import { useAppDoc } from "../../../packages/apps-sdk/src/sdk/hooks/useAppDoc";
+import { APP_DOCUMENT_UPLOAD_INTERVAL_MS } from "../../../packages/apps-sdk/src/sdk/limits";
 import type { AppsContextValue } from "../../../packages/apps-sdk/src/sdk/types";
 
 type Listener = (...args: unknown[]) => void;
@@ -96,10 +97,11 @@ const wait = async (ms: number) => {
 const boardText = () => ctx.getDoc("board").getText("t").toString();
 const draw = async (text: string) => {
   await act(async () => ctx.getDoc("board").getText("t").insert(0, text));
+  await wait(APP_DOCUMENT_UPLOAD_INTERVAL_MS);
 };
 const lastReplica = () => first.updatePayloads.at(-1)!.replicaId!;
 const refuse = async (replicaId: string) => {
-  await act(async () => first.fire("apps:yjs:refused", { appId: "board", replicaId, reason: "timed-out" }));
+  await act(async () => first.fire("apps:yjs:refused", { appId: "board", replicaId, reason: "too-large" }));
 };
 const contentOf = (doc: Y.Doc) => ({ syncMessage: Y.encodeStateAsUpdate(doc), stateVector: Y.encodeStateVector(doc) });
 const gaps = () => first.syncTimes.slice(1).map((time, index) => time - first.syncTimes[index]);

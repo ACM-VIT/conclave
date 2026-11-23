@@ -20,6 +20,7 @@
     ".": "./src/index.ts",
     "./authority": "./src/sdk/authority/index.ts",
     "./authority/server": "./src/sdk/authority/server.ts",
+    "./limits": "./src/sdk/limits.ts",
     "./native-embed": "./src/native-embed/index.ts",
     "./dev-playground/core": "./src/apps/dev-playground/core/index.ts",
     "./dev-playground/web": "./src/apps/dev-playground/web/index.ts",

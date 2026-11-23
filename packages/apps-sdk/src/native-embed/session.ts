@@ -1,5 +1,6 @@
 import * as Y from "yjs";
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from "y-protocols/awareness";
+import { createUploadQueue } from "../sdk/runtime/uploadQueue";
 import type { NativeTransport } from "./bridge";
 import {
   HOST_COMMAND_TYPES,
@@ -100,6 +101,11 @@ export class NativeEmbedSession {
   private readonly pendingAwareness = new Set<number>();
   private awarenessTimer: ReturnType<typeof setTimeout> | null = null;
   private lastStatus = "";
+  private readonly uploads = createUploadQueue((_appId, _replicaId, update) => {
+    if (this.closed || this.host.readOnly || this.host.connection !== "live") return false;
+    this.send("update", { update: base64FromBytes(update) });
+    return true;
+  });
 
   constructor(transport: NativeTransport, scope: SessionScope, doc: Y.Doc) {
     this.transport = transport;
@@ -238,6 +244,7 @@ export class NativeEmbedSession {
     if (this.awarenessTimer !== null) clearTimeout(this.awarenessTimer);
     this.awarenessTimer = null;
     this.pendingAwareness.clear();
+    this.uploads.clear();
     this.doc.off("update", this.handleDocUpdate);
     this.awareness.off("update", this.handleAwarenessUpdate);
     this.notify();
@@ -272,7 +279,7 @@ export class NativeEmbedSession {
       return;
     }
     if (diff.length <= 2 || diff.length > NATIVE_EMBED_LIMITS.updateBytes) return;
-    this.send("update", { update: base64FromBytes(diff) });
+    this.uploads.add(this.scope.appId, undefined, diff);
   }
 
   private applyRemoteUpdate(bytes: Uint8Array): void {
@@ -294,6 +301,7 @@ export class NativeEmbedSession {
       userName: typeof payload.userName === "string" ? payload.userName.slice(0, 128) : "",
     };
     if (wasReadOnly !== this.host.readOnly) this.lastStatus = "";
+    this.uploads.wake();
     this.notify();
   }
 
@@ -317,7 +325,7 @@ export class NativeEmbedSession {
     if (origin === REMOTE || this.closed || !this.synced) return;
     if (this.host.readOnly || this.host.connection !== "live") return;
     if (update.length > NATIVE_EMBED_LIMITS.updateBytes) return;
-    this.send("update", { update: base64FromBytes(update) });
+    this.uploads.add(this.scope.appId, undefined, update);
   };
 
   private readonly handleAwarenessUpdate = (change: AwarenessChange, origin: unknown): void => {
