@@ -1138,7 +1138,7 @@ export const teardownClient = (options: {
 
   room.removeClient(userId);
   state.transcriptRelays
-    .stopRoomForUser({ roomKey: roomChannelId, userId, canStopAnyRelay: false })
+    .releaseSeat({ roomKey: roomChannelId, userId })
     .catch((error) => {
       Logger.warn(
         `Transcript SFU relay stop for ${userId} in room ${roomChannelId} failed: ${error}`,

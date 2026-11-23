@@ -3153,10 +3153,9 @@ describe("what ending a seat releases", () => {
     await stoppedFor(state, room, relays[0]);
   });
 
-  it("keeps the relay with the returning seat when a restart the old seat asked for fails after it left", async () => {
-    const state = makeState();
+  const gatedRelays = (state: SfuState) => {
     const closed: boolean[] = [];
-    let failRestart = () => {};
+    let failReplacement = () => {};
     state.transcriptRelays = createTranscriptRelayRegistry({
       enabled: true,
       createRelay: (options) => {
@@ -3164,12 +3163,12 @@ describe("what ending a seat releases", () => {
         return {
           controllerUserId: options.controllerUserId,
           start:
-            index === 0
-              ? async () => {}
-              : () =>
+            index === 1
+              ? () =>
                   new Promise<void>((_resolve, reject) => {
-                    failRestart = () => reject(new Error("worker unreachable"));
-                  }),
+                    failReplacement = () => reject(new Error("worker unreachable"));
+                  })
+              : async () => {},
           prepareHandoff: async () => true,
           syncProducers: async () => {},
           close: () => {
@@ -3178,29 +3177,71 @@ describe("what ending a seat releases", () => {
         };
       },
     });
+    return { closed, failReplacement: () => failReplacement() };
+  };
+
+  it.each([
+    ["the old seat", false],
+    ["the host (Daybreak)", true],
+  ])("keeps the relay with the returning seat when a replacement %s started fails after the seat came back", async (_starter, byHost) => {
+    const state = makeState();
+    const relays = gatedRelays(state);
     await join(state, guestHost);
     const room = state.rooms.get("conclave:room")!;
-    const controller = tabOf("relay-restarter");
+    const controller = tabOf(byHost ? "relay-kept-from-host" : "relay-restarter");
     await join(state, controller);
     await relayRun(state, room, controller);
-    const restart = state.transcriptRelays.start({
+    const replacement = state.transcriptRelays.start({
       room,
       workerUrl: "http://worker.test",
       workerToken: "worker-token",
-      controllerUserId: seatOf(controller),
-      controllerDisplayName: "Controller",
-      canReplaceExistingRelay: false,
+      controllerUserId: byHost ? guestHostSeat : seatOf(controller),
+      controllerDisplayName: byHost ? "Host" : "Controller",
+      canReplaceExistingRelay: byHost,
     });
     const returning = underAnotherPass(controller);
 
     expect((await join(state, returning)).ack).toHaveBeenCalledWith(joined);
-    failRestart();
+    relays.failReplacement();
 
-    expect(await restart).toMatchObject({ success: false });
-    expect(closed).toEqual([false, true]);
+    expect(await replacement).toMatchObject({ success: false });
+    expect(relays.closed).toEqual([false, true]);
     expect(await stopAs(state, room, seatOf(controller))).toEqual(lostControl);
     expect(await stopAs(state, room, seatOf(returning))).toEqual({ success: true });
-    expect(closed).toEqual([true, true]);
+    expect(relays.closed).toEqual([true, true]);
+  });
+
+  it("stops the relay of a controller the host removes while the host's own replacement is starting, when that replacement fails", async () => {
+    const state = makeState();
+    const relays = gatedRelays(state);
+    await join(state, guestHost);
+    const room = state.rooms.get("conclave:room")!;
+    const controller = tabOf("relay-removed-mid-replacement");
+    await join(state, controller);
+    await relayRun(state, room, controller);
+    const replacement = state.transcriptRelays.start({
+      room,
+      workerUrl: "http://worker.test",
+      workerToken: "worker-token",
+      controllerUserId: guestHostSeat,
+      controllerDisplayName: "Host",
+      canReplaceExistingRelay: true,
+    });
+
+    expect(kickClient(room, seatOf(controller), "Removed by host", { io, state })).toBe(true);
+    relays.failReplacement();
+
+    expect(await replacement).toMatchObject({ success: false });
+    await vi.waitFor(() => expect(relays.closed).toEqual([true, true]));
+    const anyone = await state.transcriptRelays.start({
+      room,
+      workerUrl: "http://worker.test",
+      workerToken: "worker-token",
+      controllerUserId: "someone-else",
+      controllerDisplayName: "Someone",
+      canReplaceExistingRelay: false,
+    });
+    expect(anyone).toMatchObject({ success: true });
   });
 });
 

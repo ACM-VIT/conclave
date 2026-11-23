@@ -290,3 +290,116 @@ describe("TranscriptRelayRegistry", () => {
     expect(closed).toContain("u2");
   });
 });
+
+describe("who controls the relay when a replacement races its controller's seat (Daybreak)", () => {
+  type Starter = "owner" | "host" | "admin";
+  type Timing = "before" | "during" | "after";
+  type Outcome = "starts" | "fails to start" | "cannot hand off";
+  const lostControl: unknown = { error: expect.any(String) as unknown };
+
+  const rig = (outcome: Outcome) => {
+    const made: Array<{ closed: boolean }> = [];
+    let settle = () => {};
+    const registry = createTranscriptRelayRegistry({
+      enabled: true,
+      createRelay: (options) => {
+        const relay = { closed: false };
+        const index = made.push(relay) - 1;
+        return {
+          controllerUserId: options.controllerUserId,
+          start:
+            index === 1
+              ? () =>
+                  new Promise<void>((resolve, reject) => {
+                    settle = () =>
+                      outcome === "fails to start" ? reject(new Error("start failed")) : resolve();
+                  })
+              : async () => {},
+          prepareHandoff: async () => !(index === 1 && outcome === "cannot hand off"),
+          syncProducers: async () => {},
+          close: () => {
+            relay.closed = true;
+          },
+        };
+      },
+    });
+    const start = (controllerUserId: string, canReplaceExistingRelay: boolean) =>
+      registry.start({
+        room,
+        workerUrl: "http://worker.test",
+        workerToken: `token-${controllerUserId}`,
+        controllerUserId,
+        controllerDisplayName: controllerUserId,
+        canReplaceExistingRelay,
+      });
+    const stopAs = (userId: string) =>
+      registry.stopRoomForUser({ roomKey: room.channelId, userId, canStopAnyRelay: false });
+    const open = () => made.flatMap((relay, index) => (relay.closed ? [] : [index]));
+    return { registry, start, stopAs, open, settle: () => settle() };
+  };
+
+  const starters: Starter[] = ["owner", "host", "admin"];
+  const timings: Timing[] = ["before", "during", "after"];
+
+  it.each(
+    starters.flatMap((starter) =>
+      timings.flatMap((timing) =>
+        (["starts", "fails to start", "cannot hand off"] as Outcome[]).map(
+          (outcome) => [starter, timing, outcome] as const,
+        ),
+      ),
+    ),
+  )("a replacement by the %s, the controller back under a new seat %s it starts, and one that %s", async (starter, timing, outcome) => {
+    const relays = rig(outcome);
+    await relays.start("seat-a", false);
+    const rejoin = () =>
+      relays.registry.handOver({ roomKey: room.channelId, fromUserId: "seat-a", toUserId: "seat-b" });
+
+    if (timing === "before") rejoin();
+    const starterId = starter === "owner" ? (timing === "before" ? "seat-b" : "seat-a") : starter;
+    const replacing = relays.start(starterId, starter !== "owner");
+    if (timing === "during") rejoin();
+    relays.settle();
+    const result = await replacing;
+    if (timing === "after") rejoin();
+
+    const replaced = outcome === "starts";
+    expect(result).toMatchObject({ success: replaced });
+    expect(relays.open()).toEqual([replaced ? 1 : 0]);
+    const owner = replaced && starter !== "owner" ? starter : "seat-b";
+    expect(await relays.stopAs("seat-a")).toEqual(lostControl);
+    if (owner !== "seat-b") expect(await relays.stopAs("seat-b")).toEqual(lostControl);
+    expect(await relays.stopAs(owner)).toEqual({ success: true });
+    expect(relays.open()).toEqual([]);
+  });
+
+  it.each(
+    starters.flatMap((starter) =>
+      timings
+        .filter((timing) => starter !== "owner" || timing !== "before")
+        .flatMap((timing) =>
+          (["starts", "fails to start"] as Outcome[]).map((outcome) => [starter, timing, outcome] as const),
+        ),
+    ),
+  )("a replacement by the %s, the controller's seat ending %s it starts, and one that %s", async (starter, timing, outcome) => {
+    const relays = rig(outcome);
+    await relays.start("seat-a", false);
+    const leave = () => relays.registry.releaseSeat({ roomKey: room.channelId, userId: "seat-a" });
+
+    if (timing === "before") await leave();
+    const starterId = starter === "owner" ? "seat-a" : starter;
+    const replacing = relays.start(starterId, starter !== "owner");
+    if (timing === "during") await leave();
+    relays.settle();
+    await replacing;
+    if (timing === "after") await leave();
+
+    const kept = starter !== "owner" && outcome === "starts";
+    expect(relays.open()).toEqual(kept ? [1] : []);
+    expect(await relays.stopAs("seat-a")).toEqual(kept ? lostControl : { success: true });
+    if (kept) {
+      expect(await relays.stopAs(starter)).toEqual({ success: true });
+      expect(relays.open()).toEqual([]);
+    }
+  });
+});

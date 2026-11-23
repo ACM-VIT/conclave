@@ -628,11 +628,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           room.removeClient(targetUserId);
           if (isWebinarAttendeeJoin) {
             state.transcriptRelays
-              .stopRoomForUser({
-                roomKey: roomChannelId,
-                userId: targetUserId,
-                canStopAnyRelay: false,
-              })
+              .releaseSeat({ roomKey: roomChannelId, userId: targetUserId })
               .catch((error) => {
                 Logger.warn(
                   `Transcript SFU relay stop for ${targetUserId} in room ${roomChannelId} failed: ${error}`,
