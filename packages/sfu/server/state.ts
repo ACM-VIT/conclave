@@ -27,6 +27,10 @@ import {
   MAX_APP_DOCUMENT_BYTES,
   type AppDocumentPool,
 } from "./apps/documents/pool.js";
+import {
+  createAppsAuthorityRuntime,
+  type AppsAuthorityRuntime,
+} from "./apps/authority/index.js";
 import { planWorkers, type WorkerPlan } from "../utilities/workerPlan.js";
 
 export type EndedRoom = {
@@ -56,6 +60,8 @@ export type SfuState = {
   transcriptRelays: TranscriptRelayRegistry;
   workerPlan: WorkerPlan;
   appDocuments: AppDocumentPool;
+  /** Null when this SFU does not run authority apps. */
+  appsAuthority: AppsAuthorityRuntime | null;
   isDraining: boolean;
 };
 
@@ -63,6 +69,7 @@ export const createSfuState = (options?: {
   isDraining?: boolean;
   roomRegistry?: RoomRegistry;
   appDocuments?: AppDocumentPool;
+  appsAuthority?: AppsAuthorityRuntime | null;
   config?: typeof defaultConfig;
 }): SfuState => {
   const config = options?.config ?? defaultConfig;
@@ -93,6 +100,12 @@ export const createSfuState = (options?: {
         deadlineMs: config.appDocuments.deadlineMs,
         maxDocumentBytes: MAX_APP_DOCUMENT_BYTES,
       }),
+    appsAuthority:
+      options?.appsAuthority !== undefined
+        ? options.appsAuthority
+        : config.appsAuthority.enabled
+          ? createAppsAuthorityRuntime()
+          : null,
     isDraining: options?.isDraining ?? config.draining,
   };
 };

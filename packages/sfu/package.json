@@ -26,6 +26,7 @@
   "type": "module",
   "dependencies": {
     "@conclave/ai": "workspace:*",
+    "@conclave/apps-sdk": "workspace:*",
     "@conclave/shared-browser": "workspace:*",
     "@conclave/ui-tokens": "workspace:*",
     "@socket.io/redis-adapter": "^8.3.0",
