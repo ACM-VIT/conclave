@@ -36,7 +36,7 @@ import { MAX_REACTIONS_PER_CHAT_MESSAGE } from "../../types.js";
 import { Logger } from "../../utilities/loggers.js";
 import { config } from "../config.js";
 import { Admin } from "./Admin.js";
-import type { Client } from "./Client.js";
+import { Client } from "./Client.js";
 import type { ProducerType } from "./Client.js";
 import type { GameSession } from "../../server/games/engine.js";
 import {
@@ -1055,14 +1055,15 @@ export class Room {
    * A block on any of a plan's passes wins over every right the guest holds
    * under any other: the guest loses what a rejoin would honour, host rights
    * included. Only what the room already records is changed. Returns all of
-   * the guest's keys, so that the caller removes its seats and requests.
+   * the guest's keys, so that the caller removes its seats and requests, and
+   * the seats that stopped being a host's (see `dropRejoinGrantsOf`).
    */
-  refuseBlockedLink(link: GuestLinkPlan): string[] {
-    const blocked = [...link.passes].flatMap((proof) => [
+  refuseBlockedLink(link: GuestLinkPlan): { userKeys: string[]; demoted: string[] } {
+    const userKeys = [...link.passes].flatMap((proof) => [
       ...(this.userKeysByGuestProof.get(proof) ?? []),
     ]);
-    this.dropRejoinGrantsOf(blocked, { recordedOnly: true });
-    return blocked;
+    const demoted = this.dropRejoinGrantsOf(userKeys, { recordedOnly: true });
+    return { userKeys, demoted };
   }
 
   /**
@@ -1128,7 +1129,7 @@ export class Room {
   } {
     const link = this.planGuestLink(otherSeats, guestProof);
     if (!link) return { blocked: [], settled: [] };
-    if (link.blocked) return { blocked: this.refuseBlockedLink(link), settled: [] };
+    if (link.blocked) return { blocked: this.refuseBlockedLink(link).userKeys, settled: [] };
     return { blocked: [], settled: this.commitGuestLink(link) };
   }
 
@@ -2707,14 +2708,21 @@ export class Room {
    * would honour, for every key of the same guest: waiting-room and lock
    * admissions, retained host rights, primary host, and a stage invite.
    */
-  dropRejoinGrants(userKey: string): void {
-    this.dropRejoinGrantsOf(this.identitiesOfSameGuest(userKey));
+  dropRejoinGrants(userKey: string): string[] {
+    return this.dropRejoinGrantsOf(this.identitiesOfSameGuest(userKey));
   }
 
+  /**
+   * Drops what a rejoin would honour for `userKeys`, and in the same step
+   * takes the host's seat from every live seat whose guest no longer holds
+   * host or co-host rights: a host's command is authorized by the seat
+   * (`instanceof Admin`), so a seat must never outlive its guest's grant.
+   * Returns the seats that stopped being a host's.
+   */
   private dropRejoinGrantsOf(
     userKeys: Iterable<string>,
     options: { recordedOnly?: boolean } = {},
-  ): void {
+  ): string[] {
     const keys = [...userKeys];
     this.admissions.revoke(
       keys.flatMap((key) => this.refusalPrincipalsOf(key)),
@@ -2727,6 +2735,29 @@ export class Room {
       if (this.hostUserKey === key) this.hostUserKey = null;
       this.releaseGuestIdentity(key);
     }
+    return this.demoteSeatsWithoutRights(keys);
+  }
+
+  // Turns every live host seat under `userKeys` whose guest holds no host or
+  // co-host right into an ordinary seat. Returns the seats it changed.
+  private demoteSeatsWithoutRights(userKeys: readonly string[]): string[] {
+    const keys = new Set(userKeys);
+    const demoted: string[] = [];
+    for (const [userId, client] of this.clients) {
+      if (!(client instanceof Admin) || client.isObserver) continue;
+      const userKey = this.userKeysById.get(userId);
+      if (userKey === undefined || !keys.has(userKey)) continue;
+      const guestProof = this.guestProofsByUserKey.get(userKey);
+      if (
+        this.isAdminUserKey(userKey, guestProof) ||
+        this.isHostUserKey(userKey, guestProof)
+      ) {
+        continue;
+      }
+      Object.setPrototypeOf(client, Client.prototype);
+      demoted.push(userId);
+    }
+    return demoted;
   }
 
   /**
@@ -3488,13 +3519,14 @@ export class Room {
    * a stage invite, and host rights. A join that still held host rights
    * would be let past the block.
    */
-  blockUser(userKey: string) {
-    this.dropRejoinGrants(userKey);
+  blockUser(userKey: string): string[] {
+    const demoted = this.dropRejoinGrants(userKey);
     this.blockedUsers.add(userKey);
     if (this.pendingClients.has(userKey)) {
       this.lobbyOutcomes.set(userKey, "rejected");
     }
     this.stopWaiting(userKey);
+    return demoted;
   }
 
   /**

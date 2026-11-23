@@ -1181,15 +1181,21 @@ export const blockUserKey = (
     pending.socket.emit("joinRejected", { roomId: room.id });
     rejectedPendingUserKeys.push(key);
   }
-  room.blockUser(userKey);
+  const demoted = room.blockUser(userKey);
   for (const key of rejectedPendingUserKeys) {
     room.denyWaitingRequest(key);
   }
   publishLobby(room);
 
   const kickedUserIds = options.kickPresent
-    ? removeSeats(room, seatsUnder(room, userKeys), options.reason, options)
+    ? removeSeats(room, seatsUnder(room, userKeys), options.reason, options, {
+        hostLost: demoted.length > 0,
+      })
     : [];
+  if (!options.kickPresent && demoted.length > 0) {
+    // The guest's seats stay, but no longer as a host's.
+    handOffRoom(options.io, options.state, room, new Set(userKeys));
+  }
   return { rejectedPendingUserKeys, kickedUserIds };
 };
 
@@ -1202,9 +1208,10 @@ export const blockUserKey = (
  */
 export const removeBlockedGuest = (
   room: Room,
-  userKeys: string[],
+  refused: { userKeys: string[]; demoted: string[] },
   options: { io: SocketIOServer; state: SfuState },
 ): void => {
+  const { userKeys } = refused;
   for (const userKey of userKeys) {
     const request = room.pendingClients.get(userKey);
     if (!request) continue;
@@ -1212,7 +1219,9 @@ export const removeBlockedGuest = (
     request.socket.emit("joinRejected", { roomId: room.id });
   }
   publishLobby(room);
-  removeSeats(room, seatsUnder(room, userKeys), "Blocked by host", options);
+  removeSeats(room, seatsUnder(room, userKeys), "Blocked by host", options, {
+    hostLost: refused.demoted.length > 0,
+  });
 };
 
 export const kickClient = (
@@ -1226,12 +1235,15 @@ export const kickClient = (
     return false;
   }
   // A removed user has to be let in again, or they could rejoin at once,
-  // still admitted and still a host.
+  // still admitted and still a host. The guest's other live tabs stop being
+  // a host's in the same step.
   const userKey = room.userKeysById.get(userId);
-  if (userKey) {
-    room.dropRejoinGrants(userKey);
-  }
-  return removeSeats(room, [userId], reason, options).length > 0;
+  const demoted = userKey ? room.dropRejoinGrants(userKey) : [];
+  return (
+    removeSeats(room, [userId], reason, options, {
+      hostLost: demoted.length > 0,
+    }).length > 0
+  );
 };
 
 const seatsUnder = (room: Room, userKeys: readonly string[]): string[] =>
@@ -1253,6 +1265,9 @@ const removeSeats = (
   userIds: readonly string[],
   reason: string,
   options?: { io?: SocketIOServer; state?: SfuState },
+  // Whether dropping the guests' rights already took a host's seat, so the
+  // room is handed on even if no seat removed here is still a host's.
+  removal: { hostLost?: boolean } = {},
 ): string[] => {
   const targets = userIds.filter((userId) => {
     const target = room.getClient(userId);
@@ -1287,7 +1302,7 @@ const removeSeats = (
     target.socket.disconnect(true);
   }
   if (
-    removedAdmin &&
+    (removedAdmin || removal.hostLost) &&
     options?.io &&
     options.state &&
     options.state.rooms.get(room.channelId) === room

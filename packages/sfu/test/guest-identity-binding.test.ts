@@ -3060,6 +3060,92 @@ describe("what ending a seat releases", () => {
   });
 });
 
+describe("a guest who is a co-host in two tabs, when one tab is removed", () => {
+  const tabA = {
+    userId: "guest-gp_two-host-tabs-a",
+    clientId: "conclave",
+    sessionId: "two-host-a",
+    guestProof: "proof-of-the-two-host-tabs-pass",
+    guestRoom: "room",
+  } satisfies SfuAuthPayload;
+  const tabB = { ...tabA, userId: "guest-gp_two-host-tabs-b", sessionId: "two-host-b" } satisfies SfuAuthPayload;
+  const seatOf = (user: SfuAuthPayload) => `${user.userId}#${user.sessionId}`;
+  const ask = async (peer: { handlers: Map<string, Handler> }, event: string, payload: unknown) => {
+    const ack = vi.fn();
+    await peer.handlers.get(event)!(...([payload, ack] as never[]));
+    return ack;
+  };
+  const coHostInTwoTabs = async () => {
+    const state = makeState();
+    const host = await join(state, guestHost);
+    const room = state.rooms.get("conclave:room")!;
+    const first = await join(state, tabA);
+    expect(await ask(host.peer, "promoteHost", { userId: seatOf(tabA) })).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+    const second = await join(state, tabB);
+    expect(room.getClient(seatOf(tabB))).toBeInstanceOf(Admin);
+    expect(second.peer.handlers.has("lockRoom")).toBe(true);
+    return { state, host, room, first, second };
+  };
+
+  it("leaves the other tab no host command at all (Daybreak)", async () => {
+    const { host, room, second } = await coHostInTwoTabs();
+    broadcast.mockClear();
+
+    expect(await ask(host.peer, "kickUser", { userId: seatOf(tabA) })).toHaveBeenCalledWith({ success: true });
+
+    expect(room.getClient(seatOf(tabB))).toBeDefined();
+    expect(room.getClient(seatOf(tabB))).not.toBeInstanceOf(Admin);
+    expect(room.isAdminUserKey(tabB.userId, tabB.guestProof)).toBe(false);
+    expect(broadcast).toHaveBeenCalledWith("adminUsersChanged", { roomId: "room", hostUserIds: [guestHostSeat] });
+
+    // Every host command the tab had, from the room's, is refused now.
+    const commands = [...second.peer.handlers.keys()].filter((event) => event !== "joinRoom");
+    expect(commands.length).toBeGreaterThan(30);
+    const payload = {
+      userId: guestHostSeat,
+      targetUserId: guestHostSeat,
+      userKeys: [guestHost.userId],
+      locked: true,
+      enabled: true,
+      disabled: true,
+      message: "Taken over",
+      reason: "Taken over",
+      roomId: "room",
+    };
+    const accepted: string[] = [];
+    for (const event of commands) {
+      const handler = second.peer.handlers.get(event)!;
+      const ack = vi.fn();
+      await (handler.length >= 2 ? handler(...([payload, ack] as never[])) : handler(...([ack] as never[])));
+      const answer = ack.mock.calls[0]?.[0] as { error?: unknown; rooms?: Array<{ id: string }> } | undefined;
+      // `getRooms` grants nothing: the token, not the seat, decides whether
+      // it lists more than the caller's own room.
+      if (event === "getRooms") {
+        expect(answer?.rooms?.map((listed) => listed.id)).toEqual(["room"]);
+        continue;
+      }
+      if (!answer || typeof answer.error !== "string") accepted.push(event);
+    }
+    expect(accepted).toEqual([]);
+    expect(room.isLocked).toBe(false);
+    expect(room.getClient(guestHostSeat)).toBeInstanceOf(Admin);
+    registerWebinarInteractionHandlers(second.context);
+    expect(await ask(second.peer, "webinar:demoteParticipant", { userId: guestHostSeat })).toHaveBeenCalledWith({ error: "Only hosts can do this" });
+  });
+
+  it("keeps a blocked co-host's tab in the room but no longer a host's, when the block does not remove it", async () => {
+    const { state, room } = await coHostInTwoTabs();
+
+    blockUserKey(room, tabA.userId, { reason: "Blocked by host", kickPresent: false, io, state });
+
+    for (const tab of [tabA, tabB]) {
+      expect(room.getClient(seatOf(tab))).toBeDefined();
+      expect(room.getClient(seatOf(tab))).not.toBeInstanceOf(Admin);
+    }
+    expect(room.getClient(guestHostSeat)).toBeInstanceOf(Admin);
+  });
+});
+
 describe("a guest join token whose claims are malformed", () => {
   const roomScoped = {
     userId: "guest-gp_TTTTTTTTTTTTTTTTTTTTTT",
@@ -3713,6 +3799,10 @@ describe("who may come in, against a slow reading of every decision", () => {
     // have a record, and is no decision of the hosts.
     revokeKeys(keys: string[], options: { recordedOnly?: boolean } = {}) {
       for (const key of keys) this.coHosts.delete(key);
+      // A live seat is a host's only while its guest holds the right.
+      for (const key of [...this.adminSeats]) {
+        if (!this.isCoHost(tabByKey.get(key)!.pass)) this.adminSeats.delete(key);
+      }
       const passes = [...new Set(keys.map((key) => tabByKey.get(key)!.pass))].filter(
         (pass) => !options.recordedOnly || this.records.has(pass),
       );
