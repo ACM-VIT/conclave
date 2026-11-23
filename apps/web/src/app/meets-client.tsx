@@ -3130,7 +3130,7 @@ export default function MeetsClient({
         action={enterAction}
         error={
           enterErrored
-            ? (meetError ?? {
+            ? (meetError ?? mediaError ?? {
                 code: "UNKNOWN",
                 message: "",
                 recoverable: true,
