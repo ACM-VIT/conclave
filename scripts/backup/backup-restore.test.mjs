@@ -6,11 +6,15 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { test } from "node:test";
+import { describe, test as nodeTest } from "node:test";
 import { promisify } from "node:util";
 import { provideFlock } from "../test-support/host-tools.mjs";
 
 const run = promisify(execFile);
+// Every case has its own root dir, keys, state dir, docker stand-in, lock
+// files and fake SFUs, so they run side by side (see the end of the file).
+const queued = [];
+const test = (...args) => queued.push(args);
 const scripts = import.meta.dirname;
 const hasTool = (tool) => {
   try {
@@ -20,12 +24,19 @@ const hasTool = (tool) => {
     return false;
   }
 };
-const missing = ["age", "age-keygen", "sqlite3", "sha256sum", "fuser"].filter((tool) => !hasTool(tool));
+// The tools backup.sh and restore.sh need. A laptop without them skips the
+// cases that need them; CI installs them all, so there a missing tool fails
+// the run instead of letting every case skip.
+const missing = ["age", "age-keygen", "fuser", "python3"].filter((tool) => !hasTool(tool));
 const missingWithRedis = [...missing, ...["redis-server", "redis-cli"].filter((tool) => !hasTool(tool))];
+if (process.env.CI && missingWithRedis.length > 0) {
+  throw new Error(`CI must install ${missingWithRedis.join(", ")} for the backup tests (see .github/workflows/ci.yml)`);
+}
 
 // A stand-in docker CLI that answers from a JSON list of containers, so a
 // backup sees the SFU containers a test describes and never this host's.
 // Each entry: { id, mounts, status, env, user, image, runningAfterChecks };
+// a mount is a source path, or { source, rw: false } for a read-only one;
 // runningAfterChecks: the container is reported running from that many
 // inspections on, as a deploy starting it would. { "fail": true } makes every
 // command fail.
@@ -49,7 +60,9 @@ if (args[0] === "inspect" && args[1] !== "-f") {
     State: { Status: entry.status },
     Config: { Env: entry.env ?? [], User: entry.user ?? "" },
     Image: entry.image ?? "sha256:sfu-image",
-    Mounts: (entry.mounts ?? []).map((source) => ({ Type: "bind", Source: source })),
+    Mounts: (entry.mounts ?? []).map((mount) =>
+      typeof mount === "string" ? { Type: "bind", Source: mount, RW: true } : { Type: "bind", Source: mount.source, RW: mount.rw !== false },
+    ),
   })))]);
 }
 const c = listed.find((entry) => entry.id === args.at(-1));
@@ -530,7 +543,7 @@ test(
       const result = await run("bash", [path.join(scripts, "restore.sh"), "--identity", path.join(root, "key.txt"), "--file", archive, "--yes"], {
         env: { ...env, PATH: `${bin}:${env.PATH}` },
       });
-      assert.match(result.stdout, new RegExp(`Gave the files in .* to ${uid}:${gid}, the user the SFU runs as`));
+      assert.match(result.stdout, new RegExp(`Gave the restored files in .* to ${uid}:${gid}, the user the SFU runs as`));
 
       // An owner given by name that this host does not know is refused
       // before any file changes.
@@ -663,6 +676,7 @@ test(
     let writer;
     let sfu;
     let db;
+    let redisWriter;
     try {
       for (let i = 0; i < 50 && (await cli("PING").catch(() => "")) !== "PONG"; i += 1) {
         await new Promise((done) => setTimeout(done, 100));
@@ -673,7 +687,7 @@ test(
       db = new DatabaseSync(path.join(state, "conclave.sqlite"));
       db.exec("PRAGMA journal_mode = WAL");
       db.exec("CREATE TABLE records (id INTEGER PRIMARY KEY)");
-      const redisWriter = spawn("redis-cli", ["-h", "127.0.0.1", "-p", String(port)], { stdio: ["pipe", "pipe", "ignore"] });
+      redisWriter = spawn("redis-cli", ["-h", "127.0.0.1", "-p", String(port)], { stdio: ["pipe", "pipe", "ignore"] });
       let sent = 0;
       let acked = 0;
       redisWriter.stdout.on("data", (chunk) => (acked += String(chunk).split("\n").filter(Boolean).length));
@@ -704,6 +718,7 @@ test(
       redisWriter.stdin.end();
       db.close();
       await sfu.close();
+      await setDocker([{ ...sfu.container(state), status: "exited" }]);
       sfu = null;
       await writeFile(config, `${await readFile(config, "utf8")}\nCONCLAVE_SFU_HEALTH_URLS="http://127.0.0.1:9/health"\n`);
 
@@ -721,6 +736,7 @@ test(
       assert.deepEqual(keys, rows, "both stores must hold the same records");
     } finally {
       clearInterval(writer);
+      redisWriter?.kill();
       if (db?.isOpen) db.close();
       if (sfu) await sfu.close();
       redis.kill();
@@ -951,7 +967,7 @@ test(
     try {
       const state = path.join(root, hostPath("/var/lib/conclave/recordings"));
       const redisData = path.join(root, hostPath("/data"));
-      const { env, setDocker } = await setUp(root, [`CONCLAVE_STATE_DIR=${state}`]);
+      const { setDocker, backup, latestArchive, restore } = await setUp(root, [`CONCLAVE_STATE_DIR=${state}`]);
       await setDocker([{ id: "sfu-staging", mounts: [state], status: "exited", env: ["SFU_PORT=9", "SFU_INSTANCE_ID=sfu-staging"] }]);
       await mkdir(path.join(redisData, "appendonlydir"), { recursive: true });
       await mkdir(state, { recursive: true });
@@ -962,30 +978,15 @@ test(
       db.close();
       const before = await Promise.all(redisFiles.map((file) => stat(path.join(redisData, file))));
 
-      // Every directory a backup or restore walks, as find sees it.
-      const findBin = path.join(root, "find-bin");
-      const findLog = path.join(root, "find.log");
-      await mkdir(findBin);
-      const realFind = execFileSync("sh", ["-c", "command -v find"], { encoding: "utf8" }).trim();
-      await writeFile(
-        path.join(findBin, "find"),
-        `#!/bin/sh\ncase "$1" in /*) printf '%s\\n' "$1" ;; *) printf '%s\\n' "$PWD/$1" ;; esac >> "${findLog}"\nexec ${realFind} "$@"\n`,
-        { mode: 0o755 },
-      );
-      const walked = { ...env, PATH: `${findBin}:${env.PATH}` };
-      await run("bash", [path.join(scripts, "backup.sh"), "--local-only"], { env: walked });
-      const archive = (await readdir(path.join(root, "local"))).find((name) => name.endsWith(".tar.gz.age"));
+      // A backup, a restore over the live dir, and one into a lost dir.
+      await backup("--local-only");
+      const archive = await latestArchive();
+      await restore("--file", archive, "--yes");
       await rm(state, { recursive: true });
-      await run("bash", [path.join(scripts, "restore.sh"), "--identity", path.join(root, "key.txt"), "--file", path.join(root, "local", archive), "--yes"], { env: walked });
+      await restore("--file", archive, "--yes");
 
-      const roots = (await readFile(findLog, "utf8")).split("\n").filter(Boolean).map((dir) => path.resolve(dir));
-      assert.ok(roots.some((dir) => dir === path.resolve(state)), "the restore's ownership fix walked the state dir");
-      for (const dir of roots) {
-        const relative = path.relative(dir, path.resolve(redisData));
-        assert.ok(relative.startsWith("..") || path.isAbsolute(relative), `${dir} contains Redis's data`);
-      }
       const after = await Promise.all(redisFiles.map((file) => stat(path.join(redisData, file))));
-      assert.deepEqual(after.map((s) => [s.ino, s.ctimeMs, s.uid, s.gid]), before.map((s) => [s.ino, s.ctimeMs, s.uid, s.gid]));
+      assert.deepEqual(after.map((s) => [s.ino, s.ctimeMs, s.uid, s.gid]), before.map((s) => [s.ino, s.ctimeMs, s.uid, s.gid]), "nothing in Redis's dir was touched, chown included");
       for (const file of redisFiles) assert.equal(await readFile(path.join(redisData, file), "utf8"), `redis ${file}`);
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -1079,7 +1080,7 @@ test(
       await setDocker([{ id: "sfu-a", mounts: [state], status: "exited", env: ["SFU_PORT=9", "SFU_INSTANCE_ID=sfu-a"], user: `${uid}:${gid}` }]);
 
       const result = await restore("--file", archive, "--yes");
-      assert.match(result.stdout, new RegExp(`Gave the files in .* to ${uid}:${gid}, the user the SFU runs as`));
+      assert.match(result.stdout, new RegExp(`Gave the restored files in .* to ${uid}:${gid}, the user the SFU runs as`));
       const restored = new DatabaseSync(path.join(state, "conclave.sqlite"), { readOnly: true });
       assert.deepEqual(restored.prepare("SELECT id FROM meetings").all().map((row) => row.id), ["kept"]);
       restored.close();
@@ -1186,8 +1187,9 @@ test(
     try {
       const { state, local, setDocker, backup } = await setUp(root);
       withDatabase(state);
-      // Stopped at the first check, running from the second on.
-      await setDocker([{ id: "sfu-a", mounts: [state], status: "exited", env: ["SFU_PORT=9", "SFU_INSTANCE_ID=sfu-a"], runningAfterChecks: 1 }]);
+      // Stopped through the checks before the copies (the preflight, the
+      // fence and the copy's own look), running from the check after them.
+      await setDocker([{ id: "sfu-a", mounts: [state], status: "exited", env: ["SFU_PORT=9", "SFU_INSTANCE_ID=sfu-a"], runningAfterChecks: 3 }]);
       await assert.rejects(backup("--local-only"), /the SFU container sfu-a \(sfu-a\) is running but does not hold the write fence/);
       assert.deepEqual(await archives(local), []);
     } finally {
@@ -1263,23 +1265,7 @@ test(
 
       // An archive whose recorded links were changed to include one that
       // leads out of the state dir, with checksums to match.
-      const work = path.join(root, "tampered");
-      await mkdir(work);
-      const tampered = path.join(root, "local", "conclave-test-20260101T000000Z.tar.gz.age");
-      await run("bash", [
-        "-c",
-        'set -e; age --decrypt -i "$1" "$2" | tar -C "$3" -xzf -; printf "escape\\t%s\\n" "$4" >> "$3/sqlite-links"; ' +
-          '(cd "$3" && rm SHA256SUMS && find . -type f | sort | xargs sha256sum > "$5" && mv "$5" SHA256SUMS); ' +
-          'tar -C "$3" -czf - . | age --encrypt -R "$6" -o "$7"',
-        "_",
-        path.join(root, "key.txt"),
-        await latestArchive(),
-        work,
-        path.join(root, "elsewhere"),
-        path.join(root, "sums.tmp"),
-        path.join(root, "recipients.txt"),
-        tampered,
-      ]);
+      const tampered = await withExtraLink(root, await latestArchive(), `escape\t${path.join(root, "elsewhere")}`, path.join(root, "local", "conclave-test-20260101T000000Z.tar.gz.age"));
       await rm(state, { recursive: true });
       await assert.rejects(restore("--file", tampered, "--only", "sqlite", "--yes"), /the recorded link escape leads outside the state dir/);
       assert.equal(await readlink(path.join(state, "escape")).catch(() => "absent"), "absent");
@@ -1328,25 +1314,22 @@ test(
   },
 );
 
-// Rewrites an archive with an extra recorded link and checksums to match.
-const withExtraLink = async (root, archive, line, out) => {
-  const work = await mkdtemp(path.join(root, "tamper-"));
-  await run("bash", [
-    "-c",
-    'set -e; age --decrypt -i "$1" "$2" | tar -C "$3" -xzf -; printf "%s\\n" "$4" >> "$3/sqlite-links"; ' +
-      '(cd "$3" && rm SHA256SUMS && find . -type f | sort | xargs sha256sum > "$5" && mv "$5" SHA256SUMS); ' +
-      'tar -C "$3" -czf - . | age --encrypt -R "$6" -o "$7"',
-    "_",
+// Rewrites an archive the way anyone with the age public key could, with
+// checksums to match (scripts/test-support/backup-tamper.py).
+const tamper = async (root, archive, spec, out) => {
+  await run("python3", [
+    path.join(scripts, "..", "test-support", "backup-tamper.py"),
     path.join(root, "key.txt"),
-    archive,
-    work,
-    line,
-    path.join(root, "sums.tmp"),
     path.join(root, "recipients.txt"),
+    archive,
     out,
+    JSON.stringify(spec),
   ]);
   return out;
 };
+
+// Rewrites an archive with an extra recorded link and checksums to match.
+const withExtraLink = (root, archive, line, out) => tamper(root, archive, { append: { "sqlite-links": `${line}\n` } }, out);
 
 test(
   "a populated staging dir whose link names the container's path restores, as it does when empty",
@@ -1409,34 +1392,8 @@ test(
 
 // Rewrites an archive with one more member in its other-files tar (a regular
 // file, a symlink or a fifo), checksums to match.
-const withExtraMember = async (root, archive, { name, type = "file", target = "" }, out) => {
-  const work = await mkdtemp(path.join(root, "tamper-"));
-  await run("bash", [
-    "-c",
-    'set -e; age --decrypt -i "$1" "$2" | tar -C "$3" -xzf -; ' +
-      'python3 -c \'import io, sys, tarfile\n' +
-      'tar_path, name, kind, target = sys.argv[1:5]\n' +
-      'member = tarfile.TarInfo(name)\n' +
-      'data = b"planted"\n' +
-      'if kind == "file": member.size = len(data)\n' +
-      'elif kind == "symlink": member.type, member.linkname = tarfile.SYMTYPE, target\n' +
-      'else: member.type = tarfile.FIFOTYPE\n' +
-      'with tarfile.open(tar_path, "a") as tar: tar.addfile(member, io.BytesIO(data) if kind == "file" else None)\' "$3/state-files.tar" "$4" "$5" "$6"; ' +
-      '(cd "$3" && rm SHA256SUMS && find . -type f | sort | xargs sha256sum > "$7" && mv "$7" SHA256SUMS); ' +
-      'tar -C "$3" -czf - . | age --encrypt -R "$8" -o "$9"',
-    "_",
-    path.join(root, "key.txt"),
-    archive,
-    work,
-    name,
-    type,
-    target,
-    path.join(root, "sums.tmp"),
-    path.join(root, "recipients.txt"),
-    out,
-  ]);
-  return out;
-};
+const withExtraMember = (root, archive, { name, type = "file", target = "" }, out) =>
+  tamper(root, archive, { inner: [{ name, type, target }] }, out);
 
 test(
   "a crafted member that climbs through a link out of the state dir is refused before anything changes",
@@ -1526,9 +1483,9 @@ test(
       withDatabase(state);
       await backup("--local-only");
       const linked = await withExtraLink(root, await latestArchive(), `alias\t${other}`, path.join(root, "linked.tar.gz.age"));
-      const crafted = await withExtraMember(root, linked, { name: "./alias/conclave.sqlite" }, path.join(root, "local", "conclave-test-20260101T000000Z.tar.gz.age"));
+      const crafted = await withExtraMember(root, linked, { name: "./alias/notes.json" }, path.join(root, "local", "conclave-test-20260101T000000Z.tar.gz.age"));
 
-      await assert.rejects(restore("--file", crafted, "--yes"), /alias\/conclave\.sqlite sits under the recorded link alias, and a restore never writes through a link/);
+      await assert.rejects(restore("--file", crafted, "--yes"), /alias\/notes\.json sits under the recorded link alias, and a restore never writes through a link/);
       assert.equal(await readFile(path.join(other, "conclave.sqlite"), "utf8"), "the other SFU's data");
       assert.equal(await readlink(path.join(state, "alias")).catch(() => "absent"), "absent");
     } finally {
@@ -1581,3 +1538,534 @@ test(
     }
   },
 );
+
+// --- Neon's adversarial review of the restore, each reproduction as a test.
+
+const needs = { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` };
+const rows = (file, table = "meetings") => {
+  const db = new DatabaseSync(file, { readOnly: true });
+  try {
+    return db.prepare(`SELECT id FROM "${table.replaceAll('"', '""')}" ORDER BY id`).all().map((row) => row.id);
+  } finally {
+    db.close();
+  }
+};
+const makeDb = (file, id, table = "meetings") => {
+  const db = new DatabaseSync(file);
+  const quoted = `"${table.replaceAll('"', '""')}"`;
+  db.exec(`CREATE TABLE ${quoted} (id TEXT PRIMARY KEY)`);
+  db.prepare(`INSERT INTO ${quoted} VALUES (?)`).run(id);
+  db.close();
+};
+const innerFiles = async (root, archive) =>
+  (await run("python3", ["-c", `import io, subprocess, sys, tarfile
+outer = tarfile.open(fileobj=io.BytesIO(subprocess.run(["age", "--decrypt", "-i", sys.argv[1], sys.argv[2]], check=True, capture_output=True).stdout), mode="r:gz")
+inner = tarfile.open(fileobj=outer.extractfile("./state-files.tar"))
+print("\\n".join(m.name for m in inner))`, path.join(root, "key.txt"), archive])).stdout.split("\n").filter(Boolean);
+
+test("an outer archive whose sqlite dir is a link is refused before anything is read through it", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, backup, latestArchive, restore } = await setUp(root);
+    makeDb(path.join(state, "conclave.sqlite"), "kept");
+    await backup("--local-only");
+    const outside = path.join(root, "outside");
+    await mkdir(outside);
+    makeDb(path.join(outside, "conclave.sqlite"), "host secret");
+    const crafted = await tamper(root, await latestArchive(), { remove: ["./sqlite/conclave.sqlite", "./sqlite"], outer: [{ name: "./sqlite", type: "symlink", target: outside }] }, path.join(root, "crafted.tar.gz.age"));
+    await assert.rejects(restore("--file", crafted), /sqlite in the archive is not a regular file or directory/);
+    await assert.rejects(restore("--file", crafted, "--yes"), /sqlite in the archive is not a regular file or directory/);
+    assert.deepEqual(rows(path.join(state, "conclave.sqlite")), ["kept"], "the host's database never came in");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an outer redis dir that is a link is refused, and the file it names stays", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, backup, latestArchive, restore } = await setUp(root);
+    withDatabase(state);
+    await backup("--local-only");
+    const outside = path.join(root, "outside");
+    await mkdir(outside);
+    await writeFile(path.join(outside, "dump.rdb"), "a host file");
+    const crafted = await tamper(root, await latestArchive(), { outer: [{ name: "./redis", type: "symlink", target: outside }] }, path.join(root, "crafted.tar.gz.age"));
+    await assert.rejects(restore("--file", crafted, "--yes"), /redis in the archive is not a regular file or directory/);
+    assert.equal(await readFile(path.join(outside, "dump.rdb"), "utf8"), "a host file");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a SHA256SUMS that names a path outside the archive is refused, so it is no hash oracle", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, backup, latestArchive, restore } = await setUp(root);
+    withDatabase(state);
+    await backup("--local-only");
+    const crafted = await tamper(root, await latestArchive(), { sums: { extra: [`${"0".repeat(64)}  /etc/hosts`] } }, path.join(root, "crafted.tar.gz.age"));
+    await assert.rejects(restore("--file", crafted), /SHA256SUMS lists \/etc\/hosts, which is not a plain path inside the archive/);
+    const unlisted = await tamper(root, await latestArchive(), { outer: [{ name: "./extra.txt", data: "not in the sums" }], sums: { keep: true } }, path.join(root, "unlisted.tar.gz.age"));
+    await assert.rejects(restore("--file", unlisted), /checksums do not match; the archive is damaged: extra\.txt is not in SHA256SUMS/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a MANIFEST that is a link is refused before it is read", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, backup, latestArchive, restore } = await setUp(root);
+    withDatabase(state);
+    await backup("--local-only");
+    const secret = path.join(root, "secret.txt");
+    await writeFile(secret, "host secret line");
+    const crafted = await tamper(root, await latestArchive(), { remove: ["./MANIFEST"], outer: [{ name: "./MANIFEST", type: "symlink", target: secret }] }, path.join(root, "crafted.tar.gz.age"));
+    const refused = await restore("--file", crafted).then(() => null, (error) => error);
+    assert.match(String(refused?.stderr), /MANIFEST in the archive is not a regular file or directory/);
+    assert.doesNotMatch(`${refused?.stdout}${refused?.stderr}`, /host secret line/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an outer member with an absolute or climbing name is refused", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, backup, latestArchive, restore } = await setUp(root);
+    withDatabase(state);
+    await backup("--local-only");
+    for (const name of [path.join(root, "planted"), "./sqlite/../../planted"]) {
+      const crafted = await tamper(root, await latestArchive(), { outer: [{ name }] }, path.join(root, "crafted.tar.gz.age"));
+      await assert.rejects(restore("--file", crafted, "--yes"), /is not a plain path inside it/);
+    }
+    assert.equal(await readFile(path.join(root, "planted"), "utf8").catch(() => "absent"), "absent");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a process racing the restore inside the state dir cannot redirect a write outside it", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  let racer;
+  try {
+    const { state, backup, latestArchive, restore } = await setUp(root);
+    withDatabase(state);
+    await mkdir(path.join(state, "data"));
+    for (let i = 0; i < 20; i += 1) await writeFile(path.join(state, "data", `notes-${i}.json`), "{}");
+    await backup("--local-only");
+    const archive = await latestArchive();
+    const outside = path.join(root, "outside");
+    await mkdir(outside);
+    // Neon's race: whatever appears in the state dir is renamed away and a
+    // link to the outside dir put in its place, as fast as possible.
+    racer = spawn("python3", ["-c", `import os, sys, time
+state, outside = sys.argv[1], sys.argv[2]
+seen = set(os.listdir(state))
+end = time.time() + 20
+while time.time() < end:
+    for name in os.listdir(state):
+        if name not in seen:
+            seen.add(name)
+            try:
+                os.rename(os.path.join(state, name), os.path.join(state, name + ".raced"))
+                os.symlink(outside, os.path.join(state, name))
+                seen.update({name + ".raced"})
+            except OSError:
+                pass`, state, outside], { stdio: "ignore" });
+    await rm(path.join(state, "data"), { recursive: true });
+    await restore("--file", archive, "--yes").catch(() => undefined);
+    racer.kill();
+    assert.deepEqual(await readdir(outside), [], "nothing was written outside the state dir");
+  } finally {
+    racer?.kill();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a restore refuses a state dir whose parent other users can change, before changing anything", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, backup, latestArchive, restore } = await setUp(root);
+    makeDb(path.join(state, "conclave.sqlite"), "before");
+    await backup("--local-only");
+    await chmod(root, 0o777);
+    await assert.rejects(restore("--file", await latestArchive(), "--yes"), /can be changed by users other than its owner, so the restore cannot keep its staging copy private there/);
+    await chmod(root, 0o700);
+    assert.deepEqual((await readdir(root)).filter((name) => name.includes("restore")), []);
+  } finally {
+    await chmod(root, 0o700).catch(() => undefined);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a restore never touches a file outside through a hard link in the state dir", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, backup, latestArchive, restore } = await setUp(root);
+    withDatabase(state);
+    await writeFile(path.join(state, "notes.json"), "backed up");
+    await backup("--local-only");
+    // Since the backup, notes.json has become a second name for a file
+    // outside, as Neon's chown-through-a-hard-link probe made it.
+    const outside = path.join(root, "outside");
+    await mkdir(outside);
+    await writeFile(path.join(outside, "secret"), "host secret");
+    await chmod(path.join(outside, "secret"), 0o600);
+    await rm(path.join(state, "notes.json"));
+    await run("ln", [path.join(outside, "secret"), path.join(state, "notes.json")]);
+    const before = await stat(path.join(outside, "secret"));
+    await restore("--file", await latestArchive(), "--yes");
+    const after = await stat(path.join(outside, "secret"));
+    assert.deepEqual([after.ino, after.uid, after.gid, after.mode], [before.ino, before.uid, before.gid, before.mode]);
+    assert.equal(await readFile(path.join(outside, "secret"), "utf8"), "host secret");
+    assert.equal(await readFile(path.join(state, "notes.json"), "utf8"), "backed up");
+    assert.equal((await stat(path.join(state, "notes.json"))).nlink, 1, "the restored file is a new one");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a running container that mounts no SFU_INSTANCE_ID, a dir above, or one inside the state dir stops the backup", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, local, setDocker, backup } = await setUp(root);
+    withDatabase(state);
+    await mkdir(path.join(state, "data"));
+    // Neon: an empty SFU_INSTANCE_ID matched the empty list of held fences.
+    await setDocker([{ id: "rogue", mounts: [state], status: "running", env: ["SFU_INSTANCE_ID="] }]);
+    await assert.rejects(backup("--local-only"), /the container rogue is running and can write the state dir, but has no SFU_INSTANCE_ID/);
+    for (const mount of [root, path.join(state, "data")]) {
+      await setDocker([{ id: "nested", mounts: [mount], status: "running", env: ["SFU_PORT=1", "SFU_INSTANCE_ID=sfu-x"] }]);
+      await assert.rejects(backup("--local-only"), /the SFU container nested \(sfu-x\) is running but does not hold the write fence/);
+    }
+    // A read-only mount above the state dir cannot write to it.
+    await setDocker([{ id: "reader", mounts: [{ source: root, rw: false }], status: "running", env: [] }, { id: "sfu-a", mounts: [state], status: "exited", env: ["SFU_PORT=9", "SFU_INSTANCE_ID=sfu-a"] }]);
+    await backup("--local-only");
+    assert.equal((await archives(local)).length, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("two running containers under one SFU_INSTANCE_ID stop the backup, though one holds the fence", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  const sfu = await fencedSfu();
+  try {
+    const { state, local, setDocker, backup } = await setUp(root, [`CONCLAVE_SFU_HEALTH_URLS="${sfu.health}"`]);
+    withDatabase(state);
+    await setDocker([sfu.container(state), { ...sfu.container(state), id: "twin" }]);
+    await assert.rejects(backup("--local-only"), /the containers sfu-a and twin both run as SFU instance sfu-a/);
+    await setDocker([sfu.container(state), { ...sfu.container(state), id: "elsewhere", env: ["SFU_PORT=1", "SFU_INSTANCE_ID=sfu-a"] }]);
+    await assert.rejects(backup("--local-only"), /the SFU container elsewhere \(sfu-a\) listens on port 1, but the fence answer for sfu-a came from port \d+/);
+    assert.deepEqual(await archives(local), []);
+  } finally {
+    await sfu.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the other files are archived inside the fence, so a write after its release is not in the backup", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  let state;
+  const sfu = await fencedSfu({ onRelease: () => writeFile(path.join(state, "late.json"), "{}") });
+  try {
+    const setup = await setUp(root, [`CONCLAVE_SFU_HEALTH_URLS="${sfu.health}"`]);
+    state = setup.state;
+    withDatabase(state);
+    await writeFile(path.join(state, "early.json"), "{}");
+    await setup.setDocker([sfu.container(state)]);
+    await setup.backup("--local-only");
+    const files = await innerFiles(root, await setup.latestArchive());
+    assert.ok(files.includes("early.json"), files.join(" "));
+    assert.ok(!files.includes("late.json"), "late.json was written after the fence was released");
+  } finally {
+    await sfu.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the host deploy lock is made so no other user can open it, and a lock that is a link is refused", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, local, backup } = await setUp(root);
+    withDatabase(state);
+    const lock = path.join(root, "deploy.lock");
+    await backup("--local-only");
+    assert.equal((await stat(lock)).mode & 0o777, 0o640);
+    // One made world-writable by an older script is narrowed by its owner.
+    await chmod(lock, 0o666);
+    await backup("--local-only");
+    assert.equal((await stat(lock)).mode & 0o777, 0o640);
+    await rm(lock);
+    await writeFile(path.join(root, "elsewhere.lock"), "");
+    await symlink(path.join(root, "elsewhere.lock"), lock);
+    await assert.rejects(backup("--local-only"), /deploy\.lock is a link or not a regular file/);
+    assert.equal((await archives(local)).length, 2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a live database's hot journal is moved aside with it, never replayed onto the restored copy", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, backup, latestArchive, restore } = await setUp(root);
+    makeDb(path.join(state, "conclave.sqlite"), "backed up");
+    await backup("--local-only");
+    // A crashed writer left a rollback journal beside the live database.
+    await writeFile(path.join(state, "conclave.sqlite-journal"), "a hot journal from before the restore");
+    await writeFile(path.join(state, "conclave.sqlite-wal"), "a stale WAL");
+    const result = await restore("--file", await latestArchive(), "--yes");
+    assert.deepEqual((await readdir(state)).filter((name) => name.startsWith("conclave.sqlite-")), []);
+    const aside = result.stdout.match(/kept in (\S+)/)[1];
+    assert.deepEqual((await readdir(aside)).sort(), ["conclave.sqlite", "conclave.sqlite-journal", "conclave.sqlite-wal"]);
+    assert.deepEqual(rows(path.join(state, "conclave.sqlite")), ["backed up"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a SQLite side file in the archive's other files is refused, whatever it belongs to", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, backup, latestArchive, restore } = await setUp(root, ["CONCLAVE_SQLITE_PATH=/var/lib/conclave/recordings/live.db"]);
+    makeDb(path.join(state, "target.db"), "kept");
+    await symlink("target.db", path.join(state, "live.db"));
+    await backup("--local-only");
+    for (const name of ["target.db-wal", "live.db-journal", "other.sqlite-shm"]) {
+      const crafted = await tamper(root, await latestArchive(), { inner: [{ name }] }, path.join(root, "crafted.tar.gz.age"));
+      await assert.rejects(restore("--file", crafted, "--only", "files", "--yes"), /(is a SQLite side file, and a restore never takes one from the archive|is a database path)/);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a configured database named like a side file is backed up and restored, not skipped", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, backup, latestArchive, restore } = await setUp(root, ["CONCLAVE_SQLITE_PATH=/var/lib/conclave/recordings/store-wal"]);
+    makeDb(path.join(state, "store-wal"), "kept");
+    await backup("--local-only");
+    await rm(state, { recursive: true });
+    await restore("--file", await latestArchive(), "--yes");
+    assert.deepEqual(rows(path.join(state, "store-wal")), ["kept"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a database name with no room for SQLite's side files fails the backup, and a long one with room restores over itself", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, local, backup, latestArchive, restore } = await setUp(root);
+    withDatabase(state);
+    const long = `${"l".repeat(233)}.sqlite`;
+    makeDb(path.join(state, long), "long");
+    await backup("--local-only");
+    // Neon: a 224-byte name failed halfway, after the live copy was moved.
+    await restore("--file", await latestArchive(), "--yes");
+    assert.deepEqual(rows(path.join(state, long)), ["long"]);
+    // SQLite itself cannot write a database under a name with no room for
+    // its journal, so this one is made under a short name and renamed.
+    makeDb(path.join(root, "short.sqlite"), "no room");
+    await run("mv", [path.join(root, "short.sqlite"), path.join(state, `${"n".repeat(241)}.sqlite`)]);
+    await assert.rejects(backup("--local-only"), /leaves no room for SQLite's -wal\/-shm\/-journal files/);
+    assert.equal((await archives(local)).length, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a database link written with the host's own path restores into another state dir, as a restore drill does", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, config, backup, latestArchive, restore } = await setUp(root);
+    await mkdir(path.join(state, "data"));
+    makeDb(path.join(state, "data", "live.db"), "kept");
+    await symlink(path.join(state, "data", "live.db"), path.join(state, "conclave.sqlite"));
+    await backup("--local-only");
+    const drill = path.join(root, "drill");
+    await writeFile(config, `${await readFile(config, "utf8")}\nCONCLAVE_STATE_DIR=${drill}\n`);
+    await restore("--file", await latestArchive(), "--yes");
+    assert.equal(await readlink(path.join(drill, "conclave.sqlite")), "data/live.db");
+    assert.deepEqual(rows(path.join(drill, "conclave.sqlite")), ["kept"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a read-only directory in the state dir is found before the restore changes anything", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, backup, latestArchive, restore } = await setUp(root);
+    makeDb(path.join(state, "conclave.sqlite"), "backed up");
+    await mkdir(path.join(state, "data"));
+    await writeFile(path.join(state, "data", "notes.json"), "backed up");
+    await backup("--local-only");
+    await writeFile(path.join(state, "data", "notes.json"), "live");
+    await chmod(path.join(state, "data"), 0o555);
+    if (process.getuid() === 0) {
+      await restore("--file", await latestArchive(), "--yes");
+      assert.equal(await readFile(path.join(state, "data", "notes.json"), "utf8"), "backed up");
+    } else {
+      await assert.rejects(restore("--file", await latestArchive(), "--yes"), /the directory that holds data\/notes\.json is not writable by this user/);
+      assert.equal(await readFile(path.join(state, "data", "notes.json"), "utf8"), "live", "nothing changed");
+      assert.deepEqual(rows(path.join(state, "conclave.sqlite")), ["backed up"]);
+    }
+  } finally {
+    await chmod(path.join(root, "state", "data"), 0o755).catch(() => undefined);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("archive paths that collide (a file under a database, a file root, a link twice, case-only twins) are refused", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, backup, latestArchive, restore } = await setUp(root);
+    withDatabase(state);
+    await symlink("conclave.sqlite", path.join(state, "alias.sqlite"));
+    await backup("--local-only");
+    const cases = [
+      [{ inner: [{ name: "conclave.sqlite/x" }] }, /conclave\.sqlite\/x sits under conclave\.sqlite, which the archive also holds as a file/],
+      [{ inner: [{ name: "." }] }, /the root of state-files\.tar is not a directory/],
+      [{ append: { "sqlite-links": "alias.sqlite\tconclave.sqlite\n" } }, /the recorded link alias\.sqlite is listed twice/],
+      [{ inner: [{ name: "Notes.json" }, { name: "notes.json" }] }, /differ only in case or Unicode form/],
+    ];
+    for (const [spec, message] of cases) {
+      const crafted = await tamper(root, await latestArchive(), spec, path.join(root, "crafted.tar.gz.age"));
+      await assert.rejects(restore("--file", crafted, "--yes"), message);
+    }
+    assert.deepEqual(rows(path.join(state, "conclave.sqlite")), [], "nothing was restored");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a database whose path holds a quote and spaces, with a table named with a double quote, backs up and restores", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, backup, latestArchive, restore } = await setUp(root);
+    withDatabase(state);
+    await mkdir(path.join(state, "it's here"));
+    makeDb(path.join(state, "it's here", "live db.sqlite"), "odd", 'we"ird');
+    await writeFile(path.join(state, "it's here", "a note.json"), "{}");
+    await backup("--local-only");
+    const dryRun = await restore("--file", await latestArchive());
+    assert.match(dryRun.stdout, /sqlite\.it's here\/live db\.sqlite\.we"ird=1/);
+    await rm(state, { recursive: true });
+    await restore("--file", await latestArchive(), "--yes");
+    assert.deepEqual(rows(path.join(state, "it's here", "live db.sqlite"), 'we"ird'), ["odd"]);
+    assert.equal(await readFile(path.join(state, "it's here", "a note.json"), "utf8"), "{}");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// --- Greptile's four cases from the b55af173 round.
+
+test("Greptile: a link through a directory link and .. comes back as written and reaches the database it did", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, backup, latestArchive, restore } = await setUp(root);
+    // alias -> data/deep, conclave.sqlite -> alias/../live.db: the SFU opens data/live.db.
+    await mkdir(path.join(state, "data", "deep"), { recursive: true });
+    makeDb(path.join(state, "data", "live.db"), "through the alias");
+    makeDb(path.join(state, "live.db"), "a decoy at the collapsed path");
+    await symlink("data/deep", path.join(state, "alias"));
+    await symlink("alias/../live.db", path.join(state, "conclave.sqlite"));
+    await backup("--local-only");
+    await rm(state, { recursive: true });
+    await restore("--file", await latestArchive(), "--only", "sqlite", "--yes");
+    assert.equal(await readlink(path.join(state, "conclave.sqlite")), "alias/../live.db");
+    assert.equal(await readlink(path.join(state, "alias")), "data/deep");
+    assert.deepEqual(rows(path.join(state, "conclave.sqlite")), ["through the alias"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Greptile: a recorded link whose target goes through a live link that leads out is refused", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, backup, latestArchive, restore } = await setUp(root);
+    withDatabase(state);
+    await backup("--local-only");
+    const outside = path.join(root, "outside");
+    await mkdir(outside);
+    makeDb(path.join(outside, "live.db"), "outside");
+    await symlink(outside, path.join(state, "pivot"));
+    // Valid on its own: it holds pivot/live.db and records other.sqlite ->
+    // pivot/live.db. On this host pivot is a link that leads out.
+    makeDb(path.join(root, "copy.db"), "crafted");
+    const crafted = await tamper(root, await latestArchive(), {
+      append: { "sqlite-databases": "pivot/live.db\n", "sqlite-links": "other.sqlite\tpivot/live.db\n", "sqlite-chains": "other.sqlite\tpivot/live.db\n" },
+      outer: [{ name: "./sqlite/pivot", type: "dir" }, { name: "./sqlite/pivot/live.db", from: path.join(root, "copy.db") }],
+    }, path.join(root, "crafted.tar.gz.age"));
+    await assert.rejects(restore("--file", crafted, "--only", "sqlite", "--yes"), /pivot is a link in the state dir, and a restore never writes through a link/);
+    assert.equal(await readlink(path.join(state, "other.sqlite")).catch(() => "absent"), "absent");
+    assert.deepEqual(rows(path.join(outside, "live.db")), ["outside"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Greptile: a subdirectory the backup cannot list fails it and rotates nothing away", { skip: needs.skip || (process.getuid() === 0 && "root reads every directory") }, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, local, backup } = await setUp(root);
+    withDatabase(state);
+    await backup("--local-only");
+    await mkdir(path.join(state, "locked"));
+    await writeFile(path.join(state, "locked", "notes.json"), "{}");
+    await chmod(path.join(state, "locked"), 0o000);
+    await assert.rejects(backup("--local-only"), /cannot (list|open) .*locked/);
+    assert.equal((await archives(local)).length, 1);
+  } finally {
+    await chmod(path.join(root, "state", "locked"), 0o755).catch(() => undefined);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Greptile: with the state dir inside the containers' mount path, a link is read container first", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    // STATE_DIR=<rec>/staging while the containers mount <rec>: the target
+    // <rec>/staging/live.db means staging/live.db inside the state dir.
+    const rec = path.join(root, "rec");
+    const state = path.join(rec, "staging");
+    const { setDocker, backup, latestArchive, restore } = await setUp(root, [`CONCLAVE_STATE_DIR=${state}`, `CONCLAVE_CONTAINER_STATE_DIR=${rec}`]);
+    await setDocker([{ id: "sfu-a", mounts: [state], status: "exited", env: ["SFU_PORT=9", "SFU_INSTANCE_ID=sfu-a"] }]);
+    await mkdir(path.join(state, "staging"), { recursive: true });
+    makeDb(path.join(state, "staging", "live.db"), "container first");
+    makeDb(path.join(state, "live.db"), "the host's reading");
+    await symlink(path.join(rec, "staging", "live.db"), path.join(state, "conclave.sqlite"));
+    await backup("--local-only");
+    await rm(state, { recursive: true });
+    await restore("--file", await latestArchive(), "--yes");
+    assert.equal(await readlink(path.join(state, "conclave.sqlite")), "staging/live.db");
+    assert.deepEqual(rows(path.join(state, "conclave.sqlite")), ["container first"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("backup then restore over random trees reproduces what the SFU opens, or refuses, and never touches anything outside", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-property-"));
+  try {
+    for (const seed of ["1", "2", "3"]) {
+      const work = path.join(root, seed);
+      await mkdir(work);
+      const { stdout } = await run("python3", [path.join(scripts, "..", "test-support", "backup-property.py"), work, seed, "60"]);
+      assert.match(stdout, /restored/);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+describe("backup and restore", { concurrency: 6 }, () => {
+  for (const args of queued) nodeTest(...args);
+});
