@@ -1100,6 +1100,19 @@ describe("the room lifecycle model", () => {
     expect(outcome.failures, report(outcome)).toEqual([]);
   });
 
+  it("drops a lost call's hosts once its window runs out before anyone claims the room", async () => {
+    const outcome = await runScript(true, [
+      open("owner"),
+      open("invitee"),
+      host("owner", "promote", "invitee"),
+      { kind: "restart" },
+      open("bob", { hold: true }),
+      { kind: "tick", ms: 8 * MINUTE_MS },
+      { kind: "release", alongside: null },
+    ]);
+    expect(outcome.failures, report(outcome)).toEqual([]);
+  });
+
   it("gives no recovery pass to someone let in while the room waits for its lost call", async () => {
     const outcome = await runScript(true, [
       open("alice"),
