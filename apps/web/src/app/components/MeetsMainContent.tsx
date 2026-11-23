@@ -1,21 +1,30 @@
 "use client";
 
-import dynamic from "next/dynamic";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Dispatch, PointerEvent, SetStateAction } from "react";
+import { lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type {
+  Dispatch,
+  PointerEvent,
+  ReactNode,
+  SetStateAction,
+} from "react";
 import {
+  Globe,
+  Headphones,
   Home,
   Loader2,
   LogOut,
   MonitorPlay,
   Plus,
   RefreshCw,
+  VolumeX,
 } from "lucide-react";
 import type { Socket } from "socket.io-client";
 import type { RoomInfo } from "@/lib/sfu-types";
 import ChatOverlay from "./ChatOverlay";
-import ChatPanel from "./ChatPanel";
+import MeetingPanelBoundary, { meetingPanelKey } from "./MeetingPanelBoundary";
+import JoinScreen from "./JoinScreen";
 import type { RoomAiController } from "../hooks/useRoomAi";
+import { useElementSize } from "../hooks/useElementSize";
 import ControlsBar, { type ControlsBarProps } from "./ControlsBar";
 import CommandPalette from "./CommandPalette";
 import ShortcutsHelpDialog from "./ShortcutsHelpDialog";
@@ -23,6 +32,9 @@ import GridLayout from "./GridLayout";
 import ConnectionBanner from "./ConnectionBanner";
 import AdminNoticePill from "./AdminNoticePill";
 import CatchUpPill from "./CatchUpPill";
+import InCallNotice from "./InCallNotice";
+import InCallNoticeCard from "./InCallNoticeCard";
+import InCallNoticeSlot from "./InCallNoticeSlot";
 import ParticipantsPanel from "./ParticipantsPanel";
 import MeetSettingsPanel from "./MeetSettingsPanel";
 import MeetViewPanel from "./MeetViewPanel";
@@ -39,7 +51,6 @@ import WebinarViewerChrome, {
   WebinarWaitingCard,
 } from "./WebinarViewer";
 import ToastQueue from "./ToastQueue";
-import TranscriptPanel from "./TranscriptPanel";
 import RoomAiPanel from "./RoomAiPanel";
 import AndroidUpsellSheet from "./AndroidUpsellSheet";
 import type { BrowserState } from "../hooks/useSharedBrowser";
@@ -112,21 +123,18 @@ import type {
 import { getRenderableParticipantVideoStream } from "../lib/participant-media";
 import { prewarmVideoEffectsAssetsDeferred } from "../lib/video-effects-lazy";
 
-const JoinScreen = dynamic(() => import("./JoinScreen"), {
-  ssr: false,
-});
-const VideoEffectsPanel = dynamic(() => import("./VideoEffectsPanel"), {
-  ssr: false,
-});
-const DeviceSettingsPanel = dynamic(() => import("./DeviceSettingsPanel"), {
-  ssr: false,
-});
-const DevMeetToolsPanel = dynamic(() => import("./DevMeetToolsPanel"), {
-  ssr: false,
-});
+const loadChatPanel = () => import("./ChatPanel");
+const loadTranscriptPanel = () => import("./TranscriptPanel");
+const ChatPanel = lazy(loadChatPanel);
+const TranscriptPanel = lazy(loadTranscriptPanel);
+const VideoEffectsPanel = lazy(() => import("./VideoEffectsPanel"));
+const DeviceSettingsPanel = lazy(() => import("./DeviceSettingsPanel"));
+const DevMeetToolsPanel = lazy(() => import("./DevMeetToolsPanel"));
 
 interface MeetsMainContentProps {
   roomAi: RoomAiController;
+  errorNotice?: ReactNode;
+  mediaErrorNotice?: ReactNode;
   isJoined: boolean;
   isMobile?: boolean;
   viewSettings: MeetViewSettings;
@@ -282,6 +290,7 @@ interface MeetsMainContentProps {
   isBrowserAudioMuted: boolean;
   onToggleBrowserAudio: () => void;
   meetError?: MeetError | null;
+  mediaError?: MeetError | null;
   meetingEndedNotice?: string | null;
   onDismissMeetingEndedNotice?: () => void;
   browserAudioNeedsGesture: boolean;
@@ -396,6 +405,9 @@ const clamp = (value: number, min: number, max: number) =>
 const WEBINAR_SPEAKER_PROMOTE_DELAY_MS = 450;
 const WEBINAR_SPEAKER_MIN_SWITCH_INTERVAL_MS = 1800;
 const DOCKED_PANEL_WIDTH = 360;
+const WEBINAR_QA_PANEL_WIDTH = 380;
+// The meeting area's bottom padding (p-4) plus a gap above the controls bar.
+const NOTICE_CONTROLS_CLEARANCE_PX = 24;
 const GAME_DOCK_MIN_STAGE_WIDTH = 420;
 
 const getGameDockMaxWidth = (
@@ -556,6 +568,7 @@ export default function MeetsMainContent({
   onStopVoiceAgent,
   onClearVoiceAgentError,
   meetError,
+  mediaError,
   meetingEndedNotice,
   onDismissMeetingEndedNotice,
   isPopoutActive,
@@ -602,6 +615,8 @@ export default function MeetsMainContent({
   onRotateWebinarLink,
   transcript,
   roomAi,
+  errorNotice,
+  mediaErrorNotice,
 }: MeetsMainContentProps) {
   const {
     state: appsState,
@@ -616,6 +631,24 @@ export default function MeetsMainContent({
   const [isAppsOpen, setIsAppsOpen] = useState(false);
   const isDevToolsEnabled = process.env.NODE_ENV === "development";
   const isDevPlaygroundEnabled = isDevToolsEnabled;
+
+  useEffect(() => {
+    if (!isJoined || isWebinarAttendee) return;
+
+    function preloadMeetingPanels() {
+      void loadChatPanel().catch(() => {});
+      void loadTranscriptPanel().catch(() => {});
+    }
+
+    if (typeof window.requestIdleCallback === "function") {
+      const idleId = window.requestIdleCallback(preloadMeetingPanels, { timeout: 1800 });
+      return () => window.cancelIdleCallback(idleId);
+    }
+
+    const timeoutId = window.setTimeout(preloadMeetingPanels, 300);
+    return () => window.clearTimeout(timeoutId);
+  }, [isJoined, isWebinarAttendee]);
+
   const isWhiteboardActive = appsState.activeAppId === "whiteboard";
   const isWatchActive = appsState.activeAppId === "watch";
   const isDevPlaygroundActive = appsState.activeAppId === "dev-playground";
@@ -807,7 +840,7 @@ export default function MeetsMainContent({
   const hasLiveLocalCamera = Boolean(getLiveVideoStream(localStream));
   const hasLiveDevCamera = Boolean(getLiveVideoStream(devCameraStream));
   const isCameraPermissionBlocked =
-    meetError?.code === "PERMISSION_DENIED" ||
+    mediaError?.code === "PERMISSION_DENIED" ||
     (!hasLiveLocalCamera &&
       !hasLiveDevCamera &&
       (cameraPermissionState === "prompt" ||
@@ -1655,6 +1688,19 @@ export default function MeetsMainContent({
       ? (isSecondaryPanelOpen ? DOCKED_PANEL_WIDTH : 0) +
         (isGameDockPresent ? gameDockWidth : 0)
       : 0;
+  const webinarQaReserve =
+    isWebinarAttendee && isWebinarQaOpen && canReserveDockedPanel
+      ? WEBINAR_QA_PANEL_WIDTH
+      : 0;
+  const isFullScreenPanelOpen =
+    isJoined &&
+    !canReserveDockedPanel &&
+    (isWebinarAttendee ? isWebinarQaOpen : isSecondaryPanelOpen || isGameDockPresent);
+  const controlsDockRef = useRef<HTMLDivElement>(null);
+  const controlsDockSize = useElementSize(
+    controlsDockRef,
+    isJoined && !isWebinarAttendee,
+  );
   const mainContentStyle =
     isJoined && !isWebinarAttendee
       ? { paddingRight: `calc(1rem + ${dockedPanelReserve}px)` }
@@ -1875,15 +1921,6 @@ export default function MeetsMainContent({
       }`}
       style={mainContentStyle}
     >
-      {isJoined &&
-        !isRecoveringMeeting &&
-        (!isWebinarAttendee || serverRestartNotice) && (
-        <ConnectionBanner
-          state={connectionState}
-          isOffline={isNetworkOffline}
-          serverRestartNotice={serverRestartNotice}
-        />
-      )}
       {isRecoveringMeeting && (
         <div
           className="absolute inset-0 z-[95] flex items-center justify-center bg-[#050506]/70 px-4 backdrop-blur-md animate-fade-in"
@@ -1977,15 +2014,68 @@ export default function MeetsMainContent({
           </section>
         </div>
       )}
-      {isJoined && <AdminNoticePill notice={adminNotice} />}
-      {isJoined && !isWebinarAttendee && !isTranscriptOpen && transcript.isLive ? (
-        <CatchUpPill
-          startedAt={transcript.session.startedAt}
-          joinedAt={joinedAt}
-          sessionKey={`${transcript.session.roomId}:${transcript.session.startedAt ?? 0}`}
-          onOpen={handleOpenCatchUp}
-        />
+      {isJoined ? (
+        <InCallNoticeSlot
+          rightInset={isWebinarAttendee ? webinarQaReserve : dockedPanelReserve}
+          bottomInset={
+            controlsDockSize
+              ? controlsDockSize.height + NOTICE_CONTROLS_CLEARANCE_PX
+              : 0
+          }
+          clearWebinarChrome={isWebinarAttendee}
+          overPanel={isFullScreenPanelOpen}
+        >
+          <InCallNotice show={Boolean(mediaErrorNotice)}>{mediaErrorNotice}</InCallNotice>
+          <InCallNotice show={Boolean(errorNotice)}>{errorNotice}</InCallNotice>
+          {!isRecoveringMeeting && (!isWebinarAttendee || serverRestartNotice) ? (
+            <ConnectionBanner
+              state={connectionState}
+              isOffline={isNetworkOffline}
+              serverRestartNotice={serverRestartNotice}
+            />
+          ) : null}
+          <InCallNotice show={!isWebinarAttendee && participantAudioBlocked}>
+            <InCallNoticeCard
+              tone="warning"
+              icon={VolumeX}
+              title="Your browser paused audio"
+              actionLabel="Turn on audio"
+              onAction={handlePlayParticipantAudio}
+              actionOnCardClick
+            />
+          </InCallNotice>
+          <InCallNotice show={!isWebinarAttendee && browserAudioNeedsGesture}>
+            <InCallNoticeCard
+              icon={Globe}
+              title="Shared browser sound is paused"
+              actionLabel="Turn on sound"
+              onAction={onToggleBrowserAudio}
+            />
+          </InCallNotice>
+          {!isWebinarAttendee && !isTranscriptOpen && transcript.isLive ? (
+            <CatchUpPill
+              startedAt={transcript.session.startedAt}
+              joinedAt={joinedAt}
+              sessionKey={`${transcript.session.roomId}:${transcript.session.startedAt ?? 0}`}
+              onOpen={handleOpenCatchUp}
+            />
+          ) : null}
+          <InCallNotice show={viewSettings.audioOnlyMode}>
+            <InCallNoticeCard
+              icon={Headphones}
+              title="Audio-only mode is on"
+              actionLabel="Turn off"
+              onAction={() =>
+                onViewSettingsChange((current) => ({
+                  ...current,
+                  audioOnlyMode: false,
+                }))
+              }
+            />
+          </InCallNotice>
+        </InCallNoticeSlot>
       ) : null}
+      {isJoined && <AdminNoticePill notice={adminNotice} />}
       {endFlowState !== "idle" ? (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/55 px-4">
           <div
@@ -2086,11 +2176,13 @@ export default function MeetsMainContent({
         />
       )}
       {isDevToolsEnabled && isJoined && !isWebinarAttendee && (
-        <DevMeetToolsPanel
-          roomId={roomId}
-          onPresentationStreamChange={setDevPresentationStream}
-          onCameraStreamChange={handleDevCameraStreamChange}
-        />
+        <MeetingPanelBoundary key="developer-tools" name="Developer tools">
+          <DevMeetToolsPanel
+            roomId={roomId}
+            onPresentationStreamChange={setDevPresentationStream}
+            onCameraStreamChange={handleDevCameraStreamChange}
+          />
+        </MeetingPanelBoundary>
       )}
       {isJoined && !isWebinarAttendee && isWatchHiddenLocally ? (
         <div className="mb-3 flex shrink-0 justify-center">
@@ -2189,6 +2281,7 @@ export default function MeetsMainContent({
             onUserChange={onUserChange}
             onIsAdminChange={onIsAdminChange}
             meetError={meetError}
+            mediaError={mediaError}
             meetingEndedNotice={meetingEndedNotice}
             onDismissMeetingEndedNotice={onDismissMeetingEndedNotice}
             videoEffects={videoEffects}
@@ -2200,7 +2293,8 @@ export default function MeetsMainContent({
       ) : isWebinarAttendee ? (
         <div
           ref={webinarStageRef}
-          className={`relative flex min-h-0 flex-1 flex-col overflow-hidden bg-[#0a0a0b] ${isWebinarQaOpen ? "sm:mr-[380px]" : ""}`}
+          className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-[#0a0a0b]"
+          style={{ marginRight: webinarQaReserve }}
         >
           <div
             className="pointer-events-none h-0 w-0 overflow-hidden"
@@ -2441,43 +2535,19 @@ export default function MeetsMainContent({
         />
       )}
 
-      {isJoined && viewSettings.audioOnlyMode && (
-        <div
-          role="status"
-          className="pointer-events-none fixed left-1/2 top-4 z-30 -translate-x-1/2 rounded-full border border-[#F95F4A]/40 bg-[#18181b]/95 px-3 py-1.5 text-[12px] font-medium text-[#fafafa] shadow-lg backdrop-blur"
-        >
-          Audio-only mode active
-        </div>
-      )}
-
-      {isJoined && !isWebinarAttendee && participantAudioBlocked && (
-        <div className="pointer-events-none fixed inset-x-0 top-16 z-[70] flex justify-center px-4">
-          <button
-            type="button"
-            onClick={handlePlayParticipantAudio}
-            className="pointer-events-auto inline-flex items-center gap-2.5 rounded-full border border-[#F95F4A]/60 bg-[#131316] px-5 py-2.5 text-xs uppercase tracking-[0.14em] text-[#fafafa] transition hover:bg-[#F95F4A]/15"
-            style={{ fontFamily: "'PolySans Trial', sans-serif" }}
-          >
-            <span className="h-2 w-2 rounded-full bg-[#F95F4A] animate-pulse" />
-            Audio is paused by your browser — click to listen
-          </button>
-        </div>
-      )}
-
       {isJoined &&
         (isWebinarAttendee ? null : (
-          <div className="safe-area-pb flex w-full flex-col items-center gap-2">
+          <div
+            ref={controlsDockRef}
+            data-in-call-controls
+            className="safe-area-pb flex w-full flex-col items-center gap-2"
+          >
             <ControlsBar {...controlsBarProps} />
             <CommandPalette
               controls={controlsBarProps}
               onSendChatMessage={handleSendChat}
             />
             <ShortcutsHelpDialog />
-            {browserAudioNeedsGesture && (
-              <div className="w-full mt-2 text-center text-[11px] text-[#F95F4A]/70 uppercase tracking-[0.3em]">
-                Click “Shared browser audio” to unlock the system sound.
-              </div>
-            )}
           </div>
         ))}
 
@@ -2511,51 +2581,61 @@ export default function MeetsMainContent({
       )}
 
       {isJoined && !isWebinarAttendee && isChatOpen && (
-        <ChatPanel
-          key={`${currentUserId}:${roomId}`}
-          roomAi={roomAi}
-          onOpenAiSettings={roomAi ? handleOpenAiPanel : undefined}
-          messages={chatMessages}
-          chatInput={chatInput}
-          onInputChange={setChatInput}
-          onSend={handleSendChat}
-          onSendGif={handleSendChatGif}
-          onSendImage={handleSendChatImage}
+        <MeetingPanelBoundary
+          name="Chat"
+          key={meetingPanelKey("chat", currentUserId, roomId)}
           onClose={handleToggleChat}
-          currentUserId={currentUserId}
-          isChatLocked={isChatLocked}
-          isDmEnabled={isDmEnabled}
-          areImageAttachmentsEnabled={areImageAttachmentsEnabled}
-          isAdmin={isAdmin}
-          mentionableParticipants={mentionableParticipants}
-          replyTarget={replyTarget}
-          onReply={onReplyToMessage}
-          onToggleReaction={onToggleMessageReaction}
-          isReactionsDisabled={isReactionsDisabled}
-          resolveDisplayName={resolveDisplayName}
-          onCancelReply={onCancelReply}
-          activeTtsMessageId={activeTtsMessageId}
-          onReplayTtsMessage={onReplayTtsMessage}
-          onStopTts={onStopTts}
-          hasClonedTtsVoice={hasClonedTtsVoice}
-          isTtsDisabled={isTtsDisabled}
-          assistantApiKeyPrompt={assistantApiKeyPrompt}
-          onSubmitAssistantApiKey={onSubmitAssistantApiKey}
-          onCancelAssistantApiKey={onCancelAssistantApiKey}
-          onAssistantToolApproval={onAssistantToolApproval}
-        />
+        >
+          <ChatPanel
+            roomAi={roomAi}
+            onOpenAiSettings={roomAi ? handleOpenAiPanel : undefined}
+            messages={chatMessages}
+            chatInput={chatInput}
+            onInputChange={setChatInput}
+            onSend={handleSendChat}
+            onSendGif={handleSendChatGif}
+            onSendImage={handleSendChatImage}
+            onClose={handleToggleChat}
+            currentUserId={currentUserId}
+            isChatLocked={isChatLocked}
+            isDmEnabled={isDmEnabled}
+            areImageAttachmentsEnabled={areImageAttachmentsEnabled}
+            isAdmin={isAdmin}
+            mentionableParticipants={mentionableParticipants}
+            replyTarget={replyTarget}
+            onReply={onReplyToMessage}
+            onToggleReaction={onToggleMessageReaction}
+            isReactionsDisabled={isReactionsDisabled}
+            resolveDisplayName={resolveDisplayName}
+            onCancelReply={onCancelReply}
+            activeTtsMessageId={activeTtsMessageId}
+            onReplayTtsMessage={onReplayTtsMessage}
+            onStopTts={onStopTts}
+            hasClonedTtsVoice={hasClonedTtsVoice}
+            isTtsDisabled={isTtsDisabled}
+            assistantApiKeyPrompt={assistantApiKeyPrompt}
+            onSubmitAssistantApiKey={onSubmitAssistantApiKey}
+            onCancelAssistantApiKey={onCancelAssistantApiKey}
+            onAssistantToolApproval={onAssistantToolApproval}
+          />
+        </MeetingPanelBoundary>
       )}
 
       {isJoined && !isWebinarAttendee && isTranscriptOpen && (
-        <TranscriptPanel
-          key={`${currentUserId}:${roomId}`}
-          roomAi={roomAi}
-          onOpenAiSettings={roomAi ? handleOpenAiPanel : undefined}
-          transcript={transcript}
+        <MeetingPanelBoundary
+          name="Transcript"
+          key={meetingPanelKey("transcript", currentUserId, roomId)}
           onClose={handleCloseTranscript}
-          initialTab={transcriptInitialTab}
-          onPostRecap={canPostRecapToChat ? handlePostRecap : undefined}
-        />
+        >
+          <TranscriptPanel
+            roomAi={roomAi}
+            onOpenAiSettings={roomAi ? handleOpenAiPanel : undefined}
+            transcript={transcript}
+            onClose={handleCloseTranscript}
+            initialTab={transcriptInitialTab}
+            onPostRecap={canPostRecapToChat ? handlePostRecap : undefined}
+          />
+        </MeetingPanelBoundary>
       )}
 
       {isJoined && !isWebinarAttendee && isAiPanelOpen && roomAi && (
@@ -2632,68 +2712,80 @@ export default function MeetsMainContent({
         )}
 
       {isJoined && !isWebinarAttendee && isVideoEffectsOpen && (
-        <VideoEffectsPanel
-          effects={videoEffects}
-          onEffectsChange={onVideoEffectsChange}
-          onRecenterFraming={onVideoEffectsRecenter}
-          localStream={panelPreviewStream}
-          isCameraOff={effectiveIsCameraOff && !panelPreviewIsLocalOnly}
-          status={videoEffectsStatus}
-          error={videoEffectsError}
-          debugStats={videoEffectsDebugStats}
-          activeCount={activeVideoEffectsCount}
-          deferPreload={deferVideoEffectsPreload}
-          cameraPermissionBlocked={isCameraPermissionBlocked}
-          cameraActivationBlocked={isParticipantCameraActivationBlocked}
-          onToggleCamera={toggleCamera}
-          isCameraPreviewActive={panelPreviewIsLocalOnly}
-          isCameraPreviewStarting={isCameraPreviewStarting}
-          cameraPreviewError={cameraPreviewError}
-          onStartCameraPreview={onStartCameraPreview}
-          onStopCameraPreview={onStopCameraPreview}
+        <MeetingPanelBoundary
+          key="video-effects"
+          name="Backgrounds and effects"
           onClose={handleCloseVideoEffects}
-        />
+        >
+          <VideoEffectsPanel
+            effects={videoEffects}
+            onEffectsChange={onVideoEffectsChange}
+            onRecenterFraming={onVideoEffectsRecenter}
+            localStream={panelPreviewStream}
+            isCameraOff={effectiveIsCameraOff && !panelPreviewIsLocalOnly}
+            status={videoEffectsStatus}
+            error={videoEffectsError}
+            debugStats={videoEffectsDebugStats}
+            activeCount={activeVideoEffectsCount}
+            deferPreload={deferVideoEffectsPreload}
+            cameraPermissionBlocked={isCameraPermissionBlocked}
+            cameraActivationBlocked={isParticipantCameraActivationBlocked}
+            onToggleCamera={toggleCamera}
+            isCameraPreviewActive={panelPreviewIsLocalOnly}
+            isCameraPreviewStarting={isCameraPreviewStarting}
+            cameraPreviewError={cameraPreviewError}
+            onStartCameraPreview={onStartCameraPreview}
+            onStopCameraPreview={onStopCameraPreview}
+            onClose={handleCloseVideoEffects}
+          />
+        </MeetingPanelBoundary>
       )}
 
       {isJoined && !isWebinarAttendee && isDeviceSettingsOpen && (
-        <DeviceSettingsPanel
-          roomAi={roomAi}
-          localStream={panelPreviewStream}
-          isLocalVideoLive={Boolean(getLiveVideoStream(effectiveLocalStream))}
-          isPreviewOnly={panelPreviewIsLocalOnly}
-          mirrorLocalPreview={mirrorLocalPreview}
-          isMirrorCamera={isMirrorCamera}
-          onToggleMirror={onToggleMirror}
-          activeVideoEffectsCount={activeVideoEffectsCount}
-          mediaQualitySettings={mediaQualitySettings}
-          onMediaQualitySettingsChange={onMediaQualitySettingsChange}
-          selectedAudioInputDeviceId={selectedAudioInputDeviceId}
-          selectedAudioOutputDeviceId={selectedAudioOutputDeviceId}
-          ttsSystemVoices={ttsSystemVoices}
-          selectedTtsSystemVoiceUri={selectedTtsSystemVoiceUri}
-          onTtsSystemVoiceChange={onTtsSystemVoiceChange}
-          clonedTtsVoice={clonedTtsVoice}
-          onClonedTtsVoiceChange={onClonedTtsVoiceChange}
-          onClonedTtsVoiceClear={onClonedTtsVoiceClear}
-          canCloneTtsVoice={canCloneTtsVoice}
-          ttsVoiceOwnerName={ttsVoiceOwnerName}
-          selectedVideoInputDeviceId={selectedVideoInputDeviceId}
-          onAudioInputDeviceChange={onAudioInputDeviceChange}
-          onAudioOutputDeviceChange={onAudioOutputDeviceChange}
-          onVideoInputDeviceChange={onVideoInputDeviceChange}
-          isNoiseCancellationEnabled={isNoiseCancellationEnabled}
-          onToggleNoiseCancellation={onToggleNoiseCancellation}
-          isCameraPreviewStarting={isCameraPreviewStarting}
-          cameraPreviewError={cameraPreviewError}
-          onStartCameraPreview={onStartCameraPreview}
-          onStopCameraPreview={onStopCameraPreview}
-          connectionStats={connectionStats}
-          isCameraPermissionBlocked={isCameraPermissionBlocked}
-          onOpenEffects={
-            isCameraPermissionBlocked ? undefined : handleToggleVideoEffects
-          }
+        <MeetingPanelBoundary
+          key="device-settings"
+          name="Settings"
           onClose={handleCloseDeviceSettings}
-        />
+        >
+          <DeviceSettingsPanel
+            roomAi={roomAi}
+            localStream={panelPreviewStream}
+            isLocalVideoLive={Boolean(getLiveVideoStream(effectiveLocalStream))}
+            isPreviewOnly={panelPreviewIsLocalOnly}
+            mirrorLocalPreview={mirrorLocalPreview}
+            isMirrorCamera={isMirrorCamera}
+            onToggleMirror={onToggleMirror}
+            activeVideoEffectsCount={activeVideoEffectsCount}
+            mediaQualitySettings={mediaQualitySettings}
+            onMediaQualitySettingsChange={onMediaQualitySettingsChange}
+            selectedAudioInputDeviceId={selectedAudioInputDeviceId}
+            selectedAudioOutputDeviceId={selectedAudioOutputDeviceId}
+            ttsSystemVoices={ttsSystemVoices}
+            selectedTtsSystemVoiceUri={selectedTtsSystemVoiceUri}
+            onTtsSystemVoiceChange={onTtsSystemVoiceChange}
+            clonedTtsVoice={clonedTtsVoice}
+            onClonedTtsVoiceChange={onClonedTtsVoiceChange}
+            onClonedTtsVoiceClear={onClonedTtsVoiceClear}
+            canCloneTtsVoice={canCloneTtsVoice}
+            ttsVoiceOwnerName={ttsVoiceOwnerName}
+            selectedVideoInputDeviceId={selectedVideoInputDeviceId}
+            onAudioInputDeviceChange={onAudioInputDeviceChange}
+            onAudioOutputDeviceChange={onAudioOutputDeviceChange}
+            onVideoInputDeviceChange={onVideoInputDeviceChange}
+            isNoiseCancellationEnabled={isNoiseCancellationEnabled}
+            onToggleNoiseCancellation={onToggleNoiseCancellation}
+            isCameraPreviewStarting={isCameraPreviewStarting}
+            cameraPreviewError={cameraPreviewError}
+            onStartCameraPreview={onStartCameraPreview}
+            onStopCameraPreview={onStopCameraPreview}
+            connectionStats={connectionStats}
+            isCameraPermissionBlocked={isCameraPermissionBlocked}
+            onOpenEffects={
+              isCameraPermissionBlocked ? undefined : handleToggleVideoEffects
+            }
+            onClose={handleCloseDeviceSettings}
+          />
+        </MeetingPanelBoundary>
       )}
 
       {isJoined && !isWebinarAttendee && isViewPanelOpen && (
