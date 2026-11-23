@@ -464,15 +464,13 @@ export const registerWebinarInteractionHandlers = (
             webinarLinkSlug: webinarConfig?.linkSlug ?? null,
           } satisfies WebinarDemotedNotification);
 
-          // Server-side enforcement, not a client courtesy: tear the seat
-          // down now (socket handlers, producers, transports, presence).
-          // Disconnect first so a client that ignores the navigation event
-          // cannot keep invoking handlers through stale
-          // currentRoom/currentClient context; forceRemoveClientNow then
-          // cancels the disconnect grace immediately. The demoted client
-          // rejoins through the public webinar link as a viewer.
-          seat.socket.disconnect(true);
+          // Server-side enforcement, not a client courtesy: the seat ends
+          // now (media, presence, a transcript relay it runs), then its
+          // socket closes, so a client that ignores the navigation event
+          // cannot keep invoking handlers. The demoted client rejoins
+          // through the public webinar link as a viewer.
           forceRemoveClientNow({ io, state, room: guard.room, userId });
+          seat.socket.disconnect(true);
         }
         respond(callback, { success: true });
       } catch (error) {

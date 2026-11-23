@@ -18,6 +18,7 @@ import type { Room } from "../config/classes/Room.js";
 import { config as sfuConfig } from "../config/config.js";
 import { Logger } from "../utilities/loggers.js";
 import { createSfuApp } from "../server/http/createApp.js";
+import { createTranscriptRelayRegistry } from "../server/transcript/relayRegistry.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
 import type { SfuAuthPayload } from "../server/socket/auth.js";
 import { createConnectionContext } from "../server/socket/context.js";
@@ -2896,6 +2897,110 @@ describe("a host action when the decision record is full of refusals (Astra)", (
         await new Promise<void>((resolve) => server.close(() => resolve()));
       }
     });
+  });
+});
+
+describe("what ending a seat releases", () => {
+  // A transcript relay that counts the audio it would send the worker: each
+  // sync stands for the relay taking the room's producers and sending on.
+  const relayRig = (state: SfuState) => {
+    const relays: Array<{ controllerUserId: string; closed: boolean; audioSent: number }> = [];
+    state.transcriptRelays = createTranscriptRelayRegistry({
+      enabled: true,
+      createRelay: (options) => {
+        const relay = { controllerUserId: options.controllerUserId, closed: false, audioSent: 0 };
+        relays.push(relay);
+        return {
+          controllerUserId: options.controllerUserId,
+          start: async () => {},
+          prepareHandoff: async () => true,
+          syncProducers: async () => {
+            if (!relay.closed) relay.audioSent += 1;
+          },
+          close: () => {
+            relay.closed = true;
+          },
+        };
+      },
+    });
+    return relays;
+  };
+  const tabOf = (name: string, guestProof = `proof-of-${name}`) =>
+    ({
+      userId: `guest-gp_${name}`,
+      clientId: "conclave",
+      sessionId: name,
+      guestProof,
+      guestRoom: "room",
+    }) satisfies SfuAuthPayload;
+  const seatOf = (user: SfuAuthPayload) => `${user.userId}#${user.sessionId}`;
+  const relayRun = async (state: SfuState, room: Room, controller: SfuAuthPayload) => {
+    const started = await state.transcriptRelays.start({
+      room,
+      workerUrl: "http://worker.test",
+      workerToken: "worker-token",
+      controllerUserId: seatOf(controller),
+      controllerDisplayName: "Controller",
+      canReplaceExistingRelay: false,
+    });
+    expect(started).toMatchObject({ success: true });
+    await state.transcriptRelays.syncRoom(room);
+  };
+  const stoppedFor = async (state: SfuState, room: Room, relay: { closed: boolean; audioSent: number }) => {
+    await vi.waitFor(() => expect(relay.closed).toBe(true));
+    const sent = relay.audioSent;
+    await state.transcriptRelays.syncRoom(room);
+    expect(relay.audioSent).toBe(sent);
+    const replacement = await state.transcriptRelays.start({
+      room,
+      workerUrl: "http://worker.test",
+      workerToken: "worker-token",
+      controllerUserId: guestHostSeat,
+      controllerDisplayName: "Host",
+      canReplaceExistingRelay: false,
+    });
+    expect(replacement).toMatchObject({ success: true });
+  };
+
+  it("stops the transcript relay of a controller the host removes, and the worker gets no more of its audio (Greptile)", async () => {
+    const state = makeState();
+    const relays = relayRig(state);
+    await join(state, guestHost);
+    const room = state.rooms.get("conclave:room")!;
+    const controller = tabOf("relay-controller");
+    await join(state, controller);
+    await join(state, tabOf("still-speaking"));
+    await relayRun(state, room, controller);
+    expect(relays[0].audioSent).toBe(1);
+
+    expect(kickClient(room, seatOf(controller), "Removed by host", { io, state })).toBe(true);
+
+    await stoppedFor(state, room, relays[0]);
+  });
+
+  it("stops the transcript relay of a controller that a block reaches through a pass link (Greptile)", async () => {
+    const state = makeState();
+    const relays = relayRig(state);
+    await join(state, guestHost);
+    const room = state.rooms.get("conclave:room")!;
+    const controller = tabOf("relay-controller-2", "proof-of-the-controller-pass");
+    const blocked = tabOf("blocked-elsewhere", "proof-of-the-blocked-pass");
+    await join(state, controller);
+    await join(state, tabOf("still-speaking-2"));
+    await join(state, blocked);
+    blockUserKey(room, blocked.userId, { reason: "Blocked by host", kickPresent: true, io, state });
+    await relayRun(state, room, controller);
+
+    const linking = await join(state, {
+      ...controller,
+      userId: "guest-gp_relay-controller-2-tab-2",
+      sessionId: "relay-controller-2-tab-2",
+      guestWas: [{ userKey: blocked.userId, guestProof: blocked.guestProof }],
+    });
+
+    expect(linking.ack).toHaveBeenCalledWith(refused);
+    expect(room.getClient(seatOf(controller))).toBeUndefined();
+    await stoppedFor(state, room, relays[0]);
   });
 });
 

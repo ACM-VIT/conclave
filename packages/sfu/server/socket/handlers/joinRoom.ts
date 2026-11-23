@@ -53,8 +53,10 @@ import {
 import { ensureWebinarRoomConfig } from "../../scheduledWebinarScheduler.js";
 import {
   answerSettledRequests,
+  handOffRoom,
   publishLobby,
   removeBlockedGuest,
+  teardownClient,
   withdrawWaitingRequest,
 } from "../../admin/controlPlane.js";
 import { getSocketAuthUser } from "../auth.js";
@@ -939,43 +941,23 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           const previousChannelId = previousRoom.channelId;
           const previousClient = context.currentClient;
           const previousClientId = previousClient.id;
-          const wasAdmin = previousClient instanceof Admin;
-          const previousHost = wasAdmin ? previousRoom.getHostUserId() : null;
-          const previousPeers = socket.to(previousChannelId);
           Logger.info(
             `User ${userId} switching from ${previousRoom.id} to ${roomId}`,
           );
 
-          const awarenessRemovals =
-            previousRoom.clearUserAwareness(previousClientId);
-          for (const removal of awarenessRemovals) {
-            previousPeers.emit("apps:awareness", {
-              appId: removal.appId,
-              awarenessUpdate: removal.awarenessUpdate,
-            } satisfies AppsAwarenessData);
+          // Leaving for another room ends the seat as a disconnect does: it
+          // releases what the seat held there, then hands that room on.
+          const previousPeers = socket.to(previousChannelId);
+          const { wasAdmin } = teardownClient({
+            io,
+            state,
+            room: previousRoom,
+            userId: previousClientId,
+            peers: previousPeers,
+          });
+          if (wasAdmin) {
+            handOffRoom(io, state, previousRoom, new Set(), previousPeers);
           }
-
-          previousRoom.removeClient(previousClientId);
-
-          if (!previousClient.isWebinarAttendee) {
-            previousPeers.emit("userLeft", {
-              userId: previousClientId,
-              roomId: previousRoom.id,
-            });
-          }
-          if (wasAdmin && previousRoom.clients.size > 0) {
-            const hostUserId = previousRoom.getHostUserId();
-            if (hostUserId !== previousHost) {
-              previousPeers.emit("hostChanged", { roomId: previousRoom.id, hostUserId });
-            }
-            previousPeers.emit("adminUsersChanged", {
-              roomId: previousRoom.id,
-              hostUserIds: previousRoom.getAdminUserIds(),
-            });
-          }
-
-          emitWebinarAttendeeCountChanged(io, state, previousRoom);
-          emitWebinarFeedChanged(io, state, previousRoom);
 
           previousChannelIdToLeave = previousChannelId;
           context.currentRoom = null;

@@ -18,6 +18,7 @@ import {
   emitWebinarFeedChanged,
 } from "../webinarNotifications.js";
 import { getSocketContext } from "../socket/context.js";
+import { emitChatHistorySnapshot } from "../socket/handlers/chatHistory.js";
 import { registerAdminHandlers } from "../socket/handlers/adminHandlers.js";
 import { DECISION_RECORD_FULL, isSuperAdminClient } from "./moderation.js";
 import { Logger } from "../../utilities/loggers.js";
@@ -157,13 +158,20 @@ export type RoomPolicyUpdate = {
 
 type ProducerInfo = ReturnType<Client["getProducerInfos"]>[number];
 
-// A host's seat went. When no host is left, the room is handed to the next
-// seat, never to one of `excludedUserKeys`: the guests a removal took out.
-const handleAdminRemoved = (
+/**
+ * A host's seat went. When no host is left, the room is handed to the next
+ * seat, never to one of `excludedUserKeys`: the guests a removal took out.
+ * Disconnect and removal both hand a room on here, once, after their last
+ * `teardownClient`.
+ */
+export const handOffRoom = (
   io: SocketIOServer,
   state: SfuState,
   room: Room,
   excludedUserKeys: ReadonlySet<string> = new Set(),
+  // Who is told the room's hosts: the room, or everyone in it but a socket
+  // that is moving to another room (see `teardownClient`).
+  peers: { emit: (event: string, payload: unknown) => unknown } = io.to(room.channelId),
 ): void => {
   const roomId = room.id;
   const roomChannelId = room.channelId;
@@ -184,10 +192,12 @@ const handleAdminRemoved = (
         userId: pending.userKey,
         displayName: pending.displayName || pending.userKey,
       }));
+      Logger.info(`Promoted ${promoted.id} to host in room ${roomId}.`);
       promoted.socket.emit("pendingUsersSnapshot", {
         users: pendingUsers,
         roomId,
       });
+      emitChatHistorySnapshot(promoted.socket, room);
       promoted.socket.emit("roomLockChanged", {
         locked: room.isLocked,
         roomId,
@@ -232,11 +242,11 @@ const handleAdminRemoved = (
     }
   }
 
-  io.to(roomChannelId).emit("hostChanged", {
+  peers.emit("hostChanged", {
     roomId,
     hostUserId: room.getHostUserId(),
   });
-  io.to(roomChannelId).emit("adminUsersChanged", {
+  peers.emit("adminUsersChanged", {
     roomId,
     hostUserIds: room.getAdminUserIds(),
   });
@@ -1061,13 +1071,9 @@ export const clearAllRaisedHands = (io: SocketIOServer, room: Room): number => {
  * producers keep flowing. If a host kicks/blocks that user concurrently, calling
  * `socket.disconnect(true)` on the already-dead socket is a no-op and does NOT
  * cancel the pending grace, so media would keep flowing for the full grace
- * window. Here we explicitly clear any pending grace and close the client's
- * producers/transports immediately so media stops at once, then emit the same
- * userLeft / awareness / webinar updates the normal disconnect finalize would.
- *
- * The non-moderated disconnect-grace reconnect path is untouched: it still runs
- * through disconnectHandlers and is only short-circuited here when an admin
- * takes an explicit action.
+ * window. Here the seat ends at once through `teardownClient`, the same
+ * teardown a disconnect runs, so media, a transcript relay and everything
+ * else the seat holds stop now.
  */
 export const forceRemoveClientNow = (options: {
   io: SocketIOServer;
@@ -1079,48 +1085,72 @@ export const forceRemoveClientNow = (options: {
   handOff?: boolean;
 }): boolean => {
   const { io, state, room, userId, handOff = true } = options;
-  const target = room.getClient(userId);
-  if (!target) {
-    // Already gone (grace may have already expired); nothing to stop.
-    room.clearPendingDisconnect(userId);
-    return false;
+  const { removed, wasAdmin } = teardownClient({ io, state, room, userId });
+  if (removed && wasAdmin && handOff) {
+    handOffRoom(io, state, room);
   }
+  if (state.rooms.has(room.channelId)) {
+    cleanupRoom(state, room.channelId);
+  }
+  return removed;
+};
+
+/**
+ * Ends the seat `userId` and releases everything it holds in the room: its
+ * media (producers, consumers and transports, in `Room.removeClient`), its
+ * app awareness, a transcript relay it controls, and what the room is told
+ * (who left, the webinar's counts and feed, the video quality). Disconnect,
+ * removal and leaving for another room all end a seat here. Handing the
+ * room on is not part of it: the caller does that once, after its last
+ * teardown (see `handOffRoom`).
+ */
+export const teardownClient = (options: {
+  io: SocketIOServer;
+  state: SfuState;
+  room: Room;
+  userId: string;
+  // Who is told the seat left: the room, or everyone in it but the leaving
+  // socket when it is moving to another room.
+  peers?: { emit: (event: string, payload: unknown) => unknown };
+}): { removed: boolean; wasAdmin: boolean } => {
+  const { io, state, room, userId } = options;
+  const target = room.getClient(userId);
+  // Cancel any in-flight disconnect grace so the timer cannot run again.
+  room.clearPendingDisconnect(userId);
+  if (!target) return { removed: false, wasAdmin: false };
 
   const roomChannelId = room.channelId;
   const wasAdmin = target instanceof Admin && !target.isObserver;
-  const isWebinarAttendee = target.isWebinarAttendee;
-
-  // Cancel any in-flight disconnect grace so the timer cannot double-process.
-  room.clearPendingDisconnect(userId);
+  const peers = options.peers ?? io.to(roomChannelId);
 
   // Clear awareness before removing the client so peers stop seeing its cursor.
-  const awarenessRemovals = room.clearUserAwareness(userId);
-  for (const removal of awarenessRemovals) {
-    io.to(roomChannelId).emit("apps:awareness", {
+  for (const removal of room.clearUserAwareness(userId)) {
+    peers.emit("apps:awareness", {
       appId: removal.appId,
       awarenessUpdate: removal.awarenessUpdate,
     } satisfies AppsAwarenessData);
   }
 
-  // removeClient() closes the client's producers + transports => media stops now.
   room.removeClient(userId);
+  state.transcriptRelays
+    .stopRoomForUser({ roomKey: roomChannelId, userId, canStopAnyRelay: false })
+    .catch((error) => {
+      Logger.warn(
+        `Transcript SFU relay stop for ${userId} in room ${roomChannelId} failed: ${error}`,
+      );
+    });
+  void state.transcriptRelays.syncRoom(room);
 
-  if (!isWebinarAttendee) {
-    io.to(roomChannelId).emit("userLeft", { userId, roomId: room.id });
+  if (!target.isWebinarAttendee) {
+    peers.emit("userLeft", { userId, roomId: room.id });
   }
-
   emitWebinarAttendeeCountChanged(io, state, room);
   emitWebinarFeedChanged(io, state, room);
-
-  if (wasAdmin && handOff) {
-    handleAdminRemoved(io, state, room);
+  const quality = room.updateVideoQuality();
+  if (quality) {
+    peers.emit("setVideoQuality", { quality, roomId: room.id });
   }
-
-  if (state.rooms.has(roomChannelId)) {
-    cleanupRoom(state, roomChannelId);
-  }
-
-  return true;
+  return { removed: true, wasAdmin };
 };
 
 /**
@@ -1257,7 +1287,7 @@ const removeSeats = (
     options.state &&
     options.state.rooms.get(room.channelId) === room
   ) {
-    handleAdminRemoved(options.io, options.state, room, removedGuests);
+    handOffRoom(options.io, options.state, room, removedGuests);
   }
   return targets;
 };
