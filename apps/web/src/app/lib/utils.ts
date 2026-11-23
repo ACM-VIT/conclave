@@ -217,7 +217,11 @@ export function insertIntoField(input: HTMLInputElement, text: string, maxLength
   const end = input.selectionEnd ?? start;
   const fits = text.slice(0, Math.max(0, maxLength - (input.value.length - (end - start))));
   if (!fits) return;
-  if (document.execCommand("insertText", false, fits)) return;
+  input.setSelectionRange(start, end, input.selectionDirection ?? "none");
+  if (document.execCommand("insertText", false, fits)) {
+    input.setSelectionRange(start + fits.length, start + fits.length);
+    return;
+  }
   input.setRangeText(fits, start, end, "end");
   input.dispatchEvent(new Event("input", { bubbles: true }));
 }
