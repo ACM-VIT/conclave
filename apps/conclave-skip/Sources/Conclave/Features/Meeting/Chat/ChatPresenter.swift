@@ -766,7 +766,7 @@ final class ChatPresenter {
         rowStore.retain(rowIds: rowIds)
         trimCaches(messages: messages)
         trackNewRows(built: built, previousRowIds: previousRowIds, messages: messages)
-        if let answer = completedAnswer, isOpen, hasTimeline, !suppressesNewRowTracking {
+        if let answer = completedAnswer, isShown, hasTimeline, !suppressesNewRowTracking {
             let sentence = AssistantRowPolicy.firstSentence(answer.plainText)
             if !sentence.isEmpty {
                 postAnnouncement(kind: "assistantAnswered", name: answer.senderName, text: sentence, count: 1)
@@ -1095,7 +1095,7 @@ final class ChatPresenter {
             if historyRows[row.id] == true { continue }
             if row.kind == ChatRowKind.assistant && row.plainText.isEmpty { continue }
 
-            if row.kind == ChatRowKind.assistant && isOpen { continue }
+            if row.kind == ChatRowKind.assistant && isShown { continue }
             fresh.append(row)
         }
         guard hasTimeline else {
@@ -1103,7 +1103,7 @@ final class ChatPresenter {
             return
         }
         if fresh.isEmpty || suppressesNewRowTracking { return }
-        if isOpen {
+        if isShown {
             let first = fresh[0]
             postNewMessageAnnouncement(name: first.senderName, text: first.plainText, count: fresh.count)
         } else {
