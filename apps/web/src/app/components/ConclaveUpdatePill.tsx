@@ -121,8 +121,7 @@ function ConclaveUpdatePill({
         className="pointer-events-auto mx-auto flex w-fit max-w-full items-center gap-2 rounded-full border border-white/10 bg-[#0a0a0b]/90 px-3 py-2 text-[12px] font-medium text-[#fafafa] shadow-[0_8px_24px_rgba(0,0,0,0.35)] backdrop-blur-xl"
         style={{ fontFamily: "'PolySans Trial', sans-serif" }}
       >
-        <span className="h-2 w-2 shrink-0 rounded-full bg-[#F95F4A]" />
-        <span className="min-w-0 truncate">
+        <span className="min-w-0 truncate pl-1">
           New Conclave version ready · {versionLabel}
         </span>
         <button

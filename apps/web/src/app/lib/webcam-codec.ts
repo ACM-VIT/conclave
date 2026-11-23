@@ -297,6 +297,15 @@ type WebcamEncodingCap = {
   scaleResolutionDownBy?: number;
 };
 
+type WebcamProduceEncoding =
+  | ReturnType<typeof buildWebcamSimulcastEncodings>[number]
+  | ReturnType<typeof buildWebcamSingleLayerEncoding>;
+
+type WebcamLayerCap = WebcamEncodingCap & {
+  /** False for a layer the quality keeps switched off. */
+  active: boolean;
+};
+
 type CaptureSize = {
   width: number | null;
   height: number | null;
@@ -422,8 +431,8 @@ const getBaseEncodingCaps = (
   quality: VideoQuality,
   encodingCount: number,
   publishSettings?: ResolvedCameraPublishSettings,
-): WebcamEncodingCap[] => {
-  const baseEncodings =
+): WebcamLayerCap[] => {
+  const baseEncodings: readonly WebcamProduceEncoding[] =
     encodingCount > 1
       ? buildWebcamSimulcastEncodings(quality)
       : [buildWebcamSingleLayerEncoding(quality)];
@@ -436,10 +445,18 @@ const getBaseEncodingCaps = (
       : publishSettings.maxBitrate
     : defaultMaximumBitrate;
 
+  const isActive = (encoding: WebcamProduceEncoding): boolean =>
+    !("active" in encoding && encoding.active === false);
+  const highestActiveIndex = baseEncodings.reduce(
+    (highest, encoding, index) => (isActive(encoding) ? index : highest),
+    -1,
+  );
+
   return baseEncodings.map((encoding, index) => {
     const bitrateRatio = encoding.maxBitrate / defaultMaximumBitrate;
-    const isHighestLayer = index === baseEncodings.length - 1;
+    const isHighestLayer = index === highestActiveIndex;
     return {
+      active: isActive(encoding),
       maxBitrate: publishSettings
         ? Math.max(20000, Math.round(effectiveMaximumBitrate * bitrateRatio))
         : encoding.maxBitrate,
@@ -593,10 +610,6 @@ export const getWebcamSenderRtpPriority = (
   return getWebcamRtpPriority(profile, 0);
 };
 
-type WebcamProduceEncoding =
-  | ReturnType<typeof buildWebcamSimulcastEncodings>[number]
-  | ReturnType<typeof buildWebcamSingleLayerEncoding>;
-
 const applyNetworkProfileToInitialWebcamEncodings = <
   T extends WebcamProduceEncoding,
 >(
@@ -622,7 +635,7 @@ const applyNetworkProfileToInitialWebcamEncodings = <
         : getProfileAdjustedCap(base, quality, profile, layerRank);
     return {
       ...encoding,
-      active: true,
+      active: base.active,
       ...("scaleResolutionDownBy" in encoding
         ? {
             scaleResolutionDownBy:
@@ -940,7 +953,7 @@ const applyWebcamEncodingCaps = async (
             : null;
         return {
           ...encoding,
-          active: true,
+          active: base.active,
           maxBitrate: standbyCap?.maxBitrate ?? adjusted.maxBitrate,
           maxFramerate: standbyCap?.maxFramerate ?? adjusted.maxFramerate,
           scaleResolutionDownBy:

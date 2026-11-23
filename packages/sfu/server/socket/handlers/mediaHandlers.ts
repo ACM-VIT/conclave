@@ -277,6 +277,11 @@ const assertCurrentConsumerGeneration = (
   }
 };
 
+const lastConsumerScore = new WeakMap<
+  Consumer,
+  { socket: Client["socket"]; signature: string }
+>();
+
 const emitConsumerTelemetry = (
   target: ConsumerTelemetryTarget,
   event: ConsumerTelemetryNotification["event"],
@@ -293,8 +298,7 @@ const emitConsumerTelemetry = (
     return;
   }
 
-  client.socket.emit("consumerTelemetry", {
-    event,
+  const fields = {
     roomId: room.id,
     userId: client.id,
     consumerId: snapshot.consumerId,
@@ -306,6 +310,18 @@ const emitConsumerTelemetry = (
     priority: snapshot.priority,
     preferredLayers: snapshot.preferredLayers,
     currentLayers: snapshot.currentLayers,
+  };
+  const socket = client.socket;
+  if (event === "score") {
+    const signature = JSON.stringify(fields);
+    const last = lastConsumerScore.get(consumer);
+    if (last && last.socket === socket && last.signature === signature) return;
+    lastConsumerScore.set(consumer, { socket, signature });
+  }
+
+  socket.emit("consumerTelemetry", {
+    ...fields,
+    event,
     timestamp: snapshot.updatedAt,
   } satisfies ConsumerTelemetryNotification);
 };
@@ -1003,11 +1019,11 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
 
         const activeRoom = state.rooms.get(roomChannelId);
         const activeClient = activeRoom?.getClient(clientId);
-        const producerStillActive = Boolean(
-          activeClient && activeRoom?.getProducerInfoById(producer.id),
-        );
+        const activeProducerInfo = activeClient
+          ? activeRoom?.getProducerInfoById(producer.id)
+          : null;
 
-        if (producer.closed || producerClosed || !activeRoom || !producerStillActive) {
+        if (producer.closed || producerClosed || !activeRoom || !activeProducerInfo) {
           notifyProducerClosed();
           respond(callback, { error: "Producer closed during setup" });
           return;
@@ -1024,6 +1040,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
             kind,
             type,
             paused: producer.paused,
+            producerSeq: activeProducerInfo.producerSeq,
             roomId: activeRoom.id,
           });
         }
@@ -1086,7 +1103,10 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
         }
         const producerInfo = room.getProducerInfoById(producerId);
         if (!producerInfo) {
-          respond(callback, { error: "Producer not found" });
+          respond(callback, {
+            error: "Producer not found",
+            code: "producer_not_found",
+          });
           return;
         }
         // Attendees may only consume the curated program feed. Without this,

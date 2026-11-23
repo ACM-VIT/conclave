@@ -299,10 +299,11 @@ describe("media quality settings", () => {
     });
 
     const encodings = produce.mock.calls[0]?.[0]?.encodings ?? [];
-    expect(encodings).toHaveLength(2);
-    expect(Math.max(...encodings.map((encoding) => encoding.maxBitrate ?? 0))).toBe(
-      260_000,
-    );
+    const sendingEncodings = encodings.filter((encoding) => encoding.active);
+    expect(sendingEncodings).toHaveLength(2);
+    expect(
+      Math.max(...sendingEncodings.map((encoding) => encoding.maxBitrate ?? 0)),
+    ).toBe(260_000);
   });
 
   it("keeps the low-quality ceiling for negotiated VP9 SVC", async () => {

@@ -6,6 +6,8 @@ export interface WebcamSimulcastLayerProfile {
   bitrateRatio: number;
   minBitrate: number;
   maxFramerate: number;
+  /** False keeps the layer in the simulcast structure but sends nothing on it. */
+  active?: boolean;
 }
 
 export interface VideoEncodingProfile {
@@ -40,6 +42,7 @@ export function createVideoEncodingHelpers(
       scaleResolutionDownBy: layer.scaleResolutionDownBy,
       maxBitrate: floorBitrate(maxBitrate * layer.bitrateRatio, layer.minBitrate),
       maxFramerate: layer.maxFramerate,
+      ...(layer.active === false ? { active: false as const } : {}),
     }));
   };
 
