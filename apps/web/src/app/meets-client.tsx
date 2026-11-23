@@ -2524,6 +2524,7 @@ export default function MeetsClient({
     isAvailable: isBrowserServiceAvailable,
     isLaunching: isBrowserLaunching,
     launchError: browserLaunchError,
+    failedCommand: browserFailedCommand,
     launchBrowser,
     navigateTo: navigateBrowser,
     closeBrowser,
@@ -3460,6 +3461,7 @@ export default function MeetsClient({
         browserState={browserState}
         isBrowserLaunching={isBrowserLaunching}
         browserLaunchError={browserLaunchError}
+        browserFailedCommand={browserFailedCommand}
         showBrowserControls={showBrowserControls}
         onLaunchBrowser={launchBrowser}
         onNavigateBrowser={navigateBrowser}
