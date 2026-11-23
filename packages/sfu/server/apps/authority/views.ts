@@ -465,6 +465,12 @@ export class ViewTracker {
     this.heal();
   }
 
+  /** Notes a key given up where a withheld row may want it. */
+  private free(audience: Audience, name: string, key: string): void {
+    this.work += 1;
+    this.freed.push([audience, name, key]);
+  }
+
   /** Gives each key given up to a row withheld for want of it, if one still wants it. */
   private heal(): void {
     // Walked in place, never shifted: a clear frees a key for each row.
@@ -1139,7 +1145,7 @@ export class ViewTracker {
     this.note(audience, name, bucket, key, true, undefined);
     bucket.owner.delete(key);
     bucket.rows.delete(key);
-    if (bucket.withheld.size > 0) this.freed.push([audience, name, key]);
+    if (bucket.withheld.size > 0) this.free(audience, name, key);
   }
 
   /** Gives up the key a source row held when it no longer projects to it. */
@@ -1164,7 +1170,7 @@ export class ViewTracker {
     this.note(audience, name, bucket, previousKey, false, undefined);
     bucket.owner.delete(previousKey);
     bucket.rows.delete(previousKey);
-    if (bucket.withheld.size > 0) this.freed.push([audience, name, previousKey]);
+    if (bucket.withheld.size > 0) this.free(audience, name, previousKey);
   }
 
   private place(
