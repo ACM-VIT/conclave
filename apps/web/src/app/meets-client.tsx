@@ -122,6 +122,7 @@ import {
   sanitizeRoomCode,
 } from "./lib/utils";
 import type { VideoEffectsBridgeState } from "./components/VideoEffectsBridge";
+import type { SetupNotice } from "./lib/setup-notice";
 
 type MeetUser = {
   id?: string;
@@ -423,10 +424,7 @@ export default function MeetsClient({
   const [currentIsAdmin, setCurrentIsAdmin] = useState(isAdmin);
   const [pendingNewMeetingRoomId, setPendingNewMeetingRoomId] =
     useState<string | null>(null);
-  const [meetingEndedNotice, setMeetingEndedNotice] = useState<string | null>(
-    null,
-  );
-  const [joinRejection, setJoinRejection] = useState<string | null>(null);
+  const [setupNotice, setSetupNotice] = useState<SetupNotice | null>(null);
   const [guestStorageReady, setGuestStorageReady] = useState(false);
   const [appsSocket, setAppsSocket] = useState<Socket | null>(null);
   const [viewSettings, setViewSettings] = useState<MeetViewSettings>(
@@ -2312,8 +2310,7 @@ export default function MeetsClient({
   }, []);
 
   const handleLocalRoomEnded = useCallback(() => {
-    setMeetingEndedNotice(null);
-    setJoinRejection(null);
+    setSetupNotice(null);
     setMeetError(null);
     setMediaError(null);
     setWaitingMessage(null);
@@ -2368,8 +2365,7 @@ export default function MeetsClient({
     setPendingUsers,
     setConnectionState,
     setMeetError,
-    setMeetingEndedNotice,
-    setJoinRejection,
+    setSetupNotice,
     setWaitingMessage,
     setHostUserId,
     setHostUserIds,
@@ -2670,8 +2666,7 @@ export default function MeetsClient({
     socket.cleanup();
     setMeetError(null);
     setMediaError(null);
-    setMeetingEndedNotice(null);
-    setJoinRejection(null);
+    setSetupNotice(null);
     setWaitingMessage(null);
     setPendingNewMeetingRoomId(null);
     setCurrentIsAdmin(false);
@@ -2696,8 +2691,7 @@ export default function MeetsClient({
     }
     setMeetError(null);
     setMediaError(null);
-    setMeetingEndedNotice(null);
-    setJoinRejection(null);
+    setSetupNotice(null);
     setWaitingMessage(null);
     setCurrentIsAdmin(true);
     setRoomId(targetRoomId);
@@ -3029,9 +3023,7 @@ export default function MeetsClient({
   const handleEnterMeetingStart = useCallback(
     (action: "new" | "join") => {
       setMeetError(null);
-      setMeetingEndedNotice(null);
-    setJoinRejection(null);
-      setJoinRejection(null);
+      setSetupNotice(null);
       setEnterErrored(false);
       setEnterAction(action);
     },
@@ -3040,8 +3032,7 @@ export default function MeetsClient({
 
   const handleEnterRetry = useCallback(() => {
     setMeetError(null);
-    setMeetingEndedNotice(null);
-    setJoinRejection(null);
+    setSetupNotice(null);
     setEnterErrored(false);
     setConnectionState("connecting");
     if (enterAction === "new") {
@@ -3062,8 +3053,7 @@ export default function MeetsClient({
     setEnterAction(null);
     setEnterErrored(false);
     setMeetError(null);
-    setMeetingEndedNotice(null);
-    setJoinRejection(null);
+    setSetupNotice(null);
     setConnectionState("disconnected");
   }, [setConnectionState, setMeetError]);
 
@@ -3451,10 +3441,8 @@ export default function MeetsClient({
         onBrowserAudioPlaybackStarted={handleBrowserAudioPlaybackStarted}
         meetError={meetError}
         mediaError={mediaError}
-        meetingEndedNotice={meetingEndedNotice}
-        onDismissMeetingEndedNotice={() => setMeetingEndedNotice(null)}
-        joinRejection={joinRejection}
-        onDismissJoinRejection={() => setJoinRejection(null)}
+        setupNotice={setupNotice}
+        onDismissSetupNotice={() => setSetupNotice(null)}
         isPopoutActive={isPopoutActive}
         isPopoutSupported={isPopoutSupported}
         onOpenPopout={openPopout}

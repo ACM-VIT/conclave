@@ -1,6 +1,10 @@
 import type { MeetError } from "./types";
 
+export type SetupNotice = { kind: "ended" | "rejected"; message: string };
+
 export const JOIN_REJECTED_MESSAGE = "The host has denied your request to join.";
+
+export const endedNotice = (message: string): SetupNotice => ({ kind: "ended", message });
 
 export function joinRejectedUpdate() {
   const meetError: MeetError = {
@@ -8,23 +12,13 @@ export function joinRejectedUpdate() {
     message: JOIN_REJECTED_MESSAGE,
     recoverable: false,
   };
+  const setupNotice: SetupNotice = { kind: "rejected", message: JOIN_REJECTED_MESSAGE };
   return {
     meetError,
-    joinRejection: JOIN_REJECTED_MESSAGE,
+    setupNotice,
     connectionState: "error" as const,
     waitingMessage: null,
   };
-}
-
-export type SetupNotice = { kind: "rejected" | "ended"; message: string };
-
-export function setupNotice(
-  joinRejection: string | null | undefined,
-  meetingEndedNotice: string | null | undefined,
-): SetupNotice | null {
-  if (joinRejection) return { kind: "rejected", message: joinRejection };
-  if (meetingEndedNotice) return { kind: "ended", message: meetingEndedNotice };
-  return null;
 }
 
 const WAITING_FOR_HOST = /not live|not started|no room|not ready/i;
@@ -37,17 +31,14 @@ export interface HiddenSetupView {
 }
 
 export function hiddenSetupView({
-  joinRejection,
-  meetingEndedNotice,
+  notice,
   errorMessage,
   isLoading,
 }: {
-  joinRejection: string | null | undefined;
-  meetingEndedNotice: string | null | undefined;
+  notice: SetupNotice | null | undefined;
   errorMessage: string;
   isLoading: boolean;
 }): HiddenSetupView {
-  const notice = setupNotice(joinRejection, meetingEndedNotice);
   if (notice?.kind === "rejected") {
     return { headline: "you weren't let in", body: notice.message, action: "retry", busy: false };
   }

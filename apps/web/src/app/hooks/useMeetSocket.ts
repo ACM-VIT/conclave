@@ -176,7 +176,7 @@ import type {
   RequestMediaPermissionsOptions,
   ScreenShareRepublishOptions,
 } from "./useMeetMedia";
-import { joinRejectedUpdate } from "../lib/join-rejection";
+import { endedNotice, joinRejectedUpdate, type SetupNotice } from "../lib/setup-notice";
 
 type ConsumerTelemetryPayload = Omit<
   ConsumerTelemetrySnapshot,
@@ -891,8 +891,7 @@ interface UseMeetSocketOptions {
   setPendingUsers: React.Dispatch<React.SetStateAction<Map<string, string>>>;
   setConnectionState: (state: ConnectionState) => void;
   setMeetError: (error: MeetError | null) => void;
-  setMeetingEndedNotice?: (message: string | null) => void;
-  setJoinRejection?: (message: string | null) => void;
+  setSetupNotice?: (notice: SetupNotice | null) => void;
   setWaitingMessage: (message: string | null) => void;
   setHostUserId: (userId: string | null) => void;
   setHostUserIds: React.Dispatch<React.SetStateAction<string[]>>;
@@ -1012,8 +1011,7 @@ export function useMeetSocket({
   setPendingUsers,
   setConnectionState,
   setMeetError,
-  setMeetingEndedNotice,
-  setJoinRejection,
+  setSetupNotice,
   setWaitingMessage,
   setHostUserId,
   setHostUserIds,
@@ -2117,7 +2115,7 @@ export function useMeetSocket({
     if (localRoomEndedHandledRef.current) return;
     localRoomEndedHandledRef.current = true;
     setMeetError(null);
-    setMeetingEndedNotice?.(null);
+    setSetupNotice?.(null);
     setWaitingMessage(null);
     cleanup();
     onLocalRoomEnded?.();
@@ -2125,7 +2123,7 @@ export function useMeetSocket({
     cleanup,
     onLocalRoomEnded,
     setMeetError,
-    setMeetingEndedNotice,
+    setSetupNotice,
     setWaitingMessage,
   ]);
 
@@ -7128,7 +7126,7 @@ export function useMeetSocket({
                 }
 
                 setMeetError(null);
-                setMeetingEndedNotice?.(resolveRoomEndedNoticeMessage(message));
+                setSetupNotice?.(endedNotice(resolveRoomEndedNoticeMessage(message)));
                 setWaitingMessage(null);
                 cleanup();
               },
@@ -8355,7 +8353,7 @@ export function useMeetSocket({
               console.info("[Meets] Join rejected.");
               const rejected = joinRejectedUpdate();
               setMeetError(rejected.meetError);
-              setJoinRejection?.(rejected.joinRejection);
+              setSetupNotice?.(rejected.setupNotice);
               setConnectionState(rejected.connectionState);
               setWaitingMessage(rejected.waitingMessage);
               cleanup();
@@ -8775,8 +8773,7 @@ export function useMeetSocket({
       setServerActiveSpeakerAvailable,
       setLocalStream,
       setMeetError,
-      setMeetingEndedNotice,
-      setJoinRejection,
+      setSetupNotice,
       setPendingUsers,
       setWaitingMessage,
       setNetworkManagedVideoQuality,
@@ -9255,8 +9252,7 @@ export function useMeetSocket({
 
       localRoomEndedHandledRef.current = false;
       setMeetError(null);
-      setMeetingEndedNotice?.(null);
-      setJoinRejection?.(null);
+      setSetupNotice?.(null);
       updateReconnectRecoveryStatus(null);
       setConnectionState("connecting");
       if (!bypassMediaPermissions) {
@@ -9456,8 +9452,7 @@ export function useMeetSocket({
       setConnectionState,
       setLocalStream,
       setMeetError,
-      setMeetingEndedNotice,
-      setJoinRejection,
+      setSetupNotice,
       setRoomId,
       socketRef,
       stopLocalTrack,

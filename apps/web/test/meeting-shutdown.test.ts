@@ -27,7 +27,7 @@ const createHarness = (
   const io = vi.fn(() => socket);
   const setConnectionState = vi.fn();
   const setMeetError = vi.fn();
-  const setMeetingEndedNotice = vi.fn();
+  const setSetupNotice = vi.fn();
   const onLocalRoomEnded = vi.fn();
   let api!: SocketApi;
   let refs!: Refs;
@@ -37,7 +37,7 @@ const createHarness = (
     const supplied = {
       refs, roomId: "test-room", userId: "viewer#session", localStream: null,
       getJoinInfo, prewarm: { io, Device: null, isReady: true },
-      setConnectionState, setMeetError, setMeetingEndedNotice, onLocalRoomEnded,
+      setConnectionState, setMeetError, setSetupNotice, onLocalRoomEnded,
       isMuted: true, isCameraOff: true, displayNameInput: "Viewer",
       primeAudioOutput: () => {},
       chat: { setChatMessages: noop, setChatOverlayMessages: noop, setUnreadCount: noop, isChatOpenRef: { current: false } },
@@ -58,7 +58,7 @@ const createHarness = (
     await pending;
     refs.currentRoomIdRef.current = "test-room";
   };
-  return { api, refs, socket, io, connect, dispatch, setConnectionState, setMeetError, setMeetingEndedNotice, onLocalRoomEnded };
+  return { api, refs, socket, io, connect, dispatch, setConnectionState, setMeetError, setSetupNotice, onLocalRoomEnded };
 };
 
 beforeEach(() => {
@@ -75,7 +75,10 @@ describe("intentional meeting shutdown", () => {
     expect(h.refs.intentionalDisconnectRef.current).toBe(true);
     expect(h.setConnectionState).toHaveBeenLastCalledWith("disconnected");
     expect(h.setMeetError).toHaveBeenLastCalledWith(null);
-    expect(h.setMeetingEndedNotice).toHaveBeenLastCalledWith("The host ended this meeting. You are no longer connected.");
+    expect(h.setSetupNotice).toHaveBeenLastCalledWith({
+      kind: "ended",
+      message: "The host ended this meeting. You are no longer connected.",
+    });
     expect(h.refs.currentRoomIdRef.current).toBeNull();
   });
 

@@ -101,7 +101,7 @@ import {
   isSystemUserId,
   isMediaDeviceBlocked,
 } from "../lib/utils";
-import { hiddenSetupView } from "../lib/join-rejection";
+import { hiddenSetupView, type SetupNotice } from "../lib/setup-notice";
 import { useApps, useGame } from "@conclave/apps-sdk";
 import { GamePanel } from "./games/GamePanel";
 import { GamesPanel } from "./games/GamesPanel";
@@ -294,10 +294,8 @@ interface MeetsMainContentProps {
   onToggleBrowserAudio: () => void;
   meetError?: MeetError | null;
   mediaError?: MeetError | null;
-  meetingEndedNotice?: string | null;
-  onDismissMeetingEndedNotice?: () => void;
-  joinRejection?: string | null;
-  onDismissJoinRejection?: () => void;
+  setupNotice?: SetupNotice | null;
+  onDismissSetupNotice?: () => void;
   browserAudioNeedsGesture: boolean;
   browserAudioPlaybackAttemptToken?: number;
   onBrowserAudioAutoplayBlocked: () => void;
@@ -580,10 +578,8 @@ export default function MeetsMainContent({
   onClearVoiceAgentError,
   meetError,
   mediaError,
-  meetingEndedNotice,
-  onDismissMeetingEndedNotice,
-  joinRejection,
-  onDismissJoinRejection,
+  setupNotice,
+  onDismissSetupNotice,
   isPopoutActive,
   isPopoutSupported,
   onOpenPopout,
@@ -2216,8 +2212,7 @@ export default function MeetsMainContent({
         hideJoinUI ? (
           (() => {
             const view = hiddenSetupView({
-              joinRejection,
-              meetingEndedNotice,
+              notice: setupNotice,
               errorMessage: meetError?.message ?? "",
               isLoading,
             });
@@ -2280,10 +2275,8 @@ export default function MeetsMainContent({
             onUserChange={onUserChange}
             onIsAdminChange={onIsAdminChange}
             mediaError={mediaError}
-            meetingEndedNotice={meetingEndedNotice}
-            onDismissMeetingEndedNotice={onDismissMeetingEndedNotice}
-            joinRejection={joinRejection}
-            onDismissJoinRejection={onDismissJoinRejection}
+            setupNotice={setupNotice}
+            onDismissSetupNotice={onDismissSetupNotice}
             videoEffects={videoEffects}
             onVideoEffectsChange={onVideoEffectsChange}
             onPrejoinMediaCommit={onPrejoinMediaCommit}
