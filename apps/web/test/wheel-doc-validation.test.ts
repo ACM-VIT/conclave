@@ -62,4 +62,31 @@ describe("wheel document validation", () => {
 
     expect(getEntries(doc)).toEqual([{ id: "valid", label: "Valid" }]);
   });
+
+  it("reads remote labels the way it writes them, without stray whitespace", () => {
+    const doc = createWheelDoc();
+    const wheelEntries = new Y.Array<unknown>();
+    doc.getMap("wheel").set("entries", wheelEntries);
+    wheelEntries.push([
+      { id: "spaced", label: "      Bob" },
+      { id: "inner", label: "Ann \n  Lee  " },
+    ]);
+    doc.getMap("wheel").set("spin", {
+      ...validSpin(),
+      entries: [
+        { id: "one", label: "   One" },
+        { id: "two", label: "Two" },
+      ],
+    });
+
+    expect(getEntries(doc)).toEqual([
+      { id: "spaced", label: "Bob" },
+      { id: "inner", label: "Ann Lee" },
+    ]);
+    expect(getSpin(doc)?.entries).toEqual([
+      { id: "one", label: "One" },
+      { id: "two", label: "Two" },
+    ]);
+    expect(getSpin(doc)).toBe(getSpin(doc));
+  });
 });

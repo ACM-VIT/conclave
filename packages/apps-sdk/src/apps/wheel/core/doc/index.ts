@@ -67,6 +67,11 @@ const isEntry = (value: unknown): value is WheelEntry => {
   );
 };
 
+const readEntry = (entry: WheelEntry): WheelEntry => {
+  const label = normalizeLabel(entry.label);
+  return label === entry.label ? entry : { ...entry, label };
+};
+
 export const createEntryId = (): string =>
   `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -80,7 +85,7 @@ export const getEntries = (doc: Y.Doc): WheelEntry[] => {
   for (const entry of entries.toArray()) {
     if (!isEntry(entry) || seen.has(entry.id)) continue;
     seen.add(entry.id);
-    result.push(entry);
+    result.push(readEntry(entry));
     if (result.length >= MAX_WHEEL_ENTRIES) break;
   }
   return result;
@@ -166,9 +171,22 @@ const isSpin = (value: unknown): value is WheelSpin => {
   );
 };
 
+const readSpins = new WeakMap<WheelSpin, WheelSpin>();
+
+const readSpin = (spin: WheelSpin): WheelSpin => {
+  const cached = readSpins.get(spin);
+  if (cached) return cached;
+  const entries = spin.entries.map(readEntry);
+  const read = entries.every((entry, index) => entry === spin.entries[index])
+    ? spin
+    : { ...spin, entries };
+  readSpins.set(spin, read);
+  return read;
+};
+
 export const getSpin = (doc: Y.Doc): WheelSpin | null => {
   const value = getRoot(doc).get(SPIN_KEY);
-  return isSpin(value) ? value : null;
+  return isSpin(value) ? readSpin(value) : null;
 };
 
 export const startSpin = (doc: Y.Doc, spin: WheelSpin): void => {
@@ -194,7 +212,13 @@ const isResult = (value: unknown): value is WheelResult => {
 export const getHistory = (doc: Y.Doc): WheelResult[] => {
   const value = getRoot(doc).get(HISTORY_KEY);
   if (!(value instanceof Y.Array)) return [];
-  const results = (value as Y.Array<WheelResult>).toArray().filter(isResult);
+  const results = (value as Y.Array<WheelResult>)
+    .toArray()
+    .filter(isResult)
+    .map((result) => {
+      const label = normalizeLabel(result.label);
+      return label === result.label ? result : { ...result, label };
+    });
   const seen = new Set<string>();
   return results.filter((result) => {
     if (seen.has(result.spinId)) return false;
