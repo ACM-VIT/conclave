@@ -541,6 +541,52 @@ def database_paths(archive):
     return set(archive.databases) | {rel for rel, _ in archive.links} | {start for start, _ in archive.chains}
 
 
+def store_paths(env, fallback=None):
+    """(variable, path) for each store's database, the way the SFU picks it:
+    the store's own variable, else CONCLAVE_SQLITE_PATH, else fallback (the
+    compose default), or nothing when there is no fallback."""
+    shared = env.get("CONCLAVE_SQLITE_PATH", "").strip()
+    picked = []
+    for variable in STORE_VARIABLES:
+        own = env.get(variable, "").strip()
+        if own:
+            picked.append((variable, own))
+        elif shared:
+            picked.append(("CONCLAVE_SQLITE_PATH", shared))
+        elif fallback:
+            picked.append(("the compose default", fallback))
+    return picked
+
+
+def configured_stores(state, container, containers, env=None):
+    """Every database a store opens, as this host's config sets it and as the
+    env of each SFU container that mounts the state dir sets it, each store's
+    precedence applied: {"rel", "variable", "value", "where"}, one per path.
+    The SFU opens path.resolve(value), which drops ".." without reading the
+    disk, so the same is done here. A path outside the state dir refuses."""
+    env = os.environ if env is None else env
+    roots = mount_roots(state, container)
+    sources = [("the backup config", variable, value, roots)
+               for variable, value in store_paths(env, f"{container.rstrip('/')}/conclave.sqlite")]
+    for found in containers:
+        if found["relation"] == "exact":
+            # A container without any of the variables runs with whatever its
+            # compose file set; only what its env says it opens counts here.
+            sources += [(f"the container {found['id']}", variable, value, list(found["destinations"]) + roots)
+                        for variable, value in store_paths(found["env"])]
+    stores = []
+    for where, variable, value, these_roots in sources:
+        shown = f"{variable}={value}" if variable != "the compose default" else f"the compose default {value}"
+        if not value.startswith("/"):
+            raise Refused(f"{shown} ({where}) is not an absolute path, so it is not on the volume; set it under {container}")
+        rel = under_root(posixpath.normpath(value), these_roots)
+        if not rel:
+            raise Refused(f"{shown} ({where}) is outside the state dir, so it is not on the volume; move it under {container}")
+        if rel not in [store["rel"] for store in stores]:
+            stores.append({"rel": rel, "variable": variable, "value": value, "where": where})
+    return stores
+
+
 def walk_error(error):
     raise Refused(f"cannot list {error.filename}: {error.strerror}")
 

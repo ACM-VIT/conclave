@@ -18,7 +18,6 @@ through a shell. Links are recorded relative.
 """
 import hashlib
 import os
-import posixpath
 import sqlite3
 import stat
 import sys
@@ -32,13 +31,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from statelib import (  # noqa: E402
     DIR_FLAGS,
     READ_FLAGS,
-    STORE_VARIABLES,
     Archive,
     Refused,
     Tree,
     Unresolved,
     archive_problems,
     chain_problems,
+    configured_stores,
     database_paths,
     docker_containers,
     is_database_name,
@@ -53,7 +52,6 @@ from statelib import (  # noqa: E402
     running,
     side_files,
     state_mounts,
-    under_root,
     walk,
     within,
 )
@@ -67,44 +65,6 @@ def open_state(state):
         raise Refused(f"the state dir {state} does not exist, so there is nothing to back up; check CONCLAVE_STATE_DIR")
     except OSError as error:
         raise Refused(f"cannot open the state dir {state}: {error.strerror}")
-
-
-def configured_starts(state, container, containers):
-    """Every database path a store opens, relative to the state dir, as this
-    host's config sets it and as the env of each SFU container that mounts
-    the state dir sets it. The SFU opens path.resolve(value), which drops
-    ".." without reading the disk, so the same is done here."""
-    roots = mount_roots(state, container)
-    sources = []
-    env = os.environ
-    for variable in STORE_VARIABLES:
-        own = env.get(variable, "").strip()
-        shared = env.get("CONCLAVE_SQLITE_PATH", "").strip()
-        if own:
-            sources.append(("the backup config", variable, own, roots))
-        elif shared:
-            sources.append(("the backup config", "CONCLAVE_SQLITE_PATH", shared, roots))
-        else:
-            sources.append(("the backup config", "the compose default", f"{container.rstrip('/')}/conclave.sqlite", roots))
-    for found in containers:
-        if found["relation"] != "exact":
-            continue
-        container_roots = list(found["destinations"]) + roots
-        for variable in STORE_VARIABLES + ("CONCLAVE_SQLITE_PATH",):
-            value = found["env"].get(variable, "").strip()
-            if value:
-                sources.append((f"the container {found['id']}", variable, value, container_roots))
-    starts = []
-    for where, variable, value, these_roots in sources:
-        shown = f"{variable}={value}" if variable != "the compose default" else f"the compose default {value}"
-        if not value.startswith("/"):
-            raise Refused(f"{shown} ({where}) is not an absolute path, so it is not on the volume; set it under {container}")
-        rel = under_root(posixpath.normpath(value), these_roots)
-        if not rel:
-            raise Refused(f"{shown} ({where}) is outside the state dir, so it is not on the volume; move it under {container}")
-        if rel not in starts:
-            starts.append(rel)
-    return starts
 
 
 def plan(state_fd, state, roots, configured):
@@ -218,7 +178,7 @@ def copy_command(state, container, payload):
     real, state_fd = open_state(state)
     try:
         roots = mount_roots(state, container)
-        configured = configured_starts(state, container, state_mounts(docker_containers(), state))
+        configured = [store["rel"] for store in configured_stores(state, container, state_mounts(docker_containers(), state))]
         databases, links, chains, dirs = plan(state_fd, state, roots, configured)
         write_lines(os.path.join(payload, "sqlite-databases"), databases)
         write_lines(os.path.join(payload, "sqlite-links"), [f"{link}\t{target}" for link, target in links])
@@ -250,7 +210,7 @@ def preflight_command(state, container, local_dir):
         local = os.path.realpath(local_dir)
         if within(local, real) or within(real, local):
             raise Refused(f"BACKUP_LOCAL_DIR ({local_dir}) and the state dir ({state}) overlap; keep the archives outside the state dir")
-        configured = configured_starts(state, container, state_mounts(docker_containers(), state))
+        configured = [store["rel"] for store in configured_stores(state, container, state_mounts(docker_containers(), state))]
         plan(state_fd, state, mount_roots(state, container), configured)
     finally:
         os.close(state_fd)
