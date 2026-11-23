@@ -60,22 +60,6 @@ type AppDoc = {
   unmeasuredBytes: number;
 };
 
-const getAwarenessStateUserId = (state: unknown): string | null => {
-  if (!state || typeof state !== "object" || Array.isArray(state)) {
-    return null;
-  }
-  const record = state as { user?: unknown };
-  if (
-    !record.user ||
-    typeof record.user !== "object" ||
-    Array.isArray(record.user)
-  ) {
-    return null;
-  }
-  const user = record.user as { id?: unknown };
-  return typeof user.id === "string" ? user.id : null;
-};
-
 const encodedSizeAfter = (doc: Y.Doc, update: Uint8Array): number => {
   const trial = new Y.Doc({ gc: doc.gc });
   try {
@@ -575,16 +559,7 @@ export class RoomApps {
         }
       }
 
-      const clientIds = new Set<number>(trackedClientIds ?? []);
-      if (clientIds.size === 0) {
-        for (const [clientId, state] of awareness.getStates().entries()) {
-          if (getAwarenessStateUserId(state) === userId) {
-            clientIds.add(clientId);
-          }
-        }
-      }
-
-      const removableClientIds = Array.from(clientIds).filter((id) =>
+      const removableClientIds = Array.from(trackedClientIds ?? []).filter((id) =>
         awareness.meta.has(id),
       );
       if (removableClientIds.length === 0) {

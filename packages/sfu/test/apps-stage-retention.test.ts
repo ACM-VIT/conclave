@@ -572,6 +572,25 @@ describe("Yjs client ids", () => {
     for (const presence of [peerPresence, viewerPresence, left]) presence.destroy();
   });
 
+  it("removes no one's cursor when a participant who showed none leaves", () => {
+    const { room, join } = makeRoom();
+    const host = join("host#1", "host");
+    const peer = join("peer#1", "participant");
+    join("viewer#1", "participant");
+    host.present("whiteboard");
+    const peerPresence = new Awareness(new Y.Doc());
+    peerPresence.setLocalState({ user: { id: "viewer#1" } });
+    peer.sendAwareness("whiteboard", peerPresence);
+
+    expect(room.apps.clearUserAwareness("viewer#1")).toEqual([]);
+
+    const left = new Awareness(new Y.Doc());
+    applyAwarenessUpdate(left, room.apps.encodeAwarenessSnapshot("whiteboard")!, "remote");
+    expect(left.getStates().has(peerPresence.clientID)).toBe(true);
+    peerPresence.destroy();
+    left.destroy();
+  });
+
   it("keeps a participant's own client id when they rejoin", () => {
     const { join } = makeRoom();
     const host = join("host#1", "host");
