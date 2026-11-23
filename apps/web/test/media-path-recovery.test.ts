@@ -12,6 +12,8 @@ import {
   planSilentPathStep,
   planMediaPathEscalation,
   readMediaPathHealth,
+  receivePathExpectsMedia,
+  type ConsumedStream,
   readRtpBytes,
   resolveRebuildRelayOnly,
   takeDeferredRebuilds,
@@ -437,5 +439,50 @@ describe("knowing that media moved", () => {
     expect(first.mediaMoved).toBe(false);
     expect(advanceMediaPathWatch(first.watch, sample({ at: 1, rtpBytes: 100 })).mediaMoved).toBe(false);
     expect(advanceMediaPathWatch(first.watch, sample({ at: 1, rtpBytes: 250 })).mediaMoved).toBe(true);
+  });
+});
+
+describe("which received streams should keep media flowing", () => {
+  const stream = (
+    kind: ConsumedStream["kind"],
+    source: ConsumedStream["source"],
+    on: boolean,
+  ): ConsumedStream => ({ kind, source, consumerPaused: false, producerPaused: !on });
+  const table = [false, true].flatMap((micOn) =>
+    [false, true].flatMap((cameraOn) =>
+      [false, true].map((screenOn) => ({ micOn, cameraOn, screenOn })),
+    ),
+  );
+
+  it.each(table)(
+    "expects media on a connected path when a mic or a camera is on: %o",
+    ({ micOn, cameraOn, screenOn }) => {
+      const streams = [
+        stream("audio", "webcam", micOn),
+        stream("video", "webcam", cameraOn),
+        stream("video", "screen", screenOn),
+        stream("audio", "screen", false),
+      ];
+
+      expect(receivePathExpectsMedia(streams, true)).toBe(micOn || cameraOn);
+    },
+  );
+
+  it("expects media on a path that is not connected whenever it carries any stream", () => {
+    expect(receivePathExpectsMedia([stream("video", "screen", false)], false)).toBe(true);
+    expect(receivePathExpectsMedia([], false)).toBe(false);
+  });
+
+  it("does not expect media from a stream this client paused", () => {
+    expect(
+      receivePathExpectsMedia(
+        [{ kind: "video", source: "webcam", consumerPaused: true, producerPaused: false }],
+        true,
+      ),
+    ).toBe(false);
+  });
+
+  it("expects screen share audio, which keeps sending through silence", () => {
+    expect(receivePathExpectsMedia([stream("audio", "screen", true)], true)).toBe(true);
   });
 });

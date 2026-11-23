@@ -158,6 +158,9 @@ import {
   planMediaPathFailure,
   planSilentPathStep,
   readMediaPathHealth,
+  receivePathExpectsMedia,
+  streamShouldFlow,
+  type ConsumedStream,
   resolveRebuildRelayOnly,
   takeDeferredRebuilds,
   type MediaPathHealth,
@@ -6174,9 +6177,29 @@ export function useMeetSocket({
           producer.track.enabled &&
           !producer.track.muted,
       );
-    // A connected transport is judged only on streams that never go quiet
-    // on their own: a live microphone or camera, or an unmuted remote
-    // microphone. A transport that is not connected fails every stream.
+    const consumedStreams = (): Array<{
+      producerId: string;
+      stream: ConsumedStream;
+    }> => {
+      const streams: Array<{ producerId: string; stream: ConsumedStream }> = [];
+      for (const [producerId, consumer] of consumersRef.current) {
+        if (consumer.closed) continue;
+        streams.push({
+          producerId,
+          stream: {
+            kind: consumer.kind,
+            source:
+              producerMapRef.current.get(producerId)?.type === "screen"
+                ? "screen"
+                : "webcam",
+            consumerPaused: consumer.paused,
+            producerPaused:
+              producerPausedStateRef.current.get(producerId) === true,
+          },
+        });
+      }
+      return streams;
+    };
     const expectsMedia = (
       kind: "producer" | "consumer",
       connected: boolean,
@@ -6189,39 +6212,18 @@ export function useMeetSocket({
               (ref) => ref.current && !ref.current.closed,
             );
       }
-      for (const [producerId, consumer] of consumersRef.current) {
-        if (consumer.closed) continue;
-        if (!connected) return true;
-        if (
-          consumer.kind === "audio" &&
-          !consumer.paused &&
-          producerPausedStateRef.current.get(producerId) !== true
-        ) {
-          return true;
-        }
-      }
-      return false;
+      return receivePathExpectsMedia(
+        consumedStreams().map(({ stream }) => stream),
+        connected,
+      );
     };
 
-    // The senders a silent receive path still expects media from, by how well
-    // each one reaches the server.
-    const expectedConsumerProducerScores = (): Array<number | null> => {
-      const scores: Array<number | null> = [];
-      for (const [producerId, consumer] of consumersRef.current) {
-        if (
-          consumer.closed ||
-          consumer.kind !== "audio" ||
-          consumer.paused ||
-          producerPausedStateRef.current.get(producerId) === true
-        ) {
-          continue;
-        }
-        scores.push(
+    const expectedConsumerProducerScores = (): Array<number | null> =>
+      consumedStreams()
+        .filter(({ stream }) => streamShouldFlow(stream))
+        .map(({ producerId }) =>
           readProducerScore(consumerTelemetryRef.current.get(producerId)?.score),
         );
-      }
-      return scores;
-    };
 
     // Restarts ICE on a path that says connected but carries nothing, and
     // reports whether media moved again within the check window. A path that

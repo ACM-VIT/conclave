@@ -398,3 +398,23 @@ export const blockedMediaDirections = (
   health: MediaPathHealth,
 ): MediaDirection[] =>
   MEDIA_DIRECTIONS.filter((direction) => health[direction] === "blocked");
+
+export type ConsumedStream = {
+  kind: "audio" | "video";
+  source: "webcam" | "screen";
+  consumerPaused: boolean;
+  producerPaused: boolean;
+};
+
+export const streamShouldFlow = ({
+  kind,
+  source,
+  consumerPaused,
+  producerPaused,
+}: ConsumedStream): boolean =>
+  !consumerPaused && !producerPaused && (kind === "audio" || source === "webcam");
+
+export const receivePathExpectsMedia = (
+  streams: ConsumedStream[],
+  connected: boolean,
+): boolean => (connected ? streams.some(streamShouldFlow) : streams.length > 0);
