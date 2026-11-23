@@ -1642,6 +1642,13 @@ export class TranscriptRoom {
             const drain = this.providerDrains.get(epoch);
             if (drain) return this.applyDrainedFinal(drain, itemId, transcript);
           },
+          onItemFailed: (itemId) => {
+            if (epoch === this.transcriptionConnectionEpoch) {
+              return this.applyTranscriptFinal(itemId, "");
+            }
+            const drain = this.providerDrains.get(epoch);
+            if (drain) return this.applyDrainedFinal(drain, itemId, "");
+          },
           onFailure: (message) => {
             if (epoch === this.transcriptionConnectionEpoch) {
               return this.handleTranscriptionFailure(message);

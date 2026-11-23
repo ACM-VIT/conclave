@@ -5,6 +5,8 @@ export type LiveTranscriptionCallbacks = {
   onCommitted: (itemId: string) => void;
   onDelta: (itemId: string, delta: string) => void;
   onFinal: (itemId: string, transcript: string) => void | Promise<void>;
+  /** One item could not be transcribed; the connection itself is fine. */
+  onItemFailed?: (itemId: string, message: string) => void | Promise<void>;
   onFailure: (message: string) => void | Promise<void>;
 };
 
