@@ -157,7 +157,7 @@ export function WheelPanel({
     "inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-white/10 px-2.5 py-[5px] text-[11px] font-medium text-[#c4c4cc] transition-colors hover:border-white/20 hover:text-[#fafafa] disabled:cursor-not-allowed disabled:opacity-30";
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex h-full min-h-0 flex-col max-md:landscape:h-auto max-md:landscape:shrink-0">
       <div className="flex items-center gap-2 border-b border-white/[0.06] px-4 pb-3 pt-3.5">
         <span className="text-[#f95f4a]">
           <MiniWheelIcon />

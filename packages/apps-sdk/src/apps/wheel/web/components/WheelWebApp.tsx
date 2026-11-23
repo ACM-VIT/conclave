@@ -282,8 +282,8 @@ export function WheelWebApp() {
     entries.length === 0 && !isSpinning && highlightIndex === null;
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-col bg-[#0b0b0b] text-[#fafafa] md:flex-row">
-      <div className="relative min-h-[300px] flex-1">
+    <div className="flex h-full min-h-0 w-full flex-col bg-[#0b0b0b] text-[#fafafa] md:flex-row max-md:landscape:flex-row">
+      <div className="relative min-h-[300px] flex-1 max-md:landscape:min-h-0 max-md:landscape:min-w-0">
         <WheelStage
           entries={entries}
           spin={spin}
@@ -351,7 +351,7 @@ export function WheelWebApp() {
         )}
       </div>
 
-      <aside className="flex h-[46%] max-h-[380px] w-full shrink-0 flex-col border-t border-white/[0.06] md:h-auto md:max-h-none md:w-[312px] md:border-l md:border-t-0">
+      <aside className="flex h-[46%] max-h-[380px] w-full shrink-0 flex-col border-t border-white/[0.06] md:h-auto md:max-h-none md:w-[312px] md:border-l md:border-t-0 max-md:landscape:h-auto max-md:landscape:max-h-none max-md:landscape:w-[min(312px,50%)] max-md:landscape:overflow-y-auto max-md:landscape:border-l max-md:landscape:border-t-0">
         <WheelPanel
           entries={entries}
           history={history}
