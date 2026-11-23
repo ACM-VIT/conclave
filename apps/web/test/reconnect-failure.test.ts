@@ -10,6 +10,16 @@ describe("whether a failed reconnect is worth another try", () => {
     expect(isRecoverableReconnectFailure(new Error("No room found."))).toBe(true);
   });
 
+  it("keeps trying while the server is still opening the meeting", () => {
+    // The SFU answers a join whose room is slow to open before the tab would
+    // give up; the next try takes that opening over.
+    expect(
+      isRecoverableReconnectFailure(
+        new Error("The meeting is still opening. Try again in a moment."),
+      ),
+    ).toBe(true);
+  });
+
   it("keeps trying when the server cannot be reached or is failing", () => {
     expect(isRecoverableReconnectFailure(new Error("websocket error"))).toBe(true);
     expect(isRecoverableReconnectFailure(new Error("Connection timeout"))).toBe(true);
