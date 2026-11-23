@@ -304,6 +304,7 @@ describe("in-call notices", () => {
     panel.className = "fixed";
     panel.innerHTML = "<header>Chat</header><div data-panel-notices></div><form>Composer</form>";
     panel.getBoundingClientRect = () => new DOMRect(0, 0, 390, 844);
+    Object.assign(panel, { __reactFiber$probe: { stateNode: panel } });
     document.body.append(panel);
     await act(async () => root.render(banner(true)));
     await waitOutExit();
@@ -407,6 +408,7 @@ describe("in-call notices", () => {
     const panel = document.createElement("div");
     panel.innerHTML = '<header>Participants</header><div data-panel-notices></div><section>Host controls</section>';
     panel.getBoundingClientRect = () => new DOMRect(0, 0, 390, 844);
+    Object.assign(panel, { __reactFiber$probe: { stateNode: panel } });
     document.body.append(panel);
     await act(async () =>
       root.render(
@@ -464,6 +466,7 @@ describe("in-call notices", () => {
     panel.className = "fixed";
     panel.innerHTML = "<header>Chat</header><div data-panel-notices></div><form>Composer</form>";
     panel.getBoundingClientRect = () => new DOMRect(0, 0, 390, 844);
+    Object.assign(panel, { __reactFiber$probe: { stateNode: panel } });
     document.body.append(panel);
     await act(async () => root.render(notices(true)));
     await waitOutExit();

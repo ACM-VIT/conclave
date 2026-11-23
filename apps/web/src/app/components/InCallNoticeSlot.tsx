@@ -86,8 +86,6 @@ const narrowLane = (
     ? undefined
     : { left: Math.round(placement.left - padLeft), width: Math.round(placement.right - placement.left) };
 
-const roundRect = ({ left, right, top, bottom }: LaneObstacle) =>
-  [left, right, top, bottom].map(Math.round);
 
 function layoutStack(list: HTMLElement, items: HTMLElement[], heights: number[], expanded: boolean) {
   if (expanded || items.length <= 1) {
@@ -288,11 +286,17 @@ export default function InCallNoticeSlot({
         const id = twin.getAttribute("data-notice-twin");
         if (id) twins.set(id, (twin as HTMLElement).offsetHeight);
       }
-      return items.map((item) => {
+      const heights: number[] = [];
+      for (const item of items) {
         const id = item.querySelector("[data-notice-id]")?.getAttribute("data-notice-id");
-        return (id ? twins.get(id) : undefined) ?? item.offsetHeight;
-      });
+        const height = id ? twins.get(id) : undefined;
+        if (height === undefined) return null;
+        heights.push(height);
+      }
+      return heights;
     };
+    const contents = (items: HTMLElement[]) =>
+      items.map((item) => item.querySelector("[data-notice-content]")?.getAttribute("data-notice-content"));
     const listSpan = (heights: number[]) =>
       heights.reduce((sum, height) => sum + height, 0) + NOTICE_GAP_PX * (heights.length - 1);
 
@@ -331,10 +335,11 @@ export default function InCallNoticeSlot({
             (parseFloat(targetStyle.paddingRight) || 0),
         );
         const heights = fullHeights(items, laneWidth);
+        if (!heights) return;
         const obstacles = showsList || inPanel.room >= COMPACT_HEIGHT_PX + peekSpace
           ? []
           : collectObstacles(slot, slotRect, inPanel.panel);
-        const inputs = JSON.stringify(["panel", currentView, urgent, heights, inPanel.room, inPanel.top, inPanel.height, Math.round(slotRect.width), Math.round(slotRect.height), obstacles.map(roundRect)]);
+        const inputs = JSON.stringify(["panel", currentView, urgent, contents(items), heights, inPanel.room, inPanel.top, inPanel.height, slotRect.top, slotRect.width, slotRect.height, obstacles]);
         if (inputs === lastInputs) return;
         lastInputs = inputs;
         if (showsList) {
@@ -386,7 +391,8 @@ export default function InCallNoticeSlot({
       const bounds = { left: laneLeft, right: laneLeft + laneWidth, minTop, maxBottom: column.clientHeight };
       const obstacles = collectObstacles(slot, slotRect, coversPanel ? panel : slot.parentElement);
       const heights = fullHeights(items, laneWidth);
-      const inputs = JSON.stringify(["lane", currentView, coversPanel, urgent, heights, Math.round(contentLeft), Math.round(contentWidth), Math.round(bounds.minTop), Math.round(bounds.maxBottom), obstacles.map(roundRect)]);
+      if (!heights) return;
+      const inputs = JSON.stringify(["lane", currentView, coversPanel, urgent, contents(items), heights, contentLeft, contentWidth, cssMinTop, padLeft, bounds, obstacles]);
       if (inputs === lastInputs) return;
       lastInputs = inputs;
 
@@ -403,9 +409,9 @@ export default function InCallNoticeSlot({
           return;
         }
         const narrow = narrowLane(spot, padLeft);
-        const full = narrow
-          ? COMPACT_HEIGHT_PX * count + NOTICE_GAP_PX * (count - 1) + TOGGLE_HEIGHT_PX
-          : natural;
+        const narrowHeights = narrow ? fullHeights(items, narrow.width) : heights;
+        if (!narrowHeights) return;
+        const full = listSpan(narrowHeights) + TOGGLE_HEIGHT_PX;
         const height = Math.min(spot.height, full);
         commit({
           compact: false,
@@ -413,7 +419,7 @@ export default function InCallNoticeSlot({
           count,
           room: height - TOGGLE_HEIGHT_PX,
           narrow,
-          cramped: Boolean(narrow) || height < natural,
+          cramped: height < full,
         });
         return;
       }
@@ -552,8 +558,8 @@ export default function InCallNoticeSlot({
   const isExpanded = inSheet || (view === "list" && lane.count > 1);
   const compact = inSheet ? false : isExpanded ? Boolean(lane.cramped) : lane.compact;
   const laneContext = useMemo(
-    () => ({ compact, expanded: isExpanded, announce, probe }),
-    [compact, isExpanded, announce, probe],
+    () => ({ compact, expanded: isExpanded, probeExpanded: view !== "stack", announce, probe }),
+    [compact, isExpanded, view, announce, probe],
   );
   const toggleExpanded = () => setView((current) => (current === "stack" ? "list" : "stack"));
   const more = lane.count - 1;

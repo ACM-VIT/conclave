@@ -51,7 +51,8 @@ export default function InCallNoticeCard({
   useEffect(() => announce?.(content, tone), [announce, content, tone]);
 
   const face = (compact: boolean, twin: boolean) => {
-    const showDetail = Boolean(detail) && !compact && (isError || lane?.expanded || !lane);
+    const expanded = twin ? lane?.probeExpanded : lane?.expanded;
+    const showDetail = Boolean(detail) && !compact && (isError || expanded || !lane);
     return (
       <div
         data-notice-id={twin ? undefined : id}
