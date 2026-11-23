@@ -1964,6 +1964,36 @@ test("a database whose path holds a quote and spaces, with a table named with a 
   }
 });
 
+test("every store's own SQLite path is backed up, from the host config and from the SFU containers' env", needs, async () => {
+  // Greptile on #313: each store prefers its own variable over
+  // CONCLAVE_SQLITE_PATH, so those databases were never copied.
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, config, setDocker, backup, latestArchive, restore } = await setUp(root, [
+      "SCHEDULED_WEBINARS_SQLITE_PATH=/var/lib/conclave/recordings/webinars.db",
+    ]);
+    withDatabase(state);
+    makeDb(path.join(state, "webinars.db"), "webinar");
+    await mkdir(path.join(state, "meetings"));
+    makeDb(path.join(state, "meetings", "store.db"), "meeting");
+    // The SFU container sets one more that the host config does not.
+    await setDocker([{ id: "sfu-a", mounts: [state], status: "exited", env: ["SFU_PORT=9", "SFU_INSTANCE_ID=sfu-a", "SCHEDULED_MEETINGS_SQLITE_PATH=/var/lib/conclave/recordings/meetings/store.db"] }]);
+    await backup("--local-only");
+    await rm(state, { recursive: true });
+    await restore("--file", await latestArchive(), "--only", "sqlite", "--yes");
+    assert.deepEqual(rows(path.join(state, "webinars.db")), ["webinar"]);
+    assert.deepEqual(rows(path.join(state, "meetings", "store.db")), ["meeting"]);
+
+    // One outside the volume, or missing, fails the backup.
+    await writeFile(config, `${await readFile(config, "utf8")}\nSCHEDULING_SQLITE_PATH=/app/data/scheduling.db\n`);
+    await assert.rejects(backup("--local-only"), /SCHEDULING_SQLITE_PATH=\/app\/data\/scheduling\.db \(the backup config\) is outside the state dir/);
+    await writeFile(config, `${await readFile(config, "utf8")}\nSCHEDULING_SQLITE_PATH=/var/lib/conclave/recordings/gone.db\n`);
+    await assert.rejects(backup("--local-only"), /the configured database .*gone\.db is missing/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 // --- Greptile's four cases from the b55af173 round.
 
 test("Greptile: a link through a directory link and .. comes back as written and reaches the database it did", needs, async () => {
