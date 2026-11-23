@@ -2814,10 +2814,17 @@ export default function MeetsClient({
   }, [leaveRoom]);
 
   const reconnectPhase = reconnectRecoveryStatus?.phase;
+  const failureRecoverable = meetError?.recoverable;
   useEffect(() => {
-    if (!reconnectEndedCall(reconnectPhase, connectionState, callJoinedAtRef.current !== null)) return;
-    leaveRoomCommandRef.current?.();
-  }, [connectionState, reconnectPhase]);
+    const ended = reconnectEndedCall({
+      phase: reconnectPhase,
+      connectionState,
+      wasInCall: callJoinedAtRef.current !== null,
+      showsOutcome: showsCallOutcome,
+      recoverable: failureRecoverable,
+    });
+    if (ended) leaveRoomCommandRef.current?.();
+  }, [connectionState, failureRecoverable, reconnectPhase, showsCallOutcome]);
 
   const toggleBrowserAudio = useCallback(() => {
     if (browserAudioNeedsGesture) {
