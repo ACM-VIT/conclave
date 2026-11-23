@@ -65,6 +65,7 @@ jobs:
           PARSERS_HIT: ${{ steps.comment-parsers.outputs.cache-hit }}
         run: |
           pnpm comments:tools
+          pnpm comments:fetch-base
           if [ "$PARSERS_HIT" != "true" ]; then
             echo "CI_JOB_STARTED_AT=$(date +%s%3N)" >> "$GITHUB_ENV"
             echo "CI_BUDGET_FROM=the comment parsers were built, as their cache missed" >> "$GITHUB_ENV"

@@ -353,7 +353,9 @@ test("deleting Swift and Python files needs neither parser", (t) => {
   assert.equal(result.status, 0, result.stderr);
 });
 
-test("a missing base ref is fetched, never widened to a full scan", (t) => {
+const commitExists = (repo, ref) => spawnSync("git", ["-C", repo, "rev-parse", "--verify", "--quiet", `${ref}^{commit}`]).status === 0;
+
+test("a missing base ref fails naming the fetch command, and only --fetch-base fetches it", (t) => {
   const remote = repoWith(t, { "App.swift": "// one\nlet a = 1\n", "src/view.ts": "export const v = 1;\n", [BASELINE]: { "App.swift": 1 } });
   git(remote, "branch", "-q", "-m", "base", "staging");
   git(remote, "checkout", "-q", "-B", "feature", "staging");
@@ -361,17 +363,46 @@ test("a missing base ref is fetched, never widened to a full scan", (t) => {
   git(remote, "commit", "-q", "-m", "web only");
   const clone = mkdtempSync(path.join(tmpdir(), "comment-clone-"));
   t.after(() => rmSync(clone, { recursive: true, force: true }));
-  execFileSync("git", ["clone", "-q", "--depth", "1", "--single-branch", "--branch", "feature", `file://${remote}`, clone]);
+  execFileSync("git", ["clone", "-q", "--single-branch", "--branch", "feature", `file://${remote}`, clone]);
   const env = { ...cleanEnv(), PATH: pathWithOnly(t, ["git"]), COMMENT_RATCHET_BASE: "origin/staging", COMMENT_RATCHET_MODE: "merge-base" };
-  const fetched = spawnSync(process.execPath, [RATCHET, "--repo", clone], { encoding: "utf8", env });
-  assert.doesNotMatch(fetched.stdout + fetched.stderr, /every tracked file/);
-  assert.ok(
-    fetched.status === 0 || /shallow: run git fetch --unshallow origin/.test(fetched.stderr),
-    `${fetched.status}\n${fetched.stdout}\n${fetched.stderr}`,
-  );
-  git(clone, "remote", "set-url", "origin", path.join(clone, "missing-remote"));
-  git(clone, "update-ref", "-d", "refs/remotes/origin/staging");
-  const missing = spawnSync(process.execPath, [RATCHET, "--repo", clone], { encoding: "utf8", env });
+  const run = (...args) => spawnSync(process.execPath, [RATCHET, "--repo", clone, ...args], { encoding: "utf8", env });
+  const missing = run();
   assert.equal(missing.status, 2);
-  assert.match(missing.stderr, /base ref origin\/staging is missing: run git fetch origin staging/);
+  assert.match(missing.stderr, /base ref origin\/staging is missing from this clone: run `pnpm comments:fetch-base` first; the check never fetches/);
+  assert.equal(commitExists(clone, "origin/staging"), false);
+  const fetched = run("--fetch-base");
+  assert.equal(fetched.status, 0, fetched.stderr);
+  assert.equal(commitExists(clone, "origin/staging"), true);
+  git(clone, "remote", "set-url", "origin", path.join(clone, "missing-remote"));
+  const offline = run();
+  assert.equal(offline.status, 0, offline.stderr);
+  assert.doesNotMatch(offline.stdout + offline.stderr, /every tracked file/);
+});
+
+test("a partial clone missing a base file fails closed, and --fetch-base fills it in", (t) => {
+  const remote = repoWith(t, { "app.css": "/* one */\na { z-index: 1 }\n", [BASELINE]: { "app.css": 1 } });
+  git(remote, "branch", "-q", "-m", "base", "staging");
+  git(remote, "checkout", "-q", "-B", "feature", "staging");
+  write(remote, { "app.css": "/* one */\na { z-index: 2 }\n" });
+  git(remote, "commit", "-q", "-m", "same comment, new code");
+  git(remote, "config", "uploadpack.allowFilter", "true");
+  git(remote, "config", "uploadpack.allowAnySHA1InWant", "true");
+  const clone = mkdtempSync(path.join(tmpdir(), "comment-partial-"));
+  t.after(() => rmSync(clone, { recursive: true, force: true }));
+  execFileSync("git", ["clone", "-q", "--filter=blob:none", "--branch", "feature", `file://${remote}`, clone]);
+  const env = { ...cleanEnv(), COMMENT_RATCHET_BASE: "origin/staging", COMMENT_RATCHET_MODE: "merge-base" };
+  const run = (...args) => spawnSync(process.execPath, [RATCHET, "--repo", clone, ...args], { encoding: "utf8", env });
+  const reachable = git(clone, "remote", "get-url", "origin").trim();
+  git(clone, "remote", "set-url", "origin", path.join(clone, "missing-remote"));
+  const offline = run();
+  assert.equal(offline.status, 2, offline.stdout + offline.stderr);
+  assert.doesNotMatch(offline.stderr, /new comments|rose from/);
+  assert.match(offline.stderr, /the copy of app\.css at the base [0-9a-f]{8} is not in this clone, which is partial: run `pnpm comments:fetch-base` first/);
+  git(clone, "remote", "set-url", "origin", reachable);
+  const fetched = run("--fetch-base");
+  assert.equal(fetched.status, 0, fetched.stderr);
+  assert.match(fetched.stdout, /fetched [1-9]\d* file\(s\)/);
+  git(clone, "remote", "set-url", "origin", path.join(clone, "missing-remote"));
+  const ready = run();
+  assert.equal(ready.status, 0, ready.stderr);
 });

@@ -10,12 +10,16 @@ export const BASELINE_FILE = "scripts/quality/comments/baseline.json";
 export const ESLINT_SUPPRESSION_FILES = ["eslint-suppressions.json", "apps/web/eslint-suppressions.json"];
 const DEFAULT_BASE = "origin/staging";
 const UPDATE_COMMAND = "node scripts/quality/comments/ratchet.mjs --update";
+const FETCH_COMMAND = "pnpm comments:fetch-base";
+const NEVER_FETCHES = `run \`${FETCH_COMMAND}\` first; the check never fetches`;
 
-const git = (repo, args) =>
+const git = (repo, args, { input, network = false } = {}) =>
   execFileSync("git", ["-C", repo, ...args], {
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
-    stdio: ["ignore", "pipe", "ignore"],
+    input,
+    stdio: [input === undefined ? "ignore" : "pipe", "pipe", "ignore"],
+    env: network ? process.env : { ...process.env, GIT_NO_LAZY_FETCH: "1" },
   });
 
 const tryGit = (repo, args) => {
@@ -29,11 +33,13 @@ const tryGit = (repo, args) => {
 const ratchetedRecords = (repo, files = listSourceFiles(repo)) =>
   extractFiles(repo, files.filter((file) => languageOf(file) !== ESLINT_LANGUAGE));
 
+const changedFiles = (repo, base) => git(repo, ["diff", "--no-renames", "--name-only", "-z", base, "--"]).split("\0").filter((file) => file !== "");
+
 export const changedSince = (repo, bases) => {
   const files = new Set();
   for (const base of bases) {
-    for (const file of (tryGit(repo, ["diff", "--name-only", "-z", base, "--"]) ?? "").split("\0")) {
-      if (file !== "" && isFirstPartySource(file)) files.add(file);
+    for (const file of changedFiles(repo, base)) {
+      if (isFirstPartySource(file)) files.add(file);
     }
   }
   return [...files].sort();
@@ -72,16 +78,8 @@ const commitOf = (repo, ref) => tryGit(repo, ["rev-parse", "--verify", "--quiet"
 
 const mergeBaseWith = (repo, ref) => (commitOf(repo, ref) ? tryGit(repo, ["merge-base", "HEAD", ref])?.trim() : undefined);
 
-const fetchBranch = (repo, ref) => {
-  const match = /^origin\/(.+)$/.exec(ref);
-  if (!match) return false;
-  return tryGit(repo, ["fetch", "--quiet", "origin", `+refs/heads/${match[1]}:refs/remotes/origin/${match[1]}`]) !== undefined;
-};
-
-const commitOrFetch = (repo, ref) => commitOf(repo, ref) ?? (fetchBranch(repo, ref) ? commitOf(repo, ref) : undefined);
-
 const missingBase = (ref) => ({
-  error: `base ref ${ref} is missing: run git fetch origin ${ref.replace(/^origin\//, "")}`,
+  error: `base ref ${ref} is missing from this clone: ${NEVER_FETCHES}`,
 });
 
 const noMergeBase = (repo, ref) => ({
@@ -92,10 +90,10 @@ const noMergeBase = (repo, ref) => ({
 });
 
 export const resolveBases = (repo, baseRef, mode = "merge-base") => {
-  const commit = commitOrFetch(repo, baseRef);
+  const commit = commitOf(repo, baseRef);
   if (mode === "exact") {
     if (commit) return { bases: [commit] };
-    const stagingBase = commitOrFetch(repo, DEFAULT_BASE) ? mergeBaseWith(repo, DEFAULT_BASE) : undefined;
+    const stagingBase = mergeBaseWith(repo, DEFAULT_BASE);
     const fallbacks = [
       ["HEAD^1", parentOfHead(repo)],
       [`the merge base with ${DEFAULT_BASE}`, stagingBase],
@@ -118,16 +116,40 @@ const disallowedIn = (text, file) => extractComments(text, file).filter((comment
 
 const readIfPresent = (file) => (existsSync(file) ? readFileSync(file, "utf8") : undefined);
 
+const blobsAt = (repo, base, files) =>
+  new Map(
+    git(repo, ["ls-tree", "-r", "-z", base, "--", ...files])
+      .split("\0")
+      .map((entry) => /^\d+ blob ([0-9a-f]+)\t(.+)$/s.exec(entry))
+      .filter(Boolean)
+      .map(([, oid, file]) => [file, oid]),
+  );
+
+const textAt = (repo, base, file) => {
+  const oid = blobsAt(repo, base, [file]).get(file);
+  if (oid === undefined) return undefined;
+  const text = tryGit(repo, ["cat-file", "blob", oid]);
+  if (text === undefined) throw new Error(`the copy of ${file} at the base ${base.slice(0, 8)} is not in this clone, which is partial: ${NEVER_FETCHES}`);
+  return text;
+};
+
+const missingObjects = (repo, oids) =>
+  oids.length === 0
+    ? []
+    : git(repo, ["cat-file", "--batch-check=%(objectname)"], { input: `${oids.join("\n")}\n` })
+        .split("\n")
+        .map((line) => /^([0-9a-f]+) missing$/.exec(line)?.[1])
+        .filter(Boolean);
+
 export const countRisesSinceBase = (repo, base) => {
-  const present = (tryGit(repo, ["diff", "--name-only", "-z", base, "--"]) ?? "")
-    .split("\0")
-    .filter((file) => file !== "" && isFirstPartySource(file))
+  const present = changedFiles(repo, base)
+    .filter((file) => isFirstPartySource(file))
     .map((file) => ({ file, text: readIfPresent(path.join(repo, file)) }))
     .filter(({ text }) => text !== undefined);
   prepareFiles(present);
   const commented = present.map(({ file, text }) => ({ file, to: disallowedIn(text, file) })).filter(({ to }) => to > 0);
   const before = commented
-    .map(({ file }) => ({ file, text: tryGit(repo, ["show", `${base}:${file}`]) }))
+    .map(({ file }) => ({ file, text: textAt(repo, base, file) }))
     .filter(({ text }) => text !== undefined);
   prepareFiles(before);
   const fromCounts = new Map(before.map(({ file, text }) => [file, disallowedIn(text, file)]));
@@ -136,7 +158,7 @@ export const countRisesSinceBase = (repo, base) => {
 
 const baselineRisesSince = (repo, base) =>
   RATCHET_FILES.flatMap(({ file, flatten }) => {
-    const before = tryGit(repo, ["show", `${base}:${file}`]);
+    const before = textAt(repo, base, file);
     const local = path.join(repo, file);
     if (before === undefined || !existsSync(local)) return [];
     return compareCounts(flatten(JSON.parse(before)), flatten(readJson(local))).rises.map((rise) => ({
@@ -228,6 +250,36 @@ const check = (repo, baseline, baseRef, mode, { full = false } = {}) => {
   return 1;
 };
 
+const fetchRef = (repo, ref) => {
+  const branch = /^origin\/(.+)$/.exec(ref)?.[1];
+  const refspec = branch ? `+refs/heads/${branch}:refs/remotes/origin/${branch}` : /^[0-9a-f]{40}$/.test(ref) ? ref : undefined;
+  if (refspec && !commitOf(repo, ref)) tryGit(repo, ["fetch", "--quiet", "--no-tags", "origin", refspec], { network: true });
+};
+
+const fetchBase = (repo, baseRef, mode) => {
+  for (const ref of new Set([baseRef, DEFAULT_BASE])) fetchRef(repo, ref);
+  const resolved = resolveBases(repo, baseRef, mode);
+  if (resolved.error) {
+    console.error(`comment ratchet: ${resolved.error.replace(NEVER_FETCHES, "it could not be fetched from origin")}.`);
+    return 2;
+  }
+  const wanted = resolved.bases.flatMap((base) => [...blobsAt(repo, base, [...changedFiles(repo, base), ...RATCHET_FILES.map(({ file }) => file)]).values()]);
+  const missing = missingObjects(repo, [...new Set(wanted)]);
+  if (missing.length > 0) {
+    git(repo, ["fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--recurse-submodules=no", "--filter=blob:none", "--stdin", "origin"], {
+      input: `${missing.join("\n")}\n`,
+      network: true,
+    });
+  }
+  const left = missingObjects(repo, missing);
+  if (left.length > 0) {
+    console.error(`comment ratchet: origin did not send ${left.length} base file(s), such as ${left[0]}.`);
+    return 2;
+  }
+  console.log(`comment ratchet: the base is ready (${resolved.bases.map((base) => base.slice(0, 8)).join(", ")}), fetched ${missing.length} file(s).`);
+  return 0;
+};
+
 const writeBaseline = (file, counts) => {
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, `${JSON.stringify(counts, null, 2)}\n`);
@@ -268,9 +320,10 @@ const main = () => {
   if (args.includes("--init")) return init(repo, baselineFile);
   const baseline = existsSync(baselineFile) ? readJson(baselineFile) : {};
   if (args.includes("--update")) return update(repo, baselineFile, baseline);
-  return check(repo, baseline, process.env.COMMENT_RATCHET_BASE || DEFAULT_BASE, process.env.COMMENT_RATCHET_MODE || "merge-base", {
-    full: args.includes("--full"),
-  });
+  const baseRef = process.env.COMMENT_RATCHET_BASE || DEFAULT_BASE;
+  const mode = process.env.COMMENT_RATCHET_MODE || "merge-base";
+  if (args.includes("--fetch-base")) return fetchBase(repo, baseRef, mode);
+  return check(repo, baseline, baseRef, mode, { full: args.includes("--full") });
 };
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
