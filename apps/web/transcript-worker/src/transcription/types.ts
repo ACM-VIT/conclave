@@ -19,6 +19,9 @@ export type AcceptedUtterance = {
   lineId?: string;
 };
 
+/** Speech our voice check heard for an utterance after it was accepted, so its line takes that audio. */
+export type HeardSpeech = Pick<AcceptedUtterance, "speaker" | "since" | "turn" | "ownsNewAudio" | "lineId">;
+
 /** What the room knows about a chunk it sends: our voice check's reading, and the line it belongs to on a replay. */
 export type AudioContext = { voice: VoiceReading; turn: number; lineId?: string };
 
@@ -26,7 +29,7 @@ export type LiveTranscriptionCallbacks = {
   /** The provider took an utterance it owes a final for. */
   onAccepted?: (itemId: string, utterance: AcceptedUtterance) => void;
   /** Our voice check heard speech for an accepted utterance after it was accepted. */
-  onHeard?: (itemId: string, speaker: TranscriptSpeaker | null) => void;
+  onHeard?: (itemId: string, heard: HeardSpeech) => void;
   onCommitted: (itemId: string) => void;
   onDelta: (itemId: string, delta: string) => void;
   onFinal: (itemId: string, transcript: string) => void | Promise<void>;

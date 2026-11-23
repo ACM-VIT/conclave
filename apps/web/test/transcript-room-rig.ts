@@ -60,10 +60,11 @@ type TestRoom = {
 
 export const OPENAI = "gpt-live-transcribe";
 export const SARVAM = "saaras:v3";
-/** 200 ms chunks as the relays send them: speech, a quiet room, key clicks, silence. */
+/** 200 ms chunks as the relays send them: speech, speech too soft for our check, a quiet room, key clicks, silence. */
 export const AUDIO = {
   speech: pcmBase64(voicedPcm(-26)),
   softSpeech: pcmBase64(voicedPcm(-44)),
+  whisper: pcmBase64(voicedPcm(-56)),
   noise: pcmBase64(noisePcm(-60)),
   clicks: pcmBase64(clicksPcm(-12)),
   silence: pcmBase64(silencePcm()),

@@ -12,6 +12,7 @@ import {
   openAiDelta,
   openAiFinal,
   sarvamFinal,
+  sarvamSpeechEnd,
   sarvamSpeechStart,
   seeded,
   settle,
@@ -395,6 +396,37 @@ describe("a gap means our side heard speech", () => {
     expect(savedTexts()).toEqual(["First.", "Second."]);
   });
 
+  it("Sarvam: a false start right before someone talks on under their own signal leaves no gap", async () => {
+    vi.useFakeTimers();
+    quiet();
+    const { providerSockets, start, speak, sendAudio, endTurn, savedTexts, restartedTexts } = await rig(SARVAM);
+    await start("hi");
+    const [socket] = providerSockets();
+    await speak();
+    socket.emit(sarvamSpeechStart());
+    await endTurn();
+    socket.emit(sarvamFinal("one", "First."));
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    await sendAudio("noise");
+    await endTurn();
+    socket.emit(sarvamSpeechStart());
+    await speak();
+    socket.emit(sarvamSpeechStart());
+    for (const _ of [1, 2, 3, 4, 5, 6]) {
+      await vi.advanceTimersByTimeAsync(250);
+      await speak();
+    }
+    await endTurn();
+    await vi.advanceTimersByTimeAsync(1_600);
+    expect(await restartedTexts()).toEqual(["First.", GAP]);
+
+    socket.emit(sarvamFinal("two", ""));
+    socket.emit(sarvamFinal("three", "Second."));
+    await vi.advanceTimersByTimeAsync(DEADLINE + 100);
+    expect(savedTexts()).toEqual(["First.", "Second."]);
+  });
+
   it("Sarvam: a false start on speech our voice check heard ends as a gap", async () => {
     vi.useFakeTimers();
     quiet();
@@ -692,6 +724,8 @@ type Utterance = {
   text: string;
   noise: boolean;
   speaker: Speaker;
+  /** Speech chunks its audio was sent as. */
+  chunks: number;
   itemId: string;
   connection: Connection;
   placedAt: number | null;
@@ -779,6 +813,7 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         text: noise ? "" : `Line ${utterances.length}.`,
         noise,
         speaker: pick(SPEAKERS),
+        chunks: 1,
         itemId: `u${utterances.length}`,
         connection: live,
         placedAt: null,
@@ -822,7 +857,53 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         await endTurn(utterance.speaker);
         await vi.advanceTimersByTimeAsync(600 + random() * 800);
         live.socket.emit(sarvamSpeechStart());
+        utterance.deadlineAt = Date.now() + DEADLINE;
         live.awaiting.push(utterance);
+      },
+      async signalEarly() {
+        if (live.provider !== "sarvam" || !sarvamSignalsSpeech) return moves.utter();
+        await vi.advanceTimersByTimeAsync(1_600);
+        const utterance = newUtterance(false);
+        live.socket.emit(sarvamSpeechStart());
+        place(utterance);
+        live.awaiting.push(utterance);
+        await vi.advanceTimersByTimeAsync(50 + random() * 400);
+        await speak(utterance.speaker);
+        utterance.deadlineAt = Date.now() + DEADLINE;
+        await endTurn(utterance.speaker);
+        await vi.advanceTimersByTimeAsync(1_600);
+      },
+      async monologue() {
+        if (live.provider !== "sarvam") return moves.utter();
+        const utterance = newUtterance(false);
+        await speak(utterance.speaker);
+        if (sarvamSignalsSpeech) live.socket.emit(sarvamSpeechStart());
+        place(utterance);
+        live.awaiting.push(utterance);
+        for (let elapsed = 0; elapsed < DEADLINE + 2_000; elapsed += 1_000) {
+          await vi.advanceTimersByTimeAsync(1_000);
+          await speak(utterance.speaker);
+          utterance.chunks += 1;
+        }
+        utterance.deadlineAt = Date.now() + DEADLINE;
+        await endTurn(utterance.speaker);
+        if (sarvamSignalsSpeech) live.socket.emit(sarvamSpeechEnd());
+      },
+      async crosstalk() {
+        if (live.provider !== "sarvam" || !sarvamSignalsSpeech) return moves.utter();
+        await vi.advanceTimersByTimeAsync(1_600);
+        const first = newUtterance(false);
+        const second = newUtterance(false);
+        second.speaker = SPEAKERS.find(({ userId }) => userId !== first.speaker.userId)!;
+        for (const utterance of [first, second]) {
+          await speak(utterance.speaker);
+          await endTurn(utterance.speaker);
+        }
+        for (const utterance of [first, second]) {
+          live.socket.emit(sarvamSpeechStart());
+          place(utterance);
+          live.awaiting.push(utterance);
+        }
       },
       async noise() {
         acknowledgeLive();
@@ -955,16 +1036,17 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         }
         const replayed = [...owed, ...unacknowledged, ...buffered].sort((left, right) => left.index - right.index);
         for (const utterance of replayed) utterance.connection = live;
+        const replayedChunks = replayed.reduce((sum, { chunks }) => sum + chunks, 0);
         const sent = live.socket.sent;
         if (live.provider === "openai") {
           const commits = sent.filter(({ type }) => type === "input_audio_buffer.commit").length;
           const speech = sent.filter((message) => audioOf(message) === AUDIO.speech).length;
           expect(commits, "every owed line's audio is replayed with its commit").toBe(replayed.length);
-          expect(speech, "no line's replay audio was dropped by another line ending").toBe(replayed.length);
+          expect(speech, "no line's replay audio was dropped by another line ending").toBe(replayedChunks);
           live.unacknowledged = replayed;
         } else {
           const speech = sent.filter((message) => audioOf(message) === sarvamSpeechPayload).length;
-          expect(speech, "no line's replay audio was dropped by another line ending").toBe(replayed.length);
+          expect(speech, "no line's replay audio was dropped by another line ending").toBe(replayedChunks);
           if (sarvamSignalsSpeech) for (const _ of replayed) live.socket.emit(sarvamSpeechStart());
           live.awaiting = replayed;
         }
@@ -1036,6 +1118,9 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
     const weights: [string, number][] = [
       ["utter", 22],
       ["utterLate", 5],
+      ["signalEarly", 3],
+      ["monologue", 2],
+      ["crosstalk", 3],
       ["turnPair", 4],
       ["lateAck", 3],
       ["itemFails", 3],

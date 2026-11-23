@@ -110,7 +110,7 @@ import {
   connectLiveTranscriptionProvider,
   type LiveTranscriptionSession,
 } from "./transcription";
-import type { AcceptedUtterance } from "./transcription/types";
+import type { AcceptedUtterance, HeardSpeech } from "./transcription/types";
 import {
   TranscriptRecoveryAudioBuffer,
   isRetryableTranscriptionFailure,
@@ -1359,24 +1359,25 @@ export class TranscriptRoom {
 
   /**
    * Keeps a chunk for a replay with the line it belongs to: a Sarvam
-   * speaker's open line, else that speaker's audio no line owns yet, which
-   * a line accepted for it adopts. Sarvam's unowned audio is kept only as
-   * long as a late speech signal could still claim it, and is never
-   * replayed on its own.
+   * speaker's open line, which then waits 30 s from this chunk, else that
+   * speaker's audio no line owns yet, which a line accepted for it adopts.
+   * Sarvam's unowned audio is kept only as long as a late speech signal
+   * could still claim it, and is never replayed on its own.
    */
   private keepAudio(provider: string, speaker: TranscriptSpeaker, chunk: AudioChunk): void {
     const key = speakerKey(speaker);
     const owner = provider === "sarvam" ? this.ledger.get(this.speakingLine.get(key) ?? "") : undefined;
     if (owner?.state === "open") {
       owner.audio.push(chunk);
-      return;
+      owner.deadlineAt = Math.max(owner.deadlineAt, chunk.createdAt + TRANSCRIPTION_LINE_DEADLINE_MS);
+    } else {
+      const pending = this.uncommittedAudio.get(key) ?? { speaker, chunks: [] };
+      pending.chunks.push(chunk);
+      if (provider === "sarvam") {
+        pending.chunks = pending.chunks.filter(({ createdAt }) => chunk.createdAt - createdAt <= UNOWNED_AUDIO_KEPT_MS);
+      }
+      this.uncommittedAudio.set(key, pending);
     }
-    const pending = this.uncommittedAudio.get(key) ?? { speaker, chunks: [] };
-    pending.chunks.push(chunk);
-    if (provider === "sarvam") {
-      pending.chunks = pending.chunks.filter(({ createdAt }) => chunk.createdAt - createdAt <= UNOWNED_AUDIO_KEPT_MS);
-    }
-    this.uncommittedAudio.set(key, pending);
   }
 
   private voiceCheckFor(key: string): VoiceActivity {
@@ -1692,9 +1693,9 @@ export class TranscriptRoom {
             const connection = this.connectionFor(epoch);
             if (connection) this.acceptLine(connection, itemId, utterance);
           },
-          onHeard: (itemId, speaker) => {
+          onHeard: (itemId, heard) => {
             const connection = this.connectionFor(epoch);
-            if (connection) this.markLineHeard(connection, itemId, speaker);
+            if (connection) this.markLineHeard(connection, itemId, heard);
           },
           onCommitted: (itemId) => {
             const connection = this.connectionFor(epoch);
@@ -1913,15 +1914,29 @@ export class TranscriptRoom {
     this.armLineTimer();
   }
 
-  private markLineHeard(
-    connection: ProviderConnection,
-    providerItemId: string,
-    speaker: TranscriptSpeaker | null,
-  ): void {
+  /**
+   * Our check heard speech for a line after Sarvam signalled it: the line
+   * takes that speaker's audio from the signal on, in that turn, so a
+   * replay sends it as this line and its end lets that audio go; while the
+   * turn goes on, newer audio is the line's too.
+   */
+  private markLineHeard(connection: ProviderConnection, providerItemId: string, heard: HeardSpeech): void {
     const line = this.ledger.get(connection.providerToLine.get(providerItemId) ?? "");
     if (!line || !isActive(line)) return;
     line.heard = true;
-    if (speaker) this.setLineSpeaker(line, speaker);
+    if (heard.speaker) this.setLineSpeaker(line, heard.speaker);
+    if (connection === this.liveConnection && !heard.lineId) {
+      const taken = [
+        ...this.takeFromSpeakingLine(line.speaker, heard.since, heard.turn),
+        ...this.adoptAudio(line.speaker, heard.since, heard.turn),
+      ];
+      line.audio = [...line.audio, ...taken].sort((left, right) => left.createdAt - right.createdAt);
+      const lastAudioAt = line.audio.at(-1)?.createdAt;
+      if (lastAudioAt !== undefined) {
+        line.deadlineAt = Math.max(line.deadlineAt, lastAudioAt + TRANSCRIPTION_LINE_DEADLINE_MS);
+      }
+      if (heard.ownsNewAudio) this.speakingLine.set(speakerKey(line.speaker), line.id);
+    }
     void this.persist();
   }
 
