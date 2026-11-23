@@ -943,23 +943,28 @@ export const allowUserKeys = (
   const waiting = new Map(
     userKeys.map((userKey) => [userKey, room.waitingRequestsOfGuest(userKey)]),
   );
+  // Two keys of one guest name the same waiting requests. Each request is
+  // answered once: a second approval would start a second join.
+  const requests = new Map<string, WaitingRequest>();
+  for (const request of [...waiting.values()].flat()) {
+    requests.set(request.userKey, request);
+  }
   const keyScopes: AdmissionScope[] =
     options.allowWhenLocked || room.isLocked
       ? ["waitingRoom", "lock"]
       : ["waitingRoom"];
   const result = room.admitUserKeys([
-    ...[...waiting.values()]
-      .flat()
-      .map((request) => ({ userKey: request.userKey, scopes: lobbyScopes(room) })),
+    ...[...requests.values()].map((request) => ({
+      userKey: request.userKey,
+      scopes: lobbyScopes(room),
+    })),
     ...userKeys.map((userKey) => ({ userKey, scopes: keyScopes })),
   ]);
   if (result.status === "full") {
     return { ok: false, code: DECISION_RECORD_FULL, refused: result.refused };
   }
-  for (const requests of waiting.values()) {
-    for (const request of requests) {
-      request.socket.emit("joinApproved", { roomId: room.id });
-    }
+  for (const request of requests.values()) {
+    request.socket.emit("joinApproved", { roomId: room.id });
   }
   publishLobby(room);
   return {

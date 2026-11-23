@@ -2926,6 +2926,36 @@ describe("a host action when the decision record is full of refusals (Astra)", (
   });
 });
 
+describe("a host who lets in one guest by more than one key", () => {
+  it("tells each waiting tab once (Greptile)", async () => {
+    const state = makeState();
+    const host = await join(state, guestHost);
+    const room = state.rooms.get("conclave:room")!;
+    room.setLocked(true);
+    const tabOne = {
+      userId: "guest-gp_named-twice-tab-1",
+      clientId: "conclave",
+      sessionId: "named-twice-1",
+      guestProof: "proof-of-the-named-twice-pass",
+      guestRoom: "room",
+    } satisfies SfuAuthPayload;
+    const tabTwo = { ...tabOne, userId: "guest-gp_named-twice-tab-2", sessionId: "named-twice-2" } satisfies SfuAuthPayload;
+    const one = await join(state, tabOne);
+    const two = await join(state, tabTwo);
+    const waiting: unknown = expect.objectContaining({ status: "waiting" });
+    expect(one.ack).toHaveBeenCalledWith(waiting);
+    expect(two.ack).toHaveBeenCalledWith(waiting);
+
+    const ack = vi.fn();
+    await host.peer.handlers.get("admin:allowUsers")!(...([{ userKeys: [tabOne.userId, tabTwo.userId] }, ack] as never[]));
+
+    expect(ack).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+    const approvals = (peer: typeof one.peer) =>
+      (peer.emit.mock.calls as Array<[string, ...unknown[]]>).filter(([event]) => event === "joinApproved").length;
+    expect([approvals(one.peer), approvals(two.peer)]).toEqual([1, 1]);
+  });
+});
+
 describe("what ending a seat releases", () => {
   // A transcript relay that counts the audio it would send the worker: each
   // sync stands for the relay taking the room's producers and sending on.
