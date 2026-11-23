@@ -1,17 +1,25 @@
 "use client";
 
-import { memo, useEffect, useState, type ComponentType } from "react";
+import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
 import { LogOut, RotateCw } from "lucide-react";
 import { useSmartParticipantOrder } from "../hooks/useSmartParticipantOrder";
 import type { Participant } from "../lib/types";
 import { isSystemUserId } from "../lib/utils";
 import AdminNoticePill from "./AdminNoticePill";
+import LocalVideoTile from "./LocalVideoTile";
 import ParticipantVideo from "./ParticipantVideo";
-import RailLocalTile from "./RailLocalTile";
+import {
+  STAGE_RAIL_CLASS,
+  STAGE_RAIL_SHORT_LANDSCAPE_HIDDEN_CLASS,
+  STAGE_RAIL_TILE_CLASS,
+  STAGE_SPLIT_CLASS,
+} from "./stage-layout";
 
 interface MeetingAppLayoutProps {
-  app: ComponentType;
+  children: ReactNode;
+  stageId: string;
   frameContent?: boolean;
+  fullStageBelowLarge?: boolean;
   localStream: MediaStream | null;
   isCameraOff: boolean;
   isMuted: boolean;
@@ -26,7 +34,6 @@ interface MeetingAppLayoutProps {
   onAudioPlaybackStarted?: () => void;
   audioPlaybackAttemptToken?: number;
   getDisplayName: (userId: string) => string;
-  /** Lets this participant step out of a shared app without affecting others. */
   leaveAction?: { label: string; hint?: string; onLeave: () => void };
   syncFailed?: boolean;
   onRetrySync?: () => void;
@@ -46,8 +53,10 @@ const rejectedChangeNotice = (reason: string | null) => ({
 });
 
 function MeetingAppLayout({
-  app: App,
+  children,
+  stageId,
   frameContent = true,
+  fullStageBelowLarge = false,
   localStream,
   isCameraOff,
   isMuted,
@@ -80,94 +89,117 @@ function MeetingAppLayout({
     return () => window.clearTimeout(timer);
   }, [rejectedChangeAt]);
 
-  const isLocalActiveSpeaker = activeSpeakerId === currentUserId;
-
+  const remoteParticipants = useMemo(
+    () =>
+      Array.from(participants.values()).filter(
+        (participant) =>
+          !isSystemUserId(participant.userId) &&
+          participant.userId !== currentUserId,
+      ),
+    [currentUserId, participants],
+  );
   const participantsList = useSmartParticipantOrder(
-    Array.from(participants.values()).filter(
-      (participant) =>
-        !isSystemUserId(participant.userId) &&
-        participant.userId !== currentUserId,
-    ),
-    activeSpeakerId
+    remoteParticipants,
+    activeSpeakerId,
   );
 
   return (
-    <div className="mt-5 flex min-h-0 min-w-0 flex-1 gap-4 overflow-hidden">
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
-        {leaveAction ? (
-          <div className="flex shrink-0 items-center justify-end gap-3">
-            {leaveAction.hint ? (
-              <span className="hidden text-[12px] text-[#a1a1aa] sm:inline">
-                {leaveAction.hint}
-              </span>
-            ) : null}
-            <button
-              type="button"
-              onClick={leaveAction.onLeave}
-              className="inline-flex h-8 items-center gap-1.5 rounded-full border border-white/10 px-3 text-[12.5px] font-medium text-[#fafafa]/80 transition-colors hover:border-white/25 hover:bg-white/[0.06] hover:text-[#fafafa] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30"
-            >
-              <LogOut size={14} strokeWidth={1.75} aria-hidden="true" />
-              {leaveAction.label}
-            </button>
-          </div>
-        ) : null}
-        {syncFailed ? (
-          <div
-            role="status"
-            className="flex shrink-0 items-center justify-between gap-3 rounded-xl border border-white/10 bg-[#141414] px-3 py-2"
-          >
-            <span className="text-[12.5px] text-[#fafafa]/80">
-              {"Couldn't load this app"}
-            </span>
-            <button
-              type="button"
-              onClick={onRetrySync}
-              className="inline-flex h-7 items-center gap-1.5 rounded-full border border-white/10 px-3 text-[12px] font-medium text-[#fafafa]/85 transition-colors hover:border-white/25 hover:bg-white/[0.06] hover:text-[#fafafa] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30"
-            >
-              <RotateCw size={13} strokeWidth={1.75} aria-hidden="true" />
-              Retry
-            </button>
-          </div>
-        ) : null}
+    <div className="relative flex min-h-0 min-w-0 flex-1 p-4">
+      <div className={STAGE_SPLIT_CLASS}>
         <div
-          className={
-            frameContent
-              ? "relative min-h-0 min-w-0 flex-1 overflow-hidden rounded-2xl border border-white/10 bg-[#0b0b0b] shadow-[0_20px_60px_rgba(0,0,0,0.4)]"
-              : "relative min-h-0 min-w-0 flex-1 overflow-hidden"
-          }
+          className="flex min-h-0 min-w-0 flex-1 flex-col gap-2"
+          data-meet-stage-main={stageId}
         >
-          <div inert={frozen} className="contents">
-            <App key={documentsVersion} />
+          {leaveAction ? (
+            <div className="flex shrink-0 items-center justify-end gap-3">
+              {leaveAction.hint ? (
+                <span className="hidden text-[12px] text-[#a1a1aa] sm:inline">
+                  {leaveAction.hint}
+                </span>
+              ) : null}
+              <button
+                type="button"
+                onClick={leaveAction.onLeave}
+                className="inline-flex h-8 items-center gap-1.5 rounded-full border border-white/10 px-3 text-[12.5px] font-medium text-[#fafafa]/80 transition-colors hover:border-white/25 hover:bg-white/[0.06] hover:text-[#fafafa] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30"
+              >
+                <LogOut size={14} strokeWidth={1.75} aria-hidden="true" />
+                {leaveAction.label}
+              </button>
+            </div>
+          ) : null}
+          {syncFailed ? (
+            <div
+              role="status"
+              className="flex shrink-0 items-center justify-between gap-3 rounded-xl border border-white/10 bg-[#141414] px-3 py-2"
+            >
+              <span className="text-[12.5px] text-[#fafafa]/80">
+                {"Couldn't load this app"}
+              </span>
+              <button
+                type="button"
+                onClick={onRetrySync}
+                className="inline-flex h-7 items-center gap-1.5 rounded-full border border-white/10 px-3 text-[12px] font-medium text-[#fafafa]/85 transition-colors hover:border-white/25 hover:bg-white/[0.06] hover:text-[#fafafa] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30"
+              >
+                <RotateCw size={13} strokeWidth={1.75} aria-hidden="true" />
+                Retry
+              </button>
+            </div>
+          ) : null}
+          <div
+            className={
+              frameContent
+                ? "acm-stage-frame min-h-0 min-w-0 flex-1"
+                : "relative min-h-0 min-w-0 flex-1 overflow-hidden"
+            }
+          >
+            <div key={documentsVersion} inert={frozen} className="contents">
+              {children}
+            </div>
+            {noticeFor !== null && noticeFor === rejectedChangeAt ? (
+              <AdminNoticePill notice={rejectedChangeNotice(rejectedChangeReason)} compact />
+            ) : null}
           </div>
-          {noticeFor !== null && noticeFor === rejectedChangeAt ? <AdminNoticePill notice={rejectedChangeNotice(rejectedChangeReason)} compact /> : null}
+        </div>
+        <div
+          className={fullStageBelowLarge ? "hidden lg:contents" : "contents"}
+        >
+          <div
+            className={`${STAGE_RAIL_CLASS} ${STAGE_RAIL_SHORT_LANDSCAPE_HIDDEN_CLASS}`}
+            data-meet-stage-rail
+          >
+            <div className={STAGE_RAIL_TILE_CLASS} data-userid={currentUserId}>
+              <LocalVideoTile
+                stream={localStream}
+                isCameraOff={isCameraOff}
+                isMuted={isMuted}
+                isHandRaised={isHandRaised}
+                isMirrorCamera={isMirrorCamera}
+                displayName={getDisplayName(currentUserId)}
+                userEmail={userEmail}
+                isActiveSpeaker={activeSpeakerId === currentUserId}
+                size="rail"
+              />
+            </div>
+            {participantsList.map((participant) => (
+              <div
+                key={participant.userId}
+                className={STAGE_RAIL_TILE_CLASS}
+                data-userid={participant.userId}
+              >
+                <ParticipantVideo
+                  participant={participant}
+                  displayName={getDisplayName(participant.userId)}
+                  isActiveSpeaker={activeSpeakerId === participant.userId}
+                  audioOutputDeviceId={audioOutputDeviceId}
+                  onAudioAutoplayBlocked={onAudioAutoplayBlocked}
+                  onAudioPlaybackStarted={onAudioPlaybackStarted}
+                  audioPlaybackAttemptToken={audioPlaybackAttemptToken}
+                />
+              </div>
+            ))}
+          </div>
         </div>
       </div>
-      <aside className="hidden lg:flex w-64 shrink-0 flex-col gap-3 overflow-y-auto overflow-x-visible px-1">
-        <RailLocalTile
-          stream={localStream}
-          isCameraOff={isCameraOff}
-          isMuted={isMuted}
-          isHandRaised={isHandRaised}
-          isMirrorCamera={isMirrorCamera}
-          isActiveSpeaker={isLocalActiveSpeaker}
-          displayName={getDisplayName(currentUserId)}
-          userEmail={userEmail}
-        />
-
-        {participantsList.map((participant) => (
-          <ParticipantVideo
-            key={participant.userId}
-            participant={participant}
-            displayName={getDisplayName(participant.userId)}
-            isActiveSpeaker={activeSpeakerId === participant.userId}
-            compact
-            audioOutputDeviceId={audioOutputDeviceId}
-            onAudioAutoplayBlocked={onAudioAutoplayBlocked}
-            onAudioPlaybackStarted={onAudioPlaybackStarted}
-            audioPlaybackAttemptToken={audioPlaybackAttemptToken}
-          />
-        ))}
-      </aside>
     </div>
   );
 }

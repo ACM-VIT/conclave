@@ -13,7 +13,7 @@ const renderLayout = async (props: { syncFailed?: boolean; onRetrySync?: () => v
     root.render(
       <GameProvider socket={null}>
         <MeetingAppLayout
-          app={() => <div>board</div>}
+          stageId="app"
           localStream={null}
           isCameraOff
           isMuted
@@ -25,7 +25,9 @@ const renderLayout = async (props: { syncFailed?: boolean; onRetrySync?: () => v
           currentUserId="me"
           getDisplayName={() => "Me"}
           {...props}
-        />
+        >
+          <div>board</div>
+        </MeetingAppLayout>
       </GameProvider>,
     ),
   );

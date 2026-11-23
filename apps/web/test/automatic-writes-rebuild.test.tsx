@@ -81,13 +81,13 @@ const fakeSfu = (appId: string, serverDoc: Y.Doc) => {
   };
 };
 
-function Meeting({ app }: { app: ComponentType }) {
+function Meeting({ app: App }: { app: ComponentType }) {
   ctx = useContext(AppsContext)!;
   const { documents, isRebuilding, rejectedChangeAt, rejectedChangeReason } = useApps();
   if (!ctx.state.activeAppId) return null;
   return (
     <MeetingAppLayout
-      app={app}
+      stageId="app"
       documentsVersion={documents.version}
       frozen={isRebuilding}
       rejectedChangeAt={rejectedChangeAt}
@@ -102,7 +102,9 @@ function Meeting({ app }: { app: ComponentType }) {
       activeSpeakerId={null}
       currentUserId="me"
       getDisplayName={() => "Me"}
-    />
+    >
+      <App />
+    </MeetingAppLayout>
   );
 }
 
