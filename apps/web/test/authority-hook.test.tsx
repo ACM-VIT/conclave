@@ -487,6 +487,54 @@ it("does not ask again when a subscribe's answer is lost but its view arrives", 
   expect(server.count(AUTHORITY_EVENTS.subscribe)).toBe(1);
 });
 
+it("keeps a view that starts to come in parts after its answer was lost", async () => {
+  await mount();
+  await offer();
+  const subscribe = server.last(AUTHORITY_EVENTS.subscribe)!;
+  const part = (index: number, last: boolean) =>
+    act(async () =>
+      server.push(AUTHORITY_EVENTS.frame, {
+        kind: "replace",
+        subscription: subscribe.payload.subscription,
+        generation: 1,
+        serverNowMs: Date.now(),
+        part: index,
+        last,
+        rows: [{ bucket: "notes", key: `n${index}`, value: { text: `note ${index}` } }],
+        ...(index === 0 ? { grants: { actions: ["add"], needsIdentity: [], queries: [] } } : {}),
+      }),
+    );
+  // The answer is lost, then the view's first part arrives, slowly.
+  await act(async () => vi.advanceTimersByTimeAsync(5_100));
+  await part(0, false);
+  await act(async () => vi.advanceTimersByTimeAsync(60_000));
+  const askedWhileItCame = server.count(AUTHORITY_EVENTS.subscribe);
+  await part(1, true);
+
+  expect(askedWhileItCame).toBe(1);
+  expect(rendered()).toMatchObject({ kind: "ready", notes: ["note 0", "note 1"] });
+});
+
+it("does not ask again after a lost answer when the server then revokes the view", async () => {
+  await mount();
+  await offer();
+  const subscribe = server.last(AUTHORITY_EVENTS.subscribe)!;
+  await act(async () => vi.advanceTimersByTimeAsync(5_100));
+  await act(async () =>
+    server.push(AUTHORITY_EVENTS.frame, {
+      kind: "revoke",
+      subscription: subscribe.payload.subscription,
+      generation: 1,
+      serverNowMs: Date.now(),
+      reason: "forbidden",
+    }),
+  );
+  await act(async () => vi.advanceTimersByTimeAsync(60_000));
+
+  expect(server.count(AUTHORITY_EVENTS.subscribe)).toBe(1);
+  expect(rendered().kind).toBe("revoked");
+});
+
 it("still revokes the view when a subscribe is refused as forbidden", async () => {
   await mount();
   await offer();
