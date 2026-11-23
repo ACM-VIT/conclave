@@ -26,7 +26,7 @@ struct ACT6ZipTests {
     }
 
     private func makeSession() -> ActivitySession {
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         return ActivitySession(shell: shell, stage: StagePresenter(shell: shell))
     }
 

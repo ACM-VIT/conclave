@@ -184,7 +184,7 @@ struct SET6EffectsTests {
         #expect(EffectsSelfViewPolicy.corner(selfViewCorner: "bottom-left", lifted: true) == "top-right")
         #expect(EffectsSelfViewPolicy.corner(selfViewCorner: "bottom-left", lifted: false) == "bottom-left")
         for platform in [EffectsPlatform.ios, EffectsPlatform.android] {
-            let shell = MeetingShellPresenter()
+            let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
             let stage = StagePresenter(shell: shell)
             stage.effectsPlatform = platform
             stage.apply(StageFixtureScript.copy(StageFixtureScript.base(count: 2, localCameraOn: true), selfViewCorner: "bottom-left"))
@@ -220,10 +220,7 @@ struct SET6EffectsTests {
     }
 
     static func freshDefaults() -> UserDefaults {
-        let suite = "set6-effects-" + UUID().uuidString
-        let defaults = UserDefaults(suiteName: suite) ?? UserDefaults.standard
-        defaults.removePersistentDomain(forName: suite)
-        return defaults
+        IsolatedDefaults.make()
     }
 
     static func source(_ path: String) throws -> String {

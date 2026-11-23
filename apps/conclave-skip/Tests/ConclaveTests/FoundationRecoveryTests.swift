@@ -6,7 +6,7 @@ import Testing
 struct FoundationRecoveryTests {
     @Test
     func adminMuteCancelsMicrophoneWithoutAnInstalledProducer() async {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state.isMuted = false
         var localMuteCount = 0
         viewModel.webRTCClient.onLocalAudioEnabledChanged = { enabled in
@@ -28,7 +28,7 @@ struct FoundationRecoveryTests {
 
     @Test
     func adminCameraCloseDoesNotCancelMicrophoneIntent() async {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state.isMuted = false
         var localMuteCount = 0
         viewModel.webRTCClient.onLocalAudioEnabledChanged = { _ in
