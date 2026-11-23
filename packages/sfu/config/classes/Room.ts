@@ -286,6 +286,9 @@ export class Room {
   // Passes that a join token showed to be in one browser. Every proof of a
   // group maps to the same set.
   private guestPassGroups: Map<string, Set<string>> = new Map();
+  private guestPassIdentities: Map<string, { proof: string; since: number }> =
+    new Map();
+  private guestPassClock = 0;
   // Who waits, by guest: the keys of each guest's waiting tabs, oldest
   // first, and for each waiting key the guest it was filed under. With it
   // the lobby shows one row per guest, and a join finds its guest's
@@ -950,20 +953,46 @@ export class Room {
   private bindGuestProof(userKey: string, guestProof: string): void {
     const previous = this.guestProofsByUserKey.get(userKey);
     if (previous === guestProof) return;
-    if (previous !== undefined) this.userKeysByGuestProof.get(previous)?.delete(userKey);
+    if (previous !== undefined) this.dropKeyOfPass(userKey, previous);
     this.guestProofsByUserKey.set(userKey, guestProof);
     const userKeys = this.userKeysByGuestProof.get(guestProof);
     if (userKeys) userKeys.add(userKey);
     else this.userKeysByGuestProof.set(guestProof, new Set([userKey]));
+    if (!this.guestPassIdentities.has(guestProof)) {
+      this.guestPassIdentities.set(guestProof, {
+        proof: guestProof,
+        since: (this.guestPassClock += 1),
+      });
+    }
   }
 
   private unbindGuestProof(userKey: string): void {
     const guestProof = this.guestProofsByUserKey.get(userKey);
     if (guestProof === undefined) return;
     this.guestProofsByUserKey.delete(userKey);
+    this.dropKeyOfPass(userKey, guestProof);
+  }
+
+  private dropKeyOfPass(userKey: string, guestProof: string): void {
     const userKeys = this.userKeysByGuestProof.get(guestProof);
     userKeys?.delete(userKey);
     if (userKeys?.size === 0) this.userKeysByGuestProof.delete(guestProof);
+    this.forgetGuestPassIdentity(guestProof);
+  }
+
+  private forgetGuestPassIdentity(guestProof: string): void {
+    if (
+      !this.userKeysByGuestProof.has(guestProof) &&
+      !this.guestPassGroups.has(guestProof)
+    ) {
+      this.guestPassIdentities.delete(guestProof);
+    }
+  }
+
+  guestIdentityOf(userKey: string): string | undefined {
+    const guestProof = this.guestProofsByUserKey.get(userKey);
+    if (guestProof === undefined) return undefined;
+    return this.guestPassIdentities.get(guestProof)?.proof ?? guestProof;
   }
 
   private passesOfGuest(guestProof: string): Iterable<string> {
@@ -1120,6 +1149,13 @@ export class Room {
     const guestsBefore = [...new Set([...link.passes].map((proof) => this.guestOfPass(proof)))];
     const group = new Set(link.passes);
     for (const proof of group) this.guestPassGroups.set(proof, group);
+    let identity: { proof: string; since: number } | undefined;
+    for (const proof of group) {
+      const known = this.guestPassIdentities.get(proof);
+      if (known && (!identity || known.since < identity.since)) identity = known;
+    }
+    identity ??= { proof: link.guestProof, since: (this.guestPassClock += 1) };
+    for (const proof of group) this.guestPassIdentities.set(proof, identity);
     this.mergeWaitingGuests(guestsBefore, this.guestOfPass(link.guestProof));
     const settled: Array<{ request: WaitingRequest; admitted: boolean }> = [];
     for (const userKey of [
@@ -1417,6 +1453,7 @@ export class Room {
     for (const group of new Set(this.guestPassGroups.values())) {
       if ([...group].some((proof) => this.isKnownGuestPass(proof))) continue;
       for (const proof of group) this.guestPassGroups.delete(proof);
+      for (const proof of group) this.forgetGuestPassIdentity(proof);
     }
   }
 
@@ -3349,6 +3386,7 @@ export class Room {
     this.blockedUsers.clear();
     this.guestProofsByUserKey.clear();
     this.userKeysByGuestProof.clear();
+    this.guestPassIdentities.clear();
     this.guestIdentitiesToRelease.clear();
     this.admissions.clear();
     this.shownRowByGuest.clear();

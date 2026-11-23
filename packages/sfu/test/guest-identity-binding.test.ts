@@ -17,6 +17,7 @@ import {
 import type { Room } from "../config/classes/Room.js";
 import { config as sfuConfig } from "../config/config.js";
 import { Logger } from "../utilities/loggers.js";
+import { IdentityAdapter } from "../server/apps/authority/identity.js";
 import { createSfuApp } from "../server/http/createApp.js";
 import { createTranscriptRelayRegistry } from "../server/transcript/relayRegistry.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
@@ -3242,6 +3243,98 @@ describe("what ending a seat releases", () => {
       canReplaceExistingRelay: false,
     });
     expect(anyone).toMatchObject({ success: true });
+  });
+});
+
+describe("the identity the room's apps see for a guest (Daybreak)", () => {
+  const tabOf = (name: string, guestProof = `proof-of-${name}`) =>
+    ({
+      userId: `guest-gp_${name}`,
+      clientId: "conclave",
+      sessionId: name,
+      guestProof,
+      guestRoom: "room",
+    }) satisfies SfuAuthPayload;
+  const seatOf = (user: SfuAuthPayload) => `${user.userId}#${user.sessionId}`;
+  const inRoom = async () => {
+    const state = makeState();
+    await join(state, guestHost);
+    return { state, room: state.rooms.get("conclave:room")!, adapter: new IdentityAdapter() };
+  };
+  const seen = (room: Room, adapter: IdentityAdapter, user: SfuAuthPayload) =>
+    adapter.resolve(room, room.getClient(seatOf(user))!);
+
+  it("is one verified identity for the tabs of one pass, and another for another pass", async () => {
+    const { state, room, adapter } = await inRoom();
+    const first = tabOf("one-pass-tab-1", "proof-of-one-pass");
+    const second = tabOf("one-pass-tab-2", "proof-of-one-pass");
+    const other = tabOf("another-pass");
+    for (const user of [first, second, other]) {
+      expect((await join(state, user)).ack).toHaveBeenCalledWith(joined);
+    }
+
+    expect(seen(room, adapter, first)).toMatchObject({ verified: true });
+    expect(seen(room, adapter, second)).toEqual(seen(room, adapter, first));
+    expect(seen(room, adapter, other)?.verified).toBe(true);
+    expect(seen(room, adapter, other)?.subject).not.toBe(seen(room, adapter, first)?.subject);
+  });
+
+  it("stays the same when the tab comes back under another pass", async () => {
+    const { state, room, adapter } = await inRoom();
+    const before = tabOf("comes-back-under-another-pass");
+    await join(state, before);
+    const identity = seen(room, adapter, before);
+    const after = {
+      ...before,
+      userId: `${before.userId}-under-the-second-pass`,
+      guestProof: `${before.guestProof}-the-second`,
+      guestWas: formerSeats(before),
+    } satisfies SfuAuthPayload;
+
+    expect((await join(state, after)).ack).toHaveBeenCalledWith(joined);
+    await endOfTurn();
+
+    expect(room.getClient(seatOf(before))).toBeUndefined();
+    expect(identity).toMatchObject({ verified: true });
+    expect(seen(room, adapter, after)).toEqual(identity);
+  });
+
+  it("stays the same for a tab whose pass a later tab of the browser links to its own", async () => {
+    const { state, room, adapter } = await inRoom();
+    const first = tabOf("linked-first", "proof-of-the-first-pass");
+    await join(state, first);
+    const identity = seen(room, adapter, first);
+    const second = {
+      ...tabOf("linked-second", "proof-of-the-second-pass"),
+      guestWas: [{ userKey: "guest-gp_linked-second-under-the-first-pass", guestProof: "proof-of-the-first-pass" }],
+    } satisfies SfuAuthPayload;
+
+    expect((await join(state, second)).ack).toHaveBeenCalledWith(joined);
+
+    expect(identity).toMatchObject({ verified: true });
+    expect(seen(room, adapter, first)).toEqual(identity);
+    expect(seen(room, adapter, second)).toEqual(identity);
+  });
+
+  it("is unverified for a guest token with no pass", async () => {
+    const { state, room, adapter } = await inRoom();
+    const namesItself = { userId: "guest-names-itself", clientId: "conclave", sessionId: "names-itself" } satisfies SfuAuthPayload;
+
+    expect((await join(state, namesItself)).ack).toHaveBeenCalledWith(joined);
+
+    expect(seen(room, adapter, namesItself)?.verified).toBe(false);
+  });
+
+  it("is unverified for a pass the room does not vouch for, because the key came in without one", async () => {
+    const { state, room, adapter } = await inRoom();
+    const namesItself = { userId: "guest-came-in-without-a-pass", clientId: "conclave", sessionId: "came-in-without-a-pass" } satisfies SfuAuthPayload;
+    const first = await join(state, namesItself);
+    dropConnection(first.peer);
+
+    const withPass = { ...namesItself, guestProof: "proof-of-a-pass-shown-later" } satisfies SfuAuthPayload;
+    expect((await join(state, withPass)).ack).toHaveBeenCalledWith(joined);
+
+    expect(seen(room, adapter, withPass)?.verified).toBe(false);
   });
 });
 
