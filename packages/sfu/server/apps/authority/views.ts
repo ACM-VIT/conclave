@@ -34,11 +34,12 @@ type Untold = {
   /** While untold: whether the row is now other than it was before. */
   differs?: boolean;
   /**
-   * A row a clear took, and then another row took its key again, before
-   * every viewer was told of the clear. A viewer whose cursor is past `n`
-   * was told: they hold the key as it was at the clear, version `at`.
+   * Each time a clear took the row and another row took its key again
+   * before every viewer was told, oldest first. A viewer whose cursor is
+   * past a clear's `n` was told of it: they hold the key as it was at that
+   * clear, version `at`, until a later clear they were told of.
    */
-  owedAt?: { n: number; at: number };
+  owedAt?: { n: number; at: number }[];
 };
 
 /**
@@ -55,6 +56,8 @@ type Owed = {
   change: Untold;
   /** False once a row took the key again, or every viewer was told. */
   live: boolean;
+  /** An earlier clear of the key was told to some viewers: see `owedAt`. */
+  marked: boolean;
 };
 
 /** Where a viewer has got to in the rows clears took, in each of its audiences. */
@@ -102,6 +105,8 @@ type Audience = {
   owed: Owed[];
   /** Of those, the ones a viewer from before the clear held. */
   heldOwed: Owed[];
+  /** Live ones whose key some viewers were told of an earlier clear of. */
+  markedOwed: number;
   nextOwed: number;
   /** The first version any owed row changed at, and the last. */
   owedSince: number;
@@ -117,6 +122,7 @@ const newAudience = (of: AudienceOf): Audience => ({
   untoldUntil: Number.NEGATIVE_INFINITY,
   owed: [],
   heldOwed: [],
+  markedOwed: 0,
   nextOwed: 0,
   owedSince: Number.POSITIVE_INFINITY,
   owedUntil: Number.NEGATIVE_INFINITY,
@@ -172,10 +178,14 @@ const heldAt = (change: Untold, version: number): string | undefined => {
  * What a viewer at `version`, got to `cursor` in the rows clears took, holds
  * of a changed key.
  */
-const heldBy = (change: Untold, version: number, cursor: number): string | undefined =>
-  change.owedAt && cursor > change.owedAt.n
-    ? heldAt(change, Math.max(version, change.owedAt.at))
-    : heldAt(change, version);
+const heldBy = (change: Untold, version: number, cursor: number): string | undefined => {
+  let told: { n: number; at: number } | undefined;
+  for (const clear of change.owedAt ?? []) {
+    if (clear.n >= cursor) break;
+    told = clear;
+  }
+  return told ? heldAt(change, Math.max(version, told.at)) : heldAt(change, version);
+};
 
 /** The first place in rows clears took, kept in order, at or after `from`. */
 const firstOwed = (list: readonly Owed[], from: number): number => {
@@ -273,7 +283,7 @@ export class ViewChanges {
       Number.POSITIVE_INFINITY,
     );
     this.cut = told.reduce(
-      (first, change) => Math.min(first, change.owedAt?.n ?? Number.POSITIVE_INFINITY),
+      (first, change) => Math.min(first, change.owedAt?.[0]?.n ?? Number.POSITIVE_INFINITY),
       Number.POSITIVE_INFINITY,
     );
   }
@@ -637,7 +647,7 @@ export class ViewTracker {
   /** Whether such a viewer still holds a row a clear took, past where it got to. */
   private owedHeld(audience: Audience, version: number, from: number): boolean {
     if (audience.owed.length === 0 || version >= audience.owedUntil) return false;
-    if (version < audience.owedSince) {
+    if (version < audience.owedSince && audience.markedOwed === 0) {
       // They held every such row the audience held before the clear.
       const held = audience.heldOwed;
       while (held.length > 0 && !held[held.length - 1].live) held.pop();
@@ -647,7 +657,7 @@ export class ViewTracker {
       const owed = audience.owed[index];
       if (!owed.live) continue;
       this.work += 1;
-      if (heldAt(owed.change, version) !== undefined) return true;
+      if (heldBy(owed.change, version, from) !== undefined) return true;
     }
     return false;
   }
@@ -701,7 +711,7 @@ export class ViewTracker {
       const owed = audience.owed[index];
       if (!owed.live) continue;
       this.work += 1;
-      if (heldAt(owed.change, version) === undefined) continue;
+      if (heldBy(owed.change, version, from) === undefined) continue;
       if (walked.used === budget) {
         walked.next = owed.n;
         walked.more = true;
@@ -755,12 +765,14 @@ export class ViewTracker {
         owed.live = false;
         audience.buckets.get(owed.bucket)?.owed.delete(owed.key);
         this.owedLive -= 1;
+        if (owed.marked) audience.markedOwed -= 1;
       }
       drop += 1;
     }
     if (drop > 0) list.splice(0, drop);
     if (list.length === 0) {
       audience.heldOwed = [];
+      audience.markedOwed = 0;
       audience.owedSince = Number.POSITIVE_INFINITY;
       audience.owedUntil = Number.NEGATIVE_INFINITY;
     }
@@ -967,6 +979,10 @@ export class ViewTracker {
         owed.n = audience.nextOwed;
         audience.nextOwed += 1;
         audience.owed.push(owed);
+        if (owed.change.owedAt) {
+          owed.marked = true;
+          audience.markedOwed += 1;
+        }
         if (owed.change.before !== undefined) audience.heldOwed.push(owed);
         const { steps } = owed.change;
         audience.owedSince = Math.min(audience.owedSince, steps[0].at);
@@ -1094,9 +1110,10 @@ export class ViewTracker {
       // Those who were told hold it as the clear left it.
       owed.live = false;
       bucket.owed.delete(key);
+      if (owed.marked) audience.markedOwed -= 1;
       if (owed.n >= 0) {
         this.owedLive -= 1;
-        change.owedAt = { n: owed.n, at: change.steps[change.steps.length - 1].at };
+        (change.owedAt ??= []).push({ n: owed.n, at: change.steps[change.steps.length - 1].at });
       }
     }
     // One version is one moment: only where the key ended up in it counts.
@@ -1105,7 +1122,7 @@ export class ViewTracker {
     else change.steps.push({ at: this.version, encoded: next });
     if (later) {
       bucket.untold.delete(key);
-      const entry: Owed = { n: -1, bucket: name, key, change, live: true };
+      const entry: Owed = { n: -1, bucket: name, key, change, live: true, marked: false };
       bucket.owed.set(key, entry);
       const list = this.owing.get(audience);
       if (list) list.push(entry);
@@ -1115,7 +1132,7 @@ export class ViewTracker {
     bucket.untold.set(key, change);
     change.differs = next !== change.before;
     if (change.differs) audience.untoldDiffering += 1;
-    if (change.owedAt) audience.untoldCut = Math.min(audience.untoldCut, change.owedAt.n);
+    if (change.owedAt) audience.untoldCut = Math.min(audience.untoldCut, change.owedAt[0].n);
     audience.untoldSince = Math.min(audience.untoldSince, change.steps[0].at);
     audience.untoldUntil = Math.max(audience.untoldUntil, this.version);
     this.changed.add(audience);
