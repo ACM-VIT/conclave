@@ -25,10 +25,6 @@ export const shouldUseRedisPersistence = (
   return Boolean(redisUrl);
 };
 
-/** A write script refused because the store has no seeded marker, for example after Redis lost its data. */
-export const isNotSeededError = (error: unknown): boolean =>
-  /^NOSEED\b/.test(error instanceof Error ? error.message : String(error));
-
 export const createRedisPersistenceClient = (
   name: string,
   redisUrl: string,

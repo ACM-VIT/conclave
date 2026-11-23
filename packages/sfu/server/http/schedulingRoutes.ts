@@ -21,24 +21,22 @@ import {
   getProfileAvailability,
   getPublicEventType,
   getPublicProfile,
-  changeSchedulingHost,
   listEventTypes,
   moveSchedulingProfileToClient,
+  persistScheduling,
   setGoogleCalendarConnection,
   setProfileAvailability,
   updateEventType,
   updateSchedulingProfile,
   type BusyInterval,
-  type SchedulingStore,
-  mergePersistedScheduling,
 } from "../scheduling.js";
 import {
-  changeMeetings,
   createScheduledMeeting,
+  deleteScheduledMeeting,
   moveScheduledMeetingToClient,
+  persistScheduledMeetingChanges,
   updateScheduledMeeting,
   type BookingSlotLease,
-  type ScheduledMeetingStore,
 } from "../scheduledMeetings.js";
 import {
   isSchedulingEmailConfigured,
@@ -46,8 +44,6 @@ import {
   type SchedulingEmailDeliveryResult,
 } from "../schedulingEmails.js";
 import { buildSchedulingMeetingLink } from "../schedulingLinks.js";
-import { applyIfUnchanged, basisOf, retryInBackground, sameStoredValue } from "../persistThenApply.js";
-import { answerStoreFailure, ChangedElsewhereError } from "./persistenceUnavailable.js";
 import type { SfuState } from "../state.js";
 import {
   canonicalizeClientId,
@@ -60,7 +56,6 @@ import type {
   CalendarConnectionSummary,
   CreateBookingRequest,
   ScheduledMeeting,
-  UpdateScheduledMeetingRequest,
   SchedulingCalendarConnection,
   SchedulingEventType,
   SchedulingProfile,
@@ -193,70 +188,52 @@ const profilePayload = (
   calendar: getCalendarSummary(state.scheduling, profile.id),
 });
 
-const changeHost = <R>(
-  state: SfuState,
-  host: string | ((store: SchedulingStore) => string | null),
-  mutate: (draft: SchedulingStore, at: number) => R,
-): Promise<R> => changeSchedulingHost(state.scheduling, state.schedulingPersistence, host, mutate);
-
-/** The draft's copy of a host profile, which a change may edit. */
-const hostIn = (draft: SchedulingStore, profileId: string): SchedulingProfile => {
-  const profile = draft.profilesById.get(profileId);
-  if (!profile) throw new Error("Scheduling profile not found.");
-  return profile;
-};
-
-const committedProfile = (state: SfuState, profile: SchedulingProfile): SchedulingProfile =>
-  state.scheduling.profilesById.get(profile.id) ?? profile;
-
-const legacyProfileToMigrate = (
-  state: SfuState,
-  clientId: string,
-  userId: string,
-): SchedulingProfile | null => {
-  for (const legacyClientId of clientIdCandidates(clientId).slice(1)) {
-    const legacyProfile = getProfileByUser(state.scheduling, legacyClientId, userId);
-    if (!legacyProfile) continue;
-    // Only into the deployment's default client: the requested id comes
-    // from the request and must not move a profile's booking meetings out.
-    return canMigrateClientNamespace(legacyProfile.clientId, clientId) ? legacyProfile : null;
-  }
-  return null;
-};
-
-/**
- * Moves a legacy profile's booking meetings into `clientId`. It runs before
- * the profile moves, so a failure leaves the profile behind to try again.
- */
-const moveProfileMeetings = async (
+const migrateProfileNamespace = async (
   state: SfuState,
   profile: SchedulingProfile,
   clientId: string,
 ): Promise<void> => {
   const previousClientId = profile.clientId;
+  if (previousClientId === clientId) return;
   const eventTypeIds = new Set(
-    listEventTypes(state.scheduling, profile.id).map((eventType) => eventType.id),
+    Array.from(state.scheduling.eventTypesById.values())
+      .filter((eventType) => eventType.profileId === profile.id)
+      .map((eventType) => eventType.id),
   );
-  const belongsToProfile = (meeting: ScheduledMeeting): boolean =>
-    meeting.clientId === previousClientId &&
-    meeting.source === "booking_link" &&
-    Boolean(
+
+  moveSchedulingProfileToClient(state.scheduling, profile, clientId);
+
+  const changedMeetings: ScheduledMeeting[] = [];
+  for (const meeting of state.scheduledMeetings.byId.values()) {
+    if (meeting.clientId !== previousClientId) continue;
+    if (meeting.source !== "booking_link") continue;
+    const belongsToProfile =
       (meeting.eventTypeId && eventTypeIds.has(meeting.eventTypeId)) ||
-        (meeting.hostUserId && meeting.hostUserId === profile.userId) ||
-        meeting.hostEmail.trim().toLowerCase() === profile.email,
-    );
-  const profileMeetings = (store: ScheduledMeetingStore): string[] =>
-    [...store.byId.values()].filter(belongsToProfile).map((meeting) => meeting.id);
-  if (profileMeetings(state.scheduledMeetings).length === 0) return;
-  await changeMeetings(state.scheduledMeetings, state.scheduledMeetingPersistence, profileMeetings, (draft) => {
-    for (const id of profileMeetings(draft)) {
-      try {
-        moveScheduledMeetingToClient(draft, id, clientId);
-      } catch (error) {
-        Logger.warn(`Skipped scheduled meeting namespace migration for ${id}`, error);
-      }
+      (meeting.hostUserId && meeting.hostUserId === profile.userId) ||
+      meeting.hostEmail.trim().toLowerCase() === profile.email;
+    if (!belongsToProfile) continue;
+    try {
+      const moved = moveScheduledMeetingToClient(
+        state.scheduledMeetings,
+        meeting.id,
+        clientId,
+      );
+      if (moved) changedMeetings.push(moved);
+    } catch (error) {
+      Logger.warn(
+        `Skipped scheduled meeting namespace migration for ${meeting.id}`,
+        error,
+      );
     }
-  });
+  }
+
+  if (changedMeetings.length > 0 && state.scheduledMeetingPersistence) {
+    await persistScheduledMeetingChanges(
+      state.scheduledMeetings,
+      state.scheduledMeetingPersistence,
+      changedMeetings,
+    );
+  }
 };
 
 const requireHostProfile = async (
@@ -264,31 +241,41 @@ const requireHostProfile = async (
   res: Response,
   state: SfuState,
 ): Promise<SchedulingProfile | null> => {
-  const { email, name, userId } = resolveUserContext(req);
-  if (!email || !userId) {
+  const user = resolveUserContext(req);
+  if (!user.email || !user.userId) {
     res.status(400).json({ error: "User context required" });
     return null;
   }
   const clientId = resolveClientId(req);
-  if (!getProfileByUser(state.scheduling, clientId, userId) && state.schedulingPersistence) {
-    await mergePersistedScheduling(state.scheduling, state.schedulingPersistence);
-  }
-  const legacy = getProfileByUser(state.scheduling, clientId, userId)
-    ? null
-    : legacyProfileToMigrate(state, clientId, userId);
-  if (legacy) await moveProfileMeetings(state, legacy, clientId);
-  const timeZone = readString(requestBody(req), "timeZone");
-  const profile = await changeHost(
-    state,
-    (store) => getProfileByUser(store, clientId, userId)?.id ?? legacy?.id ?? null,
-    (draft) => {
-      if (legacy && draft.profilesById.has(legacy.id) && !getProfileByUser(draft, clientId, userId)) {
-        moveSchedulingProfileToClient(draft, hostIn(draft, legacy.id), clientId);
-      }
-      return ensureSchedulingProfile(draft, { clientId, userId, email, name, timeZone });
-    },
+  const existingProfile = getProfileByUser(
+    state.scheduling,
+    clientId,
+    user.userId,
   );
-  return committedProfile(state, profile);
+  if (!existingProfile) {
+    for (const legacyClientId of clientIdCandidates(clientId).slice(1)) {
+      const legacyProfile = getProfileByUser(
+        state.scheduling,
+        legacyClientId,
+        user.userId,
+      );
+      if (!legacyProfile) continue;
+      // Only into the deployment's default client: the requested id comes
+      // from the request and must not move a profile's booking meetings out.
+      if (!canMigrateClientNamespace(legacyProfile.clientId, clientId)) break;
+      await migrateProfileNamespace(state, legacyProfile, clientId);
+      break;
+    }
+  }
+  const profile = ensureSchedulingProfile(state.scheduling, {
+    clientId,
+    userId: user.userId,
+    email: user.email,
+    name: user.name,
+    timeZone: readString(requestBody(req), "timeZone"),
+  });
+  await persistScheduling(state.scheduling, state.schedulingPersistence);
+  return profile;
 };
 
 const requireConnectedCalendar = (
@@ -363,9 +350,16 @@ const acquireBookingSlotLease = async (
   }
 };
 
-const answerFailure = (res: Response, error: unknown, status: number): void => {
-  if (answerStoreFailure(res, error)) return;
-  res.status(status).json({ error: (error as Error).message });
+const persistMeetingChange = async (
+  state: SfuState,
+  meeting: ScheduledMeeting,
+): Promise<void> => {
+  if (!state.scheduledMeetingPersistence) return;
+  await persistScheduledMeetingChanges(
+    state.scheduledMeetings,
+    state.scheduledMeetingPersistence,
+    [meeting],
+  );
 };
 
 class GoogleCalendarApiError extends Error {
@@ -416,106 +410,69 @@ const googleFetchJson = async <T>(
   return data as T;
 };
 
-type CalendarCredentials = {
-  profileId: string;
-  id: string;
-  refreshToken: string | null;
-  accessToken: string | null;
-  accessTokenExpiresAt: number | null;
-  calendarId: string;
-};
-
-type CalendarGrant = Pick<CalendarCredentials, "profileId" | "id" | "refreshToken">;
-
-const credentialsOf = (connection: SchedulingCalendarConnection): CalendarCredentials =>
-  structuredClone({
-    profileId: connection.profileId,
-    id: connection.id,
-    refreshToken: connection.refreshToken,
-    accessToken: connection.accessToken,
-    accessTokenExpiresAt: connection.accessTokenExpiresAt,
-    calendarId: connection.calendarId || "primary",
-  });
-
-const grantOf = (holder: CalendarGrant): CalendarGrant => ({
-  profileId: holder.profileId,
-  id: holder.id,
-  refreshToken: holder.refreshToken,
-});
-
-const grantStillHeld = (state: SfuState, grant: CalendarGrant): boolean => {
-  const connection = state.scheduling.calendarByProfileId.get(grant.profileId);
-  return Boolean(connection) && sameStoredValue(grantOf(connection!), grantOf(grant));
-};
-
-const accessTokenFor = async (state: SfuState, credentials: CalendarCredentials): Promise<string> => {
-  if (credentials.accessToken && credentials.accessTokenExpiresAt && credentials.accessTokenExpiresAt > Date.now() + 60_000) {
-    return credentials.accessToken;
+const refreshGoogleAccessToken = async (
+  state: SfuState,
+  connection: SchedulingCalendarConnection,
+): Promise<string> => {
+  if (
+    connection.accessToken &&
+    connection.accessTokenExpiresAt &&
+    connection.accessTokenExpiresAt > Date.now() + 60_000
+  ) {
+    return connection.accessToken;
   }
+
   const config = requireGoogleConfig();
   const body = new URLSearchParams({
     client_id: config.clientId,
     client_secret: config.clientSecret,
-    refresh_token: credentials.refreshToken || "",
+    refresh_token: connection.refreshToken || "",
     grant_type: "refresh_token",
   });
-  let token: { access_token?: string; expires_in?: number; scope?: string };
+  let token: {
+    access_token?: string;
+    expires_in?: number;
+    scope?: string;
+  };
   try {
-    token = await googleFetchJson<{ access_token?: string; expires_in?: number; scope?: string }>(GOOGLE_TOKEN_URL, {
+    token = await googleFetchJson<{
+      access_token?: string;
+      expires_in?: number;
+      scope?: string;
+    }>(GOOGLE_TOKEN_URL, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body,
     });
   } catch (error) {
-    if (shouldMarkCalendarReconnectRequired(error)) await markCalendarError(state, credentials, error);
+    if (shouldMarkCalendarReconnectRequired(error)) {
+      await markCalendarError(state, connection, error);
+    }
     throw error;
   }
-  if (!token.access_token) throw new Error("Google did not return an access token.");
-  credentials.accessToken = token.access_token;
-  credentials.accessTokenExpiresAt = Date.now() + Math.max(token.expires_in ?? 3600, 60) * 1000;
-  await saveConnectionState(state, credentials, "refreshed Google access token", {
-    accessToken: credentials.accessToken,
-    accessTokenExpiresAt: credentials.accessTokenExpiresAt,
-    status: "connected",
-    error: null,
-  });
-  return credentials.accessToken;
-};
-
-const CALENDAR_CHANGED = "Google Calendar was reconnected while this booking synced.";
-
-const tokenForHeldGrant = async (state: SfuState, credentials: CalendarCredentials): Promise<string | null> => {
-  const accessToken = await accessTokenFor(state, credentials);
-  return grantStillHeld(state, credentials) ? accessToken : null;
-};
-
-const saveConnectionState = async (
-  state: SfuState,
-  grant: CalendarGrant,
-  what: string,
-  patch: Partial<SchedulingCalendarConnection>,
-): Promise<void> => {
-  const basis = grantOf(grant);
-  try {
-    await changeHost(state, basis.profileId, (draft, at) =>
-      applyIfUnchanged(what, draft.calendarByProfileId.get(basis.profileId), basis, (held) =>
-        Object.assign(held, patch, { updatedAt: at }),
-      ),
-    );
-  } catch (error) {
-    Logger.warn(`Failed to save ${what}`, error);
+  if (!token.access_token) {
+    throw new Error("Google did not return an access token.");
   }
+  connection.accessToken = token.access_token;
+  connection.accessTokenExpiresAt =
+    Date.now() + Math.max(token.expires_in ?? 3600, 60) * 1000;
+  connection.status = "connected";
+  connection.error = null;
+  connection.updatedAt = Date.now();
+  await persistScheduling(state.scheduling, state.schedulingPersistence);
+  return connection.accessToken;
 };
 
-const markCalendarError = (
+const markCalendarError = async (
   state: SfuState,
-  grant: CalendarGrant,
+  connection: SchedulingCalendarConnection,
   error: unknown,
-): Promise<void> =>
-  saveConnectionState(state, grant, "calendar reconnect mark", {
-    status: "needs_reconnect",
-    error: (error as Error).message || "Google Calendar sync failed.",
-  });
+): Promise<void> => {
+  connection.status = "needs_reconnect";
+  connection.error = (error as Error).message || "Google Calendar sync failed.";
+  connection.updatedAt = Date.now();
+  await persistScheduling(state.scheduling, state.schedulingPersistence);
+};
 
 const shouldMarkCalendarReconnectRequired = (error: unknown): boolean =>
   error instanceof GoogleCalendarApiError &&
@@ -526,11 +483,11 @@ const shouldMarkCalendarReconnectRequired = (error: unknown): boolean =>
 
 const fetchGoogleBusy = async (
   state: SfuState,
-  credentials: CalendarCredentials,
+  connection: SchedulingCalendarConnection,
   timeMin: number,
   timeMax: number,
 ): Promise<BusyInterval[]> => {
-  const accessToken = await accessTokenFor(state, credentials);
+  const accessToken = await refreshGoogleAccessToken(state, connection);
   const data = await googleFetchJson<{
     calendars?: Record<string, { busy?: Array<{ start?: string; end?: string }> }>;
   }>(GOOGLE_FREEBUSY_URL, {
@@ -542,10 +499,11 @@ const fetchGoogleBusy = async (
     body: JSON.stringify({
       timeMin: new Date(timeMin).toISOString(),
       timeMax: new Date(timeMax).toISOString(),
-      items: [{ id: credentials.calendarId }],
+      items: [{ id: connection.calendarId || "primary" }],
     }),
   });
-  const busy = data.calendars?.[credentials.calendarId]?.busy;
+  const calendarId = connection.calendarId || "primary";
+  const busy = data.calendars?.[calendarId]?.busy;
   if (!Array.isArray(busy)) {
     throw new Error("Google Calendar returned an invalid freebusy response.");
   }
@@ -561,14 +519,14 @@ const fetchGoogleBusy = async (
 
 const fetchOptionalGoogleBusy = async (
   state: SfuState,
-  credentials: CalendarCredentials | null,
+  connection: SchedulingCalendarConnection | null,
   eventType: SchedulingEventType,
   timeMin: number,
   timeMax: number,
 ): Promise<BusyInterval[]> => {
-  if (!credentials) return [];
+  if (!connection) return [];
   try {
-    return await fetchGoogleBusy(state, credentials, timeMin, timeMax);
+    return await fetchGoogleBusy(state, connection, timeMin, timeMax);
   } catch (error) {
     if (eventType.requiresCalendar) throw error;
     Logger.warn(
@@ -579,28 +537,9 @@ const fetchOptionalGoogleBusy = async (
   }
 };
 
-type EventTimes = { startAt: number; endAt: number };
-
-type BookingCalendarEvent = {
-  id: string;
-  credentials: CalendarCredentials;
-  timeZone: string;
-  googleTimes: EventTimes | null;
-};
-
-const calendarEventsUrl = (calendarId: string, eventId?: string): string =>
-  `${GOOGLE_CALENDAR_API}/calendars/${encodeURIComponent(calendarId)}/events${
-    eventId ? `/${encodeURIComponent(eventId)}` : ""
-  }?sendUpdates=none`;
-
-const eventTimes = (startAt: number, endAt: number, timeZone: string) => ({
-  start: { dateTime: new Date(startAt).toISOString(), timeZone },
-  end: { dateTime: new Date(endAt).toISOString(), timeZone },
-});
-
 const createGoogleCalendarEvent = async (
   state: SfuState,
-  credentials: CalendarCredentials,
+  connection: SchedulingCalendarConnection,
   input: {
     title: string;
     description: string;
@@ -611,11 +550,13 @@ const createGoogleCalendarEvent = async (
     attendeeName: string;
     attendeeEmail: string;
   },
-): Promise<BookingCalendarEvent> => {
+): Promise<string> => {
   try {
-    const accessToken = await tokenForHeldGrant(state, credentials);
-    if (!accessToken) throw new Error(CALENDAR_CHANGED);
-    const data = await googleFetchJson<{ id?: string }>(calendarEventsUrl(credentials.calendarId), {
+    const accessToken = await refreshGoogleAccessToken(state, connection);
+    const url = `${GOOGLE_CALENDAR_API}/calendars/${encodeURIComponent(
+      connection.calendarId || "primary",
+    )}/events?sendUpdates=none`;
+    const data = await googleFetchJson<{ id?: string }>(url, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -625,7 +566,14 @@ const createGoogleCalendarEvent = async (
         summary: input.title,
         location: "Conclave room",
         description: `${input.description ? `${input.description}\n\n` : ""}Join Conclave: ${input.meetingLink}`,
-        ...eventTimes(input.startAt, input.endAt, input.timeZone),
+        start: {
+          dateTime: new Date(input.startAt).toISOString(),
+          timeZone: input.timeZone,
+        },
+        end: {
+          dateTime: new Date(input.endAt).toISOString(),
+          timeZone: input.timeZone,
+        },
         attendees: [
           {
             email: input.attendeeEmail,
@@ -635,94 +583,13 @@ const createGoogleCalendarEvent = async (
       }),
     });
     if (!data.id) throw new Error("Google did not return an event id.");
-    return {
-      id: data.id,
-      credentials,
-      timeZone: input.timeZone,
-      googleTimes: { startAt: input.startAt, endAt: input.endAt },
-    };
+    return data.id;
   } catch (error) {
     if (shouldMarkCalendarReconnectRequired(error)) {
-      await markCalendarError(state, credentials, error);
+      await markCalendarError(state, connection, error);
     }
     throw error;
   }
-};
-
-const moveGoogleCalendarEvent = async (
-  state: SfuState,
-  event: BookingCalendarEvent,
-  times: EventTimes,
-): Promise<void> => {
-  event.googleTimes = null;
-  const accessToken = await tokenForHeldGrant(state, event.credentials);
-  if (!accessToken) return;
-  await googleFetchJson<{ id?: string }>(calendarEventsUrl(event.credentials.calendarId, event.id), {
-    method: "PATCH",
-    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-    body: JSON.stringify(eventTimes(times.startAt, times.endAt, event.timeZone)),
-  });
-  event.googleTimes = times;
-};
-
-const deleteGoogleCalendarEvent = async (state: SfuState, event: BookingCalendarEvent): Promise<void> => {
-  const accessToken = await accessTokenFor(state, event.credentials);
-  const response = await fetch(calendarEventsUrl(event.credentials.calendarId, event.id), {
-    method: "DELETE",
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
-  if (!response.ok && response.status !== 404 && response.status !== 410) {
-    throw new GoogleCalendarApiError(response.statusText || "Google Calendar delete failed.", response.status);
-  }
-};
-
-const MAX_SETTLE_ROUNDS = 5;
-
-const settleBookingEvent = async (
-  state: SfuState,
-  meetingId: string,
-  event: BookingCalendarEvent,
-): Promise<void> => {
-  for (let round = 0; round < MAX_SETTLE_ROUNDS; round += 1) {
-    if (!grantStillHeld(state, event.credentials)) {
-      await deleteGoogleCalendarEvent(state, event);
-      Logger.info(`Deleted Google event ${event.id}: the host reconnected Google Calendar while booking ${meetingId} synced`);
-      await changeMeetings(state.scheduledMeetings, state.scheduledMeetingPersistence, [meetingId], (draft) =>
-        draft.byId.has(meetingId)
-          ? updateScheduledMeeting(draft, meetingId, {
-              googleCalendarEventId: null,
-              calendarSyncStatus: "failed",
-              calendarSyncError: CALENDAR_CHANGED,
-            })
-          : null,
-      );
-      return;
-    }
-    const recorded = await changeMeetings(state.scheduledMeetings, state.scheduledMeetingPersistence, [meetingId], (draft) => {
-      const held = draft.byId.get(meetingId);
-      if (!held) return null;
-      const times = { startAt: held.scheduledStartAt, endAt: held.scheduledEndAt };
-      const settled =
-        event.googleTimes !== null && sameStoredValue(event.googleTimes, times) && grantStillHeld(state, event.credentials);
-      updateScheduledMeeting(draft, meetingId, {
-        googleCalendarEventId: event.id,
-        calendarSyncStatus: settled ? "synced" : "pending",
-        calendarSyncError: null,
-      });
-      return { settled, times };
-    });
-    if (!recorded) {
-      await deleteGoogleCalendarEvent(state, event);
-      Logger.info(`Deleted Google event ${event.id}: booking ${meetingId} was removed while it synced`);
-      return;
-    }
-    if (!grantStillHeld(state, event.credentials)) continue;
-    if (recorded.settled) return;
-    if (event.googleTimes === null || !sameStoredValue(event.googleTimes, recorded.times)) {
-      await moveGoogleCalendarEvent(state, event, recorded.times);
-    }
-  }
-  throw new Error(`Booking ${meetingId} kept moving while its Google event synced`);
 };
 
 const meetingMatchesProfile = (
@@ -779,7 +646,7 @@ const resolvePublicTarget = (
   | {
       profile: SchedulingProfile;
       eventType: SchedulingEventType;
-      calendar: CalendarCredentials | null;
+      calendar: SchedulingCalendarConnection | null;
     }
   | { error: string; status: number } => {
   const profile = getPublicProfile(state.scheduling, clientId, username);
@@ -789,35 +656,7 @@ const resolvePublicTarget = (
     return { error: "Event type is not available.", status: 404 };
   }
   const calendar = requireConnectedCalendar(state, profile);
-  return {
-    profile: structuredClone(profile),
-    eventType: structuredClone(eventType),
-    calendar: calendar ? credentialsOf(calendar) : null,
-  };
-};
-
-const BOOKED_PROFILE_FIELDS = ["clientId", "userId", "email", "name", "timeZone"] as const;
-
-const sameCalendarGrant = (state: SfuState, profile: SchedulingProfile, calendar: CalendarCredentials | null): boolean => {
-  if (calendar) return grantStillHeld(state, calendar);
-  return !requireConnectedCalendar(state, profile);
-};
-
-const assertBookingPageUnchanged = (
-  state: SfuState,
-  target: { profile: SchedulingProfile; eventType: SchedulingEventType; calendar: CalendarCredentials | null },
-): void => {
-  const eventType = state.scheduling.eventTypesById.get(target.eventType.id);
-  const profile = state.scheduling.profilesById.get(target.profile.id);
-  if (
-    !eventType ||
-    !profile ||
-    !sameStoredValue(eventType, target.eventType) ||
-    !sameStoredValue(basisOf(profile, BOOKED_PROFILE_FIELDS), basisOf(target.profile, BOOKED_PROFILE_FIELDS)) ||
-    !sameCalendarGrant(state, profile, target.calendar)
-  ) {
-    throw new ChangedElsewhereError("booking page");
-  }
+  return { profile, eventType, calendar };
 };
 
 const resolvePublicTargetForClients = (
@@ -862,42 +701,31 @@ const buildConfirmation = (
   emailNotificationStatus: meeting.emailNotificationStatus ?? "not_configured",
 });
 
-/**
- * Runs a step that comes after a booking was saved. The booking already
- * exists, so a failure is logged and the step retried in the background,
- * never turned into an error for the guest. Every step is safe to repeat.
- */
-const followUpBooking = async (what: string, step: () => Promise<unknown>): Promise<void> => {
-  try {
-    await step();
-  } catch (error) {
-    Logger.warn(`Failed ${what}; retrying in the background`, error);
-    retryInBackground(what, step);
-  }
-};
-
-/** Records an outcome on a booking; the outcome depends only on the booking still existing. */
-const recordOnBooking = (
+const sendBookingEmailNotifications = async (
   state: SfuState,
-  meetingId: string,
-  what: string,
-  fields: UpdateScheduledMeetingRequest,
-) => () =>
-  changeMeetings(state.scheduledMeetings, state.scheduledMeetingPersistence, [meetingId], (draft) =>
-    applyIfUnchanged(`${what} for booking ${meetingId}`, draft.byId.get(meetingId), {}, () =>
-      updateScheduledMeeting(draft, meetingId, fields),
-    ),
-  );
-
-const sendBookingEmails = async (
-  input: Parameters<typeof sendSchedulingBookingEmails>[0],
-): Promise<SchedulingEmailDeliveryResult> => {
+  input: {
+    profile: SchedulingProfile;
+    eventType: SchedulingEventType;
+    meeting: ScheduledMeeting;
+    appOrigin: string;
+    calendarError?: string | null;
+  },
+): Promise<{
+  meeting: ScheduledMeeting;
+  emailResult: SchedulingEmailDeliveryResult;
+}> => {
+  const emailResult = await sendSchedulingBookingEmails(input);
+  const next = updateScheduledMeeting(state.scheduledMeetings, input.meeting.id, {
+    emailNotificationStatus: emailResult.status,
+    emailNotificationError: emailResult.error,
+    emailNotificationSentAt: emailResult.sentAt,
+  });
   try {
-    return await sendSchedulingBookingEmails(input);
+    await persistMeetingChange(state, next);
   } catch (error) {
-    Logger.warn("Failed to send booking emails", error);
-    return { status: "failed", error: (error as Error).message || "Booking email failed.", sentAt: null };
+    Logger.warn("Failed to persist scheduling email status", error);
   }
+  return { meeting: next, emailResult };
 };
 
 export const registerSchedulingRoutes = (
@@ -925,23 +753,21 @@ export const registerSchedulingRoutes = (
     if (!profile) return;
     const body = requestBody(req);
     try {
-      const updated = await changeHost(state, profile.id, (draft) => {
-        const next = updateSchedulingProfile(draft, profile.id, {
-          name: readString(body, "name"),
-          username: readString(body, "username"),
-          timeZone: readString(body, "timeZone"),
-        });
-        if (typeof body.timeZone === "string") {
-          setProfileAvailability(draft, next, {
-            ...getProfileAvailability(draft, next),
-            timeZone: next.timeZone,
-          });
-        }
-        return next;
+      const updated = updateSchedulingProfile(state.scheduling, profile.id, {
+        name: readString(body, "name"),
+        username: readString(body, "username"),
+        timeZone: readString(body, "timeZone"),
       });
-      res.json(profilePayload(state, committedProfile(state, updated)));
+      if (typeof body.timeZone === "string") {
+        setProfileAvailability(state.scheduling, updated, {
+          ...getProfileAvailability(state.scheduling, updated),
+          timeZone: updated.timeZone,
+        });
+      }
+      await persistScheduling(state.scheduling, state.schedulingPersistence);
+      res.json(profilePayload(state, updated));
     } catch (error) {
-      answerFailure(res, error, 400);
+      res.status(400).json({ error: (error as Error).message });
     }
   });
 
@@ -956,10 +782,13 @@ export const registerSchedulingRoutes = (
     if (!requireSecret(req, res)) return;
     const profile = await requireHostProfile(req, res, state);
     if (!profile) return;
-    const availability = await changeHost(state, profile.id, (draft) =>
-      setProfileAvailability(draft, hostIn(draft, profile.id), requestBody(req)),
+    const availability = setProfileAvailability(
+      state.scheduling,
+      profile,
+      requestBody(req),
     );
-    res.json({ availability, profile: committedProfile(state, profile) });
+    await persistScheduling(state.scheduling, state.schedulingPersistence);
+    res.json({ availability, profile });
   });
 
   app.get("/scheduling/event-types", async (req, res) => {
@@ -974,12 +803,15 @@ export const registerSchedulingRoutes = (
     const profile = await requireHostProfile(req, res, state);
     if (!profile) return;
     try {
-      const eventType = await changeHost(state, profile.id, (draft) =>
-        createEventType(draft, hostIn(draft, profile.id), eventTypeInput(requestBody(req))),
+      const eventType = createEventType(
+        state.scheduling,
+        profile,
+        eventTypeInput(requestBody(req)),
       );
+      await persistScheduling(state.scheduling, state.schedulingPersistence);
       res.status(201).json({ eventType });
     } catch (error) {
-      answerFailure(res, error, 400);
+      res.status(400).json({ error: (error as Error).message });
     }
   });
 
@@ -988,12 +820,16 @@ export const registerSchedulingRoutes = (
     const profile = await requireHostProfile(req, res, state);
     if (!profile) return;
     try {
-      const eventType = await changeHost(state, profile.id, (draft) =>
-        updateEventType(draft, hostIn(draft, profile.id), req.params.id, eventTypeInput(requestBody(req))),
+      const eventType = updateEventType(
+        state.scheduling,
+        profile,
+        req.params.id,
+        eventTypeInput(requestBody(req)),
       );
+      await persistScheduling(state.scheduling, state.schedulingPersistence);
       res.json({ eventType });
     } catch (error) {
-      answerFailure(res, error, 400);
+      res.status(400).json({ error: (error as Error).message });
     }
   });
 
@@ -1001,13 +837,12 @@ export const registerSchedulingRoutes = (
     if (!requireSecret(req, res)) return;
     const profile = await requireHostProfile(req, res, state);
     if (!profile) return;
-    const eventType = await changeHost(state, profile.id, (draft) =>
-      deleteEventType(draft, hostIn(draft, profile.id), req.params.id),
-    );
+    const eventType = deleteEventType(state.scheduling, profile, req.params.id);
     if (!eventType) {
       res.status(404).json({ error: "Event type not found." });
       return;
     }
+    await persistScheduling(state.scheduling, state.schedulingPersistence);
     res.json({ success: true, id: eventType.id });
   });
 
@@ -1032,7 +867,7 @@ export const registerSchedulingRoutes = (
       });
       return;
     }
-    const connectionInput = {
+    const connection = setGoogleCalendarConnection(state.scheduling, profile, {
       email: normalizeEmail(body.email) || profile.email,
       accessToken: normalizeIdentifier(body.accessToken, 4096),
       refreshToken,
@@ -1040,12 +875,10 @@ export const registerSchedulingRoutes = (
       scopes: (asArray(body.scopes) ?? [])
         .map((scope) => normalizeText(scope, 200))
         .filter(Boolean),
-      status: "connected" as const,
+      status: "connected",
       error: null,
-    };
-    const connection = await changeHost(state, profile.id, (draft) =>
-      setGoogleCalendarConnection(draft, hostIn(draft, profile.id), connectionInput),
-    );
+    });
+    await persistScheduling(state.scheduling, state.schedulingPersistence);
     res.json({ calendar: getCalendarSummary(state.scheduling, connection.profileId) });
   });
 
@@ -1053,9 +886,8 @@ export const registerSchedulingRoutes = (
     if (!requireSecret(req, res)) return;
     const profile = await requireHostProfile(req, res, state);
     if (!profile) return;
-    await changeHost(state, profile.id, (draft) =>
-      clearGoogleCalendarConnection(draft, hostIn(draft, profile.id)),
-    );
+    clearGoogleCalendarConnection(state.scheduling, profile);
+    await persistScheduling(state.scheduling, state.schedulingPersistence);
     res.json({
       calendar: getCalendarSummary(state.scheduling, profile.id),
       eventTypes: listEventTypes(state.scheduling, profile.id),
@@ -1184,7 +1016,7 @@ export const registerSchedulingRoutes = (
       });
       res.json({ slots });
     } catch (error) {
-      answerFailure(res, error, 502);
+      res.status(502).json({ error: (error as Error).message });
     }
   });
 
@@ -1277,39 +1109,43 @@ export const registerSchedulingRoutes = (
       const appOrigin = resolveAppOrigin(req);
       let meeting: ScheduledMeeting;
       try {
-        meeting = await changeMeetings(state.scheduledMeetings, state.scheduledMeetingPersistence, [], (draft) => {
-          assertBookingPageUnchanged(state, target);
-          return createScheduledMeeting(
-            draft,
-            {
-              title: target.eventType.title,
-              scheduledStartAt: startAt,
-              scheduledEndAt: endAt,
-              hostEmail: target.profile.email,
-              hostName: target.profile.name,
-              source: "booking_link",
-              eventTypeId: target.eventType.id,
-              attendeeName,
-              attendeeEmail,
-              attendeeNote,
-              attendeeTimeZone,
-              calendarSyncStatus: target.calendar ? "pending" : "not_required",
-              emailNotificationStatus: isSchedulingEmailConfigured()
-                ? "pending"
-                : "not_configured",
-            },
-            {
-              clientId: target.profile.clientId,
-              createdBy: attendeeEmail,
-              defaultHostEmail: target.profile.email,
-              defaultHostName: target.profile.name,
-              defaultHostUserId: target.profile.userId,
-            },
-          );
-        });
+        meeting = createScheduledMeeting(
+          state.scheduledMeetings,
+          {
+            title: target.eventType.title,
+            scheduledStartAt: startAt,
+            scheduledEndAt: endAt,
+            hostEmail: target.profile.email,
+            hostName: target.profile.name,
+            source: "booking_link",
+            eventTypeId: target.eventType.id,
+            attendeeName,
+            attendeeEmail,
+            attendeeNote,
+            attendeeTimeZone,
+            calendarSyncStatus: target.calendar ? "pending" : "not_required",
+            emailNotificationStatus: isSchedulingEmailConfigured()
+              ? "pending"
+              : "not_configured",
+          },
+          {
+            clientId: target.profile.clientId,
+            createdBy: attendeeEmail,
+            defaultHostEmail: target.profile.email,
+            defaultHostName: target.profile.name,
+            defaultHostUserId: target.profile.userId,
+          },
+        );
       } catch (createError) {
         await releaseSlotLease();
         throw createError;
+      }
+      try {
+        await persistMeetingChange(state, meeting);
+      } catch (persistError) {
+        deleteScheduledMeeting(state.scheduledMeetings, meeting.id);
+        await releaseSlotLease();
+        throw persistError;
       }
       try {
         await releaseSlotLease();
@@ -1317,66 +1153,80 @@ export const registerSchedulingRoutes = (
         Logger.warn("Failed to release booking slot lock", releaseError);
       }
 
-      let calendarError: string | null = null;
       const calendar = target.calendar;
-      if (calendar) {
-        try {
-          const event = await createGoogleCalendarEvent(state, calendar, {
+      if (!calendar) {
+        const { meeting: notified, emailResult } =
+          await sendBookingEmailNotifications(state, {
+            profile: target.profile,
+            eventType: target.eventType,
+            meeting,
+            appOrigin,
+          });
+        res.status(201).json({
+          booking: buildConfirmation(notified, appOrigin),
+          ...(emailResult.error ? { emailError: emailResult.error } : {}),
+        });
+        return;
+      }
+
+      try {
+        const meetingLink = buildSchedulingMeetingLink(appOrigin, meeting);
+        const calendarEventId = await createGoogleCalendarEvent(
+          state,
+          calendar,
+          {
             title: target.eventType.title,
             description: attendeeNote,
-            meetingLink: buildSchedulingMeetingLink(appOrigin, meeting),
+            meetingLink,
             startAt,
             endAt,
             timeZone: target.profile.timeZone,
             attendeeName,
             attendeeEmail,
-          });
-          await followUpBooking(`syncing the Google event of booking ${meeting.id}`, () =>
-            settleBookingEvent(state, meeting.id, event),
-          );
-        } catch (error) {
-          calendarError = (error as Error).message || "Could not create the calendar event.";
-          await followUpBooking(
-            `saving the calendar failure of booking ${meeting.id}`,
-            recordOnBooking(state, meeting.id, "calendar failure", {
-              calendarSyncStatus: "failed",
-              calendarSyncError: calendarError,
-            }),
-          );
-        }
-      }
-
-      let emailError: string | null = null;
-      const savedBooking = state.scheduledMeetings.byId.get(meeting.id);
-      if (savedBooking) {
-        const emailResult = await sendBookingEmails({
-          profile: target.profile,
-          eventType: target.eventType,
-          meeting: structuredClone(savedBooking),
-          appOrigin,
-          calendarError,
-        });
-        emailError = emailResult.error;
-        await followUpBooking(
-          `saving the email status of booking ${meeting.id}`,
-          recordOnBooking(state, meeting.id, "email status", {
-            emailNotificationStatus: emailResult.status,
-            emailNotificationError: emailResult.error,
-            emailNotificationSentAt: emailResult.sentAt,
-          }),
+          },
         );
-      } else {
-        Logger.info(`Skipped the confirmation email: booking ${meeting.id} was removed while it synced`);
+        const synced = updateScheduledMeeting(state.scheduledMeetings, meeting.id, {
+          googleCalendarEventId: calendarEventId,
+          calendarSyncStatus: "synced",
+          calendarSyncError: null,
+        });
+        await persistMeetingChange(state, synced);
+        const { meeting: notified, emailResult } =
+          await sendBookingEmailNotifications(state, {
+            profile: target.profile,
+            eventType: target.eventType,
+            meeting: synced,
+            appOrigin,
+          });
+        res.status(201).json({
+          booking: buildConfirmation(notified, appOrigin),
+          ...(emailResult.error ? { emailError: emailResult.error } : {}),
+        });
+      } catch (calendarError) {
+        const message =
+          (calendarError as Error).message || "Could not create the calendar event.";
+        const failed = updateScheduledMeeting(state.scheduledMeetings, meeting.id, {
+          calendarSyncStatus: "failed",
+          calendarSyncError: message,
+        });
+        await persistMeetingChange(state, failed);
+        const { meeting: notified, emailResult } =
+          await sendBookingEmailNotifications(state, {
+            profile: target.profile,
+            eventType: target.eventType,
+            meeting: failed,
+            appOrigin,
+            calendarError: message,
+          });
+        res.status(201).json({
+          booking: buildConfirmation(notified, appOrigin),
+          calendarError: message,
+          ...(emailResult.error ? { emailError: emailResult.error } : {}),
+        });
       }
-
-      res.status(201).json({
-        booking: buildConfirmation(meeting, appOrigin),
-        ...(calendarError ? { calendarError } : {}),
-        ...(emailError ? { emailError } : {}),
-      });
     } catch (error) {
       Logger.warn("Booking request failed", error);
-      answerFailure(res, error, 502);
+      res.status(502).json({ error: (error as Error).message });
     }
   });
 };

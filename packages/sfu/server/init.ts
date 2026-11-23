@@ -103,35 +103,37 @@ export const initMediaSoup = async (
   Logger.info(`Created ${state.workers.length} mediasoup workers`);
 };
 
-export const initScheduledWebinars = async (
+export const initScheduledWebinars = (
   state: SfuState,
   persistence: ScheduledWebinarPersistence = createScheduledWebinarPersistence(),
-): Promise<void> => {
+): void => {
   state.scheduledWebinarPersistence = persistence;
-  const loaded = await loadPersistedSchedules(state.scheduledWebinars, persistence, { importFallback: true });
+  const loaded = loadPersistedSchedules(state.scheduledWebinars, persistence);
   if (loaded > 0) {
     Logger.info(`Restored ${loaded} scheduled webinar(s) from persistence`);
   }
 };
 
-export const initScheduledMeetings = async (
+export const initScheduledMeetings = (
   state: SfuState,
   persistence: ScheduledMeetingPersistence = createScheduledMeetingPersistence(),
 ): Promise<void> => {
   state.scheduledMeetingPersistence = persistence;
-  const loaded = await loadPersistedMeetings(state.scheduledMeetings, persistence, { importFallback: true });
-  if (loaded > 0) {
-    Logger.info(`Restored ${loaded} scheduled meeting(s) from persistence`);
-  }
+  return loadPersistedMeetings(state.scheduledMeetings, persistence).then((loaded) => {
+    if (loaded > 0) {
+      Logger.info(`Restored ${loaded} scheduled meeting(s) from persistence`);
+    }
+  });
 };
 
-export const initScheduling = async (
+export const initScheduling = (
   state: SfuState,
   persistence: SchedulingPersistence = createSchedulingPersistence(),
 ): Promise<void> => {
   state.schedulingPersistence = persistence;
-  const loaded = await loadPersistedScheduling(state.scheduling, persistence, { importFallback: true });
-  if (loaded > 0) {
-    Logger.info(`Restored ${loaded} scheduling record(s) from persistence`);
-  }
+  return loadPersistedScheduling(state.scheduling, persistence).then((loaded) => {
+    if (loaded > 0) {
+      Logger.info(`Restored ${loaded} scheduling record(s) from persistence`);
+    }
+  });
 };

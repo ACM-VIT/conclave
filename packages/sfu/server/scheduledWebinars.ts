@@ -1,5 +1,5 @@
 import { createHash, randomUUID, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import type {
@@ -21,10 +21,6 @@ import {
 } from "./webinar.js";
 import { canonicalizeClientId } from "./clientIds.js";
 import { assertSqliteWritable } from "./sqliteWriteCheck.js";
-import { describeEntry, importFallbackFiles, requireArray, requireRecord } from "./fallbackImport.js";
-import { mergeNewestStamp } from "./stampedMerge.js";
-import { assignInPlace, ChangedElsewhereError, commitStamp, committed, committedRecords, persistThenApply, sameStoredValue, serialized, targetIds, type ChangeTargets, type Committed } from "./persistThenApply.js";
-import { commitStampedJson, readStampedJson } from "./stampedJsonFile.js";
 
 const DEFAULT_EARLY_ENTRY_MINUTES = 10;
 const MAX_EARLY_ENTRY_MINUTES = 240;
@@ -119,14 +115,12 @@ export type ScheduledWebinarStore = {
   byId: Map<string, ScheduledWebinar>;
   bySlug: Map<string, string>;
   byRoomChannel: Map<string, string>;
-  deletedAt: Map<string, number>;
 };
 
 export const createScheduledWebinarStore = (): ScheduledWebinarStore => ({
   byId: new Map(),
   bySlug: new Map(),
   byRoomChannel: new Map(),
-  deletedAt: new Map(),
 });
 
 const roomChannelKey = (clientId: string, roomId: string): string =>
@@ -268,17 +262,11 @@ export const listScheduledWebinars = (
   return result.sort((a, b) => a.scheduledStartAt - b.scheduledStartAt);
 };
 
-export type StoredWebinars = { records: ScheduledWebinar[]; deletedAt: Map<string, number> };
-
-export type WebinarCommit = { id: string; record: ScheduledWebinar | null; deletedAt: number | null };
-
-export type CommittedWebinars = Committed<WebinarCommit[]>;
-
 export type ScheduledWebinarPersistence = {
-  saveChanged: (webinars: ScheduledWebinar[], deletions?: Array<{ id: string; deletedAt: number }>) => CommittedWebinars;
-  importIfNewer: (webinar: ScheduledWebinar) => boolean;
-  loadState: (options?: { strict?: boolean }) => StoredWebinars;
-  load: (options?: { strict?: boolean }) => ScheduledWebinar[];
+  save: (snapshot: ScheduledWebinar[]) => void;
+  saveChanged?: (webinars: ScheduledWebinar[]) => void;
+  deleteIds?: (ids: string[]) => void;
+  load: () => ScheduledWebinar[];
   close?: () => void;
 };
 
@@ -302,25 +290,40 @@ const scheduledWebinarsSqlitePath = (): string => {
   return resolve(process.cwd(), "data", "conclave.sqlite");
 };
 
-const readWebinarsState = (path: string, options?: { strict?: boolean }): StoredWebinars => {
-  try {
-    return readStampedJson(path, normalizeStoredWebinar);
-  } catch (error) {
-    if (options?.strict) throw error;
-    Logger.error("Failed to load scheduled webinars", error);
-    return { records: [], deletedAt: new Map() };
+const writeJsonAtomic = (path: string, data: string): void => {
+  const dir = dirname(path);
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
   }
+  const tmp = `${path}.${randomBytes(4).toString("hex")}.tmp`;
+  writeFileSync(tmp, data, "utf8");
+  renameSync(tmp, path);
 };
 
 const createFileScheduledWebinarPersistence = (
   path: string = scheduledWebinarsPath(),
 ): ScheduledWebinarPersistence => ({
-  saveChanged: (webinars, deletions = []) =>
-    committed(commitStampedJson(path, normalizeStoredWebinar, { upserts: webinars, deletions }).touched),
-  importIfNewer: (webinar) =>
-    commitStampedJson(path, normalizeStoredWebinar, { upserts: [webinar], deletions: [] }, "newer").written > 0,
-  loadState: (options) => readWebinarsState(path, options),
-  load: (options) => readWebinarsState(path, options).records,
+  save: (snapshot) => {
+    try {
+      writeJsonAtomic(path, JSON.stringify(snapshot, null, 2));
+    } catch (error) {
+      Logger.error("Failed to persist scheduled webinars", error);
+    }
+  },
+  load: () => {
+    try {
+      if (!existsSync(path)) return [];
+      const raw = readFileSync(path, "utf8");
+      const data: unknown = JSON.parse(raw);
+      if (!Array.isArray(data)) return [];
+      return data
+        .map((entry) => normalizeStoredWebinar(entry))
+        .filter((entry): entry is ScheduledWebinar => Boolean(entry));
+    } catch (error) {
+      Logger.error("Failed to load scheduled webinars", error);
+      return [];
+    }
+  },
 });
 
 type SqliteStatement = {
@@ -374,14 +377,7 @@ const createSqliteScheduledWebinarPersistence = (
       ON scheduled_webinars(status, scheduled_start_at);
   `);
 
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS scheduled_webinar_tombstones (
-      id TEXT PRIMARY KEY,
-      deleted_at INTEGER NOT NULL
-    );
-  `);
-
-  const upsertSql = (guard: ">=" | ">") => `
+  const insert = db.prepare(`
     INSERT INTO scheduled_webinars (
       id,
       client_id,
@@ -392,11 +388,7 @@ const createSqliteScheduledWebinarPersistence = (
       scheduled_end_at,
       updated_at,
       payload_json
-    )
-    SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9
-    WHERE NOT EXISTS (
-      SELECT 1 FROM scheduled_webinar_tombstones WHERE id = ?1 AND NOT (?8 ${guard} deleted_at)
-    )
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       client_id = excluded.client_id,
       room_id = excluded.room_id,
@@ -406,27 +398,18 @@ const createSqliteScheduledWebinarPersistence = (
       scheduled_end_at = excluded.scheduled_end_at,
       updated_at = excluded.updated_at,
       payload_json = excluded.payload_json
-    WHERE excluded.updated_at ${guard} scheduled_webinars.updated_at
-  `;
-  const insert = db.prepare(upsertSql(">="));
-  const insertIfNewer = db.prepare(upsertSql(">"));
+    WHERE excluded.updated_at >= scheduled_webinars.updated_at
+  `);
   const loadRows = db.prepare(`
     SELECT payload_json
     FROM scheduled_webinars
     ORDER BY scheduled_start_at ASC, id ASC
   `);
-  const loadTombstones = db.prepare("SELECT id, deleted_at FROM scheduled_webinar_tombstones");
-  const deleteOlder = db.prepare("DELETE FROM scheduled_webinars WHERE id = ? AND updated_at < ?");
-  const readRow = db.prepare("SELECT payload_json FROM scheduled_webinars WHERE id = ?");
-  const readStamp = db.prepare("SELECT deleted_at FROM scheduled_webinar_tombstones WHERE id = ?");
-  const markDeleted = db.prepare(`
-    INSERT INTO scheduled_webinar_tombstones (id, deleted_at) VALUES (?, ?)
-    ON CONFLICT(id) DO UPDATE SET
-      deleted_at = MAX(scheduled_webinar_tombstones.deleted_at, excluded.deleted_at)
-  `);
+  const deleteById = db.prepare("DELETE FROM scheduled_webinars WHERE id = ?");
+  let knownIds = new Set<string>();
 
-  const upsertWebinar = (webinar: ScheduledWebinar, statement = insert): boolean => {
-    const result = statement.run(
+  const upsertWebinar = (webinar: ScheduledWebinar): void => {
+    insert.run(
       webinar.id,
       webinar.clientId,
       webinar.roomId,
@@ -436,79 +419,83 @@ const createSqliteScheduledWebinarPersistence = (
       webinar.scheduledEndAt,
       webinar.updatedAt,
       JSON.stringify(webinar),
-    ) as { changes: number | bigint };
-    return Number(result.changes) > 0;
-  };
-
-  const inTransaction = (write: () => void): void => {
-    try {
-      db.exec("BEGIN IMMEDIATE");
-      write();
-      db.exec("COMMIT");
-    } catch (error) {
-      try {
-        db.exec("ROLLBACK");
-      } catch {}
-      throw error;
-    }
-  };
-
-  const loadState = (options?: { strict?: boolean }): StoredWebinars => {
-    try {
-      db.exec("BEGIN");
-      const rows = loadRows.all();
-      const tombstones = loadTombstones.all() as Array<{ id: unknown; deleted_at: unknown }>;
-      db.exec("COMMIT");
-      const records = rows
-        .map((row) => {
-          const payload =
-            row && typeof row === "object" && "payload_json" in row
-              ? String((row).payload_json)
-              : "";
-          if (!payload) return null;
-          return normalizeStoredWebinar(JSON.parse(payload));
-        })
-        .filter((entry): entry is ScheduledWebinar => Boolean(entry));
-      return {
-        records,
-        deletedAt: new Map(tombstones.map((row) => [String(row.id), Number(row.deleted_at)])),
-      };
-    } catch (error) {
-      try {
-        db.exec("ROLLBACK");
-      } catch {}
-      if (options?.strict) throw error;
-      Logger.error("Failed to load scheduled webinars from SQLite", error);
-      return { records: [], deletedAt: new Map() };
-    }
+    );
   };
 
   return {
-    saveChanged: (webinars, deletions = []) => {
-      if (webinars.length === 0 && deletions.length === 0) return committed([]);
-      let commits: WebinarCommit[] = [];
-      inTransaction(() => {
-        for (const webinar of webinars) upsertWebinar(webinar);
-        for (const { id, deletedAt } of deletions) {
-          deleteOlder.run(id, deletedAt);
-          markDeleted.run(id, deletedAt);
+    save: (snapshot) => {
+      try {
+        const snapshotIds = new Set(snapshot.map((webinar) => webinar.id));
+        db.exec("BEGIN IMMEDIATE");
+        for (const webinar of snapshot) {
+          upsertWebinar(webinar);
         }
-        const ids = [...new Set([...webinars.map((webinar) => webinar.id), ...deletions.map((deletion) => deletion.id)])];
-        commits = ids.map((id) => {
-          const row = readRow.all(id)[0] as { payload_json?: unknown } | undefined;
-          const stamp = readStamp.all(id)[0] as { deleted_at?: unknown } | undefined;
-          return {
-            id,
-            record: row ? normalizeStoredWebinar(JSON.parse(String(row.payload_json))) : null,
-            deletedAt: stamp ? Number(stamp.deleted_at) : null,
-          };
-        });
-      });
-      return committed(commits);
+        for (const id of knownIds) {
+          if (!snapshotIds.has(id)) {
+            deleteById.run(id);
+          }
+        }
+        db.exec("COMMIT");
+        knownIds = snapshotIds;
+      } catch (error) {
+        try {
+          db.exec("ROLLBACK");
+        } catch {}
+        Logger.error("Failed to persist scheduled webinars to SQLite", error);
+      }
     },
-    importIfNewer: (webinar) => upsertWebinar(webinar, insertIfNewer),
-    loadState,
-    load: (options) => loadState(options).records,
+    saveChanged: (webinars) => {
+      if (webinars.length === 0) return;
+      try {
+        db.exec("BEGIN IMMEDIATE");
+        for (const webinar of webinars) {
+          upsertWebinar(webinar);
+          knownIds.add(webinar.id);
+        }
+        db.exec("COMMIT");
+      } catch (error) {
+        try {
+          db.exec("ROLLBACK");
+        } catch {}
+        Logger.error("Failed to persist changed scheduled webinars", error);
+      }
+    },
+    deleteIds: (ids) => {
+      if (ids.length === 0) return;
+      try {
+        db.exec("BEGIN IMMEDIATE");
+        for (const id of ids) {
+          deleteById.run(id);
+          knownIds.delete(id);
+        }
+        db.exec("COMMIT");
+      } catch (error) {
+        try {
+          db.exec("ROLLBACK");
+        } catch {}
+        Logger.error("Failed to delete scheduled webinars", error);
+      }
+    },
+    load: () => {
+      try {
+        const webinars = loadRows
+          .all()
+          .map((row) => {
+            const payload =
+              row && typeof row === "object" && "payload_json" in row
+                ? String((row).payload_json)
+                : "";
+            if (!payload) return null;
+            return normalizeStoredWebinar(JSON.parse(payload));
+          })
+          .filter((entry): entry is ScheduledWebinar => Boolean(entry));
+        knownIds = new Set(webinars.map((webinar) => webinar.id));
+        return webinars;
+      } catch (error) {
+        Logger.error("Failed to load scheduled webinars from SQLite", error);
+        return [];
+      }
+    },
     close: () => db.close(),
   };
 };
@@ -517,14 +504,14 @@ const migrateJsonScheduledWebinarsToSqlite = (
   sqlite: ScheduledWebinarPersistence,
   json: ScheduledWebinarPersistence,
 ): number => {
-  const existing = sqlite.loadState();
-  if (existing.records.length > 0 || existing.deletedAt.size > 0) return 0;
+  const existing = sqlite.load();
+  if (existing.length > 0) return 0;
 
-  const legacy = json.loadState();
-  if (legacy.records.length === 0 && legacy.deletedAt.size === 0) return 0;
+  const legacy = json.load();
+  if (legacy.length === 0) return 0;
 
-  sqlite.saveChanged(legacy.records, [...legacy.deletedAt].map(([id, deletedAt]) => ({ id, deletedAt })));
-  return legacy.records.length + legacy.deletedAt.size;
+  sqlite.save(legacy);
+  return sqlite.load().length;
 };
 
 export const createScheduledWebinarPersistence = (): ScheduledWebinarPersistence => {
@@ -542,7 +529,7 @@ export const createScheduledWebinarPersistence = (): ScheduledWebinarPersistence
   );
   if (migrated > 0) {
     Logger.info(
-      `Migrated ${migrated} scheduled webinar record(s) and deletion(s) from JSON into SQLite`,
+      `Migrated ${migrated} scheduled webinar(s) from JSON into SQLite`,
     );
   }
   return sqlitePersistence;
@@ -605,61 +592,49 @@ const normalizeStoredWebinar = (raw: unknown): ScheduledWebinar | null => {
   };
 };
 
-export const importFallbackWebinars = async (persistence: ScheduledWebinarPersistence): Promise<number> => {
-  return importFallbackFiles({
-    fileName: "scheduled-webinars.json",
-    noun: "scheduled webinar",
-    records: (data) => requireArray(data, "scheduled webinars"),
-    describe: describeEntry("webinar"),
-    importIfNewer: (entry) => persistence.importIfNewer(requireRecord(normalizeStoredWebinar(entry), "webinar")),
-  });
-};
-
-/** Loads stored webinars into memory at startup, after any JSON fallback import, in the store's queue. */
 export const loadPersistedSchedules = (
   store: ScheduledWebinarStore,
   persistence: ScheduledWebinarPersistence,
-  options: { importFallback?: boolean } = {},
-): Promise<number> =>
-  serialized(store, async () => {
-    if (options.importFallback) await importFallbackWebinars(persistence);
-    const { records, deletedAt } = persistence.loadState();
-    for (const webinar of records) {
-      indexScheduledWebinar(store, webinar);
-    }
-    for (const [id, at] of deletedAt) store.deletedAt.set(id, at);
-    return records.length;
-  });
+): number => {
+  const snapshot = persistence.load();
+  for (const webinar of snapshot) {
+    indexScheduledWebinar(store, webinar);
+  }
+  return snapshot.length;
+};
 
-/** Merges what storage holds into memory, newest stamp wins, in the store's queue. */
-export const mergePersistedSchedules = (
+const persistScheduledWebinars = (
   store: ScheduledWebinarStore,
   persistence: ScheduledWebinarPersistence,
-): Promise<number> =>
-  serialized(store, () => {
-    const stored = persistence.loadState({ strict: true });
-    return mergeNewestStamp(
-      { values: store.byId, deletedAt: store.deletedAt },
-      { values: new Map(stored.records.map((webinar) => [webinar.id, webinar])), deletedAt: stored.deletedAt },
-      (webinar) => webinar.updatedAt,
-      {
-        set: (id, webinar) => {
-          const held = store.byId.get(id);
-          if (held) {
-            removeFromIndexes(store, held);
-            Object.assign(held, webinar);
-          }
-          indexScheduledWebinar(store, held ?? webinar);
-          store.deletedAt.delete(id);
-        },
-        remove: (id, deletedAt) => {
-          const held = store.byId.get(id);
-          if (held) removeFromIndexes(store, held);
-          store.deletedAt.set(id, deletedAt);
-        },
-      },
-    );
-  });
+): void => {
+  persistence.save(Array.from(store.byId.values()));
+};
+
+export const persistScheduledWebinarChanges = (
+  store: ScheduledWebinarStore,
+  persistence: ScheduledWebinarPersistence,
+  webinars: ScheduledWebinar[],
+): void => {
+  if (webinars.length === 0) return;
+  if (persistence.saveChanged) {
+    persistence.saveChanged(webinars);
+    return;
+  }
+  persistScheduledWebinars(store, persistence);
+};
+
+export const persistScheduledWebinarDeletes = (
+  store: ScheduledWebinarStore,
+  persistence: ScheduledWebinarPersistence,
+  ids: string[],
+): void => {
+  if (ids.length === 0) return;
+  if (persistence.deleteIds) {
+    persistence.deleteIds(ids);
+    return;
+  }
+  persistScheduledWebinars(store, persistence);
+};
 
 export type CreateScheduledWebinarOptions = {
   clientId: string;
@@ -913,82 +888,6 @@ export const updateScheduledWebinar = (
   return { webinar: existing, inviteCodeHashChange };
 };
 
-type WebinarPlan<R> = {
-  result: R;
-  upserts: ScheduledWebinar[];
-  deletions: Array<{ id: string; deletedAt: number }>;
-};
-
-const planWebinarChange = <R>(
-  store: ScheduledWebinarStore,
-  targets: ChangeTargets<ScheduledWebinarStore>,
-  mutate: (draft: ScheduledWebinarStore, at: number) => R,
-  at: number,
-): WebinarPlan<R> => {
-  const ids = targetIds(targets, store, at);
-  const draft: ScheduledWebinarStore = {
-    byId: new Map(store.byId),
-    bySlug: new Map(store.bySlug),
-    byRoomChannel: new Map(store.byRoomChannel),
-    deletedAt: new Map(store.deletedAt),
-  };
-  for (const id of ids) {
-    const held = store.byId.get(id);
-    if (held) draft.byId.set(id, structuredClone(held));
-  }
-  const result = mutate(draft, at);
-  const upserts = [...draft.byId].flatMap(([id, webinar]) => {
-    const held = store.byId.get(id);
-    if (held && sameStoredValue(held, webinar)) return [];
-    webinar.updatedAt = commitStamp(at, held?.updatedAt);
-    return [webinar];
-  });
-  const deletions = ids
-    .filter((id) => store.byId.has(id) && !draft.byId.has(id))
-    .map((id) => ({ id, deletedAt: commitStamp(at, store.byId.get(id)?.updatedAt) }));
-  return { result, upserts, deletions };
-};
-
-const applyCommittedWebinars = (store: ScheduledWebinarStore, commits: CommittedWebinars): void => {
-  for (const { id, record, deletedAt } of commits) {
-    const held = store.byId.get(id);
-    if (held) removeFromIndexes(store, held);
-    if (record) indexScheduledWebinar(store, held ? assignInPlace(held, record) : record);
-    if (deletedAt === null) store.deletedAt.delete(id);
-    else store.deletedAt.set(id, deletedAt);
-  }
-};
-
-export const changeWebinars = async <R>(
-  store: ScheduledWebinarStore,
-  persistence: ScheduledWebinarPersistence | null,
-  ids: ChangeTargets<ScheduledWebinarStore>,
-  mutate: (draft: ScheduledWebinarStore, at: number) => R,
-): Promise<R> => {
-  const plan = await persistThenApply(store, "scheduled webinars", {
-    plan: (at) => planWebinarChange(store, ids, mutate, at),
-    save: (planned) => {
-      if (planned.upserts.length === 0 && planned.deletions.length === 0) return committed([]);
-      if (persistence) return persistence.saveChanged(planned.upserts, planned.deletions);
-      return committed([
-        ...planned.upserts.map((webinar) => ({ id: webinar.id, record: webinar, deletedAt: null })),
-        ...planned.deletions.map(({ id, deletedAt }) => ({ id, record: null, deletedAt })),
-      ]);
-    },
-    apply: (_planned, commits) => applyCommittedWebinars(store, commits),
-  });
-  if (plan.upserts.some((webinar) => !store.byId.has(webinar.id))) throw new ChangedElsewhereError("scheduled webinar");
-  return committedRecords(store.byId, plan.result);
-};
-
-export const coHostInviteWebinarId = (store: ScheduledWebinarStore, token: string): string | null => {
-  const tokenHash = hashCoHostInviteToken(token.trim());
-  for (const webinar of store.byId.values()) {
-    if (webinar.coHostInviteTokenHash === tokenHash) return webinar.id;
-  }
-  return null;
-};
-
 export const deleteScheduledWebinar = (
   store: ScheduledWebinarStore,
   id: string,
@@ -996,7 +895,6 @@ export const deleteScheduledWebinar = (
   const existing = store.byId.get(id);
   if (!existing) return null;
   removeFromIndexes(store, existing);
-  store.deletedAt.set(id, Math.max(Date.now(), existing.updatedAt + 1));
   return existing;
 };
 

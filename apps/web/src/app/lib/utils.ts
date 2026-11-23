@@ -14,17 +14,13 @@ export const toError = (value: unknown): Error =>
 export const errorName = (value: unknown): string =>
   value instanceof Error ? value.name : "";
 
-const SAVE_FAILED_MESSAGE = "Couldn't save, try again.";
-
 export const readResponseError = async (
   response: Response,
   fallback = "Request failed",
 ): Promise<string> => {
   const data: unknown = await response.json().catch(() => null);
   if (data && typeof data === "object" && "error" in data) {
-    const error = String((data as { error?: unknown }).error || "");
-    if (error === "persistence_unavailable") return SAVE_FAILED_MESSAGE;
-    return error || fallback;
+    return String((data as { error?: unknown }).error || "") || fallback;
   }
   return response.statusText || fallback;
 };

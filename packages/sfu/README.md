@@ -40,6 +40,12 @@ docker compose -f docker-compose.sfu.yml run --rm --no-deps --user root \
   --cap-add CHOWN --cap-add DAC_READ_SEARCH --entrypoint chown sfu-a -R node:node /var/lib/conclave/recordings
 ```
 
+Images before this change fell back to JSON files in the container layer
+when SQLite was locked. Before it replaces such a container, the deploy copies
+any of those files onto the volume under `CONCLAVE_FALLBACK_IMPORT_DIR`, readable
+only by the SFU user, so they survive the replacement. This SFU does not import
+them; multi-SFU persistence and that import move to a follow-up.
+
 To upgrade an existing host, run `git pull` to the reviewed revision first,
 then run the new `scripts/deploy-sfu.sh`. Do not start the upgrade with the
 deploy script already on the host: it pulls the new revision and then keeps

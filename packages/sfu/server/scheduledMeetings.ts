@@ -1,5 +1,11 @@
-import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync } from "node:fs";
+import { randomBytes, randomUUID } from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import type {
@@ -16,16 +22,9 @@ import {
   resolveRedisPersistenceUrl,
   shouldUseRedisPersistence,
   type RedisPersistenceClient,
-  isNotSeededError,
 } from "./redisPersistence.js";
 import { canonicalizeClientId } from "./clientIds.js";
 import { assertSqliteWritable } from "./sqliteWriteCheck.js";
-import { addMirrorVersionColumn } from "./sqliteMirrorVersion.js";
-import { NEXT_VERSION_LUA } from "./redisCommitVersion.js";
-import { describeEntry, importFallbackFiles, requireArray, requireRecord } from "./fallbackImport.js";
-import { commitStampedJson, readStampedJson } from "./stampedJsonFile.js";
-import { mergeNewestStamp } from "./stampedMerge.js";
-import { assignInPlace, ChangedElsewhereError, commitStamp, committed, committedRecords, persistThenApply, sameStoredValue, serialized, targetIds, type ChangeTargets, type Committed } from "./persistThenApply.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -106,13 +105,11 @@ const generateRoomCode = (): string => {
 export type ScheduledMeetingStore = {
   byId: Map<string, ScheduledMeeting>;
   byRoomCode: Map<string, string>;
-  deletedAt: Map<string, number>;
 };
 
 export const createScheduledMeetingStore = (): ScheduledMeetingStore => ({
   byId: new Map(),
   byRoomCode: new Map(),
-  deletedAt: new Map(),
 });
 
 const roomCodeKey = (clientId: string, roomCode: string): string =>
@@ -448,7 +445,6 @@ export const deleteScheduledMeeting = (
   const meeting = store.byId.get(id);
   if (!meeting) return null;
   unregisterStore(store, meeting);
-  store.deletedAt.set(id, Math.max(Date.now(), meeting.updatedAt + 1));
   return meeting;
 };
 
@@ -510,30 +506,17 @@ export const listScheduledMeetings = (
   return result.sort((a, b) => a.scheduledStartAt - b.scheduledStartAt);
 };
 
-export type StoredMeetings = { records: ScheduledMeeting[]; deletedAt: Map<string, number> };
-export type MeetingDeletion = { id: string; deletedAt: number };
-
-/**
- * One store is the authority in each mode, with one commit point per change:
- * SQLite, the JSON file, or Redis. In Redis mode SQLite is only a mirror,
- * written after Redis commits and rebuilt from Redis whenever it may have
- * missed a change; memory is never loaded from it.
- */
-export type MeetingCommit = { id: string; record: ScheduledMeeting | null; deletedAt: number | null };
-
-export type CommittedMeetings = Committed<MeetingCommit[]>;
-
 export type ScheduledMeetingPersistence = {
-  saveChanged: (meetings: ScheduledMeeting[], deletions?: MeetingDeletion[]) => MaybePromise<CommittedMeetings>;
-  importIfNewer: (meeting: ScheduledMeeting) => MaybePromise<boolean>;
-  loadState: (options?: { strict?: boolean }) => MaybePromise<StoredMeetings>;
+  save: (snapshot: ScheduledMeeting[]) => MaybePromise<void>;
+  saveChanged?: (meetings: ScheduledMeeting[]) => MaybePromise<void>;
+  deleteIds?: (ids: string[]) => MaybePromise<void>;
   reserveBookingSlot?: (
     reservation: BookingSlotReservation,
   ) => MaybePromise<BookingSlotLease | null>;
   claimEmailReminder?: (
     claim: EmailReminderClaim,
   ) => MaybePromise<ScheduledMeeting | null>;
-  load: (options?: { strict?: boolean }) => MaybePromise<ScheduledMeeting[]>;
+  load: () => MaybePromise<ScheduledMeeting[]>;
   close?: () => MaybePromise<void>;
   flush?: () => Promise<void>;
 };
@@ -571,6 +554,16 @@ const scheduledMeetingsPath = (): string => {
   const configured = process.env.SCHEDULED_MEETINGS_PATH?.trim();
   if (configured) return resolve(configured);
   return resolve(process.cwd(), "data", "scheduled-meetings.json");
+};
+
+const writeJsonAtomic = (path: string, data: string): void => {
+  const dir = dirname(path);
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+  const tmp = `${path}.${randomBytes(4).toString("hex")}.tmp`;
+  writeFileSync(tmp, data, "utf8");
+  renameSync(tmp, path);
 };
 
 type SqliteStatement = {
@@ -687,21 +680,9 @@ const normalizeStoredMeeting = (raw: unknown): ScheduledMeeting | null => {
   };
 };
 
-type VersionedMeetings = { version: number; state: StoredMeetings };
-
-export type MirroredMeeting = { id: string; payload: string | null; deletedAt: number | null };
-
-export type MirroredMeetingChange = { version: number; meetings: MirroredMeeting[] };
-
-type SqliteMeetingStore = ScheduledMeetingPersistence & {
-  mirror: (change: MirroredMeetingChange) => Promise<void>;
-  syncFrom: (authority: StoredMeetings, version: number) => Promise<void>;
-};
-
-export const createSqliteScheduledMeetingPersistence = (
+const createSqliteScheduledMeetingPersistence = (
   path: string = scheduledMeetingsSqlitePath(),
-  legacyJsonPath?: string,
-): SqliteMeetingStore => {
+): ScheduledMeetingPersistence => {
   const dir = dirname(path);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
@@ -732,24 +713,11 @@ export const createSqliteScheduledMeetingPersistence = (
       ON scheduled_meetings(status, scheduled_start_at);
   `);
 
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS scheduled_meeting_tombstones (
-      id TEXT PRIMARY KEY,
-      deleted_at INTEGER NOT NULL
-    );
-  `);
-  addMirrorVersionColumn(db, "scheduled_meetings");
-  addMirrorVersionColumn(db, "scheduled_meeting_tombstones");
-
-  const upsertSql = (guard: ">=" | ">") => `
+  const insert = db.prepare(`
     INSERT INTO scheduled_meetings (
       id, client_id, room_code, status, scheduled_start_at,
       scheduled_end_at, updated_at, payload_json
-    )
-    SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8
-    WHERE NOT EXISTS (
-      SELECT 1 FROM scheduled_meeting_tombstones WHERE id = ?1 AND NOT (?7 ${guard} deleted_at)
-    )
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       client_id = excluded.client_id,
       room_code = excluded.room_code,
@@ -758,25 +726,18 @@ export const createSqliteScheduledMeetingPersistence = (
       scheduled_end_at = excluded.scheduled_end_at,
       updated_at = excluded.updated_at,
       payload_json = excluded.payload_json
-    WHERE excluded.updated_at ${guard} scheduled_meetings.updated_at
-  `;
-  const insert = db.prepare(upsertSql(">="));
-  const insertIfNewer = db.prepare(upsertSql(">"));
+    WHERE excluded.updated_at >= scheduled_meetings.updated_at
+  `);
   const loadRows = db.prepare(`
     SELECT payload_json
     FROM scheduled_meetings
     ORDER BY scheduled_start_at ASC, id ASC
   `);
-  const loadTombstones = db.prepare("SELECT id, deleted_at FROM scheduled_meeting_tombstones");
-  const deleteOlder = db.prepare("DELETE FROM scheduled_meetings WHERE id = ? AND updated_at < ?");
-  const markDeleted = db.prepare(`
-    INSERT INTO scheduled_meeting_tombstones (id, deleted_at) VALUES (?, ?)
-    ON CONFLICT(id) DO UPDATE SET
-      deleted_at = MAX(scheduled_meeting_tombstones.deleted_at, excluded.deleted_at)
-  `);
+  const deleteById = db.prepare("DELETE FROM scheduled_meetings WHERE id = ?");
+  let knownIds = new Set<string>();
 
-  const upsertMeeting = (meeting: ScheduledMeeting, statement = insert): boolean => {
-    const result = statement.run(
+  const upsertMeeting = (meeting: ScheduledMeeting): void => {
+    insert.run(
       meeting.id,
       meeting.clientId,
       meeting.roomCode,
@@ -785,221 +746,111 @@ export const createSqliteScheduledMeetingPersistence = (
       meeting.scheduledEndAt,
       meeting.updatedAt,
       JSON.stringify(meeting),
-    ) as { changes: number | bigint };
-    return Number(result.changes) > 0;
-  };
-
-  const inTransaction = (write: () => void): void => {
-    try {
-      db.exec("BEGIN IMMEDIATE");
-      write();
-      db.exec("COMMIT");
-    } catch (error) {
-      try {
-        db.exec("ROLLBACK");
-      } catch {}
-      throw error;
-    }
-  };
-
-  const loadStateSync = (options?: { strict?: boolean }): StoredMeetings => {
-    try {
-      db.exec("BEGIN");
-      const rows = loadRows.all();
-      const tombstones = loadTombstones.all() as Array<{ id: unknown; deleted_at: unknown }>;
-      db.exec("COMMIT");
-      const records = rows
-        .map((row) => {
-          const payload =
-            row && typeof row === "object" && "payload_json" in row
-              ? String((row).payload_json)
-              : "";
-          if (!payload) return null;
-          return normalizeStoredMeeting(JSON.parse(payload));
-        })
-        .filter((entry): entry is ScheduledMeeting => Boolean(entry));
-      return {
-        records,
-        deletedAt: new Map(tombstones.map((row) => [String(row.id), Number(row.deleted_at)])),
-      };
-    } catch (error) {
-      try {
-        db.exec("ROLLBACK");
-      } catch {}
-      if (options?.strict) throw error;
-      Logger.error("Failed to load scheduled meetings", error);
-      return { records: [], deletedAt: new Map() };
-    }
-  };
-
-  const current = loadStateSync();
-  if (legacyJsonPath && current.records.length === 0 && current.deletedAt.size === 0) {
-    const legacy = readMeetingsState(legacyJsonPath);
-    if (legacy.records.length > 0 || legacy.deletedAt.size > 0) {
-      inTransaction(() => {
-        for (const meeting of legacy.records) upsertMeeting(meeting);
-        for (const [id, deletedAt] of legacy.deletedAt) {
-          deleteOlder.run(id, deletedAt);
-          markDeleted.run(id, deletedAt);
-        }
-      });
-      Logger.info(`Migrated ${legacy.records.length} scheduled meeting(s) and ${legacy.deletedAt.size} deletion(s) from JSON into SQLite`);
-    }
-  }
-
-  const markDeletions = (deletions: MeetingDeletion[]): void => {
-    for (const { id, deletedAt } of deletions) {
-      deleteOlder.run(id, deletedAt);
-      markDeleted.run(id, deletedAt);
-    }
-  };
-  const mirrorUpsert = db.prepare(`
-    INSERT INTO scheduled_meetings (
-      id, client_id, room_code, status, scheduled_start_at,
-      scheduled_end_at, updated_at, payload_json, mirror_version
-    )
-    SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9
-    WHERE NOT EXISTS (
-      SELECT 1 FROM scheduled_meeting_tombstones WHERE id = ?1 AND mirror_version > ?9
-    )
-    ON CONFLICT(id) DO UPDATE SET
-      client_id = excluded.client_id,
-      room_code = excluded.room_code,
-      status = excluded.status,
-      scheduled_start_at = excluded.scheduled_start_at,
-      scheduled_end_at = excluded.scheduled_end_at,
-      updated_at = excluded.updated_at,
-      payload_json = excluded.payload_json,
-      mirror_version = excluded.mirror_version
-    WHERE scheduled_meetings.mirror_version <= excluded.mirror_version
-  `);
-  const mirrorMark = db.prepare(`
-    INSERT INTO scheduled_meeting_tombstones (id, deleted_at, mirror_version) VALUES (?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET
-      deleted_at = excluded.deleted_at,
-      mirror_version = excluded.mirror_version
-    WHERE scheduled_meeting_tombstones.mirror_version <= excluded.mirror_version
-  `);
-  const mirrorRemove = db.prepare("DELETE FROM scheduled_meetings WHERE id = ? AND mirror_version <= ?");
-  const mirrorRows = db.prepare("SELECT id, mirror_version FROM scheduled_meetings");
-  const mirrorStamps = db.prepare("SELECT id, mirror_version FROM scheduled_meeting_tombstones");
-  const dropRow = db.prepare("DELETE FROM scheduled_meetings WHERE id = ?");
-  const dropStamp = db.prepare("DELETE FROM scheduled_meeting_tombstones WHERE id = ?");
-  const mirrorMeetingPayload = (meeting: ScheduledMeeting, payload: string, version: number): void => {
-    mirrorUpsert.run(
-      meeting.id,
-      meeting.clientId,
-      meeting.roomCode,
-      meeting.status,
-      meeting.scheduledStartAt,
-      meeting.scheduledEndAt,
-      meeting.updatedAt,
-      payload,
-      version,
     );
-  };
-  const mirrorMeeting = (meeting: ScheduledMeeting, version: number): void =>
-    mirrorMeetingPayload(meeting, JSON.stringify(meeting), version);
-
-  const readRow = db.prepare("SELECT payload_json FROM scheduled_meetings WHERE id = ?");
-  const readStamp = db.prepare("SELECT deleted_at FROM scheduled_meeting_tombstones WHERE id = ?");
-  const mirrorDropStamp = db.prepare("DELETE FROM scheduled_meeting_tombstones WHERE id = ? AND mirror_version <= ?");
-  const readCommitted = (id: string): MeetingCommit => {
-    const row = readRow.all(id)[0] as { payload_json?: unknown } | undefined;
-    const stamp = readStamp.all(id)[0] as { deleted_at?: unknown } | undefined;
-    return {
-      id,
-      record: row ? normalizeStoredMeeting(JSON.parse(String(row.payload_json))) : null,
-      deletedAt: stamp ? Number(stamp.deleted_at) : null,
-    };
   };
 
   return {
-    saveChanged: async (meetings, deletions = []) => {
-      if (meetings.length === 0 && deletions.length === 0) return committed([]);
-      let commits: MeetingCommit[] = [];
-      inTransaction(() => {
-        for (const meeting of meetings) upsertMeeting(meeting);
-        markDeletions(deletions);
-        commits = touchedIds(meetings, deletions).map(readCommitted);
-      });
-      return committed(commits);
-    },
-    importIfNewer: async (meeting) => upsertMeeting(meeting, insertIfNewer),
-    mirror: async ({ version, meetings }) => {
-      inTransaction(() => {
-        for (const { id, payload, deletedAt } of meetings) {
-          const record = payload === null ? null : normalizeStoredMeeting(JSON.parse(payload));
-          if (record && payload !== null) mirrorMeetingPayload(record, payload, version);
-          else mirrorRemove.run(id, version);
-          if (deletedAt === null) mirrorDropStamp.run(id, version);
-          else mirrorMark.run(id, deletedAt, version);
+    save: (snapshot) => {
+      try {
+        const snapshotIds = new Set(snapshot.map((meeting) => meeting.id));
+        db.exec("BEGIN IMMEDIATE");
+        for (const meeting of snapshot) {
+          upsertMeeting(meeting);
         }
-      });
-    },
-    syncFrom: async (authority, version) => {
-      inTransaction(() => {
-        for (const meeting of authority.records) mirrorMeeting(meeting, version);
-        for (const [id, deletedAt] of authority.deletedAt) mirrorMark.run(id, deletedAt, version);
-        const live = new Set(authority.records.map((meeting) => meeting.id));
-        for (const row of mirrorRows.all() as Array<{ id: unknown; mirror_version: unknown }>) {
-          if (!live.has(String(row.id)) && Number(row.mirror_version) <= version) dropRow.run(String(row.id));
+        for (const id of knownIds) {
+          if (!snapshotIds.has(id)) {
+            deleteById.run(id);
+          }
         }
-        for (const row of mirrorStamps.all() as Array<{ id: unknown; mirror_version: unknown }>) {
-          if (!authority.deletedAt.has(String(row.id)) && Number(row.mirror_version) <= version) dropStamp.run(String(row.id));
-        }
-      });
+        db.exec("COMMIT");
+        knownIds = snapshotIds;
+      } catch (error) {
+        try {
+          db.exec("ROLLBACK");
+        } catch {}
+        Logger.error("Failed to persist scheduled meetings", error);
+      }
     },
-    loadState: async (options) => loadStateSync(options),
-    load: async (options) => loadStateSync(options).records,
+    saveChanged: (meetings) => {
+      if (meetings.length === 0) return;
+      try {
+        db.exec("BEGIN IMMEDIATE");
+        for (const meeting of meetings) {
+          upsertMeeting(meeting);
+          knownIds.add(meeting.id);
+        }
+        db.exec("COMMIT");
+      } catch (error) {
+        try {
+          db.exec("ROLLBACK");
+        } catch {}
+        Logger.error("Failed to persist changed scheduled meetings", error);
+      }
+    },
+    deleteIds: (ids) => {
+      if (ids.length === 0) return;
+      try {
+        db.exec("BEGIN IMMEDIATE");
+        for (const id of ids) {
+          deleteById.run(id);
+          knownIds.delete(id);
+        }
+        db.exec("COMMIT");
+      } catch (error) {
+        try {
+          db.exec("ROLLBACK");
+        } catch {}
+        Logger.error("Failed to delete scheduled meetings", error);
+      }
+    },
+    load: () => {
+      try {
+        const meetings = loadRows
+          .all()
+          .map((row) => {
+            const payload =
+              row && typeof row === "object" && "payload_json" in row
+                ? String((row).payload_json)
+                : "";
+            if (!payload) return null;
+            return normalizeStoredMeeting(JSON.parse(payload));
+          })
+          .filter((entry): entry is ScheduledMeeting => Boolean(entry));
+        knownIds = new Set(meetings.map((meeting) => meeting.id));
+        return meetings;
+      } catch (error) {
+        Logger.error("Failed to load scheduled meetings", error);
+        return [];
+      }
+    },
     close: () => db.close(),
   };
-};
-
-
-const mirroredMeetingsFrom = (state: unknown[]): MirroredMeeting[] => {
-  const meetings: MirroredMeeting[] = [];
-  for (let index = 0; index < state.length; index += 3) {
-    const [id, payload, deletedAt] = state.slice(index, index + 3);
-    meetings.push({
-      id: String(id),
-      payload: typeof payload === "string" ? payload : null,
-      deletedAt: deletedAt === null || deletedAt === undefined ? null : Number(deletedAt),
-    });
-  }
-  return meetings;
-};
-
-const commitsOfMirrored = (meetings: MirroredMeeting[]): MeetingCommit[] =>
-  meetings.map(({ id, payload, deletedAt }) => ({
-    id,
-    record: payload === null ? null : normalizeStoredMeeting(JSON.parse(payload)),
-    deletedAt,
-  }));
-
-const touchedIds = (meetings: ScheduledMeeting[], deletions: MeetingDeletion[]): string[] => [
-  ...new Set([...meetings.map((meeting) => meeting.id), ...deletions.map((deletion) => deletion.id)]),
-];
-
-const readMeetingsState = (path: string, options?: { strict?: boolean }): StoredMeetings => {
-  try {
-    return readStampedJson(path, normalizeStoredMeeting);
-  } catch (error) {
-    if (options?.strict) throw error;
-    Logger.error("Failed to load scheduled meetings from JSON", error);
-    return { records: [], deletedAt: new Map() };
-  }
 };
 
 const createFileScheduledMeetingPersistence = (
   path: string = scheduledMeetingsPath(),
 ): ScheduledMeetingPersistence => ({
-  saveChanged: async (meetings, deletions = []) =>
-    committed(commitStampedJson(path, normalizeStoredMeeting, { upserts: meetings, deletions }).touched),
-  importIfNewer: async (meeting) =>
-    commitStampedJson(path, normalizeStoredMeeting, { upserts: [meeting], deletions: [] }, "newer").written > 0,
-  loadState: async (options) => readMeetingsState(path, options),
-  load: async (options) => readMeetingsState(path, options).records,
+  save: (snapshot) => {
+    try {
+      writeJsonAtomic(path, JSON.stringify(snapshot, null, 2));
+    } catch (error) {
+      Logger.error("Failed to persist scheduled meetings to JSON", error);
+    }
+  },
+  load: () => {
+    try {
+      if (!existsSync(path)) return [];
+      const raw = readFileSync(path, "utf8");
+      const data: unknown = JSON.parse(raw);
+      if (!Array.isArray(data)) return [];
+      return data
+        .map((entry) => normalizeStoredMeeting(entry))
+        .filter((entry): entry is ScheduledMeeting => Boolean(entry));
+    } catch (error) {
+      Logger.error("Failed to load scheduled meetings from JSON", error);
+      return [];
+    }
+  },
 });
 
 const RELEASE_BOOKING_SLOT_LOCK_SCRIPT = `
@@ -1011,7 +862,7 @@ end
 return 0
 `;
 
-const CLAIM_EMAIL_REMINDER_SCRIPT = `${NEXT_VERSION_LUA}
+const CLAIM_EMAIL_REMINDER_SCRIPT = `
 local key = KEYS[1]
 local meetingId = ARGV[1]
 local now = tonumber(ARGV[2]) or 0
@@ -1059,117 +910,11 @@ end
 meeting["emailReminderStatus"] = "pending"
 meeting["emailReminderError"] = cjson.null
 meeting["emailReminderSentAt"] = cjson.null
-meeting["updatedAt"] = math.max(tonumber(ARGV[4]) or now, (tonumber(meeting["updatedAt"]) or 0) + 1)
+meeting["updatedAt"] = now
 
 local nextPayload = cjson.encode(meeting)
 redis.call("HSET", key, meetingId, nextPayload)
-return { nextVersion(KEYS[2]), meetingId, nextPayload, redis.call("HGET", KEYS[3], meetingId) }
-`;
-
-const STORED_AT_LUA = `${NEXT_VERSION_LUA}
-local function storedAt(hash, id)
-  local current = redis.call("HGET", hash, id)
-  if not current then return nil end
-  local ok, stored = pcall(cjson.decode, current)
-  if ok and type(stored) == "table" then return tonumber(stored["updatedAt"]) or 0 end
-  return 0
-end
-
-local function markDeleted(hash, tombstones, id, deletedAt)
-  local currentAt = storedAt(hash, id)
-  local removed = 0
-  if currentAt and currentAt < deletedAt then
-    redis.call("HDEL", hash, id)
-    removed = 1
-  end
-  local previous = tonumber(redis.call("HGET", tombstones, id) or "")
-  if not previous or previous < deletedAt then redis.call("HSET", tombstones, id, deletedAt) end
-  return removed
-end
-
-
-local function setIfNewer(hash, tombstones, id, updatedAt, payload, strict)
-  local deletedAt = tonumber(redis.call("HGET", tombstones, id) or "")
-  if deletedAt and (deletedAt > updatedAt or (strict and deletedAt == updatedAt)) then return 0 end
-  local currentAt = storedAt(hash, id)
-  if currentAt and (currentAt > updatedAt or (strict and currentAt == updatedAt)) then return 0 end
-  redis.call("HSET", hash, id, payload)
-  return 1
-end
-`;
-
-const COMMITTED_LUA = `
-local function committedState(hash, tombstones, ids)
-  local state = {}
-  for _, id in ipairs(ids) do
-    state[#state + 1] = id
-    state[#state + 1] = redis.call("HGET", hash, id)
-    state[#state + 1] = redis.call("HGET", tombstones, id)
-  end
-  return state
-end
-`;
-
-const SET_MEETING_IF_NEWER_SCRIPT = `${STORED_AT_LUA}${COMMITTED_LUA}
-if redis.call("EXISTS", KEYS[3]) == 0 then return redis.error_reply("NOSEED the scheduled meetings store is not seeded") end
-local applied = setIfNewer(KEYS[1], KEYS[2], ARGV[1], tonumber(ARGV[2]) or 0, ARGV[3], ARGV[4] == "newer")
-local reply = committedState(KEYS[1], KEYS[2], { ARGV[1] })
-table.insert(reply, 1, applied)
-table.insert(reply, 1, nextVersion(KEYS[4]))
-return reply
-`;
-
-const SAVE_MEETINGS_SCRIPT = `${STORED_AT_LUA}${COMMITTED_LUA}
-if redis.call("EXISTS", KEYS[3]) == 0 then return redis.error_reply("NOSEED the scheduled meetings store is not seeded") end
-local ids = {}
-local seen = {}
-local function touch(id)
-  if not seen[id] then
-    seen[id] = true
-    ids[#ids + 1] = id
-  end
-end
-local count = tonumber(ARGV[1]) or 0
-local index = 2
-for _ = 1, count do
-  setIfNewer(KEYS[1], KEYS[2], ARGV[index], tonumber(ARGV[index + 1]) or 0, ARGV[index + 2], false)
-  touch(ARGV[index])
-  index = index + 3
-end
-while index <= #ARGV do
-  markDeleted(KEYS[1], KEYS[2], ARGV[index], tonumber(ARGV[index + 1]) or 0)
-  touch(ARGV[index])
-  index = index + 2
-end
-local reply = committedState(KEYS[1], KEYS[2], ids)
-table.insert(reply, 1, nextVersion(KEYS[4]))
-return reply
-`;
-
-/**
- * Seeds an empty Redis from SQLite and marks it seeded, in one step. A Redis
- * that already holds meetings is the authority: it is only marked, never
- * topped up from SQLite, whose rows an older SFU may have left stale.
- */
-const SEED_MEETINGS_SCRIPT = `${STORED_AT_LUA}
-if redis.call("EXISTS", KEYS[3]) == 1 then return 0 end
-if redis.call("HLEN", KEYS[1]) > 0 or redis.call("HLEN", KEYS[2]) > 0 then
-  redis.call("SET", KEYS[3], "1")
-  return 0
-end
-local count = tonumber(ARGV[1]) or 0
-local index = 2
-for _ = 1, count do
-  setIfNewer(KEYS[1], KEYS[2], ARGV[index], tonumber(ARGV[index + 1]) or 0, ARGV[index + 2], false)
-  index = index + 3
-end
-while index <= #ARGV do
-  markDeleted(KEYS[1], KEYS[2], ARGV[index], tonumber(ARGV[index + 1]) or 0)
-  index = index + 2
-end
-nextVersion(KEYS[4])
-redis.call("SET", KEYS[3], "1")
-return 1
+return nextPayload
 `;
 
 const bookingSlotLockTtlMs = (): number => {
@@ -1187,36 +932,26 @@ const bookingSlotLockKey = (
 
 class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
   private client: RedisPersistenceClient;
-  private mirror: SqliteMeetingStore;
-  private mirrorStale = true;
+  private fallback: ScheduledMeetingPersistence;
   private key: string;
-  private tombstonesKey: string;
-  private seededKey: string;
-  private versionKey: string;
   private keyPrefix: string;
   private startPromise: Promise<void> | null = null;
   private started = false;
   private pendingWrite: Promise<void> = Promise.resolve();
-  private seeded: Promise<void> | null = null;
+  private knownMeetings = new Map<string, ScheduledMeeting>();
 
   constructor(options: {
     redisUrl: string;
     keyPrefix: string;
-    mirror: SqliteMeetingStore;
+    fallback: ScheduledMeetingPersistence;
   }) {
     this.client = createRedisPersistenceClient(
       "ScheduledMeetings",
       options.redisUrl,
     );
-    this.mirror = options.mirror;
+    this.fallback = options.fallback;
     this.keyPrefix = options.keyPrefix;
     this.key = `${options.keyPrefix}:scheduled-meetings`;
-    this.tombstonesKey = `${options.keyPrefix}:scheduled-meetings:tombstones`;
-    this.seededKey = `${options.keyPrefix}:scheduled-meetings:seeded`;
-    this.versionKey = `${options.keyPrefix}:scheduled-meetings:version`;
-    this.client.on("ready", () => {
-      this.seeded = null;
-    });
   }
 
   async start(): Promise<void> {
@@ -1240,49 +975,46 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     }
   }
 
-  async saveChanged(meetings: ScheduledMeeting[], deletions: MeetingDeletion[] = []): Promise<CommittedMeetings> {
-    if (meetings.length === 0 && deletions.length === 0) return committed([]);
-    let commits: MeetingCommit[] = [];
-    await this.queueWrite(async () => {
-      const [version, ...state] = (await this.evalSeeded([
-        "EVAL",
-        SAVE_MEETINGS_SCRIPT,
-        "4",
-        this.key,
-        this.tombstonesKey,
-        this.seededKey,
-        this.versionKey,
-        String(meetings.length),
-        ...meetings.flatMap((meeting) => [meeting.id, String(meeting.updatedAt), JSON.stringify(meeting)]),
-        ...deletions.flatMap(({ id, deletedAt }) => [id, String(deletedAt)]),
-      ])) as unknown[];
-      const mirrored = mirroredMeetingsFrom(state);
-      commits = commitsOfMirrored(mirrored);
-      await this.updateMirror({ version: Number(version), meetings: mirrored });
+  save(snapshot: ScheduledMeeting[]): void {
+    this.knownMeetings = new Map(snapshot.map((meeting) => [meeting.id, meeting]));
+    void this.fallback.save(snapshot);
+    const payload = snapshot.map((meeting) => [
+      meeting.id,
+      JSON.stringify(meeting),
+    ] as const);
+    this.queueWrite("save snapshot", async () => {
+      const transaction = this.client.multi();
+      transaction.del(this.key);
+      if (payload.length > 0) {
+        transaction.hSet(this.key, Object.fromEntries(payload));
+      }
+      await transaction.exec();
     });
-    return committed(commits);
   }
 
-  async importIfNewer(meeting: ScheduledMeeting): Promise<boolean> {
-    let applied = false;
-    await this.queueWrite(async () => {
-      const [version, outcome, ...state] = (await this.evalSeeded([
-        "EVAL",
-        SET_MEETING_IF_NEWER_SCRIPT,
-        "4",
-        this.key,
-        this.tombstonesKey,
-        this.seededKey,
-        this.versionKey,
-        meeting.id,
-        String(meeting.updatedAt),
-        JSON.stringify(meeting),
-        "newer",
-      ])) as unknown[];
-      applied = Number(outcome) === 1;
-      await this.updateMirror({ version: Number(version), meetings: mirroredMeetingsFrom(state) });
+  saveChanged(meetings: ScheduledMeeting[]): void {
+    if (meetings.length === 0) return;
+    for (const meeting of meetings) {
+      this.knownMeetings.set(meeting.id, meeting);
+    }
+    void this.fallback.save(Array.from(this.knownMeetings.values()));
+    const payload = Object.fromEntries(
+      meetings.map((meeting) => [meeting.id, JSON.stringify(meeting)]),
+    );
+    this.queueWrite("save changed meetings", async () => {
+      await this.client.hSet(this.key, payload);
     });
-    return applied;
+  }
+
+  deleteIds(ids: string[]): void {
+    if (ids.length === 0) return;
+    for (const id of ids) {
+      this.knownMeetings.delete(id);
+    }
+    void this.fallback.save(Array.from(this.knownMeetings.values()));
+    this.queueWrite("delete meetings", async () => {
+      await this.client.hDel(this.key, ids);
+    });
   }
 
   async reserveBookingSlot(
@@ -1313,51 +1045,70 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     };
   }
 
-  /** Claims a due reminder in Redis, where the claim commits; the mirror follows. */
   async claimEmailReminder(
     claim: EmailReminderClaim,
   ): Promise<ScheduledMeeting | null> {
-    let claimed: ScheduledMeeting | null = null;
-    await this.queueWrite(async () => {
-      const result = await this.client.sendCommand([
-        "EVAL",
-        CLAIM_EMAIL_REMINDER_SCRIPT,
-        "3",
-        this.key,
-        this.versionKey,
-        this.tombstonesKey,
-        claim.meetingId,
-        String(claim.now),
-        String(claim.leadMs),
-        String(Date.now()),
-      ]);
-      if (!Array.isArray(result)) return;
-      const [version, ...state] = result as unknown[];
-      const mirrored = mirroredMeetingsFrom(state);
-      claimed = commitsOfMirrored(mirrored)[0]?.record ?? null;
-      await this.updateMirror({ version: Number(version), meetings: mirrored });
-    });
-    return claimed;
-  }
-
-  /**
-   * Reads the meetings from Redis, which holds them. A failed read fails: an
-   * SFU never loads memory from the mirror, which can lag Redis.
-   */
-  async loadState(): Promise<StoredMeetings> {
-    let authority: VersionedMeetings;
-    try {
-      await this.start();
-      authority = await this.readAuthority();
-    } catch (error) {
-      throw new Error("Could not read scheduled meetings from Redis, which holds them; not loading the local mirror instead", { cause: error });
+    await this.start();
+    const result = await this.client.sendCommand([
+      "EVAL",
+      CLAIM_EMAIL_REMINDER_SCRIPT,
+      "1",
+      this.key,
+      claim.meetingId,
+      String(claim.now),
+      String(claim.leadMs),
+    ]);
+    if (typeof result !== "string" || !result) return null;
+    const meeting = normalizeStoredMeeting(JSON.parse(result));
+    if (!meeting) return null;
+    this.knownMeetings.set(meeting.id, meeting);
+    if (this.fallback.saveChanged) {
+      await Promise.resolve(this.fallback.saveChanged([meeting]));
+    } else {
+      await Promise.resolve(
+        this.fallback.save(Array.from(this.knownMeetings.values())),
+      );
     }
-    if (this.mirrorStale) await this.rebuildMirror(authority);
-    return authority.state;
+    return meeting;
   }
 
   async load(): Promise<ScheduledMeeting[]> {
-    return (await this.loadState()).records;
+    try {
+      await this.start();
+      const values = await this.client.hVals(this.key);
+      if (values.length > 0) {
+        const meetings = values
+          .map((value) => normalizeStoredMeeting(JSON.parse(value)))
+          .filter((entry): entry is ScheduledMeeting => Boolean(entry));
+        this.knownMeetings = new Map(
+          meetings.map((meeting) => [meeting.id, meeting]),
+        );
+        return meetings;
+      }
+
+      const fallbackMeetings = await this.fallback.load();
+      this.knownMeetings = new Map(
+        fallbackMeetings.map((meeting) => [meeting.id, meeting]),
+      );
+      if (fallbackMeetings.length > 0) {
+        this.save(fallbackMeetings);
+        await this.flush();
+        Logger.info(
+          `Migrated ${fallbackMeetings.length} scheduled meeting(s) into Redis persistence`,
+        );
+      }
+      return fallbackMeetings;
+    } catch (error) {
+      Logger.error(
+        "Failed to load scheduled meetings from Redis; falling back to local persistence",
+        error,
+      );
+      const fallbackMeetings = await this.fallback.load();
+      this.knownMeetings = new Map(
+        fallbackMeetings.map((meeting) => [meeting.id, meeting]),
+      );
+      return fallbackMeetings;
+    }
   }
 
   async flush(): Promise<void> {
@@ -1366,126 +1117,46 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
 
   async close(): Promise<void> {
     await this.flush();
-    await this.mirror.close?.();
+    await this.fallback.close?.();
     if (!this.started) return;
     this.started = false;
     await this.client.quit();
   }
 
-  private async readAuthority(): Promise<VersionedMeetings> {
-    let read = await this.readSeeded();
-    if (!read) {
-      this.seeded = null;
-      read = await this.readSeeded();
-    }
-    if (!read) throw new Error("Redis lost its scheduled meetings while reseeding");
-    const [values, tombstones, version] = read;
-    return {
-      version: Number(version ?? 0),
-      state: {
-        records: values
-          .map((value) => normalizeStoredMeeting(JSON.parse(value)))
-          .filter((entry): entry is ScheduledMeeting => Boolean(entry)),
-        deletedAt: new Map(Object.entries(tombstones).map(([id, deletedAt]) => [id, Number(deletedAt)])),
-      },
-    };
-  }
-
-  private async updateMirror(change: MirroredMeetingChange): Promise<void> {
-    if (this.mirrorStale) {
-      await this.rebuildMirror();
-      return;
-    }
-    try {
-      await this.mirror.mirror(change);
-    } catch (error) {
-      this.mirrorStale = true;
-      Logger.warn("[ScheduledMeetings] The SQLite mirror missed a change; it is rebuilt from Redis on the next write", error);
-    }
-  }
-
-  private async rebuildMirror(read?: VersionedMeetings): Promise<void> {
-    try {
-      const authority = read ?? (await this.readAuthority());
-      await this.mirror.syncFrom(authority.state, authority.version);
-      this.mirrorStale = false;
-    } catch (error) {
-      this.mirrorStale = true;
-      Logger.warn("[ScheduledMeetings] Could not rebuild the SQLite mirror from Redis; it is tried again on the next write", error);
-    }
-  }
-
-  /** Runs before the first read or write, so nothing this SFU writes can make an empty Redis look established. */
-  private async readSeeded(): Promise<[string[], Record<string, string>, string | null] | null> {
-    await this.ensureSeeded();
-    const [seeded, values, tombstones, version] = (await this.client
-      .multi()
-      .exists(this.seededKey)
-      .hVals(this.key)
-      .hGetAll(this.tombstonesKey)
-      .get(this.versionKey)
-      .exec()) as unknown as [number, string[], Record<string, string>, string | null];
-    return Number(seeded) === 1 ? [values, tombstones, version] : null;
-  }
-
-  /** Runs a write script; if Redis lost its data since the seed, reseeds and retries once. */
-  private async evalSeeded(command: string[]): Promise<unknown> {
-    try {
-      return await this.client.sendCommand(command);
-    } catch (error) {
-      if (!isNotSeededError(error)) throw error;
-      this.seeded = null;
-      await this.ensureSeeded();
-      return this.client.sendCommand(command);
-    }
-  }
-
-  private ensureSeeded(): Promise<void> {
-    this.seeded ??= this.seed().catch((error: unknown) => {
-      this.seeded = null;
+  private queueWrite(label: string, write: () => Promise<void>): void {
+    const writePromise = this.pendingWrite
+      .catch(() => undefined)
+      .then(async () => {
+        await this.start();
+        await write();
+      });
+    this.pendingWrite = writePromise.catch((error) => {
+      Logger.error(`Failed to persist scheduled meetings to Redis (${label})`, error);
       throw error;
     });
-    return this.seeded;
-  }
-
-  private async seed(): Promise<void> {
-    if (await this.client.exists(this.seededKey)) return;
-    const local = await this.mirror.loadState({ strict: true });
-    const seeded = await this.client.sendCommand([
-      "EVAL",
-      SEED_MEETINGS_SCRIPT,
-      "4",
-      this.key,
-      this.tombstonesKey,
-      this.seededKey,
-      this.versionKey,
-      String(local.records.length),
-      ...local.records.flatMap((meeting) => [meeting.id, String(meeting.updatedAt), JSON.stringify(meeting)]),
-      ...[...local.deletedAt].flatMap(([id, deletedAt]) => [id, String(deletedAt)]),
-    ]);
-    if (Number(seeded) === 1 && local.records.length > 0) {
-      Logger.info(`Seeded Redis with ${local.records.length} scheduled meeting(s) from local persistence`);
-    }
-  }
-
-  /** Writes in order; each caller gets its own write's result. */
-  private queueWrite(write: () => Promise<void>): Promise<void> {
-    const writePromise = this.pendingWrite.then(async () => {
-      await this.start();
-      await this.ensureSeeded();
-      await write();
-    });
-    this.pendingWrite = writePromise.catch(() => undefined);
-    return writePromise;
   }
 }
 
-export const createRedisScheduledMeetingPersistence = (
+const createRedisScheduledMeetingPersistence = (
   redisUrl: string = resolveRedisPersistenceUrl(),
   keyPrefix: string = resolveRedisPersistenceKeyPrefix(),
-  mirror: SqliteMeetingStore = createSqliteScheduledMeetingPersistence(),
+  fallback: ScheduledMeetingPersistence = createSqliteScheduledMeetingPersistence(),
 ): ScheduledMeetingPersistence =>
-  new RedisScheduledMeetingPersistence({ redisUrl, keyPrefix, mirror });
+  new RedisScheduledMeetingPersistence({ redisUrl, keyPrefix, fallback });
+
+const migrateJsonScheduledMeetingsToSqlite = (
+  sqlite: ScheduledMeetingPersistence,
+  json: ScheduledMeetingPersistence,
+): number => {
+  const existing = sqlite.load() as ScheduledMeeting[];
+  if (existing.length > 0) return 0;
+
+  const legacy = json.load() as ScheduledMeeting[];
+  if (legacy.length === 0) return 0;
+
+  void sqlite.save(legacy);
+  return (sqlite.load() as ScheduledMeeting[]).length;
+};
 
 export const createScheduledMeetingPersistence = (): ScheduledMeetingPersistence => {
   const mode = process.env.SCHEDULED_MEETINGS_PERSISTENCE?.trim().toLowerCase();
@@ -1493,11 +1164,19 @@ export const createScheduledMeetingPersistence = (): ScheduledMeetingPersistence
     return createFileScheduledMeetingPersistence();
   }
 
+  const jsonPersistence = createFileScheduledMeetingPersistence();
   const redisUrl = resolveRedisPersistenceUrl();
-  const sqlitePersistence = createSqliteScheduledMeetingPersistence(
-    scheduledMeetingsSqlitePath(),
-    scheduledMeetingsPath(),
+
+  const sqlitePersistence = createSqliteScheduledMeetingPersistence();
+  const migrated = migrateJsonScheduledMeetingsToSqlite(
+    sqlitePersistence,
+    jsonPersistence,
   );
+  if (migrated > 0) {
+    Logger.info(
+      `Migrated ${migrated} scheduled meeting(s) from JSON into SQLite`,
+    );
+  }
   if (shouldUseRedisPersistence(mode, redisUrl)) {
     if (!redisUrl) {
       throw new Error(
@@ -1513,177 +1192,67 @@ export const createScheduledMeetingPersistence = (): ScheduledMeetingPersistence
   return sqlitePersistence;
 };
 
-export const importFallbackMeetings = async (
-  persistence: ScheduledMeetingPersistence,
-): Promise<number> => {
-  return importFallbackFiles({
-    fileName: "scheduled-meetings.json",
-    noun: "scheduled meeting",
-    records: (data) => requireArray(data, "scheduled meetings"),
-    describe: describeEntry("meeting"),
-    importIfNewer: (entry) => persistence.importIfNewer(requireRecord(normalizeStoredMeeting(entry), "meeting")),
-  });
-};
-
-/** Loads stored meetings into memory at startup, after any JSON fallback import, in the store's queue. */
 export const loadPersistedMeetings = (
   store: ScheduledMeetingStore,
   persistence: ScheduledMeetingPersistence,
-  options: { importFallback?: boolean } = {},
-): Promise<number> =>
-  serialized(store, async () => {
-    if (options.importFallback) await importFallbackMeetings(persistence);
-    const { records, deletedAt } = await persistence.loadState();
-    for (const meeting of records) {
-      registerStore(store, meeting);
-    }
-    for (const [id, at] of deletedAt) store.deletedAt.set(id, at);
-    return records.length;
-  });
+): Promise<number> => Promise.resolve(persistence.load()).then((meetings) => {
+  for (const meeting of meetings) {
+    registerStore(store, meeting);
+  }
+  return meetings.length;
+});
 
-/** Merges what storage holds into memory, newest stamp wins, in the store's queue. */
-export const mergePersistedMeetings = (
+const persistScheduledMeetings = (
   store: ScheduledMeetingStore,
   persistence: ScheduledMeetingPersistence,
-): Promise<number> =>
-  serialized(store, async () => {
-    const stored = await persistence.loadState({ strict: true });
-    return mergeNewestStamp(
-      { values: store.byId, deletedAt: store.deletedAt },
-      { values: new Map(stored.records.map((meeting) => [meeting.id, meeting])), deletedAt: stored.deletedAt },
-      (meeting) => meeting.updatedAt,
-      {
-        set: (id, meeting) => {
-          const held = store.byId.get(id);
-          if (held) {
-            unregisterStore(store, held);
-            Object.assign(held, meeting);
-          }
-          registerStore(store, held ?? meeting);
-          store.deletedAt.delete(id);
-        },
-        remove: (id, deletedAt) => {
-          const held = store.byId.get(id);
-          if (held) unregisterStore(store, held);
-          store.deletedAt.set(id, deletedAt);
-        },
-      },
+): Promise<void> =>
+  Promise.resolve(persistence.save(Array.from(store.byId.values()))).then(() =>
+    persistence.flush?.(),
+  );
+
+export const persistScheduledMeetingChanges = (
+  store: ScheduledMeetingStore,
+  persistence: ScheduledMeetingPersistence,
+  meetings: ScheduledMeeting[],
+): Promise<void> => {
+  if (meetings.length === 0) return Promise.resolve();
+  if (persistence.saveChanged) {
+    return Promise.resolve(persistence.saveChanged(meetings)).then(() =>
+      persistence.flush?.(),
     );
-  });
-
-type MeetingPlan<R> = {
-  result: R;
-  upserts: ScheduledMeeting[];
-  deletions: MeetingDeletion[];
-};
-
-const planMeetingChange = <R>(
-  store: ScheduledMeetingStore,
-  targets: ChangeTargets<ScheduledMeetingStore>,
-  mutate: (draft: ScheduledMeetingStore, at: number) => R,
-  at: number,
-): MeetingPlan<R> => {
-  const ids = targetIds(targets, store, at);
-  const draft: ScheduledMeetingStore = {
-    byId: new Map(store.byId),
-    byRoomCode: new Map(store.byRoomCode),
-    deletedAt: new Map(store.deletedAt),
-  };
-  for (const id of ids) {
-    const held = store.byId.get(id);
-    if (held) draft.byId.set(id, structuredClone(held));
   }
-  const result = mutate(draft, at);
-  const upserts = [...draft.byId].flatMap(([id, meeting]) => {
-    const held = store.byId.get(id);
-    if (held && sameStoredValue(held, meeting)) return [];
-    meeting.updatedAt = commitStamp(at, held?.updatedAt);
-    return [meeting];
-  });
-  const deletions = ids
-    .filter((id) => store.byId.has(id) && !draft.byId.has(id))
-    .map((id) => ({ id, deletedAt: commitStamp(at, store.byId.get(id)?.updatedAt) }));
-  return { result, upserts, deletions };
+  return persistScheduledMeetings(store, persistence);
 };
 
-const uncommittedMeetings = (plan: MeetingPlan<unknown>): CommittedMeetings =>
-  committed([
-    ...plan.upserts.map((meeting) => ({ id: meeting.id, record: meeting, deletedAt: null })),
-    ...plan.deletions.map(({ id, deletedAt }) => ({ id, record: null, deletedAt })),
-  ]);
-
-const saveMeetingPlan = async (
-  persistence: ScheduledMeetingPersistence | null,
-  plan: MeetingPlan<unknown>,
-): Promise<CommittedMeetings> => {
-  if (plan.upserts.length === 0 && plan.deletions.length === 0) return committed([]);
-  if (!persistence) return uncommittedMeetings(plan);
-  const result = await persistence.saveChanged(plan.upserts, plan.deletions);
-  await persistence.flush?.();
-  return result;
-};
-
-export const adoptStoredMeeting = (store: ScheduledMeetingStore, meeting: ScheduledMeeting): ScheduledMeeting => {
-  const held = store.byId.get(meeting.id);
-  if (held) unregisterStore(store, held);
-  const adopted = held ? assignInPlace(held, meeting) : meeting;
-  registerStore(store, adopted);
-  return adopted;
-};
-
-export const applyCommittedMeetings = (store: ScheduledMeetingStore, commits: CommittedMeetings): void => {
-  for (const { id, record, deletedAt } of commits) {
-    if (record) {
-      adoptStoredMeeting(store, record);
-    } else {
-      const held = store.byId.get(id);
-      if (held) unregisterStore(store, held);
-    }
-    if (deletedAt === null) store.deletedAt.delete(id);
-    else store.deletedAt.set(id, deletedAt);
-  }
-};
-
-export const changeMeetings = async <R>(
+export const persistScheduledMeetingDeletes = (
   store: ScheduledMeetingStore,
-  persistence: ScheduledMeetingPersistence | null,
-  ids: ChangeTargets<ScheduledMeetingStore>,
-  mutate: (draft: ScheduledMeetingStore, at: number) => R,
-): Promise<R> => {
-  const plan = await persistThenApply(store, "scheduled meetings", {
-    plan: (at) => planMeetingChange(store, ids, mutate, at),
-    save: (planned) => saveMeetingPlan(persistence, planned),
-    apply: (_planned, commits) => applyCommittedMeetings(store, commits),
-  });
-  if (plan.upserts.some((meeting) => !store.byId.has(meeting.id))) throw new ChangedElsewhereError("scheduled meeting");
-  return committedRecords(store.byId, plan.result);
+  persistence: ScheduledMeetingPersistence,
+  ids: string[],
+): Promise<void> => {
+  if (ids.length === 0) return Promise.resolve();
+  if (persistence.deleteIds) {
+    return Promise.resolve(persistence.deleteIds(ids)).then(() =>
+      persistence.flush?.(),
+    );
+  }
+  return persistScheduledMeetings(store, persistence);
 };
-
-export const dueScheduledMeetingIds = (store: ScheduledMeetingStore, now = Date.now()): string[] =>
-  [...store.byId.values()]
-    .filter(
-      (meeting) =>
-        (meeting.status === "scheduled" && now >= meeting.scheduledStartAt) ||
-        (meeting.status === "live" && now >= meeting.scheduledEndAt),
-    )
-    .map((meeting) => meeting.id);
 
 export const advanceScheduledMeetings = (
   store: ScheduledMeetingStore,
-  dueAt = Date.now(),
-  at = dueAt,
+  now = Date.now(),
 ): ScheduledMeeting[] => {
   const changed: ScheduledMeeting[] = [];
   for (const meeting of store.byId.values()) {
-    if (meeting.status === "scheduled" && dueAt >= meeting.scheduledStartAt) {
+    if (meeting.status === "scheduled" && now >= meeting.scheduledStartAt) {
       meeting.status = "live";
-      if (!meeting.startedAt) meeting.startedAt = at;
-      meeting.updatedAt = at;
+      if (!meeting.startedAt) meeting.startedAt = now;
+      meeting.updatedAt = now;
       changed.push(meeting);
-    } else if (meeting.status === "live" && dueAt >= meeting.scheduledEndAt) {
+    } else if (meeting.status === "live" && now >= meeting.scheduledEndAt) {
       meeting.status = "ended";
-      if (!meeting.endedAt) meeting.endedAt = at;
-      meeting.updatedAt = at;
+      if (!meeting.endedAt) meeting.endedAt = now;
+      meeting.updatedAt = now;
       changed.push(meeting);
     }
   }

@@ -38,16 +38,16 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-describe("SQLite write check at startup", () => {
+describe.skipIf(runsAsRoot)("SQLite write check at startup", () => {
   for (const store of stores) {
-    it.skipIf(runsAsRoot)(`refuses a ${store.name} database the SFU can open but not write`, async () => {
+    it(`refuses a ${store.name} database the SFU can open but not write`, async () => {
       await store.open().close?.();
       chmodSync(join(dir, "conclave.sqlite"), 0o444);
 
       expect(() => store.open()).toThrow(/conclave\.sqlite is not writable[\s\S]*ownership step in packages\/sfu\/README\.md/);
     });
 
-    it.skipIf(runsAsRoot)(`refuses a ${store.name} database whose directory the SFU cannot write`, async () => {
+    it(`refuses a ${store.name} database whose directory the SFU cannot write`, async () => {
       await store.open().close?.();
       chmodSync(dir, 0o555);
 

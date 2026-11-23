@@ -207,9 +207,9 @@ function Get-PublicUrl {
 # container starts. Safe to repeat; it only touches mismatched files.
 # Older images fell back to JSON files in the container layer when SQLite was
 # locked. The old container is stopped first, so it cannot write after the
-# copy; the new SFU imports the copies on startup and renames each .imported.
-# The copy runs in a container of the new image and writes to the import folder
-# that image names (CONCLAVE_FALLBACK_IMPORT_DIR), the path the SFU reads.
+# copy, and the copies stay on the volume for a later import. The copy runs in
+# a container of the new image and writes to the folder that image names
+# (CONCLAVE_FALLBACK_IMPORT_DIR).
 function Copy-FallbackJson {
   param([string]$Service)
 
@@ -261,78 +261,6 @@ function Copy-FallbackJson {
   }
 }
 
-function Get-SfuDeployUrl {
-  param([string]$Service)
-
-  if ($Service -eq "sfu-a") {
-    return $sfuAUrl
-  }
-  return $sfuBUrl
-}
-
-function Wait-SfuHealthy {
-  param([string]$Service)
-
-  $url = Get-SfuDeployUrl -Service $Service
-  $timeout = if ([string]::IsNullOrWhiteSpace($env:SFU_HEALTH_TIMEOUT_SECONDS)) { 180 } else { [int]$env:SFU_HEALTH_TIMEOUT_SECONDS }
-  $deadline = (Get-Date).AddSeconds($timeout)
-  while ($true) {
-    try {
-      $response = Invoke-WebRequest -Uri "$url/health" -Method Get -TimeoutSec 5 -SkipHttpErrorCheck
-      if ($response.StatusCode -eq 200) {
-        return
-      }
-    } catch {
-    }
-    if ((Get-Date) -ge $deadline) {
-      Exit-WithError "$Service did not become healthy at $url; stopping before reloading the other SFU."
-    }
-    Start-Sleep -Seconds 2
-  }
-}
-
-# Each SFU loads its stores at startup. Reload the ones already running so they
-# also hold what the new SFU just recovered; the reload merges newest-wins.
-function Invoke-SfuStoreReload {
-  param([string]$Service, [bool]$Required)
-
-  $url = Get-SfuDeployUrl -Service $Service
-  try {
-    $response = Invoke-WebRequest -Uri "$url/admin/reload-stores" -Method Post -Headers @{ "x-sfu-secret" = $env:SFU_SECRET } -TimeoutSec 60 -SkipHttpErrorCheck
-  } catch {
-    $cause = $_.Exception
-    while ($cause -and -not ($cause -is [System.Net.Sockets.SocketException])) {
-      $cause = $cause.InnerException
-    }
-    if (-not $Required -and $cause -and $cause.SocketErrorCode -eq [System.Net.Sockets.SocketError]::ConnectionRefused) {
-      Write-Host "$Service is not running; it loads the stores when it starts."
-      return
-    }
-    Exit-WithError "Could not reload $Service's stores at $url ($($_.Exception.Message)); stopping."
-  }
-  if ($response.StatusCode -eq 200) {
-    Write-Host "Reloaded $Service's scheduling, meeting and webinar stores."
-    return
-  }
-  if (-not $Required -and $response.StatusCode -eq 404) {
-    Write-Host "$Service runs an image without store reload; it loads the stores when it is replaced."
-    return
-  }
-  Exit-WithError "Could not reload $Service's stores at $url (HTTP $($response.StatusCode)); stopping."
-}
-
-function Invoke-StoreReloadAfterStart {
-  param([string]$Service)
-
-  Wait-SfuHealthy -Service $Service
-  foreach ($other in @("sfu-a", "sfu-b")) {
-    if ($other -ne $Service) {
-      Invoke-SfuStoreReload -Service $other -Required $false
-    }
-  }
-  Invoke-SfuStoreReload -Service $Service -Required $true
-}
-
 function Start-SfuService {
   param([string]$Service)
 
@@ -349,7 +277,6 @@ function Start-SfuService {
     Exit-WithError "$($_.Exception.Message) Stopped before replacing $Service. Its old container is stopped, not removed; start it again with: docker $($composeBaseArgs -join ' ') start $Service"
   }
   Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @("up", "-d", $Service))
-  Invoke-StoreReloadAfterStart -Service $Service
 }
 
 function Get-StatusJson {

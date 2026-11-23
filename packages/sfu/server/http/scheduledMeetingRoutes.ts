@@ -2,18 +2,17 @@ import type { Express, Request, Response } from "express";
 import { Logger } from "../../utilities/loggers.js";
 import { secretsMatch } from "../secret.js";
 import {
-  changeMeetings,
   createScheduledMeeting,
   deleteScheduledMeeting,
   getScheduledMeetingById,
   getScheduledMeetingByRoomCode,
   listScheduledMeetings,
   moveScheduledMeetingToClient,
+  persistScheduledMeetingChanges,
+  persistScheduledMeetingDeletes,
   updateScheduledMeeting,
-  type ScheduledMeetingStore,
 } from "../scheduledMeetings.js";
 import type { SfuState } from "../state.js";
-import { answerStoreFailure } from "./persistenceUnavailable.js";
 import {
   canonicalizeClientId,
   canMigrateClientNamespace,
@@ -139,12 +138,32 @@ export const registerScheduledMeetingRoutes = (
     return false;
   };
 
-  const change = <R>(ids: string[], mutate: (draft: ScheduledMeetingStore) => R): Promise<R> =>
-    changeMeetings(state.scheduledMeetings, state.scheduledMeetingPersistence, ids, mutate);
+  const persistChanged = async (meeting: ScheduledMeeting): Promise<void> => {
+    if (state.scheduledMeetingPersistence) {
+      try {
+        await persistScheduledMeetingChanges(
+          state.scheduledMeetings,
+          state.scheduledMeetingPersistence,
+          [meeting],
+        );
+      } catch (error) {
+        Logger.warn("Failed to persist scheduled meetings", error);
+      }
+    }
+  };
 
-  const answerFailure = (res: Response, error: unknown): void => {
-    if (answerStoreFailure(res, error)) return;
-    res.status(400).json({ error: (error as Error).message });
+  const persistDeleted = async (id: string): Promise<void> => {
+    if (state.scheduledMeetingPersistence) {
+      try {
+        await persistScheduledMeetingDeletes(
+          state.scheduledMeetings,
+          state.scheduledMeetingPersistence,
+          [id],
+        );
+      } catch (error) {
+        Logger.warn("Failed to delete scheduled meeting", error);
+      }
+    }
   };
 
   const migrateMeetingNamespace = async (
@@ -154,9 +173,15 @@ export const registerScheduledMeetingRoutes = (
     if (meeting.clientId === clientId) return meeting;
     if (!canMigrateClientNamespace(meeting.clientId, clientId)) return null;
     try {
-      return await change([meeting.id], (draft) =>
-        moveScheduledMeetingToClient(draft, meeting.id, clientId),
+      const migrated = moveScheduledMeetingToClient(
+        state.scheduledMeetings,
+        meeting.id,
+        clientId,
       );
+      if (migrated) {
+        await persistChanged(migrated);
+      }
+      return migrated;
     } catch (error) {
       Logger.warn(
         `Failed to migrate scheduled meeting ${meeting.id} from ${meeting.clientId} to ${clientId}`,
@@ -243,22 +268,21 @@ export const registerScheduledMeetingRoutes = (
 
     try {
       const body = (req.body ?? {}) as CreateScheduledMeetingRequest;
-      const email = user.email;
-      const meeting = await change([], (draft) =>
-        createScheduledMeeting(draft, body, {
-          clientId,
-          createdBy: user.userId || email,
-          defaultHostEmail: email,
-          defaultHostName: user.name || undefined,
-          defaultHostUserId: user.userId,
-        }),
-      );
+      const meeting = createScheduledMeeting(state.scheduledMeetings, body, {
+        clientId,
+        createdBy: user.userId || user.email,
+        defaultHostEmail: user.email,
+        defaultHostName: user.name || undefined,
+        defaultHostUserId: user.userId,
+      });
+
+      await persistChanged(meeting);
       Logger.info(
         `Scheduled meeting created ${meeting.id} (${meeting.roomCode}) by ${user.email}`,
       );
       res.status(201).json({ scheduledMeeting: serializeMeeting(meeting) });
     } catch (error) {
-      answerFailure(res, error);
+      res.status(400).json({ error: (error as Error).message });
     }
   });
 
@@ -337,12 +361,15 @@ export const registerScheduledMeetingRoutes = (
     if (!target) return;
     try {
       const body = (req.body ?? {}) as UpdateScheduledMeetingRequest;
-      const meeting = await change([target.id], (draft) =>
-        updateScheduledMeeting(draft, target.id, body),
+      const meeting = updateScheduledMeeting(
+        state.scheduledMeetings,
+        target.id,
+        body,
       );
+      await persistChanged(meeting);
       res.json({ scheduledMeeting: serializeMeeting(meeting) });
     } catch (error) {
-      answerFailure(res, error);
+      res.status(400).json({ error: (error as Error).message });
     }
   });
 
@@ -350,19 +377,12 @@ export const registerScheduledMeetingRoutes = (
     if (!requireSecret(req, res)) return;
     const target = requireMeetingAccess(req, res);
     if (!target) return;
-    let meeting: ScheduledMeeting | null;
-    try {
-      meeting = await change([target.id], (draft) =>
-        deleteScheduledMeeting(draft, target.id),
-      );
-    } catch (error) {
-      answerFailure(res, error);
-      return;
-    }
+    const meeting = deleteScheduledMeeting(state.scheduledMeetings, target.id);
     if (!meeting) {
       res.status(404).json({ error: "Scheduled meeting not found" });
       return;
     }
+    await persistDeleted(meeting.id);
     res.json({ success: true, id: meeting.id });
   });
 
@@ -371,12 +391,15 @@ export const registerScheduledMeetingRoutes = (
     const target = requireMeetingAccess(req, res);
     if (!target) return;
     try {
-      const meeting = await change([target.id], (draft) =>
-        updateScheduledMeeting(draft, target.id, { status: "live" }),
+      const meeting = updateScheduledMeeting(
+        state.scheduledMeetings,
+        target.id,
+        { status: "live" },
       );
+      await persistChanged(meeting);
       res.json({ scheduledMeeting: serializeMeeting(meeting) });
     } catch (error) {
-      answerFailure(res, error);
+      res.status(400).json({ error: (error as Error).message });
     }
   });
 
@@ -385,12 +408,15 @@ export const registerScheduledMeetingRoutes = (
     const target = requireMeetingAccess(req, res);
     if (!target) return;
     try {
-      const meeting = await change([target.id], (draft) =>
-        updateScheduledMeeting(draft, target.id, { status: "cancelled" }),
+      const meeting = updateScheduledMeeting(
+        state.scheduledMeetings,
+        target.id,
+        { status: "cancelled" },
       );
+      await persistChanged(meeting);
       res.json({ scheduledMeeting: serializeMeeting(meeting) });
     } catch (error) {
-      answerFailure(res, error);
+      res.status(400).json({ error: (error as Error).message });
     }
   });
 };

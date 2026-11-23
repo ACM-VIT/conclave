@@ -17,13 +17,13 @@ const stores = [
   {
     name: "scheduled meetings", modeVariable: "SCHEDULED_MEETINGS_PERSISTENCE", jsonVariable: "SCHEDULED_MEETINGS_PATH",
     open: async () => {
-      await createScheduledMeetingPersistence().saveChanged([]);
+      await createScheduledMeetingPersistence().save([]);
     },
   },
   {
     name: "scheduled webinars", modeVariable: "SCHEDULED_WEBINARS_PERSISTENCE", jsonVariable: "SCHEDULED_WEBINARS_PATH",
     open: async () => {
-      createScheduledWebinarPersistence().saveChanged([]);
+      createScheduledWebinarPersistence().save([]);
     },
   },
 ];

@@ -237,9 +237,9 @@ COMPOSE=(docker compose "${COMPOSE_ENV_FILES[@]}" -f "$COMPOSE_FILE")
 #
 # Older images fell back to JSON files in the container layer when SQLite was
 # locked. The old container is stopped first, so it cannot write after the
-# copy; the new SFU imports the copies on startup and renames each .imported.
-# The copy runs in a container of the new image and writes to the import folder
-# that image names (CONCLAVE_FALLBACK_IMPORT_DIR), the path the SFU reads.
+# copy, and the copies stay on the volume for a later import. The copy runs in
+# a container of the new image and writes to the folder that image names
+# (CONCLAVE_FALLBACK_IMPORT_DIR).
 copy_fallback_json() (
   local service="$1" container changes staging name path
   local -a copied=()
@@ -282,63 +282,11 @@ ensure_state_ownership() {
   fi
 }
 
-sfu_deploy_url() {
-  case "$1" in
-    sfu-a) printf "%s" "$SFU_A_URL" ;;
-    sfu-b) printf "%s" "$SFU_B_URL" ;;
-  esac
-}
-
-wait_for_sfu_health() {
-  local service="$1" url deadline
-  url="$(sfu_deploy_url "$service")"
-  deadline=$(( $(date +%s) + ${SFU_HEALTH_TIMEOUT_SECONDS:-180} ))
-  until curl -fsS -m 5 -o /dev/null "${url}/health" 2>/dev/null; do
-    if (( $(date +%s) >= deadline )); then
-      echo "${service} did not become healthy at ${url}; stopping before reloading the other SFU." >&2
-      return 1
-    fi
-    sleep 2
-  done
-}
-
-# Each SFU loads its stores at startup. Reload the ones already running so they
-# also hold what the new SFU just recovered; the reload merges newest-wins.
-reload_sfu_stores() {
-  local service="$1" required="$2" url code curl_status=0
-  url="$(sfu_deploy_url "$service")"
-  code="$(curl -sS -m 60 -o /dev/null -w '%{http_code}' -X POST -H "x-sfu-secret: ${SFU_SECRET}" "${url}/admin/reload-stores" 2>/dev/null)" || curl_status=$?
-  if [[ "$code" == "200" ]]; then
-    echo "Reloaded ${service}'s scheduling, meeting and webinar stores."
-    return 0
-  fi
-  if [[ "$required" != "required" && "$code" == "404" ]]; then
-    echo "${service} runs an image without store reload; it loads the stores when it is replaced."
-    return 0
-  fi
-  if [[ "$required" != "required" && "$curl_status" == "7" ]]; then
-    echo "${service} is not running; it loads the stores when it starts."
-    return 0
-  fi
-  echo "Could not reload ${service}'s stores at ${url} (HTTP ${code:-none}, curl exit ${curl_status}); stopping." >&2
-  return 1
-}
-
-reload_stores_after_start() {
-  local started="$1" service
-  wait_for_sfu_health "$started" || exit 1
-  for service in sfu-a sfu-b; do
-    [[ "$service" == "$started" ]] || reload_sfu_stores "$service" optional || exit 1
-  done
-  reload_sfu_stores "$started" required || exit 1
-}
-
 build_and_start() {
   local service="$1"
   "${COMPOSE[@]}" build "$service"
   ensure_state_ownership "$service"
   "${COMPOSE[@]}" up -d "$service"
-  reload_stores_after_start "$service"
 }
 
 HAS_REDIS_SERVICE="false"

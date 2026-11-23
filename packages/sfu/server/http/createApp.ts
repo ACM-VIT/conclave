@@ -43,8 +43,6 @@ import { readBoolean, requestBody } from "../../utilities/untrusted.js";
 import { registerScheduledWebinarRoutes } from "./scheduledWebinarRoutes.js";
 import { registerScheduledMeetingRoutes } from "./scheduledMeetingRoutes.js";
 import { registerSchedulingRoutes } from "./schedulingRoutes.js";
-import { reloadPersistedStores } from "../storeReload.js";
-import { persistenceUnavailableHandler } from "./persistenceUnavailable.js";
 import type { SfuState } from "../state.js";
 import type { RedisPublisherHealth } from "../socket/redisPublisher.js";
 import { resolveWebinarLinkTarget } from "../webinar.js";
@@ -1032,22 +1030,6 @@ export const createSfuApp = ({
     next();
   });
 
-  app.post("/admin/reload-stores", async (req, res) => {
-    if (!requireSecret(req, res)) {
-      return;
-    }
-    try {
-      const merged = await reloadPersistedStores(state);
-      Logger.warn(
-        `Reloaded stores from shared persistence: ${merged.webinars} webinar(s), ${merged.meetings} meeting(s), ${merged.scheduling} scheduling record(s) merged`,
-      );
-      res.json({ ok: true, merged });
-    } catch (error) {
-      Logger.error("Failed to reload stores from shared persistence", error);
-      res.status(500).json({ error: "Store reload failed" });
-    }
-  });
-
   app.get("/admin/overview", (req, res) => {
     if (!requireSecret(req, res)) {
       return;
@@ -1960,8 +1942,6 @@ export const createSfuApp = ({
     state,
     sfuSecret: config.sfuSecret,
   });
-
-  app.use(persistenceUnavailableHandler);
 
   return app;
 };

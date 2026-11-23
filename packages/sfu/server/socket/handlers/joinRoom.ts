@@ -42,8 +42,8 @@ import {
   verifyInviteCode,
 } from "../../webinar.js";
 import {
-  changeWebinars,
   getScheduledWebinarForRoom,
+  persistScheduledWebinarChanges,
   recordWebinarJoin,
   resolveScheduledWebinarAttendeeEntry,
 } from "../../scheduledWebinars.js";
@@ -1030,15 +1030,22 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           !existingClient
         ) {
           const attendeeCount = context.currentRoom.getWebinarAttendeeCount();
-          const scheduledWebinarId = webinarConfig.scheduledWebinarId;
-          void changeWebinars(
+          const webinarWithJoinMetric = recordWebinarJoin(
             state.scheduledWebinars,
-            state.scheduledWebinarPersistence,
-            [scheduledWebinarId],
-            (draft) => recordWebinarJoin(draft, scheduledWebinarId, attendeeCount),
-          ).catch((error: unknown) => {
-            Logger.warn("Failed to persist join metric", error);
-          });
+            webinarConfig.scheduledWebinarId,
+            attendeeCount,
+          );
+          if (state.scheduledWebinarPersistence && webinarWithJoinMetric) {
+            try {
+              persistScheduledWebinarChanges(
+                state.scheduledWebinars,
+                state.scheduledWebinarPersistence,
+                [webinarWithJoinMetric],
+              );
+            } catch (error) {
+              Logger.warn("Failed to persist join metric", error);
+            }
+          }
         }
 
         const webinarSnapshot = toWebinarConfigSnapshot(

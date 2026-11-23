@@ -4,16 +4,13 @@ import type {
   SchedulingProfile,
 } from "../types.js";
 import { Logger } from "../utilities/loggers.js";
-import { applyIfUnchanged, retryInBackground, serialized } from "./persistThenApply.js";
 import {
-  adoptStoredMeeting,
-  changeMeetings,
+  persistScheduledMeetingChanges,
   updateScheduledMeeting,
 } from "./scheduledMeetings.js";
 import {
   isSchedulingEmailConfigured,
   sendSchedulingReminderEmails,
-  type SchedulingEmailDeliveryResult,
 } from "./schedulingEmails.js";
 import type { SfuState } from "./state.js";
 
@@ -139,19 +136,17 @@ const fallbackEventType = (
   updatedAt: meeting.updatedAt,
 });
 
-/** Writes reminder fields only while the meeting still exists and holds `basis`. */
-const changeReminder = (
+const persistMeetingChange = async (
   state: SfuState,
-  meetingId: string,
-  what: string,
-  basis: Partial<ScheduledMeeting>,
-  request: Parameters<typeof updateScheduledMeeting>[2],
-): Promise<ScheduledMeeting | null> =>
-  changeMeetings(state.scheduledMeetings, state.scheduledMeetingPersistence, [meetingId], (draft) =>
-    applyIfUnchanged(`${what} for meeting ${meetingId}`, draft.byId.get(meetingId), basis, () =>
-      updateScheduledMeeting(draft, meetingId, request),
-    ),
+  meeting: ScheduledMeeting,
+): Promise<void> => {
+  if (!state.scheduledMeetingPersistence) return;
+  await persistScheduledMeetingChanges(
+    state.scheduledMeetings,
+    state.scheduledMeetingPersistence,
+    [meeting],
   );
+};
 
 const claimReminderForMeeting = async (
   state: SfuState,
@@ -159,51 +154,35 @@ const claimReminderForMeeting = async (
   now: number,
   leadMs: number,
 ): Promise<ScheduledMeeting | null> => {
-  const persistence = state.scheduledMeetingPersistence;
-  if (persistence?.claimEmailReminder) {
-    const claimEmailReminder = persistence.claimEmailReminder.bind(persistence);
-    return serialized(state.scheduledMeetings, async () => {
-      const claimed = await claimEmailReminder({ meetingId: meeting.id, now, leadMs });
-      return claimed ? adoptStoredMeeting(state.scheduledMeetings, claimed) : null;
+  if (state.scheduledMeetingPersistence?.claimEmailReminder) {
+    const claimed = await state.scheduledMeetingPersistence.claimEmailReminder({
+      meetingId: meeting.id,
+      now,
+      leadMs,
     });
+    if (!claimed) return null;
+    const local = state.scheduledMeetings.byId.get(claimed.id);
+    if (local) {
+      Object.assign(local, claimed);
+      return local;
+    }
+    state.scheduledMeetings.byId.set(claimed.id, claimed);
+    state.scheduledMeetings.byRoomCode.set(
+      `${claimed.clientId}:${claimed.roomCode}`,
+      claimed.id,
+    );
+    return claimed;
   }
-  return changeMeetings(state.scheduledMeetings, state.scheduledMeetingPersistence, [meeting.id], (draft) => {
-    const current = draft.byId.get(meeting.id);
-    if (!current || !shouldSendSchedulingReminder(current, now, leadMs)) return null;
-    return updateScheduledMeeting(draft, meeting.id, {
-      emailReminderStatus: "pending",
-      emailReminderError: null,
-      emailReminderSentAt: null,
-    });
+
+  const pending = updateScheduledMeeting(state.scheduledMeetings, meeting.id, {
+    emailReminderStatus: "pending",
+    emailReminderError: null,
+    emailReminderSentAt: null,
   });
+  await persistMeetingChange(state, pending);
+  return pending;
 };
 
-/** Sends a reminder built from one copy of the saved meeting, so an edit mid-send cannot mix its times. */
-const deliverReminder = async (
-  state: SfuState,
-  saved: ScheduledMeeting,
-): Promise<SchedulingEmailDeliveryResult> => {
-  const meeting = structuredClone(saved);
-  try {
-    const eventType = resolveEventType(state, meeting);
-    const profile = resolveProfile(state, meeting, eventType);
-    return await sendSchedulingReminderEmails({
-      profile,
-      eventType: eventType ?? fallbackEventType(meeting, profile),
-      meeting,
-      appOrigin: resolveAppOrigin(),
-    });
-  } catch (error) {
-    Logger.warn("Failed to send scheduling reminder", error);
-    return { status: "failed", error: (error as Error).message || "Scheduling reminder email failed.", sentAt: null };
-  }
-};
-
-/**
- * Claims a due reminder, sends it, and records the outcome. The email has
- * gone out by then, so the outcome is recorded whenever the meeting still
- * exists, and a failed save of it is retried in the background.
- */
 const sendReminderForMeeting = async (
   state: SfuState,
   meeting: ScheduledMeeting,
@@ -212,20 +191,22 @@ const sendReminderForMeeting = async (
 ): Promise<ScheduledMeeting | null> => {
   const pending = await claimReminderForMeeting(state, meeting, now, leadMs);
   if (!pending) return null;
-  const result = await deliverReminder(state, pending);
-  const record = () =>
-    changeReminder(state, pending.id, "reminder result", {}, {
-      emailReminderStatus: result.status,
-      emailReminderError: result.error,
-      emailReminderSentAt: result.sentAt,
-    });
-  try {
-    return await record();
-  } catch (error) {
-    Logger.warn(`Failed to save the reminder result for meeting ${pending.id}; retrying in the background`, error);
-    retryInBackground(`saving the reminder result for meeting ${pending.id}`, record);
-    return null;
-  }
+
+  const eventType = resolveEventType(state, pending);
+  const profile = resolveProfile(state, pending, eventType);
+  const result = await sendSchedulingReminderEmails({
+    profile,
+    eventType: eventType ?? fallbackEventType(pending, profile),
+    meeting: pending,
+    appOrigin: resolveAppOrigin(),
+  });
+  const updated = updateScheduledMeeting(state.scheduledMeetings, pending.id, {
+    emailReminderStatus: result.status,
+    emailReminderError: result.error,
+    emailReminderSentAt: result.sentAt,
+  });
+  await persistMeetingChange(state, updated);
+  return updated;
 };
 
 export const sendDueSchedulingEmailReminders = async (
@@ -251,7 +232,19 @@ export const sendDueSchedulingEmailReminders = async (
         const updated = await sendReminderForMeeting(state, meeting, now, leadMs);
         if (updated) changed.push(updated);
       } catch (error) {
-        Logger.warn("Could not claim a scheduling reminder; the next scan tries again", error);
+        Logger.warn("Failed to send scheduling reminder", error);
+        try {
+          const failed = updateScheduledMeeting(state.scheduledMeetings, meeting.id, {
+            emailReminderStatus: "failed",
+            emailReminderError:
+              (error as Error).message || "Scheduling reminder email failed.",
+            emailReminderSentAt: null,
+          });
+          await persistMeetingChange(state, failed);
+          changed.push(failed);
+        } catch (persistError) {
+          Logger.warn("Failed to persist scheduling reminder failure", persistError);
+        }
       } finally {
         reminderInFlight.delete(meeting.id);
       }

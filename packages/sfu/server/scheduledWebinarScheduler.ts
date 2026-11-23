@@ -1,13 +1,12 @@
+import type { Server as SocketIOServer } from "socket.io";
 import { Logger } from "../utilities/loggers.js";
 import { notifyAuthorityPolicy } from "./apps/authority/index.js";
-import { startBackgroundTimer } from "./backgroundTimer.js";
 import { getRoomChannelId } from "./rooms.js";
 import type { ScheduledWebinar } from "../types.js";
 import {
-  changeWebinars,
   hasWebinarEnded,
   isWithinEarlyEntryWindow,
-  type ScheduledWebinarStore,
+  persistScheduledWebinarChanges,
 } from "./scheduledWebinars.js";
 import type { SfuState } from "./state.js";
 import {
@@ -165,68 +164,69 @@ export const ensureWebinarRoomConfig = (
 ): WebinarRoomConfig =>
   applyScheduledWebinarToConfig(state, webinar, inviteCodeHash);
 
-const dueWebinarIds = (store: ScheduledWebinarStore, now: number): string[] =>
-  [...store.byId.values()]
-    .filter(
-      (webinar) =>
-        (webinar.status === "scheduled" && isWithinEarlyEntryWindow(webinar, now) && now >= webinar.scheduledStartAt) ||
-        (webinar.status === "live" && hasWebinarEnded(webinar, now)),
-    )
-    .map((webinar) => webinar.id);
-
-const advanceDueWebinars = (draft: ScheduledWebinarStore, dueAt: number, at: number): ScheduledWebinar[] =>
-  dueWebinarIds(draft, dueAt).map((id) => {
-    const webinar = draft.byId.get(id)!;
-    if (webinar.status === "scheduled") {
-      webinar.status = "live";
-      if (!webinar.liveStartedAt) webinar.liveStartedAt = at;
-    } else {
-      webinar.status = "ended";
-      webinar.endedAt = at;
-    }
-    webinar.updatedAt = at;
-    return webinar;
-  });
-
-export const runScheduledWebinarTick = async (state: SfuState, now = Date.now()): Promise<number> => {
+const advanceScheduledWebinars = (
+  state: SfuState,
+  io: SocketIOServer | null,
+  now = Date.now(),
+): number => {
+  let changed = 0;
+  const changedWebinars: ScheduledWebinar[] = [];
   for (const webinar of state.scheduledWebinars.byId.values()) {
+    if (webinar.status === "cancelled") continue;
+
     if (webinar.status === "scheduled" && isWithinEarlyEntryWindow(webinar, now)) {
       applyScheduledWebinarToConfig(state, webinar, null);
+      if (now >= webinar.scheduledStartAt) {
+        webinar.status = "live";
+        if (!webinar.liveStartedAt) {
+          webinar.liveStartedAt = now;
+        }
+        webinar.updatedAt = now;
+        changedWebinars.push(webinar);
+        changed += 1;
+      }
+    } else if (webinar.status === "live" && hasWebinarEnded(webinar, now)) {
+      webinar.status = "ended";
+      webinar.endedAt = now;
+      webinar.updatedAt = now;
+      changedWebinars.push(webinar);
+      const channelId = getRoomChannelId(webinar.clientId, webinar.roomId);
+      const cfg = state.webinarConfigs.get(channelId);
+      if (cfg) {
+        recordScheduledWebinarEnded(cfg, webinar);
+      }
+      void io;
+      changed += 1;
     }
   }
-  if (dueWebinarIds(state.scheduledWebinars, now).length === 0) return 0;
 
-  let changed: ScheduledWebinar[];
-  try {
-    changed = await changeWebinars(
+  if (changed > 0 && state.scheduledWebinarPersistence) {
+    persistScheduledWebinarChanges(
       state.scheduledWebinars,
       state.scheduledWebinarPersistence,
-      (store) => dueWebinarIds(store, now),
-      (draft, at) => advanceDueWebinars(draft, now, at),
+      changedWebinars,
     );
-  } catch (error) {
-    Logger.warn("Failed to persist scheduled webinar status changes", error);
-    return 0;
   }
-  for (const webinar of changed) {
-    if (webinar.status !== "ended") continue;
-    const cfg = state.webinarConfigs.get(getRoomChannelId(webinar.clientId, webinar.roomId));
-    if (cfg) recordScheduledWebinarEnded(cfg, webinar);
-  }
-  return changed.length;
+
+  return changed;
 };
 
 export const startScheduledWebinarTimer = (
   state: SfuState,
+  getIo: () => SocketIOServer | null,
   intervalMs = DEFAULT_TICK_MS,
 ): void => {
   if (state.scheduledWebinarTimer) return;
-  state.scheduledWebinarTimer = startBackgroundTimer(
-    "Scheduled webinar tick",
-    intervalMs,
-    () => runScheduledWebinarTick(state, Date.now()),
-    Logger.error,
-  );
+  state.scheduledWebinarTimer = setInterval(() => {
+    try {
+      advanceScheduledWebinars(state, getIo(), Date.now());
+    } catch (error) {
+      Logger.error("scheduled webinar tick failed", error);
+    }
+  }, intervalMs);
+  if (state.scheduledWebinarTimer.unref) {
+    state.scheduledWebinarTimer.unref();
+  }
 };
 
 export const stopScheduledWebinarTimer = (state: SfuState): void => {
