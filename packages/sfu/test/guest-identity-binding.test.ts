@@ -3340,6 +3340,56 @@ describe("the identity the room's apps see for a guest (Daybreak)", () => {
     expect(seen(room, adapter, onB)).toEqual(identity);
   });
 
+  it("stays the same for a guest that left and comes back under a new pass that shows the one it left under (Greptile)", async () => {
+    const { state, room, adapter } = await inRoom();
+    const onA = tabOf("left-and-shows-it");
+    await join(state, onA);
+    const identity = seen(room, adapter, onA);
+    room.removeClient(seatOf(onA));
+    await endOfTurn();
+
+    const onB = {
+      ...onA,
+      userId: `${onA.userId}-under-a-new-pass`,
+      guestProof: `${onA.guestProof}-new`,
+      guestWas: formerSeats(onA),
+    } satisfies SfuAuthPayload;
+    expect((await join(state, onB)).ack).toHaveBeenCalledWith(joined);
+
+    expect(identity).toMatchObject({ verified: true });
+    expect(seen(room, adapter, onB)).toEqual(identity);
+  });
+
+  describe.each([
+    ["its first pass sorts first", "proof-1-first", "proof-2-second"],
+    ["its first pass sorts last", "proof-9-first", "proof-2-second"],
+  ])("a guest whose %s", (order, first, second) => {
+    it.each([
+      ["without", "its first pass", false],
+      ["without", "a new pass that shows the first", false],
+      ["with", "its first pass", true],
+      ["with", "a new pass that shows the first", true],
+    ])("keeps one identity when it leaves %s rights in the room and comes back under %s", async (_rights, comesBack, keepsRights) => {
+      const { state, room, adapter } = await inRoom();
+      const name = `${order === "its first pass sorts first" ? "low" : "high"}-${keepsRights ? "kept" : "none"}-${comesBack.length}`;
+      const onFirst = { ...tabOf(`${name}-first`), guestProof: first } satisfies SfuAuthPayload;
+      await join(state, onFirst);
+      const identity = seen(room, adapter, onFirst);
+      if (keepsRights) room.allowLockedUser(onFirst.userId);
+      room.removeClient(seatOf(onFirst));
+      await endOfTurn();
+
+      const back =
+        comesBack === "its first pass"
+          ? onFirst
+          : ({ ...tabOf(`${name}-second`), guestProof: second, guestWas: formerSeats(onFirst) } satisfies SfuAuthPayload);
+      expect((await join(state, back)).ack).toHaveBeenCalledWith(joined);
+
+      expect(identity).toMatchObject({ verified: true });
+      expect(seen(room, adapter, back)).toEqual(identity);
+    });
+  });
+
   it("is unverified for a guest token with no pass", async () => {
     const { state, room, adapter } = await inRoom();
     const namesItself = { userId: "guest-names-itself", clientId: "conclave", sessionId: "names-itself" } satisfies SfuAuthPayload;
@@ -3987,6 +4037,7 @@ describe("who may come in, against a slow reading of every decision", () => {
     adminSeats = new Set<string>();
     status = new Map<string, "idle" | "pending" | "seated">();
     arrival = new Map<string, number>();
+    seen = new Set<string>();
     tick() {
       return (this.clock += 1);
     }
@@ -4019,7 +4070,7 @@ describe("who may come in, against a slow reading of every decision", () => {
         .map((tab) => tab.key);
     }
     known(pass: string): boolean {
-      return this.records.has(pass) || this.boundKeys(pass).some((key) => tabByKey.get(key)!.pass === pass);
+      return this.seen.has(pass);
     }
     tabsOfGuest(pass: string, state: "pending" | "seated", passes = this.group(pass)): Tab[] {
       return tabs.filter((tab) => passes.has(tab.pass) && this.status.get(tab.key) === state);
@@ -4136,18 +4187,6 @@ describe("who may come in, against a slow reading of every decision", () => {
     identities(key: string): string[] {
       return [...new Set([key, ...this.boundKeys(tabByKey.get(key)!.pass)])];
     }
-    prune() {
-      const groups = new Map<string, string[]>();
-      for (const tab of tabs) {
-        const top = this.find(tab.pass);
-        groups.set(top, [...new Set([...(groups.get(top) ?? []), tab.pass])]);
-      }
-      for (const passes of groups.values()) {
-        if (passes.length > 1 && !passes.some((pass) => this.known(pass))) {
-          for (const pass of passes) this.root.delete(pass);
-        }
-      }
-    }
     rows(): string[] {
       const rows: string[] = [];
       const seen = new Set<string>();
@@ -4186,11 +4225,9 @@ describe("who may come in, against a slow reading of every decision", () => {
         const keys = this.boundKeysOf(union);
         this.revokeKeys(keys, { recordedOnly: true });
         this.removeGuestOf(tab.pass, events, keys, union);
-        this.prune();
         return { outcome: "refused" as const, events };
       }
       if (this.blocked.has(tab.key) || this.guestBlocked(tab.pass)) {
-        this.prune();
         return { outcome: "refused" as const, events };
       }
       for (const other of others) this.root.set(this.find(other), this.find(tab.pass));
@@ -4208,6 +4245,7 @@ describe("who may come in, against a slow reading of every decision", () => {
         }
       }
       let outcome: "joined" | "waiting";
+      this.seen.add(tab.pass);
       if (this.isCoHost(tab.pass)) {
         outcome = "joined";
         this.status.set(tab.key, "seated");
@@ -4226,7 +4264,6 @@ describe("who may come in, against a slow reading of every decision", () => {
           this.status.set(tab.key, "pending");
         }
       }
-      this.prune();
       return { outcome, events };
     }
     answer(row: string, admitted: boolean) {
@@ -4237,7 +4274,6 @@ describe("who may come in, against a slow reading of every decision", () => {
         this.status.set(waiting.key, "idle");
         events.set(waiting.key, admitted ? "joinApproved" : "joinRejected");
       }
-      this.prune();
       return events;
     }
     block(key: string) {
@@ -4260,7 +4296,6 @@ describe("who may come in, against a slow reading of every decision", () => {
         events.set(other, "kicked");
       }
       void pass;
-      this.prune();
       return events;
     }
     kick(key: string) {
@@ -4269,7 +4304,6 @@ describe("who may come in, against a slow reading of every decision", () => {
       this.status.set(key, "idle");
       this.adminSeats.delete(key);
       events.set(key, "kicked");
-      this.prune();
       return events;
     }
     setLocked(locked: boolean) {
@@ -4280,20 +4314,16 @@ describe("who may come in, against a slow reading of every decision", () => {
       for (const tab of tabs) {
         if (this.status.get(tab.key) === "seated") this.admit(tab.key, ["lock"]);
       }
-      this.prune();
     }
     unblock(key: string) {
       this.blocked.delete(key);
-      this.prune();
     }
     promote(key: string) {
       this.coHosts.add(key);
       this.adminSeats.add(key);
-      this.prune();
     }
     withdraw(key: string) {
       this.status.set(key, "idle");
-      this.prune();
     }
   }
 

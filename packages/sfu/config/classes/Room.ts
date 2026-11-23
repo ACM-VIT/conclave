@@ -242,6 +242,8 @@ export type WaitingRequest = {
  */
 export type RoomLifecycleEvent = "membership" | "closed";
 
+type GuestRecord = { identity: string; since: number; passes: Set<string> };
+
 export class Room {
   public readonly id: string;
   public readonly router: Router;
@@ -283,11 +285,7 @@ export class Room {
   // The same bindings by proof: the keys a pass has in this room.
   private userKeysByGuestProof: Map<string, Set<string>> = new Map();
   private guestIdentitiesToRelease: Set<string> = new Set();
-  // Passes that a join token showed to be in one browser. Every proof of a
-  // group maps to the same set.
-  private guestPassGroups: Map<string, Set<string>> = new Map();
-  private guestPassIdentities: Map<string, { proof: string; since: number }> =
-    new Map();
+  private guestRecords: Map<string, GuestRecord> = new Map();
   private guestPassClock = 0;
   // Who waits, by guest: the keys of each guest's waiting tabs, oldest
   // first, and for each waiting key the guest it was filed under. With it
@@ -908,7 +906,7 @@ export class Room {
   private isSameGuestPass(guestProof: string, otherProof: string): boolean {
     return (
       guestProof === otherProof ||
-      this.guestPassGroups.get(guestProof)?.has(otherProof) === true
+      this.guestRecords.get(guestProof)?.passes.has(otherProof) === true
     );
   }
 
@@ -958,10 +956,11 @@ export class Room {
     const userKeys = this.userKeysByGuestProof.get(guestProof);
     if (userKeys) userKeys.add(userKey);
     else this.userKeysByGuestProof.set(guestProof, new Set([userKey]));
-    if (!this.guestPassIdentities.has(guestProof)) {
-      this.guestPassIdentities.set(guestProof, {
-        proof: guestProof,
+    if (!this.guestRecords.has(guestProof)) {
+      this.guestRecords.set(guestProof, {
+        identity: guestProof,
         since: (this.guestPassClock += 1),
+        passes: new Set([guestProof]),
       });
     }
   }
@@ -982,11 +981,11 @@ export class Room {
   guestIdentityOf(userKey: string): string | undefined {
     const guestProof = this.guestProofsByUserKey.get(userKey);
     if (guestProof === undefined) return undefined;
-    return this.guestPassIdentities.get(guestProof)?.proof ?? guestProof;
+    return this.guestRecords.get(guestProof)?.identity ?? guestProof;
   }
 
   private passesOfGuest(guestProof: string): Iterable<string> {
-    return this.guestPassGroups.get(guestProof) ?? [guestProof];
+    return this.guestRecords.get(guestProof)?.passes ?? [guestProof];
   }
 
   private tick(): number {
@@ -1059,10 +1058,7 @@ export class Room {
   }
 
   private isKnownGuestPass(guestProof: string): boolean {
-    return (
-      this.userKeysByGuestProof.has(guestProof) ||
-      this.admissions.has(`pass:${guestProof}`)
-    );
+    return this.guestRecords.has(guestProof);
   }
 
   /**
@@ -1137,15 +1133,20 @@ export class Room {
       return [];
     }
     const guestsBefore = [...new Set([...link.passes].map((proof) => this.guestOfPass(proof)))];
-    const group = new Set(link.passes);
-    for (const proof of group) this.guestPassGroups.set(proof, group);
-    let identity: { proof: string; since: number } | undefined;
-    for (const proof of group) {
-      const known = this.guestPassIdentities.get(proof);
-      if (known && (!identity || known.since < identity.since)) identity = known;
+    const passes = new Set(link.passes);
+    let first: GuestRecord | undefined;
+    for (const proof of link.passes) {
+      const known = this.guestRecords.get(proof);
+      if (!known) continue;
+      for (const pass of known.passes) passes.add(pass);
+      if (!first || known.since < first.since) first = known;
     }
-    identity ??= { proof: link.guestProof, since: (this.guestPassClock += 1) };
-    for (const proof of group) this.guestPassIdentities.set(proof, identity);
+    const record: GuestRecord = {
+      identity: first?.identity ?? link.guestProof,
+      since: first?.since ?? (this.guestPassClock += 1),
+      passes,
+    };
+    for (const proof of passes) this.guestRecords.set(proof, record);
     this.mergeWaitingGuests(guestsBefore, this.guestOfPass(link.guestProof));
     const settled: Array<{ request: WaitingRequest; admitted: boolean }> = [];
     for (const userKey of [
@@ -1189,7 +1190,11 @@ export class Room {
 
   /** How many passes the room links to another, for its memory bound. */
   get linkedGuestPassCount(): number {
-    return this.guestPassGroups.size;
+    let linked = 0;
+    for (const record of this.guestRecords.values()) {
+      if (record.passes.size > 1) linked += 1;
+    }
+    return linked;
   }
 
   /** A host turned away the request `userKey` made to be let in. */
@@ -1266,8 +1271,8 @@ export class Room {
   // lowest proof of those the room has linked, or its key when it showed
   // no pass.
   private guestOfPass(guestProof: string): string {
-    const group = this.guestPassGroups.get(guestProof);
-    return `pass:${group ? [...group].sort()[0] : guestProof}`;
+    const passes = this.guestRecords.get(guestProof)?.passes;
+    return `pass:${passes ? [...passes].sort()[0] : guestProof}`;
   }
 
   private guestOfKey(userKey: string): string {
@@ -1383,6 +1388,7 @@ export class Room {
     if (this.isBlocked(userKey, guestProof)) return false;
     const newlyBound =
       guestProof !== undefined && isGuestUserKey(userKey) && bound === undefined;
+    const newGuest = guestProof !== undefined && !this.guestRecords.has(guestProof);
     if (guestProof !== undefined && isGuestUserKey(userKey)) {
       this.bindGuestProof(userKey, guestProof);
     }
@@ -1394,6 +1400,7 @@ export class Room {
         },
       ]).status === "admitted";
     if (!kept && newlyBound) this.unbindGuestProof(userKey);
+    if (!kept && newGuest && guestProof !== undefined) this.guestRecords.delete(guestProof);
     return kept;
   }
 
@@ -1439,11 +1446,6 @@ export class Room {
       }
     }
     this.guestIdentitiesToRelease.clear();
-    if (this.guestPassGroups.size === 0) return;
-    for (const group of new Set(this.guestPassGroups.values())) {
-      if ([...group].some((proof) => this.isKnownGuestPass(proof))) continue;
-      for (const proof of group) this.guestPassGroups.delete(proof);
-    }
   }
 
   setUserIdentity(
@@ -3375,7 +3377,7 @@ export class Room {
     this.blockedUsers.clear();
     this.guestProofsByUserKey.clear();
     this.userKeysByGuestProof.clear();
-    this.guestPassIdentities.clear();
+    this.guestRecords.clear();
     this.guestIdentitiesToRelease.clear();
     this.admissions.clear();
     this.shownRowByGuest.clear();

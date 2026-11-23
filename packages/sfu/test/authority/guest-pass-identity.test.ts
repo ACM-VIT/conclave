@@ -38,8 +38,7 @@ const guestTab = (room: Harness, userKey: string, session: string, guestProof?: 
 
 const linkPasses = (room: Harness, joining: string, shown: string) => {
   const link = room.room.planGuestLink([{ guestProof: shown }], joining);
-  if (!link) throw new Error("the room did not plan a link");
-  room.room.commitGuestLink(link);
+  if (link) room.room.commitGuestLink(link);
 };
 
 const alreadyVoted = { ok: false, code: "rejected", reason: "already-voted" };
@@ -121,5 +120,58 @@ describe("a guest's pass, as the room's apps see it (Daybreak)", () => {
     expect(field(second.row("myVotes", pollId), "optionIds")).toEqual(["o1"]);
     expect(await second.act("vote", { pollId, optionIds: ["o2"] })).toEqual(alreadyVoted);
     expect(field(hostTab.row("polls", pollId), "results", "voterCount")).toBe(1);
+  });
+
+  it("keeps the identity of a guest who voted under one pass, left, and came back under another that shows the first (Greptile)", async () => {
+    const room = new Harness([pollsAuthority]);
+    const hostTab = await room.open(host, pollsContract);
+    const pollId = await pollIn(room, hostTab);
+    const onA = await guestTab(room, "guest-gp_gita-votes-on-a", "tab-1", "proof-of-the-voting-pass");
+    expect((await onA.act("vote", { pollId, optionIds: ["o1"] })).ok).toBe(true);
+    await room.deliver();
+    room.room.removeClient(onA.seat.id);
+    await room.deliver();
+
+    linkPasses(room, "proof-of-the-returning-pass", "proof-of-the-voting-pass");
+    const onB = await guestTab(room, "guest-gp_gita-back-on-b", "tab-1", "proof-of-the-returning-pass");
+    await room.deliver();
+
+    expect(field(onB.row("myVotes", pollId), "optionIds")).toEqual(["o1"]);
+    expect(await onB.act("vote", { pollId, optionIds: ["o2"] })).toEqual(alreadyVoted);
+    expect(field(hostTab.row("polls", pollId), "results", "voterCount")).toBe(1);
+  });
+
+  describe.each([
+    ["its first pass sorts first", "proof-1-first", "proof-2-second"],
+    ["its first pass sorts last", "proof-9-first", "proof-2-second"],
+  ])("a guest whose %s", (_order, first, second) => {
+    it.each([
+      ["without", "its first pass", false],
+      ["without", "a new pass that shows the first", false],
+      ["with", "its first pass", true],
+      ["with", "a new pass that shows the first", true],
+    ])("votes once when it leaves %s rights in the room and comes back under %s", async (_rights, comesBack, keepsRights) => {
+      const room = new Harness([pollsAuthority]);
+      const hostTab = await room.open(host, pollsContract);
+      const pollId = await pollIn(room, hostTab);
+      const firstKey = `guest-gp_gita-${first}`;
+      const tab = await guestTab(room, firstKey, "tab-1", first);
+      expect((await tab.act("vote", { pollId, optionIds: ["o1"] })).ok).toBe(true);
+      await room.deliver();
+      if (keepsRights) room.room.allowLockedUser(firstKey);
+      room.room.removeClient(tab.seat.id);
+      await room.deliver();
+
+      const onFirst = comesBack === "its first pass";
+      if (!onFirst) linkPasses(room, second, first);
+      const back = onFirst
+        ? await guestTab(room, firstKey, "tab-1-back", first)
+        : await guestTab(room, `guest-gp_gita-${second}`, "tab-1", second);
+      await room.deliver();
+
+      expect(field(back.row("myVotes", pollId), "optionIds")).toEqual(["o1"]);
+      expect(await back.act("vote", { pollId, optionIds: ["o2"] })).toEqual(alreadyVoted);
+      expect(field(hostTab.row("polls", pollId), "results", "voterCount")).toBe(1);
+    });
   });
 });
