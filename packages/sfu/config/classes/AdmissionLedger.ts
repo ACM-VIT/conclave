@@ -239,6 +239,17 @@ export class AdmissionLedger {
     return latest !== undefined && !latest.admitted;
   }
 
+  /** The keys named by the admissions for `scope` that count across `principals`. */
+  namedKeys(principals: Iterable<string>, scope: AdmissionScope): string[] {
+    const userKeys = new Set<string>();
+    for (const principal of principals) {
+      const mark = this.records.get(principal)?.marks[scope];
+      if (!mark?.admitted || !this.counts(scope, mark)) continue;
+      for (const userKey of mark.userKeys) userKeys.add(userKey);
+    }
+    return [...userKeys];
+  }
+
   /** The hosts' latest answer across `principals`. */
   latestAnswer(
     principals: Iterable<string>,

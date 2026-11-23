@@ -347,6 +347,21 @@ describe("a stage invite for a guest whose key differs between the audience and 
     return { state, room, host };
   };
 
+  it("tells the hosts which invite the guest used when it comes on stage under its other key (Daybreak)", async () => {
+    const { state, host } = await invited();
+    const onStageAs: unknown = expect.objectContaining({ status: "joined", webinarRole: "participant" });
+
+    const promoted = await join(state, onStage);
+
+    expect(promoted.ack).toHaveBeenCalledWith(onStageAs);
+    expect(host.peer.emit).toHaveBeenCalledWith("webinar:stageInviteUsed", {
+      roomId: "room",
+      userId: `${onStage.userId}#${onStage.sessionId}`,
+      invitedUserKeys: [audience.userId],
+    });
+    expect(promoted.peer.emit).not.toHaveBeenCalledWith("webinar:stageInviteUsed", expect.anything());
+  });
+
   it("lets the invited guest onto the stage under its other key", async () => {
     const { state, room } = await invited();
 

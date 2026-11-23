@@ -1762,6 +1762,22 @@ export class Room {
     );
   }
 
+  /**
+   * The keys the hosts invited onto the stage whose invite a join as
+   * `userKey` uses: a guest's invite follows it from its audience key to
+   * its key for the room, so hosts are told which invite it was.
+   */
+  stageInviteKeys(
+    userKey: string,
+    roomGuestProof: string | undefined,
+    link?: GuestLinkPlan,
+  ): string[] {
+    return this.admissions.namedKeys(
+      this.principalsOfJoin(userKey, roomGuestProof, rightsPassesOf(link)),
+      "stage",
+    );
+  }
+
   isWebinarPromotedUserKey(userKey: string): boolean {
     const invited = this.admissions.admits(
       this.principalsOfRequest(userKey),
