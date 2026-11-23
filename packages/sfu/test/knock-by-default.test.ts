@@ -1846,6 +1846,93 @@ describe.skipIf(!redisServerPath)("knockers waiting on an SFU when the next meet
   }, 30_000);
 });
 
+describe("a join asked again on the same connection while its room is still opening", () => {
+  // Opening a room waits here until the test lets it go on.
+  const holdRoomOpening = (state: SfuState) => {
+    const [worker] = state.workers;
+    const createRouter = worker.createRouter.bind(worker);
+    let goOn = () => {};
+    const held = new Promise<void>((resolve) => (goOn = resolve));
+    const opened = vi.fn();
+    (worker as { createRouter: typeof createRouter }).createRouter = async (...args) => {
+      opened();
+      await held;
+      return createRouter(...args);
+    };
+    return { opened, goOn };
+  };
+  // One tab's connection, which can ask to join more than once.
+  const connect = (state: SfuState, user: SfuAuthPayload) => {
+    const peer = makeSocket(`${user.userId}-socket`, user);
+    const context = createConnectionContext(io, peer.socket, state);
+    registerJoinRoomHandler(context);
+    registerDisconnectHandlers(context);
+    const ask = async () => {
+      const ack = vi.fn();
+      await peer.handlers.get("joinRoom")!(
+        ...([{ roomId: "abc-mnop-xyz", sessionId: user.sessionId }, ack] as never[]),
+      );
+      return (ack.mock.calls[0]?.[0] ?? {}) as JoinAck;
+    };
+    return { peer, context, ask };
+  };
+  const opener = { ...guest, allowRoomCreation: true };
+
+  it("makes the newer join the host of the room the older one opened, and opens it once", async () => {
+    const state = makeState();
+    const opening = holdRoomOpening(state);
+    const tab = connect(state, opener);
+    const firstTry = tab.ask();
+    await vi.waitFor(() => expect(opening.opened).toHaveBeenCalled());
+    const retry = tab.ask();
+    opening.goOn();
+
+    expect((await firstTry).error).toBe("A newer join from this connection took over.");
+    expect((await retry).status).toBe("joined");
+    expect(tab.context.currentClient).toBeInstanceOf(Admin);
+    expect(roomOf(state).getHostUserId()).toBe("guest-visitor#v");
+    expect(roomOf(state).isLocked).toBe(true);
+    expect(opening.opened).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers a join whose room is slow to open before the tab gives up, and the retry hosts it", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const state = makeState();
+    const opening = holdRoomOpening(state);
+    const tab = connect(state, opener);
+    const firstTry = tab.ask();
+    await vi.waitFor(() => expect(opening.opened).toHaveBeenCalled());
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect((await firstTry).error).toBe("The meeting is still opening. Try again in a moment.");
+
+    opening.goOn();
+    const retry = tab.ask();
+    expect((await retry).status).toBe("joined");
+    expect(tab.context.currentClient).toBeInstanceOf(Admin);
+    expect(opening.opened).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes a room it opened for a tab that left before taking its seat", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const state = makeState();
+    const opening = holdRoomOpening(state);
+    const tab = connect(state, opener);
+    const firstTry = tab.ask();
+    await vi.waitFor(() => expect(opening.opened).toHaveBeenCalled());
+    await vi.advanceTimersByTimeAsync(10_000);
+    await firstTry;
+    await hangUp(tab.peer);
+
+    opening.goOn();
+    // The room opens, and closes again with nobody in it.
+    await vi.waitFor(() => expect(state.roomCreations.size + state.rooms.size).toBe(0));
+    vi.useRealTimers();
+    const next = await join(state, host);
+    expect(next.status).toBe("joined");
+    expect(next.context.currentClient).toBeInstanceOf(Admin);
+  });
+});
+
 describe("an invited attendee a host removed from a call the server lost", () => {
   // A host removes the invitee, then the SFU loses the call. Someone who was
   // only knocking recreates the room, and nobody from the call comes back.

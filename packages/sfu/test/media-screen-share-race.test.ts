@@ -64,6 +64,7 @@ describe("screen share ownership across the produce await", () => {
       activeConclaveAnswers: new Map(),
       adminHandlersRegistered: false,
       joinAttempts: 0,
+      opening: null,
     });
 
     const callback = vi.fn();

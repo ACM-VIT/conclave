@@ -68,7 +68,7 @@ import {
 import { offerLapsedRoom } from "../../admin/controlPlane.js";
 import type { LostRoom, RecalledRoom } from "../../roomRecoveryLedger.js";
 import { getSocketAuthUser } from "../auth.js";
-import type { ConnectionContext } from "../context.js";
+import type { ConnectionContext, OpenedRoom, RoomOpening } from "../context.js";
 import { registerAdminHandlers } from "./adminHandlers.js";
 import { respond } from "./ack.js";
 import { emitChatHistorySnapshot } from "./chatHistory.js";
@@ -113,6 +113,26 @@ const recordedOwnerOf = (
       : undefined;
 
 const JOIN_OVERTAKEN = "A newer join from this connection took over.";
+
+// How long a join waits for its room to open before it answers. Web tabs
+// give up on a join after 15 seconds, so this stays well inside that; the
+// opening goes on, and the tab's next join takes it over.
+const ROOM_OPEN_DEADLINE_MS = 10_000;
+const ROOM_STILL_OPENING = "The meeting is still opening. Try again in a moment.";
+const STILL_OPENING = Symbol("still opening");
+const withinOpenDeadline = async <T>(work: Promise<T>): Promise<T | typeof STILL_OPENING> => {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<typeof STILL_OPENING>((resolve) => {
+        timer = setTimeout(() => resolve(STILL_OPENING), ROOM_OPEN_DEADLINE_MS);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+};
 
 // The gate a join meets at a code with no live room, in order. Whoever may
 // open the code (a host, the account the code belongs to or that booked it,
@@ -354,9 +374,24 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         if (parked && parkedChannelId && parkedChannelId !== roomChannelId) {
           leaveNextMeetingLobby(state, parkedChannelId, parked.userKey, socket.id);
         }
-        let room = state.rooms.get(roomChannelId);
-        let createdRoom = false;
-        let lostRoom: LostRoom | null = null;
+        // This socket's older join may still be opening this code, or have
+        // opened it and stopped before taking its seat. This join takes that
+        // opening over as its own, rather than open the room a second time.
+        let adopted: OpenedRoom | null = null;
+        const earlierOpening = context.opening;
+        if (earlierOpening?.channelId === roomChannelId) {
+          const outcome = await withinOpenDeadline(earlierOpening.outcome);
+          if (overtaken()) return;
+          if (outcome === STILL_OPENING) {
+            respond(callback, { error: ROOM_STILL_OPENING });
+            return;
+          }
+          if (context.opening === earlierOpening) context.opening = null;
+          if (outcome && state.rooms.get(roomChannelId) === outcome.room) adopted = outcome;
+        }
+        let room = adopted?.room ?? state.rooms.get(roomChannelId);
+        let createdRoom = adopted?.created ?? false;
+        let lostRoom: LostRoom | null = adopted?.lost ?? null;
         const respondWithRoomOwner = (owner: RoomAssignmentRecord): void => {
           Logger.info(
             `Join for ${roomId} (${clientId}) routed to SFU instance ${owner.instanceId}`,
@@ -405,12 +440,11 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         // as it is, a guest a host has let in since is seated, and a retry
         // whose tab has gone does nothing. Other joins reach a room opening
         // meanwhile through its creation, once its creator has set it up.
-        type FoundRoom = { room: Room; created: boolean; lost: LostRoom | null };
         const openedForThisGuest = (): Room | undefined =>
           parked && parkedChannelId === roomChannelId
             ? state.rooms.get(roomChannelId)
             : undefined;
-        const joinOpenedRoom = (opened: Room): FoundRoom | null => {
+        const joinOpenedRoom = (opened: Room): OpenedRoom | null => {
           if (!socket.connected) return null;
           if (opened.pendingClients.get(userKey)?.socket.id !== socket.id) {
             return { room: opened, created: false, lost: null };
@@ -426,7 +460,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         };
         // The room for a code with no room here yet: one that opened
         // meanwhile, or this join opens it. Null once the join is answered.
-        const findOrOpenRoom = async (): Promise<FoundRoom | null> => {
+        const findOrOpenRoom = async (): Promise<OpenedRoom | null> => {
           const assignment = await state.roomRegistry.getAssignment(roomChannelId);
           if (overtaken()) return null;
           const openedWhileAsking = openedForThisGuest();
@@ -492,10 +526,11 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             respond(callback, { error: opening.refusal });
             return null;
           }
-          let openedRoom: Room;
-          let created: boolean;
-          let lost: LostRoom | null = null;
-          try {
+          // Opening the room is its own piece of work, kept on the connection:
+          // a newer join from this socket takes it over instead of opening a
+          // second one, whether this one is overtaken or answered first.
+          const openRoom = async (): Promise<OpenedRoom> => {
+            let lost: LostRoom | null = null;
             // Several joiners can miss the lookup above while the room is
             // still being created; only the one whose call created it is the
             // creator (and so the host). The rest join it as an existing room.
@@ -504,8 +539,8 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
               clientId,
               roomId,
             );
-            openedRoom = result.room;
-            created = result.created;
+            const openedRoom = result.room;
+            const created = result.created;
             // The recovery record was read once this SFU held the code, so
             // nothing awaits between creating the room and settling who
             // hosts it.
@@ -533,32 +568,47 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
                     ? null
                     : normalizedJoinEmail || null;
             }
+            if (created && endedRoom) {
+              clearEndedRoom(state, roomChannelId);
+              Logger.info(
+                `Re-opened ended room ${roomId} (${clientId}) for ${userId}`,
+              );
+            }
+            if (created && clientPolicy.knockByDefault) {
+              openedRoom.setLocked(true);
+            }
+            // The SFU lost this call and it is coming back: its hosts are
+            // hosts again when they return, and the people a host had put out
+            // still have to be let in.
+            if (lost) {
+              openedRoom.restoreLostCall(lost);
+            }
+            return { room: openedRoom, created, lost };
+          };
+          const opened = openRoom();
+          const roomOpening: RoomOpening = {
+            channelId: roomChannelId,
+            outcome: opened.catch(() => null),
+          };
+          context.opening = roomOpening;
+          let found: OpenedRoom | typeof STILL_OPENING;
+          try {
+            found = await withinOpenDeadline(opened);
           } catch (error) {
+            if (context.opening === roomOpening) context.opening = null;
             if (error instanceof RoomOwnershipError) {
               respondWithRoomOwner(error.owner);
               return null;
             }
             throw error;
           }
-          if (created && endedRoom) {
-            clearEndedRoom(state, roomChannelId);
-            Logger.info(
-              `Re-opened ended room ${roomId} (${clientId}) for ${userId}`,
-            );
+          if (found === STILL_OPENING) {
+            respond(callback, { error: ROOM_STILL_OPENING });
+            return null;
           }
-          if (created && clientPolicy.knockByDefault) {
-            openedRoom.setLocked(true);
-          }
-          // The SFU lost this call and it is coming back: its hosts are
-          // hosts again when they return, and the people a host had put out
-          // still have to be let in.
-          if (lost) {
-            openedRoom.restoreLostCall(lost);
-          }
-          // A room this join opened is set up whether or not a newer join
-          // overtook it; that one finds it open.
           if (overtaken()) return null;
-          return { room: openedRoom, created, lost };
+          if (context.opening === roomOpening) context.opening = null;
+          return found;
         };
         if (!room) {
           const found = await findOrOpenRoom();
