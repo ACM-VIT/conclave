@@ -21,6 +21,7 @@ In-call party games (Trivia, Imposter, Wordle, Chess and others) carry hidden in
 - Text options can hold private topic text, so public state omits them and a rematch uses defaults for them.
 - Clients that predate `showWhen` simply show every option and still submit a valid configuration.
 - Wordle: only the setter, who already knows the word, receives every contestant's live board. Contestants never receive each other's boards. In team modes the shared board is also sent as the player's own board, and is mirrored into the setter's `boards` list as one entry, so clients that only know solo Wordle still render it.
+- Wordle checks who may act before it reads the word. `decodeWordleMove` leaves the `word` field `unknown`, and each case first rejects a move in the wrong phase or from the wrong player (the setter guessing, a contestant setting the word, a relay guess out of turn or after time is up). Only then does `normalizeWord` validate the word, with messages that name its role ("Word" or "Guess"). A player who may not act is told that, not that their word is malformed, and these error messages keep the order they had before the typed move contract.
 
 ## Consequences
 
@@ -39,5 +40,5 @@ In-call party games (Trivia, Imposter, Wordle, Chess and others) carry hidden in
 - `packages/sfu/server/games/rng.ts`: `createSeed`, `createRng`
 - `packages/sfu/server/games/modules/reaction.ts`
 - `packages/sfu/server/games/modules/imposter.ts`
-- `packages/sfu/server/games/modules/wordle.ts`: `playerView`
+- `packages/sfu/server/games/modules/wordle.ts`: `playerView`, `decodeWordleMove`, `normalizeWord`
 - `packages/sfu/server/socket/handlers/gameHandlers.ts`: `broadcastGame`
