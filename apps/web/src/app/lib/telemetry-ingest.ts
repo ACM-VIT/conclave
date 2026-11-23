@@ -286,6 +286,30 @@ const reply = (status: number, retryAfterMs: number | null = null) =>
     },
   });
 
+// How long /ingest waits for PostHog, and for one of our own chunk
+// manifests, body included: a server that holds a response open must not
+// hold every report waiting on it.
+export const UPSTREAM_DEADLINE_MS = 10_000;
+export const MANIFEST_DEADLINE_MS = 2000;
+
+class DeadlinePassed extends Error {}
+
+/**
+ * Runs one outbound request, its body read included, with a signal that
+ * aborts at the deadline; it rejects then even if the request ignores it.
+ */
+const withinDeadline = <T>(ms: number, request: (signal: AbortSignal) => Promise<T>): Promise<T> => {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const passed = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new DeadlinePassed());
+    }, ms);
+  });
+  return Promise.race([request(controller.signal), passed]).finally(() => clearTimeout(timer));
+};
+
 /**
  * Handles one request to /ingest/<path>: decodes the capture body, scrubs
  * each event for our project again, and forwards the batch to PostHog as
@@ -312,23 +336,30 @@ export async function forwardCapture(
   // Every event in it already reached PostHog: a page sending what it saved
   // as it went away, or a beacon's batch again.
   if (!prepared) return reply(200);
+  let upstream: { status: number; retryAfter: string | null };
   try {
-    const upstream = await deps.fetch(`${ingestHost}/e/`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "user-agent": INGEST_USER_AGENT },
-      body: JSON.stringify(prepared),
-      redirect: "manual",
+    upstream = await withinDeadline(UPSTREAM_DEADLINE_MS, async (signal) => {
+      const response = await deps.fetch(`${ingestHost}/e/`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "user-agent": INGEST_USER_AGENT },
+        body: JSON.stringify(prepared),
+        redirect: "manual",
+        signal,
+      });
+      // Nothing in PostHog's body is read: the connection can go.
+      await response.body?.cancel().catch(() => {});
+      return { status: response.status, retryAfter: response.headers.get("retry-after") };
     });
-    // PostHog's answer, through the table the browser's outbox reads ours by.
-    const answer = answerOf(upstream.status, upstream.headers.get("retry-after"), deps.now());
-    if (answer.outcome === "delivered") {
-      deps.forwarded.delivered(prepared.batch.map((event) => event.uuid));
-      return reply(200);
-    }
-    return answer.outcome === "retry" ? reply(503, answer.afterMs) : reply(400);
   } catch {
     return reply(503);
   }
+  // PostHog's answer, through the table the browser's outbox reads ours by.
+  const answer = answerOf(upstream.status, upstream.retryAfter, deps.now());
+  if (answer.outcome === "delivered") {
+    deps.forwarded.delivered(prepared.batch.map((event) => event.uuid));
+    return reply(200);
+  }
+  return answer.outcome === "retry" ? reply(503, answer.afterMs) : reply(400);
 }
 
 /**
@@ -401,10 +432,11 @@ const MAX_MANIFESTS = 16;
  * version, and keeps the 16 most recently used, found or not; an older
  * build's tabs report against their own manifest, which `dpl` (the build's
  * deployment id) can reach while that build is still served. Concurrent
- * loads of one build share a fetch. A manifest it cannot find or read is
- * null: that build was not shipped here, its frames keep no path or chunk id,
- * and its events name no build. A version that is not a build's is never
- * fetched.
+ * loads of one build share a fetch, which has MANIFEST_DEADLINE_MS, body
+ * included. A load that fails or runs out of time gives the last manifest
+ * read for that build. One it has never read is null: that build was not
+ * shipped here, its frames keep no path or chunk id, and its events name no
+ * build. A version that is not a build's is never fetched.
  */
 export function createChunkManifestLoader({
   origin,
@@ -425,16 +457,22 @@ export function createChunkManifestLoader({
     known.set(version, { files, until: now() + (files ? MANIFEST_TTL_MS : MISSING_MANIFEST_TTL_MS) });
   };
 
+  // A build's manifest never changes, so the last one read stands in for a
+  // load that fails or passes its deadline.
   const fetchManifest = async (version: string, url: string): Promise<Manifest> => {
     let files: Manifest = null;
     try {
-      const response = await fetch(`${origin}${url}?dpl=${version}`, {
-        headers: { "user-agent": INGEST_USER_AGENT },
+      files = await withinDeadline(MANIFEST_DEADLINE_MS, async (signal) => {
+        const response = await fetch(`${origin}${url}?dpl=${version}`, {
+          headers: { "user-agent": INGEST_USER_AGENT },
+          signal,
+        });
+        return response.ok ? parseChunkManifest(await response.json()) : null;
       });
-      if (response.ok) files = parseChunkManifest(await response.json());
     } catch {}
-    remember(version, files);
-    return files;
+    const loaded = files ?? known.get(version)?.files ?? null;
+    remember(version, loaded);
+    return loaded;
   };
 
   return (version) => {

@@ -1,11 +1,13 @@
 import { gzipSync } from "node:zlib";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createChunkManifestLoader,
   createForwardedEvents,
   forwardCapture,
   INGEST_USER_AGENT,
   type IngestDeps,
+  MANIFEST_DEADLINE_MS,
+  UPSTREAM_DEADLINE_MS,
 } from "../src/app/lib/telemetry-ingest";
 import { beforeSend } from "../src/app/lib/telemetry-privacy";
 
@@ -724,6 +726,10 @@ describe("PostHog's answers and slow requests at /ingest", () => {
   const answering = (status: number, headers: Record<string, string> = {}) => async () =>
     new Response(status === 204 ? null : "", { status, headers });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it.each([
     [200, 200],
     [204, 200],
@@ -755,5 +761,96 @@ describe("PostHog's answers and slow requests at /ingest", () => {
     expect(await retryAfter(503, new Date(NOW + 20_000).toUTCString())).toBe("20");
     expect(await retryAfter(429, "3600")).toBe("60");
     expect(await retryAfter(429, "soon")).toBeNull();
+  });
+
+  it("gives up on PostHog after its deadline and asks the browser to send again", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let signal: AbortSignal | undefined;
+    const pending = forward(post(json(), "application/json"), ["e"], {
+      fetch: (_url, init) => {
+        signal = init?.signal ?? undefined;
+        return new Promise<Response>(() => {});
+      },
+    });
+    let settled = false;
+    void pending.then(() => (settled = true));
+    await vi.advanceTimersByTimeAsync(UPSTREAM_DEADLINE_MS - 1);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect((await pending).response.status).toBe(503);
+    expect(signal?.aborted).toBe(true);
+  });
+
+  const manifestBody = JSON.stringify({ [CHUNK_ID]: "/_next/static/chunks/3u-6_1om1fv26.js" });
+
+  it("gives up on a manifest request that never answers, or whose body never ends, at its deadline", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const stalls = [
+      () => new Promise<Response>(() => {}),
+      () => Promise.resolve(new Response(new ReadableStream({ start: (controller) => controller.enqueue(new TextEncoder().encode("{")) }))),
+    ];
+    for (const stall of stalls) {
+      const signals: AbortSignal[] = [];
+      const load = createChunkManifestLoader({
+        origin: "https://conclave.acmvit.in",
+        fetch: (_url, init) => {
+          if (init?.signal) signals.push(init.signal);
+          return stall();
+        },
+      });
+      const loading = load(BUILD);
+      await vi.advanceTimersByTimeAsync(MANIFEST_DEADLINE_MS);
+      expect(await loading).toBeNull();
+      expect(signals.every((signal) => signal.aborted)).toBe(true);
+    }
+  });
+
+  it("keeps the last manifest it read when a later load fails or stalls", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let now = NOW;
+    let answer: "good" | "error" | "stall" = "good";
+    const load = createChunkManifestLoader({
+      origin: "https://conclave.acmvit.in",
+      now: () => now,
+      fetch: () => {
+        if (answer === "stall") return new Promise<Response>(() => {});
+        return Promise.resolve(answer === "good" ? new Response(manifestBody, { status: 200 }) : new Response("", { status: 500 }));
+      },
+    });
+    const good = await load(BUILD);
+    expect(good?.get(CHUNK_ID)).toBe("/_next/static/chunks/3u-6_1om1fv26.js");
+
+    for (const next of ["error", "stall"] as const) {
+      now += 11 * 60_000;
+      answer = next;
+      const loading = load(BUILD);
+      await vi.advanceTimersByTimeAsync(MANIFEST_DEADLINE_MS);
+      expect((await loading)?.get(CHUNK_ID), next).toBe("/_next/static/chunks/3u-6_1om1fv26.js");
+    }
+  });
+
+  it("forwards a request while the manifest server stalls, once the manifest's deadline passes", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let asked = false;
+    const manifest = createChunkManifestLoader({
+      origin: "https://conclave.acmvit.in",
+      fetch: () => {
+        asked = true;
+        return new Promise<Response>(() => {});
+      },
+    });
+    const ofBuild = JSON.stringify(captureBody([event({ client_version: BUILD })]));
+    const pending = forward(post(ofBuild, "application/json"), ["e"], { manifest });
+    let settled = false;
+    void pending.then(() => (settled = true));
+    await vi.advanceTimersByTimeAsync(MANIFEST_DEADLINE_MS - 1);
+    expect(asked).toBe(true);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+
+    const { response, upstream } = await pending;
+    expect(response.status).toBe(200);
+    expect(upstream).toHaveLength(1);
   });
 });

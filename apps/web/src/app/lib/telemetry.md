@@ -210,14 +210,16 @@ a request costs at most one manifest lookup. That build's chunk manifest is
 fetched from our configured site (`lib/site-url.ts`, never the request's Host)
 with `?dpl=<build>` (a version that is not a git sha is never fetched), shared
 by concurrent requests, and kept for 10 minutes, or 1 minute when missing, for
-the 16 most recently used builds. A tab still running an older build is judged
-by its own manifest, not the newest one. It forwards the batch to PostHog as
+the 16 most recently used builds. A manifest load has 2 s, its body included;
+one that fails or runs out of time falls back to the last manifest read for
+that build (a build's manifest never changes), or to none. A tab still running
+an older build is judged by its own manifest, not the newest one. It forwards the batch to PostHog as
 plain JSON with the fixed User-Agent `conclave-web-ingest/1` and no header of
 the browser's: no cookie, no IP address and no forwarded or referrer header
-reaches PostHog. `/ingest` reads PostHog's answer through the same table as
-the outbox: delivered is 200; worth sending again, or no answer, is 503, with
-PostHog's `Retry-After` (in seconds, at most 60) when it gave one; refused is
-400. A body that fails validation, an exception list of the wrong shape
+reaches PostHog. `/ingest` waits at most 10 s for PostHog, and reads
+PostHog's answer through the same table as the outbox: delivered is 200; worth
+sending again, or no answer in time, is 503, with PostHog's `Retry-After` (in
+seconds, at most 60) when it gave one; refused is 400. A body that fails validation, an exception list of the wrong shape
 included, gets 400 with an empty body, so the browser drops it and learns
 nothing of what failed.
 
