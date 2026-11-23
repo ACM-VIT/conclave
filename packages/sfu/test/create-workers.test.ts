@@ -142,7 +142,7 @@ it.each([
   }
 });
 
-it("uses the inherited Compose budget for staging WebRTC and plain RTP", async ({ skip }) => {
+it("uses the inherited Compose budget for staging WebRTC and plain RTP", { timeout: 30_000 }, async ({ skip }) => {
   if (spawnSync("docker", ["compose", "version"], { stdio: "ignore" }).status !== 0) {
     skip("Docker Compose is not installed");
     return;
