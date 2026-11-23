@@ -112,6 +112,8 @@ const recordedOwnerOf = (
       ? recalled.owner.email
       : undefined;
 
+const JOIN_OVERTAKEN = "A newer join from this connection took over.";
+
 // The gate a join meets at a code with no live room, in order. Whoever may
 // open the code (a host, the account the code belongs to or that booked it,
 // a visitor the web lets open rooms) opens it past every refusal after it:
@@ -136,6 +138,14 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
       data: JoinRoomData,
       callback: (response: JoinRoomResponse | JoinRoomErrorResponse) => void,
     ) => {
+      // Only the newest join this socket asked for acts. One that a newer
+      // join overtook while it waited answers so, and changes nothing.
+      const attempt = ++context.joinAttempts;
+      const overtaken = (): boolean => {
+        if (context.joinAttempts === attempt) return false;
+        respond(callback, { error: JOIN_OVERTAKEN });
+        return true;
+      };
       try {
         // A socket waiting for the next meeting keeps its place while this
         // join is decided, so a room opening meanwhile takes it in.
@@ -378,6 +388,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             // to the creation path below, which applies the creation checks
             // and makes this joiner the creator if it creates the room.
             room = (await renewLocalRoom(state, clientId, roomId)) ?? undefined;
+            if (overtaken()) return;
           } catch (error) {
             if (error instanceof RoomOwnershipError) {
               respondWithRoomOwner(error.owner);
@@ -417,6 +428,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         // meanwhile, or this join opens it. Null once the join is answered.
         const findOrOpenRoom = async (): Promise<FoundRoom | null> => {
           const assignment = await state.roomRegistry.getAssignment(roomChannelId);
+          if (overtaken()) return null;
           const openedWhileAsking = openedForThisGuest();
           if (openedWhileAsking) return joinOpenedRoom(openedWhileAsking);
           if (assignment && !state.roomRegistry.isLocalOwner(assignment)) {
@@ -471,6 +483,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
               Boolean(scheduledWebinarForAttendee) ||
               clientPolicy.allowNonHostRoomCreation,
           });
+          if (overtaken()) return null;
           const openedWhileDeciding = openedForThisGuest();
           if (openedWhileDeciding) return joinOpenedRoom(openedWhileDeciding);
           if (!opening.opens) {
@@ -542,6 +555,9 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           if (lost) {
             openedRoom.restoreLostCall(lost);
           }
+          // A room this join opened is set up whether or not a newer join
+          // overtook it; that one finds it open.
+          if (overtaken()) return null;
           return { room: openedRoom, created, lost };
         };
         if (!room) {
@@ -1089,6 +1105,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
 
           await socket.leave(previousChannelId);
           cleanupRoom(state, previousChannelId);
+          if (overtaken()) return;
 
           context.currentRoom = null;
           context.currentClient = null;

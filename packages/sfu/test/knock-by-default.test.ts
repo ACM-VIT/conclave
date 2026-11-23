@@ -1688,6 +1688,27 @@ describe("a meeting whose last participant leaves while someone is still knockin
     expect(knocksAskedOf(reopened)).toEqual([]);
   });
 
+  it("leaves a knocker's seat alone when a retry older than the join that seated them ends", async () => {
+    const { state, knocking } = await everyoneLeftButTheKnocker();
+    const retry = askAgainHeldAtTheRegistry(state, knocking);
+    const reopened = await join(state, host);
+    expect(await send(reopened.peer, "admitUser", { userId: knocker.userId })).toEqual({
+      success: true,
+    });
+    // The tab answers "joinApproved" with a join of its own, which seats it
+    // before the older retry gets its answer from the registry.
+    expect((await askAgain(knocking)).status).toBe("joined");
+    const seat = knocking.context.currentClient!;
+    const closing = vi.spyOn(seat, "close");
+
+    retry.goOn();
+    expect((await retry.reply).error).toBe("A newer join from this connection took over.");
+    expect(knocking.context.currentClient).toBe(seat);
+    expect(roomOf(state).getClient(seat.id)).toBe(seat);
+    expect(closing).not.toHaveBeenCalled();
+    expect(knocksAskedOf(reopened)).toEqual([]);
+  });
+
   it("does not knock again for a knocker the host turned away while their retry was still being decided", async () => {
     const { state, knocking } = await everyoneLeftButTheKnocker();
     const retry = askAgainHeldAtTheRegistry(state, knocking);

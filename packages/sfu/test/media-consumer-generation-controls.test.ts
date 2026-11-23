@@ -142,6 +142,7 @@ const makeHarness = (
     currentUserKey: null,
     activeConclaveAnswers: new Map(),
     adminHandlersRegistered: false,
+    joinAttempts: 0,
   } satisfies ConnectionContext;
   registerMediaHandlers(context);
   return { client, handlers, room, socket };

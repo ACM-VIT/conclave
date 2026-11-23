@@ -14,6 +14,10 @@ export type ConnectionContext = {
   pendingRoomChannelId: string | null;
   pendingUserKey: string | null;
   currentUserKey: string | null;
+  // How many joins this socket has asked for. Only the newest may act: an
+  // older one still waiting when a newer one arrives answers and does
+  // nothing.
+  joinAttempts: number;
   // Answers are added only after their first signed packet is relayed and
   // removed when a terminal packet arrives. Socket disconnect cleanup drains
   // this map so peers never retain an orphaned streaming assistant bubble.
@@ -56,6 +60,7 @@ export const createConnectionContext = (
     pendingRoomChannelId: null,
     pendingUserKey: null,
     currentUserKey: null,
+    joinAttempts: 0,
     activeConclaveAnswers: new Map(),
     adminHandlersRegistered: false,
   };

@@ -55,6 +55,7 @@ const registerFixture = ({
     currentUserKey: null,
     activeConclaveAnswers: new Map(),
     adminHandlersRegistered: false,
+    joinAttempts: 0,
   } satisfies ConnectionContext;
 
   registerTransportHandlers(context);
