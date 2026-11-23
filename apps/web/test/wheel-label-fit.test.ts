@@ -198,6 +198,11 @@ describe("wheel label scripts without a grapheme segmenter", () => {
     ]);
   });
 
+  it("keeps a virama with no consonant before it apart from the next consonant, as Unicode 17 does", () => {
+    expect(splitGraphemesFallback("\u0905\u094D\u0937")).toEqual(["\u0905\u094D", "\u0937"]);
+    expect(splitGraphemesFallback("\u0915\u093E\u094D\u0937")).toEqual(["\u0915\u093E\u094D", "\u0937"]);
+  });
+
   it("splits names the way the browser segmenter does, script by script", () => {
     const names = [
       "AAAAAलक्ष्मीनारायण लक्ष्मीनारायण",
@@ -221,7 +226,7 @@ describe("wheel label scripts without a grapheme segmenter", () => {
       "Nguye\u0302\u0303n",
       "ｶﾞｷﾞ 山田太郎",
       "क्A क्ক क्ก",
-      "अ्ष का्ष क़्ष क््ष क\u200D्ष क्\uFE0Fष",
+      "क़्ष क््ष क\u200D्ष क्\uFE0Fष",
       "ক\u09CD\u09BEষ ক\u09BE\u09CDষ ക\u0D57\u0D4Dഷ",
       "\u{1F469}\u0E33\u200D\u{1F4BB} \u{1F469}\u200C\u200D\u{1F4BB}",
       "\u{16D43}\u{16D63}\u{16D67}\u{16D50}",
