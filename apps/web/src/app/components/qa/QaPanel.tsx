@@ -8,6 +8,7 @@ import type {
   WebinarQaModerateRequest,
   WebinarQaStatus,
 } from "../../lib/types";
+import PanelNoticeSlot from "../PanelNoticeSlot";
 
 const ICON_STROKE = 1.75;
 const MAX_QUESTION_LENGTH = 500;
@@ -246,6 +247,7 @@ export function QaPanel({
           <X size={18} strokeWidth={ICON_STROKE} />
         </button>
       </header>
+      <PanelNoticeSlot />
 
       <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-3.5">
         {orderedEntries.length === 0 ? (

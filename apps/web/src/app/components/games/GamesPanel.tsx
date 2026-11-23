@@ -15,6 +15,7 @@ import {
   HEAD_FONT,
   PrimaryButton,
 } from "./gameUi";
+import PanelNoticeSlot from "../PanelNoticeSlot";
 
 type CatalogEntry = {
   id: string;
@@ -167,6 +168,7 @@ export function GamesPanel({
         <GameDockCloseButton onClose={onClose} label="Close games" />
       </div>
 
+      <PanelNoticeSlot />
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
         {vote ? (
           <VoteView

@@ -3,6 +3,7 @@
 import { Sparkles, X } from "lucide-react";
 import type { RoomAiController } from "../hooks/useRoomAi";
 import RoomAiSettings from "./RoomAiSettings";
+import PanelNoticeSlot from "./PanelNoticeSlot";
 
 const ICON = 18;
 const STROKE = 1.75;
@@ -38,6 +39,7 @@ export default function RoomAiPanel({
           <X size={ICON} strokeWidth={STROKE} />
         </button>
       </header>
+      <PanelNoticeSlot />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <RoomAiSettings controller={controller} onClose={onClose} embedded />
       </div>

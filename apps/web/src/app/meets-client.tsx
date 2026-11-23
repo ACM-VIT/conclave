@@ -5,6 +5,7 @@ import { useSharedVoiceStart } from "./hooks/useSharedVoiceStart";
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useHotkey } from "@tanstack/react-hotkeys";
+import { isDevicePublishing, retryFailedMediaDevices } from "./lib/media-retry";
 import { HOTKEYS } from "./lib/hotkeys";
 import type { Socket } from "socket.io-client";
 import { SFU_EVENTS } from "@conclave/meeting-core/sfu-events";
@@ -115,6 +116,7 @@ import {
 } from "./lib/network-information";
 import { resolveEffectiveCameraPublishSettings } from "./lib/media-quality-settings";
 import {
+  clearMediaDeviceError,
   generateRoomCode,
   isSystemUserId,
   sanitizeInstitutionDisplayName,
@@ -559,6 +561,8 @@ export default function MeetsClient({
     setActiveSpeakerId,
     meetError,
     setMeetError,
+    mediaError,
+    setMediaError,
     waitingMessage,
     setWaitingMessage,
     pendingUsers,
@@ -1224,6 +1228,7 @@ export default function MeetsClient({
     localStream,
     setLocalStream,
     setMeetError,
+    setMediaError,
     selectedAudioInputDeviceId,
     setSelectedAudioInputDeviceId,
     setSelectedAudioOutputDeviceId,
@@ -1333,24 +1338,75 @@ export default function MeetsClient({
     toggleCameraCommandRef.current = toggleCamera;
   }, [toggleCamera]);
 
-  const handleRetryMedia = useCallback(async () => {
-    const stream = await requestMediaPermissions();
-    if (!stream) return;
-    const refreshedTrackIds = new Set(
-      stream.getTracks().map((track) => track.id),
-    );
-    localStream?.getTracks().forEach((track) => {
-      if (!refreshedTrackIds.has(track.id)) {
-        stopLocalTrack(track);
-      }
+  const mediaIntentRef = useRef({ isMuted, isCameraOff });
+  useEffect(() => {
+    mediaIntentRef.current = { isMuted, isCameraOff };
+  }, [isMuted, isCameraOff]);
+  const mediaRetryRef = useRef<Promise<void> | null>(null);
+
+  const canRetryMedia = Boolean(mediaError?.device);
+
+  const handleRetryMedia = useCallback(() => {
+    const device = mediaError?.device;
+    if (!device) return;
+    if (mediaRetryRef.current) return;
+    mediaRetryRef.current = retryFailedMediaDevices({
+      device,
+      isOn: (target) => {
+        const intent = mediaIntentRef.current;
+        return target === "camera"
+          ? isDevicePublishing({
+              intendedOn: !intent.isCameraOff,
+              producer: refs.videoProducerRef.current,
+            })
+          : isDevicePublishing({
+              intendedOn: !intent.isMuted,
+              producer: refs.audioProducerRef.current,
+            });
+      },
+      turnOn: async (target) => {
+        const intent = mediaIntentRef.current;
+        const intendedOn =
+          target === "camera" ? !intent.isCameraOff : !intent.isMuted;
+        if (intendedOn) {
+          const kind = target === "camera" ? "video" : "audio";
+          const stream = await requestMediaPermissions({
+            audio: target === "microphone",
+            video: target === "camera",
+            audioRequired: target === "microphone",
+            videoRequired: target === "camera",
+          });
+          const fresh = stream?.getTracks().filter((track) => track.kind === kind) ?? [];
+          if (fresh.length === 0) return;
+          const current = refs.localStreamRef.current;
+          current?.getTracks().forEach((track) => {
+            if (track.kind === kind && !fresh.includes(track)) stopLocalTrack(track);
+          });
+          setLocalStream(
+            new MediaStream([
+              ...(current?.getTracks().filter((track) => track.kind !== kind) ?? []),
+              ...fresh,
+            ]),
+          );
+          return;
+        }
+        await (target === "camera"
+          ? toggleCameraCommandRef.current?.()
+          : toggleMuteCommandRef.current?.());
+      },
+      markRecovered: (target) =>
+        setMediaError((current) => clearMediaDeviceError(current, target)),
+    }).finally(() => {
+      mediaRetryRef.current = null;
     });
-    setLocalStream(stream);
-    setMeetError(null);
   }, [
-    localStream,
+    mediaError,
+    refs.audioProducerRef,
+    refs.localStreamRef,
+    refs.videoProducerRef,
     requestMediaPermissions,
     setLocalStream,
-    setMeetError,
+    setMediaError,
     stopLocalTrack,
   ]);
 
@@ -1394,6 +1450,12 @@ export default function MeetsClient({
           : { ...settings, audioOnlyMode: joinAudioOnly },
       );
       setMeetError(null);
+      setMediaError((current) => {
+        let next = current;
+        if (hasLiveAudio) next = clearMediaDeviceError(next, "microphone");
+        if (hasLiveVideo) next = clearMediaDeviceError(next, "camera");
+        return next;
+      });
       logMeetVideo("adopt_prejoin_media", {
         handoff: {
           stream: getMeetStreamDebugSnapshot(handoff.stream),
@@ -2252,6 +2314,7 @@ export default function MeetsClient({
   const handleLocalRoomEnded = useCallback(() => {
     setMeetingEndedNotice(null);
     setMeetError(null);
+    setMediaError(null);
     setWaitingMessage(null);
     setPendingNewMeetingRoomId(null);
     setCurrentIsAdmin(false);
@@ -2608,6 +2671,7 @@ export default function MeetsClient({
     handleStopVoiceAgent();
     socket.cleanup();
     setMeetError(null);
+    setMediaError(null);
     setMeetingEndedNotice(null);
     setWaitingMessage(null);
     setPendingNewMeetingRoomId(null);
@@ -2632,6 +2696,7 @@ export default function MeetsClient({
       setViewSettings((settings) => ({ ...settings, audioOnlyMode: false }));
     }
     setMeetError(null);
+    setMediaError(null);
     setMeetingEndedNotice(null);
     setWaitingMessage(null);
     setCurrentIsAdmin(true);
@@ -3076,7 +3141,7 @@ export default function MeetsClient({
         action={enterAction}
         error={
           enterErrored
-            ? (meetError ?? {
+            ? (meetError ?? mediaError ?? {
                 code: "UNKNOWN",
                 message: "",
                 recoverable: true,
@@ -3183,26 +3248,22 @@ export default function MeetsClient({
   return renderWithApps(
     <div className="flex flex-col h-full w-full bg-[#18181b] text-white">
       <MeetsHeader isJoined={isJoined} />
-      {connectionState === "joined" && meetError && (
-        <MeetsErrorBanner
-          meetError={meetError}
-          onDismiss={() => setMeetError(null)}
-          primaryActionLabel={
-            meetError.code === "PERMISSION_DENIED"
-              ? "Retry Permissions"
-              : meetError.code === "MEDIA_ERROR"
-                ? "Retry Devices"
-                : undefined
-          }
-          onPrimaryAction={
-            meetError.code === "PERMISSION_DENIED" ||
-            meetError.code === "MEDIA_ERROR"
-              ? handleRetryMedia
-              : undefined
-          }
-        />
-      )}
       <MeetsMainContent
+        errorNotice={
+          connectionState === "joined" && meetError ? (
+            <MeetsErrorBanner meetError={meetError} onDismiss={() => setMeetError(null)} />
+          ) : null
+        }
+        mediaErrorNotice={
+          connectionState === "joined" && mediaError ? (
+            <MeetsErrorBanner
+              meetError={mediaError}
+              onDismiss={() => setMediaError(null)}
+              primaryActionLabel={canRetryMedia ? "Try again" : undefined}
+              onPrimaryAction={canRetryMedia ? handleRetryMedia : undefined}
+            />
+          ) : null
+        }
         roomAi={roomAi}
         isJoined={isJoined}
         isMobile={isMobile}
@@ -3389,6 +3450,7 @@ export default function MeetsClient({
         onBrowserAudioAutoplayBlocked={handleBrowserAudioAutoplayBlocked}
         onBrowserAudioPlaybackStarted={handleBrowserAudioPlaybackStarted}
         meetError={meetError}
+        mediaError={mediaError}
         meetingEndedNotice={meetingEndedNotice}
         onDismissMeetingEndedNotice={() => setMeetingEndedNotice(null)}
         isPopoutActive={isPopoutActive}

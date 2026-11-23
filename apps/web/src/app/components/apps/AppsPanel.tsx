@@ -12,6 +12,7 @@ import {
   GameDockResizeHandle,
   HEAD_FONT,
 } from "../games/gameUi";
+import PanelNoticeSlot from "../PanelNoticeSlot";
 
 /**
  * An app that opens beside the call for this viewer alone. Opening one
@@ -98,6 +99,7 @@ export function AppsPanel({
         <GameDockCloseButton onClose={onClose} label="Close apps" />
       </div>
 
+      <PanelNoticeSlot />
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
         <div className="flex flex-col gap-2">
           {panelApps.length > 0 && (

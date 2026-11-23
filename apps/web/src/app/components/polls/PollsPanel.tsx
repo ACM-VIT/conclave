@@ -14,6 +14,7 @@ import {
   type PollItem,
   type PollResultRow,
 } from "@conclave/apps-sdk/polls/web";
+import PanelNoticeSlot from "../PanelNoticeSlot";
 
 const STROKE = 1.75;
 
@@ -83,6 +84,7 @@ export function PollsPanel({
           <X size={18} strokeWidth={STROKE} />
         </button>
       </div>
+      <PanelNoticeSlot />
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
         {isHost && !isComposing ? (

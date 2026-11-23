@@ -27,6 +27,7 @@ import type {
   WebinarQaModerateRequest,
 } from "../lib/types";
 import { formatDisplayName, isSystemUserId } from "../lib/utils";
+import PanelNoticeSlot from "./PanelNoticeSlot";
 import { QaModerationActions } from "./qa/QaPanel";
 
 interface ParticipantsPanelProps {
@@ -363,6 +364,7 @@ function ParticipantsPanel({
           <X size={ICON} strokeWidth={STROKE} />
         </button>
       </header>
+      <PanelNoticeSlot />
 
       {isAdmin && (
         <section className="border-b border-white/10 px-4 py-3">
