@@ -6,3 +6,6 @@ export const STAGE_RAIL_CLASS =
 
 export const STAGE_RAIL_TILE_CLASS =
   "relative h-full w-28 shrink-0 sm:h-28 sm:w-auto";
+
+export const STAGE_RAIL_SHORT_LANDSCAPE_HIDDEN_CLASS =
+  "[@media(width<40rem)_and_(height<31.25rem)_and_(orientation:landscape)]:hidden";

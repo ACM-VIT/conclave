@@ -8,6 +8,7 @@ interface StageNoticeProps {
   icon?: LucideIcon;
   busy?: boolean;
   compact?: boolean;
+  fit?: boolean;
   role?: "status" | "alert";
   action?: { label: string; onClick: () => void };
 }
@@ -18,12 +19,17 @@ export default function StageNotice({
   icon: Icon,
   busy = false,
   compact = false,
+  fit = false,
   role,
   action,
 }: StageNoticeProps) {
   return (
     <div
-      className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#131316] p-4 text-center"
+      className={`absolute inset-0 flex flex-col items-center gap-3 bg-[#131316] p-4 text-center ${
+        fit
+          ? "justify-center-safe overflow-y-auto pt-[3.25rem] [container-type:size]"
+          : "justify-center"
+      }`}
       role={role}
     >
       {busy ? (
@@ -37,7 +43,9 @@ export default function StageNotice({
         <Icon
           size={compact ? 22 : 32}
           strokeWidth={1.75}
-          className="text-[#F95F4A]"
+          className={`text-[#F95F4A] ${
+            fit ? "shrink-0 [@container(height<7.25rem)]:hidden" : ""
+          }`}
           aria-hidden="true"
         />
       ) : null}
@@ -49,7 +57,11 @@ export default function StageNotice({
         {title}
       </p>
       {detail && !compact ? (
-        <p className="max-w-[20rem] text-[12px] leading-snug text-[#fafafa]/56">
+        <p
+          className={`max-w-[20rem] text-[12px] leading-snug text-[#fafafa]/56 ${
+            fit ? "[@container(height<10rem)]:hidden" : ""
+          }`}
+        >
           {detail}
         </p>
       ) : null}

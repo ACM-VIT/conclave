@@ -94,10 +94,11 @@ function SharedBrowserFrame({
         title="Shared browser"
       />
       {status === "loading" ? (
-        <StageNotice busy role="status" title="Loading shared browser" />
+        <StageNotice busy fit role="status" title="Loading shared browser" />
       ) : status === "failed" ? (
         <StageNotice
           icon={Globe}
+          fit
           role="alert"
           title="Couldn’t load the shared browser"
           detail="Check your connection, then try again."

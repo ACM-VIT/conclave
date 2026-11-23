@@ -9,6 +9,7 @@ import LocalVideoTile from "./LocalVideoTile";
 import ParticipantVideo from "./ParticipantVideo";
 import {
   STAGE_RAIL_CLASS,
+  STAGE_RAIL_SHORT_LANDSCAPE_HIDDEN_CLASS,
   STAGE_RAIL_TILE_CLASS,
   STAGE_SPLIT_CLASS,
 } from "./stage-layout";
@@ -107,7 +108,10 @@ function MeetingAppLayout({
         <div
           className={fullStageBelowLarge ? "hidden lg:contents" : "contents"}
         >
-          <div className={STAGE_RAIL_CLASS} data-meet-stage-rail>
+          <div
+            className={`${STAGE_RAIL_CLASS} ${STAGE_RAIL_SHORT_LANDSCAPE_HIDDEN_CLASS}`}
+            data-meet-stage-rail
+          >
             <div className={STAGE_RAIL_TILE_CLASS} data-userid={currentUserId}>
               <LocalVideoTile
                 stream={localStream}
