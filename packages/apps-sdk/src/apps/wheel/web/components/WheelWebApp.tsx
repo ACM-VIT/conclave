@@ -502,7 +502,7 @@ export function WheelWebApp() {
             ref={actionsRef}
             className={
               layout === "landscape"
-                ? `flex flex-col items-center justify-center overflow-y-auto px-3 py-3 ${wheelHidden ? "min-w-0 flex-1" : "w-[220px] shrink-0"}`
+                ? `flex flex-col items-center justify-center-safe overflow-y-auto px-3 py-3 ${wheelHidden ? "min-w-0 flex-1" : "w-[220px] shrink-0"}`
                 : "contents"
             }
           >
