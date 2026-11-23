@@ -13,6 +13,7 @@ import {
   planMediaPathEscalation,
   readMediaPathHealth,
   readRtpBytes,
+  resolveRebuildRelayOnly,
   takeDeferredRebuilds,
   type MediaPathFailure,
   type MediaPathSample,
@@ -145,65 +146,83 @@ describe("watching a transport for media", () => {
 });
 
 describe("escalating when an ICE restart did not help", () => {
-  it("rebuilds through TURN alone when TURN is configured", () => {
+  it("asks for TURN alone on the first rebuild, before the refresh says whether TURN is there", () => {
     expect(
       planMediaPathEscalation({
         hasReconnected: false,
         relayOnly: false,
-        hasTurnServers: true,
         reconnectInFlight: false,
       }),
     ).toBe("reconnect-relay-only");
   });
 
-  it.each([
-    { relayOnly: false, hasTurnServers: true },
-    { relayOnly: false, hasTurnServers: false },
-    { relayOnly: true, hasTurnServers: true },
-  ])("waits for a rejoin in progress rather than dropping the rebuild: %o", (state) => {
+  it("rebuilds on the same policy when TURN alone is already in use", () => {
     expect(
       planMediaPathEscalation({
         hasReconnected: false,
-        reconnectInFlight: true,
-        ...state,
+        relayOnly: true,
+        reconnectInFlight: false,
       }),
-    ).toBe("wait-for-reconnect");
+    ).toBe("reconnect");
   });
+
+  it.each([{ relayOnly: false }, { relayOnly: true }])(
+    "waits for a rejoin in progress rather than dropping the rebuild: %o",
+    (state) => {
+      expect(
+        planMediaPathEscalation({
+          hasReconnected: false,
+          reconnectInFlight: true,
+          ...state,
+        }),
+      ).toBe("wait-for-reconnect");
+    },
+  );
 
   it("reports a blocked path at once, even while a rejoin is running", () => {
     expect(
       planMediaPathEscalation({
         hasReconnected: true,
         relayOnly: true,
-        hasTurnServers: true,
         reconnectInFlight: true,
       }),
     ).toBe("report-blocked");
   });
 
-  it("rebuilds once without TURN", () => {
+  it.each([{ relayOnly: true }, { relayOnly: false }])(
+    "tells the user once a rebuild has also failed: %o",
+    (state) => {
+      expect(
+        planMediaPathEscalation({
+          hasReconnected: true,
+          reconnectInFlight: false,
+          ...state,
+        }),
+      ).toBe("report-blocked");
+    },
+  );
+});
+
+describe("the ICE policy of a rebuild", () => {
+  it("uses TURN alone when it was asked for and the current credentials have a relay", () => {
     expect(
-      planMediaPathEscalation({
-        hasReconnected: false,
-        relayOnly: false,
-        hasTurnServers: false,
-        reconnectInFlight: false,
-      }),
-    ).toBe("reconnect");
+      resolveRebuildRelayOnly({ requested: true, relayOnly: false, hasTurnServers: true }),
+    ).toBe(true);
   });
 
-  it.each([
-    { relayOnly: true, hasTurnServers: true },
-    { relayOnly: false, hasTurnServers: false },
-    { relayOnly: false, hasTurnServers: true },
-  ])("tells the user once a rebuild has also failed: %o", (state) => {
+  it("stays on every path when the current credentials have no relay", () => {
     expect(
-      planMediaPathEscalation({
-        hasReconnected: true,
-        reconnectInFlight: false,
-        ...state,
-      }),
-    ).toBe("report-blocked");
+      resolveRebuildRelayOnly({ requested: true, relayOnly: false, hasTurnServers: false }),
+    ).toBe(false);
+  });
+
+  it("keeps the policy in use when TURN alone was not asked for", () => {
+    expect(
+      resolveRebuildRelayOnly({ requested: false, relayOnly: true, hasTurnServers: true }),
+    ).toBe(true);
+    expect(
+      resolveRebuildRelayOnly({ requested: false, relayOnly: false, hasTurnServers: true }),
+    ).toBe(false);
   });
 });
 
@@ -248,7 +267,6 @@ describe("a direction's media path recovery", () => {
     transportId,
     reason: "Consumer transport carried no media",
     relayOnly: false,
-    hasTurnServers: true,
     reconnectInFlight: false,
     ...overrides,
   });

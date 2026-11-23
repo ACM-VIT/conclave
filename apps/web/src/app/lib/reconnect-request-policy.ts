@@ -10,6 +10,11 @@ export type ReconnectRequest = {
   refreshIceServers?: boolean;
   /** The media directions whose transports failed, for a media-path rebuild. */
   failedDirections?: MediaDirection[];
+  /**
+   * Build the new transports through TURN alone if the credentials fetched
+   * for the rebuild have a relay, and the failure that asked for it.
+   */
+  relayOnly?: { reason: string };
 };
 
 /**

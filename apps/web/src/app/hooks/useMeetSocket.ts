@@ -153,6 +153,7 @@ import {
   planMediaPathFailure,
   planSilentPathStep,
   readMediaPathHealth,
+  resolveRebuildRelayOnly,
   takeDeferredRebuilds,
   type MediaPathHealth,
   type MediaPathRecovery,
@@ -1503,9 +1504,6 @@ export function useMeetSocket({
         transportId: transport.id,
         reason,
         relayOnly: relayOnlyIceRef.current,
-        hasTurnServers:
-          getUsableTurnIceServers(runtimeIceServersRef.current, Date.now()) !==
-          null,
         reconnectInFlight: reconnectInFlightRef.current,
       });
       commitMediaPathRecovery(recovery);
@@ -1526,17 +1524,11 @@ export function useMeetSocket({
         return;
       }
 
-      if (step === "reconnect-relay-only") {
-        relayOnlyIceRef.current = true;
-        console.warn(`[Meets] ${reason}. Retrying through TURN only.`);
-        telemetry.capture("meet_turn_relay_activated", {
-          reason,
-          roomId: currentRoomIdRef.current ?? undefined,
-        });
-      }
+      console.warn(`[Meets] ${reason}. Rebuilding the ${transportKind} transport.`);
       void handleReconnectRef.current?.({
         refreshIceServers: true,
         failedDirections: [transportKind],
+        ...(step === "reconnect-relay-only" ? { relayOnly: { reason } } : {}),
       });
     },
     [
@@ -9451,6 +9443,25 @@ export function useMeetSocket({
     // Waiting for a missing room is bounded by time, so those retries do not
     // count against the attempt budget and show no attempt number.
     let retryingForRoom = false;
+    // TURN alone is chosen with the credentials the new transports will use,
+    // never the held ones: those can have expired while a fresh answer brings
+    // a working relay.
+    const applyRequestedRelayPolicy = () => {
+      const relayOnly = resolveRebuildRelayOnly({
+        requested: Boolean(options?.relayOnly),
+        relayOnly: relayOnlyIceRef.current,
+        hasTurnServers:
+          getUsableTurnIceServers(runtimeIceServersRef.current, Date.now()) !==
+          null,
+      });
+      if (relayOnly === relayOnlyIceRef.current) return;
+      relayOnlyIceRef.current = relayOnly;
+      console.warn("[Meets] Rebuilding through TURN only.");
+      telemetry.capture("meet_turn_relay_activated", {
+        reason: options?.relayOnly?.reason ?? "media path rebuild",
+        roomId: currentRoomIdRef.current ?? undefined,
+      });
+    };
     reconnectInFlightRef.current = true;
     reconnectAttemptsRef.current = resolveReconnectStartAttempts(
       reconnectAttemptsRef.current,
@@ -9472,6 +9483,7 @@ export function useMeetSocket({
         }
         if (reconnectGeneration !== reconnectGenerationRef.current) return;
         if (intentionalDisconnectRef.current) return;
+        applyRequestedRelayPolicy();
         const result =
           scopedDirection === "consumer"
             ? await rebuildReceivePath()
@@ -9612,6 +9624,7 @@ export function useMeetSocket({
           }
           if (reconnectGeneration !== reconnectGenerationRef.current) return;
           if (intentionalDisconnectRef.current) return;
+          applyRequestedRelayPolicy();
 
           const joinOptions = joinOptionsRef.current;
           const mediaNeeds = getJoinMediaNeeds(

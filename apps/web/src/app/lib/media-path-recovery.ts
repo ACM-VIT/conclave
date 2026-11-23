@@ -103,7 +103,10 @@ export const advanceMediaPathWatch = (
 };
 
 export type MediaPathEscalation =
-  /** Rebuild the transports, forcing every candidate through TURN. */
+  /**
+   * Rebuild the transports through TURN alone, if the credentials current at
+   * rebuild time have a relay.
+   */
   | "reconnect-relay-only"
   | "reconnect"
   /**
@@ -116,24 +119,39 @@ export type MediaPathEscalation =
 
 /**
  * What to do when an ICE restart could not bring a transport back. One
- * rebuild is tried, through TURN alone when TURN is configured, because a
- * direct path that half works can keep ICE from settling on the relay.
+ * rebuild is tried, asking for TURN alone, because a direct path that half
+ * works can keep ICE from settling on the relay. Whether TURN is there is
+ * only known once the rebuild has fetched current credentials, so the plan
+ * never depends on the credentials held now; see resolveRebuildRelayOnly.
  */
 export const planMediaPathEscalation = ({
   hasReconnected,
   relayOnly,
-  hasTurnServers,
   reconnectInFlight,
 }: {
   hasReconnected: boolean;
   relayOnly: boolean;
-  hasTurnServers: boolean;
   reconnectInFlight: boolean;
 }): MediaPathEscalation => {
   if (hasReconnected) return "report-blocked";
   if (reconnectInFlight) return "wait-for-reconnect";
-  return hasTurnServers && !relayOnly ? "reconnect-relay-only" : "reconnect";
+  return relayOnly ? "reconnect" : "reconnect-relay-only";
 };
+
+/**
+ * The ICE policy for transports a rebuild is about to create, decided with
+ * the credentials it just fetched: TURN alone when that was asked for and
+ * there is a relay to use, otherwise the policy already in use.
+ */
+export const resolveRebuildRelayOnly = ({
+  requested,
+  relayOnly,
+  hasTurnServers,
+}: {
+  requested: boolean;
+  relayOnly: boolean;
+  hasTurnServers: boolean;
+}): boolean => (requested && hasTurnServers ? true : relayOnly);
 
 export type MediaDirection = "producer" | "consumer";
 
@@ -317,7 +335,6 @@ export type MediaPathFailure = {
   transportId: string;
   reason: string;
   relayOnly: boolean;
-  hasTurnServers: boolean;
   reconnectInFlight: boolean;
 };
 
