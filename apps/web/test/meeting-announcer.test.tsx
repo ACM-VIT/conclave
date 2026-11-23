@@ -33,6 +33,8 @@ const message = (id: string, userId: string, content: string): ChatMessage => ({
   timestamp: 0,
 });
 
+const privately = (chat: ChatMessage): ChatMessage => ({ ...chat, isDirect: true });
+
 const fromHistory = (chat: ChatMessage): ChatMessage => ({
   ...chat,
   isHistory: true,
@@ -238,4 +240,23 @@ it("names the person who left, though their name goes before their tile does", a
   await wait(1300);
 
   expect(announced()).toBe("Bob left");
+});
+
+it("says a private message is private, and keeps private messages apart in a burst", async () => {
+  await show([person("Ann"), person("Bo")]);
+  await wait(3500);
+
+  await show([person("Ann"), person("Bo")], [privately(message("1", "Ann", "just us"))]);
+  await wait(1300);
+  expect(announced()).toBe("Ann sent you a private message: just us");
+
+  await wait(3000);
+  await show([person("Ann"), person("Bo")], [
+    privately(message("1", "Ann", "just us")),
+    message("2", "Bo", "hello all"),
+    message("3", "Ann", "hi"),
+    privately(message("4", "Bo", "psst")),
+  ]);
+  await wait(1300);
+  expect(announced()).toBe("2 new messages from Bo and Ann. Bo sent you a private message: psst");
 });

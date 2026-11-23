@@ -25,7 +25,7 @@ import type { Dispatch, SetStateAction } from "react";
 import { Avatar } from "@conclave/ui-tokens/web";
 import { signOut, useSession } from "@/lib/auth-client";
 import type { RoomInfo } from "@/lib/sfu-types";
-import { buildMeetingUrl } from "@/lib/meeting-links";
+import { buildMeetingUrl, crossTenantJoinPath, parseMeetingInput } from "@/lib/meeting-links";
 import type { RejoinMedia } from "../lib/call-outcome";
 import { useRejoinMediaRestore } from "../hooks/useRejoinMediaRestore";
 import type {
@@ -42,7 +42,6 @@ import {
   ROOM_CODE_MAX_LENGTH,
   extractRoomCode,
   sanitizeInstitutionDisplayName,
-  sanitizeRoomCodeInput,
   sanitizeRoomCode,
 } from "../lib/utils";
 import RoomPresenceBadge from "./RoomPresenceBadge";
@@ -1067,6 +1066,7 @@ function JoinScreen({
     }
   };
 
+  const [linkedClientId, setLinkedClientId] = useState<string | null>(null);
   const restoringMedia = useRejoinMediaRestore(initialMedia, async (media) => {
     if (media.isAudioOnly) toggleAudioOnly();
     await Promise.allSettled([
@@ -1118,6 +1118,11 @@ function JoinScreen({
       ? sanitizeRoomCode(normalizedRoomId)
       : normalizedRoomId.trim();
     if (!candidate || restoringMedia) return;
+    const elsewhere = crossTenantJoinPath(candidate, linkedClientId, clientId);
+    if (elsewhere) {
+      window.location.assign(elsewhere);
+      return;
+    }
     if (!ensureGuest()) return;
     onEnterStart?.("join");
     commitPrejoinMedia();
@@ -1152,10 +1157,13 @@ function JoinScreen({
   };
 
   const onCodeChange = (raw: string) => {
-    const next = enforceShortCode
-      ? sanitizeRoomCodeInput(raw).slice(0, ROOM_CODE_MAX_LENGTH)
-      : extractRoomCode(raw);
-    onRoomIdChange(next);
+    if (!enforceShortCode) {
+      onRoomIdChange(extractRoomCode(raw));
+      return;
+    }
+    const pasted = parseMeetingInput(raw);
+    setLinkedClientId(pasted.clientId);
+    onRoomIdChange(pasted.roomCode.slice(0, ROOM_CODE_MAX_LENGTH));
   };
 
   const canJoin = normalizedRoomId.trim().length > 0;

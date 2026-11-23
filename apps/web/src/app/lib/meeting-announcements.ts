@@ -3,7 +3,7 @@ import { isSystemUserId } from "./utils";
 
 export type MeetingAnnouncement =
   | { kind: "joined" | "left" | "raisedHand"; name: string }
-  | { kind: "chat"; name: string; phrase: string };
+  | { kind: "chat"; name: string; phrase: string; isPrivate: boolean };
 
 export type RoomRoster = Map<string, { name: string; handRaised: boolean }>;
 
@@ -52,14 +52,21 @@ export function diffRoster(
 
 export function chatAnnouncement(message: ChatMessage): MeetingAnnouncement {
   const content = message.content.trim();
+  const text = content.length > MAX_CHAT_TEXT ? `${content.slice(0, MAX_CHAT_TEXT)}…` : content;
+  const isPrivate = Boolean(message.isDirect);
+  const sent = isPrivate ? "sent you a private" : "sent a";
   const phrase = content
-    ? `says: ${content.length > MAX_CHAT_TEXT ? `${content.slice(0, MAX_CHAT_TEXT)}…` : content}`
+    ? isPrivate
+      ? `sent you a private message: ${text}`
+      : `says: ${text}`
     : message.gif
-      ? "sent a GIF"
+      ? `${sent} GIF`
       : message.image
-        ? "sent an image"
-        : "sent a message";
-  return { kind: "chat", name: message.displayName || "Someone", phrase };
+        ? isPrivate
+          ? "sent you a private image"
+          : "sent an image"
+        : `${sent} message`;
+  return { kind: "chat", name: message.displayName || "Someone", phrase, isPrivate };
 }
 
 const listNames = (names: string[]): string => {
@@ -87,12 +94,15 @@ export function phraseAnnouncements(events: MeetingAnnouncement[]): string {
     (event): event is Extract<MeetingAnnouncement, { kind: "chat" }> =>
       event.kind === "chat",
   );
-  if (chats.length === 1) {
-    sentences.push(`${chats[0].name} ${chats[0].phrase}`);
-  } else if (chats.length > 1) {
-    sentences.push(
-      `${chats.length} new messages from ${listNames(chats.map((chat) => chat.name))}`,
-    );
+  for (const [group, plural] of [
+    [chats.filter((chat) => !chat.isPrivate), "new messages"],
+    [chats.filter((chat) => chat.isPrivate), "private messages"],
+  ] as const) {
+    if (group.length === 1) {
+      sentences.push(`${group[0].name} ${group[0].phrase}`);
+    } else if (group.length > 1) {
+      sentences.push(`${group.length} ${plural} from ${listNames(group.map((chat) => chat.name))}`);
+    }
   }
   return sentences.join(". ");
 }

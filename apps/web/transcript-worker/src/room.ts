@@ -623,7 +623,11 @@ export class TranscriptRoom {
       rateBucket &&
       !takeTranscriptRateLimit(viewer.rateLimits, rateBucket)
     ) {
-      this.sendError(viewer, "Transcript message rate limit exceeded.");
+      this.sendError(
+        viewer,
+        "Transcript message rate limit exceeded.",
+        normalizeRequestId((message as { requestId?: unknown }).requestId),
+      );
       return;
     }
 
