@@ -30,11 +30,6 @@ const CONCLAVE_CLIENT_IDS = [
   ...LEGACY_CONCLAVE_SFU_CLIENT_IDS,
 ];
 
-/**
- * Client IDs to look a room code's booking up under. A link that names its
- * tenant is looked up under that tenant only. A bare link or typed code keeps
- * its old meaning: the server's default first, then Conclave's ids.
- */
 export const resolveSfuClientIdCandidates = (
   preferred?: string | null,
 ): string[] => {
@@ -43,13 +38,6 @@ export const resolveSfuClientIdCandidates = (
   return Array.from(new Set([resolveServerSfuClientId(), ...CONCLAVE_CLIENT_IDS]));
 };
 
-/**
- * The booking a meeting link opens, with the tenant it really belongs to.
- * The booking service falls back across tenants, so a link that names its
- * tenant ignores a booking from any other, and one an older service returns
- * without its tenant, since that could be any tenant's. A bare link takes the
- * tenant a booking was looked up under, as before.
- */
 export const findScheduledMeetingForLink = async <
   Meeting extends { clientId?: string },
 >(

@@ -14,9 +14,6 @@ type Booking = { clientId: string; roomCode: string };
 type SfuOptions = { reportsClientId?: boolean; sfuDefault?: string };
 const olderSfu = { reportsClientId: false };
 
-// The SFU's by-room lookup: the asked tenant first, then the SFU's own
-// default and Conclave's legacy ids, returning the booking with its own id.
-// An older SFU leaves the id out.
 const sfuLookup =
   (bookedUnder: string[], { reportsClientId = true, sfuDefault }: SfuOptions = {}) =>
   async (clientId: string) => {
@@ -32,8 +29,6 @@ const sfuLookup =
     return null;
   };
 
-// What /[code] opens: a scheduled meeting found for the link, otherwise the
-// link's tenant, otherwise the browser default.
 const tenantOpenedBy = async (
   path: string,
   bookedUnder: string[] = [],

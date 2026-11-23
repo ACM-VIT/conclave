@@ -100,9 +100,6 @@ const normalizeSarvamLanguageCode = (
 const baseLanguage = (language: string): string =>
   language.trim().toLowerCase().split("-")[0] ?? "";
 
-// A picked language gets its regional code. With no pick, as from clients
-// that send no language, the code resolves exactly as it did before picks:
-// the operator's code or the language, else the deployment locale.
 const supportedSarvamLanguageCode = (
   language: string,
   languageChosen: boolean,
@@ -125,7 +122,6 @@ export const sarvamCanTranscribe = (
   env: LiveTranscriptionConnectOptions["env"],
 ): boolean => supportedSarvamLanguageCode(language, languageChosen, env) !== null;
 
-/** The exact language-code a Sarvam connection is sent; "unknown" auto-detects. */
 export const sarvamProviderLanguage = (options: {
   language: string;
   languageChosen?: boolean;

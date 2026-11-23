@@ -55,10 +55,6 @@ export interface ChatMessage {
    * render them as spoken voice messages. Never sent over the wire.
    */
   isTts?: boolean;
-  /**
-   * Set client-side on messages that arrived in a chat history snapshot
-   * rather than live. Never sent over the wire.
-   */
   isHistory?: boolean;
   /** Encrypted capability for the sender's consented cloned TTS voice. */
   ttsVoiceToken?: string;
@@ -622,6 +618,8 @@ export interface MediaState {
   videoDeviceId?: string;
 }
 
+export type MeetMediaDevice = "camera" | "microphone" | "both";
+
 export interface MeetError {
   code:
     | "PERMISSION_DENIED"
@@ -631,6 +629,14 @@ export interface MeetError {
     | "UNKNOWN";
   message: string;
   recoverable: boolean;
+  device?: MeetMediaDevice;
+  causes?: Partial<Record<"camera" | "microphone", MeetMediaDeviceCause>>;
+}
+
+export interface MeetMediaDeviceCause {
+  code: MeetError["code"];
+  kind: "blocked" | "missing" | "busy" | "unresponsive" | "other";
+  message: string;
 }
 
 export type {

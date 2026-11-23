@@ -17,8 +17,6 @@ afterEach(() => {
 const MODELS = { openai: "gpt-live-transcribe", sarvam: "saaras:v3" } as const;
 type Provider = keyof typeof MODELS;
 
-// The code each provider connection was really sent: Sarvam's language-code,
-// or the language in OpenAI's session.update.
 function sentCodes() {
   const sent: (string | null)[] = [];
   vi.stubGlobal(

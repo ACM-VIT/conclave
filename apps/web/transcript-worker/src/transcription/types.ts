@@ -36,7 +36,6 @@ export type LiveTranscriptionCallbacks = {
   onCommitted: (itemId: string) => void;
   onDelta: (itemId: string, delta: string) => void;
   onFinal: (itemId: string, transcript: string) => void | Promise<void>;
-  /** One item could not be transcribed; the connection itself is fine. */
   onItemFailed?: (itemId: string, message: string) => void | Promise<void>;
   onFailure: (message: string) => void | Promise<void>;
 };
@@ -47,7 +46,6 @@ export type LiveTranscriptionConnectOptions = {
   transcriptModel: string;
   language: string;
   languageChosen?: boolean;
-  /** The exact code to send the provider; resolved from the rest when absent. */
   providerLanguage?: string;
   delay: string;
   locale: string;
@@ -61,7 +59,6 @@ export interface LiveTranscriptionSession {
   appendAudio(audioBase64: string, speaker?: TranscriptSpeaker, context?: AudioContext): void;
   commitAudio(): void;
   clearAudio(): void;
-  /** Asks a streaming provider to finalize the audio it has already received. */
   finishAudio(): void;
   /** Forgets an utterance whose line ended, so it never takes a later utterance's final. */
   retire?(itemId: string): void;

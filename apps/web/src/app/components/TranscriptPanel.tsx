@@ -79,6 +79,7 @@ import AiModelSelect from "./AiModelSelect";
 import { useAiModels } from "../hooks/useAiModels";
 import RoomAiSettings from "./RoomAiSettings";
 import { configureRoomAiForFeature, type RoomAiController } from "../hooks/useRoomAi";
+import PanelNoticeSlot from "./PanelNoticeSlot";
 
 interface TranscriptPanelProps {
   roomAi?: RoomAiController;
@@ -235,7 +236,6 @@ function CaptionLanguageSelect({
   className,
 }: {
   id: string;
-  /** A language code, or "" for the default option. A code outside the list still shows as itself. */
   value: string;
   provider: ReturnType<typeof getTranscriptTranscriptionProvider>;
   defaultLabel?: string;
@@ -288,16 +288,9 @@ function StartStage({
   const needsTakeover = transcript.session.status === "takeover_needed";
   const provider = getTranscriptTranscriptionProvider(transcriptModel);
   const isSarvam = provider === "sarvam";
-  // What the form shows is what will be used: a language someone picked
-  // (now, or earlier and saved, for a new session), the resumed session's
-  // own language, or "" for the worker's default. Only a pick is sent, and
-  // picking the default names it (null when the worker auto-detects).
   const offered = (code: string | null | undefined): code is string =>
     Boolean(code) && captionLanguagesFor(provider).some((language) => language.code === code);
   const resumedLanguage = needsTakeover ? captionLanguageCode(transcript.session.language) : undefined;
-  // A resumed language carries over only when this provider keeps it: a pick
-  // it offers, or the same provider's own default. Otherwise the form shows
-  // this provider's default and sends that, so what it shows is what is used.
   const resumesOnSameProvider =
     provider === getTranscriptTranscriptionProvider(transcript.session.transcriptModel);
   const keepsResumedLanguage =
@@ -313,9 +306,6 @@ function StartStage({
   const defaultCode = transcript.supportsCaptionLanguage
     ? transcript.captionLanguageDefaults[provider] ?? undefined
     : undefined;
-  // The request names exactly what the form shows: the resumed session's own
-  // provider code, a listed language with its provider code, or the default
-  // with the provider code the worker reported for it.
   const resumedCode = transcript.session.providerLanguage;
   const sentLanguage: { language?: string | null; providerLanguage?: string } =
     needsTakeover && chosenLanguage === null && keepsResumedLanguage && resumesOnSameProvider
@@ -1211,6 +1201,7 @@ export default function TranscriptPanel({
           </div>
         ) : null}
       </div>
+      <PanelNoticeSlot />
 
       {settingsOpen && roomAi ? (
         <div className="min-h-0 flex-1 overflow-y-auto">

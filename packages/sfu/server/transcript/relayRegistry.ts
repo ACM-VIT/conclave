@@ -32,7 +32,6 @@ export type TranscriptRelayRegistry = {
   }) => Promise<TranscriptSfuRelayStopResponse | { error: string }>;
   syncRoom: (room: Room) => Promise<void>;
   closeAll: () => void;
-  /** How many rooms the registry holds any state for; a done room holds none. */
   trackedRoomCount: () => number;
 };
 
@@ -45,29 +44,18 @@ export const createTranscriptRelayRegistry = (options: {
   ) => TranscriptRelayInstance;
 }): TranscriptRelayRegistry => {
   const relays = new Map<string, TranscriptRelayInstance>();
-  // Every relay opened for a room and not yet closed, by creation order. A
-  // start that loses a race or a stop must not leave an older relay running,
-  // and must never close one created after it.
   const opened = new Map<string, Map<TranscriptRelayInstance, number>>();
-  // The outcome of every start still in flight, by its relay. A start that
-  // a newer one overtakes waits for this before it reports anything.
   const startsInFlight = new Map<
     TranscriptRelayInstance,
     Promise<TranscriptSfuRelayStartResponse>
   >();
-  // Per room, the newest relay generation a stop has retired. A retired
-  // relay never gets the room back and never counts as running; relays
-  // started after the stop began are newer and keep it.
   const stoppedThrough = new Map<string, number>();
-  // Relays whose start finished; one still starting does not count as running.
   const running = new Set<TranscriptRelayInstance>();
   let nextGeneration = 0;
   const isRetired = (key: string, relay: TranscriptRelayInstance): boolean => {
     const generation = opened.get(key)?.get(relay);
     return generation === undefined || generation <= (stoppedThrough.get(key) ?? -1);
   };
-  // A closed relay already counts as retired, so a room's watermark is only
-  // needed while a relay it retired is still open; drop it after that.
   const pruneStopWatermark = (key: string): void => {
     const watermark = stoppedThrough.get(key);
     if (watermark === undefined) return;
@@ -190,10 +178,6 @@ export const createTranscriptRelayRegistry = (options: {
         !isRetired(key, candidate);
       const isRunning = (candidate: TranscriptRelayInstance | undefined): boolean =>
         Boolean(candidate && running.has(candidate) && isOpen(candidate));
-      // The outcome is decided as it is returned: a success stands only if
-      // the room's relay, this one or its replacement, has finished starting
-      // and is open right now. A stop or a new start can land while this
-      // start settles, and a relay still starting does not count.
       const finish = (
         response: TranscriptSfuRelayStartResponse,
       ): TranscriptSfuRelayStartResponse => {
@@ -205,10 +189,6 @@ export const createTranscriptRelayRegistry = (options: {
         settle(settled);
         return settled;
       };
-      // Report success only while a relay really runs. When a newer start
-      // took the room, wait for it to settle: it either runs, so the room has
-      // a relay, or it fails and hands the room back to this one, which
-      // carries on. A room left with no relay fails, so the browser retries.
       const outcomeOfNewerStart = async (): Promise<TranscriptSfuRelayStartResponse | null> => {
         for (;;) {
           const current = relays.get(key);
@@ -224,8 +204,6 @@ export const createTranscriptRelayRegistry = (options: {
             : failure("No SFU transcript relay is running for this room.");
         }
       };
-      // A failed start hands the room back to the relay before it, never to
-      // one that has closed.
       const giveRoomBack = (): void => {
         if (relays.get(key) !== relay) return;
         if (existingRelay && existingRelay !== relay && isOpen(existingRelay)) {
@@ -279,8 +257,6 @@ export const createTranscriptRelayRegistry = (options: {
           error: "Only the transcript relay controller, host, or admin can stop the SFU relay.",
         };
       }
-      // Retire this relay and every older one before awaiting anything, so no
-      // handoff that settles meanwhile can hand the room back to one of them.
       stoppedThrough.set(roomKey, Math.max(stoppedThrough.get(roomKey) ?? -1, stoppedGeneration));
       try {
         const handoffReady = await relay.prepareHandoff();
@@ -294,8 +270,6 @@ export const createTranscriptRelayRegistry = (options: {
         if (opened.get(roomKey)?.has(relay)) {
           closeRelay(roomKey, relay, { flushBufferedAudio: true });
         }
-        // A replacement started while the handoff awaited is newer and keeps
-        // the room; anything this stop retired never does.
         const current = relays.get(roomKey);
         if (current && isRetired(roomKey, current)) {
           relays.delete(roomKey);

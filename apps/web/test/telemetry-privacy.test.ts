@@ -6,8 +6,6 @@ import {
   scrubUrl,
 } from "../src/app/lib/telemetry-privacy";
 
-// The public jwt.io sample shape ({"alg":"HS256"}, {"sub":"1234567890"}),
-// joined at runtime so secret scanners do not read it as a leaked key.
 const sampleJwt = [
   "eyJhbGciOiJIUzI1NiJ9",
   "eyJzdWIiOiIxMjM0NTY3ODkwIn0",

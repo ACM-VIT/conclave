@@ -144,12 +144,25 @@ describe("rejoin intent", () => {
 });
 
 describe("a lost connection", () => {
-  it("ends the call only once reconnecting has failed for good, and only for someone who was in it", () => {
-    expect(reconnectEndedCall("waiting", "reconnecting", true)).toBe(false);
-    expect(reconnectEndedCall("connecting", "reconnecting", true)).toBe(false);
-    expect(reconnectEndedCall("failed", "reconnecting", true)).toBe(false);
-    expect(reconnectEndedCall("failed", "error", true)).toBe(true);
-    expect(reconnectEndedCall("failed", "error", false)).toBe(false);
-    expect(reconnectEndedCall(undefined, "error", true)).toBe(false);
+  const lost = {
+    phase: "failed",
+    connectionState: "error",
+    wasInCall: true,
+    showsOutcome: true,
+    recoverable: true,
+  } as const;
+
+  it("ends the call only once reconnecting has given up on a lost connection, for someone who was in it", () => {
+    expect(reconnectEndedCall(lost)).toBe(true);
+    expect(reconnectEndedCall({ ...lost, phase: "waiting", connectionState: "reconnecting" })).toBe(false);
+    expect(reconnectEndedCall({ ...lost, connectionState: "reconnecting" })).toBe(false);
+    expect(reconnectEndedCall({ ...lost, wasInCall: false })).toBe(false);
+    expect(reconnectEndedCall({ ...lost, phase: undefined })).toBe(false);
+  });
+
+  it("leaves a webinar viewer's page and a permanent refusal showing their own message", () => {
+    expect(reconnectEndedCall({ ...lost, showsOutcome: false })).toBe(false);
+    expect(reconnectEndedCall({ ...lost, recoverable: false })).toBe(false);
+    expect(reconnectEndedCall({ ...lost, recoverable: undefined })).toBe(false);
   });
 });

@@ -286,7 +286,6 @@ describe("TranscriptRelayRegistry", () => {
     releaseHandoff();
     await expect(stopping).resolves.toEqual({ success: true });
 
-    // u1's late stop must leave the replacement running; only the room stops it.
     expect(closed).toEqual(["u1"]);
     registry.stopRoom(room.channelId);
     expect(closed).toEqual(["u1", "u2"]);
@@ -538,7 +537,6 @@ describe("relay handoffs through the real worker client", () => {
         controllerDisplayName: "Host",
         canReplaceExistingRelay: true,
       });
-    // The browser retries a failed start, and each start gets a new relay.
     const startLikeTheBrowser = async (workerToken: string) => {
       const first = await start(workerToken);
       if (first.success) return first;
@@ -752,7 +750,6 @@ describe("a stop clears the room whatever handoffs are pending", () => {
   it("lets another participant start after a stop lands while a replacement awaits its handoff", async () => {
     const closed = new Set<string>();
     const synced: string[] = [];
-    // Each handoff request waits on its own, as each times out on its own.
     const pendingHandoffs: { workerToken: string; settle: (ok: boolean) => void }[] = [];
     const registry = createTranscriptRelayRegistry({
       enabled: true,
@@ -897,8 +894,6 @@ describe("a start's success always comes with a running relay", () => {
           syncProducers: async () => {
             synced.push(workerToken);
           },
-          // Like a real relay, a closed one fails its start only when that
-          // start's pending work resumes, which the test chooses.
           close: () => {
             relay.open = false;
             for (const settle of relay.handoffs.splice(0)) settle(false);
@@ -918,8 +913,6 @@ describe("a start's success always comes with a running relay", () => {
         controllerDisplayName: "Host",
         canReplaceExistingRelay: true,
       });
-      // Checked as the result arrives: a success needs the room's relay to be
-      // one that finished starting and is still open.
       const checked = result.then((response) => {
         if (!response.success) return response;
         synced.length = 0;
@@ -991,7 +984,6 @@ describe("a start's success always comes with a running relay", () => {
         relay.handoffs.shift()!(random() < 0.7);
       } else if (roll < 0.83) registry.stopRoom(room.channelId);
       else if (roll < 0.9) {
-        // A stop and a fresh start in the same turn, while older starts settle.
         if (pending.length) pending[Math.floor(random() * pending.length)].failStart();
         queueMicrotask(() => {
           registry.stopRoom(room.channelId);

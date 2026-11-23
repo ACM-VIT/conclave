@@ -25,11 +25,6 @@ export function captionLanguageFor(
     : DEFAULT_CAPTION_LANGUAGE;
 }
 
-/**
- * The label for "nobody picked a language": the worker's default for the
- * provider, Auto-detect when that default detects the language, or plain
- * Default for a worker that does not say.
- */
 export function defaultCaptionLanguageLabel(
   defaultLanguage: string | null | undefined,
 ): string {
@@ -38,7 +33,6 @@ export function defaultCaptionLanguageLabel(
   return label ? `Default (${label})` : "Auto-detect";
 }
 
-/** The language this browser last picked, or null when it never picked one. */
 export function readCaptionLanguage(): string | null {
   try {
     const stored = window.localStorage.getItem(STORAGE_KEY);

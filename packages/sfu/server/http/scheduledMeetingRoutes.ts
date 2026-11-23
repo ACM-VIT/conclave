@@ -176,8 +176,6 @@ export const registerScheduledMeetingRoutes = (
         candidateClientId,
         roomCode,
       );
-      // Returned as stored, with its own clientId: a lookup never moves a
-      // booking to the tenant it was asked under.
       if (meeting) return meeting;
     }
     return null;

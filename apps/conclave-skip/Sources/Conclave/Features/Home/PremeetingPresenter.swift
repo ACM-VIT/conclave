@@ -1547,7 +1547,6 @@ final class PremeetingPresenter {
         return joinClientId(target)
     }
 
-    /// The tenant a lobby's room is joined in: the one its link named, else this build's.
     private func joinClientId(_ target: PremeetingRouteTarget) -> String {
         if let clientId = target.clientId, !clientId.isEmpty {
             return clientId
