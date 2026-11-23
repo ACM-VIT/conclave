@@ -302,6 +302,57 @@ describe("answers from /ingest", () => {
   });
 });
 
+describe("a batch /ingest asked to wait for", () => {
+  it("is saved, not beaconed, while its Retry-After runs as the page hides", async () => {
+    const store = memoryStore();
+    const h = harness({ answers: [{ status: 503, retryAfter: "60" }], store });
+    const waiting = event();
+    h.outbox.add(waiting);
+    await h.advance(FLUSH_INTERVAL_MS);
+    h.outbox.flushForUnload();
+
+    expect(h.beacons).toEqual([]);
+    expect(store.list()).toEqual([expect.objectContaining({ events: [waiting], notBefore: START + 5000 + 60_000 })]);
+  });
+
+  it("is sent by a replay no sooner than its Retry-After allows, and kept until then", async () => {
+    const store = memoryStore();
+    const closed = harness({ answers: [{ status: 503, retryAfter: "60" }], store });
+    const waiting = event();
+    closed.outbox.add(waiting);
+    await closed.advance(FLUSH_INTERVAL_MS);
+    closed.outbox.flushForUnload();
+
+    const nextLoad = harness({ store, at: START + 20_000 });
+    nextLoad.outbox.replaySaved();
+    await nextLoad.advance(0);
+    expect(nextLoad.posts).toEqual([]);
+    // Back in view again while it waits: still not before its time.
+    nextLoad.outbox.flushForUnload();
+    expect(nextLoad.beacons).toEqual([]);
+    nextLoad.outbox.replaySaved();
+    await nextLoad.advance(0);
+    expect(nextLoad.posts).toEqual([]);
+    expect(storedUuids(store)).toEqual([waiting.uuid]);
+
+    await nextLoad.advance(START + 65_000 - (START + 20_000) - 1);
+    expect(nextLoad.posts).toEqual([]);
+    await nextLoad.advance(1);
+    expect(nextLoad.posted()).toEqual([waiting.uuid]);
+    expect(store.list()).toEqual([]);
+  });
+
+  it("still goes by beacon after an ordinary backoff, which /ingest did not ask for", async () => {
+    const h = harness({ answers: [503] });
+    const failed = event();
+    h.outbox.add(failed);
+    await h.advance(FLUSH_INTERVAL_MS);
+    h.outbox.flushForUnload();
+
+    expect(h.uuidsIn(h.beacons)).toEqual([failed.uuid]);
+  });
+});
+
 describe("the outbox as the page goes away", () => {
   it("saves every batch not yet answered, and beacons the ones not in flight", async () => {
     const store = memoryStore();
@@ -657,7 +708,7 @@ describe("saved batches across tabs", () => {
     const size = 40 * 1024;
     const count = Math.ceil(MAX_STORED_CHARS / size) + 2;
     for (let i = 0; i < count; i++) {
-      store.save({ id: `batch-${i}`, events: [event("meet_join_attempt", size, START + i * 1000)], oldestAt: START + i * 1000, sent: false });
+      store.save({ id: `batch-${i}`, events: [event("meet_join_attempt", size, START + i * 1000)], oldestAt: START + i * 1000, sent: false, notBefore: 0 });
     }
 
     const kept = store.list().map((batch) => batch.id);

@@ -59,6 +59,8 @@ export type StoredBatch = {
    * a keepalive request still in flight when it was saved.
    */
   sent: boolean;
+  /** No send before this time, by this browser's clock: a Retry-After /ingest gave. */
+  notBefore: number;
 };
 
 /** Storage the site's tabs share, one entry per batch. */
@@ -101,6 +103,8 @@ type Batch = {
   inFlight: "keepalive" | "fetch" | null;
   // A beacon of it was taken, which no answer confirms.
   beaconed: boolean;
+  // No send before this time: the Retry-After of its last answer.
+  notBefore: number;
 };
 
 type Queued = { event: OutboxEvent; bytes: number };
@@ -179,6 +183,7 @@ export function createOutbox(deps: OutboxDeps) {
       timer: null,
       inFlight: null,
       beaconed: false,
+      notBefore: 0,
     }));
   };
 
@@ -192,6 +197,7 @@ export function createOutbox(deps: OutboxDeps) {
     events: batch.events,
     oldestAt: batch.oldestAt,
     sent: batch.beaconed || batch.inFlight === "keepalive",
+    notBefore: batch.notBefore,
   });
 
   const tooOld = (oldestAt: number): boolean => deps.now() - oldestAt > MAX_SEND_AGE_MS;
@@ -235,6 +241,9 @@ export function createOutbox(deps: OutboxDeps) {
   // After the next delay of the schedule, or the Retry-After /ingest asked
   // for when that is longer.
   const retry = (batch: Batch, afterMs: number | null): void => {
+    // Kept through unload and replay, so a page hiding or coming back does
+    // not send it sooner than /ingest asked.
+    batch.notBefore = afterMs === null ? 0 : deps.now() + afterMs;
     const delay = RETRY_DELAYS_MS[batch.attempt];
     if (delay === undefined) {
       // This page has given up on it: storage keeps it for the next replay.
@@ -243,10 +252,16 @@ export function createOutbox(deps: OutboxDeps) {
       return;
     }
     batch.attempt += 1;
+    sendLater(batch, Math.max(delay, afterMs ?? 0));
+  };
+
+  // Held as a batch waiting to send, so the page going away saves it.
+  const sendLater = (batch: Batch, ms: number): void => {
+    live.set(batch.id, batch);
     batch.timer = deps.setTimer(() => {
       batch.timer = null;
       void send(batch);
-    }, Math.max(delay, afterMs ?? 0));
+    }, ms);
   };
 
   // One pass over storage: sends each batch in it, from any tab, that this
@@ -261,17 +276,18 @@ export function createOutbox(deps: OutboxDeps) {
         stale.push(saved);
         continue;
       }
-      sends.push(
-        send({
-          id: saved.id,
-          events: saved.events,
-          oldestAt: saved.oldestAt,
-          attempt: 0,
-          timer: null,
-          inFlight: null,
-          beaconed: saved.sent,
-        }),
-      );
+      const batch: Batch = {
+        id: saved.id,
+        events: saved.events,
+        oldestAt: saved.oldestAt,
+        attempt: 0,
+        timer: null,
+        inFlight: null,
+        beaconed: saved.sent,
+        notBefore: saved.notBefore,
+      };
+      if (saved.notBefore > deps.now()) sendLater(batch, saved.notBefore - deps.now());
+      else sends.push(send(batch));
     }
     if (stale.length > 0) deps.onStale(counted(stale));
     if (sends.length === 0) return;
@@ -339,7 +355,8 @@ export function createOutbox(deps: OutboxDeps) {
         live.delete(batch.id);
         const body = bodyOf(batch.events);
         const bytes = byteLength(body);
-        if (!tooOld(batch.oldestAt) && bytes <= budget && deps.beacon(body)) {
+        const due = batch.notBefore <= deps.now();
+        if (due && !tooOld(batch.oldestAt) && bytes <= budget && deps.beacon(body)) {
           budget -= bytes;
           beacons.push({ bytes, at: deps.now() });
           batch.beaconed = true;
@@ -401,6 +418,7 @@ const StoredBatchSchema = z.object({
     .max(MAX_BATCH_EVENTS),
   oldestAt: z.number(),
   sent: z.boolean(),
+  notBefore: z.number().default(0),
 });
 
 /**

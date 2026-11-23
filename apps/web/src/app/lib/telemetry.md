@@ -38,8 +38,10 @@ PostHog: 2xx is delivered; 408, 425, 429 and any 5xx are worth sending again;
 anything else is refused for good. A batch with no answer, or one worth
 sending again, is retried with the very same events after 2, 4, 8, 16 and
 30 s, or after the answer's `Retry-After` when that is longer (seconds or an
-HTTP date, held to 60 s); each send carries its own `sent_at`, so `/ingest`
-can tell the events' age by the browser's clock. A batch whose retries run
+HTTP date, held to 60 s). A batch keeps the time its `Retry-After` asked it
+to wait until, saved with it: the page going away saves it without a beacon,
+and a replay sends it no sooner. Each send carries its own `sent_at`, so
+`/ingest` can tell the events' age by the browser's clock. A batch whose retries run
 out is saved, as below, for the next replay. A refused batch is dropped.
 Batches go by keepalive fetch, without cookies.
 
