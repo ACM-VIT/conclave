@@ -1295,6 +1295,8 @@ function JoinScreen({
           ? `${window.location.origin}/${presenceTarget}`
           : "";
   const linkCopy = useClipboardCopy(inviteLink);
+  const previewHint =
+    permissionRequestError ?? (showPermissionHint ? "Permission needed" : null);
   const handleNameInputChange = (nextName: string) => {
     setGuestName(nextName);
     onDisplayNameInputChange(nextName);
@@ -1304,7 +1306,7 @@ function JoinScreen({
     <div className="relative min-h-screen w-full bg-[#0a0a0b] text-[#fafafa]">
       <main className="flex min-h-dvh w-full flex-col items-stretch px-0 pb-6 pt-[calc(env(safe-area-inset-top,0px)+5rem)] sm:items-center sm:justify-center sm:px-4 sm:py-10 sm:pt-10">
         <div className="flex w-full flex-1 flex-col overflow-hidden bg-[#0e0e10] sm:block sm:flex-none sm:max-w-4xl sm:rounded-2xl sm:border sm:border-white/10 md:grid md:min-h-[520px] md:grid-cols-2">
-          <div className="relative min-h-[176px] flex-1 bg-[#121214] sm:aspect-video sm:h-auto sm:flex-none md:aspect-auto md:min-h-[520px]">
+          <div className="relative flex min-h-[calc(76px+9.25rem)] flex-1 flex-col bg-[#121214] sm:aspect-video sm:h-auto sm:flex-none md:aspect-auto md:min-h-[520px]">
                 <video
                   ref={videoRef}
                   autoPlay
@@ -1312,150 +1314,145 @@ function JoinScreen({
                   playsInline
                   className={`absolute inset-0 h-full w-full -scale-x-100 object-cover ${isCameraOn ? "" : "hidden"}`}
                 />
-                {!isCameraOn && (
-                  <div
-                    className={`absolute inset-0 flex flex-col items-center justify-center gap-2.5 pb-14 pt-12 sm:pt-0 ${
-                      meetingEndedNotice ? "max-sm:invisible" : ""
-                    }`}
-                  >
-                    <Avatar id={user?.id || previewName} name={previewName} size={76} />
-                    <span className="text-[13.5px] text-[#fafafa]/45">Camera is off</span>
-                  </div>
-                )}
-                {shouldShowPermissionCta ? (
-                  <button
-                    type="button"
-                    onClick={requestMicrophoneAndCamera}
-                    disabled={isRequestingPermissions}
-                    className="absolute left-3 top-3 z-10 inline-flex h-8 max-w-[calc(100%-1.5rem)] items-center gap-1.5 rounded-full bg-[#F95F4A] px-3 text-[12.5px] font-medium text-white transition-[background-color,opacity] duration-150 hover:bg-[#e8553f] disabled:cursor-wait disabled:opacity-75"
-                  >
-                    {isRequestingPermissions ? (
-                      <Loader2 size={14} className="shrink-0 animate-spin" />
-                    ) : (
-                      <Video size={14} className="shrink-0" />
-                    )}
-                    <span className="truncate">Allow microphone and camera</span>
-                  </button>
-                ) : null}
-                <div
-                  className={`pointer-events-none absolute top-3 inline-flex h-8 items-center rounded-full bg-black/55 px-3 text-[12.5px] font-medium backdrop-blur-sm ${
-                    shouldShowPermissionCta ? "right-3" : "left-3"
-                  }`}
-                >
-                  {previewName}
-                  {isAudioOnly ? (
-                    <span className="ml-2 inline-flex items-center gap-1 border-l border-white/20 pl-2 text-white/85">
-                      <Headphones size={13} aria-hidden="true" />
-                      Audio only
-                    </span>
-                  ) : null}
-                </div>
-                {meetingEndedNotice ? (
-                  <div
-                    role="status"
-                    className="absolute inset-x-3 top-14 z-20 flex items-start gap-2 rounded-xl border border-white/10 bg-[#18181b] px-3.5 py-3 text-left text-[13px] leading-snug text-[#fafafa]"
-                  >
-                    <Info
-                      size={16}
-                      className="mt-0.5 shrink-0 text-[#F95F4A]"
-                      aria-hidden="true"
-                    />
-                    <p className="min-w-0 flex-1">{meetingEndedNotice}</p>
-                    {onDismissMeetingEndedNotice ? (
+                <div className="pointer-events-none relative z-10 flex min-h-0 flex-1 flex-col gap-2 p-3 pb-4">
+                  <div className="flex h-8 shrink-0 items-start justify-between gap-2">
+                    {shouldShowPermissionCta ? (
                       <button
                         type="button"
-                        onClick={onDismissMeetingEndedNotice}
-                        aria-label="Dismiss meeting ended notice"
-                        className="-mr-1 -mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[#fafafa]/55 transition-colors hover:bg-white/[0.08] hover:text-[#fafafa]"
+                        onClick={requestMicrophoneAndCamera}
+                        disabled={isRequestingPermissions}
+                        className="pointer-events-auto inline-flex h-8 min-w-0 items-center gap-1.5 rounded-full bg-[#F95F4A] px-3 text-[12.5px] font-medium text-white transition-[background-color,opacity] duration-150 hover:bg-[#e8553f] disabled:cursor-wait disabled:opacity-75"
                       >
-                        <X size={14} aria-hidden="true" />
+                        {isRequestingPermissions ? (
+                          <Loader2 size={14} className="shrink-0 animate-spin" />
+                        ) : (
+                          <Video size={14} className="shrink-0" />
+                        )}
+                        <span className="truncate">Allow microphone and camera</span>
                       </button>
                     ) : null}
+                    <div className="inline-flex h-8 min-w-0 items-center rounded-full bg-black/55 px-3 text-[12.5px] font-medium backdrop-blur-sm">
+                      <span className="truncate">{previewName}</span>
+                      {isAudioOnly ? (
+                        <span className="ml-2 inline-flex shrink-0 items-center gap-1 border-l border-white/20 pl-2 text-white/85">
+                          <Headphones size={13} aria-hidden="true" />
+                          Audio only
+                        </span>
+                      ) : null}
+                    </div>
                   </div>
-                ) : null}
-                {(showPermissionHint || permissionRequestError) && (
-                  <div
-                    className={`pointer-events-none absolute bottom-[76px] left-1/2 max-w-[calc(100%-2rem)] -translate-x-1/2 rounded-full bg-black/65 px-3 py-1.5 text-center text-[12.5px] font-medium text-white/80 backdrop-blur-sm ${
-                      meetingEndedNotice ? "max-sm:invisible" : ""
-                    }`}
-                  >
-                    {permissionRequestError ?? "Permission needed"}
+                  <div className="relative min-h-[calc(76px+1.75rem)] flex-1">
+                    <div className="absolute inset-0 flex flex-col items-center justify-center">
+                      {meetingEndedNotice ? (
+                        <div
+                          role="status"
+                          className="pointer-events-auto flex max-h-full min-h-0 w-full items-start gap-2 overflow-y-auto rounded-xl border border-white/10 bg-[#18181b] px-3.5 py-3 text-left text-[13px] leading-snug text-[#fafafa]"
+                        >
+                          <Info
+                            size={16}
+                            className="mt-0.5 shrink-0 text-[#F95F4A]"
+                            aria-hidden="true"
+                          />
+                          <p className="min-w-0 flex-1 [overflow-wrap:anywhere]">{meetingEndedNotice}</p>
+                          {onDismissMeetingEndedNotice ? (
+                            <button
+                              type="button"
+                              onClick={onDismissMeetingEndedNotice}
+                              aria-label="Dismiss meeting ended notice"
+                              className="-mr-1 -mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[#fafafa]/55 transition-colors hover:bg-white/[0.08] hover:text-[#fafafa]"
+                            >
+                              <X size={14} aria-hidden="true" />
+                            </button>
+                          ) : null}
+                        </div>
+                      ) : !isCameraOn ? (
+                        <div className="flex flex-col items-center gap-2">
+                          <Avatar id={user?.id || previewName} name={previewName} size={76} />
+                          <span className="max-w-full truncate text-[13.5px] leading-5 text-[#fafafa]/45">
+                            {previewHint ?? "Camera is off"}
+                          </span>
+                        </div>
+                      ) : previewHint ? (
+                        <div className="max-w-full truncate rounded-full bg-black/65 px-3 py-1.5 text-center text-[12.5px] font-medium text-white/80 backdrop-blur-sm">
+                          {previewHint}
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
-                )}
-                <div className="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-2.5">
-                  <button
-                    onClick={toggleMic}
-                    aria-label={isMicOn ? "Turn off microphone" : "Turn on microphone"}
-                    className={`inline-flex h-11 w-11 items-center justify-center rounded-full text-white transition-colors duration-150 ${
-                      isMicOn ? "bg-[#232327] hover:bg-[#2e2e33]" : "bg-[#ea4335] hover:brightness-105"
-                    }`}
-                  >
-                    {isMicOn ? <Mic size={18} /> : <MicOff size={18} />}
-                  </button>
-                  <button
-                    onClick={toggleCamera}
-                    disabled={isAudioOnly}
-                    aria-label={
-                      isAudioOnly
-                        ? "Camera is off in audio-only mode"
-                        : isCameraOn
-                          ? "Turn off camera"
-                          : "Turn on camera"
-                    }
-                    title={isAudioOnly ? "Camera is off in audio-only mode" : undefined}
-                    className={`inline-flex h-11 w-11 items-center justify-center rounded-full text-white transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-45 ${
-                      isCameraOn ? "bg-[#232327] hover:bg-[#2e2e33]" : "bg-[#ea4335] hover:brightness-105"
-                    }`}
-                  >
-                    {isCameraOn ? <Video size={18} /> : <VideoOff size={18} />}
-                  </button>
-                  <button
-                    type="button"
-                    data-testid="prejoin-backgrounds-effects"
-                    onClick={openEffectsPanel}
-                    onFocus={() => prewarmLiveCameraEffects("prejoin-effects-button")}
-                    onPointerEnter={() =>
-                      prewarmLiveCameraEffects("prejoin-effects-button")
-                    }
-                    onTouchStart={() =>
-                      prewarmLiveCameraEffects("prejoin-effects-button")
-                    }
-                    disabled={isCameraPermissionBlocked}
-                    aria-label={
-                      isCameraPermissionBlocked
-                        ? "Backgrounds and effects: Permission needed"
-                        : "Backgrounds and effects"
-                    }
-                    title={
-                      isCameraPermissionBlocked
-                        ? "Permission needed"
-                        : "Backgrounds and effects"
-                    }
-                    className={`inline-flex h-11 w-11 items-center justify-center rounded-full text-white transition-colors duration-150 hover:bg-[#2e2e33] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-[#232327] ${
-                      activeVideoEffectsCount > 0
-                        ? "bg-[#F95F4A] hover:bg-[#ff6d5a]"
-                        : "bg-[#232327]"
-                    }`}
-                  >
-                    <WandSparkles size={18} />
-                  </button>
-                  <button
-                    type="button"
-                    data-testid="prejoin-audio-only"
-                    onClick={toggleAudioOnly}
-                    aria-pressed={isAudioOnly}
-                    aria-label="Audio only: join without video"
-                    title="Audio only: join without video"
-                    className={`inline-flex h-11 w-11 items-center justify-center rounded-full text-white transition-colors duration-150 ${
-                      isAudioOnly
-                        ? "bg-[#F95F4A] hover:bg-[#ff6d5a]"
-                        : "bg-[#232327] hover:bg-[#2e2e33]"
-                    }`}
-                  >
-                    <Headphones size={18} />
-                  </button>
+                  <div className="pointer-events-auto flex shrink-0 items-center justify-center gap-2.5">
+                    <button
+                      onClick={toggleMic}
+                      aria-label={isMicOn ? "Turn off microphone" : "Turn on microphone"}
+                      className={`inline-flex h-11 w-11 items-center justify-center rounded-full text-white transition-colors duration-150 ${
+                        isMicOn ? "bg-[#232327] hover:bg-[#2e2e33]" : "bg-[#ea4335] hover:brightness-105"
+                      }`}
+                    >
+                      {isMicOn ? <Mic size={18} /> : <MicOff size={18} />}
+                    </button>
+                    <button
+                      onClick={toggleCamera}
+                      disabled={isAudioOnly}
+                      aria-label={
+                        isAudioOnly
+                          ? "Camera is off in audio-only mode"
+                          : isCameraOn
+                            ? "Turn off camera"
+                            : "Turn on camera"
+                      }
+                      title={isAudioOnly ? "Camera is off in audio-only mode" : undefined}
+                      className={`inline-flex h-11 w-11 items-center justify-center rounded-full text-white transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-45 ${
+                        isCameraOn ? "bg-[#232327] hover:bg-[#2e2e33]" : "bg-[#ea4335] hover:brightness-105"
+                      }`}
+                    >
+                      {isCameraOn ? <Video size={18} /> : <VideoOff size={18} />}
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="prejoin-backgrounds-effects"
+                      onClick={openEffectsPanel}
+                      onFocus={() => prewarmLiveCameraEffects("prejoin-effects-button")}
+                      onPointerEnter={() =>
+                        prewarmLiveCameraEffects("prejoin-effects-button")
+                      }
+                      onTouchStart={() =>
+                        prewarmLiveCameraEffects("prejoin-effects-button")
+                      }
+                      disabled={isCameraPermissionBlocked}
+                      aria-label={
+                        isCameraPermissionBlocked
+                          ? "Backgrounds and effects: Permission needed"
+                          : "Backgrounds and effects"
+                      }
+                      title={
+                        isCameraPermissionBlocked
+                          ? "Permission needed"
+                          : "Backgrounds and effects"
+                      }
+                      className={`inline-flex h-11 w-11 items-center justify-center rounded-full text-white transition-colors duration-150 hover:bg-[#2e2e33] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-[#232327] ${
+                        activeVideoEffectsCount > 0
+                          ? "bg-[#F95F4A] hover:bg-[#ff6d5a]"
+                          : "bg-[#232327]"
+                      }`}
+                    >
+                      <WandSparkles size={18} />
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="prejoin-audio-only"
+                      onClick={toggleAudioOnly}
+                      aria-pressed={isAudioOnly}
+                      aria-label="Audio only: join without video"
+                      title="Audio only: join without video"
+                      className={`inline-flex h-11 w-11 items-center justify-center rounded-full text-white transition-colors duration-150 ${
+                        isAudioOnly
+                          ? "bg-[#F95F4A] hover:bg-[#ff6d5a]"
+                          : "bg-[#232327] hover:bg-[#2e2e33]"
+                      }`}
+                    >
+                      <Headphones size={18} />
+                    </button>
+                  </div>
                 </div>
-
               </div>
 
           <div className="safe-area-pb flex min-h-0 shrink-0 flex-col justify-start gap-3 p-5 pb-10 sm:gap-4 sm:p-8 sm:pb-14 md:min-h-[520px] md:justify-center">
