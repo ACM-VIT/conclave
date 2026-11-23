@@ -50,9 +50,11 @@ class MicrophoneReplacementRecoveryTests {
         override fun getId(): String = fakeId ?: ""
         override fun isClosed(): Boolean = closed
         override fun close() { closed = true }
-        override fun pause() {}
+        var onPause: (() -> Unit)? = null
+        var onReplace: (() -> Unit)? = null
+        override fun pause() { onPause?.invoke() }
         override fun resume() {}
-        override fun replaceTrack(track: MediaStreamTrack?) {}
+        override fun replaceTrack(track: MediaStreamTrack?) { onReplace?.invoke() }
     }
 
     class FakeSendTransport : SendTransport(0L) {
@@ -543,5 +545,41 @@ class MicrophoneReplacementRecoveryTests {
 
         assertEquals("mic-2" to false, wire.muteRequests!!.last { it.first == "mic-2" })
         assertTrue(media.isLocalAudioPublishingHealthy)
+    }
+
+    @Test
+    fun aMuteNeverEntersTheProducerWhileNoiseSuppressionReplacesItsTrack() {
+        val app = org.robolectric.RuntimeEnvironment.getApplication()
+        skip.foundation.ProcessInfo.launch(app)
+        val call = liveCall()
+        val media = call.media
+        producingCall(call)
+        val replacing = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val paused = CountDownLatch(1)
+        val pausedDuringReplace = java.util.concurrent.atomic.AtomicBoolean(false)
+        call.old.onReplace = {
+            replacing.countDown()
+            release.await(5, TimeUnit.SECONDS)
+        }
+        call.old.onPause = {
+            pausedDuringReplace.set(replacing.count == 0L && release.count == 1L)
+            paused.countDown()
+        }
+        val scope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
+        val noise = scope.async(start = CoroutineStart.UNDISPATCHED) { media.applyNoiseSuppression(true) }
+        try {
+            assertTrue("the track replacement entered the send lane", replacing.await(2, TimeUnit.SECONDS))
+            media.suspendLocalAudioForRecovery()
+            assertFalse(media.isLocalAudioPublishingHealthy)
+        } finally {
+            release.countDown()
+        }
+        pumpMainLooperUntil { noise.isCompleted }
+        assertTrue(runBlocking { noise.await() })
+
+        assertTrue("the producer was paused", paused.await(2, TimeUnit.SECONDS))
+        assertFalse("Producer.pause ran while Producer.replaceTrack was still running", pausedDuringReplace.get())
+        assertFalse((field("localAudioTrack").get(media) as AudioTrack).enabled())
     }
 }

@@ -2089,6 +2089,17 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         lane.post { producer.setMaxSpatialLayer(layers) }
     }
 
+    /** libmediasoupclient's pause and resume read the track a replaceTrack writes, so they run on the producer's lane too. */
+    private fun pauseSendProducer(producer: Producer?) = changeSendProducer(producer) { it.pause() }
+
+    private fun resumeSendProducer(producer: Producer?) = changeSendProducer(producer) { it.resume() }
+
+    private fun changeSendProducer(producer: Producer?, change: (Producer) -> Unit) {
+        val target = producer ?: return
+        val lane = sendProducerLanes[target] ?: return
+        lane.post { if (!target.isClosed) change(target) }
+    }
+
     /** Stats read the send handler, so they skip a sample while the lane has work rather than race it. */
     private val isSendTransportQuiet: Boolean get() = sendTransportLane?.isIdle ?: true
 
@@ -2244,7 +2255,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
                 debugLog("[WebRTC] Dropped microphone producer superseded during its acknowledgement: ${producer.id}")
                 return
             }
-            producer.resume()
+            resumeSendProducer(producer)
 
             audioProducer = producer
             audioProducerBandwidthQuality = producedQuality
@@ -2378,7 +2389,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
                 debugLog("[WebRTC] Dropped camera producer superseded during its acknowledgement: ${producer.id}")
                 return
             }
-            producer.resume()
+            resumeSendProducer(producer)
             setSendProducerMaxSpatialLayer(
                 producer,
                 WebcamSpatialLayerPolicy.activeLayerCount(webcamMaxSpatialLayer(currentVideoQuality, currentLocalBandwidthQuality)),
@@ -2463,7 +2474,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             if (screenCapturer !== capturer) {
                 throw ErrorException("Screen sharing stopped before the SFU acknowledged it")
             }
-            producer.resume()
+            resumeSendProducer(producer)
             screenProducer = producer
             screenProducerBandwidthQuality = currentLocalBandwidthQuality
             screenProducerBandwidthSignature = localScreenBandwidthSignature(currentLocalBandwidthQuality)
@@ -3086,7 +3097,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             localAudioMuteIntentGeneration += 1
             audioCaptureReassertionGeneration += 1
             audioStartOrEnableInFlight = false
-            audioProducer?.pause()
+            pauseSendProducer(audioProducer)
             audioDeviceModule?.setMicrophoneMute(true)
             localAudioTrack?.setEnabled(false)
             localAudioEnabled = false
@@ -3108,9 +3119,9 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
                     audioProducer !== producer || !hasUsableProducer(producer)) return
                 configureCallAudioMode(unmuted = true)
                 forceUnmuteMicrophoneCapture()
-                producer.resume()
+                resumeSendProducer(producer)
             } else {
-                producer.pause()
+                pauseSendProducer(producer)
                 audioDeviceModule?.setMicrophoneMute(true)
             }
 
@@ -3146,13 +3157,13 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             }
             if (previous) {
                 localAudioTargetEnabled = true
-                producer.resume()
+                resumeSendProducer(producer)
                 localAudioTrack?.setEnabled(true)
                 forceUnmuteMicrophoneCapture()
                 configureCallAudioMode(unmuted = true)
             } else {
                 localAudioTargetEnabled = false
-                producer.pause()
+                pauseSendProducer(producer)
                 audioDeviceModule?.setMicrophoneMute(true)
             }
             localAudioTrack?.setEnabled(previous)
@@ -3174,10 +3185,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         localAudioTargetEnabled = false
         audioStartOrEnableInFlight = false
         audioCaptureReassertionGeneration += 1
-        try {
-            audioProducer?.pause()
-        } catch (_: Throwable) {
-        }
+        pauseSendProducer(audioProducer)
         audioDeviceModule?.setMicrophoneMute(true)
         localAudioTrack?.setEnabled(false)
         localAudioEnabled = false
@@ -3195,7 +3203,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         configureCallAudioMode(unmuted = true)
         forceUnmuteMicrophoneCapture()
         localAudioTrack?.setEnabled(true)
-        producer.resume()
+        resumeSendProducer(producer)
         socket.toggleMute(producer.id, paused = false)
 
         ensureCurrentConfiguration(generation)
@@ -3240,9 +3248,9 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
                 if (!localVideoEnabled) {
                     startWebcamCapture(videoCapturer, "restart")
                 }
-                producer.resume()
+                resumeSendProducer(producer)
             } else {
-                producer.pause()
+                pauseSendProducer(producer)
             }
 
             socket.toggleCamera(producer.id, paused = !enabled)
@@ -3272,14 +3280,10 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
                 }
                 return
             }
-            try {
-                if (previous) {
-                    producer.resume()
-                } else {
-                    producer.pause()
-                }
-            } catch (rollbackError: Throwable) {
-                debugLog("[WebRTC] Failed to roll back video producer state after toggle failure: ${rollbackError}")
+            if (previous) {
+                resumeSendProducer(producer)
+            } else {
+                pauseSendProducer(producer)
             }
             if (!previous) {
                 stopWebcamCapture()
@@ -3303,10 +3307,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
     internal suspend fun suspendLocalVideoForRecovery() {
         localVideoOffIntentGeneration += 1
         invalidateWebcamReceiverCapacityAuthority()
-        try {
-            videoProducer?.pause()
-        } catch (_: Throwable) {
-        }
+        pauseSendProducer(videoProducer)
         localVideoTrack?.setEnabled(false)
         localVideoTrackWrapper?.isEnabled = false
         localVideoEnabled = false
@@ -3707,12 +3708,12 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         audioProducer = nextProducer
         audioProducerBandwidthQuality = bandwidthQuality
         if (muted) {
-            nextProducer.pause()
+            pauseSendProducer(nextProducer)
             localAudioTrack?.setEnabled(false)
             audioDeviceModule?.setMicrophoneMute(true)
             localAudioEnabled = false
         } else {
-            nextProducer.resume()
+            resumeSendProducer(nextProducer)
             localAudioEnabled = true
         }
     }
@@ -3869,7 +3870,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
                 debugLog("[WebRTC] Camera-off landed during a webcam refresh; closed the camera")
                 return
             }
-            nextProducer.resume()
+            resumeSendProducer(nextProducer)
             setSendProducerMaxSpatialLayer(
                 nextProducer,
                 WebcamSpatialLayerPolicy.activeLayerCount(webcamMaxSpatialLayer(currentVideoQuality, connectionQuality)),
@@ -4041,7 +4042,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
                 closeSendProducer(nextProducer)
                 return
             }
-            nextProducer.resume()
+            resumeSendProducer(nextProducer)
             screenProducer = nextProducer
             screenProducerBandwidthQuality = connectionQuality
             screenProducerBandwidthSignature = localScreenBandwidthSignature(connectionQuality)
@@ -4817,7 +4818,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
                 },
             )
             pendingProducer = producer
-            producer.resume()
+            resumeSendProducer(producer)
             if (targetTopology == WebcamProducerTopology.vp8Simulcast) {
                 setSendProducerMaxSpatialLayer(producer, WebcamSpatialLayerPolicy.activeLayerCount(2))
             }
@@ -5397,14 +5398,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
                 onLocalAudioProducerLost?.invoke()
                 return
             }
-            try {
-                producer?.resume()
-            } catch (error: Throwable) {
-                debugLog("[WebRTC] Failed to reassert audio producer capture: ${error}")
-                if (!audioStartOrEnableInFlight && !audioBandwidthRefreshInFlight) {
-                    onLocalAudioProducerLost?.invoke()
-                }
-            }
+            resumeSendProducer(producer)
         }
     }
 
@@ -5585,10 +5579,9 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
                 ) {
                     forceUnmuteMicrophoneCapture()
                     localAudioTrack?.setEnabled(true)
-                    try {
-                        audioProducer?.resume()
-                    } catch (resumeError: Throwable) {
-                        debugLog("[WebRTC] Failed to resume existing microphone producer after recovery failure: ${resumeError}")
+                    if (hasUsableProducer(audioProducer)) {
+                        resumeSendProducer(audioProducer)
+                    } else {
                         onLocalAudioProducerLost?.invoke()
                     }
                 }

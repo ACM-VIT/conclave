@@ -369,6 +369,12 @@ Fixed 2026-10-22 and guarded by `testNativeCallCorrectnessBlockersStayFixed`:
   `closeSendProducer`, `closeSendTransport`), never directly and never via
   `sync`. SendTransport/SendHandler state is unsynchronized, and the queued
   transport close keeps the Device alive until any in-flight create is done.
+  Every other producer mutation joins the same queue: pause, resume and layer
+  changes (`pauseSendProducer`, `resumeSendProducer`,
+  `setSendProducerMaxSpatialLayer`) and the noise-suppression `replaceTrack`,
+  because a pause reads the track pointer a `replaceTrack` writes. Android
+  does the same on the producer's `SendTransportLane`. Mute latency is not
+  at stake: the track and capture go silent on the main thread first.
 - iOS: the SFU closes a displaced producer and broadcasts `producerClosed`
   for it to the owner before acking the replacement, so with off-main creates
   that event reaches the view model first. Microphone replacements (bandwidth
