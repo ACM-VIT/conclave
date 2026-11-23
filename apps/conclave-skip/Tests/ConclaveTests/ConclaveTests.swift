@@ -3209,6 +3209,21 @@ final class ConclaveTests: XCTestCase {
     }
 
     @MainActor
+    func testLeavingARoomForgetsWhetherItsSfuKeepsBoards() async throws {
+        let viewModel = MeetingViewModel()
+        viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
+        viewModel.state.roomId = "demo-room"
+        viewModel.state.connectionState = ConnectionState.joined
+        await applyServerWhiteboardState(viewModel, revision: 4, docGeneration: 1)
+        XCTAssertEqual(viewModel.state.appsRevision, 4)
+
+        await viewModel.cleanup(notifyLocalState: false)
+
+        XCTAssertNil(viewModel.state.appsRevision)
+        XCTAssertNil(viewModel.state.activeAppId)
+    }
+
+    @MainActor
     private func applyServerWhiteboardState(_ viewModel: MeetingViewModel, revision: Int?, docGeneration: Int?,
                                             locked: Bool = false) async {
         viewModel.bufferPendingAppsState(AppsStateNotification(activeAppId: "whiteboard", locked: locked, roomId: "demo-room",

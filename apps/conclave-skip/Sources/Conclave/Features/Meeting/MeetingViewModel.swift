@@ -3501,7 +3501,7 @@ final class MeetingViewModel {
             state.resetWebinarInteractionState()
             resetWebinarRoleTracking()
             clearBrowserState()
-            clearAppsState()
+            forgetRoomAppsState()
             clearGameState(clearCatalog: false)
         }
         clearReactions()
@@ -5650,6 +5650,11 @@ final class MeetingViewModel {
         state.isAppsLocked = false
         state.isAppsActionInFlight = false
         clearAppSyncState()
+    }
+
+    private func forgetRoomAppsState() {
+        clearAppsState()
+        state.appsRevision = nil
     }
 
     private func applyGameSnapshot(_ snapshot: GameStateResponse) {
@@ -10763,7 +10768,7 @@ final class MeetingViewModel {
         state.isBrowserAvailable = false
         browserInputURLSource = ""
         browserInputURLResolved = ""
-        clearAppsState()
+        forgetRoomAppsState()
         clearGameState(clearCatalog: false)
         state.isChatOpen = false
         state.isTranscriptOpen = false
