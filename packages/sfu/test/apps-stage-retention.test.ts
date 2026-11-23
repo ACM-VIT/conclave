@@ -332,6 +332,31 @@ describe("clearing an app", () => {
     expect(lastState(broadcasts)).toMatchObject({ activeAppId: null, savedAppIds: [] });
   });
 
+  it("stays cleared for every writer, however many a room clears", () => {
+    const { join } = makeRoom();
+    const host = join("host#1", "host");
+    host.present("whiteboard");
+    const writers = Array.from({ length: 5 }, (_, index) => {
+      const writer = join(`writer#${index}`, "participant");
+      const copies = Array.from({ length: 1000 }, (_, offset) => {
+        const author = new Y.Doc();
+        author.clientID = 100_000 + index * 1000 + offset;
+        author.getMap("shapes").set(`s${index}-${offset}`, true);
+        return Y.encodeStateAsUpdate(author);
+      });
+      writer.sendUpdate("whiteboard", Y.mergeUpdates(copies));
+      return { writer, lastCopy: copies.at(-1)! };
+    });
+    expect(join("before#1", "participant").coldSync("whiteboard").shapes).toHaveLength(5000);
+
+    host.close(host.state().revision);
+    host.discard("whiteboard", host.state().revision);
+    host.present("whiteboard");
+    for (const { writer, lastCopy } of writers) writer.sendUpdate("whiteboard", lastCopy);
+
+    expect(join("late#1", "participant").coldSync("whiteboard")).toEqual({ shapes: [] });
+  });
+
   it("stays cleared when a client that missed the clear resyncs its old copy", () => {
     const { join } = makeRoom();
     const host = join("host#1", "host");
@@ -398,21 +423,26 @@ describe("clearing an app", () => {
     expect(returning.relayed.map((sent) => sent.event)).toEqual(["apps:yjs:update"]);
   });
 
-  it("stops only the cleared app's writers", () => {
+  it("stops only the cleared app's writers, and keeps each client id to its own app", () => {
     const { join } = makeRoom();
     const host = join("host#1", "host");
     const wheelWriter = join("writer#1", "participant");
     const boardWriter = join("writer#1", "participant");
+    const reusedId = join("writer#1", "participant");
     wheelWriter.doc.clientID = 7;
-    boardWriter.doc.clientID = 7;
+    boardWriter.doc.clientID = 8;
+    reusedId.doc.clientID = 7;
     host.present("wheel");
     wheelWriter.draw("wheel", "name");
     host.discard("wheel");
     host.present("whiteboard");
 
     boardWriter.draw("whiteboard", "circle");
+    reusedId.draw("whiteboard", "square");
 
     expect(boardWriter.relayed.map((sent) => sent.event)).toEqual(["apps:yjs:update"]);
+    expect(reusedId.relayed).toEqual([]);
+    expect(join("late#1", "participant").coldSync("whiteboard")).toEqual({ shapes: ["circle"] });
   });
 
   it("starts a cleared app on a new document generation", () => {

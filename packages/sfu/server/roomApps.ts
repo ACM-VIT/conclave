@@ -15,12 +15,6 @@ export const MAX_APP_DOC_BYTES = 1024 * 1024;
 // documents are also bounded per room: by count, and by total encoded bytes.
 export const MAX_ROOM_APP_DOCS = 8;
 export const MAX_ROOM_APP_DOC_BYTES = 4 * 1024 * 1024;
-// Yjs client IDs that wrote to a cleared document, per app, kept so a client
-// that missed the clear cannot write that content back. Oldest go first.
-export const MAX_CLEARED_WRITERS = 4096;
-// Yjs client ids are chosen by clients, so the room binds each to the
-// participant who first writes or shows presence under it. These bound how
-// many ids one participant, and the whole room, may hold.
 export const MAX_CLIENT_IDS_PER_PARTICIPANT = 1024;
 export const MAX_ROOM_CLIENT_IDS = 16384;
 
@@ -54,7 +48,6 @@ export type ContentRefusal =
   | "malformed"
   | "unresolved"
   | "unseen_value"
-  | "other_app"
   | "cleared"
   | "foreign_id";
 
@@ -241,11 +234,8 @@ export class RoomApps {
   private generations = 0;
   private docs: Map<string, AppDoc> = new Map();
   private clearedWriters: Set<string> = new Set();
-  private clientIdOwners: Map<number, string> = new Map();
+  private clientIdOwners: Map<number, { participant: string; appId: string }> = new Map();
   private clientIdCounts: Map<string, number> = new Map();
-  // Writers of every kept document other than the presented one. Documents
-  // off the stage take no updates, so this changes only with the stage.
-  private otherAppWriters: Set<number> = new Set();
   private awareness: Map<string, Awareness> = new Map();
   private awarenessClientIdsByUser: Map<string, Map<string, Set<number>>> =
     new Map();
@@ -310,7 +300,6 @@ export class RoomApps {
     this.stage = { activeAppId: appId, locked: false };
     this.stayStart = stateOf(this.docs.get(appId)!.doc);
     this.revision += 1;
-    this.refreshOtherAppWriters();
     return { ok: true, changed: true, awarenessRemoval };
   }
 
@@ -324,7 +313,6 @@ export class RoomApps {
     const awarenessRemoval = this.leaveStage();
     this.stage = { activeAppId: null, locked: false };
     this.revision += 1;
-    this.refreshOtherAppWriters();
     return { ok: true, changed: true, awarenessRemoval };
   }
 
@@ -345,7 +333,6 @@ export class RoomApps {
     this.markCleared(appId, writersOf(entry.doc));
     this.destroyDoc(appId, entry);
     this.revision += 1;
-    this.refreshOtherAppWriters();
     return { ok: true, changed: true, awarenessRemoval };
   }
 
@@ -422,13 +409,10 @@ export class RoomApps {
     for (const replaced of facts.blindlyReplaced) {
       if (heldIn(mark.seen, replaced) || heldIn(this.stayStart, replaced)) return "unseen_value";
     }
-    for (const client of facts.writers) {
-      if (this.otherAppWriters.has(client)) return "other_app";
-    }
     for (const client of facts.touched) {
       if (this.clearedWriters.has(clearedWriterKey(appId, client))) return "cleared";
     }
-    return this.claimClientIds(this.participantOf(userId), facts.writers) ? null : "foreign_id";
+    return this.claimClientIds(this.participantOf(userId), appId, facts.writers) ? null : "foreign_id";
   }
 
   /**
@@ -499,25 +483,15 @@ export class RoomApps {
   }
 
   private markCleared(appId: string, clients: Iterable<number>): void {
-    for (const client of clients) {
-      const key = clearedWriterKey(appId, client);
-      this.clearedWriters.delete(key);
-      this.clearedWriters.add(key);
-    }
-    for (const key of this.clearedWriters) {
-      if (this.clearedWriters.size <= MAX_CLEARED_WRITERS) break;
-      this.clearedWriters.delete(key);
-    }
+    for (const client of clients) this.clearedWriters.add(clearedWriterKey(appId, client));
   }
 
-  // Binds each new client id to `participant`. False when an id belongs to
-  // someone else, or when the participant or the room holds as many as allowed.
-  private claimClientIds(participant: string, clients: Iterable<number>): boolean {
+  private claimClientIds(participant: string, appId: string, clients: Iterable<number>): boolean {
     const unclaimed: number[] = [];
     for (const client of new Set(clients)) {
       const owner = this.clientIdOwners.get(client);
       if (owner === undefined) unclaimed.push(client);
-      else if (owner !== participant) return false;
+      else if (owner.participant !== participant || owner.appId !== appId) return false;
     }
     if (unclaimed.length === 0) return true;
     const held = this.clientIdCounts.get(participant) ?? 0;
@@ -527,17 +501,9 @@ export class RoomApps {
     ) {
       return false;
     }
-    for (const client of unclaimed) this.clientIdOwners.set(client, participant);
+    for (const client of unclaimed) this.clientIdOwners.set(client, { participant, appId });
     this.clientIdCounts.set(participant, held + unclaimed.length);
     return true;
-  }
-
-  private refreshOtherAppWriters(): void {
-    this.otherAppWriters = new Set();
-    for (const [appId, entry] of this.docs) {
-      if (appId === this.stage.activeAppId) continue;
-      for (const client of writersOf(entry.doc)) this.otherAppWriters.add(client);
-    }
   }
 
   private destroyDoc(appId: string, entry: AppDoc): void {
@@ -624,14 +590,15 @@ export class RoomApps {
     for (const entry of decodeAwarenessEntries(awarenessUpdate)) {
       const owner = this.clientIdOwners.get(entry.clientID);
       const removal = JSON.parse(entry.state) === null;
-      if (owner === participant || (owner === undefined && !removal)) {
+      const ours = owner?.participant === participant && owner.appId === appId;
+      if (ours || (owner === undefined && !removal)) {
         own.push(entry);
         if (owner === undefined) claimed.push(entry.clientID);
       } else if (!removal) {
         return null;
       }
     }
-    if (own.length === 0 || !this.claimClientIds(participant, claimed)) return null;
+    if (own.length === 0 || !this.claimClientIds(participant, appId, claimed)) return null;
 
     const forwarded = encodeAwarenessEntries(own);
     let awareness = this.awareness.get(appId);
@@ -712,7 +679,6 @@ export class RoomApps {
       this.destroyDoc(appId, entry);
     }
     this.clearedWriters.clear();
-    this.otherAppWriters.clear();
     this.clientIdOwners.clear();
     this.clientIdCounts.clear();
     this.stage = { activeAppId: null, locked: false };
