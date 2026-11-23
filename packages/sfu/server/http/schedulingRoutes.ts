@@ -577,15 +577,21 @@ const fetchOptionalGoogleBusy = async (
   }
 };
 
-/** A Google event a booking created, with the grant, calendar and times it was made with. */
+type EventTimes = { startAt: number; endAt: number };
+
+/**
+ * A Google event a booking created: the grant and calendar it lives in, and
+ * the times Google last confirmed it holds, or null while a move is not yet
+ * confirmed. One copy is kept across retries, so a retry starts from what
+ * Google holds, not from what the event was created with.
+ */
 type BookingCalendarEvent = {
   id: string;
   grant: CalendarGrant;
   calendarId: string;
   accessToken: string;
   timeZone: string;
-  startAt: number;
-  endAt: number;
+  googleTimes: EventTimes | null;
 };
 
 const calendarEventsUrl = (calendarId: string, eventId?: string): string =>
@@ -636,7 +642,14 @@ const createGoogleCalendarEvent = async (
       }),
     });
     if (!data.id) throw new Error("Google did not return an event id.");
-    return { id: data.id, grant, calendarId, accessToken, timeZone: input.timeZone, startAt: input.startAt, endAt: input.endAt };
+    return {
+      id: data.id,
+      grant,
+      calendarId,
+      accessToken,
+      timeZone: input.timeZone,
+      googleTimes: { startAt: input.startAt, endAt: input.endAt },
+    };
   } catch (error) {
     if (shouldMarkCalendarReconnectRequired(error)) {
       await markCalendarError(state, grant, error);
@@ -651,19 +664,22 @@ const connectionFor = (state: SfuState, grant: CalendarGrant): SchedulingCalenda
   return connection && sameStoredValue(grantOf(connection), grant) ? connection : null;
 };
 
-const patchGoogleCalendarEvent = async (
+/** Moves the event in Google; what Google holds is unknown until it confirms the move. */
+const moveGoogleCalendarEvent = async (
   state: SfuState,
   connection: SchedulingCalendarConnection,
   event: BookingCalendarEvent,
-  times: { startAt: number; endAt: number },
-): Promise<BookingCalendarEvent> => {
+  times: EventTimes,
+): Promise<void> => {
+  event.googleTimes = null;
   const accessToken = await refreshGoogleAccessToken(state, connection);
   await googleFetchJson<{ id?: string }>(calendarEventsUrl(event.calendarId, event.id), {
     method: "PATCH",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
     body: JSON.stringify(eventTimes(times.startAt, times.endAt, event.timeZone)),
   });
-  return { ...event, ...times, accessToken };
+  event.accessToken = accessToken;
+  event.googleTimes = times;
 };
 
 /** Deletes an event nothing should point at; an event already gone counts as deleted. */
@@ -683,18 +699,19 @@ const MAX_SETTLE_ROUNDS = 5;
 
 /**
  * Records a Google event a booking created and brings it in line with the
- * booking. The event already exists, so its id is never dropped: it is
- * recorded and patched to the booking's current times when they moved, or
- * the event is deleted when the booking is gone or the host's calendar was
- * reconnected to another grant. The booking reads `synced` only once the
- * recorded event matches it. Every step is safe to repeat.
+ * saved booking. The event already exists, so its id is never dropped: it
+ * is recorded and moved to the booking's saved times when they differ from
+ * what Google last confirmed, or the event is deleted when the booking is
+ * gone or the host's calendar was reconnected to another grant. The booking
+ * reads `synced` only once the saved times match what Google confirmed.
+ * Every step is safe to repeat, and `event` carries what Google holds from
+ * one attempt to the next.
  */
 const settleBookingEvent = async (
   state: SfuState,
   meetingId: string,
-  created: BookingCalendarEvent,
+  event: BookingCalendarEvent,
 ): Promise<void> => {
-  let event = created;
   for (let round = 0; round < MAX_SETTLE_ROUNDS; round += 1) {
     const connection = connectionFor(state, event.grant);
     if (!connection) {
@@ -714,13 +731,14 @@ const settleBookingEvent = async (
     const recorded = await changeMeetings(state.scheduledMeetings, state.scheduledMeetingPersistence, [meetingId], (draft) => {
       const held = draft.byId.get(meetingId);
       if (!held) return null;
-      const matches = held.scheduledStartAt === event.startAt && held.scheduledEndAt === event.endAt;
+      const times = { startAt: held.scheduledStartAt, endAt: held.scheduledEndAt };
+      const matches = event.googleTimes !== null && sameStoredValue(event.googleTimes, times);
       updateScheduledMeeting(draft, meetingId, {
         googleCalendarEventId: event.id,
         calendarSyncStatus: matches ? "synced" : "pending",
         calendarSyncError: null,
       });
-      return { matches, startAt: held.scheduledStartAt, endAt: held.scheduledEndAt };
+      return { matches, times };
     });
     if (!recorded) {
       await deleteGoogleCalendarEvent(state, event);
@@ -728,7 +746,7 @@ const settleBookingEvent = async (
       return;
     }
     if (recorded.matches) return;
-    event = await patchGoogleCalendarEvent(state, connection, event, recorded);
+    await moveGoogleCalendarEvent(state, connection, event, recorded.times);
   }
   throw new Error(`Booking ${meetingId} kept moving while its Google event synced`);
 };
@@ -1329,11 +1347,12 @@ export const registerSchedulingRoutes = (
       }
 
       let emailError: string | null = null;
-      if (state.scheduledMeetings.byId.has(meeting.id)) {
+      const savedBooking = state.scheduledMeetings.byId.get(meeting.id);
+      if (savedBooking) {
         const emailResult = await sendBookingEmails({
           profile: target.profile,
           eventType: target.eventType,
-          meeting,
+          meeting: structuredClone(savedBooking),
           appOrigin,
           calendarError,
         });

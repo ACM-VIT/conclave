@@ -174,10 +174,12 @@ const claimReminderForMeeting = async (
   });
 };
 
+/** Sends a reminder built from one copy of the saved meeting, so an edit mid-send cannot mix its times. */
 const deliverReminder = async (
   state: SfuState,
-  meeting: ScheduledMeeting,
+  saved: ScheduledMeeting,
 ): Promise<SchedulingEmailDeliveryResult> => {
+  const meeting = structuredClone(saved);
   try {
     const eventType = resolveEventType(state, meeting);
     const profile = resolveProfile(state, meeting, eventType);

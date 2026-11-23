@@ -11,6 +11,34 @@ import { createScheduledMeetingPersistence } from "../server/scheduledMeetings.j
 import { createSchedulingPersistence } from "../server/scheduling.js";
 import { createSfuState, type SfuState } from "../server/state.js";
 
+// Lets a test hold booking emails while they render, so an edit can land mid-render.
+const emailRender = vi.hoisted(() => ({ hold: null as null | (() => Promise<void>) }));
+
+// Lets a test take a background retry and run it when it chooses, instead of on a timer.
+const retries = vi.hoisted(() => ({ taken: null as null | Array<() => Promise<unknown>> }));
+
+vi.mock("../server/persistThenApply.js", async (importOriginal) => {
+  const helpers = await importOriginal<typeof import("../server/persistThenApply.js")>();
+  return {
+    ...helpers,
+    retryInBackground: (what: string, attempt: () => Promise<unknown>) => {
+      if (retries.taken) retries.taken.push(attempt);
+      else helpers.retryInBackground(what, attempt);
+    },
+  };
+});
+
+vi.mock("../server/email/schedulingTemplates.js", async (importOriginal) => {
+  const templates = await importOriginal<typeof import("../server/email/schedulingTemplates.js")>();
+  return {
+    ...templates,
+    renderSchedulingEmail: async (...args: Parameters<typeof templates.renderSchedulingEmail>) => {
+      await emailRender.hold?.();
+      return templates.renderSchedulingEmail(...args);
+    },
+  };
+});
+
 let stateDir = "";
 const servers: Server[] = [];
 const host = { "x-user-id": "host-user", "x-user-email": "host@example.test", "x-user-name": "Host" };
@@ -73,6 +101,8 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  retries.taken = null;
+  emailRender.hold = null;
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
@@ -253,7 +283,7 @@ const GOOGLE_EVENTS = "https://www.googleapis.com/calendar/v3/calendars/";
  * Answers Google and the email worker in-process; every other request goes
  * out as usual. `beforeInsert` runs while Google is creating the event.
  */
-const fakeOutsideServices = (options: { beforeInsert?: () => Promise<void> } = {}) => {
+const fakeOutsideServices = (options: { beforeInsert?: () => Promise<void>; beforeMove?: () => Promise<void> } = {}) => {
   const passThrough = globalThis.fetch;
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
@@ -263,6 +293,7 @@ const fakeOutsideServices = (options: { beforeInsert?: () => Promise<void> } = {
     if (url.startsWith(GOOGLE_EVENTS)) {
       if (init?.method === "DELETE") return new Response(null, { status: 204 });
       if (init?.method === "POST") await options.beforeInsert?.();
+      if (init?.method === "PATCH") await options.beforeMove?.();
       return Response.json({ id: "google-event-1" });
     }
     if (url.startsWith(EMAIL_WORKER)) return Response.json({ ok: true });
@@ -301,7 +332,11 @@ const bookableHost = async (call: Awaited<ReturnType<typeof startSfu>>["call"]) 
 };
 
 /** Starts a booking and holds Google's reply to the event insert until `answer` runs. */
-const bookWithGoogleHeld = async (state: SfuState, call: Awaited<ReturnType<typeof startSfu>>["call"]) => {
+const bookWithGoogleHeld = async (
+  state: SfuState,
+  call: Awaited<ReturnType<typeof startSfu>>["call"],
+  beforeMove?: () => Promise<void>,
+) => {
   const insertStarted = deferred();
   const insertAnswered = deferred();
   const outside = fakeOutsideServices({
@@ -309,6 +344,7 @@ const bookWithGoogleHeld = async (state: SfuState, call: Awaited<ReturnType<type
       insertStarted.resolve();
       await insertAnswered.promise;
     },
+    beforeMove,
   });
   const { book, startAt } = await bookableHost(call);
   const booking = book();
@@ -327,17 +363,21 @@ describe("a booking", () => {
   });
 
   it("whose event id save fails succeeds and sends the confirmation, reads pending until the id is saved, then records it", async () => {
-    vi.stubEnv("SFU_FOLLOW_UP_RETRY_DELAYS_MS", "400,40,80");
     const { state, call } = await startSfu();
     const outside = fakeOutsideServices();
     const { book } = await bookableHost(call);
     const persistence = state.scheduledMeetingPersistence!;
     const saveChanged = persistence.saveChanged!.bind(persistence);
-    vi.spyOn(persistence, "saveChanged")
-      .mockImplementationOnce(saveChanged)
-      .mockImplementationOnce(() => {
-        throw new Error("database is locked");
-      });
+    const allowRetry = deferred();
+    let syncedSaves = 0;
+    vi.spyOn(persistence, "saveChanged").mockImplementation(async (meetings) => {
+      if (meetings.some((meeting) => meeting.calendarSyncStatus === "synced")) {
+        syncedSaves += 1;
+        if (syncedSaves === 1) throw new Error("database is locked");
+        await allowRetry.promise;
+      }
+      await saveChanged(meetings);
+    });
 
     const booked = await book();
 
@@ -347,6 +387,7 @@ describe("a booking", () => {
     expect(state.scheduledMeetings.byId.get(booking.id)?.calendarSyncStatus).toBe("pending");
     expect(requestsTo(outside, GOOGLE_EVENTS)).toHaveLength(1);
     expect(requestsTo(outside, EMAIL_WORKER)).toHaveLength(1);
+    allowRetry.resolve();
     await vi.waitFor(async () => {
       const stored = (await createScheduledMeetingPersistence().load()).find((meeting) => meeting.id === booking.id);
       expect([stored?.googleCalendarEventId, stored?.calendarSyncStatus, stored?.emailNotificationStatus]).toEqual(["google-event-1", "synced", "sent"]);
@@ -394,6 +435,91 @@ describe("a booking", () => {
     expect(patches.map((request) => bodyOf(request).start.dateTime)).toEqual([new Date(movedStart).toISOString()]);
     const stored = (await createScheduledMeetingPersistence().load()).find((meeting) => meeting.id === saved.id);
     expect([stored?.googleCalendarEventId, stored?.calendarSyncStatus, stored?.scheduledStartAt]).toEqual(["google-event-1", "synced", movedStart]);
+  });
+
+  it("retried after Google accepted a move confirms against the time Google holds, not the time it was created at", async () => {
+    retries.taken = [];
+    const { state, call } = await startSfu();
+    const { outside, booking, saved, startAt, answer } = await bookWithGoogleHeld(state, call);
+    const persistence = state.scheduledMeetingPersistence!;
+    const saveChanged = persistence.saveChanged!.bind(persistence);
+    let syncedSaveFailed = false;
+    vi.spyOn(persistence, "saveChanged").mockImplementation(async (meetings) => {
+      if (!syncedSaveFailed && meetings.some((meeting) => meeting.calendarSyncStatus === "synced")) {
+        syncedSaveFailed = true;
+        throw new Error("database is locked");
+      }
+      await saveChanged(meetings);
+    });
+    const movedStart = startAt + 2 * 3_600_000;
+    await call("PATCH", `/scheduled-meetings/${saved.id}`, { scheduledStartAt: movedStart, scheduledEndAt: movedStart + 1_800_000 });
+    answer();
+
+    expect(((await booking).body.booking as Confirmation).syncStatus).toBe("pending");
+    await call("PATCH", `/scheduled-meetings/${saved.id}`, { scheduledStartAt: startAt, scheduledEndAt: startAt + 1_800_000 });
+
+    expect(retries.taken).toHaveLength(1);
+    await retries.taken[0]();
+
+    const stored = (await createScheduledMeetingPersistence().load()).find((meeting) => meeting.id === saved.id);
+    expect([stored?.calendarSyncStatus, stored?.scheduledStartAt]).toEqual(["synced", startAt]);
+    const moves = requestsTo(outside, `${GOOGLE_EVENTS}primary/events/google-event-1`, "PATCH");
+    expect(moves.map((request) => bodyOf(request).start.dateTime)).toEqual([movedStart, startAt].map((at) => new Date(at).toISOString()));
+  });
+
+  it("redoes a Google move whose reply was lost before the booking reads synced", async () => {
+    retries.taken = [];
+    const { state, call } = await startSfu();
+    let moveLost = false;
+    const { outside, booking, saved, startAt, answer } = await bookWithGoogleHeld(state, call, () => {
+      if (moveLost) return Promise.resolve();
+      moveLost = true;
+      return Promise.reject(new TypeError("fetch failed"));
+    });
+    const movedStart = startAt + 2 * 3_600_000;
+    await call("PATCH", `/scheduled-meetings/${saved.id}`, { scheduledStartAt: movedStart, scheduledEndAt: movedStart + 1_800_000 });
+    answer();
+
+    expect(((await booking).body.booking as Confirmation).syncStatus).toBe("pending");
+    await call("PATCH", `/scheduled-meetings/${saved.id}`, { scheduledStartAt: startAt, scheduledEndAt: startAt + 1_800_000 });
+
+    expect(retries.taken).toHaveLength(1);
+    await retries.taken[0]();
+
+    const stored = (await createScheduledMeetingPersistence().load()).find((meeting) => meeting.id === saved.id);
+    expect([stored?.calendarSyncStatus, stored?.scheduledStartAt]).toEqual(["synced", startAt]);
+    const moves = requestsTo(outside, `${GOOGLE_EVENTS}primary/events/google-event-1`, "PATCH");
+    expect(moves.map((request) => bodyOf(request).start.dateTime)).toEqual([movedStart, startAt].map((at) => new Date(at).toISOString()));
+  });
+
+  it("builds the confirmation email from one saved copy, so a mid-render edit cannot split its times", async () => {
+    const { state, call } = await startSfu();
+    const outside = fakeOutsideServices();
+    const { book, startAt } = await bookableHost(call);
+    const renderStarted = deferred();
+    const finishRender = deferred();
+    emailRender.hold = async () => {
+      renderStarted.resolve();
+      await finishRender.promise;
+    };
+    try {
+      const booking = book();
+      await renderStarted.promise;
+      const saved = [...state.scheduledMeetings.byId.values()].find((meeting) => meeting.source === "booking_link")!;
+      const movedStart = startAt + 2 * 3_600_000;
+      await call("PATCH", `/scheduled-meetings/${saved.id}`, { scheduledStartAt: movedStart, scheduledEndAt: movedStart + 1_800_000 });
+      finishRender.resolve();
+      expect((await booking).status).toBe(201);
+    } finally {
+      emailRender.hold = null;
+    }
+
+    const [request] = requestsTo(outside, EMAIL_WORKER);
+    const { messages } = JSON.parse(String(request[1]?.body)) as { messages: Array<{ attachments?: Array<{ content: string }> }> };
+    const icsStart = new Date(startAt).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+    for (const message of messages) {
+      expect(message.attachments?.[0]?.content).toContain(`DTSTART:${icsStart}`);
+    }
   });
 
   it("deleted while Google is replying removes the orphaned event and is never reported synced", async () => {
