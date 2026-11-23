@@ -176,6 +176,28 @@ describe("a waiting tab that the host approves twice", () => {
   });
 });
 
+describe("a host tab whose guest lost its host rights", () => {
+  it("stops acting as a host once the room's host list leaves it out (Daybreak)", async () => {
+    const setIsAdmin = vi.fn();
+    let refs!: ReturnType<typeof useMeetRefs>;
+    const h = createHarness({
+      adoptJoinIdentity: () => false,
+      setIsAdmin,
+      captureRefs: (captured: ReturnType<typeof useMeetRefs>) => {
+        refs = captured;
+      },
+    } as Partial<Options>);
+    await h.connect("room-a", 1);
+    refs.currentRoomIdRef.current = "room-a";
+
+    h.handlers.get("adminUsersChanged")?.(...([{ roomId: "room-a", hostUserIds: ["guest-before#session", "host#h"] }] as never[]));
+    expect(setIsAdmin).not.toHaveBeenCalledWith(false);
+
+    h.handlers.get("adminUsersChanged")?.(...([{ roomId: "room-a", hostUserIds: ["host#h"] }] as never[]));
+    expect(setIsAdmin).toHaveBeenCalledWith(false);
+  });
+});
+
 describe("a socket that is still open after a join failed", () => {
   it("is reused for the same room", async () => {
     const h = createHarness({ adoptJoinIdentity: () => false });
