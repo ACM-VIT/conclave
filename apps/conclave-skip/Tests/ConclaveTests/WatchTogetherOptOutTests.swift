@@ -14,7 +14,7 @@ struct WatchTogetherOptOutTests {
     }
 
     private func stage(_ inputs: StageInputs) -> StagePresenter {
-        let presenter = StagePresenter(shell: MeetingShellPresenter())
+        let presenter = StagePresenter(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()))
         presenter.setViewport(StagePoliciesTests.iphoneSE)
         presenter.apply(inputs)
         return presenter
@@ -102,7 +102,7 @@ struct WatchTogetherOptOutTests {
 
     @Test func rejoiningAfterAnAbandonedLoadMountsAFreshPlayer() {
         let presenter = stage(inputs())
-        let activity = ActivitySession(shell: MeetingShellPresenter(), stage: presenter)
+        let activity = ActivitySession(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()), stage: presenter)
         activity.bindStage()
         let relay = ActiveAppSession()
         relay.onBridgeEnded = { [weak relay] id in relay?.detachBridge(appSessionId: id) }
@@ -125,7 +125,7 @@ struct WatchTogetherOptOutTests {
 
     @Test func leavingReleasesOnlyThisDevicesPlayer() {
         let presenter = stage(inputs())
-        let activity = ActivitySession(shell: MeetingShellPresenter(), stage: presenter)
+        let activity = ActivitySession(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()), stage: presenter)
         activity.bindStage()
         var released: [String] = []
         var commands: [AppHostCoreCommand] = []

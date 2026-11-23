@@ -293,7 +293,7 @@ struct CHT6VoiceMessagesTests {
     #if os(macOS)
 
     @Test func theHostSpeakerIsSilentAndKeepsTheSharedMembers() {
-        let speaker = TtsSpeaker()
+        let speaker = TtsSpeaker(queue: TtsPlaybackQueue(defaults: IsolatedDefaults.make()))
         speaker.queue.schedulesTimers = false
         speaker.queue.preferences = { VoicePreferenceSnapshot.defaults }
         var changes: [String] = []
@@ -368,7 +368,7 @@ struct CHT6VoiceMessagesTests {
 
     #if os(macOS)
     @Test func theCoreKeepsIsTtsTheFullTextAndTheVoiceToken() throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "admin@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "admin@example.com"
         viewModel.state.roomId = "room-a"
@@ -393,10 +393,7 @@ struct CHT6VoiceMessagesTests {
     #endif
 
     static func freshDefaults() -> UserDefaults {
-        let suite = "cht6-voice-" + UUID().uuidString
-        let defaults = UserDefaults(suiteName: suite) ?? UserDefaults.standard
-        defaults.removePersistentDomain(forName: suite)
-        return defaults
+        IsolatedDefaults.make()
     }
 
     static func inputs(_ messages: [ChatMessageInput], voiceEnabled: Bool = true, activeTtsMessageId: String = "") -> ChatInputs {
@@ -410,7 +407,7 @@ struct CHT6VoiceMessagesTests {
 
 @MainActor
 private final class VoiceHarness {
-    let queue = TtsPlaybackQueue()
+    let queue = TtsPlaybackQueue(defaults: IsolatedDefaults.make())
     let speaker: TtsRecordingSpeaker
     var prefs = VoicePreferenceSnapshot.defaults
     var blocked = false

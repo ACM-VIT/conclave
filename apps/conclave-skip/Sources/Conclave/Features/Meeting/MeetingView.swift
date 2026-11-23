@@ -547,5 +547,7 @@ private struct WebinarWaitingView: View {
 }
 
 #Preview {
-    MeetingView(viewModel: MeetingViewModel())
+    let defaults = IsolatedDefaults.make()
+    MeetingView(viewModel: MeetingViewModel(defaults: defaults, appState: AppState(defaults: defaults),
+                                            notifications: SystemNotifications(defaults: defaults)))
 }

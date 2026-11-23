@@ -162,7 +162,7 @@ struct S1bStageMomentsTests {
     static let iosSafeBottom = 21.0
 
     private func burstStage(_ viewport: StageViewport, count: Int = 6) -> StagePresenter {
-        let stage = StagePresenter(shell: MeetingShellPresenter())
+        let stage = StagePresenter(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()))
         stage.setViewport(viewport)
         stage.apply(count == 6 ? StageFixtureScript.inputs(for: .reactionsBurst25) : StageFixtureScript.base(count: count))
         return stage

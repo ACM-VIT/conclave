@@ -291,7 +291,7 @@ private enum PremeetingRootPolicyHelpers {
 @Suite(.serialized)
 struct ENT6RejoinCoreDeltaTests {
     private func joinedViewModel() -> MeetingViewModel {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"
@@ -364,7 +364,7 @@ struct ENT6RejoinCoreDeltaTests {
     }
 
     @Test func theRestartNoticeReachesThePremeetingInputs() {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.serverRestartNotice = "Conclave is updating."
         #expect(viewModel.makePremeetingInputs().serverRestartText == "Conclave is updating.")

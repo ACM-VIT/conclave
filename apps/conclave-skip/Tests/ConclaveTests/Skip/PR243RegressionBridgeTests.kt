@@ -64,7 +64,7 @@ class PR243RegressionBridgeTests {
     }
 
     @Test fun delayedTtsCompletionCannotStartWhileBlockedOrFinishANewerToken() {
-        val queue = TtsPlaybackQueue()
+        val queue = TtsPlaybackQueue(defaults = IsolatedDefaults.make())
         val speaker = TtsSpeaker(queue)
         queue.schedulesTimers = false
         queue.onStart = { _, _ -> }

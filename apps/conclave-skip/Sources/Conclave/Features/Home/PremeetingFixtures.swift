@@ -537,7 +537,7 @@ enum PremeetingFixtureScript {
 @MainActor
 @Observable
 final class PremeetingFixtureSession {
-    let shell = MeetingShellPresenter()
+    let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
     let premeeting = PremeetingPresenter()
     let state: PremeetingFixtureState
 
