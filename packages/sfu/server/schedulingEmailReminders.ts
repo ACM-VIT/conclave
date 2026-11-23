@@ -139,7 +139,7 @@ const fallbackEventType = (
   updatedAt: meeting.updatedAt,
 });
 
-/** Writes reminder fields only while the meeting still holds `basis`, the values the step started from. */
+/** Writes reminder fields only while the meeting still exists and holds `basis`. */
 const changeReminder = (
   state: SfuState,
   meetingId: string,
@@ -194,9 +194,9 @@ const deliverReminder = async (
 };
 
 /**
- * Claims a due reminder, sends it, and records the outcome while the
- * reminder is still the pending one this scan claimed. A failed save of the
- * outcome is retried in the background.
+ * Claims a due reminder, sends it, and records the outcome. The email has
+ * gone out by then, so the outcome is recorded whenever the meeting still
+ * exists, and a failed save of it is retried in the background.
  */
 const sendReminderForMeeting = async (
   state: SfuState,
@@ -206,10 +206,9 @@ const sendReminderForMeeting = async (
 ): Promise<ScheduledMeeting | null> => {
   const pending = await claimReminderForMeeting(state, meeting, now, leadMs);
   if (!pending) return null;
-  const basis = basisOf(pending, ["emailReminderStatus"]);
   const result = await deliverReminder(state, pending);
   const record = () =>
-    changeReminder(state, pending.id, "reminder result", basis, {
+    changeReminder(state, pending.id, "reminder result", {}, {
       emailReminderStatus: result.status,
       emailReminderError: result.error,
       emailReminderSentAt: result.sentAt,

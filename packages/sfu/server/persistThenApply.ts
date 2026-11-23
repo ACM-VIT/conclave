@@ -71,8 +71,11 @@ export const basisOf = <T extends object, K extends keyof T>(record: T, keys: re
 
 /**
  * Applies the result of an outside call that came back later only if the
- * record still holds the values the call was based on. Otherwise the result
- * is dropped and logged, so a late reply never overwrites newer state.
+ * record still holds the values the result depends on, and nothing else.
+ * Otherwise the result is dropped and logged, so a late reply never
+ * overwrites newer state. Use it only for results that are safe to lose,
+ * like a cached token: a side effect that already happened, like a created
+ * calendar event, is reconciled instead of dropped.
  */
 export const applyIfUnchanged = <T extends object, R>(
   what: string,

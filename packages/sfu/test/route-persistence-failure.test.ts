@@ -247,15 +247,22 @@ describe("a route whose save fails", () => {
 
 const EMAIL_WORKER = "https://email-worker.example.test";
 
-/** Answers Google and the email worker in-process; every other request goes out as usual. */
-const fakeOutsideServices = () => {
+const GOOGLE_EVENTS = "https://www.googleapis.com/calendar/v3/calendars/";
+
+/**
+ * Answers Google and the email worker in-process; every other request goes
+ * out as usual. `beforeInsert` runs while Google is creating the event.
+ */
+const fakeOutsideServices = (options: { beforeInsert?: () => Promise<void> } = {}) => {
   const passThrough = globalThis.fetch;
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
     if (url.startsWith("https://www.googleapis.com/calendar/v3/freeBusy")) {
       return Response.json({ calendars: { primary: { busy: [] } } });
     }
-    if (url.startsWith("https://www.googleapis.com/calendar/v3/calendars/")) {
+    if (url.startsWith(GOOGLE_EVENTS)) {
+      if (init?.method === "DELETE") return new Response(null, { status: 204 });
+      if (init?.method === "POST") await options.beforeInsert?.();
       return Response.json({ id: "google-event-1" });
     }
     if (url.startsWith(EMAIL_WORKER)) return Response.json({ ok: true });
@@ -263,10 +270,15 @@ const fakeOutsideServices = () => {
   });
 };
 
-const requestsTo = (outside: ReturnType<typeof fakeOutsideServices>, prefix: string) =>
-  outside.mock.calls.filter(([input]) => (input instanceof Request ? input.url : String(input)).startsWith(prefix));
+type OutsideServices = ReturnType<typeof fakeOutsideServices>;
 
-const GOOGLE_EVENTS = "https://www.googleapis.com/calendar/v3/calendars/";
+const requestsTo = (outside: OutsideServices, prefix: string, method?: string) =>
+  outside.mock.calls.filter(
+    ([input, init]) =>
+      (input instanceof Request ? input.url : String(input)).startsWith(prefix) && (!method || init?.method === method),
+  );
+
+const bodyOf = (call: Parameters<typeof fetch>) => JSON.parse(String(call[1]?.body)) as { start: { dateTime: string } };
 
 const bookableHost = async (call: Awaited<ReturnType<typeof startSfu>>["call"]) => {
   const { username } = (await call("GET", "/scheduling/profile")).body.profile as { username: string };
@@ -285,8 +297,27 @@ const bookableHost = async (call: Awaited<ReturnType<typeof startSfu>>["call"]) 
       attendeeName: "Guest",
       attendeeEmail: "guest@example.test",
     });
-  return { book };
+  return { book, startAt: slots[0].startAt };
 };
+
+/** Starts a booking and holds Google's reply to the event insert until `answer` runs. */
+const bookWithGoogleHeld = async (state: SfuState, call: Awaited<ReturnType<typeof startSfu>>["call"]) => {
+  const insertStarted = deferred();
+  const insertAnswered = deferred();
+  const outside = fakeOutsideServices({
+    beforeInsert: async () => {
+      insertStarted.resolve();
+      await insertAnswered.promise;
+    },
+  });
+  const { book, startAt } = await bookableHost(call);
+  const booking = book();
+  await insertStarted.promise;
+  const saved = [...state.scheduledMeetings.byId.values()].find((meeting) => meeting.source === "booking_link")!;
+  return { outside, booking, saved, startAt, answer: () => insertAnswered.resolve() };
+};
+
+type Confirmation = { id: string; calendarEventId: string | null; syncStatus: string; emailNotificationStatus: string; startsAt: number };
 
 describe("a booking", () => {
   beforeEach(() => {
@@ -295,7 +326,8 @@ describe("a booking", () => {
     vi.stubEnv("SFU_FOLLOW_UP_RETRY_DELAYS_MS", "20,40,80");
   });
 
-  it("whose event id save fails still succeeds, sends the confirmation, and records the id later", async () => {
+  it("whose event id save fails succeeds and sends the confirmation, reads pending until the id is saved, then records it", async () => {
+    vi.stubEnv("SFU_FOLLOW_UP_RETRY_DELAYS_MS", "400,40,80");
     const { state, call } = await startSfu();
     const outside = fakeOutsideServices();
     const { book } = await bookableHost(call);
@@ -310,8 +342,9 @@ describe("a booking", () => {
     const booked = await book();
 
     expect(booked.status).toBe(201);
-    const booking = booked.body.booking as { id: string; calendarEventId: string | null; syncStatus: string; emailNotificationStatus: string };
-    expect([booking.calendarEventId, booking.syncStatus, booking.emailNotificationStatus]).toEqual(["google-event-1", "synced", "sent"]);
+    const booking = booked.body.booking as Confirmation;
+    expect([booking.calendarEventId, booking.syncStatus, booking.emailNotificationStatus]).toEqual([null, "pending", "sent"]);
+    expect(state.scheduledMeetings.byId.get(booking.id)?.calendarSyncStatus).toBe("pending");
     expect(requestsTo(outside, GOOGLE_EVENTS)).toHaveLength(1);
     expect(requestsTo(outside, EMAIL_WORKER)).toHaveLength(1);
     await vi.waitFor(async () => {
@@ -342,6 +375,61 @@ describe("a booking", () => {
     const retried = await book();
     expect(retried.status).toBe(201);
     expect(requestsTo(outside, GOOGLE_EVENTS)).toHaveLength(1);
+  });
+
+  it("rescheduled while Google is replying keeps the event id and moves the event to the new times", async () => {
+    const { state, call } = await startSfu();
+    const { outside, booking, saved, startAt, answer } = await bookWithGoogleHeld(state, call);
+    const movedStart = startAt + 2 * 3_600_000;
+    const moved = await call("PATCH", `/scheduled-meetings/${saved.id}`, { scheduledStartAt: movedStart, scheduledEndAt: movedStart + 1_800_000 });
+    expect(moved.status).toBe(200);
+    answer();
+
+    const booked = await booking;
+
+    expect(booked.status).toBe(201);
+    const confirmation = booked.body.booking as Confirmation;
+    expect([confirmation.calendarEventId, confirmation.syncStatus, confirmation.startsAt]).toEqual(["google-event-1", "synced", movedStart]);
+    const patches = requestsTo(outside, `${GOOGLE_EVENTS}primary/events/google-event-1`, "PATCH");
+    expect(patches.map((request) => bodyOf(request).start.dateTime)).toEqual([new Date(movedStart).toISOString()]);
+    const stored = (await createScheduledMeetingPersistence().load()).find((meeting) => meeting.id === saved.id);
+    expect([stored?.googleCalendarEventId, stored?.calendarSyncStatus, stored?.scheduledStartAt]).toEqual(["google-event-1", "synced", movedStart]);
+  });
+
+  it("deleted while Google is replying removes the orphaned event and is never reported synced", async () => {
+    const { state, call } = await startSfu();
+    const { outside, booking, saved, answer } = await bookWithGoogleHeld(state, call);
+    expect((await call("DELETE", `/scheduled-meetings/${saved.id}`)).status).toBe(200);
+    answer();
+
+    const booked = await booking;
+
+    expect(booked.status).toBe(201);
+    expect((booked.body.booking as Confirmation).syncStatus).not.toBe("synced");
+    expect(requestsTo(outside, `${GOOGLE_EVENTS}primary/events/google-event-1`, "DELETE")).toHaveLength(1);
+    expect(requestsTo(outside, EMAIL_WORKER)).toHaveLength(0);
+    expect(state.scheduledMeetings.byId.has(saved.id)).toBe(false);
+    expect((await createScheduledMeetingPersistence().load()).some((meeting) => meeting.id === saved.id)).toBe(false);
+  });
+
+  it("whose host reconnects Google while Google is replying deletes the event from the old calendar and marks the sync failed", async () => {
+    const { state, call } = await startSfu();
+    const { outside, booking, saved, answer } = await bookWithGoogleHeld(state, call);
+    const reconnected = await call("POST", "/scheduling/calendar/google", {
+      refreshToken: "other-account-refresh",
+      accessToken: "other-account-access",
+      accessTokenExpiresAt: Date.now() + 3_600_000,
+    });
+    expect(reconnected.status).toBe(200);
+    answer();
+
+    const booked = await booking;
+
+    expect((booked.body.booking as Confirmation).syncStatus).toBe("failed");
+    const deletes = requestsTo(outside, `${GOOGLE_EVENTS}primary/events/google-event-1`, "DELETE");
+    expect(deletes.map(([, init]) => new Headers(init?.headers).get("authorization"))).toEqual(["Bearer access-token"]);
+    const stored = (await createScheduledMeetingPersistence().load()).find((meeting) => meeting.id === saved.id);
+    expect([stored?.googleCalendarEventId ?? null, stored?.calendarSyncStatus]).toEqual([null, "failed"]);
   });
 });
 
