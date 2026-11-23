@@ -10,7 +10,7 @@ struct PPL2PeopleActionTests {
     private let avery = "u-avery"
 
     private func makePeople() -> PeoplePresenter {
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         return PeoplePresenter(shell: shell, stage: StagePresenter(shell: shell))
     }
 

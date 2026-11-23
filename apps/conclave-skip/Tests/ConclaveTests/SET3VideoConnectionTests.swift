@@ -39,6 +39,7 @@ struct SET3VideoConnectionTests {
     @Test func anAppScopeVideoChangeReadsTheSameInTheNextCall() {
         let defaults = Self.freshDefaults()
         let app = SettingsPresenter(scope: .app, platform: .ios, defaults: defaults)
+        app.previewHooks = SettingsPreviewHooks()
         app.setDataSaver(true)
         app.setMirrorsSelfView(false)
         let (call, _) = Self.make(.video, defaults: defaults)
@@ -163,7 +164,7 @@ struct SET3VideoConnectionTests {
         #expect(!LocalVideoMirrorPolicy.mirrorsSentStream)
     }
 
-    @Test func theMirrorSwitchReachesTheStoreTheRenderersAndThePreviewOwner() {
+    @Test func theMirrorSwitchReachesTheStoreAndThePreviewHooks() {
         let defaults = Self.freshDefaults()
         let (presenter, core) = Self.make(.video, defaults: defaults)
         presenter.panelDidOpen()
@@ -171,11 +172,11 @@ struct SET3VideoConnectionTests {
         presenter.setMirrorsSelfView(false)
         presenter.setMirrorsSelfView(false)
         #expect(!NativeVideoPreferences.mirrorsSelfView(defaults: defaults))
-        #expect(!LocalVideoMirrorPreference.shared.isOn)
         #expect(core.count("mirrorOff") == 1)
         #expect(presenter.dispatchedKinds.filter { $0 == SettingsCommandKind.preferenceChanged.rawValue }.count == 1)
         presenter.setMirrorsSelfView(true)
-        #expect(LocalVideoMirrorPreference.shared.isOn)
+        #expect(NativeVideoPreferences.mirrorsSelfView(defaults: defaults))
+        #expect(core.count("mirrorOn") == 2)
         presenter.panelDidClose()
     }
 
@@ -362,10 +363,7 @@ struct SET3VideoConnectionTests {
     }
 
     nonisolated static func freshDefaults() -> UserDefaults {
-        let suite = "set3-video-" + UUID().uuidString
-        let defaults = UserDefaults(suiteName: suite) ?? UserDefaults.standard
-        defaults.removePersistentDomain(forName: suite)
-        return defaults
+        IsolatedDefaults.make()
     }
 
     static func source(_ path: String) throws -> String {

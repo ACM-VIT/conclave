@@ -331,21 +331,21 @@ struct T3BorrowPresenterTests {
         #expect(ChatFixtureDriver.state(named: "chat-suggestions-mention-query") == .suggestionsMentionQuery)
         #expect(ChatFixtureScriptName(rawValue: "gateBlip") == .gateBlip && ChatFixtureScriptName(rawValue: "gateLong") == .gateLong)
         #expect(ChatFixtureScriptName(rawValue: "photoTwice") == .photoTwice)
-        let multiline = ChatFixtureDriver.installOnStage(state: .draftMultiline, shell: MeetingShellPresenter())
+        let multiline = ChatFixtureDriver.installOnStage(state: .draftMultiline, shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()))
         let draft = multiline.chat.drafts.text(for: multiline.chat.composer.draftKey)
         #expect(draft == ChatFixtureScript.multilineDraft && draft.components(separatedBy: "\n").count == 3)
-        let query = ChatFixtureDriver.installOnStage(state: .suggestionsMentionQuery, shell: MeetingShellPresenter())
+        let query = ChatFixtureDriver.installOnStage(state: .suggestionsMentionQuery, shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()))
         #expect(query.chat.drafts.text(for: query.chat.composer.draftKey) == "@av")
         let mentions = ChatComposerPolicy.mentionSuggestions(draft: "@av", options: query.chat.composer.mentionOptions)
         #expect(mentions.first?.name == "Avery Lee", "Avery leads the filtered list")
 
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         let driver = ChatFixtureDriver.installOnStage(state: .busy, shell: shell)
         driver.run(.photoTwice)
         #expect(shell.chat.composer.attachment.phase == .preparing && shell.chat.composer.inlineNotice == .oneAttachment)
         #expect(driver.actionsReadout.components(separatedBy: "\n").filter { $0.hasPrefix("attachPhoto") }.count == 1)
 
-        let uploadingShell = MeetingShellPresenter()
+        let uploadingShell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         let uploading = ChatFixtureDriver.installOnStage(state: .attachmentUploading, shell: uploadingShell)
         uploading.run(.attachPhoto)
         #expect(uploadingShell.chat.composer.attachment.phase == .preparing)
@@ -357,7 +357,7 @@ struct T3BorrowPresenterTests {
         defer { ChatFixtureTestGate.release() }
         let clock = T3BClock()
         let sleeper = T3BSleeper()
-        let blipShell = MeetingShellPresenter()
+        let blipShell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         let blip = ChatFixtureDriver.installOnStage(state: .busy, shell: blipShell)
         blipShell.chat.now = { Self.base + clock.value }
         blipShell.chat.sleep = { millis in await sleeper.sleep(millis) }
@@ -377,7 +377,7 @@ struct T3BorrowPresenterTests {
 
         let longClock = T3BClock()
         let longSleeper = T3BSleeper()
-        let longShell = MeetingShellPresenter()
+        let longShell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         let long = ChatFixtureDriver.installOnStage(state: .busy, shell: longShell)
         longShell.chat.now = { Self.base + longClock.value }
         longShell.chat.sleep = { millis in await longSleeper.sleep(millis) }

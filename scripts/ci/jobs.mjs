@@ -60,6 +60,8 @@ export const jobs = {
       { dir: ".", script: "check:native-icons" },
       { dir: "packages/apps-sdk", script: "check:native-embed" },
       { dir: ".", script: "check:native-emoji" },
+      { dir: ".", script: "check:native-test-stores" },
+      { dir: ".", script: "test:native-test-stores" },
       { dir: ".", script: "check:native-game-fixtures" },
       { dir: ".", script: "check:join-deadlines" },
       { dir: ".", exec: "node --test scripts/ci/*.test.mjs" },
