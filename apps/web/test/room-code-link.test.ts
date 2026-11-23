@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { parseCodeFieldPaste, sanitizeRoomCode } from "../src/app/lib/utils";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { parseCodeFieldPaste } from "../src/app/lib/utils";
+import { getMeetingLinkHosts } from "../src/lib/site-url";
 
 const KNOWN_HOSTS = ["conclave.acmvit.in", "localhost:3615"];
 
@@ -23,13 +24,35 @@ const APP_PAGES = new Set([
 const expectedReplacement = (text: string): string | null => {
   const trimmed = text.trim();
   const scheme = /^https?:\/\//i.exec(trimmed);
-  const rest = scheme ? trimmed.slice(scheme[0].length) : trimmed;
-  const slash = rest.indexOf("/");
-  if (slash <= 0) return null;
-  const host = rest.slice(0, slash);
+  const rest = scheme
+    ? trimmed.slice(scheme[0].length)
+    : trimmed.startsWith("//")
+      ? trimmed.slice(2)
+      : trimmed;
+  const hostEnd = rest.search(/[/?#]/);
+  if (hostEnd <= 0 || rest[hostEnd] !== "/") return null;
+  const host = rest.slice(0, hostEnd);
+  if (/[\s@\\]/.test(host)) return null;
   if (!scheme && !KNOWN_HOSTS.includes(host.toLowerCase())) return null;
-  const path = rest.slice(slash).split(/[?#]/)[0];
-  const segment = /^\/([^/]+)\/?$/.exec(path)?.[1];
+  let hostname: string;
+  try {
+    hostname = new URL(`https://${host}/`).hostname;
+  } catch {
+    return null;
+  }
+  if (!hostname.startsWith("[")) {
+    const name = hostname.replace(/\.$/, "");
+    const labels = name.split(".");
+    if (name.length > 253 || labels.some((label) => label.length < 1 || label.length > 63)) {
+      return null;
+    }
+  }
+  const afterHost = rest.slice(hostEnd);
+  const suffixStart = afterHost.search(/[?#]/);
+  const path = suffixStart === -1 ? afterHost : afterHost.slice(0, suffixStart);
+  const suffix = suffixStart === -1 ? "" : afterHost.slice(suffixStart);
+  if (/\s/.test(suffix)) return null;
+  const segment = /^\/([^/\\\s]+)\/?$/.exec(path)?.[1];
   if (!segment) return null;
   let decoded: string;
   try {
@@ -37,9 +60,9 @@ const expectedReplacement = (text: string): string | null => {
   } catch {
     return null;
   }
-  if (!/^[a-z0-9-]+$/i.test(decoded)) return null;
   const code = decoded.toLowerCase();
-  return !APP_PAGES.has(code) && sanitizeRoomCode(code) === code ? code : null;
+  const isCode = /^[a-z0-9]+(?:-[a-z0-9]+)*$/i.test(decoded);
+  return isCode && code.length <= 64 && !APP_PAGES.has(code) ? code : null;
 };
 
 const seededRandom = (seed: number) => () => {
@@ -81,6 +104,8 @@ describe("pasting into the join code field", () => {
     expect(linkCode("https://m\u00fcnchen.example/abc-defg-hij")).toBe("abc-defg-hij");
     expect(linkCode("https://devbox:3005/abc-defg-hij")).toBe("abc-defg-hij");
     expect(linkCode("https://127.0.0.1:3005/abc-defg-hij")).toBe("abc-defg-hij");
+    expect(linkCode("https://conclave.acmvit.in/abc-defg-hij?ref=a\\b")).toBe("abc-defg-hij");
+    expect(linkCode("https://conclave.acmvit.in/abc-defg-hij#a\\b")).toBe("abc-defg-hij");
   });
 
   it("replaces the field from a Conclave link without a scheme", () => {
@@ -88,6 +113,7 @@ describe("pasting into the join code field", () => {
     expect(linkCode("Conclave.ACMVIT.in/abc-defg-hij")).toBe("abc-defg-hij");
     expect(linkCode("localhost:3615/abc-defg-hij")).toBe("abc-defg-hij");
     expect(linkCode("conclave.acmvit.in/abc%2Ddefg")).toBe("abc-defg");
+    expect(linkCode("//CONCLAVE.ACMVIT.IN/ABC-123/")).toBe("abc-123");
   });
 
   it("never treats other text with a slash as a link", () => {
@@ -144,7 +170,8 @@ describe("pasting into the join code field", () => {
       "https://meet..example/abc-defg-hij",
       "https://./abc-defg-hij",
       "https://localhost:65536/abc-defg-hij",
-      "https://meet.example/abc-defg-hij?ref=a\\b",
+      "https://meet.example\\x/abc-defg-hij",
+      "conclave.acmvit.in/abc\\defg",
       `https://${"a".repeat(64)}.example/abc-defg-hij`,
       `https://${"a".repeat(100_000)}.example/abc`,
     ]) {
@@ -183,6 +210,7 @@ describe("pasting into the join code field", () => {
     const random = seededRandom(310);
     let replacements = 0;
     const pick = (items: readonly string[]) => items[Math.floor(random() * items.length)];
+    const mismatches: string[] = [];
     for (let run = 0; run < 20_000; run += 1) {
       let text = "";
       if (random() < 0.5) {
@@ -191,11 +219,46 @@ describe("pasting into the join code field", () => {
         const count = 1 + Math.floor(random() * 6);
         for (let i = 0; i < count; i += 1) text += pick(PIECES);
       }
-      const paste = parse(text);
-      if (paste?.kind !== "replace") continue;
-      replacements += 1;
-      expect(expectedReplacement(text), JSON.stringify(text)).toBe(paste.code);
+      const got = linkCode(text);
+      if (got !== null) replacements += 1;
+      if (got !== expectedReplacement(text)) mismatches.push(JSON.stringify(text));
     }
+    expect(mismatches).toEqual([]);
     expect(replacements).toBeGreaterThan(500);
+  });
+});
+
+describe("hosts a pasted meeting link may use without a scheme", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it("always includes the production host", () => {
+    expect(getMeetingLinkHosts()).toContain("conclave.acmvit.in");
+  });
+
+  it("adds the browser-visible site host", () => {
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://staging.example:8443");
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", "app.example");
+    expect(getMeetingLinkHosts()).toEqual(
+      expect.arrayContaining(["conclave.acmvit.in", "staging.example:8443", "app.example"]),
+    );
+  });
+
+  it("ignores site settings that are not web addresses", () => {
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "file:///tmp/conclave");
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", "http://");
+    expect(getMeetingLinkHosts()).toEqual(["conclave.acmvit.in"]);
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "mailto:user@example.com");
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://user:secret@app.example");
+    expect(getMeetingLinkHosts()).toEqual(["conclave.acmvit.in"]);
+  });
+
+  it("only trusts the current page when it is served over http or https", () => {
+    vi.stubGlobal("window", { location: { protocol: "https:", host: "staging.example" } });
+    expect(getMeetingLinkHosts()).toContain("staging.example");
+    vi.stubGlobal("window", { location: { protocol: "file:", host: "local.example" } });
+    expect(getMeetingLinkHosts()).not.toContain("local.example");
   });
 });

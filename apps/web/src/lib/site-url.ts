@@ -48,11 +48,39 @@ export const getAuthBaseUrl = (): string =>
     ),
   ) ?? defaultSiteUrl;
 
+const webHostOf = (url: string | undefined): string | null => {
+  const value = url?.trim();
+  if (!value) return null;
+  const href = /^https?:\/\//i.test(value)
+    ? value
+    : /^[a-z0-9.-]+(?::\d+)?\/?$/i.test(value)
+      ? `https://${value}`
+      : null;
+  if (!href) return null;
+  try {
+    const parsed = new URL(href);
+    return parsed.host && !parsed.username && !parsed.password ? parsed.host : null;
+  } catch {
+    return null;
+  }
+};
+
 export const getMeetingLinkHosts = (): string[] => {
-  const hosts = new Set([
-    new URL(DEFAULT_PRODUCTION_SITE_URL).host,
-    new URL(getPublicSiteUrl()).host,
-  ]);
-  if (typeof window !== "undefined") hosts.add(window.location.host);
+  const hosts = new Set<string>();
+  for (const url of [
+    DEFAULT_PRODUCTION_SITE_URL,
+    process.env.NEXT_PUBLIC_SITE_URL,
+    process.env.NEXT_PUBLIC_APP_URL,
+  ]) {
+    const host = webHostOf(url);
+    if (host) hosts.add(host);
+  }
+  if (
+    typeof window !== "undefined" &&
+    /^https?:$/.test(window.location.protocol) &&
+    window.location.host
+  ) {
+    hosts.add(window.location.host);
+  }
   return [...hosts];
 };

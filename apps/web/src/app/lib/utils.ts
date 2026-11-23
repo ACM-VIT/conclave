@@ -152,7 +152,7 @@ export type CodeFieldPaste =
 
 const ROOM_CODE_TEXT = /^[a-z0-9-]+$/i;
 const MEETING_LINK = new RegExp(
-  String.raw`^(?:(?<scheme>https?):\/\/)?(?<authority>[^\/?#\\\s@]+)\/(?<segment>[^\/?#\\\s]+)\/?(?:[?#]\S*)?$`,
+  String.raw`^(?:(?<scheme>https?:)?\/\/)?(?<authority>[^\/?#\\\s@]+)\/(?<segment>[^\/?#\\\s]+)\/?(?:[?#]\S*)?$`,
   "i",
 );
 const NOT_ROOM_CODES = new Set([
@@ -200,7 +200,6 @@ export function parseCodeFieldPaste(
 ): CodeFieldPaste | null {
   const trimmed = text.trim();
   if (ROOM_CODE_TEXT.test(trimmed)) return { kind: "insert", text: trimmed.toLowerCase() };
-  if (trimmed.includes("\\")) return null;
   const { scheme, authority, segment } = MEETING_LINK.exec(trimmed)?.groups ?? {};
   if (!authority || !segment) return null;
   const typedHost = authority.toLowerCase();
