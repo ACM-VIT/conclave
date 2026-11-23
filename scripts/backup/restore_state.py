@@ -843,7 +843,7 @@ def restore(args):
         refuse_live_sfus(state, archive)
         owner = parse_owner(args.owner)
         if redis:
-            redis_step = RedisRestore(work_real, archive, redis, os.environ.get("REDIS_KEY_PATTERN", "conclave:sfu:persistence*"))
+            redis_step = RedisRestore(work_real, archive, redis, os.environ.get("REDIS_KEY_PATTERN", "conclave:sfu:persistence:*"))
             redis_step.prepare()
         if writes:
             aside = apply_restore(state, archive, writes, sides, roots, args.stamp, owner, sqlite)

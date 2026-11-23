@@ -2458,6 +2458,28 @@ test(
   },
 );
 
+test("a restore selects the Redis keys under the prefix the SFU makes of SFU_PERSISTENCE_REDIS_KEY_PREFIX, and no other", needsRedis, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  const live = await startRedis();
+  try {
+    const { state, backup, latestArchive, restore } = await setUp(root, [`SFU_PERSISTENCE_REDIS_URL=redis://127.0.0.1:${live.port}/0`, 'SFU_PERSISTENCE_REDIS_KEY_PREFIX="team:: "']);
+    withDatabase(state);
+    await live.cli("SET", "team:scheduling:profiles", "backed up");
+    await live.cli("SET", "teammate:scheduling:profiles", "before the backup");
+    await backup("--local-only");
+    await live.cli("SET", "team:scheduling:profiles", "after the backup");
+    await live.cli("SET", "team:scheduling:tombstones", "after the backup");
+    await live.cli("SET", "teammate:scheduling:profiles", "after the backup");
+    await restore("--file", await latestArchive(), "--yes");
+    assert.equal((await live.cli("GET", "team:scheduling:profiles")).stdout.trim(), "backed up");
+    assert.equal((await live.cli("EXISTS", "team:scheduling:tombstones")).stdout.trim(), "0");
+    assert.equal((await live.cli("GET", "teammate:scheduling:profiles")).stdout.trim(), "after the backup");
+  } finally {
+    live.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 describe("backup and restore", { concurrency: 6 }, () => {
   for (const args of queued) nodeTest(...args);
 });
