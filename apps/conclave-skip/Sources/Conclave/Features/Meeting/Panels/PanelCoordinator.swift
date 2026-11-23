@@ -9,11 +9,12 @@ final class PanelCoordinator {
 
     @ObservationIgnored var onSnapshotChanged: (() -> Void)? = nil
     @ObservationIgnored var afterSnapshotChanged: (() -> Void)? = nil
-    @ObservationIgnored private var shownPresentationID: Int? = nil
+    @ObservationIgnored private var liveAppearance: PanelMount? = nil
+    @ObservationIgnored private var nextAppearanceToken = 0
 
-    var currentWasShown: Bool {
-        guard let shown = shownPresentationID, !snapshot.isDismissing else { return false }
-        return snapshot.current?.presentationID == shown
+    var currentIsOnScreen: Bool {
+        guard let appearance = liveAppearance, !snapshot.isDismissing else { return false }
+        return snapshot.current?.presentationID == appearance.presentationID
     }
     private var nextID = 0
     private var nextDestinationSequence = 0
@@ -95,20 +96,21 @@ final class PanelCoordinator {
         publish(PanelSnapshot(session: session, current: snapshot.pending, pending: nil, isDismissing: false))
     }
 
-    func didPresent(session: Int, presentationID: Int) {
-        guard snapshot.session == session, snapshot.current?.presentationID == presentationID, !snapshot.isDismissing,
-              shownPresentationID != presentationID else { return }
-        shownPresentationID = presentationID
-        afterSnapshotChanged?()
-    }
-
     @discardableResult
     func panelDidAppear(session: Int, presentationID: Int) -> Int {
-        didPresent(session: session, presentationID: presentationID)
-        return 0
+        guard snapshot.session == session, snapshot.current?.presentationID == presentationID, !snapshot.isDismissing else {
+            return 0
+        }
+        nextAppearanceToken += 1
+        liveAppearance = PanelMount(presentationID: presentationID, token: nextAppearanceToken)
+        afterSnapshotChanged?()
+        return nextAppearanceToken
     }
 
     func panelDidDisappear(token: Int) {
+        guard token != 0, liveAppearance?.token == token else { return }
+        liveAppearance = nil
+        afterSnapshotChanged?()
     }
 
     func reset(session: Int) {
@@ -119,9 +121,14 @@ final class PanelCoordinator {
 
     private func publish(_ next: PanelSnapshot) {
         guard next != snapshot else { return }
-        if next.current?.presentationID != shownPresentationID { shownPresentationID = nil }
+        if next.current?.presentationID != liveAppearance?.presentationID { liveAppearance = nil }
         snapshot = next
         onSnapshotChanged?()
         afterSnapshotChanged?()
     }
+}
+
+struct PanelMount: Equatable {
+    let presentationID: Int
+    let token: Int
 }

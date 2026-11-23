@@ -1322,6 +1322,9 @@ final class MeetingViewModel {
             self.callPresence.reportPipTarget(report.pipTarget)
         }
 
+        shell.onChatShownChanged = { [weak self] shown in
+            self?.chatShownChanged(shown)
+        }
         shell.panels.onSnapshotChanged = { [weak self] in
             guard let self else { return }
             self.stage.panelSnapshotChanged()
@@ -14097,11 +14100,12 @@ final class MeetingViewModel {
     }
 
     private func syncChatPanelOpenState() {
-        let isCurrent = shell.chatPanelIsCurrent
-        guard isCurrent != nativeChatPanelIsCurrent else { return }
-        nativeChatPanelIsCurrent = isCurrent
-        state.isChatOpen = isCurrent
-        if isCurrent {
+        nativeChatPanelIsCurrent = shell.chatPanelIsCurrent
+    }
+
+    private func chatShownChanged(_ shown: Bool) {
+        state.isChatOpen = shown
+        if shown {
             state.unreadChatCount = 0
             clearChatOverlayMessages()
         }

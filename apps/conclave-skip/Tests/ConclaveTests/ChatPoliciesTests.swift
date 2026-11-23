@@ -411,16 +411,20 @@ struct ChatViewModelWiringTests {
         #expect(viewModel.chat.timeline.rowIds.contains("s-9"))
     }
 
-    @Test func isChatOpenFollowsTheNativeChatPanel() {
+    @Test func isChatOpenFollowsTheNativeChatPanelOnScreen() {
         let viewModel = joinedViewModel()
         viewModel.state.unreadChatCount = 4
         viewModel.shell.panels.present(.chat, from: .call)
-        #expect(viewModel.state.isChatOpen)
-        #expect(viewModel.state.unreadChatCount == 0)
+        #expect(!viewModel.state.isChatOpen)
+        #expect(viewModel.state.unreadChatCount == 4)
         guard let current = viewModel.shell.panels.snapshot.current else {
             Issue.record("no current panel")
             return
         }
+        viewModel.shell.panels.panelDidAppear(session: viewModel.shell.panels.snapshot.session,
+                                              presentationID: current.presentationID)
+        #expect(viewModel.state.isChatOpen)
+        #expect(viewModel.state.unreadChatCount == 0)
         viewModel.shell.panels.dismiss(cancelPending: true)
         #expect(!viewModel.state.isChatOpen)
         viewModel.shell.panels.didDismiss(session: viewModel.shell.panels.snapshot.session, presentationID: current.presentationID)

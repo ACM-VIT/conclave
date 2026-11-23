@@ -11,6 +11,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -40,8 +41,11 @@ internal fun ChatPanel(
     val snackbars = remember { SnackbarHostState() }
     val sidePane = variant == InCallPageVariant.SidePane
     val copiedText = conclaveString("chat_copied")
+    DisposableEffect(request.presentationID) {
+        val appearance = panels.panelDidAppear(panels.snapshot.session, request.presentationID)
+        onDispose { panels.panelDidDisappear(appearance) }
+    }
     LaunchedEffect(request.presentationID) {
-        panels.didPresent(panels.snapshot.session, request.presentationID)
         presenter.route(ChatPresenter.destination(request.destination), request.targetId)
     }
 

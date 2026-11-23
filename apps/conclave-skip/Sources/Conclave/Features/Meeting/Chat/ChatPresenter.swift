@@ -188,8 +188,17 @@ final class ChatPresenter {
     func panelDidAppear() {
         guard isOpen, !isShown else { return }
         isShown = true
+        let anchor = pendingFirstUnreadId
         pendingFirstUnreadId = ""
         pendingUnreadCount = 0
+        guard !anchor.isEmpty, anchor != firstUnreadId else { return }
+        firstUnreadId = anchor
+        rebuildRows(previousRowIds: currentTimeline.rowIds)
+    }
+
+    func panelDidDisappear() {
+        guard isShown else { return }
+        isShown = false
     }
 
     func route(to destination: ChatDestination, targetId: String) {

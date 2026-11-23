@@ -205,6 +205,7 @@ struct ChatPanelHost: View {
     let onPromoteToLarge: () -> Void
     @Environment(\.conclaveSystemColorScheme) private var systemScheme
     @State private var path: [ChatPage] = []
+    @State private var appearanceToken = 0
 
     var body: some View {
         PanelShell(title: ConclaveStrings.text("Chat"), presentation: resolved, hostStyle: resolved.style,
@@ -213,8 +214,15 @@ struct ChatPanelHost: View {
                    onPromoteToLarge: onPromoteToLarge) {
             ChatPanel(chat: chat, path: $path, hostStyle: resolved.style)
         }
+        .onAppear {
+            appearanceToken = panels.panelDidAppear(session: presentation.session,
+                                                    presentationID: presentation.request.presentationID)
+        }
+        .onDisappear {
+            panels.panelDidDisappear(token: appearanceToken)
+            appearanceToken = 0
+        }
         .task(id: presentation.id) {
-            panels.didPresent(session: presentation.session, presentationID: presentation.request.presentationID)
             chat.route(to: ChatPresenter.destination(for: presentation.request.destination),
                        targetId: presentation.request.targetId)
         }
