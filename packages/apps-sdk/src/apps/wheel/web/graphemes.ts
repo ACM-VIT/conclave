@@ -178,24 +178,26 @@ export const splitGraphemesFallback = (text: string): string[] => {
   return clusters;
 };
 
-const SEGMENTER_PROBES: readonly (readonly [string, number])[] = [
-  ["\u0915\u094D\u0937", 1],
-  ["\u0995\u09CD\u09B7", 1],
-  ["\u1001\u1014\u1039\u1013\u102C", 3],
-  ["\u1021\u1004\u103A\u1039\u1002", 2],
-  ["\u1019\u103C\u1014\u103A", 2],
-  ["\u{1F468}\u200D\u{1F469}\u200D\u{1F467}", 1],
-  ["\u0600\u0661", 1],
+const SEGMENTER_PROBES: readonly (readonly string[])[] = [
+  ["\u0915\u094D\u0937"],
+  ["\u0995\u09CD\u09B7"],
+  ["\u1001", "\u1014\u1039\u1013", "\u102C"],
+  ["\u1021", "\u1004\u103A\u1039\u1002"],
+  ["\u1019\u103C", "\u1014\u103A"],
+  ["\u{1F468}\u200D\u{1F469}\u200D\u{1F467}"],
+  ["\u0600\u0661"],
 ];
 
+const segmentsLike = (segmenter: Intl.Segmenter, clusters: readonly string[]): boolean => {
+  const actual = Array.from(segmenter.segment(clusters.join("")), (part) => part.segment);
+  return actual.length === clusters.length && actual.every((segment, index) => segment === clusters[index]);
+};
+
 const trustedSegmenter = (): Intl.Segmenter | null => {
-  if (typeof Intl === "undefined" || typeof Intl.Segmenter !== "function") return null;
   try {
+    if (typeof Intl === "undefined" || typeof Intl.Segmenter !== "function") return null;
     const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
-    const correct = SEGMENTER_PROBES.every(
-      ([text, clusters]) => Array.from(segmenter.segment(text)).length === clusters
-    );
-    return correct ? segmenter : null;
+    return SEGMENTER_PROBES.every((clusters) => segmentsLike(segmenter, clusters)) ? segmenter : null;
   } catch {
     return null;
   }
