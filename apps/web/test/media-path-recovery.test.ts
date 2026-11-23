@@ -369,16 +369,16 @@ describe("a direction's media path recovery", () => {
     expect(planMediaPathFailure(retried, failure("t2", { relayOnly: true })).step).toBe("reconnect");
   });
 
-  it("treats a connected direction with nothing to carry as recovered, unless it is blocked", () => {
-    const rebuilding = planMediaPathFailure(INITIAL_MEDIA_PATH_RECOVERY, failure("t1")).recovery;
-    expect(
-      advanceMediaPathRecovery(rebuilding, { type: "connected-idle", direction: "consumer" }),
-    ).toEqual(INITIAL_MEDIA_PATH_RECOVERY);
+  it("keeps a rebuild's ladder when the new transport only connects", () => {
+    const rebuilt = advanceMediaPathRecovery(
+      planMediaPathFailure(INITIAL_MEDIA_PATH_RECOVERY, failure("t1")).recovery,
+      connected("t2"),
+    );
 
-    const blocked = blockedOnT2();
-    expect(
-      advanceMediaPathRecovery(blocked, { type: "connected-idle", direction: "consumer" }),
-    ).toBe(blocked);
+    expect(readMediaPathHealth(rebuilt).consumer).toBe("recovering");
+    expect(planMediaPathFailure(rebuilt, failure("t2", { relayOnly: true })).step).toBe(
+      "report-blocked",
+    );
   });
 
   it("stays blocked through new trouble and other directions' rebuilds", () => {

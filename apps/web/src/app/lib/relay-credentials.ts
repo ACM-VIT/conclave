@@ -131,10 +131,11 @@ export const applyJoinAnswerToIceServers = (
 };
 
 /**
- * A transport connected through the relay at `url`. When that is the newest
- * relay it becomes the proven one and the older relay stops being offered.
- * A connection through the older relay, or one that both sets list, changes
- * nothing, so a working relay is never dropped for one that has not worked.
+ * Media was seen moving through the relay at `url` (see relayProvenByMedia).
+ * When that is the newest relay it becomes the proven one and the older
+ * relay stops being offered. Media through the older relay, or through one
+ * that both sets list, changes nothing, so a working relay is never dropped
+ * for one that has not carried media.
  */
 export const noteRelayCarryingMedia = (
   current: RuntimeIceServers,
@@ -146,6 +147,25 @@ export const noteRelayCarryingMedia = (
   if (provenRelay && relayHasUrl(provenRelay, url)) return current;
   return { ...current, provenRelay: latestRelay };
 };
+
+/**
+ * The relay a transport just proved by carrying media: RTP moved between two
+ * samples that both had this relay selected. A relay that only connected
+ * proves nothing, because a relay can pass ICE checks and drop every media
+ * packet.
+ */
+export const relayProvenByMedia = ({
+  mediaMoved,
+  relayUrl,
+  previousRelayUrl,
+}: {
+  mediaMoved: boolean;
+  relayUrl: string | null;
+  previousRelayUrl: string | null;
+}): string | null =>
+  mediaMoved && relayUrl !== null && relayUrl === previousRelayUrl
+    ? relayUrl
+    : null;
 
 type StatsEntry = {
   type?: string;

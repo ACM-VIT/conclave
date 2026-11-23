@@ -5,6 +5,7 @@ import {
   getUsableTurnIceServers,
   noteRelayCarryingMedia,
   readSelectedRelayUrl,
+  relayProvenByMedia,
   type RuntimeIceServers,
 } from "../src/app/lib/relay-credentials";
 
@@ -172,5 +173,58 @@ describe("reading which relay a transport uses", () => {
         { type: "local-candidate", id: "L1", candidateType: "relay", url: "turns:turn.example:5349" },
       ]),
     ).toBe("turns:turn.example:5349");
+  });
+});
+
+describe("knowing that a relay works", () => {
+  const relayB = "turn:127.0.0.1:30606?transport=udp";
+
+  it("takes media moving between two samples on the same relay", () => {
+    expect(
+      relayProvenByMedia({ mediaMoved: true, relayUrl: relayB, previousRelayUrl: relayB }),
+    ).toBe(relayB);
+  });
+
+  it("never takes a relay that only connected", () => {
+    expect(
+      relayProvenByMedia({ mediaMoved: false, relayUrl: relayB, previousRelayUrl: relayB }),
+    ).toBeNull();
+    expect(
+      relayProvenByMedia({ mediaMoved: false, relayUrl: relayB, previousRelayUrl: null }),
+    ).toBeNull();
+  });
+
+  it("does not credit a relay that was selected after the media moved", () => {
+    expect(
+      relayProvenByMedia({
+        mediaMoved: true,
+        relayUrl: relayB,
+        previousRelayUrl: "turn:127.0.0.1:30603?transport=udp",
+      }),
+    ).toBeNull();
+  });
+
+  it("proves nothing about a relay when media moved on a direct path", () => {
+    expect(
+      relayProvenByMedia({ mediaMoved: true, relayUrl: null, previousRelayUrl: null }),
+    ).toBeNull();
+  });
+
+  it("keeps the working relay offered while a newer one has only connected", () => {
+    const relayA = { urls: "turn:127.0.0.1:30603?transport=udp", username: "a", credential: "a" };
+    const relayBServer = { urls: relayB, username: "b", credential: "b" };
+    const rotated = applyJoinAnswerToIceServers(
+      {
+        stun: [stun],
+        latestRelay: { servers: [relayA], expiresAt: NOW + HOUR_MS },
+        provenRelay: { servers: [relayA], expiresAt: NOW + HOUR_MS },
+      },
+      { iceServers: [stun, relayBServer], relayExpiresAt: NOW + HOUR_MS },
+      NOW,
+    );
+    const proven = relayProvenByMedia({ mediaMoved: false, relayUrl: relayB, previousRelayUrl: relayB });
+    const next = proven ? noteRelayCarryingMedia(rotated, proven) : rotated;
+
+    expect(getUsableTurnIceServers(next, NOW)).toEqual([relayBServer, relayA]);
   });
 });

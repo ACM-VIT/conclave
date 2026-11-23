@@ -271,18 +271,15 @@ const restartDirection = (
     : { ...recovery, [direction]: FRESH_DIRECTION };
 
 /**
- * Trouble starts recovery and keeps a blocked direction blocked. Media seen
- * flowing makes a direction healthy and clears all of its recovery. A
- * connected direction with nothing to carry has nothing left to recover,
- * unless it is blocked: only media clears that, never an unmute or a device
- * change. Try again starts the ladder over but keeps the warning until
- * media flows.
+ * Trouble starts recovery and keeps a blocked direction blocked. Only media
+ * seen flowing makes a direction healthy and clears its recovery: a
+ * transport connecting, an unmute or a device change never does. Try again
+ * starts the ladder over but keeps the warning until media flows.
  */
 export type MediaPathRecoveryEvent =
   | { type: "trouble"; direction: MediaDirection }
   | { type: "transport-connected"; direction: MediaDirection; transportId: string }
   | { type: "media-flowing"; direction: MediaDirection }
-  | { type: "connected-idle"; direction: MediaDirection }
   | { type: "user-retry" }
   | { type: "reset" };
 
@@ -305,10 +302,6 @@ export const advanceMediaPathRecovery = (
       );
     case "media-flowing":
       return restartDirection(recovery, event.direction);
-    case "connected-idle":
-      return recovery[event.direction].health === "blocked"
-        ? recovery
-        : restartDirection(recovery, event.direction);
     case "trouble":
       return patchDirection(recovery, event.direction, {
         health:

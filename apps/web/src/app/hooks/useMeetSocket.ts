@@ -180,6 +180,7 @@ import {
   normalizeIceServerUrls,
   noteRelayCarryingMedia,
   readSelectedRelayUrl,
+  relayProvenByMedia,
   type RuntimeIceServers,
 } from "../lib/relay-credentials";
 import {
@@ -1545,29 +1546,14 @@ export function useMeetSocket({
 
   const noteMediaPathConnected = useCallback(
     (transportKind: "producer" | "consumer", transport: Transport) => {
-      // A transport that connects again may escalate again. Connecting is not
-      // recovery: the watchdog marks the direction healthy once media is seen
-      // flowing on it.
+      // A transport that connects again may escalate again. Connecting proves
+      // nothing else: the watchdog marks the direction healthy, and trusts
+      // its relay, only once media is seen flowing on it.
       updateMediaPathRecovery({
         type: "transport-connected",
         direction: transportKind,
         transportId: transport.id,
       });
-      // Remember which relay actually carries media, so a newer relay that
-      // has not worked yet never replaces it.
-      void transport
-        .getStats()
-        .then((stats) => {
-          if (transport.closed) return;
-          const relayUrl = readSelectedRelayUrl(stats.values());
-          if (relayUrl) {
-            runtimeIceServersRef.current = noteRelayCarryingMedia(
-              runtimeIceServersRef.current,
-              relayUrl,
-            );
-          }
-        })
-        .catch(() => {});
     },
     [updateMediaPathRecovery],
   );
@@ -6145,28 +6131,34 @@ export function useMeetSocket({
   // moves, without ever reporting a failure. Sample both transports and start
   // the recovery a reported failure would get.
   useEffect(() => {
-    // A direction's watch lasts as long as its transport. The note that its
-    // silence was logged as the senders' doing also clears once media moves.
+    // A direction's watch lasts as long as its transport, with the relay its
+    // last sample had selected. The note that its silence was logged as the
+    // senders' doing also clears once media moves.
     const watched: Record<
       "producer" | "consumer",
       {
         transport: Transport | null;
         watch: MediaPathWatch;
+        relayUrl: string | null;
         reportedRemoteSilence: boolean;
       }
     > = {
       producer: {
         transport: null,
         watch: INITIAL_MEDIA_PATH_WATCH,
+        relayUrl: null,
         reportedRemoteSilence: false,
       },
       consumer: {
         transport: null,
         watch: INITIAL_MEDIA_PATH_WATCH,
+        relayUrl: null,
         reportedRemoteSilence: false,
       },
     };
-    const connectedOnce = new WeakSet<Transport>();
+    // Transports seen carrying media. Connecting alone does not count: a path
+    // can pass ICE checks and drop every media packet.
+    const carriedMediaOnce = new WeakSet<Transport>();
     let sampling = false;
 
     const isSending = (producer: Producer | null): boolean =>
@@ -6228,12 +6220,13 @@ export function useMeetSocket({
     };
 
     // Restarts ICE on a path that says connected but carries nothing, and
-    // reports whether media moved again within the check window.
+    // reports whether media moved again within the check window. A path that
+    // never carried media is not restarted; it goes straight to a rebuild.
     const restartIceAndCheckMedia = async (
       kind: "producer" | "consumer",
       transport: Transport,
     ): Promise<boolean> => {
-      if (!connectedOnce.has(transport)) return false;
+      if (!carriedMediaOnce.has(transport)) return false;
       const direction = kind === "producer" ? "send" : "recv";
       const readBytes = async () =>
         readRtpBytes((await transport.getStats()).values(), direction);
@@ -6268,6 +6261,7 @@ export function useMeetSocket({
       ) {
         entry.transport = transport ?? null;
         entry.watch = INITIAL_MEDIA_PATH_WATCH;
+        entry.relayUrl = null;
         return;
       }
       // A new transport starts a fresh watch, and this sample already counts
@@ -6276,21 +6270,19 @@ export function useMeetSocket({
         entry.transport = transport;
         entry.watch = INITIAL_MEDIA_PATH_WATCH;
         entry.reportedRemoteSilence = false;
+        entry.relayUrl = null;
       }
 
       let rtpBytes: number;
+      let relayUrl: string | null;
       try {
-        rtpBytes = readRtpBytes(
-          (await transport.getStats()).values(),
-          kind === "producer" ? "send" : "recv",
-        );
+        const stats = [...(await transport.getStats()).values()];
+        rtpBytes = readRtpBytes(stats, kind === "producer" ? "send" : "recv");
+        relayUrl = readSelectedRelayUrl(stats);
       } catch {
         return;
       }
       if (entry.transport !== transport) return;
-      if (transport.connectionState === "connected") {
-        connectedOnce.add(transport);
-      }
 
       const result = advanceMediaPathWatch(entry.watch, {
         at: Date.now(),
@@ -6302,14 +6294,24 @@ export function useMeetSocket({
         rtpBytes,
       });
       entry.watch = result.watch;
+      const provenRelayUrl = relayProvenByMedia({
+        mediaMoved: result.mediaMoved,
+        relayUrl,
+        previousRelayUrl: entry.relayUrl,
+      });
+      entry.relayUrl = relayUrl;
       if (result.mediaMoved) {
+        carriedMediaOnce.add(transport);
         entry.reportedRemoteSilence = false;
+        // Only a relay seen carrying media replaces the one that worked
+        // before; a newer relay that merely connected stays on probation.
+        if (provenRelayUrl) {
+          runtimeIceServersRef.current = noteRelayCarryingMedia(
+            runtimeIceServersRef.current,
+            provenRelayUrl,
+          );
+        }
         updateMediaPathRecovery({ type: "media-flowing", direction: kind });
-      } else if (
-        result.condition === "idle" &&
-        transport.connectionState === "connected"
-      ) {
-        updateMediaPathRecovery({ type: "connected-idle", direction: kind });
       }
       if (result.stalledForMs < MEDIA_PATH_STALL_MS) return;
 
@@ -6359,10 +6361,10 @@ export function useMeetSocket({
         );
         return;
       }
-      // An ICE restart can revive a path that worked before. One that never
-      // connected needs different candidates, so go straight to a rebuild.
+      // An ICE restart can revive a path that carried media before. One that
+      // never did needs different candidates, so go straight to a rebuild.
       const restarted =
-        connectedOnce.has(transport) && (await attemptIceRestart(kind));
+        carriedMediaOnce.has(transport) && (await attemptIceRestart(kind));
       if (restarted) {
         if (kind === "consumer") void syncProducersRef.current();
         return;
