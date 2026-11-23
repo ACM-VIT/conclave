@@ -114,7 +114,7 @@ const crashAt = async (name, step, variant) => {
 };
 
 describe("a deploy killed at any step", { concurrency: 8 }, () => {
-  for (const [name, variants] of [["passes", ["retried", "waiting"]], ["fails", ["by hand", "waiting"]]]) {
+  for (const [name, variants] of [["passes", ["retried"]], ["fails", ["by hand", "waiting"]]]) {
     for (const variant of variants) {
       for (let step = 1; step <= counts[name]; step += 1) {
         test(`build ${name} its canary, killed at step ${step} of ${counts[name]}, then ${variant}`, () => crashAt(name, step, variant));

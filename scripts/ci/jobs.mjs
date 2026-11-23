@@ -12,6 +12,7 @@ export const jobs = {
       { dir: ".", script: "lint:packages" },
       { dir: "apps/web", script: "lint" },
       { dir: ".", script: "konsistent" },
+      { dir: ".", script: "test:deploy-crash" },
     ],
   },
   typecheck: {
@@ -41,7 +42,6 @@ export const jobs = {
       { dir: "apps/web", script: "build" },
       { dir: "packages/shared-browser", script: "build" },
       { dir: ".", script: "test:deploy-preflight" },
-      { dir: ".", script: "test:deploy-crash" },
     ],
   },
   checks: {
