@@ -53,6 +53,7 @@ import {
   type MediaQualitySettings,
   type ScreenShareQualityPreset,
 } from "../lib/media-quality-settings";
+import PanelNoticeSlot from "./PanelNoticeSlot";
 
 type SettingsTab = "video" | "audio" | "connection";
 
@@ -837,6 +838,7 @@ export default function DeviceSettingsPanel({
           <X size={18} strokeWidth={ICON_STROKE} />
         </button>
       </header>
+      <PanelNoticeSlot />
 
       <div
         className="grid grid-cols-3 border-b px-4"
