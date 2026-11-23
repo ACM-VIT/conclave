@@ -1391,7 +1391,7 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
     this.knownCalendarIds = new Set(calendarRecords.map((record) => record.id));
 
     return this.queueWrite("save snapshot", async () => {
-      await Promise.all([
+      const results = await Promise.allSettled([
         this.upsertRecords(this.profilesKey, "profile", profileRecords),
         this.upsertRecords(
           this.availabilityKey,
@@ -1409,6 +1409,10 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
         this.deleteRecords(this.eventTypesKey, "event_type", deletedEventTypeIds),
         this.deleteRecords(this.calendarsKey, "calendar", deletedCalendarIds),
       ]);
+      const failed = results.find(
+        (result): result is PromiseRejectedResult => result.status === "rejected",
+      );
+      if (failed) throw failed.reason;
     });
   }
 
