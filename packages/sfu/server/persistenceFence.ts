@@ -109,6 +109,8 @@ export const createPersistenceFence = (): PersistenceFence => {
   };
 };
 
+const atCall = <A extends unknown[]>(args: A): A => structuredClone(args);
+
 export const fenceScheduledMeetingPersistence = (
   persistence: ScheduledMeetingPersistence,
   fence: PersistenceFence,
@@ -116,20 +118,39 @@ export const fenceScheduledMeetingPersistence = (
   // Each write's promise is that write's own: Redis resolves it once the
   // write landed, so the caller gets its result or error, never another's.
   return {
-    save: (snapshot) => fence.run(() => persistence.save(snapshot)),
-    saveChanged: persistence.saveChanged && ((meetings) => fence.run(() => persistence.saveChanged!(meetings))),
-    deleteIds: persistence.deleteIds && ((ids) => fence.run(() => persistence.deleteIds!(ids))),
+    save: (...args) => {
+      const [snapshot] = atCall(args);
+      return fence.run(() => persistence.save(snapshot));
+    },
+    saveChanged:
+      persistence.saveChanged &&
+      ((...args) => {
+        const [meetings] = atCall(args);
+        return fence.run(() => persistence.saveChanged!(meetings));
+      }),
+    deleteIds:
+      persistence.deleteIds &&
+      ((...args) => {
+        const [ids] = atCall(args);
+        return fence.run(() => persistence.deleteIds!(ids));
+      }),
     reserveBookingSlot:
-      persistence.reserveBookingSlot && ((reservation) => fence.run(() => persistence.reserveBookingSlot!(reservation))),
+      persistence.reserveBookingSlot &&
+      ((...args) => {
+        const [reservation] = atCall(args);
+        return fence.run(() => persistence.reserveBookingSlot!(reservation));
+      }),
     // A claim reads what the meeting writes made before it left, so it waits
     // for them to land, failed or not.
     claimEmailReminder:
       persistence.claimEmailReminder &&
-      ((claim) =>
-        fence.run(async () => {
+      ((...args) => {
+        const [claim] = atCall(args);
+        return fence.run(async () => {
           if (persistence.flush) await persistence.flush().catch(() => undefined);
           return persistence.claimEmailReminder!(claim);
-        })),
+        });
+      }),
     // A load can write too: Redis migrates the fallback's meetings into itself.
     load: () => fence.run(() => persistence.load()),
     flush: persistence.flush && (() => fence.run(() => persistence.flush!())),
@@ -146,7 +167,10 @@ export const fenceSchedulingPersistence = (
   persistence: SchedulingPersistence,
   fence: PersistenceFence,
 ): SchedulingPersistence => ({
-  save: (snapshot) => fence.run(() => persistence.save(snapshot)),
+  save: (...args) => {
+    const [snapshot] = atCall(args);
+    return fence.run(() => persistence.save(snapshot));
+  },
   load: () => fence.run(() => persistence.load()),
   flush: persistence.flush && (() => fence.run(() => persistence.flush!())),
   close:
@@ -161,9 +185,22 @@ export const fenceScheduledWebinarPersistence = (
   persistence: ScheduledWebinarPersistence,
   fence: PersistenceFence,
 ): ScheduledWebinarPersistence => ({
-  save: (snapshot) => fence.run(() => persistence.save(snapshot)),
-  saveChanged: persistence.saveChanged && ((webinars) => fence.run(() => persistence.saveChanged!(webinars))),
-  deleteIds: persistence.deleteIds && ((ids) => fence.run(() => persistence.deleteIds!(ids))),
+  save: (...args) => {
+    const [snapshot] = atCall(args);
+    return fence.run(() => persistence.save(snapshot));
+  },
+  saveChanged:
+    persistence.saveChanged &&
+    ((...args) => {
+      const [webinars] = atCall(args);
+      return fence.run(() => persistence.saveChanged!(webinars));
+    }),
+  deleteIds:
+    persistence.deleteIds &&
+    ((...args) => {
+      const [ids] = atCall(args);
+      return fence.run(() => persistence.deleteIds!(ids));
+    }),
   load: () => persistence.load(),
   close:
     persistence.close &&

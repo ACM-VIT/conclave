@@ -13,7 +13,7 @@ import {
 import { persistScheduledMeetingChanges, type ScheduledMeetingPersistence } from "../server/scheduledMeetings.js";
 import { persistScheduledWebinarChanges } from "../server/scheduledWebinars.js";
 import { createSfuState } from "../server/state.js";
-import type { ScheduledMeeting } from "../types.js";
+import type { ScheduledMeeting, ScheduledWebinar } from "../types.js";
 
 const meeting = (id: string) => ({ id }) as unknown as ScheduledMeeting;
 const store = { byId: new Map() } as never;
@@ -283,6 +283,44 @@ describe("persistence fence", () => {
     await Promise.all(writes);
     await expect(failed).rejects.toThrow("SQLITE_FULL");
     expect(order).toEqual(["scheduling", "webinars.save"]);
+  });
+
+  it("queues a copy of every write made during a hold, so later edits to the same records cannot change it", async () => {
+    const fence = createPersistenceFence();
+    const webinarSaves: string[] = [];
+    const meetingSaves: string[] = [];
+    const webinars = fenceScheduledWebinarPersistence(
+      {
+        save: () => undefined,
+        saveChanged: (list) => void webinarSaves.push(list.map((w) => `${w.id}->${w.linkSlug}`).join(",")),
+        load: () => [],
+      },
+      fence,
+    );
+    const meetings = fenceScheduledMeetingPersistence(
+      {
+        save: () => undefined,
+        saveChanged: (list) => void meetingSaves.push(list.map((m) => `${m.id}->${m.title}`).join(",")),
+        load: () => [],
+      },
+      fence,
+    );
+    const a = { id: "A", linkSlug: "a" } as ScheduledWebinar;
+    const b = { id: "B", linkSlug: "b" } as ScheduledWebinar;
+    const m = { id: "M", title: "first" } as ScheduledMeeting;
+    await fence.hold("backup-one", 10_000);
+    a.linkSlug = "c";
+    const writes = [webinars.saveChanged!([a])];
+    b.linkSlug = "a";
+    writes.push(webinars.saveChanged!([b]));
+    a.linkSlug = "b";
+    writes.push(webinars.saveChanged!([a]));
+    writes.push(meetings.saveChanged!([m]));
+    m.title = "second";
+    fence.release("backup-one");
+    await Promise.all(writes.map((write) => Promise.resolve(write)));
+    expect(webinarSaves).toEqual(["A->c", "B->a", "A->b"]);
+    expect(meetingSaves).toEqual(["M->first"]);
   });
 });
 
