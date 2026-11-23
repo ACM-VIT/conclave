@@ -128,7 +128,7 @@ export const startSfu = async (
       sfu.image = url.searchParams.get("image");
       // The image it ran before the deploy still boots healthy.
       sfu.healthy = replacementHealthy || sfu.image === sfu.firstImage;
-      sfu.configHash = "current-hash";
+      sfu.configHash = url.searchParams.get("hash") ?? "current-hash";
       if (bootExit && sfu.image === "sha256:target") sfu.container = bootExit;
       // onRecreate: a test's hook, given the instance as it now is.
       onRecreate?.(sfu);
@@ -168,6 +168,10 @@ const tags = fs.existsSync(tagsFile) ? JSON.parse(fs.readFileSync(tagsFile, "utf
 const state = async (name) => (await fetch("http://127.0.0.1:" + sfus[name].port + "/stand-in/state")).json();
 // The variable a service's image name reads, as in the compose files.
 const imageVar = (name) => "SFU_IMAGE_" + name.toUpperCase().replaceAll("-", "_");
+const configHash = (name) =>
+  "current-hash" +
+  (process.env.SFU_START_DRAINING === "true" ? "-drained" : "") +
+  (process.env[imageVar(name)] && process.env[imageVar(name)] !== "vm-" + name ? "-" + process.env[imageVar(name)] : "");
 const service = (name, sfu, index) => ({
   image: process.env[imageVar(name)] || "vm-" + name,
   environment: {
@@ -200,7 +204,9 @@ const main = async () => {
     if (rest[0] === "config" && rest[1] === "--format") {
       return out(JSON.stringify({ name: "vm", services: Object.fromEntries(names.map((n, i) => [n, service(n, sfus[n], i)])) }));
     }
-    if (rest[0] === "config" && rest[1] === "--hash") return out(rest[2] + " current-hash");
+    // The hash covers the rendered config, so it changes with what the
+    // service's env and image name render to, as Compose's does.
+    if (rest[0] === "config" && rest[1] === "--hash") return out(rest[2] + " " + configHash(rest[2]));
     if (rest[0] === "ps") return out("ctr-" + rest.at(-1));
     // A build retags the service's own image, as compose does.
     if (rest[0] === "build") {
@@ -224,7 +230,7 @@ const main = async () => {
       const image = process.env.DEPLOY_TEST_COMPOSE_IGNORES_IMAGE
         ? "sha256:running"
         : tags[told] || (told === "vm-" + name ? (await state(name)).firstImage : "sha256:target");
-      const response = await fetch("http://127.0.0.1:" + sfus[name].port + "/stand-in/recreate?draining=" + draining + "&image=" + image);
+      const response = await fetch("http://127.0.0.1:" + sfus[name].port + "/stand-in/recreate?draining=" + draining + "&image=" + image + "&hash=" + encodeURIComponent(configHash(name)));
       if (!response.ok) process.exitCode = 1;
       // DEPLOY_TEST_KILL_AFTER_RECREATES: kill the deploy, as a crash or a
       // closed SSH session would, once that many recreates have run.

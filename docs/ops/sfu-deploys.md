@@ -100,10 +100,14 @@ Every one of these steps is written to the instance's deploy journal
 image, whether it was draining before) before it is taken, whole, fsynced and
 renamed into place. Every deploy starts by reading the journals and repairing
 what a run that died left behind, before it drains anything: an instance it
-drained goes back into service, one with a candidate started goes back to its
-last-known-good image, and one promoting a build that passed finishes, or goes
-back if it will not serve. An instance carrying a call is never recreated
-there; the deploy waits for it as usual. So a crash, a closed SSH session or a
+drained goes back into service; one already serving its last-known-good image
+(or, mid-promotion, the build that passed) only has its journal finished; one
+with a candidate started goes back to its last-known-good image; and one
+promoting a build that passed finishes, or goes back if it will not serve.
+Nothing that may carry a call is restarted there: only a stopped instance, or
+one out of rotation that reports no rooms for `PLACEMENT_SETTLE_SECONDS`. One
+that takes meetings, or whose `/status` cannot be read while its container
+runs, is left for the deploy, which drains it the normal way. So a crash, a closed SSH session or a
 second deploy waiting on the lock always ends with every instance serving its
 last-known-good image or a build that passed its canary
 (`scripts/deploy-sfu-crash.test.mjs` kills a deploy at every step boundary to
