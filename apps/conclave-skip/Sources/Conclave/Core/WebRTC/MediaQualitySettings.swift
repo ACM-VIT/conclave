@@ -517,11 +517,11 @@ enum NativeMediaQualityPolicy {
 enum NativeMediaQualityPreferences {
     static let storageKey = "conclave:media-quality-settings:v1"
 
-    static func load(defaults: UserDefaults = UserDefaults.standard) -> NativeMediaQualitySettings {
+    static func load(defaults: UserDefaults) -> NativeMediaQualitySettings {
         decode(defaults.string(forKey: storageKey))
     }
 
-    static func save(_ settings: NativeMediaQualitySettings, defaults: UserDefaults = UserDefaults.standard) {
+    static func save(_ settings: NativeMediaQualitySettings, defaults: UserDefaults) {
         guard let value = encode(settings) else { return }
         defaults.set(value, forKey: storageKey)
     }
@@ -549,27 +549,27 @@ enum NativeVideoPreferences {
     static let dataSaverKey = "conclave.pref.dataSaver"
     static let shareDeviceAudioKey = "conclave.pref.shareDeviceAudio"
 
-    static func mirrorsSelfView(defaults: UserDefaults = UserDefaults.standard) -> Bool {
+    static func mirrorsSelfView(defaults: UserDefaults) -> Bool {
         boolValue(mirrorSelfViewKey, fallback: true, defaults: defaults)
     }
 
-    static func setMirrorsSelfView(_ on: Bool, defaults: UserDefaults = UserDefaults.standard) {
+    static func setMirrorsSelfView(_ on: Bool, defaults: UserDefaults) {
         defaults.set(on, forKey: mirrorSelfViewKey)
     }
 
-    static func dataSaver(defaults: UserDefaults = UserDefaults.standard) -> Bool {
+    static func dataSaver(defaults: UserDefaults) -> Bool {
         boolValue(dataSaverKey, fallback: false, defaults: defaults)
     }
 
-    static func setDataSaver(_ on: Bool, defaults: UserDefaults = UserDefaults.standard) {
+    static func setDataSaver(_ on: Bool, defaults: UserDefaults) {
         defaults.set(on, forKey: dataSaverKey)
     }
 
-    static func shareDeviceAudio(defaults: UserDefaults = UserDefaults.standard) -> Bool {
+    static func shareDeviceAudio(defaults: UserDefaults) -> Bool {
         boolValue(shareDeviceAudioKey, fallback: false, defaults: defaults)
     }
 
-    static func setShareDeviceAudio(_ on: Bool, defaults: UserDefaults = UserDefaults.standard) {
+    static func setShareDeviceAudio(_ on: Bool, defaults: UserDefaults) {
         defaults.set(on, forKey: shareDeviceAudioKey)
     }
 
@@ -591,11 +591,11 @@ enum LocalVideoMirrorPolicy {
 @MainActor
 @Observable
 final class LocalVideoMirrorPreference {
-    static let shared = LocalVideoMirrorPreference()
+    static let shared = LocalVideoMirrorPreference(defaults: UserDefaults.standard)
 
     private(set) var isOn: Bool = true
 
-    init(defaults: UserDefaults = UserDefaults.standard) {
+    init(defaults: UserDefaults) {
         isOn = NativeVideoPreferences.mirrorsSelfView(defaults: defaults)
     }
 

@@ -301,7 +301,7 @@ struct ACT7AppHostTests {
     }
 
     @Test func aCursorFloodPublishesNothingObservable() async {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.roomId = "room-a"
         viewModel.state.connectionState = ConnectionState.joined

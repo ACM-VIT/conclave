@@ -18,7 +18,7 @@ class S1StageAloneBridgeTests {
         placement = StageChromePlacement.bottomBar)
 
     private fun presenter(inputs: StageInputs, at: StageViewport = android360): StagePresenter {
-        val stage = StagePresenter(shell = MeetingShellPresenter())
+        val stage = StagePresenter(shell = MeetingShellPresenter(defaults = IsolatedDefaults.make()))
         stage.setViewport(at)
         stage.apply(inputs)
         return stage

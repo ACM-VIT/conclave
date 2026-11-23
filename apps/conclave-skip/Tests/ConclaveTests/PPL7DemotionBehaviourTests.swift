@@ -15,7 +15,6 @@ struct PPL7DemotionBehaviourTests {
     }
 
     private static let panelist = SfuJoinUser(id: "user-17", email: "panelist@example.com", name: "Local User")
-    private static let parallelRunTimeout: Duration = .seconds(30)
 
     private func joinAsPanelist(_ call: RejoinHarness) async throws {
         #expect(await call.join())
@@ -50,7 +49,7 @@ struct PPL7DemotionBehaviourTests {
         #expect(call.viewModel.isIntentionalLeave, "the handoff is marked before the server disconnect arrives")
         call.deliverServerDisconnect()
 
-        #expect(await settle(timeout: Self.parallelRunTimeout) { call.joinAttemptCount > attempts })
+        #expect(await settle { call.joinAttemptCount > attempts })
         #expect(call.joinAttemptCount == attempts + 1)
         #expect(await settle { call.viewModel.lastJoinContext?.roomId == "design-week" })
         let rejoin = try #require(call.viewModel.lastJoinContext)
@@ -88,7 +87,7 @@ struct PPL7DemotionBehaviourTests {
             #expect(call.viewModel.isIntentionalLeave, "\(label)")
             call.deliverServerDisconnect()
 
-            #expect(await settle(timeout: Self.parallelRunTimeout) {
+            #expect(await settle {
                 call.viewModel.premeeting.home.noticeKind == HomeNoticeKind.movedToAudience
             }, "\(label)")
             #expect(call.viewModel.state.connectionState == .disconnected, "\(label)")
@@ -109,7 +108,7 @@ struct PPL7DemotionBehaviourTests {
 
         call.deliverServerDisconnect()
 
-        #expect(await settle(timeout: Self.parallelRunTimeout) { call.viewModel.state.terminalOutcome?.kind == .serverDisconnected })
+        #expect(await settle { call.viewModel.state.terminalOutcome?.kind == .serverDisconnected })
         #expect(call.viewModel.state.connectionState == .disconnected)
         #expect(call.joinAttemptCount == attempts)
         #expect(call.viewModel.premeeting.home.noticeKind == HomeNoticeKind.none)
@@ -123,7 +122,7 @@ struct PPL7DemotionBehaviourTests {
 
         call.viewModel.socketManager.onWebinarDemoted?(WebinarDemotedNotification(roomId: "room-b", webinarLinkSlug: "design-week"))
 
-        #expect(await settle(timeout: Self.parallelRunTimeout) { !call.viewModel.isIntentionalLeave })
+        #expect(await settle { !call.viewModel.isIntentionalLeave })
         try? await Task.sleep(for: .milliseconds(50))
         #expect(call.joinAttemptCount == attempts)
         #expect(call.viewModel.lastJoinContext?.roomId == "room-a")

@@ -62,7 +62,7 @@ struct STG7OrientationPipTests {
     }
 
     @Test func pipFollowsTheLastRemoteSpeakerEvenWithTheCameraOff() {
-        let stage = StagePresenter(shell: MeetingShellPresenter())
+        let stage = StagePresenter(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()))
         stage.setViewport(StageViewport(width: 390, height: 844, insetTop: 103, insetBottom: 98, insetLeading: 0, insetTrailing: 0,
                                         widthClass: StageSizeClass.compact, heightClass: StageSizeClass.regular, placement: .bottomBar))
         stage.apply(Self.inputs(Self.roster))
@@ -91,7 +91,7 @@ struct STG7OrientationPipTests {
 
     @Test func presenterLayoutFeedsThePolicyAtTheWorkedSize() {
 
-        let stage = StagePresenter(shell: MeetingShellPresenter())
+        let stage = StagePresenter(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()))
         stage.setViewport(StageViewport(width: 390, height: 844, insetTop: 103, insetBottom: 98, insetLeading: 0, insetTrailing: 0,
                                         widthClass: StageSizeClass.compact, heightClass: StageSizeClass.regular, placement: .bottomBar))
         stage.apply(Self.inputs(Self.roster))

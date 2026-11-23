@@ -50,7 +50,7 @@ struct PresenterSessionTests {
     }
 
     private func presenter(_ log: CommandLog, _ inputs: MeetingShellInputs) -> MeetingShellPresenter {
-        let presenter = MeetingShellPresenter()
+        let presenter = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         presenter.onCommand = { command, ticket in
             log.commands.append(command)
             if let ticket { log.tickets.append(ticket) }
@@ -674,7 +674,7 @@ struct PresenterSessionTests {
 @Suite(.serialized)
 struct PresenterSessionViewModelTests {
     private func makeJoinedViewModel(room: String = "room-a") -> MeetingViewModel {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = room

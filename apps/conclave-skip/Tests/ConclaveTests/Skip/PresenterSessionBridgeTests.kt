@@ -54,7 +54,7 @@ class PresenterSessionBridgeTests {
     )
 
     private fun presenter(recorder: Recorder, inputs: MeetingShellInputs): MeetingShellPresenter {
-        val shell = MeetingShellPresenter()
+        val shell = MeetingShellPresenter(defaults = IsolatedDefaults.make())
         shell.onCommand = { command, ticket ->
             recorder.commands += command
             if (ticket != null) recorder.tickets += ticket

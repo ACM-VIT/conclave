@@ -356,7 +356,7 @@ final class ControlsFixtureSession {
 
     init(state: ControlsFixtureState) {
         self.state = state
-        let owner = MeetingShellPresenter()
+        let owner = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         shell = owner
         let stagePresenter = StagePresenter(shell: owner)
         stage = stagePresenter

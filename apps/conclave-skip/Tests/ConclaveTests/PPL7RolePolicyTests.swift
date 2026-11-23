@@ -91,7 +91,7 @@ struct PPL7RolePolicyTests {
     }
 
     private func hostPeople() -> (PeoplePresenter, CommandLog) {
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         let people = PeoplePresenter(shell: shell, stage: StagePresenter(shell: shell))
         let log = CommandLog()
         people.onCommand = { command, ticket in
@@ -164,7 +164,7 @@ struct PPL7RolePolicyTests {
     }
 
     private func attendeePeople() -> (PeoplePresenter, CommandLog) {
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         let people = PeoplePresenter(shell: shell, stage: StagePresenter(shell: shell))
         let log = CommandLog()
         people.onCommand = { command, ticket in

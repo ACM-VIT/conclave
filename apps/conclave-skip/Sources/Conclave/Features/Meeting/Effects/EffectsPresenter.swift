@@ -252,7 +252,7 @@ enum EffectsPreferences {
     static let appearanceKey = "conclave.pref.videoEffects.appearance"
     static let personalKey = "conclave.pref.videoEffects.personal"
 
-    static func read(defaults: UserDefaults = UserDefaults.standard) -> EffectsSelection {
+    static func read(defaults: UserDefaults) -> EffectsSelection {
         let background = defaults.string(forKey: EffectsPreferences.backgroundKey) ?? EffectsCatalog.noBackground
         let filter = defaults.string(forKey: EffectsPreferences.filterKey) ?? EffectsCatalog.noFilter
         let appearance = EffectsPreferences.list(defaults.string(forKey: EffectsPreferences.appearanceKey) ?? "")
@@ -262,7 +262,7 @@ enum EffectsPreferences {
                                 personal: personal)
     }
 
-    static func write(_ selection: EffectsSelection, defaults: UserDefaults = UserDefaults.standard) {
+    static func write(_ selection: EffectsSelection, defaults: UserDefaults) {
         defaults.set(selection.background, forKey: EffectsPreferences.backgroundKey)
         defaults.set(selection.filter, forKey: EffectsPreferences.filterKey)
         defaults.set(selection.appearance.joined(separator: ","), forKey: EffectsPreferences.appearanceKey)
@@ -471,7 +471,7 @@ final class EffectsPresenter {
     @ObservationIgnored private(set) var publishCount = 0
 
     init(scope: EffectsScope = EffectsScope.call, platform: EffectsPlatform = EffectsPlatform.current,
-         defaults: UserDefaults = UserDefaults.standard) {
+         defaults: UserDefaults) {
         self.scope = scope
         self.platform = platform
         self.defaults = defaults
