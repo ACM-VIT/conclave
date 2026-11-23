@@ -10,6 +10,14 @@ struct TestHarnessSettleTests {
         var hops = 0
     }
 
+    private final class ManualClock {
+        var now = ContinuousClock.now
+
+        func advance(_ duration: Duration) {
+            now = now.advanced(by: duration)
+        }
+    }
+
     @Test func aMainActorStallPastTheFloorKeepsTheWaitGoingUntilTheNextHop() async {
         let floor: Duration = .milliseconds(20)
         let chain = Chain()
@@ -30,6 +38,41 @@ struct TestHarnessSettleTests {
         }
         #expect(sawUnfinishedChainPastTheFloor, "the stall ended after the floor with one hop still queued")
         #expect(reached, "one more turn lets the queued hop run")
+    }
+
+    @Test func theFloorKeepsTheWaitGoingAfterTheTurnsRunOut() async {
+        let clock = ManualClock()
+        var checks = 0
+        let reached = await settle(floor: .seconds(1), turns: 3, ceiling: .seconds(60), now: { clock.now }) {
+            checks += 1
+            return checks == 10
+        }
+        #expect(reached, "no time passed, so spending the turns alone does not end the wait")
+        #expect(checks == 10)
+    }
+
+    @Test func theTurnsKeepTheWaitGoingAfterTheFloorPasses() async {
+        let clock = ManualClock()
+        var checks = 0
+        let reached = await settle(floor: .seconds(1), turns: 10, ceiling: .seconds(1000), now: { clock.now }) {
+            checks += 1
+            clock.advance(.seconds(2))
+            return checks == 5
+        }
+        #expect(reached, "the floor passed on the first check, but the turns were not spent")
+        #expect(checks == 5)
+    }
+
+    @Test func theCeilingEndsAWaitThatStillHasTurnsLeft() async {
+        let clock = ManualClock()
+        var checks = 0
+        let reached = await settle(floor: .seconds(1), turns: 1_000_000, ceiling: .seconds(30), now: { clock.now }) {
+            checks += 1
+            clock.advance(.seconds(10))
+            return false
+        }
+        #expect(!reached)
+        #expect(checks == 3, "the third check sees 30 s gone and stops, with almost every turn unused")
     }
 
     @Test func aConditionThatNeverHoldsFailsOnceTheTurnsAndTheFloorAreSpent() async {
