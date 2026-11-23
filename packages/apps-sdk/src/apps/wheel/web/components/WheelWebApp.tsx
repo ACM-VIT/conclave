@@ -5,6 +5,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import type * as Y from "yjs";
 import { useAppDoc } from "../../../../sdk/hooks/useAppDoc";
 import { useApps } from "../../../../sdk/hooks/useApps";
 import {
@@ -177,19 +178,20 @@ export function WheelWebApp() {
       const winner = settled.entries[settled.winnerIndex];
       if (!winner) return;
       const isSpinner = Boolean(user?.id) && user?.id === settled.spunById;
-      const recorded = () => getHistory(doc).some((result) => result.spinId === settled.spinId);
-      const finalizeResult = () => {
-        if (!documents.claim(APP_ID, `result:${settled.spinId}`)) return;
-        recordResult(doc, {
-          spinId: settled.spinId,
-          label: winner.label,
-          at: Date.now(),
-          byName: settled.spunByName,
+      const isRecordedIn = (target: Y.Doc) =>
+        getHistory(target).some((result) => result.spinId === settled.spinId);
+      const recorded = () => isRecordedIn(doc);
+      const finalizeResult = () =>
+        documents.writeOnce(APP_ID, `result:${settled.spinId}`, (live) => {
+          if (isRecordedIn(live)) return;
+          recordResult(live, {
+            spinId: settled.spinId,
+            label: winner.label,
+            at: Date.now(),
+            byName: settled.spunByName,
+          });
+          if (getRemoveWinnerOnDone(live)) removeEntryById(live, winner.id);
         });
-        if (getRemoveWinnerOnDone(doc)) {
-          removeEntryById(doc, winner.id);
-        }
-      };
       if (!fresh) {
         if (isSpinner && canEditRef.current && !recorded()) finalizeResult();
         return;

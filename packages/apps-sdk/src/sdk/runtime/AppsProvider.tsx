@@ -43,6 +43,15 @@ export type AppsProviderProps = {
 const ACK_TIMEOUT_MS = 8_000;
 const SYNC_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 4_000];
 const SYNC_GIVE_UP_MS = 30_000;
+const MAX_AUTOMATIC_WRITE_ATTEMPTS = 3;
+const FINAL_REFUSALS = new Set(["too-large", "locked", "invalid"]);
+
+type AutomaticWrite = {
+  write: (doc: Y.Doc) => void;
+  writtenOn: string | null;
+  attempts: number;
+  final: boolean;
+};
 
 type SyncRun = {
   appId: string;
@@ -178,7 +187,8 @@ export function AppsProvider({
   const replicaIdsRef = useRef<Map<string, string>>(new Map());
   const staleAppsRef = useRef<Set<string>>(new Set());
   const unsentAppsRef = useRef<Set<string>>(new Set());
-  const claimsRef = useRef<Map<string, Set<string>>>(new Map());
+  const syncedAppsRef = useRef<Set<string>>(new Set());
+  const automaticWritesRef = useRef<Map<string, Map<string, AutomaticWrite>>>(new Map());
   const socketRef = useRef<Socket | null>(null);
   const isReadOnlyRef = useRef(isReadOnly);
   const isAdminRef = useRef(Boolean(isAdmin));
@@ -239,7 +249,8 @@ export function AppsProvider({
     replicaIdsRef.current.clear();
     staleAppsRef.current.clear();
     unsentAppsRef.current.clear();
-    claimsRef.current.clear();
+    syncedAppsRef.current.clear();
+    automaticWritesRef.current.clear();
     serverActiveAppIdRef.current = null;
     lockedRef.current = false;
     setState({ activeAppId: null, locked: false });
@@ -291,6 +302,7 @@ export function AppsProvider({
     replicaIdsRef.current.delete(appId);
     staleAppsRef.current.delete(appId);
     unsentAppsRef.current.delete(appId);
+    syncedAppsRef.current.delete(appId);
     setDocsVersion((version) => version + 1);
   }, []);
 
@@ -386,6 +398,51 @@ export function AppsProvider({
     [apps, registerDocHandlers, queueInitialUpdate]
   );
 
+  const runAutomaticWrites = useCallback(
+    (appId: string) => {
+      const writes = automaticWritesRef.current.get(appId);
+      if (!writes || !canWrite()) return;
+      if (!syncedAppsRef.current.has(appId)) return;
+      const doc = docsRef.current.get(appId);
+      const replicaId = replicaIdsRef.current.get(appId);
+      if (!doc || !replicaId) return;
+      for (const entry of writes.values()) {
+        if (entry.final || entry.writtenOn !== null) continue;
+        entry.writtenOn = replicaId;
+        entry.attempts += 1;
+        entry.write(doc);
+      }
+    },
+    [canWrite]
+  );
+
+  const settleAutomaticWrites = useCallback(
+    (appId: string, replicaId: string | undefined, refusal: { reason: string } | null) => {
+      const writes = automaticWritesRef.current.get(appId);
+      if (!writes || !replicaId) return;
+      for (const entry of writes.values()) {
+        if (entry.writtenOn !== replicaId) continue;
+        if ((refusal && FINAL_REFUSALS.has(refusal.reason)) || entry.attempts >= MAX_AUTOMATIC_WRITE_ATTEMPTS) {
+          entry.final = true;
+        } else {
+          entry.writtenOn = null;
+        }
+      }
+    },
+    []
+  );
+
+  const writeOnce = useCallback(
+    (appId: string, key: string, write: (doc: Y.Doc) => void) => {
+      const writes = automaticWritesRef.current.get(appId) ?? new Map<string, AutomaticWrite>();
+      automaticWritesRef.current.set(appId, writes);
+      if (writes.has(key)) return;
+      writes.set(key, { write, writtenOn: null, attempts: 0, final: false });
+      runAutomaticWrites(appId);
+    },
+    [runAutomaticWrites]
+  );
+
   const adoptReplacement = useCallback(
     (appId: string, doc: Y.Doc): number | null => {
       const replacedClient = docsRef.current.get(appId)?.clientID ?? null;
@@ -440,16 +497,15 @@ export function AppsProvider({
         }
       }
 
-      if (run.replaces) return true;
       const serverVector = response.stateVector ? toUint8Array(response.stateVector) : null;
-      if (serverVector) {
+      if (!run.replaces && serverVector) {
         try {
           const updateForServer = Y.encodeStateAsUpdate(run.doc, serverVector);
           const serverState = Y.createSnapshot(Y.decodeUpdate(update).ds, Y.decodeStateVector(serverVector));
-          if (Y.snapshotContainsUpdate(serverState, updateForServer)) return true;
-          if (!canWrite()) {
+          const serverLacksSome = !Y.snapshotContainsUpdate(serverState, updateForServer);
+          if (serverLacksSome && !canWrite()) {
             unsentAppsRef.current.add(run.appId);
-          } else {
+          } else if (serverLacksSome) {
             const payload: AppsUpdatePayload = {
               appId: run.appId,
               update: updateForServer,
@@ -461,9 +517,11 @@ export function AppsProvider({
           console.warn("[Apps] Failed to read the server state vector", err);
         }
       }
+      syncedAppsRef.current.add(run.appId);
+      runAutomaticWrites(run.appId);
       return true;
     },
-    [adoptReplacement, getAwareness, canWrite]
+    [adoptReplacement, getAwareness, canWrite, runAutomaticWrites]
   );
 
   const attemptSync = useCallback(
@@ -536,6 +594,7 @@ export function AppsProvider({
 
   const rebuildApp = useCallback(
     (appId: string, refusal: { reason: string } | null) => {
+      settleAutomaticWrites(appId, replicaIdsRef.current.get(appId), refusal);
       detachDoc(appId);
       staleAppsRef.current.add(appId);
       unsentAppsRef.current.delete(appId);
@@ -543,7 +602,7 @@ export function AppsProvider({
       if (refusal) setRejectedChange({ at: Date.now(), reason: refusal.reason });
       startSync(appId);
     },
-    [detachDoc, startSync]
+    [settleAutomaticWrites, detachDoc, startSync]
   );
 
   const resumeWrites = useCallback(() => {
@@ -552,7 +611,8 @@ export function AppsProvider({
     const changedWhileBlocked = appId !== null && unsentAppsRef.current.has(appId);
     unsentAppsRef.current.clear();
     if (changedWhileBlocked) rebuildApp(appId, null);
-  }, [canWrite, rebuildApp]);
+    else if (appId !== null) runAutomaticWrites(appId);
+  }, [canWrite, rebuildApp, runAutomaticWrites]);
 
   const retrySync = useCallback(() => {
     const appId = serverActiveAppIdRef.current;
@@ -570,7 +630,7 @@ export function AppsProvider({
         setIsRebuilding(false);
         if (previous) {
           discardLocalApp(previous);
-          claimsRef.current.delete(previous);
+          automaticWritesRef.current.delete(previous);
         }
         if (next.activeAppId) startSync(next.activeAppId);
         else setSyncStatus("idle");
@@ -753,23 +813,9 @@ export function AppsProvider({
     });
   }, []);
 
-  const currentDoc = useCallback(
-    (appId: string): Y.Doc | null =>
-      staleAppsRef.current.has(appId) ? null : (docsRef.current.get(appId) ?? null),
-    []
-  );
-
-  const claim = useCallback((appId: string, key: string): boolean => {
-    const claims = claimsRef.current.get(appId) ?? new Set<string>();
-    if (claims.has(key)) return false;
-    claims.add(key);
-    claimsRef.current.set(appId, claims);
-    return true;
-  }, []);
-
   const documents = useMemo<AppDocuments>(
-    () => ({ version: docsVersion, doc: getDoc, awareness: getAwareness, current: currentDoc, claim }),
-    [docsVersion, getDoc, getAwareness, currentDoc, claim]
+    () => ({ version: docsVersion, doc: getDoc, awareness: getAwareness, writeOnce }),
+    [docsVersion, getDoc, getAwareness, writeOnce]
   );
 
   const contextValue = useMemo<AppsContextValue>(

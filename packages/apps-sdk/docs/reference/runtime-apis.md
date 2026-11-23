@@ -56,7 +56,30 @@ Returns the full runtime context:
 - `refreshState() => void`
 - `getDoc(appId) => Y.Doc`
 - `getAwareness(appId) => Awareness`
+- `documents`: `{ version, doc(appId), awareness(appId), writeOnce(appId, key, write) }`
+- `syncStatus`, `retrySync()`, `isRebuilding`, `rejectedChangeAt`, `rejectedChangeReason`
 - `user`, `isAdmin`, `isReadOnly`
+
+`documents.version` changes whenever the provider replaces a document (a refused
+change is rebuilt from the server), and hosts remount the app on that change.
+
+### `documents.writeOnce(appId, key, write)`
+
+The only way for an app to change its document without a user action: from a
+timer, an effect, a promise, a media event, or code that runs on mount.
+
+- `write(doc)` runs against the live copy, after its first sync, and only while
+  the participant may write. While a rebuild is pending it waits and then runs on
+  the replacement.
+- Each `key` runs once per app activation. Use a key that names the change, such
+  as `result:<spinId>`.
+- If the server refuses the copy it ran on for a passing reason, it runs once
+  more on the replacement, at most three times in all. A refusal because the
+  document is full, locked or invalid is final.
+- `write` must be safe to run again on a copy that already has its change.
+
+A test in `apps/web/test/app-automatic-writes.test.ts` fails when an app writes
+its document anywhere else outside a user event handler.
 
 Ack behavior:
 
@@ -247,6 +270,7 @@ and mutation helpers lazily create the shared types they write.
 - Use `useAppDoc` for content, `useAppPresence` for ephemeral state.
 - Keep app id consistent across app definition, controls, and hooks.
 - Always gate write mutations using lock/admin state.
+- Write only from user event handlers or through `documents.writeOnce`.
 - Avoid calling control methods before socket connect.
 - Use `useGame` for server-authoritative games where the server must own rules or hidden information.
 

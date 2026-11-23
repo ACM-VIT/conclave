@@ -9,13 +9,18 @@ import { createWatchDoc, enqueue, getVideoId, setVideo, writePlayback } from "..
 let root: Root;
 let player: ReturnType<typeof useSyncedPlayback>;
 
-function Harness({ doc, claim }: { doc: Y.Doc; claim: (key: string) => boolean }) {
-  player = useSyncedPlayback({ doc, videoId: getVideoId(doc), readOnly: false, claimAutomaticWrite: claim });
+function Harness({ doc, claimed }: { doc: Y.Doc; claimed: Set<string> }) {
+  const writeOnce = (key: string, write: (live: Y.Doc) => void) => {
+    if (claimed.has(key)) return;
+    claimed.add(key);
+    write(doc);
+  };
+  player = useSyncedPlayback({ doc, videoId: getVideoId(doc), readOnly: false, writeOnce });
   return null;
 }
 
-const show = async (doc: Y.Doc, claim: (key: string) => boolean) => {
-  await act(async () => root.render(<Harness key={Math.random()} doc={doc} claim={claim} />));
+const show = async (doc: Y.Doc, claimed: Set<string>) => {
+  await act(async () => root.render(<Harness key={Math.random()} doc={doc} claimed={claimed} />));
 };
 
 const copyOf = (doc: Y.Doc) => {
@@ -41,15 +46,14 @@ it("advances the queue once per play even when a rebuild hands it the same ended
   setVideo(server, "first", { play: true });
   enqueue(server, { videoId: "second" }, { userId: "me", userName: "Me" });
   const claimed = new Set<string>();
-  const claim = (key: string) => !claimed.has(key) && Boolean(claimed.add(key));
 
   const refusedCopy = copyOf(server);
-  await show(refusedCopy, claim);
+  await show(refusedCopy, claimed);
   await act(async () => player.onEnded());
   expect(getVideoId(refusedCopy)).toBe("second");
 
   const replacement = copyOf(server);
-  await show(replacement, claim);
+  await show(replacement, claimed);
   await act(async () => player.onEnded());
   expect(getVideoId(replacement)).toBe("first");
 

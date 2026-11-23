@@ -132,20 +132,24 @@ it("restarts an app's pending work on the document that replaces a refused one",
   expect(refused.getText("t").toString()).toBe("mine ");
 });
 
-it("hands late work the live document, and nothing while the app is being rebuilt", async () => {
+it("runs an automatic write on the live copy, and waits while the app is being rebuilt", async () => {
   await mount("board", () => null);
   const refused = ctx.getDoc("board");
-  expect(ctx.documents.current("board")).toBe(refused);
-  expect(ctx.documents.current("other")).toBeNull();
+  await act(async () => ctx.documents.writeOnce("board", "first", (live) => live.getText("t").insert(0, "first ")));
+  expect(refused.getText("t").toString()).toBe("first ");
   answerSyncsAtOnce = false;
   await act(async () => refused.getText("t").insert(0, "mine "));
-
   await refuseLastChange("board");
-  expect(ctx.documents.current("board")).toBeNull();
+  const uploadsWhileRebuilding = uploads.length;
+
+  await act(async () => ctx.documents.writeOnce("board", "second", (live) => live.getText("t").insert(0, "second ")));
+  expect(refused.getText("t").toString()).not.toContain("second");
+  expect(uploads).toHaveLength(uploadsWhileRebuilding);
   await act(async () => pendingSyncs.shift()!(contentOf(serverDoc)));
 
-  expect(ctx.documents.current("board")).toBe(ctx.getDoc("board"));
-  expect(ctx.documents.current("board")).not.toBe(refused);
+  expect(ctx.getDoc("board")).not.toBe(refused);
+  expect(ctx.getDoc("board").getText("t").toString()).toContain("second ");
+  expect(uploads.length).toBeGreaterThan(uploadsWhileRebuilding);
 });
 
 it("records the spinner's settled result when the wheel mounts and finds it unrecorded", async () => {
@@ -190,19 +194,26 @@ it("leaves another participant's unrecorded spin to them", async () => {
   expect(getHistory(ctx.getDoc("wheel"))).toEqual([]);
 });
 
-it("lets an app claim a write it makes on its own once per activation, across rebuilds", async () => {
+it("runs each automatic write once per activation, again only after a passing refusal, and fresh after a reopen", async () => {
   await mount("board", () => null);
-  expect(ctx.documents.claim("board", "reveal")).toBe(true);
-  expect(ctx.documents.claim("board", "reveal")).toBe(false);
-  expect(ctx.documents.claim("board", "other")).toBe(true);
-  await act(async () => ctx.getDoc("board").getText("t").insert(0, "mine "));
+  let runs = 0;
+  const reveal = () => ctx.documents.writeOnce("board", "reveal", (live) => {
+    runs += 1;
+    live.getMap("m").set("reveal", runs);
+  });
+  await act(async () => reveal());
+  await act(async () => reveal());
+  expect(runs).toBe(1);
 
   await refuseLastChange("board");
-  expect(ctx.documents.claim("board", "reveal")).toBe(false);
+  expect(runs).toBe(2);
+  await act(async () => reveal());
+  expect(runs).toBe(2);
   await act(async () => listeners.get("apps:state")?.forEach((listener) => listener({ activeAppId: null, locked: false })));
   await act(async () => listeners.get("apps:state")?.forEach((listener) => listener({ activeAppId: "board", locked: false })));
+  await act(async () => reveal());
 
-  expect(ctx.documents.claim("board", "reveal")).toBe(true);
+  expect(runs).toBe(3);
 });
 
 it("tries a refused spin result once, says the app is full, and never sends it again after the rebuild", async () => {
@@ -232,4 +243,52 @@ it("tries a refused spin result once, says the app is full, and never sends it a
   expect(getHistory(ctx.getDoc("wheel"))).toEqual([]);
   expect(uploads).toHaveLength(1);
   expect(ctx.rejectedChangeReason).toBe("too-large");
+});
+
+it("waits for the first sync before it runs an automatic write", async () => {
+  answerSyncsAtOnce = false;
+  await mount("board", () => null);
+  await act(async () => ctx.documents.writeOnce("board", "early", (live) => live.getText("t").insert(0, "early ")));
+  expect(ctx.getDoc("board").getText("t").toString()).toBe("");
+  expect(uploads).toHaveLength(0);
+
+  await act(async () => pendingSyncs.shift()!(contentOf(serverDoc)));
+
+  expect(ctx.getDoc("board").getText("t").toString()).toBe("early ");
+  expect(uploads).toHaveLength(1);
+});
+
+it("waits while the app is locked for someone who is not a host, and runs once it is unlocked", async () => {
+  await act(async () =>
+    root.render(
+      <GameProvider socket={null}>
+        <AppsProvider socket={socketFor("board")} apps={[{ id: "board", name: "board" } as never]} user={{ id: "me", name: "Me" }} isAdmin={false}>
+          <Meeting app={() => null} />
+        </AppsProvider>
+      </GameProvider>,
+    ),
+  );
+  await act(async () => listeners.get("apps:state")?.forEach((listener) => listener({ activeAppId: "board", locked: true })));
+  await act(async () => ctx.documents.writeOnce("board", "locked", (live) => live.getText("t").insert(0, "later ")));
+  expect(ctx.getDoc("board").getText("t").toString()).toBe("");
+
+  await act(async () => listeners.get("apps:state")?.forEach((listener) => listener({ activeAppId: "board", locked: false })));
+
+  expect(ctx.getDoc("board").getText("t").toString()).toBe("later ");
+  expect(uploads).toHaveLength(1);
+});
+
+it("gives up on an automatic write after three attempts refused for passing reasons", async () => {
+  await mount("board", () => null);
+  let runs = 0;
+  await act(async () =>
+    ctx.documents.writeOnce("board", "stubborn", (live) => {
+      runs += 1;
+      live.getMap("m").set("try", runs);
+    }),
+  );
+
+  for (let refusal = 0; refusal < 5; refusal += 1) await refuseLastChange("board");
+
+  expect(runs).toBe(3);
 });

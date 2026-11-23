@@ -37,8 +37,7 @@ export type AppDocuments = {
   version: number;
   doc: (appId: string) => Y.Doc;
   awareness: (appId: string) => Awareness;
-  current: (appId: string) => Y.Doc | null;
-  claim: (appId: string, key: string) => boolean;
+  writeOnce: (appId: string, key: string, write: (doc: Y.Doc) => void) => void;
 };
 
 export type AppsUpdatePayload = {

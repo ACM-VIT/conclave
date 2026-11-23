@@ -6,6 +6,7 @@ import { useAppDoc } from "../../../../sdk/hooks/useAppDoc";
 import {
   advanceQueue,
   enqueue,
+  getPlayback,
   getVideoId,
   getWatchRequestResolution,
   moveQueueItem,
@@ -40,14 +41,26 @@ const CONTROLS_IDLE_MS = 2600;
 export function WatchWebApp() {
   const { user, isAdmin, isReadOnly: appReadOnly, setLocked, documents } = useApps();
   const { doc, locked, awareness } = useAppDoc("watch");
-  const saveTitleWhenKnown = useCallback(
-    (videoId: string, save: (live: Y.Doc, title: string) => void) => {
+  const writeOnce = useCallback(
+    (key: string, write: (live: Y.Doc) => void) => documents.writeOnce("watch", key, write),
+    [documents],
+  );
+  const saveVideoTitleWhenKnown = useCallback(
+    (videoId: string) => {
+      const key = `video-title:${videoId}:${getPlayback(doc).updatedAt}`;
       void fetchVideoTitle(videoId).then((title) => {
-        const live = documents.current("watch");
-        if (title && live) save(live, title);
+        if (title) writeOnce(key, (live) => setVideoTitle(live, videoId, title));
       });
     },
-    [documents],
+    [doc, writeOnce],
+  );
+  const saveItemTitleWhenKnown = useCallback(
+    (itemId: string, videoId: string) => {
+      void fetchVideoTitle(videoId).then((title) => {
+        if (title) writeOnce(`item-title:${itemId}`, (live) => setQueueItemTitle(live, itemId, title));
+      });
+    },
+    [writeOnce],
   );
   const isReadOnly = Boolean(appReadOnly) || (locked && !isAdmin);
   const canRequest = !appReadOnly && locked && !isAdmin;
@@ -96,13 +109,12 @@ export function WatchWebApp() {
     videoMetadata?.videoId === videoId ? videoMetadata : null,
   );
 
-  const claimAutomaticWrite = useCallback((key: string) => documents.claim("watch", key), [documents]);
   const player = useSyncedPlayback({
     doc,
     videoId,
     readOnly: isReadOnly,
     liveHint,
-    claimAutomaticWrite,
+    writeOnce,
   });
 
   const handleAdd = useCallback(
@@ -116,7 +128,7 @@ export function WatchWebApp() {
           title: knownTitle ?? null,
         });
         if (!knownTitle) {
-          saveTitleWhenKnown(nextVideoId, (live, title) => setVideoTitle(live, nextVideoId, title));
+          saveVideoTitleWhenKnown(nextVideoId);
         }
         return;
       }
@@ -126,10 +138,10 @@ export function WatchWebApp() {
         { userId: user?.id ?? null, userName: user?.name ?? null },
       );
       if (!knownTitle) {
-        saveTitleWhenKnown(nextVideoId, (live, title) => setQueueItemTitle(live, item.id, title));
+        saveItemTitleWhenKnown(item.id, nextVideoId);
       }
     },
-    [doc, isReadOnly, user?.id, user?.name, saveTitleWhenKnown],
+    [doc, isReadOnly, user?.id, user?.name, saveVideoTitleWhenKnown, saveItemTitleWhenKnown],
   );
 
   const handleStart = useCallback(
@@ -145,10 +157,10 @@ export function WatchWebApp() {
         title: knownTitle ?? null,
       });
       if (!knownTitle) {
-        saveTitleWhenKnown(nextVideoId, (live, title) => setVideoTitle(live, nextVideoId, title));
+        saveVideoTitleWhenKnown(nextVideoId);
       }
     },
-    [doc, handleAdd, isReadOnly, saveTitleWhenKnown],
+    [doc, handleAdd, isReadOnly, saveVideoTitleWhenKnown],
   );
 
   const handleRemove = useCallback(
@@ -165,10 +177,10 @@ export function WatchWebApp() {
       const item = queue.find((entry) => entry.id === itemId);
       playQueueItemNow(doc, itemId);
       if (item && !item.title) {
-        saveTitleWhenKnown(item.videoId, (live, title) => setVideoTitle(live, item.videoId, title));
+        saveVideoTitleWhenKnown(item.videoId);
       }
     },
-    [doc, isReadOnly, queue, saveTitleWhenKnown],
+    [doc, isReadOnly, queue, saveVideoTitleWhenKnown],
   );
 
   const handleMove = useCallback(
@@ -216,10 +228,10 @@ export function WatchWebApp() {
         { userId: request.byId, userName: request.byName },
       );
       if (!request.title) {
-        saveTitleWhenKnown(request.videoId, (live, title) => setQueueItemTitle(live, item.id, title));
+        saveItemTitleWhenKnown(item.id, request.videoId);
       }
     },
-    [doc, saveTitleWhenKnown],
+    [doc, saveItemTitleWhenKnown],
   );
 
   const declineRequest = useCallback(
@@ -240,8 +252,8 @@ export function WatchWebApp() {
     player.currentTime >= player.duration - 1.5;
   useEffect(() => {
     if (isReadOnly || !videoOver || queue.length === 0 || !videoId) return;
-    advanceQueue(doc, videoId);
-  }, [doc, isReadOnly, queue.length, videoId, videoOver]);
+    writeOnce(`ended:${videoId}:${getPlayback(doc).updatedAt}`, (live) => advanceQueue(live, videoId));
+  }, [doc, isReadOnly, queue.length, videoId, videoOver, writeOnce]);
 
   const endedIdle = videoOver && queue.length === 0;
 
