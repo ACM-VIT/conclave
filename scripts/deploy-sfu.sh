@@ -328,8 +328,10 @@ fi
 file_id() {
   node -e 'const fs=require("fs");const a=process.argv[1];const s=/^[0-9]+$/.test(a)?fs.fstatSync(Number(a)):fs.statSync(a);console.log(s.dev+":"+s.ino)' "$1"
 }
-# Readable by every user that deploys or backs up, whoever made it.
-[[ -e "$DEPLOY_LOCK" ]] || (umask 0111 && : >> "$DEPLOY_LOCK")
+# A regular file no other user can open, made and checked by host_lock.py
+# under the rules backup.sh and restore.sh follow too: a lock any user can
+# open is one any user can hold, stopping every deploy and backup.
+python3 -I "${ROOT_DIR}/scripts/host_lock.py" prepare "$DEPLOY_LOCK" || exit 1
 lock_id="$(file_id "$DEPLOY_LOCK")"
 # A restarted run inherits fd 9; SFU_DEPLOY_LOCK_HELD only says to look at
 # it, whatever value an older release put there. What decides is the file:
@@ -359,6 +361,7 @@ fi
   echo "${DEPLOY_LOCK} was replaced while this deploy waited for it; rerun it." >&2
   exit 1
 }
+python3 -I "${ROOT_DIR}/scripts/host_lock.py" check 9 "$DEPLOY_LOCK" || exit 1
 export SFU_DEPLOY_LOCK_HELD="$lock_id"
 
 if [[ "$ROLLBACK" == "true" ]]; then
