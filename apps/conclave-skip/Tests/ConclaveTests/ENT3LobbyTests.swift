@@ -303,22 +303,32 @@ struct ENT3LobbyTests {
 
     @Test func presenceReadsTheThreeCountsAndStopsWhenTheLobbyIsPopped() async {
         let hooks = ENT3HookRecorder()
-        hooks.presenceAnswers = [0, 1, 3]
-        hooks.repeatsLastAnswer = true
+        hooks.answersPresenceOnDemand = true
+        defer { hooks.releasePresenceFetches() }
         let presenter = presenter(hooks: hooks)
         let routeId = openLinkLobby(presenter)
         #expect(presenter.lobbyPresence?.kind == .checking)
         #expect(presenter.liveTaskCount == 0, "no poll before the lobby is visible")
         presenter.lobbyDidAppear(routeId: routeId)
         #expect(presenter.liveTaskCount == 1)
+        #expect(await ent3Settle { hooks.waitingPresenceFetches == 1 })
+        hooks.answerPresence(0)
         #expect(await ent3Settle { presenter.lobbyPresence?.kind == .empty })
+        #expect(await ent3Settle { hooks.waitingPresenceFetches == 1 })
+        hooks.answerPresence(1)
         #expect(await ent3Settle { presenter.lobbyPresence?.kind == .count && presenter.lobbyPresence?.count == 1 })
+        #expect(await ent3Settle { hooks.waitingPresenceFetches == 1 })
+        hooks.answerPresence(3)
         #expect(await ent3Settle { presenter.lobbyPresence?.count == 3 })
+        #expect(await ent3Settle { hooks.waitingPresenceFetches == 1 })
         presenter.setPath([])
         #expect(presenter.liveTaskCount == 0)
         let fetches = presenter.presenceFetchCount
+        hooks.answerPresence(7)
         try? await Task.sleep(nanoseconds: 50_000_000)
         #expect(presenter.presenceFetchCount == fetches, "polling stops when the lobby is popped (6 l6)")
+        #expect(hooks.waitingPresenceFetches == 0)
+        #expect(presenter.lobbyPresence == nil, "an answer that lands after the pop shows nothing")
 
         #expect(LobbyPresencePolicy.kind(hasResult: true, count: nil, intent: .join, mode: .editing) == .hidden)
         #expect(LobbyPresencePolicy.kind(hasResult: true, count: 2, intent: .join, mode: .waiting) == .hidden)
@@ -502,7 +512,25 @@ private final class ENT3HookRecorder {
     var previewCalls: [String] = []
     var presenceAnswers: [Int?] = []
     var repeatsLastAnswer = false
+    var answersPresenceOnDemand = false
     var presenceRooms: [String] = []
+    private var heldPresenceFetches: [CheckedContinuation<Int?, Never>] = []
+
+    var waitingPresenceFetches: Int { heldPresenceFetches.count }
+
+    func answerPresence(_ count: Int?) {
+        guard !heldPresenceFetches.isEmpty else {
+            Issue.record("no presence fetch is waiting for an answer")
+            return
+        }
+        heldPresenceFetches.removeFirst().resume(returning: count)
+    }
+
+    func releasePresenceFetches() {
+        while !heldPresenceFetches.isEmpty {
+            heldPresenceFetches.removeFirst().resume(returning: nil)
+        }
+    }
     var refreshCount = 0
 
     init() {
@@ -538,6 +566,9 @@ private final class ENT3HookRecorder {
         hooks.fetchPresence = { [weak self] room, _ in
             guard let self else { return nil }
             self.presenceRooms.append(room)
+            if self.answersPresenceOnDemand {
+                return await withCheckedContinuation { self.heldPresenceFetches.append($0) }
+            }
             if self.presenceAnswers.count > 1 || (!self.repeatsLastAnswer && !self.presenceAnswers.isEmpty) {
                 return self.presenceAnswers.removeFirst()
             }
@@ -561,7 +592,7 @@ private func ent3Settle(_ condition: () -> Bool) async -> Bool {
 @Suite(.serialized)
 struct ENT3EntryCoreDeltaTests {
     private func viewModel() -> MeetingViewModel {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         return viewModel
     }

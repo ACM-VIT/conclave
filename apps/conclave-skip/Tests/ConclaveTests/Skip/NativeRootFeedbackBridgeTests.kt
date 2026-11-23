@@ -32,7 +32,7 @@ class NativeRootFeedbackBridgeTests {
     private fun poll(delivery: NativeFeedbackDelivery) = delivery.deliver(delivery.observe())
 
     @Test fun actualProductionSourcesDoNotMergeEqualSequences() {
-        val shell = MeetingShellPresenter()
+        val shell = MeetingShellPresenter(defaults = IsolatedDefaults.make())
         shell.apply(MeetingShellInputs.make(identity = MeetingSessionIdentity(callSession = 1, attempt = 1, attemptToken = "feedback-1"),
             connectionState = ConnectionState.joined))
         val stage = StagePresenter(shell = shell)
@@ -150,7 +150,7 @@ class NativeRootFeedbackBridgeTests {
 
     @Test fun nativeInvalidInputRecordsOnceWithoutShellOrCoreCommand() {
         val premeeting = PremeetingPresenter()
-        val shell = MeetingShellPresenter()
+        val shell = MeetingShellPresenter(defaults = IsolatedDefaults.make())
         val commands = mutableListOf<PremeetingCommand>()
         premeeting.onCommand = { commands += it }
         val received = mutableListOf<FeedbackKind>()

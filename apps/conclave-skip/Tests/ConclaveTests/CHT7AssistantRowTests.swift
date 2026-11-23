@@ -368,7 +368,7 @@ struct CHT7AssistantRowTests {
     @Test func theBusyFixtureShowsEveryAssistantStateButApproval() async {
         await ChatFixtureTestGate.acquire()
         defer { ChatFixtureTestGate.release() }
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         let driver = ChatFixtureDriver.installOnStage(state: .busy, shell: shell)
         #expect(shell.chat.rows.entry(for: "s-a1").assistant?.state == .thinking)
         #expect(shell.chat.rows.entry(for: "s-a2").assistant?.state == .streaming)

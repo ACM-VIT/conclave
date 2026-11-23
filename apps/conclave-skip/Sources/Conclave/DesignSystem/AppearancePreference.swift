@@ -17,12 +17,12 @@ enum AppearanceMode: String, CaseIterable {
 @Observable
 final class AppearancePreference {
     static let storageKey = "conclave.pref.appearance"
-    static let shared = AppearancePreference()
+    static let shared = AppearancePreference(defaults: UserDefaults.standard)
 
     private(set) var mode: AppearanceMode
     @ObservationIgnored private let defaults: UserDefaults
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults) {
         self.defaults = defaults
         mode = AppearanceMode(rawValue: defaults.string(forKey: Self.storageKey) ?? "") ?? .system
     }

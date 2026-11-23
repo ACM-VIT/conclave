@@ -259,10 +259,7 @@ struct SettingsTranscriptPoliciesTests {
     ]
 
     static func freshDefaults() -> UserDefaults {
-        let suite = "set1-settings-" + UUID().uuidString
-        let defaults = UserDefaults(suiteName: suite) ?? UserDefaults.standard
-        defaults.removePersistentDomain(forName: suite)
-        return defaults
+        IsolatedDefaults.make()
     }
 
     static func packageRoot() -> URL {

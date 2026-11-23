@@ -15,7 +15,9 @@ final class MeetingShellPresenter {
 
     let chat = ChatPresenter()
 
-    let settings = SettingsPresenter(scope: SettingsScope.call)
+    let settings: SettingsPresenter
+
+    let defaults: UserDefaults
 
     let transcript = TranscriptPresenter()
 
@@ -76,6 +78,14 @@ final class MeetingShellPresenter {
         )
     }
 
+    init(defaults: UserDefaults) {
+        self.defaults = defaults
+        settings = SettingsPresenter(scope: SettingsScope.call, defaults: defaults)
+        panels.afterSnapshotChanged = { [weak self] in
+            self?.syncChatWithPanels()
+        }
+    }
+
     var currentInputs: MeetingShellInputs { inputs }
 
     var snapshotPublishCount: Int { publishCount }
@@ -92,12 +102,6 @@ final class MeetingShellPresenter {
         guard visible != callSurfaceIsVisible else { return }
         callSurfaceIsVisible = visible
         syncChatWithPanels()
-    }
-
-    init() {
-        panels.afterSnapshotChanged = { [weak self] in
-            self?.syncChatWithPanels()
-        }
     }
 
     private func syncChatWithPanels() {

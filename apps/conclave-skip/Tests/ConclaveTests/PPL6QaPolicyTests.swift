@@ -36,7 +36,7 @@ struct PPL6QaPolicyTests {
 
     private func qaPeople(role: String, qaEnabled: Bool = true, snapshot: Bool = true, becameHost: Bool = false,
                           blocked: String = MeetingBlockedReason.none.rawValue) -> (PeoplePresenter, CommandLog) {
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         let people = PeoplePresenter(shell: shell, stage: StagePresenter(shell: shell))
         let log = CommandLog()
         people.onCommand = { command, ticket in

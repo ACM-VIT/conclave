@@ -3,7 +3,7 @@ import UIKit
 
 @MainActor
 final class ConclaveFeedbackPlayer {
-    static let shared = ConclaveFeedbackPlayer()
+    static let shared = ConclaveFeedbackPlayer(defaults: UserDefaults.standard)
 
     private var notificationGenerator: UINotificationFeedbackGenerator?
     private var selectionGenerator: UISelectionFeedbackGenerator?
@@ -13,7 +13,7 @@ final class ConclaveFeedbackPlayer {
 
     private(set) var playedCount = 0
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults) {
         self.defaults = defaults
     }
 

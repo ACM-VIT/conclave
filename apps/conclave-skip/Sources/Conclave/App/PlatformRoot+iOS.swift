@@ -21,7 +21,7 @@ struct NativeHostingPreview: View {
     init(onClose: @escaping () -> Void) {
         let owner = NativeHostingPresenter()
         _presenter = State(initialValue: owner)
-        _feedback = State(initialValue: IOSFeedbackDelivery(presenter: owner))
+        _feedback = State(initialValue: IOSFeedbackDelivery(presenter: owner, defaults: UserDefaults.standard))
         self.onClose = onClose
     }
 
