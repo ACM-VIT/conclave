@@ -39,7 +39,28 @@ const SPIN_TURNS_SPREAD = 3;
 const REVEAL_DELAY_MS = 800;
 const RESULT_FAILOVER_MS = 2600;
 const STAGE_PADDING_PX = 16;
-const MIN_REVEAL_WHEEL_PX = 96;
+const MIN_WHEEL_PX = 96;
+const SIDE_MIN_WIDTH = 720;
+const SIDE_MIN_HEIGHT = 300;
+const LANDSCAPE_MIN_WIDTH = 560;
+const LANDSCAPE_PANEL_PX = 280;
+const LANDSCAPE_ACTIONS_PX = 220;
+const STACK_REVEAL_CONTROLS_PX = 196;
+
+type WheelLayout = "side" | "landscape" | "stack";
+
+const landscapeWheel = (width: number, height: number): number =>
+  Math.min(width - LANDSCAPE_PANEL_PX - LANDSCAPE_ACTIONS_PX, height) - 2 * STAGE_PADDING_PX;
+
+const stackWheel = (height: number): number =>
+  Math.max(height * 0.56, Math.min(240, height)) - STACK_REVEAL_CONTROLS_PX - 2 * STAGE_PADDING_PX;
+
+const layoutFor = (width: number, height: number): WheelLayout => {
+  if (width >= SIDE_MIN_WIDTH && height >= SIDE_MIN_HEIGHT) return "side";
+  if (width < LANDSCAPE_MIN_WIDTH) return "stack";
+  const stack = stackWheel(height);
+  return stack >= MIN_WHEEL_PX && stack >= landscapeWheel(width, height) ? "stack" : "landscape";
+};
 
 const useReducedMotion = (): boolean => {
   const [reduced, setReduced] = useState(false);
@@ -54,15 +75,10 @@ const useReducedMotion = (): boolean => {
   return reduced;
 };
 
-const readoutSize = (label: string): string => {
+const readoutSize = (label: string, roomy: boolean): string => {
   const length = Array.from(label).length;
-  const narrow =
-    length <= 16
-      ? "text-[30px] leading-[38px]"
-      : length <= 30
-        ? "text-[22px] leading-[28px]"
-        : "text-[18px] leading-6";
-  return `${narrow} @min-[720px]:text-[30px] @min-[720px]:leading-[38px]`;
+  if (roomy || length <= 16) return "text-[30px] leading-[38px]";
+  return length <= 30 ? "text-[22px] leading-[28px]" : "text-[18px] leading-6";
 };
 
 const readSoundPreference = (): boolean => {
@@ -263,168 +279,233 @@ export function WheelWebApp() {
   );
   const canSpin = canEdit && !isSpinning && entries.length >= 2;
 
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const sectionRef = useRef<HTMLElement | null>(null);
   const readoutRef = useRef<HTMLDivElement | null>(null);
   const footerRef = useRef<HTMLDivElement | null>(null);
+  const actionsRef = useRef<HTMLDivElement | null>(null);
+  const [layout, setLayout] = useState<WheelLayout>("stack");
   const [wheelHidden, setWheelHidden] = useState(false);
+  const [controlsHeight, setControlsHeight] = useState(0);
 
   useLayoutEffect(() => {
-    if (!showReveal) {
-      setWheelHidden(false);
-      return;
-    }
+    const root = rootRef.current;
+    if (!root) return;
+    const update = () => {
+      const box = root.getBoundingClientRect();
+      if (box.width > 0 && box.height > 0) setLayout(layoutFor(box.width, box.height));
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(root);
+    return () => observer.disconnect();
+  }, []);
+
+  useLayoutEffect(() => {
     const section = sectionRef.current;
     const readout = readoutRef.current;
     const footer = footerRef.current;
     if (!section || !readout || !footer) return;
+    const actions = actionsRef.current;
     const update = () => {
-      const height = section.clientHeight - readout.offsetHeight - footer.offsetHeight;
-      const wheel = Math.min(section.clientWidth, height) - 2 * STAGE_PADDING_PX;
-      setWheelHidden(wheel < MIN_REVEAL_WHEEL_PX);
+      const box = section.getBoundingClientRect();
+      const controls =
+        readout.getBoundingClientRect().height + footer.getBoundingClientRect().height;
+      const width =
+        layout === "landscape" ? box.width - LANDSCAPE_ACTIONS_PX : box.width;
+      const height = layout === "landscape" ? box.height : box.height - controls;
+      setControlsHeight(Math.ceil(controls));
+      setWheelHidden(Math.min(width, height) - 2 * STAGE_PADDING_PX < MIN_WHEEL_PX);
     };
     update();
     const observer = new ResizeObserver(update);
     observer.observe(section);
     observer.observe(readout);
     observer.observe(footer);
+    if (actions) observer.observe(actions);
     return () => observer.disconnect();
-  }, [showReveal]);
+  }, [layout]);
 
   const handlePointerLabel = useCallback((label: string | null) => {
     const element = liveLabelRef.current;
     if (element && label) element.textContent = label;
   }, []);
 
+  const roomy = layout === "side";
+
+  const readoutElement = (
+    <div
+      ref={readoutRef}
+      className={`order-1 flex shrink-0 flex-col items-center justify-end text-center ${
+        layout === "landscape" ? "min-h-[62px] w-full" : roomy ? "min-h-[76px] px-4 pt-2" : "min-h-[62px] px-4 pt-2"
+      }`}
+    >
+      <p
+        className="h-[38px] max-w-full truncate text-[30px] font-semibold leading-[38px]"
+        hidden={!isSpinning}
+      >
+        <span ref={liveLabelRef} />
+      </p>
+      {!isSpinning &&
+        (winner ? (
+          <p
+            data-wheel-readout
+            className={`max-w-full text-balance font-semibold [overflow-wrap:anywhere] ${readoutSize(winner.label, roomy)}`}
+          >
+            {winner.label}
+          </p>
+        ) : (
+          <div className="h-[38px]" />
+        ))}
+      <p className="line-clamp-2 min-h-4 max-w-full text-[12px] leading-4 text-[#fafafa]/55 [overflow-wrap:anywhere]">
+        {showReveal && frozen ? `Spun by ${frozen.spunByName}` : null}
+      </p>
+    </div>
+  );
+
+  const wheelElement = (
+    <div
+      aria-hidden={wheelHidden || undefined}
+      className={
+        wheelHidden
+          ? "hidden"
+          : `relative min-h-0 min-w-0 flex-1 transition-opacity duration-100 ease-out starting:opacity-0 motion-reduce:transition-none ${layout === "landscape" ? "" : "order-2"}`
+      }
+    >
+      <WheelStage
+        entries={frozen ? frozen.entries : entries}
+        spin={spin}
+        canSpin={canEdit}
+        sounds={soundsRef.current}
+        reducedMotion={reducedMotion}
+        highlightIndex={frozen && landed ? frozen.winnerIndex : null}
+        onRequestSpin={handleRequestSpin}
+        onSettled={handleSettled}
+        onSpinningChange={setIsSpinning}
+        onPointerLabel={handlePointerLabel}
+      />
+    </div>
+  );
+
+  const footerElement = (
+    <div
+      ref={footerRef}
+      className={`order-3 flex shrink-0 flex-wrap items-center justify-center gap-2 ${
+        layout === "landscape" ? "w-full pt-3" : roomy ? "px-4 pb-4 pt-1" : "px-3 pb-3 pt-1"
+      }`}
+    >
+      {showReveal ? (
+        <>
+          {canEdit && (
+            <button
+              type="button"
+              data-wheel-action="spin-again"
+              onClick={handleRequestSpin}
+              disabled={entries.length < 2}
+              className={`${PRIMARY_BUTTON} ${roomy ? "" : "w-full"}`}
+            >
+              Spin again
+            </button>
+          )}
+          {canEdit && winnerOnWheel && winner && (
+            <button
+              type="button"
+              data-wheel-action="remove-winner"
+              onClick={() => removeEntryById(doc, winner.id)}
+              className={`${SECONDARY_BUTTON} ${roomy ? "" : "h-9 flex-1"}`}
+            >
+              Remove from wheel
+            </button>
+          )}
+          <button
+            type="button"
+            data-wheel-action="done"
+            onClick={closeReveal}
+            className={`${GHOST_BUTTON} ${roomy ? "" : "h-9"}`}
+          >
+            Done
+          </button>
+        </>
+      ) : canEdit ? (
+        <button
+          type="button"
+          data-wheel-action="spin"
+          onClick={handleRequestSpin}
+          disabled={!canSpin || Boolean(frozen)}
+          className={`${PRIMARY_BUTTON} ${roomy ? "min-w-40" : "w-full"}`}
+        >
+          {isSpinning ? "Spinning" : "Spin"}
+        </button>
+      ) : null}
+    </div>
+  );
+
+  const panel = (
+    <WheelPanel
+      fill={roomy}
+      entries={entries}
+      history={history}
+      canEdit={canEdit}
+      locked={locked}
+      isAdmin={Boolean(isAdmin)}
+      isSpinning={isSpinning}
+      soundOn={soundOn}
+      removeWinnerOnDone={removeWinnerOnDone}
+      missingParticipantCount={missingParticipantLabels.length}
+      onToggleSound={() => setSoundOn((value) => !value)}
+      onAddEntries={(labels) => addEntries(doc, labels)}
+      onAddParticipants={handleAddParticipants}
+      onRemoveEntry={(entryId) => removeEntryById(doc, entryId)}
+      onShuffle={handleShuffle}
+      onSort={handleSort}
+      onClearEntries={() => clearEntries(doc)}
+      onClearHistory={() => clearHistory(doc)}
+      onToggleRemoveWinner={(value) => setRemoveWinnerOnDone(doc, value)}
+    />
+  );
+
+  const sectionClass =
+    layout === "landscape"
+      ? "relative flex min-w-0 flex-1 flex-row"
+      : `relative flex flex-col ${roomy ? "min-h-0 min-w-0 flex-1 overflow-y-auto" : "h-[56%] w-full flex-none"} ${wheelHidden ? "justify-center-safe" : ""}`;
+  const asideClass =
+    layout === "landscape"
+      ? "h-full w-[280px] shrink-0 overflow-y-auto border-l"
+      : roomy
+        ? "flex h-full w-[320px] shrink-0 flex-col border-l"
+        : "w-full flex-none border-t";
+
   return (
-    <div className="@container h-full min-h-0 w-full">
+    <div ref={rootRef} data-wheel-root className="h-full min-h-0 w-full">
       <div
-        data-wheel-scroll
-        className="flex h-full min-h-0 w-full flex-col overflow-y-auto bg-[#0a0a0b] text-[#fafafa] @min-[720px]:flex-row @min-[720px]:overflow-visible"
+        data-wheel-scroll={layout === "stack" ? "" : undefined}
+        className={`flex h-full min-h-0 w-full bg-[#0a0a0b] text-[#fafafa] ${
+          layout === "stack" ? "flex-col overflow-y-auto" : "flex-row"
+        }`}
       >
         <section
           ref={sectionRef}
-          className={`relative flex min-h-[240px] min-w-0 flex-1 flex-col @min-[720px]:min-h-[260px] ${wheelHidden ? "justify-center" : ""}`}
+          className={sectionClass}
+          style={
+            layout === "stack"
+              ? { minHeight: `max(min(240px, 100%), ${controlsHeight}px)` }
+              : undefined
+          }
         >
+          {wheelElement}
           <div
-            ref={readoutRef}
-            className="flex min-h-[62px] shrink-0 flex-col items-center justify-end px-4 pt-2 text-center @min-[720px]:min-h-[76px]"
-          >
-            <p
-              className="h-[38px] max-w-full truncate text-[30px] font-semibold leading-[38px]"
-              hidden={!isSpinning}
-            >
-              <span ref={liveLabelRef} />
-            </p>
-            {!isSpinning &&
-              (winner ? (
-                <p
-                  data-wheel-readout
-                  className={`max-w-full text-balance font-semibold [overflow-wrap:anywhere] ${readoutSize(winner.label)}`}
-                >
-                  {winner.label}
-                </p>
-              ) : (
-                <div className="h-[38px]" />
-              ))}
-            <p className="min-h-4 max-w-full text-[12px] leading-4 text-[#fafafa]/55 [overflow-wrap:anywhere]">
-              {showReveal && frozen ? `Spun by ${frozen.spunByName}` : null}
-            </p>
-          </div>
-
-          <div
-            aria-hidden={wheelHidden || undefined}
+            ref={actionsRef}
             className={
-              wheelHidden
-                ? "pointer-events-none relative h-0 min-h-0 flex-none overflow-hidden opacity-0"
-                : "relative min-h-0 flex-1 opacity-100 transition-opacity duration-100 ease-out motion-reduce:transition-none"
+              layout === "landscape"
+                ? `flex flex-col items-center justify-center overflow-y-auto px-3 py-3 ${wheelHidden ? "min-w-0 flex-1" : "w-[220px] shrink-0"}`
+                : "contents"
             }
           >
-            <WheelStage
-              entries={frozen ? frozen.entries : entries}
-              spin={spin}
-              canSpin={canEdit}
-              sounds={soundsRef.current}
-              reducedMotion={reducedMotion}
-              highlightIndex={frozen && landed ? frozen.winnerIndex : null}
-              onRequestSpin={handleRequestSpin}
-              onSettled={handleSettled}
-              onSpinningChange={setIsSpinning}
-              onPointerLabel={handlePointerLabel}
-            />
-          </div>
-
-          <div
-            ref={footerRef}
-            className="flex shrink-0 flex-wrap items-center justify-center gap-2 px-3 pb-3 pt-1 @min-[720px]:px-4 @min-[720px]:pb-4"
-          >
-            {showReveal ? (
-              <>
-                {canEdit && (
-                  <button
-                    type="button"
-                    data-wheel-action="spin-again"
-                    onClick={handleRequestSpin}
-                    disabled={entries.length < 2}
-                    className={`${PRIMARY_BUTTON} w-full @min-[720px]:w-auto`}
-                  >
-                    Spin again
-                  </button>
-                )}
-                {canEdit && winnerOnWheel && winner && (
-                  <button
-                    type="button"
-                    data-wheel-action="remove-winner"
-                    onClick={() => removeEntryById(doc, winner.id)}
-                    className={`${SECONDARY_BUTTON} h-9 flex-1 @min-[720px]:h-10 @min-[720px]:flex-none`}
-                  >
-                    Remove from wheel
-                  </button>
-                )}
-                <button
-                  type="button"
-                  data-wheel-action="done"
-                  onClick={closeReveal}
-                  className={`${GHOST_BUTTON} h-9 @min-[720px]:h-10`}
-                >
-                  Done
-                </button>
-              </>
-            ) : canEdit ? (
-              <button
-                type="button"
-                data-wheel-action="spin"
-                onClick={handleRequestSpin}
-                disabled={!canSpin || Boolean(frozen)}
-                className={`${PRIMARY_BUTTON} w-full @min-[720px]:w-auto @min-[720px]:min-w-40`}
-              >
-                {isSpinning ? "Spinning" : "Spin"}
-              </button>
-            ) : null}
+            {readoutElement}
+            {footerElement}
           </div>
         </section>
-
-        <aside className="flex h-[44%] min-h-[280px] w-full shrink-0 @min-[720px]:min-h-[200px] flex-col border-t border-white/[0.08] bg-[#111113] @min-[720px]:h-auto @min-[720px]:w-[320px] @min-[720px]:border-l @min-[720px]:border-t-0">
-          <WheelPanel
-            entries={entries}
-            history={history}
-            canEdit={canEdit}
-            locked={locked}
-            isAdmin={Boolean(isAdmin)}
-            isSpinning={isSpinning}
-            soundOn={soundOn}
-            removeWinnerOnDone={removeWinnerOnDone}
-            missingParticipantCount={missingParticipantLabels.length}
-            onToggleSound={() => setSoundOn((value) => !value)}
-            onAddEntries={(labels) => addEntries(doc, labels)}
-            onAddParticipants={handleAddParticipants}
-            onRemoveEntry={(entryId) => removeEntryById(doc, entryId)}
-            onShuffle={handleShuffle}
-            onSort={handleSort}
-            onClearEntries={() => clearEntries(doc)}
-            onClearHistory={() => clearHistory(doc)}
-            onToggleRemoveWinner={(value) => setRemoveWinnerOnDone(doc, value)}
-          />
-        </aside>
+        <aside className={`${asideClass} border-white/[0.08] bg-[#111113]`}>{panel}</aside>
       </div>
 
       <div className="sr-only" aria-live="polite">

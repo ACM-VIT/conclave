@@ -15,6 +15,7 @@ import {
 import { GHOST_BUTTON, ICON_BUTTON, SECONDARY_BUTTON } from "./buttons";
 
 export type WheelPanelProps = {
+  fill: boolean;
   entries: WheelEntry[];
   history: WheelResult[];
   canEdit: boolean;
@@ -112,6 +113,7 @@ function TabButton({
 }
 
 export function WheelPanel({
+  fill,
   entries,
   history,
   canEdit,
@@ -156,7 +158,7 @@ export function WheelPanel({
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className={fill ? "flex h-full min-h-0 flex-col" : "flex flex-col"}>
       <div className="flex h-12 shrink-0 items-center gap-1 border-b border-white/[0.08] px-3">
         <TabButton
           active={tab === "names"}
@@ -319,9 +321,9 @@ export function WheelPanel({
             </div>
           )}
 
-          <div className="mt-1 min-h-0 flex-1 overflow-y-auto px-3 pb-3 pt-1">
+          <div className={`mt-1 px-3 pb-3 pt-1 ${fill ? "min-h-0 flex-1 overflow-y-auto" : ""}`}>
             {entries.length === 0 ? (
-              <div className="flex h-full flex-col items-center justify-center gap-3 px-4 py-2 text-center">
+              <div className="flex h-full min-h-24 flex-col items-center justify-center gap-3 px-4 py-2 text-center">
                 <p className="text-[13px] text-[#fafafa]/55">
                   {canEdit ? "Add at least two names to spin." : "The host is adding names."}
                 </p>
@@ -382,9 +384,9 @@ export function WheelPanel({
         </>
       ) : (
         <>
-          <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
+          <div className={`px-3 py-2 ${fill ? "min-h-0 flex-1 overflow-y-auto" : ""}`}>
             {history.length === 0 ? (
-              <div className="flex h-full items-center justify-center px-4 text-center">
+              <div className="flex h-full min-h-24 items-center justify-center px-4 text-center">
                 <p className="text-[13px] text-[#fafafa]/55">
                   Winners show up here after each spin.
                 </p>
