@@ -418,20 +418,9 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       if (!changesNothingIn(doc, update)) signalRefused(appId, replicaId, "locked");
       return;
     }
-    const refusal = apps.contentRefusal(appId, writer, update, mark);
+    const refusal = apps.write(appId, writer, update, mark, socket.id);
     if (refusal) {
       refuse(refusal);
-      return;
-    }
-    if (!apps.reserveUpdate(appId, update)) {
-      refuse("too-large");
-      return;
-    }
-
-    try {
-      Y.applyUpdate(doc, update, socket.id);
-    } catch {
-      refuse("invalid");
       return;
     }
 

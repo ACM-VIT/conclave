@@ -54,7 +54,9 @@ local copy of an app that leaves the stage and resync from the server when it
 returns.
 
 Yjs client ids are chosen by clients, so the SFU binds each one to the
-participant who first writes under it, and to the app it writes in. It
+participant who first writes under it, and to the app it writes in. An id is
+bound only in the same step that applies the write; a refused write, for any
+reason, binds nothing. It
 refuses that id from anyone else and in any other app, so bytes copied from
 one app never land in another. A participant who rejoins keeps their ids. A
 viewer that only syncs binds nothing. One update may bring at most 8 new ids

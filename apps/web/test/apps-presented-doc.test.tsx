@@ -101,13 +101,8 @@ async function withSavedBoard(run: (room: Room) => Promise<void>, policy: SyncPo
         syncReplies[syncs - 1] = pendingSync;
         if (policy.autoAnswer) pendingSync();
       }
-      if (
-        event === "apps:yjs:update" &&
-        roomDoc &&
-        room.acceptsContent(APP_ID, "viewer#1", data.update, syncMark) &&
-        room.reserveUpdate(APP_ID, data.update)
-      ) {
-        Y.applyUpdate(roomDoc, data.update);
+      if (event === "apps:yjs:update" && roomDoc) {
+        room.write(APP_ID, "viewer#1", data.update, syncMark);
       }
     },
   } as unknown as Socket;

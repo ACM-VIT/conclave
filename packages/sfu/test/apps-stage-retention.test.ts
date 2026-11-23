@@ -234,6 +234,12 @@ const authoredBy = (clientIds: number[]): Uint8Array =>
     }),
   );
 
+const textBy = (doc: Y.Doc, text: string): Uint8Array => {
+  const before = Y.encodeStateVector(doc);
+  doc.getText("t").insert(doc.getText("t").length, text);
+  return Y.encodeStateAsUpdate(doc, before);
+};
+
 const clockOf = (doc: Y.Doc): number =>
   Y.decodeStateVector(Y.encodeStateVector(doc)).get(doc.clientID) ?? 0;
 
@@ -873,6 +879,156 @@ describe("client id reservations", () => {
     const refusals = writer.received.filter((sent) => sent.event === "apps:yjs:refused");
     expect(refusals).toHaveLength(1);
     expect(refusals[0].payload).toMatchObject({ appId: "whiteboard", replicaId: "copy-1" });
+  });
+});
+
+describe("client ids are claimed only by a write the room takes", () => {
+  const nearlyFullBoard = () => {
+    const { room, join } = makeRoom();
+    const host = join("host#1", "host");
+    host.present("whiteboard");
+    for (let chunk = 0; chunk < 5; chunk += 1) {
+      host.sendUpdate("whiteboard", textBy(host.doc, "x".repeat(200 * 1024)));
+    }
+    const size = Y.encodeStateAsUpdate(room.apps.liveDoc("whiteboard")!).length;
+    host.sendUpdate("whiteboard", textBy(host.doc, "x".repeat(MAX_APP_DOC_BYTES - size - 400)));
+    return { room, join, host };
+  };
+
+  it("keeps no claim from writes refused at the size cap, however many guests try", () => {
+    const { room, join, host } = nearlyFullBoard();
+    const held = room.apps.boundClientIdCount;
+
+    for (let session = 0; session < 50; session += 1) {
+      const guest = join(`guest#${session}`, "participant");
+      for (let attempt = 0; attempt < MAX_NEW_CLIENT_IDS_PER_UPDATE; attempt += 1) {
+        const author = new Y.Doc();
+        author.clientID = 50_000 + session * 100 + attempt;
+        guest.sendUpdate("whiteboard", textBy(author, "y".repeat(2048)));
+      }
+      expect(guest.relayed).toEqual([]);
+    }
+
+    expect(room.apps.boundClientIdCount).toBe(held);
+    host.close(host.state().revision);
+    host.discard("whiteboard", host.state().revision);
+    host.present("whiteboard");
+    const writer = join("writer#1", "participant");
+    writer.draw("whiteboard", "circle");
+    expect(writer.relayed.map((sent) => sent.event)).toEqual(["apps:yjs:update"]);
+  });
+
+  const refusals: Array<[string, () => { send: () => void; held: () => number; reason: () => unknown }]> = [
+    ["too-large", () => {
+      const { room, join } = nearlyFullBoard();
+      const writer = join("writer#1", "participant");
+      const author = new Y.Doc();
+      author.clientID = 60_001;
+      return {
+        held: () => room.apps.boundClientIdCount,
+        send: () => writer.sendWithReplica("whiteboard", textBy(author, "y".repeat(2048)), "copy"),
+        reason: () => writer.received.find((sent) => sent.event === "apps:yjs:refused")?.payload,
+      };
+    }],
+    ["locked", () => {
+      const { room, join } = makeRoom();
+      const host = join("host#1", "host");
+      const writer = join("writer#1", "participant");
+      host.present("whiteboard");
+      host.lock(true, host.state().revision);
+      return {
+        held: () => room.apps.boundClientIdCount,
+        send: () => writer.sendWithReplica("whiteboard", authoredBy([60_002]), "copy"),
+        reason: () => writer.received.find((sent) => sent.event === "apps:yjs:refused")?.payload,
+      };
+    }],
+    ["not-synced", () => {
+      const { room, join } = makeRoom();
+      const host = join("host#1", "host");
+      const writer = join("writer#1", "participant");
+      host.present("whiteboard");
+      return {
+        held: () => room.apps.boundClientIdCount,
+        send: () => writer.sendAsIs("whiteboard", authoredBy([60_003])),
+        reason: () => (writer.relayed.length === 0 ? { reason: "not-synced" } : undefined),
+      };
+    }],
+    ["unresolved", () => {
+      const { room, join } = makeRoom();
+      const host = join("host#1", "host");
+      const writer = join("writer#1", "participant");
+      host.present("whiteboard");
+      return {
+        held: () => room.apps.boundClientIdCount,
+        send: () => writer.sendWithReplica("whiteboard", forgedUpdate(60_004, 3, "gap"), "copy"),
+        reason: () => writer.received.find((sent) => sent.event === "apps:yjs:refused")?.payload,
+      };
+    }],
+    ["unseen-value", () => {
+      const { room, join } = makeRoom();
+      const host = join("host#1", "host");
+      const writer = join("writer#1", "participant");
+      host.present("whiteboard");
+      host.sendUpdate("whiteboard", writePage(host.doc, ["kept"]));
+      const fresh = new Y.Doc();
+      fresh.clientID = 60_005;
+      return {
+        held: () => room.apps.boundClientIdCount,
+        send: () => writer.sendWithReplica("whiteboard", writePage(fresh, ["early"]), "copy"),
+        reason: () => writer.received.find((sent) => sent.event === "apps:yjs:refused")?.payload,
+      };
+    }],
+    ["foreign-id", () => {
+      const { room, join } = makeRoom();
+      const host = join("host#1", "host");
+      const owner = join("owner#1", "participant");
+      const writer = join("writer#1", "participant");
+      host.present("whiteboard");
+      owner.sendUpdate("whiteboard", authoredBy([60_006]));
+      return {
+        held: () => room.apps.boundClientIdCount,
+        send: () =>
+          writer.sendWithReplica(
+            "whiteboard",
+            Y.mergeUpdates([authoredBy([60_007]), forgedUpdate(60_006, 1, "taken")]),
+            "copy",
+          ),
+        reason: () => writer.received.find((sent) => sent.event === "apps:yjs:refused")?.payload,
+      };
+    }],
+    ["id-limit", () => {
+      const { room, join } = makeRoom();
+      const host = join("host#1", "host");
+      const writer = join("writer#1", "participant");
+      host.present("whiteboard");
+      const ids = Array.from({ length: MAX_NEW_CLIENT_IDS_PER_UPDATE + 1 }, (_, index) => 61_000 + index);
+      return {
+        held: () => room.apps.boundClientIdCount,
+        send: () => writer.sendWithReplica("whiteboard", authoredBy(ids), "copy"),
+        reason: () => writer.received.find((sent) => sent.event === "apps:yjs:refused")?.payload,
+      };
+    }],
+    ["malformed", () => {
+      const { room, join } = makeRoom();
+      const host = join("host#1", "host");
+      const writer = join("writer#1", "participant");
+      host.present("whiteboard");
+      return {
+        held: () => room.apps.boundClientIdCount,
+        send: () => writer.sendWithReplica("whiteboard", Uint8Array.from([1, 1, 200, 200, 200]), "copy"),
+        reason: () => writer.received.find((sent) => sent.event === "apps:yjs:refused")?.payload,
+      };
+    }],
+  ];
+
+  it.each(refusals)("keeps no claim from a write refused as %s", (reason, setup) => {
+    const scenario = setup();
+    const held = scenario.held();
+
+    scenario.send();
+
+    expect(scenario.reason()).toMatchObject({ reason });
+    expect(scenario.held()).toBe(held);
   });
 });
 

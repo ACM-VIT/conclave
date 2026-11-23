@@ -43,6 +43,8 @@ export type AppSyncMark = {
   readonly seen: ReadonlyMap<number, number>;
 };
 
+export type WriteRefusal = ContentRefusal | "too-large" | "invalid";
+
 export type ContentRefusal =
   | "not-live"
   | "not-synced"
@@ -250,6 +252,10 @@ export class RoomApps {
   // which stays the same when that participant rejoins.
   constructor(private readonly participantOf: (userId: string) => string = (userId) => userId) {}
 
+  get boundClientIdCount(): number {
+    return this.clientIdOwners.size;
+  }
+
   get activeAppId(): string | null {
     return this.stage.activeAppId;
   }
@@ -370,38 +376,13 @@ export class RoomApps {
     );
   }
 
-  /**
-   * False when an update from `userId` for `appId`, sent by a socket whose
-   * sync of the app's current stay is `mark`:
-   * - comes from a socket that has not synced the presented document;
-   * - replaces a map value without having seen it, when that value was in
-   *   the room's copy the socket synced or when this stay began: a client
-   *   drawing on a fresh copy before the room's copy reached it writes that;
-   * - builds on content the room does not hold, such as content it refused;
-   * - writes under a client id bound to another participant, or already in
-   *   another app's document;
-   * - holds, builds on or deletes content of one of the app's cleared
-   *   documents, as a client that missed the clear sends when it resyncs.
-   * Accepting it binds its new client ids to the participant, so a
-   * participant is only ever blocked by their own writes, or by a host
-   * clearing a document they wrote.
-   */
-  acceptsContent(
+  write(
     appId: string,
     userId: string,
     update: Uint8Array,
     mark: AppSyncMark | null,
-  ): boolean {
-    return this.contentRefusal(appId, userId, update, mark) === null;
-  }
-
-  /** Why `acceptsContent` refuses an update, or null when it accepts it. */
-  contentRefusal(
-    appId: string,
-    userId: string,
-    update: Uint8Array,
-    mark: AppSyncMark | null,
-  ): ContentRefusal | null {
+    origin?: unknown,
+  ): WriteRefusal | null {
     const doc = this.liveDoc(appId);
     if (!doc) return "not-live";
     if (!this.isCurrentSync(mark)) return "not-synced";
@@ -418,7 +399,17 @@ export class RoomApps {
     for (const client of facts.touched) {
       if (this.clearedWriters.has(clearedWriterKey(appId, client))) return "cleared";
     }
-    return this.claimClientIds(this.participantOf(userId), appId, facts.writers);
+    const participant = this.participantOf(userId);
+    const claims = this.planClaims(participant, appId, facts.writers);
+    if (typeof claims === "string") return claims;
+    if (!this.reserveUpdate(appId, update)) return "too-large";
+    try {
+      Y.applyUpdate(doc, update, origin);
+    } catch {
+      return "invalid";
+    }
+    this.commitClaims(participant, appId, claims);
+    return null;
   }
 
   /**
@@ -492,18 +483,17 @@ export class RoomApps {
     for (const client of clients) this.clearedWriters.add(clearedWriterKey(appId, client));
   }
 
-  private claimClientIds(
+  private planClaims(
     participant: string,
     appId: string,
     clients: Iterable<number>,
-  ): "foreign-id" | "id-limit" | null {
+  ): "foreign-id" | "id-limit" | number[] {
     const claims: number[] = [];
     for (const client of new Set(clients)) {
       const owner = this.clientIdOwners.get(client) ?? this.presenceIds.get(client);
       if (owner && (owner.participant !== participant || owner.appId !== appId)) return "foreign-id";
       if (!this.clientIdOwners.has(client)) claims.push(client);
     }
-    if (claims.length === 0) return null;
     const held = this.clientIdCounts.get(participant) ?? 0;
     if (
       claims.length > MAX_NEW_CLIENT_IDS_PER_UPDATE ||
@@ -511,10 +501,14 @@ export class RoomApps {
     ) {
       return "id-limit";
     }
+    return claims;
+  }
+
+  private commitClaims(participant: string, appId: string, claims: number[]): void {
+    if (claims.length === 0) return;
     this.releasePresenceIds(claims);
     for (const client of claims) this.clientIdOwners.set(client, { participant, appId });
-    this.clientIdCounts.set(participant, held + claims.length);
-    return null;
+    this.clientIdCounts.set(participant, (this.clientIdCounts.get(participant) ?? 0) + claims.length);
   }
 
   private claimPresenceIds(participant: string, appId: string, clients: Iterable<number>): boolean {
