@@ -51,7 +51,7 @@ export const ledgerAuthority = defineAuthority({
   contract: ledgerContract,
   tables: {
     cards: table<Card>({ maxRows: 50_000 }),
-    secrets: table<Secret>({ maxRows: 50_000 }),
+    secrets: table<Secret>({ maxRows: 100_000 }),
   },
   timers: {},
   canView: ({ role }) => role === "moderator" || role === "member",

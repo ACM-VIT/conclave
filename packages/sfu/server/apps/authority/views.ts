@@ -467,8 +467,9 @@ export class ViewTracker {
 
   /** Gives each key given up to a row withheld for want of it, if one still wants it. */
   private heal(): void {
-    while (this.freed.length > 0) {
-      const [audience, name, key] = this.freed.shift()!;
+    // Walked in place, never shifted: a clear frees a key for each row.
+    for (let index = 0; index < this.freed.length; index += 1) {
+      const [audience, name, key] = this.freed[index];
       const bucket = audience.buckets.get(name);
       if (!bucket || bucket.owner.has(key)) continue;
       for (const [source, withheld] of [...bucket.withheld]) {
@@ -479,6 +480,7 @@ export class ViewTracker {
         if (bucket.owner.has(key)) break;
       }
     }
+    this.freed.length = 0;
   }
 
   /** What one source row projects to for an audience now, or null for nothing. */
@@ -1137,7 +1139,7 @@ export class ViewTracker {
     this.note(audience, name, bucket, key, true, undefined);
     bucket.owner.delete(key);
     bucket.rows.delete(key);
-    this.freed.push([audience, name, key]);
+    if (bucket.withheld.size > 0) this.freed.push([audience, name, key]);
   }
 
   /** Gives up the key a source row held when it no longer projects to it. */
@@ -1162,7 +1164,7 @@ export class ViewTracker {
     this.note(audience, name, bucket, previousKey, false, undefined);
     bucket.owner.delete(previousKey);
     bucket.rows.delete(previousKey);
-    this.freed.push([audience, name, previousKey]);
+    if (bucket.withheld.size > 0) this.freed.push([audience, name, previousKey]);
   }
 
   private place(
