@@ -660,6 +660,28 @@ describe("Sarvam: a line waits while its speaker is still talking", () => {
   });
 });
 
+describe("Sarvam: a line's wait follows its own audio", () => {
+  it("a second utterance in the same turn takes its audio's wait with it, so the first still ends on time", async () => {
+    vi.useFakeTimers();
+    quiet();
+    const { providerSockets, start, speak, endTurn, savedTexts } = await rig(SARVAM);
+    await start("hi");
+    const [socket] = providerSockets();
+    await speak(ada);
+    socket.emit(sarvamSpeechStart());
+    await vi.advanceTimersByTimeAsync(700);
+    await speak(ada);
+    socket.emit(sarvamSpeechStart());
+    await endTurn(ada);
+
+    await vi.advanceTimersByTimeAsync(DEADLINE - 700 + 100);
+    socket.emit(sarvamFinal("two", "Second."));
+    await vi.advanceTimersByTimeAsync(DEADLINE + 100);
+
+    expect(savedTexts()).toEqual([GAP, "Second."]);
+  });
+});
+
 describe("Sarvam: a replayed line is claimed once", () => {
   it("speech our check missed in the next replayed line binds that line, not one already claimed", async () => {
     vi.useFakeTimers();

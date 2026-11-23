@@ -1427,13 +1427,23 @@ export class TranscriptRoom {
     return adopted;
   }
 
-  /** A new utterance in a turn an older line took keeps its own audio from where it began. */
+  /**
+   * A new utterance in a turn an older line took keeps its own audio from
+   * where it began, and the older line's wait goes back to its own audio.
+   */
   private takeFromSpeakingLine(speaker: TranscriptSpeaker, since: number, turn: number | undefined): AudioChunk[] {
     const older = this.ledger.get(this.speakingLine.get(speakerKey(speaker)) ?? "");
     if (!older || turn === undefined) return [];
     const taken = older.audio.filter((chunk) => chunk.createdAt >= since && chunk.turn === turn);
     older.audio = older.audio.filter((chunk) => !taken.includes(chunk));
+    if (taken.length > 0 && isActive(older)) older.deadlineAt = this.ownAudioDeadline(older);
     return taken;
+  }
+
+  /** A live Sarvam line waits 30 s from when it was accepted or from its last own chunk, whichever is later. */
+  private ownAudioDeadline(line: CaptionLine): number {
+    const lastAudioAt = line.audio.reduce((latest, { createdAt }) => Math.max(latest, createdAt), line.place.startMs);
+    return lastAudioAt + TRANSCRIPTION_LINE_DEADLINE_MS;
   }
 
   private commitAudio(
@@ -1958,10 +1968,7 @@ export class TranscriptRoom {
         ...this.adoptAudio(line.speaker, heard.since, heard.turn),
       ];
       line.audio = [...line.audio, ...taken].sort((left, right) => left.createdAt - right.createdAt);
-      const lastAudioAt = line.audio.at(-1)?.createdAt;
-      if (lastAudioAt !== undefined) {
-        line.deadlineAt = Math.max(line.deadlineAt, lastAudioAt + TRANSCRIPTION_LINE_DEADLINE_MS);
-      }
+      line.deadlineAt = Math.max(line.deadlineAt, this.ownAudioDeadline(line));
       if (heard.ownsNewAudio) this.speakingLine.set(speakerKey(line.speaker), line.id);
     }
     void this.persist();
