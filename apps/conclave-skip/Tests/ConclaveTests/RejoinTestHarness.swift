@@ -382,10 +382,12 @@ final class HeldStubCalls {
 }
 
 @MainActor
-func settle(timeout: Duration = .seconds(5), _ condition: () -> Bool) async -> Bool {
-    let deadline = ContinuousClock.now.advanced(by: timeout)
+func settle(floor: Duration = .seconds(5), turns: Int = 2_000, _ condition: () -> Bool) async -> Bool {
+    let deadline = ContinuousClock.now.advanced(by: floor)
+    var taken = 0
     while !condition() {
-        guard ContinuousClock.now < deadline else { return false }
+        if Task.isCancelled || (taken >= turns && ContinuousClock.now >= deadline) { return false }
+        taken += 1
         await Task.yield()
     }
     return true
