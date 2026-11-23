@@ -32,7 +32,14 @@ import type { ConnectionContext } from "../../socket/context.js";
 import type { IdentityAdapter } from "./identity.js";
 import { AuthorityInstance, type Actor } from "./instance.js";
 import type { AuthorityLimits } from "./limits.js";
-import { ARRAY_BYTES, type HeldRows, type LiveAudiences, type SizedRow, type ViewOps } from "./views.js";
+import {
+  ARRAY_BYTES,
+  type HeldRows,
+  type LiveAudiences,
+  type OwedCursor,
+  type SizedRow,
+  type ViewOps,
+} from "./views.js";
 
 export type SocketPressure = { packets: number; bytes: number };
 
@@ -97,6 +104,8 @@ type Subscription = {
    * recovers a view whose delivery was skipped, brings it there.
    */
   target: number;
+  /** Where its view has got to in the rows clears took, told a batch a flush. */
+  owed: OwedCursor;
   dropped: boolean;
 };
 
@@ -111,6 +120,22 @@ export type RoomAuthorityStats = {
   /** Sockets disconnected because their queue was full. */
   disconnects: number;
   flushes: number;
+};
+
+/**
+ * One frame's rows, by bucket, then key, from parts that are each in that
+ * order already.
+ */
+const inOrder = <Row extends { bucket: string; key: string }>(
+  parts: readonly (readonly Row[] | undefined)[],
+): Row[] => {
+  const present = parts.filter((part): part is readonly Row[] => part !== undefined && part.length > 0);
+  if (present.length <= 1) return [...(present[0] ?? [])];
+  return present
+    .flat()
+    .sort((a, b) =>
+      a.bucket < b.bucket ? -1 : a.bucket > b.bucket ? 1 : a.key < b.key ? -1 : a.key > b.key ? 1 : 0,
+    );
 };
 
 const failure = (
@@ -305,6 +330,7 @@ export class RoomAuthority {
       grantsDue: false,
       viewRevision: 0,
       target: 0,
+      owed: { shared: 0, own: 0 },
       dropped: false,
     };
     subscriptions.set(subscription.id, subscription);
@@ -349,11 +375,13 @@ export class RoomAuthority {
    * the change.
    */
   private answerRevision(subscription: Subscription): number {
+    // A version already named for it covers everything committed since.
+    if (subscription.target > subscription.viewRevision) return subscription.target;
     const { instance, actor } = subscription;
     const behind =
       subscription.lagging ||
       subscription.transfer !== null ||
-      instance.pendingSince(actor, subscription.viewVersion);
+      instance.pendingSince(actor, subscription.viewVersion, subscription.owed);
     if (behind && subscription.target <= subscription.viewRevision) {
       subscription.target = subscription.viewRevision + 1;
       this.promising.add(instance);
@@ -365,13 +393,14 @@ export class RoomAuthority {
   /**
    * The view version a frame brings a subscription to. It moves on only when
    * the frame completes what is owed to its view: rows changed, or a version
-   * an answer named. Removals from a large clear still owed to it hold it
-   * back, so a client that reached an answer's version holds all of it.
+   * an answer named. Rows a clear took that it held and has yet to be told
+   * of hold it back, so a client that reached an answer's version holds all
+   * of it.
    */
-  private nextRevision(subscription: Subscription, changed: boolean): number {
-    const { viewRevision, target, instance, actor, viewVersion } = subscription;
+  private nextRevision(subscription: Subscription, changed: boolean, more: boolean): number {
+    const { viewRevision, target } = subscription;
     if (!changed && target <= viewRevision) return viewRevision;
-    return instance.owesSince(actor, viewVersion) ? viewRevision : viewRevision + 1;
+    return more ? viewRevision : viewRevision + 1;
   }
 
   query(context: ConnectionContext, request: QueryRequest): QueryReply {
@@ -708,11 +737,14 @@ export class RoomAuthority {
       this.left.delete(instance);
       const grantsDue = this.grantsDue.delete(instance);
       const promised = this.promising.delete(instance);
+      // Rows a clear took are told whether or not anything else changed,
+      // so when a viewer hears of them never follows what others wrote.
       if (
         changes.shared.size === 0 &&
         changes.personal.size === 0 &&
         !grantsDue &&
-        !promised
+        !promised &&
+        !instance.hasOwedRows
       ) {
         continue;
       }
@@ -720,33 +752,58 @@ export class RoomAuthority {
         // One whose snapshot is still in parts is caught up after its last
         // part, from what the parts carried. Nothing is held for it here.
         if (subscription.transfer) continue;
+        const { actor, viewVersion, owed: cursor } = subscription;
         // Each is told from its own snapshot on: a change that snapshot
         // already had, or a row gone before it was read, is not sent.
-        const shared = changes.shared
-          .get(subscription.actor.role)
-          ?.for(subscription.viewVersion);
-        const personal = changes.personal
-          .get(subscription.actor.subject)
-          ?.for(subscription.viewVersion);
+        const shared = changes.shared.get(actor.role)?.for(viewVersion, cursor.shared);
+        const personal = changes.personal.get(actor.subject)?.for(viewVersion, cursor.own);
+        // And of rows clears took, the next batch of those it held.
+        const owed = instance.owedFor(actor, viewVersion, cursor);
         const grants = subscription.grantsDue
           ? this.changedGrants(subscription)
           : undefined;
-        const revision = this.nextRevision(subscription, Boolean(shared || personal));
-        if (shared || personal || grants || revision !== subscription.viewRevision) {
-          this.sendPatch(subscription, shared, personal, grants, revision);
+        const changed = Boolean(shared || personal || owed.ops);
+        const revision = this.nextRevision(subscription, changed, owed.more);
+        if (changed || grants || revision !== subscription.viewRevision) {
+          this.sendPatch(subscription, [shared, personal, owed.ops], grants, revision, owed.next);
+        } else {
+          subscription.owed = owed.next;
         }
         // Held back by removals still owed, or by a socket that is behind:
         // sent with the flush that ends them, or the recovering snapshot.
-        if (subscription.target > subscription.viewRevision) this.promising.add(instance);
+        if (owed.more || subscription.target > subscription.viewRevision) {
+          this.promising.add(instance);
+        }
       }
+      this.settleOwed(instance, subscriptions);
     }
     // A large clear is told to its viewers a batch per flush.
     for (const instance of this.instances.values()) {
-      if (instance.hasPendingChanges) {
+      if (instance.hasPendingChanges || this.promising.has(instance)) {
         this.scheduleFlush(false);
         break;
       }
     }
+  }
+
+  /**
+   * Lets an app's views forget rows clears took once every viewer of an
+   * audience has been told of them. A viewer whose snapshot is in parts, or
+   * whose socket fell behind, is sent a whole view next, so it holds none.
+   */
+  private settleOwed(instance: AuthorityInstance, subscriptions: Set<Subscription>): void {
+    const roles = new Map<Role, number>();
+    const subjects = new Map<Subject, number>();
+    for (const subscription of subscriptions) {
+      if (subscription.transfer || subscription.lagging || subscription.dropped) continue;
+      const { actor, owed } = subscription;
+      roles.set(actor.role, Math.min(roles.get(actor.role) ?? Number.POSITIVE_INFINITY, owed.shared));
+      subjects.set(
+        actor.subject,
+        Math.min(subjects.get(actor.subject) ?? Number.POSITIVE_INFINITY, owed.own),
+      );
+    }
+    instance.settleOwed({ roles, subjects });
   }
 
   /** The roles and subjects that hold a view of the app right now. */
@@ -780,17 +837,17 @@ export class RoomAuthority {
 
   private sendPatch(
     subscription: Subscription,
-    shared: ViewOps | undefined,
-    personal: ViewOps | undefined,
+    parts: readonly (ViewOps | undefined)[],
     grants: AuthorityGrants | undefined,
     revision: number,
+    owed: OwedCursor,
   ): void {
     // A lagging subscription is caught up by a whole replacement later, and
     // one with a snapshot in parts by its catch-up after the last part.
     if (subscription.lagging || subscription.dropped || subscription.transfer) return;
     if (!this.hasRoom(subscription)) return;
 
-    const bytes = (shared?.bytes ?? 0) + (personal?.bytes ?? 0);
+    const bytes = parts.reduce((total, part) => total + (part?.bytes ?? 0), 0);
     if (bytes > this.limits.patchBytes) {
       this.regenerate(subscription, subscription.actor);
       return;
@@ -798,14 +855,15 @@ export class RoomAuthority {
     subscription.seq += 1;
     subscription.viewRevision = revision;
     subscription.target = Math.max(subscription.target, revision);
+    subscription.owed = owed;
     this.emit(subscription, {
       kind: "patch",
       subscription: subscription.id,
       generation: subscription.generation,
       serverNowMs: this.now(),
       seq: subscription.seq,
-      put: [...(shared?.put ?? []), ...(personal?.put ?? [])],
-      remove: [...(shared?.remove ?? []), ...(personal?.remove ?? [])],
+      put: inOrder(parts.map((part) => part?.put)),
+      remove: inOrder(parts.map((part) => part?.remove)),
       revision,
       ...(grants ? { grants } : {}),
     });
@@ -832,6 +890,8 @@ export class RoomAuthority {
 
     const { rows, version } = subscription.instance.snapshot(subscription.actor);
     subscription.viewVersion = version;
+    // A whole view as committed now holds none of the rows clears took.
+    subscription.owed = subscription.instance.owedEnd(subscription.actor);
     const bytes = rows.reduce((total, sized) => total + sized.bytes, 0);
     if (bytes > this.limits.snapshotBytes) {
       this.revoke(subscription, "too-large");
@@ -950,11 +1010,15 @@ export class RoomAuthority {
   private catchUp(subscription: Subscription, held: HeldRows): void {
     const { ops, version } = subscription.instance.catchUp(subscription.actor, held);
     subscription.viewVersion = version;
+    const owed = subscription.instance.owedEnd(subscription.actor);
     const grants = subscription.grantsDue ? this.changedGrants(subscription) : undefined;
     const changed = ops.put.length > 0 || ops.remove.length > 0;
-    const revision = this.nextRevision(subscription, changed);
-    if (!changed && !grants && revision === subscription.viewRevision) return;
-    this.sendPatch(subscription, ops, undefined, grants, revision);
+    const revision = this.nextRevision(subscription, changed, false);
+    if (!changed && !grants && revision === subscription.viewRevision) {
+      subscription.owed = owed;
+      return;
+    }
+    this.sendPatch(subscription, [ops], grants, revision, owed);
   }
 
   /**
