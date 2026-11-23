@@ -607,6 +607,7 @@ export default function MeetsMainContent({
     syncStatus: appSyncStatus,
     retrySync: retryAppSync,
     rejectedChangeAt: rejectedAppChangeAt,
+    rejectedChangeReason: rejectedAppChangeReason,
     isRebuilding: isAppRebuilding,
     documents: appDocuments,
   } = useApps();
@@ -2358,6 +2359,7 @@ export default function MeetsMainContent({
           syncFailed={appSyncStatus === "failed"}
           onRetrySync={retryAppSync}
           rejectedChangeAt={rejectedAppChangeAt}
+          rejectedChangeReason={rejectedAppChangeReason}
           frozen={isAppRebuilding}
           documentsVersion={appDocuments.version}
           leaveAction={isWatchActive ? watchLeaveAction : undefined}

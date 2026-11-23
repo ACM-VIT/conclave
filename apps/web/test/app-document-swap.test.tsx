@@ -189,3 +189,47 @@ it("leaves another participant's unrecorded spin to them", async () => {
 
   expect(getHistory(ctx.getDoc("wheel"))).toEqual([]);
 });
+
+it("lets an app claim a write it makes on its own once per activation, across rebuilds", async () => {
+  await mount("board", () => null);
+  expect(ctx.documents.claim("board", "reveal")).toBe(true);
+  expect(ctx.documents.claim("board", "reveal")).toBe(false);
+  expect(ctx.documents.claim("board", "other")).toBe(true);
+  await act(async () => ctx.getDoc("board").getText("t").insert(0, "mine "));
+
+  await refuseLastChange("board");
+  expect(ctx.documents.claim("board", "reveal")).toBe(false);
+  await act(async () => listeners.get("apps:state")?.forEach((listener) => listener({ activeAppId: null, locked: false })));
+  await act(async () => listeners.get("apps:state")?.forEach((listener) => listener({ activeAppId: "board", locked: false })));
+
+  expect(ctx.documents.claim("board", "reveal")).toBe(true);
+});
+
+it("tries a refused spin result once, says the app is full, and never sends it again after the rebuild", async () => {
+  serverDoc = createWheelDoc();
+  addEntry(serverDoc, "Ada");
+  addEntry(serverDoc, "Grace");
+  startSpin(serverDoc, {
+    spinId: "spin-3",
+    entries: getEntries(serverDoc),
+    winnerIndex: 1,
+    startedAt: Date.now() - 10_000,
+    durationMs: 4_000,
+    turns: 4,
+    jitter: 0.5,
+    spunById: "me",
+    spunByName: "Me",
+  });
+  await mount("wheel", wheelApp.web!, [wheelApp as never]);
+  expect(uploads).toHaveLength(1);
+  const replicaId = uploads[0].replicaId!;
+
+  await act(async () =>
+    listeners.get("apps:yjs:refused")?.forEach((listener) => listener({ appId: "wheel", replicaId, reason: "too-large" })),
+  );
+
+  expect(ctx.syncStatus).toBe("synced");
+  expect(getHistory(ctx.getDoc("wheel"))).toEqual([]);
+  expect(uploads).toHaveLength(1);
+  expect(ctx.rejectedChangeReason).toBe("too-large");
+});

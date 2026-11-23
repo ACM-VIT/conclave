@@ -8,7 +8,7 @@ import MeetingAppLayout from "../src/app/components/MeetingAppLayout";
 let root: Root;
 let container: HTMLDivElement;
 
-const renderLayout = async (props: { syncFailed?: boolean; onRetrySync?: () => void; rejectedChangeAt?: number | null; frozen?: boolean }) => {
+const renderLayout = async (props: { syncFailed?: boolean; onRetrySync?: () => void; rejectedChangeAt?: number | null; rejectedChangeReason?: string | null; frozen?: boolean }) => {
   await act(async () =>
     root.render(
       <GameProvider socket={null}>
@@ -136,4 +136,10 @@ it("keeps the app from taking input while it is rebuilt from the server, but sti
 
   await renderLayout({ frozen: false });
   expect(container.querySelector("[inert]")).toBeNull();
+});
+
+it("says the app is full when the server refused a change for that reason", async () => {
+  await renderLayout({ rejectedChangeAt: Date.now(), rejectedChangeReason: "too-large" });
+
+  expect(container.querySelector('[role="status"]')?.textContent).toContain("This app is full, so your last change couldn't be saved");
 });

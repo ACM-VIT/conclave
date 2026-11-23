@@ -216,6 +216,7 @@ type UseSyncedPlaybackArgs = {
   videoId: string | null;
   readOnly: boolean;
   liveHint?: boolean | null;
+  claimAutomaticWrite: (key: string) => boolean;
 };
 
 export function useSyncedPlayback({
@@ -223,6 +224,7 @@ export function useSyncedPlayback({
   videoId,
   readOnly,
   liveHint = null,
+  claimAutomaticWrite,
 }: UseSyncedPlaybackArgs): SyncedPlaybackHandle {
   const elementRef = useRef<WatchMediaElement | null>(null);
   const readOnlyRef = useRef(readOnly);
@@ -696,6 +698,7 @@ export function useSyncedPlayback({
     const ended = videoIdRef.current;
     if (readOnlyRef.current || !ended) return;
     if (advancedFromRef.current === ended) return;
+    if (!claimAutomaticWrite(`ended:${ended}:${recordRef.current.updatedAt}`)) return;
     const queue = getQueue(doc);
     if (queue.length > 0) {
       advancedFromRef.current = ended;
@@ -715,7 +718,7 @@ export function useSyncedPlayback({
       rate: 1,
       liveEdge: false,
     });
-  }, [doc]);
+  }, [claimAutomaticWrite, doc]);
 
   const onError = useCallback((event: MediaEvent) => {
     const mediaError = event.currentTarget?.error;

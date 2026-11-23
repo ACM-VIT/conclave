@@ -31,12 +31,19 @@ interface MeetingAppLayoutProps {
   syncFailed?: boolean;
   onRetrySync?: () => void;
   rejectedChangeAt?: number | null;
+  rejectedChangeReason?: string | null;
   frozen?: boolean;
   documentsVersion?: number;
 }
 
 const REJECTED_CHANGE_NOTICE_MS = 4_000;
-const REJECTED_CHANGE_NOTICE = { message: "Your last change couldn't be saved", level: "info" as const };
+const rejectedChangeNotice = (reason: string | null) => ({
+  message:
+    reason === "too-large"
+      ? "This app is full, so your last change couldn't be saved"
+      : "Your last change couldn't be saved",
+  level: "info" as const,
+});
 
 function MeetingAppLayout({
   app: App,
@@ -59,6 +66,7 @@ function MeetingAppLayout({
   syncFailed = false,
   onRetrySync,
   rejectedChangeAt = null,
+  rejectedChangeReason = null,
   frozen = false,
   documentsVersion,
 }: MeetingAppLayoutProps) {
@@ -131,7 +139,7 @@ function MeetingAppLayout({
           <div inert={frozen} className="contents">
             <App key={documentsVersion} />
           </div>
-          {noticeFor !== null && noticeFor === rejectedChangeAt ? <AdminNoticePill notice={REJECTED_CHANGE_NOTICE} compact /> : null}
+          {noticeFor !== null && noticeFor === rejectedChangeAt ? <AdminNoticePill notice={rejectedChangeNotice(rejectedChangeReason)} compact /> : null}
         </div>
       </div>
       <aside className="hidden lg:flex w-64 shrink-0 flex-col gap-3 overflow-y-auto overflow-x-visible px-1">

@@ -153,7 +153,7 @@ export function AppsProvider({
   const [roster, setRoster] = useState<AppUser[]>(() => participants ?? []);
   const [syncStatus, setSyncStatus] = useState<AppSyncStatus>("idle");
   const [docsVersion, setDocsVersion] = useState(0);
-  const [rejectedChangeAt, setRejectedChangeAt] = useState<number | null>(null);
+  const [rejectedChange, setRejectedChange] = useState<{ at: number; reason: string } | null>(null);
   const [isRebuilding, setIsRebuilding] = useState(false);
   const syncRunRef = useRef<SyncRun | null>(null);
   const disposedRef = useRef(false);
@@ -178,6 +178,7 @@ export function AppsProvider({
   const replicaIdsRef = useRef<Map<string, string>>(new Map());
   const staleAppsRef = useRef<Set<string>>(new Set());
   const unsentAppsRef = useRef<Set<string>>(new Set());
+  const claimsRef = useRef<Map<string, Set<string>>>(new Map());
   const socketRef = useRef<Socket | null>(null);
   const isReadOnlyRef = useRef(isReadOnly);
   const isAdminRef = useRef(Boolean(isAdmin));
@@ -238,10 +239,11 @@ export function AppsProvider({
     replicaIdsRef.current.clear();
     staleAppsRef.current.clear();
     unsentAppsRef.current.clear();
+    claimsRef.current.clear();
     serverActiveAppIdRef.current = null;
     lockedRef.current = false;
     setState({ activeAppId: null, locked: false });
-    setRejectedChangeAt(null);
+    setRejectedChange(null);
     setIsRebuilding(false);
     setDocsVersion((version) => version + 1);
   }, [stopSync]);
@@ -533,12 +535,12 @@ export function AppsProvider({
   );
 
   const rebuildApp = useCallback(
-    (appId: string, { quietly = false }: { quietly?: boolean } = {}) => {
+    (appId: string, refusal: { reason: string } | null) => {
       detachDoc(appId);
       staleAppsRef.current.add(appId);
       unsentAppsRef.current.delete(appId);
       setIsRebuilding(true);
-      if (!quietly) setRejectedChangeAt(Date.now());
+      if (refusal) setRejectedChange({ at: Date.now(), reason: refusal.reason });
       startSync(appId);
     },
     [detachDoc, startSync]
@@ -549,7 +551,7 @@ export function AppsProvider({
     const appId = serverActiveAppIdRef.current;
     const changedWhileBlocked = appId !== null && unsentAppsRef.current.has(appId);
     unsentAppsRef.current.clear();
-    if (changedWhileBlocked) rebuildApp(appId, { quietly: true });
+    if (changedWhileBlocked) rebuildApp(appId, null);
   }, [canWrite, rebuildApp]);
 
   const retrySync = useCallback(() => {
@@ -564,9 +566,12 @@ export function AppsProvider({
       lockedRef.current = next.locked;
       if (previous !== next.activeAppId) {
         stopSync();
-        setRejectedChangeAt(null);
+        setRejectedChange(null);
         setIsRebuilding(false);
-        if (previous) discardLocalApp(previous);
+        if (previous) {
+          discardLocalApp(previous);
+          claimsRef.current.delete(previous);
+        }
         if (next.activeAppId) startSync(next.activeAppId);
         else setSyncStatus("idle");
       } else {
@@ -630,7 +635,7 @@ export function AppsProvider({
       if (!appId || appId !== serverActiveAppIdRef.current) return;
       const replicaId = replicaIdsRef.current.get(appId);
       if (!replicaId || replicaId !== payload.replicaId) return;
-      rebuildApp(appId);
+      rebuildApp(appId, { reason: typeof payload.reason === "string" ? payload.reason : "refused" });
     };
 
     socket.on("apps:state", handleState);
@@ -754,9 +759,17 @@ export function AppsProvider({
     []
   );
 
+  const claim = useCallback((appId: string, key: string): boolean => {
+    const claims = claimsRef.current.get(appId) ?? new Set<string>();
+    if (claims.has(key)) return false;
+    claims.add(key);
+    claimsRef.current.set(appId, claims);
+    return true;
+  }, []);
+
   const documents = useMemo<AppDocuments>(
-    () => ({ version: docsVersion, doc: getDoc, awareness: getAwareness, current: currentDoc }),
-    [docsVersion, getDoc, getAwareness, currentDoc]
+    () => ({ version: docsVersion, doc: getDoc, awareness: getAwareness, current: currentDoc, claim }),
+    [docsVersion, getDoc, getAwareness, currentDoc, claim]
   );
 
   const contextValue = useMemo<AppsContextValue>(
@@ -772,7 +785,8 @@ export function AppsProvider({
       syncStatus,
       retrySync,
       documents,
-      rejectedChangeAt,
+      rejectedChangeAt: rejectedChange?.at ?? null,
+      rejectedChangeReason: rejectedChange?.reason ?? null,
       isRebuilding,
       user,
       participants: roster,
@@ -791,7 +805,7 @@ export function AppsProvider({
       syncStatus,
       retrySync,
       documents,
-      rejectedChangeAt,
+      rejectedChange,
       isRebuilding,
       user,
       roster,

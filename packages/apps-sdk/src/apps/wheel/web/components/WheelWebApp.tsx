@@ -99,7 +99,7 @@ const SoundOffIcon = () => (
 
 export function WheelWebApp() {
   const { doc, locked } = useAppDoc(APP_ID);
-  const { user, isAdmin, isReadOnly, participants } = useApps();
+  const { user, isAdmin, isReadOnly, participants, documents } = useApps();
   const { entries, spin, history, removeWinnerOnDone } = useWheelDocState(doc);
 
   const canEdit = !isReadOnly && (!locked || Boolean(isAdmin));
@@ -179,6 +179,7 @@ export function WheelWebApp() {
       const isSpinner = Boolean(user?.id) && user?.id === settled.spunById;
       const recorded = () => getHistory(doc).some((result) => result.spinId === settled.spinId);
       const finalizeResult = () => {
+        if (!documents.claim(APP_ID, `result:${settled.spinId}`)) return;
         recordResult(doc, {
           spinId: settled.spinId,
           label: winner.label,
@@ -218,7 +219,7 @@ export function WheelWebApp() {
         if (isSpinner && canEditRef.current) finalizeResult();
       }, flashable ? REVEAL_DELAY_MS : 120);
     },
-    [doc, user]
+    [doc, user, documents]
   );
 
   const rosterLabels = useMemo(() => {

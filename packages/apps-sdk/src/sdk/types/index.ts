@@ -38,6 +38,7 @@ export type AppDocuments = {
   doc: (appId: string) => Y.Doc;
   awareness: (appId: string) => Awareness;
   current: (appId: string) => Y.Doc | null;
+  claim: (appId: string, key: string) => boolean;
 };
 
 export type AppsUpdatePayload = {
@@ -97,6 +98,7 @@ export type AppsContextValue = {
   retrySync: () => void;
   documents: AppDocuments;
   rejectedChangeAt: number | null;
+  rejectedChangeReason: string | null;
   isRebuilding: boolean;
   user?: AppUser;
   participants?: AppUser[];

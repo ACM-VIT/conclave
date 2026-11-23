@@ -96,11 +96,13 @@ export function WatchWebApp() {
     videoMetadata?.videoId === videoId ? videoMetadata : null,
   );
 
+  const claimAutomaticWrite = useCallback((key: string) => documents.claim("watch", key), [documents]);
   const player = useSyncedPlayback({
     doc,
     videoId,
     readOnly: isReadOnly,
     liveHint,
+    claimAutomaticWrite,
   });
 
   const handleAdd = useCallback(
