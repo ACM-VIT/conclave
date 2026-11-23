@@ -12,7 +12,8 @@ const NO_ENTRIES: WebinarQaEntry[] = [];
 type LegacyQa = {
   /**
    * The list the old events gave this connection, or null while they have
-   * given it none. The socket drops it when its connection ends.
+   * given it none. The socket drops it when its connection ends, and empties
+   * it when webinar mode ends.
    */
   entries: WebinarQaEntry[] | null;
   /** Drops `entries`: the old events rest once the app's view is in. */
@@ -71,12 +72,14 @@ export const hasUnseenMeetingQuestion = ({
  * sending the old events to that connection then: it resumes them with a
  * whole list once the subscription ends.
  *
- * What is shown never goes back. While no source has a list, as when a
- * connection is coming back or a new subscription has started, the list last
- * shown stays until a source has one, which is newer. It never falls back to
- * an older source's list. A replacement of the view in parts shows nothing
- * until it is in: never the view before it, which the client dropped because
- * the new one may hold less.
+ * What is shown never goes back, and is only what the viewer may see now.
+ * While a connection or a subscription is coming back, no source has a list
+ * yet, and the list last shown stays until one does, which is newer. It
+ * never falls back to an older source's list. When Q&A is no longer the
+ * viewer's, nothing is kept: the server withdrawing the view clears it at
+ * once, and so does a regular meeting whose server does not offer the app.
+ * A replacement of the view in parts shows nothing until it is in: never the
+ * view before it, which the client dropped because the new one may hold less.
  */
 export function useMeetingQa({
   legacy,
@@ -121,14 +124,20 @@ export function useMeetingQa({
     if (forgetLegacy) forget();
   }, [forgetLegacy, forget]);
 
-  // The list a source has now, or null while none has one.
+  // The list a source has now, or null while a connection or subscription
+  // is coming back and none has one yet.
   const live: WebinarQaEntry[] | null = fromApp
     ? appEntries
     : awaitingNewView
       ? NO_ENTRIES
-      : isWebinar
-        ? legacy.entries
-        : null;
+      : qa.isRevoked
+        ? // Withdrawn: only a list the old events sent since can show.
+          (isWebinar ? legacy.entries : null) ?? NO_ENTRIES
+        : isWebinar
+          ? legacy.entries
+          : qa.isConnecting
+            ? null
+            : NO_ENTRIES;
   const [shown, setShown] = useState<WebinarQaEntry[]>(NO_ENTRIES);
   if (live !== null && live !== shown) setShown(live);
   const entries = live ?? shown;

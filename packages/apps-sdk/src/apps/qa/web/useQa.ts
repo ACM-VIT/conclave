@@ -263,6 +263,10 @@ export function useQa() {
      * it because the new one may hold rows this viewer can no longer see.
      */
     isReplacing: state.kind === "connecting" && state.replacing === true,
+    /** A view is on its way: the connection is new or coming back. */
+    isConnecting: state.kind === "connecting",
+    /** The server withdrew this viewer's view: Q&A is no longer theirs. */
+    isRevoked: state.kind === "revoked",
     questions,
     canAsk: ready?.actions.has("ask") ?? false,
     /** Asking is closed to this viewer only for want of a verified identity. */

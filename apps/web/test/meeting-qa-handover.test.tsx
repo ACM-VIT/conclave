@@ -5,9 +5,11 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { AuthorityProvider } from "@conclave/apps-sdk";
 import { AUTHORITY_EVENTS, type AuthoritySocket } from "@conclave/apps-sdk/authority";
 import { useMeetingQa } from "../src/app/hooks/useMeetingQa";
-import type { WebinarQaEntry } from "../src/app/lib/types";
+import type { WebinarQaChangedNotification, WebinarQaEntry } from "../src/app/lib/types";
+import { withQaChange, type WebinarQaList } from "../src/app/lib/webinarQaList";
 
 type Listener = (...args: unknown[]) => void;
+type LegacyQaProps = Parameters<typeof useMeetingQa>[0]["legacy"];
 type Sent = { event: string; payload: Record<string, unknown>; ack?: (reply: unknown) => void };
 
 const listeners = new Map<string, Set<Listener>>();
@@ -41,7 +43,7 @@ const fromOldEvents: WebinarQaEntry = {
   upvotes: 3,
   hasUpvoted: false,
 };
-const legacy = {
+const legacy: Omit<LegacyQaProps, "entries"> & { entries: WebinarQaList } = {
   entries: [fromOldEvents],
   submit: vi.fn(async () => ({ ok: true })),
   upvote: vi.fn(),
@@ -53,18 +55,24 @@ let qa: ReturnType<typeof useMeetingQa>;
 /** The ids each render of the hook showed, in order. */
 const renders: string[][] = [];
 
+/** What the socket was sent on the old events, as `useMeetSocket` keeps it. */
+let oldEvents: { change: (notification: WebinarQaChangedNotification) => void };
+
 /**
- * The hook over a list as the socket holds it. A list the hook is done with
- * is forgotten, and a list the socket is sent after that is a new one.
+ * The hook over a list as the socket holds it. A new `entries` is a whole
+ * list the socket was sent, a change goes through the socket's own rule,
+ * and a list the hook is done with is forgotten.
  */
 function Probe({ isWebinar, legacyQa }: { isWebinar: boolean; legacyQa: typeof legacy }) {
-  const [forgotten, setForgotten] = useState<WebinarQaEntry[] | null>(null);
+  const [list, setList] = useState<WebinarQaList>(legacyQa.entries);
+  const [sent, setSent] = useState<WebinarQaList>(legacyQa.entries);
+  if (legacyQa.entries !== sent) {
+    setSent(legacyQa.entries);
+    setList(legacyQa.entries);
+  }
+  oldEvents = { change: (notification) => setList((held) => withQaChange(held, notification)) };
   qa = useMeetingQa({
-    legacy: {
-      ...legacyQa,
-      entries: legacyQa.entries === forgotten ? null : legacyQa.entries,
-      forget: () => setForgotten(legacyQa.entries),
-    },
+    legacy: { ...legacyQa, entries: list, forget: () => setList(null) },
     isWebinar,
     currentUserId: "me",
   });
@@ -465,4 +473,67 @@ it("never shows a question the host hid again while the same connection subscrib
   expect(whileWaiting.entries.map((entry) => entry.id)).toEqual(["q1"]);
   expect(onTheNewList).toEqual(["q1"]);
   expect(qa.onSubmit).toBe(legacy.submit);
+});
+
+it("shows a host each question once their meeting becomes a webinar, with no list sent first", async () => {
+  // A server without the runtime: the client asks what it offers and is
+  // never answered.
+  await mount(false, { ...legacy, entries: null });
+  await act(async () => vi.advanceTimersByTimeAsync(8_000));
+  const inTheMeeting = qa;
+  // Webinar mode starts. A server that sends no list with it still sends
+  // each question as it comes.
+  await mount(true, { ...legacy, entries: null });
+  const fromTheQuestion = renders.length;
+  await act(async () =>
+    oldEvents.change({
+      roomId: "room",
+      entry: { ...fromOldEvents, id: "q9", question: "First question", status: "pending" },
+    }),
+  );
+
+  expect(inTheMeeting).toMatchObject({ offered: false, fromApp: false, entries: [] });
+  expect(qa.entries.map((entry) => entry.id)).toEqual(["q9"]);
+  expect(renders.slice(fromTheQuestion).length).toBeGreaterThan(0);
+  expect(renders.slice(fromTheQuestion).every((shown) => shown.join() === "q9")).toBe(true);
+});
+
+it("clears an attendee's list at once when webinar mode ends and the server withdraws Q&A", async () => {
+  await mount(true, { ...legacy, entries: [fromOldEvents] });
+  await offerQa();
+  await sendView();
+  const onTheApp = qa.entries.map((entry) => entry.id);
+  const subscription = last(AUTHORITY_EVENTS.subscribe)!.payload.subscription as string;
+
+  // The host turns webinar mode off with Q&A still on, and the server
+  // withdraws the attendee's view.
+  const fromTheRevoke = renders.length;
+  await act(async () =>
+    push({ kind: "revoke", subscription, generation: 1, serverNowMs: Date.now(), reason: "forbidden" }),
+  );
+  const atTheRevoke = qa;
+  await act(async () => vi.advanceTimersByTimeAsync(60_000));
+
+  expect(onTheApp).toEqual(["q1"]);
+  expect(atTheRevoke.entries).toEqual([]);
+  expect(renders.slice(fromTheRevoke).length).toBeGreaterThan(0);
+  expect(renders.slice(fromTheRevoke).every((shown) => shown.length === 0)).toBe(true);
+  expect(qa.entries).toEqual([]);
+});
+
+it("clears a meeting's list at once when the server withdraws Q&A", async () => {
+  await mount(false, { ...legacy, entries: null });
+  await offerQa();
+  await sendView();
+  const onTheApp = qa.entries.map((entry) => entry.id);
+  const subscription = last(AUTHORITY_EVENTS.subscribe)!.payload.subscription as string;
+
+  const fromTheRevoke = renders.length;
+  await act(async () =>
+    push({ kind: "revoke", subscription, generation: 1, serverNowMs: Date.now(), reason: "forbidden" }),
+  );
+
+  expect(onTheApp).toEqual(["q1"]);
+  expect(renders.slice(fromTheRevoke).every((shown) => shown.length === 0)).toBe(true);
+  expect(qa.entries).toEqual([]);
 });

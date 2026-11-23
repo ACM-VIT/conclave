@@ -77,6 +77,11 @@ import type {
   WebinarUpdateRequest,
 } from "../lib/types";
 import type { ParticipantAction } from "../lib/participant-reducer";
+import {
+  qaListForConfig,
+  qaListFromSnapshot,
+  withQaChange,
+} from "../lib/webinarQaList";
 import { createMeetError, isSystemUserId, normalizeDisplayName } from "../lib/utils";
 import { normalizeChatMessage } from "../lib/chat-commands";
 import {
@@ -8512,6 +8517,9 @@ export function useMeetSocket({
               "webinar:configChanged",
               (nextConfig: WebinarConfigSnapshot) => {
                 setWebinarConfig(nextConfig);
+                setWebinarQaEntries((previous) =>
+                  qaListForConfig(previous, nextConfig),
+                );
               },
             );
 
@@ -8574,11 +8582,7 @@ export function useMeetSocket({
               "webinar:qaSnapshot",
               (snapshot: WebinarQaSnapshot) => {
                 if (!isRoomEvent(snapshot.roomId)) return;
-                setWebinarQaEntries(
-                  [...(snapshot.entries ?? [])].sort(
-                    (a, b) => a.askedAt - b.askedAt,
-                  ),
-                );
+                setWebinarQaEntries(qaListFromSnapshot(snapshot));
               },
             );
 
@@ -8586,33 +8590,9 @@ export function useMeetSocket({
               "webinar:qaChanged",
               (notification: WebinarQaChangedNotification) => {
                 if (!isRoomEvent(notification.roomId)) return;
-                setWebinarQaEntries((previous) => {
-                  // A change is to a list this connection was sent. Without
-                  // one, the whole list that comes next already has it.
-                  if (previous === null) return null;
-                  if (notification.removedId) {
-                    return previous.filter(
-                      (entry) => entry.id !== notification.removedId,
-                    );
-                  }
-                  const entry = notification.entry;
-                  if (!entry) return previous;
-                  const existingIndex = previous.findIndex(
-                    (candidate) => candidate.id === entry.id,
-                  );
-                  if (existingIndex === -1) {
-                    return [...previous, entry].sort(
-                      (a, b) => a.askedAt - b.askedAt,
-                    );
-                  }
-                  const next = previous.slice();
-                  next[existingIndex] = {
-                    ...entry,
-                    hasUpvoted:
-                      entry.hasUpvoted ?? previous[existingIndex].hasUpvoted,
-                  };
-                  return next;
-                });
+                setWebinarQaEntries((previous) =>
+                  withQaChange(previous, notification),
+                );
               },
             );
 
