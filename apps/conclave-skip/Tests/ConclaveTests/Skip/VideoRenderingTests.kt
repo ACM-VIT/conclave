@@ -697,6 +697,12 @@ class VideoRenderingTests {
         assertLayout(VideoDrawLayout(287, 0, 225, 400, 1f, 1f, mirror = false, clearsSurface = true), layout)
     }
 
+    @Test fun aFitFrameIsBoxedForTheViewWhileTheBufferStillHasTheShapeOfTheViewsOldSize() {
+        val layout = VideoDrawLayoutPolicy.layout(frameWidth = 640, frameHeight = 480, surfaceWidth = 540, surfaceHeight = 1200,
+            viewAspect = 16f / 9f, fit = true, letterboxInBuffer = true, mirror = false)
+        assertLayout(VideoDrawLayout(67, 0, 405, 1200, 1f, 1f, mirror = false, clearsSurface = true), layout)
+    }
+
     @Test fun aFitFrameThatAlreadyMatchesTheSurfaceNeedsNoClear() {
         val layout = VideoDrawLayoutPolicy.layout(frameWidth = 640, frameHeight = 360, surfaceWidth = 320, surfaceHeight = 180,
             viewAspect = 0f, fit = true, letterboxInBuffer = true, mirror = false)
