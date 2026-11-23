@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AbortError,
   ClientClosedError,
@@ -20,6 +20,7 @@ import {
   installRedisCrashGuards,
   isRedisTransientError,
 } from "../server/redisErrors.js";
+import { Logger } from "../utilities/loggers.js";
 
 const nodeSocketError = (code: string, message: string): Error => {
   const error = new Error(message) as Error & { code: string; syscall: string };
@@ -105,62 +106,9 @@ describe("isRedisTransientError", () => {
 });
 
 describe("Redis crash guards", () => {
-  const runGuard = (
-    event: "unhandledRejection" | "uncaughtException",
-    errorExpression: string,
-  ) => {
-    const guardUrl = new URL("../server/redisErrors.ts", import.meta.url).href;
-    const code = `
-      import { TimeoutError, AbortError } from "redis";
-      import { installRedisCrashGuards } from ${JSON.stringify(guardUrl)};
-      installRedisCrashGuards();
-      const error = ${errorExpression};
-      ${event === "unhandledRejection"
-        ? "void Promise.reject(error);"
-        : "setImmediate(() => { throw error; });"}
-      setTimeout(() => console.log("SFU_STILL_RUNNING"), 25);
-    `;
-    return spawnSync(
-      process.execPath,
-      ["--import", "tsx", "--input-type=module", "-e", code],
-      {
-        cwd: fileURLToPath(new URL("..", import.meta.url)),
-        encoding: "utf8",
-        timeout: 10000,
-        env: { ...process.env, SFU_LOG_LEVEL: "warn" },
-      },
-    );
-  };
-
-  describe.each(["unhandledRejection", "uncaughtException"] as const)(
-    "%s",
-    (event) => {
-      it.each(["TimeoutError", "AbortError"])(
-        "keeps the process running after a real Redis %s",
-        (errorClass) => {
-          const result = runGuard(event, `new ${errorClass}()`);
-          expect(result.error).toBeUndefined();
-          expect(result.status).toBe(0);
-          expect(result.stdout).toContain("SFU_STILL_RUNNING");
-          expect(result.stderr).toContain("Suppressed");
-        },
-      );
-
-      it("still exits for an unrelated programming error", () => {
-        const result = runGuard(event, 'new TypeError("programming bug")');
-        expect(result.error).toBeUndefined();
-        expect(result.status).toBe(1);
-        expect(result.stdout).not.toContain("SFU_STILL_RUNNING");
-        expect(result.stderr).toContain("programming bug");
-      });
-    },
-  );
-});
-
-describe("Redis crash guard reporting", () => {
   // A process the guards listen on: the test raises its events and sees its
   // exits, and each report settles only when the test says so.
-  const guarded = (reporting: CrashGuardReporting) => {
+  const guarded = (reporting: CrashGuardReporting = {}) => {
     const target = Object.assign(new EventEmitter(), { exit: vi.fn((_code: number) => {}) });
     installRedisCrashGuards(reporting, target);
     return target;
@@ -175,8 +123,37 @@ describe("Redis crash guard reporting", () => {
   // Runs every promise callback already queued: the guard's chain is only those.
   const drain = () => new Promise((resolve) => setImmediate(resolve));
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   describe.each(["unhandledRejection", "uncaughtException"] as const)("%s", (event) => {
+    it.each([
+      ["TimeoutError", () => new TimeoutError()],
+      ["AbortError", () => new AbortError()],
+    ])("keeps the process running after a real Redis %s", async (_name, error) => {
+      const warn = vi.spyOn(Logger, "warn").mockImplementation(() => {});
+      const target = guarded();
+      target.emit(event, error());
+      await drain();
+
+      expect(target.exit).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("Suppressed"), expect.anything());
+    });
+
+    it("still exits for an unrelated programming error", () => {
+      const logged = vi.spyOn(Logger, "error").mockImplementation(() => {});
+      const target = guarded();
+      const error = new TypeError("programming bug");
+      target.emit(event, error);
+
+      expect(target.exit).toHaveBeenCalledTimes(1);
+      expect(target.exit).toHaveBeenCalledWith(1);
+      expect(logged).toHaveBeenCalledWith(expect.any(String), error);
+    });
+
     it("reports a fatal error before exiting", async () => {
+      vi.spyOn(Logger, "error").mockImplementation(() => {});
       const fatal = report();
       const target = guarded({ onFatal: fatal.onFatal });
       target.emit(event, new TypeError("programming bug"));
@@ -191,6 +168,7 @@ describe("Redis crash guard reporting", () => {
     });
 
     it("exits when the report fails", async () => {
+      vi.spyOn(Logger, "error").mockImplementation(() => {});
       const fatal = report();
       const target = guarded({ onFatal: fatal.onFatal });
       target.emit(event, new TypeError("programming bug"));
@@ -202,6 +180,7 @@ describe("Redis crash guard reporting", () => {
     });
 
     it("exits at once for a second fatal error while the first is reported", async () => {
+      vi.spyOn(Logger, "error").mockImplementation(() => {});
       const fatal = report();
       const target = guarded({ onFatal: fatal.onFatal });
       target.emit(event, new TypeError("programming bug"));
@@ -214,6 +193,7 @@ describe("Redis crash guard reporting", () => {
     });
 
     it("reports a suppressed Redis error and stays up", async () => {
+      vi.spyOn(Logger, "warn").mockImplementation(() => {});
       const onSuppressed = vi.fn();
       const fatal = report();
       const target = guarded({ onSuppressed, onFatal: fatal.onFatal });
@@ -226,4 +206,39 @@ describe("Redis crash guard reporting", () => {
       expect(target.exit).not.toHaveBeenCalled();
     });
   });
+
+  // The one check in a real process: with no process given, the guards
+  // listen on this one and exit it. A cold start through tsx takes a few
+  // seconds under load; the deadline is far past that.
+  const SMOKE_DEADLINE_MS = 60_000;
+
+  it(
+    "guards the real process by default: stays up through a Redis rejection, then exits for a programming error",
+    () => {
+      const guardUrl = new URL("../server/redisErrors.ts", import.meta.url).href;
+      const code = `
+        import { TimeoutError } from "redis";
+        import { installRedisCrashGuards } from ${JSON.stringify(guardUrl)};
+        installRedisCrashGuards();
+        void Promise.reject(new TimeoutError());
+        setImmediate(() => {
+          console.log("SFU_STILL_RUNNING");
+          throw new TypeError("programming bug");
+        });
+      `;
+      const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", code], {
+        cwd: fileURLToPath(new URL("..", import.meta.url)),
+        encoding: "utf8",
+        timeout: SMOKE_DEADLINE_MS,
+        env: { ...process.env, SFU_LOG_LEVEL: "warn" },
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain("SFU_STILL_RUNNING");
+      expect(result.stderr).toContain("Suppressed");
+      expect(result.stderr).toContain("programming bug");
+    },
+    SMOKE_DEADLINE_MS + 10_000,
+  );
 });
