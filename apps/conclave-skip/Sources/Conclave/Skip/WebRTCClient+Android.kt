@@ -3936,8 +3936,10 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             recovery.command?.let { enqueueWebcamTopologyCommand(it) }
             debugLog("[WebRTC] Failed to refresh webcam producer for bandwidth: ${error}")
         } finally {
-            videoBandwidthRefreshInFlight = false
-            if (generation == configurationGeneration) replayVideoSettingsRefreshIfChangedSince(settingsRevision)
+            if (generation == configurationGeneration) {
+                videoBandwidthRefreshInFlight = false
+                replayVideoSettingsRefreshIfChangedSince(settingsRevision)
+            }
         }
     }
 
@@ -4083,8 +4085,10 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             ScreenShareAndroidLog.warn("refresh", error)
             debugLog("[WebRTC] Failed to refresh screen producer for bandwidth: ${error}")
         } finally {
-            screenBandwidthRefreshInFlight = false
-            if (generation == configurationGeneration) replayVideoSettingsRefreshIfChangedSince(settingsRevision)
+            if (generation == configurationGeneration) {
+                screenBandwidthRefreshInFlight = false
+                replayVideoSettingsRefreshIfChangedSince(settingsRevision)
+            }
         }
     }
 
@@ -5620,8 +5624,10 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
                 )
                 disposeAudioTrack(nextTrack)
                 disposeAudioSource(nextSource)
-                audioProducerRouteRecoveryInFlight = false
-                if (generation == configurationGeneration) runPendingMicrophoneChanges()
+                if (generation == configurationGeneration) {
+                    audioProducerRouteRecoveryInFlight = false
+                    runPendingMicrophoneChanges()
+                }
             }
         }
     }

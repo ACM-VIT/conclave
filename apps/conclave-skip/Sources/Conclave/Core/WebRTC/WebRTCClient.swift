@@ -5026,8 +5026,13 @@ final class WebRTCClient: NSObject, ObservableObject {
             return
         }
 
+        let generation = configurationGeneration
         screenBandwidthRefreshInFlight = true
-        defer { screenBandwidthRefreshInFlight = false }
+        defer {
+            if generation == configurationGeneration {
+                screenBandwidthRefreshInFlight = false
+            }
+        }
         lastScreenProducerSignalingError = nil
 
         do {

@@ -26,7 +26,7 @@ import sun.misc.Unsafe
 
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [33])
-class VideoSettingsDuringProduceTests {
+class VideoProducerRefreshTests {
     private val unsafe: Unsafe = Unsafe::class.java.getDeclaredField("theUnsafe").let {
         it.isAccessible = true
         it.get(null) as Unsafe
@@ -51,8 +51,16 @@ class VideoSettingsDuringProduceTests {
     }
 
     class AckingSocket : io.socket.client.Socket(null, "/", null) {
+        @Volatile var holdNextClose = false
+        @Volatile var heldClose: io.socket.client.Ack? = null
         override fun emit(event: String?, vararg args: Any?): io.socket.emitter.Emitter {
-            (args.lastOrNull() as? io.socket.client.Ack)?.call(JSONObject())
+            val ack = args.lastOrNull() as? io.socket.client.Ack
+            if (event == "closeProducer" && holdNextClose) {
+                holdNextClose = false
+                heldClose = ack
+                return this
+            }
+            ack?.call(JSONObject())
             return this
         }
     }
@@ -60,6 +68,7 @@ class VideoSettingsDuringProduceTests {
     class RecordingSendTransport : SendTransport(0L) {
         var maxBitrates: CopyOnWriteArrayList<Int>? = null
         var firstAck: CountDownLatch? = null
+        var heldProduce = 1
         var idPrefix: String? = null
         override fun isClosed(): Boolean = false
         override fun getId(): String = "send-1"
@@ -74,7 +83,7 @@ class VideoSettingsDuringProduceTests {
         ): Producer {
             val produced = maxBitrates!!
             produced.add(encodings.orEmpty().maxOf { it.maxBitrateBps ?: 0 })
-            if (produced.size == 1) firstAck!!.await(5, TimeUnit.SECONDS)
+            if (produced.size == heldProduce) firstAck!!.await(5, TimeUnit.SECONDS)
             return (Unsafe::class.java.getDeclaredField("theUnsafe").let {
                 it.isAccessible = true
                 it.get(null) as Unsafe
@@ -82,7 +91,13 @@ class VideoSettingsDuringProduceTests {
         }
     }
 
-    private class Call(val media: WebRTCClient, val maxBitrates: CopyOnWriteArrayList<Int>, val firstAck: CountDownLatch)
+    private class Call(
+        val media: WebRTCClient,
+        val maxBitrates: CopyOnWriteArrayList<Int>,
+        val firstAck: CountDownLatch,
+        val transport: RecordingSendTransport,
+        val socket: AckingSocket,
+    )
 
     private fun field(name: String) = WebRTCClient::class.java.getDeclaredField(name).apply { isAccessible = true }
 
@@ -123,13 +138,14 @@ class VideoSettingsDuringProduceTests {
         val lane = SendTransportLane("TestVideoLane")
         val old = (unsafe.allocateInstance(FakeProducer::class.java) as FakeProducer).also { it.fakeId = "$kind-1" }
         val transport = unsafe.allocateInstance(RecordingSendTransport::class.java) as RecordingSendTransport
-        val call = Call(media, CopyOnWriteArrayList(), CountDownLatch(1))
+        val wire = unsafe.allocateInstance(AckingSocket::class.java) as AckingSocket
+        val call = Call(media, CopyOnWriteArrayList(), CountDownLatch(1), transport, wire)
         transport.maxBitrates = call.maxBitrates
         transport.firstAck = call.firstAck
+        transport.heldProduce = 1
         transport.idPrefix = kind
         val socket = unsafe.allocateInstance(SocketIOManager::class.java) as SocketIOManager
-        SocketIOManager::class.java.getDeclaredField("socket").apply { isAccessible = true }
-            .set(socket, unsafe.allocateInstance(AckingSocket::class.java))
+        SocketIOManager::class.java.getDeclaredField("socket").apply { isAccessible = true }.set(socket, wire)
         field("socketManager").set(media, socket)
         field("sendTransport").set(media, transport)
         field("sendTransportLane").set(media, lane)
@@ -197,5 +213,56 @@ class VideoSettingsDuringProduceTests {
 
         assertEquals(300_000, call.maxBitrates.last())
         assertEquals("screen-3", (field("screenProducer").get(call.media) as Producer).id)
+    }
+
+    private fun replaceSession(call: Call, kind: String) {
+        val generation = field("configurationGeneration")
+        generation.setLong(call.media, generation.getLong(call.media) + 1)
+        field("videoBandwidthRefreshInFlight").setBoolean(call.media, false)
+        field("screenBandwidthRefreshInFlight").setBoolean(call.media, false)
+        field(if (kind == "camera") "videoProducerBandwidthSignature" else "screenProducerBandwidthSignature").set(call.media, null)
+    }
+
+    private fun refresh(media: WebRTCClient, kind: String) {
+        CoroutineScope(Dispatchers.Main.immediate + SupervisorJob()).launch(start = CoroutineStart.UNDISPATCHED) {
+            if (kind == "camera") {
+                media.refreshLocalVideoProducerForBandwidthProfile(ConnectionQuality.good)
+            } else {
+                media.refreshLocalScreenProducerForBandwidthProfile(ConnectionQuality.good)
+            }
+        }
+    }
+
+    private fun assertAnEndedSessionsRefreshNeverFreesTheNextSessionsRefresh(kind: String) {
+        val call = publishingCall(kind)
+        call.firstAck.countDown()
+        call.transport.heldProduce = 2
+        val nextAck = CountDownLatch(1)
+        call.transport.firstAck = nextAck
+        call.socket.holdNextClose = true
+        refresh(call.media, kind)
+        pumpMainLooperUntil { call.socket.heldClose != null }
+        assertEquals(1, call.maxBitrates.size)
+
+        replaceSession(call, kind)
+        refresh(call.media, kind)
+        pumpMainLooperUntil { call.maxBitrates.size == 2 }
+        call.socket.heldClose!!.call(JSONObject())
+        settle()
+        refresh(call.media, kind)
+        nextAck.countDown()
+        settle()
+
+        assertEquals(2, call.maxBitrates.size)
+    }
+
+    @Test
+    fun anEndedSessionsWebcamRefreshNeverFreesTheNextSessionsRefresh() {
+        assertAnEndedSessionsRefreshNeverFreesTheNextSessionsRefresh("camera")
+    }
+
+    @Test
+    fun anEndedSessionsScreenRefreshNeverFreesTheNextSessionsRefresh() {
+        assertAnEndedSessionsRefreshNeverFreesTheNextSessionsRefresh("screen")
     }
 }
