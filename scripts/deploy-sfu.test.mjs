@@ -950,7 +950,7 @@ test("repair never restarts an instance whose status it cannot read", async () =
       journals: { "sfu-a": { phase: "candidate", lkg: "sha256:running", candidate: "sha256:target" } },
     });
     assert.equal(sfus["sfu-a"].recreates.length, 0, result.output);
-    assert.match(result.output, /sfu-a's \/status cannot be read, so it is not restarted/);
+    assert.match(result.output, /sfu-a cannot be rolled back without risking its calls: its \/status has not answered/);
   });
 });
 
@@ -988,13 +988,33 @@ test("a build that fails its last check after calls joined it is drained before 
   });
 });
 
-test("a drain whose reply is lost is undone, and the journal stays pending until it is", async () => {
+test("a drain whose reply is lost and that /status cannot confirm is undone, and the journal stays pending until it is", async () => {
+  await withSfus({ "sfu-a": { dropDrainReply: true }, "sfu-b": { rooms: 1 } }, async (sfus, events, context) => {
+    const shared = await sharedRun("deploy-drain-");
+    try {
+      context.beforeDrain = async () => {
+        sfus["sfu-a"].statusAnswers = false;
+      };
+      const result = await deploy(sfus, { env: shared.env });
+      assert.equal(result.code, 1, result.output);
+      assert.match(result.output, /Failed to drain sfu-a/);
+      assert.equal(sfus["sfu-a"].draining, false, "the drain the SFU applied was undone");
+      assert.equal(sfus["sfu-a"].recreates.length, 0);
+      const journal = JSON.parse(await readFile(path.join(shared.env.SFU_DEPLOY_STATE_DIR, "vm.sfu-a.journal.json"), "utf8"));
+      assert.equal(journal.phase, "drained");
+    } finally {
+      await rm(shared.dir, { recursive: true, force: true });
+    }
+  });
+});
+
+test("a drain whose reply is lost but that /status confirms counts as applied", async () => {
   await withSfus({ "sfu-a": { dropDrainReply: true }, "sfu-b": { rooms: 1 } }, async (sfus) => {
-    const result = await deploy(sfus);
-    assert.equal(result.code, 1, result.output);
-    assert.match(result.output, /Failed to drain sfu-a/);
-    assert.equal(sfus["sfu-a"].draining, false, "the drain the SFU applied was undone");
-    assert.equal(sfus["sfu-a"].recreates.length, 0);
+    const result = await deploy(sfus, { env: { SFU_DEPLOY_SERVICES: "sfu-a" } });
+    assert.equal(result.code, 0, result.output);
+    assert.equal(sfus["sfu-a"].image, "sha256:target");
+    assert.equal(sfus["sfu-a"].draining, false);
+    assert.deepEqual(cutRooms(sfus), cutRooms(sfus).map(() => 0));
   });
 });
 

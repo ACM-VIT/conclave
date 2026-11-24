@@ -18,7 +18,7 @@ struct SettingsTranscriptPoliciesTests {
         #expect(sections[3].rows == [.chatPreviews, .playVoiceMessages, .voiceMessages])
         #expect(sections[4].rows == [.connection, .alwaysShowControls, .haptics])
         #expect(sections[5].rows == [.name, .identity])
-        #expect(sections[6].rows == [.privacy, .version])
+        #expect(sections[6].rows == [.privacy, .crashReports, .version])
     }
 
     @Test func hostsGetTheHostSectionWithSoundsOnlyWhenTheCapabilityExists() {
@@ -40,7 +40,7 @@ struct SettingsTranscriptPoliciesTests {
             #expect(!rows.contains(inCall), "\(inCall)")
         }
         #expect(rows == [.noiseSuppression, .captions, .chatPreviews, .playVoiceMessages, .voiceMessages, .alwaysShowControls,
-                         .haptics, .privacy, .version])
+                         .haptics, .privacy, .crashReports, .version])
     }
 
     @Test func appScopeAddsTheR704RowsOnlyWithTheirCapabilities() {
@@ -64,11 +64,11 @@ struct SettingsTranscriptPoliciesTests {
         let caps = SettingsRowCapabilities.make(dataSaver: true, exportDiagnostics: true, hasAccountIdentity: true, isSignedIn: true)
         let ios = SettingsRowPolicy.sections(scope: .call, isAttendee: true, isHost: true, platform: .ios, capabilities: caps)
         #expect(ios.map { $0.section } == [.video, .general, .about])
-        #expect(SettingsRowPolicy.rows(ios) == [.dataSaver, .haptics, .privacy, .exportDiagnostics, .version])
+        #expect(SettingsRowPolicy.rows(ios) == [.dataSaver, .haptics, .privacy, .crashReports, .exportDiagnostics, .version])
         let autoHides = SettingsRowCapabilities.make(attendeeChromeAutoHides: true)
         let android = SettingsRowPolicy.rows(SettingsRowPolicy.sections(scope: .call, isAttendee: true, isHost: false,
                                                                        platform: .android, capabilities: autoHides))
-        #expect(android == [.alwaysShowControls, .privacy, .version])
+        #expect(android == [.alwaysShowControls, .privacy, .crashReports, .version])
     }
 
     @Test func routesMapDestinationsAndHostPages() {

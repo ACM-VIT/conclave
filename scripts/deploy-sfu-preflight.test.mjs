@@ -384,23 +384,33 @@ test(
   { skip: !hasCompose && "needs docker compose" },
   () => {
     const root = path.join(import.meta.dirname, "..");
-    const rendered = spawnSync("docker", ["compose", "-f", path.join(root, "docker-compose.sfu-staging.yml"), "config", "--format", "json"], {
-      cwd: mkdtempSync(path.join(tmpdir(), "staging-compose-")),
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        COMPOSE_PROJECT_NAME: "conclave-staging",
-        STAGING_REDIS_PASSWORD: "staging-pw",
-        SFU_SECRET: "staging-secret",
-        ANNOUNCED_IP: "127.0.0.1",
-        SFU_STAGING_PUBLIC_URL: "http://localhost:3033",
-        SFU_REQUIRE_REDIS_ADAPTER: "1",
-        // Production's Redis, inherited from the shell.
-        REDIS_URL: "redis://127.0.0.1:6379/0",
-        SFU_REDIS_URL: "redis://127.0.0.1:6379/0",
-        SFU_PERSISTENCE_REDIS_URL: "redis://127.0.0.1:6379/0",
-      },
-    });
+    const render = (extra) =>
+      spawnSync("docker", ["compose", "-f", path.join(root, "docker-compose.sfu-staging.yml"), "config", "--format", "json"], {
+        cwd: mkdtempSync(path.join(tmpdir(), "staging-compose-")),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          COMPOSE_PROJECT_NAME: "conclave-staging",
+          STAGING_REDIS_PASSWORD: "staging-pw",
+          SFU_SECRET: "staging-secret",
+          ANNOUNCED_IP: "127.0.0.1",
+          SFU_STAGING_PUBLIC_URL: "http://localhost:3033",
+          SFU_REQUIRE_REDIS_ADAPTER: "1",
+          // Production's Redis, inherited from the shell.
+          REDIS_URL: "redis://127.0.0.1:6379/0",
+          SFU_REDIS_URL: "redis://127.0.0.1:6379/0",
+          SFU_PERSISTENCE_REDIS_URL: "redis://127.0.0.1:6379/0",
+          BROWSER_SERVICE_URL: "http://localhost:3040",
+          TRANSCRIPT_WORKER_URL: "http://localhost:8788",
+          ...extra,
+        },
+      });
+    for (const missing of ["STAGING_BROWSER_SERVICE_URL", "STAGING_TRANSCRIPT_WORKER_URL"]) {
+      const refused = render({ STAGING_BROWSER_SERVICE_URL: "https://browser.staging.example", STAGING_TRANSCRIPT_WORKER_URL: "https://transcripts.staging.example", [missing]: "" });
+      assert.notEqual(refused.status, 0, `staging renders without ${missing}`);
+      assert.match(refused.stderr, new RegExp(missing));
+    }
+    const rendered = render({ STAGING_BROWSER_SERVICE_URL: "https://browser.staging.example", STAGING_TRANSCRIPT_WORKER_URL: "https://transcripts.staging.example" });
     assert.equal(rendered.status, 0, rendered.stderr);
     const compose = JSON.parse(rendered.stdout);
     const env = compose.services["sfu-staging"].environment;
@@ -409,5 +419,7 @@ test(
     }
     assert.equal(resolveSfuTargets({ compose, serviceNames: ["sfu-staging"] }).length, 1);
     assert.notEqual(compose.services["sfu-staging"].image, "conclave-sfu-a", "staging never retags production's image");
+    assert.equal(env.BROWSER_SERVICE_URL, "https://browser.staging.example");
+    assert.equal(env.TRANSCRIPT_WORKER_URL, "https://transcripts.staging.example");
   },
 );

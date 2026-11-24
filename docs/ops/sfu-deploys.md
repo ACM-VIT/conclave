@@ -105,27 +105,83 @@ instance's last-known-good image, so a plain `docker compose up` never builds
 the checkout. Tags are checked again once the run's repair has put instances
 back into service, before the first drain: on a first upgrade where an older
 deploy left every instance drained, none of them serves at the first check,
-so each is tagged from the image it serves on once it is back. A drain request that fails is undone, and the instance's journal
-leaves the drained phase only once its `/status` confirms the drain state it
-had before.
+so each is tagged from the image it serves on once it is back. A drain counts
+only once the instance's own `/status` says `draining: true`, whatever the
+reply to the drain request was; a drain that cannot be confirmed is undone,
+and the instance's journal leaves the drained phase only once its `/status`
+confirms the drain state it had before.
 
 Every one of these steps is written to the instance's deploy journal
 (`<state dir>/<project>.<service>.journal.json`: phase, candidate, last-known-good
-image, whether it was draining before) before it is taken, whole, fsynced and
-renamed into place. Every deploy starts by reading the journals and repairing
-what a run that died left behind, before it drains anything: an instance it
-drained goes back into service; one already serving its last-known-good image
-(or, mid-promotion, the build that passed) only has its journal finished; one
-with a candidate started goes back to its last-known-good image; and one
-promoting a build that passed finishes, or goes back if it will not serve.
-Nothing that may carry a call is restarted there: only a stopped instance, or
-one out of rotation that reports no rooms for `PLACEMENT_SETTLE_SECONDS`. One
-that takes meetings, or whose `/status` cannot be read while its container
-runs, is left for the deploy, which drains it the normal way. So a crash, a closed SSH session or a
-second deploy waiting on the lock always ends with every instance serving its
-last-known-good image or a build that passed its canary
-(`scripts/deploy-sfu-crash.test.mjs` kills a deploy at every step boundary to
-check it).
+image, the image it served before a promotion, whether it was draining before)
+before it is taken, whole, fsynced and renamed into place. Every deploy starts
+by repairing what a run that died left behind, by the table below, before it
+drains anything. An instance whose journal is still not idle after that is
+never drained or rebuilt: the deploy stops with the repair's exit code, and a
+rerun tries the repair again.
+
+## Recovery: the state machine
+
+Repair, for each instance whose journal is not idle:
+
+| Journal phase | What the instance shows | Action |
+| --- | --- | --- |
+| drained | container stopped or absent, a last-known-good image on record | Roll back. |
+| drained | container stopped or absent, no last-known-good image | Journal to idle; the deploy starts it fresh. |
+| drained | runs an image other than its last-known-good | Left as it is (exit 5); check it by hand. |
+| drained | runs its last-known-good, was already draining before the deploy | Journal to idle. |
+| drained | runs its last-known-good, was serving before the deploy | Undrain it; the journal goes to idle only once `/status` confirms `draining: false`, otherwise it stays drained (exit 1) and the next run tries again. |
+| candidate, rollback | serving its last-known-good image | Journal to idle. |
+| candidate, rollback | anything else | Roll back. |
+| passed, promoting | serving the build that passed its canary | Journal to idle; that build is its last-known-good. |
+| passed, promoting | serving the image it had before the promotion | Journal to idle on that image. |
+| passed, promoting | container stopped or absent, or still the passed build booted drained | Drain and wait, then promote; if the build will not serve, roll back. |
+| passed, promoting | anything else (the build ran undrained and is not serving) | Roll back. |
+
+Every rollback, in repair and after any failed step of a deploy, takes one
+path: the journal goes to `rollback` first; then drain and wait; then the
+last-known-good image starts serving, and the journal goes to idle once it
+serves by the serving rule. With no last-known-good image the instance is
+stopped instead (exit 5). A promotion also takes one path, in repair and in a
+deploy: journal `promoting`, move the service tag, start it serving, then the
+serving rule; any failure there is a rollback.
+
+Drain and wait, the only wait for an instance's calls:
+
+| Container | `/status` | Result |
+| --- | --- | --- |
+| stopped or absent | any | Empty at once: a container that does not run carries no calls. |
+| running | unreadable for `HEALTH_TIMEOUT_SECONDS` | Unknown, even for a container that booted drained (a call can still reach a drained candidate): exit 5, left as it is with its journal kept. |
+| running | `draining: false` | The drain is sent again; still not draining after `HEALTH_TIMEOUT_SECONDS` is unknown (exit 5). |
+| running | `draining: true`, 0 rooms from `PLACEMENT_SETTLE_SECONDS` after the last drain | Empty. |
+| running | `draining: true`, rooms left at `DRAIN_TIMEOUT_SECONDS` | Calls remain: exit 3, left drained with its journal kept. |
+
+The rules every path keeps, checked after every run by
+`scripts/deploy-sfu-fuzz.test.mjs`:
+
+1. No call is cut, unless `--force-drain` says so.
+2. Every instance has a running container on its last-known-good image or a
+   build that passed its canary, unless its journal says a rollback is under
+   way.
+3. An instance is undrained only when it runs its last-known-good image and
+   its journal is idle (or drained, undoing this deploy's own drain). The
+   recovery that puts an instance back when none takes meetings follows the
+   same rule.
+4. No drain wait runs out its deadline on a container that is not running.
+5. Every rollback is in the journal before its first step.
+
+The fuzz test runs fixed cases (the four recovery holes found in review)
+and seeded fault plans: one or two instances, a canary that passes or fails,
+crashes at random steps with reruns, containers that exit at boot, `/status`
+outages, public routes that answer 502, refused drains, and calls joining
+undrained instances at random. After the faults it reruns the deploy until it
+settles and checks that every instance serves what it should. A failure
+prints its seed and plan; rerun one with `DEPLOY_FUZZ_SEED=<seed>
+DEPLOY_FUZZ_RUNS=1 node --test scripts/deploy-sfu-fuzz.test.mjs`
+(`DEPLOY_FUZZ_RUNS` sets how many plans, `DEPLOY_FUZZ_CONCURRENCY` how many
+at once). `scripts/deploy-sfu-crash.test.mjs` kills a deploy at every step
+boundary in turn, including with a hand-run `docker compose up` and a second
+deploy waiting on the lock.
 
 An instance whose public URL does not reach it is not drained or rebuilt at
 all, and neither is any instance after it (exit 1, `Deploy stopped: clients
@@ -163,9 +219,9 @@ if it is hung, and rerun.
 | Code | Meaning | What to do |
 | --- | --- | --- |
 | 0 | Every instance is on the new commit and passed its canary. | Nothing. |
-| 3 | A meeting outlasted the drain deadline. That instance was put back into service untouched, or, if the call reached it after its canary, left drained on the new image. | Rerun later. Instances already deployed are skipped. |
+| 3 | A meeting outlasted the drain deadline. That instance was put back into service untouched; or, if the call reached it after its canary, or it needs a rollback with calls still on it, it was left drained, its journal kept. | Rerun later. Instances already deployed are skipped, and a pending rollback finishes once its calls end. |
 | 4 | The canary failed. The instance runs the image it last served calls on, healthy and taking meetings. | Read the canary lines in the log, fix forward, deploy again. |
-| 5 | The canary failed and the instance could not be brought back: it is down or stopped. | Act now: read the log, start it on a known-good release (`--rollback`, or fix forward and deploy). |
+| 5 | The canary failed and the instance could not be brought back: it is down or stopped, or it could not be rolled back without risking its calls (its `/status` does not answer, or it will not stay drained) and was left as it is with its journal kept. | Act now: read the log. Fix what stopped it (its `/status`, its route), then rerun, which finishes the rollback; or start it on a known-good release (`--rollback`, or fix forward and deploy). |
 | 1 | Another instance is not serving, a public URL does not reach its instance, or anything else (preflight, build, Docker). Nothing after the failing step was drained. | Read the log. For a public URL, follow the steps above: fix the route, pass `--preflight-only`, rerun. |
 
 During an exit 3, 4 or 5 the two instances can run different commits. That is the
@@ -226,6 +282,10 @@ It fails if either side goes more than 2 s without audio or is disconnected.
 
 ## Known limits
 
+- A running container whose `/status` does not answer is never restarted, so
+  a build that hangs at startup without exiting is left as it is (exit 5,
+  rollback kept in its journal). Stop that container (`docker compose stop
+  <service>`); the next run finds it not running and rolls it back.
 - The canary reaches the transports on loopback, so it proves the media path
   inside the SFU, not the public UDP route. The preflight and the NSG rules
   cover that route.

@@ -12,7 +12,13 @@ export const jobs = {
       { dir: ".", script: "lint:packages" },
       { dir: "apps/web", script: "lint" },
       { dir: ".", script: "konsistent" },
+    ],
+  },
+  deploy: {
+    budgetSeconds: 420,
+    tasks: [
       { dir: ".", script: "test:deploy-crash" },
+      { dir: ".", script: "test:deploy-fuzz" },
     ],
   },
   typecheck: {

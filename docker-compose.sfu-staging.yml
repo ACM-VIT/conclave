@@ -33,6 +33,8 @@ services:
       REDIS_URL: *staging-redis-url
       SFU_REDIS_URL: *staging-redis-url
       SFU_PERSISTENCE_REDIS_URL: *staging-redis-url
+      BROWSER_SERVICE_URL: "${STAGING_BROWSER_SERVICE_URL:?set STAGING_BROWSER_SERVICE_URL in .env to staging's own shared-browser service}"
+      TRANSCRIPT_WORKER_URL: "${STAGING_TRANSCRIPT_WORKER_URL:?set STAGING_TRANSCRIPT_WORKER_URL in .env to staging's own transcript worker}"
     # Its own state directory, so a staging build can never open the
     # production SQLite file.
     volumes:

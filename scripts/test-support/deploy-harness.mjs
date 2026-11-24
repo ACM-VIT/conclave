@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -51,10 +52,21 @@ export const startSfu = async (
     publicRoute = false,
     onRecreate = null,
     dropDrainReply = false,
+    refuseDrain = false,
+    id = instanceId,
   } = {},
 ) => {
+  const journal = () => {
+    try {
+      return JSON.parse(readFileSync(path.join(context.stateDir ?? "", `vm.${instanceId}.journal.json`), "utf8"));
+    } catch {
+      return {};
+    }
+  };
   const sfu = {
     instanceId,
+    id,
+    refuseDrain,
     rooms,
     draining,
     statusAnswers,
@@ -69,6 +81,8 @@ export const startSfu = async (
     failRecreate,
     drains: [],
     recreates: [],
+    stops: [],
+    undrains: [],
   };
   const server = createServer(async (req, res) => {
     let body = "";
@@ -95,11 +109,13 @@ export const startSfu = async (
     if (url.pathname === "/health") return sfu.healthy ? json({ status: "healthy" }) : json({ status: "starting" }, 503);
     if (url.pathname === "/status") {
       if (!sfu.statusAnswers) return json({ error: "unavailable" }, 503);
-      return json({ instanceId, region: "local", healthy: sfu.statusHealthy, rooms: sfu.rooms, draining: sfu.draining });
+      return json({ instanceId: id, region: "local", healthy: sfu.statusHealthy, rooms: sfu.rooms, draining: sfu.draining });
     }
     if (url.pathname === "/drain" && req.method === "POST") {
       const request = JSON.parse(body || "{}");
       if (request.draining && context.beforeDrain) await context.beforeDrain();
+      if (sfu.refuseDrain) return json({ error: "drain refused" }, 500);
+      if (request.draining === false) sfu.undrains.push({ image: sfu.image, ...journal() });
       sfu.drains.push(request);
       context.events.push(`drain ${instanceId}`);
       sfu.draining = request.draining === true;
@@ -113,11 +129,13 @@ export const startSfu = async (
     }
     if (url.pathname === "/stand-in/stop") {
       context.events.push(`stop ${instanceId}`);
+      sfu.stops.push({ roomsCut: ["exited", "crash-looping"].includes(sfu.container) ? 0 : sfu.rooms });
+      sfu.rooms = 0;
       sfu.container = "exited";
       return json({ ok: true });
     }
     if (url.pathname === "/stand-in/recreate") {
-      sfu.recreates.push({ roomsCut: sfu.rooms });
+      sfu.recreates.push({ roomsCut: ["exited", "crash-looping"].includes(sfu.container) ? 0 : sfu.rooms, draining: sfu.draining, bootDrained: sfu.bootDrained, from: sfu.image, to: url.searchParams.get("image"), ...journal() });
       context.events.push(`recreate ${instanceId}`);
       sfu.rooms = 0;
       if (sfu.failRecreate === sfu.recreates.length) {
@@ -146,7 +164,7 @@ export const startSfu = async (
   let proxy = null;
   if (publicRoute) {
     proxy = createServer(async (req, res) => {
-      if (sfu.publicDown) return res.writeHead(502).end("bad gateway");
+      if (sfu.publicDown || (sfu.publicFailures > 0 && sfu.publicFailures--)) return res.writeHead(502).end("bad gateway");
       const answer = await fetch("http://127.0.0.1:" + sfu.port + req.url, { headers: req.headers }).catch(() => null);
       if (!answer) return req.socket.destroy();
       res.writeHead(answer.status, { "content-type": "application/json" }).end(await answer.text());
@@ -183,7 +201,7 @@ const service = (name, sfu, index) => ({
     // preflight rejects.
     RTC_MIN_PORT: process.env.DEPLOY_TEST_OVERLAP ? "41001" : String(40000 + index * 1000),
     RTC_MAX_PORT: process.env.DEPLOY_TEST_OVERLAP ? "42000" : String(40999 + index * 1000),
-    SFU_INSTANCE_ID: name,
+    SFU_INSTANCE_ID: sfu.id ?? name,
     SFU_PORT: String(sfu.port),
     SFU_PUBLIC_URL: "http://127.0.0.1:" + sfu.port,
     SFU_REDIS_URL: "redis://127.0.0.1:6379/0",
@@ -396,7 +414,7 @@ export const deploy = async (
     const env = {
       ...process.env,
       PATH: `${bin}:${hostPath}`,
-      DEPLOY_TEST_SFUS: JSON.stringify(Object.fromEntries(Object.entries(sfus).map(([n, s]) => [n, { port: s.port }]))),
+      DEPLOY_TEST_SFUS: JSON.stringify(Object.fromEntries(Object.entries(sfus).map(([n, s]) => [n, { port: s.port, id: s.id }]))),
       DEPLOY_TEST_DOCKER_LOG: dockerLog,
       SFU_DEPLOY_STATE_DIR: path.join(root, "state"),
       DRAIN_TIMEOUT_SECONDS: "2",
@@ -438,7 +456,7 @@ export const composeUpByHand = async (sfus, { tags, dir, env: extra = {} }, name
   const docker = path.join(dir, "docker");
   await writeFile(docker, dockerStandIn, { mode: 0o755 });
   const log = path.join(dir, "docker.log");
-  const env = { ...process.env, ...extra, DEPLOY_TEST_SFUS: JSON.stringify(Object.fromEntries(Object.entries(sfus).map(([n, s]) => [n, { port: s.port }]))), DEPLOY_TEST_DOCKER_LOG: log, DEPLOY_TEST_DOCKER_TAGS: tags };
+  const env = { ...process.env, ...extra, DEPLOY_TEST_SFUS: JSON.stringify(Object.fromEntries(Object.entries(sfus).map(([n, s]) => [n, { port: s.port, id: s.id }]))), DEPLOY_TEST_DOCKER_LOG: log, DEPLOY_TEST_DOCKER_TAGS: tags };
   for (const variable of Object.keys(env)) if (variable.startsWith("SFU_IMAGE_") || variable === "SFU_START_DRAINING") delete env[variable];
   await run(docker, ["compose", "up", "-d", name], { env });
 };
@@ -456,4 +474,4 @@ export const withSfus = async (specs, body) => {
 
 export const passedPreflight = (result) => assert.match(result.output, /SFU deployment preflight passed/, result.output);
 
-export const cutRooms = (sfus) => Object.values(sfus).flatMap((sfu) => sfu.recreates.map((r) => r.roomsCut));
+export const cutRooms = (sfus) => Object.values(sfus).flatMap((sfu) => [...sfu.recreates, ...sfu.stops].map((r) => r.roomsCut));
