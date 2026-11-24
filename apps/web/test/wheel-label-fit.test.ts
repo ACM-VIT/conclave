@@ -8,7 +8,9 @@ import {
   fitSingleLabel,
   fitWheelLabels,
   isLabelFlipped,
+  labelAngle,
   wheelLabelGeometry,
+  type FittedLabel,
   type LabelGeometry,
   type MeasureText,
 } from "../../../packages/apps-sdk/src/apps/wheel/web/labelFit";
@@ -24,6 +26,16 @@ const fitsInSlice = (text: string, fontSize: number, shape: LabelGeometry): bool
   const innerEnd = shape.outerRadius - measure(text) * fontSize;
   const halfWidthAtInnerEnd = innerEnd * Math.tan(Math.PI / shape.count);
   return innerEnd >= shape.innerRadius - 1e-9 && halfWidthAtInnerEnd >= fontSize / 2;
+};
+
+const fitsUpright = (label: FittedLabel, fontSize: number, shape: LabelGeometry): boolean => {
+  if (!label.numbered) return false;
+  const reach = (fontSize * Math.hypot(measure(label.text), 1)) / 2;
+  return (
+    label.radius + reach <= shape.outerRadius + 1e-9 &&
+    label.radius - reach >= shape.innerRadius - 1e-9 &&
+    label.radius * Math.sin(Math.PI / shape.count) >= reach - 1e-9
+  );
 };
 
 const restingRotation = (winnerIndex: number, count: number, jitter = 0.5): number =>
@@ -106,7 +118,8 @@ describe("wheel label fitting", () => {
     const names = [...twelve.slice(0, 11), `\u0915${"\u094D\u0915".repeat(23)}`];
     const fitted = fitWheelLabels(names, geometry(12), measure);
     expect(fitted.labels.slice(0, 11).map((label) => label?.text)).toEqual(names.slice(0, 11));
-    expect(fitted.labels[11]).toEqual({ text: "12", truncated: true, numbered: true });
+    expect(fitted.labels[11]).toMatchObject({ text: "12", truncated: true, numbered: true });
+    expect(fitsUpright(fitted.labels[11]!, fitted.fontSize, geometry(12))).toBe(true);
     expect(fitted.labels.slice(0, 11).every((label) => label?.numbered === false)).toBe(true);
   });
 
@@ -146,7 +159,8 @@ describe("wheel label coverage", () => {
     const names = [...Array.from({ length: 63 }, () => "A"), CONJUNCT];
     const fitted = fitWheelLabels(names, geometry(64, 700), measure);
     expect(fitted.labels.every((label) => label !== null)).toBe(true);
-    expect(fitted.labels[63]).toEqual({ text: "64", truncated: true, numbered: true });
+    expect(fitted.labels[63]).toMatchObject({ text: "64", truncated: true, numbered: true });
+    expect(fitsUpright(fitted.labels[63]!, fitted.fontSize, geometry(64, 700))).toBe(true);
   });
 
   it("never leaves a slice blank while other slices are labelled", () => {
@@ -177,7 +191,10 @@ describe("wheel label coverage", () => {
       if (shown === 0) continue;
       expect(fitted.fontSize * shape.pxPerUnit).toBeGreaterThanOrEqual(shape.minScreenPx - 1e-9);
       fitted.labels.forEach((label, index) => {
-        expect(fitsInSlice(label!.text, fitted.fontSize, shape), `run ${run}: slice ${index + 1}`).toBe(true);
+        const fits = label!.numbered
+          ? fitsUpright(label!, fitted.fontSize, shape)
+          : fitsInSlice(label!.text, fitted.fontSize, shape);
+        expect(fits, `run ${run}: slice ${index + 1}`).toBe(true);
         if (label!.numbered) expect(label!.text).toBe(String(index + 1));
       });
       if (fitted.labels.some((label) => label?.numbered)) numberedRuns += 1;
@@ -372,6 +389,18 @@ describe("wheel label orientation", () => {
     }
     expect(isLabelFlipped(0, 1, 0)).toBe(false);
     expect(isLabelFlipped(0, 1, 180)).toBe(true);
+  });
+
+  it("draws every name within 90 degrees of upright and every list number upright", () => {
+    const fromUpright = (angle: number): number => ((((angle % 360) + 540) % 360) - 180);
+    for (const count of [3, 4, 6, 12, 40, 64]) {
+      for (let rotation = -360; rotation < 720; rotation += 7.3) {
+        for (let index = 0; index < count; index += 1) {
+          expect(Math.abs(fromUpright(rotation + labelAngle(index, count, rotation, false)))).toBeLessThanOrEqual(90);
+          expect(Math.abs(fromUpright(rotation + labelAngle(index, count, rotation, true)))).toBeLessThan(1e-9);
+        }
+      }
+    }
   });
 
   it("leaves the winner at the pointer unflipped, so it reads level", () => {

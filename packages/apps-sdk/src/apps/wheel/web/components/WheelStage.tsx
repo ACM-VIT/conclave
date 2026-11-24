@@ -21,7 +21,9 @@ import {
   fitSingleLabel,
   fitWheelLabels,
   isLabelFlipped,
+  labelAngle,
   labelFlipSignature,
+  uprightAngle,
   wheelLabelGeometry,
   type MeasureText,
 } from "../labelFit";
@@ -248,6 +250,13 @@ export function WheelStage({
       flapper.setAttribute(
         "transform",
         `rotate(${flapperRef.current.angle} 0 ${-POINTER_BASE})`
+      );
+    }
+    const numbers = labelGroupRef.current?.querySelectorAll("[data-wheel-number]") ?? [];
+    for (const number of numbers) {
+      number.setAttribute(
+        "transform",
+        `rotate(${uprightAngle(rotationRef.current)} ${number.getAttribute("x")} ${number.getAttribute("y")})`
       );
     }
   }, []);
@@ -477,7 +486,7 @@ export function WheelStage({
       const label = fitted.labels[index];
       if (!label) return null;
       const mid = sweep * (index + 0.5);
-      const [x, y] = polar(mid, WHEEL_RADIUS - LABEL_PAD);
+      const [x, y] = polar(mid, label.numbered ? label.radius : WHEEL_RADIUS - LABEL_PAD);
       const flipped = isLabelFlipped(index, count, flipRotation);
       const highlighted = highlightIndex === index;
       return (
@@ -485,8 +494,9 @@ export function WheelStage({
           key={entry.id}
           x={x}
           y={y}
-          transform={`rotate(${flipped ? mid + 90 : mid - 90} ${x} ${y})`}
-          textAnchor={flipped ? "start" : "end"}
+          data-wheel-number={label.numbered ? "" : undefined}
+          transform={`rotate(${labelAngle(index, count, flipRotation, label.numbered)} ${x} ${y})`}
+          textAnchor={label.numbered ? "middle" : flipped ? "start" : "end"}
           dominantBaseline="central"
           fontSize={fitted.fontSize}
           fontWeight={600}

@@ -20,11 +20,9 @@ export type LabelGeometry = {
   minScreenPx: number;
 };
 
-export type FittedLabel = {
-  text: string;
-  truncated: boolean;
-  numbered: boolean;
-};
+export type FittedLabel =
+  | { text: string; truncated: boolean; numbered: false }
+  | { text: string; truncated: true; numbered: true; radius: number };
 
 export type FittedLabels = {
   fontSize: number;
@@ -112,13 +110,31 @@ const truncateToWidth = (
   };
 };
 
+const uprightReach = (unitWidth: number): number => Math.hypot(unitWidth, THICKNESS) / 2;
+
+const largestUprightSize = (unitWidth: number, geometry: LabelGeometry): number => {
+  const reach = uprightReach(unitWidth);
+  const sinHalf = Math.sin(Math.PI / geometry.count);
+  const byWedge = (geometry.outerRadius * sinHalf - EDGE_GAP) / (reach * (1 + sinHalf));
+  const byDepth = (geometry.outerRadius - geometry.innerRadius) / (2 * reach);
+  return Math.min(geometry.maxFontSize, byWedge, byDepth);
+};
+
 const numberedLabel = (
   index: number,
-  widthAtSize: (text: string) => number,
-  limit: number
+  fontSize: number,
+  geometry: LabelGeometry,
+  measure: MeasureText
 ): FittedLabel | null => {
   const text = String(index + 1);
-  return widthAtSize(text) <= limit ? { text, truncated: true, numbered: true } : null;
+  const unitWidth = measure(text);
+  if (fontSize > largestUprightSize(unitWidth, geometry)) return null;
+  return {
+    text,
+    truncated: true,
+    numbered: true,
+    radius: geometry.outerRadius - fontSize * uprightReach(unitWidth),
+  };
 };
 
 const fitAtSize = (
@@ -131,7 +147,8 @@ const fitAtSize = (
   const widthAtSize = (text: string) => measure(text) * fontSize;
   return labels.map(
     (label, index) =>
-      truncateToWidth(label, widthAtSize, limit) ?? numberedLabel(index, widthAtSize, limit)
+      truncateToWidth(label, widthAtSize, limit) ??
+      numberedLabel(index, fontSize, geometry, measure)
   );
 };
 
@@ -164,7 +181,7 @@ export const fitWheelLabels = (
   const needed = Math.min(
     fontSize,
     ...fitted.flatMap((label, index) =>
-      label ? [] : [largestFittingSize(measure(String(index + 1)), geometry)]
+      label ? [] : [largestUprightSize(measure(String(index + 1)), geometry)]
     )
   );
   if (needed < minFontSize) return hidden(fontSize);
@@ -185,6 +202,19 @@ export const isLabelFlipped = (
   const direction =
     count === 1 ? SINGLE_LABEL_DIRECTION : (360 / count) * (index + 0.5);
   return mod360(direction + rotation) >= 180;
+};
+
+export const uprightAngle = (rotation: number): number => -mod360(rotation);
+
+export const labelAngle = (
+  index: number,
+  count: number,
+  rotation: number,
+  numbered: boolean
+): number => {
+  if (numbered) return uprightAngle(rotation);
+  const middle = (360 / count) * (index + 0.5);
+  return isLabelFlipped(index, count, rotation) ? middle + 90 : middle - 90;
 };
 
 export const labelFlipSignature = (rotation: number, count: number): string => {
