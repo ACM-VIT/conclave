@@ -209,24 +209,21 @@ const checkProductionMode = (env, service, errors) => {
   }
 };
 
-// Mirrors how the stores resolve their files (packages/sfu/server/scheduling*.ts)
+// Mirrors how the control-plane store resolves its file (packages/sfu/server/controlPlane/open.ts)
 // and the image defaults in packages/sfu/Dockerfile. The SFU's root filesystem
 // is read-only, so a store off a writable mount stops it at startup.
 const SFU_WORKDIR = "/app/packages/sfu";
 const IMAGE_SQLITE_PATH = "/var/lib/conclave/conclave.sqlite";
-const STORES = [
-  { sqlite: "SCHEDULING_SQLITE_PATH", mode: "SCHEDULING_PERSISTENCE", json: "SCHEDULING_PATH", jsonDefault: "/var/lib/conclave/recordings/scheduling.json" },
-  { sqlite: "SCHEDULED_MEETINGS_SQLITE_PATH", mode: "SCHEDULED_MEETINGS_PERSISTENCE", json: "SCHEDULED_MEETINGS_PATH", jsonDefault: "/var/lib/conclave/recordings/scheduled-meetings.json" },
-  { sqlite: "SCHEDULED_WEBINARS_SQLITE_PATH", mode: "SCHEDULED_WEBINARS_PERSISTENCE", json: "SCHEDULED_WEBINARS_PATH", jsonDefault: "/var/lib/conclave/recordings/scheduled-webinars.json" },
-];
+const IMAGE_JSON_PATH = "/var/lib/conclave/recordings/control-plane.json";
+const LEGACY_MODES = ["SCHEDULING_PERSISTENCE", "SCHEDULED_MEETINGS_PERSISTENCE", "SCHEDULED_WEBINARS_PERSISTENCE"];
 
-const storeFile = (env, store) => {
-  const mode = String(env[store.mode] || "").trim().toLowerCase();
-  if (mode === "json" || mode === "file") {
-    return [store.json, String(env[store.json] || "").trim() || store.jsonDefault];
-  }
-  const own = String(env[store.sqlite] || "").trim();
-  if (own) return [store.sqlite, own];
+const isJsonMode = (value) => value === "json" || value === "file";
+
+const storeFile = (env) => {
+  const explicit = String(env.CONTROL_PLANE_PERSISTENCE || "").trim().toLowerCase();
+  const legacy = LEGACY_MODES.map((name) => String(env[name] || "").trim().toLowerCase());
+  const json = explicit ? isJsonMode(explicit) : legacy.every(isJsonMode);
+  if (json) return ["CONTROL_PLANE_JSON_PATH", String(env.CONTROL_PLANE_JSON_PATH || "").trim() || IMAGE_JSON_PATH];
   return ["CONCLAVE_SQLITE_PATH", String(env.CONCLAVE_SQLITE_PATH || "").trim() || IMAGE_SQLITE_PATH];
 };
 
@@ -234,17 +231,13 @@ const checkStorePaths = (definition, env, service, errors) => {
   const mounts = (Array.isArray(definition.volumes) ? definition.volumes : [])
     .filter((volume) => volume && (volume.type === "bind" || volume.type === "volume") && !volume.read_only)
     .map((volume) => posix.normalize(String(volume.target)));
-  const problems = new Set();
-  for (const store of STORES) {
-    const [variable, file] = storeFile(env, store);
-    const path = posix.resolve(SFU_WORKDIR, file);
-    if (!mounts.some((target) => path === target || path.startsWith(`${target}/`))) {
-      problems.add(
-        `${service}: ${variable} resolves to ${path}, which is not on a writable volume mount (${mounts.join(", ") || "none"}). The SFU's root filesystem is read-only, so it would refuse to start.`,
-      );
-    }
+  const [variable, file] = storeFile(env);
+  const path = posix.resolve(SFU_WORKDIR, file);
+  if (!mounts.some((target) => path === target || path.startsWith(`${target}/`))) {
+    errors.push(
+      `${service}: ${variable} resolves to ${path}, which is not on a writable volume mount (${mounts.join(", ") || "none"}). The SFU's root filesystem is read-only, so it would refuse to start.`,
+    );
   }
-  errors.push(...problems);
 };
 
 const isRequiredRedisMode = (value) =>

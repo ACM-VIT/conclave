@@ -515,9 +515,13 @@ test("every store path must be on a writable volume mount", () => {
   assert.match(storePathErrors({ CONCLAVE_SQLITE_PATH: "/var/lib/conclave/conclave.sqlite" }).join("\n"), /CONCLAVE_SQLITE_PATH resolves to \/var\/lib\/conclave\/conclave\.sqlite/);
   // Without CONCLAVE_SQLITE_PATH the image default applies, which is off the volume.
   assert.match(storePathErrors({ CONCLAVE_SQLITE_PATH: undefined }).join("\n"), /not on a writable volume mount/);
-  assert.match(storePathErrors({ SCHEDULED_WEBINARS_SQLITE_PATH: "/tmp/webinars.sqlite" }).join("\n"), /SCHEDULED_WEBINARS_SQLITE_PATH resolves to \/tmp\/webinars\.sqlite/);
-  assert.match(storePathErrors({ SCHEDULING_PERSISTENCE: "json", SCHEDULING_PATH: "/app/data/scheduling.json" }).join("\n"), /SCHEDULING_PATH resolves to/);
-  assert.deepEqual(storePathErrors({ SCHEDULING_PERSISTENCE: "json" }), []);
+  assert.match(storePathErrors({ CONTROL_PLANE_PERSISTENCE: "json", CONTROL_PLANE_JSON_PATH: "/app/data/control-plane.json" }).join("\n"), /CONTROL_PLANE_JSON_PATH resolves to \/app\/data\/control-plane\.json/);
+  assert.deepEqual(storePathErrors({ CONTROL_PLANE_PERSISTENCE: "json" }), []);
+  assert.deepEqual(
+    storePathErrors({ SCHEDULING_PERSISTENCE: "json", SCHEDULED_MEETINGS_PERSISTENCE: "json", SCHEDULED_WEBINARS_PERSISTENCE: "json", CONCLAVE_SQLITE_PATH: "/tmp/unused.sqlite" }),
+    [],
+  );
+  assert.deepEqual(storePathErrors({ SCHEDULED_WEBINARS_SQLITE_PATH: "/tmp/webinars.sqlite" }), []);
   assert.match(
     storePathErrors({}, [{ type: "bind", source: "/srv/recordings", target: "/var/lib/conclave/recordings", read_only: true }]).join("\n"),
     /not on a writable volume mount/,
