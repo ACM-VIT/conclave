@@ -3,6 +3,7 @@ import { readdir, rm } from "node:fs/promises";
 import path from "node:path";
 import nextEnv from "@next/env";
 import { readBuildVersion, writeChunkManifest } from "./posthog-chunk-manifest.mjs";
+import { sourceMapUploadRequested } from "./posthog-sourcemaps-policy.mjs";
 import { groupAlive, signalGroup } from "./process-group.mjs";
 
 // Runs after the OpenNext build, on the exact files wrangler deploys:
@@ -12,9 +13,7 @@ const assetsDir = path.join(process.cwd(), ".open-next/assets");
 const staticDir = path.join(assetsDir, "_next/static");
 // The same .env files `next build` read when it decided to build the maps.
 nextEnv.loadEnvConfig(process.cwd());
-const uploadRequested = Boolean(
-  process.env.POSTHOG_CLI_API_KEY && process.env.POSTHOG_CLI_PROJECT_ID,
-);
+const uploadRequested = sourceMapUploadRequested(process.env);
 // Inject and upload together get 90 s. A release's ~70 maps upload in a few
 // seconds even on a slow link, so past that the uploader has stalled, and
 // wrangler deploy is waiting on cf:build behind it.
@@ -110,7 +109,9 @@ const posthogCli = async (args) => {
 
 const upload = async () => {
   if (!uploadRequested) {
-    console.log("[sourcemaps] upload skipped (POSTHOG_CLI_API_KEY and POSTHOG_CLI_PROJECT_ID not set)");
+    console.log(
+      "[sourcemaps] upload skipped: it needs CI=true, POSTHOG_SOURCEMAPS_UPLOAD=1, POSTHOG_CLI_API_KEY and POSTHOG_CLI_PROJECT_ID",
+    );
     return;
   }
   if ((await listSourceMaps(staticDir)).length === 0) {

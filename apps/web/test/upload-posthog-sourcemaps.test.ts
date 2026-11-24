@@ -44,7 +44,9 @@ const buildFixture = (cliExit: number | null) => {
   return { root, bin, chunks };
 };
 
-const runUpload = ({ root, bin }: { root: string; bin: string }) =>
+const optedIn = { CI: "true", POSTHOG_SOURCEMAPS_UPLOAD: "1" };
+
+const runUpload = ({ root, bin }: { root: string; bin: string }, env: Record<string, string> = optedIn) =>
   spawnSync(process.execPath, [script], {
     cwd: root,
     encoding: "utf8",
@@ -54,6 +56,7 @@ const runUpload = ({ root, bin }: { root: string; bin: string }) =>
       POSTHOG_CLI_API_KEY: "phx_fake_not_real",
       POSTHOG_CLI_PROJECT_ID: "1",
       POSTHOG_CLI_HOST: "http://127.0.0.1:9",
+      ...env,
     },
   });
 
@@ -139,6 +142,7 @@ const runUploadAsync = (fixture: { root: string; bin: string }, env: Record<stri
         HOME: fixture.root,
         POSTHOG_CLI_API_KEY: "phx_fake_not_real",
         POSTHOG_CLI_PROJECT_ID: "1",
+        ...optedIn,
         ...env,
       },
     });
@@ -155,6 +159,48 @@ const isRunning = (pid: number) => {
     return false;
   }
 };
+
+describe("who may upload source maps", () => {
+  it("skips a developer build that has credentials only in .env.local, and still removes the maps", () => {
+    const fixture = buildFixture(0);
+    writeFileSync(path.join(fixture.root, ".env.local"), "POSTHOG_CLI_API_KEY=phx_left_in_env_local\nPOSTHOG_CLI_PROJECT_ID=1\n");
+    const result = spawnSync(process.execPath, [script], {
+      cwd: fixture.root,
+      encoding: "utf8",
+      env: { PATH: `${fixture.bin}:/usr/bin:/bin`, HOME: fixture.root },
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/upload skipped/);
+    expect(result.stdout).not.toMatch(/posthog-cli/);
+    expect(mapsLeft(fixture.chunks)).toEqual([]);
+  });
+
+  it.each([
+    ["no CI flag", { POSTHOG_SOURCEMAPS_UPLOAD: "1" }],
+    ["no opt-in", { CI: "true" }],
+    ["neither", {}],
+  ])("skips the upload with credentials set but %s", (_name, env) => {
+    const fixture = buildFixture(0);
+    const result = runUpload(fixture, env as Record<string, string>);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/upload skipped/);
+    expect(result.stdout).not.toMatch(/posthog-cli/);
+    expect(mapsLeft(fixture.chunks)).toEqual([]);
+  });
+
+  it("builds maps only where it would upload them", async () => {
+    const { sourceMapUploadRequested } = await import("../scripts/posthog-sourcemaps-policy.mjs");
+    const credentials = { POSTHOG_CLI_API_KEY: "phx_fake_not_real", POSTHOG_CLI_PROJECT_ID: "1" };
+
+    expect(sourceMapUploadRequested({ ...credentials, ...optedIn })).toBe(true);
+    expect(sourceMapUploadRequested({ ...credentials })).toBe(false);
+    expect(sourceMapUploadRequested({ ...credentials, CI: "true" })).toBe(false);
+    expect(sourceMapUploadRequested({ ...credentials, POSTHOG_SOURCEMAPS_UPLOAD: "1" })).toBe(false);
+    expect(sourceMapUploadRequested({ ...optedIn })).toBe(false);
+  });
+});
 
 describe("upload-posthog-sourcemaps", () => {
   it("warns and lets the deploy go on when the upload fails, with the maps removed", () => {
@@ -192,6 +238,7 @@ describe("upload-posthog-sourcemaps", () => {
           POSTHOG_CLI_PROJECT_ID: "1",
           POSTHOG_CLI_HOST: uploadHost.host,
           POSTHOG_SOURCEMAPS_TIMEOUT_MS: "5000",
+          ...optedIn,
         },
       });
       let stderr = "";
@@ -243,6 +290,7 @@ describe("upload-posthog-sourcemaps", () => {
           POSTHOG_CLI_API_KEY: "phx_fake_not_real",
           POSTHOG_CLI_PROJECT_ID: "1",
           POSTHOG_CLI_HOST: uploadHost.host,
+          ...optedIn,
         },
       });
       let stderr = "";
