@@ -4,6 +4,7 @@ import {
   ChevronDown,
   ChevronUp,
   Hand,
+  Info,
   MessageCircleQuestion,
   Mic,
   MicOff,
@@ -26,6 +27,7 @@ import type {
   WebinarQaEntry,
   WebinarQaModerateRequest,
 } from "../lib/types";
+import { hostDecisionLimitNotice } from "../lib/host-decision-limit";
 import { formatDisplayName, isSystemUserId } from "../lib/utils";
 import PanelNoticeSlot from "./PanelNoticeSlot";
 
@@ -53,7 +55,7 @@ interface ParticipantsPanelProps {
   ) => Promise<{ ok: boolean; error?: string }>;
   onPromoteWebinarAttendee?: (
     userId: string,
-  ) => Promise<{ ok: boolean; error?: string }>;
+  ) => Promise<{ ok: boolean; error?: string; code?: string }>;
   onDemoteWebinarParticipant?: (
     userId: string,
   ) => Promise<{ ok: boolean; error?: string }>;
@@ -139,7 +141,16 @@ function ParticipantsPanel({
   const [pendingKickUserId, setPendingKickUserId] = useState<string | null>(null);
   const [removingUserId, setRemovingUserId] = useState<string | null>(null);
   const [isAdmittingAll, setIsAdmittingAll] = useState(false);
-  const [hostActionError, setHostActionError] = useState<string | null>(null);
+  // What the host is told about its last action: an error, or a calm
+  // notice when the action could not be done and nothing changed.
+  const [hostActionMessage, setHostActionMessage] = useState<{
+    text: string;
+    calm: boolean;
+  } | null>(null);
+  const setHostActionError = (text: string | null) =>
+    setHostActionMessage(text ? { text, calm: false } : null);
+  const setHostActionNotice = (text: string) =>
+    setHostActionMessage({ text, calm: true });
   const [isQaSectionExpanded, setIsQaSectionExpanded] = useState(true);
   const [isAttendeeSectionExpanded, setIsAttendeeSectionExpanded] =
     useState(true);
@@ -163,13 +174,16 @@ function ParticipantsPanel({
 
   const runWebinarAction = async (
     key: string,
-    action: () => Promise<{ ok: boolean; error?: string }>,
+    action: () => Promise<{ ok: boolean; error?: string; code?: string }>,
   ) => {
     setBusyWebinarActionKey(key);
     setHostActionError(null);
     try {
       const result = await action();
-      if (!result.ok) {
+      const notice = result.ok ? null : hostDecisionLimitNotice(result, "invite");
+      if (notice) {
+        setHostActionNotice(notice);
+      } else if (!result.ok) {
         setHostActionError(result.error ?? "Webinar action failed");
       }
     } finally {
@@ -223,6 +237,11 @@ function ParticipantsPanel({
         "admin:admitAllPending",
         (timeoutError: Error | null, res: unknown) => {
           setIsAdmittingAll(false);
+          const notice = timeoutError ? null : hostDecisionLimitNotice(res, "admit");
+          if (notice) {
+            setHostActionNotice(notice);
+            return;
+          }
           const error = timeoutError
             ? "Couldn’t admit everyone."
             : getAdminActionError(res, "Couldn’t admit everyone.");
@@ -361,9 +380,18 @@ function ParticipantsPanel({
           <h3 className="mb-2.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-[#71717a]">
             Host controls
           </h3>
-          {hostActionError && (
+          {hostActionMessage?.calm && (
+            <div
+              role="status"
+              className="mb-2.5 flex items-start gap-2 rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-[12px] text-[#fafafa]/80"
+            >
+              <Info size={14} strokeWidth={STROKE} className="mt-px shrink-0 text-[#fafafa]/60" />
+              <span>{hostActionMessage.text}</span>
+            </div>
+          )}
+          {hostActionMessage && !hostActionMessage.calm && (
             <div className="mb-2.5 rounded-md border border-[#ea4335]/25 bg-[#ea4335]/10 px-2.5 py-1.5 text-[12px] text-[#ea4335]">
-              {hostActionError}
+              {hostActionMessage.text}
             </div>
           )}
           <div className="flex gap-2">
@@ -444,6 +472,11 @@ function ParticipantsPanel({
                             "admitUser",
                             { userId },
                             (res: { success?: boolean; error?: string }) => {
+                              const notice = hostDecisionLimitNotice(res, "admit");
+                              if (notice) {
+                                setHostActionNotice(notice);
+                                return;
+                              }
                               if (res?.error) onPendingUserStale?.(userId);
                             },
                           )

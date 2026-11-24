@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { resolveHostGrant } from "@conclave/meeting-core";
 import { resolveConclaveMinNativeVersion } from "@/app/lib/site-version";
 import { auth } from "@/lib/auth";
+import { resolveGuestJoinIdentity } from "@/lib/guest-pass";
 import {
   canonicalizeSfuClientId,
   resolveServerSfuClientId,
@@ -43,6 +44,15 @@ const logSecretFingerprint = (secret: string): void => {
 type JoinRequestBody = {
   roomId?: string;
   sessionId?: string;
+  /**
+   * Sending this field at all, with any value, marks a client that takes its
+   * guest identity from the join token instead of deriving
+   * `guest-<sessionId>` itself. The server picks the pass.
+   */
+  guestId?: string | null;
+  guestGrant?: string | null;
+  /** Ids of the passes this tab has joined under. A hint, never a proof. */
+  guestJoinedAs?: string[] | null;
   joinMode?: "meeting" | "webinar_attendee";
   user?: {
     id?: string | null;
@@ -653,7 +663,20 @@ export async function POST(request: Request) {
     sessionUser?.name?.trim() || body?.user?.name?.trim() || undefined;
   const normalizedSessionEmail = normalizeEmail(sessionEmail);
   const providedId = sessionUser?.id?.trim() || undefined;
-  const baseUserId = email || providedId || `guest-${sessionId}`;
+  const secret = process.env.SFU_SECRET || "development-secret";
+  const guest =
+    email || providedId
+      ? null
+      : resolveGuestJoinIdentity({
+          sfuSecret: secret,
+          seat: { clientId, roomId, sessionId },
+          request,
+          body,
+        });
+  if (guest && !guest.ok) {
+    return NextResponse.json({ error: guest.error }, { status: guest.status });
+  }
+  const baseUserId = email || providedId || guest?.userKey;
   const isWebinarAttendeeJoin = joinMode === "webinar_attendee";
   const isScheduledHostRoom = isScheduledRoomId(roomId);
   const isSuperAdmin = isSfuSuperAdminEmail(normalizedSessionEmail);
@@ -682,7 +705,6 @@ export async function POST(request: Request) {
     bodyAllowRoomCreation: Boolean(body?.allowRoomCreation),
   });
 
-  const secret = process.env.SFU_SECRET || "development-secret";
   const routedSfu = await resolveRoutedSfuUrl({
     candidateSfuUrls: resolveSfuUrls(),
     secret,
@@ -722,6 +744,7 @@ export async function POST(request: Request) {
       clientId,
       sessionId,
       joinMode,
+      ...guest?.claims,
     },
     secret,
     { expiresIn: "12h" },
@@ -730,11 +753,16 @@ export async function POST(request: Request) {
   const { iceServers, ttlSeconds: iceServersTtlSeconds } =
     await iceServersPromise;
 
-  return NextResponse.json({
+  const response = NextResponse.json({
     token,
     sfuUrl: routedSfuUrl,
     ...(iceServers.length > 0 ? { iceServers } : {}),
     ...(iceServersTtlSeconds ? { iceServersTtlSeconds } : {}),
     minNativeVersion: resolveConclaveMinNativeVersion(process.env),
+    ...guest?.issued,
   });
+  if (guest?.setCookie) {
+    response.headers.append("Set-Cookie", guest.setCookie);
+  }
+  return response;
 }

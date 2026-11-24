@@ -174,6 +174,17 @@ struct PPL5WebinarSettingsTests {
         #expect(WebinarStageInvitePolicy.rows(invites).map(\.displayName) == ["Jo B.", "Mina T."])
     }
 
+    @Test func guestInviteClearsWhenTheServerNamesTheInviteItsStageSeatUsed() throws {
+        let invites = WebinarStageInvitePolicy.added([:], userId: "guest-gp_audience-key#view-1", name: "Mina T.")
+        #expect(WebinarStageInvitePolicy.afterPanelistJoin(invites, joinedUserId: "guest-gp_stage-key#view-1").count == 1)
+
+        let payload = #"{"roomId":"room","userId":"guest-gp_stage-key#view-1","invitedUserKeys":["guest-gp_audience-key"]}"#
+        let used = try JSONDecoder().decode(WebinarStageInviteUsedNotification.self, from: Data(payload.utf8))
+        #expect(WebinarStageInvitePolicy.afterInvitesUsed(invites, invitedUserKeys: used.invitedUserKeys ?? []).isEmpty)
+        #expect(WebinarStageInvitePolicy.afterInvitesUsed(invites, invitedUserKeys: ["guest-gp_someone-else"]).count == 1)
+        #expect(WebinarStageInvitePolicy.afterInvitesUsed(invites, invitedUserKeys: []).count == 1)
+    }
+
     @Test func capacityRejectsZeroOverTheCapAndLetters() {
         #expect(WebinarSettingsPolicy.showsCapacityError("0"))
         #expect(WebinarSettingsPolicy.showsCapacityError("5001"))
