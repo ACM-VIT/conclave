@@ -28,6 +28,7 @@ import type {
 } from "../types/index";
 import { classifySyncReply } from "./syncReply";
 import { createUploadQueue } from "./uploadQueue";
+import { changesToResend } from "./catchUpResend";
 
 export const AppsContext = createContext<AppsContextValue | null>(null);
 
@@ -209,16 +210,18 @@ export function AppsProvider({
   const unsentAppsRef = useRef<Set<string>>(new Set());
   const syncedAppsRef = useRef<Set<string>>(new Set());
   const catchUpsRef = useRef<Map<string, number[]>>(new Map());
+  const resendRef = useRef<Map<string, Uint8Array[]>>(new Map());
   const reconnectedRef = useRef(false);
   const stagesPartsRef = useRef<boolean | null>(null);
   const takesListsRef = useRef(false);
   const [uploads] = useState(() =>
     createUploadQueue(
-      (appId, replicaId, upload) => {
+      (appId, replicaId, upload, settled) => {
         const currentSocket = socketRef.current;
         if (!currentSocket?.connected || reconnectedRef.current) return false;
         const payload: AppsUpdatePayload = { appId, replicaId, ...upload };
-        currentSocket.emit("apps:yjs:update", payload);
+        if (settled) currentSocket.emit("apps:yjs:update", payload, settled);
+        else currentSocket.emit("apps:yjs:update", payload);
         return true;
       },
       { stagesParts: () => stagesPartsRef.current, takesLists: () => takesListsRef.current },
@@ -281,6 +284,7 @@ export function AppsProvider({
     docHandlersRef.current.clear();
     awarenessHandlersRef.current.clear();
     uploads.clear();
+    resendRef.current.clear();
     stagesPartsRef.current = null;
     reconnectedRef.current = false;
     catchUpsRef.current.clear();
@@ -337,6 +341,7 @@ export function AppsProvider({
     docHandlersRef.current.delete(appId);
     awarenessHandlersRef.current.delete(appId);
     uploads.drop(appId);
+    resendRef.current.delete(appId);
     initialUpdateSentRef.current.delete(appId);
     replicaIdsRef.current.delete(appId);
     staleAppsRef.current.delete(appId);
@@ -355,7 +360,10 @@ export function AppsProvider({
         return;
       }
       const run = syncRunRef.current;
-      if (run?.catchesUp && run.appId === appId) return;
+      if (run?.catchesUp && run.appId === appId) {
+        resendRef.current.set(appId, [...(resendRef.current.get(appId) ?? []), update]);
+        return;
+      }
       uploads.add(appId, replicaIdsRef.current.get(appId), update);
     };
 
@@ -370,6 +378,7 @@ export function AppsProvider({
     docHandlersRef.current.delete(appId);
     replicaIdsRef.current.delete(appId);
     uploads.drop(appId);
+    resendRef.current.delete(appId);
   }, [uploads]);
 
   const queueInitialUpdate = useCallback((appId: string, doc: Y.Doc) => {
@@ -535,14 +544,16 @@ export function AppsProvider({
       const serverVector = response.stateVector ? toUint8Array(response.stateVector) : null;
       if (!run.replaces && serverVector) {
         try {
-          const updateForServer = Y.encodeStateAsUpdate(run.doc, serverVector);
+          const lacking = Y.encodeStateAsUpdate(run.doc, serverVector);
           const serverState = Y.createSnapshot(Y.decodeUpdate(update).ds, Y.decodeStateVector(serverVector));
-          const serverLacksSome = !Y.snapshotContainsUpdate(serverState, updateForServer);
-          uploads.drop(run.appId);
+          const serverLacksSome = !Y.snapshotContainsUpdate(serverState, lacking);
+          const pending = [...(resendRef.current.get(run.appId) ?? []), ...uploads.take(run.appId)];
+          resendRef.current.delete(run.appId);
           if (serverLacksSome && !canWrite()) {
             unsentAppsRef.current.add(run.appId);
           } else if (serverLacksSome) {
-            uploads.add(run.appId, replicaIdsRef.current.get(run.appId), updateForServer);
+            const replicaId = replicaIdsRef.current.get(run.appId);
+            for (const change of changesToResend(serverState, pending, lacking)) uploads.add(run.appId, replicaId, change);
           }
         } catch (err) {
           console.warn("[Apps] Failed to read the server state vector", err);
@@ -650,7 +661,7 @@ export function AppsProvider({
       for (const entry of automaticWritesRef.current.get(appId)?.values() ?? []) {
         if (entry.state === "written" && entry.writtenOn === refusedReplica) entry.writtenOn = replicaId;
       }
-      uploads.drop(appId);
+      resendRef.current.set(appId, [...(resendRef.current.get(appId) ?? []), ...uploads.take(appId)]);
       startSync(appId, true);
     },
     [startSync, uploads]

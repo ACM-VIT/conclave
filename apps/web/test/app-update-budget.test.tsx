@@ -15,6 +15,7 @@ import {
   APP_DOCUMENT_UPLOADS_PER_SECOND,
 } from "../../../packages/apps-sdk/src/sdk/limits";
 import { createUploadQueue } from "../../../packages/apps-sdk/src/sdk/runtime/uploadQueue";
+import { changesToResend } from "../../../packages/apps-sdk/src/sdk/runtime/catchUpResend";
 import { whiteboardApp } from "../../../packages/apps-sdk/src/apps/whiteboard/web/index";
 import {
   addElement,
@@ -57,6 +58,7 @@ const budgetedSfu = (appId: string, serverDoc: Y.Doc) => {
   const reasons: string[] = [];
   const partsSeen: Array<{ id: string; index: number; count: number }> = [];
   const lists: number[] = [];
+  const acks: number[] = [];
   let staged: { id: string; parts: Uint8Array[] } | null = null;
   const state = {
     refusals: 0,
@@ -125,58 +127,64 @@ const budgetedSfu = (appId: string, serverDoc: Y.Doc) => {
         return;
       }
       if (event !== "apps:yjs:update") return;
-      const { update, updates, replicaId, part } = payload as {
-        update?: Uint8Array;
-        updates?: Uint8Array[];
-        replicaId: string;
-        part?: { id: string; index: number; count: number };
-      };
-      if (updates) {
-        sentAt.push(Date.now());
-        sentBytes.push(updates.reduce((total, listed) => total + listed.length, 0));
-        lists.push(updates.length);
-        if (!state.joined || state.refusedReplicas.has(replicaId)) return;
-        if (!takeToken(limiter, "apps:yjs:update", RATE_LIMITS.appsYjsUpdate)) {
-          refuse(replicaId, "rate-limited");
-          return;
-        }
-        staged = null;
-        for (const listed of updates) {
-          if (state.refusedReplicas.has(replicaId)) return;
-          accept(replicaId, [listed]);
-        }
-        return;
-      }
-      if (!update) return;
+      receive(payload);
+      if (!state.takesLists || typeof ack !== "function") return;
+      acks.push(Date.now());
+      setTimeout(() => ack(undefined), state.refusalDelayMs);
+    },
+  } as unknown as Socket;
+  function receive(payload: unknown) {
+    const { update, updates, replicaId, part } = payload as {
+      update?: Uint8Array;
+      updates?: Uint8Array[];
+      replicaId: string;
+      part?: { id: string; index: number; count: number };
+    };
+    if (updates) {
       sentAt.push(Date.now());
-      sentBytes.push(update.length);
-      if (part) partsSeen.push(part);
+      sentBytes.push(updates.reduce((total, listed) => total + listed.length, 0));
+      lists.push(updates.length);
       if (!state.joined || state.refusedReplicas.has(replicaId)) return;
       if (!takeToken(limiter, "apps:yjs:update", RATE_LIMITS.appsYjsUpdate)) {
         refuse(replicaId, "rate-limited");
         return;
       }
-      if (update.length > APP_DOCUMENT_UPDATE_MAX_BYTES) {
-        refuse(replicaId, "too-large");
-        return;
-      }
-      if (!part || !state.stagesParts) {
-        staged = null;
-        accept(replicaId, [update]);
-        return;
-      }
-      if (part.index === 0) staged = { id: part.id, parts: [] };
-      if (!staged || staged.id !== part.id || staged.parts.length !== part.index) {
-        refuse(replicaId, "interrupted");
-        return;
-      }
-      staged.parts.push(update);
-      if (staged.parts.length < part.count) return;
-      const { parts } = staged;
       staged = null;
-      accept(replicaId, [joinBytes(parts)]);
-    },
-  } as unknown as Socket;
+      for (const listed of updates) {
+        if (state.refusedReplicas.has(replicaId)) return;
+        accept(replicaId, [listed]);
+      }
+      return;
+    }
+    if (!update) return;
+    sentAt.push(Date.now());
+    sentBytes.push(update.length);
+    if (part) partsSeen.push(part);
+    if (!state.joined || state.refusedReplicas.has(replicaId)) return;
+    if (!takeToken(limiter, "apps:yjs:update", RATE_LIMITS.appsYjsUpdate)) {
+      refuse(replicaId, "rate-limited");
+      return;
+    }
+    if (update.length > APP_DOCUMENT_UPDATE_MAX_BYTES) {
+      refuse(replicaId, "too-large");
+      return;
+    }
+    if (!part || !state.stagesParts) {
+      staged = null;
+      accept(replicaId, [update]);
+      return;
+    }
+    if (part.index === 0) staged = { id: part.id, parts: [] };
+    if (!staged || staged.id !== part.id || staged.parts.length !== part.index) {
+      refuse(replicaId, "interrupted");
+      return;
+    }
+    staged.parts.push(update);
+    if (staged.parts.length < part.count) return;
+    const { parts } = staged;
+    staged = null;
+    accept(replicaId, [joinBytes(parts)]);
+  }
   const busiestSecond = () =>
     sentAt.reduce((most, start, index) => Math.max(most, sentAt.slice(index).filter((time) => time < start + 1_000).length), 0);
   const interrupt = () => {
@@ -196,7 +204,7 @@ const budgetedSfu = (appId: string, serverDoc: Y.Doc) => {
   const dropStaging = () => {
     staged = null;
   };
-  return { socket, state, sentAt, sentBytes, reasons, partsSeen, lists, syncPayloads, busiestSecond, fire, interrupt, restore, dropStaging };
+  return { socket, state, sentAt, sentBytes, reasons, partsSeen, lists, acks, syncPayloads, busiestSecond, fire, interrupt, restore, dropStaging };
 };
 
 const mount = async (socket: Socket, Body: ComponentType, apps: never[]) => {
@@ -860,10 +868,46 @@ describe("edits near the document limit", () => {
     expect(labels(ctx.getDoc("dev-playground"))).toEqual(["warm-0-", "warm-1-", "fits-0-"]);
   });
 
-  it("never loses an edit that would fit on its own, over random inserts, deletions that split items, large pastes and another writer's changes near the limit", async () => {
+  it("keeps a change that fits when a passing refusal near the limit makes it resend that change with one that does not fit", async () => {
+    const server = longText(1_000);
+    for (let index = 0; encodedBytes(server) < 880 * 1024; index += 1) addItem(server, `saved-${index}-`.padEnd(200 * 1024, "s"));
+    const sfu = await nearTheLimit(server);
+    sfu.state.refusalReason = "timed-out";
+    sfu.state.refuseNext = () => true;
+
+    await editsMadeBy((doc) => {
+      addItem(doc, "fits-0-".padEnd(20 * 1024, "f"));
+      addItem(doc, "big-1-".padEnd(200 * 1024, "b"));
+    });
+    await advance(4_000);
+
+    expect(sfu.reasons).toEqual(["timed-out", "too-large"]);
+    expect(labels(server).filter((label) => !label.startsWith("saved"))).toEqual(["fits-0-"]);
+    expect(labels(ctx.getDoc("dev-playground")).filter((label) => !label.startsWith("saved"))).toEqual(["fits-0-"]);
+  });
+
+  it("keeps a change that fits when one that does not fit is made while the catch-up sync is on its way", async () => {
+    const server = longText(1_000);
+    for (let index = 0; encodedBytes(server) < 880 * 1024; index += 1) addItem(server, `saved-${index}-`.padEnd(200 * 1024, "s"));
+    const sfu = await nearTheLimit(server);
+    sfu.state.syncDelayMs = 1_000;
+    sfu.state.refusalReason = "timed-out";
+    sfu.state.refuseNext = () => true;
+
+    await editsMadeBy((doc) => addItem(doc, "fits-0-".padEnd(20 * 1024, "f")));
+    await advance(300);
+    await editsMadeBy((doc) => addItem(doc, "big-1-".padEnd(200 * 1024, "b")));
+    await advance(4_000);
+
+    expect(sfu.reasons).toEqual(["timed-out", "too-large"]);
+    expect(labels(server).filter((label) => !label.startsWith("saved"))).toEqual(["fits-0-"]);
+  });
+
+  it("never loses an edit that would fit on its own, over random inserts, deletions that split items, large pastes, another writer's changes and passing refusals near the limit", async () => {
     let refused = 0;
     let rounds = 0;
     let splits = 0;
+    let passingTotal = 0;
     for (let seed = 1; seed <= 24; seed += 1) {
       const random = seeded(seed);
       const length = 90_000 + pick(random, 30_000);
@@ -876,6 +920,8 @@ describe("edits near the document limit", () => {
       const model = new Y.Doc();
       Y.applyUpdate(model, Y.encodeStateAsUpdate(server));
       let expectedRefusals = 0;
+      let transients = 0;
+      let passingRefusals = 0;
       for (let round = 0, count = 4 + pick(random, 5); round < count; round += 1) {
         if (random() < 0.25) {
           const writer = new Y.Doc();
@@ -887,6 +933,14 @@ describe("edits near the document limit", () => {
             Y.applyUpdate(server, unseen);
             Y.applyUpdate(model, unseen);
           }
+        }
+        const passing = transients < 2 && random() < 0.35;
+        if (passing) {
+          let countdown = pick(random, 3);
+          transients += 1;
+          sfu.state.refusalReason = ["timed-out", "queue-full", "missing-dependency"][pick(random, 3)];
+          sfu.state.refusalsLeft = 1;
+          sfu.state.refuseNext = () => countdown-- === 0;
         }
         const edits = await editsMadeBy((doc) => {
           for (let index = 0, burst = 1 + pick(random, 4); index < burst; index += 1) {
@@ -902,11 +956,15 @@ describe("edits near the document limit", () => {
           }
         });
         if (landInOrder(model, edits)) expectedRefusals += 1;
-        await advance(2_500);
+        await advance(passing ? 5_000 : 2_500);
+        if (passing && sfu.state.refuseNext === null) passingRefusals += 1;
+        sfu.state.refuseNext = null;
         rounds += 1;
         expect({ seed, round, sameText: textOf(server) === textOf(model), items: labels(server) }).toEqual({ seed, round, sameText: true, items: labels(model) });
       }
-      expect({ seed, reasons: sfu.reasons }).toEqual({ seed, reasons: Array.from({ length: expectedRefusals }, () => "too-large") });
+      expect({ seed, tooLarge: sfu.reasons.filter((reason) => reason === "too-large").length }).toEqual({ seed, tooLarge: expectedRefusals });
+      expect({ seed, passing: sfu.reasons.filter((reason) => reason !== "too-large").length }).toEqual({ seed, passing: passingRefusals });
+      passingTotal += passingRefusals;
       refused += expectedRefusals;
       await act(async () => root.unmount());
       root = createRoot(container);
@@ -914,6 +972,7 @@ describe("edits near the document limit", () => {
     expect(rounds).toBeGreaterThan(80);
     expect(refused).toBeGreaterThan(10);
     expect(splits).toBeGreaterThan(30);
+    expect(passingTotal).toBeGreaterThan(8);
   }, 240_000);
 });
 
@@ -960,8 +1019,9 @@ describe("the upload queue", () => {
     const doc = new Y.Doc();
     const uploads: Uint8Array[][] = [];
     const queue = createUploadQueue(
-      (_appId, _replicaId, upload) => {
+      (_appId, _replicaId, upload, settled) => {
         uploads.push("updates" in upload ? upload.updates : [upload.update]);
+        setTimeout(() => settled?.(), 0);
         return true;
       },
       { stagesParts: () => true, takesLists: () => true },
@@ -980,6 +1040,160 @@ describe("the upload queue", () => {
     expect(uploads.flat()).toEqual(changes);
     expect(uploads.map((list) => list.length)).toEqual([1, 1, APP_DOCUMENT_UPLOAD_LIST_MAX, 7]);
     expect(uploads.every((list) => list.reduce((bytes, change) => bytes + change.length, 0) <= APP_DOCUMENT_UPDATE_MAX_BYTES)).toBe(true);
+  });
+});
+
+describe("unacknowledged uploads", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  });
+
+  const recordingQueue = () => {
+    const uploads: Uint8Array[][] = [];
+    const settles: Array<(() => void) | undefined> = [];
+    const queue = createUploadQueue(
+      (_appId, _replicaId, upload, settled) => {
+        uploads.push("updates" in upload ? upload.updates : [upload.update]);
+        settles.push(settled);
+        return true;
+      },
+      { stagesParts: () => true, takesLists: () => true },
+    );
+    return { queue, uploads, settles };
+  };
+  const change = (doc: Y.Doc, size: number) => edited(doc, size);
+  const edited = (doc: Y.Doc, size: number) => {
+    const before = Y.encodeStateVector(doc);
+    doc.getText("t").insert(doc.getText("t").length, "u".repeat(size));
+    return Y.encodeStateAsUpdate(doc, before);
+  };
+
+  it("stay at most 64 changes and 256 KiB for a server that takes lists, and more go out as acknowledgements arrive", async () => {
+    const doc = new Y.Doc();
+    const { queue, uploads, settles } = recordingQueue();
+    for (let index = 0; index < 70; index += 1) queue.add("board", "r", change(doc, 4));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(uploads.map((list) => list.length)).toEqual([APP_DOCUMENT_UPLOAD_LIST_MAX]);
+
+    settles[0]?.();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(uploads.map((list) => list.length)).toEqual([APP_DOCUMENT_UPLOAD_LIST_MAX, 6]);
+
+    const big = Math.floor(APP_DOCUMENT_UPDATE_MAX_BYTES * 0.7);
+    queue.add("board", "r", change(doc, big));
+    queue.add("board", "r", change(doc, big));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(uploads).toHaveLength(3);
+    settles[1]?.();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(uploads).toHaveLength(3);
+    settles[2]?.();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(uploads).toHaveLength(4);
+  });
+
+  it("are handed back whole and in order with what still waits, and forgotten", async () => {
+    const doc = new Y.Doc();
+    const { queue, uploads } = recordingQueue();
+    const first = change(doc, 10);
+    const second = change(doc, 20);
+    queue.add("board", "r", first);
+    queue.add("board", "r", second);
+    await vi.advanceTimersByTimeAsync(0);
+    const large = change(doc, APP_DOCUMENT_UPDATE_MAX_BYTES + 1_000);
+    queue.add("board", "r", large);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const waiting = change(doc, 30);
+    queue.add("board", "r2", waiting);
+
+    expect(uploads).toEqual([[first, second]]);
+    expect(queue.take("board")).toEqual([first, second, large, waiting]);
+    expect(queue.take("board")).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(uploads).toHaveLength(1);
+  });
+
+  it("hold a change in parts until nothing else is unacknowledged, and keep others out until its last part is", async () => {
+    const doc = new Y.Doc();
+    const { queue, uploads, settles } = recordingQueue();
+    queue.add("board", "r", change(doc, 10));
+    await vi.advanceTimersByTimeAsync(0);
+    queue.add("board", "r", change(doc, APP_DOCUMENT_UPDATE_MAX_BYTES + 1_000));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(uploads).toHaveLength(1);
+
+    settles[0]?.();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(uploads).toHaveLength(3);
+    queue.add("board", "r", change(doc, 10));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(uploads).toHaveLength(3);
+    expect(settles[1]).toBeUndefined();
+    settles[2]?.();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(uploads).toHaveLength(4);
+  });
+
+  it("hand back a change in parts once, whole, after some of its parts went out", async () => {
+    const doc = new Y.Doc();
+    const { queue, uploads, settles } = recordingQueue();
+    const large = change(doc, APP_DOCUMENT_UPDATE_MAX_BYTES * 2 + 1_000);
+    queue.add("board", "r", large);
+    await vi.advanceTimersByTimeAsync(APP_DOCUMENT_UPLOAD_INTERVAL_MS + 1);
+
+    expect(uploads).toHaveLength(2);
+    expect(settles).toEqual([undefined, undefined]);
+    expect(queue.take("board")).toEqual([large]);
+  });
+});
+
+describe("the catch-up resend", () => {
+  const withEdit = (doc: Y.Doc, edit: () => void) => {
+    const before = Y.encodeStateVector(doc);
+    edit();
+    return Y.encodeStateAsUpdate(doc, before);
+  };
+  const lackingFrom = (server: Y.Doc, client: Y.Doc) => Y.encodeStateAsUpdate(client, Y.encodeStateVector(server));
+
+  it("resends the logged changes the server lacks, not one diff", () => {
+    const server = new Y.Doc();
+    server.getText("t").insert(0, "saved");
+    const client = new Y.Doc();
+    Y.applyUpdate(client, Y.encodeStateAsUpdate(server));
+    const landed = withEdit(client, () => client.getText("t").insert(0, "a"));
+    Y.applyUpdate(server, landed);
+    const first = withEdit(client, () => client.getText("t").insert(0, "b"));
+    const second = withEdit(client, () => client.getText("t").delete(0, 2));
+
+    expect(changesToResend(Y.snapshot(server), [landed, first, second], lackingFrom(server, client))).toEqual([first, second]);
+  });
+
+  it("falls back to the one diff when the log does not cover what the server lacks", () => {
+    const server = new Y.Doc();
+    const client = new Y.Doc();
+    withEdit(client, () => client.getText("t").insert(0, "unlogged"));
+    const logged = withEdit(client, () => client.getText("t").insert(0, "logged"));
+    const lacking = lackingFrom(server, client);
+
+    expect(changesToResend(Y.snapshot(server), [logged], lacking)).toEqual([lacking]);
+  });
+
+  it("adds only the deletes a concurrent write implies when the logged changes cover every struct", () => {
+    const server = new Y.Doc();
+    const client = new Y.Doc();
+    const writer = new Y.Doc();
+    const logged = withEdit(client, () => client.getMap("m").set("title", "client"));
+    const remote = withEdit(writer, () => writer.getMap("m").set("title", "writer"));
+    Y.applyUpdate(server, remote);
+    Y.applyUpdate(client, remote);
+
+    const resend = changesToResend(Y.snapshot(server), [logged], lackingFrom(server, client));
+    expect(resend[0]).toEqual(logged);
+    expect(resend).toHaveLength(2);
+    expect([...Y.parseUpdateMeta(resend[1]).to.keys()]).toEqual([]);
+    resend.forEach((update) => Y.applyUpdate(server, update));
+    expect(server.getMap("m").toJSON()).toEqual(client.getMap("m").toJSON());
+    expect(Y.encodeStateVector(server)).toEqual(Y.encodeStateVector(client));
   });
 });
 
@@ -1177,7 +1391,8 @@ describe("every change over random documents and histories", () => {
     };
     const takesLists = Math.floor(seed / 2) % 2 === 1;
     const queue = createUploadQueue(
-      (_appId, _replicaId, upload) => {
+      (_appId, _replicaId, upload, settled) => {
+        setTimeout(() => settled?.(), 0);
         if ("updates" in upload) {
           staged = [];
           for (const listed of upload.updates) {
