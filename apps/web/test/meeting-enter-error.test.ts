@@ -15,6 +15,16 @@ describe("meeting entry errors", () => {
     });
   });
 
+  it("describes a host rejection as a rejection, not a blocked device", () => {
+    const result = describeEnterError("join", {
+      code: "JOIN_REJECTED",
+      message: "The host has denied your request to join.",
+      recoverable: false,
+    });
+    expect(result.detail).toBe("The host has denied your request to join.");
+    expect(result.title).not.toMatch(/blocked|camera|mic/i);
+  });
+
   it("keeps the network wording for connection failures", () => {
     expect(
       describeEnterError("join", { code: "CONNECTION_FAILED", message: "Failed to connect to server", recoverable: true }),
