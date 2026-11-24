@@ -5,7 +5,8 @@ export const SENDER_PACKET_COUNTS_MAX_CONSUMERS = 16;
 export const senderPacketCountsRequestSchema = z.strictObject({
   consumerIds: z
     .array(z.string().min(1).max(128))
-    .max(SENDER_PACKET_COUNTS_MAX_CONSUMERS),
+    .max(SENDER_PACKET_COUNTS_MAX_CONSUMERS)
+    .refine((ids) => new Set(ids).size === ids.length, "Each consumer id once"),
 });
 export type SenderPacketCountsRequest = z.infer<
   typeof senderPacketCountsRequestSchema

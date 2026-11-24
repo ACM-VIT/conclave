@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Consumer, Producer } from "mediasoup/types";
 import type { Socket } from "socket.io";
 import type { Client } from "../config/classes/Client.js";
@@ -6,31 +6,34 @@ import type { Room } from "../config/classes/Room.js";
 import type { ConnectionContext } from "../server/socket/context.js";
 import { registerMediaHandlers } from "../server/socket/handlers/mediaHandlers.js";
 import type { SfuState } from "../server/state.js";
+import { PRODUCER_PACKET_COUNT_MAX_AGE_MS } from "../server/producerPacketCounts.js";
 
 type SocketHandler = (...args: never[]) => unknown;
 type Counts = { counts: Record<string, number> } | { error: string };
 
-const register = ({ inRoom = true } = {}) => {
+const sharer = (id: string, packetCounts: number[] = [70, 50]) =>
+  ({
+    id,
+    closed: false,
+    getStats: vi
+      .fn()
+      .mockResolvedValue(packetCounts.map((packetCount) => ({ type: "inbound-rtp", packetCount }))),
+  }) as unknown as Producer & { getStats: ReturnType<typeof vi.fn> };
+
+const register = ({
+  inRoom = true,
+  socketId = "viewer-socket",
+  producers = new Map<string, Producer>([["shared-screen", sharer("shared-screen")]]),
+  consumerProducers = { screen: "shared-screen" } as Record<string, string>,
+} = {}) => {
   const handlers = new Map<string, SocketHandler>();
   const socket = {
-    id: "viewer-socket",
+    id: socketId,
     on: vi.fn((event: string, handler: SocketHandler) => {
       handlers.set(event, handler);
       return socket;
     }),
   } as unknown as Socket;
-  const producers = new Map([
-    [
-      "shared-screen",
-      {
-        id: "shared-screen",
-        getStats: vi.fn().mockResolvedValue([
-          { type: "inbound-rtp", packetCount: 70 },
-          { type: "inbound-rtp", packetCount: 50 },
-        ]),
-      } as unknown as Producer,
-    ],
-  ]);
   const consumer = (id: string, producerId: string, closed = false) =>
     ({
       id,
@@ -39,12 +42,14 @@ const register = ({ inRoom = true } = {}) => {
       getStats: vi.fn().mockResolvedValue([{ type: "outbound-rtp", packetCount: 3 }]),
     }) as unknown as Consumer;
   const consumers = new Map([
-    ["screen", consumer("screen", "shared-screen")],
+    ...Object.entries(consumerProducers).map(
+      ([id, producerId]) => [id, consumer(id, producerId)] as const,
+    ),
     ["closed", consumer("closed", "shared-screen", true)],
     ["orphan", consumer("orphan", "gone-producer")],
   ]);
   const client = {
-    id: "viewer",
+    id: `viewer-${socketId}`,
     getConsumerById: (id: string) => consumers.get(id),
   } as unknown as Client;
   const room = {
@@ -99,7 +104,84 @@ describe("telling a viewer how many packets the sharers behind its consumers sen
     ["an id that is not a string", { consumerIds: ["screen", 7] }],
     ["more ids than one request may name", { consumerIds: Array.from({ length: 17 }, () => "screen") }],
     ["a field the request does not have", { consumerIds: ["screen"], producerIds: ["shared-screen"] }],
+    ["the same id twice", { consumerIds: ["screen", "screen"] }],
   ])("refuses %s instead of guessing what it meant", async (_name, request) => {
     expect(await register().ask(request)).toEqual({ error: "Invalid request" });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("reads a sharer once however many viewers ask at the same time", async () => {
+    const screen = sharer("shared-screen");
+    const producers = new Map<string, Producer>([["shared-screen", screen]]);
+    const viewers = Array.from({ length: 50 }, (_, index) =>
+      register({ socketId: `viewer-${index}`, producers }),
+    );
+
+    const answers = await Promise.all(viewers.map(({ ask }) => ask({ consumerIds: ["screen"] })));
+
+    expect(answers).toEqual(viewers.map(() => ({ counts: { screen: 120 } })));
+    expect(screen.getStats).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads a sharer again only once the last count is older than the cache allows", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const screen = sharer("shared-screen");
+    const producers = new Map<string, Producer>([["shared-screen", screen]]);
+    const viewers = Array.from({ length: 3 }, (_, index) =>
+      register({ socketId: `viewer-${index}`, producers }),
+    );
+
+    await viewers[0].ask({ consumerIds: ["screen"] });
+    vi.advanceTimersByTime(PRODUCER_PACKET_COUNT_MAX_AGE_MS - 1);
+    await viewers[1].ask({ consumerIds: ["screen"] });
+    expect(screen.getStats).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(1);
+    await viewers[2].ask({ consumerIds: ["screen"] });
+    expect(screen.getStats).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads a sharer once for two of the viewer's consumers behind it", async () => {
+    const screen = sharer("shared-screen");
+    const { ask } = register({
+      producers: new Map<string, Producer>([["shared-screen", screen]]),
+      consumerProducers: { screen: "shared-screen", "screen-again": "shared-screen" },
+    });
+
+    expect(await ask({ consumerIds: ["screen", "screen-again"] })).toEqual({
+      counts: { screen: 120, "screen-again": 120 },
+    });
+    expect(screen.getStats).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves out a sharer that closes mid-request and still answers for the rest", async () => {
+    const closing = sharer("closing-screen");
+    closing.getStats.mockRejectedValue(new Error("Producer closed"));
+    const { ask } = register({
+      producers: new Map<string, Producer>([
+        ["shared-screen", sharer("shared-screen")],
+        ["closing-screen", closing],
+      ]),
+      consumerProducers: { screen: "shared-screen", closing: "closing-screen" },
+    });
+
+    expect(await ask({ consumerIds: ["closing", "screen"] })).toEqual({
+      counts: { screen: 120 },
+    });
+  });
+
+  it("answers a burst of six from one viewer and refuses the seventh", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const { ask } = register();
+    const answers = [];
+    for (let index = 0; index < 7; index += 1) {
+      answers.push(await ask({ consumerIds: ["screen"] }));
+    }
+
+    expect(answers.slice(0, 6)).toEqual(Array.from({ length: 6 }, () => ({ counts: { screen: 120 } })));
+    expect(answers[6]).toEqual({ error: "Too many requests" });
   });
 });

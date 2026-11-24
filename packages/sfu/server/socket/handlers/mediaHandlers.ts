@@ -4,6 +4,7 @@ import {
   senderPacketCountsRequestSchema,
   type SenderPacketCountsAnswer,
 } from "@conclave/meeting-core/sender-packet-counts";
+import { readProducerPacketCounts } from "../../producerPacketCounts.js";
 import type {
   AbortConsumerHandoffData,
   AbortConsumerHandoffResponse,
@@ -1447,17 +1448,19 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           respond(callback, { error: "Invalid request" });
           return;
         }
-        const counts: SenderPacketCountsAnswer["counts"] = {};
-        for (const consumerId of request.data.consumerIds) {
+        const sharers = request.data.consumerIds.flatMap((consumerId) => {
           const consumer = client.getConsumerById(consumerId);
-          if (!consumer || consumer.closed) continue;
+          if (!consumer || consumer.closed) return [];
           const producer = room.getActiveProducerById(consumer.producerId);
-          if (!producer) continue;
-          const stats = await producer.getStats();
-          counts[consumerId] = stats.reduce(
-            (total, entry) => total + entry.packetCount,
-            0,
-          );
+          return producer ? [{ consumerId, producer }] : [];
+        });
+        const packets = await readProducerPacketCounts(
+          sharers.map(({ producer }) => producer),
+        );
+        const counts: SenderPacketCountsAnswer["counts"] = {};
+        for (const { consumerId, producer } of sharers) {
+          const count = packets.get(producer);
+          if (count !== undefined) counts[consumerId] = count;
         }
         respond(callback, senderPacketCountsAnswerSchema.parse({ counts }));
       } catch (error) {

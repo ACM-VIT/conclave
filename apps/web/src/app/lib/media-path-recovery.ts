@@ -582,7 +582,7 @@ export const senderPacketCountsRequestFor = (
 ): SenderPacketCountsRequest | null => {
   if (consumerIds.length === 0) return null;
   const parsed = senderPacketCountsRequestSchema.safeParse({
-    consumerIds: consumerIds.slice(0, SENDER_PACKET_COUNTS_MAX_CONSUMERS),
+    consumerIds: [...new Set(consumerIds)].slice(0, SENDER_PACKET_COUNTS_MAX_CONSUMERS),
   });
   return parsed.success ? parsed.data : null;
 };

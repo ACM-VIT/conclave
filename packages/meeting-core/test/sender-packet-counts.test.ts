@@ -18,6 +18,7 @@ describe("asking the SFU how many packets the sharers behind a viewer's consumer
     ["an empty id", { consumerIds: [""] }, false],
     ["an id longer than any consumer id", { consumerIds: ["x".repeat(129)] }, false],
     ["a field the request does not have", { consumerIds: ["a"], producerIds: ["b"] }, false],
+    ["the same id twice", { consumerIds: ["a", "b", "a"] }, false],
     ["no request at all", undefined, false],
   ])("reads %s as %s", (_name, request, valid) => {
     expect(senderPacketCountsRequestSchema.safeParse(request).success).toBe(valid);

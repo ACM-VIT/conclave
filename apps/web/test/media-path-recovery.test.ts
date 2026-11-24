@@ -815,6 +815,7 @@ describe("telling a still screen share apart from one whose packets never arrive
     expect(senderPacketCountsRequestFor(["s"])).toEqual({ consumerIds: ["s"] });
     expect(senderPacketCountsRequestFor(ids)).toEqual({ consumerIds: ids.slice(0, 16) });
     expect(senderPacketCountsRequestFor([""])).toBeNull();
+    expect(senderPacketCountsRequestFor(["s", "t", "s"])).toEqual({ consumerIds: ["s", "t"] });
   });
 
   it("reads only a well formed answer from the SFU", () => {
