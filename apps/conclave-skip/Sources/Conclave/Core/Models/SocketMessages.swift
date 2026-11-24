@@ -279,6 +279,7 @@ struct AppsLockRequest: Codable {
 struct AppsSyncRequest: Codable {
     let appId: String
     let syncMessage: String
+    var wholeChanges: Bool = true
 }
 
 struct AppsUpdateRequest: Codable {

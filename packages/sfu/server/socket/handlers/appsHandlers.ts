@@ -28,6 +28,9 @@ const MAX_REPLICA_ID_LENGTH = 64;
 const REMEMBERED_REFUSED_REPLICAS = 16;
 const LEGACY_SYNC_HOLD_MS = 25_000;
 const MAX_OPEN_LEGACY_SYNCS = 4;
+const WHOLE_CHANGES_SUFFIX = ":whole-changes";
+
+const wholeChangesChannel = (channelId: string): string => `${channelId}${WHOLE_CHANGES_SUFFIX}`;
 
 const retryLater = (error: string, retryAfterMs: number): AppsSyncError => ({
   error,
@@ -264,7 +267,12 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     for (const stop of [...openLegacySyncs]) stop();
     dropStaged();
   });
-  socket.on("joinRoom", () => dropStaged());
+  socket.on("joinRoom", () => {
+    dropStaged();
+    for (const joined of [...socket.rooms]) {
+      if (joined.endsWith(WHOLE_CHANGES_SUFFIX)) void socket.leave(joined);
+    }
+  });
 
   const activeDocument = (room: Room, appId: string): AppDocument | null =>
     room.appsState.activeAppId === appId ? room.getOrCreateAppDoc(appId, documents) : null;
@@ -294,6 +302,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     const result = await scope.document.sync(stateVector);
     if (!isCurrent(scope)) return { error: "App not active" };
     if (!result.ok) return SYNC_REFUSALS[result.reason];
+    if (data.wholeChanges === true) void socket.join(wholeChangesChannel(scope.room.channelId));
     const awarenessSnapshot = scope.room.encodeAppAwarenessSnapshot(scope.appId) ?? undefined;
     return {
       syncMessage: result.update,
@@ -390,7 +399,16 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         if (result.reason !== "closed") signalRefused(appId, replicaId, result.reason);
         return;
       }
-      socket.to(channelId).emit("apps:yjs:update", { appId, update } satisfies AppsUpdateData);
+      if (update.length <= APP_DOCUMENT_UPDATE_MAX_BYTES) {
+        socket.to(channelId).emit("apps:yjs:update", { appId, update } satisfies AppsUpdateData);
+        return;
+      }
+      const whole = wholeChangesChannel(channelId);
+      socket.to(whole).emit("apps:yjs:update", { appId, update } satisfies AppsUpdateData);
+      const reload = socket.to(channelId).except(whole);
+      const { activeAppId, locked } = room.appsState;
+      reload.emit("apps:state", { activeAppId: null, locked, roomId: room.id } satisfies AppsState);
+      reload.emit("apps:state", { activeAppId, locked, roomId: room.id } satisfies AppsState);
     });
   };
 
@@ -429,7 +447,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
 
     const part = readChangePart(data?.part);
     if (part === "invalid") {
-      refuse("invalid");
+      refuse("interrupted");
       return;
     }
     if (!part) {
@@ -451,7 +469,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       change.count !== part.count ||
       change.parts.length !== part.index
     ) {
-      refuse("invalid");
+      refuse("interrupted");
       return;
     }
     if (change.bytes + update.length > MAX_APP_DOCUMENT_BYTES) {

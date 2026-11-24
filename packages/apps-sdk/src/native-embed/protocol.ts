@@ -10,6 +10,7 @@ export const NATIVE_EMBED_ORIGINS = {
 export const NATIVE_EMBED_LIMITS = {
   envelopeCharacters: 1_572_864,
   updateBytes: 262_144,
+  remoteUpdateBytes: 1_048_576,
   awarenessBytes: 65_536,
   stateVectorBytes: 65_536,
   snapshotBytes: 1_048_576,

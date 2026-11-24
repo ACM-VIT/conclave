@@ -81,7 +81,7 @@ describe("app changes sent in parts", () => {
     expect(peer.getText("t").toString()).toBe(after);
   });
 
-  it("are refused as invalid when a part arrives out of order or names another change, with nothing applied", async () => {
+  it("are refused as interrupted, a passing reason, when a part arrives out of order or names another change, with nothing applied", async () => {
     const room = await boardRoom("order");
     const author = new Y.Doc();
     const [first, second, third] = inParts(bigChange(author, 30 * KIB, "o"), 10 * KIB);
@@ -93,9 +93,9 @@ describe("app changes sent in parts", () => {
 
     expect(await settled(room)).toBe("");
     expect(room.refused.map((refusal) => [refusal.replicaId, refusal.reason])).toEqual([
-      ["copy-1", "invalid"],
-      ["copy-2", "invalid"],
-      ["copy-3", "invalid"],
+      ["copy-1", "interrupted"],
+      ["copy-2", "interrupted"],
+      ["copy-3", "interrupted"],
     ]);
   });
 
@@ -114,7 +114,7 @@ describe("app changes sent in parts", () => {
     sendRange(room, parts, "c", "copy-1", 1);
 
     expect(await settled(room)).toBe("");
-    expect(room.refused).toEqual([{ appId: "board", replicaId: "copy-1", reason: "invalid" }]);
+    expect(room.refused).toEqual([{ appId: "board", replicaId: "copy-1", reason: "interrupted" }]);
   });
 
   it("are refused on their next part when the room changed by a path that never asked to join", async () => {
@@ -126,7 +126,7 @@ describe("app changes sent in parts", () => {
     sendRange(room, parts, "s", "copy-1", 1);
 
     expect(await settled(room)).toBe("");
-    expect(room.refused).toEqual([{ appId: "board", replicaId: "copy-1", reason: "invalid" }]);
+    expect(room.refused).toEqual([{ appId: "board", replicaId: "copy-1", reason: "interrupted" }]);
     expect(room.state.appChangeStaging.used()).toBe(0);
   });
 
@@ -156,7 +156,42 @@ describe("app changes sent in parts", () => {
     sendRange(room, parts, "d", "copy-2", 1);
 
     expect(await settled(room)).toBe("");
-    expect(room.refused).toEqual([{ appId: "board", replicaId: "copy-2", reason: "invalid" }]);
+    expect(room.refused).toEqual([{ appId: "board", replicaId: "copy-2", reason: "interrupted" }]);
+  });
+
+  it("go whole only to sockets that said they take whole changes, and make every other socket reload the app", async () => {
+    const room = await boardRoom("routing");
+    const author = new Y.Doc();
+    const small = edit(author, (text) => text.insert(0, "small"));
+    const large = bigChange(author, 300 * KIB, "w");
+
+    room.send(small, "copy-1");
+    sendChange(room, inParts(large), "large", "copy-2");
+    await settled(room);
+
+    const channel = room.channelId();
+    const whole = `${channel}:whole-changes`;
+    expect(room.broadcasts.map(({ to, except, event }) => [to, except ?? null, event])).toEqual([
+      [channel, null, "apps:yjs:update"],
+      [whole, null, "apps:yjs:update"],
+      [channel, whole, "apps:state"],
+      [channel, whole, "apps:state"],
+    ]);
+    expect(room.broadcasts[1].payload).toEqual({ appId: "board", update: large });
+    expect(room.broadcasts.slice(2).map(({ payload }) => (payload as { activeAppId: string | null }).activeAppId)).toEqual([null, "board"]);
+  });
+
+  it("put a socket among those that take whole changes only when its sync says so, and take it out when it asks to join another room", async () => {
+    const room = await boardRoom("membership");
+    const whole = `${room.channelId()}:whole-changes`;
+
+    await room.requestSync(new Y.Doc());
+    expect(room.joined.has(whole)).toBe(false);
+    await room.requestSync(new Y.Doc(), true, true);
+    expect(room.joined.has(whole)).toBe(true);
+    await room.moveTo("membership-elsewhere");
+
+    expect(room.joined.has(whole)).toBe(false);
   });
 
   it("are dropped when the client sends a whole update before the last part", async () => {

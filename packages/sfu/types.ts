@@ -1158,6 +1158,7 @@ export interface AppsSyncData {
   appId: string;
   syncMessage: Uint8Array;
   canRetry?: boolean;
+  wholeChanges?: boolean;
 }
 
 export interface AppsSyncResponse {

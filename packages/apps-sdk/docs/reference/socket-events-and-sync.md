@@ -106,6 +106,13 @@ Client -> server (`apps:yjs:update`):
   else), joins them into the original update on the last part and applies it
   once, so the change is kept whole or refused whole
 - clients send parts only after a sync reply with `stagesParts: true`
+- a part the SFU cannot place is refused as `interrupted`, a passing reason
+
+Server -> peers, for a change over 256 KiB:
+
+- sent whole to sockets whose sync request said `wholeChanges: true`
+- every other socket in the room gets `apps:state` with no active app and then
+  the real state, so it reloads the app from the server instead of missing it
 
 Server -> peers (`apps:yjs:update`):
 

@@ -576,7 +576,12 @@ export function AppsProvider({
         return;
       }
 
-      const payload: AppsSyncPayload = { appId: run.appId, syncMessage: Y.encodeStateVector(run.doc), canRetry: true };
+      const payload: AppsSyncPayload = {
+        appId: run.appId,
+        syncMessage: Y.encodeStateVector(run.doc),
+        canRetry: true,
+        wholeChanges: true,
+      };
       let answered = false;
       const answer = (response?: AppsSyncResponse | AppsSyncError) => {
         if (answered || disposedRef.current) return;
@@ -754,7 +759,23 @@ export function AppsProvider({
       recoverFromRefusal(appId, replicaId, typeof payload.reason === "string" ? payload.reason : "refused");
     };
 
-    socket.on("connect", uploads.wake);
+    let interrupted = false;
+    const handleDisconnect = () => {
+      interrupted = true;
+    };
+    const handleConnect = () => {
+      if (interrupted) {
+        interrupted = false;
+        refreshState();
+        const appId = serverActiveAppIdRef.current;
+        const replicaId = appId ? replicaIdsRef.current.get(appId) : undefined;
+        if (appId && replicaId && syncedAppsRef.current.has(appId)) catchUp(appId, replicaId);
+      }
+      uploads.wake();
+    };
+
+    socket.on("disconnect", handleDisconnect);
+    socket.on("connect", handleConnect);
     socket.on("apps:state", handleState);
     socket.on("apps:yjs:update", handleUpdate);
     socket.on("apps:awareness", handleAwareness);
@@ -767,9 +788,10 @@ export function AppsProvider({
       socket.off("apps:yjs:update", handleUpdate);
       socket.off("apps:awareness", handleAwareness);
       socket.off("apps:yjs:refused", handleRefused);
-      socket.off("connect", uploads.wake);
+      socket.off("disconnect", handleDisconnect);
+      socket.off("connect", handleConnect);
     };
-  }, [socket, getDoc, getAwareness, refreshState, applyServerAppsState, recoverFromRefusal, uploads]);
+  }, [socket, getDoc, getAwareness, refreshState, applyServerAppsState, recoverFromRefusal, catchUp, uploads]);
 
   useEffect(() => {
     resumeWrites();

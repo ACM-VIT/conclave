@@ -26,6 +26,8 @@ export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChang
   const listeners = new Map<string, Listener>();
   const relayed: Uint8Array[] = [];
   const refused: AppsRefusedData[] = [];
+  const joined = new Set<string>();
+  const broadcasts: Array<{ to: string; except?: string; event: string; payload: unknown }> = [];
   const socket = {
     id: `s-${id}`,
     data: { user: {} },
@@ -33,10 +35,23 @@ export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChang
       listeners.set(event, listener);
       return socket;
     },
-    to: () => ({
+    rooms: joined,
+    join: (target: string) => {
+      joined.add(target);
+    },
+    leave: (target: string) => {
+      joined.delete(target);
+    },
+    to: (target: string) => ({
       emit: (event: string, payload: { update: Uint8Array }) => {
+        broadcasts.push({ to: target, event, payload });
         if (event === "apps:yjs:update") relayed.push(payload.update);
       },
+      except: (other: string) => ({
+        emit: (event: string, payload: unknown) => {
+          broadcasts.push({ to: target, except: other, event, payload });
+        },
+      }),
     }),
     emit: (event: string, payload: AppsRefusedData) => {
       if (event === "apps:yjs:refused") refused.push(payload);
@@ -58,11 +73,12 @@ export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChang
   registerAppsHandlers(context);
   const call = <T>(event: string, ...args: unknown[]) =>
     new Promise<T>((resolve) => listeners.get(event)!(...args, resolve));
-  const requestSync = (holder: Y.Doc, canRetry = true) =>
+  const requestSync = (holder: Y.Doc, canRetry = true, wholeChanges = false) =>
     call<AppsSyncResponse | AppsSyncError>("apps:yjs:sync", {
       appId: "board",
       syncMessage: Y.encodeStateVector(holder),
       canRetry,
+      ...(wholeChanges ? { wholeChanges } : {}),
     });
   const syncFrom = async (holder: Y.Doc) => {
     const response = await requestSync(holder);
@@ -77,6 +93,9 @@ export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChang
   };
   return {
     state,
+    channelId: () => context.currentRoom?.channelId ?? "",
+    joined,
+    broadcasts,
     relayed,
     refused,
     open: () => call("apps:open", { appId: "board" }),

@@ -7,7 +7,7 @@ import type { Socket } from "socket.io-client";
 import { AppsContext, AppsProvider } from "../../../packages/apps-sdk/src/sdk/runtime/AppsProvider";
 import { useApps } from "../../../packages/apps-sdk/src/sdk/hooks/useApps";
 import { useAppDoc } from "../../../packages/apps-sdk/src/sdk/hooks/useAppDoc";
-import { APP_DOCUMENT_UPDATE_MAX_BYTES, APP_DOCUMENT_UPLOADS_PER_SECOND } from "../../../packages/apps-sdk/src/sdk/limits";
+import { APP_DOCUMENT_UPDATE_MAX_BYTES, APP_DOCUMENT_UPLOAD_INTERVAL_MS, APP_DOCUMENT_UPLOADS_PER_SECOND } from "../../../packages/apps-sdk/src/sdk/limits";
 import { createUploadQueue } from "../../../packages/apps-sdk/src/sdk/runtime/uploadQueue";
 import { whiteboardApp } from "../../../packages/apps-sdk/src/apps/whiteboard/web/index";
 import {
@@ -60,8 +60,10 @@ const budgetedSfu = (appId: string, serverDoc: Y.Doc) => {
     syncDelayMs: 0,
     stagesParts: false,
     docLimit: Number.POSITIVE_INFINITY,
+    activeAppId: appId as string | null,
     refusedReplicas: new Set<string>(),
   };
+  const syncPayloads: Array<{ wholeChanges?: boolean }> = [];
   const refuse = (replicaId: string, reason: string, delayMs = 0) => {
     state.refusals += 1;
     reasons.push(reason);
@@ -96,10 +98,11 @@ const budgetedSfu = (appId: string, serverDoc: Y.Doc) => {
     off: (event: string, listener: Listener) => listeners.get(event)?.delete(listener),
     emit: (event: string, payload?: unknown, ack?: Ack) => {
       if (event === "apps:getState" && typeof payload === "function") {
-        (payload as Ack)({ activeAppId: appId, locked: false });
+        (payload as Ack)({ activeAppId: state.activeAppId, locked: false });
         return;
       }
       if (event === "apps:yjs:sync" && typeof ack === "function") {
+        syncPayloads.push(payload as { wholeChanges?: boolean });
         const answer = () =>
           ack({
             syncMessage: Y.encodeStateAsUpdate(serverDoc),
@@ -131,7 +134,7 @@ const budgetedSfu = (appId: string, serverDoc: Y.Doc) => {
       }
       if (part.index === 0) staged = { id: part.id, parts: [] };
       if (!staged || staged.id !== part.id || staged.parts.length !== part.index) {
-        refuse(replicaId, "invalid");
+        refuse(replicaId, "interrupted");
         return;
       }
       staged.parts.push(update);
@@ -143,7 +146,19 @@ const budgetedSfu = (appId: string, serverDoc: Y.Doc) => {
   } as unknown as Socket;
   const busiestSecond = () =>
     sentAt.reduce((most, start, index) => Math.max(most, sentAt.slice(index).filter((time) => time < start + 1_000).length), 0);
-  return { socket, state, sentAt, sentBytes, reasons, partsSeen, busiestSecond, fire };
+  const interrupt = () => {
+    (socket as unknown as { connected: boolean }).connected = false;
+    staged = null;
+    fire("disconnect", "transport close");
+  };
+  const restore = () => {
+    (socket as unknown as { connected: boolean }).connected = true;
+    fire("connect", undefined);
+  };
+  const dropStaging = () => {
+    staged = null;
+  };
+  return { socket, state, sentAt, sentBytes, reasons, partsSeen, syncPayloads, busiestSecond, fire, interrupt, restore, dropStaging };
 };
 
 const mount = async (socket: Socket, Body: ComponentType, apps: never[]) => {
@@ -497,6 +512,79 @@ describe("app updates stay inside the server's budget", () => {
     expect(sfu.sentBytes.every((bytes) => bytes <= APP_DOCUMENT_UPDATE_MAX_BYTES)).toBe(true);
     expect(ctx.getDoc("seeded").getText("t").toString()).toBe(seeded);
     expect(server.getText("t").toString()).toBe(seeded);
+  });
+
+  const reconnectDuringParts = async (partsBeforeDrop: number) => {
+    const server = new Y.Doc();
+    const sfu = budgetedSfu("dev-playground", server);
+    sfu.state.stagesParts = true;
+    await mount(sfu.socket, () => null, [{ id: "dev-playground", name: "Dev" } as never]);
+    const live = ctx.getDoc("dev-playground");
+    const paste = "r".repeat(700 * 1024);
+
+    await act(async () => setNotes(live, paste));
+    await advance(APP_DOCUMENT_UPLOAD_INTERVAL_MS * (partsBeforeDrop - 1) + 1);
+    expect(sfu.partsSeen.map((part) => part.index)).toEqual(Array.from({ length: partsBeforeDrop }, (_, index) => index));
+    await act(async () => sfu.interrupt());
+    await advance(1_000);
+    await act(async () => sfu.restore());
+    await advance(3_000);
+    return { sfu, server, live, paste };
+  };
+
+  it("restarts a change in parts from a fresh sync after an in-place reconnect right after its first part", async () => {
+    const { sfu, server, live, paste } = await reconnectDuringParts(1);
+
+    expect(sfu.syncPayloads.length).toBeGreaterThan(1);
+    expect(sfu.syncPayloads.every((payload) => payload.wholeChanges === true)).toBe(true);
+    expect(sfu.reasons).toEqual([]);
+    expect(getNotes(server)).toBe(paste);
+    expect(ctx.getDoc("dev-playground")).toBe(live);
+    expect(ctx.rejectedChangeAt).toBeNull();
+  });
+
+  it("restarts a change in parts from a fresh sync after an in-place reconnect after a later part", async () => {
+    const { sfu, server, live, paste } = await reconnectDuringParts(2);
+
+    expect(sfu.reasons).toEqual([]);
+    expect(getNotes(server)).toBe(paste);
+    expect(ctx.getDoc("dev-playground")).toBe(live);
+    expect(ctx.rejectedChangeAt).toBeNull();
+  });
+
+  it("asks the server what is open after an in-place reconnect, and sends nothing into an app that closed meanwhile", async () => {
+    const sfu = budgetedSfu("dev-playground", new Y.Doc());
+    sfu.state.stagesParts = true;
+    await mount(sfu.socket, () => null, [{ id: "dev-playground", name: "Dev" } as never]);
+    await act(async () => sfu.interrupt());
+    await act(async () => setNotes(ctx.getDoc("dev-playground"), "written while away"));
+    sfu.state.activeAppId = null;
+    const sentBefore = sfu.sentAt.length;
+
+    await act(async () => sfu.restore());
+    await advance(3_000);
+
+    expect(ctx.state.activeAppId).toBeNull();
+    expect(sfu.sentAt).toHaveLength(sentBefore);
+  });
+
+  it("treats a refused part as passing: it resends the whole change from a fresh sync and keeps the local copy", async () => {
+    const server = new Y.Doc();
+    const sfu = budgetedSfu("dev-playground", server);
+    sfu.state.stagesParts = true;
+    await mount(sfu.socket, () => null, [{ id: "dev-playground", name: "Dev" } as never]);
+    const live = ctx.getDoc("dev-playground");
+    const paste = "q".repeat(700 * 1024);
+
+    await act(async () => setNotes(live, paste));
+    await advance(1);
+    sfu.dropStaging();
+    await advance(3_000);
+
+    expect(sfu.reasons).toEqual(["interrupted"]);
+    expect(getNotes(server)).toBe(paste);
+    expect(ctx.getDoc("dev-playground")).toBe(live);
+    expect(ctx.rejectedChangeAt).toBeNull();
   });
 
   const catchUpWithThreeChanges = async (docLimit: number) => {

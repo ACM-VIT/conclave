@@ -1337,6 +1337,7 @@ internal class SocketIOManager {
         val payload = JSONObject()
             .put("appId", appId)
             .put("syncMessage", encodeBase64(stateVector))
+            .put("wholeChanges", true)
         val data = emit(SocketEvent.appsYjsSync, payload)
         val response = decodeAppsSyncResponse(data)
             ?: throw ErrorException("Invalid app sync acknowledgement.")

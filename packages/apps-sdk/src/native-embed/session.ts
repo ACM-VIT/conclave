@@ -174,7 +174,7 @@ export class NativeEmbedSession {
       case "snapshot":
         return this.applySnapshot(payload);
       case "update": {
-        const update = bytesFromBase64(payload.update, NATIVE_EMBED_LIMITS.updateBytes);
+        const update = bytesFromBase64(payload.update, NATIVE_EMBED_LIMITS.remoteUpdateBytes);
         if (!update.ok) return this.reject(update.reason);
         if (update.bytes.length > 0) this.applyRemoteUpdate(update.bytes);
         return "none";

@@ -17,6 +17,7 @@ export type AppsSyncPayload = {
   appId: string;
   syncMessage: Uint8Array;
   canRetry?: boolean;
+  wholeChanges?: true;
 };
 
 export type AppsSyncResponse = {

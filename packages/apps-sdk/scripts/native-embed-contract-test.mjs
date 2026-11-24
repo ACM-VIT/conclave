@@ -339,6 +339,26 @@ test("a resync or a change bigger than one update never reaches the room in part
   assert.deepEqual(ben.session.doc.getArray("big").toJSON(), []);
 });
 
+test("an embed takes a relayed change of 300 KiB, or one at the document limit, and ends equal to the room", { skip: skipConvergence }, async (context) => {
+  const harness = makeRoom(sessionModule, context);
+  const ben = await harness.join("ben");
+  const { Y } = harness;
+  const web = new Y.Doc();
+  Y.applyUpdate(web, Y.encodeStateAsUpdate(harness.room));
+  for (const size of [300 * 1024, limits.APP_DOCUMENT_UPDATE_MAX_BYTES * 4 - 64 * 1024]) {
+    const before = Y.encodeStateVector(web);
+    web.getText("notes").insert(0, "w".repeat(size));
+    const change = Y.encodeStateAsUpdate(web, before);
+    assert.ok(change.length > limits.APP_DOCUMENT_UPDATE_MAX_BYTES, `${change.length} bytes`);
+    Y.applyUpdate(harness.room, change);
+    assert.equal(harness.deliver(ben, "update", { update: Buffer.from(change).toString("base64") }), "none");
+    await harness.pump();
+    assert.equal(ben.session.doc.getText("notes").toString(), harness.room.getText("notes").toString());
+  }
+  assert.ok(ben.session.doc.getText("notes").length > 1_000_000);
+  assert.deepEqual(ben.session.rejections, []);
+});
+
 test("read-only embeds draw nothing into the room", { skip: skipConvergence }, async (context) => {
   const harness = makeRoom(sessionModule, context);
   const viewer = await harness.join("viewer", { readOnly: true });
