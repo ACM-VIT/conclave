@@ -36,6 +36,13 @@ const sdkUuid = "0196f0a1-0000-7000-8000-00000000000a";
 const originalConsoleError = console.error;
 let root: Root | null = null;
 
+const browserRequest = class extends Request {
+  constructor(input: RequestInfo | URL, init?: RequestInit) {
+    super(input, init);
+    Object.defineProperty(this, "keepalive", { value: init?.keepalive === true });
+  }
+};
+
 beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
@@ -43,6 +50,7 @@ beforeEach(() => {
   console.error = () => {};
   vi.stubEnv("NEXT_PUBLIC_POSTHOG_KEY", "phc_test_project");
   vi.stubEnv("NEXT_PUBLIC_POSTHOG_DEV", "1");
+  vi.stubGlobal("Request", browserRequest);
   vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 404 })));
   Object.defineProperty(navigator, "sendBeacon", { configurable: true, value: () => false });
 });

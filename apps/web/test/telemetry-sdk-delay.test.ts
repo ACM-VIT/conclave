@@ -31,6 +31,13 @@ let sent: Sent[] = [];
 let manifest: "pending" | "missing" = "pending";
 let abortManifest: () => void = () => {};
 
+const browserRequest = class extends Request {
+  constructor(input: RequestInfo | URL, init?: RequestInit) {
+    super(input, init);
+    Object.defineProperty(this, "keepalive", { value: init?.keepalive === true });
+  }
+};
+
 beforeEach(async () => {
   vi.resetModules();
   const { PostHog } = await import("posthog-js");
@@ -41,6 +48,7 @@ beforeEach(async () => {
   vi.stubEnv("NEXT_PUBLIC_POSTHOG_KEY", KEY);
   vi.stubEnv("NEXT_PUBLIC_POSTHOG_DEV", "1");
   vi.stubEnv("NEXT_PUBLIC_CONCLAVE_CLIENT_VERSION", BUILD);
+  vi.stubGlobal("Request", browserRequest);
   vi.stubGlobal(
     "fetch",
     vi.fn((resource: unknown, init?: RequestInit) => {

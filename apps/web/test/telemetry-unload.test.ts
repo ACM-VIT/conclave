@@ -22,6 +22,9 @@ const holdSdk = () => {
 
 type Sent = { via: "beacon" | "fetch"; url: string; body: BodyInit; type: string };
 let sent: Sent[] = [];
+let ingestInits: RequestInit[] = [];
+let sendBeaconCalls = 0;
+let refuseBeacons = false;
 
 // While set, /ingest answers only once the test releases it.
 let ingestHeld: Promise<void> | null = null;
@@ -31,11 +34,21 @@ let ingestHeld: Promise<void> | null = null;
 let manifest: "pending" | "missing" = "pending";
 let abortManifest: () => void = () => {};
 
+const browserRequest = class extends Request {
+  constructor(input: RequestInfo | URL, init?: RequestInit) {
+    super(input, init);
+    Object.defineProperty(this, "keepalive", { value: init?.keepalive === true });
+  }
+};
+
 beforeEach(async () => {
   vi.resetModules();
   const { PostHog } = await import("posthog-js");
   vi.spyOn(PostHog.prototype, "init");
   sent = [];
+  ingestInits = [];
+  sendBeaconCalls = 0;
+  refuseBeacons = false;
   ingestHeld = null;
   localStorage.clear();
   manifest = "pending";
@@ -43,6 +56,7 @@ beforeEach(async () => {
   vi.stubEnv("NEXT_PUBLIC_POSTHOG_KEY", KEY);
   vi.stubEnv("NEXT_PUBLIC_POSTHOG_DEV", "1");
   vi.stubEnv("NEXT_PUBLIC_CONCLAVE_CLIENT_VERSION", BUILD);
+  vi.stubGlobal("Request", browserRequest);
   vi.stubGlobal(
     "fetch",
     vi.fn((resource: unknown, init?: RequestInit) => {
@@ -55,8 +69,11 @@ beforeEach(async () => {
       }
       const answer = new Response('{"status":1}', { status: 200 });
       if (url.includes("/ingest/") && init?.body) {
-        sent.push({ via: "fetch", url, body: init.body, type: new Headers(init.headers).get("content-type") ?? "" });
-        if (ingestHeld) return ingestHeld.then(() => answer);
+        const via = init.signal ? "fetch" : "beacon";
+        if (via === "beacon" && refuseBeacons) throw new TypeError("keepalive request refused");
+        ingestInits.push(init);
+        sent.push({ via, url, body: init.body, type: new Headers(init.headers).get("content-type") ?? "" });
+        if (ingestHeld && via === "fetch") return ingestHeld.then(() => answer);
       }
       return Promise.resolve(answer);
     }),
@@ -66,8 +83,9 @@ beforeEach(async () => {
   Object.defineProperty(navigator, "sendBeacon", {
     configurable: true,
     value: (url: string | URL, body: Blob) => {
+      sendBeaconCalls += 1;
       sent.push({ via: "beacon", url: String(url), body, type: body.type });
-      return true;
+      return !refuseBeacons;
     },
   });
 });
@@ -303,7 +321,7 @@ describe("batches the browser will not take as the page goes away", () => {
     await loaded();
     telemetry.capture("meet_join_attempt", { joinMode: "meeting", isAdmin: false });
     telemetry.capture("meet_join_success", { joinMode: "meeting", status: "joined" });
-    Object.defineProperty(navigator, "sendBeacon", { configurable: true, value: () => false });
+    refuseBeacons = true;
     window.dispatchEvent(new Event("pagehide"));
     expect(sent).toEqual([]);
     expect(savedKeys()).toHaveLength(1);
@@ -323,7 +341,7 @@ describe("batches the browser will not take as the page goes away", () => {
     startTelemetry();
     await loaded();
     telemetry.capture("meet_join_attempt", { joinMode: "meeting", isAdmin: false });
-    Object.defineProperty(navigator, "sendBeacon", { configurable: true, value: () => false });
+    refuseBeacons = true;
     hide();
     expect(sent).toEqual([]);
     expect(savedKeys()).toHaveLength(1);
@@ -407,7 +425,7 @@ describe("batches the browser will not take as the page goes away", () => {
 
       // The page hides, saving what it holds, and comes back while the
       // replay still waits for its answer.
-      Object.defineProperty(navigator, "sendBeacon", { configurable: true, value: () => false });
+      refuseBeacons = true;
       telemetry.capture("meet_join_success", { joinMode: "meeting", status: "joined" });
       hide();
       expect(savedKeys()).toHaveLength(2);
@@ -420,6 +438,24 @@ describe("batches the browser will not take as the page goes away", () => {
     } finally {
       delete (navigator as unknown as { locks?: unknown }).locks;
     }
+  });
+});
+
+describe("what a telemetry request carries", () => {
+  it("sends every report without cookies or a referrer, and never by sendBeacon", async () => {
+    manifest = "missing";
+    const { telemetry, startTelemetry } = await import("../src/app/lib/telemetry");
+    startTelemetry();
+    await loaded();
+    telemetry.captureException(new TypeError("while the page stays"), { source: "react_error_boundary", boundary: "route" });
+    await vi.waitFor(() => expect(sent.length).toBeGreaterThan(0));
+    telemetry.capture("meet_join_attempt", { joinMode: "meeting", isAdmin: false });
+    hide();
+
+    expect(sendBeaconCalls).toBe(0);
+    expect(ingestInits.length).toBeGreaterThanOrEqual(2);
+    for (const init of ingestInits) expect(init).toMatchObject({ credentials: "omit", referrerPolicy: "no-referrer" });
+    expect(ingestInits.some((init) => init.keepalive === true && !init.signal)).toBe(true);
   });
 });
 

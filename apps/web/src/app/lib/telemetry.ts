@@ -371,6 +371,25 @@ const initPostHog = (client: PostHog, key: string): void => {
   dropStoredProperties(client);
 };
 
+const keepaliveRequests = (): boolean => {
+  try {
+    return new Request(window.location.origin, { keepalive: true }).keepalive === true;
+  } catch {
+    return false;
+  }
+};
+
+const ingestRequest = (body: string, keepalive: boolean, signal?: AbortSignal): Promise<Response> =>
+  fetch(`${INGEST_PATH}/e/`, {
+    method: "POST",
+    body,
+    keepalive,
+    signal,
+    credentials: "omit",
+    referrerPolicy: "no-referrer",
+    headers: { "content-type": "application/json" },
+  });
+
 /**
  * Starts telemetry once for the page's lifetime: the lifecycle flush at once,
  * then the SDK and the chunk manifest. Every report starts it too, so an
@@ -383,23 +402,22 @@ export function startTelemetry(): void {
   if (phase.name !== "idle" || !posthogKey || !telemetryEnabled) return;
   if (typeof window === "undefined") return;
   phase = { name: "loading", pending: [] };
+  const unloadRequests = keepaliveRequests();
   outbox = createOutbox({
     token: posthogKey,
     now: Date.now,
     setTimer: (run, ms) => window.setTimeout(run, ms),
     clearTimer: (timer) => window.clearTimeout(timer as number),
     post: (body, keepalive, signal) =>
-      fetch(`${INGEST_PATH}/e/`, {
-        method: "POST",
-        body,
-        keepalive,
-        signal,
-        credentials: "omit",
-        headers: { "content-type": "application/json" },
-      }).then((response) => ({ status: response.status, retryAfter: response.headers.get("retry-after") })),
+      ingestRequest(body, keepalive, signal).then((response) => ({
+        status: response.status,
+        retryAfter: response.headers.get("retry-after"),
+      })),
     beacon: (body) => {
+      if (!unloadRequests) return false;
       try {
-        return navigator.sendBeacon(`${INGEST_PATH}/e/`, new Blob([body], { type: "application/json" }));
+        ingestRequest(body, true).catch(() => {});
+        return true;
       } catch {
         return false;
       }

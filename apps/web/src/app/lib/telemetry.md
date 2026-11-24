@@ -32,12 +32,16 @@ of requests rather than one per event. A batch goes 5 s after its first event,
 as soon as it holds 20 events, or before it would pass 48 KB (under the
 browser's 64 KB budget for keepalive requests and beacons), whichever comes
 first. An exception sends early, at most once every 3 s. An event is queued
-once by its uuid. Batches go by keepalive fetch, without cookies, and each
-send carries its own `sent_at`, so `/ingest` can tell the events' age by the
-browser's clock. One table, in `lib/telemetry-answers.ts`, says what an
-answer means, for the outbox reading `/ingest` and for `/ingest` reading
-PostHog: 2xx is delivered; 408, 425, 429 and any 5xx are worth sending again;
-anything else is refused for good.
+once by its uuid. Every request is a `fetch` with `credentials: "omit"` and
+`referrerPolicy: "no-referrer"`, so `/ingest` never sees the auth cookie or
+the page's URL; `sendBeacon`, which always sends cookies and the referrer, is
+not used, and the send as a page goes away is a keepalive `fetch` instead
+(where a browser has no keepalive `fetch`, the batch is saved for the next
+load). Each send carries its own `sent_at`, so `/ingest` can tell the events'
+age by the browser's clock. One table, in `lib/telemetry-answers.ts`, says
+what an answer means, for the outbox reading `/ingest` and for `/ingest`
+reading PostHog: 2xx is delivered; 408, 425, 429 and any 5xx are worth
+sending again; anything else is refused for good.
 
 The outbox owns every batch until `/ingest` answers it, and each batch has
 one owner at a time:
@@ -51,9 +55,10 @@ one owner at a time:
   a 15 s deadline (`/ingest` itself allows 2 s for a manifest and 10 s for
   PostHog); at the deadline it is aborted and counts as no answer.
 - **Saved.** On `visibilitychange` to hidden, on `pagehide` and on `freeze`,
-  everything queued and every batch waiting in memory goes by beacon, within
-  one 56 KB budget for every beacon and keepalive request still outstanding,
-  unless its `Retry-After` has not passed; then each is saved in local storage
+  everything queued and every batch waiting in memory goes by beacon (a
+  keepalive `fetch`), within one 56 KB budget for every keepalive request
+  still outstanding, unless its `Retry-After` has not passed; then each is
+  saved in local storage
   under its own key, `conclave:telemetry:batch:<uuid>`, at most 512 KB in
   all. A request in flight is saved too, with its attempt id and a lease. A
   saved batch keeps its place in the retry schedule (`attempt`, `nextTry`,
