@@ -4,7 +4,7 @@ import type { Server as SocketIOServer, Socket } from "socket.io";
 import { Admin } from "../config/classes/Admin.js";
 import type { Room } from "../config/classes/Room.js";
 import { config } from "../config/config.js";
-import { initScheduledMeetings } from "../server/init.js";
+import { cleanupDeadWorkerRooms, initScheduledMeetings } from "../server/init.js";
 import { ROOM_OPEN_DEADLINE_MS } from "../server/joinDeadlines.js";
 import {
   createMemoryRoomRecoveryStore,
@@ -12,6 +12,7 @@ import {
 } from "../server/roomRecoveryLedger.js";
 import { startRoomRecoveryPassRefresh } from "../server/roomRecoveryPass.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
+import { renewRoomOwnerships } from "../server/rooms.js";
 import {
   createScheduledMeeting,
   type ScheduledMeetingPersistence,
@@ -24,6 +25,7 @@ import {
 } from "../server/socket/context.js";
 import { registerDisconnectHandlers } from "../server/socket/handlers/disconnectHandlers.js";
 import { registerJoinRoomHandler } from "../server/socket/handlers/joinRoom.js";
+import { forceDrainRooms, handOffRooms } from "../server/serverShutdown.js";
 import { createSfuState, type SfuState } from "../server/state.js";
 import type { ScheduledMeeting } from "../types.js";
 import { Logger } from "../utilities/loggers.js";
@@ -71,9 +73,11 @@ type Sfu = {
   state: SfuState;
   io: SocketIOServer;
   channels: Map<string, Set<Peer>>;
+  peers: Set<Peer>;
   stopRefresh: () => void;
 };
 type Tab = {
+  user: SfuAuthPayload;
   peer: Peer;
   context: ConnectionContext;
   generation: number;
@@ -84,6 +88,7 @@ type Actor = {
   user: SfuAuthPayload;
   key: string;
   tab: Tab | null;
+  second: Tab | null;
   pass: string | null;
 };
 type JoinAck = { status?: string; error?: string; roomRecoveryPass?: string };
@@ -93,6 +98,7 @@ type Completion = {
   admin: boolean;
   incarnation: string | null;
   ownerEmail: string | null;
+  seatId: string | null;
 };
 type Phase =
   | { kind: "none" }
@@ -122,9 +128,11 @@ type HostAction =
   | "block"
   | "revoke"
   | "allow";
+type Shutdown = "drain" | "stop" | "worker" | "handoff";
 type Step =
   | { kind: "open"; actor: ActorName; pass: boolean; hold: boolean }
   | { kind: "again"; actor: ActorName; pass: boolean }
+  | { kind: "second"; actor: ActorName; action: "open" | "leave" }
   | { kind: "leave"; actor: ActorName }
   | { kind: "drop"; actor: ActorName }
   | { kind: "together"; actors: [ActorName, ActorName] }
@@ -133,6 +141,7 @@ type Step =
   | { kind: "host"; action: HostAction; by: ActorName; target: ActorName }
   | { kind: "end"; by: ActorName }
   | { kind: "restart" }
+  | { kind: "shutdown"; how: Shutdown; leaver: ActorName | null }
   | { kind: "tick"; ms: number };
 
 type World = {
@@ -194,6 +203,7 @@ const makePeer = (sfu: Sfu, id: string, user: SfuAuthPayload): Peer => {
   const events: Peer["events"] = [];
   const wire = { connected: true };
   const peer = { handlers, events, wire } as Peer;
+  sfu.peers.add(peer);
   const socket = {
     id,
     data: { user },
@@ -283,6 +293,7 @@ const boot = async (world: World): Promise<Sfu> => {
     generation,
     state,
     channels: new Map(),
+    peers: new Set(),
     io: undefined as unknown as SocketIOServer,
     stopRefresh: () => undefined,
   };
@@ -304,6 +315,7 @@ const createWorld = async (options: {
         user: USERS[name],
         key: USERS[name].email ?? USERS[name].userId!,
         tab: null,
+        second: null,
         pass: null,
       } satisfies Actor,
     ]),
@@ -383,11 +395,17 @@ const seatOf = (room: Room, key: string): string | null => {
 const ownsCode = (actor: Actor, ownerEmail: string | null | undefined): boolean =>
   Boolean(actor.user.email) && ownerEmail === actor.user.email;
 
-const liveTab = (world: World, actor: Actor): Tab | null => {
-  const tab = actor.tab;
-  if (!tab || tab.generation !== world.sfu.generation || !tab.peer.wire.connected) return null;
-  return tab;
-};
+const isLive = (world: World, tab: Tab | null): tab is Tab =>
+  Boolean(tab && tab.generation === world.sfu.generation && tab.peer.wire.connected);
+
+const liveTab = (world: World, actor: Actor): Tab | null =>
+  isLive(world, actor.tab) ? actor.tab : null;
+
+const liveSecondTab = (world: World, actor: Actor): Tab | null =>
+  isLive(world, actor.second) ? actor.second : null;
+
+const liveTabsOf = (world: World, actor: Actor): Tab[] =>
+  [actor.tab, actor.second].filter((tab): tab is Tab => isLive(world, tab));
 
 const hostsLiveRoom = (world: World, actor: Actor): boolean => {
   const tab = liveTab(world, actor);
@@ -401,16 +419,19 @@ const hostsLiveRoom = (world: World, actor: Actor): boolean => {
   );
 };
 
-const openTab = (world: World, actor: Actor): Tab => {
+const openTab = (world: World, actor: Actor, which: "main" | "second" = "main"): Tab => {
   const sfu = world.sfu;
   world.tabs += 1;
-  const peer = makePeer(sfu, `${actor.name}-tab-${world.tabs}`, actor.user);
+  const user =
+    which === "second" ? { ...actor.user, sessionId: `${actor.user.sessionId}2` } : actor.user;
+  const peer = makePeer(sfu, `${actor.name}-tab-${world.tabs}`, user);
   const context = createConnectionContext(sfu.io, peer.socket, sfu.state);
   setSocketContext(peer.socket, context);
   registerJoinRoomHandler(context);
   registerDisconnectHandlers(context);
-  const tab: Tab = { peer, context, generation: sfu.generation, approvalsSeen: 0 };
-  actor.tab = tab;
+  const tab: Tab = { user, peer, context, generation: sfu.generation, approvalsSeen: 0 };
+  if (which === "second") actor.second = tab;
+  else actor.tab = tab;
   return tab;
 };
 
@@ -436,11 +457,12 @@ const startJoin = (world: World, actor: Actor, tab: Tab, presentPass: boolean): 
       admin: tab.context.currentClient instanceof Admin,
       incarnation: tab.context.currentRoom?.incarnationId ?? null,
       ownerEmail: tab.context.currentRoom?.ownerEmail ?? null,
+      seatId: tab.context.currentClient?.id ?? null,
     });
   };
   const payload = {
     roomId: CODE,
-    sessionId: actor.user.sessionId,
+    sessionId: tab.user.sessionId,
     ...(presentPass && actor.pass ? { roomRecoveryPass: actor.pass } : {}),
   };
   void Promise.resolve(handler(payload, ack)).catch((error: unknown) => {
@@ -472,11 +494,11 @@ const hostAct = async (
 
 const keepNewestPasses = (world: World): void => {
   for (const actor of Object.values(world.actors)) {
-    const tab = liveTab(world, actor);
-    if (!tab) continue;
-    for (const { event, payload } of tab.peer.events) {
-      if (event !== "roomRecoveryPass") continue;
-      actor.pass = (payload as { roomRecoveryPass: string }).roomRecoveryPass;
+    for (const tab of liveTabsOf(world, actor)) {
+      for (const { event, payload } of tab.peer.events) {
+        if (event !== "roomRecoveryPass") continue;
+        actor.pass = (payload as { roomRecoveryPass: string }).roomRecoveryPass;
+      }
     }
   }
 };
@@ -485,15 +507,16 @@ const followApprovals = async (world: World): Promise<void> => {
   for (let round = 0; round < 4; round += 1) {
     let asked = false;
     for (const actor of Object.values(world.actors)) {
-      const tab = liveTab(world, actor);
-      if (!tab || approvalsOf(tab) <= tab.approvalsSeen) continue;
-      if (!world.follows()) {
-        tab.approvalsSeen = approvalsOf(tab);
-        continue;
+      for (const tab of liveTabsOf(world, actor)) {
+        if (approvalsOf(tab) <= tab.approvalsSeen) continue;
+        if (!world.follows()) {
+          tab.approvalsSeen = approvalsOf(tab);
+          continue;
+        }
+        world.trace.push(`  ${actor.name}'s tab asks again after being let in`);
+        startJoin(world, actor, tab, true);
+        asked = true;
       }
-      world.trace.push(`  ${actor.name}'s tab asks again after being let in`);
-      startJoin(world, actor, tab, true);
-      asked = true;
     }
     if (!asked) return;
     await settle();
@@ -506,6 +529,10 @@ const describeStep = (step: Step): string => {
       return `${step.actor} opens a tab and joins${step.pass ? " with a pass" : ""}${step.hold ? ", the room opening is held" : ""}`;
     case "again":
       return `${step.actor} asks again on the same tab${step.pass ? " with a pass" : ""}`;
+    case "second":
+      return step.action === "open"
+        ? `${step.actor} opens a second tab and joins`
+        : `${step.actor} closes their second tab`;
     case "leave":
       return `${step.actor} closes the tab`;
     case "drop":
@@ -524,6 +551,13 @@ const describeStep = (step: Step): string => {
       return `${step.by} ends the meeting for everyone`;
     case "restart":
       return "the SFU restarts";
+    case "shutdown":
+      return {
+        drain: "the SFU is force drained",
+        stop: "the SFU is stopped (SIGTERM)",
+        worker: "the room's media worker dies",
+        handoff: "another SFU takes the room over",
+      }[step.how] + (step.leaver ? `, and ${step.leaver} leaves during the notice` : "");
     case "tick":
       return `${step.ms / SECOND_MS} s pass`;
   }
@@ -599,34 +633,133 @@ const seatedHostKeys = (room: Room): Set<string> => {
   return keys;
 };
 
-const restart = async (world: World): Promise<void> => {
-  const old = world.sfu;
-  const room = old.state.rooms.get(CHANNEL);
-  const hosts = hostKeys(room);
-  const members = new Set([...world.shadow.members, ...seatedKeys(room)]);
-  old.stopRefresh();
+type CallSnapshot = { hosts: Set<string>; members: Set<string>; removals: Set<string> };
+
+const snapshotCall = (world: World): CallSnapshot => {
+  const room = world.sfu.state.rooms.get(CHANNEL);
+  return {
+    hosts: hostKeys(room),
+    members: new Set([...world.shadow.members, ...seatedKeys(room)]),
+    removals: new Set(world.shadow.removed),
+  };
+};
+
+const switchProcess = async (world: World): Promise<void> => {
+  world.sfu.stopRefresh();
   const now = Date.now();
   vi.clearAllTimers();
   vi.setSystemTime(now);
   world.held = [];
   world.holdNext = false;
   world.sfu = await boot(world);
+};
+
+const callIsLost = async (world: World, snapshot: CallSnapshot, cause: string): Promise<void> => {
   const phase = world.shadow.phase;
   if (phase.kind !== "running") return;
   const recalled = await world.sfu.state.roomRecovery.recall(CHANNEL);
   if (!recalled.lost) {
-    world.failures.push("the server kept no record of a running call when it restarted");
+    world.failures.push(`${cause} ended a running call: the server kept no record of it`);
     return;
+  }
+  const kept = new Set([
+    ...recalled.lost.adminUserKeys,
+    ...(recalled.lost.hostUserKey ? [recalled.lost.hostUserKey] : []),
+  ]);
+  for (const key of snapshot.hosts) {
+    if (!kept.has(key)) world.failures.push(`${cause} cleared the call's host ${key}`);
+  }
+  for (const key of kept) {
+    if (!snapshot.hosts.has(key)) world.failures.push(`${cause} made ${key} a host of the call`);
+  }
+  for (const key of snapshot.removals) {
+    if (!recalled.lost.readmissionRequiredUserKeys.includes(key)) {
+      world.failures.push(`${cause} cleared the removal of ${key}`);
+    }
+  }
+  if (recalled.passesVoidUntil !== null && recalled.passesVoidUntil >= phase.since) {
+    world.failures.push(`${cause} voided the call's recovery passes`);
   }
   world.shadow.phase = {
     kind: "lost",
     callSince: phase.since,
     since: Date.now(),
     until: recalled.lost.claimableUntil,
-    hosts,
-    members,
-    removals: new Set(world.shadow.removed),
+    hosts: snapshot.hosts,
+    members: snapshot.members,
+    removals: snapshot.removals,
   };
+};
+
+const restart = async (world: World): Promise<void> => {
+  const snapshot = snapshotCall(world);
+  await switchProcess(world);
+  await callIsLost(world, snapshot, "the restart");
+};
+
+const DRAIN_NOTICE_MS = 2_000;
+
+const SHUTDOWNS = {
+  drain: (sfu: Sfu) =>
+    forceDrainRooms(sfu.state, sfu.io, { message: "Restarting", noticeMs: DRAIN_NOTICE_MS }),
+  stop: (sfu: Sfu) => {
+    handOffRooms(sfu.state);
+    for (const peer of [...sfu.peers]) closePeer(sfu, peer, "server shutting down");
+  },
+  worker: (sfu: Sfu) =>
+    cleanupDeadWorkerRooms(sfu.state, sfu.io, sfu.state.workers[0], "model-worker"),
+  handoff: async (sfu: Sfu) => {
+    const registry = sfu.state.roomRegistry;
+    const moved = vi.spyOn(registry, "renewRoom").mockImplementation(async (room) => ({
+      ok: false as const,
+      owner: {
+        ...room,
+        instanceId: "model-other-sfu",
+        updatedAt: Date.now(),
+        expiresAt: Date.now() + 45_000,
+      },
+    }));
+    try {
+      await renewRoomOwnerships(sfu.state);
+    } finally {
+      moved.mockRestore();
+    }
+  },
+};
+
+const shutDown = async (world: World, step: Extract<Step, { kind: "shutdown" }>): Promise<void> => {
+  const snapshot = snapshotCall(world);
+  const sfu = world.sfu;
+  const cause = describeStep(step);
+  switch (step.how) {
+    case "drain": {
+      const drained = SHUTDOWNS.drain(sfu);
+      await settle();
+      const leaver = step.leaver ? liveTab(world, world.actors[step.leaver]) : null;
+      if (leaver) closePeer(sfu, leaver.peer, "client namespace disconnect");
+      await vi.advanceTimersByTimeAsync(DRAIN_NOTICE_MS);
+      await drained;
+      await settle();
+      await switchProcess(world);
+      break;
+    }
+    case "stop":
+      SHUTDOWNS.stop(sfu);
+      await settle();
+      await switchProcess(world);
+      break;
+    case "worker": {
+      const cleaned = SHUTDOWNS.worker(sfu);
+      await vi.advanceTimersByTimeAsync(1_500);
+      await cleaned;
+      break;
+    }
+    case "handoff":
+      await SHUTDOWNS.handoff(sfu);
+      break;
+  }
+  await settle();
+  await callIsLost(world, snapshot, cause);
 };
 
 const perform = async (world: World, step: Step): Promise<void> => {
@@ -634,8 +767,19 @@ const perform = async (world: World, step: Step): Promise<void> => {
   const before = liveRoom(world);
   const beforeIncarnation = before?.incarnationId ?? null;
   const beforeHosts = hostKeys(before);
-  const beforeSeated = seatedKeys(before);
+  const beforeSeated = new Set(before?.clients.keys() ?? []);
   switch (step.kind) {
+    case "second": {
+      const actor = world.actors[step.actor];
+      if (step.action === "open") {
+        startJoin(world, actor, openTab(world, actor, "second"), true);
+      } else {
+        const tab = liveSecondTab(world, actor);
+        if (!tab) throw new Error(`${actor.name} has no second tab`);
+        closePeer(world.sfu, tab.peer, "client namespace disconnect");
+      }
+      break;
+    }
     case "open": {
       const actor = world.actors[step.actor];
       if (step.hold) world.holdNext = true;
@@ -677,6 +821,9 @@ const perform = async (world: World, step: Step): Promise<void> => {
     case "restart":
       await restart(world);
       break;
+    case "shutdown":
+      await shutDown(world, step);
+      break;
     case "tick":
       await vi.advanceTimersByTimeAsync(step.ms);
       break;
@@ -708,7 +855,8 @@ const check = async (
     const { actor } = done;
     const owner = ownsCode(actor, done.ownerEmail);
     const sameRoom = done.incarnation !== null && done.incarnation === before.beforeIncarnation;
-    if (shadow.removed.has(actor.key) && !owner && !(sameRoom && before.beforeSeated.has(actor.key))) {
+    const sameSeat = sameRoom && done.seatId !== null && before.beforeSeated.has(done.seatId);
+    if (shadow.removed.has(actor.key) && !owner && !sameSeat) {
       fail(`${actor.name} was removed and got back in without a host letting them in`);
     }
     if (!done.admin || done.incarnation === null) continue;
@@ -840,6 +988,10 @@ const nextStep = (world: World): Step => {
       continue;
     }
     options.push([1.5, () => ({ kind: "again", actor: name, pass: random() < 0.7 })]);
+    options.push([
+      0.6,
+      () => ({ kind: "second", actor: name, action: liveSecondTab(world, actor) ? "leave" : "open" }),
+    ]);
     options.push([1.2, () => ({ kind: "leave", actor: name })]);
     options.push([0.4, () => ({ kind: "drop", actor: name })]);
     if (!room || !hostsLiveRoom(world, actor)) continue;
@@ -877,6 +1029,16 @@ const nextStep = (world: World): Step => {
   ]);
   options.push([0.4, () => ({ kind: "hold" })]);
   options.push([0.6, () => ({ kind: "restart" })]);
+  for (const how of ["drain", "stop", "worker", "handoff"] as const) {
+    options.push([
+      0.2,
+      () => ({
+        kind: "shutdown",
+        how,
+        leaver: how === "drain" && random() < 0.5 ? anyone() : null,
+      }),
+    ]);
+  }
   options.push([1.5, () => ({ kind: "tick", ms: SECOND_MS })]);
   options.push([1.2, () => ({ kind: "tick", ms: ROOM_OPEN_DEADLINE_MS + SECOND_MS })]);
   options.push([0.6, () => ({ kind: "tick", ms: MINUTE_MS + SECOND_MS })]);
@@ -1109,6 +1271,71 @@ describe("the room lifecycle model", () => {
       open("bob", { hold: true }),
       { kind: "tick", ms: 8 * MINUTE_MS },
       { kind: "release", alongside: null },
+    ]);
+    expect(outcome.failures, report(outcome)).toEqual([]);
+  });
+
+  it.each(["drain", "stop", "worker", "handoff"] as const)(
+    "keeps a call recoverable, with its hosts and removals, through a server-initiated %s",
+    async (how) => {
+      const outcome = await runScript(false, [
+        open("alice"),
+        open("carol"),
+        host("alice", "admit", "carol"),
+        open("invitee"),
+        host("alice", "admit", "invitee"),
+        host("alice", "kick", "invitee"),
+        { kind: "shutdown", how, leaver: null },
+        open("bob"),
+        open("carol"),
+        open("invitee"),
+      ]);
+      expect(outcome.failures, report(outcome)).toEqual([]);
+    },
+  );
+
+  it("takes host rights from every tab of a host when one of their tabs is removed", async () => {
+    const outcome = await runScript(true, [
+      open("alice"),
+      { kind: "second", actor: "alice", action: "open" },
+      open("carol"),
+      host("alice", "admit", "carol"),
+      host("alice", "promote", "carol"),
+      host("carol", "kick", "alice"),
+      open("owner"),
+    ]);
+    expect(outcome.failures, report(outcome)).toEqual([]);
+  });
+
+  it("takes host rights back from a temporary host when a host promotes the code's owner", async () => {
+    const outcome = await runScript(true, [
+      open("alice"),
+      open("invitee"),
+      open("owner"),
+      { kind: "second", actor: "owner", action: "open" },
+      host("owner", "transfer", "alice"),
+      host("alice", "kick", "owner"),
+      { kind: "leave", actor: "alice" },
+      host("invitee", "promote", "owner"),
+    ]);
+    expect(outcome.failures, report(outcome)).toEqual([]);
+  });
+
+  it("makes nobody host as a stopping SFU's people disconnect", async () => {
+    const outcome = await runScript(false, [
+      open("alice"),
+      open("carol"),
+      host("alice", "admit", "carol"),
+      { kind: "shutdown", how: "stop", leaver: null },
+    ]);
+    expect(outcome.failures, report(outcome)).toEqual([]);
+  });
+
+  it("does not end a call whose last person leaves while the SFU is draining", async () => {
+    const outcome = await runScript(false, [
+      open("alice"),
+      { kind: "shutdown", how: "drain", leaver: "alice" },
+      open("bob"),
     ]);
     expect(outcome.failures, report(outcome)).toEqual([]);
   });
