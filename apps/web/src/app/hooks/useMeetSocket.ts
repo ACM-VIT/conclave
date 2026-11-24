@@ -167,6 +167,7 @@ import {
   advanceScreenShareWatch,
   deliveredRtpBytes,
   readSenderPacketCounts,
+  senderPacketCountsRequestFor,
   screenPacketsGoMissing,
   screenVideoAwaitingSenderCheck,
   senderSentMore,
@@ -6485,13 +6486,11 @@ export function useMeetSocket({
 
     const unansweredSockets = new WeakSet<Socket>();
     const screenSenderPackets = async (): Promise<SenderPacketCounts | null> => {
-      const consumerIds = screenVideoAwaitingSenderCheck(consumedStreams(), true);
+      const request = senderPacketCountsRequestFor(
+        screenVideoAwaitingSenderCheck(consumedStreams(), true),
+      );
       const socket = socketRef.current;
-      if (
-        consumerIds.length === 0 ||
-        !socket?.connected ||
-        unansweredSockets.has(socket)
-      ) {
+      if (!request || !socket?.connected || unansweredSockets.has(socket)) {
         return null;
       }
       return new Promise<SenderPacketCounts | null>((resolve) => {
@@ -6503,7 +6502,7 @@ export function useMeetSocket({
             resolve(null);
           },
           "getSenderPacketCounts",
-          { consumerIds },
+          request,
           (answer: unknown) => resolve(readSenderPacketCounts(answer)),
         );
       });

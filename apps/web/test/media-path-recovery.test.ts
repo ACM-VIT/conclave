@@ -21,6 +21,7 @@ import {
   screenVideoAwaitingSenderCheck,
   senderSentMore,
   readSenderPacketCounts,
+  senderPacketCountsRequestFor,
   type ConsumedStream,
   type ScreenShareWatch,
   deliveredRtpBytes,
@@ -805,6 +806,15 @@ describe("telling a still screen share apart from one whose packets never arrive
     for (const pause of ["here", "server", "producer"] as const) {
       expect(screenVideoAwaitingSenderCheck([{ consumerId: "s", stream: screen(pause) }], true)).toEqual([]);
     }
+  });
+
+  it("asks for at most as many consumers as one request may name, and never for none", () => {
+    const ids = Array.from({ length: 20 }, (_, index) => `consumer-${index}`);
+
+    expect(senderPacketCountsRequestFor([])).toBeNull();
+    expect(senderPacketCountsRequestFor(["s"])).toEqual({ consumerIds: ["s"] });
+    expect(senderPacketCountsRequestFor(ids)).toEqual({ consumerIds: ids.slice(0, 16) });
+    expect(senderPacketCountsRequestFor([""])).toBeNull();
   });
 
   it("reads only a well formed answer from the SFU", () => {

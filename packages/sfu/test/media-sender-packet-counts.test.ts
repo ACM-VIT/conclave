@@ -82,16 +82,24 @@ describe("telling a viewer how many packets the sharers behind its consumers sen
     const { ask } = register();
 
     expect(
-      await ask({ consumerIds: ["screen", "closed", "orphan", "someone-else", 7] }),
+      await ask({ consumerIds: ["screen", "closed", "orphan", "someone-else"] }),
     ).toEqual({
       counts: { screen: 120 },
     });
   });
 
-  it("answers nothing useful outside a room or for a malformed request", async () => {
+  it("answers nothing outside a room", async () => {
     expect(await register({ inRoom: false }).ask({ consumerIds: ["screen"] })).toEqual({
       error: "Not in a room",
     });
-    expect(await register().ask(undefined)).toEqual({ counts: {} });
+  });
+
+  it.each<[string, unknown]>([
+    ["no request", undefined],
+    ["an id that is not a string", { consumerIds: ["screen", 7] }],
+    ["more ids than one request may name", { consumerIds: Array.from({ length: 17 }, () => "screen") }],
+    ["a field the request does not have", { consumerIds: ["screen"], producerIds: ["shared-screen"] }],
+  ])("refuses %s instead of guessing what it meant", async (_name, request) => {
+    expect(await register().ask(request)).toEqual({ error: "Invalid request" });
   });
 });

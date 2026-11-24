@@ -6,6 +6,7 @@ import { useMeetSocket } from "../src/app/hooks/useMeetSocket";
 import { requestJoinInfo } from "../src/app/lib/join-info-request";
 import { readJoinTokenUserKey } from "../src/app/lib/join-token-identity";
 import { ASSUMED_RELAY_LIFETIME_MS } from "../src/app/lib/relay-credentials";
+import { senderPacketCountsRequestSchema } from "@conclave/meeting-core/sender-packet-counts";
 
 type Listener = (...args: never[]) => unknown;
 type Ack = (response: unknown) => void;
@@ -621,10 +622,13 @@ export class CallRig {
       case "getSenderPacketCounts": {
         this.senderCountQueries += 1;
         if (!this.answersSenderCounts) return;
-        const ids = Array.isArray(payload?.consumerIds) ? (payload.consumerIds as string[]) : [];
+        const request = senderPacketCountsRequestSchema.safeParse(payload);
+        if (!request.success) return this.ack(ack, { error: "Invalid request" });
         return this.ack(ack, {
           counts: Object.fromEntries(
-            ids.filter((id) => this.senderPackets.has(id)).map((id) => [id, this.senderPackets.get(id)]),
+            request.data.consumerIds
+              .filter((id) => this.senderPackets.has(id))
+              .map((id) => [id, this.senderPackets.get(id)]),
           ),
         });
       }

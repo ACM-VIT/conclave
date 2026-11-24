@@ -1,4 +1,10 @@
-import { z } from "zod";
+import {
+  SENDER_PACKET_COUNTS_MAX_CONSUMERS,
+  senderPacketCountsAnswerSchema,
+  senderPacketCountsRequestSchema,
+  type SenderPacketCountsAnswer,
+  type SenderPacketCountsRequest,
+} from "@conclave/meeting-core/sender-packet-counts";
 
 /** How long a transport may carry no media before it is treated as stalled. */
 export const MEDIA_PATH_STALL_MS = 15_000;
@@ -569,14 +575,20 @@ export const screenVideoAwaitingSenderCheck = (
         .map(({ consumerId }) => consumerId)
     : [];
 
-export type SenderPacketCounts = Record<string, number>;
+export type SenderPacketCounts = SenderPacketCountsAnswer["counts"];
 
-const SenderPacketCountsAnswer = z.object({
-  counts: z.record(z.string(), z.number().int().nonnegative()),
-});
+export const senderPacketCountsRequestFor = (
+  consumerIds: string[],
+): SenderPacketCountsRequest | null => {
+  if (consumerIds.length === 0) return null;
+  const parsed = senderPacketCountsRequestSchema.safeParse({
+    consumerIds: consumerIds.slice(0, SENDER_PACKET_COUNTS_MAX_CONSUMERS),
+  });
+  return parsed.success ? parsed.data : null;
+};
 
 export const readSenderPacketCounts = (answer: unknown): SenderPacketCounts | null => {
-  const parsed = SenderPacketCountsAnswer.safeParse(answer);
+  const parsed = senderPacketCountsAnswerSchema.safeParse(answer);
   return parsed.success ? parsed.data.counts : null;
 };
 

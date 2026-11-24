@@ -1,4 +1,9 @@
 import type { Consumer, ConsumerLayers, Producer } from "mediasoup/types";
+import {
+  senderPacketCountsAnswerSchema,
+  senderPacketCountsRequestSchema,
+  type SenderPacketCountsAnswer,
+} from "@conclave/meeting-core/sender-packet-counts";
 import type {
   AbortConsumerHandoffData,
   AbortConsumerHandoffResponse,
@@ -1423,10 +1428,8 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
   socket.on(
     "getSenderPacketCounts",
     async (
-      data: { consumerIds?: unknown } | undefined,
-      callback: (
-        response: { counts: Record<string, number> } | { error: string },
-      ) => void,
+      data: unknown,
+      callback: (response: SenderPacketCountsAnswer | { error: string }) => void,
     ) => {
       try {
         const room = context.currentRoom;
@@ -1439,13 +1442,13 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           respond(callback, { error: "Too many requests" });
           return;
         }
-        const consumerIds = Array.isArray(data?.consumerIds)
-          ? data.consumerIds
-              .filter((id): id is string => typeof id === "string")
-              .slice(0, 16)
-          : [];
-        const counts: Record<string, number> = {};
-        for (const consumerId of consumerIds) {
+        const request = senderPacketCountsRequestSchema.safeParse(data);
+        if (!request.success) {
+          respond(callback, { error: "Invalid request" });
+          return;
+        }
+        const counts: SenderPacketCountsAnswer["counts"] = {};
+        for (const consumerId of request.data.consumerIds) {
           const consumer = client.getConsumerById(consumerId);
           if (!consumer || consumer.closed) continue;
           const producer = room.getActiveProducerById(consumer.producerId);
@@ -1456,7 +1459,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
             0,
           );
         }
-        respond(callback, { counts });
+        respond(callback, senderPacketCountsAnswerSchema.parse({ counts }));
       } catch (error) {
         respond(callback, { error: (error as Error).message });
       }

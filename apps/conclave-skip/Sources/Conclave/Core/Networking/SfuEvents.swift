@@ -26,6 +26,7 @@ enum SfuClientEvent: String {
     case requestProducerKeyFrame = "requestProducerKeyFrame"
     case getProducers = "getProducers"
     case restartIce = "restartIce"
+    case getSenderPacketCounts = "getSenderPacketCounts"
     case toggleMute = "toggleMute"
     case toggleCamera = "toggleCamera"
     case closeRemoteProducer = "closeRemoteProducer"
