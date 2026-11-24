@@ -165,9 +165,21 @@ export const icePolicyForOffers = (
 ): RTCIceTransportPolicy =>
   relayOnly && offeredTurnServers(offers) !== null ? "relay" : "all";
 
-export const RELAY_REFRESH_TRIES = 6;
+export const RELAY_REFRESH_DELAYS_MS = [
+  2_000, 4_000, 8_000, 10_000, 10_000, 10_000, 10_000, 10_000,
+] as const;
+
+export const RELAY_REFRESH_TRIES = RELAY_REFRESH_DELAYS_MS.length;
 
 export type RelayRefreshChain = { triesLeft: number } | null;
+
+export const relayRefreshDelayMs = (chain: { triesLeft: number }): number =>
+  RELAY_REFRESH_DELAYS_MS[
+    Math.min(
+      Math.max(RELAY_REFRESH_TRIES - chain.triesLeft, 0),
+      RELAY_REFRESH_TRIES - 1,
+    )
+  ];
 
 export const planRelayRefresh = (
   chain: RelayRefreshChain,

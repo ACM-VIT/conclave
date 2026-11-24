@@ -208,6 +208,7 @@ import {
   offerRelays,
   offeredTurnServers,
   planRelayRefresh,
+  relayRefreshDelayMs,
   reconcileRelayPaths,
   takeRelayRefreshTry,
   type RelayRefreshChain,
@@ -269,7 +270,6 @@ type ConsumerTelemetryPayload = Omit<
   "receivedAt"
 >;
 
-const RELAY_REFRESH_RETRY_MS = 10_000;
 
 type ConsumeProducerOptions = {
   replaceExisting?: boolean;
@@ -1751,7 +1751,7 @@ export function useMeetSocket({
           window.clearTimeout(state.timeout);
           state.timeout = null;
         }
-        if (plan.armRefresh) {
+        if (plan.armRefresh && plan.chain) {
           const generation = reconnectGenerationRef.current;
           state.timeout = window.setTimeout(() => {
             state.timeout = null;
@@ -1780,7 +1780,7 @@ export function useMeetSocket({
               if (relayRefreshRef.current === state) reconcile("keep");
             };
             void refresh(roomId).then(settle, settle);
-          }, RELAY_REFRESH_RETRY_MS);
+          }, relayRefreshDelayMs(plan.chain));
         }
         if (plan.moveOntoRelay.length > 0) void confirmMoves(plan.moveOntoRelay);
       };

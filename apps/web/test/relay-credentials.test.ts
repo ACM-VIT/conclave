@@ -7,6 +7,7 @@ import {
   icePolicyForOffers,
   noteRelayCarryingMedia,
   planRelayRefresh,
+  relayRefreshDelayMs,
   takeRelayRefreshTry,
   transportsToMoveOntoRelay,
   type RelayRefreshChain,
@@ -367,6 +368,21 @@ describe("fetching TURN credentials again while relay only is wanted", () => {
     expect(
       planRelayRefresh({ triesLeft: 2 }, { wanted: false, relayUsable: false, budget: "renew" }),
     ).toBeNull();
+  });
+
+  it("waits 2, 4 and 8 s, then 10 s, between tries, over at least the minute six 10 s tries covered", () => {
+    let chain: RelayRefreshChain = planRelayRefresh(null, { ...wanted, budget: "keep" });
+    const delays: number[] = [];
+    while (chain && chain.triesLeft > 0) {
+      delays.push(relayRefreshDelayMs(chain));
+      chain = takeRelayRefreshTry(chain);
+    }
+
+    expect(delays).toEqual([2_000, 4_000, 8_000, 10_000, 10_000, 10_000, 10_000, 10_000]);
+    expect(delays.reduce((total, delay) => total + delay, 0)).toBeGreaterThanOrEqual(60_000);
+    expect(
+      relayRefreshDelayMs(planRelayRefresh({ triesLeft: 0 }, { ...wanted, budget: "renew" })!),
+    ).toBe(2_000);
   });
 
   it("gives a new rebuild a fresh budget but never refills one from an answer", () => {

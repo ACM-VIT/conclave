@@ -40,8 +40,8 @@ describe("the media path recovery the hook runs", () => {
     rig = await startRig({ ttlSeconds: 30 });
     await rig.join();
     await recoverThroughTurn(rig);
-    await rig.advance(30_000);
     rig.route = "down";
+    await rig.advance(30_000);
     rig.failRecv();
     await rig.advance(5_000);
 
@@ -247,6 +247,38 @@ describe("moving onto the relay when credentials return", () => {
 
     expect(rig.joinRequests.filter((request) => request.at > recoveredAt + 20_000).length).toBeGreaterThan(0);
     expect(rig.recv).toBe(recovered);
+  });
+
+  it("backs the credential retries off from 2 s to every 10 s over about a minute", async () => {
+    rig = await startRig({ ttlSeconds: 30 });
+    await rig.join();
+    await recoverThroughTurn(rig);
+    rig.provider = "down";
+    const downAt = Date.now();
+    await rig.advance(120_000);
+
+    const tries = rig.joinRequests.filter((request) => request.at > downAt).map((request) => request.at);
+    const gaps = tries.slice(1).map((at, index) => Math.round((at - tries[index]) / 1000));
+    expect(gaps).toEqual([4, 8, 10, 10, 10, 10, 10]);
+    expect(tries.at(-1)! - tries[0]).toBeGreaterThanOrEqual(60_000);
+  });
+
+  it("gets credentials back within seconds when the provider returns just after a failed try", async () => {
+    rig = await startRig({ ttlSeconds: 30 });
+    await rig.join();
+    await recoverThroughTurn(rig);
+    rig.provider = "down";
+    const downAt = Date.now();
+    expect(
+      await waitFor(rig, () => rig!.joinRequests.some((request) => request.at > downAt), 60_000),
+    ).toBe(true);
+    rig.provider = "up";
+    const upAt = Date.now();
+    await rig.advance(6_000);
+
+    const relayAnswer = rig.joinRequests.find((request) => request.at > upAt && request.outcome === "relay");
+    expect(relayAnswer).toBeDefined();
+    expect(relayAnswer!.at - upAt).toBeLessThan(5_000);
   });
 
   it("gives a new rebuild a fresh retry budget after the last one ran out", async () => {
