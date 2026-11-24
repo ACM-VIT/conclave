@@ -34,7 +34,6 @@ const ELLIPSIS = "…";
 const THICKNESS = 1.05;
 const EDGE_GAP = 0.6;
 const OUTLIER_RATIO = 0.7;
-const MIN_FULL_RATIO = 0.75;
 
 const mod360 = (value: number): number => ((value % 360) + 360) % 360;
 
@@ -138,6 +137,9 @@ const numberedLabel = (
   };
 };
 
+const fullName = (label: string, width: number, limit: number): FittedLabel | null =>
+  width > 0 && width <= limit ? { text: label, truncated: false, numbered: false } : null;
+
 const fitAtSize = (
   labels: string[],
   fontSize: number,
@@ -145,13 +147,17 @@ const fitAtSize = (
   measure: MeasureText
 ): (FittedLabel | null)[] => {
   const limit = maxLabelWidth(fontSize, geometry);
-  const widthAtSize = (text: string) => measure(text) * fontSize;
   return labels.map(
     (label, index) =>
-      truncateToWidth(label, widthAtSize, limit) ??
+      fullName(label, measure(label) * fontSize, limit) ??
       numberedLabel(index, fontSize, geometry, measure)
   );
 };
+
+const fallbackAllowance = (count: number): number => Math.max(1, Math.floor(count / 4));
+
+const fallbackCount = (labels: (FittedLabel | null)[]): number =>
+  labels.filter((label) => label === null || label.numbered).length;
 
 const sizeStep = (size: number): number => Math.floor(size * 20) / 20;
 
@@ -195,8 +201,7 @@ export const fitWheelLabels = (
   const numbered = (): FittedLabels =>
     numberEverySlice(labels.length, geometry, measure, minFontSize) ?? hidden(fontSize);
   const fitted = fitAtSize(labels, fontSize, geometry, measure);
-  const fullCount = fitted.filter((label) => label && !label.truncated).length;
-  if (fullCount < labels.length * MIN_FULL_RATIO) return numbered();
+  if (fallbackCount(fitted) > fallbackAllowance(labels.length)) return numbered();
   if (fitted.every((label) => label !== null)) return { fontSize, labels: fitted };
   const needed = Math.min(
     fontSize,

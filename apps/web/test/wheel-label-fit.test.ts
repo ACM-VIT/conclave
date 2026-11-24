@@ -48,6 +48,8 @@ const numberFitsAt = (index: number, fontSize: number, shape: LabelGeometry): bo
   );
 };
 
+const fallbackAllowance = (count: number): number => Math.max(1, Math.floor(count / 4));
+
 const everyNumberFits = (shape: LabelGeometry): boolean =>
   Array.from({ length: shape.count }, (_, index) => index).every((index) =>
     numberFitsAt(index, shape.minScreenPx / shape.pxPerUnit, shape)
@@ -71,16 +73,14 @@ describe("wheel label fitting", () => {
     }
   });
 
-  it("cuts a long name with an ellipsis instead of running it under the hub", () => {
+  it("numbers a long name's slice instead of running it under the hub", () => {
     const names = ["Ada", "Grace", "Linus", "Margaret", "Alan", "Maximiliana Featherstonehaugh-Worthington"];
     const shape = geometry(names.length);
     const fitted = fitWheelLabels(names, shape, measure);
-    const long = fitted.labels[5]!;
-    expect(long.truncated).toBe(true);
-    expect(long.text.endsWith("…")).toBe(true);
-    expect(names[5].startsWith(long.text.slice(0, -1))).toBe(true);
-    expect(fitsInSlice(long.text, fitted.fontSize, shape)).toBe(true);
+    expect(fitted.labels[5]).toMatchObject({ text: "6", numbered: true });
+    expect(fitsUpright(fitted.labels[5]!, fitted.fontSize, shape)).toBe(true);
     expect(fitted.labels.slice(0, 5).map((label) => label?.text)).toEqual(names.slice(0, 5));
+    expect(fitted.labels.slice(0, 5).every((label) => label?.numbered === false)).toBe(true);
   });
 
   it("does not shrink every name because of one long outlier", () => {
@@ -89,7 +89,7 @@ describe("wheel label fitting", () => {
     const withOutlier = fitWheelLabels([...short, "A name that is far too long for any slice"], geometry(12), measure);
     expect(withOutlier.fontSize).toBeGreaterThanOrEqual(alone.fontSize * 0.9);
     expect(withOutlier.labels.slice(0, 11).every((label) => label && !label.truncated)).toBe(true);
-    expect(withOutlier.labels[11]?.truncated).toBe(true);
+    expect(withOutlier.labels[11]).toMatchObject({ text: "12", numbered: true });
   });
 
   it("fits all 40 names without truncating the one that sets the size", () => {
@@ -226,8 +226,13 @@ describe("wheel label coverage", () => {
           ? fitsUpright(label!, fitted.fontSize, shape)
           : fitsInSlice(label!.text, fitted.fontSize, shape);
         expect(fits, `run ${run}: slice ${index + 1}`).toBe(true);
-        if (label!.numbered) expect(label!.text).toBe(String(index + 1));
+        expect(label!.text, `run ${run}: slice ${index + 1}`).toBe(label!.numbered ? String(index + 1) : names[index]);
       });
+      const numberedCount = fitted.labels.filter((label) => label!.numbered).length;
+      expect(
+        numberedCount <= fallbackAllowance(count) || numberedCount === count,
+        `run ${run}: ${numberedCount} of ${count} numbered at ${wheelPx}px`
+      ).toBe(true);
       if (fitted.labels.some((label) => label?.numbered)) numberedRuns += 1;
     }
     expect(numberedRuns).toBeGreaterThan(20);
@@ -237,22 +242,56 @@ describe("wheel label coverage", () => {
 describe("wheel label fallback", () => {
   const LONG_NAMES = ["A".repeat(48), "Maximiliana Featherstonehaugh-Worthington Smythe"];
 
-  it("shows visible text on every slice of a three name wheel with one 48 character name, at every size", () => {
+  it("shows Ada, 2 and Bo on a three name wheel with one 48 character name, at every size", () => {
+    let checked = 0;
     for (const long of LONG_NAMES) {
       expect(long).toHaveLength(48);
       for (let wheelPx = 180; wheelPx <= 900; wheelPx += 10) {
         const shape = geometry(3, wheelPx);
         const fitted = fitWheelLabels(["Ada", long, "Bo"], shape, measure);
-        fitted.labels.forEach((label, index) => {
-          const where = `${long.slice(0, 8)} at ${wheelPx}px, slice ${index + 1}`;
-          expect(label, where).not.toBeNull();
-          expect(/[^\s\u2026]/u.test(label!.text), where).toBe(true);
-          const fits = label!.numbered ? fitsUpright(label!, fitted.fontSize, shape) : fitsInSlice(label!.text, fitted.fontSize, shape);
-          expect(fits, where).toBe(true);
-        });
+        const where = `${long.slice(0, 8)} at ${wheelPx}px`;
+        if (!everyNumberFits(shape)) continue;
+        checked += 1;
+        expect(fitted.labels.map((label) => label?.text), where).toEqual(["Ada", "2", "Bo"]);
+        expect(fitted.labels.map((label) => label?.numbered), where).toEqual([false, true, false]);
+        expect(fitsUpright(fitted.labels[1]!, fitted.fontSize, shape), where).toBe(true);
+        expect(fitsInSlice("Ada", fitted.fontSize, shape) && fitsInSlice("Bo", fitted.fontSize, shape), where).toBe(true);
         expect(fitted.fontSize * shape.pxPerUnit).toBeGreaterThanOrEqual(shape.minScreenPx - 1e-9);
       }
     }
+    expect(checked).toBeGreaterThan(100);
+  });
+
+  it("keeps names and numbers only the slices that do not fit, up to one slice or a quarter of them", () => {
+    let kept = 0;
+    let allNumbered = 0;
+    for (let count = 2; count <= 12; count += 1) {
+      for (let longCount = 0; longCount <= count; longCount += 1) {
+        for (const wheelPx of [420, 700]) {
+          const shape = geometry(count, wheelPx);
+          if (!everyNumberFits(shape)) continue;
+          const names = Array.from({ length: count }, (_, index) => (index < longCount ? LONG_NAMES[index % 2] : `N${index}`));
+          const fitted = fitWheelLabels(names, shape, measure);
+          const where = `${longCount} long of ${count} at ${wheelPx}px`;
+          expect(fitted.labels.every((label) => label !== null), where).toBe(true);
+          const numberedCount = fitted.labels.filter((label) => label!.numbered).length;
+          if (longCount <= fallbackAllowance(count)) {
+            kept += 1;
+            expect(fitted.labels.slice(longCount).map((label) => label!.text), where).toEqual(names.slice(longCount));
+            expect(numberedCount, where).toBeLessThanOrEqual(longCount);
+          } else if (numberedCount === count) {
+            allNumbered += 1;
+          } else {
+            expect(numberedCount, where).toBeLessThanOrEqual(fallbackAllowance(count));
+          }
+          fitted.labels.forEach((label, index) => {
+            expect(label!.text, `${where}, slice ${index + 1}`).toBe(label!.numbered ? String(index + 1) : names[index]);
+          });
+        }
+      }
+    }
+    expect(kept).toBeGreaterThan(20);
+    expect(allNumbered).toBeGreaterThan(20);
   });
 
   it("numbers every slice when too few names fit in full, instead of leaving the dial blank", () => {
@@ -274,18 +313,20 @@ describe("wheel label fallback", () => {
 describe("wheel label emoji", () => {
   const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}";
 
-  it("never cuts a joined emoji in half when it shortens a name", () => {
+  it("never cuts a joined emoji in half when it shortens a lone name", () => {
     const label = `Team ${family}${family}${family} Rockets`;
     const whole = graphemes(label);
-    for (let wheelPx = 200; wheelPx <= 900; wheelPx += 10) {
-      const fitted = fitWheelLabels([label, "Ada", "Bea", "Cal", "Dee", "Eve"], wheelLabelGeometry(6, wheelPx), measure);
-      const text = fitted.labels[0]?.text;
-      if (!text || !text.endsWith("…")) continue;
+    let shortened = 0;
+    for (let scale = 0.5; scale <= 6; scale += 0.05) {
+      const text = fitSingleLabel(label, 600, (value) => measure(value) * scale);
+      if (!text || !text.endsWith("\u2026")) continue;
+      shortened += 1;
       const kept = text.slice(0, -1).trimEnd();
       expect(kept.endsWith("\u200D")).toBe(false);
       const parts = graphemes(kept);
       expect(parts).toEqual(whole.slice(0, parts.length).map((part, i) => (i === parts.length - 1 ? part.trimEnd() : part)));
     }
+    expect(shortened).toBeGreaterThan(20);
   });
 
   it("splits a family emoji into one grapheme", () => {
