@@ -1,4 +1,4 @@
-export type GateKind = "commit" | "freebusy" | "google-create" | "email";
+export type GateKind = "commit" | "freebusy" | "google-create" | "email" | "redis";
 
 export class Gates {
   parking = new Set<GateKind>();

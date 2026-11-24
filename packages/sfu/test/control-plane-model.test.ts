@@ -16,6 +16,7 @@ import {
 } from "../server/scheduling.js";
 import { sendDueSchedulingEmailReminders } from "../server/schedulingEmailReminders.js";
 import type { ScheduledMeeting } from "../types.js";
+import { startRedisProxy, type RedisProxy } from "./support/redisProxy.js";
 import { hasRedis, startRedis, type RedisServer } from "./support/redisServer.js";
 import {
   EMAIL_WORKER_URL,
@@ -110,6 +111,22 @@ const runSequence = async (mode: StoreMode, seed: number, steps: number): Promis
     clock: (sfu) => Date.now() + advance + skew[sfu],
     memory: createMemoryData(),
   };
+  const proxies: RedisProxy[] = [];
+  if (mode === "redis" && redis) {
+    const network = random(seed ^ 0x9e3779b9);
+    const target = { host: "127.0.0.1", port: redis.port };
+    for (const sfu of ["A", "B"] as const) {
+      proxies.push(
+        await startRedisProxy(target, {
+          label: sfu,
+          gates,
+          jitter: () => Math.floor(network() * 3),
+          park: () => network() < 0.15,
+        }),
+      );
+    }
+    world.redisUrlFor = (sfu) => (sfu === "B" ? proxies[1].url : sfu === "A" ? proxies[0].url : redis!.url);
+  }
   const sfus: Record<SfuName, Sfu | null> = { A: null, B: null };
   let observer: ControlPlaneStore | null = null;
   const pending = new Set<Promise<void>>();
@@ -388,10 +405,13 @@ const runSequence = async (mode: StoreMode, seed: number, steps: number): Promis
       }
     }
     for (const [target, count] of reminders) if (count > 1) flag(`a reminder went out ${count} times (${target.split(":")[0].slice(0, 8)})`);
+    const recordedEvents = new Set(
+      [...versions.values()].flatMap((list) =>
+        list.map((version) => (version.value as { googleCalendarEventId?: string | null } | null)?.googleCalendarEventId),
+      ),
+    );
     for (const event of google?.events.values() ?? []) {
-      if (!snapshot.meetings.some((m) => m.value.googleCalendarEventId === event.id)) {
-        flag("a Google event outlived the booking it was made for");
-      }
+      if (!recordedEvents.has(event.id)) flag("a Google event outlived the booking it was made for");
     }
   };
 
@@ -553,7 +573,7 @@ const runSequence = async (mode: StoreMode, seed: number, steps: number): Promis
       durationMinutes: 30,
     });
     eventTypeId = (created.body.eventType as { id: string }).id;
-    const kinds: GateKind[] = ["commit", "freebusy", "google-create", "email"];
+    const kinds: GateKind[] = ["commit", "freebusy", "google-create", "email", ...(mode === "redis" ? (["redis"] as const) : [])];
     for (const kind of kinds) if (rand() < 0.6) gates.parking.add(kind);
 
     for (let step = 0; step < steps; step += 1) {
@@ -565,8 +585,11 @@ const runSequence = async (mode: StoreMode, seed: number, steps: number): Promis
         checkHistory();
         await checkAuthority();
         trace.push(`restart ${sfu.name}`);
+        const parking = new Set(gates.parking);
+        gates.parking.clear();
         await stopSfu(sfu);
         sfus[sfu.name] = await startSfu(sfu.name, world, log, gates);
+        gates.parking = parking;
       } else if (roll < 0.1) {
         advance += pick([60_000, 3_600_000, DAY_MS, 2 * DAY_MS]);
         trace.push(`clock +${advance}`);
@@ -589,6 +612,7 @@ const runSequence = async (mode: StoreMode, seed: number, steps: number): Promis
     await Promise.allSettled([...pending]);
     for (const sfu of [sfus.A, sfus.B]) if (sfu) await stopSfu(sfu);
     await observer?.close();
+    for (const proxy of proxies) await proxy.close();
     rmSync(dir, { recursive: true, force: true });
   }
   return violations;

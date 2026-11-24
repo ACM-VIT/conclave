@@ -99,22 +99,23 @@ export type WorldOptions = {
   mode: StoreMode;
   dir: string;
   redisUrl?: string;
+  redisUrlFor?: (sfu: SfuName | "observer") => string;
   prefix: string;
   clock: (sfu: SfuName) => number;
   memory?: MemoryData;
 };
 
-const storeConfig = (options: WorldOptions): ControlPlaneConfig => ({
+const storeConfig = (options: WorldOptions, sfu: SfuName | "observer"): ControlPlaneConfig => ({
   ...resolveControlPlaneConfig({ CONTROL_PLANE_PERSISTENCE: "memory" }),
   mode: options.mode,
   sqlitePath: join(options.dir, "conclave.sqlite"),
   jsonPath: join(options.dir, "control-plane.json"),
-  redisUrl: options.redisUrl ?? "",
+  redisUrl: options.redisUrlFor?.(sfu) ?? options.redisUrl ?? "",
   keyPrefix: options.prefix,
 });
 
 export const openWorldStore = (options: WorldOptions, sfu: SfuName | "observer"): Promise<ControlPlaneStore> =>
-  openControlPlane(storeConfig(options), {
+  openControlPlane(storeConfig(options, sfu), {
     clock: () => options.clock(sfu === "observer" ? "A" : sfu),
     memory: options.memory ?? createMemoryData(),
     importLegacy: false,
