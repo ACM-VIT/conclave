@@ -5,7 +5,6 @@ export type WireBytes = {
 
 const BASE64_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
 const PAD = 61;
-const WHITESPACE = /\s/;
 
 const isNumberList = (items: unknown[]): boolean => items.every((item) => typeof item === "number");
 
@@ -15,22 +14,13 @@ const fromNumbers = (items: unknown[]): WireBytes => ({
 });
 
 const fromBase64 = (value: string): WireBytes | null => {
-  let start = 0;
-  let end = value.length;
-  while (start < end && WHITESPACE.test(value[start])) start += 1;
-  while (end > start && WHITESPACE.test(value[end - 1])) end -= 1;
-  const characters = end - start;
+  const characters = value.length;
   if (characters === 0 || characters % 4 !== 0) return null;
-  let padding = 0;
-  while (padding < 3 && value.charCodeAt(end - 1 - padding) === PAD) padding += 1;
-  if (padding > 2) return null;
+  const padding =
+    value.charCodeAt(characters - 1) !== PAD ? 0 : value.charCodeAt(characters - 2) !== PAD ? 1 : 2;
   return {
     length: (characters / 4) * 3 - padding,
-    read: () => {
-      const text = value.slice(start, end);
-      if (!BASE64_PATTERN.test(text)) return null;
-      return Uint8Array.from(Buffer.from(text, "base64"));
-    },
+    read: () => (BASE64_PATTERN.test(value) ? Uint8Array.from(Buffer.from(value, "base64")) : null),
   };
 };
 

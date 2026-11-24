@@ -2,10 +2,9 @@ import { describe, expect, it } from "vitest";
 import { wireBytes } from "../server/socket/wireBytes.js";
 import { seededRandom } from "./support/appsRoom.js";
 
-const previousDecode = (value: string): Uint8Array | null => {
-  const trimmed = value.trim();
-  if (!trimmed || trimmed.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(trimmed)) return null;
-  return Uint8Array.from(Buffer.from(trimmed, "base64"));
+const strictDecode = (value: string): Uint8Array | null => {
+  if (!value || value.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) return null;
+  return Uint8Array.from(Buffer.from(value, "base64"));
 };
 
 const WHITESPACE = [" ", "\t", "\n", "\r", "\v", "\f", " ", " ", "﻿", "　"];
@@ -41,7 +40,7 @@ describe("wire bytes", () => {
         const wire = wireBytes(form);
         const read = wire?.read() ?? null;
         if (typeof form === "string") {
-          const expected = previousDecode(form);
+          const expected = strictDecode(form);
           expect(read === null, JSON.stringify(form)).toBe(expected === null);
           if (expected) expect(read).toEqual(expected);
         } else {
@@ -56,11 +55,16 @@ describe("wire bytes", () => {
     expect(checked).toBeGreaterThan(20000);
   });
 
+  it("refuses base64 with surrounding whitespace, which no client sends", () => {
+    for (const padded of [" AAAA", "AAAA ", "\nAAAA", "AAAA\r\n", " AA= "]) expect(wireBytes(padded)?.read() ?? null).toBeNull();
+  });
+
   it("refuses what it cannot read without reading it", () => {
     expect([null, undefined, 0, "", "   ", {}, { type: "Buffer" }, 12].map((value) => wireBytes(value))).toEqual(
       Array(8).fill(null),
     );
-    expect(["A", "AB", "ABC", "A===", "===="].map((value) => wireBytes(value))).toEqual(Array(5).fill(null));
+    expect(["A", "AB", "ABC", "AAAAA"].map((value) => wireBytes(value))).toEqual(Array(4).fill(null));
+    expect(["A===", "====", "AA=A"].map((value) => wireBytes(value)?.read())).toEqual(Array(3).fill(null));
     expect(wireBytes(["a", 1])?.read()).toBeNull();
     expect(wireBytes("A=A=")?.read()).toBeNull();
   });

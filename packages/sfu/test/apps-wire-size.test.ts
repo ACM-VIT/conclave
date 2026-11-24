@@ -77,7 +77,6 @@ const ENCODINGS: [string, (bytes: Uint8Array) => unknown][] = [
   ["a number array", (bytes) => Array.from(bytes)],
   ["a JSON Buffer", (bytes) => ({ type: "Buffer", data: Array.from(bytes) })],
   ["native base64 (padded, no line breaks)", nativeBase64],
-  ["base64 with surrounding whitespace", (bytes) => ` \t${nativeBase64(bytes)}\r\n`],
 ];
 
 const BOUNDARIES = (limit: number): [string, number, boolean][] => [
