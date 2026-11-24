@@ -71,6 +71,17 @@ type ProducerIndexEntry = {
   userId: string;
   type: ProducerType;
   system: boolean;
+  seq: number;
+};
+
+let lastProducerSeq = 0;
+
+// Clients order producer announcements by this. It only ever increases, and
+// it follows the clock so a producer created after a restart still sorts
+// after one created before it.
+const nextProducerSeq = (): number => {
+  lastProducerSeq = Math.max(lastProducerSeq + 1, Date.now());
+  return lastProducerSeq;
 };
 
 export type TranscriptAudioProducerEntry = {
@@ -184,6 +195,12 @@ const verifyInviteCodeHash = (
   return timingSafeEqual(expected, candidate);
 };
 
+/**
+ * `membership`: a seat was added, removed, replaced or promoted.
+ * `closed`: the room is being torn down.
+ */
+export type RoomLifecycleEvent = "membership" | "closed";
+
 export class Room {
   public readonly id: string;
   public readonly router: Router;
@@ -290,6 +307,9 @@ export class Room {
     WebcamReceiverCapacityProofCoordinator;
 
   private readonly webcamVp9Enabled: boolean;
+  private readonly lifecycleListeners = new Set<
+    (event: RoomLifecycleEvent) => void
+  >();
 
   constructor(options: RoomOptions) {
     this.id = options.id;
@@ -324,6 +344,25 @@ export class Room {
     return this.router.rtpCapabilities;
   }
 
+  /**
+   * Lets room-scoped state that lives outside this class, such as the apps
+   * authority runtime, follow who is in the room and when it closes.
+   */
+  onLifecycle(listener: (event: RoomLifecycleEvent) => void): () => void {
+    this.lifecycleListeners.add(listener);
+    return () => this.lifecycleListeners.delete(listener);
+  }
+
+  private notifyLifecycle(event: RoomLifecycleEvent): void {
+    for (const listener of this.lifecycleListeners) {
+      try {
+        listener(event);
+      } catch (error) {
+        Logger.warn(`Room ${this.id}: a lifecycle listener failed`, error);
+      }
+    }
+  }
+
   get activeSpeakerUserId(): string | null {
     return this.meetingActiveSpeakerUserId;
   }
@@ -354,6 +393,7 @@ export class Room {
     this.refreshWebcamReceiverCapacityProofs();
     this.cancelWebcamCodecPolicyUpgrade();
     this.reconcileWebcamCodecPolicy();
+    this.notifyLifecycle("membership");
   }
 
   get webcamCodecPolicy(): WebcamCodecPolicy {
@@ -783,6 +823,7 @@ export class Room {
     if (this.webinarDominantSpeakerUserId === clientId) {
       this.webinarDominantSpeakerUserId = null;
     }
+    this.notifyLifecycle("membership");
     return client;
   }
 
@@ -1456,6 +1497,7 @@ export class Room {
       kind: entry.producer.kind,
       type: entry.type,
       paused: entry.producer.paused,
+      producerSeq: entry.seq,
     };
   }
 
@@ -1474,10 +1516,13 @@ export class Room {
   }
 
   private indexProducer(
-    entry: ProducerIndexEntry,
+    entry: Omit<ProducerIndexEntry, "seq">,
     options?: { skipWebcamReceiverCapacityRefresh?: boolean },
   ): void {
-    this.producerIndex.set(entry.producer.id, entry);
+    this.producerIndex.set(entry.producer.id, {
+      ...entry,
+      seq: nextProducerSeq(),
+    });
 
     const cleanup = () => {
       this.removeProducerIndexById(entry.producer.id, entry.producer);
@@ -1899,6 +1944,7 @@ export class Room {
     if (userKey) {
       this.adminUserKeys.add(userKey);
     }
+    this.notifyLifecycle("membership");
     return client as Admin;
   }
 
@@ -1957,6 +2003,7 @@ export class Room {
       kind: info.kind,
       type: info.type,
       paused: info.paused,
+      producerSeq: this.producerIndex.get(info.producerId)?.seq,
     }));
 
     producers.sort((a, b) => {
@@ -2358,6 +2405,8 @@ export class Room {
   }
 
   close(): void {
+    this.notifyLifecycle("closed");
+    this.lifecycleListeners.clear();
     this.aiCredentials.clear();
     this.stopCleanupTimer();
     this.cancelWebcamCodecPolicyUpgrade();

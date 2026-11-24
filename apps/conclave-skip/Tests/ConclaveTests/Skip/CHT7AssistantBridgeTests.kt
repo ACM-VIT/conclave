@@ -168,7 +168,8 @@ class CHT7AssistantBridgeTests {
         chat.apply(inputs(listOf(answer("## Summary\n\nLaunch moved", ChatAssistantInput.make()))), ChatInputChange.assistant)
         assertEquals(first, chat.rows.entry("ans").assistant?.blocks?.get(0))
         assertEquals(publishes, chat.timelinePublishCount)
-        chat.panelDidOpen(ChatDestination.none, "")
+        chat.openPanel()
+        chat.panelDidAppear()
         chat.apply(inputs(listOf(answer("Launch moved. Details", ChatAssistantInput.make(isDone = true)))), ChatInputChange.assistant)
         assertEquals("assistantAnswered", chat.announcement?.kind)
         assertEquals("Launch moved.", chat.announcement?.text)
@@ -186,7 +187,7 @@ class CHT7AssistantBridgeTests {
         assertEquals(AssistantRowState.done, model?.state)
         assertTrue(model?.blocks?.toList()?.any { it.kind == StreamingMarkdownBlockKind.codeFence } == true)
 
-        val shell = MeetingShellPresenter()
+        val shell = MeetingShellPresenter(defaults = IsolatedDefaults.make())
         ChatFixtureDriver.installOnStage(ChatFixtureState.busy, shell)
         assertEquals(AssistantRowState.thinking, shell.chat.rows.entry("s-a1").assistant?.state)
         assertEquals(AssistantRowState.streaming, shell.chat.rows.entry("s-a2").assistant?.state)

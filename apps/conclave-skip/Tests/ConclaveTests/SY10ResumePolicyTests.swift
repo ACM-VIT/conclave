@@ -29,8 +29,8 @@ struct SY10ResumePolicyTests {
         )
     }
 
-    private static func storedSnapshot() -> String? {
-        UserDefaults.standard.string(forKey: MeetingResumeStore.key)
+    private static func storedSnapshot(_ defaults: UserDefaults) -> String? {
+        defaults.string(forKey: MeetingResumeStore.key)
     }
 
     private static func freshHarness() -> RejoinHarness {
@@ -85,9 +85,8 @@ struct SY10ResumePolicyTests {
     }
 
     @Test func theMarkerStoresEpochMillisecondsAsAString() throws {
-        let suite = "conclave.sy10.marker.tests"
+        let suite = "conclave.sy10.marker.tests." + UUID().uuidString
         let defaults = try #require(UserDefaults(suiteName: suite))
-        defaults.removePersistentDomain(forName: suite)
         defer { defaults.removePersistentDomain(forName: suite) }
         #expect(MeetingResumeMarker.read(defaults: defaults) == nil)
         MeetingResumeMarker.write(now: Date(timeIntervalSince1970: 1_793_102_400.25), defaults: defaults)
@@ -114,17 +113,17 @@ struct SY10ResumePolicyTests {
         call.clearResumeSnapshot()
         call.viewModel.state.connectionState = .waiting
         call.viewModel.handleAppEnteredBackground()
-        #expect(Self.storedSnapshot() == nil)
+        #expect(Self.storedSnapshot(call.defaults) == nil)
 
         call.viewModel.state.connectionState = .joined
         call.viewModel.handleAppEnteredBackground()
-        let joined = Self.storedSnapshot()
+        let joined = Self.storedSnapshot(call.defaults)
         call.clearResumeSnapshot()
         #expect(joined != nil)
 
         call.viewModel.state.connectionState = .reconnecting
         call.viewModel.handleAppEnteredBackground()
-        let reconnecting = Self.storedSnapshot()
+        let reconnecting = Self.storedSnapshot(call.defaults)
         call.clearResumeSnapshot()
         #expect(reconnecting != nil)
         await call.finish()
@@ -138,7 +137,8 @@ struct SY10ResumePolicyTests {
         #expect(call.viewModel.callPresence.snapshot.isCameraOn)
         let attempts = call.joinAttemptCount
 
-        MeetingResumeStore.save(Self.snapshot(savedAt: Date().addingTimeInterval(-540.0), isMuted: false, isCameraOff: false))
+        MeetingResumeStore.save(Self.snapshot(savedAt: Date().addingTimeInterval(-540.0), isMuted: false, isCameraOff: false),
+                                defaults: call.defaults)
         call.viewModel.handleAppBecameActive()
         call.clearResumeSnapshot()
 
@@ -168,9 +168,9 @@ struct SY10ResumePolicyTests {
     @Test func anElevenMinuteSnapshotIsRefusedAndCleared() async {
         let call = Self.freshHarness()
         let attempts = call.joinAttemptCount
-        MeetingResumeStore.save(Self.snapshot(savedAt: Date().addingTimeInterval(-660.0)))
+        MeetingResumeStore.save(Self.snapshot(savedAt: Date().addingTimeInterval(-660.0)), defaults: call.defaults)
         call.viewModel.handleAppBecameActive()
-        let left = Self.storedSnapshot()
+        let left = Self.storedSnapshot(call.defaults)
         call.clearResumeSnapshot()
         #expect(left == nil)
         #expect(call.viewModel.lastJoinContext == nil)
@@ -184,10 +184,10 @@ struct SY10ResumePolicyTests {
         let call = Self.freshHarness()
         let attempts = call.joinAttemptCount
         let savedAt = Date().addingTimeInterval(-120.0)
-        MeetingResumeStore.save(Self.snapshot(savedAt: savedAt))
-        MeetingResumeMarker.write(now: savedAt.addingTimeInterval(30.0))
+        MeetingResumeStore.save(Self.snapshot(savedAt: savedAt), defaults: call.defaults)
+        MeetingResumeMarker.write(now: savedAt.addingTimeInterval(30.0), defaults: call.defaults)
         call.viewModel.handleAppBecameActive()
-        let left = Self.storedSnapshot()
+        let left = Self.storedSnapshot(call.defaults)
         call.clearResumeSnapshot()
         call.clearResumeMarker()
         #expect(left == nil)
@@ -200,13 +200,13 @@ struct SY10ResumePolicyTests {
     @Test func anOlderMarkerAllowsTheRestoreAndLeaveClearsBothKeys() async {
         let call = Self.freshHarness()
         let savedAt = Date().addingTimeInterval(-60.0)
-        MeetingResumeMarker.write(now: savedAt.addingTimeInterval(-30.0))
-        MeetingResumeStore.save(Self.snapshot(savedAt: savedAt))
+        MeetingResumeMarker.write(now: savedAt.addingTimeInterval(-30.0), defaults: call.defaults)
+        MeetingResumeStore.save(Self.snapshot(savedAt: savedAt), defaults: call.defaults)
         call.viewModel.handleAppBecameActive()
         #expect(call.viewModel.lastJoinContext?.roomId == Self.room)
         call.viewModel.leaveRoom()
-        let snapshotAfterLeave = Self.storedSnapshot()
-        let markerAfterLeave = MeetingResumeMarker.read()
+        let snapshotAfterLeave = Self.storedSnapshot(call.defaults)
+        let markerAfterLeave = MeetingResumeMarker.read(defaults: call.defaults)
         call.clearResumeSnapshot()
         call.clearResumeMarker()
         #expect(snapshotAfterLeave == nil)
@@ -217,7 +217,7 @@ struct SY10ResumePolicyTests {
     @Test func resumeInputsArePublishedForTheRestoreJoinAndClearedOnFailure() async {
         let call = Self.freshHarness()
         #expect(!call.viewModel.makePremeetingInputs().resumeInFlight)
-        MeetingResumeStore.save(Self.snapshot(savedAt: Date().addingTimeInterval(-60.0)))
+        MeetingResumeStore.save(Self.snapshot(savedAt: Date().addingTimeInterval(-60.0)), defaults: call.defaults)
         call.viewModel.handleAppBecameActive()
         call.clearResumeSnapshot()
         let restoring = call.viewModel.makePremeetingInputs()
@@ -234,7 +234,7 @@ struct SY10ResumePolicyTests {
 
     @Test func resumeInputsClearWhenThePersonCancels() async {
         let call = Self.freshHarness()
-        MeetingResumeStore.save(Self.snapshot(savedAt: Date().addingTimeInterval(-60.0)))
+        MeetingResumeStore.save(Self.snapshot(savedAt: Date().addingTimeInterval(-60.0)), defaults: call.defaults)
         call.viewModel.handleAppBecameActive()
         call.clearResumeSnapshot()
         #expect(call.viewModel.makePremeetingInputs().resumeInFlight)
@@ -259,8 +259,8 @@ struct SY10ResumePolicyTests {
         call.viewModel.handleAppEnteredBackground()
         let before = Date().timeIntervalSince1970 * 1000.0
         call.viewModel.handleAppWillTerminate()
-        let snapshotAfter = Self.storedSnapshot()
-        let marker = MeetingResumeMarker.read()
+        let snapshotAfter = Self.storedSnapshot(call.defaults)
+        let marker = MeetingResumeMarker.read(defaults: call.defaults)
         call.clearResumeSnapshot()
         call.clearResumeMarker()
         #expect(snapshotAfter == nil)
@@ -271,22 +271,20 @@ struct SY10ResumePolicyTests {
     }
 
     @Test func terminationOnHomeWritesTheMarkerWithoutAnOutcome() {
-        let viewModel = MeetingViewModel()
+        let defaults = MemoryDefaults()
+        let viewModel = isolatedViewModel(defaults: defaults)
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
-        let storedKeys = SY10ResumeKeys()
-        defer { storedKeys.restore() }
-        UserDefaults.standard.removeObject(forKey: MeetingResumeMarker.key)
+        #expect(MeetingResumeMarker.read(defaults: defaults) == nil)
         viewModel.handleAppWillTerminate()
-        let marker = MeetingResumeMarker.read()
+        let marker = MeetingResumeMarker.read(defaults: defaults)
         #expect(marker != nil)
         #expect(viewModel.state.terminalOutcome == nil)
         #expect(viewModel.state.connectionState == .disconnected)
     }
 
     @Test func homeRejoinKeepsThePreviousIntentAndNeverReadsTheSnapshot() async {
-        let storedKeys = SY10ResumeKeys()
-        defer { storedKeys.restore() }
-        let viewModel = MeetingViewModel()
+        let defaults = MemoryDefaults()
+        let viewModel = isolatedViewModel(defaults: defaults)
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"
@@ -312,8 +310,9 @@ struct SY10ResumePolicyTests {
         #expect(await settle { viewModel.lastJoinContext == nil })
         #expect(viewModel.rejoinContext?.roomId == "room-a")
 
-        MeetingResumeStore.save(Self.snapshot(savedAt: Date().addingTimeInterval(-60.0), isMuted: true, isCameraOff: true))
-        #expect(Self.storedSnapshot() != nil)
+        MeetingResumeStore.save(Self.snapshot(savedAt: Date().addingTimeInterval(-60.0), isMuted: true, isCameraOff: true),
+                                defaults: defaults)
+        #expect(Self.storedSnapshot(defaults) != nil)
         viewModel.state.isMuted = true
         viewModel.state.isCameraOff = true
         viewModel.rejoinLastMeeting()
@@ -328,28 +327,5 @@ struct SY10ResumePolicyTests {
 
 private struct SY10JoinFailure: LocalizedError {
     var errorDescription: String? { "The resume join failed" }
-}
-
-private struct SY10ResumeKeys {
-    private let snapshot: Any?
-    private let marker: Any?
-
-    init() {
-        snapshot = UserDefaults.standard.object(forKey: MeetingResumeStore.key)
-        marker = UserDefaults.standard.object(forKey: MeetingResumeMarker.key)
-    }
-
-    func restore() {
-        Self.put(snapshot, forKey: MeetingResumeStore.key)
-        Self.put(marker, forKey: MeetingResumeMarker.key)
-    }
-
-    private static func put(_ value: Any?, forKey key: String) {
-        if let value {
-            UserDefaults.standard.set(value, forKey: key)
-        } else {
-            UserDefaults.standard.removeObject(forKey: key)
-        }
-    }
 }
 #endif

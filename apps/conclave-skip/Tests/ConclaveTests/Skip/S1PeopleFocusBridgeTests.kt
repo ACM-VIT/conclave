@@ -17,7 +17,7 @@ import org.robolectric.annotation.Config
 @Config(manifest = Config.NONE, sdk = [28])
 class S1PeopleFocusBridgeTests {
     private fun people(): PeoplePresenter {
-        val shell = MeetingShellPresenter()
+        val shell = MeetingShellPresenter(defaults = IsolatedDefaults.make())
         return PeoplePresenter(shell = shell, stage = StagePresenter(shell = shell))
     }
 

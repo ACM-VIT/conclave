@@ -163,4 +163,11 @@ export const RATE_LIMITS = {
   gameMove: { capacity: 20, refillPerSec: 8 },
   // Game lifecycle (start/end/state): low frequency, admin-driven.
   gameControl: { capacity: 10, refillPerSec: 2 },
+  // Authority app actions. Each action also has its own per-person limit;
+  // this is the ceiling for one socket across every app and action.
+  appsAuthorityAct: { capacity: 60, refillPerSec: 20 },
+  // Capability and subscribe requests: once per join, reconnect or panel open.
+  appsAuthorityControl: { capacity: 20, refillPerSec: 4 },
+  // One-shot reads such as an export. They can encode up to a megabyte.
+  appsAuthorityQuery: { capacity: 6, refillPerSec: 1 },
 } as const satisfies Record<string, TokenBucketOptions>;

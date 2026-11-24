@@ -49,6 +49,27 @@ describe("buildWebcamSimulcastEncodings", () => {
     expect(enc.map((e) => e.rid)).toEqual(["r0", "r1"]);
   });
 
+  it("marks only a layer the profile switches off", () => {
+    const withStandby = createVideoEncodingHelpers({
+      bitrates,
+      profile: {
+        ...profile,
+        simulcast: {
+          ...profile.simulcast,
+          low: [
+            ...profile.simulcast.low,
+            { ...profile.simulcast.low[0], rid: "r1", active: false },
+          ],
+        },
+      },
+    });
+
+    const [live, standby] = withStandby.buildWebcamSimulcastEncodings("low");
+
+    expect(live).not.toHaveProperty("active");
+    expect(standby).toMatchObject({ rid: "r1", active: false });
+  });
+
   it("scales maxBitrate by the layer ratio", () => {
     const [layer] = helpers.buildWebcamSimulcastEncodings("low");
     // 200_000 * 0.5 = 100_000, above the 80_000 floor → use computed value.

@@ -337,7 +337,7 @@ struct CTL5MoreMenuTests {
 
 @MainActor
 private final class CTL5Harness {
-    let shell = MeetingShellPresenter()
+    let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
     let stage: StagePresenter
     let controls: CallControlsPresenter
     private let make: @MainActor (MeetingShellPresenter) -> CallControlsInputs

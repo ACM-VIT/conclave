@@ -305,35 +305,35 @@ enum NotificationPreferences {
     static let permissionAskedKey = "conclave.pref.notificationsPermissionAsked"
     static let primingDismissedKey = "conclave.pref.notificationsPrimingDismissed"
 
-    static func primingDismissed(defaults: UserDefaults = UserDefaults.standard) -> Bool {
+    static func primingDismissed(defaults: UserDefaults) -> Bool {
         boolValue(primingDismissedKey, fallback: false, defaults: defaults)
     }
 
-    static func setPrimingDismissed(defaults: UserDefaults = UserDefaults.standard) {
+    static func setPrimingDismissed(defaults: UserDefaults) {
         defaults.set(true, forKey: primingDismissedKey)
     }
 
-    static func messageNotifications(defaults: UserDefaults = UserDefaults.standard) -> Bool {
+    static func messageNotifications(defaults: UserDefaults) -> Bool {
         boolValue(messageNotificationsKey, fallback: true, defaults: defaults)
     }
 
-    static func setMessageNotifications(_ on: Bool, defaults: UserDefaults = UserDefaults.standard) {
+    static func setMessageNotifications(_ on: Bool, defaults: UserDefaults) {
         defaults.set(on, forKey: messageNotificationsKey)
     }
 
-    static func admissionNotify(defaults: UserDefaults = UserDefaults.standard) -> Bool {
+    static func admissionNotify(defaults: UserDefaults) -> Bool {
         boolValue(admissionNotifyKey, fallback: false, defaults: defaults)
     }
 
-    static func setAdmissionNotify(_ on: Bool, defaults: UserDefaults = UserDefaults.standard) {
+    static func setAdmissionNotify(_ on: Bool, defaults: UserDefaults) {
         defaults.set(on, forKey: admissionNotifyKey)
     }
 
-    static func permissionAsked(defaults: UserDefaults = UserDefaults.standard) -> Bool {
+    static func permissionAsked(defaults: UserDefaults) -> Bool {
         boolValue(permissionAskedKey, fallback: false, defaults: defaults)
     }
 
-    static func setPermissionAsked(defaults: UserDefaults = UserDefaults.standard) {
+    static func setPermissionAsked(defaults: UserDefaults) {
         defaults.set(true, forKey: permissionAskedKey)
     }
 
@@ -515,7 +515,7 @@ final class SystemNotifications {
     @ObservationIgnored private(set) var authorizationRequestCount = 0
     @ObservationIgnored private(set) var postedCount = 0
 
-    init(isAndroid: Bool? = nil, defaults: UserDefaults = UserDefaults.standard) {
+    init(isAndroid: Bool? = nil, defaults: UserDefaults) {
         self.isAndroid = isAndroid ?? SystemNotifications.platformIsAndroid
         self.defaults = defaults
         publish()
@@ -530,7 +530,7 @@ final class SystemNotifications {
     }
 
     private static func makeShared() -> SystemNotifications {
-        let presenter = SystemNotifications()
+        let presenter = SystemNotifications(defaults: UserDefaults.standard)
         #if SKIP
         presenter.install(center: LocalNotifications.center(presenter: presenter))
         #elseif os(iOS)

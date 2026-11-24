@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createCoalescedRunner } from "../lib/coalesced-run";
+import { createProducerSlotOrder } from "../lib/producer-slot-order";
 import { toError } from "../lib/utils";
 import type { Socket } from "socket.io-client";
 import type { Device } from "mediasoup-client";
@@ -131,6 +133,7 @@ import {
 } from "../lib/consumer-resume-retry";
 import {
   advanceVideoFreezeRecovery,
+  isProducerGoneConsumeError,
   shouldRecreateProducerTransport,
   type VideoFreezeRecoveryState,
 } from "../lib/media-recovery-policy";
@@ -141,6 +144,7 @@ import {
   decideWebcamStartupResetVerification,
   enqueueWebcamStartupResetProducer,
   getConsumerMaximumSpatialLayer,
+  getHighestActiveSpatialLayer,
   getWebcamStartupResetQueueDelayMs,
   isCurrentConsumerGeneration,
   isProducerPauseSnapshotCurrent,
@@ -172,6 +176,7 @@ import type {
   RequestMediaPermissionsOptions,
   ScreenShareRepublishOptions,
 } from "./useMeetMedia";
+import { endedNotice, joinRejectedUpdate, type SetupNotice } from "../lib/setup-notice";
 
 type ConsumerTelemetryPayload = Omit<
   ConsumerTelemetrySnapshot,
@@ -886,7 +891,7 @@ interface UseMeetSocketOptions {
   setPendingUsers: React.Dispatch<React.SetStateAction<Map<string, string>>>;
   setConnectionState: (state: ConnectionState) => void;
   setMeetError: (error: MeetError | null) => void;
-  setMeetingEndedNotice?: (message: string | null) => void;
+  setSetupNotice?: (notice: SetupNotice | null) => void;
   setWaitingMessage: (message: string | null) => void;
   setHostUserId: (userId: string | null) => void;
   setHostUserIds: React.Dispatch<React.SetStateAction<string[]>>;
@@ -1006,7 +1011,7 @@ export function useMeetSocket({
   setPendingUsers,
   setConnectionState,
   setMeetError,
-  setMeetingEndedNotice,
+  setSetupNotice,
   setWaitingMessage,
   setHostUserId,
   setHostUserIds,
@@ -1153,19 +1158,15 @@ export function useMeetSocket({
   audioOnlyModeRef.current = audioOnlyMode;
   const pendingScreenProducerCloseIdsRef = useRef<Set<string>>(new Set());
   const screenShareRepublishPromiseRef = useRef<Promise<boolean> | null>(null);
-  const producerAnnounceOrderRef = useRef<{
-    slotById: Map<string, string>;
-    latestBySlot: Map<string, string>;
-  }>({
-    slotById: new Map(),
-    latestBySlot: new Map(),
-  });
+  const [producerSlotOrder] = useState(createProducerSlotOrder);
+  const [coalesceProducerSync] = useState(createCoalescedRunner);
   const consumeProducerRef = useRef<
     (producerInfo: ProducerInfo, options?: ConsumeProducerOptions) => Promise<void>
   >(async () => {});
   const recoverStaleConsumerRef = useRef<
     (producerInfo: ProducerInfo, reason: string) => Promise<void>
   >(async () => {});
+  const syncProducersRef = useRef<() => Promise<void>>(async () => {});
   const resumeConsumerReliablyRef = useRef<
     (
       producerId: string,
@@ -1413,46 +1414,17 @@ export function useMeetSocket({
     [userId],
   );
 
-  const getProducerSlotKey = (
-    info: Pick<ProducerInfo, "producerUserId" | "kind" | "type">,
-  ): string => `${info.producerUserId}:${info.kind}:${info.type}`;
+  const isSupersededProducer = producerSlotOrder.isSuperseded;
 
-  const noteAnnouncedProducer = useCallback((info: ProducerInfo) => {
-    const state = producerAnnounceOrderRef.current;
-    if (state.slotById.has(info.producerId)) return;
-    const slotKey = getProducerSlotKey(info);
-    state.slotById.set(info.producerId, slotKey);
-    state.latestBySlot.set(slotKey, info.producerId);
-  }, []);
-
-  const isSupersededProducer = useCallback(
-    (info: Pick<
-      ProducerInfo,
-      "producerId" | "producerUserId" | "kind" | "type"
-    >): boolean => {
-      const state = producerAnnounceOrderRef.current;
-      const slotKey =
-        state.slotById.get(info.producerId) ?? getProducerSlotKey(info);
-      const latest = state.latestBySlot.get(slotKey);
-      return latest !== undefined && latest !== info.producerId;
+  const noteRemoteProducerList = useCallback(
+    (producers: readonly ProducerInfo[], requestedAt: number) => {
+      producerSlotOrder.noteServerList(
+        producers.filter((producer) => producer.producerUserId !== userId),
+        requestedAt,
+      );
     },
-    [],
+    [producerSlotOrder, userId],
   );
-
-  const forgetAnnouncedProducer = useCallback((producerId: string) => {
-    const state = producerAnnounceOrderRef.current;
-    const slotKey = state.slotById.get(producerId);
-    state.slotById.delete(producerId);
-    if (slotKey && state.latestBySlot.get(slotKey) === producerId) {
-      state.latestBySlot.delete(slotKey);
-    }
-  }, []);
-
-  const resetAnnouncedProducers = useCallback(() => {
-    const state = producerAnnounceOrderRef.current;
-    state.slotById.clear();
-    state.latestBySlot.clear();
-  }, []);
 
   useEffect(() => {
     isMutedRef.current = isMuted;
@@ -1836,7 +1808,7 @@ export function useMeetSocket({
         }
       }
       consumerResumeRetryStateRef.current.clear();
-      resetAnnouncedProducers();
+      producerSlotOrder.reset();
       if (!preserveMeetingState) {
         const statusTimeouts =
           participantConnectionStatusTimeoutsRef.current.values();
@@ -2143,7 +2115,7 @@ export function useMeetSocket({
     if (localRoomEndedHandledRef.current) return;
     localRoomEndedHandledRef.current = true;
     setMeetError(null);
-    setMeetingEndedNotice?.(null);
+    setSetupNotice?.(null);
     setWaitingMessage(null);
     cleanup();
     onLocalRoomEnded?.();
@@ -2151,7 +2123,7 @@ export function useMeetSocket({
     cleanup,
     onLocalRoomEnded,
     setMeetError,
-    setMeetingEndedNotice,
+    setSetupNotice,
     setWaitingMessage,
   ]);
 
@@ -2978,7 +2950,7 @@ export function useMeetSocket({
         webcamStartupLatencyResetQueueRef.current.filter(
           (queuedProducerId) => queuedProducerId !== producerId,
         );
-      forgetAnnouncedProducer(producerId);
+      producerSlotOrder.forget(producerId);
       mutedConsumerSinceRef.current.delete(producerId);
       producerPausedStateRef.current.delete(producerId);
       suppressedVideoProducersRef.current.delete(producerId);
@@ -3156,7 +3128,7 @@ export function useMeetSocket({
       consumerTelemetryRef,
       clearConsumerResumeRetry,
       clearStaleConsumerRecoveryTimeout,
-      forgetAnnouncedProducer,
+      producerSlotOrder,
       mutedConsumerSinceRef,
       producerPausedStateRef,
       consumerRecoveryInFlightRef,
@@ -4495,7 +4467,9 @@ export function useMeetSocket({
               screenShareVideoActive: knownScreenShareVideoActive,
             }),
           },
-          async (response: ConsumeResponse | { error: string }) => {
+          async (
+            response: ConsumeResponse | { error: string; code?: string },
+          ) => {
             if (!settleConsume()) {
               if (!("error" in response)) {
                 pendingConsumerTelemetryByIdRef.current.delete(response.id);
@@ -4514,7 +4488,13 @@ export function useMeetSocket({
 
             if ("error" in response) {
               console.error("[Meets] Consume error:", response.error);
-              queueFailureRetry(300);
+              if (isProducerGoneConsumeError(response)) {
+                producerSlotOrder.noteClosed(producerInfo.producerId);
+                handleProducerClosed(producerInfo.producerId);
+                void syncProducersRef.current();
+              } else {
+                queueFailureRetry(300);
+              }
               resolve();
               return;
             }
@@ -5353,9 +5333,9 @@ export function useMeetSocket({
       }
 
       const consumer = consumersRef.current.get(producerId);
+      const consumerTelemetry = consumerTelemetryRef.current.get(producerId);
       const observedSpatialLayer =
-        consumerTelemetryRef.current.get(producerId)?.currentLayers
-          ?.spatialLayer ?? null;
+        consumerTelemetry?.currentLayers?.spatialLayer ?? null;
       state.observedSpatialLayer = observedSpatialLayer;
       const decision = decideWebcamStartupResetPoll({
         now: Date.now(),
@@ -5373,6 +5353,10 @@ export function useMeetSocket({
           adaptivelyPausedConsumerProducerIdsRef.current.has(producerId),
         observedSpatialLayer,
         maximumSpatialLayer: state.maximumSpatialLayer,
+        highestActiveSpatialLayer: getHighestActiveSpatialLayer(
+          consumerTelemetry?.score,
+          state.maximumSpatialLayer,
+        ),
       });
 
       if (decision.action === "queue") {
@@ -5516,9 +5500,9 @@ export function useMeetSocket({
         }
 
         const preflightConsumer = consumersRef.current.get(producerId);
+        const consumerTelemetry = consumerTelemetryRef.current.get(producerId);
         const observedSpatialLayer =
-          consumerTelemetryRef.current.get(producerId)?.currentLayers
-            ?.spatialLayer ?? null;
+          consumerTelemetry?.currentLayers?.spatialLayer ?? null;
         state.observedSpatialLayer = observedSpatialLayer;
         const preflight = decideWebcamStartupResetPoll({
           now: Date.now(),
@@ -5536,6 +5520,10 @@ export function useMeetSocket({
             adaptivelyPausedConsumerProducerIdsRef.current.has(producerId),
           observedSpatialLayer,
           maximumSpatialLayer: state.maximumSpatialLayer,
+          highestActiveSpatialLayer: getHighestActiveSpatialLayer(
+            consumerTelemetry?.score,
+            state.maximumSpatialLayer,
+          ),
         });
         if (
           preflight.action === "queue" ||
@@ -6048,31 +6036,45 @@ export function useMeetSocket({
     videoFreezeStatsRef,
   ]);
 
-  const syncProducers = useCallback(async () => {
+  const runProducerSync = useCallback(async () => {
     const socket = socketRef.current;
     const device = deviceRef.current;
     if (!socket || !socket.connected || !device) return;
     if (!currentRoomIdRef.current) return;
 
     try {
-      const producers = await new Promise<ProducerInfo[]>((resolve, reject) => {
-        socket.emit(
-          "getProducers",
-          (response: { producers: ProducerInfo[] } | { error: string }) => {
-            if ("error" in response) {
-              reject(new Error(response.error));
-            } else {
-              resolve(response.producers || []);
-            }
-          },
-        );
-      });
+      const listRequestedAt = producerSlotOrder.markListRequested();
+      const producers = await new Promise<ProducerInfo[] | null>(
+        (resolve, reject) => {
+          emitWithAckTimeout(
+            socket,
+            ACK_REQUEST_TIMEOUT_MS,
+            () => resolve(null),
+            "getProducers",
+            (response: { producers: ProducerInfo[] } | { error: string }) => {
+              if ("error" in response) {
+                reject(new Error(response.error));
+              } else {
+                const listedProducers = response.producers || [];
+                noteRemoteProducerList(listedProducers, listRequestedAt);
+                resolve(listedProducers);
+              }
+            },
+          );
+        },
+      );
+      if (!producers) return;
 
       const serverProducerIds = new Set(
         producers.map((producer) => producer.producerId),
       );
+      // The list may predate a producer announced while it was in flight, so
+      // leaving that producer out says nothing about it.
+      const isGoneFromServer = (producerId: string): boolean =>
+        !serverProducerIds.has(producerId) &&
+        !producerSlotOrder.wasAnnouncedAfter(producerId, listRequestedAt);
       for (const producerId of announcedRemoteProducersRef.current.keys()) {
-        if (!serverProducerIds.has(producerId)) {
+        if (isGoneFromServer(producerId)) {
           announcedRemoteProducersRef.current.delete(producerId);
         }
       }
@@ -6102,14 +6104,15 @@ export function useMeetSocket({
             continue;
           }
         }
-        if (producerInfo.producerUserId !== userId) {
-          noteAnnouncedProducer(producerInfo);
-        }
         setProducerPausedState(
           producerInfo.producerId,
           Boolean(producerInfo.paused),
         );
-        if (producerInfo.type !== "webcam") continue;
+        // Only the producer that owns the slot speaks for the participant: a
+        // stale list can still carry the paused producer it replaced.
+        if (producerInfo.type !== "webcam" || isSupersededProducer(producerInfo)) {
+          continue;
+        }
         if (producerInfo.kind === "audio") {
           dispatchParticipants({
             type: "UPDATE_MUTED",
@@ -6126,7 +6129,7 @@ export function useMeetSocket({
       }
 
       for (const producerId of producerMapRef.current.keys()) {
-        if (!serverProducerIds.has(producerId)) {
+        if (isGoneFromServer(producerId)) {
           handleProducerClosed(producerId);
         }
       }
@@ -6205,16 +6208,18 @@ export function useMeetSocket({
           producersToConsume,
           countWebcamVideoProducerEntries(producerMapRef.current),
         );
-        await Promise.all(
-          producersToConsume.map((producerInfo) =>
-            consumeProducer(producerInfo, {
-              knownScreenShareVideoActive: snapshotHasScreenShareVideo,
-              webcamVideoStartupRank: webcamVideoStartupRanks.get(
-                producerInfo.producerId,
-              ),
-            }),
-          ),
-        );
+        // Syncs are serialized, so they must not wait on negotiation: a
+        // consume cut off by its transport closing never settles.
+        for (const producerInfo of producersToConsume) {
+          consumeProducer(producerInfo, {
+            knownScreenShareVideoActive: snapshotHasScreenShareVideo,
+            webcamVideoStartupRank: webcamVideoStartupRanks.get(
+              producerInfo.producerId,
+            ),
+          }).catch((err) => {
+            console.error("[Meets] Failed to sync producers:", err);
+          });
+        }
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err ?? "");
@@ -6240,7 +6245,8 @@ export function useMeetSocket({
     dropDepartedProducer,
     handleProducerClosed,
     joinMode,
-    noteAnnouncedProducer,
+    noteRemoteProducerList,
+    producerSlotOrder,
     restoreWebinarFeedParticipant,
     resumeConsumerReliably,
     setProducerPausedState,
@@ -6252,6 +6258,11 @@ export function useMeetSocket({
     videoFreezeStatsRef,
     announcedRemoteProducersRef,
   ]);
+  const syncProducers = useCallback(
+    () => coalesceProducerSync(runProducerSync),
+    [coalesceProducerSync, runProducerSync],
+  );
+  syncProducersRef.current = syncProducers;
 
   const applyDisplayNameSnapshot = useCallback(
     (users: DisplayNameSnapshotEntry[] = []) => {
@@ -6366,6 +6377,9 @@ export function useMeetSocket({
         }
         return !isDeparted;
       });
+      for (const producer of activeProducers) {
+        producerSlotOrder.noteAnnounced(producer);
+      }
       const serverProducerIds = new Set(
         activeProducers.map((producer) => producer.producerId),
       );
@@ -6405,6 +6419,7 @@ export function useMeetSocket({
       handleProducerClosed,
       pendingProducersRef,
       producerMapRef,
+      producerSlotOrder,
       restoreWebinarFeedParticipant,
       shouldIgnoreDepartedParticipant,
     ],
@@ -6606,6 +6621,7 @@ export function useMeetSocket({
       setWaitingMessage(null);
       setConnectionState("joining");
 
+      const joinRequestedAt = producerSlotOrder.markListRequested();
       return new Promise<"joined" | "waiting">((resolve, reject) => {
         const settleJoinRoom = startSocketAckTimeout(
           "joinRoom",
@@ -6704,6 +6720,12 @@ export function useMeetSocket({
               console.info(
                 "[Meets] Joined room, existing producers:",
                 response.existingProducers,
+              );
+              // The snapshot is ordered against live producer events by when
+              // it arrived, so note it before anything here awaits.
+              noteRemoteProducerList(
+                response.existingProducers,
+                joinRequestedAt,
               );
               currentRoomIdRef.current = targetRoomId;
               serverRoomIdRef.current = response.roomId ?? targetRoomId;
@@ -6851,11 +6873,6 @@ export function useMeetSocket({
                     })
                   : Promise.resolve();
 
-              for (const producer of response.existingProducers) {
-                if (producer.producerUserId !== userId) {
-                  noteAnnouncedProducer(producer);
-                }
-              }
               const snapshotHasScreenShareVideo =
                 response.existingProducers.some(
                   (producer) =>
@@ -7031,6 +7048,12 @@ export function useMeetSocket({
               socket.disconnect();
               reject(new Error("Connection timeout"));
             }, SOCKET_CONNECT_TIMEOUT_MS);
+            type SocketListener = Parameters<typeof socket.on>[1];
+            const onLive = ((event: Parameters<typeof socket.on>[0], handler: SocketListener) =>
+              socket.on(event, (...args: unknown[]) => {
+                if (socketRef.current !== socket || intentionalDisconnectRef.current) return;
+                handler.apply(socket, args);
+              })) as typeof socket.on;
 
             socket.on("connect", () => {
               clearTimeout(connectionTimeout);
@@ -7082,7 +7105,7 @@ export function useMeetSocket({
               }
             });
 
-            socket.on("roomClosed", ({ reason }: { reason: string }) => {
+            onLive("roomClosed", ({ reason }: { reason: string }) => {
               console.info("[Meets] Room closed:", reason);
               setMeetError({
                 code: "UNKNOWN",
@@ -7093,7 +7116,7 @@ export function useMeetSocket({
               cleanup();
             });
 
-            socket.on(
+            onLive(
               "roomEnded",
               ({
                 message,
@@ -7109,7 +7132,7 @@ export function useMeetSocket({
                 }
 
                 setMeetError(null);
-                setMeetingEndedNotice?.(resolveRoomEndedNoticeMessage(message));
+                setSetupNotice?.(endedNotice(resolveRoomEndedNoticeMessage(message)));
                 setWaitingMessage(null);
                 cleanup();
               },
@@ -7135,7 +7158,7 @@ export function useMeetSocket({
               reject(err);
             });
 
-            socket.on(
+            onLive(
               "hostAssigned",
               ({
                 roomId: eventRoomId,
@@ -7156,7 +7179,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "serverRestarting",
               (notification: ServerRestartNotification) => {
                 if (!isRoomEvent(notification?.roomId)) return;
@@ -7167,7 +7190,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on("adminNotice", (notification: AdminNoticeNotification) => {
+            onLive("adminNotice", (notification: AdminNoticeNotification) => {
               if (!isRoomEvent(notification?.roomId)) return;
               const message = notification?.message?.trim();
               if (!message) return;
@@ -7197,7 +7220,7 @@ export function useMeetSocket({
               });
             });
 
-            socket.on(
+            onLive(
               "consumerTelemetry",
               (notification: ConsumerTelemetryPayload) => {
                 if (!isRoomEvent(notification?.roomId)) return;
@@ -7261,7 +7284,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "consumerAutoResumed",
               (notification: {
                 roomId?: string;
@@ -7286,7 +7309,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "hostChanged",
               ({
                 roomId: eventRoomId,
@@ -7300,7 +7323,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "adminUsersChanged",
               ({
                 roomId: eventRoomId,
@@ -7314,7 +7337,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "activeSpeakerChanged",
               (notification: ActiveSpeakerChangedNotification) => {
                 if (!isRoomEvent(notification?.roomId)) return;
@@ -7334,7 +7357,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "webcamCodecPolicyChanged",
               (
                 policy: WebcamCodecPolicy & { roomId?: string },
@@ -7343,7 +7366,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on("newProducer", async (data: ProducerInfo) => {
+            onLive("newProducer", async (data: ProducerInfo) => {
               console.info("[Meets] New producer:", data);
               if (shouldIgnoreDepartedParticipant(data.producerUserId)) {
                 dropDepartedProducer(data);
@@ -7353,7 +7376,7 @@ export function useMeetSocket({
               if (data.producerUserId === userId) {
                 return;
               }
-              noteAnnouncedProducer(data);
+              producerSlotOrder.noteAnnounced(data);
               if (joinMode === "webinar_attendee") {
                 void syncProducers();
                 return;
@@ -7362,7 +7385,7 @@ export function useMeetSocket({
               await consumeProducer(data);
             });
 
-            socket.on(
+            onLive(
               "producerClosed",
               ({
                 producerId,
@@ -7533,11 +7556,12 @@ export function useMeetSocket({
                   }
                 }
 
+                producerSlotOrder.noteClosed(producerId);
                 handleProducerClosed(producerId);
               },
             );
 
-            socket.on(
+            onLive(
               "userJoined",
               ({
                 userId: joinedUserId,
@@ -7578,7 +7602,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "userLeft",
               ({ userId: leftUserId }: { userId: string }) => {
                 console.info("[Meets] User left:", leftUserId);
@@ -7631,7 +7655,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "participantConnectionState",
               (payload: {
                 userId?: string;
@@ -7681,7 +7705,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "displayNameSnapshot",
               ({
                 users,
@@ -7695,7 +7719,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "handRaisedSnapshot",
               ({ users, roomId: eventRoomId }: HandRaisedSnapshot) => {
                 if (!isRoomEvent(eventRoomId)) return;
@@ -7714,7 +7738,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "chatHistorySnapshot",
               ({ messages, roomId: eventRoomId }: ChatHistorySnapshot) => {
                 if (!isRoomEvent(eventRoomId)) return;
@@ -7755,7 +7779,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "displayNameUpdated",
               ({
                 userId: updatedUserId,
@@ -7775,7 +7799,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "participantMuted",
               ({
                 userId: mutedUserId,
@@ -7801,7 +7825,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "participantCameraOff",
               ({
                 userId: camUserId,
@@ -7827,7 +7851,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "admin:mediaEnforced",
               (payload: {
                 roomId?: string;
@@ -7935,7 +7959,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "admin:bulkMediaEnforced",
               (payload: {
                 roomId?: string;
@@ -7954,7 +7978,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "setVideoQuality",
               async ({ quality }: { quality: VideoQuality }) => {
                 console.info(`[Meets] Setting video quality to: ${quality}`);
@@ -7971,7 +7995,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on("chatMessage", (message: ChatMessage) => {
+            onLive("chatMessage", (message: ChatMessage) => {
               console.info("[Meets] Chat message received:", message);
               const { message: normalized, ttsText } =
                 normalizeChatMessage(message);
@@ -7998,7 +8022,7 @@ export function useMeetSocket({
               }
             });
 
-            socket.on(
+            onLive(
               "conclaveMessage",
               (payload: {
                 id?: string;
@@ -8088,7 +8112,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on("reaction", (reaction: ReactionNotification) => {
+            onLive("reaction", (reaction: ReactionNotification) => {
               if (reaction.kind && reaction.value) {
                 addReaction({
                   userId: reaction.userId,
@@ -8110,7 +8134,7 @@ export function useMeetSocket({
               }
             });
 
-            socket.on(
+            onLive(
               "chat:reactionChanged",
               ({
                 messageId,
@@ -8133,7 +8157,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "handRaised",
               ({ userId: raisedUserId, raised }: HandRaisedNotification) => {
                 if (raisedUserId === userId) {
@@ -8149,7 +8173,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on("kicked", () => {
+            onLive("kicked", () => {
               cleanup();
               setMeetError({
                 code: "UNKNOWN",
@@ -8158,7 +8182,7 @@ export function useMeetSocket({
               });
             });
 
-            socket.on(
+            onLive(
               "redirect",
               async ({ newRoomId }: { newRoomId: string }) => {
                 console.info(
@@ -8168,7 +8192,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "userRequestedJoin",
               ({
                 userId,
@@ -8190,7 +8214,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "pendingUsersSnapshot",
               ({
                 users,
@@ -8210,7 +8234,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "userAdmitted",
               ({
                 userId,
@@ -8228,7 +8252,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "userRejected",
               ({
                 userId,
@@ -8246,7 +8270,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "pendingUserLeft",
               ({
                 userId,
@@ -8264,8 +8288,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on("joinApproved", async () => {
-              if (intentionalDisconnectRef.current || socketRef.current !== socket) return;
+            onLive("joinApproved", async () => {
               const approvalGeneration = reconnectGenerationRef.current;
               console.info("[Meets] Join approved! Re-attempting join...");
               const joinOptions = joinOptionsRef.current;
@@ -8331,19 +8354,17 @@ export function useMeetSocket({
               }
             });
 
-            socket.on("joinRejected", () => {
+            onLive("joinRejected", () => {
               console.info("[Meets] Join rejected.");
-              setMeetError({
-                code: "PERMISSION_DENIED",
-                message: "The host has denied your request to join.",
-                recoverable: false,
-              });
-              setConnectionState("error");
-              setWaitingMessage(null);
+              const rejected = joinRejectedUpdate();
+              setMeetError(rejected.meetError);
+              setSetupNotice?.(rejected.setupNotice);
+              setConnectionState(rejected.connectionState);
+              setWaitingMessage(rejected.waitingMessage);
               cleanup();
             });
 
-            socket.on(
+            onLive(
               "waitingRoomStatus",
               ({
                 message,
@@ -8357,7 +8378,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "roomLockChanged",
               ({
                 locked,
@@ -8372,7 +8393,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "ttsDisabledChanged",
               ({
                 disabled,
@@ -8387,7 +8408,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "dmStateChanged",
               ({
                 enabled,
@@ -8402,7 +8423,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "imageAttachmentsStateChanged",
               ({
                 enabled,
@@ -8416,7 +8437,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "reactionsDisabledChanged",
               ({
                 disabled,
@@ -8431,7 +8452,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "participantMediaPermissionsChanged",
               ({
                 unmuteAllowed,
@@ -8448,7 +8469,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "noGuestsChanged",
               ({
                 noGuests,
@@ -8463,7 +8484,7 @@ export function useMeetSocket({
               }
             );
 
-            socket.on(
+            onLive(
               "chatLockChanged",
               ({
                 locked,
@@ -8478,7 +8499,7 @@ export function useMeetSocket({
               }
             );
 
-            socket.on(
+            onLive(
               "meeting:configChanged",
               (nextConfig: MeetingConfigSnapshot) => {
                 setMeetingRequiresInviteCode(
@@ -8487,14 +8508,14 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "webinar:configChanged",
               (nextConfig: WebinarConfigSnapshot) => {
                 setWebinarConfig(nextConfig);
               },
             );
 
-            socket.on(
+            onLive(
               "webinar:attendeeCountChanged",
               ({
                 attendeeCount,
@@ -8521,7 +8542,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "webinar:participantJoined",
               (notification: WebinarParticipantJoinedNotification) => {
                 if (joinMode !== "webinar_attendee") return;
@@ -8549,7 +8570,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "webinar:qaSnapshot",
               (snapshot: WebinarQaSnapshot) => {
                 if (!isRoomEvent(snapshot.roomId)) return;
@@ -8561,7 +8582,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "webinar:qaChanged",
               (notification: WebinarQaChangedNotification) => {
                 if (!isRoomEvent(notification.roomId)) return;
@@ -8592,7 +8613,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "webinar:handQueueChanged",
               (notification: WebinarHandQueueChangedNotification) => {
                 if (!isRoomEvent(notification.roomId)) return;
@@ -8600,7 +8621,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "webinar:promoted",
               (notification: WebinarPromotedNotification) => {
                 if (joinMode !== "webinar_attendee") return;
@@ -8612,7 +8633,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "webinar:demoted",
               (notification: WebinarDemotedNotification) => {
                 if (joinMode === "webinar_attendee") return;
@@ -8621,7 +8642,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "webinar:feedChanged",
               (notification: WebinarFeedChangedNotification) => {
                 if (joinMode !== "webinar_attendee") return;
@@ -8757,7 +8778,7 @@ export function useMeetSocket({
       setServerActiveSpeakerAvailable,
       setLocalStream,
       setMeetError,
-      setMeetingEndedNotice,
+      setSetupNotice,
       setPendingUsers,
       setWaitingMessage,
       setNetworkManagedVideoQuality,
@@ -9236,7 +9257,7 @@ export function useMeetSocket({
 
       localRoomEndedHandledRef.current = false;
       setMeetError(null);
-      setMeetingEndedNotice?.(null);
+      setSetupNotice?.(null);
       updateReconnectRecoveryStatus(null);
       setConnectionState("connecting");
       if (!bypassMediaPermissions) {
@@ -9436,7 +9457,7 @@ export function useMeetSocket({
       setConnectionState,
       setLocalStream,
       setMeetError,
-      setMeetingEndedNotice,
+      setSetupNotice,
       setRoomId,
       socketRef,
       stopLocalTrack,

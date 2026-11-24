@@ -6,7 +6,7 @@ import Testing
 @MainActor
 struct S1PeopleFocusTests {
     private func makePeople() -> PeoplePresenter {
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         return PeoplePresenter(shell: shell, stage: StagePresenter(shell: shell))
     }
 

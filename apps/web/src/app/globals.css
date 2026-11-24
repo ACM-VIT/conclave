@@ -164,13 +164,17 @@ select:focus {
     animation: reaction-hold 2s ease-out forwards !important;
   }
 }
-.acm-video-tile {
+.acm-video-tile,
+.acm-stage-frame {
   position: relative;
   background: #131316;
   border-radius: 16px;
   overflow: hidden;
-  contain: layout paint;
   border: 1px solid rgba(250, 250, 250, 0.08);
+}
+
+.acm-video-tile {
+  contain: layout paint;
   transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
 
@@ -529,11 +533,12 @@ select:focus {
 
 .web-chat-message-new-peer,
 .web-chat-message-new-self {
-  animation: acm-fade-in 0.11s cubic-bezier(0.2, 0.75, 0.15, 1) both;
+  --web-chat-message-entrance: acm-fade-in 0.11s cubic-bezier(0.2, 0.75, 0.15, 1);
+  animation: var(--web-chat-message-entrance);
 }
 
 .web-chat-action-new {
-  animation: acm-fade-in 0.11s ease-out both;
+  animation: acm-fade-in 0.11s ease-out;
 }
 
 .web-chat-send-active {
@@ -577,7 +582,8 @@ select:focus {
 }
 
 .web-chat-message-highlight {
-  animation: web-chat-highlight-flash 900ms ease-out both;
+  /* Keep the entrance animation in the list so the highlight cannot restart it. */
+  animation: var(--web-chat-message-entrance, none), web-chat-highlight-flash 900ms ease-out both;
 }
 
 @keyframes web-chat-tts-eq {

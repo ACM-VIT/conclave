@@ -15,6 +15,7 @@ import {
   HEAD_FONT,
   PrimaryButton,
 } from "./gameUi";
+import PanelNoticeSlot from "../PanelNoticeSlot";
 
 type CatalogEntry = {
   id: string;
@@ -167,6 +168,7 @@ export function GamesPanel({
         <GameDockCloseButton onClose={onClose} label="Close games" />
       </div>
 
+      <PanelNoticeSlot />
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
         {vote ? (
           <VoteView
@@ -245,7 +247,7 @@ function LauncherView({
               </span>
               {isAdmin && !readOnly ? (
                 <svg width={16} height={16} viewBox="0 0 24 24" fill="none" aria-hidden>
-                  <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
               ) : null}
             </span>

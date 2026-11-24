@@ -2507,7 +2507,7 @@ final class WebRTCClient: NSObject, ObservableObject {
             debugLog("[WebRTC] Dropped superseded microphone producer: \(producer.id)")
             return
         }
-        producer.resume()
+        resumeSendProducer(producer)
         microphone.track.isEnabled = true
 
         audioSource = microphone.source
@@ -2524,7 +2524,7 @@ final class WebRTCClient: NSObject, ObservableObject {
 
     private func createMicrophoneAudioTrack() -> (source: RTCAudioSource, track: RTCAudioTrack) {
 
-        createMicrophoneAudioTrack(noiseSuppression: SettingsPreferences.noiseSuppression())
+        createMicrophoneAudioTrack(noiseSuppression: SettingsPreferences.noiseSuppression(defaults: UserDefaults.standard))
     }
 
     private func createMicrophoneAudioTrack(noiseSuppression: Bool) -> (source: RTCAudioSource, track: RTCAudioTrack) {
@@ -2685,6 +2685,7 @@ final class WebRTCClient: NSObject, ObservableObject {
             }
 
             let appData = try encodeJSONString(ProducerAppData(type: ProducerType.webcam.rawValue, paused: false))
+            let appliedProfile = lastAppliedLocalBandwidthSignature
             let producer = try await createProducerOffMain(
                 on: sendTransport,
                 track: track,
@@ -2734,8 +2735,8 @@ final class WebRTCClient: NSObject, ObservableObject {
                 return
             }
             producer.delegate = self
-            producer.resume()
-            try? producer.setMaxSpatialLayer(WebcamSpatialLayerPolicy.activeLayerCount(
+            resumeSendProducer(producer)
+            setSendProducerMaxSpatialLayer(producer, WebcamSpatialLayerPolicy.activeLayerCount(
                 maxLayerIndex: webcamMaxSpatialLayer(for: currentVideoQuality, connectionQuality: currentLocalBandwidthQuality)
             ))
 
@@ -2753,6 +2754,7 @@ final class WebRTCClient: NSObject, ObservableObject {
                 track: track
             )
             localVideoTrack = trackWrapper
+            reapplyLocalBandwidthProfile(ifChangedSince: appliedProfile)
 
             debugLog("[WebRTC] Video producer created: \(producer.id)")
         } catch {
@@ -3276,6 +3278,27 @@ final class WebRTCClient: NSObject, ObservableObject {
 
         guard let queue = sendProducerOperationQueues[ObjectIdentifier(producer)] else { return }
         closeSendProducer(producer, on: queue)
+    }
+
+    private func pauseSendProducer(_ producer: Producer?) {
+        changeSendProducer(producer) { $0.pause() }
+    }
+
+    private func resumeSendProducer(_ producer: Producer?) {
+        changeSendProducer(producer) { $0.resume() }
+    }
+
+    private func setSendProducerMaxSpatialLayer(_ producer: Producer, _ layers: Int) {
+        changeSendProducer(producer) { try? $0.setMaxSpatialLayer(layers) }
+    }
+
+    private func changeSendProducer(_ producer: Producer?, _ change: @escaping @Sendable (Producer) -> Void) {
+        guard let producer, let queue = sendProducerOperationQueues[ObjectIdentifier(producer)] else { return }
+        let handle = SendTransportOperationHandle(producer: producer)
+        queue.async {
+            guard let producer = handle.producer, !producer.closed else { return }
+            change(producer)
+        }
     }
 
     private func closeSendProducer(_ producer: Producer, on queue: DispatchQueue) {
@@ -3873,7 +3896,7 @@ final class WebRTCClient: NSObject, ObservableObject {
             localAudioMuteIntentGeneration += 1
             localAudioIntentEnabled = false
 
-            audioProducer?.pause()
+            pauseSendProducer(audioProducer)
             rtcLocalAudioTrack?.isEnabled = false
             localAudioEnabled = false
             audioCaptureReassertionTask?.cancel()
@@ -3896,7 +3919,7 @@ final class WebRTCClient: NSObject, ObservableObject {
                 guard localAudioMuteIntentGeneration == muteIntentGeneration,
                       audioProducer === producer, !producer.closed else { return }
                 try configureCallAudioSession()
-                producer.resume()
+                resumeSendProducer(producer)
             }
             try await socket.toggleMute(producerId: producer.id, paused: !enabled)
             guard generation == configurationGeneration else { throw WebRTCError.staleConfiguration }
@@ -3921,7 +3944,7 @@ final class WebRTCClient: NSObject, ObservableObject {
             }
             localAudioIntentEnabled = previous
             if previous {
-                producer.resume()
+                resumeSendProducer(producer)
                 do {
                     try configureCallAudioSession()
                     scheduleLocalAudioCaptureReassertion()
@@ -3929,7 +3952,7 @@ final class WebRTCClient: NSObject, ObservableObject {
                     debugLog("[WebRTC] Failed to restore audio session after toggle failure: \(error)")
                 }
             } else {
-                producer.pause()
+                pauseSendProducer(producer)
             }
             rtcLocalAudioTrack?.isEnabled = previous
             localAudioEnabled = previous
@@ -3945,7 +3968,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         audioCaptureReassertionTask = nil
         audioCaptureRestartTask?.cancel()
         audioCaptureRestartTask = nil
-        audioProducer?.pause()
+        pauseSendProducer(audioProducer)
         rtcLocalAudioTrack?.isEnabled = false
         localAudioEnabled = false
     }
@@ -3959,7 +3982,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         let generation = configurationGeneration
         let muteIntentGeneration = localAudioMuteIntentGeneration
         try configureCallAudioSession()
-        producer.resume()
+        resumeSendProducer(producer)
         rtcLocalAudioTrack?.isEnabled = true
         try await socket.toggleMute(producerId: producer.id, paused: false)
 
@@ -3989,9 +4012,9 @@ final class WebRTCClient: NSObject, ObservableObject {
                 if !localVideoEnabled {
                     try startCameraCapture()
                 }
-                producer.resume()
+                resumeSendProducer(producer)
             } else {
-                producer.pause()
+                pauseSendProducer(producer)
             }
             try await socket.toggleCamera(producerId: producer.id, paused: !enabled)
 
@@ -4023,9 +4046,9 @@ final class WebRTCClient: NSObject, ObservableObject {
             }
             let capturer = videoCapturer
             if previous {
-                producer.resume()
+                resumeSendProducer(producer)
             } else {
-                producer.pause()
+                pauseSendProducer(producer)
             }
             rtcLocalVideoTrack?.isEnabled = previous
             localVideoTrack?.isEnabled = previous
@@ -4050,7 +4073,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         localVideoOffIntentGeneration += 1
         invalidateWebcamReceiverCapacityAuthority()
         let capturer = videoCapturer
-        videoProducer?.pause()
+        pauseSendProducer(videoProducer)
         rtcLocalVideoTrack?.isEnabled = false
         localVideoTrack?.isEnabled = false
         localVideoEnabled = false
@@ -4287,6 +4310,28 @@ final class WebRTCClient: NSObject, ObservableObject {
 
     func consumeIntentionalLocalAudioProducerClose(producerId: String) -> Bool {
         intentionalLocalAudioProducerCloseIds.remove(producerId) != nil
+    }
+
+    /// The SFU closes `oldProducer` before it acknowledges the replacement, and the view model drops that close while
+    /// the mark is set. If the replacement then fails after the close arrived, nothing else recovers the microphone,
+    /// so discard the dead producer and ask for a restart, as the close would have.
+    private func settleFailedMicrophoneReplacement(_ oldProducer: Producer, generation: Int) -> Bool {
+        let closeAlreadyArrived = intentionalLocalAudioProducerCloseIds.remove(oldProducer.id) == nil
+        guard closeAlreadyArrived, generation == configurationGeneration, audioProducer === oldProducer else { return false }
+        closeSendProducer(oldProducer)
+        audioProducer = nil
+        audioProducerBandwidthQuality = .unknown
+        audioCaptureReassertionTask?.cancel()
+        audioCaptureReassertionTask = nil
+        rtcLocalAudioTrack?.isEnabled = false
+        rtcLocalAudioTrack = nil
+        audioSource = nil
+        let previousSuppressLocalStateCallbacks = suppressLocalStateCallbacks
+        suppressLocalStateCallbacks = true
+        localAudioEnabled = false
+        suppressLocalStateCallbacks = previousSuppressLocalStateCallbacks
+        onLocalAudioProducerLost?()
+        return true
     }
 
     private func markIntentionalLocalAudioProducerClose(_ producerId: String) {
@@ -4586,6 +4631,7 @@ final class WebRTCClient: NSObject, ObservableObject {
 
             intentionalLocalVideoProducerCloseIds.insert(oldProducer.id)
 
+            let appliedProfile = lastAppliedLocalBandwidthSignature
             let producer = try await createProducerOffMain(
                 on: sendTransport,
                 track: track,
@@ -4604,9 +4650,9 @@ final class WebRTCClient: NSObject, ObservableObject {
             )
             pendingProducer = producer
             producer.delegate = self
-            producer.resume()
+            resumeSendProducer(producer)
             if targetTopology == .vp8Simulcast {
-                try? producer.setMaxSpatialLayer(WebcamSpatialLayerPolicy.activeLayerCount(maxLayerIndex: 2))
+                setSendProducerMaxSpatialLayer(producer, WebcamSpatialLayerPolicy.activeLayerCount(maxLayerIndex: 2))
             }
 
             guard self.webcamTopologyControlGeneration == topologyGeneration,
@@ -4628,6 +4674,7 @@ final class WebRTCClient: NSObject, ObservableObject {
                 track: track
             )
             pendingProducer = nil
+            reapplyLocalBandwidthProfile(ifChangedSince: appliedProfile)
 
             do {
                 try await socketManager.closeProducer(producerId: oldProducer.id)
@@ -4737,6 +4784,12 @@ final class WebRTCClient: NSObject, ObservableObject {
 
     }
 
+    private func reapplyLocalBandwidthProfile(ifChangedSince appliedProfile: String?) {
+        guard lastAppliedLocalBandwidthSignature != appliedProfile else { return }
+        lastAppliedLocalBandwidthSignature = nil
+        applyLocalBandwidthProfile(connectionQuality: currentLocalBandwidthQuality)
+    }
+
     func updateVideoQuality(_ quality: VideoQuality) {
         currentVideoQuality = quality
         evaluateWebcamTopologyTransition()
@@ -4797,7 +4850,7 @@ final class WebRTCClient: NSObject, ObservableObject {
             let fps = webcamCaptureProfile(for: currentVideoQuality, connectionQuality: connectionQuality).fps
 
             if adaptEncodings {
-                try? producer.setMaxSpatialLayer(WebcamSpatialLayerPolicy.activeLayerCount(
+                setSendProducerMaxSpatialLayer(producer, WebcamSpatialLayerPolicy.activeLayerCount(
                     maxLayerIndex: webcamMaxSpatialLayer(for: currentVideoQuality, connectionQuality: connectionQuality)
                 ))
             }
@@ -4859,12 +4912,13 @@ final class WebRTCClient: NSObject, ObservableObject {
         var pendingProducer: Producer?
         var pendingTrack: RTCAudioTrack?
         let generation = configurationGeneration
+        var handedToRecovery = false
         defer {
 
             if generation == configurationGeneration {
                 suppressLocalStateCallbacks = previousSuppressLocalStateCallbacks
                 audioBandwidthRefreshInFlight = false
-                if !localAudioEnabled {
+                if !localAudioEnabled && !handedToRecovery {
                     onLocalAudioEnabledChanged?(false)
                 }
             }
@@ -4874,7 +4928,6 @@ final class WebRTCClient: NSObject, ObservableObject {
             try configureCallAudioSession()
             let oldTrack = rtcLocalAudioTrack
 
-            let muteIntentGeneration = localAudioMuteIntentGeneration
             let microphone = createMicrophoneAudioTrack()
             pendingTrack = microphone.track
             markIntentionalLocalAudioProducerClose(oldProducer.id)
@@ -4882,8 +4935,7 @@ final class WebRTCClient: NSObject, ObservableObject {
             do {
                 nextProducer = try await createMicrophoneProducer(on: sendTransport, track: microphone.track)
             } catch {
-
-                intentionalLocalAudioProducerCloseIds.remove(oldProducer.id)
+                handedToRecovery = settleFailedMicrophoneReplacement(oldProducer, generation: generation)
                 throw error
             }
             pendingProducer = nextProducer
@@ -4903,9 +4955,7 @@ final class WebRTCClient: NSObject, ObservableObject {
                 return
             }
 
-            let muted = isLocalAudioMuteInEffect(since: muteIntentGeneration) ||
-                !localAudioEnabled ||
-                !localAudioIntentEnabled
+            let muted = !localAudioIntentEnabled
             commitMicrophoneReplacement(
                 nextProducer,
                 microphone: microphone,
@@ -4944,13 +4994,12 @@ final class WebRTCClient: NSObject, ObservableObject {
         audioProducer = nextProducer
         audioProducerBandwidthQuality = bandwidthQuality
         if muted {
-            nextProducer.pause()
+            pauseSendProducer(nextProducer)
             microphone.track.isEnabled = false
             localAudioEnabled = false
         } else {
-            nextProducer.resume()
+            resumeSendProducer(nextProducer)
             microphone.track.isEnabled = true
-            localAudioIntentEnabled = true
             localAudioEnabled = true
         }
         closeSendProducer(oldProducer)
@@ -4977,8 +5026,13 @@ final class WebRTCClient: NSObject, ObservableObject {
             return
         }
 
+        let generation = configurationGeneration
         screenBandwidthRefreshInFlight = true
-        defer { screenBandwidthRefreshInFlight = false }
+        defer {
+            if generation == configurationGeneration {
+                screenBandwidthRefreshInFlight = false
+            }
+        }
         lastScreenProducerSignalingError = nil
 
         do {
@@ -4987,6 +5041,7 @@ final class WebRTCClient: NSObject, ObservableObject {
                 intentionalLocalScreenProducerCloseIds.removeAll()
             }
             intentionalLocalScreenProducerCloseIds.insert(oldProducer.id)
+            let appliedProfile = lastAppliedLocalBandwidthSignature
             let producer = try await createScreenProducerOffMain(
                 on: sendTransport,
                 track: screenTrack,
@@ -5000,12 +5055,13 @@ final class WebRTCClient: NSObject, ObservableObject {
                 return
             }
             producer.delegate = self
-            producer.resume()
+            resumeSendProducer(producer)
             screenProducer = producer
             applyConfiguredDegradationPreference(to: producer, type: .screen)
             screenProducerBandwidthQuality = connectionQuality
             updateScreenCaptureProfile(connectionQuality: connectionQuality)
             resetScreenFrameLimiter()
+            reapplyLocalBandwidthProfile(ifChangedSince: appliedProfile)
 
             do {
                 try await socketManager.closeProducer(producerId: oldProducer.id)
@@ -6024,7 +6080,7 @@ extension WebRTCClient {
             return
         }
         rtcLocalAudioTrack?.isEnabled = true
-        audioProducer?.resume()
+        resumeSendProducer(audioProducer)
     }
 
     private func scheduleLocalAudioCaptureReassertion(forceCaptureRestart: Bool = false) {
@@ -6118,8 +6174,7 @@ extension WebRTCClient {
             do {
                 nextProducer = try await createMicrophoneProducer(on: sendTransport, track: microphone.track)
             } catch {
-
-                intentionalLocalAudioProducerCloseIds.remove(oldProducer.id)
+                _ = settleFailedMicrophoneReplacement(oldProducer, generation: generation)
                 throw error
             }
             pendingProducer = nextProducer
@@ -6139,9 +6194,7 @@ extension WebRTCClient {
                 return
             }
 
-            let muted = isLocalAudioMuteInEffect(since: muteIntentGeneration) ||
-                !localAudioEnabled ||
-                !localAudioIntentEnabled
+            let muted = !localAudioIntentEnabled
             commitMicrophoneReplacement(
                 nextProducer,
                 microphone: microphone,
@@ -6767,22 +6820,25 @@ extension WebRTCClient {
 
         do {
             let appData = try encodeJSONString(ProducerAppData(type: ProducerType.screen.rawValue, paused: false))
+            let producedQuality = currentLocalBandwidthQuality
+            let appliedProfile = lastAppliedLocalBandwidthSignature
             let producer = try await createScreenProducerOffMain(
                 on: sendTransport,
                 track: screenTrack,
                 encodings: screenShareEncodings(
-                    connectionQuality: currentLocalBandwidthQuality
+                    connectionQuality: producedQuality
                 ),
                 codec: preferredVideoCodecJSON(),
                 appData: appData
             )
             producer.delegate = self
-            producer.resume()
+            resumeSendProducer(producer)
 
             screenProducer = producer
             applyConfiguredDegradationPreference(to: producer, type: .screen)
-            screenProducerBandwidthQuality = currentLocalBandwidthQuality
+            screenProducerBandwidthQuality = producedQuality
             evaluateWebcamTopologyTransition()
+            reapplyLocalBandwidthProfile(ifChangedSince: appliedProfile)
 
             debugLog("[WebRTC] Screen sharing producer created: \(producer.id)")
         } catch {

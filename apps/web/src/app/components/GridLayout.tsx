@@ -26,6 +26,7 @@ import {
   type SetStateAction,
   useCallback,
   useEffect,
+  useEffectEvent,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -43,8 +44,15 @@ import { isSystemUserId, truncateDisplayName } from "../lib/utils";
 import { observeRemoteVideoPresentation } from "../lib/remote-video-presentation";
 import ParticipantAudio from "./ParticipantAudio";
 import ParticipantConnectionOverlay from "./ParticipantConnectionOverlay";
+import LocalVideoTile from "./LocalVideoTile";
+import StageNotice from "./StageNotice";
+import StageSourcePill from "./StageSourcePill";
+import {
+  STAGE_RAIL_CLASS,
+  STAGE_RAIL_TILE_CLASS,
+  STAGE_SPLIT_CLASS,
+} from "./stage-layout";
 import ParticipantVideo from "./ParticipantVideo";
-import GameTileOverlay from "./games/GameTileOverlay";
 import { Avatar } from "@conclave/ui-tokens/web";
 import {
   chooseStageMode,
@@ -2110,14 +2118,8 @@ function GridLayout({
       : usesMeasuredAutoTileLimit && autoGridTileLimit < requestedMaxTiles
         ? 1
         : 0;
-  const roomTilingSequenceRef = useRef(0);
   const roomTilingMetadataRef = useRef<MeetRoomTilingMetadata | null>(null);
   const roomTilingHistoryRef = useRef<MeetRoomTilingMetadata[]>([]);
-  const lastPublishedRoomTilingSignatureRef = useRef<string | null>(null);
-  const latestRoomTilingMetadataBaseRef =
-    useRef<MeetRoomTilingMetadataBase | null>(null);
-  const latestRoomTilingMetadataSignatureRef = useRef("");
-  const publishRoomTilingMetadataRef = useRef<(() => void) | null>(null);
   const roomTilingMetadataBase = useMemo<MeetRoomTilingMetadataBase>(
     () => ({
       source: "client",
@@ -2293,74 +2295,70 @@ function GridLayout({
     [roomTilingMetadataBase],
   );
 
-  useLayoutEffect(() => {
-    latestRoomTilingMetadataBaseRef.current = roomTilingMetadataBase;
-    latestRoomTilingMetadataSignatureRef.current = roomTilingMetadataSignature;
-    publishRoomTilingMetadataRef.current?.();
-  }, [roomTilingMetadataBase, roomTilingMetadataSignature]);
-
-  useEffect(() => {
-    const getSnapshot = (): MeetRoomTilingDebugSnapshot => ({
+  const getRoomTilingSnapshot = useCallback(
+    (): MeetRoomTilingDebugSnapshot => ({
       current: roomTilingMetadataRef.current,
       history: roomTilingHistoryRef.current,
-      sequence: roomTilingSequenceRef.current,
+      sequence: roomTilingMetadataRef.current?.sequence ?? 0,
       intervalMs: ROOM_TILING_METADATA_INTERVAL_MS,
-    });
-    const publish = ({
-      force = false,
-      heartbeat = false,
-    }: {
-      force?: boolean;
-      heartbeat?: boolean;
-    } = {}) => {
-      const base = latestRoomTilingMetadataBaseRef.current;
-      const signature = latestRoomTilingMetadataSignatureRef.current;
-      if (!base || !signature) return;
+    }),
+    [],
+  );
+
+  const publishRoomTiling = useEffectEvent(
+    (heartbeat = false) => {
+      const previous = roomTilingMetadataRef.current;
       if (
-        lastPublishedRoomTilingSignatureRef.current === signature &&
         !heartbeat &&
-        (!force || roomTilingMetadataRef.current)
+        previous?.signature === roomTilingMetadataSignature
       ) {
         return;
       }
 
       const metadata: MeetRoomTilingMetadata = {
-        ...base,
-        sequence: roomTilingSequenceRef.current + 1,
+        ...roomTilingMetadataBase,
+        sequence: (previous?.sequence ?? 0) + 1,
         timestamp: Date.now(),
         performanceTime: Math.round(performance.now()),
-        signature,
+        signature: roomTilingMetadataSignature,
       };
-      roomTilingSequenceRef.current = metadata.sequence;
       roomTilingMetadataRef.current = metadata;
       roomTilingHistoryRef.current = [
         ...roomTilingHistoryRef.current,
         metadata,
       ].slice(-24);
-      lastPublishedRoomTilingSignatureRef.current = signature;
-      window.__conclaveMeetRoomTilingDebug = getSnapshot();
+      window.__conclaveMeetRoomTilingDebug = getRoomTilingSnapshot();
       window.dispatchEvent(
         new CustomEvent("conclave:meet-room-tiling", { detail: metadata }),
       );
-    };
+    },
+  );
 
-    window.__conclaveGetMeetRoomTilingDebug = getSnapshot;
-    publishRoomTilingMetadataRef.current = publish;
-    publish({ force: true });
-    const interval = window.setInterval(
-      () => publish({ heartbeat: true }),
-      ROOM_TILING_METADATA_INTERVAL_MS,
-    );
+  useEffect(() => {
+    window.__conclaveGetMeetRoomTilingDebug = getRoomTilingSnapshot;
+    window.__conclaveMeetRoomTilingDebug = getRoomTilingSnapshot();
+    let interval: number | undefined;
+    try {
+      if (window.localStorage.getItem("conclave:debug-video-effects") === "1") {
+        interval = window.setInterval(
+          () => publishRoomTiling(true),
+          ROOM_TILING_METADATA_INTERVAL_MS,
+        );
+      }
+    } catch {}
 
     return () => {
       window.clearInterval(interval);
-      publishRoomTilingMetadataRef.current = null;
-      if (window.__conclaveGetMeetRoomTilingDebug === getSnapshot) {
+      if (window.__conclaveGetMeetRoomTilingDebug === getRoomTilingSnapshot) {
         delete window.__conclaveGetMeetRoomTilingDebug;
+        delete window.__conclaveMeetRoomTilingDebug;
       }
-      delete window.__conclaveMeetRoomTilingDebug;
     };
-  }, []);
+  }, [getRoomTilingSnapshot]);
+
+  useLayoutEffect(() => {
+    publishRoomTiling();
+  }, [roomTilingMetadataSignature]);
   const setSelfViewMode = useCallback(
     (selfViewMode: MeetSelfViewMode) => {
       onViewSettingsChange?.((current) => ({ ...current, selfViewMode }));
@@ -2678,7 +2676,7 @@ function GridLayout({
       >
         {usesSideBySideLayout && presentationStream ? (
           <div
-            className="flex h-full w-full min-w-0 flex-col gap-3 sm:flex-row"
+            className={STAGE_SPLIT_CLASS}
             data-meet-side-by-side
             data-meet-side-by-side-companion-kind={sideBySideCompanionKind}
             data-meet-side-by-side-companion={
@@ -2752,7 +2750,7 @@ function GridLayout({
                 data-meet-stage-rail
               >
                 {shouldShowSelfAsTile && sideBySideCompanionKind !== "local" ? (
-                  <div className="relative h-full w-28 shrink-0 sm:h-28 sm:w-auto">
+                  <div className={STAGE_RAIL_TILE_CLASS}>
                     <LocalVideoTile
                       stream={localStream}
                       isCameraOff={isCameraOff}
@@ -2774,7 +2772,7 @@ function GridLayout({
                 {stageSideParticipants.map((participant) => (
                   <div
                     key={participant.userId}
-                    className="relative h-full w-28 shrink-0 sm:h-28 sm:w-auto"
+                    className={STAGE_RAIL_TILE_CLASS}
                     data-userid={participant.userId}
                   >
                     <ParticipantVideo
@@ -2824,7 +2822,7 @@ function GridLayout({
             </div>
           </div>
         ) : usesStageLayout && stageMainKind ? (
-          <div className="flex h-full w-full min-w-0 flex-col gap-3 sm:flex-row">
+          <div className={STAGE_SPLIT_CLASS}>
             <div
               className="relative min-w-0 flex-1"
               data-meet-stage-main={
@@ -2890,11 +2888,11 @@ function GridLayout({
                 detached) so the stage fills the space instead. */}
             {!usesSpotlightLayout && stageRailTileCount > 0 ? (
               <div
-                className="flex h-32 w-full shrink-0 flex-row gap-3 overflow-x-auto pb-1 sm:h-auto sm:w-[min(22vw,15rem)] sm:min-w-[10rem] sm:max-w-[15rem] sm:flex-col sm:overflow-x-visible sm:overflow-y-auto sm:pb-0 sm:pr-1"
+                className={STAGE_RAIL_CLASS}
                 data-meet-stage-rail
               >
                 {shouldShowSelfAsTile && stageMainKind !== "local" ? (
-                  <div className="relative h-full w-28 shrink-0 sm:h-28 sm:w-auto">
+                  <div className={STAGE_RAIL_TILE_CLASS}>
                     <LocalVideoTile
                       stream={localStream}
                       isCameraOff={isCameraOff}
@@ -2916,7 +2914,7 @@ function GridLayout({
                 {hasPresentation &&
                 stageMainKind !== "presentation" &&
                 presentationStream ? (
-                  <div className="relative h-full w-28 shrink-0 sm:h-28 sm:w-auto">
+                  <div className={STAGE_RAIL_TILE_CLASS}>
                     <PresentationVideoTile
                       stream={presentationStream}
                       presenterName={presenterName}
@@ -2932,7 +2930,7 @@ function GridLayout({
                 {stageSideParticipants.map((participant) => (
                   <div
                     key={participant.userId}
-                    className="relative h-full w-28 shrink-0 sm:h-28 sm:w-auto"
+                    className={STAGE_RAIL_TILE_CLASS}
                     data-userid={participant.userId}
                   >
                     <ParticipantVideo
@@ -3709,58 +3707,23 @@ const PresentationVideoTile = memo(function PresentationVideoTile({
         }`}
       />
       {showChooser && selfView && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#131316] p-4 text-center">
-          <MonitorUp
-            size={size === "stage" ? 32 : 22}
-            strokeWidth={1.75}
-            className="text-[#F95F4A]"
-          />
-          <p
-            className={`font-medium text-[#fafafa] ${
-              size === "stage" ? "text-[14px]" : "text-[11.5px]"
-            }`}
-          >
-            You&rsquo;re sharing your screen
-          </p>
-          {size === "stage" && (
-            <p className="max-w-[20rem] text-[12px] leading-snug text-[#fafafa]/56">
-              Everyone in the call can already see it — this is just what you
-              see on your end.
-            </p>
-          )}
-          <button
-            type="button"
-            onClick={() => selfView.onModeChange("preview")}
-            className={`mt-1 rounded-full border border-[#fafafa]/14 bg-[#18181b] font-medium text-[#fafafa]/82 transition-colors duration-100 hover:bg-[#232327] hover:text-[#fafafa] ${
-              size === "stage"
-                ? "px-4 py-2 text-[13px]"
-                : "px-3 py-1.5 text-[11.5px]"
-            }`}
-          >
-            Preview my screen
-          </button>
-        </div>
+        <StageNotice
+          icon={MonitorUp}
+          title="You’re sharing your screen"
+          detail="Everyone in the call can already see it — this is just what you see on your end."
+          compact={size !== "stage"}
+          action={{
+            label: "Preview my screen",
+            onClick: () => selfView.onModeChange("preview"),
+          }}
+        />
       )}
       {!showChooser && (
-        <div
-          className={`absolute flex max-w-[calc(100%-1.5rem)] items-center gap-2 rounded-full border border-[#fafafa]/10 bg-[#0a0a0b]/70 ${
-            compact
-              ? "bottom-2 left-2 px-2.5 py-1"
-              : "left-3 top-3 px-3 py-1.5"
-          }`}
+        <StageSourcePill
+          icon={MonitorUp}
+          label={compact ? "Presenting" : formatPresentingLabel(presenterName)}
+          compact={compact}
         >
-          <MonitorUp
-            size={compact ? 15 : 18}
-            strokeWidth={1.75}
-            className="shrink-0 text-[#F95F4A]"
-          />
-          <span
-            className={`truncate font-medium text-[#fafafa] ${
-              compact ? "text-[12.5px]" : "text-[13px]"
-            }`}
-          >
-            {compact ? "Presenting" : formatPresentingLabel(presenterName)}
-          </span>
           {selfView && !compact && (
             <>
               <span className="h-3 w-px shrink-0 bg-[#fafafa]/14" />
@@ -3773,7 +3736,7 @@ const PresentationVideoTile = memo(function PresentationVideoTile({
               </button>
             </>
           )}
-        </div>
+        </StageSourcePill>
       )}
       {showCaptureControls && (
         <div
@@ -3851,176 +3814,6 @@ const PresentationVideoTile = memo(function PresentationVideoTile({
           )}
         </button>
       )}
-    </div>
-  );
-});
-
-const LocalVideoTile = memo(function LocalVideoTile({
-  stream,
-  isCameraOff,
-  isMuted,
-  isHandRaised,
-  isMirrorCamera,
-  displayName,
-  userEmail,
-  isActiveSpeaker = false,
-  isPinned = false,
-  onTogglePin,
-  tracking,
-  cropPosition = null,
-  videoObjectFit = "cover",
-  size = "rail",
-}: {
-  stream: MediaStream | null;
-  isCameraOff: boolean;
-  isMuted: boolean;
-  isHandRaised: boolean;
-  isMirrorCamera: boolean;
-  displayName: string;
-  userEmail: string;
-  isActiveSpeaker?: boolean;
-  isPinned?: boolean;
-  onTogglePin?: () => void;
-  tracking?: MeetLocalVideoTracking;
-  cropPosition?: string | null;
-  videoObjectFit?: "cover" | "contain";
-  size?: "rail" | "stage";
-}) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const videoTrack = stream?.getVideoTracks()[0] ?? null;
-
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-
-    if (!stream || isCameraOff) {
-      if (video.srcObject) {
-        video.srcObject = null;
-      }
-      return;
-    }
-
-    if (video.srcObject !== stream) {
-      video.srcObject = stream;
-    }
-
-    const playVideo = () => {
-      video.play().catch(() => {});
-    };
-
-    playVideo();
-    videoTrack?.addEventListener("unmute", playVideo);
-
-    return () => {
-      videoTrack?.removeEventListener("unmute", playVideo);
-      if (video.srcObject === stream) {
-        video.srcObject = null;
-      }
-    };
-  }, [isCameraOff, stream, videoTrack]);
-
-  const compact = size === "rail";
-  const speakerHighlight = isActiveSpeaker ? "speaking" : "";
-  const handRaisedHighlight = isHandRaised ? "!border-amber-400/60" : "";
-  const videoStyle: CSSProperties | undefined = cropPosition
-    ? { objectPosition: cropPosition }
-    : undefined;
-
-  return (
-    <div
-      className={`acm-video-tile group relative flex overflow-hidden bg-[#18181b] ${
-        compact ? "h-28 shrink-0" : "h-full w-full"
-      } ${speakerHighlight} ${handRaisedHighlight}`}
-    >
-      <video
-        ref={videoRef}
-        autoPlay
-        muted
-        playsInline
-        data-meet-local-tracking={tracking?.active ? "true" : "false"}
-        data-meet-local-tracking-source={tracking?.source ?? "none"}
-        data-meet-local-crop-position={cropPosition ?? ""}
-        style={videoStyle}
-        className={`h-full w-full ${
-          videoObjectFit === "contain" ? "object-contain bg-black" : "object-cover"
-        } ${
-          isCameraOff ? "hidden" : ""
-        } ${isMirrorCamera ? "scale-x-[-1]" : ""}`}
-      />
-      {isCameraOff ? (
-        <div
-          data-meet-local-camera-placeholder="true"
-          className="absolute inset-0 flex items-center justify-center bg-[#18181b]"
-        >
-          <Avatar
-            className={compact ? "text-xl" : "text-3xl"}
-            id={userEmail}
-            name={displayName || userEmail}
-            size={compact ? 48 : 80}
-          />
-        </div>
-      ) : null}
-      {isHandRaised ? (
-        <div
-          className={`absolute flex items-center justify-center rounded-full border border-amber-400/40 bg-amber-500/20 text-amber-300 ${
-            compact ? "left-2 top-2 h-7 w-7" : "left-3 top-3 h-8 w-8"
-          }`}
-          title="Hand raised"
-          aria-label="Hand raised"
-        >
-          <Hand size={compact ? 16 : 18} strokeWidth={1.75} />
-        </div>
-      ) : null}
-      {onTogglePin ? (
-        <button
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            onTogglePin();
-          }}
-          className={`absolute rounded-full border border-[#fafafa]/10 bg-black/60 text-[#fafafa]/82 transition-[border-color,color,opacity] duration-[120ms] hover:border-[#F95F4A]/40 hover:text-[#fafafa] focus-visible:opacity-100 ${
-            compact ? "right-2 top-2 p-1.5" : "right-3 top-3 p-2"
-          } ${isPinned ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
-          title={isPinned ? "Unpin" : "Pin to spotlight"}
-          aria-label={isPinned ? "Unpin" : "Pin to spotlight"}
-          aria-pressed={isPinned}
-        >
-          {isPinned ? (
-            <PinOff className={compact ? "h-3.5 w-3.5" : "h-4 w-4"} />
-          ) : (
-            <Pin className={compact ? "h-3.5 w-3.5" : "h-4 w-4"} />
-          )}
-        </button>
-      ) : null}
-      <div
-        className={`absolute flex max-w-[85%] items-center gap-1.5 rounded-full border border-[#fafafa]/10 bg-[#0a0a0b]/70 ${
-          compact ? "bottom-2 left-2 px-2.5 py-1" : "bottom-3 left-3 px-3 py-1.5"
-        }`}
-      >
-        <span
-          className={`truncate font-medium text-[#fafafa] ${
-            compact ? "text-[12.5px]" : "text-[13px]"
-          }`}
-        >
-          {truncateDisplayName(displayName, compact ? 18 : 24)}
-        </span>
-        <span className="text-[10.5px] font-medium text-[#F95F4A]">You</span>
-        {isActiveSpeaker && !isMuted ? (
-          <span className="acm-voice-activity" aria-label="Speaking">
-            <span />
-            <span />
-            <span />
-          </span>
-        ) : null}
-        {isMuted ? (
-          <MicOff
-            size={compact ? 13 : 14}
-            strokeWidth={1.75}
-            className="shrink-0 text-[#F95F4A]"
-          />
-        ) : null}
-      </div>
-      <GameTileOverlay compact={compact} />
     </div>
   );
 });

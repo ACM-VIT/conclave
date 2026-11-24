@@ -1,0 +1,556 @@
+/**
+ * Runs `new:app` and `check:apps` against a throwaway copy of the package
+ * layout, so the rules are tested by breaking them.
+ */
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { test } from "node:test";
+import { fileURLToPath } from "node:url";
+
+const scripts = path.dirname(fileURLToPath(import.meta.url));
+
+const run = (script, args) => {
+  const result = spawnSync(process.execPath, [path.join(scripts, script), ...args], {
+    encoding: "utf8",
+  });
+  return { status: result.status, output: `${result.stdout}${result.stderr}` };
+};
+
+/** A minimal monorepo: this package, a web app and the SFU's registry. */
+const makeRepo = () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "apps-sdk-check-"));
+  const root = path.join(repo, "packages", "apps-sdk");
+  fs.mkdirSync(path.join(root, "src", "apps"), { recursive: true });
+  fs.mkdirSync(path.join(root, "src", "sdk", "authority"), { recursive: true });
+  fs.writeFileSync(path.join(root, "src", "sdk", "authority", "server.ts"), "export {};\n");
+  fs.writeFileSync(
+    path.join(root, "package.json"),
+    `${JSON.stringify(
+      {
+        name: "@conclave/apps-sdk",
+        exports: {
+          ".": "./src/index.ts",
+          "./authority/server": "./src/sdk/authority/server.ts",
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  fs.mkdirSync(path.join(repo, "apps", "web", "src"), { recursive: true });
+  const registry = path.join(repo, "packages", "sfu", "server", "apps", "authority");
+  fs.mkdirSync(registry, { recursive: true });
+  const write = (relative, content) => {
+    const target = path.join(repo, relative);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, content);
+  };
+  write(
+    "packages/sfu/server/apps/authority/registry.ts",
+    'import type { AuthorityModule } from "@conclave/apps-sdk/authority/server";\nexport const AUTHORITY_MODULES: readonly AuthorityModule[] = [];\n',
+  );
+  return {
+    root,
+    write,
+    check: () => run("check-app-integrations.mjs", ["--root", root]),
+    scaffold: (id, ...args) => run("create-app-integration.mjs", [id, "--root", root, ...args]),
+    /** Every file in the repo with its contents, to show a run wrote nothing. */
+    files: () => {
+      const found = {};
+      const walk = (dir) => {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          const target = path.join(dir, entry.name);
+          if (entry.isDirectory()) walk(target);
+          else found[path.relative(repo, target)] = fs.readFileSync(target, "utf8");
+        }
+      };
+      walk(repo);
+      return found;
+    },
+    setExports: (more) => {
+      const manifest = path.join(root, "package.json");
+      const pkg = JSON.parse(fs.readFileSync(manifest, "utf8"));
+      pkg.exports = { ...pkg.exports, ...more };
+      fs.writeFileSync(manifest, `${JSON.stringify(pkg, null, 2)}\n`);
+    },
+  };
+};
+
+test("a scaffolded authority app passes the check", () => {
+  const repo = makeRepo();
+
+  const scaffolded = repo.scaffold("sign-up", "--runtime", "authority");
+  const checked = repo.check();
+
+  assert.equal(scaffolded.status, 0, scaffolded.output);
+  assert.equal(checked.status, 0, checked.output);
+  assert.match(checked.output, /passed for 1 app/);
+  for (const part of ["core", "web", "server"]) {
+    assert.ok(fs.existsSync(path.join(repo.root, "src", "apps", "sign-up", part, "index.ts")));
+  }
+  const exported = JSON.parse(fs.readFileSync(path.join(repo.root, "package.json"), "utf8")).exports;
+  assert.equal(exported["./sign-up/server"], "./src/apps/sign-up/server/index.ts");
+});
+
+test("a scaffolded doc app still passes the check", () => {
+  const repo = makeRepo();
+
+  const scaffolded = repo.scaffold("sketchpad");
+  const checked = repo.check();
+
+  assert.equal(scaffolded.status, 0, scaffolded.output);
+  assert.equal(checked.status, 0, checked.output);
+  assert.ok(!fs.existsSync(path.join(repo.root, "src", "apps", "sketchpad", "server")));
+});
+
+test("an app's renderer may not import its server entry", () => {
+  const repo = makeRepo();
+  repo.scaffold("sign-up", "--runtime", "authority");
+  repo.write(
+    "packages/apps-sdk/src/apps/sign-up/web/leak.ts",
+    'import { signUpAuthority } from "../server/index";\nexport const leak = signUpAuthority;\n',
+  );
+
+  const checked = repo.check();
+
+  assert.equal(checked.status, 1);
+  assert.match(checked.output, /sign-up\/web\/leak\.ts imports server-only code/);
+});
+
+test("type-only and package-name imports of server code are refused too", () => {
+  const repo = makeRepo();
+  repo.scaffold("sign-up", "--runtime", "authority");
+  repo.write(
+    "packages/apps-sdk/src/apps/sign-up/core/types.ts",
+    'import type { Subject } from "@conclave/apps-sdk/authority/server";\nexport type Who = Subject;\n',
+  );
+  repo.write(
+    "packages/apps-sdk/src/native-embed/sign-up.ts",
+    'export { signUpAuthority } from "@conclave/apps-sdk/sign-up/server";\n',
+  );
+
+  const checked = repo.check();
+
+  assert.equal(checked.status, 1);
+  assert.match(checked.output, /core\/types\.ts imports server-only code/);
+  assert.match(checked.output, /native-embed\/sign-up\.ts imports server-only code/);
+});
+
+test("the web app may not import any server entry", () => {
+  const repo = makeRepo();
+  repo.scaffold("sign-up", "--runtime", "authority");
+  repo.write(
+    "apps/web/src/app/panel.tsx",
+    'import { signUpAuthority } from "@conclave/apps-sdk/sign-up/server";\nexport const rules = signUpAuthority;\n',
+  );
+
+  const checked = repo.check();
+
+  assert.equal(checked.status, 1);
+  assert.match(checked.output, /apps\/web\/src\/app\/panel\.tsx imports server-only code/);
+});
+
+test("the web app may not reach a server entry by relative path either", () => {
+  const repo = makeRepo();
+  repo.scaffold("sign-up", "--runtime", "authority");
+  repo.write(
+    "apps/web/src/app/panel.tsx",
+    'import { signUpAuthority } from "../../../../packages/apps-sdk/src/apps/sign-up/server/index";\nexport const rules = signUpAuthority;\n',
+  );
+
+  const checked = repo.check();
+
+  assert.equal(checked.status, 1);
+  assert.match(checked.output, /apps\/web\/src\/app\/panel\.tsx imports server-only code/);
+});
+
+test("a lazy import is read however its path is written", () => {
+  const repo = makeRepo();
+  repo.scaffold("sign-up", "--runtime", "authority");
+  repo.write(
+    "packages/apps-sdk/src/apps/sign-up/web/template.ts",
+    "export const load = () => import(`../server/index`);\n",
+  );
+  repo.write(
+    "packages/apps-sdk/src/apps/sign-up/web/commented.ts",
+    'export const load = () => import(/* webpackChunkName: "rules" */ "../server/index");\n',
+  );
+  repo.write(
+    "apps/web/src/app/required.ts",
+    'export const rules = require("@conclave/apps-sdk/sign-up/server");\n',
+  );
+
+  const checked = repo.check();
+
+  assert.equal(checked.status, 1);
+  assert.match(checked.output, /sign-up\/web\/template\.ts imports server-only code/);
+  assert.match(checked.output, /sign-up\/web\/commented\.ts imports server-only code/);
+  assert.match(checked.output, /apps\/web\/src\/app\/required\.ts imports server-only code/);
+});
+
+test("a lazy import whose path is worked out at run time is refused near server code", () => {
+  const repo = makeRepo();
+  repo.scaffold("sign-up", "--runtime", "authority");
+  // A bundler ships every file such a path could name, the server entry too.
+  repo.write(
+    "packages/apps-sdk/src/apps/sign-up/web/computed.ts",
+    "export const load = (part: string) => import(`../${part}/index`);\n",
+  );
+  repo.write(
+    "apps/web/src/app/computed.ts",
+    "export const load = (app: string) => import(`@conclave/apps-sdk/${app}/server`);\n",
+  );
+  // Elsewhere in the web app a computed path cannot reach this package.
+  repo.write(
+    "apps/web/src/app/locale.ts",
+    "export const load = (lang: string) => import(`./locales/${lang}`);\n",
+  );
+
+  const checked = repo.check();
+
+  assert.equal(checked.status, 1);
+  assert.match(checked.output, /sign-up\/web\/computed\.ts builds an import path at run time/);
+  assert.match(checked.output, /apps\/web\/src\/app\/computed\.ts builds an import path at run time/);
+  assert.doesNotMatch(checked.output, /locale\.ts/);
+});
+
+test("a JavaScript file is checked like a TypeScript one", () => {
+  const repo = makeRepo();
+  repo.scaffold("sign-up", "--runtime", "authority");
+  // The web project compiles JavaScript too, so each of these would ship.
+  repo.write(
+    "apps/web/src/app/panel.js",
+    'import { signUpAuthority } from "@conclave/apps-sdk/sign-up/server";\nexport const rules = signUpAuthority;\n',
+  );
+  repo.write(
+    "apps/web/src/app/panel-view.jsx",
+    'import { signUpAuthority } from "@conclave/apps-sdk/sign-up/server";\nexport const Panel = () => <p>{signUpAuthority.contract.id}</p>;\n',
+  );
+  repo.write(
+    "apps/web/src/app/worker.mjs",
+    'export const load = () => import("@conclave/apps-sdk/sign-up/server");\n',
+  );
+  repo.write(
+    "apps/web/src/app/legacy.cjs",
+    'module.exports = require("@conclave/apps-sdk/sign-up/server");\n',
+  );
+  repo.write(
+    "packages/apps-sdk/src/apps/sign-up/web/leak.jsx",
+    'import { signUpAuthority } from "../server/index";\nexport const Leak = () => <p>{signUpAuthority.contract.id}</p>;\n',
+  );
+  repo.write(
+    "packages/apps-sdk/src/apps/sign-up/web/computed.js",
+    "export const load = (part) => import(`../${part}/index`);\n",
+  );
+
+  const checked = repo.check();
+
+  assert.equal(checked.status, 1);
+  assert.match(checked.output, /apps\/web\/src\/app\/panel\.js imports server-only code/);
+  assert.match(checked.output, /apps\/web\/src\/app\/panel-view\.jsx imports server-only code/);
+  assert.match(checked.output, /apps\/web\/src\/app\/worker\.mjs imports server-only code/);
+  assert.match(checked.output, /apps\/web\/src\/app\/legacy\.cjs imports server-only code/);
+  assert.match(checked.output, /sign-up\/web\/leak\.jsx imports server-only code/);
+  assert.match(checked.output, /sign-up\/web\/computed\.js builds an import path at run time/);
+});
+
+test("a server entry reached through a JavaScript file's own extension is still found", () => {
+  const repo = makeRepo();
+  repo.scaffold("sign-up", "--runtime", "authority");
+  repo.write(
+    "packages/apps-sdk/src/apps/sign-up/server/secrets.mjs",
+    'export const answerKey = "42";\n',
+  );
+  repo.write(
+    "packages/apps-sdk/src/apps/sign-up/web/peek.ts",
+    'export { answerKey } from "../server/secrets.mjs";\n',
+  );
+
+  const checked = repo.check();
+
+  assert.equal(checked.status, 1);
+  assert.match(checked.output, /sign-up\/web\/peek\.ts imports server-only code/);
+});
+
+test("a Node script that loads files by path is not taken for bundled code", () => {
+  const repo = makeRepo();
+  repo.scaffold("sign-up", "--runtime", "authority");
+  // It imports a Node builtin, so no browser or native bundle can hold it.
+  repo.write(
+    "packages/apps-sdk/src/native-embed/tests/contract-test.mjs",
+    'import path from "node:path";\nimport { pathToFileURL } from "node:url";\nexport const load = (file) => import(pathToFileURL(path.join("..", file)).href);\n',
+  );
+  // Its fixed imports are held to the rule all the same.
+  repo.write(
+    "packages/apps-sdk/src/native-embed/tests/peek-test.mjs",
+    'import path from "node:path";\nimport { signUpAuthority } from "../../apps/sign-up/server/index.ts";\nexport const where = path.sep + signUpAuthority.contract.id;\n',
+  );
+
+  const checked = repo.check();
+
+  assert.equal(checked.status, 1);
+  assert.doesNotMatch(checked.output, /contract-test\.mjs/);
+  assert.match(checked.output, /tests\/peek-test\.mjs imports server-only code/);
+});
+
+test("a type-only import of a Node builtin does not make a file a Node script", () => {
+  const repo = makeRepo();
+  repo.scaffold("sign-up", "--runtime", "authority");
+  // Types are erased when the file is built, so each of these is a renderer
+  // that a bundler ships, and the path it works out at run time is a leak.
+  repo.write(
+    "packages/apps-sdk/src/apps/sign-up/web/typed.ts",
+    'import type { Buffer } from "node:buffer";\nexport type Bytes = Buffer;\nexport const load = (part: string) => import(`../${part}/index`);\n',
+  );
+  repo.write(
+    "packages/apps-sdk/src/apps/sign-up/web/inline.ts",
+    'import { type Buffer } from "node:buffer";\nexport type Bytes = Buffer;\nexport const load = (part: string) => import(`../${part}/index`);\n',
+  );
+  repo.write(
+    "packages/apps-sdk/src/apps/sign-up/web/reexported.ts",
+    'export type { Buffer } from "node:buffer";\nexport const load = (part: string) => import(`../${part}/index`);\n',
+  );
+  repo.write(
+    "packages/apps-sdk/src/apps/sign-up/web/queried.ts",
+    'export type Bytes = import("node:buffer").Buffer;\nexport const load = (part: string) => import(`../${part}/index`);\n',
+  );
+  // One value among the names is enough for the import to stay when built.
+  repo.write(
+    "packages/apps-sdk/src/native-embed/tests/mixed-test.ts",
+    'import { type Buffer, constants } from "node:buffer";\nexport type Bytes = Buffer;\nexport const max = constants.MAX_LENGTH;\nexport const load = (file: string) => import(file);\n',
+  );
+
+  const checked = repo.check();
+
+  assert.equal(checked.status, 1);
+  for (const file of ["typed", "inline", "reexported", "queried"]) {
+    assert.match(checked.output, new RegExp(`sign-up/web/${file}\\.ts builds an import path at run time`));
+  }
+  assert.doesNotMatch(checked.output, /mixed-test\.ts/);
+});
+
+test("words that only look like an import are left alone", () => {
+  const repo = makeRepo();
+  repo.scaffold("sign-up", "--runtime", "authority");
+  repo.write(
+    "packages/apps-sdk/src/apps/sign-up/web/notes.ts",
+    '// import { signUpAuthority } from "../server/index";\nexport const hint = \'import("../server/index")\';\n',
+  );
+
+  const checked = repo.check();
+
+  assert.equal(checked.status, 0, checked.output);
+});
+
+test("an authority app needs a contract with its own id and a server definition", () => {
+  const repo = makeRepo();
+  repo.scaffold("sign-up", "--runtime", "authority");
+  const core = path.join(repo.root, "src", "apps", "sign-up", "core", "index.ts");
+  fs.writeFileSync(core, fs.readFileSync(core, "utf8").replace('id: "sign-up"', 'id: "other"'));
+  fs.writeFileSync(
+    path.join(repo.root, "src", "apps", "sign-up", "server", "index.ts"),
+    "export const rules = {};\n",
+  );
+
+  const checked = repo.check();
+
+  assert.equal(checked.status, 1);
+  assert.match(checked.output, /must have id "sign-up"/);
+  assert.match(checked.output, /must define the app's rules with defineAuthority/);
+});
+
+test("the SFU registry may only name apps that have a server entry", () => {
+  const repo = makeRepo();
+  repo.scaffold("sign-up", "--runtime", "authority");
+  repo.write(
+    "packages/sfu/server/apps/authority/registry.ts",
+    'import { ghostAuthority } from "@conclave/apps-sdk/ghost/server";\nexport const AUTHORITY_MODULES = [ghostAuthority];\n',
+  );
+
+  const checked = repo.check();
+
+  assert.equal(checked.status, 1);
+  assert.match(checked.output, /ghost has no server\/index\.ts/);
+  assert.match(checked.output, /\[sign-up\] is an authority app but is not in the SFU registry/);
+});
+
+test("a missing server export is reported and fixed", () => {
+  const repo = makeRepo();
+  repo.scaffold("sign-up", "--runtime", "authority");
+  const manifest = path.join(repo.root, "package.json");
+  const pkg = JSON.parse(fs.readFileSync(manifest, "utf8"));
+  delete pkg.exports["./sign-up/server"];
+  fs.writeFileSync(manifest, JSON.stringify(pkg, null, 2));
+
+  const broken = repo.check();
+  run("check-app-integrations.mjs", ["--root", repo.root, "--fix"]);
+  const fixed = repo.check();
+
+  assert.equal(broken.status, 1);
+  assert.match(broken.output, /exports missing \.\/sign-up\/server/);
+  assert.equal(fixed.status, 0, fixed.output);
+});
+
+test("new:app refuses an id that would take over the SDK's own server export, and writes nothing", () => {
+  const repo = makeRepo();
+  const before = repo.files();
+
+  const asAuthority = repo.scaffold("authority", "--runtime", "authority");
+  const asDoc = repo.scaffold("authority");
+  const dryRun = repo.scaffold("authority", "--runtime", "authority", "--dry-run");
+
+  for (const refused of [asAuthority, asDoc, dryRun]) {
+    assert.equal(refused.status, 1, refused.output);
+    assert.match(refused.output, /"authority" is a name the SDK keeps for itself/);
+    assert.doesNotMatch(refused.output, /create |Scaffold complete/);
+  }
+  assert.deepEqual(repo.files(), before);
+});
+
+test("new:app refuses an id the package already exports something under", () => {
+  const repo = makeRepo();
+  repo.setExports({ "./kit/server": "./src/sdk/kit.ts", "./theme": "./src/theme.ts" });
+  const before = repo.files();
+
+  const exact = repo.scaffold("kit", "--runtime", "authority");
+  const sameFolder = repo.scaffold("kit");
+  const root = repo.scaffold("theme");
+  const byFlag = repo.scaffold("anything", "--id", "Kit", "--runtime", "authority");
+
+  for (const refused of [exact, sameFolder, byFlag]) {
+    assert.equal(refused.status, 1, refused.output);
+    assert.match(refused.output, /"kit" is taken: package\.json already exports \.\/kit\/server/);
+  }
+  assert.equal(root.status, 1, root.output);
+  assert.match(root.output, /"theme" is taken: package\.json already exports \.\/theme/);
+  assert.deepEqual(repo.files(), before);
+});
+
+test("new:app refuses the names the SDK keeps for itself and ids that are not names", () => {
+  const repo = makeRepo();
+  const before = repo.files();
+
+  for (const id of ["native-embed", "sdk", "apps", "core", "web", "server", "native"]) {
+    const refused = repo.scaffold(id, "--runtime", "authority");
+    assert.equal(refused.status, 1, `${id}: ${refused.output}`);
+    assert.match(refused.output, /is a name the SDK keeps for itself/);
+  }
+  const digit = repo.scaffold("3d-viewer");
+  assert.equal(digit.status, 1, digit.output);
+  assert.match(digit.output, /"3d-viewer" is not a valid app id: does not match/);
+  assert.deepEqual(repo.files(), before);
+});
+
+test("an app folder that took one of the SDK's names is reported, and --fix leaves the SDK's export alone", () => {
+  const repo = makeRepo();
+  repo.scaffold("sign-up", "--runtime", "authority");
+  // Made by hand, or by a scaffolder older than the rule.
+  for (const part of ["core", "web", "server"]) {
+    const from = path.join(repo.root, "src", "apps", "sign-up", part);
+    fs.cpSync(from, path.join(repo.root, "src", "apps", "authority", part), { recursive: true });
+  }
+
+  // And a folder whose server subpath the SDK exports under another name.
+  repo.setExports({ "./kit/server": "./src/sdk/kit.ts" });
+  fs.cpSync(
+    path.join(repo.root, "src", "apps", "sign-up", "server"),
+    path.join(repo.root, "src", "apps", "kit", "server"),
+    { recursive: true },
+  );
+
+  const checked = repo.check();
+  run("check-app-integrations.mjs", ["--root", repo.root, "--fix"]);
+  const exported = JSON.parse(fs.readFileSync(path.join(repo.root, "package.json"), "utf8")).exports;
+
+  assert.equal(checked.status, 1);
+  assert.match(checked.output, /\[authority\] is a name the SDK keeps for itself/);
+  assert.match(checked.output, /exports \.\/kit\/server is the SDK's own/);
+  assert.equal(exported["./authority/server"], "./src/sdk/authority/server.ts");
+  assert.equal(exported["./authority/core"], undefined);
+  assert.equal(exported["./kit/server"], "./src/sdk/kit.ts");
+  assert.equal(exported["./sign-up/server"], "./src/apps/sign-up/server/index.ts");
+});
+
+test("new:app refuses an id longer than a contract may have, before writing anything", () => {
+  const repo = makeRepo();
+  const before = repo.files();
+  const tooLong = `a${"b".repeat(48)}`;
+
+  const asAuthority = repo.scaffold(tooLong, "--runtime", "authority");
+  const asDoc = repo.scaffold(tooLong);
+  const dryRun = repo.scaffold(tooLong, "--runtime", "authority", "--dry-run");
+
+  assert.equal(tooLong.length, 49);
+  for (const refused of [asAuthority, asDoc, dryRun]) {
+    assert.equal(refused.status, 1, refused.output);
+    assert.match(refused.output, /is not a valid app id: longer than 48/);
+    assert.doesNotMatch(refused.output, /create |Scaffold complete/);
+  }
+  assert.deepEqual(repo.files(), before);
+});
+
+test("the longest id a contract may have is scaffolded and passes the check", () => {
+  const repo = makeRepo();
+  const longest = `a${"b".repeat(47)}`;
+
+  const scaffolded = repo.scaffold(longest, "--runtime", "authority");
+  const checked = repo.check();
+
+  assert.equal(scaffolded.status, 0, scaffolded.output);
+  assert.equal(checked.status, 0, checked.output);
+});
+
+test("a hand-made authority app whose id breaks the contract's grammar fails the check", () => {
+  for (const id of ["3d-viewer", "sign_up"]) {
+    const repo = makeRepo();
+    repo.scaffold("sign-up", "--runtime", "authority");
+    // The same app made by hand under an id defineContract would refuse,
+    // with every other part of it consistent: its contract, its imports
+    // and its package exports all use that id.
+    const from = path.join(repo.root, "src", "apps", "sign-up");
+    const to = path.join(repo.root, "src", "apps", id);
+    fs.cpSync(from, to, { recursive: true });
+    fs.rmSync(from, { recursive: true });
+    const rename = (dir) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const target = path.join(dir, entry.name);
+        if (entry.isDirectory()) rename(target);
+        else fs.writeFileSync(target, fs.readFileSync(target, "utf8").replaceAll("sign-up", id));
+      }
+    };
+    rename(to);
+    const manifest = path.join(repo.root, "package.json");
+    const pkg = JSON.parse(fs.readFileSync(manifest, "utf8"));
+    for (const part of ["core", "web", "server"]) {
+      delete pkg.exports[`./sign-up/${part}`];
+      pkg.exports[`./${id}/${part}`] = `./src/apps/${id}/${part}/index.ts`;
+    }
+    fs.writeFileSync(manifest, `${JSON.stringify(pkg, null, 2)}\n`);
+
+    const checked = repo.check();
+
+    assert.equal(checked.status, 1, `${id}: ${checked.output}`);
+    assert.match(checked.output, new RegExp(`\\[${id}\\] is not a valid app id: does not match`));
+    assert.match(fs.readFileSync(path.join(to, "core", "index.ts"), "utf8"), new RegExp(`id: "${id}"`));
+  }
+});
+
+test("an app folder whose name no contract could have is reported", () => {
+  const repo = makeRepo();
+  repo.scaffold("sign-up", "--runtime", "authority");
+  const tooLong = `a${"b".repeat(48)}`;
+  // Made by hand, or by a scaffolder older than the rule.
+  fs.cpSync(
+    path.join(repo.root, "src", "apps", "sign-up"),
+    path.join(repo.root, "src", "apps", tooLong),
+    { recursive: true },
+  );
+
+  const checked = repo.check();
+
+  assert.equal(checked.status, 1);
+  assert.match(checked.output, new RegExp(`\\[${tooLong}\\] is not a valid app id: longer than 48`));
+});

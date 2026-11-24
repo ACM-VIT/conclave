@@ -466,7 +466,7 @@ final class ChatFixtureDriver {
     let chat: ChatPresenter
     let counters = ChatFixtureCounters()
 
-    let voice = TtsRecordingSpeaker(queue: TtsPlaybackQueue())
+    let voice = TtsRecordingSpeaker(queue: TtsPlaybackQueue(defaults: IsolatedDefaults.make()))
 
     let assistant = ConclaveAssistantStore()
     private(set) var inputs: ChatInputs

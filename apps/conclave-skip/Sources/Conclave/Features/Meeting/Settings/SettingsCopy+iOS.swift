@@ -47,6 +47,7 @@ enum SettingsCopy {
         case .identity: return ConclaveStrings.text("Account")
         case .signOut: return ConclaveStrings.text("Sign Out…")
         case .privacy: return ConclaveStrings.text("Privacy Policy")
+        case .crashReports: return ConclaveStrings.text("Share Crash Reports")
         case .exportDiagnostics: return ConclaveStrings.text("Export Diagnostics")
         case .version: return ConclaveStrings.text("Version")
         }

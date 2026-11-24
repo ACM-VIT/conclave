@@ -6,7 +6,7 @@ import Observation
 final class AppState {
     private static let storedUserKey = "conclave.auth.user"
 
-    static let shared = AppState()
+    static let shared = AppState(defaults: UserDefaults.standard)
 
     var isAuthenticated = false {
         didSet {
@@ -28,6 +28,7 @@ final class AppState {
     }
 
     @ObservationIgnored var onIdentityChanged: (() -> Void)? = nil
+    @ObservationIgnored private let defaults: UserDefaults
     var pendingJoinURLString: String?
     var pendingJoinRequestID = 0
 
@@ -60,7 +61,8 @@ final class AppState {
         let provider: AuthProvider
     }
 
-    init() {
+    init(defaults: UserDefaults) {
+        self.defaults = defaults
         restoreStoredAuthState()
     }
 
@@ -121,7 +123,7 @@ final class AppState {
     }
 
     private func restoreStoredAuthState() {
-        guard let raw = UserDefaults.standard.string(forKey: Self.storedUserKey),
+        guard let raw = defaults.string(forKey: Self.storedUserKey),
               let data = raw.data(using: .utf8),
               let stored = try? JSONDecoder().decode(StoredAuthUser.self, from: data),
               stored.provider != AppState.AuthProvider.none,
@@ -143,14 +145,14 @@ final class AppState {
         currentUser = nil
         authProvider = .none
         isAuthenticated = false
-        UserDefaults.standard.removeObject(forKey: Self.storedUserKey)
+        defaults.removeObject(forKey: Self.storedUserKey)
     }
 
     private func persistAuthState() {
         guard let currentUser,
               currentUser.provider != .none,
               !currentUser.id.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty else {
-            UserDefaults.standard.removeObject(forKey: Self.storedUserKey)
+            defaults.removeObject(forKey: Self.storedUserKey)
             return
         }
 
@@ -162,7 +164,7 @@ final class AppState {
         )
         guard let data = try? JSONEncoder().encode(stored),
               let raw = String(data: data, encoding: .utf8) else { return }
-        UserDefaults.standard.set(raw, forKey: Self.storedUserKey)
+        defaults.set(raw, forKey: Self.storedUserKey)
     }
 }
 
