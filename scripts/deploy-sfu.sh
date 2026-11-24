@@ -541,27 +541,14 @@ instance_status() {
   printf "%s" "$status"
 }
 
-# What Docker reports for a service's container, from two samples a moment
-# apart: "running" when it runs steadily, so it may carry calls however silent
-# it is; "stopped" when it is exited, dead, created or restarting, or its
-# restart count moves (crash-looping), so it carries none; "absent" when
-# compose has no container for it; "unknown" when compose or Docker cannot
-# say. Only stopped and absent may be rebuilt without a drain: unknown is busy.
 container_state() {
-  local container first second
+  local container state
   container="$(service_container "$1")" || { echo unknown; return; }
   [[ -n "$container" ]] || { echo absent; return; }
-  first="$(docker inspect -f '{{.State.Status}}:{{.RestartCount}}' "$container" 2>/dev/null)" || { echo unknown; return; }
-  sleep "${CONTAINER_SAMPLE_SECONDS:-2}"
-  second="$(docker inspect -f '{{.State.Status}}:{{.RestartCount}}' "$container" 2>/dev/null)" || { echo unknown; return; }
-  case "${second%%:*}" in
+  state="$(docker inspect -f '{{.State.Status}}' "$container" 2>/dev/null)" || { echo unknown; return; }
+  case "$state" in
     exited|dead|created|restarting) echo stopped ;;
-    running)
-      case "${first%%:*}" in
-        running|exited|dead|created|restarting)
-          if [[ "${first#*:}" != "${second#*:}" ]]; then echo stopped; else echo running; fi ;;
-        *) echo unknown ;;
-      esac ;;
+    running) echo running ;;
     *) echo unknown ;;
   esac
 }
