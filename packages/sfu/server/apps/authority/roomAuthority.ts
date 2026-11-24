@@ -334,6 +334,8 @@ export class RoomAuthority {
   private readonly policyListeners = new Set<
     (policy: RoomPolicy, previous: RoomPolicy) => void
   >();
+  private observedPolicy: RoomPolicy;
+  private readonly policyTransitions: [RoomPolicy, RoomPolicy][] = [];
   private lastFlushAt = 0;
   private lastNow = 0;
   private closed = false;
@@ -343,6 +345,7 @@ export class RoomAuthority {
     this.room = options.room;
     this.limits = options.limits;
     const policy = options.policy();
+    this.observedPolicy = policy;
     for (const module of options.modules) {
       const instance = new AuthorityInstance(
         `${module.contract.id}.${randomBytes(9).toString("base64url")}`,
@@ -651,7 +654,17 @@ export class RoomAuthority {
 
   /** The room's mode or a flag changed. */
   policyChanged(): void {
+    this.observePolicy();
     this.scheduleSweep();
+  }
+
+  private observePolicy(): RoomPolicy {
+    const policy = this.options.policy();
+    if (!samePolicy(this.observedPolicy, policy)) {
+      this.policyTransitions.push([this.observedPolicy, policy]);
+      this.observedPolicy = policy;
+    }
+    return policy;
   }
 
   dropSocket(socketId: string): void {
@@ -821,11 +834,11 @@ export class RoomAuthority {
    * and not 5,000 whole views.
    */
   private applyPolicy(): boolean {
-    const policy = this.options.policy();
-    let previous: RoomPolicy | null = null;
+    const policy = this.observePolicy();
+    let changed = false;
     for (const instance of this.instances.values()) {
       if (samePolicy(instance.policy, policy)) continue;
-      previous ??= instance.policy;
+      changed = true;
       instance.setPolicy(policy);
       for (const subscription of [...this.byInstance.get(instance)!]) {
         const bound = this.bind(subscription.context);
@@ -847,9 +860,10 @@ export class RoomAuthority {
       this.grantsDue.add(instance);
       this.scheduleFlush(true);
     }
-    if (!previous) return false;
-    for (const listener of this.policyListeners) listener(policy, previous);
-    return true;
+    for (const [previous, next] of this.policyTransitions.splice(0)) {
+      for (const listener of this.policyListeners) listener(next, previous);
+    }
+    return changed;
   }
 
   /**

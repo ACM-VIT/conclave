@@ -83,6 +83,9 @@ const oldClient = async (
     ...options,
     prepare: (socket) => {
       options.prepare?.(socket);
+      socket.on("webinar:configChanged", (config: { enabled?: boolean }) => {
+        if (config.enabled === false) entries.clear();
+      });
       socket.on("webinar:qaSnapshot", (snapshot: WebinarQaSnapshot) => {
         snapshots += 1;
         entries.clear();
@@ -729,6 +732,44 @@ describe("webinar Q&A with old and new clients in one room", () => {
   });
 });
 
+
+describe("a webinar turned off and back on at once", () => {
+  const roundTrip = async (stack: Stack) => {
+    const host = await oldClient(stack, asha);
+    const attendee = await oldClient(stack, vik, asAttendee);
+    const asked = await attendee.submit("Pending through the round trip");
+    await until(() => host.entries.has(asked.id ?? ""), "the host sees it");
+    const listsBefore = host.snapshots();
+
+    const [off, on] = await Promise.all([
+      ask<{ success?: boolean }>(host.socket, "webinar:updateConfig", { enabled: false }),
+      ask<{ success?: boolean }>(host.socket, "webinar:updateConfig", { enabled: true, publicAccess: true }),
+    ]);
+    await wait(300);
+
+    expect([off.success, on.success]).toEqual([true, true]);
+    expect(host.snapshots()).toBeGreaterThan(listsBefore);
+    expect(host.entries.get(asked.id ?? "")?.status).toBe("pending");
+  };
+
+  it("sends an old-event host the list again when the room runs the Q&A app", async () => {
+    await roundTrip(await startWebinar());
+  });
+
+  it("sends an old-event host the list again on a server without the runtime", async () => {
+    const stack = await start(null);
+    const webinar = getOrCreateWebinarRoomConfig(stack.state.webinarConfigs, stack.room.channelId);
+    webinar.enabled = true;
+    webinar.publicAccess = true;
+    setCustomWebinarLinkSlug({
+      webinarConfig: webinar,
+      webinarLinks: stack.state.webinarLinks,
+      room: stack.room,
+      slug: SLUG,
+    });
+    await roundTrip(stack);
+  });
+});
 
 describe("webinar Q&A on a server without the runtime", () => {
   /** The room's webinar link, so attendees can come in by it. */
