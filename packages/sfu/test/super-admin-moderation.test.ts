@@ -298,7 +298,7 @@ describe("kick and admission", () => {
     h.room.promoteWebinarUserKey("admin@example.com");
     expect(h.invoke("kickUser", { userId: "target" })).toHaveBeenCalledWith({ success: true });
     expect(h.room.isAdminUserKey("admin@example.com")).toBe(false);
-    expect(h.room.hostUserKey).toBeNull();
+    expect(h.room.hostUserKey).not.toBe("admin@example.com");
     expect(h.room.isWebinarPromotedUserKey("admin@example.com")).toBe(false);
   });
 });

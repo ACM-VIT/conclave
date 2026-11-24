@@ -1,4 +1,7 @@
-import { GUEST_SEAT_KEY_PREFIX } from "@conclave/meeting-core/guest-join-claims";
+import {
+  GUEST_SEAT_KEY_PREFIX,
+  MAX_BROWSER_GUEST_PASSES,
+} from "@conclave/meeting-core/guest-join-claims";
 import { isGuestUserKey } from "../../server/identity.js";
 import { AdmissionLedger, type AdmissionScope } from "./AdmissionLedger.js";
 import { RoomAiCredentials } from "../../server/roomAiCredentials.js";
@@ -119,7 +122,7 @@ const WEBINAR_AUDIO_LEVEL_INTERVAL_MS = 350;
 const MAX_WEBINAR_QA_ENTRIES = 300;
 // The most passes a room records as one guest: a join token names the pass
 // a tab joins under and up to 15 others.
-export const GUEST_PASS_GROUP_LIMIT = 16;
+export const GUEST_PASS_GROUP_LIMIT = MAX_BROWSER_GUEST_PASSES;
 
 /** What a host's admission did (see `Room.admitUserKeys`). */
 export type AdmitResult =
@@ -147,11 +150,16 @@ export type GuestLinkPlan = {
 const rightsPassesOf = (link: GuestLinkPlan | undefined) =>
   link?.recordable ? link.passes : undefined;
 
+export type Reach = "rights" | "removal";
+
 export type Person = {
   readonly userKey: string;
+  readonly reach: Reach;
   readonly passes: ReadonlySet<string>;
 };
 const NO_PASSES: ReadonlySet<string> = new Set();
+const isSelfNamedGuestKey = (userKey: string): boolean =>
+  isGuestUserKey(userKey) && !userKey.startsWith(GUEST_SEAT_KEY_PREFIX);
 const MAX_WEBINAR_OPEN_QUESTIONS_PER_USER = 3;
 export const MAX_WEBINAR_QA_QUESTION_LENGTH = 500;
 export const MAX_WEBINAR_QA_ANSWER_LENGTH = 1000;
@@ -929,7 +937,10 @@ export class Room {
     if (bound !== undefined && bound !== guestProof) {
       return { ok: false };
     }
-    return { ok: true, bindTo: bound };
+    return {
+      ok: true,
+      bindTo: bound ?? (userKey.startsWith(GUEST_SEAT_KEY_PREFIX) ? guestProof : undefined),
+    };
   }
 
   /** How many guest identities this room holds a pass proof for. */
@@ -986,18 +997,23 @@ export class Room {
 
   personOf(
     userKey: string,
+    reach: Reach,
     guestProof: string | undefined = this.guestProofsByUserKey.get(userKey),
     passes?: ReadonlySet<string>,
   ): Person {
-    if (guestProof === undefined) return { userKey, passes: NO_PASSES };
+    if (guestProof === undefined || (reach === "rights" && isSelfNamedGuestKey(userKey))) {
+      return { userKey, reach, passes: NO_PASSES };
+    }
     return {
       userKey,
+      reach,
       passes: passes ?? this.passesOfGuest(guestProof),
     };
   }
 
   private isKeyOf(person: Person, userKey: string): boolean {
     if (userKey === person.userKey) return true;
+    if (person.reach === "rights" && isSelfNamedGuestKey(userKey)) return false;
     const bound = this.guestProofsByUserKey.get(userKey);
     return bound !== undefined && person.passes.has(bound);
   }
@@ -1012,12 +1028,13 @@ export class Room {
    * tells that two keys are one guest.
    */
   private guestHolds(
+    reach: Reach,
     userKeys: Iterable<string>,
     userKey: string,
     guestProof: string | undefined,
     passes?: ReadonlySet<string>,
   ): boolean {
-    const person = this.personOf(userKey, guestProof, passes);
+    const person = this.personOf(userKey, reach, guestProof, passes);
     for (const key of userKeys) {
       if (this.isKeyOf(person, key)) return true;
     }
@@ -1157,15 +1174,17 @@ export class Room {
    */
   private principalsOfJoin(
     userKey: string,
-    roomGuestProof: string | undefined,
+    reach: Reach,
+    guestProof: string | undefined,
     passes?: ReadonlySet<string>,
   ): string[] {
-    if (roomGuestProof === undefined) return [this.principalOf(userKey)];
+    const person = this.personOf(userKey, reach, guestProof, passes);
+    if (person.passes.size === 0) return [this.principalOf(userKey)];
     const principals = new Set([`key:${userKey}`]);
-    for (const guestProof of this.personOf(userKey, roomGuestProof, passes).passes) {
-      principals.add(`pass:${guestProof}`);
-      for (const boundKey of this.userKeysByGuestProof.get(guestProof) ?? []) {
-        if (!boundKey.startsWith(GUEST_SEAT_KEY_PREFIX)) {
+    for (const pass of person.passes) {
+      principals.add(`pass:${pass}`);
+      for (const boundKey of this.userKeysByGuestProof.get(pass) ?? []) {
+        if (!boundKey.startsWith(GUEST_SEAT_KEY_PREFIX) && this.isKeyOf(person, boundKey)) {
           principals.add(`key:${boundKey}`);
         }
       }
@@ -1173,12 +1192,8 @@ export class Room {
     return [...principals];
   }
 
-  // The principals a waiting request of `userKey` speaks for.
   private principalsOfRequest(userKey: string): string[] {
-    const guestProof = userKey.startsWith(GUEST_SEAT_KEY_PREFIX)
-      ? this.guestProofsByUserKey.get(userKey)
-      : undefined;
-    return this.principalsOfJoin(userKey, guestProof);
+    return this.principalsOfJoin(userKey, "rights", undefined);
   }
 
   private admitsRequest(principals: string[]): boolean {
@@ -1226,7 +1241,7 @@ export class Room {
     return {
       guestProof,
       passes,
-      blocked: this.guestHolds(this.blockedUsers, "", guestProof, passes),
+      blocked: this.guestHolds("removal", this.blockedUsers, "", guestProof, passes),
       recordable: passes.size <= GUEST_PASS_GROUP_LIMIT,
     };
   }
@@ -1413,9 +1428,10 @@ export class Room {
     if (!kept) return { status: "full", refused: [] };
     const admitted = [...new Set(grants.map((grant) => grant.userKey))];
     for (const userKey of admitted) {
-      for (const key of this.identitiesOfSameGuest(userKey)) {
+      for (const key of this.identitiesOfSameGuest(userKey, "removal")) {
         this.setReadmissionRequired(key, false);
         this.blockedUsers.delete(key);
+        this.releaseGuestIdentity(key);
       }
       if (this.pendingClients.has(userKey)) {
         this.lobbyOutcomes.set(userKey, "admitted");
@@ -1444,7 +1460,7 @@ export class Room {
 
   private guestOfKey(userKey: string): string {
     const guestProof = this.guestProofsByUserKey.get(userKey);
-    return guestProof === undefined
+    return guestProof === undefined || isSelfNamedGuestKey(userKey)
       ? `key:${userKey}`
       : this.guestOfPass(guestProof);
   }
@@ -1978,22 +1994,22 @@ export class Room {
    */
   hasStageInvite(
     userKey: string,
-    roomGuestProof: string | undefined,
+    guestProof: string | undefined,
     link?: GuestLinkPlan,
   ): boolean {
     return this.admissions.admits(
-      this.principalsOfJoin(userKey, roomGuestProof, rightsPassesOf(link)),
+      this.principalsOfJoin(userKey, "rights", guestProof, rightsPassesOf(link)),
       "stage",
     );
   }
 
   stageInviteKeys(
     userKey: string,
-    roomGuestProof: string | undefined,
+    guestProof: string | undefined,
     link?: GuestLinkPlan,
   ): string[] {
     return this.admissions.namedKeys(
-      this.principalsOfJoin(userKey, roomGuestProof, rightsPassesOf(link)),
+      this.principalsOfJoin(userKey, "rights", guestProof, rightsPassesOf(link)),
       "stage",
     );
   }
@@ -2032,7 +2048,7 @@ export class Room {
     link?: GuestLinkPlan,
   ): boolean {
     return this.admissions.refuses(
-      this.principalsOfJoin(userKey, guestProof, link?.passes),
+      this.principalsOfJoin(userKey, "removal", guestProof, link?.passes),
       "stageDemotion",
     );
   }
@@ -2912,7 +2928,7 @@ export class Room {
 
   hostReasonOf(userKey: string, guestProof?: string): HostReason | null {
     let strongest: HostReason | null = null;
-    for (const key of this.identitiesOfSameGuest(userKey, guestProof)) {
+    for (const key of this.identitiesOfSameGuest(userKey, "rights", guestProof)) {
       const reason = this.hostReasonsByKey.get(key);
       if (reason && (!strongest || HOST_REASON_RANK[reason] > HOST_REASON_RANK[strongest])) {
         strongest = reason;
@@ -2934,23 +2950,25 @@ export class Room {
     const held = this.hostReasonOf(userKey, guestProof);
     const kept = held && HOST_REASON_RANK[held] >= HOST_REASON_RANK[reason] ? held : reason;
     let changed = false;
-    for (const key of this.identitiesOfSameGuest(userKey, guestProof)) {
+    for (const key of this.identitiesOfSameGuest(userKey, "rights", guestProof)) {
       if (key !== userKey && !this.hostReasonsByKey.has(key)) continue;
       if (this.hostReasonsByKey.get(key) === kept) continue;
       this.hostReasonsByKey.set(key, kept);
       changed = true;
     }
     if (changed) this.onRecoverableChange?.();
-    return this.promoteSeatsOf(userKey);
+    return this.promoteSeatsOf(userKey, guestProof);
   }
 
-  seatsOf(userKey: string): Client[] {
-    return this.seatsOfSameGuest(userKey).flatMap((seatId) => this.clients.get(seatId) ?? []);
+  seatsOf(userKey: string, guestProof?: string): Client[] {
+    return this.seatsOfSameGuest(userKey, "rights", guestProof).flatMap(
+      (seatId) => this.clients.get(seatId) ?? [],
+    );
   }
 
-  private promoteSeatsOf(userKey: string): Admin[] {
+  private promoteSeatsOf(userKey: string, guestProof?: string): Admin[] {
     const promoted: Admin[] = [];
-    for (const client of this.seatsOf(userKey)) {
+    for (const client of this.seatsOf(userKey, guestProof)) {
       if (client instanceof Admin || client.isWebinarAttendee || client.isObserver) continue;
       const key = this.userKeysById.get(client.id);
       if (key === undefined || !this.isAdminUserKey(key, this.guestProofsByUserKey.get(key))) {
@@ -3049,7 +3067,7 @@ export class Room {
       return true;
     }
     for (const key of this.userKeysById.values()) {
-      if (this.isSamePerson(userKey, key, guestProof)) return true;
+      if (this.isSamePerson(userKey, key, "rights", guestProof)) return true;
     }
     return false;
   }
@@ -3063,6 +3081,7 @@ export class Room {
     return (
       !this.isBlocked(userKey, guestProof, link) &&
       this.guestHolds(
+        "rights",
         this.adminUserKeys,
         userKey,
         guestProof,
@@ -3075,7 +3094,10 @@ export class Room {
     for (const [seatId, client] of this.clients) {
       if (!(client instanceof Admin) || client.isObserver || !client.socket.connected) continue;
       const key = this.userKeysById.get(seatId);
-      if (key !== undefined && this.guestHolds([key], userKey, guestProof, rightsPassesOf(link))) {
+      if (
+        key !== undefined &&
+        this.guestHolds("rights", [key], userKey, guestProof, rightsPassesOf(link))
+      ) {
         return true;
       }
     }
@@ -3092,6 +3114,7 @@ export class Room {
       this.hostUserKey !== null &&
       !this.isBlocked(userKey, guestProof, link) &&
       this.guestHolds(
+        "rights",
         [this.hostUserKey],
         userKey,
         guestProof,
@@ -3116,32 +3139,16 @@ export class Room {
     return demoted;
   }
 
-  promoteClientToAdmin(userId: string, basis: Exclude<HostBasis, "owner">): Admin[] | null {
-    const client = this.clients.get(userId);
-    const userKey = this.userKeysById.get(userId);
-    if (!client || !userKey || client.isWebinarAttendee) {
-      return null;
-    }
-    const guestProof = this.guestProofsByUserKey.get(userKey);
-    if (this.isBlocked(userKey, guestProof)) return null;
-    if (
-      basis === "fallback" &&
-      (this.handingOff || this.needsReadmission(userKey, guestProof))
-    ) {
-      return null;
-    }
-    const promoted = this.grantHost(userKey, basis);
-    if (this.hostReasonOf(userKey) === "owner") {
-      this.tellOwnerTookOver(this.welcomeOwner(userKey));
-    }
-    this.notifyLifecycle("membership");
-    return promoted;
+  mayGrantHost(userKey: string, basis: HostBasis, guestProof?: string): boolean {
+    if (this.isBlocked(userKey, guestProof)) return false;
+    if (basis !== "fallback" || this.hasLiveHostSeat(userKey, guestProof)) return true;
+    return !this.handingOff && !this.needsReadmission(userKey, guestProof);
   }
 
   getHostUserId(): string | null {
     if (this.hostUserKey) {
       // The host's own seat, else another tab of the same guest.
-      const host = this.personOf(this.hostUserKey);
+      const host = this.personOf(this.hostUserKey, "rights");
       let otherTab: string | null = null;
       for (const [userId, userKey] of this.userKeysById.entries()) {
         if (!(this.clients.get(userId) instanceof Admin)) continue;
@@ -3808,9 +3815,15 @@ export class Room {
 
   needsReadmission(userKey: string, guestProof?: string, link?: GuestLinkPlan): boolean {
     return (
-      this.guestHolds(this.readmissionRequiredUserKeys, userKey, guestProof, link?.passes) ||
+      this.guestHolds(
+        "removal",
+        this.readmissionRequiredUserKeys,
+        userKey,
+        guestProof,
+        link?.passes,
+      ) ||
       this.admissions.refuses(
-        this.principalsOfJoin(userKey, guestProof, link?.passes),
+        this.principalsOfJoin(userKey, "removal", guestProof, link?.passes),
         "waitingRoom",
       )
     );
@@ -3911,11 +3924,17 @@ export class Room {
     this.lostCallEnded = true;
     const report = this.onRecoverableChange;
     this.onRecoverableChange = null;
+    const released = [
+      ...this.hostReasonsByKey.keys(),
+      ...this.readmissionRequiredUserKeys,
+      ...this.blockedUsers,
+    ];
     this.primaryHostUserKey = null;
     this.hostReasonsByKey.clear();
     this.demoteSeatsWithoutRights();
     this.readmissionRequiredUserKeys.clear();
     this.blockedUsers.clear();
+    for (const userKey of released) this.releaseGuestIdentity(userKey);
     this.onRecoverableChange = report;
     this.onLostCallEnded?.();
   }
@@ -3978,17 +3997,17 @@ export class Room {
    */
   isAllowed(
     userKey: string,
-    roomGuestProof?: string,
+    guestProof?: string,
     link?: GuestLinkPlan,
   ): boolean {
     return this.admissions.admits(
-      this.principalsOfJoin(userKey, roomGuestProof, rightsPassesOf(link)),
+      this.principalsOfJoin(userKey, "rights", guestProof, rightsPassesOf(link)),
       "waitingRoom",
     );
   }
 
   revokeAllowedUser(userKey: string) {
-    this.recordRevocation(this.identitiesOfSameGuest(userKey), ["waitingRoom"]);
+    this.recordRevocation(this.identitiesOfSameGuest(userKey, "removal"), ["waitingRoom"]);
   }
 
   /**
@@ -4003,17 +4022,17 @@ export class Room {
   /** Whether a join as `userKey` may pass the lock (see `isAllowed`). */
   isLockedAllowed(
     userKey: string,
-    roomGuestProof?: string,
+    guestProof?: string,
     link?: GuestLinkPlan,
   ): boolean {
     return this.admissions.admits(
-      this.principalsOfJoin(userKey, roomGuestProof, rightsPassesOf(link)),
+      this.principalsOfJoin(userKey, "rights", guestProof, rightsPassesOf(link)),
       "lock",
     );
   }
 
   revokeLockedAllowedUser(userKey: string) {
-    const userKeys = this.identitiesOfSameGuest(userKey);
+    const userKeys = this.identitiesOfSameGuest(userKey, "removal");
     for (const key of userKeys) this.setReadmissionRequired(key, true);
     this.recordRevocation(userKeys, ["lock"]);
   }
@@ -4028,7 +4047,7 @@ export class Room {
       .admittedKeys(scope, (principal) =>
         principal.startsWith("pass:")
           ? this.admissions.admits(
-              this.principalsOfJoin("", principal.slice("pass:".length)),
+              this.principalsOfJoin("", "rights", principal.slice("pass:".length)),
               scope,
             )
           : true,
@@ -4037,7 +4056,7 @@ export class Room {
   }
 
   removeUser(userKey: string): Client[] {
-    const userKeys = this.identitiesOfSameGuest(userKey);
+    const userKeys = this.identitiesOfSameGuest(userKey, "removal");
     for (const key of userKeys) this.setReadmissionRequired(key, true);
     return this.dropRejoinGrantsOf(userKeys);
   }
@@ -4081,7 +4100,7 @@ export class Room {
   // Takes host rights away from everyone in the room with this user key, who
   // stay in it as admitted participants. Returns those who had them.
   demoteToParticipant(userKey: string): Client[] {
-    const userKeys = this.identitiesOfSameGuest(userKey);
+    const userKeys = this.identitiesOfSameGuest(userKey, "rights");
     this.keepAdmitted(userKeys);
     return this.revokeHostOf(userKeys);
   }
@@ -4129,13 +4148,17 @@ export class Room {
    */
   identitiesOfSameGuest(
     userKey: string,
+    reach: Reach,
     guestProof: string | undefined = this.guestProofsByUserKey.get(userKey),
     link?: GuestLinkPlan,
   ): string[] {
+    const person = this.personOf(userKey, reach, guestProof, link?.passes);
     const userKeys = [userKey];
-    for (const pass of this.personOf(userKey, guestProof, link?.passes).passes) {
+    for (const pass of person.passes) {
       for (const otherKey of this.userKeysByGuestProof.get(pass) ?? []) {
-        if (!userKeys.includes(otherKey)) userKeys.push(otherKey);
+        if (!userKeys.includes(otherKey) && this.isKeyOf(person, otherKey)) {
+          userKeys.push(otherKey);
+        }
       }
     }
     return userKeys;
@@ -4144,10 +4167,11 @@ export class Room {
   isSamePerson(
     userKey: string,
     otherKey: string,
+    reach: Reach,
     guestProof: string | undefined = this.guestProofsByUserKey.get(userKey),
     link?: GuestLinkPlan,
   ): boolean {
-    return this.isKeyOf(this.personOf(userKey, guestProof, link?.passes), otherKey);
+    return this.isKeyOf(this.personOf(userKey, reach, guestProof, link?.passes), otherKey);
   }
 
   guestPassesFor(userKeys: Iterable<string>): Record<string, string[]> {
@@ -4176,8 +4200,8 @@ export class Room {
   }
 
   /** The seats held under `userKey` and every other key of the same guest. */
-  seatsOfSameGuest(userKey: string): string[] {
-    const userKeys = new Set(this.identitiesOfSameGuest(userKey));
+  seatsOfSameGuest(userKey: string, reach: Reach, guestProof?: string): string[] {
+    const userKeys = new Set(this.identitiesOfSameGuest(userKey, reach, guestProof));
     return Array.from(this.userKeysById)
       .filter(([, key]) => userKeys.has(key))
       .map(([userId]) => userId);
@@ -4192,6 +4216,6 @@ export class Room {
     guestProof?: string,
     link?: GuestLinkPlan,
   ): boolean {
-    return this.guestHolds(this.blockedUsers, userKey, guestProof, link?.passes);
+    return this.guestHolds("removal", this.blockedUsers, userKey, guestProof, link?.passes);
   }
 }

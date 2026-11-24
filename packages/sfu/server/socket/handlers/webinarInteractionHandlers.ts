@@ -436,7 +436,7 @@ export const registerWebinarInteractionHandlers = (
         // guest leaves the stage, as admitting or denying covers every tab.
         const stageSeats = (
           targetUserKey
-            ? guard.room.seatsOfSameGuest(targetUserKey)
+            ? guard.room.seatsOfSameGuest(targetUserKey, "removal")
             : [targetUserId]
         ).filter((userId) => {
           const seat = guard.room.getClient(userId);

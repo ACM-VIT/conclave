@@ -69,7 +69,7 @@ import {
   ROOM_RECOVERY_PASS_TTL_MS,
 } from "../../roomRecoveryPass.js";
 import {
-  announcePromotedHost,
+  applyHostGrant,
   answerSettledRequests,
   ensureHost,
   offerLapsedRoom,
@@ -83,7 +83,6 @@ import type { LostRoom, RecalledRoom } from "../../roomRecoveryLedger.js";
 import { emitToHost } from "../../admin/hostOnlyEvents.js";
 import { getSocketAuthUser } from "../auth.js";
 import type { ConnectionContext } from "../context.js";
-import { registerAdminHandlers } from "./adminHandlers.js";
 import { respond } from "./ack.js";
 import { emitChatHistorySnapshot } from "./chatHistory.js";
 import { emitGameSnapshot } from "./gameHandlers.js";
@@ -442,7 +441,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           Boolean(
             state.rooms
               .get(resolvedChannelId)
-              ?.hasStageInvite(userKey, roomGuestProof, earlyLink),
+              ?.hasStageInvite(userKey, guestProof, earlyLink),
           );
         if (
           isActiveScheduledWebinarRoom &&
@@ -982,24 +981,24 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           return;
         }
 
-        const needsReadmission = room.needsReadmission(userKey, roomGuestProof, guestLink);
+        const needsReadmission = room.needsReadmission(userKey, guestProof, guestLink);
+        const claimsHost = hostRequested && (forcedHostJoin || !needsReadmission);
         const isReturningPrimaryHost =
           !isWebinarAttendeeJoin &&
           !needsReadmission &&
-          room.isHostUserKey(userKey, roomGuestProof, guestLink);
+          room.isHostUserKey(userKey, guestProof, guestLink);
         const isPersistedAdminForExistingRoom =
           !isWebinarAttendeeJoin &&
           !needsReadmission &&
-          room.isAdminUserKey(userKey, roomGuestProof, guestLink);
-        const holdsLiveHostSeat = room.hasLiveHostSeat(userKey, roomGuestProof, guestLink);
+          room.isAdminUserKey(userKey, guestProof, guestLink);
+        const holdsLiveHostSeat = room.hasLiveHostSeat(userKey, guestProof, guestLink);
         const isAdminForExistingRoom =
           !isWebinarAttendeeJoin &&
           (isReturningPrimaryHost ||
             isPersistedAdminForExistingRoom ||
             holdsLiveHostSeat ||
             isCodeOwner ||
-            (hostRequested &&
-              (clientPolicy.allowHostJoin || forcedHostJoin)));
+            (claimsHost && (clientPolicy.allowHostJoin || forcedHostJoin)));
         const provesMembership =
           !isWebinarAttendeeJoin &&
           !needsReadmission &&
@@ -1014,7 +1013,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         // or a member who holds its pass. Anyone else who recreates it, such
         // as a tab that was only knocking, waits as before, and the room
         // waits for its people. A room with no gate has nothing to wait at.
-        const hostsLostCall = hostRequested || isAdminForExistingRoom;
+        const hostsLostCall = claimsHost || isAdminForExistingRoom;
         if (
           createdRoom &&
           !isWebinarAttendeeJoin &&
@@ -1046,7 +1045,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         const takesOverRecreatedRoom =
           restorerState === "awaited"
             ? hostsLostCall || (provesMembership && room.knowsLostRoster)
-            : restorerState === "lapsed" && (allowRoomCreation || hostRequested);
+            : restorerState === "lapsed" && (allowRoomCreation || claimsHost);
         const isAdminJoin = isWebinarAttendeeJoin
           ? false
           : createdRoom
@@ -1150,7 +1149,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           provesMembership &&
           !hasPrivilegedJoinAccess &&
           room.isLocked &&
-          !room.isLockedAllowed(userKey, roomGuestProof, guestLink) &&
+          !room.isLockedAllowed(userKey, guestProof, guestLink) &&
           room.restoreAdmission(userKey, guestProof, { pastLock: true })
         ) {
           Logger.info(
@@ -1163,7 +1162,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           !hasPrivilegedJoinAccess &&
           !isWebinarPromotedJoin &&
           !isInvitedJoin &&
-          !room.isLockedAllowed(userKey, roomGuestProof, guestLink)
+          !room.isLockedAllowed(userKey, guestProof, guestLink)
         ) {
           if (isWaitingRoomFull(room, userKey)) {
             respond(callback, { error: WAITING_ROOM_FULL_ERROR });
@@ -1221,10 +1220,10 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           clientPolicy.useWaitingRoom &&
           !hasPrivilegedJoinAccess &&
           !isWebinarPromotedJoin &&
-          !room.isAllowed(userKey, roomGuestProof, guestLink) &&
+          !room.isAllowed(userKey, guestProof, guestLink) &&
           !(
             room.isLocked &&
-            room.isLockedAllowed(userKey, roomGuestProof, guestLink)
+            room.isLockedAllowed(userKey, guestProof, guestLink)
           )
         ) {
           if (isWaitingRoomFull(room, userKey)) {
@@ -1292,37 +1291,9 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         ) {
           room.allowLockedUser(userKey);
         }
-        let otherHostTabs: Admin[] = [];
-        if (isAdminJoin) {
-          otherHostTabs = room.grantHost(
-            userKey,
-            isCodeOwner
-              ? "owner"
-              : hostRequested && (clientPolicy.allowHostJoin || forcedHostJoin)
-                ? "promoted"
-                : "fallback",
-            guestClaim.bindTo,
-          );
-          if (!room.hostUserKey) room.makePrimaryHost(userKey);
-        }
-        let demotedForOwner: Client[] = [];
-        if (isAdminJoin && isCodeOwner) {
-          demotedForOwner = room.welcomeOwner(userKey);
-        }
         if (isAdminJoin && (claimsOpening || restorerState !== "none")) {
           room.markRestored();
           state.roomRecovery.noteRunning(room);
-        }
-        const isPrimaryHost = room.isHostUserKey(userKey, roomGuestProof, guestLink);
-        if (isAdminJoin) {
-          socket.emit("hostAssigned", {
-            roomId,
-            hostUserId: room.getHostUserId() ?? (isPrimaryHost ? userId : null),
-          });
-        }
-        if (isAdminForExistingRoom && room.cleanupDeadline !== null) {
-          Logger.info(`Host returning to room ${roomId}, cleanup cancelled.`);
-          room.stopCleanupTimer();
         }
         const attempts = attemptsOf(state);
         const tabAttempts = attempts.byTab.get(joinKey);
@@ -1398,13 +1369,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         context.pendingRoomChannelId = null;
         context.pendingUserKey = null;
 
-        if (isAdminJoin) {
-          context.currentClient = new Admin({
-            id: userId,
-            socket,
-            mediaCapabilities: data?.mediaCapabilities,
-          });
-        } else if (isWebinarAttendeeJoin) {
+        if (isWebinarAttendeeJoin) {
           context.currentClient = new Client({
             id: userId,
             socket,
@@ -1425,6 +1390,22 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         });
         const joiningChannel = socket.join(roomChannelId);
         context.currentRoom.addClient(context.currentClient);
+        if (isAdminJoin) {
+          applyHostGrant(
+            room,
+            {
+              userKey,
+              basis: isCodeOwner
+                ? "owner"
+                : claimsHost && (clientPolicy.allowHostJoin || forcedHostJoin)
+                  ? "promoted"
+                  : "fallback",
+              guestProof: guestClaim.bindTo,
+            },
+            { joining: context },
+          );
+        }
+        const seatedAsHost = context.currentClient instanceof Admin;
         if (!room.hasActiveAdmin()) ensureHost(io, state, room);
 
         const hostUserId = room.getHostUserId();
@@ -1455,13 +1436,6 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         await joiningChannel;
         if (stopped()) return;
 
-        room.tellOwnerTookOver(demotedForOwner);
-        for (const tab of otherHostTabs) {
-          if (tab.socket.id !== socket.id && room.getClient(tab.id) === tab) {
-            announcePromotedHost(room, tab);
-          }
-        }
-
         if (context.currentClient instanceof Admin && !context.currentClient.isObserver) {
           const pendingUsers = context.currentRoom.waitingGuests().map((pending) => ({
             userId: pending.userKey,
@@ -1471,15 +1445,6 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             users: pendingUsers,
             roomId: context.currentRoom.id,
           });
-          // Those waiting in a room this join opened were waiting for it.
-          if (createdRoom) {
-            for (const pending of context.currentRoom.pendingClients.values()) {
-              pending.socket.emit("waitingRoomStatus", {
-                message: "A host is available to let you in.",
-                roomId: context.currentRoom.id,
-              });
-            }
-          }
         }
 
         const resolvedDisplayName =
@@ -1487,7 +1452,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         if (!wasReconnecting) {
           if (!context.currentClient.isWebinarAttendee) {
             const usedStageInvites = isWebinarPromotedJoin
-              ? context.currentRoom.stageInviteKeys(userKey, roomGuestProof, guestLink)
+              ? context.currentRoom.stageInviteKeys(userKey, guestProof, guestLink)
               : [];
             for (const [clientId, client] of context.currentRoom.clients) {
               if (clientId === userId) {
@@ -1667,17 +1632,13 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
 
         Logger.debug(
           `User ${userId} joined room ${roomId} as ${
-            isAdminJoin
+            seatedAsHost
               ? "Host"
               : context.currentClient.isWebinarAttendee
                 ? "WebinarAttendee"
                 : "Client"
           }`,
         );
-
-        if (context.currentClient instanceof Admin && !context.currentClient.isObserver) {
-          registerAdminHandlers(context, { roomId });
-        }
 
         // Publish settings only after this socket's room membership is restored.
         // A transport reconnect can happen before joinRoom finishes.
@@ -1717,7 +1678,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           meetingRequiresInviteCode: context.currentRoom.requiresMeetingInviteCode,
           webinarRole: context.currentClient.isWebinarAttendee
             ? "attendee"
-            : isAdminJoin
+            : seatedAsHost
               ? "host"
               : "participant",
           isWebinarEnabled: webinarSnapshot.enabled,

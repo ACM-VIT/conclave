@@ -13,6 +13,7 @@ import {
   toPendingUserSnapshots,
   toRoomSnapshot,
   withdrawWaitingRequest,
+  applyHostGrant,
 } from "../server/admin/controlPlane.js";
 import type { Room } from "../config/classes/Room.js";
 import { config as sfuConfig } from "../config/config.js";
@@ -1440,7 +1441,7 @@ describe("a guest whose browser holds two passes", () => {
     await join(state, stillOnOldPass);
     await join(state, underOtherPass);
 
-    const sameGuest = room.identitiesOfSameGuest(underOtherPass.userId);
+    const sameGuest = room.identitiesOfSameGuest(underOtherPass.userId, "rights");
     room.blockUser(underOtherPass.userId);
     room.removeClient(`${stillOnOldPass.userId}#tab-8`);
     await endOfTurn();
@@ -1477,7 +1478,7 @@ describe("a guest whose browser holds two passes", () => {
       guestWas: [{ userKey: "guest-gp_NNNNNNNNNNNNNNNNNNNNNN", guestProof: "proof-nobody-here-has" }],
     });
 
-    expect(room.identitiesOfSameGuest(underOtherPass.userId)).toEqual([underOtherPass.userId]);
+    expect(room.identitiesOfSameGuest(underOtherPass.userId, "rights")).toEqual([underOtherPass.userId]);
   });
 
   it("leaves nothing behind once it holds nothing in the room", async () => {
@@ -1492,7 +1493,7 @@ describe("a guest whose browser holds two passes", () => {
     await endOfTurn();
     await join(state, { ...underOtherPass, guestWas: undefined });
 
-    expect(room.identitiesOfSameGuest(underOtherPass.userId)).toEqual([underOtherPass.userId]);
+    expect(room.identitiesOfSameGuest(underOtherPass.userId, "rights")).toEqual([underOtherPass.userId]);
     expect(room.boundGuestIdentityCount).toBe(boundWithHostOnly + 1);
   });
 });
@@ -1549,7 +1550,7 @@ describe("a browser whose passes arrived out of order", () => {
     for (const tab of [second, third, fourth]) {
       expect(tab.context.currentClient).toBeInstanceOf(Admin);
     }
-    expect(room.identitiesOfSameGuest(tabUnder(1, "tab-4").userId)).toHaveLength(4);
+    expect(room.identitiesOfSameGuest(tabUnder(1, "tab-4").userId, "rights")).toHaveLength(4);
   });
 
   it("is still not a guest whose passes the room has never seen together", async () => {
@@ -1865,7 +1866,7 @@ describe("a guest who asks to be let in from more than one tab", () => {
     expect(room.pendingClients.size).toBe(0);
   });
 
-  it("treats two tabs of a client that names itself as one guest when they show one pass", async () => {
+  it("keeps two tabs of a client that names itself to a request each, though they show one pass", async () => {
     const { state, room, host } = await lockedRoom();
     const older = (sessionId: string) =>
       ({ userId: `guest-${sessionId}`, clientId: "conclave", sessionId, guestProof: "proof-of-the-older-pass" }) satisfies SfuAuthPayload;
@@ -1874,11 +1875,24 @@ describe("a guest who asks to be let in from more than one tab", () => {
 
     await hostAsks(host, "admitUser", { userId: "guest-older-tab-1" });
 
-    expect(heard(host, "userRequestedJoin")).toEqual(["guest-older-tab-1"]);
+    expect(heard(host, "userRequestedJoin")).toEqual(["guest-older-tab-1", "guest-older-tab-2"]);
     expect(first.peer.emit).toHaveBeenCalledWith(...approved);
-    expect(second.peer.emit).toHaveBeenCalledWith(...approved);
-    expect(room.pendingClients.size).toBe(0);
-    expect((await join(state, older("older-tab-2"))).ack).toHaveBeenCalledWith(joined);
+    expect(second.peer.emit).not.toHaveBeenCalledWith(...approved);
+    expect([...room.pendingClients.keys()]).toEqual(["guest-older-tab-2"]);
+  });
+
+  it("keeps the other tab of a client that names itself out once a host blocks the pass it shows", async () => {
+    const { state, room, host } = await lockedRoom();
+    const older = (sessionId: string) =>
+      ({ userId: `guest-${sessionId}`, clientId: "conclave", sessionId, guestProof: "proof-of-the-older-pass" }) satisfies SfuAuthPayload;
+    await join(state, older("older-tab-1"));
+
+    await hostAsks(host, "admin:blockUsers", { userKeys: ["guest-older-tab-1"], kickPresent: true });
+
+    expect((await join(state, older("older-tab-2"))).ack).toHaveBeenCalledWith({
+      error: "You are not allowed to join this meeting.",
+    });
+    expect(room.isBlocked("guest-older-tab-2", "proof-of-the-older-pass")).toBe(true);
   });
 
   it("keeps a guest with no pass to one request per tab", async () => {
@@ -2244,7 +2258,7 @@ describe("what a join costs a room with a large lobby", () => {
     for (const request of room.pendingClients.values()) {
       if (covered.has(request.userKey)) continue;
       rows.push(request.userKey);
-      for (const userKey of room.identitiesOfSameGuest(request.userKey)) covered.add(userKey);
+      for (const userKey of room.identitiesOfSameGuest(request.userKey, "rights")) covered.add(userKey);
     }
     return rows;
   };
@@ -2319,7 +2333,7 @@ describe("what a join costs a room with a large lobby", () => {
 
       expect(toPendingUserSnapshots(room).map((row) => row.userId)).toEqual(rowsTheSlowWay(room));
       for (const userKey of room.pendingClients.keys()) {
-        const sameGuest = new Set(room.identitiesOfSameGuest(userKey));
+        const sameGuest = new Set(room.identitiesOfSameGuest(userKey, "rights"));
         expect(room.waitingRequestsOfGuest(userKey).map((request) => request.userKey)).toEqual(
           [...room.pendingClients.keys()].filter((key) => sameGuest.has(key)),
         );
@@ -2406,7 +2420,7 @@ describe("a guest that is a co-host under one pass and blocked under another", (
     const room = state.rooms.get("conclave:room")!;
     await join(state, coHostTab);
     await join(state, blockedTab);
-    room.promoteClientToAdmin(`${coHostTab.userId}#tab-7`, "promoted");
+    applyHostGrant(room, { userKey: room.userKeysById.get(`${coHostTab.userId}#tab-7`)!, basis: "promoted" });
     room.blockUser(blockedTab.userId);
     room.removeClient(`${blockedTab.userId}#tab-8`);
     room.removeClient(`${coHostTab.userId}#tab-7`);
@@ -2447,7 +2461,7 @@ describe("a guest that is a co-host under one pass and blocked under another", (
     const room = state.rooms.get("conclave:room")!;
     const coHost = await join(state, coHostTab);
     const coHostSeat = `${coHostTab.userId}#tab-7`;
-    room.promoteClientToAdmin(coHostSeat, "promoted");
+    applyHostGrant(room, { userKey: room.userKeysById.get(coHostSeat)!, basis: "promoted" });
     room.setLocked(true);
     room.allowLockedUser(coHostTab.userId);
     room.promoteWebinarUserKey(coHostTab.userId);
@@ -2478,7 +2492,7 @@ describe("a guest that is a co-host under one pass and blocked under another", (
     const primary = await join(state, hostTab);
     const room = state.rooms.get("conclave:room")!;
     const coHost = await join(state, coHostTab);
-    room.promoteClientToAdmin(`${coHostTab.userId}#tab-7`, "promoted");
+    applyHostGrant(room, { userKey: room.userKeysById.get(`${coHostTab.userId}#tab-7`)!, basis: "promoted" });
     await join(state, blockedTab);
     room.blockUser(blockedTab.userId);
     room.removeClient(`${blockedTab.userId}#tab-8`);
@@ -2517,7 +2531,7 @@ describe("a guest that is a co-host under one pass and blocked under another", (
     const room = state.rooms.get("conclave:room")!;
     const coHost = await join(state, coHostTab);
     const coHostSeat = `${coHostTab.userId}#tab-7`;
-    room.promoteClientToAdmin(coHostSeat, "promoted");
+    applyHostGrant(room, { userKey: room.userKeysById.get(coHostSeat)!, basis: "promoted" });
     const other = await join(state, {
       ...blockedTab,
       guestWas: [{ userKey: "guest-gp_NNNNNNNNNNNNNNNNNNNNNN", guestProof: coHostTab.guestProof }],
@@ -2566,7 +2580,7 @@ describe("a guest that is a co-host under one pass and blocked under another", (
     await join(state, hostTab);
     const room = state.rooms.get("conclave:room")!;
     await join(state, coHostTab);
-    room.promoteClientToAdmin(`${coHostTab.userId}#tab-7`, "promoted");
+    applyHostGrant(room, { userKey: room.userKeysById.get(`${coHostTab.userId}#tab-7`)!, basis: "promoted" });
     room.removeClient(`${coHostTab.userId}#tab-7`);
 
     room.blockUser(coHostTab.userId);
@@ -2731,8 +2745,8 @@ describe("what a refused join leaves behind", () => {
     const over = await join(state, { ...last, userId: `${last.userId}-tab-2`, sessionId: "cap-16-tab-2", guestWas: shows(first) });
     expect(over.ack).toHaveBeenCalledWith(joined);
     expect(room.linkedGuestPassCount).toBe(16);
-    expect(room.identitiesOfSameGuest(first.userId)).not.toContain(last.userId);
-    expect(room.identitiesOfSameGuest(first.userId)).toContain(rest[0].userId);
+    expect(room.identitiesOfSameGuest(first.userId, "rights")).not.toContain(last.userId);
+    expect(room.identitiesOfSameGuest(first.userId, "rights")).toContain(rest[0].userId);
 
     // A block on the full guest still reaches a join that shows its pass.
     blockUserKey(room, rest[0].userId, { reason: "Blocked by host", kickPresent: true, io, state });

@@ -14,6 +14,7 @@ import {
   closeProducerForMediaKey,
   admitWaitingGuest,
   allowUserKeys,
+  applyHostGrant,
   blockUserKey,
   emitPendingUsersSnapshot,
   ensureHost,
@@ -23,7 +24,6 @@ import {
   toPendingUserSnapshots,
   toRoomSnapshot,
 } from "../../admin/controlPlane.js";
-import { emitToHost } from "../../admin/hostOnlyEvents.js";
 import {
   decisionRecordFull,
   includesSuperAdminUserKey,
@@ -33,10 +33,9 @@ import {
 } from "../../admin/moderation.js";
 import { forceCloseRoom, isCurrentRoom, markRoomEnded } from "../../rooms.js";
 import { getSocketAuthUser } from "../auth.js";
-import { getSocketContext, type ConnectionContext } from "../context.js";
+import type { ConnectionContext } from "../context.js";
 import { RATE_LIMITS, takeToken } from "../rateLimit.js";
 import { respond } from "./ack.js";
-import { emitChatHistorySnapshot } from "./chatHistory.js";
 
 const DEFAULT_END_ROOM_MESSAGE =
   "This meeting has been ended by the host.";
@@ -340,33 +339,6 @@ const performBulkMediaClosure = (options: {
   return { affectedUsers, affectedProducers, users };
 };
 
-const activatePromotedAdmin = (
-  context: ConnectionContext,
-  promoted: Admin,
-  roomId: string,
-): void => {
-  const promotedContext = getSocketContext(promoted.socket);
-
-  if (!promotedContext || !context.currentRoom) {
-    return;
-  }
-
-  promotedContext.currentClient = promoted;
-  promotedContext.currentRoom = context.currentRoom;
-  registerAdminHandlers(promotedContext, { roomId });
-
-  emitToHost(promoted, "pendingUsersSnapshot", {
-    users: toPendingUserSnapshots(context.currentRoom),
-    roomId,
-  });
-  emitChatHistorySnapshot(promoted.socket, context.currentRoom);
-
-  emitToHost(promoted, "admin:roomStateChanged", {
-    roomId,
-    snapshot: toRoomSnapshot(context.currentRoom),
-  });
-};
-
 export const registerAdminHandlers = (
   context: ConnectionContext,
   options: { roomId: string },
@@ -401,7 +373,7 @@ export const registerAdminHandlers = (
       normalizedTargetId === guard.adminId ||
       (ownKey !== undefined &&
         targetKey !== undefined &&
-        guard.room.isSamePerson(ownKey, targetKey))
+        guard.room.isSamePerson(ownKey, targetKey, "removal"))
     ) {
       respond(cb, { error: "Cannot kick yourself" });
       return;
@@ -731,24 +703,10 @@ export const registerAdminHandlers = (
       return;
     }
 
-    const promoted = currentRoom.promoteClientToAdmin(normalizedTargetId, "promoted");
-    if (!promoted) {
+    if (!applyHostGrant(currentRoom, { userKey: targetUserKey, basis: "promoted" })) {
       respond(cb, { error: "Failed to promote user" });
       return;
     }
-
-    for (const seat of promoted) activatePromotedAdmin(context, seat, currentRoom.id);
-    for (const seat of currentRoom.seatsOf(targetUserKey)) {
-      seat.socket.emit("hostAssigned", {
-        roomId: currentRoom.id,
-        hostUserId: currentRoom.getHostUserId() ?? normalizedTargetId,
-      });
-    }
-
-    context.io.to(currentRoom.channelId).emit("adminUsersChanged", {
-      roomId: currentRoom.id,
-      hostUserIds: currentRoom.getAdminUserIds(),
-    });
 
     Logger.info(
       `Host privileges granted in room ${currentRoom.id}: ${context.currentClient.id} -> ${normalizedTargetId}`,
@@ -791,30 +749,11 @@ export const registerAdminHandlers = (
       return;
     }
 
-    const promoted = currentRoom.promoteClientToAdmin(normalizedTargetId, "promoted");
-    if (!promoted) {
+    if (
+      !applyHostGrant(currentRoom, { userKey: targetUserKey, basis: "promoted", primary: true })
+    ) {
       respond(cb, { error: "Failed to promote user" });
       return;
-    }
-
-    currentRoom.makePrimaryHost(targetUserKey);
-
-    for (const seat of promoted) activatePromotedAdmin(context, seat, currentRoom.id);
-
-    io.to(currentRoom.channelId).emit("hostChanged", {
-      roomId: currentRoom.id,
-      hostUserId: currentRoom.getHostUserId(),
-    });
-    io.to(currentRoom.channelId).emit("adminUsersChanged", {
-      roomId: currentRoom.id,
-      hostUserIds: currentRoom.getAdminUserIds(),
-    });
-
-    for (const seat of currentRoom.seatsOf(targetUserKey)) {
-      seat.socket.emit("hostAssigned", {
-        roomId: currentRoom.id,
-        hostUserId: normalizedTargetId,
-      });
     }
 
     respond(cb, {
@@ -1191,6 +1130,11 @@ export const registerAdminHandlers = (
       return;
     }
 
+    const ownKey = guard.room.userKeysById.get(guard.adminId);
+    if (ownKey !== undefined && guard.room.isSamePerson(ownKey, normalizedTargetId, "removal")) {
+      respond(cb, { error: "Cannot turn yourself away" });
+      return;
+    }
     const rejected = rejectWaitingGuest(guard.room, normalizedTargetId);
     if (rejected.length > 0) {
       Logger.info(
@@ -1230,7 +1174,9 @@ export const registerAdminHandlers = (
       return;
     }
 
-    const rejected = rejectAllPendingUsers(guard.room);
+    const rejected = rejectAllPendingUsers(guard.room, {
+      sparing: guard.room.userKeysById.get(guard.adminId),
+    });
     emitPendingUsersSnapshot(guard.room);
 
     respond(cb, {

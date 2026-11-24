@@ -15,6 +15,7 @@ import { pollsAuthority, pollsContract } from "./fixtures/polls.js";
 import { qaAuthority, qaContract } from "./fixtures/qa.js";
 import { quizAuthority, quizContract } from "./fixtures/quiz.js";
 import { wheelAuthority, wheelContract } from "./fixtures/wheel.js";
+import { applyHostGrant } from "../../server/admin/controlPlane.js";
 
 const at = (value: Json | null, ...path: (string | number)[]): Json | null => {
   let node: Json | null = value;
@@ -149,7 +150,7 @@ describe("polls", () => {
     ).toEqual([true, 1]);
 
     // Promotion: the same seat, a new audience, a fresh view.
-    room.room.promoteClientToAdmin(raviTab.seat.id, "promoted");
+    applyHostGrant(room.room, { userKey: room.room.userKeysById.get(raviTab.seat.id)!, basis: "promoted" });
     await room.deliver();
     expect(
       at(raviTab.row("polls", pollId), "results", "voterCount"),

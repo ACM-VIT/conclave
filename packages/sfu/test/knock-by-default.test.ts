@@ -9,6 +9,7 @@ import type { Router, Worker } from "mediasoup/types";
 import type { Server as SocketIOServer, Socket } from "socket.io";
 import type { ScheduledMeeting } from "../types.js";
 import { Admin } from "../config/classes/Admin.js";
+import { Client } from "../config/classes/Client.js";
 import { config } from "../config/config.js";
 import { initScheduledMeetings } from "../server/init.js";
 import {
@@ -1127,6 +1128,32 @@ describe("who hosts a call the server lost", () => {
     const saved = (await recovery.read(CHANNEL)) as { writer?: string; overAt?: number | null };
     expect(saved.writer).toBe(replacement);
     expect(saved.overAt).toBeTypeOf("number");
+  });
+
+  it("tells each meeting tab of a promoted person once that they host, and never their audience tab", async () => {
+    const state = makeState();
+    const created = await join(state, host);
+    roomOf(state).restoreAdmission(guest.userId, undefined, { pastLock: true });
+    const visitor = await join(state, guest);
+    const audience = makeSocket("guest-visitor-audience", guest);
+    const audienceSeat = new Client({
+      id: "guest-visitor#audience",
+      socket: audience.socket,
+      mode: "webinar_attendee",
+    });
+    roomOf(state).setUserIdentity(audienceSeat.id, guest.userId, "Visitor");
+    roomOf(state).addClient(audienceSeat);
+    const told = (peer: ReturnType<typeof makeSocket>) =>
+      peer.emit.mock.calls.filter(([event]) => event === "hostAssigned");
+    const before = told(visitor.peer).length;
+
+    expect(await send(created.peer, "promoteHost", { userId: "guest-visitor#v" })).toMatchObject({
+      success: true,
+    });
+
+    expect(told(visitor.peer).length - before).toBe(1);
+    expect(told(audience)).toEqual([]);
+    expect(audienceSeat).not.toBeInstanceOf(Admin);
   });
 
   it("keeps what the SFU that took a call over wrote when the SFU it took it from writes again", async () => {

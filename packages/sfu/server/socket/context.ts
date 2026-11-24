@@ -36,7 +36,7 @@ type SocketContextData = { context?: ConnectionContext };
 
 export const getSocketContext = (
   socket: Socket,
-): ConnectionContext | undefined => (socket.data as SocketContextData).context;
+): ConnectionContext | undefined => (socket.data as SocketContextData | undefined)?.context;
 
 export const setSocketContext = (
   socket: Socket,

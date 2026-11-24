@@ -8,7 +8,7 @@ import type {
   ProducerType,
 } from "../../config/classes/Client.js";
 import type { AdmissionScope } from "../../config/classes/AdmissionLedger.js";
-import type { Room, WaitingRequest } from "../../config/classes/Room.js";
+import type { HostBasis, Room, WaitingRequest } from "../../config/classes/Room.js";
 import type { AppsAwarenessData } from "../../types.js";
 import { isGuestUserKey } from "../identity.js";
 import { cleanupRoom, forceCloseRoom, getRoomChannelId, markRoomEnded } from "../rooms.js";
@@ -17,7 +17,7 @@ import {
   emitWebinarAttendeeCountChanged,
   emitWebinarFeedChanged,
 } from "../webinarNotifications.js";
-import { getSocketContext } from "../socket/context.js";
+import { getSocketContext, type ConnectionContext } from "../socket/context.js";
 import { emitChatHistorySnapshot } from "../socket/handlers/chatHistory.js";
 import { registerAdminHandlers } from "../socket/handlers/adminHandlers.js";
 import { emitToHost, emitToHosts } from "./hostOnlyEvents.js";
@@ -159,15 +159,68 @@ export type RoomPolicyUpdate = {
 
 type ProducerInfo = ReturnType<Client["getProducerInfos"]>[number];
 
+export type HostGrant = {
+  userKey: string;
+  basis: HostBasis;
+  guestProof?: string;
+  primary?: boolean;
+};
+
+const activateHostSeat = (room: Room, seat: Admin, joining: ConnectionContext | undefined): void => {
+  const roomId = room.id;
+  const seatContext = joining ?? getSocketContext(seat.socket);
+  if (seatContext) {
+    seatContext.currentClient = seat;
+    seatContext.currentRoom = room;
+    registerAdminHandlers(seatContext, { roomId });
+  }
+  if (joining) return;
+  emitToHost(seat, "pendingUsersSnapshot", { users: toPendingUserSnapshots(room), roomId });
+  emitChatHistorySnapshot(seat.socket, room);
+  seat.socket.emit("roomLockChanged", { locked: room.isLocked, roomId });
+  emitToHost(seat, "admin:roomStateChanged", { roomId, snapshot: toRoomSnapshot(room) });
+};
+
+export const applyHostGrant = (
+  room: Room,
+  grant: HostGrant,
+  options: { joining?: ConnectionContext } = {},
+): Admin[] | null => {
+  if (!room.mayGrantHost(grant.userKey, grant.basis, grant.guestProof)) return null;
+  const hadHost = room.hasActiveAdmin();
+  const promoted = room.grantHost(grant.userKey, grant.basis, grant.guestProof);
+  if (grant.primary || !room.hostUserKey) room.makePrimaryHost(grant.userKey);
+  if (room.hostReasonOf(grant.userKey, grant.guestProof) === "owner") {
+    room.tellOwnerTookOver(room.welcomeOwner(grant.userKey));
+  }
+  if (promoted.length === 0) return promoted;
+  room.stopCleanupTimer();
+  for (const seat of promoted) {
+    Logger.info(`Promoted ${seat.id} to host in room ${room.id} (${grant.basis}).`);
+    activateHostSeat(
+      room,
+      seat,
+      seat.socket === options.joining?.socket ? options.joining : undefined,
+    );
+  }
+  if (!hadHost) {
+    for (const pending of room.pendingClients.values()) {
+      pending.socket.emit("waitingRoomStatus", {
+        message: "A host is available to let you in.",
+        roomId: room.id,
+      });
+    }
+  }
+  return promoted;
+};
+
 const promoteNextAdmin = (room: Room): Admin[] | null => {
   for (const client of [...room.clients.values()]) {
-    if (client instanceof Admin || client.isObserver) {
-      continue;
-    }
-    const promoted = room.promoteClientToAdmin(client.id, "fallback");
-    if (promoted && promoted.length > 0) {
-      return promoted;
-    }
+    if (client instanceof Admin || client.isObserver || client.isWebinarAttendee) continue;
+    const userKey = room.userKeysById.get(client.id);
+    if (!userKey) continue;
+    const promoted = applyHostGrant(room, { userKey, basis: "fallback" });
+    if (promoted && promoted.length > 0) return promoted;
   }
   return null;
 };
@@ -192,34 +245,6 @@ const endForNoHost = (io: SocketIOServer, state: SfuState, room: Room): void => 
   forceCloseRoom(state, room.channelId);
 };
 
-export const announcePromotedHost = (room: Room, promoted: Admin): void => {
-  const roomId = room.id;
-  const promotedContext = getSocketContext(promoted.socket);
-  if (promotedContext) {
-    promotedContext.currentClient = promoted;
-    promotedContext.currentRoom = room;
-    registerAdminHandlers(promotedContext, { roomId });
-  }
-  room.stopCleanupTimer();
-  Logger.info(`Promoted ${promoted.id} to host in room ${roomId}.`);
-  emitToHost(promoted, "pendingUsersSnapshot", {
-    users: room.waitingGuests().map((pending) => ({
-      userId: pending.userKey,
-      displayName: pending.displayName || pending.userKey,
-    })),
-    roomId,
-  });
-  emitChatHistorySnapshot(promoted.socket, room);
-  promoted.socket.emit("roomLockChanged", { locked: room.isLocked, roomId });
-  promoted.socket.emit("hostAssigned", { roomId, hostUserId: promoted.id });
-  for (const pending of room.pendingClients.values()) {
-    pending.socket.emit("waitingRoomStatus", {
-      message: "A host is available to let you in.",
-      roomId,
-    });
-  }
-};
-
 const tellWaitingNoHost = (room: Room): void => {
   for (const pending of room.pendingClients.values()) {
     pending.socket.emit("waitingRoomStatus", { message: "No one to let you in.", roomId: room.id });
@@ -236,9 +261,7 @@ export const ensureHost = (
   if (room.isHandingOff || room.hasEnded || !room.recordsItsCall) return;
   if (!room.hasActiveAdmin()) {
     const promoted = promoteNextAdmin(room);
-    if (promoted) {
-      for (const seat of promoted) announcePromotedHost(room, seat);
-    } else {
+    if (!promoted) {
       tellWaitingNoHost(room);
       room.startCleanupTimer(() => {
         if (state.rooms.get(room.channelId) !== room || room.hasActiveAdmin()) return;
@@ -248,7 +271,6 @@ export const ensureHost = (
         }
         const late = promoteNextAdmin(room);
         if (late) {
-          for (const seat of late) announcePromotedHost(room, seat);
           io.to(room.channelId).emit("hostChanged", {
             roomId: room.id,
             hostUserId: room.getHostUserId(),
@@ -1048,9 +1070,14 @@ export const admitAllPendingUsers = (
 
 export const rejectAllPendingUsers = (
   room: Room,
+  options: { sparing?: string } = {},
 ): Array<{ userId: string; userKey: string }> => {
   const rejected: Array<{ userId: string; userKey: string }> = [];
-  const pendingUsers = Array.from(room.pendingClients.values());
+  const pendingUsers = Array.from(room.pendingClients.values()).filter(
+    (pending) =>
+      options.sparing === undefined ||
+      !room.isSamePerson(options.sparing, pending.userKey, "removal"),
+  );
 
   for (const pending of pendingUsers) {
     room.denyWaitingRequest(pending.userKey);
@@ -1191,7 +1218,7 @@ export const blockUserKey = (
     state: SfuState;
   },
 ): { rejectedPendingUserKeys: string[]; kickedUserIds: string[] } => {
-  const userKeys = room.identitiesOfSameGuest(userKey);
+  const userKeys = room.identitiesOfSameGuest(userKey, "removal");
   const rejectedPendingUserKeys: string[] = [];
   for (const key of userKeys) {
     const pending = room.pendingClients.get(key);
@@ -1296,7 +1323,7 @@ export const kickClient = (
   // still admitted and still a host.
   const userKey = room.userKeysById.get(userId);
   if (!userKey) return removeSeats(room, [userId], reason, options);
-  const seats = room.seatsOfSameGuest(userKey);
+  const seats = room.seatsOfSameGuest(userKey, "removal");
   room.removeUser(userKey);
   return removeSeats(room, seats, reason, options);
 };
