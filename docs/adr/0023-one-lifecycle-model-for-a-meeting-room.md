@@ -31,7 +31,7 @@ This model is the source of truth for the room lifecycle. Code and tests follow 
 | Next-meeting lobby | SFU | Knockers whose room closed, waiting for the next meeting at the code. |
 | `joinAttempts` | Connection | Only the newest join of a connection may act. |
 
-A room's stage follows from these: **Opening** (`awaitingOpener` set), **Recovering** (`restorer` set, window not over), **Lapsed** (`restorer` set, window over), **Running** (none of these, not ended), **Handing off** (Running, `handingOff` set), **Ended**. Only a Running or Handing off room records its call (`recordsItsCall`): it alone writes running records and hands out recovery passes. Only a Running room can end a meeting by emptying (`endsWhenEmpty`).
+A room's stage follows from these: **Opening** (`awaitingOpener` set), **Recovering** (`restorer` set, window not over), **Lapsed** (`restorer` set, window over), **Running** (none of these, not ended), **Waiting for a host** (Running with nobody seated as host and nobody eligible to promote; bounded by `cleanupDeadline`), **Handing off** (Running, `handingOff` set), **Ended**. Only a Running or Handing off room records its call (`recordsItsCall`): it alone writes running records and hands out recovery passes. Only a Running room can end a meeting by emptying (`endsWhenEmpty`).
 
 ### Events
 
@@ -42,11 +42,11 @@ A room's stage follows from these: **Opening** (`awaitingOpener` set), **Recover
 | A join into a claimed room | No change | Host only as the owner, a recorded host who is not removed (keeping their reason), someone from a Recovering call, or someone who may open a Lapsed one (both as a fallback) | Seated if admitted, invited and not removed, or the room is unlocked; else knocks | Pass if Running |
 | Admit | No change | No change | Admission given; that person's removal and block cleared (the host decided) | Running record; schedule decision |
 | Reject | No change | No change | Knock dropped | Nothing |
-| Kick, block | No change | That key's host reason cleared, and every tab of theirs stops hosting and is told so | Admissions cleared; removal set; block also blocks | Running record; schedule decision |
+| Kick, block (with or without removing them) | No change | That key's host reason cleared, every tab of theirs stops hosting and is told so, then the host follow-up | Admissions cleared; removal set; block also blocks | Running record; schedule decision |
 | Revoke admission | No change | Kept, but a kept host right no longer gets past the removal | Removal set | Running record; schedule decision |
 | Promote, transfer | No change | Co-host, whatever reason they had; transfer also makes them primary. Promoting the owner's tab is the owner arriving | No change | Running record |
 | Owner arrives | Recovering or Lapsed: Running | Owner hosts and is primary; every temporary host is demoted; co-hosts keep their seat | Demoted host stays admitted only if not removed; the owner's own removal is cleared (nobody removes the owner from its code) | Running record |
-| Seated person leaves | No change | If no host is left, the next participant is promoted as a fallback | No change | Nothing |
+| Seated person leaves | No change | Host follow-up | No change | Nothing |
 | Knocker leaves | No change | No change | Knock dropped | Nothing |
 | A newer join on the same connection, or a disconnect | The older join stops at its next wait and changes nothing | No change | No change | Nothing |
 | 10 s open deadline, still Opening | Nobody in it: closed (abandoned opening). People in it: Recovering for a lost call, else Running | Running: the first participant hosts as a fallback | Knockers of a closed room go to the next-meeting lobby | Abandoned: nothing. Running: running record |
@@ -68,6 +68,10 @@ An **abandoned opening** is a room that closes before anyone claims it, or a Rec
 
 No path that grants entry clears a removal it did not decide. Admit and allow are a host's decision and clear it. Demotion, locking the room, a recovery pass, an invitation, and a kept host or co-host right do not. Removing someone clears every mark tied to them: admissions, host, co-host and temporary host. The code's owner is the one exception: its own arrival clears its removal.
 
+### Host follow-up
+
+One function, `ensureHost`, runs after every kick, every block (whether or not it removes the person), every forced removal and every disconnect. It decides on what the action left, not on what the removed seat was: if nobody is seated as host, it promotes the first eligible participant as a fallback; if nobody is eligible, the room is Waiting for a host for `adminCleanupTimeout` (2 minutes), tells knockers nobody can let them in, and at the deadline promotes anyone eligible who arrived meanwhile, closes the room if it emptied, or ends the meeting for everyone. Eligible means not removed, not blocked and not needing readmission: a fallback never hands the host's seat to someone a host put out. It does nothing in a room that is Opening, Recovering, Handing off or Ended, which have deadlines of their own.
+
 ### Server-initiated shutdown
 
 A drain, a stop, a dead media worker and a room another SFU takes over are not meetings ending. The room goes Handing off first: it still writes running records and hands out passes, but emptying ends nothing and nobody is promoted as its people disconnect. A drain closes its rooms the non-ending way before it disconnects anyone, as a dead worker does. The call stays a lost call in the ledger, with its hosts, removals and passes, and comes back on whichever SFU people reach.
@@ -85,11 +89,12 @@ A reason belongs to a person (a user key) and a seat to a tab, so one person can
 1. A removed person never gets back in without a host letting them in (the owner excepted).
 2. Inside its recovery window, a lost call keeps its hosts and removals in the ledger, and its passes stay good.
 3. At most one join opens a room as its host, and while a call is lost only its hosts, its members who were not removed, or the owner host it.
-4. No room stays locked with nobody to let anyone in past its deadline: 10 s while Opening, the lost call's window while Recovering.
+4. No room stays locked with nobody to let anyone in past its deadline: 10 s while Opening, the lost call's window while Recovering, 2 minutes while Waiting for a host.
 5. While the owner is here as host, the only hosts are the owner and the people a host made co-host.
 6. Every host has exactly one recorded reason, and it is the right one.
 7. No seat is a host (`Admin`) without a recorded host reason for its user key, whichever of the person's tabs it is.
 8. A server-initiated shutdown (drain, stop, dead worker, another SFU taking the room) never ends a meeting, never voids its passes, and never adds to, clears or changes its hosts or removals.
+9. A fallback never chooses a removed, blocked or needs-readmission person.
 
 ## Consequences
 
@@ -99,6 +104,7 @@ A reason belongs to a person (a user key) and a seat to a tab, so one person can
 - An Opening room with people in it at 10 s is handed to them instead of staying locked with no host.
 - A Lapsed room with nobody in it closes and parks its knockers for the next meeting, even if their tabs never ask again.
 - Only a Running room hands out recovery passes. Someone seated in a Recovering room gets one at the next refresh after the call is running again, within a minute.
+- When the last host goes and only people a host removed are left, nobody is promoted; the meeting ends 2 minutes later unless a host comes back. Blocking a meeting's only host promotes someone else, as removing them does.
 - A drain or a stop no longer ends the calls on that SFU: they come back on the next SFU as recovered calls, with their hosts, removals and passes.
 - A revoked co-host keeps their reason across a restart, so letting them back in makes them a co-host again whether or not the SFU restarted.
 - Anyone who hosts an owned code only as a fallback (a pass takeover, a lapse, the last host leaving, the 10 s handover) loses host rights when the owner arrives; a co-host a host promoted keeps them.
@@ -117,7 +123,7 @@ A reason belongs to a person (a user key) and a seat to a tab, so one person can
 - `packages/sfu/server/roomRecoveryLedger.ts`: `coHostUserKeys` in the record
 - `packages/sfu/server/serverShutdown.ts`: `forceDrainRooms`, `handOffRooms`; `createSfuServer` `stop`, `init.ts` `cleanupDeadWorkerRooms`, `rooms.ts` `handOffRoomState`
 - `packages/sfu/test/server-shutdown.test.ts`: a forced drain through the real `POST /drain` route
-- `packages/sfu/server/admin/controlPlane.ts`: `settleUnclaimedRoom`, `offerLapsedRoom`, `kickClient`, `applyRoomPolicyUpdate`
+- `packages/sfu/server/admin/controlPlane.ts`: `ensureHost`, `settleUnclaimedRoom`, `offerLapsedRoom`, `kickClient`, `applyRoomPolicyUpdate`
 - `packages/sfu/server/socket/handlers/joinRoom.ts`: the claim of an Opening room, the host decision for a removed key
 - `packages/sfu/server/roomRecoveryPass.ts`: `issueRoomRecoveryPass`
 - `packages/sfu/server/rooms.ts`: `cleanupRoom`, `noteMeetingOver`
