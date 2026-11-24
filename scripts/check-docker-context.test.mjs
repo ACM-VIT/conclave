@@ -3,9 +3,12 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
-import { contextProblems, dockerIgnoreMatcher, parseDockerfile, repoRoot } from "./check-docker-context.mjs";
+import { contextProblems, dockerIgnoreMatcher, parseDockerfile, repoRoot, stepProblems, workspacePackages } from "./check-docker-context.mjs";
 
 const dockerIgnore = readFileSync(path.join(repoRoot, ".dockerignore"), "utf8");
+const sfuDockerfile = readFileSync(path.join(repoRoot, "packages/sfu/Dockerfile"), "utf8");
+const browserDockerfile = readFileSync(path.join(repoRoot, "packages/shared-browser/Dockerfile"), "utf8");
+const packages = workspacePackages(repoRoot);
 
 test("a re-included directory brings its whole subtree back, as Docker does", () => {
   const excluded = dockerIgnoreMatcher("**\n!packages/\n");
@@ -54,4 +57,22 @@ test("a package without node_modules and env excludes leaks them into the contex
   const problems = contextProblems(repoRoot, "**\n!package.json\n!pnpm-lock.yaml\n!pnpm-workspace.yaml\n!patches/\n!packages/\n");
   assert.ok(problems.includes("packages/sfu/Dockerfile: @conclave/apps-sdk build artifact packages/apps-sdk/node_modules/.bin/tsc would enter the build context"));
   assert.ok(problems.includes("packages/sfu/Dockerfile: @conclave/meeting-core build artifact packages/meeting-core/.env would enter the build context"));
+});
+
+test("the SFU install fails the check when a workspace manifest it needs is not copied first", () => {
+  const withoutAppsSdkManifest = sfuDockerfile.split("\n").filter((line) => !line.includes("packages/apps-sdk/package.json")).join("\n");
+  assert.deepEqual(stepProblems("packages/sfu/Dockerfile", parseDockerfile(withoutAppsSdkManifest), packages, true), [
+    "packages/sfu/Dockerfile: `pnpm install --filter @conclave/sfu... --frozen-lockfile --node-linker=isolated` runs before packages/apps-sdk/package.json is copied",
+  ]);
+  assert.deepEqual(stepProblems("packages/sfu/Dockerfile", parseDockerfile(sfuDockerfile), packages, true), []);
+});
+
+test("a pnpm script in a partial image workspace must skip the dependency reinstall", () => {
+  const staging = browserDockerfile.replace(" --config.verify-deps-before-run=false", "");
+  assert.deepEqual(stepProblems("packages/shared-browser/Dockerfile", parseDockerfile(staging), packages, true), [
+    "packages/shared-browser/Dockerfile: RUN `pnpm -C packages/shared-browser run build` reinstalls the partial image workspace first; pass --config.verify-deps-before-run=false",
+  ]);
+  assert.deepEqual(stepProblems("packages/shared-browser/Dockerfile", parseDockerfile(staging), packages, false), []);
+  assert.deepEqual(stepProblems("packages/shared-browser/Dockerfile", parseDockerfile(browserDockerfile), packages, true), []);
+  assert.deepEqual(stepProblems("x/Dockerfile", parseDockerfile('CMD ["pnpm", "--dir", "packages/sfu", "start"]'), packages, true).length, 1);
 });

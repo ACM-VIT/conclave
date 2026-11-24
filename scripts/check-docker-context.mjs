@@ -83,30 +83,61 @@ function logicalLines(text) {
     .filter(Boolean);
 }
 
+const VERIFY_DEPS_OFF = "--config.verify-deps-before-run=false";
+const PNPM_VALUE_FLAGS = new Set(["-C", "--dir", "--filter", "-F"]);
+const PNPM_INSTALLS = new Set(["install", "i", "add", "fetch"]);
+
+function instructionArgs(rest) {
+  const args = rest.join(" ").trim();
+  if (args.startsWith("[")) return JSON.parse(args);
+  return rest;
+}
+
 export function parseDockerfile(text) {
-  const copySources = [];
-  const filters = [];
+  const steps = [];
   for (const line of logicalLines(text)) {
     const [instruction, ...rest] = line.split(/\s+/);
     const keyword = instruction.toUpperCase();
     if (keyword === "COPY" || keyword === "ADD") {
-      const args = rest.join(" ");
-      const tokens = args.trim().startsWith("[") ? JSON.parse(args.trim()) : rest;
-      const flags = tokens.filter((token) => token.startsWith("--"));
-      if (flags.some((flag) => flag.startsWith("--from"))) continue;
+      const tokens = instructionArgs(rest);
+      if (tokens.some((token) => token.startsWith("--from"))) continue;
       const paths = tokens.filter((token) => !token.startsWith("--"));
-      copySources.push(...paths.slice(0, -1).map(cleanPattern).filter((source) => source !== "."));
-    } else if (keyword === "RUN") {
-      const tokens = rest.join(" ").split(/\s+/);
-      tokens.forEach((token, i) => {
-        const [flag, inline] = token.split("=", 2);
-        if (flag !== "--filter" && flag !== "-F") return;
-        const value = inline ?? tokens[i + 1];
-        if (value && !value.startsWith("...")) filters.push(value.replace(/\.\.\.$/, ""));
-      });
+      steps.push({ kind: "copy", sources: paths.slice(0, -1).map(cleanPattern) });
+    } else if (keyword === "RUN" || keyword === "CMD" || keyword === "ENTRYPOINT") {
+      steps.push({ kind: "command", instruction: keyword, command: instructionArgs(rest).join(" ") });
     }
   }
-  return { copySources, filters };
+  const copySources = steps.flatMap((step) => (step.kind === "copy" ? step.sources : [])).filter((source) => source !== ".");
+  const pnpmCommands = steps.flatMap((step, index) =>
+    step.kind === "command" ? pnpmInvocations(step.command).map((invocation) => ({ ...invocation, index, instruction: step.instruction })) : [],
+  );
+  const filters = pnpmCommands.flatMap((invocation) => invocation.filters);
+  return { steps, copySources, filters, pnpmCommands };
+}
+
+export function pnpmInvocations(command) {
+  return command
+    .split(/&&|\|\||;|\|/)
+    .map((segment) => segment.trim().split(/\s+/).filter(Boolean))
+    .filter((tokens) => tokens[0] === "pnpm")
+    .map((tokens) => {
+      const filters = [];
+      let subcommand;
+      for (let i = 1; i < tokens.length; i += 1) {
+        const [flag, inline] = tokens[i].split("=", 2);
+        if (!flag.startsWith("-")) subcommand ??= flag;
+        else if (PNPM_VALUE_FLAGS.has(flag) && inline === undefined) {
+          if (flag === "--filter" || flag === "-F") filters.push(tokens[i + 1]);
+          i += 1;
+        } else if ((flag === "--filter" || flag === "-F") && inline) filters.push(inline);
+      }
+      return {
+        text: tokens.join(" "),
+        installs: PNPM_INSTALLS.has(subcommand),
+        verifiesDeps: !tokens.includes(VERIFY_DEPS_OFF),
+        filters: filters.filter((value) => value && !value.startsWith("...")).map((value) => value.replace(/\.\.\.$/, "")),
+      };
+    });
 }
 
 export function workspacePackages(root = repoRoot) {
@@ -158,13 +189,30 @@ function trackedFiles(root, pathspec) {
 }
 
 export function imageInputs(root, dockerfile, packages = workspacePackages(root)) {
-  const { copySources, filters } = parseDockerfile(readFileSync(path.join(root, dockerfile), "utf8"));
+  const parsed = parseDockerfile(readFileSync(path.join(root, dockerfile), "utf8"));
   const owner = [...packages].find(([, pkg]) => dockerfile.startsWith(`${pkg.dir}/`));
-  const names = filters.filter((name) => packages.has(name));
+  const names = parsed.filters.filter((name) => packages.has(name));
   return {
-    copySources,
+    ...parsed,
     packages: workspaceClosure(owner ? [owner[0], ...names] : names, packages),
   };
+}
+
+export function stepProblems(dockerfile, inputs, packages, partialWorkspace) {
+  const problems = [];
+  for (const invocation of inputs.pnpmCommands) {
+    if (invocation.installs) {
+      const copiedBefore = new Set(inputs.steps.slice(0, invocation.index).flatMap((step) => (step.kind === "copy" ? step.sources : [])));
+      if (copiedBefore.has(".")) continue;
+      for (const name of workspaceClosure(invocation.filters.filter((value) => packages.has(value)), packages)) {
+        const manifest = `${packages.get(name).dir}/package.json`;
+        if (!copiedBefore.has(manifest)) problems.push(`${dockerfile}: \`${invocation.text}\` runs before ${manifest} is copied`);
+      }
+    } else if (partialWorkspace && invocation.verifiesDeps) {
+      problems.push(`${dockerfile}: ${invocation.instruction} \`${invocation.text}\` reinstalls the partial image workspace first; pass ${VERIFY_DEPS_OFF}`);
+    }
+  }
+  return problems;
 }
 
 export function contextProblems(root = repoRoot, dockerIgnoreText = readFileSync(path.join(root, ".dockerignore"), "utf8")) {
@@ -172,9 +220,11 @@ export function contextProblems(root = repoRoot, dockerIgnoreText = readFileSync
   const packages = workspacePackages(root);
   const problems = [];
   const dockerfiles = rootContextDockerfiles(root);
+  const partialWorkspace = [...packages.values()].some(({ dir }) => excluded(`${dir}/package.json`));
   if (!dockerfiles.length) problems.push("no docker-compose file builds a Dockerfile from the repository root context");
   for (const dockerfile of dockerfiles) {
     const inputs = imageInputs(root, dockerfile, packages);
+    problems.push(...stepProblems(dockerfile, inputs, packages, partialWorkspace));
     for (const source of inputs.copySources) {
       const files = trackedFiles(root, source);
       if (!files.length) problems.push(`${dockerfile}: COPY source ${source} matches no tracked file`);
