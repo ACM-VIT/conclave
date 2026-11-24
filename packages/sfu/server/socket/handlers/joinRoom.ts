@@ -80,6 +80,7 @@ import {
   withdrawWaitingRequest,
 } from "../../admin/controlPlane.js";
 import type { LostRoom, RecalledRoom } from "../../roomRecoveryLedger.js";
+import { emitToHost } from "../../admin/hostOnlyEvents.js";
 import { getSocketAuthUser } from "../auth.js";
 import type { ConnectionContext } from "../context.js";
 import { registerAdminHandlers } from "./adminHandlers.js";
@@ -1465,7 +1466,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             userId: pending.userKey,
             displayName: pending.displayName || pending.userKey,
           }));
-          socket.emit("pendingUsersSnapshot", {
+          emitToHost(context.currentClient, "pendingUsersSnapshot", {
             users: pendingUsers,
             roomId: context.currentRoom.id,
           });
@@ -1491,12 +1492,8 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
               if (clientId === userId) {
                 continue;
               }
-              if (
-                usedStageInvites.length > 0 &&
-                client instanceof Admin &&
-                !client.isObserver
-              ) {
-                client.socket.emit("webinar:stageInviteUsed", {
+              if (usedStageInvites.length > 0 && client instanceof Admin) {
+                emitToHost(client, "webinar:stageInviteUsed", {
                   roomId: context.currentRoom.id,
                   userId,
                   invitedUserKeys: usedStageInvites,
@@ -1567,8 +1564,8 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             ),
           });
         }
-        if (webinarConfig.enabled && isModeratorClient) {
-          socket.emit("webinar:handQueueChanged", {
+        if (webinarConfig.enabled && context.currentClient instanceof Admin) {
+          emitToHost(context.currentClient, "webinar:handQueueChanged", {
             roomId: context.currentRoom.id,
             queue: context.currentRoom.getWebinarHandQueue(),
           });
