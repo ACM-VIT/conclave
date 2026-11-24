@@ -41,6 +41,12 @@ type Outcome = {
   saved?: string[];
   threw?: boolean;
   supersededChunks?: number;
+  forwarded?: number;
+  status?: string;
+  opened?: number;
+  oldProviderAudio?: number;
+  restarted?: string[];
+  retained?: { linesWithinCap: boolean; mappingsWithinCap: boolean; lines: number };
 };
 
 const ada = { userId: "ada", displayName: "Ada" };
@@ -51,7 +57,13 @@ const audioMessages = (socket: { sent: Record<string, unknown>[] }) =>
     return typeof audio === "string" || Boolean((audio as { data?: string } | undefined)?.data);
   }).length;
 const shown = (rig: Rig) =>
-  rig.room.segments.map(({ text, speakerUserId }) => [text, speakerUserId] as [string, string | undefined]);
+  rig.viewerTranscript().segments.map(({ text, speakerUserId }) => [text, speakerUserId] as [string, string | undefined]);
+const forwardedTo = (sockets: { sent: Record<string, unknown>[] }[]) =>
+  sockets.reduce(
+    (sum, socket) =>
+      sum + audioMessages(socket) + socket.sent.filter(({ type }) => String(type).includes("commit")).length,
+    0,
+  );
 const bufferedBytes = (rig: Rig) =>
   (rig.room as unknown as { transcriptionRecoveryAudio: { bytes: number } }).transcriptionRecoveryAudio.bytes;
 
@@ -65,7 +77,7 @@ const signalsActive = async (rig: Rig) => {
   return socket;
 };
 
-const cases: { thread: string; model: string; run: (rig: Rig) => Promise<Outcome> }[] = [
+const cases: { thread: string; model: string; env?: Record<string, string>; run: (rig: Rig) => Promise<Outcome> }[] = [
   {
     thread: "Replay signals hide new speech",
     model: SARVAM,
@@ -453,6 +465,176 @@ const cases: { thread: string; model: string; run: (rig: Rig) => Promise<Outcome
     },
   },
   {
+    thread: "Restored pauses leak audio",
+    model: OPENAI,
+    async run(rig) {
+      await rig.speak(ada);
+      await rig.send({ type: "session.pause" });
+      await settle();
+      rig.connectPlans.push({ lateMs: 1_000 });
+      const before = rig.providerSockets().length;
+      const restarted = await rig.restart({
+        env: { OPENAI_API_KEY: "sk-global" },
+        snapshot: (saved) => {
+          saved.session.keySource = "global";
+        },
+      });
+      await restarted.send({ type: "audio.chunk", audio: AUDIO.speech, speaker: ada });
+      await restarted.send({ type: "audio.commit", speaker: ada });
+      await vi.advanceTimersByTimeAsync(1_500);
+      await restarted.send({ type: "audio.chunk", audio: AUDIO.speech, speaker: ada });
+      await restarted.send({ type: "audio.commit", speaker: ada });
+      await settle();
+      return {
+        shown: [],
+        forwarded: forwardedTo(rig.providerSockets().slice(before)),
+        status: (restarted.room.session as { status?: string } | null)?.status,
+      };
+    },
+  },
+  {
+    thread: "Late answers take the next caption",
+    model: SARVAM,
+    async run(rig) {
+      const socket = await signalsActive(rig);
+      await rig.speak(ada);
+      socket.emit(sarvamSpeechStart());
+      await rig.endTurn(ada);
+      await vi.advanceTimersByTimeAsync(20_000);
+      await rig.speak(grace);
+      socket.emit(sarvamSpeechStart());
+      await rig.endTurn(grace);
+      await vi.advanceTimersByTimeAsync(DEADLINE - 20_000 + 1_000);
+      socket.emit(sarvamFinal("ada-late", "Ada late."));
+      socket.emit(sarvamFinal("grace", "Grace words."));
+      await vi.advanceTimersByTimeAsync(DEADLINE + 100);
+      return { shown: shown(rig) };
+    },
+  },
+  {
+    thread: "Repeated answers take the next caption",
+    model: SARVAM,
+    async run(rig) {
+      const socket = await signalsActive(rig);
+      await rig.speak(ada);
+      socket.emit(sarvamSpeechStart());
+      await rig.endTurn(ada);
+      await vi.advanceTimersByTimeAsync(500);
+      await rig.speak(grace);
+      socket.emit(sarvamSpeechStart());
+      await rig.endTurn(grace);
+      socket.emit(sarvamFinal("ada", "Ada words."));
+      socket.emit(sarvamFinal("ada", "Ada words."));
+      socket.emit(sarvamFinal("grace", "Grace words."));
+      await vi.advanceTimersByTimeAsync(DEADLINE + 100);
+      return { shown: shown(rig) };
+    },
+  },
+  {
+    thread: "Replays land after later finals",
+    model: SARVAM,
+    async run(rig) {
+      const socket = await signalsActive(rig);
+      await rig.speak(ada);
+      await rig.speak(ada);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await rig.speak(grace);
+      socket.emit(sarvamSpeechStart());
+      socket.emit(sarvamFinal("g", "Grace words."));
+      await settle();
+      socket.disconnect();
+      await settle();
+      const replacement = rig.providerSockets().at(-1)!;
+      replacement.emit(sarvamSpeechStart());
+      replacement.emit(sarvamFinal("a", "Ada words."));
+      await vi.advanceTimersByTimeAsync(DEADLINE + 100);
+      return { shown: shown(rig), saved: rig.lastSnapshotTexts() };
+    },
+  },
+  {
+    thread: "A failed save strands a switch",
+    model: SARVAM,
+    async run(rig) {
+      const socket = await signalsActive(rig);
+      let failures = 1;
+      rig.saves.before = async () => {
+        if (failures <= 0) return;
+        failures -= 1;
+        throw new Error("Snapshot write failed (injected).");
+      };
+      const before = rig.providerRequestCount();
+      const sentBefore = audioMessages(socket);
+      const switching = rig.switchTo("ta").catch(() => undefined);
+      await settle();
+      await rig.speak(ada);
+      const oldProviderAudio = audioMessages(socket) - sentBefore;
+      await vi.advanceTimersByTimeAsync(10_000);
+      await switching;
+      rig.saves.before = undefined;
+      return {
+        shown: [],
+        opened: rig.providerRequestCount() - before,
+        status: rig.room.session?.status,
+        oldProviderAudio,
+      };
+    },
+  },
+  {
+    thread: "Restarts erase words viewers saw",
+    model: OPENAI,
+    async run(rig) {
+      const [socket] = rig.providerSockets();
+      await rig.speak(ada);
+      await rig.commit(ada);
+      socket.emit(openAiCommitted("a"));
+      socket.emit(openAiDelta("a", "First "));
+      socket.emit(openAiDelta("a", "then second"));
+      await settle();
+      return { shown: [], restarted: await rig.restartedTexts() };
+    },
+  },
+  {
+    thread: "Restarts lose speech silently",
+    model: OPENAI,
+    async run(rig) {
+      await rig.speak(ada);
+      await rig.speak(ada);
+      await settle();
+      return { shown: [], restarted: await rig.restartedTexts() };
+    },
+  },
+  {
+    thread: "Ended lines pile up",
+    model: OPENAI,
+    env: { TRANSCRIPT_MAX_SEGMENTS: "40" },
+    async run(rig) {
+      const [socket] = rig.providerSockets();
+      for (let index = 0; index < 120; index += 1) {
+        await rig.sendAudio("silence", ada);
+        await rig.commit(ada);
+        socket.emit(openAiCommitted(`s${index}`));
+        socket.emit({
+          type: "conversation.item.input_audio_transcription.failed",
+          item_id: `s${index}`,
+          error: { message: "No speech." },
+        });
+        await settle();
+      }
+      const internals = rig.room as unknown as {
+        ledger: { size: number };
+        liveConnection: { providerToLine: Map<string, string> } | null;
+      };
+      return {
+        shown: [],
+        retained: {
+          linesWithinCap: internals.ledger.size <= 40,
+          mappingsWithinCap: (internals.liveConnection?.providerToLine.size ?? 0) <= 40,
+          lines: Math.min(internals.ledger.size, 41),
+        },
+      };
+    },
+  },
+  {
     thread: "Later audio gets dropped first",
     model: OPENAI,
     async run(rig) {
@@ -508,6 +690,21 @@ const expected: Record<string, Outcome> = {
   },
   "Switches can lose buffered speech": { shown: [], replayedChunks: 3, supersededChunks: 0 },
   "Corrupt audio escapes error checks": { shown: [["Setup.", "grace"], ["Still heard.", "ada"]], threw: false },
+  "Restored pauses leak audio": { shown: [], forwarded: 0, status: "paused" },
+  "Late answers take the next caption": {
+    shown: [["Setup.", "grace"], [GAP, "ada"], ["Grace words.", "grace"]],
+  },
+  "Repeated answers take the next caption": {
+    shown: [["Setup.", "grace"], ["Ada words.", "ada"], ["Grace words.", "grace"]],
+  },
+  "Replays land after later finals": {
+    shown: [["Setup.", "grace"], ["Ada words.", "ada"], ["Grace words.", "grace"]],
+    saved: ["Setup.", "Ada words.", "Grace words."],
+  },
+  "A failed save strands a switch": { shown: [], opened: 1, status: "live", oldProviderAudio: 1 },
+  "Restarts erase words viewers saw": { shown: [], restarted: ["First then second"] },
+  "Restarts lose speech silently": { shown: [], restarted: [GAP] },
+  "Ended lines pile up": { shown: [], retained: { linesWithinCap: true, mappingsWithinCap: true, lines: 40 } },
   "Later audio gets dropped first": {
     shown: [],
     bufferedBytes: Math.ceil((0.3 * REPLAY_AUDIO_LIMIT) / LONG_SPEECH.length) * LONG_SPEECH.length,
@@ -527,7 +724,7 @@ describe("the caption model: what each signal claims, what is shown and what is 
   it.each(cases.map((testCase) => [testCase.thread, testCase] as const))("%s", async (_, testCase) => {
     vi.useFakeTimers();
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    const rig = await transcriptRoomRig(lookup, testCase.model);
+    const rig = await transcriptRoomRig(lookup, testCase.model, testCase.env);
     await rig.start(testCase.model === OPENAI ? "en" : "hi");
     expect(await testCase.run(rig)).toEqual(expected[testCase.thread]);
   });

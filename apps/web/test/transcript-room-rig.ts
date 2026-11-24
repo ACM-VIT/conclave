@@ -12,12 +12,15 @@ export class FakeProviderSocket {
   closed = false;
   sendsBeforeFailing = Number.POSITIVE_INFINITY;
   requestIndex = -1;
+  onSend: ((socket: FakeProviderSocket, message: Record<string, unknown>) => void) | null = null;
   private listeners = new Map<string, Listener[]>();
   constructor(readonly url: string) {}
   accept() {}
   send(raw: string) {
     if (this.sent.length >= this.sendsBeforeFailing) throw new Error("Provider socket disconnected.");
-    this.sent.push(JSON.parse(raw));
+    const message = JSON.parse(raw);
+    this.sent.push(message);
+    this.onSend?.(this, message);
   }
   close() {
     this.closed = true;
@@ -80,6 +83,7 @@ export async function transcriptRoomRig(
   lookup: Mock,
   transcriptModel: string,
   env: Partial<Env> = {},
+  hooks: { onProviderSend?: (socket: FakeProviderSocket, message: Record<string, unknown>) => void } = {},
 ) {
   const sockets: FakeProviderSocket[] = [];
   const connectPlans: Array<"unreachable" | number | { lateMs: number }> = [];
@@ -95,6 +99,7 @@ export async function transcriptRoomRig(
       if (typeof plan === "object") await new Promise((resolve) => setTimeout(resolve, plan.lateMs));
       const socket = new FakeProviderSocket(String(url));
       socket.requestIndex = requestIndex;
+      socket.onSend = hooks.onProviderSend ?? null;
       if (typeof plan === "number") socket.sendsBeforeFailing = plan;
       sockets.push(socket);
       return { webSocket: socket, status: 101 };
@@ -245,6 +250,34 @@ export async function transcriptRoomRig(
   };
   const restartedTexts = async (snapshotIndex = snapshots.length - 1) =>
     (await restartedSegments(snapshotIndex)).map(({ text }) => text);
+  const restart = async (
+    overrides: { env?: Partial<Env>; snapshot?: (saved: Record<string, unknown> & { session: Record<string, unknown> }) => void } = {},
+  ) => {
+    const saved = structuredClone(snapshots.at(-1)) as unknown as Record<string, unknown> & { session: Record<string, unknown> };
+    overrides.snapshot?.(saved);
+    const restartedSnapshots: { segments: TestSegment[] }[] = [];
+    const restarted = new TranscriptRoom(
+      {
+        storage: {
+          get: async (key: string) => (key === "snapshot" ? saved : undefined),
+          put: async (_key: string, value: { segments: TestSegment[] }) => {
+            restartedSnapshots.push(structuredClone(value));
+          },
+          delete: async () => true,
+          setAlarm: async () => {},
+        },
+        waitUntil: () => undefined,
+      } as unknown as DurableObjectState,
+      { TRANSCRIPT_TRANSCRIPTION_LANGUAGE: "en", ...env, ...overrides.env } as Env,
+    ) as unknown as TestRoom;
+    await restarted.loaded;
+    restarted.viewers.set(viewer.socket, viewer);
+    return {
+      room: restarted,
+      snapshots: restartedSnapshots,
+      send: (message: object) => restarted.handleMessage(viewer, JSON.stringify(message)),
+    };
+  };
   const viewerSnapshot = async () => {
     await send({ type: "export.snapshot" });
     return sentMessages()
@@ -275,6 +308,7 @@ export async function transcriptRoomRig(
     lastSnapshotSegment,
     restartedSegments,
     restartedTexts,
+    restart,
     snapshotCount,
     broadcastPlaces,
     broadcastPlacesByWords,

@@ -46,6 +46,7 @@ afterEach(() => {
 const RUNS = Number(process.env.TRANSCRIPT_CHUNK_ORDER_RUNS ?? 300);
 const EXTENDED_RUNS = Number(process.env.TRANSCRIPT_CHUNK_ORDER_EXTENDED_RUNS ?? 300);
 const BURST_RUNS = Number(process.env.TRANSCRIPT_CHUNK_ORDER_BURST_RUNS ?? 200);
+const PAUSE_RUNS = Number(process.env.TRANSCRIPT_CHUNK_ORDER_PAUSE_RUNS ?? 200);
 const LIMIT_CHUNKS = 24;
 const MALFORMED = ["%%%%", "@@@@AAAA", "A", "====", "AB=C", "\u0000\u0001"];
 const LANGUAGES = ["ta", "hi", "bn"];
@@ -100,9 +101,28 @@ type Ledger = {
 type RoomInternals = {
   ledger: Ledger;
   uncommittedAudio: Map<string, { speaker: { userId: string }; chunks: HeldChunk[] }>;
-  transcriptionRecoveryAudio: { chunks(): HeldChunk[] };
-  segments: { itemId: string; text: string }[];
+  transcriptionRecoveryAudio: {
+    chunks(): HeldChunk[];
+    enqueueMany(events: { type: string; audio?: string }[], ...rest: unknown[]): void;
+  };
+  segments: SavedLine[];
+  session: { status?: string } | null;
   state: { storage: { put: (key: string, value: unknown) => Promise<void> } };
+  keepReplayAudioWithinLimit: () => void;
+};
+type SavedLine = { itemId: string; text: string; speakerUserId?: string; sequence: number };
+type Mode = { extended?: boolean; bursts?: boolean; pauses?: boolean };
+
+const wordsOf = (text: string) => text.split(/\s+/).filter(Boolean);
+const keepsWordsInOrder = (kept: string, seen: string) => {
+  const keptWords = wordsOf(kept);
+  let at = 0;
+  for (const word of wordsOf(seen)) {
+    while (at < keptWords.length && keptWords[at] !== word) at += 1;
+    if (at === keptWords.length) return false;
+    at += 1;
+  }
+  return true;
 };
 
 const audioCount = (socket: FakeProviderSocket) =>
@@ -111,15 +131,33 @@ const audioCount = (socket: FakeProviderSocket) =>
     return typeof audio === "string" || Boolean((audio as { data?: string } | undefined)?.data);
   }).length;
 
-const runOnce = async (seed: number, extended = false, bursts = false): Promise<string[]> => {
+const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
+  const extended = Boolean(mode.extended || mode.bursts || mode.pauses);
+  const bursts = Boolean(mode.bursts);
   const random = randomFrom(seed);
+  const pauseRandom = randomFrom(seed * 7919 + 17);
   const problems: string[] = [];
   limit.bytes = bursts ? VOICED[0].length * LIMIT_CHUNKS : limit.real;
   vi.useFakeTimers();
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "info").mockImplementation(() => {});
   const openai = extended && seed % 3 === 0;
-  const rig = await transcriptRoomRig(lookup, openai ? OPENAI : SARVAM);
+  const forwardedWhilePaused: string[] = [];
+  const rig = await transcriptRoomRig(
+    lookup,
+    openai ? OPENAI : SARVAM,
+    { TRANSCRIPT_TOKEN_SECRET: "chunk-order-secret" },
+    {
+      onProviderSend: (providerSocket, message) => {
+        const audio = (message as { audio?: unknown }).audio;
+        const carriesAudio = typeof audio === "string" || Boolean((audio as { data?: string } | undefined)?.data);
+        const status = (rig?.room as unknown as RoomInternals | undefined)?.session?.status;
+        if (carriesAudio && status === "paused") {
+          forwardedWhilePaused.push(`request ${providerSocket.requestIndex}`);
+        }
+      },
+    },
+  );
   await rig.start(openai ? "en" : "hi");
   let acked = 0;
   const openItems: string[] = [];
@@ -148,23 +186,65 @@ const runOnce = async (seed: number, extended = false, bursts = false): Promise<
   const order: Sent[] = [];
   const lastHolder = new Map<string, string>();
   const shown = new Set<string>();
+  const endedChunkLine = new Map<string, string>();
   const roomTurn = new Map<string, number>();
   const runOf = new Map<number, number>();
   const removed = new Set<string>();
   const everHeld = new Set<string>();
+  const evicted = new Set<string>();
+  const sentWhilePaused = new Set<string>();
   const ledger = room.ledger;
   const end = ledger.end.bind(ledger);
   ledger.end = (line, ...rest) => {
-    for (const chunk of line.audio) shown.add(chunk.audio);
+    for (const chunk of line.audio) endedChunkLine.set(chunk.audio, line.id);
     end(line, ...rest);
   };
   const remove = ledger.remove.bind(ledger);
   ledger.remove = (id) => {
     const line = ledger.get(id);
     const ended = line && (line.state === "final" || line.state === "gap" || line.state === "dropped");
-    for (const chunk of line?.audio ?? []) (ended ? shown : removed).add(chunk.audio);
+    for (const chunk of line?.audio ?? []) {
+      if (ended) endedChunkLine.set(chunk.audio, line.id);
+      else removed.add(chunk.audio);
+    }
     remove(id);
   };
+  const countedByLimit = () => [
+    ...room.ledger.activeUnordered().flatMap(({ audio }) => audio),
+    ...Array.from(room.uncommittedAudio.values()).flatMap(({ chunks }) => chunks),
+    ...room.transcriptionRecoveryAudio.chunks(),
+  ];
+  const recordEvictions = (before: string[]) => {
+    const after = new Set(countedByLimit().map(({ audio }) => audio));
+    const dropped = before.filter((audio) => !after.has(audio) && sent.has(audio));
+    if (dropped.length === 0) return;
+    const newestDropped = Math.max(...dropped.map((audio) => sent.get(audio)!.index));
+    const oldestKept = [...after]
+      .map((audio) => sent.get(audio))
+      .filter((info): info is Sent => info !== undefined)
+      .sort((left, right) => left.index - right.index)[0];
+    if (oldestKept && oldestKept.index < newestDropped) {
+      report(`the audio limit dropped #${newestDropped} but kept older ${describeChunk(oldestKept)}`);
+    }
+    for (const audio of dropped) evicted.add(audio);
+  };
+  const keepWithinLimit = room.keepReplayAudioWithinLimit.bind(room);
+  room.keepReplayAudioWithinLimit = () => {
+    const before = countedByLimit().map(({ audio }) => audio);
+    keepWithinLimit();
+    recordEvictions(before);
+  };
+  const buffer = room.transcriptionRecoveryAudio;
+  const enqueueMany = buffer.enqueueMany.bind(buffer);
+  buffer.enqueueMany = (events, ...rest) => {
+    const before = [
+      ...countedByLimit().map(({ audio }) => audio),
+      ...events.flatMap((event) => ("audio" in event && typeof event.audio === "string" ? [event.audio] : [])),
+    ];
+    enqueueMany(events, ...rest);
+    recordEvictions(before);
+  };
+  let paused = false;
   let speaker = speakers[0];
   let turn = 0;
   let run = 0;
@@ -172,17 +252,20 @@ const runOnce = async (seed: number, extended = false, bursts = false): Promise<
   const saveMode = { delayMs: 0, fail: false };
   let savesInFlight = 0;
   let lastSaveFailed = false;
-  let savedForms = new Map<string, string>();
   const delivered = new Set<string>();
   const audioAtSwitch = new Map<FakeProviderSocket, number>();
   let switchFloor = -1;
+  let liveAtSwitch: FakeProviderSocket | null = null;
+  let replacedAt: number | null = null;
+  let sentSinceSwitch = 0;
+  const liveSocket = () =>
+    (rig.room as unknown as { liveConnection: { session: { socket?: FakeProviderSocket } } | null }).liveConnection
+      ?.session.socket ?? null;
   const switches: Promise<unknown>[] = [];
-  if (extended) {
+  {
     const put = room.state.storage.put.bind(room.state.storage);
     let writes: Promise<unknown> = Promise.resolve();
     room.state.storage.put = (key, value) => {
-      const segments = (value as { segments?: { itemId: string; text: string }[] }).segments ?? [];
-      const forms = new Map(segments.map(({ itemId, text }) => [itemId, text === GAP ? "gap" : "words"]));
       const { delayMs, fail } = saveMode;
       savesInFlight += 1;
       const write = writes.then(async () => {
@@ -190,7 +273,6 @@ const runOnce = async (seed: number, extended = false, bursts = false): Promise<
           if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
           if (fail) throw new Error(SAVE_FAILURE);
           await put(key, value);
-          savedForms = forms;
           lastSaveFailed = false;
         } catch (error) {
           lastSaveFailed = true;
@@ -219,14 +301,75 @@ const runOnce = async (seed: number, extended = false, bursts = false): Promise<
 
   const describeChunk = (info: Sent) => `#${info.index} ${info.speaker}`;
 
-  const countedByLimit = () => [
-    ...room.ledger.activeUnordered().flatMap(({ audio }) => audio),
-    ...Array.from(room.uncommittedAudio.values()).flatMap(({ chunks }) => chunks),
-    ...room.transcriptionRecoveryAudio.chunks(),
-  ];
+  const seenByViewers = () => {
+    const viewer = rig.viewerTranscript();
+    return [...viewer.segments, ...viewer.partials.values()]
+      .filter(({ text }) => text.trim() !== "" && text !== GAP)
+      .sort((left, right) => left.sequence - right.sequence);
+  };
+
+  const checkKept = (stage: string, kept: SavedLine[], where: string) => {
+    const byItem = new Map(kept.map((line) => [line.itemId, line]));
+    const seen = seenByViewers();
+    for (const line of seen) {
+      const saved = byItem.get(line.itemId);
+      if (!saved || !keepsWordsInOrder(saved.text, line.text) || saved.speakerUserId !== line.speakerUserId) {
+        report(
+          `${stage}: viewers saw "${line.text}" under ${line.speakerUserId} but ${where} holds ${
+            saved ? `"${saved.text}" under ${saved.speakerUserId}` : "nothing"
+          }`,
+        );
+        return;
+      }
+    }
+    const seenOrder = seen.map(({ itemId }) => itemId);
+    const keptOrder = [...kept]
+      .sort((left, right) => left.sequence - right.sequence)
+      .map(({ itemId }) => itemId)
+      .filter((itemId) => seenOrder.includes(itemId));
+    if (keptOrder.join() !== seenOrder.join()) {
+      report(`${stage}: viewers saw lines in the order ${seenOrder.join(",")} but ${where} keeps ${keptOrder.join(",")}`);
+    }
+  };
+
+  const checkViewers = (stage: string) => {
+    const viewer = rig.viewerTranscript();
+    const finals = new Map(viewer.segments.map((segment) => [segment.itemId, segment]));
+    for (const segment of room.segments) {
+      const seen = finals.get(segment.itemId);
+      const want = [segment.text, segment.speakerUserId, segment.sequence];
+      const got = seen ? [seen.text, seen.speakerUserId, seen.sequence] : null;
+      if (JSON.stringify(got) !== JSON.stringify(want)) {
+        report(`${stage}: the room shows ${JSON.stringify(want)} for ${segment.itemId} but viewers have ${JSON.stringify(got)}`);
+        return;
+      }
+    }
+    for (const line of room.ledger.activeUnordered()) {
+      if (!line.text) continue;
+      const seen = viewer.partials.get(line.id);
+      const want = [line.text, line.speaker.userId, line.place.sequence];
+      const got = seen ? [seen.text, seen.speakerUserId, seen.sequence] : null;
+      if (JSON.stringify(got) !== JSON.stringify(want)) {
+        report(`${stage}: the room shows live ${JSON.stringify(want)} for ${line.id} but viewers have ${JSON.stringify(got)}`);
+        return;
+      }
+    }
+    if (savesInFlight === 0 && !lastSaveFailed) {
+      checkKept(stage, (rig.snapshots.at(-1)?.segments ?? []) as SavedLine[], "the saved transcript");
+    }
+    if (forwardedWhilePaused.length > 0) {
+      report(`${stage}: a provider (${forwardedWhilePaused[0]}) received audio while captions were paused`);
+      forwardedWhilePaused.length = 0;
+    }
+  };
 
   const check = (stage: string) => {
     const now = Date.now();
+    checkViewers(stage);
+    const viewerFinalIds = new Set(rig.viewerTranscript().segments.map(({ itemId }) => itemId));
+    for (const [audio, lineId] of endedChunkLine) {
+      if (viewerFinalIds.has(lineId)) shown.add(audio);
+    }
     const holders = new Map<string, string>();
     const hold = (audio: string, holder: string) => {
       if (!sent.has(audio)) return;
@@ -241,7 +384,7 @@ const runOnce = async (seed: number, extended = false, bursts = false): Promise<
         const info = sent.get(chunk.audio);
         if (!info) continue;
         hold(chunk.audio, `line ${line.id}`);
-        if (ended) shown.add(chunk.audio);
+        if (ended && viewerFinalIds.has(line.id)) shown.add(chunk.audio);
         if (info.speaker !== line.speaker.userId) {
           report(`${stage}: ${describeChunk(info)} shown under ${line.speaker.userId}`);
         }
@@ -254,7 +397,11 @@ const runOnce = async (seed: number, extended = false, bursts = false): Promise<
         const first = indices[0];
         const last = indices[indices.length - 1];
         const crossed = order.find(
-          (other) => other.index > first && other.index < last && other.speaker !== line.speaker.userId,
+          (other) =>
+            other.index > first &&
+            other.index < last &&
+            other.speaker !== line.speaker.userId &&
+            !sentWhilePaused.has((other.voiced ? VOICED : QUIET)[other.index]),
         );
         if (crossed) report(`${stage}: line ${line.id} spans ${describeChunk(crossed)} from another speaker`);
       }
@@ -266,16 +413,26 @@ const runOnce = async (seed: number, extended = false, bursts = false): Promise<
       }
     }
     for (const chunk of room.transcriptionRecoveryAudio.chunks()) hold(chunk.audio, "buffered");
-    if (extended && savesInFlight === 0 && !lastSaveFailed) {
-      for (const line of room.ledger.activeUnordered()) {
-        if (line.text.trim() !== "" && savedForms.get(line.id) !== "words") {
-          report(`${stage}: line ${line.id} shows words that were never saved`);
+    if (switchFloor >= 0) {
+      const live = liveSocket();
+      if (replacedAt === null && live && live.requestIndex >= switchFloor) {
+        replacedAt = liveAtSwitch ? audioCount(liveAtSwitch) : 0;
+        for (const [audio, holder] of lastHolder) if (holder !== "buffered") delivered.add(audio);
+        if (liveAtSwitch) {
+          for (const info of order.slice(sentSinceSwitch)) {
+            const audio = (info.voiced ? VOICED : QUIET)[info.index];
+            if (!holders.has(audio)) delivered.add(audio);
+          }
         }
       }
-    }
-    if (switchFloor >= 0) {
       for (const providerSocket of rig.providerSockets()) {
         if (providerSocket.requestIndex >= switchFloor) continue;
+        if (providerSocket === liveAtSwitch) {
+          if (replacedAt !== null && audioCount(providerSocket) > replacedAt) {
+            report(`${stage}: the replaced provider (request ${providerSocket.requestIndex}) received audio after its replacement went live`);
+          }
+          continue;
+        }
         if (audioCount(providerSocket) > (audioAtSwitch.get(providerSocket) ?? 0)) {
           report(`${stage}: a superseded connection (request ${providerSocket.requestIndex}) received audio after a switch`);
         }
@@ -302,7 +459,7 @@ const runOnce = async (seed: number, extended = false, bursts = false): Promise<
       for (const info of order) {
         if (!info.voiced || info.index >= order.length - 1) continue;
         const audio = VOICED[info.index];
-        if (!everHeld.has(audio) && !delivered.has(audio)) {
+        if (!everHeld.has(audio) && !delivered.has(audio) && !sentWhilePaused.has(audio)) {
           report(`${stage}: ${describeChunk(info)} was dropped on arrival`);
           everHeld.add(audio);
         }
@@ -317,23 +474,16 @@ const runOnce = async (seed: number, extended = false, bursts = false): Promise<
         report(`${stage}: ${describeChunk(info)} dropped with its line`);
         continue;
       }
-      if (holder.startsWith("line ") && !activeLines.has(holder)) continue;
       if (delivered.has(audio)) continue;
+      if (evicted.has(audio)) continue;
+      if (holder.startsWith("line ") && !activeLines.has(holder)) {
+        report(`${stage}: ${describeChunk(info)} left ${holder}, which ended without viewers receiving it`);
+        continue;
+      }
       if (holder === "unowned") {
         const lastInTurn = lastUnownedInTurn.get(`${info.speaker}:${roomTurn.get(audio)}`) ?? info.at;
         const lastInRun = lastInUnownedRun.get(runOf.get(info.index) ?? info.index) ?? info.at;
         if (now - lastInTurn > KEPT || now - lastInRun > KEPT) continue;
-      }
-      if (bursts) {
-        const counted = countedByLimit();
-        const heldBytes = counted.reduce((sum, chunk) => sum + chunk.audio.length, 0);
-        if (heldBytes + audio.length > limit.bytes) {
-          const older = counted
-            .map((chunk) => sent.get(chunk.audio))
-            .find((other) => other !== undefined && other.index < info.index);
-          if (older) report(`${stage}: the audio limit dropped ${describeChunk(info)} but kept older ${describeChunk(older)}`);
-          continue;
-        }
       }
       report(`${stage}: ${describeChunk(info)} lost from ${holder}`);
     }
@@ -352,7 +502,7 @@ const runOnce = async (seed: number, extended = false, bursts = false): Promise<
 
   const sendChunk = async (voiced: boolean) => {
     const index = order.length;
-    if (index >= POOL) return;
+    if (index >= POOL) return false;
     if (speaker.userId !== previousSpeaker) {
       run += 1;
       previousSpeaker = speaker.userId;
@@ -361,7 +511,20 @@ const runOnce = async (seed: number, extended = false, bursts = false): Promise<
     const info = { index, speaker: speaker.userId, voiced, at: Date.now(), turn, run };
     sent.set(audio, info);
     order.push(info);
+    if (room.session?.status === "paused") sentWhilePaused.add(audio);
     await tolerate(() => rig.send({ type: "audio.chunk", audio, speaker }), `chunk #${index}`);
+    return true;
+  };
+
+  const togglePause = async (step: number) => {
+    const wanted = !paused;
+    let answered = false;
+    void tolerate(() => rig.send({ type: wanted ? "session.pause" : "session.resume" }), `step ${step} pause`).then(() => {
+      answered = true;
+    });
+    for (let round = 0; round < 20 && !answered; round += 1) await vi.advanceTimersByTimeAsync(250);
+    const status = room.session?.status;
+    paused = status === "paused";
   };
 
   const burst = async (step: number) => {
@@ -374,7 +537,7 @@ const runOnce = async (seed: number, extended = false, bursts = false): Promise<
     const count = Math.floor(LIMIT_CHUNKS / 2) + Math.floor(random() * LIMIT_CHUNKS);
     for (let chunk = 0; chunk < count; chunk += 1) {
       if (random() < 0.15) speaker = speakers[Math.floor(random() * speakers.length)];
-      await sendChunk(true);
+      if (!(await sendChunk(true))) break;
       check(`step ${step} burst chunk ${chunk}`);
     }
   };
@@ -387,6 +550,9 @@ const runOnce = async (seed: number, extended = false, bursts = false): Promise<
     } else if (pick < 0.36) {
       for (const [audio, holder] of lastHolder) if (holder !== "buffered") delivered.add(audio);
       switchFloor = rig.providerRequestCount();
+      liveAtSwitch = liveSocket();
+      replacedAt = null;
+      sentSinceSwitch = order.length;
       for (const providerSocket of rig.providerSockets()) audioAtSwitch.set(providerSocket, audioCount(providerSocket));
       const language = LANGUAGES[Math.floor(random() * LANGUAGES.length)];
       switches.push(tolerate(() => rig.switchTo(language), `step ${step} switch`));
@@ -410,7 +576,7 @@ const runOnce = async (seed: number, extended = false, bursts = false): Promise<
         adapter?.signalsSpeech === true &&
         (adapter.openedBeforeSignal?.length ?? 1) === 0 &&
         (adapter.unheardSignals?.length ?? 1) === 0;
-      await sendChunk(true);
+      if (!(await sendChunk(true))) return;
       latestSocket().emit(sarvamSpeechStart());
       latestSocket().emit(sarvamFinal(`s${step}`, `Short ${step}.`));
       latestSocket().emit(sarvamSpeechStart());
@@ -418,8 +584,7 @@ const runOnce = async (seed: number, extended = false, bursts = false): Promise<
       const continuing: string[] = [];
       for (let chunk = 0; chunk < more; chunk += 1) {
         await vi.advanceTimersByTimeAsync(80 + Math.floor(random() * 120));
-        await sendChunk(true);
-        continuing.push(VOICED[order.length - 1]);
+        if (await sendChunk(true)) continuing.push(VOICED[order.length - 1]);
         check(`step ${step} short line ${chunk}`);
       }
       await vi.advanceTimersByTimeAsync(1_600);
@@ -469,6 +634,10 @@ const runOnce = async (seed: number, extended = false, bursts = false): Promise<
   check("setup");
 
   for (let step = 0; step < STEPS; step += 1) {
+    if (mode.pauses && pauseRandom() < 0.15) {
+      await togglePause(step);
+      check(`step ${step} pause`);
+    }
     if (bursts && random() < 0.2) {
       await burst(step);
       await settle();
@@ -524,8 +693,13 @@ const runOnce = async (seed: number, extended = false, bursts = false): Promise<
     await vi.advanceTimersByTimeAsync(DEADLINE + 1_000);
   }
   if (!switchesSettled) report("a language switch never settled");
+  if (paused) await togglePause(STEPS);
   await vi.advanceTimersByTimeAsync(DEADLINE + 1_000);
+  for (let round = 0; round < 60 && savesInFlight > 0; round += 1) await vi.advanceTimersByTimeAsync(500);
   check("end");
+  if (savesInFlight === 0 && !lastSaveFailed && rig.snapshots.length > 0) {
+    checkKept("after a restart", (await rig.restartedSegments()) as SavedLine[], "the restarted room");
+  }
   vi.useRealTimers();
   limit.bytes = limit.real;
   return problems;
@@ -534,6 +708,10 @@ const runOnce = async (seed: number, extended = false, bursts = false): Promise<
 const FIXED_SEEDS: Record<string, number> = {
   "Recent speech loses its speaker": 2,
   "Same-tick audio changes owners": 142,
+};
+
+const PAUSE_FIXED_SEEDS: Record<string, number> = {
+  "No audio reaches a provider while captions are paused": 4,
 };
 
 const BURST_FIXED_SEEDS: Record<string, number> = {
@@ -553,19 +731,34 @@ describe("caption chunks under random speech, signals and drops", () => {
   });
 
   it.each(Object.entries(EXTENDED_FIXED_SEEDS))("%s (extended seed %i)", async (_thread, seed) => {
-    expect(await runOnce(seed, true)).toEqual([]);
+    expect(await runOnce(seed, { extended: true })).toEqual([]);
+  });
+
+  it.each(Object.entries(PAUSE_FIXED_SEEDS))("%s (pause seed %i)", async (_thread, seed) => {
+    expect(await runOnce(seed, { pauses: true })).toEqual([]);
   });
 
   it.each(Object.entries(BURST_FIXED_SEEDS))("%s (burst seed %i)", async (_thread, seed) => {
-    expect(await runOnce(seed, true, true)).toEqual([]);
+    expect(await runOnce(seed, { bursts: true })).toEqual([]);
   });
+
+  it(`forwards no audio while captions are paused across ${PAUSE_RUNS} seeded runs`, async () => {
+    const failures: string[] = [];
+    const first = Number(process.env.TRANSCRIPT_CHUNK_ORDER_FROM ?? 1);
+    const maxFailures = Number(process.env.TRANSCRIPT_CHUNK_ORDER_MAX_FAILURES ?? 3);
+    for (let seed = first; seed < first + PAUSE_RUNS && failures.length < maxFailures; seed += 1) {
+      const problems = await runOnce(seed, { pauses: true });
+      if (problems.length > 0) failures.push(`seed ${seed}: ${problems.join(" | ")}`);
+    }
+    expect(failures).toEqual([]);
+  }, Math.max(600_000, PAUSE_RUNS * 1_500));
 
   it(`drops the oldest audio first at the audio limit under same-millisecond bursts across ${BURST_RUNS} seeded runs`, async () => {
     const failures: string[] = [];
     const first = Number(process.env.TRANSCRIPT_CHUNK_ORDER_FROM ?? 1);
     const maxFailures = Number(process.env.TRANSCRIPT_CHUNK_ORDER_MAX_FAILURES ?? 3);
     for (let seed = first; seed < first + BURST_RUNS && failures.length < maxFailures; seed += 1) {
-      const problems = await runOnce(seed, true, true);
+      const problems = await runOnce(seed, { bursts: true });
       if (problems.length > 0) failures.push(`seed ${seed}: ${problems.join(" | ")}`);
     }
     expect(failures).toEqual([]);
@@ -576,7 +769,7 @@ describe("caption chunks under random speech, signals and drops", () => {
     const first = Number(process.env.TRANSCRIPT_CHUNK_ORDER_FROM ?? 1);
     const maxFailures = Number(process.env.TRANSCRIPT_CHUNK_ORDER_MAX_FAILURES ?? 3);
     for (let seed = first; seed < first + EXTENDED_RUNS && failures.length < maxFailures; seed += 1) {
-      const problems = await runOnce(seed, true);
+      const problems = await runOnce(seed, { extended: true });
       if (problems.length > 0) failures.push(`seed ${seed}: ${problems.join(" | ")}`);
     }
     expect(failures).toEqual([]);
