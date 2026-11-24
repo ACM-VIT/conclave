@@ -704,11 +704,14 @@ class RedisRestore:
         shutil.copyfile(self.dump, os.path.join(self.scratch, "dump.rdb"))
         self.socket = os.path.join(self.scratch, "redis.sock")
         self.snapshot = ["-s", self.socket, "-n", self.source_db]
+        if not str(self.source_db).isdigit():
+            raise Refused(f"the backup names Redis database {self.source_db!r}, which is not a database number")
+        databases = str(max(16, int(self.source_db) + 1))
         self.server_log = open(os.path.join(self.scratch, "server.log"), "w")
         if loader != "Docker":
             self.server = subprocess.Popen(
                 ["redis-server", "--port", "0", "--unixsocket", self.socket, "--dir", self.scratch, "--dbfilename", "dump.rdb",
-                 "--save", "", "--appendonly", "no", "--daemonize", "no"],
+                 "--save", "", "--appendonly", "no", "--daemonize", "no", "--databases", databases],
                 stdout=self.server_log, stderr=subprocess.STDOUT)
         else:
             info = run_cli(self.live + ["INFO", "server"], password=self.target["password"])
@@ -719,7 +722,8 @@ class RedisRestore:
             started = subprocess.run(
                 ["docker", "run", "--rm", "-d", "--name", self.container, "--network", "host", "-v", f"{self.scratch}:/data",
                  f"redis:{version.group(1)}", "redis-server", "--port", "0", "--unixsocket", "/data/redis.sock",
-                 "--unixsocketperm", "777", "--dir", "/data", "--dbfilename", "dump.rdb", "--save", "", "--appendonly", "no"],
+                 "--unixsocketperm", "777", "--dir", "/data", "--dbfilename", "dump.rdb", "--save", "", "--appendonly", "no",
+                 "--databases", databases],
                 capture_output=True, text=True)
             if started.returncode != 0:
                 raise Refused(f"docker run redis:{version.group(1)} failed: {started.stderr.strip()[-300:]}")

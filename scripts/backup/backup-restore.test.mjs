@@ -2048,9 +2048,9 @@ test("every store's own SQLite path is backed up, from the host config and from 
 // --- Greptile's round on 88673407.
 
 // A Redis on a free port, optionally with a password, stopped by close().
-const startRedis = async (password) => {
+const startRedis = async (password, extra = []) => {
   const port = await freePort();
-  const args = ["--port", String(port), "--bind", "127.0.0.1", "--save", "", "--appendonly", "no", ...(password ? ["--requirepass", password] : [])];
+  const args = ["--port", String(port), "--bind", "127.0.0.1", "--save", "", "--appendonly", "no", ...(password ? ["--requirepass", password] : []), ...extra];
   const server = spawn("redis-server", args, { stdio: "ignore" });
   const cli = (...more) => run("redis-cli", ["-h", "127.0.0.1", "-p", String(port), "--no-auth-warning", ...(password ? ["-a", password] : []), ...more]);
   for (let i = 0; i < 50 && (await cli("PING").then((r) => r.stdout.trim(), () => "")) !== "PONG"; i += 1) {
@@ -2497,6 +2497,26 @@ test("a restore gives its files to the SFU's user, not to another container that
     const result = await restore("--file", await latestArchive(), "--yes");
     assert.match(result.stdout, new RegExp(`Gave the restored files in .* to ${uid}:${gid}, the user the SFU runs as`));
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a restore loads a snapshot taken from a Redis database above 15", needsRedis, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  const source = await startRedis(undefined, ["--databases", "32"]);
+  const drill = await startRedis();
+  try {
+    const { state, config, backup, latestArchive, restore } = await setUp(root, [`SFU_PERSISTENCE_REDIS_URL=redis://127.0.0.1:${source.port}/20`]);
+    withDatabase(state);
+    await source.cli("-n", "20", "SET", "conclave:sfu:persistence:meeting", "from db 20");
+    await backup("--local-only");
+    await writeFile(config, `${await readFile(config, "utf8")}\nSFU_PERSISTENCE_REDIS_URL=redis://127.0.0.1:${drill.port}/0\n`);
+    await rm(state, { recursive: true });
+    await restore("--file", await latestArchive(), "--yes");
+    assert.equal((await drill.cli("-n", "0", "GET", "conclave:sfu:persistence:meeting")).stdout.trim(), "from db 20");
+  } finally {
+    source.close();
+    drill.close();
     await rm(root, { recursive: true, force: true });
   }
 });
