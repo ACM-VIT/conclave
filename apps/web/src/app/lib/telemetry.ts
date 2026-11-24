@@ -3,6 +3,7 @@
 import type { CaptureResult, PostHog } from "posthog-js";
 import { installCallErrorCapture } from "./call-error-capture";
 import { randomUuid } from "./random-uuid";
+import { RejectedEvents } from "./telemetry-answers";
 import { telemetryFetch } from "./telemetry-fetch";
 import {
   countDropped,
@@ -10,6 +11,7 @@ import {
   createOutbox,
   type Outbox,
   type OutboxEvent,
+  type Reply,
   SEND_DEADLINE_MS,
   STORED_BATCH_PREFIX,
 } from "./telemetry-outbox";
@@ -412,6 +414,15 @@ const ingestRequest = (body: string, keepalive: boolean, signal?: AbortSignal): 
     headers: { "content-type": "application/json" },
   });
 
+const replyOf = async (response: Response): Promise<Reply> => {
+  const answer = RejectedEvents.safeParse(await response.json().catch(() => null));
+  return {
+    status: response.status,
+    retryAfter: response.headers.get("retry-after"),
+    rejected: answer.success ? answer.data.rejected : [],
+  };
+};
+
 const rebuilt = (key: string) => (event: OutboxEvent): OutboxEvent | null => {
   const own = event.properties.client_version;
   const build = isBuildVersion(own) ? own : UNKNOWN_BUILD;
@@ -447,11 +458,7 @@ export function startTelemetry(): void {
     now: Date.now,
     setTimer: (run, ms) => window.setTimeout(run, ms),
     clearTimer: (timer) => window.clearTimeout(timer as number),
-    post: (body, keepalive, signal) =>
-      ingestRequest(body, keepalive, signal).then((response) => ({
-        status: response.status,
-        retryAfter: response.headers.get("retry-after"),
-      })),
+    post: (body, keepalive, signal) => ingestRequest(body, keepalive, signal).then(replyOf),
     beacon: (body) => {
       if (!unloadRequests) return false;
       try {

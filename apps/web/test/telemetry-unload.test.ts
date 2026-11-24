@@ -42,7 +42,7 @@ let ingestInits: RequestInit[] = [];
 let manifestInits: RequestInit[] = [];
 let sendBeaconCalls = 0;
 let refuseBeacons = false;
-let ingestAnswers: number[] = [];
+let ingestAnswers: Array<number | { status: number; body: string }> = [];
 
 // While set, /ingest answers only once the test releases it.
 let ingestHeld: Promise<void> | null = null;
@@ -91,8 +91,9 @@ beforeEach(async () => {
       let answer = new Response('{"status":1}', { status: 200 });
       if (url.includes("/ingest/") && init?.body) {
         const via = helperCall.via ?? (init.signal ? "fetch" : "beacon");
-        const status = via === "fetch" ? ingestAnswers.shift() : undefined;
-        if (status !== undefined) answer = new Response("{}", { status });
+        const scripted = via === "fetch" ? ingestAnswers.shift() : undefined;
+        if (typeof scripted === "number") answer = new Response("{}", { status: scripted });
+        else if (scripted) answer = new Response(scripted.body, { status: scripted.status, headers: { "content-type": "application/json" } });
         if (via === "beacon" && refuseBeacons) throw new TypeError("keepalive request refused");
         ingestInits.push(init);
         sent.push({ via, url, body: init.body, type: new Headers(init.headers).get("content-type") ?? "" });
@@ -543,6 +544,24 @@ describe("what a telemetry request carries", () => {
     const bodies = await Promise.all(sent.map((item) => new Response(item.body).text()));
     expect(bodies.join("\n")).not.toContain("lime-pear");
     expect(bodies.join("\n")).toContain(tampered.uuid);
+  });
+});
+
+describe("events /ingest refuses", () => {
+  it("drops only the events /ingest names as refused, and sends the rest again", async () => {
+    manifest = "missing";
+    ingestAnswers = [{ status: 503, body: '{"rejected":[0]}' }];
+    const { telemetry, startTelemetry } = await import("../src/app/lib/telemetry");
+    startTelemetry();
+    await loaded();
+    telemetry.capture("meet_join_attempt", { joinMode: "meeting", isAdmin: false });
+    telemetry.captureException(new TypeError("next to a refused event"), { source: "react_error_boundary", boundary: "route" });
+    await vi.waitFor(() => expect(fetches()).toHaveLength(2), { timeout: 6000 });
+
+    const names = await Promise.all(
+      fetches().map(async (item) => (JSON.parse(await new Response(item.body).text()) as { batch: Array<{ event: string }> }).batch.map((event) => event.event)),
+    );
+    expect(names).toEqual([["meet_join_attempt", "$exception"], ["$exception"]]);
   });
 });
 

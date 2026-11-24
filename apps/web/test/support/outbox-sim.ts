@@ -375,7 +375,7 @@ export async function simulate(
     const count = scriptedCount ?? 1 + Math.floor(rng() * 4);
     for (let index = 0; index < count; index++) {
       const urgent = rng() < 0.1;
-      const uuid = `ev-${seed}-${++eventIds}`;
+      const uuid = `0196f0a1-0000-7000-8000-${((seed % 1_000_000_000) * 100_000 + ++eventIds).toString(16).padStart(12, "0")}`;
       allEvents.add(uuid);
       const event = {
         uuid,

@@ -11,6 +11,7 @@ import {
   MAX_STORED_CHARS,
   type OutboxEvent,
   SEND_DEADLINE_MS,
+  STORED_BATCH_PREFIX,
   type StoredBatch,
   UNLOAD_BUDGET_BYTES,
   URGENT_FLUSH_GAP_MS,
@@ -20,7 +21,7 @@ const KEY = "phc_test_project";
 const START = Date.parse("2026-11-23T00:00:00.000Z");
 const MINUTE = 60_000;
 
-type Reply = { status: number; retryAfter: string | null };
+type Reply = { status: number; retryAfter: string | null; rejected?: number[] };
 type Answer = number | Reply | "offline" | "pending" | Promise<number | Reply>;
 
 /** Storage the next page load reads, shared by the outboxes a test makes: one entry per batch. */
@@ -1101,5 +1102,70 @@ describe("saved batches too old for /ingest", () => {
     expect(nextLoad.posts.length).toBeLessThan(6);
     expect(store.list()).toEqual([]);
     expect(nextLoad.dropped).toEqual([{ batches: 1, events: 1, unsent: 1 }]);
+  });
+});
+
+const seeded = (seed: number) => () => {
+  seed = (seed + 0x6d2b79f5) | 0;
+  let mixed = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+  mixed = (mixed + Math.imul(mixed ^ (mixed >>> 7), 61 | mixed)) ^ mixed;
+  return ((mixed ^ (mixed >>> 14)) >>> 0) / 4294967296;
+};
+
+describe("one event's flaw stays with that event", () => {
+  const flaws: Array<(item: OutboxEvent) => unknown> = [
+    (item) => ({ ...item, uuid: "not-a-uuid" }),
+    ({ uuid: _uuid, ...item }) => item,
+    (item) => ({ ...item, uuid: 7 }),
+    (item) => ({ ...item, timestamp: "not a time" }),
+    ({ timestamp: _timestamp, ...item }) => item,
+    (item) => ({ ...item, properties: "Meet Mira" }),
+    (item) => ({ ...item, event: 7 }),
+  ];
+
+  it("keeps every sound event of a saved batch, whatever is wrong with the others, over 300 seeded batches", () => {
+    for (let seed = 1; seed <= 300; seed++) {
+      const random = seeded(seed);
+      const storage = memoryWebStorage();
+      const events = Array.from({ length: 1 + Math.floor(random() * 8) }, (_, index) => event("meet_join_attempt", 0, START + index));
+      const items = events.map((item) => (random() < 0.4 ? flaws[Math.floor(random() * flaws.length)](item) : item));
+      const sound = events.filter((item, index) => items[index] === item);
+      storage.setItem(`${STORED_BATCH_PREFIX}saved-${seed}`, JSON.stringify({ id: `saved-${seed}`, events: items, oldestAt: START, sent: false }));
+
+      const listed = createBatchStore(() => storage).list();
+      if (sound.length === 0) {
+        expect(listed, `seed ${seed}`).toEqual([]);
+        expect(storage.length, `seed ${seed}`).toBe(0);
+      } else {
+        expect(listed.map((batch) => batch.events), `seed ${seed}`).toEqual([sound]);
+      }
+    }
+  });
+
+  it("drops only the events /ingest names as refused, and sends the rest again", async () => {
+    const h = harness({ answers: [{ status: 503, retryAfter: null, rejected: [1] }, 200] });
+    const sent = [event(), event(), event()];
+    for (const item of sent) h.outbox.add(item);
+    await h.advance(FLUSH_INTERVAL_MS);
+    await h.advance(2000);
+
+    expect(h.posts.map((post) => h.batchOf(post.body).batch.map((item) => item.uuid))).toEqual([
+      sent.map((item) => item.uuid),
+      [sent[0].uuid, sent[2].uuid],
+    ]);
+  });
+
+  it("finishes a batch whose every event /ingest refused, even on an answer worth retrying", async () => {
+    const store = memoryStore();
+    const h = harness({ answers: [{ status: 503, retryAfter: null, rejected: [0, 1] }], store });
+    h.outbox.add(event());
+    h.outbox.add(event());
+    await h.advance(FLUSH_INTERVAL_MS);
+    h.outbox.flushForUnload();
+    await h.advance(10 * MINUTE);
+
+    expect(h.posts).toHaveLength(1);
+    expect(h.beacons).toEqual([]);
+    expect(store.list()).toEqual([]);
   });
 });

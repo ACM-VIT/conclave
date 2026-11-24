@@ -167,12 +167,9 @@ const CapturedEvent = z.object({
 type CapturedEvent = z.infer<typeof CapturedEvent>;
 
 const CaptureBody = z.union([
-  z.object({
-    batch: z.array(CapturedEvent).max(MAX_EVENTS),
-    sent_at: z.string().max(64).optional(),
-  }),
-  z.array(CapturedEvent).max(MAX_EVENTS),
-  CapturedEvent,
+  z.object({ batch: z.array(z.unknown()).max(MAX_EVENTS) }).loose().transform((body) => body.batch),
+  z.array(z.unknown()).max(MAX_EVENTS),
+  z.record(z.string(), z.unknown()).transform((event) => [event]),
 ]);
 
 
@@ -272,14 +269,21 @@ const fresh = (timestamp: string, sentAt: number | null, receivedAt: number): bo
   return sentAt !== null && sentAt - time <= MAX_EVENT_AGE_MS && sentAt - time >= -MAX_EVENT_LEAD_MS;
 };
 
-const reply = (status: number, retryAfterMs: number | null = null) =>
-  new Response(status === 200 ? '{"status":1}' : null, {
+const reply = (status: number, retryAfterMs: number | null = null, rejected: readonly number[] = []) => {
+  const body =
+    status === 200
+      ? JSON.stringify(rejected.length ? { status: 1, rejected } : { status: 1 })
+      : status === 503 && rejected.length
+        ? JSON.stringify({ rejected })
+        : null;
+  return new Response(body, {
     status,
     headers: {
-      ...(status === 200 ? { "content-type": "application/json" } : {}),
+      ...(body !== null ? { "content-type": "application/json" } : {}),
       ...(retryAfterMs !== null ? { "retry-after": String(Math.ceil(retryAfterMs / 1000)) } : {}),
     },
   });
+};
 
 // How long /ingest waits for PostHog, and for one of our own chunk
 // manifests, body included: a server that holds a response open must not
@@ -330,18 +334,16 @@ export async function forwardCapture(
     // not say what was wrong with it.
     return reply(error instanceof Refused ? error.status : 400);
   }
-  // Every event in it already reached PostHog: a page sending what it saved
-  // as it went away, or a beacon's batch again.
-  if (!prepared) return reply(200);
-  const { body, sent, waits } = prepared;
+  const { body, sent, waits, rejected } = prepared;
   let answer: Answer = { outcome: "delivered" };
   try {
     if (body.batch.length > 0) answer = await sendUpstream(ingestHost, body, deps);
   } finally {
     sent(answer.outcome === "delivered");
   }
-  if (answer.outcome !== "delivered") return answer.outcome === "retry" ? reply(503, answer.afterMs) : reply(400);
-  return (await Promise.all(waits)).every(Boolean) ? reply(200) : reply(503);
+  if (answer.outcome === "refused") return reply(400);
+  if (answer.outcome === "retry") return reply(503, answer.afterMs, rejected);
+  return (await Promise.all(waits)).every(Boolean) ? reply(200, null, rejected) : reply(503, null, rejected);
 }
 
 const sendUpstream = async (
@@ -373,8 +375,8 @@ const sendUpstream = async (
 };
 
 /**
- * The batch to send PostHog for one request; null when PostHog already took
- * every event in it, or a Refused error.
+ * The batch to send PostHog for one request, with the index of each event in
+ * it that will never be taken, or a Refused error when none can be.
  */
 const prepareForward = async (request: Request, deps: IngestDeps) => {
   const receivedAt = deps.now();
@@ -382,9 +384,11 @@ const prepareForward = async (request: Request, deps: IngestDeps) => {
   const decoded = await decodeBody(request, url);
   const parsed = CaptureBody.safeParse(decoded);
   if (!parsed.success) throw new Refused(400);
-  const body = parsed.data;
-  const events = Array.isArray(body) ? body : "batch" in body ? body.batch : [body];
-  const ours = events.filter((event) => event.properties.token === deps.projectKey);
+  const events = parsed.data.map((item) => {
+    const event = CapturedEvent.safeParse(item);
+    return event.success && event.data.properties.token === deps.projectKey ? event.data : null;
+  });
+  const ours = events.filter((event) => event !== null);
   if (ours.length === 0) throw new Refused(400);
   // A batch holds one tab's events, so a request carries one build:
   // the first event's. Events naming any other build are dropped, which holds
@@ -392,7 +396,6 @@ const prepareForward = async (request: Request, deps: IngestDeps) => {
   // checks its frames; without it the build is still named and its frames
   // are held to their shared forms.
   const build = buildOf(ours[0]);
-  const sameBuild = ours.filter((event) => buildOf(event) === build);
   const manifest = build ? await deps.manifest(build) : null;
   const context = {
     token: deps.projectKey,
@@ -402,33 +405,42 @@ const prepareForward = async (request: Request, deps: IngestDeps) => {
   const schemas = createOutboundSchemas(context);
   const sentAt = clientSentAt(url, decoded);
   const inRequest = new Set<string>();
-  let delivered = 0;
-  const batch = sameBuild.flatMap((event) => {
+  const rejected: number[] = [];
+  let taken = 0;
+  const batch = events.flatMap((event, index) => {
+    if (!event || buildOf(event) !== build) {
+      rejected.push(index);
+      return [];
+    }
     const { uuid } = event;
     if (inRequest.has(uuid)) return [];
     inRequest.add(uuid);
     // A retry, or an event sent again, goes exactly as it went the first
     // time, and not at all once PostHog has it.
     const known = deps.forwarded.get(uuid);
-    if (known?.delivered) delivered += 1;
-    if (known) return known.delivered ? [] : [known.event];
-    if (!fresh(event.timestamp, sentAt, receivedAt)) return [];
-    const built = buildOutboundEvent(
-      { uuid, event: event.event, properties: event.properties },
-      // Our fields are the event's own: the browser took them from the
-      // capture's payload, and nothing here counts as stored.
-      { ...context, payload: event.properties, storedKeys: new Set(), siteOrigin: deps.siteOrigin },
-      schemas,
-    );
-    if (!built) return [];
+    if (known) {
+      taken += 1;
+      return known.delivered ? [] : [known.event];
+    }
+    const built =
+      fresh(event.timestamp, sentAt, receivedAt) &&
+      buildOutboundEvent(
+        { uuid, event: event.event, properties: event.properties },
+        // Our fields are the event's own: the browser took them from the
+        // capture's payload, and nothing here counts as stored.
+        { ...context, payload: event.properties, storedKeys: new Set(), siteOrigin: deps.siteOrigin },
+        schemas,
+      );
+    if (!built) {
+      rejected.push(index);
+      return [];
+    }
+    taken += 1;
     const forwarded = { ...built, timestamp: event.timestamp };
     deps.forwarded.remember(forwarded);
     return [forwarded];
   });
-  if (batch.length === 0) {
-    if (delivered > 0) return null;
-    throw new Refused(400);
-  }
+  if (taken === 0) throw new Refused(400);
   const waits: Array<Promise<boolean>> = [];
   const own = batch.filter((event) => {
     const elsewhere = deps.forwarded.inFlight(event.uuid);
@@ -437,7 +449,7 @@ const prepareForward = async (request: Request, deps: IngestDeps) => {
   });
   let sent: (delivered: boolean) => void = () => {};
   deps.forwarded.sending(own.map((event) => event.uuid), new Promise<boolean>((resolve) => (sent = resolve)));
-  return { body: { api_key: deps.projectKey, batch: own }, sent, waits };
+  return { body: { api_key: deps.projectKey, batch: own }, sent, waits, rejected };
 };
 
 const MANIFEST_TTL_MS = 10 * 60_000;

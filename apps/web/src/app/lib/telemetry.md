@@ -97,7 +97,10 @@ one owner at a time:
   id and a lease until 16 s after the send, so another tab leaves it alone
   until the request has settled; an answer from an earlier attempt changes
   nothing. Without the Web Locks API two tabs may both claim a batch, and
-  `/ingest` takes each uuid once.
+  `/ingest` takes each uuid once. Reading a saved batch back checks each of
+  its events on its own (a uuid, an ISO timestamp, an event name and a
+  properties object): a malformed event is dropped and the rest are kept,
+  and a batch with none left is removed.
 - **Refused by storage.** When local storage refuses a write, blocked or
   full, the batch stays in memory and its tab keeps retrying it. A tab that
   closes while storage refuses it and its beacon fails loses that batch; that
@@ -276,9 +279,16 @@ the browser's: no cookie, no IP address and no forwarded or referrer header
 reaches PostHog. `/ingest` waits at most 10 s for PostHog, and reads
 PostHog's answer through the same table as the outbox: delivered is 200; worth
 sending again, or no answer in time, is 503, with PostHog's `Retry-After` (in
-seconds, at most 60) when it gave one; refused is 400. A body that fails validation, an exception list of the wrong shape
-included, gets 400 with an empty body, so the browser drops it and learns
-nothing of what failed.
+seconds, at most 60) when it gave one; refused is 400. Each event is
+checked on its own, every field of it (uuid, timestamp, project, build,
+time and outbound schema), so one malformed event never takes the others
+down: the sound events are forwarded, and the answer lists the index of
+each event that will never be taken (`{"status":1,"rejected":[...]}` on
+200, `{"rejected":[...]}` on 503), with nothing about why. The outbox
+drops exactly those events from the batch and keeps the rest for the next
+try. A body that is not a capture body at all, or one with no event that
+could be taken, gets 400 with an empty body, so the browser drops it and
+learns nothing of what failed.
 
 Both the browser's `before_send` and `/ingest` build each event from scratch
 through the outbound schema in `lib/telemetry-schema.ts` (`buildOutboundEvent`

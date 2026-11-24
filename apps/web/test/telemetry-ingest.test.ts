@@ -960,3 +960,61 @@ describe("PostHog's answers and slow requests at /ingest", () => {
     expect(upstream).toHaveLength(1);
   });
 });
+
+const seeded = (seed: number) => () => {
+  seed = (seed + 0x6d2b79f5) | 0;
+  let mixed = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+  mixed = (mixed + Math.imul(mixed ^ (mixed >>> 7), 61 | mixed)) ^ mixed;
+  return ((mixed ^ (mixed >>> 14)) >>> 0) / 4294967296;
+};
+
+describe("one event's flaw stays with that event at /ingest", () => {
+  type Sent = ReturnType<typeof event>;
+  const flaws: Array<(item: Sent) => unknown> = [
+    (item) => ({ ...item, uuid: "not-a-uuid" }),
+    ({ uuid: _uuid, ...item }) => item,
+    (item) => ({ ...item, timestamp: "not a time" }),
+    ({ timestamp: _timestamp, ...item }) => item,
+    (item) => ({ ...item, properties: "Meet Mira" }),
+    (item) => ({ ...item, event: "" }),
+    (item) => ({ ...item, properties: { ...item.properties, token: "phc_another_project" } }),
+    (item) => ({ ...item, timestamp: "2026-11-21T00:00:00.000Z" }),
+  ];
+
+  it("forwards every sound event of a mixed batch and names each flawed one, over 200 seeded batches", async () => {
+    for (let seed = 1; seed <= 200; seed++) {
+      const random = seeded(seed);
+      const events = Array.from({ length: 1 + Math.floor(random() * 10) }, (_, index) => ({
+        ...event(),
+        uuid: `0196f0a1-0000-7000-8000-${String(seed).padStart(4, "0")}${String(index).padStart(8, "0")}`,
+      }));
+      const items = events.map((item) => (random() < 0.4 ? flaws[Math.floor(random() * flaws.length)](item) : item));
+      const rejected = items.flatMap((item, index) => (item === events[index] ? [] : [index]));
+      const { response, upstream } = await forward(post(JSON.stringify(captureBody(items)), "application/json"));
+
+      if (rejected.length === items.length) {
+        expect(response.status, `seed ${seed}`).toBe(400);
+        expect(upstream, `seed ${seed}`).toEqual([]);
+        continue;
+      }
+      expect(response.status, `seed ${seed}`).toBe(200);
+      expect(sentBody(upstream).batch.map((item) => item.uuid), `seed ${seed}`).toEqual(
+        events.filter((item, index) => items[index] === item).map((item) => item.uuid),
+      );
+      expect(await response.json(), `seed ${seed}`).toEqual(rejected.length ? { status: 1, rejected } : { status: 1 });
+    }
+  });
+
+  it("names the flawed events on an answer worth retrying too, so the browser keeps only the sound ones", async () => {
+    const sound = event();
+    const { response } = await forward(
+      post(JSON.stringify(captureBody([{ ...sound, uuid: "not-a-uuid" }, sound])), "application/json"),
+      ["e"],
+      { fetch: async () => new Response(null, { status: 503, headers: { "retry-after": "7" } }) },
+    );
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("retry-after")).toBe("7");
+    expect(await response.json()).toEqual({ rejected: [0] });
+  });
+});

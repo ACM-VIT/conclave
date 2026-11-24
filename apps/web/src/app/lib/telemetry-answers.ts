@@ -44,3 +44,9 @@ export function answerOf(status: number, retryAfter: string | null, now: number)
   if (RETRYABLE.has(status) || status >= 500) return { outcome: "retry", afterMs: waitOf(retryAfter, now) };
   return { outcome: "refused" };
 }
+
+export const MAX_REJECTED_EVENTS = 200;
+
+export const RejectedEvents = z.object({
+  rejected: z.array(z.number().int().min(0).max(MAX_REJECTED_EVENTS - 1)).max(MAX_REJECTED_EVENTS),
+});

@@ -59,7 +59,7 @@ export type OutboxDeps = {
   now: () => number;
   setTimer: (run: () => void, ms: number) => unknown;
   clearTimer: (timer: unknown) => void;
-  post: (body: string, keepalive: boolean, signal?: AbortSignal) => Promise<{ status: number; retryAfter: string | null }>;
+  post: (body: string, keepalive: boolean, signal?: AbortSignal) => Promise<Reply>;
   beacon: (body: string) => boolean;
   newId: () => string;
   store: BatchStore;
@@ -87,7 +87,7 @@ type Batch = {
 
 type Queued = { event: OutboxEvent; bytes: number };
 
-type Reply = { status: number; retryAfter: string | null };
+export type Reply = { status: number; retryAfter: string | null; rejected?: readonly number[] };
 
 const byteLength = (text: string): number => new TextEncoder().encode(text).byteLength;
 
@@ -345,7 +345,13 @@ export function createOutbox(deps: OutboxDeps) {
         batch.notBefore = Math.max(batch.notBefore, current.notBefore);
       }
       const answer = reply ? answerOf(reply.status, reply.retryAfter, deps.now()) : null;
-      if (answer && answer.outcome !== "retry") finish(batch);
+      if (answer && answer.outcome !== "retry") {
+        finish(batch);
+        return;
+      }
+      const refused = new Set((reply?.rejected ?? []).flatMap((index) => (events[index] ? [events[index].uuid] : [])));
+      batch.events = batch.events.filter((item) => !refused.has(item.uuid));
+      if (batch.events.length === 0) finish(batch);
       else retry(batch, answer?.afterMs ?? null);
     };
     deadline = deps.setTimer(() => {
@@ -469,19 +475,23 @@ export type Outbox = ReturnType<typeof createOutbox>;
 export const STORED_BATCH_PREFIX = "conclave:telemetry:batch:";
 export const MAX_STORED_CHARS = 512 * 1024;
 
+const StoredEvent = z.object({
+  uuid: z.uuid(),
+  event: z.string().min(1).max(200),
+  timestamp: z.iso.datetime(),
+  properties: z.record(z.string(), z.unknown()),
+});
+
 const StoredBatchSchema = z.object({
   id: z.string().min(1).max(64),
   events: z
-    .array(
-      z.object({
-        uuid: z.string(),
-        event: z.string(),
-        timestamp: z.string().optional(),
-        properties: z.record(z.string(), z.unknown()),
-      }),
-    )
-    .min(1)
-    .max(MAX_BATCH_EVENTS),
+    .array(z.unknown())
+    .max(MAX_BATCH_EVENTS)
+    .transform((items) => items.flatMap((item) => {
+      const event = StoredEvent.safeParse(item);
+      return event.success ? [event.data] : [];
+    }))
+    .pipe(z.array(StoredEvent).min(1)),
   oldestAt: z.number(),
   sent: z.boolean(),
   notBefore: z.number().default(0),
