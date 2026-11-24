@@ -43,13 +43,13 @@ docker compose -f docker-compose.sfu.yml run --rm --no-deps --user root \
 Images before this change fell back to JSON files in the container layer
 when SQLite was locked. Before it replaces such a container, the deploy copies
 any of those files onto the volume under `CONCLAVE_FALLBACK_IMPORT_DIR`, readable
-only by the SFU user, so they survive the replacement. The next start claims
-each copy by renaming it to `<name>.claimed-<ticket>-<n>`, imports it into the
-control-plane store in every mode (see below), keeping the newer version of
-each record, and renames exactly the bytes it imported with an `.adopted`
-suffix. It
-refuses to start if two copies changed one record differently at the same time,
-or if a calendar token cannot be decrypted with this SFU's secret.
+only by the SFU user, so they survive the replacement, one folder per transfer
+(`<service>/<stamp>-<deploy id>/`). The next start claims each copy by renaming
+it to `<name>.claimed-<ticket>-<n>`, replays each old container's copies in
+order into the control-plane store in every mode (see below), so a record the
+container deleted between two copies stays deleted, and renames exactly the
+bytes it imported with an `.adopted` suffix. It refuses to start if a calendar
+token cannot be decrypted with this SFU's secret.
 
 To upgrade an existing host, run `git pull` to the reviewed revision first,
 then run the new `scripts/deploy-sfu.sh`. Do not start the upgrade with the
