@@ -12,7 +12,9 @@ import {
   planSilentPathStep,
   planMediaPathEscalation,
   readMediaPathHealth,
+  describeConsumedStream,
   receivePathExpectsMedia,
+  streamShouldFlow,
   type ConsumedStream,
   readRtpBytes,
   resolveRebuildRelayOnly,
@@ -443,46 +445,113 @@ describe("knowing that media moved", () => {
 });
 
 describe("which received streams should keep media flowing", () => {
-  const stream = (
-    kind: ConsumedStream["kind"],
-    source: ConsumedStream["source"],
-    on: boolean,
-  ): ConsumedStream => ({ kind, source, consumerPaused: false, producerPaused: !on });
+  type Pause = "none" | "here" | "adaptive" | "server" | "producer" | "producer-on-server";
+  const stream = ({
+    kind,
+    source,
+    on,
+    pause = "none",
+  }: {
+    kind: "audio" | "video";
+    source: "webcam" | "screen";
+    on: boolean;
+    pause?: Pause;
+  }): ConsumedStream =>
+    describeConsumedStream({
+      kind,
+      source,
+      consumerPaused: pause === "here",
+      adaptivelyPaused: pause === "adaptive",
+      producerPausedHere: !on || pause === "producer",
+      server: {
+        paused: pause === "server",
+        producerPaused: pause === "producer-on-server",
+      },
+    });
+  const pauses: Pause[] = ["none", "here", "adaptive", "server", "producer", "producer-on-server"];
   const table = [false, true].flatMap((micOn) =>
     [false, true].flatMap((cameraOn) =>
-      [false, true].map((screenOn) => ({ micOn, cameraOn, screenOn })),
+      [false, true].flatMap((screenOn) =>
+        pauses.map((cameraPause) => ({ micOn, cameraOn, screenOn, cameraPause })),
+      ),
     ),
   );
 
   it.each(table)(
-    "expects media on a connected path when a mic or a camera is on: %o",
-    ({ micOn, cameraOn, screenOn }) => {
+    "expects media on a connected path only from a live mic or an unpaused live camera: %o",
+    ({ micOn, cameraOn, screenOn, cameraPause }) => {
       const streams = [
-        stream("audio", "webcam", micOn),
-        stream("video", "webcam", cameraOn),
-        stream("video", "screen", screenOn),
-        stream("audio", "screen", false),
+        stream({ kind: "audio", source: "webcam", on: micOn }),
+        stream({ kind: "video", source: "webcam", on: cameraOn, pause: cameraPause }),
+        stream({ kind: "video", source: "screen", on: screenOn }),
+        stream({ kind: "audio", source: "screen", on: false }),
       ];
 
-      expect(receivePathExpectsMedia(streams, true)).toBe(micOn || cameraOn);
+      expect(receivePathExpectsMedia(streams, true)).toBe(
+        micOn || (cameraOn && cameraPause === "none"),
+      );
     },
   );
 
+  it("does not expect cameras the receiver parked on the server during a quiet screen share", () => {
+    const streams = [
+      stream({ kind: "audio", source: "webcam", on: false }),
+      stream({ kind: "video", source: "webcam", on: true, pause: "adaptive" }),
+      stream({ kind: "video", source: "webcam", on: true, pause: "adaptive" }),
+      stream({ kind: "video", source: "screen", on: true }),
+    ];
+
+    expect(receivePathExpectsMedia(streams, true)).toBe(false);
+    expect(streams.filter(streamShouldFlow)).toEqual([]);
+  });
+
+  it("still expects a camera whose layers the server stopped forwarding", () => {
+    const forwardingNothing = {
+      paused: false,
+      producerPaused: false,
+      preferredLayers: { spatialLayer: 2 },
+      currentLayers: undefined,
+    };
+
+    expect(
+      streamShouldFlow(
+        describeConsumedStream({
+          kind: "video",
+          source: "webcam",
+          consumerPaused: false,
+          adaptivelyPaused: false,
+          producerPausedHere: false,
+          server: forwardingNothing,
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("expects a stream whose server state has not arrived yet", () => {
+    expect(
+      streamShouldFlow(
+        describeConsumedStream({
+          kind: "video",
+          source: "webcam",
+          consumerPaused: false,
+          adaptivelyPaused: false,
+          producerPausedHere: false,
+          server: undefined,
+        }),
+      ),
+    ).toBe(true);
+  });
+
   it("expects media on a path that is not connected whenever it carries any stream", () => {
-    expect(receivePathExpectsMedia([stream("video", "screen", false)], false)).toBe(true);
+    expect(
+      receivePathExpectsMedia([stream({ kind: "video", source: "screen", on: false })], false),
+    ).toBe(true);
     expect(receivePathExpectsMedia([], false)).toBe(false);
   });
 
-  it("does not expect media from a stream this client paused", () => {
-    expect(
-      receivePathExpectsMedia(
-        [{ kind: "video", source: "webcam", consumerPaused: true, producerPaused: false }],
-        true,
-      ),
-    ).toBe(false);
-  });
-
   it("expects screen share audio, which keeps sending through silence", () => {
-    expect(receivePathExpectsMedia([stream("audio", "screen", true)], true)).toBe(true);
+    expect(
+      receivePathExpectsMedia([stream({ kind: "audio", source: "screen", on: true })], true),
+    ).toBe(true);
   });
 });

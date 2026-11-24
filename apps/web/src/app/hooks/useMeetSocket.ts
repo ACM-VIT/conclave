@@ -158,6 +158,7 @@ import {
   planMediaPathFailure,
   planSilentPathStep,
   readMediaPathHealth,
+  describeConsumedStream,
   receivePathExpectsMedia,
   streamShouldFlow,
   type ConsumedStream,
@@ -6203,16 +6204,19 @@ export function useMeetSocket({
         if (consumer.closed) continue;
         streams.push({
           producerId,
-          stream: {
+          stream: describeConsumedStream({
             kind: consumer.kind,
             source:
               producerMapRef.current.get(producerId)?.type === "screen"
                 ? "screen"
                 : "webcam",
             consumerPaused: consumer.paused,
-            producerPaused:
+            adaptivelyPaused:
+              adaptivelyPausedConsumerProducerIdsRef.current.has(producerId),
+            producerPausedHere:
               producerPausedStateRef.current.get(producerId) === true,
-          },
+            server: consumerTelemetryRef.current.get(producerId),
+          }),
         });
       }
       return streams;

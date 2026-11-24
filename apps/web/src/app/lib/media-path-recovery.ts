@@ -402,17 +402,49 @@ export const blockedMediaDirections = (
 export type ConsumedStream = {
   kind: "audio" | "video";
   source: "webcam" | "screen";
-  consumerPaused: boolean;
+  pausedHere: boolean;
+  pausedOnServer: boolean;
   producerPaused: boolean;
 };
+
+export type ServerConsumerState = {
+  paused?: boolean;
+  producerPaused?: boolean;
+};
+
+export const describeConsumedStream = ({
+  kind,
+  source,
+  consumerPaused,
+  adaptivelyPaused,
+  producerPausedHere,
+  server,
+}: {
+  kind: "audio" | "video";
+  source: "webcam" | "screen";
+  consumerPaused: boolean;
+  adaptivelyPaused: boolean;
+  producerPausedHere: boolean;
+  server: ServerConsumerState | undefined;
+}): ConsumedStream => ({
+  kind,
+  source,
+  pausedHere: consumerPaused,
+  pausedOnServer: adaptivelyPaused || server?.paused === true,
+  producerPaused: producerPausedHere || server?.producerPaused === true,
+});
 
 export const streamShouldFlow = ({
   kind,
   source,
-  consumerPaused,
+  pausedHere,
+  pausedOnServer,
   producerPaused,
 }: ConsumedStream): boolean =>
-  !consumerPaused && !producerPaused && (kind === "audio" || source === "webcam");
+  !pausedHere &&
+  !pausedOnServer &&
+  !producerPaused &&
+  (kind === "audio" || source === "webcam");
 
 export const receivePathExpectsMedia = (
   streams: ConsumedStream[],
