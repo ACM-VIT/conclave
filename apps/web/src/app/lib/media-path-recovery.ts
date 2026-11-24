@@ -189,19 +189,17 @@ export const planMediaPathEscalation = ({
 };
 
 /**
- * The ICE policy for transports a rebuild is about to create, decided with
- * the credentials it just fetched: TURN alone when that was asked for and
- * there is a relay to use, otherwise the policy already in use.
+ * Whether TURN alone is wanted once a rebuild starts: asked for now or
+ * before. Each transport still takes its policy from the relays it is
+ * offered, so wanting TURN alone never leaves a transport without candidates.
  */
 export const resolveRebuildRelayOnly = ({
   requested,
   relayOnly,
-  hasTurnServers,
 }: {
   requested: boolean;
   relayOnly: boolean;
-  hasTurnServers: boolean;
-}): boolean => (requested && hasTurnServers ? true : relayOnly);
+}): boolean => requested || relayOnly;
 
 export type MediaDirection = "producer" | "consumer";
 

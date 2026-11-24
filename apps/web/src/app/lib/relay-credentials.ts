@@ -121,6 +121,49 @@ export const icePolicyForOffers = (
 ): RTCIceTransportPolicy =>
   relayOnly && offeredTurnServers(offers) !== null ? "relay" : "all";
 
+export const RELAY_REFRESH_TRIES = 6;
+
+export type RelayRefreshChain = { triesLeft: number } | null;
+
+export const planRelayRefresh = (
+  chain: RelayRefreshChain,
+  {
+    wanted,
+    relayUsable,
+    budget,
+  }: { wanted: boolean; relayUsable: boolean; budget: "keep" | "renew" },
+): RelayRefreshChain => {
+  if (!wanted || relayUsable) return null;
+  if (chain && (chain.triesLeft > 0 || budget === "keep")) return chain;
+  return { triesLeft: RELAY_REFRESH_TRIES };
+};
+
+export const takeRelayRefreshTry = (
+  chain: RelayRefreshChain,
+): RelayRefreshChain =>
+  chain && chain.triesLeft > 0 ? { triesLeft: chain.triesLeft - 1 } : chain;
+
+export type RelayShortfall<D extends string> = {
+  direction: D;
+  offeredRelay: boolean;
+  carryingMedia: boolean;
+};
+
+export const transportsToMoveOntoRelay = <D extends string>({
+  wanted,
+  relayUsable,
+  transports,
+}: {
+  wanted: boolean;
+  relayUsable: boolean;
+  transports: RelayShortfall<D>[];
+}): D[] =>
+  wanted && relayUsable
+    ? transports
+        .filter(({ offeredRelay, carryingMedia }) => !offeredRelay && !carryingMedia)
+        .map(({ direction }) => direction)
+    : [];
+
 export const relayCarryingUrl = (
   offers: RelayOffer[],
   url: string,

@@ -25,7 +25,7 @@ import {
   type MediaPathSample,
   type MediaPathWatch,
 } from "../src/app/lib/media-path-recovery";
-import { relayProvenByMedia } from "../src/app/lib/relay-credentials";
+import { icePolicyForOffers, relayProvenByMedia } from "../src/app/lib/relay-credentials";
 
 const sample = (overrides: Partial<MediaPathSample>): MediaPathSample => ({
   at: 0,
@@ -297,26 +297,17 @@ describe("escalating when an ICE restart did not help", () => {
   );
 });
 
-describe("the ICE policy of a rebuild", () => {
-  it("uses TURN alone when it was asked for and the current credentials have a relay", () => {
-    expect(
-      resolveRebuildRelayOnly({ requested: true, relayOnly: false, hasTurnServers: true }),
-    ).toBe(true);
+describe("wanting TURN alone after a rebuild", () => {
+  it("wants TURN alone once asked, even while no relay is usable", () => {
+    const wanted = resolveRebuildRelayOnly({ requested: true, relayOnly: false });
+
+    expect(wanted).toBe(true);
+    expect(icePolicyForOffers(wanted, [])).toBe("all");
   });
 
-  it("stays on every path when the current credentials have no relay", () => {
-    expect(
-      resolveRebuildRelayOnly({ requested: true, relayOnly: false, hasTurnServers: false }),
-    ).toBe(false);
-  });
-
-  it("keeps the policy in use when TURN alone was not asked for", () => {
-    expect(
-      resolveRebuildRelayOnly({ requested: false, relayOnly: true, hasTurnServers: true }),
-    ).toBe(true);
-    expect(
-      resolveRebuildRelayOnly({ requested: false, relayOnly: false, hasTurnServers: true }),
-    ).toBe(false);
+  it("keeps wanting it until something resets it", () => {
+    expect(resolveRebuildRelayOnly({ requested: false, relayOnly: true })).toBe(true);
+    expect(resolveRebuildRelayOnly({ requested: false, relayOnly: false })).toBe(false);
   });
 });
 

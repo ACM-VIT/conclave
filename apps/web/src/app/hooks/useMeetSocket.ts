@@ -193,6 +193,10 @@ import {
   noteRelayCarryingMedia,
   offerRelays,
   offeredTurnServers,
+  planRelayRefresh,
+  takeRelayRefreshTry,
+  transportsToMoveOntoRelay,
+  type RelayRefreshChain,
   relayCarryingUrl,
   type RelayOffer,
   readRelayPairBytes,
@@ -252,7 +256,6 @@ type ConsumerTelemetryPayload = Omit<
 >;
 
 const RELAY_REFRESH_RETRY_MS = 10_000;
-const RELAY_REFRESH_RETRIES = 6;
 
 type ConsumeProducerOptions = {
   replaceExisting?: boolean;
@@ -1105,7 +1108,15 @@ export function useMeetSocket({
   const runtimeIceServersRef = useRef<RuntimeIceServers>(NO_RUNTIME_ICE_SERVERS);
   const relayOffersRef = useRef(new WeakMap<Transport, RelayOffer[]>());
   const relayOnlyIceRef = useRef(false);
-  const relayRefreshRetryRef = useRef<{ timeout: number | null } | null>(null);
+  const relayRefreshRef = useRef<{
+    chain: RelayRefreshChain;
+    timeout: number | null;
+    inFlight: boolean;
+  }>({ chain: null, timeout: null, inFlight: false });
+  const refreshIceServersRef = useRef<
+    ((roomId: string) => Promise<void>) | null
+  >(null);
+  const transportsCarryingMediaRef = useRef(new WeakSet<Transport>());
   // Each direction's health, escalated transport, rebuild step and held
   // rebuild live in one record, so they change together. Its health is the
   // only source of the blocked warning and its Try again.
@@ -1590,6 +1601,12 @@ export function useMeetSocket({
       ),
     [],
   );
+
+  const stopRelayRefresh = useCallback(() => {
+    const { timeout } = relayRefreshRef.current;
+    if (timeout !== null) window.clearTimeout(timeout);
+    relayRefreshRef.current = { chain: null, timeout: null, inFlight: false };
+  }, []);
 
   const resolveIceTransportPolicy = useCallback(
     (offers: RelayOffer[]): RTCIceTransportPolicy => {
@@ -2114,6 +2131,7 @@ export function useMeetSocket({
         currentRoomIdRef.current = null;
         runtimeIceServersRef.current = NO_RUNTIME_ICE_SERVERS;
         relayOnlyIceRef.current = false;
+        stopRelayRefresh();
         updateMediaPathRecovery({ type: "reset" });
       }
     },
@@ -2202,10 +2220,7 @@ export function useMeetSocket({
     onSocketReady?.(null);
     joinInfoRequestRef.current?.abort();
     joinInfoRequestRef.current = null;
-    if (relayRefreshRetryRef.current?.timeout != null) {
-      window.clearTimeout(relayRefreshRetryRef.current.timeout);
-    }
-    relayRefreshRetryRef.current = null;
+    stopRelayRefresh();
     heldJoinInfoRef.current = null;
     deviceRef.current = null;
     webcamCodecPolicyRef.current = { ...BASELINE_WEBCAM_CODEC_POLICY };
@@ -6203,7 +6218,7 @@ export function useMeetSocket({
     };
     // Transports seen carrying media. Connecting alone does not count: a path
     // can pass ICE checks and drop every media packet.
-    const carriedMediaOnce = new WeakSet<Transport>();
+    const carriedMediaOnce = transportsCarryingMediaRef.current;
     let sampling = false;
 
     const isSending = (producer: Producer | null): boolean =>
@@ -7442,25 +7457,121 @@ export function useMeetSocket({
     ],
   );
 
+  const relayUsableNow = useCallback(
+    () =>
+      getUsableTurnIceServers(runtimeIceServersRef.current, Date.now()) !==
+      null,
+    [],
+  );
+
+  const driveRelayRefresh = useCallback(
+    (budget: "keep" | "renew") => {
+      const drive = (nextBudget: "keep" | "renew") => {
+        const state = relayRefreshRef.current;
+        state.chain = planRelayRefresh(state.chain, {
+          wanted: relayOnlyIceRef.current,
+          relayUsable: relayUsableNow(),
+          budget: nextBudget,
+        });
+        if (!state.chain) {
+          if (state.timeout !== null) window.clearTimeout(state.timeout);
+          state.timeout = null;
+          return;
+        }
+        if (state.timeout !== null || state.inFlight) return;
+        if (state.chain.triesLeft === 0) return;
+        const generation = reconnectGenerationRef.current;
+        state.timeout = window.setTimeout(() => {
+          state.timeout = null;
+          const roomId = currentRoomIdRef.current;
+          const refresh = refreshIceServersRef.current;
+          if (
+            relayRefreshRef.current !== state ||
+            generation !== reconnectGenerationRef.current ||
+            intentionalDisconnectRef.current ||
+            !roomId ||
+            !refresh
+          ) {
+            return;
+          }
+          state.chain = takeRelayRefreshTry(
+            planRelayRefresh(state.chain, {
+              wanted: relayOnlyIceRef.current,
+              relayUsable: relayUsableNow(),
+              budget: "keep",
+            }),
+          );
+          if (!state.chain) return;
+          state.inFlight = true;
+          const settle = () => {
+            state.inFlight = false;
+            if (relayRefreshRef.current === state) drive("keep");
+          };
+          void refresh(roomId).then(settle, settle);
+        }, RELAY_REFRESH_RETRY_MS);
+      };
+      drive(budget);
+    },
+    [currentRoomIdRef, intentionalDisconnectRef, relayUsableNow],
+  );
+
+  const moveShortTransportsOntoRelay = useCallback(() => {
+    if (reconnectInFlightRef.current || intentionalDisconnectRef.current) {
+      return;
+    }
+    const directions = transportsToMoveOntoRelay({
+      wanted: relayOnlyIceRef.current,
+      relayUsable: relayUsableNow(),
+      transports: (["producer", "consumer"] as const).flatMap((direction) => {
+        const transport =
+          direction === "producer"
+            ? producerTransportRef.current
+            : consumerTransportRef.current;
+        if (!transport || transport.closed) return [];
+        return [
+          {
+            direction,
+            offeredRelay:
+              offeredTurnServers(relayOffersRef.current.get(transport) ?? []) !==
+              null,
+            carryingMedia: transportsCarryingMediaRef.current.has(transport),
+          },
+        ];
+      }),
+    });
+    if (directions.length === 0) return;
+    console.warn(
+      `[Meets] TURN credentials are back; moving the ${directions.join(" and ")} transport onto the relay.`,
+    );
+    void handleReconnectRef.current?.({
+      refreshIceServers: false,
+      failedDirections: directions,
+      relayOnly: { reason: "relay credentials are back" },
+    });
+  }, [
+    consumerTransportRef,
+    handleReconnectRef,
+    intentionalDisconnectRef,
+    producerTransportRef,
+    reconnectInFlightRef,
+    relayUsableNow,
+  ]);
+
   const applyJoinAnswerIceServers = useCallback(
     (
       iceServers: RTCIceServer[] | undefined,
       relayExpiresAt: number | null,
     ) => {
       if (!Array.isArray(iceServers)) return;
-      const next = applyJoinAnswerToIceServers(
+      runtimeIceServersRef.current = applyJoinAnswerToIceServers(
         runtimeIceServersRef.current,
         { iceServers, relayExpiresAt },
         Date.now(),
       );
-      runtimeIceServersRef.current = next;
-      // Relay-only needs a relay. Without one, go back to the direct path
-      // rather than offer no candidates.
-      if (!getUsableTurnIceServers(next, Date.now())) {
-        relayOnlyIceRef.current = false;
-      }
+      driveRelayRefresh("keep");
+      moveShortTransportsOntoRelay();
     },
-    [],
+    [driveRelayRefresh, moveShortTransportsOntoRelay],
   );
 
   // Fetches a fresh join answer for its ICE servers while the socket stays
@@ -7509,41 +7620,9 @@ export function useMeetSocket({
     ],
   );
 
-  const retryRelayRefreshInBackground = useCallback(
-    (roomId: string) => {
-      if (relayRefreshRetryRef.current) return;
-      const generation = reconnectGenerationRef.current;
-      const chain: { timeout: number | null } = { timeout: null };
-      relayRefreshRetryRef.current = chain;
-      const stillNeeded = () =>
-        relayRefreshRetryRef.current === chain &&
-        generation === reconnectGenerationRef.current &&
-        !intentionalDisconnectRef.current &&
-        relayOnlyIceRef.current &&
-        getUsableTurnIceServers(runtimeIceServersRef.current, Date.now()) ===
-          null;
-      const finish = () => {
-        if (relayRefreshRetryRef.current === chain) {
-          relayRefreshRetryRef.current = null;
-        }
-      };
-      const retry = (triesLeft: number) => {
-        chain.timeout = window.setTimeout(() => {
-          chain.timeout = null;
-          if (!stillNeeded()) {
-            finish();
-            return;
-          }
-          void refreshIceServersOnOpenSocket(roomId).then(() => {
-            if (stillNeeded() && triesLeft > 1) retry(triesLeft - 1);
-            else finish();
-          });
-        }, RELAY_REFRESH_RETRY_MS);
-      };
-      retry(RELAY_REFRESH_RETRIES);
-    },
-    [intentionalDisconnectRef, refreshIceServersOnOpenSocket],
-  );
+  useEffect(() => {
+    refreshIceServersRef.current = refreshIceServersOnOpenSocket;
+  }, [refreshIceServersOnOpenSocket]);
 
   const connectSocket = useCallback(
     (
@@ -9575,19 +9654,20 @@ export function useMeetSocket({
     const reconnectGeneration = reconnectGenerationRef.current;
     let attemptState = freshReconnectAttemptState(options);
     let rejoined = false;
-    const applyRequestedRelayPolicy = (roomId: string) => {
-      const hasTurnServers =
-        getUsableTurnIceServers(runtimeIceServersRef.current, Date.now()) !==
-        null;
+    const applyRequestedRelayPolicy = () => {
       const relayOnly = resolveRebuildRelayOnly({
         requested: attemptState.relayOnlyRequest !== null,
         relayOnly: relayOnlyIceRef.current,
-        hasTurnServers,
       });
-      if (relayOnly && !hasTurnServers) retryRelayRefreshInBackground(roomId);
-      if (relayOnly === relayOnlyIceRef.current) return;
+      const changed = relayOnly !== relayOnlyIceRef.current;
       relayOnlyIceRef.current = relayOnly;
-      console.warn("[Meets] Rebuilding through TURN only.");
+      driveRelayRefresh("renew");
+      if (!changed) return;
+      console.warn(
+        relayUsableNow()
+          ? "[Meets] Rebuilding through TURN only."
+          : "[Meets] TURN only is wanted, but no TURN credentials are usable yet.",
+      );
       telemetry.capture("meet_turn_relay_activated", {
         reason: attemptState.relayOnlyRequest?.reason ?? "media path rebuild",
         roomId: currentRoomIdRef.current ?? undefined,
@@ -9614,7 +9694,7 @@ export function useMeetSocket({
         }
         if (reconnectGeneration !== reconnectGenerationRef.current) return;
         if (intentionalDisconnectRef.current) return;
-        applyRequestedRelayPolicy(scopedRoomId);
+        applyRequestedRelayPolicy();
         const result =
           scopedDirection === "consumer"
             ? await rebuildReceivePath()
@@ -9741,7 +9821,7 @@ export function useMeetSocket({
           }
           if (reconnectGeneration !== reconnectGenerationRef.current) return;
           if (intentionalDisconnectRef.current) return;
-          applyRequestedRelayPolicy(reconnectRoomId);
+          applyRequestedRelayPolicy();
 
           const joinOptions = joinOptionsRef.current;
           const mediaNeeds = getJoinMediaNeeds(
@@ -9991,7 +10071,8 @@ export function useMeetSocket({
     currentRoomIdRef,
     ensureLiveLocalMediaForJoin,
     refreshIceServersOnOpenSocket,
-    retryRelayRefreshInBackground,
+    driveRelayRefresh,
+    relayUsableNow,
     escalateMediaPathFailure,
     rebuildReceivePath,
     rebuildSendPath,
@@ -10142,6 +10223,7 @@ export function useMeetSocket({
       serverRoomIdRef.current = null;
       runtimeIceServersRef.current = NO_RUNTIME_ICE_SERVERS;
       relayOnlyIceRef.current = false;
+      stopRelayRefresh();
       updateMediaPathRecovery({ type: "reset" });
       setRoomId(targetRoomId);
       if (joinMode === "webinar_attendee") {

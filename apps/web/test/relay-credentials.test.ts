@@ -3,8 +3,13 @@ import {
   NO_RUNTIME_ICE_SERVERS,
   applyJoinAnswerToIceServers,
   getUsableTurnIceServers,
+  RELAY_REFRESH_TRIES,
   icePolicyForOffers,
   noteRelayCarryingMedia,
+  planRelayRefresh,
+  takeRelayRefreshTry,
+  transportsToMoveOntoRelay,
+  type RelayRefreshChain,
   offerRelays,
   relayCarryingUrl,
   readRelayPairBytes,
@@ -306,5 +311,87 @@ describe("the ICE policy a transport is built with", () => {
 
   it("never asks for relay only with no relay at all", () => {
     expect(icePolicyForOffers(true, offerRelays(NO_RUNTIME_ICE_SERVERS, NOW))).toBe("all");
+  });
+});
+
+describe("fetching TURN credentials again while relay only is wanted", () => {
+  const wanted = { wanted: true, relayUsable: false } as const;
+
+  it("starts a chain when a join answer comes back with STUN only", () => {
+    expect(planRelayRefresh(null, { ...wanted, budget: "keep" })).toEqual({
+      triesLeft: RELAY_REFRESH_TRIES,
+    });
+  });
+
+  it("keeps a running chain going when its own answer has STUN only", () => {
+    expect(planRelayRefresh({ triesLeft: 2 }, { ...wanted, budget: "keep" })).toEqual({
+      triesLeft: 2,
+    });
+  });
+
+  it("ends the chain once a relay is usable or relay only is no longer wanted", () => {
+    expect(
+      planRelayRefresh({ triesLeft: 2 }, { wanted: true, relayUsable: true, budget: "keep" }),
+    ).toBeNull();
+    expect(
+      planRelayRefresh({ triesLeft: 2 }, { wanted: false, relayUsable: false, budget: "renew" }),
+    ).toBeNull();
+  });
+
+  it("gives a new rebuild a fresh budget but never refills one from an answer", () => {
+    expect(planRelayRefresh({ triesLeft: 0 }, { ...wanted, budget: "keep" })).toEqual({
+      triesLeft: 0,
+    });
+    expect(planRelayRefresh({ triesLeft: 0 }, { ...wanted, budget: "renew" })).toEqual({
+      triesLeft: RELAY_REFRESH_TRIES,
+    });
+  });
+
+  const provider = (upFromTry: number | null) => {
+    let chain: RelayRefreshChain = planRelayRefresh(null, { ...wanted, budget: "keep" });
+    let tries = 0;
+    while (chain && chain.triesLeft > 0) {
+      chain = takeRelayRefreshTry(chain);
+      tries += 1;
+      const relayUsable = upFromTry !== null && tries >= upFromTry;
+      chain = planRelayRefresh(chain, { wanted: true, relayUsable, budget: "keep" });
+    }
+    return { tries, chain };
+  };
+
+  it("keeps asking through a provider outage and stops at the first usable relay", () => {
+    expect(provider(3)).toEqual({ tries: 3, chain: null });
+  });
+
+  it("stops after its budget while the provider stays down", () => {
+    expect(provider(null)).toEqual({ tries: RELAY_REFRESH_TRIES, chain: { triesLeft: 0 } });
+  });
+});
+
+describe("moving a transport onto the relay once one is usable", () => {
+  const transports = [
+    { direction: "consumer" as const, offeredRelay: false, carryingMedia: false },
+    { direction: "producer" as const, offeredRelay: false, carryingMedia: true },
+  ];
+
+  it("rebuilds a transport built without a relay that carries no media", () => {
+    expect(transportsToMoveOntoRelay({ wanted: true, relayUsable: true, transports })).toEqual([
+      "consumer",
+    ]);
+  });
+
+  it("leaves transports alone while no relay is usable or relay only is not wanted", () => {
+    expect(transportsToMoveOntoRelay({ wanted: true, relayUsable: false, transports })).toEqual([]);
+    expect(transportsToMoveOntoRelay({ wanted: false, relayUsable: true, transports })).toEqual([]);
+  });
+
+  it("leaves a transport that was offered a relay to the watchdog", () => {
+    expect(
+      transportsToMoveOntoRelay({
+        wanted: true,
+        relayUsable: true,
+        transports: [{ direction: "consumer", offeredRelay: true, carryingMedia: false }],
+      }),
+    ).toEqual([]);
   });
 });
