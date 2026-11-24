@@ -1301,6 +1301,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
               : hostRequested && (clientPolicy.allowHostJoin || forcedHostJoin)
                 ? "promoted"
                 : "fallback",
+            guestClaim.bindTo,
           );
           if (!room.hostUserKey) room.makePrimaryHost(userKey);
         }

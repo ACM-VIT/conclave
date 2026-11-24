@@ -104,6 +104,7 @@ const record = (hostUserKey: string, writer: string, liveAt = Date.now()): RoomR
   ownerEmail: null,
   temporaryHostUserKey: null,
   coHostUserKeys: [],
+  guestPasses: {},
 });
 const filesIn = (dir: string): string[] =>
   readdirSync(dir).flatMap((name) => {

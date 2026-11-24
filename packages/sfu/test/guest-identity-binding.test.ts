@@ -634,6 +634,24 @@ describe("blocking a guest", () => {
     const third = await join(state, tab("tab-3", "proof-of-pass-e", "E"));
     expect(third.ack).toHaveBeenCalledWith(notAllowed);
   });
+
+  it("lets the pass back in once a host admits it, whichever of its blocked tabs the admission names", async () => {
+    const state = makeState();
+    await join(state, guestHost);
+    const room = state.rooms.get("conclave:room")!;
+    const first = tab("tab-1", "proof-of-pass-e", "E");
+    const second = tab("tab-2", "proof-of-pass-e", "E");
+    await join(state, first);
+    await join(state, second);
+    room.blockUser(first.userId);
+    room.blockUser(second.userId);
+    room.removeClient(`${first.userId}#tab-1`);
+    room.removeClient(`${second.userId}#tab-2`);
+    expect(room.allowLockedUser(first.userId)).toBe(true);
+
+    const third = await join(state, tab("tab-3", "proof-of-pass-e", "E"));
+    expect(third.ack).toHaveBeenCalledWith(joined);
+  });
 });
 
 describe("guests on clients that predate guest passes", () => {
@@ -3791,19 +3809,9 @@ describe("a guest identity that holds nothing in the room", () => {
       (room) => room.setLocked(true),
     ],
     [
-      "the host revokes its admission past the lock",
-      (room) => room.allowLockedUser(guest.userId),
-      (room) => room.revokeLockedAllowedUser(guest.userId),
-    ],
-    [
       "the host revokes its waiting-room admission",
       (room) => room.allowUser(guest.userId),
       (room) => room.revokeAllowedUser(guest.userId),
-    ],
-    [
-      "the host unblocks it",
-      (room) => room.blockUser(guest.userId),
-      (room) => room.unblockUser(guest.userId),
     ],
     [
       "the host withdraws its stage invite",
@@ -3826,6 +3834,29 @@ describe("a guest identity that holds nothing in the room", () => {
     await endOfTurn();
 
     expect(room.boundGuestIdentityCount).toBe(0);
+  });
+
+  it.each<[string, (room: Room) => void, (room: Room) => void]>([
+    [
+      "the host revokes its admission past the lock",
+      (room) => room.allowLockedUser(guest.userId),
+      (room) => room.revokeLockedAllowedUser(guest.userId),
+    ],
+    [
+      "the host unblocks it",
+      (room) => room.blockUser(guest.userId),
+      (room) => room.unblockUser(guest.userId),
+    ],
+  ])("stays bound, with the pass the ledger keeps, while it has to be let in again after %s", async (_label, retain, lose) => {
+    const { room } = await departedGuestWith(retain);
+
+    lose(room);
+    await endOfTurn();
+
+    expect(room.boundGuestIdentityCount).toBe(1);
+    expect(room.guestPassesFor(room.usersNeedingReadmission)).toEqual({
+      [guest.userId]: [guest.guestProof],
+    });
   });
 
   it("stays bound while one host action swaps its last right for another", async () => {

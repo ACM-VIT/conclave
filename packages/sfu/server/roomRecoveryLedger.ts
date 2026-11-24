@@ -46,6 +46,7 @@ export type RoomRecoveryRecord = {
   ownerEmail: string | null;
   temporaryHostUserKey: string | null;
   coHostUserKeys: string[];
+  guestPasses: Record<string, string[]>;
 };
 
 /**
@@ -71,6 +72,7 @@ export type LostRoom = {
   adminUserKeys: string[];
   coHostUserKeys: string[];
   readmissionRequiredUserKeys: string[];
+  guestPasses: Record<string, string[]>;
   // After this no pass from the lost call can still be good, so the room is
   // anyone's to open again.
   claimableUntil: number;
@@ -96,6 +98,7 @@ type LedgerRoom = Pick<
   | "usersNeedingReadmission"
   | "recoveryPassesVoidUntil"
   | "hostReasons"
+  | "guestPassesFor"
 >;
 
 export type RoomRecoveryLedger = {
@@ -108,6 +111,12 @@ export type RoomRecoveryLedger = {
 
 const isStringList = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every((item) => typeof item === "string");
+
+const isStringListRecord = (value: unknown): value is Record<string, string[]> =>
+  Boolean(value) &&
+  typeof value === "object" &&
+  !Array.isArray(value) &&
+  Object.values(value as Record<string, unknown>).every(isStringList);
 
 // The one place a stored record is read back into its shape.
 const parseRoomRecoveryRecord = (raw: unknown): RoomRecoveryRecord | null => {
@@ -122,6 +131,7 @@ const parseRoomRecoveryRecord = (raw: unknown): RoomRecoveryRecord | null => {
     ownerEmail,
     temporaryHostUserKey = null,
     coHostUserKeys,
+    guestPasses = {},
   } = raw as Record<string, unknown>;
   if (liveAt !== null && typeof liveAt !== "number") return null;
   if (overAt !== null && typeof overAt !== "number") return null;
@@ -134,6 +144,7 @@ const parseRoomRecoveryRecord = (raw: unknown): RoomRecoveryRecord | null => {
   if (!isStringList(adminUserKeys)) return null;
   if (!isStringList(readmissionRequiredUserKeys)) return null;
   if (coHostUserKeys !== undefined && !isStringList(coHostUserKeys)) return null;
+  if (!isStringListRecord(guestPasses)) return null;
   return {
     liveAt,
     hostUserKey,
@@ -145,6 +156,7 @@ const parseRoomRecoveryRecord = (raw: unknown): RoomRecoveryRecord | null => {
     temporaryHostUserKey,
     coHostUserKeys:
       coHostUserKeys ?? adminUserKeys.filter((userKey) => userKey !== temporaryHostUserKey),
+    guestPasses,
   };
 };
 
@@ -278,6 +290,10 @@ export const createRoomRecoveryLedger = (
         coHostUserKeys: [...room.hostReasons]
           .filter(([, reason]) => reason === "cohost")
           .map(([userKey]) => userKey),
+        guestPasses: room.guestPassesFor([
+          ...room.adminUserKeys,
+          ...room.usersNeedingReadmission,
+        ]),
       }),
     noteOver: (room) => {
       save(room, {
@@ -290,6 +306,7 @@ export const createRoomRecoveryLedger = (
         ownerEmail: room.ownerEmail,
         temporaryHostUserKey: null,
         coHostUserKeys: [],
+        guestPasses: {},
       });
       noteFinished(room.incarnationId);
     },
@@ -309,6 +326,7 @@ export const createRoomRecoveryLedger = (
                 adminUserKeys: record.adminUserKeys,
                 coHostUserKeys: record.coHostUserKeys,
                 readmissionRequiredUserKeys: record.readmissionRequiredUserKeys,
+                guestPasses: record.guestPasses,
                 claimableUntil: liveAt + LOST_ROOM_WINDOW_MS,
               }
             : null,

@@ -396,9 +396,12 @@ export const registerAdminHandlers = (
       return;
     }
     const ownKey = guard.room.userKeysById.get(guard.adminId);
+    const targetKey = guard.room.userKeysById.get(normalizedTargetId);
     if (
       normalizedTargetId === guard.adminId ||
-      (ownKey !== undefined && guard.room.userKeysById.get(normalizedTargetId) === ownKey)
+      (ownKey !== undefined &&
+        targetKey !== undefined &&
+        guard.room.isSamePerson(ownKey, targetKey))
     ) {
       respond(cb, { error: "Cannot kick yourself" });
       return;

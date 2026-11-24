@@ -27,6 +27,7 @@ const room = {
   adminUserKeys: new Set(["host@example.com", "guest-cohost"]),
   usersNeedingReadmission: ["guest-removed"],
   recoveryPassesVoidUntil: null,
+  guestPassesFor: () => ({ "guest-removed": ["proof-of-pass", "proof-of-linked-pass"] }),
 };
 
 let directory: string;
@@ -44,7 +45,7 @@ afterEach(() => {
 });
 
 describe("what the SFU remembers about a room across a restart", () => {
-  it("knows a room it lost, who hosted it and who had been put out of it", async () => {
+  it("knows a room it lost, who hosted it and who had been put out of it, with the passes of each guest", async () => {
     sfu().noteRunning(room);
 
     expect(await sfu().recall(CHANNEL)).toEqual({
@@ -53,6 +54,7 @@ describe("what the SFU remembers about a room across a restart", () => {
         adminUserKeys: ["host@example.com", "guest-cohost"],
         coHostUserKeys: ["guest-cohost"],
         readmissionRequiredUserKeys: ["guest-removed"],
+        guestPasses: { "guest-removed": ["proof-of-pass", "proof-of-linked-pass"] },
         claimableUntil: Date.now() + 7 * MINUTE_MS,
       },
       passesVoidUntil: null,
@@ -80,6 +82,7 @@ describe("what the SFU remembers about a room across a restart", () => {
 
     const recalled = await createRoomRecoveryLedger(store).recall(CHANNEL);
     expect(recalled.lost?.coHostUserKeys).toEqual(["guest-cohost"]);
+    expect(recalled.lost?.guestPasses).toEqual({});
   });
 
   it("knows nothing of a code that never had a room", async () => {
