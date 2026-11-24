@@ -446,3 +446,45 @@ describe("one versioned set of TURN credentials", () => {
     expect(noteRelayCarryingMedia(servers, older, NOW)).toBe(servers);
   });
 });
+
+describe("offering a proven relay next to the newest one", () => {
+  const A = "turn:a.example:3478";
+  const B = "turns:b.example:5349";
+  const C = "turn:c.example:3478?transport=tcp";
+  const set = (urls: string[][], issuedAt: number, expiresAt: number | null) => ({
+    servers: urls.map((group, index) => ({ urls: group.length === 1 ? group[0] : group, username: `u${issuedAt}-${index}`, credential: "c" })),
+    expiresAt,
+    issuedAt,
+  });
+  const offeredUrls = (latest: ReturnType<typeof set> | null, proven: ReturnType<typeof set> | null) =>
+    offerRelays({ stun: [stun], latestRelay: latest, provenRelay: proven }, NOW).map((offer) =>
+      offer.servers.map((server) => [server.urls].flat()),
+    );
+  const fresh = NOW + HOUR_MS;
+
+  it.each([
+    ["no overlap", [[A]], [[B]], [[[A]], [[B]]]],
+    ["the proven entry shares one of its URLs", [[A]], [[A, B]], [[[A]], [[B]]]],
+    ["the proven entry shares every URL", [[A, B]], [[A, B]], [[[A, B]]]],
+    ["the newest entry covers part of two proven entries", [[A]], [[A, B], [A, C]], [[[A]], [[B], [C]]]],
+    ["the proven set repeats a URL", [[A]], [[B], [B, C]], [[[A]], [[B], [C]]]],
+  ])("keeps every proven URL the newest set does not offer: %s", (_name, latest, proven, expected) => {
+    expect(offeredUrls(set(latest, NOW, fresh), set(proven, NOW - 60_000, fresh))).toEqual(expected);
+  });
+
+  it("offers the proven set whole when the newest set has expired", () => {
+    expect(offeredUrls(set([[A]], NOW, NOW + 1_000), set([[A, B]], NOW - 60_000, fresh))).toEqual([[[A, B]]]);
+  });
+
+  it("drops a proven set that has expired, whatever its URLs", () => {
+    expect(offeredUrls(set([[A]], NOW, fresh), set([[A, B]], NOW - 60_000, NOW + 1_000))).toEqual([[[A]]]);
+  });
+
+  it("keeps the credentials of a proven entry it trims", () => {
+    const proven = set([[A, B]], NOW - 60_000, fresh);
+    const offers = offerRelays({ stun: [stun], latestRelay: set([[A]], NOW, fresh), provenRelay: proven }, NOW);
+
+    expect(offers[1].servers).toEqual([{ ...proven.servers[0], urls: B }]);
+    expect(offers[1].relay).toBe(proven);
+  });
+});

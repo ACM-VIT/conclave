@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it } from "vitest";
-import { RIG_START, startRig, stopRig, type CallRig, type FakeTransport } from "./call-rig";
+import { RIG_START, TURN_A, TURN_B, startRig, stopRig, type CallRig, type FakeTransport } from "./call-rig";
 import { readJoinTokenUserKey } from "../src/app/lib/join-token-identity";
 
 let rig: CallRig | null = null;
@@ -181,6 +181,28 @@ describe("moving onto the relay when credentials return", () => {
     expect(await waitFor(rig, () => rig!.health.consumer === "healthy", 8_000)).toBe(true);
   });
 
+  it("keeps offering a proven relay URL that a newer answer leaves out", async () => {
+    rig = await startRig({ directWorks: false });
+    rig.answerUrls = [TURN_A, TURN_B];
+    rig.workingRelayUrls = new Set([TURN_B]);
+    await rig.join();
+    await rig.advance(10_000);
+    const proven = rig.generations[0];
+    expect(rig.recv?.allocatedUrl).toBe(TURN_B);
+    expect(rig.provenAt.has(proven)).toBe(true);
+
+    rig.answerUrls = [TURN_A];
+    rig.refuseIceRestart = true;
+    rig.failRecv();
+    await rig.advance(6_000);
+
+    expect(rig.generations.length).toBeGreaterThan(1);
+    expect(rig.recv?.turnUsernames).toContain(proven.username);
+    expect(rig.recv?.allocatedUrl).toBe(TURN_B);
+    expect(rig.recv?.carriedBytes).toBeGreaterThan(0);
+    expect(rig.offerViolations).toEqual([]);
+  });
+
   it("never moves a transport that carries media while its rebuild waits for the producer list", async () => {
     rig = await startRig({ ttlSeconds: 30 });
     await rig.join();
@@ -283,6 +305,8 @@ const playSeed = async (seed: number): Promise<string | null> => {
   const pick = <T,>(values: T[]) => values[Math.floor(random() * values.length)];
   const target = await startRig({ ttlSeconds: 40, directWorks: random() < 0.5 });
   rig = target;
+  target.answerUrls = pick([[TURN_A], [TURN_A, TURN_B], [TURN_B, TURN_A]]);
+  target.workingRelayUrls = new Set(pick([[TURN_A, TURN_B], [TURN_B], [TURN_A]]));
   const trace: string[] = [];
   try {
     await target.join();
@@ -290,7 +314,7 @@ const playSeed = async (seed: number): Promise<string | null> => {
     target.failRecv();
     await target.advance(3_000);
     for (let step = 0; step < 24; step++) {
-      const event = pick(["advance", "advance", "provider", "route", "release", "fail", "holdProducers", "announce", "slowRelay"]);
+      const event = pick(["advance", "advance", "provider", "route", "release", "fail", "holdProducers", "announce", "slowRelay", "relayUrls", "workingUrls"]);
       trace.push(event);
       if (event === "advance") await target.advance(500 + Math.floor(random() * 8_000));
       else if (event === "provider") target.provider = target.provider === "up" ? "down" : "up";
@@ -300,6 +324,8 @@ const playSeed = async (seed: number): Promise<string | null> => {
       else if (event === "holdProducers") target.holdProducersMs = 2_000 + Math.floor(random() * 11_000);
       else if (event === "announce") target.announceProducer();
       else if (event === "slowRelay") target.relayConnectMs = target.relayConnectMs === 200 ? 7_000 : 200;
+      else if (event === "relayUrls") target.answerUrls = pick([[TURN_A], [TURN_A, TURN_B], [TURN_B], [TURN_B, TURN_A]]);
+      else if (event === "workingUrls") target.workingRelayUrls = new Set(pick([[TURN_A, TURN_B], [TURN_B], [TURN_A]]));
       await target.advance(250);
     }
     target.route = "up";
@@ -309,7 +335,7 @@ const playSeed = async (seed: number): Promise<string | null> => {
     target.releaseHeldRoutes("answer");
     await target.advance(30_000);
 
-    const failures: string[] = [];
+    const failures: string[] = [...target.offerViolations];
     for (const move of target.moves) {
       if (move.bytes > 0) failures.push(`moved a transport that carried ${move.bytes} bytes`);
     }
@@ -317,7 +343,8 @@ const playSeed = async (seed: number): Promise<string | null> => {
     const newest = target.generations.at(-1);
     const relayUsable = Boolean(newest && newest.expiresAt - Date.now() > RELAY_USABLE_MARGIN_MS);
     const recv = target.recv;
-    if (needsRelay && relayUsable && recv && recv.carriedBytes === 0 && recv.usableGeneration === null) {
+    const workingHeld = Boolean(newest && newest.urls.some((url) => target.workingRelayUrls.has(url)));
+    if (needsRelay && relayUsable && workingHeld && recv && recv.carriedBytes === 0 && recv.usableGeneration === null) {
       failures.push(`receive transport ${recv.policy} [${recv.turnUsernames.join(",")}] never carried media and is off the relay`);
     }
     return failures.length > 0

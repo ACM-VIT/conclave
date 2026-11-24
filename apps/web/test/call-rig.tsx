@@ -14,7 +14,8 @@ type Options = Parameters<typeof useMeetSocket>[0];
 
 export const RIG_START = Date.UTC(2030, 0, 1, 12, 0, 0);
 export const ROOM = "rig-room";
-const TURN_URL = "turn:turn.rig.test:3478?transport=udp";
+export const TURN_A = "turn:turn.rig.test:3478?transport=udp";
+export const TURN_B = "turns:turn-b.rig.test:5349?transport=tcp";
 const STUN = { urls: "stun:stun.rig.test:3478" };
 
 class Emitter {
@@ -58,7 +59,10 @@ export type Generation = {
   username: string;
   sentAt: number;
   expiresAt: number;
+  urls: string[];
 };
+
+type OfferedEntry = { username: string; urls: string[] };
 
 export class FakeTransport extends Emitter {
   readonly createdAt: number;
@@ -70,6 +74,8 @@ export class FakeTransport extends Emitter {
   accruedAt: number | null = null;
   connectedAt: number | null = null;
   allocatedGeneration: Generation | null = null;
+  allocatedUrl: string | null = null;
+  relayCarriedMs = 0;
   reportAt: number | null = null;
   restartIceCalls = 0;
 
@@ -99,6 +105,21 @@ export class FakeTransport extends Emitter {
       .filter((generation): generation is Generation => Boolean(generation));
   }
 
+  get offeredEntries(): OfferedEntry[] {
+    return (this.options.iceServers ?? [])
+      .map((server) => ({ username: String(server.username), urls: [server.urls].flat().map(String) }))
+      .filter(({ urls }) => urls.some((url) => url.startsWith("turn")));
+  }
+
+  workingEntry(): { generation: Generation; url: string } | null {
+    const choices = this.offeredEntries.flatMap((entry) => {
+      const generation = this.rig.generations.find((candidate) => candidate.username === entry.username);
+      const url = entry.urls.find((candidate) => this.rig.workingRelayUrls.has(candidate));
+      return generation && url && generation.expiresAt > Date.now() ? [{ generation, url }] : [];
+    });
+    return choices.sort((a, b) => b.generation.sentAt - a.generation.sentAt)[0] ?? null;
+  }
+
   setState(state: RTCPeerConnectionState) {
     if (this.closed || this.connectionState === state) return;
     this.connectionState = state;
@@ -107,11 +128,7 @@ export class FakeTransport extends Emitter {
   }
 
   get usableGeneration(): Generation | null {
-    return (
-      this.offeredGenerations
-        .filter((generation) => generation.expiresAt > Date.now())
-        .sort((a, b) => b.sentAt - a.sentAt)[0] ?? null
-    );
+    return this.workingEntry()?.generation ?? null;
   }
 
   private async startConnecting() {
@@ -219,7 +236,7 @@ export class FakeTransport extends Emitter {
       [
         "L1",
         relay
-          ? { type: "local-candidate", id: "L1", candidateType: "relay", url: TURN_URL }
+          ? { type: "local-candidate", id: "L1", candidateType: "relay", url: this.allocatedUrl ?? TURN_A }
           : { type: "local-candidate", id: "L1", candidateType: "host" },
       ],
     ];
@@ -277,6 +294,10 @@ export class CallRig {
   relayConnectMs: number;
   refuseIceRestart = false;
   relayFailsOnExpiry = false;
+  answerUrls: string[] = [TURN_A];
+  workingRelayUrls = new Set([TURN_A, TURN_B]);
+  provenAt = new Map<Generation, number>();
+  offerViolations: string[] = [];
   answerDelayMs = 300;
   routePlan: Array<"answer" | "hold" | "fail"> = [];
   holdProducersMs = 0;
@@ -360,7 +381,7 @@ export class CallRig {
     window.setTimeout(() => {
       if (transport.closed) return;
       if (this.canConnect(transport)) {
-        if (!this.direct(transport)) transport.allocatedGeneration = transport.usableGeneration;
+        if (!this.direct(transport)) this.allocate(transport);
         transport.setState("connected");
       } else {
         window.setTimeout(() => transport.setState("failed"), 5_000);
@@ -372,7 +393,7 @@ export class CallRig {
     window.setTimeout(() => {
       if (transport.closed) return;
       if (this.canConnect(transport)) {
-        if (!this.direct(transport)) transport.allocatedGeneration = transport.usableGeneration;
+        if (!this.direct(transport)) this.allocate(transport);
         transport.setState("connected");
       } else {
         transport.setState("failed");
@@ -380,11 +401,23 @@ export class CallRig {
     }, 300);
   }
 
+  allocate(transport: FakeTransport) {
+    const entry = transport.workingEntry();
+    transport.allocatedGeneration = entry?.generation ?? null;
+    transport.allocatedUrl = entry?.url ?? null;
+  }
+
   accrue(transport: FakeTransport) {
     const now = Date.now();
     const since = transport.accruedAt ?? now;
     transport.accruedAt = now;
     if (!this.pathWorks(transport) || !transport.hasConsumers) return;
+    if (this.carriesOverRelay(transport) && transport.allocatedGeneration) {
+      transport.relayCarriedMs += now - since;
+      if (transport.relayCarriedMs >= 7_500 && !this.provenAt.has(transport.allocatedGeneration)) {
+        this.provenAt.set(transport.allocatedGeneration, now);
+      }
+    }
     if (transport.direction === "send") {
       transport.carriedBytes += Math.round((now - since) * 4);
       if (!this.outgoingDropped) transport.reportAt = now;
@@ -415,6 +448,7 @@ export class CallRig {
       username: `gen-${this.generations.length + 1}`,
       sentAt,
       expiresAt: sentAt + this.ttlSeconds * 1000,
+      urls: [...this.answerUrls],
     };
     this.generations.push(generation);
     return generation;
@@ -438,7 +472,14 @@ export class CallRig {
     return {
       token: this.token(),
       sfuUrl: "http://sfu.rig.test",
-      iceServers: [STUN, { urls: TURN_URL, username: generation.username, credential: "secret" }],
+      iceServers: [
+        STUN,
+        {
+          urls: generation.urls.length === 1 ? generation.urls[0] : generation.urls,
+          username: generation.username,
+          credential: "secret",
+        },
+      ],
       iceServersTtlSeconds: this.ttlSeconds,
     };
   }
@@ -613,8 +654,35 @@ export class CallRig {
     };
   }
 
+  checkOffer(transport: FakeTransport) {
+    const now = Date.now();
+    const usable = (generation: Generation) => generation.expiresAt - now > 5_000;
+    const carried = [...this.provenAt.keys()].sort((a, b) => b.sentAt - a.sentAt);
+    const proven = carried[0];
+    const newestCarrier = this.transports
+      .filter((candidate) => candidate.allocatedGeneration && candidate.relayCarriedMs > 0)
+      .map((candidate) => candidate.allocatedGeneration!)
+      .sort((a, b) => b.sentAt - a.sentAt)[0];
+    if (!proven || !usable(proven) || newestCarrier !== proven) return;
+    const offered = new Set(
+      transport.offeredEntries
+        .filter(({ username }) => {
+          const generation = this.generations.find((candidate) => candidate.username === username);
+          return generation !== undefined && usable(generation);
+        })
+        .flatMap(({ urls }) => urls),
+    );
+    const missing = proven.urls.filter((url) => !offered.has(url));
+    if (missing.length > 0) {
+      this.offerViolations.push(
+        `${((now - RIG_START) / 1000).toFixed(1)}s ${transport.direction} transport left out ${missing.join(",")} of proven ${proven.username}`,
+      );
+    }
+  }
+
   addTransport(direction: "send" | "recv", options: FakeTransport["options"] & { id: string }) {
     const transport = new FakeTransport(this, options.id, direction, options);
+    this.checkOffer(transport);
     this.transports.push(transport);
     this.log.push(`${((Date.now() - RIG_START) / 1000).toFixed(1)}s ${direction} transport ${transport.policy} [${transport.turnUsernames.join(",")}]`);
     return transport;

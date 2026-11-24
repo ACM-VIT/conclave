@@ -121,9 +121,11 @@ export const offerRelays = (
     : [];
   if (!proven || proven === latest) return offers;
   const taken = serverUrls(latest?.servers ?? []);
-  const provenServers = proven.servers.filter(
-    (server) => !normalizeIceServerUrls(server.urls).some((url) => taken.has(url)),
-  );
+  const provenServers = proven.servers.flatMap((server) => {
+    const urls = normalizeIceServerUrls(server.urls).filter((url) => !taken.has(url));
+    for (const url of urls) taken.add(url);
+    return urls.length > 0 ? [buildIceServerWithUrls(server, urls)] : [];
+  });
   return provenServers.length > 0
     ? [...offers, { relay: proven, servers: provenServers }]
     : offers;
