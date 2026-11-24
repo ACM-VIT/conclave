@@ -13,8 +13,10 @@ import { fakeDockerEngine, freePort, hardenedImage } from "./support/docker.js";
 const TOKEN = randomBytes(32).toString("hex");
 const packageDir = fileURLToPath(new URL("..", import.meta.url));
 
-const runService = async (env: NodeJS.ProcessEnv, args: string[]) => {
-    const child = spawn(process.execPath, ["--import", "tsx", "src/server.ts", ...args], {
+const fakeLocalhostDns = fileURLToPath(new URL("./support/fake-localhost-dns.mjs", import.meta.url));
+
+const runService = async (env: NodeJS.ProcessEnv, args: string[], preload: string[] = []) => {
+    const child = spawn(process.execPath, ["--import", "tsx", ...preload.flatMap((path) => ["--import", path]), "src/server.ts", ...args], {
         cwd: packageDir,
         env: { PATH: process.env.PATH, BROWSER_SERVICE_TOKEN: TOKEN, ...env },
         stdio: ["ignore", "pipe", "pipe"],
@@ -193,6 +195,72 @@ test("--check-config accepts the replaced service on ::1 however its address was
             }
         }
         assert.deepEqual(outcomes, { "::1": 0, "0:0:0:0:0:0:0:1": 0, "[0000:0000:0000:0000:0000:0000:0000:0001]": 0 });
+    } finally {
+        await engine.close();
+    }
+});
+
+test("--check-config resolves a host name once and compares the address it resolves to", async () => {
+    const engine = await fakeDockerEngine({ "conclave-browser:latest": hardenedImage });
+    const listenOn = async (port: number, host: string) => {
+        const server = createHttpServer((_req, res) => {
+            res.writeHead(503, { "content-type": "application/json" });
+            res.end(JSON.stringify({ status: "unavailable" }));
+        });
+        server.listen(port, host);
+        await once(server, "listening");
+        return () =>
+            new Promise<void>((resolve) => {
+                server.closeAllConnections();
+                server.close(() => resolve());
+            });
+    };
+    const check = async (localhost: string, holderHost: string | null, previousBinding: (port: number) => string) => {
+        const port = await freePort();
+        const release = holderHost ? await listenOn(port, holderHost) : async () => undefined;
+        try {
+            return await runService(
+                {
+                    BROWSER_SERVICE_HOST: "localhost",
+                    BROWSER_SERVICE_PORT: String(port),
+                    DOCKER_HOST: engine.host,
+                    FAKE_LOCALHOST_ADDRESSES: localhost,
+                    BROWSER_SERVICE_PREVIOUS_CONTAINER: "4f2c1d",
+                    BROWSER_SERVICE_PREVIOUS_BINDINGS: previousBinding(port),
+                    BROWSER_SERVICE_PREVIOUS_DEPLOY_ID: "",
+                },
+                ["--check-config"],
+                [fakeLocalhostDns],
+            );
+        } finally {
+            await release();
+        }
+    };
+    try {
+        const outcomes: Record<string, number | null> = {
+            "localhost is 127.0.0.1, an older service holds 0.0.0.0": (await check("127.0.0.1", "127.0.0.1", (port) => `|${port}`)).code,
+            "localhost is 127.0.0.1 then ::1, an older service holds 0.0.0.0": (await check("127.0.0.1,::1", "127.0.0.1", (port) => `0.0.0.0|${port}`)).code,
+            "localhost is 127.0.0.1, the replaced service held 10.0.4.7": (await check("127.0.0.1", "127.0.0.1", (port) => `10.0.4.7|${port}`)).code,
+        };
+        if (ipv6Loopback) {
+            outcomes["localhost is ::1, something else holds ::1, the replaced service held 0.0.0.0"] = (await check("::1", "::1", (port) => `0.0.0.0|${port}`)).code;
+            outcomes["localhost is ::1 then 127.0.0.1, an older service holds 0.0.0.0 only"] = (await check("::1,127.0.0.1", "127.0.0.1", (port) => `0.0.0.0|${port}`)).code;
+        }
+        assert.deepEqual(outcomes, {
+            "localhost is 127.0.0.1, an older service holds 0.0.0.0": 0,
+            "localhost is 127.0.0.1 then ::1, an older service holds 0.0.0.0": 0,
+            "localhost is 127.0.0.1, the replaced service held 10.0.4.7": 1,
+            ...(ipv6Loopback
+                ? {
+                      "localhost is ::1, something else holds ::1, the replaced service held 0.0.0.0": 1,
+                      "localhost is ::1 then 127.0.0.1, an older service holds 0.0.0.0 only": 0,
+                  }
+                : {}),
+        });
+
+        const unresolved = await check("", null, (port) => `|${port}`);
+        assert.equal(unresolved.code, 1, unresolved.output);
+        assert.match(unresolved.output, /refused to start[\s\S]*BROWSER_SERVICE_HOST=localhost does not resolve on this host \(ENOTFOUND\)/);
     } finally {
         await engine.close();
     }

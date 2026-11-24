@@ -36,7 +36,7 @@ const isLoopbackOrPrivateIpv4 = (host: string): boolean => {
 
 const isLoopbackOrPrivateIpv6 = (canonical: string): boolean => canonical === "::1" || /^f[cd][0-9a-f]{2}:/.test(canonical);
 
-const isLoopbackOrPrivateHost = (host: string): boolean => {
+export const isLoopbackOrPrivateHost = (host: string): boolean => {
     const canonical = canonicalHost(host);
     if (canonical === "localhost") return true;
     const version = isIP(canonical);
