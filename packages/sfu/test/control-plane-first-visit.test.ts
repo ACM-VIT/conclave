@@ -21,7 +21,7 @@ let dir = "";
 const running: Sfu[] = [];
 
 beforeAll(async () => {
-  if (hasRedis) redis = await startRedis(6630);
+  if (hasRedis) redis = await startRedis(6840);
 });
 
 afterAll(() => {

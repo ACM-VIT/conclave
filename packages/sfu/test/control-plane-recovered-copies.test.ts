@@ -104,7 +104,7 @@ const dataRevs = (store: ControlPlaneStore) =>
   );
 
 beforeAll(async () => {
-  if (hasRedis) redis = await startRedis(6620);
+  if (hasRedis) redis = await startRedis(6800);
 });
 
 afterAll(() => {

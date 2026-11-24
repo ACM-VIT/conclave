@@ -33,7 +33,7 @@ const stores: ControlPlaneStore[] = [];
 const olds: OldSfu[] = [];
 
 beforeAll(async () => {
-  if (hasRedis) redis = await startRedis(6610);
+  if (hasRedis) redis = await startRedis(6760);
 });
 
 afterAll(() => {
