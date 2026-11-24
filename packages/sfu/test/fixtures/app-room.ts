@@ -177,6 +177,7 @@ export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChang
     close: () => call("apps:close"),
     send: (update: Uint8Array, replicaId?: string, part?: unknown) =>
       listeners.get("apps:yjs:update")!({ appId: "board", update, replicaId, ...(part === undefined ? {} : { part }) }),
+    sendList: (updates: unknown, replicaId?: string) => listeners.get("apps:yjs:update")!({ appId: "board", updates, replicaId }),
     disconnect: () => listeners.get("disconnect")!(),
     leave: () => {
       context.currentRoom = null;

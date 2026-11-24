@@ -246,6 +246,21 @@ describe("app changes sent in parts", () => {
     expect(room.state.appChangeStaging.used()).toBe(0);
   });
 
+  it("are dropped when the client sends a list of whole changes before the last part, and the next part is refused", async () => {
+    const room = await boardRoom("abandoned-for-a-list");
+    const author = new Y.Doc();
+    const [first, second] = inParts(bigChange(author, 20 * KIB, "a"), 10 * KIB);
+    const other = new Y.Doc();
+
+    room.send(first, "copy-1", { id: "c", index: 0, count: 2 });
+    room.sendList([edit(other, (text) => text.insert(0, "listed"))], "copy-2");
+    expect(room.state.appChangeStaging.used()).toBe(0);
+    room.send(second, "copy-1", { id: "c", index: 1, count: 2 });
+
+    expect(await settled(room)).toBe("listed");
+    expect(room.refused.map(({ replicaId, reason }) => `${replicaId} ${reason}`)).toEqual(["copy-1 interrupted"]);
+  });
+
   it("are refused while staging when the change alone is bigger than a document can be", async () => {
     const room = await boardRoom("oversized");
     const author = new Y.Doc();
@@ -296,6 +311,190 @@ describe("app changes sent in parts", () => {
     expect(room.state.appChangeStaging.used()).toBe(0);
     expect(await settled(room)).toBe("");
   });
+});
+
+describe("app changes sent as a list", () => {
+  const TEXT_CLIENT = 0xffffffff;
+  const writeVarUint = (bytes: number[], value: number) => {
+    let rest = value;
+    while (rest > 0x7f) {
+      bytes.push(0x80 | (rest & 0x7f));
+      rest = Math.floor(rest / 128);
+    }
+    bytes.push(rest);
+  };
+  const splitEveryOther = (from: number, deletions: number) => {
+    const bytes: number[] = [];
+    writeVarUint(bytes, 0);
+    writeVarUint(bytes, 1);
+    writeVarUint(bytes, TEXT_CLIENT);
+    writeVarUint(bytes, deletions);
+    for (let step = 0; step < deletions; step += 1) {
+      writeVarUint(bytes, from + step * 2);
+      writeVarUint(bytes, 1);
+    }
+    return Uint8Array.from(bytes);
+  };
+  const encodedBytes = (doc: Y.Doc) => Y.encodeStateAsUpdate(doc).length;
+  const fits = (model: Y.Doc, update: Uint8Array) => {
+    const trial = new Y.Doc();
+    Y.applyUpdate(trial, Y.encodeStateAsUpdate(model));
+    Y.applyUpdate(trial, update);
+    return trial.store.pendingStructs === null && trial.store.pendingDs === null && encodedBytes(trial) <= MAX_DOC_BYTES;
+  };
+  const contentOf = (doc: Y.Doc) => ({ t: doc.getText("t").toString(), m: doc.getMap("m").toJSON() });
+  const serverCopy = async (room: Awaited<ReturnType<typeof boardRoom>>) => (await room.joinDocument()).doc;
+
+  it("are offered to new clients in the sync reply", async () => {
+    const room = await boardRoom("list-offer");
+
+    expect(await room.syncFrom(new Y.Doc())).toMatchObject({ takesUpdateLists: true });
+  });
+
+  it("apply one change at a time in order, so one that fits lands and is relayed while the one that does not, and what follows it from the same copy, are refused", async () => {
+    const room = await boardRoom("list-near-limit");
+    const author = new Y.Doc();
+    fill(room, author, 4, 225 * KIB);
+    await settled(room);
+    const relayedBefore = room.relayed.length;
+    const other = new Y.Doc();
+    Y.applyUpdate(other, Y.encodeStateAsUpdate(author));
+    const fitting = edit(author, (text) => text.insert(0, "a".repeat(20 * KIB)));
+    const tooBig = edit(author, (text) => text.insert(text.length, "b".repeat(200 * KIB)));
+    const after = (() => {
+      const before = Y.encodeStateVector(author);
+      author.getMap("m").set("c", "c".repeat(10 * KIB));
+      return Y.encodeStateAsUpdate(author, before);
+    })();
+    const fromAnotherCopy = (() => {
+      const before = Y.encodeStateVector(other);
+      other.getMap("m").set("d", "d".repeat(10 * KIB));
+      return Y.encodeStateAsUpdate(other, before);
+    })();
+
+    room.sendList([fitting, tooBig, after, fromAnotherCopy], "copy-list");
+    const saved = await serverCopy(room);
+
+    expect(saved.getText("t").toString().startsWith("a".repeat(20 * KIB))).toBe(true);
+    expect(saved.getText("t").toString().includes("b")).toBe(false);
+    expect(saved.getMap("m").get("c")).toBeUndefined();
+    expect(saved.getMap("m").get("d")).toBe("d".repeat(10 * KIB));
+    expect(room.refused.map(({ reason }) => reason)).toEqual(["too-large"]);
+    expect(room.relayed.slice(relayedBefore)).toEqual([fitting, fromAnotherCopy]);
+  }, 30_000);
+
+  it("never lose a change that would fit on its own, over random lists near the limit with deletions that split a long text", async () => {
+    let refused = 0;
+    let landed = 0;
+    for (let seed = 1; seed <= 8; seed += 1) {
+      const random = (() => {
+        let state = seed >>> 0;
+        return () => {
+          state = (state + 0x6d2b79f5) >>> 0;
+          let mixed = state;
+          mixed = Math.imul(mixed ^ (mixed >>> 15), mixed | 1);
+          mixed ^= mixed + Math.imul(mixed ^ (mixed >>> 7), mixed | 61);
+          return ((mixed ^ (mixed >>> 14)) >>> 0) / 4294967296;
+        };
+      })();
+      const pick = (below: number) => Math.floor(random() * below);
+      const room = await boardRoom(`list-history-${seed}`);
+      const seedDoc = new Y.Doc();
+      seedDoc.clientID = TEXT_CLIENT;
+      const length = 80_000 + pick(40_000);
+      seedDoc.getText("t").insert(0, "x".repeat(length));
+      const model = new Y.Doc();
+      const seeded = Y.encodeStateAsUpdate(seedDoc);
+      room.send(seeded, `seed-${seed}`);
+      Y.applyUpdate(model, seeded);
+      let author = new Y.Doc();
+      Y.applyUpdate(author, Y.encodeStateAsUpdate(model));
+      for (let round = 0; round < 6; round += 1) {
+        const list: Uint8Array[] = [];
+        let bytes = 0;
+        for (let index = 0, count = 1 + pick(5); index < count; index += 1) {
+          const kind = random();
+          let update: Uint8Array;
+          if (kind < 0.4) {
+            const from = pick(length / 2);
+            update = splitEveryOther(from, Math.max(1, Math.floor(Math.min(length - from, 2_000 + pick(40_000)) / 2)));
+            Y.applyUpdate(author, update);
+          } else if (kind < 0.7) {
+            update = edit(author, (text) => text.insert(pick(text.length + 1), "p".repeat(1 + pick(120 * KIB))));
+          } else {
+            const before = Y.encodeStateVector(author);
+            author.getMap("m").set(`k${round}-${index}`, "v".repeat(1 + pick(80 * KIB)));
+            update = Y.encodeStateAsUpdate(author, before);
+          }
+          if (bytes + update.length > PART_BYTES) break;
+          bytes += update.length;
+          list.push(update);
+        }
+        const replicaId = `copy-${seed}-${round}`;
+        let refusedInRound = false;
+        for (const update of list) {
+          if (fits(model, update)) {
+            Y.applyUpdate(model, update);
+            landed += 1;
+          } else {
+            refusedInRound = true;
+          }
+        }
+        if (list.length > 0) room.sendList(list, replicaId);
+        const saved = await serverCopy(room);
+        expect({ seed, round, content: contentOf(saved) }).toEqual({ seed, round, content: contentOf(model) });
+        expect({ seed, round, refused: room.refused.some((refusal) => refusal.replicaId === replicaId) }).toEqual({ seed, round, refused: refusedInRound });
+        if (refusedInRound) {
+          refused += 1;
+          author = new Y.Doc();
+          Y.applyUpdate(author, Y.encodeStateAsUpdate(saved));
+        }
+      }
+    }
+    expect(refused).toBeGreaterThan(5);
+    expect(landed).toBeGreaterThan(40);
+  }, 120_000);
+
+  it("take one rate-limit token for the whole list", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const room = await boardRoom("list-tokens");
+    const author = new Y.Doc();
+    const small = () => edit(author, (text) => text.insert(text.length, "t"));
+
+    for (let index = 0; index < 30; index += 1) room.sendList([small(), small(), small()], "copy-tokens");
+    for (let index = 0; index < 30; index += 1) room.send(small(), "copy-tokens");
+    expect(await settled(room)).toHaveLength(30 * 3 + 30);
+    expect(room.refused).toEqual([]);
+
+    room.send(small(), "copy-tokens");
+    await settled(room);
+    expect(room.refused.map(({ reason }) => reason)).toEqual(["rate-limited"]);
+  }, 30_000);
+
+  it("are refused whole when the list is malformed or bigger than one update may be, with nothing applied or relayed", async () => {
+    const room = await boardRoom("list-malformed");
+    const author = new Y.Doc();
+    const small = () => edit(author, (text) => text.insert(text.length, "m"));
+    const relayedBefore = room.relayed.length;
+
+    room.sendList([], "copy-empty");
+    room.sendList("not a list", "copy-string");
+    room.sendList(Array.from({ length: 65 }, small), "copy-too-many");
+    room.sendList([small(), 5], "copy-not-binary");
+    room.sendList([small(), new Uint8Array(0)], "copy-empty-item");
+    room.sendList([edit(author, (text) => text.insert(0, "x".repeat(200 * KIB))), edit(author, (text) => text.insert(0, "y".repeat(100 * KIB)))], "copy-over-cap");
+
+    expect(await settled(room)).toBe("");
+    expect(room.refused.map(({ replicaId, reason }) => `${replicaId} ${reason}`)).toEqual([
+      "copy-empty invalid",
+      "copy-string invalid",
+      "copy-too-many invalid",
+      "copy-not-binary invalid",
+      "copy-empty-item invalid",
+      "copy-over-cap too-large",
+    ]);
+    expect(room.relayed.slice(relayedBefore)).toEqual([]);
+  }, 30_000);
 });
 
 describe("app state answers", () => {

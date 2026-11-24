@@ -1,4 +1,4 @@
-import { APP_DOCUMENT_UPDATE_MAX_BYTES } from "@conclave/apps-sdk/limits";
+import { APP_DOCUMENT_UPDATE_MAX_BYTES, APP_DOCUMENT_UPLOAD_LIST_MAX } from "@conclave/apps-sdk/limits";
 import type {
   AppsAwarenessData,
   AppsCloseResponse,
@@ -130,6 +130,17 @@ const toUint8Array = (value: unknown): Uint8Array | null => {
     return decodeBase64(value);
   }
   return null;
+};
+
+const readUpdateList = (value: unknown): Uint8Array[] | null => {
+  if (!Array.isArray(value) || value.length === 0 || value.length > APP_DOCUMENT_UPLOAD_LIST_MAX) return null;
+  const updates: Uint8Array[] = [];
+  for (const item of value) {
+    const update = toUint8Array(item);
+    if (!update || update.length === 0) return null;
+    updates.push(update);
+  }
+  return updates;
 };
 
 const getRoomAppsState = (context: ConnectionContext): AppsState => {
@@ -306,6 +317,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       syncMessage: result.update,
       stateVector: result.stateVector,
       stagesParts: true,
+      takesUpdateLists: true,
       awarenessUpdate:
         awarenessSnapshot && awarenessSnapshot.length <= MAX_APPS_AWARENESS_BYTES ? awarenessSnapshot : undefined,
     };
@@ -435,6 +447,21 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     }
     if (room.appsState.locked && (!(context.currentClient instanceof Admin) || context.currentClient.isObserver)) {
       refuse("locked");
+      return;
+    }
+
+    if (data.updates !== undefined) {
+      const updates = readUpdateList(data.updates);
+      if (!updates) {
+        refuse("invalid");
+        return;
+      }
+      if (updates.reduce((bytes, listed) => bytes + listed.length, 0) > APP_DOCUMENT_UPDATE_MAX_BYTES) {
+        refuse("too-large");
+        return;
+      }
+      dropStaged();
+      for (const listed of updates) commit(room, appId, replicaId, listed, false);
       return;
     }
 

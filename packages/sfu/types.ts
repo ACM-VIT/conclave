@@ -1167,6 +1167,7 @@ export interface AppsSyncResponse {
   stateVector?: Uint8Array;
   awarenessUpdate?: Uint8Array;
   stagesParts?: true;
+  takesUpdateLists?: true;
 }
 
 export interface AppsSyncError {
@@ -1183,7 +1184,8 @@ export interface AppsUpdatePart {
 
 export interface AppsUpdateData {
   appId: string;
-  update: Uint8Array;
+  update?: Uint8Array;
+  updates?: Uint8Array[];
   replicaId?: string;
   part?: AppsUpdatePart;
 }
