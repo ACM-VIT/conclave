@@ -61,6 +61,14 @@ const acquireLock = (lockPath: string, onLost: () => void): JsonLock => {
   throw new Error(`Could not lock ${lockPath}.`);
 };
 
+const holdsLock = (lockPath: string, lock: JsonLock): boolean => {
+  try {
+    return readFileSync(lockPath, "utf8") === lock.token;
+  } catch {
+    return false;
+  }
+};
+
 const releaseLock = (lockPath: string, lock: JsonLock): void => {
   clearInterval(lock.heartbeat);
   try {
@@ -139,10 +147,22 @@ export const createJsonBackend = (path: string): Backend => {
     releaseLock(lockPath, lock);
     throw error;
   }
+  const lostLock = (): StoreUnavailableError => {
+    closed = true;
+    return new StoreUnavailableError(`Another SFU holds ${lockPath}; this SFU no longer writes ${path}.`);
+  };
   const persist = (): void => {
     const tmp = `${path}.${randomUUID()}.tmp`;
     try {
       writeFileSync(tmp, serialize(data), { encoding: "utf8", flush: true });
+    } catch (error) {
+      throw new StoreUnavailableError(`Could not write ${path}.`, { cause: error });
+    }
+    if (!holdsLock(lockPath, lock)) {
+      unlinkSync(tmp);
+      throw lostLock();
+    }
+    try {
       renameSync(tmp, path);
     } catch (error) {
       throw new StoreUnavailableError(`Could not write ${path}.`, { cause: error });
@@ -151,7 +171,8 @@ export const createJsonBackend = (path: string): Backend => {
   return {
     mode: "json",
     commit: async (command, now) => {
-      if (closed) throw new Error("The control-plane store is closed.");
+      if (closed) throw new StoreUnavailableError("The control-plane store is closed.");
+      if (!holdsLock(lockPath, lock)) throw lostLock();
       return runOnMemory(data, command, now, persist);
     },
     read: async (read, now) => readMemory(data, read, now),

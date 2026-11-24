@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -293,6 +293,15 @@ describe("the JSON store", () => {
   it("refuses to start on a file it cannot read", () => {
     writeFileSync(join(dir, "control-plane.json"), "{ not json");
     expect(() => createJsonBackend(join(dir, "control-plane.json"))).toThrow();
+  });
+
+  it("stops writing once another SFU has taken over its lock", async () => {
+    const store = await open("json");
+    await mustCreate(store, "first-room");
+    const before = readFileSync(join(dir, "control-plane.json"), "utf8");
+    writeFileSync(join(dir, "control-plane.json.lock"), "another-holder");
+    await expect(mustCreate(store, "second-room")).rejects.toBeInstanceOf(StoreUnavailableError);
+    expect(readFileSync(join(dir, "control-plane.json"), "utf8")).toBe(before);
   });
 
   it("takes over a lock whose holder stopped renewing it", async () => {
