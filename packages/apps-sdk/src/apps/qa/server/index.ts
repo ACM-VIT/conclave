@@ -6,6 +6,7 @@ import {
   QA_MIN_QUESTION_LENGTH,
   isQaStatusPublic,
   qaContract,
+  type QaMode,
   type QaStatus,
   type QuestionCard,
 } from "@conclave/apps-sdk/qa/core";
@@ -36,6 +37,7 @@ type QuestionRow = QuestionCard & {
   upvotes: number;
   order: number;
   openTimes: { order: number; open: boolean }[];
+  askedIn: QaMode;
 };
 
 type Upvote = { questionId: string; voter: Subject };
@@ -74,7 +76,7 @@ const card = (row: QuestionRow): QuestionCard => ({
 });
 
 const isPublic = (row: QuestionRow, room: RoomPolicy): boolean =>
-  isQaStatusPublic(row.status, room.mode);
+  isQaStatusPublic(row.status, row.askedIn) && isQaStatusPublic(row.status, room.mode);
 
 /**
  * Hosts see every question, askers their own, everyone the public ones. A
@@ -224,6 +226,7 @@ export const qaAuthority = defineAuthority({
           answeredByName: null,
           order,
           openTimes: [{ order, open: true }],
+          askedIn: ctx.room.mode,
         });
         trimBook(tx, id);
         return { id };
