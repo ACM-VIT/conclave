@@ -1435,6 +1435,13 @@ for svc in "${ALL_SFU_SERVICES[@]}"; do
     exit "${REPAIR_CODE[$svc]}"
   fi
 done
+for svc in "${ORDERED_SERVICES[@]}"; do
+  if ! wait_serving "$svc" "$TARGET_IMAGE"; then
+    echo "" >&2
+    echo "Deploy stopped: ${svc} was deployed on ${TARGET_COMMIT} but is not serving now (${SERVING_WHY}). Check it now, then rerun this script." >&2
+    exit 1
+  fi
+done
 
 # The release record moves only once every instance runs the target, so a
 # deploy or rollback of some instances (SFU_DEPLOY_SERVICES) keeps what the

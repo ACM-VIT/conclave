@@ -243,6 +243,22 @@ fixed("Greptile: repair never drains the only instance taking meetings to roll i
   }),
 );
 
+fixed("Greptile: a deploy fails when an instance it already deployed stops serving before it ends", () => {
+  let sfusRef = null;
+  const dropPeerRoute = (sfu) => {
+    if (sfu.image === TARGET && sfu.bootDrained && !sfu.dropped) {
+      sfu.dropped = true;
+      sfusRef["sfu-a"].publicDown = true;
+    }
+  };
+  return withStack({ "sfu-a": { publicRoute: true }, "sfu-b": { publicRoute: true, onRecreate: dropPeerRoute } }, async (sfus, shared) => {
+    sfusRef = sfus;
+    const result = await deploy(sfus, { env: shared.env });
+    assert.notEqual(result.code, 0, result.output);
+    assert.match(result.output, /sfu-a was deployed on .* but is not serving now/);
+  });
+});
+
 fixed("fuzz: a public route that is down when the deploy first looks still leaves the image the instance served on to go back to", () =>
   withStack({ "sfu-a": { publicRoute: true } }, async (sfus, shared) => {
     sfus["sfu-a"].publicFailures = 1;
