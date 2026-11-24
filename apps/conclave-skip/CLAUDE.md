@@ -664,9 +664,14 @@ Fixed 2026-10-22 and guarded by `testNativeCallCorrectnessBlockersStayFixed`:
   and `ScreenCapturerAndroid.stopCapture()` block their caller on the
   capture thread, which takes the shared EGL lock that tile rendering also
   takes, so `CaptureTeardown` stops and disposes capturers and helpers on
-  its own thread. A camera-off keeps its synchronous `stopCapture()` on the
-  main thread, because a restart must run after it; that call waits only
-  while a camera open is in progress.
+  its own thread, one worker per kind (`CaptureTeardown.camera`,
+  `CaptureTeardown.screen`) so a stalled share teardown never holds up the
+  camera. Every capture start waits for its kind's earlier teardowns before
+  it opens a device (`awaitReleased()`): the camera start (which camera
+  recovery and rejoin go through), the camera switch and the share start,
+  each re-checking its session after the wait. A camera-off keeps its
+  synchronous `stopCapture()` on the main thread, because a restart must
+  run after it; that call waits only while a camera open is in progress.
 - Every input that changes publish settings goes through
   `publishSettingsChanged()` on Android (camera and share settings, video
   quality), which bumps `mediaPublishSettingsRevision`. A video produce in

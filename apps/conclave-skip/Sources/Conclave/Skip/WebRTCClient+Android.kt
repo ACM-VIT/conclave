@@ -2402,6 +2402,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         var startedCapturer: VideoCapturer? = null
         try {
             releasePreJoinCameraPreview()
+            CaptureTeardown.camera.awaitReleased()
 
             ensureCurrentConfiguration(generation)
             if (localVideoOffIntentGeneration != offIntentGeneration) {
@@ -2500,6 +2501,8 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         val sendTransport = sendTransport ?: throw ErrorException("Send transport not ready")
         val context = ProcessInfo.processInfo.androidContext
         ensurePeerConnectionFactory(context)
+        CaptureTeardown.screen.awaitReleased()
+        ensureCurrentConfiguration(generation)
 
         val data = ScreenCaptureManager.getCaptureResultIntent()
             ?: throw ErrorException("No screen capture permission")
@@ -3578,7 +3581,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         localVideoTrack = null
         isWebcamCaptureActive = false
         activeWebcamCaptureProfile = null
-        releaseVideoCapture(capturer, helper, source, track)
+        releaseVideoCapture(CaptureTeardown.camera, capturer, helper, source, track)
     }
 
     private fun releaseScreenCapture() {
@@ -3590,10 +3593,16 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         screenSurfaceTextureHelper = null
         screenVideoSource = null
         screenVideoTrack = null
-        releaseVideoCapture(capturer, helper, source, track)
+        releaseVideoCapture(CaptureTeardown.screen, capturer, helper, source, track)
     }
 
-    private fun releaseVideoCapture(capturer: VideoCapturer?, helper: SurfaceTextureHelper?, source: VideoSource?, track: VideoTrack?) {
+    private fun releaseVideoCapture(
+        teardown: CaptureTeardown,
+        capturer: VideoCapturer?,
+        helper: SurfaceTextureHelper?,
+        source: VideoSource?,
+        track: VideoTrack?,
+    ) {
         if (capturer == null && helper == null && source == null && track == null) return
         try {
             track?.setEnabled(false)
@@ -3614,7 +3623,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
                 }
             }
         }
-        CaptureTeardown.release(capturer, helper, disposeOnceStopped)
+        teardown.release(capturer, helper, disposeOnceStopped)
         releaseAfterSendTransportWork(disposeOnceStopped)
     }
 
@@ -7960,6 +7969,8 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             activeCameraFacing = previousFacing
             throw ErrorException("Camera switch unavailable")
         }
+        CaptureTeardown.camera.awaitReleased()
+        if (videoCapturer !== capturer || !localVideoEnabled) return
 
         suspendCancellableCoroutine<Unit> { cont ->
             capturer.switchCamera(object : CameraVideoCapturer.CameraSwitchHandler {

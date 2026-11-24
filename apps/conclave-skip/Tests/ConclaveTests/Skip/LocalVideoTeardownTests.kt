@@ -2,15 +2,23 @@ package conclave.module
 
 import android.content.Context
 import android.os.Looper
+import java.time.Duration
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.mediasoup.droid.Producer
+import org.mediasoup.droid.SendTransport
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
@@ -82,6 +90,12 @@ class LocalVideoTeardownTests {
         override fun switchCamera(handler: CameraVideoCapturer.CameraSwitchHandler?, cameraName: String?) {
             handler?.onCameraSwitchDone(true)
         }
+    }
+
+    class LiveSendTransport : SendTransport(0L) {
+        override fun isClosed(): Boolean = false
+        override fun getId(): String = "send-1"
+        override fun close() {}
     }
 
     private class Capture(val capturer: FakeCapturer, val source: CountingVideoSource, val track: CountingVideoTrack)
@@ -229,5 +243,72 @@ class LocalVideoTeardownTests {
             assertSame(main, dropped.track.disposedOn)
             assertSame(main, dropped.source.disposedOn)
         }
+    }
+
+    private fun readyToStart(media: WebRTCClient) {
+        val app = org.robolectric.RuntimeEnvironment.getApplication()
+        shadowOf(app).grantPermissions(android.Manifest.permission.CAMERA)
+        field("sendTransport").set(media, unsafe.allocateInstance(LiveSendTransport::class.java))
+        field("sendTransportId").set(media, "send-1")
+        field("peerConnectionFactory").set(media, unsafe.allocateInstance(org.webrtc.FakeAudioPeerConnectionFactory::class.java))
+    }
+
+    private fun advanceMain(millis: Long) {
+        repeat((millis / 100).toInt()) { shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(100)) }
+    }
+
+    private val scope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
+
+    @Test
+    fun aCameraStartWaitsForThePreviousCameraToStop() {
+        val (media, lane) = joinedCall()
+        readyToStart(media)
+        val stopping = CountDownLatch(1)
+        val previous = installCamera(media, lane, stopping)
+        runBlocking { media.closeLocalMedia(kind = "video", type = ProducerType.webcam.rawValue, producerId = null) }
+
+        val start = scope.async(start = CoroutineStart.UNDISPATCHED) { runCatching { media.startProducingVideo() } }
+        advanceMain(1_000)
+        assertFalse("the camera start went ahead while the previous camera was still stopping", start.isCompleted)
+
+        stopping.countDown()
+        pumpMainLooperUntil { start.isCompleted }
+        assertTrue(start.isCompleted)
+        assertEquals(1, previous.capturer.disposals)
+    }
+
+    @Test
+    fun aCameraSwitchWaitsForThePreviousCameraToStop() {
+        val (media, lane) = joinedCall()
+        val stopping = CountDownLatch(1)
+        installCamera(media, lane, stopping)
+        runBlocking { media.closeLocalMedia(kind = "video", type = ProducerType.webcam.rawValue, producerId = null) }
+        installCamera(media, lane)
+
+        val switch = scope.async(start = CoroutineStart.UNDISPATCHED) { runCatching { media.switchCamera() } }
+        advanceMain(500)
+        assertFalse("the camera switch went ahead while the previous camera was still stopping", switch.isCompleted)
+
+        stopping.countDown()
+        pumpMainLooperUntil { switch.isCompleted }
+        assertTrue(switch.isCompleted)
+    }
+
+    @Test
+    fun aScreenShareStartWaitsForThePreviousShareToStop() {
+        val (media, lane) = joinedCall()
+        readyToStart(media)
+        val stopping = CountDownLatch(1)
+        val previous = installShare(media, lane, stopping)
+        runBlocking { media.stopScreenSharing() }
+
+        val start = scope.async(start = CoroutineStart.UNDISPATCHED) { runCatching { media.startScreenSharing() } }
+        advanceMain(500)
+        assertFalse("the share start went ahead while the previous share was still stopping", start.isCompleted)
+
+        stopping.countDown()
+        pumpMainLooperUntil { start.isCompleted }
+        assertTrue(start.isCompleted)
+        assertEquals(1, previous.capturer.disposals)
     }
 }
