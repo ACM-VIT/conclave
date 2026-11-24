@@ -8,7 +8,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import puppeteer from "puppeteer-core";
 import { ContainerManager, VNC_AUTH_IMAGE_LABEL } from "../src/ContainerManager.js";
-import { fakeDocker, fakeDockerEngine, hardenedImage as hardened, listenHttp } from "./support/docker.js";
+import { fakeDocker, fakeDockerEngine, freePort, hardenedImage as hardened, listenHttp } from "./support/docker.js";
 
 const STRONG_TOKEN = randomBytes(32).toString("hex");
 const packageDir = fileURLToPath(new URL("..", import.meta.url));
@@ -16,7 +16,7 @@ const packageDir = fileURLToPath(new URL("..", import.meta.url));
 const runService = async (env: NodeJS.ProcessEnv, args: string[]) => {
     const child = spawn(process.execPath, ["--import", "tsx", "src/server.ts", ...args], {
         cwd: packageDir,
-        env: { PATH: process.env.PATH, BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_PORT: "43109", ...env },
+        env: { PATH: process.env.PATH, BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_PORT: String(await freePort()), ...env },
         stdio: ["ignore", "pipe", "pipe"],
     });
     let output = "";
@@ -49,6 +49,28 @@ test("a Chromium image without the per-session password label is never launched 
         await manager.checkHealth();
         assert.equal((await manager.launchBrowser({ roomId: "room-a", url: "https://example.com" })).success, true);
         assert.equal(created.length, 1);
+    } finally {
+        await manager.shutdown();
+    }
+});
+
+test("a session starts from the exact image that passed the check, even if the tag moves", async () => {
+    const created: Array<{ Image: string }> = [];
+    let inspected = 0;
+    const docker = fakeDocker(hardened, created) as unknown as Record<string, unknown>;
+    docker.getImage = () => ({
+        inspect: async () => {
+            inspected += 1;
+            return inspected === 1
+                ? { Id: "sha256:checked", Config: { Labels: hardened?.Labels } }
+                : { Id: "sha256:moved", Config: { Labels: {} } };
+        },
+    });
+    const manager = new ContainerManager({ noVncPortStart: 6080, noVncPortEnd: 6081 }, docker as never);
+    try {
+        const launched = await manager.launchBrowser({ roomId: "room-a", url: "https://example.com" });
+        assert.equal(launched.success, true, launched.error);
+        assert.deepEqual(created.map((options) => options.Image), ["sha256:checked"]);
     } finally {
         await manager.shutdown();
     }

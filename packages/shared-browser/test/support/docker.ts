@@ -1,10 +1,10 @@
 import { once } from "node:events";
 import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import { createServer as createNetServer, type AddressInfo } from "node:net";
 import type Docker from "dockerode";
 import { VNC_AUTH_IMAGE_LABEL, VNC_AUTH_IMAGE_LABEL_VALUE } from "../../src/ContainerManager.js";
 
-export type Image = { Labels: Record<string, string> } | null;
+export type Image = { Labels: Record<string, string>; Id?: string } | null;
 
 export const hardenedImage: Image = { Labels: { [VNC_AUTH_IMAGE_LABEL]: VNC_AUTH_IMAGE_LABEL_VALUE } };
 
@@ -14,7 +14,7 @@ export const fakeDocker = <Created>(image: Image, created: Created[] = []) =>
         getImage: () => ({
             inspect: async () => {
                 if (!image) throw Object.assign(new Error("(HTTP code 404) no such image"), { statusCode: 404 });
-                return { Config: { Labels: image.Labels } };
+                return { Id: image.Id ?? "sha256:hardened", Config: { Labels: image.Labels } };
             },
         }),
         getContainer: () => ({ remove: async () => undefined, stop: async () => undefined }),
@@ -57,4 +57,12 @@ export const fakeDockerEngine = async (images: Record<string, Image>) => {
                 server.close(() => resolve());
             }),
     };
+};
+
+export const freePort = async (): Promise<number> => {
+    const probe = createNetServer().listen(0, "127.0.0.1");
+    await once(probe, "listening");
+    const { port } = probe.address() as AddressInfo;
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+    return port;
 };

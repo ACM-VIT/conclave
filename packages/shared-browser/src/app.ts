@@ -2,6 +2,7 @@ import express, { type Express } from "express";
 import { timingSafeEqual } from "node:crypto";
 import cors from "cors";
 import type { ServiceSecurity } from "./serviceSecurity.js";
+import { currentDeployId, SHARED_BROWSER_SERVICE } from "./serviceIdentity.js";
 import type { AudioTarget, BrowserAgentAction, BrowserManager } from "./types.js";
 
 // Express types `req.body` as `any`; narrow it once at the boundary so every
@@ -129,16 +130,19 @@ export const createApp = (browserManager: BrowserManager, security: ServiceSecur
     });
     app.use(express.json());
 
+    const identity = { service: SHARED_BROWSER_SERVICE, deployId: currentDeployId() };
+
     app.get("/health", async (_req, res) => {
         try {
             await browserManager.checkHealth();
             res.json({
+                ...identity,
                 status: "ok",
                 sessions: browserManager.getAllSessions().length,
                 capabilities: browserManager.capabilities,
             });
         } catch {
-            res.status(503).json({ status: "unavailable" });
+            res.status(503).json({ ...identity, status: "unavailable" });
         }
     });
 

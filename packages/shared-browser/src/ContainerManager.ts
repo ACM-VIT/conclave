@@ -153,11 +153,14 @@ export class ContainerManager implements BrowserManager {
         }
     }
 
-    private async verifyImage(): Promise<void> {
+    private async verifyImage(): Promise<string> {
         const name = this.config.dockerImageName;
         let labels: Record<string, string> | undefined;
+        let imageId = "";
         try {
-            labels = (await this.docker.getImage(name).inspect()).Config?.Labels ?? undefined;
+            const image = await this.docker.getImage(name).inspect();
+            labels = image.Config?.Labels ?? undefined;
+            imageId = image.Id;
         } catch (error) {
             const reason = error instanceof Error ? error.message : String(error);
             throw new Error(`The browser image ${name} could not be inspected (${reason}), so it is not known to enforce a per-session VNC password.`);
@@ -167,6 +170,10 @@ export class ContainerManager implements BrowserManager {
                 `The browser image ${name} is not known to enforce a per-session VNC password: it lacks the ${VNC_AUTH_IMAGE_LABEL}=${VNC_AUTH_IMAGE_LABEL_VALUE} label. Rebuild it from packages/shared-browser/docker, or deploy without --skip-runtime-image.`,
             );
         }
+        if (!imageId) {
+            throw new Error(`The browser image ${name} has no image id to launch, so it is not known to enforce a per-session VNC password.`);
+        }
+        return imageId;
     }
 
     async assertReady(): Promise<void> {
@@ -188,8 +195,9 @@ export class ContainerManager implements BrowserManager {
             };
         }
 
+        let imageId: string;
         try {
-            await this.verifyImage();
+            imageId = await this.verifyImage();
         } catch (error) {
             return { success: false, error: error instanceof Error ? error.message : String(error) };
         }
@@ -239,7 +247,7 @@ export class ContainerManager implements BrowserManager {
             }
 
             container = await this.docker.createContainer({
-                Image: this.config.dockerImageName,
+                Image: imageId,
                 name: containerName,
                 Env: containerEnv,
                 HostConfig: {

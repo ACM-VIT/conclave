@@ -9,7 +9,7 @@ import { createApp } from "../src/app.js";
 import { ContainerManager } from "../src/ContainerManager.js";
 import { resolveServiceSecurity, ServiceSecurityError } from "../src/serviceSecurity.js";
 import type { BrowserManager, BrowserSession } from "../src/types.js";
-import { fakeDocker, fakeDockerEngine, hardenedImage } from "./support/docker.js";
+import { fakeDocker, fakeDockerEngine, freePort, hardenedImage } from "./support/docker.js";
 
 const STRONG_TOKEN = randomBytes(32).toString("hex");
 const packageDir = fileURLToPath(new URL("..", import.meta.url));
@@ -185,7 +185,7 @@ test("--check-config applies the startup checks and exits without listening", as
         assert.match(result.output, /refused to start/);
     }
     const engine = await fakeDockerEngine({ "conclave-browser:latest": hardenedImage });
-    const valid = await check({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_HOST: "127.0.0.1", DOCKER_HOST: engine.host }).finally(engine.close);
+    const valid = await check({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_HOST: "127.0.0.1", BROWSER_SERVICE_PORT: String(await freePort()), DOCKER_HOST: engine.host }).finally(engine.close);
     assert.equal(valid.code, 0, valid.output);
     assert.match(valid.output, /configuration is valid/i);
     assert.doesNotMatch(valid.output, /listening/);
