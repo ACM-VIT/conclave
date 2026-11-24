@@ -7,6 +7,7 @@ export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)
 
 const BUILD_ARTIFACTS = ["node_modules/.bin/tsc", "dist/index.js", ".env", ".env.local", "server.log"];
 const DEPENDENCY_FIELDS = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"];
+const TEST_PATH = /(^|\/)(test|tests|__tests__)\/|\.(test|spec)\.[cm]?[jt]sx?$/;
 
 function cleanPattern(pattern) {
   const cleaned = path.posix.normalize(pattern).replace(/\/+$/, "");
@@ -181,7 +182,7 @@ export function contextProblems(root = repoRoot, dockerIgnoreText = readFileSync
     }
     for (const name of inputs.packages) {
       const { dir } = packages.get(name);
-      for (const file of trackedFiles(root, dir).filter(excluded)) problems.push(`${dockerfile}: ${name} needs ${file}, which .dockerignore excludes`);
+      for (const file of trackedFiles(root, dir).filter((file) => !TEST_PATH.test(file) && excluded(file))) problems.push(`${dockerfile}: ${name} needs ${file}, which .dockerignore excludes`);
       for (const artifact of BUILD_ARTIFACTS.map((item) => `${dir}/${item}`).filter((file) => !excluded(file))) {
         problems.push(`${dockerfile}: ${name} build artifact ${artifact} would enter the build context`);
       }

@@ -45,6 +45,11 @@ test("dropping a workspace package the SFU depends on fails the check", () => {
   assert.ok(problems.includes("packages/sfu/Dockerfile: @conclave/apps-sdk needs packages/apps-sdk/src/index.ts, which .dockerignore excludes"));
 });
 
+test("an image may leave test files out of its packages", () => {
+  const withoutTests = `${dockerIgnore}\npackages/ai/test\npackages/sfu/test\npackages/shared-browser/test\n`;
+  assert.deepEqual(contextProblems(repoRoot, withoutTests), []);
+});
+
 test("a package without node_modules and env excludes leaks them into the context", () => {
   const problems = contextProblems(repoRoot, "**\n!package.json\n!pnpm-lock.yaml\n!pnpm-workspace.yaml\n!patches/\n!packages/\n");
   assert.ok(problems.includes("packages/sfu/Dockerfile: @conclave/apps-sdk build artifact packages/apps-sdk/node_modules/.bin/tsc would enter the build context"));
