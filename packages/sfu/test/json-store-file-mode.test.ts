@@ -68,7 +68,7 @@ afterEach(() => {
 
 describe.each(stores)("the $name JSON store under umask 022", (store) => {
   const active = () => join(dir, "recordings", store.file);
-  const copy = () => join(dir, "recordings", "json-fallback-import", "sfu-a", store.file);
+  const copy = () => join(dir, "recordings", "json-fallback-import", "sfu-a", "20261124T000000000Z-sfu-test-deploy", store.file);
 
   it("keeps its file readable only by its owner when it saves", async () => {
     await store.save();
