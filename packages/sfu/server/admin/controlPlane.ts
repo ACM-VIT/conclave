@@ -1055,8 +1055,11 @@ export const kickClient = (
   // admitted and still a host. Taking back the lock admission also covers
   // what is not a grant on the room: a scheduled invite, a recovery pass.
   const userKey = room.userKeysById.get(userId);
-  if (userKey) {
-    room.removeUser(userKey);
+  const wasHost = target instanceof Admin && !target.isObserver;
+  const demoted = userKey ? room.removeUser(userKey) : [];
+  for (const client of demoted) {
+    if (client === target) continue;
+    client.socket.emit("hostRemoved", { roomId: room.id, hostUserId: room.getHostUserId() });
   }
   target.socket.emit("kicked", { reason, roomId: room.id });
   target.socket.disconnect(true);
@@ -1070,6 +1073,9 @@ export const kickClient = (
       room,
       userId,
     });
+    if (wasHost && options.state.rooms.get(room.channelId) === room) {
+      handleAdminRemoved(options.io, options.state, room);
+    }
   }
 
   return true;

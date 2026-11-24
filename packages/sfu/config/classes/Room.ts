@@ -2014,11 +2014,24 @@ export class Room {
     this.onRecoverableChange?.();
   }
 
-  private revokeHost(userKey: string): void {
+  private revokeHost(userKey: string): Client[] {
     const held = this.hostReasonsByKey.delete(userKey);
     const primary = this.primaryHostUserKey === userKey;
     if (primary) this.primaryHostUserKey = null;
     if (held || primary) this.onRecoverableChange?.();
+    return this.demoteSeatsWithoutHostReason();
+  }
+
+  private demoteSeatsWithoutHostReason(): Client[] {
+    const demoted: Client[] = [];
+    for (const [userId, client] of this.clients) {
+      if (!(client instanceof Admin) || client.isObserver) continue;
+      const userKey = this.userKeysById.get(userId);
+      if (userKey && this.hostReasonsByKey.has(userKey)) continue;
+      Object.setPrototypeOf(client, Client.prototype);
+      demoted.push(client);
+    }
+    return demoted;
   }
 
   welcomeOwner(ownerKey: string): Client[] {
@@ -2790,6 +2803,7 @@ export class Room {
     this.onRecoverableChange = null;
     this.primaryHostUserKey = null;
     this.hostReasonsByKey.clear();
+    this.demoteSeatsWithoutHostReason();
     this.readmissionRequiredUserKeys.clear();
     this.blockedUsers.clear();
     this.onRecoverableChange = report;
@@ -2863,12 +2877,12 @@ export class Room {
     this.lockedAllowedUsers.delete(userKey);
   }
 
-  removeUser(userKey: string) {
+  removeUser(userKey: string): Client[] {
     this.setReadmissionRequired(userKey, true);
     this.allowedUsers.delete(userKey);
     this.lockedAllowedUsers.delete(userKey);
-    this.revokeHost(userKey);
     this.webinarPromotedUserKeys.delete(userKey);
+    return this.revokeHost(userKey);
   }
 
   keepAdmitted(userKey: string) {
@@ -2892,15 +2906,7 @@ export class Room {
   // stay in it as admitted participants. Returns those who had them.
   demoteToParticipant(userKey: string): Client[] {
     this.keepAdmitted(userKey);
-    this.revokeHost(userKey);
-    const demoted: Client[] = [];
-    for (const [userId, key] of this.userKeysById) {
-      const client = this.clients.get(userId);
-      if (key !== userKey || !(client instanceof Admin) || client.isObserver) continue;
-      Object.setPrototypeOf(client, Client.prototype);
-      demoted.push(client);
-    }
-    return demoted;
+    return this.revokeHost(userKey);
   }
 
   isBlocked(userKey: string): boolean {
