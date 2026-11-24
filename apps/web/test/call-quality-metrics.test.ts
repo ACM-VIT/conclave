@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import {
   createCallMetricsTracker,
@@ -1192,5 +1194,50 @@ describe("newCallId", () => {
     } finally {
       Object.defineProperty(crypto, "randomUUID", { configurable: true, value: randomUUID });
     }
+  });
+});
+
+describe("the tracker's memory over a long call", () => {
+  it("takes a stream that drops out of one report and comes back as a new baseline", () => {
+    const { tracker, state, named } = setup();
+    state("connecting", 0);
+    state("joined", 1000);
+    const watched = (freezeCount: number, freezesSec: number, frames: number) =>
+      video({ freezeCount, totalFreezesDurationSec: freezesSec, framesDecoded: frames, bytesReceived: frames * 1000, packetsReceived: frames });
+    tracker.onStats(sample([watched(0, 0, 0)]), 1000);
+    tracker.onStats(sample([]), 6000);
+    tracker.onStats(sample([watched(40, 30, 900)]), 11_000);
+    tracker.onStats(sample([watched(41, 31, 1000)]), 16_000);
+    state("disconnected", 17_000);
+
+    expect(named("call_summary")[0].props).toMatchObject({ video_freeze_count: 1, video_freeze_ms: 1000 });
+  });
+
+  it("holds only the latest reading's streams and layers, however many a long call replaces", () => {
+    setFlagsFromString("--expose-gc");
+    const collect = runInNewContext("gc") as () => void;
+    const { tracker, state } = setup();
+    state("connecting", 0);
+    state("joined", 1000);
+    let at = 1000;
+    const replaceAll = (round: number) => {
+      at += STEADY_SAMPLE_MS;
+      tracker.onStats(
+        sample(
+          [0, 1, 2, 3].map((n) => video({ id: `recv:${round}-${n}`, bytesReceived: 1000, framesDecoded: 10, packetsReceived: 10 })),
+          { outboundVideo: [0, 1, 2].map((n) => layer({ id: `send:${round}-${n}`, bytesSent: 1000 })) },
+        ),
+        at,
+      );
+    };
+    for (let round = 0; round < 300; round++) replaceAll(round);
+    collect();
+    collect();
+    const before = process.memoryUsage().heapUsed;
+    for (let round = 300; round < 3300; round++) replaceAll(round);
+    collect();
+    collect();
+
+    expect(process.memoryUsage().heapUsed - before).toBeLessThan(1024 * 1024);
   });
 });

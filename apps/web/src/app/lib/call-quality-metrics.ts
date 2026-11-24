@@ -78,6 +78,7 @@ const MAX_SAMPLE_GAP_MS = 15_000;
 // Same threshold as the freeze watchdog in useMeetSocket: bytes arriving
 // without decoded frames means the decoder is stuck, not that video paused.
 const STALL_MIN_BYTE_DELTA = 8_000;
+const MAX_DROPPED_STREAMS = 256;
 const MEDIASOUP_PROBATOR_MID = "probator";
 export const FAST_SAMPLE_MS = 250;
 export const STEADY_SAMPLE_MS = 5_000;
@@ -155,6 +156,7 @@ type Attempt = {
    * a new baseline.
    */
   streams: Map<string, StreamMemory>;
+  droppedStreams: Set<string>;
   outboundLayers: Map<string, LayerReading>;
 };
 
@@ -474,17 +476,20 @@ export function createCallMetricsTracker({
     at: number,
   ) => {
     const previous = media.streams.get(stream.id);
+    const returning = previous === undefined && media.droppedStreams.has(stream.id);
+    media.droppedStreams.delete(stream.id);
     const measured =
       dt !== null &&
       totals !== null &&
       previousAt !== null &&
+      !returning &&
       (previous === undefined || previous.readAt === previousAt);
     const countingSince = measured ? (previous?.countingSince ?? previousAt) : at;
     const progress = measured
       ? addInbound(totals, stream, previous, dt, countingSince, at)
       : { ...BASELINE, stalled: dt === null && (previous?.stalled ?? false) };
 
-    media.streams.set(stream.id, {
+    return {
       packetsReceived: stream.packetsReceived,
       bytesReceived: stream.bytesReceived,
       framesDecoded: stream.framesDecoded,
@@ -495,11 +500,22 @@ export function createCallMetricsTracker({
       ...progress,
       countingSince,
       readAt: at,
-    });
+    };
+  };
+
+  const rememberStreams = (media: Attempt, read: Map<string, StreamMemory>) => {
+    for (const id of media.streams.keys()) {
+      if (read.has(id)) continue;
+      media.droppedStreams.add(id);
+      if (media.droppedStreams.size > MAX_DROPPED_STREAMS) {
+        media.droppedStreams.delete(media.droppedStreams.values().next().value as string);
+      }
+    }
+    media.streams = read;
   };
 
   const rememberLayers = (media: Attempt, layers: OutboundLayerStats[], at: number) => {
-    layers.forEach((layer) => media.outboundLayers.set(layer.id, { ...layer, readAt: at }));
+    media.outboundLayers = new Map(layers.map((layer) => [layer.id, { ...layer, readAt: at }]));
   };
 
   /**
@@ -516,7 +532,7 @@ export function createCallMetricsTracker({
     previousAt: number | null,
     at: number,
   ) => {
-    const previous = new Map(call.outboundLayers);
+    const previous = call.outboundLayers;
     rememberLayers(call, layers, at);
     const dt = measuredInterval(previousAt, at);
     if (dt === null) return;
@@ -589,6 +605,7 @@ export function createCallMetricsTracker({
             lastInboundAt: null,
             lastOutboundAt: null,
             streams: new Map(),
+            droppedStreams: new Set(),
             outboundLayers: new Map(),
           },
         };
@@ -669,9 +686,11 @@ export function createCallMetricsTracker({
         const previousAt = media.lastInboundAt;
         const dt = call ? measuredInterval(previousAt, at) : null;
         media.lastInboundAt = at;
+        const read = new Map<string, StreamMemory>();
         sample.inbound.forEach((stream) =>
-          foldInbound(media, call?.totals ?? null, stream, previousAt, dt, at),
+          read.set(stream.id, foldInbound(media, call?.totals ?? null, stream, previousAt, dt, at)),
         );
+        rememberStreams(media, read);
       }
       if (sample.outboundVideo) {
         if (call) {
