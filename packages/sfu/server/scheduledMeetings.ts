@@ -25,6 +25,7 @@ import {
 } from "./redisPersistence.js";
 import { canonicalizeClientId } from "./clientIds.js";
 import { assertSqliteWritable } from "./sqliteWriteCheck.js";
+import { adoptRecoveredJsonStore, countArrayRecords } from "./jsonStoreUpgrade.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -1161,6 +1162,7 @@ const migrateJsonScheduledMeetingsToSqlite = (
 export const createScheduledMeetingPersistence = (): ScheduledMeetingPersistence => {
   const mode = process.env.SCHEDULED_MEETINGS_PERSISTENCE?.trim().toLowerCase();
   if (mode === "json" || mode === "file") {
+    adoptRecoveredJsonStore(scheduledMeetingsPath(), "scheduled-meetings.json", countArrayRecords);
     return createFileScheduledMeetingPersistence();
   }
 

@@ -32,6 +32,7 @@ import {
   CONCLAVE_CLIENT_ID,
 } from "./clientIds.js";
 import { assertSqliteWritable } from "./sqliteWriteCheck.js";
+import { adoptRecoveredJsonStore, countSnapshotRecords } from "./jsonStoreUpgrade.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -1588,7 +1589,10 @@ const createRedisSchedulingPersistence = (
 
 export const createSchedulingPersistence = (): SchedulingPersistence => {
   const mode = process.env.SCHEDULING_PERSISTENCE?.trim().toLowerCase();
-  if (mode === "json" || mode === "file") return createFileSchedulingPersistence();
+  if (mode === "json" || mode === "file") {
+    adoptRecoveredJsonStore(getSchedulingJsonPath(), "scheduling.json", countSnapshotRecords);
+    return createFileSchedulingPersistence();
+  }
   const redisUrl = resolveRedisPersistenceUrl();
   const sqlitePersistence = createSqliteSchedulingPersistence();
   if (shouldUseRedisPersistence(mode, redisUrl)) {
