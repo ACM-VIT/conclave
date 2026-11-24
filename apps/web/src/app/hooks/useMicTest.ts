@@ -58,19 +58,11 @@ const pickRecorderMimeType = (): string | undefined => {
 
 const createResourceScope = () => {
   const disposers: Array<() => void> = [];
-  let closed = false;
   return {
     own: (dispose: () => void) => {
-      if (!closed) {
-        disposers.push(dispose);
-        return;
-      }
-      try {
-        dispose();
-      } catch {}
+      disposers.push(dispose);
     },
     close: () => {
-      closed = true;
       while (disposers.length > 0) {
         try {
           disposers.pop()?.();

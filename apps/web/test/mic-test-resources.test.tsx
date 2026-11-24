@@ -108,6 +108,45 @@ describe("the Settings microphone test owns everything one run opens", () => {
     expect(leftOpen()).toEqual([]);
   });
 
+  it("stops the microphone when it arrives after Settings closed", async () => {
+    world.holds.add("capture");
+    await mount(false);
+
+    closeSettings();
+    world.releaseAll();
+    await flush();
+
+    expect(leftOpen()).toEqual([]);
+  });
+
+  it("opens nothing after Settings closed while noise cancellation was starting", async () => {
+    world.holds.add("noiseSetup");
+    await mount(true);
+    await waitForNoiseSetup();
+    const contextsAtClose = world.contexts.length;
+
+    closeSettings();
+    world.releaseAll();
+    await flush();
+
+    expect(world.contexts.length).toBe(contextsAtClose);
+    expect(leftOpen()).toEqual([]);
+  });
+
+  it("opens no monitor after the call ended while noise cancellation was starting, even with Settings still open", async () => {
+    world.holds.add("noiseSetup");
+    await mount(true);
+    await waitForNoiseSetup();
+    const contextsAtEnd = world.contexts.length;
+
+    await act(async () => releaseAllCaptures());
+    world.releaseAll();
+    await flush();
+
+    expect(world.contexts.length).toBe(contextsAtEnd);
+    expect(leftOpen()).toEqual([]);
+  });
+
   it("falls back to the raw microphone when noise cancellation fails, and closing Settings releases it", async () => {
     pipelineFailure.next = new Error("the noise cancellation worklet failed to load");
     await mount(true);

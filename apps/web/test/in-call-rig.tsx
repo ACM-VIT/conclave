@@ -24,6 +24,7 @@ export class World {
   joinRefusal: string | null = null;
   produceRoundTripMs = Number(process.env.IN_CALL_PRODUCE_RTT_MS ?? 0);
   roundTripsInFlight = 0;
+  sent: Array<{ producer: string; source: string | null }> = [];
   refusals = new Map<string, number>();
   cameraRefusesConstraints = false;
   contextsStartSuspended = false;
@@ -326,6 +327,7 @@ export class FakeProducer {
       setParameters: async () => {},
     };
     world.producers.push(this);
+    world.sent.push({ producer: id, source: track?.source ?? null });
   }
 
   pause() {
@@ -346,6 +348,7 @@ export class FakeProducer {
     await this.world.wait("replaceTrack");
     if (this.closed) throw new Error("closed");
     this.track = track;
+    this.world.sent.push({ producer: this.id, source: track?.source ?? null });
   }
 
   async setRtpEncodingParameters() {}

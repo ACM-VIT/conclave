@@ -157,6 +157,71 @@ describe("a chosen device ends up sending", () => {
     expect(unwanted(world, rig.rig())).toEqual([]);
   });
 
+  it("a microphone lost again while its recovery publishes sends again without waiting for the watchdog", async () => {
+    const rig = await join({ camera: false });
+    world.holds.add("produce");
+    await act(async () => liveMicrophoneSource()?.lose());
+    await until("the recovery publish", () => pendingOf("produce") === 1);
+
+    await act(async () => liveMicrophoneSource()?.lose());
+    await releaseAll(rig);
+
+    expect(notLive(world, rig.rig())).toEqual([]);
+    expect(unwanted(world, rig.rig())).toEqual([]);
+  });
+
+  it("captures released while a microphone recovery publishes leave its producer closed", async () => {
+    const rig = await join({ camera: false });
+    world.holds.add("produce");
+    await act(async () => liveMicrophoneSource()?.lose());
+    await until("the recovery publish", () => pendingOf("produce") === 1);
+    const publishedBefore = world.producers.length;
+
+    await act(async () => releaseAllCaptures());
+    const recovered: Array<[boolean, boolean | undefined]> = [];
+    await act(async () => {
+      world.releaseAll();
+      for (let turn = 0; turn < 6; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+      world.producers
+        .slice(publishedBefore)
+        .forEach((producer) => recovered.push([producer.closed, world.sfu.get(producer.id)?.closed]));
+    });
+
+    expect(recovered).toEqual([[true, true]]);
+  });
+
+  it("leaving the meeting page while a microphone recovery publishes leaves no producer open", async () => {
+    const rig = await join({ camera: false });
+    world.holds.add("produce");
+    await act(async () => liveMicrophoneSource()?.lose());
+    await until("the recovery publish", () => pendingOf("produce") === 1);
+
+    const publishedBefore = world.producers.length;
+    rig.unmount();
+    current = null;
+    world.releaseAll();
+    await until("the recovery publish answer", () => world.producers.length > publishedBefore && world.roundTripsInFlight === 0);
+    await act(async () => {
+      for (let turn = 0; turn < 6; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(world.producers.filter((producer) => !producer.closed).map((producer) => producer.id)).toEqual([]);
+  });
+
+  it("turning noise cancellation on and straight back off never sends the noise-cancelled microphone", async () => {
+    const rig = await join({ camera: false });
+    world.holds.add("noiseSetup");
+    await act(async () => rig.rig().setNoiseCancellation(true));
+    await until("the noise cancellation setup", () => pendingOf("noiseSetup") >= 1);
+
+    await act(async () => rig.rig().setNoiseCancellation(false));
+    await releaseAll(rig);
+
+    expect(world.sent.filter((entry) => entry.source === "web-audio")).toEqual([]);
+    expect(notLive(world, rig.rig())).toEqual([]);
+    expect(unwanted(world, rig.rig())).toEqual([]);
+  });
+
   it("a camera lost mid-call sends again without waiting for the watchdog when video effects change during the publish", async () => {
     const rig = await join({ mic: false });
     world.holds.add("produce");
