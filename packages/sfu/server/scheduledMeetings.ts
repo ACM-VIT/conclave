@@ -1,11 +1,5 @@
-import { randomBytes, randomUUID } from "node:crypto";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import type {
@@ -25,6 +19,7 @@ import {
 } from "./redisPersistence.js";
 import { canonicalizeClientId } from "./clientIds.js";
 import { openSqliteStore } from "./sqliteWriteCheck.js";
+import { writePrivateFileAtomic } from "./privateFile.js";
 import { storedTimestampOrNull } from "./storedValues.js";
 import { adoptRecoveredJsonStore, jsonStoreCollection, type JsonStoreAdapter, type JsonStoreClaim } from "./jsonStoreUpgrade.js";
 
@@ -562,15 +557,6 @@ const scheduledMeetingsPath = (): string => {
   return resolve(process.cwd(), "data", "scheduled-meetings.json");
 };
 
-const writeJsonAtomic = (path: string, data: string): void => {
-  const dir = dirname(path);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
-  }
-  const tmp = `${path}.${randomBytes(4).toString("hex")}.tmp`;
-  writeFileSync(tmp, data, "utf8");
-  renameSync(tmp, path);
-};
 
 type SqliteStatement = {
   run: (...params: unknown[]) => unknown;
@@ -830,7 +816,7 @@ const createFileScheduledMeetingPersistence = (
 ): ScheduledMeetingPersistence => ({
   save: (snapshot) => {
     try {
-      writeJsonAtomic(path, JSON.stringify(snapshot, null, 2));
+      writePrivateFileAtomic(path, JSON.stringify(snapshot, null, 2));
     } catch (error) {
       Logger.error("Failed to persist scheduled meetings to JSON", error);
     }

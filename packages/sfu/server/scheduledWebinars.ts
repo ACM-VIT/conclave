@@ -1,5 +1,5 @@
 import { createHash, randomUUID, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import type {
@@ -21,6 +21,7 @@ import {
 } from "./webinar.js";
 import { canonicalizeClientId } from "./clientIds.js";
 import { openSqliteStore } from "./sqliteWriteCheck.js";
+import { writePrivateFileAtomic } from "./privateFile.js";
 import { adoptRecoveredJsonStore, jsonStoreCollection, type JsonStoreAdapter, type JsonStoreClaim } from "./jsonStoreUpgrade.js";
 
 const DEFAULT_EARLY_ENTRY_MINUTES = 10;
@@ -294,22 +295,13 @@ const scheduledWebinarsSqlitePath = (): string => {
   return resolve(process.cwd(), "data", "conclave.sqlite");
 };
 
-const writeJsonAtomic = (path: string, data: string): void => {
-  const dir = dirname(path);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
-  }
-  const tmp = `${path}.${randomBytes(4).toString("hex")}.tmp`;
-  writeFileSync(tmp, data, "utf8");
-  renameSync(tmp, path);
-};
 
 const createFileScheduledWebinarPersistence = (
   path: string = scheduledWebinarsPath(),
 ): ScheduledWebinarPersistence => ({
   save: (snapshot) => {
     try {
-      writeJsonAtomic(path, JSON.stringify(snapshot, null, 2));
+      writePrivateFileAtomic(path, JSON.stringify(snapshot, null, 2));
     } catch (error) {
       Logger.error("Failed to persist scheduled webinars", error);
     }

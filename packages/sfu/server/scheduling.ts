@@ -1,11 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from "node:crypto";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import type {
@@ -32,6 +26,7 @@ import {
   CONCLAVE_CLIENT_ID,
 } from "./clientIds.js";
 import { openSqliteStore } from "./sqliteWriteCheck.js";
+import { writePrivateFileAtomic } from "./privateFile.js";
 import { adoptRecoveredJsonStore, jsonStoreCollection, type JsonStoreAdapter, type JsonStoreClaim } from "./jsonStoreUpgrade.js";
 
 type MaybePromise<T> = T | Promise<T>;
@@ -970,13 +965,6 @@ const getSchedulingJsonPath = (): string => {
   return resolve(process.cwd(), "data", "scheduling.json");
 };
 
-const writeJsonAtomic = (path: string, data: string): void => {
-  const dir = dirname(path);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  const tmp = `${path}.${randomBytes(4).toString("hex")}.tmp`;
-  writeFileSync(tmp, data, "utf8");
-  renameSync(tmp, path);
-};
 
 const loadNodeSqlite = (): {
   DatabaseSync: new (path: string) => SqliteDatabase;
@@ -1217,7 +1205,7 @@ const createFileSchedulingPersistence = (
 ): SchedulingPersistence => ({
   save: (snapshot) => {
     try {
-      writeJsonAtomic(
+      writePrivateFileAtomic(
         path,
         JSON.stringify(
           {

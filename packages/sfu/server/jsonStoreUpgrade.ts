@@ -1,6 +1,7 @@
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Logger } from "../utilities/loggers.js";
+import { writePrivateFileAtomic } from "./privateFile.js";
 
 export type JsonStoreClaim<Row> = {
   key: (row: Row) => string;
@@ -108,7 +109,7 @@ export const adoptRecoveredJsonStore = <Snapshot>(activePath: string, fileName: 
   const result = adapter.build(active?.snapshot ?? sources[0].snapshot, merged);
   if (!active || stableJson(result) !== stableJson(active.snapshot)) {
     mkdirSync(dirname(activePath), { recursive: true });
-    if (active) copyFileSync(activePath, `${activePath}.premerge-${Date.now()}`);
+    if (active) writePrivateFileAtomic(`${activePath}.premerge-${Date.now()}`, readFileSync(activePath, "utf8"));
     adapter.write(activePath, result);
     if (stableJson(readSource(adapter, activePath, "the combined store").snapshot) !== stableJson(result)) {
       throw new Error(`${activePath} did not read back as the combined store, so the copies were left in place.`);
