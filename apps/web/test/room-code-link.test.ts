@@ -323,15 +323,16 @@ describe("pasting into the join code field", () => {
 
 const referenceSettingHost = (setting: string): string | null => {
   const trimmed = setting.trim();
-  const scheme = /^https?:\/\//i.exec(trimmed)?.[0] ?? "https://";
-  const authority = trimmed.replace(/^https?:\/\//i, "").split(/[/?#\\]/)[0];
-  if (!/^(?:\[[0-9a-f:.]+\]|[^\s@:[\]]+)(?::\d+)?$/i.test(authority)) return null;
+  const explicit = /^https?:\/\//i.test(trimmed);
+  const authority = trimmed.split(/[/?#\\]/)[0];
+  if (!explicit && !/^(?:\[[0-9a-f:.]+\]|[^\s@:[\]]+)(?::\d+)?$/i.test(authority)) return null;
   let url: URL;
   try {
-    url = new URL(`${scheme}${authority}/`);
+    url = new URL(explicit ? trimmed : `https://${trimmed}`);
   } catch {
     return null;
   }
+  if (!url.hostname) return null;
   return url.port && url.port !== "80" && url.port !== "443"
     ? `${url.hostname}:${url.port}`
     : url.hostname;
@@ -437,6 +438,11 @@ describe("hosts a pasted meeting link may use without a scheme", () => {
       "127.1",
       "https://[2001:0db8:0:0:0:0:0:1]:8443",
       "http://[::1]:3615",
+      "https://staging.example/team meetings/",
+      "staging.example/team meetings/",
+      "https://staging.example:",
+      "https://user:secret@app.example",
+      "http://127.0.0.1:443",
       "https://conclave.example:443",
       "http://conclave.example:80",
       "file:///tmp/conclave",
@@ -494,12 +500,26 @@ describe("hosts a pasted meeting link may use without a scheme", () => {
     expect(parseCodeFieldPaste("11/23", getMeetingLinkHosts())).toBeNull();
   });
 
+  it("keeps the origin of any http or https setting whatever its path", () => {
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", "");
+    for (const [setting, origin, host] of [
+      ["https://staging.example/team meetings/", "https://staging.example", "staging.example"],
+      ["staging.example/team meetings/", "https://staging.example", "staging.example"],
+      ["https://staging.example:", "https://staging.example", "staging.example"],
+      ["https://user:secret@app.example/x", "https://app.example", "app.example"],
+    ]) {
+      vi.stubEnv("NEXT_PUBLIC_SITE_URL", setting);
+      expect({ setting, origin: getPublicSiteUrl() }).toEqual({ setting, origin });
+      expect({ setting, hosts: getMeetingLinkHosts() }).toEqual({ setting, hosts: [PRODUCTION_HOST, host] });
+    }
+  });
+
   it("ignores site settings that are not web addresses", () => {
     vi.stubEnv("NEXT_PUBLIC_SITE_URL", "file:///tmp/conclave");
     vi.stubEnv("NEXT_PUBLIC_APP_URL", "http://");
     expect(getMeetingLinkHosts()).toEqual(["conclave.acmvit.in"]);
     vi.stubEnv("NEXT_PUBLIC_SITE_URL", "mailto:user@example.com");
-    vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://user:secret@app.example");
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", "ftp://app.example");
     expect(getMeetingLinkHosts()).toEqual(["conclave.acmvit.in"]);
   });
 

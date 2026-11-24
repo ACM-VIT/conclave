@@ -28,21 +28,23 @@ export const normalizeOrigin = (value: string | undefined): string | null => {
   }
 };
 
-const SITE_SETTING = /^(?:(?<scheme>https?):\/\/)?(?<authority>[^\s/?#\\]+)(?:[/?#\\]\S*)?$/i;
-const SITE_AUTHORITY = /^(?:\[[0-9a-f:.]+\]|[^\s@:[\]]+)(?::\d+)?$/i;
+const WEB_URL = /^https?:\/\//i;
+const SCHEMELESS_AUTHORITY = /^(?:\[[0-9a-f:.]+\]|[^\s@:[\]]+)(?::\d+)?$/i;
 
 const parseSiteSetting = (
   value: string | undefined,
 ): { origin: string; host: string } | null => {
-  const { scheme, authority } = SITE_SETTING.exec(value?.trim() ?? "")?.groups ?? {};
-  if (!authority || !SITE_AUTHORITY.test(authority)) return null;
+  const setting = value?.trim();
+  if (!setting) return null;
+  const explicit = WEB_URL.test(setting);
+  if (!explicit && !SCHEMELESS_AUTHORITY.test(setting.split(/[/?#\\]/)[0])) return null;
   let url: URL;
   try {
-    url = new URL(`${scheme ?? "https"}://${authority}`);
+    url = new URL(explicit ? setting : `https://${setting}`);
   } catch {
     return null;
   }
-  const host = canonicalHost(url.host);
+  const host = url.hostname ? canonicalHost(url.host) : null;
   return host ? { origin: url.origin, host } : null;
 };
 
