@@ -603,7 +603,7 @@ describe("blocking a guest", () => {
     );
   });
 
-  it("lets every tab of the pass back in once the host unblocks it", async () => {
+  it("stops refusing every tab of the pass once the host unblocks it, which then asks to be let back in", async () => {
     const state = makeState();
     await join(state, guestHost);
     const room = state.rooms.get("conclave:room")!;
@@ -614,7 +614,7 @@ describe("blocking a guest", () => {
     room.unblockUser(blockedTab.userId);
 
     const otherTab = await join(state, tab("tab-2", "proof-of-pass-e", "E"));
-    expect(otherTab.ack).toHaveBeenCalledWith(joined);
+    expect(otherTab.ack).toHaveBeenCalledWith(expect.objectContaining({ status: "waiting" }));
   });
 
   it("keeps the pass out while any of its tabs is still blocked", async () => {
@@ -1434,7 +1434,7 @@ describe("a guest whose browser holds two passes", () => {
     expect(thirdTab.ack).toHaveBeenCalledWith(notAllowed);
   });
 
-  it("is let back in under both passes when the host lifts that block", async () => {
+  it("asks to be let back in under both passes when the host lifts that block", async () => {
     const state = makeState();
     await join(state, hostTab);
     const room = state.rooms.get("conclave:room")!;
@@ -1446,7 +1446,7 @@ describe("a guest whose browser holds two passes", () => {
     room.unblockUser(underOtherPass.userId);
     const back = await join(state, guest);
 
-    expect(back.ack).toHaveBeenCalledWith(joined);
+    expect(back.ack).toHaveBeenCalledWith(expect.objectContaining({ status: "waiting" }));
   });
 
   it("is not linked to a pass the room has never seen", async () => {
@@ -4377,7 +4377,7 @@ describe("who may come in, against a slow reading of every decision", () => {
         this.status.set(tab.key, "seated");
         this.coHosts.add(tab.key);
         this.adminSeats.add(tab.key);
-      } else if (!this.locked || this.admits(tab.pass)) {
+      } else if ((!this.locked && !this.removed(tab.pass)) || this.admits(tab.pass)) {
         if (this.locked) {
           expect(this.admitsWithWholeHistory(tab.pass), `${tab.key} let in although the whole history refuses it`).toBe(true);
         }
