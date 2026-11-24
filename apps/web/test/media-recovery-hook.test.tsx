@@ -49,6 +49,20 @@ describe("the media path recovery the hook runs", () => {
     expect(rig.recv?.carriedBytes).toBeGreaterThan(0);
   });
 
+  it("restarts ICE on a send path whose media stops reaching the SFU while bytes still leave", async () => {
+    rig = await startRig({ publish: true });
+    await rig.join();
+    await rig.advance(5_000);
+    const send = rig.send!;
+    expect(send.reportAt).not.toBeNull();
+    rig.outgoingDropped = true;
+    const sentBefore = send.carriedBytes;
+
+    expect(await waitFor(rig, () => send.restartIceCalls > 0, 25_000)).toBe(true);
+    expect(send.carriedBytes).toBeGreaterThan(sentBefore);
+    expect(rig.log.some((line) => line.includes("producer transport has carried no media"))).toBe(true);
+  });
+
   it("does not rebuild when the last remote stream pauses while an ICE restart is checked", async () => {
     rig = await startRig();
     await rig.join();

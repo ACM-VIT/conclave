@@ -154,9 +154,43 @@ export class FakeTransport extends Emitter {
     return consumer;
   }
 
-  async produce() {
+  async produce(options: { track: ReturnType<typeof fakeTrack>; appData?: Record<string, unknown> }) {
     await this.startConnecting();
-    throw new Error("the rig does not publish");
+    const id = await new Promise<string>((resolve, reject) => {
+      this.emit(
+        "produce",
+        { kind: options.track.kind, rtpParameters: { codecs: [], encodings: [{}], headerExtensions: [], rtcp: {} }, appData: options.appData ?? {} },
+        ({ id: producerId }: { id: string }) => resolve(producerId),
+        reject,
+      );
+    });
+    this.hasConsumers = true;
+    const producer = {
+      id,
+      kind: options.track.kind,
+      track: options.track,
+      paused: false,
+      closed: false,
+      appData: options.appData ?? {},
+      rtpParameters: { encodings: [{}] },
+      observer: new Emitter(),
+      on() {},
+      off() {},
+      pause() {
+        producer.paused = true;
+      },
+      resume() {
+        producer.paused = false;
+      },
+      close() {
+        producer.closed = true;
+      },
+      replaceTrack: async () => {},
+      setMaxSpatialLayer: async () => {},
+      setRtpEncodingParameters: async () => {},
+      getStats: async () => new Map(),
+    };
+    return producer;
   }
 
   async restartIce() {
@@ -219,6 +253,7 @@ type FakeSocket = {
 };
 
 export type RigOptions = {
+  publish?: boolean;
   directWorks?: boolean;
   ttlSeconds?: number;
   relayConnectMs?: number;
@@ -243,6 +278,8 @@ export class CallRig {
   routePlan: Array<"answer" | "hold" | "fail"> = [];
   holdProducersMs = 0;
   mediaFlows = true;
+  outgoingDropped = false;
+  publish: boolean;
   consumerIds = new Map<string, string>();
   moves: Array<{ at: number; closing: FakeTransport | undefined; bytes: number }> = [];
   transports: FakeTransport[] = [];
@@ -255,6 +292,7 @@ export class CallRig {
   private remoteProducers: Array<{ producerId: string; producerUserId: string; kind: "audio"; type: "webcam"; paused: boolean }>;
 
   constructor(options: RigOptions = {}) {
+    this.publish = options.publish ?? false;
     this.directWorks = options.directWorks ?? true;
     this.ttlSeconds = options.ttlSeconds ?? 3600;
     this.relayConnectMs = options.relayConnectMs ?? 200;
@@ -265,6 +303,10 @@ export class CallRig {
       type: "webcam" as const,
       paused: false,
     }));
+  }
+
+  get send(): FakeTransport | undefined {
+    return this.transports.filter((transport) => transport.direction === "send").at(-1);
   }
 
   get recv(): FakeTransport | undefined {
@@ -335,6 +377,11 @@ export class CallRig {
     const since = transport.accruedAt ?? now;
     transport.accruedAt = now;
     if (!this.pathWorks(transport) || !transport.hasConsumers) return;
+    if (transport.direction === "send") {
+      transport.carriedBytes += Math.round((now - since) * 4);
+      if (!this.outgoingDropped) transport.reportAt = now;
+      return;
+    }
     if (this.mediaFlows && this.remoteProducers.some((producer) => !producer.paused)) {
       transport.carriedBytes += Math.round((now - since) * 1.6);
       transport.reportAt = now;
@@ -437,6 +484,8 @@ export class CallRig {
           rtpCapabilities: { codecs: [], headerExtensions: [] },
           hostUserId: "remote-0#s",
         });
+      case "produce":
+        return this.ack(ack, { producerId: `local-${String(payload?.kind)}-${this.nextId++}` });
       case "updateMediaCapabilities":
         return this.ack(ack, { error: "not in the rig" });
       case "createConsumerTransport":
@@ -613,13 +662,25 @@ export class CallRig {
   async mount() {
     const noop = () => {};
     const rig = this;
+    const microphone = fakeTrack("audio");
+    const stream = this.publish
+      ? {
+          id: "local-stream",
+          active: true,
+          getTracks: () => [microphone],
+          getAudioTracks: () => [microphone],
+          getVideoTracks: () => [],
+          addEventListener() {},
+          removeEventListener() {},
+        }
+      : null;
     const supplied: Record<string, unknown> = {
       roomId: ROOM,
       userId: "viewer#session",
       isAdmin: false,
       displayNameInput: "Viewer",
-      localStream: null,
-      isMuted: true,
+      localStream: stream,
+      isMuted: !this.publish,
       isCameraOff: true,
       isTtsDisabled: false,
       getJoinInfo: (roomId: string, sessionId: string, options?: { signal?: AbortSignal }) =>
