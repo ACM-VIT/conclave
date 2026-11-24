@@ -336,7 +336,19 @@ test("the pruned walk finds exactly the files a full walk finds, for random tree
 test("heredocs are read only from whole instruction arguments", () => {
   const cases = [
     ["shift operator in a quoted script", 'FROM node\nRUN node -e "console.log(1 << x)"\nCOPY a ./\n', [["a"]]],
-    ["shift operator in shell arithmetic", "FROM node\nRUN echo $((1 << 2))\nCOPY a ./\n", [["a"]]],
+    ["shift operator glued to a word", "FROM node\nRUN echo a<<b\nCOPY a ./\n", [["a"]]],
+    ["here-string", "FROM node\nRUN cat <<< x\nCOPY a ./\n", [["a"]]],
+    ["bare << at the end", "FROM node\nRUN cat <<\nCOPY a ./\n", [["a"]]],
+    ["bare << that takes a word with <", "FROM node\nRUN cat << <<EOF\nCOPY a ./\n", [["a"]]],
+    ["chomp marker apart from its word", "FROM node\nRUN cat <<- EOF\nCOPY a ./\n", [["a"]]],
+    ["spaced RUN heredoc", "FROM node\nRUN cat << EOF\nCOPY not/a/copy ./\nEOF\nCOPY a ./\n", [["a"]]],
+    ["wide-spaced quoted RUN heredoc", "FROM node\nRUN cat <<   \"E F\"\nCOPY not/a/copy ./\nE F\nCOPY a ./\n", [["a"]]],
+    ["spaced fd heredoc", "FROM node\nRUN cat 3<< EOF\nCOPY not/a/copy ./\nEOF\nCOPY a ./\n", [["a"]]],
+    ["glued chomped heredoc", "FROM node\nRUN cat <<-EOF\n\tCOPY not/a/copy ./\n\tEOF\nCOPY a ./\n", [["a"]]],
+    ["unchomped heredoc ends only at an exact line", "FROM node\nRUN cat <<EOF\n\tEOF\n EOF\nCOPY not/a/copy ./\nEOF\nCOPY a ./\n", [["a"]]],
+    ["spaced inline-only COPY", "FROM node\nCOPY << EOF /app/note.txt\nx\nEOF\n", []],
+    ["spaced mixed COPY", "FROM node\nCOPY << EOF packages/sfu/package.json /app/\nx\nEOF\n", [["packages/sfu/package.json"]]],
+    ["mixed COPY whose source is named like the delimiter", "FROM node\nCOPY <<EOF EOF /app/\nx\nEOF\n", [["EOF"]]],
     ["quoted heredoc marker in RUN", "FROM node\nRUN echo '<<EOF'\nCOPY a ./\n", [["a"]]],
     ["heredoc marker in ENV", "FROM node\nENV X=<<EOF\nCOPY a ./\n", [["a"]]],
     ["closed RUN heredoc", "FROM node\nRUN <<EOF\nCOPY not/a/copy ./\nEOF\nCOPY a ./\n", [["a"]]],
@@ -349,5 +361,7 @@ test("heredocs are read only from whole instruction arguments", () => {
   ];
   for (const [name, text, expected] of cases) assert.deepEqual(copies(text), expected, name);
   assert.throws(() => contextCopies("FROM node\nRUN cat <<EOF\nx\n"), DockerfileError);
+  assert.throws(() => contextCopies("FROM node\nRUN echo $((1 << 2))\nCOPY a ./\n"), /heredoc 2\)\) is never closed/);
+  assert.throws(() => contextCopies("FROM node\nRUN cat << EOF\nx\n"), DockerfileError);
   assert.throws(() => contextCopies("FROM node\nCOPY <<EOF packages/sfu/package.json /app/\nx\n"), DockerfileError);
 });
