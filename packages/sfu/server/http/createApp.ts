@@ -25,6 +25,7 @@ import {
   admitWaitingGuest,
   allowUserKeys,
   blockUserKey,
+  emitPendingUsersSnapshot,
   rejectWaitingGuest,
   kickClient,
   rejectAllPendingUsers,
@@ -343,19 +344,6 @@ export const createSfuApp = ({
       pendingSocket.disconnect(true);
     }
     return forceCloseRoom(state, room);
-  };
-
-  const emitPendingUsersSnapshot = (
-    io: SocketIOServer,
-    room: Room,
-  ): void => {
-    io.to(room.channelId).emit("pendingUsersSnapshot", {
-      users: room.waitingGuests().map((pending) => ({
-        userId: pending.userKey,
-        displayName: pending.displayName || pending.userKey,
-      })),
-      roomId: room.id,
-    });
   };
 
   const handleUserMediaControl = (
@@ -1325,7 +1313,7 @@ export const createSfuApp = ({
     }
     const { allowed, refused, admitted } = outcome;
 
-    emitPendingUsersSnapshot(io, lookup.room);
+    emitPendingUsersSnapshot(lookup.room);
 
     res.status(allowed.length === 0 ? 409 : 200).json({
       ...(allowed.length === 0
@@ -1424,7 +1412,7 @@ export const createSfuApp = ({
       }
     }
 
-    emitPendingUsersSnapshot(io, lookup.room);
+    emitPendingUsersSnapshot(lookup.room);
 
     res.json({
       success: true,
@@ -1629,7 +1617,7 @@ export const createSfuApp = ({
       return;
     }
 
-    emitPendingUsersSnapshot(io, lookup.room);
+    emitPendingUsersSnapshot(lookup.room);
     res.json({ success: true, roomId: lookup.room.id, userKey });
   });
 
@@ -1659,7 +1647,7 @@ export const createSfuApp = ({
       return;
     }
 
-    emitPendingUsersSnapshot(io, lookup.room);
+    emitPendingUsersSnapshot(lookup.room);
     res.json({ success: true, roomId: lookup.room.id, userKey });
   });
 
@@ -1683,7 +1671,7 @@ export const createSfuApp = ({
       res.status(409).json(decisionRecordFull("admit"));
       return;
     }
-    emitPendingUsersSnapshot(io, lookup.room);
+    emitPendingUsersSnapshot(lookup.room);
 
     res.json({
       success: true,
@@ -1708,7 +1696,7 @@ export const createSfuApp = ({
     }
 
     const rejected = rejectAllPendingUsers(lookup.room);
-    emitPendingUsersSnapshot(io, lookup.room);
+    emitPendingUsersSnapshot(lookup.room);
 
     res.json({
       success: true,
