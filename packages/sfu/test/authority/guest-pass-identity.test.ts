@@ -4,6 +4,8 @@ import { defineAuthority } from "@conclave/apps-sdk/authority/server";
 import { Harness, person, type Tab } from "./harness.js";
 import { pollsContract } from "@conclave/apps-sdk/polls/core";
 import { pollsAuthority } from "@conclave/apps-sdk/polls/server";
+import { qaContract } from "@conclave/apps-sdk/qa/core";
+import { qaAuthority } from "@conclave/apps-sdk/qa/server";
 
 beforeEach(() => {
   vi.useFakeTimers({ now: 1_000_000 });
@@ -36,6 +38,11 @@ const guestTab = (room: Harness, userKey: string, session: string, guestProof?: 
     room.room.setUserIdentity(`${userKey}#${session}`, userKey, "Gita", { guestProof });
   }
   return room.open(person(userKey, "Gita"), pollsContract, { session });
+};
+
+const guestQaTab = (room: Harness, userKey: string, session: string, guestProof: string) => {
+  room.room.setUserIdentity(`${userKey}#${session}`, userKey, "Gita", { guestProof });
+  return room.open(person(userKey, "Gita"), qaContract, { session });
 };
 
 const linkPasses = (room: Harness, joining: string, shown: string) => {
@@ -105,6 +112,30 @@ describe("a guest's pass, as the room's apps see it (Daybreak)", () => {
     expect(field(back.row("myVotes", pollId), "optionIds")).toEqual(["o1"]);
     expect(await back.act("vote", { pollId, optionIds: ["o2"] })).toEqual(alreadyVoted);
     expect(field(hostTab.row("results", pollId), "voterCount")).toBe(1);
+  });
+
+  it.each([
+    ["through the app", (tab: Tab, _room: Harness, text: string) => tab.act("ask", { text })],
+    ["over the old webinar events", (tab: Tab, room: Harness, text: string) => Promise.resolve(room.authority.actAs(tab.context, "qa", "ask", { text }))],
+  ])("keeps the identity of a guest who asked %s, left after a pass change and came back under the new pass (Neon)", async (_way, ask) => {
+    const room = new Harness([qaAuthority]);
+    await room.open(host, qaContract);
+    const onA = await guestQaTab(room, "guest-gp_gita-on-pass-a", "tab-1", "proof-of-pass-a");
+    const asked = await ask(onA, room, "Asked before the pass changed");
+    const id = asked.ok ? (field(asked.value, "id") as string) : "";
+    await room.deliver();
+    linkPasses(room, "proof-of-pass-b", "proof-of-pass-a");
+    const onB = await guestQaTab(room, "guest-gp_gita-on-pass-b", "tab-1", "proof-of-pass-b");
+    room.room.removeClient(onA.seat.id);
+    await room.deliver();
+
+    room.room.removeClient(onB.seat.id);
+    await room.deliver();
+    const back = await guestQaTab(room, "guest-gp_gita-on-pass-b", "tab-1-back", "proof-of-pass-b");
+    await room.deliver();
+
+    expect(asked.ok).toBe(true);
+    expect(back.row("myQuestions", id)).not.toBeNull();
   });
 
   it("counts one vote for two tabs of a guest once the room links their passes", async () => {

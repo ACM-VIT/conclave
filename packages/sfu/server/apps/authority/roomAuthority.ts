@@ -533,6 +533,9 @@ export class RoomAuthority {
     this.syncPolicy();
     const result = instance.act(bound.actor, action, input, null, this.now());
     this.afterAction(instance, action, bound.client.id, bound.actor.subject, result);
+    if (result.ok && bound.actor.verified) {
+      this.options.identity.hold(this.room, bound.client);
+    }
     return result;
   }
 
@@ -540,6 +543,7 @@ export class RoomAuthority {
   onAction(listener: (notice: ActionNotice) => void): void {
     this.actionListeners.add(listener);
   }
+
 
   /** Called when the room's policy has changed, with the new and the old. */
   onPolicy(listener: (policy: RoomPolicy, previous: RoomPolicy) => void): void {
