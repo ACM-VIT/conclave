@@ -165,7 +165,7 @@ it("frees a webinar's Ask the moment a new connection's list is in, while the ol
   await act(async () => {
     for (const listener of [...(listeners.get("disconnect") ?? [])]) listener();
   });
-  await render("reconnecting", [question], false);
+  await render("reconnecting", [question], false, false);
   await render("joined", [question], true);
   await typeQuestion("A new draft");
   const freeOnTheNewConnection = !button("qa-send").disabled;

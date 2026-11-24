@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { AuthorityProvider } from "@conclave/apps-sdk";
 import { AUTHORITY_EVENTS, type AuthoritySocket } from "@conclave/apps-sdk/authority";
+import { QaPanel } from "../src/app/components/qa/QaPanel";
 import { useMeetingQa } from "../src/app/hooks/useMeetingQa";
 import { WAITING_FOR_VIEW, useReconnectHold } from "../src/app/hooks/useHeldThroughReconnect";
 import type {
@@ -57,6 +58,8 @@ const legacy: Omit<LegacyQaProps, "entries"> & { entries: WebinarQaList } = {
 };
 
 let root: Root;
+let container: HTMLDivElement;
+let withPanel = false;
 let qa: ReturnType<typeof useMeetingQa>;
 /** The ids each render of the hook showed, in order. */
 const renders: string[][] = [];
@@ -114,7 +117,19 @@ function Probe({
     ids: qa.entries.map((entry) => entry.id),
     asks: !qa.onSubmit ? "nothing" : qa.onSubmit === legacyQa.submit ? "old events" : "app",
   });
-  return null;
+  return withPanel ? (
+    <QaPanel
+      audience="webinar"
+      entries={qa.entries}
+      qaEnabled
+      currentUserId="me"
+      onClose={() => {}}
+      onSubmit={qa.onSubmit}
+      onUpvote={qa.onUpvote}
+      waiting={qa.waiting}
+      connection={qa.connection}
+    />
+  ) : null;
 }
 
 const mount = async (
@@ -202,10 +217,12 @@ beforeEach(() => {
   renders.length = 0;
   offers.length = 0;
   availability.length = 0;
-  root = createRoot(document.createElement("div"));
+  container = document.createElement("div");
+  root = createRoot(container);
 });
 
 afterEach(async () => {
+  withPanel = false;
   await act(async () => root.unmount());
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -955,5 +972,57 @@ it("names each connection of a meeting's Q&A by its own token, stable within it 
 
   expect(afterAPatch).toBe(first);
   expect(qa.connection).not.toBe(first);
+});
+
+it.each([
+  ["accepts it", { ok: true }, { draft: "", error: false }],
+  ["refuses it", { ok: false, error: "Ask a longer question" }, { draft: "Will the slides be shared?", error: true }],
+])(
+  "answers a webinar question asked on the old events while the app's view was coming, when the server %s after the view is in",
+  async (_case, reply, shown) => {
+    withPanel = true;
+    let settle!: (value: { ok: boolean; error?: string }) => void;
+    vi.mocked(legacy.submit!).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          settle = resolve;
+        }),
+    );
+    await mount(true);
+    await offerQa();
+    const input = container.querySelector<HTMLTextAreaElement>('[data-testid="qa-input"]')!;
+    const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+    await act(async () => {
+      setValue?.call(input, "Will the slides be shared?");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const askedOn = qa.onSubmit === legacy.submit ? "old events" : "app";
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="qa-send"]')!.click());
+    await sendView();
+    const afterTheHandover = qa.fromApp;
+    await act(async () => settle(reply));
+
+    expect(askedOn).toBe("old events");
+    expect(afterTheHandover).toBe(true);
+    expect(container.querySelector<HTMLTextAreaElement>('[data-testid="qa-input"]')!.value).toBe(shown.draft);
+    expect(container.textContent?.includes("Ask a longer question")).toBe(shown.error);
+  },
+);
+
+it("keeps one connection token through a webinar's handover to the app and a rejoin over the same socket, and takes a new one only with a new socket", async () => {
+  await mount(true);
+  const onTheOldEvents = qa.connection;
+  await offerQa();
+  await sendView();
+  const afterTheHandover = qa.connection;
+  await mount(true, { ...legacy, fromThisConnection: false }, { connectionState: "reconnecting", socketOpen: true });
+  await mount(true);
+  const afterARejoinOverTheSameSocket = qa.connection;
+  await mount(true, { ...legacy, fromThisConnection: false }, { connected: false });
+  await mount(true);
+
+  expect(afterTheHandover).toBe(onTheOldEvents);
+  expect(afterARejoinOverTheSameSocket).toBe(onTheOldEvents);
+  expect(qa.connection).not.toBe(onTheOldEvents);
 });
 

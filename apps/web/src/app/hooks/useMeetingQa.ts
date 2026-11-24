@@ -165,14 +165,7 @@ export function useMeetingQa({
   const [shown, setShown] = useState<WebinarQaEntry[]>(NO_ENTRIES);
   if (live !== null && live !== shown) setShown(live);
   const entries = live ?? shown;
-  const [legacyConnection, setLegacyConnection] = useState(() => ({
-    fromThisConnection: legacy.fromThisConnection,
-    token: {},
-  }));
-  if (legacyConnection.fromThisConnection !== legacy.fromThisConnection) {
-    setLegacyConnection({ fromThisConnection: legacy.fromThisConnection, token: {} });
-  }
-  const connection: unknown = fromApp ? qa.connection : legacyConnection.token;
+  const connection = qa.connection;
 
   const { ask, toggleUpvote, moderate } = qa;
   const appModerate = useCallback(
