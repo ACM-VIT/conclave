@@ -627,14 +627,44 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
     live.emit(sarvamSpeechStart());
     await rig.endTurn(speaker);
     turn += 1;
-    await vi.advanceTimersByTimeAsync(DEADLINE - 2_000);
+    await vi.advanceTimersByTimeAsync(DEADLINE - 9_000);
     check(`step ${step} owed answers timed out`);
     if (liveSocket() !== live) return;
+    const talker = speakers[Math.floor(random() * speakers.length)];
+    const shownUnder = () => rig.viewerTranscript().segments.filter(({ speakerUserId }) => speakerUserId === talker.userId).length;
+    const activeIdsBefore = new Set(room.ledger.activeUnordered().map(({ id }) => id));
+    const shownBefore = shownUnder();
+    speaker = talker;
+    if (!(await sendChunk(true))) return;
+    live.emit(sarvamSpeechStart());
+    for (let chunk = 0; chunk < 6; chunk += 1) {
+      await vi.advanceTimersByTimeAsync(120);
+      if (!(await sendChunk(true))) return;
+      check(`step ${step} refused speech ${chunk}`);
+    }
+    const dropped = random() < 0.5;
+    if (dropped) {
+      live.disconnect();
+    } else {
+      live.emit(sarvamSpeechEnd());
+      await rig.endTurn(talker);
+      turn += 1;
+    }
+    await vi.advanceTimersByTimeAsync(3_000);
+    check(`step ${step} refused speech ended`);
+    const newActive = room.ledger
+      .activeUnordered()
+      .filter(({ id, speaker: lineSpeaker }) => !activeIdsBefore.has(id) && lineSpeaker.userId === talker.userId);
+    if (shownUnder() - shownBefore !== 1 || newActive.length > 0) {
+      report(`step ${step}: one refused utterance by ${talker.userId} opened ${shownUnder() - shownBefore} shown and ${newActive.length} live lines`);
+    }
+    if (dropped || liveSocket() !== live) return;
     for (let utterance = 0; utterance < 18; utterance += 1) live.emit(sarvamFinal(`late${step}`, `Late ${step} ${utterance}.`));
     live.emit(sarvamFinal(`fresh${step}`, `Fresh ${step}.`));
+    live.emit(sarvamFinal(`refused${step}`, `Refused ${step}.`));
     await settle();
     const seen = rig.viewerTranscript().segments;
-    const misplaced = seen.filter(({ text }) => text.startsWith(`Late ${step} `));
+    const misplaced = seen.filter(({ text }) => text.startsWith(`Late ${step} `) || text === `Refused ${step}.`);
     if (misplaced.length > 0) report(`step ${step}: an owed answer reached a newer line (${misplaced.map(({ text }) => text).join(", ")})`);
     const fresh = seen.find(({ text }) => text === `Fresh ${step}.`);
     if (!fresh || fresh.speakerUserId !== freshSpeaker) {

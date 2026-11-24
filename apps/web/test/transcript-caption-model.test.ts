@@ -12,6 +12,7 @@ import {
   openAiDelta,
   openAiFinal,
   sarvamFinal,
+  sarvamSpeechEnd,
   sarvamSpeechStart,
   settle,
   transcriptRoomRig,
@@ -814,6 +815,91 @@ describe("Sarvam answer positions stay open for their whole window (Greptile at 
     const texts = shown(rig).map(([text]) => text);
     expect(texts.filter((text) => text.startsWith("Late"))).toEqual([]);
     expect(shown(rig).at(-1)).toEqual(["Fresh.", "ada"]);
+  });
+
+  it("a refused line keeps its speaker's utterance until it ends, so continuing speech opens no second line or position", async () => {
+    const rig = await startRig(SARVAM);
+    const socket = await signalsActive(rig);
+    await owe(rig, socket, 17);
+    await rig.speak(ada);
+    socket.emit(sarvamSpeechStart());
+    await rig.endTurn(ada);
+    await vi.advanceTimersByTimeAsync(DEADLINE - 500);
+    const session = (rig.room as unknown as {
+      liveConnection: { session: { utteranceCount: number } };
+    }).liveConnection.session;
+    const linesOf = (userId: string) =>
+      (rig.room as unknown as { ledger: { all(): PlacedLine[] } }).ledger
+        .all()
+        .filter(({ speaker }) => speaker.userId === userId).length;
+    const graceLinesBefore = linesOf("grace");
+    const utterancesBefore = session.utteranceCount;
+    await rig.speak(grace);
+    socket.emit(sarvamSpeechStart());
+    for (let chunk = 0; chunk < 8; chunk += 1) {
+      await vi.advanceTimersByTimeAsync(120);
+      await rig.speak(grace);
+    }
+    await vi.advanceTimersByTimeAsync(120);
+    await rig.speak(ada);
+    socket.emit(sarvamSpeechStart());
+    await rig.endTurn(ada);
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(session.utteranceCount - utterancesBefore).toBe(2);
+    expect(linesOf("grace") - graceLinesBefore).toBe(1);
+    expect(shown(rig).at(-1)).toEqual([GAP, "ada"]);
+  });
+
+  it("a refused utterance's continuing speech is not replayed as a second line after a reconnect", async () => {
+    const rig = await startRig(SARVAM);
+    const socket = await signalsActive(rig);
+    await owe(rig, socket, 17);
+    await rig.speak(ada);
+    socket.emit(sarvamSpeechStart());
+    await rig.endTurn(ada);
+    await vi.advanceTimersByTimeAsync(DEADLINE - 500);
+    const graceShownBefore = shown(rig).filter(([, speaker]) => speaker === "grace").length;
+    await rig.speak(grace);
+    socket.emit(sarvamSpeechStart());
+    for (let chunk = 0; chunk < 8; chunk += 1) {
+      await vi.advanceTimersByTimeAsync(120);
+      await rig.speak(grace);
+    }
+    socket.disconnect();
+    await vi.advanceTimersByTimeAsync(3_000);
+    const replacement = rig.providerSockets().at(-1)!;
+    expect(replacement).not.toBe(socket);
+    await vi.advanceTimersByTimeAsync(DEADLINE + 1_000);
+
+    expect(ledgerOf(rig).activeUnordered().filter(({ speaker }) => speaker.userId === "grace")).toHaveLength(0);
+    expect(shown(rig).filter(([, speaker]) => speaker === "grace").length - graceShownBefore).toBe(1);
+  });
+
+  it("a refused line stops owning its speaker's speech when Sarvam ends the utterance", async () => {
+    const rig = await startRig(SARVAM);
+    const socket = await signalsActive(rig);
+    await owe(rig, socket, 17);
+    await rig.speak(ada);
+    socket.emit(sarvamSpeechStart());
+    await rig.endTurn(ada);
+    await vi.advanceTimersByTimeAsync(DEADLINE - 500);
+    await rig.speak(grace);
+    socket.emit(sarvamSpeechStart());
+    const refused = () =>
+      (rig.room as unknown as { ledger: { all(): (PlacedLine & { refused?: boolean; audio: unknown[] })[] } }).ledger
+        .all()
+        .filter((line) => line.refused);
+    await vi.advanceTimersByTimeAsync(120);
+    await rig.speak(grace);
+    const heldWhileSpeaking = refused()[0]?.audio.length ?? 0;
+    socket.emit(sarvamSpeechEnd());
+    await vi.advanceTimersByTimeAsync(120);
+    await rig.speak(grace);
+
+    expect(refused()).toHaveLength(1);
+    expect(heldWhileSpeaking).toBe(1);
+    expect(refused()[0].audio).toHaveLength(heldWhileSpeaking);
   });
 
   it("shows a new heard line as a gap at once while 16 answers are owed, and keeps later answers on their own lines", async () => {
