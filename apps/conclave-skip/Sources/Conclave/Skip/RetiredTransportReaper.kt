@@ -3,6 +3,7 @@ package conclave.module
 import android.os.Handler
 import android.os.Looper
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withTimeoutOrNull
 
 internal class RetiredTransportReaper<T : Any>(
     private val idleDelayMs: Long,
@@ -10,20 +11,32 @@ internal class RetiredTransportReaper<T : Any>(
     private val dispose: (T) -> Unit,
     private val handler: Handler = Handler(Looper.getMainLooper()),
 ) {
-    private class Entry<T>(val item: T, var ready: Boolean)
+    private class Entry<T>(val item: T, var ready: Boolean) {
+        var abandoned = false
+        val holdsUp: Boolean get() = !ready && !abandoned
+    }
 
     private val retired: MutableList<Entry<T>> = mutableListOf()
     private val laneWaiters: MutableList<CompletableDeferred<Unit>> = mutableListOf()
     private val idleCheck = Runnable { disposeIfIdle() }
 
-    val isWaitingOnLanes: Boolean get() = synchronized(retired) { retired.any { !it.ready } }
+    val isWaitingOnLanes: Boolean get() = synchronized(retired) { retired.any { it.holdsUp } }
 
-    suspend fun awaitLanes() {
+    suspend fun awaitLanes(deadlineMillis: Long = LANE_DEADLINE_MILLIS): Boolean {
         val waiter = synchronized(retired) {
-            if (retired.none { !it.ready }) return
+            if (retired.none { it.holdsUp }) return true
             CompletableDeferred<Unit>().also { laneWaiters.add(it) }
         }
-        waiter.await()
+        val finished = try {
+            withTimeoutOrNull(deadlineMillis) { waiter.await() } != null
+        } finally {
+            synchronized(retired) { laneWaiters.remove(waiter) }
+        }
+        if (finished) return true
+        synchronized(retired) {
+            for (entry in retired) if (!entry.ready) entry.abandoned = true
+        }
+        return false
     }
 
     fun retire(item: T) {
@@ -50,7 +63,7 @@ internal class RetiredTransportReaper<T : Any>(
             handler.post {
                 val released = synchronized(retired) {
                     entry.ready = true
-                    if (retired.any { !it.ready }) emptyList() else laneWaiters.toList().also { laneWaiters.clear() }
+                    if (retired.any { it.holdsUp }) emptyList() else laneWaiters.toList().also { laneWaiters.clear() }
                 }
                 for (waiter in released) waiter.complete(Unit)
                 restartIdleCheck()
@@ -62,8 +75,8 @@ internal class RetiredTransportReaper<T : Any>(
         if (Looper.myLooper() != handler.looper) return
         if (!isIdle()) return
         val batch = synchronized(retired) {
-            if (retired.any { !it.ready }) return
-            retired.toList().also { retired.clear() }
+            if (retired.any { it.holdsUp }) return
+            retired.filter { it.ready }.also { retired.removeAll(it) }
         }
         for (entry in batch) dispose(entry.item)
     }
@@ -71,5 +84,9 @@ internal class RetiredTransportReaper<T : Any>(
     private fun restartIdleCheck() {
         handler.removeCallbacks(idleCheck)
         handler.postDelayed(idleCheck, idleDelayMs)
+    }
+
+    companion object {
+        const val LANE_DEADLINE_MILLIS = 5_000L
     }
 }

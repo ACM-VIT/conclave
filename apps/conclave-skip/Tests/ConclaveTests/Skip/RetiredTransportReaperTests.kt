@@ -5,10 +5,14 @@ import java.time.Duration
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -235,5 +239,30 @@ class RetiredTransportReaperTests {
             reaper.disposeIfIdle()
             assertEquals("seed $seed", calls + readyAtOnce, disposed().size)
         }
+    }
+
+    @Test
+    fun aLaneThatMissesTheDeadlineStopsHoldingUpTheNextCallAndIsDisposedOnlyAfterItsCloseFinishes() {
+        val (stuckLane, stuckRelease) = heldLane("ReaperStuckClose")
+        reaper.retireAfter(stuckLane, "stuck call") { events.add("close stuck call") }
+        reaper.retire("receive transport")
+        val scope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
+        val wait = scope.async(start = CoroutineStart.UNDISPATCHED) { reaper.awaitLanes(deadlineMillis = 5_000) }
+
+        advance(4)
+        assertFalse("the lane wait gave up before its deadline", wait.isCompleted)
+        assertTrue(reaper.isWaitingOnLanes)
+        advance(2)
+        assertTrue("the lane wait outlived its deadline", wait.isCompleted)
+        assertFalse(runBlocking { wait.await() })
+        assertFalse("an abandoned lane still holds up the next Device load", reaper.isWaitingOnLanes)
+        assertTrue(runBlocking { reaper.awaitLanes(deadlineMillis = 1) })
+        reaper.disposeIfIdle()
+        assertEquals(listOf("dispose receive transport"), disposed())
+
+        stuckRelease.countDown()
+        drain(stuckLane)
+        reaper.disposeIfIdle()
+        assertEquals(listOf("dispose receive transport", "dispose stuck call"), disposed())
     }
 }

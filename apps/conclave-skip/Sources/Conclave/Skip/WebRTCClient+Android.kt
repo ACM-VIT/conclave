@@ -1940,7 +1940,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         }
         val generation = configurationGeneration
         deviceLoadJob = transportConnectScope.launch {
-            retiredTransports.awaitLanes()
+            if (!retiredTransports.awaitLanes()) reportTeardownStuck("transport")
             if (generation != configurationGeneration) return@launch
             disposeRetiredTransportsIfIdle()
             loadDevice(preferred)
