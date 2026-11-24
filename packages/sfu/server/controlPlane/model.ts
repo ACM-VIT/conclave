@@ -12,7 +12,7 @@ export type ProfileHours = {
   availability: WeeklyAvailability;
 };
 
-export type EntityMap = {
+export type DataMap = {
   profile: SchedulingProfile;
   hours: ProfileHours;
   eventType: SchedulingEventType;
@@ -21,9 +21,9 @@ export type EntityMap = {
   webinar: ScheduledWebinar;
 };
 
-export type Kind = keyof EntityMap;
+export type DataKind = keyof DataMap;
 
-export const KINDS: readonly Kind[] = [
+export const DATA_KINDS: readonly DataKind[] = [
   "profile",
   "hours",
   "eventType",
@@ -31,6 +31,40 @@ export const KINDS: readonly Kind[] = [
   "meeting",
   "webinar",
 ];
+
+export type LegacyDomain = "scheduling" | "meetings" | "webinars";
+
+export const LEGACY_DOMAINS: readonly LegacyDomain[] = ["scheduling", "meetings", "webinars"];
+
+export const domainOf = (kind: DataKind): LegacyDomain =>
+  kind === "meeting" ? "meetings" : kind === "webinar" ? "webinars" : "scheduling";
+
+export type LegacyCopy = {
+  key: string;
+  kind: DataKind;
+  id: string;
+  hash: string;
+  stamp: number;
+};
+
+export const LEGACY_IMPORT_ID = "legacy";
+
+export type LegacyImportState = {
+  id: typeof LEGACY_IMPORT_ID;
+  ticket: number;
+  sources: Partial<Record<LegacyDomain, string>>;
+};
+
+export const legacyCopyKey = (kind: DataKind, id: string): string => `${kind}:${id}`;
+
+export type EntityMap = DataMap & {
+  legacyCopy: LegacyCopy;
+  legacyImport: LegacyImportState;
+};
+
+export type Kind = keyof EntityMap;
+
+export const KINDS: readonly Kind[] = [...DATA_KINDS, "legacyCopy", "legacyImport"];
 
 export type UniqueIndex =
   | "profileUser"

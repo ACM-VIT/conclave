@@ -43,13 +43,11 @@ docker compose -f docker-compose.sfu.yml run --rm --no-deps --user root \
 Images before this change fell back to JSON files in the container layer
 when SQLite was locked. Before it replaces such a container, the deploy copies
 any of those files onto the volume under `CONCLAVE_FALLBACK_IMPORT_DIR`, readable
-only by the SFU user, so they survive the replacement. A store set to JSON with
-`SCHEDULING_PERSISTENCE`, `SCHEDULED_MEETINGS_PERSISTENCE` or
-`SCHEDULED_WEBINARS_PERSISTENCE` adopts that copy as its file on the first start
-after the upgrade, when its own file is missing, and renames the copy with a
-`.adopted` suffix. It refuses to start if two different copies exist, or if its
-own file is empty while a copy holds records. Stores on SQLite do not import the
-copies; that import moves to a follow-up with the multi-SFU persistence work.
+only by the SFU user, so they survive the replacement. The next start imports
+them into the control-plane store in every mode (see below), keeping the newer
+version of each record, and renames each copy with a `.adopted` suffix. It
+refuses to start if two copies changed one record differently at the same time,
+or if a calendar token cannot be decrypted with this SFU's secret.
 
 To upgrade an existing host, run `git pull` to the reviewed revision first,
 then run the new `scripts/deploy-sfu.sh`. Do not start the upgrade with the
@@ -67,6 +65,11 @@ file next to `CONTROL_PLANE_JSON_PATH`, and a second SFU refuses to start on
 it. The per-store `SCHEDULING_PERSISTENCE`, `SCHEDULED_MEETINGS_PERSISTENCE`
 and `SCHEDULED_WEBINARS_PERSISTENCE` still work when all three agree; mixed
 values stop startup with a message naming `CONTROL_PLANE_PERSISTENCE`.
+
+Every start also reads the previous release's stores and follows what an old
+SFU still running during a deploy created, edited or deleted there, unless the
+same record was changed here since its import; then this store's version stays
+and a warning names the record.
 
 At startup the SQLite store proves it can write its file and directory with a
 rolled-back test transaction. If it cannot, or SQLite will not open, a

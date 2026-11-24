@@ -7,13 +7,21 @@ import {
   normalizeStoredHours,
   normalizeStoredProfile,
 } from "../scheduling.js";
+import { asRecord } from "../../utilities/untrusted.js";
 import {
+  DATA_KINDS,
+  LEGACY_DOMAINS,
+  LEGACY_IMPORT_ID,
   isActiveMeeting,
   isOpenWebinar,
   tags,
   uniqueKeys,
+  type DataKind,
   type EntityMap,
   type Kind,
+  type LegacyCopy,
+  type LegacyDomain,
+  type LegacyImportState,
   type UniqueIndex,
 } from "./model.js";
 
@@ -28,6 +36,26 @@ export type EntitySpec<K extends Kind> = {
 type Registry = { [K in Kind]: EntitySpec<K> };
 
 const same = <T>(value: T): T => value;
+
+const decodeLegacyCopy = (raw: unknown): LegacyCopy | null => {
+  const record = asRecord(raw);
+  const { key, kind, id, hash, stamp } = record;
+  if (typeof key !== "string" || typeof id !== "string" || typeof hash !== "string") return null;
+  if (!DATA_KINDS.includes(kind as DataKind) || typeof stamp !== "number") return null;
+  return { key, kind: kind as DataKind, id, hash, stamp };
+};
+
+const decodeLegacyImport = (raw: unknown): LegacyImportState | null => {
+  const record = asRecord(raw);
+  if (record.id !== LEGACY_IMPORT_ID || typeof record.ticket !== "number") return null;
+  const sources: Partial<Record<LegacyDomain, string>> = {};
+  for (const [domain, source] of Object.entries(asRecord(record.sources))) {
+    if (LEGACY_DOMAINS.includes(domain as LegacyDomain) && typeof source === "string") {
+      sources[domain as LegacyDomain] = source;
+    }
+  }
+  return { id: LEGACY_IMPORT_ID, ticket: record.ticket, sources };
+};
 
 export const entities: Registry = {
   profile: {
@@ -91,6 +119,20 @@ export const entities: Registry = {
     tags: (webinar) => (isOpenWebinar(webinar) ? [tags.openWebinars] : []),
     encode: same,
     decode: normalizeStoredWebinar,
+  },
+  legacyCopy: {
+    id: (copy) => copy.key,
+    unique: () => [],
+    tags: () => [],
+    encode: same,
+    decode: decodeLegacyCopy,
+  },
+  legacyImport: {
+    id: (state) => state.id,
+    unique: () => [],
+    tags: () => [],
+    encode: same,
+    decode: decodeLegacyImport,
   },
 };
 

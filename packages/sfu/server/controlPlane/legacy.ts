@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { Logger } from "../../utilities/loggers.js";
 import { asArray, asRecord } from "../../utilities/untrusted.js";
 import type { RedisPersistenceClient } from "../redisPersistence.js";
@@ -14,11 +14,12 @@ import { normalizeStoredWebinar } from "../scheduledWebinars.js";
 import type { StoreMode } from "./backends/backend.js";
 import { openSqliteDatabase, type SqliteDatabase } from "./backends/sqlite.js";
 import { specOf } from "./entities.js";
-import { done, type EntityMap, type Kind } from "./model.js";
-import type { ControlPlaneStore } from "./store.js";
-import type { Command } from "./tx.js";
+import { LEGACY_DOMAINS, legacyCopyKey, type DataKind, type DataMap, type LegacyDomain } from "./model.js";
+import { hashLegacyValue } from "./legacyHash.js";
 
-export type LegacyRecord = { [K in Kind]: { kind: K; value: EntityMap[K]; stamp: number } }[Kind];
+export type LegacyRecord = { [K in DataKind]: { kind: K; value: DataMap[K]; stamp: number } }[DataKind];
+
+export type HashedLegacyRecord = LegacyRecord & { id: string; key: string; hash: string };
 
 export type LegacyPaths = {
   schedulingSqlite: string;
@@ -27,6 +28,7 @@ export type LegacyPaths = {
   schedulingJson: string;
   meetingsJson: string;
   webinarsJson: string;
+  fallbackDir: string | null;
 };
 
 type RawScheduling = {
@@ -37,7 +39,6 @@ type RawScheduling = {
   tombstones: Map<string, number>;
 };
 
-type Domain<T> = { source: string; data: T } | null;
 
 const sqlitePathFor = (specific: string | undefined, env: NodeJS.ProcessEnv): string => {
   const configured = specific?.trim() || env.CONCLAVE_SQLITE_PATH?.trim();
@@ -57,6 +58,7 @@ export const resolveLegacyPaths = (env: NodeJS.ProcessEnv = process.env): Legacy
   schedulingJson: jsonPathFor(env.SCHEDULING_PATH, "scheduling.json"),
   meetingsJson: jsonPathFor(env.SCHEDULED_MEETINGS_PATH, "scheduled-meetings.json"),
   webinarsJson: jsonPathFor(env.SCHEDULED_WEBINARS_PATH, "scheduled-webinars.json"),
+  fallbackDir: env.CONCLAVE_FALLBACK_IMPORT_DIR?.trim() ? resolve(env.CONCLAVE_FALLBACK_IMPORT_DIR.trim()) : null,
 });
 
 const parseJson = (text: string, where: string): unknown => {
@@ -151,17 +153,6 @@ const jsonArray = (path: string): unknown[] | null => {
 const jsonScheduling = (path: string): RawScheduling | null =>
   existsSync(path) ? snapshotScheduling(parseJson(readFileSync(path, "utf8"), path)) : null;
 
-const firstFilled = <T>(
-  candidates: Array<{ source: string; read: () => T | null | Promise<T | null> }>,
-  size: (data: T) => number,
-): Promise<Domain<T>> =>
-  candidates.reduce<Promise<Domain<T>>>(async (found, candidate) => {
-    const earlier = await found;
-    if (earlier) return earlier;
-    const data = await candidate.read();
-    return data && size(data) > 0 ? { source: candidate.source, data } : null;
-  }, Promise.resolve(null));
-
 const redisMeetings = async (client: RedisPersistenceClient, prefix: string): Promise<unknown[]> =>
   (await client.hVals(`${prefix}:scheduled-meetings`)).map((value) =>
     parseJson(value, `${prefix}:scheduled-meetings`),
@@ -195,11 +186,21 @@ const dropped = (kind: string, raw: unknown): void => {
   Logger.warn(`[ControlPlane] skipped an unreadable legacy ${kind}: ${JSON.stringify(raw).slice(0, 200)}`);
 };
 
-const schedulingRecords = (raw: RawScheduling): LegacyRecord[] => {
+const TOKEN_FIELDS = ["accessToken", "refreshToken"] as const;
+
+const unreadableTokens = (raw: unknown, value: DataMap["calendar"]): string[] => {
+  const stored = asRecord(raw);
+  return TOKEN_FIELDS.filter((field) => typeof stored[field] === "string" && stored[field] !== "" && !value[field]).map(
+    (field) => `the ${field} of profile ${value.profileId}'s calendar`,
+  );
+};
+
+const schedulingRecords = (raw: RawScheduling, where: string): LegacyRecord[] => {
   const records: LegacyRecord[] = [];
+  const unreadable: string[] = [];
   const tombstoned = (kind: string, id: string, stamp: number): boolean =>
     (raw.tombstones.get(`${kind}:${id}`) ?? 0) > stamp;
-  const profiles = new Map<string, EntityMap["profile"]>();
+  const profiles = new Map<string, DataMap["profile"]>();
   for (const entry of raw.profiles) {
     const value = normalizeStoredProfile(entry);
     if (!value) {
@@ -241,8 +242,14 @@ const schedulingRecords = (raw: RawScheduling): LegacyRecord[] => {
       dropped("calendar", entry);
       continue;
     }
+    unreadable.push(...unreadableTokens(entry, value));
     if (tombstoned("calendar", value.profileId, value.updatedAt)) continue;
     records.push({ kind: "calendar", value, stamp: value.updatedAt });
+  }
+  if (unreadable.length > 0) {
+    throw new Error(
+      `In ${where}, ${unreadable.join(", ")} cannot be decrypted with this SFU's secret. Set SCHEDULING_TOKEN_SECRET to the secret the older SFU used.`,
+    );
   }
   return records;
 };
@@ -250,7 +257,7 @@ const schedulingRecords = (raw: RawScheduling): LegacyRecord[] => {
 const listRecords = <K extends "meeting" | "webinar">(
   kind: K,
   entries: unknown[],
-  normalize: (raw: unknown) => EntityMap[K] | null,
+  normalize: (raw: unknown) => DataMap[K] | null,
 ): LegacyRecord[] =>
   entries.flatMap((entry) => {
     const value = normalize(entry);
@@ -261,112 +268,143 @@ const listRecords = <K extends "meeting" | "webinar">(
     return [{ kind, value, stamp: value.updatedAt } as LegacyRecord];
   });
 
+export const hashed = (record: LegacyRecord): HashedLegacyRecord => {
+  const id = specOf(record.kind).id(record.value);
+  return { ...record, id, key: legacyCopyKey(record.kind, id), hash: hashLegacyValue(record.value) };
+};
+
+type Candidate = { source: string; read: () => Promise<LegacyRecord[] | null> };
+
+export type LegacyDomainRead = {
+  domain: LegacyDomain;
+  source: string | null;
+  records: HashedLegacyRecord[] | null;
+};
+
 export type LegacyReadOptions = {
   mode: StoreMode;
   paths: LegacyPaths;
   redis?: { client: RedisPersistenceClient; prefix: string };
+  sticky?: Partial<Record<LegacyDomain, string>>;
 };
 
-export const readLegacyRecords = async (
-  options: LegacyReadOptions,
-): Promise<{ records: LegacyRecord[]; sources: string[] }> => {
-  if (options.mode === "memory") return { records: [], sources: [] };
+const candidatesFor = (domain: LegacyDomain, options: LegacyReadOptions): Candidate[] => {
   const { paths, redis } = options;
   const useSqlite = options.mode !== "json";
-  const meetings = await firstFilled<unknown[]>(
-    [
+  const scheduling = (data: RawScheduling | null, where: string) => (data ? schedulingRecords(data, where) : null);
+  const meetings = (data: unknown[] | null) => (data ? listRecords("meeting", data, normalizeStoredMeeting) : null);
+  const webinars = (data: unknown[] | null) => (data ? listRecords("webinar", data, normalizeStoredWebinar) : null);
+  const candidates: Record<LegacyDomain, Candidate[]> = {
+    scheduling: [
       ...(redis
-        ? [{ source: "redis meetings", read: () => redisMeetings(redis.client, redis.prefix) }]
+        ? [{ source: "redis", read: async () => scheduling(await redisScheduling(redis.client, redis.prefix), "the old Redis scheduling records") }]
         : []),
       ...(useSqlite
-        ? [{ source: `sqlite ${paths.meetingsSqlite}`, read: () => sqliteRows(paths.meetingsSqlite, "scheduled_meetings") }]
+        ? [{ source: "sqlite", read: async () => scheduling(sqliteScheduling(paths.schedulingSqlite), paths.schedulingSqlite) }]
         : []),
-      { source: paths.meetingsJson, read: () => jsonArray(paths.meetingsJson) },
+      { source: "json", read: async () => scheduling(jsonScheduling(paths.schedulingJson), paths.schedulingJson) },
     ],
-    (entries) => entries.length,
-  );
-  const scheduling = await firstFilled<RawScheduling>(
-    [
-      ...(redis
-        ? [{ source: "redis scheduling", read: () => redisScheduling(redis.client, redis.prefix) }]
-        : []),
+    meetings: [
+      ...(redis ? [{ source: "redis", read: async () => meetings(await redisMeetings(redis.client, redis.prefix)) }] : []),
       ...(useSqlite
-        ? [{ source: `sqlite ${paths.schedulingSqlite}`, read: () => sqliteScheduling(paths.schedulingSqlite) }]
+        ? [{ source: "sqlite", read: async () => meetings(sqliteRows(paths.meetingsSqlite, "scheduled_meetings")) }]
         : []),
-      { source: paths.schedulingJson, read: () => jsonScheduling(paths.schedulingJson) },
+      { source: "json", read: async () => meetings(jsonArray(paths.meetingsJson)) },
     ],
-    schedulingSize,
-  );
-  const webinars = await firstFilled<unknown[]>(
-    [
+    webinars: [
       ...(useSqlite
-        ? [{ source: `sqlite ${paths.webinarsSqlite}`, read: () => sqliteRows(paths.webinarsSqlite, "scheduled_webinars") }]
+        ? [{ source: "sqlite", read: async () => webinars(sqliteRows(paths.webinarsSqlite, "scheduled_webinars")) }]
         : []),
-      { source: paths.webinarsJson, read: () => jsonArray(paths.webinarsJson) },
+      { source: "json", read: async () => webinars(jsonArray(paths.webinarsJson)) },
     ],
-    (entries) => entries.length,
-  );
-  return {
-    records: [
-      ...(scheduling ? schedulingRecords(scheduling.data) : []),
-      ...(meetings ? listRecords("meeting", meetings.data, normalizeStoredMeeting) : []),
-      ...(webinars ? listRecords("webinar", webinars.data, normalizeStoredWebinar) : []),
-    ],
-    sources: [scheduling?.source, meetings?.source, webinars?.source].filter(
-      (source): source is string => Boolean(source),
-    ),
   };
+  return candidates[domain];
 };
 
-export type ImportCounts = { inserted: number; refreshed: number; kept: number; unindexed: number };
-
-export const importLegacy =
-  (batch: readonly LegacyRecord[]): Command<ImportCounts> =>
-  (tx) => {
-    const counts: ImportCounts = { inserted: 0, refreshed: 0, kept: 0, unindexed: 0 };
-    for (const record of batch) {
-      const id = specOf(record.kind).id(record.value);
-      const existing = tx.get(record.kind, id);
-      if (existing) {
-        if (existing.legacy === null || existing.legacy >= record.stamp) {
-          counts.kept += 1;
-          continue;
-        }
-        counts.refreshed += 1;
-      } else if (tx.tombstone(record.kind, id) !== null) {
-        counts.kept += 1;
-        continue;
-      } else {
-        counts.inserted += 1;
-      }
-      const skipped = tx.importLegacy(record.kind, record.value, record.stamp);
-      if (skipped.length > 0) {
-        counts.unindexed += 1;
-        Logger.warn(
-          `[ControlPlane] legacy ${record.kind} ${id} kept without ${skipped.join(", ")}: another record already holds it`,
-        );
-      }
+const readDomain = async (domain: LegacyDomain, options: LegacyReadOptions): Promise<LegacyDomainRead> => {
+  const candidates = candidatesFor(domain, options);
+  const sticky = options.sticky?.[domain];
+  if (sticky) {
+    const candidate = candidates.find((entry) => entry.source === sticky);
+    const records = candidate ? await candidate.read() : null;
+    if (!records) {
+      Logger.warn(`[ControlPlane] the old ${sticky} ${domain} store this store imported from is gone; its changes are not followed`);
     }
-    return done(counts);
-  };
-
-const IMPORT_BATCH = 50;
-
-export const importLegacyRecords = async (
-  store: ControlPlaneStore,
-  records: readonly LegacyRecord[],
-): Promise<ImportCounts> => {
-  const ordered = [...records].sort((a, b) => b.stamp - a.stamp);
-  const total: ImportCounts = { inserted: 0, refreshed: 0, kept: 0, unindexed: 0 };
-  for (let start = 0; start < ordered.length; start += IMPORT_BATCH) {
-    const result = await store.commit(importLegacy(ordered.slice(start, start + IMPORT_BATCH)));
-    if (!result.ok) {
-      throw new Error(`Legacy control-plane import failed: ${result.reason} ${result.message ?? ""}`);
-    }
-    total.inserted += result.value.inserted;
-    total.refreshed += result.value.refreshed;
-    total.kept += result.value.kept;
-    total.unindexed += result.value.unindexed;
+    return { domain, source: sticky, records: records ? records.map(hashed) : null };
   }
-  return total;
+  for (const candidate of candidates) {
+    const records = await candidate.read();
+    if (records && records.length > 0) return { domain, source: candidate.source, records: records.map(hashed) };
+  }
+  return { domain, source: null, records: [] };
+};
+
+export const readLegacyDomains = async (options: LegacyReadOptions): Promise<LegacyDomainRead[]> => {
+  if (options.mode === "memory") return [];
+  const reads: LegacyDomainRead[] = [];
+  for (const domain of LEGACY_DOMAINS) reads.push(await readDomain(domain, options));
+  return reads;
+};
+
+const RECOVERED_FILES: Record<LegacyDomain, string> = {
+  scheduling: "scheduling.json",
+  meetings: "scheduled-meetings.json",
+  webinars: "scheduled-webinars.json",
+};
+
+export type RecoveredRecord = HashedLegacyRecord & { from: string };
+
+export type RecoveredCopies = { files: string[]; records: RecoveredRecord[] };
+
+const recoveredFiles = (dir: string | null): Array<{ domain: LegacyDomain; path: string }> => {
+  if (!dir || !existsSync(dir)) return [];
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+    .map((entry) => entry.name)
+    .sort()
+    .flatMap((name) =>
+      LEGACY_DOMAINS.map((domain) => ({ domain, path: join(dir, name, RECOVERED_FILES[domain]) })).filter((file) =>
+        existsSync(file.path),
+      ),
+    );
+};
+
+const recoveredRecords = (domain: LegacyDomain, path: string): LegacyRecord[] => {
+  let records: LegacyRecord[] | null;
+  try {
+    records =
+      domain === "scheduling"
+        ? schedulingRecords(jsonScheduling(path) ?? emptyScheduling(), path)
+        : domain === "meetings"
+          ? listRecords("meeting", jsonArray(path) ?? [], normalizeStoredMeeting)
+          : listRecords("webinar", jsonArray(path) ?? [], normalizeStoredWebinar);
+  } catch (error) {
+    throw new Error(
+      `${path}, a store an older SFU kept in its container, cannot be read: ${(error as Error).message} Repair it before the SFU starts.`,
+      { cause: error },
+    );
+  }
+  return records;
+};
+
+export const readRecoveredCopies = (dir: string | null): RecoveredCopies => {
+  const files = recoveredFiles(dir);
+  const winners = new Map<string, RecoveredRecord>();
+  const problems: string[] = [];
+  for (const file of files) {
+    for (const record of recoveredRecords(file.domain, file.path).map(hashed)) {
+      const held = winners.get(record.key);
+      if (!held || record.stamp > held.stamp) {
+        winners.set(record.key, { ...record, from: file.path });
+      } else if (record.stamp === held.stamp && record.hash !== held.hash) {
+        problems.push(`${record.key} differs between ${held.from} and ${file.path}, and both were last changed at ${record.stamp}.`);
+      }
+    }
+  }
+  if (problems.length > 0) {
+    throw new Error(
+      `Could not combine the stores older SFUs kept in their containers without losing a change:\n- ${problems.join("\n- ")}\nResolve these records by hand, then rename each copy with a .adopted suffix.`,
+    );
+  }
+  return { files: files.map((file) => file.path), records: [...winners.values()] };
 };

@@ -10,12 +10,8 @@ import { createJsonBackend } from "./backends/json.js";
 import { createMemoryBackend, type MemoryData } from "./backends/memory.js";
 import { createRedisBackend } from "./backends/redis.js";
 import { createSqliteBackend } from "./backends/sqlite.js";
-import {
-  importLegacyRecords,
-  readLegacyRecords,
-  resolveLegacyPaths,
-  type LegacyPaths,
-} from "./legacy.js";
+import { resolveLegacyPaths, type LegacyPaths } from "./legacy.js";
+import { runLegacyImport } from "./legacyImport.js";
 import { controlPlaneStore, type ControlPlaneStore } from "./store.js";
 
 export type ControlPlaneConfig = {
@@ -127,16 +123,18 @@ export const openControlPlane = async (
   const store = controlPlaneStore(backend, options.clock);
   if (options.importLegacy === false || config.mode === "memory") return store;
   try {
-    const legacy = await retryWhileSqliteLocked(() =>
-      readLegacyRecords({ mode: config.mode, paths: config.legacy, redis }),
-    );
-    if (legacy.records.length > 0) {
-      const counts = await importLegacyRecords(store, legacy.records);
-      if (counts.inserted + counts.refreshed > 0) {
-        Logger.info(
-          `[ControlPlane] imported ${counts.inserted} and refreshed ${counts.refreshed} legacy record(s) from ${legacy.sources.join(", ")}`,
-        );
-      }
+    const imported = await runLegacyImport(store, {
+      mode: config.mode,
+      paths: config.legacy,
+      redis,
+      read: (run) => retryWhileSqliteLocked(run),
+    });
+    if (imported.superseded) {
+      Logger.info("[ControlPlane] another SFU started a newer legacy import; left the rest to it");
+    } else if (imported.inserted + imported.refreshed + imported.deleted + imported.conflicts > 0) {
+      Logger.info(
+        `[ControlPlane] legacy import from ${[...imported.sources, ...imported.adopted].join(", ")}: ${imported.inserted} new, ${imported.refreshed} changed, ${imported.deleted} deleted, ${imported.conflicts} kept over a conflicting change`,
+      );
     }
   } catch (error) {
     await store.close();

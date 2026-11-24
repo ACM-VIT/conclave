@@ -7,7 +7,8 @@ import { createJsonBackend } from "../server/controlPlane/backends/json.js";
 import { createMemoryBackend, createMemoryData, type MemoryData } from "../server/controlPlane/backends/memory.js";
 import { createRedisBackend } from "../server/controlPlane/backends/redis.js";
 import { createSqliteBackend, openSqliteDatabase } from "../server/controlPlane/backends/sqlite.js";
-import { importLegacy } from "../server/controlPlane/legacy.js";
+import { hashed } from "../server/controlPlane/legacy.js";
+import { beginLegacyImport, reconcileLegacy, type LegacyItem } from "../server/controlPlane/legacyImport.js";
 import {
   advanceMeetings,
   createMeeting,
@@ -162,33 +163,49 @@ describe.each(modes)("the %s control-plane store", (mode) => {
     expect(await store.read(meetingById(meeting.id))).toEqual(meeting);
   });
 
-  it("imports legacy records only where no live record or deletion exists", async () => {
+  it("follows legacy edits and deletes only where this store has not changed the record since its import", async () => {
     const store = await open(mode);
-    const live = await mustCreate(store, "live-room");
-    const removed = await mustCreate(store, "gone-room");
-    await store.commit(deleteMeeting(removed.id, host));
-    const fresh = { ...live, id: "legacy-fresh", roomCode: "legacy-room", updatedAt: 100 };
-    const imported = await store.commit(
-      importLegacy([
-        { kind: "meeting", value: { ...live, title: "Old title", updatedAt: 1 }, stamp: 1 },
-        { kind: "meeting", value: { ...removed, title: "Back" }, stamp: removed.updatedAt + 1 },
-        { kind: "meeting", value: fresh, stamp: 100 },
-      ]),
-    );
-    expect(imported).toMatchObject({ ok: true, value: { inserted: 1, kept: 2 } });
-    expect((await store.read(meetingById(live.id)))?.title).toBe("Standup");
-    expect(await store.read(meetingById(removed.id))).toBeNull();
-    expect(await store.read(meetingById(fresh.id))).toEqual(fresh);
+    const begun = await store.commit(beginLegacyImport());
+    if (!begun.ok) throw new Error("no ticket");
+    const template = await mustCreate(store, "template-room");
+    const copy = (id: string, title: string, stamp: number) =>
+      hashed({ kind: "meeting", value: { ...template, id, roomCode: `room-${id}`, title, updatedAt: stamp }, stamp });
+    const items = (copies: ReturnType<typeof copy>[], gone: string[] = []): LegacyItem[] => [
+      ...gone.map((id) => ({ kind: "meeting" as const, id, copy: null })),
+      ...copies.map((record) => ({ kind: record.kind, id: record.id, copy: record })),
+    ];
+    const reconcile = (list: LegacyItem[]) => store.commit(reconcileLegacy(begun.value.ticket, "meetings", "sqlite", list));
+    const title = async (id: string) => (await store.read(meetingById(id)))?.title ?? null;
 
-    const refreshed = await store.commit(
-      importLegacy([{ kind: "meeting", value: { ...fresh, title: "Newer legacy" }, stamp: 200 }]),
-    );
-    expect(refreshed).toMatchObject({ ok: true, value: { refreshed: 1 } });
-    expect((await store.read(meetingById(fresh.id)))?.title).toBe("Newer legacy");
+    expect(await reconcile(items([copy("a", "A", 100), copy("b", "B", 100), copy("c", "C", 100), copy("d", "D", 100)]))).toMatchObject({
+      ok: true,
+      value: { inserted: 4 },
+    });
+    expect(await store.read((view) => view.get("meeting", "a")?.legacy)).toBe(100);
+    await store.commit(updateMeeting("b", { title: "B here" }, host));
+    await store.commit(deleteMeeting("c", host));
 
-    await store.commit(updateMeeting(fresh.id, { title: "Edited live" }, host));
-    await store.commit(importLegacy([{ kind: "meeting", value: { ...fresh, title: "Later legacy" }, stamp: 300 }]));
-    expect((await store.read(meetingById(fresh.id)))?.title).toBe("Edited live");
+    expect(
+      await reconcile(items([copy("a", "A edited there", 50), copy("b", "B edited there", 200), copy("c", "C edited there", 200), copy("d", "D", 100)])),
+    ).toMatchObject({ ok: true, value: { refreshed: 1, conflicts: 2 } });
+    expect([await title("a"), await title("b"), await title("c"), await title("d")]).toEqual(["A edited there", "B here", null, "D"]);
+
+    const before = await store.read((view) => view.all("meeting").map((stored) => [stored.value.id, stored.rev]));
+    expect(await reconcile(items([copy("a", "A edited there", 50), copy("b", "B edited there", 200), copy("d", "D", 100)], ["c"]))).toMatchObject({
+      ok: true,
+      value: { inserted: 0, refreshed: 0, deleted: 0, conflicts: 0 },
+    });
+    expect(await store.read((view) => view.all("meeting").map((stored) => [stored.value.id, stored.rev]))).toEqual(before);
+
+    expect(await reconcile(items([], ["a", "b", "d"]))).toMatchObject({ ok: true, value: { deleted: 2, conflicts: 1 } });
+    expect([await title("a"), await title("b"), await title("d")]).toEqual([null, "B here", null]);
+    expect(await store.read((view) => view.tombstone("meeting", "a"))).not.toBeNull();
+    expect(await reconcile(items([copy("a", "A again", 300)]))).toMatchObject({ ok: true, value: { conflicts: 1 } });
+    expect(await title("a")).toBeNull();
+
+    expect((await store.commit(beginLegacyImport())).ok).toBe(true);
+    expect(await reconcile(items([copy("e", "E", 100)]))).toMatchObject({ ok: false, reason: "conflict" });
+    expect(await title("e")).toBeNull();
   });
 
   it("returns a no-op command's value without writing", async () => {

@@ -76,9 +76,11 @@ const tagVersion = (kind: Kind, tag: string): string => `t:${kind}:${tag}`;
 const tombField = (kind: Kind, id: string): string => `${kind}:${id}`;
 const slot = (kind: Kind, id: string): string => `${kind}\u0000${id}`;
 
+const FIXED_KEYS = 4;
+
 const COMMIT_SCRIPT = `
 local p = cjson.decode(ARGV[1])
-local kinds = { profile = 5, hours = 6, eventType = 7, calendar = 8, meeting = 9, webinar = 10 }
+local kinds = { ${KINDS.map((kind, index) => `${kind} = ${index + FIXED_KEYS + 1}`).join(", ")} }
 local function recordRev(kind, id)
   local raw = redis.call("HGET", KEYS[kinds[kind]], id)
   if not raw then return 0 end
@@ -299,7 +301,7 @@ export const createRedisBackend = async (options: {
       const known = tagIndex.get(key);
       if (known) return known;
       tagKeys.push(key);
-      const index = 10 + tagKeys.length;
+      const index = FIXED_KEYS + KINDS.length + tagKeys.length;
       tagIndex.set(key, index);
       return index;
     };
