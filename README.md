@@ -137,6 +137,26 @@ Run shared browser service locally:
 pnpm -C packages/shared-browser run dev
 ```
 
+Before every SFU or shared browser deploy, build and boot both root-context images locally. This is a required pre-deploy step:
+
+```bash
+pnpm check:docker-images
+```
+
+It needs a local Docker daemon.
+
+- It runs `pnpm check:docker-context` first, then builds `packages/sfu/Dockerfile` and `packages/shared-browser/Dockerfile` from the repository root and boots each one.
+- Each container must answer 200 on `/health` over HTTP from inside the container. The SFU must also import `@conclave/apps-sdk` there.
+- The shared browser gets a random `BROWSER_SERVICE_TOKEN`, binds `127.0.0.1`, and gets the session browser image built from `packages/shared-browser/docker` (as `scripts/deploy-browser-service.sh` builds it) as `BROWSER_IMAGE_NAME`.
+- It resolves Docker's effective endpoint the way the CLI does: `DOCKER_HOST` first, otherwise `DOCKER_CONTEXT` or the current context. It refuses that endpoint unless it is a local `unix://` socket.
+- It runs every later Docker call pinned to that endpoint, with every `DOCKER_*` and `BUILDX_*` variable removed except `DOCKER_CONFIG` and `BUILDX_CONFIG`, which only locate configuration (credentials, proxies, buildx state). It builds only with the `default` buildx builder, and refuses unless that is the docker driver on the checked endpoint.
+- It never pushes. It gives each run a random container name and tag. It makes each container with `docker create` and a random owner label chosen before the command runs, then runs it with `docker start`. It removes only the containers that carry those labels, by the ids `docker ps` lists for them, and the tags it created. A name conflict therefore never removes another container, and a container created just as the run is interrupted is still removed.
+- Ctrl-C or SIGTERM is passed on to the running Docker command, including a build in progress. No later step runs, the run's containers and tags are removed, and it exits 130 or 143.
+- Supported setups: OrbStack, Docker Desktop and Colima, which run the daemon in a VM and get `/var/run/docker.sock` (the socket inside that VM) mounted into the shared browser container. Also a native Linux engine, rootless included, which gets the resolved socket path mounted. `BROWSER_DOCKER_SOCKET` overrides the mounted path, as with `docker-compose.browser.yml`.
+- Pass `--no-cache` for a cold build.
+
+Do not deploy if it fails.
+
 Deploy SFU pair (Docker Compose):
 
 ```bash
