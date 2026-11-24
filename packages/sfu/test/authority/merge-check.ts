@@ -15,12 +15,27 @@ export type MergeStep =
 
 const STEP_MS = 10_000;
 
+const SETUP_LIMITS = {
+  ...DEFAULT_AUTHORITY_LIMITS,
+  mutationBurst: Number.MAX_SAFE_INTEGER,
+  mutationsPerSecond: Number.MAX_SAFE_INTEGER,
+};
+
 const actor = (subject: string, role: Actor["role"], displayName: string): Actor => ({
   subject: subject as Subject,
   role,
   verified: true,
   displayName,
 });
+
+const mixed = (...parts: number[]): number => {
+  let hash = 2_166_136_261;
+  for (const part of parts) {
+    hash = Math.imul(hash ^ part, 16_777_619) >>> 0;
+    hash ^= hash >>> 13;
+  }
+  return hash >>> 0;
+};
 
 const withoutFields = (row: object, fields: readonly string[]): object =>
   Object.fromEntries(Object.entries(row).filter(([name]) => !fields.includes(name)));
@@ -32,16 +47,17 @@ const play = (
   activityFields: readonly string[],
 ) => {
   let step = 0;
+  let member = 0;
   let draw = 0;
   const instance = new AuthorityInstance(
     `${module.contract.id}.merge-check`,
     module,
     { mode: "meeting", qaEnabled: true },
     {
-      limits: DEFAULT_AUTHORITY_LIMITS,
+      limits: SETUP_LIMITS,
       random: {
         next: () => 0.5,
-        int: (max) => (step * 35 + (draw += 1) * 31) % max,
+        int: (max) => mixed(step, member, (draw += 1)) % max,
         shuffle: (list) => [...list],
       },
       verifyViews: false,
@@ -55,6 +71,7 @@ const play = (
   let now = 1_000_000;
   for (const [index, entry] of steps.entries()) {
     step = index + 1;
+    member = 0;
     draw = 0;
     now += STEP_MS;
     if ("wait" in entry) {
@@ -64,8 +81,11 @@ const play = (
     }
     if ("crowd" in entry) {
       instance.runDueTimers(now);
-      for (let member = 0; member < entry.crowd; member += 1) {
-        instance.act(crowdOf(member), entry.action, entry.input?.(receipts, member) ?? null, null, now);
+      for (let position = 0; position < entry.crowd; position += 1) {
+        member = position + 1;
+        draw = 0;
+        const result = instance.act(crowdOf(position), entry.action, entry.input?.(receipts, position) ?? null, null, now);
+        if (!result.ok) throw new Error(`${module.contract.id}: ${entry.action} by crowd member ${position} failed: ${JSON.stringify(result)}`);
       }
       continue;
     }
@@ -76,8 +96,15 @@ const play = (
   }
   let mergeOps = 0;
   let subjectRows = 0;
+  const crowd = new Set<string>();
+  for (const table of Object.keys(module.runtime.tables)) {
+    for (const [key, row] of instance.store.rows(table)) {
+      for (const member of `${String(key)} ${JSON.stringify(row)}`.match(/crowd-\d{5}/g) ?? []) crowd.add(member);
+    }
+  }
   if (merge) {
     step = steps.length + 1;
+    member = 0;
     draw = 0;
     for (const table of Object.keys(module.runtime.tables)) {
       for (const [key, row] of instance.store.rows(table)) {
@@ -105,7 +132,7 @@ const play = (
         .sort(([a], [b]) => a.localeCompare(b)),
     ]),
   );
-  return { tables, mergeOps, subjectRows };
+  return { tables, mergeOps, subjectRows, crowd: crowd.size };
 };
 
 export const mergeAgainstOnePerson = (
@@ -118,6 +145,6 @@ export const mergeAgainstOnePerson = (
 });
 
 export const mergeCost = (module: AuthorityModule, steps: readonly MergeStep[]) => {
-  const { mergeOps, subjectRows } = play(module, steps, true, []);
-  return { ops: mergeOps, subjectRows };
+  const { mergeOps, subjectRows, crowd } = play(module, steps, true, []);
+  return { ops: mergeOps, subjectRows, crowd };
 };

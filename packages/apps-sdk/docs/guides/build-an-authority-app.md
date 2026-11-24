@@ -124,7 +124,7 @@ The rule a merge follows: it leaves what one person would have if they had done 
 
 A merge must cost in proportion to the two subjects' own rows, never the room's. Read only what is theirs: point reads and scans under a key that starts with the subject. Where a table is keyed by something else first (a ballot by poll, an answer by round), keep a second table keyed by subject and use it. A result that ranks everyone, such as a leaderboard, is updated from the merged person's entry rather than rebuilt from every row.
 
-Check a merge with `mergeAgainstOnePerson` in `packages/sfu/test/authority/merge-check.ts`: it plays a script once as two subjects followed by the merge and once as one person, and compares every table. Check its cost with `mergeCost`, which plays the same script with a crowd of other subjects; the merge's operations must be the same for a crowd of ten as for thousands.
+Check a merge with `mergeAgainstOnePerson` in `packages/sfu/test/authority/merge-check.ts`: it plays a script once as two subjects followed by the merge and once as one person, and compares every table. Check its cost with `mergeCost`, which plays the same script with a crowd of other subjects. Every crowd action must succeed, so the check lifts the room's shared action rate while it sets up the room, and keeps the transaction budget. The merge's operations must be the same for a crowd of ten as for thousands.
 
 The four things a module has:
 

@@ -119,8 +119,10 @@ describe("the cost of an app's mergeSubjects (Greptile)", () => {
     const small = mergeCost(module, withCrowd(steps, 10));
     const large = mergeCost(module, withCrowd(steps, crowd));
 
+    expect(small.crowd).toBe(10);
+    expect(large.crowd).toBe(crowd);
     expect(large.ops).toBe(small.ops);
     expect(large.ops).toBeLessThanOrEqual(8 + 8 * large.subjectRows);
-  });
+  }, 30_000);
 });
 
