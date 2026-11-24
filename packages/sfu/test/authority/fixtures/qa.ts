@@ -84,7 +84,6 @@ type QaTables = {
   questions: TableSpec<QuestionRow>;
   questionsByAuthor: TableSpec<{ id: string }>;
   upvotes: TableSpec<Upvote>;
-  upvotesByVoter: TableSpec<{ questionId: string }>;
   order: TableSpec<{ last: number }>;
 };
 
@@ -154,7 +153,6 @@ export const qaAuthority = defineAuthority({
     questions: table<QuestionRow>({ maxRows: QA_MAX_ENTRIES + 1 }),
     questionsByAuthor: table<{ id: string }>({ maxRows: QA_MAX_ENTRIES + 1 }),
     upvotes: table<Upvote>({ maxRows: 200_000 }),
-    upvotesByVoter: table<{ questionId: string }>({ maxRows: 200_000 }),
     order: actionOrderTable(),
   },
   timers: {},
@@ -223,11 +221,8 @@ export const qaAuthority = defineAuthority({
             voter: ctx.subject,
           });
           if (inserted === "exists") return null;
-          tx.put("upvotesByVoter", key(ctx.subject, input.id), { questionId: input.id });
         } else if (!tx.delete("upvotes", voteKey)) {
           return null;
-        } else {
-          tx.delete("upvotesByVoter", key(ctx.subject, input.id));
         }
         tx.put("questions", key(question.id), {
           ...question,
@@ -322,19 +317,14 @@ export const qaAuthority = defineAuthority({
         tx.put("questionsByAuthor", key(into, question.id), { id: question.id });
       }
     }
-    for (const [, { questionId }] of tx.scan("upvotesByVoter", key(from))) {
-      tx.delete("upvotesByVoter", key(from, questionId));
-      const upvote = tx.get("upvotes", key(questionId, from));
+    for (const [, question] of tx.scan("questions")) {
+      const upvote = tx.get("upvotes", key(question.id, from));
       if (!upvote) continue;
-      tx.delete("upvotes", key(questionId, from));
-      tx.put("upvotesByVoter", key(into, questionId), { questionId });
-      if (tx.insertIfAbsent("upvotes", key(questionId, into), { ...upvote, voter: into }) === "inserted") {
+      tx.delete("upvotes", key(question.id, from));
+      if (tx.insertIfAbsent("upvotes", key(question.id, into), { ...upvote, voter: into }) === "inserted") {
         continue;
       }
-      const question = tx.get("questions", key(questionId));
-      if (question) {
-        tx.put("questions", key(question.id), { ...question, upvotes: Math.max(0, question.upvotes - 1) });
-      }
+      tx.put("questions", key(question.id), { ...question, upvotes: Math.max(0, question.upvotes - 1) });
     }
     return undefined;
   },

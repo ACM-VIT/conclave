@@ -29,7 +29,7 @@ const ask = (by: "into" | "from", name: string): MergeStep => ({
   input: () => ({ text: `Question ${name}` }),
   keep: name,
 });
-const upvote = (by: "into" | "from", question: string): MergeStep => ({
+const upvote = (by: "into" | "from" | "host", question: string): MergeStep => ({
   by,
   action: "upvote",
   input: (receipts: ReadonlyMap<string, Json>) => ({ id: kept(receipts, question, "id"), value: true }),
@@ -55,7 +55,7 @@ const quizStart: MergeStep[] = [
 ];
 const endRound: MergeStep[] = [{ by: "host", action: "endRound" }, { wait: 1 }];
 const nextRound: MergeStep = { wait: 6_000 };
-const moderate = (question: string, action: "answered" | "reopen"): MergeStep => ({
+const moderate = (question: string, action: "answered" | "dismissed" | "reopen"): MergeStep => ({
   by: "host",
   action: "moderate",
   input: (receipts: ReadonlyMap<string, Json>) => ({ id: kept(receipts, question, "id"), action }),
@@ -67,6 +67,13 @@ const secret = (by: "into" | "from", id: string, text: string): MergeStep => ({
 });
 
 const atOnce = (step: MergeStep): MergeStep => ("by" in step ? { ...step, sameMoment: true } : step);
+const crowdUpvote = (question: string): MergeStep => ({
+  crowd: 0,
+  action: "upvote",
+  input: (receipts: ReadonlyMap<string, Json>) => ({ id: kept(receipts, question, "id"), value: true }),
+});
+const crowdAsk: MergeStep = { crowd: 0, action: "ask", input: (_receipts, member) => ({ text: `Crowd question ${member}` }) };
+const ofSize = (step: MergeStep, size: number): MergeStep => ("crowd" in step ? { ...step, crowd: size } : step);
 
 const activityFields = new Map<AuthorityModule, string[]>([[qaAuthority, ["updatedAt"]]]);
 
@@ -97,6 +104,34 @@ describe("an app's mergeSubjects leaves what one person would have (Greptile)", 
       activityFields: activityFields.get(module),
     });
 
+    expect(merged).toEqual(onePerson);
+  });
+});
+
+describe("a removed question leaves no row behind that names it (Greptile)", () => {
+  const orphans = (tables: Record<string, (readonly [string, object])[]>): string[] => {
+    const live = new Set(tables.questions.map(([, row]) => (row as { id: string }).id));
+    return Object.entries(tables)
+      .filter(([table]) => table !== "questions")
+      .flatMap(([table, rows]) =>
+        rows
+          .filter(([, row]) => {
+            const named = (row as { questionId?: string; id?: string }).questionId ?? (row as { id?: string }).id;
+            return named !== undefined && !live.has(named);
+          })
+          .map(([rowKey]) => `${table} ${rowKey}`),
+      );
+  };
+  const removals: Array<[string, MergeStep[]]> = [
+    ["evicted when the book fills", [ask("into", "q"), ofSize(crowdUpvote("q"), 5), upvote("host", "q"), moderate("q", "dismissed"), ofSize(crowdAsk, 300)]],
+    ["dropped by the merge", [ask("into", "q1"), ask("into", "q2"), ask("from", "q3"), ask("from", "q4"), upvote("into", "q4"), upvote("host", "q4")]],
+  ];
+
+  it.each(removals)("%s", (_name, steps) => {
+    const { merged, onePerson } = mergeAgainstOnePerson(qaAuthority, steps, { activityFields: ["updatedAt"] });
+
+    expect(orphans(merged)).toEqual([]);
+    expect(orphans(onePerson)).toEqual([]);
     expect(merged).toEqual(onePerson);
   });
 });
@@ -190,31 +225,25 @@ describe("the cost of an app's mergeSubjects (Greptile)", () => {
     action: "vote",
     input: (receipts, member) => ({ pollId: kept(receipts, poll, "pollId"), optionIds: [member % 2 === 0 ? "o1" : "o2"] }),
   });
-  const crowdUpvote = (question: string): MergeStep => ({
-    crowd: 0,
-    action: "upvote",
-    input: (receipts: ReadonlyMap<string, Json>) => ({ id: kept(receipts, question, "id"), value: true }),
-  });
   const crowdAnswer: MergeStep = { crowd: 0, action: "answer", input: (_receipts, member) => ({ choice: member % 2 }) };
   const crowdSecret: MergeStep = { crowd: 0, action: "secret", input: (_receipts, member) => ({ id: `c${member}`, text: "theirs" }) };
-  const withCrowd = (steps: MergeStep[], size: number): MergeStep[] =>
-    steps.map((step) => ("crowd" in step ? { ...step, crowd: size } : step));
+  const withCrowd = (steps: MergeStep[], size: number): MergeStep[] => steps.map((step) => ofSize(step, size));
 
-  const costs: Array<[string, AuthorityModule, MergeStep[], number]> = [
-    ["polls", pollsAuthority, [pollOf("p1"), pollOf("p2"), crowdVote("p1"), crowdVote("p2"), voteIn("into", "p1", "o1"), voteIn("from", "p1", "o2"), voteIn("from", "p2", "o1")], 4_000],
-    ["qa", qaAuthority, [ask("into", "q1"), ask("from", "q2"), crowdUpvote("q1"), crowdUpvote("q2"), upvote("into", "q2"), upvote("from", "q1"), upvote("from", "q2")], 4_000],
-    ["quiz", quizAuthority, [...quizStart, crowdAnswer, answer("into", 0), answer("from", 1), ...endRound, nextRound, crowdAnswer, answer("from", 1), ...endRound], 990],
-    ["ledger", ledgerAuthority, [crowdSecret, secret("into", "s1", "mine"), secret("from", "s1", "later"), secret("from", "s2", "other")], 4_000],
+  const costs: Array<[string, AuthorityModule, MergeStep[], number, number, string[]]> = [
+    ["polls", pollsAuthority, [pollOf("p1"), pollOf("p2"), crowdVote("p1"), crowdVote("p2"), voteIn("into", "p1", "o1"), voteIn("from", "p1", "o2"), voteIn("from", "p2", "o1")], 10, 4_000, []],
+    ["qa", qaAuthority, [ask("into", "q1"), ask("from", "q2"), crowdUpvote("q1"), crowdUpvote("q2"), upvote("into", "q2"), upvote("from", "q1"), upvote("from", "q2")], 10, 4_000, ["questions"]],
+    ["qa with a full book", qaAuthority, [crowdAsk, ask("into", "q1"), ask("from", "q2"), crowdUpvote("q1"), crowdUpvote("q2"), upvote("into", "q2"), upvote("from", "q1"), upvote("from", "q2")], 300, 1_500, ["questions"]],
+    ["quiz", quizAuthority, [...quizStart, crowdAnswer, answer("into", 0), answer("from", 1), ...endRound, nextRound, crowdAnswer, answer("from", 1), ...endRound], 10, 990, []],
+    ["ledger", ledgerAuthority, [crowdSecret, secret("into", "s1", "mine"), secret("from", "s1", "later"), secret("from", "s2", "other")], 10, 4_000, []],
   ];
 
-  it.each(costs)("%s: the same for a crowd of ten as for thousands, and a small multiple of the two people's rows", (_name, module, steps, crowd) => {
-    const small = mergeCost(module, withCrowd(steps, 10));
-    const large = mergeCost(module, withCrowd(steps, crowd));
+  it.each(costs)("%s: the same for a small crowd as for a large one, and a small multiple of the two people's rows", (_name, module, steps, smallCrowd, largeCrowd, walked) => {
+    const small = mergeCost(module, withCrowd(steps, smallCrowd), walked);
+    const large = mergeCost(module, withCrowd(steps, largeCrowd), walked);
 
-    expect(small.crowd).toBe(10);
-    expect(large.crowd).toBe(crowd);
+    expect(small.crowd).toBe(smallCrowd);
+    expect(large.crowd).toBe(largeCrowd);
     expect(large.ops).toBe(small.ops);
-    expect(large.ops).toBeLessThanOrEqual(8 + 8 * large.subjectRows);
+    expect(large.ops).toBeLessThanOrEqual(8 + 8 * large.subjectRows + 2 * large.walkedRows);
   }, 30_000);
 });
-

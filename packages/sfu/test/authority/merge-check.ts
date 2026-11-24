@@ -129,7 +129,9 @@ const play = (
   let mergeOps = 0;
   let subjectRows = 0;
   const crowd = new Set<string>();
+  const rowsBefore = new Map<string, number>();
   for (const table of Object.keys(module.runtime.tables)) {
+    rowsBefore.set(table, instance.store.rows(table).size);
     for (const [key, row] of instance.store.rows(table)) {
       for (const member of `${String(key)} ${JSON.stringify(row)}`.match(/crowd-\d{5}/g) ?? []) crowd.add(member);
     }
@@ -164,7 +166,7 @@ const play = (
         .sort(([a], [b]) => a.localeCompare(b)),
     ]),
   );
-  return { tables: byRank(tables), mergeOps, subjectRows, crowd: crowd.size };
+  return { tables: byRank(tables), mergeOps, subjectRows, crowd: crowd.size, rowsBefore };
 };
 
 export const mergeAgainstOnePerson = (
@@ -176,7 +178,8 @@ export const mergeAgainstOnePerson = (
   onePerson: play(module, steps, false, options.activityFields ?? []).tables,
 });
 
-export const mergeCost = (module: AuthorityModule, steps: readonly MergeStep[]) => {
-  const { mergeOps, subjectRows, crowd } = play(module, steps, true, []);
-  return { ops: mergeOps, subjectRows, crowd };
+export const mergeCost = (module: AuthorityModule, steps: readonly MergeStep[], walked: readonly string[] = []) => {
+  const { mergeOps, subjectRows, crowd, rowsBefore } = play(module, steps, true, []);
+  const walkedRows = walked.reduce((total, table) => total + (rowsBefore.get(table) ?? 0), 0);
+  return { ops: mergeOps, subjectRows, crowd, walkedRows };
 };
