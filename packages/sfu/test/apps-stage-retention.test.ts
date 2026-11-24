@@ -592,9 +592,8 @@ describe("client id reservations", () => {
     const allowed = Array.from({ length: MAX_NEW_CLIENT_IDS_PER_UPDATE }, (_, index) => 30_000 + index);
     const tooMany = Array.from({ length: MAX_NEW_CLIENT_IDS_PER_UPDATE + 1 }, (_, index) => 31_000 + index);
 
-    writer.sendUpdate("whiteboard", authoredBy(tooMany));
-    writer.syncReplyInto("whiteboard");
-    writer.sendUpdate("whiteboard", authoredBy(allowed));
+    writer.sendWithReplica("whiteboard", authoredBy(tooMany), "copy-1");
+    writer.sendWithReplica("whiteboard", authoredBy(allowed), "copy-1");
 
     expect(writer.relayed.map((sent) => sent.event)).toEqual(["apps:yjs:update"]);
     expect(join("late#1", "participant").coldSync("whiteboard").shapes).toHaveLength(allowed.length);
@@ -1033,13 +1032,15 @@ describe("writes made before a client's first sync", () => {
     expect(cold()).toEqual(["kept-1", "kept-2"]);
   });
 
-  it("takes an early write that replaces nothing once the client has the room's copy", () => {
+  it("takes an early write that replaces nothing once the client has started over and synced", () => {
+    vi.useFakeTimers();
     const { early, earlyDoc, cold } = savedBoardWithEarlyDrawer();
     const before = Y.encodeStateVector(earlyDoc);
     earlyDoc.getMap("notes").set("early", true);
 
     early.sendAsIs("whiteboard", Y.encodeStateAsUpdate(earlyDoc, before));
     expect(early.relayed).toEqual([]);
+    vi.advanceTimersByTime(600);
     early.resync("whiteboard");
 
     expect(early.relayed.map((sent) => sent.event)).toEqual(["apps:yjs:update"]);

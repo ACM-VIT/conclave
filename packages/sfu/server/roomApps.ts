@@ -8,6 +8,7 @@ import * as decoding from "lib0/decoding";
 import * as encoding from "lib0/encoding";
 import * as Y from "yjs";
 import { Logger } from "../utilities/loggers.js";
+import { RoomAppsScheduler } from "./roomAppsScheduler.js";
 
 // A document larger than one sync response can no longer reach new joiners,
 // so it is also the most a document may grow to.
@@ -45,7 +46,9 @@ export type AppSyncMark = {
   readonly seen: ReadonlyMap<number, number>;
 };
 
-export type WriteRefusal = ContentRefusal | "too-large" | "invalid";
+export type WriteRefusal = ContentRefusal | "too-large" | "invalid" | "rate-limited";
+
+export type DocumentExecutor = Pick<RoomApps, "write" | "changesNothing" | "roomCopy">;
 
 export type ContentRefusal =
   | "not-live"
@@ -308,6 +311,7 @@ export class RoomApps {
   private clientIdCounts: Map<string, number> = new Map();
   private presenceIds: Map<number, ClientIdClaim> = new Map();
   private presence: Map<string, Presence> = new Map();
+  scheduler = new RoomAppsScheduler();
 
   // `participantOf` maps a connection's user id to the participant behind it,
   // which stays the same when that participant rejoins.
@@ -455,6 +459,37 @@ export class RoomApps {
 
   participantFor(userId: string): string {
     return this.participantOf(userId);
+  }
+
+  changesNothing(appId: string, update: Uint8Array): boolean {
+    const doc = this.liveDoc(appId);
+    if (!doc) return false;
+    let decoded: ReturnType<typeof Y.decodeUpdate>;
+    try {
+      decoded = Y.decodeUpdate(update);
+    } catch {
+      return false;
+    }
+    for (const struct of decoded.structs) {
+      if (struct instanceof Y.Skip) continue;
+      if (struct.id.clock + struct.length > Y.getState(doc.store, struct.id.client)) return false;
+    }
+    for (const [client, deletes] of decoded.ds.clients) {
+      const structs = doc.store.clients.get(client);
+      for (const { clock, len } of deletes) {
+        if (!structs || clock + len > Y.getState(doc.store, client)) return false;
+        for (let index = Y.findIndexSS(structs, clock); index < structs.length; index += 1) {
+          if (structs[index].id.clock >= clock + len) break;
+          if (!structs[index].deleted) return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  roomCopy(appId: string): Uint8Array | null {
+    const doc = this.liveDoc(appId);
+    return doc ? Y.encodeStateAsUpdate(doc) : null;
   }
 
   write(
@@ -811,6 +846,8 @@ export class RoomApps {
 
   /** Room teardown: destroys every document and all presence. */
   clear(): void {
+    this.scheduler.close();
+    this.scheduler = new RoomAppsScheduler();
     for (const presence of this.presence.values()) {
       destroyPresence(presence.awareness);
     }

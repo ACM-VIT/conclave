@@ -74,7 +74,7 @@ describe("the room's update budget", () => {
     ]);
   });
 
-  it("applies the updates it held for a socket before that socket syncs again", () => {
+  it("answers a socket's sync at once, and the updates it held still land", () => {
     vi.useFakeTimers();
     const { join } = makeRoom();
     const host = join("host#1", "host");
@@ -86,9 +86,10 @@ describe("the room's update budget", () => {
       appId: "whiteboard",
       syncMessage: Y.encodeStateVector(new Y.Doc()),
     });
+    expect(reply.value).toBeDefined();
     vi.advanceTimersByTime(200);
 
-    expect(keysIn(reply.value!.syncMessage)).toHaveLength(80);
+    expect(keysIn(join("late#1", "participant").coldUpdate("whiteboard"))).toHaveLength(80);
   });
 
   it("applies the strokes it held for a host before that host changes the stage", () => {

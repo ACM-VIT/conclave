@@ -90,6 +90,18 @@ export const takeToken = (
   return false;
 };
 
+export const msUntilToken = (
+  socket: Socket,
+  key: string,
+  options: TokenBucketOptions,
+): number => {
+  const bucket = getBucketStore(socket).get(key);
+  if (!bucket) return 0;
+  refill(bucket, Date.now());
+  if (bucket.tokens >= 1) return 0;
+  return Math.ceil(((1 - bucket.tokens) / options.refillPerSec) * 1000);
+};
+
 /**
  * Centralized, named rate-limit profiles for the high-frequency socket events.
  * Capacity = burst allowance; refillPerSec = sustained rate.
@@ -106,6 +118,7 @@ export const RATE_LIMITS = {
   appsYjsSync: { capacity: 10, refillPerSec: 2 },
   // Yjs document updates: bursty while typing, so allow a generous burst.
   appsYjsUpdate: { capacity: 60, refillPerSec: 30 },
+  appsNoopCheck: { capacity: 20, refillPerSec: 10 },
   // Chat messages: ~5/s sustained, small burst.
   chat: { capacity: 10, refillPerSec: 5 },
   // Image uploads are much heavier than text messages; authorize a small burst.
