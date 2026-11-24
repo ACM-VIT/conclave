@@ -21,7 +21,7 @@ import {
 } from "./webinar.js";
 import { canonicalizeClientId } from "./clientIds.js";
 import { openSqliteStore } from "./sqliteWriteCheck.js";
-import { adoptRecoveredJsonStore, webinarStoreShape } from "./jsonStoreUpgrade.js";
+import { adoptRecoveredJsonStore, jsonStoreCollection, type JsonStoreAdapter, type JsonStoreClaim } from "./jsonStoreUpgrade.js";
 
 const DEFAULT_EARLY_ENTRY_MINUTES = 10;
 const MAX_EARLY_ENTRY_MINUTES = 240;
@@ -127,6 +127,11 @@ export const createScheduledWebinarStore = (): ScheduledWebinarStore => ({
 const roomChannelKey = (clientId: string, roomId: string): string =>
   `${clientId}:${roomId}`;
 
+export const scheduledWebinarClaims: Record<"bySlug" | "byRoomChannel", JsonStoreClaim<ScheduledWebinar>> = {
+  bySlug: { key: (webinar) => webinar.linkSlug },
+  byRoomChannel: { key: (webinar) => roomChannelKey(webinar.clientId, webinar.roomId) },
+};
+
 const isSlugTaken = (
   store: ScheduledWebinarStore,
   slug: string,
@@ -167,11 +172,8 @@ const indexScheduledWebinar = (
   webinar: ScheduledWebinar,
 ): void => {
   store.byId.set(webinar.id, webinar);
-  store.bySlug.set(webinar.linkSlug, webinar.id);
-  store.byRoomChannel.set(
-    roomChannelKey(webinar.clientId, webinar.roomId),
-    webinar.id,
-  );
+  store.bySlug.set(scheduledWebinarClaims.bySlug.key(webinar), webinar.id);
+  store.byRoomChannel.set(scheduledWebinarClaims.byRoomChannel.key(webinar), webinar.id);
 };
 
 const removeFromIndexes = (
@@ -179,10 +181,11 @@ const removeFromIndexes = (
   webinar: ScheduledWebinar,
 ): void => {
   store.byId.delete(webinar.id);
-  if (store.bySlug.get(webinar.linkSlug) === webinar.id) {
-    store.bySlug.delete(webinar.linkSlug);
+  const slug = scheduledWebinarClaims.bySlug.key(webinar);
+  if (store.bySlug.get(slug) === webinar.id) {
+    store.bySlug.delete(slug);
   }
-  const channel = roomChannelKey(webinar.clientId, webinar.roomId);
+  const channel = scheduledWebinarClaims.byRoomChannel.key(webinar);
   if (store.byRoomChannel.get(channel) === webinar.id) {
     store.byRoomChannel.delete(channel);
   }
@@ -515,10 +518,30 @@ const migrateJsonScheduledWebinarsToSqlite = (
   return sqlite.load().length;
 };
 
+export const scheduledWebinarJsonStore: JsonStoreAdapter<ScheduledWebinar[]> = {
+  decode: (data) => {
+    if (!Array.isArray(data)) throw new Error("it is not a list of scheduled webinars");
+    return data
+      .map((entry) => normalizeStoredWebinar(entry))
+      .filter((entry): entry is ScheduledWebinar => Boolean(entry));
+  },
+  write: (path, webinars) => createFileScheduledWebinarPersistence(path).save(webinars),
+  collections: {
+    webinars: jsonStoreCollection<ScheduledWebinar[], ScheduledWebinar>({
+      index: "byId",
+      rows: (webinars) => webinars,
+      key: (webinar) => webinar.id,
+      stamp: (webinar) => webinar.updatedAt,
+      claims: scheduledWebinarClaims,
+    }),
+  },
+  build: (_base, rows) => rows.webinars as ScheduledWebinar[],
+};
+
 export const createScheduledWebinarPersistence = (): ScheduledWebinarPersistence => {
   const mode = process.env.SCHEDULED_WEBINARS_PERSISTENCE?.trim().toLowerCase();
   if (mode === "json" || mode === "file") {
-    adoptRecoveredJsonStore(scheduledWebinarsPath(), "scheduled-webinars.json", webinarStoreShape);
+    adoptRecoveredJsonStore(scheduledWebinarsPath(), "scheduled-webinars.json", scheduledWebinarJsonStore);
     return createFileScheduledWebinarPersistence();
   }
 

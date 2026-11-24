@@ -25,7 +25,7 @@ import {
 } from "./redisPersistence.js";
 import { canonicalizeClientId } from "./clientIds.js";
 import { openSqliteStore } from "./sqliteWriteCheck.js";
-import { adoptRecoveredJsonStore, meetingStoreShape } from "./jsonStoreUpgrade.js";
+import { adoptRecoveredJsonStore, jsonStoreCollection, type JsonStoreAdapter, type JsonStoreClaim } from "./jsonStoreUpgrade.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -119,6 +119,10 @@ const roomCodeKey = (clientId: string, roomCode: string): string =>
 const isActiveMeeting = (meeting: ScheduledMeeting): boolean =>
   meeting.status === "scheduled" || meeting.status === "live";
 
+export const scheduledMeetingClaims: Record<"byRoomCode", JsonStoreClaim<ScheduledMeeting>> = {
+  byRoomCode: { key: (meeting) => roomCodeKey(meeting.clientId, meeting.roomCode), holds: isActiveMeeting },
+};
+
 /**
  * Point the room-code index at `meeting`. A code can be reused once its
  * earlier meeting has ended or been cancelled, so several meetings can share
@@ -128,14 +132,14 @@ const claimRoomCode = (
   store: ScheduledMeetingStore,
   meeting: ScheduledMeeting,
 ): void => {
-  const key = roomCodeKey(meeting.clientId, meeting.roomCode);
+  const key = scheduledMeetingClaims.byRoomCode.key(meeting);
   const ownerId = store.byRoomCode.get(key);
   const owner = ownerId ? store.byId.get(ownerId) : undefined;
   if (
     owner &&
     owner.id !== meeting.id &&
-    isActiveMeeting(owner) &&
-    !isActiveMeeting(meeting)
+    scheduledMeetingClaims.byRoomCode.holds?.(owner) &&
+    !scheduledMeetingClaims.byRoomCode.holds?.(meeting)
   ) {
     return;
   }
@@ -147,7 +151,7 @@ const releaseRoomCode = (
   store: ScheduledMeetingStore,
   meeting: ScheduledMeeting,
 ): void => {
-  const key = roomCodeKey(meeting.clientId, meeting.roomCode);
+  const key = scheduledMeetingClaims.byRoomCode.key(meeting);
   if (store.byRoomCode.get(key) === meeting.id) {
     store.byRoomCode.delete(key);
   }
@@ -854,6 +858,28 @@ const createFileScheduledMeetingPersistence = (
   },
 });
 
+export const scheduledMeetingJsonStore: JsonStoreAdapter<ScheduledMeeting[]> = {
+  decode: (data) => {
+    if (!Array.isArray(data)) throw new Error("it is not a list of scheduled meetings");
+    return data
+      .map((entry) => normalizeStoredMeeting(entry))
+      .filter((entry): entry is ScheduledMeeting => Boolean(entry));
+  },
+  write: (path, meetings) => {
+    void createFileScheduledMeetingPersistence(path).save(meetings);
+  },
+  collections: {
+    meetings: jsonStoreCollection<ScheduledMeeting[], ScheduledMeeting>({
+      index: "byId",
+      rows: (meetings) => meetings,
+      key: (meeting) => meeting.id,
+      stamp: (meeting) => meeting.updatedAt,
+      claims: scheduledMeetingClaims,
+    }),
+  },
+  build: (_base, rows) => rows.meetings as ScheduledMeeting[],
+};
+
 const RELEASE_BOOKING_SLOT_LOCK_SCRIPT = `
 local key = KEYS[1]
 local token = ARGV[1]
@@ -1162,7 +1188,7 @@ const migrateJsonScheduledMeetingsToSqlite = (
 export const createScheduledMeetingPersistence = (): ScheduledMeetingPersistence => {
   const mode = process.env.SCHEDULED_MEETINGS_PERSISTENCE?.trim().toLowerCase();
   if (mode === "json" || mode === "file") {
-    adoptRecoveredJsonStore(scheduledMeetingsPath(), "scheduled-meetings.json", meetingStoreShape);
+    adoptRecoveredJsonStore(scheduledMeetingsPath(), "scheduled-meetings.json", scheduledMeetingJsonStore);
     return createFileScheduledMeetingPersistence();
   }
 

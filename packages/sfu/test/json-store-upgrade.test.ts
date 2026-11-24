@@ -6,22 +6,30 @@ import {
   createScheduledMeeting,
   createScheduledMeetingPersistence,
   createScheduledMeetingStore,
+  scheduledMeetingJsonStore,
 } from "../server/scheduledMeetings.js";
 import {
   createScheduledWebinar,
   createScheduledWebinarPersistence,
   createScheduledWebinarStore,
+  scheduledWebinarJsonStore,
 } from "../server/scheduledWebinars.js";
-import { createSchedulingPersistence, createSchedulingStore, ensureSchedulingProfile } from "../server/scheduling.js";
+import {
+  createSchedulingPersistence,
+  createSchedulingStore,
+  ensureSchedulingProfile,
+  schedulingJsonStore,
+} from "../server/scheduling.js";
+import type { SchedulingCalendarConnection } from "../types.js";
 
-type Record = { id: string; title: string; updatedAt: number; unique?: string };
+type Record = { id: string; title: string; updatedAt: number; unique?: string; status?: string; room?: string };
 
 type Store = {
   name: string;
   file: string;
   modeVariable: string;
   pathVariable: string;
-  uniqueKey: string | null;
+  uniqueKey: string;
   encode: (records: Record[]) => unknown;
   load: () => Promise<Record[]>;
 };
@@ -40,8 +48,16 @@ const stores: Store[] = [
     file: "scheduled-meetings.json",
     modeVariable: "SCHEDULED_MEETINGS_PERSISTENCE",
     pathVariable: "SCHEDULED_MEETINGS_PATH",
-    uniqueKey: null,
-    encode: (records) => records.map(({ id, title, updatedAt }) => ({ ...meetingTemplate(), id, title, updatedAt })),
+    uniqueKey: "room code",
+    encode: (records) =>
+      records.map(({ id, title, updatedAt, unique, status }) => ({
+        ...meetingTemplate(),
+        id,
+        title,
+        updatedAt,
+        ...(unique ? { roomCode: unique } : {}),
+        ...(status ? { status } : {}),
+      })),
     load: async () =>
       (await createScheduledMeetingPersistence().load()).map(({ id, title, updatedAt }) => ({ id, title, updatedAt })),
   },
@@ -52,7 +68,14 @@ const stores: Store[] = [
     pathVariable: "SCHEDULED_WEBINARS_PATH",
     uniqueKey: "link slug",
     encode: (records) =>
-      records.map(({ id, title, updatedAt, unique }) => ({ ...webinarTemplate(), id, title, updatedAt, linkSlug: unique ?? `slug-${id}` })),
+      records.map(({ id, title, updatedAt, unique, room }) => ({
+        ...webinarTemplate(),
+        id,
+        title,
+        updatedAt,
+        linkSlug: unique ?? `slug-${id}`,
+        roomId: room ?? `room-${id}`,
+      })),
     load: async () => createScheduledWebinarPersistence().load().map(({ id, title, updatedAt }) => ({ id, title, updatedAt })),
   },
   {
@@ -158,11 +181,102 @@ describe.each(stores)("an SFU in explicit JSON mode with $name from an older ima
   });
 });
 
-describe.each(stores.filter((store) => store.uniqueKey))("an SFU in explicit JSON mode combining $name", (store) => {
+describe.each(stores)("an SFU in explicit JSON mode combining $name", (store) => {
   it("refuses to start when two records would claim the same $uniqueKey", async () => {
     write(activePath(store), store.encode([{ id: "a", title: "First", updatedAt: 100, unique: "shared" }]));
     write(copyPath(store), store.encode([{ id: "b", title: "Second", updatedAt: 100, unique: "shared" }]));
 
     await expect(store.load()).rejects.toThrow(/both claim/);
+  });
+});
+
+describe("an SFU in explicit JSON mode combining scheduled meetings", () => {
+  const meetings = stores[0];
+
+  it("lets an ended or cancelled meeting share a room code with an active one", async () => {
+    write(activePath(meetings), meetings.encode([{ id: "active", title: "Active", updatedAt: 100, unique: "shared-code" }]));
+    write(copyPath(meetings), meetings.encode([{ id: "done", title: "Cancelled", updatedAt: 100, unique: "shared-code", status: "cancelled" }]));
+
+    expect(byId(await meetings.load())).toEqual({ active: "Active", done: "Cancelled" });
+  });
+});
+
+describe("an SFU in explicit JSON mode combining scheduled webinars", () => {
+  const webinars = stores[1];
+
+  it("refuses to start when two webinars would claim the same room", async () => {
+    write(activePath(webinars), webinars.encode([{ id: "a", title: "First", updatedAt: 100, room: "same-room" }]));
+    write(copyPath(webinars), webinars.encode([{ id: "b", title: "Second", updatedAt: 100, room: "same-room" }]));
+
+    await expect(webinars.load()).rejects.toThrow(/both claim[\s\S]*byRoomChannel/);
+  });
+});
+
+describe("an SFU in explicit JSON mode combining scheduling records", () => {
+  const scheduling = stores[2];
+  const calendar = (profileId: string): SchedulingCalendarConnection => ({
+    id: `calendar-${profileId}`,
+    clientId: "conclave",
+    profileId,
+    userId: `user-${profileId}`,
+    provider: "google",
+    status: "connected",
+    email: "host@example.test",
+    calendarId: "primary",
+    accessToken: "access-token-value",
+    refreshToken: "refresh-token-value",
+    accessTokenExpiresAt: 1_800_000_000_000,
+    scopes: [],
+    connectedAt: 100,
+    updatedAt: 150,
+    error: null,
+  });
+  const saveThroughTheStore = (path: string, secret: string, snapshot: object) => {
+    vi.stubEnv("SCHEDULING_PATH", path);
+    vi.stubEnv("CONCLAVE_FALLBACK_IMPORT_DIR", "");
+    vi.stubEnv("SCHEDULING_TOKEN_SECRET", secret);
+    void createSchedulingPersistence().save(snapshot as never);
+    vi.stubEnv("SCHEDULING_PATH", activePath(scheduling));
+    vi.stubEnv("CONCLAVE_FALLBACK_IMPORT_DIR", importDir());
+    vi.stubEnv("SCHEDULING_TOKEN_SECRET", "current-secret");
+  };
+  const withCalendar = () => ({ ...(scheduling.encode([{ id: "p1", title: "Host", updatedAt: 100 }]) as object), calendars: [calendar("p1")] });
+
+  it("treats two saves of the same calendar as one record, though their ciphertext differs", async () => {
+    const snapshot = withCalendar();
+    saveThroughTheStore(activePath(scheduling), "current-secret", snapshot);
+    saveThroughTheStore(copyPath(scheduling), "current-secret", snapshot);
+
+    expect(byId(await scheduling.load())).toEqual({ p1: "Host" });
+    expect((await createSchedulingPersistence().load()).calendars.map((entry) => entry.refreshToken)).toEqual(["refresh-token-value"]);
+    expect(readdirSync(dirname(activePath(scheduling))).some((name) => name.includes(".premerge-"))).toBe(false);
+    expect(existsSync(`${copyPath(scheduling)}.adopted`)).toBe(true);
+  });
+
+  it("refuses to start rather than drop calendar tokens it cannot decrypt", async () => {
+    saveThroughTheStore(copyPath(scheduling), "the-older-sfus-secret", withCalendar());
+
+    await expect(scheduling.load()).rejects.toThrow(/cannot be decrypted/);
+    expect(existsSync(copyPath(scheduling))).toBe(true);
+  });
+});
+
+describe("the JSON store merger", () => {
+  type CheckedIndexes = { collections: { [name: string]: { index: string; claims: object } } };
+  const liveStores: Array<{ name: string; store: object; adapter: CheckedIndexes }> = [
+    { name: "scheduled meetings", store: createScheduledMeetingStore(), adapter: scheduledMeetingJsonStore },
+    { name: "scheduled webinars", store: createScheduledWebinarStore(), adapter: scheduledWebinarJsonStore },
+    { name: "scheduling records", store: createSchedulingStore(), adapter: schedulingJsonStore },
+  ];
+
+  it.each(liveStores)("checks every index the live $name store keeps", ({ store, adapter }) => {
+    const indexes = Object.entries(store)
+      .filter(([, value]) => value instanceof Map)
+      .map(([name]) => name)
+      .sort();
+    const checked = Object.values(adapter.collections)
+      .flatMap((collection) => [collection.index, ...Object.keys(collection.claims)])
+      .sort();
+    expect(checked).toEqual(indexes);
   });
 });

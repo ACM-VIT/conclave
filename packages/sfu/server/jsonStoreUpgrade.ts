@@ -1,85 +1,38 @@
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Logger } from "../utilities/loggers.js";
 
-type Entry = Record<string, unknown>;
-type Source = { path: string; data: unknown };
-
-type Collection = {
-  key: (entry: Entry) => string | null;
-  stamp: (entry: Entry, source: unknown) => number;
-  unique?: Array<(entry: Entry) => string | null>;
+export type JsonStoreClaim<Row> = {
+  key: (row: Row) => string;
+  holds?: (row: Row) => boolean;
 };
 
-export type JsonStoreShape = {
-  collections: Record<string, Collection>;
-  read: (data: unknown) => Record<string, Entry[]>;
-  build: (base: unknown, collections: Record<string, Entry[]>) => unknown;
+export type JsonStoreCollection<Snapshot, Row> = {
+  index: string;
+  rows: (snapshot: Snapshot) => Row[];
+  key: (row: Row) => string;
+  stamp: (row: Row, snapshot: Snapshot) => number;
+  claims: Record<string, JsonStoreClaim<Row>>;
 };
 
-const entries = (value: unknown): Entry[] =>
-  Array.isArray(value) ? value.filter((entry): entry is Entry => Boolean(entry) && typeof entry === "object") : [];
+type ErasedCollection<Snapshot> = JsonStoreCollection<Snapshot, unknown>;
 
-const text = (value: unknown): string | null => (value === undefined || value === null || value === "" ? null : String(value));
+export const jsonStoreCollection = <Snapshot, Row>(collection: JsonStoreCollection<Snapshot, Row>): ErasedCollection<Snapshot> =>
+  collection as unknown as ErasedCollection<Snapshot>;
 
-const stampOf = (value: unknown): number => {
-  const stamp = Number(value);
-  return Number.isFinite(stamp) ? stamp : 0;
+export type JsonStoreAdapter<Snapshot> = {
+  decode: (data: unknown) => Snapshot;
+  write: (path: string, snapshot: Snapshot) => void;
+  collections: Record<string, ErasedCollection<Snapshot>>;
+  build: (base: Snapshot, rows: Record<string, unknown[]>) => Snapshot;
 };
 
-const profileStamp = (source: unknown, profileId: unknown): number => {
-  const profile = entries((source as { profiles?: unknown } | null)?.profiles).find((entry) => entry.id === profileId);
-  return stampOf(profile?.updatedAt);
-};
-
-const listOfRecords = (unique: Collection["unique"] = []): JsonStoreShape => ({
-  collections: { records: { key: (entry) => text(entry.id), stamp: (entry) => stampOf(entry.updatedAt), unique } },
-  read: (data) => ({ records: entries(data) }),
-  build: (_base, collections) => collections.records,
-});
-
-export const meetingStoreShape = listOfRecords();
-
-export const webinarStoreShape = listOfRecords([(entry) => text(entry.linkSlug)?.toLowerCase() ?? null]);
-
-export const schedulingStoreShape: JsonStoreShape = {
-  collections: {
-    profiles: {
-      key: (entry) => text(entry.id),
-      stamp: (entry) => stampOf(entry.updatedAt),
-      unique: [
-        (entry) => (text(entry.userId) ? `user ${text(entry.clientId)}:${text(entry.userId)}` : null),
-        (entry) => (text(entry.username) ? `username ${text(entry.clientId)}:${text(entry.username)?.toLowerCase()}` : null),
-      ],
-    },
-    availability: {
-      key: (entry) => text(entry.profileId),
-      stamp: (entry, source) =>
-        stampOf((entry.availability as Entry | undefined)?.updatedAt) || profileStamp(source, entry.profileId),
-    },
-    eventTypes: {
-      key: (entry) => text(entry.id),
-      stamp: (entry) => stampOf(entry.updatedAt),
-      unique: [(entry) => (text(entry.slug) ? `${text(entry.profileId)}:${text(entry.slug)?.toLowerCase()}` : null)],
-    },
-    calendars: { key: (entry) => text(entry.profileId), stamp: (entry) => stampOf(entry.updatedAt) },
-  },
-  read: (data) => {
-    const snapshot = (data ?? {}) as Record<string, unknown>;
-    return {
-      profiles: entries(snapshot.profiles),
-      availability: entries(snapshot.availability),
-      eventTypes: entries(snapshot.eventTypes),
-      calendars: entries(snapshot.calendars),
-    };
-  },
-  build: (base, collections) => ({ ...((base ?? {}) as Record<string, unknown>), ...collections }),
-};
+type Source<Snapshot> = { path: string; snapshot: Snapshot };
 
 const stableJson = (value: unknown): string =>
   JSON.stringify(value, (_key, inner: unknown) =>
     inner && typeof inner === "object" && !Array.isArray(inner)
-      ? Object.fromEntries(Object.entries(inner as Entry).sort(([a], [b]) => a.localeCompare(b)))
+      ? Object.fromEntries(Object.entries(inner as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)))
       : inner,
   );
 
@@ -93,72 +46,73 @@ const recoveredCopies = (fileName: string): string[] => {
     .sort();
 };
 
-const readSource = (path: string, role: string): Source => {
+const readSource = <Snapshot>(adapter: JsonStoreAdapter<Snapshot>, path: string, role: string): Source<Snapshot> => {
+  let data: unknown;
   try {
-    return { path, data: JSON.parse(readFileSync(path, "utf8")) };
+    data = JSON.parse(readFileSync(path, "utf8"));
   } catch (error) {
     throw new Error(`${path}, ${role}, is not readable JSON (${(error as Error).message}). Repair it before the SFU starts.`);
   }
+  try {
+    return { path, snapshot: adapter.decode(data) };
+  } catch (error) {
+    throw new Error(`${path}, ${role}, cannot be read: ${(error as Error).message}`);
+  }
 };
 
-const mergeSources = (shape: JsonStoreShape, sources: Source[]): { merged: Record<string, Entry[]>; problems: string[] } => {
+const mergeSources = <Snapshot>(adapter: JsonStoreAdapter<Snapshot>, sources: Source<Snapshot>[]) => {
   const problems: string[] = [];
-  const merged: Record<string, Entry[]> = {};
-  for (const [name, collection] of Object.entries(shape.collections)) {
-    const winners = new Map<string, { entry: Entry; stamp: number; json: string; from: string }>();
-    const keyless = new Map<string, Entry>();
+  const merged: Record<string, unknown[]> = {};
+  for (const [name, collection] of Object.entries(adapter.collections)) {
+    const winners = new Map<string, { row: unknown; stamp: number; json: string; from: string }>();
     for (const source of sources) {
-      for (const entry of shape.read(source.data)[name] ?? []) {
-        const key = collection.key(entry);
-        const json = stableJson(entry);
-        if (key === null) {
-          keyless.set(json, entry);
-          continue;
-        }
-        const stamp = collection.stamp(entry, source.data);
+      for (const row of collection.rows(source.snapshot)) {
+        const key = collection.key(row);
+        const stamp = collection.stamp(row, source.snapshot);
+        const json = stableJson(row);
         const held = winners.get(key);
         if (!held || stamp > held.stamp) {
-          winners.set(key, { entry, stamp, json, from: source.path });
+          winners.set(key, { row, stamp, json, from: source.path });
         } else if (stamp === held.stamp && json !== held.json) {
           problems.push(`${name} ${key} differs between ${held.from} and ${source.path}, and both were last changed at ${stamp}.`);
         }
       }
     }
-    const kept = [...winners.values()].map((winner) => winner.entry);
-    for (const unique of collection.unique ?? []) {
+    const kept = [...winners.entries()];
+    for (const [index, claim] of Object.entries(collection.claims)) {
       const owners = new Map<string, string>();
-      for (const entry of kept) {
-        const value = unique(entry);
-        if (value === null) continue;
-        const key = String(collection.key(entry));
+      for (const [key, { row }] of kept) {
+        if (claim.holds && !claim.holds(row)) continue;
+        const value = claim.key(row);
         const other = owners.get(value);
-        if (other !== undefined && other !== key) problems.push(`${name} ${other} and ${key} both claim ${value}.`);
+        if (other !== undefined && other !== key) problems.push(`${name} ${other} and ${key} both claim ${value} in ${index}.`);
         owners.set(value, key);
       }
     }
-    merged[name] = [...kept, ...keyless.values()];
+    merged[name] = kept.map(([, { row }]) => row);
   }
   return { merged, problems };
 };
 
-export const adoptRecoveredJsonStore = (activePath: string, fileName: string, shape: JsonStoreShape): void => {
+export const adoptRecoveredJsonStore = <Snapshot>(activePath: string, fileName: string, adapter: JsonStoreAdapter<Snapshot>): void => {
   const copies = recoveredCopies(fileName);
   if (copies.length === 0) return;
-  const active = existsSync(activePath) ? readSource(activePath, "this SFU's store") : null;
-  const sources = [...(active ? [active] : []), ...copies.map((path) => readSource(path, "a store an older SFU kept in its container"))];
-  const { merged, problems } = mergeSources(shape, sources);
+  const active = existsSync(activePath) ? readSource(adapter, activePath, "this SFU's store") : null;
+  const sources = [...(active ? [active] : []), ...copies.map((path) => readSource(adapter, path, "a store an older SFU kept in its container"))];
+  const { merged, problems } = mergeSources(adapter, sources);
   if (problems.length > 0) {
     throw new Error(
-      `Could not combine ${sources.map((source) => source.path).join(", ")} without losing a change:\n- ${problems.join("\n- ")}\nResolve these records by hand, then rename each copy under ${dirname(copies[0])}/.. with a .adopted suffix.`,
+      `Could not combine ${sources.map((source) => source.path).join(", ")} without losing a change:\n- ${problems.join("\n- ")}\nResolve these records by hand, then rename each copy with a .adopted suffix.`,
     );
   }
-  const result = shape.build(active?.data ?? sources[0].data, merged);
-  if (!active || stableJson(result) !== stableJson(active.data)) {
+  const result = adapter.build(active?.snapshot ?? sources[0].snapshot, merged);
+  if (!active || stableJson(result) !== stableJson(active.snapshot)) {
     mkdirSync(dirname(activePath), { recursive: true });
     if (active) copyFileSync(activePath, `${activePath}.premerge-${Date.now()}`);
-    const staged = `${activePath}.${process.pid}.merging`;
-    writeFileSync(staged, JSON.stringify(result, null, 2), { mode: 0o600 });
-    renameSync(staged, activePath);
+    adapter.write(activePath, result);
+    if (stableJson(readSource(adapter, activePath, "the combined store").snapshot) !== stableJson(result)) {
+      throw new Error(`${activePath} did not read back as the combined store, so the copies were left in place.`);
+    }
   }
   for (const path of copies) renameSync(path, `${path}.adopted`);
   Logger.warn(`Combined ${copies.join(", ")} into ${activePath}, the store an older SFU kept in its container`);
