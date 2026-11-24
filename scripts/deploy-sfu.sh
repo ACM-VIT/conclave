@@ -267,7 +267,7 @@ validate_public_route() {
     if [[ -n "$status" ]]; then
       instance_id="$(printf "%s" "$status" | json_field instanceId || true)"
     fi
-    [[ "$instance_id" == "$id" ]] && return 0
+    [[ "$instance_id" == "${EXPECTED_ID[$id]:-$id}" ]] && return 0
     if (( $(date +%s) - start_ts >= HEALTH_TIMEOUT_SECONDS )); then
       if [[ -z "$status" ]]; then
         echo "Public URL for ${id} does not answer: ${url}" >&2
@@ -609,27 +609,63 @@ set_draining() {
     -d "$payload"
 }
 
-# Waits for an instance to report zero rooms, and not before settle_until (a
-# Unix time). An unreadable status is not zero: it keeps waiting. Returns 1 at
-# the deadline.
-wait_for_empty() {
-  local svc="$1"
-  local url="$2"
-  local settle_until="${3:-0}"
-  local start_ts
+booted_drained() {
+  local container env
+  container="$(service_container "$1")" || return 1
+  [[ -n "$container" ]] || return 1
+  env="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$container" 2>/dev/null)" || return 1
+  grep -qx 'SFU_DRAINING=true' <<< "$env"
+}
+
+DRAIN_WHY=""
+drain_and_wait() {
+  local svc="$1" url="$2" settle_until="${3:-}" start_ts now state status rooms draining unreadable_since="" undrained_since=""
   start_ts="$(date +%s)"
+  [[ -n "$settle_until" ]] || settle_until=$(( start_ts + PLACEMENT_SETTLE_SECONDS ))
+  DRAIN_WHY=""
   while true; do
-    local status="" rooms="unknown"
-    status="$(instance_status "$svc")" || status=""
-    if [[ -n "$status" ]]; then
-      rooms="$(printf "%s" "$status" | json_field rooms || echo "unknown")"
+    now="$(date +%s)"
+    state="$(container_state "$svc")"
+    if [[ "$state" == "stopped" || "$state" == "absent" ]]; then
+      echo "${svc}'s container is not running, so it carries no calls."
+      return 0
     fi
-    echo "${svc} active rooms: ${rooms}"
-    if [[ "$rooms" == "0" ]]; then
-      (( $(date +%s) >= settle_until )) && return 0
-      echo "${svc} waiting for placements reserved before the drain to expire"
-    elif (( $(date +%s) - start_ts >= DRAIN_TIMEOUT_SECONDS )); then
-      return 1
+    status="$(instance_status "$svc" 2>/dev/null)" || status=""
+    if [[ -z "$status" ]]; then
+      undrained_since=""
+      [[ -n "$unreadable_since" ]] || unreadable_since="$now"
+      echo "${svc} active rooms: unknown"
+      if (( now - unreadable_since >= HEALTH_TIMEOUT_SECONDS )); then
+        if booted_drained "$svc"; then
+          echo "${svc} booted out of rotation and its /status has not answered for ${HEALTH_TIMEOUT_SECONDS}s, so it took no meetings."
+          return 0
+        fi
+        DRAIN_WHY="its /status has not answered for ${HEALTH_TIMEOUT_SECONDS}s, so whether calls run on it is unknown"
+        return 5
+      fi
+    else
+      unreadable_since=""
+      draining="$(printf "%s" "$status" | json_field draining || true)"
+      rooms="$(printf "%s" "$status" | json_field rooms || echo unknown)"
+      echo "${svc} active rooms: ${rooms}"
+      if [[ "$draining" != "true" ]]; then
+        [[ -n "$undrained_since" ]] || undrained_since="$now"
+        if (( now - undrained_since >= HEALTH_TIMEOUT_SECONDS )); then
+          DRAIN_WHY="it does not stay drained, so new meetings can still reach it"
+          return 5
+        fi
+        FORCE_DRAIN=false set_draining "$url" true >/dev/null 2>&1 || true
+        settle_until=$(( $(date +%s) + PLACEMENT_SETTLE_SECONDS ))
+      else
+        undrained_since=""
+        if [[ "$rooms" == "0" ]]; then
+          (( now >= settle_until )) && return 0
+          echo "${svc} waiting for placements reserved before the drain to expire"
+        elif (( now - start_ts >= DRAIN_TIMEOUT_SECONDS )); then
+          DRAIN_WHY="a meeting is still running on it after ${DRAIN_TIMEOUT_SECONDS}s"
+          return 3
+        fi
+      fi
     fi
     sleep "$DRAIN_POLL_SECONDS"
   done
@@ -696,7 +732,7 @@ peers_serving() {
 # not boot drained, as an unverified build does) goes back into service before
 # this run drains anything.
 restore_service_when_none_serves() {
-  local svc status container env
+  local svc status container env lkg
   for svc in "${ALL_SFU_SERVICES[@]}"; do
     status="$(instance_status "$svc" 2>/dev/null)" || continue
     [[ "$(printf "%s" "$status" | json_field draining)" == "false" ]] && is_healthy "$(service_url "$svc")" && return 0
@@ -705,6 +741,9 @@ restore_service_when_none_serves() {
     status="$(instance_status "$svc" 2>/dev/null)" || continue
     [[ "$(printf "%s" "$status" | json_field draining)" == "true" ]] || continue
     is_healthy "$(service_url "$svc")" || continue
+    [[ "$(journal_get "$svc" phase)" =~ ^(idle)?$ ]] || continue
+    lkg="$(journal_get "$svc" lkg)"
+    [[ -z "$lkg" || "$(container_image "$svc")" == "$lkg" ]] || continue
     container="$(service_container "$svc")"
     [[ -n "$container" ]] || continue
     # Only an env Docker could read shows the container did not boot drained.
@@ -887,7 +926,7 @@ const why =
   status.instanceId !== expected ? `its management URL answers as ${status.instanceId}, not ${expected}` :
   status.healthy !== true ? "its /status says unhealthy" :
   status.draining !== false ? "it is draining" :
-  publicStatus.instanceId !== svc ? `its public URL ${publicUrl} reaches ${publicStatus.instanceId ?? "nothing"}` : "";
+  publicStatus.instanceId !== expected ? `its public URL ${publicUrl} reaches ${publicStatus.instanceId ?? "nothing"}` : "";
 process.stdout.write(why);
 ' "$svc" "${EXPECTED_ID[$svc]:-$svc}" "$url" "$(service_public_url "$svc")")"
   if [[ -n "$verdict" ]]; then SERVING_WHY="$verdict"; return 1; fi
@@ -994,92 +1033,108 @@ seed_service_tags() {
   return 0
 }
 
-# Whether repair may restart an instance: only one that cannot be carrying
-# a call. Its container is stopped or absent, or it is out of rotation
-# (draining) and reports no rooms for PLACEMENT_SETTLE_SECONDS, as long as a
-# placement reserved before its drain could still open one. An instance that
-# takes meetings, or whose /status cannot be read while its container runs,
-# is never restarted here: the deploy below drains it the normal way.
-repair_may_restart() {
-  local svc="$1" status settle_until
-  status="$(instance_status "$svc" 2>/dev/null)" || status=""
-  if [[ -z "$status" ]]; then
-    case "$(container_state "$svc")" in
-      stopped|absent) return 0 ;;
-    esac
-    echo "${svc}'s /status cannot be read, so it is not restarted now; the deploy below decides what to do with it."
+PROMOTE_WHY=""
+promote() {
+  local svc="$1" url="$2" image_name="$3" image="$4" prev="$5"
+  journal_set "$svc" phase=promoting candidate="$image" prevLkg="$prev"
+  docker tag "$image" "$image_name"
+  checkpoint "tag ${svc}"
+  if ! up_service "$svc" "$image_name" false; then
+    checkpoint "start ${svc}"
+    PROMOTE_WHY="compose could not start ${svc} serving on ${image}"
     return 1
   fi
-  if [[ "$(printf "%s" "$status" | json_field draining)" != "true" ]]; then
-    echo "${svc} takes meetings, so it is not restarted now; the deploy below drains it first."
+  checkpoint "start ${svc}"
+  if ! started_on "$svc" "$image" "$image_name"; then
+    PROMOTE_WHY="${svc} is not running ${image} after it was started serving"
     return 1
   fi
-  settle_until=$(( $(date +%s) + PLACEMENT_SETTLE_SECONDS ))
-  while true; do
-    status="$(instance_status "$svc" 2>/dev/null)" || status=""
-    if [[ "$(printf "%s" "$status" | json_field rooms 2>/dev/null || true)" != "0" ]]; then
-      echo "${svc} has rooms on it (or no readable /status), so it is not restarted now; the deploy below waits for them."
-      return 1
-    fi
-    (( $(date +%s) >= settle_until )) && return 0
-    sleep "$DRAIN_POLL_SECONDS"
-  done
+  if ! wait_serving "$svc" "$image"; then
+    PROMOTE_WHY="${svc} passed its canary but is not serving on ${image} (${SERVING_WHY})"
+    return 1
+  fi
+  journal_set "$svc" phase=idle lkg="$image" candidate= prevLkg=
+  docker tag "$image" "${IMAGE_REPO}:rollback-${svc}"
 }
 
-# A deploy that died mid-step left its journal behind. Before anything else,
-# each instance it touched is brought back to a state a deploy can build on:
-# one it drained goes back into service; one already serving its
-# last-known-good image (or, mid-promotion, the build that passed) only has
-# its journal finished; one with a candidate started goes back to its
-# last-known-good image; one promoting a build that passed finishes, or goes
-# back if it will not serve. Nothing that may carry a call is restarted.
+roll_back() {
+  local svc="$1" url="$2" image_name="$3" lkg="$4" code=0
+  [[ "$(journal_get "$svc" phase)" == "rollback" ]] || journal_set "$svc" phase=rollback
+  drain_and_wait "$svc" "$url" || code=$?
+  if (( code == 3 )); then
+    echo "Deploy paused: ${svc} is drained, but ${DRAIN_WHY}. It goes back to its previous image once its calls end; rerun this script then." >&2
+    return 3
+  elif (( code != 0 )); then
+    echo "ERROR: ${svc} cannot be rolled back without risking its calls: ${DRAIN_WHY}. It is left as it is, and the next run of this script rolls it back." >&2
+    return 5
+  fi
+  restore_lkg "$svc" "$url" "$image_name" "$lkg" || return 5
+}
+
+declare -A REPAIR_CODE=()
 repair_interrupted() {
-  local svc phase lkg candidate prev url image_name status
+  local svc phase lkg candidate prev url image_name state code
   for svc in "${ALL_SFU_SERVICES[@]}"; do
     phase="$(journal_get "$svc" phase)"
-    [[ -z "$phase" || "$phase" == "idle" || "$phase" == "passed" ]] && continue
+    [[ -z "$phase" || "$phase" == "idle" ]] && continue
     url="$(service_url "$svc")"
     image_name="$(service_image_name "$svc")"
     lkg="$(journal_get "$svc" lkg)"
     candidate="$(journal_get "$svc" candidate)"
     prev="$(journal_get "$svc" prevLkg)"
+    code=0
     echo "A deploy stopped while ${svc} was ${phase}; repairing it before anything else."
     case "$phase" in
       drained)
-        # The container still runs the image it served on; only the drain
-        # this deploy sent is undone.
-        status="$(instance_status "$svc" 2>/dev/null)" || status=""
-        if [[ "$(journal_get "$svc" wasDraining)" != "true" && -n "$status" && "$(container_image "$svc")" == "$lkg" ]]; then
-          restore_drain_state "$svc" "$url" false || true
-        else
+        state="$(container_state "$svc")"
+        if [[ "$state" == "stopped" || "$state" == "absent" ]]; then
+          if [[ -n "$lkg" ]]; then
+            roll_back "$svc" "$url" "$image_name" "$lkg" || code=$?
+          else
+            journal_set "$svc" phase=idle
+          fi
+        elif [[ -n "$lkg" && "$(container_image "$svc")" != "$lkg" ]]; then
+          echo "ERROR: ${svc} runs $(container_image "$svc"), not its last-known-good image ${lkg}, so it is left as it is. Check it by hand." >&2
+          code=$EXIT_NOT_RESTORED
+        elif [[ "$(journal_get "$svc" wasDraining)" == "true" ]]; then
           journal_set "$svc" phase=idle
+        else
+          restore_drain_state "$svc" "$url" false || code=1
         fi
         ;;
-      promoting)
-        if serving "$svc" "$candidate"; then
+      candidate|rollback)
+        if [[ -n "$lkg" ]] && serving "$svc" "$lkg"; then
+          journal_set "$svc" phase=idle candidate= prevLkg=
+        else
+          roll_back "$svc" "$url" "$image_name" "$lkg" || code=$?
+        fi
+        ;;
+      passed|promoting)
+        [[ "$phase" == "passed" ]] && prev="$lkg"
+        if [[ -n "$candidate" ]] && serving "$svc" "$candidate"; then
           journal_set "$svc" phase=idle lkg="$candidate" candidate= prevLkg=
           docker tag "$candidate" "${IMAGE_REPO}:rollback-${svc}"
         elif [[ -n "$prev" ]] && serving "$svc" "$prev"; then
           journal_set "$svc" phase=idle lkg="$prev" candidate= prevLkg=
-        elif repair_may_restart "$svc"; then
-          if docker tag "$candidate" "$image_name" && checkpoint "tag ${svc}" &&
-             up_service "$svc" "$image_name" false && checkpoint "start ${svc}" &&
-             wait_serving "$svc" "$candidate"; then
-            journal_set "$svc" phase=idle lkg="$candidate" candidate= prevLkg=
-            docker tag "$candidate" "${IMAGE_REPO}:rollback-${svc}"
+        else
+          state="$(container_state "$svc")"
+          if [[ -n "$candidate" ]] && { [[ "$state" == "stopped" || "$state" == "absent" ]] || { [[ "$(container_image "$svc")" == "$candidate" ]] && booted_drained "$svc"; }; }; then
+            drain_and_wait "$svc" "$url" || code=$?
+            if (( code == 0 )) && ! promote "$svc" "$url" "$image_name" "$candidate" "$prev"; then
+              echo "${PROMOTE_WHY}; rolling ${svc} back." >&2
+              roll_back "$svc" "$url" "$image_name" "$prev" || code=$?
+            fi
           else
-            restore_lkg "$svc" "$url" "$image_name" "$prev" || echo "ERROR: ${svc} could not be repaired; the deploy below treats it as down." >&2
+            roll_back "$svc" "$url" "$image_name" "$prev" || code=$?
           fi
         fi
         ;;
       *)
-        if [[ -n "$lkg" ]] && serving "$svc" "$lkg"; then
-          journal_set "$svc" phase=idle candidate= prevLkg=
-        elif repair_may_restart "$svc"; then
-          restore_lkg "$svc" "$url" "$image_name" "$lkg" || echo "ERROR: ${svc} could not be repaired; the deploy below treats it as down." >&2
-        fi
+        echo "ERROR: ${svc}'s deploy journal has a phase this script does not know (${phase}); check it by hand." >&2
+        code=1
         ;;
     esac
+    (( code == 0 )) || REPAIR_CODE[$svc]=$code
   done
 }
 
@@ -1096,6 +1151,13 @@ deploy_service() {
   image_name="$(service_image_name "$svc")"
   candidate="$(candidate_tag "$svc")"
   container="$(service_container "$svc")"
+  local phase
+  phase="$(journal_get "$svc" phase)"
+  if [[ -n "$phase" && "$phase" != "idle" ]]; then
+    echo "" >&2
+    echo "Deploy stopped: ${svc} is still ${phase} from an interrupted deploy, and the repair above could not finish it, so it was not drained or rebuilt. Rerun this script once that is resolved." >&2
+    return "${REPAIR_CODE[$svc]:-1}"
+  fi
   local status_code=1
   for _ in 1 2 3; do
     status_code=0
@@ -1154,26 +1216,35 @@ deploy_service() {
       echo "${svc} was not drained or rebuilt. Bring the other instance back, then rerun this script." >&2
       return 1
     fi
+    if serving "$svc" || { [[ -z "$lkg" ]] && wait_serving "$svc"; }; then
+      lkg="$(container_image "$svc")"
+    elif [[ -z "$lkg" ]]; then
+      echo "" >&2
+      echo "Deploy stopped: ${svc} is not serving (${SERVING_WHY}) and no image it served on is on record, so a failed canary would leave it nothing to go back to. It was not drained or rebuilt; fix it, then rerun this script." >&2
+      return 1
+    fi
     journal_set "$svc" phase=drained lkg="$lkg" wasDraining="$was_draining" candidate= prevLkg= commit="$TARGET_COMMIT"
     [[ -n "$lkg" ]] && docker tag "$lkg" "${IMAGE_REPO}:rollback-${svc}"
     echo "Draining ${svc}..."
-    local drain_response="" drained="true"
-    drain_response="$(set_draining "$url" true)" || drained="false"
+    local drain_response="" code=0
+    drain_response="$(set_draining "$url" true)" || drain_response=""
     checkpoint "drain ${svc}"
-    if [[ "$drained" != "true" ]]; then
-      echo "Failed to drain ${svc}; not rebuilding it." >&2
-      restore_drain_state "$svc" "$url" "$was_draining" || true
-      return 1
-    fi
     settle_until=$(( $(date +%s) + PLACEMENT_SETTLE_SECONDS ))
     if [[ "$FORCE_DRAIN" == "true" && "$(printf "%s" "$drain_response" | json_field forced || echo false)" == "true" ]]; then
       echo "Force drain applied to ${svc}; skipping the room wait."
-    elif ! wait_for_empty "$svc" "$url" "$settle_until"; then
-      restore_drain_state "$svc" "$url" "$was_draining" || true
-      echo "" >&2
-      echo "Deploy paused: ${svc} did not drain within ${DRAIN_TIMEOUT_SECONDS}s; a meeting is still running on it." >&2
-      echo "${svc} was not rebuilt and keeps serving its calls. Rerun this script once the meeting ends." >&2
-      return "$EXIT_BLOCKED_BY_ROOMS"
+    else
+      drain_and_wait "$svc" "$url" "$settle_until" || code=$?
+      if (( code == 3 )); then
+        restore_drain_state "$svc" "$url" "$was_draining" || true
+        echo "" >&2
+        echo "Deploy paused: ${svc} did not drain within ${DRAIN_TIMEOUT_SECONDS}s; a meeting is still running on it." >&2
+        echo "${svc} was not rebuilt and keeps serving its calls. Rerun this script once the meeting ends." >&2
+        return "$EXIT_BLOCKED_BY_ROOMS"
+      elif (( code != 0 )); then
+        echo "Failed to drain ${svc} (${DRAIN_WHY}); not rebuilding it." >&2
+        restore_drain_state "$svc" "$url" "$was_draining" || true
+        return 1
+      fi
     fi
   elif answers_http "$url"; then
     # Up but its status is unreadable: its rooms are unknown, so leave it.
@@ -1200,7 +1271,7 @@ deploy_service() {
   fi
 
   echo "Starting ${svc} on ${TARGET_COMMIT} under its candidate tag, out of rotation until its canary passes..."
-  local failure="" promoted="false"
+  local failure="" code=0
   docker tag "$TARGET_IMAGE" "$candidate"
   checkpoint "tag candidate ${svc}"
   journal_set "$svc" phase=candidate candidate="$TARGET_IMAGE"
@@ -1210,51 +1281,40 @@ deploy_service() {
   [[ -n "$failure" ]] || wait_for_healthy "$url" || failure="${svc} did not report healthy within ${HEALTH_TIMEOUT_SECONDS}s"
   [[ -n "$failure" ]] || run_canary "$svc" "$url" || failure="the canary call against ${svc} failed"
   checkpoint "canary ${svc}"
-  if [[ -z "$failure" ]] && ! wait_for_empty "$svc" "$url" "$settle_until"; then
-    # The build passed, but a call reached it while it was out of rotation.
-    # Restarting it would cut that call, so it stays drained on the
-    # candidate, and its service tag still names the last-known-good image.
-    journal_set "$svc" phase=passed
-    echo "" >&2
-    echo "Deploy paused: ${svc} passed its canary, but a call is running on it while it is out of rotation." >&2
-    echo "Rerun this script once that call ends." >&2
-    return "$EXIT_BLOCKED_BY_ROOMS"
-  fi
   if [[ -z "$failure" ]]; then
-    # Passed: only now does the service's own image name move to the build,
-    # and the serving container boots undrained from it.
-    journal_set "$svc" phase=promoting prevLkg="$lkg"
-    docker tag "$TARGET_IMAGE" "$image_name"
-    checkpoint "tag ${svc}"
-    up_service "$svc" "$image_name" false && promoted="true" || failure="compose could not recreate ${svc} after its canary"
-    checkpoint "start ${svc}"
-    [[ -n "$failure" ]] || started_on "$svc" "$TARGET_IMAGE" "$image_name" || failure="${svc} is not running ${TARGET_COMMIT}'s image after its canary"
-    [[ -n "$failure" ]] || wait_serving "$svc" "$TARGET_IMAGE" || failure="${svc} passed its canary but is not serving on ${TARGET_COMMIT} (${SERVING_WHY})"
+    drain_and_wait "$svc" "$url" "$settle_until" || code=$?
+    if (( code == 3 )); then
+      journal_set "$svc" phase=passed
+      echo "" >&2
+      echo "Deploy paused: ${svc} passed its canary, but a call is running on it while it is out of rotation." >&2
+      echo "Rerun this script once that call ends." >&2
+      return "$EXIT_BLOCKED_BY_ROOMS"
+    elif (( code != 0 )); then
+      failure="${svc} passed its canary, but ${DRAIN_WHY}"
+    fi
+  fi
+  if [[ -z "$failure" ]] && ! promote "$svc" "$url" "$image_name" "$TARGET_IMAGE" "$lkg"; then
+    failure="$PROMOTE_WHY"
   fi
   if [[ -n "$failure" ]]; then
     echo "" >&2
     echo "Deploy stopped: ${failure}." >&2
-    journal_set "$svc" phase=rollback
-    if [[ "$promoted" == "true" ]]; then
-      # It served undrained, so calls may have joined it: it is drained and
-      # waited for like any rebuild, and left alone while they run.
-      set_draining "$url" true >/dev/null || true
-      checkpoint "drain ${svc} back"
-      if ! wait_for_empty "$svc" "$url" "$(( $(date +%s) + PLACEMENT_SETTLE_SECONDS ))"; then
-        echo "" >&2
-        echo "Deploy paused: calls joined ${svc} on ${TARGET_COMMIT} before it failed its last check. It is drained and goes back to its previous image once they end; rerun this script then." >&2
+    code=0
+    roll_back "$svc" "$url" "$image_name" "$lkg" || code=$?
+    case "$code" in
+      0)
+        echo "Instances not yet deployed were left untouched and keep serving." >&2
+        return "$EXIT_CANARY_FAILED"
+        ;;
+      3)
         return "$EXIT_BLOCKED_BY_ROOMS"
-      fi
-    fi
-    if restore_lkg "$svc" "$url" "$image_name" "$lkg"; then
-      echo "Instances not yet deployed were left untouched and keep serving." >&2
-      return "$EXIT_CANARY_FAILED"
-    fi
-    echo "${svc} is not serving. Instances not yet deployed were left untouched and keep serving." >&2
-    return "$EXIT_NOT_RESTORED"
+        ;;
+      *)
+        echo "${svc} is not serving. Instances not yet deployed were left untouched and keep serving." >&2
+        return "$EXIT_NOT_RESTORED"
+        ;;
+    esac
   fi
-  journal_set "$svc" phase=idle lkg="$TARGET_IMAGE" candidate= prevLkg=
-  docker tag "$TARGET_IMAGE" "${IMAGE_REPO}:rollback-${svc}"
   echo "${svc} passed its canary on ${TARGET_COMMIT} and is serving."
 }
 
@@ -1367,6 +1427,13 @@ fi
 
 for svc in "${ORDERED_SERVICES[@]}"; do
   deploy_service "$svc"
+done
+for svc in "${ALL_SFU_SERVICES[@]}"; do
+  if [[ -n "${REPAIR_CODE[$svc]:-}" ]]; then
+    echo "" >&2
+    echo "Deploy stopped: ${svc} is still being repaired from an interrupted deploy (see above); rerun this script." >&2
+    exit "${REPAIR_CODE[$svc]}"
+  fi
 done
 
 # The release record moves only once every instance runs the target, so a
