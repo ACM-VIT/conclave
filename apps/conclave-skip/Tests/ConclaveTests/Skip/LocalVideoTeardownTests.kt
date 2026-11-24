@@ -506,6 +506,7 @@ class LocalVideoTeardownTests {
 
             val start = scope.async(start = CoroutineStart.UNDISPATCHED) { runCatching { media.startProducingVideo() } }
             advanceMain(CaptureTeardown.DEADLINE_MILLIS + 1_000)
+            advanceMainAtMost(2_000) { devices.cameras.isNotEmpty() }
             assertEquals(listOf("camera"), stuck.toList())
             assertEquals("a camera was opened past the teardown deadline while the slow camera still held it", 0, devices.cameras.size)
             assertFalse(start.isCompleted)
