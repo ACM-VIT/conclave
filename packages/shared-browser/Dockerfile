@@ -11,7 +11,7 @@ RUN pnpm install --filter @conclave/shared-browser... --frozen-lockfile --node-l
 
 COPY packages/shared-browser/tsconfig.json packages/shared-browser/tsconfig.json
 COPY packages/shared-browser/src packages/shared-browser/src
-RUN pnpm -C packages/shared-browser run build
+RUN pnpm -C packages/shared-browser --config.verify-deps-before-run=false run build
 
 EXPOSE 3040
 
