@@ -112,3 +112,22 @@ describe("a calendar task Google keeps refusing", () => {
     expect(state.calendarTasks.failed).toBe(0);
   });
 });
+
+describe("a booking cancelled and then deleted", () => {
+  it("drops its event link when cancelled, so deleting it later writes no second task", async () => {
+    const { state, call, username } = await sfuWithClock();
+    const startAt = Math.ceil((Date.now() + 2 * DAY_MS) / 1_800_000) * 1_800_000;
+    const booked = await call("POST", `/scheduling/public/${username}/intro/book`, { startAt, attendeeName: "Guest", attendeeEmail: "guest@example.test" });
+    const id = (booked.body.booking as { id: string }).id;
+    expect(google.events.size).toBe(1);
+
+    const cancelled = await call("POST", `/scheduled-meetings/${id}/cancel`);
+    expect((cancelled.body.scheduledMeeting as { googleCalendarEventId: string | null }).googleCalendarEventId).toBeNull();
+    await drainCalendarTasks(state);
+    expect(google.events.size).toBe(0);
+    expect(await state.controlPlane.read((view) => view.all("calendarTask"))).toEqual([]);
+
+    expect((await call("DELETE", `/scheduled-meetings/${id}`)).status).toBe(200);
+    expect(await state.controlPlane.read((view) => view.all("calendarTask"))).toEqual([]);
+  });
+});

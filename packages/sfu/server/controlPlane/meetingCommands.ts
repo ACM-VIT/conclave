@@ -116,12 +116,13 @@ export const updateMeeting =
   ): Command<ScheduledMeeting> =>
   (tx) =>
     withAccess(tx, id, access, (meeting) => {
-      const next = applyScheduledMeetingUpdate(meeting, request, {
+      const updated = applyScheduledMeetingUpdate(meeting, request, {
         now: tx.now,
         activeOwner: activeOwner(tx),
       });
+      const retired = updated.status === "cancelled" && meeting.status !== "cancelled" && retireMeetingEvent(tx, updated);
+      const next = retired ? { ...updated, googleCalendarEventId: null } : updated;
       tx.put("meeting", next);
-      if (next.status === "cancelled" && meeting.status !== "cancelled") retireMeetingEvent(tx, next);
       return done(next);
     });
 

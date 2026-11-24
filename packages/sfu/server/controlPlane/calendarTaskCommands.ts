@@ -98,12 +98,13 @@ const profileOfBooking = (tx: TxRead, meeting: ScheduledMeeting): string | null 
 export const retireMeetingEvent = (tx: Tx, meeting: ScheduledMeeting): CalendarTask | null => {
   const eventId = meeting.googleCalendarEventId;
   if (!eventId) return null;
-  const existing = tx.get("calendarTask", eventId)?.value ?? null;
-  if (existing) return existing.action === "delete" ? existing : toDelete(tx, existing);
+  const id = `delete-${eventId}`;
+  const existing = tx.get("calendarTask", id)?.value ?? null;
+  if (existing) return existing;
   const profileId = profileOfBooking(tx, meeting);
   if (!profileId) return null;
   const task: CalendarTask = {
-    id: eventId,
+    id,
     action: "delete",
     state: "open",
     meetingId: meeting.id,
