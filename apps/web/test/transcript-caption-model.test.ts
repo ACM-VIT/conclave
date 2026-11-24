@@ -9,6 +9,7 @@ import {
   OPENAI,
   SARVAM,
   openAiCommitted,
+  openAiDelta,
   openAiFinal,
   sarvamFinal,
   sarvamSpeechStart,
@@ -30,7 +31,14 @@ afterEach(() => {
 });
 
 type Rig = Awaited<ReturnType<typeof transcriptRoomRig>>;
-type Outcome = { shown: [string, string | undefined][]; replayedChunks?: number; bufferedBytes?: number };
+type Outcome = {
+  shown: [string, string | undefined][];
+  replayedChunks?: number;
+  bufferedBytes?: number;
+  saved?: string[];
+  threw?: boolean;
+  supersededChunks?: number;
+};
 
 const ada = { userId: "ada", displayName: "Ada" };
 const grace = { userId: "grace", displayName: "Grace" };
@@ -360,6 +368,87 @@ const cases: { thread: string; model: string; run: (rig: Rig) => Promise<Outcome
       return { shown: shown(rig), replayedChunks };
     },
   },
+  {
+    thread: "Shown words are not saved",
+    model: OPENAI,
+    async run(rig) {
+      const [socket] = rig.providerSockets();
+      await rig.speak(ada);
+      await rig.commit(ada);
+      await settle();
+      socket.emit(openAiCommitted("a"));
+      await settle();
+      socket.emit(openAiDelta("a", "Hello there"));
+      await settle();
+      return { shown: shown(rig), saved: rig.lastSnapshotTexts() };
+    },
+  },
+  {
+    thread: "Early starts miss continuing speech",
+    model: SARVAM,
+    async run(rig) {
+      const socket = await signalsActive(rig);
+      await rig.speak(ada);
+      socket.emit(sarvamSpeechStart());
+      socket.emit(sarvamFinal("s", "Short."));
+      socket.emit(sarvamSpeechStart());
+      for (let chunk = 0; chunk < 3; chunk += 1) {
+        await vi.advanceTimersByTimeAsync(100);
+        await rig.speak(ada);
+      }
+      await vi.advanceTimersByTimeAsync(3_500);
+      socket.disconnect();
+      await settle();
+      const replacement = rig.providerSockets().at(-1)!;
+      const replayedChunks = audioMessages(replacement);
+      replacement.emit(sarvamSpeechStart());
+      replacement.emit(sarvamFinal("c", "Continued."));
+      await vi.advanceTimersByTimeAsync(DEADLINE + 100);
+      return { shown: shown(rig), replayedChunks };
+    },
+  },
+  {
+    thread: "Switches can lose buffered speech",
+    model: SARVAM,
+    async run(rig) {
+      const socket = await signalsActive(rig);
+      rig.connectPlans.push("unreachable", { lateMs: 1_500 });
+      socket.disconnect();
+      await settle();
+      for (let chunk = 0; chunk < 3; chunk += 1) {
+        await rig.speak(ada);
+        await vi.advanceTimersByTimeAsync(100);
+      }
+      rig.saves.before = () => new Promise((resolve) => setTimeout(resolve, 3_000));
+      const switching = rig.switchTo("ta");
+      await vi.advanceTimersByTimeAsync(4_000);
+      await switching;
+      rig.saves.before = undefined;
+      await settle();
+      const [superseded, current] = rig.providerSockets().slice(-2);
+      return { shown: [], replayedChunks: audioMessages(current), supersededChunks: audioMessages(superseded) };
+    },
+  },
+  {
+    thread: "Corrupt audio escapes error checks",
+    model: SARVAM,
+    async run(rig) {
+      const socket = await signalsActive(rig);
+      let threw = false;
+      for (const audio of ["%%%%", "@@@@AAAA", "A"]) {
+        try {
+          await rig.send({ type: "audio.chunk", audio, speaker: ada });
+        } catch {
+          threw = true;
+        }
+      }
+      await rig.speak(ada);
+      socket.emit(sarvamSpeechStart());
+      socket.emit(sarvamFinal("a", "Still heard."));
+      await settle();
+      return { shown: shown(rig), threw };
+    },
+  },
 ];
 
 const expected: Record<string, Outcome> = {
@@ -388,6 +477,13 @@ const expected: Record<string, Outcome> = {
   "Late signals miss ongoing speech": { shown: [["Setup.", "grace"], [GAP, "ada"]] },
   "Brief drops end recoverable captions": { shown: [["Recovered.", "ada"]], replayedChunks: 1 },
   "Short turns lose replay audio": { shown: [["Setup.", "grace"], ["Ada short.", "ada"]], replayedChunks: 1 },
+  "Shown words are not saved": { shown: [], saved: ["Hello there"] },
+  "Early starts miss continuing speech": {
+    shown: [["Setup.", "grace"], ["Short.", "ada"], ["Continued.", "ada"]],
+    replayedChunks: 3,
+  },
+  "Switches can lose buffered speech": { shown: [], replayedChunks: 3, supersededChunks: 0 },
+  "Corrupt audio escapes error checks": { shown: [["Setup.", "grace"], ["Still heard.", "ada"]], threw: false },
   "Recent speech loses its speaker": { shown: [["Setup.", "grace"], ["Ada long.", "ada"]], replayedChunks: 27 },
   "Same-tick audio changes owners": {
     shown: [["Setup.", "grace"], ["One.", "ada"], ["Two.", "grace"], ["Three.", "ada"]],

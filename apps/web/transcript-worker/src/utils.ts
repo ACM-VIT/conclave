@@ -121,6 +121,14 @@ export const estimatePcm16Base64SampleCount = (value: string): number => {
   return Math.floor(byteLength / 2);
 };
 
+export const parsePcm16Base64 = (base64: string): Int16Array | null => {
+  try {
+    return decodePcm16Base64(base64);
+  } catch {
+    return null;
+  }
+};
+
 export const decodePcm16Base64 = (base64: string): Int16Array => {
   const binary = atob(base64.replace(/\s+/g, ""));
   const samples = new Int16Array(Math.floor(binary.length / 2));

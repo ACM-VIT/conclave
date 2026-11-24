@@ -45,6 +45,7 @@ import {
   TRANSCRIPTION_PROVIDER_DRAIN_MS,
   TRANSCRIPTION_RECOVERY_MAX_AUDIO_BYTES,
   UNOWNED_AUDIO_KEPT_MS,
+  TRANSCRIPT_PERSIST_RETRY_MS,
 } from "./constants";
 import {
   signTranscriptSfuRelayStartToken,
@@ -132,8 +133,7 @@ import {
   redactSensitiveText,
   safeJsonParse,
   createSilentPcm16Base64,
-  decodePcm16Base64,
-  estimatePcm16Base64SampleCount,
+  parsePcm16Base64,
   speakerKey,
   trimText,
 } from "./utils";
@@ -166,6 +166,7 @@ export class TranscriptRoom {
   private audioTurn = 0;
   private lineTimer: ReturnType<typeof setTimeout> | null = null;
   private switchingProvider = false;
+  private persistRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private latestSpeaker: TranscriptSpeaker | null = null;
   private lastAudioAt = 0;
   private hasPendingAudio = false;
@@ -763,7 +764,7 @@ export class TranscriptRoom {
       }
       this.markTakeoverNeeded("Transcript controller disconnected.");
       this.broadcastHandoffRequested();
-      void this.persist();
+      this.persistInBackground();
     }, TRANSCRIPT_CONTROLLER_RECONNECT_GRACE_MS);
   }
 
@@ -812,7 +813,7 @@ export class TranscriptRoom {
         "Transcript audio relay could not reconnect automatically.",
       );
       this.broadcastHandoffRequested();
-      void this.persist();
+      this.persistInBackground();
     }, TRANSCRIPT_SFU_RELAY_RECOVERY_GRACE_MS);
   }
 
@@ -1035,6 +1036,7 @@ export class TranscriptRoom {
       this.drainTranscriptionProvider();
       this.switchingProvider = true;
     }
+    this.supersedeTranscriptionRecovery();
     this.resetTranscriptionAudioState();
     this.audioPaused = false;
     this.resetMinutesScheduler(!wasIdle);
@@ -1238,7 +1240,12 @@ export class TranscriptRoom {
     if (this.audioPaused) return;
     if (!this.canRelayAudio(viewer)) return;
     if (!audio) return;
-    const sampleCount = estimatePcm16Base64SampleCount(audio);
+    const pcm = parsePcm16Base64(audio);
+    if (!pcm) {
+      this.sendError(viewer, "Transcript audio chunk is not valid PCM audio.");
+      return;
+    }
+    const sampleCount = pcm.length;
     if (sampleCount <= 0) return;
     const normalizedSpeaker = normalizeSpeaker(speaker, viewer);
     if (!this.transcriptionSession) {
@@ -1292,7 +1299,7 @@ export class TranscriptRoom {
     const now = Date.now();
     const sequence = this.audioSequence++;
     const key = speakerKey(speaker);
-    const voice = this.voiceCheckFor(key).push(decodePcm16Base64(audio), now);
+    const voice = this.voiceCheckFor(key).push(parsePcm16Base64(audio) ?? new Int16Array(0), now);
     if (session.provider === "sarvam") {
       for (const other of Array.from(this.speakingLine.keys())) {
         if (other !== key || voice === "onset") this.speakingLine.delete(other);
@@ -1495,7 +1502,7 @@ export class TranscriptRoom {
     live.commitQueue.push({ lineId: line.id, committedAt: Date.now() });
     this.armTranscriptionCommitWatchdog();
     this.armLineTimer();
-    if (line.heard) void this.persist();
+    if (line.heard) this.persistInBackground();
     return true;
   }
 
@@ -1750,6 +1757,13 @@ export class TranscriptRoom {
     this.transcriptionSession = connection.session;
   }
 
+  private supersedeTranscriptionRecovery(): void {
+    this.transcriptionRecoveryGeneration += 1;
+    this.transcriptionProviderOpeningGeneration = null;
+    this.transcriptionRecoveryPromise = null;
+    this.pendingTranscriptionRecoveryFailure = null;
+  }
+
   private closeTranscriptionProvider(keepOwed: boolean): void {
     this.transcriptionRecoveryGeneration += 1;
     this.transcriptionProviderOpeningGeneration = null;
@@ -1838,7 +1852,7 @@ export class TranscriptRoom {
     if (this.providerDrains.get(drain.epoch) !== drain) return;
     const owed = this.ledger.active().filter(({ epoch }) => epoch === drain.epoch);
     if (this.endUnfinishedLines(owed, `A replaced provider ${reason}`, drain)) {
-      await this.persist();
+      this.persistInBackground();
       this.scheduleMinutes();
     }
     this.closeDrain(drain);
@@ -1905,7 +1919,7 @@ export class TranscriptRoom {
     if (utterance.ownsNewAudio && isLive && line !== replayed) {
       this.speakingLine.set(speakerKey(line.speaker), line.id);
     }
-    if (line.heard) void this.persist();
+    if (line.heard) this.persistInBackground();
     this.armLineTimer();
   }
 
@@ -1923,7 +1937,7 @@ export class TranscriptRoom {
       line.deadlineAt = Math.max(line.deadlineAt, this.ownAudioDeadline(line));
       if (heard.ownsNewAudio) this.speakingLine.set(speakerKey(line.speaker), line.id);
     }
-    void this.persist();
+    this.persistInBackground();
   }
 
   private acknowledgeLine(connection: ProviderConnection, providerItemId: string): CaptionLine | null {
@@ -1955,11 +1969,11 @@ export class TranscriptRoom {
     const line = this.namedLine(connection, providerItemId);
     if (!line || line.state !== "open") return;
     const now = Date.now();
-    const saved = line.heard || line.text.trim() !== "";
+    const hadWords = line.text.trim() !== "";
     line.text = line.freshText ? delta : `${line.text}${delta}`;
     line.freshText = false;
     const segment = this.lineSegment(line, now);
-    if (connection.role === "draining" || !saved) void this.persist();
+    if (connection.role === "draining" || (!hadWords && line.text.trim() !== "")) this.persistInBackground();
     this.broadcast({
       type: "segment.delta",
       delta: this.toSegmentDelta(segment, delta, now),
@@ -1991,7 +2005,7 @@ export class TranscriptRoom {
     }
     if (connection.role === "draining") this.settleDrain(connection);
     if (!changed) return;
-    await this.persist();
+    this.persistInBackground();
     this.scheduleMinutes();
   }
 
@@ -2001,7 +2015,7 @@ export class TranscriptRoom {
     const changed = this.endUnfinishedLines([line], "A provider failed one line", connection);
     if (connection.role === "draining") this.settleDrain(connection);
     if (changed) {
-      await this.persist();
+      this.persistInBackground();
       this.scheduleMinutes();
     }
   }
@@ -2084,7 +2098,7 @@ export class TranscriptRoom {
     for (const drain of Array.from(this.providerDrains.values())) this.settleDrain(drain);
     this.armLineTimer();
     if (changed) {
-      await this.persist();
+      this.persistInBackground();
       this.scheduleMinutes();
     }
   }
@@ -2132,7 +2146,7 @@ export class TranscriptRoom {
       ? owed.filter(({ state, replayed }) => state === "pending_ack" && replayed)
       : [];
     if (this.endUnfinishedLines(replayedUnanswered, "A replacement never acknowledged a replayed line", live)) {
-      void this.persist();
+      this.persistInBackground();
     }
     for (const line of owed) {
       if (!replayedUnanswered.includes(line)) this.awaitReplacement(line);
@@ -2489,7 +2503,7 @@ export class TranscriptRoom {
     this.broadcast({ type: "error", message: redactedMessage });
     this.markTakeoverNeeded(redactedMessage);
     this.broadcastSession();
-    await this.persist();
+    this.persistInBackground();
   }
 
   private controllerSpeaker(): TranscriptSpeaker {
@@ -3021,6 +3035,20 @@ export class TranscriptRoom {
       default:
         return null;
     }
+  }
+
+  private persistInBackground(): void {
+    this.persist().catch((error: unknown) => {
+      console.warn("[TranscriptWorker] snapshot write failed", {
+        roomId: this.session?.roomId,
+        message: redactSensitiveText(error instanceof Error ? error.message : "Snapshot write failed."),
+      });
+      if (this.persistRetryTimer !== null) return;
+      this.persistRetryTimer = setTimeout(() => {
+        this.persistRetryTimer = null;
+        this.persistInBackground();
+      }, TRANSCRIPT_PERSIST_RETRY_MS);
+    });
   }
 
   private async persist(): Promise<void> {

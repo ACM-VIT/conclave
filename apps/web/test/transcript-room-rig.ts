@@ -11,6 +11,7 @@ export class FakeProviderSocket {
   sent: Record<string, unknown>[] = [];
   closed = false;
   sendsBeforeFailing = Number.POSITIVE_INFINITY;
+  requestIndex = -1;
   private listeners = new Map<string, Listener[]>();
   constructor(readonly url: string) {}
   accept() {}
@@ -81,13 +82,19 @@ export async function transcriptRoomRig(
   env: Partial<Env> = {},
 ) {
   const sockets: FakeProviderSocket[] = [];
-  const connectPlans: Array<"unreachable" | number> = [];
+  const connectPlans: Array<"unreachable" | number | { lateMs: number }> = [];
+  const saves: { before?: () => Promise<void> } = {};
+  let providerRequests = 0;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string) => {
-      const plan = /\/v1\/realtime|speech-to-text/.test(String(url)) ? connectPlans.shift() : undefined;
+      const isProvider = /\/v1\/realtime|speech-to-text/.test(String(url));
+      const requestIndex = isProvider ? providerRequests++ : -1;
+      const plan = isProvider ? connectPlans.shift() : undefined;
       if (plan === "unreachable") throw new Error("Provider connection timed out.");
+      if (typeof plan === "object") await new Promise((resolve) => setTimeout(resolve, plan.lateMs));
       const socket = new FakeProviderSocket(String(url));
+      socket.requestIndex = requestIndex;
       if (typeof plan === "number") socket.sendsBeforeFailing = plan;
       sockets.push(socket);
       return { webSocket: socket, status: 101 };
@@ -100,7 +107,9 @@ export async function transcriptRoomRig(
       storage: {
         get: async () => undefined,
         put: async (_key: string, value: { segments: TestSegment[] }) => {
-          snapshots.push(structuredClone(value));
+          const copy = structuredClone(value);
+          await saves.before?.();
+          snapshots.push(copy);
         },
         delete: async () => true,
         setAlarm: async () => {},
@@ -245,6 +254,9 @@ export async function transcriptRoomRig(
   return {
     room,
     send,
+    saves,
+    snapshots,
+    providerRequestCount: () => providerRequests,
     sockets,
     connectPlans,
     providerSockets,

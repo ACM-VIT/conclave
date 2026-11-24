@@ -36,6 +36,8 @@ type SpeechSegment = {
   endSequence: number | null;
   afterSignal: number;
   claimed: boolean;
+  itemId: string | null;
+  answered: boolean;
   continuedSequence: number | null;
 };
 export const SARVAM_SUPPORTED_LANGUAGE_CODES = new Set([
@@ -434,20 +436,20 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
     if (!this.signalsSpeech) {
       if (this.turn.accepted || (this.turn.needsOnset && voice !== "onset")) return;
       this.turn.accepted = true;
-      this.beginSegment(speaker ?? null, context?.turn, now, sequence).claimed = true;
-      this.openedBeforeSignal.push(
-        this.acceptUtterance({
-          heard: true,
-          speaker: speaker ?? null,
-          fromSequence: this.turn.firstSequence,
-          turn: context?.turn,
-          ownsNewAudio: true,
-        }),
-      );
+      const opened = this.beginSegment(speaker ?? null, context?.turn, now, sequence);
+      opened.claimed = true;
+      opened.itemId = this.acceptUtterance({
+        heard: true,
+        speaker: speaker ?? null,
+        fromSequence: this.turn.firstSequence,
+        turn: context?.turn,
+        ownsNewAudio: true,
+      });
+      this.openedBeforeSignal.push(opened.itemId);
       return;
     }
     const open = this.openSegment;
-    if (open && voice !== "onset" && open.turnId === this.turn.id) {
+    if (open && !open.answered && voice !== "onset" && open.turnId === this.turn.id) {
       open.heardAt = now;
       if (open.claimed && open.continuedSequence === null) open.continuedSequence = sequence;
       return;
@@ -478,6 +480,8 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
       endSequence: null,
       afterSignal: this.signalCount,
       claimed: false,
+      itemId: null,
+      answered: false,
       continuedSequence: null,
     };
     current.segments += 1;
@@ -503,6 +507,9 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
   }
 
   retire(itemId: string): void {
+    for (const segment of this.segments) {
+      if (segment.itemId === itemId) segment.answered = true;
+    }
     this.awaitingFinal = this.awaitingFinal.filter((awaiting) => awaiting !== itemId);
     this.openedBeforeSignal = this.openedBeforeSignal.filter((opened) => opened !== itemId);
     this.unheardSignals = this.unheardSignals.filter((signal) => signal.itemId !== itemId);
@@ -557,6 +564,7 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
         heard: true,
         ...this.segmentSpeech(segment, segment.startedAt - SARVAM_SIGNAL_LOOKBACK_MS, true),
       });
+      segment.itemId = this.signalledItem;
       return;
     }
     const running = this.openSegment;
@@ -575,6 +583,7 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
         turn: running.turn,
         ownsNewAudio: true,
       });
+      running.itemId = this.signalledItem;
       return;
     }
     const itemId = this.acceptUtterance({
@@ -610,6 +619,7 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
     ongoing: boolean,
   ): void {
     segment.claimed = true;
+    segment.itemId = signal.itemId;
     this.unheardSignals.splice(this.unheardSignals.indexOf(signal), 1);
     this.callbacks.onHeard?.(
       signal.itemId,
