@@ -649,6 +649,24 @@ Fixed 2026-10-22 and guarded by `testNativeCallCorrectnessBlockersStayFixed`:
   lane; otherwise it defers the load (`deviceLoadJob`) until every lane has
   finished, disposes the retired objects, then loads. Send and receive
   transport creation wait for that load first (`awaitDeviceLoad`).
+- Android disposes every track it creates exactly once, through the field
+  that holds it, on every path that drops it. The microphone track
+  (`localAudioTrack`, and the route-recovery and noise-suppression
+  replacements) goes through `disposeAudioTrack`, after the lane's queued
+  work. The camera (`localVideoTrack`, `videoSource`, `videoCapturer`,
+  `surfaceTextureHelper`) goes through `releaseLocalCameraCapture()` and the
+  share (`screenVideoTrack` and the rest) through `releaseScreenCapture()`:
+  camera-off by the server, a superseded or failed start, stop share and
+  `cleanup()`. A camera switch keeps its track. A video track and its source
+  are disposed on the main thread, where renderers add and remove sinks,
+  after both the capturer has stopped and the lane has closed the producer.
+- Hang-up never waits on a capture thread. `SurfaceTextureHelper.dispose()`
+  and `ScreenCapturerAndroid.stopCapture()` block their caller on the
+  capture thread, which takes the shared EGL lock that tile rendering also
+  takes, so `CaptureTeardown` stops and disposes capturers and helpers on
+  its own thread. A camera-off keeps its synchronous `stopCapture()` on the
+  main thread, because a restart must run after it; that call waits only
+  while a camera open is in progress.
 - Every input that changes publish settings goes through
   `publishSettingsChanged()` on Android (camera and share settings, video
   quality), which bumps `mediaPublishSettingsRevision`. A video produce in

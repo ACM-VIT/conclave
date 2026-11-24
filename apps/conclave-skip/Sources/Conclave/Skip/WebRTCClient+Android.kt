@@ -71,6 +71,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import java.util.UUID
 
@@ -2563,23 +2564,8 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
                     ScreenShareAndroidLog.warn("produceFence", error)
                 }
             }
-            try {
-                capturer.stopCapture()
-            } catch (_: Throwable) {
-            }
-            try {
-                capturer.dispose()
-            } catch (_: Throwable) {
-            }
             val ownsCapture = screenCapturer === capturer
-            if (ownsCapture) {
-                screenCapturer = null
-                screenSurfaceTextureHelper?.dispose()
-                screenSurfaceTextureHelper = null
-                clearScreenVideoSource()
-                screenVideoTrack?.setEnabled(false)
-                screenVideoTrack = null
-            }
+            if (ownsCapture) releaseScreenCapture()
 
             if (ownsCapture || screenCapturer == null) {
                 ScreenCaptureManager.stopCapture()
@@ -2645,17 +2631,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         screenProducerBandwidthQuality = ConnectionQuality.unknown
         screenProducerBandwidthSignature = null
         evaluateWebcamTopologyTransition()
-        try {
-            screenCapturer?.stopCapture()
-        } catch (_: Throwable) {
-        }
-        screenCapturer?.dispose()
-        screenCapturer = null
-        screenSurfaceTextureHelper?.dispose()
-        screenSurfaceTextureHelper = null
-        clearScreenVideoSource()
-        screenVideoTrack?.setEnabled(false)
-        screenVideoTrack = null
+        releaseScreenCapture()
     }
 
     private enum class ConsumerRegistrationVisibility {
@@ -3472,17 +3448,10 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             videoProducer = null
             videoProducerBandwidthQuality = ConnectionQuality.unknown
             videoProducerBandwidthSignature = null
-            localVideoTrack?.setEnabled(false)
             localVideoTrackWrapper?.isEnabled = false
             localVideoTrackWrapper?.setTrack(null)
             localVideoTrackWrapper = null
-            localVideoTrack = null
-            stopWebcamCapture()
-            videoCapturer?.dispose()
-            videoCapturer = null
-            surfaceTextureHelper?.dispose()
-            surfaceTextureHelper = null
-            clearVideoSource()
+            releaseLocalCameraCapture()
             localVideoEnabled = false
             onLocalVideoEnabledChanged?.invoke(false)
             return true
@@ -3507,16 +3476,9 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         videoProducer = null
         videoProducerBandwidthQuality = ConnectionQuality.unknown
         videoProducerBandwidthSignature = null
-        localVideoTrack?.setEnabled(false)
-        localVideoTrack = null
         localVideoTrackWrapper?.setTrack(null)
         localVideoTrackWrapper = null
-        stopWebcamCapture()
-        videoCapturer?.dispose()
-        videoCapturer = null
-        surfaceTextureHelper?.dispose()
-        surfaceTextureHelper = null
-        clearVideoSource()
+        releaseLocalCameraCapture()
         localVideoEnabled = false
         if (notifyLocalState) {
             onLocalVideoEnabledChanged?.invoke(false)
@@ -3604,16 +3566,56 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         return "screen$screenVideoTrackSequence"
     }
 
-    private fun clearVideoSource() {
-        val source = videoSource ?: return
+    private fun releaseLocalCameraCapture() {
+        localVideoTrackWrapper?.setTrack(null)
+        val capturer = videoCapturer
+        val helper = surfaceTextureHelper
+        val source = videoSource
+        val track = localVideoTrack
+        videoCapturer = null
+        surfaceTextureHelper = null
         videoSource = null
-        releaseAfterSendTransportWork { source.dispose() }
+        localVideoTrack = null
+        isWebcamCaptureActive = false
+        activeWebcamCaptureProfile = null
+        releaseVideoCapture(capturer, helper, source, track)
     }
 
-    private fun clearScreenVideoSource() {
-        val source = screenVideoSource ?: return
+    private fun releaseScreenCapture() {
+        val capturer = screenCapturer
+        val helper = screenSurfaceTextureHelper
+        val source = screenVideoSource
+        val track = screenVideoTrack
+        screenCapturer = null
+        screenSurfaceTextureHelper = null
         screenVideoSource = null
-        releaseAfterSendTransportWork { source.dispose() }
+        screenVideoTrack = null
+        releaseVideoCapture(capturer, helper, source, track)
+    }
+
+    private fun releaseVideoCapture(capturer: VideoCapturer?, helper: SurfaceTextureHelper?, source: VideoSource?, track: VideoTrack?) {
+        if (capturer == null && helper == null && source == null && track == null) return
+        try {
+            track?.setEnabled(false)
+        } catch (_: Throwable) {
+        }
+        val remaining = AtomicInteger(2)
+        val disposeOnceStopped: () -> Unit = {
+            if (remaining.decrementAndGet() == 0) {
+                mainHandler.post {
+                    try {
+                        track?.dispose()
+                    } catch (_: Throwable) {
+                    }
+                    try {
+                        source?.dispose()
+                    } catch (_: Throwable) {
+                    }
+                }
+            }
+        }
+        CaptureTeardown.release(capturer, helper, disposeOnceStopped)
+        releaseAfterSendTransportWork(disposeOnceStopped)
     }
 
     private fun matchesProducer(producer: Producer?, producerId: String?): Boolean {
@@ -5038,22 +5040,6 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         activeConsumerResetLifecycleGeneration = null
         resetWebcamTopologyControl()
         PermissionHelper.cancelPendingCallPermissionRequests()
-        stopWebcamCapture()
-        videoCapturer?.dispose()
-        videoCapturer = null
-        surfaceTextureHelper?.dispose()
-        surfaceTextureHelper = null
-
-        try {
-            screenCapturer?.stopCapture()
-        } catch (_: Throwable) {
-        }
-        screenCapturer?.dispose()
-        screenCapturer = null
-        screenSurfaceTextureHelper?.dispose()
-        screenSurfaceTextureHelper = null
-        clearScreenVideoSource()
-        screenVideoTrack = null
 
         closeSendProducer(audioProducer)
         closeSendProducer(videoProducer)
@@ -5061,6 +5047,8 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         audioProducer = null
         videoProducer = null
         screenProducer = null
+        releaseLocalCameraCapture()
+        releaseScreenCapture()
         audioStartGate.reset()
         videoStartGate.reset()
         intentionalLocalAudioProducerCloseIds.clear()
@@ -5100,9 +5088,6 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         previousReceiveConnectionLossSample = null
         previousReceiveMediaCounterSample = null
 
-        localVideoTrack?.setEnabled(false)
-        localVideoTrack = null
-        clearVideoSource()
         clearLocalAudioCapture()
         audioDeviceModule?.setMicrophoneMute(true)
         audioDeviceModule?.setSpeakerMute(false)

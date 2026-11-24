@@ -62,7 +62,10 @@ private fun HostedVideoTrack(
         if (clearBeforeAttach || track == null) {
             host.clearImage()
         }
-        track?.addSink(host.sink)
+        try {
+            track?.addSink(host.sink)
+        } catch (_: IllegalStateException) {
+        }
         onDispose {
             track?.removeSink(host.sink)
         }
