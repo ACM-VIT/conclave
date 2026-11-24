@@ -179,11 +179,11 @@ interface JoinScreenProps {
 }
 
 const FIELD =
-  "w-full rounded-xl border border-white/10 bg-white/[0.03] px-4 h-12 text-[15px] text-[#fafafa] placeholder:text-[#fafafa]/30 transition-[border-color,background-color] duration-150 focus:border-[#F95F4A]/60 focus:bg-white/[0.05] focus:outline-none disabled:opacity-50";
+  "w-full rounded-xl border border-white/10 bg-white/[0.03] px-4 h-12 short-screen:h-11 text-[15px] text-[#fafafa] placeholder:text-[#fafafa]/30 transition-[border-color,background-color] duration-150 focus:border-[#F95F4A]/60 focus:bg-white/[0.05] focus:outline-none disabled:opacity-50";
 const CTA_PRIMARY =
-  "inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#F95F4A] text-[15px] font-medium text-white transition-[filter] duration-150 hover:brightness-[1.05] disabled:bg-[#232327] disabled:text-[#fafafa]/40 disabled:cursor-not-allowed";
+  "inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl short-screen:h-11 bg-[#F95F4A] text-[15px] font-medium text-white transition-[filter] duration-150 hover:brightness-[1.05] disabled:bg-[#232327] disabled:text-[#fafafa]/40 disabled:cursor-not-allowed";
 const CTA_GHOST =
-  "inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] text-[15px] font-medium text-[#fafafa] transition-colors duration-150 hover:bg-white/[0.08] disabled:opacity-50";
+  "inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl short-screen:h-11 border border-white/10 bg-white/[0.04] text-[15px] font-medium text-[#fafafa] transition-colors duration-150 hover:bg-white/[0.08] disabled:opacity-50";
 const DEBUG_VIDEO_EFFECTS_STORAGE_KEY = "conclave:debug-video-effects";
 
 const getSignInHref = (): string => {
@@ -1347,7 +1347,7 @@ function JoinScreen({
 
   return (
     <div className="relative min-h-screen w-full bg-[#0a0a0b] text-[#fafafa] [&_:is(a,button,input,select,textarea)]:scroll-mt-[calc(env(safe-area-inset-top,0px)+5rem)]">
-      <main className="flex min-h-dvh w-full flex-col items-stretch px-0 pb-6 pt-[calc(env(safe-area-inset-top,0px)+5rem)] sm:items-center sm:justify-center sm:px-4 sm:pb-10 short-screen:pb-4">
+      <main className="flex min-h-dvh w-full flex-col items-stretch px-0 pt-[calc(env(safe-area-inset-top,0px)+5rem)] sm:items-center sm:justify-center sm:px-4 sm:pb-10 short-screen:pb-4">
         <div className="flex w-full flex-1 flex-col overflow-hidden bg-[#0e0e10] sm:block sm:flex-none sm:max-w-4xl sm:rounded-2xl sm:border sm:border-white/10 md:grid md:min-h-[520px] md:grid-cols-2 short-screen:grid short-screen:min-h-0 short-screen:grid-cols-2">
           <div className="relative flex min-h-[calc(76px+9.25rem)] flex-1 flex-col bg-[#121214] sm:aspect-video sm:h-auto sm:flex-none md:aspect-auto md:min-h-[520px] short-screen:aspect-auto short-screen:min-h-[calc(76px+9.25rem)]">
                 <video
@@ -1498,7 +1498,7 @@ function JoinScreen({
                 </div>
               </div>
 
-          <div className="safe-area-pb flex min-h-0 shrink-0 flex-col justify-start gap-3 p-5 pb-10 sm:gap-4 sm:p-8 sm:pb-14 md:min-h-[520px] md:justify-center short-screen:min-h-0 short-screen:gap-2.5 short-screen:pt-6">
+          <div className="flex min-h-0 shrink-0 flex-col justify-start gap-3 p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom,0px))] sm:gap-4 sm:p-8 sm:pb-[calc(2rem+env(safe-area-inset-bottom,0px))] md:min-h-[520px] md:justify-center short-screen:min-h-0 short-screen:gap-2.5 short-screen:p-5 short-screen:pb-[calc(1.25rem+env(safe-area-inset-bottom,0px))]">
             <div className="space-y-1.5">
               <h1
                 className="text-[22px] leading-tight text-[#fafafa]"
