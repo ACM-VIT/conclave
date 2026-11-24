@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it } from "vitest";
 import { RIG_START, startRig, stopRig, type CallRig, type FakeTransport } from "./call-rig";
+import { readJoinTokenUserKey } from "../src/app/lib/join-token-identity";
 
 let rig: CallRig | null = null;
 afterEach(async (context) => {
@@ -201,6 +202,44 @@ describe("moving onto the relay when credentials return", () => {
     expect(rig.moves).toEqual([]);
     expect(rig.recv).toBe(direct);
     expect(relayTransportsAfter(rig, failedAt)).toEqual([]);
+  });
+});
+
+describe("the guest identity across recovery", () => {
+  it("keeps the seat's identity when a credential refresh answers for another one", async () => {
+    rig = await startRig({ identity: "guest-a" });
+    await rig.join();
+    rig.identity = "guest-b";
+    rig.refuseIceRestart = true;
+    rig.failRecv();
+    await rig.advance(3_000);
+    expect(rig.joinRequests.length).toBe(2);
+    expect(rig.recv?.carriedBytes).toBeGreaterThan(0);
+
+    await rig.dropSocket();
+    await rig.advance(6_000);
+
+    expect(rig.identityChanges).toEqual([]);
+    expect(rig.sockets).toHaveLength(2);
+    expect(readJoinTokenUserKey(rig.socket!.authToken!)).toBe("guest-a");
+    expect(rig.recv?.carriedBytes).toBeGreaterThan(0);
+  });
+
+  it("stops a reconnect without an error when its answer names another identity", async () => {
+    rig = await startRig({ identity: "guest-a", ttlSeconds: 30 });
+    await rig.join();
+    await rig.advance(31_000);
+    rig.identity = "guest-b";
+    await rig.dropSocket();
+    await rig.advance(10_000);
+    const asked = rig.joinRequests.length;
+    await rig.advance(30_000);
+
+    expect(rig.identityChanges).toEqual(["guest-b"]);
+    expect(rig.sockets).toHaveLength(1);
+    expect(rig.joinRequests.length).toBe(asked);
+    expect(rig.meetErrors.filter((error) => error?.code === "CONNECTION_FAILED")).toEqual([]);
+    expect(rig.api.reconnectRecoveryStatus).toBeNull();
   });
 });
 

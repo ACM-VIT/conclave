@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createCoalescedRunner } from "../lib/coalesced-run";
 import {
   holdJoinInfo,
+  keepsJoinIdentity,
   planJoinInfo,
   type HeldJoinInfo,
   type JoinGrant,
@@ -7657,11 +7658,17 @@ export function useMeetSocket({
         ) {
           return;
         }
-        heldJoinInfoRef.current = holdJoinInfo(joinInfo, {
-          roomId,
-          grant: { joinMode, userId: user?.id ?? "", isHost: isAdmin },
-          receivedAt: Date.now(),
-        });
+        if (keepsJoinIdentity(heldJoinInfoRef.current, joinInfo)) {
+          heldJoinInfoRef.current = holdJoinInfo(joinInfo, {
+            roomId,
+            grant: { joinMode, userId: user?.id ?? "", isHost: isAdmin },
+            receivedAt: Date.now(),
+          });
+        } else {
+          console.warn(
+            "[Meets] A credential refresh answered for another identity; reconnects keep the seat's join answer.",
+          );
+        }
         applyJoinAnswerIceServers(joinInfo);
       } catch (error) {
         console.warn(

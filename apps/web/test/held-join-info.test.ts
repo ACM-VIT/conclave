@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   getReusableJoinInfo,
   holdJoinInfo,
+  keepsJoinIdentity,
   planJoinInfo,
   type JoinGrant,
 } from "../src/app/lib/held-join-info";
@@ -224,5 +225,24 @@ describe("where a reconnect gets its join info", () => {
     expect(
       planJoinInfo({ held: null, ...wanted, isFirstReconnectAttempt: true }),
     ).toEqual({ source: "fresh", fallback: null });
+  });
+});
+
+describe("keeping the seat's identity when credentials are refreshed", () => {
+  const tokenFor = (claims: object) =>
+    [btoa(JSON.stringify({ alg: "HS256" })), btoa(JSON.stringify(claims)), "signature"].join(".");
+  const seat = held({ joinInfo: { token: tokenFor({ userId: "guest-a" }), sfuUrl: "https://sfu" } });
+
+  it("keeps an answer for the same identity", () => {
+    expect(keepsJoinIdentity(seat, { token: tokenFor({ userId: "guest-a" }) })).toBe(true);
+  });
+
+  it("refuses an answer that names another identity", () => {
+    expect(keepsJoinIdentity(seat, { token: tokenFor({ userId: "guest-b" }) })).toBe(false);
+  });
+
+  it("takes an answer when there is nothing held or no identity can be read", () => {
+    expect(keepsJoinIdentity(null, { token: tokenFor({ userId: "guest-b" }) })).toBe(true);
+    expect(keepsJoinIdentity(seat, { token: "not-a-token" })).toBe(true);
   });
 });

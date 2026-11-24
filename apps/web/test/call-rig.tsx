@@ -4,6 +4,7 @@ import { vi } from "vitest";
 import { useMeetRefs } from "../src/app/hooks/useMeetRefs";
 import { useMeetSocket } from "../src/app/hooks/useMeetSocket";
 import { requestJoinInfo } from "../src/app/lib/join-info-request";
+import { readJoinTokenUserKey } from "../src/app/lib/join-token-identity";
 
 type Listener = (...args: never[]) => unknown;
 type Ack = (response: unknown) => void;
@@ -242,6 +243,7 @@ export class FakeTransport extends Emitter {
 
 type FakeSocket = {
   id: string;
+  authToken: string | null;
   connected: boolean;
   on: (event: string, listener: Listener) => FakeSocket;
   off: (event: string, listener: Listener) => FakeSocket;
@@ -253,6 +255,7 @@ type FakeSocket = {
 };
 
 export type RigOptions = {
+  identity?: string;
   publish?: boolean;
   directWorks?: boolean;
   ttlSeconds?: number;
@@ -279,6 +282,10 @@ export class CallRig {
   holdProducersMs = 0;
   mediaFlows = true;
   outgoingDropped = false;
+  identity: string | undefined;
+  seatedAs: string | null = null;
+  identityChanges: string[] = [];
+  meetErrors: Array<{ code?: string } | null> = [];
   publish: boolean;
   consumerIds = new Map<string, string>();
   moves: Array<{ at: number; closing: FakeTransport | undefined; bytes: number }> = [];
@@ -293,6 +300,7 @@ export class CallRig {
 
   constructor(options: RigOptions = {}) {
     this.publish = options.publish ?? false;
+    this.identity = options.identity;
     this.directWorks = options.directWorks ?? true;
     this.ttlSeconds = options.ttlSeconds ?? 3600;
     this.relayConnectMs = options.relayConnectMs ?? 200;
@@ -413,7 +421,12 @@ export class CallRig {
   }
 
   private token() {
-    const claims = btoa(JSON.stringify({ exp: Math.floor((RIG_START + 24 * 3600_000) / 1000) }));
+    const claims = btoa(
+      JSON.stringify({
+        exp: Math.floor((RIG_START + 24 * 3600_000) / 1000),
+        ...(this.identity ? { userId: this.identity } : {}),
+      }),
+    );
     return `header.${claims}.signature`;
   }
 
@@ -523,10 +536,11 @@ export class CallRig {
     }
   }
 
-  io = () => {
+  io = (_url?: string, options?: { auth?: { token?: string } }) => {
     const listeners = new Emitter();
     const socket: FakeSocket = {
       id: `socket-${this.sockets.length + 1}`,
+      authToken: options?.auth?.token ?? null,
       connected: false,
       on: (event, listener) => {
         listeners.on(event, listener);
@@ -694,6 +708,19 @@ export class CallRig {
       mediaQualitySettingsRef: { current: {} },
       updateVideoQualityRef: { current: async () => {} },
       requestMediaPermissions: async () => null,
+      setMeetError: (error: { code?: string } | null) => {
+        this.meetErrors.push(error);
+      },
+      adoptJoinIdentity: (token: string) => {
+        const issued = readJoinTokenUserKey(token);
+        if (!this.seatedAs) {
+          this.seatedAs = issued;
+          return false;
+        }
+        if (!issued || issued === this.seatedAs) return false;
+        this.identityChanges.push(issued);
+        return true;
+      },
       chat: {
         setChatMessages: noop,
         setChatOverlayMessages: noop,

@@ -5,6 +5,7 @@ export type JoinGrant = {
   isHost: boolean;
 };
 
+import { readJoinTokenUserKey } from "./join-token-identity";
 import { isRelayDueForRefresh, splitIceServersByType } from "./relay-credentials";
 
 type HoldableJoinInfo = {
@@ -78,6 +79,15 @@ export const holdJoinInfo = <T extends HoldableJoinInfo>(
     tokenExpiresAt: readTokenExpiryMs(joinInfo.token),
     relayExpiresAt: hasRelay ? (stampedDeadline ?? deadlineFromReceipt) : null,
   };
+};
+
+export const keepsJoinIdentity = (
+  held: { joinInfo: { token: string } } | null,
+  answer: { token: string },
+): boolean => {
+  const heldKey = held ? readJoinTokenUserKey(held.joinInfo.token) : null;
+  const answerKey = readJoinTokenUserKey(answer.token);
+  return heldKey === null || answerKey === null || heldKey === answerKey;
 };
 
 // A participant token still works after a promotion, because the SFU makes a
