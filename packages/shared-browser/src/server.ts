@@ -42,7 +42,7 @@ const heldBySharedBrowser = async (host: string, port: number): Promise<boolean>
         const address = host.includes(":") ? `[${host}]` : host;
         const response = await fetch(`http://${address}:${port}/health`, { signal: AbortSignal.timeout(3_000) });
         const body: unknown = await response.json();
-        return isHeldByPreviousContainer(body, port, previousManagedContainer());
+        return isHeldByPreviousContainer(body, { host, port }, previousManagedContainer());
     } catch {
         return false;
     }

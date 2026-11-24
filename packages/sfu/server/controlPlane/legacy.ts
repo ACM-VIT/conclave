@@ -467,6 +467,9 @@ const recoveredRecords = (domain: LegacyDomain, text: string, path: string): Leg
   }
 };
 
+export const readLegacyFile = (domain: LegacyDomain, text: string, where: string): HashedLegacyRecord[] =>
+  recoveredRecords(domain, text, where).map(hashed);
+
 const sha256 = (text: string): string => createHash("sha256").update(text).digest("hex");
 
 const readClaimed = (path: string): string | null => {

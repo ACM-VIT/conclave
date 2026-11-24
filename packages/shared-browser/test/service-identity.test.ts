@@ -80,18 +80,24 @@ test("/health names the shared browser service and the deploy it came from, heal
 test("--check-config accepts a port held only by the browser service the deploy is replacing", async () => {
     const engine = await fakeDockerEngine({ "conclave-browser:latest": hardenedImage });
     try {
-        type Previous = { ports?: "this" | "another"; deployId?: string };
+        type Previous = { address?: "this" | "wildcard" | "moved" | "another port"; deployId?: string };
         const check = async (holder: { body: unknown; status?: number } | undefined, previous?: Previous) => {
             const port = await freePort();
             const release = holder ? await holdPort(port, holder.body, holder.status) : async () => undefined;
-            const previousPorts = previous?.ports === "this" ? String(port) : previous?.ports === "another" ? String(await freePort()) : "";
+            const addresses = {
+                this: `127.0.0.1:${port}`,
+                wildcard: `0.0.0.0:${port}`,
+                moved: `10.0.4.7:${port}`,
+                "another port": `127.0.0.1:${await freePort()}`,
+            };
             try {
                 return await runService(
                     {
+                        BROWSER_SERVICE_HOST: "127.0.0.1",
                         BROWSER_SERVICE_PORT: String(port),
                         DOCKER_HOST: engine.host,
                         BROWSER_SERVICE_PREVIOUS_CONTAINER: previous ? "4f2c1d" : "",
-                        BROWSER_SERVICE_PREVIOUS_PORTS: previousPorts,
+                        BROWSER_SERVICE_PREVIOUS_ADDRESSES: previous?.address ? addresses[previous.address] : "",
                         BROWSER_SERVICE_PREVIOUS_DEPLOY_ID: previous?.deployId ?? "",
                     },
                     ["--check-config"],
@@ -107,31 +113,37 @@ test("--check-config accepts a port held only by the browser service the deploy 
 
         const outcomes = {
             "free port": (await check(undefined)).code,
-            "current service, the replaced container's deploy id, though it reports another port": (await check(current, { ports: "another", deployId: "older" })).code,
-            "current service, replaced container on this port": (await check(current, { ports: "this" })).code,
-            "earlier service, unhealthy, replaced container on this port": (await check(earlierUnhealthy, { ports: "this" })).code,
-            "earlier service, healthy, replaced container on this port": (await check(earlierHealthy, { ports: "this" })).code,
-            "current service, no managed container": (await check(current)).code,
-            "current service, another deploy id, replaced container on another port": (await check(current, { ports: "another", deployId: "newer" })).code,
-            "earlier service shape, replaced container on another port": (await check(earlierUnhealthy, { ports: "another" })).code,
+            "current service with the replaced container's deploy id, bound elsewhere": (await check(current, { address: "moved", deployId: "older" })).code,
+            "current service, replaced container bound to this address": (await check(current, { address: "this" })).code,
+            "earlier service, unhealthy, replaced container bound to this address": (await check(earlierUnhealthy, { address: "this" })).code,
+            "earlier service, healthy, replaced container bound to every address on this port": (await check(earlierHealthy, { address: "wildcard" })).code,
+            "earlier service, unhealthy, replaced container bound to every address on this port": (await check(earlierUnhealthy, { address: "wildcard" })).code,
+            "earlier service shape, replaced container bound to another host on this port": (await check(earlierUnhealthy, { address: "moved" })).code,
+            "current service, another deploy id, replaced container bound to another host": (await check(current, { address: "moved", deployId: "newer" })).code,
+            "earlier service shape, replaced container on another port": (await check(earlierUnhealthy, { address: "another port" })).code,
+            "earlier service shape, no address or deploy id for the replaced container": (await check(earlierUnhealthy, {})).code,
             "earlier service shape, no managed container": (await check(earlierUnhealthy)).code,
-            "SFU, replaced container on this port": (await check(sfu, { ports: "this" })).code,
-            "empty answer, replaced container on this port": (await check({ body: {} }, { ports: "this" })).code,
+            "current service, no managed container": (await check(current)).code,
+            "SFU, replaced container bound to this address": (await check(sfu, { address: "this" })).code,
+            "empty answer, replaced container bound to this address": (await check({ body: {} }, { address: "this" })).code,
         };
         assert.deepEqual(outcomes, {
             "free port": 0,
-            "current service, the replaced container's deploy id, though it reports another port": 0,
-            "current service, replaced container on this port": 0,
-            "earlier service, unhealthy, replaced container on this port": 0,
-            "earlier service, healthy, replaced container on this port": 0,
-            "current service, no managed container": 1,
-            "current service, another deploy id, replaced container on another port": 1,
+            "current service with the replaced container's deploy id, bound elsewhere": 0,
+            "current service, replaced container bound to this address": 0,
+            "earlier service, unhealthy, replaced container bound to this address": 0,
+            "earlier service, healthy, replaced container bound to every address on this port": 0,
+            "earlier service, unhealthy, replaced container bound to every address on this port": 0,
+            "earlier service shape, replaced container bound to another host on this port": 1,
+            "current service, another deploy id, replaced container bound to another host": 1,
             "earlier service shape, replaced container on another port": 1,
+            "earlier service shape, no address or deploy id for the replaced container": 1,
             "earlier service shape, no managed container": 1,
-            "SFU, replaced container on this port": 1,
-            "empty answer, replaced container on this port": 1,
+            "current service, no managed container": 1,
+            "SFU, replaced container bound to this address": 1,
+            "empty answer, replaced container bound to this address": 1,
         });
-        const refused = await check(earlierUnhealthy, { ports: "another" });
+        const refused = await check(earlierUnhealthy, { address: "moved" });
         assert.match(refused.output, /refused to start[\s\S]*BROWSER_SERVICE_PORT=\d+[\s\S]*not the shared browser service this deploy replaces/);
     } finally {
         await engine.close();

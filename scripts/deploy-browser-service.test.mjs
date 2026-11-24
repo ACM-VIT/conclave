@@ -65,7 +65,7 @@ const healthBodies = {
 const deploy = async (
   shell,
   flags = [],
-  { checkStatus = 0, answers = "deployed", previousContainer = "", previousRunning = "true", previousEnv = "", previousNetwork = "host", previousBindings = "" } = {},
+  { checkStatus = 0, answers = "deployed", previousContainer = "", previousRunning = "true", previousEnv = "", previousNetwork = "host", previousBindings = "", serviceHost = "127.0.0.1" } = {},
 ) => {
   const root = mkdtempSync(join(tmpdir(), "deploy-browser-service-"));
   const deployIdFile = join(root, "deploy-id");
@@ -97,7 +97,7 @@ const deploy = async (
       FAKE_PREVIOUS_ENV: previousEnv,
       FAKE_PREVIOUS_NETWORK: previousNetwork,
       FAKE_PREVIOUS_BINDINGS: previousBindings,
-      BROWSER_SERVICE_HOST: "127.0.0.1",
+      BROWSER_SERVICE_HOST: serviceHost,
       BROWSER_SERVICE_PORT: String(health.address().port),
     });
     return { ...result, calls: readFileSync(log, "utf8").trim().split("\n").filter(Boolean) };
@@ -164,22 +164,28 @@ for (const shell of shells) {
     assert.equal(previous(none.calls), "", none.calls.join("\n"));
   });
 
-  test(`${shell.name}: tells the check the port and deploy id of the container it is replacing`, async () => {
+  test(`${shell.name}: tells the check the address and deploy id the replaced container holds, not the ones this deploy configures`, async () => {
     const passed = (calls, name) => calls.map((call) => call.match(new RegExp(` -e ${name}=(\\S*) `))?.[1]).find((value) => value !== undefined);
     const hostNetwork = await deploy(shell, ["--check-config"], {
       previousContainer: "4f2c1d",
-      previousEnv: "PATH=/usr/bin\\nBROWSER_SERVICE_PORT=3999\\nBROWSER_SERVICE_DEPLOY_ID=1a2b3c\\n",
+      previousEnv: "PATH=/usr/bin\\nBROWSER_SERVICE_HOST=127.0.0.1\\nBROWSER_SERVICE_PORT=3999\\nBROWSER_SERVICE_DEPLOY_ID=1a2b3c\\n",
     });
     assert.equal(hostNetwork.status, 0, hostNetwork.stderr);
-    assert.equal(passed(hostNetwork.calls, "BROWSER_SERVICE_PREVIOUS_PORTS"), "3999", hostNetwork.calls.join("\n"));
+    assert.equal(passed(hostNetwork.calls, "BROWSER_SERVICE_PREVIOUS_ADDRESSES"), "127.0.0.1:3999", hostNetwork.calls.join("\n"));
     assert.equal(passed(hostNetwork.calls, "BROWSER_SERVICE_PREVIOUS_DEPLOY_ID"), "1a2b3c", hostNetwork.calls.join("\n"));
-    const defaultPort = await deploy(shell, ["--check-config"], { previousContainer: "4f2c1d", previousEnv: "PATH=/usr/bin\\n" });
-    assert.equal(passed(defaultPort.calls, "BROWSER_SERVICE_PREVIOUS_PORTS"), "3040", defaultPort.calls.join("\n"));
-    assert.equal(passed(defaultPort.calls, "BROWSER_SERVICE_PREVIOUS_DEPLOY_ID"), "", defaultPort.calls.join("\n"));
-    const published = await deploy(shell, ["--check-config"], { previousContainer: "4f2c1d", previousNetwork: "bridge", previousBindings: "4100,4101," });
-    assert.equal(passed(published.calls, "BROWSER_SERVICE_PREVIOUS_PORTS"), "4100,4101", published.calls.join("\n"));
+    const moved = await deploy(shell, ["--check-config"], {
+      serviceHost: "10.0.4.7",
+      previousContainer: "4f2c1d",
+      previousEnv: "BROWSER_SERVICE_HOST=127.0.0.1\\nBROWSER_SERVICE_PORT=3040\\n",
+    });
+    assert.equal(passed(moved.calls, "BROWSER_SERVICE_PREVIOUS_ADDRESSES"), "127.0.0.1:3040", moved.calls.join("\n"));
+    const olderImage = await deploy(shell, ["--check-config"], { previousContainer: "4f2c1d", previousEnv: "PATH=/usr/bin\\n" });
+    assert.equal(passed(olderImage.calls, "BROWSER_SERVICE_PREVIOUS_ADDRESSES"), "0.0.0.0:3040", olderImage.calls.join("\n"));
+    assert.equal(passed(olderImage.calls, "BROWSER_SERVICE_PREVIOUS_DEPLOY_ID"), "", olderImage.calls.join("\n"));
+    const published = await deploy(shell, ["--check-config"], { previousContainer: "4f2c1d", previousNetwork: "bridge", previousBindings: ":4100,10.0.0.5:4101," });
+    assert.equal(passed(published.calls, "BROWSER_SERVICE_PREVIOUS_ADDRESSES"), ":4100,10.0.0.5:4101", published.calls.join("\n"));
     const none = await deploy(shell, ["--check-config"]);
-    assert.equal(passed(none.calls, "BROWSER_SERVICE_PREVIOUS_PORTS"), "", none.calls.join("\n"));
+    assert.equal(passed(none.calls, "BROWSER_SERVICE_PREVIOUS_ADDRESSES"), "", none.calls.join("\n"));
   });
 
   test(`${shell.name}: --skip-runtime-image checks the image already on the host`, async () => {
