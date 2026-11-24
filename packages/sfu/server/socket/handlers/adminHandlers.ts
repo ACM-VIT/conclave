@@ -22,6 +22,7 @@ import {
   toPendingUserSnapshots,
   toRoomSnapshot,
 } from "../../admin/controlPlane.js";
+import { emitToHost } from "../../admin/hostOnlyEvents.js";
 import {
   decisionRecordFull,
   includesSuperAdminUserKey,
@@ -353,13 +354,13 @@ const activatePromotedAdmin = (
   promotedContext.currentRoom = context.currentRoom;
   registerAdminHandlers(promotedContext, { roomId });
 
-  promoted.socket.emit("pendingUsersSnapshot", {
+  emitToHost(promoted, "pendingUsersSnapshot", {
     users: toPendingUserSnapshots(context.currentRoom),
     roomId,
   });
   emitChatHistorySnapshot(promoted.socket, context.currentRoom);
 
-  promoted.socket.emit("admin:roomStateChanged", {
+  emitToHost(promoted, "admin:roomStateChanged", {
     roomId,
     snapshot: toRoomSnapshot(context.currentRoom),
   });
