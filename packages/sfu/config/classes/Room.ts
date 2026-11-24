@@ -441,6 +441,7 @@ export class Room {
   private restorerLapseTimer: NodeJS.Timeout | null = null;
   private lostCallTimer: NodeJS.Timeout | null = null;
   private openingDeadlineTimer: NodeJS.Timeout | null = null;
+  private openingDeadlineAt = 0;
   private meetingParticipantCount = 0;
   private currentWebcamCodecPolicy: WebcamCodecPolicy =
     buildWebcamCodecPolicy("vp8", 0);
@@ -3729,7 +3730,12 @@ export class Room {
   }
 
   armOpeningDeadline(delayMs: number, onDeadline: () => void): void {
+    this.openingDeadlineAt = Date.now() + delayMs;
     this.armLifecycleTimer("openingDeadlineTimer", delayMs, onDeadline);
+  }
+
+  get openingDeadline(): number | null {
+    return this.openingDeadlineTimer ? this.openingDeadlineAt : null;
   }
 
   private armLifecycleTimer(slot: LifecycleTimer, delayMs: number, fire: () => void): void {

@@ -26,12 +26,20 @@ import {
 import { registerDisconnectHandlers } from "../server/socket/handlers/disconnectHandlers.js";
 import { registerJoinRoomHandler } from "../server/socket/handlers/joinRoom.js";
 import { forceDrainRooms, handOffRooms } from "../server/serverShutdown.js";
+import { createScheduledWebinar } from "../server/scheduledWebinars.js";
+import { ensureWebinarRoomConfig } from "../server/scheduledWebinarScheduler.js";
 import { createSfuState, type SfuState } from "../server/state.js";
 import type { ScheduledMeeting } from "../types.js";
 import { Logger } from "../utilities/loggers.js";
 
 const CODE = "abc-mnop-xyz";
 const CHANNEL = `conclave:${CODE}`;
+const OTHER_CODE = "zzz-yyyy-xxx";
+const OTHER_CHANNEL = `conclave:${OTHER_CODE}`;
+const GRACES_MS = [0, 15_000, 120_000];
+const WEBINAR_SLUG = "model-webinar";
+const WEBINAR_CODE = "right-code";
+type WebinarGate = "code" | "locked" | "full";
 const SEQUENCES = Number(process.env.ROOM_LIFECYCLE_SEQUENCES ?? "300");
 const FIRST_SEED = Number(process.env.ROOM_LIFECYCLE_FIRST_SEED ?? "1");
 const STEPS_PER_SEQUENCE = 32;
@@ -67,6 +75,7 @@ type Peer = {
   wire: { connected: boolean };
   handlers: Map<string, Handler>;
   events: Array<{ event: string; payload: unknown }>;
+  holdLeave: boolean;
 };
 type Sfu = {
   generation: number;
@@ -74,6 +83,8 @@ type Sfu = {
   io: SocketIOServer;
   channels: Map<string, Set<Peer>>;
   peers: Set<Peer>;
+  heldLeaves: Array<() => void>;
+  membership: Map<Room, number>;
   stopRefresh: () => void;
 };
 type Tab = {
@@ -82,6 +93,7 @@ type Tab = {
   context: ConnectionContext;
   generation: number;
   approvalsSeen: number;
+  toldSince: number;
 };
 type Actor = {
   name: ActorName;
@@ -94,6 +106,7 @@ type Actor = {
 type JoinAck = { status?: string; error?: string; roomRecoveryPass?: string };
 type Completion = {
   actor: Actor;
+  channelId: string;
   response: JoinAck;
   admin: boolean;
   incarnation: string | null;
@@ -129,7 +142,9 @@ type HostAction =
   | "block"
   | "blockStay"
   | "revoke"
-  | "allow";
+  | "allow"
+  | "lock"
+  | "unlock";
 type Shutdown = "drain" | "stop" | "worker" | "handoff";
 type Step =
   | { kind: "open"; actor: ActorName; pass: boolean; hold: boolean }
@@ -145,7 +160,10 @@ type Step =
   | { kind: "restart" }
   | { kind: "shutdown"; how: Shutdown; leaver: ActorName | null; noticeMs?: number }
   | { kind: "tick"; ms: number }
-  | { kind: "untilDeadline"; beforeMs: number };
+  | { kind: "untilDeadline"; beforeMs: number }
+  | { kind: "switch"; actor: ActorName; overtaken: null | "disconnect" | "newer" }
+  | { kind: "attend"; code: "none" | "wrong" | "right" }
+  | { kind: "expect"; actor: ActorName; tab: "main" | "second"; role: "host" | "participant" | "out" };
 
 type World = {
   random: () => number;
@@ -163,6 +181,7 @@ type World = {
   firstSeen: Map<string, number>;
   openers: Map<string, Set<string>>;
   tabs: number;
+  webinar: WebinarGate | null;
 };
 
 const loggedErrors: string[] = [];
@@ -205,7 +224,7 @@ const makePeer = (sfu: Sfu, id: string, user: SfuAuthPayload): Peer => {
   const handlers = new Map<string, Handler>();
   const events: Peer["events"] = [];
   const wire = { connected: true };
-  const peer = { handlers, events, wire } as Peer;
+  const peer = { handlers, events, wire, holdLeave: false } as Peer;
   sfu.peers.add(peer);
   const socket = {
     id,
@@ -228,8 +247,18 @@ const makePeer = (sfu: Sfu, id: string, user: SfuAuthPayload): Peer => {
     },
     leave: (channel: string) => {
       sfu.channels.get(channel)?.delete(peer);
+      if (!peer.holdLeave) return undefined;
+      peer.holdLeave = false;
+      return new Promise<void>((resolve) => sfu.heldLeaves.push(resolve));
     },
-    to: () => ({ emit: () => true }),
+    to: (channel: string) => ({
+      emit: (event: string, payload: unknown) => {
+        for (const member of sfu.channels.get(channel) ?? []) {
+          if (member !== peer) member.events.push({ event, payload });
+        }
+        return true;
+      },
+    }),
   };
   peer.socket = socket as unknown as Socket;
   return peer;
@@ -237,7 +266,14 @@ const makePeer = (sfu: Sfu, id: string, user: SfuAuthPayload): Peer => {
 
 const makeIo = (sfu: Sfu): SocketIOServer =>
   ({
-    to: () => ({ emit: () => true }),
+    to: (channel: string) => ({
+      emit: (event: string, payload: unknown) => {
+        for (const member of sfu.channels.get(channel) ?? []) {
+          member.events.push({ event, payload });
+        }
+        return true;
+      },
+    }),
     in: (channel: string) => ({
       disconnectSockets: () => {
         for (const peer of [...(sfu.channels.get(channel) ?? [])]) {
@@ -297,18 +333,67 @@ const boot = async (world: World): Promise<Sfu> => {
     state,
     channels: new Map(),
     peers: new Set(),
+    heldLeaves: [],
+    membership: new Map(),
     io: undefined as unknown as SocketIOServer,
     stopRefresh: () => undefined,
   };
   sfu.io = makeIo(sfu);
   sfu.stopRefresh = startRoomRecoveryPassRefresh(state, config.sfuSecret);
+  if (world.webinar) scheduleWebinar(state, world.webinar);
   return sfu;
+};
+
+const scheduleWebinar = (state: SfuState, gate: WebinarGate): void => {
+  const { webinar, inviteCodeHash } = createScheduledWebinar(
+    state.scheduledWebinars,
+    {
+      title: "Model webinar",
+      scheduledStartAt: Date.now(),
+      hostEmail: USERS.owner.email!,
+      linkSlug: WEBINAR_SLUG,
+      publicAccess: true,
+      inviteCode: gate === "code" ? WEBINAR_CODE : null,
+    },
+    { clientId: "conclave", createdBy: USERS.owner.email!, defaultHostEmail: USERS.owner.email! },
+  );
+  webinar.status = "live";
+  const roomConfig = ensureWebinarRoomConfig(state, webinar, inviteCodeHash);
+  if (gate === "locked") roomConfig.locked = true;
+  if (gate === "full") roomConfig.maxAttendees = 0;
+};
+
+const attend = (world: World, code: "none" | "wrong" | "right"): void => {
+  const sfu = world.sfu;
+  world.tabs += 1;
+  const user = {
+    userId: `guest-attendee-${world.tabs}`,
+    clientId: "conclave",
+    sessionId: `w${world.tabs}`,
+    joinMode: "webinar_attendee",
+  } satisfies SfuAuthPayload;
+  const peer = makePeer(sfu, `attendee-tab-${world.tabs}`, user);
+  const context = createConnectionContext(sfu.io, peer.socket, sfu.state);
+  setSocketContext(peer.socket, context);
+  registerJoinRoomHandler(context);
+  registerDisconnectHandlers(context);
+  const payload = {
+    roomId: WEBINAR_SLUG,
+    sessionId: user.sessionId,
+    ...(code === "none" ? {} : { webinarInviteCode: code === "right" ? WEBINAR_CODE : "wrong-code" }),
+  };
+  void Promise.resolve(peer.handlers.get("joinRoom")?.(payload, () => undefined)).catch(
+    (error: unknown) => {
+      world.failures.push(`an attendee's join threw: ${String(error)}`);
+    },
+  );
 };
 
 const createWorld = async (options: {
   random: () => number;
   follows: () => boolean;
   scheduled: boolean;
+  webinar?: WebinarGate | null;
 }): Promise<World> => {
   const actors = Object.fromEntries(
     ACTOR_NAMES.map((name) => [
@@ -345,6 +430,7 @@ const createWorld = async (options: {
     firstSeen: new Map(),
     openers: new Map(),
     tabs: 0,
+    webinar: options.webinar ?? null,
   };
   world.sfu = await boot(world);
   if (options.scheduled) {
@@ -368,6 +454,15 @@ const createWorld = async (options: {
     await state.scheduledMeetingPersistence?.save([...state.scheduledMeetings.byId.values()]);
   }
   world.trace.push(options.scheduled ? "a booked code" : "a code nobody booked");
+  if (world.webinar) {
+    world.trace.push(
+      {
+        code: "and a live webinar that asks for an invite code",
+        locked: "and a live webinar that is locked",
+        full: "and a live webinar that is full",
+      }[world.webinar],
+    );
+  }
   return world;
 };
 
@@ -433,7 +528,14 @@ const openTab = (world: World, actor: Actor, which: "main" | "second" = "main"):
   setSocketContext(peer.socket, context);
   registerJoinRoomHandler(context);
   registerDisconnectHandlers(context);
-  const tab: Tab = { user, peer, context, generation: sfu.generation, approvalsSeen: 0 };
+  const tab: Tab = {
+    user,
+    peer,
+    context,
+    generation: sfu.generation,
+    approvalsSeen: 0,
+    toldSince: 0,
+  };
   if (which === "second") actor.second = tab;
   else actor.tab = tab;
   return tab;
@@ -442,8 +544,15 @@ const openTab = (world: World, actor: Actor, which: "main" | "second" = "main"):
 const approvalsOf = (tab: Tab): number =>
   tab.peer.events.filter(({ event }) => event === "joinApproved").length;
 
-const startJoin = (world: World, actor: Actor, tab: Tab, presentPass: boolean): void => {
+const startJoin = (
+  world: World,
+  actor: Actor,
+  tab: Tab,
+  presentPass: boolean,
+  roomId: string = CODE,
+): void => {
   tab.approvalsSeen = approvalsOf(tab);
+  const toldFrom = tab.peer.events.length;
   const handler = tab.peer.handlers.get("joinRoom");
   if (!handler) throw new Error(`${actor.name}'s tab has no join handler`);
   let answered = false;
@@ -454,9 +563,11 @@ const startJoin = (world: World, actor: Actor, tab: Tab, presentPass: boolean): 
       return;
     }
     answered = true;
+    if (response.status === "joined") tab.toldSince = toldFrom;
     if (response.roomRecoveryPass) actor.pass = response.roomRecoveryPass;
     world.completions.push({
       actor,
+      channelId: `conclave:${roomId}`,
       response,
       admin: tab.context.currentClient instanceof Admin,
       incarnation: tab.context.currentRoom?.incarnationId ?? null,
@@ -465,7 +576,7 @@ const startJoin = (world: World, actor: Actor, tab: Tab, presentPass: boolean): 
     });
   };
   const payload = {
-    roomId: CODE,
+    roomId,
     sessionId: tab.user.sessionId,
     ...(presentPass && actor.pass ? { roomRecoveryPass: actor.pass } : {}),
   };
@@ -550,7 +661,25 @@ const describeStep = (step: Step): string => {
         ? `held room openings finish as ${step.alongside} joins`
         : "held room openings finish";
     case "host":
-      return `${step.by} ${step.action}s ${step.target}`;
+      return step.action === "lock" || step.action === "unlock"
+        ? `${step.by} ${step.action}s the room`
+        : `${step.by} ${step.action}s ${step.target}`;
+    case "expect":
+      return `  (expect ${step.actor}'s ${step.tab} tab to be ${step.role === "out" ? "out of the meeting" : `a ${step.role}`})`;
+    case "attend":
+      return {
+        none: "someone opens the webinar link",
+        wrong: "someone opens the webinar link with a wrong invite code",
+        right: "someone opens the webinar link with its invite code",
+      }[step.code];
+    case "switch":
+      return `${step.actor}'s tab switches to the other meeting${
+        step.overtaken === "disconnect"
+          ? ", and the tab drops while it leaves"
+          : step.overtaken === "newer"
+            ? ", and the tab asks again while it leaves"
+            : ""
+      }`;
     case "end":
       return `${step.by} ends the meeting for everyone`;
     case "restart":
@@ -595,6 +724,13 @@ const performHostAction = async (
   const room = liveRoom(world);
   if (!room) return;
   const seat = seatOf(room, target.key);
+  const seatedTabs = [target.tab, target.second].filter(
+    (tab): tab is Tab =>
+      tab !== null &&
+      tab.generation === world.sfu.generation &&
+      tab.context.currentRoom === room &&
+      room.clients.has(tab.context.currentClient?.id ?? ""),
+  );
   const answer = await (async () => {
     switch (step.action) {
       case "admit":
@@ -615,6 +751,9 @@ const performHostAction = async (
         return hostAct(world, by, "admin:revokeAllowedUsers", { userKeys: [target.key] });
       case "allow":
         return hostAct(world, by, "admin:allowUsers", { userKeys: [target.key] });
+      case "lock":
+      case "unlock":
+        return hostAct(world, by, "lockRoom", { locked: step.action === "lock" });
     }
   })();
   if (!answer?.success) {
@@ -622,12 +761,9 @@ const performHostAction = async (
     return;
   }
   if (step.action === "kick" || step.action === "block") {
-    for (const tab of [target.tab, target.second]) {
-      if (!tab || tab.generation !== world.sfu.generation) continue;
-      const seat = tab.context.currentClient?.id;
-      if (!seat || !room.clients.has(seat) || tab.context.currentRoom !== room) continue;
+    for (const tab of seatedTabs) {
       if (!tab.peer.events.some(({ event }) => event === "kicked")) {
-        world.failures.push(`${target.name}'s other tab was not told they were removed`);
+        world.failures.push(`${target.name}'s tab was not told they were removed`);
       }
     }
     if (world.shadow.phase.kind === "running" && !ownsCode(target, room.ownerEmail)) {
@@ -789,12 +925,46 @@ const shutDown = async (world: World, step: Extract<Step, { kind: "shutdown" }>)
   await callIsLost(world, snapshot, cause);
 };
 
+const roomsOf = (world: World): Room[] => [...world.sfu.state.rooms.values()];
+
+type Roles = Map<Room, Map<string, boolean>>;
+
+const rolesOf = (world: World): Roles => {
+  const roles: Roles = new Map();
+  for (const room of roomsOf(world)) {
+    const seats = new Map<string, boolean>();
+    for (const [seatId, client] of room.clients) {
+      if (client.isObserver || client.isWebinarAttendee) continue;
+      seats.set(seatId, client instanceof Admin);
+    }
+    roles.set(room, seats);
+  }
+  return roles;
+};
+
+const latestTold = (
+  tab: Tab,
+  event: string,
+  roomId: string,
+): { index: number; payload: Record<string, unknown> } | null => {
+  for (let index = tab.peer.events.length - 1; index >= tab.toldSince; index -= 1) {
+    const entry = tab.peer.events[index];
+    const payload = entry.payload as Record<string, unknown> | undefined;
+    if (entry.event === event && payload?.roomId === roomId) return { index, payload };
+  }
+  return null;
+};
+
 const perform = async (world: World, step: Step): Promise<void> => {
   world.trace.push(describeStep(step));
   const before = liveRoom(world);
   const beforeIncarnation = before?.incarnationId ?? null;
   const beforeHosts = hostKeys(before);
   const beforeSeated = new Set(before?.clients.keys() ?? []);
+  const beforeLiveHosts = before ? seatedHostKeys(before) : new Set<string>();
+  const beforeRoles = rolesOf(world);
+  const beforeMembership = new Map(world.sfu.membership);
+  const beforeGeneration = world.generation;
   switch (step.kind) {
     case "second": {
       const actor = world.actors[step.actor];
@@ -854,6 +1024,37 @@ const perform = async (world: World, step: Step): Promise<void> => {
     case "tick":
       await vi.advanceTimersByTimeAsync(step.ms);
       break;
+    case "attend":
+      attend(world, step.code);
+      break;
+    case "expect": {
+      const actor = world.actors[step.actor];
+      const tab = step.tab === "main" ? liveTab(world, actor) : liveSecondTab(world, actor);
+      const room = liveRoom(world);
+      const client = tab?.context.currentClient;
+      const seated = Boolean(room && tab?.context.currentRoom === room && client && room.getClient(client.id) === client);
+      const role = !seated ? "out" : client instanceof Admin ? "host" : "participant";
+      if (role !== step.role) {
+        world.failures.push(`${actor.name}'s ${step.tab} tab is ${role === "out" ? "out of the meeting" : `a ${role}`}, not ${step.role === "out" ? "out" : `a ${step.role}`}`);
+      }
+      break;
+    }
+    case "switch": {
+      const actor = world.actors[step.actor];
+      const tab = liveTab(world, actor);
+      if (!tab) throw new Error(`${actor.name} has no open tab to switch`);
+      const inOther = tab.context.currentRoom?.channelId === OTHER_CHANNEL;
+      const from = inOther ? OTHER_CODE : CODE;
+      tab.peer.holdLeave = step.overtaken !== null;
+      startJoin(world, actor, tab, false, inOther ? CODE : OTHER_CODE);
+      await settle();
+      if (step.overtaken === "disconnect") closePeer(world.sfu, tab.peer, "transport close");
+      if (step.overtaken === "newer") startJoin(world, actor, tab, true, from);
+      await settle();
+      tab.peer.holdLeave = false;
+      for (const resume of world.sfu.heldLeaves.splice(0)) resume();
+      break;
+    }
     case "untilDeadline": {
       const now = Date.now();
       const deadlines = roomDeadlines(world).filter((deadline) => deadline - step.beforeMs > now);
@@ -866,12 +1067,138 @@ const perform = async (world: World, step: Step): Promise<void> => {
   await followApprovals(world);
   await settle();
   keepNewestPasses(world);
-  await check(world, { beforeIncarnation, beforeHosts, beforeSeated });
+  await check(world, {
+    beforeIncarnation,
+    beforeHosts,
+    beforeSeated,
+    beforeLiveHosts,
+    beforeRoles: world.generation === beforeGeneration ? beforeRoles : (new Map() as Roles),
+    beforeMembership,
+  });
+};
+
+const checkRooms = (
+  world: World,
+  now: number,
+  before: { beforeRoles: Roles; beforeMembership: Map<Room, number> },
+  fail: (message: string) => void,
+): void => {
+  for (const room of roomsOf(world)) {
+    if (!world.firstSeen.has(room.incarnationId)) world.firstSeen.set(room.incarnationId, now);
+    if (!world.sfu.membership.has(room)) {
+      const counts = world.sfu.membership;
+      counts.set(room, 0);
+      room.onLifecycle((event) => {
+        if (event === "membership") counts.set(room, (counts.get(room) ?? 0) + 1);
+      });
+    }
+    if (room.hasEnded || room.isHandingOff) continue;
+    const label =
+      room.channelId === CHANNEL
+        ? "the meeting"
+        : room.channelId === OTHER_CHANNEL
+          ? "the other meeting"
+          : "the webinar's room";
+    const openedAt = world.firstSeen.get(room.incarnationId) ?? now;
+
+    if (
+      room.clients.size === 0 &&
+      room.pendingClients.size === 0 &&
+      now - openedAt > ROOM_OPEN_DEADLINE_MS + SECOND_MS
+    ) {
+      fail(`${label} has stayed open with nobody in it for ${Math.round((now - openedAt) / SECOND_MS)} s`);
+    }
+
+    const inMeeting = room.clients.size - room.getWebinarAttendeeCount();
+    if ((inMeeting > 0 || room.pendingClients.size > 0) && !room.hasActiveAdmin()) {
+      const opening =
+        room.awaitingOpener !== null && room.openingDeadline !== null && now <= room.openingDeadline;
+      const recovering = room.restorerState(now) === "awaited";
+      const waitingForHost = room.cleanupDeadline !== null && now <= room.cleanupDeadline;
+      if (!opening && !recovering && !waitingForHost) {
+        fail(
+          `${label} has nobody to host it and no deadline that will give it a host (${room.clients.size} in it, ${room.pendingClients.size} waiting; opening ${room.awaitingOpener ? "unclaimed" : "claimed"}, open deadline ${room.openingDeadline === null ? "none" : `in ${room.openingDeadline - now} ms`}, lost call ${room.restorerState(now)})`,
+        );
+      }
+    }
+
+    const running = room.awaitingOpener === null && room.restorerState(now) === "none";
+    if (running && !room.hasActiveAdmin()) {
+      for (const [seatId, client] of room.clients) {
+        const key = room.userKeysById.get(seatId);
+        if (!key || client.isObserver || client.isWebinarAttendee) continue;
+        const proof = room.guestProofOf(key);
+        if (!room.needsReadmission(key, proof) && !room.isBlocked(key, proof)) {
+          fail(`${key} could host ${label}, which has no host, and nobody made them host`);
+          break;
+        }
+      }
+    }
+
+    const roles = new Map<string, Set<boolean>>();
+    for (const [seatId, client] of room.clients) {
+      const key = room.userKeysById.get(seatId);
+      if (!key || client.isObserver || client.isWebinarAttendee) continue;
+      const seen = roles.get(key) ?? new Set<boolean>();
+      seen.add(client instanceof Admin);
+      roles.set(key, seen);
+    }
+    for (const [key, seen] of roles) {
+      if (seen.size > 1) fail(`${key}'s tabs do not all have the same role`);
+    }
+
+    const admins = [...room.getAdminUserIds()].sort().join(", ");
+    const host = room.getHostUserId();
+    for (const actor of Object.values(world.actors)) {
+      for (const tab of liveTabsOf(world, actor)) {
+        const client = tab.context.currentClient;
+        if (tab.context.currentRoom !== room || !client || room.getClient(client.id) !== client) continue;
+        if (client.isObserver || client.isWebinarAttendee) continue;
+        const roster = latestTold(tab, "adminUsersChanged", room.id);
+        const toldHosts = roster
+          ? [...((roster.payload.hostUserIds as string[] | undefined) ?? [])].sort().join(", ")
+          : "";
+        if (toldHosts !== admins) {
+          fail(`${actor.name}'s tab in ${label} was last told the hosts are [${toldHosts}], not [${admins}]`);
+        }
+        const toldMain = latestTold(tab, "hostChanged", room.id)?.payload.hostUserId ?? null;
+        if (toldMain !== host) {
+          fail(`${actor.name}'s tab in ${label} was last told the main host is ${String(toldMain)}, not ${String(host)}`);
+        }
+        const assigned = latestTold(tab, "hostAssigned", room.id)?.index ?? -1;
+        const removed = latestTold(tab, "hostRemoved", room.id)?.index ?? -1;
+        if (client instanceof Admin !== assigned > removed) {
+          fail(
+            `${actor.name}'s tab in ${label} is ${client instanceof Admin ? "a host" : "a participant"}, but was last told otherwise`,
+          );
+        }
+      }
+    }
+
+    const rolesBefore = before.beforeRoles.get(room);
+    if (rolesBefore) {
+      let changed = false;
+      for (const [seatId, client] of room.clients) {
+        if (client.isObserver || client.isWebinarAttendee) continue;
+        const was = rolesBefore.get(seatId);
+        if (was !== undefined && was !== client instanceof Admin) changed = true;
+      }
+      const told = (world.sfu.membership.get(room) ?? 0) > (before.beforeMembership.get(room) ?? 0);
+      if (changed && !told) fail(`a seat in ${label} changed role and the room's apps were not told`);
+    }
+  }
 };
 
 const check = async (
   world: World,
-  before: { beforeIncarnation: string | null; beforeHosts: Set<string>; beforeSeated: Set<string> },
+  before: {
+    beforeIncarnation: string | null;
+    beforeHosts: Set<string>;
+    beforeSeated: Set<string>;
+    beforeLiveHosts: Set<string>;
+    beforeRoles: Roles;
+    beforeMembership: Map<Room, number>;
+  },
 ): Promise<void> => {
   const now = Date.now();
   const shadow = world.shadow;
@@ -885,18 +1212,22 @@ const check = async (
     callOver(world, "the room it ran in closed");
   }
   for (const done of world.completions.splice(0)) {
-    if (done.response.status !== "joined") continue;
+    if (done.channelId !== CHANNEL || done.response.status !== "joined") continue;
     const { actor } = done;
     const owner = ownsCode(actor, done.ownerEmail);
     const sameRoom = done.incarnation !== null && done.incarnation === before.beforeIncarnation;
     const sameSeat = sameRoom && done.seatId !== null && before.beforeSeated.has(done.seatId);
-    if (shadow.removed.has(actor.key) && !owner && !sameSeat) {
+    const presentHost = sameRoom && before.beforeLiveHosts.has(actor.key);
+    if (shadow.removed.has(actor.key) && !owner && !sameSeat && !presentHost) {
       fail(`${actor.name} was removed and got back in without a host letting them in`);
     }
     if (!done.admin || done.incarnation === null) continue;
     const phase = shadow.phase;
     const lostHost = phase.kind === "lost" && phase.hosts.has(actor.key);
-    const justified = owner || (sameRoom && before.beforeHosts.has(actor.key)) || lostHost;
+    const fallback =
+      sameRoom && before.beforeLiveHosts.size === 0 && phase.kind === "running";
+    const justified =
+      owner || (sameRoom && before.beforeHosts.has(actor.key)) || lostHost || fallback;
     if (!justified) {
       const openers = world.openers.get(done.incarnation) ?? new Set<string>();
       openers.add(actor.key);
@@ -908,7 +1239,7 @@ const check = async (
   }
 
   const room = liveRoom(world);
-  if (room && !world.firstSeen.has(room.incarnationId)) world.firstSeen.set(room.incarnationId, now);
+  checkRooms(world, now, before, fail);
 
   if (shadow.phase.kind === "lost") {
     const lost = shadow.phase;
@@ -960,18 +1291,6 @@ const check = async (
     }
   }
 
-  if (room && room.isLocked && !room.hasActiveAdmin() && !room.hasEnded) {
-    const openedAt = world.firstSeen.get(room.incarnationId) ?? now;
-    const opening = room.awaitingOpener !== null && now - openedAt <= ROOM_OPEN_DEADLINE_MS;
-    const recovering = room.restorerState(now) === "awaited";
-    const waitingForHost = room.cleanupDeadline !== null && now <= room.cleanupDeadline;
-    if (!opening && !recovering && !waitingForHost) {
-      fail(
-        `the room has been locked with nobody to let anyone in for ${Math.round((now - openedAt) / SECOND_MS)} s (${room.clients.size} in it, ${room.pendingClients.size} waiting)`,
-      );
-    }
-  }
-
   if (room && !room.hasEnded && room.ownerEmail && seatedHostKeys(room).has(room.ownerEmail)) {
     for (const key of room.adminUserKeys) {
       if (key === room.ownerEmail || shadow.cohosts.has(key)) continue;
@@ -982,17 +1301,6 @@ const check = async (
   if (room && !room.hasEnded) {
     for (const key of seatedKeys(room)) {
       if (shadow.ejected.has(key)) fail(`${key} still holds a seat after a host removed them`);
-    }
-    const roles = new Map<string, Set<boolean>>();
-    for (const [seatId, client] of room.clients) {
-      const key = room.userKeysById.get(seatId);
-      if (!key || client.isObserver || client.isWebinarAttendee) continue;
-      const seen = roles.get(key) ?? new Set<boolean>();
-      seen.add(client instanceof Admin);
-      roles.set(key, seen);
-    }
-    for (const [key, seen] of roles) {
-      if (seen.size > 1) fail(`${key}'s tabs do not all have the same role`);
     }
   }
 
@@ -1076,8 +1384,20 @@ const nextStep = (world: World): Step => {
     ]);
     options.push([1.2, () => ({ kind: "leave", actor: name })]);
     options.push([0.4, () => ({ kind: "drop", actor: name })]);
+    options.push([
+      0.5,
+      () => ({
+        kind: "switch",
+        actor: name,
+        overtaken: random() < 0.6 ? null : random() < 0.5 ? "disconnect" : "newer",
+      }),
+    ]);
     if (!room || !hostsLiveRoom(world, actor)) continue;
     options.push([0.25, () => ({ kind: "end", by: name })]);
+    options.push([
+      0.3,
+      () => ({ kind: "host", action: room.isLocked ? "unlock" : "lock", by: name, target: name }),
+    ]);
     for (const other of Object.values(world.actors)) {
       if (other === actor) continue;
       const target = other.name;
@@ -1112,6 +1432,12 @@ const nextStep = (world: World): Step => {
     },
   ]);
   options.push([0.4, () => ({ kind: "hold" })]);
+  if (world.webinar) {
+    options.push([
+      0.4,
+      () => ({ kind: "attend", code: (["none", "wrong", "right"] as const)[Math.floor(random() * 3)] }),
+    ]);
+  }
   options.push([0.6, () => ({ kind: "restart" })]);
   for (const how of ["drain", "stop", "worker", "handoff"] as const) {
     options.push([
@@ -1164,37 +1490,69 @@ const withModelClock = async (run: () => Promise<Outcome>): Promise<Outcome> => 
   }
 };
 
+const withDisconnectGrace = async <T>(graceMs: number, run: () => Promise<T>): Promise<T> => {
+  const before = config.socket.disconnectGraceMs;
+  config.socket.disconnectGraceMs = graceMs;
+  try {
+    return await run();
+  } finally {
+    config.socket.disconnectGraceMs = before;
+  }
+};
+
 const runSequence = (seed: number): Promise<Outcome> =>
   withModelClock(async () => {
     const random = seeded(seed);
-    const world = await createWorld({
-      random,
-      follows: () => random() < 0.8,
-      scheduled: random() < 0.5,
-    });
-    const prelude = random() < 0.25 ? leftWaitingForHost(random) : [];
-    for (let index = 0; index < STEPS_PER_SEQUENCE && world.failures.length === 0; index += 1) {
-      await vi.advanceTimersByTimeAsync(BETWEEN_STEPS_MS);
-      await perform(world, prelude[index] ?? nextStep(world));
-    }
-    return { trace: world.trace, failures: world.failures };
+    const graceMs = GRACES_MS[Math.floor(random() * GRACES_MS.length)];
+    return withDisconnectGrace(graceMs, () => runSeeded(random, graceMs));
   });
+
+const runSeeded = async (random: () => number, graceMs: number): Promise<Outcome> => {
+  const world = await createWorld({
+    random,
+    follows: () => random() < 0.8,
+    scheduled: random() < 0.5,
+    webinar: random() < 0.3 ? (["code", "locked", "full"] as const)[Math.floor(random() * 3)] : null,
+  });
+  world.trace.push(`  (a dropped tab keeps its seat for ${graceMs / SECOND_MS} s)`);
+  const prelude = random() < 0.25 ? leftWaitingForHost(random) : [];
+  for (let index = 0; index < STEPS_PER_SEQUENCE && world.failures.length === 0; index += 1) {
+    await vi.advanceTimersByTimeAsync(BETWEEN_STEPS_MS);
+    await perform(world, prelude[index] ?? nextStep(world));
+  }
+  return { trace: world.trace, failures: world.failures };
+};
 
 const runScript = (
   scheduled: boolean,
   steps: Step[],
-  options: { tabsAskAgain?: boolean } = {},
+  options: { tabsAskAgain?: boolean; webinar?: WebinarGate; graceMs?: number } = {},
 ): Promise<Outcome> =>
-  withModelClock(async () => {
-    const tabsAskAgain = options.tabsAskAgain ?? true;
-    const world = await createWorld({ random: seeded(0), follows: () => tabsAskAgain, scheduled });
-    for (const step of steps) {
-      await vi.advanceTimersByTimeAsync(BETWEEN_STEPS_MS);
-      await perform(world, step);
-      if (world.failures.length > 0) break;
-    }
-    return { trace: world.trace, failures: world.failures };
+  withModelClock(() =>
+    withDisconnectGrace(options.graceMs ?? config.socket.disconnectGraceMs, () =>
+      runScripted(scheduled, steps, options),
+    ),
+  );
+
+const runScripted = async (
+  scheduled: boolean,
+  steps: Step[],
+  options: { tabsAskAgain?: boolean; webinar?: WebinarGate },
+): Promise<Outcome> => {
+  const tabsAskAgain = options.tabsAskAgain ?? true;
+  const world = await createWorld({
+    random: seeded(0),
+    follows: () => tabsAskAgain,
+    scheduled,
+    webinar: options.webinar ?? null,
   });
+  for (const step of steps) {
+    await vi.advanceTimersByTimeAsync(BETWEEN_STEPS_MS);
+    await perform(world, step);
+    if (world.failures.length > 0) break;
+  }
+  return { trace: world.trace, failures: world.failures };
+};
 
 const report = (outcome: Outcome): string =>
   [...outcome.trace, ...outcome.failures.map((failure) => `FAILED: ${failure}`)].join("\n");
@@ -1271,11 +1629,10 @@ describe("the room lifecycle model", () => {
   it("gives a room nobody claimed in time to someone already in it", async () => {
     const outcome = await runScript(true, [
       open("owner", { hold: true }),
-      { kind: "leave", actor: "owner" },
+      { kind: "tick", ms: ROOM_OPEN_DEADLINE_MS + SECOND_MS },
       { kind: "release", alongside: null },
       open("invitee"),
-      open("carol"),
-      { kind: "tick", ms: ROOM_OPEN_DEADLINE_MS + SECOND_MS },
+      { kind: "expect", actor: "invitee", tab: "main", role: "host" },
     ]);
     expect(outcome.failures, report(outcome)).toEqual([]);
   });
@@ -1369,9 +1726,13 @@ describe("the room lifecycle model", () => {
       open("carol"),
       host("alice", "admit", "carol"),
       host("alice", "promote", "carol"),
+      open("bob"),
+      host("alice", "admit", "bob"),
+      host("alice", "promote", "bob"),
       { kind: "restart" },
-      open("carol"),
+      open("bob"),
       open("owner"),
+      { kind: "expect", actor: "bob", tab: "main", role: "host" },
     ]);
     expect(outcome.failures, report(outcome)).toEqual([]);
   });
@@ -1424,15 +1785,14 @@ describe("the room lifecycle model", () => {
   it("takes host rights back from a temporary host when a host promotes the code's owner", async () => {
     const outcome = await runScript(true, [
       open("alice"),
-      open("invitee"),
       open("owner"),
       { kind: "second", actor: "owner", action: "open" },
-      host("owner", "transfer", "alice"),
-      host("alice", "kick", "owner"),
-      { kind: "leave", actor: "alice" },
-      host("invitee", "promote", "owner"),
+      host("owner", "blockStay", "owner"),
+      host("alice", "allow", "owner"),
+      host("alice", "promote", "owner"),
     ]);
     expect(outcome.failures, report(outcome)).toEqual([]);
+    expect(outcome.trace.filter((line) => line.includes("refused")), report(outcome)).toEqual([]);
   });
 
   it("makes every tab of a person a host promotes a host", async () => {
@@ -1475,10 +1835,10 @@ describe("the room lifecycle model", () => {
       open("alice"),
       open("carol"),
       host("alice", "admit", "carol"),
-      host("alice", "promote", "carol"),
       { kind: "second", actor: "carol", action: "open" },
-      host("alice", "kick", "carol"),
+      host("alice", "revoke", "carol"),
       { kind: "leave", actor: "alice" },
+      { kind: "expect", actor: "carol", tab: "second", role: "participant" },
       { kind: "tick", ms: 2 * MINUTE_MS + SECOND_MS },
     ]);
     expect(outcome.failures, report(outcome)).toEqual([]);
@@ -1535,6 +1895,126 @@ describe("the room lifecycle model", () => {
       open("invitee"),
       { kind: "restart" },
       open("bob"),
+      open("invitee"),
+    ]);
+    expect(outcome.failures, report(outcome)).toEqual([]);
+  });
+
+  it.each([
+    ["asks for an invite code", "code", "wrong"],
+    ["is locked", "locked", "none"],
+    ["is full", "full", "none"],
+  ] as const)(
+    "closes the room an attendee opened and was turned away from, when the webinar %s",
+    async (_how, webinar, code) => {
+      const outcome = await runScript(
+        false,
+        [{ kind: "attend", code }, { kind: "tick", ms: ROOM_OPEN_DEADLINE_MS + 2 * SECOND_MS }],
+        { webinar },
+      );
+      expect(outcome.failures, report(outcome)).toEqual([]);
+    },
+  );
+
+  it("hands the room on when its last host switches to another meeting on the same tab", async () => {
+    const outcome = await runScript(false, [
+      open("alice"),
+      open("carol"),
+      host("alice", "admit", "carol"),
+      open("bob"),
+      { kind: "switch", actor: "alice", overtaken: null },
+    ]);
+    expect(outcome.failures, report(outcome)).toEqual([]);
+  });
+
+  it.each(["disconnect", "newer"] as const)(
+    "keeps the host wait of a room a host switches into when the switch is overtaken by a %s",
+    async (overtaken) => {
+      const outcome = await runScript(false, [
+        open("alice"),
+        open("carol"),
+        host("alice", "admit", "carol"),
+        host("alice", "revoke", "carol"),
+        { kind: "switch", actor: "alice", overtaken: null },
+        { kind: "switch", actor: "alice", overtaken },
+      ]);
+      expect(outcome.failures, report(outcome)).toEqual([]);
+    },
+  );
+
+  it("tells a host blocked without being removed, and the room, that they no longer host", async () => {
+    const outcome = await runScript(false, [
+      open("alice"),
+      open("carol"),
+      host("alice", "admit", "carol"),
+      host("alice", "promote", "carol"),
+      host("alice", "blockStay", "carol"),
+    ]);
+    expect(outcome.failures, report(outcome)).toEqual([]);
+  });
+
+  it("gives a co-host's second tab the co-host's role after a host took their admission back in an open room", async () => {
+    const outcome = await runScript(false, [
+      open("alice"),
+      open("carol"),
+      host("alice", "admit", "carol"),
+      host("alice", "promote", "carol"),
+      host("alice", "unlock", "alice"),
+      host("alice", "revoke", "carol"),
+      { kind: "second", actor: "carol", action: "open" },
+      { kind: "expect", actor: "carol", tab: "second", role: "host" },
+    ]);
+    expect(outcome.failures, report(outcome)).toEqual([]);
+  });
+
+  it("keeps someone a host removed knocking even after the room is opened up", async () => {
+    const outcome = await runScript(false, [
+      open("alice"),
+      open("carol"),
+      host("alice", "admit", "carol"),
+      host("alice", "unlock", "alice"),
+      host("alice", "kick", "carol"),
+      open("carol"),
+    ]);
+    expect(outcome.failures, report(outcome)).toEqual([]);
+  });
+
+  it("makes someone who may host a meeting waiting for a host its host as soon as they arrive", async () => {
+    const outcome = await runScript(true, [
+      open("alice"),
+      open("bob"),
+      host("alice", "admit", "bob"),
+      host("alice", "revoke", "bob"),
+      { kind: "leave", actor: "alice" },
+      open("invitee"),
+      { kind: "expect", actor: "invitee", tab: "main", role: "host" },
+    ]);
+    expect(outcome.failures, report(outcome)).toEqual([]);
+  });
+
+  it("hands the room on once a dropped last host's grace runs out", async () => {
+    const outcome = await runScript(
+      false,
+      [
+        open("alice"),
+        open("carol"),
+        host("alice", "admit", "carol"),
+        { kind: "drop", actor: "alice" },
+        { kind: "tick", ms: 15 * SECOND_MS + SECOND_MS },
+      ],
+      { graceMs: 15 * SECOND_MS },
+    );
+    expect(outcome.failures, report(outcome)).toEqual([]);
+  });
+
+  it("gives a room whose lost call ran out while it was being made a host from the people in it", async () => {
+    const outcome = await runScript(true, [
+      open("alice"),
+      { kind: "restart" },
+      open("alice", { hold: true }),
+      { kind: "leave", actor: "alice" },
+      { kind: "tick", ms: 8 * MINUTE_MS },
+      { kind: "release", alongside: null },
       open("invitee"),
     ]);
     expect(outcome.failures, report(outcome)).toEqual([]);
