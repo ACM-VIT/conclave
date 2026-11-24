@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { captureUserMedia, createHeldDestination } from "../lib/media-captures";
+import { captureGeneration, captureUserMedia, createHeldDestination } from "../lib/media-captures";
 import { DEFAULT_AUDIO_CONSTRAINTS } from "../lib/constants";
 import { createNoiseCancellationPipeline } from "../lib/noise-cancellation";
 
@@ -162,14 +162,18 @@ export function useMicTest({
     setIsStarting(true);
     setError(null);
 
+    const generation = captureGeneration();
     const run = async () => {
       try {
-        const stream = await captureUserMedia({
-          audio: {
-            ...DEFAULT_AUDIO_CONSTRAINTS,
-            ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+        const stream = await captureUserMedia(
+          {
+            audio: {
+              ...DEFAULT_AUDIO_CONSTRAINTS,
+              ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+            },
           },
-        });
+          generation,
+        );
         if (cancelled) {
           stream.getTracks().forEach((track) => track.stop());
           return;
@@ -182,7 +186,7 @@ export function useMicTest({
         let usedNoiseCancellation = false;
         if (noiseCancellation) {
           try {
-            const pipeline = await createNoiseCancellationPipeline(rawTrack);
+            const pipeline = await createNoiseCancellationPipeline(rawTrack, generation);
             if (cancelled) {
               pipeline.cleanup({ stopSource: true, stopOutput: true });
               return;
@@ -218,7 +222,7 @@ export function useMicTest({
         const analyser = context.createAnalyser();
         analyser.fftSize = 2048;
         analyser.smoothingTimeConstant = 0;
-        const recorderDestination = createHeldDestination(context);
+        const recorderDestination = createHeldDestination(context, generation);
 
         source.connect(gainNode);
         gainNode.connect(analyser);
@@ -449,11 +453,12 @@ export async function playSpeakerTestSound(
       .webkitAudioContext;
   if (!AudioContextConstructor) return;
 
+  const generation = captureGeneration();
   const context = new AudioContextConstructor();
   if (context.state === "suspended") {
     await context.resume().catch(() => {});
   }
-  const destination = createHeldDestination(context);
+  const destination = createHeldDestination(context, generation);
   const master = context.createGain();
   master.gain.value = 0.5;
   master.connect(destination);

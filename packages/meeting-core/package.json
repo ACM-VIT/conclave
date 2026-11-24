@@ -10,6 +10,7 @@
     "./caption-languages": "./src/caption-languages.ts",
     "./chat-commands": "./src/chat-commands.ts",
     "./grid-layout": "./src/grid-layout.ts",
+    "./guest-join-claims": "./src/guest-join-claims.ts",
     "./participant-reducer": "./src/participant-reducer.ts",
     "./scheduling": "./src/scheduling.ts",
     "./sfu-events": "./src/sfu-events.ts",
@@ -34,6 +35,7 @@
     "vitest": "^5.1.1"
   },
   "dependencies": {
-    "@conclave/ai": "workspace:*"
+    "@conclave/ai": "workspace:*",
+    "zod": "4.6.7"
   }
 }

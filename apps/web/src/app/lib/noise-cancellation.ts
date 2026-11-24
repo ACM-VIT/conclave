@@ -1,7 +1,12 @@
 "use client";
 
 import type { RnnoiseWorkletNode } from "@sapphi-red/web-noise-suppressor";
-import { createHeldDestination } from "./media-captures";
+import {
+  CaptureReleasedError,
+  captureGeneration,
+  createHeldDestination,
+  onCapturesReleased,
+} from "./media-captures";
 
 type CleanupOptions = {
   stopSource?: boolean;
@@ -320,7 +325,9 @@ export const stopNoiseCancellationForTrack = (
 
 export async function createNoiseCancellationPipeline(
   sourceTrack: MediaStreamTrack,
+  requestedIn: number,
 ): Promise<NoiseCancellationPipeline> {
+  if (requestedIn !== captureGeneration()) throw new CaptureReleasedError();
   if (sourceTrack.kind !== "audio") {
     throw new Error("Noise cancellation requires an audio track");
   }
@@ -415,7 +422,17 @@ export async function createNoiseCancellationPipeline(
   const outputGain = context.createGain();
   outputGain.gain.value = 1.05;
 
-  const destination = createHeldDestination(context);
+  const abandon = async (): Promise<never> => {
+    if (rnnoise) {
+      try {
+        rnnoise.destroy();
+      } catch {}
+    }
+    await context.close().catch(() => {});
+    throw new CaptureReleasedError();
+  };
+  if (requestedIn !== captureGeneration()) return abandon();
+  const destination = createHeldDestination(context, requestedIn);
   const nodes = [
     source,
     highPass,
@@ -432,6 +449,11 @@ export async function createNoiseCancellationPipeline(
   ];
   connectNodes(nodes);
   await connectSilentRealtimeDestination(context, outputGain);
+  if (requestedIn !== captureGeneration()) {
+    disconnectNodes(nodes);
+    destination.stream.getTracks().forEach((track) => track.stop());
+    return abandon();
+  }
 
   const outputTrack = destination.stream.getAudioTracks()[0];
   if (!outputTrack) {
@@ -453,6 +475,9 @@ export async function createNoiseCancellationPipeline(
   const handleSourceEnded = () => {
     pipeline.cleanup({ stopSource: false, stopOutput: true });
   };
+  const stopListeningForRelease = onCapturesReleased(() => {
+    pipeline.cleanup({ stopSource: false, stopOutput: true });
+  });
 
   const pipeline: NoiseCancellationPipelineInternal = {
     sourceTrack,
@@ -467,6 +492,7 @@ export async function createNoiseCancellationPipeline(
       if (pipeline.disposed) return;
       pipeline.disposed = true;
 
+      stopListeningForRelease();
       sourceTrack.removeEventListener("ended", handleSourceEnded);
       outputTrackPipelines.delete(outputTrack);
       sourceTrackPipelines.delete(sourceTrack);

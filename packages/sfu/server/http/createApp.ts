@@ -22,6 +22,11 @@ import {
   clearAllRaisedHands,
   closeClientProducers,
   closeProducerById,
+  admitWaitingGuest,
+  allowUserKeys,
+  blockUserKey,
+  emitPendingUsersSnapshot,
+  rejectWaitingGuest,
   kickClient,
   rejectAllPendingUsers,
   resolveRoom,
@@ -30,8 +35,10 @@ import {
   toWorkerSnapshots,
 } from "../admin/controlPlane.js";
 import {
+  decisionRecordFull,
   includesSuperAdminUserKey,
   isSuperAdminClient,
+  NO_ONE_ADMITTED_ERROR,
   SUPER_ADMIN_REMOVAL_ERROR,
 } from "../admin/moderation.js";
 import { recordAdminAudit } from "../admin/adminAudit.js";
@@ -337,19 +344,6 @@ export const createSfuApp = ({
       pendingSocket.disconnect(true);
     }
     return forceCloseRoom(state, roomChannelId);
-  };
-
-  const emitPendingUsersSnapshot = (
-    io: SocketIOServer,
-    room: Room,
-  ): void => {
-    io.to(room.channelId).emit("pendingUsersSnapshot", {
-      users: Array.from(room.pendingClients.values()).map((pending) => ({
-        userId: pending.userKey,
-        displayName: pending.displayName || pending.userKey,
-      })),
-      roomId: room.id,
-    });
   };
 
   const handleUserMediaControl = (
@@ -1303,35 +1297,31 @@ export const createSfuApp = ({
       return;
     }
 
-    const allowWhenLocked = body.allowWhenLocked !== false;
-    const admitted: string[] = [];
-
-    for (const userKey of userKeys) {
-      const pending = lookup.room.pendingClients.get(userKey);
-      lookup.room.unblockUser(userKey);
-      lookup.room.allowUser(userKey);
-      if (allowWhenLocked || lookup.room.isLocked) {
-        lookup.room.allowLockedUser(userKey);
-      }
-
-      if (pending) {
-        pending.socket.emit("joinApproved", { roomId: lookup.room.id });
-        admitted.push(userKey);
-        for (const admin of lookup.room.getAdmins()) {
-          admin.socket.emit("userAdmitted", {
-            userId: userKey,
-            roomId: lookup.room.id,
-          });
-        }
-      }
+    const outcome = allowUserKeys(lookup.room, userKeys, {
+      allowWhenLocked: body.allowWhenLocked !== false,
+    });
+    if (!outcome.ok) {
+      res.status(409).json({
+        ...decisionRecordFull("admit"),
+        roomId: lookup.room.id,
+        allowed: [],
+        refused: outcome.refused,
+        admitted: [],
+        access: toRoomSnapshot(lookup.room).access,
+      });
+      return;
     }
+    const { allowed, refused, admitted } = outcome;
 
-    emitPendingUsersSnapshot(io, lookup.room);
+    emitPendingUsersSnapshot(lookup.room);
 
-    res.json({
-      success: true,
+    res.status(allowed.length === 0 ? 409 : 200).json({
+      ...(allowed.length === 0
+        ? { success: false, error: NO_ONE_ADMITTED_ERROR }
+        : { success: true }),
       roomId: lookup.room.id,
-      allowed: userKeys,
+      allowed,
+      refused,
       admitted,
       access: toRoomSnapshot(lookup.room).access,
     });
@@ -1410,27 +1400,19 @@ export const createSfuApp = ({
     const rejectedPending: string[] = [];
 
     for (const userKey of userKeys) {
-      const pending = lookup.room.pendingClients.get(userKey);
-      lookup.room.blockUser(userKey);
-
-      if (pending) {
-        pending.socket.emit("joinRejected", { roomId: lookup.room.id });
-        rejectedPending.push(userKey);
-      }
-
-      if (kickPresent) {
-        for (const [userId, key] of [
-          ...lookup.room.userKeysById.entries(),
-        ]) {
-          if (key !== userKey) continue;
-          if (kickClient(lookup.room, userId, reason, { io, state })) {
-            kickedUserIds.add(userId);
-          }
-        }
+      const result = blockUserKey(lookup.room, userKey, {
+        reason,
+        kickPresent,
+        io,
+        state,
+      });
+      rejectedPending.push(...result.rejectedPendingUserKeys);
+      for (const userId of result.kickedUserIds) {
+        kickedUserIds.add(userId);
       }
     }
 
-    emitPendingUsersSnapshot(io, lookup.room);
+    emitPendingUsersSnapshot(lookup.room);
 
     res.json({
       success: true,
@@ -1555,8 +1537,12 @@ export const createSfuApp = ({
       requestBody(req).reason,
       "Blocked by operator",
     );
-    lookup.room.blockUser(userKey);
-    kickClient(lookup.room, userId, reason, { io, state });
+    blockUserKey(lookup.room, userKey, {
+      reason,
+      kickPresent: true,
+      io,
+      state,
+    });
 
     res.json({
       success: true,
@@ -1621,26 +1607,17 @@ export const createSfuApp = ({
       return;
     }
 
-    const pending = lookup.room.pendingClients.get(userKey);
-    if (!pending) {
+    const outcome = admitWaitingGuest(lookup.room, userKey);
+    if (!outcome.ok) {
+      res.status(409).json(decisionRecordFull("admit"));
+      return;
+    }
+    if (outcome.admitted.length === 0) {
       res.status(404).json({ error: "Pending user not found" });
       return;
     }
 
-    if (lookup.room.isLocked) {
-      lookup.room.allowLockedUser(userKey);
-    }
-    lookup.room.allowUser(userKey);
-    pending.socket.emit("joinApproved", { roomId: lookup.room.id });
-
-    for (const admin of lookup.room.getAdmins()) {
-      admin.socket.emit("userAdmitted", {
-        userId: userKey,
-        roomId: lookup.room.id,
-      });
-    }
-
-    emitPendingUsersSnapshot(io, lookup.room);
+    emitPendingUsersSnapshot(lookup.room);
     res.json({ success: true, roomId: lookup.room.id, userKey });
   });
 
@@ -1665,23 +1642,12 @@ export const createSfuApp = ({
       return;
     }
 
-    const pending = lookup.room.pendingClients.get(userKey);
-    if (!pending) {
+    if (rejectWaitingGuest(lookup.room, userKey).length === 0) {
       res.status(404).json({ error: "Pending user not found" });
       return;
     }
 
-    lookup.room.removePendingClient(userKey);
-    pending.socket.emit("joinRejected", { roomId: lookup.room.id });
-
-    for (const admin of lookup.room.getAdmins()) {
-      admin.socket.emit("userRejected", {
-        userId: userKey,
-        roomId: lookup.room.id,
-      });
-    }
-
-    emitPendingUsersSnapshot(io, lookup.room);
+    emitPendingUsersSnapshot(lookup.room);
     res.json({ success: true, roomId: lookup.room.id, userKey });
   });
 
@@ -1700,13 +1666,17 @@ export const createSfuApp = ({
       return;
     }
 
-    const admitted = admitAllPendingUsers(lookup.room);
-    emitPendingUsersSnapshot(io, lookup.room);
+    const outcome = admitAllPendingUsers(lookup.room);
+    if (!outcome.ok) {
+      res.status(409).json(decisionRecordFull("admit"));
+      return;
+    }
+    emitPendingUsersSnapshot(lookup.room);
 
     res.json({
       success: true,
-      admittedCount: admitted.length,
-      users: admitted,
+      admittedCount: outcome.users.length,
+      users: outcome.users,
     });
   });
 
@@ -1726,7 +1696,7 @@ export const createSfuApp = ({
     }
 
     const rejected = rejectAllPendingUsers(lookup.room);
-    emitPendingUsersSnapshot(io, lookup.room);
+    emitPendingUsersSnapshot(lookup.room);
 
     res.json({
       success: true,

@@ -109,7 +109,10 @@ import {
   normalizeWebcamCodecPolicy,
   rememberProvenVp9EncoderIncompatibility,
 } from "../lib/webcam-codec-policy";
-import { setNoiseCancellationTrackEnabled } from "../lib/noise-cancellation";
+import {
+  setNoiseCancellationTrackEnabled,
+  stopNoiseCancellationForTrack,
+} from "../lib/noise-cancellation";
 import {
   getMostConstrainedWebcamProducerNetworkProfile,
   getScreenShareReceiveNetworkProfileForAvailableIncomingBitrate,
@@ -176,7 +179,8 @@ import type {
   RequestMediaPermissionsOptions,
   ScreenShareRepublishOptions,
 } from "./useMeetMedia";
-import { releaseAllCaptures } from "../lib/media-captures";
+import { captureGeneration, releaseAllCaptures } from "../lib/media-captures";
+import { installProducer } from "../lib/producer-slot";
 import { publishIntent } from "../lib/device-intent";
 import { endedNotice, joinRejectedUpdate, type SetupNotice } from "../lib/setup-notice";
 
@@ -242,6 +246,7 @@ const RESUME_CONSUMER_MAX_ATTEMPTS = 6;
 const getResumeConsumerRetryDelayMs = (attempt: number): number =>
   Math.min(8000, 400 * 2 ** attempt) + Math.floor(Math.random() * 250);
 const JOIN_ROOM_ACK_TIMEOUT_MS = 15000;
+const HELD_JOIN_INFO_TTL_MS = 30000;
 const RESTART_ICE_ACK_TIMEOUT_MS = 5000;
 const PARTICIPANT_RECONNECTING_STATUS_FALLBACK_MS = 30000;
 const PARTICIPANT_RECONNECTING_STATUS_BUFFER_MS = 5000;
@@ -671,6 +676,18 @@ class JoinRoomRedirectError extends Error {
   }
 }
 
+/**
+ * The join token names another identity than the one this join was started
+ * as. The caller has been told (`adoptJoinIdentity`) and joins again from the
+ * render that knows the new identity, so this attempt stops without an error.
+ */
+class JoinIdentityChangedError extends Error {
+  constructor() {
+    super("The join token names another identity.");
+    this.name = "JoinIdentityChangedError";
+  }
+}
+
 const normalizeJoinRedirectUrl = (value: unknown): string | null => {
   if (typeof value !== "string" || !value.trim()) return null;
   try {
@@ -879,6 +896,14 @@ interface UseMeetSocketOptions {
   setIsAdmin: (value: boolean) => void;
   user?: { id?: string; email?: string | null; name?: string | null };
   userId: string;
+  /**
+   * Takes this client's identity from the join token it is about to connect
+   * with. Returns true when that changes `userId`. The connection is then
+   * not made, and the caller joins `roomId` again from the render that knows
+   * the new identity. A socket is only ever opened as the identity its token
+   * names.
+   */
+  adoptJoinIdentity?: (token: string, roomId: string) => boolean;
   getJoinInfo: (
     roomId: string,
     sessionId: string,
@@ -966,6 +991,7 @@ interface UseMeetSocketOptions {
   requestCameraProducerRecovery: () => void;
   prepareAudioPublishTrack?: (
     track: MediaStreamTrack,
+    requestedIn: number,
   ) => Promise<MediaStreamTrack>;
   stopLocalTrack: (track?: MediaStreamTrack | null) => void;
   handleLocalTrackEnded: (
@@ -1011,6 +1037,7 @@ export function useMeetSocket({
   setIsAdmin,
   user,
   userId,
+  adoptJoinIdentity,
   getJoinInfo,
   joinMode = "meeting",
   requestWebinarInviteCode,
@@ -1090,9 +1117,13 @@ export function useMeetSocket({
   const departedParticipantIdsRef = useRef<Set<string>>(new Set());
   const webinarJoinedParticipantIdsRef = useRef<Set<string>>(new Set());
   const webinarVisibleParticipantIdsRef = useRef<Set<string>>(new Set());
-  const isMutedRef = useRef(isMuted);
-  const isCameraOffRef = useRef(isCameraOff);
   const serverRoomIdRef = useRef<string | null>(null);
+  const socketRoomIdRef = useRef<string | null>(null);
+  const identityRestartRoomIdRef = useRef<string | null>(null);
+  const identityRestartMediaRef = useRef<{
+    roomId: string;
+    request: Promise<MediaStream | null>;
+  } | null>(null);
   const foregroundRecoveryTimeoutRef = useRef<number | null>(null);
   const runtimeStunIceServersRef = useRef<RTCIceServer[] | null>(null);
   const runtimeTurnIceServersRef = useRef<RTCIceServer[] | null>(null);
@@ -1441,14 +1472,6 @@ export function useMeetSocket({
     },
     [producerSlotOrder, userId],
   );
-
-  useEffect(() => {
-    isMutedRef.current = isMuted;
-  }, [isMuted]);
-
-  useEffect(() => {
-    isCameraOffRef.current = isCameraOff;
-  }, [isCameraOff]);
 
   const shouldPlayJoinLeaveSound = useCallback(
     (type: "join" | "leave", targetUserId: string) => {
@@ -2077,7 +2100,7 @@ export function useMeetSocket({
       ...(localStream?.getTracks() ?? []),
     ]);
     localStreamRef.current = null;
-    localTracks.forEach(stopLocalTrack);
+    localTracks.forEach((track) => stopLocalTrack(track));
 
     socketRef.current?.disconnect();
     socketRef.current = null;
@@ -2134,7 +2157,7 @@ export function useMeetSocket({
       ...(localStream?.getTracks() ?? []),
     ]);
     localStreamRef.current = null;
-    localTracks.forEach(stopLocalTrack);
+    localTracks.forEach((track) => stopLocalTrack(track));
     setLocalStream(null);
     deviceIntents.dispatch({ type: "release" });
     stopScreenShareCapture();
@@ -2280,13 +2303,25 @@ export function useMeetSocket({
       }
 
       const previousTracks = candidateStream?.getTracks() ?? [];
-      const refreshedTrackIds = new Set(
-        refreshedStream.getTracks().map((track) => track.id),
+      const committedMeanwhile = (localStreamRef.current?.getTracks() ?? []).filter(
+        (track) => track.readyState === "live" && !previousTracks.includes(track),
       );
-      localStreamRef.current = refreshedStream;
-      setLocalStream(refreshedStream);
+      const joinTracks = refreshedStream.getTracks().filter((track) => {
+        if (committedMeanwhile.some((committed) => committed.kind === track.kind)) {
+          stopLocalTrack(track);
+          return false;
+        }
+        return true;
+      });
+      const joinStream =
+        committedMeanwhile.length === 0
+          ? refreshedStream
+          : new MediaStream([...committedMeanwhile, ...joinTracks]);
+      const joinTrackIds = new Set(joinStream.getTracks().map((track) => track.id));
+      localStreamRef.current = joinStream;
+      setLocalStream(joinStream);
       previousTracks.forEach((track) => {
-        if (!refreshedTrackIds.has(track.id)) {
+        if (!joinTrackIds.has(track.id)) {
           stopLocalTrack(track);
         }
       });
@@ -2294,10 +2329,10 @@ export function useMeetSocket({
       console.info("[Meets] Refreshed local media before join:", {
         reason,
         previousStream: summarizeStreamForLog(candidateStream),
-        refreshedStream: summarizeStreamForLog(refreshedStream),
+        refreshedStream: summarizeStreamForLog(joinStream),
       });
 
-      return refreshedStream;
+      return joinStream;
     },
     [
       isCameraOff,
@@ -2505,19 +2540,19 @@ export function useMeetSocket({
         if (producerTransportRef.current === transport) {
           producerTransportRef.current = null;
         }
-        if (!isMutedRef.current) requestAudioProducerRecovery();
+        if (deviceIntents.get().audio.chosen) requestAudioProducerRecovery();
       };
 
       const producer = videoProducerRef.current;
       if (!producer || producer.closed) {
         pendingCameraCodecTransportResetEpochRef.current = next.epoch;
-        if (!isCameraOffRef.current) {
+        if (deviceIntents.get().video.chosen) {
           requestCameraProducerRecovery();
         }
         return;
       }
 
-      if (isCameraOffRef.current) {
+      if (!deviceIntents.get().video.chosen) {
         pendingCameraCodecTransportResetEpochRef.current = next.epoch;
         if (producer && !producer.closed) {
           intentionalLocalProducerCloseIdsRef.current.add(producer.id);
@@ -4064,41 +4099,63 @@ export function useMeetSocket({
     ): Promise<void> => {
       const transport = producerTransportRef.current;
       if (!transport) return;
+      const generation = captureGeneration();
+      const committedStream = () => localStreamRef.current ?? stream;
+      const committedMic = () => getFirstLiveTrack(committedStream().getAudioTracks());
       const publicationWarnings: string[] = [];
       const mediaIntent = resolveMediaPublishIntent();
+      const pauseAudioNow = () =>
+        !deviceIntents.get().audio.chosen || !participantMediaPermissions.unmuteAllowed;
+      const intentsAtStart = deviceIntents.get();
+      const requestAtStart = (device: "audio" | "video") =>
+        intentsAtStart[device].capturing ? -1 : intentsAtStart[device].request;
+      const micRequest = requestAtStart("audio");
+      const cameraRequest = requestAtStart("video");
+      const ownsMic = () =>
+        deviceIntents.get().audio.request === micRequest && generation === captureGeneration();
+      const ownsCamera = () =>
+        deviceIntents.get().video.request === cameraRequest && generation === captureGeneration();
+      const cameraWantedNow = () =>
+        ownsCamera() && deviceIntents.get().video.chosen && participantMediaPermissions.videoAllowed;
+      const discardJoinProducer = (producer: Producer) => {
+        socketRef.current?.emit("closeProducer", { producerId: producer.id }, () => {});
+        try {
+          producer.close();
+        } catch {}
+      };
+      const closeJoinVideoProducer = (producer: Producer, joinStream: MediaStream) => {
+        discardJoinProducer(producer);
+        dropVideoTracksForCameraOff(joinStream, "camera turned off while joining");
+      };
       const shouldPauseAudio =
         !mediaIntent.isMicOn || !participantMediaPermissions.unmuteAllowed;
       const shouldPauseVideo =
         !mediaIntent.isCameraOn || !participantMediaPermissions.videoAllowed;
 
       if (mediaIntent.isMicOn && shouldPauseAudio) {
-        isMutedRef.current = true;
         setIsMuted(true);
       }
 
-      let audioTrack = getFirstLiveTrack(stream.getAudioTracks());
+      let audioTrack = committedMic();
       if (audioTrack) {
         try {
           const rawAudioTrack = audioTrack;
-          audioTrack =
-            (await prepareAudioPublishTrack?.(audioTrack)) ?? audioTrack;
-          if (audioTrack.id !== rawAudioTrack.id) {
-            const nextStream = new MediaStream([
-              ...stream.getTracks().filter((track) => track.kind !== "audio"),
-              audioTrack,
-            ]);
-            if (
-              localStreamRef.current === stream ||
-              localStreamRef.current?.id === stream.id
-            ) {
+          const preparedTrack =
+            (await prepareAudioPublishTrack?.(audioTrack, generation)) ?? audioTrack;
+          if (preparedTrack.id !== rawAudioTrack.id) {
+            if (committedMic() === rawAudioTrack) {
+              const nextStream = new MediaStream([
+                ...committedStream().getTracks().filter((track) => track.kind !== "audio"),
+                preparedTrack,
+              ]);
               localStreamRef.current = nextStream;
+              setLocalStream(nextStream);
+            } else {
+              stopNoiseCancellationForTrack(preparedTrack, { stopOutput: true, stopSource: false });
             }
-            setLocalStream((current) =>
-              current === stream || current?.id === stream.id
-                ? nextStream
-                : current,
-            );
           }
+          audioTrack = committedMic();
+          if (!audioTrack) throw new Error("The microphone was replaced while joining");
           if ("contentHint" in audioTrack) {
             audioTrack.contentHint = "speech";
           }
@@ -4115,57 +4172,73 @@ export function useMeetSocket({
             },
           });
 
-          if (shouldPauseAudio) {
+          const pausedNow = pauseAudioNow();
+          setNoiseCancellationTrackEnabled(audioTrack, !pausedNow);
+          if (pausedNow) {
             audioProducer.pause();
           }
+          if (pausedNow !== shouldPauseAudio) {
+            socketRef.current?.emit(
+              "toggleMute",
+              { producerId: audioProducer.id, paused: pausedNow },
+              () => {},
+            );
+          }
 
-          audioProducerRef.current = audioProducer;
-          const audioProducerId = audioProducer.id;
-
-          audioProducer.on("transportclose", () => {
-            if (audioProducerRef.current?.id === audioProducerId) {
-              audioProducerRef.current = null;
-              if (!shouldPauseAudio) {
-                requestAudioProducerRecovery();
+          if (installProducer(audioProducerRef, null, audioProducer, discardJoinProducer)) {
+            const audioProducerId = audioProducer.id;
+            audioProducer.on("transportclose", () => {
+              if (audioProducerRef.current?.id === audioProducerId) {
+                audioProducerRef.current = null;
+                if (!shouldPauseAudio) {
+                  requestAudioProducerRecovery();
+                }
               }
-            }
-          });
+            });
+          }
         } catch (err) {
           console.error("[Meets] Failed to produce audio:", err);
-          if (mediaIntent.isMicOn && !shouldPauseAudio) {
-            if (audioTrack.readyState === "live") {
+          const liveMic = committedMic();
+          if (mediaIntent.isMicOn && ownsMic() && !pauseAudioNow()) {
+            if (liveMic) {
               publicationWarnings.push("microphone publish retry scheduled");
-              setNoiseCancellationTrackEnabled(audioTrack, true);
-              isMutedRef.current = false;
+              setNoiseCancellationTrackEnabled(liveMic, true);
               setIsMuted(false);
               requestAudioProducerRecovery();
             } else {
               publicationWarnings.push("microphone publish failed");
-              isMutedRef.current = true;
               setIsMuted(true);
             }
           }
         }
-      } else if (mediaIntent.isMicOn) {
-        const endedAudioTracks = stream
+      } else if (mediaIntent.isMicOn && ownsMic()) {
+        const endedAudioTracks = committedStream()
           .getAudioTracks()
           .filter((track) => track.readyState !== "live");
         if (endedAudioTracks.length > 0) {
           console.warn("[Meets] Skipping ended microphone track(s):", {
-            stream: summarizeStreamForLog(stream),
+            stream: summarizeStreamForLog(committedStream()),
             endedAudioTracks: endedAudioTracks.map(summarizeTrackForLog),
           });
           publicationWarnings.push("microphone track ended");
         } else {
           publicationWarnings.push("microphone track missing");
         }
-        isMutedRef.current = true;
         setIsMuted(true);
+      }
+
+      if (!ownsCamera()) {
+        if (publicationWarnings.length > 0) {
+          console.warn(
+            `[Meets] Continuing join without some local media: ${publicationWarnings.join(", ")}`
+          );
+        }
+        return;
       }
 
       if (shouldPauseVideo) {
         dropVideoTracksForCameraOff(
-          stream,
+          committedStream(),
           mediaIntent.isCameraOn
             ? "host-disabled camera publish intent"
             : "camera-off publish intent",
@@ -4181,20 +4254,20 @@ export function useMeetSocket({
         return;
       }
 
-      const requestedVideoTrack = getVideoPublishTrack?.(stream) ?? null;
+      const requestedVideoTrack = getVideoPublishTrack?.(committedStream()) ?? null;
       let videoTrack =
         requestedVideoTrack?.readyState === "live" ? requestedVideoTrack : null;
       if (requestedVideoTrack && requestedVideoTrack.readyState !== "live") {
         console.warn("[Meets] Ignoring ended requested video publish track:", {
           requestedVideoTrack: summarizeTrackForLog(requestedVideoTrack),
-          stream: summarizeStreamForLog(stream),
+          stream: summarizeStreamForLog(committedStream()),
         });
         if (refs.processedVideoTrackRef.current?.id === requestedVideoTrack.id) {
           refs.processedVideoTrackRef.current = null;
         }
       }
       if (!videoTrack) {
-        videoTrack = getFirstLiveTrack(stream.getVideoTracks());
+        videoTrack = getFirstLiveTrack(committedStream().getVideoTracks());
       }
       if (videoTrack) {
         const quality = videoQualityRef.current;
@@ -4221,11 +4294,12 @@ export function useMeetSocket({
             publishSettings: cameraPublishSettings,
           });
 
-          if (shouldPauseVideo) {
-            videoProducer.pause();
+          if (!cameraWantedNow()) {
+            closeJoinVideoProducer(videoProducer, committedStream());
+            return;
           }
 
-          videoProducerRef.current = videoProducer;
+          if (!installProducer(videoProducerRef, null, videoProducer, discardJoinProducer)) return;
           const videoProducerId = videoProducer.id;
 
           videoProducer.on("transportclose", () => {
@@ -4240,7 +4314,7 @@ export function useMeetSocket({
           const rawFallbackTrack =
             requestedVideoTrack && videoTrack.id === requestedVideoTrack.id
               ? getFirstLiveTrack(
-                  stream
+                  committedStream()
                     .getVideoTracks()
                     .filter((track) => track.id !== requestedVideoTrack.id),
                 )
@@ -4281,11 +4355,12 @@ export function useMeetSocket({
                 publishSettings: cameraPublishSettings,
               });
 
-              if (shouldPauseVideo) {
-                fallbackVideoProducer.pause();
+              if (!cameraWantedNow()) {
+                closeJoinVideoProducer(fallbackVideoProducer, committedStream());
+                return;
               }
 
-              videoProducerRef.current = fallbackVideoProducer;
+              if (!installProducer(videoProducerRef, null, fallbackVideoProducer, discardJoinProducer)) return;
               const fallbackVideoProducerId = fallbackVideoProducer.id;
 
               fallbackVideoProducer.on("transportclose", () => {
@@ -4309,11 +4384,10 @@ export function useMeetSocket({
             reportCurrentWebcamCodecFailure(err);
           }
 
-          if (mediaIntent.isCameraOn) {
-            const liveVideoTrack = getFirstLiveTrack(stream.getVideoTracks());
-            if (liveVideoTrack) {
+          if (mediaIntent.isCameraOn && ownsCamera()) {
+            const liveVideoTrack = getFirstLiveTrack(committedStream().getVideoTracks());
+            if (liveVideoTrack && cameraWantedNow()) {
               publicationWarnings.push("camera publish retry scheduled");
-              setIsCameraOff(false);
               requestCameraProducerRecovery();
             } else {
               publicationWarnings.push("camera publish failed");
@@ -4322,12 +4396,12 @@ export function useMeetSocket({
           }
         }
       } else if (mediaIntent.isCameraOn) {
-        const endedVideoTracks = stream
+        const endedVideoTracks = committedStream()
           .getVideoTracks()
           .filter((track) => track.readyState !== "live");
         if (endedVideoTracks.length > 0) {
           console.warn("[Meets] Skipping ended camera track(s):", {
-            stream: summarizeStreamForLog(stream),
+            stream: summarizeStreamForLog(committedStream()),
             endedVideoTracks: endedVideoTracks.map(summarizeTrackForLog),
           });
           publicationWarnings.push("camera track ended");
@@ -6998,6 +7072,11 @@ export function useMeetSocket({
     ],
   );
 
+  const heldJoinInfoRef = useRef<{
+    roomId: string;
+    joinInfo: JoinInfo;
+    fetchedAt: number;
+  } | null>(null);
   const connectSocket = useCallback(
     (
       targetRoomId: string,
@@ -7010,7 +7089,16 @@ export function useMeetSocket({
             const sfuUrlOverride = normalizeJoinRedirectUrl(
               options?.sfuUrlOverride,
             );
-            if (socketRef.current?.connected && !sfuUrlOverride) {
+            const roomIdForJoin =
+              targetRoomId || currentRoomIdRef.current || "";
+            // A live socket is reused only for the room its token was issued
+            // for. Another room needs another token, and with it the identity
+            // that token names.
+            if (
+              socketRef.current?.connected &&
+              !sfuUrlOverride &&
+              (!roomIdForJoin || socketRoomIdRef.current === roomIdForJoin)
+            ) {
               resolve(socketRef.current);
               return;
             }
@@ -7022,8 +7110,6 @@ export function useMeetSocket({
 
             setConnectionState("connecting");
 
-            const roomIdForJoin =
-              targetRoomId || currentRoomIdRef.current || "";
             if (!roomIdForJoin) {
               throw new Error("Missing room ID");
             }
@@ -7034,7 +7120,13 @@ export function useMeetSocket({
               ? Promise.resolve({ io: prewarm.io })
               : import("socket.io-client");
 
-            const cachedToken = prewarm?.getCachedToken?.(roomIdForJoin);
+            const heldJoinInfo = heldJoinInfoRef.current;
+            heldJoinInfoRef.current = null;
+            const cachedToken =
+              heldJoinInfo?.roomId === roomIdForJoin &&
+              Date.now() - heldJoinInfo.fetchedAt < HELD_JOIN_INFO_TTL_MS
+                ? heldJoinInfo.joinInfo
+                : prewarm?.getCachedToken?.(roomIdForJoin);
             const tokenPromise = cachedToken
               ? Promise.resolve(cachedToken)
                 : getJoinInfo(roomIdForJoin, sessionIdRef.current, {
@@ -7064,6 +7156,17 @@ export function useMeetSocket({
                 turnIceServers.length > 0 ? turnIceServers : null;
             }
 
+            if (adoptJoinIdentity?.(token, roomIdForJoin)) {
+              heldJoinInfoRef.current = {
+                roomId: roomIdForJoin,
+                joinInfo: { token, sfuUrl, iceServers },
+                fetchedAt: Date.now(),
+              };
+              identityRestartRoomIdRef.current = roomIdForJoin;
+              throw new JoinIdentityChangedError();
+            }
+
+            socketRoomIdRef.current = roomIdForJoin;
             const socket = io(socketUrl, {
               transports: ["websocket", "polling"],
               tryAllTransports: true,
@@ -7367,7 +7470,9 @@ export function useMeetSocket({
                 hostUserIds?: string[];
               }) => {
                 if (!isRoomEvent(eventRoomId)) return;
-                setHostUserIds(Array.isArray(hostUserIds) ? hostUserIds : []);
+                const nextHostUserIds = Array.isArray(hostUserIds) ? hostUserIds : [];
+                setHostUserIds(nextHostUserIds);
+                if (!nextHostUserIds.includes(userId)) setIsAdmin(false);
               },
             );
 
@@ -7503,12 +7608,11 @@ export function useMeetSocket({
                     const liveAudioTrack = getFirstLiveTrack(
                       localStreamRef.current?.getAudioTracks() ?? [],
                     );
-                    const shouldRecoverAudio = !isMutedRef.current;
+                    const shouldRecoverAudio = deviceIntents.get().audio.chosen;
                     if (shouldRecoverAudio) {
                       if (liveAudioTrack) {
                         setNoiseCancellationTrackEnabled(liveAudioTrack, true);
                       }
-                      isMutedRef.current = false;
                       setIsMuted(false);
                       requestAudioProducerRecovery();
                       return;
@@ -7516,7 +7620,6 @@ export function useMeetSocket({
                     localStreamRef.current?.getAudioTracks().forEach((track) => {
                       setNoiseCancellationTrackEnabled(track, false);
                     });
-                    isMutedRef.current = true;
                     setIsMuted(true);
                     return;
                   }
@@ -7538,17 +7641,15 @@ export function useMeetSocket({
                             currentStream?.getVideoTracks() ?? [],
                           );
                     const shouldRecoverCamera =
-                      !isCameraOffRef.current;
+                      deviceIntents.get().video.chosen;
                     if (shouldRecoverCamera) {
                       if (liveVideoTrack) {
                         liveVideoTrack.enabled = true;
                       }
-                      isCameraOffRef.current = false;
                       setIsCameraOff(false);
                       requestCameraProducerRecovery();
                       return;
                     }
-                    isCameraOffRef.current = true;
                     setIsCameraOff(true);
                     return;
                   }
@@ -8329,7 +8430,17 @@ export function useMeetSocket({
               },
             );
 
-            onLive("joinApproved", async () => {
+            let approvedJoin: Promise<void> | null = null;
+            onLive("joinApproved", () => {
+              if (approvedJoin) {
+                console.info("[Meets] Join already approved; ignoring a repeated approval.");
+                return;
+              }
+              approvedJoin = joinAfterApproval().finally(() => {
+                approvedJoin = null;
+              });
+            });
+            const joinAfterApproval = async (): Promise<void> => {
               const approvalGeneration = reconnectGenerationRef.current;
               console.info("[Meets] Join approved! Re-attempting join...");
               const joinOptions = joinOptionsRef.current;
@@ -8362,7 +8473,7 @@ export function useMeetSocket({
                   bypassMediaPermissions ||
                   joinOptions.joinMode === "webinar_attendee")
               ) {
-                joinRoomInternal(
+                await joinRoomInternal(
                   currentRoomIdRef.current,
                   stream,
                   joinOptions,
@@ -8386,7 +8497,7 @@ export function useMeetSocket({
                 );
                 refuseEntry(null);
               }
-            });
+            };
 
             onLive("joinRejected", () => {
               console.info("[Meets] Join rejected.");
@@ -8724,6 +8835,13 @@ export function useMeetSocket({
               reject(toError(err));
               return;
             }
+            // Adopting the identity the token names is the expected way in:
+            // the join starts over from the render that knows it, and only a
+            // failure of that join is an error.
+            if (err instanceof JoinIdentityChangedError) {
+              reject(err);
+              return;
+            }
             console.error("Failed to get join info:", err);
             const reconnectFailure = describeReconnectFailure(err);
             const isRecoverable = isRecoverableReconnectFailure(err);
@@ -9055,6 +9173,14 @@ export function useMeetSocket({
           return;
         } catch (err) {
           if (reconnectGeneration !== reconnectGenerationRef.current) return;
+          if (err instanceof JoinIdentityChangedError) {
+            cleanupRoomResources({
+              resetRoomId: false,
+              preserveMeetingState: true,
+            });
+            updateReconnectRecoveryStatus(null);
+            return;
+          }
           lastReconnectError = err;
           const reconnectFailure = describeReconnectFailure(err);
           const isRecoverable = isRecoverableReconnectFailure(err);
@@ -9278,11 +9404,17 @@ export function useMeetSocket({
       if (refs.abortControllerRef.current?.signal.aborted) return;
       const joinGeneration = reconnectGenerationRef.current;
 
-      telemetry.capture("meet_join_attempt", {
-        roomId: targetRoomId,
-        joinMode,
-        isAdmin,
-      });
+      // A join that starts over under the identity its token named is still
+      // the attempt that was already counted.
+      const continuesAttempt = identityRestartRoomIdRef.current === targetRoomId;
+      identityRestartRoomIdRef.current = null;
+      if (!continuesAttempt) {
+        telemetry.capture("meet_join_attempt", {
+          roomId: targetRoomId,
+          joinMode,
+          isAdmin,
+        });
+      }
 
       localRoomEndedHandledRef.current = false;
       setMeetError(null);
@@ -9302,6 +9434,9 @@ export function useMeetSocket({
         setIsAdmin(false);
       }
       const normalizedDisplayName = normalizeDisplayName(displayNameInput);
+      // An attempt that starts over keeps what the meeting was joined with:
+      // the codes asked for along the way, and the name.
+      const carried = continuesAttempt ? joinOptionsRef.current : null;
       const joinOptions: {
         displayName?: string;
         isRecorder?: boolean;
@@ -9309,9 +9444,17 @@ export function useMeetSocket({
         webinarInviteCode?: string;
         meetingInviteCode?: string;
       } = {
-        displayName: isAdmin ? normalizedDisplayName || undefined : undefined,
+        displayName:
+          (isAdmin ? normalizedDisplayName || undefined : undefined) ??
+          carried?.displayName,
         isRecorder: bypassMediaPermissions,
         joinMode,
+        ...(carried?.webinarInviteCode
+          ? { webinarInviteCode: carried.webinarInviteCode }
+          : {}),
+        ...(carried?.meetingInviteCode
+          ? { meetingInviteCode: carried.meetingInviteCode }
+          : {}),
       };
       joinOptionsRef.current = joinOptions;
       const candidateStream = localStreamRef.current ?? localStream;
@@ -9322,16 +9465,26 @@ export function useMeetSocket({
         !bypassMediaPermissions &&
         (mediaNeeds.needsAudio || mediaNeeds.needsVideo);
 
-      try {
-        const [, stream] = await Promise.all([
-          connectSocket(targetRoomId),
-          shouldRequestMedia
+      // The attempt that starts over waits for the media request the first
+      // one made. A second request would capture the microphone and camera
+      // again, and nothing would ever stop the first capture.
+      const heldMedia = identityRestartMediaRef.current;
+      identityRestartMediaRef.current = null;
+      const mediaRequest =
+        continuesAttempt && heldMedia?.roomId === targetRoomId
+          ? heldMedia.request
+          : shouldRequestMedia
             ? ensureLiveLocalMediaForJoin(
                 candidateStream,
                 joinOptions,
                 "initial join",
               )
-            : Promise.resolve(candidateStream),
+            : Promise.resolve(candidateStream);
+
+      try {
+        const [, stream] = await Promise.all([
+          connectSocket(targetRoomId),
+          mediaRequest,
         ]);
         if (
           joinGeneration !== reconnectGenerationRef.current ||
@@ -9348,9 +9501,10 @@ export function useMeetSocket({
         }
 
         const joinMediaIntent = resolveMediaPublishIntent();
+        const committedForJoin = localStreamRef.current ?? stream;
         const streamForJoin = joinMediaIntent.isCameraOn
-          ? stream
-          : dropVideoTracksForCameraOff(stream, "camera-off initial join");
+          ? committedForJoin
+          : dropVideoTracksForCameraOff(committedForJoin, "camera-off initial join");
 
         localStreamRef.current = streamForJoin;
         setLocalStream(streamForJoin);
@@ -9441,6 +9595,14 @@ export function useMeetSocket({
           joinGeneration !== reconnectGenerationRef.current ||
           intentionalDisconnectRef.current
         ) return;
+        if (err instanceof JoinIdentityChangedError) {
+          identityRestartMediaRef.current = {
+            roomId: targetRoomId,
+            request: mediaRequest,
+          };
+          void mediaRequest.catch(() => undefined);
+          return;
+        }
         console.error("[Meets] Error joining room:", err);
         telemetry.capture("meet_join_failure", {
           roomId: targetRoomId,
@@ -10141,7 +10303,7 @@ export function useMeetSocket({
   }, [socketRef]);
 
   const promoteWebinarAttendee = useCallback(
-    (userId: string): Promise<{ ok: boolean; error?: string }> => {
+    (userId: string): Promise<{ ok: boolean; error?: string; code?: string }> => {
       const socket = socketRef.current;
       if (!socket) return Promise.resolve({ ok: false, error: "Not connected" });
 
@@ -10152,9 +10314,13 @@ export function useMeetSocket({
           () => resolve({ ok: false, error: "The server did not respond. Try again." }),
           "webinar:promoteAttendee",
           { userId },
-          (response: { success: boolean } | { error: string }) => {
+          (
+            response:
+              | { success: boolean }
+              | { error: string; code?: string },
+          ) => {
             if ("error" in response) {
-              resolve({ ok: false, error: response.error });
+              resolve({ ok: false, error: response.error, code: response.code });
               return;
             }
             resolve({ ok: true });

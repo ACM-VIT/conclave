@@ -13,6 +13,7 @@ import type { Socket } from "socket.io-client";
 import { SFU_EVENTS } from "@conclave/meeting-core/sfu-events";
 import type { RoomInfo } from "@/lib/sfu-types";
 import { useSession } from "@/lib/auth-client";
+import { readJoinTokenUserKey } from "./lib/join-token-identity";
 import { shouldRetainMeetingSurface } from "./lib/meeting-surface-policy";
 import {
   AppsProvider,
@@ -1011,10 +1012,28 @@ export default function MeetsClient({
     currentUser?.id ||
     "You";
   const isGuestIdentity = !currentUser || isGuestUser(currentUser);
+  // Who a guest is, the join route decides, and it decides per room. Before
+  // the first join token arrives this tab goes by its session id.
+  const [issuedGuestKey, setIssuedGuestKey] = useState<string | null>(null);
+  const [roomToJoinAsIssued, setRoomToJoinAsIssued] = useState<string | null>(
+    null,
+  );
+  const guestUserKey = issuedGuestKey ?? `guest-${sessionId}`;
   const userKey = isGuestIdentity
-    ? `guest-${sessionId}`
-    : currentUser.email || currentUser.id || `guest-${sessionId}`;
+    ? guestUserKey
+    : currentUser.email || currentUser.id || guestUserKey;
   const userId = `${userKey}#${sessionId}`;
+  const adoptJoinIdentity = useCallback(
+    (token: string, targetRoomId: string): boolean => {
+      if (!isGuestIdentity) return false;
+      const issuedKey = readJoinTokenUserKey(token);
+      if (!issuedKey || issuedKey === userKey) return false;
+      setIssuedGuestKey(issuedKey);
+      setRoomToJoinAsIssued(targetRoomId);
+      return true;
+    },
+    [isGuestIdentity, userKey],
+  );
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1217,6 +1236,7 @@ export default function MeetsClient({
     refreshScreenAudioProducerForNetworkProfile,
   } = useMeetMedia({
     isObserverMode: isWebinarAttendee,
+    deviceIntents: refs.deviceIntents,
     connectionState,
     isMuted,
     setIsMuted,
@@ -2389,6 +2409,7 @@ export default function MeetsClient({
     setIsAdmin: setCurrentIsAdmin,
     user: currentUser,
     userId,
+    adoptJoinIdentity,
     getJoinInfo,
     joinMode,
     requestWebinarInviteCode,
@@ -2690,6 +2711,11 @@ export default function MeetsClient({
   }, [roomId, isAdminFlag, connectionState, refreshRooms]);
 
   const joinRoomById = socket.joinRoomById;
+  useEffect(() => {
+    if (!roomToJoinAsIssued) return;
+    setRoomToJoinAsIssued(null);
+    void joinRoomById(roomToJoinAsIssued);
+  }, [joinRoomById, roomToJoinAsIssued]);
   const retryReconnect = socket.retryReconnect;
   const reconnectRecoveryStatus = socket.reconnectRecoveryStatus;
   const getMeetingConfig = socket.getMeetingConfig;

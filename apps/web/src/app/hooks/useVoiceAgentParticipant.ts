@@ -29,7 +29,7 @@ import {
 } from "../lib/constants";
 import { getBrowserNetworkSnapshot } from "../lib/network-information";
 import { resolveBrowserSfuClientId } from "@/lib/sfu-client-id";
-import { createHeldDestination } from "../lib/media-captures";
+import { captureGeneration, createHeldDestination } from "../lib/media-captures";
 
 type VoiceAgentStatus = "idle" | "starting" | "running" | "error";
 
@@ -1073,6 +1073,7 @@ export function useVoiceAgentParticipant({
 
     closeRuntimeState(runtimeRef.current);
     const runtime = createRuntimeState();
+    const generation = captureGeneration();
     runtimeRef.current = runtime;
     pendingRemoteTrackRef.current = null;
 
@@ -1088,7 +1089,7 @@ export function useVoiceAgentParticipant({
         latencyHint: "interactive",
       });
       runtime.openAiMixDestination =
-        createHeldDestination(runtime.openAiMixContext);
+        createHeldDestination(runtime.openAiMixContext, generation);
       runtime.openAiMicStream = runtime.openAiMixDestination.stream;
       await rebuildOpenAiMix(runtime);
 

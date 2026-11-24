@@ -5,6 +5,7 @@ import type {
   WebinarQaModerateRequest,
 } from "../../../types.js";
 import { forceRemoveClientNow } from "../../admin/controlPlane.js";
+import { decisionRecordFull } from "../../admin/moderation.js";
 import { getOrCreateWebinarRoomConfig } from "../../webinar.js";
 import {
   emitWebinarHandQueueChanged,
@@ -334,7 +335,7 @@ export const registerWebinarInteractionHandlers = (
         }
         const userKey = guard.room.userKeysById.get(guard.userId);
         if (userKey) {
-          guard.room.revokeWebinarPromotion(userKey);
+          guard.room.declineStageInvite(userKey);
         }
         respond(callback, { success: true });
       } catch (error) {
@@ -372,7 +373,10 @@ export const registerWebinarInteractionHandlers = (
           return;
         }
 
-        guard.room.promoteWebinarUserKey(targetUserKey);
+        if (!guard.room.promoteWebinarUserKey(targetUserKey)) {
+          respond(callback, decisionRecordFull("invite"));
+          return;
+        }
         if (guard.room.setWebinarHandRaised(targetUserId, false)) {
           emitWebinarHandQueueChanged(guard.room);
         }
@@ -428,34 +432,46 @@ export const registerWebinarInteractionHandlers = (
           return;
         }
 
+        // A demotion is a decision on the guest: every stage tab of the
+        // guest leaves the stage, as admitting or denying covers every tab.
+        const stageSeats = (
+          targetUserKey
+            ? guard.room.seatsOfSameGuest(targetUserKey)
+            : [targetUserId]
+        ).filter((userId) => {
+          const seat = guard.room.getClient(userId);
+          return (
+            seat !== undefined &&
+            !seat.isWebinarAttendee &&
+            !(seat instanceof Admin) &&
+            userId !== guard.hostUserId
+          );
+        });
+
         if (targetUserKey) {
-          guard.room.revokeWebinarPromotion(targetUserKey);
-          // While webinar mode is on, this identity may not slip back in as
-          // a participant — a client that ignores the demote signal below
-          // must not be able to simply rejoin the panel.
+          // While webinar mode is on, this guest may not slip back in as a
+          // participant under any of its keys: a client that ignores the
+          // demote signal below must not be able to simply rejoin the panel.
           guard.room.markWebinarDemotedUserKey(targetUserKey);
         }
 
         const webinarConfig = state.webinarConfigs.get(guard.room.channelId);
-        target.socket.emit("webinar:demoted", {
-          roomId: guard.room.id,
-          webinarLinkSlug: webinarConfig?.linkSlug ?? null,
-        } satisfies WebinarDemotedNotification);
+        for (const userId of stageSeats) {
+          const seat = guard.room.getClient(userId);
+          if (!seat) continue;
+          seat.socket.emit("webinar:demoted", {
+            roomId: guard.room.id,
+            webinarLinkSlug: webinarConfig?.linkSlug ?? null,
+          } satisfies WebinarDemotedNotification);
 
-        // Server-side enforcement, not a client courtesy: tear the seat down
-        // now (socket handlers, producers, transports, presence). Disconnect
-        // first so a client that ignores the navigation event cannot keep
-        // invoking handlers through stale currentRoom/currentClient context;
-        // forceRemoveClientNow then cancels the disconnect grace immediately.
-        // The demoted client rejoins through the public webinar link as a
-        // viewer.
-        target.socket.disconnect(true);
-        forceRemoveClientNow({
-          io,
-          state,
-          room: guard.room,
-          userId: targetUserId,
-        });
+          // Server-side enforcement, not a client courtesy: the seat ends
+          // now (media, presence, a transcript relay it runs), then its
+          // socket closes, so a client that ignores the navigation event
+          // cannot keep invoking handlers. The demoted client rejoins
+          // through the public webinar link as a viewer.
+          forceRemoveClientNow({ io, state, room: guard.room, userId });
+          seat.socket.disconnect(true);
+        }
         respond(callback, { success: true });
       } catch (error) {
         respond(callback, { error: (error as Error).message });

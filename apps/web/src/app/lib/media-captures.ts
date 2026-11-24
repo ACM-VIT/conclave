@@ -37,25 +37,47 @@ const holdTracks = (tracks: MediaStreamTrack[]) => {
   tracks.forEach((track) => heldTracks.add(track));
 };
 
-export const createHeldDestination = (context: AudioContext): MediaStreamAudioDestinationNode => {
+const holdDerived = (requestedIn: number, tracks: MediaStreamTrack[]): void => {
+  if (requestedIn !== generation) {
+    tracks.forEach(stopTrack);
+    throw new CaptureReleasedError();
+  }
+  holdTracks(tracks);
+};
+
+export const createHeldDestination = (
+  context: AudioContext,
+  requestedIn: number,
+): MediaStreamAudioDestinationNode => {
   const node = context.createMediaStreamDestination();
-  holdTracks(node.stream.getTracks());
+  holdDerived(requestedIn, node.stream.getTracks());
   return node;
 };
 
-export const captureHeldCanvas = (canvas: HTMLCanvasElement, frameRate?: number): MediaStream => {
+export const captureHeldCanvas = (
+  canvas: HTMLCanvasElement,
+  frameRate: number | undefined,
+  requestedIn: number,
+): MediaStream => {
   const stream = canvas.captureStream(frameRate);
-  holdTracks(stream.getTracks());
+  holdDerived(requestedIn, stream.getTracks());
   return stream;
 };
 
 export const createHeldTrackGenerator = <Init, Track extends MediaStreamTrack>(
   Generator: new (init: Init) => Track,
   init: Init,
+  requestedIn: number,
 ): Track => {
   const track = new Generator(init);
-  holdTracks([track]);
+  holdDerived(requestedIn, [track]);
   return track;
+};
+
+export const holdClone = (track: MediaStreamTrack, requestedIn: number): MediaStreamTrack => {
+  const clone = track.clone();
+  holdDerived(requestedIn, [clone]);
+  return clone;
 };
 
 export const captureUserMedia = (

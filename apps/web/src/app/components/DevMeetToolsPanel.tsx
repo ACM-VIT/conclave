@@ -6,7 +6,7 @@ import type { Socket } from "socket.io-client";
 import type { JoinMode } from "../lib/types";
 import { generateSessionId, readResponseError } from "../lib/utils";
 import { resolveBrowserSfuClientId } from "@/lib/sfu-client-id";
-import { captureHeldCanvas } from "../lib/media-captures";
+import { captureGeneration, captureHeldCanvas } from "../lib/media-captures";
 
 const DevVideoEffectsDiagnostic = dynamic(
   () => import("./DevVideoEffectsDiagnostic"),
@@ -91,7 +91,7 @@ function SyntheticPresentationDiagnostic({
       return;
     }
 
-    const stream = captureHeldCanvas(canvas, 30);
+    const stream = captureHeldCanvas(canvas, 30, captureGeneration());
     const [track] = stream.getVideoTracks() as Array<
       MediaStreamTrack & { requestFrame?: () => void }
     >;
@@ -227,7 +227,7 @@ function SyntheticCameraDiagnostic({
       return;
     }
 
-    const stream = captureHeldCanvas(canvas, 30);
+    const stream = captureHeldCanvas(canvas, 30, captureGeneration());
     const [track] = stream.getVideoTracks() as Array<
       MediaStreamTrack & { requestFrame?: () => void }
     >;
