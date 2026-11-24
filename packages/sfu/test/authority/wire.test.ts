@@ -345,31 +345,21 @@ describe("authority transport on real sockets", () => {
     expect(stack.room.isAdminUserKey(ravi.email)).toBe(false);
   });
 
-  it("ends the first socket's view when a second connection takes its seat", async () => {
+  it("disconnects the first socket when a second connection takes its seat (Neon)", async () => {
     const stack = await start([pollsAuthority]);
     const host = await open(stack, asha, pollsContract);
     const first = await open(stack, priya, pollsContract);
     const pollId = await createPoll(host);
     await until(() => row(first, "polls", pollId) !== null, "poll reaches the first socket");
 
-    // Same session, new socket: the room swaps the seat, the old socket stays open.
     const second = await open(stack, priya, pollsContract);
-    await until(() => first.session.getState().kind === "revoked", "old view revoked");
+    await until(() => !first.socket.connected, "old socket disconnected");
     const framesAtSwap = first.frames.length;
     await host.session.act("share", { pollId, shared: true });
     await until(() => field(row(second, "polls", pollId), "resultsShared") === true, "new socket updated");
-    const oldVote = await ask<AuthorityResult<Json>>(first.socket, AUTHORITY_EVENTS.act, {
-      roomEpoch: getRoomAuthority(stack.state, stack.room)!.roomEpoch,
-      subscription: first.frames[0].subscription,
-      generation: 1,
-      operation: { issuedAtMs: Date.now(), nonce: "op-from-old-socket" },
-      action: "vote",
-      input: { pollId, optionIds: ["o1"] },
-    });
 
-    expect(first.socket.connected).toBe(true);
+    expect(first.socket.connected).toBe(false);
     expect(first.frames.slice(framesAtSwap)).toEqual([]);
-    expect(oldVote).toEqual({ ok: false, code: "not-in-room" });
   });
 
   it("a demoted panelist loses the meeting's apps and keeps only the audience's", async () => {

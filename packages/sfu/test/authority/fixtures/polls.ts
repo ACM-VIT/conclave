@@ -10,6 +10,7 @@ import {
   table,
   type Subject,
 } from "@conclave/apps-sdk/authority/server";
+import { actionOrderTable, nextActionOrder } from "./action-order.js";
 
 const POLL_MIN_OPTIONS = 2;
 const POLL_MAX_OPTIONS = 10;
@@ -94,6 +95,7 @@ type Ballot = {
   subject: Subject;
   voterName: string;
   votedAt: number;
+  order: number;
   optionIds: string[];
 };
 
@@ -117,6 +119,8 @@ export const pollsAuthority = defineAuthority({
   tables: {
     polls: table<PollRow>({ maxRows: MAX_POLLS_PER_ROOM }),
     ballots: table<Ballot>({ maxRows: 100_000 }),
+    ballotsBySubject: table<{ pollId: string }>({ maxRows: 100_000 }),
+    order: actionOrderTable(),
   },
   timers: {},
   // Webinar attendees never see meeting polls.
@@ -182,9 +186,11 @@ export const pollsAuthority = defineAuthority({
           subject: ctx.subject,
           voterName: ctx.displayName,
           votedAt: ctx.now,
+          order: nextActionOrder(tx),
           optionIds,
         });
         if (inserted === "exists") reject("already-voted");
+        tx.put("ballotsBySubject", key(ctx.subject, input.pollId), { pollId: input.pollId });
         const votes = { ...poll.tally.votes };
         for (const id of optionIds) votes[id] = (votes[id] ?? 0) + 1;
         tx.put("polls", key(poll.id), {
@@ -260,5 +266,34 @@ export const pollsAuthority = defineAuthority({
         value: { optionIds: [...ballot.optionIds] },
       }),
     },
+  },
+  mergeSubjects(_ctx, tx, { from, into }) {
+    for (const [, { pollId }] of tx.scan("ballotsBySubject", key(from))) {
+      tx.delete("ballotsBySubject", key(from, pollId));
+      const ballot = tx.get("ballots", key(pollId, from));
+      if (!ballot) continue;
+      tx.delete("ballots", key(pollId, from));
+      tx.put("ballotsBySubject", key(into, pollId), { pollId });
+      const kept = tx.get("ballots", key(pollId, into));
+      if (!kept) {
+        tx.put("ballots", key(pollId, into), { ...ballot, subject: into });
+        continue;
+      }
+      const dropped = kept.order < ballot.order ? ballot : kept;
+      if (dropped === kept) tx.put("ballots", key(pollId, into), { ...ballot, subject: into });
+      const poll = tx.get("polls", key(pollId));
+      if (!poll) continue;
+      const votes = { ...poll.tally.votes };
+      for (const id of dropped.optionIds) {
+        const left = (votes[id] ?? 0) - 1;
+        if (left > 0) votes[id] = left;
+        else delete votes[id];
+      }
+      tx.put("polls", key(poll.id), {
+        ...poll,
+        tally: { voterCount: Math.max(0, poll.tally.voterCount - 1), votes },
+      });
+    }
+    return undefined;
   },
 });
