@@ -401,14 +401,16 @@ describe("result visibility", () => {
     const names: Json[] = [];
     const pages: number[] = [];
     let offset: number | null = 0;
+    let rewrites: Json | undefined;
     while (offset !== null) {
       now += 1_000;
-      const page: AuthorityResult<Json> = polls.query(hostActor, "exportBallots", { pollId, offset }, now);
+      const page: AuthorityResult<Json> = polls.query(hostActor, "exportBallots", { pollId, offset, rewrites }, now);
       if (!page.ok) throw new Error(`page at ${offset} failed: ${page.code}`);
       const ballots = field(page.value, "ballots") as Json[];
       pages.push(ballots.length);
       names.push(...ballots.map((ballot) => field(ballot, "name")));
       offset = field(page.value, "nextOffset") as number | null;
+      rewrites = field(page.value, "rewrites") ?? undefined;
     }
 
     expect(pages.length).toBeGreaterThan(1);
@@ -446,15 +448,17 @@ describe("result visibility", () => {
     const answerBytes: number[] = [];
     let ballotBytes = 0;
     let offset: number | null = 0;
+    let rewrites: Json | undefined;
     while (offset !== null) {
       now += 1_000;
-      const page: AuthorityResult<Json> = polls.query(hostActor, "exportBallots", { pollId, offset }, now);
+      const page: AuthorityResult<Json> = polls.query(hostActor, "exportBallots", { pollId, offset, rewrites }, now);
       if (!page.ok) throw new Error(`page at ${offset} failed: ${page.code}`);
       answerBytes.push(Buffer.byteLength(JSON.stringify(page.value)));
       const ballots = field(page.value, "ballots") as Json[];
       ballotBytes += ballots.reduce<number>((sum, ballot) => sum + Buffer.byteLength(JSON.stringify(ballot)), 0);
       names.push(...ballots.map((ballot) => field(ballot, "name")));
       offset = field(page.value, "nextOffset") as number | null;
+      rewrites = field(page.value, "rewrites") ?? undefined;
     }
     return { refused, names, answerBytes, ballotBytes };
   };

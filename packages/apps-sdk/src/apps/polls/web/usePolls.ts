@@ -33,6 +33,7 @@ const REASONS: Record<string, string> = {
   ended: "This poll has ended",
   "already-voted": "You already voted",
   "invalid-choice": "Pick an option to vote",
+  "export-changed": "This poll's votes changed during the download. Try again.",
 };
 
 const FAILURES: Partial<Record<AuthorityFailure["code"], string>> = {
@@ -53,6 +54,7 @@ const describe = (failure: AuthorityFailure): string =>
 const EXPORT_WAIT_MS = 1_000;
 /** Waits in a row before an export gives up. */
 const EXPORT_MAX_WAITS = 10;
+const EXPORT_MAX_RESTARTS = 3;
 
 const pause = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
@@ -158,10 +160,19 @@ export function usePolls(options?: {
     async (pollId: string): Promise<PollActionResult> => {
       const ballots: PollBallot[] = [];
       let offset = 0;
+      let rewrites: number | undefined;
       let waits = 0;
+      let restarts = 0;
       for (;;) {
-        const result = await query("exportBallots", { pollId, offset });
+        const result = await query("exportBallots", { pollId, offset, rewrites });
         if (!result.ok) {
+          if (result.code === "rejected" && result.reason === "export-changed" && restarts < EXPORT_MAX_RESTARTS) {
+            restarts += 1;
+            ballots.length = 0;
+            offset = 0;
+            rewrites = undefined;
+            continue;
+          }
           const busy = result.code === "rate-limited" || result.code === "busy";
           if (!busy || waits >= EXPORT_MAX_WAITS) {
             return { ok: false, error: describe(result) };
@@ -171,6 +182,7 @@ export function usePolls(options?: {
           continue;
         }
         waits = 0;
+        rewrites = result.value.rewrites;
         ballots.push(...result.value.ballots);
         if (result.value.nextOffset === null) {
           const { poll } = result.value;

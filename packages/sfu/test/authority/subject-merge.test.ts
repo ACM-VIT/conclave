@@ -86,7 +86,10 @@ const crowdUpvote = (question: string): MergeStep => ({
 const crowdAsk: MergeStep = { crowd: 0, action: "ask", input: (_receipts, member) => ({ text: `Crowd question ${member}` }) };
 const ofSize = (step: MergeStep, size: number): MergeStep => ("crowd" in step ? { ...step, crowd: size } : step);
 
-const activityFields = new Map<AuthorityModule, string[]>([[qaAuthority, ["updatedAt"]]]);
+const activityFields = new Map<AuthorityModule, string[]>([
+  [qaAuthority, ["updatedAt"]],
+  [pollsAuthority, ["ballotRewrites"]],
+]);
 
 const scripts: Array<[string, AuthorityModule, MergeStep[]]> = [
   ["polls: a ballot each in different polls", pollsAuthority, [pollOf("p1"), pollOf("p2"), voteIn("into", "p1", "o1"), voteIn("from", "p2", "o2")]],
@@ -154,6 +157,91 @@ describe("qa merges after random histories of any length", () => {
     }
     expect(mismatches).toEqual([]);
     expect(compared).toBeGreaterThan(40);
+  });
+});
+
+describe("a poll export with a merge between its pages", () => {
+  const meeting = { mode: "meeting" as const, qaEnabled: true };
+  const voter = (subject: string, displayName: string, role: Actor["role"] = "member"): Actor => ({
+    subject: subject as Subject,
+    role,
+    verified: true,
+    displayName,
+  });
+  const host = voter("host", "Host", "moderator");
+  const firstTab = voter("gita-tab-1", "Gita, first tab");
+  const secondTab = voter("gita-tab-2", "Gita, second tab");
+  const pollWithBallots = (secondTabVotes: boolean) => {
+    const instance = new AuthorityInstance("polls.export-merge", pollsAuthority, meeting, {
+      limits: DEFAULT_AUTHORITY_LIMITS,
+      random: { next: () => 0.5, int: () => 0, shuffle: (list) => [...list] },
+      verifyViews: false,
+    });
+    let now = 1_000_000;
+    const created = instance.act(host, "create", { question: "Lunch?", options: ["Tea", "Coffee"] }, null, now);
+    const pollId = created.ok ? ((created.value as { pollId: string }).pollId) : "";
+    for (let index = 0; index < 3_000; index += 1) {
+      now += 20;
+      if (index === 2_600 && !secondTabVotes) continue;
+      const who =
+        index === 40 ? firstTab : index === 2_600 ? secondTab : voter(`voter-${index}`, `${"名".repeat(190)} ${index}`);
+      const cast = instance.act(who, "vote", { pollId, optionIds: [index % 2 === 0 ? "o1" : "o2"] }, null, now);
+      if (!cast.ok) throw new Error(`vote ${index} failed: ${cast.code}`);
+    }
+    return { instance, pollId, now };
+  };
+  const exportAll = (secondTabVotes: boolean, mergeBeforePage: number | null) => {
+    const { instance, pollId, now } = pollWithBallots(secondTabVotes);
+    let at = now;
+    const names: string[] = [];
+    let offset: number | null = 0;
+    let rewrites: number | undefined;
+    let pages = 0;
+    let restarts = 0;
+    let merged = false;
+    while (offset !== null) {
+      if (!merged && pages === mergeBeforePage) {
+        instance.mergeSubjects({ from: firstTab.subject, into: secondTab.subject }, (at += 1));
+        merged = true;
+      }
+      at += 1_000;
+      const page = instance.query(host, "exportBallots", { pollId, offset, rewrites }, at);
+      if (!page.ok) {
+        if (page.code !== "rejected" || page.reason !== "export-changed" || restarts > 0) {
+          throw new Error(`page at ${offset} failed: ${JSON.stringify(page)}`);
+        }
+        restarts += 1;
+        names.length = 0;
+        offset = 0;
+        rewrites = undefined;
+        continue;
+      }
+      pages += 1;
+      const value = page.value as { ballots: { name: string }[]; nextOffset: number | null; rewrites: number };
+      names.push(...value.ballots.map((ballot) => ballot.name));
+      offset = value.nextOffset;
+      rewrites = value.rewrites;
+    }
+    return { names, pages, restarts };
+  };
+
+  it.each([
+    ["both tabs voted, and the first tab's ballot is kept under the second", true, 2_999],
+    ["only the first tab voted, and its ballot moves to the second", false, 2_999],
+  ])("exports every ballot once, whichever two pages the merge falls between: %s", (_case, secondTabVotes, ballots) => {
+    const afterTheMerge = exportAll(secondTabVotes, 0);
+    const outcomes = Array.from({ length: afterTheMerge.pages - 1 }, (_, index) => {
+      const { names, restarts } = exportAll(secondTabVotes, index + 1);
+      return { between: [index + 1, index + 2], sameAsAfterTheMerge: names.join("|") === afterTheMerge.names.join("|"), restarts };
+    });
+
+    expect(afterTheMerge.pages).toBeGreaterThan(2);
+    expect(afterTheMerge.names).toHaveLength(ballots);
+    expect(new Set(afterTheMerge.names).size).toBe(ballots);
+    expect(afterTheMerge.names.filter((name) => name.startsWith("Gita"))).toEqual(["Gita, first tab"]);
+    expect(outcomes).toEqual(
+      outcomes.map(({ between }) => ({ between, sameAsAfterTheMerge: true, restarts: 1 })),
+    );
   });
 });
 

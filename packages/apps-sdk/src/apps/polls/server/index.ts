@@ -28,6 +28,7 @@ import {
 type PollRow = PollCard & {
   /** Kept in step with the ballots, so a view never recounts. */
   tally: PollResults;
+  ballotRewrites: number;
 };
 
 type Ballot = {
@@ -106,6 +107,7 @@ export const pollsAuthority = defineAuthority({
           endedAt: null,
           createdByName: ctx.displayName,
           tally: { voterCount: 0, votes: {} },
+          ballotRewrites: 0,
         });
         return { pollId: id };
       },
@@ -195,6 +197,7 @@ export const pollsAuthority = defineAuthority({
       read(_ctx, db, input) {
         const poll = db.get("polls", key(input.pollId));
         if (!poll) return reject("not-found");
+        if ((input.offset ?? 0) > 0 && input.rewrites !== poll.ballotRewrites) reject("export-changed");
         const ballots: PollBallot[] = [];
         let offset = input.offset ?? 0;
         let bytes = 0;
@@ -221,7 +224,7 @@ export const pollsAuthority = defineAuthority({
           }
           if (rows.length < EXPORT_SCAN_ROWS) break;
         }
-        return { poll: card(poll), results: totals(poll), ballots, nextOffset };
+        return { poll: card(poll), results: totals(poll), ballots, nextOffset, rewrites: poll.ballotRewrites };
       },
     },
   },
@@ -258,8 +261,10 @@ export const pollsAuthority = defineAuthority({
       if (!ballot) continue;
       tx.delete("ballots", key(poll.id, from));
       const kept = tx.get("ballots", key(poll.id, into));
+      const rewrites = poll.ballotRewrites + 1;
       if (!kept) {
         tx.put("ballots", key(poll.id, into), { ...ballot, subject: into });
+        tx.put("polls", key(poll.id), { ...poll, ballotRewrites: rewrites });
         continue;
       }
       const dropped = kept.order < ballot.order ? ballot : kept;
@@ -273,6 +278,7 @@ export const pollsAuthority = defineAuthority({
       tx.put("polls", key(poll.id), {
         ...poll,
         tally: { voterCount: Math.max(0, poll.tally.voterCount - 1), votes },
+        ballotRewrites: rewrites,
       });
     }
     return undefined;
