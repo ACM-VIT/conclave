@@ -1220,12 +1220,15 @@ describe("the tracker's memory over a long call", () => {
     state("connecting", 0);
     state("joined", 1000);
     let at = 1000;
+    const streams = Array.from({ length: 24 }, (_, n) => n);
     const replaceAll = (round: number) => {
       at += STEADY_SAMPLE_MS;
       tracker.onStats(
         sample(
-          [0, 1, 2, 3].map((n) => video({ id: `recv:${round}-${n}`, bytesReceived: 1000, framesDecoded: 10, packetsReceived: 10 })),
-          { outboundVideo: [0, 1, 2].map((n) => layer({ id: `send:${round}-${n}`, bytesSent: 1000 })) },
+          streams.map((n) =>
+            video({ id: `RTCInboundRTPVideoStream_${round}_${n}_${"0".repeat(48)}`, bytesReceived: 1000, framesDecoded: 10, packetsReceived: 10 }),
+          ),
+          { outboundVideo: [0, 1, 2].map((n) => layer({ id: `RTCOutboundRTPVideoStream_${round}_${n}_${"0".repeat(48)}`, bytesSent: 1000 })) },
         ),
         at,
       );
