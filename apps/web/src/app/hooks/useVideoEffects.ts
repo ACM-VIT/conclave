@@ -4367,9 +4367,10 @@ const prewarmOutputWriterWorker = (
       finish(new Error("output writer worker prewarm timed out."));
     }, PROCESSOR_PREWARM_TIMEOUT_MS);
 
+    const generation = captureGeneration();
     try {
       logVideoEffects(instanceId, "output_writer_worker_prewarm_start");
-      const track = createHeldTrackGenerator(GeneratorCtor, { kind: "video" }, captureGeneration());
+      const track = createHeldTrackGenerator(GeneratorCtor, { kind: "video" }, generation);
       generatorTrack = track;
       worker = new Worker("/effects/video-effects-output-writer.js", {
         type: "module",
@@ -4397,13 +4398,20 @@ const prewarmOutputWriterWorker = (
             finish();
             return;
           }
-          if (!message.hasVideoFrame || !worker || !generatorTrack) {
+          if (
+            !message.hasVideoFrame ||
+            !worker ||
+            !generatorTrack ||
+            generation !== captureGeneration() ||
+            generatorTrack.readyState !== "live"
+          ) {
             logVideoEffects(instanceId, "output_writer_worker_prewarm_done", {
               hasVideoFrame: message.hasVideoFrame,
               hasWritableStream: message.hasWritableStream,
               hasOffscreenCanvas: message.hasOffscreenCanvas,
               renderer: message.renderer,
               stored: false,
+              released: generation !== captureGeneration(),
               elapsedMs: Math.round(performance.now() - startedAt),
             });
             finish();
