@@ -7,6 +7,7 @@ import {
 import * as decoding from "lib0/decoding";
 import * as encoding from "lib0/encoding";
 import * as Y from "yjs";
+import { Logger } from "../utilities/loggers.js";
 
 // A document larger than one sync response can no longer reach new joiners,
 // so it is also the most a document may grow to.
@@ -104,9 +105,27 @@ const heldIn = (state: ReadonlyMap<number, number>, id: Y.ID): boolean =>
 const writersOf = (doc: Y.Doc): Iterable<number> =>
   Y.decodeStateVector(Y.encodeStateVector(doc)).keys();
 
-// App ids hold no control characters, so this joins them unambiguously.
-const clearedWriterKey = (appId: string, client: number): string =>
-  `${appId}\u0000${client}`;
+const CLEARED_WRITER_FILTER_BYTES = 32 * 1024;
+const CLEARED_WRITER_FILTER_BITS = CLEARED_WRITER_FILTER_BYTES * 8;
+const CLEARED_WRITER_PROBES = 6;
+
+const mixClientId = (client: number, seed: number): number => {
+  const high = Math.floor(client / 0x1_0000_0000);
+  let hash = Math.imul((client >>> 0) ^ seed ^ Math.imul(high, 0x27d4eb2d), 0x85ebca6b);
+  hash ^= hash >>> 13;
+  hash = Math.imul(hash, 0xc2b2ae35);
+  hash ^= hash >>> 16;
+  return hash >>> 0;
+};
+
+const clearedWriterBits = (client: number): number[] => {
+  const first = mixClientId(client, 0x9e3779b9);
+  const step = (mixClientId(client, 0x7f4a7c15) | 1) >>> 0;
+  return Array.from(
+    { length: CLEARED_WRITER_PROBES },
+    (_, probe) => (first + probe * step) % CLEARED_WRITER_FILTER_BITS,
+  );
+};
 
 // The live value under `key` of the map `parent` names in `doc`: a root type
 // by name, or a nested type by the id of the item holding it.
@@ -222,11 +241,25 @@ const createPresence = (): Awareness => {
   return awareness;
 };
 
+type Cursor = { participant: string; userId: string };
+
 type Presence = {
   awareness: Awareness;
-  holders: Map<number, string>;
+  cursors: Map<number, Cursor>;
+  shown: Map<string, number>;
   removed: Map<string, Set<number>>;
+  removedBy: Map<number, string>;
 };
+
+const removalPacket = (awareness: Awareness, clients: number[]): Uint8Array =>
+  encodeAwarenessEntries(
+    clients.map((clientID) => ({
+      clientID,
+      clock: awareness.meta.get(clientID)?.clock ?? 0,
+      state: "null",
+      removal: true,
+    })),
+  );
 
 const planPresence = (awareness: Awareness, entries: AwarenessEntry[]) => {
   const clocks = new Map<number, number>();
@@ -269,11 +302,10 @@ export class RoomApps {
   private stayStart: ReadonlyMap<number, number> = new Map();
   private generations = 0;
   private docs: Map<string, AppDoc> = new Map();
-  private clearedWriters: Set<string> = new Set();
+  private clearedWriters: Uint8Array | null = null;
   private clientIdOwners: Map<number, ClientIdClaim> = new Map();
   private clientIdCounts: Map<string, number> = new Map();
   private presenceIds: Map<number, ClientIdClaim> = new Map();
-  private presenceIdCounts: Map<string, number> = new Map();
   private presence: Map<string, Presence> = new Map();
 
   // `participantOf` maps a connection's user id to the participant behind it,
@@ -286,6 +318,12 @@ export class RoomApps {
 
   get heldPresenceIds(): ReadonlyMap<number, string> {
     return new Map(Array.from(this.presenceIds, ([client, claim]) => [client, claim.participant]));
+  }
+
+  get documentWriterCount(): number {
+    let writers = 0;
+    for (const { doc } of this.docs.values()) writers += doc.store.clients.size;
+    return writers;
   }
 
   presenceRecordCount(appId: string): number {
@@ -380,7 +418,7 @@ export class RoomApps {
       awarenessRemoval = this.removeAwareness(appId);
       this.stage = { activeAppId: null, locked: false };
     }
-    this.markCleared(appId, writersOf(entry.doc));
+    this.markCleared([...writersOf(entry.doc), ...this.releaseWriters(appId)]);
     this.destroyDoc(appId, entry);
     this.revision += 1;
     return { ok: true, changed: true, awarenessRemoval };
@@ -435,7 +473,7 @@ export class RoomApps {
       if (heldIn(mark.seen, replaced) || heldIn(this.stayStart, replaced)) return "unseen-value";
     }
     for (const client of facts.touched) {
-      if (this.clearedWriters.has(clearedWriterKey(appId, client))) return "cleared";
+      if (!this.clientIdOwners.has(client) && this.wasCleared(client)) return "cleared";
     }
     const participant = this.participantOf(userId);
     const claims = this.planClaims(participant, appId, facts.writers);
@@ -517,8 +555,30 @@ export class RoomApps {
     return awarenessRemoval;
   }
 
-  private markCleared(appId: string, clients: Iterable<number>): void {
-    for (const client of clients) this.clearedWriters.add(clearedWriterKey(appId, client));
+  private markCleared(clients: Iterable<number>): void {
+    const filter = (this.clearedWriters ??= new Uint8Array(CLEARED_WRITER_FILTER_BYTES));
+    for (const client of clients) {
+      for (const bit of clearedWriterBits(client)) filter[bit >>> 3] |= 1 << (bit & 7);
+    }
+  }
+
+  private wasCleared(client: number): boolean {
+    const filter = this.clearedWriters;
+    if (!filter) return false;
+    return clearedWriterBits(client).every((bit) => (filter[bit >>> 3] & (1 << (bit & 7))) !== 0);
+  }
+
+  private releaseWriters(appId: string): number[] {
+    const released: number[] = [];
+    for (const [client, claim] of this.clientIdOwners) {
+      if (claim.appId !== appId) continue;
+      this.clientIdOwners.delete(client);
+      const held = (this.clientIdCounts.get(claim.participant) ?? 1) - 1;
+      if (held > 0) this.clientIdCounts.set(claim.participant, held);
+      else this.clientIdCounts.delete(claim.participant);
+      released.push(client);
+    }
+    return released;
   }
 
   private planClaims(
@@ -551,29 +611,24 @@ export class RoomApps {
 
   private holdPresenceId(client: number, participant: string, appId: string): void {
     this.presenceIds.set(client, { participant, appId });
-    this.presenceIdCounts.set(participant, (this.presenceIdCounts.get(participant) ?? 0) + 1);
   }
 
-  private withinPresenceLimit(participant: string, ends: ReadonlyMap<number, boolean>): boolean {
-    let held = this.presenceIdCounts.get(participant) ?? 0;
-    for (const [client, shown] of ends) {
-      if (this.clientIdOwners.has(client)) continue;
-      const holding = this.presenceIds.has(client);
-      if (shown && !holding) held += 1;
-      if (!shown && holding) held -= 1;
+  private withinCursorLimit(
+    presence: Presence,
+    participant: string,
+    ends: ReadonlyMap<number, boolean>,
+  ): boolean {
+    let shown = presence.shown.get(participant) ?? 0;
+    for (const [client, showing] of ends) {
+      const wasShowing = presence.awareness.states.has(client);
+      if (showing && !wasShowing) shown += 1;
+      if (!showing && wasShowing) shown -= 1;
     }
-    return held <= MAX_PRESENCE_IDS_PER_PARTICIPANT;
+    return shown <= MAX_PRESENCE_IDS_PER_PARTICIPANT;
   }
 
   private releasePresenceIds(clients: Iterable<number>): void {
-    for (const client of clients) {
-      const claim = this.presenceIds.get(client);
-      if (!claim) continue;
-      this.presenceIds.delete(client);
-      const held = (this.presenceIdCounts.get(claim.participant) ?? 1) - 1;
-      if (held > 0) this.presenceIdCounts.set(claim.participant, held);
-      else this.presenceIdCounts.delete(claim.participant);
-    }
+    for (const client of clients) this.presenceIds.delete(client);
   }
 
   private destroyDoc(appId: string, entry: AppDoc): void {
@@ -586,16 +641,17 @@ export class RoomApps {
   private removeAwareness(appId: string): AppAwarenessRemoval | null {
     const presence = this.presence.get(appId);
     if (!presence) return null;
-
-    const clientIds = Array.from(presence.awareness.getStates().keys());
-    let removal: AppAwarenessRemoval | null = null;
-    if (clientIds.length > 0) {
-      removeAwarenessStates(presence.awareness, clientIds, "app-close");
-      removal = { appId, awarenessUpdate: encodeAwarenessUpdate(presence.awareness, clientIds) };
-    }
-
-    destroyPresence(presence.awareness);
     this.presence.delete(appId);
+    let removal: AppAwarenessRemoval | null = null;
+    try {
+      const clients = Array.from(presence.awareness.getStates().keys());
+      if (clients.length > 0) {
+        removal = { appId, awarenessUpdate: removalPacket(presence.awareness, clients) };
+      }
+    } catch (error) {
+      Logger.warn(`[Apps] Could not encode the cursor removal for ${appId}`, error);
+    }
+    destroyPresence(presence.awareness);
     this.releasePresenceIds(
       Array.from(this.presenceIds).filter(([, claim]) => claim.appId === appId).map(([client]) => client),
     );
@@ -605,9 +661,20 @@ export class RoomApps {
   private presenceFor(appId: string): Presence {
     const existing = this.presence.get(appId);
     if (existing) return existing;
-    const presence: Presence = { awareness: createPresence(), holders: new Map(), removed: new Map() };
+    const presence: Presence = {
+      awareness: createPresence(),
+      cursors: new Map(),
+      shown: new Map(),
+      removed: new Map(),
+      removedBy: new Map(),
+    };
     presence.awareness.on("update", ({ removed }: { removed: number[] }, origin: unknown) => {
-      if (origin !== presence) this.settlePresence(presence, removed);
+      if (origin === presence || this.presence.get(appId) !== presence) return;
+      try {
+        this.settlePresence(presence, removed);
+      } catch (error) {
+        Logger.warn(`[Apps] Could not settle removed cursors for ${appId}`, error);
+      }
     });
     this.presence.set(appId, presence);
     return presence;
@@ -619,40 +686,58 @@ export class RoomApps {
     sender?: { participant: string; appId: string; userId: string },
   ): void {
     for (const client of clients) {
-      const holder = presence.holders.get(client);
+      const cursor = presence.cursors.get(client);
       if (presence.awareness.states.has(client)) {
         if (!sender) continue;
-        if (holder !== undefined) presence.removed.get(holder)?.delete(client);
-        presence.holders.set(client, sender.userId);
+        this.forgetRemoved(presence, client);
+        if (!cursor) this.countCursor(presence, sender.participant, 1);
+        presence.cursors.set(client, { participant: sender.participant, userId: sender.userId });
         if (!this.clientIdOwners.has(client) && !this.presenceIds.has(client)) {
           this.holdPresenceId(client, sender.participant, sender.appId);
         }
         continue;
       }
+      if (cursor) {
+        presence.cursors.delete(client);
+        this.countCursor(presence, cursor.participant, -1);
+      }
       this.releasePresenceIds([client]);
-      const keeper = holder ?? sender?.userId;
+      const keeper = cursor?.userId ?? presence.removedBy.get(client) ?? sender?.userId;
       if (keeper !== undefined) this.keepRemoved(presence, client, keeper);
     }
   }
 
-  private keepRemoved(presence: Presence, client: number, holder: string): void {
-    const removed = presence.removed.get(holder) ?? new Set<number>();
-    presence.removed.set(holder, removed);
-    presence.holders.set(client, holder);
-    removed.delete(client);
+  private countCursor(presence: Presence, participant: string, change: number): void {
+    const shown = (presence.shown.get(participant) ?? 0) + change;
+    if (shown > 0) presence.shown.set(participant, shown);
+    else presence.shown.delete(participant);
+  }
+
+  private forgetRemoved(presence: Presence, client: number): void {
+    const keeper = presence.removedBy.get(client);
+    if (keeper === undefined) return;
+    presence.removedBy.delete(client);
+    presence.removed.get(keeper)?.delete(client);
+  }
+
+  private keepRemoved(presence: Presence, client: number, keeper: string): void {
+    this.forgetRemoved(presence, client);
+    const removed = presence.removed.get(keeper) ?? new Set<number>();
+    presence.removed.set(keeper, removed);
+    presence.removedBy.set(client, keeper);
     removed.add(client);
     for (const oldest of removed) {
       if (removed.size <= MAX_REMOVED_PRESENCE_IDS_PER_CONNECTION) return;
       removed.delete(oldest);
-      presence.holders.delete(oldest);
-      presence.awareness.meta.delete(oldest);
+      presence.removedBy.delete(oldest);
+      if (!presence.awareness.states.has(oldest)) presence.awareness.meta.delete(oldest);
     }
   }
 
   private forgetConnection(presence: Presence, userId: string): void {
     for (const client of presence.removed.get(userId) ?? []) {
-      presence.holders.delete(client);
-      presence.awareness.meta.delete(client);
+      presence.removedBy.delete(client);
+      if (!presence.awareness.states.has(client)) presence.awareness.meta.delete(client);
     }
     presence.removed.delete(userId);
   }
@@ -684,7 +769,7 @@ export class RoomApps {
       if (owner !== undefined || shownHere.has(entry.clientID)) own.push(entry);
     }
     const { applied, ends } = planPresence(presence.awareness, own);
-    if (applied.length === 0 || !this.withinPresenceLimit(participant, ends)) return null;
+    if (applied.length === 0 || !this.withinCursorLimit(presence, participant, ends)) return null;
 
     const forwarded = encodeAwarenessEntries(applied);
     applyAwarenessUpdate(presence.awareness, forwarded, presence);
@@ -703,14 +788,18 @@ export class RoomApps {
   clearUserAwareness(userId: string): AppAwarenessRemoval[] {
     const removals: AppAwarenessRemoval[] = [];
     for (const [appId, presence] of this.presence) {
-      const shown = Array.from(presence.holders)
-        .filter(([client, holder]) => holder === userId && presence.awareness.states.has(client))
-        .map(([client]) => client);
-      if (shown.length > 0) {
-        removeAwarenessStates(presence.awareness, shown, userId);
-        removals.push({ appId, awarenessUpdate: encodeAwarenessUpdate(presence.awareness, shown) });
+      try {
+        const shown = Array.from(presence.cursors)
+          .filter(([, cursor]) => cursor.userId === userId)
+          .map(([client]) => client);
+        if (shown.length > 0) {
+          removals.push({ appId, awarenessUpdate: removalPacket(presence.awareness, shown) });
+          removeAwarenessStates(presence.awareness, shown, userId);
+        }
+        this.forgetConnection(presence, userId);
+      } catch (error) {
+        Logger.warn(`[Apps] Could not remove the cursors of ${userId} from ${appId}`, error);
       }
-      this.forgetConnection(presence, userId);
     }
     return removals;
   }
@@ -725,11 +814,10 @@ export class RoomApps {
     for (const [appId, entry] of Array.from(this.docs)) {
       this.destroyDoc(appId, entry);
     }
-    this.clearedWriters.clear();
+    this.clearedWriters = null;
     this.clientIdOwners.clear();
     this.clientIdCounts.clear();
     this.presenceIds.clear();
-    this.presenceIdCounts.clear();
     this.stage = { activeAppId: null, locked: false };
     this.revision += 1;
   }

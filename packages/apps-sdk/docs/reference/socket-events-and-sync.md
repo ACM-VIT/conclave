@@ -61,13 +61,17 @@ refuses that id from anyone else and in any other app, so bytes copied from
 one app never land in another. A participant who rejoins keeps their ids. A
 viewer that only syncs binds nothing. One update may bring at most 8 new ids
 and a participant may hold 1024; there is no shared room-wide pool, so no
-participant's ids can stop another from writing.
+participant's ids can stop another from writing. A binding lasts as long as
+the document it was written into: clearing a document releases its writers'
+ids, so the bindings a room keeps never outnumber the writers of the documents
+it keeps.
 
 Presence only holds an id while the room shows a cursor under it. An id first
 shown in presence is held for that participant until its cursor is removed,
-times out after 30 s, the participant leaves or the app leaves the stage, and
-a participant may hold at most 4 this way; a presence packet that would leave
-them holding more is refused. An entry the room ignores, such as one whose
+times out after 30 s, the participant leaves or the app leaves the stage. A
+participant may show at most 4 cursors at a time, whether under ids held this
+way or ids they write under; a presence packet that would leave them showing
+more is refused. An entry the room ignores, such as one whose
 clock is not newer than the room's, holds nothing, and the room forwards only
 the entries it applies. Writing under a held id makes it the participant's for
 good.
@@ -112,14 +116,15 @@ allows, and always before that socket's next sync or stage command, so a
 stroke drawn at pointer speed is never cut in two. Only an update that would
 take a socket's held updates past 256 KiB is refused, as `rate-limited`.
 
-A cleared document stays cleared. The SFU remembers, per app, the Yjs clients
-that wrote to it and drops any later `apps:yjs:update` for that app from those
-clients or that holds, builds on or deletes their content, as a client that
-missed the clear would send on resync. It keeps these records until the
-room closes; every writer is a bound id of that one app, so they never
-outnumber the room's ids. With ids bound to their writers, a participant is
-only ever blocked by their own writes, or by a host clearing a document they
-wrote.
+A cleared document stays cleared. The SFU remembers the Yjs clients that wrote
+to it and drops any later `apps:yjs:update`, in any app, from those clients or
+that holds, builds on or deletes their content, as a client that missed the
+clear would send on resync. It keeps them until the room closes in a fixed
+32 KiB filter that never forgets a cleared client. Once it holds many
+thousands of cleared clients, a brand new client id may rarely be taken for a
+cleared one; that writer is refused and starts its copy over under a new id.
+With ids bound to their writers, a participant is only ever blocked by their
+own writes, or by a host clearing a document they wrote.
 
 A refused stage command acks `{ success: false, error, code }`. `code` is
 `"stale_revision"` when the stage changed first, and `"room_full"` when the
