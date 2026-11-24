@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { artifactProblems, contextProblems, imagePackages, repoRoot, workspacePackages } from "./check-docker-context.mjs";
-import { rootContextBuilds } from "./docker-context/compose.mjs";
+import { composeBuilds, rootContextBuilds } from "./docker-context/compose.mjs";
 import { DockerfileError, contextCopies } from "./docker-context/dockerfile.mjs";
 import { dockerIgnoreMatcher, walkContext } from "./docker-context/dockerignore.mjs";
 import { UnsupportedShape } from "./docker-context/unsupported.mjs";
@@ -256,6 +256,34 @@ test("compose builds inherited through a YAML merge key are found", (t) => {
     "docker-compose.yml": "x-sfu: &sfu\n  build:\n    context: .\n    dockerfile: packages/sfu/Dockerfile\nservices:\n  edge:\n    <<: *sfu\n    environment: { A: b }\n",
   });
   assert.deepEqual(rootContextBuilds(root).map(({ service, dockerfile }) => [service, dockerfile]), [["edge", "packages/sfu/Dockerfile"]]);
+});
+
+test("compose builds inherited through extends are found, from the same file or one beside it", (t) => {
+  const root = fixture(t, {
+    "docker-compose.sfu.yml": "services:\n  sfu-a:\n    build:\n      context: .\n      dockerfile: packages/sfu/Dockerfile\n  sfu-b:\n    extends: sfu-a\n",
+    "docker-compose.sfu-staging.yml": "services:\n  sfu-staging:\n    extends:\n      file: ./docker-compose.sfu.yml\n      service: sfu-b\n    image: staging\n  redis:\n    image: redis\n",
+  });
+  assert.deepEqual(composeBuilds(root).map(({ file, service, dockerfile }) => [file, service, dockerfile]), [
+    ["docker-compose.sfu-staging.yml", "sfu-staging", "packages/sfu/Dockerfile"],
+    ["docker-compose.sfu.yml", "sfu-a", "packages/sfu/Dockerfile"],
+    ["docker-compose.sfu.yml", "sfu-b", "packages/sfu/Dockerfile"],
+  ]);
+});
+
+test("extends the guard cannot resolve fails closed", (t) => {
+  const base = "services:\n  base:\n    build:\n      context: .\n      dockerfile: packages/sfu/Dockerfile\n";
+  for (const service of [
+    "    extends: base\n    build: .",
+    "    extends: { file: ../docker-compose.yml, service: base }",
+    "    extends: { file: other/docker-compose.yml, service: base }",
+    "    extends: { file: docker-compose.yml, service: missing }",
+    "    extends: { service: base, from: elsewhere }",
+    "    extends: [base]",
+    "    extends: x",
+  ]) {
+    const root = fixture(t, { "docker-compose.yml": `${base}  x:\n${service}\n` });
+    assert.throws(() => composeBuilds(root), UnsupportedShape, service);
+  }
 });
 
 test("removing any single .dockerignore rule fails the check", () => {
