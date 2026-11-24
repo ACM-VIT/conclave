@@ -115,6 +115,7 @@ type Phase =
 type Shadow = {
   phase: Phase;
   removed: Set<string>;
+  ejected: Set<string>;
   members: Set<string>;
   cohosts: Set<string>;
 };
@@ -333,6 +334,7 @@ const createWorld = async (options: {
     shadow: {
       phase: { kind: "none" },
       removed: new Set(),
+      ejected: new Set(),
       members: new Set(),
       cohosts: new Set(),
     },
@@ -568,6 +570,7 @@ const callOver = (world: World, why: string): void => {
   world.trace.push(`  (the call is over: ${why})`);
   world.shadow.phase = { kind: "none" };
   world.shadow.removed.clear();
+  world.shadow.ejected.clear();
   world.shadow.members.clear();
   world.shadow.cohosts.clear();
 };
@@ -613,7 +616,23 @@ const performHostAction = async (
     world.trace.push(`  (refused: ${answer?.error ?? "no answer"})`);
     return;
   }
-  if (step.action === "admit" || step.action === "allow") world.shadow.removed.delete(target.key);
+  if (step.action === "kick" || step.action === "block") {
+    for (const tab of [target.tab, target.second]) {
+      if (!tab || tab.generation !== world.sfu.generation) continue;
+      const seat = tab.context.currentClient?.id;
+      if (!seat || !room.clients.has(seat) || tab.context.currentRoom !== room) continue;
+      if (!tab.peer.events.some(({ event }) => event === "kicked")) {
+        world.failures.push(`${target.name}'s other tab was not told they were removed`);
+      }
+    }
+    if (world.shadow.phase.kind === "running" && !ownsCode(target, room.ownerEmail)) {
+      world.shadow.ejected.add(target.key);
+    }
+  }
+  if (step.action === "admit" || step.action === "allow") {
+    world.shadow.removed.delete(target.key);
+    world.shadow.ejected.delete(target.key);
+  }
   const removal = ["kick", "block", "blockStay", "revoke"].includes(step.action);
   if (removal) removes(world, target);
   if (removal && step.action !== "revoke") world.shadow.cohosts.delete(target.key);
@@ -944,6 +963,12 @@ const check = async (
     for (const key of room.adminUserKeys) {
       if (key === room.ownerEmail || shadow.cohosts.has(key)) continue;
       fail(`${key} still hosts with the code's owner here, and no host made them a co-host`);
+    }
+  }
+
+  if (room && !room.hasEnded) {
+    for (const key of seatedKeys(room)) {
+      if (shadow.ejected.has(key)) fail(`${key} still holds a seat after a host removed them`);
     }
   }
 
@@ -1339,6 +1364,17 @@ describe("the room lifecycle model", () => {
     expect(outcome.failures, report(outcome)).toEqual([]);
   });
 
+  it("removes every tab of a person a host kicks, and tells each tab why", async () => {
+    const outcome = await runScript(false, [
+      open("alice"),
+      open("carol"),
+      host("alice", "admit", "carol"),
+      { kind: "second", actor: "carol", action: "open" },
+      host("alice", "kick", "carol"),
+    ]);
+    expect(outcome.failures, report(outcome)).toEqual([]);
+  });
+
   it("never makes a removed person's remaining tab host when the last host leaves", async () => {
     const outcome = await runScript(false, [
       open("alice"),
@@ -1419,6 +1455,6 @@ describe("the room lifecycle model", () => {
         }
       }
     },
-    Math.max(60_000, SEQUENCES * 60),
+    Math.max(60_000, SEQUENCES * 200),
   );
 });
