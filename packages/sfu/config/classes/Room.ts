@@ -207,6 +207,14 @@ const verifyInviteCodeHash = (
 export type HostReason = "owner" | "cohost" | "temporary" | "opener";
 export type HostBasis = "owner" | "promoted" | "fallback";
 
+const LIFECYCLE_TIMERS = [
+  "cleanupTimer",
+  "restorerLapseTimer",
+  "lostCallTimer",
+  "openingDeadlineTimer",
+] as const;
+type LifecycleTimer = (typeof LIFECYCLE_TIMERS)[number];
+
 const HOST_REASON_RANK: Record<HostReason, number> = {
   opener: 0,
   temporary: 0,
@@ -265,7 +273,7 @@ export class Room {
   private chatImageBytes = 0;
   public lockedAllowedUsers: Set<string> = new Set();
   public blockedUsers: Set<string> = new Set();
-  public cleanupTimer: NodeJS.Timeout | null = null;
+  private cleanupTimer: NodeJS.Timeout | null = null;
   private cleanupTimerDeadline = 0;
   private primaryHostUserKey: string | null = null;
   private _isLocked: boolean = false;
@@ -354,6 +362,7 @@ export class Room {
   private restorer: { until: number; rosterKnown: boolean } | null = null;
   private restorerLapseTimer: NodeJS.Timeout | null = null;
   private lostCallTimer: NodeJS.Timeout | null = null;
+  private openingDeadlineTimer: NodeJS.Timeout | null = null;
   private meetingParticipantCount = 0;
   private currentWebcamCodecPolicy: WebcamCodecPolicy =
     buildWebcamCodecPolicy("vp8", 0);
@@ -2560,18 +2569,10 @@ export class Room {
   close(): void {
     this.onRecoverableChange = null;
     this.onReadmissionChange = null;
-    if (this.restorerLapseTimer) {
-      clearTimeout(this.restorerLapseTimer);
-      this.restorerLapseTimer = null;
-    }
-    if (this.lostCallTimer) {
-      clearTimeout(this.lostCallTimer);
-      this.lostCallTimer = null;
-    }
+    this.cancelLifecycleTimers();
     this.notifyLifecycle("closed");
     this.lifecycleListeners.clear();
     this.aiCredentials.clear();
-    this.stopCleanupTimer();
     this.cancelWebcamCodecPolicyUpgrade();
     this.webcamReceiverCapacityProofCoordinator.close();
     for (const pending of this.pendingDisconnects.values()) {
@@ -2697,25 +2698,49 @@ export class Room {
   }
 
   startCleanupTimer(callback: () => void) {
-    if (this.cleanupTimer) return;
+    if (this.cleanupTimer || this.handingOff) return;
     this.cleanupTimerDeadline = Date.now() + config.adminCleanupTimeout;
 
     Logger.debug(
       `Room ${this.id}: Cleanup timer started (${config.adminCleanupTimeout}ms)`,
     );
-    this.cleanupTimer = setTimeout(() => {
+    this.armLifecycleTimer("cleanupTimer", config.adminCleanupTimeout, () => {
       Logger.debug(`Room ${this.id}: Cleanup timer expired. Dissolving room.`);
-      this.cleanupTimer = null;
       callback();
-    }, config.adminCleanupTimeout);
+    });
   }
 
   stopCleanupTimer() {
     if (this.cleanupTimer) {
       Logger.debug(`Room ${this.id}: Cleanup timer stopped.`);
-      clearTimeout(this.cleanupTimer);
-      this.cleanupTimer = null;
+      this.clearLifecycleTimer("cleanupTimer");
     }
+  }
+
+  armOpeningDeadline(delayMs: number, onDeadline: () => void): void {
+    this.armLifecycleTimer("openingDeadlineTimer", delayMs, onDeadline);
+  }
+
+  private armLifecycleTimer(slot: LifecycleTimer, delayMs: number, fire: () => void): void {
+    this.clearLifecycleTimer(slot);
+    if (this.handingOff) return;
+    const timer = setTimeout(() => {
+      this[slot] = null;
+      if (this.handingOff) return;
+      fire();
+    }, delayMs);
+    timer.unref?.();
+    this[slot] = timer;
+  }
+
+  private clearLifecycleTimer(slot: LifecycleTimer): void {
+    const timer = this[slot];
+    if (timer) clearTimeout(timer);
+    this[slot] = null;
+  }
+
+  private cancelLifecycleTimers(): void {
+    for (const slot of LIFECYCLE_TIMERS) this.clearLifecycleTimer(slot);
   }
 
   addPendingClient(
@@ -2774,6 +2799,7 @@ export class Room {
 
   beginHandOff(): void {
     this.handingOff = true;
+    this.cancelLifecycleTimers();
   }
 
   get isHandingOff(): boolean {
@@ -2794,13 +2820,15 @@ export class Room {
     onLapse: () => void;
   }) {
     this.restorer = { until: options.until, rosterKnown: options.rosterKnown };
-    this.restorerLapseTimer = setTimeout(() => {
-      this.restorerLapseTimer = null;
-      if (this.restorer === null) return;
-      this.endLostCall();
-      options.onLapse();
-    }, Math.max(0, options.until - Date.now()) + 1);
-    this.restorerLapseTimer.unref();
+    this.armLifecycleTimer(
+      "restorerLapseTimer",
+      Math.max(0, options.until - Date.now()) + 1,
+      () => {
+        if (this.restorer === null) return;
+        this.endLostCall();
+        options.onLapse();
+      },
+    );
   }
 
   // "awaited": only someone from the lost call may take the host's seat.
@@ -2838,10 +2866,7 @@ export class Room {
 
   markRestored() {
     this.restorer = null;
-    if (this.restorerLapseTimer) {
-      clearTimeout(this.restorerLapseTimer);
-      this.restorerLapseTimer = null;
-    }
+    this.clearLifecycleTimer("restorerLapseTimer");
   }
 
   // Puts back what the ledger held of the call this room recreates: who has
@@ -2860,7 +2885,6 @@ export class Room {
     if (lost.hostUserKey) this.makePrimaryHost(lost.hostUserKey);
     this.onRecoverableChange = report;
     const endIfUnclaimed = () => {
-      this.lostCallTimer = null;
       if (this.awaitingOpener) this.endLostCall();
     };
     const wait = lost.claimableUntil - Date.now();
@@ -2868,8 +2892,7 @@ export class Room {
       endIfUnclaimed();
       return;
     }
-    this.lostCallTimer = setTimeout(endIfUnclaimed, wait + 1);
-    this.lostCallTimer.unref?.();
+    this.armLifecycleTimer("lostCallTimer", wait + 1, endIfUnclaimed);
   }
 
   allowUser(userKey: string) {

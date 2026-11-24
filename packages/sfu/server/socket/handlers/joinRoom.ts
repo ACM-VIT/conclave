@@ -568,10 +568,9 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
               openedRoom.restoreLostCall(lost);
             }
             if (created) {
-              setTimeout(
-                () => settleUnclaimedRoom(io, state, openedRoom),
-                ROOM_OPEN_DEADLINE_MS,
-              ).unref?.();
+              openedRoom.armOpeningDeadline(ROOM_OPEN_DEADLINE_MS, () =>
+                settleUnclaimedRoom(io, state, openedRoom),
+              );
             }
             return { room: openedRoom, created };
           };
@@ -927,7 +926,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           });
         }
 
-        if (isAdminForExistingRoom && room.cleanupTimer) {
+        if (isAdminForExistingRoom && room.cleanupDeadline !== null) {
           Logger.info(`Host returning to room ${roomId}, cleanup cancelled.`);
           room.stopCleanupTimer();
         }
