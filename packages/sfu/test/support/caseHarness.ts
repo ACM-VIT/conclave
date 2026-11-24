@@ -30,6 +30,7 @@ const loadSfuModules = () =>
     import("../../server/scheduledWebinarScheduler.js"),
     import("../../server/schedulingEmailReminders.js"),
     import("../../server/state.js"),
+    import("../../server/controlPlane/open.js"),
   ]);
 
 export const warmCaseModules = async (): Promise<void> => {
@@ -39,7 +40,7 @@ export const warmCaseModules = async (): Promise<void> => {
 
 export const startCaseSfu = async (
   name: string,
-  options: { skewMs?: number } = {},
+  options: { skewMs?: number; sqliteCommitWaitMs?: number } = {},
 ): Promise<CaseSfu> => {
   installSkewedClock();
   vi.resetModules();
@@ -51,12 +52,15 @@ export const startCaseSfu = async (
     { advanceScheduledWebinars },
     { sendDueSchedulingEmailReminders },
     { createSfuState },
+    { openControlPlane },
   ] = await loadSfuModules();
   const offset = options.skewMs ?? 0;
   const state = createSfuState({
     roomRegistry: new LocalRoomRegistry({ instanceId: `case-${name}`, instanceUrl: "http://localhost", ttlMs: 45000 }),
   });
-  await skew.run(offset, () => initControlPlane(state));
+  await skew.run(offset, async () =>
+    initControlPlane(state, await openControlPlane(undefined, { sqliteCommitWaitMs: options.sqliteCommitWaitMs })),
+  );
   const app = createSfuApp({ state, config, getIo: () => null });
   const server = createServer((req, res) => {
     skew.run(offset, () => {

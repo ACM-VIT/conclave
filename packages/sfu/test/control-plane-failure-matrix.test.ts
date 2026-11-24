@@ -101,7 +101,7 @@ const configure = (mode: Mode) => {
 };
 
 const start = async () => {
-  const sfu = await startCaseSfu("matrix");
+  const sfu = await startCaseSfu("matrix", { sqliteCommitWaitMs: 100 });
   running.push(sfu);
   return sfu;
 };
@@ -178,7 +178,6 @@ beforeEach(() => {
   vi.stubEnv("SCHEDULING_EMAIL_WORKER_URL", EMAIL_WORKER_URL);
   vi.stubEnv("SCHEDULING_EMAIL_WORKER_SECRET", "matrix-email-secret");
   vi.stubEnv("SFU_FOLLOW_UP_RETRY_DELAYS_MS", "600000");
-  vi.stubEnv("CONTROL_PLANE_SQLITE_COMMIT_WAIT_MS", "100");
   for (const variable of ["REDIS_URL", "SFU_REDIS_URL", "SFU_CLIENT_ID", "SCHEDULING_SQLITE_PATH", "SCHEDULED_MEETINGS_SQLITE_PATH", "SCHEDULED_WEBINARS_SQLITE_PATH", "RECORDING_STORAGE_PATH"]) {
     vi.stubEnv(variable, "");
   }

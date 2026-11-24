@@ -77,19 +77,21 @@ const unavailable = (error: unknown): Error =>
       ? error
       : new Error(String(error));
 
-export const createSqliteBackend = (path: string): Backend =>
-  openSqliteStore(openSqliteDatabase(path), path, sqliteBackendOn);
-
 export const SQLITE_COMMIT_WAIT_MS = 1_000;
 
-const commitWaitMs = (): number => {
-  const configured = Number(process.env.CONTROL_PLANE_SQLITE_COMMIT_WAIT_MS);
-  return Number.isInteger(configured) && configured > 0 ? configured : SQLITE_COMMIT_WAIT_MS;
-};
+export type SqliteBackendOptions = { commitWaitMs?: number };
 
-const sqliteBackendOn = (db: SqliteDatabase): Backend => {
+export const createSqliteBackend = (path: string, options: SqliteBackendOptions = {}): Backend =>
+  openSqliteStore(openSqliteDatabase(path), path, (db) =>
+    sqliteBackendOn(db, options.commitWaitMs ?? SQLITE_COMMIT_WAIT_MS),
+  );
+
+const sqliteBackendOn = (db: SqliteDatabase, commitWaitMs: number): Backend => {
+  if (!Number.isInteger(commitWaitMs) || commitWaitMs <= 0) {
+    throw new Error(`A SQLite commit wait must be a positive whole number of milliseconds, not ${commitWaitMs}.`);
+  }
   db.exec(SCHEMA);
-  db.exec(`PRAGMA busy_timeout = ${commitWaitMs()}`);
+  db.exec(`PRAGMA busy_timeout = ${commitWaitMs}`);
 
   const statements = {
     record: db.prepare(

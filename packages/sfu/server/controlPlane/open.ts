@@ -88,6 +88,7 @@ export type OpenOptions = {
   clock?: () => number;
   memory?: MemoryData;
   importLegacy?: boolean;
+  sqliteCommitWaitMs?: number;
 };
 
 export const openControlPlane = async (
@@ -104,7 +105,7 @@ export const openControlPlane = async (
       backend = createJsonBackend(config.jsonPath);
       break;
     case "sqlite":
-      backend = await retryWhileSqliteLocked(() => createSqliteBackend(config.sqlitePath));
+      backend = await retryWhileSqliteLocked(() => createSqliteBackend(config.sqlitePath, { commitWaitMs: options.sqliteCommitWaitMs }));
       break;
     case "redis": {
       const created = await createRedisBackend({
