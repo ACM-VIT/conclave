@@ -85,6 +85,7 @@ type Sfu = {
   peers: Set<Peer>;
   heldLeaves: Array<() => void>;
   membership: Map<Room, number>;
+  ranThisStep: Map<string, string>;
   stopRefresh: () => void;
 };
 type Tab = {
@@ -335,6 +336,7 @@ const boot = async (world: World): Promise<Sfu> => {
     peers: new Set(),
     heldLeaves: [],
     membership: new Map(),
+    ranThisStep: new Map(),
     io: undefined as unknown as SocketIOServer,
     stopRefresh: () => undefined,
   };
@@ -964,6 +966,7 @@ const perform = async (world: World, step: Step): Promise<void> => {
   const beforeLiveHosts = before ? seatedHostKeys(before) : new Set<string>();
   const beforeRoles = rolesOf(world);
   const beforeMembership = new Map(world.sfu.membership);
+  world.sfu.ranThisStep.clear();
   const beforeGeneration = world.generation;
   switch (step.kind) {
     case "second": {
@@ -1088,8 +1091,11 @@ const checkRooms = (
     if (!world.sfu.membership.has(room)) {
       const counts = world.sfu.membership;
       counts.set(room, 0);
+      const ran = world.sfu.ranThisStep;
       room.onLifecycle((event) => {
-        if (event === "membership") counts.set(room, (counts.get(room) ?? 0) + 1);
+        if (event !== "membership") return;
+        counts.set(room, (counts.get(room) ?? 0) + 1);
+        if (room.recordsItsCall && room.hasActiveAdmin()) ran.set(room.incarnationId, room.channelId);
       });
     }
     if (room.hasEnded || room.isHandingOff) continue;
@@ -1238,6 +1244,15 @@ const check = async (
     }
   }
 
+  const ranHere = [...world.sfu.ranThisStep].find(([, channelId]) => channelId === CHANNEL);
+  if (shadow.phase.kind === "lost" && ranHere) {
+    const lost = shadow.phase;
+    world.trace.push("  (the lost call came back)");
+    shadow.phase = { kind: "running", incarnation: ranHere[0], since: lost.callSince };
+    if (liveRoom(world)?.incarnationId !== ranHere[0]) {
+      callOver(world, "it came back and the room it ran in closed");
+    }
+  }
   const room = liveRoom(world);
   checkRooms(world, now, before, fail);
 
