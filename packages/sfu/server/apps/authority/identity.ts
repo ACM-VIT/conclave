@@ -21,12 +21,8 @@ export type GuestPassProofSource = (
   userKey: string,
 ) => string | undefined;
 
-/**
- * No guest is verified yet. The guest pass (PR #264) binds each guest
- * `userKey` to a pass proof in the room. When it lands, return that proof
- * here and every guest gets a verified subject, with no other change.
- */
-export const guestPassProofOf: GuestPassProofSource = () => undefined;
+export const guestPassProofOf: GuestPassProofSource = (room, userKey) =>
+  room.guestIdentityOf(userKey);
 
 /**
  * Whether the join token says this seat is a signed-in account. The web join
@@ -85,6 +81,16 @@ export class IdentityAdapter {
     const identity = this.derive(userKey, account, proof, client.id);
     this.cache.set(client, { userKey, account, proof, identity });
     return identity;
+  }
+
+  guestSubject(identity: string): Subject {
+    return this.subject("guest-pass", identity);
+  }
+
+  hold(room: Room, client: Client): void {
+    const userKey = room.userKeysById.get(client.id);
+    if (!userKey || !isGuestUserKey(userKey) || this.isAccount(client)) return;
+    room.holdGuestIdentityOf(userKey);
   }
 
   private derive(

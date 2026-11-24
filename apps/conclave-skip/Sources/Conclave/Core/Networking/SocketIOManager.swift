@@ -249,6 +249,7 @@ private enum SocketEvent {
     static let webinarHandQueueChanged = SfuServerEvent.webinarHandQueueChanged.rawValue
     static let webinarPromoted = SfuServerEvent.webinarPromoted.rawValue
     static let webinarDemoted = SfuServerEvent.webinarDemoted.rawValue
+    static let webinarStageInviteUsed = SfuServerEvent.webinarStageInviteUsed.rawValue
     static let browserState = SfuServerEvent.browserState.rawValue
     static let browserClosed = SfuServerEvent.browserClosed.rawValue
     static let appsState = SfuServerEvent.appsState.rawValue
@@ -335,6 +336,7 @@ final class SocketIOManager {
     var onWebinarHandQueueChanged: ((WebinarHandQueueChangedNotification) -> Void)?
     var onWebinarPromoted: ((WebinarPromotedNotification) -> Void)?
     var onWebinarDemoted: ((WebinarDemotedNotification) -> Void)?
+    var onWebinarStageInviteUsed: ((WebinarStageInviteUsedNotification) -> Void)?
     var onBrowserState: ((BrowserStateNotification) -> Void)?
     var onBrowserClosed: ((BrowserClosedNotification) -> Void)?
     var onAppsState: ((AppsStateNotification) -> Void)?
@@ -2591,6 +2593,14 @@ final class SocketIOManager {
                   let notification = self.decode(WebinarDemotedNotification.self, from: first),
                   self.eventRoomIdMatchesActiveOrPending(notification.roomId) else { return }
             self.onWebinarDemoted?(notification)
+        }
+
+        socket.on(SocketEvent.webinarStageInviteUsed) { [weak self] data, _ in
+            guard let self, let first = data.first,
+                  self.socket === socket,
+                  let notification = self.decode(WebinarStageInviteUsedNotification.self, from: first),
+                  self.eventRoomIdMatchesActiveOrPending(notification.roomId) else { return }
+            self.onWebinarStageInviteUsed?(notification)
         }
 
         socket.on(SocketEvent.browserState) { [weak self] data, _ in
