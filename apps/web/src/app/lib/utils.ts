@@ -166,23 +166,6 @@ const NOT_ROOM_CODES = new Set([
   "sign-in",
 ]);
 
-const linkHostname = (authority: string) => {
-  try {
-    return new URL(`https://${authority}/`).hostname;
-  } catch {
-    return null;
-  }
-};
-
-const fitsDns = (hostname: string) => {
-  if (hostname.startsWith("[")) return true;
-  const name = hostname.replace(/\.$/, "");
-  return (
-    name.length <= 253 &&
-    name.split(".").every((label) => label.length >= 1 && label.length <= 63)
-  );
-};
-
 const linkRoomCode = (segment: string) => {
   let decoded: string;
   try {
@@ -203,14 +186,8 @@ export function parseCodeFieldPaste(
   if (ROOM_CODE_TEXT.test(trimmed)) return { kind: "insert", text: trimmed.toLowerCase() };
   const { scheme, authority, segment } = MEETING_LINK.exec(trimmed)?.groups ?? {};
   if (!authority || !segment) return null;
-  if (!scheme) {
-    const typedHost = canonicalTypedHost(authority);
-    if (!typedHost || !conclaveHosts.some((host) => canonicalHost(host) === typedHost)) {
-      return null;
-    }
-  }
-  const hostname = linkHostname(authority);
-  if (!hostname || !fitsDns(hostname)) return null;
+  const linkHost = scheme ? canonicalHost(authority) : canonicalTypedHost(authority);
+  if (!linkHost || !conclaveHosts.some((host) => canonicalHost(host) === linkHost)) return null;
   const code = linkRoomCode(segment);
   return code ? { kind: "replace", code } : null;
 }

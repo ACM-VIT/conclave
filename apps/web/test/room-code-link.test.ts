@@ -70,6 +70,16 @@ const referenceHost = (host: string): string | null => {
 
 const KNOWN_REFERENCE_HOSTS = KNOWN_HOSTS.map(referenceHost);
 
+const referenceUrlHost = (host: string): string | null => {
+  let url: URL;
+  try {
+    url = new URL(`https://${host}/`);
+  } catch {
+    return null;
+  }
+  return url.port && url.port !== "80" ? `${url.hostname}:${url.port}` : url.hostname;
+};
+
 const parse = (text: string) => parseCodeFieldPaste(text, KNOWN_HOSTS);
 
 const linkCode = (text: string) => {
@@ -102,23 +112,8 @@ const expectedReplacement = (
   if (hostEnd <= 0 || rest[hostEnd] !== "/") return null;
   const host = rest.slice(0, hostEnd);
   if (/[\s@\\]/.test(host)) return null;
-  if (!scheme) {
-    const typed = referenceHost(host);
-    if (!typed || !referenceHosts.includes(typed)) return null;
-  }
-  let hostname: string;
-  try {
-    hostname = new URL(`https://${host}/`).hostname;
-  } catch {
-    return null;
-  }
-  if (!hostname.startsWith("[")) {
-    const name = hostname.replace(/\.$/, "");
-    const labels = name.split(".");
-    if (name.length > 253 || labels.some((label) => label.length < 1 || label.length > 63)) {
-      return null;
-    }
-  }
+  const typed = scheme ? referenceUrlHost(host) : referenceHost(host);
+  if (!typed || !referenceHosts.includes(typed)) return null;
   const afterHost = rest.slice(hostEnd);
   const suffixStart = afterHost.search(/[?#]/);
   const path = suffixStart === -1 ? afterHost : afterHost.slice(0, suffixStart);
@@ -175,16 +170,39 @@ const SEGMENTS = [
 const SUFFIXES = ["", "", "", "/", "?ref=chat", "#top", "//", " ", "\\", "\n"];
 
 describe("pasting into the join code field", () => {
-  it("replaces the field with the code from an explicit http or https link", () => {
-    expect(linkCode("https://meet.example.com/abc-defg-hij")).toBe("abc-defg-hij");
-    expect(linkCode("http://localhost:3005/abc-defg-hij/")).toBe("abc-defg-hij");
-    expect(linkCode("  HTTPS://Meet.Example.com/Abc-Defg-Hij  ")).toBe("abc-defg-hij");
-    expect(linkCode("https://meet.example.com/abc-defg-hij?ref=chat#top")).toBe("abc-defg-hij");
+  it("replaces the field with the code from an explicit link to a Conclave host", () => {
+    expect(linkCode("https://conclave.acmvit.in/abc-defg-hij")).toBe("abc-defg-hij");
+    expect(linkCode("http://localhost:3615/abc-defg-hij/")).toBe("abc-defg-hij");
+    expect(linkCode("  HTTPS://Conclave.ACMVIT.in/Abc-Defg-Hij  ")).toBe("abc-defg-hij");
+    expect(linkCode("https://conclave.acmvit.in/abc-defg-hij?ref=chat#top")).toBe("abc-defg-hij");
     expect(linkCode("https://m\u00fcnchen.example/abc-defg-hij")).toBe("abc-defg-hij");
-    expect(linkCode("https://devbox:3005/abc-defg-hij")).toBe("abc-defg-hij");
-    expect(linkCode("https://127.0.0.1:3005/abc-defg-hij")).toBe("abc-defg-hij");
+    expect(linkCode("https://127.0.0.1:3615/abc-defg-hij")).toBe("abc-defg-hij");
+    expect(linkCode("https://127.1:3615/abc-defg-hij")).toBe("abc-defg-hij");
     expect(linkCode("https://conclave.acmvit.in/abc-defg-hij?ref=a\\b")).toBe("abc-defg-hij");
     expect(linkCode("https://conclave.acmvit.in/abc-defg-hij#a\\b")).toBe("abc-defg-hij");
+  });
+
+  it("never treats a link to another site as a meeting link", () => {
+    for (const text of [
+      "https://example.org/about",
+      "http://example.org/about",
+      "https://meet.example.com/abc-defg-hij",
+      "http://localhost:3005/abc-defg-hij",
+      "https://devbox:3005/abc-defg-hij",
+      "https://conclave.acmvit.in@evil.example/abc-def",
+      "https://evil.example@conclave.acmvit.in/abc-def",
+      "https://conclave.acmvit.in:secret@evil.example/abc-def",
+      "https://conclave.acmvit.in.evil.example/abc-def",
+      "conclave.acmvit.in.evil.example/abc-def",
+      "https://evil-conclave.acmvit.in/abc-def",
+      "https://conclave-acmvit.in/abc-def",
+      "https://conclave.acmvit.in/a/b",
+      "https://conclave.acmvit.in/sign-in",
+      "https://conclave.acmvit.in/",
+      "https://conclave.acmvit.in/w/public-slug",
+    ]) {
+      expect(parse(text), JSON.stringify(text)).toBeNull();
+    }
   });
 
   it("replaces the field from a Conclave link without a scheme", () => {
@@ -277,10 +295,6 @@ describe("pasting into the join code field", () => {
     ]) {
       expect(parse(text), JSON.stringify(text).slice(0, 80)).toBeNull();
     }
-    const longestName = [61, 63, 63, 63].map((n) => "a".repeat(n)).join(".");
-    expect(longestName).toHaveLength(253);
-    expect(linkCode(`https://${longestName}./abc-defg-hij`)).toBe("abc-defg-hij");
-    expect(linkCode(`https://a${longestName}/abc-defg-hij`)).toBeNull();
   });
 
   it("inserts pasted room code characters where the cursor is", () => {
@@ -370,7 +384,7 @@ describe("replacing the field only for an unambiguous Conclave meeting link", ()
       if (got !== expectedReplacement(text, referenceHosts)) mismatches.push(JSON.stringify(text));
     }
     expect(mismatches).toEqual([]);
-    expect(replacements).toBeGreaterThan(500);
+    expect(replacements).toBeGreaterThan(300);
   });
 });
 
