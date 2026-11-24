@@ -51,6 +51,7 @@ import {
 import { ensureWebinarRoomConfig } from "../../scheduledWebinarScheduler.js";
 import { getSocketAuthUser } from "../auth.js";
 import type { ConnectionContext } from "../context.js";
+import { toPendingUserSnapshots } from "../../admin/controlPlane.js";
 import { attachLegacyQaFeed } from "../../apps/authority/legacyWebinarQa.js";
 import { registerAdminHandlers } from "./adminHandlers.js";
 import { respond } from "./ack.js";
@@ -870,14 +871,8 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         });
 
         if (context.currentClient instanceof Admin && !context.currentClient.isObserver) {
-          const pendingUsers = Array.from(
-            context.currentRoom.pendingClients.values(),
-          ).map((pending) => ({
-            userId: pending.userKey,
-            displayName: pending.displayName || pending.userKey,
-          }));
           socket.emit("pendingUsersSnapshot", {
-            users: pendingUsers,
+            users: toPendingUserSnapshots(context.currentRoom),
             roomId: context.currentRoom.id,
           });
         }

@@ -19,7 +19,7 @@ import {
 import { Admin } from "../../config/classes/Admin.js";
 import { Client } from "../../config/classes/Client.js";
 import { LocalRoomRegistry } from "../../server/roomRegistry.js";
-import { forceRemoveClientNow } from "../../server/admin/controlPlane.js";
+import { forceRemoveClientNow, toRoomSnapshot } from "../../server/admin/controlPlane.js";
 import { createSfuState } from "../../server/state.js";
 import type {
   WebinarQaChangedNotification,
@@ -897,12 +897,71 @@ describe("webinar Q&A on a server without the runtime", () => {
     stack.room.setLocked(true);
     stack.room.setWebinarHandRaised(attendeeSeat, true);
   };
-  const hostStateIn = (seen: Seen[]) => ({
-    pending: (lastPayload(seen, "pendingUsersSnapshot")?.users as { userId: string }[] | undefined)?.map((user) => user.userId),
-    chat: (lastPayload(seen, "chatHistorySnapshot")?.messages as { id: string }[] | undefined)?.map((message) => message.id),
-    locked: lastPayload(seen, "roomLockChanged")?.locked,
-    hands: (lastPayload(seen, "webinar:handQueueChanged")?.queue as { userId: string }[] | undefined)?.map((entry) => entry.userId),
-  });
+  const roomStateFor = (socket: { emit: (event: string, reply: (answer: unknown) => void) => unknown }) =>
+    Promise.race([
+      new Promise<unknown>((resolve) => socket.emit("admin:getRoomState", resolve)),
+      wait(1_000).then(() => null),
+    ]);
+  const HOST_EVENTS = [
+    "hostAssigned",
+    "pendingUsersSnapshot",
+    "chatHistorySnapshot",
+    "roomLockChanged",
+    "admin:roomStateChanged",
+    "webinar:handQueueChanged",
+    "webinar:qaSnapshot",
+  ];
+  const hostPayloadsIn = (seen: Seen[]) =>
+    Object.fromEntries(HOST_EVENTS.map((event) => [event, lastPayload(seen, event) ?? null]));
+  const hostPayloadsFor = (
+    stack: Stack,
+    hostUserId: string,
+    attendeeSeat: string,
+    question: { id: string; text: string },
+  ) => {
+    const roomId = stack.room.id;
+    return {
+      hostAssigned: { roomId, hostUserId },
+      pendingUsersSnapshot: {
+        roomId,
+        users: [
+          {
+            userId: "kit@example.com",
+            participantUserId: "kit@example.com#k1",
+            userKey: "kit@example.com",
+            displayName: "Kit",
+            socketId: "knocking",
+          },
+        ],
+      },
+      chatHistorySnapshot: {
+        roomId,
+        messages: [{ id: "m1", userId: "asha@example.com#h1", displayName: "Asha", content: "Welcome", timestamp: 1 }],
+      },
+      roomLockChanged: { roomId, locked: true },
+      "admin:roomStateChanged": { roomId, snapshot: toRoomSnapshot(stack.room) },
+      "webinar:handQueueChanged": {
+        roomId,
+        queue: [{ userId: attendeeSeat, displayName: "Vik", raisedAt: expect.any(Number) as number }],
+      },
+      "webinar:qaSnapshot": {
+        roomId,
+        entries: [
+          {
+            id: question.id,
+            userId: attendeeSeat,
+            displayName: "Vik",
+            question: question.text,
+            status: "pending",
+            askedAt: expect.any(Number) as number,
+            updatedAt: expect.any(Number) as number,
+            upvotes: 0,
+            hasUpvoted: false,
+          },
+        ],
+      },
+    };
+  };
   const waysToBecomeHost: [string, (stack: Stack, host: { socket: { disconnect: () => void }; seatId: string }, panelistSeat: string) => Promise<string>][] = [
     ["promoted to co-host", async (_stack, host, panelistSeat) => {
       const promoted = await ask<{ success?: boolean; error?: string }>(host.socket as never, "promoteHost", { userId: panelistSeat });
@@ -943,19 +1002,16 @@ describe("webinar Q&A on a server without the runtime", () => {
       const expectedHost = await becomeHost(stack, host, panelist.seatId);
       await until(() => seen.some((entry) => entry.event === "hostAssigned"), "the panelist is told they are a host");
       await wait(150);
-      const roomState = lastPayload(seen, "admin:roomStateChanged")?.snapshot as { id?: string; adminUserIds?: string[] } | undefined;
+      const roomState = lastPayload(seen, "admin:roomStateChanged")?.snapshot as { adminUserIds?: string[] } | undefined;
 
       expect(heldBefore).toBe(false);
       expect(panelist.entries.get(asked.id ?? "")?.status).toBe("pending");
-      expect(hostStateIn(seen)).toEqual({ pending: ["kit@example.com"], chat: ["m1"], locked: true, hands: [attendee.seatId] });
-      expect({ id: roomState?.id, isAdmin: roomState?.adminUserIds?.includes(panelist.seatId) }).toEqual({ id: stack.room.id, isAdmin: true });
-      expect(lastPayload(seen, "hostAssigned")).toEqual({ roomId: stack.room.id, hostUserId: expectedHost });
+      expect(hostPayloadsIn(seen)).toEqual(
+        hostPayloadsFor(stack, expectedHost, attendee.seatId, { id: asked.id ?? "", text: "Waiting for a host" }),
+      );
+      expect(roomState?.adminUserIds).toContain(panelist.seatId);
       expect(build63Promotion(seen, panelist.seatId)).toEqual({ isAdmin: true, refreshes: 1 });
-      const asHost = await Promise.race([
-        new Promise<{ room?: { id?: string } }>((resolve) => panelist.socket.emit("admin:getRoomState", resolve)),
-        wait(1_000).then(() => null),
-      ]);
-      expect(asHost?.room?.id).toBe(stack.room.id);
+      expect(await roomStateFor(panelist.socket)).toEqual({ room: toRoomSnapshot(stack.room) });
     },
   );
 
@@ -979,8 +1035,11 @@ describe("webinar Q&A on a server without the runtime", () => {
 
     expect(panelist.entries.has(asked.id ?? "")).toBe(false);
     expect(owner.entries.get(asked.id ?? "")?.status).toBe("pending");
-    expect(hostStateIn(seen)).toEqual({ pending: ["kit@example.com"], chat: ["m1"], locked: true, hands: [attendee.seatId] });
-    expect(lastPayload(seen, "hostAssigned")?.roomId).toBe(stack.room.id);
+    expect(hostPayloadsIn(seen)).toEqual({
+      ...hostPayloadsFor(stack, owner.seatId, attendee.seatId, { id: asked.id ?? "", text: "Asked before the owner came" }),
+      "admin:roomStateChanged": null,
+    });
+    expect(await roomStateFor(owner.socket)).toEqual({ room: toRoomSnapshot(stack.room) });
   });
 
   it("sends a panelist the list as they join a webinar", async () => {
