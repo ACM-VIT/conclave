@@ -50,6 +50,12 @@ const useHostStatus = (session: NativeEmbedSession): HostStatus =>
     () => session.hostStatus,
   );
 
+const useSynced = (session: NativeEmbedSession): boolean =>
+  useSyncExternalStore(
+    useCallback((listener: () => void) => session.subscribe(listener), [session]),
+    () => session.isSynced,
+  );
+
 const centerOf = (points: Point[]): Point => {
   const sum = points.reduce((total, point) => ({ x: total.x + point.x, y: total.y + point.y }), { x: 0, y: 0 });
   return { x: sum.x / points.length, y: sum.y / points.length };
@@ -84,7 +90,8 @@ const exportPng = (canvas: HTMLCanvasElement | null): string | null => {
 export function NativeWhiteboardEmbed({ session }: { session: NativeEmbedSession }) {
   const { doc, awareness } = session;
   const host = useHostStatus(session);
-  const readOnly = host.readOnly;
+  const synced = useSynced(session);
+  const readOnly = host.readOnly || !synced;
   const [tool, setTool] = useState<ToolKind>("pen");
   const [settings, setSettings] = useState<ToolSettings>({ ...DEFAULT_TOOL_SETTINGS });
   const { viewport, panBy, zoomAt, resetViewport, fitBounds } = useViewport();

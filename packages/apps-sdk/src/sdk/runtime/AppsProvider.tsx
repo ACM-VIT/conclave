@@ -545,6 +545,7 @@ export function AppsProvider({
         }
       }
       syncedAppsRef.current.add(run.appId);
+      setIsRebuilding(false);
       runAutomaticWrites(run.appId);
       return true;
     },
@@ -617,6 +618,7 @@ export function AppsProvider({
       const doc = replaces ? new Y.Doc() : getDoc(appId);
       if (!replaces) getAwareness(appId);
       const run: SyncRun = { appId, doc, replaces, catchesUp: catchesUp && !replaces, startedAt: Date.now(), attempt: 0 };
+      if (!syncedAppsRef.current.has(appId)) setIsRebuilding(true);
       syncRunRef.current = run;
       setSyncStatus("syncing");
       attemptSync(run);
