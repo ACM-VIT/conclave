@@ -16,6 +16,32 @@ import {
   type WheelEntry,
   type WheelSpin,
 } from "../../../packages/apps-sdk/src/apps/wheel/core/doc/index";
+import {
+  NATIVE_EMBED_ORIGINS,
+  decodeEmbedMessage,
+  decodeHostMessage,
+  encodeEnvelope,
+  isValidIdentifier,
+} from "../../../packages/apps-sdk/src/native-embed/protocol";
+
+const LONE_SURROGATE = /[\uD800-\uDFFF]/u;
+const SURROGATE_ESCAPE = /\\ud[89a-f][0-9a-f]{2}/i;
+const SCOPE = { callSessionId: "call-7-3f2a9c1e", appSessionId: "app-5b1d7a2e", appId: "wheel" };
+const HALF_EMOJI = "A".repeat(47) + "\uD83C";
+
+const wheelStatus = (label: string) => ({
+  kind: "wheel",
+  entries: [{ id: "e0", label }],
+  results: [],
+  removeWinner: false,
+  sounds: true,
+  spinning: false,
+  winnerSpinId: "",
+  winnerLabel: "",
+});
+
+const sentEnvelope = (type: string, payload: Record<string, unknown>): string =>
+  JSON.stringify({ v: 1, type, callSessionId: SCOPE.callSessionId, appSessionId: SCOPE.appSessionId, requestId: "e-1", payload });
 
 const validSpin = (): WheelSpin => ({
   spinId: "spin-1",
@@ -97,6 +123,126 @@ describe("wheel document validation", () => {
       { id: "two", label: "Two" },
     ]);
     expect(getSpin(doc)).toBe(getSpin(doc));
+  });
+});
+
+describe("wheel names never split a character", () => {
+  const CLUSTERS = [
+    "\u{1F389}",
+    "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}",
+    "\u{1F1EE}\u{1F1F3}",
+    "e\u0301",
+    "\u{1F44D}\u{1F3FD}",
+    "\u0915\u094D\u0937",
+    "\u1100\u1161\u11A8",
+  ];
+
+  it("cuts 47 letters and an emoji before the emoji", () => {
+    const typed = "A".repeat(47) + "\u{1F389}";
+    expect(normalizeLabel(typed)).toBe("A".repeat(47));
+    const doc = createWheelDoc();
+    expect(addEntries(doc, [typed])).toBe(1);
+    expect(getEntries(doc)[0].label).toBe("A".repeat(47));
+  });
+
+  it("cuts at every point through emoji, joined emoji, flags and marks without keeping part of one", () => {
+    for (const cluster of CLUSTERS) {
+      for (let lead = 0; lead <= 48; lead += 1) {
+        const label = "A".repeat(lead) + cluster + "Z".repeat(60);
+        const fits = lead + cluster.length <= 48;
+        const expected = fits ? "A".repeat(lead) + cluster + "Z".repeat(48 - lead - cluster.length) : "A".repeat(lead);
+        expect(normalizeLabel(label), `${JSON.stringify(cluster)} after ${lead}`).toBe(expected);
+      }
+    }
+  });
+
+  it("keeps the first code points of one cluster longer than a whole name", () => {
+    expect(normalizeLabel("Z" + "\u0301".repeat(60))).toBe("Z" + "\u0301".repeat(47));
+  });
+
+  it("reads a document that already holds a lone surrogate as well formed text", () => {
+    const doc = createWheelDoc();
+    const wheel = doc.getMap("wheel");
+    const entries = new Y.Array<unknown>();
+    wheel.set("entries", entries);
+    entries.push([
+      { id: "e0", label: HALF_EMOJI },
+      { id: "e1", label: "\uDF89Bo" },
+    ]);
+    const history = new Y.Array<unknown>();
+    wheel.set("history", history);
+    history.push([{ spinId: "s1", label: HALF_EMOJI, at: 1, byName: "Host" }]);
+    wheel.set("spin", { ...validSpin(), entries: [{ id: "e0", label: HALF_EMOJI }, { id: "two", label: "Two" }] });
+
+    expect(getEntries(doc).map((entry) => entry.label)).toEqual(["A".repeat(47), "Bo"]);
+    expect(getHistory(doc).map((result) => result.label)).toEqual(["A".repeat(47)]);
+    expect(getSpin(doc)?.entries.map((entry) => entry.label)).toEqual(["A".repeat(47), "Two"]);
+  });
+
+  it("lets no lone surrogate cross the Yjs wire, so only the writer's own copy can hold one", () => {
+    const writer = createWheelDoc();
+    const entries = new Y.Array<unknown>();
+    writer.getMap("wheel").set("entries", entries);
+    entries.push([{ id: "e0", label: HALF_EMOJI }]);
+    const reader = new Y.Doc();
+    Y.applyUpdate(reader, Y.encodeStateAsUpdate(writer));
+    const stored = (reader.getMap("wheel").get("entries") as Y.Array<{ label: string }>).get(0).label;
+    expect(stored).toBe("A".repeat(47) + "\uFFFD");
+  });
+
+  it("never sends a lone surrogate to the native app", () => {
+    const raw = encodeEnvelope("status", SCOPE, "e-1", {
+      app: { ...wheelStatus("\uDF89Bo"), winnerLabel: HALF_EMOJI },
+    });
+    expect(raw).not.toMatch(SURROGATE_ESCAPE);
+    expect(LONE_SURROGATE.test(raw)).toBe(false);
+    const parsed = JSON.parse(raw) as { payload: { app: { winnerLabel: string; entries: { label: string }[] } } };
+    expect(parsed.payload.app.winnerLabel).toBe("A".repeat(47));
+    expect(parsed.payload.app.entries[0].label).toBe("Bo");
+  });
+
+  it("decodes a lone surrogate from the embed the way iOS does and strips one from the host", () => {
+    const fromEmbed = sentEnvelope("status", { app: wheelStatus(HALF_EMOJI) });
+    expect(fromEmbed).toMatch(SURROGATE_ESCAPE);
+    expect(
+      decodeEmbedMessage(fromEmbed, SCOPE, NATIVE_EMBED_ORIGINS.ios, NATIVE_EMBED_ORIGINS.ios, true)
+    ).toMatchObject({ ok: false, reason: "malformed" });
+    expect(
+      decodeEmbedMessage(sentEnvelope("status", { app: wheelStatus("A".repeat(47)) }), SCOPE, NATIVE_EMBED_ORIGINS.ios, NATIVE_EMBED_ORIGINS.ios, true)
+    ).toMatchObject({ ok: true });
+    const fromHost = decodeHostMessage(sentEnvelope("status", { readOnly: false, userName: "Gr\uD83Cace" }), SCOPE);
+    expect(fromHost.ok && fromHost.envelope.payload.userName).toBe("Grace");
+  });
+});
+
+describe("wheel accept rule", () => {
+  const storeHistory = (doc: Y.Doc, records: unknown[]) => {
+    const history = new Y.Array<unknown>();
+    doc.getMap("wheel").set("history", history);
+    history.push(records);
+    return history;
+  };
+
+  it("reads a result through the same rule as a name: normalise, then require something visible", () => {
+    const doc = createWheelDoc();
+    const history = storeHistory(doc, [{ spinId: "s1", label: "\u200B".repeat(48) + "Ada", at: 1, byName: "Host" }]);
+    expect(getHistory(doc)).toEqual([]);
+    recordResult(doc, { spinId: "s2", label: "\u200B".repeat(48) + "Ada", at: 2, byName: "Host" });
+    expect(getHistory(doc)).toEqual([]);
+    recordResult(doc, { spinId: "s3", label: "  Ada   Lee ", at: 3, byName: "Host" });
+    expect(getHistory(doc).map((result) => result.label)).toEqual(["Ada Lee"]);
+    expect((history.toArray() as { label: string }[]).map((result) => result.label)).toEqual(["Ada Lee"]);
+  });
+
+  it("keeps only names and results whose ids the native app accepts", () => {
+    const doc = createWheelDoc();
+    const entries = new Y.Array<unknown>();
+    doc.getMap("wheel").set("entries", entries);
+    const ids: unknown[] = ["ok-1", "a b", "", "\u00E9", "x".repeat(65), 7, "ok:2"];
+    entries.push(ids.map((id, index) => ({ id, label: `Name ${index}` })));
+    storeHistory(doc, ids.map((spinId, index) => ({ spinId, label: `Won ${index}`, at: index, byName: "Host" })));
+    expect(getEntries(doc).map((entry) => entry.id)).toEqual(["ok-1", "ok:2"]);
+    expect(getHistory(doc).map((result) => result.spinId)).toEqual(["ok-1", "ok:2"]);
   });
 });
 
@@ -203,7 +349,11 @@ describe("wheel accepted list", () => {
     const visibleName = () => ["Ada", "Bo", " Cy ", "D\u0007e", "\u{1F600}", "\u0915\u094D\u0937"][random(6)] + random(1000);
     const anyName = () => (random(3) === 0 ? HIDDEN[random(HIDDEN.length)] : visibleName());
     const record = (index: number): unknown => {
-      switch (random(6)) {
+      switch (random(8)) {
+        case 6:
+          return { id: ["a b", "", "\u00E9", 9][random(4)], label: visibleName() };
+        case 7:
+          return { id: `torn-${index}`, label: ["\uD83C", "Bo\uDF89", HALF_EMOJI][random(3)] };
         case 0:
           return { id: `hidden-${index}`, label: HIDDEN[random(HIDDEN.length)] };
         case 1:
@@ -233,8 +383,8 @@ describe("wheel accepted list", () => {
       wheel.set("history", history);
       history.push(
         Array.from({ length: random(40) }, (_, index) => ({
-          spinId: `old-${random(20)}`,
-          label: random(3) === 0 ? HIDDEN[random(HIDDEN.length)] : `Old ${index}`,
+          spinId: random(8) === 0 ? "bad id" : `old-${random(20)}`,
+          label: [HIDDEN[random(HIDDEN.length)], `Old ${index}`, `Old ${index}\uD83C`, "\u200B".repeat(48) + "Old"][random(4)],
           at: index,
           byName: "Host",
         }))
@@ -296,6 +446,15 @@ describe("wheel accepted list", () => {
         const shown = getEntries(doc);
         expect(shown.length, where).toBeLessThanOrEqual(MAX_WHEEL_ENTRIES);
         expect(new Set(shown.map((entry) => entry.id)).size, where).toBe(shown.length);
+        const read = [
+          ...shown.map((entry) => ({ id: entry.id, label: entry.label })),
+          ...getHistory(doc).map((result) => ({ id: result.spinId, label: result.label })),
+        ];
+        for (const item of read) {
+          expect(isValidIdentifier(item.id), `${where} ${item.id}`).toBe(true);
+          expect(item.label, where).toBe(normalizeLabel(item.label));
+          expect(item.label.length > 0 && !LONE_SURROGATE.test(item.label), where).toBe(true);
+        }
       }
     }
   });

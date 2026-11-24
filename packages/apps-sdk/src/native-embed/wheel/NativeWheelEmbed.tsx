@@ -3,14 +3,12 @@ import { WheelStage } from "../../apps/wheel/web/components/WheelStage";
 import { useWheelDocState } from "../../apps/wheel/web/hooks/useWheelDocState";
 import { WheelSounds } from "../../apps/wheel/web/sounds";
 import {
-  addEntries,
   clearEntries,
   clearHistory,
   createEntryId,
   getEntries,
   getHistory,
   getRemoveWinnerOnDone,
-  normalizeLabel,
   recordResult,
   removeEntryById,
   replaceEntries,
@@ -18,7 +16,7 @@ import {
   startSpin,
   type WheelSpin,
 } from "../../apps/wheel/core/doc/index";
-import { APP_EDIT_COMMANDS, WHEEL_LIMITS, isValidIdentifier, type Envelope, type NativeToEmbedType } from "../protocol";
+import { APP_EDIT_COMMANDS, isValidIdentifier, type Envelope, type NativeToEmbedType } from "../protocol";
 import {
   payloadBoolean,
   payloadString,
@@ -28,6 +26,7 @@ import {
   type NativeEmbedSession,
   type WheelAppStatus,
 } from "../session";
+import { addNames, wheelStatus } from "./commands";
 
 const SPIN_MIN_DURATION_MS = 7200;
 const SPIN_DURATION_SPREAD_MS = 1600;
@@ -49,19 +48,6 @@ const useSynced = (session: NativeEmbedSession): boolean =>
     useCallback((listener: () => void) => session.subscribe(listener), [session]),
     () => session.isSynced,
   );
-
-const labelsFrom = (payload: Record<string, unknown>): string[] => {
-  const raw = payload.labels;
-  if (!Array.isArray(raw)) return [];
-  const labels: string[] = [];
-  for (const value of raw as unknown[]) {
-    if (typeof value !== "string") continue;
-    const label = normalizeLabel(value).slice(0, WHEEL_LIMITS.label);
-    if (label.length > 0) labels.push(label);
-    if (labels.length >= WHEEL_LIMITS.entries) break;
-  }
-  return labels;
-};
 
 type Winner = { spinId: string; label: string };
 
@@ -209,26 +195,8 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
   }, [doc, isSpinning]);
 
   const status = useMemo<WheelAppStatus>(
-    () => ({
-      kind: "wheel",
-      entries: entries
-        .filter((entry) => isValidIdentifier(entry.id))
-        .slice(0, WHEEL_LIMITS.entries)
-        .map((entry) => ({ id: entry.id, label: entry.label.slice(0, WHEEL_LIMITS.label) })),
-      results: history
-        .filter((result) => isValidIdentifier(result.spinId) && result.label.trim().length > 0)
-        .slice(0, WHEEL_LIMITS.results)
-        .map((result) => ({
-          id: result.spinId,
-          label: result.label.slice(0, WHEEL_LIMITS.label),
-          byName: result.byName.slice(0, WHEEL_LIMITS.name),
-        })),
-      removeWinner: removeWinnerOnDone,
-      sounds: soundOn,
-      spinning: isSpinning,
-      winnerSpinId: winner && isValidIdentifier(winner.spinId) ? winner.spinId : "",
-      winnerLabel: winner ? winner.label.slice(0, WHEEL_LIMITS.label) : "",
-    }),
+    () =>
+      wheelStatus({ entries, history, removeWinner: removeWinnerOnDone, sounds: soundOn, spinning: isSpinning, winner }),
     [entries, history, removeWinnerOnDone, soundOn, isSpinning, winner],
   );
 
@@ -248,12 +216,8 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
       if (!session.isSynced && envelope.type !== "setSounds") return { ok: false, error: "notSynced" };
       if (EDIT_COMMANDS.has(envelope.type) && !canEditRef.current) return { ok: false, error: "readOnly" };
       switch (envelope.type) {
-        case "addEntries": {
-          const labels = labelsFrom(payload);
-          if (labels.length === 0) return { ok: false, error: "noNames" };
-          if (getEntries(doc).length >= WHEEL_LIMITS.entries) return { ok: false, error: "full" };
-          return addEntries(doc, labels) > 0 ? { ok: true } : { ok: false, error: "noNames" };
-        }
+        case "addEntries":
+          return addNames(doc, payload);
         case "removeEntry": {
           const entryId = payloadString(payload, "entryId");
           if (!isValidIdentifier(entryId)) return { ok: false, error: "badEntry" };
