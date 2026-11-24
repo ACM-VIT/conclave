@@ -208,6 +208,7 @@ internal object SocketEvent {
     val webinarHandQueueChanged = SfuServerEvent.webinarHandQueueChanged.rawValue
     val webinarPromoted = SfuServerEvent.webinarPromoted.rawValue
     val webinarDemoted = SfuServerEvent.webinarDemoted.rawValue
+    val webinarStageInviteUsed = SfuServerEvent.webinarStageInviteUsed.rawValue
     val browserState = SfuServerEvent.browserState.rawValue
     val browserClosed = SfuServerEvent.browserClosed.rawValue
     val appsState = SfuServerEvent.appsState.rawValue
@@ -278,6 +279,7 @@ internal class SocketIOManager {
     internal var onWebinarHandQueueChanged: ((WebinarHandQueueChangedNotification) -> Unit)? = null
     internal var onWebinarPromoted: ((WebinarPromotedNotification) -> Unit)? = null
     internal var onWebinarDemoted: ((WebinarDemotedNotification) -> Unit)? = null
+    internal var onWebinarStageInviteUsed: ((WebinarStageInviteUsedNotification) -> Unit)? = null
     internal var onBrowserState: ((BrowserStateNotification) -> Unit)? = null
     internal var onBrowserClosed: ((BrowserClosedNotification) -> Unit)? = null
     internal var onAppsState: ((AppsStateNotification) -> Unit)? = null
@@ -3850,6 +3852,13 @@ internal class SocketIOManager {
             val notification = decode<WebinarDemotedNotification>(args.firstOrNull()) ?: return@Listener
             if (!eventRoomIdMatchesActiveOrPending(notification.roomId)) return@Listener
             onWebinarDemoted?.invoke(notification)
+        })
+
+        socket.on(SocketEvent.webinarStageInviteUsed, Emitter.Listener { args ->
+            if (this.socket !== socket) return@Listener
+            val notification = decode<WebinarStageInviteUsedNotification>(args.firstOrNull()) ?: return@Listener
+            if (!eventRoomIdMatchesActiveOrPending(notification.roomId)) return@Listener
+            onWebinarStageInviteUsed?.invoke(notification)
         })
 
         socket.on(SocketEvent.browserState, Emitter.Listener { args ->

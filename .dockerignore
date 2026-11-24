@@ -7,6 +7,10 @@
 !packages/
 !packages/ai/
 !packages/ai/**
+!packages/meeting-core/
+!packages/meeting-core/package.json
+!packages/meeting-core/src/
+!packages/meeting-core/src/**
 !packages/sfu/
 !packages/sfu/**
 !packages/shared-browser/
