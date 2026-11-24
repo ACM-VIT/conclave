@@ -38,9 +38,11 @@ import {
 import {
   generateRoomCode,
   ROOM_CODE_MAX_LENGTH,
+  applyFieldEdit,
   extractRoomCode,
-  insertIntoField,
+  inputEditRange,
   parseCodeFieldPaste,
+  planFieldEdit,
   sanitizeInstitutionDisplayName,
   sanitizeRoomCodeInput,
   sanitizeRoomCode,
@@ -1139,11 +1141,41 @@ function JoinScreen({
     setIsSigningOut(false);
   };
 
-  const onCodeChange = (raw: string) => {
-    const next = enforceShortCode
-      ? sanitizeRoomCodeInput(raw).slice(0, ROOM_CODE_MAX_LENGTH)
-      : extractRoomCode(raw);
-    onRoomIdChange(next);
+  const normalizeCode = (raw: string) =>
+    enforceShortCode ? sanitizeRoomCodeInput(raw) : extractRoomCode(raw);
+  const onCodeChange = (raw: string) => onRoomIdChange(normalizeCode(raw));
+  const shapeCodeEdit = (
+    event: { preventDefault(): void },
+    input: HTMLInputElement,
+    [start, end]: readonly [number, number],
+    text: string,
+    nativeText = text,
+  ) => {
+    const edit = planFieldEdit(
+      input.value,
+      start,
+      end,
+      text,
+      normalizeCode,
+      ROOM_CODE_MAX_LENGTH,
+    );
+    if (edit.start === start && edit.end === end && edit.text === nativeText) return;
+    event.preventDefault();
+    applyFieldEdit(input, edit);
+  };
+  const shapeTypedCodeEdits = (input: HTMLInputElement | null) => {
+    if (!input) return;
+    const onBeforeInput = (event: InputEvent) => {
+      if (event.isComposing) return;
+      const start = input.selectionStart ?? input.value.length;
+      const end = input.selectionEnd ?? start;
+      const range = inputEditRange(event.inputType, start, end, input.value.length);
+      if (!range) return;
+      const text = event.inputType === "insertText" ? (event.data ?? "") : "";
+      shapeCodeEdit(event, input, range, text);
+    };
+    input.addEventListener("beforeinput", onBeforeInput);
+    return () => input.removeEventListener("beforeinput", onBeforeInput);
   };
 
   const canJoin = normalizedRoomId.trim().length > 0;
@@ -1561,16 +1593,23 @@ function JoinScreen({
                   <input
                     type="text"
                     value={normalizedRoomId}
+                    ref={shapeTypedCodeEdits}
                     onChange={(e) => onCodeChange(e.target.value)}
                     onPaste={(e) => {
                       if (isRoutedRoom) return;
+                      const input = e.currentTarget;
                       const text = e.clipboardData.getData("text");
                       const paste = parseCodeFieldPaste(text, getMeetingLinkHosts());
-                      if (paste?.kind === "insert" && paste.text === text) return;
-                      e.preventDefault();
-                      if (paste?.kind === "replace") onCodeChange(paste.code);
-                      if (paste?.kind === "insert") {
-                        insertIntoField(e.currentTarget, paste.text, ROOM_CODE_MAX_LENGTH);
+                      if (!paste) {
+                        e.preventDefault();
+                        return;
+                      }
+                      const start = input.selectionStart ?? input.value.length;
+                      const end = input.selectionEnd ?? start;
+                      if (paste.kind === "replace") {
+                        shapeCodeEdit(e, input, [0, input.value.length], paste.code, text);
+                      } else {
+                        shapeCodeEdit(e, input, [start, end], paste.text, text);
                       }
                     }}
                     onKeyDown={(e) => {

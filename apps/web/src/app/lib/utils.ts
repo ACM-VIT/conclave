@@ -238,17 +238,60 @@ export function parseCodeFieldPaste(
   return code ? { kind: "replace", code } : null;
 }
 
-export function insertIntoField(input: HTMLInputElement, text: string, maxLength: number) {
-  const start = input.selectionStart ?? input.value.length;
-  const end = input.selectionEnd ?? start;
-  const fits = text.slice(0, Math.max(0, maxLength - (input.value.length - (end - start))));
-  if (!fits) return;
-  input.setSelectionRange(start, end, input.selectionDirection ?? "none");
-  if (document.execCommand("insertText", false, fits)) {
-    input.setSelectionRange(start + fits.length, start + fits.length);
+export type FieldEdit = { start: number; end: number; text: string };
+
+export function planFieldEdit(
+  value: string,
+  start: number,
+  end: number,
+  text: string,
+  normalize: (value: string) => string,
+  maxLength: number,
+): FieldEdit {
+  const fits = text.slice(0, Math.max(0, maxLength - (value.length - (end - start))));
+  const next = normalize(value.slice(0, start) + fits + value.slice(end));
+  let head = 0;
+  while (head < start && value[head] === next[head]) head += 1;
+  let tail = 0;
+  while (
+    tail < value.length - end &&
+    tail < next.length - head &&
+    value[value.length - 1 - tail] === next[next.length - 1 - tail]
+  ) {
+    tail += 1;
+  }
+  return { start: head, end: value.length - tail, text: next.slice(head, next.length - tail) };
+}
+
+export function inputEditRange(
+  inputType: string,
+  start: number,
+  end: number,
+  length: number,
+): readonly [number, number] | null {
+  if (inputType === "insertText") return [start, end];
+  if (!inputType.startsWith("deleteContent")) return null;
+  if (start !== end) return [start, end];
+  if (inputType === "deleteContentBackward") return [Math.max(0, start - 1), start];
+  if (inputType === "deleteContentForward") return [start, Math.min(length, start + 1)];
+  return null;
+}
+
+export function applyFieldEdit(input: HTMLInputElement, edit: FieldEdit) {
+  const caret = edit.start + edit.text.length;
+  if (edit.start === edit.end && !edit.text) {
+    input.setSelectionRange(caret, caret);
     return;
   }
-  input.setRangeText(fits, start, end, "end");
+  input.setSelectionRange(edit.start, edit.end);
+  const applied = edit.text
+    ? document.execCommand("insertText", false, edit.text)
+    : document.execCommand("delete");
+  if (applied) {
+    input.setSelectionRange(caret, caret);
+    return;
+  }
+  input.setRangeText(edit.text, edit.start, edit.end, "end");
   input.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
