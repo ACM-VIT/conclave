@@ -346,6 +346,7 @@ export const activateHost = (
     hostContext.currentRoom = room;
     registerAdminHandlers(hostContext, { roomId });
   }
+  host.socket.emit("hostAssigned", { roomId, hostUserId });
   if (room.cleanupTimer) {
     room.stopCleanupTimer();
   }
@@ -369,7 +370,6 @@ export const activateHost = (
     });
   }
   grantWebinarQaList(state, room, host);
-  host.socket.emit("hostAssigned", { roomId, hostUserId });
 };
 
 export const registerAdminHandlers = (
