@@ -15,6 +15,7 @@ import {
   internalBusyIntervals,
 } from "../../server/scheduling.js";
 import { sendDueSchedulingEmailReminders } from "../../server/schedulingEmailReminders.js";
+import { drainCalendarTasks } from "../../server/calendarTasks.js";
 import type { ScheduledMeeting } from "../../types.js";
 import { startRedisProxy, type RedisProxy } from "./redisProxy.js";
 import { hasRedis, startRedis, type RedisServer } from "./redisServer.js";
@@ -262,7 +263,15 @@ const runSequence = async (mode: StoreMode, seed: number, steps: number): Promis
       webinar: ["status"],
     },
   };
-  const allowedFor = (label: string, kind: Kind): string[] => ownedFields[label]?.[kind] ?? [];
+  const calendarWork: Partial<Record<Kind, string[]>> = {
+    meeting: ["googleCalendarEventId", "calendarSyncStatus", "calendarSyncError"],
+    calendarTask: ["action", "state", "attempts", "nextAttemptAt", "lastError", "updatedAt"],
+  };
+  const runsCalendarWork = new Set(["book", "cancel meeting", "delete meeting", "tick", "background"]);
+  const allowedFor = (label: string, kind: Kind): string[] => [
+    ...(ownedFields[label]?.[kind] ?? []),
+    ...(runsCalendarWork.has(label) ? calendarWork[kind] ?? [] : []),
+  ];
 
   const checkBooking = (versions: ReturnType<typeof history>, entry: CommitEntry) => {
     if (entry.op?.label !== "book") return;
@@ -416,6 +425,30 @@ const runSequence = async (mode: StoreMode, seed: number, steps: number): Promis
     }
   };
 
+  const checkCalendarSettles = async () => {
+    if (!observer || !google) return;
+    const sfu = sfus.A!;
+    for (let round = 0; round < 10; round += 1) {
+      const open = await observer.read((view) => view.tagged("calendarTask", "open").length);
+      if (open === 0) break;
+      advance += 6 * 3_600_000;
+      await runAsOp(newOp("A", "tick", "TICK"), () => drainCalendarTasks(sfu.state));
+      await drain();
+    }
+    const snapshot = await observer.read((view) => ({
+      meetings: view.all("meeting").map((stored) => stored.value),
+      tasks: view.all("calendarTask").map((stored) => stored.value),
+    }));
+    if (snapshot.tasks.some((task) => task.state === "open")) flag("a calendar task was still open after every retry was due");
+    const linked = new Set(
+      snapshot.meetings.filter((meeting) => meeting.status !== "cancelled").map((meeting) => meeting.googleCalendarEventId),
+    );
+    const givenUp = new Set(snapshot.tasks.filter((task) => task.state === "failed").map((task) => task.eventId));
+    for (const event of google.events.values()) {
+      if (!linked.has(event.id) && !givenUp.has(event.id)) flag("a Google event is left with no live booking once every calendar task ran");
+    }
+  };
+
   const settle = async () => {
     let last = "";
     let stable = 0;
@@ -551,6 +584,7 @@ const runSequence = async (mode: StoreMode, seed: number, steps: number): Promis
             await sfu.state.controlPlane.commit(advanceMeetings);
             await advanceScheduledWebinars(sfu.state, Date.now(), () => {});
             await sendDueSchedulingEmailReminders(sfu.state);
+            await drainCalendarTasks(sfu.state);
             return { status: 200, body: {} };
           }),
         ),
@@ -611,6 +645,7 @@ const runSequence = async (mode: StoreMode, seed: number, steps: number): Promis
     checkCompleted();
     checkHistory();
     await checkAuthority();
+    await checkCalendarSettles();
   } finally {
     gates.drain();
     await Promise.allSettled([...pending]);

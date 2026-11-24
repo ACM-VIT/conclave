@@ -7,6 +7,7 @@ import { Logger } from "../utilities/loggers.js";
 import { advanceMeetings } from "./controlPlane/meetingCommands.js";
 import { initControlPlane, initMediaSoup } from "./init.js";
 import { sendDueSchedulingEmailReminders } from "./schedulingEmailReminders.js";
+import { drainCalendarTasks } from "./calendarTasks.js";
 import { createSfuApp } from "./http/createApp.js";
 import { registerAdminGateway, type AdminGateway } from "./admin/adminGateway.js";
 import {
@@ -99,6 +100,9 @@ export const createSfuServer = (
       });
       sendDueSchedulingEmailReminders(state).catch((error) => {
         Logger.warn("Failed to send scheduling reminders", error);
+      });
+      drainCalendarTasks(state).catch((error) => {
+        Logger.warn("Failed to run calendar tasks", error);
       });
     }, 5000);
 

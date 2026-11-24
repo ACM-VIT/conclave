@@ -15,24 +15,7 @@ const retryDelays = (): number[] => {
   return delays.length > 0 ? delays : DEFAULT_DELAYS_MS;
 };
 
-type OnResult<T> = (result: CommitResult<T>) => Promise<void> | void;
-
-const settle = async <T>(label: string, result: CommitResult<T>, onResult: OnResult<T> | undefined): Promise<void> => {
-  if (!result.ok) Logger.warn(`[ControlPlane] ${label} no longer applies: ${result.reason}`);
-  try {
-    await onResult?.(result);
-  } catch (error) {
-    Logger.warn(`[ControlPlane] could not finish ${label}`, error);
-  }
-};
-
-const retryLater = <T>(
-  store: ControlPlaneStore,
-  label: string,
-  command: Command<T>,
-  delays: number[],
-  onResult: OnResult<T> | undefined,
-): void => {
+const retryLater = <T>(store: ControlPlaneStore, label: string, command: Command<T>, delays: number[]): void => {
   const [delay, ...rest] = delays;
   if (delay === undefined) {
     Logger.error(`[ControlPlane] gave up recording ${label}; it is not saved`);
@@ -40,10 +23,12 @@ const retryLater = <T>(
   }
   const timer = setTimeout(() => {
     store.commit(command).then(
-      (result) => settle(label, result, onResult),
+      (result) => {
+        if (!result.ok) Logger.warn(`[ControlPlane] ${label} no longer applies: ${result.reason}`);
+      },
       (error: unknown) => {
         Logger.warn(`[ControlPlane] retrying ${label} after a storage error`, error);
-        retryLater(store, label, command, rest, onResult);
+        retryLater(store, label, command, rest);
       },
     );
   }, delay);
@@ -54,13 +39,12 @@ export const commitFollowUp = async <T>(
   store: ControlPlaneStore,
   label: string,
   command: Command<T>,
-  onRetried?: OnResult<T>,
 ): Promise<CommitResult<T> | null> => {
   try {
     return await store.commit(command);
   } catch (error) {
     Logger.warn(`[ControlPlane] could not record ${label} yet`, error);
-    retryLater(store, label, command, retryDelays(), onRetried);
+    retryLater(store, label, command, retryDelays());
     return null;
   }
 };

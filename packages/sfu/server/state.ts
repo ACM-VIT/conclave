@@ -34,6 +34,7 @@ export type SfuState = {
   googleAccessTokens: Map<string, { token: string; expiresAt: number }>;
   scheduledWebinarTimer: NodeJS.Timeout | null;
   reminderScanRunning: boolean;
+  calendarTasks: { draining: boolean; failed: number };
   roomRegistry: RoomRegistry;
   transcriptRelays: TranscriptRelayRegistry;
   /** Null when this SFU does not run authority apps. */
@@ -59,6 +60,7 @@ export const createSfuState = (options?: {
     googleAccessTokens: new Map(),
     scheduledWebinarTimer: null,
     reminderScanRunning: false,
+    calendarTasks: { draining: false, failed: 0 },
     roomRegistry: options?.roomRegistry ?? createRoomRegistry(config),
     transcriptRelays: createTranscriptRelayRegistry(config.transcriptRelay),
     appsAuthority:

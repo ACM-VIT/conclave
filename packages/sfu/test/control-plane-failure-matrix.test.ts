@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { createClient } from "redis";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { startCaseSfu, type CaseSfu } from "./support/caseHarness.js";
-import { EMAIL_WORKER_URL, FakeEmail, FakeGoogle, Gates, installFakeFetch } from "./support/fakeServices.js";
+import { createMemoryData, type MemoryData } from "../server/controlPlane/backends/memory.js";
+import { EMAIL_WORKER_URL, FakeEmail, FakeGoogle, Gates, installFakeFetch, type GateKind } from "./support/fakeServices.js";
 import { hasRedis, startRedis, type RedisServer } from "./support/redisServer.js";
 
 type Mode = "sqlite" | "json" | "redis";
@@ -228,6 +229,125 @@ describe.each(modes)("a %s store that fails a write", (mode) => {
   );
 });
 
+type CrashMode = "memory" | Mode;
+
+const crashModes: CrashMode[] = ["memory", "sqlite", ...(runsAsRoot ? [] : (["json"] as const)), ...(hasRedis ? (["redis"] as const) : [])];
+
+const LEASE_PASSED_MS = 2 * 60_000;
+
+describe.each(crashModes)("an SFU on a %s store killed between a calendar change and Google", (mode) => {
+  let memory: MemoryData | undefined;
+
+  const boot = async (skewMs = 0) => {
+    const sfu = await startCaseSfu("matrix", { sqliteCommitWaitMs: 100, memory, skewMs });
+    running.push(sfu);
+    return sfu;
+  };
+
+  const kill = async (sfu: CaseSfu, gate: GateKind, inFlight: Promise<unknown>) => {
+    expect(gates.drop(gate)).toBe(1);
+    running.splice(running.indexOf(sfu), 1);
+    await sfu.stop();
+    await inFlight.catch(() => undefined);
+  };
+
+  const until = async (condition: () => boolean, label: string) => {
+    for (let round = 0; round < 300; round += 1) {
+      if (condition()) return;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error(`timed out waiting for ${label}`);
+  };
+
+  const bookOn = (sfu: CaseSfu, world: World) =>
+    sfu.call("POST", `/scheduling/public/${world.username}/intro/book`, { startAt: slot(), attendeeName: "Guest", attendeeEmail: "guest@example.test" });
+
+  const onlyBooking = async (sfu: CaseSfu) => {
+    const listed = (await host(sfu, "GET", "/scheduling/bookings")).body.bookings as Array<{ id: string }>;
+    expect(listed).toHaveLength(1);
+    const saved = await host(sfu, "GET", `/scheduled-meetings/${listed[0].id}`);
+    return saved.body.scheduledMeeting as { id: string; googleCalendarEventId: string | null; calendarSyncStatus: string };
+  };
+
+  const recover = async () => {
+    const again = await boot(LEASE_PASSED_MS);
+    await again.drainCalendarTasks();
+    return again;
+  };
+
+  beforeEach(() => {
+    if (mode === "memory") {
+      memory = createMemoryData();
+      configure("sqlite");
+      vi.stubEnv("CONTROL_PLANE_PERSISTENCE", "memory");
+    } else {
+      memory = undefined;
+      configure(mode);
+    }
+  });
+
+  it("creates the booking's event after a restart when the SFU died before calling Google", async () => {
+    const sfu = await boot();
+    const world = await seed(sfu);
+    gates.parking.add("google-create");
+    const booking = bookOn(sfu, world);
+    await until(() => gates.parked.length > 0, "the booking to reach Google");
+    await kill(sfu, "google-create", booking);
+    expect(google.created).toHaveLength(0);
+
+    const again = await recover();
+    expect(google.created).toHaveLength(1);
+    const [event] = google.events.values();
+    expect(await onlyBooking(again)).toMatchObject({ googleCalendarEventId: event.id, calendarSyncStatus: "synced" });
+  }, 30_000);
+
+  it("keeps one event and links it after a restart when the SFU died before hearing Google's answer", async () => {
+    const sfu = await boot();
+    const world = await seed(sfu);
+    gates.parking.add("google-created");
+    const booking = bookOn(sfu, world);
+    await until(() => gates.parked.length > 0, "Google to create the event");
+    await kill(sfu, "google-created", booking);
+    expect(google.events.size).toBe(1);
+
+    const again = await recover();
+    expect(google.created).toHaveLength(1);
+    const [event] = google.events.values();
+    expect(await onlyBooking(again)).toMatchObject({ googleCalendarEventId: event.id, calendarSyncStatus: "synced" });
+  }, 30_000);
+
+  it("removes the event of a booking deleted while Google created it, after the SFU died before hearing back", async () => {
+    const sfu = await boot();
+    const world = await seed(sfu);
+    gates.parking.add("google-created");
+    const booking = bookOn(sfu, world);
+    await until(() => gates.parked.length > 0, "Google to create the event");
+    const listed = (await host(sfu, "GET", "/scheduling/bookings")).body.bookings as Array<{ id: string }>;
+    expect((await host(sfu, "DELETE", `/scheduled-meetings/${listed[0].id}`)).status).toBe(200);
+    await kill(sfu, "google-created", booking);
+    expect(google.events.size).toBe(1);
+
+    await recover();
+    expect(google.events.size).toBe(0);
+  }, 30_000);
+
+  it("removes a cancelled booking's event after a restart when the SFU died before Google deleted it", async () => {
+    const sfu = await boot();
+    const world = await seed(sfu);
+    expect((await bookOn(sfu, world)).status).toBe(201);
+    const booked = await onlyBooking(sfu);
+    expect(booked.calendarSyncStatus).toBe("synced");
+    gates.parking.add("google-delete");
+    expect((await host(sfu, "POST", `/scheduled-meetings/${booked.id}/cancel`)).status).toBe(200);
+    await until(() => gates.parked.length > 0, "the SFU to ask Google to delete the event");
+    await kill(sfu, "google-delete", Promise.resolve());
+    expect(google.events.size).toBe(1);
+
+    await recover();
+    expect(google.events.size).toBe(0);
+  }, 30_000);
+});
+
 describe("a booking whose calendar settle waits out a storage error", () => {
   const until = async (condition: () => boolean, label: string) => {
     for (let round = 0; round < 300; round += 1) {
@@ -237,9 +357,8 @@ describe("a booking whose calendar settle waits out a storage error", () => {
     throw new Error(`timed out waiting for ${label}`);
   };
 
-  it("deletes the booking's Google event once a retry finds the booking deleted meanwhile", async () => {
+  it("deletes the booking's Google event once the task runs again and finds the booking deleted meanwhile", async () => {
     configure("sqlite");
-    vi.stubEnv("SFU_FOLLOW_UP_RETRY_DELAYS_MS", "100,100,100,100");
     const sfu = await start();
     const world = await seed(sfu);
     gates.parking.add("google-create");
@@ -261,6 +380,10 @@ describe("a booking whose calendar settle waits out a storage error", () => {
     } finally {
       await fault.clear();
     }
-    await until(() => google.events.size === 0, "the orphaned Google event to be deleted");
+    expect(google.events.size).toBe(1);
+    const later = await startCaseSfu("matrix", { sqliteCommitWaitMs: 100, skewMs: 2 * 60_000 });
+    running.push(later);
+    await later.drainCalendarTasks();
+    expect(google.events.size).toBe(0);
   }, 30_000);
 });

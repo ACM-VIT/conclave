@@ -31,18 +31,18 @@ import {
   hostBookings,
   hostBusyIntervals,
   hostDashboard,
-  patchCalendarToken,
-  recordBookingCalendarFailure,
   recordBookingEmailResult,
   setHostHours,
-  settleBookingCalendar,
   updateHostEventType,
   updateHostProfile,
   type BookingTarget,
   type HostDashboard,
 } from "../controlPlane/schedulingCommands.js";
 import { commitFollowUp } from "../controlPlane/followUp.js";
-import { StoreCorruptionError, StoreUnavailableError, type CommitResult } from "../controlPlane/model.js";
+import { CALENDAR_TASK_LEASE_MS } from "../controlPlane/calendarTaskCommands.js";
+import { runCalendarTask } from "../calendarTasks.js";
+import { fetchOptionalGoogleBusy } from "../googleCalendar.js";
+import { StoreCorruptionError, StoreUnavailableError } from "../controlPlane/model.js";
 import {
   isSchedulingEmailConfigured,
   sendSchedulingBookingEmails,
@@ -77,9 +77,6 @@ const MAX_TEXT_LENGTH = 2000;
 const MINUTE_MS = 60 * 1000;
 const DAY_MS = 24 * 60 * MINUTE_MS;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
-const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
-const GOOGLE_FREEBUSY_URL = "https://www.googleapis.com/calendar/v3/freeBusy";
-const GOOGLE_CALENDAR_API = "https://www.googleapis.com/calendar/v3";
 
 const hasValidSecret = (req: Request, secret: string): boolean => {
   const provided = req.header("x-sfu-secret");
@@ -154,15 +151,6 @@ const resolveUserContext = (
   return { email, name, userId, isAdmin };
 };
 
-const requireGoogleConfig = (): { clientId: string; clientSecret: string } => {
-  const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
-  if (!clientId || !clientSecret) {
-    throw new Error("Google Calendar sync is not configured.");
-  }
-  return { clientId, clientSecret };
-};
-
 const resolveAppOrigin = (req: Request): string => {
   const fromHeader = req.header("x-app-origin")?.trim();
   if (fromHeader) return fromHeader.replace(/\/$/, "");
@@ -180,62 +168,6 @@ const publicCalendarSummary = (
   ...summary,
   error: summary.status === "connected" ? null : summary.error,
 });
-
-
-class GoogleCalendarApiError extends Error {
-  status: number;
-  code: string | null;
-
-  constructor(message: string, status: number, code: string | null = null) {
-    super(message);
-    this.name = "GoogleCalendarApiError";
-    this.status = status;
-    this.code = code;
-  }
-}
-
-const googleErrorCode = (data: unknown): string | null => {
-  if (!data || typeof data !== "object" || !("error" in data)) return null;
-  const error = (data as { error?: unknown }).error;
-  if (typeof error === "string") return error;
-  if (error && typeof error === "object" && "status" in error) {
-    const status = (error as { status?: unknown }).status;
-    return typeof status === "string" ? status : null;
-  }
-  return null;
-};
-
-const googleFetchJson = async <T>(
-  url: string,
-  init: RequestInit,
-): Promise<T> => {
-  const response = await fetch(url, init);
-  const data: unknown = await response.json().catch(() => undefined);
-  if (!response.ok) {
-    const code = googleErrorCode(data);
-    const message = code
-      ? code
-      : data && typeof data === "object" && "error" in data
-        ? JSON.stringify((data as { error?: unknown }).error)
-        : response.statusText;
-    throw new GoogleCalendarApiError(
-      message || "Google Calendar request failed.",
-      response.status,
-      code,
-    );
-  }
-  if (!data || typeof data !== "object") {
-    throw new Error("Google Calendar returned an invalid response.");
-  }
-  return data as T;
-};
-
-const shouldMarkCalendarReconnectRequired = (error: unknown): boolean =>
-  error instanceof GoogleCalendarApiError &&
-  (error.status === 401 ||
-    error.code === "invalid_grant" ||
-    error.code === "invalid_client" ||
-    error.code === "unauthorized_client");
 
 
 const buildConfirmation = (
@@ -259,125 +191,6 @@ const buildConfirmation = (
 const isStoreError = (error: unknown): boolean =>
   error instanceof StoreUnavailableError || error instanceof StoreCorruptionError;
 
-const markCalendarError = async (
-  state: SfuState,
-  connection: SchedulingCalendarConnection,
-  error: unknown,
-): Promise<void> => {
-  state.googleAccessTokens.delete(connection.grantId);
-  try {
-    await state.controlPlane.commit(
-      patchCalendarToken(connection.profileId, connection.grantId, {
-        status: "needs_reconnect",
-        error: (error as Error).message || "Google Calendar sync failed.",
-      }),
-    );
-  } catch (storeError) {
-    Logger.warn("Failed to record that Google Calendar needs a reconnect", storeError);
-  }
-};
-
-const refreshGoogleAccessToken = async (
-  state: SfuState,
-  connection: SchedulingCalendarConnection,
-): Promise<string> => {
-  const freshAfter = Date.now() + 60_000;
-  const cached = state.googleAccessTokens.get(connection.grantId);
-  if (cached && cached.expiresAt > freshAfter) return cached.token;
-  if (
-    connection.accessToken &&
-    connection.accessTokenExpiresAt &&
-    connection.accessTokenExpiresAt > freshAfter
-  ) {
-    return connection.accessToken;
-  }
-  const config = requireGoogleConfig();
-  const body = new URLSearchParams({
-    client_id: config.clientId,
-    client_secret: config.clientSecret,
-    refresh_token: connection.refreshToken || "",
-    grant_type: "refresh_token",
-  });
-  let token: { access_token?: string; expires_in?: number };
-  try {
-    token = await googleFetchJson<{ access_token?: string; expires_in?: number }>(
-      GOOGLE_TOKEN_URL,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body,
-      },
-    );
-  } catch (error) {
-    if (shouldMarkCalendarReconnectRequired(error)) {
-      await markCalendarError(state, connection, error);
-    }
-    throw error;
-  }
-  if (!token.access_token) {
-    throw new Error("Google did not return an access token.");
-  }
-  state.googleAccessTokens.set(connection.grantId, {
-    token: token.access_token,
-    expiresAt: Date.now() + Math.max(token.expires_in ?? 3600, 60) * 1000,
-  });
-  return token.access_token;
-};
-
-const fetchGoogleBusy = async (
-  state: SfuState,
-  connection: SchedulingCalendarConnection,
-  timeMin: number,
-  timeMax: number,
-): Promise<BusyInterval[]> => {
-  const accessToken = await refreshGoogleAccessToken(state, connection);
-  const data = await googleFetchJson<{
-    calendars?: Record<string, { busy?: Array<{ start?: string; end?: string }> }>;
-  }>(GOOGLE_FREEBUSY_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      timeMin: new Date(timeMin).toISOString(),
-      timeMax: new Date(timeMax).toISOString(),
-      items: [{ id: connection.calendarId || "primary" }],
-    }),
-  });
-  const calendarId = connection.calendarId || "primary";
-  const busy = data.calendars?.[calendarId]?.busy;
-  if (!Array.isArray(busy)) {
-    throw new Error("Google Calendar returned an invalid freebusy response.");
-  }
-  return busy
-    .map((entry) => ({
-      startAt: entry.start ? new Date(entry.start).getTime() : NaN,
-      endAt: entry.end ? new Date(entry.end).getTime() : NaN,
-    }))
-    .filter((entry) => Number.isFinite(entry.startAt) && Number.isFinite(entry.endAt));
-};
-
-const fetchOptionalGoogleBusy = async (
-  state: SfuState,
-  connection: SchedulingCalendarConnection | null,
-  eventType: SchedulingEventType,
-  timeMin: number,
-  timeMax: number,
-): Promise<BusyInterval[]> => {
-  if (!connection) return [];
-  try {
-    return await fetchGoogleBusy(state, connection, timeMin, timeMax);
-  } catch (error) {
-    if (eventType.requiresCalendar) throw error;
-    Logger.warn(
-      "Optional Google Calendar busy lookup failed; continuing with Conclave availability",
-      error,
-    );
-    return [];
-  }
-};
-
 const hostBusyAround = async (
   state: SfuState,
   profileId: string,
@@ -391,71 +204,6 @@ const hostBusyAround = async (
   const internal = await state.controlPlane.read(hostBusyIntervals(profileId, busyFrom, busyTo));
   const google = await fetchOptionalGoogleBusy(state, connection, eventType, busyFrom, busyTo);
   return [...internal, ...google];
-};
-
-const createGoogleCalendarEvent = async (
-  state: SfuState,
-  connection: SchedulingCalendarConnection,
-  input: {
-    title: string;
-    description: string;
-    meetingLink: string;
-    startAt: number;
-    endAt: number;
-    timeZone: string;
-    attendeeName: string;
-    attendeeEmail: string;
-  },
-): Promise<string> => {
-  try {
-    const accessToken = await refreshGoogleAccessToken(state, connection);
-    const url = `${GOOGLE_CALENDAR_API}/calendars/${encodeURIComponent(
-      connection.calendarId || "primary",
-    )}/events?sendUpdates=none`;
-    const data = await googleFetchJson<{ id?: string }>(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        summary: input.title,
-        location: "Conclave room",
-        description: `${input.description ? `${input.description}\n\n` : ""}Join Conclave: ${input.meetingLink}`,
-        start: { dateTime: new Date(input.startAt).toISOString(), timeZone: input.timeZone },
-        end: { dateTime: new Date(input.endAt).toISOString(), timeZone: input.timeZone },
-        attendees: [{ email: input.attendeeEmail, displayName: input.attendeeName }],
-      }),
-    });
-    if (!data.id) throw new Error("Google did not return an event id.");
-    return data.id;
-  } catch (error) {
-    if (shouldMarkCalendarReconnectRequired(error)) {
-      await markCalendarError(state, connection, error);
-    }
-    throw error;
-  }
-};
-
-const deleteGoogleCalendarEvent = async (
-  state: SfuState,
-  connection: SchedulingCalendarConnection,
-  eventId: string,
-): Promise<void> => {
-  try {
-    const accessToken = await refreshGoogleAccessToken(state, connection);
-    const response = await fetch(
-      `${GOOGLE_CALENDAR_API}/calendars/${encodeURIComponent(
-        connection.calendarId || "primary",
-      )}/events/${encodeURIComponent(eventId)}?sendUpdates=none`,
-      { method: "DELETE", headers: { Authorization: `Bearer ${accessToken}` } },
-    );
-    if (!response.ok && response.status !== 404 && response.status !== 410) {
-      throw new Error(`Google answered ${response.status}`);
-    }
-  } catch (error) {
-    Logger.warn(`Failed to remove orphaned Google Calendar event ${eventId}`, error);
-  }
 };
 
 const hasCalendarConnectionProblem = (target: BookingTarget): boolean =>
@@ -810,7 +558,7 @@ export const registerSchedulingRoutes = (
     try {
       const commitBooking = async (
         retriesLeft: number,
-      ): Promise<{ target: BookingTarget; meeting: ScheduledMeeting; calendar: SchedulingCalendarConnection | null } | null> => {
+      ): Promise<{ target: BookingTarget; meeting: ScheduledMeeting; calendarTaskId: string | null } | null> => {
         const target = await resolveTarget(req, res);
         if (!target) return null;
         if (hasCalendarConnectionProblem(target)) {
@@ -875,9 +623,10 @@ export const registerSchedulingRoutes = (
               defaultHostName: profile.name,
               defaultHostUserId: profile.userId,
             },
+            calendarEvent: { appOrigin, timeZone: profile.timeZone, leaseMs: CALENDAR_TASK_LEASE_MS },
           }),
         );
-        if (result.ok) return { target, meeting: result.value, calendar };
+        if (result.ok) return { target, meeting: result.value.meeting, calendarTaskId: result.value.calendarTaskId };
         if (result.message === BOOKING_PAGE_CHANGED && retriesLeft > 0) {
           return commitBooking(retriesLeft - 1);
         }
@@ -891,7 +640,7 @@ export const registerSchedulingRoutes = (
 
       const booked = await commitBooking(1);
       if (!booked) return;
-      const { target, calendar } = booked;
+      const { target, calendarTaskId } = booked;
       let latest = booked.meeting;
       let calendarError: string | null = null;
       const profile = target.profile.value;
@@ -901,60 +650,14 @@ export const registerSchedulingRoutes = (
         res.status(409).json({ error: BOOKING_GONE });
       };
 
-      if (calendar) {
-        let eventId: string | null = null;
-        try {
-          eventId = await createGoogleCalendarEvent(state, calendar, {
-            title: eventType.title,
-            description: attendeeNote,
-            meetingLink: buildSchedulingMeetingLink(appOrigin, latest),
-            startAt: latest.scheduledStartAt,
-            endAt: latest.scheduledEndAt,
-            timeZone: profile.timeZone,
-            attendeeName,
-            attendeeEmail: attendeeEmail ?? "",
-          });
-        } catch (error) {
-          calendarError = (error as Error).message || "Could not create the calendar event.";
+      if (calendarTaskId) {
+        const run = await runCalendarTask(state, calendarTaskId, {}, true);
+        if (run.bookingGone) {
+          bookingGone();
+          return;
         }
-        if (eventId) {
-          const createdEvent = eventId;
-          const command = settleBookingCalendar({
-            meetingId: latest.id,
-            profileId: profile.id,
-            grantId: calendar.grantId,
-            eventId: createdEvent,
-            startAt: latest.scheduledStartAt,
-            endAt: latest.scheduledEndAt,
-          });
-          const orphaned = (result: CommitResult<{ orphaned: boolean }>) => !result.ok || result.value.orphaned;
-          const removeIfOrphaned = async (result: CommitResult<{ orphaned: boolean }>) => {
-            if (orphaned(result)) await deleteGoogleCalendarEvent(state, calendar, createdEvent);
-          };
-          const settled = await commitFollowUp(
-            state.controlPlane,
-            `calendar event ${createdEvent} for booking ${latest.id}`,
-            command,
-            removeIfOrphaned,
-          );
-          if (settled && orphaned(settled)) {
-            await removeIfOrphaned(settled);
-            bookingGone();
-            return;
-          }
-          if (settled?.ok) latest = settled.value.meeting;
-        } else if (calendarError) {
-          const failed = await commitFollowUp(
-            state.controlPlane,
-            `calendar failure for booking ${latest.id}`,
-            recordBookingCalendarFailure(latest.id, calendarError),
-          );
-          if (failed && !failed.ok) {
-            bookingGone();
-            return;
-          }
-          if (failed?.ok) latest = failed.value;
-        }
+        calendarError = run.error;
+        if (run.meeting) latest = run.meeting;
       }
 
       const emailResult = await sendSchedulingBookingEmails({

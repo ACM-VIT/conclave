@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createServer } from "node:http";
 import { vi } from "vitest";
+import type { MemoryData } from "../../server/controlPlane/backends/memory.js";
 
 export type CaseReply = { status: number; body: Record<string, unknown> };
 
@@ -8,6 +9,7 @@ export type CaseSfu = {
   call: (method: string, path: string, body?: unknown, headers?: Record<string, string>) => Promise<CaseReply>;
   tickWebinars: () => Promise<void>;
   scanReminders: () => Promise<void>;
+  drainCalendarTasks: () => Promise<void>;
   stop: () => Promise<void>;
 };
 
@@ -31,6 +33,7 @@ const loadSfuModules = () =>
     import("../../server/schedulingEmailReminders.js"),
     import("../../server/state.js"),
     import("../../server/controlPlane/open.js"),
+    import("../../server/calendarTasks.js"),
   ]);
 
 export const warmCaseModules = async (): Promise<void> => {
@@ -40,7 +43,7 @@ export const warmCaseModules = async (): Promise<void> => {
 
 export const startCaseSfu = async (
   name: string,
-  options: { skewMs?: number; sqliteCommitWaitMs?: number } = {},
+  options: { skewMs?: number; sqliteCommitWaitMs?: number; memory?: MemoryData } = {},
 ): Promise<CaseSfu> => {
   installSkewedClock();
   vi.resetModules();
@@ -53,13 +56,17 @@ export const startCaseSfu = async (
     { sendDueSchedulingEmailReminders },
     { createSfuState },
     { openControlPlane },
+    { drainCalendarTasks },
   ] = await loadSfuModules();
   const offset = options.skewMs ?? 0;
   const state = createSfuState({
     roomRegistry: new LocalRoomRegistry({ instanceId: `case-${name}`, instanceUrl: "http://localhost", ttlMs: 45000 }),
   });
   await skew.run(offset, async () =>
-    initControlPlane(state, await openControlPlane(undefined, { sqliteCommitWaitMs: options.sqliteCommitWaitMs })),
+    initControlPlane(
+      state,
+      await openControlPlane(undefined, { sqliteCommitWaitMs: options.sqliteCommitWaitMs, memory: options.memory }),
+    ),
   );
   const app = createSfuApp({ state, config, getIo: () => null });
   const server = createServer((req, res) => {
@@ -95,9 +102,13 @@ export const startCaseSfu = async (
     scanReminders: () => skew.run(offset, async () => {
       await sendDueSchedulingEmailReminders(state);
     }),
+    drainCalendarTasks: () => skew.run(offset, async () => {
+      await drainCalendarTasks(state);
+    }),
     stop: async () => {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      const closed = new Promise<void>((resolve) => server.close(() => resolve()));
       server.closeAllConnections?.();
+      await closed;
       await state.controlPlane.close();
     },
   };

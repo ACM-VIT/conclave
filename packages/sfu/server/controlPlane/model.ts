@@ -80,15 +80,39 @@ export const shadowKey = (source: string, kind: DataKind, id: string): string =>
 
 export const isDataKind = (kind: string): kind is DataKind => DATA_KINDS.includes(kind as DataKind);
 
+export type CalendarTaskAction = "create" | "delete";
+
+export type CalendarTaskState = "open" | "failed";
+
+export type CalendarTask = {
+  id: string;
+  action: CalendarTaskAction;
+  state: CalendarTaskState;
+  meetingId: string;
+  profileId: string;
+  grantId: string;
+  eventId: string;
+  startAt: number;
+  endAt: number;
+  appOrigin: string;
+  timeZone: string;
+  attempts: number;
+  nextAttemptAt: number;
+  lastError: string | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
 export type EntityMap = DataMap & {
   legacyCopy: LegacyCopy;
   legacyImport: LegacyImportState;
   removal: Removal;
+  calendarTask: CalendarTask;
 };
 
 export type Kind = keyof EntityMap;
 
-export const KINDS: readonly Kind[] = [...DATA_KINDS, "legacyCopy", "legacyImport", "removal"];
+export const KINDS: readonly Kind[] = [...DATA_KINDS, "legacyCopy", "legacyImport", "removal", "calendarTask"];
 
 export type UniqueIndex =
   | "profileUser"
@@ -187,6 +211,8 @@ export const tags = {
     `code:${clientId}:${roomCode}`,
   profileEventTypes: (profileId: string): string => `profile:${profileId}`,
   openWebinars: "open",
+  openCalendarTasks: "open",
+  failedCalendarTasks: "failed",
 };
 
 export const isActiveMeeting = (meeting: ScheduledMeeting): boolean =>

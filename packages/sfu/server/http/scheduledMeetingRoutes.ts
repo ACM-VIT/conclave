@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { Logger } from "../../utilities/loggers.js";
+import { drainCalendarTasks } from "../calendarTasks.js";
 import { secretsMatch } from "../secret.js";
 import {
   createMeeting,
@@ -149,6 +150,12 @@ export const registerScheduledMeetingRoutes = (
     return roomCode ?? null;
   };
 
+  const cleanUpCalendar = (): void => {
+    drainCalendarTasks(state).catch((error) => {
+      Logger.warn("Failed to run calendar tasks", error);
+    });
+  };
+
   const changeMeeting = async (
     req: Request,
     res: Response,
@@ -161,6 +168,7 @@ export const registerScheduledMeetingRoutes = (
       sendFailure(res, result);
       return;
     }
+    if (result.value.status === "cancelled") cleanUpCalendar();
     res.json({ scheduledMeeting: serializeMeeting(result.value) });
   };
 
@@ -284,6 +292,7 @@ export const registerScheduledMeetingRoutes = (
         sendFailure(res, result);
         return;
       }
+      cleanUpCalendar();
       res.json({ success: true, id: result.value.id });
     }),
   );

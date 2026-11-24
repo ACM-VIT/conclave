@@ -1,4 +1,4 @@
-export type GateKind = "commit" | "freebusy" | "google-create" | "email" | "redis";
+export type GateKind = "commit" | "freebusy" | "google-create" | "google-created" | "google-delete" | "email" | "redis";
 
 export class Gates {
   parking = new Set<GateKind>();
@@ -15,6 +15,13 @@ export class Gates {
     return `${entry.kind} ${entry.label}`;
   }
 
+  drop(kind: GateKind): number {
+    const dropped = this.parked.filter((entry) => entry.kind === kind);
+    this.parked = this.parked.filter((entry) => entry.kind !== kind);
+    this.parking.delete(kind);
+    return dropped.length;
+  }
+
   drain(): void {
     this.parking.clear();
     for (const entry of this.parked.splice(0)) entry.release();
@@ -27,6 +34,9 @@ export class FakeGoogle {
   events = new Map<string, FakeEvent>();
   created: FakeEvent[] = [];
   busy: Array<{ startAt: number; endAt: number }> = [];
+  private readonly usedIds = new Set<string>();
+  createAttempts = 0;
+  failCreatesWith: number | null = null;
   private next = 1;
 
   constructor(private readonly gates: Gates) {}
@@ -51,24 +61,32 @@ export class FakeGoogle {
     const method = (init?.method ?? "GET").toUpperCase();
     if (method === "POST" && url.pathname.endsWith("/events")) {
       const payload = JSON.parse(String(init?.body ?? "{}")) as {
+        id?: string;
         start: { dateTime: string };
         end: { dateTime: string };
         description: string;
       };
       await this.gates.admit("google-create", payload.description.slice(-40));
+      this.createAttempts += 1;
+      if (this.failCreatesWith) return json(this.failCreatesWith, { error: { code: this.failCreatesWith, status: "UNAVAILABLE" } });
+      const id = payload.id ?? `event-${this.next++}`;
+      if (this.usedIds.has(id)) return json(409, { error: { code: 409, status: "ALREADY_EXISTS", message: "The requested identifier already exists." } });
+      this.usedIds.add(id);
       const event = {
-        id: `event-${this.next++}`,
+        id,
         startAt: Date.parse(payload.start.dateTime),
         endAt: Date.parse(payload.end.dateTime),
         description: payload.description,
       };
       this.events.set(event.id, event);
       this.created.push(event);
+      await this.gates.admit("google-created", event.id);
       return json(200, { id: event.id });
     }
     if (method === "DELETE") {
       const id = decodeURIComponent(url.pathname.split("/").pop() ?? "");
-      this.events.delete(id);
+      await this.gates.admit("google-delete", id);
+      if (!this.events.delete(id)) return json(this.usedIds.has(id) ? 410 : 404, { error: "not found" });
       return new Response(null, { status: 204 });
     }
     return json(404, { error: "not found" });

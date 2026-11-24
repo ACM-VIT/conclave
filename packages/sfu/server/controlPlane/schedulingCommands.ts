@@ -38,6 +38,7 @@ import {
   type ProfileIdentity,
   type ProfileUpdate,
 } from "../scheduling.js";
+import { CALENDAR_CHANGED, putCreateTask } from "./calendarTaskCommands.js";
 import { done, fail, tags, uniqueKeys, type Stored } from "./model.js";
 import type { Command, Query, TxRead } from "./tx.js";
 
@@ -62,6 +63,8 @@ export type BookingExpectation = {
   grantId: string | null;
 };
 
+export type BookedSlot = { meeting: ScheduledMeeting; calendarTaskId: string | null };
+
 export type EmailResult = {
   status: ScheduledMeetingEmailNotificationStatus;
   error: string | null;
@@ -73,7 +76,6 @@ export const EVENT_TYPE_NOT_FOUND = "Event type not found.";
 export const SLOT_TAKEN = "That time is no longer available.";
 export const BOOKING_PAGE_CHANGED = "The booking page changed while you were booking.";
 export const BOOKING_GONE = "This booking is no longer available.";
-export const CALENDAR_CHANGED = "Google Calendar was reconnected or disconnected meanwhile.";
 const OFFLINE_ACCESS_MISSING =
   "Google did not return offline access. Disconnect and connect Google Calendar again.";
 
@@ -381,7 +383,8 @@ export const bookSlot =
     endAt: number;
     request: CreateScheduledMeetingRequest;
     options: CreateScheduledMeetingOptions;
-  }): Command<ScheduledMeeting> =>
+    calendarEvent: { appOrigin: string; timeZone: string; leaseMs: number };
+  }): Command<BookedSlot> =>
   (tx) => {
     const profile = tx.get("profile", input.profileId);
     const eventType = tx.get("eventType", input.eventTypeId);
@@ -420,57 +423,10 @@ export const bookSlot =
         tx.owner("meetingCode", uniqueKeys.meetingCode(clientId, roomCode)),
     });
     tx.put("meeting", meeting);
-    return done(meeting);
-  };
-
-export type CalendarSettlement = { meeting: ScheduledMeeting; orphaned: boolean };
-
-export const settleBookingCalendar =
-  (input: {
-    meetingId: string;
-    profileId: string;
-    grantId: string;
-    eventId: string;
-    startAt: number;
-    endAt: number;
-  }): Command<CalendarSettlement> =>
-  (tx) => {
-    const current = tx.get("meeting", input.meetingId);
-    if (!current) return fail("not_found", BOOKING_GONE);
-    const meeting = current.value;
-    if (meeting.status === "cancelled") return done({ meeting, orphaned: true });
-    const grantHeld = calendarOf(tx, input.profileId)?.grantId === input.grantId;
-    const timesMatch =
-      meeting.scheduledStartAt === input.startAt && meeting.scheduledEndAt === input.endAt;
-    const error = !grantHeld
-      ? CALENDAR_CHANGED
-      : !timesMatch
-        ? "The booking moved after its calendar event was created."
-        : null;
-    const next: ScheduledMeeting = {
-      ...meeting,
-      googleCalendarEventId: input.eventId,
-      calendarSyncStatus: error ? "failed" : "synced",
-      calendarSyncError: error,
-      updatedAt: tx.now,
-    };
-    tx.put("meeting", next);
-    return done({ meeting: next, orphaned: false });
-  };
-
-export const recordBookingCalendarFailure =
-  (meetingId: string, message: string): Command<ScheduledMeeting> =>
-  (tx) => {
-    const current = tx.get("meeting", meetingId);
-    if (!current || current.value.status === "cancelled") return fail("not_found", BOOKING_GONE);
-    const next: ScheduledMeeting = {
-      ...current.value,
-      calendarSyncStatus: "failed",
-      calendarSyncError: message.slice(0, 512),
-      updatedAt: tx.now,
-    };
-    tx.put("meeting", next);
-    return done(next);
+    const task = grantId
+      ? putCreateTask(tx, { meeting, profileId: profile.value.id, grantId, ...input.calendarEvent })
+      : null;
+    return done({ meeting, calendarTaskId: task?.id ?? null });
   };
 
 export const recordBookingEmailResult =

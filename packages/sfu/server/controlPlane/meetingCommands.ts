@@ -12,6 +12,7 @@ import {
   type CreateScheduledMeetingOptions,
   type ScheduledMeetingFilter,
 } from "../scheduledMeetings.js";
+import { retireMeetingEvent } from "./calendarTaskCommands.js";
 import { done, fail, tags, uniqueKeys, type Outcome } from "./model.js";
 import type { Command, Query, Tx, TxRead } from "./tx.js";
 
@@ -120,6 +121,7 @@ export const updateMeeting =
         activeOwner: activeOwner(tx),
       });
       tx.put("meeting", next);
+      if (next.status === "cancelled" && meeting.status !== "cancelled") retireMeetingEvent(tx, next);
       return done(next);
     });
 
@@ -128,6 +130,7 @@ export const deleteMeeting =
   (tx) =>
     withAccess(tx, id, access, (meeting) => {
       tx.remove("meeting", id);
+      retireMeetingEvent(tx, meeting);
       return done(meeting);
     });
 

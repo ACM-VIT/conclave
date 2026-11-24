@@ -25,6 +25,7 @@ import {
   type LegacyImportState,
   type Removal,
   type UniqueIndex,
+  type CalendarTask,
 } from "./model.js";
 
 export type EntitySpec<K extends Kind> = {
@@ -79,6 +80,21 @@ const decodeLegacyImport = (raw: unknown): LegacyImportState | null => {
     if (typeof order === "string") applied[key] = order;
   }
   return { id: LEGACY_IMPORT_ID, ticket: record.ticket, completed, sources, applied };
+};
+
+const CALENDAR_TASK_ACTIONS = ["create", "delete"] as const;
+const CALENDAR_TASK_STATES = ["open", "failed"] as const;
+
+const decodeCalendarTask = (raw: unknown): CalendarTask | null => {
+  const record = asRecord(raw);
+  const strings = ["id", "meetingId", "profileId", "grantId", "eventId", "appOrigin", "timeZone"] as const;
+  const numbers = ["startAt", "endAt", "attempts", "nextAttemptAt", "createdAt", "updatedAt"] as const;
+  if (strings.some((field) => typeof record[field] !== "string")) return null;
+  if (numbers.some((field) => typeof record[field] !== "number" || !Number.isFinite(record[field]))) return null;
+  if (!CALENDAR_TASK_ACTIONS.includes(record.action as CalendarTask["action"])) return null;
+  if (!CALENDAR_TASK_STATES.includes(record.state as CalendarTask["state"])) return null;
+  if (record.lastError !== null && typeof record.lastError !== "string") return null;
+  return record as unknown as CalendarTask;
 };
 
 export const entities: Registry = {
@@ -165,6 +181,13 @@ export const entities: Registry = {
     tags: () => [],
     encode: same,
     decode: decodeRemoval,
+  },
+  calendarTask: {
+    id: (task) => task.id,
+    unique: () => [],
+    tags: (task) => [task.state === "open" ? tags.openCalendarTasks : tags.failedCalendarTasks],
+    encode: same,
+    decode: decodeCalendarTask,
   },
 };
 

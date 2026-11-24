@@ -509,6 +509,7 @@ export const createSfuApp = ({
         healthy: healthyWorkers.length,
         closed: state.workers.length - healthyWorkers.length,
       },
+      calendarTasks: { failed: state.calendarTasks.failed },
     };
 
     if (!isHealthy) {
