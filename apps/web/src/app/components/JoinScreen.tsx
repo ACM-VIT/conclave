@@ -44,7 +44,9 @@ import {
   sanitizeInstitutionDisplayName,
   sanitizeRoomCodeInput,
   sanitizeRoomCode,
+  isMediaDeviceBlocked,
 } from "../lib/utils";
+import type { SetupNotice } from "../lib/setup-notice";
 import RoomPresenceBadge from "./RoomPresenceBadge";
 import { useCameraPermissionState } from "../hooks/useCameraPermissionState";
 import { useClipboardCopy } from "../hooks/useClipboardCopy";
@@ -164,10 +166,9 @@ interface JoinScreenProps {
   onDisplayNameInputChange: (value: string) => void;
   onUserChange: (user: { id: string; email: string; name: string } | null) => void;
   onIsAdminChange: (isAdmin: boolean) => void;
-  meetError?: MeetError | null;
   mediaError?: MeetError | null;
-  meetingEndedNotice?: string | null;
-  onDismissMeetingEndedNotice?: () => void;
+  setupNotice?: SetupNotice | null;
+  onDismissSetupNotice?: () => void;
   videoEffects: VideoEffectsState;
   onVideoEffectsChange: Dispatch<SetStateAction<VideoEffectsState>>;
   onPrejoinMediaCommit?: (handoff: PrejoinMediaHandoff) => void;
@@ -319,10 +320,9 @@ function JoinScreen({
   onDisplayNameInputChange,
   onUserChange,
   onIsAdminChange,
-  meetError,
   mediaError,
-  meetingEndedNotice,
-  onDismissMeetingEndedNotice,
+  setupNotice,
+  onDismissSetupNotice,
   videoEffects,
   onVideoEffectsChange,
   onPrejoinMediaCommit,
@@ -411,10 +411,9 @@ function JoinScreen({
       ?.getVideoTracks()
       .some((track) => track.readyState === "live" && track.enabled),
   );
-  const isPermissionDenied =
-    mediaError?.code === "PERMISSION_DENIED" || meetError?.code === "PERMISSION_DENIED";
+  const isCameraBlocked = isMediaDeviceBlocked(mediaError, "camera");
   const isCameraPermissionBlocked =
-    isPermissionDenied ||
+    isCameraBlocked ||
     (!hasLivePreviewCamera &&
       (cameraPermissionState === "prompt" ||
         cameraPermissionState === "denied"));
@@ -423,7 +422,7 @@ function JoinScreen({
     !isCameraOn &&
     (cameraPermissionState === "prompt" ||
       cameraPermissionState === "denied" ||
-      isPermissionDenied);
+      isCameraBlocked);
   const prewarmLiveCameraEffects = (reason: string) => {
     if (activeVideoEffectsCount <= 0 && !isEffectsOpen) return;
     if (shouldDeferPreviewVideoEffectsPreload) return;
@@ -1350,7 +1349,7 @@ function JoinScreen({
                   </div>
                   <div className="relative min-h-[calc(76px+1.75rem)] flex-1">
                     <div className="absolute inset-0 flex flex-col items-center justify-center">
-                      {meetingEndedNotice ? (
+                      {setupNotice ? (
                         <div
                           role="status"
                           className="pointer-events-auto flex max-h-full min-h-0 w-full items-start gap-2 overflow-y-auto rounded-xl border border-white/10 bg-[#18181b] px-3.5 py-3 text-left text-[13px] leading-snug text-[#fafafa]"
@@ -1360,12 +1359,12 @@ function JoinScreen({
                             className="mt-0.5 shrink-0 text-[#F95F4A]"
                             aria-hidden="true"
                           />
-                          <p className="min-w-0 flex-1 [overflow-wrap:anywhere]">{meetingEndedNotice}</p>
-                          {onDismissMeetingEndedNotice ? (
+                          <p className="min-w-0 flex-1 [overflow-wrap:anywhere]">{setupNotice.message}</p>
+                          {onDismissSetupNotice ? (
                             <button
                               type="button"
-                              onClick={onDismissMeetingEndedNotice}
-                              aria-label="Dismiss meeting ended notice"
+                              onClick={onDismissSetupNotice}
+                              aria-label="Dismiss notice"
                               className="-mr-1 -mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[#fafafa]/55 transition-colors hover:bg-white/[0.08] hover:text-[#fafafa]"
                             >
                               <X size={14} aria-hidden="true" />

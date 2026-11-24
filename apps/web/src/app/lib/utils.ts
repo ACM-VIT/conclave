@@ -381,6 +381,11 @@ export function createMediaDeviceError(
   return mediaErrorFromCauses(causes);
 }
 
+export const isMediaDeviceBlocked = (
+  error: MeetError | null | undefined,
+  device: MediaDevice,
+): boolean => error?.causes?.[device]?.kind === "blocked";
+
 export function mediaErrorAdvice(error: MeetError): string | null {
   const camera = error.causes?.camera;
   const microphone = error.causes?.microphone;

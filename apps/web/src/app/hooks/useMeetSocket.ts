@@ -176,6 +176,7 @@ import type {
   RequestMediaPermissionsOptions,
   ScreenShareRepublishOptions,
 } from "./useMeetMedia";
+import { endedNotice, joinRejectedUpdate, type SetupNotice } from "../lib/setup-notice";
 
 type ConsumerTelemetryPayload = Omit<
   ConsumerTelemetrySnapshot,
@@ -890,7 +891,7 @@ interface UseMeetSocketOptions {
   setPendingUsers: React.Dispatch<React.SetStateAction<Map<string, string>>>;
   setConnectionState: (state: ConnectionState) => void;
   setMeetError: (error: MeetError | null) => void;
-  setMeetingEndedNotice?: (message: string | null) => void;
+  setSetupNotice?: (notice: SetupNotice | null) => void;
   setWaitingMessage: (message: string | null) => void;
   setHostUserId: (userId: string | null) => void;
   setHostUserIds: React.Dispatch<React.SetStateAction<string[]>>;
@@ -1010,7 +1011,7 @@ export function useMeetSocket({
   setPendingUsers,
   setConnectionState,
   setMeetError,
-  setMeetingEndedNotice,
+  setSetupNotice,
   setWaitingMessage,
   setHostUserId,
   setHostUserIds,
@@ -2114,7 +2115,7 @@ export function useMeetSocket({
     if (localRoomEndedHandledRef.current) return;
     localRoomEndedHandledRef.current = true;
     setMeetError(null);
-    setMeetingEndedNotice?.(null);
+    setSetupNotice?.(null);
     setWaitingMessage(null);
     cleanup();
     onLocalRoomEnded?.();
@@ -2122,7 +2123,7 @@ export function useMeetSocket({
     cleanup,
     onLocalRoomEnded,
     setMeetError,
-    setMeetingEndedNotice,
+    setSetupNotice,
     setWaitingMessage,
   ]);
 
@@ -7047,6 +7048,12 @@ export function useMeetSocket({
               socket.disconnect();
               reject(new Error("Connection timeout"));
             }, SOCKET_CONNECT_TIMEOUT_MS);
+            type SocketListener = Parameters<typeof socket.on>[1];
+            const onLive = ((event: Parameters<typeof socket.on>[0], handler: SocketListener) =>
+              socket.on(event, (...args: unknown[]) => {
+                if (socketRef.current !== socket || intentionalDisconnectRef.current) return;
+                handler.apply(socket, args);
+              })) as typeof socket.on;
 
             socket.on("connect", () => {
               clearTimeout(connectionTimeout);
@@ -7098,7 +7105,7 @@ export function useMeetSocket({
               }
             });
 
-            socket.on("roomClosed", ({ reason }: { reason: string }) => {
+            onLive("roomClosed", ({ reason }: { reason: string }) => {
               console.info("[Meets] Room closed:", reason);
               setMeetError({
                 code: "UNKNOWN",
@@ -7109,7 +7116,7 @@ export function useMeetSocket({
               cleanup();
             });
 
-            socket.on(
+            onLive(
               "roomEnded",
               ({
                 message,
@@ -7125,7 +7132,7 @@ export function useMeetSocket({
                 }
 
                 setMeetError(null);
-                setMeetingEndedNotice?.(resolveRoomEndedNoticeMessage(message));
+                setSetupNotice?.(endedNotice(resolveRoomEndedNoticeMessage(message)));
                 setWaitingMessage(null);
                 cleanup();
               },
@@ -7151,7 +7158,7 @@ export function useMeetSocket({
               reject(err);
             });
 
-            socket.on(
+            onLive(
               "hostAssigned",
               ({
                 roomId: eventRoomId,
@@ -7172,7 +7179,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "serverRestarting",
               (notification: ServerRestartNotification) => {
                 if (!isRoomEvent(notification?.roomId)) return;
@@ -7183,7 +7190,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on("adminNotice", (notification: AdminNoticeNotification) => {
+            onLive("adminNotice", (notification: AdminNoticeNotification) => {
               if (!isRoomEvent(notification?.roomId)) return;
               const message = notification?.message?.trim();
               if (!message) return;
@@ -7213,7 +7220,7 @@ export function useMeetSocket({
               });
             });
 
-            socket.on(
+            onLive(
               "consumerTelemetry",
               (notification: ConsumerTelemetryPayload) => {
                 if (!isRoomEvent(notification?.roomId)) return;
@@ -7277,7 +7284,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "consumerAutoResumed",
               (notification: {
                 roomId?: string;
@@ -7302,7 +7309,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "hostChanged",
               ({
                 roomId: eventRoomId,
@@ -7316,7 +7323,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "adminUsersChanged",
               ({
                 roomId: eventRoomId,
@@ -7330,7 +7337,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "activeSpeakerChanged",
               (notification: ActiveSpeakerChangedNotification) => {
                 if (!isRoomEvent(notification?.roomId)) return;
@@ -7350,7 +7357,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "webcamCodecPolicyChanged",
               (
                 policy: WebcamCodecPolicy & { roomId?: string },
@@ -7359,7 +7366,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on("newProducer", async (data: ProducerInfo) => {
+            onLive("newProducer", async (data: ProducerInfo) => {
               console.info("[Meets] New producer:", data);
               if (shouldIgnoreDepartedParticipant(data.producerUserId)) {
                 dropDepartedProducer(data);
@@ -7378,7 +7385,7 @@ export function useMeetSocket({
               await consumeProducer(data);
             });
 
-            socket.on(
+            onLive(
               "producerClosed",
               ({
                 producerId,
@@ -7554,7 +7561,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "userJoined",
               ({
                 userId: joinedUserId,
@@ -7595,7 +7602,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "userLeft",
               ({ userId: leftUserId }: { userId: string }) => {
                 console.info("[Meets] User left:", leftUserId);
@@ -7648,7 +7655,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "participantConnectionState",
               (payload: {
                 userId?: string;
@@ -7698,7 +7705,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "displayNameSnapshot",
               ({
                 users,
@@ -7712,7 +7719,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "handRaisedSnapshot",
               ({ users, roomId: eventRoomId }: HandRaisedSnapshot) => {
                 if (!isRoomEvent(eventRoomId)) return;
@@ -7731,7 +7738,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "chatHistorySnapshot",
               ({ messages, roomId: eventRoomId }: ChatHistorySnapshot) => {
                 if (!isRoomEvent(eventRoomId)) return;
@@ -7772,7 +7779,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "displayNameUpdated",
               ({
                 userId: updatedUserId,
@@ -7792,7 +7799,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "participantMuted",
               ({
                 userId: mutedUserId,
@@ -7818,7 +7825,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "participantCameraOff",
               ({
                 userId: camUserId,
@@ -7844,7 +7851,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "admin:mediaEnforced",
               (payload: {
                 roomId?: string;
@@ -7952,7 +7959,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "admin:bulkMediaEnforced",
               (payload: {
                 roomId?: string;
@@ -7971,7 +7978,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "setVideoQuality",
               async ({ quality }: { quality: VideoQuality }) => {
                 console.info(`[Meets] Setting video quality to: ${quality}`);
@@ -7988,7 +7995,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on("chatMessage", (message: ChatMessage) => {
+            onLive("chatMessage", (message: ChatMessage) => {
               console.info("[Meets] Chat message received:", message);
               const { message: normalized, ttsText } =
                 normalizeChatMessage(message);
@@ -8015,7 +8022,7 @@ export function useMeetSocket({
               }
             });
 
-            socket.on(
+            onLive(
               "conclaveMessage",
               (payload: {
                 id?: string;
@@ -8105,7 +8112,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on("reaction", (reaction: ReactionNotification) => {
+            onLive("reaction", (reaction: ReactionNotification) => {
               if (reaction.kind && reaction.value) {
                 addReaction({
                   userId: reaction.userId,
@@ -8127,7 +8134,7 @@ export function useMeetSocket({
               }
             });
 
-            socket.on(
+            onLive(
               "chat:reactionChanged",
               ({
                 messageId,
@@ -8150,7 +8157,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "handRaised",
               ({ userId: raisedUserId, raised }: HandRaisedNotification) => {
                 if (raisedUserId === userId) {
@@ -8166,7 +8173,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on("kicked", () => {
+            onLive("kicked", () => {
               cleanup();
               setMeetError({
                 code: "UNKNOWN",
@@ -8175,7 +8182,7 @@ export function useMeetSocket({
               });
             });
 
-            socket.on(
+            onLive(
               "redirect",
               async ({ newRoomId }: { newRoomId: string }) => {
                 console.info(
@@ -8185,7 +8192,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "userRequestedJoin",
               ({
                 userId,
@@ -8207,7 +8214,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "pendingUsersSnapshot",
               ({
                 users,
@@ -8227,7 +8234,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "userAdmitted",
               ({
                 userId,
@@ -8245,7 +8252,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "userRejected",
               ({
                 userId,
@@ -8263,7 +8270,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "pendingUserLeft",
               ({
                 userId,
@@ -8281,8 +8288,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on("joinApproved", async () => {
-              if (intentionalDisconnectRef.current || socketRef.current !== socket) return;
+            onLive("joinApproved", async () => {
               const approvalGeneration = reconnectGenerationRef.current;
               console.info("[Meets] Join approved! Re-attempting join...");
               const joinOptions = joinOptionsRef.current;
@@ -8348,19 +8354,17 @@ export function useMeetSocket({
               }
             });
 
-            socket.on("joinRejected", () => {
+            onLive("joinRejected", () => {
               console.info("[Meets] Join rejected.");
-              setMeetError({
-                code: "PERMISSION_DENIED",
-                message: "The host has denied your request to join.",
-                recoverable: false,
-              });
-              setConnectionState("error");
-              setWaitingMessage(null);
+              const rejected = joinRejectedUpdate();
+              setMeetError(rejected.meetError);
+              setSetupNotice?.(rejected.setupNotice);
+              setConnectionState(rejected.connectionState);
+              setWaitingMessage(rejected.waitingMessage);
               cleanup();
             });
 
-            socket.on(
+            onLive(
               "waitingRoomStatus",
               ({
                 message,
@@ -8374,7 +8378,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "roomLockChanged",
               ({
                 locked,
@@ -8389,7 +8393,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "ttsDisabledChanged",
               ({
                 disabled,
@@ -8404,7 +8408,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "dmStateChanged",
               ({
                 enabled,
@@ -8419,7 +8423,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "imageAttachmentsStateChanged",
               ({
                 enabled,
@@ -8433,7 +8437,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "reactionsDisabledChanged",
               ({
                 disabled,
@@ -8448,7 +8452,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "participantMediaPermissionsChanged",
               ({
                 unmuteAllowed,
@@ -8465,7 +8469,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "noGuestsChanged",
               ({
                 noGuests,
@@ -8480,7 +8484,7 @@ export function useMeetSocket({
               }
             );
 
-            socket.on(
+            onLive(
               "chatLockChanged",
               ({
                 locked,
@@ -8495,7 +8499,7 @@ export function useMeetSocket({
               }
             );
 
-            socket.on(
+            onLive(
               "meeting:configChanged",
               (nextConfig: MeetingConfigSnapshot) => {
                 setMeetingRequiresInviteCode(
@@ -8504,14 +8508,14 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "webinar:configChanged",
               (nextConfig: WebinarConfigSnapshot) => {
                 setWebinarConfig(nextConfig);
               },
             );
 
-            socket.on(
+            onLive(
               "webinar:attendeeCountChanged",
               ({
                 attendeeCount,
@@ -8538,7 +8542,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "webinar:participantJoined",
               (notification: WebinarParticipantJoinedNotification) => {
                 if (joinMode !== "webinar_attendee") return;
@@ -8566,7 +8570,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "webinar:qaSnapshot",
               (snapshot: WebinarQaSnapshot) => {
                 if (!isRoomEvent(snapshot.roomId)) return;
@@ -8578,7 +8582,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "webinar:qaChanged",
               (notification: WebinarQaChangedNotification) => {
                 if (!isRoomEvent(notification.roomId)) return;
@@ -8609,7 +8613,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "webinar:handQueueChanged",
               (notification: WebinarHandQueueChangedNotification) => {
                 if (!isRoomEvent(notification.roomId)) return;
@@ -8617,7 +8621,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "webinar:promoted",
               (notification: WebinarPromotedNotification) => {
                 if (joinMode !== "webinar_attendee") return;
@@ -8629,7 +8633,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "webinar:demoted",
               (notification: WebinarDemotedNotification) => {
                 if (joinMode === "webinar_attendee") return;
@@ -8638,7 +8642,7 @@ export function useMeetSocket({
               },
             );
 
-            socket.on(
+            onLive(
               "webinar:feedChanged",
               (notification: WebinarFeedChangedNotification) => {
                 if (joinMode !== "webinar_attendee") return;
@@ -8774,7 +8778,7 @@ export function useMeetSocket({
       setServerActiveSpeakerAvailable,
       setLocalStream,
       setMeetError,
-      setMeetingEndedNotice,
+      setSetupNotice,
       setPendingUsers,
       setWaitingMessage,
       setNetworkManagedVideoQuality,
@@ -9253,7 +9257,7 @@ export function useMeetSocket({
 
       localRoomEndedHandledRef.current = false;
       setMeetError(null);
-      setMeetingEndedNotice?.(null);
+      setSetupNotice?.(null);
       updateReconnectRecoveryStatus(null);
       setConnectionState("connecting");
       if (!bypassMediaPermissions) {
@@ -9453,7 +9457,7 @@ export function useMeetSocket({
       setConnectionState,
       setLocalStream,
       setMeetError,
-      setMeetingEndedNotice,
+      setSetupNotice,
       setRoomId,
       socketRef,
       stopLocalTrack,
