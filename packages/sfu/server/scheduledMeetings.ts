@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, resolve } from "node:path";
+import { dirname } from "node:path";
 import type {
   CreateScheduledMeetingRequest,
   ScheduledMeeting,
@@ -19,6 +19,7 @@ import {
 } from "./redisPersistence.js";
 import { canonicalizeClientId } from "./clientIds.js";
 import { openSqliteStore } from "./sqliteWriteCheck.js";
+import { storeJsonPath, storeSqlitePath } from "./storePaths.js";
 import { writePrivateFileAtomic } from "./privateFile.js";
 import { storedTimestampOrNull } from "./storedValues.js";
 import { adoptRecoveredJsonStore, jsonStoreCollection, type JsonStoreAdapter, type JsonStoreClaim } from "./jsonStoreUpgrade.js";
@@ -539,23 +540,9 @@ type EmailReminderClaim = {
   leadMs: number;
 };
 
-const scheduledMeetingsSqlitePath = (): string => {
-  const configured =
-    process.env.SCHEDULED_MEETINGS_SQLITE_PATH?.trim() ||
-    process.env.CONCLAVE_SQLITE_PATH?.trim();
-  if (configured) return resolve(configured);
-  const recordingStoragePath = process.env.RECORDING_STORAGE_PATH?.trim();
-  if (recordingStoragePath) {
-    return resolve(recordingStoragePath, "conclave.sqlite");
-  }
-  return resolve(process.cwd(), "data", "conclave.sqlite");
-};
+const scheduledMeetingsSqlitePath = (): string => storeSqlitePath("scheduled-meetings");
 
-const scheduledMeetingsPath = (): string => {
-  const configured = process.env.SCHEDULED_MEETINGS_PATH?.trim();
-  if (configured) return resolve(configured);
-  return resolve(process.cwd(), "data", "scheduled-meetings.json");
-};
+const scheduledMeetingsPath = (): string => storeJsonPath("scheduled-meetings");
 
 
 type SqliteStatement = {

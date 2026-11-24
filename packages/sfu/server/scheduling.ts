@@ -1,7 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, resolve } from "node:path";
+import { dirname } from "node:path";
 import type {
   AvailabilityOverride,
   AvailabilityWindow,
@@ -26,6 +26,7 @@ import {
   CONCLAVE_CLIENT_ID,
 } from "./clientIds.js";
 import { openSqliteStore } from "./sqliteWriteCheck.js";
+import { storeJsonPath, storeSqlitePath } from "./storePaths.js";
 import { storedTimestampOrNull } from "./storedValues.js";
 import { writePrivateFileAtomic } from "./privateFile.js";
 import { adoptRecoveredJsonStore, jsonStoreCollection, type JsonStoreAdapter, type JsonStoreClaim } from "./jsonStoreUpgrade.js";
@@ -950,21 +951,9 @@ export const generateAvailableSlots = ({
   return slots.sort((a, b) => a.startAt - b.startAt);
 };
 
-const getSchedulingSqlitePath = (): string => {
-  const configured =
-    process.env.SCHEDULING_SQLITE_PATH?.trim() ||
-    process.env.CONCLAVE_SQLITE_PATH?.trim();
-  if (configured) return resolve(configured);
-  const recordingStoragePath = process.env.RECORDING_STORAGE_PATH?.trim();
-  if (recordingStoragePath) return resolve(recordingStoragePath, "conclave.sqlite");
-  return resolve(process.cwd(), "data", "conclave.sqlite");
-};
+const getSchedulingSqlitePath = (): string => storeSqlitePath("scheduling");
 
-const getSchedulingJsonPath = (): string => {
-  const configured = process.env.SCHEDULING_PATH?.trim();
-  if (configured) return resolve(configured);
-  return resolve(process.cwd(), "data", "scheduling.json");
-};
+const getSchedulingJsonPath = (): string => storeJsonPath("scheduling");
 
 
 const loadNodeSqlite = (): {

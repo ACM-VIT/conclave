@@ -266,7 +266,28 @@ function ConvertTo-ContainerPath {
   return "/" + ($kept -join "/")
 }
 
-function Get-FallbackJsonPaths {
+function Get-ContainerSetting {
+  param([string[]]$EnvLines, [string]$Name)
+
+  $value = ""
+  foreach ($line in $EnvLines) {
+    if ($line.StartsWith("$Name=", [System.StringComparison]::Ordinal)) {
+      $value = $line.Substring($Name.Length + 1)
+    }
+  }
+  return $value.Trim()
+}
+
+function ConvertTo-ContainerFilePath {
+  param([string]$Workdir, [string]$Path)
+
+  if ($Path.StartsWith("/")) {
+    return ConvertTo-ContainerPath -Path $Path
+  }
+  return ConvertTo-ContainerPath -Path "$Workdir/$Path"
+}
+
+function Get-StoreFilePaths {
   param([string]$Container)
 
   $workdir = (@(& docker inspect --format "{{.Config.WorkingDir}}" $Container) -join "").Trim()
@@ -277,23 +298,28 @@ function Get-FallbackJsonPaths {
   if ($LASTEXITCODE -ne 0) {
     throw "Could not read where the old container kept its stores."
   }
-  $paths = [ordered]@{}
-  foreach ($pair in @(@("scheduling.json", "SCHEDULING_PATH"), @("scheduled-meetings.json", "SCHEDULED_MEETINGS_PATH"), @("scheduled-webinars.json", "SCHEDULED_WEBINARS_PATH"))) {
-    $name = $pair[0]
-    $variable = $pair[1]
-    $value = ""
-    foreach ($line in $envLines) {
-      if ($line.StartsWith("$variable=", [System.StringComparison]::Ordinal)) {
-        $value = $line.Substring($variable.Length + 1)
-      }
-    }
-    $value = $value.Trim()
+  $shared = Get-ContainerSetting -EnvLines $envLines -Name "CONCLAVE_SQLITE_PATH"
+  $recordings = Get-ContainerSetting -EnvLines $envLines -Name "RECORDING_STORAGE_PATH"
+  $paths = New-Object System.Collections.Generic.List[object]
+  foreach ($pair in @(@("scheduling", "SCHEDULING"), @("scheduled-meetings", "SCHEDULED_MEETINGS"), @("scheduled-webinars", "SCHEDULED_WEBINARS"))) {
+    $store = $pair[0]
+    $prefix = $pair[1]
+    $value = Get-ContainerSetting -EnvLines $envLines -Name "${prefix}_PATH"
     if (-not $value) {
-      $value = "$workdir/data/$name"
-    } elseif (-not $value.StartsWith("/")) {
-      $value = "$workdir/$value"
+      $value = "data/$store.json"
     }
-    $paths[$name] = ConvertTo-ContainerPath -Path $value
+    $paths.Add([pscustomobject]@{ Kind = "json"; Name = "$store.json"; Path = (ConvertTo-ContainerFilePath -Workdir $workdir -Path $value) })
+    $value = Get-ContainerSetting -EnvLines $envLines -Name "${prefix}_SQLITE_PATH"
+    if (-not $value) {
+      $value = $shared
+    }
+    if (-not $value -and $recordings) {
+      $value = "$recordings/conclave.sqlite"
+    }
+    if (-not $value) {
+      $value = "data/conclave.sqlite"
+    }
+    $paths.Add([pscustomobject]@{ Kind = "sqlite"; Name = $store; Path = (ConvertTo-ContainerFilePath -Workdir $workdir -Path $value) })
   }
   return $paths
 }
@@ -309,9 +335,9 @@ function Copy-FallbackJson {
   if ($LASTEXITCODE -ne 0) {
     throw "Could not list the files the old $Service container wrote."
   }
-  $paths = Get-FallbackJsonPaths -Container $Container
-  foreach ($name in $paths.Keys) {
-    $path = $paths[$name]
+  foreach ($entry in @(Get-StoreFilePaths -Container $Container | Where-Object { $_.Kind -eq "json" })) {
+    $name = $entry.Name
+    $path = $entry.Path
     if (-not (($changes -ccontains "A $path") -or ($changes -ccontains "C $path"))) {
       continue
     }
@@ -371,6 +397,163 @@ function Send-FallbackJson {
   Write-Host "Saved the old $Service container's JSON fallback files on the volume as $name and verified them: $($names -join ' ')"
 }
 
+function Get-LayerSqliteDatabases {
+  param([string]$Container)
+
+  $changes = @(& docker diff $Container)
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not list the files the old container wrote."
+  }
+  $found = @()
+  foreach ($entry in @(Get-StoreFilePaths -Container $Container | Where-Object { $_.Kind -eq "sqlite" })) {
+    if (($changes -ccontains "A $($entry.Path)") -or ($changes -ccontains "C $($entry.Path)")) {
+      $found += [pscustomobject]@{ Store = $entry.Name; Path = $entry.Path }
+    }
+  }
+  return $found
+}
+
+function Get-SqliteTargetProbe {
+  return 'lines=$(node --import tsx server/storePaths.ts) || exit 1; printf "%s\n" "$lines" | while read -r kind store target; do [ "$kind" = sqlite ] || continue; dir=$(dirname "$target"); if [ -e "$target" ] || [ -e "$target-wal" ] || [ -e "$target-journal" ]; then state=taken; elif [ -d "$dir" ] && check=$(mktemp "$dir/.conclave-write-check-XXXXXX" 2>/dev/null) && rm -f "$check"; then state=free; else state=unwritable; fi; printf "%s %s %s\n" "$store" "$state" "$target"; done'
+}
+
+function Get-SqliteReceiver {
+  return 'umask 077 && target=$1 && case "$target" in /*) ;; *) echo "The database path $target is not absolute." >&2; exit 1;; esac && case "$3" in ""|*[!A-Za-z0-9]*) echo "The transfer id $3 is not safe to use." >&2; exit 1;; esac && dir=$(dirname "$target") && incoming=$dir/.incoming-sqlite-$3 && find "$dir" -mindepth 1 -maxdepth 1 -type d -name ".incoming-sqlite-*" -mmin +30 -exec rm -rf {} + && for existing in "$target" "$target-wal" "$target-journal"; do if [ -e "$existing" ]; then echo "$existing already exists, and a database is never replaced." >&2; exit 1; fi; done && mkdir "$incoming" && chown node:node "$incoming" && trap ''rm -rf "$incoming"'' EXIT && cat > "$incoming/payload.tar" && got=$(sha256sum "$incoming/payload.tar" | cut -d" " -f1) && if [ "$got" != "$2" ]; then echo "The database arrived with checksum $got, not $2." >&2; exit 1; fi && tar -xf "$incoming/payload.tar" -C "$incoming" && rm "$incoming/payload.tar" && chown node:node "$incoming"/db* && chmod 0600 "$incoming"/db* && for part in -wal -journal; do if [ -e "$incoming/db$part" ]; then mv "$incoming/db$part" "$target$part" || exit 1; fi; done && mv "$incoming/db" "$target" && rmdir "$incoming"'
+}
+
+function Get-LayerSqlitePlan {
+  param([string]$Service, [string]$Container)
+
+  $layer = @(Get-LayerSqliteDatabases -Container $Container)
+  if ($layer.Count -eq 0) {
+    return @()
+  }
+  $targets = @($null | & docker @($composeBaseArgs + @("run", "-T", "--rm", "--no-deps", "--user", "root", "--cap-add", "DAC_OVERRIDE", "--entrypoint", "sh", $Service, "-c", (Get-SqliteTargetProbe))))
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not check where the new $Service keeps its databases."
+  }
+  $plan = @()
+  foreach ($entry in $layer) {
+    $state = ""
+    $target = ""
+    foreach ($line in $targets) {
+      $fields = @("$line" -split " ", 3)
+      if ($fields.Count -eq 3 -and $fields[0] -ceq $entry.Store) {
+        $state = $fields[1]
+        $target = $fields[2]
+      }
+    }
+    switch -CaseSensitive ($state) {
+      "free" {
+        if (-not ($plan | Where-Object { $_.Old -ceq $entry.Path -and $_.Target -ceq $target })) {
+          $plan += [pscustomobject]@{ Old = $entry.Path; Target = $target }
+        }
+      }
+      "taken" {
+        throw "The old $Service container keeps the $($entry.Store) database at $($entry.Path) inside the container, not on the volume, and $target on the volume already holds a database, so a copy cannot carry it over. Copy it out with: docker cp ${Container}:$($entry.Path) <file>, merge it into $target, then deploy again."
+      }
+      "unwritable" {
+        throw "The old $Service container keeps the $($entry.Store) database at $($entry.Path) inside the container, not on the volume, and the new image would keep it at $target, which the new container cannot write. Point CONCLAVE_SQLITE_PATH (or the store's own *_SQLITE_PATH) at the recordings volume, then deploy again."
+      }
+      default {
+        throw "Could not tell where the new $Service keeps the $($entry.Store) database."
+      }
+    }
+  }
+  $shared = @($plan | Group-Object -Property Target -CaseSensitive | Where-Object { $_.Count -gt 1 } | Select-Object -First 1)
+  if ($shared.Count -gt 0) {
+    throw "The old $Service container keeps more than one database inside the container that the new image would keep at $($shared[0].Name), so a copy cannot carry them over. Merge them into $($shared[0].Name), then deploy again."
+  }
+  return $plan
+}
+
+function Copy-LayerSqlite {
+  param([string]$Service, [string]$Container, [string]$Directory, [object[]]$Plan)
+
+  if ($Plan.Count -eq 0) {
+    return
+  }
+  $changes = @(& docker diff $Container)
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not list the databases the old $Service container kept."
+  }
+  foreach ($entry in @(Get-LayerSqliteDatabases -Container $Container)) {
+    if (-not ($Plan | Where-Object { $_.Old -ceq $entry.Path })) {
+      throw "The old $Service container started keeping a database at $($entry.Path) after the deploy checked it."
+    }
+  }
+  New-Item -ItemType Directory -Path $Directory -Force | Out-Null
+  if (-not $IsWindows) {
+    & chmod 0700 $Directory
+  }
+  $index = 0
+  foreach ($step in $Plan) {
+    $index++
+    $folder = Join-Path $Directory "$index"
+    New-Item -ItemType Directory -Path $folder -Force | Out-Null
+    $parts = @()
+    foreach ($part in @("", "-wal", "-journal")) {
+      $source = "$($step.Old)$part"
+      if ($part -and -not (($changes -ccontains "A $source") -or ($changes -ccontains "C $source"))) {
+        continue
+      }
+      $copy = Join-Path $folder "db$part"
+      & docker cp "${Container}:$source" $copy
+      if ($LASTEXITCODE -ne 0) {
+        throw "Could not copy $source out of the old $Service container."
+      }
+      if (-not $IsWindows) {
+        & chmod 0600 $copy
+      }
+      $parts += "db$part"
+    }
+    $archive = "$folder.tar"
+    & tar -C $folder -cf $archive @parts
+    if ($LASTEXITCODE -ne 0) {
+      throw "Could not pack the old $Service container's database $($step.Old)."
+    }
+    if (-not $IsWindows) {
+      & chmod 0600 $archive
+    }
+    $checksum = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+    $transfer = [guid]::NewGuid().ToString("N").Substring(0, 12)
+    $exitCode = Send-FileToCommand -Path $archive -Command "docker" -Arguments ($composeBaseArgs + @(
+      "run", "-T", "--rm", "--no-deps", "--user", "root", "--cap-add", "CHOWN", "--cap-add", "DAC_OVERRIDE", "--cap-add", "FOWNER", "--entrypoint", "sh", $Service, "-c",
+      (Get-SqliteReceiver), "sh", $step.Target, $checksum, $transfer
+    ))
+    if ($exitCode -ne 0) {
+      throw "Could not copy the old $Service container's database $($step.Old) to $($step.Target) on the volume."
+    }
+    Write-Host "Copied the old $Service container's database $($step.Old) to $($step.Target) on the volume and verified it: $($parts -join ' ')"
+  }
+}
+
+function Assert-UndividedLayerDatabases {
+  param([string[]]$Services)
+
+  $holders = @()
+  foreach ($service in $Services) {
+    $container = @(& docker @($composeBaseArgs + @("ps", "-a", "-q", $service))) | Select-Object -First 1
+    if ($LASTEXITCODE -ne 0) {
+      Exit-WithError "Could not look up the old $service container. Nothing was changed."
+    }
+    if ([string]::IsNullOrWhiteSpace($container)) {
+      continue
+    }
+    try {
+      $layer = @(Get-LayerSqliteDatabases -Container $container)
+    } catch {
+      Exit-WithError "Could not list the databases the old $service container kept. Nothing was changed."
+    }
+    if ($layer.Count -gt 0) {
+      $holders += $service
+    }
+  }
+  if ($holders.Count -gt 1) {
+    Exit-WithError "The old $($holders -join ' ') containers each keep their own database inside the container, not on the volume. A copy can carry over only one of them, so nothing was changed. Merge them into one database on the recordings volume, then deploy again."
+  }
+}
+
 function Test-SfuDeployed {
   param([string]$Service, [string]$Url)
 
@@ -417,6 +600,7 @@ function Start-SfuService {
     $after = Join-Path $staging "after"
     if ($hasContainer) {
       try {
+        $sqlitePlan = @(Get-LayerSqlitePlan -Service $Service -Container $container)
         Copy-FallbackJson -Service $Service -Container $container -Directory $before
         Send-FallbackJson -Service $Service -Directory $before
       } catch {
@@ -435,6 +619,7 @@ function Start-SfuService {
         if ((Get-FallbackFingerprint -Directory $before) -ne (Get-FallbackFingerprint -Directory $after)) {
           Send-FallbackJson -Service $Service -Directory $after
         }
+        Copy-LayerSqlite -Service $Service -Container $container -Directory (Join-Path $staging "sqlite") -Plan $sqlitePlan
       } catch {
         Exit-WithError "$($_.Exception.Message) Stopped before replacing $Service. Its old container is stopped, not removed; start it again with: docker $($composeBaseArgs -join ' ') start $Service"
       }
@@ -694,6 +879,8 @@ if ($activeService -eq "sfu-a") {
 
 Write-Host "Active service: $activeService"
 Write-Host "Inactive service: $inactiveService"
+
+Assert-UndividedLayerDatabases -Services @("sfu-a", "sfu-b")
 
 Write-Host "Building and starting $inactiveService..."
 Start-SfuService -Service $inactiveService -Url $inactiveUrl

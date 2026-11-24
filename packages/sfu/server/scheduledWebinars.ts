@@ -1,7 +1,7 @@
 import { createHash, randomUUID, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, resolve } from "node:path";
+import { dirname } from "node:path";
 import type {
   CreateScheduledWebinarRequest,
   ScheduledWebinar,
@@ -21,6 +21,7 @@ import {
 } from "./webinar.js";
 import { canonicalizeClientId } from "./clientIds.js";
 import { openSqliteStore } from "./sqliteWriteCheck.js";
+import { storeJsonPath, storeSqlitePath } from "./storePaths.js";
 import { storedTimestampOrNull } from "./storedValues.js";
 import { writePrivateFileAtomic } from "./privateFile.js";
 import { adoptRecoveredJsonStore, jsonStoreCollection, type JsonStoreAdapter, type JsonStoreClaim } from "./jsonStoreUpgrade.js";
@@ -276,25 +277,9 @@ export type ScheduledWebinarPersistence = {
   close?: () => void;
 };
 
-const scheduledWebinarsPath = (): string => {
-  const configured = process.env.SCHEDULED_WEBINARS_PATH?.trim();
-  if (configured) return resolve(configured);
-  return resolve(process.cwd(), "data", "scheduled-webinars.json");
-};
+const scheduledWebinarsPath = (): string => storeJsonPath("scheduled-webinars");
 
-const scheduledWebinarsSqlitePath = (): string => {
-  const configured =
-    process.env.SCHEDULED_WEBINARS_SQLITE_PATH?.trim() ||
-    process.env.CONCLAVE_SQLITE_PATH?.trim();
-  if (configured) return resolve(configured);
-
-  const recordingStoragePath = process.env.RECORDING_STORAGE_PATH?.trim();
-  if (recordingStoragePath) {
-    return resolve(recordingStoragePath, "conclave.sqlite");
-  }
-
-  return resolve(process.cwd(), "data", "conclave.sqlite");
-};
+const scheduledWebinarsSqlitePath = (): string => storeSqlitePath("scheduled-webinars");
 
 
 const createFileScheduledWebinarPersistence = (
