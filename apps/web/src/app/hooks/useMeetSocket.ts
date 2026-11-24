@@ -4185,12 +4185,14 @@ export function useMeetSocket({
             );
           }
 
-          if (installProducer(audioProducerRef, null, audioProducer, discardJoinProducer)) {
+          if (generation !== captureGeneration()) {
+            discardJoinProducer(audioProducer);
+          } else if (installProducer(audioProducerRef, null, audioProducer, discardJoinProducer)) {
             const audioProducerId = audioProducer.id;
             audioProducer.on("transportclose", () => {
               if (audioProducerRef.current?.id === audioProducerId) {
                 audioProducerRef.current = null;
-                if (!shouldPauseAudio) {
+                if (deviceIntents.get().audio.chosen) {
                   requestAudioProducerRecovery();
                 }
               }

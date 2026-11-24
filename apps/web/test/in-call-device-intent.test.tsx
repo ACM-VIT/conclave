@@ -6,6 +6,7 @@ import {
   createInCallRig,
   installMediaWorld,
   leftAfterEnd,
+  notLive,
   unwanted,
   World,
   type FakeTrack,
@@ -74,6 +75,22 @@ const endCall = async (rig: InCallRig) => {
 const liveCameraTrack = (rig: InCallRig) =>
   rig.rig().refs.localStreamRef.current?.getVideoTracks()[0] as unknown as FakeTrack;
 
+const liveMicrophoneSource = () =>
+  world.tracks.find((track) => track.kind === "audio" && track.source === "device" && track.readyState === "live");
+
+const WATCHDOG_MS = 1500;
+const LIVENESS_TICKS = 3;
+
+const sendingWithin = async (rig: InCallRig, ticks = LIVENESS_TICKS) => {
+  for (let tick = 0; tick < ticks && notLive(world, rig.rig()).length > 0; tick += 1) {
+    await rig.tick(WATCHDOG_MS);
+  }
+  return notLive(world, rig.rig());
+};
+
+const opened = (kind: "audio" | "video") =>
+  world.tracks.filter((track) => track.kind === kind && track.source === "device").length;
+
 describe("in-call rig", () => {
   it("joins with the microphone and camera on, publishes both, and leaves nothing behind", async () => {
     const rig = await join();
@@ -85,6 +102,187 @@ describe("in-call rig", () => {
     await endCall(rig);
     await rig.settle();
     expect(leftAfterEnd(world)).toEqual([]);
+  });
+});
+
+describe("a chosen device ends up sending", () => {
+  it.each([false, true])(
+    "a microphone lost mid-call is reopened once and sends again (noise cancellation %s)",
+    async (noiseCancellation) => {
+      const rig = await join({ camera: false, noiseCancellation });
+      expect(notLive(world, rig.rig())).toEqual([]);
+      await act(async () => liveMicrophoneSource()?.lose());
+      await rig.settle();
+
+      expect(await sendingWithin(rig)).toEqual([]);
+      expect(rig.rig().state.isMuted).toBe(false);
+      expect(opened("audio")).toBe(2);
+      expect(unwanted(world, rig.rig())).toEqual([]);
+    },
+  );
+
+  it("muting while a microphone recovery is publishing leaves one paused producer and no live microphone", async () => {
+    const rig = await join({ camera: false });
+    world.holds.add("produce");
+    await act(async () => liveMicrophoneSource()?.lose());
+    await until("the recovery publish", () => pendingOf("produce") === 1);
+
+    await act(async () => {
+      await rig.rig().media.toggleMute();
+    });
+    await releaseAll(rig);
+
+    expect(rig.rig().state.isMuted).toBe(true);
+    expect(world.producers.filter((producer) => !producer.closed && producer.kind === "audio").map((producer) => producer.paused)).toEqual([true]);
+    expect(unwanted(world, rig.rig())).toEqual([]);
+  });
+
+  it("unmuting while a muted microphone recovery is publishing sends the microphone", async () => {
+    const rig = await join({ camera: false });
+    await act(async () => {
+      await rig.rig().media.toggleMute();
+    });
+    world.holds.add("produce");
+    await act(async () => liveMicrophoneSource()?.lose());
+    await rig.tick(WATCHDOG_MS);
+    await until("the recovery publish", () => pendingOf("produce") === 1);
+
+    let unmuting: Promise<unknown> = Promise.resolve();
+    await act(async () => {
+      unmuting = rig.rig().media.toggleMute();
+    });
+    await releaseAll(rig, unmuting);
+
+    expect(await sendingWithin(rig)).toEqual([]);
+    expect(unwanted(world, rig.rig())).toEqual([]);
+  });
+
+  it("a camera lost mid-call sends again without waiting for the watchdog when video effects change during the publish", async () => {
+    const rig = await join({ mic: false });
+    world.holds.add("produce");
+    await act(async () => liveCameraTrack(rig).lose());
+    await until("the recovery publish", () => pendingOf("produce") === 1);
+
+    await act(async () => rig.rig().setVideoEffects(1));
+    await releaseAll(rig);
+
+    expect(notLive(world, rig.rig())).toEqual([]);
+    expect(opened("video")).toBe(2);
+    expect(unwanted(world, rig.rig())).toEqual([]);
+  });
+
+  it("camera recovery whose publish finishes after Turn off camera closes what it published", async () => {
+    const rig = await join({ mic: false });
+    world.holds.add("produce");
+    await act(async () => liveCameraTrack(rig).lose());
+    await until("the recovery publish", () => pendingOf("produce") === 1);
+
+    await act(async () => {
+      await rig.rig().media.toggleCamera();
+    });
+    await releaseAll(rig);
+
+    expect(rig.rig().state.isCameraOff).toBe(true);
+    expect(unwanted(world, rig.rig())).toEqual([]);
+  });
+});
+
+describe("presses and publishes that race each other", () => {
+  const openAudio = () => world.producers.filter((producer) => !producer.closed && producer.kind === "audio");
+
+  it("a mute the SFU refuses after newer presses keeps the newest press", async () => {
+    const rig = await join({ camera: false });
+    world.holds.add("toggleMute");
+    world.refusals.set("toggleMute", 1);
+    let first: Promise<unknown> = Promise.resolve();
+    await act(async () => {
+      first = rig.rig().media.toggleMute();
+    });
+    await act(async () => {
+      await rig.rig().media.toggleMute();
+    });
+    let third: Promise<unknown> = Promise.resolve();
+    await act(async () => {
+      third = rig.rig().media.toggleMute();
+    });
+    await releaseAll(rig, first, third);
+
+    expect(rig.rig().state.isMuted).toBe(true);
+    expect(openAudio().map((producer) => producer.paused)).toEqual([true]);
+    expect(unwanted(world, rig.rig())).toEqual([]);
+  });
+
+  it("turning the camera on opens it once although camera recovery also wants it", async () => {
+    const rig = await join({ mic: false, camera: false });
+    world.holds.add("capture");
+    let turningOn: Promise<unknown> = Promise.resolve();
+    await act(async () => {
+      turningOn = rig.rig().media.toggleCamera();
+    });
+    await until("the camera capture", () => pendingOf("capture") === 1);
+    await rig.settle();
+    await releaseAll(rig, turningOn);
+
+    expect(opened("video")).toBe(1);
+    expect(notLive(world, rig.rig())).toEqual([]);
+    expect(unwanted(world, rig.rig())).toEqual([]);
+  });
+
+  it("a quality change still reopening the camera when the camera is turned off leaves no camera in the call", async () => {
+    const rig = await join({ mic: false });
+    world.cameraRefusesConstraints = true;
+    world.holds.add("capture");
+    let updating: Promise<unknown> = Promise.resolve();
+    await act(async () => {
+      updating = rig.rig().media.updateVideoQualityRef.current?.("low") ?? Promise.resolve();
+    });
+    await until("the camera reopen", () => pendingOf("capture") === 1);
+
+    await act(async () => {
+      await rig.rig().media.toggleCamera();
+    });
+    await releaseAll(rig, updating);
+
+    expect(rig.rig().state.isCameraOff).toBe(true);
+    expect(rig.rig().refs.localStreamRef.current?.getVideoTracks() ?? []).toEqual([]);
+    expect(unwanted(world, rig.rig())).toEqual([]);
+  });
+
+  it("captures released while the join's microphone publish is in flight install no microphone producer", async () => {
+    current = await createInCallRig(world);
+    await setIntents(current, true, false);
+    world.holds.add("produce");
+    let joining: Promise<unknown> = Promise.resolve();
+    await act(async () => {
+      joining = current!.rig().socket.joinRoom();
+    });
+    await until("the join's microphone publish", () => pendingOf("produce") === 1);
+
+    await act(async () => releaseAllCaptures());
+    const joinsOwn: Array<[boolean, boolean | undefined]> = [];
+    await act(async () => {
+      world.releaseAll();
+      await joining;
+      world.producers
+        .filter((producer) => producer.kind === "audio")
+        .forEach((producer) => joinsOwn.push([producer.closed, world.sfu.get(producer.id)?.closed]));
+    });
+
+    expect(joinsOwn).toEqual([[true, true]]);
+  });
+
+  it("a microphone unmuted after a muted join sends again at once when its transport closes", async () => {
+    const rig = await join({ mic: false, camera: false });
+    await act(async () => {
+      await rig.rig().media.toggleMute();
+    });
+    await rig.settle();
+    expect(notLive(world, rig.rig())).toEqual([]);
+
+    await act(async () => openAudio()[0]?.closeTransport());
+    await rig.settle();
+
+    expect(notLive(world, rig.rig())).toEqual([]);
   });
 });
 
@@ -364,7 +562,7 @@ const quiesce = async (model: Model) => {
       world.socketEvents.length,
       world.contexts.map((context) => context.state).join(""),
     ].join("|");
-    stableTurns = snapshot === last && model.running.size === 0 ? stableTurns + 1 : 0;
+    stableTurns = snapshot === last && model.running.size === 0 && world.roundTripsInFlight === 0 ? stableTurns + 1 : 0;
     last = snapshot;
     if (stableTurns >= 4) return true;
   }
@@ -414,6 +612,14 @@ const runSeed = async (seed: number, steps: number) => {
       const problems = unwanted(world, current.rig());
       if (problems.length > 0) fail(seed, model, `after step ${index}`, problems);
     }
+    if (settled && world.holds.size === 0) {
+      for (let tick = 0; tick < LIVENESS_TICKS && notLive(world, current.rig()).length > 0; tick += 1) {
+        await current.tick(WATCHDOG_MS);
+        await quiesce(model);
+      }
+      const silent = notLive(world, current.rig());
+      if (silent.length > 0) fail(seed, model, `after step ${index}, ${LIVENESS_TICKS} watchdog ticks later`, silent);
+    }
   }
   model.log.push(`end the call with ${world.pending.length} step(s) held`);
   await endCall(current);
@@ -435,7 +641,7 @@ const SEED_FROM = Number(process.env.IN_CALL_MODEL_SEED_FROM ?? 1);
 const SEED_COUNT = Number(process.env.IN_CALL_MODEL_SEEDS ?? 30);
 const MODEL_STEPS = Number(process.env.IN_CALL_MODEL_STEPS ?? 24);
 
-describe("seeded in-call model: no live track, node or producer the current choice does not call for", () => {
+describe("seeded in-call model: nothing live the current choice does not call for, and every chosen device sending", () => {
   it(
     `seeds ${SEED_FROM} to ${SEED_FROM + SEED_COUNT - 1}`,
     async () => {
