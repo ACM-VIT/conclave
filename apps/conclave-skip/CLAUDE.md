@@ -686,17 +686,20 @@ Fixed 2026-10-22 and guarded by `testNativeCallCorrectnessBlockersStayFixed`:
   healthy stop can take longer than the deadline, so past the deadline the
   start records `media.teardownStuck.<kind>` (`onTeardownStuck`) and waits
   up to `CaptureTeardown.DEVICE_WAIT_MILLIS` (5 s) more for the device to be
-  free: for a camera, CameraManager reporting that camera id available
-  (`CameraAvailability`, an `AvailabilityCallback`) or the teardown
-  finishing; for a share, the teardown finishing. A device still held fails
+  free (`awaitDeviceFreed`, whichever comes first): for a camera,
+  CameraManager reporting that camera id available (`CameraAvailability`,
+  an `AvailabilityCallback`) or the teardown finishing; for a share, the
+  teardown finishing. A device still held fails
   the start visibly instead of opening it twice: a camera start marks the
   call camera `inUseByAnotherClient` and throws a "device busy" error the
   view model shows as "Another app is using your camera." with the camera
   left off, and a share start fails into the share failure path. Tapping
-  again retries. So while a teardown of a kind is stuck, no capture of that
-  kind is opened, and none is added for another teardown thread to strand.
-  Camera names are CameraManager ids, except on the Camera1 fallback, where
-  only the finished teardown frees the device.
+  again retries. So a device a stuck teardown still holds is never opened
+  again, and a start behind it adds no capture for another teardown thread
+  to strand. A second stuck thread of a kind needs the system to have
+  reported the device free in between. Camera names are CameraManager ids,
+  except on the Camera1 fallback, where only the finished teardown frees the
+  device, and the start opens as soon as it finishes.
 - A capture's texture helper is created off the main thread
   (`CaptureTeardown.createHelper`, 2 s bound, one creation per kind at a
   time), before its capturer is opened. `SurfaceTextureHelper.create` builds

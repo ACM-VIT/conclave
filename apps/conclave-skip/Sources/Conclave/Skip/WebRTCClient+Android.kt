@@ -59,11 +59,13 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -3629,8 +3631,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
     private suspend fun awaitCaptureDeviceFree(teardown: CaptureTeardown, kind: String, cameraName: String?) {
         if (teardown.awaitReleased()) return
         reportTeardownStuck(kind)
-        val available = cameraName != null && awaitCameraAvailable(cameraName, CaptureTeardown.DEVICE_WAIT_MILLIS)
-        if (available || teardown.awaitReleased(if (cameraName == null) CaptureTeardown.DEVICE_WAIT_MILLIS else 0L)) return
+        if (awaitDeviceFreed(teardown, cameraName)) return
         debugLog("[WebRTC] The $kind is still held by a stuck teardown; not opening it again")
         NativePerformanceDiagnostics.event("capture_device_busy", "kind=$kind")
         if (teardown === CaptureTeardown.camera) {
@@ -3638,6 +3639,21 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             throw ErrorException("Camera device busy: the previous camera has not released it yet")
         }
         throw ErrorException("Screen capture is still stopping")
+    }
+
+    private suspend fun awaitDeviceFreed(teardown: CaptureTeardown, cameraName: String?): Boolean = coroutineScope {
+        val freed = CompletableDeferred<Boolean>()
+        val waits = listOfNotNull(
+            launch { if (teardown.awaitReleased(CaptureTeardown.DEVICE_WAIT_MILLIS)) freed.complete(true) },
+            cameraName?.let { name ->
+                launch { if (awaitCameraAvailable(name, CaptureTeardown.DEVICE_WAIT_MILLIS)) freed.complete(true) }
+            },
+        )
+        launch {
+            waits.joinAll()
+            freed.complete(false)
+        }
+        freed.await().also { coroutineContext.cancelChildren() }
     }
 
     private suspend fun createCaptureHelper(teardown: CaptureTeardown, threadName: String): SurfaceTextureHelper {

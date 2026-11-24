@@ -207,6 +207,15 @@ class LocalVideoTeardownTests {
         }
     }
 
+    private fun advanceMainAtMost(millis: Long, condition: () -> Boolean) {
+        var advanced = 0L
+        while (!condition() && advanced < millis) {
+            shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(100))
+            advanced += 100
+            Thread.sleep(20)
+        }
+    }
+
     private fun waitUntil(condition: () -> Boolean) {
         val deadline = System.currentTimeMillis() + 5_000
         while (!condition() && System.currentTimeMillis() < deadline) Thread.sleep(5)
@@ -529,7 +538,8 @@ class LocalVideoTeardownTests {
             advanceMain(CaptureTeardown.DEADLINE_MILLIS + 1_000)
             stopping.countDown()
             waitUntil { events.contains("slow camera stopped") }
-            advanceMainUntil { start.isCompleted }
+            advanceMainAtMost(1_000) { start.isCompleted }
+            assertTrue("the start waited out the availability wait after its teardown finished", start.isCompleted)
             assertTrue(runBlocking { start.await() }.isSuccess)
             assertEquals(1, devices.cameras.size)
             assertEquals(listOf("slow camera stopped", "next camera started"), events.toList())
