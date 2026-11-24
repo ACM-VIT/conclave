@@ -290,7 +290,7 @@ describe("moving onto the relay when credentials return", () => {
     expect(rig.recv).toBe(recovered);
   });
 
-  it("backs the credential retries off from 2 s to every 10 s over about a minute", async () => {
+  it("retries credentials within 5 s for the first half minute, then every 10 s, over about a minute", async () => {
     rig = await startRig({ ttlSeconds: 30 });
     await rig.join();
     await recoverThroughTurn(rig);
@@ -300,7 +300,7 @@ describe("moving onto the relay when credentials return", () => {
 
     const tries = rig.joinRequests.filter((request) => request.at > downAt).map((request) => request.at);
     const gaps = tries.slice(1).map((at, index) => Math.round((at - tries[index]) / 1000));
-    expect(gaps).toEqual([4, 8, 10, 10, 10, 10, 10]);
+    expect(gaps).toEqual([3, 5, 5, 5, 5, 5, 10, 10, 10]);
     expect(tries.at(-1)! - tries[0]).toBeGreaterThanOrEqual(60_000);
   });
 
@@ -517,6 +517,8 @@ describe("one versioned set of TURN credentials", () => {
     await recoverThroughTurn(rig);
     rig.route = "down";
     await advanceTo(rig, 40);
+    const unreachable = rig.joinRequests.length;
+    expect(await waitFor(rig, () => rig!.joinRequests.length > unreachable, 15_000)).toBe(true);
     rig.route = "up";
     rig.routePlan = ["hold"];
     await rig.dropSocket();

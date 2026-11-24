@@ -371,7 +371,7 @@ describe("fetching TURN credentials again while relay only is wanted", () => {
     ).toBeNull();
   });
 
-  it("waits 2, 4 and 8 s, then 10 s, between tries, over at least the minute six 10 s tries covered", () => {
+  it("tries within 5 s for the first half minute, then every 10 s, over at least the minute six 10 s tries covered", () => {
     let chain: RelayRefreshChain = planRelayRefresh(null, { ...wanted, budget: "keep" });
     const delays: number[] = [];
     while (chain && chain.triesLeft > 0) {
@@ -379,7 +379,10 @@ describe("fetching TURN credentials again while relay only is wanted", () => {
       chain = takeRelayRefreshTry(chain);
     }
 
-    expect(delays).toEqual([2_000, 4_000, 8_000, 10_000, 10_000, 10_000, 10_000, 10_000]);
+    expect(delays).toEqual([
+      2_000, 3_000, 5_000, 5_000, 5_000, 5_000, 5_000, 10_000, 10_000, 10_000,
+    ]);
+    expect(delays.slice(0, 7).reduce((total, delay) => total + delay, 0)).toBe(30_000);
     expect(delays.reduce((total, delay) => total + delay, 0)).toBeGreaterThanOrEqual(60_000);
     expect(
       relayRefreshDelayMs(planRelayRefresh({ triesLeft: 0 }, { ...wanted, budget: "renew" })!),

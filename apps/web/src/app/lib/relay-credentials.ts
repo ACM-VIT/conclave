@@ -166,7 +166,7 @@ export const icePolicyForOffers = (
   relayOnly && offeredTurnServers(offers) !== null ? "relay" : "all";
 
 export const RELAY_REFRESH_DELAYS_MS = [
-  2_000, 4_000, 8_000, 10_000, 10_000, 10_000, 10_000, 10_000,
+  2_000, 3_000, 5_000, 5_000, 5_000, 5_000, 5_000, 10_000, 10_000, 10_000,
 ] as const;
 
 export const RELAY_REFRESH_TRIES = RELAY_REFRESH_DELAYS_MS.length;
