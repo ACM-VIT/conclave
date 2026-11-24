@@ -2,7 +2,7 @@ import { createServer } from "node:net";
 import { createApp } from "./app.js";
 import { createBrowserManager } from "./createBrowserManager.js";
 import { resolveServiceSecurity, ServiceSecurityError } from "./serviceSecurity.js";
-import { isCurrentSharedBrowserHealth, isEarlierSharedBrowserHealth, previousManagedContainer } from "./serviceIdentity.js";
+import { isHeldByPreviousContainer, previousManagedContainer } from "./serviceIdentity.js";
 import { defaultConfig } from "./types.js";
 
 const resolveSecurityOrExit = () => {
@@ -42,7 +42,7 @@ const heldBySharedBrowser = async (host: string, port: number): Promise<boolean>
         const address = host.includes(":") ? `[${host}]` : host;
         const response = await fetch(`http://${address}:${port}/health`, { signal: AbortSignal.timeout(3_000) });
         const body: unknown = await response.json();
-        return isCurrentSharedBrowserHealth(body) || (previousManagedContainer() !== null && isEarlierSharedBrowserHealth(body));
+        return isHeldByPreviousContainer(body, port, previousManagedContainer());
     } catch {
         return false;
     }
@@ -100,7 +100,7 @@ if (process.argv.includes("--check-config")) {
         }
         if (await heldBySharedBrowser(security.listenHost, security.listenPort)) return reportValid();
         return refuseToStart(
-            `BROWSER_SERVICE_PORT=${security.listenPort} on ${security.listenHost} is in use by a program that is not the shared browser service. Free the port or choose another one.`,
+            `BROWSER_SERVICE_PORT=${security.listenPort} on ${security.listenHost} is in use by a program that is not the shared browser service this deploy replaces. Free the port or choose another one.`,
         );
     });
 } else {

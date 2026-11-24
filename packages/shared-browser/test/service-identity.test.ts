@@ -80,12 +80,20 @@ test("/health names the shared browser service and the deploy it came from, heal
 test("--check-config accepts a port held only by the browser service the deploy is replacing", async () => {
     const engine = await fakeDockerEngine({ "conclave-browser:latest": hardenedImage });
     try {
-        const check = async (holder: { body: unknown; status?: number } | undefined, previousContainer = "") => {
+        type Previous = { ports?: "this" | "another"; deployId?: string };
+        const check = async (holder: { body: unknown; status?: number } | undefined, previous?: Previous) => {
             const port = await freePort();
             const release = holder ? await holdPort(port, holder.body, holder.status) : async () => undefined;
+            const previousPorts = previous?.ports === "this" ? String(port) : previous?.ports === "another" ? String(await freePort()) : "";
             try {
                 return await runService(
-                    { BROWSER_SERVICE_PORT: String(port), DOCKER_HOST: engine.host, BROWSER_SERVICE_PREVIOUS_CONTAINER: previousContainer },
+                    {
+                        BROWSER_SERVICE_PORT: String(port),
+                        DOCKER_HOST: engine.host,
+                        BROWSER_SERVICE_PREVIOUS_CONTAINER: previous ? "4f2c1d" : "",
+                        BROWSER_SERVICE_PREVIOUS_PORTS: previousPorts,
+                        BROWSER_SERVICE_PREVIOUS_DEPLOY_ID: previous?.deployId ?? "",
+                    },
                     ["--check-config"],
                 );
             } finally {
@@ -99,24 +107,32 @@ test("--check-config accepts a port held only by the browser service the deploy 
 
         const outcomes = {
             "free port": (await check(undefined)).code,
-            "current service, unhealthy": (await check(current)).code,
-            "earlier service, unhealthy, managed container named": (await check(earlierUnhealthy, "4f2c1d")).code,
-            "earlier service, healthy, managed container named": (await check(earlierHealthy, "4f2c1d")).code,
+            "current service, the replaced container's deploy id, though it reports another port": (await check(current, { ports: "another", deployId: "older" })).code,
+            "current service, replaced container on this port": (await check(current, { ports: "this" })).code,
+            "earlier service, unhealthy, replaced container on this port": (await check(earlierUnhealthy, { ports: "this" })).code,
+            "earlier service, healthy, replaced container on this port": (await check(earlierHealthy, { ports: "this" })).code,
+            "current service, no managed container": (await check(current)).code,
+            "current service, another deploy id, replaced container on another port": (await check(current, { ports: "another", deployId: "newer" })).code,
+            "earlier service shape, replaced container on another port": (await check(earlierUnhealthy, { ports: "another" })).code,
             "earlier service shape, no managed container": (await check(earlierUnhealthy)).code,
-            "SFU, managed container named": (await check(sfu, "4f2c1d")).code,
-            "empty answer, managed container named": (await check({ body: {} }, "4f2c1d")).code,
+            "SFU, replaced container on this port": (await check(sfu, { ports: "this" })).code,
+            "empty answer, replaced container on this port": (await check({ body: {} }, { ports: "this" })).code,
         };
         assert.deepEqual(outcomes, {
             "free port": 0,
-            "current service, unhealthy": 0,
-            "earlier service, unhealthy, managed container named": 0,
-            "earlier service, healthy, managed container named": 0,
+            "current service, the replaced container's deploy id, though it reports another port": 0,
+            "current service, replaced container on this port": 0,
+            "earlier service, unhealthy, replaced container on this port": 0,
+            "earlier service, healthy, replaced container on this port": 0,
+            "current service, no managed container": 1,
+            "current service, another deploy id, replaced container on another port": 1,
+            "earlier service shape, replaced container on another port": 1,
             "earlier service shape, no managed container": 1,
-            "SFU, managed container named": 1,
-            "empty answer, managed container named": 1,
+            "SFU, replaced container on this port": 1,
+            "empty answer, replaced container on this port": 1,
         });
-        const refused = await check(sfu, "4f2c1d");
-        assert.match(refused.output, /refused to start[\s\S]*BROWSER_SERVICE_PORT=\d+[\s\S]*not the shared browser service/);
+        const refused = await check(earlierUnhealthy, { ports: "another" });
+        assert.match(refused.output, /refused to start[\s\S]*BROWSER_SERVICE_PORT=\d+[\s\S]*not the shared browser service this deploy replaces/);
     } finally {
         await engine.close();
     }
