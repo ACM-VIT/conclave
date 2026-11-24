@@ -32,7 +32,7 @@ Each start imports the previous release's data: in Redis mode the old Redis meet
 - During a blue-green deploy, writes an old SFU accepts after the first new SFU started reach the new store only if they created a record, and only when the next new SFU starts; edits and deletes made there are lost. A rollback finds the old data as it was at the upgrade.
 - A GET may create the caller's own profile once, so the dashboard link works on first visit; it never changes an existing record.
 - Host requests no longer copy the login name over the profile name, which reverted a host's own rename on their next request (found by the model).
-- A booking moved after its Google event was created is recorded as a failed calendar sync with a reason; staging never updated such events either.
+- A booking moved after its Google event was created is recorded as a failed calendar sync with a reason; staging never updated such events either. Deleting or cancelling a booking later still leaves its Google event in the host's calendar, as on staging (found by the model; a follow-up).
 - Lookups still fall back to legacy client ids, read-only; nothing moves namespace on a read. An attendee may join a webinar stored under a legacy alias of the deployment's default client.
 - Legacy records that broke a unique key are kept without that key's index entry, newest first wins, and a warning names them.
 - Revisit if a deployment needs more than a few thousand scheduled items per scan, or a second region.
