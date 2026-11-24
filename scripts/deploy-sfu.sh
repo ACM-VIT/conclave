@@ -636,10 +636,6 @@ drain_and_wait() {
       [[ -n "$unreadable_since" ]] || unreadable_since="$now"
       echo "${svc} active rooms: unknown"
       if (( now - unreadable_since >= HEALTH_TIMEOUT_SECONDS )); then
-        if booted_drained "$svc"; then
-          echo "${svc} booted out of rotation and its /status has not answered for ${HEALTH_TIMEOUT_SECONDS}s, so it took no meetings."
-          return 0
-        fi
         DRAIN_WHY="its /status has not answered for ${HEALTH_TIMEOUT_SECONDS}s, so whether calls run on it is unknown"
         return 5
       fi

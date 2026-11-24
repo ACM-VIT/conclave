@@ -152,7 +152,7 @@ Drain and wait, the only wait for an instance's calls:
 | Container | `/status` | Result |
 | --- | --- | --- |
 | stopped or absent | any | Empty at once: a container that does not run carries no calls. |
-| running | unreadable for `HEALTH_TIMEOUT_SECONDS` | Empty if the container booted drained (it never took a meeting); otherwise unknown: exit 5, left as it is with its journal kept. |
+| running | unreadable for `HEALTH_TIMEOUT_SECONDS` | Unknown, even for a container that booted drained (a call can still reach a drained candidate): exit 5, left as it is with its journal kept. |
 | running | `draining: false` | The drain is sent again; still not draining after `HEALTH_TIMEOUT_SECONDS` is unknown (exit 5). |
 | running | `draining: true`, 0 rooms from `PLACEMENT_SETTLE_SECONDS` after the last drain | Empty. |
 | running | `draining: true`, rooms left at `DRAIN_TIMEOUT_SECONDS` | Calls remain: exit 3, left drained with its journal kept. |
@@ -283,11 +283,10 @@ It fails if either side goes more than 2 s without audio or is disconnected.
 
 ## Known limits
 
-- A container that booted drained and whose `/status` has not answered for
-  `HEALTH_TIMEOUT_SECONDS` is taken to carry no calls, so a hung candidate
-  can still be rolled back. Nothing in this script undrains a container that
-  booted drained; one undrained by hand while its `/status` is down is outside
-  what the deploy can see.
+- A running container whose `/status` does not answer is never restarted, so
+  a build that hangs at startup without exiting is left as it is (exit 5,
+  rollback kept in its journal). Stop that container (`docker compose stop
+  <service>`); the next run finds it not running and rolls it back.
 - The canary reaches the transports on loopback, so it proves the media path
   inside the SFU, not the public UDP route. The preflight and the NSG rules
   cover that route.

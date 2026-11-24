@@ -161,6 +161,27 @@ fixed("a call that reaches a drained candidate pauses the deploy, and the next r
   });
 });
 
+fixed("fuzz: a call on a drained candidate whose /status stops answering is never cut", () => {
+  const callAndGoQuiet = (sfu) => {
+    if (sfu.image !== TARGET || !sfu.bootDrained || sfu.called) return;
+    sfu.called = true;
+    sfu.rooms = 1;
+    sfu.statusAnswers = false;
+  };
+  return withStack({ "sfu-a": { onRecreate: callAndGoQuiet }, "sfu-b": {} }, async (sfus, shared) => {
+    const stuck = await deploy(sfus, { env: { ...shared.env, ...ONLY_A } });
+    assert.equal(stuck.code, 5, stuck.output);
+    assert.equal(sfus["sfu-a"].rooms, 1, "the call is still on it");
+    assert.equal((await journal(shared, "sfu-a")).phase, "rollback");
+    sfus["sfu-a"].statusAnswers = true;
+    sfus["sfu-a"].rooms = 0;
+    const finished = await deploy(sfus, { env: { ...shared.env, ...ONLY_A } });
+    assert.equal(finished.code, 0, finished.output);
+    assertServes(sfus["sfu-a"], TARGET);
+    assert.deepEqual(cutRooms(sfus), cutRooms(sfus).map(() => 0));
+  });
+});
+
 fixed("fuzz: a public route that is down when the deploy first looks still leaves the image the instance served on to go back to", () =>
   withStack({ "sfu-a": { publicRoute: true } }, async (sfus, shared) => {
     sfus["sfu-a"].publicFailures = 1;
