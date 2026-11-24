@@ -37,11 +37,13 @@ once by its uuid. Every request is a `fetch` with `credentials: "omit"` and
 the page's URL; `sendBeacon`, which always sends cookies and the referrer, is
 not used, and the send as a page goes away is a keepalive `fetch` instead
 (where a browser has no keepalive `fetch`, the batch is saved for the next
-load). Each send carries its own `sent_at`, so `/ingest` can tell the events'
-age by the browser's clock. One table, in `lib/telemetry-answers.ts`, says
-what an answer means, for the outbox reading `/ingest` and for `/ingest`
-reading PostHog: 2xx is delivered; 408, 425, 429 and any 5xx are worth
-sending again; anything else is refused for good.
+load). Every event is built through the outbound schema again each time it
+is sent, so a saved copy from storage is checked like a new one, and each
+send carries its own `sent_at`, so `/ingest` can tell the events' age by the
+browser's clock. One table, in `lib/telemetry-answers.ts`, says what an
+answer means, for the outbox reading `/ingest` and for `/ingest` reading
+PostHog: 2xx is delivered; 408, 425, 429 and any 5xx are worth sending again;
+anything else is refused for good.
 
 The outbox owns every batch until `/ingest` answers it, and each batch has
 one owner at a time:
@@ -103,8 +105,8 @@ for a call-log label, its message, but no frames. If the SDK fails to load,
 reports go the same way. Only an answer to the manifest request ends the wait early: a page that
 navigates away aborts that request before the `pagehide` listener runs, and
 the abort must not release the reports as if the page stayed. PostHog's own
-error capture starts as soon as it loads. Each report is built once, when it
-is sent:
+error capture starts as soon as it loads. Each report is built when it is
+sent, and again at every later send:
 
 - Unhandled errors and promise rejections (posthog-js autocapture, rate limited per error type by the SDK).
 - Errors caught by `app/error.tsx` and `app/global-error.tsx`: `source: "react_error_boundary"`, `boundary: "route" | "root"`, `digest`. A meeting panel that fails to render or load (`MeetingPanelBoundary`) reports `boundary: "panel"` while the call goes on; the panel's name is not sent.

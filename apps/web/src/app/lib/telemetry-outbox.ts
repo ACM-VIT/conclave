@@ -63,6 +63,7 @@ export type OutboxDeps = {
   store: BatchStore;
   lock: (replay: () => Promise<void>) => void;
   onStale: (dropped: readonly StoredBatch[]) => void;
+  shape?: (event: OutboxEvent) => OutboxEvent | null;
 };
 
 type InFlight = { keepalive: boolean };
@@ -245,6 +246,14 @@ export function createOutbox(deps: OutboxDeps) {
     holdInMemory(batch);
   };
 
+  const shaped = (batch: Batch): boolean => {
+    batch.events = batch.events.flatMap((item) => {
+      const built = deps.shape ? deps.shape(item) : item;
+      return built ? [built] : [];
+    });
+    return batch.events.length > 0;
+  };
+
   const send = (batch: Batch): void => {
     if (tooOld(batch.oldestAt)) {
       expire(batch);
@@ -253,6 +262,10 @@ export function createOutbox(deps: OutboxDeps) {
     if (dueAt(batch) > deps.now()) {
       if (batch.saved) wakeAt(dueAt(batch));
       else holdInMemory(batch);
+      return;
+    }
+    if (!shaped(batch)) {
+      finish(batch);
       return;
     }
     batch.sendId = deps.newId();
@@ -378,6 +391,10 @@ export function createOutbox(deps: OutboxDeps) {
       let budget = UNLOAD_BUDGET_BYTES - keepaliveBytes - beaconBytes();
       const waiting = [...live.values()].filter((batch) => batch.inFlight === null);
       for (const batch of [...waiting, ...batchesOf(items)]) {
+        if (!shaped(batch)) {
+          finish(batch);
+          continue;
+        }
         const body = bodyOf(batch.events);
         const bytes = byteLength(body);
         if (dueAt(batch) <= deps.now() && !tooOld(batch.oldestAt) && bytes <= budget && deps.beacon(body)) {

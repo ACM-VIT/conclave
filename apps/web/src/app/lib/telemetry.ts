@@ -390,13 +390,28 @@ const ingestRequest = (body: string, keepalive: boolean, signal?: AbortSignal): 
     headers: { "content-type": "application/json" },
   });
 
+const rebuilt = (key: string) => (event: OutboxEvent): OutboxEvent | null => {
+  const built = buildOutboundEvent(
+    { uuid: event.uuid, event: event.event, properties: event.properties },
+    {
+      storedKeys: new Set(),
+      token: key,
+      clientVersion,
+      chunkFiles,
+      siteOrigin: window.location.origin,
+      payload: event.properties,
+    },
+  );
+  return built ? { ...built, ...(event.timestamp ? { timestamp: event.timestamp } : {}) } : null;
+};
+
 /**
  * Starts telemetry once for the page's lifetime: the lifecycle flush at once,
  * then the SDK and the chunk manifest. Every report starts it too, so an
  * error boundary that replaced the root layout can still send. PostHog's own
  * error capture starts as soon as it loads; our reports wait until the
  * manifest has loaded too, or MANIFEST_WAIT_MS has passed, and each is built
- * once, when it is sent.
+ * when it is sent, and again at every later send.
  */
 export function startTelemetry(): void {
   if (phase.name !== "idle" || !posthogKey || !telemetryEnabled) return;
@@ -422,6 +437,7 @@ export function startTelemetry(): void {
         return false;
       }
     },
+    shape: rebuilt(posthogKey),
     newId: randomUuid,
     store: createBatchStore(() => localStorage),
     lock: replayLock,

@@ -85,6 +85,7 @@ const harness = ({
   lock = noLock,
   clock = { now: at },
   ignoreAbort = false,
+  shape = undefined as ((event: OutboxEvent) => OutboxEvent | null) | undefined,
 } = {}) => {
   const timers: Array<{ at: number; fn: () => void; id: number }> = [];
   let ids = 0;
@@ -133,6 +134,7 @@ const harness = ({
     store,
     lock,
     onStale: (batches) => dropped.push(countDropped(batches)),
+    ...(shape ? { shape } : {}),
   });
   const advance = async (ms: number) => {
     const until = clock.now + ms;
@@ -588,6 +590,40 @@ describe("a batch /ingest asked to wait for", () => {
 
     expect(h.uuidsIn(h.beacons)).toEqual([queued.uuid]);
     expect(h.posts).toEqual([]);
+  });
+});
+
+describe("what a batch carries when it is sent", () => {
+  const strip = (item: OutboxEvent): OutboxEvent | null => {
+    if (item.event === "rogue") return null;
+    const { forbidden: _forbidden, ...properties } = item.properties;
+    return { ...item, properties };
+  };
+
+  it("builds every event through the outbound schema again at send time, a saved copy's too", async () => {
+    const store = memoryStore();
+    const kept = { ...event(), properties: { ...event().properties, forbidden: "Meet Mira" } };
+    const rogue = { ...event("rogue") };
+    store.save({ id: "saved-1", events: [kept, rogue], oldestAt: START, sent: false, notBefore: 0, nextTry: 0, attempt: 0, sendId: "", leaseUntil: 0 });
+    const h = harness({ store, shape: strip, at: START + 1000 });
+    h.outbox.replaySaved();
+    await h.advance(0);
+
+    const sent = h.posts.map((post) => h.batchOf(post.body).batch).flat();
+    expect(sent.map((item) => item.uuid)).toEqual([kept.uuid]);
+    expect(JSON.stringify(sent)).not.toContain("Meet Mira");
+    expect(store.list()).toEqual([]);
+  });
+
+  it("drops a batch whose every event the schema refuses, without sending it", async () => {
+    const store = memoryStore();
+    store.save({ id: "saved-2", events: [event("rogue")], oldestAt: START, sent: false, notBefore: 0, nextTry: 0, attempt: 0, sendId: "", leaseUntil: 0 });
+    const h = harness({ store, shape: strip, at: START + 1000 });
+    h.outbox.replaySaved();
+    await h.advance(0);
+
+    expect(h.posts).toEqual([]);
+    expect(store.list()).toEqual([]);
   });
 });
 

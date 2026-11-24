@@ -457,6 +457,26 @@ describe("what a telemetry request carries", () => {
     for (const init of ingestInits) expect(init).toMatchObject({ credentials: "omit", referrerPolicy: "no-referrer" });
     expect(ingestInits.some((init) => init.keepalive === true && !init.signal)).toBe(true);
   });
+
+  it("builds a saved batch through the outbound schema again before it replays it", async () => {
+    manifest = "missing";
+    const id = "0196f0a1-0000-7000-9000-0000000000b0";
+    const tampered = {
+      uuid: "0196f0a1-0000-7000-8000-0000000000b1",
+      event: "meet_join_attempt",
+      timestamp: new Date().toISOString(),
+      properties: { token: KEY, distinct_id: "0196f0a1-0000-7000-8000-00000000d15d", joinMode: "meeting", isAdmin: false, roomId: "lime-pear-plum" },
+    };
+    localStorage.setItem(`${STORED_BATCH_PREFIX}${id}`, JSON.stringify({ id, events: [tampered], oldestAt: Date.now(), sent: false }));
+
+    const { startTelemetry } = await import("../src/app/lib/telemetry");
+    startTelemetry();
+    await vi.waitFor(() => expect(sent.filter((item) => item.via === "fetch").length).toBeGreaterThan(0));
+
+    const bodies = await Promise.all(sent.map((item) => new Response(item.body).text()));
+    expect(bodies.join("\n")).not.toContain("lime-pear");
+    expect(bodies.join("\n")).toContain(tampered.uuid);
+  });
 });
 
 describe("reports for the whole life of the page", () => {
