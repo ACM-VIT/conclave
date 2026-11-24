@@ -85,13 +85,24 @@ function Probe({
   const hold = useReconnectHold({ isJoined, connectionState });
   const [list, setList] = useState<WebinarQaList>(legacyQa.entries);
   const [sent, setSent] = useState<WebinarQaList>(legacyQa.entries);
+  const [fromThisConnection, setFromThisConnection] = useState(legacyQa.fromThisConnection);
+  const [sentMark, setSentMark] = useState(legacyQa.fromThisConnection);
   if (legacyQa.entries !== sent) {
     setSent(legacyQa.entries);
     setList(legacyQa.entries);
   }
-  oldEvents = { change: (notification) => setList((held) => withQaChange(held, notification)) };
+  if (legacyQa.fromThisConnection !== sentMark) {
+    setSentMark(legacyQa.fromThisConnection);
+    setFromThisConnection(legacyQa.fromThisConnection);
+  }
+  oldEvents = {
+    change: (notification) => {
+      setList((held) => withQaChange(held, notification));
+      setFromThisConnection(true);
+    },
+  };
   qa = useMeetingQa({
-    legacy: { ...legacyQa, entries: list, forget: () => setList(null) },
+    legacy: { ...legacyQa, entries: list, fromThisConnection, forget: () => setList(null) },
     isWebinar,
     hold,
     currentUserId: "me",
@@ -525,12 +536,13 @@ it("never shows a question the host hid again while the same connection subscrib
 it("shows a host each question once their meeting becomes a webinar, with no list sent first", async () => {
   // A server without the runtime: the client asks what it offers and is
   // never answered.
-  await mount(false, { ...legacy, entries: null });
+  const noListYet = { ...legacy, entries: null, fromThisConnection: false };
+  await mount(false, noListYet);
   await act(async () => vi.advanceTimersByTimeAsync(8_000));
   const inTheMeeting = qa;
   // Webinar mode starts. A server that sends no list with it still sends
   // each question as it comes.
-  await mount(true, { ...legacy, entries: null });
+  await mount(true, noListYet);
   const fromTheQuestion = renders.length;
   await act(async () =>
     oldEvents.change({
@@ -543,6 +555,7 @@ it("shows a host each question once their meeting becomes a webinar, with no lis
   expect(qa.entries.map((entry) => entry.id)).toEqual(["q9"]);
   expect(renders.slice(fromTheQuestion).length).toBeGreaterThan(0);
   expect(renders.slice(fromTheQuestion).every((shown) => shown.join() === "q9")).toBe(true);
+  expect({ waiting: qa.waiting, moderate: qa.onModerate }).toEqual({ waiting: false, moderate: legacy.moderate });
 });
 
 it("clears an attendee's list at once when webinar mode ends and the server withdraws Q&A", async () => {

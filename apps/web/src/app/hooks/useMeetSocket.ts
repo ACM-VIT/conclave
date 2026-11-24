@@ -7067,6 +7067,12 @@ export function useMeetSocket({
                 if (socketRef.current !== socket || intentionalDisconnectRef.current) return;
                 handler.apply(socket, args);
               })) as typeof socket.on;
+            const takeWebinarQaList = (
+              update: React.SetStateAction<WebinarQaEntry[] | null>,
+            ) => {
+              setWebinarQaEntries(update);
+              setWebinarQaListFromThisConnection(true);
+            };
 
             socket.on("connect", () => {
               clearTimeout(connectionTimeout);
@@ -8527,7 +8533,7 @@ export function useMeetSocket({
               "webinar:configChanged",
               (nextConfig: WebinarConfigSnapshot) => {
                 setWebinarConfig(nextConfig);
-                setWebinarQaEntries((previous) =>
+                takeWebinarQaList((previous) =>
                   qaListForConfig(previous, nextConfig),
                 );
               },
@@ -8592,8 +8598,7 @@ export function useMeetSocket({
               "webinar:qaSnapshot",
               (snapshot: WebinarQaSnapshot) => {
                 if (!isRoomEvent(snapshot.roomId)) return;
-                setWebinarQaEntries(qaListFromSnapshot(snapshot));
-                setWebinarQaListFromThisConnection(true);
+                takeWebinarQaList(qaListFromSnapshot(snapshot));
               },
             );
 
@@ -8601,7 +8606,7 @@ export function useMeetSocket({
               "webinar:qaChanged",
               (notification: WebinarQaChangedNotification) => {
                 if (!isRoomEvent(notification.roomId)) return;
-                setWebinarQaEntries((previous) =>
+                takeWebinarQaList((previous) =>
                   withQaChange(previous, notification),
                 );
               },
