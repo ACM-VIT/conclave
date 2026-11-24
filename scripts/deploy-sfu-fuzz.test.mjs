@@ -249,7 +249,8 @@ const checkRun = async ({ sfus, shared, plan, result, label, quiet }) => {
       if (!(sfu.container === "running" && allowed.includes(sfu.image)) && phase !== "rollback") {
         problems.push(`${name}: left ${sfu.container} on ${sfu.image} with its journal at ${phase}, so nothing serves and no rollback is under way`);
       }
-      if ([0, 4].includes(result.code) && !(sfu.container === "running" && !sfu.draining && allowed.includes(sfu.image) && settledPhase(phase))) {
+      const serves = sfu.container === "running" && !sfu.draining && allowed.includes(sfu.image);
+      if ((result.code === 0 && !(serves && settledPhase(phase))) || (result.code === 4 && !serves)) {
         problems.push(`${name}: exit ${result.code}, but it is ${sfu.container}, draining ${sfu.draining}, on ${sfu.image}, journal ${phase}`);
       }
     }
