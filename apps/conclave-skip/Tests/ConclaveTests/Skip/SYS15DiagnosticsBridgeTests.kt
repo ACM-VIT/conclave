@@ -213,9 +213,11 @@ class SYS15DiagnosticsBridgeTests {
 
     @Test
     fun processStateSummaryRoundTripsAndExitReasonsHaveNames() {
-        val bytes = NativePerformanceDiagnostics.processStateSummary(7, "recovering")
-        assertEquals("s=7;p=recovering", String(bytes, Charsets.UTF_8))
+        val bytes = NativePerformanceDiagnostics.processStateSummary(7, "recovering", "2.0.0 (63)")
+        assertEquals("s=7;p=recovering;v=2.0.0 (63)", String(bytes, Charsets.UTF_8))
         assertEquals(Pair(7, "recovering"), NativePerformanceDiagnostics.parseProcessStateSummary(bytes))
+        assertEquals("2.0.0 (63)", NativePerformanceDiagnostics.parseProcessStateVersion(bytes))
+        assertEquals("", NativePerformanceDiagnostics.parseProcessStateVersion("s=7;p=recovering".toByteArray()))
         assertEquals(Pair(0, ""), NativePerformanceDiagnostics.parseProcessStateSummary(null))
         assertTrue(NativePerformanceDiagnostics.processStateSummary(1, "x".repeat(300)).size <= 128)
         assertEquals("anr", NativePerformanceDiagnostics.exitReasonName(6))
