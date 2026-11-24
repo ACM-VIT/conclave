@@ -252,6 +252,7 @@ const makeWorkRoom = () => {
           command.ackedAt = Date.now();
         });
       },
+      sendRaw: (update: Uint8Array) => sendUpdate(update),
       flood: (count: number) => {
         for (let index = 0; index < count; index += 1) {
           fire("apps:yjs:update", { appId: BOARD, update: new Uint8Array([index % 250]), replicaId: `flood-${index}` });
@@ -358,6 +359,39 @@ describe("one work queue per room", () => {
 
     expect(calls.filter((call) => call.result === "foreign-id")).toEqual([]);
     expect(room.apps.liveDoc(BOARD)!.getMap("m").size).toBe(UPDATE_BURST + 20);
+  });
+
+  it("keeps a guest's two linked tabs writing as one participant, and their ids theirs", () => {
+    vi.useFakeTimers();
+    const calls = recordWrites();
+    const { connect, room } = makeWorkRoom();
+    const host = connect("host#1", { host: true });
+    host.stage("apps:open", BOARD);
+    const first = connect("guest-gp_pass#tab-1");
+    const second = connect("guest-gp_pass#tab-2", { legacy: true });
+    const other = connect("guest-gp_other#tab-1");
+    for (const tab of [first, second, other]) tab.sync();
+
+    first.write(3);
+    second.write(3);
+    const firstClient = first.doc.clientID;
+    first.write(UPDATE_BURST + 10);
+    first.leave();
+    vi.advanceTimersByTime(2000);
+    second.write(2);
+    const forger = new Y.Doc();
+    Y.applyUpdate(forger, Y.encodeStateAsUpdate(room.apps.liveDoc(BOARD)!));
+    forger.clientID = firstClient;
+    const before = Y.encodeStateVector(forger);
+    forger.getMap("m").set("forged", true);
+    other.sendRaw(Y.encodeStateAsUpdate(forger, before));
+    vi.advanceTimersByTime(2000);
+
+    const byParticipant = (participant: string) => calls.filter((call) => call.userId === participant);
+    expect(byParticipant("guest-gp_pass").map((call) => call.result).filter((result) => result !== null)).toEqual([]);
+    expect(room.apps.liveDoc(BOARD)!.getMap("m").size).toBe(3 + 3 + UPDATE_BURST + 10 + 2);
+    expect(byParticipant("guest-gp_other").map((call) => call.result)).toEqual(["foreign-id"]);
+    expect(room.apps.liveDoc(BOARD)!.getMap("m").has("forged")).toBe(false);
   });
 
   it("applies another participant's queued strokes before the host closes the board", () => {
