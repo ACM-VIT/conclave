@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "conclave-web",
-  "main": ".open-next/worker.js",
+  "main": "worker.ts",
   "account_id": "4ee36e42cabfd44e8ce61b2a6bd637c5",
   "compatibility_date": "2026-06-30",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
@@ -76,14 +76,20 @@
         "limit": 120,
         "period": 60
       }
-    },
-    {
-      "name": "INGEST_GLOBAL_RATE_LIMITER",
-      "namespace_id": "2007",
-      "simple": {
-        "limit": 6000,
-        "period": 60
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "INGEST_QUOTA",
+        "class_name": "IngestQuota"
       }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["IngestQuota"]
     }
   ],
   "r2_buckets": [

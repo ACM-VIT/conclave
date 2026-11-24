@@ -261,14 +261,18 @@ The browser sends its events to `/ingest` on our own site (`app/ingest/[...path]
 endpoint (`/ingest/e/`) as a POST of at most 256 KB, 1 MB once decoded, and 200
 events, labelled with a content type posthog-js sends (`application/json`,
 `text/plain` or `application/x-www-form-urlencoded`). Before it reads the
-body it takes a rate limit (`lib/ingest-rate-limit.ts`), the same mechanism
-as `/api/unfurl`: 120 requests a minute per client (keyed by
-`cf-connecting-ip`) and 6000 a minute for the whole site, through the
-`INGEST_RATE_LIMITER` and `INGEST_GLOBAL_RATE_LIMITER` bindings in
-`wrangler.jsonc`. A client over either limit gets 429 with `Retry-After: 60`,
-which the outbox already honours. On Cloudflare a missing or failing binding
-answers 503; off Cloudflare (`next start`) the same two limits are kept in
-the process. It decodes the body
+body it takes a rate limit (`lib/ingest-rate-limit.ts`): 120 requests a
+minute per client (keyed by `cf-connecting-ip`), then 6000 a minute for the
+whole site, so a client over its own limit never spends the site's. The
+per-client limit is the `INGEST_RATE_LIMITER` binding, which Cloudflare
+counts per location; a client stays at one. The site's limit is one Durable
+Object, `IngestQuota` (`lib/ingest-quota.ts`, exported by the Worker entry
+`worker.ts` next to the OpenNext handler, bound as `INGEST_QUOTA`), which
+counts every location's requests in one window; a rate limit binding would
+give each location its own 6000. A client over either limit gets 429 with
+`Retry-After: 60`, which the outbox already honours. On Cloudflare a missing
+binding, or one that fails or takes more than 2 s, answers 503; off
+Cloudflare (`next start`) the same two limits are kept in the process. It decodes the body
 (gzip, base64 or JSON), drops events for any project but ours, and builds
 every event again from the outbound schema, so the
 browser's before_send is not the only guard. Each event is judged by its own

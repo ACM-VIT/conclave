@@ -92,7 +92,7 @@ describe("the /ingest route's PostHog host", () => {
 describe("the /ingest route's rate limit", () => {
   it("answers 429 with Retry-After once one client passes its limit, and forwards nothing for it", async () => {
     vi.stubEnv("POSTHOG_INGEST_HOST", "https://ingest.example");
-    const { INGEST_RATE_LIMITS } = await import("../src/app/lib/ingest-rate-limit");
+    const { INGEST_RATE_LIMITS } = await import("../src/app/lib/ingest-quota");
     const { POST } = await import("../src/app/ingest/[...path]/route");
     const from = (ip: string) =>
       POST(

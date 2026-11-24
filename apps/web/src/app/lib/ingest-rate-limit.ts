@@ -1,45 +1,58 @@
 import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { createFixedWindow, type FixedWindow, INGEST_QUOTA_URL, INGEST_RATE_LIMITS, INGEST_WINDOW_MS } from "./ingest-quota";
 import { rateLimitClientKey } from "./unfurl-rate-limit";
 
-export const INGEST_RATE_LIMITS = { perClient: 120, total: 6000 } as const;
-const WINDOW_MS = 60_000;
 const MAX_LOCAL_CLIENTS = 1_000;
+const SITE_QUOTA_DEADLINE_MS = 2_000;
 
 type RateLimitBinding = { limit(options: { key: string }): Promise<{ success: boolean }> };
+type QuotaStub = { fetch(url: string, init: RequestInit): Promise<Response> };
+type QuotaNamespace = { idFromName(name: string): unknown; get(id: unknown): QuotaStub };
 
 export type IngestAdmission =
   | { ok: true }
   | { ok: false; status: 429; retryAfterMs: number }
   | { ok: false; status: 503; retryAfterMs: null };
 
-const LIMITED: IngestAdmission = { ok: false, status: 429, retryAfterMs: WINDOW_MS };
+const ADMITTED: IngestAdmission = { ok: true };
+const LIMITED: IngestAdmission = { ok: false, status: 429, retryAfterMs: INGEST_WINDOW_MS };
 const UNAVAILABLE: IngestAdmission = { ok: false, status: 503, retryAfterMs: null };
 
-type Window = { startedAt: number; count: number };
-const clients = new Map<string, Window>();
-let site: Window = { startedAt: 0, count: 0 };
-
-const current = (window: Window | undefined, now: number): Window =>
-  window && now - window.startedAt < WINDOW_MS ? window : { startedAt: now, count: 0 };
+const clients = new Map<string, FixedWindow>();
+const site = createFixedWindow(INGEST_RATE_LIMITS.total);
 
 const takeLocal = (key: string): IngestAdmission => {
   const now = Date.now();
-  const client = current(clients.get(key), now);
-  if (client.count >= INGEST_RATE_LIMITS.perClient) return LIMITED;
-  site = current(site, now);
-  if (site.count >= INGEST_RATE_LIMITS.total) return LIMITED;
-  client.count += 1;
-  site.count += 1;
+  const client = clients.get(key) ?? createFixedWindow(INGEST_RATE_LIMITS.perClient);
   clients.delete(key);
   clients.set(key, client);
   while (clients.size > MAX_LOCAL_CLIENTS) clients.delete(clients.keys().next().value as string);
-  return { ok: true };
+  if (!client.take(now)) return LIMITED;
+  return site.take(now) ? ADMITTED : LIMITED;
 };
 
-const bindingsOf = (env: Record<string, unknown>): { perClient: RateLimitBinding; total: RateLimitBinding } | null => {
+const bindingsOf = (env: Record<string, unknown>): { perClient: RateLimitBinding; site: QuotaNamespace } | null => {
   const perClient = env.INGEST_RATE_LIMITER as RateLimitBinding | undefined;
-  const total = env.INGEST_GLOBAL_RATE_LIMITER as RateLimitBinding | undefined;
-  return typeof perClient?.limit === "function" && typeof total?.limit === "function" ? { perClient, total } : null;
+  const quota = env.INGEST_QUOTA as QuotaNamespace | undefined;
+  return typeof perClient?.limit === "function" && typeof quota?.get === "function" && typeof quota.idFromName === "function"
+    ? { perClient, site: quota }
+    : null;
+};
+
+const takeSiteQuota = async (quota: QuotaNamespace): Promise<IngestAdmission> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const stalled = new Promise<IngestAdmission>((resolve) => {
+    timer = setTimeout(() => resolve(UNAVAILABLE), SITE_QUOTA_DEADLINE_MS);
+  });
+  const answered = quota
+    .get(quota.idFromName("site"))
+    .fetch(INGEST_QUOTA_URL, { method: "POST" })
+    .then((response) => (response.status === 204 ? ADMITTED : response.status === 429 ? LIMITED : UNAVAILABLE));
+  try {
+    return await Promise.race([answered, stalled]);
+  } finally {
+    clearTimeout(timer);
+  }
 };
 
 export async function takeIngestRateLimit(request: Request): Promise<IngestAdmission> {
@@ -54,7 +67,7 @@ export async function takeIngestRateLimit(request: Request): Promise<IngestAdmis
   if (!limiters) return UNAVAILABLE;
   try {
     if (!(await limiters.perClient.limit({ key })).success) return LIMITED;
-    return (await limiters.total.limit({ key: "ingest:all" })).success ? { ok: true } : LIMITED;
+    return await takeSiteQuota(limiters.site);
   } catch {
     return UNAVAILABLE;
   }
