@@ -12,6 +12,7 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 internal data class CameraFacingNames(val front: String?, val back: String?) {
     val canSwitch: Boolean get() = front != null && back != null
@@ -45,29 +46,39 @@ internal class CameraFacingCatalog(
     var onChanged: (() -> Unit)? = null
 
     private val refreshQueued = AtomicBoolean(false)
+    private val scanSequence = AtomicLong(0)
+    private val storeLock = Any()
+    private var latestStoredScan = 0L
 
     fun refresh() {
         if (!refreshQueued.compareAndSet(false, true)) return
         background.execute {
             refreshQueued.set(false)
-            probeOrNull()?.let { store(it) }
+            val scan = scanSequence.incrementAndGet()
+            probeOrNull()?.let { store(it, scan) }
         }
     }
 
     fun snapshotOrProbe(): CameraFacingNames {
         current?.takeIf { it != CameraFacingNames.none }?.let { return it }
+        val scan = scanSequence.incrementAndGet()
         val names = probeOrNull() ?: return current ?: CameraFacingNames.none
-        store(names)
-        return names
+        return if (store(names, scan)) names else current ?: names
     }
 
     private fun probeOrNull(): CameraFacingNames? =
         try { probe() } catch (_: Throwable) { null }
 
-    private fun store(names: CameraFacingNames) {
-        val previous = current
-        current = names
-        if (previous != names) postToMain(Runnable { onChanged?.invoke() })
+    private fun store(names: CameraFacingNames, scan: Long): Boolean {
+        val changed = synchronized(storeLock) {
+            if (scan < latestStoredScan) return false
+            latestStoredScan = scan
+            val previous = current
+            current = names
+            previous != names
+        }
+        if (changed) postToMain(Runnable { onChanged?.invoke() })
+        return true
     }
 
     companion object {

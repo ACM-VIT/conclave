@@ -119,6 +119,29 @@ class CameraFacingCatalogBridgeTests {
         assertEquals(2, h.changes)
     }
 
+    @Test fun anOlderScanThatFinishesLastNeverRestoresAVanishedCamera() {
+        var nestedScanRan = false
+        lateinit var catalog: CameraFacingCatalog
+        catalog = CameraFacingCatalog(
+            probe = {
+                if (!nestedScanRan) {
+                    nestedScanRan = true
+                    catalog.snapshotOrProbe()
+                    both
+                } else {
+                    frontOnly
+                }
+            },
+            background = { it.run() },
+            postToMain = { it.run() },
+        )
+
+        catalog.refresh()
+
+        assertTrue(nestedScanRan)
+        assertEquals(frontOnly, catalog.current)
+    }
+
     @Test fun snapshotOrProbeProbesOnlyWhenNothingIsCached() {
         val h = Harness(frontOnly)
         assertEquals(frontOnly, h.catalog.snapshotOrProbe())
