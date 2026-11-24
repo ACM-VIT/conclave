@@ -1050,10 +1050,10 @@ export const kickClient = (
   userId: string,
   reason = "Removed by host",
   options?: { io?: SocketIOServer; state?: SfuState },
-): boolean => {
+): string[] => {
   const target = room.getClient(userId);
   if (!target || isSuperAdminClient(target)) {
-    return false;
+    return [];
   }
   // A removed user has to be let in again: drop every grant a rejoin would
   // honour (waiting-room and lock admissions, retained host rights, primary
@@ -1061,27 +1061,23 @@ export const kickClient = (
   // admitted and still a host. Taking back the lock admission also covers
   // what is not a grant on the room: a scheduled invite, a recovery pass.
   const userKey = room.userKeysById.get(userId);
-  const demoted = userKey ? room.removeUser(userKey) : [];
-  for (const client of demoted) {
-    if (client === target) continue;
-    client.socket.emit("hostRemoved", { roomId: room.id, hostUserId: room.getHostUserId() });
+  const seats = userKey
+    ? [...room.userKeysById].filter(([, key]) => key === userKey).map(([seatId]) => seatId)
+    : [userId];
+  if (userKey) room.removeUser(userKey);
+  const removed: string[] = [];
+  for (const seatId of seats) {
+    const seat = room.getClient(seatId);
+    if (!seat || isSuperAdminClient(seat)) continue;
+    seat.socket.emit("kicked", { reason, roomId: room.id });
+    seat.socket.disconnect(true);
+    if (options?.io && options.state) {
+      forceRemoveClientNow({ io: options.io, state: options.state, room, userId: seatId });
+    }
+    removed.push(seatId);
   }
-  target.socket.emit("kicked", { reason, roomId: room.id });
-  target.socket.disconnect(true);
-
-  // When io/state are available, also deterministically stop media now so a
-  // concurrent network drop's disconnect grace cannot keep producers flowing.
-  if (options?.io && options.state) {
-    forceRemoveClientNow({
-      io: options.io,
-      state: options.state,
-      room,
-      userId,
-    });
-    ensureHost(options.io, options.state, room);
-  }
-
-  return true;
+  if (options?.io && options.state) ensureHost(options.io, options.state, room);
+  return removed;
 };
 
 export const closeProducerForMediaKey = (options: {

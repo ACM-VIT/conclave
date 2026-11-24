@@ -146,7 +146,7 @@ describe("super admin socket moderation", () => {
 
   it("protects clients at the shared kick primitive", () => {
     const h = makeHarness();
-    expect(kickClient(h.room, "target")).toBe(false);
+    expect(kickClient(h.room, "target")).toEqual([]);
     expect(h.targetSocket.disconnect).not.toHaveBeenCalled();
   });
 

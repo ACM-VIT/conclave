@@ -1210,7 +1210,7 @@ export const createSfuApp = ({
     }
     const kicked = kickClient(lookup.room, userId, reason, { io, state });
 
-    if (!kicked) {
+    if (kicked.length === 0) {
       res.status(404).json({ error: "User not found" });
       return;
     }
@@ -1409,8 +1409,8 @@ export const createSfuApp = ({
           ...lookup.room.userKeysById.entries(),
         ]) {
           if (key !== userKey) continue;
-          if (kickClient(lookup.room, userId, reason, { io, state })) {
-            kickedUserIds.add(userId);
+          for (const kickedId of kickClient(lookup.room, userId, reason, { io, state })) {
+            kickedUserIds.add(kickedId);
           }
         }
       }
@@ -1493,8 +1493,8 @@ export const createSfuApp = ({
       if (!includeAttendees && client.isWebinarAttendee) {
         continue;
       }
-      if (kickClient(lookup.room, client.id, reason, { io, state })) {
-        kickedUserIds.push(client.id);
+      for (const kickedId of kickClient(lookup.room, client.id, reason, { io, state })) {
+        if (!kickedUserIds.includes(kickedId)) kickedUserIds.push(kickedId);
       }
     }
 

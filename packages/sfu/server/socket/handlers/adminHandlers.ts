@@ -387,7 +387,11 @@ export const registerAdminHandlers = (
       respond(cb, { error: "Invalid user ID" });
       return;
     }
-    if (normalizedTargetId === guard.adminId) {
+    const ownKey = guard.room.userKeysById.get(guard.adminId);
+    if (
+      normalizedTargetId === guard.adminId ||
+      (ownKey !== undefined && guard.room.userKeysById.get(normalizedTargetId) === ownKey)
+    ) {
       respond(cb, { error: "Cannot kick yourself" });
       return;
     }
@@ -402,7 +406,7 @@ export const registerAdminHandlers = (
       io,
       state,
     });
-    if (!kicked) {
+    if (kicked.length === 0) {
       respond(cb, { error: "User not found" });
       return;
     }
@@ -1020,8 +1024,8 @@ export const registerAdminHandlers = (
             ...guard.room.userKeysById.entries(),
           ]) {
             if (key !== userKey) continue;
-            if (kickClient(guard.room, userId, reason, { io, state })) {
-              kickedUserIds.add(userId);
+            for (const kickedId of kickClient(guard.room, userId, reason, { io, state })) {
+              kickedUserIds.add(kickedId);
             }
           }
         }
