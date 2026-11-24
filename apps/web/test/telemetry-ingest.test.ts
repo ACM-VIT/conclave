@@ -266,6 +266,41 @@ describe("forwardCapture", () => {
     expect(await response.json()).toEqual({ status: 1, rejected: Array.from({ length: 196 }, (_, index) => index + 4) });
   });
 
+  it("spends a manifest lookup only on a build whose events it would build: not on events it refuses or already has", async () => {
+    const buildNumber = (index: number) => index.toString(16).padStart(40, "0").replace(/^0/, "b");
+    const numbered = (index: number, properties: Record<string, unknown>, overrides: Record<string, unknown> = {}) => ({
+      ...event({ client_version: buildNumber(index), ...properties }),
+      uuid: `0196f0a1-0000-7000-8000-${String(index).padStart(12, "0")}`,
+      ...overrides,
+    });
+    const forwarded = createForwardedEvents();
+    const delivered = numbered(1, {});
+    await forward(post(JSON.stringify(captureBody([delivered])), "application/json"), ["e"], { forwarded, manifest: async () => new Map() });
+
+    const calls: string[] = [];
+    const sound = Array.from({ length: 4 }, (_, index) => numbered(10 + index, {}));
+    const events = [
+      numbered(2, {}, { event: "not_an_event_we_send" }),
+      numbered(3, {}, { event: "$pageview" }),
+      numbered(4, {}, { timestamp: "2026-11-21T00:00:00.000Z" }),
+      { ...delivered, properties: { ...delivered.properties, client_version: buildNumber(5) } },
+      { ...numbered(6, {}), properties: { ...numbered(6, {}).properties, token: "phc_other_project" } },
+      ...sound,
+    ];
+    const { response, upstream } = await forward(post(JSON.stringify(captureBody(events)), "application/json"), ["e"], {
+      forwarded,
+      manifest: async (version) => {
+        calls.push(version);
+        return new Map();
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(calls).toEqual(sound.map((item) => item.properties.client_version));
+    expect(sentBody(upstream).batch.map((item) => item.uuid)).toEqual(sound.map((item) => item.uuid));
+    expect(await response.json()).toEqual({ status: 1, rejected: [0, 1, 2, 4] });
+  });
+
   it("forwards an event the browser built unchanged, building it again from the schema", async () => {
     const chunk = "https://conclave.acmvit.in/_next/static/chunks/3u-6_1om1fv26.js";
     const captured = {

@@ -286,7 +286,9 @@ build, its `client_version`, once the event itself has passed its checks: an
 event with none names `unknown`, and one whose `client_version` is neither a
 build nor `unknown` is refused on its own. A request may carry up to four
 builds, each with one manifest lookup; an event of any further build is
-refused. A batch holds one tab's events, so a browser's request carries one. A build's chunk manifest is
+refused. Only an event that would be built counts toward those four: one for
+another project, of an event we never send, too old, repeated in the request
+or already forwarded is settled first and never takes a build's place. A batch holds one tab's events, so a browser's request carries one. A build's chunk manifest is
 fetched from our configured site (`lib/site-url.ts`, never the request's Host)
 with `?dpl=<build>` (a version that is not a git sha is never fetched), shared
 by concurrent requests, and kept for 10 minutes, or 1 minute when missing, for

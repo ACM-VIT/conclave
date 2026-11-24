@@ -8,7 +8,7 @@ import {
 } from "./telemetry-privacy";
 import type { IngestAdmission } from "./ingest-rate-limit";
 import { type Answer, answerOf } from "./telemetry-answers";
-import { createOutboundSchemas, MAX_EVENT_AGE_MS, UNKNOWN_BUILD } from "./telemetry-schema";
+import { createOutboundSchemas, isOutboundEventName, MAX_EVENT_AGE_MS, UNKNOWN_BUILD } from "./telemetry-schema";
 
 /**
  * The browser's PostHog traffic goes through /ingest on our own site, so the
@@ -249,6 +249,10 @@ const decodeBody = async (request: Request, url: URL): Promise<unknown> => {
 
 const MAX_BUILDS_PER_REQUEST = 4;
 
+type Pending =
+  | { index: number; known: ForwardedEvent }
+  | { index: number; event: CapturedEvent; build: string };
+
 /**
  * The build an event says it came from: the one its client_version names,
  * UNKNOWN_BUILD when it names none, or null when it names something that is
@@ -417,10 +421,34 @@ const prepareForward = async (request: Request, deps: IngestDeps) => {
     const event = CapturedEvent.safeParse(item);
     return event.success && event.data.properties.token === deps.projectKey ? event.data : null;
   });
-  const builds = [...new Set(events.flatMap((event) => (event ? [buildOf(event)] : [])))]
-    .filter((build) => build !== null)
-    .slice(0, MAX_BUILDS_PER_REQUEST);
-  if (builds.length === 0) throw new Refused(400);
+  const sentAt = clientSentAt(url, decoded);
+  const inRequest = new Set<string>();
+  const rejected: number[] = [];
+  const taken: number[] = [];
+  const pending = events.flatMap((event, index): Pending[] => {
+    const build = event ? buildOf(event) : null;
+    if (!event || build === null) {
+      rejected.push(index);
+      return [];
+    }
+    if (inRequest.has(event.uuid)) return [];
+    inRequest.add(event.uuid);
+    const known = deps.forwarded.get(event.uuid);
+    if (known?.delivered) {
+      taken.push(index);
+      return [];
+    }
+    if (known) return [{ index, known: known.event }];
+    if (!isOutboundEventName(event.event) || !fresh(event.timestamp, sentAt, receivedAt)) {
+      rejected.push(index);
+      return [];
+    }
+    return [{ index, event, build }];
+  });
+  const builds = [...new Set(pending.flatMap((item) => ("build" in item ? [item.build] : [])))].slice(
+    0,
+    MAX_BUILDS_PER_REQUEST,
+  );
   const contexts = new Map(
     await Promise.all(
       builds.map(async (build) => {
@@ -430,37 +458,16 @@ const prepareForward = async (request: Request, deps: IngestDeps) => {
       }),
     ),
   );
-  const sentAt = clientSentAt(url, decoded);
-  const inRequest = new Set<string>();
-  const rejected: number[] = [];
-  const taken: number[] = [];
-  const batch = events.flatMap((event, index) => {
-    const build = event ? buildOf(event) : null;
-    const shaped = build === null ? undefined : contexts.get(build);
-    if (!event || !shaped) {
-      rejected.push(index);
-      return [];
-    }
-    const { context, schemas } = shaped;
-    const { uuid } = event;
-    if (inRequest.has(uuid)) return [];
-    inRequest.add(uuid);
-    // A retry, or an event sent again, goes exactly as it went the first
-    // time, and not at all once PostHog has it.
-    const known = deps.forwarded.get(uuid);
-    if (known?.delivered) {
-      taken.push(index);
-      return [];
-    }
-    if (known) return [{ index, event: known.event }];
+  const batch = pending.flatMap((item) => {
+    if ("known" in item) return [{ index: item.index, event: item.known }];
+    const { index, event, build } = item;
+    const shaped = contexts.get(build);
     const built =
-      fresh(event.timestamp, sentAt, receivedAt) &&
+      shaped &&
       buildOutboundEvent(
-        { uuid, event: event.event, properties: event.properties },
-        // Our fields are the event's own: the browser took them from the
-        // capture's payload, and nothing here counts as stored.
-        { ...context, payload: event.properties, storedKeys: new Set(), siteOrigin: deps.siteOrigin },
-        schemas,
+        { uuid: event.uuid, event: event.event, properties: event.properties },
+        { ...shaped.context, payload: event.properties, storedKeys: new Set(), siteOrigin: deps.siteOrigin },
+        shaped.schemas,
       );
     if (!built) {
       rejected.push(index);
