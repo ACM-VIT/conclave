@@ -625,6 +625,7 @@ export interface MeetError {
     | "CONNECTION_FAILED"
     | "MEDIA_ERROR"
     | "TRANSPORT_ERROR"
+    | "JOIN_REJECTED"
     | "UNKNOWN";
   message: string;
   recoverable: boolean;

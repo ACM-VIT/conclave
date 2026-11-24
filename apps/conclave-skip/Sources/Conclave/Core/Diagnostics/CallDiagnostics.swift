@@ -189,6 +189,7 @@ final class CallDiagnostics {
                 store.launchHousekeeping(nowMillis: now)
             }.value
             self.adoptPrevious(previous)
+            CrashReporting.scheduleUpload(diagnostics: self)
         }
     }
 

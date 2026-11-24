@@ -561,7 +561,7 @@ struct SYS15DiagnosticsTests {
                 let sections = SettingsRowPolicy.sections(scope: scope, isAttendee: false, isHost: false, platform: platform,
                                                           capabilities: capabilities)
                 let about = sections.first { $0.section == .about }?.rows ?? []
-                #expect(about == [.privacy, .exportDiagnostics, .version], "\(scope) \(platform)")
+                #expect(about == [.privacy, .crashReports, .exportDiagnostics, .version], "\(scope) \(platform)")
             }
         }
         #expect(DiagnosticsReadout.listenersKey == "sys.diagListeners" && DiagnosticsReadout.bufferKey == "sys.diagBuffer")
