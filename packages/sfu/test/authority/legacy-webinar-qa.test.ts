@@ -771,6 +771,66 @@ describe("a webinar turned off and back on at once", () => {
   });
 });
 
+describe("a webinar turned off with a question still waiting", () => {
+  const TEXT = "Is the roadmap public yet?";
+  const everyFrame = (socket: { onAny: (listener: (event: string, ...args: unknown[]) => void) => void }) => {
+    const seen: string[] = [];
+    socket.onAny((event, ...args) => seen.push(JSON.stringify([event, ...args])));
+    return seen;
+  };
+  const turnOff = async (stack: Stack, withRuntime: boolean) => {
+    const host = await oldClient(stack, asha);
+    const panelist = await oldClient(stack, omar);
+    const panelistFrames = everyFrame(panelist.socket);
+    const newPanelist = withRuntime ? await open(stack, { ...omar, session: "o2" }, qaContract) : null;
+    const newPanelistFrames = newPanelist ? everyFrame(newPanelist.socket) : [];
+    const newHost = withRuntime ? await open(stack, { ...asha, session: "h2" }, qaContract) : null;
+    const attendee = await oldClient(stack, vik, asAttendee);
+    const asked = await attendee.submit(TEXT);
+    const id = asked.id ?? "";
+    await until(() => host.entries.has(id), "the host sees the question");
+    await wait(150);
+    const seenBeforeTheSwitch = [...panelistFrames, ...newPanelistFrames].filter((frame) => frame.includes(TEXT));
+
+    const off = await ask<{ success?: boolean }>(host.socket, "webinar:updateConfig", { enabled: false });
+    await wait(400);
+    const seenAfterTheSwitch = [...panelistFrames, ...newPanelistFrames].filter((frame) => frame.includes(TEXT));
+    return { host, newHost, newPanelist, id, off, seenBeforeTheSwitch, seenAfterTheSwitch };
+  };
+
+  it("keeps an attendee's waiting question from the panel when the room runs the Q&A app", async () => {
+    const stack = await startWebinar();
+    const { newHost, newPanelist, id, off, seenBeforeTheSwitch, seenAfterTheSwitch } = await turnOff(stack, true);
+    const hostStillSees = field(row(newHost!, "questions", id), "text");
+    await newHost!.session.act("moderate", { id, action: "answered", answerText: "Next week." });
+    await until(() => row(newPanelist!, "questions", id) !== null, "the panel sees it once it is answered");
+
+    expect(off.success).toBe(true);
+    expect(seenBeforeTheSwitch).toEqual([]);
+    expect(seenAfterTheSwitch).toEqual([]);
+    expect(hostStillSees).toBe(TEXT);
+    expect(field(row(newPanelist!, "questions", id), "status")).toBe("answered");
+  });
+
+  it("keeps an attendee's waiting question from the panel on a server without the runtime", async () => {
+    const stack = await start(null);
+    const webinar = getOrCreateWebinarRoomConfig(stack.state.webinarConfigs, stack.room.channelId);
+    webinar.enabled = true;
+    webinar.publicAccess = true;
+    setCustomWebinarLinkSlug({
+      webinarConfig: webinar,
+      webinarLinks: stack.state.webinarLinks,
+      room: stack.room,
+      slug: SLUG,
+    });
+    const { off, seenBeforeTheSwitch, seenAfterTheSwitch } = await turnOff(stack, false);
+
+    expect(off.success).toBe(true);
+    expect(seenBeforeTheSwitch).toEqual([]);
+    expect(seenAfterTheSwitch).toEqual([]);
+  });
+});
+
 describe("webinar Q&A on a server without the runtime", () => {
   /** The room's webinar link, so attendees can come in by it. */
   const linkRoom = (stack: Stack) =>

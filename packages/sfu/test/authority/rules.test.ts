@@ -333,9 +333,31 @@ describe("Q&A", () => {
     webinar.setWebinar(false);
     await webinar.deliver();
     expect(
+      [panelist.row("questions", qid), panelist.row("votes", qid), at(stageHost.row("questions", qid), "status")],
+      "turning webinar mode off keeps a question asked in the webinar from the room while it waits",
+    ).toEqual([null, null, "pending"]);
+
+    await stageHost.act("moderate", { id: qid, action: "answering" });
+    await webinar.deliver();
+    expect(
       at(panelist.row("questions", qid), "status"),
-      "turning webinar mode off republishes pending questions to everyone",
-    ).toBe("pending");
+      "answering it is what makes it public",
+    ).toBe("answering");
+
+    const member = await webinar.open(ravi, qaContract);
+    const inTheMeeting = await panelist.act("ask", { text: "Asked in the meeting" });
+    const mid = inTheMeeting.ok ? (at(inTheMeeting.value, "id") as string) : "";
+    await webinar.deliver();
+    const seenInTheMeeting = at(member.row("questions", mid), "status");
+    webinar.setWebinar(true, true);
+    await webinar.deliver();
+    const seenInTheWebinar = [member.row("questions", mid), otherViewer.row("questions", mid)];
+    webinar.setWebinar(false);
+    await webinar.deliver();
+    expect(
+      [seenInTheMeeting, seenInTheWebinar, at(member.row("questions", mid), "status")],
+      "a question asked in the meeting waits unseen while the room is a webinar, and comes back after",
+    ).toEqual(["pending", [null, null], "pending"]);
     expect(await webinar.converged(), "every tab's patched copy matches the server").toBe(true);
   });
 });
