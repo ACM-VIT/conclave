@@ -141,6 +141,26 @@ fixed("Neon 6: an instance whose SFU_INSTANCE_ID is not its service name is show
   }),
 );
 
+fixed("a call that reaches a drained candidate pauses the deploy, and the next run promotes the build once the call ends", () => {
+  const callOnce = (sfu) => {
+    if (sfu.image !== TARGET || !sfu.bootDrained || sfu.called) return;
+    sfu.called = true;
+    sfu.rooms = 1;
+  };
+  return withStack({ "sfu-a": { onRecreate: callOnce }, "sfu-b": {} }, async (sfus, shared) => {
+    const paused = await deploy(sfus, { env: { ...shared.env, ...ONLY_A } });
+    assert.equal(paused.code, 3, paused.output);
+    assert.equal((await journal(shared, "sfu-a")).phase, "passed");
+    assert.equal(sfus["sfu-a"].draining, true);
+    sfus["sfu-a"].rooms = 0;
+    const finished = await deploy(sfus, { env: { ...shared.env, ...ONLY_A } });
+    assert.equal(finished.code, 0, finished.output);
+    assertServes(sfus["sfu-a"], TARGET);
+    assert.equal((await journal(shared, "sfu-a")).phase, "idle");
+    assert.deepEqual(cutRooms(sfus), cutRooms(sfus).map(() => 0));
+  });
+});
+
 fixed("fuzz: a public route that is down when the deploy first looks still leaves the image the instance served on to go back to", () =>
   withStack({ "sfu-a": { publicRoute: true } }, async (sfus, shared) => {
     sfus["sfu-a"].publicFailures = 1;
@@ -173,6 +193,7 @@ const makePlan = (seed) => {
     canaryFails: chance(0.3),
     promotedExits: chance(0.15),
     candidateExits: chance(0.1),
+    callOnCandidate: chance(0.15),
     routeDownAfterPromotion: chance(0.2) ? pick([400, 1500, 4000]) : 0,
     statusOutages: Array.from({ length: pick([0, 0, 1, 2]) }, window),
     routeOutages: Array.from({ length: pick([0, 0, 1]) }, window),
@@ -236,11 +257,17 @@ const runPlan = async (plan) => {
     };
     const done = new Set();
     const once = (key) => !done.has(key) && done.add(key);
+    const calls = [];
+    const generation = (sfu) => sfu.recreates.length + sfu.stops.length;
     let faults = true;
     hooks.onRecreate = (sfu) => {
       if (!faults) return;
       if (sfu.image === TARGET && !sfu.bootDrained && plan.promotedExits && once("promotedExits")) sfu.container = "exited";
       if (sfu.image === TARGET && sfu.bootDrained && plan.candidateExits && once("candidateExits")) sfu.container = "exited";
+      if (sfu.image === TARGET && sfu.bootDrained && sfu.container === "running" && plan.callOnCandidate && once("callOnCandidate")) {
+        sfu.rooms += 1;
+        calls.push({ sfu, generation: generation(sfu), endAt: Date.now() + plan.callMs });
+      }
       if (sfu.image === TARGET && !sfu.bootDrained && plan.routeDownAfterPromotion && once("routeDown")) {
         sfu.publicDown = true;
         later(plan.routeDownAfterPromotion, () => (sfu.publicDown = false));
@@ -263,8 +290,6 @@ const runPlan = async (plan) => {
         later(w.ms, () => (sfus[w.who][field] = !value));
       });
     }
-    const calls = [];
-    const generation = (sfu) => sfu.recreates.length + sfu.stops.length;
     const tick = setInterval(() => {
       const now = Date.now();
       for (const sfu of Object.values(sfus)) {
