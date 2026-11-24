@@ -34,6 +34,14 @@ const settle = async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
 };
 
+const gate = () => {
+  let release = () => {};
+  const wait = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { wait, release: () => release() };
+};
+
 const sfu = () => {
   const broadcast = vi.fn();
   let onConnection: ((socket: Socket) => void) | null = null;
@@ -57,11 +65,39 @@ const sfu = () => {
     rtpCapabilities: { codecs: [], headerExtensions: [] },
     close: vi.fn(),
   } as unknown as Router;
-  state.workers = [{ pid: 1, closed: false, createRouter: async () => router } as unknown as Worker];
+  const routerHolds: Array<Promise<void>> = [];
+  state.workers = [
+    {
+      pid: 1,
+      closed: false,
+      createRouter: async () => {
+        const hold = routerHolds.shift();
+        if (hold) await hold;
+        return router;
+      },
+    } as unknown as Worker,
+  ];
+  const holdRoomCreation = () => {
+    const held = gate();
+    routerHolds.push(held.wait);
+    return held.release;
+  };
   registerConnectionHandlers(io, state);
+  const renewHolds: Array<Promise<void>> = [];
+  const renew = state.roomRegistry.renewRoom.bind(state.roomRegistry);
+  state.roomRegistry.renewRoom = async (input) => {
+    const hold = renewHolds.shift();
+    if (hold) await hold;
+    return renew(input);
+  };
+  const holdNextRenew = () => {
+    const held = gate();
+    renewHolds.push(held.wait);
+    return held.release;
+  };
 
   let sockets = 0;
-  const connect = (user: SfuAuthPayload) => {
+  const connect = (user: SfuAuthPayload, options: { channelJoin?: () => Promise<void> } = {}) => {
     const handlers = new Map<string, Listener>();
     const socket = {
       id: `socket-${(sockets += 1)}`,
@@ -73,7 +109,7 @@ const sfu = () => {
         return socket;
       },
       emit: vi.fn(),
-      join: vi.fn(async () => {}),
+      join: vi.fn(() => options.channelJoin?.() ?? Promise.resolve()),
       leave: vi.fn(async () => {}),
       to: () => ({ emit: vi.fn() }),
       disconnect: vi.fn(() => {
@@ -91,9 +127,14 @@ const sfu = () => {
     };
     const join = (roomId = "room", payload: Record<string, unknown> = {}) =>
       ask("joinRoom", { roomId, sessionId: user.sessionId, ...payload });
-    return { socket: socket as unknown as Socket & { connected: boolean }, handlers, ask, join };
+    const startJoin = (roomId = "room") => {
+      const ack = vi.fn();
+      handlers.get("joinRoom")?.({ roomId, sessionId: user.sessionId }, ack);
+      return ack;
+    };
+    return { socket: socket as unknown as Socket & { connected: boolean }, handlers, ask, join, startJoin };
   };
-  return { state, broadcast, connect, room: () => state.rooms.get("conclave:room")! };
+  return { state, broadcast, connect, holdNextRenew, holdRoomCreation, room: () => state.rooms.get("conclave:room")! };
 };
 
 const stableView = (room: Room) => ({
@@ -228,5 +269,110 @@ describe("a seat that another socket took over (Neon)", () => {
     expect(room().getClient("guest-gp_PPPPPPPPPPPPPPPPPPPPPP#participant")).toBeInstanceOf(Admin);
     expect((await hostTab.ask("lockRoom", true))?.success).not.toBe(true);
     expect(room().isLocked).toBe(false);
+  });
+});
+
+const seeded = (seed: number) => {
+  let value = seed >>> 0;
+  return () => {
+    value = (value + 0x6d2b79f5) >>> 0;
+    let mixed = Math.imul(value ^ (value >>> 15), 1 | value);
+    mixed ^= mixed + Math.imul(mixed ^ (mixed >>> 7), 61 | mixed);
+    return ((mixed ^ (mixed >>> 14)) >>> 0) / 4294967296;
+  };
+};
+
+describe("joins for one tab that overlap (Greptile)", () => {
+  const liveSockets = (room: Room) =>
+    [...room.clients.values()].filter((client) => (client.socket as unknown as { connected: boolean }).connected);
+
+  it("does not let an older join that waited on the room's lease take the seat back from a newer socket", async () => {
+    const { connect, holdNextRenew, room } = sfu();
+    await connect(host).join();
+    const first = connect(coHost);
+    expect(await first.join()).toMatchObject({ status: "joined" });
+    const release = holdNextRenew();
+    const olderJoin = first.startJoin();
+    await settle();
+
+    const second = connect(coHost);
+    expect(await second.join()).toMatchObject({ status: "joined" });
+    expect(first.socket.connected).toBe(false);
+    release();
+    await settle();
+
+    expect(room().getClient(seatOf(coHost))?.socket).toBe(second.socket);
+    expect(second.socket.connected).toBe(true);
+    expect(liveSockets(room()).length).toBe(room().clients.size);
+    expect(olderJoin.mock.calls[0]?.[0]).not.toMatchObject({ status: "joined" });
+  });
+
+  it.each(
+    [2, 3].flatMap((count) => [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((seed) => [count, seed] as const)),
+  )("leaves one live seat on a connected socket when joins of one tab from %i sockets interleave (seed %i)", async (count, seed) => {
+    const random = seeded(seed);
+    const { connect, holdNextRenew, room } = sfu();
+    await connect(host).join();
+
+    const releases: Array<() => void> = [];
+    const tabs: Array<ReturnType<typeof connect>> = [];
+    const attempts = count + 1 + Math.floor(random() * 2);
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      let tab = tabs[Math.floor(random() * tabs.length)];
+      if (attempt < count || !tab) {
+        const holds: Array<Promise<void>> = [];
+        tab = connect(coHost, { channelJoin: () => holds.shift() ?? Promise.resolve() });
+        (tab as { holds?: Array<Promise<void>> }).holds = holds;
+        tabs.push(tab);
+      }
+      if (!tab.socket.connected) continue;
+      if (random() < 0.7) releases.push(holdNextRenew());
+      if (random() < 0.7) {
+        const channelJoin = gate();
+        (tab as { holds?: Array<Promise<void>> }).holds!.push(channelJoin.wait);
+        releases.push(channelJoin.release);
+      }
+      tab.startJoin();
+      await settle();
+      if (random() < 0.3 && releases.length > 0) {
+        releases.splice(Math.floor(random() * releases.length), 1)[0]();
+        await settle();
+      }
+    }
+    for (let index = releases.length - 1; index > 0; index -= 1) {
+      const swap = Math.floor(random() * (index + 1));
+      [releases[index], releases[swap]] = [releases[swap], releases[index]];
+    }
+    for (const release of releases) {
+      release();
+      await settle();
+    }
+    await settle();
+
+    const seat = room().getClient(seatOf(coHost));
+    expect(seat).toBeDefined();
+    expect((seat!.socket as unknown as { connected: boolean }).connected).toBe(true);
+    expect(liveSockets(room()).length).toBe(room().clients.size);
+  });
+
+  it("keeps the host the host when its tab joins again while the room it is creating is still being made", async () => {
+    const { connect, holdRoomCreation, room } = sfu();
+    const release = holdRoomCreation();
+    const first = connect(host);
+    const creating = first.startJoin();
+    await settle();
+    const second = connect(host);
+    const again = second.startJoin();
+    await settle();
+
+    release();
+    await vi.waitFor(() => expect(again).toHaveBeenCalled(), { timeout: 2000 });
+    await settle();
+
+    expect(again.mock.calls[0]?.[0]).toMatchObject({ status: "joined" });
+    expect(creating.mock.calls[0]?.[0]).not.toMatchObject({ status: "joined" });
+    expect(room().getClient(seatOf(host))?.socket).toBe(second.socket);
+    expect(room().getClient(seatOf(host))).toBeInstanceOf(Admin);
+    expect(room().getHostUserId()).toBe(seatOf(host));
   });
 });
