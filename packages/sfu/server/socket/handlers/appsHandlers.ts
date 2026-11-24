@@ -18,12 +18,14 @@ import type {
   AppsUpdateData,
 } from "../../../types.js";
 import { Admin } from "../../../config/classes/Admin.js";
+import type { Room } from "../../../config/classes/Room.js";
 import {
   MAX_APP_DOC_BYTES,
+  type AppAwarenessRemoval,
   type AppSyncMark,
   type DocumentExecutor,
   type RoomApps,
-  type StageCommandResult,
+  type StageCommand,
   type WriteRefusal,
 } from "../../roomApps.js";
 import type { WriteOutcome } from "../../roomAppsScheduler.js";
@@ -161,6 +163,26 @@ const getRoomAppsState = (context: ConnectionContext): AppsState => {
     };
   }
   return { ...context.currentRoom.apps.snapshot(), roomId: context.currentRoom.id };
+};
+
+type SyncRequest =
+  | { ok: true; appId: string; live: Y.Doc; stateVector: Uint8Array }
+  | { ok: false; error: string };
+
+const readSyncRequest = (apps: RoomApps, data: AppsSyncData | undefined): SyncRequest => {
+  const appId = normalizeAppId(data?.appId);
+  if (!appId) return { ok: false, error: "Invalid app id" };
+  const live = apps.liveDoc(appId);
+  if (!live) return { ok: false, error: "App not active" };
+  const stateVector = toUint8Array(data?.syncMessage);
+  if (!stateVector) return { ok: false, error: "Invalid sync payload" };
+  if (stateVector.length > MAX_APPS_SYNC_BYTES) return { ok: false, error: "Sync payload too large" };
+  try {
+    Y.decodeStateVector(stateVector);
+  } catch {
+    return { ok: false, error: "Invalid sync payload" };
+  }
+  return { ok: true, appId, live, stateVector };
 };
 
 const retryLater = (error: string, retryAfterMs: number): AppsSyncError => ({
@@ -305,9 +327,8 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
   const runStageCommand = (
     expectedRevision: unknown,
     deniedError: string,
-    command: (apps: RoomApps, expectedRevision: number | undefined) => StageCommandResult,
+    command: StageCommand,
     reply: (outcome: StageOutcome) => void,
-    afterHeld: boolean,
   ): void => {
     if (!context.currentRoom || !context.currentClient) {
       reply({ success: false, error: "Not in a room" });
@@ -328,36 +349,62 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     }
     const room = context.currentRoom;
     const { apps } = room;
+    const plan = apps.plan(command, revision);
+    if (!plan.ok) {
+      reply({ success: false, ...STAGE_COMMAND_ERRORS[plan.reason] });
+      return;
+    }
+    if (!plan.changed) {
+      reply({ success: true, state: { ...apps.snapshot(), roomId: room.id } });
+      return;
+    }
     const execute = (): void => {
-      const result = command(apps, revision);
+      const result = apps.apply(command, revision);
       if (!result.ok) {
         reply({ success: false, ...STAGE_COMMAND_ERRORS[result.reason] });
         return;
       }
-      if (result.awarenessRemoval) {
-        io.to(room.channelId).emit("apps:awareness", {
-          appId: result.awarenessRemoval.appId,
-          awarenessUpdate: result.awarenessRemoval.awarenessUpdate,
-        } satisfies AppsAwarenessData);
-      }
       const state: AppsState = { ...apps.snapshot(), roomId: room.id };
-      if (result.changed) {
-        io.to(room.channelId).emit("apps:state", state);
-        for (const follow of [...followersOf(apps)]) {
-          try {
-            follow();
-          } catch (error) {
-            Logger.warn("[Apps] Following a stage change failed", error);
-          }
-        }
-      }
+      if (result.changed) announceStageChange(room, command, result.awarenessRemoval, state);
       reply({ success: true, state });
     };
-    if (afterHeld) {
-      apps.scheduler.afterHeld(apps.activeAppId, execute, () => reply({ success: false, error: "Room closed" }));
+    if (command.kind === "present" || command.kind === "close") {
+      apps.scheduler.afterHeld(apps.activeAppId, {
+        changes: () => {
+          const next = apps.plan(command, revision);
+          return next.ok && next.changed;
+        },
+        run: execute,
+        cancel: () => reply({ success: false, error: "Room closed" }),
+      });
     } else {
       execute();
     }
+  };
+  const announceStageChange = (
+    room: Room,
+    command: StageCommand,
+    awarenessRemoval: AppAwarenessRemoval | null,
+    state: AppsState,
+  ): void => {
+    const { apps } = room;
+    if (awarenessRemoval) {
+      io.to(room.channelId).emit("apps:awareness", {
+        appId: awarenessRemoval.appId,
+        awarenessUpdate: awarenessRemoval.awarenessUpdate,
+      } satisfies AppsAwarenessData);
+    }
+    io.to(room.channelId).emit("apps:state", state);
+    for (const follow of [...followersOf(apps)]) {
+      try {
+        follow();
+      } catch (error) {
+        Logger.warn("[Apps] Following a stage change failed", error);
+      }
+    }
+    if (command.kind === "discard") apps.scheduler.purge((write) => write.appId === command.appId, "not-live");
+    if (command.kind === "lock" && command.locked) apps.scheduler.purge((write) => !write.host, "locked");
+    apps.scheduler.wake();
   };
 
   socket.on("disconnecting", endRestart);
@@ -377,7 +424,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       runStageCommand(
         data?.expectedRevision,
         "Only admins can open apps",
-        (apps, revision) => apps.present(appId, revision),
+        { kind: "present", appId },
         (outcome) =>
           respond(
             callback,
@@ -389,7 +436,6 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
                 }
               : outcome,
           ),
-        true,
       );
     }
   );
@@ -402,13 +448,12 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     runStageCommand(
       data?.expectedRevision,
       "Only admins can close apps",
-      (apps, revision) => apps.close(revision),
+      { kind: "close" },
       (outcome) =>
         respond<AppsCloseResponse>(
           callback,
           outcome.success ? { success: true, revision: outcome.state.revision } : outcome,
         ),
-      true,
     );
   });
 
@@ -423,17 +468,12 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       runStageCommand(
         data?.expectedRevision,
         "Only admins can clear apps",
-        (apps, revision) => {
-          const result = apps.discard(appId, revision);
-          if (result.ok) apps.scheduler.purge((write) => write.appId === appId, "not-live");
-          return result;
-        },
+        { kind: "discard", appId },
         (outcome) =>
           respond(
             callback,
             outcome.success ? { success: true, revision: outcome.state.revision } : outcome,
           ),
-        false,
       );
     }
   );
@@ -449,17 +489,12 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       runStageCommand(
         data.expectedRevision,
         "Only admins can lock apps",
-        (apps, revision) => {
-          const result = apps.setLocked(locked, revision);
-          if (result.ok && locked) apps.scheduler.purge((write) => !write.host, "locked");
-          return result;
-        },
+        { kind: "lock", locked },
         (outcome) =>
           respond(
             callback,
             outcome.success ? { success: true, locked: outcome.state.locked } : outcome,
           ),
-        false,
       );
     }
   );
@@ -473,37 +508,18 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       }
       const { apps } = context.currentRoom;
       const current = scopeFor(apps);
-      const appId = normalizeAppId(data?.appId);
-      const live = appId ? apps.liveDoc(appId) : null;
-      const freeSync = live !== null && current.freeSyncRevision !== apps.stageRevision;
+      const request = readSyncRequest(apps, data);
+      const freeSync = request.ok && current.freeSyncRevision !== apps.stageRevision;
       if (!freeSync && !takeToken(socket, "apps:yjs:sync", RATE_LIMITS.appsYjsSync)) {
         respond(callback, retryLater("Too many app sync requests", 500));
         return;
       }
+      if (!request.ok) {
+        respond(callback, { error: request.error });
+        return;
+      }
       if (freeSync) current.freeSyncRevision = apps.stageRevision;
-      if (!appId) {
-        respond(callback, { error: "Invalid app id" });
-        return;
-      }
-      if (!live) {
-        respond(callback, { error: "App not active" });
-        return;
-      }
-      const stateVector = toUint8Array(data.syncMessage);
-      if (!stateVector) {
-        respond(callback, { error: "Invalid sync payload" });
-        return;
-      }
-      if (stateVector.length > MAX_APPS_SYNC_BYTES) {
-        respond(callback, { error: "Sync payload too large" });
-        return;
-      }
-      try {
-        Y.decodeStateVector(stateVector);
-      } catch {
-        respond(callback, { error: "Invalid sync payload" });
-        return;
-      }
+      const { appId, live, stateVector } = request;
       const update = Y.encodeStateAsUpdate(live, stateVector);
       if (update.length > MAX_APP_DOC_BYTES) {
         respond(callback, { error: "App document too large to sync" });
@@ -576,7 +592,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       return;
     }
     const stage = apps.snapshot();
-    if (stage.activeAppId !== appId || stage.docGeneration === null || apps.scheduler.frozen(appId)) {
+    if (stage.activeAppId !== appId || stage.docGeneration === null) {
       refuse(admission, "not-live");
       return;
     }

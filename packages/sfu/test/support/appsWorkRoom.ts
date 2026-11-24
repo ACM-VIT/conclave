@@ -204,15 +204,15 @@ export const makeWorkRooms = () => {
     const replicaIdNow = () => (options.legacy ? undefined : `copy-${replica}`);
     const sendUpdate = (update: Uint8Array, replicaId: string | undefined = replicaIdNow()) =>
       fire("apps:yjs:update", { appId: BOARD, update, replicaId });
-    const command = (kind: Command["kind"], appId?: string) => {
+    const command = (kind: Command["kind"], appId?: string, expectedRevision?: number) => {
       const record: Command = { peer: id, kind, appId, sentAt: Date.now(), ackedAt: null, reply: undefined };
       commands.push(record);
       const done = (reply: unknown) => {
         record.ackedAt = Date.now();
         record.reply = reply;
       };
-      if (kind === "lock" || kind === "unlock") fire("apps:lock", { locked: kind === "lock" }, done);
-      else fire(`apps:${kind}`, { appId }, done);
+      if (kind === "lock" || kind === "unlock") fire("apps:lock", { locked: kind === "lock", expectedRevision }, done);
+      else fire(`apps:${kind}`, { appId, expectedRevision }, done);
       return record;
     };
     const peer = {

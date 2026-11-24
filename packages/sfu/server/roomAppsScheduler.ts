@@ -25,13 +25,13 @@ export type SlotWrite = {
 
 type Slot = { first: SlotWrite; updates: Uint8Array[]; bytes: number; admittedAt: number };
 
-type Barrier = {
-  appId: string | null;
-  senders: Set<Socket>;
-  deadline: number;
-  run: () => void;
-  cancel: () => void;
+export type HeldCommand = {
+  readonly changes: () => boolean;
+  readonly run: () => void;
+  readonly cancel: () => void;
 };
+
+type Barrier = { command: HeldCommand; senders: Set<Socket>; deadline: number };
 
 const settle = (label: string, task: () => void): void => {
   try {
@@ -50,10 +50,6 @@ export class RoomAppsScheduler {
 
   get isClosed(): boolean {
     return this.closed;
-  }
-
-  frozen(appId: string): boolean {
-    return this.barriers.some((barrier) => barrier.appId === appId);
   }
 
   slotSummaries(): { updates: number; bytes: number; age: number }[] {
@@ -107,14 +103,18 @@ export class RoomAppsScheduler {
     this.pump();
   }
 
-  afterHeld(appId: string | null, run: () => void, cancel: () => void): void {
+  afterHeld(appId: string | null, command: HeldCommand): void {
     if (this.closed) {
-      settle("App stage command", cancel);
+      settle("App stage command", command.cancel);
       return;
     }
     const senders = new Set<Socket>();
     for (const [sender, slot] of this.slots) if (appId !== null && slot.first.appId === appId) senders.add(sender);
-    this.barriers.push({ appId, senders, deadline: Date.now() + BARRIER_DEADLINE_MS, run, cancel });
+    this.barriers.push({ command, senders, deadline: Date.now() + BARRIER_DEADLINE_MS });
+    this.pump();
+  }
+
+  wake(): void {
     this.pump();
   }
 
@@ -127,7 +127,7 @@ export class RoomAppsScheduler {
     this.slots.clear();
     this.barriers = [];
     for (const slot of slots) settle("App update", () => slot.first.finish("not-live", null));
-    for (const barrier of barriers) settle("App stage command", barrier.cancel);
+    for (const barrier of barriers) settle("App stage command", barrier.command.cancel);
   }
 
   private execute(first: SlotWrite, updates: Uint8Array[]): void {
@@ -163,16 +163,22 @@ export class RoomAppsScheduler {
       }
       while (this.barriers.length > 0 && !this.closed) {
         const [head] = this.barriers;
-        for (const sender of [...head.senders]) if (!this.slots.has(sender)) head.senders.delete(sender);
-        if (head.senders.size > 0 && Date.now() < head.deadline) break;
-        for (const sender of head.senders) {
-          const slot = this.slots.get(sender);
-          if (!slot) continue;
-          this.slots.delete(sender);
-          settle("App update", () => slot.first.finish("rate-limited", null));
+        let changes = false;
+        settle("App stage command", () => {
+          changes = head.command.changes();
+        });
+        if (changes) {
+          for (const sender of [...head.senders]) if (!this.slots.has(sender)) head.senders.delete(sender);
+          if (head.senders.size > 0 && Date.now() < head.deadline) break;
+          for (const sender of head.senders) {
+            const slot = this.slots.get(sender);
+            if (!slot) continue;
+            this.slots.delete(sender);
+            settle("App update", () => slot.first.finish("rate-limited", null));
+          }
         }
         this.barriers.shift();
-        settle("App stage command", head.run);
+        settle("App stage command", head.command.run);
       }
     } finally {
       this.pumping = false;

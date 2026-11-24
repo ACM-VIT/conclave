@@ -71,6 +71,14 @@ export type AppsSnapshot = {
   docGeneration: number | null;
 };
 
+export type StageCommand =
+  | { readonly kind: "present"; readonly appId: string }
+  | { readonly kind: "close" }
+  | { readonly kind: "discard"; readonly appId: string }
+  | { readonly kind: "lock"; readonly locked: boolean };
+
+export type StagePlan = { ok: true; changed: boolean } | { ok: false; reason: "stale" | "full" };
+
 export type StageCommandResult =
   | { ok: true; changed: boolean; awarenessRemoval: AppAwarenessRemoval | null }
   | { ok: false; reason: "stale" | "full" };
@@ -370,16 +378,59 @@ export class RoomApps {
     return this.docs.get(appId)?.doc ?? null;
   }
 
-  present(appId: string, expectedRevision?: number): StageCommandResult {
-    if (this.stage.activeAppId === appId) {
-      return { ok: true, changed: false, awarenessRemoval: null };
-    }
+  plan(command: StageCommand, expectedRevision?: number): StagePlan {
+    const changes =
+      command.kind === "present"
+        ? this.stage.activeAppId !== command.appId
+        : command.kind === "close"
+          ? this.stage.activeAppId !== null
+          : command.kind === "discard"
+            ? this.docs.has(command.appId)
+            : this.stage.locked !== command.locked;
+    if (!changes) return { ok: true, changed: false };
     if (expectedRevision !== undefined && expectedRevision !== this.revision) {
       return { ok: false, reason: "stale" };
     }
-    if (!this.docs.has(appId) && !this.canAdmitDoc()) {
+    if (command.kind === "present" && !this.docs.has(command.appId) && !this.canAdmitDoc()) {
       return { ok: false, reason: "full" };
     }
+    return { ok: true, changed: true };
+  }
+
+  apply(command: StageCommand, expectedRevision?: number): StageCommandResult {
+    const plan = this.plan(command, expectedRevision);
+    if (!plan.ok) return plan;
+    if (!plan.changed) return { ok: true, changed: false, awarenessRemoval: null };
+    const awarenessRemoval =
+      command.kind === "present"
+        ? this.showApp(command.appId)
+        : command.kind === "close"
+          ? this.closeStage()
+          : command.kind === "discard"
+            ? this.destroyApp(command.appId)
+            : this.lockStage(command.locked);
+    this.revision += 1;
+    return { ok: true, changed: true, awarenessRemoval };
+  }
+
+  present(appId: string, expectedRevision?: number): StageCommandResult {
+    return this.apply({ kind: "present", appId }, expectedRevision);
+  }
+
+  close(expectedRevision?: number): StageCommandResult {
+    return this.apply({ kind: "close" }, expectedRevision);
+  }
+
+  /** Destroys an app's document. Discarding the presented app closes the stage. */
+  discard(appId: string, expectedRevision?: number): StageCommandResult {
+    return this.apply({ kind: "discard", appId }, expectedRevision);
+  }
+
+  setLocked(locked: boolean, expectedRevision?: number): StageCommandResult {
+    return this.apply({ kind: "lock", locked }, expectedRevision);
+  }
+
+  private showApp(appId: string): AppAwarenessRemoval | null {
     const awarenessRemoval = this.leaveStage();
     if (!this.docs.has(appId)) {
       this.generations += 1;
@@ -392,32 +443,17 @@ export class RoomApps {
     }
     this.stage = { activeAppId: appId, locked: false };
     this.stayStart = stateOf(this.docs.get(appId)!.doc);
-    this.revision += 1;
-    return { ok: true, changed: true, awarenessRemoval };
+    return awarenessRemoval;
   }
 
-  close(expectedRevision?: number): StageCommandResult {
-    if (this.stage.activeAppId === null) {
-      return { ok: true, changed: false, awarenessRemoval: null };
-    }
-    if (expectedRevision !== undefined && expectedRevision !== this.revision) {
-      return { ok: false, reason: "stale" };
-    }
+  private closeStage(): AppAwarenessRemoval | null {
     const awarenessRemoval = this.leaveStage();
     this.stage = { activeAppId: null, locked: false };
-    this.revision += 1;
-    return { ok: true, changed: true, awarenessRemoval };
+    return awarenessRemoval;
   }
 
-  /** Destroys an app's document. Discarding the presented app closes the stage. */
-  discard(appId: string, expectedRevision?: number): StageCommandResult {
-    const entry = this.docs.get(appId);
-    if (!entry) {
-      return { ok: true, changed: false, awarenessRemoval: null };
-    }
-    if (expectedRevision !== undefined && expectedRevision !== this.revision) {
-      return { ok: false, reason: "stale" };
-    }
+  private destroyApp(appId: string): AppAwarenessRemoval | null {
+    const entry = this.docs.get(appId)!;
     let awarenessRemoval: AppAwarenessRemoval | null = null;
     if (this.stage.activeAppId === appId) {
       awarenessRemoval = this.removeAwareness(appId);
@@ -425,20 +461,12 @@ export class RoomApps {
     }
     this.markCleared([...writersOf(entry.doc), ...this.releaseWriters(appId)]);
     this.destroyDoc(appId, entry);
-    this.revision += 1;
-    return { ok: true, changed: true, awarenessRemoval };
+    return awarenessRemoval;
   }
 
-  setLocked(locked: boolean, expectedRevision?: number): StageCommandResult {
-    if (this.stage.locked === locked) {
-      return { ok: true, changed: false, awarenessRemoval: null };
-    }
-    if (expectedRevision !== undefined && expectedRevision !== this.revision) {
-      return { ok: false, reason: "stale" };
-    }
+  private lockStage(locked: boolean): null {
     this.stage = { ...this.stage, locked };
-    this.revision += 1;
-    return { ok: true, changed: true, awarenessRemoval: null };
+    return null;
   }
 
   /** The mark a socket keeps when the room answers its sync of `appId`. */

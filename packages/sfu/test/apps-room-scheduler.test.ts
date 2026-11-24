@@ -264,13 +264,34 @@ describe("a sender's slot", () => {
     const started = Date.now();
     let ranAt: number | null = null;
 
-    scheduler.afterHeld(BOARD, () => (ranAt = Date.now()), () => {});
+    scheduler.afterHeld(BOARD, { changes: () => true, run: () => (ranAt = Date.now()), cancel: () => {} });
     vi.advanceTimersByTime(BARRIER_DEADLINE_MS);
 
     expect(ranAt).toBe(started + BARRIER_DEADLINE_MS);
     expect(finished).toEqual([{ outcome: "rate-limited", at: started + BARRIER_DEADLINE_MS }]);
     expect(ran).toEqual([]);
     expect(scheduler.slotSummaries()).toEqual([]);
+  });
+
+  it("answers a waiting command that stops changing the stage at once, and refuses none of the held updates", () => {
+    vi.useFakeTimers();
+    const scheduler = new RoomAppsScheduler();
+    const { ran, finished, write } = writesFor(starved());
+    scheduler.submit(write(keyed(new Y.Doc(), "a")));
+    let changes = true;
+    let ranAt: number | null = null;
+    scheduler.afterHeld(BOARD, { changes: () => changes, run: () => (ranAt = Date.now()), cancel: () => {} });
+    vi.advanceTimersByTime(10);
+    const changedAt = Date.now();
+
+    changes = false;
+    scheduler.wake();
+    vi.advanceTimersByTime(BARRIER_DEADLINE_MS);
+
+    expect(ranAt).toBe(changedAt);
+    expect(finished).toEqual([]);
+    expect(ran).toEqual([]);
+    expect(scheduler.slotSummaries()).toHaveLength(1);
   });
 
   it("refuses a slot once it has been held for its time limit, and leaves no timer behind", () => {
@@ -330,7 +351,7 @@ describe("a sender's slot", () => {
     scheduler.submit(write(keyed(new Y.Doc(), "a")));
     let executed = false;
     let cancelled = false;
-    scheduler.afterHeld(BOARD, () => (executed = true), () => (cancelled = true));
+    scheduler.afterHeld(BOARD, { changes: () => true, run: () => (executed = true), cancel: () => (cancelled = true) });
 
     scheduler.close();
     scheduler.submit(write(keyed(new Y.Doc(), "late")));
@@ -422,6 +443,95 @@ describe("the update budget", () => {
     expect(strokes.filter((writeId) => !boardHas(room, writeId))).toEqual([]);
     expect(byParticipant("guest-gp_other").map((call) => call.result)).toEqual(["foreign-id"]);
     expect(room.apps.liveDoc(BOARD)!.getMap("m").has("forged")).toBe(false);
+  });
+});
+
+describe("a control command the room refuses or that changes nothing", () => {
+  type Rooms = ReturnType<typeof presentedBoard>;
+  const stale = (room: Rooms["room"]) => room.apps.stageRevision + 5;
+
+  it.each([
+    ["a stale Present of another app", (host: Rooms["host"], room: Rooms["room"]) => host.command("open", "watch", stale(room)), false],
+    ["a repeated Present of the board", (host: Rooms["host"]) => host.command("open", BOARD), true],
+    ["a repeated Present of the board under a stale revision", (host: Rooms["host"], room: Rooms["room"]) => host.command("open", BOARD, stale(room)), true],
+    ["a stale Close", (host: Rooms["host"], room: Rooms["room"]) => host.command("close", undefined, stale(room)), false],
+    ["a stale Clear", (host: Rooms["host"], room: Rooms["room"]) => host.command("discard", BOARD, stale(room)), false],
+    ["a stale Lock", (host: Rooms["host"], room: Rooms["room"]) => host.command("lock", undefined, stale(room)), false],
+    ["an Unlock of an open board", (host: Rooms["host"]) => host.command("unlock"), true],
+  ] as const)("answers %s at once and drops none of the strokes a writer holds or sends next", (_, send, succeeds) => {
+    const { connect, host, room } = presentedBoard();
+    const artist = connect("artist#1");
+    artist.sync();
+    const strokes = artist.write(UPDATE_BURST + 10);
+    const before = JSON.stringify(room.apps.snapshot());
+    const seen = artist.received.length;
+
+    const record = send(host, room);
+    strokes.push(...artist.write(5));
+    const during = JSON.stringify(room.apps.snapshot());
+    advance(500);
+
+    expect(waited(record)).toBe(0);
+    expect(record.reply).toMatchObject(succeeds ? { success: true } : { success: false, code: "stale_revision" });
+    expect([during, JSON.stringify(room.apps.snapshot())]).toEqual([before, before]);
+    expect(artist.received.slice(seen).filter((entry) => entry.event !== "apps:yjs:update")).toEqual([]);
+    expect(strokes.filter((writeId) => !boardHas(room, writeId))).toEqual([]);
+  });
+
+  it("answers a waiting Present once another change makes it stale, and drops none of the strokes held or sent meanwhile", () => {
+    const { host, room } = presentedBoard();
+    host.sync();
+    const strokes = host.write(UPDATE_BURST + 10);
+    const present = host.command("open", "watch", room.apps.stageRevision);
+    strokes.push(...host.write(3));
+
+    const lock = host.command("lock");
+    advance(500);
+
+    expect([waited(lock), waited(present)]).toEqual([0, 0]);
+    expect(present.reply).toMatchObject({ success: false, code: "stale_revision" });
+    expect(room.apps.activeAppId).toBe(BOARD);
+    expect(host.received.filter((entry) => entry.event === "apps:yjs:refused")).toEqual([]);
+    expect(strokes.filter((writeId) => !boardHas(room, writeId))).toEqual([]);
+  });
+
+  it("broadcasts and answers a Lock with the stage it made, even when it lets a waiting Close run", () => {
+    const { connect, host, room } = presentedBoard();
+    const guest = connect("guest#1");
+    guest.sync();
+    guest.write(UPDATE_BURST + 10);
+    const close = host.command("close");
+    const seen = host.received.length;
+
+    const lock = host.command("lock");
+
+    const stages = host.received
+      .slice(seen)
+      .filter((entry) => entry.event === "apps:state")
+      .map((entry) => {
+        const stage = entry.payload as AppsState;
+        return [stage.activeAppId, stage.locked];
+      });
+    expect(stages).toEqual([
+      [BOARD, true],
+      [null, false],
+    ]);
+    expect(lock.reply).toMatchObject({ success: true, locked: true });
+    expect(close.reply).toMatchObject({ success: true });
+    expect(room.apps.activeAppId).toBeNull();
+  });
+
+  it("keeps a socket's free sync of the stage when a sync it sends is refused", () => {
+    const { connect, host } = presentedBoard();
+    const viewer = connect("viewer#1");
+    for (let index = 0; index < 12; index += 1) viewer.sync();
+    host.command("lock");
+
+    const invalid = viewer.sync(false);
+    const valid = viewer.sync();
+
+    expect(invalid.reply).toHaveProperty("error");
+    expect(valid.reply).toHaveProperty("syncMessage");
   });
 });
 

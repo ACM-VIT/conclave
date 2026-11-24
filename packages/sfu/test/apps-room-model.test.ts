@@ -68,6 +68,8 @@ const runModel = (seed: number, steps: number) => {
     blankPhaseSyncs: 0,
     commandsUnderAttack: 0,
     chainedCommands: 0,
+    pointlessCommands: 0,
+    refusalsChecked: 0,
     slotsChecked: 0,
     budgetPressure: 0,
   };
@@ -92,10 +94,19 @@ const runModel = (seed: number, steps: number) => {
   const switcher = rooms.connect("switcher#1");
   const chainers = Array.from({ length: 6 }, (_, index) => rooms.connect(`chain${index}#1`));
 
-  const command = (kind: Command["kind"], appId?: string): Command => {
-    const record = host.command(kind, appId);
-    if (record.ackedAt === null) pending.add(record);
-    else applyReply(record);
+  const stageNow = () => JSON.stringify(room.apps.snapshot());
+  const command = (kind: Command["kind"], appId?: string, expectedRevision?: number): Command => {
+    const before = stageNow();
+    const record = host.command(kind, appId, expectedRevision);
+    if (record.ackedAt === null) {
+      pending.add(record);
+      return record;
+    }
+    if (!(record.reply as { success?: boolean }).success) {
+      expect(stageNow(), `a refused ${kind} changes nothing`).toBe(before);
+      observed.refusalsChecked += 1;
+    }
+    applyReply(record);
     return record;
   };
   const applyReply = (record: Command) => {
@@ -110,6 +121,7 @@ const runModel = (seed: number, steps: number) => {
       reference.presented = null;
       reference.locked = false;
     } else if (record.kind === "discard") {
+      if (record.appId !== BOARD) return;
       reference.epoch += 1;
       if (reference.presented === record.appId) {
         reference.presented = null;
@@ -165,7 +177,28 @@ const runModel = (seed: number, steps: number) => {
       mustCommit.set(writeId, reference.epoch);
     }
   };
-  const burst = (then: "wait" | "close" | "leave") => {
+  const pointlessCommands = () => {
+    const stale = room.apps.stageRevision + 3;
+    const menu: [Command["kind"], string | undefined, number | undefined][] = [
+      ["open", BOARD, undefined],
+      ["open", BOARD, stale],
+      ["open", "watch", stale],
+      ["close", undefined, stale],
+      ["discard", BOARD, stale],
+      ["discard", "ghost", undefined],
+      [reference.locked ? "lock" : "unlock", undefined, undefined],
+      [reference.locked ? "unlock" : "lock", undefined, stale],
+    ];
+    for (let count = 1 + Math.floor(random() * 3); count > 0; count -= 1) {
+      const [kind, appId, revision] = pick(menu);
+      const before = stageNow();
+      const record = command(kind, appId, revision);
+      expect(record.ackedAt, `a pointless ${kind} is answered at once`).toBe(record.sentAt);
+      expect(stageNow(), `a pointless ${kind} changes nothing`).toBe(before);
+      observed.pointlessCommands += 1;
+    }
+  };
+  const burst = (then: "wait" | "close" | "leave" | "pointless") => {
     if (!eligible(bursty) || !burstyBucket.full(Date.now())) return;
     const extra = 1 + Math.floor(random() * 20);
     const writes = bursty.write(UPDATE_BURST + extra);
@@ -178,6 +211,14 @@ const runModel = (seed: number, steps: number) => {
       advance(CLOSE_BOUND_MS);
       command("open", BOARD);
       advance(5);
+    } else if (then === "pointless") {
+      const seen = bursty.received.length;
+      pointlessCommands();
+      for (const writeId of bursty.write(3)) mustCommit.set(writeId, reference.epoch);
+      pointlessCommands();
+      advance(40);
+      const told = bursty.received.slice(seen).filter((entry) => entry.event !== "apps:yjs:update");
+      expect(told, "pointless commands cost the writer nothing").toEqual([]);
     } else if (then === "leave") {
       for (const writeId of held) heldAcrossLeave.add(writeId);
       bursty.leave();
@@ -341,7 +382,7 @@ const runModel = (seed: number, steps: number) => {
     if (reference.locked && random() < 0.3) probeLocked();
     const roll = random();
     if (roll < 0.3) honestWrite();
-    else if (roll < 0.44) burst(pick(["wait", "close", "leave"] as const));
+    else if (roll < 0.46) burst(pick(["wait", "close", "leave", "pointless"] as const));
     else if (roll < 0.47) pick(honest).sync(random() < 0.7);
     else if (roll < 0.5) {
       const peer = pick(honest);
@@ -380,7 +421,10 @@ const runModel = (seed: number, steps: number) => {
     else if (roll < 0.69) command("close");
     else if (roll < 0.695) command("open", "watch");
     else if (roll < 0.7) command("discard", BOARD);
-    else if (roll < 0.715) command(reference.locked ? "unlock" : "lock");
+    else if (roll < 0.715) {
+      command(reference.locked ? "unlock" : "lock");
+      probeLocked();
+    }
     else if (roll < 0.75 && switcher.roomId === "room") {
       switcher.sync();
       switcher.write(UPDATE_BURST + 3);
