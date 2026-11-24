@@ -174,6 +174,8 @@ export async function simulate(
   let exactCounts = true;
   const lostAtClose = new Set<string>();
   const waitUntil = new Map<string, number>();
+  const lateWaits: Array<{ key: string; until: number; at: number }> = [];
+  const refusedAt: number[] = [];
   const beaconedAt = new Map<string, number>();
   let refusingUntil = 0;
   const failures = new Map<string, { count: number; at: number }>();
@@ -227,6 +229,7 @@ export async function simulate(
     setItem: (key: string, value: string) => {
       if (profile.noLocks || clock < refusingUntil || rng() < profile.refuseRate) {
         refusedWrites += 1;
+        refusedAt.push(clock);
         if (closingTab === tab) {
           try {
             for (const event of (JSON.parse(value) as { events: Array<{ uuid: string }> }).events) lostAtClose.add(event.uuid);
@@ -266,8 +269,22 @@ export async function simulate(
   };
 
   const keyOf = (uuids: string[]) => [...uuids].sort().join(",");
+  const storedKeys = () =>
+    new Set(
+      [...items.values()].flatMap((value) => {
+        try {
+          return [keyOf((JSON.parse(value) as { events: Array<{ uuid: string }> }).events.map((event) => event.uuid))];
+        } catch {
+          return [];
+        }
+      }),
+    );
+  const carried = (wait: { at: number }) => !refusedAt.some((at) => at >= wait.at && at <= wait.at + 1000);
   const checkSend = (key: string, how: "post" | "beacon") => {
-    const until = waitUntil.get(key) ?? 0;
+    const until = Math.max(
+      waitUntil.get(key) ?? 0,
+      ...lateWaits.filter((wait) => wait.key === key && carried(wait)).map((wait) => wait.until),
+    );
     if (clock < until) violate("sent before its Retry-After", `${how} of ${key} ${until - clock} ms early`);
     const beaconed = beaconedAt.get(key);
     if (beaconed !== undefined && clock - beaconed < BEACON_CONFIRM_MS) {
@@ -378,7 +395,8 @@ export async function simulate(
           if (outcome.retryAfter !== null) retryAfters += 1;
           if (outcome.retryAfter !== null) {
             const until = clock + Math.min(Number(outcome.retryAfter) * 1000, MAX_WAIT_MS);
-            waitUntil.set(key, Math.max(waitUntil.get(key) ?? 0, until));
+            if (request.latest) waitUntil.set(key, Math.max(waitUntil.get(key) ?? 0, until));
+            else if (storedKeys().has(key)) lateWaits.push({ key, until, at: clock });
           }
           failed(request);
         }

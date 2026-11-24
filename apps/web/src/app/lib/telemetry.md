@@ -127,7 +127,10 @@ one owner at a time:
   that arrives after another tab took the batch over, changes nothing but
   the wait: a Retry-After it carries still moves the stored batch's
   `notBefore` later (never earlier), so whichever tab holds the batch waits
-  it out. A Retry-After is about the batch, whichever send it answered. Local storage has no compare-and-set across tabs, so the lock is
+  it out. A Retry-After is about the batch, whichever send it answered.
+  Storage is the only way it reaches another tab: when storage refuses that
+  write, or holds no copy because it refused the new owner's claim, the wait
+  is lost like any other write storage refuses. Local storage has no compare-and-set across tabs, so the lock is
   what orders writes: a stored batch is written or removed only by a tab
   holding the lock (a claim, the answer to a claimed send, the answer to a
   keepalive send, a removal), which checks first that the stored copy still
