@@ -102,7 +102,14 @@ one owner at a time:
   id and a lease until 16 s after the send, so another tab leaves it alone
   until the request has settled; an answer from an earlier attempt changes
   nothing. Without the Web Locks API two tabs may both claim a batch, and
-  `/ingest` takes each uuid once. Reading a saved batch back checks each of
+  `/ingest` takes each uuid once; two such tabs may also both count one
+  expired batch in `telemetry_reports_dropped`. Every write and removal of a stored batch
+  (a claim, a save after an answer, the save as a page goes away, a
+  removal) goes through one compare-and-write: a tab writes a batch only
+  while the stored copy still carries the send id it last wrote or read, and
+  saves a new batch only where no copy exists, so a newer claim, or a copy
+  another tab removed, is never written over; a tab that finds its copy gone
+  or claimed by another lets the batch go. Reading a saved batch back checks each of
   its events on its own (a uuid, an ISO timestamp, an event name and a
   properties object): a malformed event is dropped and the rest are kept,
   and a batch with none left is removed.

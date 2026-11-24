@@ -244,9 +244,19 @@ export function createOutbox(deps: OutboxDeps) {
 
   const tooOld = (oldestAt: number): boolean => deps.now() - oldestAt > MAX_SEND_AGE_MS;
 
+  const writeStored = (owned: string | null, next: StoredBatch): "written" | "refused" | "lost" => {
+    const current = deps.store.get(next.id);
+    if (owned === null ? current !== null : current?.sendId !== owned) return "lost";
+    return deps.store.save(next) ? "written" : "refused";
+  };
+
+  const removeStored = (id: string, owned: string): void => {
+    if (deps.store.get(id)?.sendId === owned) deps.store.remove(id);
+  };
+
   const finish = (batch: Batch): void => {
     live.delete(batch.id);
-    if (batch.saved) deps.store.remove(batch.id);
+    if (batch.saved) removeStored(batch.id, batch.sendId);
   };
 
   const expire = (batch: Batch): void => {
@@ -273,18 +283,19 @@ export function createOutbox(deps: OutboxDeps) {
     }, Math.max(dueAt(batch) - deps.now(), 0));
   };
 
-  const toStorage = (batch: Batch): boolean => {
-    if (!deps.store.save(stored(batch))) return false;
+  const toStorage = (batch: Batch): "written" | "refused" | "lost" => {
+    const written = writeStored(batch.saved ? batch.sendId : null, stored(batch));
+    if (written !== "written") return written;
     batch.saved = true;
     if (batch.timer !== null) deps.clearTimer(batch.timer);
     batch.timer = null;
     live.delete(batch.id);
     wakeAt(dueAt(batch));
-    return true;
+    return written;
   };
 
-  const leaveStorage = (batch: Batch): void => {
-    deps.store.remove(batch.id);
+  const leaveStorage = (batch: Batch, owned = batch.sendId): void => {
+    removeStored(batch.id, owned);
     batch.saved = false;
   };
 
@@ -294,7 +305,8 @@ export function createOutbox(deps: OutboxDeps) {
     if (afterMs !== null) batch.notBefore = Math.max(batch.notBefore, deps.now() + afterMs);
     if (batch.saved) {
       live.delete(batch.id);
-      if (toStorage(batch)) return;
+      const written = toStorage(batch);
+      if (written !== "refused") return;
       leaveStorage(batch);
     }
     holdInMemory(batch);
@@ -321,9 +333,17 @@ export function createOutbox(deps: OutboxDeps) {
       finish(batch);
       return;
     }
+    const owned = batch.sendId;
     batch.sendId = deps.newId();
     batch.leaseUntil = deps.now() + LEASE_MS;
-    if (batch.saved && !deps.store.save(stored(batch))) leaveStorage(batch);
+    if (batch.saved) {
+      const written = writeStored(owned, stored(batch));
+      if (written === "lost") {
+        live.delete(batch.id);
+        return;
+      }
+      if (written === "refused") leaveStorage(batch, owned);
+    }
     const sendId = batch.sendId;
     live.set(batch.id, batch);
     const body = bodyOf(events);
@@ -377,7 +397,7 @@ export function createOutbox(deps: OutboxDeps) {
       answered.notBefore = Math.max(answered.notBefore, until);
       answered.events = withoutRefused(answered.events, events, reply);
       if (answered.events.length === 0) finish(answered);
-      else if (!toStorage(answered)) {
+      else if (toStorage(answered) === "refused") {
         leaveStorage(answered);
         holdInMemory(answered);
       }
@@ -399,7 +419,7 @@ export function createOutbox(deps: OutboxDeps) {
         continue;
       }
       if (tooOld(saved.oldestAt)) {
-        deps.store.remove(saved.id);
+        removeStored(saved.id, saved.sendId);
         stale.push(saved);
         continue;
       }
@@ -490,10 +510,10 @@ export function createOutbox(deps: OutboxDeps) {
           batch.nextTry = Math.max(batch.nextTry, deps.now() + BEACON_CONFIRM_MS);
           answer.then((reply) => beaconAnswered(batch, events, reply), () => {});
         }
-        if (!toStorage(batch)) holdInMemory(batch);
+        if (toStorage(batch) !== "written") holdInMemory(batch);
       }
       for (const batch of live.values()) {
-        if (batch.inFlight !== null && deps.store.save(stored(batch))) batch.saved = true;
+        if (batch.inFlight !== null && writeStored(batch.saved ? batch.sendId : null, stored(batch)) === "written") batch.saved = true;
       }
     },
 

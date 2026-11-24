@@ -2,9 +2,31 @@ import type { Scenario } from "./outbox-sim";
 
 export type ThreadCase = { name: string; thread: string; head: string; seed: number; scenario: Scenario };
 
-const quiet = { refuseRate: 0, beaconRefuseRate: 1, beaconLossRate: 0, beaconLimitRate: 0, maxTabs: 3 };
+const quiet = { refuseRate: 0, beaconRefuseRate: 1, beaconLossRate: 0, beaconLimitRate: 0, noLocks: false, maxTabs: 3 };
 
 export const THREAD_CASES: ThreadCase[] = [
+  {
+    name: "a tab whose claim another tab replaced, without Web Locks, never saves over that newer claim's wait as it hides",
+    thread: "https://github.com/ACM-VIT/conclave/pull/265#discussion_r4676724334",
+    head: "8db1926b",
+    seed: 4676724334,
+    scenario: {
+      profile: { ...quiet, noLocks: true },
+      actions: [
+        { at: 0, act: "open", tab: 1 },
+        { at: 500, act: "open", tab: 2 },
+        { at: 1000, act: "emit", tab: 1, count: 2 },
+        { at: 6050, act: "hide", tab: 1 },
+        { at: 8100, act: "race", tab: 1, other: 2 },
+        { at: 9000, act: "hide", tab: 1 },
+      ],
+      replies: [
+        { latency: 100, status: 503 },
+        { latency: 10_000, status: 503 },
+        { latency: 100, status: 429, retryAfter: "60" },
+      ],
+    },
+  },
   {
     name: "a second and third lifecycle event right after the first do not beacon the batch again",
     thread: "Sol final review of #265 at daf5493f, finding 2",

@@ -1252,3 +1252,26 @@ describe("the size cap on one event", () => {
     expect(cut).toMatchObject({ uuid: over.uuid, event: over.event, timestamp: over.timestamp });
   });
 });
+
+describe("a stored batch another tab has claimed since", () => {
+  it("is never saved over as this tab goes away, and this tab lets it go when its own request fails", async () => {
+    const store = memoryStore();
+    store.save({ id: "saved-claimed", events: [event()], oldestAt: START, sent: false, notBefore: 0, nextTry: 0, attempt: 0, sendId: "", leaseUntil: 0 });
+    const later = answerLater();
+    const h = harness({ store, answers: [later.promise], at: START + 1000 });
+    h.outbox.replaySaved();
+    await h.advance(0);
+    expect(h.posts).toHaveLength(1);
+
+    const [claimed] = store.list();
+    const newer = { ...claimed, sendId: "another-tab", notBefore: START + 61_000, attempt: 2, leaseUntil: 0 };
+    store.save(newer);
+    h.outbox.flushForUnload();
+    expect(store.list()).toEqual([newer]);
+
+    later.answer(503);
+    await h.advance(30_000);
+    expect(h.posts).toHaveLength(1);
+    expect(store.list()).toEqual([newer]);
+  });
+});

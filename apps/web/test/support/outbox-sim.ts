@@ -52,7 +52,7 @@ const rngOf = (seed: number) => {
 
 type Job = { at: number; seq: number; tab: Tab | null; kind: "timer" | "reply" | "server" | "storage" | "action"; run: () => void; cancelled: boolean };
 
-type Tab = { id: number; open: boolean; hidden: boolean; outbox: OutboxLike };
+type Tab = { id: number; open: boolean; hidden: boolean; outbox: OutboxLike; view: Map<string, string> | null };
 
 type Request = { key: string; uuids: string[]; tab: Tab; keepalive: boolean; latest: boolean; done: boolean; arrived: boolean; aborted: boolean };
 
@@ -69,10 +69,11 @@ export type Profile = {
   beaconRefuseRate: number;
   beaconLossRate: number;
   beaconLimitRate: number;
+  noLocks: boolean;
   activeMs: number;
 };
 
-const profileOf = (rng: () => number): Omit<Profile, "beaconLimitRate"> => ({
+const profileOf = (rng: () => number): Omit<Profile, "beaconLimitRate" | "noLocks"> => ({
   maxTabs: 1 + Math.floor(rng() * 3),
   refuseRate: rng() < 0.4 ? 0 : rng() * 0.5,
   slowRate: rng() * 0.3,
@@ -89,7 +90,7 @@ const profileOf = (rng: () => number): Omit<Profile, "beaconLimitRate"> => ({
 
 export type ScriptedReply = { latency: number; status: number | null; retryAfter?: string };
 
-export type ScriptedAction = { at: number; act: "open" | "emit" | "hide" | "show" | "close"; tab: number; count?: number };
+export type ScriptedAction = { at: number; act: "open" | "emit" | "hide" | "show" | "close" | "race"; tab: number; count?: number; other?: number };
 
 export type Scenario = { profile?: Partial<Profile>; replies?: ScriptedReply[]; actions?: ScriptedAction[] };
 
@@ -101,11 +102,13 @@ export async function simulate(
 ): Promise<SimResult> {
   const rng = rngOf(seed);
   const beaconRng = rngOf(seed ^ 0x5bd1e995);
+  const lockRng = rngOf(seed ^ 0x27d4eb2f);
   const between = (low: number, high: number) => low + rng() * (high - low);
   const scriptedEnd = scenario.actions ? Math.max(...scenario.actions.map((action) => action.at)) + 1 : null;
   const profile: Profile = {
     ...profileOf(rng),
     beaconLimitRate: beaconRng() * 0.3,
+    noLocks: lockRng() < 0.25,
     ...(scriptedEnd === null ? {} : { activeMs: scriptedEnd }),
     ...scenario.profile,
   };
@@ -139,6 +142,7 @@ export async function simulate(
   const refused = new Set<string>();
   const counted = new Set<string>();
   const countedTwice: string[] = [];
+  let racing = false;
   let countedTotal = 0;
   let exactCounts = true;
   const lostAtClose = new Set<string>();
@@ -166,10 +170,10 @@ export async function simulate(
   };
   const storageFor = (tab: Tab): Storage => ({
     get length() {
-      return items.size;
+      return (tab.view ?? items).size;
     },
-    key: (index: number) => [...items.keys()][index] ?? null,
-    getItem: (key: string) => items.get(key) ?? null,
+    key: (index: number) => [...(tab.view ?? items).keys()][index] ?? null,
+    getItem: (key: string) => (tab.view ?? items).get(key) ?? null,
     setItem: (key: string, value: string) => {
       if (clock < refusingUntil || rng() < profile.refuseRate) {
         refusedWrites += 1;
@@ -181,11 +185,13 @@ export async function simulate(
         throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
       }
       items.set(key, value);
+      tab.view?.set(key, value);
       writtenAt.set(key, clock);
       if (trace) note(`tab${tab.id} saved ${key.slice(-12)} ${value.replace(/"events":\[.*?\],/, "")}`);
       notifyOthers(tab);
     },
     removeItem: (key: string) => {
+      tab.view?.delete(key);
       if (items.delete(key)) {
         note(`tab${tab.id} removed ${key.slice(-12)}`);
         notifyOthers(tab);
@@ -219,7 +225,7 @@ export async function simulate(
     if (beaconed !== undefined && clock - beaconed < BEACON_CONFIRM_MS) {
       violate("sent again before its beacon is confirmed", `${how} of ${key} ${clock - beaconed} ms after its beacon`);
     }
-    if (how === "post") {
+    if (how === "post" && !profile.noLocks) {
       const open = (requests.get(key) ?? []).filter((request) => !request.done && request.tab.open);
       if (open.length > 0) violate("two sends of one batch in flight", key);
     }
@@ -350,7 +356,7 @@ export async function simulate(
     if (Array.isArray(dropped)) {
       for (const batch of dropped as Array<{ events: Array<{ uuid: string }> }>) {
         for (const event of batch.events) {
-          if (counted.has(event.uuid)) countedTwice.push(event.uuid);
+          if (counted.has(event.uuid) && !racing) countedTwice.push(event.uuid);
           counted.add(event.uuid);
         }
       }
@@ -361,7 +367,7 @@ export async function simulate(
   };
 
   const openTab = () => {
-    const tab: Tab = { id: tabs.length + 1, open: true, hidden: false, outbox: undefined as unknown as OutboxLike };
+    const tab: Tab = { id: tabs.length + 1, open: true, hidden: false, outbox: undefined as unknown as OutboxLike, view: null };
     const deps = {
       token: PROJECT,
       now: () => clock,
@@ -374,6 +380,10 @@ export async function simulate(
       newId: () => `sim-${seed}-${++ids}`,
       store: outboxModule.createBatchStore(() => storageFor(tab)),
       lock: (run: () => Promise<void>) => {
+        if (profile.noLocks) {
+          void run();
+          return;
+        }
         waiting.push({ tab, run });
         pump();
       },
@@ -419,9 +429,26 @@ export async function simulate(
     tab.open = false;
     for (const job of jobs) if (job.tab === tab && job.kind !== "reply") job.cancelled = true;
   };
+  const race = (first: Tab, second: Tab) => {
+    note(`tab${first.id} and tab${second.id} replay at once, without a lock`);
+    const before = new Map(items);
+    racing = true;
+    for (const tab of [first, second]) {
+      tab.view = new Map(before);
+      tab.outbox.replaySaved();
+    }
+    racing = false;
+    first.view = null;
+    second.view = null;
+  };
   const act = () => {
     if (!active()) return;
     const open = tabs.filter((tab) => tab.open);
+    if (profile.noLocks && open.length >= 2 && lockRng() < 0.3) {
+      const first = open[Math.floor(lockRng() * open.length)];
+      const others = open.filter((tab) => tab !== first);
+      race(first, others[Math.floor(lockRng() * others.length)]);
+    }
     const roll = rng();
     if (open.length < profile.maxTabs && (open.length === 0 || roll < 0.25)) {
       emit(openTab());
@@ -499,6 +526,9 @@ export async function simulate(
           note(`tab${tab.id} shows`);
           tab.hidden = false;
           tab.outbox.replaySaved();
+        } else if (action.act === "race") {
+          const other = tabs[(action.other ?? 0) - 1];
+          if (other?.open) race(tab, other);
         } else closeTab(tab);
       });
     }
