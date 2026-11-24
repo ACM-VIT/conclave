@@ -1,7 +1,8 @@
 import { createServer } from "node:net";
 import { createApp } from "./app.js";
 import { createBrowserManager } from "./createBrowserManager.js";
-import { resolveServiceSecurity, ServiceSecurityError } from "./serviceSecurity.js";
+import { resolveListenHost } from "./listenAddress.js";
+import { isLoopbackOrPrivateHost, resolveServiceSecurity, ServiceSecurityError } from "./serviceSecurity.js";
 import { isHeldByPreviousContainer, previousManagedContainer } from "./serviceIdentity.js";
 import { defaultConfig } from "./types.js";
 
@@ -29,6 +30,10 @@ const browserManager = (() => {
     }
 })();
 const app = createApp(browserManager, security);
+const listenAddress: Promise<string> = resolveListenHost(security.listenHost, isLoopbackOrPrivateHost).then((resolved) =>
+    resolved.ok ? resolved.address : refuseToStart(resolved.problem),
+);
+const listenLabel = (address: string) => (address === security.listenHost ? address : `${security.listenHost} (${address})`);
 
 const checkListenAddress = (host: string, port: number): Promise<void> =>
     new Promise((resolve, reject) => {
@@ -74,12 +79,12 @@ const gracefulShutdown = async () => {
 process.on("SIGTERM", () => void gracefulShutdown());
 process.on("SIGINT", () => void gracefulShutdown());
 
-const listen = () => app.listen(security.listenPort, security.listenHost, (error?: Error) => {
+const listen = (address: string) => app.listen(security.listenPort, address, (error?: Error) => {
     if (error) {
-        console.error(`[Server] Could not listen on ${security.listenHost}:${security.listenPort}:`, error);
+        console.error(`[Server] Could not listen on ${listenLabel(address)}:${security.listenPort}:`, error);
         process.exit(1);
     }
-    console.log(`[Server] Shared Browser Service listening on ${security.listenHost}:${security.listenPort}`);
+    console.log(`[Server] Shared Browser Service listening on ${listenLabel(address)}:${security.listenPort}`);
     console.log(`[Server] Browser provider: ${browserManager.capabilities.provider}`);
     if (browserManager.capabilities.provider === "chromium") {
         console.log(`[Server] noVNC port range: ${defaultConfig.noVncPortStart}-${defaultConfig.noVncPortEnd}`);
@@ -89,20 +94,22 @@ const listen = () => app.listen(security.listenPort, security.listenHost, (error
 // The deploy scripts run --check-config in the new image before replacing the
 // service: every startup check above, short of listening on the real port.
 if (process.argv.includes("--check-config")) {
-    const reportValid = () =>
-        assertReady().then(() => {
-            console.log(`[Server] Shared browser service configuration is valid (control API on ${security.listenHost}:${security.listenPort}).`);
-            process.exit(0);
+    void listenAddress.then((address) => {
+        const reportValid = () =>
+            assertReady().then(() => {
+                console.log(`[Server] Shared browser service configuration is valid (control API on ${listenLabel(address)}:${security.listenPort}).`);
+                process.exit(0);
+            });
+        return checkListenAddress(address, security.listenPort).then(reportValid, async (error: NodeJS.ErrnoException) => {
+            if (error.code !== "EADDRINUSE") {
+                return refuseToStart(`BROWSER_SERVICE_HOST=${listenLabel(address)} cannot be bound on this host (${error.code ?? error.message}).`);
+            }
+            if (await heldBySharedBrowser(address, security.listenPort)) return reportValid();
+            return refuseToStart(
+                `BROWSER_SERVICE_PORT=${security.listenPort} on ${listenLabel(address)} is in use by a program that is not the shared browser service this deploy replaces. Free the port or choose another one.`,
+            );
         });
-    checkListenAddress(security.listenHost, security.listenPort).then(reportValid, async (error: NodeJS.ErrnoException) => {
-        if (error.code !== "EADDRINUSE") {
-            return refuseToStart(`BROWSER_SERVICE_HOST=${security.listenHost} cannot be bound on this host (${error.code ?? error.message}).`);
-        }
-        if (await heldBySharedBrowser(security.listenHost, security.listenPort)) return reportValid();
-        return refuseToStart(
-            `BROWSER_SERVICE_PORT=${security.listenPort} on ${security.listenHost} is in use by a program that is not the shared browser service this deploy replaces. Free the port or choose another one.`,
-        );
     });
 } else {
-    void assertReady().then(listen);
+    void Promise.all([listenAddress, assertReady()]).then(([address]) => listen(address));
 }
