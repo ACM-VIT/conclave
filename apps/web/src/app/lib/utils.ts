@@ -254,19 +254,30 @@ export class FieldHistory {
     this.typingOpen = typing;
   }
 
-  undo(): FieldState | null {
-    if (this.cursor === 0) return null;
+  undone(value: string): FieldState | null {
+    const step = this.steps[this.cursor - 1];
+    if (!step || step.before.value !== value) {
+      this.clear();
+      return null;
+    }
     this.typingOpen = false;
     this.cursor -= 1;
-    return this.steps[this.cursor].before;
+    return step.before;
   }
 
-  redo(): FieldState | null {
+  redone(value: string): FieldState | null {
     const step = this.steps[this.cursor];
-    if (!step) return null;
+    if (!step || step.after.value !== value) {
+      this.clear();
+      return null;
+    }
     this.typingOpen = false;
     this.cursor += 1;
     return step.after;
+  }
+
+  seal() {
+    this.typingOpen = false;
   }
 
   clear() {
@@ -321,11 +332,12 @@ const writeField = (input: HTMLInputElement, tracker: FieldTracker, write: () =>
 
 export function applyFieldEdit(input: HTMLInputElement, edit: FieldEdit) {
   const caret = edit.start + edit.text.length;
+  const tracker = fieldTrackerFor(input);
   if (edit.start === edit.end && !edit.text) {
     input.setSelectionRange(caret, caret);
+    tracker.history.seal();
     return;
   }
-  const tracker = fieldTrackerFor(input);
   const before = fieldStateOf(input);
   writeField(input, tracker, () => {
     input.setSelectionRange(edit.start, edit.end);
@@ -342,57 +354,35 @@ export function applyFieldEdit(input: HTMLInputElement, edit: FieldEdit) {
   tracker.history.record(before, tracker.last, false);
 }
 
-const historyShortcut = (event: KeyboardEvent): "undo" | "redo" | null => {
-  if (event.isComposing || event.altKey || !(event.metaKey || event.ctrlKey)) return null;
-  const key = event.key.toLowerCase();
-  if (key === "z") return event.shiftKey ? "redo" : "undo";
-  return key === "y" && !event.shiftKey ? "redo" : null;
-};
-
 export function trackFieldHistory(input: HTMLInputElement) {
-  const travel = (direction: "undo" | "redo") => {
-    const tracker = fieldTrackerFor(input);
-    const state = direction === "undo" ? tracker.history.undo() : tracker.history.redo();
-    if (!state) return;
-    writeField(input, tracker, () => {
-      input.setRangeText(state.value, 0, input.value.length, "end");
-      input.setSelectionRange(state.selection[0], state.selection[1]);
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-  };
-  const onKeyDown = (event: KeyboardEvent) => {
-    const direction = historyShortcut(event);
-    if (!direction) return;
-    event.preventDefault();
-    travel(direction);
-  };
   const onBeforeInput = (event: InputEvent) => {
     const tracker = fieldTrackerFor(input);
     if (tracker.applying || event.defaultPrevented) return;
-    if (event.inputType === "historyUndo" || event.inputType === "historyRedo") {
-      event.preventDefault();
-      travel(event.inputType === "historyUndo" ? "undo" : "redo");
-      return;
-    }
     tracker.pending = fieldStateOf(input);
   };
   const onInput = (event: Event) => {
     const tracker = fieldTrackers.get(input);
     if (!tracker || tracker.applying || !(event instanceof InputEvent)) return;
-    const before = tracker.pending ?? tracker.last;
-    const after = fieldStateOf(input);
-    if (after.value !== before.value) {
-      tracker.history.record(before, after, TYPING_INPUT.has(event.inputType));
+    if (event.inputType === "historyUndo" || event.inputType === "historyRedo") {
+      const state =
+        event.inputType === "historyUndo"
+          ? tracker.history.undone(input.value)
+          : tracker.history.redone(input.value);
+      if (state) input.setSelectionRange(state.selection[0], state.selection[1]);
+    } else {
+      const before = tracker.pending ?? tracker.last;
+      const after = fieldStateOf(input);
+      if (after.value !== before.value) {
+        tracker.history.record(before, after, TYPING_INPUT.has(event.inputType));
+      }
     }
-    tracker.last = after;
+    tracker.last = fieldStateOf(input);
     tracker.pending = null;
   };
   fieldTrackerFor(input);
-  input.addEventListener("keydown", onKeyDown);
   input.addEventListener("beforeinput", onBeforeInput);
   input.addEventListener("input", onInput);
   return () => {
-    input.removeEventListener("keydown", onKeyDown);
     input.removeEventListener("beforeinput", onBeforeInput);
     input.removeEventListener("input", onInput);
   };

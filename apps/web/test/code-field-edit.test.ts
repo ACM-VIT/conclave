@@ -139,22 +139,24 @@ class ReferenceHistory {
     this.open = false;
     return step.after;
   }
+
+  seal() {
+    this.open = false;
+  }
 }
 
-describe("the code field's own undo history", () => {
-  it("walks back through edits by position, not by matching values", () => {
+describe("the code field's undo mirror of the browser's stack", () => {
+  it("follows undo and redo by position, not by matching values", () => {
     const history = new FieldHistory();
     history.record(at("abc-def", 2), at("new-room", 8), false);
     history.record(at("new-room", 8), at("abc-def", 7), false);
     history.record(at("abc-def", 7), at("new-room", 8), false);
-    expect(history.undo()).toEqual(at("abc-def", 7));
-    expect(history.undo()).toEqual(at("new-room", 8));
-    expect(history.undo()).toEqual(at("abc-def", 2));
-    expect(history.undo()).toBeNull();
-    expect(history.redo()).toEqual(at("new-room", 8));
-    expect(history.redo()).toEqual(at("abc-def", 7));
-    expect(history.redo()).toEqual(at("new-room", 8));
-    expect(history.redo()).toBeNull();
+    expect(history.undone("abc-def")).toEqual(at("abc-def", 7));
+    expect(history.undone("new-room")).toEqual(at("new-room", 8));
+    expect(history.undone("abc-def")).toEqual(at("abc-def", 2));
+    expect(history.redone("new-room")).toEqual(at("new-room", 8));
+    expect(history.redone("abc-def")).toEqual(at("abc-def", 7));
+    expect(history.redone("new-room")).toEqual(at("new-room", 8));
   });
 
   it("merges a run of typing into one step and starts a new one after anything else", () => {
@@ -163,75 +165,78 @@ describe("the code field's own undo history", () => {
     history.record(at("a", 1), at("ab", 2), true);
     history.record(at("ab", 2), at("abx", 3), false);
     history.record(at("abx", 3), at("abxc", 4), true);
-    history.record(at("abxc", 1), at("aybxc", 2), true);
-    expect(history.undo()).toEqual(at("abxc", 1));
-    expect(history.undo()).toEqual(at("abx", 3));
-    expect(history.undo()).toEqual(at("ab", 2));
-    expect(history.undo()).toEqual(at("", 0));
+    history.seal();
+    history.record(at("abxc", 4), at("abxcd", 5), true);
+    expect(history.undone("abxc")).toEqual(at("abxc", 4));
+    expect(history.undone("abx")).toEqual(at("abx", 3));
+    expect(history.undone("ab")).toEqual(at("ab", 2));
+    expect(history.undone("")).toEqual(at("", 0));
   });
 
   it("drops the redo branch when a new edit follows an undo", () => {
     const history = new FieldHistory();
     history.record(at("", 0), at("abc", 3), true);
     history.record(at("abc", 3), at("room", 4), false);
-    history.undo();
+    history.undone("abc");
     history.record(at("abc", 3), at("abcd", 4), true);
-    expect(history.redo()).toBeNull();
-    expect(history.undo()).toEqual(at("abc", 3));
-    expect(history.undo()).toEqual(at("", 0));
+    expect(history.redone("room")).toBeNull();
   });
 
-  it("matches a reference model over random paste, type, delete, caret, undo and redo steps", () => {
+  it("lets go of the selection when the browser's step does not match its own", () => {
+    const history = new FieldHistory();
+    history.record(at("", 0), at("abc", 3), true);
+    history.record(at("abc", 3), at("ab", 2), false);
+    expect(history.undone("")).toBeNull();
+    expect(history.undone("abc")).toBeNull();
+  });
+
+  it("matches a simulated browser stack over random paste, type, delete, caret, undo and redo steps", () => {
     const random = seededRandom(4675657343 % 2147483647);
     const pick = <T,>(items: readonly T[]) => items[Math.floor(random() * items.length)];
     const failures: string[] = [];
     let undos = 0;
     for (let run = 0; run < 300; run += 1) {
       const history = new FieldHistory();
-      const reference = new ReferenceHistory();
+      const browser = new ReferenceHistory();
       let field = at("", 0);
-      const edit = (start: number, end: number, text: string, replace: boolean) => {
+      const edit = (start: number, end: number, text: string, replace: boolean, typing: boolean) => {
         const [from, to] = replace ? [0, field.value.length] : [start, end];
         const planned = plan(field.value, from, to, text);
-        if (planned.start === planned.end && !planned.text) return;
-        const native = !replace && planned.start === from && planned.end === to && planned.text === text;
-        const caret = planned.start + planned.text.length;
-        const next = at(applied(field.value, planned), caret);
-        const typing = native && text.length === 1;
-        history.record(field, next, typing);
-        reference.record(field, next, typing);
+        if (planned.start === planned.end && !planned.text) {
+          history.seal();
+          browser.seal();
+          return;
+        }
+        const native = typing && planned.start === from && planned.end === to && planned.text === text;
+        const next = at(applied(field.value, planned), planned.start + planned.text.length);
+        history.record(field, next, native);
+        browser.record(field, next, native);
         field = next;
       };
       for (let step = 0; step < 40; step += 1) {
         const [start, end] = field.selection;
-        const op = pick(["type", "type", "type", "paste", "link", "delete", "caret", "select", "undo", "undo", "redo"]);
-        if (op === "type") edit(start, end, pick(["a", "b", "-", "X", " "]), false);
-        if (op === "paste") edit(start, end, pick(["new-room", "abc-def", "-wxyz", "x-"]), false);
-        if (op === "link") edit(start, end, pick(["new-room", "abc-def", "room-two"]), true);
-        if (op === "delete") {
-          const from = start === end ? Math.max(0, start - 1) : start;
-          edit(from, end, "", false);
-        }
+        const op = pick(["type", "type", "type", "paste", "link", "delete", "caret", "undo", "undo", "redo"]);
+        if (op === "type") edit(start, end, pick(["a", "b", "-", "X", " "]), false, true);
+        if (op === "paste") edit(start, end, pick(["new-room", "abc-def", "-wxyz", "x-"]), false, false);
+        if (op === "link") edit(start, end, pick(["new-room", "abc-def", "room-two"]), true, false);
+        if (op === "delete") edit(start === end ? Math.max(0, start - 1) : start, end, "", false, false);
         if (op === "caret") {
-          const caret = Math.floor(random() * (field.value.length + 1));
-          field = at(field.value, caret);
-        }
-        if (op === "select") {
           const a = Math.floor(random() * (field.value.length + 1));
-          const b = a + Math.floor(random() * (field.value.length - a + 1));
+          const b = random() < 0.5 ? a : a + Math.floor(random() * (field.value.length - a + 1));
           field = at(field.value, a, b);
+          history.seal();
+          browser.seal();
         }
         if (op === "undo" || op === "redo") {
-          const got = op === "undo" ? history.undo() : history.redo();
-          const want = op === "undo" ? reference.undo() : reference.redo();
+          const want = op === "undo" ? browser.undo() : browser.redo();
+          if (!want) continue;
+          const got = op === "undo" ? history.undone(want.value) : history.redone(want.value);
           if (JSON.stringify(got) !== JSON.stringify(want)) {
             failures.push(JSON.stringify({ run, step, op, got, want }));
             break;
           }
-          if (got) {
-            field = got;
-            if (op === "undo") undos += 1;
-          }
+          field = want;
+          if (op === "undo") undos += 1;
         }
       }
     }

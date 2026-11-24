@@ -1150,7 +1150,7 @@ function JoinScreen({
     input: HTMLInputElement,
     [start, end]: readonly [number, number],
     text: string,
-    nativeText = text,
+    nativeTyping: boolean,
   ) => {
     const edit = planFieldEdit(
       input.value,
@@ -1160,7 +1160,7 @@ function JoinScreen({
       normalizeCode,
       ROOM_CODE_MAX_LENGTH,
     );
-    if (edit.start === start && edit.end === end && edit.text === nativeText) return;
+    if (nativeTyping && edit.start === start && edit.end === end && edit.text === text) return;
     event.preventDefault();
     applyFieldEdit(input, edit);
   };
@@ -1173,7 +1173,7 @@ function JoinScreen({
       const range = inputEditRange(event.inputType, start, end, input.value.length);
       if (!range) return;
       const text = event.inputType === "insertText" ? (event.data ?? "") : "";
-      shapeCodeEdit(event, input, range, text);
+      shapeCodeEdit(event, input, range, text, event.inputType === "insertText");
     };
     input.addEventListener("beforeinput", onBeforeInput);
     const stopTrackingHistory = trackFieldHistory(input);
@@ -1612,9 +1612,9 @@ function JoinScreen({
                       const start = input.selectionStart ?? input.value.length;
                       const end = input.selectionEnd ?? start;
                       if (paste.kind === "replace") {
-                        shapeCodeEdit(e, input, [0, input.value.length], paste.code, text);
+                        shapeCodeEdit(e, input, [0, input.value.length], paste.code, false);
                       } else {
-                        shapeCodeEdit(e, input, [start, end], paste.text, text);
+                        shapeCodeEdit(e, input, [start, end], paste.text, false);
                       }
                     }}
                     onKeyDown={(e) => {
