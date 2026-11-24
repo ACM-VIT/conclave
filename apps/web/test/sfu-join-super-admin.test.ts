@@ -5,6 +5,7 @@ import { POST } from "../src/app/api/sfu/join/route";
 const { getSession } = vi.hoisted(() => ({ getSession: vi.fn() }));
 vi.mock("@/lib/auth", () => ({ auth: { api: { getSession } } }));
 vi.mock("@/lib/sfu-user-auth", () => ({ lookupScheduledWebinarByRoomId: vi.fn() }));
+vi.mock("@/lib/guest-pass", () => import("../src/lib/guest-pass"));
 vi.mock("@/lib/sfu-client-id", () => import("../src/lib/sfu-client-id"));
 vi.mock("@/lib/sfu-super-admin", () => import("../src/lib/sfu-super-admin"));
 vi.mock("@/lib/sfu-url", () => import("../src/lib/sfu-url"));

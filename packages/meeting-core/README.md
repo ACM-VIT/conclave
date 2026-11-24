@@ -5,6 +5,7 @@ Shared meeting domain logic for `apps/web` and mirrored native behavior.
 ## What belongs here
 
 - Data contracts shared by the web client and SFU (`types.ts`, `sfu-types.ts`)
+- The guest claims of a join token, as one schema that the join route signs from and the SFU parses with (`guest-join-claims.ts`)
 - Pure meeting domain reducers and command parsing
 - Configurable media encoding helpers
 
