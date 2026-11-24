@@ -370,9 +370,13 @@ Runtime accepts multiple binary-like payload forms:
 - typed array views
 - `number[]`
 - Node-style `{ type: "Buffer", data: number[] }`
-- base64 string (validated before decode)
+- standard base64 string with its `=` padding, as native sends it
+  (validated before decode; surrounding whitespace is ignored, unpadded or
+  URL-safe base64 is refused as invalid)
 
-This keeps sync stable across browser, native, and server runtimes.
+This keeps sync stable across browser, native, and server runtimes. Every size
+limit counts the decoded bytes, measured from the frame without decoding it, so
+a 256 KiB update is accepted whether it arrives as binary or as base64.
 
 ## Client Ack Timeout Behavior
 
