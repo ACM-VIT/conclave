@@ -1,4 +1,5 @@
 import { isIP } from "node:net";
+import { canonicalHost } from "./bindAddress.js";
 
 /** How the control API authenticates callers, where it listens, and who may call it from a browser. */
 export interface ServiceSecurity {
@@ -20,7 +21,7 @@ const MIN_DISTINCT_TOKEN_CHARACTERS = 8;
 // The SFU sends the token in an HTTP header, so it must be visible ASCII.
 const HEADER_SAFE_TOKEN = /^[\x21-\x7e]+$/;
 const DEFAULT_LISTEN_HOST = "127.0.0.1";
-const DEFAULT_LISTEN_PORT = 3040;
+export const DEFAULT_LISTEN_PORT = 3040;
 
 const isLoopbackOrPrivateIpv4 = (host: string): boolean => {
     const [a, b] = host.split(".").map(Number);
@@ -33,17 +34,14 @@ const isLoopbackOrPrivateIpv4 = (host: string): boolean => {
     );
 };
 
-const isLoopbackOrPrivateIpv6 = (host: string): boolean => {
-    const normalized = new URL(`http://[${host}]`).hostname.slice(1, -1);
-    // Unique-local fc00::/7: the first hextet is fcXX or fdXX in full.
-    return normalized === "::1" || /^f[cd][0-9a-f]{2}:/.test(normalized);
-};
+const isLoopbackOrPrivateIpv6 = (canonical: string): boolean => canonical === "::1" || /^f[cd][0-9a-f]{2}:/.test(canonical);
 
 const isLoopbackOrPrivateHost = (host: string): boolean => {
-    if (host === "localhost") return true;
-    const version = isIP(host);
-    if (version === 4) return isLoopbackOrPrivateIpv4(host);
-    if (version === 6) return isLoopbackOrPrivateIpv6(host);
+    const canonical = canonicalHost(host);
+    if (canonical === "localhost") return true;
+    const version = isIP(canonical);
+    if (version === 4) return isLoopbackOrPrivateIpv4(canonical);
+    if (version === 6) return isLoopbackOrPrivateIpv6(canonical);
     return false;
 };
 

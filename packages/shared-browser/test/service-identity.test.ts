@@ -80,15 +80,17 @@ test("/health names the shared browser service and the deploy it came from, heal
 test("--check-config accepts a port held only by the browser service the deploy is replacing", async () => {
     const engine = await fakeDockerEngine({ "conclave-browser:latest": hardenedImage });
     try {
-        type Previous = { address?: "this" | "wildcard" | "moved" | "another port"; deployId?: string };
+        type Previous = { address?: "this" | "this, IPv4-mapped" | "wildcard" | "wildcard, spelled in full" | "moved" | "another port"; deployId?: string };
         const check = async (holder: { body: unknown; status?: number } | undefined, previous?: Previous) => {
             const port = await freePort();
             const release = holder ? await holdPort(port, holder.body, holder.status) : async () => undefined;
-            const addresses = {
-                this: `127.0.0.1:${port}`,
-                wildcard: `0.0.0.0:${port}`,
-                moved: `10.0.4.7:${port}`,
-                "another port": `127.0.0.1:${await freePort()}`,
+            const bindings = {
+                this: `127.0.0.1|${port}`,
+                "this, IPv4-mapped": `::ffff:127.0.0.1|${port}`,
+                wildcard: `0.0.0.0|${port}`,
+                "wildcard, spelled in full": `0:0:0:0:0:0:0:0|${port}`,
+                moved: `10.0.4.7|${port}`,
+                "another port": `127.0.0.1|${await freePort()}`,
             };
             try {
                 return await runService(
@@ -97,7 +99,7 @@ test("--check-config accepts a port held only by the browser service the deploy 
                         BROWSER_SERVICE_PORT: String(port),
                         DOCKER_HOST: engine.host,
                         BROWSER_SERVICE_PREVIOUS_CONTAINER: previous ? "4f2c1d" : "",
-                        BROWSER_SERVICE_PREVIOUS_ADDRESSES: previous?.address ? addresses[previous.address] : "",
+                        BROWSER_SERVICE_PREVIOUS_BINDINGS: previous?.address ? bindings[previous.address] : "",
                         BROWSER_SERVICE_PREVIOUS_DEPLOY_ID: previous?.deployId ?? "",
                     },
                     ["--check-config"],
@@ -116,6 +118,8 @@ test("--check-config accepts a port held only by the browser service the deploy 
             "current service with the replaced container's deploy id, bound elsewhere": (await check(current, { address: "moved", deployId: "older" })).code,
             "current service, replaced container bound to this address": (await check(current, { address: "this" })).code,
             "earlier service, unhealthy, replaced container bound to this address": (await check(earlierUnhealthy, { address: "this" })).code,
+            "earlier service, unhealthy, replaced container bound to this address spelled IPv4-mapped": (await check(earlierUnhealthy, { address: "this, IPv4-mapped" })).code,
+            "earlier service, unhealthy, replaced container bound to every address spelled in full": (await check(earlierUnhealthy, { address: "wildcard, spelled in full" })).code,
             "earlier service, healthy, replaced container bound to every address on this port": (await check(earlierHealthy, { address: "wildcard" })).code,
             "earlier service, unhealthy, replaced container bound to every address on this port": (await check(earlierUnhealthy, { address: "wildcard" })).code,
             "earlier service shape, replaced container bound to another host on this port": (await check(earlierUnhealthy, { address: "moved" })).code,
@@ -132,6 +136,8 @@ test("--check-config accepts a port held only by the browser service the deploy 
             "current service with the replaced container's deploy id, bound elsewhere": 0,
             "current service, replaced container bound to this address": 0,
             "earlier service, unhealthy, replaced container bound to this address": 0,
+            "earlier service, unhealthy, replaced container bound to this address spelled IPv4-mapped": 0,
+            "earlier service, unhealthy, replaced container bound to every address spelled in full": 0,
             "earlier service, healthy, replaced container bound to every address on this port": 0,
             "earlier service, unhealthy, replaced container bound to every address on this port": 0,
             "earlier service shape, replaced container bound to another host on this port": 1,
@@ -145,6 +151,48 @@ test("--check-config accepts a port held only by the browser service the deploy 
         });
         const refused = await check(earlierUnhealthy, { address: "moved" });
         assert.match(refused.output, /refused to start[\s\S]*BROWSER_SERVICE_PORT=\d+[\s\S]*not the shared browser service this deploy replaces/);
+    } finally {
+        await engine.close();
+    }
+});
+
+const ipv6Loopback = await new Promise<boolean>((resolve) => {
+    const probe = createHttpServer();
+    probe.once("error", () => resolve(false));
+    probe.listen(0, "::1", () => probe.close(() => resolve(true)));
+});
+
+test("--check-config accepts the replaced service on ::1 however its address was spelled", { skip: ipv6Loopback ? false : "no IPv6 loopback on this machine" }, async () => {
+    const engine = await fakeDockerEngine({ "conclave-browser:latest": hardenedImage });
+    try {
+        const outcomes: Record<string, unknown> = {};
+        for (const spelling of ["::1", "0:0:0:0:0:0:0:1", "[0000:0000:0000:0000:0000:0000:0000:0001]"]) {
+            const port = await freePort();
+            const server = createHttpServer((_req, res) => {
+                res.writeHead(503, { "content-type": "application/json" });
+                res.end(JSON.stringify({ service: "conclave-shared-browser", deployId: null, status: "unavailable" }));
+            });
+            server.listen(port, "::1");
+            await once(server, "listening");
+            try {
+                const checked = await runService(
+                    {
+                        BROWSER_SERVICE_HOST: "::1",
+                        BROWSER_SERVICE_PORT: String(port),
+                        DOCKER_HOST: engine.host,
+                        BROWSER_SERVICE_PREVIOUS_CONTAINER: "4f2c1d",
+                        BROWSER_SERVICE_PREVIOUS_BINDINGS: `${spelling}|${port}`,
+                        BROWSER_SERVICE_PREVIOUS_DEPLOY_ID: "",
+                    },
+                    ["--check-config"],
+                );
+                outcomes[spelling] = checked.code;
+            } finally {
+                server.closeAllConnections();
+                await new Promise<void>((resolve) => server.close(() => resolve()));
+            }
+        }
+        assert.deepEqual(outcomes, { "::1": 0, "0:0:0:0:0:0:0:1": 0, "[0000:0000:0000:0000:0000:0000:0000:0001]": 0 });
     } finally {
         await engine.close();
     }
