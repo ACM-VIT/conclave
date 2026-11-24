@@ -255,6 +255,70 @@ fixed("Greptile: a deploy fails when an instance it already deployed stops servi
   });
 });
 
+fixed("Sol: a stopped container is held down before it counts as empty, so Docker cannot bring it back under a call before it is recreated", () => {
+  const failAndCrash = (sfu) => {
+    if (sfu.image !== TARGET || sfu.bootDrained || sfu.failed) return;
+    sfu.failed = true;
+    sfu.publicDown = true;
+    setTimeout(() => sfu.crash(null), 500).unref();
+  };
+  const comeBackUnderACall = (sfu) => {
+    if (sfu.container !== "exited" || sfu.restartPolicy === "no") return;
+    sfu.container = "running";
+    sfu.draining = sfu.bootDrained;
+    sfu.rooms = 1;
+    sfu.starts.push({ image: sfu.image, bootDrained: sfu.bootDrained, by: "restart-policy" });
+  };
+  return withStack({ "sfu-a": { publicRoute: true, onRecreate: failAndCrash, onTag: comeBackUnderACall }, "sfu-b": {} }, async (sfus, shared) => {
+    const result = await deploy(sfus, { env: { ...shared.env, ...ONLY_A } });
+    assert.deepEqual(cutRooms(sfus), cutRooms(sfus).map(() => 0), result.output);
+  });
+});
+
+fixed("Sol: a single bad /status reading neither rolls back a serving instance nor drains the only one taking meetings", () =>
+  withStack({ "sfu-a": {}, "sfu-b": { container: "exited" } }, async (sfus, shared) => {
+    sfus["sfu-a"].statusFailures = 3;
+    const result = await deploy(sfus, { env: shared.env, journals: { "sfu-a": { phase: "rollback", lkg: LAST_GOOD } } });
+    assert.deepEqual(sfus["sfu-a"].lonelyDrains, [], result.output);
+    assert.deepEqual(cutRooms(sfus), cutRooms(sfus).map(() => 0));
+  }),
+);
+
+fixed("Sol: a candidate whose deploy died is never restarted by Docker before it passes its canary", () =>
+  withStack({ "sfu-a": {}, "sfu-b": {} }, async (sfus, shared) => {
+    const crashed = await deploy(sfus, { env: { ...shared.env, ...ONLY_A, SFU_DEPLOY_TEST_CRASH_AT: "start candidate sfu-a" } });
+    assert.equal(crashed.code, null, crashed.output);
+    sfus["sfu-a"].crash(50);
+    await new Promise((done) => setTimeout(done, 400));
+    assert.deepEqual(sfus["sfu-a"].starts.filter((start) => start.by === "restart-policy"), [], "Docker restarted the untested candidate");
+    const next = await deploy(sfus, { env: { ...shared.env, ...ONLY_A } });
+    assert.equal(next.code, 0, next.output);
+    assertServes(sfus["sfu-a"], TARGET);
+  }),
+);
+
+fixed("Sol: a 502 at the final public check fails the run", () => {
+  let sfusRef = null;
+  const blipAtTheEnd = (sfu, to) => {
+    if (to.endsWith(":rollback-sfu-b") && sfu.image === TARGET) sfusRef["sfu-b"].publicFailures = 1;
+  };
+  return withStack({ "sfu-a": { publicRoute: true }, "sfu-b": { publicRoute: true, onTag: blipAtTheEnd } }, async (sfus, shared) => {
+    sfusRef = sfus;
+    const result = await deploy(sfus, { env: shared.env });
+    assert.notEqual(result.code, 0, result.output);
+    assert.match(result.output, /sfu-b was deployed on .* but is not serving now/);
+  });
+});
+
+fixed("fuzz: a first deploy that finds an instance down for a moment waits for Docker to bring it back, so a failed canary rolls back to it", () =>
+  withStack({ "sfu-a": {} }, async (sfus, shared) => {
+    sfus["sfu-a"].crash(3500);
+    const result = await deploy(sfus, { env: { ...shared.env, DEPLOY_TEST_BAD_IMAGES: TARGET } });
+    assert.equal(result.code, 4, result.output);
+    assertServes(sfus["sfu-a"], LAST_GOOD);
+  }),
+);
+
 fixed("fuzz: a public route that is down when the deploy first looks still leaves the image the instance served on to go back to", () =>
   withStack({ "sfu-a": { publicRoute: true } }, async (sfus, shared) => {
     sfus["sfu-a"].publicFailures = 1;
@@ -297,6 +361,8 @@ const makePlan = (seed) => {
     callRate: pick([0, 0, 0.05, 0.2]),
     callMs: pick([300, 1200, 3000]),
     crashes: [chance(0.85) ? 1 + Math.floor(rand() * 30) : 0, chance(0.35) ? 1 + Math.floor(rand() * 30) : 0],
+    crashRestarts: Array.from({ length: pick([0, 0, 1, 2]) }, () => ({ who: pick(names), atMs: Math.floor(rand() * 8000), restartMs: pick([50, 300, 1500]) })),
+    statusBlips: Array.from({ length: pick([0, 1, 3]) }, () => ({ who: pick(names), atMs: Math.floor(rand() * 8000) })),
   };
 };
 
@@ -306,7 +372,16 @@ const checkRun = async ({ sfus, shared, plan, result, label, quiet }) => {
   const allowed = plan.canaryFails ? [LAST_GOOD] : [LAST_GOOD, TARGET];
   const problems = [];
   for (const [name, sfu] of Object.entries(sfus)) {
-    for (const cut of [...sfu.recreates, ...sfu.stops].filter((entry) => entry.roomsCut > 0)) problems.push(`${name}: ${cut.roomsCut} call(s) cut by a restart`);
+    for (const cut of [...sfu.recreates, ...sfu.stops].filter((entry) => entry.roomsCut > 0)) {
+      problems.push(`${name}: ${cut.roomsCut} call(s) cut by a restart (${cut.from ?? "stop"} to ${cut.to ?? "-"}, journal ${cut.phase}, draining ${cut.draining}, starts ${JSON.stringify(sfu.starts)})`);
+    }
+    for (const drain of sfu.lonelyDrains.filter((entry) => entry.othersDownMs >= 3000)) {
+      problems.push(`${name}: drained on ${drain.image} while no other instance had taken meetings for ${drain.othersDownMs} ms (${drain.others.join(", ")})`);
+    }
+    for (const start of sfu.starts.filter((entry) => entry.image === TARGET)) {
+      if (start.by === "restart-policy" && start.bootDrained) problems.push(`${name}: Docker restarted the candidate ${TARGET} before it passed its canary`);
+      if (!start.bootDrained && !sfu.canaryPassed.includes(TARGET)) problems.push(`${name}: started ${TARGET} taking meetings (${start.by}) before it passed its canary`);
+    }
     for (const undrain of sfu.undrains) {
       if (!["idle", "drained", undefined, ""].includes(undrain.phase) || (undrain.lkg && undrain.image !== undrain.lkg)) {
         problems.push(`${name}: undrained on ${undrain.image} while its journal said ${undrain.phase} with last-known-good ${undrain.lkg}`);
@@ -317,15 +392,22 @@ const checkRun = async ({ sfus, shared, plan, result, label, quiet }) => {
         problems.push(`${name}: rolled back to ${recreate.to} while its journal said ${recreate.phase}, not rollback`);
       }
     }
-    if (result.code !== null) {
+    const crashedByFault = sfu.container === "exited" && sfu.crashedAt && !sfu.heldDown;
+    if (result.code !== null && !crashedByFault) {
       const { phase } = await journal(shared, name);
       if (!(sfu.container === "running" && allowed.includes(sfu.image)) && phase !== "rollback") {
-        problems.push(`${name}: left ${sfu.container} on ${sfu.image} with its journal at ${phase}, so nothing serves and no rollback is under way`);
+        problems.push(`${name}: left ${sfu.container} on ${sfu.image} with its journal at ${phase}, so nothing serves and no rollback is under way (crashed ${sfu.crashedAt ? Date.now() - sfu.crashedAt : "never"} ms ago, held down ${sfu.heldDown}, restart ${sfu.restartPolicy}, starts ${JSON.stringify(sfu.starts.slice(-3))})`);
       }
       const serves = sfu.container === "running" && !sfu.draining && allowed.includes(sfu.image);
       if ((result.code === 0 && !(serves && settledPhase(phase))) || (result.code === 4 && !serves)) {
         problems.push(`${name}: exit ${result.code}, but it is ${sfu.container}, draining ${sfu.draining}, on ${sfu.image}, journal ${phase}`);
       }
+    }
+  }
+  if (result.code === 0) {
+    for (const name of plan.only ? [plan.only] : plan.names) {
+      const last = sfus[name].publicLog.at(-1);
+      if (last && !last.healthy) problems.push(`${name}: exit 0, but the last answer on its public route was not healthy`);
     }
   }
   if (result.code === 3 && !quiet && !Object.values(sfus).some((sfu) => sfu.rooms > 0 || Date.now() - (sfu.lastCallAt ?? 0) < 8000)) {
@@ -378,6 +460,8 @@ const runPlan = async (plan) => {
       ...plan.routeOutages.map((w) => [w, "publicDown", true]),
       ...plan.drainRefusals.map((w) => [w, "refuseDrain", true]),
     ];
+    for (const crash of plan.crashRestarts) later(crash.atMs, () => faults && sfus[crash.who].crash(crash.restartMs));
+    for (const blip of plan.statusBlips) later(blip.atMs, () => faults && (sfus[blip.who].statusFailures += 1));
     for (const [w, field, value] of windows) {
       later(w.atMs, () => {
         if (!faults) return;
@@ -419,7 +503,7 @@ const runPlan = async (plan) => {
       for (const timer of timers) clearTimeout(timer);
       timers.clear();
       calls.length = 0;
-      for (const sfu of Object.values(sfus)) Object.assign(sfu, { rooms: 0, statusAnswers: true, publicDown: false, refuseDrain: false });
+      for (const sfu of Object.values(sfus)) Object.assign(sfu, { rooms: 0, statusAnswers: true, publicDown: false, refuseDrain: false, statusFailures: 0, publicFailures: 0 });
       let result = null;
       for (let attempt = 1; attempt <= 4; attempt += 1) {
         result = await deploy(sfus, { env });

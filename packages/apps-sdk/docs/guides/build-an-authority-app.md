@@ -56,11 +56,15 @@ import {
   defineAuthority, key, reject, table, type Subject,
 } from "@conclave/apps-sdk/authority/server";
 
-type Entry = { id: string; subject: Subject; name: string; joinedAt: number };
+type Entry = { id: string; subject: Subject; name: string; joinedAt: number; order: number };
+const ORDER = key("last");
 
 export const signUpAuthority = defineAuthority({
   contract: signUpContract,
-  tables: { entries: table<Entry>({ maxRows: 500 }) },
+  tables: {
+    entries: table<Entry>({ maxRows: 500 }),
+    order: table<{ last: number }>({ maxRows: 1 }),
+  },
   timers: {},
   canView: ({ role }) => role === "moderator" || role === "member",
   actions: {
@@ -68,11 +72,14 @@ export const signUpAuthority = defineAuthority({
       roles: ["moderator", "member"],
       rate: { burst: 5, perSecond: 1 },
       run(ctx, tx) {
+        const order = (tx.get("order", ORDER)?.last ?? 0) + 1;
+        tx.put("order", ORDER, { last: order });
         tx.insertIfAbsent("entries", key(ctx.subject), {
           id: ctx.nextId("e"),
           subject: ctx.subject,
           name: ctx.displayName,
           joinedAt: ctx.now,
+          order,
         });
         return null;
       },
@@ -97,8 +104,34 @@ export const signUpAuthority = defineAuthority({
       project: () => ({ key: "entry", value: {} }),
     },
   },
+  mergeSubjects(_ctx, tx, { from, into }) {
+    const entry = tx.get("entries", key(from));
+    if (!entry) return undefined;
+    tx.delete("entries", key(from));
+    const kept = tx.get("entries", key(into));
+    if (!kept || entry.order < kept.order) {
+      tx.put("entries", key(into), { ...entry, subject: into });
+    }
+    return undefined;
+  },
 });
 ```
+
+An app with a personal view keeps rows by person, so it must define `mergeSubjects`. The room can learn late that two subjects are one person, for example a guest whose two tabs got different passes. It then runs `mergeSubjects` once in every app, in one transaction, and moves everything kept under `from` to `into`. After the merge the person has one subject everywhere.
+
+The rule a merge follows: it leaves what one person would have if they had done the surviving actions themselves, in the order they happened.
+
+- Of two actions that are one per person (two ballots in one poll, two answers in one round, two joins), the earlier one survives, because the later one would have been refused.
+- A rule an action checks is applied the way the action checked it: in the order the actions happened, against the state at that moment. A cap on open questions is checked against the questions open when each one was asked, so a question answered before the next was asked frees its place, and one reopened later does not take it back. Keep where in that order a row changed state if a rule depends on it.
+- Of two writes of the same row, the later one survives, because it would have overwritten the first.
+- Counts, totals and scores are worked out again from what survives, and stored results (a tally, a leaderboard) are rebuilt.
+- A merge sees the rows, not the history, so store each action's place in a strict order whenever that order decides which row survives or how a rule applied. A time is not enough, because two actions can share a millisecond. Keep a counter row the app bumps once per action, as the `order` table above does, and compare by it.
+- A field that only records when a row last changed, such as `updatedAt`, may keep the later time.
+- An action of one subject that undid or cleared the other subject's rows saw none of them, so a merge cannot reproduce it; both effects stay.
+
+A merge's cost must not grow with the room. Read only what is the two subjects': point reads and scans under a key that starts with the subject. Where a table is keyed by something else first (a ballot by poll, an answer by round), keep a second table keyed by subject and use it, but only for rows that are removed one at a time. A `clear` takes the rows under one prefix and cannot reach a second table keyed by subject, which then fills with rows of parents long gone. For rows that go with their parent, such as an upvote with its question, read the subject's row under each parent by key instead, as in `get(key(questionId, subject))`. That costs two operations a parent and stays small because the app caps its parents: Q&A keeps at most 300 questions. A result that ranks everyone, such as a leaderboard, is updated from the merged person's entry rather than rebuilt from every row. If it keeps only the top of the list, store whether it holds everyone, because a merge shortens the list and its length then says nothing. Rebuild it only when too few are left to show.
+
+Check a merge with `mergeAgainstOnePerson` in `packages/sfu/test/authority/merge-check.ts`: it plays a script once as two subjects followed by the merge and once as one person, and compares every table. A step marked `sameMoment` happens in the same millisecond as the step before it. Order numbers are compared by rank and the counter row is left out, because a merged person may have made an action that one person would have been refused. Check its cost with `mergeCost`, which plays the same script with a crowd of other subjects. Every crowd action must succeed, so the check lifts the room's shared action rate while it sets up the room, and keeps the transaction budget. The merge's operations must be the same for a small crowd as for thousands, and stay within a small multiple of the two subjects' rows plus two for each row of a capped table the merge walks.
 
 The four things a module has:
 

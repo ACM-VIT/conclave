@@ -65,7 +65,7 @@ services:
       CONCLAVE_SQLITE_PATH: ${CONCLAVE_SQLITE_PATH:-/var/lib/conclave/recordings/conclave.sqlite}
     volumes:
       - ${RECORDING_STORAGE_PATH:-/var/lib/conclave/recordings}:/var/lib/conclave/recordings
-    restart: unless-stopped
+    restart: ${SFU_RESTART_POLICY:-unless-stopped}
 
   sfu-b:
     # Named here, so the image deploy-sfu.sh tags is the one compose starts
@@ -133,4 +133,4 @@ services:
       CONCLAVE_SQLITE_PATH: ${CONCLAVE_SQLITE_PATH:-/var/lib/conclave/recordings/conclave.sqlite}
     volumes:
       - ${RECORDING_STORAGE_PATH:-/var/lib/conclave/recordings}:/var/lib/conclave/recordings
-    restart: unless-stopped
+    restart: ${SFU_RESTART_POLICY:-unless-stopped}

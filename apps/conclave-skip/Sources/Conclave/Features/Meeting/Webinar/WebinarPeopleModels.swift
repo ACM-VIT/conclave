@@ -167,6 +167,15 @@ enum WebinarStageInvitePolicy {
         return next
     }
 
+    static func afterInvitesUsed(_ invites: [String: String], invitedUserKeys: [String]) -> [String: String] {
+        if invitedUserKeys.isEmpty { return invites }
+        var next = invites
+        for id in invites.keys {
+            if invitedUserKeys.contains(userKeyPart(id)) { next[id] = nil }
+        }
+        return next
+    }
+
     static func afterWebinarMode(_ invites: [String: String], isWebinarEnabled: Bool) -> [String: String] {
         isWebinarEnabled ? invites : [:]
     }

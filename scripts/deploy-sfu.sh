@@ -606,17 +606,34 @@ booted_drained() {
   grep -qx 'SFU_DRAINING=true' <<< "$env"
 }
 
+hold_down() {
+  local svc="$1" container
+  container="$(service_container "$svc")" || return 1
+  [[ -n "$container" ]] || return 0
+  [[ "$(container_state "$svc")" == "stopped" ]] || return 1
+  docker update --restart=no "$container" >/dev/null 2>&1 || return 1
+  [[ "$(container_state "$svc")" == "stopped" ]]
+}
+
+serving_confirmed() {
+  local i
+  for i in 1 2 3; do
+    serving "$@" && return 0
+    (( i < 3 )) && sleep "$STATUS_RETRY_SECONDS"
+  done
+  return 1
+}
+
 DRAIN_WHY=""
 drain_and_wait() {
-  local svc="$1" url="$2" settle_until="${3:-}" start_ts now state status rooms draining unreadable_since="" undrained_since=""
+  local svc="$1" url="$2" settle_until="${3:-}" start_ts now status rooms draining unreadable_since="" undrained_since=""
   start_ts="$(date +%s)"
   [[ -n "$settle_until" ]] || settle_until=$(( start_ts + PLACEMENT_SETTLE_SECONDS ))
   DRAIN_WHY=""
   while true; do
     now="$(date +%s)"
-    state="$(container_state "$svc")"
-    if [[ "$state" == "stopped" || "$state" == "absent" ]]; then
-      echo "${svc}'s container is not running, so it carries no calls."
+    if hold_down "$svc"; then
+      echo "${svc}'s container is not running and Docker will not restart it, so it carries no calls."
       return 0
     fi
     status="$(instance_status "$svc" 2>/dev/null)" || status=""
@@ -739,16 +756,6 @@ restore_service_when_none_serves() {
   done
 }
 
-# True when every SFU instance, deployed in this run or not, serves the image
-# by the serving rule, and its journal records it as that instance's
-# last-known-good image: the only state a release is recorded from.
-all_serving_on() {
-  local svc
-  for svc in "${ALL_SFU_SERVICES[@]}"; do
-    [[ "$(journal_get "$svc" lkg)" == "$1" ]] && serving "$svc" "$1" || return 1
-  done
-}
-
 # True when every SFU instance, deployed in this run or not, runs the image.
 all_on_image() {
   local svc container
@@ -810,8 +817,9 @@ candidate_tag() {
 # ("false"). Both are set on every start, never inherited from the shell or
 # .env.
 up_service() {
-  local svc="$1" tag="$2" drained="$3"
-  env "$(image_var "$svc")=${tag}" SFU_START_DRAINING="$drained" \
+  local svc="$1" tag="$2" drained="$3" restart="unless-stopped"
+  [[ "$drained" == "true" ]] && restart="no"
+  env "$(image_var "$svc")=${tag}" SFU_START_DRAINING="$drained" SFU_RESTART_POLICY="$restart" \
     "${COMPOSE[@]}" up -d --no-build --no-deps --force-recreate "$svc"
 }
 
@@ -879,7 +887,7 @@ try {
 # The config hash a serving container of this service carries: rendered with
 # the very settings its serving start uses, never the shell's or .env's.
 serving_config_hash() {
-  env "$(image_var "$1")=$2" SFU_START_DRAINING=false "${COMPOSE[@]}" config --hash "$1" | awk '{print $2}'
+  env "$(image_var "$1")=$2" SFU_START_DRAINING=false SFU_RESTART_POLICY=unless-stopped "${COMPOSE[@]}" config --hash "$1" | awk '{print $2}'
 }
 
 # One rule for "serving", used for the last-known-good image, the deploy's
@@ -914,7 +922,8 @@ const why =
   status.instanceId !== expected ? `its management URL answers as ${status.instanceId}, not ${expected}` :
   status.healthy !== true ? "its /status says unhealthy" :
   status.draining !== false ? "it is draining" :
-  publicStatus.instanceId !== expected ? `its public URL ${publicUrl} reaches ${publicStatus.instanceId ?? "nothing"}` : "";
+  publicStatus.instanceId !== expected ? `its public URL ${publicUrl} reaches ${publicStatus.instanceId ?? "nothing"}` :
+  publicStatus.healthy !== true ? `its public URL ${publicUrl} does not report healthy` : "";
 process.stdout.write(why);
 ' "$svc" "${EXPECTED_ID[$svc]:-$svc}" "$url" "$(service_public_url "$svc")")"
   if [[ -n "$verdict" ]]; then SERVING_WHY="$verdict"; return 1; fi
@@ -1048,10 +1057,12 @@ promote() {
 roll_back() {
   local svc="$1" url="$2" image_name="$3" lkg="$4" code=0 status
   [[ "$(journal_get "$svc" phase)" == "rollback" ]] || journal_set "$svc" phase=rollback
-  status="$(instance_status "$svc" 2>/dev/null)" || status=""
-  if [[ -n "$status" && "$(printf "%s" "$status" | json_field draining)" == "false" ]] && ! peers_serving "$svc"; then
-    echo "${svc} takes meetings and no other instance does, so it is not drained to roll it back now; it keeps serving, and the next run of this script rolls it back once another instance serves." >&2
-    return 1
+  if ! hold_down "$svc"; then
+    status="$(instance_status "$svc" 2>/dev/null)" || status=""
+    if ! [[ -n "$status" && "$(printf "%s" "$status" | json_field draining)" == "true" ]] && ! peers_serving "$svc"; then
+      echo "${svc} may take meetings and no other instance serves, so it is not drained to roll it back now; it keeps running, and the next run of this script rolls it back once another instance serves." >&2
+      return 1
+    fi
   fi
   drain_and_wait "$svc" "$url" || code=$?
   if (( code == 3 )); then
@@ -1102,7 +1113,7 @@ repair_interrupted() {
         fi
         ;;
       candidate|rollback)
-        if [[ -n "$lkg" ]] && serving "$svc" "$lkg"; then
+        if [[ -n "$lkg" ]] && serving_confirmed "$svc" "$lkg"; then
           journal_set "$svc" phase=idle candidate= prevLkg=
         else
           roll_back "$svc" "$url" "$image_name" "$lkg" || code=$?
@@ -1110,10 +1121,10 @@ repair_interrupted() {
         ;;
       passed|promoting)
         [[ "$phase" == "passed" ]] && prev="$lkg"
-        if [[ -n "$candidate" ]] && serving "$svc" "$candidate"; then
+        if [[ -n "$candidate" ]] && serving_confirmed "$svc" "$candidate"; then
           journal_set "$svc" phase=idle lkg="$candidate" candidate= prevLkg=
           docker tag "$candidate" "${IMAGE_REPO}:rollback-${svc}"
-        elif [[ -n "$prev" ]] && serving "$svc" "$prev"; then
+        elif [[ -n "$prev" ]] && serving_confirmed "$svc" "$prev"; then
           journal_set "$svc" phase=idle lkg="$prev" candidate= prevLkg=
         else
           state="$(container_state "$svc")"
@@ -1250,13 +1261,24 @@ deploy_service() {
     echo "${svc} answers but its /status cannot be read; not rebuilding it." >&2
     return 1
   else
+    if [[ -z "$lkg" && "$(container_state "$svc")" == "stopped" ]]; then
+      echo "${svc} is stopped and no image it served on is on record; giving Docker up to ${HEALTH_TIMEOUT_SECONDS}s to bring it back before it is rebuilt."
+      if wait_serving "$svc"; then
+        deploy_service "$svc"
+        return
+      fi
+    fi
     # Silent is not stopped: a wrong URL or proxy hides a container that may
     # still carry calls, however recently it started.
-    case "$(container_state "$svc")" in
-      stopped|absent)
+    case "$(hold_down "$svc" && echo down || container_state "$svc")" in
+      down)
         echo "${svc} is not running; starting it without a drain."
         journal_set "$svc" phase=drained lkg="$lkg" wasDraining=true candidate= prevLkg= commit="$TARGET_COMMIT"
         settle_until=$(( $(date +%s) + PLACEMENT_SETTLE_SECONDS ))
+        ;;
+      stopped)
+        echo "Docker could not keep ${svc}'s stopped container from restarting, so it could take calls while it is rebuilt; not rebuilding it." >&2
+        return 1
         ;;
       running)
         echo "${svc}'s container is running but nothing answers at ${url}; check that URL, or stop ${svc} if it is hung. Not rebuilding it." >&2
@@ -1324,9 +1346,13 @@ deploy_service() {
 # or a candidate could only run under the service's own tag.
 for svc in "${ALL_SFU_SERVICES[@]}"; do
   probe="conclave-deploy-probe:${svc}"
-  named="$(env "$(image_var "$svc")=${probe}" "${COMPOSE[@]}" config --format json | node -e "const c=JSON.parse(require('fs').readFileSync(0,'utf8'));process.stdout.write(String(c.services[process.argv[1]].image||''))" "$svc")"
-  if [[ "$named" != "$probe" ]]; then
+  named="$(env "$(image_var "$svc")=${probe}" SFU_RESTART_POLICY=no "${COMPOSE[@]}" config --format json | node -e "const c=JSON.parse(require('fs').readFileSync(0,'utf8'));const s=c.services[process.argv[1]];process.stdout.write(String(s.image||'')+' '+String(s.restart||''))" "$svc")"
+  if [[ "${named% *}" != "$probe" ]]; then
     echo "${COMPOSE_FILE} must name ${svc}'s image as \${$(image_var "$svc"):-<name>}, so a candidate runs under its own tag and never under ${svc}'s." >&2
+    exit 1
+  fi
+  if [[ "${named##* }" != "no" ]]; then
+    echo "${COMPOSE_FILE} must set ${svc}'s restart policy as \${SFU_RESTART_POLICY:-unless-stopped}, so Docker never restarts a candidate that has not passed its canary." >&2
     exit 1
   fi
 done
@@ -1437,18 +1463,34 @@ for svc in "${ALL_SFU_SERVICES[@]}"; do
     exit "${REPAIR_CODE[$svc]}"
   fi
 done
+declare -A FINAL_SERVING=()
+for svc in "${ALL_SFU_SERVICES[@]}"; do
+  if [[ "$(journal_get "$svc" lkg)" != "$TARGET_IMAGE" ]]; then
+    FINAL_SERVING[$svc]="its journal does not record ${TARGET_COMMIT} as its last-known-good image"
+  elif serving "$svc" "$TARGET_IMAGE"; then
+    FINAL_SERVING[$svc]=yes
+  else
+    FINAL_SERVING[$svc]="$SERVING_WHY"
+  fi
+done
 for svc in "${ORDERED_SERVICES[@]}"; do
-  if ! wait_serving "$svc" "$TARGET_IMAGE"; then
+  if [[ "${FINAL_SERVING[$svc]}" != yes ]]; then
     echo "" >&2
-    echo "Deploy stopped: ${svc} was deployed on ${TARGET_COMMIT} but is not serving now (${SERVING_WHY}). Check it now, then rerun this script." >&2
+    echo "Deploy stopped: ${svc} was deployed on ${TARGET_COMMIT} but is not serving now (${FINAL_SERVING[$svc]}). Check it now, then rerun this script." >&2
     exit 1
   fi
 done
+all_final_serving() {
+  local svc
+  for svc in "${ALL_SFU_SERVICES[@]}"; do
+    [[ "${FINAL_SERVING[$svc]}" == yes ]] || return 1
+  done
+}
 
 # The release record moves only once every instance runs the target, so a
 # deploy or rollback of some instances (SFU_DEPLOY_SERVICES) keeps what the
 # others still need: a partial rollback keeps its target for the rest.
-if [[ "$ROLLBACK" == "true" ]] && ! all_serving_on "$TARGET_IMAGE"; then
+if [[ "$ROLLBACK" == "true" ]] && ! all_final_serving; then
   echo "Not every instance runs ${TARGET_COMMIT} yet; --rollback continues to it until every instance is back on it."
 elif [[ "$ROLLBACK" == "true" ]]; then
   # Back past the current release, one step only: a second --rollback has
@@ -1462,7 +1504,7 @@ elif [[ "$ROLLBACK" == "true" ]]; then
   ROLLBACK_TARGET_COMMIT=""
   ROLLBACK_TARGET_IMAGE=""
   save_deploy_state
-elif [[ "$TARGET_IMAGE" != "$LAST_GOOD_IMAGE" ]] && all_serving_on "$TARGET_IMAGE"; then
+elif [[ "$TARGET_IMAGE" != "$LAST_GOOD_IMAGE" ]] && all_final_serving; then
   PREVIOUS_GOOD_COMMIT="$LAST_GOOD_COMMIT"
   PREVIOUS_GOOD_IMAGE="$LAST_GOOD_IMAGE"
   LAST_GOOD_COMMIT="$TARGET_COMMIT"
