@@ -1,7 +1,7 @@
 import { createServer } from "node:net";
 import { createApp } from "./app.js";
 import { createBrowserManager } from "./createBrowserManager.js";
-import { canonicalLiteral, resolveBindings, resolveListenHost, type ResolvedHost } from "./bindAddress.js";
+import { canonicalLiteral, resolveBindings, resolveListenHost, urlHost, type ResolvedHost } from "./bindAddress.js";
 import { isLoopbackOrPrivateHost, resolveServiceSecurity, ServiceSecurityError } from "./serviceSecurity.js";
 import { isHeldByPreviousContainer, previousManagedContainer } from "./serviceIdentity.js";
 import { defaultConfig } from "./types.js";
@@ -33,6 +33,7 @@ const app = createApp(browserManager, security);
 const listenAddress: Promise<ResolvedHost> = resolveListenHost(security.listenHost, isLoopbackOrPrivateHost).then((resolved) =>
     resolved.ok ? resolved.address : refuseToStart(resolved.problem),
 );
+const healthUrl = (address: ResolvedHost, port: number) => `http://${urlHost(address)}:${port}/health`;
 const resolvedFrom = canonicalLiteral(security.listenHost) === null ? ` (BROWSER_SERVICE_HOST=${security.listenHost})` : "";
 
 const checkListenAddress = (host: string, port: number): Promise<void> =>
@@ -44,8 +45,7 @@ const checkListenAddress = (host: string, port: number): Promise<void> =>
 
 const heldBySharedBrowser = async (host: ResolvedHost, port: number): Promise<boolean> => {
     try {
-        const address = host.includes(":") ? `[${host}]` : host;
-        const response = await fetch(`http://${address}:${port}/health`, { signal: AbortSignal.timeout(3_000) });
+        const response = await fetch(healthUrl(host, port), { signal: AbortSignal.timeout(3_000) });
         const body: unknown = await response.json();
         const previous = previousManagedContainer();
         const resolved = previous && { ...previous, bindings: await resolveBindings(previous.bindings) };
@@ -100,6 +100,7 @@ if (process.argv.includes("--check-config")) {
         const reportValid = () =>
             assertReady().then(() => {
                 console.log(`[Server] Shared browser service configuration is valid (control API on ${address}:${security.listenPort}${resolvedFrom}).`);
+                console.log(`BROWSER_SERVICE_HEALTH_URL=${healthUrl(address, security.listenPort)}`);
                 process.exit(0);
             });
         return checkListenAddress(address, security.listenPort).then(reportValid, async (error: NodeJS.ErrnoException) => {
