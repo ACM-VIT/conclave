@@ -770,7 +770,7 @@ struct AppWheelPage: View {
 
     var body: some View {
         let wheel = host.wheel
-        let deleteAction: ((IndexSet) -> Void)? = wheel.canReorder ? { offsets in remove(offsets) } : nil
+        let deleteAction: ((IndexSet) -> Void)? = wheel.canEdit ? { offsets in remove(offsets) } : nil
         List {
             if !wheel.isReady {
                 AppPageUnavailable(appId: "wheel")
@@ -824,6 +824,7 @@ struct AppWheelPage: View {
                             .opacity(wheel.isPending(AppPageCommandKind.removeEntry, target: entry.id) ? HostingTheme.disabledOpacity : 1)
                             .accessibilityElement(children: .combine)
                             .accessibilityIdentifier("app.wheel.entry")
+                            .deleteDisabled(!wheel.canReorder)
                         }
                         .onDelete(perform: deleteAction)
                     }
