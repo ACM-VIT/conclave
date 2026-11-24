@@ -372,7 +372,9 @@ const checkRun = async ({ sfus, shared, plan, result, label, quiet }) => {
   const allowed = plan.canaryFails ? [LAST_GOOD] : [LAST_GOOD, TARGET];
   const problems = [];
   for (const [name, sfu] of Object.entries(sfus)) {
-    for (const cut of [...sfu.recreates, ...sfu.stops].filter((entry) => entry.roomsCut > 0)) problems.push(`${name}: ${cut.roomsCut} call(s) cut by a restart`);
+    for (const cut of [...sfu.recreates, ...sfu.stops].filter((entry) => entry.roomsCut > 0)) {
+      problems.push(`${name}: ${cut.roomsCut} call(s) cut by a restart (${cut.from ?? "stop"} to ${cut.to ?? "-"}, journal ${cut.phase}, draining ${cut.draining}, starts ${JSON.stringify(sfu.starts)})`);
+    }
     for (const drain of sfu.lonelyDrains.filter((entry) => entry.othersDownMs >= 3000)) {
       problems.push(`${name}: drained on ${drain.image} while no other instance had taken meetings for ${drain.othersDownMs} ms (${drain.others.join(", ")})`);
     }
@@ -394,7 +396,7 @@ const checkRun = async ({ sfus, shared, plan, result, label, quiet }) => {
     if (result.code !== null && !crashedByFault) {
       const { phase } = await journal(shared, name);
       if (!(sfu.container === "running" && allowed.includes(sfu.image)) && phase !== "rollback") {
-        problems.push(`${name}: left ${sfu.container} on ${sfu.image} with its journal at ${phase}, so nothing serves and no rollback is under way`);
+        problems.push(`${name}: left ${sfu.container} on ${sfu.image} with its journal at ${phase}, so nothing serves and no rollback is under way (crashed ${sfu.crashedAt ? Date.now() - sfu.crashedAt : "never"} ms ago, held down ${sfu.heldDown}, restart ${sfu.restartPolicy}, starts ${JSON.stringify(sfu.starts.slice(-3))})`);
       }
       const serves = sfu.container === "running" && !sfu.draining && allowed.includes(sfu.image);
       if ((result.code === 0 && !(serves && settledPhase(phase))) || (result.code === 4 && !serves)) {
