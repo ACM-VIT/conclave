@@ -91,6 +91,13 @@ export const startSfu = async (
     restartPolicy: "unless-stopped",
     statusFailures: 0,
   };
+  sfu.restart = () => {
+    if (sfu.container !== "exited" || sfu.restartPolicy === "no") return;
+    sfu.container = "running";
+    sfu.draining = sfu.bootDrained;
+    sfu.crashedAt = null;
+    sfu.starts.push({ image: sfu.image, bootDrained: sfu.bootDrained, by: "restart-policy" });
+  };
   sfu.crash = (restartAfterMs) => {
     if (sfu.container !== "running") return;
     sfu.container = "exited";
@@ -99,11 +106,7 @@ export const startSfu = async (
     if (restartAfterMs === null) return;
     const generation = sfu.recreates.length;
     setTimeout(() => {
-      if (sfu.container !== "exited" || sfu.restartPolicy === "no" || sfu.recreates.length !== generation) return;
-      sfu.container = "running";
-      sfu.draining = sfu.bootDrained;
-      sfu.crashedAt = null;
-      sfu.starts.push({ image: sfu.image, bootDrained: sfu.bootDrained, by: "restart-policy" });
+      if (sfu.recreates.length === generation) sfu.restart();
     }, restartAfterMs).unref();
   };
   const server = createServer(async (req, res) => {
@@ -127,6 +130,7 @@ export const startSfu = async (
         firstImage: sfu.firstImage,
       });
     }
+    if (url.pathname === "/status") sfu.onStatus?.(sfu);
     if (sfu.container !== "running" && !url.pathname.startsWith("/stand-in/")) return req.socket.destroy();
     if (url.pathname === "/health") return sfu.healthy ? json({ status: "healthy" }) : json({ status: "starting" }, 503);
     if (url.pathname === "/status") {
