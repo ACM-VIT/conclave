@@ -59,6 +59,15 @@
         <meta-data
             android:name="CONCLAVE_DEBUG_VIEWER_PROFILE"
             android:value="${CONCLAVE_DEBUG_VIEWER_PROFILE}" />
+        <meta-data
+            android:name="POSTHOG_PROJECT_KEY"
+            android:value="${POSTHOG_PROJECT_KEY}" />
+        <meta-data
+            android:name="POSTHOG_HOST"
+            android:value="${POSTHOG_HOST}" />
+        <meta-data
+            android:name="CONCLAVE_CRASH_REPORTS_IN_DEBUG"
+            android:value="${CONCLAVE_CRASH_REPORTS_IN_DEBUG}" />
 
         <activity
             android:name=".MainActivity"
