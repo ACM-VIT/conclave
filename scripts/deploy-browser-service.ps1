@@ -80,29 +80,42 @@ if (Test-Path -Path $envFile -PathType Leaf) {
 }
 $composeArgs += @("-f", $composeFile)
 
-# Run the service's own startup checks in the new image, with the environment
-# compose will give it, before anything is replaced.
-Write-Host "Checking the shared browser service configuration..."
-Invoke-Checked -Command "docker" -Arguments ($composeArgs + @("build", "browser-service"))
-Invoke-Checked -Command "docker" -Arguments ($composeArgs + @("run", "--rm", "--no-deps", "browser-service", "node", "packages/shared-browser/dist/server.js", "--check-config"))
-if ($checkConfigOnly) {
-  exit 0
-}
-
 $runtimeImageName = if (-not [string]::IsNullOrWhiteSpace($env:BROWSER_IMAGE_NAME)) {
   $env:BROWSER_IMAGE_NAME
 } else {
   "conclave-browser:latest"
 }
+$checkImageName = $runtimeImageName
+$candidateImageName = ""
 
-if ($buildRuntimeImage) {
-  $browserDockerDir = Join-Path $rootDir "packages/shared-browser/docker"
-  if (-not (Test-Path -Path $browserDockerDir -PathType Container)) {
-    Exit-WithError "Missing browser runtime Docker context at $browserDockerDir"
+try {
+  if ($buildRuntimeImage) {
+    $browserDockerDir = Join-Path $rootDir "packages/shared-browser/docker"
+    if (-not (Test-Path -Path $browserDockerDir -PathType Container)) {
+      Exit-WithError "Missing browser runtime Docker context at $browserDockerDir"
+    }
+    $candidateImageName = "conclave-browser-candidate:$PID"
+    Write-Host "Building browser runtime image ($runtimeImageName)..."
+    Invoke-Checked -Command "docker" -Arguments @("build", "-t", $candidateImageName, $browserDockerDir)
+    $checkImageName = $candidateImageName
   }
 
-  Write-Host "Building browser runtime image ($runtimeImageName)..."
-  Invoke-Checked -Command "docker" -Arguments @("build", "-t", $runtimeImageName, $browserDockerDir)
+  # Run the service's own startup checks in the new image, against the runtime
+  # image it would launch, before anything is replaced or retagged.
+  Write-Host "Checking the shared browser service configuration..."
+  Invoke-Checked -Command "docker" -Arguments ($composeArgs + @("build", "browser-service"))
+  Invoke-Checked -Command "docker" -Arguments ($composeArgs + @("run", "--rm", "--no-deps", "-e", "BROWSER_IMAGE_NAME=$checkImageName", "browser-service", "node", "packages/shared-browser/dist/server.js", "--check-config"))
+  if ($checkConfigOnly) {
+    exit 0
+  }
+
+  if ($candidateImageName) {
+    Invoke-Checked -Command "docker" -Arguments @("tag", $candidateImageName, $runtimeImageName)
+  }
+} finally {
+  if ($candidateImageName) {
+    & docker image rm $candidateImageName *> $null
+  }
 }
 
 Write-Host "Deploying shared browser service..."

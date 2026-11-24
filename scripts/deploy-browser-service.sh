@@ -44,26 +44,33 @@ if [[ "$BROWSER_PROVIDER" == "kitesurf" ]]; then
   export BROWSER_DOCKER_SOCKET="${BROWSER_DOCKER_SOCKET:-/dev/null}"
 fi
 
-# Run the service's own startup checks in the new image, with the environment
-# compose will give it, before anything is replaced.
-echo "Checking the shared browser service configuration..."
-"${COMPOSE[@]}" build browser-service
-"${COMPOSE[@]}" run --rm --no-deps browser-service node packages/shared-browser/dist/server.js --check-config
-if [[ "$CHECK_CONFIG_ONLY" == "true" ]]; then
-  exit 0
-fi
-
 RUNTIME_IMAGE_NAME="${BROWSER_IMAGE_NAME:-conclave-browser:latest}"
-
+CHECK_IMAGE_NAME="$RUNTIME_IMAGE_NAME"
+CANDIDATE_IMAGE_NAME=""
 if [[ "$BUILD_RUNTIME_IMAGE" == "true" ]]; then
   BROWSER_DOCKER_DIR="${ROOT_DIR}/packages/shared-browser/docker"
   if [[ ! -d "$BROWSER_DOCKER_DIR" ]]; then
     echo "Missing browser runtime Docker context at ${BROWSER_DOCKER_DIR}" >&2
     exit 1
   fi
-
+  CANDIDATE_IMAGE_NAME="conclave-browser-candidate:$$"
+  trap 'docker image rm "$CANDIDATE_IMAGE_NAME" >/dev/null 2>&1 || true' EXIT
   echo "Building browser runtime image (${RUNTIME_IMAGE_NAME})..."
-  docker build -t "$RUNTIME_IMAGE_NAME" "$BROWSER_DOCKER_DIR"
+  docker build -t "$CANDIDATE_IMAGE_NAME" "$BROWSER_DOCKER_DIR"
+  CHECK_IMAGE_NAME="$CANDIDATE_IMAGE_NAME"
+fi
+
+# Run the service's own startup checks in the new image, against the runtime
+# image it would launch, before anything is replaced or retagged.
+echo "Checking the shared browser service configuration..."
+"${COMPOSE[@]}" build browser-service
+"${COMPOSE[@]}" run --rm --no-deps -e "BROWSER_IMAGE_NAME=${CHECK_IMAGE_NAME}" browser-service node packages/shared-browser/dist/server.js --check-config
+if [[ "$CHECK_CONFIG_ONLY" == "true" ]]; then
+  exit 0
+fi
+
+if [[ -n "$CANDIDATE_IMAGE_NAME" ]]; then
+  docker tag "$CANDIDATE_IMAGE_NAME" "$RUNTIME_IMAGE_NAME"
 fi
 
 echo "Deploying shared browser service..."
