@@ -48,8 +48,11 @@ const SECOND_MS = 1_000;
 const MINUTE_MS = 60_000;
 const BETWEEN_STEPS_MS = 50;
 
-type ActorName = "owner" | "alice" | "bob" | "carol" | "invitee";
-const ACTOR_NAMES: ActorName[] = ["owner", "alice", "bob", "carol", "invitee"];
+type ActorName = "owner" | "alice" | "bob" | "carol" | "invitee" | "dana";
+const ACTOR_NAMES: ActorName[] = ["owner", "alice", "bob", "carol", "invitee", "dana"];
+const DANA = "pass:proof-dana";
+const DANA_KEY_PREFIX = "guest-gp_dana-";
+const personOf = (key: string): string => (key.startsWith(DANA_KEY_PREFIX) ? DANA : key);
 const USERS: Record<ActorName, SfuAuthPayload> = {
   owner: {
     userId: "owner@example.com",
@@ -66,6 +69,14 @@ const USERS: Record<ActorName, SfuAuthPayload> = {
     email: "invitee@example.com",
     clientId: "conclave",
     sessionId: "i",
+  },
+  dana: {
+    userId: `${DANA_KEY_PREFIX}d`,
+    clientId: "conclave",
+    sessionId: "d",
+    guestProof: "proof-dana",
+    guestRoom: CODE,
+    allowRoomCreation: true,
   },
 };
 
@@ -103,6 +114,8 @@ type Actor = {
   tab: Tab | null;
   second: Tab | null;
   pass: string | null;
+  passKey: string | null;
+  lastUser: SfuAuthPayload | null;
 };
 type JoinAck = { status?: string; error?: string; roomRecoveryPass?: string };
 type Completion = {
@@ -148,7 +161,7 @@ type HostAction =
   | "unlock";
 type Shutdown = "drain" | "stop" | "worker" | "handoff";
 type Step =
-  | { kind: "open"; actor: ActorName; pass: boolean; hold: boolean }
+  | { kind: "open"; actor: ActorName; pass: boolean; hold: boolean; reload?: boolean }
   | { kind: "again"; actor: ActorName; pass: boolean }
   | { kind: "second"; actor: ActorName; action: "open" | "leave" }
   | { kind: "leave"; actor: ActorName }
@@ -403,10 +416,12 @@ const createWorld = async (options: {
       {
         name,
         user: USERS[name],
-        key: USERS[name].email ?? USERS[name].userId!,
+        key: name === "dana" ? DANA : (USERS[name].email ?? USERS[name].userId!),
         tab: null,
         second: null,
         pass: null,
+        passKey: null,
+        lastUser: null,
       } satisfies Actor,
     ]),
   ) as Record<ActorName, Actor>;
@@ -475,23 +490,34 @@ const seatedKeys = (room: Room | undefined): Set<string> => {
   if (!room) return keys;
   for (const userId of room.clients.keys()) {
     const key = room.userKeysById.get(userId);
-    if (key) keys.add(key);
+    if (key) keys.add(personOf(key));
   }
   return keys;
 };
 
 const hostKeys = (room: Room | undefined): Set<string> =>
-  new Set([
-    ...(room?.adminUserKeys ?? []),
-    ...(room?.hostUserKey ? [room.hostUserKey] : []),
-  ]);
+  new Set(
+    [...(room?.adminUserKeys ?? []), ...(room?.hostUserKey ? [room.hostUserKey] : [])].map(personOf),
+  );
 
-const seatOf = (room: Room, key: string): string | null => {
+const seatOf = (room: Room, person: string, except: string | null = null): string | null => {
   for (const userId of room.clients.keys()) {
-    if (room.userKeysById.get(userId) === key) return userId;
+    const key = room.userKeysById.get(userId);
+    if (userId !== except && key !== undefined && personOf(key) === person) return userId;
   }
   return null;
 };
+
+const pendingKeyOf = (room: Room, person: string): string | null =>
+  [...room.pendingClients.keys()].find((key) => personOf(key) === person) ?? null;
+
+const keyOf = (world: World, actor: Actor): string =>
+  actor.name === "dana"
+    ? (liveTab(world, actor)?.user.userId ??
+      liveSecondTab(world, actor)?.user.userId ??
+      actor.lastUser?.userId ??
+      USERS.dana.userId!)
+    : actor.key;
 
 const ownsCode = (actor: Actor, ownerEmail: string | null | undefined): boolean =>
   Boolean(actor.user.email) && ownerEmail === actor.user.email;
@@ -520,11 +546,23 @@ const hostsLiveRoom = (world: World, actor: Actor): boolean => {
   );
 };
 
-const openTab = (world: World, actor: Actor, which: "main" | "second" = "main"): Tab => {
+const openTab = (
+  world: World,
+  actor: Actor,
+  which: "main" | "second" = "main",
+  reload = false,
+): Tab => {
   const sfu = world.sfu;
   world.tabs += 1;
   const user =
-    which === "second" ? { ...actor.user, sessionId: `${actor.user.sessionId}2` } : actor.user;
+    reload && which === "main" && actor.lastUser
+      ? actor.lastUser
+      : actor.name === "dana"
+        ? { ...actor.user, userId: `${DANA_KEY_PREFIX}${world.tabs}`, sessionId: `d${world.tabs}` }
+        : which === "second"
+          ? { ...actor.user, sessionId: `${actor.user.sessionId}2` }
+          : actor.user;
+  if (which === "main") actor.lastUser = user;
   const peer = makePeer(sfu, `${actor.name}-tab-${world.tabs}`, user);
   const context = createConnectionContext(sfu.io, peer.socket, sfu.state);
   setSocketContext(peer.socket, context);
@@ -566,7 +604,10 @@ const startJoin = (
     }
     answered = true;
     if (response.status === "joined") tab.toldSince = toldFrom;
-    if (response.roomRecoveryPass) actor.pass = response.roomRecoveryPass;
+    if (response.roomRecoveryPass) {
+      actor.pass = response.roomRecoveryPass;
+      actor.passKey = tab.user.userId ?? null;
+    }
     world.completions.push({
       actor,
       channelId: `conclave:${roomId}`,
@@ -580,7 +621,9 @@ const startJoin = (
   const payload = {
     roomId,
     sessionId: tab.user.sessionId,
-    ...(presentPass && actor.pass ? { roomRecoveryPass: actor.pass } : {}),
+    ...(presentPass && actor.pass && actor.passKey === tab.user.userId
+      ? { roomRecoveryPass: actor.pass }
+      : {}),
   };
   void Promise.resolve(handler(payload, ack)).catch((error: unknown) => {
     if (tab.generation === world.sfu.generation) {
@@ -615,6 +658,7 @@ const keepNewestPasses = (world: World): void => {
       for (const { event, payload } of tab.peer.events) {
         if (event !== "roomRecoveryPass") continue;
         actor.pass = (payload as { roomRecoveryPass: string }).roomRecoveryPass;
+        actor.passKey = tab.user.userId ?? null;
       }
     }
   }
@@ -643,7 +687,7 @@ const followApprovals = async (world: World): Promise<void> => {
 const describeStep = (step: Step): string => {
   switch (step.kind) {
     case "open":
-      return `${step.actor} opens a tab and joins${step.pass ? " with a pass" : ""}${step.hold ? ", the room opening is held" : ""}`;
+      return `${step.actor} ${step.reload ? "reloads their tab" : "opens a tab"} and joins${step.pass ? " with a pass" : ""}${step.hold ? ", the room opening is held" : ""}`;
     case "again":
       return `${step.actor} asks again on the same tab${step.pass ? " with a pass" : ""}`;
     case "second":
@@ -711,8 +755,8 @@ const callOver = (world: World, why: string): void => {
   world.shadow.cohosts.clear();
 };
 
-const removes = (world: World, target: Actor): void => {
-  if (world.shadow.phase.kind !== "running") return;
+const removes = (world: World, target: Actor, known: boolean): void => {
+  if (world.shadow.phase.kind !== "running" || !known) return;
   if (ownsCode(target, liveRoom(world)?.ownerEmail)) return;
   world.shadow.removed.add(target.key);
 };
@@ -725,7 +769,11 @@ const performHostAction = async (
   const target = world.actors[step.target];
   const room = liveRoom(world);
   if (!room) return;
-  const seat = seatOf(room, target.key);
+  const ownSeat = by === target ? (liveTab(world, by)?.context.currentClient?.id ?? null) : null;
+  const seat = seatOf(room, target.key, ownSeat);
+  const targetKey = keyOf(world, target);
+  const waitingKey = pendingKeyOf(room, target.key) ?? targetKey;
+  const known = target.name !== "dana" || room.guestProofOf(targetKey) !== undefined;
   const seatedTabs = [target.tab, target.second].filter(
     (tab): tab is Tab =>
       tab !== null &&
@@ -736,9 +784,9 @@ const performHostAction = async (
   const answer = await (async () => {
     switch (step.action) {
       case "admit":
-        return hostAct(world, by, "admitUser", { userId: target.key });
+        return hostAct(world, by, "admitUser", { userId: waitingKey });
       case "reject":
-        return hostAct(world, by, "rejectUser", { userId: target.key });
+        return hostAct(world, by, "rejectUser", { userId: waitingKey });
       case "kick":
         return seat ? hostAct(world, by, "kickUser", { userId: seat }) : undefined;
       case "promote":
@@ -746,13 +794,13 @@ const performHostAction = async (
       case "transfer":
         return seat ? hostAct(world, by, "admin:transferHost", { userId: seat }) : undefined;
       case "block":
-        return hostAct(world, by, "admin:blockUsers", { userKeys: [target.key], kickPresent: true });
+        return hostAct(world, by, "admin:blockUsers", { userKeys: [targetKey], kickPresent: true });
       case "blockStay":
-        return hostAct(world, by, "admin:blockUsers", { userKeys: [target.key], kickPresent: false });
+        return hostAct(world, by, "admin:blockUsers", { userKeys: [targetKey], kickPresent: false });
       case "revoke":
-        return hostAct(world, by, "admin:revokeAllowedUsers", { userKeys: [target.key] });
+        return hostAct(world, by, "admin:revokeAllowedUsers", { userKeys: [targetKey] });
       case "allow":
-        return hostAct(world, by, "admin:allowUsers", { userKeys: [target.key] });
+        return hostAct(world, by, "admin:allowUsers", { userKeys: [targetKey] });
       case "lock":
       case "unlock":
         return hostAct(world, by, "lockRoom", { locked: step.action === "lock" });
@@ -762,13 +810,16 @@ const performHostAction = async (
     world.trace.push(`  (refused: ${answer?.error ?? "no answer"})`);
     return;
   }
+  if (step.action === "kick" && by === target) {
+    world.failures.push(`${by.name} removed themselves from another of their tabs`);
+  }
   if (step.action === "kick" || step.action === "block") {
     for (const tab of seatedTabs) {
       if (!tab.peer.events.some(({ event }) => event === "kicked")) {
         world.failures.push(`${target.name}'s tab was not told they were removed`);
       }
     }
-    if (world.shadow.phase.kind === "running" && !ownsCode(target, room.ownerEmail)) {
+    if (world.shadow.phase.kind === "running" && known && !ownsCode(target, room.ownerEmail)) {
       world.shadow.ejected.add(target.key);
     }
   }
@@ -777,7 +828,7 @@ const performHostAction = async (
     world.shadow.ejected.delete(target.key);
   }
   const removal = ["kick", "block", "blockStay", "revoke"].includes(step.action);
-  if (removal) removes(world, target);
+  if (removal) removes(world, target, known);
   if (removal && step.action !== "revoke") world.shadow.cohosts.delete(target.key);
   if (
     (step.action === "promote" || step.action === "transfer") &&
@@ -826,10 +877,12 @@ const callIsLost = async (world: World, snapshot: CallSnapshot, cause: string): 
     world.failures.push(`${cause} ended a running call: the server kept no record of it`);
     return;
   }
-  const kept = new Set([
-    ...recalled.lost.adminUserKeys,
-    ...(recalled.lost.hostUserKey ? [recalled.lost.hostUserKey] : []),
-  ]);
+  const kept = new Set(
+    [
+      ...recalled.lost.adminUserKeys,
+      ...(recalled.lost.hostUserKey ? [recalled.lost.hostUserKey] : []),
+    ].map(personOf),
+  );
   for (const key of snapshot.hosts) {
     if (!kept.has(key)) world.failures.push(`${cause} cleared the call's host ${key}`);
   }
@@ -837,7 +890,7 @@ const callIsLost = async (world: World, snapshot: CallSnapshot, cause: string): 
     if (!snapshot.hosts.has(key)) world.failures.push(`${cause} made ${key} a host of the call`);
   }
   for (const key of snapshot.removals) {
-    if (!recalled.lost.readmissionRequiredUserKeys.includes(key)) {
+    if (!recalled.lost.readmissionRequiredUserKeys.some((removed) => personOf(removed) === key)) {
       world.failures.push(`${cause} cleared the removal of ${key}`);
     }
   }
@@ -963,7 +1016,7 @@ const perform = async (world: World, step: Step): Promise<void> => {
   const beforeIncarnation = before?.incarnationId ?? null;
   const beforeHosts = hostKeys(before);
   const beforeSeated = new Set(before?.clients.keys() ?? []);
-  const beforeLiveHosts = before ? seatedHostKeys(before) : new Set<string>();
+  const beforeLiveHosts = new Set([...(before ? seatedHostKeys(before) : [])].map(personOf));
   const beforeRoles = rolesOf(world);
   const beforeMembership = new Map(world.sfu.membership);
   world.sfu.ranThisStep.clear();
@@ -983,7 +1036,7 @@ const perform = async (world: World, step: Step): Promise<void> => {
     case "open": {
       const actor = world.actors[step.actor];
       if (step.hold) world.holdNext = true;
-      startJoin(world, actor, openTab(world, actor), step.pass);
+      startJoin(world, actor, openTab(world, actor, "main", step.reload ?? false), step.pass);
       break;
     }
     case "again": {
@@ -1145,9 +1198,10 @@ const checkRooms = (
     for (const [seatId, client] of room.clients) {
       const key = room.userKeysById.get(seatId);
       if (!key || client.isObserver || client.isWebinarAttendee) continue;
-      const seen = roles.get(key) ?? new Set<boolean>();
+      const person = personOf(key);
+      const seen = roles.get(person) ?? new Set<boolean>();
       seen.add(client instanceof Admin);
-      roles.set(key, seen);
+      roles.set(person, seen);
     }
     for (const [key, seen] of roles) {
       if (seen.size > 1) fail(`${key}'s tabs do not all have the same role`);
@@ -1288,15 +1342,17 @@ const check = async (
     if (!recalled.lost) {
       fail("a call the server lost was forgotten inside its recovery window");
     } else {
-      const kept = new Set([
-        ...recalled.lost.adminUserKeys,
-        ...(recalled.lost.hostUserKey ? [recalled.lost.hostUserKey] : []),
-      ]);
+      const kept = new Set(
+        [
+          ...recalled.lost.adminUserKeys,
+          ...(recalled.lost.hostUserKey ? [recalled.lost.hostUserKey] : []),
+        ].map(personOf),
+      );
       for (const key of lost.hosts) {
         if (!kept.has(key)) fail(`the lost call forgot its host ${key} inside its recovery window`);
       }
       for (const key of lost.removals) {
-        if (!recalled.lost.readmissionRequiredUserKeys.includes(key)) {
+        if (!recalled.lost.readmissionRequiredUserKeys.some((removed) => personOf(removed) === key)) {
           fail(`the lost call forgot that ${key} was removed inside its recovery window`);
         }
       }
@@ -1308,7 +1364,7 @@ const check = async (
 
   if (room && !room.hasEnded && room.ownerEmail && seatedHostKeys(room).has(room.ownerEmail)) {
     for (const key of room.adminUserKeys) {
-      if (key === room.ownerEmail || shadow.cohosts.has(key)) continue;
+      if (key === room.ownerEmail || shadow.cohosts.has(personOf(key))) continue;
       fail(`${key} still hosts with the code's owner here, and no host made them a co-host`);
     }
   }
@@ -1323,24 +1379,35 @@ const check = async (
     const priorHosts =
       room.incarnationId === before.beforeIncarnation ? before.beforeHosts : new Set<string>();
     for (const key of seatedHostKeys(room)) {
-      if (priorHosts.has(key)) continue;
+      if (priorHosts.has(personOf(key))) continue;
       const reason = room.hostReasonOf(key);
       if (reason !== "temporary" && reason !== "opener") continue;
-      if (room.needsReadmission(key) || room.isBlocked(key) || shadow.removed.has(key)) {
+      const proof = room.guestProofOf(key);
+      if (room.needsReadmission(key, proof) || room.isBlocked(key, proof) || shadow.removed.has(personOf(key))) {
         fail(`${key} was handed a host's seat as a fallback although a host removed them`);
       }
     }
   }
 
   if (room && !room.hasEnded) {
+    const recordedHosts = hostKeys(room);
     for (const key of seatedHostKeys(room)) {
-      if (!room.adminUserKeys.has(key)) fail(`${key} has a host's seat with no recorded reason`);
+      if (!recordedHosts.has(personOf(key))) fail(`${key} has a host's seat with no recorded reason`);
+    }
+    const reasonsOfPerson = new Map<string, Set<string>>();
+    for (const [key, reason] of room.hostReasons) {
+      const reasons = reasonsOfPerson.get(personOf(key)) ?? new Set<string>();
+      reasons.add(reason);
+      reasonsOfPerson.set(personOf(key), reasons);
+    }
+    for (const [person, reasons] of reasonsOfPerson) {
+      if (reasons.size > 1) fail(`${person} hosts for more than one reason at once: ${[...reasons].join(", ")}`);
     }
     for (const key of room.adminUserKeys) {
       const expected =
         key === room.ownerEmail
           ? "owner"
-          : shadow.cohosts.has(key)
+          : shadow.cohosts.has(personOf(key))
             ? "cohost"
             : room.ownerEmail
               ? "temporary"
@@ -1389,7 +1456,10 @@ const nextStep = (world: World): Step => {
   for (const actor of Object.values(world.actors)) {
     const name = actor.name;
     if (!liveTab(world, actor)) {
-      options.push([3, () => ({ kind: "open", actor: name, pass: random() < 0.7, hold: random() < 0.2 })]);
+      options.push([
+        3,
+        () => ({ kind: "open", actor: name, pass: random() < 0.7, hold: random() < 0.2, reload: random() < 0.4 }),
+      ]);
       continue;
     }
     options.push([1.5, () => ({ kind: "again", actor: name, pass: random() < 0.7 })]);
@@ -1399,14 +1469,16 @@ const nextStep = (world: World): Step => {
     ]);
     options.push([1.2, () => ({ kind: "leave", actor: name })]);
     options.push([0.4, () => ({ kind: "drop", actor: name })]);
-    options.push([
-      0.5,
-      () => ({
-        kind: "switch",
-        actor: name,
-        overtaken: random() < 0.6 ? null : random() < 0.5 ? "disconnect" : "newer",
-      }),
-    ]);
+    if (name !== "dana") {
+      options.push([
+        0.5,
+        () => ({
+          kind: "switch",
+          actor: name,
+          overtaken: random() < 0.6 ? null : random() < 0.5 ? "disconnect" : "newer",
+        }),
+      ]);
+    }
     if (!room || !hostsLiveRoom(world, actor)) continue;
     options.push([0.25, () => ({ kind: "end", by: name })]);
     options.push([
@@ -1417,7 +1489,7 @@ const nextStep = (world: World): Step => {
       if (other === actor) continue;
       const target = other.name;
       const host = (action: HostAction): Step => ({ kind: "host", action, by: name, target });
-      if (room.pendingClients.has(other.key)) {
+      if (pendingKeyOf(room, other.key)) {
         options.push([3, () => host("admit")]);
         options.push([0.8, () => host("reject")]);
       }
@@ -1432,6 +1504,10 @@ const nextStep = (world: World): Step => {
       options.push([0.2, () => host("allow")]);
     }
     options.push([0.15, () => ({ kind: "host", action: "block", by: name, target: name })]);
+    const ownSeat = liveTab(world, actor)?.context.currentClient?.id ?? null;
+    if (seatOf(room, actor.key, ownSeat)) {
+      options.push([0.4, () => ({ kind: "host", action: "kick", by: name, target: name })]);
+    }
   }
   const anyone = () => ACTOR_NAMES[Math.floor(random() * ACTOR_NAMES.length)];
   if (world.held.length > 0) {
@@ -1442,7 +1518,9 @@ const nextStep = (world: World): Step => {
     0.8,
     () => {
       const first = anyone();
-      const second = ACTOR_NAMES.filter((name) => name !== first)[Math.floor(random() * 4)];
+      const second = ACTOR_NAMES.filter((name) => name !== first)[
+        Math.floor(random() * (ACTOR_NAMES.length - 1))
+      ];
       return { kind: "together", actors: [first, second] };
     },
   ]);
@@ -2031,6 +2109,73 @@ describe("the room lifecycle model", () => {
       { kind: "tick", ms: 8 * MINUTE_MS },
       { kind: "release", alongside: null },
       open("invitee"),
+    ]);
+    expect(outcome.failures, report(outcome)).toEqual([]);
+  });
+
+  it("keeps a co-host's second tab, under a key of its own, a co-host when the code's owner arrives", async () => {
+    const outcome = await runScript(true, [
+      open("alice"),
+      open("dana"),
+      host("alice", "admit", "dana"),
+      host("alice", "promote", "dana"),
+      { kind: "second", actor: "dana", action: "open" },
+      { kind: "expect", actor: "dana", tab: "second", role: "host" },
+      open("owner"),
+      { kind: "expect", actor: "dana", tab: "main", role: "host" },
+      { kind: "expect", actor: "dana", tab: "second", role: "host" },
+    ]);
+    expect(outcome.failures, report(outcome)).toEqual([]);
+  });
+
+  it("refuses a host who tries to remove themselves from their other tab", async () => {
+    const outcome = await runScript(false, [
+      open("dana"),
+      { kind: "second", actor: "dana", action: "open" },
+      host("dana", "kick", "dana"),
+      { kind: "expect", actor: "dana", tab: "second", role: "host" },
+    ]);
+    expect(outcome.failures, report(outcome)).toEqual([]);
+    expect(outcome.trace.filter((line) => line.includes("refused")), report(outcome)).toHaveLength(1);
+  });
+
+  it("keeps a removed guest knocking when they come back in a fresh tab after a restart", async () => {
+    const outcome = await runScript(false, [
+      open("alice"),
+      open("dana"),
+      host("alice", "admit", "dana"),
+      host("alice", "kick", "dana"),
+      { kind: "restart" },
+      open("alice"),
+      host("alice", "unlock", "alice"),
+      open("dana"),
+      { kind: "expect", actor: "dana", tab: "main", role: "out" },
+    ]);
+    expect(outcome.failures, report(outcome)).toEqual([]);
+  });
+
+  it("gives a guest host who reloads their tab after a restart the host's seat back", async () => {
+    const outcome = await runScript(false, [
+      open("dana"),
+      open("bob"),
+      host("dana", "admit", "bob"),
+      { kind: "restart" },
+      { kind: "open", actor: "dana", pass: true, hold: false, reload: true },
+      { kind: "expect", actor: "dana", tab: "main", role: "host" },
+      open("bob"),
+      { kind: "expect", actor: "bob", tab: "main", role: "participant" },
+    ]);
+    expect(outcome.failures, report(outcome)).toEqual([]);
+  });
+
+  it("gives a guest host a fresh tab after a restart the host's seat back", async () => {
+    const outcome = await runScript(false, [
+      open("dana"),
+      open("bob"),
+      host("dana", "admit", "bob"),
+      { kind: "restart" },
+      open("dana"),
+      { kind: "expect", actor: "dana", tab: "main", role: "host" },
     ]);
     expect(outcome.failures, report(outcome)).toEqual([]);
   });
