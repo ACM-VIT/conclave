@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Logger } from "../../../utilities/loggers.js";
 import { asRecord } from "../../../utilities/untrusted.js";
 import {
@@ -54,6 +55,7 @@ export type RedisKeys = {
   tomb: string;
   records: Record<Kind, string>;
   tag: (kind: Kind, tag: string) => string;
+  commit: (id: string) => string;
 };
 
 export const controlPlaneRedisKeys = (prefix: string): RedisKeys => {
@@ -68,6 +70,7 @@ export const controlPlaneRedisKeys = (prefix: string): RedisKeys => {
       string
     >,
     tag: (kind, tag) => `${base}:tag:${kind}:${tag}`,
+    commit: (id) => `${base}:commit:${id}`,
   };
 };
 
@@ -76,11 +79,21 @@ const tagVersion = (kind: Kind, tag: string): string => `t:${kind}:${tag}`;
 const tombField = (kind: Kind, id: string): string => `${kind}:${id}`;
 const slot = (kind: Kind, id: string): string => `${kind}\u0000${id}`;
 
-const FIXED_KEYS = 4;
+const FIXED_KEYS = 5;
+
+export const COMMIT_MARK_TTL_MS = 3_600_000;
 
 const COMMIT_SCRIPT = `
 local p = cjson.decode(ARGV[1])
 local kinds = { ${KINDS.map((kind, index) => `${kind} = ${index + FIXED_KEYS + 1}`).join(", ")} }
+for _, f in ipairs(p.f) do
+  if not redis.call("GET", KEYS[f]) then redis.call("SET", KEYS[f], "cancelled", "PX", p.ttl) end
+end
+local mark = redis.call("GET", KEYS[5])
+if mark then
+  if mark == "cancelled" then return { 2, "cancelled" } end
+  return { 1, tonumber(string.sub(mark, 9)) }
+end
 local function recordRev(kind, id)
   local raw = redis.call("HGET", KEYS[kinds[kind]], id)
   if not raw then return 0 end
@@ -131,8 +144,18 @@ end
 for _, d in ipairs(p.w.d) do
   redis.call("HSET", KEYS[4], d, rev)
 end
+redis.call("SET", KEYS[5], "applied:" .. rev, "PX", p.ttl)
 return { 1, rev }
 `;
+
+const RESOLVE_SCRIPT = `
+local mark = redis.call("GET", KEYS[1])
+if mark then return mark end
+redis.call("SET", KEYS[1], "cancelled", "PX", ARGV[1])
+return "cancelled"
+`;
+
+type ScriptReply = { ok: boolean; rev: number; detail: string };
 
 const parseEnvelope = (raw: string, where: string): RawStored => {
   const parsed: unknown = JSON.parse(raw);
@@ -224,6 +247,7 @@ export const createRedisBackend = async (options: {
   let reconnecting: Promise<RedisPersistenceClient> | null = null;
   const keys = controlPlaneRedisKeys(options.keyPrefix);
   let closed = false;
+  const unresolved = new Set<string>();
 
   const replace = (stalled: RedisPersistenceClient): void => {
     if (client !== stalled || closed) return;
@@ -344,7 +368,26 @@ export const createRedisBackend = async (options: {
     }
   };
 
-  const runScript = async (snapshot: Snapshot, writes: WriteSet): Promise<{ ok: boolean; rev: number; detail: string }> => {
+  const resolveUnheard = async (commitKey: string, cause: Error): Promise<ScriptReply> => {
+    let mark: string;
+    try {
+      mark = String(
+        await bounded((redis) => redis.sendCommand(["EVAL", RESOLVE_SCRIPT, "1", commitKey, String(COMMIT_MARK_TTL_MS)])),
+      );
+    } catch {
+      unresolved.add(commitKey);
+      Logger.warn(`[${name}] a commit's outcome is unknown; it is fenced before the next commit (${cause.message})`);
+      throw new StoreUnavailableError("Redis control-plane store is unavailable.", { cause });
+    }
+    if (mark.startsWith("applied:")) {
+      Logger.warn(`[${name}] a commit whose reply was lost had applied at revision ${mark.slice(8)}`);
+      return { ok: true, rev: Number(mark.slice(8)), detail: "" };
+    }
+    Logger.warn(`[${name}] a commit whose reply was lost did not apply, and now never will (${cause.message})`);
+    throw new StoreUnavailableError("Redis control-plane store is unavailable.", { cause });
+  };
+
+  const runScript = async (snapshot: Snapshot, writes: WriteSet): Promise<ScriptReply> => {
     const tagKeys: string[] = [];
     const tagIndex = new Map<string, number>();
     const keyFor = (kind: Kind, tag: string): number => {
@@ -375,18 +418,34 @@ export const createRedisBackend = async (options: {
         ]),
         d: writes.tombstones.map((removal) => tombField(removal.kind, removal.id)),
       },
+      f: [] as number[],
+      ttl: COMMIT_MARK_TTL_MS,
     };
+    const commitKey = keys.commit(randomUUID());
+    const fences = [...unresolved];
     const scriptKeys = [
       keys.rev,
       keys.ver,
       keys.unique,
       keys.tomb,
+      commitKey,
       ...KINDS.map((kind) => keys.records[kind]),
       ...tagKeys,
+      ...fences,
     ];
-    const reply = (await bounded((redis) =>
-      redis.sendCommand(["EVAL", COMMIT_SCRIPT, String(scriptKeys.length), ...scriptKeys, JSON.stringify(payload)]),
-    )) as unknown;
+    payload.f = fences.map((_, index) => scriptKeys.length - fences.length + index + 1);
+    let reply: unknown;
+    try {
+      reply = await bounded((redis) =>
+        redis.sendCommand(["EVAL", COMMIT_SCRIPT, String(scriptKeys.length), ...scriptKeys, JSON.stringify(payload)]),
+      );
+    } catch (error) {
+      if (writes.records.length === 0 && writes.tombstones.length === 0) throw error;
+      const resolved = await resolveUnheard(commitKey, toError(error));
+      for (const fence of fences) unresolved.delete(fence);
+      return resolved;
+    }
+    for (const fence of fences) unresolved.delete(fence);
     const [status, detail] = Array.isArray(reply) ? (reply as unknown[]) : [];
     if (Number(status) === 1) return { ok: true, rev: Number(detail), detail: "" };
     return { ok: false, rev: 0, detail: String(detail) };
@@ -418,10 +477,11 @@ export const createRedisBackend = async (options: {
           }
           continue;
         }
-        let reply: { ok: boolean; rev: number; detail: string };
+        let reply: ScriptReply;
         try {
           reply = await runScript(snapshot, ran.writes);
         } catch (error) {
+          if (error instanceof StoreUnavailableError) throw error;
           throw new StoreUnavailableError("Redis control-plane store is unavailable.", {
             cause: toError(error),
           });

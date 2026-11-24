@@ -1,9 +1,11 @@
 import { createClient } from "redis";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createRedisBackend } from "../server/controlPlane/backends/redis.js";
-import { createMeeting } from "../server/controlPlane/meetingCommands.js";
+import { controlPlaneRedisKeys, createRedisBackend } from "../server/controlPlane/backends/redis.js";
+import { createMeeting, meetingById } from "../server/controlPlane/meetingCommands.js";
 import { StoreUnavailableError } from "../server/controlPlane/model.js";
+import { allWebinars, createWebinar } from "../server/controlPlane/webinarCommands.js";
 import { controlPlaneStore } from "../server/controlPlane/store.js";
+import { startRedisProxy, type ProxyFate } from "./support/redisProxy.js";
 import { hasRedis, startRedis, type RedisServer } from "./support/redisServer.js";
 
 const options = { clientId: "conclave", createdBy: "host@example.test", defaultHostEmail: "host@example.test", defaultHostUserId: null };
@@ -89,6 +91,78 @@ describe.skipIf(!hasRedis)("a Redis store whose server stops answering", () => {
     } finally {
       await new Promise((resolve) => setTimeout(resolve, PAUSE_MS * 2));
       await admin.quit();
+    }
+  }, 20_000);
+});
+
+describe.skipIf(!hasRedis)("a Redis commit whose outcome the SFU did not hear", () => {
+  const meeting = (title: string) => createMeeting({ title, scheduledStartAt: 1_900_000_000_000 }, options);
+
+  const throughProxy = async (fates: ProxyFate[]) => {
+    let scripts = 0;
+    const proxy = await startRedisProxy(
+      { host: "127.0.0.1", port: redis!.port },
+      { label: "unheard", fate: (chunk) => (chunk.includes("\r\nEVAL\r\n") ? fates[scripts++] ?? "send" : "send") },
+    );
+    const prefix = `unheard:${Date.now()}:${Math.random()}`;
+    const store = controlPlaneStore(
+      await createRedisBackend({ redisUrl: proxy.url, keyPrefix: prefix, requestDeadlineMs: DEADLINE_MS }),
+    );
+    const admin = createClient({ url: redis!.url });
+    await admin.connect();
+    const records = controlPlaneRedisKeys(prefix).records.meeting;
+    return {
+      proxy,
+      store,
+      meetings: async () => Object.values(await admin.hGetAll(records)).map((raw) => JSON.parse(raw) as { rev: number; value: { title: string } }),
+      stop: async () => {
+        await store.close();
+        await admin.quit();
+        await proxy.close();
+      },
+    };
+  };
+
+  it("answers ok, with the one record it wrote, when Redis ran the script and the reply was lost", async () => {
+    const world = await throughProxy(["lose-reply"]);
+    try {
+      const result = await world.store.commit(meeting("Reply lost"));
+      expect(result).toMatchObject({ ok: true, value: { title: "Reply lost" } });
+      const stored = await world.meetings();
+      expect(stored.map((record) => record.value.title)).toEqual(["Reply lost"]);
+      expect(result.ok && stored[0].rev).toBe(result.ok && result.rev);
+      expect((await world.store.read(meetingById(result.ok ? result.value.id : "")))?.title).toBe("Reply lost");
+    } finally {
+      await world.stop();
+    }
+  }, 20_000);
+
+  it("answers 503 and never applies the script when it reaches Redis only after the SFU gave up", async () => {
+    const world = await throughProxy(["deliver-late"]);
+    try {
+      await expect(world.store.commit(meeting("Arrives late"))).rejects.toBeInstanceOf(StoreUnavailableError);
+      await world.proxy.deliverLate();
+      expect(await world.meetings()).toEqual([]);
+      expect((await world.store.commit(meeting("Next"))).ok).toBe(true);
+      expect((await world.meetings()).map((record) => record.value.title)).toEqual(["Next"]);
+    } finally {
+      await world.stop();
+    }
+  }, 20_000);
+
+  it("fences a commit it could not resolve before its next commit runs", async () => {
+    const world = await throughProxy(["deliver-late", "lose"]);
+    try {
+      await expect(world.store.commit(meeting("Unresolved"))).rejects.toBeInstanceOf(StoreUnavailableError);
+      const next = await world.store.commit(
+        createWebinar({ title: "Next", scheduledStartAt: 1_900_000_000_000 }, { clientId: "conclave", createdBy: "host@example.test", defaultHostEmail: "host@example.test" }),
+      );
+      expect(next.ok).toBe(true);
+      await world.proxy.deliverLate();
+      expect(await world.meetings()).toEqual([]);
+      expect((await world.store.read(allWebinars)).map((webinar) => webinar.title)).toEqual(["Next"]);
+    } finally {
+      await world.stop();
     }
   }, 20_000);
 });
