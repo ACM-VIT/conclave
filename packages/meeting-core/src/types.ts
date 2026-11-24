@@ -629,6 +629,7 @@ export interface MeetError {
     | "MEDIA_ERROR"
     | "TRANSPORT_ERROR"
     | "ROOM_NOT_FOUND"
+    | "JOIN_REJECTED"
     | "UNKNOWN";
   message: string;
   recoverable: boolean;
