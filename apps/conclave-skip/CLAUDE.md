@@ -663,15 +663,33 @@ Fixed 2026-10-22 and guarded by `testNativeCallCorrectnessBlockersStayFixed`:
 - Hang-up never waits on a capture thread. `SurfaceTextureHelper.dispose()`
   and `ScreenCapturerAndroid.stopCapture()` block their caller on the
   capture thread, which takes the shared EGL lock that tile rendering also
-  takes, so `CaptureTeardown` stops and disposes capturers and helpers on
-  its own thread, one worker per kind (`CaptureTeardown.camera`,
-  `CaptureTeardown.screen`) so a stalled share teardown never holds up the
-  camera. Every capture start waits for its kind's earlier teardowns before
-  it opens a device (`awaitReleased()`): the camera start (which camera
-  recovery and rejoin go through), the camera switch and the share start,
-  each re-checking its session after the wait. A camera-off keeps its
-  synchronous `stopCapture()` on the main thread, because a restart must
+  takes, so `CaptureTeardown` stops and disposes each capturer and helper
+  on a thread of its own (`CaptureTeardown.camera`, `CaptureTeardown.screen`).
+  Every capture start waits for its kind's earlier teardowns before it opens
+  a device (`awaitCaptureTeardown`): the camera start (which camera recovery
+  and rejoin go through), the camera switch and the share start, each
+  re-checking its session after the wait. The wait has a deadline
+  (`CaptureTeardown.DEADLINE_MILLIS`, 3 s): WebRTC's `stopCapture()` waits
+  while a camera open is pending and a hung driver never releases it, so
+  after the deadline the start goes ahead, the stuck teardown keeps its own
+  thread, and `onCaptureTeardownStuck` records
+  `capture.teardownStuck.<kind>` in the call diagnostics. A camera-off keeps
+  its synchronous `stopCapture()` on the main thread, because a restart must
   run after it; that call waits only while a camera open is in progress.
+- Every capture-session callback carries the session it was registered for
+  and does nothing once that session has ended (`cameraCaptureSession`,
+  `screenCaptureSession`, cleared by the release): the projection stop
+  callback, the camera events handler (`cameraEvents(session)`) and the
+  capturer observer (`SessionCapturerObserver`). Android delivers those
+  callbacks through queues, so an ended capture can still call back after a
+  new one started: an old projection stop once cleared the new share's
+  consent and stopped its service.
+- Renderers attach sinks through `VideoSinkAttachment`. It removes a sink
+  only if adding it succeeded and never throws on detach: `addSink` on a
+  disposed track inserts its sink entry and then throws, and a later
+  `removeSink` throws on that entry. `CameraFacingCatalog` numbers its scans
+  and keeps a result only if no newer scan has been stored, so a slow older
+  scan cannot bring a vanished camera back.
 - Every input that changes publish settings goes through
   `publishSettingsChanged()` on Android (camera and share settings, video
   quality), which bumps `mediaPublishSettingsRevision`. A video produce in
