@@ -22,11 +22,13 @@ import {
   type LegacyCopy,
   type LegacyDomain,
   type LegacyImportState,
+  type Removal,
   type UniqueIndex,
 } from "./model.js";
 
 export type EntitySpec<K extends Kind> = {
   id: (value: EntityMap[K]) => string;
+  identity?: (value: EntityMap[K]) => string;
   unique: (value: EntityMap[K]) => Array<[UniqueIndex, string]>;
   tags: (value: EntityMap[K]) => string[];
   encode: (value: EntityMap[K]) => unknown;
@@ -45,6 +47,14 @@ const decodeLegacyCopy = (raw: unknown): LegacyCopy | null => {
   return { key, kind: kind as DataKind, id, hash, stamp };
 };
 
+const decodeRemoval = (raw: unknown): Removal | null => {
+  const record = asRecord(raw);
+  const { key, kind, id, identity, hash } = record;
+  if (typeof key !== "string" || typeof id !== "string" || typeof identity !== "string") return null;
+  if (!DATA_KINDS.includes(kind as DataKind) || typeof hash !== "string") return null;
+  return { key, kind: kind as DataKind, id, identity, hash };
+};
+
 const decodeLegacyImport = (raw: unknown): LegacyImportState | null => {
   const record = asRecord(raw);
   if (record.id !== LEGACY_IMPORT_ID || typeof record.ticket !== "number") return null;
@@ -54,7 +64,8 @@ const decodeLegacyImport = (raw: unknown): LegacyImportState | null => {
       sources[domain as LegacyDomain] = source;
     }
   }
-  return { id: LEGACY_IMPORT_ID, ticket: record.ticket, sources };
+  const completed = typeof record.completed === "number" ? record.completed : 0;
+  return { id: LEGACY_IMPORT_ID, ticket: record.ticket, completed, sources };
 };
 
 export const entities: Registry = {
@@ -86,6 +97,7 @@ export const entities: Registry = {
   },
   calendar: {
     id: (calendar) => calendar.profileId,
+    identity: (calendar) => calendar.id,
     unique: () => [],
     tags: () => [],
     encode: encodeStoredCalendar,
@@ -134,6 +146,18 @@ export const entities: Registry = {
     encode: same,
     decode: decodeLegacyImport,
   },
+  removal: {
+    id: (removal) => removal.key,
+    unique: () => [],
+    tags: () => [],
+    encode: same,
+    decode: decodeRemoval,
+  },
+};
+
+export const identityOf = <K extends Kind>(kind: K, value: EntityMap[K]): string => {
+  const spec = specOf(kind);
+  return (spec.identity ?? spec.id)(value);
 };
 
 export const specOf = <K extends Kind>(kind: K): EntitySpec<K> => entities[kind];

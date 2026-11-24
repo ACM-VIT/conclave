@@ -102,10 +102,13 @@ export const legacyCalendar = (profileId: string, secret: string, fields: Record
 
 export type OldSfuPaths = { sqlite: string; jsonDir: string; redisUrl?: string; prefix?: string };
 
+export type LegacyCalendar = ReturnType<typeof legacyCalendar>;
+
 type Snapshot = {
   meetings: Map<string, LegacyMeeting>;
   webinars: Map<string, LegacyWebinar>;
   profiles: Map<string, LegacyProfile>;
+  calendars: Map<string, LegacyCalendar>;
 };
 
 export type OldSfu = {
@@ -115,6 +118,8 @@ export type OldSfu = {
   removeWebinar: (id: string) => Promise<void>;
   putProfile: (profile: LegacyProfile) => Promise<void>;
   removeProfile: (id: string) => Promise<void>;
+  putCalendar: (calendar: LegacyCalendar) => Promise<void>;
+  removeCalendar: (profileId: string) => Promise<void>;
   close: () => Promise<void>;
 };
 
@@ -202,18 +207,24 @@ const jsonOldSfu = (dir: string): OldSfu => {
   const paths = jsonPaths(dir);
   const snapshot = (): Snapshot => {
     const scheduling = existsSync(paths.scheduling)
-      ? (JSON.parse(readFileSync(paths.scheduling, "utf8")) as { profiles?: LegacyProfile[] })
+      ? (JSON.parse(readFileSync(paths.scheduling, "utf8")) as { profiles?: LegacyProfile[]; calendars?: LegacyCalendar[] })
       : {};
     return {
       meetings: new Map(readJsonList<LegacyMeeting>(paths.meetings).map((entry) => [entry.id, entry])),
       webinars: new Map(readJsonList<LegacyWebinar>(paths.webinars).map((entry) => [entry.id, entry])),
       profiles: new Map((scheduling.profiles ?? []).map((entry) => [entry.id, entry])),
+      calendars: new Map((scheduling.calendars ?? []).map((entry) => [entry.profileId, entry])),
     };
   };
   const save = (data: Snapshot) => {
     writeJson(paths.meetings, [...data.meetings.values()]);
     writeJson(paths.webinars, [...data.webinars.values()]);
-    writeJson(paths.scheduling, { profiles: [...data.profiles.values()], availability: [], eventTypes: [], calendars: [] });
+    writeJson(paths.scheduling, {
+      profiles: [...data.profiles.values()],
+      availability: [],
+      eventTypes: [],
+      calendars: [...data.calendars.values()],
+    });
   };
   const change = async (edit: (data: Snapshot) => void) => {
     const data = snapshot();
@@ -227,6 +238,8 @@ const jsonOldSfu = (dir: string): OldSfu => {
     removeWebinar: (id) => change((data) => void data.webinars.delete(id)),
     putProfile: (profile) => change((data) => void data.profiles.set(profile.id, profile)),
     removeProfile: (id) => change((data) => void data.profiles.delete(id)),
+    putCalendar: (calendar) => change((data) => void data.calendars.set(calendar.profileId, calendar)),
+    removeCalendar: (profileId) => change((data) => void data.calendars.delete(profileId)),
     close: async () => {},
   };
 };
@@ -243,6 +256,14 @@ const sqliteOldSfu = (path: string): OldSfu => ({
       );
     }),
   removeProfile: async (id) => sqliteDelete(path, "DELETE FROM scheduling_records WHERE kind = 'profile' AND id = ?", id),
+  putCalendar: async (calendar) =>
+    withSqlite(path, (db) => {
+      db.prepare("INSERT OR REPLACE INTO scheduling_records VALUES (?, ?, ?, ?, ?)").run(
+        "calendar", calendar.profileId, "conclave", calendar.updatedAt, JSON.stringify(calendar),
+      );
+    }),
+  removeCalendar: async (profileId) =>
+    sqliteDelete(path, "DELETE FROM scheduling_records WHERE kind = 'calendar' AND id = ?", profileId),
   close: async () => {},
 });
 
@@ -266,6 +287,12 @@ const redisOldSfu = async (paths: OldSfuPaths): Promise<OldSfu> => {
     removeProfile: async (id) => {
       await client.hDel(`${prefix}:scheduling:profiles`, id);
       await client.hSet(`${prefix}:scheduling:tombstones`, `profile:${id}`, String(Date.now()));
+    },
+    putCalendar: async (calendar) => {
+      await client.hSet(`${prefix}:scheduling:calendars`, calendar.profileId, wrapped(calendar));
+    },
+    removeCalendar: async (profileId) => {
+      await client.hDel(`${prefix}:scheduling:calendars`, profileId);
     },
     close: async () => {
       await client.quit();

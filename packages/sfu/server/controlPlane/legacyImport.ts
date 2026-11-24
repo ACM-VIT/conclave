@@ -1,10 +1,11 @@
-import { existsSync, renameSync } from "node:fs";
 import { Logger } from "../../utilities/loggers.js";
 import type { RedisPersistenceClient } from "../redisPersistence.js";
 import type { StoreMode } from "./backends/backend.js";
 import {
+  claimRecoveredCopies,
+  markAdopted,
   readLegacyDomains,
-  readRecoveredCopies,
+  stillClaimed,
   type HashedLegacyRecord,
   type LegacyPaths,
   type RecoveredRecord,
@@ -61,10 +62,30 @@ export const beginLegacyImport = (): Command<LegacyImportState> => (tx) => {
   const next: LegacyImportState = {
     id: LEGACY_IMPORT_ID,
     ticket: (current?.ticket ?? 0) + 1,
+    completed: current?.completed ?? 0,
     sources: current?.sources ?? {},
   };
   tx.put("legacyImport", next);
   return done(next);
+};
+
+export const finishLegacyImport =
+  (ticket: number): Command<ImportCounts> =>
+  (tx) => {
+    const state = currentState(tx);
+    if (!state || state.ticket !== ticket) return fail("conflict", STALE);
+    tx.put("legacyImport", { ...state, completed: ticket });
+    return done(emptyCounts());
+  };
+
+const legacyImportState: Query<LegacyImportState | null> = (view) =>
+  view.get("legacyImport", LEGACY_IMPORT_ID)?.value ?? null;
+
+const deletedHere = (tx: Tx, kind: DataKind, id: string, copy: HashedLegacyRecord): "new" | "same" | "changed" => {
+  if (tx.tombstone(kind, id) === null) return "new";
+  const removal = tx.get("removal", legacyCopyKey(kind, id))?.value ?? null;
+  if (removal && removal.identity !== copy.identity) return "new";
+  return removal && removal.hash === copy.hash ? "same" : "changed";
 };
 
 const conflict = (kind: DataKind, id: string, what: string, counts: ImportCounts): void => {
@@ -99,12 +120,15 @@ const reconcileOne = (tx: Tx, item: LegacyItem, counts: ImportCounts): void => {
   if (shadow && shadow.hash === copy.hash) return;
   tx.put("legacyCopy", { key, kind, id, hash: copy.hash, stamp: copy.stamp });
   if (!live) {
-    if (tx.tombstone(kind, id) !== null) {
+    const deleted = deletedHere(tx, kind, id, copy);
+    if (deleted === "new") {
+      write(tx, copy, counts);
+      counts.inserted += 1;
+    } else if (deleted === "same") {
+      counts.kept += 1;
+    } else {
       conflict(kind, id, "was changed in the old store and deleted here", counts);
-      return;
     }
-    write(tx, copy, counts);
-    counts.inserted += 1;
     return;
   }
   if (hashLegacyValue(live.value) === copy.hash) {
@@ -146,10 +170,11 @@ const adoptOne = (tx: Tx, record: RecoveredRecord, counts: ImportCounts): void =
   const shadow = tx.get("legacyCopy", record.key)?.value ?? null;
   const superseded = shadow !== null && (record.hash === shadow.hash || record.stamp < shadow.stamp);
   if (!live) {
-    if (tx.tombstone(kind, id) === null) {
+    const deleted = deletedHere(tx, kind, id, record);
+    if (deleted === "new") {
       write(tx, record, counts);
       counts.inserted += 1;
-    } else if (superseded) {
+    } else if (deleted === "same" || superseded) {
       counts.kept += 1;
     } else {
       conflict(kind, id, `is in ${record.from} but was deleted here`, counts);
@@ -217,6 +242,8 @@ export type LegacyImportOptions = {
   paths: LegacyPaths;
   redis?: { client: RedisPersistenceClient; prefix: string };
   read?: <T>(read: () => Promise<T>) => Promise<T>;
+  waitMs?: number;
+  pollMs?: number;
 };
 
 export type LegacyImportResult = Omit<ImportCounts, "notes"> & { sources: string[]; adopted: string[]; superseded: boolean };
@@ -226,6 +253,76 @@ const committed = async (store: ControlPlaneStore, command: Command<ImportCounts
   if (result.ok) return result.value;
   if (result.reason === "conflict" && result.message === STALE) return null;
   throw new Error(`Legacy control-plane import failed: ${result.reason} ${result.message ?? ""}`);
+};
+
+const DEFAULT_WAIT_MS = 120_000;
+const ROUNDS = 3;
+
+const waitForNewerImport = async (store: ControlPlaneStore, ticket: number, waitMs: number, pollMs: number): Promise<void> => {
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    const state = await store.read(legacyImportState);
+    if (state && state.completed > ticket) return;
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `Another SFU started a newer legacy import (ticket ${state?.ticket ?? "unknown"}) that did not finish within ${waitMs} ms; this SFU will not serve until one does.`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+};
+
+type RoundResult = {
+  ticket: number;
+  superseded: boolean;
+  counted: ImportCounts;
+  sources: string[];
+  adopted: string[];
+  claimedLeft: boolean;
+};
+
+const importRound = async (
+  store: ControlPlaneStore,
+  options: LegacyImportOptions,
+  read: <T>(run: () => Promise<T>) => Promise<T>,
+): Promise<RoundResult> => {
+  const begun = await store.commit(beginLegacyImport());
+  if (!begun.ok) throw new Error(`Legacy control-plane import could not start: ${begun.reason} ${begun.message ?? ""}`);
+  const { ticket, sources: sticky } = begun.value;
+  const counted = emptyCounts();
+  const sources: string[] = [];
+  const adopted: string[] = [];
+  const recovered = claimRecoveredCopies(options.paths.fallbackDir, ticket);
+  const stopped = () => ({
+    ticket,
+    superseded: true,
+    counted,
+    sources,
+    adopted,
+    claimedLeft: recovered.files.some(stillClaimed),
+  });
+  const domains = await read(() => readLegacyDomains({ mode: options.mode, paths: options.paths, redis: options.redis, sticky }));
+  for (const domain of domains) {
+    if (!domain.source || !domain.records) continue;
+    sources.push(`${domain.source} ${domain.domain}`);
+    const shadows = await store.read(shadowsOf(domain.domain));
+    for (const batch of batches(itemsFor(domain.records, shadows))) {
+      const counts = await committed(store, reconcileLegacy(ticket, domain.domain, domain.source, batch));
+      if (!counts) return stopped();
+      add(counted, counts);
+    }
+  }
+  for (const batch of batches([...recovered.records].sort(newestFirst))) {
+    const counts = await committed(store, adoptRecovered(ticket, batch));
+    if (!counts) return stopped();
+    add(counted, counts);
+  }
+  if (!(await committed(store, finishLegacyImport(ticket)))) return stopped();
+  for (const file of recovered.files) {
+    const target = markAdopted(file);
+    if (target) adopted.push(target);
+  }
+  return { ticket, superseded: false, counted, sources, adopted, claimedLeft: false };
 };
 
 export const runLegacyImport = async (
@@ -249,40 +346,16 @@ export const runLegacyImport = async (
   });
   if (options.mode === "memory") return total();
   const read = options.read ?? (<T>(run: () => Promise<T>) => run());
-  const begun = await store.commit(beginLegacyImport());
-  if (!begun.ok) throw new Error(`Legacy control-plane import could not start: ${begun.reason} ${begun.message ?? ""}`);
-  const { ticket, sources: sticky } = begun.value;
-  const domains = await read(() => readLegacyDomains({ mode: options.mode, paths: options.paths, redis: options.redis, sticky }));
-  const recovered = readRecoveredCopies(options.paths.fallbackDir);
-  for (const domain of domains) {
-    if (!domain.source || !domain.records) continue;
-    sources.push(`${domain.source} ${domain.domain}`);
-    const shadows = await store.read(shadowsOf(domain.domain));
-    for (const batch of batches(itemsFor(domain.records, shadows))) {
-      const counts = await committed(store, reconcileLegacy(ticket, domain.domain, domain.source, batch));
-      if (!counts) {
-        superseded = true;
-        return total();
-      }
-      add(counted, counts);
-    }
+  const waitMs = options.waitMs ?? (Number(process.env.CONTROL_PLANE_LEGACY_IMPORT_WAIT_MS) || DEFAULT_WAIT_MS);
+  for (let round = 0; round < ROUNDS; round += 1) {
+    const result = await importRound(store, options, read);
+    add(counted, { ...result.counted, notes: [] });
+    sources.push(...result.sources.filter((source) => !sources.includes(source)));
+    adopted.push(...result.adopted);
+    if (!result.superseded) return total();
+    superseded = true;
+    await waitForNewerImport(store, result.ticket, waitMs, options.pollMs ?? 200);
+    if (!result.claimedLeft) return total();
   }
-  for (const batch of batches([...recovered.records].sort(newestFirst))) {
-    const counts = await committed(store, adoptRecovered(ticket, batch));
-    if (!counts) {
-      superseded = true;
-      return total();
-    }
-    add(counted, counts);
-  }
-  for (const path of recovered.files) {
-    if (!existsSync(path)) continue;
-    try {
-      renameSync(path, `${path}.adopted`);
-      adopted.push(path);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-  }
-  return total();
+  throw new Error(`The legacy import was superseded ${ROUNDS} times while it still held copies older SFUs kept; restart the SFU.`);
 };

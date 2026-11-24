@@ -1,4 +1,5 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readdirSync, readFileSync, renameSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { Logger } from "../../utilities/loggers.js";
 import { asArray, asRecord } from "../../utilities/untrusted.js";
@@ -13,13 +14,13 @@ import { normalizeStoredMeeting } from "../scheduledMeetings.js";
 import { normalizeStoredWebinar } from "../scheduledWebinars.js";
 import type { StoreMode } from "./backends/backend.js";
 import { openSqliteDatabase, type SqliteDatabase } from "./backends/sqlite.js";
-import { specOf } from "./entities.js";
-import { LEGACY_DOMAINS, legacyCopyKey, type DataKind, type DataMap, type LegacyDomain } from "./model.js";
+import { identityOf, specOf } from "./entities.js";
+import { LEGACY_DOMAINS, legacyCopyKey, type DataKind, type DataMap, type Kind, type LegacyDomain } from "./model.js";
 import { hashLegacyValue } from "./legacyHash.js";
 
 export type LegacyRecord = { [K in DataKind]: { kind: K; value: DataMap[K]; stamp: number } }[DataKind];
 
-export type HashedLegacyRecord = LegacyRecord & { id: string; key: string; hash: string };
+export type HashedLegacyRecord = LegacyRecord & { id: string; key: string; identity: string; hash: string };
 
 export type LegacyPaths = {
   schedulingSqlite: string;
@@ -142,13 +143,14 @@ const sqliteScheduling = (path: string): RawScheduling | null =>
     return raw;
   });
 
-const jsonArray = (path: string): unknown[] | null => {
-  if (!existsSync(path)) return null;
-  const parsed = parseJson(readFileSync(path, "utf8"), path);
-  const entries = asArray(parsed);
-  if (!entries) throw new Error(`Legacy control-plane data in ${path} is not a list.`);
+const listOf = (text: string, where: string): unknown[] => {
+  const entries = asArray(parseJson(text, where));
+  if (!entries) throw new Error(`Legacy control-plane data in ${where} is not a list.`);
   return [...entries];
 };
+
+const jsonArray = (path: string): unknown[] | null =>
+  existsSync(path) ? listOf(readFileSync(path, "utf8"), path) : null;
 
 const jsonScheduling = (path: string): RawScheduling | null =>
   existsSync(path) ? snapshotScheduling(parseJson(readFileSync(path, "utf8"), path)) : null;
@@ -270,7 +272,13 @@ const listRecords = <K extends "meeting" | "webinar">(
 
 export const hashed = (record: LegacyRecord): HashedLegacyRecord => {
   const id = specOf(record.kind).id(record.value);
-  return { ...record, id, key: legacyCopyKey(record.kind, id), hash: hashLegacyValue(record.value) };
+  return {
+    ...record,
+    id,
+    key: legacyCopyKey(record.kind, id),
+    identity: identityOf<Kind>(record.kind, record.value),
+    hash: hashLegacyValue(record.value),
+  };
 };
 
 type Candidate = { source: string; read: () => Promise<LegacyRecord[] | null> };
@@ -354,57 +362,114 @@ const RECOVERED_FILES: Record<LegacyDomain, string> = {
 
 export type RecoveredRecord = HashedLegacyRecord & { from: string };
 
-export type RecoveredCopies = { files: string[]; records: RecoveredRecord[] };
+export type ClaimedCopy = { domain: LegacyDomain; base: string; path: string; hash: string };
 
-const recoveredFiles = (dir: string | null): Array<{ domain: LegacyDomain; path: string }> => {
+export type RecoveredCopies = { files: ClaimedCopy[]; records: RecoveredRecord[] };
+
+const CLAIM = /^(.+)\.claimed-(\d+)-\d+$/;
+
+const claimable = (dir: string | null, ticket: number): Array<{ domain: LegacyDomain; base: string; path: string }> => {
   if (!dir || !existsSync(dir)) return [];
-  return readdirSync(dir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
-    .map((entry) => entry.name)
-    .sort()
-    .flatMap((name) =>
-      LEGACY_DOMAINS.map((domain) => ({ domain, path: join(dir, name, RECOVERED_FILES[domain]) })).filter((file) =>
-        existsSync(file.path),
-      ),
-    );
+  const found: Array<{ domain: LegacyDomain; base: string; path: string }> = [];
+  for (const service of readdirSync(dir, { withFileTypes: true })) {
+    if (!service.isDirectory() || service.name.startsWith(".")) continue;
+    const folder = join(dir, service.name);
+    for (const name of readdirSync(folder).sort()) {
+      const claimed = CLAIM.exec(name);
+      const fileName = claimed ? claimed[1] : name;
+      const domain = LEGACY_DOMAINS.find((entry) => RECOVERED_FILES[entry] === fileName);
+      if (!domain) continue;
+      if (claimed && Number(claimed[2]) >= ticket) continue;
+      found.push({ domain, base: join(folder, fileName), path: join(folder, name) });
+    }
+  }
+  return found;
 };
 
-const recoveredRecords = (domain: LegacyDomain, path: string): LegacyRecord[] => {
-  let records: LegacyRecord[] | null;
+const claim = (dir: string | null, ticket: number): Array<{ domain: LegacyDomain; base: string; path: string }> => {
+  const mine: Array<{ domain: LegacyDomain; base: string; path: string }> = [];
+  for (let pass = 0; pass < 5; pass += 1) {
+    const candidates = claimable(dir, ticket);
+    if (candidates.length === 0) break;
+    for (const candidate of candidates) {
+      const path = `${candidate.base}.claimed-${ticket}-${mine.length}`;
+      try {
+        renameSync(candidate.path, path);
+        mine.push({ domain: candidate.domain, base: candidate.base, path });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+  }
+  return mine;
+};
+
+const recoveredRecords = (domain: LegacyDomain, text: string, path: string): LegacyRecord[] => {
   try {
-    records =
-      domain === "scheduling"
-        ? schedulingRecords(jsonScheduling(path) ?? emptyScheduling(), path)
-        : domain === "meetings"
-          ? listRecords("meeting", jsonArray(path) ?? [], normalizeStoredMeeting)
-          : listRecords("webinar", jsonArray(path) ?? [], normalizeStoredWebinar);
+    return domain === "scheduling"
+      ? schedulingRecords(snapshotScheduling(parseJson(text, path)), path)
+      : domain === "meetings"
+        ? listRecords("meeting", listOf(text, path), normalizeStoredMeeting)
+        : listRecords("webinar", listOf(text, path), normalizeStoredWebinar);
   } catch (error) {
     throw new Error(
       `${path}, a store an older SFU kept in its container, cannot be read: ${(error as Error).message} Repair it before the SFU starts.`,
       { cause: error },
     );
   }
-  return records;
 };
 
-export const readRecoveredCopies = (dir: string | null): RecoveredCopies => {
-  const files = recoveredFiles(dir);
+const sha256 = (text: string): string => createHash("sha256").update(text).digest("hex");
+
+const release = (files: ReadonlyArray<{ base: string; path: string }>): void => {
+  for (const file of files) {
+    if (existsSync(file.path) && !existsSync(file.base)) renameSync(file.path, file.base);
+  }
+};
+
+const combine = (files: ClaimedCopy[], texts: string[]): RecoveredRecord[] => {
   const winners = new Map<string, RecoveredRecord>();
   const problems: string[] = [];
-  for (const file of files) {
-    for (const record of recoveredRecords(file.domain, file.path).map(hashed)) {
+  files.forEach((file, index) => {
+    for (const record of recoveredRecords(file.domain, texts[index], file.base).map(hashed)) {
       const held = winners.get(record.key);
       if (!held || record.stamp > held.stamp) {
-        winners.set(record.key, { ...record, from: file.path });
+        winners.set(record.key, { ...record, from: file.base });
       } else if (record.stamp === held.stamp && record.hash !== held.hash) {
-        problems.push(`${record.key} differs between ${held.from} and ${file.path}, and both were last changed at ${record.stamp}.`);
+        problems.push(`${record.key} differs between ${held.from} and ${file.base}, and both were last changed at ${record.stamp}.`);
       }
     }
-  }
+  });
   if (problems.length > 0) {
     throw new Error(
       `Could not combine the stores older SFUs kept in their containers without losing a change:\n- ${problems.join("\n- ")}\nResolve these records by hand, then rename each copy with a .adopted suffix.`,
     );
   }
-  return { files: files.map((file) => file.path), records: [...winners.values()] };
+  return [...winners.values()];
+};
+
+export const claimRecoveredCopies = (dir: string | null, ticket: number): RecoveredCopies => {
+  const claimed = claim(dir, ticket);
+  try {
+    const texts = claimed.map((file) => readFileSync(file.path, "utf8"));
+    const files = claimed.map((file, index) => ({ ...file, hash: sha256(texts[index]) }));
+    return { files, records: combine(files, texts) };
+  } catch (error) {
+    release(claimed);
+    throw error;
+  }
+};
+
+export const stillClaimed = (file: ClaimedCopy): boolean =>
+  existsSync(file.path) && sha256(readFileSync(file.path, "utf8")) === file.hash;
+
+export const markAdopted = (file: ClaimedCopy): string | null => {
+  if (!stillClaimed(file)) {
+    if (existsSync(file.path)) Logger.warn(`[ControlPlane] ${file.path} changed after it was imported; left it for the next start`);
+    return null;
+  }
+  const plain = `${file.base}.adopted`;
+  const target = existsSync(plain) ? `${plain}-${file.hash.slice(0, 12)}` : plain;
+  renameSync(file.path, target);
+  return target;
 };

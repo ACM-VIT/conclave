@@ -1,8 +1,11 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { specOf } from "./entities.js";
+import { identityOf, specOf } from "./entities.js";
+import { hashLegacyValue } from "./legacyHash.js";
 import {
   InvalidInput,
   StoreCorruptionError,
+  isDataKind,
+  legacyCopyKey,
   UniqueViolation,
   fail,
   uniqueField,
@@ -190,6 +193,20 @@ class TxImpl implements Tx {
     const key = slot(kind, id);
     this.pending.set(key, { kind, id, value: null, legacy: null });
     this.removed.set(key, { kind, id });
+    if (isDataKind(kind)) {
+      this.write(
+        "removal",
+        {
+          key: legacyCopyKey(kind, id),
+          kind,
+          id,
+          identity: identityOf<Kind>(kind, current.value),
+          hash: hashLegacyValue(current.value),
+        },
+        null,
+        false,
+      );
+    }
   }
 
   writeSet(): WriteSet {

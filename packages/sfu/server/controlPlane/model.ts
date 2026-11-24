@@ -47,24 +47,36 @@ export type LegacyCopy = {
   stamp: number;
 };
 
+export type Removal = {
+  key: string;
+  kind: DataKind;
+  id: string;
+  identity: string;
+  hash: string;
+};
+
 export const LEGACY_IMPORT_ID = "legacy";
 
 export type LegacyImportState = {
   id: typeof LEGACY_IMPORT_ID;
   ticket: number;
+  completed: number;
   sources: Partial<Record<LegacyDomain, string>>;
 };
 
 export const legacyCopyKey = (kind: DataKind, id: string): string => `${kind}:${id}`;
 
+export const isDataKind = (kind: string): kind is DataKind => DATA_KINDS.includes(kind as DataKind);
+
 export type EntityMap = DataMap & {
   legacyCopy: LegacyCopy;
   legacyImport: LegacyImportState;
+  removal: Removal;
 };
 
 export type Kind = keyof EntityMap;
 
-export const KINDS: readonly Kind[] = [...DATA_KINDS, "legacyCopy", "legacyImport"];
+export const KINDS: readonly Kind[] = [...DATA_KINDS, "legacyCopy", "legacyImport", "removal"];
 
 export type UniqueIndex =
   | "profileUser"
