@@ -115,11 +115,19 @@ Every change an app makes reaches the server through one paced upload path:
 - Nothing else sends app updates. `apps/web/test/app-upload-path.test.ts` fails
   when code in the SDK, the web app or meeting core emits `apps:yjs:update`, or
   the native embed posts an update, outside the queue.
+- An SFU that says `takesUpdateLists: true` acknowledges every upload once it
+  is done with it, after any refusal for it. Until then the queue keeps what it
+  sent: at most `APP_DOCUMENT_UPLOAD_LIST_MAX` changes and
+  `APP_DOCUMENT_UPDATE_MAX_BYTES`, except a single change in parts, which may
+  fill it alone. That log is also its send window, so nothing more goes out
+  while it is full.
 - A refusal for a passing reason (`rate-limited`, `timed-out`, `queue-full`,
   `missing-dependency` and the like) keeps the live copy. The provider syncs
-  with the server and sends everything the server lacks, the refused change and
-  anything not yet sent included, under a fresh copy id. Changes made during that
-  sync go out with it.
+  with the server under a fresh copy id and then resends, as a list, each change
+  from the log, the queue and the sync itself that the server lacks, so near the
+  document limit a change that fits still lands on its own. Only when those
+  changes do not cover what the server lacks (state that never went through the
+  queue) does it send one diff of everything the server lacks instead.
 - A refusal because the document is full, locked or invalid, or a fourth passing
   refusal within 30 seconds, rebuilds the copy from the server. Anything built on
   the refused change goes with it, because the server can never accept it, and

@@ -19,7 +19,7 @@ Use this page when debugging:
 | `apps:close` | client -> server | yes | clear active app and unlock (admin-only) |
 | `apps:lock` | client -> server | yes | set lock flag (admin-only) |
 | `apps:yjs:sync` | client -> server | yes | request state diff for active app |
-| `apps:yjs:update` | bi-directional | no | relay Yjs content updates |
+| `apps:yjs:update` | bi-directional | optional | relay Yjs content updates |
 | `apps:awareness` | bi-directional | no | relay awareness/presence updates |
 
 ## State and Control Flow
@@ -126,6 +126,12 @@ Client -> server (`apps:yjs:update`):
   list is refused as `invalid` and an oversized one as `too-large`, with nothing
   applied; a list drops a staged change like any whole update
 - clients send lists only after a sync reply with `takesUpdateLists: true`
+- such an SFU acknowledges an upload that carries an ack callback once it is
+  done with it: after the change or every listed change has been committed or
+  refused (always after the `apps:yjs:refused` event for it), when it drops the
+  upload before the document, and for a part as soon as it is staged; clients
+  keep sent changes until then and resend the ones the server lacks after a
+  passing refusal
 
 Server -> peers, for a change over 256 KiB:
 
