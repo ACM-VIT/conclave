@@ -610,12 +610,14 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
               staleSameIdentitySeats.some((seat) => seat.isWebinarAttendee),
           );
 
+        let replacedHostSeat = false;
         const removeClientForRejoin = (
           targetUserId: string,
-          options?: { notifyPeers?: boolean; disconnectSocket?: boolean },
+          options?: { notifyPeers?: boolean },
         ) => {
           const client = room.getClient(targetUserId);
           if (!client) return;
+          if (client instanceof Admin && !client.isObserver) replacedHostSeat = true;
 
           const awarenessRemovals = room.clearUserAwareness(targetUserId);
           for (const removal of awarenessRemovals) {
@@ -641,7 +643,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
               toUserId: userId,
             });
           }
-          if (options?.disconnectSocket && client.socket.id !== socket.id) {
+          if (client.socket.id !== socket.id) {
             client.socket.disconnect(true);
           }
 
@@ -929,10 +931,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           Logger.warn(
             `Reclaiming stale session ${stale.userId} for identity ${userKey} in room ${roomId}`,
           );
-          removeClientForRejoin(stale.userId, {
-            notifyPeers: true,
-            disconnectSocket: stale.isFormerSeat,
-          });
+          removeClientForRejoin(stale.userId, { notifyPeers: true });
         }
 
         if (existingClient) {
@@ -1019,6 +1018,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           guestProof: guestClaim.bindTo,
         });
         context.currentRoom.addClient(context.currentClient);
+        if (replacedHostSeat && !room.hasActiveAdmin()) handOffRoom(io, state, room);
 
         // The previous room's channel is left only now. Nothing awaits between
         // the identity checks above and this seat, so a second join under the
