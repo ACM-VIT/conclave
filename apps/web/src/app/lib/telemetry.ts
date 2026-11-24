@@ -133,9 +133,10 @@ const storedKeys = (client: PostHog): Set<string> =>
 // merged into the event. An event the SDK raised itself has none.
 let emitting: TelemetryProps | null = null;
 
-// This build's chunk ids by file. Until it loads, and in a build with no
-// injected chunks, chunk frames keep no path.
-let chunkFiles: ReadonlyMap<string, string> = new Map();
+// This build's chunk ids by file, null until it loads. A report built before
+// then keeps no chunk path; a saved one resent keeps its own for /ingest.
+let chunkFiles: ReadonlyMap<string, string> | null = null;
+const NO_CHUNKS: ReadonlyMap<string, string> = new Map();
 
 // Rejects when the request gets no answer: a network failure, or the page
 // navigating away.
@@ -228,7 +229,7 @@ const queueWithoutSdk = (reports: Report[]): void => {
     storedKeys: new Set<string>(),
     token: posthogKey,
     clientVersion,
-    chunkFiles,
+    chunkFiles: chunkFiles ?? NO_CHUNKS,
     siteOrigin: window.location.origin,
   };
   const batch = reports.flatMap((report) => {
@@ -361,7 +362,7 @@ const initPostHog = (client: PostHog, key: string): void => {
           storedKeys: storedKeys(client),
           token: key,
           clientVersion,
-          chunkFiles,
+          chunkFiles: chunkFiles ?? NO_CHUNKS,
           siteOrigin: window.location.origin,
         });
       if (built) queueBuilt(built);
@@ -391,13 +392,15 @@ const ingestRequest = (body: string, keepalive: boolean, signal?: AbortSignal): 
   });
 
 const rebuilt = (key: string) => (event: OutboxEvent): OutboxEvent | null => {
+  const own = event.properties.client_version;
+  const build = isBuildVersion(own) ? own : UNKNOWN_BUILD;
   const built = buildOutboundEvent(
     { uuid: event.uuid, event: event.event, properties: event.properties },
     {
       storedKeys: new Set(),
       token: key,
-      clientVersion,
-      chunkFiles,
+      clientVersion: build,
+      chunkFiles: build === clientVersion ? chunkFiles : null,
       siteOrigin: window.location.origin,
       payload: event.properties,
     },

@@ -35,6 +35,8 @@ export const MAX_FRAMES = 500;
 const position = z.number().int().min(0).max(MAX_POSITION);
 const pixels = z.number().int().min(0).max(100_000);
 const uuid = z.uuid();
+export const chunkIdForm = uuid;
+export const chunkPathForm = z.string().regex(/^\/_next\/static\/[A-Za-z0-9_./-]+\.js$/);
 
 export const STATIC_PAGES = ["schedule", "sfu-admin", "privacy", "delete-account", "sign-in"] as const;
 /** Every path a URL is sent as: the route it belongs to, never the room code or slug. */
@@ -272,13 +274,13 @@ export type OutboundContext = {
   token: string;
   /** A build this deployment shipped, or UNKNOWN_BUILD. */
   clientVersion: string;
-  /** That build's chunk ids and the file each was injected into. */
-  chunkFiles: ReadonlyMap<string, string>;
+  /** That build's chunk ids and files, or null when its list is not at hand. */
+  chunkFiles: ReadonlyMap<string, string> | null;
 };
 
 /** A stack frame: its file only when it is one of ours, and no function name. */
-const frameForm = (chunkFiles: ReadonlyMap<string, string>) => {
-  const chunkPaths = new Set(chunkFiles.values());
+const frameForm = (chunkFiles: ReadonlyMap<string, string> | null) => {
+  const chunkPaths = chunkFiles ? new Set(chunkFiles.values()) : null;
   return z.object({
     platform: z.literal("web:javascript"),
     function: z.literal("?"),
@@ -289,17 +291,17 @@ const frameForm = (chunkFiles: ReadonlyMap<string, string>) => {
           (FRAME_PLACEHOLDERS as readonly string[]).includes(file) ||
           file === PATH_WITHHELD ||
           FIRST_PARTY_SCRIPTS.has(file) ||
-          chunkPaths.has(file),
+          (chunkPaths ? chunkPaths.has(file) : chunkPathForm.safeParse(file).success),
       )
       .optional(),
     lineno: position.optional(),
     colno: position.optional(),
     in_app: flag.optional(),
-    chunk_id: uuid.refine((id) => chunkFiles.has(id)).optional(),
+    chunk_id: uuid.refine((id) => !chunkFiles || chunkFiles.has(id)).optional(),
   });
 };
 
-const exceptionListForm = (chunkFiles: ReadonlyMap<string, string>) =>
+const exceptionListForm = (chunkFiles: ReadonlyMap<string, string> | null) =>
   z
     .array(
       z.object({

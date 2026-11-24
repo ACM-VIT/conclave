@@ -25,6 +25,7 @@ let sent: Sent[] = [];
 let ingestInits: RequestInit[] = [];
 let sendBeaconCalls = 0;
 let refuseBeacons = false;
+let ingestAnswers: number[] = [];
 
 // While set, /ingest answers only once the test releases it.
 let ingestHeld: Promise<void> | null = null;
@@ -49,6 +50,7 @@ beforeEach(async () => {
   ingestInits = [];
   sendBeaconCalls = 0;
   refuseBeacons = false;
+  ingestAnswers = [];
   ingestHeld = null;
   localStorage.clear();
   manifest = "pending";
@@ -67,8 +69,10 @@ beforeEach(async () => {
           abortManifest = () => reject(new TypeError("Failed to fetch"));
         });
       }
-      const answer = new Response('{"status":1}', { status: 200 });
+      let answer = new Response('{"status":1}', { status: 200 });
       if (url.includes("/ingest/") && init?.body) {
+        const status = init.signal ? ingestAnswers.shift() : undefined;
+        if (status !== undefined) answer = new Response("{}", { status });
         const via = init.signal ? "fetch" : "beacon";
         if (via === "beacon" && refuseBeacons) throw new TypeError("keepalive request refused");
         ingestInits.push(init);
@@ -476,6 +480,72 @@ describe("what a telemetry request carries", () => {
     const bodies = await Promise.all(sent.map((item) => new Response(item.body).text()));
     expect(bodies.join("\n")).not.toContain("lime-pear");
     expect(bodies.join("\n")).toContain(tampered.uuid);
+  });
+});
+
+describe("a saved report replayed on another page", () => {
+  const OLDER_BUILD = "5f1c0e9a7d2b4c6e8f0a1b3c5d7e9f1a2b4c6d8e";
+  const CHUNK_ID = "147fc2df-e663-5d76-aa13-f67e1e894071";
+  const CHUNK = "/_next/static/chunks/3u-6_1om1fv26.js";
+  const BATCH_ID = "0196f0a1-0000-7000-9000-0000000000c0";
+  const savedException = (version: string) => ({
+    uuid: "0196f0a1-0000-7000-8000-0000000000c1",
+    event: "$exception",
+    timestamp: new Date().toISOString(),
+    properties: {
+      token: KEY,
+      distinct_id: "0196f0a1-0000-7000-8000-00000000d15d",
+      client_version: version,
+      source: "react_error_boundary",
+      boundary: "route",
+      $exception_list: [
+        {
+          type: "TypeError",
+          value: "[message withheld]",
+          stacktrace: {
+            type: "raw",
+            frames: [{ platform: "web:javascript", function: "?", filename: CHUNK, lineno: 1, colno: 2, in_app: true, chunk_id: CHUNK_ID }],
+          },
+        },
+      ],
+    },
+  });
+  const save = (event: ReturnType<typeof savedException>) =>
+    localStorage.setItem(`${STORED_BATCH_PREFIX}${BATCH_ID}`, JSON.stringify({ id: BATCH_ID, events: [event], oldestAt: Date.now(), sent: false }));
+  const stored = () => JSON.parse(localStorage.getItem(`${STORED_BATCH_PREFIX}${BATCH_ID}`) ?? "null") as { attempt?: number; events: unknown[] } | null;
+  const firstPosted = async () => {
+    const body = JSON.parse(await new Response(fetches()[0].body).text()) as { batch: Array<{ properties: Record<string, unknown> }> };
+    return body.batch[0].properties;
+  };
+  const firstFrame = (properties: Record<string, unknown>) =>
+    (properties.$exception_list as Array<{ stacktrace: { frames: Array<Record<string, unknown>> } }>)[0].stacktrace.frames[0];
+
+  it("keeps a saved exception's chunk frames when it replays before this build's chunk list has loaded", async () => {
+    manifest = "pending";
+    save(savedException(BUILD));
+    const { startTelemetry } = await import("../src/app/lib/telemetry");
+    startTelemetry();
+    await vi.waitFor(() => expect(fetches().length).toBeGreaterThan(0));
+
+    const properties = await firstPosted();
+    expect(properties.client_version).toBe(BUILD);
+    expect(firstFrame(properties)).toMatchObject({ filename: CHUNK, chunk_id: CHUNK_ID, lineno: 1, colno: 2 });
+  });
+
+  it("keeps a saved event's own build on a page of a newer one, and its stored copy as it was", async () => {
+    manifest = "missing";
+    ingestAnswers = [503];
+    const original = savedException(OLDER_BUILD);
+    save(original);
+    const { startTelemetry } = await import("../src/app/lib/telemetry");
+    startTelemetry();
+    await vi.waitFor(() => expect(fetches().length).toBeGreaterThan(0));
+
+    const properties = await firstPosted();
+    expect(properties.client_version).toBe(OLDER_BUILD);
+    expect(firstFrame(properties)).toMatchObject({ filename: CHUNK, chunk_id: CHUNK_ID });
+    await vi.waitFor(() => expect(stored()?.attempt).toBe(1));
+    expect(stored()?.events).toEqual([original]);
   });
 });
 

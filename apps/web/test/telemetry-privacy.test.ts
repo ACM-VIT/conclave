@@ -386,6 +386,40 @@ describe("exceptions", () => {
     expect(JSON.stringify(unproven)).not.toContain(CHUNK_ID);
   });
 
+  it("without the build's chunk list, keeps only a chunk id and a chunk file of their forms, for /ingest to check", () => {
+    const event = exceptionEvent();
+    const other = "0f8c2a1e-5b7d-4c3e-9a10-000000000001";
+    event.properties.$exception_list[0].stacktrace.frames = [
+      { filename: "/_next/static/chunks/3u-6_1om1fv26.js", lineno: 1, chunk_id: CHUNK_ID },
+      { filename: `${SITE}/_next/static/chunks/0yo6oel71v_bh.js`, lineno: 2, chunk_id: other },
+      { filename: "/_next/static/chunks/3u-6_1om1fv26.js", lineno: 3 },
+      { filename: "https://cdn.example.net/_next/static/chunks/3u-6_1om1fv26.js", lineno: 4, chunk_id: CHUNK_ID },
+      { filename: "/_next/static/chunks/review@example.invalid.js", lineno: 5, chunk_id: CHUNK_ID },
+      { filename: "/api/telemetry?token=abc.js", lineno: 6, chunk_id: CHUNK_ID },
+      { filename: "/_next/static/chunks/3u-6_1om1fv26.js", lineno: 7, chunk_id: "1team-meeting" },
+    ];
+    const built = build(event, { chunkFiles: null });
+
+    expect(frameFiles(built)).toEqual([
+      "/_next/static/chunks/3u-6_1om1fv26.js",
+      "/_next/static/chunks/0yo6oel71v_bh.js",
+      "[path]",
+      "[path]",
+      "[path]",
+      "[path]",
+      "[path]",
+    ]);
+    expect(built.properties.$exception_list[0].stacktrace.frames.map((frame: { chunk_id?: string }) => frame.chunk_id)).toEqual([
+      CHUNK_ID,
+      other,
+      undefined,
+      CHUNK_ID,
+      CHUNK_ID,
+      CHUNK_ID,
+      undefined,
+    ]);
+  });
+
   it.each([
     [`${SITE}/mediapipe/review-frame@example.invalid.js`, "[path]"],
     [`${SITE}/_next/static/chunks/review@example.invalid.js`, "[path]"],

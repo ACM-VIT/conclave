@@ -41,8 +41,14 @@ request is a `fetch` with `credentials: "omit"` and `referrerPolicy:
 the send as a page goes away is a keepalive `fetch` instead (where a browser
 has no keepalive `fetch`, the batch is saved for the next load). Every event
 is built through the outbound schema again each time it is sent, so a saved
-copy from storage is checked like a new one, and each send carries its own
-`sent_at`, so `/ingest` can tell the events' age by the browser's clock.
+copy from storage is checked like a new one, against the build it was made
+in: it keeps its own `client_version`, and its frames are checked against
+that build's chunk list when this page has it (the same build, once its list
+has loaded). Otherwise a frame keeps its chunk id and chunk file as long as
+each has the right form, and `/ingest` checks them against that build's own
+list. The rebuilt copy is only sent; the saved batch keeps the original. Each
+send carries its own `sent_at`, so `/ingest` can tell the events' age by the
+browser's clock.
 One table, in `lib/telemetry-answers.ts`, says what an answer means, for the
 outbox reading `/ingest` and for `/ingest` reading PostHog: 2xx is delivered;
 408, 425, 429 and any 5xx are worth sending again; anything else is refused
@@ -237,7 +243,8 @@ by concurrent requests, and kept for 10 minutes, or 1 minute when missing, for
 the 16 most recently used builds. A manifest load has 2 s, its body included;
 one that fails or runs out of time falls back to the last manifest read for
 that build (a build's manifest never changes), or to none. A tab still running
-an older build is judged by its own manifest, not the newest one. It forwards the batch to PostHog as
+an older build, or a saved batch from one that a newer page replays, is
+judged by its own manifest, not the newest one. It forwards the batch to PostHog as
 plain JSON with the fixed User-Agent `conclave-web-ingest/1` and no header of
 the browser's: no cookie, no IP address and no forwarded or referrer header
 reaches PostHog. `/ingest` waits at most 10 s for PostHog, and reads

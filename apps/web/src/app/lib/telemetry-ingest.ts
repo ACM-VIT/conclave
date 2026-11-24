@@ -376,7 +376,7 @@ const prepareForward = async (request: Request, deps: IngestDeps) => {
   const events = Array.isArray(body) ? body : "batch" in body ? body.batch : [body];
   const ours = events.filter((event) => event.properties.token === deps.projectKey);
   if (ours.length === 0) throw new Refused(400);
-  // A tab sends only its own build's events, so a request carries one build:
+  // A batch holds one tab's events, so a request carries one build:
   // the first event's. Events naming any other build are dropped, which holds
   // a request to at most one manifest lookup. A tab can still run an older
   // build than the one deployed, so that build's own manifest is used, and a

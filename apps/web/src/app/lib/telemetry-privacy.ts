@@ -3,6 +3,8 @@ import { z } from "zod";
 import { isCallLogLabel } from "./call-log-labels";
 import {
   BUILD_VERSION,
+  chunkIdForm,
+  chunkPathForm,
   createOutboundSchemas,
   FIRST_PARTY_SCRIPTS,
   FRAME_PLACEHOLDERS,
@@ -42,10 +44,7 @@ export const isBuildVersion = (value: unknown): value is string =>
 export const chunkManifestUrl = (version: unknown): string | null =>
   isBuildVersion(version) ? `/_next/static/posthog-chunk-ids/${version}.json` : null;
 
-const ChunkManifest = z.record(
-  z.uuid(),
-  z.string().regex(/^\/_next\/static\/[A-Za-z0-9_./-]+\.js$/),
-);
+const ChunkManifest = z.record(chunkIdForm, chunkPathForm);
 
 /** The chunk manifest as a map, or null when it is not one. */
 export const parseChunkManifest = (value: unknown): ReadonlyMap<string, string> | null => {
@@ -114,8 +113,8 @@ export type EventSource = OutboundContext & {
 /**
  * A frame's file as its path, only for a script of ours served from our own
  * origin: an exact file under public/, or a chunk whose injected id the
- * build's manifest pairs with that very file. A name or an id alone proves
- * nothing, so any other file is [path]. Never an origin.
+ * build's manifest pairs with that very file, or, without that list, a chunk
+ * file and id of their forms for /ingest to check. Never an origin.
  */
 const framePath = (value: string, chunkId: string | null, source: EventSource): string => {
   if (placeholders.has(value) || value === PATH_WITHHELD) return value;
@@ -131,8 +130,10 @@ const framePath = (value: string, chunkId: string | null, source: EventSource): 
       return PATH_WITHHELD;
     }
   }
-  const ours =
-    FIRST_PARTY_SCRIPTS.has(path) || (chunkId !== null && source.chunkFiles.get(chunkId) === path);
+  const listed =
+    chunkId !== null &&
+    (source.chunkFiles ? source.chunkFiles.get(chunkId) === path : chunkPathForm.safeParse(path).success);
+  const ours = FIRST_PARTY_SCRIPTS.has(path) || listed;
   return ours ? path : PATH_WITHHELD;
 };
 
@@ -140,8 +141,8 @@ const framePath = (value: string, chunkId: string | null, source: EventSource): 
 // build's manifest lists. Its function name is dropped: source maps restore
 // it in PostHog.
 const shapeFrame = (frame: Record<string, unknown>, source: EventSource) => {
-  const chunkId =
-    typeof frame.chunk_id === "string" && source.chunkFiles.has(frame.chunk_id) ? frame.chunk_id : null;
+  const id = chunkIdForm.safeParse(frame.chunk_id);
+  const chunkId = id.success && (!source.chunkFiles || source.chunkFiles.has(id.data)) ? id.data : null;
   return {
     platform: "web:javascript",
     function: "?",
