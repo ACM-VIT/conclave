@@ -41,12 +41,12 @@ import {
   applyFieldEdit,
   extractRoomCode,
   inputEditRange,
-  keepFieldHistorySelection,
   parseCodeFieldPaste,
   planFieldEdit,
   sanitizeInstitutionDisplayName,
   sanitizeRoomCodeInput,
   sanitizeRoomCode,
+  trackFieldHistory,
   isMediaDeviceBlocked,
 } from "../lib/utils";
 import type { SetupNotice } from "../lib/setup-notice";
@@ -1176,10 +1176,10 @@ function JoinScreen({
       shapeCodeEdit(event, input, range, text);
     };
     input.addEventListener("beforeinput", onBeforeInput);
-    const stopKeepingHistorySelection = keepFieldHistorySelection(input);
+    const stopTrackingHistory = trackFieldHistory(input);
     return () => {
       input.removeEventListener("beforeinput", onBeforeInput);
-      stopKeepingHistorySelection();
+      stopTrackingHistory();
     };
   };
 
