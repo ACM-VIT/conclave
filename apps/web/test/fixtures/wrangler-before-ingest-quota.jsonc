@@ -1,0 +1,85 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "conclave-web",
+  "main": ".open-next/worker.js",
+  "account_id": "4ee36e42cabfd44e8ce61b2a6bd637c5",
+  "compatibility_date": "2026-06-30",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "cache": {
+    "enabled": false
+  },
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "version_metadata": {
+    "binding": "CF_VERSION_METADATA"
+  },
+  "vars": {
+    "BETTER_AUTH_URL": "https://conclave.acmvit.in",
+    "BETTER_AUTH_TRUSTED_ORIGINS": "https://conclave.acmvit.in",
+    "NEXT_PUBLIC_APP_URL": "https://conclave.acmvit.in",
+    "NEXT_PUBLIC_SITE_URL": "https://conclave.acmvit.in",
+    "SFU_URLS": "https://sfu-a.acmvit.in,https://sfu-b.acmvit.in"
+  },
+  "services": [
+    {
+      "binding": "WORKER_SELF_REFERENCE",
+      "service": "conclave-web"
+    }
+  ],
+  "ratelimits": [
+    {
+      "name": "YOUTUBE_SEARCH_RATE_LIMITER",
+      "namespace_id": "2001",
+      "simple": {
+        "limit": 8,
+        "period": 60
+      }
+    },
+    {
+      "name": "YOUTUBE_TRENDING_RATE_LIMITER",
+      "namespace_id": "2002",
+      "simple": {
+        "limit": 30,
+        "period": 60
+      }
+    },
+    {
+      "name": "YOUTUBE_METADATA_RATE_LIMITER",
+      "namespace_id": "2003",
+      "simple": {
+        "limit": 30,
+        "period": 60
+      }
+    },
+    {
+      "name": "UNFURL_RATE_LIMITER",
+      "namespace_id": "2004",
+      "simple": {
+        "limit": 30,
+        "period": 60
+      }
+    },
+    {
+      "name": "TTS_SPEECH_RATE_LIMITER",
+      "namespace_id": "2005",
+      "simple": {
+        "limit": 20,
+        "period": 60
+      }
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "NEXT_INC_CACHE_R2_BUCKET",
+      "bucket_name": "conclave-web-opennext-cache"
+    }
+  ],
+  "images": {
+    "binding": "IMAGES"
+  },
+  "observability": {
+    "enabled": true
+  }
+}

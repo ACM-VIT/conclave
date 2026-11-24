@@ -14,6 +14,29 @@ names, emails, chat text or room codes.
 | Web deploy | `CI=true`, `POSTHOG_SOURCEMAPS_UPLOAD=1`, `POSTHOG_CLI_API_KEY`, `POSTHOG_CLI_PROJECT_ID`, `POSTHOG_CLI_HOST` | `cf:build` builds, uploads and deletes browser source maps (needs `posthog-cli` on PATH), only when `CI=true` and `POSTHOG_SOURCEMAPS_UPLOAD=1` are both set along with the credentials: credentials left in a developer's `.env.local` never upload anything. One rule (`scripts/posthog-sourcemaps-policy.mjs`) decides both whether `next build` makes maps and whether the upload runs. Other builds, `cf:preview` included, make no maps. A failed upload, or one still running after 90 s (`POSTHOG_SOURCEMAPS_TIMEOUT_MS`), warns and the deploy goes on without readable stacks. The CLI runs in its own process group, so a stalled upload is stopped with its native uploader child before the maps are removed, which they always are. Ctrl-C or SIGTERM is passed on to that group, the maps are removed, and the script exits 130 or 143. Exited (zombie) processes count as gone, for containers with no init to reap them. |
 | SFU | `SFU_POSTHOG_KEY`, `SFU_POSTHOG_HOST` | Server exceptions and game events. `SFU_POSTHOG_ENABLED=0` turns both off. Always off under vitest. |
 
+### Rolling the web Worker back
+
+The first deploy with `/ingest` limits applies Durable Object migration `v1`,
+which creates `IngestQuota`. From then on Cloudflare takes only a Worker that
+keeps that migration and still exports the class, so neither `wrangler
+rollback` nor a plain deploy of an older checkout can go back to a build from
+before it. To go back, deploy a recovery build of the older checkout instead:
+
+1. Check out the older commit in its own worktree and install it
+   (`pnpm install --frozen-lockfile`).
+2. From a checkout that has this change, run
+   `node apps/web/scripts/worker-recovery.mjs <older checkout>/apps/web`. It
+   copies `worker.ts` and `src/app/lib/ingest-quota.ts` into the older tree,
+   points its `wrangler.jsonc` at `worker.ts` and adds the `INGEST_QUOTA`
+   binding and every migration, keeping everything else from the older
+   config. It writes nothing when the result would still leave a migrated
+   class unexported, or when the two trees' migrations diverge.
+3. In the older tree, `pnpm -C apps/web cf:deploy` as usual.
+
+The older code never calls the binding, so the object sits idle until a later
+deploy uses it again. `test/worker-recovery.test.ts` checks the rule on this
+tree and on the config from before the migration.
+
 ## Exceptions (`$exception`)
 
 Web, from `lib/telemetry.ts`. It starts when the first page mounts or the
