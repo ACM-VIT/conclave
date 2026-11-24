@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
@@ -243,6 +243,46 @@ describe.each(stores)("an SFU combining the old $name with a container copy", (s
 
     expect(await loaded(store)).toEqual({});
     expect(existsSync(partial)).toBe(true);
+  });
+});
+
+describe.each(stores)("an SFU whose saved $name copies it cannot open", (store) => {
+  const isRoot = process.getuid?.() === 0;
+  const lockedWhile = async (path: string, mode: number, check: () => Promise<void>) => {
+    chmodSync(path, mode);
+    try {
+      await check();
+    } finally {
+      chmodSync(path, 0o700);
+    }
+  };
+
+  it.skipIf(isRoot).each([
+    ["the import folder", () => importDir(), 0o000],
+    ["a service folder", () => join(importDir(), "sfu-a"), 0o000],
+    ["an archive folder it can read but not claim in", () => dirname(copyPath(store)), 0o500],
+  ] as const)("refuses to start, naming %s and the fix, and changes nothing", async (_label, locked, mode) => {
+    write(oldStorePath(store), store.encode([{ id: "live", title: "Live", updatedAt: 100 }]));
+    write(copyPath(store), store.encode([{ id: "saved", title: "Saved", updatedAt: 100 }]));
+
+    await lockedWhile(locked(), mode, async () => {
+      const refusal = start();
+      await expect(refusal).rejects.toThrow(/cannot open it \((EACCES|EPERM)\)[\s\S]*chown -R node:node/);
+      await expect(refusal).rejects.toThrow(locked());
+    });
+    expect(existsSync(copyPath(store))).toBe(true);
+    expect(readdirSync(dirname(copyPath(store)))).toEqual([store.file]);
+    expect(await loaded(store)).toEqual({ live: "Live", saved: "Saved" });
+  });
+
+  it.skipIf(isRoot)("starts as usual when only a staging folder it never reads is locked", async () => {
+    write(copyPath(store), store.encode([{ id: "saved", title: "Saved", updatedAt: 100 }]));
+    const staging = join(importDir(), ".incoming-sfu-a-20261124T000000000Z-sfu-test-deploy-1a2b3c");
+    write(join(staging, "files", store.file), store.encode([{ id: "partial", title: "Partial", updatedAt: 100 }]));
+
+    await lockedWhile(staging, 0o000, async () => {
+      expect(await loaded(store)).toEqual({ saved: "Saved" });
+    });
   });
 });
 

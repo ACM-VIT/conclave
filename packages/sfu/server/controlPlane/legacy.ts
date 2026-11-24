@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, renameSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { Logger } from "../../utilities/loggers.js";
 import { asArray, asRecord } from "../../utilities/untrusted.js";
 import type { RedisPersistenceClient } from "../redisPersistence.js";
@@ -378,8 +378,28 @@ type CopyFile = { domain: LegacyDomain; base: string; path: string; service: str
 const CLAIM = /^(.+)\.claimed-(\d+)-\d+$/;
 const ARCHIVE = /^(\d{8}T\d+Z)-(.+)$/;
 
+const missing = (error: unknown): boolean => (error as NodeJS.ErrnoException).code === "ENOENT";
+
+const denied = (error: unknown): boolean => ["EACCES", "EPERM"].includes(String((error as NodeJS.ErrnoException).code));
+
+const unreadableCopies = (path: string, error: unknown): Error =>
+  new Error(
+    `${path} holds store copies a deploy saved from an older SFU, and this SFU cannot open it (${(error as NodeJS.ErrnoException).code ?? (error as Error).message}). Nothing was changed. Give it to the user the SFU runs as, for example: chown -R node:node ${path} && chmod -R u+rwX ${path}. Then start the SFU again.`,
+    { cause: error },
+  );
+
+const listFolder = <T,>(path: string, list: () => T): T | null => {
+  try {
+    return list();
+  } catch (error) {
+    if (missing(error)) return null;
+    if (denied(error)) throw unreadableCopies(path, error);
+    throw error;
+  }
+};
+
 const folders = (path: string): string[] =>
-  readdirSync(path, { withFileTypes: true })
+  (listFolder(path, () => readdirSync(path, { withFileTypes: true })) ?? [])
     .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
     .map((entry) => entry.name)
     .sort();
@@ -390,19 +410,12 @@ const copyFolders = (dir: string): Array<{ path: string; service: string; archiv
     ...folders(join(dir, service)).map((archive) => ({ path: join(dir, service, archive), service, archive })),
   ]);
 
-const missing = (error: unknown): boolean => (error as NodeJS.ErrnoException).code === "ENOENT";
-
 const claimable = (dir: string | null, ticket: number): CopyFile[] => {
   if (!dir || !existsSync(dir)) return [];
   const found: CopyFile[] = [];
   for (const folder of copyFolders(dir)) {
-    let names: string[];
-    try {
-      names = readdirSync(folder.path).sort();
-    } catch (error) {
-      if (missing(error)) continue;
-      throw error;
-    }
+    const names = listFolder(folder.path, () => readdirSync(folder.path).sort());
+    if (!names) continue;
     for (const name of names) {
       const claimed = CLAIM.exec(name);
       const fileName = claimed ? claimed[1] : name;
@@ -417,18 +430,24 @@ const claimable = (dir: string | null, ticket: number): CopyFile[] => {
 
 const claim = (dir: string | null, ticket: number): CopyFile[] => {
   const mine: CopyFile[] = [];
-  for (let pass = 0; pass < 5; pass += 1) {
-    const candidates = claimable(dir, ticket);
-    if (candidates.length === 0) break;
-    for (const candidate of candidates) {
-      const path = `${candidate.base}.claimed-${ticket}-${mine.length}`;
-      try {
-        renameSync(candidate.path, path);
-        mine.push({ ...candidate, path });
-      } catch (error) {
-        if (!missing(error)) throw error;
+  try {
+    for (let pass = 0; pass < 5; pass += 1) {
+      const candidates = claimable(dir, ticket);
+      if (candidates.length === 0) break;
+      for (const candidate of candidates) {
+        const path = `${candidate.base}.claimed-${ticket}-${mine.length}`;
+        try {
+          renameSync(candidate.path, path);
+          mine.push({ ...candidate, path });
+        } catch (error) {
+          if (missing(error)) continue;
+          throw denied(error) ? unreadableCopies(dirname(candidate.path), error) : error;
+        }
       }
     }
+  } catch (error) {
+    release(mine);
+    throw error;
   }
   return mine;
 };
@@ -455,6 +474,7 @@ const readClaimed = (path: string): string | null => {
     return readFileSync(path, "utf8");
   } catch (error) {
     if (missing(error)) return null;
+    if (denied(error)) throw unreadableCopies(dirname(path), error);
     throw error;
   }
 };
