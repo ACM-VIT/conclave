@@ -20,6 +20,7 @@ const REASONS: Record<string, string> = {
   "too-short": "Ask a longer question",
   "too-many-open": "You already have questions waiting. Give the host a moment.",
   "not-found": "Question not found",
+  "reopened-too-often": "This question cannot be reopened again",
 };
 
 type Doing = "ask" | "upvote" | "moderate";

@@ -522,3 +522,18 @@ it("sends nothing for an upvote clicked before the new connection's view is in",
   expect(qa.questions[0].hasUpvoted).toBe(true);
   expect((await outcome).ok).toBe(false);
 });
+
+it("says a question cannot be reopened again when the server refuses one more reopen", async () => {
+  let outcome!: Promise<QaActionResult>;
+  await act(async () => {
+    outcome = qa.moderate({ id: "q1", action: "reopen" });
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  await act(async () => {
+    last(AUTHORITY_EVENTS.act).ack!({ ok: false, code: "rejected", reason: "reopened-too-often" });
+    await vi.advanceTimersByTimeAsync(0);
+  });
+
+  expect(await outcome).toEqual({ ok: false, error: "This question cannot be reopened again" });
+});
+

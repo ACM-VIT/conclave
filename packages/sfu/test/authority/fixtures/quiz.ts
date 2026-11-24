@@ -5,8 +5,10 @@
  */
 import { defineContract, s, type Infer } from "@conclave/apps-sdk/authority";
 import {
+  actionOrderTable,
   defineAuthority,
   key,
+  nextActionOrder,
   reject,
   table,
   type Subject,
@@ -80,9 +82,17 @@ type QuizState = {
   secondsPerQuestion: number;
   deadline: number;
   answered: number;
-  leaderboard: { name: string; score: number }[] | null;
+  leaderboard: Leaderboard | null;
 };
-type Answer = { round: number; subject: Subject; choice: number; at: number };
+type Answer = { round: number; subject: Subject; choice: number; at: number; order: number; points: number };
+type Standing = { subject: Subject; name: string; score: number };
+type Leaderboard = { standings: Standing[]; complete: boolean };
+
+const LEADERBOARD_SHOWN = 10;
+const LEADERBOARD_KEPT = 20;
+
+const byStanding = (a: Standing, b: Standing): number =>
+  b.score - a.score || (a.subject < b.subject ? -1 : a.subject > b.subject ? 1 : 0);
 type Score = { subject: Subject; name: string; score: number };
 
 const initial: QuizState = {
@@ -95,12 +105,38 @@ const initial: QuizState = {
   leaderboard: null,
 };
 
+const leaderboardOf = (tx: { scan(table: "scores"): readonly (readonly [unknown, Score])[] }): Leaderboard => {
+  const standings = tx
+    .scan("scores")
+    .map(([, row]) => ({ subject: row.subject, name: row.name, score: row.score }))
+    .sort(byStanding);
+  return { standings: standings.slice(0, LEADERBOARD_KEPT), complete: standings.length <= LEADERBOARD_KEPT };
+};
+
+const mergedLeaderboard = (
+  tx: { scan(table: "scores"): readonly (readonly [unknown, Score])[] },
+  board: Leaderboard,
+  gone: readonly Subject[],
+  merged: Score | null,
+): Leaderboard => {
+  const lowest = board.standings[board.standings.length - 1];
+  const standings = board.standings.filter((entry) => !gone.includes(entry.subject));
+  if (merged) {
+    const entry = { subject: merged.subject, name: merged.name, score: merged.score };
+    if (board.complete || !lowest || byStanding(entry, lowest) <= 0) standings.push(entry);
+  }
+  if (!board.complete && standings.length < LEADERBOARD_SHOWN) return leaderboardOf(tx);
+  return { standings: standings.sort(byStanding), complete: board.complete };
+};
+
 export const quizAuthority = defineAuthority({
   contract: quizContract,
   tables: {
     quiz: table<QuizState>({ maxRows: 1, maxRowBytes: 64 * 1024 }),
     answers: table<Answer>({ maxRows: 30 * 1_000 }),
+    answersBySubject: table<{ round: number }>({ maxRows: 30 * 1_000 }),
     scores: table<Score>({ maxRows: 1_000 }),
+    order: actionOrderTable(),
   },
   timers: { advance: s.object({ round: s.int({ min: 0 }), phase: s.string({ max: 16 }) }) },
   canView: ({ role }) => role === "moderator" || role === "member",
@@ -159,9 +195,10 @@ export const quizAuthority = defineAuthority({
         const inserted = tx.insertIfAbsent(
           "answers",
           key(String(state.index), ctx.subject),
-          { round: state.index, subject: ctx.subject, choice: input.choice, at: ctx.now },
+          { round: state.index, subject: ctx.subject, choice: input.choice, at: ctx.now, order: nextActionOrder(tx), points: 0 },
         );
         if (inserted === "exists") reject("already-answered");
+        tx.put("answersBySubject", key(ctx.subject, String(state.index)), { round: state.index });
         tx.insertIfAbsent("scores", key(ctx.subject), {
           subject: ctx.subject,
           name: ctx.displayName,
@@ -205,19 +242,11 @@ export const quizAuthority = defineAuthority({
           const left = Math.max(0, state.deadline - given.at);
           const score = tx.get("scores", key(given.subject));
           if (!score) continue;
-          tx.put("scores", key(given.subject), {
-            ...score,
-            score:
-              score.score +
-              BASE_POINTS +
-              Math.round((SPEED_POINTS * Math.min(left, roundMs)) / roundMs),
-          });
+          const points = BASE_POINTS + Math.round((SPEED_POINTS * Math.min(left, roundMs)) / roundMs);
+          tx.put("answers", key(String(given.round), given.subject), { ...given, points });
+          tx.put("scores", key(given.subject), { ...score, score: score.score + points });
         }
-        const leaderboard = tx
-          .scan("scores")
-          .map(([, row]) => ({ name: row.name, score: row.score }))
-          .sort((a, b) => b.score - a.score)
-          .slice(0, 10);
+        const leaderboard = leaderboardOf(tx);
         const deadline = ctx.now + REVEAL_MS;
         tx.put("quiz", STATE, { ...state, phase: "reveal", deadline, leaderboard });
         tx.schedule("advance", STATE, deadline, { round: state.index, phase: "reveal" });
@@ -264,7 +293,12 @@ export const quizAuthority = defineAuthority({
                   }
                 : null,
             answered: state.answered,
-            leaderboard: revealed && state.leaderboard ? [...state.leaderboard] : null,
+            leaderboard:
+              revealed && state.leaderboard
+                ? state.leaderboard.standings
+                    .slice(0, LEADERBOARD_SHOWN)
+                    .map(({ name, score }) => ({ name, score }))
+                : null,
           },
         };
       },
@@ -281,5 +315,41 @@ export const quizAuthority = defineAuthority({
       owner: (row) => row.subject,
       project: (row) => ({ key: "score", value: { score: row.score } }),
     },
+  },
+  mergeSubjects(_ctx, tx, { from, into }) {
+    const state = tx.get("quiz", STATE);
+    let answeredDropped = 0;
+    for (const [, { round }] of tx.scan("answersBySubject", key(from))) {
+      tx.delete("answersBySubject", key(from, String(round)));
+      const mine = tx.get("answers", key(String(round), from));
+      if (!mine) continue;
+      tx.delete("answers", key(String(round), from));
+      tx.put("answersBySubject", key(into, String(round)), { round });
+      const kept = tx.get("answers", key(String(round), into));
+      if (kept && state && round === state.index) answeredDropped += 1;
+      if (kept && kept.order < mine.order) continue;
+      tx.put("answers", key(String(round), into), { ...mine, subject: into });
+    }
+    const fromScore = tx.get("scores", key(from));
+    const intoScore = tx.get("scores", key(into));
+    let merged: Score | null = null;
+    if (fromScore || intoScore) {
+      tx.delete("scores", key(from));
+      const points = tx
+        .scan("answersBySubject", key(into))
+        .reduce((sum, [, { round }]) => sum + (tx.get("answers", key(String(round), into))?.points ?? 0), 0);
+      merged = { ...(intoScore ?? fromScore!), subject: into, score: points };
+      tx.put("scores", key(into), merged);
+    }
+    if (state && (answeredDropped > 0 || state.leaderboard)) {
+      tx.put("quiz", STATE, {
+        ...state,
+        answered: state.answered - answeredDropped,
+        leaderboard: state.leaderboard
+          ? mergedLeaderboard(tx, state.leaderboard, [from, into], merged)
+          : null,
+      });
+    }
+    return undefined;
   },
 });

@@ -206,7 +206,7 @@ it("builds one download from every page of a large export", async () => {
   const ballot = (name: string, votedAt: number) => ({ name, optionIds: ["o1"], votedAt });
   const page = (ballots: unknown[], nextOffset: number | null) => ({
     ok: true,
-    value: { poll: card("p1").value, results: { voterCount: 3, votes: { o1: 3 } }, ballots, nextOffset },
+    value: { poll: card("p1").value, results: { voterCount: 3, votes: { o1: 3 } }, ballots, nextOffset, rewrites: 0 },
   });
   const queries = () => sent.filter((entry) => entry.event === AUTHORITY_EVENTS.query);
 
@@ -241,3 +241,98 @@ it("builds one download from every page of a large export", async () => {
   expect(csv).toContain("Voters,3");
   expect(csv).toMatch(/Ana,Yes,[^]*Ben,Yes,[^]*Cy,Yes,/);
 });
+
+it("starts the download again when a merge changes the poll's votes between pages", async () => {
+  await serve([card("p1")], { actions: ["create"], needsIdentity: [], queries: ["exportBallots"] });
+  const saved: Blob[] = [];
+  const createUrl = vi.spyOn(URL, "createObjectURL").mockImplementation((file) => {
+    saved.push(file as Blob);
+    return "blob:poll";
+  });
+  const revokeUrl = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+  const ballot = (name: string, votedAt: number) => ({ name, optionIds: ["o1"], votedAt });
+  const page = (ballots: unknown[], nextOffset: number | null, rewrites: number) => ({
+    ok: true,
+    value: { poll: card("p1").value, results: { voterCount: 2, votes: { o1: 2 } }, ballots, nextOffset, rewrites },
+  });
+  const queries = () => sent.filter((entry) => entry.event === AUTHORITY_EVENTS.query);
+
+  let outcome: unknown;
+  await act(async () => {
+    void polls.exportCsv("p1").then((result) => {
+      outcome = result;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  await act(async () => {
+    queries()[0].ack!(page([ballot("Gita, first tab", 1), ballot("Ana", 2)], 2, 0));
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  await act(async () => {
+    queries()[1].ack!({ ok: false, code: "rejected", reason: "export-changed" });
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  await act(async () => {
+    queries()[2].ack!(page([ballot("Ana", 2), ballot("Gita, first tab", 1)], null, 1));
+    await vi.advanceTimersByTimeAsync(0);
+  });
+
+  createUrl.mockRestore();
+  revokeUrl.mockRestore();
+  vi.useRealTimers();
+  const csv = saved.length === 1 ? await saved[0].text() : "";
+
+  expect(queries().map((entry) => entry.payload.input)).toEqual([
+    { pollId: "p1", offset: 0 },
+    { pollId: "p1", offset: 2, rewrites: 0 },
+    { pollId: "p1", offset: 0 },
+  ]);
+  expect(outcome).toEqual({ ok: true });
+  expect(csv.match(/Gita, first tab/g)).toHaveLength(1);
+  expect(csv.match(/Ana,/g)).toHaveLength(1);
+});
+
+it("finishes a download from an older server, whose pages carry no rewrite count", async () => {
+  await serve([card("p1")], { actions: ["create"], needsIdentity: [], queries: ["exportBallots"] });
+  const saved: Blob[] = [];
+  const createUrl = vi.spyOn(URL, "createObjectURL").mockImplementation((file) => {
+    saved.push(file as Blob);
+    return "blob:poll";
+  });
+  const revokeUrl = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+  const ballot = (name: string, votedAt: number) => ({ name, optionIds: ["o1"], votedAt });
+  const olderPage = (ballots: unknown[], nextOffset: number | null) => ({
+    ok: true,
+    value: { poll: card("p1").value, results: { voterCount: 2, votes: { o1: 2 } }, ballots, nextOffset },
+  });
+  const queries = () => sent.filter((entry) => entry.event === AUTHORITY_EVENTS.query);
+
+  let outcome: unknown;
+  await act(async () => {
+    void polls.exportCsv("p1").then((result) => {
+      outcome = result;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  await act(async () => {
+    queries()[0].ack!(olderPage([ballot("Ana", 1)], 1));
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  await act(async () => {
+    queries()[1].ack!(olderPage([ballot("Ben", 2)], null));
+    await vi.advanceTimersByTimeAsync(0);
+  });
+
+  createUrl.mockRestore();
+  revokeUrl.mockRestore();
+  vi.useRealTimers();
+  const csv = saved.length === 1 ? await saved[0].text() : "";
+
+  expect(queries().map((entry) => entry.payload.input)).toEqual([
+    { pollId: "p1", offset: 0 },
+    { pollId: "p1", offset: 1 },
+  ]);
+  expect(outcome).toEqual({ ok: true });
+  expect(csv).toMatch(/Ana,Yes,[^]*Ben,Yes,/);
+});
+

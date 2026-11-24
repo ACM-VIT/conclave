@@ -19,6 +19,7 @@ import type {
   RuntimeQuery,
   RuntimeTransaction,
   Subject,
+  SubjectMerge,
   TimerContext,
 } from "@conclave/apps-sdk/authority/server";
 import { Logger } from "../../../utilities/loggers.js";
@@ -354,6 +355,24 @@ export class AuthorityInstance {
       this.transact((tx) => tx.cancelTimer(timer.key));
     }
     return changed;
+  }
+
+  mergeSubjects(merge: SubjectMerge, now: number): boolean {
+    const handler = this.module.runtime.mergeSubjects;
+    if (!handler) return false;
+    const ctx: TimerContext = {
+      room: this.policy,
+      now,
+      random: this.options.random,
+      nextId: (prefix) => this.nextId(prefix),
+    };
+    const outcome = this.transact((tx) => {
+      finished(handler(ctx, tx, merge), "Subject merge");
+    });
+    if (!outcome.ok && outcome.kind === "fault") {
+      Logger.error(`[Authority] ${this.appId}: merging two subjects failed`, outcome.error);
+    }
+    return outcome.ok && outcome.changed;
   }
 
   /**

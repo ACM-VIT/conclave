@@ -11,10 +11,13 @@ import {
   type QuestionCard,
 } from "@conclave/apps-sdk/qa/core";
 import {
+  actionOrderTable,
   defineAuthority,
   key,
+  nextActionOrder,
   reject,
   table,
+  type ActionOrder,
   type AuthorityTransaction,
   type GateContext,
   type IdentityRequirement,
@@ -32,6 +35,8 @@ import {
 type QuestionRow = QuestionCard & {
   author: Subject;
   upvotes: number;
+  order: number;
+  openTimes: { order: number; open: boolean }[];
   askedIn: QaMode;
 };
 
@@ -40,10 +45,24 @@ type Upvote = { questionId: string; voter: Subject };
 type QaTables = {
   questions: TableSpec<QuestionRow>;
   upvotes: TableSpec<Upvote>;
+  order: TableSpec<ActionOrder>;
 };
 
 /** Upvotes a room can hold across all its questions. */
 const MAX_UPVOTES = 200_000;
+
+const MAX_REOPENS = 16;
+
+const isOpenStatus = (status: QaStatus): boolean => status === "pending" || status === "answering";
+
+const openAt = (row: QuestionRow, order: number): boolean => {
+  let open = false;
+  for (const change of row.openTimes) {
+    if (change.order >= order) break;
+    open = change.open;
+  }
+  return open;
+};
 
 const card = (row: QuestionRow): QuestionCard => ({
   id: row.id,
@@ -172,6 +191,7 @@ export const qaAuthority = defineAuthority({
     // One over the cap, so a new question lands before an old one is dropped.
     questions: table<QuestionRow>({ maxRows: QA_MAX_ENTRIES + 1 }),
     upvotes: table<Upvote>({ maxRows: MAX_UPVOTES }),
+    order: actionOrderTable(),
   },
   timers: {},
   canView: ({ role }, room) =>
@@ -189,13 +209,10 @@ export const qaAuthority = defineAuthority({
         if (input.text.length < QA_MIN_QUESTION_LENGTH) reject("too-short");
         const open = tx
           .scan("questions")
-          .filter(
-            ([, row]) =>
-              row.author === ctx.subject &&
-              (row.status === "pending" || row.status === "answering"),
-          ).length;
+          .filter(([, row]) => row.author === ctx.subject && isOpenStatus(row.status)).length;
         if (open >= QA_MAX_OPEN_PER_PERSON) reject("too-many-open");
         const id = ctx.nextId("q");
+        const order = nextActionOrder(tx);
         tx.insertIfAbsent("questions", key(id), {
           id,
           author: ctx.subject,
@@ -207,6 +224,8 @@ export const qaAuthority = defineAuthority({
           upvotes: 0,
           answerText: null,
           answeredByName: null,
+          order,
+          openTimes: [{ order, open: true }],
           askedIn: ctx.room.mode,
         });
         trimBook(tx, id);
@@ -268,6 +287,14 @@ export const qaAuthority = defineAuthority({
             next.status = "pending";
             break;
         }
+        if (isOpenStatus(question.status) !== isOpenStatus(next.status)) {
+          const reopens = question.openTimes.filter((change) => change.open).length - 1;
+          if (isOpenStatus(next.status) && reopens >= MAX_REOPENS) reject("reopened-too-often");
+          next.openTimes = [
+            ...question.openTimes,
+            { order: nextActionOrder(tx), open: isOpenStatus(next.status) },
+          ];
+        }
         tx.put("questions", key(question.id), next);
         // An answer can be twice the length of its question.
         trimBook(tx, question.id);
@@ -321,5 +348,37 @@ export const qaAuthority = defineAuthority({
       owner: (row) => row.voter,
       project: (row) => ({ key: row.questionId, value: {} }),
     },
+  },
+  mergeSubjects(_ctx, tx, { from, into }) {
+    const rows = tx.scan("questions").map(([, row]) => row);
+    const asked = rows
+      .filter((row) => row.author === from || row.author === into)
+      .sort((a, b) => a.order - b.order);
+    const dropped = new Set<string>();
+    const kept: QuestionRow[] = [];
+    for (const question of asked) {
+      const open = kept.filter((other) => openAt(other, question.order)).length;
+      if (open >= QA_MAX_OPEN_PER_PERSON) {
+        dropped.add(question.id);
+        tx.clear("upvotes", key(question.id));
+        tx.delete("questions", key(question.id));
+        continue;
+      }
+      kept.push(question);
+    }
+    for (const row of rows) {
+      if (dropped.has(row.id)) continue;
+      let next = row.author === from ? { ...row, author: into } : row;
+      if (tx.get("upvotes", key(row.id, from))) {
+        tx.delete("upvotes", key(row.id, from));
+        if (tx.get("upvotes", key(row.id, into))) {
+          next = { ...next, upvotes: Math.max(0, next.upvotes - 1) };
+        } else {
+          tx.put("upvotes", key(row.id, into), { questionId: row.id, voter: into });
+        }
+      }
+      if (next !== row) tx.put("questions", key(row.id), next);
+    }
+    return undefined;
   },
 });

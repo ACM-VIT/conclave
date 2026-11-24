@@ -38,7 +38,7 @@ export type TransactionOutcome<R> =
  * How many rows the store handles in bulk for the cost of one row a handler
  * touches itself. A bulk row is cheap, but not free.
  */
-const BULK_ROWS_PER_OP = 64;
+export const BULK_ROWS_PER_OP = 64;
 
 const DELETED = Symbol("deleted");
 type Staged = Row | typeof DELETED;

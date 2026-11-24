@@ -57,6 +57,7 @@ const pollExportPage = s.object({
   ballots: s.array(pollBallot, { max: 20_000 }),
   /** Where the next page starts, or null after the last one. */
   nextOffset: s.nullable(s.int({ min: 0 })),
+  rewrites: s.int({ min: 0 }),
 });
 
 /**
@@ -96,7 +97,11 @@ export const pollsContract = defineContract({
   queries: {
     /** Named ballots, for the host's download. */
     exportBallots: {
-      input: s.object({ pollId, offset: s.optional(s.int({ min: 0 })) }),
+      input: s.object({
+        pollId,
+        offset: s.optional(s.int({ min: 0 })),
+        rewrites: s.optional(s.int({ min: 0 })),
+      }),
       output: pollExportPage,
     },
   },

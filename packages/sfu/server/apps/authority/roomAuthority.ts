@@ -573,6 +573,9 @@ export class RoomAuthority {
       result,
     );
     if (!result.ok) return result;
+    if (actor.verified && context.currentClient) {
+      this.options.identity.hold(this.room, context.currentClient);
+    }
     return { ...result, revision: this.answerRevision(subscription) };
   }
 
@@ -648,6 +651,19 @@ export class RoomAuthority {
    * subscription is checked against the room as it is now. A missed call
    * only delays this: nothing is ever sent without the same check.
    */
+  guestIdentityMerged(from: string, into: string): void {
+    if (this.closed) return;
+    const merge = {
+      from: this.options.identity.guestSubject(from),
+      into: this.options.identity.guestSubject(into),
+    };
+    const now = this.now();
+    for (const instance of this.instances.values()) {
+      if (instance.mergeSubjects(merge, now)) this.afterWrite(instance);
+    }
+    this.scheduleSweep();
+  }
+
   membershipChanged(): void {
     this.scheduleSweep();
   }
@@ -1007,6 +1023,11 @@ export class RoomAuthority {
 
   /* ---- Delivery ---------------------------------------------------------- */
 
+  private afterWrite(instance: AuthorityInstance): void {
+    if (instance.hasPendingChanges) this.scheduleFlush(false);
+    this.armWake();
+  }
+
   private afterAction(
     instance: AuthorityInstance,
     action: string,
@@ -1014,8 +1035,7 @@ export class RoomAuthority {
     subject: Subject,
     result: AuthorityResult<Json>,
   ): void {
-    if (instance.hasPendingChanges) this.scheduleFlush(false);
-    this.armWake();
+    this.afterWrite(instance);
     if (!result.ok) return;
     for (const listener of this.actionListeners) {
       listener({ app: instance.appId, action, seatId, subject, value: result.value });

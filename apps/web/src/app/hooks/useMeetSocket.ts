@@ -245,6 +245,7 @@ const RESUME_CONSUMER_MAX_ATTEMPTS = 6;
 const getResumeConsumerRetryDelayMs = (attempt: number): number =>
   Math.min(8000, 400 * 2 ** attempt) + Math.floor(Math.random() * 250);
 const JOIN_ROOM_ACK_TIMEOUT_MS = 15000;
+const HELD_JOIN_INFO_TTL_MS = 30000;
 const RESTART_ICE_ACK_TIMEOUT_MS = 5000;
 const PARTICIPANT_RECONNECTING_STATUS_FALLBACK_MS = 30000;
 const PARTICIPANT_RECONNECTING_STATUS_BUFFER_MS = 5000;
@@ -674,6 +675,18 @@ class JoinRoomRedirectError extends Error {
   }
 }
 
+/**
+ * The join token names another identity than the one this join was started
+ * as. The caller has been told (`adoptJoinIdentity`) and joins again from the
+ * render that knows the new identity, so this attempt stops without an error.
+ */
+class JoinIdentityChangedError extends Error {
+  constructor() {
+    super("The join token names another identity.");
+    this.name = "JoinIdentityChangedError";
+  }
+}
+
 const normalizeJoinRedirectUrl = (value: unknown): string | null => {
   if (typeof value !== "string" || !value.trim()) return null;
   try {
@@ -870,6 +883,14 @@ interface UseMeetSocketOptions {
   setIsAdmin: (value: boolean) => void;
   user?: { id?: string; email?: string | null; name?: string | null };
   userId: string;
+  /**
+   * Takes this client's identity from the join token it is about to connect
+   * with. Returns true when that changes `userId`. The connection is then
+   * not made, and the caller joins `roomId` again from the render that knows
+   * the new identity. A socket is only ever opened as the identity its token
+   * names.
+   */
+  adoptJoinIdentity?: (token: string, roomId: string) => boolean;
   getJoinInfo: (
     roomId: string,
     sessionId: string,
@@ -1002,6 +1023,7 @@ export function useMeetSocket({
   setIsAdmin,
   user,
   userId,
+  adoptJoinIdentity,
   getJoinInfo,
   joinMode = "meeting",
   requestWebinarInviteCode,
@@ -1084,6 +1106,12 @@ export function useMeetSocket({
   const isMutedRef = useRef(isMuted);
   const isCameraOffRef = useRef(isCameraOff);
   const serverRoomIdRef = useRef<string | null>(null);
+  const socketRoomIdRef = useRef<string | null>(null);
+  const identityRestartRoomIdRef = useRef<string | null>(null);
+  const identityRestartMediaRef = useRef<{
+    roomId: string;
+    request: Promise<MediaStream | null>;
+  } | null>(null);
   const foregroundRecoveryTimeoutRef = useRef<number | null>(null);
   const runtimeStunIceServersRef = useRef<RTCIceServer[] | null>(null);
   const runtimeTurnIceServersRef = useRef<RTCIceServer[] | null>(null);
@@ -6983,6 +7011,11 @@ export function useMeetSocket({
     ],
   );
 
+  const heldJoinInfoRef = useRef<{
+    roomId: string;
+    joinInfo: JoinInfo;
+    fetchedAt: number;
+  } | null>(null);
   const connectSocket = useCallback(
     (
       targetRoomId: string,
@@ -6995,7 +7028,16 @@ export function useMeetSocket({
             const sfuUrlOverride = normalizeJoinRedirectUrl(
               options?.sfuUrlOverride,
             );
-            if (socketRef.current?.connected && !sfuUrlOverride) {
+            const roomIdForJoin =
+              targetRoomId || currentRoomIdRef.current || "";
+            // A live socket is reused only for the room its token was issued
+            // for. Another room needs another token, and with it the identity
+            // that token names.
+            if (
+              socketRef.current?.connected &&
+              !sfuUrlOverride &&
+              (!roomIdForJoin || socketRoomIdRef.current === roomIdForJoin)
+            ) {
               resolve(socketRef.current);
               return;
             }
@@ -7007,8 +7049,6 @@ export function useMeetSocket({
 
             setConnectionState("connecting");
 
-            const roomIdForJoin =
-              targetRoomId || currentRoomIdRef.current || "";
             if (!roomIdForJoin) {
               throw new Error("Missing room ID");
             }
@@ -7019,7 +7059,13 @@ export function useMeetSocket({
               ? Promise.resolve({ io: prewarm.io })
               : import("socket.io-client");
 
-            const cachedToken = prewarm?.getCachedToken?.(roomIdForJoin);
+            const heldJoinInfo = heldJoinInfoRef.current;
+            heldJoinInfoRef.current = null;
+            const cachedToken =
+              heldJoinInfo?.roomId === roomIdForJoin &&
+              Date.now() - heldJoinInfo.fetchedAt < HELD_JOIN_INFO_TTL_MS
+                ? heldJoinInfo.joinInfo
+                : prewarm?.getCachedToken?.(roomIdForJoin);
             const tokenPromise = cachedToken
               ? Promise.resolve(cachedToken)
                 : getJoinInfo(roomIdForJoin, sessionIdRef.current, {
@@ -7049,6 +7095,17 @@ export function useMeetSocket({
                 turnIceServers.length > 0 ? turnIceServers : null;
             }
 
+            if (adoptJoinIdentity?.(token, roomIdForJoin)) {
+              heldJoinInfoRef.current = {
+                roomId: roomIdForJoin,
+                joinInfo: { token, sfuUrl, iceServers },
+                fetchedAt: Date.now(),
+              };
+              identityRestartRoomIdRef.current = roomIdForJoin;
+              throw new JoinIdentityChangedError();
+            }
+
+            socketRoomIdRef.current = roomIdForJoin;
             const socket = io(socketUrl, {
               transports: ["websocket", "polling"],
               tryAllTransports: true,
@@ -7354,7 +7411,9 @@ export function useMeetSocket({
                 hostUserIds?: string[];
               }) => {
                 if (!isRoomEvent(eventRoomId)) return;
-                setHostUserIds(Array.isArray(hostUserIds) ? hostUserIds : []);
+                const nextHostUserIds = Array.isArray(hostUserIds) ? hostUserIds : [];
+                setHostUserIds(nextHostUserIds);
+                if (!nextHostUserIds.includes(userId)) setIsAdmin(false);
               },
             );
 
@@ -8309,7 +8368,17 @@ export function useMeetSocket({
               },
             );
 
-            onLive("joinApproved", async () => {
+            let approvedJoin: Promise<void> | null = null;
+            onLive("joinApproved", () => {
+              if (approvedJoin) {
+                console.info("[Meets] Join already approved; ignoring a repeated approval.");
+                return;
+              }
+              approvedJoin = joinAfterApproval().finally(() => {
+                approvedJoin = null;
+              });
+            });
+            const joinAfterApproval = async (): Promise<void> => {
               const approvalGeneration = reconnectGenerationRef.current;
               console.info("[Meets] Join approved! Re-attempting join...");
               const joinOptions = joinOptionsRef.current;
@@ -8342,7 +8411,7 @@ export function useMeetSocket({
                   bypassMediaPermissions ||
                   joinOptions.joinMode === "webinar_attendee")
               ) {
-                joinRoomInternal(
+                await joinRoomInternal(
                   currentRoomIdRef.current,
                   stream,
                   joinOptions,
@@ -8373,7 +8442,7 @@ export function useMeetSocket({
                 );
                 setConnectionState("error");
               }
-            });
+            };
 
             onLive("joinRejected", () => {
               console.info("[Meets] Join rejected.");
@@ -8687,6 +8756,13 @@ export function useMeetSocket({
               intentionalDisconnectRef.current
             ) {
               reject(toError(err));
+              return;
+            }
+            // Adopting the identity the token names is the expected way in:
+            // the join starts over from the render that knows it, and only a
+            // failure of that join is an error.
+            if (err instanceof JoinIdentityChangedError) {
+              reject(err);
               return;
             }
             console.error("Failed to get join info:", err);
@@ -9022,6 +9098,14 @@ export function useMeetSocket({
           return;
         } catch (err) {
           if (reconnectGeneration !== reconnectGenerationRef.current) return;
+          if (err instanceof JoinIdentityChangedError) {
+            cleanupRoomResources({
+              resetRoomId: false,
+              preserveMeetingState: true,
+            });
+            updateReconnectRecoveryStatus(null);
+            return;
+          }
           lastReconnectError = err;
           const reconnectFailure = describeReconnectFailure(err);
           const isRecoverable = isRecoverableReconnectFailure(err);
@@ -9249,11 +9333,17 @@ export function useMeetSocket({
       if (refs.abortControllerRef.current?.signal.aborted) return;
       const joinGeneration = reconnectGenerationRef.current;
 
-      telemetry.capture("meet_join_attempt", {
-        roomId: targetRoomId,
-        joinMode,
-        isAdmin,
-      });
+      // A join that starts over under the identity its token named is still
+      // the attempt that was already counted.
+      const continuesAttempt = identityRestartRoomIdRef.current === targetRoomId;
+      identityRestartRoomIdRef.current = null;
+      if (!continuesAttempt) {
+        telemetry.capture("meet_join_attempt", {
+          roomId: targetRoomId,
+          joinMode,
+          isAdmin,
+        });
+      }
 
       localRoomEndedHandledRef.current = false;
       setMeetError(null);
@@ -9273,6 +9363,9 @@ export function useMeetSocket({
         setIsAdmin(false);
       }
       const normalizedDisplayName = normalizeDisplayName(displayNameInput);
+      // An attempt that starts over keeps what the meeting was joined with:
+      // the codes asked for along the way, and the name.
+      const carried = continuesAttempt ? joinOptionsRef.current : null;
       const joinOptions: {
         displayName?: string;
         isRecorder?: boolean;
@@ -9280,9 +9373,17 @@ export function useMeetSocket({
         webinarInviteCode?: string;
         meetingInviteCode?: string;
       } = {
-        displayName: isAdmin ? normalizedDisplayName || undefined : undefined,
+        displayName:
+          (isAdmin ? normalizedDisplayName || undefined : undefined) ??
+          carried?.displayName,
         isRecorder: bypassMediaPermissions,
         joinMode,
+        ...(carried?.webinarInviteCode
+          ? { webinarInviteCode: carried.webinarInviteCode }
+          : {}),
+        ...(carried?.meetingInviteCode
+          ? { meetingInviteCode: carried.meetingInviteCode }
+          : {}),
       };
       joinOptionsRef.current = joinOptions;
       const candidateStream = localStreamRef.current ?? localStream;
@@ -9293,16 +9394,26 @@ export function useMeetSocket({
         !bypassMediaPermissions &&
         (mediaNeeds.needsAudio || mediaNeeds.needsVideo);
 
-      try {
-        const [, stream] = await Promise.all([
-          connectSocket(targetRoomId),
-          shouldRequestMedia
+      // The attempt that starts over waits for the media request the first
+      // one made. A second request would capture the microphone and camera
+      // again, and nothing would ever stop the first capture.
+      const heldMedia = identityRestartMediaRef.current;
+      identityRestartMediaRef.current = null;
+      const mediaRequest =
+        continuesAttempt && heldMedia?.roomId === targetRoomId
+          ? heldMedia.request
+          : shouldRequestMedia
             ? ensureLiveLocalMediaForJoin(
                 candidateStream,
                 joinOptions,
                 "initial join",
               )
-            : Promise.resolve(candidateStream),
+            : Promise.resolve(candidateStream);
+
+      try {
+        const [, stream] = await Promise.all([
+          connectSocket(targetRoomId),
+          mediaRequest,
         ]);
         if (
           joinGeneration !== reconnectGenerationRef.current ||
@@ -9415,6 +9526,14 @@ export function useMeetSocket({
           joinGeneration !== reconnectGenerationRef.current ||
           intentionalDisconnectRef.current
         ) return;
+        if (err instanceof JoinIdentityChangedError) {
+          identityRestartMediaRef.current = {
+            roomId: targetRoomId,
+            request: mediaRequest,
+          };
+          void mediaRequest.catch(() => undefined);
+          return;
+        }
         console.error("[Meets] Error joining room:", err);
         telemetry.capture("meet_join_failure", {
           roomId: targetRoomId,
@@ -10127,7 +10246,7 @@ export function useMeetSocket({
   }, [socketRef]);
 
   const promoteWebinarAttendee = useCallback(
-    (userId: string): Promise<{ ok: boolean; error?: string }> => {
+    (userId: string): Promise<{ ok: boolean; error?: string; code?: string }> => {
       const socket = socketRef.current;
       if (!socket) return Promise.resolve({ ok: false, error: "Not connected" });
 
@@ -10138,9 +10257,13 @@ export function useMeetSocket({
           () => resolve({ ok: false, error: "The server did not respond. Try again." }),
           "webinar:promoteAttendee",
           { userId },
-          (response: { success: boolean } | { error: string }) => {
+          (
+            response:
+              | { success: boolean }
+              | { error: string; code?: string },
+          ) => {
             if ("error" in response) {
-              resolve({ ok: false, error: response.error });
+              resolve({ ok: false, error: response.error, code: response.code });
               return;
             }
             resolve({ ok: true });

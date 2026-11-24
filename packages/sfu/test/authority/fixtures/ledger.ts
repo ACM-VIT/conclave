@@ -5,8 +5,10 @@
  */
 import { defineContract, s } from "@conclave/apps-sdk/authority";
 import {
+  actionOrderTable,
   defineAuthority,
   key,
+  nextActionOrder,
   table,
   type Subject,
 } from "@conclave/apps-sdk/authority/server";
@@ -39,7 +41,7 @@ export const ledgerContract = defineContract({
 });
 
 type Card = { id: string; text: string };
-type Secret = { id: string; text: string; subject: Subject };
+type Secret = { id: string; text: string; subject: Subject; at: number; order: number };
 
 const everyone = ["moderator", "member"] as const;
 
@@ -52,6 +54,7 @@ export const ledgerAuthority = defineAuthority({
   tables: {
     cards: table<Card>({ maxRows: 50_000 }),
     secrets: table<Secret>({ maxRows: 100_000 }),
+    order: actionOrderTable(),
   },
   timers: {},
   canView: ({ role }) => role === "moderator" || role === "member",
@@ -74,6 +77,8 @@ export const ledgerAuthority = defineAuthority({
           id: input.id,
           text: input.text,
           subject: ctx.subject,
+          at: ctx.now,
+          order: nextActionOrder(tx),
         });
         return null;
       },
@@ -118,11 +123,14 @@ export const ledgerAuthority = defineAuthority({
       identity: "any",
       rate: RATE,
       run(ctx, tx, input) {
+        const order = nextActionOrder(tx);
         for (let index = 0; index < input.count; index += 1) {
           tx.put("secrets", key("secret", ctx.subject, `k${index}`), {
             id: `k${index}`,
             text: "kept",
             subject: ctx.subject,
+            at: ctx.now,
+            order,
           });
         }
         return null;
@@ -149,5 +157,14 @@ export const ledgerAuthority = defineAuthority({
         return { key: row.id, value: { id: row.id, text: row.text } };
       },
     },
+  },
+  mergeSubjects(_ctx, tx, { from, into }) {
+    for (const [, secret] of tx.scan("secrets", key("secret", from))) {
+      tx.delete("secrets", key("secret", from, secret.id));
+      const kept = tx.get("secrets", key("secret", into, secret.id));
+      if (kept && kept.order > secret.order) continue;
+      tx.put("secrets", key("secret", into, secret.id), { ...secret, subject: into });
+    }
+    return undefined;
   },
 });
