@@ -11,20 +11,23 @@ import { PRODUCER_PACKET_COUNT_MAX_AGE_MS } from "../server/producerPacketCounts
 type SocketHandler = (...args: never[]) => unknown;
 type Counts = { counts: Record<string, number> } | { error: string };
 
-const sharer = (id: string, packetCounts: number[] = [70, 50]) =>
-  ({
-    id,
-    closed: false,
-    getStats: vi
-      .fn()
-      .mockResolvedValue(packetCounts.map((packetCount) => ({ type: "inbound-rtp", packetCount }))),
-  }) as unknown as Producer & { getStats: ReturnType<typeof vi.fn> };
+const sharer = (id: string, packetCounts: number[] = [70, 50]) => {
+  const getStats = vi
+    .fn()
+    .mockResolvedValue(packetCounts.map((packetCount) => ({ type: "inbound-rtp", packetCount })));
+  return { producer: { id, closed: false, getStats } as unknown as Producer, getStats };
+};
 
 const register = ({
   inRoom = true,
   socketId = "viewer-socket",
-  producers = new Map<string, Producer>([["shared-screen", sharer("shared-screen")]]),
-  consumerProducers = { screen: "shared-screen" } as Record<string, string>,
+  producers = new Map<string, Producer>([["shared-screen", sharer("shared-screen").producer]]),
+  consumerProducers = { screen: "shared-screen" },
+}: {
+  inRoom?: boolean;
+  socketId?: string;
+  producers?: Map<string, Producer>;
+  consumerProducers?: Record<string, string>;
 } = {}) => {
   const handlers = new Map<string, SocketHandler>();
   const socket = {
@@ -115,7 +118,7 @@ describe("telling a viewer how many packets the sharers behind its consumers sen
 
   it("reads a sharer once however many viewers ask at the same time", async () => {
     const screen = sharer("shared-screen");
-    const producers = new Map<string, Producer>([["shared-screen", screen]]);
+    const producers = new Map<string, Producer>([["shared-screen", screen.producer]]);
     const viewers = Array.from({ length: 50 }, (_, index) =>
       register({ socketId: `viewer-${index}`, producers }),
     );
@@ -129,7 +132,7 @@ describe("telling a viewer how many packets the sharers behind its consumers sen
   it("reads a sharer again only once the last count is older than the cache allows", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const screen = sharer("shared-screen");
-    const producers = new Map<string, Producer>([["shared-screen", screen]]);
+    const producers = new Map<string, Producer>([["shared-screen", screen.producer]]);
     const viewers = Array.from({ length: 3 }, (_, index) =>
       register({ socketId: `viewer-${index}`, producers }),
     );
@@ -147,7 +150,7 @@ describe("telling a viewer how many packets the sharers behind its consumers sen
   it("reads a sharer once for two of the viewer's consumers behind it", async () => {
     const screen = sharer("shared-screen");
     const { ask } = register({
-      producers: new Map<string, Producer>([["shared-screen", screen]]),
+      producers: new Map<string, Producer>([["shared-screen", screen.producer]]),
       consumerProducers: { screen: "shared-screen", "screen-again": "shared-screen" },
     });
 
@@ -162,8 +165,8 @@ describe("telling a viewer how many packets the sharers behind its consumers sen
     closing.getStats.mockRejectedValue(new Error("Producer closed"));
     const { ask } = register({
       producers: new Map<string, Producer>([
-        ["shared-screen", sharer("shared-screen")],
-        ["closing-screen", closing],
+        ["shared-screen", sharer("shared-screen").producer],
+        ["closing-screen", closing.producer],
       ]),
       consumerProducers: { screen: "shared-screen", closing: "closing-screen" },
     });
