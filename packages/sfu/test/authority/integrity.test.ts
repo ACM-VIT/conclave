@@ -411,6 +411,14 @@ describe("schemas", () => {
     expect(cut.parse("abc9")).toBe("abc");
   });
 
+  it("cuts a string on whole characters, never leaving half an emoji for a native client to choke on", () => {
+    const name = s.string({ max: 4, collapse: true, truncate: true });
+    expect(name.parse("Ada\u{1F389}x")).toBe("Ada");
+    expect(name.parse("Ad\u{1F468}\u200D\u{1F469}")).toBe("Ad");
+    expect(name.parse("e\u0301e\u0301e")).toBe("e\u0301e\u0301");
+    expect(s.string({ max: 8, truncate: true }).parse("ab  cd  efgh")).toBe("ab  cd");
+  });
+
   it("gives a string schema with a pattern the same answer on every call, and refuses a pattern that keeps state", () => {
     const slug = s.string({ max: 8, pattern: /^[a-z]+$/ });
     const answers = (input: string) =>

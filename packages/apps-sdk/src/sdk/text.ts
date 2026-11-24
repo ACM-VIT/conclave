@@ -1,5 +1,5 @@
-import { withoutLoneSurrogates } from "../native-embed/protocol";
-import { graphemes } from "./graphemes";
+import { withoutLoneSurrogates } from "#native-embed/protocol";
+import { graphemes } from "#sdk/graphemes";
 
 export const cutText = (text: string, limit: number): string => {
   const whole = withoutLoneSurrogates(text);
