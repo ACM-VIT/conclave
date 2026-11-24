@@ -80,8 +80,11 @@ const unavailable = (error: unknown): Error =>
 export const createSqliteBackend = (path: string): Backend =>
   openSqliteStore(openSqliteDatabase(path), path, sqliteBackendOn);
 
+export const SQLITE_COMMIT_WAIT_MS = 1_000;
+
 const sqliteBackendOn = (db: SqliteDatabase): Backend => {
   db.exec(SCHEMA);
+  db.exec(`PRAGMA busy_timeout = ${SQLITE_COMMIT_WAIT_MS}`);
 
   const statements = {
     record: db.prepare(
