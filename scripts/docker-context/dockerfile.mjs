@@ -20,6 +20,29 @@ function splitDirectives(lines) {
   return { directives, body: lines.slice(index) };
 }
 
+function delimiterOf(word) {
+  let out = "";
+  let quote = null;
+  for (let i = 0; i < word.length; i += 1) {
+    const ch = word[i];
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      else out += ch;
+    } else if (quote === '"') {
+      if (ch === '"') quote = null;
+      else if (ch === "\\" && "\"\\$`".includes(word[i + 1] ?? "")) out += word[(i += 1)];
+      else out += ch;
+    } else if (ch === "'" || ch === '"') {
+      quote = ch;
+    } else if (ch === "\\" && i + 1 < word.length) {
+      out += word[(i += 1)];
+    } else {
+      out += ch;
+    }
+  }
+  return quote ? "" : out;
+}
+
 export function heredocsIn(words, escape = "\\") {
   const found = [];
   for (let i = 0; i < words.length; i += 1) {
@@ -35,9 +58,9 @@ export function heredocsIn(words, escape = "\\") {
       indices.push(i);
       if (name.includes("<")) continue;
     }
-    const names = splitWords(name, escape);
-    if (names.length !== 1) continue;
-    found.push({ indices, chomp, terminator: expandWord(names[0], {}, escape) });
+    const names = splitWords(name, "\\");
+    const terminator = names.length === 1 ? delimiterOf(names[0]) : "";
+    if (terminator) found.push({ indices, chomp, terminator });
   }
   return found;
 }
