@@ -277,4 +277,11 @@ test("pnpm scripts in a partial image workspace must skip the dependency reinsta
   assert.deepEqual(pnpmScriptProblems("x", `${install}RUN ["pnpm", "-C", "a", "--config.verify-deps-before-run=false", "run", "build"]\n`), []);
   assert.throws(() => pnpmScriptProblems("x", `${install}RUN <<EOF\nset -e\npnpm -C packages/shared-browser run build\nEOF\n`), UnsupportedShape);
   assert.deepEqual(pnpmScriptProblems("x", `${install}RUN <<EOF\napt-get update\nEOF\n`), []);
+  const flagged = (run) => pnpmScriptProblems("x", `${install}RUN ${run}\n`).length;
+  for (const run of ['["corepack", "enable", "pnpm"]', "corepack enable pnpm", "npm i -g pnpm@12.16.1", '["npm", "i", "-g", "pnpm"]', "echo pnpm", 'echo "pnpm run build" | tee /dev/null', "pnpm -C packages/sfu install --frozen-lockfile", "CI=1 pnpm --filter a... install"]) {
+    assert.equal(flagged(run), 0, run);
+  }
+  for (const run of ['sh -c "pnpm run build"', '["sh", "-c", "pnpm run build"]', 'bash -c "cd a && pnpm -C b run build"', "CI=1 pnpm run build", "true | pnpm run build", "/usr/local/bin/pnpm build"]) {
+    assert.equal(flagged(run), 1, run);
+  }
 });
