@@ -617,6 +617,24 @@ describe("what a batch carries when it is sent", () => {
     expect(store.list()).toEqual([]);
   });
 
+  it("sends a rebuilt copy and keeps the stored original, so every send rebuilds from what was captured", async () => {
+    const store = memoryStore();
+    const original = { ...event(), properties: { ...event().properties, shaped: 0 } };
+    store.save({ id: "saved-3", events: [original], oldestAt: START, sent: false, notBefore: 0, nextTry: 0, attempt: 0, sendId: "", leaseUntil: 0 });
+    const count = (item: OutboxEvent): OutboxEvent => ({
+      ...item,
+      properties: { ...item.properties, shaped: Number(item.properties.shaped) + 1 },
+    });
+    const h = harness({ store, shape: count, answers: [503, 200], at: START + 1000 });
+    h.outbox.replaySaved();
+    await h.advance(0);
+    expect(store.list().map((batch) => batch.events)).toEqual([[original]]);
+
+    await h.advance(2000);
+    expect(h.posts.map((post) => h.batchOf(post.body).batch[0].properties.shaped)).toEqual([1, 1]);
+    expect(store.list()).toEqual([]);
+  });
+
   it("drops a batch whose every event the schema refuses, without sending it", async () => {
     const store = memoryStore();
     store.save({ id: "saved-2", events: [event("rogue")], oldestAt: START, sent: false, notBefore: 0, nextTry: 0, attempt: 0, sendId: "", leaseUntil: 0 });
