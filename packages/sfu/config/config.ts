@@ -465,6 +465,10 @@ export const config = {
   // The most requests to be let in that one room keeps waiting at once,
   // and the most seats in a meeting (webinar attendees have their own
   // limit). A join past either is refused and the room records nothing.
+  guestAppIdentityLimit: toNumber(process.env.SFU_GUEST_APP_IDENTITY_LIMIT, 5000, {
+    integer: true,
+    min: 1,
+  }),
   waitingRequestLimit: toNumber(process.env.SFU_WAITING_REQUEST_LIMIT, 1000, {
     integer: true,
     min: 1,

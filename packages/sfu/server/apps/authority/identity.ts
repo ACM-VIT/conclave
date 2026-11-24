@@ -83,6 +83,12 @@ export class IdentityAdapter {
     return identity;
   }
 
+  hold(room: Room, client: Client): void {
+    const userKey = room.userKeysById.get(client.id);
+    if (!userKey || !isGuestUserKey(userKey) || this.isAccount(client)) return;
+    room.holdGuestIdentityOf(userKey);
+  }
+
   private derive(
     userKey: string,
     account: boolean,

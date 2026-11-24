@@ -2787,6 +2787,75 @@ describe("what a refused join leaves behind", () => {
   });
 });
 
+describe("what a room keeps of guests that come and go (Neon)", () => {
+  const guestOf = (name: string, extra: Omit<Partial<SfuAuthPayload>, "userId" | "guestProof"> = {}) =>
+    ({
+      userId: `guest-gp_${name}`,
+      clientId: "conclave",
+      sessionId: name,
+      guestProof: `proof-of-${name}`,
+      guestRoom: "room",
+      ...extra,
+    }) satisfies SfuAuthPayload;
+
+  it("keeps no record of guests that knocked, showed each other's passes, and went away", async () => {
+    const state = makeState();
+    await join(state, guestHost);
+    const room = state.rooms.get("conclave:room")!;
+    room.setLocked(true);
+    await endOfTurn();
+    const baseline = { records: room.guestRecordCount, links: room.linkedGuestPassCount };
+
+    let previous: ReturnType<typeof guestOf> | null = null;
+    for (let index = 0; index < 50; index += 1) {
+      const guest = guestOf(`churn-${index}`, previous ? { guestWas: formerSeats({ userId: `guest-gp_churn-${index}-under-the-last`, guestProof: previous.guestProof }) } : {});
+      expect((await join(state, guest)).ack).toHaveBeenCalledWith(expect.objectContaining({ status: "waiting" }));
+      withdrawWaitingRequest(room, guest.userId);
+      await endOfTurn();
+      previous = guest;
+    }
+
+    expect({ seats: room.clients.size, waiting: room.pendingClients.size }).toEqual({ seats: 1, waiting: 0 });
+    expect({ records: room.guestRecordCount, links: room.linkedGuestPassCount }).toEqual(baseline);
+  });
+
+  it("keeps the app identities of guests that left only up to the room's limit, dropping the longest unused first", async () => {
+    const before = sfuConfig.guestAppIdentityLimit;
+    sfuConfig.guestAppIdentityLimit = 2;
+    try {
+      const state = makeState();
+      await join(state, guestHost);
+      const room = state.rooms.get("conclave:room")!;
+      const adapter = new IdentityAdapter();
+      const seat = (user: SfuAuthPayload) => room.getClient(`${user.userId}#${user.sessionId}`)!;
+      const names = ["kept-a", "kept-b", "kept-c"];
+      const identities: Array<ReturnType<IdentityAdapter["resolve"]>> = [];
+      for (const name of names) {
+        const first = guestOf(`${name}-first`);
+        await join(state, first);
+        identities.push(adapter.resolve(room, seat(first)));
+        room.holdGuestIdentityOf(first.userId);
+        const second = { ...guestOf(`${name}-second`), guestWas: formerSeats(first) } satisfies SfuAuthPayload;
+        await join(state, second);
+        room.removeClient(`${first.userId}#${first.sessionId}`);
+        room.removeClient(`${second.userId}#${second.sessionId}`);
+        await endOfTurn();
+      }
+
+      expect(room.guestRecordCount).toBe(1 + 2 * 2);
+      const back: Array<ReturnType<IdentityAdapter["resolve"]>> = [];
+      for (const name of names) {
+        const second = { ...guestOf(`${name}-second`), sessionId: `${name}-back` };
+        await join(state, second);
+        back.push(adapter.resolve(room, seat(second)));
+      }
+      expect(back.map((identity, index) => identity?.subject === identities[index]?.subject)).toEqual([false, true, true]);
+    } finally {
+      sfuConfig.guestAppIdentityLimit = before;
+    }
+  });
+});
+
 describe("a host action when the decision record is full of refusals (Astra)", () => {
   const full = {
     success: false,
@@ -3316,11 +3385,12 @@ describe("the identity the room's apps see for a guest (Daybreak)", () => {
     expect(seen(room, adapter, second)).toEqual(identity);
   });
 
-  it("stays the same when the guest leaves after a pass change and comes back under the new pass (Greptile)", async () => {
+  it("stays the same when a guest with saved app state leaves after a pass change and comes back under the new pass (Greptile)", async () => {
     const { state, room, adapter } = await inRoom();
     const onA = tabOf("leaves-after-a-pass-change");
     const first = await join(state, onA);
     const identity = seen(room, adapter, onA);
+    room.holdGuestIdentityOf(onA.userId);
     const onB = {
       ...onA,
       userId: `${onA.userId}-under-the-second-pass`,
@@ -3340,11 +3410,12 @@ describe("the identity the room's apps see for a guest (Daybreak)", () => {
     expect(seen(room, adapter, onB)).toEqual(identity);
   });
 
-  it("stays the same for a guest that left and comes back under a new pass that shows the one it left under (Greptile)", async () => {
+  it("stays the same for a guest with saved app state that left and comes back under a new pass that shows the one it left under (Greptile)", async () => {
     const { state, room, adapter } = await inRoom();
     const onA = tabOf("left-and-shows-it");
     await join(state, onA);
     const identity = seen(room, adapter, onA);
+    room.holdGuestIdentityOf(onA.userId);
     room.removeClient(seatOf(onA));
     await endOfTurn();
 
@@ -3369,12 +3440,13 @@ describe("the identity the room's apps see for a guest (Daybreak)", () => {
       ["without", "a new pass that shows the first", false],
       ["with", "its first pass", true],
       ["with", "a new pass that shows the first", true],
-    ])("keeps one identity when it leaves %s rights in the room and comes back under %s", async (_rights, comesBack, keepsRights) => {
+    ])("keeps one identity for its saved app state when it leaves %s rights in the room and comes back under %s", async (_rights, comesBack, keepsRights) => {
       const { state, room, adapter } = await inRoom();
       const name = `${order === "its first pass sorts first" ? "low" : "high"}-${keepsRights ? "kept" : "none"}-${comesBack.length}`;
       const onFirst = { ...tabOf(`${name}-first`), guestProof: first } satisfies SfuAuthPayload;
       await join(state, onFirst);
       const identity = seen(room, adapter, onFirst);
+      room.holdGuestIdentityOf(onFirst.userId);
       if (keepsRights) room.allowLockedUser(onFirst.userId);
       room.removeClient(seatOf(onFirst));
       await endOfTurn();
@@ -4037,7 +4109,6 @@ describe("who may come in, against a slow reading of every decision", () => {
     adminSeats = new Set<string>();
     status = new Map<string, "idle" | "pending" | "seated">();
     arrival = new Map<string, number>();
-    seen = new Set<string>();
     tick() {
       return (this.clock += 1);
     }
@@ -4070,7 +4141,7 @@ describe("who may come in, against a slow reading of every decision", () => {
         .map((tab) => tab.key);
     }
     known(pass: string): boolean {
-      return this.seen.has(pass);
+      return this.boundKeys(pass).length > 0 || [...this.group(pass)].some((other) => this.records.has(other));
     }
     tabsOfGuest(pass: string, state: "pending" | "seated", passes = this.group(pass)): Tab[] {
       return tabs.filter((tab) => passes.has(tab.pass) && this.status.get(tab.key) === state);
@@ -4187,6 +4258,18 @@ describe("who may come in, against a slow reading of every decision", () => {
     identities(key: string): string[] {
       return [...new Set([key, ...this.boundKeys(tabByKey.get(key)!.pass)])];
     }
+    prune() {
+      const groups = new Map<string, string[]>();
+      for (const tab of tabs) {
+        const top = this.find(tab.pass);
+        groups.set(top, [...new Set([...(groups.get(top) ?? []), tab.pass])]);
+      }
+      for (const passes of groups.values()) {
+        if (passes.length > 1 && !passes.some((pass) => this.known(pass))) {
+          for (const pass of passes) this.root.delete(pass);
+        }
+      }
+    }
     rows(): string[] {
       const rows: string[] = [];
       const seen = new Set<string>();
@@ -4225,9 +4308,11 @@ describe("who may come in, against a slow reading of every decision", () => {
         const keys = this.boundKeysOf(union);
         this.revokeKeys(keys, { recordedOnly: true });
         this.removeGuestOf(tab.pass, events, keys, union);
+        this.prune();
         return { outcome: "refused" as const, events };
       }
       if (this.blocked.has(tab.key) || this.guestBlocked(tab.pass)) {
+        this.prune();
         return { outcome: "refused" as const, events };
       }
       for (const other of others) this.root.set(this.find(other), this.find(tab.pass));
@@ -4245,7 +4330,6 @@ describe("who may come in, against a slow reading of every decision", () => {
         }
       }
       let outcome: "joined" | "waiting";
-      this.seen.add(tab.pass);
       if (this.isCoHost(tab.pass)) {
         outcome = "joined";
         this.status.set(tab.key, "seated");
@@ -4264,6 +4348,7 @@ describe("who may come in, against a slow reading of every decision", () => {
           this.status.set(tab.key, "pending");
         }
       }
+      this.prune();
       return { outcome, events };
     }
     answer(row: string, admitted: boolean) {
@@ -4274,6 +4359,7 @@ describe("who may come in, against a slow reading of every decision", () => {
         this.status.set(waiting.key, "idle");
         events.set(waiting.key, admitted ? "joinApproved" : "joinRejected");
       }
+      this.prune();
       return events;
     }
     block(key: string) {
@@ -4296,6 +4382,7 @@ describe("who may come in, against a slow reading of every decision", () => {
         events.set(other, "kicked");
       }
       void pass;
+      this.prune();
       return events;
     }
     kick(key: string) {
@@ -4304,6 +4391,7 @@ describe("who may come in, against a slow reading of every decision", () => {
       this.status.set(key, "idle");
       this.adminSeats.delete(key);
       events.set(key, "kicked");
+      this.prune();
       return events;
     }
     setLocked(locked: boolean) {
@@ -4314,16 +4402,20 @@ describe("who may come in, against a slow reading of every decision", () => {
       for (const tab of tabs) {
         if (this.status.get(tab.key) === "seated") this.admit(tab.key, ["lock"]);
       }
+      this.prune();
     }
     unblock(key: string) {
       this.blocked.delete(key);
+      this.prune();
     }
     promote(key: string) {
       this.coHosts.add(key);
       this.adminSeats.add(key);
+      this.prune();
     }
     withdraw(key: string) {
       this.status.set(key, "idle");
+      this.prune();
     }
   }
 

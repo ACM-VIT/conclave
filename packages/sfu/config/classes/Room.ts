@@ -242,7 +242,12 @@ export type WaitingRequest = {
  */
 export type RoomLifecycleEvent = "membership" | "closed";
 
-type GuestRecord = { identity: string; since: number; passes: Set<string> };
+type GuestRecord = {
+  identity: string;
+  since: number;
+  heldAt: number | null;
+  passes: Set<string>;
+};
 
 export class Room {
   public readonly id: string;
@@ -960,6 +965,7 @@ export class Room {
       this.guestRecords.set(guestProof, {
         identity: guestProof,
         since: (this.guestPassClock += 1),
+        heldAt: null,
         passes: new Set([guestProof]),
       });
     }
@@ -982,6 +988,44 @@ export class Room {
     const guestProof = this.guestProofsByUserKey.get(userKey);
     if (guestProof === undefined) return undefined;
     return this.guestRecords.get(guestProof)?.identity ?? guestProof;
+  }
+
+  holdGuestIdentityOf(userKey: string): void {
+    const guestProof = this.guestProofsByUserKey.get(userKey);
+    const record = guestProof === undefined ? undefined : this.guestRecords.get(guestProof);
+    if (!record) return;
+    record.heldAt = this.guestPassClock += 1;
+    this.trimGuestRecords();
+  }
+
+  get guestRecordCount(): number {
+    return this.guestRecords.size;
+  }
+
+  private isGuestPassInUse(guestProof: string): boolean {
+    return (
+      this.userKeysByGuestProof.has(guestProof) ||
+      this.admissions.has(`pass:${guestProof}`)
+    );
+  }
+
+  private trimGuestRecords(): void {
+    const heldOnly: GuestRecord[] = [];
+    for (const record of new Set(this.guestRecords.values())) {
+      if ([...record.passes].some((proof) => this.isGuestPassInUse(proof))) continue;
+      if (record.heldAt === null) this.dropGuestRecord(record);
+      else heldOnly.push(record);
+    }
+    const excess = heldOnly.length - config.guestAppIdentityLimit;
+    if (excess <= 0) return;
+    heldOnly.sort((a, b) => (a.heldAt ?? 0) - (b.heldAt ?? 0));
+    for (const record of heldOnly.slice(0, excess)) this.dropGuestRecord(record);
+  }
+
+  private dropGuestRecord(record: GuestRecord): void {
+    for (const proof of record.passes) {
+      if (this.guestRecords.get(proof) === record) this.guestRecords.delete(proof);
+    }
   }
 
   private passesOfGuest(guestProof: string): Iterable<string> {
@@ -1058,7 +1102,12 @@ export class Room {
   }
 
   private isKnownGuestPass(guestProof: string): boolean {
-    return this.guestRecords.has(guestProof);
+    const record = this.guestRecords.get(guestProof);
+    if (!record) return false;
+    return (
+      record.heldAt !== null ||
+      [...record.passes].some((proof) => this.isGuestPassInUse(proof))
+    );
   }
 
   /**
@@ -1134,19 +1183,28 @@ export class Room {
     }
     const guestsBefore = [...new Set([...link.passes].map((proof) => this.guestOfPass(proof)))];
     const passes = new Set(link.passes);
-    let first: GuestRecord | undefined;
+    const known = new Set<GuestRecord>();
     for (const proof of link.passes) {
-      const known = this.guestRecords.get(proof);
-      if (!known) continue;
-      for (const pass of known.passes) passes.add(pass);
-      if (!first || known.since < first.since) first = known;
+      const record = this.guestRecords.get(proof);
+      if (!record) continue;
+      known.add(record);
+      for (const pass of record.passes) passes.add(pass);
     }
-    const record: GuestRecord = {
-      identity: first?.identity ?? link.guestProof,
-      since: first?.since ?? (this.guestPassClock += 1),
+    const held = [...known].filter((record) => record.heldAt !== null);
+    const kept = [...known].reduce<GuestRecord | undefined>(
+      (earliest, record) => (!earliest || record.since < earliest.since ? record : earliest),
+      undefined,
+    );
+    const merged: GuestRecord = {
+      identity: kept?.identity ?? link.guestProof,
+      since: kept?.since ?? (this.guestPassClock += 1),
+      heldAt: held.reduce<number | null>(
+        (latest, record) => Math.max(latest ?? 0, record.heldAt ?? 0),
+        null,
+      ),
       passes,
     };
-    for (const proof of passes) this.guestRecords.set(proof, record);
+    for (const proof of passes) this.guestRecords.set(proof, merged);
     this.mergeWaitingGuests(guestsBefore, this.guestOfPass(link.guestProof));
     const settled: Array<{ request: WaitingRequest; admitted: boolean }> = [];
     for (const userKey of [
@@ -1446,6 +1504,7 @@ export class Room {
       }
     }
     this.guestIdentitiesToRelease.clear();
+    this.trimGuestRecords();
   }
 
   setUserIdentity(
