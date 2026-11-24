@@ -33,6 +33,7 @@ import { Logger } from "../../../utilities/loggers.js";
 import type { ConnectionContext } from "../context.js";
 import { RATE_LIMITS, refundToken, takeToken } from "../rateLimit.js";
 import { respond } from "./ack.js";
+import { wireBytes } from "../wireBytes.js";
 
 const MAX_APPS_SYNC_BYTES = 64 * 1024;
 const MAX_APPS_UPDATE_BYTES = 256 * 1024;
@@ -133,55 +134,6 @@ const normalizeAppId = (value: unknown): string | null => {
   return appId;
 };
 
-const decodeBase64 = (value: string): Uint8Array | null => {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  if (trimmed.length % 4 !== 0) return null;
-  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(trimmed)) return null;
-  try {
-    return Uint8Array.from(Buffer.from(trimmed, "base64"));
-  } catch {
-    return null;
-  }
-};
-
-const rawByteLength = (value: unknown): number | null => {
-  if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) return value.byteLength;
-  if (Array.isArray(value)) return value.length;
-  if (typeof value === "string") return Math.floor((value.length * 3) / 4);
-  if (value && typeof value === "object") {
-    const maybeBuffer = value as { type?: unknown; data?: unknown };
-    if (maybeBuffer.type === "Buffer" && Array.isArray(maybeBuffer.data)) return maybeBuffer.data.length;
-  }
-  return null;
-};
-
-const toUint8Array = (value: unknown): Uint8Array | null => {
-  if (!value) return null;
-  if (value instanceof Uint8Array) return value;
-  if (value instanceof ArrayBuffer) return new Uint8Array(value);
-  if (ArrayBuffer.isView(value)) {
-    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-  }
-  if (Array.isArray(value)) {
-    if (!value.every((item) => typeof item === "number")) return null;
-    return Uint8Array.from(value);
-  }
-  if (typeof value === "object") {
-    const maybeBuffer = value as { type?: unknown; data?: unknown };
-    if (maybeBuffer.type === "Buffer" && Array.isArray(maybeBuffer.data)) {
-      if (!maybeBuffer.data.every((item) => typeof item === "number")) {
-        return null;
-      }
-      return Uint8Array.from(maybeBuffer.data);
-    }
-  }
-  if (typeof value === "string") {
-    return decodeBase64(value);
-  }
-  return null;
-};
-
 const getRoomAppsState = (context: ConnectionContext): AppsState => {
   if (!context.currentRoom) {
     return {
@@ -204,10 +156,10 @@ const readSyncRequest = (apps: RoomApps, data: AppsSyncData | undefined): SyncRe
   if (!appId) return { ok: false, error: "Invalid app id" };
   const live = apps.liveDoc(appId);
   if (!live) return { ok: false, error: "App not active" };
-  const size = rawByteLength(data?.syncMessage);
-  if (!size) return { ok: false, error: "Invalid sync payload" };
-  if (size > MAX_APPS_SYNC_BYTES) return { ok: false, error: "Sync payload too large" };
-  const stateVector = toUint8Array(data?.syncMessage);
+  const wire = wireBytes(data?.syncMessage);
+  if (!wire || wire.length === 0) return { ok: false, error: "Invalid sync payload" };
+  if (wire.length > MAX_APPS_SYNC_BYTES) return { ok: false, error: "Sync payload too large" };
+  const stateVector = wire.read();
   if (!stateVector) return { ok: false, error: "Invalid sync payload" };
   try {
     Y.decodeStateVector(stateVector);
@@ -593,8 +545,9 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       replicaId: normalizeReplicaId(data?.replicaId),
       arrivedAt: Date.now(),
     };
-    const size = rawByteLength(data?.update);
-    if (!size) {
+    const wire = wireBytes(data?.update);
+    const size = wire?.length ?? 0;
+    if (!wire || size === 0) {
       refuse(admission, "invalid");
       return;
     }
@@ -605,7 +558,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     if (current.restart.state === "blank-sent") return;
     let converted: Uint8Array | null | undefined;
     const bytes = (): Uint8Array | null => {
-      if (converted === undefined) converted = toUint8Array(data.update);
+      if (converted === undefined) converted = wire.read();
       return converted;
     };
     let checked: boolean | null | undefined;
@@ -680,10 +633,10 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
 
     const appId = normalizeAppId(data?.appId);
     if (!appId) return;
-    const size = rawByteLength(data?.awarenessUpdate);
-    if (!size || size > MAX_APPS_AWARENESS_BYTES) return;
+    const wire = wireBytes(data?.awarenessUpdate);
+    if (!wire || wire.length === 0 || wire.length > MAX_APPS_AWARENESS_BYTES) return;
     if (!context.currentRoom.apps.liveDoc(appId)) return;
-    const awarenessUpdate = toUint8Array(data.awarenessUpdate);
+    const awarenessUpdate = wire.read();
     if (!awarenessUpdate || awarenessUpdate.length === 0) return;
     let forwarded: Uint8Array | null;
     try {
