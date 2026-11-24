@@ -16,19 +16,24 @@ import {
   receivePathExpectsMedia,
   streamShouldFlow,
   type ConsumedStream,
-  readRtpBytes,
+  deliveredRtpBytes,
+  iceRestartBroughtMediaBack,
+  readMediaPath,
   resolveRebuildRelayOnly,
   takeDeferredRebuilds,
   type MediaPathFailure,
   type MediaPathSample,
   type MediaPathWatch,
 } from "../src/app/lib/media-path-recovery";
+import { relayProvenByMedia } from "../src/app/lib/relay-credentials";
 
 const sample = (overrides: Partial<MediaPathSample>): MediaPathSample => ({
   at: 0,
   connectionState: "connected",
   expectsMedia: true,
+  direction: "recv",
   rtpBytes: 0,
+  receiverReportAt: null,
   ...overrides,
 });
 
@@ -41,22 +46,107 @@ const run = (samples: Partial<MediaPathSample>[]) => {
   });
 };
 
-describe("reading RTP bytes from a stats report", () => {
+describe("reading a transport's media from a stats report", () => {
   const stats = [
     { type: "outbound-rtp", bytesSent: 1_000 },
     { type: "outbound-rtp", bytesSent: 250 },
     { type: "inbound-rtp", bytesReceived: 70 },
     { type: "candidate-pair", bytesSent: 9_999, bytesReceived: 9_999 },
+    { type: "remote-inbound-rtp", timestamp: 1_795_490_306_879 },
+    { type: "remote-inbound-rtp", timestamp: 1_795_490_305_778 },
     { type: "remote-inbound-rtp" },
   ];
 
   it("counts only what this transport sends or receives as media", () => {
-    expect(readRtpBytes(stats, "send")).toBe(1_250);
-    expect(readRtpBytes(stats, "recv")).toBe(70);
+    expect(readMediaPath(stats, "send").rtpBytes).toBe(1_250);
+    expect(readMediaPath(stats, "recv").rtpBytes).toBe(70);
   });
 
-  it("reads zero from an empty report", () => {
-    expect(readRtpBytes([], "send")).toBe(0);
+  it("keeps the newest receiver report the SFU sent about the streams going out", () => {
+    expect(readMediaPath(stats, "send").receiverReportAt).toBe(1_795_490_306_879);
+    expect(readMediaPath(stats, "recv").receiverReportAt).toBeNull();
+  });
+
+  it("reads nothing from an empty report", () => {
+    expect(readMediaPath([], "send")).toEqual({
+      direction: "send",
+      rtpBytes: 0,
+      receiverReportAt: null,
+    });
+  });
+});
+
+describe("knowing that sent media reached the SFU", () => {
+  const sent = (at: number, rtpBytes: number, receiverReportAt: number | null) =>
+    sample({ at, direction: "send", rtpBytes, receiverReportAt });
+
+  it("finds a send path stalled when bytes leave but no receiver report comes back", () => {
+    let watch: MediaPathWatch = INITIAL_MEDIA_PATH_WATCH;
+    const results = [
+      sent(0, 1_000_000, 5_000),
+      sent(2_500, 1_074_000, 5_000),
+      sent(5_000, 1_148_000, 5_000),
+      sent(10_000, 1_296_000, 5_000),
+      sent(17_500, 1_296_084, 5_000),
+    ].map((next) => {
+      const result = advanceMediaPathWatch(watch, next);
+      watch = result.watch;
+      return result;
+    });
+
+    expect(results.map((result) => result.condition)).toEqual([
+      "flowing",
+      "connected-without-media",
+      "connected-without-media",
+      "connected-without-media",
+      "connected-without-media",
+    ]);
+    expect(results.at(-1)?.stalledForMs).toBe(MEDIA_PATH_STALL_MS);
+    expect(results.some((result) => result.mediaMoved)).toBe(false);
+  });
+
+  it("counts sent media once a newer receiver report shows the SFU heard from this transport", () => {
+    const first = advanceMediaPathWatch(INITIAL_MEDIA_PATH_WATCH, sent(0, 1_000, 5_000));
+    const next = advanceMediaPathWatch(first.watch, sent(2_500, 80_000, 6_100));
+
+    expect(next.condition).toBe("flowing");
+    expect(next.deliveredBytes).toBe(79_000);
+    expect(next.mediaMoved).toBe(true);
+  });
+
+  it("needs bytes to leave as well as a newer receiver report", () => {
+    expect(deliveredRtpBytes(sent(0, 1_000, 5_000), sent(2_500, 1_000, 6_100))).toBe(0);
+    expect(deliveredRtpBytes(sent(0, 1_000, 5_000), sent(2_500, 9_000, 6_100))).toBe(8_000);
+  });
+
+  it("counts received bytes as delivered without a receiver report", () => {
+    expect(deliveredRtpBytes(sample({ rtpBytes: 1_000 }), sample({ at: 2_500, rtpBytes: 9_000 }))).toBe(8_000);
+    expect(deliveredRtpBytes(sample({ rtpBytes: 1_000 }), sample({ at: 2_500, rtpBytes: 1_000 }))).toBe(0);
+  });
+
+  it("never compares readings from opposite directions", () => {
+    expect(deliveredRtpBytes(sample({ rtpBytes: 1_000 }), sent(2_500, 9_000, 6_100))).toBe(0);
+  });
+
+  it("counts the first receiver report a transport gets", () => {
+    expect(deliveredRtpBytes(sent(0, 1_000, null), sent(2_500, 9_000, 400))).toBe(8_000);
+    expect(deliveredRtpBytes(sent(0, 1_000, null), sent(2_500, 9_000, null))).toBe(0);
+  });
+
+  it("never proves a relay with bytes the SFU did not get", () => {
+    const relay = "turn:127.0.0.1:6519?transport=udp";
+    const previous = advanceMediaPathWatch(INITIAL_MEDIA_PATH_WATCH, sent(0, 1_000_000, 5_000));
+    const blocked = advanceMediaPathWatch(previous.watch, sent(2_500, 1_296_084, 5_000));
+    const delivered = advanceMediaPathWatch(previous.watch, sent(2_500, 1_296_084, 6_100));
+    const relayBytes = { [relay]: 1_330_000 };
+    const previousRelayBytes = { [relay]: 1_020_000 };
+
+    expect(
+      relayProvenByMedia({ mediaBytes: blocked.deliveredBytes, relayBytes, previousRelayBytes }),
+    ).toBeNull();
+    expect(
+      relayProvenByMedia({ mediaBytes: delivered.deliveredBytes, relayBytes, previousRelayBytes }),
+    ).toBe(relay);
   });
 });
 
@@ -432,6 +522,50 @@ describe("a stall while the transport says connected", () => {
     expect(
       planSilentPathStep({ direction: "consumer", expectedProducerScores: [0, 0] }),
     ).toBe("remote-not-sending");
+  });
+});
+
+describe("verifying an ICE restart on a silent path", () => {
+  const lastCamera = (producerPaused: boolean) =>
+    describeConsumedStream({
+      kind: "video",
+      source: "webcam",
+      consumerPaused: false,
+      adaptivelyPaused: false,
+      producerPausedHere: false,
+      server: { producerPaused },
+    });
+
+  it("passes once media reaches the far end again", () => {
+    expect(
+      iceRestartBroughtMediaBack({ replaced: false, expectsMedia: true, deliveredBytes: 4_000 }),
+    ).toBe(true);
+  });
+
+  it("fails while media is still expected and none arrived", () => {
+    expect(
+      iceRestartBroughtMediaBack({
+        replaced: false,
+        expectsMedia: receivePathExpectsMedia([lastCamera(false)], true),
+        deliveredBytes: 0,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not fail when the last camera paused during the check", () => {
+    expect(
+      iceRestartBroughtMediaBack({
+        replaced: false,
+        expectsMedia: receivePathExpectsMedia([lastCamera(true)], true),
+        deliveredBytes: 0,
+      }),
+    ).toBe(true);
+  });
+
+  it("leaves a transport replaced during the check to the rebuild that replaced it", () => {
+    expect(
+      iceRestartBroughtMediaBack({ replaced: true, expectsMedia: true, deliveredBytes: 0 }),
+    ).toBe(true);
   });
 });
 

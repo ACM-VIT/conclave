@@ -172,7 +172,10 @@ import {
   MEDIA_PATH_STALL_MS,
   MEDIA_PATH_VERIFY_MS,
   advanceMediaPathWatch,
-  readRtpBytes,
+  deliveredRtpBytes,
+  iceRestartBroughtMediaBack,
+  readMediaPath,
+  type MediaPathReading,
   type MediaPathWatch,
 } from "../lib/media-path-recovery";
 import { readProducerScore } from "../lib/adaptive-consumer-score";
@@ -6239,6 +6242,17 @@ export function useMeetSocket({
       );
     };
 
+    const readPath = async (
+      kind: "producer" | "consumer",
+      transport: Transport,
+    ) => {
+      const stats = [...(await transport.getStats()).values()];
+      return {
+        stats,
+        reading: readMediaPath(stats, kind === "producer" ? "send" : "recv"),
+      };
+    };
+
     const expectedConsumerProducerScores = (): Array<number | null> =>
       consumedStreams()
         .filter(({ stream }) => streamShouldFlow(stream))
@@ -6254,11 +6268,8 @@ export function useMeetSocket({
       transport: Transport,
     ): Promise<boolean> => {
       if (!carriedMediaOnce.has(transport)) return false;
-      const direction = kind === "producer" ? "send" : "recv";
-      const readBytes = async () =>
-        readRtpBytes((await transport.getStats()).values(), direction);
       try {
-        const before = await readBytes();
+        const before = (await readPath(kind, transport)).reading;
         if (!(await attemptIceRestart(kind))) return false;
         await new Promise<void>((resolve) =>
           window.setTimeout(resolve, MEDIA_PATH_FLOW_CHECK_MS),
@@ -6267,8 +6278,16 @@ export function useMeetSocket({
           kind === "producer"
             ? producerTransportRef.current
             : consumerTransportRef.current;
-        if (transport.closed || current !== transport) return true;
-        return (await readBytes()) > before;
+        const replaced = transport.closed || current !== transport;
+        return iceRestartBroughtMediaBack({
+          replaced,
+          expectsMedia:
+            !replaced &&
+            expectsMedia(kind, transport.connectionState === "connected"),
+          deliveredBytes: replaced
+            ? 0
+            : deliveredRtpBytes(before, (await readPath(kind, transport)).reading),
+        });
       } catch {
         return false;
       }
@@ -6300,34 +6319,29 @@ export function useMeetSocket({
         entry.relayBytes = null;
       }
 
-      let rtpBytes: number;
+      let reading: MediaPathReading;
       let relayBytes: Record<string, number>;
       try {
-        const stats = [...(await transport.getStats()).values()];
-        const direction = kind === "producer" ? "send" : "recv";
-        rtpBytes = readRtpBytes(stats, direction);
-        relayBytes = readRelayPairBytes(stats, direction);
+        const read = await readPath(kind, transport);
+        reading = read.reading;
+        relayBytes = readRelayPairBytes(read.stats, reading.direction);
       } catch {
         return;
       }
       if (entry.transport !== transport) return;
 
-      const previousRtpBytes = entry.watch.lastRtpBytes;
       const result = advanceMediaPathWatch(entry.watch, {
+        ...reading,
         at: Date.now(),
         connectionState: transport.connectionState,
         expectsMedia: expectsMedia(
           kind,
           transport.connectionState === "connected",
         ),
-        rtpBytes,
       });
       entry.watch = result.watch;
       const provenRelayUrl = relayProvenByMedia({
-        mediaBytes:
-          result.mediaMoved && previousRtpBytes !== null
-            ? rtpBytes - previousRtpBytes
-            : 0,
+        mediaBytes: result.deliveredBytes,
         relayBytes,
         previousRelayBytes: entry.relayBytes,
       });

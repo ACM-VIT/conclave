@@ -14,64 +14,95 @@ type RtpStat = {
   type?: string;
   bytesSent?: number;
   bytesReceived?: number;
+  timestamp?: number;
 };
 
-/** RTP bytes a transport has moved in its direction, from a stats report. */
-export const readRtpBytes = (
+export type MediaPathReading = {
+  direction: MediaPathDirection;
+  rtpBytes: number;
+  receiverReportAt: number | null;
+};
+
+export const readMediaPath = (
   stats: Iterable<RtpStat>,
   direction: MediaPathDirection,
-): number => {
-  let bytes = 0;
+): MediaPathReading => {
+  let rtpBytes = 0;
+  let receiverReportAt: number | null = null;
   for (const stat of stats) {
     if (direction === "send" && stat.type === "outbound-rtp") {
-      bytes += stat.bytesSent ?? 0;
+      rtpBytes += stat.bytesSent ?? 0;
     } else if (direction === "recv" && stat.type === "inbound-rtp") {
-      bytes += stat.bytesReceived ?? 0;
+      rtpBytes += stat.bytesReceived ?? 0;
+    } else if (
+      direction === "send" &&
+      stat.type === "remote-inbound-rtp" &&
+      typeof stat.timestamp === "number" &&
+      Number.isFinite(stat.timestamp)
+    ) {
+      receiverReportAt = Math.max(receiverReportAt ?? stat.timestamp, stat.timestamp);
     }
   }
-  return bytes;
+  return {
+    direction,
+    rtpBytes,
+    receiverReportAt: direction === "send" ? receiverReportAt : null,
+  };
 };
 
-export type MediaPathSample = {
+export const deliveredRtpBytes = (
+  previous: MediaPathReading | null,
+  current: MediaPathReading,
+): number => {
+  if (!previous || previous.direction !== current.direction) return 0;
+  const moved = current.rtpBytes - previous.rtpBytes;
+  if (moved <= 0) return 0;
+  if (current.direction === "recv") return moved;
+  return current.receiverReportAt !== null &&
+    (previous.receiverReportAt === null ||
+      current.receiverReportAt > previous.receiverReportAt)
+    ? moved
+    : 0;
+};
+
+export type MediaPathSample = MediaPathReading & {
   at: number;
   connectionState: string;
   /** A live, unpaused stream should be crossing this transport right now. */
   expectsMedia: boolean;
-  rtpBytes: number;
 };
 
 export type MediaPathCondition =
   /** Nothing should be flowing, so there is nothing to judge. */
   | "idle"
   | "flowing"
-  /** ICE and DTLS are up but no RTP moved since the last sample. */
+  /** ICE and DTLS are up but no media reached the far end since the last sample. */
   | "connected-without-media"
   | "not-connected";
 
 export type MediaPathWatch = {
   troubleSince: number | null;
-  lastRtpBytes: number | null;
+  lastReading: MediaPathReading | null;
 };
 
 export const INITIAL_MEDIA_PATH_WATCH: MediaPathWatch = {
   troubleSince: null,
-  lastRtpBytes: null,
+  lastReading: null,
 };
 
-const getMediaPathCondition = (
-  watch: MediaPathWatch,
-  sample: MediaPathSample,
-): MediaPathCondition => {
-  if (!sample.expectsMedia) return "idle";
-  if (sample.connectionState !== "connected") return "not-connected";
-  return watch.lastRtpBytes !== null && sample.rtpBytes <= watch.lastRtpBytes
-    ? "connected-without-media"
-    : "flowing";
-};
+const toReading = ({
+  direction,
+  rtpBytes,
+  receiverReportAt,
+}: MediaPathSample): MediaPathReading => ({
+  direction,
+  rtpBytes,
+  receiverReportAt,
+});
 
 /**
  * Folds one sample into the watch. `stalledForMs` is how long the transport
- * has been expected to carry media without carrying any.
+ * has been expected to carry media without any reaching the far end.
  */
 export const advanceMediaPathWatch = (
   watch: MediaPathWatch,
@@ -80,27 +111,46 @@ export const advanceMediaPathWatch = (
   watch: MediaPathWatch;
   condition: MediaPathCondition;
   stalledForMs: number;
-  /** RTP bytes grew since the last connected sample: media is really moving. */
+  /** RTP bytes that reached the far end since the last connected sample. */
+  deliveredBytes: number;
   mediaMoved: boolean;
 } => {
-  const condition = getMediaPathCondition(watch, sample);
+  const connected = sample.connectionState === "connected";
+  const reading = toReading(sample);
+  const deliveredBytes = connected
+    ? deliveredRtpBytes(watch.lastReading, reading)
+    : 0;
+  const condition: MediaPathCondition = !sample.expectsMedia
+    ? "idle"
+    : !connected
+      ? "not-connected"
+      : watch.lastReading === null || deliveredBytes > 0
+        ? "flowing"
+        : "connected-without-media";
   const inTrouble =
     condition === "not-connected" || condition === "connected-without-media";
   const troubleSince = inTrouble ? (watch.troubleSince ?? sample.at) : null;
   return {
     watch: {
       troubleSince,
-      lastRtpBytes:
-        sample.connectionState === "connected" ? sample.rtpBytes : null,
+      lastReading: connected ? reading : null,
     },
     condition,
     stalledForMs: troubleSince === null ? 0 : sample.at - troubleSince,
-    mediaMoved:
-      sample.connectionState === "connected" &&
-      watch.lastRtpBytes !== null &&
-      sample.rtpBytes > watch.lastRtpBytes,
+    deliveredBytes,
+    mediaMoved: deliveredBytes > 0,
   };
 };
+
+export const iceRestartBroughtMediaBack = ({
+  replaced,
+  expectsMedia,
+  deliveredBytes,
+}: {
+  replaced: boolean;
+  expectsMedia: boolean;
+  deliveredBytes: number;
+}): boolean => replaced || !expectsMedia || deliveredBytes > 0;
 
 export type MediaPathEscalation =
   /**
