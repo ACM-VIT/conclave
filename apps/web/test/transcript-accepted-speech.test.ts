@@ -5,7 +5,10 @@ import {
   TRANSCRIPTION_LINE_DEADLINE_MS as DEADLINE,
   TRANSCRIPTION_RECOVERY_MAX_AUDIO_BYTES as REPLAY_AUDIO_LIMIT,
 } from "../transcript-worker/src/constants";
-import { Pcm24To16Downsampler } from "../transcript-worker/src/transcription/sarvam";
+import {
+  Pcm24To16Downsampler,
+  SARVAM_EXPIRED_SLOT_KEPT_MS as SARVAM_OWED_KEPT,
+} from "../transcript-worker/src/transcription/sarvam";
 import {
   AUDIO,
   OPENAI,
@@ -736,6 +739,8 @@ type Utterance = {
   itemId: string;
   connection: Connection;
   placedAt: number | null;
+  acceptedAt: number | null;
+  owedLate: boolean;
   deadlineAt: number | null;
   claiming: boolean;
   lost: boolean;
@@ -794,6 +799,11 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
       utterance.placedAt ??= at;
       utterance.deadlineAt ??= at + DEADLINE;
     };
+    const awaitAnswer = (connection: Connection, utterance: Utterance) => {
+      utterance.acceptedAt = Date.now();
+      utterance.owedLate = false;
+      connection.awaiting.push(utterance);
+    };
     const acknowledge = (connection: Connection) => {
       const utterance = connection.unacknowledged.shift()!;
       utterance.itemId = `ack_${(acks += 1)}`;
@@ -801,7 +811,7 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
       place(utterance);
       if (connection === live) utterance.deadlineAt = Date.now() + DEADLINE;
       if (utterance.claiming && !connection.socket.closed) utterance.claiming = false;
-      connection.awaiting.push(utterance);
+      awaitAnswer(connection, utterance);
     };
     const acknowledgeLive = () => {
       while (live.provider === "openai" && live.unacknowledged.length) acknowledge(live);
@@ -810,7 +820,14 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
     const expectedText = (utterance: Utterance) =>
       utterance.final === "shown" ? utterance.text : utterance.partial || GAP;
     const retireExpired = (connection: Connection) => {
-      while (connection.provider === "sarvam" && connection.awaiting[0] && Date.now() >= connection.awaiting[0].deadlineAt!) {
+      const now = Date.now();
+      while (connection.provider === "sarvam" && connection.awaiting[0] && now >= connection.awaiting[0].deadlineAt!) {
+        const expired = connection.awaiting[0];
+        expired.owedLate ||= !expired.noise &&
+          connection.awaiting
+            .slice(1)
+            .some((later) => !later.owedLate && later.acceptedAt! <= expired.deadlineAt! && later.deadlineAt! >= expired.deadlineAt!);
+        if (expired.owedLate && now - expired.deadlineAt! <= SARVAM_OWED_KEPT) return;
         connection.awaiting.shift();
       }
     };
@@ -830,6 +847,8 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         itemId: `u${utterances.length}`,
         connection: live,
         placedAt: null,
+        acceptedAt: null,
+        owedLate: false,
         deadlineAt: null,
         claiming: false,
         lost: false,
@@ -916,7 +935,8 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         const speech = sent.filter((message) => audioOf(message) === sarvamSpeechPayload).length;
         expect(speech, "no line's replay audio was dropped by another line ending").toBe(replayedChunks);
         if (sarvamSignalsSpeech) for (const _ of replayed) signalSpeech(live);
-        live.awaiting = replayed;
+        live.awaiting = [];
+        for (const utterance of replayed) awaitAnswer(live, utterance);
       }
     };
 
@@ -933,7 +953,7 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         }
         if (sarvamSignalsSpeech) signalSpeech(live);
         place(utterance);
-        live.awaiting.push(utterance);
+        awaitAnswer(live, utterance);
         const tail = sarvamSignalsSpeech && random() < 0.3;
         if (tail) {
           await vi.advanceTimersByTimeAsync(200);
@@ -960,7 +980,7 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         await vi.advanceTimersByTimeAsync(600 + random() * 800);
         signalSpeech(live);
         utterance.deadlineAt = Date.now() + DEADLINE;
-        live.awaiting.push(utterance);
+        awaitAnswer(live, utterance);
       },
       async signalEarly() {
         if (live.provider !== "sarvam" || !sarvamSignalsSpeech) return moves.utter();
@@ -968,7 +988,7 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         const utterance = newUtterance(false);
         signalSpeech(live);
         place(utterance);
-        live.awaiting.push(utterance);
+        awaitAnswer(live, utterance);
         await vi.advanceTimersByTimeAsync(50 + random() * 400);
         await speak(utterance.speaker);
         utterance.deadlineAt = Date.now() + DEADLINE;
@@ -991,7 +1011,7 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         await speak(utterance.speaker);
         if (sarvamSignalsSpeech) signalSpeech(live);
         place(utterance);
-        live.awaiting.push(utterance);
+        awaitAnswer(live, utterance);
         for (let elapsed = 0; elapsed < DEADLINE + 2_000; elapsed += 250) {
           await vi.advanceTimersByTimeAsync(250);
           await speak(utterance.speaker);
@@ -1017,7 +1037,7 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         for (const utterance of [first, second]) {
           signalSpeech(live);
           utterance.deadlineAt = Date.now() + DEADLINE;
-          live.awaiting.push(utterance);
+          awaitAnswer(live, utterance);
         }
       },
       async lateEnd() {
@@ -1027,7 +1047,7 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         await speak(first.speaker);
         signalSpeech(live);
         place(first);
-        live.awaiting.push(first);
+        awaitAnswer(live, first);
         await endTurn(first.speaker);
         await vi.advanceTimersByTimeAsync(100 + random() * 400);
         const second = newUtterance(false);
@@ -1037,7 +1057,7 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         await vi.advanceTimersByTimeAsync(random() * 300);
         signalSpeech(live);
         place(second);
-        live.awaiting.push(second);
+        awaitAnswer(live, second);
       },
       async cough() {
         if (live.provider !== "sarvam" || !live.signalled) return moves.noise();
@@ -1060,7 +1080,7 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         for (const utterance of [first, second]) {
           signalSpeech(live);
           place(utterance);
-          live.awaiting.push(utterance);
+          awaitAnswer(live, utterance);
         }
       },
       async noise() {
@@ -1079,7 +1099,7 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         if (sarvamSignalsSpeech && random() < 0.5) {
           signalSpeech(live);
           place(utterance);
-          live.awaiting.push(utterance);
+          awaitAnswer(live, utterance);
         }
       },
       async acknowledge() {
@@ -1095,7 +1115,7 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         if (Date.now() < utterance.deadlineAt!) {
           expect(connection.socket.closed, `${utterance.text}: its socket stays open until its deadline`).toBe(false);
         }
-        utterance.final = connection.socket.closed ? "ignored" : "shown";
+        if (!utterance.owedLate) utterance.final = connection.socket.closed ? "ignored" : "shown";
         connection.socket.emit(
           connection.provider === "openai"
             ? openAiFinal(utterance.itemId, utterance.text)
@@ -1208,7 +1228,7 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         await speak(first.speaker);
         if (sarvamSignalsSpeech) signalSpeech(live);
         place(first);
-        live.awaiting.push(first);
+        awaitAnswer(live, first);
         if (!sarvamSignalsSpeech) {
           live.awaiting.shift();
           first.final = "shown";
@@ -1221,7 +1241,7 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         await speak(second.speaker);
         if (sarvamSignalsSpeech) signalSpeech(live);
         place(second);
-        live.awaiting.push(second);
+        awaitAnswer(live, second);
         await endTurn(second.speaker);
       },
       async itemFails() {

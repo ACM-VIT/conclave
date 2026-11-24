@@ -283,10 +283,11 @@ describe("Neon H3: committed or buffered speech is never lost without a trace", 
     expect(savedTexts()).toEqual(["Ada in French.", "Grace in French."]);
   });
 
-  it("audio sent while a switch saves the session goes to the new provider", async () => {
+  it("audio sent while a switch saves the session is captioned by the provider still running", async () => {
     vi.useFakeTimers();
     const { room, providerSockets, start, switchTo, speak, commit, savedTexts } = await rig(OPENAI);
     await start("en");
+    const [english] = providerSockets();
     const storage = (room as unknown as { state: { storage: { put: (key: string, value: unknown) => Promise<void> } } }).state.storage;
     const put = storage.put.bind(storage);
     let release: () => void = () => {};
@@ -300,13 +301,13 @@ describe("Neon H3: committed or buffered speech is never lost without a trace", 
     await settle();
     await speak(ada);
     await commit(ada);
+    expect(english.sentTypes()).toContain("input_audio_buffer.commit");
+    english.emit(openAiCommitted("en_1"));
     release();
     await switching;
     await settle();
-    const hindi = providerSockets().at(-1)!;
-    expect(hindi.sentTypes()).toContain("input_audio_buffer.commit");
-    hindi.emit(openAiCommitted("hi_1"));
-    hindi.emit(openAiFinal("hi_1", "Said during the switch."));
+    expect(providerSockets().at(-1)).not.toBe(english);
+    english.emit(openAiFinal("en_1", "Said during the switch."));
     await settle();
     expect(savedTexts()).toEqual(["Said during the switch."]);
   });
@@ -731,7 +732,7 @@ describe("Sarvam: a line's wait follows its own audio", () => {
     socket.emit(sarvamFinal("two", "Second."));
     await vi.advanceTimersByTimeAsync(DEADLINE + 100);
 
-    expect(savedTexts()).toEqual([GAP, "Second."]);
+    expect(savedTexts()).toEqual([GAP, GAP]);
   });
 });
 

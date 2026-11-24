@@ -9,6 +9,7 @@ export type AudioChunk = {
   sampleCount: number;
   createdAt: number;
   sequence: number;
+  order: number;
   voice: VoiceReading;
   turn: number;
 };
@@ -27,6 +28,7 @@ export type CaptionLine = {
   audio: AudioChunk[];
   epoch: number | null;
   deadlineAt: number;
+  endedAt?: number;
 };
 
 export type QueuedCommit = { lineId: string; committedAt: number };
@@ -37,6 +39,15 @@ export const isActive = (line: CaptionLine): boolean => ACTIVE.has(line.state);
 
 export class CaptionLedger {
   private readonly lines = new Map<string, CaptionLine>();
+
+  constructor(
+    private readonly limits: {
+      maxEnded: () => number;
+      endedKeptMs: number;
+      shown: () => ReadonlySet<string>;
+      onForget: (lineIds: string[]) => void;
+    },
+  ) {}
 
   get size(): number {
     return this.lines.size;
@@ -66,11 +77,27 @@ export class CaptionLedger {
     return created;
   }
 
-  end(line: CaptionLine, state: "gap" | "final" | "dropped", text = line.text): void {
+  end(line: CaptionLine, state: "gap" | "final" | "dropped", text = line.text, now = Date.now()): void {
     line.state = state;
     line.text = text;
     line.audio = [];
     line.deadlineAt = Number.POSITIVE_INFINITY;
+    line.endedAt = now;
+    this.forgetOldEnded(now);
+  }
+
+  forgetOldEnded(now: number): void {
+    const shown = this.limits.shown();
+    const ended = Array.from(this.lines.values())
+      .filter((line) => !isActive(line) && !shown.has(line.id))
+      .sort((left, right) => (right.endedAt ?? 0) - (left.endedAt ?? 0));
+    const maxEnded = this.limits.maxEnded();
+    const forgotten = ended
+      .filter((line, index) => index >= maxEnded || now - (line.endedAt ?? now) > this.limits.endedKeptMs)
+      .map(({ id }) => id);
+    if (forgotten.length === 0) return;
+    for (const id of forgotten) this.lines.delete(id);
+    this.limits.onForget(forgotten);
   }
 
   remove(id: string): void {

@@ -20,6 +20,8 @@ const SARVAM_DEFAULT_LANGUAGE_CODE = "unknown";
 const SARVAM_DEFAULT_MODE = "codemix";
 const SARVAM_SIGNAL_LOOKBACK_MS = 1_500;
 const SARVAM_SEGMENT_KEPT_MS = 3_000;
+export const SARVAM_EXPIRED_SLOT_KEPT_MS = 60_000;
+const SARVAM_RECENT_ANSWERS = 64;
 
 type SentChunk = { sequence: number; at: number };
 
@@ -359,6 +361,8 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
   private readonly connectionId = crypto.randomUUID();
   private utteranceCount = 0;
   private awaitingFinal: string[] = [];
+  private readonly expiredSlots = new Map<string, number>();
+  private readonly recentAnswers = new Map<string, string>();
   private openedBeforeSignal: string[] = [];
   private readonly replayedLines = new Set<string>();
   private segments: SpeechSegment[] = [];
@@ -506,14 +510,33 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
     this.openSegment = null;
   }
 
-  retire(itemId: string): void {
+  retire(itemId: string, heard = false): void {
+    const slot = this.awaitingFinal.indexOf(itemId);
+    const newerWaiting = this.awaitingFinal.slice(slot + 1).some((waiting) => !this.expiredSlots.has(waiting));
+    const owed = slot >= 0 && heard && newerWaiting;
+    if (owed) this.expiredSlots.set(itemId, Date.now());
+    this.settleUtterance(itemId, !owed);
+  }
+
+  private settleUtterance(itemId: string, answered: boolean): void {
     for (const segment of this.segments) {
       if (segment.itemId === itemId) segment.answered = true;
     }
-    this.awaitingFinal = this.awaitingFinal.filter((awaiting) => awaiting !== itemId);
+    if (answered) {
+      this.awaitingFinal = this.awaitingFinal.filter((awaiting) => awaiting !== itemId);
+      this.expiredSlots.delete(itemId);
+    }
     this.openedBeforeSignal = this.openedBeforeSignal.filter((opened) => opened !== itemId);
     this.unheardSignals = this.unheardSignals.filter((signal) => signal.itemId !== itemId);
     if (this.signalledItem === itemId) this.signalledItem = null;
+  }
+
+  private forgetExpiredSlots(now: number): void {
+    for (const [itemId, expiredAt] of this.expiredSlots) {
+      if (now - expiredAt <= SARVAM_EXPIRED_SLOT_KEPT_MS) continue;
+      this.expiredSlots.delete(itemId);
+      this.awaitingFinal = this.awaitingFinal.filter((awaiting) => awaiting !== itemId);
+    }
   }
 
   private nextUtteranceId(): string {
@@ -689,8 +712,18 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
       this.handleSpeechEnd();
       return;
     }
-    const answered = this.awaitingFinal.shift();
+    if (this.recentAnswers.get(event.itemId) === event.transcript) return;
+    this.forgetExpiredSlots(Date.now());
+    const answered = this.awaitingFinal[0];
     if (!answered && !event.transcript) return;
+    this.recentAnswers.set(event.itemId, event.transcript);
+    if (this.recentAnswers.size > SARVAM_RECENT_ANSWERS) {
+      this.recentAnswers.delete(this.recentAnswers.keys().next().value!);
+    }
+    if (answered && this.expiredSlots.has(answered)) {
+      this.settleUtterance(answered, true);
+      return;
+    }
     const itemId = answered ?? this.nextUtteranceId();
     this.resolveNow(itemId);
     if (!answered) {
@@ -702,7 +735,7 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
         ownsNewAudio: false,
       });
     }
-    this.retire(itemId);
+    this.settleUtterance(itemId, true);
     if (this.turn) {
       this.turn.accepted = false;
       this.turn.needsOnset = true;

@@ -47,6 +47,6 @@ export interface LiveTranscriptionSession {
   commitAudio(): void;
   clearAudio(): void;
   finishAudio(): void;
-  retire?(itemId: string): void;
+  retire?(itemId: string, heard?: boolean): void;
   close(): void;
 }

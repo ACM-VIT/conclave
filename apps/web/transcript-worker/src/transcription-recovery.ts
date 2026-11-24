@@ -16,6 +16,7 @@ export type BufferedTranscriptAudioEvent =
       sampleCount: number;
       createdAt: number;
       sequence: number;
+      order: number;
     }
   | {
       type: "commit" | "clear";
