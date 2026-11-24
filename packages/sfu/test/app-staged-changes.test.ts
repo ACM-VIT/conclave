@@ -497,6 +497,54 @@ describe("app changes sent as a list", () => {
   }, 30_000);
 });
 
+describe("app uploads", () => {
+  const refusalsIn = (inbox: Array<{ event: string; payload: unknown }>) =>
+    inbox.filter(({ event }) => event === "apps:yjs:refused").map(({ payload }) => (payload as { reason: string }).reason);
+
+  it("are acknowledged once committed, and a list once every change in it is", async () => {
+    const room = await boardRoom("ack-commit");
+    const author = new Y.Doc();
+    const relayedBefore = room.relayed.length;
+
+    const single = await room.acknowledged({ update: edit(author, (text) => text.insert(0, "one")) }, "copy-a");
+    expect(single.relayed).toBe(relayedBefore + 1);
+    const list = await room.acknowledged({ updates: [edit(author, (text) => text.insert(0, "two")), edit(author, (text) => text.insert(0, "three"))] }, "copy-a");
+    expect(list.relayed).toBe(relayedBefore + 3);
+    expect(await settled(room)).toBe("threetwoone");
+  });
+
+  it("are acknowledged only after the author is told one was refused", async () => {
+    const room = await boardRoom("ack-refused");
+    const author = new Y.Doc();
+    fill(room, author, 4, 230 * KIB);
+
+    const refused = await room.acknowledged({ updates: [edit(author, (text) => text.insert(0, "f")), edit(author, (text) => text.insert(0, "b".repeat(200 * KIB)))] }, "copy-r");
+    expect(refusalsIn(refused.inbox)).toEqual(["too-large"]);
+    const dropped = await room.acknowledged({ update: new Uint8Array(0) }, "copy-e");
+    expect(refusalsIn(dropped.inbox)).toEqual(["too-large", "invalid"]);
+  }, 30_000);
+
+  it("are acknowledged when the server drops them before the document, and a part as soon as it is staged", async () => {
+    const room = await boardRoom("ack-dropped");
+    const author = new Y.Doc();
+    await room.close();
+    const notOpen = await room.acknowledged({ update: edit(author, (text) => text.insert(0, "x")) }, "copy-n");
+    expect(refusalsIn(notOpen.inbox)).toEqual([]);
+    await room.open();
+
+    const parts = inParts(bigChange(new Y.Doc(), 20 * KIB, "s"), 10 * KIB);
+    const relayedBefore = room.relayed.length;
+    await room.acknowledged({ update: parts[0], part: { id: "c", index: 0, count: parts.length } }, "copy-p");
+    expect(room.state.appChangeStaging.used()).toBe(parts[0].length);
+    for (const [index, part] of parts.slice(1, -1).entries()) {
+      await room.acknowledged({ update: part, part: { id: "c", index: index + 1, count: parts.length } }, "copy-p");
+    }
+    const last = await room.acknowledged({ update: parts.at(-1)!, part: { id: "c", index: parts.length - 1, count: parts.length } }, "copy-p");
+    expect(last.relayed).toBe(relayedBefore + 1);
+    expect(room.refused).toEqual([]);
+  });
+});
+
 describe("app state answers", () => {
   it("say a socket is not in a room yet instead of saying no app is open", async () => {
     const room = await boardRoom("state-answer");

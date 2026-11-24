@@ -399,10 +399,10 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     socket.emit("apps:yjs:refused", { appId, replicaId, reason } satisfies AppsRefusedData);
   };
 
-  const commit = (room: Room, appId: string, replicaId: string | undefined, update: Uint8Array, assembled: boolean): void => {
+  const commit = (room: Room, appId: string, replicaId: string | undefined, update: Uint8Array, assembled: boolean): Promise<void> => {
     const { channelId } = room;
     const document = room.getOrCreateAppDoc(appId, documents);
-    void (assembled ? document.applyAssembled(update) : document.apply(update)).then((result) => {
+    return (assembled ? document.applyAssembled(update) : document.apply(update)).then((result) => {
       if (!result.ok) {
         const why = UPDATE_REFUSALS[result.reason];
         if (why) Logger.warn(`[Apps] Dropping update for ${appId}: ${why}`);
@@ -427,7 +427,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     });
   };
 
-  socket.on("apps:yjs:update", (data: AppsUpdateData) => {
+  const receiveUpdate = async (data: AppsUpdateData): Promise<void> => {
     const room = context.currentRoom;
     if (!room || !context.currentClient) return;
     if (context.currentClient.isObserver) return;
@@ -461,7 +461,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         return;
       }
       dropStaged();
-      for (const listed of updates) commit(room, appId, replicaId, listed, false);
+      await Promise.all(updates.map((listed) => commit(room, appId, replicaId, listed, false)));
       return;
     }
 
@@ -482,7 +482,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     }
     if (!part) {
       dropStaged();
-      commit(room, appId, replicaId, update, false);
+      await commit(room, appId, replicaId, update, false);
       return;
     }
     const document = room.getOrCreateAppDoc(appId, documents);
@@ -522,7 +522,12 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       return;
     }
     dropStaged();
-    commit(room, appId, replicaId, joinParts(change.parts), true);
+    await commit(room, appId, replicaId, joinParts(change.parts), true);
+  };
+
+  socket.on("apps:yjs:update", (data: AppsUpdateData, ack?: unknown) => {
+    const settle = () => respond(ack, undefined);
+    void receiveUpdate(data).then(settle, settle);
   });
 
   socket.on("apps:awareness", (data: AppsAwarenessData) => {
