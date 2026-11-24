@@ -117,6 +117,7 @@ export const pollsAuthority = defineAuthority({
   tables: {
     polls: table<PollRow>({ maxRows: MAX_POLLS_PER_ROOM }),
     ballots: table<Ballot>({ maxRows: 100_000 }),
+    ballotsBySubject: table<{ pollId: string }>({ maxRows: 100_000 }),
   },
   timers: {},
   // Webinar attendees never see meeting polls.
@@ -185,6 +186,7 @@ export const pollsAuthority = defineAuthority({
           optionIds,
         });
         if (inserted === "exists") reject("already-voted");
+        tx.put("ballotsBySubject", key(ctx.subject, input.pollId), { pollId: input.pollId });
         const votes = { ...poll.tally.votes };
         for (const id of optionIds) votes[id] = (votes[id] ?? 0) + 1;
         tx.put("polls", key(poll.id), {
@@ -262,17 +264,20 @@ export const pollsAuthority = defineAuthority({
     },
   },
   mergeSubjects(_ctx, tx, { from, into }) {
-    for (const [, ballot] of tx.scan("ballots")) {
-      if (ballot.subject !== from) continue;
-      tx.delete("ballots", key(ballot.pollId, from));
-      const kept = tx.get("ballots", key(ballot.pollId, into));
+    for (const [, { pollId }] of tx.scan("ballotsBySubject", key(from))) {
+      tx.delete("ballotsBySubject", key(from, pollId));
+      const ballot = tx.get("ballots", key(pollId, from));
+      if (!ballot) continue;
+      tx.delete("ballots", key(pollId, from));
+      tx.put("ballotsBySubject", key(into, pollId), { pollId });
+      const kept = tx.get("ballots", key(pollId, into));
       if (!kept) {
-        tx.put("ballots", key(ballot.pollId, into), { ...ballot, subject: into });
+        tx.put("ballots", key(pollId, into), { ...ballot, subject: into });
         continue;
       }
       const dropped = kept.votedAt <= ballot.votedAt ? ballot : kept;
-      if (dropped === kept) tx.put("ballots", key(ballot.pollId, into), { ...ballot, subject: into });
-      const poll = tx.get("polls", key(ballot.pollId));
+      if (dropped === kept) tx.put("ballots", key(pollId, into), { ...ballot, subject: into });
+      const poll = tx.get("polls", key(pollId));
       if (!poll) continue;
       const votes = { ...poll.tally.votes };
       for (const id of dropped.optionIds) {

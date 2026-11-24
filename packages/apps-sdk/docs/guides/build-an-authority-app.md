@@ -115,13 +115,16 @@ An app with a personal view keeps rows by person, so it must define `mergeSubjec
 The rule a merge follows: it leaves what one person would have if they had done the surviving actions themselves, in the order they happened.
 
 - Of two actions that are one per person (two ballots in one poll, two answers in one round, two joins), the earlier one survives, because the later one would have been refused.
+- A rule an action checks is applied the way the action checked it: in time order, against the state at that moment. A cap on open questions is checked against the questions open when each one was asked, so a question answered before the next was asked frees its place, and one reopened later does not take it back. Keep the times a row changed state if a rule depends on them.
 - Of two writes of the same row, the later one survives, because it would have overwritten the first.
 - Counts, totals and scores are worked out again from what survives, and stored results (a tally, a leaderboard) are rebuilt.
 - A merge sees the rows, not the history, so store the time a row was written whenever its order decides which one survives.
 - A field that only records when a row last changed, such as `updatedAt`, may keep the later time.
 - An action of one subject that undid or cleared the other subject's rows saw none of them, so a merge cannot reproduce it; both effects stay.
 
-Check a merge with `mergeAgainstOnePerson` in `packages/sfu/test/authority/merge-check.ts`: it plays a script once as two subjects followed by the merge and once as one person, and compares every table.
+A merge must cost in proportion to the two subjects' own rows, never the room's. Read only what is theirs: point reads and scans under a key that starts with the subject. Where a table is keyed by something else first (a ballot by poll, an answer by round), keep a second table keyed by subject and use it. A result that ranks everyone, such as a leaderboard, is updated from the merged person's entry rather than rebuilt from every row.
+
+Check a merge with `mergeAgainstOnePerson` in `packages/sfu/test/authority/merge-check.ts`: it plays a script once as two subjects followed by the merge and once as one person, and compares every table. Check its cost with `mergeCost`, which plays the same script with a crowd of other subjects; the merge's operations must be the same for a crowd of ten as for thousands.
 
 The four things a module has:
 
