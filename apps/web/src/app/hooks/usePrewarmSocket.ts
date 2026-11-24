@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { JoinInfoAnswer } from "../lib/join-info-request";
 
 type PrewarmState = {
   mediasoupDevice: typeof import("mediasoup-client").Device | null;
@@ -8,13 +9,7 @@ type PrewarmState = {
   isReady: boolean;
 };
 
-type JoinInfo = {
-  token: string;
-  sfuUrl: string;
-  iceServers?: RTCIceServer[];
-  iceServersTtlSeconds?: number;
-  relayExpiresAt?: number;
-};
+type JoinInfo = JoinInfoAnswer;
 
 type TokenCache = {
   roomId: string;

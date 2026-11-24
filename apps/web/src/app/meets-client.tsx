@@ -12,6 +12,7 @@ import { SFU_EVENTS } from "@conclave/meeting-core/sfu-events";
 import type { RoomInfo } from "@/lib/sfu-types";
 import { useSession } from "@/lib/auth-client";
 import { readJoinTokenUserKey } from "./lib/join-token-identity";
+import type { JoinInfoAnswer } from "./lib/join-info-request";
 import { shouldRetainMeetingSurface } from "./lib/meeting-surface-policy";
 import {
   AppsProvider,
@@ -402,13 +403,7 @@ export type MeetsClientProps = {
       joinMode?: JoinMode;
       signal?: AbortSignal;
     },
-  ) => Promise<{
-    token: string;
-    sfuUrl: string;
-    iceServers?: RTCIceServer[];
-    iceServersTtlSeconds?: number;
-    relayExpiresAt?: number;
-  }>;
+  ) => Promise<JoinInfoAnswer>;
   joinMode?: JoinMode;
   autoJoinOnMount?: boolean;
   hideJoinUI?: boolean;

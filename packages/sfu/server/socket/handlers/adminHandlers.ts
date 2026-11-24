@@ -600,7 +600,8 @@ export const registerAdminHandlers = (
   });
 
   socket.on("muteAll", (input: unknown, maybeCb?: (data: unknown) => void) => {
-    const callback = typeof input === "function" ? input : maybeCb;
+    const callback =
+      typeof input === "function" ? (input as (data: unknown) => void) : maybeCb;
     const data = typeof input === "function" ? {} : input;
     if (!callback) return;
 
@@ -628,7 +629,8 @@ export const registerAdminHandlers = (
   });
 
   socket.on("closeAllVideo", (input: unknown, maybeCb?: (data: unknown) => void) => {
-    const callback = typeof input === "function" ? input : maybeCb;
+    const callback =
+      typeof input === "function" ? (input as (data: unknown) => void) : maybeCb;
     const data = typeof input === "function" ? {} : input;
     if (!callback) return;
 
@@ -656,7 +658,8 @@ export const registerAdminHandlers = (
   });
 
   socket.on("admin:stopAllScreenShare", (input: unknown, maybeCb?: (data: unknown) => void) => {
-    const callback = typeof input === "function" ? input : maybeCb;
+    const callback =
+      typeof input === "function" ? (input as (data: unknown) => void) : maybeCb;
     const data = typeof input === "function" ? {} : input;
     if (!callback) return;
 
@@ -1596,7 +1599,7 @@ export const registerAdminHandlers = (
   ): void => {
     const guard = ensureAdminRoom(context, { bulk: true });
     if ("error" in guard) {
-      respond(cb, guard);
+      respond(cb, { success: false, error: guard.error });
       return;
     }
 

@@ -26,6 +26,7 @@ import {
   buildScreenShareAudioOpusCodecOptions,
 } from "../lib/constants";
 import { emitWithAckTimeout } from "../lib/socket-ack";
+import type { JoinInfoAnswer } from "../lib/join-info-request";
 import { joinAnswerReportsSenderPacketCounts } from "@conclave/meeting-core/sender-packet-counts";
 import {
   USER_RETRY_REQUEST,
@@ -309,14 +310,7 @@ type WebcamStartupLatencyResetRuntime = {
   failureReason: string | null;
 };
 
-type JoinInfo = {
-  token: string;
-  sfuUrl: string;
-  iceServers?: RTCIceServer[];
-  iceServersTtlSeconds?: number;
-  relayExpiresAt?: number;
-  relayIssuedAt?: number;
-};
+type JoinInfo = JoinInfoAnswer;
 
 const MAX_JOIN_ROOM_REDIRECTS = 1;
 type ProducerSyncResult = ProducerListResult<ProducerInfo>;
