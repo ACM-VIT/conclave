@@ -17,3 +17,10 @@ export const senderPacketCountsAnswerSchema = z.strictObject({
 export type SenderPacketCountsAnswer = z.infer<
   typeof senderPacketCountsAnswerSchema
 >;
+
+const joinAnswerOfferingSenderPacketCountsSchema = z.object({
+  reportsSenderPacketCounts: z.literal(true),
+});
+
+export const joinAnswerReportsSenderPacketCounts = (answer: unknown): boolean =>
+  joinAnswerOfferingSenderPacketCountsSchema.safeParse(answer).success;

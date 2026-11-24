@@ -26,6 +26,7 @@ import {
   buildScreenShareAudioOpusCodecOptions,
 } from "../lib/constants";
 import { emitWithAckTimeout } from "../lib/socket-ack";
+import { joinAnswerReportsSenderPacketCounts } from "@conclave/meeting-core/sender-packet-counts";
 import {
   USER_RETRY_REQUEST,
   canReuseSocketAfterFailure,
@@ -168,10 +169,6 @@ import {
   deliveredRtpBytes,
   readSenderPacketCounts,
   senderPacketCountsRequestFor,
-  INITIAL_SENDER_COUNT_SUPPORT,
-  mayAskForSenderCounts,
-  noteSenderCountReply,
-  type SenderCountSupport,
   screenPacketsGoMissing,
   screenVideoAwaitingSenderCheck,
   senderSentMore,
@@ -1172,6 +1169,7 @@ export function useMeetSocket({
     ((roomId: string) => Promise<void>) | null
   >(null);
   const transportsCarryingMediaRef = useRef(new WeakSet<Transport>());
+  const senderPacketCountSocketsRef = useRef(new WeakSet<Socket>());
   const relayMoveDecisionRef = useRef({ running: false, rerun: false });
   // Each direction's health, escalated transport, rebuild step and held
   // rebuild live in one record, so they change together. Its health is the
@@ -6495,15 +6493,6 @@ export function useMeetSocket({
             framesOptional: false,
           };
 
-    const senderCountSupport = new WeakMap<Socket, SenderCountSupport>();
-    const noteSenderCountReplyOn = (socket: Socket, replied: boolean) =>
-      senderCountSupport.set(
-        socket,
-        noteSenderCountReply(
-          senderCountSupport.get(socket) ?? INITIAL_SENDER_COUNT_SUPPORT,
-          replied,
-        ),
-      );
     const screenSenderPackets = async (): Promise<SenderPacketsReading> => {
       const request = senderPacketCountsRequestFor(
         screenVideoAwaitingSenderCheck(consumedStreams(), true),
@@ -6512,9 +6501,7 @@ export function useMeetSocket({
       if (
         !request ||
         !socket?.connected ||
-        !mayAskForSenderCounts(
-          senderCountSupport.get(socket) ?? INITIAL_SENDER_COUNT_SUPPORT,
-        )
+        !senderPacketCountSocketsRef.current.has(socket)
       ) {
         return NOT_ASKED;
       }
@@ -6522,16 +6509,11 @@ export function useMeetSocket({
         emitWithAckTimeout(
           socket,
           SENDER_PACKET_COUNT_TIMEOUT_MS,
-          () => {
-            noteSenderCountReplyOn(socket, false);
-            resolve({ asked: true, sent: null });
-          },
+          () => resolve({ asked: true, sent: null }),
           "getSenderPacketCounts",
           request,
-          (answer: unknown) => {
-            noteSenderCountReplyOn(socket, true);
-            resolve({ asked: true, sent: readSenderPacketCounts(answer) });
-          },
+          (answer: unknown) =>
+            resolve({ asked: true, sent: readSenderPacketCounts(answer) }),
         );
       });
     };
@@ -7437,6 +7419,11 @@ export function useMeetSocket({
             }
 
             departedParticipantIdsRef.current.clear();
+            if (joinAnswerReportsSenderPacketCounts(response)) {
+              senderPacketCountSocketsRef.current.add(socket);
+            } else {
+              senderPacketCountSocketsRef.current.delete(socket);
+            }
 
             webcamCodecPolicyRef.current =
               normalizeWebcamCodecPolicy(response.webcamCodecPolicy) ?? {

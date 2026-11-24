@@ -632,24 +632,3 @@ export const advanceScreenShareWatch = (
 
 export const screenPacketsGoMissing = (watch: ScreenShareWatch): boolean =>
   watch.samplesSentWithoutArrival >= SCREEN_PACKETS_LOST_SAMPLES;
-
-export const SENDER_COUNT_ASKS_BEFORE_GIVING_UP = 3;
-
-export type SenderCountSupport = { answered: boolean; unansweredInARow: number };
-
-export const INITIAL_SENDER_COUNT_SUPPORT: SenderCountSupport = {
-  answered: false,
-  unansweredInARow: 0,
-};
-
-export const noteSenderCountReply = (
-  support: SenderCountSupport,
-  replied: boolean,
-): SenderCountSupport =>
-  replied
-    ? { answered: true, unansweredInARow: 0 }
-    : { ...support, unansweredInARow: support.unansweredInARow + 1 };
-
-export const mayAskForSenderCounts = (support: SenderCountSupport): boolean =>
-  support.answered ||
-  support.unansweredInARow < SENDER_COUNT_ASKS_BEFORE_GIVING_UP;

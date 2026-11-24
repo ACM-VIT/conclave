@@ -408,6 +408,7 @@ export interface JoinRoomResponse {
   webinarQaEnabled?: boolean;
   webinarSpeakerUserId?: string | null;
   webcamCodecPolicy?: WebcamCodecPolicy;
+  reportsSenderPacketCounts?: true;
 }
 
 export interface JoinRoomErrorResponse {

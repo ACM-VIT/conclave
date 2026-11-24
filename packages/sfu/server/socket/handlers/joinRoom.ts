@@ -1389,6 +1389,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             ? { webinarSpeakerUserId: feedSnapshot.speakerUserId }
             : {}),
           webcamCodecPolicy: context.currentRoom.webcamCodecPolicy,
+          reportsSenderPacketCounts: true,
         });
       } catch (error) {
         Logger.error("Error joining room:", error);

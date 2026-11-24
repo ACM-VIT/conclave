@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  joinAnswerReportsSenderPacketCounts,
   SENDER_PACKET_COUNTS_MAX_CONSUMERS,
   senderPacketCountsAnswerSchema,
   senderPacketCountsRequestSchema,
@@ -32,5 +33,17 @@ describe("asking the SFU how many packets the sharers behind a viewer's consumer
     ["a field the answer does not have", { counts: {}, extra: true }, false],
   ])("reads the answer %s as %s", (_name, answer, valid) => {
     expect(senderPacketCountsAnswerSchema.safeParse(answer).success).toBe(valid);
+  });
+});
+
+describe("knowing from the join answer whether the SFU reports the sharer's packets", () => {
+  it.each<[string, unknown, boolean]>([
+    ["an answer that offers it", { status: "joined", reportsSenderPacketCounts: true }, true],
+    ["an answer from an SFU that does not", { status: "joined" }, false],
+    ["an answer that turns it off", { reportsSenderPacketCounts: false }, false],
+    ["an answer that says it as text", { reportsSenderPacketCounts: "true" }, false],
+    ["no answer at all", undefined, false],
+  ])("reads %s as %s", (_name, answer, offered) => {
+    expect(joinAnswerReportsSenderPacketCounts(answer)).toBe(offered);
   });
 });

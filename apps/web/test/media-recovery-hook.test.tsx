@@ -193,8 +193,25 @@ describe("a viewer whose only incoming media is a screen share", () => {
     expect(await waitFor(rig, () => transport.restartIceCalls > 0, 45_000)).toBe(true);
   });
 
-  it("asks an SFU that cannot count a few times, then stays exempt as before", async () => {
+  it("keeps checking a screen share after a slow answer, then a normal one", async () => {
     rig = await startRig({ remoteMedia: "screen" });
+    await rig.join();
+    await rig.advance(5_000);
+    const transport = rig.recv!;
+    rig.slowSenderCountAnswers = 1;
+    await rig.advance(5_000);
+    expect(rig.slowSenderCountAnswers).toBe(0);
+    const asked = rig.senderCountQueries;
+    await rig.advance(5_000);
+    expect(rig.senderCountQueries).toBeGreaterThan(asked);
+    rig.mediaFlows = false;
+
+    expect(await waitFor(rig, () => transport.restartIceCalls > 0, 30_000)).toBe(true);
+  });
+
+  it("never asks an SFU whose join does not offer sender counts, and stays exempt as before", async () => {
+    rig = await startRig({ remoteMedia: "screen" });
+    rig.advertisesSenderCounts = false;
     rig.answersSenderCounts = false;
     await rig.join();
     await rig.advance(5_000);
@@ -202,7 +219,7 @@ describe("a viewer whose only incoming media is a screen share", () => {
     rig.screenChanging = false;
     await rig.advance(60_000);
 
-    expect(rig.senderCountQueries).toBe(3);
+    expect(rig.senderCountQueries).toBe(0);
     expect(transport.restartIceCalls).toBe(0);
     expect(rig.log.filter((line) => line.includes("carried no media"))).toEqual([]);
   });

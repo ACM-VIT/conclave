@@ -336,7 +336,9 @@ export class CallRig {
   sendStatic = false;
   screenChanging = true;
   answersSenderCounts = true;
+  advertisesSenderCounts = true;
   dropSenderCountAnswers = 0;
+  slowSenderCountAnswers = 0;
   dropEveryOtherSenderCountAnswer = false;
   senderPackets = new Map<string, number>();
   senderCountQueries = 0;
@@ -590,6 +592,7 @@ export class CallRig {
           existingProducers: this.remoteProducers,
           rtpCapabilities: { codecs: [], headerExtensions: [] },
           hostUserId: "remote-0#s",
+          ...(this.advertisesSenderCounts ? { reportsSenderPacketCounts: true } : {}),
         });
       case "produce":
         return this.ack(ack, { producerId: `local-${String(payload?.kind)}-${this.nextId++}` });
@@ -631,13 +634,19 @@ export class CallRig {
         if (this.dropEveryOtherSenderCountAnswer && this.senderCountQueries % 2 === 0) return;
         const request = senderPacketCountsRequestSchema.safeParse(payload);
         if (!request.success) return this.ack(ack, { error: "Invalid request" });
-        return this.ack(ack, {
-          counts: Object.fromEntries(
-            request.data.consumerIds
-              .filter((id) => this.senderPackets.has(id))
-              .map((id) => [id, this.senderPackets.get(id)]),
-          ),
-        });
+        const slow = this.slowSenderCountAnswers > 0;
+        if (slow) this.slowSenderCountAnswers -= 1;
+        return this.ack(
+          ack,
+          {
+            counts: Object.fromEntries(
+              request.data.consumerIds
+                .filter((id) => this.senderPackets.has(id))
+                .map((id) => [id, this.senderPackets.get(id)]),
+            ),
+          },
+          slow ? 3_000 : 0,
+        );
       }
       case "restartIce":
         return this.ack(
