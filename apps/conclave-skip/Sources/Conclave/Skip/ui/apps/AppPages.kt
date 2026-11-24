@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.toggleable
@@ -51,6 +52,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
@@ -117,6 +119,10 @@ internal fun AppWheelPage(host: AppHostPresenter, reservation: PaddingValues) {
                     val removing = wheel.isPending(AppPageCommandKind.removeEntry, target = entry.id)
                     AppSwipeToRemove(enabled = wheel.canEdit && !removing, onRemove = { host.removeWheelEntry(entry.id) }) {
                         ListItem(
+                            leadingContent = {
+                                Text(entry.number.toString(), style = MaterialTheme.typography.bodyMedium.copy(fontFeatureSettings = "tnum"),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.End, modifier = Modifier.widthIn(min = 20.dp))
+                            },
                             headlineContent = { Text(entry.label) },
                             trailingContent = if (removing) ({ CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp) }) else null,
                             modifier = Modifier.testTag("app.wheel.entry"),

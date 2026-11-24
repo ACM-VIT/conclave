@@ -818,9 +818,16 @@ struct AppWheelPage: View {
                             .accessibilityIdentifier("app.wheel.empty")
                     } else {
                         ForEach(wheel.entries) { entry in
-                            Text(verbatim: entry.label)
-                                .opacity(wheel.isPending(AppPageCommandKind.removeEntry, target: entry.id) ? HostingTheme.disabledOpacity : 1)
-                                .accessibilityIdentifier("app.wheel.entry")
+                            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                                Text(verbatim: String(entry.number))
+                                    .font(.subheadline.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                                    .frame(minWidth: 20, alignment: .trailing)
+                                Text(verbatim: entry.label)
+                            }
+                            .opacity(wheel.isPending(AppPageCommandKind.removeEntry, target: entry.id) ? HostingTheme.disabledOpacity : 1)
+                            .accessibilityElement(children: .combine)
+                            .accessibilityIdentifier("app.wheel.entry")
                         }
                         .onDelete(perform: deleteAction)
                     }

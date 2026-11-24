@@ -133,6 +133,12 @@ struct ACT8WheelWatchTests {
         #expect(AppEmbedAppCodec.parse(nil) == AppEmbedAppStatus.empty)
     }
 
+    @Test func wheelEntriesCarryTheirListNumber() throws {
+        let wheel = try #require(AppEmbedAppCodec.parse(Self.wheelApp(["Ada", "Ben", "Cy"])))
+        #expect(wheel.entries.map { $0.label } == ["Ada", "Ben", "Cy"])
+        #expect(wheel.entries.map { $0.number } == [1, 2, 3])
+    }
+
     @Test func statusEnvelopesCarryThePageData() throws {
         let fixtures = try Self.fixtures()
         let scope = try #require(fixtures["scope"] as? [String: Any])
@@ -199,7 +205,7 @@ struct ACT8WheelWatchTests {
         #expect(AppPagePolicy.wheelLabels("Ada\nBen\r\n\n  \nCy", room: 64) == ["Ada", "Ben", "Cy"])
         #expect(AppPagePolicy.wheelLabels("Ada\nBen\nCy", room: 2) == ["Ada", "Ben"])
         #expect(AppPagePolicy.wheelLabels("Ada", room: 0).isEmpty)
-        let entries = [WheelEntryModel(id: "e1", label: "ada"), WheelEntryModel(id: "e2", label: "Ben")]
+        let entries = [WheelEntryModel(id: "e1", label: "ada", number: 1), WheelEntryModel(id: "e2", label: "Ben", number: 2)]
         #expect(AppPagePolicy.missingNames(roster: ["Ada", "ADA", "Cy", " ", "ben", "Dee"], entries: entries) == ["Cy", "Dee"])
         #expect(AppPagePolicy.pickAction(canControl: true, canRequest: false, isPlaying: false) == .playNow)
         #expect(AppPagePolicy.pickAction(canControl: true, canRequest: false, isPlaying: true) == .enqueue)

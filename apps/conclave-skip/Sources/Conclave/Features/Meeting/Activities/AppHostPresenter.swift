@@ -159,6 +159,7 @@ enum AppPageCommandKind: String, CaseIterable, Equatable {
 struct WheelEntryModel: Equatable, Identifiable {
     let id: String
     let label: String
+    let number: Int
 }
 
 struct WheelResultModel: Equatable, Identifiable {
@@ -229,7 +230,7 @@ enum AppEmbedAppCodec {
                 let id = entry["id"] as? String ?? ""
                 guard AppBridgeCodec.isValidIdentifier(id),
                       let label = text(entry["label"], limit: AppWheelLimits.label, required: true) else { return nil }
-                entries.append(WheelEntryModel(id: id, label: label))
+                entries.append(WheelEntryModel(id: id, label: label, number: entries.count + 1))
             }
         }
         var results: [WheelResultModel] = []
