@@ -1421,6 +1421,49 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
   );
 
   socket.on(
+    "getSenderPacketCounts",
+    async (
+      data: { consumerIds?: unknown } | undefined,
+      callback: (
+        response: { counts: Record<string, number> } | { error: string },
+      ) => void,
+    ) => {
+      try {
+        const room = context.currentRoom;
+        const client = context.currentClient;
+        if (!room || !client) {
+          respond(callback, { error: "Not in a room" });
+          return;
+        }
+        if (!takeToken(socket, "senderPacketCounts", RATE_LIMITS.senderPacketCounts)) {
+          respond(callback, { error: "Too many requests" });
+          return;
+        }
+        const consumerIds = Array.isArray(data?.consumerIds)
+          ? data.consumerIds
+              .filter((id): id is string => typeof id === "string")
+              .slice(0, 16)
+          : [];
+        const counts: Record<string, number> = {};
+        for (const consumerId of consumerIds) {
+          const consumer = client.getConsumerById(consumerId);
+          if (!consumer || consumer.closed) continue;
+          const producer = room.getActiveProducerById(consumer.producerId);
+          if (!producer) continue;
+          const stats = await producer.getStats();
+          counts[consumerId] = stats.reduce(
+            (total, entry) => total + entry.packetCount,
+            0,
+          );
+        }
+        respond(callback, { counts });
+      } catch (error) {
+        respond(callback, { error: (error as Error).message });
+      }
+    },
+  );
+
+  socket.on(
     "resumeConsumer",
     async (
       data: { consumerId: string; requestKeyFrame?: boolean },

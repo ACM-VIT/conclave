@@ -2485,6 +2485,15 @@ export class Room {
   }
 
   getProducerInfoById(producerId: string): ProducerInfo | null {
+    const producer = this.getActiveProducerById(producerId);
+    if (!producer) {
+      return null;
+    }
+    const entry = this.producerIndex.get(producerId);
+    return entry ? this.producerInfoFromIndexEntry(entry) : null;
+  }
+
+  getActiveProducerById(producerId: string): Producer | null {
     const entry = this.producerIndex.get(producerId);
     if (!entry) {
       return null;
@@ -2493,7 +2502,7 @@ export class Room {
       this.removeProducerIndexById(producerId, entry.producer);
       return null;
     }
-    return this.producerInfoFromIndexEntry(entry);
+    return entry.producer;
   }
 
   producerMatchesCurrentWebcamCodecPolicy(
