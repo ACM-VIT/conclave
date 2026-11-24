@@ -310,6 +310,15 @@ fixed("Sol: a 502 at the final public check fails the run", () => {
   });
 });
 
+fixed("fuzz: a first deploy that finds an instance down for a moment waits for Docker to bring it back, so a failed canary rolls back to it", () =>
+  withStack({ "sfu-a": {} }, async (sfus, shared) => {
+    sfus["sfu-a"].crash(3500);
+    const result = await deploy(sfus, { env: { ...shared.env, DEPLOY_TEST_BAD_IMAGES: TARGET } });
+    assert.equal(result.code, 4, result.output);
+    assertServes(sfus["sfu-a"], LAST_GOOD);
+  }),
+);
+
 fixed("fuzz: a public route that is down when the deploy first looks still leaves the image the instance served on to go back to", () =>
   withStack({ "sfu-a": { publicRoute: true } }, async (sfus, shared) => {
     sfus["sfu-a"].publicFailures = 1;

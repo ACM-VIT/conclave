@@ -231,7 +231,11 @@ hide calls. A silent instance is started without a drain only when Docker
 affirmatively reports its container exited, dead, created or restarting
 right now, or compose has no container for it. A container that crashed and
 runs again counts as running, however often it restarted: it boots with the
-drain state it was created with and can take a call.
+drain state it was created with and can take a call. A stopped instance with no image it
+served on recorded is first given `HEALTH_TIMEOUT_SECONDS` for Docker to bring
+it back, so a container that crashed a moment before the deploy looked comes
+back with its image recorded as last-known-good; only one that stays down is
+rebuilt.
 When compose or `docker inspect` cannot answer, its state is unknown, so it
 counts as busy and is left alone (exit 1). Fix the URL, or stop the container
 if it is hung, and rerun.

@@ -1259,6 +1259,13 @@ deploy_service() {
     echo "${svc} answers but its /status cannot be read; not rebuilding it." >&2
     return 1
   else
+    if [[ -z "$lkg" && "$(container_state "$svc")" == "stopped" ]]; then
+      echo "${svc} is stopped and no image it served on is on record; giving Docker up to ${HEALTH_TIMEOUT_SECONDS}s to bring it back before it is rebuilt."
+      if wait_serving "$svc"; then
+        deploy_service "$svc"
+        return
+      fi
+    fi
     # Silent is not stopped: a wrong URL or proxy hides a container that may
     # still carry calls, however recently it started.
     case "$(hold_down "$svc" && echo down || container_state "$svc")" in
