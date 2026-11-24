@@ -192,6 +192,17 @@ const roomOf = (
     }, LEGACY_QA_SAVED_CHECK_MS);
     room.checkTimer.unref?.();
   });
+  authority.onSubjectsMerged(({ from, into }) => {
+    const moved = room.bySubject.get(from);
+    if (!moved) return;
+    room.bySubject.delete(from);
+    const kept = room.bySubject.get(into) ?? new Set<Feed>();
+    for (const feed of moved) {
+      feed.subject = into;
+      kept.add(feed);
+    }
+    room.bySubject.set(into, kept);
+  });
   authority.onPolicy((policy, previous) => {
     // A room that has just become a webinar starts on the old events. Its
     // hosts' views may not differ at all, so no frame would say so.
@@ -554,6 +565,9 @@ const index = (room: RoomFeeds, feed: Feed): void => {
  * false when the room does not run the Q&A app, and the caller then sends
  * the snapshot the old way.
  */
+export const legacyQaFeedSubjects = (authority: RoomAuthority): ReadonlyMap<Subject, number> =>
+  new Map([...(rooms.get(authority)?.bySubject ?? [])].map(([subject, feeds]) => [subject, feeds.size]));
+
 export const attachLegacyQaFeed = (context: ConnectionContext): boolean => {
   const authority = qaBookOf(context);
   const channel = context.currentRoom;

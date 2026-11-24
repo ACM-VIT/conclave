@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Json } from "@conclave/apps-sdk/authority";
 import { defineAuthority } from "@conclave/apps-sdk/authority/server";
 import { Harness, person, type Tab } from "./harness.js";
+import { attachLegacyQaFeed, legacyQaFeedSubjects } from "../../server/apps/authority/legacyWebinarQa.js";
 import { pollsContract } from "@conclave/apps-sdk/polls/core";
 import { pollsAuthority } from "@conclave/apps-sdk/polls/server";
 import { qaContract } from "@conclave/apps-sdk/qa/core";
@@ -136,6 +137,46 @@ describe("a guest's pass, as the room's apps see it (Daybreak)", () => {
 
     expect(asked.ok).toBe(true);
     expect(back.row("myQuestions", id)).not.toBeNull();
+  });
+
+  it("files an old-events feed under the merged person the moment the room links their passes, as the sweep later would (Neon)", async () => {
+    const room = new Harness([pollsAuthority, qaAuthority]);
+    const hostTab = await room.open(host, pollsContract);
+    const pollId = await pollIn(room, hostTab);
+    const onA = await guestQaTab(room, "guest-gp_gita-on-pass-a", "tab-1", "proof-of-pass-a");
+    expect((await onA.act("ask", { text: "Asked under the first pass" })).ok).toBe(true);
+    const onB = await guestTab(room, "guest-gp_gita-on-pass-b", "tab-2", "proof-of-pass-b");
+    expect((await onB.act("vote", { pollId, optionIds: ["o1"] })).ok).toBe(true);
+    expect(attachLegacyQaFeed(onB.context)).toBe(true);
+    await room.deliver();
+    const beforeTheLink = legacyQaFeedSubjects(room.authority);
+
+    linkPasses(room, "proof-of-pass-b", "proof-of-pass-a");
+    const rightAfterTheLink = legacyQaFeedSubjects(room.authority);
+    await room.deliver();
+    const onceTheRoomCaughtUp = legacyQaFeedSubjects(room.authority);
+
+    expect([...beforeTheLink.values()]).toEqual([1]);
+    expect(onceTheRoomCaughtUp).not.toEqual(beforeTheLink);
+    expect(rightAfterTheLink).toEqual(onceTheRoomCaughtUp);
+  });
+
+  it("lets go of an old-events feed whose person merged and then left before the room caught up (Neon)", async () => {
+    const room = new Harness([pollsAuthority, qaAuthority]);
+    const hostTab = await room.open(host, pollsContract);
+    const pollId = await pollIn(room, hostTab);
+    const onA = await guestQaTab(room, "guest-gp_gita-on-pass-a", "tab-1", "proof-of-pass-a");
+    expect((await onA.act("ask", { text: "Asked under the first pass" })).ok).toBe(true);
+    const onB = await guestTab(room, "guest-gp_gita-on-pass-b", "tab-2", "proof-of-pass-b");
+    expect((await onB.act("vote", { pollId, optionIds: ["o1"] })).ok).toBe(true);
+    expect(attachLegacyQaFeed(onB.context)).toBe(true);
+    await room.deliver();
+
+    linkPasses(room, "proof-of-pass-b", "proof-of-pass-a");
+    room.room.removeClient(onB.seat.id);
+    await room.deliver();
+
+    expect(legacyQaFeedSubjects(room.authority)).toEqual(new Map());
   });
 
   it("counts one vote for two tabs of a guest once the room links their passes", async () => {

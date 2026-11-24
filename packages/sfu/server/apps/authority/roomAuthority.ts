@@ -26,6 +26,7 @@ import {
   type Role,
   type RoomPolicy,
   type Subject,
+  type SubjectMerge,
 } from "@conclave/apps-sdk/authority/server";
 import type { Client } from "../../../config/classes/Client.js";
 import type { Room } from "../../../config/classes/Room.js";
@@ -331,6 +332,7 @@ export class RoomAuthority {
    */
   private readonly dormant = new Set<Subscription>();
   private readonly actionListeners = new Set<(notice: ActionNotice) => void>();
+  private readonly mergeListeners = new Set<(merge: SubjectMerge) => void>();
   private readonly policyListeners = new Set<
     (policy: RoomPolicy, previous: RoomPolicy) => void
   >();
@@ -544,6 +546,9 @@ export class RoomAuthority {
     this.actionListeners.add(listener);
   }
 
+  onSubjectsMerged(listener: (merge: SubjectMerge) => void): void {
+    this.mergeListeners.add(listener);
+  }
 
   /** Called when the room's policy has changed, with the new and the old. */
   onPolicy(listener: (policy: RoomPolicy, previous: RoomPolicy) => void): void {
@@ -665,6 +670,7 @@ export class RoomAuthority {
     for (const instance of this.instances.values()) {
       if (instance.mergeSubjects(merge, now)) this.afterWrite(instance);
     }
+    for (const listener of this.mergeListeners) listener(merge);
     this.scheduleSweep();
   }
 
@@ -724,6 +730,7 @@ export class RoomAuthority {
     this.byInstance.clear();
     this.dormant.clear();
     this.actionListeners.clear();
+    this.mergeListeners.clear();
     this.policyListeners.clear();
     this.watchers.clear();
     this.instances.clear();
