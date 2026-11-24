@@ -2,10 +2,14 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { tmpdir } from "node:os";
+import { availableParallelism, tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { describe, test as nodeTest } from "node:test";
 import { fileURLToPath } from "node:url";
+
+const registered = [];
+const test = (name, body) => registered.push({ name, body });
+const SUITE = "SFU deploy state";
 
 const scriptsDir = fileURLToPath(new URL(".", import.meta.url));
 const sfuDir = fileURLToPath(new URL("../packages/sfu/", import.meta.url));
@@ -261,7 +265,9 @@ const replaceService = async (
   } = {},
 ) => {
   const dir = mkdtempSync(join(tmpdir(), "deploy-sfu-state-"));
+  let healthRequests = 0;
   const healthServer = createServer((req, res) => {
+    if (req.url === "/health") healthRequests += 1;
     const [code, body] = healthAnswers[health]("sfu-a", deployId);
     res.writeHead(req.url === "/health" ? code : 404, { "content-type": "application/json" });
     res.end(JSON.stringify(body));
@@ -309,7 +315,7 @@ const replaceService = async (
       STAGING_MODES: join(dir, "staging-modes"),
       SFU_HEALTH_URL: healthUrl,
       SFU_DEPLOY_ID: deployId,
-      SFU_HEALTH_TIMEOUT_SECONDS: "3",
+      SFU_HEALTH_TIMEOUT_SECONDS: "1",
       SFU_HEALTH_POLL_SECONDS: "1",
       FIXED_STAMP: fixedStamp,
       FAKE_KILL_TRANSFER: killTransfer ? "1" : "",
@@ -323,6 +329,7 @@ const replaceService = async (
     const latest = archives.at(-1);
     return {
       ...result,
+      healthRequests,
       calls: readFileSync(log, "utf8").trim().split("\n").filter(Boolean),
       archives,
       imported: latest?.files ?? [],
@@ -531,14 +538,17 @@ for (const harness of harnesses) {
   });
 
   test(`${shell}: stops a replacement that never answers healthy as this deploy`, async () => {
-    for (const health of ["unavailable", "an earlier deploy", "another SFU", "an older image"]) {
-      const { status, calls, stderr } = await replaceService(harness, { health });
+    const answers = ["unavailable", "an earlier deploy", "another SFU", "an older image"];
+    const outcomes = await Promise.all(answers.map((health) => replaceService(harness, { health })));
+    outcomes.forEach(({ status, calls, stderr, healthRequests }, at) => {
+      const health = answers[at];
       assert.notEqual(status, 0, `${health} was accepted`);
       const start = callIndex(calls, /^compose .* up -d sfu-a$/);
       const stop = calls.findLastIndex((call) => /^compose .* stop sfu-a$/.test(call));
       assert.ok(start >= 0 && stop > start, `${health}\n${calls.join("\n")}`);
       assert.match(stderr, /did not answer healthy/, health);
-    }
+      assert.ok(healthRequests >= 2, `${health}: the deploy asked for health ${healthRequests} time(s), so it never retried`);
+    });
   });
 
   test(`${shell}: a payload that arrives changed stops the deploy before anything is stopped`, async () => {
@@ -932,7 +942,7 @@ const deploySfus = async (shell, replacements, { layerHolders = "" } = {}) => {
       FAKE_LAYER_HOLDERS: layerHolders,
       SFU_A_URL: urls["sfu-a"],
       SFU_B_URL: urls["sfu-b"],
-      SFU_HEALTH_TIMEOUT_SECONDS: "3",
+      SFU_HEALTH_TIMEOUT_SECONDS: "1",
       SFU_HEALTH_POLL_SECONDS: "1",
       DRAIN_POLL_SECONDS: "1",
     });
@@ -984,3 +994,7 @@ for (const shell of deployShells) {
     assert.match(stderr, /sfu-a did not answer healthy/);
   });
 }
+
+describe(SUITE, { concurrency: Math.min(16, availableParallelism() * 2) }, () => {
+  for (const { name, body } of registered) nodeTest(name, body);
+});

@@ -192,6 +192,7 @@ $browserHostAddress = if (-not [string]::IsNullOrWhiteSpace($env:BROWSER_HOST_AD
 Write-Host "Waiting for $healthUrl..."
 $healthy = $false
 $healthTimeout = if ([string]::IsNullOrWhiteSpace($env:BROWSER_SERVICE_HEALTH_TIMEOUT_SECONDS)) { 120 } else { [int]$env:BROWSER_SERVICE_HEALTH_TIMEOUT_SECONDS }
+$healthPoll = if ([string]::IsNullOrWhiteSpace($env:BROWSER_SERVICE_HEALTH_POLL_SECONDS)) { 2 } else { [double]$env:BROWSER_SERVICE_HEALTH_POLL_SECONDS }
 $deadline = (Get-Date).AddSeconds($healthTimeout)
 while ((Get-Date) -lt $deadline) {
   try {
@@ -207,7 +208,7 @@ while ((Get-Date) -lt $deadline) {
     }
   } catch {
   }
-  Start-Sleep -Seconds 2
+  Start-Sleep -Milliseconds ([int]($healthPoll * 1000))
 }
 if (-not $healthy) {
   Exit-WithError "The shared browser service from this deploy ($deployId) did not answer healthy at $healthUrl.`nSee: docker compose -f $composeFile logs browser-service"

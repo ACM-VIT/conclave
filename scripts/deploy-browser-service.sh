@@ -118,7 +118,7 @@ while (( $(date +%s) < deadline )); do
     healthy="true"
     break
   fi
-  sleep 2
+  sleep "${BROWSER_SERVICE_HEALTH_POLL_SECONDS:-2}"
 done
 if [[ "$healthy" != "true" ]]; then
   echo "The shared browser service from this deploy (${BROWSER_SERVICE_DEPLOY_ID}) did not answer healthy at ${HEALTH_URL}." >&2

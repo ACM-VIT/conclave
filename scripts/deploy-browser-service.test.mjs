@@ -5,9 +5,9 @@ import { once } from "node:events";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
-import { tmpdir } from "node:os";
+import { availableParallelism, tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { describe, test as nodeTest } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const scriptsDir = fileURLToPath(new URL(".", import.meta.url));
@@ -44,6 +44,10 @@ const powerShells = (process.env.CONCLAVE_PWSH_BINARIES ?? "pwsh")
   .filter(Boolean)
   .filter((binary) => spawnSync(binary, ["-NoProfile", "-NonInteractive", "-Command", "exit 0"]).status === 0);
 
+const registered = [];
+const test = (name, body) => registered.push({ name, body });
+const SUITE = "browser service deploy";
+
 const shells = [
   { name: "bash", script: "deploy-browser-service.sh", command: "bash", args: [] },
   ...powerShells.map((binary) => ({ name: `pwsh ${binary}`, script: "deploy-browser-service.ps1", command: binary, args: ["-NoProfile", "-NonInteractive", "-File"] })),
@@ -73,7 +77,9 @@ const deploy = async (
 ) => {
   const root = mkdtempSync(join(tmpdir(), "deploy-browser-service-"));
   const deployIdFile = join(root, "deploy-id");
+  let healthRequests = 0;
   const health = createServer((req, res) => {
+    if (req.url === "/health") healthRequests += 1;
     const deployId = existsSync(deployIdFile) ? readFileSync(deployIdFile, "utf8") : null;
     res.writeHead(req.url === "/health" ? 200 : 404, { "content-type": "application/json" });
     res.end(JSON.stringify(healthBodies[answers](deployId)));
@@ -94,7 +100,8 @@ const deploy = async (
       HOME: root,
       DOCKER_LOG: log,
       DEPLOY_ID_FILE: deployIdFile,
-      BROWSER_SERVICE_HEALTH_TIMEOUT_SECONDS: "5",
+      BROWSER_SERVICE_HEALTH_TIMEOUT_SECONDS: "2",
+      BROWSER_SERVICE_HEALTH_POLL_SECONDS: "0.2",
       FAKE_CHECK_STATUS: String(checkStatus),
       FAKE_PREVIOUS_CONTAINER: previousContainer,
       FAKE_PREVIOUS_RUNNING: previousRunning,
@@ -104,7 +111,7 @@ const deploy = async (
       BROWSER_SERVICE_HOST: serviceHost,
       BROWSER_SERVICE_PORT: String(health.address().port),
     });
-    return { ...result, calls: readFileSync(log, "utf8").trim().split("\n").filter(Boolean) };
+    return { ...result, healthRequests, calls: readFileSync(log, "utf8").trim().split("\n").filter(Boolean) };
   } finally {
     await new Promise((resolve) => health.close(resolve));
     rmSync(root, { recursive: true, force: true });
@@ -149,12 +156,14 @@ for (const shell of shells) {
   });
 
   test(`${shell.name}: only this deploy's browser service counts as healthy`, async () => {
-    for (const answers of ["empty", "sfu", "previous"]) {
-      const { status, calls, stderr } = await deploy(shell, [], { answers });
-      assert.notEqual(status, 0, `${answers} was accepted as healthy`);
+    const kinds = ["empty", "sfu", "previous"];
+    const outcomes = await Promise.all(kinds.map((answers) => deploy(shell, [], { answers })));
+    outcomes.forEach(({ status, calls, stderr, healthRequests }, at) => {
+      assert.notEqual(status, 0, `${kinds[at]} was accepted as healthy`);
       assert.ok(index(calls, / up -d /) >= 0, calls.join("\n"));
-      assert.match(stderr, /did not answer healthy/, answers);
-    }
+      assert.match(stderr, /did not answer healthy/, kinds[at]);
+      assert.ok(healthRequests >= 2, `${kinds[at]}: the deploy asked for health ${healthRequests} time(s), so it never retried`);
+    });
   });
 
   test(`${shell.name}: tells the check which running container it is replacing, and only a running one`, async () => {
@@ -247,11 +256,12 @@ createServer((req, res) => {
 }).listen(Number(port), host);
 `;
 
+const handedOutPorts = new Set();
 const freePort = () =>
   new Promise((resolve) => {
     const probe = createNetServer().listen(0, "127.0.0.1", () => {
       const { port } = probe.address();
-      probe.close(() => resolve(port));
+      probe.close(() => (handedOutPorts.has(port) ? freePort().then(resolve) : (handedOutPorts.add(port), resolve(port))));
     });
   });
 
@@ -333,6 +343,7 @@ const deployWithRealCheck = async (shell, { setting, localhost = "", serviceHost
       BROWSER_SERVICE_HOST: setting,
       BROWSER_SERVICE_PORT: String(port),
       BROWSER_SERVICE_HEALTH_TIMEOUT_SECONDS: "10",
+      BROWSER_SERVICE_HEALTH_POLL_SECONDS: "0.2",
     });
     return { ...result, port, polled: result.stdout.match(/Waiting for (\S+)\.\.\./)?.[1] ?? null };
   } finally {
@@ -385,3 +396,7 @@ for (const shell of shells) {
     assert.deepEqual(outcomes, cases.map(({ localhost }) => ({ localhost, status: 0, stderr: "" })));
   });
 }
+
+describe(SUITE, { concurrency: Math.min(16, availableParallelism() * 2) }, () => {
+  for (const { name, body } of registered) nodeTest(name, body);
+});
