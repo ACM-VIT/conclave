@@ -8,10 +8,9 @@ import {
   emitWebinarAttendeeCountChanged,
   emitWebinarFeedChanged,
 } from "../../webinarNotifications.js";
-import { getSocketContext, type ConnectionContext } from "../context.js";
+import type { ConnectionContext } from "../context.js";
 import { interruptActiveConclaveAnswers } from "../conclaveRelayLifecycle.js";
-import { emitChatHistorySnapshot } from "./chatHistory.js";
-import { registerAdminHandlers } from "./adminHandlers.js";
+import { activateHost } from "./adminHandlers.js";
 
 const promoteNextAdmin = (room: Room): Admin | null => {
   for (const client of room.clients.values()) {
@@ -107,34 +106,7 @@ export const registerDisconnectHandlers = (
               Logger.info(
                 `Promoted ${promoted.id} to admin in room ${roomId} after host disconnect.`,
               );
-              const promotedContext = getSocketContext(promoted.socket);
-              if (promotedContext) {
-                promotedContext.currentClient = promoted;
-                promotedContext.currentRoom = activeRoom;
-                registerAdminHandlers(promotedContext, { roomId });
-              }
-              if (activeRoom.cleanupTimer) {
-                activeRoom.stopCleanupTimer();
-              }
-              const pendingUsers = Array.from(
-                activeRoom.pendingClients.values(),
-              ).map((pending) => ({
-                userId: pending.userKey,
-                displayName: pending.displayName || pending.userKey,
-              }));
-              promoted.socket.emit("pendingUsersSnapshot", {
-                users: pendingUsers,
-                roomId,
-              });
-              emitChatHistorySnapshot(promoted.socket, activeRoom);
-              promoted.socket.emit("roomLockChanged", {
-                locked: activeRoom.isLocked,
-                roomId,
-              });
-              promoted.socket.emit("hostAssigned", {
-                roomId,
-                hostUserId: promoted.id,
-              });
+              activateHost(state, activeRoom, promoted, promoted.id);
               if (activeRoom.pendingClients.size > 0) {
                 for (const pending of activeRoom.pendingClients.values()) {
                   pending.socket.emit("waitingRoomStatus", {

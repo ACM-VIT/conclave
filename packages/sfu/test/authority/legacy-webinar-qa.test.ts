@@ -19,6 +19,7 @@ import {
 import { Admin } from "../../config/classes/Admin.js";
 import { Client } from "../../config/classes/Client.js";
 import { LocalRoomRegistry } from "../../server/roomRegistry.js";
+import { forceRemoveClientNow } from "../../server/admin/controlPlane.js";
 import { createSfuState } from "../../server/state.js";
 import type {
   WebinarQaChangedNotification,
@@ -81,6 +82,7 @@ const oldClient = async (
   const connection = await connect(stack, who, {
     ...options,
     prepare: (socket) => {
+      options.prepare?.(socket);
       socket.on("webinar:qaSnapshot", (snapshot: WebinarQaSnapshot) => {
         snapshots += 1;
         entries.clear();
@@ -767,24 +769,62 @@ describe("webinar Q&A on a server without the runtime", () => {
     expect(host.entries.get(asked.id ?? "")?.question).toBe("Is this recorded?");
   });
 
-  it("sends a new host the list with the questions only hosts see", async () => {
+  const HOST_SET = ["pendingUsersSnapshot", "roomLockChanged", "webinar:handQueueChanged", "hostAssigned"];
+  const waysToBecomeHost: [string, (stack: Stack, host: { socket: { disconnect: () => void }; seatId: string }, panelistSeat: string) => Promise<void>][] = [
+    ["promoted to co-host", async (_stack, host, panelistSeat) => {
+      const promoted = await ask<{ success?: boolean; error?: string }>(host.socket as never, "promoteHost", { userId: panelistSeat });
+      expect(promoted.success).toBe(true);
+    }],
+    ["handed the host role", async (_stack, host, panelistSeat) => {
+      const transferred = await ask<{ success?: boolean; error?: string }>(host.socket as never, "admin:transferHost", { userId: panelistSeat });
+      expect(transferred.success).toBe(true);
+    }],
+    ["promoted when the last host disconnects", async (_stack, host) => {
+      host.socket.disconnect();
+    }],
+    ["promoted when the last host is removed from the room", async (stack, host) => {
+      expect(forceRemoveClientNow({ io: stack.io, state: stack.state, room: stack.room, userId: host.seatId })).toBe(true);
+    }],
+  ];
+
+  it.each(waysToBecomeHost)(
+    "sends a panelist %s everything a host needs, the questions only hosts see included",
+    async (_way, becomeHost) => {
+      const stack = await startWebinarWithoutRuntime();
+      const host = await oldClient(stack, asha);
+      const panelist = await oldClient(stack, omar);
+      const attendee = await oldClient(stack, vik, asAttendee);
+      const asked = await attendee.submit("Waiting for a host");
+      await until(() => host.entries.has(asked.id ?? ""), "the host sees it");
+      const heldBefore = panelist.entries.has(asked.id ?? "");
+      const seen: string[] = [];
+      panelist.socket.onAny((event: string) => seen.push(event));
+
+      await becomeHost(stack, host, panelist.seatId);
+      await until(() => seen.includes("hostAssigned"), "the panelist is told they are a host");
+      await wait(150);
+
+      expect(heldBefore).toBe(false);
+      expect(panelist.entries.get(asked.id ?? "")?.status).toBe("pending");
+      expect(HOST_SET.filter((event) => !seen.includes(event))).toEqual([]);
+    },
+  );
+
+  it("sends the owner arriving at a webinar everything a host needs, the questions only hosts see included", async () => {
     const stack = await startWebinarWithoutRuntime();
-    const host = await oldClient(stack, asha);
     const panelist = await oldClient(stack, omar);
     const attendee = await oldClient(stack, vik, asAttendee);
-    const asked = await attendee.submit("Waiting for a host");
-    await until(() => host.entries.has(asked.id ?? ""), "the host sees it");
-    const listsBefore = panelist.snapshots();
-    const heldBefore = panelist.entries.has(asked.id ?? "");
+    const asked = await attendee.submit("Asked before the owner came");
+    await wait(150);
+    const seen: string[] = [];
 
-    const promoted = await ask<{ success?: boolean; error?: string }>(host.socket, "promoteHost", {
-      userId: panelist.seatId,
-    });
-    await until(() => panelist.snapshots() > listsBefore, "the new host is sent the list");
+    const owner = await oldClient(stack, asha, { prepare: (socket) => socket.onAny((event: string) => seen.push(event)) });
+    await until(() => owner.entries.has(asked.id ?? ""), "the owner is sent the list");
+    await wait(150);
 
-    expect(promoted.success).toBe(true);
-    expect(heldBefore).toBe(false);
-    expect(panelist.entries.get(asked.id ?? "")?.status).toBe("pending");
+    expect(panelist.entries.has(asked.id ?? "")).toBe(false);
+    expect(owner.entries.get(asked.id ?? "")?.status).toBe("pending");
+    expect(HOST_SET.filter((event) => !seen.includes(event))).toEqual([]);
   });
 
   it("sends a panelist the list as they join a webinar", async () => {

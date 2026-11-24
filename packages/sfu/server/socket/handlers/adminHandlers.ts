@@ -23,6 +23,7 @@ import {
   SUPER_ADMIN_REMOVAL_ERROR,
 } from "../../admin/moderation.js";
 import { forceCloseRoom, isCurrentRoom, markRoomEnded } from "../../rooms.js";
+import type { SfuState } from "../../state.js";
 import { grantWebinarQaList } from "../../webinarNotifications.js";
 import { getSocketAuthUser } from "../auth.js";
 import { getSocketContext, type ConnectionContext } from "../context.js";
@@ -332,33 +333,43 @@ const performBulkMediaClosure = (options: {
   return { affectedUsers, affectedProducers, users };
 };
 
-const activatePromotedAdmin = (
-  context: ConnectionContext,
-  promoted: Admin,
-  roomId: string,
+export const activateHost = (
+  state: SfuState,
+  room: Room,
+  host: Admin,
+  hostUserId: string | null,
 ): void => {
-  const promotedContext = getSocketContext(promoted.socket);
-
-  if (!promotedContext || !context.currentRoom) {
-    return;
+  const roomId = room.id;
+  const hostContext = getSocketContext(host.socket);
+  if (hostContext) {
+    hostContext.currentClient = host;
+    hostContext.currentRoom = room;
+    registerAdminHandlers(hostContext, { roomId });
   }
-
-  promotedContext.currentClient = promoted;
-  promotedContext.currentRoom = context.currentRoom;
-  registerAdminHandlers(promotedContext, { roomId });
-
-  promoted.socket.emit("pendingUsersSnapshot", {
-    users: toPendingUserSnapshots(context.currentRoom),
+  if (room.cleanupTimer) {
+    room.stopCleanupTimer();
+  }
+  host.socket.emit("pendingUsersSnapshot", {
+    users: toPendingUserSnapshots(room),
     roomId,
   });
-  emitChatHistorySnapshot(promoted.socket, context.currentRoom);
-
-  promoted.socket.emit("admin:roomStateChanged", {
+  emitChatHistorySnapshot(host.socket, room);
+  host.socket.emit("roomLockChanged", {
+    locked: room.isLocked,
     roomId,
-    snapshot: toRoomSnapshot(context.currentRoom),
   });
-  // A host reads questions others do not, so the list comes again.
-  grantWebinarQaList(context.state, context.currentRoom, promoted);
+  host.socket.emit("admin:roomStateChanged", {
+    roomId,
+    snapshot: toRoomSnapshot(room),
+  });
+  if (state.webinarConfigs.get(room.channelId)?.enabled) {
+    host.socket.emit("webinar:handQueueChanged", {
+      roomId,
+      queue: room.getWebinarHandQueue(),
+    });
+  }
+  grantWebinarQaList(state, room, host);
+  host.socket.emit("hostAssigned", { roomId, hostUserId });
 };
 
 export const registerAdminHandlers = (
@@ -718,21 +729,13 @@ export const registerAdminHandlers = (
       return;
     }
 
-    const alreadyAdmin = targetClient instanceof Admin;
     const promoted = currentRoom.promoteClientToAdmin(normalizedTargetId);
     if (!promoted) {
       respond(cb, { error: "Failed to promote user" });
       return;
     }
 
-    if (!alreadyAdmin) {
-      activatePromotedAdmin(context, promoted, currentRoom.id);
-    }
-
-    promoted.socket.emit("hostAssigned", {
-      roomId: currentRoom.id,
-      hostUserId: currentRoom.getHostUserId() ?? promoted.id,
-    });
+    activateHost(state, currentRoom, promoted, currentRoom.getHostUserId() ?? promoted.id);
 
     context.io.to(currentRoom.channelId).emit("adminUsersChanged", {
       roomId: currentRoom.id,
@@ -780,7 +783,6 @@ export const registerAdminHandlers = (
       return;
     }
 
-    const alreadyAdmin = targetClient instanceof Admin;
     const promoted = currentRoom.promoteClientToAdmin(normalizedTargetId);
     if (!promoted) {
       respond(cb, { error: "Failed to promote user" });
@@ -788,10 +790,6 @@ export const registerAdminHandlers = (
     }
 
     currentRoom.hostUserKey = targetUserKey;
-
-    if (!alreadyAdmin) {
-      activatePromotedAdmin(context, promoted, currentRoom.id);
-    }
 
     io.to(currentRoom.channelId).emit("hostChanged", {
       roomId: currentRoom.id,
@@ -802,10 +800,7 @@ export const registerAdminHandlers = (
       hostUserIds: currentRoom.getAdminUserIds(),
     });
 
-    promoted.socket.emit("hostAssigned", {
-      roomId: currentRoom.id,
-      hostUserId: promoted.id,
-    });
+    activateHost(state, currentRoom, promoted, promoted.id);
 
     respond(cb, {
       success: true,

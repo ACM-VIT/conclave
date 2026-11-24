@@ -16,8 +16,7 @@ import {
   emitWebinarAttendeeCountChanged,
   emitWebinarFeedChanged,
 } from "../webinarNotifications.js";
-import { getSocketContext } from "../socket/context.js";
-import { registerAdminHandlers } from "../socket/handlers/adminHandlers.js";
+import { activateHost } from "../socket/handlers/adminHandlers.js";
 import { isSuperAdminClient } from "./moderation.js";
 
 type ParticipantRole = "host" | "admin" | "participant" | "attendee";
@@ -179,33 +178,7 @@ const handleAdminRemoved = (
   if (!room.hasActiveAdmin()) {
     const promoted = promoteNextAdmin(room);
     if (promoted) {
-      const promotedContext = getSocketContext(promoted.socket);
-      if (promotedContext) {
-        promotedContext.currentClient = promoted;
-        promotedContext.currentRoom = room;
-        registerAdminHandlers(promotedContext, { roomId });
-      }
-      if (room.cleanupTimer) {
-        room.stopCleanupTimer();
-      }
-      const pendingUsers = Array.from(room.pendingClients.values()).map(
-        (pending) => ({
-          userId: pending.userKey,
-          displayName: pending.displayName || pending.userKey,
-        }),
-      );
-      promoted.socket.emit("pendingUsersSnapshot", {
-        users: pendingUsers,
-        roomId,
-      });
-      promoted.socket.emit("roomLockChanged", {
-        locked: room.isLocked,
-        roomId,
-      });
-      promoted.socket.emit("hostAssigned", {
-        roomId,
-        hostUserId: promoted.id,
-      });
+      activateHost(state, room, promoted, promoted.id);
       if (room.pendingClients.size > 0) {
         for (const pending of room.pendingClients.values()) {
           pending.socket.emit("waitingRoomStatus", {
