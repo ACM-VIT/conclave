@@ -266,6 +266,7 @@ export class Room {
   public lockedAllowedUsers: Set<string> = new Set();
   public blockedUsers: Set<string> = new Set();
   public cleanupTimer: NodeJS.Timeout | null = null;
+  private cleanupTimerDeadline = 0;
   private primaryHostUserKey: string | null = null;
   private _isLocked: boolean = false;
   private _isChatLocked: boolean = false;
@@ -2691,8 +2692,13 @@ export class Room {
     return this.pendingDisconnects.get(userId)?.notificationEmittedAt != null;
   }
 
+  get cleanupDeadline(): number | null {
+    return this.cleanupTimer ? this.cleanupTimerDeadline : null;
+  }
+
   startCleanupTimer(callback: () => void) {
     if (this.cleanupTimer) return;
+    this.cleanupTimerDeadline = Date.now() + config.adminCleanupTimeout;
 
     Logger.debug(
       `Room ${this.id}: Cleanup timer started (${config.adminCleanupTimeout}ms)`,

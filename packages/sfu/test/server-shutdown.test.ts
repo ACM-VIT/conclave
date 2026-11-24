@@ -206,3 +206,35 @@ describe("a forced drain through POST /drain", () => {
     expect((await ask(removedBack, removed)).status).toBe("waiting");
   });
 });
+
+describe("an operator blocking a meeting's only host through the HTTP route", () => {
+  it("hands the host's seat to someone still in the meeting", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const sfu = makeSfu(createMemoryRoomRecoveryStore(), "sfu-a");
+    const hostTab = connect(sfu, host);
+    expect((await ask(hostTab, host)).status).toBe("joined");
+    const memberTab = connect(sfu, member);
+    await ask(memberTab, member);
+    await send(hostTab, "admitUser", { userId: member.userId });
+    expect((await ask(memberTab, member)).status).toBe("joined");
+
+    const blocked = await fetch(
+      `${await serve(sfu)}/admin/rooms/${CODE}/users/${encodeURIComponent(`${host.userId}#${host.sessionId}`)}/block`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-sfu-secret": config.sfuSecret,
+          "x-sfu-client": "conclave",
+        },
+        body: JSON.stringify({ reason: "Blocked by operator" }),
+      },
+    );
+    expect(blocked.status).toBe(200);
+    const room = sfu.state.rooms.get(CHANNEL);
+    expect(room?.isBlocked(host.userId)).toBe(true);
+    expect(memberTab.context.currentClient).toBeInstanceOf(Admin);
+  });
+});
+

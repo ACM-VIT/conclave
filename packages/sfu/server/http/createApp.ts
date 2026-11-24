@@ -22,6 +22,7 @@ import {
   clearAllRaisedHands,
   closeClientProducers,
   closeProducerById,
+  ensureHost,
   kickClient,
   rejectAllPendingUsers,
   resolveRoom,
@@ -1414,6 +1415,7 @@ export const createSfuApp = ({
         }
       }
     }
+    ensureHost(io, state, lookup.room);
 
     emitPendingUsersSnapshot(io, lookup.room);
 
@@ -1542,6 +1544,7 @@ export const createSfuApp = ({
     );
     lookup.room.blockUser(userKey);
     kickClient(lookup.room, userId, reason, { io, state });
+    ensureHost(io, state, lookup.room);
 
     res.json({
       success: true,

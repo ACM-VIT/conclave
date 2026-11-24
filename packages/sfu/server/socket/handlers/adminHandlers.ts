@@ -12,6 +12,7 @@ import {
   closeClientProducers,
   closeProducerById,
   closeProducerForMediaKey,
+  ensureHost,
   kickClient,
   rejectAllPendingUsers,
   toPendingUserSnapshots,
@@ -1025,6 +1026,7 @@ export const registerAdminHandlers = (
           }
         }
       }
+      ensureHost(io, state, guard.room);
 
       io.to(guard.room.channelId).emit("pendingUsersSnapshot", {
         users: toPendingUserSnapshots(guard.room),

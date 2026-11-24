@@ -1,31 +1,15 @@
-import { Admin } from "../../../config/classes/Admin.js";
-import type { Room } from "../../../config/classes/Room.js";
 import { config } from "../../../config/config.js";
 import type { AppsAwarenessData } from "../../../types.js";
 import { Logger } from "../../../utilities/loggers.js";
+import { ensureHost } from "../../admin/controlPlane.js";
 import { cleanupRoom } from "../../rooms.js";
 import { leaveNextMeetingLobby } from "../../nextMeetingLobby.js";
 import {
   emitWebinarAttendeeCountChanged,
   emitWebinarFeedChanged,
 } from "../../webinarNotifications.js";
-import { getSocketContext, type ConnectionContext } from "../context.js";
+import type { ConnectionContext } from "../context.js";
 import { interruptActiveConclaveAnswers } from "../conclaveRelayLifecycle.js";
-import { emitChatHistorySnapshot } from "./chatHistory.js";
-import { registerAdminHandlers } from "./adminHandlers.js";
-
-const promoteNextAdmin = (room: Room): Admin | null => {
-  for (const client of room.clients.values()) {
-    if (client instanceof Admin || client.isObserver) {
-      continue;
-    }
-    const promoted = room.promoteClientToAdmin(client.id, "fallback");
-    if (promoted) {
-      return promoted;
-    }
-  }
-  return null;
-};
 
 export const registerDisconnectHandlers = (
   context: ConnectionContext,
@@ -69,7 +53,6 @@ export const registerDisconnectHandlers = (
           return;
         }
 
-        const wasAdmin = activeClient instanceof Admin && !activeClient.isObserver;
         const isWebinarAttendee = activeClient.isWebinarAttendee;
         const awarenessRemovals = activeRoom.clearUserAwareness(userId);
 
@@ -102,106 +85,10 @@ export const registerDisconnectHandlers = (
         emitWebinarAttendeeCountChanged(io, state, activeRoom);
         emitWebinarFeedChanged(io, state, activeRoom);
 
-        if (wasAdmin) {
-          if (!activeRoom.hasActiveAdmin()) {
-            const promoted = promoteNextAdmin(activeRoom);
-            if (promoted) {
-              Logger.info(
-                `Promoted ${promoted.id} to admin in room ${roomId} after host disconnect.`,
-              );
-              const promotedContext = getSocketContext(promoted.socket);
-              if (promotedContext) {
-                promotedContext.currentClient = promoted;
-                promotedContext.currentRoom = activeRoom;
-                registerAdminHandlers(promotedContext, { roomId });
-              }
-              if (activeRoom.cleanupTimer) {
-                activeRoom.stopCleanupTimer();
-              }
-              const pendingUsers = Array.from(
-                activeRoom.pendingClients.values(),
-              ).map((pending) => ({
-                userId: pending.userKey,
-                displayName: pending.displayName || pending.userKey,
-              }));
-              promoted.socket.emit("pendingUsersSnapshot", {
-                users: pendingUsers,
-                roomId,
-              });
-              emitChatHistorySnapshot(promoted.socket, activeRoom);
-              promoted.socket.emit("roomLockChanged", {
-                locked: activeRoom.isLocked,
-                roomId,
-              });
-              promoted.socket.emit("hostAssigned", {
-                roomId,
-                hostUserId: promoted.id,
-              });
-              if (activeRoom.pendingClients.size > 0) {
-                for (const pending of activeRoom.pendingClients.values()) {
-                  pending.socket.emit("waitingRoomStatus", {
-                    message: "A host is available to let you in.",
-                    roomId,
-                  });
-                }
-              }
-            } else {
-              Logger.info(
-                `Last admin left room ${roomId}. Room remains open without an admin.`,
-              );
-              if (activeRoom.pendingClients.size > 0) {
-                Logger.info(
-                  `Room ${roomId} has pending users but no admins. Notifying waiting clients.`,
-                );
-                for (const pending of activeRoom.pendingClients.values()) {
-                  pending.socket.emit("waitingRoomStatus", {
-                    message: "No one to let you in.",
-                    roomId,
-                  });
-                }
-              }
-              activeRoom.startCleanupTimer(() => {
-                if (state.rooms.has(roomChannelId)) {
-                  const roomInState = state.rooms.get(roomChannelId);
-                  if (roomInState) {
-                    if (roomInState.hasActiveAdmin()) {
-                      return;
-                    }
-                    if (roomInState.pendingClients.size > 0) {
-                      for (const pending of roomInState.pendingClients.values()) {
-                        pending.socket.emit("waitingRoomStatus", {
-                          message: "No one to let you in.",
-                          roomId,
-                        });
-                      }
-                    }
-                    if (roomInState.isEmpty()) {
-                      Logger.info(
-                        `Cleanup executed for room ${roomId}. Room is empty.`,
-                      );
-                      cleanupRoom(state, roomChannelId);
-                    }
-                  }
-                }
-              });
-            }
-          } else {
-            Logger.info(`Admin left room ${roomId}, but other admins remain.`);
-          }
-
-          io.to(roomChannelId).emit("hostChanged", {
-            roomId,
-            hostUserId: activeRoom.getHostUserId(),
-          });
-          io.to(roomChannelId).emit("adminUsersChanged", {
-            roomId,
-            hostUserIds: activeRoom.getAdminUserIds(),
-          });
-        }
-
         if (state.rooms.has(roomChannelId)) {
           cleanupRoom(state, roomChannelId);
         }
+        ensureHost(io, state, activeRoom);
 
         Logger.info(`User ${userId} left room ${roomId}`);
 

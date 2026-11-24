@@ -10,7 +10,7 @@ import type {
 import type { Room } from "../../config/classes/Room.js";
 import type { AppsAwarenessData } from "../../types.js";
 import { isGuestUserKey } from "../identity.js";
-import { cleanupRoom, getRoomChannelId } from "../rooms.js";
+import { cleanupRoom, forceCloseRoom, getRoomChannelId, markRoomEnded } from "../rooms.js";
 import type { SfuState } from "../state.js";
 import {
   emitWebinarAttendeeCountChanged,
@@ -18,6 +18,7 @@ import {
 } from "../webinarNotifications.js";
 import { getSocketContext } from "../socket/context.js";
 import { registerAdminHandlers } from "../socket/handlers/adminHandlers.js";
+import { emitChatHistorySnapshot } from "../socket/handlers/chatHistory.js";
 import { isSuperAdminClient } from "./moderation.js";
 
 type ParticipantRole = "host" | "admin" | "participant" | "attendee";
@@ -168,86 +169,95 @@ const promoteNextAdmin = (room: Room): Admin | null => {
   return null;
 };
 
-const handleAdminRemoved = (
-  io: SocketIOServer,
-  state: SfuState,
-  room: Room,
-): void => {
-  const roomId = room.id;
-  const roomChannelId = room.channelId;
+export const NO_HOST_LEFT_MESSAGE = "The meeting ended because no one who can host it is left.";
 
+const endForNoHost = (io: SocketIOServer, state: SfuState, room: Room): void => {
+  const pendingSockets = Array.from(room.pendingClients.values(), (pending) => pending.socket);
+  markRoomEnded(state, room, { message: NO_HOST_LEFT_MESSAGE, endedBy: "server" });
+  io.to(room.channelId).emit("roomEnded", {
+    roomId: room.id,
+    message: NO_HOST_LEFT_MESSAGE,
+    endedBy: "server",
+  });
+  for (const socket of pendingSockets) {
+    socket.emit("roomEnded", { roomId: room.id, message: NO_HOST_LEFT_MESSAGE, endedBy: "server" });
+  }
+  io.in(room.channelId).disconnectSockets(true);
+  for (const socket of pendingSockets) socket.disconnect(true);
+  forceCloseRoom(state, room.channelId);
+};
+
+const announcePromotedHost = (room: Room, promoted: Admin): void => {
+  const roomId = room.id;
+  const promotedContext = getSocketContext(promoted.socket);
+  if (promotedContext) {
+    promotedContext.currentClient = promoted;
+    promotedContext.currentRoom = room;
+    registerAdminHandlers(promotedContext, { roomId });
+  }
+  room.stopCleanupTimer();
+  promoted.socket.emit("pendingUsersSnapshot", {
+    users: Array.from(room.pendingClients.values()).map((pending) => ({
+      userId: pending.userKey,
+      displayName: pending.displayName || pending.userKey,
+    })),
+    roomId,
+  });
+  emitChatHistorySnapshot(promoted.socket, room);
+  promoted.socket.emit("roomLockChanged", { locked: room.isLocked, roomId });
+  promoted.socket.emit("hostAssigned", { roomId, hostUserId: promoted.id });
+  for (const pending of room.pendingClients.values()) {
+    pending.socket.emit("waitingRoomStatus", {
+      message: "A host is available to let you in.",
+      roomId,
+    });
+  }
+};
+
+const tellWaitingNoHost = (room: Room): void => {
+  for (const pending of room.pendingClients.values()) {
+    pending.socket.emit("waitingRoomStatus", { message: "No one to let you in.", roomId: room.id });
+  }
+};
+
+export const ensureHost = (io: SocketIOServer, state: SfuState, room: Room): void => {
+  if (state.rooms.get(room.channelId) !== room) return;
+  if (room.isHandingOff || room.hasEnded || !room.recordsItsCall) return;
   if (!room.hasActiveAdmin()) {
     const promoted = promoteNextAdmin(room);
     if (promoted) {
-      const promotedContext = getSocketContext(promoted.socket);
-      if (promotedContext) {
-        promotedContext.currentClient = promoted;
-        promotedContext.currentRoom = room;
-        registerAdminHandlers(promotedContext, { roomId });
-      }
-      if (room.cleanupTimer) {
-        room.stopCleanupTimer();
-      }
-      const pendingUsers = Array.from(room.pendingClients.values()).map(
-        (pending) => ({
-          userId: pending.userKey,
-          displayName: pending.displayName || pending.userKey,
-        }),
-      );
-      promoted.socket.emit("pendingUsersSnapshot", {
-        users: pendingUsers,
-        roomId,
-      });
-      promoted.socket.emit("roomLockChanged", {
-        locked: room.isLocked,
-        roomId,
-      });
-      promoted.socket.emit("hostAssigned", {
-        roomId,
-        hostUserId: promoted.id,
-      });
-      if (room.pendingClients.size > 0) {
-        for (const pending of room.pendingClients.values()) {
-          pending.socket.emit("waitingRoomStatus", {
-            message: "A host is available to let you in.",
-            roomId,
-          });
-        }
-      }
+      announcePromotedHost(room, promoted);
     } else {
-      if (room.pendingClients.size > 0) {
-        for (const pending of room.pendingClients.values()) {
-          pending.socket.emit("waitingRoomStatus", {
-            message: "No one to let you in.",
-            roomId,
-          });
-        }
-      }
+      tellWaitingNoHost(room);
       room.startCleanupTimer(() => {
-        if (!state.rooms.has(roomChannelId)) return;
-        const roomInState = state.rooms.get(roomChannelId);
-        if (!roomInState || roomInState.hasActiveAdmin()) return;
-        if (roomInState.pendingClients.size > 0) {
-          for (const pending of roomInState.pendingClients.values()) {
-            pending.socket.emit("waitingRoomStatus", {
-              message: "No one to let you in.",
-              roomId,
-            });
-          }
+        if (state.rooms.get(room.channelId) !== room || room.hasActiveAdmin()) return;
+        if (room.isEmpty()) {
+          cleanupRoom(state, room.channelId);
+          return;
         }
-        if (roomInState.isEmpty()) {
-          cleanupRoom(state, roomChannelId);
+        const late = promoteNextAdmin(room);
+        if (late) {
+          announcePromotedHost(room, late);
+          io.to(room.channelId).emit("hostChanged", {
+            roomId: room.id,
+            hostUserId: room.getHostUserId(),
+          });
+          io.to(room.channelId).emit("adminUsersChanged", {
+            roomId: room.id,
+            hostUserIds: room.getAdminUserIds(),
+          });
+          return;
         }
+        endForNoHost(io, state, room);
       });
     }
   }
-
-  io.to(roomChannelId).emit("hostChanged", {
-    roomId,
+  io.to(room.channelId).emit("hostChanged", {
+    roomId: room.id,
     hostUserId: room.getHostUserId(),
   });
-  io.to(roomChannelId).emit("adminUsersChanged", {
-    roomId,
+  io.to(room.channelId).emit("adminUsersChanged", {
+    roomId: room.id,
     hostUserIds: room.getAdminUserIds(),
   });
 };
@@ -957,7 +967,6 @@ export const forceRemoveClientNow = (options: {
   }
 
   const roomChannelId = room.channelId;
-  const wasAdmin = target instanceof Admin && !target.isObserver;
   const isWebinarAttendee = target.isWebinarAttendee;
 
   // Cancel any in-flight disconnect grace so the timer cannot double-process.
@@ -982,13 +991,10 @@ export const forceRemoveClientNow = (options: {
   emitWebinarAttendeeCountChanged(io, state, room);
   emitWebinarFeedChanged(io, state, room);
 
-  if (wasAdmin) {
-    handleAdminRemoved(io, state, room);
-  }
-
   if (state.rooms.has(roomChannelId)) {
     cleanupRoom(state, roomChannelId);
   }
+  ensureHost(io, state, room);
 
   return true;
 };
@@ -1007,7 +1013,7 @@ export const offerLapsedRoom = (
   if (state.rooms.get(room.channelId) !== room || room.hasActiveAdmin()) return;
   if (room.getMeetingParticipantCount() > 0) {
     room.markRestored();
-    handleAdminRemoved(io, state, room);
+    ensureHost(io, state, room);
     return;
   }
   for (const pending of room.pendingClients.values()) {
@@ -1036,7 +1042,7 @@ export const settleUnclaimedRoom = (
     });
     return;
   }
-  handleAdminRemoved(io, state, room);
+  ensureHost(io, state, room);
 };
 
 export const kickClient = (
@@ -1055,7 +1061,6 @@ export const kickClient = (
   // admitted and still a host. Taking back the lock admission also covers
   // what is not a grant on the room: a scheduled invite, a recovery pass.
   const userKey = room.userKeysById.get(userId);
-  const wasHost = target instanceof Admin && !target.isObserver;
   const demoted = userKey ? room.removeUser(userKey) : [];
   for (const client of demoted) {
     if (client === target) continue;
@@ -1073,9 +1078,7 @@ export const kickClient = (
       room,
       userId,
     });
-    if (wasHost && options.state.rooms.get(room.channelId) === room) {
-      handleAdminRemoved(options.io, options.state, room);
-    }
+    ensureHost(options.io, options.state, room);
   }
 
   return true;
