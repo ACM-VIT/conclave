@@ -231,22 +231,75 @@ export function inputEditRange(
   return null;
 }
 
+export type FieldEditRecord = {
+  before: string;
+  after: string;
+  selection: readonly [number, number];
+  caret: number;
+};
+
+const FIELD_EDIT_HISTORY_LIMIT = 50;
+const fieldEditHistory = new WeakMap<HTMLInputElement, FieldEditRecord[]>();
+
+export function selectionAfterHistory(
+  records: readonly FieldEditRecord[],
+  inputType: string,
+  before: string,
+  after: string,
+): readonly [number, number] | null {
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    const record = records[index];
+    if (inputType === "historyUndo" && record.after === before && record.before === after) {
+      return record.selection;
+    }
+    if (inputType === "historyRedo" && record.before === before && record.after === after) {
+      return [record.caret, record.caret];
+    }
+  }
+  return null;
+}
+
 export function applyFieldEdit(input: HTMLInputElement, edit: FieldEdit) {
   const caret = edit.start + edit.text.length;
   if (edit.start === edit.end && !edit.text) {
     input.setSelectionRange(caret, caret);
     return;
   }
+  const before = input.value;
+  const selection = [input.selectionStart ?? caret, input.selectionEnd ?? caret] as const;
   input.setSelectionRange(edit.start, edit.end);
   const applied = edit.text
     ? document.execCommand("insertText", false, edit.text)
     : document.execCommand("delete");
   if (applied) {
     input.setSelectionRange(caret, caret);
-    return;
+  } else {
+    input.setRangeText(edit.text, edit.start, edit.end, "end");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
   }
-  input.setRangeText(edit.text, edit.start, edit.end, "end");
-  input.dispatchEvent(new Event("input", { bubbles: true }));
+  const records = fieldEditHistory.get(input) ?? [];
+  records.push({ before, after: input.value, selection, caret });
+  fieldEditHistory.set(input, records.slice(-FIELD_EDIT_HISTORY_LIMIT));
+}
+
+export function keepFieldHistorySelection(input: HTMLInputElement) {
+  let previous = input.value;
+  const remember = () => {
+    previous = input.value;
+  };
+  const restore = (event: Event) => {
+    const inputType = event instanceof InputEvent ? event.inputType : "";
+    const records = fieldEditHistory.get(input) ?? [];
+    const selection = selectionAfterHistory(records, inputType, previous, input.value);
+    if (selection) input.setSelectionRange(selection[0], selection[1]);
+    previous = input.value;
+  };
+  input.addEventListener("beforeinput", remember);
+  input.addEventListener("input", restore);
+  return () => {
+    input.removeEventListener("beforeinput", remember);
+    input.removeEventListener("input", restore);
+  };
 }
 
 type MediaDevice = "camera" | "microphone";

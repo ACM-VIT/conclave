@@ -4,7 +4,9 @@ import {
   inputEditRange,
   planFieldEdit,
   sanitizeRoomCodeInput,
+  selectionAfterHistory,
   type FieldEdit,
+  type FieldEditRecord,
 } from "../src/app/lib/utils";
 
 const plan = (value: string, start: number, end: number, text: string) =>
@@ -103,5 +105,30 @@ describe("the range a browser edit touches", () => {
     expect(inputEditRange("insertFromPaste", 3, 3, 7)).toBeNull();
     expect(inputEditRange("insertCompositionText", 3, 3, 7)).toBeNull();
     expect(inputEditRange("historyUndo", 3, 3, 7)).toBeNull();
+  });
+});
+
+describe("the selection after undoing or redoing an edit the field made itself", () => {
+  const linkPaste: FieldEditRecord = { before: "abc-def", after: "new-room", selection: [2, 2], caret: 8 };
+  const hyphenJoin: FieldEditRecord = { before: "abc-x-def", after: "abc-def", selection: [5, 5], caret: 4 };
+
+  it("puts back the selection the user had before the edit on undo", () => {
+    expect(selectionAfterHistory([linkPaste], "historyUndo", "new-room", "abc-def")).toEqual([2, 2]);
+    expect(selectionAfterHistory([hyphenJoin], "historyUndo", "abc-def", "abc-x-def")).toEqual([5, 5]);
+  });
+
+  it("puts the caret after the edit on redo", () => {
+    expect(selectionAfterHistory([linkPaste], "historyRedo", "abc-def", "new-room")).toEqual([8, 8]);
+  });
+
+  it("uses the latest matching edit", () => {
+    const again: FieldEditRecord = { ...linkPaste, selection: [7, 7] };
+    expect(selectionAfterHistory([linkPaste, again], "historyUndo", "new-room", "abc-def")).toEqual([7, 7]);
+  });
+
+  it("leaves the browser's selection for edits the browser made", () => {
+    expect(selectionAfterHistory([linkPaste], "historyUndo", "new-roomx", "new-room")).toBeNull();
+    expect(selectionAfterHistory([linkPaste], "insertText", "new-room", "abc-def")).toBeNull();
+    expect(selectionAfterHistory([], "historyUndo", "new-room", "abc-def")).toBeNull();
   });
 });

@@ -41,6 +41,7 @@ import {
   applyFieldEdit,
   extractRoomCode,
   inputEditRange,
+  keepFieldHistorySelection,
   parseCodeFieldPaste,
   planFieldEdit,
   sanitizeInstitutionDisplayName,
@@ -1175,7 +1176,11 @@ function JoinScreen({
       shapeCodeEdit(event, input, range, text);
     };
     input.addEventListener("beforeinput", onBeforeInput);
-    return () => input.removeEventListener("beforeinput", onBeforeInput);
+    const stopKeepingHistorySelection = keepFieldHistorySelection(input);
+    return () => {
+      input.removeEventListener("beforeinput", onBeforeInput);
+      stopKeepingHistorySelection();
+    };
   };
 
   const canJoin = normalizedRoomId.trim().length > 0;
