@@ -375,4 +375,84 @@ describe("joins for one tab that overlap (Greptile)", () => {
     expect(room().getClient(seatOf(host))).toBeInstanceOf(Admin);
     expect(room().getHostUserId()).toBe(seatOf(host));
   });
+
+  it("closes a room whose creating tab dropped while it was being made and did not come back (Greptile)", async () => {
+    const { connect, holdRoomCreation, state } = sfu();
+    const release = holdRoomCreation();
+    const creator = connect(host);
+    creator.startJoin();
+    await settle();
+
+    creator.socket.disconnect();
+    release();
+    await settle();
+
+    expect(state.rooms.has("conclave:room")).toBe(false);
+  });
+
+  it.each([
+    ["after the room was made", true],
+    ["while the room was still being made", false],
+  ])("lets the creating tab host its room when it comes back %s (Greptile)", async (_when, afterCreation) => {
+    const { connect, holdRoomCreation, room } = sfu();
+    const release = holdRoomCreation();
+    const creator = connect(host);
+    creator.startJoin();
+    await settle();
+    creator.socket.disconnect();
+    if (afterCreation) {
+      release();
+      await settle();
+    }
+
+    const back = connect(host);
+    const rejoined = back.startJoin();
+    await settle();
+    if (!afterCreation) release();
+    await vi.waitFor(() => expect(rejoined).toHaveBeenCalled(), { timeout: 2000 });
+    await settle();
+
+    expect(rejoined.mock.calls[0]?.[0]).toMatchObject({ status: "joined" });
+    expect(room().getClient(seatOf(host))).toBeInstanceOf(Admin);
+    expect(room().getHostUserId()).toBe(seatOf(host));
+  });
+
+  it.each([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16])(
+    "leaves a room a tab created either hosted by that tab or closed, however its joins drop and retry (seed %i)",
+    async (seed) => {
+      const random = seeded(seed);
+      const { connect, holdRoomCreation, holdNextRenew, state } = sfu();
+      const releases: Array<() => void> = [];
+      const attempts = 2 + Math.floor(random() * 3);
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        if (attempt === 0 || random() < 0.4) releases.push(holdRoomCreation());
+        if (random() < 0.4) releases.push(holdNextRenew());
+        const tab = connect(host);
+        tab.startJoin();
+        await settle();
+        if (random() < 0.5) {
+          tab.socket.disconnect();
+          await settle();
+        }
+        if (random() < 0.4 && releases.length > 0) {
+          releases.splice(Math.floor(random() * releases.length), 1)[0]();
+          await settle();
+        }
+      }
+      for (const release of releases) {
+        release();
+        await settle();
+      }
+      await settle();
+
+      const current = state.rooms.get("conclave:room");
+      if (current) {
+        const seat = current.getClient(seatOf(host));
+        expect(seat).toBeInstanceOf(Admin);
+        expect((seat!.socket as unknown as { connected: boolean }).connected).toBe(true);
+        expect(current.getHostUserId()).toBe(seatOf(host));
+        expect(liveSockets(current).length).toBe(current.clients.size);
+      }
+    },
+  );
 });

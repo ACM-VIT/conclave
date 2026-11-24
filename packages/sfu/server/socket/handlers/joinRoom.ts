@@ -106,36 +106,61 @@ const normalizeIdentifier = (
 
 const JOIN_SUPERSEDED_ERROR = "A newer join for this tab took its place.";
 
-type JoinAttempts = Map<string, { seated: number; inFlight: number; createdRoom: boolean }>;
+type JoinAttempts = {
+  byTab: Map<string, { seated: number; inFlight: number }>;
+  byRoom: Map<string, number>;
+  unclaimedRooms: Map<string, string>;
+};
 const joinAttemptsByState = new WeakMap<ConnectionContext["state"], JoinAttempts>();
 let joinAttemptCount = 0;
 
 const attemptsOf = (state: ConnectionContext["state"]): JoinAttempts => {
   let attempts = joinAttemptsByState.get(state);
   if (!attempts) {
-    attempts = new Map();
+    attempts = { byTab: new Map(), byRoom: new Map(), unclaimedRooms: new Map() };
     joinAttemptsByState.set(state, attempts);
   }
   return attempts;
 };
 
-const beginJoinAttempt = (state: ConnectionContext["state"], key: string): number => {
-  const attempt = (joinAttemptCount += 1);
-  const record = attemptsOf(state).get(key);
-  if (record) {
-    record.inFlight += 1;
-  } else {
-    attemptsOf(state).set(key, { seated: 0, inFlight: 1, createdRoom: false });
-  }
-  return attempt;
+const beginJoinAttempt = (
+  state: ConnectionContext["state"],
+  channelId: string,
+  key: string,
+): number => {
+  const attempts = attemptsOf(state);
+  const record = attempts.byTab.get(key);
+  if (record) record.inFlight += 1;
+  else attempts.byTab.set(key, { seated: 0, inFlight: 1 });
+  attempts.byRoom.set(channelId, (attempts.byRoom.get(channelId) ?? 0) + 1);
+  return (joinAttemptCount += 1);
 };
 
-const endJoinAttempt = (state: ConnectionContext["state"], key: string): void => {
-  const attempts = attemptsOf(state);
-  const record = attempts.get(key);
-  if (!record) return;
-  record.inFlight -= 1;
-  if (record.inFlight <= 0) attempts.delete(key);
+const endJoinAttempt = (
+  context: ConnectionContext,
+  channelId: string,
+  key: string,
+): void => {
+  const attempts = attemptsOf(context.state);
+  const record = attempts.byTab.get(key);
+  if (record) {
+    record.inFlight -= 1;
+    if (record.inFlight <= 0) attempts.byTab.delete(key);
+  }
+  const inRoom = (attempts.byRoom.get(channelId) ?? 1) - 1;
+  if (inRoom > 0) {
+    attempts.byRoom.set(channelId, inRoom);
+    return;
+  }
+  attempts.byRoom.delete(channelId);
+  if (!attempts.unclaimedRooms.delete(channelId)) return;
+  const room = context.state.rooms.get(channelId);
+  if (!room) return;
+  if (room.isEmpty()) {
+    cleanupRoom(context.state, channelId);
+  } else if (!room.hasActiveAdmin()) {
+    handOffRoom(context.io, context.state, room);
+  }
 };
 
 export const registerJoinRoomHandler = (context: ConnectionContext): void => {
@@ -148,6 +173,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
       callback: (response: JoinRoomResponse | JoinRoomErrorResponse) => void,
     ) => {
       let attemptKey: string | null = null;
+      let attemptRoom: string | null = null;
       try {
         const requestedRoomId = normalizeIdentifier(
           data?.roomId,
@@ -390,9 +416,10 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         const roomChannelId = getRoomChannelId(clientId, roomId);
         const joinKey = `${roomChannelId} ${userId}`;
         attemptKey = joinKey;
-        const attempt = beginJoinAttempt(state, joinKey);
+        attemptRoom = roomChannelId;
+        const attempt = beginJoinAttempt(state, roomChannelId, joinKey);
         const superseded = (): boolean => {
-          if (socket.connected && (attemptsOf(state).get(joinKey)?.seated ?? 0) <= attempt) {
+          if (socket.connected && (attemptsOf(state).byTab.get(joinKey)?.seated ?? 0) <= attempt) {
             return false;
           }
           respond(callback, { error: JOIN_SUPERSEDED_ERROR });
@@ -485,11 +512,10 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             );
             room = result.room;
             createdRoom = result.created;
-            if (superseded()) {
-              const record = attemptsOf(state).get(joinKey);
-              if (result.created && record) record.createdRoom = true;
-              return;
+            if (result.created && !isWebinarAttendeeJoin) {
+              attemptsOf(state).unclaimedRooms.set(roomChannelId, joinKey);
             }
+            if (superseded()) return;
           } catch (error) {
             if (error instanceof RoomOwnershipError) {
               respondWithRoomOwner(error.owner);
@@ -743,7 +769,8 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             isPersistedAdminForExistingRoom ||
             (hostRequested &&
               (clientPolicy.allowHostJoin || forcedHostJoin)));
-        const createdBySupersededAttempt = attemptsOf(state).get(joinKey)?.createdRoom === true;
+        const createdBySupersededAttempt =
+          attemptsOf(state).unclaimedRooms.get(roomChannelId) === joinKey;
         const isAdminJoin = isWebinarAttendeeJoin
           ? false
           : createdRoom || createdBySupersededAttempt
@@ -972,8 +999,12 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           return;
         }
         commitLink();
-        const attempts = attemptsOf(state).get(joinKey);
-        if (attempts) attempts.seated = Math.max(attempts.seated, attempt);
+        const attempts = attemptsOf(state);
+        const tabAttempts = attempts.byTab.get(joinKey);
+        if (tabAttempts) tabAttempts.seated = Math.max(tabAttempts.seated, attempt);
+        if (isAdminJoin && attempts.unclaimedRooms.get(roomChannelId) === joinKey) {
+          attempts.unclaimedRooms.delete(roomChannelId);
+        }
 
         room.clearPendingDisconnect(userId);
         // This tab is let in, so a request it left in the lobby is over.
@@ -1366,7 +1397,9 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         Logger.error("Error joining room:", error);
         respond(callback, { error: (error as Error).message });
       } finally {
-        if (attemptKey !== null) endJoinAttempt(state, attemptKey);
+        if (attemptKey !== null && attemptRoom !== null) {
+          endJoinAttempt(context, attemptRoom, attemptKey);
+        }
       }
     },
   );
