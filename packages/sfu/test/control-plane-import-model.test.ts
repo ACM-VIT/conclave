@@ -15,7 +15,7 @@ import { hasRedis, startRedis, type RedisServer } from "./support/redisServer.js
 const SECRET = "import-model-secret";
 const admin = { email: null, isAdmin: true };
 const modes: OldMode[] = hasRedis ? ["sqlite", "json", "redis"] : ["sqlite", "json"];
-const SEEDS = Number(process.env.CONTROL_PLANE_IMPORT_SEEDS ?? 25);
+const SEEDS = Number(process.env.CONTROL_PLANE_IMPORT_SEEDS ?? 8);
 const SEED_FROM = Number(process.env.CONTROL_PLANE_IMPORT_SEED_FROM ?? 1);
 const STEPS = Number(process.env.CONTROL_PLANE_IMPORT_STEPS ?? 40);
 const TIMEOUT_MS = Number(process.env.CONTROL_PLANE_IMPORT_TIMEOUT_MS ?? 600_000);

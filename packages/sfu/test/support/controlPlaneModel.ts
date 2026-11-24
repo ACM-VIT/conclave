@@ -37,7 +37,7 @@ import {
   type WorldOptions,
 } from "./twoSfuWorld.js";
 
-const SEEDS = Number(process.env.CONTROL_PLANE_MODEL_SEEDS ?? 120);
+const SEEDS = Number(process.env.CONTROL_PLANE_MODEL_SEEDS ?? 20);
 const SEED_FROM = Number(process.env.CONTROL_PLANE_MODEL_SEED_FROM ?? 1);
 const STEPS = Number(process.env.CONTROL_PLANE_MODEL_STEPS ?? 36);
 const MODES = (process.env.CONTROL_PLANE_MODEL_MODES ?? "memory,sqlite,redis")

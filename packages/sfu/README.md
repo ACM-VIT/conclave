@@ -79,6 +79,9 @@ and a warning names the record. An SFU whose import another SFU superseded
 waits for that import to finish before it serves, and stops after
 `CONTROL_PLANE_LEGACY_IMPORT_WAIT_MS` (120 s by default) if it never does.
 
+A SQLite commit waits at most `CONTROL_PLANE_SQLITE_COMMIT_WAIT_MS` (1000 by
+default) for another SFU's write lock, then answers 503.
+
 At startup the SQLite store proves it can write its file and directory with a
 rolled-back test transaction. If it cannot, or SQLite will not open, a
 production SFU exits before it reports healthy instead of accepting saves it
