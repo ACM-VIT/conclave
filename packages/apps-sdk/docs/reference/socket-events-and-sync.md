@@ -133,10 +133,17 @@ as one. Slots of different sockets drain in turn and never wait on each other.
 Everything else is decided when it arrives and never waits on a slot:
 refusals, updates to a locked board from someone who is not a host, syncs,
 lock and discard. A sync acks at once, and the updates its socket sent before
-it still land. Close and present wait for the slots that hold updates for the
+it still land. Every stage command is checked against the stage when it
+arrives, before it does anything: one the room refuses, such as a stale
+revision, or one that changes nothing, such as presenting the app already
+shown, is answered at once and touches no slot and no update. Close and present
+that would change the stage wait for the slots that hold updates for the
 presented app when they arrive, so strokes already sent are saved first, but
 never more than 100 ms: a slot still held then is refused as `rate-limited`.
-Discard refuses the cleared app's held updates, and locking refuses the held
+Updates keep arriving and landing while they wait. A waiting command is checked
+again before it runs; if the stage has changed so that it would be refused or
+change nothing, it is answered at once and refuses no held update. Discard
+refuses the cleared app's held updates, and locking refuses the held
 updates of everyone who is not a host. When the room closes, every held update
 is refused and every waiting command fails. An update is applied under the
 participant and role it arrived with, so one still held when its sender leaves
@@ -243,10 +250,11 @@ Server behavior:
 
 Present, close, discard and lock share one rate limit per socket.
 
-`apps:yjs:sync` has its own per-socket limit, but a socket's first sync of the
-presented app after each stage change is free. Every stage change makes each
-client sync once, so other hosts switching apps cannot use up a viewer's
-budget; repeated syncs of the same stage still spend it. A sync refused by the
+`apps:yjs:sync` has its own per-socket limit, but a socket's first valid sync
+of the presented app after each stage change is free. Every stage change makes
+each client sync once, so other hosts switching apps cannot use up a viewer's
+budget; repeated syncs of the same stage still spend it, and so does a sync the
+room refuses for its content, which leaves the free sync unused. A sync refused by the
 limit acks `{ error, retryable: true, retryAfterMs }`, and the client tries
 again after at least `retryAfterMs`. An older SFU sends that refusal as only
 `{ error: "Too many app sync requests" }`; the client retries it with its own
