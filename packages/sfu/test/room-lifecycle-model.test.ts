@@ -126,6 +126,7 @@ type HostAction =
   | "promote"
   | "transfer"
   | "block"
+  | "blockStay"
   | "revoke"
   | "allow";
 type Shutdown = "drain" | "stop" | "worker" | "handoff";
@@ -600,6 +601,8 @@ const performHostAction = async (
         return seat ? hostAct(world, by, "admin:transferHost", { userId: seat }) : undefined;
       case "block":
         return hostAct(world, by, "admin:blockUsers", { userKeys: [target.key], kickPresent: true });
+      case "blockStay":
+        return hostAct(world, by, "admin:blockUsers", { userKeys: [target.key], kickPresent: false });
       case "revoke":
         return hostAct(world, by, "admin:revokeAllowedUsers", { userKeys: [target.key] });
       case "allow":
@@ -611,10 +614,9 @@ const performHostAction = async (
     return;
   }
   if (step.action === "admit" || step.action === "allow") world.shadow.removed.delete(target.key);
-  if (step.action === "kick" || step.action === "block" || step.action === "revoke") {
-    removes(world, target);
-  }
-  if (step.action === "kick" || step.action === "block") world.shadow.cohosts.delete(target.key);
+  const removal = ["kick", "block", "blockStay", "revoke"].includes(step.action);
+  if (removal) removes(world, target);
+  if (removal && step.action !== "revoke") world.shadow.cohosts.delete(target.key);
   if (
     (step.action === "promote" || step.action === "transfer") &&
     world.shadow.phase.kind === "running" &&
@@ -930,7 +932,8 @@ const check = async (
     const openedAt = world.firstSeen.get(room.incarnationId) ?? now;
     const opening = room.awaitingOpener !== null && now - openedAt <= ROOM_OPEN_DEADLINE_MS;
     const recovering = room.restorerState(now) === "awaited";
-    if (!opening && !recovering) {
+    const waitingForHost = room.cleanupDeadline !== null && now <= room.cleanupDeadline;
+    if (!opening && !recovering && !waitingForHost) {
       fail(
         `the room has been locked with nobody to let anyone in for ${Math.round((now - openedAt) / SECOND_MS)} s (${room.clients.size} in it, ${room.pendingClients.size} waiting)`,
       );
@@ -941,6 +944,19 @@ const check = async (
     for (const key of room.adminUserKeys) {
       if (key === room.ownerEmail || shadow.cohosts.has(key)) continue;
       fail(`${key} still hosts with the code's owner here, and no host made them a co-host`);
+    }
+  }
+
+  if (room && !room.hasEnded) {
+    const priorHosts =
+      room.incarnationId === before.beforeIncarnation ? before.beforeHosts : new Set<string>();
+    for (const key of seatedHostKeys(room)) {
+      if (priorHosts.has(key)) continue;
+      const reason = room.hostReasonOf(key);
+      if (reason !== "temporary" && reason !== "opener") continue;
+      if (room.needsReadmission(key) || room.isBlocked(key) || shadow.removed.has(key)) {
+        fail(`${key} was handed a host's seat as a fallback although a host removed them`);
+      }
     }
   }
 
@@ -1010,9 +1026,11 @@ const nextStep = (world: World): Step => {
         options.push([0.4, () => host("transfer")]);
         options.push([0.4, () => host("block")]);
       }
+      if (seatOf(room, other.key)) options.push([0.3, () => host("blockStay")]);
       options.push([0.2, () => host("revoke")]);
       options.push([0.2, () => host("allow")]);
     }
+    options.push([0.15, () => ({ kind: "host", action: "block", by: name, target: name })]);
   }
   const anyone = () => ACTOR_NAMES[Math.floor(random() * ACTOR_NAMES.length)];
   if (world.held.length > 0) {
@@ -1317,6 +1335,44 @@ describe("the room lifecycle model", () => {
       host("alice", "kick", "owner"),
       { kind: "leave", actor: "alice" },
       host("invitee", "promote", "owner"),
+    ]);
+    expect(outcome.failures, report(outcome)).toEqual([]);
+  });
+
+  it("never makes a removed person's remaining tab host when the last host leaves", async () => {
+    const outcome = await runScript(false, [
+      open("alice"),
+      open("carol"),
+      host("alice", "admit", "carol"),
+      host("alice", "promote", "carol"),
+      { kind: "second", actor: "carol", action: "open" },
+      host("alice", "kick", "carol"),
+      { kind: "leave", actor: "alice" },
+      { kind: "tick", ms: 2 * MINUTE_MS + SECOND_MS },
+    ]);
+    expect(outcome.failures, report(outcome)).toEqual([]);
+  });
+
+  it("hands the room on when its only host is blocked", async () => {
+    const outcome = await runScript(false, [
+      open("alice"),
+      open("carol"),
+      host("alice", "admit", "carol"),
+      open("bob"),
+      host("alice", "block", "alice"),
+    ]);
+    expect(outcome.failures, report(outcome)).toEqual([]);
+  });
+
+  it("hands the room on when a host blocks someone without removing them and then leaves", async () => {
+    const outcome = await runScript(false, [
+      open("alice"),
+      open("carol"),
+      host("alice", "admit", "carol"),
+      open("invitee"),
+      host("alice", "admit", "invitee"),
+      host("alice", "blockStay", "carol"),
+      { kind: "leave", actor: "alice" },
     ]);
     expect(outcome.failures, report(outcome)).toEqual([]);
   });
