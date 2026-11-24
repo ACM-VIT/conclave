@@ -46,6 +46,26 @@ export const assertSqliteWritable = (db: SqliteDatabase, path: string): void => 
   }
 };
 
+const closeQuietly = (db: SqliteDatabase): void => {
+  try {
+    db.close();
+  } catch {
+    return;
+  }
+};
+
+export const openSqliteStore = <Db extends SqliteDatabase, Store>(db: Db, path: string, prepare: (db: Db) => Store): Store => {
+  try {
+    db.exec("PRAGMA busy_timeout = 5000");
+    assertSqliteWritable(db, path);
+    db.exec("PRAGMA journal_mode = WAL");
+    return prepare(db);
+  } catch (error) {
+    closeQuietly(db);
+    throw error;
+  }
+};
+
 const LOCKED = /database is locked|SQLITE_BUSY/i;
 
 /**

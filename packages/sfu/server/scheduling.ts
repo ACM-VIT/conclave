@@ -31,7 +31,7 @@ import {
   canonicalizeClientId,
   CONCLAVE_CLIENT_ID,
 } from "./clientIds.js";
-import { assertSqliteWritable } from "./sqliteWriteCheck.js";
+import { openSqliteStore } from "./sqliteWriteCheck.js";
 import { adoptRecoveredJsonStore, countSnapshotRecords } from "./jsonStoreUpgrade.js";
 
 type MaybePromise<T> = T | Promise<T>;
@@ -1077,10 +1077,10 @@ const createSqliteSchedulingPersistence = (
   const dir = dirname(path);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const { DatabaseSync } = loadNodeSqlite();
-  const db = new DatabaseSync(path);
-  db.exec("PRAGMA busy_timeout = 5000");
-  assertSqliteWritable(db, path);
-  db.exec("PRAGMA journal_mode = WAL");
+  return openSqliteStore(new DatabaseSync(path), path, (db) => prepareSqliteSchedulingPersistence(db));
+};
+
+const prepareSqliteSchedulingPersistence = (db: SqliteDatabase): SchedulingPersistence => {
   db.exec(`
     CREATE TABLE IF NOT EXISTS scheduling_records (
       kind TEXT NOT NULL,

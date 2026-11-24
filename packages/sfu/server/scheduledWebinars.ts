@@ -20,7 +20,7 @@ import {
   normalizeHostEmail,
 } from "./webinar.js";
 import { canonicalizeClientId } from "./clientIds.js";
-import { assertSqliteWritable } from "./sqliteWriteCheck.js";
+import { openSqliteStore } from "./sqliteWriteCheck.js";
 import { adoptRecoveredJsonStore, countArrayRecords } from "./jsonStoreUpgrade.js";
 
 const DEFAULT_EARLY_ENTRY_MINUTES = 10;
@@ -354,10 +354,10 @@ const createSqliteScheduledWebinarPersistence = (
   }
 
   const { DatabaseSync } = loadNodeSqlite();
-  const db = new DatabaseSync(path);
-  db.exec("PRAGMA busy_timeout = 5000");
-  assertSqliteWritable(db, path);
-  db.exec("PRAGMA journal_mode = WAL");
+  return openSqliteStore(new DatabaseSync(path), path, (db) => prepareSqliteScheduledWebinarPersistence(db));
+};
+
+const prepareSqliteScheduledWebinarPersistence = (db: SqliteDatabase): ScheduledWebinarPersistence => {
   db.exec(`
     CREATE TABLE IF NOT EXISTS scheduled_webinars (
       id TEXT PRIMARY KEY,

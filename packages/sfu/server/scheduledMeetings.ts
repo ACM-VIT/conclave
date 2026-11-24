@@ -24,7 +24,7 @@ import {
   type RedisPersistenceClient,
 } from "./redisPersistence.js";
 import { canonicalizeClientId } from "./clientIds.js";
-import { assertSqliteWritable } from "./sqliteWriteCheck.js";
+import { openSqliteStore } from "./sqliteWriteCheck.js";
 import { adoptRecoveredJsonStore, countArrayRecords } from "./jsonStoreUpgrade.js";
 
 type MaybePromise<T> = T | Promise<T>;
@@ -689,10 +689,10 @@ const createSqliteScheduledMeetingPersistence = (
     mkdirSync(dir, { recursive: true });
   }
   const { DatabaseSync } = loadNodeSqlite();
-  const db = new DatabaseSync(path);
-  db.exec("PRAGMA busy_timeout = 5000");
-  assertSqliteWritable(db, path);
-  db.exec("PRAGMA journal_mode = WAL");
+  return openSqliteStore(new DatabaseSync(path), path, (db) => prepareSqliteScheduledMeetingPersistence(db));
+};
+
+const prepareSqliteScheduledMeetingPersistence = (db: SqliteDatabase): ScheduledMeetingPersistence => {
   db.exec(`
     CREATE TABLE IF NOT EXISTS scheduled_meetings (
       id TEXT PRIMARY KEY,
