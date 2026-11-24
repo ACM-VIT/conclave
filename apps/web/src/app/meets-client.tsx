@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useHotkey } from "@tanstack/react-hotkeys";
 import { isDevicePublishing, retryFailedMediaDevices } from "./lib/media-retry";
 import { captureGeneration } from "./lib/media-captures";
+import { publishIntent } from "./lib/device-intent";
 import { HOTKEYS } from "./lib/hotkeys";
 import type { Socket } from "socket.io-client";
 import { SFU_EVENTS } from "@conclave/meeting-core/sfu-events";
@@ -639,7 +640,7 @@ export default function MeetsClient({
     setServerRestartNotice,
     adminNotice,
     setAdminNotice,
-  } = useMeetState({ initialRoomId });
+  } = useMeetState({ initialRoomId, deviceIntents: refs.deviceIntents });
 
   const [serverActiveSpeakerAvailable, setServerActiveSpeakerAvailable] =
     useState(false);
@@ -947,25 +948,8 @@ export default function MeetsClient({
   useEffect(() => {
     if (!autoJoinOnMount) return;
     if (!roomId || roomId.trim().length === 0) return;
-    if (!refs.prejoinMediaIntentRef.current) {
-      const autoJoinStream = refs.localStreamRef.current;
-      refs.prejoinMediaIntentRef.current = {
-        streamId: autoJoinStream?.id ?? null,
-        trackIds: new Set(
-          autoJoinStream?.getTracks().map((track) => track.id) ?? [],
-        ),
-        isCameraOn: false,
-        isMicOn: false,
-      };
-    }
     refs.shouldAutoJoinRef.current = true;
-  }, [
-    autoJoinOnMount,
-    roomId,
-    refs.localStreamRef,
-    refs.prejoinMediaIntentRef,
-    refs.shouldAutoJoinRef,
-  ]);
+  }, [autoJoinOnMount, roomId, refs.shouldAutoJoinRef]);
 
   const {
     setNetworkManagedVideoQuality,
@@ -1358,10 +1342,6 @@ export default function MeetsClient({
     toggleCameraCommandRef.current = toggleCamera;
   }, [toggleCamera]);
 
-  const mediaIntentRef = useRef({ isMuted, isCameraOff });
-  useEffect(() => {
-    mediaIntentRef.current = { isMuted, isCameraOff };
-  }, [isMuted, isCameraOff]);
   const mediaRetryRef = useRef<Promise<void> | null>(null);
 
   const canRetryMedia = Boolean(mediaError?.device);
@@ -1375,21 +1355,21 @@ export default function MeetsClient({
       device,
       callEnded: () => generation !== captureGeneration(),
       isOn: (target) => {
-        const intent = mediaIntentRef.current;
+        const intent = publishIntent(refs.deviceIntents.get());
         return target === "camera"
           ? isDevicePublishing({
-              intendedOn: !intent.isCameraOff,
+              intendedOn: intent.isCameraOn,
               producer: refs.videoProducerRef.current,
             })
           : isDevicePublishing({
-              intendedOn: !intent.isMuted,
+              intendedOn: intent.isMicOn,
               producer: refs.audioProducerRef.current,
             });
       },
       turnOn: async (target) => {
-        const intent = mediaIntentRef.current;
+        const intent = publishIntent(refs.deviceIntents.get());
         const intendedOn =
-          target === "camera" ? !intent.isCameraOff : !intent.isMuted;
+          target === "camera" ? intent.isCameraOn : intent.isMicOn;
         if (intendedOn) {
           const kind = target === "camera" ? "video" : "audio";
           const stream = await requestMediaPermissions({
@@ -1424,6 +1404,7 @@ export default function MeetsClient({
   }, [
     mediaError,
     refs.audioProducerRef,
+    refs.deviceIntents,
     refs.localStreamRef,
     refs.videoProducerRef,
     requestMediaPermissions,
@@ -1456,15 +1437,12 @@ export default function MeetsClient({
       });
 
       refs.localStreamRef.current = nextStream;
-      refs.prejoinMediaIntentRef.current = {
-        streamId: nextStream?.id ?? null,
-        trackIds: liveTrackIds,
-        isCameraOn: handoff.isCameraOn && hasLiveVideo,
-        isMicOn: handoff.isMicOn && hasLiveAudio,
-      };
+      refs.deviceIntents.dispatch({
+        type: "set",
+        audio: handoff.isMicOn,
+        video: handoff.isCameraOn,
+      });
       setLocalStream(nextStream);
-      setIsCameraOff(!(handoff.isCameraOn && hasLiveVideo));
-      setIsMuted(!(handoff.isMicOn && hasLiveAudio));
       const joinAudioOnly = handoff.isAudioOnly === true;
       setViewSettings((settings) =>
         settings.audioOnlyMode === joinAudioOnly
@@ -1490,10 +1468,8 @@ export default function MeetsClient({
     },
     [
       localStream,
+      refs.deviceIntents,
       refs.localStreamRef,
-      refs.prejoinMediaIntentRef,
-      setIsCameraOff,
-      setIsMuted,
       setLocalStream,
       setMeetError,
       stopLocalTrack,

@@ -26,11 +26,36 @@ const hold = async (requestedIn: number, request: () => Promise<MediaStream>): P
     stream.getTracks().forEach(stopTrack);
     throw new CaptureReleasedError();
   }
+  holdTracks(stream.getTracks());
+  return stream;
+};
+
+const holdTracks = (tracks: MediaStreamTrack[]) => {
   for (const track of heldTracks) {
     if (track.readyState === "ended") heldTracks.delete(track);
   }
-  stream.getTracks().forEach((track) => heldTracks.add(track));
+  tracks.forEach((track) => heldTracks.add(track));
+};
+
+export const createHeldDestination = (context: AudioContext): MediaStreamAudioDestinationNode => {
+  const node = context.createMediaStreamDestination();
+  holdTracks(node.stream.getTracks());
+  return node;
+};
+
+export const captureHeldCanvas = (canvas: HTMLCanvasElement, frameRate?: number): MediaStream => {
+  const stream = canvas.captureStream(frameRate);
+  holdTracks(stream.getTracks());
   return stream;
+};
+
+export const createHeldTrackGenerator = <Init, Track extends MediaStreamTrack>(
+  Generator: new (init: Init) => Track,
+  init: Init,
+): Track => {
+  const track = new Generator(init);
+  holdTracks([track]);
+  return track;
 };
 
 export const captureUserMedia = (

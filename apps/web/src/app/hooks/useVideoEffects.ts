@@ -40,7 +40,7 @@ import {
   VIDEO_EFFECTS_OUTPUT_MAX_HEIGHT as MAX_EFFECTS_OUTPUT_HEIGHT,
   VIDEO_EFFECTS_OUTPUT_MAX_WIDTH as MAX_EFFECTS_OUTPUT_WIDTH,
 } from "../lib/media-quality-settings";
-import { onCapturesReleased } from "../lib/media-captures";
+import { captureHeldCanvas, createHeldTrackGenerator, onCapturesReleased } from "../lib/media-captures";
 
 const SELFIE_SEGMENTATION_CDN =
   "https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1.1675465747";
@@ -4363,7 +4363,7 @@ const prewarmOutputWriterWorker = (
 
     try {
       logVideoEffects(instanceId, "output_writer_worker_prewarm_start");
-      const track = new GeneratorCtor({ kind: "video" });
+      const track = createHeldTrackGenerator(GeneratorCtor, { kind: "video" });
       generatorTrack = track;
       worker = new Worker("/effects/video-effects-output-writer.js", {
         type: "module",
@@ -12061,7 +12061,7 @@ export function useVideoEffects({
       }
 
       try {
-        const generatorTrack = new GeneratorCtor({ kind: "video" });
+        const generatorTrack = createHeldTrackGenerator(GeneratorCtor, { kind: "video" });
         if ("contentHint" in generatorTrack) {
           generatorTrack.contentHint = "motion";
         }
@@ -12155,7 +12155,7 @@ export function useVideoEffects({
       }
 
       try {
-        const generatorTrack = new GeneratorCtor({ kind: "video" });
+        const generatorTrack = createHeldTrackGenerator(GeneratorCtor, { kind: "video" });
         outputGeneratorWriter = generatorTrack.writable.getWriter();
         outputVideoFrameCtor = VideoFrameCtor;
         outputWriterMode = "main-thread";
@@ -12187,7 +12187,7 @@ export function useVideoEffects({
 
     const createCanvasCaptureOutput = (): ProcessedOutput | null => {
       if (typeof canvas.captureStream === "function") {
-        const capturedStream = canvas.captureStream(TARGET_FPS);
+        const capturedStream = captureHeldCanvas(canvas, TARGET_FPS);
         const [capturedTrack] = capturedStream.getVideoTracks() as [
           CanvasCaptureMediaStreamTrack | undefined,
         ];

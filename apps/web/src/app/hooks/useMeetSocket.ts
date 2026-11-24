@@ -177,6 +177,7 @@ import type {
   ScreenShareRepublishOptions,
 } from "./useMeetMedia";
 import { releaseAllCaptures } from "../lib/media-captures";
+import { publishIntent } from "../lib/device-intent";
 import { endedNotice, joinRejectedUpdate, type SetupNotice } from "../lib/setup-notice";
 
 type ConsumerTelemetryPayload = Omit<
@@ -1233,7 +1234,7 @@ export function useMeetSocket({
     shouldAutoJoinRef,
     joinOptionsRef,
     localStreamRef,
-    prejoinMediaIntentRef,
+    deviceIntents,
     sessionIdRef,
     producerTransportDisconnectTimeoutRef,
     consumerTransportDisconnectTimeoutRef,
@@ -1961,7 +1962,6 @@ export function useMeetSocket({
       consumerTransportRef.current = null;
       producerTransportCreatePromiseRef.current = null;
       pendingCameraCodecTransportResetEpochRef.current = null;
-      prejoinMediaIntentRef.current = null;
       if (producerTransportDisconnectTimeoutRef.current) {
         window.clearTimeout(producerTransportDisconnectTimeoutRef.current);
         producerTransportDisconnectTimeoutRef.current = null;
@@ -2047,7 +2047,6 @@ export function useMeetSocket({
       producerTransportDisconnectTimeoutRef,
       consumerTransportDisconnectTimeoutRef,
       pendingProducerRetryTimeoutRef,
-      prejoinMediaIntentRef,
       producerSyncIntervalRef,
       consumeRetryAttemptsRef,
       videoStallRecoveryTimeoutsRef,
@@ -2088,8 +2087,7 @@ export function useMeetSocket({
 
     setConnectionState("disconnected");
     setLocalStream(null);
-    setIsMuted(true);
-    setIsCameraOff(true);
+    deviceIntents.dispatch({ type: "release" });
     setWaitingMessage(null);
     serverRestartNoticeRef.current = null;
     setServerRestartNotice(null);
@@ -2105,14 +2103,13 @@ export function useMeetSocket({
     reconnectAttemptsRef.current = 0;
   }, [
     cleanupRoomResources,
+    deviceIntents,
     intentionalDisconnectRef,
     reconnectInFlightRef,
     localStream,
     localStreamRef,
     reconnectAttemptsRef,
     setConnectionState,
-    setIsCameraOff,
-    setIsMuted,
     setLocalStream,
     setAdminNotice,
     setServerRestartNotice,
@@ -2131,6 +2128,36 @@ export function useMeetSocket({
     releaseAllCaptures();
   }, [closeConnection]);
 
+  const releaseLocalMedia = useCallback(() => {
+    const localTracks = new Set([
+      ...(localStreamRef.current?.getTracks() ?? []),
+      ...(localStream?.getTracks() ?? []),
+    ]);
+    localStreamRef.current = null;
+    localTracks.forEach(stopLocalTrack);
+    setLocalStream(null);
+    deviceIntents.dispatch({ type: "release" });
+    stopScreenShareCapture();
+    releaseAllCaptures();
+  }, [
+    deviceIntents,
+    localStream,
+    localStreamRef,
+    setLocalStream,
+    stopLocalTrack,
+    stopScreenShareCapture,
+  ]);
+
+  const refuseEntry = useCallback(
+    (error: MeetError | null, status?: ReconnectRecoveryStatus) => {
+      releaseLocalMedia();
+      if (status) updateReconnectRecoveryStatus(status);
+      if (error) setMeetError(error);
+      setConnectionState("error");
+    },
+    [releaseLocalMedia, setConnectionState, setMeetError, updateReconnectRecoveryStatus],
+  );
+
   const finishLocalRoomEnded = useCallback(() => {
     if (localRoomEndedHandledRef.current) return;
     localRoomEndedHandledRef.current = true;
@@ -2148,32 +2175,13 @@ export function useMeetSocket({
   ]);
 
   const resolveMediaPublishIntent = useCallback(
-    (stream: MediaStream | null | undefined) => {
-      const prejoinIntent = prejoinMediaIntentRef.current;
-      const streamTrackIds = new Set(
-        stream?.getTracks().map((track) => track.id) ?? [],
-      );
-      const matchesPrejoinIntent = Boolean(
-        prejoinIntent &&
-          ((prejoinIntent.streamId === null && streamTrackIds.size === 0) ||
-            prejoinIntent.streamId === stream?.id ||
-            Array.from(streamTrackIds).some((trackId) =>
-              prejoinIntent.trackIds.has(trackId),
-            )),
-      );
-
-      return {
-        isMicOn: prejoinIntent ? prejoinIntent.isMicOn : !isMuted,
-        isCameraOn: prejoinIntent ? prejoinIntent.isCameraOn : !isCameraOff,
-        matchesPrejoinIntent,
-      };
-    },
-    [isCameraOff, isMuted, prejoinMediaIntentRef],
+    () => publishIntent(deviceIntents.get()),
+    [deviceIntents],
   );
 
   const getJoinMediaNeeds = useCallback(
-    (stream: MediaStream | null | undefined) => {
-      const mediaIntent = resolveMediaPublishIntent(stream);
+    () => {
+      const mediaIntent = resolveMediaPublishIntent();
       return {
         needsAudio: true,
         needsVideo: mediaIntent.isCameraOn,
@@ -2225,7 +2233,7 @@ export function useMeetSocket({
       joinOptions: { isRecorder?: boolean; joinMode: JoinMode },
       reason: string,
     ) => {
-      const mediaNeeds = getJoinMediaNeeds(candidateStream);
+      const mediaNeeds = getJoinMediaNeeds();
       const shouldRequestMedia =
         !joinOptions.isRecorder &&
         joinOptions.joinMode !== "webinar_attendee" &&
@@ -4057,7 +4065,7 @@ export function useMeetSocket({
       const transport = producerTransportRef.current;
       if (!transport) return;
       const publicationWarnings: string[] = [];
-      const mediaIntent = resolveMediaPublishIntent(stream);
+      const mediaIntent = resolveMediaPublishIntent();
       const shouldPauseAudio =
         !mediaIntent.isMicOn || !participantMediaPermissions.unmuteAllowed;
       const shouldPauseVideo =
@@ -8326,7 +8334,7 @@ export function useMeetSocket({
               console.info("[Meets] Join approved! Re-attempting join...");
               const joinOptions = joinOptionsRef.current;
               let stream = localStreamRef.current;
-              const mediaNeeds = getJoinMediaNeeds(stream);
+              const mediaNeeds = getJoinMediaNeeds();
               const shouldRequestMedia =
                 !joinOptions.isRecorder &&
                 joinOptions.joinMode !== "webinar_attendee" &&
@@ -8358,21 +8366,14 @@ export function useMeetSocket({
                   currentRoomIdRef.current,
                   stream,
                   joinOptions,
-                )
-                  .then((joinResult) => {
-                    if (joinResult === "joined") {
-                      prejoinMediaIntentRef.current = null;
-                    }
-                  })
-                  .catch((joinError: unknown) => {
+                ).catch((joinError: unknown) => {
                     if (
                       approvalGeneration !== reconnectGenerationRef.current ||
                       intentionalDisconnectRef.current ||
                       socketRef.current !== socket
                     ) return;
                     console.error("[Meets] Join after approval failed:", joinError);
-                    setMeetError(createMeetError(joinError));
-                    setConnectionState("error");
+                    refuseEntry(createMeetError(joinError));
                   });
               } else {
                 console.error(
@@ -8383,7 +8384,7 @@ export function useMeetSocket({
                     bypassMediaPermissions,
                   },
                 );
-                setConnectionState("error");
+                refuseEntry(null);
               }
             });
 
@@ -8741,6 +8742,7 @@ export function useMeetSocket({
       addReaction,
       audioProducerRef,
       cleanup,
+      refuseEntry,
       consumeProducer,
       currentRoomIdRef,
       deviceRef,
@@ -8773,7 +8775,6 @@ export function useMeetSocket({
       clearParticipantConnectionStatus,
       localStream,
       localStreamRef,
-      prejoinMediaIntentRef,
       pendingProducersRef,
       playNotificationSound,
       shouldPlayJoinLeaveSound,
@@ -8984,9 +8985,7 @@ export function useMeetSocket({
           if (intentionalDisconnectRef.current) return;
 
           const joinOptions = joinOptionsRef.current;
-          const mediaNeeds = getJoinMediaNeeds(
-            localStreamRef.current || localStream,
-          );
+          const mediaNeeds = getJoinMediaNeeds();
           const stream = await ensureLiveLocalMediaForJoin(
             localStreamRef.current || localStream,
             joinOptions,
@@ -9072,7 +9071,8 @@ export function useMeetSocket({
           });
           if (!isRecoverable) {
             manualReconnectRetryRequestedRef.current = false;
-            updateReconnectRecoveryStatus(
+            refuseEntry(
+              { code: "CONNECTION_FAILED", message: reconnectFailure, recoverable: false },
               buildReconnectRecoveryStatus(
                 "failed",
                 attempt,
@@ -9080,12 +9080,6 @@ export function useMeetSocket({
                 reconnectFailure,
               ),
             );
-            setMeetError({
-              code: "CONNECTION_FAILED",
-              message: reconnectFailure,
-              recoverable: false,
-            });
-            setConnectionState("error");
             return;
           }
           if (manualReconnectRetryRequestedRef.current) {
@@ -9151,6 +9145,7 @@ export function useMeetSocket({
     }
   }, [
     cleanupRoomResources,
+    refuseEntry,
     connectSocket,
     currentRoomIdRef,
     ensureLiveLocalMediaForJoin,
@@ -9320,7 +9315,7 @@ export function useMeetSocket({
       };
       joinOptionsRef.current = joinOptions;
       const candidateStream = localStreamRef.current ?? localStream;
-      const mediaNeeds = getJoinMediaNeeds(candidateStream);
+      const mediaNeeds = getJoinMediaNeeds();
       const shouldRequestMedia =
         !joinOptions.isRecorder &&
         joinOptions.joinMode !== "webinar_attendee" &&
@@ -9348,11 +9343,11 @@ export function useMeetSocket({
           !stream &&
           hasRequiredJoinMediaNeed(mediaNeeds)
         ) {
-          setConnectionState("error");
+          refuseEntry(null);
           return;
         }
 
-        const joinMediaIntent = resolveMediaPublishIntent(stream);
+        const joinMediaIntent = resolveMediaPublishIntent();
         const streamForJoin = joinMediaIntent.isCameraOn
           ? stream
           : dropVideoTracksForCameraOff(stream, "camera-off initial join");
@@ -9374,9 +9369,6 @@ export function useMeetSocket({
               joinMode: nextJoinOptions.joinMode,
               status: joinResult,
             });
-            if (joinResult === "joined") {
-              prejoinMediaIntentRef.current = null;
-            }
             break;
           } catch (joinError) {
             if (
@@ -9455,18 +9447,13 @@ export function useMeetSocket({
           joinMode,
           error: err instanceof Error ? err.message : String(err ?? ""),
         });
-        const stream = localStreamRef.current;
-        if (stream) {
-          stream.getTracks().forEach((track) => stopLocalTrack(track));
-          setLocalStream(null);
-        }
-        setMeetError(createMeetError(err));
-        setConnectionState("error");
+        refuseEntry(createMeetError(err));
       }
     },
     [
       connectSocket,
       cleanupRoomResources,
+      refuseEntry,
       displayNameInput,
       dropVideoTracksForCameraOff,
       joinMode,
@@ -9479,7 +9466,6 @@ export function useMeetSocket({
       joinRoomInternal,
       localStream,
       localStreamRef,
-      prejoinMediaIntentRef,
       primeAudioOutput,
       requestMeetingInviteCode,
       requestWebinarInviteCode,

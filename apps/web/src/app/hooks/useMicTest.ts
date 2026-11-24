@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { captureUserMedia } from "../lib/media-captures";
+import { captureUserMedia, createHeldDestination } from "../lib/media-captures";
 import { DEFAULT_AUDIO_CONSTRAINTS } from "../lib/constants";
 import { createNoiseCancellationPipeline } from "../lib/noise-cancellation";
 
@@ -218,7 +218,7 @@ export function useMicTest({
         const analyser = context.createAnalyser();
         analyser.fftSize = 2048;
         analyser.smoothingTimeConstant = 0;
-        const recorderDestination = context.createMediaStreamDestination();
+        const recorderDestination = createHeldDestination(context);
 
         source.connect(gainNode);
         gainNode.connect(analyser);
@@ -257,6 +257,7 @@ export function useMicTest({
           rafId = null;
         }
         gainNodeRef.current = null;
+        recorderStreamRef.current?.getTracks().forEach((track) => track.stop());
         recorderStreamRef.current = null;
         for (const node of nodes) {
           try {
@@ -285,6 +286,7 @@ export function useMicTest({
       if (rafId !== null) window.cancelAnimationFrame(rafId);
       stopLoopback();
       gainNodeRef.current = null;
+      recorderStreamRef.current?.getTracks().forEach((track) => track.stop());
       recorderStreamRef.current = null;
       for (const node of nodes) {
         try {
@@ -451,7 +453,7 @@ export async function playSpeakerTestSound(
   if (context.state === "suspended") {
     await context.resume().catch(() => {});
   }
-  const destination = context.createMediaStreamDestination();
+  const destination = createHeldDestination(context);
   const master = context.createGain();
   master.gain.value = 0.5;
   master.connect(destination);
