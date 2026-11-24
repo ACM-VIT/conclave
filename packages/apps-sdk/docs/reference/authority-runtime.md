@@ -65,7 +65,7 @@ Each table declares its own row cap. Per-action rates are declared by the module
 
 ## Turning it on
 
-Set `SFU_APPS_AUTHORITY_ENABLED=1` on the SFU. With it off no authority event has a listener, so the SFU behaves like one that predates the runtime: a client's capability request goes unanswered and it opens no authority app. The web client then lists Polls and meeting Q&A in the Apps panel switched off, each with "Needs a server update", so their absence is explained. It does the same on any server that answers and does not offer them, such as one that runs the runtime without these two apps.
+Set `SFU_APPS_AUTHORITY_ENABLED=1` on the SFU. With it off the SFU answers only the capability request, at once and as `unsupported`, and has no listener for any other authority event, so a client opens no authority app and does not wait for the answer to time out. An SFU that predates the runtime does not answer at all; the client gives up after the ack timeout, 5 s. The web client then lists Polls and meeting Q&A in the Apps panel switched off, each with "Needs a server update", so their absence is explained. It does the same on any server that answers and does not offer them, such as one that runs the runtime without these two apps.
 
 The switch is read once, when the SFU process starts. Changing it needs a restart of the SFU, and there is no live toggle. A process that is already running keeps the mode it started with for every room it holds, so during a rolling deploy the rooms on the old process stay as they were until they move or end.
 

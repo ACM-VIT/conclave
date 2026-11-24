@@ -107,6 +107,16 @@ const parseQuery = (data: unknown): QueryRequest | null => {
  * the caller is and what they may do is decided by the room's authority,
  * against the room as it is at that moment.
  */
+export const registerAuthorityOffHandlers = ({ socket }: ConnectionContext): void => {
+  socket.on(AUTHORITY_EVENTS.capabilities, (_data: unknown, callback: unknown) => {
+    if (!takeToken(socket, "apps:authority:capabilities", RATE_LIMITS.appsAuthorityControl)) {
+      respond(callback, fail("rate-limited"));
+      return;
+    }
+    respond(callback, fail("unsupported"));
+  });
+};
+
 export const registerAuthorityHandlers = (context: ConnectionContext): void => {
   const { socket, state } = context;
 

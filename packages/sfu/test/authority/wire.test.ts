@@ -401,14 +401,14 @@ describe("authority transport on real sockets", () => {
     expect(afterClose).toEqual({ ok: false, code: "not-in-room" });
   });
 
-  it("an SFU without the runtime never answers, so the client hides the app", async () => {
+  it("an SFU without the runtime answers the capability request as unsupported at once, so the client hides the app", async () => {
     const stack = await start(null);
-    const host = await open(stack, asha, pollsContract, {
-      ackTimeoutMs: 200,
-      expectReady: false,
-    });
-    await until(() => host.client.capabilities.kind === "unsupported", "client gives up");
+    const startedAt = Date.now();
+    const host = await open(stack, asha, pollsContract, { expectReady: false });
+    await until(() => host.client.capabilities.kind === "unsupported", "client hears unsupported", 1_000);
+    const heardAfterMs = Date.now() - startedAt;
 
+    expect(heardAfterMs).toBeLessThan(1_000);
     expect(host.session.getState()).toEqual({ kind: "unsupported" });
     expect(await host.session.act("create", { question: "Q", options: ["a", "b"] })).toEqual({
       ok: false,
