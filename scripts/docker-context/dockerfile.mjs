@@ -21,8 +21,7 @@ function logicalInstructions(lines, escape) {
   for (let i = 0; i < lines.length; i += 1) {
     const raw = lines[i];
     const trimmed = raw.trim();
-    if (trimmed.startsWith("#") || (current && trimmed === "")) continue;
-    if (!current && trimmed === "") continue;
+    if (trimmed === "" || trimmed.startsWith("#")) continue;
     const continues = raw.trimEnd().endsWith(escape);
     const text = continues ? raw.trimEnd().slice(0, -1) : raw;
     if (current) current.text += text;
