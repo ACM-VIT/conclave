@@ -2100,7 +2100,7 @@ export function useMeetSocket({
       ...(localStream?.getTracks() ?? []),
     ]);
     localStreamRef.current = null;
-    localTracks.forEach(stopLocalTrack);
+    localTracks.forEach((track) => stopLocalTrack(track));
 
     socketRef.current?.disconnect();
     socketRef.current = null;
@@ -2157,7 +2157,7 @@ export function useMeetSocket({
       ...(localStream?.getTracks() ?? []),
     ]);
     localStreamRef.current = null;
-    localTracks.forEach(stopLocalTrack);
+    localTracks.forEach((track) => stopLocalTrack(track));
     setLocalStream(null);
     deviceIntents.dispatch({ type: "release" });
     stopScreenShareCapture();
@@ -2313,7 +2313,10 @@ export function useMeetSocket({
         }
         return true;
       });
-      const joinStream = new MediaStream([...committedMeanwhile, ...joinTracks]);
+      const joinStream =
+        committedMeanwhile.length === 0
+          ? refreshedStream
+          : new MediaStream([...committedMeanwhile, ...joinTracks]);
       const joinTrackIds = new Set(joinStream.getTracks().map((track) => track.id));
       localStreamRef.current = joinStream;
       setLocalStream(joinStream);

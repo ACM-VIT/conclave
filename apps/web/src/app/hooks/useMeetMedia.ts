@@ -2712,7 +2712,7 @@ export function useMeetMedia({
             );
           }
           if (!claimHolds(claim)) {
-            newStream.getTracks().forEach(stopLocalTrack);
+            newStream.getTracks().forEach((track) => stopLocalTrack(track));
             return;
           }
           const newVideoTrack = newStream.getVideoTracks()[0] ?? null;
