@@ -9,10 +9,14 @@ final class DiagnosticsFileStore {
 
     let directoryPath: String
     let exportDirectoryPath: String
+    /// The clock retention is measured against when a payload is written; tests pin it.
+    let wallClock: () -> Double
 
-    init(directoryPath: String, exportDirectoryPath: String) {
+    init(directoryPath: String, exportDirectoryPath: String,
+         wallClock: @escaping () -> Double = { DiagnosticsClock.wallMillis() }) {
         self.directoryPath = directoryPath
         self.exportDirectoryPath = exportDirectoryPath
+        self.wallClock = wallClock
     }
 
     static func standard() -> DiagnosticsFileStore {
@@ -51,8 +55,13 @@ final class DiagnosticsFileStore {
         } catch {
             return false
         }
-        prune(nowMillis: DiagnosticsClock.wallMillis())
+        prune(nowMillis: wallClock())
         return true
+    }
+
+    func removePayload(_ name: String) {
+        guard name.hasPrefix(DiagnosticsFileStore.payloadPrefix) && name.hasSuffix(".json") else { return }
+        try? FileManager.default.removeItem(at: fileURL(name))
     }
 
     func loadPayloads() -> [DiagnosticsLoadedPayload] {
@@ -116,6 +125,7 @@ final class DiagnosticsFileStore {
             try? FileManager.default.moveItem(at: current, to: previous)
         }
         prune(nowMillis: nowMillis)
+        CrashSignatureLedger(store: self).prune(nowMillis: nowMillis)
         guard let file = readBreadcrumbs(DiagnosticsFileStore.previousBreadcrumbsName) else { return nil }
         if nowMillis - file.writtenAtMillis > DiagnosticsLimits.retentionMillis {
             try? FileManager.default.removeItem(at: previous)

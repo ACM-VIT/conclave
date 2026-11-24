@@ -94,6 +94,10 @@ struct DiagnosticsFixtureSection: View {
                 tick += 1
             }
             .accessibilityIdentifier("sys.diagTestHang")
+            Button(ConclaveStrings.text("Force Test Crash")) {
+                CrashCaptureIOS.debugForceCrash()
+            }
+            .accessibilityIdentifier("sys.diagTestCrash")
         }
     }
 

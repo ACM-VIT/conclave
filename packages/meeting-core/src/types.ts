@@ -627,6 +627,7 @@ export interface MeetError {
     | "TRANSPORT_ERROR"
     /** Signaling works but this network lets no audio or video through. */
     | "NETWORK_BLOCKED"
+    | "JOIN_REJECTED"
     | "UNKNOWN";
   message: string;
   recoverable: boolean;

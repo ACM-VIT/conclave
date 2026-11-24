@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { clearMediaDeviceError, createMeetError, mergeMediaDeviceError } from "../src/app/lib/utils";
+import {
+  clearMediaDeviceError,
+  createMediaDeviceError,
+  createMeetError,
+  isMediaDeviceBlocked,
+  mergeMediaDeviceError,
+} from "../src/app/lib/utils";
 import { isDevicePublishing, retryFailedMediaDevices } from "../src/app/lib/media-retry";
 
 const denied = new DOMException("Permission denied", "NotAllowedError");
@@ -194,5 +200,30 @@ describe("errors that name no device", () => {
       code: "MEDIA_ERROR",
       message: "Could not start video source",
     });
+  });
+});
+
+describe("asking whether one device is blocked", () => {
+  const blockedError = () => new DOMException("Permission denied", "NotAllowedError");
+  const missingError = () => new DOMException("Requested device not found", "NotFoundError");
+
+  it("reads only that device's own cause", () => {
+    const micBlocked = createMediaDeviceError({ microphone: blockedError() });
+    expect(isMediaDeviceBlocked(micBlocked, "microphone")).toBe(true);
+    expect(isMediaDeviceBlocked(micBlocked, "camera")).toBe(false);
+
+    const micBlockedCameraMissing = createMediaDeviceError({ microphone: blockedError(), camera: missingError() });
+    expect(micBlockedCameraMissing?.code).toBe("PERMISSION_DENIED");
+    expect(isMediaDeviceBlocked(micBlockedCameraMissing, "camera")).toBe(false);
+
+    const bothBlocked = createMediaDeviceError({ microphone: blockedError(), camera: blockedError() });
+    expect(isMediaDeviceBlocked(bothBlocked, "camera")).toBe(true);
+    expect(isMediaDeviceBlocked(null, "camera")).toBe(false);
+  });
+
+  it("never treats a host rejection as a blocked device", () => {
+    const rejected = { code: "JOIN_REJECTED" as const, message: "The host has denied your request to join.", recoverable: false };
+    expect(isMediaDeviceBlocked(rejected, "camera")).toBe(false);
+    expect(isMediaDeviceBlocked(rejected, "microphone")).toBe(false);
   });
 });
