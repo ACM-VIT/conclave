@@ -182,6 +182,10 @@ struct SfuJoinUser: Codable, Equatable {
 struct SfuJoinRequest: Encodable {
     let roomId: String
     let sessionId: String
+    /// Sending this field, even empty, asks the join route for a guest identity bound to the
+    /// guest pass it keeps in this app's cookie jar. The app takes the identity from the token
+    /// (`SfuJoinInfo.localIdentity`), so it never names a guest id of its own.
+    let guestId: String
     let user: SfuJoinUser?
     let isHost: Bool
     let isAdmin: Bool
@@ -239,6 +243,7 @@ enum SfuJoinService {
         let payload = SfuJoinRequest(
             roomId: roomId,
             sessionId: sessionId,
+            guestId: "",
             user: user,
             isHost: isHost,
             isAdmin: isHost,
