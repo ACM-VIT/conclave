@@ -376,7 +376,7 @@ export async function simulate(
         const status = outcome.status;
         if (status === 429 || status >= 500) {
           if (outcome.retryAfter !== null) retryAfters += 1;
-          if (request.latest && outcome.retryAfter !== null) {
+          if (outcome.retryAfter !== null) {
             const until = clock + Math.min(Number(outcome.retryAfter) * 1000, MAX_WAIT_MS);
             waitUntil.set(key, Math.max(waitUntil.get(key) ?? 0, until));
           }

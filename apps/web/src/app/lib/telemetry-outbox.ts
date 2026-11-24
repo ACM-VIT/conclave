@@ -55,6 +55,7 @@ type Written = "written" | "refused" | "lost";
 type LockedStore = {
   write: (owned: string, next: StoredBatch) => Written;
   remove: (id: string, owned: string) => boolean;
+  delay: (id: string, until: number) => boolean;
 };
 
 export type DroppedBatches = { batches: number; events: number; unsent: number };
@@ -275,6 +276,11 @@ export function createOutbox(deps: OutboxDeps) {
             deps.store.remove(id);
             return true;
           },
+          delay: (id, until) => {
+            const current = open ? deps.store.get(id) : null;
+            if (!current) return false;
+            return until <= current.notBefore || deps.store.save({ ...current, notBefore: until });
+          },
         });
       } finally {
         open = false;
@@ -332,6 +338,16 @@ export function createOutbox(deps: OutboxDeps) {
     holdInMemory(batch);
   };
 
+  const waitAsked = (reply: Reply | null): number => {
+    const answer = reply ? answerOf(reply.status, reply.retryAfter, deps.now()) : null;
+    return answer?.outcome === "retry" && answer.afterMs !== null ? deps.now() + answer.afterMs : 0;
+  };
+
+  const carryWait = (id: string, reply: Reply | null, store: LockedStore): void => {
+    const until = waitAsked(reply);
+    if (until > 0 && store.delay(id, until)) wakeAt(until);
+  };
+
   const applyAnswer = (batch: Batch, events: OutboxEvent[], reply: Reply | null, store: LockedStore | null): void => {
     const answer = reply ? answerOf(reply.status, reply.retryAfter, deps.now()) : null;
     if (answer && answer.outcome !== "retry") {
@@ -345,7 +361,7 @@ export function createOutbox(deps: OutboxDeps) {
     }
     batch.nextTry = deps.now() + retryDelay(batch.attempt);
     batch.attempt += 1;
-    if (answer?.afterMs != null) batch.notBefore = Math.max(batch.notBefore, deps.now() + answer.afterMs);
+    batch.notBefore = Math.max(batch.notBefore, waitAsked(reply));
     if (store) keepSaved(batch, store);
     else holdInMemory(batch);
   };
@@ -412,6 +428,7 @@ export function createOutbox(deps: OutboxDeps) {
         const current = deps.store.get(batch.id);
         if (current?.sendId !== sendId) {
           live.delete(batch.id);
+          carryWait(batch.id, reply, held);
           return;
         }
         batch.notBefore = Math.max(batch.notBefore, current.notBefore);
@@ -426,14 +443,15 @@ export function createOutbox(deps: OutboxDeps) {
   };
 
   const beaconAnswered = (batch: Batch, events: OutboxEvent[], reply: Reply | null): void => {
-    if (!reply) return;
-    const answer = answerOf(reply.status, reply.retryAfter, deps.now());
-    if (answer.outcome !== "retry") return;
-    const until = answer.afterMs === null ? 0 : deps.now() + answer.afterMs;
+    if (!reply || answerOf(reply.status, reply.retryAfter, deps.now()).outcome !== "retry") return;
+    const until = waitAsked(reply);
     if (batch.saved) {
       locked((store) => {
         const current = deps.store.get(batch.id);
-        if (!current || current.sendId !== batch.sendId) return;
+        if (!current || current.sendId !== batch.sendId) {
+          carryWait(batch.id, reply, store);
+          return;
+        }
         const answered = fromStorage(current);
         answered.notBefore = Math.max(answered.notBefore, until);
         answered.events = withoutRefused(answered.events, events, reply);
@@ -442,9 +460,10 @@ export function createOutbox(deps: OutboxDeps) {
       });
       return;
     }
-    if (live.get(batch.id) !== batch || batch.inFlight !== null) return;
+    if (live.get(batch.id) !== batch) return;
     batch.notBefore = Math.max(batch.notBefore, until);
     batch.events = withoutRefused(batch.events, events, reply);
+    if (batch.inFlight !== null) return;
     if (batch.events.length === 0) finish(batch, null);
     else holdInMemory(batch);
   };

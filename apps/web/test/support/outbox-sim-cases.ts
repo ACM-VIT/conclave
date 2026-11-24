@@ -15,6 +15,31 @@ const quiet = {
 
 export const THREAD_CASES: ThreadCase[] = [
   {
+    name: "a Retry-After that answers a send after another tab took over the batch still holds that tab's resend",
+    thread: "Sol fourth final review of #265 at 57a8f5b0, finding 2",
+    head: "57a8f5b0",
+    seed: 2026112504,
+    scenario: {
+      profile: quiet,
+      actions: [
+        { at: 0, act: "open", tab: 1 },
+        { at: 1000, act: "emit", tab: 1, count: 2 },
+        { at: 6500, act: "hide", tab: 1 },
+        { at: 7000, act: "show", tab: 1 },
+        { at: 9000, act: "open", tab: 2 },
+        { at: 10_000, act: "hide", tab: 1, throttled: true },
+      ],
+      replies: [
+        { latency: 100, status: 503 },
+        { latency: 30_000, status: 429, retryAfter: "60" },
+        { latency: 100, status: 200 },
+        { latency: 20_000, status: 503 },
+        { latency: 100, status: 200 },
+        { latency: 100, status: 200 },
+      ],
+    },
+  },
+  {
     name: "a tab that read its expired claim never writes it back over the claim another tab made before that write",
     thread: "Sol third final review of #265 at 6a6d20e2, finding 1",
     head: "6a6d20e2",
