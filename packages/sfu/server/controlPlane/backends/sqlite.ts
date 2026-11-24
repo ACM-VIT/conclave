@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import { asRecord } from "../../../utilities/untrusted.js";
-import { assertSqliteWritable } from "../../sqliteWriteCheck.js";
+import { openSqliteStore } from "../../sqliteWriteCheck.js";
 import { StoreUnavailableError, type CommitResult, type RawStored } from "../model.js";
 import {
   ReplayEntropy,
@@ -77,11 +77,10 @@ const unavailable = (error: unknown): Error =>
       ? error
       : new Error(String(error));
 
-export const createSqliteBackend = (path: string): Backend => {
-  const db = openSqliteDatabase(path);
-  db.exec("PRAGMA busy_timeout = 5000");
-  assertSqliteWritable(db, path);
-  db.exec("PRAGMA journal_mode = WAL");
+export const createSqliteBackend = (path: string): Backend =>
+  openSqliteStore(openSqliteDatabase(path), path, sqliteBackendOn);
+
+const sqliteBackendOn = (db: SqliteDatabase): Backend => {
   db.exec(SCHEMA);
 
   const statements = {

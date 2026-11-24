@@ -1,5 +1,5 @@
 import Docker from "dockerode";
-import { randomInt } from "node:crypto";
+import { randomInt, randomUUID } from "node:crypto";
 import type {
     BrowserCapabilities,
     BrowserManager,
@@ -10,6 +10,9 @@ import type {
     NavigateOptions,
 } from "./types.js";
 import { defaultConfig } from "./types.js";
+
+export const VNC_AUTH_IMAGE_LABEL = "org.conclave.browser.vnc-auth";
+export const VNC_AUTH_IMAGE_LABEL_VALUE = "per-session-password";
 
 export class ContainerManager implements BrowserManager {
     readonly capabilities: BrowserCapabilities = {
@@ -108,8 +111,9 @@ export class ContainerManager implements BrowserManager {
      * server or proxy log. noVNC's vnc_lite.html only matches `[?&]password=`,
      * so the fragment starts with `&`.
      */
-    private buildNoVncUrl(port: number, vncPassword: string): string {
+    private buildNoVncUrl(port: number, vncPassword: string, sessionId: string): string {
         const params = new URLSearchParams({
+            session: sessionId,
             autoconnect: "true",
             resize: "scale",
             reconnect: "true",
@@ -149,8 +153,36 @@ export class ContainerManager implements BrowserManager {
         }
     }
 
+    private async verifyImage(): Promise<string> {
+        const name = this.config.dockerImageName;
+        let labels: Record<string, string> | undefined;
+        let imageId = "";
+        try {
+            const image = await this.docker.getImage(name).inspect();
+            labels = image.Config?.Labels ?? undefined;
+            imageId = image.Id;
+        } catch (error) {
+            const reason = error instanceof Error ? error.message : String(error);
+            throw new Error(`The browser image ${name} could not be inspected (${reason}), so it is not known to enforce a per-session VNC password.`);
+        }
+        if (labels?.[VNC_AUTH_IMAGE_LABEL] !== VNC_AUTH_IMAGE_LABEL_VALUE) {
+            throw new Error(
+                `The browser image ${name} is not known to enforce a per-session VNC password: it lacks the ${VNC_AUTH_IMAGE_LABEL}=${VNC_AUTH_IMAGE_LABEL_VALUE} label. Rebuild it from packages/shared-browser/docker, or deploy without --skip-runtime-image.`,
+            );
+        }
+        if (!imageId) {
+            throw new Error(`The browser image ${name} has no image id to launch, so it is not known to enforce a per-session VNC password.`);
+        }
+        return imageId;
+    }
+
+    async assertReady(): Promise<void> {
+        await this.verifyImage();
+    }
+
     async checkHealth(): Promise<void> {
         await this.docker.ping();
+        await this.verifyImage();
     }
 
     async launchBrowser(options: LaunchBrowserOptions): Promise<LaunchBrowserResult> {
@@ -161,6 +193,13 @@ export class ContainerManager implements BrowserManager {
                 success: false,
                 error: "Browser session already exists for this room",
             };
+        }
+
+        let imageId: string;
+        try {
+            imageId = await this.verifyImage();
+        } catch (error) {
+            return { success: false, error: error instanceof Error ? error.message : String(error) };
         }
 
         const port = this.getAvailablePort();
@@ -208,7 +247,7 @@ export class ContainerManager implements BrowserManager {
             }
 
             container = await this.docker.createContainer({
-                Image: this.config.dockerImageName,
+                Image: imageId,
                 name: containerName,
                 Env: containerEnv,
                 HostConfig: {
@@ -227,7 +266,7 @@ export class ContainerManager implements BrowserManager {
 
             await container.start();
 
-            const noVncUrl = this.buildNoVncUrl(port, vncPassword);
+            const noVncUrl = this.buildNoVncUrl(port, vncPassword, randomUUID());
 
             const session: BrowserSession = {
                 roomId,

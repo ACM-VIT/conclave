@@ -43,8 +43,13 @@ docker compose -f docker-compose.sfu.yml run --rm --no-deps --user root \
 Images before this change fell back to JSON files in the container layer
 when SQLite was locked. Before it replaces such a container, the deploy copies
 any of those files onto the volume under `CONCLAVE_FALLBACK_IMPORT_DIR`, readable
-only by the SFU user, so they survive the replacement. This SFU does not import
-them; multi-SFU persistence and that import move to a follow-up.
+only by the SFU user, so they survive the replacement. A store set to JSON with
+`SCHEDULING_PERSISTENCE`, `SCHEDULED_MEETINGS_PERSISTENCE` or
+`SCHEDULED_WEBINARS_PERSISTENCE` adopts that copy as its file on the first start
+after the upgrade, when its own file is missing, and renames the copy with a
+`.adopted` suffix. It refuses to start if two different copies exist, or if its
+own file is empty while a copy holds records. Stores on SQLite do not import the
+copies; that import moves to a follow-up with the multi-SFU persistence work.
 
 To upgrade an existing host, run `git pull` to the reviewed revision first,
 then run the new `scripts/deploy-sfu.sh`. Do not start the upgrade with the

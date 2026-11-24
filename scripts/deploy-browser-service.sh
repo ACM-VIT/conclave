@@ -44,29 +44,42 @@ if [[ "$BROWSER_PROVIDER" == "kitesurf" ]]; then
   export BROWSER_DOCKER_SOCKET="${BROWSER_DOCKER_SOCKET:-/dev/null}"
 fi
 
-# Run the service's own startup checks in the new image, with the environment
-# compose will give it, before anything is replaced.
-echo "Checking the shared browser service configuration..."
-"${COMPOSE[@]}" build browser-service
-"${COMPOSE[@]}" run --rm --no-deps browser-service node packages/shared-browser/dist/server.js --check-config
-if [[ "$CHECK_CONFIG_ONLY" == "true" ]]; then
-  exit 0
-fi
-
 RUNTIME_IMAGE_NAME="${BROWSER_IMAGE_NAME:-conclave-browser:latest}"
-
+CHECK_IMAGE_NAME="$RUNTIME_IMAGE_NAME"
+CANDIDATE_IMAGE_NAME=""
 if [[ "$BUILD_RUNTIME_IMAGE" == "true" ]]; then
   BROWSER_DOCKER_DIR="${ROOT_DIR}/packages/shared-browser/docker"
   if [[ ! -d "$BROWSER_DOCKER_DIR" ]]; then
     echo "Missing browser runtime Docker context at ${BROWSER_DOCKER_DIR}" >&2
     exit 1
   fi
-
+  CANDIDATE_IMAGE_NAME="conclave-browser-candidate:$$"
+  trap 'docker image rm "$CANDIDATE_IMAGE_NAME" >/dev/null 2>&1 || true' EXIT
   echo "Building browser runtime image (${RUNTIME_IMAGE_NAME})..."
-  docker build -t "$RUNTIME_IMAGE_NAME" "$BROWSER_DOCKER_DIR"
+  docker build -t "$CANDIDATE_IMAGE_NAME" "$BROWSER_DOCKER_DIR"
+  CHECK_IMAGE_NAME="$CANDIDATE_IMAGE_NAME"
 fi
 
-echo "Deploying shared browser service..."
+# Run the service's own startup checks in the new image, against the runtime
+# image it would launch, before anything is replaced or retagged.
+echo "Checking the shared browser service configuration..."
+PREVIOUS_CONTAINER="$("${COMPOSE[@]}" ps -q browser-service 2>/dev/null | head -n 1 || true)"
+if [[ -n "$PREVIOUS_CONTAINER" && "$(docker inspect --format '{{.State.Running}}' "$PREVIOUS_CONTAINER" 2>/dev/null || true)" != "true" ]]; then
+  PREVIOUS_CONTAINER=""
+fi
+"${COMPOSE[@]}" build browser-service
+"${COMPOSE[@]}" run --rm --no-deps -e "BROWSER_IMAGE_NAME=${CHECK_IMAGE_NAME}" -e "BROWSER_SERVICE_PREVIOUS_CONTAINER=${PREVIOUS_CONTAINER}" browser-service node packages/shared-browser/dist/server.js --check-config
+if [[ "$CHECK_CONFIG_ONLY" == "true" ]]; then
+  exit 0
+fi
+
+if [[ -n "$CANDIDATE_IMAGE_NAME" ]]; then
+  docker tag "$CANDIDATE_IMAGE_NAME" "$RUNTIME_IMAGE_NAME"
+fi
+
+BROWSER_SERVICE_DEPLOY_ID="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+export BROWSER_SERVICE_DEPLOY_ID
+echo "Deploying shared browser service (deploy ${BROWSER_SERVICE_DEPLOY_ID})..."
 "${COMPOSE[@]}" up -d --build browser-service
 
 SERVICE_HOST="${BROWSER_SERVICE_HOST:-127.0.0.1}"
@@ -77,15 +90,17 @@ HEALTH_URL="http://${SERVICE_HOST}:${BROWSER_SERVICE_PORT:-3040}/health"
 # its configuration, so wait for the API to answer.
 echo "Waiting for ${HEALTH_URL}..."
 healthy="false"
-for _ in $(seq 1 60); do
-  if curl -fsS --max-time 3 -o /dev/null "$HEALTH_URL" 2>/dev/null; then
+deadline=$(( $(date +%s) + ${BROWSER_SERVICE_HEALTH_TIMEOUT_SECONDS:-120} ))
+while (( $(date +%s) < deadline )); do
+  body="$(curl -fsS --max-time 3 "$HEALTH_URL" 2>/dev/null || true)"
+  if [[ "$body" == *'"service":"conclave-shared-browser"'* && "$body" == *"\"deployId\":\"${BROWSER_SERVICE_DEPLOY_ID}\""* && "$body" == *'"status":"ok"'* ]]; then
     healthy="true"
     break
   fi
   sleep 2
 done
 if [[ "$healthy" != "true" ]]; then
-  echo "The shared browser service did not become healthy at ${HEALTH_URL}." >&2
+  echo "The shared browser service from this deploy (${BROWSER_SERVICE_DEPLOY_ID}) did not answer healthy at ${HEALTH_URL}." >&2
   echo "See: docker compose -f ${COMPOSE_FILE} logs browser-service" >&2
   exit 1
 fi

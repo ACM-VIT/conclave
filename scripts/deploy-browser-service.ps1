@@ -80,32 +80,56 @@ if (Test-Path -Path $envFile -PathType Leaf) {
 }
 $composeArgs += @("-f", $composeFile)
 
-# Run the service's own startup checks in the new image, with the environment
-# compose will give it, before anything is replaced.
-Write-Host "Checking the shared browser service configuration..."
-Invoke-Checked -Command "docker" -Arguments ($composeArgs + @("build", "browser-service"))
-Invoke-Checked -Command "docker" -Arguments ($composeArgs + @("run", "--rm", "--no-deps", "browser-service", "node", "packages/shared-browser/dist/server.js", "--check-config"))
-if ($checkConfigOnly) {
-  exit 0
-}
-
 $runtimeImageName = if (-not [string]::IsNullOrWhiteSpace($env:BROWSER_IMAGE_NAME)) {
   $env:BROWSER_IMAGE_NAME
 } else {
   "conclave-browser:latest"
 }
+$checkImageName = $runtimeImageName
+$candidateImageName = ""
 
-if ($buildRuntimeImage) {
-  $browserDockerDir = Join-Path $rootDir "packages/shared-browser/docker"
-  if (-not (Test-Path -Path $browserDockerDir -PathType Container)) {
-    Exit-WithError "Missing browser runtime Docker context at $browserDockerDir"
+try {
+  if ($buildRuntimeImage) {
+    $browserDockerDir = Join-Path $rootDir "packages/shared-browser/docker"
+    if (-not (Test-Path -Path $browserDockerDir -PathType Container)) {
+      Exit-WithError "Missing browser runtime Docker context at $browserDockerDir"
+    }
+    $candidateImageName = "conclave-browser-candidate:$PID"
+    Write-Host "Building browser runtime image ($runtimeImageName)..."
+    Invoke-Checked -Command "docker" -Arguments @("build", "-t", $candidateImageName, $browserDockerDir)
+    $checkImageName = $candidateImageName
   }
 
-  Write-Host "Building browser runtime image ($runtimeImageName)..."
-  Invoke-Checked -Command "docker" -Arguments @("build", "-t", $runtimeImageName, $browserDockerDir)
+  # Run the service's own startup checks in the new image, against the runtime
+  # image it would launch, before anything is replaced or retagged.
+  Write-Host "Checking the shared browser service configuration..."
+  $previousContainer = (@(& docker @($composeArgs + @("ps", "-q", "browser-service")) 2>$null) | Select-Object -First 1)
+  if ($previousContainer) {
+    $running = (@(& docker inspect --format "{{.State.Running}}" $previousContainer 2>$null) -join "").Trim()
+    if ($running -ne "true") {
+      $previousContainer = ""
+    }
+  } else {
+    $previousContainer = ""
+  }
+  Invoke-Checked -Command "docker" -Arguments ($composeArgs + @("build", "browser-service"))
+  Invoke-Checked -Command "docker" -Arguments ($composeArgs + @("run", "--rm", "--no-deps", "-e", "BROWSER_IMAGE_NAME=$checkImageName", "-e", "BROWSER_SERVICE_PREVIOUS_CONTAINER=$previousContainer", "browser-service", "node", "packages/shared-browser/dist/server.js", "--check-config"))
+  if ($checkConfigOnly) {
+    exit 0
+  }
+
+  if ($candidateImageName) {
+    Invoke-Checked -Command "docker" -Arguments @("tag", $candidateImageName, $runtimeImageName)
+  }
+} finally {
+  if ($candidateImageName) {
+    & docker image rm $candidateImageName *> $null
+  }
 }
 
-Write-Host "Deploying shared browser service..."
+$deployId = [guid]::NewGuid().ToString("N")
+[Environment]::SetEnvironmentVariable("BROWSER_SERVICE_DEPLOY_ID", $deployId, "Process")
+Write-Host "Deploying shared browser service (deploy $deployId)..."
 Invoke-Checked -Command "docker" -Arguments ($composeArgs + @("up", "-d", "--build", "browser-service"))
 
 $browserServicePort = if (-not [string]::IsNullOrWhiteSpace($env:BROWSER_SERVICE_PORT)) {
@@ -141,20 +165,26 @@ $healthUrl = "http://${healthHost}:$browserServicePort/health"
 # its configuration, so wait for the API to answer.
 Write-Host "Waiting for $healthUrl..."
 $healthy = $false
-for ($attempt = 0; $attempt -lt 60; $attempt++) {
+$healthTimeout = if ([string]::IsNullOrWhiteSpace($env:BROWSER_SERVICE_HEALTH_TIMEOUT_SECONDS)) { 120 } else { [int]$env:BROWSER_SERVICE_HEALTH_TIMEOUT_SECONDS }
+$deadline = (Get-Date).AddSeconds($healthTimeout)
+while ((Get-Date) -lt $deadline) {
   try {
     $response = Invoke-WebRequest -Uri $healthUrl -UseBasicParsing -TimeoutSec 3
-    if ($response.StatusCode -eq 200) {
+    $health = $response.Content | ConvertFrom-Json
+    $fields = $health.PSObject.Properties
+    if ($response.StatusCode -eq 200 -and
+        $fields["service"] -and $fields["service"].Value -eq "conclave-shared-browser" -and
+        $fields["deployId"] -and $fields["deployId"].Value -eq $deployId -and
+        $fields["status"] -and $fields["status"].Value -eq "ok") {
       $healthy = $true
       break
     }
   } catch {
-    # Not listening yet.
   }
   Start-Sleep -Seconds 2
 }
 if (-not $healthy) {
-  Exit-WithError "The shared browser service did not become healthy at $healthUrl.`nSee: docker compose -f $composeFile logs browser-service"
+  Exit-WithError "The shared browser service from this deploy ($deployId) did not answer healthy at $healthUrl.`nSee: docker compose -f $composeFile logs browser-service"
 }
 
 Write-Host ""

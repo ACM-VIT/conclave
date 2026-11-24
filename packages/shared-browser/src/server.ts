@@ -2,6 +2,7 @@ import { createServer } from "node:net";
 import { createApp } from "./app.js";
 import { createBrowserManager } from "./createBrowserManager.js";
 import { resolveServiceSecurity, ServiceSecurityError } from "./serviceSecurity.js";
+import { isCurrentSharedBrowserHealth, isEarlierSharedBrowserHealth, previousManagedContainer } from "./serviceIdentity.js";
 import { defaultConfig } from "./types.js";
 
 const resolveSecurityOrExit = () => {
@@ -29,14 +30,28 @@ const browserManager = (() => {
 })();
 const app = createApp(browserManager, security);
 
-// Proves the bind address exists on this host. Port 0 keeps the check from
-// colliding with the service it is about to replace.
-const checkListenHost = (host: string): Promise<void> =>
+const checkListenAddress = (host: string, port: number): Promise<void> =>
     new Promise((resolve, reject) => {
         const probe = createServer();
         probe.once("error", reject);
-        probe.listen(0, host, () => probe.close(() => resolve()));
+        probe.listen(port, host, () => probe.close(() => resolve()));
     });
+
+const heldBySharedBrowser = async (host: string, port: number): Promise<boolean> => {
+    try {
+        const address = host.includes(":") ? `[${host}]` : host;
+        const response = await fetch(`http://${address}:${port}/health`, { signal: AbortSignal.timeout(3_000) });
+        const body: unknown = await response.json();
+        return isCurrentSharedBrowserHealth(body) || (previousManagedContainer() !== null && isEarlierSharedBrowserHealth(body));
+    } catch {
+        return false;
+    }
+};
+
+const assertReady = (): Promise<void> =>
+    Promise.resolve(browserManager.assertReady?.()).catch((error: unknown) =>
+        refuseToStart(error instanceof Error ? error.message : String(error)),
+    );
 
 let isShuttingDown = false;
 
@@ -74,14 +89,20 @@ const listen = () => app.listen(security.listenPort, security.listenHost, (error
 // The deploy scripts run --check-config in the new image before replacing the
 // service: every startup check above, short of listening on the real port.
 if (process.argv.includes("--check-config")) {
-    checkListenHost(security.listenHost).then(
-        () => {
+    const reportValid = () =>
+        assertReady().then(() => {
             console.log(`[Server] Shared browser service configuration is valid (control API on ${security.listenHost}:${security.listenPort}).`);
             process.exit(0);
-        },
-        (error: NodeJS.ErrnoException) =>
-            refuseToStart(`BROWSER_SERVICE_HOST=${security.listenHost} cannot be bound on this host (${error.code ?? error.message}).`),
-    );
+        });
+    checkListenAddress(security.listenHost, security.listenPort).then(reportValid, async (error: NodeJS.ErrnoException) => {
+        if (error.code !== "EADDRINUSE") {
+            return refuseToStart(`BROWSER_SERVICE_HOST=${security.listenHost} cannot be bound on this host (${error.code ?? error.message}).`);
+        }
+        if (await heldBySharedBrowser(security.listenHost, security.listenPort)) return reportValid();
+        return refuseToStart(
+            `BROWSER_SERVICE_PORT=${security.listenPort} on ${security.listenHost} is in use by a program that is not the shared browser service. Free the port or choose another one.`,
+        );
+    });
 } else {
-    listen();
+    void assertReady().then(listen);
 }

@@ -101,6 +101,7 @@ export interface BrowserServiceConfig {
 export interface BrowserManager {
     readonly capabilities: BrowserCapabilities;
     checkHealth(): Promise<void>;
+    assertReady?(): Promise<void>;
     launchBrowser(options: LaunchBrowserOptions): Promise<LaunchBrowserResult>;
     navigateTo(options: NavigateOptions): Promise<LaunchBrowserResult>;
     closeBrowser(roomId: string): Promise<{ success: boolean; error?: string }>;

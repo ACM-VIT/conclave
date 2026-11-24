@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -400,16 +401,16 @@ test("Redis off loopback must use TLS and credentials", () => {
 });
 
 test("Redis at a public IP needs an explicit override", () => {
-  assert.match(redisErrors("rediss://user:secret@57.159.28.54:6380").join("\n"), /public IP 57\.159\.28\.54 is refused/);
+  assert.match(redisErrors("rediss://user:secret@8.8.8.8:6380").join("\n"), /public IP 8\.8\.8\.8 is refused/);
   assert.match(redisErrors("rediss://user:secret@[2606:4700::1111]:6380").join("\n"), /public IP/);
-  for (const mapped of ["[::ffff:57.159.28.54]", "[::ffff:399f:1c36]", "[0:0:0:0:0:FFFF:57.159.28.54]"]) {
+  for (const mapped of ["[::ffff:8.8.8.8]", "[::ffff:808:808]", "[0:0:0:0:0:FFFF:8.8.8.8]"]) {
     assert.match(redisErrors(`rediss://user:secret@${mapped}:6380`).join("\n"), /public IP/, mapped);
   }
   assert.deepEqual(redisErrors("rediss://user:secret@[::ffff:10.0.0.5]:6380"), []);
   assert.deepEqual(redisErrors("redis://[::ffff:127.0.0.1]:6379"), []);
-  assert.deepEqual(redisErrors("rediss://user:secret@57.159.28.54:6380", { allowPublicRedis: true }), []);
+  assert.deepEqual(redisErrors("rediss://user:secret@8.8.8.8:6380", { allowPublicRedis: true }), []);
   assert.match(
-    redisErrors("redis://57.159.28.54:6379", { allowPublicRedis: true }).join("\n"),
+    redisErrors("redis://8.8.8.8:6379", { allowPublicRedis: true }).join("\n"),
     /must use TLS[\s\S]*require credentials/,
   );
 });
@@ -427,12 +428,13 @@ test("the CLI refuses a public Redis unless SFU_DEPLOY_ALLOW_PUBLIC_REDIS=1", ()
   assert.equal(prodShape.status, 0, prodShape.stderr);
   assert.ok(!`${prodShape.stdout}${prodShape.stderr}`.includes("prod-password"));
 
-  const publicRedis = run("rediss://user:redis-pw-sentinel@57.159.28.54:6380");
+  const sentinel = randomBytes(12).toString("hex");
+  const publicRedis = run(`rediss://user:${sentinel}@8.8.8.8:6380`);
   assert.equal(publicRedis.status, 1);
   assert.match(publicRedis.stderr, /public IP/);
-  assert.ok(!publicRedis.stderr.includes("redis-pw-sentinel"));
+  assert.ok(!publicRedis.stderr.includes(sentinel));
 
-  assert.equal(run("rediss://user:secret@57.159.28.54:6380", { SFU_DEPLOY_ALLOW_PUBLIC_REDIS: "1" }).status, 0);
+  assert.equal(run("rediss://user:secret@8.8.8.8:6380", { SFU_DEPLOY_ALLOW_PUBLIC_REDIS: "1" }).status, 0);
 });
 
 const productionErrors = (environment) => {
