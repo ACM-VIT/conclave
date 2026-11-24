@@ -33,15 +33,15 @@ class SettingsTranscriptBridgeTests {
             SettingsRowID.cameraFacing, SettingsRowID.captions, SettingsRowID.captionStyle, SettingsRowID.chatPreviews,
             SettingsRowID.playVoiceMessages, SettingsRowID.voiceMessages, SettingsRowID.hostControls, SettingsRowID.knockSound,
             SettingsRowID.handSound, SettingsRowID.connection, SettingsRowID.alwaysShowControls, SettingsRowID.name_,
-            SettingsRowID.identity, SettingsRowID.signOut, SettingsRowID.privacy, SettingsRowID.version),
+            SettingsRowID.identity, SettingsRowID.signOut, SettingsRowID.privacy, SettingsRowID.crashReports, SettingsRowID.version),
             rows(SettingsScope.call, attendee = false, host = true, platform = SettingsPlatform.android, caps = caps))
         assertEquals(listOf(SettingsRowID.noiseSuppression, SettingsRowID.captions, SettingsRowID.captionStyle, SettingsRowID.chatPreviews,
             SettingsRowID.playVoiceMessages, SettingsRowID.voiceMessages, SettingsRowID.alwaysShowControls, SettingsRowID.privacy,
-            SettingsRowID.version),
+            SettingsRowID.crashReports, SettingsRowID.version),
             rows(SettingsScope.app, attendee = false, host = true, platform = SettingsPlatform.android, caps = caps))
-        assertEquals(listOf(SettingsRowID.privacy, SettingsRowID.version),
+        assertEquals(listOf(SettingsRowID.privacy, SettingsRowID.crashReports, SettingsRowID.version),
             rows(SettingsScope.call, attendee = true, host = true, platform = SettingsPlatform.android, caps = caps))
-        assertEquals(listOf(SettingsRowID.haptics, SettingsRowID.privacy, SettingsRowID.version),
+        assertEquals(listOf(SettingsRowID.haptics, SettingsRowID.privacy, SettingsRowID.crashReports, SettingsRowID.version),
             rows(SettingsScope.call, attendee = true, host = false, platform = SettingsPlatform.ios, caps = caps))
     }
 

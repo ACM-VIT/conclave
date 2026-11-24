@@ -219,6 +219,10 @@ private fun SettingsRootRow(
             val version = remember { meetingDetailsVersionName(context) }
             ConclaveValueRow(title = conclaveString("set_version"), value = version, identifier = tag)
         }
+        SettingsRowID.crashReports -> {
+            val general = settings.general
+            SettingsSwitchItem(conclaveString(SettingsCopy.rowName(row)), general.shareCrashReports, tag) { settings.setShareCrashReports(it) }
+        }
         SettingsRowID.exportDiagnostics -> DiagnosticsExportItem(DiagnosticsExportPresenter.shared, tag)
         SettingsRowID.haptics, SettingsRowID.effects -> Unit
     }

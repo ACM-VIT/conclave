@@ -96,6 +96,7 @@ const FAILURE_CODES: Record<MeetError["code"], JoinFailureReason> = {
   MEDIA_ERROR: "media_error",
   TRANSPORT_ERROR: "transport_error",
   CONNECTION_FAILED: "connection_failed",
+  JOIN_REJECTED: "rejected",
   UNKNOWN: "unknown",
 };
 
