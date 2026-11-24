@@ -701,11 +701,11 @@ export function useMeetMedia({
   const [blockedProducerRecoveryFlushPulse, setBlockedProducerRecoveryFlushPulse] =
     useState(0);
   const flushQueuedProducerRecoveries = useCallback(() => {
-    if (pendingAudioProducerRecoveryRef.current) {
+    if (pendingAudioProducerRecoveryRef.current && !audioRecoveryInFlightRef.current) {
       pendingAudioProducerRecoveryRef.current = false;
       setAudioProducerRecoveryPulse((value) => value + 1);
     }
-    if (pendingCameraProducerRecoveryRef.current) {
+    if (pendingCameraProducerRecoveryRef.current && !cameraRecoveryInFlightRef.current) {
       pendingCameraProducerRecoveryRef.current = false;
       setCameraProducerRecoveryPulse((value) => value + 1);
     }
