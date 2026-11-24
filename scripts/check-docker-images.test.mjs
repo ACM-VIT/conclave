@@ -22,6 +22,12 @@ else if (args[0] === "context" && args[1] === "inspect") {
 else if (args[0] === "create" && process.env.FAKE_DOCKER_RUN_CONFLICT) { process.stderr.write("Conflict. The container name is already in use by container \\"0ther0ther0ther0\\".\\n"); process.exit(125); }
 else if (args[0] === "create") process.stdout.write("0123456789abcdef0123\\n");
 else if (args[0] === "start" && process.env.FAKE_DOCKER_START_FAIL) { process.stderr.write("failed to create task for container: exec: \\"bad\\": executable file not found\\n"); process.exit(1); }
+else if (args[0] === "buildx" && args[1] === "build" && process.env.FAKE_DOCKER_BUILD_HANG && !fs.existsSync(process.env.FAKE_DOCKER_BUILD_HANG)) {
+  fs.writeFileSync(process.env.FAKE_DOCKER_BUILD_HANG, "");
+  for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { fs.appendFileSync(process.env.FAKE_DOCKER_LOG, JSON.stringify({ received: signal }) + "\\n"); process.exit(1); });
+  setInterval(() => {}, 1000);
+} else if (args[0] === "buildx" && args[1] === "build" && process.env.FAKE_DOCKER_BUILD_FAIL && args[args.indexOf("-t") + 1].includes(process.env.FAKE_DOCKER_BUILD_FAIL)) { process.stderr.write("build failed\\n"); process.exit(1); }
+else if (args[0] === "exec" && process.env.FAKE_DOCKER_HEALTHY) process.stdout.write("200\\n");
 else if (args[0] === "inspect") process.stdout.write("true\\n");
 else if (args[0] === "info") process.stdout.write((process.env.FAKE_DOCKER_INFO ?? JSON.stringify({ OperatingSystem: "OrbStack", Name: "orbstack" })) + "\\n");
 `;
@@ -41,20 +47,22 @@ function fakeDocker(t, { contexts = {}, current = "default", ...extra } = {}) {
     FAKE_DOCKER_CURRENT: current,
     ...extra,
   };
-  const calls = () => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)) : []);
-  return { env, calls };
+  const entries = () => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)) : []);
+  const calls = () => entries().filter((entry) => entry.args);
+  const received = () => entries().filter((entry) => entry.received).map((entry) => entry.received);
+  return { env, calls, received, dir };
 }
 
-test("DOCKER_HOST wins over DOCKER_CONTEXT without asking docker", (t) => {
+test("DOCKER_HOST wins over DOCKER_CONTEXT without asking docker", async (t) => {
   const fake = fakeDocker(t, { contexts: { remote: "tcp://203.0.113.1:2376" } });
-  assert.equal(resolveDockerEndpoint({ ...fake.env, DOCKER_HOST: "unix:///var/run/docker.sock", DOCKER_CONTEXT: "remote" }), "unix:///var/run/docker.sock");
+  assert.equal(await resolveDockerEndpoint({ ...fake.env, DOCKER_HOST: "unix:///var/run/docker.sock", DOCKER_CONTEXT: "remote" }), "unix:///var/run/docker.sock");
   assert.deepEqual(fake.calls(), []);
 });
 
-test("DOCKER_CONTEXT, then the current context, decide the endpoint when DOCKER_HOST is unset", (t) => {
+test("DOCKER_CONTEXT, then the current context, decide the endpoint when DOCKER_HOST is unset", async (t) => {
   const fake = fakeDocker(t, { current: "rootless", contexts: { remote: "tcp://203.0.113.1:2376", rootless: "unix:///run/user/1000/docker.sock" } });
-  assert.equal(resolveDockerEndpoint({ ...fake.env, DOCKER_CONTEXT: "remote" }), "tcp://203.0.113.1:2376");
-  assert.equal(resolveDockerEndpoint(fake.env), "unix:///run/user/1000/docker.sock");
+  assert.equal(await resolveDockerEndpoint({ ...fake.env, DOCKER_CONTEXT: "remote" }), "tcp://203.0.113.1:2376");
+  assert.equal(await resolveDockerEndpoint(fake.env), "unix:///run/user/1000/docker.sock");
   assert.deepEqual(fake.calls().map((call) => call.args), [
     ["context", "inspect", "remote", "--format", "{{.Endpoints.docker.Host}}"],
     ["context", "show"],
@@ -69,11 +77,11 @@ test("only a local unix socket is accepted", () => {
   }
 });
 
-test("every docker call after the check is pinned to the checked endpoint", (t) => {
+test("every docker call after the check is pinned to the checked endpoint", async (t) => {
   const fake = fakeDocker(t);
   const docker = pinnedDocker({ host: "unix:///run/user/1000/docker.sock" }, { ...fake.env, DOCKER_HOST: "unix:///elsewhere.sock", DOCKER_CONTEXT: "remote", BUILDX_BUILDER: "olympus-ec2" });
-  docker(["build", "."]);
-  docker(["run", "-d", "x"]);
+  await docker(["build", "."]);
+  await docker(["run", "-d", "x"]);
   assert.deepEqual(fake.calls(), [
     { args: ["--host", "unix:///run/user/1000/docker.sock", "build", "."], DOCKER_HOST: null, DOCKER_CONTEXT: null, BUILDX_BUILDER: null, DOCKER_CONFIG: null },
     { args: ["--host", "unix:///run/user/1000/docker.sock", "run", "-d", "x"], DOCKER_HOST: null, DOCKER_CONTEXT: null, BUILDX_BUILDER: null, DOCKER_CONFIG: null },
@@ -109,7 +117,7 @@ test("SIGINT during the readiness wait removes the container and image tag this 
   assert.ok(calls.every((args) => args[0] === "context" || args[1] === "unix:///run/fake-docker.sock"));
 });
 
-test("the shared browser mounts the daemon-side socket: the VM path for VM daemons, the resolved path for a native Linux engine", (t) => {
+test("the shared browser mounts the daemon-side socket: the VM path for VM daemons, the resolved path for a native Linux engine", async (t) => {
   const socket = "/run/user/1000/docker.sock";
   const cases = [
     ["OrbStack on macOS", "darwin", { OperatingSystem: "OrbStack", Name: "orbstack" }, "/var/run/docker.sock"],
@@ -123,15 +131,15 @@ test("the shared browser mounts the daemon-side socket: the VM path for VM daemo
   for (const [name, platform, info, expected] of cases) {
     const fake = fakeDocker(t, { FAKE_DOCKER_INFO: JSON.stringify(info) });
     const docker = pinnedDocker({ host: `unix://${socket}` }, fake.env);
-    assert.equal(browserSocketSource(docker, { socket, env: fake.env, platform }), expected, name);
+    assert.equal(await browserSocketSource(docker, { socket, env: fake.env, platform }), expected, name);
     assert.deepEqual(fake.calls().map((call) => call.args.slice(2)), [["info", "--format", "{{json .}}"]], name);
   }
 });
 
-test("BROWSER_DOCKER_SOCKET overrides the mount source without asking docker", (t) => {
+test("BROWSER_DOCKER_SOCKET overrides the mount source without asking docker", async (t) => {
   const fake = fakeDocker(t);
   const docker = pinnedDocker({ host: "unix:///var/run/docker.sock" }, fake.env);
-  assert.equal(browserSocketSource(docker, { socket: "/var/run/docker.sock", env: { ...fake.env, BROWSER_DOCKER_SOCKET: "/srv/docker.sock" }, platform: "linux" }), "/srv/docker.sock");
+  assert.equal(await browserSocketSource(docker, { socket: "/var/run/docker.sock", env: { ...fake.env, BROWSER_DOCKER_SOCKET: "/srv/docker.sock" }, platform: "linux" }), "/srv/docker.sock");
   assert.deepEqual(fake.calls(), []);
 });
 
@@ -140,14 +148,14 @@ test("the child environment keeps config locations and drops endpoint, TLS and b
   assert.deepEqual(clean, { PATH: "/bin", HOME: "/home/x", DOCKER_CONFIG: "/cfg", BUILDX_CONFIG: "/bx", BROWSER_DOCKER_SOCKET: "/s" });
 });
 
-test("a custom DOCKER_CONFIG folder reaches every pinned docker call", (t) => {
+test("a custom DOCKER_CONFIG folder reaches every pinned docker call", async (t) => {
   const config = mkdtempSync(path.join(tmpdir(), "docker-config-"));
   t.after(() => rmSync(config, { recursive: true, force: true }));
   writeFileSync(path.join(config, "config.json"), JSON.stringify({ proxies: { default: { httpProxy: "http://proxy.invalid:3128" } } }));
   const fake = fakeDocker(t);
   const docker = pinnedDocker({ host: "unix:///var/run/docker.sock" }, { ...fake.env, DOCKER_CONFIG: config, DOCKER_CONTEXT: "remote" });
-  assert.equal(assertLocalBuilder(docker), "default");
-  docker(["build", "."]);
+  assert.equal(await assertLocalBuilder(docker), "default");
+  await docker(["build", "."]);
   assert.deepEqual(fake.calls().map((call) => [call.args[2], call.DOCKER_CONFIG, call.DOCKER_CONTEXT]), [["buildx", config, null], ["build", config, null]]);
 });
 
@@ -156,13 +164,13 @@ test("a container that is created but fails to start is still removed by its id"
   const docker = pinnedDocker({ host: "unix:///var/run/docker.sock" }, fake.env);
   const resources = new RunResources(docker);
   await assert.rejects(startContainer(docker, resources, { name: "conclave-check-images-x", tag: "t", env: {}, mounts: [] }), /docker start failed: .*executable file not found/);
-  resources.removeAll();
+  await resources.removeAll();
   assert.deepEqual(fake.calls().map((call) => call.args.slice(2, 5)), [["create", "--name", "conclave-check-images-x"], ["start", "0123456789abcdef0123"], ["rm", "-f", "0123456789abcdef0123"]]);
 });
 
-test("only the docker driver on the checked endpoint is accepted as the builder", (t) => {
+test("only the docker driver on the checked endpoint is accepted as the builder", async (t) => {
   const local = fakeDocker(t);
-  assert.equal(assertLocalBuilder(pinnedDocker({ host: "unix:///var/run/docker.sock" }, local.env)), "default");
+  assert.equal(await assertLocalBuilder(pinnedDocker({ host: "unix:///var/run/docker.sock" }, local.env)), "default");
   assert.deepEqual(local.calls().map((call) => call.args.slice(2)), [["buildx", "inspect", "default"]]);
   for (const [name, text] of [
     ["container driver", "Name: default\nDriver: docker-container\n\nNodes:\nName: default0\nEndpoint: unix:///var/run/docker.sock\n"],
@@ -170,7 +178,7 @@ test("only the docker driver on the checked endpoint is accepted as the builder"
     ["ssh endpoint", "Name: default\nDriver: docker\n\nNodes:\nName: olympus-ec2\nEndpoint: olympus-ec2\n"],
   ]) {
     const fake = fakeDocker(t, { FAKE_DOCKER_BUILDER: text });
-    assert.throws(() => assertLocalBuilder(pinnedDocker({ host: "unix:///var/run/docker.sock" }, fake.env)), /refusing to build: buildx builder "default"/, name);
+    await assert.rejects(assertLocalBuilder(pinnedDocker({ host: "unix:///var/run/docker.sock" }, fake.env)), /refusing to build: buildx builder "default"/, name);
   }
 });
 
@@ -179,7 +187,7 @@ test("a container name conflict removes nothing, because containers are only rem
   const docker = pinnedDocker({ host: "unix:///var/run/docker.sock" }, fake.env);
   const resources = new RunResources(docker);
   await assert.rejects(startContainer(docker, resources, { name: "conclave-check-images-taken", tag: "t", env: {}, mounts: [] }), /docker create failed: Conflict/);
-  resources.removeAll();
+  await resources.removeAll();
   assert.deepEqual(fake.calls().map((call) => call.args[2]), ["create"]);
 });
 
@@ -198,4 +206,73 @@ test("every image build goes to the pinned local builder", async (t) => {
     assert.deepEqual(call.args.slice(0, 6), ["--host", "unix:///run/fake-docker.sock", "buildx", "build", "--builder", "default"]);
     assert.equal(call.BUILDX_BUILDER, null);
   }
+});
+
+async function waitFor(condition, what) {
+  const deadline = Date.now() + 20_000;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await sleep(50);
+  }
+}
+
+function runScript(t, env, { detached = false } = {}) {
+  const child = spawn(process.execPath, ["scripts/check-docker-images.mjs"], { cwd: repoRoot, env, detached, stdio: ["ignore", "pipe", "pipe"] });
+  let stderr = "";
+  child.stderr.on("data", (chunk) => (stderr += chunk));
+  t.after(() => {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    try {
+      process.kill(detached ? -child.pid : child.pid, "SIGKILL");
+    } catch {}
+  });
+  const exited = new Promise((resolve) => child.on("exit", (code, signal) => resolve({ code, signal, stderr })));
+  return { child, exited };
+}
+
+const isBuild = (args) => args[2] === "buildx" && args[3] === "build";
+const tagOf = (args) => args[args.indexOf("-t") + 1];
+
+function assertStoppedDuringFirstBuild(calls) {
+  const builds = calls.filter(isBuild);
+  assert.equal(builds.length, 1, JSON.stringify(calls));
+  const tag = tagOf(builds[0]);
+  assert.match(tag, /^conclave-check-images\/packages-sfu:[0-9a-f]+-[0-9a-f]{12}$/);
+  const after = calls.slice(calls.indexOf(builds[0]) + 1).map((args) => args.slice(2).join(" "));
+  assert.deepEqual(after, [`rmi ${tag}`]);
+}
+
+test("SIGINT to the process group during an image build stops the run before any later step and removes the tag", { timeout: 30_000 }, async (t) => {
+  const fake = fakeDocker(t, { contexts: { default: "unix:///run/fake-docker.sock" } });
+  const { child, exited } = runScript(t, { ...fake.env, FAKE_DOCKER_BUILD_HANG: path.join(fake.dir, "hang") }, { detached: true });
+  await waitFor(() => fake.calls().some((call) => isBuild(call.args)), "the first build");
+  await sleep(200);
+  process.kill(-child.pid, "SIGINT");
+  const { code, stderr } = await exited;
+  assert.equal(code, 130, stderr);
+  assertStoppedDuringFirstBuild(fake.calls().map((call) => call.args));
+});
+
+test("SIGTERM to the script during an image build is forwarded to docker, stops the run and removes the tag", { timeout: 30_000 }, async (t) => {
+  const fake = fakeDocker(t, { contexts: { default: "unix:///run/fake-docker.sock" } });
+  const { child, exited } = runScript(t, { ...fake.env, FAKE_DOCKER_BUILD_HANG: path.join(fake.dir, "hang") });
+  await waitFor(() => fake.calls().some((call) => isBuild(call.args)), "the first build");
+  await sleep(200);
+  child.kill("SIGTERM");
+  const { code, stderr } = await exited;
+  assert.equal(code, 143, stderr);
+  assert.deepEqual(fake.received(), ["SIGTERM"]);
+  assertStoppedDuringFirstBuild(fake.calls().map((call) => call.args));
+});
+
+test("a failed image build skips its companion builds and its boot, and removes its tag", { timeout: 30_000 }, async (t) => {
+  const fake = fakeDocker(t, { contexts: { default: "unix:///run/fake-docker.sock" } });
+  const { exited } = runScript(t, { ...fake.env, FAKE_DOCKER_HEALTHY: "1", FAKE_DOCKER_BUILD_FAIL: "packages-shared-browser:" });
+  const { code, stderr } = await exited;
+  assert.equal(code, 1, stderr);
+  const calls = fake.calls().map((call) => call.args);
+  const tags = calls.filter(isBuild).map(tagOf);
+  assert.deepEqual(tags.map((tag) => tag.split(":")[0]), ["conclave-check-images/packages-sfu", "conclave-check-images/packages-shared-browser"]);
+  const failed = calls.findIndex((args) => isBuild(args) && tagOf(args) === tags[1]);
+  assert.deepEqual(calls.slice(failed + 1).map((args) => args.slice(2).join(" ")), [`rmi ${tags[1]}`]);
 });

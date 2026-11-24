@@ -1,7 +1,7 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { constants, tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
@@ -13,18 +13,63 @@ const BOOT_TIMEOUT_MS = 120_000;
 const VM_DAEMON_SOCKET = "/var/run/docker.sock";
 const LOCAL_BUILDER = "default";
 
-function runDocker(args, env, { allowFailure = false } = {}) {
-  const result = spawnSync("docker", args, { cwd: repoRoot, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env });
-  if (result.error) throw result.error;
-  if (result.status !== 0 && !allowFailure) throw new Error(`docker ${args.join(" ")} failed:\n${result.stderr.trim()}`);
-  return result;
+export class Interrupted extends Error {
+  constructor(signal) {
+    super(`${signal}: stopped`);
+    this.signal = signal;
+  }
 }
 
-export function resolveDockerEndpoint(env = process.env) {
+export class DockerSession {
+  constructor() {
+    this.signal = null;
+    this.children = new Set();
+  }
+
+  get exitCode() {
+    return 128 + constants.signals[this.signal];
+  }
+
+  interrupt(signal) {
+    if (this.signal) return;
+    this.signal = signal;
+    for (const child of this.children) child.kill(signal);
+  }
+
+  run(args, env, { allowFailure = false, cleanup = false } = {}) {
+    if (this.signal && !cleanup) return Promise.reject(new Interrupted(this.signal));
+    return new Promise((resolve, reject) => {
+      const child = spawn("docker", args, { cwd: repoRoot, env, detached: cleanup, stdio: ["ignore", "pipe", "pipe"] });
+      if (!cleanup) this.children.add(child);
+      let stdout = "";
+      let stderr = "";
+      child.stdout.setEncoding("utf8").on("data", (chunk) => (stdout += chunk));
+      child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
+      let settled = false;
+      const settle = (error, result) => {
+        if (settled) return;
+        settled = true;
+        this.children.delete(child);
+        if (error) reject(error);
+        else resolve(result);
+      };
+      child.on("error", (error) => settle(error));
+      child.on("close", (status) => {
+        if (this.signal && !cleanup) return settle(new Interrupted(this.signal));
+        if (status !== 0 && !allowFailure) return settle(new Error(`docker ${args.join(" ")} failed:\n${stderr.trim()}`));
+        settle(null, { status, stdout, stderr });
+      });
+    });
+  }
+}
+
+export function resolveDockerEndpoint(env = process.env, session = new DockerSession()) {
   const host = env.DOCKER_HOST?.trim();
-  if (host) return host;
-  const name = env.DOCKER_CONTEXT?.trim() || runDocker(["context", "show"], env).stdout.trim();
-  return runDocker(["context", "inspect", name, "--format", "{{.Endpoints.docker.Host}}"], env).stdout.trim();
+  if (host) return Promise.resolve(host);
+  return (async () => {
+    const name = env.DOCKER_CONTEXT?.trim() || (await session.run(["context", "show"], env)).stdout.trim();
+    return (await session.run(["context", "inspect", name, "--format", "{{.Endpoints.docker.Host}}"], env)).stdout.trim();
+  })();
 }
 
 export function localSocket(endpoint) {
@@ -39,13 +84,15 @@ export function pinnedEnv(env = process.env) {
   return Object.fromEntries(Object.entries(env).filter(([name]) => CONFIG_LOCATORS.has(name) || (!name.startsWith("DOCKER_") && !name.startsWith("BUILDX_"))));
 }
 
-export function pinnedDocker(daemon, env = process.env) {
+export function pinnedDocker(daemon, env = process.env, session = new DockerSession()) {
   const clean = pinnedEnv(env);
-  return (args, options) => runDocker(["--host", daemon.host, ...args], clean, options);
+  const docker = (args, options) => session.run(["--host", daemon.host, ...args], clean, options);
+  docker.session = session;
+  return docker;
 }
 
-export function assertLocalBuilder(docker) {
-  const text = docker(["buildx", "inspect", LOCAL_BUILDER]).stdout;
+export async function assertLocalBuilder(docker) {
+  const text = (await docker(["buildx", "inspect", LOCAL_BUILDER])).stdout;
   const driver = /^Driver:\s*(\S+)/m.exec(text)?.[1];
   const endpoints = [...text.matchAll(/^Endpoint:\s*(\S+)/gm)].map((match) => match[1]);
   if (driver !== "docker" || endpoints.length !== 1 || endpoints[0] !== LOCAL_BUILDER) {
@@ -54,9 +101,9 @@ export function assertLocalBuilder(docker) {
   return LOCAL_BUILDER;
 }
 
-export function browserSocketSource(docker, { socket, env = process.env, platform = process.platform }) {
+export async function browserSocketSource(docker, { socket, env = process.env, platform = process.platform }) {
   if (env.BROWSER_DOCKER_SOCKET) return env.BROWSER_DOCKER_SOCKET;
-  const info = JSON.parse(docker(["info", "--format", "{{json .}}"]).stdout);
+  const info = JSON.parse((await docker(["info", "--format", "{{json .}}"])).stdout);
   const inVm = platform !== "linux" || /docker desktop|orbstack/i.test(info.OperatingSystem ?? "") || /^(colima|lima)/i.test(info.Name ?? "");
   return inVm ? VM_DAEMON_SOCKET : socket;
 }
@@ -69,10 +116,10 @@ async function waitForHealth(docker, id, port) {
   const deadline = Date.now() + BOOT_TIMEOUT_MS;
   let last = "no answer";
   while (Date.now() < deadline) {
-    const probe = docker(["exec", id, "node", "-e", healthProbe(port)], { allowFailure: true });
+    const probe = await docker(["exec", id, "node", "-e", healthProbe(port)], { allowFailure: true });
     if (probe.stdout.trim() === "200") return;
     last = probe.status === 0 ? `HTTP ${probe.stdout.trim()}` : probe.stderr.trim().split("\n").at(-1) || "exec failed";
-    if (docker(["inspect", "-f", "{{.State.Running}}", id], { allowFailure: true }).stdout.trim() !== "true") {
+    if ((await docker(["inspect", "-f", "{{.State.Running}}", id], { allowFailure: true })).stdout.trim() !== "true") {
       throw new Error(`the container exited before /health answered 200 (last: ${last})`);
     }
     await sleep(500);
@@ -87,7 +134,7 @@ const BOOTS = {
     mounts: () => [],
     async ready(docker, id) {
       await waitForHealth(docker, id, 3031);
-      docker(["exec", "-w", "/app/packages/sfu", id, "node", "--import", "tsx", "-e", 'await import("@conclave/apps-sdk/authority/server");']);
+      await docker(["exec", "-w", "/app/packages/sfu", id, "node", "--import", "tsx", "-e", 'await import("@conclave/apps-sdk/authority/server");']);
       return "/health answered 200 and @conclave/apps-sdk/authority/server imported";
     },
   },
@@ -110,21 +157,25 @@ export class RunResources {
     this.images = new Set();
   }
 
-  removeAll() {
-    for (const id of this.containers) this.docker(["rm", "-f", id], { allowFailure: true });
-    for (const image of this.images) this.docker(["rmi", image], { allowFailure: true });
-    this.containers.clear();
-    this.images.clear();
+  async removeAll() {
+    for (const id of [...this.containers]) {
+      this.containers.delete(id);
+      await this.docker(["rm", "-f", id], { allowFailure: true, cleanup: true });
+    }
+    for (const image of [...this.images]) {
+      this.images.delete(image);
+      await this.docker(["rmi", image], { allowFailure: true, cleanup: true });
+    }
   }
 }
 
 export async function startContainer(docker, resources, { name, tag, env, mounts }) {
   const envArgs = Object.entries(env).flatMap(([key, value]) => ["-e", `${key}=${value}`]);
-  const created = docker(["create", "--name", name, ...envArgs, ...mounts, tag], { allowFailure: true });
+  const created = await docker(["create", "--name", name, ...envArgs, ...mounts, tag], { allowFailure: true });
   const id = created.stdout.trim();
   if (created.status !== 0 || !/^[0-9a-f]{12,64}$/.test(id)) throw new Error(`docker create failed: ${created.stderr.trim() || id}`);
   resources.containers.add(id);
-  const started = docker(["start", id], { allowFailure: true });
+  const started = await docker(["start", id], { allowFailure: true });
   if (started.status !== 0) throw new Error(`docker start failed: ${started.stderr.trim()}`);
   return id;
 }
@@ -133,76 +184,95 @@ async function checkImage(build, { docker, resources, builder, socket, noCache, 
   const boot = BOOTS[build.dockerfile];
   if (!boot) throw new Error(`no boot check for ${build.dockerfile}; add one to BOOTS in scripts/check-docker-images.mjs`);
   const slug = build.dockerfile.replace(/\/Dockerfile$/, "").replace(/[^a-z0-9]+/gi, "-").toLowerCase();
-  const buildImage = ({ name, args, file, context }) => {
+  const buildImage = async ({ name, args, file, context }) => {
     const tag = `conclave-check-images/${name}:${run}`;
     resources.images.add(tag);
-    const built = docker(["buildx", "build", "--builder", builder, "--load", "--progress=plain", ...(noCache ? ["--no-cache"] : []), ...args, ...(file ? ["-f", file] : []), "-t", tag, context], { allowFailure: true });
+    const built = await docker(["buildx", "build", "--builder", builder, "--load", "--progress=plain", ...(noCache ? ["--no-cache"] : []), ...args, ...(file ? ["-f", file] : []), "-t", tag, context], { allowFailure: true });
     const log = path.join(logDir, `${name}-build.log`);
     writeFileSync(log, `${built.stdout}${built.stderr}`);
     return { tag, ok: built.status === 0, log };
   };
-  const started = Date.now();
   const buildArgs = Object.entries(build.args).flatMap(([name, value]) => ["--build-arg", `${name}=${value}`]);
-  const image = buildImage({ name: slug, args: buildArgs, file: build.dockerfile, context: "." });
-  const env = boot.env();
-  const companions = (boot.companions ?? []).map((companion) => ({ ...companion, ...buildImage({ name: `${slug}-${companion.slug}`, args: [], context: companion.context }) }));
-  const buildSeconds = Math.round((Date.now() - started) / 1000);
+  const images = [
+    { name: slug, args: buildArgs, file: build.dockerfile, context: "." },
+    ...(boot.companions ?? []).map((companion) => ({ name: `${slug}-${companion.slug}`, args: [], context: companion.context, env: companion.env })),
+  ];
+  const started = Date.now();
+  const seconds = () => Math.round((Date.now() - started) / 1000);
+  let buildSeconds = null;
   let id = null;
   try {
-    const failed = [image, ...companions].find((item) => !item.ok);
-    if (failed) return { dockerfile: build.dockerfile, ok: false, detail: `build failed after ${buildSeconds} s, see ${failed.log}` };
-    for (const companion of companions) env[companion.env] = companion.tag;
-    id = await startContainer(docker, resources, { name: `conclave-check-images-${slug}-${run}`, tag: image.tag, env, mounts: boot.mounts({ socket }) });
+    const env = boot.env();
+    let tag = null;
+    for (const image of images) {
+      const built = await buildImage(image);
+      if (!built.ok) return { dockerfile: build.dockerfile, ok: false, detail: `build failed after ${seconds()} s, see ${built.log}` };
+      if (image.env) env[image.env] = built.tag;
+      else tag = built.tag;
+    }
+    buildSeconds = seconds();
+    id = await startContainer(docker, resources, { name: `conclave-check-images-${slug}-${run}`, tag, env, mounts: boot.mounts({ socket }) });
     const detail = await boot.ready(docker, id, { socket });
     return { dockerfile: build.dockerfile, ok: true, detail: `built in ${buildSeconds} s, ${detail}` };
   } catch (error) {
-    return { dockerfile: build.dockerfile, ok: false, detail: `built in ${buildSeconds} s, boot failed: ${error.message}` };
+    if (error instanceof Interrupted) throw error;
+    const stage = buildSeconds === null ? `build failed after ${seconds()} s` : `built in ${buildSeconds} s, boot failed`;
+    return { dockerfile: build.dockerfile, ok: false, detail: `${stage}: ${error.message}` };
   } finally {
-    if (id) {
-      const logs = docker(["logs", id], { allowFailure: true });
+    if (id && !docker.session.signal) {
+      const logs = await docker(["logs", id], { allowFailure: true });
       writeFileSync(path.join(logDir, `${slug}-boot.log`), `${logs.stdout}${logs.stderr}`);
     }
-    resources.removeAll();
+    await resources.removeAll();
   }
 }
 
-async function main() {
+async function main(session) {
   const noCache = process.argv.includes("--no-cache");
   const problems = contextProblems(repoRoot);
   if (problems.length) {
     for (const problem of problems) console.error(problem);
     throw new Error("pnpm check:docker-context fails; fix the build context first");
   }
-  const daemon = localSocket(resolveDockerEndpoint());
-  const docker = pinnedDocker(daemon);
-  const builder = assertLocalBuilder(docker);
-  const resources = new RunResources(docker);
-  for (const [signal, code] of [["SIGINT", 130], ["SIGTERM", 143]]) {
-    process.on(signal, () => {
-      console.error(`${signal}: removing the containers and image tags this run created`);
-      resources.removeAll();
-      process.exit(code);
-    });
-  }
-  const socket = browserSocketSource(docker, { socket: daemon.socket });
+  const daemon = localSocket(await resolveDockerEndpoint(process.env, session));
+  const docker = pinnedDocker(daemon, process.env, session);
+  const builder = await assertLocalBuilder(docker);
+  const socket = await browserSocketSource(docker, { socket: daemon.socket });
   const head = spawnSync("git", ["rev-parse", "--short", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).stdout.trim();
   const run = `${head}-${randomBytes(6).toString("hex")}`;
   const logDir = mkdtempSync(path.join(tmpdir(), "conclave-check-images-"));
   console.log(`building root-context images at ${head} on ${daemon.host} with buildx builder ${builder}${noCache ? " without cache" : ""}; nothing is pushed`);
   const builds = [...new Map(rootContextBuilds(repoRoot).map((build) => [build.dockerfile, build])).values()];
+  const resources = new RunResources(docker);
   const results = [];
-  for (const build of builds) {
-    const result = await checkImage(build, { docker, resources, builder, socket, noCache, logDir, run });
-    console.log(`${result.ok ? "ok" : "FAIL"} ${result.dockerfile}: ${result.detail}`);
-    results.push(result);
+  try {
+    for (const build of builds) {
+      const result = await checkImage(build, { docker, resources, builder, socket, noCache, logDir, run });
+      console.log(`${result.ok ? "ok" : "FAIL"} ${result.dockerfile}: ${result.detail}`);
+      results.push(result);
+    }
+  } finally {
+    await resources.removeAll();
+    console.log(`logs in ${logDir}`);
   }
-  console.log(`logs in ${logDir}`);
-  if (results.some((result) => !result.ok)) process.exit(1);
+  return results.every((result) => result.ok);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().catch((error) => {
-    console.error(error.message);
-    process.exit(1);
-  });
+  const session = new DockerSession();
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    process.on(signal, () => {
+      if (!session.signal) console.error(`${signal}: stopping, then removing the containers and image tags this run created`);
+      session.interrupt(signal);
+    });
+  }
+  main(session).then(
+    (ok) => {
+      process.exitCode = session.signal ? session.exitCode : ok ? 0 : 1;
+    },
+    (error) => {
+      if (!session.signal) console.error(error.message);
+      process.exitCode = session.signal ? session.exitCode : 1;
+    },
+  );
 }
