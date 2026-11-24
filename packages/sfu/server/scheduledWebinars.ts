@@ -18,6 +18,7 @@ import {
 } from "./webinar.js";
 import { InvalidInput } from "./controlPlane/model.js";
 import { canonicalizeClientId } from "./clientIds.js";
+import { storedTimestampOrNull } from "./storedValues.js";
 
 const DEFAULT_EARLY_ENTRY_MINUTES = 10;
 const MAX_EARLY_ENTRY_MINUTES = 240;
@@ -489,10 +490,6 @@ export const advanceScheduledWebinar = (
   return null;
 };
 
-const finiteOrNull = (value: unknown): number | null =>
-  value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value))
-    ? Number(value)
-    : null;
 
 export const normalizeStoredWebinar = (raw: unknown): ScheduledWebinar | null => {
   const record = asRecord(raw);
@@ -500,7 +497,7 @@ export const normalizeStoredWebinar = (raw: unknown): ScheduledWebinar | null =>
   if (typeof record.linkSlug !== "string" || !record.linkSlug) return null;
   if (typeof record.roomId !== "string" || !record.roomId) return null;
   if (typeof record.clientId !== "string" || !record.clientId) return null;
-  const scheduledStartAt = finiteOrNull(record.scheduledStartAt);
+  const scheduledStartAt = storedTimestampOrNull(record.scheduledStartAt);
   if (scheduledStartAt === null || scheduledStartAt <= 0) return null;
   const rawStatus = record.status;
   const status: ScheduledWebinarStatus =
@@ -508,9 +505,9 @@ export const normalizeStoredWebinar = (raw: unknown): ScheduledWebinar | null =>
       ? rawStatus
       : "scheduled";
   const linkSlug = record.linkSlug;
-  const endAt = finiteOrNull(record.scheduledEndAt);
-  const updatedAtRaw = finiteOrNull(record.updatedAt);
-  const createdAt = finiteOrNull(record.createdAt) ?? updatedAtRaw ?? 0;
+  const endAt = storedTimestampOrNull(record.scheduledEndAt);
+  const updatedAtRaw = storedTimestampOrNull(record.updatedAt);
+  const createdAt = storedTimestampOrNull(record.createdAt) ?? updatedAtRaw ?? 0;
   return {
     id: record.id,
     clientId: canonicalizeClientId(record.clientId),
@@ -538,14 +535,14 @@ export const normalizeStoredWebinar = (raw: unknown): ScheduledWebinar | null =>
     createdAt,
     createdBy: typeof record.createdBy === "string" ? record.createdBy : "",
     updatedAt: updatedAtRaw ?? createdAt,
-    liveStartedAt: finiteOrNull(record.liveStartedAt) || null,
-    endedAt: finiteOrNull(record.endedAt) || null,
-    totalJoinCount: finiteOrNull(record.totalJoinCount) ?? 0,
-    peakAttendeeCount: finiteOrNull(record.peakAttendeeCount) ?? 0,
+    liveStartedAt: storedTimestampOrNull(record.liveStartedAt) || null,
+    endedAt: storedTimestampOrNull(record.endedAt) || null,
+    totalJoinCount: storedTimestampOrNull(record.totalJoinCount) ?? 0,
+    peakAttendeeCount: storedTimestampOrNull(record.peakAttendeeCount) ?? 0,
     webinarLink: buildWebinarLink(linkSlug),
     coHostInviteTokenHash:
       typeof record.coHostInviteTokenHash === "string" ? record.coHostInviteTokenHash : null,
-    coHostInviteTokenCreatedAt: finiteOrNull(record.coHostInviteTokenCreatedAt) || null,
+    coHostInviteTokenCreatedAt: storedTimestampOrNull(record.coHostInviteTokenCreatedAt) || null,
     inviteCodeHash: typeof record.inviteCodeHash === "string" ? record.inviteCodeHash : null,
   };
 };

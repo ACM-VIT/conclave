@@ -176,13 +176,25 @@ export const jsonPaths = (dir: string) => ({
 
 export const writeLegacyJsonFiles = (
   dir: string,
-  data: { meetings?: unknown[]; webinars?: unknown[]; profiles?: unknown[]; calendars?: unknown[] },
+  data: {
+    meetings?: unknown[];
+    webinars?: unknown[];
+    profiles?: unknown[];
+    availability?: unknown[];
+    eventTypes?: unknown[];
+    calendars?: unknown[];
+  },
 ): void => {
   const paths = jsonPaths(dir);
   if (data.meetings) writeJson(paths.meetings, data.meetings);
   if (data.webinars) writeJson(paths.webinars, data.webinars);
-  if (data.profiles || data.calendars) {
-    writeJson(paths.scheduling, { profiles: data.profiles ?? [], availability: [], eventTypes: [], calendars: data.calendars ?? [] });
+  if (data.profiles || data.availability || data.eventTypes || data.calendars) {
+    writeJson(paths.scheduling, {
+      profiles: data.profiles ?? [],
+      availability: data.availability ?? [],
+      eventTypes: data.eventTypes ?? [],
+      calendars: data.calendars ?? [],
+    });
   }
 };
 

@@ -8,6 +8,7 @@ import type {
 import { asRecord } from "../utilities/untrusted.js";
 import { InvalidInput } from "./controlPlane/model.js";
 import { canonicalizeClientId } from "./clientIds.js";
+import { storedTimestampOrNull } from "./storedValues.js";
 
 const MAX_TITLE_LENGTH = 140;
 const MIN_TITLE_LENGTH = 1;
@@ -338,10 +339,6 @@ export const filterScheduledMeetings = (
     .sort((a, b) => a.scheduledStartAt - b.scheduledStartAt);
 };
 
-const finiteOrNull = (value: unknown): number | null =>
-  value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value))
-    ? Number(value)
-    : null;
 
 export const normalizeStoredMeeting = (raw: unknown): ScheduledMeeting | null => {
   const record = asRecord(raw);
@@ -349,16 +346,16 @@ export const normalizeStoredMeeting = (raw: unknown): ScheduledMeeting | null =>
   if (typeof record.clientId !== "string" || !record.clientId) return null;
   if (typeof record.roomCode !== "string" || !record.roomCode) return null;
   if (typeof record.hostEmail !== "string" || !record.hostEmail) return null;
-  const scheduledStartAt = finiteOrNull(record.scheduledStartAt);
+  const scheduledStartAt = storedTimestampOrNull(record.scheduledStartAt);
   if (scheduledStartAt === null) return null;
-  const scheduledEndAt = finiteOrNull(record.scheduledEndAt) ?? scheduledStartAt + DEFAULT_DURATION_MS;
+  const scheduledEndAt = storedTimestampOrNull(record.scheduledEndAt) ?? scheduledStartAt + DEFAULT_DURATION_MS;
   const rawStatus = record.status;
   const status: ScheduledMeetingStatus =
     rawStatus === "live" || rawStatus === "ended" || rawStatus === "cancelled"
       ? rawStatus
       : "scheduled";
-  const updatedAtRaw = finiteOrNull(record.updatedAt);
-  const createdAt = finiteOrNull(record.createdAt) ?? updatedAtRaw ?? 0;
+  const updatedAtRaw = storedTimestampOrNull(record.updatedAt);
+  const createdAt = storedTimestampOrNull(record.createdAt) ?? updatedAtRaw ?? 0;
   const text = (value: unknown): string | null => (typeof value === "string" ? value : null);
   return {
     id: record.id,
@@ -371,8 +368,8 @@ export const normalizeStoredMeeting = (raw: unknown): ScheduledMeeting | null =>
     scheduledStartAt,
     scheduledEndAt,
     status,
-    startedAt: finiteOrNull(record.startedAt),
-    endedAt: finiteOrNull(record.endedAt),
+    startedAt: storedTimestampOrNull(record.startedAt),
+    endedAt: storedTimestampOrNull(record.endedAt),
     createdAt,
     createdBy: typeof record.createdBy === "string" ? record.createdBy : record.hostEmail,
     updatedAt: updatedAtRaw ?? createdAt,
@@ -392,10 +389,10 @@ export const normalizeStoredMeeting = (raw: unknown): ScheduledMeeting | null =>
     calendarSyncError: text(record.calendarSyncError),
     emailNotificationStatus: normalizeEmailNotificationStatus(record.emailNotificationStatus),
     emailNotificationError: text(record.emailNotificationError),
-    emailNotificationSentAt: finiteOrNull(record.emailNotificationSentAt),
+    emailNotificationSentAt: storedTimestampOrNull(record.emailNotificationSentAt),
     emailReminderStatus: normalizeEmailNotificationStatus(record.emailReminderStatus),
     emailReminderError: text(record.emailReminderError),
-    emailReminderSentAt: finiteOrNull(record.emailReminderSentAt),
+    emailReminderSentAt: storedTimestampOrNull(record.emailReminderSentAt),
   };
 };
 

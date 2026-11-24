@@ -13,6 +13,7 @@ import type {
 import { asArray, asRecord } from "../utilities/untrusted.js";
 import { InvalidInput } from "./controlPlane/model.js";
 import { canonicalizeClientId, CONCLAVE_CLIENT_ID } from "./clientIds.js";
+import { storedTimestampOrNull } from "./storedValues.js";
 
 const USERNAME_MAX_LENGTH = 48;
 const SLUG_MAX_LENGTH = 80;
@@ -115,12 +116,7 @@ const clampInteger = (
   return Math.min(max, Math.max(min, Math.round(n)));
 };
 
-const finiteOr = (value: unknown, fallback: number): number => {
-  const n = Number(value);
-  return value !== null && value !== undefined && value !== "" && Number.isFinite(n)
-    ? n
-    : fallback;
-};
+const finiteOr = (value: unknown, fallback: number): number => storedTimestampOrNull(value) ?? fallback;
 
 const getDefaultTimeZone = (): string => {
   try {
@@ -923,10 +919,7 @@ export const normalizeStoredCalendar = (
       typeof record.calendarId === "string" && record.calendarId ? record.calendarId : "primary",
     accessToken: decryptToken(record.accessToken),
     refreshToken: decryptToken(record.refreshToken),
-    accessTokenExpiresAt: Number.isFinite(Number(record.accessTokenExpiresAt)) &&
-      record.accessTokenExpiresAt !== null
-      ? Number(record.accessTokenExpiresAt)
-      : null,
+    accessTokenExpiresAt: storedTimestampOrNull(record.accessTokenExpiresAt),
     scopes: (asArray(record.scopes) ?? []).filter(
       (scope): scope is string => typeof scope === "string",
     ),
