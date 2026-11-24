@@ -112,28 +112,32 @@ try {
   } else {
     $previousContainer = ""
   }
-  $previousPorts = ""
+  $previousAddresses = ""
   $previousDeployId = ""
   if ($previousContainer) {
     $previousEnv = @(& docker inspect --format "{{range .Config.Env}}{{println .}}{{end}}" $previousContainer 2>$null)
-    $configuredPort = ""
+    $boundHost = ""
+    $boundPort = ""
     foreach ($line in $previousEnv) {
       if ($line.StartsWith("BROWSER_SERVICE_DEPLOY_ID=", [System.StringComparison]::Ordinal)) {
         $previousDeployId = $line.Substring("BROWSER_SERVICE_DEPLOY_ID=".Length).Trim()
       }
+      if ($line.StartsWith("BROWSER_SERVICE_HOST=", [System.StringComparison]::Ordinal)) {
+        $boundHost = $line.Substring("BROWSER_SERVICE_HOST=".Length).Trim()
+      }
       if ($line.StartsWith("BROWSER_SERVICE_PORT=", [System.StringComparison]::Ordinal)) {
-        $configuredPort = $line.Substring("BROWSER_SERVICE_PORT=".Length).Trim()
+        $boundPort = $line.Substring("BROWSER_SERVICE_PORT=".Length).Trim()
       }
     }
     $networkMode = (@(& docker inspect --format "{{.HostConfig.NetworkMode}}" $previousContainer 2>$null) -join "").Trim()
     if ($networkMode -eq "host") {
-      $previousPorts = if ($configuredPort) { $configuredPort } else { "3040" }
+      $previousAddresses = "$(if ($boundHost) { $boundHost } else { '0.0.0.0' }):$(if ($boundPort) { $boundPort } else { '3040' })"
     } else {
-      $previousPorts = (@(& docker inspect --format '{{range $bindings := .HostConfig.PortBindings}}{{range $bindings}}{{.HostPort}},{{end}}{{end}}' $previousContainer 2>$null) -join "").Trim().TrimEnd(",")
+      $previousAddresses = (@(& docker inspect --format '{{range $bindings := .HostConfig.PortBindings}}{{range $bindings}}{{.HostIp}}:{{.HostPort}},{{end}}{{end}}' $previousContainer 2>$null) -join "").Trim().TrimEnd(",")
     }
   }
   Invoke-Checked -Command "docker" -Arguments ($composeArgs + @("build", "browser-service"))
-  Invoke-Checked -Command "docker" -Arguments ($composeArgs + @("run", "--rm", "--no-deps", "-e", "BROWSER_IMAGE_NAME=$checkImageName", "-e", "BROWSER_SERVICE_PREVIOUS_CONTAINER=$previousContainer", "-e", "BROWSER_SERVICE_PREVIOUS_PORTS=$previousPorts", "-e", "BROWSER_SERVICE_PREVIOUS_DEPLOY_ID=$previousDeployId", "browser-service", "node", "packages/shared-browser/dist/server.js", "--check-config"))
+  Invoke-Checked -Command "docker" -Arguments ($composeArgs + @("run", "--rm", "--no-deps", "-e", "BROWSER_IMAGE_NAME=$checkImageName", "-e", "BROWSER_SERVICE_PREVIOUS_CONTAINER=$previousContainer", "-e", "BROWSER_SERVICE_PREVIOUS_ADDRESSES=$previousAddresses", "-e", "BROWSER_SERVICE_PREVIOUS_DEPLOY_ID=$previousDeployId", "browser-service", "node", "packages/shared-browser/dist/server.js", "--check-config"))
   if ($checkConfigOnly) {
     exit 0
   }
