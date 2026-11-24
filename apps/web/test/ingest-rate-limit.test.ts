@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const cloudflare = vi.hoisted(() => ({ context: null as null | { env: Record<string, unknown> } }));
@@ -46,6 +47,26 @@ afterEach(() => {
 });
 
 const inWorkers = () => vi.stubGlobal("navigator", { userAgent: "Cloudflare-Workers" });
+
+const objectStorage = (database = new DatabaseSync(":memory:")) => ({
+  sql: {
+    exec: (query: string, ...bindings: Array<string | number>) => {
+      const rows = database.prepare(query).all(...bindings);
+      return { toArray: () => rows };
+    },
+  },
+  transactionSync: <T>(run: () => T): T => {
+    database.exec("BEGIN");
+    try {
+      const result = run();
+      database.exec("COMMIT");
+      return result;
+    } catch (error) {
+      database.exec("ROLLBACK");
+      throw error;
+    }
+  },
+});
 
 describe("the /ingest rate limit", () => {
   it("limits each client and the whole site, in this process, off Cloudflare", async () => {
@@ -119,13 +140,30 @@ describe("the /ingest rate limit", () => {
 
   it("admits the site's limit across every location in one minute, then refuses until the next", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
-    const quota = new IngestQuota();
+    const quota = new IngestQuota({ storage: objectStorage() });
     for (let index = 0; index < limits.total; index++) expect((await quota.fetch()).status).toBe(204);
     expect((await quota.fetch()).status).toBe(429);
     vi.advanceTimersByTime(59_999);
     expect((await quota.fetch()).status).toBe(429);
     vi.advanceTimersByTime(1);
     expect((await quota.fetch()).status).toBe(204);
+  });
+
+  it("keeps counting the same window when Cloudflare recreates the object part way through it", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const storage = objectStorage();
+    const before = new IngestQuota({ storage });
+    for (let index = 0; index < 2500; index++) expect((await before.fetch()).status).toBe(204);
+
+    vi.advanceTimersByTime(30_000);
+    const recreated = new IngestQuota({ storage });
+    let admitted = 0;
+    for (let index = 0; index < limits.total; index++) if ((await recreated.fetch()).status === 204) admitted += 1;
+    expect(admitted).toBe(limits.total - 2500);
+    expect((await new IngestQuota({ storage }).fetch()).status).toBe(429);
+
+    vi.advanceTimersByTime(30_000);
+    expect((await new IngestQuota({ storage }).fetch()).status).toBe(204);
   });
 
   it("is deployed with the per-client limiter and the site quota at the limits it applies off Cloudflare", () => {
