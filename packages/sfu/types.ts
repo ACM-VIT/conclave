@@ -390,6 +390,7 @@ export interface ScheduledWebinar {
   webinarLink: string;
   coHostInviteTokenHash: string | null;
   coHostInviteTokenCreatedAt: number | null;
+  inviteCodeHash?: string | null;
 }
 
 export interface CreateScheduledWebinarRequest {

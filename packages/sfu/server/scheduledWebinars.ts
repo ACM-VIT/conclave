@@ -262,6 +262,7 @@ export const buildScheduledWebinar = (
     webinarLink: buildWebinarLink(linkSlug),
     coHostInviteTokenHash: null,
     coHostInviteTokenCreatedAt: null,
+    inviteCodeHash,
   };
   return { webinar, inviteCodeHash };
 };
@@ -336,12 +337,14 @@ export const applyScheduledWebinarUpdate = (
   if (patch.inviteCode !== undefined) {
     if (patch.inviteCode === null || patch.inviteCode === "") {
       next.requiresInviteCode = false;
+      next.inviteCodeHash = null;
       inviteCodeHashChange = { value: null };
     } else if (typeof patch.inviteCode === "string") {
       const trimmed = patch.inviteCode.trim();
       if (trimmed) {
         next.requiresInviteCode = true;
-        inviteCodeHashChange = { value: hashWebinarInviteCode(trimmed) };
+        next.inviteCodeHash = hashWebinarInviteCode(trimmed);
+        inviteCodeHashChange = { value: next.inviteCodeHash };
       }
     }
   }
@@ -543,5 +546,6 @@ export const normalizeStoredWebinar = (raw: unknown): ScheduledWebinar | null =>
     coHostInviteTokenHash:
       typeof record.coHostInviteTokenHash === "string" ? record.coHostInviteTokenHash : null,
     coHostInviteTokenCreatedAt: finiteOrNull(record.coHostInviteTokenCreatedAt) || null,
+    inviteCodeHash: typeof record.inviteCodeHash === "string" ? record.inviteCodeHash : null,
   };
 };

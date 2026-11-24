@@ -21,7 +21,7 @@ import {
   type WebinarSlugContext,
 } from "../scheduledWebinars.js";
 import { normalizeHostEmail } from "../webinar.js";
-import { done, fail, tags, uniqueKeys, type Outcome } from "./model.js";
+import { done, fail, tags, uniqueKeys, type Outcome, type Stored } from "./model.js";
 import type { Command, Query, Tx, TxRead } from "./tx.js";
 
 export type WebinarAccess = { email: string | null; isAdmin: boolean };
@@ -76,6 +76,17 @@ export const listWebinars =
       }
     }
     return [...byId.values()].sort((a, b) => a.scheduledStartAt - b.scheduledStartAt);
+  };
+
+export const webinarsByIds =
+  (ids: readonly string[]): Query<Map<string, Stored<"webinar">>> =>
+  (view) => {
+    const found = new Map<string, Stored<"webinar">>();
+    for (const id of new Set(ids)) {
+      const stored = view.get("webinar", id);
+      if (stored) found.set(id, stored);
+    }
+    return found;
   };
 
 export const allWebinars: Query<ScheduledWebinar[]> = (view) =>

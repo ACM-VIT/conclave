@@ -171,7 +171,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             // room that bound the same code (before the scheduler did, e.g.
             // after a restart) must not receive the webinar's audience.
             if (webinarTarget?.roomId !== scheduledWebinarForAttendee.roomId) {
-              ensureWebinarRoomConfig(state, scheduledWebinarForAttendee, null);
+              ensureWebinarRoomConfig(state, scheduledWebinarForAttendee);
             }
             webinarTarget = {
               roomChannelId: getRoomChannelId(
@@ -199,7 +199,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             scheduledWebinarForRoom.status !== "ended" &&
             scheduledWebinarForRoom.status !== "cancelled"
           ) {
-            ensureWebinarRoomConfig(state, scheduledWebinarForRoom, null);
+            ensureWebinarRoomConfig(state, scheduledWebinarForRoom);
           }
         }
 

@@ -337,7 +337,7 @@ const runSequence = async (mode: StoreMode, seed: number, steps: number): Promis
       };
       if (body.eventType) expectSame("eventType", body.eventType);
       if (body.scheduledMeeting) expectSame("meeting", body.scheduledMeeting);
-      if (body.scheduledWebinar) expectSame("webinar", body.scheduledWebinar, ["coHostInviteTokenHash", "coHostInviteTokenCreatedAt"]);
+      if (body.scheduledWebinar) expectSame("webinar", body.scheduledWebinar, ["coHostInviteTokenHash", "coHostInviteTokenCreatedAt", "inviteCodeHash"]);
       if (op.label === "close day" || op.label === "open day") {
         const write = entries.flatMap((entry) => entry.writes).find((w) => w.kind === "hours");
         if (write && JSON.stringify((write.value as EntityMap["hours"]).availability) !== JSON.stringify(body.availability)) {

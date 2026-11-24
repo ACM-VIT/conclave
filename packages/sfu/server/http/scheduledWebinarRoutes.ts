@@ -126,7 +126,7 @@ const parseStatusFilter = (
 
 type SafeScheduledWebinar = Omit<
   ScheduledWebinar,
-  "coHostInviteTokenHash" | "coHostInviteTokenCreatedAt"
+  "coHostInviteTokenHash" | "coHostInviteTokenCreatedAt" | "inviteCodeHash"
 >;
 
 const serializeScheduledWebinar = (
@@ -135,6 +135,7 @@ const serializeScheduledWebinar = (
   const {
     coHostInviteTokenHash: _coHostInviteTokenHash,
     coHostInviteTokenCreatedAt: _coHostInviteTokenCreatedAt,
+    inviteCodeHash: _inviteCodeHash,
     ...safe
   } = webinar;
   return safe;
@@ -185,7 +186,7 @@ export const registerScheduledWebinarRoutes = (
     }
     const { webinar } = result.value;
     if (status === "live" || state.webinarConfigs.has(getRoomChannelId(webinar.clientId, webinar.roomId))) {
-      ensureWebinarRoomConfig(state, webinar, null);
+      ensureWebinarRoomConfig(state, webinar);
     }
     res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
   };
@@ -230,8 +231,8 @@ export const registerScheduledWebinarRoutes = (
         sendFailure(res, result);
         return;
       }
-      const { webinar, inviteCodeHash } = result.value;
-      ensureWebinarRoomConfig(state, webinar, inviteCodeHash);
+      const { webinar } = result.value;
+      ensureWebinarRoomConfig(state, webinar);
       Logger.info(`Scheduled webinar created ${webinar.id} (${webinar.linkSlug}) by ${user.email}`);
       res.status(201).json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
     }),
@@ -308,8 +309,8 @@ export const registerScheduledWebinarRoutes = (
         sendFailure(res, result);
         return;
       }
-      const { webinar, inviteCodeHashChange } = result.value;
-      ensureWebinarRoomConfig(state, webinar, inviteCodeHashChange?.value ?? null);
+      const { webinar } = result.value;
+      ensureWebinarRoomConfig(state, webinar);
       notifyRoom(webinar, true);
       res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
     }),
@@ -413,7 +414,7 @@ export const registerScheduledWebinarRoutes = (
         sendFailure(res, result);
         return;
       }
-      ensureWebinarRoomConfig(state, result.value, null);
+      ensureWebinarRoomConfig(state, result.value);
       notifyRoom(result.value, true);
       res.json({ scheduledWebinar: serializeScheduledWebinar(result.value) });
     }),
