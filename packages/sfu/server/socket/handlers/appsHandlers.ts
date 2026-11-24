@@ -14,6 +14,7 @@ import type {
   AppsUpdateData,
 } from "../../../types.js";
 import { Admin } from "../../../config/classes/Admin.js";
+import type { Client } from "../../../config/classes/Client.js";
 import { Logger } from "../../../utilities/loggers.js";
 import type { Room } from "../../../config/classes/Room.js";
 import { MAX_APP_DOCUMENT_BYTES, type AppDocument, type Refusal } from "../../apps/documents/pool.js";
@@ -28,9 +29,6 @@ const MAX_REPLICA_ID_LENGTH = 64;
 const REMEMBERED_REFUSED_REPLICAS = 16;
 const LEGACY_SYNC_HOLD_MS = 25_000;
 const MAX_OPEN_LEGACY_SYNCS = 4;
-const WHOLE_CHANGES_SUFFIX = ":whole-changes";
-
-const wholeChangesChannel = (channelId: string): string => `${channelId}${WHOLE_CHANGES_SUFFIX}`;
 
 const retryLater = (error: string, retryAfterMs: number): AppsSyncError => ({
   error,
@@ -62,7 +60,7 @@ const UPDATE_REFUSALS: Partial<Record<Refusal, string>> = {
 const normalizeReplicaId = (value: unknown): string | undefined =>
   typeof value === "string" && value.length > 0 && value.length <= MAX_REPLICA_ID_LENGTH ? value : undefined;
 
-type SyncScope = { room: Room; appId: string; document: AppDocument };
+type SyncScope = { room: Room; client: Client; appId: string; document: AppDocument };
 
 const MAX_APP_ID_LENGTH = 128;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
@@ -267,24 +265,20 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     for (const stop of [...openLegacySyncs]) stop();
     dropStaged();
   });
-  socket.on("joinRoom", () => {
-    dropStaged();
-    for (const joined of [...socket.rooms]) {
-      if (joined.endsWith(WHOLE_CHANGES_SUFFIX)) void socket.leave(joined);
-    }
-  });
+  socket.on("joinRoom", () => dropStaged());
 
   const activeDocument = (room: Room, appId: string): AppDocument | null =>
     room.appsState.activeAppId === appId ? room.getOrCreateAppDoc(appId, documents) : null;
 
   const scopeOf = (data: AppsSyncData): SyncScope | AppsSyncError => {
     const room = context.currentRoom;
-    if (!room) return retryLater("Not in a room", 500);
+    const client = context.currentClient;
+    if (!room || !client) return retryLater("Not in a room", 500);
     const appId = normalizeAppId(data?.appId);
     if (!appId) return { error: "Invalid app id" };
     const document = activeDocument(room, appId);
     if (!document) return { error: "App not active" };
-    return { room, appId, document };
+    return { room, client, appId, document };
   };
 
   const isCurrent = ({ room, appId, document }: SyncScope): boolean =>
@@ -302,7 +296,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     const result = await scope.document.sync(stateVector);
     if (!isCurrent(scope)) return { error: "App not active" };
     if (!result.ok) return SYNC_REFUSALS[result.reason];
-    if (data.wholeChanges === true) void socket.join(wholeChangesChannel(scope.room.channelId));
+    scope.client.takesLargeAppUpdates = data.wholeChanges === true || typeof data.syncMessage !== "string";
     const awarenessSnapshot = scope.room.encodeAppAwarenessSnapshot(scope.appId) ?? undefined;
     return {
       syncMessage: result.update,
@@ -403,12 +397,16 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         socket.to(channelId).emit("apps:yjs:update", { appId, update } satisfies AppsUpdateData);
         return;
       }
-      const whole = wholeChangesChannel(channelId);
-      socket.to(whole).emit("apps:yjs:update", { appId, update } satisfies AppsUpdateData);
-      const reload = socket.to(channelId).except(whole);
       const { activeAppId, locked } = room.appsState;
-      reload.emit("apps:state", { activeAppId: null, locked, roomId: room.id } satisfies AppsState);
-      reload.emit("apps:state", { activeAppId, locked, roomId: room.id } satisfies AppsState);
+      for (const receiver of room.clients.values()) {
+        if (receiver.socket.id === socket.id) continue;
+        if (receiver.takesLargeAppUpdates === false) {
+          receiver.socket.emit("apps:state", { activeAppId: null, locked, roomId: room.id } satisfies AppsState);
+          receiver.socket.emit("apps:state", { activeAppId, locked, roomId: room.id } satisfies AppsState);
+        } else {
+          receiver.socket.emit("apps:yjs:update", { appId, update } satisfies AppsUpdateData);
+        }
+      }
     });
   };
 

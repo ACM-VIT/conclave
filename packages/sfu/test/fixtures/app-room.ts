@@ -7,12 +7,15 @@ import { Room } from "../../config/classes/Room.js";
 import type { AppDocumentPool } from "../../server/apps/documents/pool.js";
 import type { StagingBudget } from "../../server/apps/documents/staging.js";
 import { LocalRoomRegistry } from "../../server/roomRegistry.js";
-import { createConnectionContext } from "../../server/socket/context.js";
+import { createConnectionContext, type ConnectionContext } from "../../server/socket/context.js";
 import { registerAppsHandlers } from "../../server/socket/handlers/appsHandlers.js";
-import { createSfuState } from "../../server/state.js";
+import { createSfuState, type SfuState } from "../../server/state.js";
 import type { AppsRefusedData, AppsSyncError, AppsSyncResponse } from "../../types.js";
 
 type Listener = (...args: unknown[]) => unknown;
+type Received = { event: string; payload: unknown };
+type Member = { id: string; inbox: Received[] };
+type Hub = Map<string, Set<Member>>;
 
 export const edit = (doc: Y.Doc, change: (text: Y.Text) => void): Uint8Array => {
   const before = Y.encodeStateVector(doc);
@@ -20,59 +23,82 @@ export const edit = (doc: Y.Doc, change: (text: Y.Text) => void): Uint8Array => 
   return Y.encodeStateAsUpdate(doc, before);
 };
 
-export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChangeStaging?: StagingBudget } = {}) => {
-  vi.spyOn(console, "warn").mockImplementation(() => {});
-  vi.spyOn(console, "error").mockImplementation(() => {});
+const fakeSocket = (id: string, hub: Hub, relayed?: Uint8Array[]) => {
   const listeners = new Map<string, Listener>();
-  const relayed: Uint8Array[] = [];
-  const refused: AppsRefusedData[] = [];
-  const joined = new Set<string>();
-  const broadcasts: Array<{ to: string; except?: string; event: string; payload: unknown }> = [];
+  const member: Member = { id, inbox: [] };
+  const rooms = new Set<string>();
+  const deliver = (target: string, except: string | null, event: string, payload: unknown) => {
+    if (event === "apps:yjs:update") relayed?.push((payload as { update: Uint8Array }).update);
+    for (const other of hub.get(target) ?? []) {
+      if (other.id === id) continue;
+      if (except !== null && hub.get(except)?.has(other)) continue;
+      other.inbox.push({ event, payload });
+    }
+  };
   const socket = {
-    id: `s-${id}`,
+    id,
     data: { user: {} },
+    rooms,
     on: (event: string, listener: Listener) => {
       listeners.set(event, listener);
       return socket;
     },
-    rooms: joined,
     join: (target: string) => {
-      joined.add(target);
+      rooms.add(target);
+      const members = hub.get(target) ?? new Set<Member>();
+      members.add(member);
+      hub.set(target, members);
     },
     leave: (target: string) => {
-      joined.delete(target);
+      rooms.delete(target);
+      hub.get(target)?.delete(member);
     },
     to: (target: string) => ({
-      emit: (event: string, payload: { update: Uint8Array }) => {
-        broadcasts.push({ to: target, event, payload });
-        if (event === "apps:yjs:update") relayed.push(payload.update);
-      },
-      except: (other: string) => ({
-        emit: (event: string, payload: unknown) => {
-          broadcasts.push({ to: target, except: other, event, payload });
-        },
-      }),
+      emit: (event: string, payload: unknown) => deliver(target, null, event, payload),
+      except: (other: string) => ({ emit: (event: string, payload: unknown) => deliver(target, other, event, payload) }),
     }),
-    emit: (event: string, payload: AppsRefusedData) => {
-      if (event === "apps:yjs:refused") refused.push(payload);
+    emit: (event: string, payload: unknown) => {
+      member.inbox.push({ event, payload });
     },
   } as unknown as Socket;
+  const call = <T>(event: string, ...args: unknown[]) => new Promise<T>((resolve) => listeners.get(event)!(...args, resolve));
+  return { socket, member, listeners, call };
+};
+
+const enter = (state: SfuState, room: Room, joiner: ReturnType<typeof fakeSocket>, clientId: string): ConnectionContext => {
+  const io = { to: () => ({ emit: vi.fn() }) } as unknown as SocketIOServer;
+  const client = new Admin({ id: clientId, socket: joiner.socket });
+  room.addClient(client);
+  void joiner.socket.join(room.channelId);
+  const context = createConnectionContext(io, joiner.socket, state);
+  context.currentRoom = room;
+  context.currentClient = client;
+  return context;
+};
+
+const newRoom = (state: SfuState, id: string): Room => {
+  const room = new Room({ id, clientId: "conclave", workerPid: null, router: {} as Router });
+  state.rooms.set(room.channelId, room);
+  return room;
+};
+
+export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChangeStaging?: StagingBudget } = {}) => {
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const hub: Hub = new Map();
+  const relayed: Uint8Array[] = [];
+  const self = fakeSocket(`s-${id}`, hub, relayed);
+  const { listeners, call } = self;
+  const refused = (): AppsRefusedData[] =>
+    self.member.inbox.filter(({ event }) => event === "apps:yjs:refused").map(({ payload }) => payload as AppsRefusedData);
   const state = createSfuState({
     roomRegistry: new LocalRoomRegistry({ instanceId: id, instanceUrl: "http://localhost", ttlMs: 45000 }),
     appDocuments: pool,
     appChangeStaging: options.appChangeStaging,
   });
-  const room = new Room({ id, clientId: "conclave", workerPid: null, router: {} as Router });
-  state.rooms.set(room.channelId, room);
-  const admin = new Admin({ id: `a#${id}`, socket });
-  room.addClient(admin);
-  const io = { to: () => ({ emit: vi.fn() }) } as unknown as SocketIOServer;
-  const context = createConnectionContext(io, socket, state);
-  context.currentRoom = room;
-  context.currentClient = admin;
+  const room = newRoom(state, id);
+  const context = enter(state, room, self, `a#${id}`);
   registerAppsHandlers(context);
-  const call = <T>(event: string, ...args: unknown[]) =>
-    new Promise<T>((resolve) => listeners.get(event)!(...args, resolve));
   const requestSync = (holder: Y.Doc, canRetry = true, wholeChanges = false) =>
     call<AppsSyncResponse | AppsSyncError>("apps:yjs:sync", {
       appId: "board",
@@ -91,13 +117,61 @@ export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChang
     Y.applyUpdate(doc, syncMessage);
     return { doc, encodedBytes: syncMessage.length };
   };
+  let peers = 0;
+  const peer = async ({ encoding = "binary", declares = false, syncs = true }: { encoding?: "binary" | "base64"; declares?: boolean; syncs?: boolean } = {}) => {
+    peers += 1;
+    const joiner = fakeSocket(`s-${id}-peer-${peers}`, hub);
+    registerAppsHandlers(enter(state, context.currentRoom ?? room, joiner, `p${peers}#${id}`));
+    if (syncs) {
+      const vector = Y.encodeStateVector(new Y.Doc());
+      await joiner.call("apps:yjs:sync", {
+        appId: "board",
+        syncMessage: encoding === "base64" ? Buffer.from(vector).toString("base64") : vector,
+        canRetry: true,
+        ...(declares ? { wholeChanges: true } : {}),
+      });
+    }
+    return {
+      inbox: joiner.member.inbox,
+      settle: () =>
+        joiner.call("apps:yjs:sync", { appId: "board", syncMessage: Y.encodeStateVector(new Y.Doc()), canRetry: true }),
+      send: (update: Uint8Array, replicaId: string, part?: unknown) =>
+        joiner.listeners.get("apps:yjs:update")!({ appId: "board", update, replicaId, ...(part === undefined ? {} : { part }) }),
+      updates: () => joiner.member.inbox.filter(({ event }) => event === "apps:yjs:update").map(({ payload }) => (payload as { update: Uint8Array }).update),
+      states: () => joiner.member.inbox.filter(({ event }) => event === "apps:state").map(({ payload }) => (payload as { activeAppId: string | null }).activeAppId),
+    };
+  };
+  const strangerIn = (otherId: string) => {
+    const joiner = fakeSocket(`s-stranger-${otherId}`, hub);
+    enter(state, newRoom(state, otherId), joiner, `x#${otherId}`);
+    return { inbox: joiner.member.inbox };
+  };
+  const beginMove = () => listeners.get("joinRoom")?.({}, () => undefined);
+  const finishMove = async (otherId: string) => {
+    const previous = context.currentRoom!;
+    previous.removeClient(context.currentClient!.id);
+    void self.socket.leave(previous.channelId);
+    context.currentRoom = null;
+    context.currentClient = null;
+    const other = newRoom(state, otherId);
+    const moved = new Admin({ id: `a#${id}`, socket: self.socket });
+    other.addClient(moved);
+    void self.socket.join(other.channelId);
+    context.currentRoom = other;
+    context.currentClient = moved;
+    await call("apps:open", { appId: "board" });
+    return other;
+  };
   return {
     state,
-    channelId: () => context.currentRoom?.channelId ?? "",
-    joined,
-    broadcasts,
+    room,
+    inbox: self.member.inbox,
     relayed,
-    refused,
+    get refused() {
+      return refused();
+    },
+    peer,
+    strangerIn,
     open: () => call("apps:open", { appId: "board" }),
     close: () => call("apps:close"),
     send: (update: Uint8Array, replicaId?: string, part?: unknown) =>
@@ -106,14 +180,11 @@ export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChang
     leave: () => {
       context.currentRoom = null;
     },
+    beginMove,
+    finishMove,
     moveTo: async (otherId: string, { asksToJoin = true }: { asksToJoin?: boolean } = {}) => {
-      if (asksToJoin) listeners.get("joinRoom")?.({ roomId: otherId }, () => undefined);
-      const other = new Room({ id: otherId, clientId: "conclave", workerPid: null, router: {} as Router });
-      state.rooms.set(other.channelId, other);
-      other.addClient(admin);
-      context.currentRoom = other;
-      await call("apps:open", { appId: "board" });
-      return other;
+      if (asksToJoin) beginMove();
+      return finishMove(otherId);
     },
     requestSync,
     syncFrom,

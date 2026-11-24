@@ -67,6 +67,7 @@ describe("app changes sent in parts", () => {
 
   it("are joined back into the original update, applied once when they fit, and relayed whole", async () => {
     const room = await boardRoom("fits");
+    const viewer = await room.peer({ declares: true });
     const author = new Y.Doc();
     const change = bigChange(author, 600 * KIB, "q");
 
@@ -75,10 +76,10 @@ describe("app changes sent in parts", () => {
 
     expect(after).toBe(author.getText("t").toString());
     expect(room.refused).toEqual([]);
-    expect(room.relayed).toEqual([change]);
-    const peer = new Y.Doc();
-    Y.applyUpdate(peer, room.relayed[0]);
-    expect(peer.getText("t").toString()).toBe(after);
+    expect(viewer.updates()).toEqual([change]);
+    const copy = new Y.Doc();
+    Y.applyUpdate(copy, viewer.updates()[0]);
+    expect(copy.getText("t").toString()).toBe(after);
   });
 
   it("are refused as interrupted, a passing reason, when a part arrives out of order or names another change, with nothing applied", async () => {
@@ -159,8 +160,13 @@ describe("app changes sent in parts", () => {
     expect(room.refused).toEqual([{ appId: "board", replicaId: "copy-2", reason: "interrupted" }]);
   });
 
-  it("go whole only to sockets that said they take whole changes, and make every other socket reload the app", async () => {
+  it("go whole to every receiver that can take one, and make a native client that cannot reload the app", async () => {
     const room = await boardRoom("routing");
+    const newWeb = await room.peer({ declares: true });
+    const oldWeb = await room.peer();
+    const newNative = await room.peer({ encoding: "base64", declares: true });
+    const build63 = await room.peer({ encoding: "base64" });
+    const notSynced = await room.peer({ syncs: false });
     const author = new Y.Doc();
     const small = edit(author, (text) => text.insert(0, "small"));
     const large = bigChange(author, 300 * KIB, "w");
@@ -169,29 +175,42 @@ describe("app changes sent in parts", () => {
     sendChange(room, inParts(large), "large", "copy-2");
     await settled(room);
 
-    const channel = room.channelId();
-    const whole = `${channel}:whole-changes`;
-    expect(room.broadcasts.map(({ to, except, event }) => [to, except ?? null, event])).toEqual([
-      [channel, null, "apps:yjs:update"],
-      [whole, null, "apps:yjs:update"],
-      [channel, whole, "apps:state"],
-      [channel, whole, "apps:state"],
-    ]);
-    expect(room.broadcasts[1].payload).toEqual({ appId: "board", update: large });
-    expect(room.broadcasts.slice(2).map(({ payload }) => (payload as { activeAppId: string | null }).activeAppId)).toEqual([null, "board"]);
+    for (const receiver of [newWeb, oldWeb, newNative, notSynced]) {
+      expect(receiver.updates()).toEqual([small, large]);
+      expect(receiver.states()).toEqual([]);
+    }
+    expect(build63.updates()).toEqual([small]);
+    expect(build63.states()).toEqual([null, "board"]);
+    expect(room.inbox.filter(({ event }) => event === "apps:yjs:update" || event === "apps:state")).toEqual([]);
   });
 
-  it("put a socket among those that take whole changes only when its sync says so, and take it out when it asks to join another room", async () => {
-    const room = await boardRoom("membership");
-    const whole = `${room.channelId()}:whole-changes`;
+  it("never reach a socket in another meeting, even one whose room id is the victim's id plus a suffix", async () => {
+    const victim = await boardRoom("victim");
+    const stranger = victim.strangerIn("victim:whole-changes");
+    const author = new Y.Doc();
 
-    await room.requestSync(new Y.Doc());
-    expect(room.joined.has(whole)).toBe(false);
-    await room.requestSync(new Y.Doc(), true, true);
-    expect(room.joined.has(whole)).toBe(true);
-    await room.moveTo("membership-elsewhere");
+    sendChange(victim, inParts(bigChange(author, 300 * KIB, "v")));
+    victim.send(edit(author, (text) => text.insert(0, "small")), "copy-2");
+    await settled(victim);
 
-    expect(room.joined.has(whole)).toBe(false);
+    expect(stranger.inbox).toEqual([]);
+  });
+
+  it("stop reaching a socket that moved rooms, even when its sync answer landed during the move", async () => {
+    const room = await boardRoom("mid-move");
+    const stayer = await room.peer({ declares: true });
+    const answer = room.requestSync(new Y.Doc(), true, true);
+    room.beginMove();
+    await answer;
+    await room.finishMove("mid-move-elsewhere");
+    const heardBefore = room.inbox.length;
+    const author = new Y.Doc();
+
+    inParts(bigChange(author, 300 * KIB, "m")).forEach((part, index, parts) => stayer.send(part, "stayer", { id: "s", index, count: parts.length }));
+    stayer.send(edit(author, (text) => text.insert(0, "small")), "stayer");
+    await stayer.settle();
+
+    expect(room.inbox.slice(heardBefore)).toEqual([]);
   });
 
   it("are dropped when the client sends a whole update before the last part", async () => {

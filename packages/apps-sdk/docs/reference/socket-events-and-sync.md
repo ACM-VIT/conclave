@@ -110,9 +110,15 @@ Client -> server (`apps:yjs:update`):
 
 Server -> peers, for a change over 256 KiB:
 
-- sent whole to sockets whose sync request said `wholeChanges: true`
-- every other socket in the room gets `apps:state` with no active app and then
-  the real state, so it reloads the app from the server instead of missing it
+- sent whole, one socket at a time, to every other participant of the same
+  meeting that can take it: any client whose sync request said
+  `wholeChanges: true`, any web client (it syncs with binary payloads), and any
+  client that has not synced yet
+- a native client that synced with base64 payloads and never said
+  `wholeChanges` (build 63) gets `apps:state` with no active app and then the
+  real state instead, so it reloads the app from the server
+- what a client can take is recorded on its membership in that meeting, so a
+  sync answer that lands during a room move never reaches another meeting
 
 Server -> peers (`apps:yjs:update`):
 

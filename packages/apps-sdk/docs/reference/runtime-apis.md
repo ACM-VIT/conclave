@@ -88,9 +88,10 @@ Every change an app makes reaches the server through one paced upload path:
   When the same socket reconnects, the provider asks what is open and, if the
   same app still is, runs that fresh sync before it sends anything else.
 - Receivers take changes up to the document limit. The provider and native
-  clients say so with `wholeChanges: true` in their sync request; any socket
-  that has not said so gets the app state with no app and then the real state
-  instead of a change over 256 KiB, so it reloads the app from the server.
+  clients say so with `wholeChanges: true` in their sync request, and any web
+  client takes them anyway. A native client that never said so (build 63) gets
+  the app state with no app and then the real state on its own socket instead
+  of a change over 256 KiB, so it reloads the app from the server.
 - The provider sends parts only to an SFU whose sync reply says
   `stagesParts: true`. An older SFU gets the change whole and refuses it as too
   large, never half of it. The native embed does not split yet, because the
