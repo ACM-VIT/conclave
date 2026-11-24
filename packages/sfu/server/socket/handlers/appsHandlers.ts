@@ -280,7 +280,6 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     for (const stop of [...openLegacySyncs]) stop();
     dropStaged();
   });
-  socket.on("joinRoom", () => dropStaged());
 
   const activeDocument = (room: Room, appId: string): AppDocument | null =>
     room.appsState.activeAppId === appId ? room.getOrCreateAppDoc(appId, documents) : null;

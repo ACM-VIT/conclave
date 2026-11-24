@@ -104,18 +104,18 @@ describe("app changes sent in parts", () => {
   const sendRange = (room: Awaited<ReturnType<typeof boardRoom>>, parts: Uint8Array[], id: string, replicaId: string, from: number, to = parts.length) =>
     parts.slice(from, to).forEach((part, offset) => room.send(part, replicaId, { id, index: from + offset, count: parts.length }));
 
-  it("are dropped the moment the socket asks to join another room, and later parts commit nowhere", async () => {
+  it("stay pinned to their document when the socket joins another room, so the next part commits nowhere and frees them", async () => {
     const room = await boardRoom("switch");
     const parts = partsOf20Kib("r");
 
     sendRange(room, parts, "c", "copy-1", 0, 1);
     expect(room.state.appChangeStaging.used()).toBe(parts[0].length);
     await room.moveTo("switch-elsewhere");
-    expect(room.state.appChangeStaging.used()).toBe(0);
     sendRange(room, parts, "c", "copy-1", 1);
 
     expect(await settled(room)).toBe("");
     expect(room.refused).toEqual([{ appId: "board", replicaId: "copy-1", reason: "interrupted" }]);
+    expect(room.state.appChangeStaging.used()).toBe(0);
   });
 
   it("are refused on their next part when the room changed by a path that never asked to join", async () => {
