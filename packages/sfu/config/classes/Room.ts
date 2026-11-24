@@ -130,12 +130,6 @@ export type AdmitResult =
  * What a join shows the room of its guest through the browser's other
  * passes, before anything is recorded (see `Room.planGuestLink`).
  */
-export type Person = {
-  readonly userKey: string;
-  readonly passes: ReadonlySet<string>;
-};
-const NO_PASSES: ReadonlySet<string> = new Set();
-
 export type GuestLinkPlan = {
   readonly guestProof: string;
   // The guest's passes as this join shows them: the ones the room already
@@ -152,6 +146,12 @@ export type GuestLinkPlan = {
 // would record them, else what the room already links.
 const rightsPassesOf = (link: GuestLinkPlan | undefined) =>
   link?.recordable ? link.passes : undefined;
+
+export type Person = {
+  readonly userKey: string;
+  readonly passes: ReadonlySet<string>;
+};
+const NO_PASSES: ReadonlySet<string> = new Set();
 const MAX_WEBINAR_OPEN_QUESTIONS_PER_USER = 3;
 export const MAX_WEBINAR_QA_QUESTION_LENGTH = 500;
 export const MAX_WEBINAR_QA_ANSWER_LENGTH = 1000;
@@ -4155,7 +4155,8 @@ export class Room {
     for (const userKey of userKeys) {
       const guestProof = this.guestProofsByUserKey.get(userKey);
       if (guestProof === undefined) continue;
-      passes[userKey] = [guestProof, ...[...this.passesOfGuest(guestProof)].filter((pass) => pass !== guestProof)];
+      const linked = [...this.passesOfGuest(guestProof)].filter((pass) => pass !== guestProof);
+      passes[userKey] = [guestProof, ...linked];
     }
     return passes;
   }
