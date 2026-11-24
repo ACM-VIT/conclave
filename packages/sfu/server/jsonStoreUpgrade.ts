@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Logger } from "../utilities/loggers.js";
 import { writePrivateFileAtomic } from "./privateFile.js";
@@ -37,17 +37,46 @@ const stableJson = (value: unknown): string =>
       : inner,
   );
 
+const errorCode = (error: unknown): string | undefined => (error as NodeJS.ErrnoException).code;
+
+const unreadableCopies = (path: string, error: unknown) =>
+  new Error(
+    `${path} holds store copies a deploy saved from an older SFU, and this SFU cannot open it (${errorCode(error) ?? (error as Error).message}). Nothing was changed. Give it to the user the SFU runs as, for example: chown -R node:node ${path} && chmod -R u+rwX ${path}. Then start the SFU again.`,
+  );
+
+const guarded = <T>(path: string, read: () => T): T => {
+  try {
+    return read();
+  } catch (error) {
+    if (errorCode(error) === "EACCES" || errorCode(error) === "EPERM") throw unreadableCopies(path, error);
+    throw error;
+  }
+};
+
 const folders = (path: string): string[] =>
-  readdirSync(path, { withFileTypes: true })
+  guarded(path, () => readdirSync(path, { withFileTypes: true }))
     .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
     .map((entry) => entry.name);
+
+const savedCopy = (path: string): boolean =>
+  guarded(dirname(path), () => {
+    try {
+      statSync(path);
+    } catch (error) {
+      if (errorCode(error) === "ENOENT") return false;
+      throw error;
+    }
+    accessSync(path, constants.R_OK);
+    accessSync(dirname(path), constants.W_OK);
+    return true;
+  });
 
 const recoveredCopies = (fileName: string): string[] => {
   const importDir = process.env.CONCLAVE_FALLBACK_IMPORT_DIR?.trim();
   if (!importDir || !existsSync(importDir)) return [];
   return folders(importDir)
     .flatMap((service) => folders(join(importDir, service)).map((archive) => ({ archive, path: join(importDir, service, archive, fileName) })))
-    .filter(({ path }) => existsSync(path))
+    .filter(({ path }) => savedCopy(path))
     .sort((a, b) => (a.archive < b.archive ? -1 : a.archive > b.archive ? 1 : a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
     .map(({ path }) => path);
 };

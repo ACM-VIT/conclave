@@ -42,14 +42,20 @@ docker compose -f docker-compose.sfu.yml run --rm --no-deps --user root \
 
 Images before this change fell back to JSON files in the container layer
 when SQLite was locked. Before it replaces such a container, the deploy copies
-any of those files onto the volume under `CONCLAVE_FALLBACK_IMPORT_DIR`, readable
-only by the SFU user, so they survive the replacement. A store set to JSON with
+any of those files onto the volume as a new archive,
+`CONCLAVE_FALLBACK_IMPORT_DIR/<service>/<UTC time>-<deploy id>/`, owned by the
+SFU user and readable only by it, so they survive the replacement. No deploy
+replaces or deletes an archive an earlier deploy saved. A store set to JSON with
 `SCHEDULING_PERSISTENCE`, `SCHEDULED_MEETINGS_PERSISTENCE` or
-`SCHEDULED_WEBINARS_PERSISTENCE` adopts that copy as its file on the first start
-after the upgrade, when its own file is missing, and renames the copy with a
-`.adopted` suffix. It refuses to start if two different copies exist, or if its
-own file is empty while a copy holds records. Stores on SQLite do not import the
-copies; that import moves to a follow-up with the multi-SFU persistence work.
+`SCHEDULED_WEBINARS_PERSISTENCE` combines its own file with every archive it has
+not adopted yet, oldest first, record by record, and renames each adopted copy
+with a `.adopted` suffix. The newer update of a record wins. It refuses to
+start, naming the records, when two sources changed one record differently at
+the same update time or when two records claim the same unique key, and it
+refuses with the fix when it cannot open a folder of saved copies. Hidden
+staging folders from a transfer still in progress, or one that failed, are never
+read. Stores on SQLite do not import the archives; that import moves to a
+follow-up with the multi-SFU persistence work.
 
 To upgrade an existing host, run `git pull` to the reviewed revision first,
 then run the new `scripts/deploy-sfu.sh`. Do not start the upgrade with the
