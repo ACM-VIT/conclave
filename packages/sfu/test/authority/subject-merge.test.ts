@@ -195,6 +195,7 @@ describe("a poll export with a merge between its pages", () => {
     const { instance, pollId, now } = pollWithBallots(secondTabVotes);
     let at = now;
     const names: string[] = [];
+    const ballots: { name: string; order: number }[] = [];
     let offset: number | null = 0;
     let rewrites: number | undefined;
     let pages = 0;
@@ -208,23 +209,25 @@ describe("a poll export with a merge between its pages", () => {
       at += 1_000;
       const page = instance.query(host, "exportBallots", tab === "this build" ? { pollId, offset, rewrites } : { pollId, offset }, at);
       if (!page.ok) {
-        if (tab === "an older build") return { names, pages, restarts, refused: page };
+        if (tab === "an older build") return { names, ballots, pages, restarts, refused: page };
         if (page.code !== "rejected" || page.reason !== "export-changed" || restarts > 0) {
           throw new Error(`page at ${offset} failed: ${JSON.stringify(page)}`);
         }
         restarts += 1;
         names.length = 0;
+        ballots.length = 0;
         offset = 0;
         rewrites = undefined;
         continue;
       }
       pages += 1;
-      const value = page.value as { ballots: { name: string }[]; nextOffset: number | null; rewrites: number };
+      const value = page.value as { ballots: { name: string; order: number }[]; nextOffset: number | null; rewrites: number };
       names.push(...value.ballots.map((ballot) => ballot.name));
+      ballots.push(...value.ballots);
       offset = value.nextOffset;
       rewrites = value.rewrites;
     }
-    return { names, pages, restarts, refused: null };
+    return { names, ballots, pages, restarts, refused: null };
   };
 
   it.each([
@@ -232,17 +235,29 @@ describe("a poll export with a merge between its pages", () => {
     ["only the first tab voted, and its ballot moves to the second", false, 2_999],
   ])("exports every ballot once, whichever two pages the merge falls between: %s", (_case, secondTabVotes, ballots) => {
     const afterTheMerge = exportAll(secondTabVotes, 0);
+    const inActionOrder = (list: { name: string; order: number }[]) =>
+      [...list].sort((a, b) => a.order - b.order).map((ballot) => ballot.name);
+    const cast = Array.from({ length: 3_000 }, (_, index) =>
+      index === 40 ? "Gita, first tab" : index === 2_600 ? "Gita, second tab" : `${"名".repeat(190)} ${index}`,
+    ).filter((name) => name !== "Gita, second tab");
     const outcomes = Array.from({ length: afterTheMerge.pages - 1 }, (_, index) => {
-      const { names, restarts } = exportAll(secondTabVotes, index + 1);
-      return { between: [index + 1, index + 2], sameAsAfterTheMerge: names.join("|") === afterTheMerge.names.join("|"), restarts };
+      const { names, ballots, restarts } = exportAll(secondTabVotes, index + 1);
+      return {
+        between: [index + 1, index + 2],
+        sameAsAfterTheMerge: names.join("|") === afterTheMerge.names.join("|"),
+        inCastOrder: inActionOrder(ballots).join("|") === cast.join("|"),
+        restarts,
+      };
     });
 
     expect(afterTheMerge.pages).toBeGreaterThan(2);
     expect(afterTheMerge.names).toHaveLength(ballots);
     expect(new Set(afterTheMerge.names).size).toBe(ballots);
     expect(afterTheMerge.names.filter((name) => name.startsWith("Gita"))).toEqual(["Gita, first tab"]);
+    expect(afterTheMerge.names.indexOf("Gita, first tab")).not.toBe(40);
+    expect(inActionOrder(afterTheMerge.ballots)).toEqual(cast);
     expect(outcomes).toEqual(
-      outcomes.map(({ between }) => ({ between, sameAsAfterTheMerge: true, restarts: 1 })),
+      outcomes.map(({ between }) => ({ between, sameAsAfterTheMerge: true, inCastOrder: true, restarts: 1 })),
     );
   });
 

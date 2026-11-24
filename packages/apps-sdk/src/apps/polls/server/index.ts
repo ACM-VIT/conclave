@@ -212,6 +212,7 @@ export const pollsAuthority = defineAuthority({
               name: row.voterName,
               optionIds: [...row.optionIds],
               votedAt: row.votedAt,
+              order: row.order,
             };
             const size = boundedJsonBytes(ballot, POLL_EXPORT_PAGE_BYTES) + 1;
             if (ballots.length > 0 && bytes + size > POLL_EXPORT_PAGE_BYTES) {

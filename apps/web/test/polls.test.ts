@@ -42,18 +42,19 @@ describe("poll results", () => {
 });
 
 describe("poll CSV export", () => {
-  it("lists ballots oldest first even when a merge stored one after later ones", () => {
+  it("lists ballots in the order they were cast, even when a merge stored one after later ones", () => {
+    const sameMoment = Date.UTC(2026, 10, 22, 10);
     const csv = buildPollCsv({
       poll: poll(),
       results: { voterCount: 3, votes: { o1: 2, o2: 1 } },
       ballots: [
-        { name: "Ben", optionIds: ["o2"], votedAt: Date.UTC(2026, 10, 22, 10) },
-        { name: "Cy", optionIds: ["o1"], votedAt: Date.UTC(2026, 10, 22, 11) },
-        { name: "Gita", optionIds: ["o1"], votedAt: Date.UTC(2026, 10, 22, 9) },
+        { name: "Ben", optionIds: ["o2"], votedAt: sameMoment, order: 7 },
+        { name: "Cy", optionIds: ["o1"], votedAt: sameMoment, order: 5 },
+        { name: "Gita", optionIds: ["o1"], votedAt: Date.UTC(2026, 10, 22, 9), order: 2 },
       ],
     });
 
-    expect(csv.split("\r\n").slice(-4, -1).map((line) => line.split(",")[0])).toEqual(["Gita", "Ben", "Cy"]);
+    expect(csv.split("\r\n").slice(-4, -1).map((line) => line.split(",")[0])).toEqual(["Gita", "Cy", "Ben"]);
   });
 
   it("lists tallies and every ballot", () => {
@@ -61,8 +62,8 @@ describe("poll CSV export", () => {
       poll: poll({ status: "ended", choiceMode: "multiple" }),
       results: { voterCount: 2, votes: { o1: 1, o2: 2 } },
       ballots: [
-        { name: "Ana", optionIds: ["o1", "o2"], votedAt: Date.UTC(2026, 10, 22, 9) },
-        { name: "Ben", optionIds: ["o2"], votedAt: Date.UTC(2026, 10, 22, 10) },
+        { name: "Ana", optionIds: ["o1", "o2"], votedAt: Date.UTC(2026, 10, 22, 9), order: 1 },
+        { name: "Ben", optionIds: ["o2"], votedAt: Date.UTC(2026, 10, 22, 10), order: 2 },
       ],
     });
     expect(csv.split("\r\n")).toEqual([
@@ -86,7 +87,7 @@ describe("poll CSV export", () => {
     const csv = buildPollCsv({
       poll: poll({ question: 'Pick "one", please' }),
       results: { voterCount: 1, votes: { o1: 1 } },
-      ballots: [{ name: "=HYPERLINK(1)", optionIds: ["o1"], votedAt: 0 }],
+      ballots: [{ name: "=HYPERLINK(1)", optionIds: ["o1"], votedAt: 0, order: 1 }],
     });
     expect(csv).toContain('Question,"Pick ""one"", please"');
     expect(csv).toContain("'=HYPERLINK(1),Tacos,");

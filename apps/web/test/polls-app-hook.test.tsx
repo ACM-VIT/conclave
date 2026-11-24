@@ -203,7 +203,7 @@ it("builds one download from every page of a large export", async () => {
     return "blob:poll";
   });
   const revokeUrl = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
-  const ballot = (name: string, votedAt: number) => ({ name, optionIds: ["o1"], votedAt });
+  const ballot = (name: string, votedAt: number) => ({ name, optionIds: ["o1"], votedAt, order: votedAt });
   const page = (ballots: unknown[], nextOffset: number | null) => ({
     ok: true,
     value: { poll: card("p1").value, results: { voterCount: 3, votes: { o1: 3 } }, ballots, nextOffset, rewrites: 0 },
@@ -250,7 +250,7 @@ it("starts the download again when a merge changes the poll's votes between page
     return "blob:poll";
   });
   const revokeUrl = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
-  const ballot = (name: string, votedAt: number) => ({ name, optionIds: ["o1"], votedAt });
+  const ballot = (name: string, votedAt: number) => ({ name, optionIds: ["o1"], votedAt, order: votedAt });
   const page = (ballots: unknown[], nextOffset: number | null, rewrites: number) => ({
     ok: true,
     value: { poll: card("p1").value, results: { voterCount: 2, votes: { o1: 2 } }, ballots, nextOffset, rewrites },
