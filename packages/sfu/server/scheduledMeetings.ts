@@ -25,6 +25,7 @@ import {
 } from "./redisPersistence.js";
 import { canonicalizeClientId } from "./clientIds.js";
 import { openSqliteStore } from "./sqliteWriteCheck.js";
+import { storedTimestampOrNull } from "./storedValues.js";
 import { adoptRecoveredJsonStore, jsonStoreCollection, type JsonStoreAdapter, type JsonStoreClaim } from "./jsonStoreUpgrade.js";
 
 type MaybePromise<T> = T | Promise<T>;
@@ -622,10 +623,8 @@ const normalizeStoredMeeting = (raw: unknown): ScheduledMeeting | null => {
     scheduledStartAt,
     scheduledEndAt,
     status,
-    startedAt: Number.isFinite(Number(record.startedAt))
-      ? Number(record.startedAt)
-      : null,
-    endedAt: Number.isFinite(Number(record.endedAt)) ? Number(record.endedAt) : null,
+    startedAt: storedTimestampOrNull(record.startedAt),
+    endedAt: storedTimestampOrNull(record.endedAt),
     createdAt: Number.isFinite(Number(record.createdAt))
       ? Number(record.createdAt)
       : now,
@@ -667,11 +666,7 @@ const normalizeStoredMeeting = (raw: unknown): ScheduledMeeting | null => {
       typeof record.emailNotificationError === "string"
         ? record.emailNotificationError
         : null,
-    emailNotificationSentAt: Number.isFinite(
-      Number(record.emailNotificationSentAt),
-    )
-      ? Number(record.emailNotificationSentAt)
-      : null,
+    emailNotificationSentAt: storedTimestampOrNull(record.emailNotificationSentAt),
     emailReminderStatus: normalizeEmailNotificationStatus(
       record.emailReminderStatus,
     ),
@@ -679,9 +674,7 @@ const normalizeStoredMeeting = (raw: unknown): ScheduledMeeting | null => {
       typeof record.emailReminderError === "string"
         ? record.emailReminderError
         : null,
-    emailReminderSentAt: Number.isFinite(Number(record.emailReminderSentAt))
-      ? Number(record.emailReminderSentAt)
-      : null,
+    emailReminderSentAt: storedTimestampOrNull(record.emailReminderSentAt),
   };
 };
 
