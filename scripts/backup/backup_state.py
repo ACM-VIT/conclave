@@ -38,6 +38,7 @@ from statelib import (  # noqa: E402
     archive_problems,
     chain_problems,
     configured_stores,
+    database_files,
     database_paths,
     docker_containers,
     is_database_name,
@@ -223,8 +224,7 @@ def pack_command(state, payload):
     is left out and logged. Each file is opened without following and checked
     to be the entry listed."""
     archive = Archive(payload)
-    skip = database_paths(archive)
-    skip |= side_files(skip)
+    skip = database_paths(archive) | side_files(database_files(archive))
     real, state_fd = open_state(state)
     try:
         with tarfile.open(os.path.join(payload, "state-files.tar"), "w", format=tarfile.PAX_FORMAT) as tar:

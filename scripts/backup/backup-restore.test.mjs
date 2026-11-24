@@ -1878,17 +1878,20 @@ test("a restore over a live state dir moves aside the side files where a databas
   }
 });
 
-test("a SQLite side file in the archive's other files is refused, whatever it belongs to", needs, async () => {
+test("a SQLite side file of a database in the archive's other files is refused, and one named after a link is an ordinary file", needs, async () => {
   const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
   try {
     const { state, backup, latestArchive, restore } = await setUp(root, ["CONCLAVE_SQLITE_PATH=/var/lib/conclave/recordings/live.db"]);
     makeDb(path.join(state, "target.db"), "kept");
     await symlink("target.db", path.join(state, "live.db"));
     await backup("--local-only");
-    for (const name of ["target.db-wal", "live.db-journal", "other.sqlite-shm"]) {
+    for (const name of ["target.db-wal", "target.db-journal", "other.sqlite-shm"]) {
       const crafted = await tamper(root, await latestArchive(), { inner: [{ name }] }, path.join(root, "crafted.tar.gz.age"));
       await assert.rejects(restore("--file", crafted, "--only", "files", "--yes"), /(is a SQLite side file, and a restore never takes one from the archive|is a database path)/);
     }
+    const named = await tamper(root, await latestArchive(), { inner: [{ name: "live.db-journal" }] }, path.join(root, "named.tar.gz.age"));
+    await restore("--file", named, "--only", "files", "--yes");
+    assert.ok((await stat(path.join(state, "live.db-journal"))).isFile(), "SQLite keeps its journal beside target.db, so this is an ordinary file");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -2531,6 +2534,27 @@ test("a pipe at the host deploy lock's path is refused before anything opens it"
       run("bash", [path.join(scripts, "backup.sh"), "--local-only"], { env, timeout: 30_000 }),
       (error) => !error.killed && /deploy\.lock is a link or not a regular file/.test(`${error.stdout}${error.stderr}`),
     );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an ordinary file named like a directory link's SQLite side file is kept, backed up and restored", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, backup, latestArchive, restore } = await setUp(root, ["CONCLAVE_SQLITE_PATH=/var/lib/conclave/recordings/current/live.db"]);
+    await mkdir(path.join(state, "data"));
+    makeDb(path.join(state, "data", "live.db"), "kept");
+    await symlink("data", path.join(state, "current"));
+    await writeFile(path.join(state, "current-journal"), "notes, not a journal");
+    await backup("--local-only");
+    const archive = await latestArchive();
+    await restore("--file", archive, "--only", "sqlite", "--yes");
+    assert.equal(await readFile(path.join(state, "current-journal"), "utf8"), "notes, not a journal", "a restore over the live dir leaves it where it is");
+    await rm(state, { recursive: true });
+    await restore("--file", archive, "--yes");
+    assert.equal(await readFile(path.join(state, "current-journal"), "utf8").catch(() => "missing"), "notes, not a journal", "the backup kept it");
+    assert.deepEqual(rows(path.join(state, "current", "live.db")), ["kept"]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

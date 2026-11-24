@@ -64,7 +64,11 @@ database, and Redis when configured) must be in the payload before it is
 encrypted, and the encrypted file is checked before the job keeps it. The
 other files go in as files and directories only, hard links stored whole (as
 `tar --hard-dereference` does), with any other link, special file, database or
-SQLite side file left out (the first two logged); and the restore's own
+SQLite side file left out (the first two logged). A side file is one beside a
+database file itself: SQLite resolves links when it opens a database and keeps
+its `-wal`, `-shm` and `-journal` beside the real file, so a file named after a
+link (`current-journal` beside a `current -> data` link) is an ordinary file
+and is backed up like one; and the restore's own
 checks run over the payload, so a
 backup that would not restore fails and the previous archives stay. Only
 then are older local archives rotated, and the newest is always kept, so a

@@ -422,9 +422,9 @@ def archive_problems(archive):
             problems.append(f"the chain directory {rel} is not a plain path inside the archive")
 
     database_like = set(listed) | set(targets) | starts
-    sides = side_files(database_like)
+    sides = side_files(set(listed))
     for rel in sorted(listed):
-        if rel in side_files(database_like - {rel}):
+        if rel in side_files(set(listed) - {rel}):
             problems.append(f"the database {rel} has the name of another database's SQLite side file")
     writes = [(rel, "file") for rel in listed] + [(rel, "link") for rel in sorted(link_paths)]
     member_dirs = {plain(member.name) for member in archive.members if member.isdir()}
@@ -545,18 +545,10 @@ def database_paths(archive):
     return set(archive.databases) | {rel for rel, _ in archive.links} | {start for start, _ in archive.chains}
 
 
-def planned_sides(archive, writes, roots):
-    tree = overlay(None, archive, writes)
-    sides = set()
-    for rel in side_files(database_paths(archive)):
-        parent, _, name = rel.rpartition("/")
-        if parent:
-            try:
-                parent = resolve(tree, parent, roots, final="any")[1]
-            except Unresolved as unresolved:
-                raise Refused(f"the SQLite side file {rel} has no place in the restored tree: {unresolved}")
-        sides.add(f"{parent}/{name}" if parent else name)
-    return sides
+def database_files(archive):
+    return set(archive.databases)
+
+
 
 
 def store_paths(env, fallback=None):
