@@ -252,6 +252,7 @@ export const SFU_EVENTS = {
     webinarHandQueueChanged: "webinar:handQueueChanged",
     webinarPromoted: "webinar:promoted",
     webinarDemoted: "webinar:demoted",
+    webinarStageInviteUsed: "webinar:stageInviteUsed",
 
     // Meeting / webinar config broadcasts
     meetingConfigChanged: "meeting:configChanged",

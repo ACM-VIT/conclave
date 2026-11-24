@@ -2054,6 +2054,12 @@ struct WebinarDemotedNotification: Codable {
     let webinarLinkSlug: String?
 }
 
+struct WebinarStageInviteUsedNotification: Codable {
+    let roomId: String
+    let userId: String?
+    let invitedUserKeys: [String]?
+}
+
 struct WebinarUserRequest: Codable {
     let userId: String
 }

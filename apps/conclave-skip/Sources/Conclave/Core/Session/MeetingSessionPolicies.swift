@@ -13,6 +13,24 @@ enum MeetingCallSessionPolicy {
     }
 }
 
+enum GuestJoinIdentityPolicy {
+    /// The guest user key the app goes by until a join token names one.
+    ///
+    /// The join route builds a guest's key from the guest pass in this app's cookie jar, so one
+    /// pass and one session get the same key on every join. A key that a token already named for
+    /// this session therefore stays. Falling back to `guest-<sessionId>` on a later join would
+    /// make the app stop recognizing itself until the next token arrived.
+    static func provisionalUserKey(sessionId: String, currentUserKey: String?, currentUserId: String) -> String {
+        let unissued = "guest-\(sessionId)"
+        guard let currentUserKey,
+              currentUserKey.hasPrefix("guest-"),
+              currentUserId == "\(currentUserKey)#\(sessionId)" else {
+            return unissued
+        }
+        return currentUserKey
+    }
+}
+
 struct MeetingPhaseResolution: Equatable {
     let phase: MeetingPhaseKind
     let notice: MeetingNoticeKind

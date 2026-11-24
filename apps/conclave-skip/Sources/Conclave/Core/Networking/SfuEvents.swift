@@ -192,6 +192,7 @@ enum SfuServerEvent: String {
     case webinarHandQueueChanged = "webinar:handQueueChanged"
     case webinarPromoted = "webinar:promoted"
     case webinarDemoted = "webinar:demoted"
+    case webinarStageInviteUsed = "webinar:stageInviteUsed"
     case meetingConfigChanged = "meeting:configChanged"
     case webinarConfigChanged = "webinar:configChanged"
 }

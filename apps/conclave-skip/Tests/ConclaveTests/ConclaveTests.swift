@@ -1913,6 +1913,43 @@ final class ConclaveTests: XCTestCase {
         XCTAssertEqual(identity.userId, "guest-fallback-session#fallback-session")
     }
 
+    func testSfuJoinInfoAdoptsTheGuestIdentityIssuedForItsPass() throws {
+        let token = try makeUnsignedJWT(payload: [
+            "userId": "guest-gp_AAAAAAAAAAAAAAAAAAAAAA.native-session",
+            "sessionId": "native-session",
+            "guestProof": "proof-of-the-pass"
+        ])
+        let joinInfo = SfuJoinInfo(token: token, sfuUrl: "ws://127.0.0.1:3031", iceServers: nil)
+
+        let identity = try XCTUnwrap(joinInfo.localIdentity(sessionId: "native-session"))
+
+        XCTAssertEqual(identity.userKey, "guest-gp_AAAAAAAAAAAAAAAAAAAAAA.native-session")
+        XCTAssertEqual(identity.userId, "guest-gp_AAAAAAAAAAAAAAAAAAAAAA.native-session#native-session")
+    }
+
+    func testSfuJoinRequestAsksForAServerIssuedGuestIdentity() throws {
+        let request = SfuJoinRequest(
+            roomId: "room",
+            sessionId: "native-session",
+            guestId: "",
+            user: nil,
+            isHost: false,
+            isAdmin: false,
+            clientId: "conclave",
+            allowRoomCreation: false,
+            joinMode: JoinMode.meeting,
+            meetingInviteCode: nil,
+            webinarInviteCode: nil
+        )
+
+        let body = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any]
+        )
+
+        XCTAssertEqual(body["guestId"] as? String, "")
+        XCTAssertEqual(body["sessionId"] as? String, "native-session")
+    }
+
     func testSfuJoinInfoRejectsMalformedTokenUserKeyDelimiter() throws {
         let token = try makeUnsignedJWT(payload: [
             "userId": "provider-user#unexpected-session",
@@ -6343,6 +6380,53 @@ final class ConclaveTests: XCTestCase {
         let cookieHeader = try XCTUnwrap(request.value(forHTTPHeaderField: "Cookie"))
         XCTAssertTrue(cookieHeader.contains("\(cookieName)=native-session"))
     }
+
+    #if !SKIP
+    func testGuestPassCookieFromAJoinResponseRidesOnTheNextJoinRequest() throws {
+        let localJoinURL = try XCTUnwrap(URL(string: "http://127.0.0.253:39999/api/sfu/join"))
+        let secureJoinURL = try XCTUnwrap(URL(string: "https://guest-pass.conclave.test/api/sfu/join"))
+        let insecureJoinURL = try XCTUnwrap(URL(string: "http://guest-pass.conclave.test/api/sfu/join"))
+        let storage = HTTPCookieStorage.shared
+
+        func clearTestCookies() {
+            for cookie in storage.cookies ?? [] where cookie.name.hasSuffix("conclave-guest") {
+                storage.deleteCookie(cookie)
+            }
+        }
+        func joinResponse(_ url: URL, setCookie: String) throws -> HTTPURLResponse {
+            try XCTUnwrap(HTTPURLResponse(
+                url: url, statusCode: 200, httpVersion: nil, headerFields: ["Set-Cookie": setCookie]
+            ))
+        }
+        func cookieHeader(for url: URL) -> String {
+            var request = URLRequest(url: url)
+            NativeCookieSupport.attachCookies(to: &request)
+            return request.value(forHTTPHeaderField: "Cookie") ?? ""
+        }
+
+        clearTestCookies()
+        defer { clearTestCookies() }
+
+        NativeCookieSupport.storeCookies(
+            from: try joinResponse(
+                localJoinURL,
+                setCookie: "conclave-guest=local-pass; Path=/; Max-Age=2592000; HttpOnly; SameSite=Lax"
+            ),
+            url: localJoinURL
+        )
+        NativeCookieSupport.storeCookies(
+            from: try joinResponse(
+                secureJoinURL,
+                setCookie: "__Host-conclave-guest=live-pass; Path=/; Max-Age=2592000; HttpOnly; SameSite=Lax; Secure"
+            ),
+            url: secureJoinURL
+        )
+
+        XCTAssertTrue(cookieHeader(for: localJoinURL).contains("conclave-guest=local-pass"))
+        XCTAssertTrue(cookieHeader(for: secureJoinURL).contains("__Host-conclave-guest=live-pass"))
+        XCTAssertFalse(cookieHeader(for: insecureJoinURL).contains("live-pass"))
+    }
+    #endif
 
     func testNativeAuthCookiePolicyMatchesApexAndSubdomainHostsBothWays() throws {
         XCTAssertTrue(NativeAuthCookiePolicy.cookieDomainMatchesHost(

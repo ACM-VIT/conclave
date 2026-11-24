@@ -1,30 +1,13 @@
-import { Admin } from "../../../config/classes/Admin.js";
-import type { Room } from "../../../config/classes/Room.js";
 import { config } from "../../../config/config.js";
-import type { AppsAwarenessData } from "../../../types.js";
 import { Logger } from "../../../utilities/loggers.js";
 import { cleanupRoom } from "../../rooms.js";
 import {
-  emitWebinarAttendeeCountChanged,
-  emitWebinarFeedChanged,
-} from "../../webinarNotifications.js";
-import { getSocketContext, type ConnectionContext } from "../context.js";
+  handOffRoom,
+  teardownClient,
+  withdrawWaitingRequest,
+} from "../../admin/controlPlane.js";
+import type { ConnectionContext } from "../context.js";
 import { interruptActiveConclaveAnswers } from "../conclaveRelayLifecycle.js";
-import { emitChatHistorySnapshot } from "./chatHistory.js";
-import { registerAdminHandlers } from "./adminHandlers.js";
-
-const promoteNextAdmin = (room: Room): Admin | null => {
-  for (const client of room.clients.values()) {
-    if (client instanceof Admin || client.isObserver) {
-      continue;
-    }
-    const promoted = room.promoteClientToAdmin(client.id);
-    if (promoted) {
-      return promoted;
-    }
-  }
-  return null;
-};
 
 export const registerDisconnectHandlers = (
   context: ConnectionContext,
@@ -67,154 +50,19 @@ export const registerDisconnectHandlers = (
           return;
         }
 
-        const wasAdmin = activeClient instanceof Admin && !activeClient.isObserver;
-        const isWebinarAttendee = activeClient.isWebinarAttendee;
-        const awarenessRemovals = activeRoom.apps.clearUserAwareness(userId);
-
-        for (const removal of awarenessRemovals) {
-          io.to(roomChannelId).emit("apps:awareness", {
-            appId: removal.appId,
-            awarenessUpdate: removal.awarenessUpdate,
-          } satisfies AppsAwarenessData);
-        }
-
-        activeRoom.removeClient(userId);
-        state.transcriptRelays
-          .stopRoomForUser({
-            roomKey: activeRoom.channelId,
-            userId,
-            canStopAnyRelay: false,
-          })
-          .catch((error) => {
-            Logger.warn(
-              `Transcript SFU relay stop on disconnect failed for room ${activeRoom.channelId}: ${error}`,
-            );
-          });
-        void state.transcriptRelays.syncRoom(activeRoom);
-        if (!isWebinarAttendee) {
-          io.to(roomChannelId).emit("userLeft", {
-            userId,
-            roomId: activeRoom.id,
-          });
-        }
-        emitWebinarAttendeeCountChanged(io, state, activeRoom);
-        emitWebinarFeedChanged(io, state, activeRoom);
-
+        const { wasAdmin } = teardownClient({
+          io,
+          state,
+          room: activeRoom,
+          userId,
+        });
         if (wasAdmin) {
-          if (!activeRoom.hasActiveAdmin()) {
-            const promoted = promoteNextAdmin(activeRoom);
-            if (promoted) {
-              Logger.info(
-                `Promoted ${promoted.id} to admin in room ${roomId} after host disconnect.`,
-              );
-              const promotedContext = getSocketContext(promoted.socket);
-              if (promotedContext) {
-                promotedContext.currentClient = promoted;
-                promotedContext.currentRoom = activeRoom;
-                registerAdminHandlers(promotedContext, { roomId });
-              }
-              if (activeRoom.cleanupTimer) {
-                activeRoom.stopCleanupTimer();
-              }
-              const pendingUsers = Array.from(
-                activeRoom.pendingClients.values(),
-              ).map((pending) => ({
-                userId: pending.userKey,
-                displayName: pending.displayName || pending.userKey,
-              }));
-              promoted.socket.emit("pendingUsersSnapshot", {
-                users: pendingUsers,
-                roomId,
-              });
-              emitChatHistorySnapshot(promoted.socket, activeRoom);
-              promoted.socket.emit("roomLockChanged", {
-                locked: activeRoom.isLocked,
-                roomId,
-              });
-              promoted.socket.emit("hostAssigned", {
-                roomId,
-                hostUserId: promoted.id,
-              });
-              if (activeRoom.pendingClients.size > 0) {
-                for (const pending of activeRoom.pendingClients.values()) {
-                  pending.socket.emit("waitingRoomStatus", {
-                    message: "A host is available to let you in.",
-                    roomId,
-                  });
-                }
-              }
-            } else {
-              Logger.info(
-                `Last admin left room ${roomId}. Room remains open without an admin.`,
-              );
-              if (activeRoom.pendingClients.size > 0) {
-                Logger.info(
-                  `Room ${roomId} has pending users but no admins. Notifying waiting clients.`,
-                );
-                for (const pending of activeRoom.pendingClients.values()) {
-                  pending.socket.emit("waitingRoomStatus", {
-                    message: "No one to let you in.",
-                    roomId,
-                  });
-                }
-              }
-              activeRoom.startCleanupTimer(() => {
-                if (state.rooms.has(roomChannelId)) {
-                  const roomInState = state.rooms.get(roomChannelId);
-                  if (roomInState) {
-                    if (roomInState.hasActiveAdmin()) {
-                      return;
-                    }
-                    if (roomInState.pendingClients.size > 0) {
-                      for (const pending of roomInState.pendingClients.values()) {
-                        pending.socket.emit("waitingRoomStatus", {
-                          message: "No one to let you in.",
-                          roomId,
-                        });
-                      }
-                    }
-                    if (roomInState.isEmpty()) {
-                      Logger.info(
-                        `Cleanup executed for room ${roomId}. Room is empty.`,
-                      );
-                      cleanupRoom(state, roomChannelId);
-                    }
-                  }
-                }
-              });
-            }
-          } else {
-            Logger.info(`Admin left room ${roomId}, but other admins remain.`);
-          }
-
-          io.to(roomChannelId).emit("hostChanged", {
-            roomId,
-            hostUserId: activeRoom.getHostUserId(),
-          });
-          io.to(roomChannelId).emit("adminUsersChanged", {
-            roomId,
-            hostUserIds: activeRoom.getAdminUserIds(),
-          });
+          handOffRoom(io, state, activeRoom);
         }
-
         if (state.rooms.has(roomChannelId)) {
           cleanupRoom(state, roomChannelId);
         }
-
         Logger.info(`User ${userId} left room ${roomId}`);
-
-        if (state.rooms.has(roomChannelId)) {
-          const roomInState = state.rooms.get(roomChannelId);
-          if (roomInState) {
-            const newQuality = roomInState.updateVideoQuality();
-            if (newQuality) {
-              io.to(roomChannelId).emit("setVideoQuality", {
-                quality: newQuality,
-                roomId: roomInState.id,
-              });
-            }
-          }
-        }
       };
 
       const graceMs = config.socket.disconnectGraceMs;
@@ -257,13 +105,7 @@ export const registerDisconnectHandlers = (
       if (pendingRoom) {
         const pending = pendingRoom.pendingClients.get(context.pendingUserKey);
         if (pending?.socket?.id === socket.id) {
-          pendingRoom.removePendingClient(context.pendingUserKey);
-          for (const admin of pendingRoom.getAdmins()) {
-            admin.socket.emit("pendingUserLeft", {
-              userId: context.pendingUserKey,
-              roomId: context.pendingRoomId,
-            });
-          }
+          withdrawWaitingRequest(pendingRoom, context.pendingUserKey);
           if (pendingRoom.isEmpty()) {
             cleanupRoom(state, context.pendingRoomChannelId);
           }
