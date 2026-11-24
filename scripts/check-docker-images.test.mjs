@@ -11,7 +11,7 @@ import { RunResources, assertLocalBuilder, browserSocketSource, localSocket, pin
 
 const FAKE_DOCKER = `#!/usr/bin/env node
 const fs = require("node:fs");
-fs.appendFileSync(process.env.FAKE_DOCKER_LOG, JSON.stringify({ args: process.argv.slice(2), DOCKER_HOST: process.env.DOCKER_HOST ?? null, DOCKER_CONTEXT: process.env.DOCKER_CONTEXT ?? null, BUILDX_BUILDER: process.env.BUILDX_BUILDER ?? null }) + "\\n");
+fs.appendFileSync(process.env.FAKE_DOCKER_LOG, JSON.stringify({ args: process.argv.slice(2), DOCKER_HOST: process.env.DOCKER_HOST ?? null, DOCKER_CONTEXT: process.env.DOCKER_CONTEXT ?? null, BUILDX_BUILDER: process.env.BUILDX_BUILDER ?? null, DOCKER_CONFIG: process.env.DOCKER_CONFIG ?? null }) + "\\n");
 const contexts = JSON.parse(process.env.FAKE_DOCKER_CONTEXTS ?? "{}");
 const args = process.argv[2] === "--host" ? process.argv.slice(4) : process.argv.slice(2);
 if (args[0] === "context" && args[1] === "show") process.stdout.write((process.env.FAKE_DOCKER_CURRENT ?? "default") + "\\n");
@@ -19,8 +19,9 @@ else if (args[0] === "context" && args[1] === "inspect") {
   if (!(args[2] in contexts)) { process.stderr.write("context not found\\n"); process.exit(1); }
   process.stdout.write(contexts[args[2]] + "\\n");
 } else if (args[0] === "buildx" && args[1] === "inspect") process.stdout.write(process.env.FAKE_DOCKER_BUILDER ?? "Name: default\\nDriver: docker\\n\\nNodes:\\nName: default\\nEndpoint: default\\nStatus: running\\n");
-else if (args[0] === "run" && process.env.FAKE_DOCKER_RUN_CONFLICT) { process.stderr.write("Conflict. The container name is already in use by container \\"0ther0ther0ther0\\".\\n"); process.exit(125); }
-else if (args[0] === "run") process.stdout.write("0123456789abcdef0123\\n");
+else if (args[0] === "create" && process.env.FAKE_DOCKER_RUN_CONFLICT) { process.stderr.write("Conflict. The container name is already in use by container \\"0ther0ther0ther0\\".\\n"); process.exit(125); }
+else if (args[0] === "create") process.stdout.write("0123456789abcdef0123\\n");
+else if (args[0] === "start" && process.env.FAKE_DOCKER_START_FAIL) { process.stderr.write("failed to create task for container: exec: \\"bad\\": executable file not found\\n"); process.exit(1); }
 else if (args[0] === "inspect") process.stdout.write("true\\n");
 else if (args[0] === "info") process.stdout.write((process.env.FAKE_DOCKER_INFO ?? JSON.stringify({ OperatingSystem: "OrbStack", Name: "orbstack" })) + "\\n");
 `;
@@ -74,8 +75,8 @@ test("every docker call after the check is pinned to the checked endpoint", (t) 
   docker(["build", "."]);
   docker(["run", "-d", "x"]);
   assert.deepEqual(fake.calls(), [
-    { args: ["--host", "unix:///run/user/1000/docker.sock", "build", "."], DOCKER_HOST: null, DOCKER_CONTEXT: null, BUILDX_BUILDER: null },
-    { args: ["--host", "unix:///run/user/1000/docker.sock", "run", "-d", "x"], DOCKER_HOST: null, DOCKER_CONTEXT: null, BUILDX_BUILDER: null },
+    { args: ["--host", "unix:///run/user/1000/docker.sock", "build", "."], DOCKER_HOST: null, DOCKER_CONTEXT: null, BUILDX_BUILDER: null, DOCKER_CONFIG: null },
+    { args: ["--host", "unix:///run/user/1000/docker.sock", "run", "-d", "x"], DOCKER_HOST: null, DOCKER_CONTEXT: null, BUILDX_BUILDER: null, DOCKER_CONFIG: null },
   ]);
 });
 
@@ -134,9 +135,29 @@ test("BROWSER_DOCKER_SOCKET overrides the mount source without asking docker", (
   assert.deepEqual(fake.calls(), []);
 });
 
-test("the child environment carries no DOCKER_ or BUILDX_ selector", () => {
-  const clean = pinnedEnv({ PATH: "/bin", HOME: "/home/x", DOCKER_HOST: "a", DOCKER_CONTEXT: "b", DOCKER_CONFIG: "c", BUILDX_BUILDER: "olympus-ec2", BUILDX_CONFIG: "d", BROWSER_DOCKER_SOCKET: "/s" });
-  assert.deepEqual(clean, { PATH: "/bin", HOME: "/home/x", BROWSER_DOCKER_SOCKET: "/s" });
+test("the child environment keeps config locations and drops endpoint, TLS and builder selectors", () => {
+  const clean = pinnedEnv({ PATH: "/bin", HOME: "/home/x", DOCKER_HOST: "a", DOCKER_CONTEXT: "b", DOCKER_TLS_VERIFY: "1", DOCKER_CERT_PATH: "/certs", DOCKER_CONFIG: "/cfg", BUILDX_BUILDER: "olympus-ec2", BUILDX_CONFIG: "/bx", BROWSER_DOCKER_SOCKET: "/s" });
+  assert.deepEqual(clean, { PATH: "/bin", HOME: "/home/x", DOCKER_CONFIG: "/cfg", BUILDX_CONFIG: "/bx", BROWSER_DOCKER_SOCKET: "/s" });
+});
+
+test("a custom DOCKER_CONFIG folder reaches every pinned docker call", (t) => {
+  const config = mkdtempSync(path.join(tmpdir(), "docker-config-"));
+  t.after(() => rmSync(config, { recursive: true, force: true }));
+  writeFileSync(path.join(config, "config.json"), JSON.stringify({ proxies: { default: { httpProxy: "http://proxy.invalid:3128" } } }));
+  const fake = fakeDocker(t);
+  const docker = pinnedDocker({ host: "unix:///var/run/docker.sock" }, { ...fake.env, DOCKER_CONFIG: config, DOCKER_CONTEXT: "remote" });
+  assert.equal(assertLocalBuilder(docker), "default");
+  docker(["build", "."]);
+  assert.deepEqual(fake.calls().map((call) => [call.args[2], call.DOCKER_CONFIG, call.DOCKER_CONTEXT]), [["buildx", config, null], ["build", config, null]]);
+});
+
+test("a container that is created but fails to start is still removed by its id", async (t) => {
+  const fake = fakeDocker(t, { FAKE_DOCKER_START_FAIL: "1" });
+  const docker = pinnedDocker({ host: "unix:///var/run/docker.sock" }, fake.env);
+  const resources = new RunResources(docker);
+  await assert.rejects(startContainer(docker, resources, { name: "conclave-check-images-x", tag: "t", env: {}, mounts: [] }), /docker start failed: .*executable file not found/);
+  resources.removeAll();
+  assert.deepEqual(fake.calls().map((call) => call.args.slice(2, 5)), [["create", "--name", "conclave-check-images-x"], ["start", "0123456789abcdef0123"], ["rm", "-f", "0123456789abcdef0123"]]);
 });
 
 test("only the docker driver on the checked endpoint is accepted as the builder", (t) => {
@@ -153,13 +174,13 @@ test("only the docker driver on the checked endpoint is accepted as the builder"
   }
 });
 
-test("a container name conflict removes nothing, because containers are only removed by the id docker run returned", async (t) => {
+test("a container name conflict removes nothing, because containers are only removed by the id docker create returned", async (t) => {
   const fake = fakeDocker(t, { FAKE_DOCKER_RUN_CONFLICT: "1" });
   const docker = pinnedDocker({ host: "unix:///var/run/docker.sock" }, fake.env);
   const resources = new RunResources(docker);
-  await assert.rejects(startContainer(docker, resources, { name: "conclave-check-images-taken", tag: "t", env: {}, mounts: [] }), /docker run failed: Conflict/);
+  await assert.rejects(startContainer(docker, resources, { name: "conclave-check-images-taken", tag: "t", env: {}, mounts: [] }), /docker create failed: Conflict/);
   resources.removeAll();
-  assert.deepEqual(fake.calls().map((call) => call.args[2]), ["run"]);
+  assert.deepEqual(fake.calls().map((call) => call.args[2]), ["create"]);
 });
 
 test("every image build goes to the pinned local builder", async (t) => {

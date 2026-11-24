@@ -33,8 +33,10 @@ export function localSocket(endpoint) {
   return { host: endpoint, socket: match[1] };
 }
 
+const CONFIG_LOCATORS = new Set(["DOCKER_CONFIG", "BUILDX_CONFIG"]);
+
 export function pinnedEnv(env = process.env) {
-  return Object.fromEntries(Object.entries(env).filter(([name]) => !name.startsWith("DOCKER_") && !name.startsWith("BUILDX_")));
+  return Object.fromEntries(Object.entries(env).filter(([name]) => CONFIG_LOCATORS.has(name) || (!name.startsWith("DOCKER_") && !name.startsWith("BUILDX_"))));
 }
 
 export function pinnedDocker(daemon, env = process.env) {
@@ -118,10 +120,12 @@ export class RunResources {
 
 export async function startContainer(docker, resources, { name, tag, env, mounts }) {
   const envArgs = Object.entries(env).flatMap(([key, value]) => ["-e", `${key}=${value}`]);
-  const started = docker(["run", "-d", "--name", name, ...envArgs, ...mounts, tag], { allowFailure: true });
-  const id = started.stdout.trim();
-  if (started.status !== 0 || !/^[0-9a-f]{12,64}$/.test(id)) throw new Error(`docker run failed: ${started.stderr.trim() || id}`);
+  const created = docker(["create", "--name", name, ...envArgs, ...mounts, tag], { allowFailure: true });
+  const id = created.stdout.trim();
+  if (created.status !== 0 || !/^[0-9a-f]{12,64}$/.test(id)) throw new Error(`docker create failed: ${created.stderr.trim() || id}`);
   resources.containers.add(id);
+  const started = docker(["start", id], { allowFailure: true });
+  if (started.status !== 0) throw new Error(`docker start failed: ${started.stderr.trim()}`);
   return id;
 }
 
