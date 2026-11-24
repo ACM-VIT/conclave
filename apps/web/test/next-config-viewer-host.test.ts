@@ -77,3 +77,17 @@ describe("frame-src for a loopback Chromium viewer", () => {
     expect(await policy("review-app.test")).toBe(await policy("conclave.acmvit.in"));
   });
 });
+
+describe("routes that serve fetched bytes", () => {
+  it.each(["/api/avatar", "/api/unfurl/asset"])("%s keeps its sandboxed, script-free policy", async (pathname) => {
+    const policy = (await responseHeaders("conclave.acmvit.in", pathname)).get("content-security-policy") ?? "";
+    const directives = policy.split(";").map((part) => part.trim());
+    expect(directives).toEqual(expect.arrayContaining(["default-src 'none'", "sandbox", "frame-ancestors 'none'"]));
+  });
+
+  it("leaves pages on the site-wide policy, without the sandbox", async () => {
+    const policy = (await responseHeaders("conclave.acmvit.in", "/meeting/abc")).get("content-security-policy") ?? "";
+    expect(policy).toContain("frame-ancestors 'none'");
+    expect(policy).not.toContain("sandbox");
+  });
+});

@@ -464,6 +464,28 @@ export const config = {
   adminCleanupTimeout: toNumber(process.env.ADMIN_CLEANUP_TIMEOUT, 120000, {
     min: 1000,
   }),
+  // How many passes and keys one room keeps lobby decisions for (see
+  // `AdmissionLedger`). A refusal is kept past it.
+  lobbyDecisionRecordLimit: toNumber(
+    process.env.SFU_LOBBY_DECISION_RECORD_LIMIT,
+    5000,
+    { integer: true, min: 1 },
+  ),
+  // The most requests to be let in that one room keeps waiting at once,
+  // and the most seats in a meeting (webinar attendees have their own
+  // limit). A join past either is refused and the room records nothing.
+  guestAppIdentityLimit: toNumber(process.env.SFU_GUEST_APP_IDENTITY_LIMIT, 5000, {
+    integer: true,
+    min: 1,
+  }),
+  waitingRequestLimit: toNumber(process.env.SFU_WAITING_REQUEST_LIMIT, 1000, {
+    integer: true,
+    min: 1,
+  }),
+  meetingSeatLimit: toNumber(process.env.SFU_MEETING_SEAT_LIMIT, 1000, {
+    integer: true,
+    min: 1,
+  }),
   socket: {
     pingIntervalMs: toNumber(
       process.env.SFU_SOCKET_PING_INTERVAL_MS,

@@ -10,17 +10,28 @@ export const normalizeDisplayName = (value?: string): string => {
   return value.trim().replace(/\s+/g, " ").slice(0, MAX_DISPLAY_NAME_LENGTH);
 };
 
+// An account is keyed by its email. The join route never issues a guest key
+// with an `@` in it, so an email that starts with `guest-` is still an account.
 export const isGuestUserKey = (userKey?: string | null): boolean => {
   if (!userKey) return false;
-  return userKey.startsWith("guest-");
+  return userKey.startsWith("guest-") && !userKey.includes("@");
 };
+
+/** The id of the seat a user key takes in one tab. Every participant sees it. */
+export const seatIdOf = (userKey: string, sessionId: string): string =>
+  `${userKey}#${sessionId}`;
 
 export const buildUserIdentity = (
   user: { email?: string; userId?: string; name?: string; sessionId?: string },
   sessionId: string | undefined,
   socketId: string,
   displayNameOverride?: string,
-): { userKey: string; userId: string; displayName: string } | null => {
+): {
+  userKey: string;
+  userId: string;
+  sessionId: string;
+  displayName: string;
+} | null => {
   const email =
     typeof user?.email === "string"
       ? normalizeIdentityPart(user.email, MAX_USER_KEY_LENGTH)?.toLowerCase()
@@ -41,7 +52,7 @@ export const buildUserIdentity = (
   if (!effectiveSessionId) {
     return null;
   }
-  const userId = `${baseId}#${effectiveSessionId}`;
+  const userId = seatIdOf(baseId, effectiveSessionId);
   if (userId.length > MAX_USER_ID_LENGTH) {
     return null;
   }
@@ -49,6 +60,7 @@ export const buildUserIdentity = (
   return {
     userKey: baseId,
     userId,
+    sessionId: effectiveSessionId,
     displayName:
       normalizeDisplayName(displayNameOverride) ||
       normalizeDisplayName(user?.name) ||

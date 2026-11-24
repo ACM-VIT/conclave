@@ -16,6 +16,7 @@ import {
   type Subject,
   type TableSpec,
 } from "@conclave/apps-sdk/authority/server";
+import { actionOrderTable, nextActionOrder } from "./action-order.js";
 
 const QA_MAX_ENTRIES = 300;
 const QA_MAX_OPEN_PER_PERSON = 3;
@@ -73,11 +74,28 @@ export const qaContract = defineContract({
 
 type QuestionCard = Infer<typeof questionCard>;
 type QaStatus = QuestionCard["status"];
-type QuestionRow = QuestionCard & { author: Subject };
+type QuestionRow = QuestionCard & {
+  author: Subject;
+  order: number;
+  openTimes: { order: number; open: boolean }[];
+};
 type Upvote = { questionId: string; voter: Subject };
 type QaTables = {
   questions: TableSpec<QuestionRow>;
+  questionsByAuthor: TableSpec<{ id: string }>;
   upvotes: TableSpec<Upvote>;
+  order: TableSpec<{ last: number }>;
+};
+
+const isOpenStatus = (status: QaStatus): boolean => status === "pending" || status === "answering";
+
+const openAt = (row: QuestionRow, order: number): boolean => {
+  let open = false;
+  for (const change of row.openTimes) {
+    if (change.order >= order) break;
+    open = change.open;
+  }
+  return open;
 };
 
 const PUBLIC_STATUSES: Record<RoomPolicy["mode"], readonly QaStatus[]> = {
@@ -124,6 +142,7 @@ const evictOverflow = (tx: AuthorityTransaction<QaTables, Record<never, never>>)
       // webinar upvoted must not use up the asker's transaction.
       tx.clear("upvotes", key(row.id));
       tx.delete("questions", rowKey);
+      tx.delete("questionsByAuthor", key(row.author, row.id));
     }
   }
 };
@@ -132,7 +151,9 @@ export const qaAuthority = defineAuthority({
   contract: qaContract,
   tables: {
     questions: table<QuestionRow>({ maxRows: QA_MAX_ENTRIES + 1 }),
+    questionsByAuthor: table<{ id: string }>({ maxRows: QA_MAX_ENTRIES + 1 }),
     upvotes: table<Upvote>({ maxRows: 200_000 }),
+    order: actionOrderTable(),
   },
   timers: {},
   canView: ({ role }, room) =>
@@ -157,6 +178,7 @@ export const qaAuthority = defineAuthority({
           ).length;
         if (open >= QA_MAX_OPEN_PER_PERSON) reject("too-many-open");
         const id = ctx.nextId("q");
+        const order = nextActionOrder(tx);
         tx.insertIfAbsent("questions", key(id), {
           id,
           author: ctx.subject,
@@ -168,7 +190,10 @@ export const qaAuthority = defineAuthority({
           upvotes: 0,
           answerText: null,
           answeredByName: null,
+          order,
+          openTimes: [{ order, open: true }],
         });
+        tx.put("questionsByAuthor", key(ctx.subject, id), { id });
         evictOverflow(tx);
         return { id };
       },
@@ -234,6 +259,9 @@ export const qaAuthority = defineAuthority({
             next.status = "pending";
             break;
         }
+        if (isOpenStatus(question.status) !== isOpenStatus(next.status)) {
+          next.openTimes = [...question.openTimes, { order: nextActionOrder(tx), open: isOpenStatus(next.status) }];
+        }
         tx.put("questions", key(question.id), next);
         return null;
       },
@@ -265,5 +293,39 @@ export const qaAuthority = defineAuthority({
       owner: (row) => row.voter,
       project: (row) => ({ key: row.questionId, value: {} }),
     },
+  },
+  mergeSubjects(_ctx, tx, { from, into }) {
+    const fromIds = tx.scan("questionsByAuthor", key(from)).map(([, row]) => row.id);
+    const intoIds = tx.scan("questionsByAuthor", key(into)).map(([, row]) => row.id);
+    for (const id of fromIds) tx.delete("questionsByAuthor", key(from, id));
+    const asked = [...intoIds, ...fromIds]
+      .map((id) => tx.get("questions", key(id)))
+      .filter((row): row is QuestionRow => row !== undefined)
+      .sort((a, b) => a.order - b.order);
+    const kept: QuestionRow[] = [];
+    for (const question of asked) {
+      const open = kept.filter((other) => openAt(other, question.order)).length;
+      if (open >= QA_MAX_OPEN_PER_PERSON) {
+        tx.delete("questions", key(question.id));
+        tx.clear("upvotes", key(question.id));
+        tx.delete("questionsByAuthor", key(into, question.id));
+        continue;
+      }
+      kept.push(question);
+      if (question.author === from) {
+        tx.put("questions", key(question.id), { ...question, author: into });
+        tx.put("questionsByAuthor", key(into, question.id), { id: question.id });
+      }
+    }
+    for (const [, question] of tx.scan("questions")) {
+      const upvote = tx.get("upvotes", key(question.id, from));
+      if (!upvote) continue;
+      tx.delete("upvotes", key(question.id, from));
+      if (tx.insertIfAbsent("upvotes", key(question.id, into), { ...upvote, voter: into }) === "inserted") {
+        continue;
+      }
+      tx.put("questions", key(question.id), { ...question, upvotes: Math.max(0, question.upvotes - 1) });
+    }
+    return undefined;
   },
 });

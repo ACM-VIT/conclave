@@ -42,14 +42,18 @@ docker compose -f docker-compose.sfu.yml run --rm --no-deps --user root \
 
 Images before this change fell back to JSON files in the container layer
 when SQLite was locked. Before it replaces such a container, the deploy copies
-any of those files onto the volume under `CONCLAVE_FALLBACK_IMPORT_DIR`, readable
-only by the SFU user, so they survive the replacement, one folder per transfer
-(`<service>/<stamp>-<deploy id>/`). The next start claims each copy by renaming
-it to `<name>.claimed-<ticket>-<n>`, replays each old container's copies in
-order into the control-plane store in every mode (see below), so a record the
-container deleted between two copies stays deleted, and renames exactly the
-bytes it imported with an `.adopted` suffix. It refuses to start if a calendar
-token cannot be decrypted with this SFU's secret.
+any of those files onto the volume as a new archive,
+`CONCLAVE_FALLBACK_IMPORT_DIR/<service>/<UTC time>-<deploy id>/`, owned by the
+SFU user and readable only by it, so they survive the replacement. No deploy
+replaces or deletes an archive an earlier deploy saved. The next start claims
+each copy by renaming it to `<name>.claimed-<ticket>-<n>`, replays each old
+container's copies in order into the control-plane store in every mode (see
+below), so a record the container deleted between two copies stays deleted,
+and renames exactly the bytes it imported with an `.adopted` suffix. Hidden
+staging folders from a transfer still in progress, or one that failed, are
+never read. It refuses to start if a calendar token cannot be decrypted with
+this SFU's secret, and refuses with the fix when it cannot open a folder of
+saved copies.
 
 To upgrade an existing host, run `git pull` to the reviewed revision first,
 then run the new `scripts/deploy-sfu.sh`. Do not start the upgrade with the
