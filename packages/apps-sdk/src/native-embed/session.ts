@@ -5,7 +5,9 @@ import { cutText } from "../sdk/text";
 import {
   HOST_COMMAND_TYPES,
   NATIVE_EMBED_BUNDLE_VERSION,
+  COMMAND_RETRY,
   NATIVE_EMBED_LIMITS,
+  RETRYABLE_COMMANDS,
   WHEEL_LIMITS,
   base64FromBytes,
   bytesFromBase64,
@@ -97,14 +99,17 @@ export class NativeEmbedSession {
   private closed = false;
   private requestNumber = 0;
   private readonly seen: string[] = [];
-  private readonly answers = new Map<string, Record<string, unknown>>();
+  private readonly answers = new Map<string, { payload: Record<string, unknown>; at: number; bytes: number }>();
+  private answerBytes = 0;
+  private readonly clock: () => number;
   private readonly listeners = new Set<() => void>();
   private commandHandler: CommandHandler | null = null;
   private readonly pendingAwareness = new Set<number>();
   private awarenessTimer: ReturnType<typeof setTimeout> | null = null;
   private lastStatus = "";
 
-  constructor(transport: NativeTransport, scope: SessionScope, doc: Y.Doc) {
+  constructor(transport: NativeTransport, scope: SessionScope, doc: Y.Doc, clock: () => number = Date.now) {
+    this.clock = clock;
     this.transport = transport;
     this.scope = scope;
     this.doc = doc;
@@ -163,11 +168,13 @@ export class NativeEmbedSession {
     const decoded = decodeHostMessage(raw, this.scope);
     if (!decoded.ok) return this.reject(decoded.reason);
     const envelope = decoded.envelope;
-    if (this.seen.includes(envelope.requestId)) {
-      const answer = this.answers.get(envelope.requestId);
-      if (answer) this.send("ack", answer, envelope.requestId);
+    this.forgetOldAnswers();
+    const answer = this.answers.get(envelope.requestId);
+    if (answer) {
+      this.send("ack", answer.payload, envelope.requestId);
       return this.reject("duplicateRequest");
     }
+    if (this.seen.includes(envelope.requestId)) return this.reject("duplicateRequest");
     this.seen.push(envelope.requestId);
     if (this.seen.length > NATIVE_EMBED_LIMITS.requestMemory) this.seen.shift();
     const payload = envelope.payload;
@@ -318,11 +325,7 @@ export class NativeEmbedSession {
     if (result.error) payload.error = result.error.slice(0, 64);
     if (result.pngBase64) payload.pngBase64 = result.pngBase64;
     if (result.added) payload.added = result.added.slice(0, WHEEL_LIMITS.entries);
-    this.answers.set(envelope.requestId, payload);
-    if (this.answers.size > NATIVE_EMBED_LIMITS.requestMemory) {
-      const oldest = this.answers.keys().next().value;
-      if (oldest !== undefined) this.answers.delete(oldest);
-    }
+    if (RETRYABLE_COMMANDS.includes(envelope.type)) this.remember(envelope.requestId, payload);
     this.send("ack", payload, envelope.requestId);
   }
 
@@ -357,6 +360,32 @@ export class NativeEmbedSession {
     const message = encodeEnvelope(type, this.scope, id, payload);
     if (message.length > NATIVE_EMBED_LIMITS.envelopeCharacters) return;
     this.transport.post(message);
+  }
+
+  get rememberedAnswers(): number {
+    return this.answers.size;
+  }
+
+  private remember(requestId: string, payload: Record<string, unknown>): void {
+    const answer: Record<string, unknown> = { ok: payload.ok };
+    if (typeof payload.error === "string") answer.error = payload.error;
+    if (Array.isArray(payload.added)) answer.added = payload.added;
+    const bytes = requestId.length + JSON.stringify(answer).length;
+    this.answers.set(requestId, { payload: answer, at: this.clock(), bytes });
+    this.answerBytes += bytes;
+    this.forgetOldAnswers();
+  }
+
+  private forgetOldAnswers(): void {
+    const now = this.clock();
+    const retryWindow = COMMAND_RETRY.attempts * COMMAND_RETRY.timeoutMs + COMMAND_RETRY.timeoutMs;
+    for (const [requestId, answer] of this.answers) {
+      const age = now - answer.at;
+      const overCap = this.answerBytes > COMMAND_RETRY.answerBytes && age > retryWindow;
+      if (age <= COMMAND_RETRY.keepMs && !overCap) break;
+      this.answers.delete(requestId);
+      this.answerBytes -= answer.bytes;
+    }
   }
 
   private reject(reason: RejectionReason): RejectionReason {

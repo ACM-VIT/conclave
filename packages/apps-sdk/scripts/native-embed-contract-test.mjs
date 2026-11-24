@@ -120,6 +120,8 @@ test("the Swift twin matches protocol.ts", () => {
   assert.equal(Number(constant("pageLimit")), limits.pages);
   assert.equal(Number(constant("pageNameLimit")), limits.pageName);
   assert.equal(Number(constant("requestMemory")), limits.requestMemory);
+  assert.equal(Number(constant("commandAttempts")), protocol.COMMAND_RETRY.attempts);
+  assert.equal(Number(constant("commandTimeoutMillis")), protocol.COMMAND_RETRY.timeoutMs);
   const cases = (enumName) => {
     const block = swift.match(new RegExp(`enum ${enumName}: String, CaseIterable, Equatable \\{([\\s\\S]*?)\\n\\}`));
     assert.ok(block, `missing Swift enum ${enumName}`);
@@ -232,7 +234,7 @@ const makeRoom = (mod, context) => {
       }
     }
   };
-  const join = (name, host = {}) => {
+  const join = (name, host = {}, clock = undefined) => {
     const outbox = [];
     const client = {
       name,
@@ -251,7 +253,7 @@ const makeRoom = (mod, context) => {
         client.handler = next;
       },
     };
-    client.session = new mod.NativeEmbedSession(transport, client.scope, new Y.Doc());
+    client.session = new mod.NativeEmbedSession(transport, client.scope, new Y.Doc(), clock);
     clients.push(client);
     client.session.start();
     pump();
@@ -348,6 +350,71 @@ test("a repeated command id gets its first answer again and runs once", { skip: 
       ["h-6", { ok: true, added: [0, 2] }],
     ],
   );
+});
+
+test("a wheel add still answers its retry after 70 other host messages, and runs once", { skip: skipConvergence }, (context) => {
+  const harness = makeRoom(sessionModule, context);
+  const ada = harness.join("ada");
+  let adds = 0;
+  ada.session.setCommandHandler((command) => {
+    if (command.type !== "addEntries") return { ok: true };
+    adds += 1;
+    return { ok: true, added: [0] };
+  });
+  harness.deliver(ada, "addEntries", { labels: ["Ada"] }, "h-1");
+  for (let index = 0; index < 70; index += 1) harness.deliver(ada, "zoomToFit", {}, `h-z${index}`);
+  assert.equal(harness.deliver(ada, "addEntries", { labels: ["Ada"] }, "h-1"), "duplicateRequest");
+  harness.pump();
+  assert.equal(adds, 1);
+  assert.deepEqual(
+    ada.acks.filter((ack) => ack.requestId === "h-1").map((ack) => ack.payload),
+    [{ ok: true, added: [0] }, { ok: true, added: [0] }],
+  );
+});
+
+test("only wheel adds are remembered, so an export is never kept", { skip: skipConvergence }, (context) => {
+  const harness = makeRoom(sessionModule, context);
+  const ada = harness.join("ada");
+  ada.session.setCommandHandler((command) =>
+    command.type === "export" ? { ok: true, pngBase64: "A".repeat(4000) } : { ok: true, added: [0] },
+  );
+  harness.deliver(ada, "export", {}, "h-e");
+  assert.equal(ada.session.rememberedAnswers, 0);
+  assert.equal(harness.deliver(ada, "export", {}, "h-e"), "duplicateRequest");
+  harness.pump();
+  assert.equal(ada.acks.filter((ack) => ack.requestId === "h-e").length, 1);
+  harness.deliver(ada, "addEntries", { labels: ["Ada"] }, "h-a");
+  assert.equal(ada.session.rememberedAnswers, 1);
+});
+
+test("an add's answer is kept for two minutes and the byte cap never drops one inside its retry window", { skip: skipConvergence }, (context) => {
+  const harness = makeRoom(sessionModule, context);
+  let now = 1_000_000;
+  const ada = harness.join("ada", {}, () => now);
+  let runs = 0;
+  ada.session.setCommandHandler((command) => {
+    if (command.type !== "addEntries") return { ok: true };
+    runs += 1;
+    return { ok: true, added: Array.from({ length: 64 }, (_, index) => index) };
+  });
+  harness.deliver(ada, "addEntries", { labels: ["Ada"] }, "h-first");
+  for (let index = 0; index < 400; index += 1) harness.deliver(ada, "addEntries", { labels: ["N"] }, `h-${index}`);
+  assert.equal(ada.session.rememberedAnswers, 401, "over the byte cap, every answer still inside its retry window is kept");
+  now += 39_000;
+  assert.equal(harness.deliver(ada, "addEntries", { labels: ["Ada"] }, "h-first"), "duplicateRequest");
+  now += 2_000;
+  harness.deliver(ada, "addEntries", { labels: ["Late"] }, "h-late");
+  const kept = ada.session.rememberedAnswers;
+  assert.ok(kept < 402 && kept > 200, `over the cap, answers past their retry window go first (${kept} kept)`);
+  now += 60_000;
+  assert.equal(harness.deliver(ada, "addEntries", { labels: ["Late"] }, "h-late"), "duplicateRequest");
+  now += 61_000;
+  harness.deliver(ada, "zoomToFit", {}, "h-tick");
+  assert.equal(ada.session.rememberedAnswers, 0, "two minutes on, nothing is kept");
+  harness.pump();
+  assert.equal(runs, 402);
+  assert.equal(ada.acks.filter((ack) => ack.requestId === "h-first").length, 2);
+  assert.equal(ada.acks.filter((ack) => ack.requestId === "h-late").length, 2);
 });
 
 test("close invalidates the session for good", { skip: skipConvergence }, (context) => {

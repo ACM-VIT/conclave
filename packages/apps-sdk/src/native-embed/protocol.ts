@@ -152,6 +152,15 @@ export const INK_COLORS = [
 
 export const STROKE_WIDTHS = [2, 3, 5, 8, 12] as const;
 
+export const COMMAND_RETRY = {
+  attempts: 3,
+  timeoutMs: 10_000,
+  keepMs: 120_000,
+  answerBytes: 65_536,
+} as const;
+
+export const RETRYABLE_COMMANDS: readonly string[] = ["addEntries"];
+
 export const WHEEL_LIMITS = {
   entries: 64,
   label: 48,
