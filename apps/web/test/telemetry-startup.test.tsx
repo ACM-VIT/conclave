@@ -280,11 +280,12 @@ describe("what each event carries", () => {
     const manifest = { "147fc2df-e663-5d76-aa13-f67e1e894071": "/_next/static/chunks/3u-6_1om1fv26.js" };
     vi.stubGlobal(
       "fetch",
-      vi.fn(
-        () =>
-          new Promise<Response>((resolve) =>
-            setTimeout(() => resolve(new Response(JSON.stringify(manifest), { status: 200 })), 300),
-          ),
+      vi.fn((resource: RequestInfo | URL) =>
+        String(resource).includes("/posthog-chunk-ids/")
+          ? new Promise<Response>((resolve) =>
+              setTimeout(() => resolve(new Response(JSON.stringify(manifest), { status: 200 })), 300),
+            )
+          : Promise.resolve(new Response('{"status":1}', { status: 200 })),
       ),
     );
     const sent: SentEvent[] = [];
