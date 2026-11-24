@@ -1,10 +1,15 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
+import { scheduledMeetingJsonStore } from "../server/scheduledMeetings.js";
+import { scheduledWebinarJsonStore } from "../server/scheduledWebinars.js";
+import { schedulingJsonStore } from "../server/scheduling.js";
 
-const STAGING_COMMIT = "3d2711d9a056f652ea19bedf74dec4edb192339e";
+export const STAGING_COMMIT = "3d2711d9a056f652ea19bedf74dec4edb192339e";
 const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const fixturesDir = join(packageDir, "test", "fixtures", "json-stores");
 const outputDir = join(fixturesDir, "staging-rollback");
@@ -17,6 +22,62 @@ export const stagingRollbackStores = [
 
 export const STAGING_ROLLBACK_TOKEN_SECRET = "staging-rollback-fixture-secret";
 export const stagingRollbackFixture = (name: string) => join(outputDir, `${name}.staging-${STAGING_COMMIT.slice(0, 8)}.json`);
+
+type Manifest = { stagingCommit: string; files: Record<string, string> };
+type Adapter = { decode: (data: unknown) => unknown; write: (path: string, snapshot: never) => void };
+
+const MANIFEST = "manifest.json";
+const adapters: Record<string, Adapter> = {
+  "scheduled-meetings": scheduledMeetingJsonStore,
+  "scheduled-webinars": scheduledWebinarJsonStore,
+  scheduling: schedulingJsonStore,
+};
+
+const sha256 = (content: string) => createHash("sha256").update(content).digest("hex");
+
+const readsBack = (name: string, content: string, scratch: string): string | null => {
+  const adapter = adapters[name];
+  try {
+    const decoded = adapter.decode(JSON.parse(content));
+    const path = join(scratch, `${name}.json`);
+    adapter.write(path, decoded as never);
+    return isDeepStrictEqual(adapter.decode(JSON.parse(readFileSync(path, "utf8"))), decoded) ? null : "does not read back the same after this SFU saves it";
+  } catch (error) {
+    return `cannot be read by this SFU (${(error as Error).message})`;
+  }
+};
+
+export const verifyStagingRollbackFixtures = (dir: string = outputDir): string[] => {
+  const manifestPath = join(dir, MANIFEST);
+  if (!existsSync(manifestPath)) return [`${manifestPath} is missing. Run pnpm generate:json-store-fixtures.`];
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Manifest;
+  const problems: string[] = [];
+  if (manifest.stagingCommit !== STAGING_COMMIT) problems.push(`${manifestPath} records ${manifest.stagingCommit}, not ${STAGING_COMMIT}.`);
+  const expected = stagingRollbackStores.map((store) => basename(stagingRollbackFixture(store.name))).sort();
+  if (!isDeepStrictEqual(Object.keys(manifest.files).sort(), expected)) problems.push(`${manifestPath} lists ${Object.keys(manifest.files).join(", ")}, not ${expected.join(", ")}.`);
+  const scratch = mkdtempSync(join(tmpdir(), "staging-rollback-check-"));
+  const secret = process.env.SCHEDULING_TOKEN_SECRET;
+  process.env.SCHEDULING_TOKEN_SECRET = STAGING_ROLLBACK_TOKEN_SECRET;
+  try {
+    for (const store of stagingRollbackStores) {
+      const file = basename(stagingRollbackFixture(store.name));
+      const path = join(dir, file);
+      if (!existsSync(path)) {
+        problems.push(`${path} is missing.`);
+        continue;
+      }
+      const content = readFileSync(path, "utf8");
+      if (sha256(content) !== manifest.files[file]) problems.push(`${path} is not the file staging's code wrote (its SHA-256 differs from ${manifestPath}).`);
+      const readBack = readsBack(store.name, content, scratch);
+      if (readBack) problems.push(`${path} ${readBack}.`);
+    }
+  } finally {
+    if (secret === undefined) delete process.env.SCHEDULING_TOKEN_SECRET;
+    else process.env.SCHEDULING_TOKEN_SECRET = secret;
+    rmSync(scratch, { recursive: true, force: true });
+  }
+  return problems;
+};
 
 const RUNNER = `import { createRequire, syncBuiltinESMExports } from "node:module";
 
@@ -114,24 +175,37 @@ const writeWithStaging = (): Map<string, string> => {
   }
 };
 
-const main = () => {
-  const check = process.argv.includes("--check");
-  const written = writeWithStaging();
-  const drifted: string[] = [];
-  for (const [name, content] of written) {
-    const path = stagingRollbackFixture(name);
-    if (check) {
-      if (!existsSync(path) || readFileSync(path, "utf8") !== content) drifted.push(path);
-      continue;
-    }
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, content);
-  }
-  if (drifted.length > 0) {
-    console.error(`These files are not what staging's store code writes. Rerun without --check:\n${drifted.join("\n")}`);
+const stagingCommitPresent = () => spawnSync("git", ["cat-file", "-e", `${STAGING_COMMIT}^{commit}`], { cwd: packageDir }).status === 0;
+
+const generate = () => {
+  if (!stagingCommitPresent()) {
+    console.error(
+      `Regenerating these fixtures runs staging's own store code from ${STAGING_COMMIT}, and this clone does not have that commit. Fetch it, then run this again:\n  git fetch origin ${STAGING_COMMIT}`,
+    );
     process.exit(1);
   }
-  console.log(check ? "The staging rollback fixtures match staging's store code." : `Wrote ${written.size} files written by staging's store code.`);
+  const written = writeWithStaging();
+  const manifest: Manifest = { stagingCommit: STAGING_COMMIT, files: {} };
+  mkdirSync(outputDir, { recursive: true });
+  for (const [name, content] of written) {
+    const path = stagingRollbackFixture(name);
+    writeFileSync(path, content);
+    manifest.files[basename(path)] = sha256(content);
+  }
+  writeFileSync(join(outputDir, MANIFEST), `${JSON.stringify(manifest, null, 2)}\n`);
+  console.log(`Wrote ${written.size} files written by staging's store code, and their hashes to ${MANIFEST}.`);
 };
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();
+const check = () => {
+  const problems = verifyStagingRollbackFixtures();
+  if (problems.length > 0) {
+    console.error(`The staging rollback fixtures do not check out:\n- ${problems.join("\n- ")}`);
+    process.exit(1);
+  }
+  console.log("The staging rollback fixtures match their recorded hashes and read back through this SFU's stores.");
+};
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  if (process.argv.includes("--check")) check();
+  else generate();
+}
