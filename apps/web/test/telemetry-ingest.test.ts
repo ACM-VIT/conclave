@@ -245,11 +245,12 @@ describe("forwardCapture", () => {
     expect(requested).toEqual([releaseA, releaseB, "ccccccc3333333333333333333333333333333cc"]);
   });
 
-  it("looks up at most one build's manifest per request, however many builds the batch names", async () => {
+  it("looks up at most four builds' manifests per request, and refuses only the events of any build past those", async () => {
     const calls: string[] = [];
-    const events = Array.from({ length: 200 }, (_, index) =>
-      event({ client_version: index.toString(16).padStart(40, "0").replace(/^0/, "a") }),
-    );
+    const events = Array.from({ length: 200 }, (_, index) => ({
+      ...event({ client_version: index.toString(16).padStart(40, "0").replace(/^0/, "a") }),
+      uuid: `0196f0a1-0000-7000-8000-${String(index).padStart(12, "0")}`,
+    }));
     const { response, upstream } = await forward(post(JSON.stringify(captureBody(events)), "application/json"), ["e"], {
       manifest: async (version) => {
         calls.push(version);
@@ -258,9 +259,11 @@ describe("forwardCapture", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(calls).toHaveLength(1);
-    expect(sentBody(upstream).batch).toHaveLength(1);
-    expect(sentBody(upstream).batch[0].properties).toMatchObject({ client_version: events[0].properties.client_version });
+    expect(calls).toEqual(events.slice(0, 4).map((item) => item.properties.client_version));
+    expect(sentBody(upstream).batch.map((item) => [item.uuid, item.properties.client_version])).toEqual(
+      events.slice(0, 4).map((item) => [item.uuid, item.properties.client_version]),
+    );
+    expect(await response.json()).toEqual({ status: 1, rejected: Array.from({ length: 196 }, (_, index) => index + 4) });
   });
 
   it("forwards an event the browser built unchanged, building it again from the schema", async () => {
@@ -414,18 +417,34 @@ describe("the outbound schema at /ingest", () => {
     expect(String(upstream[0].init.body)).not.toMatch(/https?:|chrome-extension|audit-operator|acmvit|localhost|fleetasset|from=mail/);
   });
 
-  it("names the event's own build whenever it has a build's form, its manifest found or not, and any other as unknown", async () => {
+  it("names the event's own build whenever it has a build's form, its manifest found or not, unknown when it names none", async () => {
     const { batch: current } = await send([event({ client_version: BUILD })]);
     const { batch: older } = await send([event({ client_version: OLD_BUILD })]);
     const { batch: gone } = await send([event({ client_version: "facade00" })]);
-    const { batch: none } = await send([event({ client_version: "Meet Mira" })]);
+    const { batch: unnamed } = await send([event()]);
+    const { batch: unknown } = await send([event({ client_version: "unknown" })]);
 
-    expect([current, older, gone, none].map((batch) => (batch[0].properties as Record<string, unknown>).client_version)).toEqual([
+    expect([current, older, gone, unnamed, unknown].map((batch) => (batch[0].properties as Record<string, unknown>).client_version)).toEqual([
       BUILD,
       OLD_BUILD,
       "facade00",
       "unknown",
+      "unknown",
     ]);
+  });
+
+  it("refuses an event whose client_version is not a build's, and forwards the rest of its batch under their own builds", async () => {
+    const malformed = { ...event({ client_version: "Meet Mira" }), event: "not_an_event", uuid: "0196f0a1-0000-7000-8000-0000000000b1" };
+    const ofBuild = { ...event({ client_version: BUILD }), uuid: "0196f0a1-0000-7000-8000-0000000000b2" };
+    const ofOlder = { ...event({ client_version: OLD_BUILD }), uuid: "0196f0a1-0000-7000-8000-0000000000b3" };
+    const { response, batch } = await send([malformed, ofBuild, ofOlder]);
+
+    expect(response.status).toBe(200);
+    expect(batch.map((item) => [item.uuid, (item.properties as Record<string, unknown>).client_version])).toEqual([
+      [ofBuild.uuid, BUILD],
+      [ofOlder.uuid, OLD_BUILD],
+    ]);
+    expect(await response.json()).toEqual({ status: 1, rejected: [0] });
   });
 
   it("keeps an old build's frames of the shared forms when this deployment no longer has its manifest, and strips the rest", async () => {
@@ -971,38 +990,93 @@ const seeded = (seed: number) => () => {
 
 describe("one event's flaw stays with that event at /ingest", () => {
   type Sent = ReturnType<typeof event>;
-  const flaws: Array<(item: Sent) => unknown> = [
-    (item) => ({ ...item, uuid: "not-a-uuid" }),
-    ({ uuid: _uuid, ...item }) => item,
-    (item) => ({ ...item, timestamp: "not a time" }),
-    ({ timestamp: _timestamp, ...item }) => item,
-    (item) => ({ ...item, properties: "Meet Mira" }),
-    (item) => ({ ...item, event: "" }),
-    (item) => ({ ...item, properties: { ...item.properties, token: "phc_another_project" } }),
-    (item) => ({ ...item, timestamp: "2026-11-21T00:00:00.000Z" }),
+  const OTHER_BUILD = "aaaaaaa1111111111111111111111111111111aa";
+  const withProperties = (item: Sent, properties: Record<string, unknown>): Sent => ({
+    ...item,
+    properties: { ...item.properties, ...properties },
+  });
+  const refusing: Record<string, (item: Sent) => unknown> = {
+    "a uuid that is not one": (item) => ({ ...item, uuid: "not-a-uuid" }),
+    "no uuid": ({ uuid: _uuid, ...item }) => item,
+    "an empty event name": (item) => ({ ...item, event: "" }),
+    "an event we never send": (item) => ({ ...item, event: "room_code_typed" }),
+    "no event name": ({ event: _event, ...item }) => item,
+    "a timestamp that is not one": (item) => ({ ...item, timestamp: "not a time" }),
+    "no timestamp": ({ timestamp: _timestamp, ...item }) => item,
+    "a timestamp too old to date": (item) => ({ ...item, timestamp: "2026-11-21T00:00:00.000Z" }),
+    "properties that are not an object": (item) => ({ ...item, properties: "Meet Mira" }),
+    "no properties": ({ properties: _properties, ...item }) => item,
+    "another project's token": (item) => withProperties(item, { token: "phc_another_project" }),
+    "no token": (item) => withProperties(item, { token: undefined }),
+    "a client_version that is not a build's": (item) => withProperties(item, { client_version: "Meet Mira" }),
+    "a client_version that is a number": (item) => withProperties(item, { client_version: 42 }),
+    "a client_version too short for a build": (item) => withProperties(item, { client_version: "abc12" }),
+  };
+  const withheld: Record<string, unknown> = {
+    distinct_id: "Mira",
+    joinMode: "lobby-of-mira",
+    isAdmin: "yes",
+    $os: "MiraOS 1",
+    $current_url: 42,
+  };
+  type Flaw = { name: string; apply: (item: Sent) => unknown; refuses: boolean; key?: string };
+  const flaws: Flaw[] = [
+    ...Object.entries(refusing).map(([name, apply]) => ({ name, apply, refuses: true })),
+    ...Object.entries(withheld).map(([key, value]) => ({
+      name: `a bad ${key}`,
+      apply: (item: Sent) => withProperties(item, { [key]: value }),
+      refuses: false,
+      key,
+    })),
   ];
+  const builds = [BUILD, OTHER_BUILD, undefined];
+  const soundEvent = (batch: number, index: number, build: string | undefined) => ({
+    ...event(build === undefined ? {} : { client_version: build }),
+    uuid: `0196f0a1-0000-7000-8000-${String(batch).padStart(4, "0")}${String(index).padStart(8, "0")}`,
+  });
+  const expectEachAlone = async (sound: Sent[], flawOf: Array<Flaw | null>, label: string) => {
+    const items = sound.map((item, index) => flawOf[index]?.apply(item) ?? item);
+    const rejected = flawOf.flatMap((flaw, index) => (flaw?.refuses ? [index] : []));
+    const { response, upstream } = await forward(post(JSON.stringify(captureBody(items)), "application/json"));
+    if (rejected.length === items.length) {
+      expect(response.status, label).toBe(400);
+      expect(upstream, label).toEqual([]);
+      return;
+    }
+    expect(response.status, label).toBe(200);
+    const kept = sound.filter((_, index) => !flawOf[index]?.refuses);
+    const forwarded = sentBody(upstream).batch;
+    expect(forwarded.map((item) => item.uuid), label).toEqual(kept.map((item) => item.uuid));
+    forwarded.forEach((item, at) => {
+      const index = sound.indexOf(kept[at]);
+      const properties = item.properties as Record<string, unknown>;
+      expect(properties.client_version, label).toBe(sound[index].properties.client_version ?? "unknown");
+      const key = flawOf[index]?.key;
+      if (key) expect(Object.hasOwn(properties, key), `${label}: ${key} withheld`).toBe(false);
+      for (const other of Object.keys(withheld)) if (other !== key) expect(Object.hasOwn(properties, other), `${label}: ${other} kept`).toBe(true);
+    });
+    expect(await response.json(), label).toEqual(rejected.length ? { status: 1, rejected } : { status: 1 });
+  };
 
-  it("forwards every sound event of a mixed batch and names each flawed one, over 200 seeded batches", async () => {
+  it("refuses or withholds only what is wrong with one event, for every field's flaw at every position of a batch of three builds", async () => {
+    const size = builds.length + 1;
+    for (const flaw of flaws) {
+      for (let position = 0; position < size; position++) {
+        const sound = Array.from({ length: size }, (_, index) => soundEvent(position, index, builds[index % builds.length]));
+        const flawOf = sound.map((_, index) => (index === position ? flaw : null));
+        await expectEachAlone(sound, flawOf, `${flaw.name} at ${position}`);
+      }
+    }
+  });
+
+  it("forwards every sound event of a mixed batch under its own build and names each flawed one, over 200 seeded batches", async () => {
     for (let seed = 1; seed <= 200; seed++) {
       const random = seeded(seed);
-      const events = Array.from({ length: 1 + Math.floor(random() * 10) }, (_, index) => ({
-        ...event(),
-        uuid: `0196f0a1-0000-7000-8000-${String(seed).padStart(4, "0")}${String(index).padStart(8, "0")}`,
-      }));
-      const items = events.map((item) => (random() < 0.4 ? flaws[Math.floor(random() * flaws.length)](item) : item));
-      const rejected = items.flatMap((item, index) => (item === events[index] ? [] : [index]));
-      const { response, upstream } = await forward(post(JSON.stringify(captureBody(items)), "application/json"));
-
-      if (rejected.length === items.length) {
-        expect(response.status, `seed ${seed}`).toBe(400);
-        expect(upstream, `seed ${seed}`).toEqual([]);
-        continue;
-      }
-      expect(response.status, `seed ${seed}`).toBe(200);
-      expect(sentBody(upstream).batch.map((item) => item.uuid), `seed ${seed}`).toEqual(
-        events.filter((item, index) => items[index] === item).map((item) => item.uuid),
+      const sound = Array.from({ length: 1 + Math.floor(random() * 10) }, (_, index) =>
+        soundEvent(seed, index, builds[Math.floor(random() * builds.length)]),
       );
-      expect(await response.json(), `seed ${seed}`).toEqual(rejected.length ? { status: 1, rejected } : { status: 1 });
+      const flawOf = sound.map(() => (random() < 0.4 ? flaws[Math.floor(random() * flaws.length)] : null));
+      await expectEachAlone(sound, flawOf, `seed ${seed}`);
     }
   });
 

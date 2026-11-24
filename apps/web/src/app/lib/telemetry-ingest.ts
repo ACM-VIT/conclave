@@ -247,9 +247,18 @@ const decodeBody = async (request: Request, url: URL): Promise<unknown> => {
   }
 };
 
-/** The build an event says it came from, when its client_version names one. */
-const buildOf = (event: CapturedEvent): string | null =>
-  isBuildVersion(event.properties.client_version) ? event.properties.client_version : null;
+const MAX_BUILDS_PER_REQUEST = 4;
+
+/**
+ * The build an event says it came from: the one its client_version names,
+ * UNKNOWN_BUILD when it names none, or null when it names something that is
+ * not a build.
+ */
+const buildOf = (event: CapturedEvent): string | null => {
+  const version = event.properties.client_version;
+  if (version === undefined || version === UNKNOWN_BUILD) return UNKNOWN_BUILD;
+  return isBuildVersion(version) ? version : null;
+};
 
 const timeOf = (value: unknown): number | null => {
   const time = typeof value === "string" ? Date.parse(value) : NaN;
@@ -408,30 +417,31 @@ const prepareForward = async (request: Request, deps: IngestDeps) => {
     const event = CapturedEvent.safeParse(item);
     return event.success && event.data.properties.token === deps.projectKey ? event.data : null;
   });
-  const ours = events.filter((event) => event !== null);
-  if (ours.length === 0) throw new Refused(400);
-  // A batch holds one tab's events, so a request carries one build:
-  // the first event's. Events naming any other build are dropped, which holds
-  // a request to at most one manifest lookup. That build's own manifest
-  // checks its frames; without it the build is still named and its frames
-  // are held to their shared forms.
-  const build = buildOf(ours[0]);
-  const manifest = build ? await deps.manifest(build) : null;
-  const context = {
-    token: deps.projectKey,
-    clientVersion: build ?? UNKNOWN_BUILD,
-    chunkFiles: manifest,
-  };
-  const schemas = createOutboundSchemas(context);
+  const builds = [...new Set(events.flatMap((event) => (event ? [buildOf(event)] : [])))]
+    .filter((build) => build !== null)
+    .slice(0, MAX_BUILDS_PER_REQUEST);
+  if (builds.length === 0) throw new Refused(400);
+  const contexts = new Map(
+    await Promise.all(
+      builds.map(async (build) => {
+        const manifest = build === UNKNOWN_BUILD ? null : await deps.manifest(build);
+        const context = { token: deps.projectKey, clientVersion: build, chunkFiles: manifest };
+        return [build, { context, schemas: createOutboundSchemas(context) }] as const;
+      }),
+    ),
+  );
   const sentAt = clientSentAt(url, decoded);
   const inRequest = new Set<string>();
   const rejected: number[] = [];
   const taken: number[] = [];
   const batch = events.flatMap((event, index) => {
-    if (!event || buildOf(event) !== build) {
+    const build = event ? buildOf(event) : null;
+    const shaped = build === null ? undefined : contexts.get(build);
+    if (!event || !shaped) {
       rejected.push(index);
       return [];
     }
+    const { context, schemas } = shaped;
     const { uuid } = event;
     if (inRequest.has(uuid)) return [];
     inRequest.add(uuid);

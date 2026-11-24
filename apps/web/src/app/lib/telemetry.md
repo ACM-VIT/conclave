@@ -271,9 +271,12 @@ answers 503; off Cloudflare (`next start`) the same two limits are kept in
 the process. It decodes the body
 (gzip, base64 or JSON), drops events for any project but ours, and builds
 every event again from the outbound schema, so the
-browser's before_send is not the only guard. A request carries one build, the
-first event's `client_version`; events naming any other build are dropped, so
-a request costs at most one manifest lookup. That build's chunk manifest is
+browser's before_send is not the only guard. Each event is judged by its own
+build, its `client_version`, once the event itself has passed its checks: an
+event with none names `unknown`, and one whose `client_version` is neither a
+build nor `unknown` is refused on its own. A request may carry up to four
+builds, each with one manifest lookup; an event of any further build is
+refused. A batch holds one tab's events, so a browser's request carries one. A build's chunk manifest is
 fetched from our configured site (`lib/site-url.ts`, never the request's Host)
 with `?dpl=<build>` (a version that is not a git sha is never fetched), shared
 by concurrent requests, and kept for 10 minutes, or 1 minute when missing, for
