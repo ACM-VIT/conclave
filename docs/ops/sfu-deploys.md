@@ -114,7 +114,8 @@ confirms the drain state it had before.
 Every one of these steps is written to the instance's deploy journal
 (`<state dir>/<project>.<service>.journal.json`: phase, candidate, last-known-good
 image, the image it served before a promotion, whether it was draining before)
-before it is taken, whole, fsynced and renamed into place. Every deploy starts
+before it is taken, whole, fsynced and renamed into place; a journal write
+that fails stops the run at once, before the step it records. Every deploy starts
 by repairing what a run that died left behind, by the table below, before it
 drains anything. An instance whose journal is still not idle after that is
 never drained or rebuilt: the deploy stops with the repair's exit code, and a
@@ -141,7 +142,10 @@ Repair, for each instance whose journal is not idle:
 Every rollback, in repair and after any failed step of a deploy, takes one
 path: the journal goes to `rollback` first; then drain and wait; then the
 last-known-good image starts serving, and the journal goes to idle once it
-serves by the serving rule. With no last-known-good image the instance is
+serves by the serving rule. An instance that takes meetings is drained for a
+rollback only while another instance serves (or when it is the only one); if
+none does, it keeps serving (exit 1) and the next run rolls it back once one
+does. Repair takes instances whose container is not running first. With no last-known-good image the instance is
 stopped instead (exit 5). A promotion also takes one path, in repair and in a
 deploy: journal `promoting`, move the service tag, start it serving, then the
 serving rule; any failure there is a rollback.
@@ -169,6 +173,12 @@ The rules every path keeps, checked after every run by
    same rule.
 4. No drain wait runs out its deadline on a container that is not running.
 5. Every rollback is in the journal before its first step.
+6. An instance that takes meetings is drained only while another instance
+   serves, unless it is the only instance.
+
+A run exits 0 only once every instance it deployed serves the target by the
+serving rule at its end; one that stopped serving while a later instance
+deployed fails the run (exit 1).
 
 The fuzz test runs fixed cases (the four recovery holes found in review)
 and seeded fault plans: one or two instances, a canary that passes or fails,
@@ -224,7 +234,7 @@ if it is hung, and rerun.
 | 3 | A meeting outlasted the drain deadline. That instance was put back into service untouched; or, if the call reached it after its canary, or it needs a rollback with calls still on it, it was left drained, its journal kept. | Rerun later. Instances already deployed are skipped, and a pending rollback finishes once its calls end. |
 | 4 | The canary failed. The instance runs the image it last served calls on, healthy and taking meetings. | Read the canary lines in the log, fix forward, deploy again. |
 | 5 | The canary failed and the instance could not be brought back: it is down or stopped, or it could not be rolled back without risking its calls (its `/status` does not answer, or it will not stay drained) and was left as it is with its journal kept. | Act now: read the log. Fix what stopped it (its `/status`, its route), then rerun, which finishes the rollback; or start it on a known-good release (`--rollback`, or fix forward and deploy). |
-| 1 | Another instance is not serving, a public URL does not reach its instance, or anything else (preflight, build, Docker). Nothing after the failing step was drained. | Read the log. For a public URL, follow the steps above: fix the route, pass `--preflight-only`, rerun. |
+| 1 | Another instance is not serving, a public URL does not reach its instance, an instance deployed in this run stopped serving before it ended, the deploy journal cannot be written, or anything else (preflight, build, Docker). Nothing after the failing step was drained. | Read the log. For a public URL, follow the steps above: fix the route, pass `--preflight-only`, rerun. |
 
 During an exit 3, 4 or 5 the two instances can run different commits. That is the
 same mixed state every blue-green deploy passes through, and the SFU tolerates

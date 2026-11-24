@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { chmodSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -196,6 +197,65 @@ fixed("Greptile: a container that restarted and runs again is busy, so a call it
     assert.equal(sfus["sfu-a"].rooms, 1, "the call is still on it");
     assert.deepEqual(cutRooms(sfus), cutRooms(sfus).map(() => 0));
     assert.equal((await journal(shared, "sfu-a")).phase, "rollback");
+  });
+});
+
+fixed("Greptile: a journal write that fails stops the deploy before the step it records", () => {
+  let stateDir = "";
+  const lockJournal = (sfu) => {
+    if (sfu.image === TARGET && sfu.bootDrained && !sfu.locked) {
+      sfu.locked = true;
+      chmodSync(stateDir, 0o500);
+    }
+  };
+  return withStack({ "sfu-a": { onRecreate: lockJournal }, "sfu-b": {} }, async (sfus, shared) => {
+    stateDir = shared.env.SFU_DEPLOY_STATE_DIR;
+    try {
+      const result = await deploy(sfus, { env: { ...shared.env, ...ONLY_A } });
+      assert.notEqual(result.code, 0, result.output);
+      assert.match(result.output, /could not write sfu-a's deploy journal/);
+      assert.equal(sfus["sfu-a"].recreates.length, 1, "nothing changed after the failed write");
+    } finally {
+      chmodSync(stateDir, 0o700);
+    }
+  });
+});
+
+fixed("Greptile: repair never drains the only instance taking meetings to roll it back", () =>
+  withSfus({ "sfu-a": { onTarget: true }, "sfu-b": { container: "exited" } }, async (sfus, events, context) => {
+    const shared = await sharedDir();
+    context.stateDir = shared.env.SFU_DEPLOY_STATE_DIR;
+    try {
+      const journals = { "sfu-a": { phase: "rollback", lkg: LAST_GOOD, candidate: TARGET } };
+      const first = await deploy(sfus, { env: shared.env, journals });
+      const peerBack = events.indexOf("recreate sfu-b");
+      const drained = events.indexOf("drain sfu-a");
+      assert.ok(drained === -1 || (peerBack !== -1 && drained > peerBack), `sfu-a was drained while sfu-b was down:\n${events.join("\n")}\n${first.output}`);
+      assert.equal(sfus["sfu-b"].container, "running");
+      const second = await deploy(sfus, { env: shared.env });
+      assert.equal(second.code, 0, second.output);
+      assertServes(sfus["sfu-a"], TARGET);
+      assertServes(sfus["sfu-b"], TARGET);
+      assert.deepEqual(cutRooms(sfus), cutRooms(sfus).map(() => 0));
+    } finally {
+      await rm(shared.dir, { recursive: true, force: true });
+    }
+  }),
+);
+
+fixed("Greptile: a deploy fails when an instance it already deployed stops serving before it ends", () => {
+  let sfusRef = null;
+  const dropPeerRoute = (sfu) => {
+    if (sfu.image === TARGET && sfu.bootDrained && !sfu.dropped) {
+      sfu.dropped = true;
+      sfusRef["sfu-a"].publicDown = true;
+    }
+  };
+  return withStack({ "sfu-a": { publicRoute: true }, "sfu-b": { publicRoute: true, onRecreate: dropPeerRoute } }, async (sfus, shared) => {
+    sfusRef = sfus;
+    const result = await deploy(sfus, { env: shared.env });
+    assert.notEqual(result.code, 0, result.output);
+    assert.match(result.output, /sfu-a was deployed on .* but is not serving now/);
   });
 });
 
