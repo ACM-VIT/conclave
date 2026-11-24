@@ -81,6 +81,17 @@ export default tseslint.config(
           message:
             "Capture media with captureUserMedia or captureDisplayMedia from lib/media-captures, so ending the call releases it.",
         },
+        {
+          selector:
+            "CallExpression[callee.property.name=/^(createMediaStreamDestination|captureStream)$/]",
+          message:
+            "Create derived tracks with createHeldDestination or captureHeldCanvas from lib/media-captures, so ending the call stops them.",
+        },
+        {
+          selector: "NewExpression[callee.name=/^(GeneratorCtor|MediaStreamTrackGenerator)$/]",
+          message:
+            "Create track generators with createHeldTrackGenerator from lib/media-captures, so ending the call stops them.",
+        },
       ],
     },
   },

@@ -1459,12 +1459,12 @@ export default function MeetsClient({
       refs.prejoinMediaIntentRef.current = {
         streamId: nextStream?.id ?? null,
         trackIds: liveTrackIds,
-        isCameraOn: handoff.isCameraOn && hasLiveVideo,
-        isMicOn: handoff.isMicOn && hasLiveAudio,
+        isCameraOn: handoff.isCameraOn,
+        isMicOn: handoff.isMicOn,
       };
       setLocalStream(nextStream);
-      setIsCameraOff(!(handoff.isCameraOn && hasLiveVideo));
-      setIsMuted(!(handoff.isMicOn && hasLiveAudio));
+      setIsCameraOff(!handoff.isCameraOn);
+      setIsMuted(!handoff.isMicOn);
       const joinAudioOnly = handoff.isAudioOnly === true;
       setViewSettings((settings) =>
         settings.audioOnlyMode === joinAudioOnly

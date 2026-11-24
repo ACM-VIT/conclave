@@ -2131,6 +2131,38 @@ export function useMeetSocket({
     releaseAllCaptures();
   }, [closeConnection]);
 
+  const releaseLocalMedia = useCallback(() => {
+    const localTracks = new Set([
+      ...(localStreamRef.current?.getTracks() ?? []),
+      ...(localStream?.getTracks() ?? []),
+    ]);
+    localStreamRef.current = null;
+    localTracks.forEach(stopLocalTrack);
+    setLocalStream(null);
+    setIsMuted(true);
+    setIsCameraOff(true);
+    stopScreenShareCapture();
+    releaseAllCaptures();
+  }, [
+    localStream,
+    localStreamRef,
+    setIsCameraOff,
+    setIsMuted,
+    setLocalStream,
+    stopLocalTrack,
+    stopScreenShareCapture,
+  ]);
+
+  const refuseEntry = useCallback(
+    (error: MeetError | null, status?: ReconnectRecoveryStatus) => {
+      releaseLocalMedia();
+      if (status) updateReconnectRecoveryStatus(status);
+      if (error) setMeetError(error);
+      setConnectionState("error");
+    },
+    [releaseLocalMedia, setConnectionState, setMeetError, updateReconnectRecoveryStatus],
+  );
+
   const finishLocalRoomEnded = useCallback(() => {
     if (localRoomEndedHandledRef.current) return;
     localRoomEndedHandledRef.current = true;
@@ -8371,8 +8403,7 @@ export function useMeetSocket({
                       socketRef.current !== socket
                     ) return;
                     console.error("[Meets] Join after approval failed:", joinError);
-                    setMeetError(createMeetError(joinError));
-                    setConnectionState("error");
+                    refuseEntry(createMeetError(joinError));
                   });
               } else {
                 console.error(
@@ -8383,7 +8414,7 @@ export function useMeetSocket({
                     bypassMediaPermissions,
                   },
                 );
-                setConnectionState("error");
+                refuseEntry(null);
               }
             });
 
@@ -8741,6 +8772,7 @@ export function useMeetSocket({
       addReaction,
       audioProducerRef,
       cleanup,
+      refuseEntry,
       consumeProducer,
       currentRoomIdRef,
       deviceRef,
@@ -9072,7 +9104,8 @@ export function useMeetSocket({
           });
           if (!isRecoverable) {
             manualReconnectRetryRequestedRef.current = false;
-            updateReconnectRecoveryStatus(
+            refuseEntry(
+              { code: "CONNECTION_FAILED", message: reconnectFailure, recoverable: false },
               buildReconnectRecoveryStatus(
                 "failed",
                 attempt,
@@ -9080,12 +9113,6 @@ export function useMeetSocket({
                 reconnectFailure,
               ),
             );
-            setMeetError({
-              code: "CONNECTION_FAILED",
-              message: reconnectFailure,
-              recoverable: false,
-            });
-            setConnectionState("error");
             return;
           }
           if (manualReconnectRetryRequestedRef.current) {
@@ -9151,6 +9178,7 @@ export function useMeetSocket({
     }
   }, [
     cleanupRoomResources,
+    refuseEntry,
     connectSocket,
     currentRoomIdRef,
     ensureLiveLocalMediaForJoin,
@@ -9348,7 +9376,7 @@ export function useMeetSocket({
           !stream &&
           hasRequiredJoinMediaNeed(mediaNeeds)
         ) {
-          setConnectionState("error");
+          refuseEntry(null);
           return;
         }
 
@@ -9455,18 +9483,13 @@ export function useMeetSocket({
           joinMode,
           error: err instanceof Error ? err.message : String(err ?? ""),
         });
-        const stream = localStreamRef.current;
-        if (stream) {
-          stream.getTracks().forEach((track) => stopLocalTrack(track));
-          setLocalStream(null);
-        }
-        setMeetError(createMeetError(err));
-        setConnectionState("error");
+        refuseEntry(createMeetError(err));
       }
     },
     [
       connectSocket,
       cleanupRoomResources,
+      refuseEntry,
       displayNameInput,
       dropVideoTracksForCameraOff,
       joinMode,

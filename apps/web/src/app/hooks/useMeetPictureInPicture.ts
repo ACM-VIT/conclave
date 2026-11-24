@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getRenderableParticipantVideoStream } from "../lib/participant-media";
 import type { Participant } from "../lib/types";
+import { captureHeldCanvas } from "../lib/media-captures";
 
 interface UseMeetPictureInPictureOptions {
     isJoined: boolean;
@@ -324,7 +325,7 @@ export function useMeetPictureInPicture({
                 animationFrameRef.current = requestAnimationFrame(renderFrame);
             }
 
-            const canvasStream = canvasRef.current.captureStream(30);
+            const canvasStream = captureHeldCanvas(canvasRef.current, 30);
             canvasStreamRef.current = canvasStream;
             const pipVideo = document.createElement("video");
             pipVideoRef.current = pipVideo;

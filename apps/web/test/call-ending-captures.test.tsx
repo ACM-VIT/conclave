@@ -82,13 +82,19 @@ class FakeAudioContext {
     return new FakeNode();
   }
   createMediaStreamDestination() {
-    return new FakeNode();
+    const node = new FakeNode();
+    trackCount += 1;
+    const track = new FakeTrack(`derived-audio-${trackCount}`, "audio", "derived");
+    created.push(track);
+    node.stream = new FakeStream([track]);
+    return node;
   }
 }
 
 const created: FakeTrack[] = [];
 const waiting: Array<() => void> = [];
 let holdRequests = false;
+let refuseJoins = false;
 let trackCount = 0;
 
 const capture = (source: string, kinds: Array<"audio" | "video">) =>
@@ -137,6 +143,7 @@ const liveTracks = () =>
 
 const createRig = async () => {
   const handlers = new Map<string, (...args: never[]) => void>();
+  const states: string[] = [];
   const socket = {
     connected: false,
     on: vi.fn((event: string, handler: (...args: never[]) => void) => handlers.set(event, handler)),
@@ -173,7 +180,11 @@ const createRig = async () => {
       roomId: "test-room",
       userId: "viewer#session",
       localStream: null,
-      getJoinInfo: async () => ({ token: "test-token", sfuUrl: "http://localhost:3031" }),
+      getJoinInfo: async () => {
+        if (refuseJoins) throw new Error("Guests are not allowed in this meeting.");
+        return { token: "test-token", sfuUrl: "http://localhost:3031" };
+      },
+      setConnectionState: (state: string) => states.push(state),
       prewarm: { io, Device: null, isReady: true },
       isMuted: true,
       isCameraOff: true,
@@ -247,10 +258,18 @@ const createRig = async () => {
     act(() => root.unmount());
     host.remove();
   };
-  return { rig: () => rig, dispatch, showEndScreen, unmount };
+  const drop = async () => {
+    socket.connected = false;
+    handlers.get("disconnect")?.(...(["transport close"] as never[]));
+    await vi.waitFor(() => expect(states).toContain("error"), { timeout: 15_000 });
+  };
+  return { rig: () => rig, dispatch, drop, showEndScreen, unmount };
 };
 
-type Ending = [string, (rig: Rig, dispatch: (event: string, ...args: unknown[]) => void) => unknown];
+type Ending = [
+  string,
+  (rig: Rig, dispatch: (event: string, ...args: unknown[]) => void, drop: () => Promise<void>) => unknown,
+];
 
 const ENDINGS: Ending[] = [
   ["leaving, or a reconnect that gave up", (rig) => rig.api.cleanup()],
@@ -260,6 +279,13 @@ const ENDINGS: Ending[] = [
   ["being removed", (_rig, dispatch) => dispatch("kicked", { reason: "Removed by the host" })],
   ["the room closing", (_rig, dispatch) => dispatch("roomClosed", { reason: "server shutdown" })],
   ["entry being refused", (_rig, dispatch) => dispatch("joinRejected")],
+  [
+    "a reconnect refused for good",
+    async (_rig, _dispatch, drop) => {
+      refuseJoins = true;
+      await drop();
+    },
+  ],
 ];
 
 let current: Awaited<ReturnType<typeof createRig>> | null = null;
@@ -268,6 +294,7 @@ beforeEach(() => {
   created.length = 0;
   waiting.length = 0;
   holdRequests = false;
+  refuseJoins = false;
   Object.defineProperty(navigator, "mediaDevices", { value: fakeDevices, configurable: true });
   vi.stubGlobal("MediaStream", FakeStream);
   vi.stubGlobal("AudioContext", FakeAudioContext);
@@ -294,11 +321,11 @@ describe("every way a call ends with the client still mounted", () => {
     await vi.waitFor(() => expect(current?.rig().preview.stream).not.toBeNull());
     await vi.waitFor(() => expect(created.map((track) => track.source)).toContain("mic-test"));
     expect(new Set(created.map((track) => track.source))).toEqual(
-      new Set(["meeting", "screen-share", "settings-preview", "mic-test"]),
+      new Set(["meeting", "screen-share", "settings-preview", "mic-test", "derived"]),
     );
 
     await act(async () => {
-      await end(current!.rig(), current!.dispatch);
+      await end(current!.rig(), current!.dispatch, current!.drop);
     });
     await current.showEndScreen();
 
@@ -318,7 +345,7 @@ describe("every way a call ends with the client still mounted", () => {
     await vi.waitFor(() => expect(waiting).toHaveLength(3));
 
     await act(async () => {
-      await end(current!.rig(), current!.dispatch);
+      await end(current!.rig(), current!.dispatch, current!.drop);
     });
     await current.showEndScreen();
     await act(async () => {
@@ -346,7 +373,7 @@ describe("every way a call ends with the client still mounted", () => {
     await vi.waitFor(() => expect(waiting).toHaveLength(1));
 
     await act(async () => {
-      await end(current!.rig(), current!.dispatch);
+      await end(current!.rig(), current!.dispatch, current!.drop);
     });
     await current.showEndScreen();
     for (let round = 0; round < 3; round += 1) {

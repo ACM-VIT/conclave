@@ -354,6 +354,7 @@ function JoinScreen({
   // mode is on even if they began before it was turned on.
   const audioOnlyRef = useRef(false);
   const [isMicOn, setIsMicOn] = useState(false);
+  const [preselected, setPreselected] = useState({ mic: false, camera: false });
   const [isRequestingPermissions, setIsRequestingPermissions] = useState(false);
   const [permissionRequestError, setPermissionRequestError] = useState<
     string | null
@@ -840,8 +841,8 @@ function JoinScreen({
     });
     onPrejoinMediaCommit({
       stream: handoffStream,
-      isCameraOn: shouldCommitCamera && hasLiveVideo,
-      isMicOn: shouldCommitMic && hasLiveAudio,
+      isCameraOn: (shouldCommitCamera && hasLiveVideo) || (preselected.camera && !isAudioOnly),
+      isMicOn: (shouldCommitMic && hasLiveAudio) || preselected.mic,
       isAudioOnly,
     });
   };
@@ -1085,11 +1086,24 @@ function JoinScreen({
   );
   const restoringMedia = useRejoinMediaRestore(initialMedia, async (media) => {
     if (media.isAudioOnly) toggleAudioOnly();
-    await Promise.allSettled([
-      media.isCameraOn && !media.isAudioOnly ? toggleCamera() : undefined,
-      media.isMicOn ? toggleMic() : undefined,
-    ]);
+    setPreselected({ mic: media.isMicOn, camera: media.isCameraOn && !media.isAudioOnly });
   });
+  const micShownOn = isMicOn || preselected.mic;
+  const cameraShownOn = isCameraOn || (preselected.camera && !isAudioOnly);
+  const pressMic = () => {
+    if (preselected.mic) {
+      setPreselected((current) => ({ ...current, mic: false }));
+      if (!isMicOn) return;
+    }
+    void toggleMic();
+  };
+  const pressCamera = () => {
+    if (preselected.camera) {
+      setPreselected((current) => ({ ...current, camera: false }));
+      if (!isCameraOn) return;
+    }
+    void toggleCamera();
+  };
 
   useEffect(() => {
     if (!pending || !hasIdentity) return;
@@ -1365,7 +1379,9 @@ function JoinScreen({
                 {!isCameraOn && (
                   <div className="absolute inset-0 flex flex-col items-center justify-center gap-2.5 pb-14">
                     <Avatar id={user?.id || previewName} name={previewName} size={76} />
-                    <span className="text-[13.5px] text-[#fafafa]/45">Camera is off</span>
+                    <span className="text-[13.5px] text-[#fafafa]/45">
+                      {cameraShownOn ? "Camera turns on when you join" : "Camera is off"}
+                    </span>
                   </div>
                 )}
                 {shouldShowPermissionCta ? (
@@ -1403,30 +1419,30 @@ function JoinScreen({
                 )}
                 <div className="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-2.5">
                   <button
-                    onClick={toggleMic}
-                    aria-label={isMicOn ? "Turn off microphone" : "Turn on microphone"}
+                    onClick={pressMic}
+                    aria-label={micShownOn ? "Turn off microphone" : "Turn on microphone"}
                     className={`inline-flex h-11 w-11 items-center justify-center rounded-full text-white transition-colors duration-150 ${
-                      isMicOn ? "bg-[#232327] hover:bg-[#2e2e33]" : "bg-[#ea4335] hover:brightness-105"
+                      micShownOn ? "bg-[#232327] hover:bg-[#2e2e33]" : "bg-[#ea4335] hover:brightness-105"
                     }`}
                   >
-                    {isMicOn ? <Mic size={18} /> : <MicOff size={18} />}
+                    {micShownOn ? <Mic size={18} /> : <MicOff size={18} />}
                   </button>
                   <button
-                    onClick={toggleCamera}
+                    onClick={pressCamera}
                     disabled={isAudioOnly}
                     aria-label={
                       isAudioOnly
                         ? "Camera is off in audio-only mode"
-                        : isCameraOn
+                        : cameraShownOn
                           ? "Turn off camera"
                           : "Turn on camera"
                     }
                     title={isAudioOnly ? "Camera is off in audio-only mode" : undefined}
                     className={`inline-flex h-11 w-11 items-center justify-center rounded-full text-white transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-45 ${
-                      isCameraOn ? "bg-[#232327] hover:bg-[#2e2e33]" : "bg-[#ea4335] hover:brightness-105"
+                      cameraShownOn ? "bg-[#232327] hover:bg-[#2e2e33]" : "bg-[#ea4335] hover:brightness-105"
                     }`}
                   >
-                    {isCameraOn ? <Video size={18} /> : <VideoOff size={18} />}
+                    {cameraShownOn ? <Video size={18} /> : <VideoOff size={18} />}
                   </button>
                   <button
                     type="button"

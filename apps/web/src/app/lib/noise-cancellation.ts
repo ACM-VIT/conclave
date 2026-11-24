@@ -1,6 +1,7 @@
 "use client";
 
 import type { RnnoiseWorkletNode } from "@sapphi-red/web-noise-suppressor";
+import { createHeldDestination } from "./media-captures";
 
 type CleanupOptions = {
   stopSource?: boolean;
@@ -414,7 +415,7 @@ export async function createNoiseCancellationPipeline(
   const outputGain = context.createGain();
   outputGain.gain.value = 1.05;
 
-  const destination = context.createMediaStreamDestination();
+  const destination = createHeldDestination(context);
   const nodes = [
     source,
     highPass,
