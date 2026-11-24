@@ -136,76 +136,126 @@ const leaks = (peer: Peer, secrets: string[]) =>
 const pendingSnapshots = (peer: Peer) =>
   peer.frames.filter((frame) => frame.event === "pendingUsersSnapshot");
 
+const firstArg = <T>(frame: Frame): T => (JSON.parse(frame.json) as T[])[0];
+
+const listedKeys = (frame: Frame): string[] =>
+  firstArg<{ users: Array<{ userId: string }> }>(frame).users.map((user) => user.userId).sort();
+
 describe("waiting-room privacy", () => {
-  it("never shows a participant who is waiting, across every lobby transition", async () => {
+  it("updates hosts on every lobby transition and never shows a participant who is waiting", async () => {
     const stack = await makeStack();
     const host = await stack.seat("host", "host@example.com", true);
     const participant = await stack.seat("participant", "participant@example.com", false);
     const bystander = await stack.seat("bystander", "bystander@example.com", false);
     const watchers = [host, participant, bystander];
     const secrets: string[] = [];
+    const waiting = new Set<string>();
+
+    const framesFrom = async (peer: Peer, action: () => Promise<unknown>): Promise<Frame[]> => {
+      await settle(watchers);
+      const mark = peer.frames.length;
+      await action();
+      await settle(watchers);
+      return peer.frames.slice(mark);
+    };
+    const expectSnapshot = (frames: Frame[]) => {
+      const snapshots = frames.filter((frame) => frame.event === "pendingUsersSnapshot");
+      expect(snapshots.length).toBeGreaterThan(0);
+      expect(listedKeys(snapshots.at(-1)!)).toEqual([...waiting].sort());
+    };
+    const expectNotice = (frames: Frame[], event: string, userKey: string) => {
+      expect(
+        frames.filter((frame) => frame.event === event).map((frame) => firstArg<{ userId: string }>(frame).userId),
+      ).toContain(userKey);
+    };
     const lobbyGuest = async (email: string) => {
-      const peer = await stack.knock(email);
-      secrets.push(email, peer.client.id!);
-      return peer;
+      let peer: Peer | undefined;
+      const frames = await framesFrom(host, async () => {
+        peer = await stack.knock(email);
+      });
+      secrets.push(email, peer!.client.id!);
+      waiting.add(email);
+      expectNotice(frames, "userRequestedJoin", email);
+      return peer!;
+    };
+    const decide = async (userKeys: string[], action: () => Promise<unknown>) => {
+      for (const userKey of userKeys) waiting.delete(userKey);
+      return framesFrom(host, action);
+    };
+    const httpOk = (path: string, body?: unknown) => async () => {
+      expect((await stack.adminPost(path, body)).status).toBe(200);
     };
 
     expect(await ask(host, "lockRoom", { locked: true })).toEqual(expect.objectContaining({ success: true }));
     const stillWaiting = await lobbyGuest("still-waiting@example.com");
 
     const admittedOne = await lobbyGuest("admit-one@example.com");
-    expect(await ask(host, "admitUser", { userId: "admit-one@example.com" })).toEqual({ success: true });
-    await settle(watchers);
+    expectNotice(await decide(["admit-one@example.com"], async () => {
+      expect(await ask(host, "admitUser", { userId: "admit-one@example.com" })).toEqual({ success: true });
+    }), "userAdmitted", "admit-one@example.com");
     expect(admittedOne.frames.some((frame) => frame.event === "joinApproved")).toBe(true);
 
     await lobbyGuest("allow@example.com");
-    expect(await ask(host, "admin:allowUsers", { userKeys: ["allow@example.com"] }))
-      .toEqual(expect.objectContaining({ success: true, admitted: ["allow@example.com"] }));
+    expectSnapshot(await decide(["allow@example.com"], async () => {
+      expect(await ask(host, "admin:allowUsers", { userKeys: ["allow@example.com"] }))
+        .toEqual(expect.objectContaining({ success: true, admitted: ["allow@example.com"] }));
+    }));
 
     await lobbyGuest("reject@example.com");
-    expect(await ask(host, "rejectUser", { userId: "reject@example.com" })).toEqual({ success: true });
+    expectNotice(await decide(["reject@example.com"], async () => {
+      expect(await ask(host, "rejectUser", { userId: "reject@example.com" })).toEqual({ success: true });
+    }), "userRejected", "reject@example.com");
 
     await lobbyGuest("block@example.com");
-    expect(await ask(host, "admin:blockUsers", { userKeys: ["block@example.com"] }))
-      .toEqual(expect.objectContaining({ rejectedPending: ["block@example.com"] }));
+    expectSnapshot(await decide(["block@example.com"], async () => {
+      expect(await ask(host, "admin:blockUsers", { userKeys: ["block@example.com"] }))
+        .toEqual(expect.objectContaining({ rejectedPending: ["block@example.com"] }));
+    }));
 
     const leaver = await lobbyGuest("leaver@example.com");
-    leaver.client.close();
-    await expect.poll(() => stack.room.pendingClients.has("leaver@example.com")).toBe(false);
+    expectNotice(await decide(["leaver@example.com"], async () => {
+      leaver.client.close();
+      await expect.poll(() => stack.room.pendingClients.has("leaver@example.com")).toBe(false);
+    }), "pendingUserLeft", "leaver@example.com");
 
     await lobbyGuest("http-admit@example.com");
-    expect((await stack.adminPost("pending/http-admit%40example.com/admit")).status).toBe(200);
+    expectSnapshot(await decide(["http-admit@example.com"], httpOk("pending/http-admit%40example.com/admit")));
     await lobbyGuest("http-reject@example.com");
-    expect((await stack.adminPost("pending/http-reject%40example.com/reject")).status).toBe(200);
+    expectSnapshot(await decide(["http-reject@example.com"], httpOk("pending/http-reject%40example.com/reject")));
     await lobbyGuest("http-allow@example.com");
-    expect((await stack.adminPost("access/allow", { userKeys: ["http-allow@example.com"] })).status).toBe(200);
+    expectSnapshot(await decide(["http-allow@example.com"], httpOk("access/allow", { userKeys: ["http-allow@example.com"] })));
     await lobbyGuest("http-block@example.com");
-    expect((await stack.adminPost("access/block", { userKeys: ["http-block@example.com"] })).status).toBe(200);
+    expectSnapshot(await decide(["http-block@example.com"], httpOk("access/block", { userKeys: ["http-block@example.com"] })));
 
     expect(await ask(host, "lockRoom", { locked: false })).toEqual(expect.objectContaining({ success: true }));
     expect(await ask(host, "lockRoom", { locked: true })).toEqual(expect.objectContaining({ success: true }));
+    expect(stack.room.pendingClients.has("still-waiting@example.com")).toBe(true);
 
     await settle(watchers);
     const participantFramesWhileNotHost = participant.frames.length;
-    expect(await ask(host, "promoteHost", { userId: "participant" })).toEqual(expect.objectContaining({ success: true }));
-    await settle(watchers);
-    expect(pendingSnapshots(participant).at(-1)?.json).toContain("still-waiting@example.com");
+    expectSnapshot(await framesFrom(participant, async () => {
+      expect(await ask(host, "promoteHost", { userId: "participant" })).toEqual(expect.objectContaining({ success: true }));
+    }));
 
-    expect(await ask(host, "admin:admitAllPending")).toEqual(expect.objectContaining({ admittedCount: 1 }));
-    await settle(watchers);
+    let promotedFrames: Frame[] = [];
+    const hostFrames = await decide(["still-waiting@example.com"], async () => {
+      promotedFrames = await framesFrom(participant, async () => {
+        expect(await ask(host, "admin:admitAllPending")).toEqual(expect.objectContaining({ admittedCount: 1 }));
+      });
+    });
+    expectSnapshot(hostFrames);
+    expectSnapshot(promotedFrames);
     expect(stillWaiting.frames.some((frame) => frame.event === "joinApproved")).toBe(true);
-    expect(pendingSnapshots(participant).at(-1)?.json).not.toContain("still-waiting@example.com");
 
     await lobbyGuest("reject-all@example.com");
-    expect(await ask(host, "admin:rejectAllPending")).toEqual(expect.objectContaining({ rejectedCount: 1 }));
+    expectSnapshot(await decide(["reject-all@example.com"], async () => {
+      expect(await ask(host, "admin:rejectAllPending")).toEqual(expect.objectContaining({ rejectedCount: 1 }));
+    }));
     await lobbyGuest("http-admit-all@example.com");
-    expect((await stack.adminPost("pending/admit-all")).status).toBe(200);
+    expectSnapshot(await decide(["http-admit-all@example.com"], httpOk("pending/admit-all")));
     await lobbyGuest("http-reject-all@example.com");
-    expect((await stack.adminPost("pending/reject-all")).status).toBe(200);
-    await settle(watchers);
+    expectSnapshot(await decide(["http-reject-all@example.com"], httpOk("pending/reject-all")));
 
-    expect(leaks(host, secrets).length).toBeGreaterThan(0);
-    expect(pendingSnapshots(host).length).toBeGreaterThan(0);
     expect(leaks(bystander, secrets).map((frame) => frame.event)).toEqual([]);
     expect(pendingSnapshots(bystander)).toEqual([]);
     const participantBeforePromotion = { ...participant, frames: participant.frames.slice(0, participantFramesWhileNotHost) };
