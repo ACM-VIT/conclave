@@ -511,6 +511,10 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
   }
 
   retire(itemId: string, heard = false): void {
+    if (this.expiredSlots.has(itemId)) {
+      this.settleUtterance(itemId, false);
+      return;
+    }
     const slot = this.awaitingFinal.indexOf(itemId);
     const newerWaiting = this.awaitingFinal.slice(slot + 1).some((waiting) => !this.expiredSlots.has(waiting));
     const owed = slot >= 0 && heard && newerWaiting;
@@ -534,10 +538,8 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
   }
 
   private forgetExpiredSlots(now: number): void {
-    let over = this.expiredSlots.size - SARVAM_EXPIRED_SLOTS_KEPT;
     for (const [itemId, expiredAt] of this.expiredSlots) {
-      if (over <= 0 && now - expiredAt <= SARVAM_EXPIRED_SLOT_KEPT_MS) continue;
-      over -= 1;
+      if (now - expiredAt <= SARVAM_EXPIRED_SLOT_KEPT_MS) continue;
       this.expiredSlots.delete(itemId);
       this.awaitingFinal = this.awaitingFinal.filter((awaiting) => awaiting !== itemId);
     }
@@ -551,7 +553,10 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
   private acceptUtterance(utterance: AcceptedUtterance): string {
     const itemId = this.nextUtteranceId();
     this.awaitingFinal.push(itemId);
+    const refused = utterance.heard && this.expiredSlots.size >= SARVAM_EXPIRED_SLOTS_KEPT;
+    if (refused) this.expiredSlots.set(itemId, Date.now());
     this.callbacks.onAccepted?.(itemId, utterance);
+    if (refused) void this.callbacks.onItemFailed?.(itemId, "Sarvam owes too many answers to place another line.");
     return itemId;
   }
 

@@ -1260,7 +1260,7 @@ export class TranscriptRoom {
     const sampleCount = pcm.length;
     if (sampleCount <= 0) return;
     const normalizedSpeaker = normalizeSpeaker(speaker, viewer);
-    const arrival = { sequence: this.audioSequence++, order: this.sequence++ };
+    const arrival = { sequence: this.audioSequence++, order: this.sequence++, createdAt: Date.now() };
     if (!this.transcriptionSession) {
       if (this.shouldBufferTranscriptionAudio()) {
         this.transcriptionRecoveryAudio.enqueue({
@@ -1268,7 +1268,6 @@ export class TranscriptRoom {
           audio,
           speaker: normalizedSpeaker,
           sampleCount,
-          createdAt: Date.now(),
           ...arrival,
         });
       }
@@ -1284,7 +1283,7 @@ export class TranscriptRoom {
     audio: string,
     speaker: TranscriptSpeaker,
     sampleCount: number,
-    arrival: { sequence: number; order: number },
+    arrival: { sequence: number; order: number; createdAt: number },
     captureFailedEvent = true,
     reportFailure = true,
   ): boolean {
@@ -1307,7 +1306,6 @@ export class TranscriptRoom {
           audio,
           speaker,
           sampleCount,
-          createdAt: Date.now(),
           ...arrival,
         });
       }
@@ -1328,7 +1326,7 @@ export class TranscriptRoom {
         void this.handleTranscriptionFailure(
           "Transcript audio stream failed.",
           captureFailedEvent
-            ? [{ type: "chunk", audio, speaker, sampleCount, createdAt: now, ...arrival }]
+            ? [{ type: "chunk", audio, speaker, sampleCount, ...arrival }]
             : [],
         );
       }
@@ -1337,7 +1335,8 @@ export class TranscriptRoom {
     this.keepAudio(session.provider, speaker, {
       audio,
       sampleCount,
-      createdAt: now,
+      createdAt: arrival.createdAt,
+      sentAt: now,
       sequence,
       order: arrival.order,
       voice,
@@ -1356,7 +1355,7 @@ export class TranscriptRoom {
     if (owner?.state === "open") {
       owner.audio.push(chunk);
       this.placeByFirstAudio(owner);
-      owner.deadlineAt = Math.max(owner.deadlineAt, chunk.createdAt + TRANSCRIPTION_LINE_DEADLINE_MS);
+      owner.deadlineAt = Math.max(owner.deadlineAt, chunk.sentAt + TRANSCRIPTION_LINE_DEADLINE_MS);
     } else {
       const pending = this.uncommittedAudio.get(key) ?? { speaker, chunks: [] };
       const heardBefore = pending.chunks.some(({ voice }) => voice !== "quiet");
@@ -1445,7 +1444,7 @@ export class TranscriptRoom {
   }
 
   private ownAudioDeadline(line: CaptionLine): number {
-    const lastAudioAt = line.audio.reduce((latest, { createdAt }) => Math.max(latest, createdAt), line.place.startMs);
+    const lastAudioAt = line.audio.reduce((latest, { sentAt }) => Math.max(latest, sentAt), line.place.startMs);
     return lastAudioAt + TRANSCRIPTION_LINE_DEADLINE_MS;
   }
 
@@ -1926,11 +1925,14 @@ export class TranscriptRoom {
   }
 
   private placeByFirstAudio(line: CaptionLine, lost: readonly AudioChunk[] = []): void {
-    const place =
-      this.placeOfAudio(line.audio) ??
-      (lost.some(({ order }) => order === line.place.sequence) ? this.nextPlace(null) : null);
+    const owned = this.placeOfAudio(line.audio);
+    const gaveAwayPlace = line.placedByAudio && lost.some(({ order }) => order === line.place.sequence);
+    let place: LinePlace | null = null;
+    if (!line.placedByAudio || gaveAwayPlace) place = owned ?? (gaveAwayPlace ? this.nextPlace(null) : null);
+    else if (owned && owned.sequence < line.place.sequence) place = owned;
     if (!place || place.sequence === line.place.sequence) return;
     line.place = place;
+    line.placedByAudio = owned !== null && place.sequence === owned.sequence;
     if (isActive(line) && line.text) {
       const now = Date.now();
       this.broadcast({ type: "segment.delta", delta: this.toSegmentDelta(this.lineSegment(line, now), "", now) });
@@ -1946,6 +1948,7 @@ export class TranscriptRoom {
     return this.ledger.add({
       ...init,
       place: this.placeOfAudio(init.audio) ?? this.nextPlace(connection),
+      placedByAudio: init.audio.length > 0,
       epoch: connection?.epoch ?? null,
       deadlineAt:
         init.state === "replaying" || init.state === "pending_ack"
@@ -2256,17 +2259,19 @@ export class TranscriptRoom {
     if (!sarvam) return runs;
     return runs.filter(
       ({ audio }) =>
-        now - audio[audio.length - 1].createdAt <= UNOWNED_AUDIO_KEPT_MS && audio.some(({ voice }) => voice !== "quiet"),
+        now - audio[audio.length - 1].sentAt <= UNOWNED_AUDIO_KEPT_MS && audio.some(({ voice }) => voice !== "quiet"),
     );
   }
 
   private replayOwedLines(connection: ProviderConnection): boolean {
     if (this.audioPaused) return true;
     const owed = this.ledger.active().filter(({ state, epoch }) => state === "replaying" && epoch === null);
+    const sentAt = Date.now();
     try {
       for (const line of owed) {
         line.epoch = connection.epoch;
         if (line.audio.length === 0) continue;
+        for (const chunk of line.audio) chunk.sentAt = sentAt;
         if (connection.session.provider === "openai") {
           const samples = line.audio.reduce((sum, chunk) => sum + chunk.sampleCount, 0);
           for (const chunk of line.audio) connection.session.appendAudio(chunk.audio);
@@ -2533,7 +2538,7 @@ export class TranscriptRoom {
             event.audio,
             event.speaker,
             event.sampleCount,
-            { sequence: event.sequence, order: event.order },
+            { sequence: event.sequence, order: event.order, createdAt: event.createdAt },
             false,
             reportFailure,
           )

@@ -8,6 +8,7 @@ export type AudioChunk = {
   audio: string;
   sampleCount: number;
   createdAt: number;
+  sentAt: number;
   sequence: number;
   order: number;
   voice: VoiceReading;
@@ -20,6 +21,7 @@ export type CaptionLine = {
   readonly id: string;
   state: CaptionLineState;
   place: LinePlace;
+  placedByAudio: boolean;
   speaker: TranscriptSpeaker;
   heard: boolean;
   text: string;
