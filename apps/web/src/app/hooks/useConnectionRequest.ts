@@ -7,9 +7,16 @@ type Pending = { key: string; connection: unknown };
 export function useConnectionRequest(connection: unknown) {
   const [pending, setPending] = useState<Pending | null>(null);
   const connectionRef = useRef(connection);
+  const mountedRef = useRef(true);
   useEffect(() => {
     connectionRef.current = connection;
   }, [connection]);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const run = useCallback(
     async <R,>(key: string | null, task: () => Promise<R>): Promise<R | null> => {
@@ -18,7 +25,7 @@ export function useConnectionRequest(connection: unknown) {
       if (mine) setPending(mine);
       try {
         const result = await task();
-        return connectionRef.current === sentOn ? result : null;
+        return mountedRef.current && connectionRef.current === sentOn ? result : null;
       } finally {
         if (mine) setPending((current) => (current === mine ? null : current));
       }

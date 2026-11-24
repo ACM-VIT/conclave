@@ -285,3 +285,23 @@ it("keeps the host's composer open with its draft when a poll launched on the ol
   expect(byTestId("poll-composer")).not.toBeNull();
   expect((byTestId("poll-question-input") as HTMLInputElement).value).toBe("Lunch?");
 });
+
+it("keeps a new composer and its draft when a poll launched from a cancelled one lands later", async () => {
+  const oldAnswer = later<{ ok: false; error: string } | { ok: true }>();
+  const onCreate = vi.fn(() => oldAnswer.promise);
+  await render({ isHost: true, connection: "first", onCreate });
+  await click(byTestId("poll-start"));
+  await type(byTestId("poll-question-input") as HTMLInputElement, "Lunch?");
+  const [first, second] = container.querySelectorAll<HTMLInputElement>('[data-testid="poll-option-input"]');
+  await type(first, "Tacos");
+  await type(second, "Ramen");
+  await click(byTestId("poll-launch"));
+  await click(button("Cancel"));
+  await click(byTestId("poll-start"));
+  await type(byTestId("poll-question-input") as HTMLInputElement, "Dinner?");
+  await act(async () => oldAnswer.settle({ ok: true }));
+
+  expect(byTestId("poll-composer")).not.toBeNull();
+  expect((byTestId("poll-question-input") as HTMLInputElement).value).toBe("Dinner?");
+});
+
