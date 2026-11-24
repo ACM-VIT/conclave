@@ -64,6 +64,10 @@
 	<string>Conclave uses the local network to connect your meeting’s audio and video.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Conclave saves images to your photo library only when you choose to save them.</string>
+	<key>POSTHOG_HOST</key>
+	<string>$(POSTHOG_HOST)</string>
+	<key>POSTHOG_PROJECT_KEY</key>
+	<string>$(POSTHOG_PROJECT_KEY)</string>
 	<key>SFU_CLIENT_ID</key>
 	<string>conclave</string>
 	<key>SFU_JOIN_URL</key>
