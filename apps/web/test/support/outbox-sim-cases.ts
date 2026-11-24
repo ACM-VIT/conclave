@@ -2,7 +2,7 @@ import type { Scenario } from "./outbox-sim";
 
 export type ThreadCase = { name: string; thread: string; head: string; seed: number; scenario: Scenario };
 
-const quiet = { refuseRate: 0, beaconRefuseRate: 1, beaconLossRate: 0, maxTabs: 3 };
+const quiet = { refuseRate: 0, beaconRefuseRate: 1, beaconLossRate: 0, beaconLimitRate: 0, maxTabs: 3 };
 
 export const THREAD_CASES: ThreadCase[] = [
   {

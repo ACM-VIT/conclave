@@ -460,12 +460,11 @@ export function startTelemetry(): void {
     clearTimer: (timer) => window.clearTimeout(timer as number),
     post: (body, keepalive, signal) => ingestRequest(body, keepalive, signal).then(replyOf),
     beacon: (body) => {
-      if (!unloadRequests) return false;
+      if (!unloadRequests) return null;
       try {
-        ingestRequest(body, true).catch(() => {});
-        return true;
+        return ingestRequest(body, true).then(replyOf, () => null);
       } catch {
-        return false;
+        return null;
       }
     },
     shape: rebuilt(posthogKey),

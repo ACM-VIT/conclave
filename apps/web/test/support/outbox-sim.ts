@@ -68,10 +68,11 @@ export type Profile = {
   refuseBodyRate: number;
   beaconRefuseRate: number;
   beaconLossRate: number;
+  beaconLimitRate: number;
   activeMs: number;
 };
 
-const profileOf = (rng: () => number): Profile => ({
+const profileOf = (rng: () => number): Omit<Profile, "beaconLimitRate"> => ({
   maxTabs: 1 + Math.floor(rng() * 3),
   refuseRate: rng() < 0.4 ? 0 : rng() * 0.5,
   slowRate: rng() * 0.3,
@@ -99,10 +100,12 @@ export async function simulate(
   scenario: Scenario = {},
 ): Promise<SimResult> {
   const rng = rngOf(seed);
+  const beaconRng = rngOf(seed ^ 0x5bd1e995);
   const between = (low: number, high: number) => low + rng() * (high - low);
   const scriptedEnd = scenario.actions ? Math.max(...scenario.actions.map((action) => action.at)) + 1 : null;
   const profile: Profile = {
     ...profileOf(rng),
+    beaconLimitRate: beaconRng() * 0.3,
     ...(scriptedEnd === null ? {} : { activeMs: scriptedEnd }),
     ...scenario.profile,
   };
@@ -318,14 +321,29 @@ export async function simulate(
     });
   };
 
-  const beaconFor = () => (body: string): boolean => {
+  const beaconFor = (tab: Tab) => (body: string): Promise<Reply | null> | null => {
     const uuids = (JSON.parse(body) as { batch: Array<{ uuid: string }> }).batch.map((event) => event.uuid);
-    checkSend(keyOf(uuids), "beacon");
-    if (rng() < profile.beaconRefuseRate) return false;
-    beaconedAt.set(keyOf(uuids), clock);
+    const key = keyOf(uuids);
+    checkSend(key, "beacon");
+    if (rng() < profile.beaconRefuseRate) return null;
+    beaconedAt.set(key, clock);
     beacons += 1;
+    if (beaconRng() < profile.beaconLimitRate) {
+      const status = beaconRng() < 0.7 ? 429 : 503;
+      const retryAfter = String(1 + Math.floor(beaconRng() * 120));
+      const answeredAt = clock + 20 + beaconRng() * 780;
+      return new Promise<Reply | null>((resolve) => {
+        schedule(answeredAt, tab, "reply", () => {
+          if (!tab.open) return;
+          retryAfters += 1;
+          waitUntil.set(key, Math.max(waitUntil.get(key) ?? 0, clock + Math.min(Number(retryAfter) * 1000, MAX_WAIT_MS)));
+          note(`tab${tab.id} beacon answered ${status} ra=${retryAfter} for ${key.slice(0, 40)}`);
+          resolve({ status, retryAfter });
+        });
+      });
+    }
     if (rng() >= profile.beaconLossRate) for (const uuid of uuids) delivered.add(uuid);
-    return true;
+    return Promise.resolve(null);
   };
 
   const onStale = (dropped: unknown) => {
@@ -352,7 +370,7 @@ export async function simulate(
         if (job) (job as Job).cancelled = true;
       },
       post: network(tab),
-      beacon: beaconFor(),
+      beacon: beaconFor(tab),
       newId: () => `sim-${seed}-${++ids}`,
       store: outboxModule.createBatchStore(() => storageFor(tab)),
       lock: (run: () => Promise<void>) => {

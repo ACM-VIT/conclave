@@ -43,6 +43,7 @@ let manifestInits: RequestInit[] = [];
 let sendBeaconCalls = 0;
 let refuseBeacons = false;
 let ingestAnswers: Array<number | { status: number; body: string }> = [];
+let keepaliveAnswers: Array<{ status: number; retryAfter: string }> = [];
 
 // While set, /ingest answers only once the test releases it.
 let ingestHeld: Promise<void> | null = null;
@@ -69,6 +70,7 @@ beforeEach(async () => {
   sendBeaconCalls = 0;
   refuseBeacons = false;
   ingestAnswers = [];
+  keepaliveAnswers = [];
   ingestHeld = null;
   localStorage.clear();
   manifest = "pending";
@@ -94,6 +96,8 @@ beforeEach(async () => {
         const scripted = via === "fetch" ? ingestAnswers.shift() : undefined;
         if (typeof scripted === "number") answer = new Response("{}", { status: scripted });
         else if (scripted) answer = new Response(scripted.body, { status: scripted.status, headers: { "content-type": "application/json" } });
+        const unloadAnswer = via === "beacon" ? keepaliveAnswers.shift() : undefined;
+        if (unloadAnswer) answer = new Response(null, { status: unloadAnswer.status, headers: { "retry-after": unloadAnswer.retryAfter } });
         if (via === "beacon" && refuseBeacons) throw new TypeError("keepalive request refused");
         ingestInits.push(init);
         sent.push({ via, url, body: init.body, type: new Headers(init.headers).get("content-type") ?? "" });
@@ -562,6 +566,26 @@ describe("events /ingest refuses", () => {
       fetches().map(async (item) => (JSON.parse(await new Response(item.body).text()) as { batch: Array<{ event: string }> }).batch.map((event) => event.event)),
     );
     expect(names).toEqual([["meet_join_attempt", "$exception"], ["$exception"]]);
+  });
+});
+
+describe("an answer to the send as the page goes away", () => {
+  it("puts the Retry-After a keepalive send is answered with on its saved batch", async () => {
+    manifest = "missing";
+    keepaliveAnswers = [{ status: 429, retryAfter: "60" }];
+    const { telemetry, startTelemetry } = await import("../src/app/lib/telemetry");
+    startTelemetry();
+    await loaded();
+    telemetry.capture("meet_join_attempt", { joinMode: "meeting", isAdmin: false });
+    const hiddenAt = Date.now();
+    hide();
+    expect(beacons()).toHaveLength(1);
+
+    await vi.waitFor(() => {
+      const saved = savedKeys().map((key) => JSON.parse(localStorage.getItem(key) ?? "null") as { notBefore: number });
+      expect(saved).toHaveLength(1);
+      expect(saved[0].notBefore).toBeGreaterThanOrEqual(hiddenAt + 60_000);
+    });
   });
 });
 

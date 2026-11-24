@@ -88,8 +88,13 @@ one owner at a time:
   all. A request in flight is saved too, with its attempt id and a lease. A
   saved batch keeps its place in the retry schedule (`attempt`, `nextTry`,
   `notBefore`), and a beaconed one is sent again 30 s later to confirm it,
-  since a beacon is never answered; when storage refuses a beaconed batch,
-  its retry timer moves to that time too.
+  since the page may not live to read its answer; when storage refuses a
+  beaconed batch, its retry timer moves to that time too. When the page does
+  read an answer worth retrying, its `Retry-After` moves the saved batch's due
+  time (`notBefore`) and the events it names as refused are dropped, while
+  the stored copy is still that beacon's; if storage refuses that write, the
+  tab takes the batch back into memory with the new due time and removes the
+  stale stored copy.
 - **Replayed.** A saved batch is sent only by a replay pass, which runs under
   a Web Locks lock (`conclave:telemetry:replay`) at its due time, when a tab
   loads or comes back into view, and when another tab changes a saved batch

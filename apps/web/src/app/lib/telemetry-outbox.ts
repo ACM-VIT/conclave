@@ -60,7 +60,7 @@ export type OutboxDeps = {
   setTimer: (run: () => void, ms: number) => unknown;
   clearTimer: (timer: unknown) => void;
   post: (body: string, keepalive: boolean, signal?: AbortSignal) => Promise<Reply>;
-  beacon: (body: string) => boolean;
+  beacon: (body: string) => Promise<Reply | null> | null;
   newId: () => string;
   store: BatchStore;
   lock: (replay: () => Promise<void>) => void;
@@ -90,6 +90,11 @@ type Queued = { event: OutboxEvent; bytes: number };
 export type Reply = { status: number; retryAfter: string | null; rejected?: readonly number[] };
 
 const byteLength = (text: string): number => new TextEncoder().encode(text).byteLength;
+
+const withoutRefused = (kept: OutboxEvent[], sent: readonly OutboxEvent[], reply: Reply | null): OutboxEvent[] => {
+  const refused = new Set((reply?.rejected ?? []).flatMap((index) => (sent[index] ? [sent[index].uuid] : [])));
+  return refused.size === 0 ? kept : kept.filter((item) => !refused.has(item.uuid));
+};
 
 const dueAt = (batch: { notBefore: number; nextTry: number; leaseUntil: number }): number =>
   Math.max(batch.notBefore, batch.nextTry, batch.leaseUntil);
@@ -349,8 +354,7 @@ export function createOutbox(deps: OutboxDeps) {
         finish(batch);
         return;
       }
-      const refused = new Set((reply?.rejected ?? []).flatMap((index) => (events[index] ? [events[index].uuid] : [])));
-      batch.events = batch.events.filter((item) => !refused.has(item.uuid));
+      batch.events = withoutRefused(batch.events, events, reply);
       if (batch.events.length === 0) finish(batch);
       else retry(batch, answer?.afterMs ?? null);
     };
@@ -359,6 +363,31 @@ export function createOutbox(deps: OutboxDeps) {
       settle(null);
     }, SEND_DEADLINE_MS);
     deps.post(body, keepalive, cancel.signal).then(settle, () => settle(null));
+  };
+
+  const beaconAnswered = (batch: Batch, events: OutboxEvent[], reply: Reply | null): void => {
+    if (!reply) return;
+    const answer = answerOf(reply.status, reply.retryAfter, deps.now());
+    if (answer.outcome !== "retry") return;
+    const until = answer.afterMs === null ? 0 : deps.now() + answer.afterMs;
+    if (batch.saved) {
+      const current = deps.store.get(batch.id);
+      if (!current || current.sendId !== batch.sendId) return;
+      const answered = fromStorage(current);
+      answered.notBefore = Math.max(answered.notBefore, until);
+      answered.events = withoutRefused(answered.events, events, reply);
+      if (answered.events.length === 0) finish(answered);
+      else if (!toStorage(answered)) {
+        leaveStorage(answered);
+        holdInMemory(answered);
+      }
+      return;
+    }
+    if (live.get(batch.id) !== batch || batch.inFlight !== null) return;
+    batch.notBefore = Math.max(batch.notBefore, until);
+    batch.events = withoutRefused(batch.events, events, reply);
+    if (batch.events.length === 0) finish(batch);
+    else holdInMemory(batch);
   };
 
   const replayPass = (): void => {
@@ -453,11 +482,13 @@ export function createOutbox(deps: OutboxDeps) {
         }
         const body = bodyOf(events);
         const bytes = byteLength(body);
-        if (dueAt(batch) <= deps.now() && !tooOld(batch.oldestAt) && bytes <= budget && deps.beacon(body)) {
+        const answer = dueAt(batch) <= deps.now() && !tooOld(batch.oldestAt) && bytes <= budget ? deps.beacon(body) : null;
+        if (answer) {
           budget -= bytes;
           beacons.push({ bytes, at: deps.now() });
           batch.sent = true;
           batch.nextTry = Math.max(batch.nextTry, deps.now() + BEACON_CONFIRM_MS);
+          answer.then((reply) => beaconAnswered(batch, events, reply), () => {});
         }
         if (!toStorage(batch)) holdInMemory(batch);
       }

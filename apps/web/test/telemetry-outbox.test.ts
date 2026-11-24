@@ -87,6 +87,7 @@ const harness = ({
   clock = { now: at },
   ignoreAbort = false,
   shape = undefined as ((event: OutboxEvent) => OutboxEvent | null) | undefined,
+  beaconReplies = [] as Reply[],
 } = {}) => {
   const timers: Array<{ at: number; fn: () => void; id: number }> = [];
   let ids = 0;
@@ -127,9 +128,9 @@ const harness = ({
       });
     },
     beacon: (body) => {
-      if (beaconRefuses) return false;
+      if (beaconRefuses) return null;
       beacons.push(body);
-      return true;
+      return Promise.resolve(beaconReplies.shift() ?? null);
     },
     newId: () => `0196f0a1-0000-7000-9000-${String(++batchIds).padStart(12, "0")}`,
     store,
@@ -1167,5 +1168,66 @@ describe("one event's flaw stays with that event", () => {
     expect(h.posts).toHaveLength(1);
     expect(h.beacons).toEqual([]);
     expect(store.list()).toEqual([]);
+  });
+});
+
+describe("an answer to the send as the page goes away", () => {
+  it("puts the Retry-After it carries on the saved batch's due time, and nothing goes before it", async () => {
+    const store = memoryStore();
+    const h = harness({ store, beaconReplies: [{ status: 429, retryAfter: "60" }] });
+    h.outbox.add(event());
+    h.outbox.flushForUnload();
+    await settle();
+
+    expect(h.beacons).toHaveLength(1);
+    expect(store.list().map((batch) => batch.notBefore)).toEqual([START + 60_000]);
+    await h.advance(59_000);
+    h.outbox.replaySaved();
+    await h.advance(0);
+    expect(h.posts).toEqual([]);
+    await h.advance(1000);
+    expect(h.posts.map((post) => post.at)).toEqual([START + 60_000]);
+  });
+
+  it("holds a batch storage refused in memory until that Retry-After", async () => {
+    const h = harness({ store: createBatchStore(fullStorage), beaconReplies: [{ status: 503, retryAfter: "45" }] });
+    h.outbox.add(event());
+    h.outbox.flushForUnload();
+    await settle();
+
+    await h.advance(44_000);
+    expect(h.posts).toEqual([]);
+    await h.advance(1000);
+    expect(h.posts.map((post) => post.at)).toEqual([START + 45_000]);
+  });
+
+  it("keeps that Retry-After in memory when storage refuses to save it, and takes the stale copy out of storage", async () => {
+    const store = memoryStore();
+    let saves = 0;
+    const flaky = { ...store, save: (batch: StoredBatch) => (saves++ === 0 ? store.save(batch) : false) };
+    const h = harness({ store: flaky, beaconReplies: [{ status: 429, retryAfter: "60" }] });
+    h.outbox.add(event());
+    h.outbox.flushForUnload();
+    await settle();
+
+    expect(store.list()).toEqual([]);
+    await h.advance(59_000);
+    h.outbox.replaySaved();
+    await h.advance(0);
+    expect(h.posts).toEqual([]);
+    await h.advance(1000);
+    expect(h.posts.map((post) => post.at)).toEqual([START + 60_000]);
+  });
+
+  it("drops the events that answer names as refused from the saved batch", async () => {
+    const store = memoryStore();
+    const h = harness({ store, beaconReplies: [{ status: 503, retryAfter: null, rejected: [0] }] });
+    const [refused, kept] = [event(), event()];
+    h.outbox.add(refused);
+    h.outbox.add(kept);
+    h.outbox.flushForUnload();
+    await settle();
+
+    expect(store.list().map((batch) => batch.events.map((item) => item.uuid))).toEqual([[kept.uuid]]);
   });
 });
