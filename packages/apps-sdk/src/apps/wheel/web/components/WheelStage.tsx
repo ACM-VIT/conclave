@@ -186,6 +186,7 @@ export function WheelStage({
   const settledSpinIdsRef = useRef<Set<string>>(new Set());
   const flapperRef = useRef({ angle: 0, velocity: 0 });
   const segmentCountRef = useRef(0);
+  const hasNumbersRef = useRef(false);
   const restingRef = useRef(false);
   const speedRef = useRef(0);
   const flipKeyRef = useRef("");
@@ -252,12 +253,14 @@ export function WheelStage({
         `rotate(${flapperRef.current.angle} 0 ${-POINTER_BASE})`
       );
     }
-    const numbers = labelGroupRef.current?.querySelectorAll("[data-wheel-number]") ?? [];
-    for (const number of numbers) {
-      number.setAttribute(
-        "transform",
-        `rotate(${uprightAngle(rotationRef.current)} ${number.getAttribute("x")} ${number.getAttribute("y")})`
-      );
+    const labels = hasNumbersRef.current ? labelGroupRef.current : null;
+    if (labels) {
+      for (const number of labels.querySelectorAll("[data-wheel-number]")) {
+        number.setAttribute(
+          "transform",
+          `rotate(${uprightAngle(rotationRef.current)} ${number.getAttribute("x")} ${number.getAttribute("y")})`
+        );
+      }
     }
   }, []);
 
@@ -438,6 +441,7 @@ export function WheelStage({
       measure
     );
   }, [count, displayedEntries, measure, wheelPx]);
+  hasNumbersRef.current = Boolean(fitted?.labels.some((label) => label?.numbered));
 
   const segments = useMemo(() => {
     if (count === 0) {
