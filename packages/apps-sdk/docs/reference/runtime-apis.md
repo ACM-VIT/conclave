@@ -76,15 +76,16 @@ Every change an app makes reaches the server through one paced upload path:
   merged in. Until then `isRebuilding` is true and the meeting shows the app
   read-only, so a late joiner cannot draw over a saved board it has not loaded
   yet. Native embeds refuse edits until their first snapshot the same way.
-- Changes made between uploads wait and are merged into the next one. Nothing
-  is dropped, and no merged upload grows past `APP_DOCUMENT_UPDATE_MAX_BYTES`.
-  Changes are merged only while the saved copy of the document, with everything
-  queued, stays at least `APP_DOCUMENT_UPDATE_MAX_BYTES` under
-  `APP_DOCUMENT_MAX_BYTES`. Closer to the limit each change goes alone, so a
-  change that fits is never refused together with one that does not. The saved
-  copy is a garbage collected mirror of the live document, so undo history kept
-  on the live copy does not count, and it is measured again at most twice a
-  second.
+- Changes made between uploads wait and leave together in the next one, at
+  most `APP_DOCUMENT_UPLOAD_LIST_MAX` (64) changes and
+  `APP_DOCUMENT_UPDATE_MAX_BYTES` in all. Nothing is dropped. To an SFU whose
+  sync reply says `takesUpdateLists: true` they go as a list of the changes
+  themselves (`updates: [...]`), never merged: the SFU applies them one at a
+  time in order, so each change is kept or refused on its own and a change that
+  fits is never refused together with one that does not, whatever the document
+  size. No size estimate is involved. An older SFU gets them merged into one
+  update, as before, and the native embed merges too, because the native bridge
+  carries one update at a time.
 - While the socket is down, changes wait and leave as one upload when it
   connects.
 - Every change is all or nothing on the server. An update bigger than that

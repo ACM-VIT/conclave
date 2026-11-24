@@ -118,10 +118,14 @@ Client -> server (`apps:yjs:update`):
 - an update that changes nothing in the saved document (a resend of something
   already saved) is accepted but neither stored again nor relayed, so build 63
   reloads at most once for a large change
-- the provider merges queued changes into one upload only while its saved copy
-  of the document, with all of them, stays a full update (256 KiB) under the
-  1 MiB document limit; nearer the limit it sends them one at a time, so each
-  change is kept or refused on its own
+- optional `updates: Uint8Array[]` in place of `update` carries up to 64 whole
+  changes, 256 KiB in all, for one rate-limit token; the SFU applies each one in
+  order exactly as if it had arrived alone (relayed alone when it lands, refused
+  alone when it does not, and a change from the same copy after a refused one is
+  refused with it because its clock follows the refused change); a malformed
+  list is refused as `invalid` and an oversized one as `too-large`, with nothing
+  applied; a list drops a staged change like any whole update
+- clients send lists only after a sync reply with `takesUpdateLists: true`
 
 Server -> peers, for a change over 256 KiB:
 
