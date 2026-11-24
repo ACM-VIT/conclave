@@ -28,7 +28,11 @@ Use this page when debugging:
 
 - Emitted by provider via `refreshState()`.
 - Server callback returns `AppsState`.
-- Used on initial mount and reconnect paths.
+- A socket that is not in a room yet (for example right after an in-place
+  reconnect, before it rejoins) gets `{ activeAppId: null, locked: false,
+  notInRoom: true }`, never a plain "no app open". The provider ignores it.
+- Used on initial mount. After an in-place reconnect the provider waits for the
+  `apps:state` the SFU pushes on join instead, holding every upload until then.
 
 ### `apps:open`
 
@@ -85,6 +89,10 @@ Server behavior:
 4. apply returned awareness snapshot (if present)
 5. compare server `stateVector` and push missing local changes using `apps:yjs:update`
 
+Until the first sync reply for an app has been applied, the provider reports
+`isRebuilding: true` and hosts render the app read-only, so no local edit can be
+made against a copy that does not have the saved document in it yet.
+
 Server rejects sync requests if:
 
 - client is not in a room
@@ -107,6 +115,13 @@ Client -> server (`apps:yjs:update`):
   once, so the change is kept whole or refused whole
 - clients send parts only after a sync reply with `stagesParts: true`
 - a part the SFU cannot place is refused as `interrupted`, a passing reason
+- an update that changes nothing in the saved document (a resend of something
+  already saved) is accepted but neither stored again nor relayed, so build 63
+  reloads at most once for a large change
+- the provider merges queued changes into one upload only while its saved copy
+  of the document, with all of them, stays a full update (256 KiB) under the
+  1 MiB document limit; nearer the limit it sends them one at a time, so each
+  change is kept or refused on its own
 
 Server -> peers, for a change over 256 KiB:
 

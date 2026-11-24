@@ -72,9 +72,20 @@ Every change an app makes reaches the server through one paced upload path:
   two thirds of the rate the server refills its per-socket budget at. Both read
   `APP_DOCUMENT_UPDATE_BUDGET` from `@conclave/apps-sdk/limits`, so a client
   that only uses this path is never refused for its rate.
+- Nothing local becomes an upload before the app's first sync reply has been
+  merged in. Until then `isRebuilding` is true and the meeting shows the app
+  read-only, so a late joiner cannot draw over a saved board it has not loaded
+  yet. Native embeds refuse edits until their first snapshot the same way.
 - Changes made between uploads wait and are merged into the next one. Nothing
   is dropped, and no merged upload grows past `APP_DOCUMENT_UPDATE_MAX_BYTES`.
-  While the socket is down, changes wait and leave as one upload when it
+  Changes are merged only while the saved copy of the document, with everything
+  queued, stays at least `APP_DOCUMENT_UPDATE_MAX_BYTES` under
+  `APP_DOCUMENT_MAX_BYTES`. Closer to the limit each change goes alone, so a
+  change that fits is never refused together with one that does not. The saved
+  copy is a garbage collected mirror of the live document, so undo history kept
+  on the live copy does not count, and it is measured again at most twice a
+  second.
+- While the socket is down, changes wait and leave as one upload when it
   connects.
 - Every change is all or nothing on the server. An update bigger than that
   cap, such as one large paste or a resend after many edits piled up during a
@@ -85,8 +96,12 @@ Every change an app makes reaches the server through one paced upload path:
   limit for the whole change, so it keeps all of it or none of it.
 - A staging refusal (`interrupted`: a part the SFU cannot place) is never final.
   The provider resends the whole change from a fresh sync and keeps its copy.
-  When the same socket reconnects, the provider asks what is open and, if the
-  same app still is, runs that fresh sync before it sends anything else.
+  When the same socket reconnects, the provider holds every upload until the
+  `apps:state` the SFU pushes once the socket has rejoined its meeting. If the
+  same app is still open, it runs that fresh sync before it sends anything else,
+  and the live copy with its unsent edits is kept. An `apps:getState` answer
+  that says `notInRoom` is ignored, so an answer from before the rejoin never
+  closes the app or drops local work.
 - Receivers take changes up to the document limit. The provider and native
   clients say so with `wholeChanges: true` in their sync request, and any web
   client takes them anyway. A native client that never said so (build 63) gets
