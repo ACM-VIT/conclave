@@ -169,6 +169,58 @@ const gate = () => {
   return { open, opened };
 };
 
+class Crash extends Error {}
+
+const crashingAt = (inner: ControlPlaneStore, at: number, after: boolean): ControlPlaneStore => {
+  let commits = 0;
+  return {
+    mode: inner.mode,
+    read: (query) => inner.read(query),
+    close: () => inner.close(),
+    commit: async (command) => {
+      commits += 1;
+      if (commits === at && !after) throw new Crash(`crashed before import commit ${at}`);
+      const result = await inner.commit(command);
+      if (commits === at && after) throw new Crash(`crashed after import commit ${at}`);
+      return result;
+    },
+  };
+};
+
+const legacyRedisFor = async (mode: OldMode) => {
+  const client = mode === "redis" ? createClient({ url: redis!.url }) : null;
+  if (client) await client.connect();
+  return {
+    option: client ? { client: client as unknown as RedisPersistenceClient, prefix: String(process.env.SFU_PERSISTENCE_REDIS_KEY_PREFIX) } : undefined,
+    quit: async () => {
+      await client?.quit().catch(() => {});
+    },
+  };
+};
+
+const importThatCrashes = async (
+  mode: OldMode,
+  at: number,
+  after: boolean,
+  redisOption?: { client: RedisPersistenceClient; prefix: string },
+): Promise<boolean> => {
+  const inner = await open(false);
+  try {
+    await runLegacyImport(crashingAt(inner, at, after), {
+      mode,
+      paths: resolveControlPlaneConfig().legacy,
+      redis: redisOption,
+      pollMs: 5,
+    });
+    return false;
+  } catch (error) {
+    if (error instanceof Crash) return true;
+    throw error;
+  } finally {
+    await shut(inner);
+  }
+};
+
 describe.each(modes)("Greptile's import cases on a %s store", (mode) => {
   beforeEach(() => useMode(mode));
 
@@ -213,6 +265,45 @@ describe.each(modes)("Greptile's import cases on a %s store", (mode) => {
     const second = await open();
     expect((await second.read(meetingById("late")))?.title).toBe("Made between the copies");
     expect(leftCopies()).toEqual([]);
+  });
+
+  it("end an import that crashed at any commit, before or after it landed, with each copy applied once", async () => {
+    const legacy = await legacyRedisFor(mode);
+    let crashes = 0;
+    try {
+      for (const after of [false, true]) {
+        for (let at = 1; ; at += 1) {
+          usePaths(join(dir, `crash-${after ? "after" : "before"}-${at}`));
+          const state: ContainerState = {
+            meetings: new Map([
+              ["kept", { title: "Kept", stamp: 100 }],
+              ["gone", { title: "Deleted between the copies", stamp: 100 }],
+            ]),
+            calendars: new Map(),
+          };
+          writeSnapshot("sfu-a", "sfu-deploy-1", state);
+          state.meetings.set("late", { title: "Made between the copies", stamp: 200 });
+          state.meetings.delete("gone");
+          writeSnapshot("sfu-a", "sfu-deploy-1", state);
+          const crashed = await importThatCrashes(mode, at, after, legacy.option);
+          const label = `${crashed ? "crashed" : "finished"} ${after ? "after" : "before"} commit ${at}`;
+          for (const replay of ["", ", then a replay of both copies"]) {
+            if (replay) expect(unadopt(), label).toHaveLength(2);
+            const store = await open();
+            expect((await store.read(meetingById("late")))?.title, label + replay).toBe("Made between the copies");
+            expect((await store.read(meetingById("kept")))?.title, label + replay).toBe("Kept");
+            expect(await store.read(meetingById("gone")), label + replay).toBeNull();
+            expect(leftCopies(), label + replay).toEqual([]);
+            await shut(store);
+          }
+          if (!crashed) break;
+          crashes += 1;
+        }
+      }
+    } finally {
+      await legacy.quit();
+    }
+    expect(crashes).toBeGreaterThanOrEqual(6);
   });
 
   it("keep every connection a host disconnected deleted, not only the last", async () => {
@@ -502,6 +593,35 @@ const runSequence = async (mode: OldMode, seed: number) => {
     expect(conflictsLogged().sort(), `${label}: conflicts after ${trace.join(", ")}`).toEqual(conflicts.sort());
   };
 
+  const settleLoosely = (label: string) => {
+    const expected = new Set(conflicts);
+    for (const logged of conflictsLogged()) {
+      expect(expected.has(logged), `${label}: logged ${logged}, which the merged history has no conflict for, after ${trace.join(", ")}`).toBe(true);
+    }
+  };
+
+  const crashedRestart = async (step: number) => {
+    const index = Math.floor(random() * Math.max(serving.length, 1));
+    if (serving[index]) {
+      await shut(serving[index]);
+      serving.splice(index, 1);
+    }
+    const at = 1 + Math.floor(random() * 10);
+    const after = random() < 0.5;
+    warn.mockClear();
+    conflicts = [];
+    const snapshots = claimAll();
+    const primaryView = new Map(primary);
+    const crashed = await importThatCrashes(mode, at, after, redisOption);
+    trace.push(crashed ? `an SFU crashed ${after ? "after" : "before"} import commit ${at}, and restarts` : "an SFU restarts");
+    const next = await open();
+    expectImport(primaryView, snapshots);
+    serving.push(next);
+    await check(`seed ${seed} step ${step}`);
+    if (crashed) settleLoosely(`seed ${seed} step ${step}`);
+    else settle(`seed ${seed} step ${step}`);
+  };
+
   const restartOne = async (step: number) => {
     const index = Math.floor(random() * Math.max(serving.length, 1));
     if (serving[index]) {
@@ -570,7 +690,9 @@ const runSequence = async (mode: OldMode, seed: number) => {
         if (serving.length > 0) continue;
       }
       if (serving.length === 0 || roll < 0.32) {
-        if (mode !== "json" && serving.length > 0 && random() < 0.4) await concurrentStarts(step);
+        const how = random();
+        if (mode !== "json" && serving.length > 0 && how < 0.35) await concurrentStarts(step);
+        else if (how < 0.65) await crashedRestart(step);
         else await restartOne(step);
         continue;
       }
