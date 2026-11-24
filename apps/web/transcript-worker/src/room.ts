@@ -1290,6 +1290,7 @@ export class TranscriptRoom {
       return false;
     }
     const now = Date.now();
+    const sequence = this.audioSequence++;
     const key = speakerKey(speaker);
     const voice = this.voiceCheckFor(key).push(decodePcm16Base64(audio), now);
     if (session.provider === "sarvam") {
@@ -1298,7 +1299,7 @@ export class TranscriptRoom {
       }
     }
     try {
-      session.appendAudio(audio, speaker, { voice, turn: this.audioTurn, at: now });
+      session.appendAudio(audio, speaker, { voice, turn: this.audioTurn, at: now, sequence });
     } catch {
       if (reportFailure) {
         void this.handleTranscriptionFailure(
@@ -1314,7 +1315,7 @@ export class TranscriptRoom {
       audio,
       sampleCount,
       createdAt: now,
-      sequence: this.audioSequence++,
+      sequence,
       voice,
       turn: this.audioTurn,
     });
@@ -1335,7 +1336,13 @@ export class TranscriptRoom {
       const pending = this.uncommittedAudio.get(key) ?? { speaker, chunks: [] };
       pending.chunks.push(chunk);
       if (provider === "sarvam") {
-        pending.chunks = pending.chunks.filter(({ createdAt }) => chunk.createdAt - createdAt <= UNOWNED_AUDIO_KEPT_MS);
+        const lastHeardInTurn = new Map<number, number>();
+        for (const held of pending.chunks) {
+          lastHeardInTurn.set(held.turn, Math.max(lastHeardInTurn.get(held.turn) ?? 0, held.createdAt));
+        }
+        pending.chunks = pending.chunks.filter(
+          (held) => chunk.createdAt - (lastHeardInTurn.get(held.turn) ?? held.createdAt) <= UNOWNED_AUDIO_KEPT_MS,
+        );
       }
       this.uncommittedAudio.set(key, pending);
     }
@@ -1378,15 +1385,15 @@ export class TranscriptRoom {
 
   private adoptAudio(
     speaker: TranscriptSpeaker,
-    since: number,
+    fromSequence: number,
     turn: number | undefined,
-    until = Number.POSITIVE_INFINITY,
+    untilSequence = Number.POSITIVE_INFINITY,
   ): AudioChunk[] {
     const key = speakerKey(speaker);
     const pending = this.uncommittedAudio.get(key);
     if (!pending || turn === undefined) return [];
     const adopted = pending.chunks.filter(
-      (chunk) => chunk.createdAt >= since && chunk.createdAt < until && chunk.turn === turn,
+      (chunk) => chunk.sequence >= fromSequence && chunk.sequence < untilSequence && chunk.turn === turn,
     );
     pending.chunks = pending.chunks.filter((chunk) => !adopted.includes(chunk));
     if (pending.chunks.length === 0) this.uncommittedAudio.delete(key);
@@ -1395,14 +1402,14 @@ export class TranscriptRoom {
 
   private takeFromSpeakingLine(
     speaker: TranscriptSpeaker,
-    since: number,
+    fromSequence: number,
     turn: number | undefined,
-    until = Number.POSITIVE_INFINITY,
+    untilSequence = Number.POSITIVE_INFINITY,
   ): AudioChunk[] {
     const older = this.ledger.get(this.speakingLine.get(speakerKey(speaker)) ?? "");
     if (!older || turn === undefined) return [];
     const taken = older.audio.filter(
-      (chunk) => chunk.createdAt >= since && chunk.createdAt < until && chunk.turn === turn,
+      (chunk) => chunk.sequence >= fromSequence && chunk.sequence < untilSequence && chunk.turn === turn,
     );
     older.audio = older.audio.filter((chunk) => !taken.includes(chunk));
     if (taken.length > 0 && isActive(older)) older.deadlineAt = this.ownAudioDeadline(older);
@@ -1885,10 +1892,13 @@ export class TranscriptRoom {
         state: "open",
         speaker,
         heard: utterance.heard,
-        audio: isLive ? this.adoptAudio(speaker, utterance.since, utterance.turn, utterance.until) : [],
+        audio: isLive ? this.adoptAudio(speaker, utterance.fromSequence, utterance.turn, utterance.untilSequence) : [],
       });
       if (isLive) {
-        line.audio.unshift(...this.takeFromSpeakingLine(speaker, utterance.since, utterance.turn, utterance.until));
+        line.audio.unshift(
+          ...this.takeFromSpeakingLine(speaker, utterance.fromSequence, utterance.turn, utterance.untilSequence),
+        );
+        line.audio.sort((left, right) => left.sequence - right.sequence);
       }
     }
     connection.bind(providerItemId, line.id);
@@ -1906,10 +1916,10 @@ export class TranscriptRoom {
     if (heard.speaker) this.setLineSpeaker(line, heard.speaker);
     if (connection === this.liveConnection) {
       const taken = [
-        ...this.takeFromSpeakingLine(line.speaker, heard.since, heard.turn, heard.until),
-        ...this.adoptAudio(line.speaker, heard.since, heard.turn, heard.until),
+        ...this.takeFromSpeakingLine(line.speaker, heard.fromSequence, heard.turn, heard.untilSequence),
+        ...this.adoptAudio(line.speaker, heard.fromSequence, heard.turn, heard.untilSequence),
       ];
-      line.audio = [...line.audio, ...taken].sort((left, right) => left.createdAt - right.createdAt);
+      line.audio = [...line.audio, ...taken].sort((left, right) => left.sequence - right.sequence);
       line.deadlineAt = Math.max(line.deadlineAt, this.ownAudioDeadline(line));
       if (heard.ownsNewAudio) this.speakingLine.set(speakerKey(line.speaker), line.id);
     }
@@ -2132,6 +2142,7 @@ export class TranscriptRoom {
         this.newLine(null, { state: "replaying", speaker, heard: audio.some(({ voice }) => voice !== "quiet"), audio }),
       );
     }
+    this.placeReplaysInSendOrder();
     this.uncommittedAudio.clear();
     this.speakingLine.clear();
     this.ledger.forgetEnded(live.epoch);
@@ -2141,15 +2152,33 @@ export class TranscriptRoom {
     const now = Date.now();
     const sent = Array.from(this.uncommittedAudio.values())
       .flatMap(({ speaker, chunks }) => chunks.map((chunk) => ({ speaker, chunk })))
-      .filter(({ chunk }) => !sarvam || now - chunk.createdAt <= UNOWNED_AUDIO_KEPT_MS)
       .sort((left, right) => left.chunk.sequence - right.chunk.sequence);
     const runs: { speaker: TranscriptSpeaker; audio: AudioChunk[] }[] = [];
     for (const { speaker, chunk } of sent) {
       const run = runs.at(-1);
-      if (run && speakerKey(run.speaker) === speakerKey(speaker)) run.audio.push(chunk);
-      else runs.push({ speaker, audio: [chunk] });
+      const last = run?.audio[run.audio.length - 1];
+      if (run && last && last.sequence + 1 === chunk.sequence && speakerKey(run.speaker) === speakerKey(speaker)) {
+        run.audio.push(chunk);
+      } else {
+        runs.push({ speaker, audio: [chunk] });
+      }
     }
-    return sarvam ? runs.filter(({ audio }) => audio.some(({ voice }) => voice !== "quiet")) : runs;
+    if (!sarvam) return runs;
+    return runs.filter(
+      ({ audio }) =>
+        now - audio[audio.length - 1].createdAt <= UNOWNED_AUDIO_KEPT_MS && audio.some(({ voice }) => voice !== "quiet"),
+    );
+  }
+
+  private placeReplaysInSendOrder(): void {
+    const replays = this.ledger
+      .active()
+      .filter(({ state, epoch, audio }) => state === "replaying" && epoch === null && audio.length > 0);
+    const places = replays.map(({ place }) => place);
+    const bySent = [...replays].sort((left, right) => left.audio[0].sequence - right.audio[0].sequence);
+    bySent.forEach((line, index) => {
+      line.place = places[index];
+    });
   }
 
   private replayOwedLines(connection: ProviderConnection): boolean {
@@ -2175,6 +2204,7 @@ export class TranscriptRoom {
               voice: chunk.voice,
               turn: chunk.turn,
               at: chunk.createdAt,
+              sequence: chunk.sequence,
               lineId: line.id,
             });
           }

@@ -317,6 +317,49 @@ const cases: { thread: string; model: string; run: (rig: Rig) => Promise<Outcome
       return { shown: shown(rig), replayedChunks };
     },
   },
+  {
+    thread: "Recent speech loses its speaker",
+    model: SARVAM,
+    async run(rig) {
+      const socket = await signalsActive(rig);
+      for (let chunk = 0; chunk < 27; chunk += 1) {
+        await rig.speak(ada);
+        await vi.advanceTimersByTimeAsync(150);
+      }
+      socket.emit(sarvamSpeechStart());
+      socket.disconnect();
+      await settle();
+      const replacement = rig.providerSockets().at(-1)!;
+      const replayedChunks = audioMessages(replacement);
+      replacement.emit(sarvamSpeechStart());
+      replacement.emit(sarvamFinal("a", "Ada long."));
+      await vi.advanceTimersByTimeAsync(DEADLINE + 100);
+      return { shown: shown(rig), replayedChunks };
+    },
+  },
+  {
+    thread: "Same-tick audio changes owners",
+    model: SARVAM,
+    async run(rig) {
+      const socket = await signalsActive(rig);
+      await rig.speak(ada);
+      await rig.speak(grace);
+      await rig.speak(ada);
+      socket.emit(sarvamSpeechStart());
+      socket.emit(sarvamSpeechStart());
+      socket.emit(sarvamSpeechStart());
+      socket.disconnect();
+      await settle();
+      const replacement = rig.providerSockets().at(-1)!;
+      const replayedChunks = audioMessages(replacement);
+      for (const [id, text] of [["1", "One."], ["2", "Two."], ["3", "Three."]]) {
+        replacement.emit(sarvamSpeechStart());
+        replacement.emit(sarvamFinal(id, text));
+      }
+      await vi.advanceTimersByTimeAsync(DEADLINE + 100);
+      return { shown: shown(rig), replayedChunks };
+    },
+  },
 ];
 
 const expected: Record<string, Outcome> = {
@@ -345,6 +388,11 @@ const expected: Record<string, Outcome> = {
   "Late signals miss ongoing speech": { shown: [["Setup.", "grace"], [GAP, "ada"]] },
   "Brief drops end recoverable captions": { shown: [["Recovered.", "ada"]], replayedChunks: 1 },
   "Short turns lose replay audio": { shown: [["Setup.", "grace"], ["Ada short.", "ada"]], replayedChunks: 1 },
+  "Recent speech loses its speaker": { shown: [["Setup.", "grace"], ["Ada long.", "ada"]], replayedChunks: 27 },
+  "Same-tick audio changes owners": {
+    shown: [["Setup.", "grace"], ["One.", "ada"], ["Two.", "grace"], ["Three.", "ada"]],
+    replayedChunks: 3,
+  },
   "Replays change speaking order": {
     shown: [["Setup.", "grace"], ["Ada first.", "ada"], ["Grace second.", "grace"], ["Ada third.", "ada"]],
     replayedChunks: 3,

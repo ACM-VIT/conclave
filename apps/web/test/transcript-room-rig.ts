@@ -244,6 +244,7 @@ export async function transcriptRoomRig(
   };
   return {
     room,
+    send,
     sockets,
     connectPlans,
     providerSockets,

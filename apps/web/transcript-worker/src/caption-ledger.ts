@@ -18,7 +18,7 @@ export type CaptionLineState = "pending_ack" | "open" | "replaying" | "gap" | "f
 export type CaptionLine = {
   readonly id: string;
   state: CaptionLineState;
-  readonly place: LinePlace;
+  place: LinePlace;
   speaker: TranscriptSpeaker;
   heard: boolean;
   text: string;

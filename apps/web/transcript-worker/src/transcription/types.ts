@@ -6,16 +6,16 @@ import type { VoiceReading } from "./voice-activity";
 export type AcceptedUtterance = {
   heard: boolean;
   speaker: TranscriptSpeaker | null;
-  since: number;
+  fromSequence: number;
   turn?: number;
   ownsNewAudio: boolean;
-  until?: number;
+  untilSequence?: number;
   lineId?: string;
 };
 
-export type HeardSpeech = Pick<AcceptedUtterance, "speaker" | "since" | "turn" | "ownsNewAudio" | "until">;
+export type HeardSpeech = Pick<AcceptedUtterance, "speaker" | "fromSequence" | "turn" | "ownsNewAudio" | "untilSequence">;
 
-export type AudioContext = { voice: VoiceReading; turn: number; at: number; lineId?: string };
+export type AudioContext = { voice: VoiceReading; turn: number; at: number; sequence: number; lineId?: string };
 
 export type LiveTranscriptionCallbacks = {
   onAccepted?: (itemId: string, utterance: AcceptedUtterance) => void;
