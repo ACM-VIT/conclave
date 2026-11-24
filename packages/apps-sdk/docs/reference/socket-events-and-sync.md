@@ -82,8 +82,9 @@ A socket's `apps:yjs:update` is taken only once the room has answered its
 Present of the same document, so an update still in flight when the host
 closes and presents it again is kept. An update from a socket that has not
 synced the presented document, as an older client that draws before its sync
-reply arrives sends, is dropped, and the room sends that socket its copy of
-the document as an `apps:yjs:update`. After that the room drops an update
+reply arrives sends, is dropped. If it changes nothing, as the empty update an
+older client opens a copy with, the room sends that socket its copy of the
+document as an `apps:yjs:update`. After that the room drops an update
 that:
 
 - sets a map key that already held a value when the socket synced, or when
@@ -96,9 +97,20 @@ that:
   to another client's content only when the room already holds it, so Yjs
   always takes an update whole and never leaves part of it applied
 
-A client that drew on a fresh copy before its sync keeps its own drawing
-locally and cannot write again until the stage changes; everyone else keeps
-the saved document.
+A refused update always makes its writer start its copy over, so no client is
+left drawing on a copy the room no longer matches. A client that sends a
+`replicaId` is told with `apps:yjs:refused`. Any other client, such as an
+older web or native build, gets an `apps:state` without an `activeAppId` and,
+half a second later, the room's current state: every client drops its copy of
+an app that leaves the stage and syncs a fresh one when it returns. This
+happens once until that socket syncs again, and never for an update that
+changes nothing.
+
+A socket's updates are taken at up to 30 a second. Updates that arrive faster
+are held, in order, and applied together as one write as soon as the budget
+allows, and always before that socket's next sync or stage command, so a
+stroke drawn at pointer speed is never cut in two. Only an update that would
+take a socket's held updates past 256 KiB is refused, as `rate-limited`.
 
 A cleared document stays cleared. The SFU remembers, per app, the Yjs clients
 that wrote to it and drops any later `apps:yjs:update` for that app from those
@@ -231,6 +243,7 @@ Client -> server (`apps:yjs:update`):
 - ignored until the socket has synced the presented document, and when it
   replaces a value it never saw or builds on content the room does not hold
   (see Document lifetime)
+- held and applied together when a socket sends faster than its budget
 
 Server -> peers (`apps:yjs:update`):
 

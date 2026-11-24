@@ -35,6 +35,30 @@ const MAX_APPS_UPDATE_BYTES = 256 * 1024;
 const MAX_APPS_AWARENESS_BYTES = 64 * 1024;
 const MAX_REPLICA_ID_LENGTH = 64;
 const REMEMBERED_REFUSED_REPLICAS = 16;
+const MAX_HELD_UPDATE_BYTES = MAX_APPS_UPDATE_BYTES;
+const HELD_UPDATE_FLUSH_MS = Math.ceil(1000 / RATE_LIMITS.appsYjsUpdate.refillPerSec);
+const COPY_RESTART_DELAY_MS = 500;
+
+type HeldUpdate = {
+  apps: RoomApps;
+  appId: string;
+  update: Uint8Array;
+  replicaId: string | undefined;
+};
+
+const runsOf = (held: HeldUpdate[]): HeldUpdate[][] => {
+  const runs: HeldUpdate[][] = [];
+  for (const item of held) {
+    const run = runs.at(-1);
+    const first = run?.[0];
+    if (run && first && first.apps === item.apps && first.appId === item.appId && first.replicaId === item.replicaId) {
+      run.push(item);
+    } else {
+      runs.push([item]);
+    }
+  }
+  return runs;
+};
 
 const changesNothingIn = (doc: Y.Doc, update: Uint8Array): boolean => {
   try {
@@ -167,6 +191,26 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
   let synced: { apps: RoomApps; mark: AppSyncMark } | null = null;
   const syncMarkHere = (): AppSyncMark | null =>
     synced && synced.apps === context.currentRoom?.apps ? synced.mark : null;
+  let copyRestartPending = false;
+  let copyRestartTimer: ReturnType<typeof setTimeout> | null = null;
+  const markSynced = (apps: RoomApps, mark: AppSyncMark): void => {
+    synced = { apps, mark };
+    copyRestartPending = false;
+  };
+  const restartCopy = (): void => {
+    if (copyRestartPending || !context.currentRoom) return;
+    copyRestartPending = true;
+    socket.emit("apps:state", {
+      ...getRoomAppsState(context),
+      activeAppId: null,
+      docGeneration: null,
+    } satisfies AppsState);
+    if (copyRestartTimer) clearTimeout(copyRestartTimer);
+    copyRestartTimer = setTimeout(() => {
+      copyRestartTimer = null;
+      if (context.currentRoom) socket.emit("apps:state", getRoomAppsState(context));
+    }, COPY_RESTART_DELAY_MS);
+  };
   const refusedReplicas: string[] = [];
   const signalRefused = (appId: string, replicaId: string | undefined, reason: string): void => {
     if (!replicaId || refusedReplicas.includes(replicaId)) return;
@@ -174,6 +218,95 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     if (refusedReplicas.length > REMEMBERED_REFUSED_REPLICAS) refusedReplicas.shift();
     socket.emit("apps:yjs:refused", { appId, replicaId, reason } satisfies AppsRefusedData);
   };
+  const refuseUpdate = (appId: string, replicaId: string | undefined, reason: string): void => {
+    Logger.warn(`[Apps] Dropping update for ${appId} from ${context.currentClient?.id}: ${reason}`);
+    if (replicaId) signalRefused(appId, replicaId, reason);
+    else restartCopy();
+  };
+
+  const applyUpdate = (held: HeldUpdate): void => {
+    const { apps, appId, update, replicaId } = held;
+    if (!context.currentRoom || !context.currentClient || context.currentRoom.apps !== apps) return;
+    const doc = apps.liveDoc(appId);
+    if (!doc) {
+      signalRefused(appId, replicaId, "not-live");
+      return;
+    }
+    const mark = syncMarkHere();
+    if (!apps.isCurrentSync(mark)) {
+      if (!changesNothingIn(doc, update)) {
+        refuseUpdate(appId, replicaId, "not-synced");
+        return;
+      }
+      const resync = apps.syncMark(appId);
+      if (resync) {
+        markSynced(apps, resync);
+        socket.emit("apps:yjs:update", {
+          appId,
+          update: Y.encodeStateAsUpdate(doc),
+        } satisfies AppsUpdateData);
+      }
+      return;
+    }
+    if (apps.locked && !canControlStage(context)) {
+      if (!changesNothingIn(doc, update)) refuseUpdate(appId, replicaId, "locked");
+      return;
+    }
+    const refusal = apps.write(appId, context.currentClient.id, update, mark, socket.id);
+    if (refusal) {
+      refuseUpdate(appId, replicaId, refusal);
+      return;
+    }
+    socket.to(context.currentRoom.channelId).emit("apps:yjs:update", {
+      appId,
+      update,
+    } satisfies AppsUpdateData);
+  };
+
+  let held: HeldUpdate[] = [];
+  let heldBytes = 0;
+  let flushTimer: ReturnType<typeof setTimeout> | null = null;
+  const flushHeld = (): void => {
+    if (flushTimer) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+    const batch = held;
+    held = [];
+    heldBytes = 0;
+    for (const run of runsOf(batch)) {
+      const [first] = run;
+      let update: Uint8Array;
+      try {
+        update = run.length === 1 ? first.update : Y.mergeUpdates(run.map((item) => item.update));
+      } catch {
+        refuseUpdate(first.appId, first.replicaId, "malformed");
+        continue;
+      }
+      applyUpdate({ ...first, update });
+    }
+  };
+  const scheduleFlush = (): void => {
+    if (flushTimer) return;
+    flushTimer = setTimeout(() => {
+      flushTimer = null;
+      try {
+        if (takeToken(socket, "apps:yjs:update", RATE_LIMITS.appsYjsUpdate)) flushHeld();
+        else scheduleFlush();
+      } catch (error) {
+        Logger.warn("[Apps] Could not apply held app updates", error);
+      }
+    }, HELD_UPDATE_FLUSH_MS);
+  };
+  socket.on("disconnecting", () => {
+    try {
+      flushHeld();
+    } catch (error) {
+      Logger.warn("[Apps] Could not apply held app updates", error);
+    }
+    if (copyRestartTimer) clearTimeout(copyRestartTimer);
+    copyRestartTimer = null;
+  });
 
   const emitAppsState = (): AppsState => {
     const state = getRoomAppsState(context);
@@ -197,6 +330,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     if (!canControlStage(context)) {
       return { success: false, error: deniedError };
     }
+    flushHeld();
     if (!takeToken(socket, "apps:stage", RATE_LIMITS.appsStage)) {
       return { success: false, error: "Too many app changes" };
     }
@@ -315,6 +449,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         respond(callback, { error: "Not in a room" });
         return;
       }
+      flushHeld();
 
       // Every stage change makes each client sync the presented app once.
       // That first sync is free, so hosts switching apps cannot use up a
@@ -354,7 +489,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         return;
       }
       const mark = context.currentRoom.apps.syncMark(appId);
-      if (mark) synced = { apps: context.currentRoom.apps, mark };
+      if (mark) markSynced(context.currentRoom.apps, mark);
       const awarenessSnapshot =
         context.currentRoom.apps.encodeAwarenessSnapshot(appId) ?? undefined;
       const awarenessUpdate =
@@ -375,59 +510,27 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     const appId = normalizeAppId(data?.appId);
     if (!appId) return;
     const replicaId = normalizeReplicaId(data?.replicaId);
-    const writer = context.currentClient.id;
-    const refuse = (reason: string): void => {
-      Logger.warn(`[Apps] Dropping update for ${appId} from ${writer}: ${reason}`);
-      signalRefused(appId, replicaId, reason);
-    };
-
-    if (!takeToken(socket, "apps:yjs:update", RATE_LIMITS.appsYjsUpdate)) {
-      signalRefused(appId, replicaId, "rate-limited");
-      return;
-    }
-    const apps = context.currentRoom.apps;
-    const doc = apps.liveDoc(appId);
-    if (!doc) {
-      signalRefused(appId, replicaId, "not-live");
-      return;
-    }
     const update = toUint8Array(data.update);
     if (!update || update.length === 0) {
-      refuse("invalid");
+      refuseUpdate(appId, replicaId, "invalid");
       return;
     }
     if (update.length > MAX_APPS_UPDATE_BYTES) {
-      refuse("too-large");
+      refuseUpdate(appId, replicaId, "too-large");
       return;
     }
-
-    const mark = syncMarkHere();
-    if (!apps.isCurrentSync(mark)) {
-      const resync = apps.syncMark(appId);
-      if (resync) {
-        synced = { apps, mark: resync };
-        socket.emit("apps:yjs:update", {
-          appId,
-          update: Y.encodeStateAsUpdate(doc),
-        } satisfies AppsUpdateData);
-      }
-      refuse("not-synced");
+    const item = { apps: context.currentRoom.apps, appId, update, replicaId };
+    if (held.length === 0 && takeToken(socket, "apps:yjs:update", RATE_LIMITS.appsYjsUpdate)) {
+      applyUpdate(item);
       return;
     }
-    if (apps.locked && !canControlStage(context)) {
-      if (!changesNothingIn(doc, update)) signalRefused(appId, replicaId, "locked");
+    if (heldBytes + update.length > MAX_HELD_UPDATE_BYTES) {
+      refuseUpdate(appId, replicaId, "rate-limited");
       return;
     }
-    const refusal = apps.write(appId, writer, update, mark, socket.id);
-    if (refusal) {
-      refuse(refusal);
-      return;
-    }
-
-    socket.to(context.currentRoom.channelId).emit("apps:yjs:update", {
-      appId,
-      update,
-    } satisfies AppsUpdateData);
+    held.push(item);
+    heldBytes += update.length;
+    scheduleFlush();
   });
 
   socket.on("apps:awareness", (data: AppsAwarenessData) => {
