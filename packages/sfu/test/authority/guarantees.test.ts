@@ -525,13 +525,13 @@ describe("room policy", () => {
   it("ends an idle attendee's view when the webinar's schedule is cancelled", async () => {
     const room = new Harness([qaAuthority], { roomId: "scheduled" });
     const live = schedule("scheduled", "live");
-    ensureWebinarRoomConfig(room.state, live);
+    ensureWebinarRoomConfig(room.state, live, () => {});
     const viewer = await room.open(person("guest-viewer", "Viewer", "attendee"), qaContract);
     const readyBefore = viewer.state.kind;
 
     // What the cancel route does: record the status, apply it to the room.
     // Nobody acts afterwards, so nothing else would bring the change in.
-    ensureWebinarRoomConfig(room.state, { ...live, status: "cancelled" });
+    ensureWebinarRoomConfig(room.state, { ...live, status: "cancelled" }, () => {});
     await vi.advanceTimersByTimeAsync(10);
 
     expect(readyBefore).toBe("ready");

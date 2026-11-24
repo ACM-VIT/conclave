@@ -84,7 +84,7 @@ export const createSfuServer = (
     socketAdapterLifecycle = await connectSocketAdapter(io, { config });
     await initMediaSoup(state, () => io, workerShutdown.signal);
     await initControlPlane(state);
-    startScheduledWebinarTimer(state, undefined, notifyRoomConfig(state, () => io));
+    startScheduledWebinarTimer(state, notifyRoomConfig(state, () => io));
     roomOwnershipRenewTimer = setInterval(() => {
       renewRoomOwnerships(state).catch((error) => {
         Logger.error("Failed to renew room ownerships", error);

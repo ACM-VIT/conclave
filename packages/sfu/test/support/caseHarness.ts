@@ -86,7 +86,7 @@ export const startCaseSfu = async (
       }
     },
     tickWebinars: () => skew.run(offset, async () => {
-      await advanceScheduledWebinars(state);
+      await advanceScheduledWebinars(state, Date.now(), () => {});
     }),
     scanReminders: () => skew.run(offset, async () => {
       await sendDueSchedulingEmailReminders(state);

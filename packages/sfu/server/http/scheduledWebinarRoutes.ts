@@ -2,11 +2,7 @@ import type { Express, Request, Response } from "express";
 import type { Server as SocketIOServer } from "socket.io";
 import { Logger } from "../../utilities/loggers.js";
 import { secretsMatch } from "../secret.js";
-import {
-  emitWebinarAttendeeCountChanged,
-  emitWebinarConfigChanged,
-} from "../webinarNotifications.js";
-import { ensureWebinarRoomConfig } from "../scheduledWebinarScheduler.js";
+import { ensureWebinarRoomConfig, notifyRoomConfig, settleWebinarRoom } from "../scheduledWebinarScheduler.js";
 import { getRoomChannelId } from "../rooms.js";
 import {
   buildCoHostInviteLink,
@@ -26,7 +22,6 @@ import {
   webinarForRoomInClients,
   type WebinarAccess,
 } from "../controlPlane/webinarCommands.js";
-import { clearWebinarLinkSlug } from "../webinar.js";
 import type { SfuState } from "../state.js";
 import { canonicalizeClientId, resolveDefaultClientId } from "../clientIds.js";
 import { controlPlaneRoute, sendFailure } from "./controlPlaneReplies.js";
@@ -164,13 +159,7 @@ export const registerScheduledWebinarRoutes = (
     return id;
   };
 
-  const notifyRoom = (webinar: ScheduledWebinar, attendees: boolean): void => {
-    const io = getIo?.() ?? null;
-    const room = state.rooms.get(getRoomChannelId(webinar.clientId, webinar.roomId));
-    if (!io || !room) return;
-    emitWebinarConfigChanged(io, state, room);
-    if (attendees) emitWebinarAttendeeCountChanged(io, state, room);
-  };
+  const notices = notifyRoomConfig(state, () => getIo?.() ?? null);
 
   const changeStatus = async (
     req: Request,
@@ -186,7 +175,7 @@ export const registerScheduledWebinarRoutes = (
     }
     const { webinar } = result.value;
     if (status === "live" || state.webinarConfigs.has(getRoomChannelId(webinar.clientId, webinar.roomId))) {
-      ensureWebinarRoomConfig(state, webinar);
+      ensureWebinarRoomConfig(state, webinar, notices);
     }
     res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
   };
@@ -232,7 +221,7 @@ export const registerScheduledWebinarRoutes = (
         return;
       }
       const { webinar } = result.value;
-      ensureWebinarRoomConfig(state, webinar);
+      ensureWebinarRoomConfig(state, webinar, notices);
       Logger.info(`Scheduled webinar created ${webinar.id} (${webinar.linkSlug}) by ${user.email}`);
       res.status(201).json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
     }),
@@ -310,8 +299,7 @@ export const registerScheduledWebinarRoutes = (
         return;
       }
       const { webinar } = result.value;
-      ensureWebinarRoomConfig(state, webinar);
-      notifyRoom(webinar, true);
+      ensureWebinarRoomConfig(state, webinar, notices);
       res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
     }),
   );
@@ -328,19 +316,7 @@ export const registerScheduledWebinarRoutes = (
         return;
       }
       const webinar = result.value;
-      const channelId = getRoomChannelId(webinar.clientId, webinar.roomId);
-      const cfg = state.webinarConfigs.get(channelId);
-      if (cfg) {
-        clearWebinarLinkSlug({
-          webinarConfig: cfg,
-          webinarLinks: state.webinarLinks,
-          roomChannelId: channelId,
-        });
-        cfg.enabled = false;
-        cfg.forcedHostEmails = new Set();
-        cfg.scheduledWebinarId = null;
-        notifyRoom(webinar, false);
-      }
+      settleWebinarRoom(state, getRoomChannelId(webinar.clientId, webinar.roomId), null, notices);
       res.json({ success: true, id: webinar.id });
     }),
   );
@@ -414,8 +390,7 @@ export const registerScheduledWebinarRoutes = (
         sendFailure(res, result);
         return;
       }
-      ensureWebinarRoomConfig(state, result.value);
-      notifyRoom(result.value, true);
+      ensureWebinarRoomConfig(state, result.value, notices);
       res.json({ scheduledWebinar: serializeScheduledWebinar(result.value) });
     }),
   );

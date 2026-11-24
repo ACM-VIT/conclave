@@ -549,7 +549,7 @@ const runSequence = async (mode: StoreMode, seed: number, steps: number): Promis
         launch(sfu, "tick", "TICK", null, (op) =>
           runAsOp(op, async () => {
             await sfu.state.controlPlane.commit(advanceMeetings);
-            await advanceScheduledWebinars(sfu.state);
+            await advanceScheduledWebinars(sfu.state, Date.now(), () => {});
             await sendDueSchedulingEmailReminders(sfu.state);
             return { status: 200, body: {} };
           }),

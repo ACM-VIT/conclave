@@ -53,7 +53,7 @@ import {
   webinarBySlug,
   webinarForRoom,
 } from "../../controlPlane/webinarCommands.js";
-import { ensureWebinarRoomConfig } from "../../scheduledWebinarScheduler.js";
+import { ensureWebinarRoomConfig, notifyRoomConfig } from "../../scheduledWebinarScheduler.js";
 import {
   answerSettledRequests,
   handOffRoom,
@@ -275,7 +275,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             // room that bound the same code (before the scheduler did, e.g.
             // after a restart) must not receive the webinar's audience.
             if (webinarTarget?.roomId !== scheduledWebinarForAttendee.roomId) {
-              ensureWebinarRoomConfig(state, scheduledWebinarForAttendee);
+              ensureWebinarRoomConfig(state, scheduledWebinarForAttendee, notifyRoomConfig(state, () => io));
             }
             webinarTarget = {
               roomChannelId: getRoomChannelId(
@@ -303,7 +303,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             scheduledWebinarForRoom.status !== "ended" &&
             scheduledWebinarForRoom.status !== "cancelled"
           ) {
-            ensureWebinarRoomConfig(state, scheduledWebinarForRoom);
+            ensureWebinarRoomConfig(state, scheduledWebinarForRoom, notifyRoomConfig(state, () => io));
           }
         }
 
