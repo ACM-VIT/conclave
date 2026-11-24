@@ -67,8 +67,21 @@ PREVIOUS_CONTAINER="$("${COMPOSE[@]}" ps -q browser-service 2>/dev/null | head -
 if [[ -n "$PREVIOUS_CONTAINER" && "$(docker inspect --format '{{.State.Running}}' "$PREVIOUS_CONTAINER" 2>/dev/null || true)" != "true" ]]; then
   PREVIOUS_CONTAINER=""
 fi
+PREVIOUS_PORTS=""
+PREVIOUS_DEPLOY_ID=""
+if [[ -n "$PREVIOUS_CONTAINER" ]]; then
+  previous_env="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$PREVIOUS_CONTAINER" 2>/dev/null || true)"
+  PREVIOUS_DEPLOY_ID="$(sed -n 's/^BROWSER_SERVICE_DEPLOY_ID=//p' <<<"$previous_env" | tail -n 1)"
+  if [[ "$(docker inspect --format '{{.HostConfig.NetworkMode}}' "$PREVIOUS_CONTAINER" 2>/dev/null || true)" == "host" ]]; then
+    PREVIOUS_PORTS="$(sed -n 's/^BROWSER_SERVICE_PORT=//p' <<<"$previous_env" | tail -n 1)"
+    PREVIOUS_PORTS="${PREVIOUS_PORTS:-3040}"
+  else
+    PREVIOUS_PORTS="$(docker inspect --format '{{range $bindings := .HostConfig.PortBindings}}{{range $bindings}}{{.HostPort}},{{end}}{{end}}' "$PREVIOUS_CONTAINER" 2>/dev/null || true)"
+    PREVIOUS_PORTS="${PREVIOUS_PORTS%,}"
+  fi
+fi
 "${COMPOSE[@]}" build browser-service
-"${COMPOSE[@]}" run --rm --no-deps -e "BROWSER_IMAGE_NAME=${CHECK_IMAGE_NAME}" -e "BROWSER_SERVICE_PREVIOUS_CONTAINER=${PREVIOUS_CONTAINER}" browser-service node packages/shared-browser/dist/server.js --check-config
+"${COMPOSE[@]}" run --rm --no-deps -e "BROWSER_IMAGE_NAME=${CHECK_IMAGE_NAME}" -e "BROWSER_SERVICE_PREVIOUS_CONTAINER=${PREVIOUS_CONTAINER}" -e "BROWSER_SERVICE_PREVIOUS_PORTS=${PREVIOUS_PORTS}" -e "BROWSER_SERVICE_PREVIOUS_DEPLOY_ID=${PREVIOUS_DEPLOY_ID}" browser-service node packages/shared-browser/dist/server.js --check-config
 if [[ "$CHECK_CONFIG_ONLY" == "true" ]]; then
   exit 0
 fi
