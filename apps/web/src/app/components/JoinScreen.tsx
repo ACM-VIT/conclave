@@ -1401,14 +1401,14 @@ function JoinScreen({
                         type="button"
                         onClick={requestMicrophoneAndCamera}
                         disabled={isRequestingPermissions}
-                        className="pointer-events-auto inline-flex h-8 min-w-0 items-center gap-1.5 rounded-full bg-[#F95F4A] px-3 text-[12.5px] font-medium text-white transition-[background-color,opacity] duration-150 hover:bg-[#e8553f] disabled:cursor-wait disabled:opacity-75"
+                        className="pointer-events-auto inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-[#F95F4A] px-3 text-[12.5px] font-medium text-white transition-[background-color,opacity] duration-150 hover:bg-[#e8553f] disabled:cursor-wait disabled:opacity-75"
                       >
                         {isRequestingPermissions ? (
                           <Loader2 size={14} className="shrink-0 animate-spin" />
                         ) : (
                           <Video size={14} className="shrink-0" />
                         )}
-                        <span className="truncate">Allow microphone and camera</span>
+                        <span className="whitespace-nowrap">Allow microphone and camera</span>
                       </button>
                     ) : null}
                     <div className="inline-flex h-8 min-w-0 items-center rounded-full bg-black/55 px-3 text-[12.5px] font-medium backdrop-blur-sm">
