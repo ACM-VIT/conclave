@@ -38,6 +38,21 @@ const fitsUpright = (label: FittedLabel, fontSize: number, shape: LabelGeometry)
   );
 };
 
+const numberFitsAt = (index: number, fontSize: number, shape: LabelGeometry): boolean => {
+  const reach = (fontSize * Math.hypot(measure(String(index + 1)), 1.05)) / 2;
+  const radius = shape.outerRadius - reach;
+  return (
+    fontSize <= shape.maxFontSize + 1e-9 &&
+    radius - reach >= shape.innerRadius - 1e-9 &&
+    radius * Math.sin(Math.PI / shape.count) - 0.6 >= reach - 1e-9
+  );
+};
+
+const everyNumberFits = (shape: LabelGeometry): boolean =>
+  Array.from({ length: shape.count }, (_, index) => index).every((index) =>
+    numberFitsAt(index, shape.minScreenPx / shape.pxPerUnit, shape)
+  );
+
 const restingRotation = (winnerIndex: number, count: number, jitter = 0.5): number =>
   90 - (winnerIndex + jitter) * (360 / count);
 
@@ -201,7 +216,10 @@ describe("wheel label coverage", () => {
       const fitted = fitWheelLabels(names, shape, measure);
       const shown = fitted.labels.filter((label) => label !== null).length;
       expect(shown === 0 || shown === count, `run ${run}: ${shown} of ${count} labelled at ${wheelPx}px`).toBe(true);
-      if (shown === 0) continue;
+      if (shown === 0) {
+        expect(everyNumberFits(shape), `run ${run}: blank ${count} slice dial at ${wheelPx}px while its numbers fit`).toBe(false);
+        continue;
+      }
       expect(fitted.fontSize * shape.pxPerUnit).toBeGreaterThanOrEqual(shape.minScreenPx - 1e-9);
       fitted.labels.forEach((label, index) => {
         const fits = label!.numbered
@@ -213,6 +231,43 @@ describe("wheel label coverage", () => {
       if (fitted.labels.some((label) => label?.numbered)) numberedRuns += 1;
     }
     expect(numberedRuns).toBeGreaterThan(20);
+  });
+});
+
+describe("wheel label fallback", () => {
+  const LONG_NAMES = ["A".repeat(48), "Maximiliana Featherstonehaugh-Worthington Smythe"];
+
+  it("shows visible text on every slice of a three name wheel with one 48 character name, at every size", () => {
+    for (const long of LONG_NAMES) {
+      expect(long).toHaveLength(48);
+      for (let wheelPx = 180; wheelPx <= 900; wheelPx += 10) {
+        const shape = geometry(3, wheelPx);
+        const fitted = fitWheelLabels(["Ada", long, "Bo"], shape, measure);
+        fitted.labels.forEach((label, index) => {
+          const where = `${long.slice(0, 8)} at ${wheelPx}px, slice ${index + 1}`;
+          expect(label, where).not.toBeNull();
+          expect(/[^\s\u2026]/u.test(label!.text), where).toBe(true);
+          const fits = label!.numbered ? fitsUpright(label!, fitted.fontSize, shape) : fitsInSlice(label!.text, fitted.fontSize, shape);
+          expect(fits, where).toBe(true);
+        });
+        expect(fitted.fontSize * shape.pxPerUnit).toBeGreaterThanOrEqual(shape.minScreenPx - 1e-9);
+      }
+    }
+  });
+
+  it("numbers every slice when too few names fit in full, instead of leaving the dial blank", () => {
+    let checked = 0;
+    for (let count = 2; count <= 8; count += 1) {
+      for (const wheelPx of [240, 420, 700, 900]) {
+        const shape = geometry(count, wheelPx);
+        const names = Array.from({ length: count }, (_, index) => (index === 0 ? LONG_NAMES[1] : `N${index}`));
+        const fitted = fitWheelLabels(names, shape, measure);
+        if (!everyNumberFits(shape)) continue;
+        checked += 1;
+        expect(fitted.labels.every((label) => label !== null), `${count} names at ${wheelPx}px`).toBe(true);
+      }
+    }
+    expect(checked).toBeGreaterThan(20);
   });
 });
 
