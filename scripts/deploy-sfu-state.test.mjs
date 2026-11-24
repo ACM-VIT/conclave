@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -33,6 +33,22 @@ if [[ "$1" == "compose" ]]; then
           for file in "$staging"/*; do ls -l "$file" | cut -c1-10 >> "$STAGING_MODES"; done
         fi
         script="\${script//\\/var\\/lib\\/conclave\\/recordings/$FAKE_VOLUME}"
+        script="\${script//\\$\\$/1}"
+        [[ -n "$FAKE_FAIL_UNPACK" ]] && script="\${script//tar -xf /tar -xf \/dev\/null\/unpack-fails }"
+        if [[ -n "$FAKE_KILL_TRANSFER" ]]; then
+          fifo="$(dirname "$DOCKER_LOG")/transfer.fifo"
+          mkfifo "$fifo"
+          CONCLAVE_FALLBACK_IMPORT_DIR="$FAKE_IMAGE_IMPORT_DIR" sh -c "$script" "\${rest[@]}" < "$fifo" &
+          receiver=$!
+          exec 3> "$fifo"
+          printf 'partial' >&3
+          sleep 0.5
+          kill -9 "$receiver"
+          wait "$receiver" 2>/dev/null
+          exec 3>&-
+          rm -f "$fifo"
+          exit 137
+        fi
         if [[ -n "$FAKE_CORRUPT" ]]; then
           LC_ALL=C tr 'A' 'B' | CONCLAVE_FALLBACK_IMPORT_DIR="$FAKE_IMAGE_IMPORT_DIR" sh -c "$script" "\${rest[@]}"
           exit $?
@@ -174,6 +190,8 @@ const replaceService = async (
     deployId = "sfu-test-deploy",
     fixedStamp = "",
     sharedImportDir = "",
+    killTransfer = false,
+    failUnpack = false,
     container = OLD_CONTAINER,
     diff = "",
     diffStatus = 0,
@@ -235,6 +253,8 @@ const replaceService = async (
       SFU_HEALTH_TIMEOUT_SECONDS: "3",
       SFU_HEALTH_POLL_SECONDS: "1",
       FIXED_STAMP: fixedStamp,
+      FAKE_KILL_TRANSFER: killTransfer ? "1" : "",
+      FAKE_FAIL_UNPACK: failUnpack ? "1" : "",
     });
     const listing = (path) => (existsSync(path) ? readdirSync(path).sort() : []);
     const containerDir = join(importDir, "sfu-a");
@@ -361,6 +381,37 @@ for (const harness of harnesses) {
     } finally {
       rmSync(shared, { recursive: true, force: true });
     }
+  });
+
+  test(`${shell}: a transfer killed part way never blocks the next deploy, and stale staging is cleared`, async () => {
+    const shared = mkdtempSync(join(tmpdir(), "deploy-sfu-import-"));
+    try {
+      const stale = join(shared, ".incoming-sfu-a-left-by-an-old-deploy");
+      mkdirSync(stale, { recursive: true });
+      const hoursAgo = new Date(Date.now() - 2 * 3_600_000);
+      utimesSync(stale, hoursAgo, hoursAgo);
+      const options = { sharedImportDir: shared, diff: wrote("scheduling.json"), files: { "scheduling.json": '["kept"]' } };
+      const killed = await replaceService(harness, { ...options, killTransfer: true });
+      assert.notEqual(killed.status, 0);
+      assert.equal(stopped(killed.calls), false, killed.calls.join("\n"));
+      assert.deepEqual(killed.archives, []);
+      const retried = await replaceService(harness, options);
+      assert.equal(retried.status, 0, retried.stderr);
+      assert.deepEqual(retried.archives.map((archive) => archive.bytes["scheduling.json"].toString()), ['["kept"]']);
+      assert.equal(existsSync(stale), false, "a staging folder hours old was left in place");
+      assert.ok(readdirSync(shared).every((name) => name === "sfu-a" || name.startsWith(".incoming-")), readdirSync(shared).join(", "));
+    } finally {
+      rmSync(shared, { recursive: true, force: true });
+    }
+  });
+
+  test(`${shell}: a transfer that fails while unpacking leaves no staging folder and stops before anything is stopped`, async () => {
+    const { status, calls, archives, importLeftovers, stderr } = await replaceService(harness, { diff: wrote("scheduling.json"), failUnpack: true });
+    assert.notEqual(status, 0);
+    assert.match(stderr, /unpack-fails/);
+    assert.equal(stopped(calls), false, calls.join("\n"));
+    assert.deepEqual(archives, []);
+    assert.deepEqual(importLeftovers, []);
   });
 
   test(`${shell}: never replaces a saved copy, and stops before anything is stopped`, async () => {

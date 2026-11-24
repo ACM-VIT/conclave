@@ -312,7 +312,7 @@ fallback_fingerprint() {
 }
 
 fallback_receiver() {
-  printf '%s' 'umask 077 && base=${CONCLAVE_FALLBACK_IMPORT_DIR:?} && case "$3" in ""|.*|*[!A-Za-z0-9._-]*) echo "The archive name $3 is not safe to use." >&2; exit 1;; esac && folder=$base/$1 && dest=$folder/$3 && incoming=$base/.incoming-$1-$$ && mkdir -p "$folder" && if [ -e "$dest" ]; then echo "$dest already exists, and a saved copy is never replaced." >&2; exit 1; fi && mkdir "$incoming" && cat > "$incoming/payload.tar" && got=$(sha256sum "$incoming/payload.tar" | cut -d" " -f1) && if [ "$got" != "$2" ]; then echo "The fallback files arrived with checksum $got, not $2." >&2; rm -rf "$incoming"; exit 1; fi && mkdir "$incoming/files" && tar -xf "$incoming/payload.tar" -C "$incoming/files" && rm "$incoming/payload.tar" && chmod 0700 "$incoming/files" && chmod 0600 "$incoming/files"/*.json && mv "$incoming/files" "$dest" && rmdir "$incoming" && chmod 0700 "$base" "$folder" && chown -R node:node "$base"'
+  printf '%s' 'umask 077 && base=${CONCLAVE_FALLBACK_IMPORT_DIR:?} && case "$3" in ""|.*|*[!A-Za-z0-9._-]*) echo "The archive name $3 is not safe to use." >&2; exit 1;; esac && case "$4" in ""|*[!A-Za-z0-9]*) echo "The transfer id $4 is not safe to use." >&2; exit 1;; esac && folder=$base/$1 && dest=$folder/$3 && incoming=$base/.incoming-$1-$3-$4 && mkdir -p "$folder" && find "$base" -mindepth 1 -maxdepth 1 -type d -name ".incoming-*" -mmin +30 -exec rm -rf {} + && if [ -e "$dest" ]; then echo "$dest already exists, and a saved copy is never replaced." >&2; exit 1; fi && mkdir "$incoming" && trap '"'"'rm -rf "$incoming"'"'"' EXIT && cat > "$incoming/payload.tar" && got=$(sha256sum "$incoming/payload.tar" | cut -d" " -f1) && if [ "$got" != "$2" ]; then echo "The fallback files arrived with checksum $got, not $2." >&2; rm -rf "$incoming"; exit 1; fi && mkdir "$incoming/files" && tar -xf "$incoming/payload.tar" -C "$incoming/files" && rm "$incoming/payload.tar" && chmod 0700 "$incoming/files" && chmod 0600 "$incoming/files"/*.json && mv "$incoming/files" "$dest" && rmdir "$incoming" && chmod 0700 "$base" "$folder" && chown -R node:node "$base"'
 }
 
 archive_stamp() {
@@ -320,7 +320,7 @@ archive_stamp() {
 }
 
 send_fallback_json() {
-  local service="$1" dir="$2" archive checksum file name
+  local service="$1" dir="$2" archive checksum file name transfer
   local -a names=()
   for file in "$dir"/*.json; do
     [[ -e "$file" ]] && names+=("${file##*/}")
@@ -330,8 +330,9 @@ send_fallback_json() {
   tar -C "$dir" -cf "$archive" "${names[@]}" || return 1
   checksum="$(sha256_file "$archive")"
   name="$(archive_stamp)-${SFU_DEPLOY_ID:?}"
+  transfer="$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
   if ! "${COMPOSE[@]}" run -T --rm --no-deps --user root --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --entrypoint sh "$service" -c \
-    "$(fallback_receiver)" sh "$service" "$checksum" "$name" < "$archive"; then
+    "$(fallback_receiver)" sh "$service" "$checksum" "$name" "$transfer" < "$archive"; then
     echo "Could not copy the old ${service} container's JSON fallback files onto the volume." >&2
     return 1
   fi
