@@ -2,6 +2,7 @@ package conclave.module
 
 import java.util.Collections
 import java.util.WeakHashMap
+import org.mediasoup.droid.Consumer
 import org.webrtc.VideoSink
 import org.webrtc.VideoTrack
 
@@ -11,6 +12,10 @@ internal object VideoTrackLedger {
     fun dispose(track: VideoTrack) {
         disposed.add(track)
         track.dispose()
+    }
+
+    fun recordClosed(consumer: Consumer) {
+        (consumer.track as? VideoTrack)?.let { disposed.add(it) }
     }
 
     fun isDisposed(track: VideoTrack): Boolean = disposed.contains(track)

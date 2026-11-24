@@ -1357,6 +1357,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             return
         }
 
+        VideoTrackLedger.recordClosed(info.consumer)
         if (closeConsumer) {
             info.consumer.close()
             if (notifyServer) {
@@ -5178,7 +5179,10 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         videoSettingsRefreshPending = false
         lastAppliedLocalBandwidthSignature = null
 
-        consumers.values.forEach { it.consumer.close() }
+        consumers.values.forEach {
+            VideoTrackLedger.recordClosed(it.consumer)
+            it.consumer.close()
+        }
         firstDecodedVideoFrameSignals.keys.toList().forEach {
             cancelFirstDecodedVideoFrameObservation(it)
         }
@@ -7951,6 +7955,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
     }
 
     override fun onTransportClose(consumer: Consumer) {
+        VideoTrackLedger.recordClosed(consumer)
         mainHandler.post {
             val entry = consumers.entries.firstOrNull {
                 it.value.consumer === consumer

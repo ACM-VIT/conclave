@@ -25,6 +25,7 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.mediasoup.droid.Consumer
 import org.mediasoup.droid.Producer
 import org.mediasoup.droid.SendTransport
 import org.robolectric.RobolectricTestRunner
@@ -74,6 +75,25 @@ class LocalVideoTeardownTests {
             disposals += 1
             disposedOn = Thread.currentThread()
         }
+    }
+
+    class SinkCountingVideoTrack : VideoTrack(0L) {
+        val added: MutableList<VideoSink?> = CopyOnWriteArrayList()
+        override fun addSink(sink: VideoSink?) { added.add(sink) }
+        override fun removeSink(sink: VideoSink?) {}
+    }
+
+    class FakeConsumer : Consumer(0L) {
+        var fakeTrack: VideoTrack? = null
+        @Volatile var closed = false
+        override fun getId(): String = "c1"
+        override fun getProducerId(): String = "p1"
+        override fun getKind(): String = "video"
+        override fun getTrack(): MediaStreamTrack? = fakeTrack
+        override fun isClosed(): Boolean = closed
+        override fun close() { closed = true }
+        override fun pause() {}
+        override fun resume() {}
     }
 
     class RecordingObserver : CapturerObserver {
@@ -778,5 +798,50 @@ class LocalVideoTeardownTests {
         settle()
         assertNull("the live camera's own disconnect was dropped", field("activeWebcamCaptureProfile").get(media))
         assertEquals(PreviewInterruption.inUseByAnotherClient, LocalPreviewController.shared.callCameraInterruption)
+    }
+
+    private fun seedRemoteVideoConsumer(media: WebRTCClient): Pair<FakeConsumer, SinkCountingVideoTrack> {
+        val track = unsafe.allocateInstance(SinkCountingVideoTrack::class.java) as SinkCountingVideoTrack
+        SinkCountingVideoTrack::class.java.getDeclaredField("added").apply { isAccessible = true }.set(track, CopyOnWriteArrayList<VideoSink?>())
+        val consumer = unsafe.allocateInstance(FakeConsumer::class.java) as FakeConsumer
+        consumer.fakeTrack = track
+        val role = Class.forName("conclave.module.ConsumerGenerationLifecycleRole").enumConstants.first { (it as Enum<*>).name == "CURRENT" }
+        val info = Class.forName("conclave.module.WebRTCClient\$ConsumerInfo").declaredConstructors.first { it.parameterCount == 18 }.let {
+            it.isAccessible = true
+            it.newInstance(consumer, "p1", "u1", "video", "webcam", 1, "room", 0, 0L, null, null, null, false, false, false, role, false, "u1")
+        }
+        @Suppress("UNCHECKED_CAST")
+        (field("consumers").get(media) as MutableMap<String, Any>)["c1"] = info
+        return consumer to track
+    }
+
+    @Test
+    fun aRemoteTileRemountedAfterItsConsumerClosedAddsNoSink() {
+        val closes: List<Pair<String, (WebRTCClient, FakeConsumer) -> Unit>> = listOf(
+            "consumer closed" to { media, _ -> media.closeConsumer("c1") },
+            "producer closed" to { media, _ -> media.closeConsumer("p1", "u1") },
+            "participant left" to { media, _ -> media.closeConsumers(userIdPrefix = "u1") },
+            "stale consumer sweep" to { media, _ -> media.closeConsumers(exceptProducerIds = skip.lib.Array(listOf<String>())) },
+            "receive transport closed" to { media, consumer ->
+                val closing = Thread { media.onTransportClose(consumer) }
+                closing.start()
+                closing.join()
+            },
+            "leave" to { media, _ -> runBlocking { media.cleanup(notifyLocalState = false, preserveCallAudioRouting = true) } },
+        )
+        val remountsThatAddedASink = mutableListOf<String>()
+        for ((path, close) in closes) {
+            val (media, _) = joinedCall()
+            val (consumer, track) = seedRemoteVideoConsumer(media)
+            val sink = VideoSink { }
+            VideoSinkAttachment.attach(track, sink).detach()
+            assertEquals("$path: a live remote tile could not attach its sink", 1, track.added.size)
+
+            close(media, consumer)
+            VideoSinkAttachment.attach(track, sink).detach()
+            if (track.added.size != 1) remountsThatAddedASink.add(path)
+            shadowOf(Looper.getMainLooper()).idle()
+        }
+        assertEquals("a tile remounted on a closed consumer's track added a sink", emptyList<String>(), remountsThatAddedASink)
     }
 }

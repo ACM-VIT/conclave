@@ -721,9 +721,18 @@ Fixed 2026-10-22 and guarded by `testNativeCallCorrectnessBlockersStayFixed`:
   retired capturer. The capturer observer (`SessionCapturerObserver`) checks
   the session on the capture thread itself, because frames are too frequent
   to post and each session forwards only to its own source.
-- Renderers attach sinks through `VideoSinkAttachment`. Every local video
-  track is disposed through `VideoTrackLedger.dispose`, and an attach skips
-  `addSink` on a track the ledger has disposed: `addSink` on a disposed track
+- Renderers attach sinks through `VideoSinkAttachment`, and an attach skips
+  `addSink` on any track `VideoTrackLedger` has marked disposed. Every track a
+  renderer can be given goes through the ledger: local camera and share
+  tracks are disposed through `VideoTrackLedger.dispose`, and a remote
+  consumer's track is marked by `VideoTrackLedger.recordClosed(consumer)`
+  just before native code frees it: in `removeConsumer` (consumer close,
+  producer close, participant leave, stale consumer sweep) before
+  `Consumer.close()`, in `cleanup()` for every consumer on leave, and
+  first thing in `onTransportClose(consumer)`, which native `Transport.close()`
+  calls for each of its consumers, so a transport close is marked before its
+  main-thread removal runs. A new path that closes a consumer or disposes a
+  video track must go through the ledger. `addSink` on a disposed track
   wraps the sink (a native wrapper and a global JNI reference) before it
   throws, and a later `removeSink` throws before freeing it, so each such
   attach leaked. The attachment still removes a sink only if adding it
