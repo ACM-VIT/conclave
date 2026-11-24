@@ -7,7 +7,7 @@ type Pending = { appId: string; replicaId: string | undefined; items: Item[] };
 
 export type SendUpload = (appId: string, replicaId: string | undefined, update: Uint8Array, part?: AppsUpdatePart) => boolean;
 
-export type UploadQueueOptions = { stagesParts?: () => boolean };
+export type UploadQueueOptions = { stagesParts?: () => boolean | null };
 
 export type UploadQueue = {
   add: (appId: string, replicaId: string | undefined, update: Uint8Array) => void;
@@ -18,8 +18,7 @@ export type UploadQueue = {
 
 const newChangeId = (): string => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
 
-const itemsFor = (update: Uint8Array, stagesParts: boolean): Item[] => {
-  if (!stagesParts || update.length <= APP_DOCUMENT_UPDATE_MAX_BYTES) return [{ update }];
+const partsOf = (update: Uint8Array): Item[] => {
   const id = newChangeId();
   const count = Math.ceil(update.length / APP_DOCUMENT_UPDATE_MAX_BYTES);
   return Array.from({ length: count }, (_, index) => ({
@@ -51,6 +50,12 @@ export const createUploadQueue = (send: SendUpload, { stagesParts = () => false 
     const next = pending.entries().next();
     if (next.done) return;
     const [key, entry] = next.value;
+    const [first] = entry.items;
+    if (!first.part && first.update.length > APP_DOCUMENT_UPDATE_MAX_BYTES) {
+      const stages = stagesParts();
+      if (stages === null) return;
+      if (stages) entry.items.splice(0, 1, ...partsOf(first.update));
+    }
     const batch = entry.items.slice(0, takeBatch(entry.items));
     if (!send(entry.appId, entry.replicaId, merge(batch), batch[0].part)) return;
     entry.items.splice(0, batch.length);
@@ -79,10 +84,9 @@ export const createUploadQueue = (send: SendUpload, { stagesParts = () => false 
   return {
     add: (appId, replicaId, update) => {
       const key = `${appId}\u0000${replicaId ?? ""}`;
-      const items = itemsFor(update, stagesParts());
       const entry = pending.get(key);
-      if (entry) entry.items.push(...items);
-      else pending.set(key, { appId, replicaId, items });
+      if (entry) entry.items.push({ update });
+      else pending.set(key, { appId, replicaId, items: [{ update }] });
       schedule();
     },
     drop: (appId) => {

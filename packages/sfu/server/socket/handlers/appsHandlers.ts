@@ -242,6 +242,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
 
   const openLegacySyncs = new Set<() => void>();
   type StagedChange = {
+    document: AppDocument;
     appId: string;
     replicaId: string | undefined;
     id: string;
@@ -433,12 +434,20 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       commit(room, appId, replicaId, update, false);
       return;
     }
+    const document = room.getOrCreateAppDoc(appId, documents);
     if (part.index === 0) {
       dropStaged();
-      staged = { appId, replicaId, id: part.id, count: part.count, parts: [], bytes: 0 };
+      staged = { document, appId, replicaId, id: part.id, count: part.count, parts: [], bytes: 0 };
     }
     const change = staged;
-    if (!change || change.appId !== appId || change.id !== part.id || change.count !== part.count || change.parts.length !== part.index) {
+    if (
+      !change ||
+      change.document !== document ||
+      change.appId !== appId ||
+      change.id !== part.id ||
+      change.count !== part.count ||
+      change.parts.length !== part.index
+    ) {
       refuse("invalid");
       return;
     }

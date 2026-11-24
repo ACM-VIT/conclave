@@ -99,6 +99,31 @@ describe("app changes sent in parts", () => {
     ]);
   });
 
+  it("are refused when the socket moves to another room, or the app reopens, before the last part", async () => {
+    const room = await boardRoom("pinned");
+    const author = new Y.Doc();
+    const parts = inParts(bigChange(author, 20 * KIB, "r"), 10 * KIB);
+    const sendParts = (id: string, replicaId: string, from: number, to = parts.length) =>
+      parts.slice(from, to).forEach((part, offset) => room.send(part, replicaId, { id, index: from + offset, count: parts.length }));
+
+    sendParts("c", "copy-1", 0, 1);
+    await room.moveTo("pinned-elsewhere");
+    sendParts("c", "copy-1", 1);
+    expect(await settled(room)).toBe("");
+
+    sendParts("d", "copy-2", 0, 1);
+    await room.close();
+    await room.open();
+    sendParts("d", "copy-2", 1);
+
+    expect(await settled(room)).toBe("");
+    expect(room.refused.map((refusal) => [refusal.replicaId, refusal.reason])).toEqual([
+      ["copy-1", "invalid"],
+      ["copy-2", "invalid"],
+    ]);
+    expect(room.state.appChangeStaging.used()).toBe(0);
+  });
+
   it("are dropped when the client sends a whole update before the last part", async () => {
     const room = await boardRoom("abandoned");
     const author = new Y.Doc();

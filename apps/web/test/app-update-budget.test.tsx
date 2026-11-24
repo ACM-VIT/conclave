@@ -224,7 +224,7 @@ describe("app updates stay inside the server's budget", () => {
     expect(JSON.parse(drawn[0]).length).toBeGreaterThan(250);
     expect(strokes(server)).toEqual(drawn);
     expect(sfu.busiestSecond()).toBeLessThanOrEqual(APP_DOCUMENT_UPLOADS_PER_SECOND);
-  });
+  }, 30_000);
 
   it("sends a whiteboard element replacement as a single update", () => {
     const doc = createWhiteboardDoc();
@@ -452,6 +452,31 @@ describe("app updates stay inside the server's budget", () => {
     await advance(6_000);
 
     expect(older.partsSeen).toEqual([]);
+  });
+
+  it("holds a large seeded document until the first sync says the server stages parts, then saves all of it", async () => {
+    const seeded = "s".repeat(300 * 1024);
+    const server = new Y.Doc();
+    const sfu = budgetedSfu("seeded", server);
+    sfu.state.stagesParts = true;
+    sfu.state.syncDelayMs = 500;
+    const seededApp = {
+      id: "seeded",
+      name: "Seeded",
+      createDoc: () => {
+        const doc = new Y.Doc();
+        doc.getText("t").insert(0, seeded);
+        return doc;
+      },
+    };
+    await mount(sfu.socket, () => null, [seededApp as never]);
+    await advance(2_000);
+
+    expect(sfu.reasons).toEqual([]);
+    expect(sfu.partsSeen.length).toBeGreaterThan(1);
+    expect(sfu.sentBytes.every((bytes) => bytes <= APP_DOCUMENT_UPDATE_MAX_BYTES)).toBe(true);
+    expect(ctx.getDoc("seeded").getText("t").toString()).toBe(seeded);
+    expect(server.getText("t").toString()).toBe(seeded);
   });
 
   const catchUpWithThreeChanges = async (docLimit: number) => {

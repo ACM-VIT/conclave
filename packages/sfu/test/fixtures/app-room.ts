@@ -87,6 +87,14 @@ export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChang
     leave: () => {
       context.currentRoom = null;
     },
+    moveTo: async (otherId: string) => {
+      const other = new Room({ id: otherId, clientId: "conclave", workerPid: null, router: {} as Router });
+      state.rooms.set(other.channelId, other);
+      other.addClient(admin);
+      context.currentRoom = other;
+      await call("apps:open", { appId: "board" });
+      return other;
+    },
     requestSync,
     syncFrom,
     joinDocument,

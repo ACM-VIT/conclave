@@ -209,7 +209,7 @@ export function AppsProvider({
   const unsentAppsRef = useRef<Set<string>>(new Set());
   const syncedAppsRef = useRef<Set<string>>(new Set());
   const catchUpsRef = useRef<Map<string, number[]>>(new Map());
-  const stagesPartsRef = useRef(false);
+  const stagesPartsRef = useRef<boolean | null>(null);
   const [uploads] = useState(() =>
     createUploadQueue(
       (appId, replicaId, update, part) => {
@@ -279,7 +279,7 @@ export function AppsProvider({
     docHandlersRef.current.clear();
     awarenessHandlersRef.current.clear();
     uploads.clear();
-    stagesPartsRef.current = false;
+    stagesPartsRef.current = null;
     catchUpsRef.current.clear();
     initialUpdateSentRef.current.clear();
     replicaIdsRef.current.clear();
