@@ -1106,7 +1106,7 @@ function JoinScreen({
     setPending({ mode: "new", roomId: generateRoomCode() });
   };
   const joinMeeting = () => {
-    const candidate = roomCodeFromField(normalizedRoomId);
+    const candidate = roomCodeFromField(normalizedRoomId, getMeetingLinkOrigins());
     if (!candidate) return;
     if (!ensureGuest()) return;
     onEnterStart?.("join");
@@ -1141,7 +1141,7 @@ function JoinScreen({
     setIsSigningOut(false);
   };
 
-  const normalizeCode = (raw: string) => normalizeCodeField(raw, getMeetingLinkOrigins());
+  const normalizeCode = normalizeCodeField;
   const onCodeChange = (raw: string) => onRoomIdChange(raw);
   const shapeCodeEdit = (
     event: { preventDefault(): void },
@@ -1221,7 +1221,7 @@ function JoinScreen({
     };
   };
 
-  const joinCode = roomCodeFromField(normalizedRoomId);
+  const joinCode = roomCodeFromField(normalizedRoomId, getMeetingLinkOrigins());
   const canJoin = joinCode.length > 0;
   const nameReady = hasIdentity || liveDisplayName.length > 0;
 
@@ -1650,7 +1650,12 @@ function JoinScreen({
                       pasteIntoCode(e, e.currentTarget, e.clipboardData.getData("text"));
                     }}
                     onKeyDown={(e) => {
-                      if (e.key === "Enter" && canJoin) joinMeeting();
+                      if (e.key !== "Enter" || !canJoin) return;
+                      const input = e.currentTarget;
+                      if (input.value !== joinCode) {
+                        applyFieldEdit(input, { start: 0, end: input.value.length, text: joinCode });
+                      }
+                      joinMeeting();
                     }}
                     placeholder="Enter a code or link"
                     maxLength={ROOM_CODE_MAX_LENGTH}

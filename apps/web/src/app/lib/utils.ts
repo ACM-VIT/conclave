@@ -191,21 +191,17 @@ export function parseCodeFieldPaste(
   return code ? { kind: "replace", code } : null;
 }
 
-const NOT_CODE_OR_LINK_TEXT = /[^a-z0-9\-:/.?#@%=&+~\\]+/g;
+const URL_PUNCTUATION = /[:/.?#@%=&+~\\]/;
 
-export function normalizeCodeField(value: string, conclaveOrigins: readonly string[]): string {
-  const cleaned = value
-    .toLowerCase()
-    .replace(NOT_CODE_OR_LINK_TEXT, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-+/, "")
-    .slice(0, ROOM_CODE_MAX_LENGTH);
-  const link = parseCodeFieldPaste(cleaned, conclaveOrigins);
-  return link?.kind === "replace" ? link.code : cleaned;
+export const normalizeCodeField = (value: string) =>
+  URL_PUNCTUATION.test(value) ? value : value.toLowerCase();
+
+export function roomCodeFromField(value: string, conclaveOrigins: readonly string[]): string {
+  const paste = parseCodeFieldPaste(value, conclaveOrigins);
+  if (paste?.kind === "replace") return paste.code;
+  const code = value.trim();
+  return code && sanitizeRoomCode(code) === code ? code : "";
 }
-
-export const roomCodeFromField = (value: string) =>
-  /^[a-z0-9-]+$/.test(value) ? sanitizeRoomCode(value) : "";
 
 export type FieldEdit = { start: number; end: number; text: string };
 

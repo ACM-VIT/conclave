@@ -12,7 +12,7 @@ import {
 } from "../src/app/lib/utils";
 
 const ORIGINS = ["https://conclave.acmvit.in", "http://localhost:3615"];
-const normalizeField = (value: string) => normalizeCodeField(value, ORIGINS);
+const normalizeField = normalizeCodeField;
 
 const plan = (value: string, start: number, end: number, text: string) =>
   planFieldEdit(value, start, end, text, sanitizeRoomCodeInput, ROOM_CODE_MAX_LENGTH);

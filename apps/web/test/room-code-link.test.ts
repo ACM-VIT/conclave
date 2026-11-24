@@ -386,48 +386,96 @@ describe("pasting into the join code field", () => {
 
 const URL_PUNCTUATION = /[:/.?#@%=&+~\\]/;
 
-const referenceClean = (text: string) =>
-  text
-    .toLowerCase()
-    .replace(/[^a-z0-9\-:/.?#@%=&+~\\]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-+/, "")
-    .slice(0, 64);
+const typedSoFar = (text: string) => {
+  const cut = text.search(URL_PUNCTUATION);
+  return cut === -1 ? text.toLowerCase() : text.slice(0, cut).toLowerCase() + text.slice(cut);
+};
+
+const typeIntoField = (text: string) => {
+  let value = "";
+  const steps: string[] = [];
+  for (const character of text) {
+    value = normalizeCodeField(value + character);
+    steps.push(value);
+  }
+  return { value, steps };
+};
+
+const referenceFieldCode = (value: string, origins: readonly string[]) => {
+  const link = expectedReplacement(value, origins);
+  if (link) return link;
+  const code = value.trim();
+  return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(code) && code.length <= 64 ? code : "";
+};
+
+const TEAM_ORIGINS = [...KNOWN_ORIGINS, "https://team-meet.example"];
 
 describe("typing into the join code field", () => {
-  it("turns a typed Conclave link into its code", () => {
-    expect(normalizeCodeField("conclave.acmvit.in/abc-def", KNOWN_ORIGINS)).toBe("abc-def");
-    expect(normalizeCodeField("HTTPS://Conclave.ACMVIT.in/Abc-Def", KNOWN_ORIGINS)).toBe("abc-def");
-    expect(normalizeCodeField("http://localhost:3615/room-one", KNOWN_ORIGINS)).toBe("room-one");
+  it("keeps typed text as typed, lowercasing only text without URL punctuation", () => {
+    expect(normalizeCodeField("ABC-Def")).toBe("abc-def");
+    expect(normalizeCodeField("My Room")).toBe("my room");
+    expect(normalizeCodeField("abc--def")).toBe("abc--def");
+    expect(normalizeCodeField("https://Team--Meet.example/Other-Room")).toBe(
+      "https://Team--Meet.example/Other-Room",
+    );
   });
 
-  it("never turns a typed or dropped foreign URL into a code", () => {
-    for (const text of [
-      "https://example.org/about",
-      "example.org/about",
+  it("joins only a valid code or a whole link to a Conclave origin", () => {
+    expect(roomCodeFromField("abc-defg-hij", TEAM_ORIGINS)).toBe("abc-defg-hij");
+    expect(roomCodeFromField(" abc-defg-hij ", TEAM_ORIGINS)).toBe("abc-defg-hij");
+    for (const value of ["abc--def", "abc-", "-abc", "my room", "abc.def", ""]) {
+      expect({ value, code: roomCodeFromField(value, TEAM_ORIGINS) }).toEqual({ value, code: "" });
+    }
+    expect(roomCodeFromField("https://conclave.acmvit.in/abc-def/", TEAM_ORIGINS)).toBe("abc-def");
+    expect(roomCodeFromField("https://team-meet.example/other-room", TEAM_ORIGINS)).toBe("other-room");
+    for (const value of [
+      "https://team--meet.example/other-room",
+      "team--meet.example/other-room",
       "https://conclave.acmvit.in:80/other-room",
-      "http://conclave.acmvit.in/other-room",
-      "https://localhost:3615/other-room",
-      "meet.example",
-      "11/23",
-      "a.b",
+      "https://example.org/about",
+      "https://conclave.acmvit.in/abc-def/extra",
     ]) {
-      const value = normalizeCodeField(text, KNOWN_ORIGINS);
-      expect({ text, code: roomCodeFromField(value) }).toEqual({ text, code: "" });
+      expect({ value, code: roomCodeFromField(value, TEAM_ORIGINS) }).toEqual({ value, code: "" });
     }
   });
 
-  it("keeps the usual code typing rules", () => {
-    expect(normalizeCodeField("My Room", KNOWN_ORIGINS)).toBe("my-room");
-    expect(normalizeCodeField("abc--def", KNOWN_ORIGINS)).toBe("abc-def");
-    expect(normalizeCodeField("-abc", KNOWN_ORIGINS)).toBe("abc");
-    expect(normalizeCodeField("abc_def", KNOWN_ORIGINS)).toBe("abc-def");
-    expect(normalizeCodeField("abc-", KNOWN_ORIGINS)).toBe("abc-");
-    expect(roomCodeFromField("abc-")).toBe("abc");
-    expect(roomCodeFromField("")).toBe("");
+  it("keeps Greptile's two typed links as typed and resolves only the real one", () => {
+    const lookalike = typeIntoField("https://team--meet.example/other-room");
+    expect(lookalike.value).toBe("https://team--meet.example/other-room");
+    expect(roomCodeFromField(lookalike.value, TEAM_ORIGINS)).toBe("");
+    const trailing = typeIntoField("https://conclave.acmvit.in/abc-def/");
+    expect(trailing.value).toBe("https://conclave.acmvit.in/abc-def/");
+    expect(roomCodeFromField(trailing.value, TEAM_ORIGINS)).toBe("abc-def");
   });
 
-  it("is stable and only makes a code from URL text that links to a Conclave origin", () => {
+  it("types every known-origin link character by character without rewriting it", () => {
+    const failures: string[] = [];
+    const forms: string[] = [];
+    for (const origin of TEAM_ORIGINS) {
+      const url = new URL(origin);
+      const hosts = [url.host, url.host.toUpperCase()];
+      if (url.hostname.includes("-")) hosts.push(url.host.replace("-", "--"), url.host.replace("-", "_"));
+      hosts.push(`${url.hostname}:${url.protocol === "https:" ? "80" : "443"}`, `evil.${url.host}`);
+      for (const host of hosts) {
+        for (const prefix of [`${url.protocol}//`, url.protocol === "https:" ? "http://" : "https://", "//", ""]) {
+          for (const tail of ["", "/", "?ref=chat", "/?ref=chat#top", "/extra", "?q=a b"]) {
+            forms.push(`${prefix}${host}/abc-defg-hij${tail}`);
+          }
+        }
+      }
+    }
+    for (const text of forms) {
+      const typed = typeIntoField(text);
+      const rewrote = typed.steps.some((step, index) => step !== typedSoFar(text.slice(0, step.length)) || step.length !== index + 1);
+      const code = roomCodeFromField(typed.value, TEAM_ORIGINS);
+      const expected = referenceFieldCode(typed.value, TEAM_ORIGINS);
+      if (rewrote || code !== expected) failures.push(JSON.stringify({ text, value: typed.value, code, expected }));
+    }
+    expect(failures).toEqual([]);
+    expect(forms.length).toBeGreaterThan(500);
+  });
+
+  it("is stable and only makes a code from a valid code or a whole Conclave link", () => {
     const random = seededRandom(320);
     const pick = (items: readonly string[]) => items[Math.floor(random() * items.length)];
     const failures: string[] = [];
@@ -440,14 +488,13 @@ describe("typing into the join code field", () => {
         const count = 1 + Math.floor(random() * 6);
         for (let i = 0; i < count; i += 1) text += pick(PIECES);
       }
-      const value = normalizeCodeField(text, KNOWN_ORIGINS);
-      const code = roomCodeFromField(value);
-      const stable = normalizeCodeField(value, KNOWN_ORIGINS) === value;
-      const cleaned = referenceClean(text);
-      const fromLink = URL_PUNCTUATION.test(cleaned) && code !== "";
-      if (fromLink) linkCodes += 1;
-      const allowed = !fromLink || expectedReplacement(cleaned) === code;
-      if (!stable || !allowed) failures.push(JSON.stringify({ text, value, code }));
+      const value = normalizeCodeField(text);
+      const code = roomCodeFromField(value, KNOWN_ORIGINS);
+      if (URL_PUNCTUATION.test(value) && code) linkCodes += 1;
+      const stable = normalizeCodeField(value) === value;
+      if (!stable || code !== referenceFieldCode(value, KNOWN_ORIGINS)) {
+        failures.push(JSON.stringify({ text, value, code }));
+      }
     }
     expect(failures).toEqual([]);
     expect(linkCodes).toBeGreaterThan(300);
