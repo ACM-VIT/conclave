@@ -28,10 +28,25 @@ else if (args[0] === "create") {
     for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { fs.appendFileSync(process.env.FAKE_DOCKER_LOG, JSON.stringify({ received: signal }) + "\\n"); process.exit(1); });
     setInterval(() => {}, 1000);
   }
+} else if (args[0] === "ps" && process.env.FAKE_DOCKER_FAIL_ONCE?.split(",").includes("ps") && !fs.existsSync(process.env.FAKE_DOCKER_STATE + ".ps-failed")) {
+  fs.writeFileSync(process.env.FAKE_DOCKER_STATE + ".ps-failed", "");
+  process.stderr.write("Cannot connect to the Docker daemon\\n");
+  process.exit(1);
+} else if (args[0] === "rm" && process.env.FAKE_DOCKER_FAIL_ONCE?.split(",").includes("rm") && !fs.existsSync(process.env.FAKE_DOCKER_STATE + ".rm-failed")) {
+  fs.writeFileSync(process.env.FAKE_DOCKER_STATE + ".rm-failed", "");
+  process.stderr.write("Error response from daemon: removal already in progress\\n");
+  process.exit(1);
+} else if (args[0] === "rm") {
+  fs.appendFileSync(process.env.FAKE_DOCKER_STATE, JSON.stringify({ removed: args[2] }) + "\\n");
+} else if (args[0] === "rmi") {
+  const state = fs.existsSync(process.env.FAKE_DOCKER_STATE) ? fs.readFileSync(process.env.FAKE_DOCKER_STATE, "utf8").trim().split("\\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
+  const removed = new Set(state.filter((entry) => entry.removed).map((entry) => entry.removed));
+  if (state.some((entry) => entry.id && !removed.has(entry.id))) { process.stderr.write("conflict: unable to remove repository reference (must force) - container is using its referenced image\\n"); process.exit(1); }
 } else if (args[0] === "ps") {
   const filter = args[args.indexOf("--filter") + 1].replace(/^label=/, "");
   const state = fs.existsSync(process.env.FAKE_DOCKER_STATE) ? fs.readFileSync(process.env.FAKE_DOCKER_STATE, "utf8").trim().split("\\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
-  for (const container of state) if (container.labels.includes(filter)) process.stdout.write(container.id + "\\n");
+  const removed = new Set(state.filter((entry) => entry.removed).map((entry) => entry.removed));
+  for (const container of state) if (container.id && !removed.has(container.id) && container.labels.includes(filter)) process.stdout.write(container.id + "\\n");
 }
 else if (args[0] === "start" && process.env.FAKE_DOCKER_START_FAIL) { process.stderr.write("failed to create task for container: exec: \\"bad\\": executable file not found\\n"); process.exit(1); }
 else if (args[0] === "buildx" && args[1] === "build" && process.env.FAKE_DOCKER_BUILD_HANG && !fs.existsSync(process.env.FAKE_DOCKER_BUILD_HANG)) {
@@ -307,4 +322,22 @@ test("SIGTERM after docker create made the container but before it exited still 
   const created = calls.findIndex((args) => args.startsWith("create "));
   const tag = calls.find((args) => args.startsWith("buildx build ")).split(" -t ")[1].split(" ")[0];
   assert.deepEqual(calls.slice(created + 1).map((args) => args.replace(/owner=[0-9a-f]+/, "owner=X")), ["ps -a -q --no-trunc --filter label=conclave-check-images.owner=X", "rm -f 0123456789abcdef0123", `rmi ${tag}`]);
+});
+
+test("a container or tag whose removal failed stays registered and is removed on the next pass", async (t) => {
+  for (const failing of ["ps", "rm"]) {
+    const fake = fakeDocker(t, { FAKE_DOCKER_FAIL_ONCE: failing });
+    const docker = pinnedDocker({ host: "unix:///var/run/docker.sock" }, fake.env);
+    const resources = new RunResources(docker);
+    const tag = resources.claimImage("conclave-check-images/x:run");
+    await startContainer(docker, resources, { name: "conclave-check-images-x", tag, env: {}, mounts: [] });
+    await resources.removeAll();
+    assert.equal(resources.owners.size, 1, failing);
+    assert.deepEqual([...resources.images], [tag], failing);
+    await resources.removeAll();
+    assert.equal(resources.owners.size, 0, failing);
+    assert.deepEqual([...resources.images], [], failing);
+    const calls = fake.calls().map((call) => call.args.slice(2, 4).join(" "));
+    assert.deepEqual(calls.slice(2), failing === "ps" ? ["ps -a", "rmi " + tag, "ps -a", "rm -f", "rmi " + tag] : ["ps -a", "rm -f", "rmi " + tag, "ps -a", "rm -f", "rmi " + tag], failing);
+  }
 });

@@ -173,14 +173,14 @@ export class RunResources {
     for (const owner of [...this.owners]) {
       const listed = await this.docker(["ps", "-a", "-q", "--no-trunc", "--filter", `label=${owner}`], { allowFailure: true, cleanup: true });
       if (listed.status !== 0) continue;
-      this.owners.delete(owner);
+      let removed = true;
       for (const id of listed.stdout.split("\n").map((line) => line.trim()).filter(Boolean)) {
-        await this.docker(["rm", "-f", id], { allowFailure: true, cleanup: true });
+        removed = (await this.docker(["rm", "-f", id], { allowFailure: true, cleanup: true })).status === 0 && removed;
       }
+      if (removed) this.owners.delete(owner);
     }
     for (const image of [...this.images]) {
-      this.images.delete(image);
-      await this.docker(["rmi", image], { allowFailure: true, cleanup: true });
+      if ((await this.docker(["rmi", image], { allowFailure: true, cleanup: true })).status === 0) this.images.delete(image);
     }
   }
 }
