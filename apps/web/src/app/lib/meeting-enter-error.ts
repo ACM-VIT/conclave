@@ -30,6 +30,12 @@ export function describeEnterError(
           "Check that your devices are connected, then head back to setup to try again.",
         canRetry: false,
       };
+    case "JOIN_REJECTED":
+      return {
+        title: `Couldn't ${verb} the meeting`,
+        detail: error.message,
+        canRetry: true,
+      };
     case "CONNECTION_FAILED":
       return {
         title: `Couldn't ${verb} the meeting`,

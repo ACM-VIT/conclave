@@ -590,6 +590,12 @@ Fixed 2026-10-22 and guarded by `testNativeCallCorrectnessBlockersStayFixed`:
   `closeSendProducer`, `closeSendTransport`), never directly and never via
   `sync`. SendTransport/SendHandler state is unsynchronized, and the queued
   transport close keeps the Device alive until any in-flight create is done.
+  Every other producer mutation joins the same queue: pause, resume and layer
+  changes (`pauseSendProducer`, `resumeSendProducer`,
+  `setSendProducerMaxSpatialLayer`) and the noise-suppression `replaceTrack`,
+  because a pause reads the track pointer a `replaceTrack` writes. Android
+  does the same on the producer's `SendTransportLane`. Mute latency is not
+  at stake: the track and capture go silent on the main thread first.
 - iOS: the SFU closes a displaced producer and broadcasts `producerClosed`
   for it to the owner before acking the replacement, so with off-main creates
   that event reaches the view model first. Microphone replacements (bandwidth
@@ -597,10 +603,39 @@ Fixed 2026-10-22 and guarded by `testNativeCallCorrectnessBlockersStayFixed`:
   `intentionalLocalAudioProducerCloseIds` before the create, and
   `handleLocalProducerClosed` consumes it (like the video marker). Once the
   replacement's create returns in the same session, never fall back to the
-  predecessor: commit the replacement, paused and server-muted if a mute
-  landed (`isLocalAudioMuteInEffect`). `startProducingAudio` is single-flight
+  predecessor: commit the replacement at the user's newest mute intent
+  (iOS `localAudioIntentEnabled`, Android `localAudioTargetEnabled`), paused
+  and server-muted when muted, live and server-unmuted when an unmute landed
+  during the create (that unmute's late ack belongs to the predecessor and
+  changes nothing). `startProducingAudio` is single-flight
   (`audioStartTask`) so two starts never race a produce, and microphone tracks
   are created disabled and enabled only by a live commit.
+- Every in-flight or scheduled flag on the Android client is an owner token,
+  not a boolean (`takeInFlightToken()`): `audioStartOrEnableOwner`,
+  `audioBandwidthRefreshOwner`, `audioProducerRouteRecoveryOwner`,
+  `audioNoiseSuppressionChangeOwner`, `videoBandwidthRefreshOwner`,
+  `screenBandwidthRefreshOwner`, `audioRouteReapplyOwner`,
+  `audioCaptureRestartOwner` and `audioRouteChangeNotificationOwner`. Only the
+  call holding a token clears it, and only while `configurationGeneration`
+  still matches. Resets end all such work at once: a mute clears the
+  start/enable owner, `cleanup()` clears them all, and
+  `releaseCallAudioMode()` clears the three route debounces. Work that ends
+  without its token still runs `runPendingMicrophoneChanges()`, which checks
+  the guards itself. Mic state reports go through `notifyLocalAudioEnabled`,
+  silent while the bandwidth refresh token is held, so
+  `onLocalAudioEnabledChanged` is never swapped out. iOS gets the same from
+  single-flight flags restored only in the same session
+  (`audioBandwidthRefreshInFlight`, `screenBandwidthRefreshInFlight`,
+  `suppressLocalStateCallbacks`), `audioStartTask` identity and
+  `audioCaptureRestartToken`. A new guard belongs in this list.
+- Every input that changes publish settings goes through
+  `publishSettingsChanged()` on Android (camera and share settings, video
+  quality), which bumps `mediaPublishSettingsRevision`. A video produce in
+  flight records the settings it encoded and replays the settings refresh
+  when the revision moved (`replayVideoSettingsRefreshIfChangedSince`); iOS
+  re-applies the newest profile at each commit point
+  (`reapplyLocalBandwidthProfile(ifChangedSince:)`). A new settings input
+  belongs here.
 - A failed mute fails closed on both platforms: `setAudioEnabled(false)`
   keeps the producer paused and the track silent, and the view model stays
   muted while showing the error.
