@@ -7,9 +7,14 @@ import type { Socket } from "socket.io-client";
 import { AppsContext, AppsProvider } from "../../../packages/apps-sdk/src/sdk/runtime/AppsProvider";
 import { useApps } from "../../../packages/apps-sdk/src/sdk/hooks/useApps";
 import { useAppDoc } from "../../../packages/apps-sdk/src/sdk/hooks/useAppDoc";
-import { APP_DOCUMENT_MAX_BYTES, APP_DOCUMENT_UPDATE_MAX_BYTES, APP_DOCUMENT_UPLOAD_INTERVAL_MS, APP_DOCUMENT_UPLOADS_PER_SECOND } from "../../../packages/apps-sdk/src/sdk/limits";
+import {
+  APP_DOCUMENT_MAX_BYTES,
+  APP_DOCUMENT_UPDATE_MAX_BYTES,
+  APP_DOCUMENT_UPLOAD_INTERVAL_MS,
+  APP_DOCUMENT_UPLOAD_LIST_MAX,
+  APP_DOCUMENT_UPLOADS_PER_SECOND,
+} from "../../../packages/apps-sdk/src/sdk/limits";
 import { createUploadQueue } from "../../../packages/apps-sdk/src/sdk/runtime/uploadQueue";
-import { savedSizeStaysUnder } from "../../../packages/apps-sdk/src/sdk/runtime/documentSize";
 import { whiteboardApp } from "../../../packages/apps-sdk/src/apps/whiteboard/web/index";
 import {
   addElement,
@@ -51,6 +56,7 @@ const budgetedSfu = (appId: string, serverDoc: Y.Doc) => {
   const sentBytes: number[] = [];
   const reasons: string[] = [];
   const partsSeen: Array<{ id: string; index: number; count: number }> = [];
+  const lists: number[] = [];
   let staged: { id: string; parts: Uint8Array[] } | null = null;
   const state = {
     refusals: 0,
@@ -60,6 +66,7 @@ const budgetedSfu = (appId: string, serverDoc: Y.Doc) => {
     refusalDelayMs: 0,
     syncDelayMs: 0,
     stagesParts: false,
+    takesLists: false,
     docLimit: Number.POSITIVE_INFINITY,
     activeAppId: appId as string | null,
     joined: true,
@@ -111,13 +118,36 @@ const budgetedSfu = (appId: string, serverDoc: Y.Doc) => {
             syncMessage: Y.encodeStateAsUpdate(serverDoc),
             stateVector: Y.encodeStateVector(serverDoc),
             ...(state.stagesParts ? { stagesParts: true } : {}),
+            ...(state.takesLists ? { takesUpdateLists: true } : {}),
           });
         if (state.syncDelayMs > 0) setTimeout(answer, state.syncDelayMs);
         else answer();
         return;
       }
       if (event !== "apps:yjs:update") return;
-      const { update, replicaId, part } = payload as { update: Uint8Array; replicaId: string; part?: { id: string; index: number; count: number } };
+      const { update, updates, replicaId, part } = payload as {
+        update?: Uint8Array;
+        updates?: Uint8Array[];
+        replicaId: string;
+        part?: { id: string; index: number; count: number };
+      };
+      if (updates) {
+        sentAt.push(Date.now());
+        sentBytes.push(updates.reduce((total, listed) => total + listed.length, 0));
+        lists.push(updates.length);
+        if (!state.joined || state.refusedReplicas.has(replicaId)) return;
+        if (!takeToken(limiter, "apps:yjs:update", RATE_LIMITS.appsYjsUpdate)) {
+          refuse(replicaId, "rate-limited");
+          return;
+        }
+        staged = null;
+        for (const listed of updates) {
+          if (state.refusedReplicas.has(replicaId)) return;
+          accept(replicaId, [listed]);
+        }
+        return;
+      }
+      if (!update) return;
       sentAt.push(Date.now());
       sentBytes.push(update.length);
       if (part) partsSeen.push(part);
@@ -166,7 +196,7 @@ const budgetedSfu = (appId: string, serverDoc: Y.Doc) => {
   const dropStaging = () => {
     staged = null;
   };
-  return { socket, state, sentAt, sentBytes, reasons, partsSeen, syncPayloads, busiestSecond, fire, interrupt, restore, dropStaging };
+  return { socket, state, sentAt, sentBytes, reasons, partsSeen, lists, syncPayloads, busiestSecond, fire, interrupt, restore, dropStaging };
 };
 
 const mount = async (socket: Socket, Body: ComponentType, apps: never[]) => {
@@ -744,112 +774,147 @@ describe("edits near the document limit", () => {
   };
   const pick = (random: () => number, below: number) => Math.floor(random() * below);
   const encodedBytes = (doc: Y.Doc) => Y.encodeStateAsUpdate(doc).length;
-  const savedBytes = (doc: Y.Doc) => {
-    const saved = new Y.Doc();
-    Y.applyUpdate(saved, Y.encodeStateAsUpdate(doc));
-    return encodedBytes(saved);
+  const labels = (doc: Y.Doc) => getItems(doc).map((item) => /^[a-z]+-\d+-(\d+-)?/.exec(item)?.[0] ?? item.slice(0, 12));
+  const textOf = (doc: Y.Doc) => doc.getText("t").toString();
+  const fits = (model: Y.Doc, update: Uint8Array) => {
+    const trial = new Y.Doc();
+    Y.applyUpdate(trial, Y.encodeStateAsUpdate(model));
+    Y.applyUpdate(trial, update);
+    return trial.store.pendingStructs === null && trial.store.pendingDs === null && encodedBytes(trial) <= APP_DOCUMENT_MAX_BYTES;
   };
-  const labels = (doc: Y.Doc) => getItems(doc).map((item) => /^[a-z]+-\d+-/.exec(item)?.[0] ?? item.slice(0, 12));
-
-  const burstNearTheLimit = async (seed: number) => {
-    const random = seeded(seed);
-    const server = new Y.Doc();
-    const filled = APP_DOCUMENT_MAX_BYTES - 1_024 - pick(random, 420 * 1024);
-    for (let index = 0; encodedBytes(server) < filled - 16; index += 1) {
-      addItem(server, `saved-${index}-`.padEnd(Math.min(200 * 1024, filled - encodedBytes(server)), "s"));
-    }
-    const sfu = budgetedSfu("dev-playground", server);
-    sfu.state.stagesParts = true;
-    sfu.state.docLimit = APP_DOCUMENT_MAX_BYTES;
-    await mount(sfu.socket, () => null, [{ id: "dev-playground", name: "Dev" } as never]);
-    const live = ctx.getDoc("dev-playground");
-    if (random() < 0.5) {
-      const writer = new Y.Doc();
-      Y.applyUpdate(writer, Y.encodeStateAsUpdate(server));
-      const before = Y.encodeStateVector(writer);
-      addItem(writer, "remote-0-".padEnd(1 + pick(random, APP_DOCUMENT_UPDATE_MAX_BYTES - 1_024), "r"));
-      Y.applyUpdate(server, Y.encodeStateAsUpdate(writer, before));
-    }
-    const model = new Y.Doc();
-    Y.applyUpdate(model, Y.encodeStateAsUpdate(server));
-    const edits: Uint8Array[] = [];
-    const take = (update: Uint8Array) => edits.push(update);
-    live.on("update", take);
-    await act(async () => {
-      const count = 2 + pick(random, 5);
-      for (let index = 0; index < count; index += 1) addItem(live, `edit-${index}-`.padEnd(1 + pick(random, 150 * 1024), "e"));
-    });
-    live.off("update", take);
-    let refusedOne = false;
+  const landInOrder = (model: Y.Doc, edits: Uint8Array[]) => {
     for (const edit of edits) {
-      const trial = new Y.Doc();
-      Y.applyUpdate(trial, Y.encodeStateAsUpdate(model));
-      Y.applyUpdate(trial, edit);
-      if (encodedBytes(trial) > APP_DOCUMENT_MAX_BYTES) {
-        refusedOne = true;
-        break;
-      }
+      if (!fits(model, edit)) return true;
       Y.applyUpdate(model, edit);
     }
-    await advance(3_000);
-    return { sfu, server, model, refusedOne, edits };
+    return false;
+  };
+  const TEXT_CLIENT = 0xffffffff;
+  const writeVarUint = (bytes: number[], value: number) => {
+    let rest = value;
+    while (rest > 0x7f) {
+      bytes.push(0x80 | (rest & 0x7f));
+      rest = Math.floor(rest / 128);
+    }
+    bytes.push(rest);
+  };
+  const longText = (length: number) => {
+    const server = new Y.Doc();
+    server.clientID = TEXT_CLIENT;
+    server.getText("t").insert(0, "x".repeat(length));
+    return server;
+  };
+  const splitEveryOther = (doc: Y.Doc, from: number, deletions: number) => {
+    const bytes: number[] = [];
+    writeVarUint(bytes, 0);
+    writeVarUint(bytes, 1);
+    writeVarUint(bytes, TEXT_CLIENT);
+    writeVarUint(bytes, deletions);
+    for (let step = 0; step < deletions; step += 1) {
+      writeVarUint(bytes, from + step * 2);
+      writeVarUint(bytes, 1);
+    }
+    Y.applyUpdate(doc, Uint8Array.from(bytes), "split");
+  };
+  const nearTheLimit = async (server: Y.Doc) => {
+    const sfu = budgetedSfu("dev-playground", server);
+    sfu.state.stagesParts = true;
+    sfu.state.takesLists = true;
+    sfu.state.docLimit = APP_DOCUMENT_MAX_BYTES;
+    await mount(sfu.socket, () => null, [{ id: "dev-playground", name: "Dev" } as never]);
+    return sfu;
+  };
+  const editsMadeBy = async (make: (doc: Y.Doc) => void) => {
+    const live = ctx.getDoc("dev-playground");
+    const edits: Uint8Array[] = [];
+    const take = (update: Uint8Array, origin: unknown) => {
+      if (origin !== "remote") edits.push(update);
+    };
+    live.on("update", take);
+    await act(async () => make(live));
+    live.off("update", take);
+    return edits;
   };
 
-  it("saves every edit of a burst that fits after the ones before it, over random sizes near the limit and another writer's change it has not seen yet", async () => {
-    let refusedBursts = 0;
-    let savedBursts = 0;
-    for (let seed = 1; seed <= 32; seed += 1) {
-      const { sfu, server, model, refusedOne } = await burstNearTheLimit(seed);
-      expect({ seed, saved: labels(server) }).toEqual({ seed, saved: labels(model) });
-      expect({ seed, reasons: sfu.reasons }).toEqual({ seed, reasons: refusedOne ? ["too-large"] : [] });
-      if (refusedOne) refusedBursts += 1;
-      else savedBursts += 1;
+  it("saves a fitting edit queued with one that does not fit, after deletions that split a long text grew the document", async () => {
+    const server = longText(120_001);
+    const sfu = await nearTheLimit(server);
+    await editsMadeBy((doc) => {
+      addItem(doc, "warm-0-a");
+      addItem(doc, "warm-1-b");
+    });
+    await advance(1_000);
+    const [deletion] = await editsMadeBy((doc) => splitEveryOther(doc, 0, 37_000));
+    await advance(1_000);
+    expect(deletion.length).toBeLessThan(160 * 1024);
+    expect(encodedBytes(server)).toBeGreaterThan(900 * 1024);
+
+    await editsMadeBy((doc) => {
+      addItem(doc, "fits-0-".padEnd(20 * 1024, "f"));
+      addItem(doc, "big-1-".padEnd(200 * 1024, "b"));
+    });
+    await advance(3_000);
+
+    expect(labels(server)).toEqual(["warm-0-", "warm-1-", "fits-0-"]);
+    expect(sfu.reasons).toEqual(["too-large"]);
+    expect(labels(ctx.getDoc("dev-playground"))).toEqual(["warm-0-", "warm-1-", "fits-0-"]);
+  });
+
+  it("never loses an edit that would fit on its own, over random inserts, deletions that split items, large pastes and another writer's changes near the limit", async () => {
+    let refused = 0;
+    let rounds = 0;
+    let splits = 0;
+    for (let seed = 1; seed <= 24; seed += 1) {
+      const random = seeded(seed);
+      const length = 90_000 + pick(random, 30_000);
+      const server = longText(length);
+      const filled = 160 * 1024 + pick(random, 560 * 1024);
+      for (let index = 0; encodedBytes(server) < filled - 16; index += 1) {
+        addItem(server, `saved-${index}-`.padEnd(Math.min(200 * 1024, filled - encodedBytes(server)), "s"));
+      }
+      const sfu = await nearTheLimit(server);
+      const model = new Y.Doc();
+      Y.applyUpdate(model, Y.encodeStateAsUpdate(server));
+      let expectedRefusals = 0;
+      for (let round = 0, count = 4 + pick(random, 5); round < count; round += 1) {
+        if (random() < 0.25) {
+          const writer = new Y.Doc();
+          Y.applyUpdate(writer, Y.encodeStateAsUpdate(server));
+          const before = Y.encodeStateVector(writer);
+          addItem(writer, `remote-${round}-`.padEnd(1 + pick(random, 120 * 1024), "r"));
+          const unseen = Y.encodeStateAsUpdate(writer, before);
+          if (fits(server, unseen)) {
+            Y.applyUpdate(server, unseen);
+            Y.applyUpdate(model, unseen);
+          }
+        }
+        const edits = await editsMadeBy((doc) => {
+          for (let index = 0, burst = 1 + pick(random, 4); index < burst; index += 1) {
+            const text = doc.getText("t");
+            const kind = random();
+            if (kind < 0.35) {
+              const from = pick(random, length / 2);
+              splitEveryOther(doc, from, Math.max(1, Math.floor(Math.min(length - from, 2_000 + pick(random, 60_000)) / 2)));
+              splits += 1;
+            } else if (kind < 0.5) text.insert(pick(random, text.length + 1), "i".repeat(1 + pick(random, 40)));
+            else if (kind < 0.7) text.insert(pick(random, text.length + 1), "p".repeat(64 * 1024 + pick(random, 190 * 1024)));
+            else addItem(doc, `edit-${round}-${index}-`.padEnd(1 + pick(random, 150 * 1024), "e"));
+          }
+        });
+        if (landInOrder(model, edits)) expectedRefusals += 1;
+        await advance(2_500);
+        rounds += 1;
+        expect({ seed, round, sameText: textOf(server) === textOf(model), items: labels(server) }).toEqual({ seed, round, sameText: true, items: labels(model) });
+      }
+      expect({ seed, reasons: sfu.reasons }).toEqual({ seed, reasons: Array.from({ length: expectedRefusals }, () => "too-large") });
+      refused += expectedRefusals;
       await act(async () => root.unmount());
       root = createRoot(container);
     }
-    expect(refusedBursts).toBeGreaterThan(5);
-    expect(savedBursts).toBeGreaterThan(5);
-  }, 60_000);
-
-  it("never says a document's saved copy stays under a limit it is over, even with undo history kept, and answers exactly when half a second has passed since it was last asked", async () => {
-    let under = 0;
-    let over = 0;
-    for (let seed = 1; seed <= 40; seed += 1) {
-      const random = seeded(seed);
-      const doc = new Y.Doc();
-      const undo = seed % 2 === 0 ? new Y.UndoManager([doc.getText("t"), doc.getMap("m")], { captureTimeout: 0 }) : null;
-      const peer = new Y.Doc();
-      let askedAt = Number.NEGATIVE_INFINITY;
-      for (let step = 0; step < 60; step += 1) {
-        const kind = random();
-        const text = doc.getText("t");
-        if (kind < 0.3) text.insert(pick(random, text.length + 1), "w".repeat(1 + pick(random, 4_000)));
-        else if (kind < 0.45 && text.length > 0) {
-          const at = pick(random, text.length);
-          text.delete(at, Math.min(text.length - at, 1 + pick(random, 3_000)));
-        } else if (kind < 0.6) doc.getMap("m").set(`k${pick(random, 5)}`, "v".repeat(pick(random, 2_000)));
-        else if (kind < 0.75) {
-          const before = Y.encodeStateVector(peer);
-          Y.applyUpdate(peer, Y.encodeStateAsUpdate(doc, Y.encodeStateVector(peer)));
-          peer.getArray("a").push(["p".repeat(1 + pick(random, 3_000))]);
-          Y.applyUpdate(doc, Y.encodeStateAsUpdate(peer, before), "remote");
-        } else await vi.advanceTimersByTimeAsync(pick(random, 700));
-        const actual = savedBytes(doc);
-        const limit = Math.max(0, actual - 6_000 + pick(random, 12_000));
-        const settled = Date.now() - askedAt >= 500;
-        const answer = savedSizeStaysUnder(doc, limit);
-        if (answer) under += 1;
-        else over += 1;
-        if (answer) expect({ seed, step, actual, limit }).toEqual({ seed, step, actual: Math.min(actual, limit), limit });
-        if (settled) expect({ seed, step, answer }).toEqual({ seed, step, answer: actual <= limit });
-        askedAt = Date.now();
-      }
-      if (undo) expect(encodedBytes(doc)).toBeGreaterThan(savedBytes(doc));
-      undo?.destroy();
-    }
-    expect(under).toBeGreaterThan(200);
-    expect(over).toBeGreaterThan(200);
-  });
+    expect(rounds).toBeGreaterThan(80);
+    expect(refused).toBeGreaterThan(10);
+    expect(splits).toBeGreaterThan(30);
+  }, 240_000);
 });
 
 describe("the upload queue", () => {
@@ -871,8 +936,8 @@ describe("the upload queue", () => {
   it("merges what waits into one upload but never past the size the server takes", async () => {
     const doc = new Y.Doc();
     const sent: Uint8Array[] = [];
-    const queue = createUploadQueue((_appId, _replicaId, update) => {
-      sent.push(update);
+    const queue = createUploadQueue((_appId, _replicaId, upload) => {
+      if ("update" in upload) sent.push(upload.update);
       return true;
     });
     const half = Math.floor(APP_DOCUMENT_UPDATE_MAX_BYTES * 0.6);
@@ -889,6 +954,32 @@ describe("the upload queue", () => {
     const rebuilt = new Y.Doc();
     sent.forEach((update) => Y.applyUpdate(rebuilt, update));
     expect(rebuilt.getText("t").toString()).toBe(doc.getText("t").toString());
+  });
+
+  it("sends what waits as a list of the changes themselves to a server that takes lists, never past the size or count it takes", async () => {
+    const doc = new Y.Doc();
+    const uploads: Uint8Array[][] = [];
+    const queue = createUploadQueue(
+      (_appId, _replicaId, upload) => {
+        uploads.push("updates" in upload ? upload.updates : [upload.update]);
+        return true;
+      },
+      { stagesParts: () => true, takesLists: () => true },
+    );
+    const changes = [bigUpdate(doc, 10)];
+    queue.add("board", "r", changes[0]);
+    await vi.advanceTimersByTimeAsync(0);
+    const half = Math.floor(APP_DOCUMENT_UPDATE_MAX_BYTES * 0.6);
+    for (const size of [half, half, 10, ...Array.from({ length: APP_DOCUMENT_UPLOAD_LIST_MAX + 5 }, () => 3)]) {
+      const change = bigUpdate(doc, size);
+      changes.push(change);
+      queue.add("board", "r", change);
+    }
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(uploads.flat()).toEqual(changes);
+    expect(uploads.map((list) => list.length)).toEqual([1, 1, APP_DOCUMENT_UPLOAD_LIST_MAX, 7]);
+    expect(uploads.every((list) => list.reduce((bytes, change) => bytes + change.length, 0) <= APP_DOCUMENT_UPDATE_MAX_BYTES)).toBe(true);
   });
 });
 
@@ -917,8 +1008,8 @@ describe("a change over the cap", () => {
     const { missing } = editedCopy();
     const sent: Array<{ update: Uint8Array; part?: { id: string; index: number; count: number } }> = [];
     const queue = createUploadQueue(
-      (_appId, _replicaId, update, part) => {
-        sent.push({ update, part });
+      (_appId, _replicaId, upload) => {
+        if ("update" in upload) sent.push({ update: upload.update, part: upload.part });
         return true;
       },
       { stagesParts: () => true },
@@ -948,8 +1039,8 @@ describe("a change over the cap", () => {
     };
     const sent: Array<{ update: Uint8Array; part?: { index: number } }> = [];
     const queue = createUploadQueue(
-      (_appId, _replicaId, update, part) => {
-        sent.push({ update, part });
+      (_appId, _replicaId, upload) => {
+        if ("update" in upload) sent.push({ update: upload.update, part: upload.part });
         return true;
       },
       { stagesParts: () => true },
@@ -972,8 +1063,8 @@ describe("a change over the cap", () => {
     const sent: Array<{ update: Uint8Array; part?: { id: string; index: number; count: number } }> = [];
     let stages = true;
     const queue = createUploadQueue(
-      (_appId, _replicaId, update, part) => {
-        sent.push({ update, part });
+      (_appId, _replicaId, upload) => {
+        if ("update" in upload) sent.push({ update: upload.update, part: upload.part });
         return true;
       },
       { stagesParts: () => stages },
@@ -1084,8 +1175,18 @@ describe("every change over random documents and histories", () => {
       const pending = trial.store.pendingStructs !== null || trial.store.pendingDs !== null;
       if (!pending && Y.encodeStateAsUpdate(trial).length <= docLimit) Y.applyUpdate(server, update);
     };
+    const takesLists = Math.floor(seed / 2) % 2 === 1;
     const queue = createUploadQueue(
-      (_appId, _replicaId, update, part) => {
+      (_appId, _replicaId, upload) => {
+        if ("updates" in upload) {
+          staged = [];
+          for (const listed of upload.updates) {
+            plain.push(listed);
+            accept(listed);
+          }
+          return true;
+        }
+        const { update, part } = upload;
         if (update.length > MAX) return true;
         if (!part) {
           staged = [];
@@ -1103,7 +1204,7 @@ describe("every change over random documents and histories", () => {
         }
         return true;
       },
-      { stagesParts: () => true },
+      { stagesParts: () => true, takesLists: () => takesLists },
     );
     changes.forEach((change) => queue.add("board", "r", change));
     await vi.advanceTimersByTimeAsync(changes.length * 200 + 1_000);

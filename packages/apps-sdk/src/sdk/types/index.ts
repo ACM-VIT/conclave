@@ -26,6 +26,7 @@ export type AppsSyncResponse = {
   stateVector?: Uint8Array;
   awarenessUpdate?: Uint8Array;
   stagesParts?: true;
+  takesUpdateLists?: true;
 };
 
 export type AppsSyncError = {
@@ -49,12 +50,10 @@ export type AppsUpdatePart = {
   count: number;
 };
 
-export type AppsUpdatePayload = {
-  appId: string;
-  update: Uint8Array;
-  replicaId?: string;
-  part?: AppsUpdatePart;
-};
+export type AppsUpdatePayload = { appId: string; replicaId?: string } & (
+  | { update: Uint8Array; part?: AppsUpdatePart }
+  | { updates: Uint8Array[] }
+);
 
 export type AppsRefusedPayload = {
   appId: string;

@@ -101,9 +101,9 @@ export class NativeEmbedSession {
   private readonly pendingAwareness = new Set<number>();
   private awarenessTimer: ReturnType<typeof setTimeout> | null = null;
   private lastStatus = "";
-  private readonly uploads = createUploadQueue((_appId, _replicaId, update) => {
+  private readonly uploads = createUploadQueue((_appId, _replicaId, upload) => {
     if (this.closed || this.host.readOnly || this.host.connection !== "live") return false;
-    if (update.length <= NATIVE_EMBED_LIMITS.updateBytes) this.send("update", { update: base64FromBytes(update) });
+    if ("update" in upload && upload.update.length <= NATIVE_EMBED_LIMITS.updateBytes) this.send("update", { update: base64FromBytes(upload.update) });
     return true;
   });
 

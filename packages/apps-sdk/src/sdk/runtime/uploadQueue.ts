@@ -1,13 +1,15 @@
 import * as Y from "yjs";
-import { APP_DOCUMENT_UPDATE_MAX_BYTES, APP_DOCUMENT_UPLOAD_INTERVAL_MS } from "../limits";
+import { APP_DOCUMENT_UPDATE_MAX_BYTES, APP_DOCUMENT_UPLOAD_INTERVAL_MS, APP_DOCUMENT_UPLOAD_LIST_MAX } from "../limits";
 import type { AppsUpdatePart } from "../types/index";
 
 type Item = { update: Uint8Array; part?: AppsUpdatePart };
 type Pending = { appId: string; replicaId: string | undefined; items: Item[] };
 
-export type SendUpload = (appId: string, replicaId: string | undefined, update: Uint8Array, part?: AppsUpdatePart) => boolean;
+export type Upload = { update: Uint8Array; part?: AppsUpdatePart } | { updates: Uint8Array[] };
 
-export type UploadQueueOptions = { stagesParts?: () => boolean | null; canMerge?: (appId: string) => boolean };
+export type SendUpload = (appId: string, replicaId: string | undefined, upload: Upload) => boolean;
+
+export type UploadQueueOptions = { stagesParts?: () => boolean | null; takesLists?: () => boolean };
 
 export type UploadQueue = {
   add: (appId: string, replicaId: string | undefined, update: Uint8Array) => void;
@@ -27,22 +29,31 @@ const partsOf = (update: Uint8Array): Item[] => {
   }));
 };
 
-const takeBatch = (items: Item[], canMerge: () => boolean): number => {
+const takeBatch = (items: Item[]): number => {
   if (items[0].part) return 1;
   let bytes = items[0].update.length;
   let count = 1;
-  while (count < items.length && !items[count].part && bytes + items[count].update.length <= APP_DOCUMENT_UPDATE_MAX_BYTES) {
+  while (
+    count < items.length &&
+    count < APP_DOCUMENT_UPLOAD_LIST_MAX &&
+    !items[count].part &&
+    bytes + items[count].update.length <= APP_DOCUMENT_UPDATE_MAX_BYTES
+  ) {
     bytes += items[count].update.length;
     count += 1;
   }
-  return count > 1 && !canMerge() ? 1 : count;
+  return count;
 };
 
-const merge = (items: Item[]): Uint8Array => (items.length === 1 ? items[0].update : Y.mergeUpdates(items.map((item) => item.update)));
+const uploadOf = (batch: Item[], takesLists: boolean): Upload => {
+  if (batch.length === 1) return batch[0].part ? { update: batch[0].update, part: batch[0].part } : { update: batch[0].update };
+  if (takesLists) return { updates: batch.map((item) => item.update) };
+  return { update: Y.mergeUpdates(batch.map((item) => item.update)) };
+};
 
 export const createUploadQueue = (
   send: SendUpload,
-  { stagesParts = () => false, canMerge = () => true }: UploadQueueOptions = {},
+  { stagesParts = () => false, takesLists = () => false }: UploadQueueOptions = {},
 ): UploadQueue => {
   const pending = new Map<string, Pending>();
   let lastSentAt = Number.NEGATIVE_INFINITY;
@@ -59,8 +70,8 @@ export const createUploadQueue = (
     if (stages && !first.part && first.update.length > APP_DOCUMENT_UPDATE_MAX_BYTES) {
       entry.items.splice(0, 1, ...partsOf(first.update));
     }
-    const batch = entry.items.slice(0, takeBatch(entry.items, () => canMerge(entry.appId)));
-    if (!send(entry.appId, entry.replicaId, merge(batch), batch[0].part)) return;
+    const batch = entry.items.slice(0, takeBatch(entry.items));
+    if (!send(entry.appId, entry.replicaId, uploadOf(batch, takesLists()))) return;
     entry.items.splice(0, batch.length);
     if (entry.items.length === 0) pending.delete(key);
     lastSentAt = Date.now();

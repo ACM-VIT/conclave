@@ -28,8 +28,6 @@ import type {
 } from "../types/index";
 import { classifySyncReply } from "./syncReply";
 import { createUploadQueue } from "./uploadQueue";
-import { savedSizeStaysUnder } from "./documentSize";
-import { APP_DOCUMENT_MAX_BYTES, APP_DOCUMENT_UPDATE_MAX_BYTES } from "../limits";
 
 export const AppsContext = createContext<AppsContextValue | null>(null);
 
@@ -213,22 +211,17 @@ export function AppsProvider({
   const catchUpsRef = useRef<Map<string, number[]>>(new Map());
   const reconnectedRef = useRef(false);
   const stagesPartsRef = useRef<boolean | null>(null);
+  const takesListsRef = useRef(false);
   const [uploads] = useState(() =>
     createUploadQueue(
-      (appId, replicaId, update, part) => {
+      (appId, replicaId, upload) => {
         const currentSocket = socketRef.current;
         if (!currentSocket?.connected || reconnectedRef.current) return false;
-        const payload: AppsUpdatePayload = part ? { appId, update, replicaId, part } : { appId, update, replicaId };
+        const payload: AppsUpdatePayload = { appId, replicaId, ...upload };
         currentSocket.emit("apps:yjs:update", payload);
         return true;
       },
-      {
-        stagesParts: () => stagesPartsRef.current,
-        canMerge: (appId) => {
-          const doc = docsRef.current.get(appId);
-          return doc !== undefined && savedSizeStaysUnder(doc, APP_DOCUMENT_MAX_BYTES - APP_DOCUMENT_UPDATE_MAX_BYTES);
-        },
-      },
+      { stagesParts: () => stagesPartsRef.current, takesLists: () => takesListsRef.current },
     )
   );
   const automaticWritesRef = useRef<Map<string, Map<string, AutomaticWrite>>>(new Map());
@@ -515,6 +508,7 @@ export function AppsProvider({
       const update = toUint8Array(response.syncMessage);
       if (!update) return false;
       stagesPartsRef.current = response.stagesParts === true;
+      takesListsRef.current = response.takesUpdateLists === true;
       try {
         Y.applyUpdate(run.doc, update, "remote");
       } catch (err) {
@@ -740,7 +734,7 @@ export function AppsProvider({
       applyServerAppsState(next);
     };
 
-    const handleUpdate = (payload: AppsUpdatePayload) => {
+    const handleUpdate = (payload: { appId: string; update: Uint8Array }) => {
       const doc = getDoc(payload.appId);
       const update = toUint8Array(payload.update);
       if (!update || update.length === 0) return;
