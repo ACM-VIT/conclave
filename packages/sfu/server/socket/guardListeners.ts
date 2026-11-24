@@ -27,7 +27,10 @@ const answerFailedAck = (args: unknown[]): void => {
  * down the whole SFU and every room on it. Errors are now logged and answered
  * on the event's ack instead.
  */
-export const guardSocketListeners = (socket: Socket): void => {
+export const guardSocketListeners = (
+  socket: Socket,
+  beforeEach: () => void = () => {},
+): void => {
   const register = socket.on.bind(socket) as (
     event: string,
     listener: Listener,
@@ -44,6 +47,7 @@ export const guardSocketListeners = (socket: Socket): void => {
         answerFailedAck(args);
       };
       try {
+        beforeEach();
         const result = listener(...args);
         if (result && typeof (result as Promise<unknown>).then === "function") {
           (result as Promise<unknown>).then(undefined, fail);
