@@ -707,11 +707,30 @@ Fixed 2026-10-22 and guarded by `testNativeCallCorrectnessBlockersStayFixed`:
   hold it: past the bound the start fails, nothing has been opened, and a
   helper that arrives late is disposed on its own thread. A start that
   finds a creation still stuck fails at once instead of adding another.
+- Every capture operation holds a `CaptureClaim`: the call generation
+  (`configurationGeneration`, bumped by `cleanup()` and `configure()`), the
+  camera-off intent (`localVideoOffIntentGeneration`, camera operations
+  only) and, once it has one, its capture session. `holdsCapture(claim)` is
+  the one check, and it runs after every suspension point of a camera start,
+  camera switch and share start, and in every capture callback. Only an
+  operation that still holds its claim may write shared state:
+  `activeCameraFacing`, the capture fields, `LocalPreviewController`'s call
+  camera interruption, or a "device busy" failure. The device wait
+  (`awaitCaptureDeviceFree`) returns `free`, `busy` or `stale`. A stale
+  operation returns or throws "session replaced" without touching anything,
+  and only a holder calls `failCaptureDeviceBusy`. The desired camera is read
+  after the waits, never before: the camera start re-reads it
+  (`cameraToOpen()`) after the device wait and the helper creation, and waits
+  again for a newly chosen camera, so a flip during either opens the camera
+  the user chose. A flip during the produce ack only records the facing,
+  because the capturer is not live yet; the start applies it through the
+  normal switch once it has published (`applyCameraFacingChosenDuringStart`).
+  A camera switch whose facing a later flip already reverted does nothing.
 - Every capture callback applies its effect through one function on the main
-  thread (`applyCaptureCallback`), which checks the capture's session
+  thread (`applyCaptureCallback`), which checks the callback's claim
   (`CaptureSession`, held in `cameraCapture` and `screenCapture` and cleared
-  by the release) and that the session's capturer is still the installed one,
-  at the moment of the mutation. That covers the projection stop, the camera
+  by the release, and its capturer still the installed one) at the moment of
+  the mutation. That covers the projection stop, the camera
   events handler (`cameraEvents(capture)`: open, error, disconnect) and the
   camera switch's done and error. Never check on the callback's thread and
   then act: an old projection stop passed its check, waited on the share
