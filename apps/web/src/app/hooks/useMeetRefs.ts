@@ -1,6 +1,7 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, useState } from "react";
+import { createDeviceIntentStore } from "../lib/device-intent";
 import type { Socket } from "socket.io-client";
 import type { Device } from "mediasoup-client";
 import type {
@@ -143,12 +144,7 @@ export function useMeetRefs() {
   });
   const isChatOpenRef = useRef(false);
   const localStreamRef = useRef<MediaStream | null>(null);
-  const prejoinMediaIntentRef = useRef<{
-    streamId: string | null;
-    trackIds: Set<string>;
-    isCameraOn: boolean;
-    isMicOn: boolean;
-  } | null>(null);
+  const [deviceIntents] = useState(createDeviceIntentStore);
   const processedVideoTrackRef = useRef<MediaStreamTrack | null>(null);
   const sessionIdRef = useRef<string>(getOrCreateSessionId());
   const isHandRaisedRef = useRef(false);
@@ -200,7 +196,7 @@ export function useMeetRefs() {
     joinOptionsRef,
     isChatOpenRef,
     localStreamRef,
-    prejoinMediaIntentRef,
+    deviceIntents,
     processedVideoTrackRef,
     sessionIdRef,
     isHandRaisedRef,

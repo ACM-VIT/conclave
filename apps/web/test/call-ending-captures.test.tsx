@@ -10,6 +10,7 @@ import { useMeetMedia } from "../src/app/hooks/useMeetMedia";
 import { useMeetRefs } from "../src/app/hooks/useMeetRefs";
 import { useMeetSocket } from "../src/app/hooks/useMeetSocket";
 import { useMicTest } from "../src/app/hooks/useMicTest";
+import { publishIntent } from "../src/app/lib/device-intent";
 import { getUserMediaWithTimeout } from "../src/app/lib/media-capture-timeout";
 import { DEFAULT_MEDIA_QUALITY_SETTINGS } from "../src/app/lib/media-quality-settings";
 
@@ -94,7 +95,8 @@ class FakeAudioContext {
 const created: FakeTrack[] = [];
 const waiting: Array<() => void> = [];
 let holdRequests = false;
-let refuseJoins = false;
+let joinRefusal: string | null = null;
+let holdJoins = false;
 let trackCount = 0;
 
 const capture = (source: string, kinds: Array<"audio" | "video">) =>
@@ -141,7 +143,7 @@ const fakeDevices = {
 const liveTracks = () =>
   created.filter((track) => track.readyState === "live").map((track) => track.id);
 
-const createRig = async () => {
+const createRig = async ({ connect = true } = {}) => {
   const handlers = new Map<string, (...args: never[]) => void>();
   const states: string[] = [];
   const socket = {
@@ -181,7 +183,8 @@ const createRig = async () => {
       userId: "viewer#session",
       localStream: null,
       getJoinInfo: async () => {
-        if (refuseJoins) throw new Error("Guests are not allowed in this meeting.");
+        if (holdJoins) return new Promise<never>(() => {});
+        if (joinRefusal) throw new Error(joinRefusal);
         return { token: "test-token", sfuUrl: "http://localhost:3031" };
       },
       setConnectionState: (state: string) => states.push(state),
@@ -191,6 +194,8 @@ const createRig = async () => {
       displayNameInput: "Viewer",
       primeAudioOutput: noop,
       stopLocalTrack: (track?: MediaStreamTrack | null) => track?.stop(),
+      requestMediaPermissions: (...args: Parameters<Rig["media"]["requestMediaPermissions"]>) =>
+        rig.media.requestMediaPermissions(...args),
       chat: {
         setChatMessages: noop,
         setChatOverlayMessages: noop,
@@ -239,14 +244,16 @@ const createRig = async () => {
   await act(async () => {
     root.render(createElement(Client));
   });
-  await act(async () => {
-    const pending = rig.api.connectSocket("test-room");
-    await vi.waitFor(() => expect(io).toHaveBeenCalledOnce());
-    socket.connected = true;
-    dispatch("connect");
-    await pending;
-  });
-  rig.refs.currentRoomIdRef.current = "test-room";
+  if (connect) {
+    await act(async () => {
+      const pending = rig.api.connectSocket("test-room");
+      await vi.waitFor(() => expect(io).toHaveBeenCalledOnce());
+      socket.connected = true;
+      dispatch("connect");
+      await pending;
+    });
+    rig.refs.currentRoomIdRef.current = "test-room";
+  }
 
   const showEndScreen = async () => {
     inCall = false;
@@ -282,7 +289,7 @@ const ENDINGS: Ending[] = [
   [
     "a reconnect refused for good",
     async (_rig, _dispatch, drop) => {
-      refuseJoins = true;
+      joinRefusal = "Guests are not allowed in this meeting.";
       await drop();
     },
   ],
@@ -294,7 +301,8 @@ beforeEach(() => {
   created.length = 0;
   waiting.length = 0;
   holdRequests = false;
-  refuseJoins = false;
+  joinRefusal = null;
+  holdJoins = false;
   Object.defineProperty(navigator, "mediaDevices", { value: fakeDevices, configurable: true });
   vi.stubGlobal("MediaStream", FakeStream);
   vi.stubGlobal("AudioContext", FakeAudioContext);
@@ -389,5 +397,38 @@ describe("every way a call ends with the client still mounted", () => {
 
     expect(liveTracks()).toEqual([]);
     expect(fakeDevices.getUserMedia.mock.calls.length - requestsBefore).toBe(1);
+  });
+});
+
+describe("a first join refused before entry, then tried again", () => {
+  it.each([
+    ["for now", "Connection timeout"],
+    ["for good", "Guests are not allowed in this meeting."],
+  ])("refused %s: the retry shows and publishes the microphone and camera off and opens no camera", async (_name, reason) => {
+    current = await createRig({ connect: false });
+    await act(async () => {
+      current!.rig().refs.deviceIntents.dispatch({ type: "set", audio: true, video: true });
+    });
+    joinRefusal = reason;
+    await act(async () => {
+      await current!.rig().api.joinRoom();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(publishIntent(current.rig().refs.deviceIntents.get())).toEqual({ isMicOn: false, isCameraOn: false });
+    expect(liveTracks()).toEqual([]);
+
+    const requestsBefore = fakeDevices.getUserMedia.mock.calls.length;
+    joinRefusal = null;
+    holdJoins = true;
+    await act(async () => {
+      void current!.rig().api.joinRoom();
+      await vi.waitFor(() => expect(fakeDevices.getUserMedia.mock.calls.length).toBeGreaterThan(requestsBefore));
+    });
+
+    const retried = fakeDevices.getUserMedia.mock.calls
+      .slice(requestsBefore)
+      .map(([constraints]) => requestedKinds(constraints));
+    expect(retried).toEqual([["audio"]]);
+    expect(publishIntent(current.rig().refs.deviceIntents.get())).toEqual({ isMicOn: false, isCameraOn: false });
   });
 });

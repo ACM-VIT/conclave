@@ -18,7 +18,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { prefetchConclaveAnimation } from "../lib/conclaveAnimation";
 import { prefetchConclaveLock } from "../lib/conclaveSound";
 import type { Dispatch, SetStateAction } from "react";
@@ -68,6 +68,14 @@ import {
   MEDIA_CAPTURE_RECOVERY_TIMEOUT_MS,
 } from "../lib/media-capture-timeout";
 import { captureGeneration, isCaptureReleased } from "../lib/media-captures";
+import {
+  captureDevices,
+  chooseDevice,
+  createDeviceIntentStore,
+  handOffDevices,
+  type Device,
+  type HeldDevices,
+} from "../lib/device-intent";
 import { prewarmVideoEffectsAssetsDeferred } from "../lib/video-effects-lazy";
 import type { VideoEffectsBridgeState } from "./VideoEffectsBridge";
 import {
@@ -339,23 +347,23 @@ function JoinScreen({
   const localStreamRef = useRef<MediaStream | null>(null);
   const handedOffTrackIdsRef = useRef<Set<string>>(new Set());
   const isMountedRef = useRef(true);
-  const prejoinAudioRequestGenerationRef = useRef(0);
-  const prejoinVideoRequestGenerationRef = useRef(0);
-  const toggleCameraInFlightRef = useRef(false);
-  const toggleMicInFlightRef = useRef(false);
-  const cameraIntentRef = useRef(false);
-  const micIntentRef = useRef(false);
+  const [deviceIntents] = useState(createDeviceIntentStore);
+  const intents = useSyncExternalStore(
+    deviceIntents.subscribe,
+    deviceIntents.get,
+    deviceIntents.get,
+  );
+  const micShownOn = intents.audio.chosen;
+  const cameraShownOn = intents.video.chosen;
+  const isRequestingPermissions =
+    intents.audio.capturing || intents.video.capturing;
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const [isCameraOn, setIsCameraOn] = useState(false);
   // Join without sending or receiving video (for slow connections). Carried
   // into the meeting through the prejoin media handoff.
   const [isAudioOnly, setIsAudioOnly] = useState(false);
   // Read by async camera paths, which must not start video once audio-only
   // mode is on even if they began before it was turned on.
   const audioOnlyRef = useRef(false);
-  const [isMicOn, setIsMicOn] = useState(false);
-  const [preselected, setPreselected] = useState({ mic: false, camera: false });
-  const [isRequestingPermissions, setIsRequestingPermissions] = useState(false);
   const [permissionRequestError, setPermissionRequestError] = useState<
     string | null
   >(null);
@@ -411,6 +419,12 @@ function JoinScreen({
       ?.getVideoTracks()
       .some((track) => track.readyState === "live" && track.enabled),
   );
+  const holdsCamera = Boolean(
+    localStream?.getVideoTracks().some((track) => track.readyState === "live"),
+  );
+  const holdsMic = Boolean(
+    localStream?.getAudioTracks().some((track) => track.readyState === "live"),
+  );
   const isCameraBlocked = isMediaDeviceBlocked(mediaError, "camera");
   const isCameraPermissionBlocked =
     isCameraBlocked ||
@@ -419,7 +433,7 @@ function JoinScreen({
         cameraPermissionState === "denied"));
   const shouldShowPermissionCta =
     !hasLivePreviewCamera &&
-    !isCameraOn &&
+    !holdsCamera &&
     (cameraPermissionState === "prompt" ||
       cameraPermissionState === "denied" ||
       isCameraBlocked);
@@ -435,42 +449,6 @@ function JoinScreen({
   const openEffectsPanel = () => {
     if (isCameraPermissionBlocked) return;
     setIsEffectsOpen(true);
-  };
-
-  type PrejoinMediaKind = "audio" | "video";
-  type PrejoinMediaRequestGeneration = Partial<
-    Record<PrejoinMediaKind, number>
-  >;
-
-  const beginPrejoinMediaRequest = (
-    kinds: readonly PrejoinMediaKind[],
-  ): PrejoinMediaRequestGeneration => {
-    const generation: PrejoinMediaRequestGeneration = {};
-    if (kinds.includes("audio")) {
-      prejoinAudioRequestGenerationRef.current += 1;
-      generation.audio = prejoinAudioRequestGenerationRef.current;
-    }
-    if (kinds.includes("video")) {
-      prejoinVideoRequestGenerationRef.current += 1;
-      generation.video = prejoinVideoRequestGenerationRef.current;
-    }
-    return generation;
-  };
-
-  const getCurrentPrejoinMediaGeneration = (kind: PrejoinMediaKind) =>
-    kind === "audio"
-      ? prejoinAudioRequestGenerationRef.current
-      : prejoinVideoRequestGenerationRef.current;
-
-  const isCurrentPrejoinMediaRequest = (
-    kind: PrejoinMediaKind,
-    generation: number | undefined,
-  ) =>
-    generation !== undefined &&
-    getCurrentPrejoinMediaGeneration(kind) === generation;
-
-  const stopTracks = (tracks: readonly MediaStreamTrack[]) => {
-    tracks.forEach((track) => track.stop());
   };
 
   const stopUnownedTracks = (stream: MediaStream | null) => {
@@ -489,234 +467,204 @@ function JoinScreen({
     setLocalStream(stream);
   };
 
-  const commitRequestedPrejoinTracks = (
-    tracks: MediaStreamTrack[],
-    event: string,
-    requestGeneration: PrejoinMediaRequestGeneration,
-  ) => {
-    const acceptedTracks: MediaStreamTrack[] = [];
-    const staleKinds = new Set<PrejoinMediaKind>();
-    const currentRequestedKinds = new Set<PrejoinMediaKind>();
-
-    (["audio", "video"] as const).forEach((kind) => {
-      if (requestGeneration[kind] === undefined) return;
-      if (isCurrentPrejoinMediaRequest(kind, requestGeneration[kind])) {
-        currentRequestedKinds.add(kind);
-      } else {
-        staleKinds.add(kind);
-      }
+  const replaceHeldTrack = (device: Device, track: MediaStreamTrack | null) => {
+    const current = localStreamRef.current;
+    current?.getTracks().forEach((candidate) => {
+      if (candidate.kind === device && candidate !== track) candidate.stop();
     });
-
-    tracks.forEach((track) => {
-      const kind = track.kind === "audio" || track.kind === "video"
-        ? track.kind
-        : null;
-      if (
-        !kind ||
-        !currentRequestedKinds.has(kind) ||
-        track.readyState !== "live"
-      ) {
-        track.stop();
-        return;
-      }
-      acceptedTracks.push(track);
-    });
-
-    const staleKindList = Array.from(staleKinds);
-    if (staleKindList.length > 0) {
-      logJoinMedia("discard_stale_prejoin_media_request", {
-        event,
-        requestGeneration,
-        staleKinds: staleKindList,
-        currentGeneration: {
-          audio: prejoinAudioRequestGenerationRef.current,
-          video: prejoinVideoRequestGenerationRef.current,
-        },
-      });
-    }
-
-    const hasAcceptedAudio = acceptedTracks.some(
-      (track) => track.kind === "audio",
-    );
-    const hasAcceptedVideo = acceptedTracks.some(
-      (track) => track.kind === "video",
-    );
-    const acceptedTrackIds = new Set(
-      acceptedTracks.map((track) => track.id),
-    );
-
-    acceptedTracks.forEach((track) => {
-      if (track.kind === "video") applyPrejoinCameraContentHint(track);
-    });
-    const preservedTracks =
-      localStreamRef.current
+    const others =
+      current
         ?.getTracks()
-        .filter((track) => {
-          if (
-            (track.kind === "audio" || track.kind === "video") &&
-            currentRequestedKinds.has(track.kind)
-          ) {
-            return false;
-          }
-          return track.readyState === "live";
-        }) ?? [];
-    localStreamRef.current?.getTracks().forEach((track) => {
-      if (
-        acceptedTrackIds.has(track.id) ||
-        !(
-          (track.kind === "audio" || track.kind === "video") &&
-          currentRequestedKinds.has(track.kind)
-        )
-      ) {
-        return;
-      }
-      track.stop();
-    });
-    const liveTracks = [...preservedTracks, ...acceptedTracks];
-    const nextStream =
-      liveTracks.length > 0 ? new MediaStream(liveTracks) : null;
-    commitLocalPreviewStream(nextStream);
-    if (currentRequestedKinds.has("video")) {
-      cameraIntentRef.current = hasAcceptedVideo;
-      setIsCameraOn(hasAcceptedVideo);
-    }
-    if (currentRequestedKinds.has("audio")) {
-      micIntentRef.current = hasAcceptedAudio;
-      setIsMicOn(hasAcceptedAudio);
-    }
-    if (hasAcceptedVideo) {
-      prewarmLiveCameraEffects("prejoin-full-media-camera-live");
-    }
-    logJoinMedia(event, {
+        .filter(
+          (candidate) =>
+            candidate.kind !== device && candidate.readyState === "live",
+        ) ?? [];
+    const tracks = track ? [...others, track] : others;
+    const nextStream = tracks.length > 0 ? new MediaStream(tracks) : null;
+    logJoinMedia("prejoin_held_track_replaced", {
+      device,
+      track: getJoinTrackDebugSnapshot(track),
       stream: getJoinStreamDebugSnapshot(nextStream),
-      hasAudio: hasAcceptedAudio,
-      hasVideo: hasAcceptedVideo,
-      staleKinds: staleKindList,
     });
-    return {
-      hasAudio: hasAcceptedAudio,
-      hasVideo: hasAcceptedVideo,
-      staleKinds: staleKindList,
-    };
+    commitLocalPreviewStream(nextStream);
+  };
+
+  const heldDevices: HeldDevices = {
+    holds: (device) =>
+      Boolean(
+        localStreamRef.current
+          ?.getTracks()
+          .some(
+            (track) => track.kind === device && track.readyState === "live",
+          ),
+      ),
+    keep: (device, track) => {
+      if (device === "video") {
+        applyPrejoinCameraContentHint(track);
+        prewarmLiveCameraEffects("prejoin-camera-live");
+      }
+      replaceHeldTrack(device, track);
+    },
+    drop: (device) => replaceHeldTrack(device, null),
+  };
+
+  const describeError = (err: unknown) =>
+    err instanceof Error
+      ? { name: err.name, message: err.message, stack: err.stack }
+      : err;
+
+  const openDevice = (
+    device: Device,
+    constraints: boolean | MediaTrackConstraints,
+    label: string,
+    options: { timeoutMs?: number; generation?: number } = {},
+  ) =>
+    getUserMediaWithTimeout(
+      device === "audio" ? { audio: constraints } : { video: constraints },
+      {
+        label,
+        timeoutMs: options.timeoutMs ?? MEDIA_CAPTURE_RECOVERY_TIMEOUT_MS,
+        generation: options.generation,
+      },
+    ).then((stream) => stream.getTracks());
+
+  const captureFor = (
+    devices: readonly Device[],
+    open: Parameters<typeof captureDevices>[3],
+    event: string,
+  ) =>
+    captureDevices(deviceIntents, heldDevices, devices, open).then(
+      (result) => {
+        if (result.error && !isCaptureReleased(result.error)) {
+          warnJoinMedia(`${event}_failed`, {
+            error: describeError(result.error),
+          });
+        }
+        logJoinMedia(`${event}_done`, { outcomes: result.outcomes });
+        return result;
+      },
+    );
+
+  const startDevice = (device: Device) =>
+    captureFor(
+      [device],
+      () =>
+        device === "video"
+          ? openDevice(
+              "video",
+              getPrejoinVideoConstraints(shouldRunPreviewVideoEffects),
+              "prejoin camera toggle",
+            )
+          : openDevice(
+              "audio",
+              DEFAULT_AUDIO_CONSTRAINTS,
+              "prejoin microphone toggle",
+            ),
+      device === "video" ? "toggle_camera_on" : "toggle_mic_on",
+    );
+
+  const pressDevice = (device: Device) => {
+    if (device === "video" && audioOnlyRef.current) return;
+    if (deviceIntents.get()[device].chosen) {
+      chooseDevice(deviceIntents, heldDevices, device, false);
+      logJoinMedia(device === "video" ? "toggle_camera_off_done" : "toggle_mic_off_done");
+      return;
+    }
+    void startDevice(device);
+  };
+
+  const toggleHeldCamera = () => {
+    if (audioOnlyRef.current) return;
+    if (heldDevices.holds("video")) {
+      chooseDevice(deviceIntents, heldDevices, "video", false);
+      return;
+    }
+    void startDevice("video");
   };
 
   const requestMicrophoneAndCamera = async () => {
-    if (isRequestingPermissions) return;
-
     const wantsVideo = !audioOnlyRef.current;
-    const requestGeneration = beginPrejoinMediaRequest(
-      wantsVideo ? ["audio", "video"] : ["audio"],
-    );
-    setIsRequestingPermissions(true);
     setPermissionRequestError(null);
     const generation = captureGeneration();
-    try {
-      const videoConstraints = wantsVideo
-        ? getPrejoinVideoConstraints(shouldRunPreviewVideoEffects)
-        : false;
-      logJoinMedia("get_user_media_full_request", {
-        audio: DEFAULT_AUDIO_CONSTRAINTS,
-        video: videoConstraints,
-      });
-      const stream = await getUserMediaWithTimeout(
-        {
+    const videoConstraints = () =>
+      getPrejoinVideoConstraints(shouldRunPreviewVideoEffects);
+    const { outcomes, error } = await captureFor(
+      wantsVideo ? ["audio", "video"] : ["audio"],
+      async (isCurrent) => {
+        logJoinMedia("get_user_media_full_request", {
           audio: DEFAULT_AUDIO_CONSTRAINTS,
-          video: videoConstraints,
-        },
-        {
-          label: "prejoin microphone and camera permission request",
-          timeoutMs: MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
-          generation,
-        },
-      );
-      commitRequestedPrejoinTracks(
-        stream.getTracks(),
-        "get_user_media_full_done",
-        requestGeneration,
-      );
-    } catch (err) {
-      if (isCaptureReleased(err)) return;
-      warnJoinMedia("get_user_media_full_failed", {
-        error:
-          err instanceof Error
-            ? { name: err.name, message: err.message, stack: err.stack }
-            : err,
-      });
-      const fallbackTracks: MediaStreamTrack[] = [];
-      const [audioResult, videoResult] = await Promise.allSettled([
-        getUserMediaWithTimeout(
-          { audio: DEFAULT_AUDIO_CONSTRAINTS },
-          {
-            label: "prejoin microphone fallback permission request",
+          video: wantsVideo ? videoConstraints() : false,
+        });
+        try {
+          const stream = await getUserMediaWithTimeout(
+            {
+              audio: DEFAULT_AUDIO_CONSTRAINTS,
+              video: wantsVideo ? videoConstraints() : false,
+            },
+            {
+              label: "prejoin microphone and camera permission request",
+              timeoutMs: MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
+              generation,
+            },
+          );
+          return stream.getTracks();
+        } catch (err) {
+          if (isCaptureReleased(err)) throw err;
+          warnJoinMedia("get_user_media_full_failed", {
+            error: describeError(err),
+          });
+          const options = {
             timeoutMs: MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
             generation,
-          },
-        ),
-        wantsVideo &&
-        !audioOnlyRef.current &&
-        isCurrentPrejoinMediaRequest("video", requestGeneration.video)
-          ? getUserMediaWithTimeout(
-              {
-                video: getPrejoinVideoConstraints(shouldRunPreviewVideoEffects),
-              },
-              {
-                label: "prejoin camera fallback permission request",
-                timeoutMs: MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
-                generation,
-              },
-            )
-          : Promise.resolve(new MediaStream()),
-      ]);
-
-      if (audioResult.status === "fulfilled") {
-        fallbackTracks.push(...audioResult.value.getAudioTracks());
-      } else {
-        warnJoinMedia("get_user_media_audio_fallback_failed", {
-          error:
-            audioResult.reason instanceof Error
-              ? {
-                  name: audioResult.reason.name,
-                  message: audioResult.reason.message,
-                }
-              : (audioResult.reason as unknown),
-        });
-      }
-      if (videoResult.status === "fulfilled") {
-        fallbackTracks.push(...videoResult.value.getVideoTracks());
-      } else {
-        warnJoinMedia("get_user_media_video_fallback_failed", {
-          error:
-            videoResult.reason instanceof Error
-              ? {
-                  name: videoResult.reason.name,
-                  message: videoResult.reason.message,
-                }
-              : (videoResult.reason as unknown),
-        });
-      }
-
-      const { hasAudio, hasVideo, staleKinds } = commitRequestedPrejoinTracks(
-        fallbackTracks,
-        "get_user_media_separate_fallback_done",
-        requestGeneration,
-      );
-      const audioStale = staleKinds.includes("audio");
-      // Video that was not requested (audio-only mode) counts as settled.
-      const videoStale = !wantsVideo || staleKinds.includes("video");
-      if (audioStale && videoStale) return;
-      if (!hasAudio && !audioStale && !hasVideo && !videoStale) {
-        cameraIntentRef.current = false;
-        micIntentRef.current = false;
-        setPermissionRequestError("Permission needed");
-      } else if (!hasAudio && !audioStale) {
-        setPermissionRequestError("Microphone unavailable");
-      } else if (!hasVideo && !videoStale) {
-        setPermissionRequestError("Camera unavailable");
-      } else {
-        setPermissionRequestError(null);
-      }
-    } finally {
-      setIsRequestingPermissions(false);
+          };
+          const [audioResult, videoResult] = await Promise.allSettled([
+            isCurrent("audio")
+              ? openDevice(
+                  "audio",
+                  DEFAULT_AUDIO_CONSTRAINTS,
+                  "prejoin microphone fallback permission request",
+                  options,
+                )
+              : Promise.resolve([]),
+            wantsVideo && isCurrent("video")
+              ? openDevice(
+                  "video",
+                  videoConstraints(),
+                  "prejoin camera fallback permission request",
+                  options,
+                )
+              : Promise.resolve([]),
+          ]);
+          if (audioResult.status === "rejected") {
+            warnJoinMedia("get_user_media_audio_fallback_failed", {
+              error: describeError(audioResult.reason),
+            });
+          }
+          if (videoResult.status === "rejected") {
+            warnJoinMedia("get_user_media_video_fallback_failed", {
+              error: describeError(videoResult.reason),
+            });
+          }
+          return [
+            ...(audioResult.status === "fulfilled" ? audioResult.value : []),
+            ...(videoResult.status === "fulfilled" ? videoResult.value : []),
+          ];
+        }
+      },
+      "get_user_media_full",
+    );
+    if (isCaptureReleased(error)) return;
+    const audio = outcomes.audio ?? "stale";
+    const video = wantsVideo ? outcomes.video ?? "stale" : "stale";
+    if (audio === "stale" && video === "stale") return;
+    if (audio === "failed" && video === "failed") {
+      setPermissionRequestError("Permission needed");
+    } else if (audio === "failed") {
+      setPermissionRequestError("Microphone unavailable");
+    } else if (video === "failed") {
+      setPermissionRequestError("Camera unavailable");
+    } else {
+      setPermissionRequestError(null);
     }
   };
 
@@ -770,14 +718,12 @@ function JoinScreen({
 
   useEffect(() => {
     localStreamRef.current = localStream;
-    cameraIntentRef.current = isCameraOn;
-    micIntentRef.current = isMicOn;
     logJoinMedia("local_stream_changed", {
       localStream: getJoinStreamDebugSnapshot(localStream),
-      isCameraOn,
-      isMicOn,
+      holdsCamera,
+      holdsMic,
     });
-  }, [isCameraOn, isMicOn, localStream]);
+  }, [holdsCamera, holdsMic, localStream]);
   useEffect(() => {
     if (!videoRef.current) return;
     if (previewStream) {
@@ -815,16 +761,15 @@ function JoinScreen({
 
   const commitPrejoinMedia = () => {
     if (!onPrejoinMediaCommit) return;
+    const { mic, camera } = handOffDevices(deviceIntents);
     const stream = localStreamRef.current;
-    const shouldCommitCamera = cameraIntentRef.current && !isAudioOnly;
-    const shouldCommitMic = micIntentRef.current;
     const liveTracks =
       stream
         ?.getTracks()
         .filter((track) => {
           if (track.readyState !== "live") return false;
-          if (track.kind === "video") return shouldCommitCamera;
-          if (track.kind === "audio") return shouldCommitMic;
+          if (track.kind === "video") return camera;
+          if (track.kind === "audio") return mic;
           return true;
         }) ?? [];
     handedOffTrackIdsRef.current = new Set(
@@ -832,17 +777,15 @@ function JoinScreen({
     );
     const handoffStream =
       liveTracks.length > 0 ? new MediaStream(liveTracks) : null;
-    const hasLiveVideo = liveTracks.some((track) => track.kind === "video");
-    const hasLiveAudio = liveTracks.some((track) => track.kind === "audio");
     logJoinMedia("commit_prejoin_media", {
       handoffStream: getJoinStreamDebugSnapshot(handoffStream),
-      isCameraOn: shouldCommitCamera,
-      isMicOn: shouldCommitMic,
+      isCameraOn: camera,
+      isMicOn: mic,
     });
     onPrejoinMediaCommit({
       stream: handoffStream,
-      isCameraOn: (shouldCommitCamera && hasLiveVideo) || (preselected.camera && !isAudioOnly),
-      isMicOn: (shouldCommitMic && hasLiveAudio) || preselected.mic,
+      isCameraOn: camera,
+      isMicOn: mic,
       isAudioOnly,
     });
   };
@@ -851,231 +794,7 @@ function JoinScreen({
     const next = !isAudioOnly;
     audioOnlyRef.current = next;
     setIsAudioOnly(next);
-    if (!next) return;
-    // Invalidate any camera start still in flight, then drop live video now
-    // rather than through toggleCamera, which ignores calls while one runs.
-    beginPrejoinMediaRequest(["video"]);
-    cameraIntentRef.current = false;
-    const currentStream = localStreamRef.current;
-    const videoTracks = currentStream?.getVideoTracks() ?? [];
-    if (currentStream && videoTracks.length > 0) {
-      stopTracks(videoTracks);
-      const remaining = currentStream
-        .getTracks()
-        .filter((track) => track.kind !== "video");
-      commitLocalPreviewStream(
-        remaining.length > 0 ? new MediaStream(remaining) : null,
-      );
-    }
-    setIsCameraOn(false);
-  };
-
-  const toggleCamera = async () => {
-    if (audioOnlyRef.current) return;
-    if (toggleCameraInFlightRef.current) {
-      logJoinMedia("toggle_camera_ignored_in_flight", {
-        isCameraOn,
-        localStream: getJoinStreamDebugSnapshot(localStream),
-      });
-      return;
-    }
-
-    const requestGeneration = beginPrejoinMediaRequest(["video"]);
-    toggleCameraInFlightRef.current = true;
-    try {
-      logJoinMedia("toggle_camera_start", {
-        isCameraOn,
-        localStream: getJoinStreamDebugSnapshot(localStream),
-        videoEffects,
-      });
-      const currentStream = localStreamRef.current ?? localStream;
-      if (isCameraOn && currentStream) {
-        cameraIntentRef.current = false;
-        const track = currentStream.getVideoTracks()[0];
-        if (track) {
-          logJoinMedia("camera_track_stop", {
-            track: getJoinTrackDebugSnapshot(track),
-          });
-          track.stop();
-        }
-        const nextTracks = currentStream
-          .getTracks()
-          .filter((candidate) => candidate !== track);
-        commitLocalPreviewStream(
-          nextTracks.length > 0 ? new MediaStream(nextTracks) : null,
-        );
-        setIsCameraOn(false);
-        logJoinMedia("toggle_camera_off_done", {
-          nextTrackCount: nextTracks.length,
-        });
-        return;
-      }
-      try {
-        const videoConstraints = getPrejoinVideoConstraints(
-          shouldRunPreviewVideoEffects,
-        );
-        logJoinMedia("get_user_media_video_request", {
-          constraints: videoConstraints,
-        });
-        const stream = await getUserMediaWithTimeout(
-          { video: videoConstraints },
-          {
-            label: "prejoin camera toggle",
-            timeoutMs: MEDIA_CAPTURE_RECOVERY_TIMEOUT_MS,
-          },
-        );
-        const videoTrack = stream.getVideoTracks()[0];
-        if (!videoTrack) {
-          stopTracks(stream.getTracks());
-          warnJoinMedia("get_user_media_video_missing_track", {
-            stream: getJoinStreamDebugSnapshot(stream),
-          });
-          return;
-        }
-        if (!isCurrentPrejoinMediaRequest("video", requestGeneration.video)) {
-          stopTracks(stream.getTracks());
-          logJoinMedia("discard_stale_prejoin_camera_toggle", {
-            requestGeneration,
-            currentGeneration: getCurrentPrejoinMediaGeneration("video"),
-          });
-          return;
-        }
-        applyPrejoinCameraContentHint(videoTrack);
-        const latestStream = localStreamRef.current;
-        if (latestStream) {
-          const nextStream = new MediaStream([
-            ...latestStream.getTracks(),
-            videoTrack,
-          ]);
-          logJoinMedia("camera_track_add_to_existing_stream", {
-            receivedStream: getJoinStreamDebugSnapshot(stream),
-            nextStream: getJoinStreamDebugSnapshot(nextStream),
-          });
-          commitLocalPreviewStream(nextStream);
-        } else {
-          logJoinMedia("camera_stream_set", {
-            stream: getJoinStreamDebugSnapshot(stream),
-          });
-          commitLocalPreviewStream(stream);
-        }
-        cameraIntentRef.current = true;
-        setIsCameraOn(true);
-        prewarmLiveCameraEffects("prejoin-camera-toggle-live");
-        logJoinMedia("toggle_camera_on_done", {
-          track: getJoinTrackDebugSnapshot(videoTrack),
-        });
-      } catch (err) {
-        warnJoinMedia("get_user_media_video_failed", {
-          error:
-            err instanceof Error
-              ? { name: err.name, message: err.message, stack: err.stack }
-              : err,
-        });
-        cameraIntentRef.current = false;
-      }
-    } finally {
-      toggleCameraInFlightRef.current = false;
-    }
-  };
-
-  const toggleMic = async () => {
-    if (toggleMicInFlightRef.current) {
-      logJoinMedia("toggle_mic_ignored_in_flight", {
-        isMicOn,
-        localStream: getJoinStreamDebugSnapshot(localStream),
-      });
-      return;
-    }
-
-    const requestGeneration = beginPrejoinMediaRequest(["audio"]);
-    toggleMicInFlightRef.current = true;
-    logJoinMedia("toggle_mic_start", {
-      isMicOn,
-      localStream: getJoinStreamDebugSnapshot(localStream),
-    });
-    try {
-      const currentStream = localStreamRef.current ?? localStream;
-      if (isMicOn && currentStream) {
-        micIntentRef.current = false;
-        const track = currentStream.getAudioTracks()[0];
-        if (track) {
-          logJoinMedia("mic_track_stop", {
-            track: getJoinTrackDebugSnapshot(track),
-          });
-          track.stop();
-        }
-        const nextTracks = currentStream
-          .getTracks()
-          .filter((candidate) => candidate !== track);
-        commitLocalPreviewStream(
-          nextTracks.length > 0 ? new MediaStream(nextTracks) : null,
-        );
-        setIsMicOn(false);
-        logJoinMedia("toggle_mic_off_done", {
-          nextTrackCount: nextTracks.length,
-        });
-        return;
-      }
-
-      logJoinMedia("get_user_media_audio_request", {
-        constraints: DEFAULT_AUDIO_CONSTRAINTS,
-      });
-      const stream = await getUserMediaWithTimeout(
-        { audio: DEFAULT_AUDIO_CONSTRAINTS },
-        {
-          label: "prejoin microphone toggle",
-          timeoutMs: MEDIA_CAPTURE_RECOVERY_TIMEOUT_MS,
-        },
-      );
-      const audioTrack = stream.getAudioTracks()[0];
-      if (!audioTrack) {
-        stopTracks(stream.getTracks());
-        warnJoinMedia("get_user_media_audio_missing_track", {
-          stream: getJoinStreamDebugSnapshot(stream),
-        });
-        return;
-      }
-      if (!isCurrentPrejoinMediaRequest("audio", requestGeneration.audio)) {
-        stopTracks(stream.getTracks());
-        logJoinMedia("discard_stale_prejoin_mic_toggle", {
-          requestGeneration,
-          currentGeneration: getCurrentPrejoinMediaGeneration("audio"),
-        });
-        return;
-      }
-      const latestStream = localStreamRef.current;
-      if (latestStream) {
-        const nextStream = new MediaStream([
-          ...latestStream.getTracks(),
-          audioTrack,
-        ]);
-        logJoinMedia("mic_track_add_to_existing_stream", {
-          receivedStream: getJoinStreamDebugSnapshot(stream),
-          nextStream: getJoinStreamDebugSnapshot(nextStream),
-        });
-        commitLocalPreviewStream(nextStream);
-      } else {
-        logJoinMedia("mic_stream_set", {
-          stream: getJoinStreamDebugSnapshot(stream),
-        });
-        commitLocalPreviewStream(stream);
-      }
-      micIntentRef.current = true;
-      setIsMicOn(true);
-      logJoinMedia("toggle_mic_on_done", {
-        track: getJoinTrackDebugSnapshot(audioTrack),
-      });
-    } catch (err) {
-      warnJoinMedia("get_user_media_audio_failed", {
-        error:
-          err instanceof Error
-            ? { name: err.name, message: err.message, stack: err.stack }
-            : err,
-      });
-      micIntentRef.current = false;
-    } finally {
-      toggleMicInFlightRef.current = false;
-    }
+    if (next) chooseDevice(deviceIntents, heldDevices, "video", false);
   };
 
   const [pastedMeeting, setPastedMeeting] = useState<MeetingInput | null>(null);
@@ -1086,24 +805,12 @@ function JoinScreen({
   );
   const restoringMedia = useRejoinMediaRestore(initialMedia, async (media) => {
     if (media.isAudioOnly) toggleAudioOnly();
-    setPreselected({ mic: media.isMicOn, camera: media.isCameraOn && !media.isAudioOnly });
+    deviceIntents.dispatch({
+      type: "set",
+      audio: media.isMicOn,
+      video: media.isCameraOn && !media.isAudioOnly,
+    });
   });
-  const micShownOn = isMicOn || preselected.mic;
-  const cameraShownOn = isCameraOn || (preselected.camera && !isAudioOnly);
-  const pressMic = () => {
-    if (preselected.mic) {
-      setPreselected((current) => ({ ...current, mic: false }));
-      if (!isMicOn) return;
-    }
-    void toggleMic();
-  };
-  const pressCamera = () => {
-    if (preselected.camera) {
-      setPreselected((current) => ({ ...current, camera: false }));
-      if (!isCameraOn) return;
-    }
-    void toggleCamera();
-  };
 
   useEffect(() => {
     if (!pending || !hasIdentity) return;
@@ -1253,92 +960,32 @@ function JoinScreen({
 
   const handleSelectVideoDevice = async (deviceId: string) => {
     setSelectedVideoId(deviceId);
-    if (!isCameraOn || toggleCameraInFlightRef.current) return;
-    const requestGeneration = beginPrejoinMediaRequest(["video"]);
-    toggleCameraInFlightRef.current = true;
-    try {
-      const base = getPrejoinVideoConstraints(shouldRunPreviewVideoEffects);
-      const videoConstraints =
-        base && typeof base === "object"
-          ? { ...base, deviceId: { exact: deviceId } }
-          : { deviceId: { exact: deviceId } };
-      const stream = await getUserMediaWithTimeout(
-        { video: videoConstraints },
-        {
-          label: "prejoin camera device switch",
-          timeoutMs: MEDIA_CAPTURE_RECOVERY_TIMEOUT_MS,
-        },
-      );
-      const newTrack = stream.getVideoTracks()[0];
-      if (!newTrack) {
-        stopTracks(stream.getTracks());
-        return;
-      }
-      if (!isCurrentPrejoinMediaRequest("video", requestGeneration.video)) {
-        stopTracks(stream.getTracks());
-        logJoinMedia("discard_stale_prejoin_video_device_select", {
-          requestGeneration,
-          currentGeneration: getCurrentPrejoinMediaGeneration("video"),
-        });
-        return;
-      }
-      applyPrejoinCameraContentHint(newTrack);
-      const current = localStreamRef.current;
-      const oldTrack = current?.getVideoTracks()[0] ?? null;
-      oldTrack?.stop();
-      const others = current?.getTracks().filter((t) => t !== oldTrack) ?? [];
-      commitLocalPreviewStream(new MediaStream([...others, newTrack]));
-      cameraIntentRef.current = true;
-    } catch (err) {
-      warnJoinMedia("select_video_device_failed", {
-        error: err instanceof Error ? { name: err.name, message: err.message } : err,
-      });
-    } finally {
-      toggleCameraInFlightRef.current = false;
-    }
+    if (!heldDevices.holds("video")) return;
+    const base = getPrejoinVideoConstraints(shouldRunPreviewVideoEffects);
+    const videoConstraints =
+      base && typeof base === "object"
+        ? { ...base, deviceId: { exact: deviceId } }
+        : { deviceId: { exact: deviceId } };
+    await captureFor(
+      ["video"],
+      () => openDevice("video", videoConstraints, "prejoin camera device switch"),
+      "select_video_device",
+    );
   };
 
   const handleSelectAudioDevice = async (deviceId: string) => {
     setSelectedAudioId(deviceId);
-    if (!isMicOn) return;
-    const requestGeneration = beginPrejoinMediaRequest(["audio"]);
-    try {
-      const stream = await getUserMediaWithTimeout(
-        {
-          audio: {
-            ...DEFAULT_AUDIO_CONSTRAINTS,
-            deviceId: { exact: deviceId },
-          },
-        },
-        {
-          label: "prejoin microphone device switch",
-          timeoutMs: MEDIA_CAPTURE_RECOVERY_TIMEOUT_MS,
-        },
-      );
-      const newTrack = stream.getAudioTracks()[0];
-      if (!newTrack) {
-        stopTracks(stream.getTracks());
-        return;
-      }
-      if (!isCurrentPrejoinMediaRequest("audio", requestGeneration.audio)) {
-        stopTracks(stream.getTracks());
-        logJoinMedia("discard_stale_prejoin_audio_device_select", {
-          requestGeneration,
-          currentGeneration: getCurrentPrejoinMediaGeneration("audio"),
-        });
-        return;
-      }
-      const current = localStreamRef.current;
-      const oldTrack = current?.getAudioTracks()[0] ?? null;
-      oldTrack?.stop();
-      const others = current?.getTracks().filter((t) => t !== oldTrack) ?? [];
-      commitLocalPreviewStream(new MediaStream([...others, newTrack]));
-      micIntentRef.current = true;
-    } catch (err) {
-      warnJoinMedia("select_audio_device_failed", {
-        error: err instanceof Error ? { name: err.name, message: err.message } : err,
-      });
-    }
+    if (!heldDevices.holds("audio")) return;
+    await captureFor(
+      ["audio"],
+      () =>
+        openDevice(
+          "audio",
+          { ...DEFAULT_AUDIO_CONSTRAINTS, deviceId: { exact: deviceId } },
+          "prejoin microphone device switch",
+        ),
+      "select_audio_device",
+    );
   };
 
   const inviteLink =
@@ -1356,8 +1003,8 @@ function JoinScreen({
     }
   };
 
-  const showVideoPicker = isCameraOn && videoInputs.length > 0;
-  const showAudioPicker = isMicOn && audioInputs.length > 0;
+  const showVideoPicker = holdsCamera && videoInputs.length > 0;
+  const showAudioPicker = holdsMic && audioInputs.length > 0;
   const showDevicePickers = showVideoPicker || showAudioPicker;
   const handleNameInputChange = (nextName: string) => {
     setGuestName(nextName);
@@ -1374,13 +1021,17 @@ function JoinScreen({
                   autoPlay
                   muted
                   playsInline
-                  className={`absolute inset-0 h-full w-full -scale-x-100 object-cover ${isCameraOn ? "" : "hidden"}`}
+                  className={`absolute inset-0 h-full w-full -scale-x-100 object-cover ${holdsCamera ? "" : "hidden"}`}
                 />
-                {!isCameraOn && (
+                {!holdsCamera && (
                   <div className="absolute inset-0 flex flex-col items-center justify-center gap-2.5 pb-14">
                     <Avatar id={user?.id || previewName} name={previewName} size={76} />
                     <span className="text-[13.5px] text-[#fafafa]/45">
-                      {cameraShownOn ? "Camera turns on when you join" : "Camera is off"}
+                      {cameraShownOn
+                        ? intents.video.capturing
+                          ? "Starting camera"
+                          : "Camera turns on when you join"
+                        : "Camera is off"}
                     </span>
                   </div>
                 )}
@@ -1419,7 +1070,7 @@ function JoinScreen({
                 )}
                 <div className="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-2.5">
                   <button
-                    onClick={pressMic}
+                    onClick={() => pressDevice("audio")}
                     aria-label={micShownOn ? "Turn off microphone" : "Turn on microphone"}
                     className={`inline-flex h-11 w-11 items-center justify-center rounded-full text-white transition-colors duration-150 ${
                       micShownOn ? "bg-[#232327] hover:bg-[#2e2e33]" : "bg-[#ea4335] hover:brightness-105"
@@ -1428,7 +1079,7 @@ function JoinScreen({
                     {micShownOn ? <Mic size={18} /> : <MicOff size={18} />}
                   </button>
                   <button
-                    onClick={pressCamera}
+                    onClick={() => pressDevice("video")}
                     disabled={isAudioOnly}
                     aria-label={
                       isAudioOnly
@@ -1675,7 +1326,7 @@ function JoinScreen({
           effects={videoEffects}
           onEffectsChange={onVideoEffectsChange}
           localStream={previewStream}
-          isCameraOff={!isCameraOn}
+          isCameraOff={!holdsCamera}
           status={videoEffectsStatus}
           error={videoEffectsError}
           debugStats={videoEffectsDebugStats}
@@ -1683,7 +1334,7 @@ function JoinScreen({
           deferPreload={shouldDeferPreviewVideoEffectsPreload}
           cameraPermissionBlocked={isCameraPermissionBlocked}
           showFilters={!isCameraPermissionBlocked}
-          onToggleCamera={toggleCamera}
+          onToggleCamera={toggleHeldCamera}
           onClose={() => setIsEffectsOpen(false)}
         />
       )}
