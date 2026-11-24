@@ -24,6 +24,8 @@ export type LiveTranscriptionCallbacks = {
   onDelta: (itemId: string, delta: string) => void;
   onFinal: (itemId: string, transcript: string) => void | Promise<void>;
   onItemFailed?: (itemId: string, message: string) => void | Promise<void>;
+  onItemRefused?: (itemId: string) => void;
+  onSpeechEnded?: (itemId: string) => void;
   onFailure: (message: string) => void | Promise<void>;
 };
 

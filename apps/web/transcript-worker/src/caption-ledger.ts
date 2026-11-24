@@ -24,6 +24,7 @@ export type CaptionLine = {
   placedByAudio: boolean;
   speaker: TranscriptSpeaker;
   heard: boolean;
+  refused?: boolean;
   text: string;
   freshText: boolean;
   replayed: boolean;

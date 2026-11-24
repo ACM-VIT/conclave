@@ -1356,6 +1356,8 @@ export class TranscriptRoom {
       owner.audio.push(chunk);
       this.placeByFirstAudio(owner);
       owner.deadlineAt = Math.max(owner.deadlineAt, chunk.sentAt + TRANSCRIPTION_LINE_DEADLINE_MS);
+    } else if (owner?.refused) {
+      owner.audio.push(chunk);
     } else {
       const pending = this.uncommittedAudio.get(key) ?? { speaker, chunks: [] };
       const heardBefore = pending.chunks.some(({ voice }) => voice !== "quiet");
@@ -1376,7 +1378,10 @@ export class TranscriptRoom {
   }
 
   private keepReplayAudioWithinLimit(): void {
-    const lines = this.ledger.activeUnordered();
+    const absorbing = new Set(this.speakingLine.values());
+    const lines = this.ledger
+      .all()
+      .filter((line) => isActive(line) || (line.refused === true && absorbing.has(line.id)));
     const held: { audio: string; sequence: number }[] = [
       ...lines.flatMap(({ audio }) => audio),
       ...Array.from(this.uncommittedAudio.values()).flatMap(({ chunks }) => chunks),
@@ -1779,6 +1784,15 @@ export class TranscriptRoom {
             const connection = this.connectionFor(epoch);
             if (connection) return this.applyLineFailure(connection, itemId);
           },
+          onItemRefused: (itemId) => {
+            const connection = this.connectionFor(epoch);
+            if (connection) this.refuseLine(connection, itemId);
+          },
+          onSpeechEnded: (itemId) => {
+            const connection = this.connectionFor(epoch);
+            const line = connection ? this.namedLine(connection, itemId) : undefined;
+            if (line?.refused) this.forgetSpeakingLine(line);
+          },
           onFailure: (message) => {
             if (this.liveConnection?.epoch === epoch) {
               return this.handleTranscriptionFailure(message);
@@ -2087,6 +2101,19 @@ export class TranscriptRoom {
     if (!changed) return;
     this.persistInBackground();
     this.scheduleMinutes();
+  }
+
+  private refuseLine(connection: ProviderConnection, providerItemId: string): void {
+    const line = this.namedLine(connection, providerItemId);
+    if (!line || !isActive(line)) return;
+    const owned = Array.from(this.speakingLine).filter(([, id]) => id === line.id).map(([key]) => key);
+    line.refused = true;
+    const changed = this.endUnfinishedLines([line], "Sarvam owes too many answers to place another line", connection);
+    for (const key of owned) this.speakingLine.set(key, line.id);
+    if (changed) {
+      this.persistInBackground();
+      this.scheduleMinutes();
+    }
   }
 
   private async applyLineFailure(connection: ProviderConnection, providerItemId: string): Promise<void> {

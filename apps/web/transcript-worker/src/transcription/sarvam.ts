@@ -556,7 +556,7 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
     const refused = utterance.heard && this.expiredSlots.size >= SARVAM_EXPIRED_SLOTS_KEPT;
     if (refused) this.expiredSlots.set(itemId, Date.now());
     this.callbacks.onAccepted?.(itemId, utterance);
-    if (refused) void this.callbacks.onItemFailed?.(itemId, "Sarvam owes too many answers to place another line.");
+    if (refused) this.callbacks.onItemRefused?.(itemId);
     return itemId;
   }
 
@@ -633,7 +633,9 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
   private handleSpeechEnd(): void {
     this.lastAnswer = null;
     this.forgetExpiredSlots(Date.now());
-    if (this.signalledItem) this.resolveNow(this.signalledItem);
+    const ended = this.signalledItem;
+    if (ended) this.resolveNow(ended);
+    if (ended) this.callbacks.onSpeechEnded?.(ended);
   }
 
   private resolveNow(itemId: string): void {
