@@ -9,6 +9,7 @@ import { createRedisBackend } from "../server/controlPlane/backends/redis.js";
 import { createSqliteBackend, openSqliteDatabase } from "../server/controlPlane/backends/sqlite.js";
 import { importLegacy } from "../server/controlPlane/legacy.js";
 import {
+  advanceMeetings,
   createMeeting,
   deleteMeeting,
   meetingById,
@@ -198,6 +199,40 @@ describe.each(modes)("the %s control-plane store", (mode) => {
     expect(result).toMatchObject({ ok: true, value: "Standup" });
     expect(await store.read((view) => view.get("meeting", meeting.id)?.rev)).toBe(before);
   });
+
+  it("ends hundreds of live meetings in one tick", async () => {
+    const store = await open(mode);
+    const now = Date.now();
+    const seeded = await store.commit((tx) => {
+      for (let index = 0; index < 300; index += 1) {
+        const id = `live-${index}`;
+        tx.put("meeting", {
+          id,
+          clientId: "conclave",
+          roomCode: `live-room-${index}`,
+          title: "Live",
+          hostEmail: "host@example.test",
+          hostName: "Host",
+          hostUserId: null,
+          scheduledStartAt: now - 7_200_000,
+          scheduledEndAt: now - 3_600_000,
+          status: "live",
+          startedAt: now - 7_200_000,
+          endedAt: null,
+          createdAt: now - 7_200_000,
+          createdBy: "host@example.test",
+          updatedAt: now - 7_200_000,
+          source: "manual",
+        });
+      }
+      return done(300);
+    });
+    expect(seeded.ok).toBe(true);
+    const ticked = await store.commit(advanceMeetings);
+    expect(ticked.ok && ticked.value.length).toBe(300);
+    expect(await store.read((view) => view.tagged("meeting", tags.activeMeetings).length)).toBe(0);
+    expect((await store.read((view) => view.all("meeting"))).every((stored) => stored.value.status === "ended")).toBe(true);
+  }, 60_000);
 
   if (mode !== "memory") {
     it("keeps every committed record across a restart", async () => {

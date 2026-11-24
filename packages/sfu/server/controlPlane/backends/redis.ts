@@ -4,6 +4,7 @@ import {
   createRedisPersistenceClient,
   type RedisPersistenceClient,
 } from "../../redisPersistence.js";
+import { specOf } from "../entities.js";
 import {
   KINDS,
   StoreCorruptionError,
@@ -12,6 +13,7 @@ import {
   type CommitResult,
   type Kind,
   type RawStored,
+  uniqueField,
 } from "../model.js";
 import {
   ReplayEntropy,
@@ -26,7 +28,7 @@ import {
 import type { Backend } from "./backend.js";
 
 const MAX_ATTEMPTS = 12;
-const MAX_MISSES = 256;
+const MAX_MISSES = 100_000;
 
 type Need =
   | { type: "record"; kind: Kind; id: string }
@@ -208,15 +210,30 @@ export const createRedisBackend = async (options: {
   const keys = controlPlaneRedisKeys(options.keyPrefix);
   let closed = false;
 
+  const prefetchOwners = async (snapshot: Snapshot, kind: Kind, raws: Array<RawStored | null>): Promise<void> => {
+    const spec = specOf(kind);
+    const fields = new Set<string>();
+    for (const raw of raws) {
+      const value = raw ? spec.decode(raw.value) : null;
+      if (!value) continue;
+      for (const [index, key] of spec.unique(value)) {
+        const field = uniqueField(index, key);
+        if (!snapshot.owners.has(field)) fields.add(field);
+      }
+    }
+    if (fields.size === 0) return;
+    const list = [...fields];
+    const owners = await client.hmGet(keys.unique, list);
+    list.forEach((field, index) => snapshot.owners.set(field, owners[index] ?? null));
+  };
+
   const fetchNeed = async (snapshot: Snapshot, need: Need): Promise<void> => {
     switch (need.type) {
       case "record": {
         const raw = await client.hGet(keys.records[need.kind], need.id);
-        snapshot.records.set(slot(need.kind, need.id), {
-          kind: need.kind,
-          id: need.id,
-          raw: raw ? parseEnvelope(raw, `${need.kind} ${need.id}`) : null,
-        });
+        const parsed = raw ? parseEnvelope(raw, `${need.kind} ${need.id}`) : null;
+        snapshot.records.set(slot(need.kind, need.id), { kind: need.kind, id: need.id, raw: parsed });
+        await prefetchOwners(snapshot, need.kind, [parsed]);
         return;
       }
       case "owner": {
@@ -242,14 +259,13 @@ export const createRedisBackend = async (options: {
         const missing = ids.filter((id) => !snapshot.records.has(slot(need.kind, id)));
         if (missing.length === 0) return;
         const raws = await client.hmGet(keys.records[need.kind], missing);
-        missing.forEach((id, index) => {
+        const parsed = missing.map((id, index) => {
           const raw = raws[index];
-          snapshot.records.set(slot(need.kind, id), {
-            kind: need.kind,
-            id,
-            raw: raw ? parseEnvelope(raw, `${need.kind} ${id}`) : null,
-          });
+          const stored = raw ? parseEnvelope(raw, `${need.kind} ${id}`) : null;
+          snapshot.records.set(slot(need.kind, id), { kind: need.kind, id, raw: stored });
+          return stored;
         });
+        await prefetchOwners(snapshot, need.kind, parsed);
         return;
       }
       case "all": {
@@ -260,13 +276,12 @@ export const createRedisBackend = async (options: {
           .exec()) as unknown as [string | null, Record<string, string>];
         const ids = Object.keys(entries).sort();
         snapshot.alls.set(need.kind, { ids, ver: Number(ver ?? 0) });
-        for (const id of ids) {
-          snapshot.records.set(slot(need.kind, id), {
-            kind: need.kind,
-            id,
-            raw: parseEnvelope(entries[id], `${need.kind} ${id}`),
-          });
-        }
+        const parsed = ids.map((id) => {
+          const stored = parseEnvelope(entries[id], `${need.kind} ${id}`);
+          snapshot.records.set(slot(need.kind, id), { kind: need.kind, id, raw: stored });
+          return stored;
+        });
+        await prefetchOwners(snapshot, need.kind, parsed);
         return;
       }
       default: {
