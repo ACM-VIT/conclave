@@ -1018,3 +1018,62 @@ describe("one event's flaw stays with that event at /ingest", () => {
     expect(await response.json()).toEqual({ rejected: [0] });
   });
 });
+
+describe("every answer from /ingest carries everything the outcome needs", () => {
+  const RECEIVED = Date.parse("2026-11-22T00:00:05.000Z");
+  const concurrent = async (events: unknown[][], answer: (call: number) => Response) => {
+    const forwarded = createForwardedEvents();
+    const answers: Array<() => void> = [];
+    let calls = 0;
+    const slow = async () => {
+      const call = calls++;
+      return new Promise<Response>((resolve) => answers.push(() => resolve(answer(call))));
+    };
+    const pending = events.map((batch) =>
+      forward(post(JSON.stringify(captureBody(batch)), "application/json"), ["e"], { forwarded, fetch: slow, now: () => RECEIVED }),
+    );
+    await vi.waitFor(() => expect(calls).toBeGreaterThan(0));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    for (const release of answers.splice(0)) release();
+    const responses = await Promise.all(pending.map(async (sent) => (await sent).response));
+    return { calls, responses };
+  };
+
+  it("gives a request that shared a forward still in flight the same Retry-After the forward was answered with", async () => {
+    const batch = [event()];
+    const { calls, responses } = await concurrent([batch, batch], () =>
+      new Response(null, { status: 429, headers: { "retry-after": "60" } }),
+    );
+
+    expect(calls).toBe(1);
+    expect(responses.map((response) => [response.status, response.headers.get("retry-after")])).toEqual([
+      [503, "60"],
+      [503, "60"],
+    ]);
+  });
+
+  it("asks for the longest wait when a request's own forward and one it shared were answered with different waits", async () => {
+    const shared = { ...event(), uuid: "0196f0a1-0000-7000-8000-0000000000b9" };
+    const own = { ...event(), uuid: "0196f0a1-0000-7000-8000-0000000000ba" };
+    const { responses } = await concurrent([[shared], [shared, own]], (call) =>
+      new Response(null, { status: 503, headers: { "retry-after": call === 0 ? "60" : "10" } }),
+    );
+
+    expect(responses.map((response) => [response.status, response.headers.get("retry-after")])).toEqual([
+      [503, "60"],
+      [503, "60"],
+    ]);
+  });
+
+  it("names the events a shared forward had refused, and answers 200 for the ones that went", async () => {
+    const shared = { ...event(), uuid: "0196f0a1-0000-7000-8000-0000000000bb" };
+    const own = { ...event(), uuid: "0196f0a1-0000-7000-8000-0000000000bc" };
+    const { responses } = await concurrent([[shared], [shared, own]], (call) =>
+      call === 0 ? new Response(null, { status: 400 }) : new Response('{"status":1}', { status: 200 }),
+    );
+
+    expect(responses[0].status).toBe(400);
+    expect(responses[1].status).toBe(200);
+    expect(await responses[1].json()).toEqual({ status: 1, rejected: [0] });
+  });
+});

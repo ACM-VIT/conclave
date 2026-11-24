@@ -87,8 +87,8 @@ export type ForwardedEvents = {
   remember: (event: ForwardedEvent) => void;
   /** PostHog took these events. */
   delivered: (uuids: readonly string[]) => void;
-  sending: (uuids: readonly string[], outcome: Promise<boolean>) => void;
-  inFlight: (uuid: string) => Promise<boolean> | undefined;
+  sending: (uuids: readonly string[], outcome: Promise<Answer>) => void;
+  inFlight: (uuid: string) => Promise<Answer> | undefined;
 };
 
 /**
@@ -99,7 +99,7 @@ export type ForwardedEvents = {
  */
 export const createForwardedEvents = (): ForwardedEvents => {
   const events = new Map<string, { event: ForwardedEvent; bytes: number; delivered: boolean }>();
-  const forwarding = new Map<string, Promise<boolean>>();
+  const forwarding = new Map<string, Promise<Answer>>();
   let total = 0;
   return {
     get: (uuid) => events.get(uuid),
@@ -334,17 +334,37 @@ export async function forwardCapture(
     // not say what was wrong with it.
     return reply(error instanceof Refused ? error.status : 400);
   }
-  const { body, sent, waits, rejected } = prepared;
+  const { body, own, waits, taken, rejected, sent } = prepared;
   let answer: Answer = { outcome: "delivered" };
   try {
     if (body.batch.length > 0) answer = await sendUpstream(ingestHost, body, deps);
   } finally {
-    sent(answer.outcome === "delivered");
+    sent(answer);
   }
-  if (answer.outcome === "refused") return reply(400);
-  if (answer.outcome === "retry") return reply(503, answer.afterMs, rejected);
-  return (await Promise.all(waits)).every(Boolean) ? reply(200, null, rejected) : reply(503, null, rejected);
+  const outcomes = [
+    ...taken.map((index) => ({ index, answer: { outcome: "delivered" } satisfies Answer })),
+    ...own.map((index) => ({ index, answer })),
+    ...(await Promise.all(waits.map(async ({ index, outcome }) => ({ index, answer: await outcome })))),
+  ];
+  return replyFor(outcomes, rejected);
 }
+
+/**
+ * One answer for a request from what happened to each of its events: any
+ * that is worth sending again makes it 503 with the longest wait asked for,
+ * every event refused for good is listed, and it is 200 when any went.
+ */
+const replyFor = (outcomes: Array<{ index: number; answer: Answer }>, rejected: readonly number[]): Response => {
+  const refused = [...rejected, ...outcomes.filter(({ answer }) => answer.outcome === "refused").map(({ index }) => index)].sort(
+    (a, b) => a - b,
+  );
+  const retries = outcomes.flatMap(({ answer }) => (answer.outcome === "retry" ? [answer.afterMs] : []));
+  if (retries.length > 0) {
+    const waits = retries.filter((ms) => ms !== null);
+    return reply(503, waits.length > 0 ? Math.max(...waits) : null, refused);
+  }
+  return outcomes.some(({ answer }) => answer.outcome === "delivered") ? reply(200, null, refused) : reply(400);
+};
 
 const sendUpstream = async (
   ingestHost: string,
@@ -406,7 +426,7 @@ const prepareForward = async (request: Request, deps: IngestDeps) => {
   const sentAt = clientSentAt(url, decoded);
   const inRequest = new Set<string>();
   const rejected: number[] = [];
-  let taken = 0;
+  const taken: number[] = [];
   const batch = events.flatMap((event, index) => {
     if (!event || buildOf(event) !== build) {
       rejected.push(index);
@@ -418,10 +438,11 @@ const prepareForward = async (request: Request, deps: IngestDeps) => {
     // A retry, or an event sent again, goes exactly as it went the first
     // time, and not at all once PostHog has it.
     const known = deps.forwarded.get(uuid);
-    if (known) {
-      taken += 1;
-      return known.delivered ? [] : [known.event];
+    if (known?.delivered) {
+      taken.push(index);
+      return [];
     }
+    if (known) return [{ index, event: known.event }];
     const built =
       fresh(event.timestamp, sentAt, receivedAt) &&
       buildOutboundEvent(
@@ -435,21 +456,27 @@ const prepareForward = async (request: Request, deps: IngestDeps) => {
       rejected.push(index);
       return [];
     }
-    taken += 1;
     const forwarded = { ...built, timestamp: event.timestamp };
     deps.forwarded.remember(forwarded);
-    return [forwarded];
+    return [{ index, event: forwarded }];
   });
-  if (taken === 0) throw new Refused(400);
-  const waits: Array<Promise<boolean>> = [];
-  const own = batch.filter((event) => {
+  if (batch.length === 0 && taken.length === 0) throw new Refused(400);
+  const waits: Array<{ index: number; outcome: Promise<Answer> }> = [];
+  const own = batch.filter(({ index, event }) => {
     const elsewhere = deps.forwarded.inFlight(event.uuid);
-    if (elsewhere) waits.push(elsewhere);
+    if (elsewhere) waits.push({ index, outcome: elsewhere });
     return !elsewhere;
   });
-  let sent: (delivered: boolean) => void = () => {};
-  deps.forwarded.sending(own.map((event) => event.uuid), new Promise<boolean>((resolve) => (sent = resolve)));
-  return { body: { api_key: deps.projectKey, batch: own }, sent, waits, rejected };
+  let sent: (answer: Answer) => void = () => {};
+  deps.forwarded.sending(own.map(({ event }) => event.uuid), new Promise<Answer>((resolve) => (sent = resolve)));
+  return {
+    body: { api_key: deps.projectKey, batch: own.map(({ event }) => event) },
+    own: own.map(({ index }) => index),
+    waits,
+    taken,
+    rejected,
+    sent,
+  };
 };
 
 const MANIFEST_TTL_MS = 10 * 60_000;

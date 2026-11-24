@@ -364,8 +364,12 @@ shapes the values of listed properties:
   and an event PostHog already took is not forwarded at all (a request of
   only those is answered 200). One request naming a uuid twice forwards it
   once, and a request naming a uuid whose forward is still in flight on the
-  same instance waits for that forward instead of sending it again: 200 if
-  it delivered, 503 if not. Across instances (two isolates, or one started
+  same instance waits for that forward instead of sending it again, and takes
+  its whole answer. Every answer from `/ingest` is built from what happened
+  to each event in the request (its own forward, a forward it shared, an
+  event PostHog already took, or a refusal): if any is worth sending again
+  it is 503 with the longest `Retry-After` any of them was given; every event
+  refused for good is listed; it is 200 when any event went, else 400. Across instances (two isolates, or one started
   after a cutover) an event can reach PostHog twice; since its uuid and
   timestamp are the same every time, PostHog folds the duplicates on uuid
   plus timestamp.
