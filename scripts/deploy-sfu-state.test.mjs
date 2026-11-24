@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -102,7 +103,14 @@ const harnesses = [
     command: "bash",
     args: [],
     file: "harness.sh",
-    source: () => ["set -euo pipefail", "COMPOSE=(docker compose -f docker-compose.sfu.yml)", allDefinitions(deployShell, shellFunctions), "build_and_start sfu-a"].join("\n"),
+    source: () =>
+      [
+        "set -euo pipefail",
+        "COMPOSE=(docker compose -f docker-compose.sfu.yml)",
+        allDefinitions(deployShell, shellFunctions),
+        `if [[ -n "\${FIXED_STAMP:-}" ]]; then archive_stamp() { printf '%s' "$FIXED_STAMP"; }; fi`,
+        'build_and_start sfu-a "$SFU_HEALTH_URL"',
+      ].join("\n"),
   },
   ...powerShells.map(({ binary, version }) => ({
     name: `pwsh ${version}`,
@@ -116,7 +124,8 @@ const harnesses = [
         '$ErrorActionPreference = "Stop"',
         '$composeBaseArgs = @("compose", "-f", "docker-compose.sfu.yml")',
         allDefinitions(deployPowerShell, powerShellFunctions),
-        "Start-SfuService -Service sfu-a",
+        "if ($env:FIXED_STAMP) { function Get-ArchiveStamp { return $env:FIXED_STAMP } }",
+        "Start-SfuService -Service sfu-a -Url $env:SFU_HEALTH_URL",
       ].join("\n"),
   })),
 ];
@@ -140,9 +149,31 @@ const writeFiles = (dir, files) => {
   for (const [name, content] of Object.entries(files)) writeFileSync(join(dir, name), content);
 };
 
+const listen = (server) => new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${server.address().port}`)));
+const close = (server) => new Promise((resolve) => { server.closeAllConnections(); server.close(resolve); });
+
+const healthAnswers = {
+  deployed: (service, deployId) => [200, { status: "healthy", instanceId: service, deployId, workers: { healthy: 1 } }],
+  unavailable: (service, deployId) => [503, { status: "unhealthy", instanceId: service, deployId, workers: { healthy: 0 } }],
+  "an earlier deploy": (service) => [200, { status: "healthy", instanceId: service, deployId: "sfu-an-earlier-deploy", workers: { healthy: 1 } }],
+  "another SFU": (_service, deployId) => [200, { status: "healthy", instanceId: "sfu-z", deployId, workers: { healthy: 1 } }],
+  "an older image": () => [200, { status: "healthy", workers: { healthy: 1 } }],
+};
+
+const listArchives = (serviceDir) =>
+  (existsSync(serviceDir) ? readdirSync(serviceDir).sort() : []).map((name) => {
+    const path = join(serviceDir, name);
+    const files = readdirSync(path).sort();
+    return { name, files, bytes: Object.fromEntries(files.map((file) => [file, readFileSync(join(path, file))])), modes: [mode(path), ...files.map((file) => mode(join(path, file)))] };
+  });
+
 const replaceService = async (
   harness,
   {
+    health = "deployed",
+    deployId = "sfu-test-deploy",
+    fixedStamp = "",
+    sharedImportDir = "",
     container = OLD_CONTAINER,
     diff = "",
     diffStatus = 0,
@@ -157,6 +188,12 @@ const replaceService = async (
   } = {},
 ) => {
   const dir = mkdtempSync(join(tmpdir(), "deploy-sfu-state-"));
+  const healthServer = createServer((req, res) => {
+    const [code, body] = healthAnswers[health]("sfu-a", deployId);
+    res.writeHead(req.url === "/health" ? code : 404, { "content-type": "application/json" });
+    res.end(JSON.stringify(body));
+  });
+  const healthUrl = await listen(healthServer);
   try {
     const bin = join(dir, "bin");
     mkdirSync(bin);
@@ -170,7 +207,7 @@ const replaceService = async (
     const log = join(dir, "docker.log");
     writeFileSync(log, "");
     const volume = join(dir, "volume");
-    const importDir = join(dir, "image-import-dir");
+    const importDir = sharedImportDir || join(dir, "image-import-dir");
     mkdirSync(volume);
     writeFileSync(join(dir, harness.file), harness.source());
     const result = await run(harness.command, [...harness.args, join(dir, harness.file)], {
@@ -193,23 +230,29 @@ const replaceService = async (
       FAKE_IMAGE_IMPORT_DIR: imageImportDir ? importDir : "",
       STAGING_PATH_FILE: join(dir, "staging-path"),
       STAGING_MODES: join(dir, "staging-modes"),
+      SFU_HEALTH_URL: healthUrl,
+      SFU_DEPLOY_ID: deployId,
+      SFU_HEALTH_TIMEOUT_SECONDS: "3",
+      SFU_HEALTH_POLL_SECONDS: "1",
+      FIXED_STAMP: fixedStamp,
     });
     const listing = (path) => (existsSync(path) ? readdirSync(path).sort() : []);
     const containerDir = join(importDir, "sfu-a");
-    const importedFiles = Object.fromEntries(listing(containerDir).map((name) => [name, readFileSync(join(containerDir, name))]));
+    const archives = listArchives(containerDir);
+    const latest = archives.at(-1);
     return {
       ...result,
       calls: readFileSync(log, "utf8").trim().split("\n").filter(Boolean),
-      imported: listing(containerDir),
-      importedBytes: (name) => importedFiles[name] ?? Buffer.alloc(0),
-      importModes: existsSync(containerDir)
-        ? [mode(importDir), mode(containerDir), ...listing(containerDir).map((name) => mode(join(containerDir, name)))]
-        : [],
+      archives,
+      imported: latest?.files ?? [],
+      importedBytes: (name) => latest?.bytes[name] ?? Buffer.alloc(0),
+      importModes: latest ? [mode(importDir), mode(containerDir), ...latest.modes] : [],
       importLeftovers: listing(importDir).filter((name) => name !== "sfu-a"),
       stagingModes: existsSync(join(dir, "staging-modes")) ? readFileSync(join(dir, "staging-modes"), "utf8").trim().split("\n") : [],
       volumeEntries: listing(volume),
     };
   } finally {
+    await close(healthServer);
     rmSync(dir, { recursive: true, force: true });
   }
 };
@@ -302,7 +345,50 @@ for (const harness of harnesses) {
     const sends = receives(changed.calls).map((call) => changed.calls.indexOf(call));
     assert.equal(sends.length, 2, changed.calls.join("\n"));
     assert.ok(sends[1] > callIndex(changed.calls, /^compose .* stop sfu-a$/), changed.calls.join("\n"));
-    assert.equal(changed.importedBytes("scheduling.json").toString(), "[1,2]");
+    assert.deepEqual(changed.archives.map((archive) => archive.bytes["scheduling.json"].toString()), ["[1]", "[1,2]"]);
+  });
+
+  test(`${shell}: a later deploy keeps the copy an earlier deploy saved`, async () => {
+    const shared = mkdtempSync(join(tmpdir(), "deploy-sfu-import-"));
+    try {
+      const first = await replaceService(harness, { sharedImportDir: shared, deployId: "sfu-first-deploy", diff: wrote("scheduling.json"), files: { "scheduling.json": '["first"]' } });
+      assert.equal(first.status, 0, first.stderr);
+      const second = await replaceService(harness, { sharedImportDir: shared, deployId: "sfu-second-deploy", diff: wrote("scheduling.json"), files: { "scheduling.json": '["second"]' } });
+      assert.equal(second.status, 0, second.stderr);
+      assert.deepEqual(second.archives.map((archive) => archive.bytes["scheduling.json"].toString()), ['["first"]', '["second"]']);
+      assert.match(second.archives[0].name, /^\d{8}T\d{9}Z-sfu-first-deploy$/);
+      assert.match(second.archives[1].name, /^\d{8}T\d{9}Z-sfu-second-deploy$/);
+    } finally {
+      rmSync(shared, { recursive: true, force: true });
+    }
+  });
+
+  test(`${shell}: never replaces a saved copy, and stops before anything is stopped`, async () => {
+    const shared = mkdtempSync(join(tmpdir(), "deploy-sfu-import-"));
+    try {
+      const options = { sharedImportDir: shared, fixedStamp: "20261124T000000000Z", diff: wrote("scheduling.json") };
+      const first = await replaceService(harness, { ...options, files: { "scheduling.json": '["first"]' } });
+      assert.equal(first.status, 0, first.stderr);
+      const second = await replaceService(harness, { ...options, files: { "scheduling.json": '["second"]' } });
+      assert.notEqual(second.status, 0);
+      assert.match(second.stderr, /never replaced/);
+      assert.equal(stopped(second.calls), false, second.calls.join("\n"));
+      assert.deepEqual(second.archives.map((archive) => archive.bytes["scheduling.json"].toString()), ['["first"]']);
+      assert.deepEqual(second.importLeftovers, []);
+    } finally {
+      rmSync(shared, { recursive: true, force: true });
+    }
+  });
+
+  test(`${shell}: stops a replacement that never answers healthy as this deploy`, async () => {
+    for (const health of ["unavailable", "an earlier deploy", "another SFU", "an older image"]) {
+      const { status, calls, stderr } = await replaceService(harness, { health });
+      assert.notEqual(status, 0, `${health} was accepted`);
+      const start = callIndex(calls, /^compose .* up -d sfu-a$/);
+      const stop = calls.findLastIndex((call) => /^compose .* stop sfu-a$/.test(call));
+      assert.ok(start >= 0 && stop > start, `${health}\n${calls.join("\n")}`);
+      assert.match(stderr, /did not answer healthy/, health);
+    }
   });
 
   test(`${shell}: a payload that arrives changed stops the deploy before anything is stopped`, async () => {
@@ -334,7 +420,7 @@ for (const harness of harnesses) {
     assert.equal(status, 0, stderr);
     assert.equal(stagingModes[0], "drwx------");
     assert.ok(stagingModes.slice(1).every((entry) => entry === "-rw-------"), stagingModes.join("\n"));
-    assert.deepEqual(importModes, ["700", "700", "600", "600"]);
+    assert.deepEqual(importModes, ["700", "700", "700", "600", "600"]);
     assert.ok(callIndex(calls, /^chown -R node:node /) >= 0, calls.join("\n"));
   });
 
@@ -402,5 +488,129 @@ for (const harness of harnesses) {
     assert.equal(status, 0, stderr);
     assert.equal(callIndex(calls, /^(cp|diff) /), -1, calls.join("\n"));
     assert.ok(callIndex(calls, /^compose .* up -d sfu-a$/) >= 0);
+  });
+}
+
+const FLOW_DOCKER = `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$DOCKER_LOG"
+service="\${@: -1}"
+if [[ "$1" == "compose" ]]; then
+  case " $* " in
+    *" config --services "*) printf 'sfu-a\\nsfu-b\\n'; exit 0 ;;
+    *" config --format json "*) echo '{}'; exit 0 ;;
+    *" up -d "*) printf '%s' "$SFU_DEPLOY_ID" > "$FAKE_STATE/$service.up"; exit 0 ;;
+    *" stop "*) rm -f "$FAKE_STATE/$service.up"; exit 0 ;;
+  esac
+fi
+exit 0
+`;
+
+const fakeSfu = (service, { rooms, replacement, state, log }) => {
+  let draining = false;
+  let active = rooms;
+  return createServer((req, res) => {
+    const reply = (code, body) => {
+      res.writeHead(code, { "content-type": "application/json" });
+      res.end(JSON.stringify(body));
+    };
+    if (req.method === "POST" && req.url === "/drain") {
+      draining = true;
+      active = 0;
+      appendFileSync(log, `drain ${service}\n`);
+      req.resume();
+      return reply(200, { draining: true });
+    }
+    if (req.url === "/status") return reply(200, { instanceId: service, rooms: active, draining, healthy: true });
+    if (req.url === "/health") {
+      const upFile = join(state, `${service}.up`);
+      if (!existsSync(upFile)) return reply(200, { status: "healthy", workers: { healthy: 1 } });
+      const [code, body] = healthAnswers[replacement](service, readFileSync(upFile, "utf8"));
+      return reply(code, body);
+    }
+    return reply(404, {});
+  });
+};
+
+const deployShells = [
+  { name: "bash", script: "deploy-sfu.sh", command: "bash", args: [] },
+  ...powerShells
+    .filter(({ version }) => atLeast(version, MINIMUM_POWERSHELL))
+    .map(({ binary, version }) => ({ name: `pwsh ${version}`, script: "deploy-sfu.ps1", command: binary, args: ["-NoProfile", "-NonInteractive", "-File"] })),
+];
+
+const deploySfus = async (shell, replacements) => {
+  const root = mkdtempSync(join(tmpdir(), "deploy-sfu-flow-"));
+  const state = join(root, "state");
+  const log = join(root, "deploy.log");
+  mkdirSync(state);
+  writeFileSync(log, "");
+  const servers = {
+    "sfu-a": fakeSfu("sfu-a", { rooms: 1, replacement: replacements["sfu-a"], state, log }),
+    "sfu-b": fakeSfu("sfu-b", { rooms: 0, replacement: replacements["sfu-b"], state, log }),
+  };
+  const urls = { "sfu-a": await listen(servers["sfu-a"]), "sfu-b": await listen(servers["sfu-b"]) };
+  try {
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    mkdirSync(join(root, "scripts"));
+    copyFileSync(join(scriptsDir, shell.script), join(root, "scripts", shell.script));
+    writeFileSync(join(root, "scripts", "deploy-sfu-preflight.mjs"), "process.stdin.resume();\n");
+    writeFileSync(join(root, ".env"), "SFU_SECRET=test-secret\nREDIS_URL=redis://127.0.0.1:6399\n");
+    writeFileSync(join(root, "docker-compose.sfu.yml"), "services: {}\n");
+    writeFileSync(join(bin, "docker"), FLOW_DOCKER);
+    writeFileSync(join(bin, "git"), "#!/bin/sh\nexit 0\n");
+    writeFileSync(join(bin, "npm"), "#!/bin/sh\nexit 0\n");
+    for (const name of readdirSync(bin)) chmodSync(join(bin, name), 0o755);
+    const result = await run(shell.command, [...shell.args, join(root, "scripts", shell.script)], {
+      PATH: `${bin}:${process.env.PATH}`,
+      HOME: root,
+      TMPDIR: tmpdir(),
+      DOCKER_LOG: log,
+      FAKE_STATE: state,
+      SFU_A_URL: urls["sfu-a"],
+      SFU_B_URL: urls["sfu-b"],
+      SFU_HEALTH_TIMEOUT_SECONDS: "3",
+      SFU_HEALTH_POLL_SECONDS: "1",
+      DRAIN_POLL_SECONDS: "1",
+    });
+    return { ...result, calls: readFileSync(log, "utf8").trim().split("\n").filter(Boolean) };
+  } finally {
+    await Promise.all(Object.values(servers).map(close));
+    rmSync(root, { recursive: true, force: true });
+  }
+};
+
+for (const shell of deployShells) {
+  test(`${shell.name}: drains the serving SFU only after its replacement answers healthy as this deploy`, async () => {
+    const { status, calls, stdout, stderr } = await deploySfus(shell, { "sfu-a": "deployed", "sfu-b": "deployed" });
+    assert.equal(status, 0, `${stdout}\n${stderr}`);
+    const started = callIndex(calls, /^compose .* up -d sfu-b$/);
+    const drained = calls.indexOf("drain sfu-a");
+    const replaced = callIndex(calls, /^compose .* up -d sfu-a$/);
+    assert.ok(started >= 0 && drained > started && replaced > drained, calls.join("\n"));
+    assert.match(stdout, /SFU deploy complete/);
+  });
+
+  test(`${shell.name}: a replacement that answers 503 is stopped, the serving SFU is never drained, and the deploy fails`, async () => {
+    const { status, calls, stdout, stderr } = await deploySfus(shell, { "sfu-a": "deployed", "sfu-b": "unavailable" });
+    assert.notEqual(status, 0, stdout);
+    assert.equal(calls.indexOf("drain sfu-a"), -1, calls.join("\n"));
+    const started = callIndex(calls, /^compose .* up -d sfu-b$/);
+    const stoppedReplacement = calls.findLastIndex((call) => /^compose .* stop sfu-b$/.test(call));
+    assert.ok(started >= 0 && stoppedReplacement > started, calls.join("\n"));
+    assert.equal(callIndex(calls, /^compose .* (build|stop|up -d) sfu-a$/), -1, calls.join("\n"));
+    assert.doesNotMatch(stdout, /SFU deploy complete/);
+    assert.match(stderr, /sfu-b did not answer healthy/);
+  });
+
+  test(`${shell.name}: a second replacement that never answers healthy is stopped and the deploy fails`, async () => {
+    const { status, calls, stdout, stderr } = await deploySfus(shell, { "sfu-a": "unavailable", "sfu-b": "deployed" });
+    assert.notEqual(status, 0, stdout);
+    const started = callIndex(calls, /^compose .* up -d sfu-a$/);
+    const stoppedReplacement = calls.findLastIndex((call) => /^compose .* stop sfu-a$/.test(call));
+    assert.ok(started > calls.indexOf("drain sfu-a") && stoppedReplacement > started, calls.join("\n"));
+    assert.equal(callIndex(calls.slice(callIndex(calls, /^compose .* up -d sfu-b$/) + 1), /^compose .* stop sfu-b$/), -1, calls.join("\n"));
+    assert.doesNotMatch(stdout, /SFU deploy complete/);
+    assert.match(stderr, /sfu-a did not answer healthy/);
   });
 }

@@ -374,6 +374,7 @@ export const config = {
     max: 65535,
   }),
   instanceId: process.env.SFU_INSTANCE_ID || `sfu-${process.pid}`,
+  deployId: process.env.SFU_DEPLOY_ID?.trim() || null,
   instancePublicUrl,
   region: resolveConfiguredSfuRegion(process.env.SFU_REGION),
   version: process.env.SFU_VERSION || "dev",

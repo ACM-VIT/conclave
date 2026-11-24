@@ -335,6 +335,10 @@ function Get-FallbackFingerprint {
   return ($entries -join "`n")
 }
 
+function Get-ArchiveStamp {
+  return [DateTime]::UtcNow.ToString("yyyyMMdd'T'HHmmssfff'Z'")
+}
+
 function Send-FallbackJson {
   param([string]$Service, [string]$Directory)
 
@@ -351,19 +355,48 @@ function Send-FallbackJson {
     & chmod 0600 $archive
   }
   $checksum = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
-  $receive = 'umask 077 && base=${CONCLAVE_FALLBACK_IMPORT_DIR:?} && dest=$base/$1 && incoming=$base/.incoming-$1-$$ && mkdir -p "$dest" "$incoming" && cat > "$incoming/payload.tar" && got=$(sha256sum "$incoming/payload.tar" | cut -d" " -f1) && if [ "$got" != "$2" ]; then echo "The fallback files arrived with checksum $got, not $2." >&2; rm -rf "$incoming"; exit 1; fi && tar -xf "$incoming/payload.tar" -C "$incoming" && rm "$incoming/payload.tar" && mv -f "$incoming"/*.json "$dest"/ && rmdir "$incoming" && chmod 0700 "$base" "$dest" && chmod 0600 "$dest"/*.json && chown -R node:node "$base"'
+  if ([string]::IsNullOrWhiteSpace($env:SFU_DEPLOY_ID)) {
+    throw "SFU_DEPLOY_ID is not set, so the saved copy would have no deploy id."
+  }
+  $name = "$(Get-ArchiveStamp)-$($env:SFU_DEPLOY_ID)"
+  $receive = 'umask 077 && base=${CONCLAVE_FALLBACK_IMPORT_DIR:?} && case "$3" in ""|.*|*[!A-Za-z0-9._-]*) echo "The archive name $3 is not safe to use." >&2; exit 1;; esac && folder=$base/$1 && dest=$folder/$3 && incoming=$base/.incoming-$1-$$ && mkdir -p "$folder" && if [ -e "$dest" ]; then echo "$dest already exists, and a saved copy is never replaced." >&2; exit 1; fi && mkdir "$incoming" && cat > "$incoming/payload.tar" && got=$(sha256sum "$incoming/payload.tar" | cut -d" " -f1) && if [ "$got" != "$2" ]; then echo "The fallback files arrived with checksum $got, not $2." >&2; rm -rf "$incoming"; exit 1; fi && mkdir "$incoming/files" && tar -xf "$incoming/payload.tar" -C "$incoming/files" && rm "$incoming/payload.tar" && chmod 0700 "$incoming/files" && chmod 0600 "$incoming/files"/*.json && mv "$incoming/files" "$dest" && rmdir "$incoming" && chmod 0700 "$base" "$folder" && chown -R node:node "$base"'
   $exitCode = Send-FileToCommand -Path $archive -Command "docker" -Arguments ($composeBaseArgs + @(
     "run", "-T", "--rm", "--no-deps", "--user", "root", "--cap-add", "CHOWN", "--cap-add", "DAC_OVERRIDE", "--cap-add", "FOWNER", "--entrypoint", "sh", $Service, "-c",
-    $receive, "sh", $Service, $checksum
+    $receive, "sh", $Service, $checksum, $name
   ))
   if ($exitCode -ne 0) {
     throw "Could not copy the old $Service container's JSON fallback files onto the volume."
   }
-  Write-Host "Copied JSON fallback files from the old $Service container onto the volume and verified them: $($names -join ' ')"
+  Write-Host "Saved the old $Service container's JSON fallback files on the volume as $name and verified them: $($names -join ' ')"
+}
+
+function Test-SfuDeployed {
+  param([string]$Service, [string]$Url)
+
+  try {
+    $health = Invoke-RestMethod -Uri "$Url/health" -Method Get -TimeoutSec 5
+    return ($health.status -eq "healthy") -and ($health.instanceId -eq $Service) -and (-not [string]::IsNullOrWhiteSpace($env:SFU_DEPLOY_ID)) -and ($health.deployId -eq $env:SFU_DEPLOY_ID)
+  } catch {
+    return $false
+  }
+}
+
+function Wait-SfuDeployed {
+  param([string]$Service, [string]$Url, [int]$TimeoutSeconds)
+
+  $pollSeconds = Get-Int -Value $env:SFU_HEALTH_POLL_SECONDS -DefaultValue 2
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  while (-not (Test-SfuDeployed -Service $Service -Url $Url)) {
+    if ((Get-Date) -ge $deadline) {
+      return $false
+    }
+    Start-Sleep -Seconds $pollSeconds
+  }
+  return $true
 }
 
 function Start-SfuService {
-  param([string]$Service)
+  param([string]$Service, [string]$Url)
 
   Assert-PowerShellVersion
   Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @("build", $Service))
@@ -409,6 +442,12 @@ function Start-SfuService {
     Remove-Item -Recurse -Force -LiteralPath $staging -ErrorAction SilentlyContinue
   }
   Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @("up", "-d", $Service))
+  $timeoutSeconds = Get-Int -Value $env:SFU_HEALTH_TIMEOUT_SECONDS -DefaultValue 180
+  Write-Host "Waiting for the new $Service to answer healthy at $Url as deploy $($env:SFU_DEPLOY_ID)..."
+  if (-not (Wait-SfuDeployed -Service $Service -Url $Url -TimeoutSeconds $timeoutSeconds)) {
+    & docker @($composeBaseArgs + @("stop", $Service))
+    Exit-WithError "The new $Service did not answer healthy at $Url as deploy $($env:SFU_DEPLOY_ID) within $timeoutSeconds seconds. Stopped it; nothing was drained, and the other SFU keeps serving."
+  }
 }
 
 function Get-StatusJson {
@@ -573,6 +612,10 @@ Invoke-Checked -Command "git" -Arguments @("-C", $rootDir, "pull")
 Write-Host "Installing SFU dependencies..."
 Invoke-Checked -Command "npm" -Arguments @("--prefix", (Join-Path $rootDir "packages/sfu"), "install")
 
+$deployId = "sfu-" + [DateTime]::UtcNow.ToString("yyyyMMdd'T'HHmmss'Z'") + "-" + [guid]::NewGuid().ToString("N").Substring(0, 8)
+[Environment]::SetEnvironmentVariable("SFU_DEPLOY_ID", $deployId, "Process")
+Write-Host "Deploy id: $deployId"
+
 if ($hasUpstash) {
   Write-Host "Using Upstash Redis; skipping local Redis container."
 } elseif (-not [string]::IsNullOrWhiteSpace($env:SFU_REDIS_URL) -or
@@ -652,7 +695,7 @@ Write-Host "Active service: $activeService"
 Write-Host "Inactive service: $inactiveService"
 
 Write-Host "Building and starting $inactiveService..."
-Start-SfuService -Service $inactiveService
+Start-SfuService -Service $inactiveService -Url $inactiveUrl
 
 $forcedDrainActive = $false
 if ($activeService -eq "sfu-a" -and -not $hasStatusA) {
@@ -729,7 +772,7 @@ if ($forcedDrainActive) {
 }
 
 Write-Host "Rebuilding and starting $activeService..."
-Start-SfuService -Service $activeService
+Start-SfuService -Service $activeService -Url $activeUrl
 
 if ($deployBrowserLocal) {
   Write-Host ""

@@ -311,8 +311,16 @@ fallback_fingerprint() {
   return 0
 }
 
+fallback_receiver() {
+  printf '%s' 'umask 077 && base=${CONCLAVE_FALLBACK_IMPORT_DIR:?} && case "$3" in ""|.*|*[!A-Za-z0-9._-]*) echo "The archive name $3 is not safe to use." >&2; exit 1;; esac && folder=$base/$1 && dest=$folder/$3 && incoming=$base/.incoming-$1-$$ && mkdir -p "$folder" && if [ -e "$dest" ]; then echo "$dest already exists, and a saved copy is never replaced." >&2; exit 1; fi && mkdir "$incoming" && cat > "$incoming/payload.tar" && got=$(sha256sum "$incoming/payload.tar" | cut -d" " -f1) && if [ "$got" != "$2" ]; then echo "The fallback files arrived with checksum $got, not $2." >&2; rm -rf "$incoming"; exit 1; fi && mkdir "$incoming/files" && tar -xf "$incoming/payload.tar" -C "$incoming/files" && rm "$incoming/payload.tar" && chmod 0700 "$incoming/files" && chmod 0600 "$incoming/files"/*.json && mv "$incoming/files" "$dest" && rmdir "$incoming" && chmod 0700 "$base" "$folder" && chown -R node:node "$base"'
+}
+
+archive_stamp() {
+  node -e 'process.stdout.write(new Date().toISOString().replace(/[-:.]/g, ""))'
+}
+
 send_fallback_json() {
-  local service="$1" dir="$2" archive checksum file
+  local service="$1" dir="$2" archive checksum file name
   local -a names=()
   for file in "$dir"/*.json; do
     [[ -e "$file" ]] && names+=("${file##*/}")
@@ -321,17 +329,34 @@ send_fallback_json() {
   archive="${dir}.tar"
   tar -C "$dir" -cf "$archive" "${names[@]}" || return 1
   checksum="$(sha256_file "$archive")"
+  name="$(archive_stamp)-${SFU_DEPLOY_ID:?}"
   if ! "${COMPOSE[@]}" run -T --rm --no-deps --user root --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --entrypoint sh "$service" -c \
-    'umask 077 && base=${CONCLAVE_FALLBACK_IMPORT_DIR:?} && dest=$base/$1 && incoming=$base/.incoming-$1-$$ && mkdir -p "$dest" "$incoming" && cat > "$incoming/payload.tar" && got=$(sha256sum "$incoming/payload.tar" | cut -d" " -f1) && if [ "$got" != "$2" ]; then echo "The fallback files arrived with checksum $got, not $2." >&2; rm -rf "$incoming"; exit 1; fi && tar -xf "$incoming/payload.tar" -C "$incoming" && rm "$incoming/payload.tar" && mv -f "$incoming"/*.json "$dest"/ && rmdir "$incoming" && chmod 0700 "$base" "$dest" && chmod 0600 "$dest"/*.json && chown -R node:node "$base"' \
-    sh "$service" "$checksum" < "$archive"; then
+    "$(fallback_receiver)" sh "$service" "$checksum" "$name" < "$archive"; then
     echo "Could not copy the old ${service} container's JSON fallback files onto the volume." >&2
     return 1
   fi
-  echo "Copied JSON fallback files from the old ${service} container onto the volume and verified them: ${names[*]}"
+  echo "Saved the old ${service} container's JSON fallback files on the volume as ${name} and verified them: ${names[*]}"
+}
+
+sfu_answers_as_deployed() {
+  local service="$1" url="$2" health
+  health="$(curl -fsS --connect-timeout 2 --max-time 5 "${url}/health" 2>/dev/null)" || return 1
+  printf '%s' "$health" | SERVICE="$service" DEPLOY_ID="${SFU_DEPLOY_ID:?}" node -e 'let body = ""; process.stdin.on("data", (chunk) => (body += chunk)).on("end", () => { let health = null; try { health = JSON.parse(body); } catch {} process.exit(health?.status === "healthy" && health.instanceId === process.env.SERVICE && health.deployId === process.env.DEPLOY_ID ? 0 : 1); });'
+}
+
+wait_for_sfu() {
+  local service="$1" url="$2" deadline
+  deadline=$(( $(date +%s) + ${SFU_HEALTH_TIMEOUT_SECONDS:-180} ))
+  until sfu_answers_as_deployed "$service" "$url"; do
+    if (( $(date +%s) >= deadline )); then
+      return 1
+    fi
+    sleep "${SFU_HEALTH_POLL_SECONDS:-2}"
+  done
 }
 
 build_and_start() (
-  local service="$1" container staging
+  local service="$1" url="$2" container staging
   umask 077
   "${COMPOSE[@]}" build "$service"
   container="$("${COMPOSE[@]}" ps -a -q "$service" | head -n 1)"
@@ -352,6 +377,12 @@ build_and_start() (
     fi
   fi
   "${COMPOSE[@]}" up -d "$service"
+  echo "Waiting for the new ${service} to answer healthy at ${url} as deploy ${SFU_DEPLOY_ID}..."
+  if ! wait_for_sfu "$service" "$url"; then
+    echo "The new ${service} did not answer healthy at ${url} as deploy ${SFU_DEPLOY_ID} within ${SFU_HEALTH_TIMEOUT_SECONDS:-180} seconds. Stopping it; nothing was drained, and the other SFU keeps serving." >&2
+    "${COMPOSE[@]}" stop "$service" || true
+    exit 1
+  fi
 )
 
 HAS_REDIS_SERVICE="false"
@@ -395,6 +426,10 @@ fi
 
 echo "Pulling latest code..."
 git -C "$ROOT_DIR" pull
+
+SFU_DEPLOY_ID="sfu-$(date -u +%Y%m%dT%H%M%SZ)-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
+export SFU_DEPLOY_ID
+echo "Deploy id: ${SFU_DEPLOY_ID}"
 
 # SFU dependencies are installed inside the Docker image; the host does not need them.
 # (Previously this step tried `npm -C packages/sfu install` on the host, which fails on
@@ -478,7 +513,7 @@ echo "Active service: ${ACTIVE_SERVICE}"
 echo "Inactive service: ${INACTIVE_SERVICE}"
 
 echo "Building and starting ${INACTIVE_SERVICE}..."
-build_and_start "$INACTIVE_SERVICE"
+build_and_start "$INACTIVE_SERVICE" "$INACTIVE_URL"
 if [[ "$INACTIVE_SERVICE" == "sfu-a" ]]; then
   validate_public_route "sfu-a" "$SFU_A_PUBLIC_URL"
 else
@@ -548,7 +583,7 @@ elif [[ -n "$ACTIVE_URL" && "$HAS_STATUS_A" == "true" && "$ACTIVE_SERVICE" == "s
 fi
 
 echo "Rebuilding and starting ${ACTIVE_SERVICE}..."
-build_and_start "$ACTIVE_SERVICE"
+build_and_start "$ACTIVE_SERVICE" "$ACTIVE_URL"
 if [[ "$ACTIVE_SERVICE" == "sfu-a" ]]; then
   validate_public_route "sfu-a" "$SFU_A_PUBLIC_URL"
 else

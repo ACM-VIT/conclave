@@ -37,14 +37,19 @@ const stableJson = (value: unknown): string =>
       : inner,
   );
 
+const folders = (path: string): string[] =>
+  readdirSync(path, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+    .map((entry) => entry.name);
+
 const recoveredCopies = (fileName: string): string[] => {
   const importDir = process.env.CONCLAVE_FALLBACK_IMPORT_DIR?.trim();
   if (!importDir || !existsSync(importDir)) return [];
-  return readdirSync(importDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => join(importDir, entry.name, fileName))
-    .filter((path) => existsSync(path))
-    .sort();
+  return folders(importDir)
+    .flatMap((service) => folders(join(importDir, service)).map((archive) => ({ archive, path: join(importDir, service, archive, fileName) })))
+    .filter(({ path }) => existsSync(path))
+    .sort((a, b) => (a.archive < b.archive ? -1 : a.archive > b.archive ? 1 : a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+    .map(({ path }) => path);
 };
 
 const readSource = <Snapshot>(adapter: JsonStoreAdapter<Snapshot>, path: string, role: string): Source<Snapshot> => {

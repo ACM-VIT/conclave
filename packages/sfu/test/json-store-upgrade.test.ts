@@ -104,7 +104,7 @@ const stores: Store[] = [
 let dir = "";
 const activePath = (store: Store) => join(dir, "recordings", store.file);
 const importDir = () => join(dir, "recordings", "json-fallback-import");
-const copyPath = (store: Store, service = "sfu-a") => join(importDir(), service, store.file);
+const copyPath = (store: Store, service = "sfu-a", archive = "20261124T000000000Z-sfu-test-deploy") => join(importDir(), service, archive, store.file);
 
 const write = (path: string, data: unknown) => {
   mkdirSync(dirname(path), { recursive: true });
@@ -160,6 +160,17 @@ describe.each(stores)("an SFU in explicit JSON mode with $name from an older ima
     write(copyPath(store, "sfu-b"), store.encode([{ id: "b", title: "From sfu-b", updatedAt: 100 }]));
 
     expect(byId(await store.load())).toEqual({ a: "From sfu-a", b: "From sfu-b" });
+  });
+
+  it("adopts the copies two deploys saved, oldest first, and keeps the records of both", async () => {
+    write(copyPath(store, "sfu-a", "20261123T090000000Z-sfu-first-deploy"), store.encode([{ id: "a", title: "Saved by the first deploy", updatedAt: 100 }]));
+    write(copyPath(store, "sfu-a", "20261124T090000000Z-sfu-second-deploy"), store.encode([{ id: "b", title: "Saved by the second deploy", updatedAt: 100 }]));
+    write(join(importDir(), ".incoming-sfu-a-77", "files", store.file), store.encode([{ id: "c", title: "Still arriving", updatedAt: 100 }]));
+
+    expect(byId(await store.load())).toEqual({ a: "Saved by the first deploy", b: "Saved by the second deploy" });
+    expect(existsSync(`${copyPath(store, "sfu-a", "20261123T090000000Z-sfu-first-deploy")}.adopted`)).toBe(true);
+    expect(existsSync(`${copyPath(store, "sfu-a", "20261124T090000000Z-sfu-second-deploy")}.adopted`)).toBe(true);
+    expect(existsSync(join(importDir(), ".incoming-sfu-a-77", "files", store.file))).toBe(true);
   });
 
   it("refuses to start when both stores changed a record differently at the same time", async () => {
