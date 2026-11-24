@@ -247,22 +247,60 @@ sha256_file() {
   fi
 }
 
+normalize_container_path() {
+  local part
+  local -a parts=() kept=()
+  IFS='/' read -r -a parts <<<"$1"
+  for part in "${parts[@]}"; do
+    case "$part" in
+      "" | .) ;;
+      ..) (( ${#kept[@]} > 0 )) && kept=("${kept[@]:0:${#kept[@]}-1}") ;;
+      *) kept+=("$part") ;;
+    esac
+  done
+  local IFS=/
+  printf '/%s\n' "${kept[*]}"
+}
+
+fallback_json_paths() {
+  local container="$1" workdir env_lines pair name variable value
+  workdir="$(docker inspect --format '{{.Config.WorkingDir}}' "$container")" || return 1
+  env_lines="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$container")" || return 1
+  for pair in scheduling.json:SCHEDULING_PATH scheduled-meetings.json:SCHEDULED_MEETINGS_PATH scheduled-webinars.json:SCHEDULED_WEBINARS_PATH; do
+    name="${pair%%:*}"
+    variable="${pair#*:}"
+    value="$(sed -n "s/^${variable}=//p" <<<"$env_lines" | tail -n 1)"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    if [[ -z "$value" ]]; then
+      value="${workdir}/data/${name}"
+    elif [[ "$value" != /* ]]; then
+      value="${workdir}/${value}"
+    fi
+    printf '%s %s\n' "$name" "$(normalize_container_path "$value")"
+  done
+}
+
 collect_fallback_json() {
-  local service="$1" container="$2" dir="$3" changes name path
+  local service="$1" container="$2" dir="$3" changes paths name path
   mkdir -p "$dir"
   if ! changes="$(docker diff "$container")"; then
     echo "Could not list the files the old ${service} container wrote." >&2
     return 1
   fi
-  for name in scheduling.json scheduled-meetings.json scheduled-webinars.json; do
-    path="/app/packages/sfu/data/${name}"
+  if ! paths="$(fallback_json_paths "$container")"; then
+    echo "Could not read where the old ${service} container kept its stores." >&2
+    return 1
+  fi
+  while read -r name path; do
+    [[ -n "$name" ]] || continue
     grep -qxF -e "A ${path}" -e "C ${path}" <<<"$changes" || continue
     if ! docker cp "${container}:${path}" "${dir}/${name}"; then
       echo "Could not copy ${name} out of the old ${service} container." >&2
       return 1
     fi
     chmod 0600 "${dir}/${name}"
-  done
+  done <<<"$paths"
 }
 
 fallback_fingerprint() {

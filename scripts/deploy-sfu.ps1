@@ -247,6 +247,57 @@ function Send-FileToCommand {
   }
 }
 
+function ConvertTo-ContainerPath {
+  param([string]$Path)
+
+  $kept = New-Object System.Collections.Generic.List[string]
+  foreach ($part in $Path.Split("/")) {
+    if ($part -eq "" -or $part -eq ".") {
+      continue
+    }
+    if ($part -eq "..") {
+      if ($kept.Count -gt 0) {
+        $kept.RemoveAt($kept.Count - 1)
+      }
+      continue
+    }
+    $kept.Add($part)
+  }
+  return "/" + ($kept -join "/")
+}
+
+function Get-FallbackJsonPaths {
+  param([string]$Container)
+
+  $workdir = (@(& docker inspect --format "{{.Config.WorkingDir}}" $Container) -join "").Trim()
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not read where the old container kept its stores."
+  }
+  $envLines = @(& docker inspect --format "{{range .Config.Env}}{{println .}}{{end}}" $Container)
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not read where the old container kept its stores."
+  }
+  $paths = [ordered]@{}
+  foreach ($pair in @(@("scheduling.json", "SCHEDULING_PATH"), @("scheduled-meetings.json", "SCHEDULED_MEETINGS_PATH"), @("scheduled-webinars.json", "SCHEDULED_WEBINARS_PATH"))) {
+    $name = $pair[0]
+    $variable = $pair[1]
+    $value = ""
+    foreach ($line in $envLines) {
+      if ($line.StartsWith("$variable=", [System.StringComparison]::Ordinal)) {
+        $value = $line.Substring($variable.Length + 1)
+      }
+    }
+    $value = $value.Trim()
+    if (-not $value) {
+      $value = "$workdir/data/$name"
+    } elseif (-not $value.StartsWith("/")) {
+      $value = "$workdir/$value"
+    }
+    $paths[$name] = ConvertTo-ContainerPath -Path $value
+  }
+  return $paths
+}
+
 function Copy-FallbackJson {
   param([string]$Service, [string]$Container, [string]$Directory)
 
@@ -258,8 +309,9 @@ function Copy-FallbackJson {
   if ($LASTEXITCODE -ne 0) {
     throw "Could not list the files the old $Service container wrote."
   }
-  foreach ($name in @("scheduling.json", "scheduled-meetings.json", "scheduled-webinars.json")) {
-    $path = "/app/packages/sfu/data/$name"
+  $paths = Get-FallbackJsonPaths -Container $Container
+  foreach ($name in $paths.Keys) {
+    $path = $paths[$name]
     if (-not (($changes -ccontains "A $path") -or ($changes -ccontains "C $path"))) {
       continue
     }

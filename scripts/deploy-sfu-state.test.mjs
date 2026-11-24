@@ -44,6 +44,10 @@ if [[ "$1" == "compose" ]]; then
   exit 0
 fi
 case "$1" in
+  inspect)
+    if [[ "$*" == *WorkingDir* ]]; then printf '%s\n' "\${FAKE_WORKDIR-/app/packages/sfu}"; exit 0; fi
+    if [[ "$*" == *Config.Env* ]]; then printf '%b' "$FAKE_ENV"; exit 0; fi
+    exit 0 ;;
   diff) printf '%b' "$FAKE_DIFF"; exit "\${FAKE_DIFF_STATUS:-0}" ;;
   cp)
     name="\${2##*/}"
@@ -148,6 +152,8 @@ const replaceService = async (
     files = {},
     filesAfterStop = {},
     corrupt = false,
+    containerEnv = "",
+    workdir = "/app/packages/sfu",
   } = {},
 ) => {
   const dir = mkdtempSync(join(tmpdir(), "deploy-sfu-state-"));
@@ -174,6 +180,8 @@ const replaceService = async (
       DOCKER_LOG: log,
       FAKE_CONTAINER: container,
       FAKE_DIFF: diff,
+      FAKE_ENV: containerEnv,
+      FAKE_WORKDIR: workdir,
       FAKE_DIFF_STATUS: String(diffStatus),
       FAKE_CP_FAIL: cpFail,
       FAKE_CP_FAIL_AFTER_STOP: cpFailAfterStop,
@@ -368,6 +376,25 @@ for (const harness of harnesses) {
     assert.notEqual(status, 0);
     assert.equal(callIndex(calls, / up -d /), -1, calls.join("\n"));
     assert.match(stderr, /start sfu-a/);
+  });
+
+  test(`${shell}: copies each store from the path the old container was configured with`, async () => {
+    const { status, calls, stderr, imported, importedBytes } = await replaceService(harness, {
+      containerEnv: "SCHEDULED_MEETINGS_PATH=/srv/conclave/meetings.json\\nSCHEDULING_PATH= ./state//scheduling.json \\nSCHEDULED_WEBINARS_PATH=../shared/webinars.json\\n",
+      diff:
+        "A /srv/conclave/meetings.json\\nA /app/packages/sfu/state/scheduling.json\\nA /app/packages/shared/webinars.json\\n" +
+        wrote("scheduled-meetings.json"),
+      files: { "meetings.json": "[\"configured\"]", "scheduled-meetings.json": "[\"default\"]" },
+    });
+    assert.equal(status, 0, stderr);
+    const sources = [...new Set(calls.filter((call) => call.startsWith("cp ")).map((call) => call.split(" ")[1]))].sort();
+    assert.deepEqual(sources, [
+      `${OLD_CONTAINER}:/app/packages/sfu/state/scheduling.json`,
+      `${OLD_CONTAINER}:/app/packages/shared/webinars.json`,
+      `${OLD_CONTAINER}:/srv/conclave/meetings.json`,
+    ]);
+    assert.deepEqual(imported, ["scheduled-meetings.json", "scheduled-webinars.json", "scheduling.json"]);
+    assert.equal(importedBytes("scheduled-meetings.json").toString(), "[\"configured\"]");
   });
 
   test(`${shell}: with no old container, starts the new SFU without copying anything`, async () => {
