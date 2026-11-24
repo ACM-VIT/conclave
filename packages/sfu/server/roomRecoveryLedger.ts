@@ -5,6 +5,7 @@ import {
   opendirSync,
   readFileSync,
   readdirSync,
+  rmdirSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -341,6 +342,7 @@ const PRUNE_EVERY_MS = 10 * 60 * 1000;
 // gone left untidy, and few enough that a pass never holds up a call.
 const SWEPT_PER_PASS = 200;
 const ABANDONED_TEMP_FILE_MS = 60 * 1000;
+const TOMBSTONE_KEPT_MS = 90 * 24 * 60 * 60 * 1000;
 const WRITE_ATTEMPTS = 8;
 
 const roomRecoveryDirectory = (): string => {
@@ -450,7 +452,18 @@ export const createFileRoomRecoveryStore = (
     if (text === null) return false;
     const stored = parsedOrUndefined(text);
     if (stillMatters(stored)) return false;
-    if (isTombstone(stored)) return true;
+    if (isTombstone(stored)) {
+      const standingSince = unlessGone(() => statSync(path).mtimeMs);
+      if (standingSince !== null && Date.now() - standingSince > TOMBSTONE_KEPT_MS) {
+        rmSync(path, { force: true });
+        try {
+          rmdirSync(room);
+        } catch (error) {
+          if (!failedWith(error, "ENOTEMPTY", "EEXIST", "ENOENT")) throw error;
+        }
+      }
+      return true;
+    }
     // Once the tombstone is the newest, the record it replaces is below it.
     // Taken by a write that came in meanwhile, it is that write's room.
     if (!publish(room, newest + 1, tombstoneOf(stored))) return false;

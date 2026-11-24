@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdtempSync,
@@ -359,6 +360,39 @@ describe("two SFUs writing recovery records into one directory", () => {
       hostUserKey: "host-new",
     });
   }, 120_000);
+
+  it("removes a tombstone that has stood for 90 days, directory and all, and keeps a younger one", async () => {
+    const directory = tempDir("room-recovery-writers-");
+    const older = "conclave:old-code-xyz";
+    const store = createFileRoomRecoveryStore(directory);
+    await store.write(CHANNEL, record("host-a", "room-a", Date.now() - 3 * DAY_MS), null);
+    await store.write(older, record("host-b", "room-b", Date.now() - 3 * DAY_MS), null);
+    ageEverything(directory);
+    await createFileRoomRecoveryStore(directory).write(
+      "conclave:tidy-once",
+      record("tidy-host", "tidy-room"),
+      null,
+    );
+    expect(await store.read(older)).toMatchObject({ hostUserKey: null, writer: "room-b" });
+    const roomOf = (channelId: string) =>
+      join(directory, createHash("sha256").update(channelId).digest("hex"));
+    const stoodFor = (channelId: string, days: number) => {
+      const since = new Date(Date.now() - days * DAY_MS);
+      for (const file of filesIn(roomOf(channelId))) utimesSync(file, since, since);
+    };
+    stoodFor(older, 91);
+    stoodFor(CHANNEL, 60);
+
+    await createFileRoomRecoveryStore(directory).write(
+      "conclave:tidy-twice",
+      record("tidy-host", "tidy-room"),
+      null,
+    );
+
+    expect(existsSync(roomOf(older))).toBe(false);
+    expect(await store.read(older)).toBeNull();
+    expect(await store.read(CHANNEL)).toMatchObject({ hostUserKey: null, writer: "room-a" });
+  });
 
   it("never numbers a room again, however long its tombstone stood, while a write decided on it is stalled", async () => {
     const directory = tempDir("room-recovery-writers-");
