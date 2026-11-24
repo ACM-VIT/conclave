@@ -236,58 +236,85 @@ COMPOSE=(docker compose "${COMPOSE_ENV_FILES[@]}" -f "$COMPOSE_FILE")
 # directories it does not own.
 #
 # Older images fell back to JSON files in the container layer when SQLite was
-# locked. The old container is stopped first, so it cannot write after the
-# copy, and the copies stay on the volume for a later import. The copy runs in
-# a container of the new image and writes to the folder that image names
-# (CONCLAVE_FALLBACK_IMPORT_DIR).
-copy_fallback_json() (
-  local service="$1" container changes staging name path
-  local -a copied=()
-  umask 077
-  container="$("${COMPOSE[@]}" ps -a -q "$service" | head -n 1)" || return 1
-  [[ -n "$container" ]] || return 0
+# locked. Before the old container stops, its files are copied out, sent to the
+# folder the new image names (CONCLAVE_FALLBACK_IMPORT_DIR) and checked there
+# by SHA-256; after the stop they are copied again and resent if they changed.
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d' ' -f1
+  else
+    shasum -a 256 "$1" | cut -d' ' -f1
+  fi
+}
+
+collect_fallback_json() {
+  local service="$1" container="$2" dir="$3" changes name path
+  mkdir -p "$dir"
   if ! changes="$(docker diff "$container")"; then
     echo "Could not list the files the old ${service} container wrote." >&2
     return 1
   fi
-  staging="$(mktemp -d)"
-  trap 'rm -rf "$staging"' EXIT
   for name in scheduling.json scheduled-meetings.json scheduled-webinars.json; do
     path="/app/packages/sfu/data/${name}"
     grep -qxF -e "A ${path}" -e "C ${path}" <<<"$changes" || continue
-    if ! docker cp "${container}:${path}" "${staging}/${name}"; then
+    if ! docker cp "${container}:${path}" "${dir}/${name}"; then
       echo "Could not copy ${name} out of the old ${service} container." >&2
       return 1
     fi
-    chmod 0600 "${staging}/${name}"
-    copied+=("$name")
+    chmod 0600 "${dir}/${name}"
   done
-  (( ${#copied[@]} > 0 )) || return 0
-  if ! tar -C "$staging" -cf - "${copied[@]}" | "${COMPOSE[@]}" run -T --rm --no-deps --user node --entrypoint sh "$service" -c \
-    'umask 077 && dest=${CONCLAVE_FALLBACK_IMPORT_DIR:?}/$1 && mkdir -p $dest && chmod 0700 $CONCLAVE_FALLBACK_IMPORT_DIR $dest && tar -xf - -C $dest && chmod 0600 $dest/*.json' sh "$service"; then
+}
+
+fallback_fingerprint() {
+  local file
+  for file in "$1"/*.json; do
+    [[ -e "$file" ]] && printf '%s %s\n' "${file##*/}" "$(sha256_file "$file")"
+  done
+  return 0
+}
+
+send_fallback_json() {
+  local service="$1" dir="$2" archive checksum file
+  local -a names=()
+  for file in "$dir"/*.json; do
+    [[ -e "$file" ]] && names+=("${file##*/}")
+  done
+  (( ${#names[@]} > 0 )) || return 0
+  archive="${dir}.tar"
+  tar -C "$dir" -cf "$archive" "${names[@]}" || return 1
+  checksum="$(sha256_file "$archive")"
+  if ! "${COMPOSE[@]}" run -T --rm --no-deps --user root --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --entrypoint sh "$service" -c \
+    'umask 077 && base=${CONCLAVE_FALLBACK_IMPORT_DIR:?} && dest=$base/$1 && incoming=$base/.incoming-$1-$$ && mkdir -p "$dest" "$incoming" && cat > "$incoming/payload.tar" && got=$(sha256sum "$incoming/payload.tar" | cut -d" " -f1) && if [ "$got" != "$2" ]; then echo "The fallback files arrived with checksum $got, not $2." >&2; rm -rf "$incoming"; exit 1; fi && tar -xf "$incoming/payload.tar" -C "$incoming" && rm "$incoming/payload.tar" && mv -f "$incoming"/*.json "$dest"/ && rmdir "$incoming" && chmod 0700 "$base" "$dest" && chmod 0600 "$dest"/*.json && chown -R node:node "$base"' \
+    sh "$service" "$checksum" < "$archive"; then
     echo "Could not copy the old ${service} container's JSON fallback files onto the volume." >&2
     return 1
   fi
-  echo "Copied JSON fallback files from the old ${service} container onto the volume: ${copied[*]}"
-)
+  echo "Copied JSON fallback files from the old ${service} container onto the volume and verified them: ${names[*]}"
+}
 
-ensure_state_ownership() {
-  local service="$1"
+build_and_start() (
+  local service="$1" container staging
+  umask 077
+  "${COMPOSE[@]}" build "$service"
+  container="$("${COMPOSE[@]}" ps -a -q "$service" | head -n 1)"
+  staging="$(mktemp -d)"
+  trap 'rm -rf "$staging"' EXIT
+  if [[ -n "$container" ]] && ! { collect_fallback_json "$service" "$container" "$staging/before" && send_fallback_json "$service" "$staging/before"; }; then
+    echo "Stopped before replacing ${service}; nothing was stopped." >&2
+    exit 1
+  fi
   "${COMPOSE[@]}" stop "$service"
   "${COMPOSE[@]}" run --rm --no-deps --user root --cap-add CHOWN --cap-add DAC_READ_SEARCH --entrypoint find "$service" \
     /var/lib/conclave/recordings \( ! -user node -o ! -group node \) -exec chown node:node {} +
-  if ! copy_fallback_json "$service"; then
-    echo "Stopped before replacing ${service}. Its old container is stopped, not removed; start it again with: ${COMPOSE[*]} start ${service}" >&2
-    exit 1
+  if [[ -n "$container" ]]; then
+    if ! collect_fallback_json "$service" "$container" "$staging/after" ||
+      { [[ "$(fallback_fingerprint "$staging/before")" != "$(fallback_fingerprint "$staging/after")" ]] && ! send_fallback_json "$service" "$staging/after"; }; then
+      echo "Stopped before replacing ${service}. Its old container is stopped, not removed; start it again with: ${COMPOSE[*]} start ${service}" >&2
+      exit 1
+    fi
   fi
-}
-
-build_and_start() {
-  local service="$1"
-  "${COMPOSE[@]}" build "$service"
-  ensure_state_ownership "$service"
   "${COMPOSE[@]}" up -d "$service"
-}
+)
 
 HAS_REDIS_SERVICE="false"
 if "${COMPOSE[@]}" config --services | rg -x "redis" >/dev/null 2>&1; then

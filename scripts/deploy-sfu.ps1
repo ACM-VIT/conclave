@@ -2,6 +2,16 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+function Assert-PowerShellVersion {
+  $version = $PSVersionTable.PSVersion
+  if ($version.Major -lt 7 -or ($version.Major -eq 7 -and $version.Minor -lt 4)) {
+    [Console]::Error.WriteLine("deploy-sfu.ps1 needs PowerShell 7.4 or later; this is PowerShell $version. Nothing was changed.")
+    exit 1
+  }
+}
+
+Assert-PowerShellVersion
+
 function Exit-WithError {
   param([string]$Message)
   [Console]::Error.WriteLine($Message)
@@ -206,75 +216,145 @@ function Get-PublicUrl {
 # in the recordings volume. Hand anything node does not own over before a new
 # container starts. Safe to repeat; it only touches mismatched files.
 # Older images fell back to JSON files in the container layer when SQLite was
-# locked. The old container is stopped first, so it cannot write after the
-# copy, and the copies stay on the volume for a later import. The copy runs in
-# a container of the new image and writes to the folder that image names
-# (CONCLAVE_FALLBACK_IMPORT_DIR).
-function Copy-FallbackJson {
-  param([string]$Service)
+# locked. Before the old container stops, its files are copied out, sent to the
+# folder the new image names (CONCLAVE_FALLBACK_IMPORT_DIR) and checked there
+# by SHA-256; after the stop they are copied again and resent if they changed.
+function Send-FileToCommand {
+  param([string]$Path, [string]$Command, [string[]]$Arguments)
 
-  $containers = @(& docker @($composeBaseArgs + @("ps", "-a", "-q", $Service)))
-  if ($LASTEXITCODE -ne 0) {
-    throw "Could not look up the old $Service container."
+  $start = [System.Diagnostics.ProcessStartInfo]::new($Command)
+  foreach ($argument in $Arguments) {
+    $start.ArgumentList.Add($argument)
   }
-  $container = $containers | Select-Object -First 1
-  if ([string]::IsNullOrWhiteSpace($container)) {
-    return
+  $start.UseShellExecute = $false
+  $start.RedirectStandardInput = $true
+  $process = [System.Diagnostics.Process]::Start($start)
+  try {
+    try {
+      $source = [System.IO.File]::OpenRead($Path)
+      try {
+        $source.CopyTo($process.StandardInput.BaseStream)
+      } finally {
+        $source.Dispose()
+      }
+    } finally {
+      $process.StandardInput.Close()
+    }
+    $process.WaitForExit()
+    return $process.ExitCode
+  } finally {
+    $process.Dispose()
   }
-  $changes = @(& docker diff $container)
+}
+
+function Copy-FallbackJson {
+  param([string]$Service, [string]$Container, [string]$Directory)
+
+  New-Item -ItemType Directory -Path $Directory -Force | Out-Null
+  if (-not $IsWindows) {
+    & chmod 0700 $Directory
+  }
+  $changes = @(& docker diff $Container)
   if ($LASTEXITCODE -ne 0) {
     throw "Could not list the files the old $Service container wrote."
   }
+  foreach ($name in @("scheduling.json", "scheduled-meetings.json", "scheduled-webinars.json")) {
+    $path = "/app/packages/sfu/data/$name"
+    if (-not (($changes -ccontains "A $path") -or ($changes -ccontains "C $path"))) {
+      continue
+    }
+    $target = Join-Path $Directory $name
+    & docker cp "${Container}:$path" $target
+    if ($LASTEXITCODE -ne 0) {
+      throw "Could not copy $name out of the old $Service container."
+    }
+    if (-not $IsWindows) {
+      & chmod 0600 $target
+    }
+  }
+}
+
+function Get-FallbackFingerprint {
+  param([string]$Directory)
+
+  $entries = @(Get-ChildItem -LiteralPath $Directory -Filter "*.json" -File -ErrorAction SilentlyContinue | Sort-Object Name | ForEach-Object {
+    "$($_.Name) $((Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash)"
+  })
+  return ($entries -join "`n")
+}
+
+function Send-FallbackJson {
+  param([string]$Service, [string]$Directory)
+
+  $names = @(Get-ChildItem -LiteralPath $Directory -Filter "*.json" -File | Sort-Object Name | ForEach-Object { $_.Name })
+  if ($names.Count -eq 0) {
+    return
+  }
+  $archive = "$Directory.tar"
+  & tar -C $Directory -cf $archive @names
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not pack the old $Service container's JSON fallback files."
+  }
+  if (-not $IsWindows) {
+    & chmod 0600 $archive
+  }
+  $checksum = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+  $receive = 'umask 077 && base=${CONCLAVE_FALLBACK_IMPORT_DIR:?} && dest=$base/$1 && incoming=$base/.incoming-$1-$$ && mkdir -p "$dest" "$incoming" && cat > "$incoming/payload.tar" && got=$(sha256sum "$incoming/payload.tar" | cut -d" " -f1) && if [ "$got" != "$2" ]; then echo "The fallback files arrived with checksum $got, not $2." >&2; rm -rf "$incoming"; exit 1; fi && tar -xf "$incoming/payload.tar" -C "$incoming" && rm "$incoming/payload.tar" && mv -f "$incoming"/*.json "$dest"/ && rmdir "$incoming" && chmod 0700 "$base" "$dest" && chmod 0600 "$dest"/*.json && chown -R node:node "$base"'
+  $exitCode = Send-FileToCommand -Path $archive -Command "docker" -Arguments ($composeBaseArgs + @(
+    "run", "-T", "--rm", "--no-deps", "--user", "root", "--cap-add", "CHOWN", "--cap-add", "DAC_OVERRIDE", "--cap-add", "FOWNER", "--entrypoint", "sh", $Service, "-c",
+    $receive, "sh", $Service, $checksum
+  ))
+  if ($exitCode -ne 0) {
+    throw "Could not copy the old $Service container's JSON fallback files onto the volume."
+  }
+  Write-Host "Copied JSON fallback files from the old $Service container onto the volume and verified them: $($names -join ' ')"
+}
+
+function Start-SfuService {
+  param([string]$Service)
+
+  Assert-PowerShellVersion
+  Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @("build", $Service))
+  $containers = @(& docker @($composeBaseArgs + @("ps", "-a", "-q", $Service)))
+  if ($LASTEXITCODE -ne 0) {
+    Exit-WithError "Could not look up the old $Service container. Stopped before replacing $Service; nothing was stopped."
+  }
+  $container = $containers | Select-Object -First 1
+  $hasContainer = -not [string]::IsNullOrWhiteSpace($container)
   $staging = Join-Path ([System.IO.Path]::GetTempPath()) ("conclave-fallback-" + [guid]::NewGuid())
   New-Item -ItemType Directory -Path $staging | Out-Null
   if (-not $IsWindows) {
     & chmod 0700 $staging
   }
   try {
-    $copied = @()
-    foreach ($name in @("scheduling.json", "scheduled-meetings.json", "scheduled-webinars.json")) {
-      $path = "/app/packages/sfu/data/$name"
-      if (-not (($changes -ccontains "A $path") -or ($changes -ccontains "C $path"))) {
-        continue
+    $before = Join-Path $staging "before"
+    $after = Join-Path $staging "after"
+    if ($hasContainer) {
+      try {
+        Copy-FallbackJson -Service $Service -Container $container -Directory $before
+        Send-FallbackJson -Service $Service -Directory $before
+      } catch {
+        Exit-WithError "$($_.Exception.Message) Stopped before replacing $Service; nothing was stopped."
       }
-      & docker cp "${container}:$path" (Join-Path $staging $name)
-      if ($LASTEXITCODE -ne 0) {
-        throw "Could not copy $name out of the old $Service container."
-      }
-      if (-not $IsWindows) {
-        & chmod 0600 (Join-Path $staging $name)
-      }
-      $copied += $name
     }
-    if ($copied.Count -gt 0) {
-      & tar -C $staging -cf - @copied | & docker @($composeBaseArgs + @(
-        "run", "-T", "--rm", "--no-deps", "--user", "node", "--entrypoint", "sh", $Service, "-c",
-        'umask 077 && dest=${CONCLAVE_FALLBACK_IMPORT_DIR:?}/$1 && mkdir -p $dest && chmod 0700 $CONCLAVE_FALLBACK_IMPORT_DIR $dest && tar -xf - -C $dest && chmod 0600 $dest/*.json', "sh", $Service
-      ))
-      if ($LASTEXITCODE -ne 0) {
-        throw "Could not copy the old $Service container's JSON fallback files onto the volume."
+    Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @("stop", $Service))
+    Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @(
+      "run", "--rm", "--no-deps", "--user", "root", "--cap-add", "CHOWN", "--cap-add", "DAC_READ_SEARCH", "--entrypoint", "find", $Service,
+      "/var/lib/conclave/recordings", "(", "!", "-user", "node", "-o", "!", "-group", "node", ")",
+      "-exec", "chown", "node:node", "{}", "+"
+    ))
+    if ($hasContainer) {
+      try {
+        Copy-FallbackJson -Service $Service -Container $container -Directory $after
+        if ((Get-FallbackFingerprint -Directory $before) -ne (Get-FallbackFingerprint -Directory $after)) {
+          Send-FallbackJson -Service $Service -Directory $after
+        }
+      } catch {
+        Exit-WithError "$($_.Exception.Message) Stopped before replacing $Service. Its old container is stopped, not removed; start it again with: docker $($composeBaseArgs -join ' ') start $Service"
       }
-      Write-Host "Copied JSON fallback files from the old $Service container onto the volume: $($copied -join ' ')"
     }
   } finally {
-    Remove-Item -Recurse -Force -Path $staging -ErrorAction SilentlyContinue
-  }
-}
-
-function Start-SfuService {
-  param([string]$Service)
-
-  Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @("build", $Service))
-  Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @("stop", $Service))
-  Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @(
-    "run", "--rm", "--no-deps", "--user", "root", "--cap-add", "CHOWN", "--cap-add", "DAC_READ_SEARCH", "--entrypoint", "find", $Service,
-    "/var/lib/conclave/recordings", "(", "!", "-user", "node", "-o", "!", "-group", "node", ")",
-    "-exec", "chown", "node:node", "{}", "+"
-  ))
-  try {
-    Copy-FallbackJson -Service $Service
-  } catch {
-    Exit-WithError "$($_.Exception.Message) Stopped before replacing $Service. Its old container is stopped, not removed; start it again with: docker $($composeBaseArgs -join ' ') start $Service"
+    Remove-Item -Recurse -Force -LiteralPath $staging -ErrorAction SilentlyContinue
   }
   Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @("up", "-d", $Service))
 }
