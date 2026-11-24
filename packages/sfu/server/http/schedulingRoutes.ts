@@ -42,7 +42,7 @@ import {
   type HostDashboard,
 } from "../controlPlane/schedulingCommands.js";
 import { commitFollowUp } from "../controlPlane/followUp.js";
-import { StoreCorruptionError, StoreUnavailableError } from "../controlPlane/model.js";
+import { StoreCorruptionError, StoreUnavailableError, type CommitResult } from "../controlPlane/model.js";
 import {
   isSchedulingEmailConfigured,
   sendSchedulingBookingEmails,
@@ -916,25 +916,27 @@ export const registerSchedulingRoutes = (
           calendarError = (error as Error).message || "Could not create the calendar event.";
         }
         if (eventId) {
+          const createdEvent = eventId;
+          const command = settleBookingCalendar({
+            meetingId: latest.id,
+            profileId: profile.id,
+            grantId: calendar.grantId,
+            eventId: createdEvent,
+            startAt: latest.scheduledStartAt,
+            endAt: latest.scheduledEndAt,
+          });
+          const orphaned = (result: CommitResult<{ orphaned: boolean }>) => !result.ok || result.value.orphaned;
+          const removeIfOrphaned = async (result: CommitResult<{ orphaned: boolean }>) => {
+            if (orphaned(result)) await deleteGoogleCalendarEvent(state, calendar, createdEvent);
+          };
           const settled = await commitFollowUp(
             state.controlPlane,
-            `calendar event ${eventId} for booking ${latest.id}`,
-            settleBookingCalendar({
-              meetingId: latest.id,
-              profileId: profile.id,
-              grantId: calendar.grantId,
-              eventId,
-              startAt: latest.scheduledStartAt,
-              endAt: latest.scheduledEndAt,
-            }),
+            `calendar event ${createdEvent} for booking ${latest.id}`,
+            command,
+            removeIfOrphaned,
           );
-          if (settled && !settled.ok) {
-            await deleteGoogleCalendarEvent(state, calendar, eventId);
-            bookingGone();
-            return;
-          }
-          if (settled?.ok && settled.value.orphaned) {
-            await deleteGoogleCalendarEvent(state, calendar, eventId);
+          if (settled && orphaned(settled)) {
+            await removeIfOrphaned(settled);
             bookingGone();
             return;
           }

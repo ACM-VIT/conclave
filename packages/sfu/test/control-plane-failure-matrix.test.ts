@@ -227,3 +227,40 @@ describe.each(modes)("a %s store that fails a write", (mode) => {
     30_000,
   );
 });
+
+describe("a booking whose calendar settle waits out a storage error", () => {
+  const until = async (condition: () => boolean, label: string) => {
+    for (let round = 0; round < 300; round += 1) {
+      if (condition()) return;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    throw new Error(`timed out waiting for ${label}`);
+  };
+
+  it("deletes the booking's Google event once a retry finds the booking deleted meanwhile", async () => {
+    configure("sqlite");
+    vi.stubEnv("SFU_FOLLOW_UP_RETRY_DELAYS_MS", "100,100,100,100");
+    const sfu = await start();
+    const world = await seed(sfu);
+    gates.parking.add("google-create");
+    const booking = sfu.call("POST", `/scheduling/public/${world.username}/intro/book`, {
+      startAt: slot(),
+      attendeeName: "Guest",
+      attendeeEmail: "guest@example.test",
+    });
+    await until(() => gates.parked.length > 0, "the Google event to be created");
+    const listed = await host(sfu, "GET", "/scheduling/bookings");
+    const [booked] = listed.body.bookings as Array<{ id: string }>;
+    expect((await host(sfu, "DELETE", `/scheduled-meetings/${booked.id}`)).status).toBe(200);
+    const fault = holdSqliteLock(join(dir, "conclave.sqlite"));
+    await fault.inject();
+    try {
+      gates.drain();
+      await booking;
+      expect(google.created).toHaveLength(1);
+    } finally {
+      await fault.clear();
+    }
+    await until(() => google.events.size === 0, "the orphaned Google event to be deleted");
+  }, 30_000);
+});
