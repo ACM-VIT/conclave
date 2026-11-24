@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -202,22 +202,18 @@ fixed("Greptile: a container that restarted and runs again is busy, so a call it
 
 fixed("Greptile: a journal write that fails stops the deploy before the step it records", () => {
   let stateDir = "";
-  const lockJournal = (sfu) => {
-    if (sfu.image === TARGET && sfu.bootDrained && !sfu.locked) {
-      sfu.locked = true;
-      chmodSync(stateDir, 0o500);
+  const blockJournal = (sfu) => {
+    if (sfu.image === TARGET && sfu.bootDrained && !sfu.blocked) {
+      sfu.blocked = true;
+      mkdirSync(path.join(stateDir, "vm.sfu-a.journal.json.tmp"));
     }
   };
-  return withStack({ "sfu-a": { onRecreate: lockJournal }, "sfu-b": {} }, async (sfus, shared) => {
+  return withStack({ "sfu-a": { onRecreate: blockJournal }, "sfu-b": {} }, async (sfus, shared) => {
     stateDir = shared.env.SFU_DEPLOY_STATE_DIR;
-    try {
-      const result = await deploy(sfus, { env: { ...shared.env, ...ONLY_A } });
-      assert.notEqual(result.code, 0, result.output);
-      assert.match(result.output, /could not write sfu-a's deploy journal/);
-      assert.equal(sfus["sfu-a"].recreates.length, 1, "nothing changed after the failed write");
-    } finally {
-      chmodSync(stateDir, 0o700);
-    }
+    const result = await deploy(sfus, { env: { ...shared.env, ...ONLY_A } });
+    assert.notEqual(result.code, 0, result.output);
+    assert.match(result.output, /could not write sfu-a's deploy journal/);
+    assert.equal(sfus["sfu-a"].recreates.length, 1, "nothing changed after the failed write");
   });
 });
 
