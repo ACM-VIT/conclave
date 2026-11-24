@@ -39,11 +39,15 @@ first. An exception sends early, at most once every 3 s. An event is queued
 once by its uuid, and cut down at once to at most 32 KB (an exception's
 extra causes and outer frames first, then any text over 1 KB, then its
 largest fields), so no one report can push a batch past its limit. Every
-request is a `fetch` with `credentials: "omit"` and `referrerPolicy:
-"no-referrer"`, so `/ingest` never sees the auth cookie or the page's URL;
-`sendBeacon`, which always sends cookies and the referrer, is not used, and
-the send as a page goes away is a keepalive `fetch` instead (where a browser
-has no keepalive `fetch`, the batch is saved for the next load). Every event
+telemetry request, the chunk manifest's included, goes through one helper,
+`lib/telemetry-fetch.ts`, which sets `credentials: "omit"`, `referrerPolicy:
+"no-referrer"` and `cache: "no-store"` and gives the request its own
+deadline (`AbortSignal.timeout`: 15 s for a send, 5 s for the manifest), so
+no request carries the auth cookie or the page's URL; a test fails if any
+browser telemetry module calls `fetch` or `sendBeacon` itself. `sendBeacon`,
+which always sends cookies and the referrer, is not used, and the send as a
+page goes away is a keepalive `fetch` through the same helper instead (where
+a browser has no keepalive `fetch`, the batch is saved for the next load). Every event
 is built through the outbound schema again each time it is sent, so a saved
 copy from storage is checked like a new one, against the build it was made
 in: it keeps its own `client_version`, and its frames are checked against
@@ -71,8 +75,8 @@ one owner at a time:
   sent again, however many lifecycle events follow. Every request has a 15 s
   deadline (`/ingest` itself allows 2 s for a manifest and 10 s for
   PostHog); at the deadline it is aborted and counts as no answer. The
-  request carries that deadline itself, as an `AbortSignal.timeout`, so it
-  ends even when the tab's timer does not run. A tab the browser freezes runs
+  request carries that deadline itself, from the fetch helper, so it ends
+  even when the tab's timer does not run. A tab the browser freezes runs
   neither until it thaws, so its request can outlast the lease and meet
   another tab's replay; `/ingest` does not forward again an event PostHog
   already took (Retries, below).

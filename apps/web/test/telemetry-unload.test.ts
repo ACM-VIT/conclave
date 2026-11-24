@@ -20,9 +20,26 @@ const holdSdk = () => {
   });
 };
 
+const helperCall = vi.hoisted(() => ({ via: null as null | "beacon" | "fetch" }));
+vi.mock("../src/app/lib/telemetry-fetch", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/app/lib/telemetry-fetch")>();
+  return {
+    ...actual,
+    telemetryFetch: (url: string, request: Parameters<typeof actual.telemetryFetch>[1]) => {
+      helperCall.via = request.signal ? "fetch" : "beacon";
+      try {
+        return actual.telemetryFetch(url, request);
+      } finally {
+        helperCall.via = null;
+      }
+    },
+  };
+});
+
 type Sent = { via: "beacon" | "fetch"; url: string; body: BodyInit; type: string };
 let sent: Sent[] = [];
 let ingestInits: RequestInit[] = [];
+let manifestInits: RequestInit[] = [];
 let sendBeaconCalls = 0;
 let refuseBeacons = false;
 let ingestAnswers: number[] = [];
@@ -48,6 +65,7 @@ beforeEach(async () => {
   vi.spyOn(PostHog.prototype, "init");
   sent = [];
   ingestInits = [];
+  manifestInits = [];
   sendBeaconCalls = 0;
   refuseBeacons = false;
   ingestAnswers = [];
@@ -64,6 +82,7 @@ beforeEach(async () => {
     vi.fn((resource: unknown, init?: RequestInit) => {
       const url = String(resource);
       if (url.includes("posthog-chunk-ids")) {
+        manifestInits.push(init ?? {});
         if (manifest === "missing") return Promise.resolve(new Response("not found", { status: 404 }));
         return new Promise<Response>((_resolve, reject) => {
           abortManifest = () => reject(new TypeError("Failed to fetch"));
@@ -71,9 +90,9 @@ beforeEach(async () => {
       }
       let answer = new Response('{"status":1}', { status: 200 });
       if (url.includes("/ingest/") && init?.body) {
-        const status = init.signal ? ingestAnswers.shift() : undefined;
+        const via = helperCall.via ?? (init.signal ? "fetch" : "beacon");
+        const status = via === "fetch" ? ingestAnswers.shift() : undefined;
         if (status !== undefined) answer = new Response("{}", { status });
-        const via = init.signal ? "fetch" : "beacon";
         if (via === "beacon" && refuseBeacons) throw new TypeError("keepalive request refused");
         ingestInits.push(init);
         sent.push({ via, url, body: init.body, type: new Headers(init.headers).get("content-type") ?? "" });
@@ -460,7 +479,51 @@ describe("what a telemetry request carries", () => {
     expect(sendBeaconCalls).toBe(0);
     expect(ingestInits.length).toBeGreaterThanOrEqual(2);
     for (const init of ingestInits) expect(init).toMatchObject({ credentials: "omit", referrerPolicy: "no-referrer" });
-    expect(ingestInits.some((init) => init.keepalive === true && !init.signal)).toBe(true);
+    expect(ingestInits.some((init) => init.keepalive === true)).toBe(true);
+    for (const init of ingestInits) expect(init.signal).toBeDefined();
+  });
+
+  const recordDeadlines = () => {
+    const deadlines: Array<{ ms: number; end: () => void }> = [];
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms: number) => {
+      const controller = new AbortController();
+      deadlines.push({ ms, end: () => controller.abort() });
+      return controller.signal;
+    });
+    return deadlines;
+  };
+
+  it("fetches the chunk manifest without cookies or a referrer, ended by its own 5 s deadline", async () => {
+    const deadlines = recordDeadlines();
+    const { startTelemetry } = await import("../src/app/lib/telemetry");
+    startTelemetry();
+    await vi.waitFor(() => expect(manifestInits).toHaveLength(1));
+
+    expect(manifestInits[0]).toMatchObject({ credentials: "omit", referrerPolicy: "no-referrer" });
+    const own = deadlines.filter((deadline) => deadline.ms === 5000);
+    expect(own).toHaveLength(1);
+    expect(manifestInits[0].signal?.aborted).toBe(false);
+    own[0].end();
+    expect(manifestInits[0].signal?.aborted).toBe(true);
+  });
+
+  it("ends every send at its own 15 s deadline, the keepalive one as the page hides included", async () => {
+    manifest = "missing";
+    const deadlines = recordDeadlines();
+    const { telemetry, startTelemetry } = await import("../src/app/lib/telemetry");
+    startTelemetry();
+    await loaded();
+    telemetry.captureException(new TypeError("while the page stays"), { source: "react_error_boundary", boundary: "route" });
+    await vi.waitFor(() => expect(fetches()).toHaveLength(1));
+    telemetry.capture("meet_join_attempt", { joinMode: "meeting", isAdmin: false });
+    hide();
+    expect(beacons()).toHaveLength(1);
+
+    const sends = deadlines.filter((deadline) => deadline.ms === 15_000);
+    expect(sends).toHaveLength(ingestInits.length);
+    for (const init of ingestInits) expect(init.signal?.aborted).toBe(false);
+    for (const deadline of sends) deadline.end();
+    for (const init of ingestInits) expect(init.signal?.aborted).toBe(true);
   });
 
   it("builds a saved batch through the outbound schema again before it replays it", async () => {

@@ -16,7 +16,7 @@ export type CallMetricEvent = {
   [N in CallMetricName]: {
     name: N;
     props: TelemetryEventProps<N>;
-    /** Captured while the page unloads, so it must go out with sendBeacon. */
+    /** Captured while the page unloads, so it must go out with the unload send. */
     immediate: boolean;
   };
 }[CallMetricName];

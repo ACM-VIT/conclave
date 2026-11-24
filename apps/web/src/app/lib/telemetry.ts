@@ -3,12 +3,14 @@
 import type { CaptureResult, PostHog } from "posthog-js";
 import { installCallErrorCapture } from "./call-error-capture";
 import { randomUuid } from "./random-uuid";
+import { telemetryFetch } from "./telemetry-fetch";
 import {
   countDropped,
   createBatchStore,
   createOutbox,
   type Outbox,
   type OutboxEvent,
+  SEND_DEADLINE_MS,
   STORED_BATCH_PREFIX,
 } from "./telemetry-outbox";
 import {
@@ -155,7 +157,7 @@ const NO_CHUNKS: ReadonlyMap<string, string> = new Map();
 const loadChunkManifest = async (): Promise<void> => {
   const url = chunkManifestUrl(clientVersion);
   if (!url) return;
-  const response = await fetch(url, { cache: "no-store" });
+  const response = await telemetryFetch(url, { deadlineMs: MANIFEST_WAIT_MS });
   if (!response.ok) return;
   try {
     chunkFiles = parseChunkManifest(await response.json()) ?? chunkFiles;
@@ -397,13 +399,12 @@ const keepaliveRequests = (): boolean => {
 };
 
 const ingestRequest = (body: string, keepalive: boolean, signal?: AbortSignal): Promise<Response> =>
-  fetch(`${INGEST_PATH}/e/`, {
+  telemetryFetch(`${INGEST_PATH}/e/`, {
     method: "POST",
     body,
     keepalive,
     signal,
-    credentials: "omit",
-    referrerPolicy: "no-referrer",
+    deadlineMs: SEND_DEADLINE_MS,
     headers: { "content-type": "application/json" },
   });
 
@@ -457,7 +458,6 @@ export function startTelemetry(): void {
       }
     },
     shape: rebuilt(posthogKey),
-    deadline: typeof AbortSignal.timeout === "function" ? (ms) => AbortSignal.timeout(ms) : undefined,
     newId: randomUuid,
     store: createBatchStore(() => localStorage),
     lock: replayLock,
