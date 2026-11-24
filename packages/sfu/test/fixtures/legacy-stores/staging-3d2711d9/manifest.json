@@ -1,0 +1,15 @@
+{
+  "stagingCommit": "3d2711d9a056f652ea19bedf74dec4edb192339e",
+  "files": {
+    "json/phase-1/scheduled-meetings.json": "2e16ed05ec082eb8b5f5083d2e361d417ae77c0518b39eae712a5cef13dabf4b",
+    "json/phase-1/scheduled-webinars.json": "507e3e82b2d07b86e6bfb18302f008d90c5e40a746f4b3c3bd88d99e27c94e01",
+    "json/phase-1/scheduling.json": "13a244634c3b10f41cb4c90ac5bb2ab6c6c74fd01d007bc6530d16b4bd0e8f12",
+    "json/phase-2/scheduled-meetings.json": "08bdab36720c57c2734b354495dde149db95d14d288be97f2ca6037d0e60f011",
+    "json/phase-2/scheduled-webinars.json": "e493b5236eb1c8374a655374d44644690d5b436cc3c6f42cf54f583379c4380e",
+    "json/phase-2/scheduling.json": "b18af4cabaaaec784b342f708cb0f7564d5edf667a29516f7efeaa8911733c6b",
+    "redis/phase-1.json": "62e1676fa40d149ffd886b8b4bcaf369d27191fb1d475cb5a584b3fb910d701e",
+    "redis/phase-2.json": "8fea8f7c97bee3672cad5fc7466e346b961701b6542455de22944cf7e9900206",
+    "sqlite/phase-1.json": "5af3f4a3a0f20a92464cc45d827c1c8860cb9c362daf22b2f334e51f6f14fc23",
+    "sqlite/phase-2.json": "b12d5a1364ff6842f13bcb1ab9c62522b8aab36f138b4af05da72e108f86022f"
+  }
+}

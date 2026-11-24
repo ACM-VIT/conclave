@@ -1,0 +1,99 @@
+{
+  "profiles": [
+    {
+      "id": "16be221e-951f-4fe3-b57a-cb8568f9396f",
+      "clientId": "conclave",
+      "userId": "host-user",
+      "email": "host@example.test",
+      "name": "Host",
+      "username": "host",
+      "timeZone": "Europe/Berlin",
+      "createdAt": 1795538481314,
+      "updatedAt": 1795538481731
+    }
+  ],
+  "availability": [
+    {
+      "profileId": "16be221e-951f-4fe3-b57a-cb8568f9396f",
+      "availability": {
+        "timeZone": "Europe/Berlin",
+        "windows": [
+          {
+            "day": 1,
+            "startMinutes": 540,
+            "endMinutes": 1020
+          },
+          {
+            "day": 2,
+            "startMinutes": 540,
+            "endMinutes": 1020
+          },
+          {
+            "day": 3,
+            "startMinutes": 540,
+            "endMinutes": 1020
+          },
+          {
+            "day": 4,
+            "startMinutes": 540,
+            "endMinutes": 1020
+          },
+          {
+            "day": 5,
+            "startMinutes": 540,
+            "endMinutes": 1020
+          }
+        ],
+        "overrides": [
+          {
+            "date": "2099-01-01",
+            "windows": [],
+            "unavailable": true
+          }
+        ],
+        "updatedAt": 1795538481721
+      }
+    }
+  ],
+  "eventTypes": [
+    {
+      "id": "78d4fe79-6e83-46cf-aa75-8adc9ada5dfa",
+      "clientId": "conclave",
+      "profileId": "16be221e-951f-4fe3-b57a-cb8568f9396f",
+      "userId": "host-user",
+      "slug": "intro",
+      "title": "Intro",
+      "description": "",
+      "durationMinutes": 45,
+      "minimumNoticeMinutes": 0,
+      "bookingWindowDays": 60,
+      "bufferBeforeMinutes": 0,
+      "bufferAfterMinutes": 15,
+      "isActive": true,
+      "requiresCalendar": false,
+      "createdAt": 1795538481356,
+      "updatedAt": 1795538481724
+    }
+  ],
+  "calendars": [
+    {
+      "id": "e13f1f7a-f42c-4ca3-b638-f06028f23337",
+      "clientId": "conclave",
+      "profileId": "16be221e-951f-4fe3-b57a-cb8568f9396f",
+      "userId": "host-user",
+      "provider": "google",
+      "status": "connected",
+      "email": "host@example.test",
+      "calendarId": "primary",
+      "accessToken": "v1:JSxqWq36wJnuXH-B:4HRDMFwHZknVtNtYO1bu1w:64XrLGioCCNw3A",
+      "refreshToken": "v1:dLsnU7X4gtlOfFfl:1JeWbZrNawJApAA11VgwSw:HPlqQRRsOJd9gb0",
+      "accessTokenExpiresAt": 4000000000000,
+      "scopes": [
+        "calendar"
+      ],
+      "connectedAt": 1795538481731,
+      "updatedAt": 1795538481731,
+      "error": null
+    }
+  ]
+}
