@@ -69,4 +69,19 @@ export default tseslint.config(
       "@typescript-eslint/no-unsafe-return": "error",
     },
   },
+  {
+    files: ["src/**/*.{ts,tsx,js,jsx}"],
+    ignores: ["src/app/lib/media-captures.ts"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector:
+            "CallExpression[callee.property.name=/^(getUserMedia|getDisplayMedia)$/]",
+          message:
+            "Capture media with captureUserMedia or captureDisplayMedia from lib/media-captures, so ending the call releases it.",
+        },
+      ],
+    },
+  },
 );

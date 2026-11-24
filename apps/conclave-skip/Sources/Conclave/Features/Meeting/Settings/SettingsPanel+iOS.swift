@@ -507,6 +507,10 @@ private struct SettingsAboutSection<Route: Hashable>: View {
                     LabeledContent(SettingsCopy.rowTitle(.version), value: MeetingDetailsCopy.versionText())
                         .textSelection(.enabled)
                         .accessibilityIdentifier("settings.row.version")
+                case .crashReports:
+                    Toggle(SettingsCopy.rowTitle(.crashReports),
+                           isOn: Binding(get: { settings.general.shareCrashReports }, set: { settings.setShareCrashReports($0) }))
+                        .accessibilityIdentifier("settings.row.crashReports")
                 case .exportDiagnostics:
                     DiagnosticsExportRow(presenter: DiagnosticsExportPresenter.shared)
                 default:

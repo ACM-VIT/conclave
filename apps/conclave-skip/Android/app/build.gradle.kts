@@ -1,4 +1,9 @@
+import java.io.DataInputStream
+import java.io.DataOutputStream
+import java.nio.ByteBuffer
+import java.security.MessageDigest
 import java.util.Properties
+import java.util.zip.ZipFile
 
 val skipEnvValues: Map<String, String> = rootDir.parentFile
     .resolve("Skip.env")
@@ -65,6 +70,9 @@ val productionConclaveBaseUrl = "https://conclave.acmvit.in"
 val productionSfuJoinUrl = "$productionConclaveBaseUrl/api/sfu/join"
 val debugViewerProfile = configuredValue("CONCLAVE_DEBUG_VIEWER_PROFILE").lowercase() in setOf("yes", "true", "1")
 val sfuJoinUrl = configuredValue("SFU_JOIN_URL").ifBlank { productionSfuJoinUrl }
+val postHogProjectKey = configuredValue("POSTHOG_PROJECT_KEY")
+val postHogHost = configuredValue("POSTHOG_HOST")
+val crashReportsInDebug = configuredValue("CONCLAVE_CRASH_REPORTS_IN_DEBUG").lowercase() in setOf("yes", "true", "1")
 val releaseArtifactRequested = gradle.startParameter.taskNames.any { taskName ->
     val lower = taskName.substringAfterLast(":").lowercase()
     lower in setOf("assemble", "bundle", "build") ||
@@ -119,6 +127,9 @@ android {
         manifestPlaceholders["SFU_JOIN_URL"] = sfuJoinUrl
         manifestPlaceholders["CONCLAVE_DEBUG_VIEWER_PROFILE"] = "false"
         manifestPlaceholders["USES_CLEARTEXT_TRAFFIC"] = "true"
+        manifestPlaceholders["POSTHOG_PROJECT_KEY"] = postHogProjectKey
+        manifestPlaceholders["POSTHOG_HOST"] = postHogHost
+        manifestPlaceholders["CONCLAVE_CRASH_REPORTS_IN_DEBUG"] = "false"
 
     }
 
@@ -169,6 +180,7 @@ android {
         debug {
             isPseudoLocalesEnabled = true
             manifestPlaceholders["CONCLAVE_DEBUG_VIEWER_PROFILE"] = debugViewerProfile.toString()
+            manifestPlaceholders["CONCLAVE_CRASH_REPORTS_IN_DEBUG"] = crashReportsInDebug.toString()
         }
         release {
             signingConfig = signingConfigs.findByName("release")
@@ -181,6 +193,114 @@ android {
             manifestPlaceholders["SFU_JOIN_URL"] = productionSfuJoinUrl
             manifestPlaceholders["USES_CLEARTEXT_TRAFFIC"] = "false"
         }
+    }
+}
+
+/**
+ * Writes `crash-code-frames.bin` into the APK's assets: for every class the app compiles under `conclave/` and
+ * `skip/`, the first 8 bytes of SHA-256 of `class<TAB>source file` (the file its class file names), as sorted
+ * big-endian longs. Crash reports keep one of our Java or Kotlin frames only when its pair's hash is listed, so a
+ * parsed frame can never carry an arbitrary name. CrashCodeManifest.kt hashes the same way.
+ */
+abstract class CrashCodeManifestTask : DefaultTask() {
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val classJars: ListProperty<RegularFile>
+
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val classDirectories: ListProperty<Directory>
+
+    @get:OutputDirectory
+    abstract val outputDirectory: DirectoryProperty
+
+    @TaskAction
+    fun write() {
+        val hashes = sortedSetOf<Long>()
+        fun add(path: String, bytes: () -> ByteArray) {
+            if (!path.endsWith(".class") || OWN_PREFIXES.none { path.startsWith(it) }) return
+            val source = sourceFile(bytes()) ?: return
+            val entry = path.removeSuffix(".class").replace('/', '.') + "\t" + source
+            val digest = MessageDigest.getInstance("SHA-256").digest(entry.toByteArray(Charsets.UTF_8))
+            hashes.add(ByteBuffer.wrap(digest, 0, 8).long)
+        }
+        for (jar in classJars.get()) {
+            ZipFile(jar.asFile).use { zip ->
+                for (entry in zip.entries()) {
+                    if (!entry.isDirectory) add(entry.name) { zip.getInputStream(entry).use { it.readBytes() } }
+                }
+            }
+        }
+        for (directory in classDirectories.get()) {
+            val root = directory.asFile
+            root.walkTopDown().filter { it.isFile }.forEach { file ->
+                add(file.relativeTo(root).invariantSeparatorsPath) { file.readBytes() }
+            }
+        }
+        val output = outputDirectory.get().asFile
+        output.deleteRecursively()
+        output.mkdirs()
+        DataOutputStream(output.resolve("crash-code-frames.bin").outputStream().buffered()).use { out ->
+            for (hash in hashes) out.writeLong(hash)
+        }
+    }
+
+    /** The class file's `SourceFile` attribute, or null when it has none or is not a class file. */
+    private fun sourceFile(bytes: ByteArray): String? {
+        val input = DataInputStream(bytes.inputStream())
+        if (input.readInt() != 0xCAFEBABE.toInt()) return null
+        input.skipBytes(4)
+        val constantCount = input.readUnsignedShort()
+        val utf8 = arrayOfNulls<String>(constantCount)
+        var index = 1
+        while (index < constantCount) {
+            when (input.readUnsignedByte()) {
+                1 -> utf8[index] = input.readUTF()
+                3, 4, 9, 10, 11, 12, 17, 18 -> input.skipBytes(4)
+                5, 6 -> { input.skipBytes(8); index += 1 }
+                7, 8, 16, 19, 20 -> input.skipBytes(2)
+                15 -> input.skipBytes(3)
+                else -> return null
+            }
+            index += 1
+        }
+        input.skipBytes(6)
+        input.skipBytes(2 * input.readUnsignedShort())
+        repeat(2) {
+            repeat(input.readUnsignedShort()) {
+                input.skipBytes(6)
+                repeat(input.readUnsignedShort()) {
+                    input.skipBytes(2)
+                    input.skipBytes(input.readInt())
+                }
+            }
+        }
+        repeat(input.readUnsignedShort()) {
+            val name = utf8.getOrNull(input.readUnsignedShort())
+            val length = input.readInt()
+            if (name == "SourceFile" && length == 2) return utf8.getOrNull(input.readUnsignedShort())
+            input.skipBytes(length)
+        }
+        return null
+    }
+
+    companion object {
+        val OWN_PREFIXES = listOf("conclave/", "skip/")
+    }
+}
+
+androidComponents {
+    onVariants { variant ->
+        val name = variant.name.replaceFirstChar { it.uppercase() }
+        val manifest = tasks.register<CrashCodeManifestTask>("generate${name}CrashCodeManifest")
+        variant.artifacts.forScope(com.android.build.api.variant.ScopedArtifacts.Scope.ALL)
+            .use(manifest)
+            .toGet(
+                com.android.build.api.artifact.ScopedArtifact.CLASSES,
+                CrashCodeManifestTask::classJars,
+                CrashCodeManifestTask::classDirectories,
+            )
+        variant.sources.assets?.addGeneratedSourceDirectory(manifest, CrashCodeManifestTask::outputDirectory)
     }
 }
 
