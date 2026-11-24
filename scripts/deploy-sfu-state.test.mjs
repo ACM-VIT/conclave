@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -82,6 +82,13 @@ exit 0
 
 const FAKE_CHOWN = `#!/bin/sh
 printf 'chown %s\\n' "$*" >> "$DOCKER_LOG"
+scope=one
+[ "$1" = "-R" ] && { scope=tree; shift; }
+owner="$1"
+shift
+for path in "$@"; do
+  printf '%s %s %s\\n' "$owner" "$scope" "$(cd "$(dirname "$path")" && pwd -P)/$(basename "$path")" >> "$OWNERSHIP_LOG"
+done
 exit 0
 `;
 
@@ -176,6 +183,23 @@ const healthAnswers = {
   "an older image": () => [200, { status: "healthy", workers: { healthy: 1 } }],
 };
 
+const directoriesUnder = (root) =>
+  existsSync(root)
+    ? [root, ...readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory()).flatMap((entry) => directoriesUnder(join(root, entry.name)))]
+    : [];
+
+const strayDirectories = (root, ownershipLog) => {
+  const grants = existsSync(ownershipLog)
+    ? readFileSync(ownershipLog, "utf8").trim().split("\n").filter(Boolean).map((line) => line.split(" "))
+    : [];
+  const ownedByNode = (path) =>
+    grants.some(([owner, scope, granted]) => owner === "node:node" && (granted === path || (scope === "tree" && path.startsWith(`${granted}/`))));
+  return directoriesUnder(root)
+    .map((path) => realpathSync(path))
+    .filter((path) => !ownedByNode(path) || mode(path) !== "700")
+    .map((path) => `${path.slice(realpathSync(root).length) || "/"} (mode ${mode(path)})`);
+};
+
 const listArchives = (serviceDir) =>
   (existsSync(serviceDir) ? readdirSync(serviceDir).sort() : []).map((name) => {
     const path = join(serviceDir, name);
@@ -255,6 +279,7 @@ const replaceService = async (
       FIXED_STAMP: fixedStamp,
       FAKE_KILL_TRANSFER: killTransfer ? "1" : "",
       FAKE_FAIL_UNPACK: failUnpack ? "1" : "",
+      OWNERSHIP_LOG: join(dir, "ownership.log"),
     });
     const listing = (path) => (existsSync(path) ? readdirSync(path).sort() : []);
     const containerDir = join(importDir, "sfu-a");
@@ -268,6 +293,7 @@ const replaceService = async (
       importedBytes: (name) => latest?.bytes[name] ?? Buffer.alloc(0),
       importModes: latest ? [mode(importDir), mode(containerDir), ...latest.modes] : [],
       importLeftovers: listing(importDir).filter((name) => name !== "sfu-a"),
+      strays: strayDirectories(importDir, join(dir, "ownership.log")),
       stagingModes: existsSync(join(dir, "staging-modes")) ? readFileSync(join(dir, "staging-modes"), "utf8").trim().split("\n") : [],
       volumeEntries: listing(volume),
     };
@@ -412,6 +438,31 @@ for (const harness of harnesses) {
     assert.equal(stopped(calls), false, calls.join("\n"));
     assert.deepEqual(archives, []);
     assert.deepEqual(importLeftovers, []);
+  });
+
+  test(`${shell}: every folder the receiver makes belongs to the SFU user with mode 0700, whether the transfer succeeds or fails`, async () => {
+    const outcomes = {};
+    for (const [name, options] of Object.entries({
+      saved: {},
+      "arrived changed": { corrupt: true },
+      "failed to unpack": { failUnpack: true },
+      "killed part way": { killTransfer: true },
+    })) {
+      const shared = mkdtempSync(join(tmpdir(), "deploy-sfu-import-"));
+      const importDir = join(shared, "json-fallback-import");
+      try {
+        const run = await replaceService(harness, { ...options, sharedImportDir: importDir, diff: wrote("scheduling.json"), files: { "scheduling.json": '["kept"]' } });
+        outcomes[name] = { failed: run.status !== 0, strays: run.strays };
+      } finally {
+        rmSync(shared, { recursive: true, force: true });
+      }
+    }
+    assert.deepEqual(outcomes, {
+      saved: { failed: false, strays: [] },
+      "arrived changed": { failed: true, strays: [] },
+      "failed to unpack": { failed: true, strays: [] },
+      "killed part way": { failed: true, strays: [] },
+    });
   });
 
   test(`${shell}: never replaces a saved copy, and stops before anything is stopped`, async () => {
