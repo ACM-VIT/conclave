@@ -239,21 +239,27 @@ test("--check-config resolves a host name once and compares the address it resol
     try {
         const outcomes: Record<string, number | null> = {
             "localhost is 127.0.0.1, an older service holds 0.0.0.0": (await check("127.0.0.1", "127.0.0.1", (port) => `|${port}`)).code,
+            "localhost is 127.0.0.1, the replaced service was set to localhost": (await check("127.0.0.1", "127.0.0.1", (port) => `localhost|${port}`)).code,
+            "localhost is 127.0.0.1, the replaced service was set to LOCALHOST": (await check("127.0.0.1", "127.0.0.1", (port) => `LOCALHOST|${port}`)).code,
             "localhost is 127.0.0.1 then ::1, an older service holds 0.0.0.0": (await check("127.0.0.1,::1", "127.0.0.1", (port) => `0.0.0.0|${port}`)).code,
             "localhost is 127.0.0.1, the replaced service held 10.0.4.7": (await check("127.0.0.1", "127.0.0.1", (port) => `10.0.4.7|${port}`)).code,
         };
         if (ipv6Loopback) {
             outcomes["localhost is ::1, something else holds ::1, the replaced service held 0.0.0.0"] = (await check("::1", "::1", (port) => `0.0.0.0|${port}`)).code;
             outcomes["localhost is ::1 then 127.0.0.1, an older service holds 0.0.0.0 only"] = (await check("::1,127.0.0.1", "127.0.0.1", (port) => `0.0.0.0|${port}`)).code;
+            outcomes["localhost is ::1, the replaced service was set to localhost"] = (await check("::1", "::1", (port) => `localhost|${port}`)).code;
         }
         assert.deepEqual(outcomes, {
             "localhost is 127.0.0.1, an older service holds 0.0.0.0": 0,
+            "localhost is 127.0.0.1, the replaced service was set to localhost": 0,
+            "localhost is 127.0.0.1, the replaced service was set to LOCALHOST": 0,
             "localhost is 127.0.0.1 then ::1, an older service holds 0.0.0.0": 0,
             "localhost is 127.0.0.1, the replaced service held 10.0.4.7": 1,
             ...(ipv6Loopback
                 ? {
                       "localhost is ::1, something else holds ::1, the replaced service held 0.0.0.0": 1,
                       "localhost is ::1 then 127.0.0.1, an older service holds 0.0.0.0 only": 0,
+                      "localhost is ::1, the replaced service was set to localhost": 0,
                   }
                 : {}),
         });

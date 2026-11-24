@@ -1,7 +1,7 @@
 import { createServer } from "node:net";
 import { createApp } from "./app.js";
 import { createBrowserManager } from "./createBrowserManager.js";
-import { resolveListenHost } from "./listenAddress.js";
+import { canonicalLiteral, resolveBindings, resolveListenHost, type ResolvedHost } from "./bindAddress.js";
 import { isLoopbackOrPrivateHost, resolveServiceSecurity, ServiceSecurityError } from "./serviceSecurity.js";
 import { isHeldByPreviousContainer, previousManagedContainer } from "./serviceIdentity.js";
 import { defaultConfig } from "./types.js";
@@ -30,10 +30,10 @@ const browserManager = (() => {
     }
 })();
 const app = createApp(browserManager, security);
-const listenAddress: Promise<string> = resolveListenHost(security.listenHost, isLoopbackOrPrivateHost).then((resolved) =>
+const listenAddress: Promise<ResolvedHost> = resolveListenHost(security.listenHost, isLoopbackOrPrivateHost).then((resolved) =>
     resolved.ok ? resolved.address : refuseToStart(resolved.problem),
 );
-const listenLabel = (address: string) => (address === security.listenHost ? address : `${security.listenHost} (${address})`);
+const resolvedFrom = canonicalLiteral(security.listenHost) === null ? ` (BROWSER_SERVICE_HOST=${security.listenHost})` : "";
 
 const checkListenAddress = (host: string, port: number): Promise<void> =>
     new Promise((resolve, reject) => {
@@ -42,12 +42,14 @@ const checkListenAddress = (host: string, port: number): Promise<void> =>
         probe.listen(port, host, () => probe.close(() => resolve()));
     });
 
-const heldBySharedBrowser = async (host: string, port: number): Promise<boolean> => {
+const heldBySharedBrowser = async (host: ResolvedHost, port: number): Promise<boolean> => {
     try {
         const address = host.includes(":") ? `[${host}]` : host;
         const response = await fetch(`http://${address}:${port}/health`, { signal: AbortSignal.timeout(3_000) });
         const body: unknown = await response.json();
-        return isHeldByPreviousContainer(body, { host, port }, previousManagedContainer());
+        const previous = previousManagedContainer();
+        const resolved = previous && { ...previous, bindings: await resolveBindings(previous.bindings) };
+        return isHeldByPreviousContainer(body, { host, port }, resolved);
     } catch {
         return false;
     }
@@ -79,12 +81,12 @@ const gracefulShutdown = async () => {
 process.on("SIGTERM", () => void gracefulShutdown());
 process.on("SIGINT", () => void gracefulShutdown());
 
-const listen = (address: string) => app.listen(security.listenPort, address, (error?: Error) => {
+const listen = (address: ResolvedHost) => app.listen(security.listenPort, address, (error?: Error) => {
     if (error) {
-        console.error(`[Server] Could not listen on ${listenLabel(address)}:${security.listenPort}:`, error);
+        console.error(`[Server] Could not listen on ${address}:${security.listenPort}${resolvedFrom}:`, error);
         process.exit(1);
     }
-    console.log(`[Server] Shared Browser Service listening on ${listenLabel(address)}:${security.listenPort}`);
+    console.log(`[Server] Shared Browser Service listening on ${address}:${security.listenPort}${resolvedFrom}`);
     console.log(`[Server] Browser provider: ${browserManager.capabilities.provider}`);
     if (browserManager.capabilities.provider === "chromium") {
         console.log(`[Server] noVNC port range: ${defaultConfig.noVncPortStart}-${defaultConfig.noVncPortEnd}`);
@@ -97,16 +99,16 @@ if (process.argv.includes("--check-config")) {
     void listenAddress.then((address) => {
         const reportValid = () =>
             assertReady().then(() => {
-                console.log(`[Server] Shared browser service configuration is valid (control API on ${listenLabel(address)}:${security.listenPort}).`);
+                console.log(`[Server] Shared browser service configuration is valid (control API on ${address}:${security.listenPort}${resolvedFrom}).`);
                 process.exit(0);
             });
         return checkListenAddress(address, security.listenPort).then(reportValid, async (error: NodeJS.ErrnoException) => {
             if (error.code !== "EADDRINUSE") {
-                return refuseToStart(`BROWSER_SERVICE_HOST=${listenLabel(address)} cannot be bound on this host (${error.code ?? error.message}).`);
+                return refuseToStart(`BROWSER_SERVICE_HOST=${security.listenHost} (${address}) cannot be bound on this host (${error.code ?? error.message}).`);
             }
             if (await heldBySharedBrowser(address, security.listenPort)) return reportValid();
             return refuseToStart(
-                `BROWSER_SERVICE_PORT=${security.listenPort} on ${listenLabel(address)} is in use by a program that is not the shared browser service this deploy replaces. Free the port or choose another one.`,
+                `BROWSER_SERVICE_PORT=${security.listenPort} on ${address}${resolvedFrom} is in use by a program that is not the shared browser service this deploy replaces. Free the port or choose another one.`,
             );
         });
     });
