@@ -13,15 +13,48 @@ const KNOWN_HOSTS = [
 
 const PRINTABLE_ASCII = /^[\x20-\x7e]*$/;
 
+const referenceIpv6 = (literal: string): string | null => {
+  const inner = literal.slice(1, -1).toLowerCase();
+  const halves = inner.split("::");
+  if (halves.length > 2) return null;
+  const groupsOf = (half: string) => (half ? half.split(":") : []);
+  const head = groupsOf(halves[0]);
+  const tail = halves.length === 2 ? groupsOf(halves[1]) : [];
+  const missing = 8 - head.length - tail.length;
+  if (halves.length === 2 ? missing < 1 : missing !== 0) return null;
+  const groups = [...head, ...Array<string>(halves.length === 2 ? missing : 0).fill("0"), ...tail];
+  if (groups.some((group) => !/^[0-9a-f]{1,4}$/.test(group))) return null;
+  const values = groups.map((group) => parseInt(group, 16).toString(16));
+  let runStart = -1;
+  let runLength = 1;
+  for (let i = 0; i < 8; ) {
+    let j = i;
+    while (j < 8 && values[j] === "0") j += 1;
+    if (j - i > runLength) {
+      runStart = i;
+      runLength = j - i;
+    }
+    i = j === i ? i + 1 : j;
+  }
+  if (runStart === -1) return `[${values.join(":")}]`;
+  const before = values.slice(0, runStart).join(":");
+  const after = values.slice(runStart + runLength).join(":");
+  return `[${before}::${after}]`;
+};
+
 const referenceHost = (host: string): string | null => {
   const lower = host.toLowerCase();
   const portMatch = /:(\d*)$/.exec(lower);
   const name = portMatch ? lower.slice(0, portMatch.index) : lower;
   const port = portMatch ? portMatch[1].replace(/^0+(?=\d)/, "") : "";
   if (port && Number(port) > 65535) return null;
-  const ascii = PRINTABLE_ASCII.test(name) ? name : domainToASCII(name);
+  const ascii = name.startsWith("[")
+    ? referenceIpv6(name)
+    : PRINTABLE_ASCII.test(name)
+      ? name
+      : domainToASCII(name);
   if (!ascii) return null;
-  if (ascii !== name) {
+  if (ascii !== name && !name.startsWith("[")) {
     const typedLabels = name.split(".");
     const asciiLabels = ascii.split(".");
     if (typedLabels.length !== asciiLabels.length) return null;
@@ -128,6 +161,8 @@ const HOSTS = [
   "127.1:3615", "127.0.0.1:3615", "0x7f.0.0.1:3615", "conclave.acmvit.in:443",
   "conclave.acmvit.in:000443", "conclave.acmvit.in:8443", "\uff43onclave.acmvit.in",
   "m\u00fcnchen.example:8443", "xn--mnchen-3ya.example:8443",
+  "[2001:db8::1]:8443", "[2001:0db8:0:0:0:0:0:1]:8443", "[2001:DB8:0::1]:8443", "[2001:db8::2]:8443",
+  "127.1:3005", "conclave.example", "conclave.example:443", "conclave.example:80", "Conclave.Example",
   "conclave%2eacmvit.in",
   "conclave.acmvit.in", "Conclave.ACMVIT.in", "localhost:3615", "localhost:3005", "localhost",
   "11", "2026", "10.0.0.1", "127.0.0.1:3005", "[::1]", "m\u00fcnchen.example", "meet.example",
@@ -273,17 +308,19 @@ describe("pasting into the join code field", () => {
 });
 
 const referenceSettingHost = (setting: string): string | null => {
-  const authority = setting.trim().replace(/^https?:\/\//i, "").split(/[/?#\\]/)[0];
+  const trimmed = setting.trim();
+  const scheme = /^https?:\/\//i.exec(trimmed)?.[0] ?? "https://";
+  const authority = trimmed.replace(/^https?:\/\//i, "").split(/[/?#\\]/)[0];
   if (!/^(?:\[[0-9a-f:.]+\]|[^\s@:[\]]+)(?::\d+)?$/i.test(authority)) return null;
-  const host = referenceHost(authority);
-  if (!host) return null;
-  let hostname: string;
+  let url: URL;
   try {
-    hostname = new URL(`https://${authority}/`).hostname;
+    url = new URL(`${scheme}${authority}/`);
   } catch {
     return null;
   }
-  return host === hostname || host.startsWith(`${hostname}:`) ? host : null;
+  return url.port && url.port !== "80" && url.port !== "443"
+    ? `${url.hostname}:${url.port}`
+    : url.hostname;
 };
 
 const PRODUCTION_HOST = "conclave.acmvit.in";
@@ -293,6 +330,9 @@ const SITE_SETTINGS = [
   { label: "a bare Unicode site setting", setting: "m\u00fcnchen.example" },
   { label: "a punycode site setting", setting: "xn--mnchen-3ya.example" },
   { label: "a URL-form site setting", setting: "https://M\u00dcNCHEN.example:8443/app" },
+  { label: "an IPv6 site setting", setting: "https://[2001:0db8:0:0:0:0:0:1]:8443" },
+  { label: "a shortened IPv4 site setting", setting: "http://127.1:3005" },
+  { label: "a site setting with a default port", setting: "https://conclave.example:443" },
 ];
 
 describe("replacing the field only for an unambiguous Conclave meeting link", () => {
@@ -381,6 +421,10 @@ describe("hosts a pasted meeting link may use without a scheme", () => {
       "app.example/",
       "11",
       "127.1",
+      "https://[2001:0db8:0:0:0:0:0:1]:8443",
+      "http://[::1]:3615",
+      "https://conclave.example:443",
+      "http://conclave.example:80",
       "file:///tmp/conclave",
       "file:/tmp",
       "mailto:user@example.com",
@@ -395,6 +439,45 @@ describe("hosts a pasted meeting link may use without a scheme", () => {
       const linkHosts = getMeetingLinkHosts().filter((host) => host !== PRODUCTION_HOST);
       expect({ setting, linkHosts }).toEqual({ setting, linkHosts: expected ? [expected] : [] });
     }
+  });
+
+  it("keeps IP and default-port site settings and matches pasted links to them", () => {
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", "");
+    const cases = [
+      {
+        setting: "https://[2001:0db8:0:0:0:0:0:1]:8443",
+        site: "https://[2001:db8::1]:8443",
+        links: [
+          "[2001:0db8:0:0:0:0:0:1]:8443/abc-defg",
+          "[2001:db8::1]:8443/abc-defg",
+          "[2001:DB8:0::1]:8443/abc-defg",
+        ],
+      },
+      { setting: "http://127.1:3005", site: "http://127.0.0.1:3005", links: ["127.0.0.1:3005/abc-defg"] },
+      { setting: "http://10.0.0.1", site: "http://10.0.0.1", links: ["10.0.0.1/abc-defg", "10.0.0.1:80/abc-defg"] },
+      {
+        setting: "https://conclave.example:443",
+        site: "https://conclave.example",
+        links: ["conclave.example/abc-defg", "conclave.example:443/abc-defg", "Conclave.Example:443/abc-defg"],
+      },
+    ];
+    for (const { setting, site, links } of cases) {
+      vi.stubEnv("NEXT_PUBLIC_SITE_URL", setting);
+      expect({ setting, site: getPublicSiteUrl() }).toEqual({ setting, site });
+      for (const link of links) {
+        expect({ link, paste: parseCodeFieldPaste(link, getMeetingLinkHosts()) }).toEqual({
+          link,
+          paste: { kind: "replace", code: "abc-defg" },
+        });
+      }
+    }
+  });
+
+  it("still ignores a typed IPv4 host that URL would rewrite", () => {
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "http://127.1:3005");
+    expect(parseCodeFieldPaste("127.1:3005/abc-defg", getMeetingLinkHosts())).toBeNull();
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "http://11");
+    expect(parseCodeFieldPaste("11/23", getMeetingLinkHosts())).toBeNull();
   });
 
   it("ignores site settings that are not web addresses", () => {

@@ -1,4 +1,4 @@
-import { comparableHost } from "./comparable-host";
+import { canonicalHost } from "./comparable-host";
 
 const DEFAULT_PRODUCTION_SITE_URL = "https://conclave.acmvit.in";
 const DEFAULT_DEVELOPMENT_SITE_URL = "http://localhost:3000";
@@ -36,13 +36,14 @@ const parseSiteSetting = (
 ): { origin: string; host: string } | null => {
   const { scheme, authority } = SITE_SETTING.exec(value?.trim() ?? "")?.groups ?? {};
   if (!authority || !SITE_AUTHORITY.test(authority)) return null;
-  const host = comparableHost(authority);
-  if (!host) return null;
+  let url: URL;
   try {
-    return { origin: new URL(`${scheme ?? "https"}://${authority}`).origin, host };
+    url = new URL(`${scheme ?? "https"}://${authority}`);
   } catch {
     return null;
   }
+  const host = canonicalHost(url.host);
+  return host ? { origin: url.origin, host } : null;
 };
 
 export const getPublicSiteUrl = (): string => {

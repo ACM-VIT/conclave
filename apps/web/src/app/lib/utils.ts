@@ -1,6 +1,6 @@
 import { EMOJI_REACTIONS, type ReactionEmoji } from "./constants";
 import { isMediaCaptureTimeoutError } from "./media-capture-timeout";
-import { comparableHost } from "../../lib/comparable-host";
+import { canonicalHost, canonicalTypedHost } from "../../lib/comparable-host";
 import type {
   MeetError,
   MeetMediaDevice,
@@ -204,8 +204,8 @@ export function parseCodeFieldPaste(
   const { scheme, authority, segment } = MEETING_LINK.exec(trimmed)?.groups ?? {};
   if (!authority || !segment) return null;
   if (!scheme) {
-    const typedHost = comparableHost(authority);
-    if (!typedHost || !conclaveHosts.some((host) => comparableHost(host) === typedHost)) {
+    const typedHost = canonicalTypedHost(authority);
+    if (!typedHost || !conclaveHosts.some((host) => canonicalHost(host) === typedHost)) {
       return null;
     }
   }
