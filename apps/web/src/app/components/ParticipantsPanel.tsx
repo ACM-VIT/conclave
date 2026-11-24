@@ -20,6 +20,7 @@ import {
 import { memo, useEffect, useMemo, useState } from "react";
 import type { Socket } from "socket.io-client";
 import { Avatar } from "@conclave/ui-tokens/web";
+import { useConnectionRequest } from "../hooks/useConnectionRequest";
 import { useMeetVolume } from "../hooks/useMeetVolume";
 import type {
   Participant,
@@ -61,6 +62,7 @@ interface ParticipantsPanelProps {
     userId: string,
   ) => Promise<{ ok: boolean; error?: string }>;
   webinarQaWaiting?: boolean;
+  webinarQaConnection?: unknown;
 }
 
 const ICON = 18;
@@ -101,6 +103,7 @@ function ParticipantsPanel({
   onPromoteWebinarAttendee,
   onDemoteWebinarParticipant,
   webinarQaWaiting = false,
+  webinarQaConnection,
 }: ParticipantsPanelProps & {
   socket: Socket | null;
   isAdmin?: boolean | null;
@@ -201,6 +204,15 @@ function ParticipantsPanel({
     } finally {
       setBusyWebinarActionKey(null);
     }
+  };
+  const moderatingQa = useConnectionRequest(webinarQaConnection);
+  const moderateQuestion = async (
+    id: string,
+    action: () => Promise<{ ok: boolean; error?: string }>,
+  ) => {
+    setHostActionError(null);
+    const result = await moderatingQa.run(id, action);
+    if (result && !result.ok) setHostActionError(result.error ?? "Webinar action failed");
   };
   const effectiveHostUserId = hostUserId ?? (isAdmin ? currentUserId : null);
   const effectiveHostUserIds = new Set<string>(
@@ -680,12 +692,9 @@ function ParticipantsPanel({
                           <div className="mt-2">
                             <QaModerationActions
                               status={entry.status}
-                              disabled={
-                                webinarQaWaiting ||
-                                busyWebinarActionKey === `qa-${entry.id}`
-                              }
+                              disabled={webinarQaWaiting || moderatingQa.busy === entry.id}
                               onAction={(action) =>
-                                void runWebinarAction(`qa-${entry.id}`, () =>
+                                void moderateQuestion(entry.id, () =>
                                   onModerateWebinarQuestion({
                                     id: entry.id,
                                     action,

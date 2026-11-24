@@ -15,6 +15,7 @@ import {
   type PollResultRow,
 } from "@conclave/apps-sdk/polls/web";
 import PanelNoticeSlot from "../PanelNoticeSlot";
+import { useConnectionRequest } from "../../hooks/useConnectionRequest";
 
 const STROKE = 1.75;
 
@@ -43,6 +44,7 @@ export type PollsPanelProps = {
   onShare: (pollId: string, shared: boolean) => Promise<PollActionResult>;
   onExport: (pollId: string) => Promise<PollActionResult>;
   waiting?: boolean;
+  connection?: unknown;
 };
 
 export function PollsPanel({
@@ -57,6 +59,7 @@ export function PollsPanel({
   onShare,
   onExport,
   waiting = false,
+  connection,
 }: PollsPanelProps) {
   const [isComposing, setIsComposing] = useState(false);
   const newestFirst = useMemo(
@@ -104,12 +107,10 @@ export function PollsPanel({
         {isHost && isComposing ? (
           <PollComposer
             waiting={waiting}
+            connection={connection}
             onCancel={() => setIsComposing(false)}
-            onLaunch={async (draft) => {
-              const result = await onCreate(draft);
-              if (result.ok) setIsComposing(false);
-              return result;
-            }}
+            onLaunch={onCreate}
+            onLaunched={() => setIsComposing(false)}
           />
         ) : null}
 
@@ -136,6 +137,7 @@ export function PollsPanel({
                   onShare={onShare}
                   onExport={onExport}
                   waiting={waiting}
+                  connection={connection}
                 />
               </li>
             ))}
@@ -148,21 +150,26 @@ export function PollsPanel({
 
 function PollComposer({
   onLaunch,
+  onLaunched,
   onCancel,
   waiting,
+  connection,
 }: {
   onLaunch: (draft: {
     question: string;
     options: string[];
     choiceMode: PollChoiceMode;
   }) => Promise<PollActionResult>;
+  onLaunched: () => void;
   onCancel: () => void;
   waiting: boolean;
+  connection: unknown;
 }) {
   const [question, setQuestion] = useState("");
   const [options, setOptions] = useState<string[]>(["", ""]);
   const [allowMultiple, setAllowMultiple] = useState(false);
-  const [isLaunching, setIsLaunching] = useState(false);
+  const launching = useConnectionRequest(connection);
+  const isLaunching = launching.busy !== null;
   const [error, setError] = useState<string | null>(null);
 
   const filledOptions = options.map((option) => option.trim()).filter(Boolean);
@@ -174,15 +181,16 @@ function PollComposer({
 
   const launch = async () => {
     if (!canLaunch) return;
-    setIsLaunching(true);
     setError(null);
-    const result = await onLaunch({
+    const draft = {
       question: question.trim(),
       options: filledOptions,
-      choiceMode: allowMultiple ? "multiple" : "single",
-    });
-    setIsLaunching(false);
+      choiceMode: allowMultiple ? ("multiple" as const) : ("single" as const),
+    };
+    const result = await launching.run("launch", () => onLaunch(draft));
+    if (!result) return;
     if (!result.ok) setError(result.error);
+    else onLaunched();
   };
 
   return (
@@ -289,6 +297,7 @@ function PollCard({
   onShare,
   onExport,
   waiting,
+  connection,
 }: {
   poll: PollItem;
   isHost: boolean;
@@ -299,9 +308,11 @@ function PollCard({
   onShare: PollsPanelProps["onShare"];
   onExport: PollsPanelProps["onExport"];
   waiting: boolean;
+  connection: unknown;
 }) {
   const [selection, setSelection] = useState<string[]>([]);
-  const [busyAction, setBusyAction] = useState<string | null>(null);
+  const request = useConnectionRequest(connection);
+  const busyAction = request.busy;
   const [error, setError] = useState<string | null>(null);
 
   const isOpen = poll.status === "open";
@@ -315,11 +326,9 @@ function PollCard({
   const isMultiple = poll.choiceMode === "multiple";
 
   const run = async (action: string, task: () => Promise<PollActionResult>) => {
-    setBusyAction(action);
     setError(null);
-    const result = await task();
-    setBusyAction(null);
-    if (!result.ok) setError(result.error);
+    const result = await request.run(action, task);
+    if (result && !result.ok) setError(result.error);
   };
 
   const toggle = (optionId: string) =>

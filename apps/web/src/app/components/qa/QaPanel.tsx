@@ -9,6 +9,7 @@ import type {
   WebinarQaStatus,
 } from "../../lib/types";
 import PanelNoticeSlot from "../PanelNoticeSlot";
+import { useConnectionRequest } from "../../hooks/useConnectionRequest";
 
 const ICON_STROKE = 1.75;
 const MAX_QUESTION_LENGTH = 500;
@@ -132,6 +133,7 @@ export function QaPanel({
   onUpvote,
   onModerate,
   waiting = false,
+  connection,
 }: {
   audience: QaAudience;
   entries: WebinarQaEntry[];
@@ -150,11 +152,14 @@ export function QaPanel({
     request: WebinarQaModerateRequest,
   ) => Promise<{ ok: boolean; error?: string }>;
   waiting?: boolean;
+  connection?: unknown;
 }) {
   const [draft, setDraft] = useState("");
-  const [isSending, setIsSending] = useState(false);
+  const asking = useConnectionRequest(connection);
+  const moderating = useConnectionRequest(connection);
+  const isSending = asking.busy !== null;
+  const busyEntryId = moderating.busy;
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [busyEntryId, setBusyEntryId] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -186,30 +191,27 @@ export function QaPanel({
   const handleSubmit = useCallback(async () => {
     const question = draft.trim();
     if (!question || !onSubmit || isSending || waiting) return;
-    setIsSending(true);
     setSubmitError(null);
-    const result = await onSubmit(question);
-    setIsSending(false);
+    const result = await asking.run("ask", () => onSubmit(question));
+    if (!result) return;
     if (!result.ok) {
       setSubmitError(result.error ?? "Could not send your question.");
       return;
     }
     setDraft("");
-  }, [draft, isSending, onSubmit, waiting]);
+  }, [draft, isSending, onSubmit, waiting, asking]);
 
   const moderate = async (id: string, action: QaModerateAction) => {
     if (!onModerate) return;
-    setBusyEntryId(id);
     setListError(null);
-    const result = await onModerate({ id, action });
-    setBusyEntryId(null);
-    if (!result.ok) setListError(result.error ?? "That did not go through.");
+    const result = await moderating.run(id, () => onModerate({ id, action }));
+    if (result && !result.ok) setListError(result.error ?? "That did not go through.");
   };
 
   const upvote = async (id: string) => {
     if (!onUpvote) return;
     setListError(null);
-    const result = await onUpvote(id);
+    const result = await moderating.run(null, async () => onUpvote(id));
     if (result && !result.ok) {
       setListError(result.error ?? "That did not go through.");
     }

@@ -930,3 +930,30 @@ it("never lets a webinar act on a list an earlier connection gave it, even once 
   expect(oldServer.upvote).not.toHaveBeenCalled();
   expect(oldServer.moderate).not.toHaveBeenCalled();
 });
+
+it("names each connection of a meeting's Q&A by its own token, stable within it and new after a reconnect", async () => {
+  await mount(false);
+  await offerQa();
+  await sendView();
+  const first = qa.connection;
+  await act(async () =>
+    push({
+      kind: "patch",
+      subscription: last(AUTHORITY_EVENTS.subscribe)!.payload.subscription as string,
+      generation: 1,
+      serverNowMs: Date.now(),
+      seq: 1,
+      put: [{ bucket: "votes", key: "q1", value: { upvotes: 5 } }],
+      remove: [],
+    }),
+  );
+  const afterAPatch = qa.connection;
+  await mount(false, legacy, { connectionState: "reconnecting", socketOpen: false });
+  await mount(false);
+  await offerQa();
+  await sendView();
+
+  expect(afterAPatch).toBe(first);
+  expect(qa.connection).not.toBe(first);
+});
+

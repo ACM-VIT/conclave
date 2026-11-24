@@ -469,22 +469,39 @@ it("sends a click made after a reconnect on the new connection, while the old on
   expect(qa.questions[0].hasUpvoted).toBe(false);
 });
 
-it("drops an upvote the old connection never got through, once its request ends", async () => {
+it("lets the new connection's view replace an upvote the old one never answered, at once", async () => {
   const { outcome } = await click();
-  const viewWithoutTheVote = [question, { bucket: "votes", key: "q1", value: { upvotes: 0 } }];
-  const next = await reconnect(viewWithoutTheVote);
+  const next = await reconnect([question, { bucket: "votes", key: "q1", value: { upvotes: 0 } }]);
+  const shownOnTheNewView = qa.questions[0].hasUpvoted;
+  await act(async () => {
+    void qa.toggleUpvote("q1");
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  const sentOnTheNewConnection = next.upvotesSent();
+  const shownAfterTheClick = qa.questions[0].hasUpvoted;
   await act(async () => vi.advanceTimersByTimeAsync(10_000));
-  const shownOnceItEnded = qa.questions[0].hasUpvoted;
   const ended = await outcome;
+
+  expect(shownOnTheNewView).toBe(false);
+  expect(sentOnTheNewConnection).toEqual([true]);
+  expect(shownAfterTheClick).toBe(true);
+  expect(qa.questions[0].hasUpvoted).toBe(true);
+  expect(ended).toEqual({ ok: true });
+});
+
+it("never lets a late answer on the old connection touch the new connection's view", async () => {
+  const { outcome } = await click();
+  const next = await reconnect([question, { bucket: "votes", key: "q1", value: { upvotes: 0 } }]);
+  await answer({ ok: true, value: null, revision: 9 }, 1, true);
+  const shownAfterTheLateAnswer = qa.questions[0].hasUpvoted;
   await act(async () => {
     void qa.toggleUpvote("q1");
     await vi.advanceTimersByTimeAsync(0);
   });
 
-  expect(shownOnceItEnded).toBe(false);
-  expect(ended.ok).toBe(false);
+  expect(shownAfterTheLateAnswer).toBe(false);
+  expect(await outcome).toEqual({ ok: true });
   expect(next.upvotesSent()).toEqual([true]);
-  expect(qa.questions[0].hasUpvoted).toBe(true);
 });
 
 it("sends nothing for an upvote clicked before the new connection's view is in", async () => {

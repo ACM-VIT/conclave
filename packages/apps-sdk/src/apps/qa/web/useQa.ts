@@ -80,7 +80,7 @@ const describe = (failure: AuthorityFailure, doing: Doing): string =>
  *   committed before the answer, even when nothing in it changed.
  *
  * A wish not sent yet, a change of mind waiting for the request before it,
- * stands until it is sent, or until its connection's request ends after a reconnect.
+ * stands until it is sent. No wish outlives its connection.
  */
 type UpvoteWish = {
   value: boolean;
@@ -134,13 +134,12 @@ export function useQa() {
   const revision = state.kind === "ready" ? state.revision : 0;
   const [wishes, setWishes] = useState(NO_WISHES);
   // A new connection is a new session, whose view and revisions start over.
-  // A wish its answer settled was the old session's, and its revision says
-  // nothing of the new one: the new view decides.
+  // Every wish was the old session's, answered or not, and its request can no
+  // longer settle anything here: the new view decides.
   const [wishesOf, setWishesOf] = useState(() => act);
   if (act !== wishesOf) {
     setWishesOf(() => act);
-    const kept = new Map([...wishes].filter(([, wish]) => wish.revision === undefined));
-    if (kept.size !== wishes.size) setWishes(kept.size === 0 ? NO_WISHES : kept);
+    if (wishes.size > 0) setWishes(NO_WISHES);
   }
   // Counted from each view to the next, as React keeps what a render saw.
   const myUpvotes = view?.myUpvotes ?? null;
@@ -331,6 +330,7 @@ export function useQa() {
   const ready = state.kind === "ready" ? state : null;
   return {
     isReady: ready !== null,
+    connection: act as unknown,
     /**
      * This subscription showed a view, and a replacement in parts dropped
      * it because the new one may hold rows this viewer can no longer see.
