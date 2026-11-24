@@ -371,30 +371,48 @@ describe("fetching TURN credentials again while relay only is wanted", () => {
 });
 
 describe("moving a transport onto the relay once one is usable", () => {
-  const transports = [
-    { direction: "consumer" as const, offeredRelay: false, carryingMedia: false },
-    { direction: "producer" as const, offeredRelay: false, carryingMedia: true },
-  ];
+  const set = (issuedAt: number, expiresAt: number | null) => ({ servers: [turnA], expiresAt, issuedAt });
+  const holdingRelay = (issuedAt: number, expiresAt: number | null): RuntimeIceServers => ({
+    stun: [stun],
+    latestRelay: set(issuedAt, expiresAt),
+    provenRelay: null,
+  });
+  const transport = (offers: Array<ReturnType<typeof set>>, extra: { carriedMedia?: boolean; failed?: boolean } = {}) => ({
+    direction: "consumer" as const,
+    offers: offers.map((relay) => ({ relay, servers: relay.servers })),
+    carriedMedia: extra.carriedMedia ?? false,
+    failed: extra.failed ?? false,
+  });
+  const move = (servers: RuntimeIceServers, transports: Array<ReturnType<typeof transport>>, wanted = true) =>
+    transportsToMoveOntoRelay({ wanted, servers, now: NOW, transports });
 
-  it("rebuilds a transport built without a relay that carries no media", () => {
-    expect(transportsToMoveOntoRelay({ wanted: true, relayUsable: true, transports })).toEqual([
+  it("moves a transport that was offered no relay and never carried media", () => {
+    expect(move(holdingRelay(NOW, NOW + HOUR_MS), [transport([])])).toEqual(["consumer"]);
+  });
+
+  it("moves a transport whose offered credentials expired before it carried media", () => {
+    expect(move(holdingRelay(NOW, NOW + HOUR_MS), [transport([set(NOW - 60_000, NOW - 1_000)])])).toEqual([
       "consumer",
     ]);
   });
 
-  it("leaves transports alone while no relay is usable or relay only is not wanted", () => {
-    expect(transportsToMoveOntoRelay({ wanted: true, relayUsable: false, transports })).toEqual([]);
-    expect(transportsToMoveOntoRelay({ wanted: false, relayUsable: true, transports })).toEqual([]);
+  it("moves a failed transport once a newer generation than it was offered arrives", () => {
+    const offered = set(NOW - 60_000, NOW + 30_000);
+    expect(move(holdingRelay(NOW, NOW + HOUR_MS), [transport([offered], { failed: true })])).toEqual(["consumer"]);
+    expect(move(holdingRelay(NOW - 60_000, NOW + 30_000), [transport([offered], { failed: true })])).toEqual([]);
   });
 
-  it("leaves a transport that was offered a relay to the watchdog", () => {
-    expect(
-      transportsToMoveOntoRelay({
-        wanted: true,
-        relayUsable: true,
-        transports: [{ direction: "consumer", offeredRelay: true, carryingMedia: false }],
-      }),
-    ).toEqual([]);
+  it("leaves a transport on credentials that are still valid while it has not failed", () => {
+    expect(move(holdingRelay(NOW, NOW + HOUR_MS), [transport([set(NOW - 60_000, NOW + 30_000)])])).toEqual([]);
+  });
+
+  it("never moves a transport that has carried media", () => {
+    expect(move(holdingRelay(NOW, NOW + HOUR_MS), [transport([], { carriedMedia: true })])).toEqual([]);
+  });
+
+  it("moves nothing while no relay is usable or relay only is not wanted", () => {
+    expect(move(holdingRelay(NOW, NOW + 2_000), [transport([])])).toEqual([]);
+    expect(move(holdingRelay(NOW, NOW + HOUR_MS), [transport([])], false)).toEqual([]);
   });
 });
 

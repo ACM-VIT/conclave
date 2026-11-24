@@ -50,6 +50,10 @@ export const readMediaPath = (
   };
 };
 
+export const hasCarriedMedia = (reading: MediaPathReading): boolean =>
+  reading.rtpBytes > 0 &&
+  (reading.direction === "recv" || reading.receiverReportAt !== null);
+
 export const deliveredRtpBytes = (
   previous: MediaPathReading | null,
   current: MediaPathReading,

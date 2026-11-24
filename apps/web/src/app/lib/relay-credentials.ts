@@ -180,32 +180,44 @@ export const takeRelayRefreshTry = (
 ): RelayRefreshChain =>
   chain && chain.triesLeft > 0 ? { triesLeft: chain.triesLeft - 1 } : chain;
 
-export type RelayShortfall<D extends string> = {
+export type RelayPathTransport<D extends string> = {
   direction: D;
-  offeredRelay: boolean;
-  carryingMedia: boolean;
+  offers: RelayOffer[];
+  carriedMedia: boolean;
+  failed: boolean;
 };
 
 export const transportsToMoveOntoRelay = <D extends string>({
   wanted,
-  relayUsable,
+  servers,
+  now,
   transports,
 }: {
   wanted: boolean;
-  relayUsable: boolean;
-  transports: RelayShortfall<D>[];
-}): D[] =>
-  wanted && relayUsable
-    ? transports
-        .filter(({ offeredRelay, carryingMedia }) => !offeredRelay && !carryingMedia)
-        .map(({ direction }) => direction)
-    : [];
+  servers: RuntimeIceServers;
+  now: number;
+  transports: RelayPathTransport<D>[];
+}): D[] => {
+  const usable = offerRelays(servers, now);
+  if (!wanted || usable.length === 0) return [];
+  const newest = Math.max(...usable.map(({ relay }) => relay.issuedAt));
+  return transports
+    .filter(({ offers, carriedMedia, failed }) => {
+      if (carriedMedia) return false;
+      if (!offers.some(({ relay }) => isRelayUsable(relay.expiresAt, now))) {
+        return true;
+      }
+      return failed && newest > Math.max(...offers.map(({ relay }) => relay.issuedAt));
+    })
+    .map(({ direction }) => direction);
+};
 
 export type RelayPathState<D extends string> = {
   wanted: boolean;
-  relayUsable: boolean;
+  servers: RuntimeIceServers;
+  now: number;
   busy: boolean;
-  transports: RelayShortfall<D>[];
+  transports: RelayPathTransport<D>[];
   chain: RelayRefreshChain;
   timerArmed: boolean;
   requestInFlight: boolean;
@@ -224,7 +236,7 @@ export const reconcileRelayPaths = <D extends string>(
 ): RelayPathPlan<D> => {
   const chain = planRelayRefresh(state.chain, {
     wanted: state.wanted,
-    relayUsable: state.relayUsable,
+    relayUsable: offerRelays(state.servers, state.now).length > 0,
     budget,
   });
   return {

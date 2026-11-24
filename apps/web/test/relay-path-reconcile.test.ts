@@ -4,17 +4,28 @@ import {
   reconcileRelayPaths,
   takeRelayRefreshTry,
   type RelayRefreshChain,
+  type RuntimeIceServers,
 } from "../src/app/lib/relay-credentials";
 
 type Direction = "producer" | "consumer";
 type Stage = "refresh" | "policy" | "create" | "producers" | "finish";
-type PathTransport = { offeredRelay: boolean; carryingMedia: boolean };
+type Credentials = { issuedAt: number; expired: boolean };
+type PathTransport = { offered: Credentials | null; carryingMedia: boolean };
+
+const NOW = Date.UTC(2030, 0, 1, 12, 0, 0);
+const TURN = { urls: "turn:turn.example:3478", username: "u", credential: "c" };
+const relaySet = (credentials: Credentials) => ({
+  servers: [TURN],
+  expiresAt: credentials.expired ? NOW - 10_000 : null,
+  issuedAt: credentials.issuedAt,
+});
 
 type World = {
   providerUp: boolean;
   directWorks: boolean;
   wanted: boolean;
-  relayUsable: boolean;
+  credentials: Credentials | null;
+  issued: number;
   transports: Record<Direction, PathTransport>;
   chain: RelayRefreshChain;
   timerArmed: boolean;
@@ -27,16 +38,30 @@ type World = {
 
 const DIRECTIONS: Direction[] = ["producer", "consumer"];
 
+const relayUsable = (world: World) => world.credentials !== null && !world.credentials.expired;
+
+const servers = (world: World): RuntimeIceServers => ({
+  stun: null,
+  latestRelay: world.credentials ? relaySet(world.credentials) : null,
+  provenRelay: null,
+});
+
 const reconcile = (world: World, budget: "keep" | "renew" = "keep") => {
   const plan = reconcileRelayPaths(
     {
       wanted: world.wanted,
-      relayUsable: world.relayUsable,
+      servers: servers(world),
+      now: NOW,
       busy: world.rebuild !== null,
-      transports: DIRECTIONS.map((direction) => ({
-        direction,
-        ...world.transports[direction],
-      })),
+      transports: DIRECTIONS.map((direction) => {
+        const { offered, carryingMedia } = world.transports[direction];
+        return {
+          direction,
+          offers: offered ? [{ relay: relaySet(offered), servers: [TURN] }] : [],
+          carriedMedia: carryingMedia,
+          failed: false,
+        };
+      }),
       chain: world.chain,
       timerArmed: world.timerArmed,
       requestInFlight: world.requestInFlight,
@@ -54,7 +79,10 @@ const reconcile = (world: World, budget: "keep" | "renew" = "keep") => {
 };
 
 const answer = (world: World) => {
-  world.relayUsable = world.relayUsable || world.providerUp;
+  if (world.providerUp) {
+    world.issued += 1;
+    world.credentials = { issuedAt: world.issued, expired: false };
+  }
   reconcile(world);
 };
 
@@ -82,7 +110,10 @@ const step = (world: World) => {
     case "create":
       rebuild.stage = "producers";
       for (const direction of rebuild.directions) {
-        world.transports[direction] = { offeredRelay: world.relayUsable, carryingMedia: false };
+        world.transports[direction] = {
+          offered: relayUsable(world) ? world.credentials : null,
+          carryingMedia: false,
+        };
       }
       reconcile(world);
       return;
@@ -105,7 +136,7 @@ const fireTimer = (world: World) => {
   world.chain = takeRelayRefreshTry(
     planRelayRefresh(world.chain, {
       wanted: world.wanted,
-      relayUsable: world.relayUsable,
+      relayUsable: relayUsable(world),
       budget: "keep",
     }),
   );
@@ -120,7 +151,7 @@ const settleRequest = (world: World) => {
 
 const carryMedia = (world: World, direction: Direction) => {
   const transport = world.transports[direction];
-  if (transport.offeredRelay || world.directWorks) transport.carryingMedia = true;
+  if ((transport.offered && !transport.offered.expired) || world.directWorks) transport.carryingMedia = true;
   reconcile(world);
 };
 
@@ -140,8 +171,8 @@ const drain = (world: World) => {
 
 const violations = (world: World): Direction[] =>
   DIRECTIONS.filter((direction) => {
-    const { offeredRelay, carryingMedia } = world.transports[direction];
-    return world.wanted && world.relayUsable && !carryingMedia && !offeredRelay;
+    const { offered, carryingMedia } = world.transports[direction];
+    return world.wanted && relayUsable(world) && !carryingMedia && !(offered && !offered.expired);
   });
 
 const mulberry32 = (seed: number) => () => {
@@ -152,15 +183,16 @@ const mulberry32 = (seed: number) => () => {
 };
 
 const randomWorld = (random: () => number): World => {
-  const relayUsable = random() < 0.5;
+  const credentials = random() < 0.5 ? { issuedAt: 1, expired: false } : null;
   return {
     providerUp: random() < 0.5,
     directWorks: random() < 0.5,
     wanted: random() < 0.7,
-    relayUsable,
+    credentials,
+    issued: 1,
     transports: {
-      producer: { offeredRelay: relayUsable, carryingMedia: random() < 0.5 },
-      consumer: { offeredRelay: relayUsable, carryingMedia: random() < 0.5 },
+      producer: { offered: credentials, carryingMedia: random() < 0.5 },
+      consumer: { offered: credentials, carryingMedia: random() < 0.5 },
     },
     chain: null,
     timerArmed: false,
@@ -191,7 +223,7 @@ const play = (seed: number) => {
     const direction = DIRECTIONS[Math.floor(random() * DIRECTIONS.length)];
     world.trace.push(event === "media" || event === "failure" ? `${event} ${direction}` : event);
     if (event === "provider") world.providerUp = !world.providerUp;
-    else if (event === "expire") world.relayUsable = false;
+    else if (event === "expire" && world.credentials) world.credentials.expired = true;
     else if (event === "failure" && failures < 3) {
       failures += 1;
       startRebuild(world, direction);
@@ -206,14 +238,16 @@ const play = (seed: number) => {
 
 describe("moving a transport onto the relay, whatever the order of events", () => {
   it("moves the receive path once credentials return while its rebuild waits for the producer list", () => {
+    const expired = { issuedAt: 1, expired: true };
     const world: World = {
       providerUp: false,
       directWorks: false,
       wanted: true,
-      relayUsable: false,
+      credentials: expired,
+      issued: 1,
       transports: {
-        producer: { offeredRelay: true, carryingMedia: true },
-        consumer: { offeredRelay: true, carryingMedia: true },
+        producer: { offered: expired, carryingMedia: true },
+        consumer: { offered: expired, carryingMedia: true },
       },
       chain: null,
       timerArmed: false,
@@ -227,13 +261,13 @@ describe("moving a transport onto the relay, whatever the order of events", () =
     step(world);
     step(world);
     step(world);
-    expect(world.transports.consumer).toEqual({ offeredRelay: false, carryingMedia: false });
+    expect(world.transports.consumer).toEqual({ offered: null, carryingMedia: false });
     expect(world.timerArmed).toBe(true);
 
     world.providerUp = true;
     fireTimer(world);
     settleRequest(world);
-    expect(world.relayUsable).toBe(true);
+    expect(relayUsable(world)).toBe(true);
     expect(world.rebuild?.stage).toBe("producers");
 
     step(world);
@@ -241,23 +275,23 @@ describe("moving a transport onto the relay, whatever the order of events", () =
     drain(world);
 
     expect(world.moves).toBe(1);
-    expect(world.transports.consumer).toEqual({ offeredRelay: true, carryingMedia: true });
+    expect(world.transports.consumer).toEqual({ offered: world.credentials, carryingMedia: true });
     expect(violations(world)).toEqual([]);
   });
 
   it("keeps a transport that carries media on a direct path when credentials return", () => {
     const world = randomWorld(mulberry32(1));
-    Object.assign(world, { providerUp: false, directWorks: true, wanted: true, relayUsable: false });
+    Object.assign(world, { providerUp: false, directWorks: true, wanted: true, credentials: null });
     startRebuild(world, "consumer");
     drain(world);
-    expect(world.transports.consumer).toEqual({ offeredRelay: false, carryingMedia: true });
+    expect(world.transports.consumer).toEqual({ offered: null, carryingMedia: true });
 
     world.providerUp = true;
     startRebuild(world, "producer");
     drain(world);
 
-    expect(world.relayUsable).toBe(true);
-    expect(world.transports.consumer).toEqual({ offeredRelay: false, carryingMedia: true });
+    expect(relayUsable(world)).toBe(true);
+    expect(world.transports.consumer).toEqual({ offered: null, carryingMedia: true });
   });
 
   it("leaves no transport that needs the relay off it once a relay is usable", () => {
