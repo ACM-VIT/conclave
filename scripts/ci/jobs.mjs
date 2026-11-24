@@ -26,6 +26,10 @@ export const jobs = {
     budgetSeconds: 420,
     tasks: [{ dir: ".", script: "test:deploy-fuzz-b" }],
   },
+  "fuzz-c": {
+    budgetSeconds: 420,
+    tasks: [{ dir: ".", script: "test:deploy-fuzz-c" }],
+  },
   typecheck: {
     budgetSeconds: 75,
     tasks: [

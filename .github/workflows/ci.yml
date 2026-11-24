@@ -24,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        job: [lint, typecheck, test, build, checks, deploy, fuzz-a, fuzz-b]
+        job: [lint, typecheck, test, build, checks, deploy, fuzz-a, fuzz-b, fuzz-c]
     steps:
       - run: echo "CI_JOB_STARTED_AT=$(date +%s%3N)" >> "$GITHUB_ENV"
 

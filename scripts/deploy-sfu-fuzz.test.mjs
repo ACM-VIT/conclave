@@ -445,7 +445,7 @@ const runPlan = async (plan) => {
   });
 };
 
-const runs = Number(process.env.DEPLOY_FUZZ_RUNS ?? 100);
+const runs = Number(process.env.DEPLOY_FUZZ_RUNS ?? 70);
 const firstSeed = Number(process.env.DEPLOY_FUZZ_SEED ?? 1);
 for (let seed = firstSeed; seed < firstSeed + runs; seed += 1) {
   queued.push([`fault plan ${seed}`, () => runPlan(makePlan(seed))]);
