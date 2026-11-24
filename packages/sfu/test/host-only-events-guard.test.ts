@@ -28,8 +28,28 @@ const fansOut = (node: ts.Node): boolean => {
   return ts.forEachChild(node, (child) => fansOut(child) || undefined) ?? false;
 };
 
+const fanOutBindings = (source: ts.SourceFile): Set<string> => {
+  const names = new Set<string>();
+  const visit = (node: ts.Node) => {
+    if (
+      (ts.isVariableDeclaration(node) || ts.isParameter(node)) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer &&
+      fansOut(node.initializer)
+    ) {
+      names.add(node.name.text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return names;
+};
+
 const roomWideHostOnlyEmits = (fileName: string, text: string): string[] => {
   const source = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true);
+  const fanOutNames = fanOutBindings(source);
+  const reachesRoom = (receiver: ts.Expression) =>
+    fansOut(receiver) || (ts.isIdentifier(receiver) && fanOutNames.has(receiver.text));
   const found: string[] = [];
   const visit = (node: ts.Node) => {
     if (
@@ -42,7 +62,7 @@ const roomWideHostOnlyEmits = (fileName: string, text: string): string[] => {
         event &&
         ts.isStringLiteralLike(event) &&
         hostOnly.has(event.text) &&
-        fansOut(node.expression.expression)
+        reachesRoom(node.expression.expression)
       ) {
         const { line } = source.getLineAndCharacterOfPosition(node.getStart());
         found.push(`${fileName}:${line + 1} ${event.text}`);
@@ -68,6 +88,9 @@ describe("host-only events", () => {
     ["socket.broadcast.emit(\"userAdmitted\", {});", 1],
     ["(peers ? io.to(roomChannelId) : socket).emit(\"admin:roomStateChanged\", {});", 1],
     ["io.except(socket.id).emit(\"webinar:handQueueChanged\", {});", 1],
+    ["const peers = options.peers ?? io.to(roomChannelId);\npeers.emit(\"pendingUsersSnapshot\", {});", 1],
+    ["function handOff(peers = io.to(room.channelId)) { peers.emit(\"webinar:stageInviteUsed\", {}); }", 1],
+    ["const peers = io.to(room.channelId);\npeers.emit(\"hostChanged\", {});", 0],
     ["admin.socket.emit(\"pendingUsersSnapshot\", {});", 0],
     ["promoted.socket.emit(\"pendingUsersSnapshot\", {});", 0],
     ["io.to(room.channelId).emit(\"roomLockChanged\", {});", 0],

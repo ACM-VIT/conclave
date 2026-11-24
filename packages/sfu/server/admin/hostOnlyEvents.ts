@@ -8,6 +8,7 @@ export const HOST_ONLY_EVENTS = [
   "pendingUserLeft",
   "admin:roomStateChanged",
   "webinar:handQueueChanged",
+  "webinar:stageInviteUsed",
 ] as const;
 
 export type HostOnlyEvent = (typeof HOST_ONLY_EVENTS)[number];
