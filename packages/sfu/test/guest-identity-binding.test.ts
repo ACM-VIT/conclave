@@ -3462,6 +3462,28 @@ describe("the identity the room's apps see for a guest (Daybreak)", () => {
     });
   });
 
+  it("tells the room's listeners when a request that waits links passes and so changes a seated tab's identity (Neon)", async () => {
+    const { state, room, adapter } = await inRoom();
+    const onA = tabOf("waiting-link-a", "proof-of-the-pass-seen-first");
+    const onB = tabOf("waiting-link-b", "proof-of-the-pass-seen-second");
+    await join(state, onA);
+    await join(state, onB);
+    const before = seen(room, adapter, onB);
+    room.setLocked(true);
+    const events: string[] = [];
+    room.onLifecycle((event) => events.push(event));
+
+    const knocking = {
+      ...tabOf("waiting-link-c", "proof-of-the-pass-seen-second"),
+      guestWas: [{ userKey: "guest-gp_waiting-link-c-under-a", guestProof: "proof-of-the-pass-seen-first" }],
+    } satisfies SfuAuthPayload;
+    expect((await join(state, knocking)).ack).toHaveBeenCalledWith(expect.objectContaining({ status: "waiting" }));
+
+    expect(seen(room, adapter, onB)).not.toEqual(before);
+    expect(seen(room, adapter, onB)).toEqual(seen(room, adapter, onA));
+    expect(events).toContain("membership");
+  });
+
   it("is unverified for a guest token with no pass", async () => {
     const { state, room, adapter } = await inRoom();
     const namesItself = { userId: "guest-names-itself", clientId: "conclave", sessionId: "names-itself" } satisfies SfuAuthPayload;

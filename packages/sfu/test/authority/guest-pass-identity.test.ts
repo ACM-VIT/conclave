@@ -175,3 +175,38 @@ describe("a guest's pass, as the room's apps see it (Daybreak)", () => {
     });
   });
 });
+
+describe.each([
+  ["by a request that waits", false],
+  ["by a tab that takes a seat", true],
+])("two passes of one guest linked %s (Neon)", (_how, seated) => {
+  it.each([
+    ["A", "A"],
+    ["A", "B"],
+    ["B", "A"],
+    ["B", "B"],
+  ])("count one vote when the room saw pass %s first and pass %s voted", async (seenFirst, voter) => {
+    const room = new Harness([pollsAuthority]);
+    const hostTab = await room.open(host, pollsContract);
+    const pollId = await pollIn(room, hostTab);
+    const passes = { A: "proof-of-pass-a", B: "proof-of-pass-b" } as const;
+    const order = seenFirst === "A" ? (["A", "B"] as const) : (["B", "A"] as const);
+    const tabs: Partial<Record<"A" | "B", Tab>> = {};
+    for (const [index, pass] of order.entries()) {
+      tabs[pass] = await guestTab(room, `guest-gp_gita-on-${pass}`, `tab-${index + 1}`, passes[pass]);
+    }
+    const voting = tabs[voter as "A" | "B"]!;
+    const other = tabs[voter === "A" ? "B" : "A"]!;
+    expect((await voting.act("vote", { pollId, optionIds: ["o1"] })).ok).toBe(true);
+    await room.deliver();
+
+    linkPasses(room, passes.B, passes.A);
+    if (seated) await guestTab(room, "guest-gp_gita-linking-tab", "tab-3", passes.B);
+    await room.deliver();
+
+    expect(await other.act("vote", { pollId, optionIds: ["o2"] })).toEqual(alreadyVoted);
+    expect(await voting.act("vote", { pollId, optionIds: ["o2"] })).toEqual(alreadyVoted);
+    expect(field(hostTab.row("polls", pollId), "results", "voterCount")).toBe(1);
+  });
+});
+

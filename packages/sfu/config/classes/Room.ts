@@ -1191,7 +1191,7 @@ export class Room {
       for (const pass of record.passes) passes.add(pass);
     }
     const held = [...known].filter((record) => record.heldAt !== null);
-    const kept = [...known].reduce<GuestRecord | undefined>(
+    const kept = (held.length > 0 ? held : [...known]).reduce<GuestRecord | undefined>(
       (earliest, record) => (!earliest || record.since < earliest.since ? record : earliest),
       undefined,
     );
@@ -1204,7 +1204,15 @@ export class Room {
       ),
       passes,
     };
-    for (const proof of passes) this.guestRecords.set(proof, merged);
+    let seatedIdentityChanged = false;
+    for (const proof of passes) {
+      const before = this.guestRecords.get(proof)?.identity ?? proof;
+      if (before !== merged.identity && this.userKeysByGuestProof.has(proof)) {
+        seatedIdentityChanged = true;
+      }
+      this.guestRecords.set(proof, merged);
+    }
+    if (seatedIdentityChanged) this.notifyLifecycle("membership");
     this.mergeWaitingGuests(guestsBefore, this.guestOfPass(link.guestProof));
     const settled: Array<{ request: WaitingRequest; admitted: boolean }> = [];
     for (const userKey of [
