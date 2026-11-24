@@ -18,6 +18,7 @@ import {
   emitWebinarFeedChanged,
 } from "../webinarNotifications.js";
 import { activateHost } from "../socket/handlers/adminHandlers.js";
+import { emitToHosts } from "./hostOnlyEvents.js";
 import { DECISION_RECORD_FULL, isSuperAdminClient } from "./moderation.js";
 import { Logger } from "../../utilities/loggers.js";
 
@@ -279,6 +280,13 @@ export const toPendingUserSnapshots = (room: Room): PendingUserSnapshot[] => {
     displayName: pending.displayName || pending.userKey,
     socketId: pending.socket?.id ?? null,
   }));
+};
+
+export const emitPendingUsersSnapshot = (room: Room): void => {
+  emitToHosts(room, "pendingUsersSnapshot", {
+    users: toPendingUserSnapshots(room),
+    roomId: room.id,
+  });
 };
 
 export const toRoomSnapshot = (room: Room): RoomSnapshot => {
@@ -845,27 +853,24 @@ export const publishLobby = (
 ): void => {
   const { removed, added } = room.takeLobbyChanges();
   if (removed.length === 0 && added.length === 0) return;
-  const admins = room.getAdmins();
   for (const row of removed) {
-    const event =
+    emitToHosts(
+      room,
       row.outcome === "admitted"
         ? "userAdmitted"
         : row.outcome === "rejected"
           ? "userRejected"
-          : "pendingUserLeft";
-    for (const admin of admins) {
-      admin.socket.emit(event, { userId: row.userKey, roomId: room.id });
-    }
+          : "pendingUserLeft",
+      { userId: row.userKey, roomId: room.id },
+    );
   }
   for (const request of added) {
-    for (const admin of admins) {
-      admin.socket.emit("userRequestedJoin", {
-        userId: request.userKey,
-        displayName: request.displayName || request.userKey,
-        roomId: room.id,
-        ...(options.reason ? { reason: options.reason } : {}),
-      });
-    }
+    emitToHosts(room, "userRequestedJoin", {
+      userId: request.userKey,
+      displayName: request.displayName || request.userKey,
+      roomId: room.id,
+      ...(options.reason ? { reason: options.reason } : {}),
+    });
   }
 };
 

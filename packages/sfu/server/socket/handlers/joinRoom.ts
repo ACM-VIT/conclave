@@ -60,6 +60,7 @@ import {
   teardownClient,
   withdrawWaitingRequest,
 } from "../../admin/controlPlane.js";
+import { emitToHost } from "../../admin/hostOnlyEvents.js";
 import { getSocketAuthUser } from "../auth.js";
 import type { ConnectionContext } from "../context.js";
 import { toPendingUserSnapshots } from "../../admin/controlPlane.js";
@@ -1137,8 +1138,8 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           hostUserIds,
         });
 
-        if (context.currentClient instanceof Admin && !context.currentClient.isObserver) {
-          socket.emit("pendingUsersSnapshot", {
+        if (context.currentClient instanceof Admin) {
+          emitToHost(context.currentClient, "pendingUsersSnapshot", {
             users: toPendingUserSnapshots(context.currentRoom),
             roomId: context.currentRoom.id,
           });
@@ -1155,12 +1156,8 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
               if (clientId === userId) {
                 continue;
               }
-              if (
-                usedStageInvites.length > 0 &&
-                client instanceof Admin &&
-                !client.isObserver
-              ) {
-                client.socket.emit("webinar:stageInviteUsed", {
+              if (usedStageInvites.length > 0 && client instanceof Admin) {
+                emitToHost(client, "webinar:stageInviteUsed", {
                   roomId: context.currentRoom.id,
                   userId,
                   invitedUserKeys: usedStageInvites,
@@ -1216,17 +1213,14 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           emitChatHistorySnapshot(socket, context.currentRoom);
         }
 
-        const isModeratorClient =
-          context.currentClient instanceof Admin &&
-          !context.currentClient.isObserver;
         // A room that runs the Q&A app has one book. There the old Q&A
         // events are fed from that book for the life of this seat. Elsewhere
         // a seat joining a webinar is sent the list as its role reads it.
         if (!attachLegacyQaFeed(context)) {
           grantWebinarQaList(state, context.currentRoom, context.currentClient);
         }
-        if (webinarConfig.enabled && isModeratorClient) {
-          socket.emit("webinar:handQueueChanged", {
+        if (webinarConfig.enabled && context.currentClient instanceof Admin) {
+          emitToHost(context.currentClient, "webinar:handQueueChanged", {
             roomId: context.currentRoom.id,
             queue: context.currentRoom.getWebinarHandQueue(),
           });

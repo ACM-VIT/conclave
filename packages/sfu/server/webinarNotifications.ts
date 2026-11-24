@@ -11,6 +11,7 @@ import type {
   WebinarQaEntry,
   WebinarQaSnapshot,
 } from "../types.js";
+import { emitToHosts } from "./admin/hostOnlyEvents.js";
 import { peekRoomAuthority } from "./apps/authority/index.js";
 import type { SfuState } from "./state.js";
 import {
@@ -254,9 +255,7 @@ export const emitWebinarHandQueueChanged = (room: Room): void => {
     roomId: room.id,
     queue: room.getWebinarHandQueue(),
   };
-  for (const admin of room.getAdmins()) {
-    admin.socket.emit("webinar:handQueueChanged", notification);
-  }
+  emitToHosts(room, "webinar:handQueueChanged", notification);
 };
 
 export const emitWebinarFeedChanged = (

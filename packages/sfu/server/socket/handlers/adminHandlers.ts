@@ -15,12 +15,14 @@ import {
   admitWaitingGuest,
   allowUserKeys,
   blockUserKey,
+  emitPendingUsersSnapshot,
   rejectWaitingGuest,
   kickClient,
   rejectAllPendingUsers,
   toPendingUserSnapshots,
   toRoomSnapshot,
 } from "../../admin/controlPlane.js";
+import { emitToHost } from "../../admin/hostOnlyEvents.js";
 import {
   decisionRecordFull,
   includesSuperAdminUserKey,
@@ -356,7 +358,7 @@ export const activateHost = (
   if (room.cleanupTimer) {
     room.stopCleanupTimer();
   }
-  host.socket.emit("pendingUsersSnapshot", {
+  emitToHost(host, "pendingUsersSnapshot", {
     users: toPendingUserSnapshots(room),
     roomId,
   });
@@ -365,12 +367,12 @@ export const activateHost = (
     locked: room.isLocked,
     roomId,
   });
-  host.socket.emit("admin:roomStateChanged", {
+  emitToHost(host, "admin:roomStateChanged", {
     roomId,
     snapshot: toRoomSnapshot(room),
   });
   if (state.webinarConfigs.get(room.channelId)?.enabled) {
-    host.socket.emit("webinar:handQueueChanged", {
+    emitToHost(host, "webinar:handQueueChanged", {
       roomId,
       queue: room.getWebinarHandQueue(),
     });
@@ -941,10 +943,7 @@ export const registerAdminHandlers = (
       }
       const { allowed, refused, admitted } = outcome;
 
-      io.to(guard.room.channelId).emit("pendingUsersSnapshot", {
-        users: toPendingUserSnapshots(guard.room),
-        roomId: guard.room.id,
-      });
+      emitPendingUsersSnapshot(guard.room);
 
       respond(cb, {
         ...(allowed.length === 0
@@ -1022,10 +1021,7 @@ export const registerAdminHandlers = (
         }
       }
 
-      io.to(guard.room.channelId).emit("pendingUsersSnapshot", {
-        users: toPendingUserSnapshots(guard.room),
-        roomId: guard.room.id,
-      });
+      emitPendingUsersSnapshot(guard.room);
 
       Logger.warn(`Admin ${guard.adminId} blocked ${userKeys.join(", ")} in room ${guard.room.id}; kicked ${Array.from(kickedUserIds).join(", ") || "none"}`);
 
@@ -1210,10 +1206,7 @@ export const registerAdminHandlers = (
       respond(cb, decisionRecordFull("admit"));
       return;
     }
-    io.to(guard.room.channelId).emit("pendingUsersSnapshot", {
-      users: toPendingUserSnapshots(guard.room),
-      roomId: guard.room.id,
-    });
+    emitPendingUsersSnapshot(guard.room);
 
     respond(cb, {
       success: true,
@@ -1230,10 +1223,7 @@ export const registerAdminHandlers = (
     }
 
     const rejected = rejectAllPendingUsers(guard.room);
-    io.to(guard.room.channelId).emit("pendingUsersSnapshot", {
-      users: toPendingUserSnapshots(guard.room),
-      roomId: guard.room.id,
-    });
+    emitPendingUsersSnapshot(guard.room);
 
     respond(cb, {
       success: true,
