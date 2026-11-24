@@ -1,7 +1,12 @@
 package conclave.module
 
 import org.webrtc.CapturerObserver
+import org.webrtc.VideoCapturer
 import org.webrtc.VideoFrame
+
+internal class CaptureSession {
+    @Volatile var capturer: VideoCapturer? = null
+}
 
 internal class SessionCapturerObserver(
     private val delegate: CapturerObserver?,
