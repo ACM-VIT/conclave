@@ -1,3 +1,4 @@
+import { fakeSecretKey, fakeSignedToken } from "@conclave/meeting-core/test-fixtures";
 import { readdirSync } from "node:fs";
 import path from "node:path";
 import type { CaptureResult, Properties } from "posthog-js";
@@ -16,15 +17,9 @@ import {
 } from "../src/app/lib/telemetry-schema";
 import type { ConnectionState } from "../src/app/lib/types";
 
-// The public jwt.io sample shape ({"alg":"HS256"}, {"sub":"1234567890"}),
-// joined at runtime so secret scanners do not read it as a leaked key.
-const sampleJwt = [
-  "eyJhbGciOiJIUzI1NiJ9",
-  "eyJzdWIiOiIxMjM0NTY3ODkwIn0",
-  "bm90LWEtcmVhbC1zaWduYXR1cmU",
-].join(".");
+const sampleJwt = fakeSignedToken({ sub: "1234567890" });
 
-const KEY = "phc_test_project_key_00000000000000000000000";
+const KEY = fakeSecretKey("phc", `test_project_key_${"0".repeat(23)}`);
 const BUILD = "0b2d3b480f4621392a4151d750c90965b7c8b76c";
 const SITE = "https://conclave.acmvit.in";
 const SDK_ID = "0196f0a1-0000-7000-8000-000000000000";
@@ -700,7 +695,7 @@ describe("guest pass identifiers", () => {
   const SEAT_KEY = "guest-gp_ZyXwVuTsRqPoNmLkJiHgFe";
   const OLDER_KEY = "guest-0196f0a1-0000-7000-8000-000000000123";
   const PASS_COOKIE = "conclave-guest-0a1b2c3d-4e5f6a7b";
-  const SIGNED = "eyJhbGciOiJIUzI1NiJ9.eyJndWVzdFByb29mIjoiYWJjIn0.c2lnbmF0dXJlLXZhbHVl";
+  const SIGNED = fakeSignedToken({ guestProof: "fixture" });
   const canaries = [PASS_ID, SEAT_KEY, OLDER_KEY, PASS_COOKIE, SIGNED, "guestProof", "guestGrant"];
 
   it("sends none of them, wherever an event carries one", () => {

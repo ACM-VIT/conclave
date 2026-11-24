@@ -1,4 +1,5 @@
 import { gzipSync } from "node:zlib";
+import { fakeSignedToken } from "@conclave/meeting-core/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createChunkManifestLoader,
@@ -1081,7 +1082,7 @@ describe("every answer from /ingest carries everything the outcome needs", () =>
 describe("guest pass identifiers at /ingest", () => {
   const PASS_ID = "gp_AbCdEfGhIjKlMnOpQrStUv";
   const SEAT_KEY = "guest-gp_ZyXwVuTsRqPoNmLkJiHgFe";
-  const SIGNED = "eyJhbGciOiJIUzI1NiJ9.eyJndWVzdFByb29mIjoiYWJjIn0.c2lnbmF0dXJlLXZhbHVl";
+  const SIGNED = fakeSignedToken({ guestProof: "fixture" });
 
   it("forwards none of them, and refuses the one event whose frame path names a pass when the build's manifest is gone", async () => {
     const gone = "c0ffee0c0ffee0c0ffee0c0ffee0c0ffee0c0ff";

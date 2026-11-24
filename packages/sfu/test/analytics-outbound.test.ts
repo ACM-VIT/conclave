@@ -6,6 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { gunzipSync } from "node:zlib";
 import { PostHog } from "posthog-node";
+import { fakeSignedToken } from "@conclave/meeting-core/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import { createErrorReporter, SFU_RELEASE } from "../server/analytics/errorReporter.js";
 import { createFramePath, createOutboundEvent, SFU_ROOT } from "../server/analytics/outbound.js";
@@ -321,7 +322,7 @@ describe("the SFU's outbound schema", () => {
 describe("guest pass identifiers in SFU events", () => {
   const PASS_ID = "gp_AbCdEfGhIjKlMnOpQrStUv";
   const SEAT_KEY = "guest-gp_ZyXwVuTsRqPoNmLkJiHgFe";
-  const SIGNED = "eyJhbGciOiJIUzI1NiJ9.eyJndWVzdFByb29mIjoiYWJjIn0.c2lnbmF0dXJlLXZhbHVl";
+  const SIGNED = fakeSignedToken({ guestProof: "fixture" });
 
   it("sends none of them, wherever an exception carries one", () => {
     const message = {

@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { GUEST_SEAT_KEY_PREFIX } from "../src/guest-join-claims";
 import { namesGuestPassIdentifier } from "../src/guest-pass-identifiers";
+import { fakeSignedToken } from "./support/token-fixtures";
 
 const PASS_ID = "gp_AbCdEfGhIjKlMnOpQrStUv";
 const SEAT_KEY = `${GUEST_SEAT_KEY_PREFIX}ZyXwVuTsRqPoNmLkJiHgFe`;
 const OLDER_KEY = "guest-0196f0a1-0000-7000-8000-000000000123";
 const PASS_COOKIE = "__Host-conclave-guest-0a1b2c3d-4e5f6a7b";
-const SIGNED = "eyJhbGciOiJIUzI1NiJ9.eyJndWVzdFByb29mIjoiYWJjIn0.c2lnbmF0dXJlLXZhbHVl";
+const SIGNED = fakeSignedToken({ guestProof: "fixture" });
 
 describe("the guest pass identifiers no telemetry event may carry", () => {
   it.each([

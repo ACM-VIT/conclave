@@ -13,6 +13,7 @@
     "./guest-pass-identifiers": "./src/guest-pass-identifiers.ts",
     "./participant-reducer": "./src/participant-reducer.ts",
     "./scheduling": "./src/scheduling.ts",
+    "./test-fixtures": "./test/support/token-fixtures.ts",
     "./sfu-events": "./src/sfu-events.ts",
     "./sfu-types": "./src/sfu-types.ts",
     "./transcript-models": "./src/transcript-models.ts",
