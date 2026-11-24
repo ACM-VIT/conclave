@@ -165,17 +165,18 @@ const play = (
         .sort(([a], [b]) => a.localeCompare(b)),
     ]),
   );
-  return { tables: byRank(tables), mergeOps, subjectRows, crowd: crowd.size, rowsBefore };
+  return { tables: byRank(tables), kept: [...receipts.keys()].sort(), mergeOps, subjectRows, crowd: crowd.size, rowsBefore };
 };
 
 export const mergeAgainstOnePerson = (
   module: AuthorityModule,
   steps: readonly MergeStep[],
   options: { activityFields?: readonly string[] } = {},
-) => ({
-  merged: play(module, steps, true, options.activityFields ?? []).tables,
-  onePerson: play(module, steps, false, options.activityFields ?? []).tables,
-});
+) => {
+  const merged = play(module, steps, true, options.activityFields ?? []);
+  const onePerson = play(module, steps, false, options.activityFields ?? []);
+  return { merged: merged.tables, onePerson: onePerson.tables, keptMerged: merged.kept, keptOnePerson: onePerson.kept };
+};
 
 export const mergeCost = (module: AuthorityModule, steps: readonly MergeStep[], walked: readonly string[] = []) => {
   const { mergeOps, subjectRows, crowd, rowsBefore } = play(module, steps, true, []);

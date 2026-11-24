@@ -279,6 +279,31 @@ describe("Q&A", () => {
     expect(await room.converged(), "every tab's patched copy matches the server").toBe(true);
   });
 
+  it("lets a host reopen a question sixteen times, and close it at any time", async () => {
+    const room = new Harness([qaAuthority]);
+    const hostTab = await room.open(host, qaContract);
+    const priyaTab = await room.open(priya, qaContract);
+    const asked = await priyaTab.act("ask", { text: "Can we revisit this?" });
+    const id = asked.ok ? (at(asked.value, "id") as string) : "";
+    const reopened: boolean[] = [];
+    for (let round = 0; round < 16; round += 1) {
+      await hostTab.act("moderate", { id, action: "answered" });
+      reopened.push((await hostTab.act("moderate", { id, action: "reopen" })).ok);
+    }
+    const closedAtTheCap = (await hostTab.act("moderate", { id, action: "dismissed" })).ok;
+    const oneMore = await hostTab.act("moderate", { id, action: "reopen" });
+    const answeringOnceMore = await hostTab.act("moderate", { id, action: "answering" });
+    await room.deliver();
+
+    expect(reopened.every(Boolean), "sixteen reopens are kept").toBe(true);
+    expect(closedAtTheCap, "closing is always allowed").toBe(true);
+    expect(
+      [rejectedWith(oneMore, "reopened-too-often"), rejectedWith(answeringOnceMore, "reopened-too-often")],
+      "a seventeenth reopen is refused, however it is asked for",
+    ).toEqual([true, true]);
+    expect(at(hostTab.row("questions", id), "status"), "the question stays closed").toBe("dismissed");
+  });
+
   it("keeps every webinar rule", async () => {
     const webinar = new Harness([qaAuthority]);
     const stageHost = await webinar.open(host, qaContract);

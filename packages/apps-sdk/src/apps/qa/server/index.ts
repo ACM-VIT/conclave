@@ -49,12 +49,12 @@ type QaTables = {
 /** Upvotes a room can hold across all its questions. */
 const MAX_UPVOTES = 200_000;
 
-const MAX_OPEN_CHANGES = 16;
+const MAX_REOPENS = 16;
 
 const isOpenStatus = (status: QaStatus): boolean => status === "pending" || status === "answering";
 
 const openAt = (row: QuestionRow, order: number): boolean => {
-  let open = !(row.openTimes[0]?.open ?? true);
+  let open = false;
   for (const change of row.openTimes) {
     if (change.order >= order) break;
     open = change.open;
@@ -285,10 +285,12 @@ export const qaAuthority = defineAuthority({
             break;
         }
         if (isOpenStatus(question.status) !== isOpenStatus(next.status)) {
+          const reopens = question.openTimes.filter((change) => change.open).length - 1;
+          if (isOpenStatus(next.status) && reopens >= MAX_REOPENS) reject("reopened-too-often");
           next.openTimes = [
             ...question.openTimes,
             { order: nextActionOrder(tx), open: isOpenStatus(next.status) },
-          ].slice(-MAX_OPEN_CHANGES);
+          ];
         }
         tx.put("questions", key(question.id), next);
         // An answer can be twice the length of its question.

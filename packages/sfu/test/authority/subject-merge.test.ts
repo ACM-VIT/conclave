@@ -55,7 +55,7 @@ const quizStart: MergeStep[] = [
 ];
 const endRound: MergeStep[] = [{ by: "host", action: "endRound" }, { wait: 1 }];
 const nextRound: MergeStep = { wait: 6_000 };
-const moderate = (question: string, action: "answered" | "dismissed" | "reopen"): MergeStep => ({
+const moderate = (question: string, action: "answering" | "answered" | "dismissed" | "reopen"): MergeStep => ({
   by: "host",
   action: "moderate",
   input: (receipts: ReadonlyMap<string, Json>) => ({ id: kept(receipts, question, "id"), action }),
@@ -65,6 +65,17 @@ const secret = (by: "into" | "from", id: string, text: string): MergeStep => ({
   action: "secret",
   input: () => ({ id, text }),
 });
+
+const seeded = (seed: number) => {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let value = state;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+    return ((value ^ (value >>> 14)) >>> 0) / 4_294_967_296;
+  };
+};
 
 const atOnce = (step: MergeStep): MergeStep => ("by" in step ? { ...step, sameMoment: true } : step);
 const crowdUpvote = (question: string): MergeStep => ({
@@ -86,6 +97,7 @@ const scripts: Array<[string, AuthorityModule, MergeStep[]]> = [
   ["qa: more open questions than one person may have", qaAuthority, [ask("into", "q1"), ask("from", "q2"), ask("into", "q3"), ask("from", "q4")]],
   ["qa: an answered question frees a slot for a fourth (Greptile)", qaAuthority, [ask("into", "q1"), ask("into", "q2"), ask("from", "q3"), moderate("q1", "answered"), ask("from", "q4")]],
   ["qa: a question reopened after the fourth was asked (Greptile)", qaAuthority, [ask("into", "q1"), ask("into", "q2"), ask("from", "q3"), moderate("q1", "answered"), ask("from", "q4"), moderate("q1", "reopen")]],
+  ["qa: a question closed before the fourth was asked, then reopened and closed until that close is far back in its history", qaAuthority, [ask("into", "q1"), ask("into", "q2"), ask("from", "q3"), moderate("q1", "answered"), ask("from", "q4"), ...Array.from({ length: 8 }, () => [moderate("q1", "reopen"), moderate("q1", "answered")]).flat(), moderate("q1", "reopen")]],
   ["qa: a question answered and reopened more often than its history keeps, after the fourth was asked", qaAuthority, [ask("into", "q1"), ask("into", "q2"), ask("from", "q3"), ask("from", "q4"), ...Array.from({ length: 9 }, () => [moderate("q1", "answered"), moderate("q1", "reopen")]).flat()]],
   ["quiz: both answer a round, the kept identity first, merged at the results", quizAuthority, [...quizStart, answer("into", 0), answer("from", 1), ...endRound, nextRound, answer("from", 1), answer("into", 0), ...endRound, nextRound]],
   ["quiz: both answer a round, the merged identity first, merged at the reveal", quizAuthority, [...quizStart, answer("from", 0), answer("into", 1), ...endRound]],
@@ -106,6 +118,42 @@ describe("an app's mergeSubjects leaves what one person would have (Greptile)", 
     });
 
     expect(merged).toEqual(onePerson);
+  });
+});
+
+describe("qa merges after random histories of any length", () => {
+  const randomHistory = (seed: number): MergeStep[] => {
+    const random = seeded(seed);
+    const steps: MergeStep[] = [];
+    const asked: string[] = [];
+    const length = 10 + Math.floor(random() * 110);
+    const actions = ["answering", "answered", "dismissed", "reopen", "reopen"] as const;
+    for (let index = 0; index < length; index += 1) {
+      if (asked.length === 0 || random() < 0.3) {
+        const name = `q${asked.length + 1}`;
+        asked.push(name);
+        steps.push(ask(random() < 0.5 ? "into" : "from", name));
+      } else {
+        const target = random() < 0.5 ? asked[0] : asked[Math.floor(random() * asked.length)];
+        steps.push(moderate(target, actions[Math.floor(random() * actions.length)]));
+      }
+    }
+    return steps;
+  };
+
+  it("leaves what one person would have, for every seed whose two passes asked everything one person could", () => {
+    const mismatches: number[] = [];
+    let compared = 0;
+    for (let seed = 1; seed <= 60; seed += 1) {
+      const { merged, onePerson, keptMerged, keptOnePerson } = mergeAgainstOnePerson(qaAuthority, randomHistory(seed), {
+        activityFields: ["updatedAt"],
+      });
+      if (!keptOnePerson.every((name) => keptMerged.includes(name))) continue;
+      compared += 1;
+      if (JSON.stringify(merged) !== JSON.stringify(onePerson)) mismatches.push(seed);
+    }
+    expect(mismatches).toEqual([]);
+    expect(compared).toBeGreaterThan(40);
   });
 });
 
@@ -146,16 +194,6 @@ describe("quiz results after several merges (Greptile)", () => {
     verified: true,
     displayName: `Player ${index}`,
   });
-  const seeded = (seed: number) => {
-    let state = seed >>> 0;
-    return () => {
-      state = (state + 0x6d2b79f5) >>> 0;
-      let value = state;
-      value = Math.imul(value ^ (value >>> 15), value | 1);
-      value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
-      return ((value ^ (value >>> 14)) >>> 0) / 4_294_967_296;
-    };
-  };
   type Shown = { name: string; score: number };
   const shown = (instance: AuthorityInstance): Shown[] | null => {
     const quiz = instance.snapshot(host).rows.find(({ row }) => row.bucket === "quiz")?.row.value as
