@@ -165,7 +165,8 @@ const play = (
         .sort(([a], [b]) => a.localeCompare(b)),
     ]),
   );
-  return { tables: byRank(tables), kept: [...receipts.keys()].sort(), mergeOps, subjectRows, crowd: crowd.size, rowsBefore };
+  const removedRows = [...rowsBefore].reduce((total, [table, before]) => total + Math.max(0, before - instance.store.rows(table).size), 0);
+  return { tables: byRank(tables), kept: [...receipts.keys()].sort(), mergeOps, subjectRows, crowd: crowd.size, rowsBefore, removedRows };
 };
 
 export const mergeAgainstOnePerson = (
@@ -179,7 +180,7 @@ export const mergeAgainstOnePerson = (
 };
 
 export const mergeCost = (module: AuthorityModule, steps: readonly MergeStep[], walked: readonly string[] = []) => {
-  const { mergeOps, subjectRows, crowd, rowsBefore } = play(module, steps, true, []);
+  const { mergeOps, subjectRows, crowd, rowsBefore, removedRows } = play(module, steps, true, []);
   const walkedRows = walked.reduce((total, table) => total + (rowsBefore.get(table) ?? 0), 0);
-  return { ops: mergeOps, subjectRows, crowd, walkedRows };
+  return { ops: mergeOps, subjectRows, crowd, walkedRows, removedRows };
 };

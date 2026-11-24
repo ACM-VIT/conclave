@@ -3,6 +3,7 @@ import type { Json } from "@conclave/apps-sdk/authority";
 import type { AuthorityModule, Subject } from "@conclave/apps-sdk/authority/server";
 import { AuthorityInstance, type Actor } from "../../server/apps/authority/instance.js";
 import { DEFAULT_AUTHORITY_LIMITS } from "../../server/apps/authority/limits.js";
+import { BULK_ROWS_PER_OP } from "../../server/apps/authority/store.js";
 import { ledgerAuthority } from "./fixtures/ledger.js";
 import { pollsAuthority } from "@conclave/apps-sdk/polls/server";
 import { qaAuthority } from "@conclave/apps-sdk/qa/server";
@@ -372,5 +373,20 @@ describe("the cost of an app's mergeSubjects (Greptile)", () => {
     expect(large.crowd).toBe(largeCrowd);
     expect(large.ops).toBe(small.ops);
     expect(large.ops).toBeLessThanOrEqual(8 + 8 * large.subjectRows + 2 * large.walkedRows);
+  }, 30_000);
+
+  it("qa with a discarded question the crowd upvoted: grows only by the store's price for the upvotes it removes, and fits the budget at the upvote cap", () => {
+    const steps = [ask("into", "q1"), ask("into", "q2"), ask("into", "q3"), ask("from", "q4"), crowdUpvote("q4"), upvote("into", "q4")];
+    const small = mergeCost(qaAuthority, withCrowd(steps, 10), ["questions"]);
+    const large = mergeCost(qaAuthority, withCrowd(steps, 4_000), ["questions"]);
+    const bound = (cost: typeof small, removedRows: number) =>
+      8 + 8 * cost.subjectRows + 2 * cost.walkedRows + Math.floor(removedRows / BULK_ROWS_PER_OP);
+    const upvoteCap = qaAuthority.runtime.tables.upvotes.maxRows;
+
+    expect([small.removedRows, large.removedRows]).toEqual([12, 4_002]);
+    expect(small.ops).toBeLessThanOrEqual(bound(small, small.removedRows));
+    expect(large.ops).toBeLessThanOrEqual(bound(large, large.removedRows));
+    expect(large.ops - small.ops).toBeLessThanOrEqual(Math.ceil((large.removedRows - small.removedRows) / BULK_ROWS_PER_OP));
+    expect(bound(large, upvoteCap + large.subjectRows)).toBeLessThan(DEFAULT_AUTHORITY_LIMITS.transactionOps);
   }, 30_000);
 });
