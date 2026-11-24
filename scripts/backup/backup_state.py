@@ -42,6 +42,7 @@ from statelib import (  # noqa: E402
     database_paths,
     docker_containers,
     is_database_name,
+    is_sfu,
     log,
     mount_roots,
     name_room,
@@ -369,7 +370,7 @@ def containers_command(state):
     """The SFU containers that see the state dir, the ones that mount it
     first, then those that mount a dir above or inside it."""
     found_all = state_mounts(docker_containers(), state)
-    sfus = [found for found in found_all if found["env"].get("SFU_INSTANCE_ID")]
+    sfus = [found for found in found_all if is_sfu(found)]
     ordered = [found for found in sfus if found["relation"] == "exact"]
     ordered += [found for found in sfus if found["relation"] == "related"]
     for found in ordered:

@@ -2560,6 +2560,26 @@ test("an ordinary file named like a directory link's SQLite side file is kept, b
   }
 });
 
+test("containers that are not SFUs neither choose the stores nor stop a backup or restore", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, setDocker, backup, latestArchive, restore } = await setUp(root);
+    withDatabase(state);
+    await mkdir(path.join(root, "elsewhere"));
+    await setDocker([
+      { id: "sfu-a", mounts: [state], status: "exited", env: ["SFU_PORT=9", "SFU_INSTANCE_ID=sfu-a"] },
+      { id: "maintenance", mounts: [{ source: state, destination: "/srv/state", rw: false }], status: "exited", env: ["CONCLAVE_SQLITE_PATH=/tmp/maintenance.db"] },
+      { id: "nested", mounts: [{ source: state, destination: "/data", rw: false }, { source: path.join(root, "elsewhere"), destination: "/data/inner", rw: false }], status: "exited", env: [] },
+    ]);
+    await backup("--local-only");
+    await rm(state, { recursive: true });
+    await restore("--file", await latestArchive(), "--yes");
+    assert.deepEqual(rows(path.join(state, "conclave.sqlite")), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 describe("backup and restore", { concurrency: 6 }, () => {
   for (const args of queued) nodeTest(...args);
 });

@@ -549,6 +549,10 @@ def database_files(archive):
     return set(archive.databases)
 
 
+def is_sfu(found):
+    return bool(found["env"].get("SFU_INSTANCE_ID"))
+
+
 
 
 def store_paths(env, fallback=None):
@@ -600,7 +604,7 @@ def state_view_problems(state, containers):
     problems = []
     state_real = os.path.realpath(state)
     for found in containers:
-        if found["relation"] not in ("exact", "related"):
+        if found["relation"] not in ("exact", "related") or not is_sfu(found):
             continue
         mounts = [mount for mount in found["mounts"] if (mount.get("destination") or "").startswith("/")]
         views = []
@@ -634,7 +638,7 @@ def configured_stores(state, container, containers, env=None):
     sources = [("the backup config", variable, value, lambda path: under_root(path, roots))
                for variable, value in store_paths(env, f"{container.rstrip('/')}/conclave.sqlite")]
     for found in containers:
-        if found["relation"] in ("exact", "related"):
+        if found["relation"] in ("exact", "related") and is_sfu(found):
             # A container without any of the variables runs with whatever its
             # compose file set; only what its env says it opens counts here,
             # read through that container's own mounts.
