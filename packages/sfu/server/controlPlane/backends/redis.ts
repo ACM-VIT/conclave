@@ -244,15 +244,18 @@ export const createRedisBackend = async (options: {
 
   const bounded = async <T>(request: (redis: RedisPersistenceClient) => Promise<T>): Promise<T> => {
     let used: RedisPersistenceClient | null = null;
+    let expired = false;
     let timer: NodeJS.Timeout | undefined;
     const stalled = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
+        expired = true;
         if (used) replace(used);
         reject(new RedisStalled(deadlineMs));
       }, deadlineMs);
     });
     const work = (async () => {
       if (reconnecting) await reconnecting;
+      if (expired || closed) throw new RedisStalled(deadlineMs);
       used = client;
       return request(client);
     })();
@@ -458,9 +461,15 @@ export const createRedisBackend = async (options: {
     close: async () => {
       if (closed) return;
       closed = true;
-      await reconnecting?.catch(() => undefined);
-      if (client.isReady) await client.close().catch(() => undefined);
-      else client.destroy();
+      if (client.isReady) {
+        await client.close().catch(() => undefined);
+        return;
+      }
+      try {
+        client.destroy();
+      } catch {
+        return;
+      }
     },
   };
 };
