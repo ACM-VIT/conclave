@@ -153,6 +153,13 @@ export const makeRoom = () => {
           awarenessUpdate: encodeAwarenessUpdate(awareness, clientIds),
           clientId: awareness.clientID,
         }),
+      request: <T>(event: string, ...args: unknown[]) => {
+        const reply: { value?: T } = {};
+        listeners.get(event)!(...args, (value: T) => {
+          reply.value = value;
+        });
+        return reply;
+      },
       syncReply: (appId: string) =>
         ask<unknown>("apps:yjs:sync", { appId, syncMessage: Y.encodeStateVector(new Y.Doc()) }),
       syncReplyInto: (appId: string) => sync(appId),

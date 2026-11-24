@@ -106,17 +106,25 @@ left drawing on a copy the room no longer matches. A client that sends a
 `replicaId` is told with `apps:yjs:refused`. Any other client, such as an
 older web or native build, gets an `apps:state` without an `activeAppId` and,
 half a second later, the room's current state: every client drops its copy of
-an app that leaves the stage and syncs a fresh one when it returns. Until that
-socket syncs a fresh copy the room drops its updates and, a few seconds later,
-sends the two states again, at most three times, so a client that took both
-states at once still starts over. An update that changes nothing never
-restarts a copy.
+an app that leaves the stage and syncs a fresh one when it returns. The room
+always sends that second state; only the socket leaving cancels it. A sync
+counts as the fresh copy only once the second state has gone out. Until then
+the room drops that socket's updates, and if no such sync comes it sends the
+two states again a few seconds later, at most three times, so a client that
+took both states at once still starts over. An update that changes nothing
+never restarts a copy.
 
-A socket's updates are taken at up to 30 a second. Updates that arrive faster
-are held, in order, and applied together as one write as soon as the budget
-allows, and always before that socket's next sync or stage command, so a
-stroke drawn at pointer speed is never cut in two. Only an update that would
-take a socket's held updates past 256 KiB is refused, as `rate-limited`.
+Each room applies app work in one queue, in arrival order. A socket's updates
+are applied at up to 30 a second, counted against that socket whoever's event
+drains the queue; updates that arrive faster are held and applied together as
+one write as soon as their sender's budget allows, so a stroke drawn at
+pointer speed is never cut in two. Held updates from different sockets apply
+independently, since none of them has reached anyone yet. A sync or a stage
+command passes its own checks when it arrives, then waits behind every update
+already queued in the room: a sync never applies anyone's updates early, and a
+host who closes, replaces or clears an app does so after everyone's queued
+strokes are saved. Only an update that would take a socket's held updates past
+256 KiB is refused, as `rate-limited`.
 
 A cleared document stays cleared. The SFU remembers the Yjs clients that wrote
 to it and drops any later `apps:yjs:update`, in any app, from those clients or
@@ -250,7 +258,8 @@ Client -> server (`apps:yjs:update`):
 - ignored until the socket has synced the presented document, and when it
   replaces a value it never saw or builds on content the room does not hold
   (see Document lifetime)
-- held and applied together when a socket sends faster than its budget
+- held in the room's queue and applied together when a socket sends faster
+  than its budget
 
 Server -> peers (`apps:yjs:update`):
 

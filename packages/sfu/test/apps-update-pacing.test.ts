@@ -82,9 +82,13 @@ describe("the room's update budget", () => {
     host.syncReplyInto("whiteboard");
     for (let index = 0; index < 80; index += 1) host.sendUpdate("whiteboard", keyUpdate(host.doc, `k${index}`));
 
-    const reply = host.syncReply("whiteboard") as { syncMessage: Uint8Array };
+    const reply = host.request<{ syncMessage: Uint8Array }>("apps:yjs:sync", {
+      appId: "whiteboard",
+      syncMessage: Y.encodeStateVector(new Y.Doc()),
+    });
+    vi.advanceTimersByTime(200);
 
-    expect(keysIn(reply.syncMessage)).toHaveLength(80);
+    expect(keysIn(reply.value!.syncMessage)).toHaveLength(80);
   });
 
   it("applies the strokes it held for a host before that host changes the stage", () => {
@@ -96,7 +100,9 @@ describe("the room's update budget", () => {
     for (let index = 0; index < 80; index += 1) host.sendUpdate("whiteboard", keyUpdate(host.doc, `k${index}`));
 
     host.present("watch", host.state().revision);
+    vi.advanceTimersByTime(200);
     host.present("whiteboard", host.state().revision);
+    vi.advanceTimersByTime(200);
 
     expect(keysIn(join("late#1", "participant").coldUpdate("whiteboard"))).toHaveLength(80);
   });

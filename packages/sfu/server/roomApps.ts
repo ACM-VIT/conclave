@@ -50,6 +50,7 @@ export type WriteRefusal = ContentRefusal | "too-large" | "invalid";
 export type ContentRefusal =
   | "not-live"
   | "not-synced"
+  | "locked"
   | "malformed"
   | "unresolved"
   | "unseen-value"
@@ -457,11 +458,12 @@ export class RoomApps {
     userId: string,
     update: Uint8Array,
     mark: AppSyncMark | null,
-    origin?: unknown,
+    options: { origin?: unknown; host?: boolean } = {},
   ): WriteRefusal | null {
     const doc = this.liveDoc(appId);
     if (!doc) return "not-live";
     if (!this.isCurrentSync(mark)) return "not-synced";
+    if (this.stage.locked && !options.host) return "locked";
     let facts: UpdateFacts;
     try {
       facts = readUpdate(doc, update);
@@ -480,7 +482,7 @@ export class RoomApps {
     if (typeof claims === "string") return claims;
     if (!this.reserveUpdate(appId, update)) return "too-large";
     try {
-      Y.applyUpdate(doc, update, origin);
+      Y.applyUpdate(doc, update, options.origin);
     } catch {
       return "invalid";
     }
