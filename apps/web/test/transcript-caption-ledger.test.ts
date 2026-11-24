@@ -1189,3 +1189,127 @@ describe("Sarvam: an utterance's speech runs from its signal to the next onset i
     expect(savedTexts()).toEqual(["First.", "Grace one.", "Grace two."]);
   });
 });
+
+describe("Greptile: ended-line cleanup keeps the line being shown", () => {
+  it("a late final still fills a gap that ended in the same millisecond as a silent line, with a one-line cap", async () => {
+    vi.useFakeTimers();
+    quiet();
+    const room = await transcriptRoomRig(lookup, OPENAI, { TRANSCRIPT_MAX_SEGMENTS: "1" });
+    await room.start("en");
+    const [socket] = room.providerSockets();
+    await room.sendAudio("silence", grace);
+    await room.commit(grace);
+    await room.speak(ada);
+    await room.commit(ada);
+    socket.emit(openAiCommitted("silent"));
+    socket.emit(openAiCommitted("heard"));
+    await settle();
+    await vi.advanceTimersByTimeAsync(DEADLINE + COMMIT_ACK_TIMEOUT + 1_000);
+    expect(room.savedTexts()).toEqual([GAP]);
+
+    socket.emit(openAiFinal("heard", "Late words."));
+    await settle();
+
+    expect(speakers(room.room.segments)).toEqual([["Late words.", "ada"]]);
+    expect(speakers(room.viewerTranscript().segments)).toEqual([["Late words.", "ada"]]);
+  });
+});
+
+describe("Greptile: Sarvam answers and owed slots", () => {
+  it("keeps a second identical answer under a reused request id when it answers a later utterance", async () => {
+    vi.useFakeTimers();
+    quiet();
+    const room = await rig(SARVAM);
+    await room.start("hi");
+    const [socket] = room.providerSockets();
+    await room.speak(ada);
+    socket.emit(sarvamSpeechStart());
+    await room.endTurn(ada);
+    socket.emit(sarvamFinal("shared", "Yes."));
+    await settle();
+    await room.speak(grace);
+    socket.emit(sarvamSpeechStart());
+    await room.endTurn(grace);
+    socket.emit(sarvamFinal("shared", "Yes."));
+    await settle();
+    await room.speak(ada);
+    socket.emit(sarvamSpeechStart());
+    await room.endTurn(ada);
+    socket.emit(sarvamFinal("shared", "Ada again."));
+    await settle();
+    await vi.advanceTimersByTimeAsync(DEADLINE + 100);
+
+    expect(speakers(room.room.segments)).toEqual([
+      ["Yes.", "ada"],
+      ["Yes.", "grace"],
+      ["Ada again.", "ada"],
+    ]);
+  });
+
+  it("still ignores an answer Sarvam sends twice for the same waiting line", async () => {
+    vi.useFakeTimers();
+    quiet();
+    const room = await rig(SARVAM);
+    await room.start("hi");
+    const [socket] = room.providerSockets();
+    await room.speak(ada);
+    socket.emit(sarvamSpeechStart());
+    await room.endTurn(ada);
+    await room.speak(grace);
+    socket.emit(sarvamSpeechStart());
+    await room.endTurn(grace);
+    socket.emit(sarvamFinal("shared", "Yes."));
+    socket.emit(sarvamFinal("shared", "Yes."));
+    socket.emit(sarvamFinal("shared", "Grace words."));
+    await settle();
+    await vi.advanceTimersByTimeAsync(DEADLINE + 100);
+
+    expect(speakers(room.room.segments)).toEqual([
+      ["Yes.", "ada"],
+      ["Grace words.", "grace"],
+    ]);
+  });
+
+  it("keeps owed slots bounded while Sarvam signals speech but sends no text", async () => {
+    vi.useFakeTimers();
+    quiet();
+    const room = await rig(SARVAM);
+    await room.start("hi");
+    const [socket] = room.providerSockets();
+    for (let utterance = 0; utterance < 40; utterance += 1) {
+      const speaker = utterance % 2 === 0 ? ada : grace;
+      await room.speak(speaker);
+      socket.emit(sarvamSpeechStart());
+      await room.endTurn(speaker);
+      await vi.advanceTimersByTimeAsync(DEADLINE / 2);
+    }
+    const session = (room.room as unknown as {
+      liveConnection: { session: { expiredSlots: Map<string, number>; awaitingFinal: string[] } };
+    }).liveConnection.session;
+
+    expect(session.expiredSlots.size).toBeLessThanOrEqual(8);
+    expect(session.awaitingFinal.length).toBeLessThanOrEqual(10);
+  });
+
+  it("caps owed slots when many lines time out within a minute", async () => {
+    vi.useFakeTimers();
+    quiet();
+    const room = await rig(SARVAM);
+    await room.start("hi");
+    const [socket] = room.providerSockets();
+    for (let utterance = 0; utterance < 60; utterance += 1) {
+      const speaker = utterance % 2 === 0 ? ada : grace;
+      await room.speak(speaker);
+      socket.emit(sarvamSpeechStart());
+      await room.endTurn(speaker);
+      await vi.advanceTimersByTimeAsync(700);
+    }
+    await vi.advanceTimersByTimeAsync(DEADLINE - 20_000);
+    socket.emit(sarvamSpeechStart());
+    const session = (room.room as unknown as {
+      liveConnection: { session: { expiredSlots: Map<string, number>; awaitingFinal: string[] } };
+    }).liveConnection.session;
+
+    expect(session.expiredSlots.size).toBeLessThanOrEqual(16);
+  });
+});

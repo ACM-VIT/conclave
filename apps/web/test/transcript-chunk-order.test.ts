@@ -47,6 +47,7 @@ const RUNS = Number(process.env.TRANSCRIPT_CHUNK_ORDER_RUNS ?? 300);
 const EXTENDED_RUNS = Number(process.env.TRANSCRIPT_CHUNK_ORDER_EXTENDED_RUNS ?? 300);
 const BURST_RUNS = Number(process.env.TRANSCRIPT_CHUNK_ORDER_BURST_RUNS ?? 200);
 const PAUSE_RUNS = Number(process.env.TRANSCRIPT_CHUNK_ORDER_PAUSE_RUNS ?? 200);
+const SMALL_CAP_RUNS = Number(process.env.TRANSCRIPT_CHUNK_ORDER_SMALL_CAP_RUNS ?? 150);
 const LIMIT_CHUNKS = 24;
 const MALFORMED = ["%%%%", "@@@@AAAA", "A", "====", "AB=C", "\u0000\u0001"];
 const LANGUAGES = ["ta", "hi", "bn"];
@@ -111,7 +112,7 @@ type RoomInternals = {
   keepReplayAudioWithinLimit: () => void;
 };
 type SavedLine = { itemId: string; text: string; speakerUserId?: string; sequence: number };
-type Mode = { extended?: boolean; bursts?: boolean; pauses?: boolean };
+type Mode = { extended?: boolean; bursts?: boolean; pauses?: boolean; smallCap?: boolean };
 
 const wordsOf = (text: string) => text.split(/\s+/).filter(Boolean);
 const keepsWordsInOrder = (kept: string, seen: string) => {
@@ -132,7 +133,7 @@ const audioCount = (socket: FakeProviderSocket) =>
   }).length;
 
 const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
-  const extended = Boolean(mode.extended || mode.bursts || mode.pauses);
+  const extended = Boolean(mode.extended || mode.bursts || mode.pauses || mode.smallCap);
   const bursts = Boolean(mode.bursts);
   const random = randomFrom(seed);
   const pauseRandom = randomFrom(seed * 7919 + 17);
@@ -146,7 +147,10 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
   const rig = await transcriptRoomRig(
     lookup,
     openai ? OPENAI : SARVAM,
-    { TRANSCRIPT_TOKEN_SECRET: "chunk-order-secret" },
+    {
+      TRANSCRIPT_TOKEN_SECRET: "chunk-order-secret",
+      ...(mode.smallCap ? { TRANSCRIPT_MAX_SEGMENTS: String(1 + (Math.floor(seed / 3) % 3)) } : {}),
+    },
     {
       onProviderSend: (providerSocket, message) => {
         const audio = (message as { audio?: unknown }).audio;
@@ -308,9 +312,13 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
       .sort((left, right) => left.sequence - right.sequence);
   };
 
+  const retainedByRoom = () =>
+    new Set([...room.segments.map(({ itemId }) => itemId), ...room.ledger.activeUnordered().map(({ id }) => id)]);
+
   const checkKept = (stage: string, kept: SavedLine[], where: string) => {
     const byItem = new Map(kept.map((line) => [line.itemId, line]));
-    const seen = seenByViewers();
+    const retained = mode.smallCap ? retainedByRoom() : null;
+    const seen = seenByViewers().filter(({ itemId }) => !retained || retained.has(itemId));
     for (const line of seen) {
       const saved = byItem.get(line.itemId);
       if (!saved || !keepsWordsInOrder(saved.text, line.text) || saved.speakerUserId !== line.speakerUserId) {
@@ -542,7 +550,32 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
     }
   };
 
+  const sameMillisecondLines = async (step: number) => {
+    const live = liveSocket();
+    const queued = (room as unknown as { liveConnection: { commitQueue: unknown[] } | null }).liveConnection?.commitQueue.length;
+    if (!live || queued !== 0) return;
+    await sendChunk(false);
+    await rig.commit(speaker);
+    await sendChunk(true);
+    await rig.commit(speaker);
+    signal();
+    signal();
+    const heard = openItems.at(-1)!;
+    await vi.advanceTimersByTimeAsync(DEADLINE + 2_000);
+    check(`step ${step} same-millisecond lines ended`);
+    if (liveSocket() !== live) return;
+    live.emit(openAiFinal(heard, `Late ${step}.`));
+    await settle();
+    if (!rig.viewerTranscript().segments.some(({ text }) => text === `Late ${step}.`)) {
+      report(`step ${step}: a late answer could not fill the gap of a line that ended in the same millisecond as another`);
+    }
+  };
+
   const extendedEvent = async (step: number) => {
+    if (mode.smallCap && openai && random() < 0.4) {
+      await sameMillisecondLines(step);
+      return;
+    }
     const pick = random();
     if (pick < 0.18) {
       saveMode.delayMs = random() < 0.5 ? 0 : Math.floor(random() * 2_500);
@@ -774,6 +807,17 @@ describe("caption chunks under random speech, signals and drops", () => {
     }
     expect(failures).toEqual([]);
   }, Math.max(600_000, EXTENDED_RUNS * 1_500));
+
+  it(`lets a late answer fill the gap of a line that ended with another in the same millisecond, under a one to three line cap, across ${SMALL_CAP_RUNS} seeded runs`, async () => {
+    const failures: string[] = [];
+    const first = Number(process.env.TRANSCRIPT_CHUNK_ORDER_FROM ?? 1);
+    const maxFailures = Number(process.env.TRANSCRIPT_CHUNK_ORDER_MAX_FAILURES ?? 3);
+    for (let seed = first; seed < first + SMALL_CAP_RUNS && failures.length < maxFailures; seed += 1) {
+      const problems = await runOnce(seed, { smallCap: true });
+      if (problems.length > 0) failures.push(`seed ${seed}: ${problems.join(" | ")}`);
+    }
+    expect(failures).toEqual([]);
+  }, Math.max(600_000, SMALL_CAP_RUNS * 1_500));
 
   it(`keeps every chunk with its sender, in send order, across ${RUNS} seeded runs`, async () => {
     const failures: string[] = [];
