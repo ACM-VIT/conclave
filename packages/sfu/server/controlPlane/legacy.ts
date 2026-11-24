@@ -368,12 +368,19 @@ export type RecoveredCopies = { files: ClaimedCopy[]; records: RecoveredRecord[]
 
 const CLAIM = /^(.+)\.claimed-(\d+)-\d+$/;
 
+const folders = (path: string): string[] =>
+  readdirSync(path, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+    .map((entry) => join(path, entry.name))
+    .sort();
+
+const copyFolders = (dir: string): string[] =>
+  folders(dir).flatMap((service) => [service, ...folders(service)]);
+
 const claimable = (dir: string | null, ticket: number): Array<{ domain: LegacyDomain; base: string; path: string }> => {
   if (!dir || !existsSync(dir)) return [];
   const found: Array<{ domain: LegacyDomain; base: string; path: string }> = [];
-  for (const service of readdirSync(dir, { withFileTypes: true })) {
-    if (!service.isDirectory() || service.name.startsWith(".")) continue;
-    const folder = join(dir, service.name);
+  for (const folder of copyFolders(dir)) {
     for (const name of readdirSync(folder).sort()) {
       const claimed = CLAIM.exec(name);
       const fileName = claimed ? claimed[1] : name;

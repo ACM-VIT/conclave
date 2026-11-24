@@ -75,7 +75,9 @@ const opened: ControlPlaneStore[] = [];
 
 const oldStorePath = (store: StoreCase) => join(dir, "json", store.file);
 const importDir = () => join(dir, "recordings", "json-fallback-import");
-const copyPath = (store: StoreCase, service = "sfu-a") => join(importDir(), service, store.file);
+const ARCHIVE = "20261124T000000000Z-sfu-20261124T000000Z-0a1b2c3d";
+const copyPath = (store: StoreCase, service = "sfu-a", archive: string | null = ARCHIVE) =>
+  archive === null ? join(importDir(), service, store.file) : join(importDir(), service, archive, store.file);
 
 const write = (path: string, data: unknown) => {
   mkdirSync(dirname(path), { recursive: true });
@@ -213,7 +215,7 @@ describe.each(stores)("an SFU combining the old $name with a container copy", (s
     expect(existsSync(`${copyPath(store)}.adopted`)).toBe(true);
   });
 
-  it("keeps both records when a copy's record claims the $uniqueKey another holds, and gives it to the newer one", async () => {
+  it("keeps both records when a copy's record claims the $uniqueKey another holds, and leaves it with the record already in the store", async () => {
     write(oldStorePath(store), store.encode([{ id: "a", title: "First", updatedAt: 100, unique: "shared" }]));
     write(copyPath(store), store.encode([{ id: "b", title: "Second", updatedAt: 200, unique: "shared" }]));
 
@@ -223,8 +225,19 @@ describe.each(stores)("an SFU combining the old $name with a container copy", (s
     expect(warnings().some((line) => line.includes("kept without"))).toBe(true);
   });
 
+  it("combines every transfer the deploy saved for one SFU, and copies an older deploy left directly in its folder", async () => {
+    write(copyPath(store, "sfu-a", "20261120T000000000Z-first"), store.encode([{ id: "a", title: "First deploy", updatedAt: 100 }]));
+    write(copyPath(store, "sfu-a", "20261124T000000000Z-second"), store.encode([{ id: "a", title: "Second deploy", updatedAt: 200 }]));
+    write(copyPath(store, "sfu-b", null), store.encode([{ id: "b", title: "Flat copy", updatedAt: 100 }]));
+
+    expect(await loaded(store)).toEqual({ a: "Second deploy", b: "Flat copy" });
+    expect(existsSync(`${copyPath(store, "sfu-a", "20261120T000000000Z-first")}.adopted`)).toBe(true);
+    expect(existsSync(`${copyPath(store, "sfu-a", "20261124T000000000Z-second")}.adopted`)).toBe(true);
+    expect(existsSync(`${copyPath(store, "sfu-b", null)}.adopted`)).toBe(true);
+  });
+
   it("ignores a transfer the deploy left half done", async () => {
-    const partial = join(importDir(), ".incoming-sfu-a-123", store.file);
+    const partial = join(importDir(), ".incoming-sfu-a-20261124T000000000Z-x-0a1b2c3d4e5f", "files", store.file);
     write(partial, store.encode([{ id: "partial", title: "Half sent", updatedAt: 100 }]));
 
     expect(await loaded(store)).toEqual({});
