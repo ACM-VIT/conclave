@@ -83,6 +83,10 @@ export class IdentityAdapter {
     return identity;
   }
 
+  guestSubject(identity: string): Subject {
+    return this.subject("guest-pass", identity);
+  }
+
   hold(room: Room, client: Client): void {
     const userKey = room.userKeysById.get(client.id);
     if (!userKey || !isGuestUserKey(userKey) || this.isAccount(client)) return;

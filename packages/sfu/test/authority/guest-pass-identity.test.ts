@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Json } from "@conclave/apps-sdk/authority";
+import { defineAuthority } from "@conclave/apps-sdk/authority/server";
 import { Harness, person, type Tab } from "./harness.js";
 import { pollsAuthority, pollsContract } from "./fixtures/polls.js";
 
@@ -185,7 +186,9 @@ describe.each([
     ["A", "B"],
     ["B", "A"],
     ["B", "B"],
-  ])("count one vote when the room saw pass %s first and pass %s voted", async (seenFirst, voter) => {
+    ["A", "both"],
+    ["B", "both"],
+  ])("count one vote when the room saw pass %s first and pass %s voted (Greptile)", async (seenFirst, voter) => {
     const room = new Harness([pollsAuthority]);
     const hostTab = await room.open(host, pollsContract);
     const pollId = await pollIn(room, hostTab);
@@ -195,9 +198,10 @@ describe.each([
     for (const [index, pass] of order.entries()) {
       tabs[pass] = await guestTab(room, `guest-gp_gita-on-${pass}`, `tab-${index + 1}`, passes[pass]);
     }
-    const voting = tabs[voter as "A" | "B"]!;
-    const other = tabs[voter === "A" ? "B" : "A"]!;
+    const voting = tabs[voter === "B" ? "B" : "A"]!;
+    const other = tabs[voter === "B" ? "A" : "B"]!;
     expect((await voting.act("vote", { pollId, optionIds: ["o1"] })).ok).toBe(true);
+    if (voter === "both") expect((await other.act("vote", { pollId, optionIds: ["o2"] })).ok).toBe(true);
     await room.deliver();
 
     linkPasses(room, passes.B, passes.A);
@@ -207,6 +211,38 @@ describe.each([
     expect(await other.act("vote", { pollId, optionIds: ["o2"] })).toEqual(alreadyVoted);
     expect(await voting.act("vote", { pollId, optionIds: ["o2"] })).toEqual(alreadyVoted);
     expect(field(hostTab.row("polls", pollId), "results", "voterCount")).toBe(1);
+    expect(field(other.row("myVotes", pollId), "optionIds")).toEqual(field(voting.row("myVotes", pollId), "optionIds"));
+  });
+
+  it("keeps the votes both passes cast in different polls, and refuses a second vote in either (Greptile)", async () => {
+    const room = new Harness([pollsAuthority]);
+    const hostTab = await room.open(host, pollsContract);
+    const firstPoll = await pollIn(room, hostTab);
+    const secondPoll = await pollIn(room, hostTab);
+    const onA = await guestTab(room, "guest-gp_gita-votes-in-the-first-poll", "tab-1", "proof-of-pass-a");
+    const onB = await guestTab(room, "guest-gp_gita-votes-in-the-second-poll", "tab-2", "proof-of-pass-b");
+    expect((await onA.act("vote", { pollId: firstPoll, optionIds: ["o1"] })).ok).toBe(true);
+    expect((await onB.act("vote", { pollId: secondPoll, optionIds: ["o2"] })).ok).toBe(true);
+    await room.deliver();
+
+    linkPasses(room, "proof-of-pass-b", "proof-of-pass-a");
+    if (seated) await guestTab(room, "guest-gp_gita-linking-tab", "tab-3", "proof-of-pass-b");
+    await room.deliver();
+
+    for (const tab of [onA, onB]) {
+      expect(field(tab.row("myVotes", firstPoll), "optionIds")).toEqual(["o1"]);
+      expect(field(tab.row("myVotes", secondPoll), "optionIds")).toEqual(["o2"]);
+    }
+    expect(await onA.act("vote", { pollId: secondPoll, optionIds: ["o1"] })).toEqual(alreadyVoted);
+    expect(await onB.act("vote", { pollId: firstPoll, optionIds: ["o2"] })).toEqual(alreadyVoted);
+    expect(field(hostTab.row("polls", firstPoll), "results", "voterCount")).toBe(1);
+    expect(field(hostTab.row("polls", secondPoll), "results", "voterCount")).toBe(1);
   });
 });
 
+describe("an app that keeps rows by person (Greptile)", () => {
+  it("is refused when it has no way to merge two people the room learns are one", () => {
+    const { mergeSubjects: _merge, ...withoutMerge } = pollsAuthority.runtime;
+    expect(() => defineAuthority(withoutMerge as never)).toThrow(/needs mergeSubjects/);
+  });
+});

@@ -266,4 +266,21 @@ export const qaAuthority = defineAuthority({
       project: (row) => ({ key: row.questionId, value: {} }),
     },
   },
+  mergeSubjects(_ctx, tx, { from, into }) {
+    for (const [, question] of tx.scan("questions")) {
+      if (question.author === from) tx.put("questions", key(question.id), { ...question, author: into });
+    }
+    for (const [, upvote] of tx.scan("upvotes")) {
+      if (upvote.voter !== from) continue;
+      tx.delete("upvotes", key(upvote.questionId, from));
+      if (tx.insertIfAbsent("upvotes", key(upvote.questionId, into), { ...upvote, voter: into }) === "inserted") {
+        continue;
+      }
+      const question = tx.get("questions", key(upvote.questionId));
+      if (question) {
+        tx.put("questions", key(question.id), { ...question, upvotes: Math.max(0, question.upvotes - 1) });
+      }
+    }
+    return undefined;
+  },
 });

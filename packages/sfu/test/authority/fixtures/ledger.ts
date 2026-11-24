@@ -150,4 +150,11 @@ export const ledgerAuthority = defineAuthority({
       },
     },
   },
+  mergeSubjects(_ctx, tx, { from, into }) {
+    for (const [, secret] of tx.scan("secrets", key("secret", from))) {
+      tx.delete("secrets", key("secret", from, secret.id));
+      tx.insertIfAbsent("secrets", key("secret", into, secret.id), { ...secret, subject: into });
+    }
+    return undefined;
+  },
 });

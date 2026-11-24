@@ -389,6 +389,9 @@ export class Room {
     WebcamReceiverCapacityProofCoordinator;
 
   private readonly webcamVp9Enabled: boolean;
+  private readonly guestIdentityMergeListeners = new Set<
+    (from: string, into: string) => void
+  >();
   private readonly lifecycleListeners = new Set<
     (event: RoomLifecycleEvent) => void
   >();
@@ -430,6 +433,11 @@ export class Room {
    * Lets room-scoped state that lives outside this class, such as the apps
    * authority runtime, follow who is in the room and when it closes.
    */
+  onGuestIdentityMerged(listener: (from: string, into: string) => void): () => void {
+    this.guestIdentityMergeListeners.add(listener);
+    return () => this.guestIdentityMergeListeners.delete(listener);
+  }
+
   onLifecycle(listener: (event: RoomLifecycleEvent) => void): () => void {
     this.lifecycleListeners.add(listener);
     return () => this.lifecycleListeners.delete(listener);
@@ -1211,6 +1219,16 @@ export class Room {
         seatedIdentityChanged = true;
       }
       this.guestRecords.set(proof, merged);
+    }
+    for (const record of held) {
+      if (record.identity === merged.identity) continue;
+      for (const listener of this.guestIdentityMergeListeners) {
+        try {
+          listener(record.identity, merged.identity);
+        } catch (error) {
+          Logger.warn(`Room ${this.id}: an identity merge listener failed`, error);
+        }
+      }
     }
     if (seatedIdentityChanged) this.notifyLifecycle("membership");
     this.mergeWaitingGuests(guestsBefore, this.guestOfPass(link.guestProof));
@@ -3398,6 +3416,7 @@ export class Room {
   close(): void {
     this.notifyLifecycle("closed");
     this.lifecycleListeners.clear();
+    this.guestIdentityMergeListeners.clear();
     this.aiCredentials.clear();
     this.stopCleanupTimer();
     this.cancelWebcamCodecPolicyUpgrade();

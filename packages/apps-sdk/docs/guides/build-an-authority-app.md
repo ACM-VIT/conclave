@@ -97,8 +97,17 @@ export const signUpAuthority = defineAuthority({
       project: () => ({ key: "entry", value: {} }),
     },
   },
+  mergeSubjects(_ctx, tx, { from, into }) {
+    const entry = tx.get("entries", key(from));
+    if (!entry) return undefined;
+    tx.delete("entries", key(from));
+    tx.insertIfAbsent("entries", key(into), { ...entry, subject: into });
+    return undefined;
+  },
 });
 ```
+
+An app with a personal view keeps rows by person, so it must define `mergeSubjects`. The room can learn late that two subjects are one person, for example a guest whose two tabs got different passes. It then runs `mergeSubjects` once in every app, in one transaction, and moves everything kept under `from` to `into`. Where the person now has two of something that is one per person, such as two ballots in one poll, keep one and fix any counts. After the merge the person has one subject everywhere.
 
 The four things a module has:
 

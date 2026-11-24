@@ -261,4 +261,21 @@ export const pollsAuthority = defineAuthority({
       }),
     },
   },
+  mergeSubjects(_ctx, tx, { from, into }) {
+    for (const [, ballot] of tx.scan("ballots")) {
+      if (ballot.subject !== from) continue;
+      tx.delete("ballots", key(ballot.pollId, from));
+      const moved = tx.insertIfAbsent("ballots", key(ballot.pollId, into), { ...ballot, subject: into });
+      if (moved === "inserted") continue;
+      const poll = tx.get("polls", key(ballot.pollId));
+      if (!poll) continue;
+      const votes = { ...poll.tally.votes };
+      for (const id of ballot.optionIds) votes[id] = Math.max(0, (votes[id] ?? 0) - 1);
+      tx.put("polls", key(poll.id), {
+        ...poll,
+        tally: { voterCount: Math.max(0, poll.tally.voterCount - 1), votes },
+      });
+    }
+    return undefined;
+  },
 });

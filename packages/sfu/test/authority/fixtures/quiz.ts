@@ -282,4 +282,22 @@ export const quizAuthority = defineAuthority({
       project: (row) => ({ key: "score", value: { score: row.score } }),
     },
   },
+  mergeSubjects(_ctx, tx, { from, into }) {
+    for (const [, answer] of tx.scan("answers")) {
+      if (answer.subject !== from) continue;
+      tx.delete("answers", key(String(answer.round), from));
+      tx.insertIfAbsent("answers", key(String(answer.round), into), { ...answer, subject: into });
+    }
+    const fromScore = tx.get("scores", key(from));
+    if (fromScore) {
+      tx.delete("scores", key(from));
+      const intoScore = tx.get("scores", key(into));
+      tx.put(
+        "scores",
+        key(into),
+        intoScore ? { ...intoScore, score: intoScore.score + fromScore.score } : { ...fromScore, subject: into },
+      );
+    }
+    return undefined;
+  },
 });

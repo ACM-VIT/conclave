@@ -311,6 +311,13 @@ export const ${camel}Authority = defineAuthority({
       project: () => ({ key: "entry", value: {} }),
     },
   },
+  mergeSubjects(_ctx, tx, { from, into }) {
+    const entry = tx.get("entries", key(from));
+    if (!entry) return undefined;
+    tx.delete("entries", key(from));
+    tx.insertIfAbsent("entries", key(into), { ...entry, subject: into });
+    return undefined;
+  },
 });
 `,
     },
