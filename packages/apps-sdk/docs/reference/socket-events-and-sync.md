@@ -112,8 +112,10 @@ updates, empty ones included, and a sync it answers then does not count as the
 fresh copy. A stage change in that half second that still shows the app is
 followed at once by another state without an `activeAppId` to that socket, and
 the room waits half a second again, so the client never shows the app before
-it starts over; a stage change that takes the app away ends the restart, since
-the client drops its copy anyway. After the second state, the socket's first
+it starts over. A stage change that presents another app ends the restart at
+once, since the client drops its copy and opens the new app fresh; one that
+closes the stage leaves the restart waiting, so a quick reopen still gets the
+blank again. After the second state, the socket's first
 sync ends the restart, and so does an update that changes nothing, which the
 room answers with its copy. Until then the room drops that socket's updates,
 and if neither comes it sends the two states again a few seconds later, at
@@ -144,8 +146,11 @@ Updates keep arriving and landing while they wait. A waiting command is checked
 again before it runs; if the stage has changed so that it would be refused or
 change nothing, it is answered at once and refuses no held update. Discard
 refuses the cleared app's held updates, and locking refuses the held
-updates of everyone who is not a host. When the room closes, every held update
-is refused and every waiting command fails. An update is applied under the
+updates of everyone who is not a host. A stage change always runs in one fixed
+order: it refuses the held updates it ends, then applies and announces the new
+stage, then tells each restarting client, and nothing else queued in the room
+runs in between. When the room closes, every held update is refused and every
+waiting command fails. An update is applied under the
 participant and role it arrived with, so one still held when its sender leaves
 is applied as theirs.
 
@@ -250,12 +255,15 @@ Server behavior:
 
 Present, close, discard and lock share one rate limit per socket.
 
-`apps:yjs:sync` has its own per-socket limit, but a socket's first valid sync
-of the presented app after each stage change is free. Every stage change makes
-each client sync once, so other hosts switching apps cannot use up a viewer's
+`apps:yjs:sync` has its own per-socket limit, and every sync spends from it
+before the room reads its payload. A socket's first valid sync of the presented
+app after each stage change gets its token back. Every stage change makes each
+client sync once, so other hosts switching apps cannot use up a viewer's
 budget; repeated syncs of the same stage still spend it, and so does a sync the
-room refuses for its content, which leaves the free sync unused. A sync refused by the
-limit acks `{ error, retryable: true, retryAfterMs }`, and the client tries
+room refuses for its content, which leaves the refund for the next valid one.
+Every app event is checked for its budget, payload size, sender's role and the
+stage on the frame as it arrives, before the room converts or decodes any of
+it. A sync refused by the limit acks `{ error, retryable: true, retryAfterMs }`, and the client tries
 again after at least `retryAfterMs`. An older SFU sends that refusal as only
 `{ error: "Too many app sync requests" }`; the client retries it with its own
 backoff. Any other refusal acks `{ error }` and is final.
