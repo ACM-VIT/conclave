@@ -12,6 +12,7 @@ import { rootContextBuilds } from "./docker-context/compose.mjs";
 const BOOT_TIMEOUT_MS = 120_000;
 const VM_DAEMON_SOCKET = "/var/run/docker.sock";
 const LOCAL_BUILDER = "default";
+const OWNER_LABEL = "conclave-check-images.owner";
 
 export class Interrupted extends Error {
   constructor(signal) {
@@ -153,14 +154,29 @@ const BOOTS = {
 export class RunResources {
   constructor(docker) {
     this.docker = docker;
-    this.containers = new Set();
+    this.owners = new Set();
     this.images = new Set();
   }
 
+  claimContainer() {
+    const owner = `${OWNER_LABEL}=${randomBytes(12).toString("hex")}`;
+    this.owners.add(owner);
+    return owner;
+  }
+
+  claimImage(tag) {
+    this.images.add(tag);
+    return tag;
+  }
+
   async removeAll() {
-    for (const id of [...this.containers]) {
-      this.containers.delete(id);
-      await this.docker(["rm", "-f", id], { allowFailure: true, cleanup: true });
+    for (const owner of [...this.owners]) {
+      const listed = await this.docker(["ps", "-a", "-q", "--no-trunc", "--filter", `label=${owner}`], { allowFailure: true, cleanup: true });
+      if (listed.status !== 0) continue;
+      this.owners.delete(owner);
+      for (const id of listed.stdout.split("\n").map((line) => line.trim()).filter(Boolean)) {
+        await this.docker(["rm", "-f", id], { allowFailure: true, cleanup: true });
+      }
     }
     for (const image of [...this.images]) {
       this.images.delete(image);
@@ -171,10 +187,10 @@ export class RunResources {
 
 export async function startContainer(docker, resources, { name, tag, env, mounts }) {
   const envArgs = Object.entries(env).flatMap(([key, value]) => ["-e", `${key}=${value}`]);
-  const created = await docker(["create", "--name", name, ...envArgs, ...mounts, tag], { allowFailure: true });
+  const owner = resources.claimContainer();
+  const created = await docker(["create", "--name", name, "--label", owner, ...envArgs, ...mounts, tag], { allowFailure: true });
   const id = created.stdout.trim();
   if (created.status !== 0 || !/^[0-9a-f]{12,64}$/.test(id)) throw new Error(`docker create failed: ${created.stderr.trim() || id}`);
-  resources.containers.add(id);
   const started = await docker(["start", id], { allowFailure: true });
   if (started.status !== 0) throw new Error(`docker start failed: ${started.stderr.trim()}`);
   return id;
@@ -185,8 +201,7 @@ async function checkImage(build, { docker, resources, builder, socket, noCache, 
   if (!boot) throw new Error(`no boot check for ${build.dockerfile}; add one to BOOTS in scripts/check-docker-images.mjs`);
   const slug = build.dockerfile.replace(/\/Dockerfile$/, "").replace(/[^a-z0-9]+/gi, "-").toLowerCase();
   const buildImage = async ({ name, args, file, context }) => {
-    const tag = `conclave-check-images/${name}:${run}`;
-    resources.images.add(tag);
+    const tag = resources.claimImage(`conclave-check-images/${name}:${run}`);
     const built = await docker(["buildx", "build", "--builder", builder, "--load", "--progress=plain", ...(noCache ? ["--no-cache"] : []), ...args, ...(file ? ["-f", file] : []), "-t", tag, context], { allowFailure: true });
     const log = path.join(logDir, `${name}-build.log`);
     writeFileSync(log, `${built.stdout}${built.stderr}`);

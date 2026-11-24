@@ -20,7 +20,19 @@ else if (args[0] === "context" && args[1] === "inspect") {
   process.stdout.write(contexts[args[2]] + "\\n");
 } else if (args[0] === "buildx" && args[1] === "inspect") process.stdout.write(process.env.FAKE_DOCKER_BUILDER ?? "Name: default\\nDriver: docker\\n\\nNodes:\\nName: default\\nEndpoint: default\\nStatus: running\\n");
 else if (args[0] === "create" && process.env.FAKE_DOCKER_RUN_CONFLICT) { process.stderr.write("Conflict. The container name is already in use by container \\"0ther0ther0ther0\\".\\n"); process.exit(125); }
-else if (args[0] === "create") process.stdout.write("0123456789abcdef0123\\n");
+else if (args[0] === "create") {
+  const labels = args.flatMap((arg, i) => (args[i - 1] === "--label" ? [arg] : []));
+  fs.appendFileSync(process.env.FAKE_DOCKER_STATE, JSON.stringify({ id: "0123456789abcdef0123", labels }) + "\\n");
+  process.stdout.write("0123456789abcdef0123\\n");
+  if (process.env.FAKE_DOCKER_CREATE_HANG) {
+    for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { fs.appendFileSync(process.env.FAKE_DOCKER_LOG, JSON.stringify({ received: signal }) + "\\n"); process.exit(1); });
+    setInterval(() => {}, 1000);
+  }
+} else if (args[0] === "ps") {
+  const filter = args[args.indexOf("--filter") + 1].replace(/^label=/, "");
+  const state = fs.existsSync(process.env.FAKE_DOCKER_STATE) ? fs.readFileSync(process.env.FAKE_DOCKER_STATE, "utf8").trim().split("\\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
+  for (const container of state) if (container.labels.includes(filter)) process.stdout.write(container.id + "\\n");
+}
 else if (args[0] === "start" && process.env.FAKE_DOCKER_START_FAIL) { process.stderr.write("failed to create task for container: exec: \\"bad\\": executable file not found\\n"); process.exit(1); }
 else if (args[0] === "buildx" && args[1] === "build" && process.env.FAKE_DOCKER_BUILD_HANG && !fs.existsSync(process.env.FAKE_DOCKER_BUILD_HANG)) {
   fs.writeFileSync(process.env.FAKE_DOCKER_BUILD_HANG, "");
@@ -43,6 +55,7 @@ function fakeDocker(t, { contexts = {}, current = "default", ...extra } = {}) {
     PATH: `${path.join(dir, "bin")}${path.delimiter}${process.env.PATH}`,
     HOME: process.env.HOME,
     FAKE_DOCKER_LOG: log,
+    FAKE_DOCKER_STATE: path.join(dir, "containers.jsonl"),
     FAKE_DOCKER_CONTEXTS: JSON.stringify(contexts),
     FAKE_DOCKER_CURRENT: current,
     ...extra,
@@ -159,13 +172,17 @@ test("a custom DOCKER_CONFIG folder reaches every pinned docker call", async (t)
   assert.deepEqual(fake.calls().map((call) => [call.args[2], call.DOCKER_CONFIG, call.DOCKER_CONTEXT]), [["buildx", config, null], ["build", config, null]]);
 });
 
-test("a container that is created but fails to start is still removed by its id", async (t) => {
+test("a container that is created but fails to start is still removed by the id its owner label lists", async (t) => {
   const fake = fakeDocker(t, { FAKE_DOCKER_START_FAIL: "1" });
   const docker = pinnedDocker({ host: "unix:///var/run/docker.sock" }, fake.env);
   const resources = new RunResources(docker);
   await assert.rejects(startContainer(docker, resources, { name: "conclave-check-images-x", tag: "t", env: {}, mounts: [] }), /docker start failed: .*executable file not found/);
   await resources.removeAll();
-  assert.deepEqual(fake.calls().map((call) => call.args.slice(2, 5)), [["create", "--name", "conclave-check-images-x"], ["start", "0123456789abcdef0123"], ["rm", "-f", "0123456789abcdef0123"]]);
+  const calls = fake.calls().map((call) => call.args.slice(2));
+  const label = calls[0][calls[0].indexOf("--label") + 1];
+  assert.match(label, /^conclave-check-images\.owner=[0-9a-f]{24}$/);
+  assert.deepEqual(calls.map((args) => args.slice(0, 3)), [["create", "--name", "conclave-check-images-x"], ["start", "0123456789abcdef0123"], ["ps", "-a", "-q"], ["rm", "-f", "0123456789abcdef0123"]]);
+  assert.deepEqual(calls[2], ["ps", "-a", "-q", "--no-trunc", "--filter", `label=${label}`]);
 });
 
 test("only the docker driver on the checked endpoint is accepted as the builder", async (t) => {
@@ -182,13 +199,13 @@ test("only the docker driver on the checked endpoint is accepted as the builder"
   }
 });
 
-test("a container name conflict removes nothing, because containers are only removed by the id docker create returned", async (t) => {
+test("a container name conflict removes nothing, because containers are only removed through the owner label this run chose", async (t) => {
   const fake = fakeDocker(t, { FAKE_DOCKER_RUN_CONFLICT: "1" });
   const docker = pinnedDocker({ host: "unix:///var/run/docker.sock" }, fake.env);
   const resources = new RunResources(docker);
   await assert.rejects(startContainer(docker, resources, { name: "conclave-check-images-taken", tag: "t", env: {}, mounts: [] }), /docker create failed: Conflict/);
   await resources.removeAll();
-  assert.deepEqual(fake.calls().map((call) => call.args[2]), ["create"]);
+  assert.deepEqual(fake.calls().map((call) => call.args[2]), ["create", "ps"]);
 });
 
 test("every image build goes to the pinned local builder", async (t) => {
@@ -275,4 +292,19 @@ test("a failed image build skips its companion builds and its boot, and removes 
   assert.deepEqual(tags.map((tag) => tag.split(":")[0]), ["conclave-check-images/packages-sfu", "conclave-check-images/packages-shared-browser"]);
   const failed = calls.findIndex((args) => isBuild(args) && tagOf(args) === tags[1]);
   assert.deepEqual(calls.slice(failed + 1).map((args) => args.slice(2).join(" ")), [`rmi ${tags[1]}`]);
+});
+
+test("SIGTERM after docker create made the container but before it exited still removes that container", { timeout: 30_000 }, async (t) => {
+  const fake = fakeDocker(t, { contexts: { default: "unix:///run/fake-docker.sock" } });
+  const { child, exited } = runScript(t, { ...fake.env, FAKE_DOCKER_CREATE_HANG: "1" });
+  await waitFor(() => fake.calls().some((call) => call.args[2] === "create") && existsSync(fake.env.FAKE_DOCKER_STATE), "docker create");
+  await sleep(200);
+  child.kill("SIGTERM");
+  const { code, stderr } = await exited;
+  assert.equal(code, 143, stderr);
+  assert.deepEqual(fake.received(), ["SIGTERM"]);
+  const calls = fake.calls().map((call) => call.args.slice(2).join(" "));
+  const created = calls.findIndex((args) => args.startsWith("create "));
+  const tag = calls.find((args) => args.startsWith("buildx build ")).split(" -t ")[1].split(" ")[0];
+  assert.deepEqual(calls.slice(created + 1).map((args) => args.replace(/owner=[0-9a-f]+/, "owner=X")), ["ps -a -q --no-trunc --filter label=conclave-check-images.owner=X", "rm -f 0123456789abcdef0123", `rmi ${tag}`]);
 });
