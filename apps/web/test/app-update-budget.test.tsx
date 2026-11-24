@@ -454,6 +454,26 @@ describe("app updates stay inside the server's budget", () => {
     expect(older.partsSeen).toEqual([]);
   });
 
+  it("sends nothing before the first sync reply, and then only what the server lacks, once", async () => {
+    const server = new Y.Doc();
+    const sfu = budgetedSfu("dev-playground", server);
+    sfu.state.stagesParts = true;
+    sfu.state.syncDelayMs = 1_000;
+    await mount(sfu.socket, () => null, [{ id: "dev-playground", name: "Dev" } as never]);
+    const live = ctx.getDoc("dev-playground");
+
+    await act(async () => addItem(live, "early"));
+    await act(async () => setNotes(live, "n".repeat(300 * 1024)));
+    await advance(500);
+    expect(sfu.sentAt).toEqual([]);
+    await advance(2_000);
+
+    expect(sfu.reasons).toEqual([]);
+    expect(new Set(sfu.partsSeen.map((part) => part.id)).size).toBe(1);
+    expect(getItems(server)).toEqual(["early"]);
+    expect(getNotes(server)).toBe(getNotes(live));
+  });
+
   it("holds a large seeded document until the first sync says the server stages parts, then saves all of it", async () => {
     const seeded = "s".repeat(300 * 1024);
     const server = new Y.Doc();

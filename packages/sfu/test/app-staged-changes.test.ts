@@ -99,29 +99,64 @@ describe("app changes sent in parts", () => {
     ]);
   });
 
-  it("are refused when the socket moves to another room, or the app reopens, before the last part", async () => {
-    const room = await boardRoom("pinned");
-    const author = new Y.Doc();
-    const parts = inParts(bigChange(author, 20 * KIB, "r"), 10 * KIB);
-    const sendParts = (id: string, replicaId: string, from: number, to = parts.length) =>
-      parts.slice(from, to).forEach((part, offset) => room.send(part, replicaId, { id, index: from + offset, count: parts.length }));
+  const partsOf20Kib = (mark: string) => inParts(bigChange(new Y.Doc(), 20 * KIB, mark), 10 * KIB);
+  const sendRange = (room: Awaited<ReturnType<typeof boardRoom>>, parts: Uint8Array[], id: string, replicaId: string, from: number, to = parts.length) =>
+    parts.slice(from, to).forEach((part, offset) => room.send(part, replicaId, { id, index: from + offset, count: parts.length }));
 
-    sendParts("c", "copy-1", 0, 1);
-    await room.moveTo("pinned-elsewhere");
-    sendParts("c", "copy-1", 1);
-    expect(await settled(room)).toBe("");
+  it("are dropped the moment the socket asks to join another room, and later parts commit nowhere", async () => {
+    const room = await boardRoom("switch");
+    const parts = partsOf20Kib("r");
 
-    sendParts("d", "copy-2", 0, 1);
-    await room.close();
-    await room.open();
-    sendParts("d", "copy-2", 1);
-
-    expect(await settled(room)).toBe("");
-    expect(room.refused.map((refusal) => [refusal.replicaId, refusal.reason])).toEqual([
-      ["copy-1", "invalid"],
-      ["copy-2", "invalid"],
-    ]);
+    sendRange(room, parts, "c", "copy-1", 0, 1);
+    expect(room.state.appChangeStaging.used()).toBe(parts[0].length);
+    await room.moveTo("switch-elsewhere");
     expect(room.state.appChangeStaging.used()).toBe(0);
+    sendRange(room, parts, "c", "copy-1", 1);
+
+    expect(await settled(room)).toBe("");
+    expect(room.refused).toEqual([{ appId: "board", replicaId: "copy-1", reason: "invalid" }]);
+  });
+
+  it("are refused on their next part when the room changed by a path that never asked to join", async () => {
+    const room = await boardRoom("assigned");
+    const parts = partsOf20Kib("s");
+
+    sendRange(room, parts, "s", "copy-1", 0, 1);
+    await room.moveTo("assigned-elsewhere", { asksToJoin: false });
+    sendRange(room, parts, "s", "copy-1", 1);
+
+    expect(await settled(room)).toBe("");
+    expect(room.refused).toEqual([{ appId: "board", replicaId: "copy-1", reason: "invalid" }]);
+    expect(room.state.appChangeStaging.used()).toBe(0);
+  });
+
+  it("stop watching an old document once dropped, so closing it later leaves a newer change alone", async () => {
+    const room = await boardRoom("old-watch");
+    const old = partsOf20Kib("o");
+    const newer = partsOf20Kib("n");
+
+    sendRange(room, old, "a", "copy-1", 0, 1);
+    await room.moveTo("old-watch-elsewhere");
+    sendRange(room, newer, "b", "copy-2", 0, 1);
+    [...room.state.rooms.values()].find((candidate) => candidate.id === "old-watch")!.clearAppState("board");
+    expect(room.state.appChangeStaging.used()).toBe(newer[0].length);
+    sendRange(room, newer, "b", "copy-2", 1);
+
+    expect(await settled(room)).toBe("n".padEnd(20 * KIB, "n"));
+  });
+
+  it("are dropped the moment their document is replaced, and later parts commit nowhere", async () => {
+    const room = await boardRoom("replaced");
+    const parts = partsOf20Kib("d");
+
+    sendRange(room, parts, "d", "copy-2", 0, 1);
+    await room.close();
+    expect(room.state.appChangeStaging.used()).toBe(0);
+    await room.open();
+    sendRange(room, parts, "d", "copy-2", 1);
+
+    expect(await settled(room)).toBe("");
+    expect(room.refused).toEqual([{ appId: "board", replicaId: "copy-2", reason: "invalid" }]);
   });
 
   it("are dropped when the client sends a whole update before the last part", async () => {

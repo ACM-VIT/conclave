@@ -23,6 +23,7 @@ export type AppDocument = {
   apply: (update: Uint8Array) => Promise<ApplyResult>;
   applyAssembled: (update: Uint8Array) => Promise<ApplyResult>;
   sync: (stateVector: Uint8Array) => Promise<SyncResult>;
+  onClose: (listener: () => void) => () => void;
   close: () => void;
 };
 
@@ -481,6 +482,7 @@ export const createAppDocumentPool = ({
         if (refusal) settle({ ok: false, reason: refusal });
         else enqueue(entry, { kind: "apply", update: new Uint8Array(update), assembled, bytes: update.length, settle });
       });
+    const closeListeners = new Set<() => void>();
     return {
       apply: (update) => applyOne(update, false),
       applyAssembled: (update) => applyOne(update, true),
@@ -490,7 +492,16 @@ export const createAppDocumentPool = ({
           if (refusal) settle({ ok: false, reason: refusal });
           else enqueue(entry, { kind: "sync", stateVector: new Uint8Array(stateVector), bytes: stateVector.length, settle });
         }),
-      close: () => closeEntry(entry),
+      onClose: (listener) => {
+        closeListeners.add(listener);
+        return () => closeListeners.delete(listener);
+      },
+      close: () => {
+        closeEntry(entry);
+        const listeners = [...closeListeners];
+        closeListeners.clear();
+        for (const listener of listeners) listener();
+      },
     };
   };
 

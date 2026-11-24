@@ -534,6 +534,7 @@ export function AppsProvider({
           const updateForServer = Y.encodeStateAsUpdate(run.doc, serverVector);
           const serverState = Y.createSnapshot(Y.decodeUpdate(update).ds, Y.decodeStateVector(serverVector));
           const serverLacksSome = !Y.snapshotContainsUpdate(serverState, updateForServer);
+          uploads.drop(run.appId);
           if (serverLacksSome && !canWrite()) {
             unsentAppsRef.current.add(run.appId);
           } else if (serverLacksSome) {

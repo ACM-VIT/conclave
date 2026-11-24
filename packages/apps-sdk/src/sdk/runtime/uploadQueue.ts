@@ -50,11 +50,11 @@ export const createUploadQueue = (send: SendUpload, { stagesParts = () => false 
     const next = pending.entries().next();
     if (next.done) return;
     const [key, entry] = next.value;
+    const stages = stagesParts();
+    if (stages === null) return;
     const [first] = entry.items;
-    if (!first.part && first.update.length > APP_DOCUMENT_UPDATE_MAX_BYTES) {
-      const stages = stagesParts();
-      if (stages === null) return;
-      if (stages) entry.items.splice(0, 1, ...partsOf(first.update));
+    if (stages && !first.part && first.update.length > APP_DOCUMENT_UPDATE_MAX_BYTES) {
+      entry.items.splice(0, 1, ...partsOf(first.update));
     }
     const batch = entry.items.slice(0, takeBatch(entry.items));
     if (!send(entry.appId, entry.replicaId, merge(batch), batch[0].part)) return;

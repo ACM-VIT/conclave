@@ -250,11 +250,13 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     parts: Uint8Array[];
     bytes: number;
     idle?: ReturnType<typeof setTimeout>;
+    unwatch: () => void;
   };
   let staged: StagedChange | null = null;
   const dropStaged = (): void => {
     if (!staged) return;
     clearTimeout(staged.idle);
+    staged.unwatch();
     context.state.appChangeStaging.give(staged.bytes);
     staged = null;
   };
@@ -262,6 +264,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     for (const stop of [...openLegacySyncs]) stop();
     dropStaged();
   });
+  socket.on("joinRoom", () => dropStaged());
 
   const activeDocument = (room: Room, appId: string): AppDocument | null =>
     room.appsState.activeAppId === appId ? room.getOrCreateAppDoc(appId, documents) : null;
@@ -437,7 +440,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     const document = room.getOrCreateAppDoc(appId, documents);
     if (part.index === 0) {
       dropStaged();
-      staged = { document, appId, replicaId, id: part.id, count: part.count, parts: [], bytes: 0 };
+      staged = { document, appId, replicaId, id: part.id, count: part.count, parts: [], bytes: 0, unwatch: document.onClose(dropStaged) };
     }
     const change = staged;
     if (

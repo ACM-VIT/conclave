@@ -87,7 +87,8 @@ export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChang
     leave: () => {
       context.currentRoom = null;
     },
-    moveTo: async (otherId: string) => {
+    moveTo: async (otherId: string, { asksToJoin = true }: { asksToJoin?: boolean } = {}) => {
+      if (asksToJoin) listeners.get("joinRoom")?.({ roomId: otherId }, () => undefined);
       const other = new Room({ id: otherId, clientId: "conclave", workerPid: null, router: {} as Router });
       state.rooms.set(other.channelId, other);
       other.addClient(admin);
