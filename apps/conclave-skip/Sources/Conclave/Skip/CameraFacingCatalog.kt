@@ -55,14 +55,14 @@ internal class CameraFacingCatalog(
     }
 
     fun snapshotOrProbe(): CameraFacingNames {
-        current?.let { return it }
-        val names = probeOrNull() ?: return CameraFacingNames.none
+        current?.takeIf { it != CameraFacingNames.none }?.let { return it }
+        val names = probeOrNull() ?: return current ?: CameraFacingNames.none
         store(names)
         return names
     }
 
     private fun probeOrNull(): CameraFacingNames? =
-        try { probe().takeIf { it != CameraFacingNames.none } } catch (_: Throwable) { null }
+        try { probe() } catch (_: Throwable) { null }
 
     private fun store(names: CameraFacingNames) {
         val previous = current

@@ -95,15 +95,28 @@ class CameraFacingCatalogBridgeTests {
         assertEquals(1, h.changes)
     }
 
-    @Test fun anEmptyInventoryIsNotCachedAsFinal() {
+    @Test fun anEmptyInventoryIsReportedButNotCachedAsFinal() {
         val h = Harness(CameraFacingNames.none)
         h.catalog.refresh(); h.runBackground(); h.runMain()
-        assertNull(h.catalog.current)
+        assertEquals(CameraFacingNames.none, h.catalog.current)
+        assertEquals(1, h.changes)
+        val probes = h.probes
         assertFalse(h.catalog.snapshotOrProbe().canSwitch)
+        assertEquals(probes + 1, h.probes)
         h.names = both
         h.catalog.refresh(); h.runBackground(); h.runMain()
         assertEquals(both, h.catalog.current)
-        assertEquals(1, h.changes)
+        assertEquals(2, h.changes)
+    }
+
+    @Test fun aSuccessfulEmptyScanClearsStaleFacingsAndNotifies() {
+        val h = Harness(both)
+        h.catalog.refresh(); h.runBackground(); h.runMain()
+        assertTrue(h.catalog.current?.canSwitch == true)
+        h.names = CameraFacingNames.none
+        h.catalog.refresh(); h.runBackground(); h.runMain()
+        assertEquals(CameraFacingNames.none, h.catalog.current)
+        assertEquals(2, h.changes)
     }
 
     @Test fun snapshotOrProbeProbesOnlyWhenNothingIsCached() {
