@@ -2083,7 +2083,12 @@ export class Room {
     if (!client || !userKey || client.isWebinarAttendee) {
       return null;
     }
-    if (basis === "fallback" && this.handingOff) return null;
+    if (
+      basis === "fallback" &&
+      (this.handingOff || this.needsReadmission(userKey) || this.isBlocked(userKey))
+    ) {
+      return null;
+    }
     if (!(client instanceof Admin)) {
       Object.setPrototypeOf(client, Admin.prototype);
     }
