@@ -54,6 +54,7 @@ const LANGUAGES = ["ta", "hi", "bn"];
 const SAVE_FAILURE = "Snapshot write failed (injected).";
 const STEPS = 40;
 const POOL = 400;
+const realSetImmediate = globalThis.setImmediate.bind(globalThis);
 
 const VOICED = Array.from({ length: POOL }, (_, index) => pcmBase64(voicedPcm(-26, 200, 110 + index * 0.37)));
 const QUIET = Array.from({ length: POOL }, (_, index) => {
@@ -89,7 +90,7 @@ type Line = {
   epoch: number | null;
   heard: boolean;
   text: string;
-  place: { sequence: number };
+  place: { sequence: number; startMs: number };
 };
 type Ledger = {
   all(): Line[];
@@ -138,7 +139,7 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
   const random = randomFrom(seed);
   const pauseRandom = randomFrom(seed * 7919 + 17);
   const problems: string[] = [];
-  limit.bytes = bursts ? VOICED[0].length * LIMIT_CHUNKS : limit.real;
+  limit.bytes = bursts || mode.smallCap ? VOICED[0].length * LIMIT_CHUNKS : limit.real;
   vi.useFakeTimers();
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "info").mockImplementation(() => {});
@@ -189,6 +190,8 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
   const sent = new Map<string, Sent>();
   const order: Sent[] = [];
   const lastHolder = new Map<string, string>();
+  const audioAtOrder = new Map<number, string>();
+  const placedAt = new Map<string, number>();
   const shown = new Set<string>();
   const endedChunkLine = new Map<string, string>();
   const roomTurn = new Map<string, number>();
@@ -421,6 +424,30 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
       }
     }
     for (const chunk of room.transcriptionRecoveryAudio.chunks()) hold(chunk.audio, "buffered");
+    const learnOrder = (chunk: HeldChunk) => {
+      const order = (chunk as HeldChunk & { order?: number }).order;
+      if (order !== undefined) audioAtOrder.set(order, chunk.audio);
+    };
+    for (const line of room.ledger.all()) line.audio.forEach(learnOrder);
+    for (const [, pending] of room.uncommittedAudio) pending.chunks.forEach(learnOrder);
+    room.transcriptionRecoveryAudio.chunks().forEach(learnOrder);
+    for (const line of room.ledger.all()) {
+      const placeAudio = audioAtOrder.get(line.place.sequence);
+      if (!placeAudio) continue;
+      const placeInfo = sent.get(placeAudio);
+      if (placeInfo && line.place.startMs !== placeInfo.at) {
+        report(`${stage}: line ${line.id} starts at ${line.place.startMs}, not when its first audio reached the room (${placeInfo.at})`);
+      }
+      const before = placedAt.get(line.id);
+      if (before !== undefined && line.place.sequence > before) {
+        const firstAudio = audioAtOrder.get(before);
+        const nowHeldBy = firstAudio ? holders.get(firstAudio) : undefined;
+        if (!nowHeldBy || nowHeldBy === `line ${line.id}`) {
+          report(`${stage}: line ${line.id} moved from place ${before} to ${line.place.sequence} without giving its first audio to another line`);
+        }
+      }
+      placedAt.set(line.id, line.place.sequence);
+    }
     if (switchFloor >= 0) {
       const live = liveSocket();
       if (replacedAt === null && live && live.requestIndex >= switchFloor) {
@@ -571,9 +598,57 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
     }
   };
 
+  const owedAnswers = async (step: number) => {
+    const live = liveSocket();
+    const session = (room as unknown as {
+      liveConnection: { session: { awaitingFinal?: string[]; expiredSlots?: Map<string, number> } } | null;
+    }).liveConnection?.session;
+    if (!live || (session?.awaitingFinal?.length ?? 1) !== 0 || (session?.expiredSlots?.size ?? 1) !== 0) return;
+    await rig.endTurn(speaker);
+    turn += 1;
+    await vi.advanceTimersByTimeAsync(3_200);
+    check(`step ${step} owed answers start`);
+    if ((session?.awaitingFinal?.length ?? 1) !== 0) return;
+    for (let utterance = 0; utterance < 18; utterance += 1) {
+      speaker = speakers[utterance % speakers.length];
+      if (!(await sendChunk(true))) return;
+      check(`step ${step} owed utterance ${utterance}`);
+      live.emit(sarvamSpeechStart());
+      await rig.endTurn(speaker);
+      turn += 1;
+      await vi.advanceTimersByTimeAsync(500);
+      check(`step ${step} owed utterance ${utterance} ended`);
+    }
+    await vi.advanceTimersByTimeAsync(10_000);
+    speaker = speakers[Math.floor(random() * speakers.length)];
+    const freshSpeaker = speaker.userId;
+    if (!(await sendChunk(true))) return;
+    check(`step ${step} fresh utterance`);
+    live.emit(sarvamSpeechStart());
+    await rig.endTurn(speaker);
+    turn += 1;
+    await vi.advanceTimersByTimeAsync(DEADLINE - 2_000);
+    check(`step ${step} owed answers timed out`);
+    if (liveSocket() !== live) return;
+    for (let utterance = 0; utterance < 18; utterance += 1) live.emit(sarvamFinal(`late${step}`, `Late ${step} ${utterance}.`));
+    live.emit(sarvamFinal(`fresh${step}`, `Fresh ${step}.`));
+    await settle();
+    const seen = rig.viewerTranscript().segments;
+    const misplaced = seen.filter(({ text }) => text.startsWith(`Late ${step} `));
+    if (misplaced.length > 0) report(`step ${step}: an owed answer reached a newer line (${misplaced.map(({ text }) => text).join(", ")})`);
+    const fresh = seen.find(({ text }) => text === `Fresh ${step}.`);
+    if (!fresh || fresh.speakerUserId !== freshSpeaker) {
+      report(`step ${step}: the newest line's answer shows as ${fresh ? `${fresh.text} under ${fresh.speakerUserId}` : "nothing"}, not under ${freshSpeaker}`);
+    }
+  };
+
   const extendedEvent = async (step: number) => {
     if (mode.smallCap && openai && random() < 0.4) {
       await sameMillisecondLines(step);
+      return;
+    }
+    if (mode.smallCap && !openai && random() < 0.25) {
+      await owedAnswers(step);
       return;
     }
     const pick = random();
@@ -724,6 +799,9 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
   });
   for (let round = 0; round < 10 && !switchesSettled; round += 1) {
     await vi.advanceTimersByTimeAsync(DEADLINE + 1_000);
+    for (let spin = 0; spin < 50 && !switchesSettled; spin += 1) {
+      await new Promise((resolve) => realSetImmediate(resolve));
+    }
   }
   if (!switchesSettled) report("a language switch never settled");
   if (paused) await togglePause(STEPS);

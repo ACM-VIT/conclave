@@ -1291,7 +1291,7 @@ describe("Greptile: Sarvam answers and owed slots", () => {
     expect(session.awaitingFinal.length).toBeLessThanOrEqual(10);
   });
 
-  it("caps owed slots when many lines time out within a minute", async () => {
+  it("keeps every owed answer position for its whole window and refuses new heard lines once 16 are owed", async () => {
     vi.useFakeTimers();
     quiet();
     const room = await rig(SARVAM);
@@ -1309,7 +1309,11 @@ describe("Greptile: Sarvam answers and owed slots", () => {
     const session = (room.room as unknown as {
       liveConnection: { session: { expiredSlots: Map<string, number>; awaitingFinal: string[] } };
     }).liveConnection.session;
+    const now = Date.now();
 
-    expect(session.expiredSlots.size).toBeLessThanOrEqual(16);
+    expect(session.expiredSlots.size).toBeGreaterThan(16);
+    expect([...session.expiredSlots.values()].every((expiredAt) => now - expiredAt <= 60_000)).toBe(true);
+    expect([...session.expiredSlots.keys()].every((itemId) => session.awaitingFinal.includes(itemId))).toBe(true);
+    expect(room.savedTexts().filter((text) => text === GAP).length).toBeGreaterThan(16);
   });
 });

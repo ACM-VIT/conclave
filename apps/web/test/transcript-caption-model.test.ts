@@ -729,3 +729,108 @@ describe("the caption model: what each signal claims, what is shown and what is 
     expect(await testCase.run(rig)).toEqual(expected[testCase.thread]);
   });
 });
+
+type PlacedLine = { id: string; place: { sequence: number; startMs: number }; speaker: { userId: string } };
+const ledgerOf = (rig: Rig) =>
+  (rig.room as unknown as { ledger: { activeUnordered(): PlacedLine[] } }).ledger;
+const segmentOf = (rig: Rig, text: string) =>
+  (rig.room as unknown as { segments: { text: string; sequence: number; startMs: number; speakerUserId?: string }[] })
+    .segments.find((segment) => segment.text === text);
+const startRig = async (model: string) => {
+  vi.useFakeTimers();
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  const rig = await transcriptRoomRig(lookup, model);
+  await rig.start(model === OPENAI ? "en" : "hi");
+  return rig;
+};
+
+describe("a line's place and start come from its first audio and never move (Greptile at 52d2f420)", () => {
+  it("a long Sarvam caption keeps its first audio's place and start when the audio limit trims its oldest chunks", async () => {
+    const rig = await startRig(SARVAM);
+    const socket = await signalsActive(rig);
+    await rig.send({ type: "audio.chunk", audio: LONG_SPEECH, speaker: ada });
+    socket.emit(sarvamSpeechStart());
+    await settle();
+    const line = ledgerOf(rig).activeUnordered().find(({ speaker }) => speaker.userId === "ada")!;
+    const first = { ...line.place };
+    const chunks = Math.ceil((1.5 * REPLAY_AUDIO_LIMIT) / LONG_SPEECH.length);
+    for (let chunk = 0; chunk < chunks; chunk += 1) {
+      await vi.advanceTimersByTimeAsync(20);
+      await rig.send({ type: "audio.chunk", audio: LONG_SPEECH, speaker: ada });
+    }
+    expect(line.place).toEqual(first);
+
+    socket.emit(sarvamFinal("ada", "Ada long."));
+    await settle();
+    const segment = segmentOf(rig, "Ada long.")!;
+    expect([segment.sequence, segment.startMs]).toEqual([first.sequence, first.startMs]);
+  });
+
+  it("a caption from audio buffered during a slow reconnect starts when its speech reached the room", async () => {
+    const rig = await startRig(SARVAM);
+    const socket = await signalsActive(rig);
+    rig.connectPlans.push({ lateMs: 5_000 });
+    socket.disconnect();
+    await settle();
+    const reachedRoomAt = Date.now();
+    await rig.speak(ada);
+    await vi.advanceTimersByTimeAsync(7_000);
+    const replacement = rig.providerSockets().at(-1)!;
+    expect(replacement).not.toBe(socket);
+    replacement.emit(sarvamSpeechStart());
+    await rig.endTurn(ada);
+    replacement.emit(sarvamFinal("ada", "Ada buffered."));
+    await settle();
+
+    expect(segmentOf(rig, "Ada buffered.")?.startMs).toBe(reachedRoomAt);
+  });
+});
+
+describe("Sarvam answer positions stay open for their whole window (Greptile at 52d2f420)", () => {
+  const speakerFor = (index: number) => (index % 2 === 0 ? grace : ada);
+  const owe = async (rig: Rig, socket: { emit: (event: unknown) => void }, count: number) => {
+    for (let index = 0; index < count; index += 1) {
+      await rig.speak(speakerFor(index));
+      socket.emit(sarvamSpeechStart());
+      await rig.endTurn(speakerFor(index));
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+  };
+
+  it("never gives a late answer to a newer line after more than 16 lines time out with answers owed", async () => {
+    const rig = await startRig(SARVAM);
+    const socket = await signalsActive(rig);
+    await owe(rig, socket, 20);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await rig.speak(ada);
+    socket.emit(sarvamSpeechStart());
+    await rig.endTurn(ada);
+    await vi.advanceTimersByTimeAsync(DEADLINE - 2_000);
+    expect(shown(rig).filter(([text]) => text === GAP)).toHaveLength(20);
+    for (let index = 0; index < 20; index += 1) socket.emit(sarvamFinal("late", `Late ${index}.`));
+    socket.emit(sarvamFinal("fresh", "Fresh."));
+    await settle();
+
+    const texts = shown(rig).map(([text]) => text);
+    expect(texts.filter((text) => text.startsWith("Late"))).toEqual([]);
+    expect(shown(rig).at(-1)).toEqual(["Fresh.", "ada"]);
+  });
+
+  it("shows a new heard line as a gap at once while 16 answers are owed, and keeps later answers on their own lines", async () => {
+    const rig = await startRig(SARVAM);
+    const socket = await signalsActive(rig);
+    await owe(rig, socket, 17);
+    await rig.speak(ada);
+    socket.emit(sarvamSpeechStart());
+    await rig.endTurn(ada);
+    await vi.advanceTimersByTimeAsync(DEADLINE - 2_000);
+    const gapsBefore = shown(rig).filter(([text]) => text === GAP).length;
+    await rig.speak(grace);
+    socket.emit(sarvamSpeechStart());
+    await rig.endTurn(grace);
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(shown(rig).filter(([text]) => text === GAP).length).toBe(gapsBefore + 1);
+    expect(shown(rig).at(-1)).toEqual([GAP, "grace"]);
+  });
+});
