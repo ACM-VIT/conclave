@@ -3,13 +3,15 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { startCaseSfu, type CaseReply, type CaseSfu } from "./support/caseHarness.js";
+import { startCaseSfu, warmCaseModules, type CaseReply, type CaseSfu } from "./support/caseHarness.js";
 import { EMAIL_WORKER_URL, FakeEmail, FakeGoogle, Gates, installFakeFetch } from "./support/fakeServices.js";
 import { hasRedis, startRedis, type RedisServer } from "./support/redisServer.js";
 
 type Mode = "sqlite" | "json" | "redis";
 
 const HOST = { "x-user-id": "host-user", "x-user-email": "host@example.test", "x-user-name": "Host" };
+const CASE_TIMEOUT_MS = 15_000;
+vi.setConfig({ testTimeout: CASE_TIMEOUT_MS });
 const DAY_MS = 86_400_000;
 const HALF_HOUR = 1_800_000;
 const ALL_DAY = [0, 1, 2, 3, 4, 5, 6].map((day) => ({ day, startMinutes: 0, endMinutes: 24 * 60 }));
@@ -144,7 +146,8 @@ const legacySqlite = (build: (db: { exec: (sql: string) => void; prepare: (sql: 
 beforeAll(async () => {
   if (hasRedis) redis = await startRedis(6680);
   restoreFetch = installFakeFetch(() => google, () => email);
-});
+  await warmCaseModules();
+}, 120_000);
 
 afterAll(() => {
   restoreFetch();

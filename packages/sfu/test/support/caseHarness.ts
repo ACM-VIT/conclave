@@ -21,6 +21,22 @@ export const installSkewedClock = (): void => {
   Date.now = () => realNow() + (skew.getStore() ?? 0);
 };
 
+const loadSfuModules = () =>
+  Promise.all([
+    import("../../config/config.js"),
+    import("../../server/http/createApp.js"),
+    import("../../server/init.js"),
+    import("../../server/roomRegistry.js"),
+    import("../../server/scheduledWebinarScheduler.js"),
+    import("../../server/schedulingEmailReminders.js"),
+    import("../../server/state.js"),
+  ]);
+
+export const warmCaseModules = async (): Promise<void> => {
+  await loadSfuModules();
+  vi.resetModules();
+};
+
 export const startCaseSfu = async (
   name: string,
   options: { skewMs?: number } = {},
@@ -35,15 +51,7 @@ export const startCaseSfu = async (
     { advanceScheduledWebinars },
     { sendDueSchedulingEmailReminders },
     { createSfuState },
-  ] = await Promise.all([
-    import("../../config/config.js"),
-    import("../../server/http/createApp.js"),
-    import("../../server/init.js"),
-    import("../../server/roomRegistry.js"),
-    import("../../server/scheduledWebinarScheduler.js"),
-    import("../../server/schedulingEmailReminders.js"),
-    import("../../server/state.js"),
-  ]);
+  ] = await loadSfuModules();
   const offset = options.skewMs ?? 0;
   const state = createSfuState({
     roomRegistry: new LocalRoomRegistry({ instanceId: `case-${name}`, instanceUrl: "http://localhost", ttlMs: 45000 }),
