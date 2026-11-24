@@ -37,6 +37,7 @@ import {
   releaseAllRoomOwnerships,
   renewRoomOwnerships,
 } from "./rooms.js";
+import { handOffRooms } from "./serverShutdown.js";
 import { shutdownAnalytics } from "./analytics/posthog.js";
 import { createSfuState } from "./state.js";
 import type { SfuState } from "./state.js";
@@ -148,6 +149,7 @@ export const createSfuServer = (
   };
 
   const stop = async (): Promise<void> => {
+    handOffRooms(state);
     workerShutdown.abort();
     adminGateway.dispose();
     stopScheduledWebinarTimer(state);

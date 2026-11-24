@@ -342,6 +342,7 @@ export class Room {
   public onLostCallEnded: (() => void) | null = null;
   public awaitingOpener: { lost: LostRoom | null } | null = null;
   private lostCallEnded = false;
+  private handingOff = false;
   // A host ended the meeting for everyone. It may stay open a little longer
   // to say so, but it is over: it hands out no more recovery passes.
   private endedForEveryone = false;
@@ -2053,14 +2054,15 @@ export class Room {
 
   promoteClientToAdmin(userId: string, basis: Exclude<HostBasis, "owner">): Admin | null {
     const client = this.clients.get(userId);
-    if (!client || client.isWebinarAttendee) {
+    const userKey = this.userKeysById.get(userId);
+    if (!client || !userKey || client.isWebinarAttendee) {
       return null;
     }
+    if (basis === "fallback" && this.handingOff) return null;
     if (!(client instanceof Admin)) {
       Object.setPrototypeOf(client, Admin.prototype);
     }
-    const userKey = this.userKeysById.get(userId);
-    if (userKey) this.grantHost(userKey, basis);
+    this.grantHost(userKey, basis);
     this.notifyLifecycle("membership");
     return client as Admin;
   }
@@ -2729,6 +2731,18 @@ export class Room {
   // not one standing in for a lost call, and not one a host has ended.
   get recordsItsCall(): boolean {
     return this.awaitingOpener === null && this.restorer === null && !this.endedForEveryone;
+  }
+
+  beginHandOff(): void {
+    this.handingOff = true;
+  }
+
+  get isHandingOff(): boolean {
+    return this.handingOff;
+  }
+
+  get endsWhenEmpty(): boolean {
+    return this.recordsItsCall && !this.handingOff;
   }
 
   // `rosterKnown` is false when this SFU has no record of the lost call and

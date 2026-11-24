@@ -7,7 +7,7 @@ import { randomBytes } from "node:crypto";
 import cors from "cors";
 import express from "express";
 import type { Express, NextFunction, Request, Response } from "express";
-import type { Server as SocketIOServer, Socket } from "socket.io";
+import type { Server as SocketIOServer } from "socket.io";
 import { Admin } from "../../config/classes/Admin.js";
 import {
   MAX_CHAT_IMAGE_BYTES,
@@ -37,7 +37,7 @@ import {
 import { recordAdminAudit } from "../admin/adminAudit.js";
 import { createTranscriptSpectatorToken } from "../socket/handlers/transcriptHandlers.js";
 import { forceCloseRoom, getRoomChannelId, isCurrentRoom, markRoomEnded } from "../rooms.js";
-import { takeNextMeetingLobby } from "../nextMeetingLobby.js";
+import { forceDrainRooms } from "../serverShutdown.js";
 import { resolveCorsOrigins } from "../cors.js";
 import { secretsMatch } from "../secret.js";
 import { readBoolean, requestBody } from "../../utilities/untrusted.js";
@@ -444,68 +444,21 @@ export const createSfuApp = ({
       return;
     }
 
-    const rooms = Array.from(state.rooms.values());
-    const restartNotice = parseRestartNotice(notice);
-    const restartNoticeMs = parseRestartNoticeMs(noticeMs);
-    const connectedClients = rooms.reduce(
-      (total, room) => total + room.clients.size,
-      0,
-    );
-
-    const pendingSockets = new Set<Socket>();
-
-    for (const room of rooms) {
-      io.to(room.channelId).emit("serverRestarting", {
-        roomId: room.id,
-        message: restartNotice,
-        reconnecting: true,
-      });
-
-      for (const pending of room.pendingClients.values()) {
-        pendingSockets.add(pending.socket);
-      }
-    }
-    // Those waiting here for a meeting to open again reconnect too, and the
-    // usual route takes them to wherever it opens.
-    for (const lobby of state.nextMeetingLobbies.values()) {
-      for (const guest of lobby.guests.values()) {
-        pendingSockets.add(guest.socket);
-      }
-    }
-    for (const channelId of [...state.nextMeetingLobbies.keys()]) {
-      takeNextMeetingLobby(state, channelId);
-    }
-
-    for (const pendingSocket of pendingSockets) {
-      pendingSocket.emit("serverRestarting", {
-        message: restartNotice,
-        reconnecting: true,
-      });
-    }
-
-    if (restartNoticeMs > 0) {
-      await new Promise((resolve) => {
-        setTimeout(resolve, restartNoticeMs);
-      });
-    }
-
-    for (const room of rooms) {
-      io.in(room.channelId).disconnectSockets(true);
-    }
-    for (const pendingSocket of pendingSockets) {
-      pendingSocket.disconnect(true);
-    }
+    const drained = await forceDrainRooms(state, io, {
+      message: parseRestartNotice(notice),
+      noticeMs: parseRestartNoticeMs(noticeMs),
+    });
 
     Logger.warn(
-      `Forced drain executed for ${rooms.length} room(s), disconnecting ${connectedClients} active client(s).`,
+      `Forced drain executed for ${drained.rooms} room(s), disconnecting ${drained.clients} active client(s).`,
     );
 
     res.json({
       draining: state.isDraining,
       forced: true,
-      rooms: rooms.length,
-      clients: connectedClients,
-      noticeMs: restartNoticeMs,
+      rooms: drained.rooms,
+      clients: drained.clients,
+      noticeMs: parseRestartNoticeMs(noticeMs),
     });
   };
 

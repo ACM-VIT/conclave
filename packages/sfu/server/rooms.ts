@@ -189,7 +189,7 @@ export const renewLocalRoom = async (
     Logger.warn(
       `Discarding stale room with closed router: ${roomId} (${clientId})`,
     );
-    cleanupRoomState(state, channelId);
+    handOffRoomState(state, channelId);
     return null;
   }
   let ownership;
@@ -204,7 +204,7 @@ export const renewLocalRoom = async (
       Logger.warn(
         `Closing room ${roomId} (${clientId}) before its unconfirmed shared lease can expire`,
       );
-      cleanupRoomState(state, channelId);
+      handOffRoomState(state, channelId);
     }
     throw error;
   }
@@ -212,7 +212,7 @@ export const renewLocalRoom = async (
     Logger.warn(
       `Closing local room ${roomId} (${clientId}) because ownership belongs to ${ownership.owner.instanceId}`,
     );
-    cleanupRoomState(state, channelId);
+    handOffRoomState(state, channelId);
     throw new RoomOwnershipError(ownership.owner);
   }
   // The last client can leave during the renew await, which closes the room
@@ -355,6 +355,11 @@ const cleanupRoomState = (state: SfuState, channelId: string): Room | null => {
   return room;
 };
 
+const handOffRoomState = (state: SfuState, channelId: string): Room | null => {
+  state.rooms.get(channelId)?.beginHandOff();
+  return cleanupRoomState(state, channelId);
+};
+
 /**
  * Whether `room` is still the room registered for its channel. A delayed
  * close armed for one room must not touch a newer room that was reopened on
@@ -366,7 +371,7 @@ export const isCurrentRoom = (
 ): boolean => state.rooms.get(room.channelId) === room;
 
 export const forceCloseRoom = (state: SfuState, channelId: string): boolean => {
-  const room = cleanupRoomState(state, channelId);
+  const room = handOffRoomState(state, channelId);
   if (!room) {
     return false;
   }
@@ -383,7 +388,7 @@ export const cleanupStaleRoom = (
     return false;
   }
 
-  cleanupRoomState(state, channelId);
+  handOffRoomState(state, channelId);
   Logger.warn(
     `Discarded stale room with closed router: ${room.id} (${room.clientId})`,
   );
@@ -405,7 +410,7 @@ export const cleanupRoom = (state: SfuState, channelId: string): boolean => {
   }
   // An emptied room's meeting is over. Not so for a room that only stood in
   // for a lost call, or one a host ended, which was over already.
-  if (closedRoom.recordsItsCall) {
+  if (closedRoom.endsWhenEmpty) {
     noteMeetingOver(state, closedRoom);
   }
   // Those knocking on a meeting a host ended were told so, and are let go.
@@ -424,7 +429,7 @@ export const renewRoomOwnerships = async (state: SfuState): Promise<void> => {
       Logger.warn(
         `Cleaning up room ${room.id} (${room.clientId}) with closed router during ownership renewal`,
       );
-      cleanupRoomState(state, room.channelId);
+      handOffRoomState(state, room.channelId);
       continue;
     }
 
@@ -440,7 +445,7 @@ export const renewRoomOwnerships = async (state: SfuState): Promise<void> => {
         Logger.warn(
           `Closing room ${room.id} (${room.clientId}) before its unconfirmed shared lease can expire`,
         );
-        cleanupRoomState(state, room.channelId);
+        handOffRoomState(state, room.channelId);
         continue;
       }
       throw error;
@@ -452,7 +457,7 @@ export const renewRoomOwnerships = async (state: SfuState): Promise<void> => {
     Logger.warn(
       `Closing room ${room.id} (${room.clientId}) because ownership moved to ${ownership.owner.instanceId}`,
     );
-    cleanupRoomState(state, room.channelId);
+    handOffRoomState(state, room.channelId);
   }
   await followMeetingsOpenedElsewhere(state);
 };

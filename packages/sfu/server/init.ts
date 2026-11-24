@@ -29,7 +29,7 @@ const wait = (ms: number): Promise<void> =>
     setTimeout(resolve, ms);
   });
 
-const cleanupDeadWorkerRooms = async (
+export const cleanupDeadWorkerRooms = async (
   state: SfuState,
   io: SocketIOServer | null,
   worker: Worker,
