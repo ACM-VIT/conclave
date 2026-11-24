@@ -664,4 +664,28 @@ describe("a relay start this tab no longer wants", () => {
     expect(controller.error).toBeNull();
     expect(socket.sent.map(({ type }) => type)).not.toContain("session.relayFailed");
   });
+
+  it("keeps the relay status it had at Stop when a start's success arrives afterwards", async () => {
+    const socket = await mount();
+    await act(async () => socket.frame({ type: "session.state", session: liveSession }));
+    const answerFirst = holdFirstRelayStart();
+
+    let hindi!: Promise<boolean>;
+    await act(async () => {
+      hindi = controller.takeover({ language: "hi" });
+    });
+    await acceptSwitch(socket, "hi", 2, "relay-hi");
+    await act(async () => {
+      void controller.stop();
+    });
+    const statusAtStop = controller.sfuRelayStatus;
+    await act(async () => answerFirst({ mode: "sfu", success: true, status: "running", updatedAt: 9 }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_000);
+    });
+
+    expect(await hindi).toBe(false);
+    expect(startRelay).toHaveBeenCalledTimes(1);
+    expect(controller.sfuRelayStatus).toEqual(statusAtStop);
+  });
 });
