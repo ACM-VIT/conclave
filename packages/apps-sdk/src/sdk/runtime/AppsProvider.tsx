@@ -28,6 +28,8 @@ import type {
 } from "../types/index";
 import { classifySyncReply } from "./syncReply";
 import { createUploadQueue } from "./uploadQueue";
+import { savedSizeStaysUnder } from "./documentSize";
+import { APP_DOCUMENT_MAX_BYTES, APP_DOCUMENT_UPDATE_MAX_BYTES } from "../limits";
 
 export const AppsContext = createContext<AppsContextValue | null>(null);
 
@@ -220,7 +222,13 @@ export function AppsProvider({
         currentSocket.emit("apps:yjs:update", payload);
         return true;
       },
-      { stagesParts: () => stagesPartsRef.current },
+      {
+        stagesParts: () => stagesPartsRef.current,
+        canMerge: (appId) => {
+          const doc = docsRef.current.get(appId);
+          return doc !== undefined && savedSizeStaysUnder(doc, APP_DOCUMENT_MAX_BYTES - APP_DOCUMENT_UPDATE_MAX_BYTES);
+        },
+      },
     )
   );
   const automaticWritesRef = useRef<Map<string, Map<string, AutomaticWrite>>>(new Map());

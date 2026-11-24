@@ -7,7 +7,7 @@ type Pending = { appId: string; replicaId: string | undefined; items: Item[] };
 
 export type SendUpload = (appId: string, replicaId: string | undefined, update: Uint8Array, part?: AppsUpdatePart) => boolean;
 
-export type UploadQueueOptions = { stagesParts?: () => boolean | null };
+export type UploadQueueOptions = { stagesParts?: () => boolean | null; canMerge?: (appId: string) => boolean };
 
 export type UploadQueue = {
   add: (appId: string, replicaId: string | undefined, update: Uint8Array) => void;
@@ -27,7 +27,7 @@ const partsOf = (update: Uint8Array): Item[] => {
   }));
 };
 
-const takeBatch = (items: Item[]): number => {
+const takeBatch = (items: Item[], canMerge: () => boolean): number => {
   if (items[0].part) return 1;
   let bytes = items[0].update.length;
   let count = 1;
@@ -35,12 +35,15 @@ const takeBatch = (items: Item[]): number => {
     bytes += items[count].update.length;
     count += 1;
   }
-  return count;
+  return count > 1 && !canMerge() ? 1 : count;
 };
 
 const merge = (items: Item[]): Uint8Array => (items.length === 1 ? items[0].update : Y.mergeUpdates(items.map((item) => item.update)));
 
-export const createUploadQueue = (send: SendUpload, { stagesParts = () => false }: UploadQueueOptions = {}): UploadQueue => {
+export const createUploadQueue = (
+  send: SendUpload,
+  { stagesParts = () => false, canMerge = () => true }: UploadQueueOptions = {},
+): UploadQueue => {
   const pending = new Map<string, Pending>();
   let lastSentAt = Number.NEGATIVE_INFINITY;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -56,7 +59,7 @@ export const createUploadQueue = (send: SendUpload, { stagesParts = () => false 
     if (stages && !first.part && first.update.length > APP_DOCUMENT_UPDATE_MAX_BYTES) {
       entry.items.splice(0, 1, ...partsOf(first.update));
     }
-    const batch = entry.items.slice(0, takeBatch(entry.items));
+    const batch = entry.items.slice(0, takeBatch(entry.items, () => canMerge(entry.appId)));
     if (!send(entry.appId, entry.replicaId, merge(batch), batch[0].part)) return;
     entry.items.splice(0, batch.length);
     if (entry.items.length === 0) pending.delete(key);

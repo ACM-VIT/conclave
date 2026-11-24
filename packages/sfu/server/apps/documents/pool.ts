@@ -1,9 +1,10 @@
 import { Worker } from "node:worker_threads";
+import { APP_DOCUMENT_MAX_BYTES, APP_DOCUMENT_UPDATE_MAX_BYTES } from "@conclave/apps-sdk/limits";
 import { Logger } from "../../../utilities/loggers.js";
 import type { FromWorker, Operation, ToWorker } from "./engine.js";
 
-export const MAX_APP_DOCUMENT_BYTES = 1024 * 1024;
-export const MAX_APP_UPDATE_BYTES = 256 * 1024;
+export const MAX_APP_DOCUMENT_BYTES = APP_DOCUMENT_MAX_BYTES;
+export const MAX_APP_UPDATE_BYTES = APP_DOCUMENT_UPDATE_MAX_BYTES;
 
 export type Refusal =
   | "too-large"
