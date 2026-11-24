@@ -3042,6 +3042,17 @@ export class Room {
     );
   }
 
+  hasLiveHostSeat(userKey: string, guestProof?: string, link?: GuestLinkPlan): boolean {
+    for (const [seatId, client] of this.clients) {
+      if (!(client instanceof Admin) || client.isObserver || !client.socket.connected) continue;
+      const key = this.userKeysById.get(seatId);
+      if (key !== undefined && this.guestHolds([key], userKey, guestProof, rightsPassesOf(link))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /** Whether the guest behind `userKey` is the host. A blocked guest never is. */
   isHostUserKey(
     userKey: string,

@@ -990,10 +990,12 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           !isWebinarAttendeeJoin &&
           !needsReadmission &&
           room.isAdminUserKey(userKey, roomGuestProof, guestLink);
+        const holdsLiveHostSeat = room.hasLiveHostSeat(userKey, roomGuestProof, guestLink);
         const isAdminForExistingRoom =
           !isWebinarAttendeeJoin &&
           (isReturningPrimaryHost ||
             isPersistedAdminForExistingRoom ||
+            holdsLiveHostSeat ||
             isCodeOwner ||
             (hostRequested &&
               (clientPolicy.allowHostJoin || forcedHostJoin)));
@@ -1156,7 +1158,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         }
         if (
           !isWebinarAttendeeJoin &&
-          room.isLocked &&
+          (room.isLocked || needsReadmission) &&
           !hasPrivilegedJoinAccess &&
           !isWebinarPromotedJoin &&
           !isInvitedJoin &&
