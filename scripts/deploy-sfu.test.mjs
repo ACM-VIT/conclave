@@ -780,8 +780,10 @@ test("a serving container whose env Docker cannot read is never taken for one th
   // boot drained".
   await withSfus({ "sfu-a": { rooms: 1 }, "sfu-b": { rooms: 0, envInspectFails: true } }, async (sfus) => {
     const result = await deploy(sfus, { env: { SFU_DEPLOY_SERVICES: "sfu-b", DEPLOY_TEST_NO_BUNDLE: "sha256:target" } });
-    assert.equal(result.code, 5, result.output);
-    assert.match(result.output, /sfu-b has no image it last served calls on; it is stopped/);
+    assert.equal(result.code, 1, result.output);
+    assert.match(result.output, /sfu-b is not serving \(Docker cannot read its container's env\) and no image it served on is on record/);
+    assert.equal(sfus["sfu-b"].drains.length, 0, "it is not drained");
+    assert.equal(sfus["sfu-b"].recreates.length, 0, "it keeps running as it is");
     assert.equal(sfus["sfu-a"].drains.length, 0);
   });
 });
