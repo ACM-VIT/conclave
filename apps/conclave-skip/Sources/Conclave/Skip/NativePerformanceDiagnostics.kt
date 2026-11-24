@@ -67,6 +67,7 @@ object NativePerformanceDiagnostics {
     private const val FILE_PROVIDER_SUFFIX = ".fileprovider"
 
     private const val PROCESS_STATE_SUMMARY_BYTES = 128
+    private const val MAX_TOMBSTONE_BYTES = 2 * 1024 * 1024
     private const val MAX_TRACE_LINES = 2_000
     private const val MAX_TRACE_LINE_LENGTH = 240
     private const val SAFE_THREAD_NAME_CHARACTERS =
@@ -227,9 +228,19 @@ object NativePerformanceDiagnostics {
         }
     }
 
-    internal fun processStateSummary(callSession: Int, phase: String): ByteArray {
-        val bytes = "s=$callSession;p=$phase".toByteArray(Charsets.UTF_8)
+    /** The release rides along so an exit collected after an update is still filed under the release that exited. */
+    internal fun processStateSummary(callSession: Int, phase: String, version: String = appVersion()): ByteArray {
+        val safeVersion = version.filter { it != ';' && it != '=' }
+        val bytes = "s=$callSession;p=$phase;v=$safeVersion".toByteArray(Charsets.UTF_8)
         return if (bytes.size > PROCESS_STATE_SUMMARY_BYTES) bytes.copyOf(PROCESS_STATE_SUMMARY_BYTES) else bytes
+    }
+
+    internal fun parseProcessStateVersion(bytes: ByteArray?): String {
+        if (bytes == null || bytes.isEmpty()) return ""
+        for (part in String(bytes, Charsets.UTF_8).split(";")) {
+            if (part.startsWith("v=")) return part.substring(2)
+        }
+        return ""
     }
 
     internal fun parseProcessStateSummary(bytes: ByteArray?): Pair<Int, String> {
@@ -301,6 +312,8 @@ object NativePerformanceDiagnostics {
     internal fun installDiagnosticsListeners(store: DiagnosticsFileStore) {
         if (diagnosticsListenersInstalled) return
         diagnosticsListenersInstalled = true
+        AndroidCrashCapture.install(store)
+        stampProcessState(0, "launch")
         val register = {
             ProcessLifecycleOwner.get().lifecycle.addObserver(backgroundObserver)
             if (AndroidRuntimeConfig.isDebuggable()) {
@@ -340,7 +353,11 @@ object NativePerformanceDiagnostics {
                 if (info.timestamp <= last) continue
                 if (info.timestamp > newest) newest = info.timestamp
                 val summary = parseProcessStateSummary(info.processStateSummary)
-                val trace = if (info.reason == ApplicationExitInfo.REASON_ANR) readAnrTrace(info) else ""
+                val trace = when (info.reason) {
+                    ApplicationExitInfo.REASON_ANR -> readAnrTrace(info)
+                    ApplicationExitInfo.REASON_CRASH_NATIVE -> readNativeCrashTrace(info, summary.second)
+                    else -> ""
+                }
                 store.writePayload(
                     DiagnosticsPayloadFactory.exitRecord(
                         reason = exitReasonName(info.reason),
@@ -352,15 +369,40 @@ object NativePerformanceDiagnostics {
                         summarySession = summary.first,
                         summaryPhase = summary.second,
                         traceJSON = trace,
+                        appVersion = parseProcessStateVersion(info.processStateSummary),
                     )
                 )
             }
             if (newest > last) {
                 prefs.edit().putLong(PREF_LAST_EXIT_TIMESTAMP, newest).apply()
+                CrashReporting.scheduleUpload(afterMillis = 1_000)
             }
         } catch (error: Throwable) {
             if (verboseLogsEnabled()) Log.w(DIAG_TAG, "exit reasons unavailable: ${error.javaClass.simpleName}")
         }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.R)
+    private fun readNativeCrashTrace(info: ApplicationExitInfo, phase: String): String {
+        return try {
+            val bytes = info.traceInputStream?.use { input -> readCapped(input, MAX_TOMBSTONE_BYTES) } ?: return ""
+            val exception = TombstoneTrace.exception(bytes) ?: return ""
+            CrashCaptureRecord.detailJSON(exceptions = skip.lib.Array(listOf(exception)), breadcrumbs = skip.lib.Array(listOf<String>()),
+                phase = phase)
+        } catch (_: Throwable) {
+            ""
+        }
+    }
+
+    private fun readCapped(input: java.io.InputStream, limit: Int): ByteArray {
+        val output = java.io.ByteArrayOutputStream()
+        val buffer = ByteArray(16 * 1024)
+        while (output.size() < limit) {
+            val read = input.read(buffer, 0, minOf(buffer.size, limit - output.size()))
+            if (read <= 0) break
+            output.write(buffer, 0, read)
+        }
+        return output.toByteArray()
     }
 
     @RequiresApi(Build.VERSION_CODES.R)
@@ -571,5 +613,8 @@ fun DiagnosticsFixtureReadouts(modifier: Modifier = Modifier) {
             diagnostics.debugSimulateHang(milliseconds = 6_000)
             tick += 1
         }, modifier = Modifier.testTag("sys.diagTestHang")) { Text(conclaveString("sys_diag_fixture_hang")) }
+        TextButton(onClick = {
+            AndroidCrashCapture.debugForceCrash()
+        }, modifier = Modifier.testTag("sys.diagTestCrash")) { Text(conclaveString("sys_diag_fixture_crash")) }
     }
 }

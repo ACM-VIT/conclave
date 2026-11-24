@@ -293,7 +293,7 @@ enum DiagnosticsPayloadFactory {
 
     static func exitRecord(reason: String, timestampMillis: Double, importance: Int, status: Int, pssKb: Double,
                            rssKb: Double, summarySession: Int, summaryPhase: String,
-                           traceJSON: String) -> DiagnosticsStoredPayload {
+                           traceJSON: String, appVersion: String = "") -> DiagnosticsStoredPayload {
         var fields: [DiagnosticsField] = [
             number("importance", Double(importance)),
             number("status", Double(status)),
@@ -306,6 +306,9 @@ enum DiagnosticsPayloadFactory {
         }
         if DiagnosticsRedactionPolicy.isAllowedPhase(summaryPhase), let phaseField = text("summaryPhase", summaryPhase) {
             fields.append(phaseField)
+        }
+        if let versionField = text("appVersion", appVersion) {
+            fields.append(versionField)
         }
         return payload(kind: DiagnosticsPayloadKind.exitReason, createdAtMillis: timestampMillis, fields: fields,
                        detailJSON: traceJSON)
