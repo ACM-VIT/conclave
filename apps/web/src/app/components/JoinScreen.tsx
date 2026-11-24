@@ -67,6 +67,7 @@ import {
   MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
   MEDIA_CAPTURE_RECOVERY_TIMEOUT_MS,
 } from "../lib/media-capture-timeout";
+import { captureGeneration, isCaptureReleased } from "../lib/media-captures";
 import { prewarmVideoEffectsAssetsDeferred } from "../lib/video-effects-lazy";
 import type { VideoEffectsBridgeState } from "./VideoEffectsBridge";
 import {
@@ -607,6 +608,7 @@ function JoinScreen({
     );
     setIsRequestingPermissions(true);
     setPermissionRequestError(null);
+    const generation = captureGeneration();
     try {
       const videoConstraints = wantsVideo
         ? getPrejoinVideoConstraints(shouldRunPreviewVideoEffects)
@@ -623,6 +625,7 @@ function JoinScreen({
         {
           label: "prejoin microphone and camera permission request",
           timeoutMs: MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
+          generation,
         },
       );
       commitRequestedPrejoinTracks(
@@ -631,6 +634,7 @@ function JoinScreen({
         requestGeneration,
       );
     } catch (err) {
+      if (isCaptureReleased(err)) return;
       warnJoinMedia("get_user_media_full_failed", {
         error:
           err instanceof Error
@@ -644,6 +648,7 @@ function JoinScreen({
           {
             label: "prejoin microphone fallback permission request",
             timeoutMs: MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
+            generation,
           },
         ),
         wantsVideo &&
@@ -656,6 +661,7 @@ function JoinScreen({
               {
                 label: "prejoin camera fallback permission request",
                 timeoutMs: MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
+                generation,
               },
             )
           : Promise.resolve(new MediaStream()),

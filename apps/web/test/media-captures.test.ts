@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   captureDisplayMedia,
+  captureGeneration,
   captureUserMedia,
+  isCaptureReleased,
   onCapturesReleased,
   releaseAllCaptures,
 } from "../src/app/lib/media-captures";
@@ -77,6 +79,26 @@ describe("the capture ledger", () => {
     }
     expect(created).toHaveLength(3);
     expect(live()).toEqual([]);
+  });
+
+  it("refuses a capture asked for under an ended generation without calling the browser", async () => {
+    const getUserMedia = vi.fn(() => grant("camera"));
+    const getDisplayMedia = vi.fn(() => grant("screen"));
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia, getDisplayMedia } });
+    const generation = captureGeneration();
+
+    releaseAllCaptures();
+
+    await expect(captureUserMedia({ audio: true }, generation)).rejects.toSatisfy(isCaptureReleased);
+    await expect(captureDisplayMedia({ video: true }, generation)).rejects.toSatisfy(isCaptureReleased);
+    await expect(
+      getUserMediaWithTimeout({ audio: true }, { label: "Microphone", timeoutMs: 60000, generation }),
+    ).rejects.toSatisfy(isCaptureReleased);
+    expect(getUserMedia).not.toHaveBeenCalled();
+    expect(getDisplayMedia).not.toHaveBeenCalled();
+
+    await captureUserMedia({ audio: true });
+    expect(getUserMedia).toHaveBeenCalledOnce();
   });
 
   it("serves captures asked for after a release, and releases them at the next ending", async () => {

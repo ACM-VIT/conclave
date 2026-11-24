@@ -34,7 +34,7 @@ import {
   MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
   MEDIA_CAPTURE_RECOVERY_TIMEOUT_MS,
 } from "../lib/media-capture-timeout";
-import { captureDisplayMedia } from "../lib/media-captures";
+import { captureDisplayMedia, captureGeneration, isCaptureReleased } from "../lib/media-captures";
 import {
   clearMediaDeviceError,
   createMediaDeviceError,
@@ -2023,6 +2023,7 @@ export function useMeetMedia({
     }, 450);
 
     try {
+      const generation = captureGeneration();
       const wantsAudio = options.audio ?? true;
       const wantsVideo = options.video ?? !isCameraOff;
       const audioRequired = options.audioRequired ?? !isMuted;
@@ -2069,6 +2070,7 @@ export function useMeetMedia({
           {
             label: "local media permission request",
             timeoutMs: MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
+            generation,
           },
         );
       };
@@ -2089,6 +2091,11 @@ export function useMeetMedia({
         reusable: { audio: reusableAudioTrack, video: reusableVideoTrack },
         prepareAudio: prepareAudioPublishTrack,
       });
+      if (generation !== captureGeneration()) {
+        const fresh = settled.audio === reusableAudioTrack ? [] : [settled.audio];
+        [...acquiredTracks, ...fresh].forEach((track) => stopLocalTrack(track));
+        return null;
+      }
       const nextAudioTrack = settled.audio;
       const nextVideoTrack = settled.video;
       if (settled.audioFailure !== undefined) failures.microphone = settled.audioFailure;
@@ -2167,6 +2174,7 @@ export function useMeetMedia({
     setMediaError,
     setIsCameraOff,
     setIsMuted,
+    stopLocalTrack,
   ]);
 
   const handleAudioInputDeviceChange = useCallback(
@@ -2582,6 +2590,7 @@ export function useMeetMedia({
               ? currentTrack.getSettings().deviceId
               : undefined;
           let newStream: MediaStream;
+          const generation = captureGeneration();
           try {
             newStream = await getUserMediaWithTimeout(
               {
@@ -2596,10 +2605,11 @@ export function useMeetMedia({
               {
                 label: "camera quality-switch reopen",
                 timeoutMs: MEDIA_CAPTURE_RECOVERY_TIMEOUT_MS,
+                generation,
               },
             );
           } catch (err) {
-            if (!currentDeviceId) throw err;
+            if (!currentDeviceId || isCaptureReleased(err)) throw err;
             console.warn(
               "[Meets] Camera reopen with current device failed, retrying default device:",
               err,
@@ -2609,6 +2619,7 @@ export function useMeetMedia({
               {
                 label: "camera quality-switch fallback reopen",
                 timeoutMs: MEDIA_CAPTURE_RECOVERY_TIMEOUT_MS,
+                generation,
               },
             );
           }
@@ -5807,6 +5818,7 @@ export function useMeetMedia({
       const screenPublishSettings = getScreenSharePublishSettings();
 
       let captureController = createCaptureController();
+      const generation = captureGeneration();
       const displayVideoConstraints: DisplayMediaVideoConstraints = {
         cursor: screenPublishSettings.cursor,
       };
@@ -5825,7 +5837,7 @@ export function useMeetMedia({
             : {}),
           ...(controller ? { controller } : {}),
         };
-        return captureDisplayMedia(options);
+        return captureDisplayMedia(options, generation);
       };
 
       let stream: MediaStream;
@@ -5835,7 +5847,7 @@ export function useMeetMedia({
           captureController,
         );
       } catch (err) {
-        if (!isDisplayMediaConstraintRetryableError(err)) {
+        if (isCaptureReleased(err) || !isDisplayMediaConstraintRetryableError(err)) {
           throw err;
         }
         captureController = null;
