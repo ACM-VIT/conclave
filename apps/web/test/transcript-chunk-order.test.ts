@@ -137,6 +137,7 @@ const runOnce = async (seed: number, extended = false): Promise<string[]> => {
   const roomTurn = new Map<string, number>();
   const runOf = new Map<number, number>();
   const removed = new Set<string>();
+  const everHeld = new Set<string>();
   const ledger = room.ledger;
   const end = ledger.end.bind(ledger);
   ledger.end = (line, ...rest) => {
@@ -164,22 +165,28 @@ const runOnce = async (seed: number, extended = false): Promise<string[]> => {
   const switches: Promise<unknown>[] = [];
   if (extended) {
     const put = room.state.storage.put.bind(room.state.storage);
-    room.state.storage.put = async (key, value) => {
+    let writes: Promise<unknown> = Promise.resolve();
+    room.state.storage.put = (key, value) => {
       const segments = (value as { segments?: { itemId: string; text: string }[] }).segments ?? [];
       const forms = new Map(segments.map(({ itemId, text }) => [itemId, text === GAP ? "gap" : "words"]));
+      const { delayMs, fail } = saveMode;
       savesInFlight += 1;
-      try {
-        if (saveMode.delayMs > 0) await new Promise((resolve) => setTimeout(resolve, saveMode.delayMs));
-        if (saveMode.fail) throw new Error(SAVE_FAILURE);
-        await put(key, value);
-        savedForms = forms;
-        lastSaveFailed = false;
-      } catch (error) {
-        lastSaveFailed = true;
-        throw error;
-      } finally {
-        savesInFlight -= 1;
-      }
+      const write = writes.then(async () => {
+        try {
+          if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+          if (fail) throw new Error(SAVE_FAILURE);
+          await put(key, value);
+          savedForms = forms;
+          lastSaveFailed = false;
+        } catch (error) {
+          lastSaveFailed = true;
+          throw error;
+        } finally {
+          savesInFlight -= 1;
+        }
+      });
+      writes = write.catch(() => undefined);
+      return write;
     };
   }
 
@@ -269,6 +276,18 @@ const runOnce = async (seed: number, extended = false): Promise<string[]> => {
       lastInUnownedRun.set(runStart, info.at);
       runOf.set(info.index, runStart);
     });
+    for (const audio of holders.keys()) everHeld.add(audio);
+    for (const audio of shown) everHeld.add(audio);
+    if (extended) {
+      for (const info of order) {
+        if (!info.voiced || info.index >= order.length - 1) continue;
+        const audio = VOICED[info.index];
+        if (!everHeld.has(audio) && !delivered.has(audio)) {
+          report(`${stage}: ${describeChunk(info)} was dropped on arrival`);
+          everHeld.add(audio);
+        }
+      }
+    }
     const activeLines = new Set(room.ledger.activeUnordered().map(({ id }) => `line ${id}`));
     for (const [audio, holder] of lastHolder) {
       if (holders.has(audio) || shown.has(audio)) continue;
@@ -444,8 +463,14 @@ const runOnce = async (seed: number, extended = false): Promise<string[]> => {
   }
   saveMode.delayMs = 0;
   saveMode.fail = false;
-  await vi.advanceTimersByTimeAsync(DEADLINE + 1_000);
-  await Promise.all(switches);
+  let switchesSettled = false;
+  void Promise.all(switches).then(() => {
+    switchesSettled = true;
+  });
+  for (let round = 0; round < 10 && !switchesSettled; round += 1) {
+    await vi.advanceTimersByTimeAsync(DEADLINE + 1_000);
+  }
+  if (!switchesSettled) report("a language switch never settled");
   await vi.advanceTimersByTimeAsync(DEADLINE + 1_000);
   check("end");
   vi.useRealTimers();

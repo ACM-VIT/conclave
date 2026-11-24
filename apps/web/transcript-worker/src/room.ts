@@ -1559,7 +1559,8 @@ export class TranscriptRoom {
     return (
       this.switchingProvider ||
       this.transcriptionProviderOpeningGeneration !== null ||
-      this.transcriptionRecoveryPromise !== null
+      this.transcriptionRecoveryPromise !== null ||
+      (this.session?.status === "starting" && this.transcriptionSession === null)
     );
   }
 
