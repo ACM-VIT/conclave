@@ -36,8 +36,7 @@ function logicalInstructions(lines, escape) {
     current.heredoc = heredocs.length > 0 && ["RUN", "COPY", "ADD"].includes(keyword);
     if (current.heredoc) {
       for (const terminator of heredocs) {
-        current.heredocBody = current.heredocBody ?? [];
-        for (i += 1; i < lines.length && lines[i].replace(/^\t+/, "") !== terminator; i += 1) current.heredocBody.push(lines[i]);
+        for (i += 1; i < lines.length && lines[i].replace(/^\t+/, "") !== terminator; i += 1);
         if (i >= lines.length) throw new DockerfileError(`line ${current.line}: heredoc ${terminator} is never closed`);
       }
     }
@@ -221,14 +220,4 @@ export function contextCopies(text, buildArgs = {}) {
     }
   }
   return copies;
-}
-
-export function runInstructions(text) {
-  const { directives, body } = splitDirectives(text.replace(/^\uFEFF/, "").split(/\r?\n/));
-  return logicalInstructions(body, directives.escape ?? "\\")
-    .filter((instruction) => /^RUN\s/i.test(instruction.text))
-    .map((instruction) => {
-      const { rest } = splitFlags(instruction.text.replace(/^RUN\s+/i, ""));
-      return { line: instruction.line, text: rest, exec: execForm(rest), heredoc: instruction.heredoc ? (instruction.heredocBody ?? []).join("\n") : null };
-    });
 }

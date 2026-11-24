@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { artifactProblems, contextProblems, imagePackages, pnpmScriptProblems, repoRoot, workspacePackages } from "./check-docker-context.mjs";
+import { artifactProblems, contextProblems, imagePackages, repoRoot, workspacePackages } from "./check-docker-context.mjs";
 import { rootContextBuilds } from "./docker-context/compose.mjs";
 import { DockerfileError, contextCopies } from "./docker-context/dockerfile.mjs";
 import { dockerIgnoreMatcher, walkContext } from "./docker-context/dockerignore.mjs";
@@ -256,32 +256,4 @@ test("compose builds inherited through a YAML merge key are found", (t) => {
     "docker-compose.yml": "x-sfu: &sfu\n  build:\n    context: .\n    dockerfile: packages/sfu/Dockerfile\nservices:\n  edge:\n    <<: *sfu\n    environment: { A: b }\n",
   });
   assert.deepEqual(rootContextBuilds(root).map(({ service, dockerfile }) => [service, dockerfile]), [["edge", "packages/sfu/Dockerfile"]]);
-});
-
-test("pnpm scripts in a partial image workspace must skip the dependency reinstall", () => {
-  const install = "FROM node:22-bookworm-slim\nWORKDIR /app\nRUN pnpm install --filter @conclave/shared-browser... --frozen-lockfile --node-linker=isolated\n";
-  assert.deepEqual(pnpmScriptProblems("x", `${install}RUN pnpm -C packages/shared-browser run build\n`), [
-    "x: line 4: `pnpm -C packages/shared-browser run build` runs pnpm in a partial image workspace; pass --config.verify-deps-before-run=false or call the binary directly",
-  ]);
-  assert.deepEqual(pnpmScriptProblems("x", `${install}RUN pnpm -C packages/shared-browser --config.verify-deps-before-run=false run build\n`), []);
-  for (const dockerfile of ["packages/sfu/Dockerfile", "packages/shared-browser/Dockerfile"]) {
-    assert.deepEqual(pnpmScriptProblems(dockerfile, readFileSync(path.join(repoRoot, dockerfile), "utf8")), [], dockerfile);
-  }
-  assert.deepEqual(pnpmScriptProblems("x", "FROM node\nRUN npm install --global pnpm@12 && pnpm install --filter a... --frozen-lockfile\nWORKDIR /app/a\nRUN ./node_modules/.bin/tsc\n"), []);
-  assert.equal(pnpmScriptProblems("x", "FROM node\nRUN pnpm --filter a build\n").length, 1);
-  assert.deepEqual(pnpmScriptProblems("x", `${install}RUN ["pnpm", "-C", "packages/shared-browser", "run", "build"]\n`), [
-    "x: line 4: `pnpm -C packages/shared-browser run build` runs pnpm in a partial image workspace; pass --config.verify-deps-before-run=false or call the binary directly",
-  ]);
-  assert.equal(pnpmScriptProblems("x", `${install}RUN ["sh", "-c", "cd packages/shared-browser && pnpm run build"]\n`).length, 1);
-  assert.equal(pnpmScriptProblems("x", `${install}RUN --mount=type=cache,target=/root/.cache pnpm -C a run build\n`).length, 1);
-  assert.deepEqual(pnpmScriptProblems("x", `${install}RUN ["pnpm", "-C", "a", "--config.verify-deps-before-run=false", "run", "build"]\n`), []);
-  assert.throws(() => pnpmScriptProblems("x", `${install}RUN <<EOF\nset -e\npnpm -C packages/shared-browser run build\nEOF\n`), UnsupportedShape);
-  assert.deepEqual(pnpmScriptProblems("x", `${install}RUN <<EOF\napt-get update\nEOF\n`), []);
-  const flagged = (run) => pnpmScriptProblems("x", `${install}RUN ${run}\n`).length;
-  for (const run of ['["corepack", "enable", "pnpm"]', "corepack enable pnpm", "npm i -g pnpm@12.16.1", '["npm", "i", "-g", "pnpm"]', "echo pnpm", 'echo "pnpm run build" | tee /dev/null', "pnpm -C packages/sfu install --frozen-lockfile", "CI=1 pnpm --filter a... install"]) {
-    assert.equal(flagged(run), 0, run);
-  }
-  for (const run of ['sh -c "pnpm run build"', '["sh", "-c", "pnpm run build"]', 'bash -c "cd a && pnpm -C b run build"', "CI=1 pnpm run build", "true | pnpm run build", "/usr/local/bin/pnpm build"]) {
-    assert.equal(flagged(run), 1, run);
-  }
 });

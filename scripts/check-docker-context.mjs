@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { rootContextBuilds } from "./docker-context/compose.mjs";
-import { DockerfileError, contextCopies, runInstructions } from "./docker-context/dockerfile.mjs";
+import { DockerfileError, contextCopies } from "./docker-context/dockerfile.mjs";
 import { cleanPattern, contextDirectories, dockerIgnoreMatcher, walkContext } from "./docker-context/dockerignore.mjs";
 import { UnsupportedShape } from "./docker-context/unsupported.mjs";
 
@@ -28,7 +28,6 @@ const ARTIFACT_PROBES = [
   "probe.db-journal",
 ];
 const WILDCARD = /[*?[]/;
-const VERIFY_DEPS_OFF = "--config.verify-deps-before-run=false";
 
 export function workspacePackages(root = repoRoot) {
   const byName = new Map();
@@ -92,73 +91,6 @@ function contextGap(file, { contextFiles, matcher, ignoreFile }) {
   return matcher.excluded(file) ? `which ${ignoreFile} excludes` : "which is tracked but missing from the build context";
 }
 
-const SHELLS = new Set(["sh", "bash", "/bin/sh", "/bin/bash"]);
-const PNPM_VALUE_FLAGS = new Set(["-C", "--dir", "--filter", "-F"]);
-
-export function simpleCommands(script) {
-  const commands = [[]];
-  let word = null;
-  let quote = null;
-  const endWord = () => {
-    if (word !== null) commands.at(-1).push(word);
-    word = null;
-  };
-  for (let i = 0; i < script.length; i += 1) {
-    const ch = script[i];
-    if (quote) {
-      if (ch === quote) quote = null;
-      else if (ch === "\\" && quote === '"' && i + 1 < script.length) word += script[++i];
-      else word += ch;
-    } else if (ch === "'" || ch === '"') {
-      quote = ch;
-      word ??= "";
-    } else if (ch === "\\" && i + 1 < script.length) {
-      word = (word ?? "") + script[++i];
-    } else if (/[;&|\n]/.test(ch)) {
-      endWord();
-      if (script[i + 1] === ch && (ch === "&" || ch === "|")) i += 1;
-      commands.push([]);
-    } else if (/\s/.test(ch)) {
-      endWord();
-    } else {
-      word = (word ?? "") + ch;
-    }
-  }
-  endWord();
-  return commands.filter((words) => words.length);
-}
-
-function programCommands(argv) {
-  const words = argv.slice(argv.findIndex((word) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(word)));
-  const flag = words.findIndex((word) => /^-[a-z]*c[a-z]*$/.test(word));
-  if (SHELLS.has(words[0]) && flag !== -1 && words[flag + 1] !== undefined) return simpleCommands(words[flag + 1]).flatMap(programCommands);
-  return [words];
-}
-
-function runCommands({ line, text, exec, heredoc }) {
-  if (heredoc !== null) {
-    if (/(^|[^\w-])pnpm([^\w-]|$)/.test(`${text}\n${heredoc}`)) throw new UnsupportedShape(`line ${line}: a heredoc RUN that calls pnpm`);
-    return [];
-  }
-  return (exec ? [exec] : simpleCommands(text)).flatMap(programCommands);
-}
-
-function pnpmSubcommand(args) {
-  for (let i = 0; i < args.length; i += 1) {
-    if (PNPM_VALUE_FLAGS.has(args[i])) i += 1;
-    else if (!args[i].startsWith("-")) return args[i];
-  }
-  return null;
-}
-
-export function pnpmScriptProblems(dockerfile, text) {
-  return runInstructions(text).flatMap((run) =>
-    runCommands(run)
-      .filter(([program, ...args]) => program && program.split("/").at(-1) === "pnpm" && !["install", "i"].includes(pnpmSubcommand(args)) && !args.includes(VERIFY_DEPS_OFF))
-      .map((words) => `${dockerfile}: line ${run.line}: \`${words.join(" ")}\` runs pnpm in a partial image workspace; pass ${VERIFY_DEPS_OFF} or call the binary directly`),
-  );
-}
-
 export function imageProblems(root, build, { packages, tracked, contextFiles, matcher, ignoreFile }) {
   const problems = [];
   const sources = [];
@@ -190,8 +122,6 @@ export function imageProblems(root, build, { packages, tracked, contextFiles, ma
       if (gap) problems.push(`${build.dockerfile}: ${name} needs ${file}, ${gap}`);
     }
   }
-  const partialWorkspace = [...packages.values()].some(({ dir }) => !contextFiles.has(`${dir}/package.json`));
-  if (partialWorkspace) problems.push(...pnpmScriptProblems(build.dockerfile, text));
   return problems;
 }
 
