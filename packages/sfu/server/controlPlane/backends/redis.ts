@@ -200,17 +200,69 @@ const toError = (error: unknown): Error => (error instanceof Error ? error : new
 const isStoreError = (error: unknown): boolean =>
   error instanceof StoreCorruptionError || error instanceof Miss;
 
-export type RedisBackend = Backend & { client: RedisPersistenceClient; keys: RedisKeys };
+export type RedisBackend = Backend & { readonly client: RedisPersistenceClient; keys: RedisKeys };
+
+export const REDIS_REQUEST_DEADLINE_MS = 2_000;
+
+class RedisStalled extends Error {
+  constructor(ms: number) {
+    super(`Redis did not answer within ${ms} ms.`);
+    this.name = "RedisStalled";
+  }
+}
 
 export const createRedisBackend = async (options: {
   redisUrl: string;
   keyPrefix: string;
   name?: string;
+  requestDeadlineMs?: number;
 }): Promise<RedisBackend> => {
-  const client = createRedisPersistenceClient(options.name ?? "ControlPlane", options.redisUrl);
+  const name = options.name ?? "ControlPlane";
+  const deadlineMs = options.requestDeadlineMs ?? REDIS_REQUEST_DEADLINE_MS;
+  let client = createRedisPersistenceClient(name, options.redisUrl);
   await client.connect();
+  let reconnecting: Promise<RedisPersistenceClient> | null = null;
   const keys = controlPlaneRedisKeys(options.keyPrefix);
   let closed = false;
+
+  const replace = (stalled: RedisPersistenceClient): void => {
+    if (client !== stalled || closed) return;
+    try {
+      stalled.destroy();
+    } catch {
+      return;
+    }
+    const fresh = createRedisPersistenceClient(name, options.redisUrl);
+    const connecting = fresh.connect().then(() => fresh);
+    client = fresh;
+    reconnecting = connecting;
+    const settled = () => {
+      if (reconnecting === connecting) reconnecting = null;
+    };
+    connecting.then(settled, settled);
+  };
+
+  const bounded = async <T>(request: (redis: RedisPersistenceClient) => Promise<T>): Promise<T> => {
+    let used: RedisPersistenceClient | null = null;
+    let timer: NodeJS.Timeout | undefined;
+    const stalled = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        if (used) replace(used);
+        reject(new RedisStalled(deadlineMs));
+      }, deadlineMs);
+    });
+    const work = (async () => {
+      if (reconnecting) await reconnecting;
+      used = client;
+      return request(client);
+    })();
+    work.catch(() => undefined);
+    try {
+      return await Promise.race([work, stalled]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
 
   const prefetchOwners = async (snapshot: Snapshot, kind: Kind, raws: Array<RawStored | null>): Promise<void> => {
     const spec = specOf(kind);
@@ -225,42 +277,40 @@ export const createRedisBackend = async (options: {
     }
     if (fields.size === 0) return;
     const list = [...fields];
-    const owners = await client.hmGet(keys.unique, list);
+    const owners = await bounded((redis) => redis.hmGet(keys.unique, list));
     list.forEach((field, index) => snapshot.owners.set(field, owners[index] ?? null));
   };
 
   const fetchNeed = async (snapshot: Snapshot, need: Need): Promise<void> => {
     switch (need.type) {
       case "record": {
-        const raw = await client.hGet(keys.records[need.kind], need.id);
+        const raw = await bounded((redis) => redis.hGet(keys.records[need.kind], need.id));
         const parsed = raw ? parseEnvelope(raw, `${need.kind} ${need.id}`) : null;
         snapshot.records.set(slot(need.kind, need.id), { kind: need.kind, id: need.id, raw: parsed });
         await prefetchOwners(snapshot, need.kind, [parsed]);
         return;
       }
       case "owner": {
-        const owner = await client.hGet(keys.unique, need.field);
+        const owner = await bounded((redis) => redis.hGet(keys.unique, need.field));
         snapshot.owners.set(need.field, owner ?? null);
         return;
       }
       case "tomb": {
         const field = tombField(need.kind, need.id);
-        const rev = await client.hGet(keys.tomb, field);
+        const rev = await bounded((redis) => redis.hGet(keys.tomb, field));
         snapshot.tombs.set(field, rev ? Number(rev) : null);
         return;
       }
       case "tag": {
         const field = tagVersion(need.kind, need.tag);
-        const [ver, members] = (await client
-          .multi()
-          .hGet(keys.ver, field)
-          .sMembers(keys.tag(need.kind, need.tag))
-          .exec()) as unknown as [string | null, string[]];
+        const [ver, members] = (await bounded((redis) =>
+          redis.multi().hGet(keys.ver, field).sMembers(keys.tag(need.kind, need.tag)).exec(),
+        )) as unknown as [string | null, string[]];
         const ids = [...members].sort();
         snapshot.tags.set(field, { kind: need.kind, tag: need.tag, ids, ver: Number(ver ?? 0) });
         const missing = ids.filter((id) => !snapshot.records.has(slot(need.kind, id)));
         if (missing.length === 0) return;
-        const raws = await client.hmGet(keys.records[need.kind], missing);
+        const raws = await bounded((redis) => redis.hmGet(keys.records[need.kind], missing));
         const parsed = missing.map((id, index) => {
           const raw = raws[index];
           const stored = raw ? parseEnvelope(raw, `${need.kind} ${id}`) : null;
@@ -271,11 +321,9 @@ export const createRedisBackend = async (options: {
         return;
       }
       case "all": {
-        const [ver, entries] = (await client
-          .multi()
-          .hGet(keys.ver, kindVersion(need.kind))
-          .hGetAll(keys.records[need.kind])
-          .exec()) as unknown as [string | null, Record<string, string>];
+        const [ver, entries] = (await bounded((redis) =>
+          redis.multi().hGet(keys.ver, kindVersion(need.kind)).hGetAll(keys.records[need.kind]).exec(),
+        )) as unknown as [string | null, Record<string, string>];
         const ids = Object.keys(entries).sort();
         snapshot.alls.set(need.kind, { ids, ver: Number(ver ?? 0) });
         const parsed = ids.map((id) => {
@@ -333,13 +381,9 @@ export const createRedisBackend = async (options: {
       ...KINDS.map((kind) => keys.records[kind]),
       ...tagKeys,
     ];
-    const reply = (await client.sendCommand([
-      "EVAL",
-      COMMIT_SCRIPT,
-      String(scriptKeys.length),
-      ...scriptKeys,
-      JSON.stringify(payload),
-    ])) as unknown;
+    const reply = (await bounded((redis) =>
+      redis.sendCommand(["EVAL", COMMIT_SCRIPT, String(scriptKeys.length), ...scriptKeys, JSON.stringify(payload)]),
+    )) as unknown;
     const [status, detail] = Array.isArray(reply) ? (reply as unknown[]) : [];
     if (Number(status) === 1) return { ok: true, rev: Number(detail), detail: "" };
     return { ok: false, rev: 0, detail: String(detail) };
@@ -390,7 +434,9 @@ export const createRedisBackend = async (options: {
 
   return {
     mode: "redis",
-    client,
+    get client() {
+      return client;
+    },
     keys,
     commit: async <T>(command: Command<T>, now: number): Promise<CommitResult<T>> => {
       const done = await transact((source, entropy) => {
@@ -412,6 +458,7 @@ export const createRedisBackend = async (options: {
     close: async () => {
       if (closed) return;
       closed = true;
+      await reconnecting?.catch(() => undefined);
       if (client.isReady) await client.close().catch(() => undefined);
       else client.destroy();
     },
