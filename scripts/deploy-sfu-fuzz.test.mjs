@@ -150,6 +150,183 @@ fixed("fuzz: a public route that is down when the deploy first looks still leave
   }),
 );
 
-describe("deploy-sfu.sh recovery", { concurrency: 6 }, () => {
+const mulberry32 = (start) => {
+  let seed = start;
+  return () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+};
+
+const makePlan = (seed) => {
+  const rand = mulberry32(seed);
+  const chance = (p) => rand() < p;
+  const pick = (list) => list[Math.floor(rand() * list.length)];
+  const names = chance(0.3) ? ["sfu-a"] : ["sfu-a", "sfu-b"];
+  const window = () => ({ who: pick(names), atMs: Math.floor(rand() * 6000), ms: pick([400, 1500, 4000]) });
+  return {
+    seed,
+    names,
+    only: names.length === 2 && chance(0.4) ? "sfu-a" : null,
+    canaryFails: chance(0.3),
+    promotedExits: chance(0.15),
+    candidateExits: chance(0.1),
+    routeDownAfterPromotion: chance(0.2) ? pick([400, 1500, 4000]) : 0,
+    statusOutages: Array.from({ length: pick([0, 0, 1, 2]) }, window),
+    routeOutages: Array.from({ length: pick([0, 0, 1]) }, window),
+    drainRefusals: Array.from({ length: pick([0, 0, 0, 1]) }, window),
+    statusOutageAfterRecreate: chance(0.2) ? { who: pick(names), ms: pick([400, 1500, 4000]) } : null,
+    statusOutageAtRerun: chance(0.3) ? { who: pick(names), ms: pick([1500, 4000, 8000]) } : null,
+    callRate: pick([0, 0, 0.05, 0.2]),
+    callMs: pick([300, 1200, 3000]),
+    crashes: [chance(0.85) ? 1 + Math.floor(rand() * 30) : 0, chance(0.35) ? 1 + Math.floor(rand() * 30) : 0],
+  };
+};
+
+const settledPhase = (phase) => phase === undefined || phase === "" || phase === "idle";
+
+const checkRun = async ({ sfus, shared, plan, result, label, quiet }) => {
+  const allowed = plan.canaryFails ? [LAST_GOOD] : [LAST_GOOD, TARGET];
+  const problems = [];
+  for (const [name, sfu] of Object.entries(sfus)) {
+    for (const cut of [...sfu.recreates, ...sfu.stops].filter((entry) => entry.roomsCut > 0)) problems.push(`${name}: ${cut.roomsCut} call(s) cut by a restart`);
+    for (const undrain of sfu.undrains) {
+      if (!["idle", "drained", undefined, ""].includes(undrain.phase) || (undrain.lkg && undrain.image !== undrain.lkg)) {
+        problems.push(`${name}: undrained on ${undrain.image} while its journal said ${undrain.phase} with last-known-good ${undrain.lkg}`);
+      }
+    }
+    for (const recreate of sfu.recreates) {
+      if (recreate.lkg && recreate.to === recreate.lkg && recreate.from !== recreate.lkg && recreate.phase !== "rollback") {
+        problems.push(`${name}: rolled back to ${recreate.to} while its journal said ${recreate.phase}, not rollback`);
+      }
+    }
+    if (result.code !== null) {
+      const { phase } = await journal(shared, name);
+      if (!(sfu.container === "running" && allowed.includes(sfu.image)) && phase !== "rollback") {
+        problems.push(`${name}: left ${sfu.container} on ${sfu.image} with its journal at ${phase}, so nothing serves and no rollback is under way`);
+      }
+      if ([0, 4].includes(result.code) && !(sfu.container === "running" && !sfu.draining && allowed.includes(sfu.image) && settledPhase(phase))) {
+        problems.push(`${name}: exit ${result.code}, but it is ${sfu.container}, draining ${sfu.draining}, on ${sfu.image}, journal ${phase}`);
+      }
+    }
+  }
+  if (result.code === 3 && !quiet && !Object.values(sfus).some((sfu) => sfu.rooms > 0 || Date.now() - (sfu.lastCallAt ?? 0) < 8000)) {
+    problems.push("paused for calls (exit 3) while no instance had any");
+  }
+  if (result.code === 3 && quiet) problems.push("paused for calls (exit 3) with no calls running");
+  if (problems.length) {
+    throw new Error(`seed ${plan.seed}, ${label}, exit ${result.code}:\n  ${problems.join("\n  ")}\nplan: ${JSON.stringify(plan)}\n--- output ---\n${result.output}`);
+  }
+};
+
+const runPlan = async (plan) => {
+  const hooks = { onRecreate: () => undefined };
+  const specs = Object.fromEntries(plan.names.map((name) => [name, { publicRoute: true, onRecreate: (sfu) => hooks.onRecreate(sfu) }]));
+  await withStack(specs, async (sfus, shared) => {
+    const rand = mulberry32(plan.seed ^ 0x5eed);
+    const timers = new Set();
+    const later = (ms, fn) => {
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        fn();
+      }, ms);
+      timers.add(timer);
+    };
+    const done = new Set();
+    const once = (key) => !done.has(key) && done.add(key);
+    let faults = true;
+    hooks.onRecreate = (sfu) => {
+      if (!faults) return;
+      if (sfu.image === TARGET && !sfu.bootDrained && plan.promotedExits && once("promotedExits")) sfu.container = "exited";
+      if (sfu.image === TARGET && sfu.bootDrained && plan.candidateExits && once("candidateExits")) sfu.container = "exited";
+      if (sfu.image === TARGET && !sfu.bootDrained && plan.routeDownAfterPromotion && once("routeDown")) {
+        sfu.publicDown = true;
+        later(plan.routeDownAfterPromotion, () => (sfu.publicDown = false));
+      }
+      const outage = plan.statusOutageAfterRecreate;
+      if (outage && outage.who === sfu.instanceId && once("statusAfterRecreate")) {
+        sfu.statusAnswers = false;
+        later(outage.ms, () => (sfu.statusAnswers = true));
+      }
+    };
+    const windows = [
+      ...plan.statusOutages.map((w) => [w, "statusAnswers", false]),
+      ...plan.routeOutages.map((w) => [w, "publicDown", true]),
+      ...plan.drainRefusals.map((w) => [w, "refuseDrain", true]),
+    ];
+    for (const [w, field, value] of windows) {
+      later(w.atMs, () => {
+        if (!faults) return;
+        sfus[w.who][field] = value;
+        later(w.ms, () => (sfus[w.who][field] = !value));
+      });
+    }
+    const calls = [];
+    const generation = (sfu) => sfu.recreates.length + sfu.stops.length;
+    const tick = setInterval(() => {
+      const now = Date.now();
+      for (const sfu of Object.values(sfus)) {
+        for (const call of calls.filter((entry) => entry.sfu === sfu && entry.endAt <= now)) {
+          calls.splice(calls.indexOf(call), 1);
+          if (call.generation === generation(sfu)) sfu.rooms = Math.max(0, sfu.rooms - 1);
+        }
+        if (faults && plan.callRate && sfu.container === "running" && !sfu.draining && sfu.statusAnswers && rand() < plan.callRate) {
+          sfu.rooms += 1;
+          calls.push({ sfu, generation: generation(sfu), endAt: now + plan.callMs });
+        }
+        if (sfu.rooms > 0) sfu.lastCallAt = now;
+      }
+    }, 100);
+    const env = {
+      ...shared.env,
+      HEALTH_TIMEOUT_SECONDS: "2",
+      ...(plan.only ? { SFU_DEPLOY_SERVICES: plan.only } : {}),
+      ...(plan.canaryFails ? { DEPLOY_TEST_BAD_IMAGES: TARGET } : {}),
+    };
+    try {
+      for (const [index, crash] of plan.crashes.entries()) {
+        if (index > 0 && plan.statusOutageAtRerun) {
+          const sfu = sfus[plan.statusOutageAtRerun.who];
+          sfu.statusAnswers = false;
+          later(plan.statusOutageAtRerun.ms, () => (sfu.statusAnswers = true));
+        }
+        const result = await deploy(sfus, { env: { ...env, ...(crash ? { SFU_DEPLOY_TEST_CRASH_AT_STEP: String(crash) } : {}) } });
+        await checkRun({ sfus, shared, plan, result, label: `run ${index + 1}${crash ? `, killed at step ${crash}` : ""}` });
+      }
+      faults = false;
+      for (const timer of timers) clearTimeout(timer);
+      timers.clear();
+      calls.length = 0;
+      for (const sfu of Object.values(sfus)) Object.assign(sfu, { rooms: 0, statusAnswers: true, publicDown: false, refuseDrain: false });
+      let result = null;
+      for (let attempt = 1; attempt <= 4; attempt += 1) {
+        result = await deploy(sfus, { env });
+        await checkRun({ sfus, shared, plan, result, label: `settling run ${attempt}`, quiet: true });
+        if ([0, 4].includes(result.code)) break;
+      }
+      const deployed = plan.only ? [plan.only] : plan.names;
+      const expected = Object.fromEntries(plan.names.map((name) => [name, !plan.canaryFails && deployed.includes(name) ? TARGET : LAST_GOOD]));
+      const problems = [];
+      if (result.code !== (plan.canaryFails ? 4 : 0)) problems.push(`the stack did not settle: last exit ${result.code}`);
+      for (const [name, sfu] of Object.entries(sfus)) {
+        if (!(sfu.container === "running" && !sfu.draining && sfu.image === expected[name])) problems.push(`${name} ends ${sfu.container}, draining ${sfu.draining}, on ${sfu.image}, not serving ${expected[name]}`);
+      }
+      if (problems.length) throw new Error(`seed ${plan.seed}, settled:\n  ${problems.join("\n  ")}\nplan: ${JSON.stringify(plan)}\n--- output ---\n${result.output}`);
+    } finally {
+      clearInterval(tick);
+      for (const timer of timers) clearTimeout(timer);
+    }
+  });
+};
+
+const runs = Number(process.env.DEPLOY_FUZZ_RUNS ?? 200);
+const firstSeed = Number(process.env.DEPLOY_FUZZ_SEED ?? 1);
+for (let seed = firstSeed; seed < firstSeed + runs; seed += 1) {
+  queued.push([`fault plan ${seed}`, () => runPlan(makePlan(seed))]);
+}
+
+describe("deploy-sfu.sh recovery", { concurrency: Number(process.env.DEPLOY_FUZZ_CONCURRENCY ?? 8) }, () => {
   for (const args of queued) test(...args);
 });
