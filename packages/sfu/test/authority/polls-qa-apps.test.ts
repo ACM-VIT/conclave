@@ -415,6 +415,77 @@ describe("result visibility", () => {
     expect(names).toEqual(voters);
   });
 
+  const exportAtScale = (voterNames: string[]) => {
+    const polls = new AuthorityInstance(
+      "polls.scale",
+      pollsAuthority,
+      { mode: "meeting", qaEnabled: true },
+      {
+        limits: DEFAULT_AUTHORITY_LIMITS,
+        random: { next: Math.random, int: (max) => Math.floor(Math.random() * max), shuffle: (list) => [...list] },
+        verifyViews: false,
+      },
+    );
+    const voter = (id: string, role: Actor["role"], displayName: string): Actor => ({
+      subject: id as Subject,
+      role,
+      verified: true,
+      displayName,
+    });
+    const hostActor = voter("host", "moderator", "Asha");
+    let now = 1_000_000;
+    const created = polls.act(hostActor, "create", { question: "Lunch?", options: ["Tea", "Coffee"] }, null, now);
+    const pollId = created.ok ? (field(created.value, "pollId") as string) : "";
+    const refused: string[] = [];
+    for (const [index, name] of voterNames.entries()) {
+      now += 20;
+      const cast = polls.act(voter(`voter-${index}`, "member", name), "vote", { pollId, optionIds: ["o1"] }, null, now);
+      if (!cast.ok) refused.push(`${index}:${cast.code}`);
+    }
+    const names: Json[] = [];
+    const answerBytes: number[] = [];
+    let ballotBytes = 0;
+    let offset: number | null = 0;
+    while (offset !== null) {
+      now += 1_000;
+      const page: AuthorityResult<Json> = polls.query(hostActor, "exportBallots", { pollId, offset }, now);
+      if (!page.ok) throw new Error(`page at ${offset} failed: ${page.code}`);
+      answerBytes.push(Buffer.byteLength(JSON.stringify(page.value)));
+      const ballots = field(page.value, "ballots") as Json[];
+      ballotBytes += ballots.reduce<number>((sum, ballot) => sum + Buffer.byteLength(JSON.stringify(ballot)), 0);
+      names.push(...ballots.map((ballot) => field(ballot, "name")));
+      offset = field(page.value, "nextOffset") as number | null;
+    }
+    return { refused, names, answerBytes, ballotBytes };
+  };
+
+  it("exports a poll at the 100,000-ballot cap in pages that each fit one answer", () => {
+    const voterNames = Array.from({ length: 100_000 }, (_, index) => `Voter ${index}`);
+
+    const exported = exportAtScale(voterNames);
+
+    expect(exported.refused).toEqual([]);
+    expect(exported.names).toEqual(voterNames);
+    expect(exported.answerBytes.length).toBeGreaterThan(1);
+    expect(Math.max(...exported.answerBytes)).toBeLessThanOrEqual(DEFAULT_AUTHORITY_LIMITS.snapshotBytes);
+  }, 120_000);
+
+  it.each([
+    ["just under", 3_900],
+    ["just over", 4_500],
+  ])("exports ballots totalling %s 1 MiB in pages that each fit one answer", (side, count) => {
+    const voterNames = Array.from({ length: count }, (_, index) => `${String(index).padStart(6, "0")} ${"n".repeat(DISPLAY_NAME_MAX_LENGTH - 7)}`);
+
+    const exported = exportAtScale(voterNames);
+
+    expect(exported.refused).toEqual([]);
+    expect(exported.names).toEqual(voterNames);
+    expect(exported.ballotBytes > 1024 * 1024).toBe(side === "just over");
+    expect(Math.abs(exported.ballotBytes - 1024 * 1024)).toBeLessThan(160 * 1024);
+    expect(exported.answerBytes.length).toBeGreaterThan(1);
+    expect(Math.max(...exported.answerBytes)).toBeLessThanOrEqual(DEFAULT_AUTHORITY_LIMITS.snapshotBytes);
+  });
+
   it("leaves webinar attendees out", async () => {
     const room = new Harness([pollsAuthority]);
     const hostTab = await room.open(host, pollsContract);
