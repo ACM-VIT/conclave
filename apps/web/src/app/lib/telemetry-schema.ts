@@ -36,7 +36,11 @@ const position = z.number().int().min(0).max(MAX_POSITION);
 const pixels = z.number().int().min(0).max(100_000);
 const uuid = z.uuid();
 export const chunkIdForm = uuid;
-export const chunkPathForm = z.string().regex(/^\/_next\/static\/[A-Za-z0-9_./-]+\.js$/);
+export const chunkPathForm = z
+  .string()
+  .max(512)
+  .regex(/^\/_next\/static\/[A-Za-z0-9_./-]+\.js$/)
+  .refine((path) => !path.split("/").some((segment) => segment === "." || segment === ".."));
 
 export const STATIC_PAGES = ["schedule", "sfu-admin", "privacy", "delete-account", "sign-in"] as const;
 /** Every path a URL is sent as: the route it belongs to, never the room code or slug. */

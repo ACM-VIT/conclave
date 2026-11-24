@@ -64,7 +64,6 @@ const forward = async (request: Request, path = ["e"], deps: Partial<IngestDeps>
     },
     ingestHost: "https://eu.i.posthog.com",
     projectKey: KEY,
-    currentBuild: BUILD,
     manifest: async (version) =>
       version === BUILD ? new Map([[CHUNK_ID, "/_next/static/chunks/3u-6_1om1fv26.js"]]) : null,
     siteOrigin: "https://conclave.acmvit.in",
@@ -237,8 +236,8 @@ describe("forwardCapture", () => {
       { platform: "web:javascript", function: "?", filename: "[path]", lineno: 1 },
     ]);
     expect(fromB).toEqual([expect.objectContaining({ filename: "/_next/static/chunks/0bbbbbbbbbbbb.js", chunk_id: idB })]);
-    expect(fromUnknown).toEqual([{ platform: "web:javascript", function: "?", filename: "[path]", lineno: 1 }]);
-    expect(fromNoBuild).toEqual([{ platform: "web:javascript", function: "?", filename: "[path]", lineno: 1 }]);
+    expect(fromUnknown).toEqual([expect.objectContaining({ filename: "/_next/static/chunks/0aaaaaaaaaaaa.js", chunk_id: idA })]);
+    expect(fromNoBuild).toEqual([expect.objectContaining({ filename: "/_next/static/chunks/0aaaaaaaaaaaa.js", chunk_id: idA })]);
     expect(requested).toEqual([releaseA, releaseB, "ccccccc3333333333333333333333333333333cc"]);
   });
 
@@ -348,7 +347,6 @@ describe("the outbound schema at /ingest", () => {
     [OLD_BUILD, new Map()],
   ]);
   const deps = {
-    currentBuild: BUILD,
     manifest: async (version: string) => manifests.get(version) ?? null,
     now: () => RECEIVED,
   } as Partial<IngestDeps>;
@@ -411,17 +409,51 @@ describe("the outbound schema at /ingest", () => {
     expect(String(upstream[0].init.body)).not.toMatch(/https?:|chrome-extension|audit-operator|acmvit|localhost|fleetasset|from=mail/);
   });
 
-  it("names only a build this deployment shipped, and sends any other as unknown", async () => {
+  it("names the event's own build whenever it has a build's form, its manifest found or not, and any other as unknown", async () => {
     const { batch: current } = await send([event({ client_version: BUILD })]);
     const { batch: older } = await send([event({ client_version: OLD_BUILD })]);
-    const { batch: unpublished } = await send([event({ client_version: "facade00" })]);
+    const { batch: gone } = await send([event({ client_version: "facade00" })]);
     const { batch: none } = await send([event({ client_version: "Meet Mira" })]);
 
-    expect([current, older, unpublished, none].map((batch) => (batch[0].properties as Record<string, unknown>).client_version)).toEqual([
+    expect([current, older, gone, none].map((batch) => (batch[0].properties as Record<string, unknown>).client_version)).toEqual([
       BUILD,
       OLD_BUILD,
+      "facade00",
       "unknown",
-      "unknown",
+    ]);
+  });
+
+  it("keeps an old build's frames of the shared forms when this deployment no longer has its manifest, and strips the rest", async () => {
+    const gone = "c0ffee0c0ffee0c0ffee0c0ffee0c0ffee0c0ff";
+    const frames = [
+      { filename: "https://conclave.acmvit.in/_next/static/chunks/3u-6_1om1fv26.js?v=2", lineno: 1, colno: 2, in_app: true, chunk_id: CHUNK_ID },
+      { filename: "https://cdn.example.net/_next/static/chunks/3u-6_1om1fv26.js", lineno: 2, chunk_id: CHUNK_ID },
+      { filename: "https://conclave.acmvit.in/_next/static/chunks/3u-6_1om1fv26.js", lineno: 3, chunk_id: "1team-meeting" },
+      { filename: "/_next/static/chunks/../../../api/auth/session.js", lineno: 4, chunk_id: CHUNK_ID },
+      { filename: "/_next/static/chunks/review@example.invalid.js", lineno: 5, chunk_id: CHUNK_ID },
+    ];
+    const { response, batch } = await send([
+      {
+        uuid: "0196f0a1-0000-7000-8000-0000000000ac",
+        event: "$exception",
+        timestamp: "2026-11-22T11:59:59.000Z",
+        properties: {
+          token: KEY,
+          client_version: gone,
+          $exception_list: [{ type: "TypeError", value: "x", stacktrace: { type: "raw", frames } }],
+        },
+      },
+    ]);
+
+    expect(response.status).toBe(200);
+    const sent = batch[0].properties as { client_version: string; $exception_list: Array<{ stacktrace: { frames: unknown[] } }> };
+    expect(sent.client_version).toBe(gone);
+    expect(sent.$exception_list[0].stacktrace.frames).toEqual([
+      { platform: "web:javascript", function: "?", filename: "/_next/static/chunks/3u-6_1om1fv26.js", lineno: 1, colno: 2, in_app: true, chunk_id: CHUNK_ID },
+      { platform: "web:javascript", function: "?", filename: "[path]", lineno: 2, chunk_id: CHUNK_ID },
+      { platform: "web:javascript", function: "?", filename: "[path]", lineno: 3 },
+      { platform: "web:javascript", function: "?", filename: "[path]", lineno: 4, chunk_id: CHUNK_ID },
+      { platform: "web:javascript", function: "?", filename: "[path]", lineno: 5, chunk_id: CHUNK_ID },
     ]);
   });
 

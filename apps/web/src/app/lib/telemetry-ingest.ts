@@ -59,8 +59,6 @@ export type IngestDeps = {
   ingestHost: string | null;
   /** Our project key: events for any other project are not relayed. */
   projectKey: string;
-  /** The build this deployment serves. */
-  currentBuild: string | undefined;
   /**
    * The chunk manifest of a build, by its version (the event's
    * client_version), or null when this deployment has none for it: a build
@@ -382,18 +380,16 @@ const prepareForward = async (request: Request, deps: IngestDeps) => {
   if (ours.length === 0) throw new Refused(400);
   // A batch holds one tab's events, so a request carries one build:
   // the first event's. Events naming any other build are dropped, which holds
-  // a request to at most one manifest lookup. A tab can still run an older
-  // build than the one deployed, so that build's own manifest is used, and a
-  // build is named only when this deployment shipped it: the one it serves,
-  // or one whose manifest it still has.
+  // a request to at most one manifest lookup. That build's own manifest
+  // checks its frames; without it the build is still named and its frames
+  // are held to their shared forms.
   const build = buildOf(ours[0]);
   const sameBuild = ours.filter((event) => buildOf(event) === build);
   const manifest = build ? await deps.manifest(build) : null;
-  const shipped = build !== null && (build === deps.currentBuild || manifest !== null);
   const context = {
     token: deps.projectKey,
-    clientVersion: shipped ? build : UNKNOWN_BUILD,
-    chunkFiles: manifest ?? new Map<string, string>(),
+    clientVersion: build ?? UNKNOWN_BUILD,
+    chunkFiles: manifest,
   };
   const schemas = createOutboundSchemas(context);
   const sentAt = clientSentAt(url, decoded);
@@ -438,9 +434,9 @@ const MAX_MANIFESTS = 16;
  * deployment id) can reach while that build is still served. Concurrent
  * loads of one build share a fetch, which has MANIFEST_DEADLINE_MS, body
  * included. A load that fails or runs out of time gives the last manifest
- * read for that build. One it has never read is null: that build was not
- * shipped here, its frames keep no path or chunk id, and its events name no
- * build. A version that is not a build's is never fetched.
+ * read for that build. One it has never read is null: its frames are then
+ * held to their shared forms, and its events still name their build. A
+ * version that is not a build's is never fetched.
  */
 export function createChunkManifestLoader({
   origin,

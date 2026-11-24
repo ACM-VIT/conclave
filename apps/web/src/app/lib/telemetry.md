@@ -264,7 +264,13 @@ the 16 most recently used builds. A manifest load has 2 s, its body included;
 one that fails or runs out of time falls back to the last manifest read for
 that build (a build's manifest never changes), or to none. A tab still running
 an older build, or a saved batch from one that a newer page replays, is
-judged by its own manifest, not the newest one. It forwards the batch to PostHog as
+judged by its own manifest, not the newest one. When this deployment has no
+manifest for that build (a fresh instance after a cutover answers 404 for an
+old one), the build is still named and each frame keeps its chunk id and file
+only when both pass the shared forms (a uuid, and a same-origin
+`/_next/static/...js` path with no query and no `.` or `..` segment); what
+fails a form is stripped, so old reports keep their stacks without old
+manifests. It forwards the batch to PostHog as
 plain JSON with the fixed User-Agent `conclave-web-ingest/1` and no header of
 the browser's: no cookie, no IP address and no forwarded or referrer header
 reaches PostHog. `/ingest` waits at most 10 s for PostHog, and reads
@@ -291,9 +297,9 @@ shapes the values of listed properties:
   where a code belongs, does not compile.
 - **Fields we set.** `$host` is always `conclave-web`, `token` is our project
   key, `$lib` is `web` and `$process_person_profile` is false. `client_version`
-  is the browser's own build; at `/ingest` it names a build only when this
-  deployment shipped it, the one it serves or one whose chunk manifest it still
-  has, and is `unknown` otherwise.
+  is the browser's own build. `/ingest` keeps it whenever it has a build's
+  form (7 to 40 hex characters), whether or not this deployment still has
+  that build's chunk manifest, and sends `unknown` otherwise.
 - **Our fields** come only from the payload of the capture that sent them,
   never from the event, so nothing in local or session storage can supply one.
   An event the SDK raised itself, such as an unhandled error, carries none.

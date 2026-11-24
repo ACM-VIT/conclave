@@ -37,7 +37,6 @@ const handle = async (
     fetch: (url, init) => fetch(url, init),
     ingestHost,
     projectKey: process.env.NEXT_PUBLIC_POSTHOG_KEY ?? "",
-    currentBuild: process.env.NEXT_PUBLIC_CONCLAVE_CLIENT_VERSION,
     manifest,
     siteOrigin,
     now: Date.now,
