@@ -4,11 +4,11 @@ import { once } from "node:events";
 import { createServer, type AddressInfo, type Server } from "node:net";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import type Docker from "dockerode";
 import { createApp } from "../src/app.js";
 import { ContainerManager } from "../src/ContainerManager.js";
 import { resolveServiceSecurity, ServiceSecurityError } from "../src/serviceSecurity.js";
 import type { BrowserManager, BrowserSession } from "../src/types.js";
+import { fakeDocker, fakeDockerEngine, hardenedImage } from "./support/docker.js";
 
 const STRONG_TOKEN = "3f9c1a7e5b2d8046c1e9a3b7d5f20e84";
 const packageDir = fileURLToPath(new URL("..", import.meta.url));
@@ -123,6 +123,8 @@ test("startup configuration fails closed", () => {
     // The deploy builds its health URL from BROWSER_SERVICE_PORT as written.
     refuses({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_PORT: " 3040" });
     refuses({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_PORT: "70000" });
+    refuses({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_PORT: "0" });
+    refuses({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_PORT: "00" });
     assert.equal(resolveServiceSecurity({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_PORT: "43109" }).listenPort, 43109);
 
     assert.equal(resolveServiceSecurity({ BROWSER_SERVICE_TOKEN: ` ${STRONG_TOKEN}\n` }).token, STRONG_TOKEN);
@@ -181,7 +183,8 @@ test("--check-config applies the startup checks and exits without listening", as
         assert.equal(result.code, 1, JSON.stringify(env));
         assert.match(result.output, /refused to start/);
     }
-    const valid = await check({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_HOST: "127.0.0.1" });
+    const engine = await fakeDockerEngine({ "conclave-browser:latest": hardenedImage });
+    const valid = await check({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_HOST: "127.0.0.1", DOCKER_HOST: engine.host }).finally(engine.close);
     assert.equal(valid.code, 0, valid.output);
     assert.match(valid.output, /configuration is valid/i);
     assert.doesNotMatch(valid.output, /listening/);
@@ -189,7 +192,7 @@ test("--check-config applies the startup checks and exits without listening", as
 
 test("--check-config runs the same provider and bind checks as startup", async () => {
     const run = async (env: NodeJS.ProcessEnv, args: string[]) => {
-        const { child, output } = startService({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_PORT: "0", ...env }, args);
+        const { child, output } = startService({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_PORT: "43109", ...env }, args);
         const [code] = await once(child, "close");
         return { code, output: output() };
     };
@@ -212,9 +215,11 @@ test("the service process listens on loopback and requires the token", async () 
     const probe = createServer();
     const port = await listen(probe);
     probe.close();
+    const engine = await fakeDockerEngine({ "conclave-browser:latest": hardenedImage });
     const { child, output } = startService({
         BROWSER_SERVICE_TOKEN: STRONG_TOKEN,
         BROWSER_SERVICE_PORT: String(port),
+        DOCKER_HOST: engine.host,
     });
     try {
         const deadline = Date.now() + 20_000;
@@ -225,26 +230,17 @@ test("the service process listens on loopback and requires the token", async () 
         assert.equal((await fetch(`http://127.0.0.1:${port}/sessions`)).status, 401);
     } finally {
         child.kill("SIGKILL");
+        await engine.close();
     }
 });
 
 type CreatedContainer = { Env: string[]; HostConfig: { PortBindings: Record<string, Array<{ HostIp: string }>> } };
 
-const fakeDocker = (created: CreatedContainer[]) =>
-    ({
-        ping: async () => undefined,
-        getContainer: () => ({ remove: async () => undefined, stop: async () => undefined }),
-        createContainer: async (options: CreatedContainer) => {
-            created.push(options);
-            return { id: `container-${created.length}`, start: async () => undefined, remove: async () => undefined };
-        },
-    }) as unknown as Docker;
-
 test("each Chromium session gets its own VNC password, carried only in the URL fragment", async () => {
     const created: CreatedContainer[] = [];
     const manager = new ContainerManager(
         { noVncPortStart: 6080, noVncPortEnd: 6081, noVncBindAddress: "127.0.0.1", publicBaseUrl: "https://browser.example" },
-        fakeDocker(created),
+        fakeDocker(hardenedImage, created),
     );
     try {
         const sessions: BrowserSession[] = [];

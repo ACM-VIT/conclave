@@ -38,6 +38,11 @@ const checkListenHost = (host: string): Promise<void> =>
         probe.listen(0, host, () => probe.close(() => resolve()));
     });
 
+const assertReady = (): Promise<void> =>
+    Promise.resolve(browserManager.assertReady?.()).catch((error: unknown) =>
+        refuseToStart(error instanceof Error ? error.message : String(error)),
+    );
+
 let isShuttingDown = false;
 
 const gracefulShutdown = async () => {
@@ -75,13 +80,14 @@ const listen = () => app.listen(security.listenPort, security.listenHost, (error
 // service: every startup check above, short of listening on the real port.
 if (process.argv.includes("--check-config")) {
     checkListenHost(security.listenHost).then(
-        () => {
-            console.log(`[Server] Shared browser service configuration is valid (control API on ${security.listenHost}:${security.listenPort}).`);
-            process.exit(0);
-        },
+        () =>
+            assertReady().then(() => {
+                console.log(`[Server] Shared browser service configuration is valid (control API on ${security.listenHost}:${security.listenPort}).`);
+                process.exit(0);
+            }),
         (error: NodeJS.ErrnoException) =>
             refuseToStart(`BROWSER_SERVICE_HOST=${security.listenHost} cannot be bound on this host (${error.code ?? error.message}).`),
     );
 } else {
-    listen();
+    void assertReady().then(listen);
 }

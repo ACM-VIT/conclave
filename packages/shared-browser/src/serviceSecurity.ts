@@ -77,8 +77,8 @@ const readListenHost = (raw: string | undefined, problems: string[]): string => 
 const readListenPort = (raw: string | undefined, problems: string[]): number => {
     if (raw === undefined || raw === "") return DEFAULT_LISTEN_PORT;
     const port = Number(raw);
-    if (!/^\d+$/.test(raw) || port < 0 || port > 65535) {
-        problems.push(`BROWSER_SERVICE_PORT=${JSON.stringify(raw)} must be a port number up to 65535, with no spaces.`);
+    if (!/^\d+$/.test(raw) || port < 1 || port > 65535) {
+        problems.push(`BROWSER_SERVICE_PORT=${JSON.stringify(raw)} must be a port number from 1 to 65535, with no spaces.`);
         return DEFAULT_LISTEN_PORT;
     }
     return port;
