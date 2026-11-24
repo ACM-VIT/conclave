@@ -90,6 +90,13 @@ export const takeToken = (
   return false;
 };
 
+export const refundToken = (socket: Socket, key: string, options: TokenBucketOptions): void => {
+  const bucket = getBucketStore(socket).get(key);
+  if (!bucket) return;
+  refill(bucket, Date.now());
+  bucket.tokens = Math.min(options.capacity, bucket.tokens + 1);
+};
+
 export const msUntilToken = (
   socket: Socket,
   key: string,

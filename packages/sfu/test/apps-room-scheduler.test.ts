@@ -284,8 +284,7 @@ describe("a sender's slot", () => {
     vi.advanceTimersByTime(10);
     const changedAt = Date.now();
 
-    changes = false;
-    scheduler.wake();
+    scheduler.transition({ apply: () => (changes = false), notify: () => {} });
     vi.advanceTimersByTime(BARRIER_DEADLINE_MS);
 
     expect(ranAt).toBe(changedAt);
@@ -521,17 +520,107 @@ describe("a control command the room refuses or that changes nothing", () => {
     expect(room.apps.activeAppId).toBeNull();
   });
 
-  it("keeps a socket's free sync of the stage when a sync it sends is refused", () => {
+  it("gives back a socket's first valid sync after each stage change, and charges a sync refused for its content", () => {
     const { connect, host } = presentedBoard();
     const viewer = connect("viewer#1");
+    viewer.sync();
+    for (let round = 0; round < 8; round += 1) {
+      host.command(round % 2 === 0 ? "lock" : "unlock");
+      expect(viewer.sync().reply).toHaveProperty("syncMessage");
+    }
+
+    expect(viewer.sync(false).reply).toHaveProperty("error");
+    const answered = Array.from({ length: 12 }, () => viewer.sync().reply);
+
+    expect(answered.filter((reply) => (reply as object) && "syncMessage" in (reply as object))).toHaveLength(9);
+  });
+});
+
+describe("cheap admission before any parsing", () => {
+  const counting = (length: number) => {
+    const reads = { count: 0 };
+    const payload = new Proxy(new Array<number>(length).fill(0), {
+      get(target, key, receiver) {
+        if (typeof key === "string" && /^[0-9]+$/.test(key)) reads.count += 1;
+        return Reflect.get(target, key, receiver) as unknown;
+      },
+    });
+    return { reads, payload };
+  };
+  const flood = (send: (payload: unknown) => void, length = 1000) => {
+    const reads = { count: 0 };
+    for (let index = 0; index < 100; index += 1) {
+      const sent = counting(length);
+      send(sent.payload);
+      reads.count += sent.reads.count;
+    }
+    return reads.count;
+  };
+
+  it("parses nothing from syncs sent after the socket's sync budget is gone", () => {
+    const { connect } = presentedBoard();
+    const viewer = connect("viewer#1");
     for (let index = 0; index < 12; index += 1) viewer.sync();
-    host.command("lock");
+    const before = viewer.sync();
+    expect(before.reply).toMatchObject({ retryable: true });
 
-    const invalid = viewer.sync(false);
-    const valid = viewer.sync();
+    const reads = flood((payload) => viewer.syncPayload(payload), 60_000);
 
-    expect(invalid.reply).toHaveProperty("error");
-    expect(valid.reply).toHaveProperty("syncMessage");
+    expect(reads).toBe(0);
+  });
+
+  it("parses nothing from updates sent after the sender's slot is full", () => {
+    const { connect } = presentedBoard();
+    const writer = connect("writer#1");
+    writer.sync();
+    writer.write(UPDATE_BURST + 64);
+
+    const reads = flood((payload) => writer.sendPayload(payload));
+
+    expect(reads).toBe(0);
+  });
+
+  it.each([
+    ["a locked board", true],
+    ["a board the guest has not synced", false],
+  ])("parses nothing from updates to %s sent after the no-op checks run out", (_, locked) => {
+    const { connect, host } = presentedBoard();
+    const guest = connect("guest#1");
+    if (locked) {
+      guest.sync();
+      host.command("lock");
+    }
+    for (let index = 0; index < 20; index += 1) guest.sendRaw(new Uint8Array([0xff]));
+
+    const reads = flood((payload) => guest.sendPayload(payload));
+
+    expect(reads).toBe(0);
+  });
+
+  it("parses nothing from awareness sent after the socket's awareness budget is gone", () => {
+    const { connect } = presentedBoard();
+    const guest = connect("guest#1");
+    guest.sync();
+    for (let index = 0; index < 40; index += 1) guest.awarenessPayload(new Uint8Array([0]));
+
+    const reads = flood((payload) => guest.awarenessPayload(payload));
+
+    expect(reads).toBe(0);
+  });
+
+  it.each([
+    ["an update", (peer: ReturnType<ReturnType<typeof makeWorkRooms>["connect"]>, payload: unknown) => peer.sendPayload(payload), 256 * 1024],
+    ["a sync", (peer: ReturnType<ReturnType<typeof makeWorkRooms>["connect"]>, payload: unknown) => peer.syncPayload(payload), 64 * 1024],
+    ["an awareness packet", (peer: ReturnType<ReturnType<typeof makeWorkRooms>["connect"]>, payload: unknown) => peer.awarenessPayload(payload), 64 * 1024],
+  ] as const)("refuses %s past its size cap before reading it", (_, send, cap) => {
+    const { connect } = presentedBoard();
+    const guest = connect("guest#1");
+    guest.sync();
+    const oversized = counting(cap + 1);
+
+    send(guest, oversized.payload);
+
+    expect(oversized.reads.count).toBe(0);
   });
 });
 
@@ -555,10 +644,9 @@ describe("restarting an older client's copy", () => {
     legacy.sync();
     advance(1000);
 
-    expect(legacy.directStates().map((entry) => (entry.payload as AppsState).activeAppId).slice(0, 2)).toEqual([
-      null,
-      BOARD,
-    ]);
+    const states = legacy.directStates().map((entry) => (entry.payload as AppsState).activeAppId);
+    expect(states.at(-1)).toBe(BOARD);
+    expect(states.slice(0, -1).every((activeAppId) => activeAppId === null)).toBe(true);
   });
 
   it("takes nothing from the client, sync included, until the real stage has gone out", () => {
@@ -608,6 +696,36 @@ describe("restarting an older client's copy", () => {
     expect(boardHas(room, stroke)).toBe(true);
     expect(legacy.received.filter((entry) => entry.event === "apps:yjs:refused")).toEqual([]);
     expect(legacy.directStates().filter((entry) => !isBlank(entry))).toHaveLength(1);
+  });
+
+  it("shows the client the app a waiting Present puts up when a Lock lets it run inside the blank phase", () => {
+    const { host, room, legacy } = refusedLegacy();
+    host.sync();
+    host.write(UPDATE_BURST + 5);
+    const present = host.command("open", "watch");
+    vi.setSystemTime(Date.now() + 40);
+
+    host.command("lock");
+    advance(1000, () => legacy.react());
+
+    const shown = legacy.received.filter((entry) => entry.event === "apps:state").at(-1)!;
+    expect([room.apps.activeAppId, (shown.payload as AppsState).activeAppId]).toEqual(["watch", "watch"]);
+    expect(present.reply).toMatchObject({ success: true });
+  });
+
+  it("shows the client the app a waiting Present puts up when the client's own refusal lets it run", () => {
+    const { connect, host, room } = presentedBoard();
+    const legacy = connect("legacy#1", { legacy: true });
+    legacy.sync();
+    legacy.write(UPDATE_BURST + 5);
+    const present = host.command("open", "watch");
+
+    legacy.sendPayload(new Uint8Array(256 * 1024 + 1));
+    advance(1000, () => legacy.react());
+
+    const shown = legacy.received.filter((entry) => entry.event === "apps:state").at(-1)!;
+    expect([room.apps.activeAppId, (shown.payload as AppsState).activeAppId]).toEqual(["watch", "watch"]);
+    expect(present.reply).toMatchObject({ success: true });
   });
 
   it("sends nothing from the old room after the client moves to another room", () => {

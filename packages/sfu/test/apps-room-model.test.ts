@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
+import type { AppsState } from "../types.js";
 import { seededRandom } from "./support/appsRoom.js";
 import {
   BOARD,
@@ -37,8 +38,13 @@ class ReferenceBucket {
   }
 
   full(now: number): boolean {
-    if (this.last === null) return true;
-    return Math.min(UPDATE_BURST, this.tokens + ((now - this.last) / 1000) * UPDATES_PER_SECOND) >= UPDATE_BURST;
+    return this.untilFull(now) === 0;
+  }
+
+  untilFull(now: number): number {
+    if (this.last === null) return 0;
+    const tokens = Math.min(UPDATE_BURST, this.tokens + ((now - this.last) / 1000) * UPDATES_PER_SECOND);
+    return Math.ceil(((UPDATE_BURST - tokens) / UPDATES_PER_SECOND) * 1000);
   }
 }
 
@@ -70,6 +76,8 @@ const runModel = (seed: number, steps: number) => {
     chainedCommands: 0,
     pointlessCommands: 0,
     refusalsChecked: 0,
+    presentRaces: 0,
+    viewsChecked: 0,
     slotsChecked: 0,
     budgetPressure: 0,
   };
@@ -199,6 +207,8 @@ const runModel = (seed: number, steps: number) => {
     }
   };
   const burst = (then: "wait" | "close" | "leave" | "pointless") => {
+    if (!eligible(bursty)) return;
+    advance(burstyBucket.untilFull(Date.now()));
     if (!eligible(bursty) || !burstyBucket.full(Date.now())) return;
     const extra = 1 + Math.floor(random() * 20);
     const writes = bursty.write(UPDATE_BURST + extra);
@@ -289,6 +299,42 @@ const runModel = (seed: number, steps: number) => {
     }
   };
 
+  const skips: { at: number; by: number }[] = [];
+  const skipClock = (by: number) => {
+    skips.push({ at: Date.now(), by });
+    vi.setSystemTime(Date.now() + by);
+  };
+  const skipped = (from: number, to: number) =>
+    skips.filter((skip) => skip.at >= from && skip.at < to).reduce((total, skip) => total + skip.by, 0);
+  const racePresent = () => {
+    if (reference.presented !== BOARD || reference.locked || pending.size > 0 || restarting(racer)) return;
+    if (!racer.synced) racer.sync();
+    if (!racer.synced || !host.synced) return;
+    if (random() < 0.5) {
+      racer.sendRaw(new Uint8Array([0xff]));
+      if (!restarting(racer)) return;
+      host.write(UPDATE_BURST + 5);
+      command("open", "watch");
+      skipClock(40);
+      command("lock");
+    } else {
+      racer.write(UPDATE_BURST + 5);
+      command("open", "watch");
+      racer.sendPayload(new Uint8Array(256 * 1024 + 1));
+    }
+    advance(1000);
+    if (room.apps.activeAppId === "watch") observed.presentRaces += 1;
+  };
+  const checkViews = () => {
+    for (const peer of rooms.peers.values()) {
+      if (!peer.connected || peer.roomId !== "room") continue;
+      const last = peer.received.filter((entry) => entry.event === "apps:state" && entry.room === "room").at(-1);
+      if (last && last.direct && isBlank(last) && Date.now() - last.at - skipped(last.at, Date.now()) < 501) continue;
+      const shown = last ? (last.payload as AppsState).activeAppId : null;
+      expect(shown, `${peer.id} shows the app the room presents`).toBe(room.apps.activeAppId);
+      observed.viewsChecked += 1;
+    }
+  };
   const checkBoard = () => {
     const live = room.apps.liveDoc(BOARD);
     if (!live || reference.presented !== BOARD || pending.size > 0) return;
@@ -352,11 +398,13 @@ const runModel = (seed: number, steps: number) => {
         if (!entry.direct || !isBlank(entry)) return;
         const next = peer.received.slice(index + 1).find((later: Received) => later.event === "apps:state");
         if (next) {
-          if (next.direct) expect(next.at - entry.at, `${peer.id} real stage after the blank`).toBe(500);
+          if (next.direct) {
+            expect(next.at - entry.at - skipped(entry.at, next.at), `${peer.id} real stage after the blank`).toBe(500);
+          }
           return;
         }
         if (!peer.connected || peer.roomId !== entry.room) return;
-        expect(Date.now() - entry.at, `${peer.id} still owed the real stage`).toBeLessThanOrEqual(501);
+        expect(Date.now() - entry.at - skipped(entry.at, Date.now()), `${peer.id} still owed the real stage`).toBeLessThanOrEqual(501);
       });
     }
     for (const entry of switcher.received) {
@@ -366,6 +414,7 @@ const runModel = (seed: number, steps: number) => {
     }
   };
   const check = () => {
+    checkViews();
     checkBoard();
     checkBudget();
     checkControl();
@@ -377,7 +426,49 @@ const runModel = (seed: number, steps: number) => {
   for (const peer of rooms.peers.values()) peer.react();
   host.write(1, { blind: true });
 
+  const coverers: [keyof typeof observed, () => void][] = [
+    ["heldAcrossClose", () => burst("close")],
+    ["heldAcrossLeave", () => burst("leave")],
+    ["pointlessCommands", () => burst("pointless")],
+    [
+      "lockedRejections",
+      () => {
+        command("lock");
+        probeLocked();
+      },
+    ],
+    ["blankRestarts", raceRestart],
+    ["recoveredBySync", raceRestart],
+    ["recoveredByEmptyUpdate", raceRestart],
+    ["presentRaces", racePresent],
+    ["chainedCommands", chainSteps],
+    [
+      "commandsUnderAttack",
+      () =>
+        attackWhile(() => {
+          for (let index = 0; index < 50; index += 1) adversary.sendRaw(new Uint8Array([0xff]), "bomb");
+        }, "close"),
+    ],
+  ];
+  const cover = () => {
+    for (const [name, act] of coverers) {
+      for (let attempt = 0; attempt < 3 && observed[name] === 0; attempt += 1) {
+        advance(1100);
+        if (reference.presented !== BOARD) command("open", BOARD);
+        if (reference.locked) command("unlock");
+        react();
+        advance(5);
+        react();
+        act();
+        settleCommands();
+        react();
+        check();
+      }
+    }
+  };
+
   for (let step = 0; step < steps; step += 1) {
+    if (step === Math.floor(steps / 2) || step === steps - 50) cover();
     if (reference.presented !== BOARD && pending.size === 0 && random() < 0.5) command("open", BOARD);
     if (reference.locked && random() < 0.3) probeLocked();
     const roll = random();
@@ -415,7 +506,8 @@ const runModel = (seed: number, steps: number) => {
       );
     } else if (roll < 0.62 && reference.locked) {
       attackWhile(() => adversary.sendRaw(EMPTY_UPDATE), pick(["close", "unlock", "discard"] as const), BOARD);
-    } else if (roll < 0.66) raceRestart();
+    } else if (roll < 0.64) raceRestart();
+    else if (roll < 0.66) racePresent();
     else if (roll < 0.68) chainSteps();
     else if (roll < 0.685) command("open", BOARD);
     else if (roll < 0.69) command("close");

@@ -28,10 +28,10 @@ import {
   type StageCommand,
   type WriteRefusal,
 } from "../../roomApps.js";
-import type { WriteOutcome } from "../../roomAppsScheduler.js";
+import type { StageTransition, WriteOutcome } from "../../roomAppsScheduler.js";
 import { Logger } from "../../../utilities/loggers.js";
 import type { ConnectionContext } from "../context.js";
-import { RATE_LIMITS, takeToken } from "../rateLimit.js";
+import { RATE_LIMITS, refundToken, takeToken } from "../rateLimit.js";
 import { respond } from "./ack.js";
 
 const MAX_APPS_SYNC_BYTES = 64 * 1024;
@@ -88,8 +88,27 @@ const followersOf = (apps: RoomApps): Set<() => void> => {
   return created;
 };
 
+const heldUpdatesRefusedBy = (command: StageCommand): StageTransition["refuse"] =>
+  command.kind === "discard"
+    ? { matches: (write) => write.appId === command.appId, outcome: "not-live" }
+    : command.kind === "lock" && command.locked
+      ? { matches: (write) => !write.host, outcome: "locked" }
+      : undefined;
+
+const notifyRestarts = (apps: RoomApps): void => {
+  for (const follow of [...followersOf(apps)]) {
+    try {
+      follow();
+    } catch (error) {
+      Logger.warn("[Apps] Following a stage change failed", error);
+    }
+  }
+};
+
+const EMPTY_UPDATE_BYTES = 2;
+
 const isEmptyUpdate = (update: Uint8Array): boolean =>
-  update.length === 2 && update[0] === 0 && update[1] === 0;
+  update.length === EMPTY_UPDATE_BYTES && update[0] === 0 && update[1] === 0;
 
 const normalizeReplicaId = (value: unknown): string | undefined =>
   typeof value === "string" && value.length > 0 && value.length <= MAX_REPLICA_ID_LENGTH
@@ -124,6 +143,17 @@ const decodeBase64 = (value: string): Uint8Array | null => {
   } catch {
     return null;
   }
+};
+
+const rawByteLength = (value: unknown): number | null => {
+  if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) return value.byteLength;
+  if (Array.isArray(value)) return value.length;
+  if (typeof value === "string") return Math.floor((value.length * 3) / 4);
+  if (value && typeof value === "object") {
+    const maybeBuffer = value as { type?: unknown; data?: unknown };
+    if (maybeBuffer.type === "Buffer" && Array.isArray(maybeBuffer.data)) return maybeBuffer.data.length;
+  }
+  return null;
 };
 
 const toUint8Array = (value: unknown): Uint8Array | null => {
@@ -174,9 +204,11 @@ const readSyncRequest = (apps: RoomApps, data: AppsSyncData | undefined): SyncRe
   if (!appId) return { ok: false, error: "Invalid app id" };
   const live = apps.liveDoc(appId);
   if (!live) return { ok: false, error: "App not active" };
+  const size = rawByteLength(data?.syncMessage);
+  if (!size) return { ok: false, error: "Invalid sync payload" };
+  if (size > MAX_APPS_SYNC_BYTES) return { ok: false, error: "Sync payload too large" };
   const stateVector = toUint8Array(data?.syncMessage);
   if (!stateVector) return { ok: false, error: "Invalid sync payload" };
-  if (stateVector.length > MAX_APPS_SYNC_BYTES) return { ok: false, error: "Sync payload too large" };
   try {
     Y.decodeStateVector(stateVector);
   } catch {
@@ -238,31 +270,33 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
 
   const sendBlankStage = (current: RoomScope, appId: string, attempt: number): void => {
     const { apps } = current;
-    current.synced = null;
-    apps.scheduler.purge((write) => write.sender === socket, "not-synced");
-    socket.emit("apps:state", {
-      ...getRoomAppsState(context),
-      activeAppId: null,
-      docGeneration: null,
-    } satisfies AppsState);
-    const timer = setTimeout(() => sendRealStage(current), COPY_RESTART_DELAY_MS);
-    current.restart = { state: "blank-sent", apps, appId, revision: apps.stageRevision, attempt, timer };
-    followersOf(apps).add(followStage);
+    apps.scheduler.hold(() => {
+      current.synced = null;
+      const timer = setTimeout(() => sendRealStage(current), COPY_RESTART_DELAY_MS);
+      current.restart = { state: "blank-sent", apps, appId, revision: apps.stageRevision, attempt, timer };
+      followersOf(apps).add(followStage);
+      socket.emit("apps:state", {
+        ...getRoomAppsState(context),
+        activeAppId: null,
+        docGeneration: null,
+      } satisfies AppsState);
+      apps.scheduler.purge((write) => write.sender === socket, "not-synced");
+    });
   };
   const followStage = (): void => {
     const current = scope;
     const restart = current?.restart;
     if (!current || !restart || restart.state === "idle" || restart.apps.stageRevision === restart.revision) return;
-    if (!showsRestartedApp(restart)) {
-      if (restart.state === "awaiting-sync") endRestart();
+    if (showsRestartedApp(restart)) {
+      if (restart.state === "awaiting-sync") {
+        current.restart = { ...restart, revision: restart.apps.stageRevision };
+        return;
+      }
+      clearTimeout(restart.timer);
+      sendBlankStage(current, restart.appId, restart.attempt);
       return;
     }
-    if (restart.state === "awaiting-sync") {
-      current.restart = { ...restart, revision: restart.apps.stageRevision };
-      return;
-    }
-    clearTimeout(restart.timer);
-    sendBlankStage(current, restart.appId, restart.attempt);
+    if (restart.state === "awaiting-sync" || !inScope(restart.apps) || restart.apps.activeAppId !== null) endRestart();
   };
   const sendRealStage = (current: RoomScope): void => {
     const restart = current.restart;
@@ -359,13 +393,23 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       return;
     }
     const execute = (): void => {
-      const result = apps.apply(command, revision);
-      if (!result.ok) {
-        reply({ success: false, ...STAGE_COMMAND_ERRORS[result.reason] });
+      const next = apps.plan(command, revision);
+      if (!next.ok) {
+        reply({ success: false, ...STAGE_COMMAND_ERRORS[next.reason] });
         return;
       }
-      const state: AppsState = { ...apps.snapshot(), roomId: room.id };
-      if (result.changed) announceStageChange(room, command, result.awarenessRemoval, state);
+      let state: AppsState = { ...apps.snapshot(), roomId: room.id };
+      if (next.changed) {
+        apps.scheduler.transition({
+          refuse: heldUpdatesRefusedBy(command),
+          apply: () => {
+            const result = apps.apply(command, revision);
+            state = { ...apps.snapshot(), roomId: room.id };
+            if (result.ok && result.changed) announceStage(room, result.awarenessRemoval, state);
+          },
+          notify: () => notifyRestarts(apps),
+        });
+      }
       reply({ success: true, state });
     };
     if (command.kind === "present" || command.kind === "close") {
@@ -381,13 +425,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       execute();
     }
   };
-  const announceStageChange = (
-    room: Room,
-    command: StageCommand,
-    awarenessRemoval: AppAwarenessRemoval | null,
-    state: AppsState,
-  ): void => {
-    const { apps } = room;
+  const announceStage = (room: Room, awarenessRemoval: AppAwarenessRemoval | null, state: AppsState): void => {
     if (awarenessRemoval) {
       io.to(room.channelId).emit("apps:awareness", {
         appId: awarenessRemoval.appId,
@@ -395,16 +433,6 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       } satisfies AppsAwarenessData);
     }
     io.to(room.channelId).emit("apps:state", state);
-    for (const follow of [...followersOf(apps)]) {
-      try {
-        follow();
-      } catch (error) {
-        Logger.warn("[Apps] Following a stage change failed", error);
-      }
-    }
-    if (command.kind === "discard") apps.scheduler.purge((write) => write.appId === command.appId, "not-live");
-    if (command.kind === "lock" && command.locked) apps.scheduler.purge((write) => !write.host, "locked");
-    apps.scheduler.wake();
   };
 
   socket.on("disconnecting", endRestart);
@@ -508,17 +536,19 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       }
       const { apps } = context.currentRoom;
       const current = scopeFor(apps);
-      const request = readSyncRequest(apps, data);
-      const freeSync = request.ok && current.freeSyncRevision !== apps.stageRevision;
-      if (!freeSync && !takeToken(socket, "apps:yjs:sync", RATE_LIMITS.appsYjsSync)) {
+      if (!takeToken(socket, "apps:yjs:sync", RATE_LIMITS.appsYjsSync)) {
         respond(callback, retryLater("Too many app sync requests", 500));
         return;
       }
+      const request = readSyncRequest(apps, data);
       if (!request.ok) {
         respond(callback, { error: request.error });
         return;
       }
-      if (freeSync) current.freeSyncRevision = apps.stageRevision;
+      if (current.freeSyncRevision !== apps.stageRevision) {
+        current.freeSyncRevision = apps.stageRevision;
+        refundToken(socket, "apps:yjs:sync", RATE_LIMITS.appsYjsSync);
+      }
       const { appId, live, stateVector } = request;
       const update = Y.encodeStateAsUpdate(live, stateVector);
       if (update.length > MAX_APP_DOC_BYTES) {
@@ -563,27 +593,35 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       replicaId: normalizeReplicaId(data?.replicaId),
       arrivedAt: Date.now(),
     };
-    const update = toUint8Array(data.update);
-    if (!update || update.length === 0) {
+    const size = rawByteLength(data?.update);
+    if (!size) {
       refuse(admission, "invalid");
       return;
     }
-    if (update.length > MAX_APPS_UPDATE_BYTES) {
+    if (size > MAX_APPS_UPDATE_BYTES) {
       refuse(admission, "too-large");
       return;
     }
+    if (current.restart.state === "blank-sent") return;
+    let converted: Uint8Array | null | undefined;
+    const bytes = (): Uint8Array | null => {
+      if (converted === undefined) converted = toUint8Array(data.update);
+      return converted;
+    };
     let checked: boolean | null | undefined;
     const changesNothing = (): boolean | null => {
-      if (checked === undefined) {
-        checked = isEmptyUpdate(update)
-          ? true
-          : takeToken(socket, "apps:noop-check", RATE_LIMITS.appsNoopCheck)
-            ? executor.changesNothing(appId, update)
-            : null;
+      if (checked !== undefined) return checked;
+      const empty = size === EMPTY_UPDATE_BYTES ? bytes() : null;
+      if (empty && isEmptyUpdate(empty)) {
+        checked = true;
+      } else if (!takeToken(socket, "apps:noop-check", RATE_LIMITS.appsNoopCheck)) {
+        checked = null;
+      } else {
+        const update = bytes();
+        checked = update ? executor.changesNothing(appId, update) : null;
       }
       return checked;
     };
-    if (current.restart.state === "blank-sent") return;
     if (current.restart.state === "awaiting-sync") {
       if (current.restart.apps === apps && current.restart.appId === appId && changesNothing() === true) {
         sendRoomCopy(current, appId);
@@ -607,11 +645,20 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       else refuse(admission, "not-synced");
       return;
     }
-    const generation = stage.docGeneration;
+    const key = `${appId}\u0000${stage.docGeneration}\u0000${admission.replicaId ?? ""}\u0000${admission.host}`;
+    if (!apps.scheduler.admits(socket, key, size)) {
+      refuse(admission, "rate-limited");
+      return;
+    }
+    const update = bytes();
+    if (!update) {
+      refuse(admission, "invalid");
+      return;
+    }
     apps.scheduler.submit({
       sender: socket,
       appId,
-      key: `${appId}\u0000${generation}\u0000${admission.replicaId ?? ""}\u0000${admission.host}`,
+      key,
       host: admission.host,
       update,
       run: (merged) => {
@@ -633,9 +680,11 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
 
     const appId = normalizeAppId(data?.appId);
     if (!appId) return;
+    const size = rawByteLength(data?.awarenessUpdate);
+    if (!size || size > MAX_APPS_AWARENESS_BYTES) return;
+    if (!context.currentRoom.apps.liveDoc(appId)) return;
     const awarenessUpdate = toUint8Array(data.awarenessUpdate);
     if (!awarenessUpdate || awarenessUpdate.length === 0) return;
-    if (awarenessUpdate.length > MAX_APPS_AWARENESS_BYTES) return;
     let forwarded: Uint8Array | null;
     try {
       forwarded = context.currentRoom.apps.applyAwarenessUpdate(

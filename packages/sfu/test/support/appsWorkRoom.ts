@@ -258,6 +258,18 @@ export const makeWorkRooms = () => {
         return ids;
       },
       sendRaw: (update: Uint8Array, replicaId: string | undefined = replicaIdNow()) => sendUpdate(update, replicaId),
+      sendPayload: (update: unknown, replicaId: string | undefined = replicaIdNow()) =>
+        fire("apps:yjs:update", { appId: BOARD, update, replicaId }),
+      syncPayload: (syncMessage: unknown): SyncRecord => {
+        const record: SyncRecord = { peer: id, sentAt: Date.now(), answeredAt: null, reply: undefined };
+        syncs.push(record);
+        fire("apps:yjs:sync", { appId: BOARD, syncMessage }, (reply: unknown) => {
+          record.answeredAt = Date.now();
+          record.reply = reply;
+        });
+        return record;
+      },
+      awarenessPayload: (awarenessUpdate: unknown) => fire("apps:awareness", { appId: BOARD, awarenessUpdate }),
       freshCopy,
       sync: (valid = true): SyncRecord => {
         const record: SyncRecord = { peer: id, sentAt: Date.now(), answeredAt: null, reply: undefined };
