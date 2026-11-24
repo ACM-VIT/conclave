@@ -140,7 +140,7 @@ Before every SFU or shared browser deploy, build and boot both root-context imag
 pnpm check:docker-images
 ```
 
-It needs a local Docker daemon. It runs `pnpm check:docker-context` first, then builds `packages/sfu/Dockerfile` and `packages/shared-browser/Dockerfile` from the repository root, boots each one, and checks that it is ready. The SFU must log that the server is running and import `@conclave/apps-sdk` inside the container. The shared browser must return 200 from `/health`. It refuses any Docker endpoint that is not a local socket, never pushes, and removes the containers and image tags it created. Pass `--no-cache` for a cold build. Do not deploy if it fails.
+It needs a local Docker daemon. It runs `pnpm check:docker-context` first, then builds `packages/sfu/Dockerfile` and `packages/shared-browser/Dockerfile` from the repository root, boots each one, and checks that it is ready. The SFU must log that the server is running and import `@conclave/apps-sdk` inside the container. The shared browser must return 200 from `/health`. It resolves Docker's effective endpoint the way the CLI does: `DOCKER_HOST` first, otherwise `DOCKER_CONTEXT` or the current context. It refuses that endpoint unless it is a local `unix://` socket, and it pins every later Docker call to it. It never pushes, and it removes the containers and image tags it created, including when interrupted with Ctrl-C. The shared browser container gets that same socket mounted, unless `BROWSER_DOCKER_SOCKET` names another one, as with `docker-compose.browser.yml`. Pass `--no-cache` for a cold build. Do not deploy if it fails.
 
 Deploy SFU pair (Docker Compose):
 

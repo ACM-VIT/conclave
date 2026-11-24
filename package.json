@@ -28,7 +28,7 @@
     "test:quality-harness": "node --test scripts/quality/*.test.mjs",
     "test:deploy-preflight": "node --test scripts/deploy-sfu-preflight.test.mjs",
     "test:cloudflare-manifests": "node --test scripts/cloudflare-manifests.test.mjs",
-    "test:docker-context": "node --test scripts/check-docker-context.test.mjs",
+    "test:docker-context": "node --test scripts/check-docker-context.test.mjs scripts/check-docker-images.test.mjs",
     "check:docker-context": "node scripts/check-docker-context.mjs",
     "check:docker-images": "node scripts/check-docker-images.mjs",
     "build:conclave-skip:android": "bash scripts/build-conclave-skip-android-debug.sh",
