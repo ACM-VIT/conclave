@@ -2815,7 +2815,6 @@ export class Room {
     }
     const coHosts = new Set(lost.coHostUserKeys);
     for (const userKey of lost.adminUserKeys) {
-      if (this.needsReadmission(userKey)) continue;
       this.grantHost(userKey, coHosts.has(userKey) ? "promoted" : "fallback");
     }
     if (lost.hostUserKey) this.makePrimaryHost(lost.hostUserKey);
