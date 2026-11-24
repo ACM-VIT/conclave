@@ -21,6 +21,7 @@ import {
 } from "./webinar.js";
 import { canonicalizeClientId } from "./clientIds.js";
 import { openSqliteStore } from "./sqliteWriteCheck.js";
+import { storedTimestampOrNull } from "./storedValues.js";
 import { writePrivateFileAtomic } from "./privateFile.js";
 import { adoptRecoveredJsonStore, jsonStoreCollection, type JsonStoreAdapter, type JsonStoreClaim } from "./jsonStoreUpgrade.js";
 
@@ -594,8 +595,8 @@ const normalizeStoredWebinar = (raw: unknown): ScheduledWebinar | null => {
     createdAt: Number(record.createdAt) || Date.now(),
     createdBy: String(record.createdBy ?? ""),
     updatedAt: Number(record.updatedAt) || Date.now(),
-    liveStartedAt: record.liveStartedAt ? Number(record.liveStartedAt) : null,
-    endedAt: record.endedAt ? Number(record.endedAt) : null,
+    liveStartedAt: storedTimestampOrNull(record.liveStartedAt),
+    endedAt: storedTimestampOrNull(record.endedAt),
     totalJoinCount: Number(record.totalJoinCount) || 0,
     peakAttendeeCount: Number(record.peakAttendeeCount) || 0,
     webinarLink: buildWebinarLink(linkSlug),
@@ -603,9 +604,7 @@ const normalizeStoredWebinar = (raw: unknown): ScheduledWebinar | null => {
       typeof record.coHostInviteTokenHash === "string"
         ? record.coHostInviteTokenHash
         : null,
-    coHostInviteTokenCreatedAt: record.coHostInviteTokenCreatedAt
-      ? Number(record.coHostInviteTokenCreatedAt)
-      : null,
+    coHostInviteTokenCreatedAt: storedTimestampOrNull(record.coHostInviteTokenCreatedAt),
   };
 };
 

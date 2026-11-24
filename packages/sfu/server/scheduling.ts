@@ -26,6 +26,7 @@ import {
   CONCLAVE_CLIENT_ID,
 } from "./clientIds.js";
 import { openSqliteStore } from "./sqliteWriteCheck.js";
+import { storedTimestampOrNull } from "./storedValues.js";
 import { writePrivateFileAtomic } from "./privateFile.js";
 import { adoptRecoveredJsonStore, jsonStoreCollection, type JsonStoreAdapter, type JsonStoreClaim } from "./jsonStoreUpgrade.js";
 
@@ -1057,6 +1058,7 @@ const normalizeSnapshot = (
         return {
           ...deserialized,
           clientId: normalizeSnapshotClientId(deserialized.clientId),
+          accessTokenExpiresAt: storedTimestampOrNull(deserialized.accessTokenExpiresAt),
         };
       })
     : [],

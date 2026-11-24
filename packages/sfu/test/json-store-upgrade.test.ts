@@ -272,6 +272,49 @@ describe("an SFU in explicit JSON mode combining scheduling records", () => {
   });
 });
 
+describe("the canonical decode of a stored timestamp", () => {
+  type Raw = { [field: string]: unknown };
+  const calendarRow = (): Raw => ({
+    id: "calendar-p1",
+    clientId: "conclave",
+    profileId: "p1",
+    userId: "user-p1",
+    provider: "google",
+    status: "connected",
+    email: "host@example.test",
+    calendarId: "primary",
+    accessToken: "plaintext-access",
+    refreshToken: "plaintext-refresh",
+    accessTokenExpiresAt: null,
+    scopes: [],
+    connectedAt: 100,
+    updatedAt: 150,
+    error: null,
+  });
+  const nullable = [
+    { name: "scheduled meetings", decode: scheduledMeetingJsonStore.decode, wrap: (row: Raw) => [row], row: () => JSON.parse(JSON.stringify(meetingTemplate())) as Raw, fields: ["startedAt", "endedAt", "emailNotificationSentAt", "emailReminderSentAt"] },
+    { name: "scheduled webinars", decode: scheduledWebinarJsonStore.decode, wrap: (row: Raw) => [row], row: () => JSON.parse(JSON.stringify(webinarTemplate())) as Raw, fields: ["liveStartedAt", "endedAt", "coHostInviteTokenCreatedAt"] },
+    { name: "scheduling records", decode: schedulingJsonStore.decode, wrap: (row: Raw) => ({ profiles: [], availability: [], eventTypes: [], calendars: [row] }), row: calendarRow, fields: ["accessTokenExpiresAt"] },
+  ];
+  const unset: Array<[string, unknown]> = [["missing", undefined], ["0", 0], ["an empty string", ""], ["the string 0", "0"], ["a word", "never"]];
+  const cases = nullable.flatMap((store) => store.fields.flatMap((field) => unset.map(([variant, value]) => ({ ...store, field, variant, value }))));
+  const withField = (row: Raw, field: string, value: unknown): Raw => {
+    const copy = { ...row };
+    if (value === undefined) delete copy[field];
+    else copy[field] = value;
+    return copy;
+  };
+
+  it.each(cases)("$name reads $field written as $variant exactly as one written as null", ({ decode, wrap, row, field, value }) => {
+    const template = row();
+    expect(decode(wrap(withField(template, field, value)))).toStrictEqual(decode(wrap(withField(template, field, null))));
+  });
+
+  it.each(nullable.flatMap((store) => store.fields.map((field) => ({ ...store, field }))))("$name keeps a real $field", ({ decode, wrap, row, field }) => {
+    expect(JSON.stringify(decode(wrap(withField(row(), field, 1_716_200_000_000))))).toContain(`"${field}":1716200000000`);
+  });
+});
+
 describe("the JSON store merger", () => {
   type CheckedIndexes = { collections: { [name: string]: { index: string; claims: object } } };
   const liveStores: Array<{ name: string; store: object; adapter: CheckedIndexes }> = [
