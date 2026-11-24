@@ -305,6 +305,26 @@ describe("moving onto the relay when credentials return", () => {
     expect(relayAnswer!.at - upAt).toBeLessThan(5_000);
   });
 
+  it("starts the credential retries over at 2 s when a failed path is rebuilt", async () => {
+    rig = await startRig({ ttlSeconds: 30 });
+    await rig.join();
+    await recoverThroughTurn(rig);
+    rig.provider = "down";
+    await rig.advance(60_000);
+    const failedAt = Date.now();
+    rig.failRecv();
+    await rig.advance(3_000);
+    rig.provider = "up";
+    const upAt = Date.now();
+    await rig.advance(8_000);
+
+    const asked = rig.joinRequests.filter((request) => request.at > failedAt);
+    expect(Math.round((asked[1].at - asked[0].at) / 1000)).toBe(2);
+    const relayAnswer = asked.find((request) => request.at > upAt && request.outcome === "relay");
+    expect(relayAnswer).toBeDefined();
+    expect(relayAnswer!.at - upAt).toBeLessThan(5_000);
+  });
+
   it("gives a new rebuild a fresh retry budget after the last one ran out", async () => {
     rig = await startRig({ ttlSeconds: 30 });
     await rig.join();

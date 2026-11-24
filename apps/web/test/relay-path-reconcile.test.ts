@@ -46,7 +46,7 @@ const servers = (world: World): RuntimeIceServers => ({
   provenRelay: null,
 });
 
-const reconcile = (world: World, budget: "keep" | "renew" = "keep") => {
+const reconcile = (world: World, budget: "keep" | "renew" | "restart" = "keep") => {
   const plan = reconcileRelayPaths(
     {
       wanted: world.wanted,
@@ -105,7 +105,7 @@ const step = (world: World) => {
     case "policy":
       rebuild.stage = "create";
       world.wanted = true;
-      reconcile(world, "renew");
+      reconcile(world, "restart");
       return;
     case "create":
       rebuild.stage = "producers";

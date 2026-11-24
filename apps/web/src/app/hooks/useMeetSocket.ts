@@ -215,6 +215,7 @@ import {
   relayRefreshDelayMs,
   reconcileRelayPaths,
   takeRelayRefreshTry,
+  type RelayRefreshBudget,
   type RelayRefreshChain,
   relayCarryingUrl,
   type RelayOffer,
@@ -1671,7 +1672,7 @@ export function useMeetSocket({
   );
 
   const reconcileRelayPathsNow = useCallback(
-    (budget: "keep" | "renew" = "keep") => {
+    (budget: RelayRefreshBudget = "keep") => {
       const transportOf = (direction: "producer" | "consumer") =>
         direction === "producer"
           ? producerTransportRef.current
@@ -1753,7 +1754,7 @@ export function useMeetSocket({
           }
         }
       };
-      const reconcile = (nextBudget: "keep" | "renew") => {
+      const reconcile = (nextBudget: RelayRefreshBudget) => {
         const state = relayRefreshRef.current;
         const plan = reconcileRelayPaths(readState(), nextBudget);
         state.chain = plan.chain;
@@ -9887,14 +9888,14 @@ export function useMeetSocket({
     const reconnectGeneration = reconnectGenerationRef.current;
     let attemptState = freshReconnectAttemptState(options);
     let rejoined = false;
-    const applyRequestedRelayPolicy = () => {
+    const applyRequestedRelayPolicy = (budget: RelayRefreshBudget) => {
       const relayOnly = resolveRebuildRelayOnly({
         requested: attemptState.relayOnlyRequest !== null,
         relayOnly: relayOnlyIceRef.current,
       });
       const changed = relayOnly !== relayOnlyIceRef.current;
       relayOnlyIceRef.current = relayOnly;
-      reconcileRelayPathsNow("renew");
+      reconcileRelayPathsNow(budget);
       if (!changed) return;
       console.warn(
         relayUsableNow()
@@ -9927,7 +9928,7 @@ export function useMeetSocket({
         }
         if (reconnectGeneration !== reconnectGenerationRef.current) return;
         if (intentionalDisconnectRef.current) return;
-        applyRequestedRelayPolicy();
+        applyRequestedRelayPolicy("restart");
         const result =
           scopedDirection === "consumer"
             ? await rebuildReceivePath()
@@ -10054,7 +10055,7 @@ export function useMeetSocket({
           }
           if (reconnectGeneration !== reconnectGenerationRef.current) return;
           if (intentionalDisconnectRef.current) return;
-          applyRequestedRelayPolicy();
+          applyRequestedRelayPolicy("renew");
 
           const joinOptions = joinOptionsRef.current;
           const mediaNeeds = getJoinMediaNeeds(

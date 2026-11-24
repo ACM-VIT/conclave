@@ -181,15 +181,18 @@ export const relayRefreshDelayMs = (chain: { triesLeft: number }): number =>
     )
   ];
 
+export type RelayRefreshBudget = "keep" | "renew" | "restart";
+
 export const planRelayRefresh = (
   chain: RelayRefreshChain,
   {
     wanted,
     relayUsable,
     budget,
-  }: { wanted: boolean; relayUsable: boolean; budget: "keep" | "renew" },
+  }: { wanted: boolean; relayUsable: boolean; budget: RelayRefreshBudget },
 ): RelayRefreshChain => {
   if (!wanted || relayUsable) return null;
+  if (budget === "restart") return { triesLeft: RELAY_REFRESH_TRIES };
   if (chain && (chain.triesLeft > 0 || budget === "keep")) return chain;
   return { triesLeft: RELAY_REFRESH_TRIES };
 };
@@ -251,21 +254,22 @@ export type RelayPathPlan<D extends string> = {
 
 export const reconcileRelayPaths = <D extends string>(
   state: RelayPathState<D>,
-  budget: "keep" | "renew",
+  budget: RelayRefreshBudget,
 ): RelayPathPlan<D> => {
   const chain = planRelayRefresh(state.chain, {
     wanted: state.wanted,
     relayUsable: offerRelays(state.servers, state.now).length > 0,
     budget,
   });
+  const restarted = chain !== null && chain !== state.chain;
   return {
     chain,
     armRefresh:
       chain !== null &&
       chain.triesLeft > 0 &&
-      !state.timerArmed &&
+      (!state.timerArmed || restarted) &&
       !state.requestInFlight,
-    cancelTimer: chain === null && state.timerArmed,
+    cancelTimer: state.timerArmed && (chain === null || restarted),
     moveOntoRelay: state.busy ? [] : transportsToMoveOntoRelay(state),
   };
 };

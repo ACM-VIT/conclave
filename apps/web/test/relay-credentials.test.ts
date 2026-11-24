@@ -7,6 +7,7 @@ import {
   icePolicyForOffers,
   noteRelayCarryingMedia,
   planRelayRefresh,
+  reconcileRelayPaths,
   relayRefreshDelayMs,
   takeRelayRefreshTry,
   transportsToMoveOntoRelay,
@@ -383,6 +384,45 @@ describe("fetching TURN credentials again while relay only is wanted", () => {
     expect(
       relayRefreshDelayMs(planRelayRefresh({ triesLeft: 0 }, { ...wanted, budget: "renew" })!),
     ).toBe(2_000);
+  });
+
+  it("starts the tries over at 2 s when a failed path is rebuilt, whatever is left", () => {
+    for (const triesLeft of [0, 1, 3, RELAY_REFRESH_TRIES]) {
+      const restarted = planRelayRefresh({ triesLeft }, { ...wanted, budget: "restart" });
+      expect(restarted).toEqual({ triesLeft: RELAY_REFRESH_TRIES });
+      expect(relayRefreshDelayMs(restarted!)).toBe(2_000);
+    }
+    expect(
+      planRelayRefresh({ triesLeft: 3 }, { wanted: true, relayUsable: true, budget: "restart" }),
+    ).toBeNull();
+  });
+
+  it("re-arms a waiting retry at 2 s when a failed path is rebuilt, and leaves it alone otherwise", () => {
+    const state = {
+      wanted: true,
+      servers: { stun: null, latestRelay: null, provenRelay: null },
+      now: 0,
+      busy: false,
+      transports: [],
+      chain: { triesLeft: 3 },
+      timerArmed: true,
+      requestInFlight: false,
+    };
+
+    expect(reconcileRelayPaths(state, "restart")).toMatchObject({
+      chain: { triesLeft: RELAY_REFRESH_TRIES },
+      cancelTimer: true,
+      armRefresh: true,
+    });
+    expect(reconcileRelayPaths(state, "keep")).toMatchObject({
+      chain: { triesLeft: 3 },
+      cancelTimer: false,
+      armRefresh: false,
+    });
+    expect(reconcileRelayPaths({ ...state, requestInFlight: true }, "restart")).toMatchObject({
+      cancelTimer: true,
+      armRefresh: false,
+    });
   });
 
   it("gives a new rebuild a fresh budget but never refills one from an answer", () => {
