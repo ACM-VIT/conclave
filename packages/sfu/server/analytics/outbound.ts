@@ -13,6 +13,7 @@
 import { realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { namesGuestPassIdentifier } from "@conclave/meeting-core/guest-pass-identifiers";
 import type { EventMessage } from "posthog-node";
 import { z } from "zod";
 import type { GameOptionSpec } from "../games/types.js";
@@ -311,7 +312,7 @@ export const createOutboundEvent = (options: OutboundOptions) => {
     const room = ROOM_KEY.safeParse(message.groups?.room);
     const uuid = z.uuid().safeParse(message.uuid);
     const personProfile = message.options?.process_person_profile;
-    return {
+    const outbound: EventMessage = {
       distinctId: distinctId.data,
       event: message.event,
       properties,
@@ -321,6 +322,7 @@ export const createOutboundEvent = (options: OutboundOptions) => {
       ...(typeof personProfile === "boolean" ? { options: { process_person_profile: personProfile } } : {}),
       ...(typeof message.disableGeoip === "boolean" ? { disableGeoip: message.disableGeoip } : {}),
     };
+    return namesGuestPassIdentifier(outbound) ? null : outbound;
   };
 };
 

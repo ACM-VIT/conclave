@@ -1077,3 +1077,46 @@ describe("every answer from /ingest carries everything the outcome needs", () =>
     expect(await responses[1].json()).toEqual({ status: 1, rejected: [0] });
   });
 });
+
+describe("guest pass identifiers at /ingest", () => {
+  const PASS_ID = "gp_AbCdEfGhIjKlMnOpQrStUv";
+  const SEAT_KEY = "guest-gp_ZyXwVuTsRqPoNmLkJiHgFe";
+  const SIGNED = "eyJhbGciOiJIUzI1NiJ9.eyJndWVzdFByb29mIjoiYWJjIn0.c2lnbmF0dXJlLXZhbHVl";
+
+  it("forwards none of them, and refuses the one event whose frame path names a pass when the build's manifest is gone", async () => {
+    const gone = "c0ffee0c0ffee0c0ffee0c0ffee0c0ffee0c0ff";
+    const exception = (uuid: string, filename: string) => ({
+      uuid,
+      event: "$exception",
+      timestamp: "2026-11-22T00:00:00.000Z",
+      properties: {
+        token: KEY,
+        distinct_id: SEAT_KEY,
+        client_version: gone,
+        guestProof: SIGNED,
+        guestGrant: SIGNED,
+        $current_url: `https://conclave.acmvit.in/lime-pear-plum?guest=${PASS_ID}`,
+        $exception_list: [
+          { type: "TypeError", value: `as ${SEAT_KEY}`, stacktrace: { type: "raw", frames: [{ filename, lineno: 1, chunk_id: CHUNK_ID }] } },
+        ],
+      },
+    });
+    const { response, upstream } = await forward(
+      post(
+        JSON.stringify(
+          captureBody([
+            exception("0196f0a1-0000-7000-8000-0000000000c7", `https://conclave.acmvit.in/_next/static/chunks/${PASS_ID}.js`),
+            exception("0196f0a1-0000-7000-8000-0000000000c8", "https://conclave.acmvit.in/_next/static/chunks/3u-6_1om1fv26.js"),
+          ]),
+        ),
+        "application/json",
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: 1, rejected: [0] });
+    expect(sentBody(upstream).batch.map((event) => event.uuid)).toEqual(["0196f0a1-0000-7000-8000-0000000000c8"]);
+    const text = String(upstream[0].init.body);
+    for (const canary of [PASS_ID, SEAT_KEY, SIGNED, "guestProof", "guestGrant"]) expect(text).not.toContain(canary);
+  });
+});

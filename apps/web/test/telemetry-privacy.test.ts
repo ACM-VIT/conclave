@@ -694,3 +694,53 @@ describe("stored state", () => {
     expect(build(event, { clientVersion: "unknown" }).properties.client_version).toBe("unknown");
   });
 });
+
+describe("guest pass identifiers", () => {
+  const PASS_ID = "gp_AbCdEfGhIjKlMnOpQrStUv";
+  const SEAT_KEY = "guest-gp_ZyXwVuTsRqPoNmLkJiHgFe";
+  const OLDER_KEY = "guest-0196f0a1-0000-7000-8000-000000000123";
+  const PASS_COOKIE = "conclave-guest-0a1b2c3d-4e5f6a7b";
+  const SIGNED = "eyJhbGciOiJIUzI1NiJ9.eyJndWVzdFByb29mIjoiYWJjIn0.c2lnbmF0dXJlLXZhbHVl";
+  const canaries = [PASS_ID, SEAT_KEY, OLDER_KEY, PASS_COOKIE, SIGNED, "guestProof", "guestGrant"];
+
+  it("sends none of them, wherever an event carries one", () => {
+    const event = exceptionEvent();
+    event.properties = {
+      ...event.properties,
+      distinct_id: SEAT_KEY,
+      $device_id: PASS_ID,
+      $session_id: OLDER_KEY,
+      $current_url: `${SITE}/lime-pear-plum?guest=${PASS_ID}&grant=${SIGNED}`,
+      $pathname: `/${SEAT_KEY}`,
+      $raw_user_agent: `${PASS_COOKIE}=${SIGNED}`,
+      guestProof: SIGNED,
+      guestGrant: SIGNED,
+      userKey: SEAT_KEY,
+      cookie: `${PASS_COOKIE}=${SIGNED}`,
+    };
+    event.properties.$exception_list[0].value = `join failed for ${SEAT_KEY} with ${PASS_ID}`;
+    event.properties.$exception_list[0].stacktrace.frames = [
+      { filename: `${SITE}/_next/static/chunks/${PASS_ID}.js?grant=${SIGNED}`, function: SEAT_KEY, lineno: 1, chunk_id: CHUNK_ID },
+    ];
+    const text = JSON.stringify(build(event));
+
+    for (const canary of canaries) expect(text).not.toContain(canary);
+  });
+
+  it("refuses an event when one still survives the schema, as a frame path does without the build's chunk list", () => {
+    const event = exceptionEvent();
+    event.properties.$exception_list[0].stacktrace.frames = [
+      { filename: `${SITE}/_next/static/chunks/${PASS_ID}.js`, lineno: 1, chunk_id: CHUNK_ID },
+    ];
+    const source = {
+      payload: { source: "react_error_boundary", boundary: "route" },
+      storedKeys: new Set<string>(),
+      token: KEY,
+      clientVersion: BUILD,
+      siteOrigin: SITE,
+    };
+
+    expect(beforeSend(event, { ...source, chunkFiles: null })).toBeNull();
+    expect(beforeSend({ ...event, properties: { ...event.properties, $exception_list: [{ type: "TypeError", value: "x" }] } }, { ...source, chunkFiles: null })).not.toBeNull();
+  });
+});

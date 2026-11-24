@@ -375,6 +375,17 @@ shapes the values of listed properties:
   plus timestamp.
 - **Required fields.** An `$exception` with no exception list, or an empty
   one, is not sent.
+- **Guest pass identifiers.** No event carries a guest pass id (`gp_` and 22
+  characters), a guest seat key (`guest-gp_...`, or an older
+  `guest-<sessionId>`), a pass cookie (`conclave-guest-<scope>-<slot>`) or a
+  signed pass, grant or join token (these are what carry `guestProof`): the
+  outbound schemas have no field that could hold one, and as a last check
+  the browser and `/ingest` (`buildOutboundEvent`) and the SFU
+  (`createOutboundEvent`) refuse any built event whose content still names
+  one, by the shapes in `@conclave/meeting-core/guest-pass-identifiers`. A
+  chunk-shaped frame path that embeds a pass id, which a frame keeps when its
+  build's chunk list is not at hand, is refused that way. Telemetry requests
+  send no cookies, so a pass cookie never reaches `/ingest` either.
 
 Session replay, surveys, DOM autocapture, feature flags and pageviews are off,
 and no user is ever identified.

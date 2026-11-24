@@ -317,3 +317,51 @@ describe("the SFU's outbound schema", () => {
     }
   });
 });
+
+describe("guest pass identifiers in SFU events", () => {
+  const PASS_ID = "gp_AbCdEfGhIjKlMnOpQrStUv";
+  const SEAT_KEY = "guest-gp_ZyXwVuTsRqPoNmLkJiHgFe";
+  const SIGNED = "eyJhbGciOiJIUzI1NiJ9.eyJndWVzdFByb29mIjoiYWJjIn0.c2lnbmF0dXJlLXZhbHVl";
+
+  it("sends none of them, wherever an exception carries one", () => {
+    const message = {
+      distinctId: SFU_ID,
+      event: "$exception",
+      uuid: "0196f0a1-0000-7000-8000-0000000000ad",
+      properties: {
+        $exception_list: [
+          {
+            type: "Error",
+            value: `seat ${SEAT_KEY} proof ${SIGNED}`,
+            stacktrace: { type: "raw", frames: [{ filename: OWN_FILE, function: SEAT_KEY, lineno: 1, in_app: true }] },
+          },
+        ],
+        source: "socket_handler",
+        socket_event: "joinRoom",
+        sfu_instance_id: SFU_ID,
+        guestProof: SIGNED,
+        userKey: SEAT_KEY,
+        guestPassId: PASS_ID,
+      },
+    };
+    const text = JSON.stringify(beforeSend(message));
+
+    expect(text).toContain("joinRoom");
+    for (const canary of [PASS_ID, SEAT_KEY, SIGNED, "guestProof", "guestPassId"]) expect(text).not.toContain(canary);
+  });
+
+  it("refuses an event when one would get past a looser form", () => {
+    const loose = createOutboundEvent({
+      release: RELEASE,
+      framePath: createFramePath({ root: SFU_ROOT, cwd: () => process.cwd() }),
+      games: getGameCatalog,
+      isSocketEvent: () => true,
+    });
+    const exception = (socket_event: string) =>
+      loose({ distinctId: SFU_ID, event: "$exception", properties: { source: "socket_handler", socket_event } });
+
+    expect(exception("joinRoom")).not.toBeNull();
+    expect(exception(SEAT_KEY)).toBeNull();
+    expect(exception(PASS_ID)).toBeNull();
+  });
+});

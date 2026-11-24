@@ -1,3 +1,4 @@
+import { namesGuestPassIdentifier } from "@conclave/meeting-core/guest-pass-identifiers";
 import type { CaptureResult, Properties } from "posthog-js";
 import { z } from "zod";
 import { isCallLogLabel } from "./call-log-labels";
@@ -257,7 +258,8 @@ export function buildOutboundEvent(
     if (parsed.success && parsed.data !== undefined) properties[key] = parsed.data;
   }
   if ((REQUIRED_PROPERTIES[name] ?? []).some((key) => !Object.hasOwn(properties, key))) return null;
-  return { uuid: event.uuid, event: name, properties };
+  const built = { uuid: event.uuid, event: name, properties };
+  return namesGuestPassIdentifier(built) ? null : built;
 }
 
 /** The posthog-js `before_send` hook: the event rebuilt from the schema, or null to drop it. */
