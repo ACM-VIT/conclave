@@ -1,7 +1,11 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import MeetsClient from "./meets-client";
+import {
+  createGuestPassSession,
+  guestPassRequestFor,
+} from "./lib/guest-pass-session";
 import type { JoinMode } from "./lib/types";
 import type { RoomInfo } from "@/lib/sfu-types";
 import {
@@ -76,6 +80,10 @@ export default function MeetsClientPage({
   user,
   isAdmin = false,
 }: MeetsClientPageProps) {
+  const [guestPass] = useState(() =>
+    createGuestPassSession(guestPassRequestFor(user)),
+  );
+  useEffect(() => guestPass.pageLoaded(), [guestPass]);
   const defaultUser = user;
   const resolvedIsAdmin = isAdmin;
   const resolvedClientId =
@@ -95,38 +103,43 @@ export default function MeetsClientPage({
       const resolvedUser = options?.user ?? defaultUser;
       const isHost = Boolean(options?.isHost);
       const resolvedJoinMode = options?.joinMode ?? joinMode;
-      const response = await fetchJoinInfoWithTimeout({
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-sfu-client": resolvedClientId,
-        },
-        body: JSON.stringify({
-          roomId,
-          sessionId,
-          user: resolvedUser,
-          isHost,
-          allowRoomCreation: forceJoinOnly,
-          clientId: resolvedClientId,
-          joinMode: resolvedJoinMode,
-        }),
-      });
+      return guestPass.join(async (guestFields) => {
+        const response = await fetchJoinInfoWithTimeout({
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-sfu-client": resolvedClientId,
+          },
+          body: JSON.stringify({
+            roomId,
+            sessionId,
+            user: resolvedUser,
+            isHost,
+            allowRoomCreation: forceJoinOnly,
+            clientId: resolvedClientId,
+            joinMode: resolvedJoinMode,
+            ...guestFields,
+          }),
+        });
 
-      if (!response.ok) {
-        const error = new Error(await readError(response)) as Error & {
-          responseStatus?: number;
+        if (!response.ok) {
+          const error = new Error(await readError(response)) as Error & {
+            responseStatus?: number;
+          };
+          error.responseStatus = response.status;
+          throw error;
+        }
+
+        return (await response.json()) as {
+          token: string;
+          sfuUrl: string;
+          iceServers?: RTCIceServer[];
+          guestId?: string;
+          guestGrant?: string;
         };
-        error.responseStatus = response.status;
-        throw error;
-      }
-
-      return (await response.json()) as {
-        token: string;
-        sfuUrl: string;
-        iceServers?: RTCIceServer[];
-      };
+      });
     },
-    [forceJoinOnly, joinMode, defaultUser, resolvedClientId]
+    [forceJoinOnly, joinMode, defaultUser, resolvedClientId, guestPass]
   );
 
   const getRooms = useCallback(async () => {

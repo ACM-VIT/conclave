@@ -1,6 +1,8 @@
 import { readAiEnvironment } from "@conclave/ai/models";
+import { parseGuestJoinClaims } from "@conclave/meeting-core/guest-join-claims";
 import { Admin } from "../../../config/classes/Admin.js";
 import { Client } from "../../../config/classes/Client.js";
+import type { Room } from "../../../config/classes/Room.js";
 import { config } from "../../../config/config.js";
 import type {
   AppsAwarenessData,
@@ -15,6 +17,7 @@ import { MAX_DISPLAY_NAME_LENGTH } from "../../constants.js";
 import {
   buildUserIdentity,
   isGuestUserKey,
+  seatIdOf,
   normalizeDisplayName,
 } from "../../identity.js";
 import {
@@ -48,6 +51,15 @@ import {
   resolveScheduledWebinarAttendeeEntry,
 } from "../../scheduledWebinars.js";
 import { ensureWebinarRoomConfig } from "../../scheduledWebinarScheduler.js";
+import {
+  answerSettledRequests,
+  handOffRoom,
+  publishLobby,
+  removeBlockedGuest,
+  teardownClient,
+  withdrawWaitingRequest,
+} from "../../admin/controlPlane.js";
+import { emitToHost } from "../../admin/hostOnlyEvents.js";
 import { getSocketAuthUser } from "../auth.js";
 import type { ConnectionContext } from "../context.js";
 import { registerAdminHandlers } from "./adminHandlers.js";
@@ -63,6 +75,18 @@ const MAX_CLIENT_ID_LENGTH = 256;
 const MAX_ROOM_ID_LENGTH = 256;
 const MAX_SESSION_ID_LENGTH = 128;
 const MAX_INVITE_CODE_LENGTH = 256;
+const MAX_ADMISSION_CODE_LENGTH = 128;
+const GUEST_NOT_VERIFIED_ERROR =
+  "This guest session could not be verified. Reload the page to join again.";
+const WAITING_ROOM_FULL_ERROR =
+  "The waiting room is full. Try again in a moment.";
+const MEETING_FULL_ERROR = "This meeting is full.";
+
+// A new request to be let in past the room's limit is refused. A tab that
+// already waits keeps its place.
+const isWaitingRoomFull = (room: Room, userKey: string): boolean =>
+  !room.pendingClients.has(userKey) &&
+  room.pendingClients.size >= config.waitingRequestLimit;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
 
 const normalizeIdentifier = (
@@ -81,6 +105,65 @@ const normalizeIdentifier = (
   return normalized;
 };
 
+const JOIN_SUPERSEDED_ERROR = "A newer join for this tab took its place.";
+
+type JoinAttempts = {
+  byTab: Map<string, { seated: number; inFlight: number }>;
+  byRoom: Map<string, number>;
+  unclaimedRooms: Map<string, string>;
+};
+const joinAttemptsByState = new WeakMap<ConnectionContext["state"], JoinAttempts>();
+let joinAttemptCount = 0;
+
+const attemptsOf = (state: ConnectionContext["state"]): JoinAttempts => {
+  let attempts = joinAttemptsByState.get(state);
+  if (!attempts) {
+    attempts = { byTab: new Map(), byRoom: new Map(), unclaimedRooms: new Map() };
+    joinAttemptsByState.set(state, attempts);
+  }
+  return attempts;
+};
+
+const beginJoinAttempt = (
+  state: ConnectionContext["state"],
+  channelId: string,
+  key: string,
+): number => {
+  const attempts = attemptsOf(state);
+  const record = attempts.byTab.get(key);
+  if (record) record.inFlight += 1;
+  else attempts.byTab.set(key, { seated: 0, inFlight: 1 });
+  attempts.byRoom.set(channelId, (attempts.byRoom.get(channelId) ?? 0) + 1);
+  return (joinAttemptCount += 1);
+};
+
+const endJoinAttempt = (
+  context: ConnectionContext,
+  channelId: string,
+  key: string,
+): void => {
+  const attempts = attemptsOf(context.state);
+  const record = attempts.byTab.get(key);
+  if (record) {
+    record.inFlight -= 1;
+    if (record.inFlight <= 0) attempts.byTab.delete(key);
+  }
+  const inRoom = (attempts.byRoom.get(channelId) ?? 1) - 1;
+  if (inRoom > 0) {
+    attempts.byRoom.set(channelId, inRoom);
+    return;
+  }
+  attempts.byRoom.delete(channelId);
+  if (!attempts.unclaimedRooms.delete(channelId)) return;
+  const room = context.state.rooms.get(channelId);
+  if (!room) return;
+  if (room.isEmpty()) {
+    cleanupRoom(context.state, channelId);
+  } else if (!room.hasActiveAdmin()) {
+    handOffRoom(context.io, context.state, room);
+  }
+};
+
 export const registerJoinRoomHandler = (context: ConnectionContext): void => {
   const { socket, io, state } = context;
 
@@ -90,6 +173,8 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
       data: JoinRoomData,
       callback: (response: JoinRoomResponse | JoinRoomErrorResponse) => void,
     ) => {
+      let attemptKey: string | null = null;
+      let attemptRoom: string | null = null;
       try {
         const requestedRoomId = normalizeIdentifier(
           data?.roomId,
@@ -143,6 +228,25 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           return;
         }
         const { userKey, userId } = identity;
+        const guestClaims = isGuestUserKey(userKey)
+          ? parseGuestJoinClaims(user)
+          : null;
+        if (isGuestUserKey(userKey) && !guestClaims) {
+          respond(callback, { error: GUEST_NOT_VERIFIED_ERROR });
+          return;
+        }
+        // A guest's seat key is issued for one room. Its token joins that
+        // room and no other, whatever room this call names.
+        if (
+          guestClaims?.scope === "room" &&
+          guestClaims.guestRoom !== requestedRoomId
+        ) {
+          respond(callback, {
+            error:
+              "This join token is for another meeting. Reload the page to join again.",
+          });
+          return;
+        }
 
         let roomId = requestedRoomId;
         let scheduledWebinarForAttendee: ReturnType<
@@ -233,6 +337,30 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           Boolean(scheduledWebinarForRoom) &&
           scheduledWebinarForRoom?.status !== "ended" &&
           scheduledWebinarForRoom?.status !== "cancelled";
+        // A block follows any proof. A right does not: only a token issued
+        // for this room speaks for the guest behind its pass, and so holds
+        // what the guest's other tabs hold here, or takes a stage invite.
+        const guestProof = guestClaims?.guestProof;
+        const roomScopedClaims =
+          guestClaims?.scope === "room" ? guestClaims : null;
+        const roomGuestProof = roomScopedClaims?.guestProof;
+        const otherGuestSeats = roomScopedClaims?.guestWas ?? [];
+        // What the token shows of the guest's other passes is decided on,
+        // not recorded: only a join that is let in or waits records it
+        // (`commitLink` below). A refused join leaves the room as it was,
+        // except that a guest a block turns out to cover leaves at once.
+        const planLink = (forRoom: Room | undefined) =>
+          forRoom && roomGuestProof !== undefined && otherGuestSeats.length > 0
+            ? forRoom.planGuestLink(otherGuestSeats, roomGuestProof)
+            : undefined;
+        const knownRoom = state.rooms.get(resolvedChannelId);
+        const earlyLink = planLink(knownRoom);
+        if (knownRoom && earlyLink?.blocked) {
+          removeBlockedGuest(knownRoom, knownRoom.refuseBlockedLink(earlyLink), {
+            io,
+            state,
+          });
+        }
         // A host invite ("bring on stage") lets an attendee identity rejoin as
         // a full participant; the promotion registry lives on the live room.
         // Honored only while webinar mode is on, so a stale invite can never
@@ -243,7 +371,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           Boolean(
             state.rooms
               .get(resolvedChannelId)
-              ?.isWebinarPromotedUserKey(userKey),
+              ?.hasStageInvite(userKey, roomGuestProof, earlyLink),
           );
         if (
           isActiveScheduledWebinarRoom &&
@@ -267,7 +395,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           Boolean(
             state.rooms
               .get(resolvedChannelId)
-              ?.isWebinarDemotedUserKey(userKey),
+              ?.isWebinarDemotedUserKey(userKey, guestProof, earlyLink),
           )
         ) {
           respond(callback, {
@@ -287,6 +415,17 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         }
 
         const roomChannelId = getRoomChannelId(clientId, roomId);
+        const joinKey = `${roomChannelId} ${userId}`;
+        attemptKey = joinKey;
+        attemptRoom = roomChannelId;
+        const attempt = beginJoinAttempt(state, roomChannelId, joinKey);
+        const superseded = (): boolean => {
+          if (socket.connected && (attemptsOf(state).byTab.get(joinKey)?.seated ?? 0) <= attempt) {
+            return false;
+          }
+          respond(callback, { error: JOIN_SUPERSEDED_ERROR });
+          return true;
+        };
         let room = state.rooms.get(roomChannelId);
         let createdRoom = false;
         const respondWithRoomOwner = (owner: RoomAssignmentRecord): void => {
@@ -325,6 +464,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             // to the creation path below, which applies the creation checks
             // and makes this joiner the creator if it creates the room.
             room = (await renewLocalRoom(state, clientId, roomId)) ?? undefined;
+            if (superseded()) return;
           } catch (error) {
             if (error instanceof RoomOwnershipError) {
               respondWithRoomOwner(error.owner);
@@ -336,6 +476,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
 
         if (!room) {
           const assignment = await state.roomRegistry.getAssignment(roomChannelId);
+          if (superseded()) return;
           if (assignment && !state.roomRegistry.isLocalOwner(assignment)) {
             respondWithRoomOwner(assignment);
             return;
@@ -372,6 +513,10 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             );
             room = result.room;
             createdRoom = result.created;
+            if (result.created && !isWebinarAttendeeJoin) {
+              attemptsOf(state).unclaimedRooms.set(roomChannelId, joinKey);
+            }
+            if (superseded()) return;
           } catch (error) {
             if (error instanceof RoomOwnershipError) {
               respondWithRoomOwner(error.owner);
@@ -433,17 +578,68 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           }
         }
 
+        const guestLink = planLink(room);
+        if (guestLink?.blocked && !(room === knownRoom && earlyLink?.blocked)) {
+          removeBlockedGuest(room, room.refuseBlockedLink(guestLink), {
+            io,
+            state,
+          });
+        }
+        const joinedRoom = room;
+        const commitLink = () => {
+          if (!guestLink) return;
+          answerSettledRequests(joinedRoom, joinedRoom.commitGuestLink(guestLink));
+        };
+
+        const guestClaim = room.claimGuestIdentity(userKey, guestProof);
+        if (!guestClaim.ok) {
+          Logger.warn(
+            `Join as ${userKey} in room ${roomId} refused: guest pass does not match`,
+          );
+          respond(callback, { error: GUEST_NOT_VERIFIED_ERROR });
+          return;
+        }
+
+        // The seats this tab held under the browser's other passes. The tab
+        // is back on a new socket, so they are replaced whatever their old
+        // sockets look like.
+        const formerSeatIds = new Set(
+          otherGuestSeats
+            .filter((seat) => room.isGuestKeyOfPass(seat.userKey, seat.guestProof))
+            .map((seat) => seatIdOf(seat.userKey, identity.sessionId)),
+        );
+        // A request to be let in that this tab made under another pass is
+        // withdrawn now. Left in the lobby, the host would see two requests
+        // for one tab, and admitting the old one would answer a dead socket.
+        for (const seat of otherGuestSeats) {
+          const waiting = room.pendingClients.get(seat.userKey);
+          if (
+            !waiting ||
+            waiting.socket.id === socket.id ||
+            waiting.userId !== seatIdOf(seat.userKey, identity.sessionId) ||
+            !room.isGuestKeyOfPass(seat.userKey, seat.guestProof)
+          ) {
+            continue;
+          }
+          withdrawWaitingRequest(room, seat.userKey);
+          waiting.socket.disconnect(true);
+        }
         const existingClient = room.getClient(userId);
         const staleSameIdentitySeats = Array.from(
           room.userKeysById.entries(),
         )
           .flatMap(([candidateUserId, candidateUserKey]) => {
-            if (candidateUserId === userId || candidateUserKey !== userKey) {
+            const isFormerSeat = formerSeatIds.has(candidateUserId);
+            if (
+              candidateUserId === userId ||
+              (candidateUserKey !== userKey && !isFormerSeat)
+            ) {
               return [];
             }
             const candidateClient = room.getClient(candidateUserId);
             if (
               !(
+                isFormerSeat ||
                 room.hasPendingDisconnect(candidateUserId) ||
                 candidateClient?.socket.connected === false
               )
@@ -453,6 +649,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             return [
               {
                 userId: candidateUserId,
+                isFormerSeat,
                 isMeetingParticipant: Boolean(
                   candidateClient && !candidateClient.isObserver,
                 ),
@@ -470,10 +667,20 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         const wasReconnecting = room.hasPendingDisconnect(userId);
         const isReplacingExistingSeat =
           Boolean(existingClient) || staleSameIdentitySeats.length > 0;
+        // Only a join that takes the place of a meeting seat keeps the
+        // meeting's seat count as it was. One that replaces this tab's
+        // audience seat adds a meeting seat.
+        const isReplacingMeetingSeat =
+          (existingClient !== undefined && !existingClient.isWebinarAttendee) ||
+          staleSameIdentitySeats.some((seat) => !seat.isWebinarAttendee);
         const isSameSessionMeetingParticipantRejoin =
           !isWebinarAttendeeJoin &&
           Boolean(
-            wasReconnecting || (existingClient && !existingClient.isObserver),
+            wasReconnecting ||
+              (existingClient && !existingClient.isObserver) ||
+              staleSameIdentitySeats.some(
+                (seat) => seat.isFormerSeat && seat.isMeetingParticipant,
+              ),
           );
         const reclaimingWebinarSeat =
           isWebinarAttendeeJoin &&
@@ -482,12 +689,14 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
               staleSameIdentitySeats.some((seat) => seat.isWebinarAttendee),
           );
 
+        let replacedHostSeat = false;
         const removeClientForRejoin = (
           targetUserId: string,
           options?: { notifyPeers?: boolean },
         ) => {
           const client = room.getClient(targetUserId);
           if (!client) return;
+          if (client instanceof Admin && !client.isObserver) replacedHostSeat = true;
 
           const awarenessRemovals = room.clearUserAwareness(targetUserId);
           for (const removal of awarenessRemovals) {
@@ -498,6 +707,24 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           }
 
           room.removeClient(targetUserId);
+          if (isWebinarAttendeeJoin) {
+            state.transcriptRelays
+              .releaseSeat({ roomKey: roomChannelId, userId: targetUserId })
+              .catch((error) => {
+                Logger.warn(
+                  `Transcript SFU relay stop for ${targetUserId} in room ${roomChannelId} failed: ${error}`,
+                );
+              });
+          } else {
+            state.transcriptRelays.handOver({
+              roomKey: roomChannelId,
+              fromUserId: targetUserId,
+              toUserId: userId,
+            });
+          }
+          if (client.socket.id !== socket.id) {
+            client.socket.disconnect(true);
+          }
 
           if (!options?.notifyPeers) return;
           if (!client.isWebinarAttendee) {
@@ -517,34 +744,40 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           return;
         }
 
+        // A block comes before every right the room keeps for a rejoin: host,
+        // co-host, an admission, a stage invite. The one exemption is an
+        // account that is a host by configuration outside the room, which
+        // the room also refuses to block or remove.
+        if (
+          !forcedHostJoin &&
+          user?.isSuperAdmin !== true &&
+          room.isBlocked(userKey, guestProof, guestLink)
+        ) {
+          Logger.info(`Blocked identity ${userKey} denied access to room ${roomId}`);
+          respond(callback, { error: "You are not allowed to join this meeting." });
+          return;
+        }
+
         const isReturningPrimaryHost =
           !isWebinarAttendeeJoin &&
-          Boolean(room.hostUserKey) &&
-          room.hostUserKey === userKey;
+          room.isHostUserKey(userKey, roomGuestProof, guestLink);
         const isPersistedAdminForExistingRoom =
-          !isWebinarAttendeeJoin && room.isAdminUserKey(userKey);
+          !isWebinarAttendeeJoin &&
+          room.isAdminUserKey(userKey, roomGuestProof, guestLink);
         const isAdminForExistingRoom =
           !isWebinarAttendeeJoin &&
           (isReturningPrimaryHost ||
             isPersistedAdminForExistingRoom ||
             (hostRequested &&
               (clientPolicy.allowHostJoin || forcedHostJoin)));
+        const createdBySupersededAttempt =
+          attemptsOf(state).unclaimedRooms.get(roomChannelId) === joinKey;
         const isAdminJoin = isWebinarAttendeeJoin
           ? false
-          : createdRoom
+          : createdRoom || createdBySupersededAttempt
             ? true
             : isAdminForExistingRoom;
         const hasPrivilegedJoinAccess = isAdminJoin;
-
-        if (
-          !hasPrivilegedJoinAccess &&
-          user?.isSuperAdmin !== true &&
-          room.isBlocked(userKey)
-        ) {
-          Logger.info(`Blocked identity ${userKey} denied access to room ${roomId}`);
-          respond(callback, { error: "You are not allowed to join this meeting." });
-          return;
-        }
 
         let meetingInviteCode = "";
         if (data?.meetingInviteCode !== undefined) {
@@ -593,7 +826,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         if (isAdminJoin && !room.hostUserKey) {
           room.hostUserKey = userKey;
         }
-        const isPrimaryHost = room.hostUserKey === userKey;
+        const isPrimaryHost = room.isHostUserKey(userKey, roomGuestProof, guestLink);
 
         if (
           !isWebinarAttendeeJoin &&
@@ -621,6 +854,16 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           room.stopCleanupTimer();
         }
 
+        // An admission the host created lets this join past the waiting
+        // room and the lock below, and stays with its key.
+        const admissionCode = normalizeIdentifier(
+          data?.admissionCode,
+          MAX_ADMISSION_CODE_LENGTH,
+        );
+        if (admissionCode && !isWebinarAttendeeJoin && !hasPrivilegedJoinAccess) {
+          room.redeemAdmission(admissionCode, userKey, guestProof);
+        }
+
         const canSetDisplayName = Boolean(
           !isWebinarAttendeeJoin &&
             (clientPolicy.allowDisplayNameUpdate || isAdminJoin),
@@ -636,12 +879,23 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           room.isLocked &&
           !hasPrivilegedJoinAccess &&
           !isWebinarPromotedJoin &&
-          !room.isLockedAllowed(userKey)
+          !room.isLockedAllowed(userKey, roomGuestProof, guestLink)
         ) {
+          if (isWaitingRoomFull(room, userKey)) {
+            respond(callback, { error: WAITING_ROOM_FULL_ERROR });
+            return;
+          }
+          commitLink();
           Logger.info(
             `User ${userKey} trying to join locked room ${roomId}, adding to waiting room`,
           );
-          room.addPendingClient(userKey, userId, socket, displayName);
+          room.addPendingClient(
+            userKey,
+            userId,
+            socket,
+            displayName,
+            guestClaim.bindTo,
+          );
           context.pendingRoomId = roomId;
           context.pendingRoomChannelId = roomChannelId;
           context.pendingUserKey = userKey;
@@ -652,15 +906,9 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             roomId,
           });
 
-          const admins = room.getAdmins();
-          for (const admin of admins) {
-            admin.socket.emit("userRequestedJoin", {
-              userId: userKey,
-              displayName,
-              roomId,
-              reason: "locked",
-            });
-          }
+          // Hosts are shown one request per guest. A second tab of a guest
+          // who already waits joins that request without a new knock.
+          publishLobby(room, { reason: "locked" });
 
           respond(callback, {
             roomId,
@@ -688,11 +936,25 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           clientPolicy.useWaitingRoom &&
           !hasPrivilegedJoinAccess &&
           !isWebinarPromotedJoin &&
-          !room.isAllowed(userKey) &&
-          !(room.isLocked && room.isLockedAllowed(userKey))
+          !room.isAllowed(userKey, roomGuestProof, guestLink) &&
+          !(
+            room.isLocked &&
+            room.isLockedAllowed(userKey, roomGuestProof, guestLink)
+          )
         ) {
+          if (isWaitingRoomFull(room, userKey)) {
+            respond(callback, { error: WAITING_ROOM_FULL_ERROR });
+            return;
+          }
+          commitLink();
           Logger.info(`User ${userKey} added to waiting room ${roomId}`);
-          room.addPendingClient(userKey, userId, socket, displayName);
+          room.addPendingClient(
+            userKey,
+            userId,
+            socket,
+            displayName,
+            guestClaim.bindTo,
+          );
           context.pendingRoomId = roomId;
           context.pendingRoomChannelId = roomChannelId;
           context.pendingUserKey = userKey;
@@ -704,14 +966,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             });
           }
 
-          const admins = room.getAdmins();
-          for (const admin of admins) {
-            admin.socket.emit("userRequestedJoin", {
-              userId: userKey,
-              displayName,
-              roomId,
-            });
-          }
+          publishLobby(room);
 
           respond(callback, {
             roomId,
@@ -734,13 +989,36 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           return;
         }
 
-        room.clearPendingDisconnect(userId);
+        if (
+          !isWebinarAttendeeJoin &&
+          !hasPrivilegedJoinAccess &&
+          !isReplacingMeetingSeat &&
+          room.clients.size - room.getWebinarAttendeeCount() >=
+            config.meetingSeatLimit
+        ) {
+          respond(callback, { error: MEETING_FULL_ERROR });
+          return;
+        }
+        commitLink();
+        const attempts = attemptsOf(state);
+        const tabAttempts = attempts.byTab.get(joinKey);
+        if (tabAttempts) tabAttempts.seated = Math.max(tabAttempts.seated, attempt);
+        if (isAdminJoin && attempts.unclaimedRooms.get(roomChannelId) === joinKey) {
+          attempts.unclaimedRooms.delete(roomChannelId);
+        }
 
-        for (const { userId: staleUserId } of staleSameIdentitySeats) {
+        room.clearPendingDisconnect(userId);
+        // This tab is let in, so a request it left in the lobby is over.
+        // Another tab under the same key keeps its own request.
+        if (room.pendingClients.get(userKey)?.userId === userId) {
+          withdrawWaitingRequest(room, userKey);
+        }
+
+        for (const stale of staleSameIdentitySeats) {
           Logger.warn(
-            `Reclaiming stale session ${staleUserId} for identity ${userKey} in room ${roomId}`,
+            `Reclaiming stale session ${stale.userId} for identity ${userKey} in room ${roomId}`,
           );
-          removeClientForRejoin(staleUserId, { notifyPeers: true });
+          removeClientForRejoin(stale.userId, { notifyPeers: true });
         }
 
         if (existingClient) {
@@ -760,6 +1038,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           clearBrowserState(roomChannelId);
         }
 
+        let previousChannelIdToLeave: string | null = null;
         if (
           context.currentRoom &&
           context.currentRoom.channelId !== roomChannelId &&
@@ -769,47 +1048,25 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           const previousChannelId = previousRoom.channelId;
           const previousClient = context.currentClient;
           const previousClientId = previousClient.id;
-          const wasAdmin = previousClient instanceof Admin;
-          const previousHost = wasAdmin ? previousRoom.getHostUserId() : null;
-          const previousPeers = socket.to(previousChannelId);
           Logger.info(
             `User ${userId} switching from ${previousRoom.id} to ${roomId}`,
           );
 
-          const awarenessRemovals =
-            previousRoom.clearUserAwareness(previousClientId);
-          for (const removal of awarenessRemovals) {
-            previousPeers.emit("apps:awareness", {
-              appId: removal.appId,
-              awarenessUpdate: removal.awarenessUpdate,
-            } satisfies AppsAwarenessData);
+          // Leaving for another room ends the seat as a disconnect does: it
+          // releases what the seat held there, then hands that room on.
+          const previousPeers = socket.to(previousChannelId);
+          const { wasAdmin } = teardownClient({
+            io,
+            state,
+            room: previousRoom,
+            userId: previousClientId,
+            peers: previousPeers,
+          });
+          if (wasAdmin) {
+            handOffRoom(io, state, previousRoom, new Set(), previousPeers);
           }
 
-          previousRoom.removeClient(previousClientId);
-
-          if (!previousClient.isWebinarAttendee) {
-            previousPeers.emit("userLeft", {
-              userId: previousClientId,
-              roomId: previousRoom.id,
-            });
-          }
-          if (wasAdmin && previousRoom.clients.size > 0) {
-            const hostUserId = previousRoom.getHostUserId();
-            if (hostUserId !== previousHost) {
-              previousPeers.emit("hostChanged", { roomId: previousRoom.id, hostUserId });
-            }
-            previousPeers.emit("adminUsersChanged", {
-              roomId: previousRoom.id,
-              hostUserIds: previousRoom.getAdminUserIds(),
-            });
-          }
-
-          emitWebinarAttendeeCountChanged(io, state, previousRoom);
-          emitWebinarFeedChanged(io, state, previousRoom);
-
-          await socket.leave(previousChannelId);
-          cleanupRoom(state, previousChannelId);
-
+          previousChannelIdToLeave = previousChannelId;
           context.currentRoom = null;
           context.currentClient = null;
         }
@@ -845,10 +1102,21 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
 
         context.currentRoom.setUserIdentity(userId, userKey, displayName, {
           forceDisplayName: hasDisplayNameOverride,
+          guestProof: guestClaim.bindTo,
         });
         context.currentRoom.addClient(context.currentClient);
+        if (replacedHostSeat && !room.hasActiveAdmin()) handOffRoom(io, state, room);
 
+        // The previous room's channel is left only now. Nothing awaits between
+        // the identity checks above and this seat, so a second join under the
+        // same user key is always judged against the seat.
+        if (previousChannelIdToLeave) {
+          await socket.leave(previousChannelIdToLeave);
+          cleanupRoom(state, previousChannelIdToLeave);
+          if (superseded()) return;
+        }
         await socket.join(roomChannelId);
+        if (superseded()) return;
 
         const hostUserId = room.getHostUserId();
         const hostUserIds = room.getAdminUserIds();
@@ -867,14 +1135,12 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           hostUserIds,
         });
 
-        if (context.currentClient instanceof Admin && !context.currentClient.isObserver) {
-          const pendingUsers = Array.from(
-            context.currentRoom.pendingClients.values(),
-          ).map((pending) => ({
+        if (context.currentClient instanceof Admin) {
+          const pendingUsers = context.currentRoom.waitingGuests().map((pending) => ({
             userId: pending.userKey,
             displayName: pending.displayName || pending.userKey,
           }));
-          socket.emit("pendingUsersSnapshot", {
+          emitToHost(context.currentClient, "pendingUsersSnapshot", {
             users: pendingUsers,
             roomId: context.currentRoom.id,
           });
@@ -884,9 +1150,19 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           context.currentRoom.getDisplayNameForUser(userId) || displayName;
         if (!wasReconnecting) {
           if (!context.currentClient.isWebinarAttendee) {
+            const usedStageInvites = isWebinarPromotedJoin
+              ? context.currentRoom.stageInviteKeys(userKey, roomGuestProof, guestLink)
+              : [];
             for (const [clientId, client] of context.currentRoom.clients) {
               if (clientId === userId) {
                 continue;
+              }
+              if (usedStageInvites.length > 0 && client instanceof Admin) {
+                emitToHost(client, "webinar:stageInviteUsed", {
+                  roomId: context.currentRoom.id,
+                  userId,
+                  invitedUserKeys: usedStageInvites,
+                });
               }
               if (client.isWebinarAttendee) {
                 client.socket.emit("webinar:participantJoined", {
@@ -953,8 +1229,8 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             ),
           });
         }
-        if (webinarConfig.enabled && isModeratorClient) {
-          socket.emit("webinar:handQueueChanged", {
+        if (webinarConfig.enabled && context.currentClient instanceof Admin) {
+          emitToHost(context.currentClient, "webinar:handQueueChanged", {
             roomId: context.currentRoom.id,
             queue: context.currentRoom.getWebinarHandQueue(),
           });
@@ -1117,6 +1393,10 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
       } catch (error) {
         Logger.error("Error joining room:", error);
         respond(callback, { error: (error as Error).message });
+      } finally {
+        if (attemptKey !== null && attemptRoom !== null) {
+          endJoinAttempt(context, attemptRoom, attemptKey);
+        }
       }
     },
   );

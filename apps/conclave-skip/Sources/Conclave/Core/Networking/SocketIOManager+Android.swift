@@ -41,6 +41,7 @@ final class SocketIOManager {
 
     var onWebinarPromoted: ((WebinarPromotedNotification) -> Void)?
     var onWebinarDemoted: ((WebinarDemotedNotification) -> Void)?
+    var onWebinarStageInviteUsed: ((WebinarStageInviteUsedNotification) -> Void)?
     var onBrowserState: ((BrowserStateNotification) -> Void)?
     var onBrowserClosed: ((BrowserClosedNotification) -> Void)?
     var onAppsState: ((AppsStateNotification) -> Void)?

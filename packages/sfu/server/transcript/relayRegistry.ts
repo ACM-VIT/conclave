@@ -30,9 +30,15 @@ export type TranscriptRelayRegistry = {
     userId: string;
     canStopAnyRelay: boolean;
   }) => Promise<TranscriptSfuRelayStopResponse | { error: string }>;
+  handOver: (options: { roomKey: string; fromUserId: string; toUserId: string }) => void;
+  releaseSeat: (options: { roomKey: string; userId: string }) => Promise<void>;
   syncRoom: (room: Room) => Promise<void>;
   closeAll: () => void;
-  trackedRoomCount: () => number;
+};
+
+type RoomRelays = {
+  serving: TranscriptRelayInstance | null;
+  starting: TranscriptRelayInstance | null;
 };
 
 export const createTranscriptRelayRegistry = (options: {
@@ -43,55 +49,9 @@ export const createTranscriptRelayRegistry = (options: {
     },
   ) => TranscriptRelayInstance;
 }): TranscriptRelayRegistry => {
-  const relays = new Map<string, TranscriptRelayInstance>();
-  const opened = new Map<string, Map<TranscriptRelayInstance, number>>();
-  const startsInFlight = new Map<
-    TranscriptRelayInstance,
-    Promise<TranscriptSfuRelayStartResponse>
-  >();
-  const stoppedThrough = new Map<string, number>();
-  const running = new Set<TranscriptRelayInstance>();
-  let nextGeneration = 0;
-  const isRetired = (key: string, relay: TranscriptRelayInstance): boolean => {
-    const generation = opened.get(key)?.get(relay);
-    return generation === undefined || generation <= (stoppedThrough.get(key) ?? -1);
-  };
-  const pruneStopWatermark = (key: string): void => {
-    const watermark = stoppedThrough.get(key);
-    if (watermark === undefined) return;
-    const stillRetiring = Array.from(opened.get(key)?.values() ?? []).some(
-      (generation) => generation <= watermark,
-    );
-    if (!stillRetiring) stoppedThrough.delete(key);
-  };
+  const rooms = new Map<string, RoomRelays>();
   const roomKey = (room: Pick<Room, "channelId" | "id">): string =>
     room.channelId || room.id;
-  const forget = (key: string, relay: TranscriptRelayInstance): void => {
-    running.delete(relay);
-    const roomRelays = opened.get(key);
-    roomRelays?.delete(relay);
-    if (roomRelays?.size === 0) opened.delete(key);
-    pruneStopWatermark(key);
-  };
-  const closeRelay = (
-    key: string,
-    relay: TranscriptRelayInstance,
-    closeOptions?: Parameters<TranscriptRelayInstance["close"]>[0],
-  ): void => {
-    forget(key, relay);
-    relay.close(closeOptions);
-  };
-  const closeOlderThan = (key: string, generation: number): void => {
-    for (const [relay, relayGeneration] of Array.from(opened.get(key) ?? [])) {
-      if (relayGeneration < generation) closeRelay(key, relay);
-    }
-  };
-  const closeRoom = (key: string): void => {
-    for (const relay of Array.from(opened.get(key)?.keys() ?? [])) {
-      closeRelay(key, relay);
-    }
-    relays.delete(key);
-  };
 
   const getStatus = (): TranscriptSfuRelayStatusResponse => {
     if (!options.enabled) {
@@ -111,6 +71,33 @@ export const createTranscriptRelayRegistry = (options: {
     };
   };
 
+  const failed = (reason: string): TranscriptSfuRelayStartResponse => ({
+    mode: "sfu",
+    success: false,
+    status: "error",
+    reason,
+    updatedAt: Date.now(),
+  });
+
+  const forget = (key: string, slot: RoomRelays): void => {
+    if (!slot.serving && !slot.starting && rooms.get(key) === slot) {
+      rooms.delete(key);
+    }
+  };
+
+  const stopServing = async (
+    key: string,
+    relay: TranscriptRelayInstance,
+  ): Promise<void> => {
+    const handoffReady = await relay.prepareHandoff();
+    if (!handoffReady) {
+      Logger.warn(
+        `Transcript SFU relay stop for room ${key} could not prepare worker disconnect suppression.`,
+      );
+    }
+    relay.close({ flushBufferedAudio: true });
+  };
+
   return {
     getStatus,
     async start(startOptions) {
@@ -126,20 +113,17 @@ export const createTranscriptRelayRegistry = (options: {
       }
 
       const key = roomKey(startOptions.room);
-      const existingRelay = relays.get(key);
+      const slot = rooms.get(key) ?? { serving: null, starting: null };
+      const current = slot.starting ?? slot.serving;
       if (
-        existingRelay &&
-        existingRelay.controllerUserId !== startOptions.controllerUserId &&
+        current &&
+        current.controllerUserId !== startOptions.controllerUserId &&
         !startOptions.canReplaceExistingRelay
       ) {
-        return {
-          mode: "sfu",
-          success: false,
-          status: "error",
-          reason: "An SFU transcript relay is already controlled by another participant.",
-          updatedAt: Date.now(),
-        };
+        return failed("An SFU transcript relay is already controlled by another participant.");
       }
+      rooms.set(key, slot);
+      slot.starting?.close();
 
       const relay: TranscriptRelayInstance = (options.createRelay ?? ((relayOptions) =>
         new SfuTranscriptRelay(relayOptions)))({
@@ -149,155 +133,117 @@ export const createTranscriptRelayRegistry = (options: {
         controllerUserId: startOptions.controllerUserId,
         controllerDisplayName: startOptions.controllerDisplayName,
         onClosed: () => {
-          forget(key, relay);
-          if (relays.get(key) === relay) {
-            relays.delete(key);
-          }
+          if (slot.serving === relay) slot.serving = null;
+          if (slot.starting === relay) slot.starting = null;
+          forget(key, slot);
         },
       });
-      const generation = nextGeneration++;
-      const roomRelays =
-        opened.get(key) ?? new Map<TranscriptRelayInstance, number>();
-      opened.set(key, roomRelays.set(relay, generation));
-      relays.set(key, relay);
-      let settle!: (response: TranscriptSfuRelayStartResponse) => void;
-      startsInFlight.set(
-        relay,
-        new Promise((resolve) => {
-          settle = resolve;
-        }),
-      );
-      const failure = (reason: string): TranscriptSfuRelayStartResponse => ({
-        mode: "sfu",
-        success: false,
-        status: "error",
-        reason,
-        updatedAt: Date.now(),
-      });
-      const isOpen = (candidate: TranscriptRelayInstance): boolean =>
-        !isRetired(key, candidate);
-      const isRunning = (candidate: TranscriptRelayInstance | undefined): boolean =>
-        Boolean(candidate && running.has(candidate) && isOpen(candidate));
-      const finish = (
-        response: TranscriptSfuRelayStartResponse,
-      ): TranscriptSfuRelayStartResponse => {
-        const settled =
-          response.success && !isRunning(relays.get(key))
-            ? failure("No SFU transcript relay is running for this room.")
-            : response;
-        startsInFlight.delete(relay);
-        settle(settled);
-        return settled;
-      };
-      const outcomeOfNewerStart = async (): Promise<TranscriptSfuRelayStartResponse | null> => {
-        for (;;) {
-          const current = relays.get(key);
-          if (current === relay) return null;
-          const newer = current ? startsInFlight.get(current) : undefined;
-          if (newer) {
-            await newer;
-            continue;
-          }
-          if (isOpen(relay)) closeRelay(key, relay);
-          return isRunning(current)
-            ? { mode: "sfu", success: true, status: "available", updatedAt: Date.now() }
-            : failure("No SFU transcript relay is running for this room.");
-        }
-      };
-      const giveRoomBack = (): void => {
-        if (relays.get(key) !== relay) return;
-        if (existingRelay && existingRelay !== relay && isOpen(existingRelay)) {
-          relays.set(key, existingRelay);
-        } else {
-          relays.delete(key);
-        }
-      };
+      slot.starting = relay;
       try {
         await relay.start();
+        if (slot.starting === relay && slot.serving) {
+          const handoffReady = await relay.prepareHandoff();
+          if (!handoffReady && slot.starting === relay && slot.serving) {
+            slot.starting = null;
+            relay.close();
+            forget(key, slot);
+            return failed("Transcript worker did not prepare SFU relay handoff.");
+          }
+        }
+        if (slot.starting !== relay) {
+          relay.close();
+          forget(key, slot);
+          return failed("A newer SFU transcript relay start superseded this request.");
+        }
+        const previous = slot.serving;
+        slot.serving = relay;
+        slot.starting = null;
+        previous?.close();
+        return {
+          mode: "sfu",
+          success: true,
+          status: "available",
+          updatedAt: Date.now(),
+        };
       } catch (error) {
-        const settled = await outcomeOfNewerStart();
-        if (settled) return finish(settled);
-        giveRoomBack();
-        closeRelay(key, relay);
-        return finish(
-          failure(error instanceof Error ? error.message : "Failed to start SFU transcript relay."),
+        if (slot.starting === relay) slot.starting = null;
+        relay.close();
+        forget(key, slot);
+        return failed(
+          error instanceof Error ? error.message : "Failed to start SFU transcript relay.",
         );
       }
-      const overtaken = await outcomeOfNewerStart();
-      if (overtaken) return finish(overtaken);
-      if (existingRelay && existingRelay !== relay) {
-        const handoffReady = await relay.prepareHandoff();
-        const overtakenDuringHandoff = await outcomeOfNewerStart();
-        if (overtakenDuringHandoff) return finish(overtakenDuringHandoff);
-        if (!handoffReady) {
-          giveRoomBack();
-          closeRelay(key, relay);
-          return finish(failure("Transcript worker did not prepare SFU relay handoff."));
-        }
-      }
-      closeOlderThan(key, generation);
-      if (isOpen(relay)) running.add(relay);
-      return finish({
-        mode: "sfu",
-        success: true,
-        status: "available",
-        updatedAt: Date.now(),
-      });
     },
     stopRoom(roomKey) {
-      closeRoom(roomKey);
+      const slot = rooms.get(roomKey);
+      if (!slot) return { success: true };
+      rooms.delete(roomKey);
+      const { serving, starting } = slot;
+      slot.serving = null;
+      slot.starting = null;
+      starting?.close();
+      serving?.close();
       return { success: true };
     },
     async stopRoomForUser({ roomKey, userId, canStopAnyRelay }) {
-      const relay = relays.get(roomKey);
-      if (!relay) return { success: true };
-      const stoppedGeneration = opened.get(roomKey)?.get(relay) ?? -1;
-      if (!canStopAnyRelay && relay.controllerUserId !== userId) {
+      const slot = rooms.get(roomKey);
+      const current = slot ? slot.starting ?? slot.serving : null;
+      if (!slot || !current) return { success: true };
+      if (!canStopAnyRelay && current.controllerUserId !== userId) {
         return {
           error: "Only the transcript relay controller, host, or admin can stop the SFU relay.",
         };
       }
-      stoppedThrough.set(roomKey, Math.max(stoppedThrough.get(roomKey) ?? -1, stoppedGeneration));
-      try {
-        const handoffReady = await relay.prepareHandoff();
-        if (!handoffReady) {
-          Logger.warn(
-            `Transcript SFU relay stop for room ${roomKey} could not prepare worker disconnect suppression.`,
-          );
-        }
-      } finally {
-        closeOlderThan(roomKey, stoppedGeneration);
-        if (opened.get(roomKey)?.has(relay)) {
-          closeRelay(roomKey, relay, { flushBufferedAudio: true });
-        }
-        const current = relays.get(roomKey);
-        if (current && isRetired(roomKey, current)) {
-          relays.delete(roomKey);
-        }
-        pruneStopWatermark(roomKey);
-      }
+      const { serving, starting } = slot;
+      slot.serving = null;
+      slot.starting = null;
+      forget(roomKey, slot);
+      starting?.close();
+      if (serving) await stopServing(roomKey, serving);
       return { success: true };
     },
+    handOver({ roomKey, fromUserId, toUserId }) {
+      const slot = rooms.get(roomKey);
+      if (!slot) return;
+      for (const relay of [slot.serving, slot.starting]) {
+        if (relay?.controllerUserId === fromUserId) relay.controllerUserId = toUserId;
+      }
+    },
+    async releaseSeat({ roomKey, userId }) {
+      const slot = rooms.get(roomKey);
+      if (!slot) return;
+      const starting = slot.starting?.controllerUserId === userId ? slot.starting : null;
+      if (starting) slot.starting = null;
+      starting?.close();
+      const serving = slot.serving?.controllerUserId === userId ? slot.serving : null;
+      if (serving) slot.serving = null;
+      forget(roomKey, slot);
+      if (serving) await stopServing(roomKey, serving);
+    },
     async syncRoom(room) {
-      try {
-        await relays.get(roomKey(room))?.syncProducers();
-      } catch (error) {
-        Logger.warn(
-          `Transcript SFU relay sync failed for room ${room.id} (${room.clientId})`,
-          error,
-        );
+      const slot = rooms.get(roomKey(room));
+      if (!slot) return;
+      for (const relay of [slot.serving, slot.starting]) {
+        if (!relay) continue;
+        try {
+          await relay.syncProducers();
+        } catch (error) {
+          Logger.warn(
+            `Transcript SFU relay sync failed for room ${room.id} (${room.clientId})`,
+            error,
+          );
+        }
       }
     },
     closeAll() {
-      for (const key of Array.from(opened.keys())) {
-        closeRoom(key);
+      for (const slot of rooms.values()) {
+        const { serving, starting } = slot;
+        slot.serving = null;
+        slot.starting = null;
+        starting?.close();
+        serving?.close();
       }
-      relays.clear();
-      stoppedThrough.clear();
-      running.clear();
-    },
-    trackedRoomCount() {
-      return new Set([...relays.keys(), ...opened.keys(), ...stoppedThrough.keys()]).size;
+      rooms.clear();
     },
   };
 };

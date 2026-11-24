@@ -45,8 +45,9 @@ export class SfuTranscriptRelay implements TranscriptAudioBatchSink {
   private readonly pendingProducerIds = new Set<string>();
   private commitTimer: NodeJS.Timeout | null = null;
   private lastWorkerSendWarnAt = 0;
-  private started = false;
   private closed = false;
+  private started = false;
+  controllerUserId: string;
 
   constructor(
     private readonly options: {
@@ -65,10 +66,8 @@ export class SfuTranscriptRelay implements TranscriptAudioBatchSink {
       createDecoder?: () => TranscriptOpusDecoderLike;
       onClosed?: (message: string) => void;
     },
-  ) {}
-
-  get controllerUserId(): string {
-    return this.options.controllerUserId;
+  ) {
+    this.controllerUserId = options.controllerUserId;
   }
 
   async start(): Promise<void> {
@@ -100,14 +99,12 @@ export class SfuTranscriptRelay implements TranscriptAudioBatchSink {
     const directTransport = await this.options.room.router.createDirectTransport({
       appData: {
         kind: "transcript-sfu-relay",
-        controllerUserId: this.options.controllerUserId,
+        controllerUserId: this.controllerUserId,
         controllerDisplayName: this.options.controllerDisplayName,
       },
     });
     if (this.closed) {
-      try {
-        directTransport.close();
-      } catch {}
+      directTransport.close();
       this.throwIfClosed();
     }
     this.directTransport = directTransport;
@@ -119,7 +116,7 @@ export class SfuTranscriptRelay implements TranscriptAudioBatchSink {
 
   private throwIfClosed(): void {
     if (this.closed) {
-      throw new Error("Transcript SFU relay was closed before it started.");
+      throw new Error("The SFU transcript relay was closed while it started.");
     }
   }
 
