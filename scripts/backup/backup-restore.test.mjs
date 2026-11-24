@@ -556,7 +556,7 @@ test(
           "#!/bin/sh",
           'case "$*" in',
           '  "ps -aq") echo sfu-a ;;',
-          `  "inspect sfu-a") echo '[{"Id":"sfu-a","State":{"Status":"exited"},"Config":{"Env":[],"User":"node:node"},"Image":"sha256:sfu-image","Mounts":[{"Type":"bind","Source":"${state}"}]}]' ;;`,
+          `  "inspect sfu-a") echo '[{"Id":"sfu-a","State":{"Status":"exited"},"Config":{"Env":["SFU_INSTANCE_ID=sfu-a"],"User":"node:node"},"Image":"sha256:sfu-image","Mounts":[{"Type":"bind","Source":"${state}"}]}]' ;;`,
           `  *Mounts*) echo "${state}" ;;`,
           '  *Config.User*) echo node:node ;;',
           '  *"{{.Image}}"*) echo sha256:sfu-image ;;',
@@ -2476,6 +2476,27 @@ test("a restore selects the Redis keys under the prefix the SFU makes of SFU_PER
     assert.equal((await live.cli("GET", "teammate:scheduling:profiles")).stdout.trim(), "after the backup");
   } finally {
     live.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a restore gives its files to the SFU's user, not to another container that mounts the state dir first", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, config, setDocker, backup, latestArchive, restore } = await setUp(root);
+    withDatabase(state);
+    await backup("--local-only");
+    await writeFile(config, `${await readFile(config, "utf8")}\nBACKUP_RESTORE_OWNER=\n`);
+    const uid = process.getuid() === 0 ? 4242 : process.getuid();
+    const gid = process.getuid() === 0 ? 4242 : process.getgid();
+    await setDocker([
+      { id: "maintenance", mounts: [state], status: "exited", env: ["PATH=/usr/bin"], user: "0:0" },
+      { id: "sfu-a", mounts: [state], status: "exited", env: ["SFU_PORT=9", "SFU_INSTANCE_ID=sfu-a"], user: `${uid}:${gid}` },
+    ]);
+    await rm(state, { recursive: true });
+    const result = await restore("--file", await latestArchive(), "--yes");
+    assert.match(result.stdout, new RegExp(`Gave the restored files in .* to ${uid}:${gid}, the user the SFU runs as`));
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
