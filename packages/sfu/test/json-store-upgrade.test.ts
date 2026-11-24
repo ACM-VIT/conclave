@@ -1,6 +1,6 @@
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createScheduledMeeting,
@@ -14,16 +14,25 @@ import {
 } from "../server/scheduledWebinars.js";
 import { createSchedulingPersistence, createSchedulingStore, ensureSchedulingProfile } from "../server/scheduling.js";
 
+type Record = { id: string; title: string; updatedAt: number; unique?: string };
+
 type Store = {
   name: string;
   file: string;
   modeVariable: string;
   pathVariable: string;
-  writeOldStore: () => Promise<void>;
-  load: () => Promise<number>;
+  uniqueKey: string | null;
+  encode: (records: Record[]) => unknown;
+  load: () => Promise<Record[]>;
 };
 
 const later = Date.now() + 86_400_000;
+const HOST = { clientId: "conclave", createdBy: "host@example.test", defaultHostEmail: "host@example.test", defaultHostUserId: null };
+
+const meetingTemplate = () =>
+  createScheduledMeeting(createScheduledMeetingStore(), { title: "template", scheduledStartAt: later }, HOST);
+const webinarTemplate = () =>
+  createScheduledWebinar(createScheduledWebinarStore(), { title: "template", scheduledStartAt: later, linkSlug: "template-slug" }, HOST).webinar;
 
 const stores: Store[] = [
   {
@@ -31,67 +40,55 @@ const stores: Store[] = [
     file: "scheduled-meetings.json",
     modeVariable: "SCHEDULED_MEETINGS_PERSISTENCE",
     pathVariable: "SCHEDULED_MEETINGS_PATH",
-    writeOldStore: async () => {
-      const store = createScheduledMeetingStore();
-      createScheduledMeeting(store, { title: "Kept across the upgrade", scheduledStartAt: later }, {
-        clientId: "conclave",
-        createdBy: "host@example.test",
-        defaultHostEmail: "host@example.test",
-        defaultHostUserId: null,
-      });
-      await createScheduledMeetingPersistence().save([...store.byId.values()]);
-    },
-    load: async () => (await createScheduledMeetingPersistence().load()).length,
+    uniqueKey: null,
+    encode: (records) => records.map(({ id, title, updatedAt }) => ({ ...meetingTemplate(), id, title, updatedAt })),
+    load: async () =>
+      (await createScheduledMeetingPersistence().load()).map(({ id, title, updatedAt }) => ({ id, title, updatedAt })),
   },
   {
     name: "scheduled webinars",
     file: "scheduled-webinars.json",
     modeVariable: "SCHEDULED_WEBINARS_PERSISTENCE",
     pathVariable: "SCHEDULED_WEBINARS_PATH",
-    writeOldStore: async () => {
-      const store = createScheduledWebinarStore();
-      createScheduledWebinar(store, { title: "Kept across the upgrade", scheduledStartAt: later, linkSlug: "kept-launch" }, {
-        clientId: "conclave",
-        createdBy: "host@example.test",
-        defaultHostEmail: "host@example.test",
-      });
-      createScheduledWebinarPersistence().save([...store.byId.values()]);
-    },
-    load: async () => createScheduledWebinarPersistence().load().length,
+    uniqueKey: "link slug",
+    encode: (records) =>
+      records.map(({ id, title, updatedAt, unique }) => ({ ...webinarTemplate(), id, title, updatedAt, linkSlug: unique ?? `slug-${id}` })),
+    load: async () => createScheduledWebinarPersistence().load().map(({ id, title, updatedAt }) => ({ id, title, updatedAt })),
   },
   {
     name: "scheduling records",
     file: "scheduling.json",
     modeVariable: "SCHEDULING_PERSISTENCE",
     pathVariable: "SCHEDULING_PATH",
-    writeOldStore: async () => {
-      const profile = ensureSchedulingProfile(createSchedulingStore(), {
-        clientId: "conclave",
-        userId: "host-user",
-        email: "host@example.test",
-      });
-      await createSchedulingPersistence().save({ profiles: [profile], availability: [], eventTypes: [], calendars: [] });
-    },
-    load: async () => {
-      const snapshot = await createSchedulingPersistence().load();
-      return snapshot.profiles.length + snapshot.availability.length + snapshot.eventTypes.length + snapshot.calendars.length;
-    },
+    uniqueKey: "host",
+    encode: (records) => ({
+      profiles: records.map(({ id, title, updatedAt, unique }) => ({
+        ...ensureSchedulingProfile(createSchedulingStore(), { clientId: "conclave", userId: unique ?? `user-${id}`, email: `${id}@example.test` }),
+        id,
+        name: title,
+        username: `host-${id}`,
+        updatedAt,
+      })),
+      availability: [],
+      eventTypes: [],
+      calendars: [],
+    }),
+    load: async () =>
+      (await createSchedulingPersistence().load()).profiles.map(({ id, name, updatedAt }) => ({ id, title: name, updatedAt })),
   },
 ];
 
 let dir = "";
-const oldPath = (store: Store) => join(dir, "old-container", "data", store.file);
 const activePath = (store: Store) => join(dir, "recordings", store.file);
 const importDir = () => join(dir, "recordings", "json-fallback-import");
-const recoveredPath = (store: Store, service = "sfu-a") => join(importDir(), service, store.file);
+const copyPath = (store: Store, service = "sfu-a") => join(importDir(), service, store.file);
 
-const writeRecoveredCopy = async (store: Store, service = "sfu-a") => {
-  vi.stubEnv(store.pathVariable, oldPath(store));
-  await store.writeOldStore();
-  mkdirSync(join(importDir(), service), { recursive: true });
-  copyFileSync(oldPath(store), recoveredPath(store, service));
-  vi.stubEnv(store.pathVariable, activePath(store));
+const write = (path: string, data: unknown) => {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(data, null, 2));
 };
+
+const byId = (records: Record[]) => Object.fromEntries(records.map((record) => [record.id, record.title]));
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "sfu-json-upgrade-"));
@@ -110,41 +107,62 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-describe.each(stores)("an SFU in explicit JSON mode upgraded from an image that kept $name in its container", (store) => {
-  it("starts with the records the old SFU had, from the copy the deploy saved", async () => {
-    await writeRecoveredCopy(store);
-    expect(existsSync(activePath(store))).toBe(false);
+describe.each(stores)("an SFU in explicit JSON mode with $name from an older image", (store) => {
+  it("starts with the records the old SFU kept, from the copy the deploy saved", async () => {
+    write(copyPath(store), store.encode([{ id: "kept", title: "Kept", updatedAt: 100 }]));
 
-    expect(await store.load()).toBe(1);
-    expect(existsSync(activePath(store))).toBe(true);
-    expect(existsSync(recoveredPath(store))).toBe(false);
-    expect(existsSync(`${recoveredPath(store)}.adopted`)).toBe(true);
-    expect(await store.load()).toBe(1);
+    expect(byId(await store.load())).toEqual({ kept: "Kept" });
+    expect(existsSync(copyPath(store))).toBe(false);
+    expect(existsSync(`${copyPath(store)}.adopted`)).toBe(true);
+    expect(byId(await store.load())).toEqual({ kept: "Kept" });
   });
 
-  it("refuses to start with an empty store while an old store it has not adopted exists", async () => {
-    await writeRecoveredCopy(store);
-    mkdirSync(join(dir, "recordings"), { recursive: true });
-    writeFileSync(activePath(store), store.file === "scheduling.json" ? JSON.stringify({ profiles: [], availability: [], eventTypes: [], calendars: [] }) : "[]");
+  it("keeps a record saved during a rollback when its own store already holds records", async () => {
+    write(activePath(store), store.encode([{ id: "before", title: "Before the rollback", updatedAt: 100 }]));
+    write(copyPath(store), store.encode([{ id: "during", title: "Saved during the rollback", updatedAt: 200 }]));
 
-    await expect(store.load()).rejects.toThrow(/holds no records/);
+    expect(byId(await store.load())).toEqual({ before: "Before the rollback", during: "Saved during the rollback" });
+    expect(readdirSync(dirname(activePath(store))).some((name) => name.startsWith(`${store.file}.premerge-`))).toBe(true);
   });
 
-  it("refuses to start when two different old stores were saved", async () => {
-    await writeRecoveredCopy(store, "sfu-a");
-    await writeRecoveredCopy(store, "sfu-b");
+  it("keeps the newer edit of a record both stores hold, whichever store has it", async () => {
+    write(activePath(store), store.encode([{ id: "a", title: "Older", updatedAt: 100 }, { id: "b", title: "Newer here", updatedAt: 300 }]));
+    write(copyPath(store), store.encode([{ id: "a", title: "Newer in the copy", updatedAt: 200 }, { id: "b", title: "Older", updatedAt: 200 }]));
 
-    await expect(store.load()).rejects.toThrow(/different/);
-    expect(existsSync(activePath(store))).toBe(false);
+    expect(byId(await store.load())).toEqual({ a: "Newer in the copy", b: "Newer here" });
   });
 
-  it("leaves an active store that already holds records alone", async () => {
-    await writeRecoveredCopy(store);
-    vi.stubEnv(store.pathVariable, activePath(store));
-    mkdirSync(join(dir, "recordings"), { recursive: true });
-    copyFileSync(recoveredPath(store), activePath(store));
+  it("combines two different copies when its own store is missing", async () => {
+    write(copyPath(store, "sfu-a"), store.encode([{ id: "a", title: "From sfu-a", updatedAt: 100 }]));
+    write(copyPath(store, "sfu-b"), store.encode([{ id: "b", title: "From sfu-b", updatedAt: 100 }]));
 
-    expect(await store.load()).toBe(1);
-    expect(existsSync(recoveredPath(store))).toBe(true);
+    expect(byId(await store.load())).toEqual({ a: "From sfu-a", b: "From sfu-b" });
+  });
+
+  it("refuses to start when both stores changed a record differently at the same time", async () => {
+    write(activePath(store), store.encode([{ id: "a", title: "One edit", updatedAt: 100 }]));
+    write(copyPath(store), store.encode([{ id: "a", title: "Another edit", updatedAt: 100 }]));
+
+    await expect(store.load()).rejects.toThrow(/differs between/);
+    expect(existsSync(copyPath(store))).toBe(true);
+  });
+
+  it("leaves its own store as it is when the copy holds nothing new", async () => {
+    const records = store.encode([{ id: "a", title: "Same", updatedAt: 100 }]);
+    write(activePath(store), records);
+    write(copyPath(store), records);
+
+    expect(byId(await store.load())).toEqual({ a: "Same" });
+    expect(readdirSync(dirname(activePath(store))).some((name) => name.includes(".premerge-"))).toBe(false);
+    expect(existsSync(`${copyPath(store)}.adopted`)).toBe(true);
+  });
+});
+
+describe.each(stores.filter((store) => store.uniqueKey))("an SFU in explicit JSON mode combining $name", (store) => {
+  it("refuses to start when two records would claim the same $uniqueKey", async () => {
+    write(activePath(store), store.encode([{ id: "a", title: "First", updatedAt: 100, unique: "shared" }]));
+    write(copyPath(store), store.encode([{ id: "b", title: "Second", updatedAt: 100, unique: "shared" }]));
+
+    await expect(store.load()).rejects.toThrow(/both claim/);
   });
 });

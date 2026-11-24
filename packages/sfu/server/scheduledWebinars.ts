@@ -21,7 +21,7 @@ import {
 } from "./webinar.js";
 import { canonicalizeClientId } from "./clientIds.js";
 import { openSqliteStore } from "./sqliteWriteCheck.js";
-import { adoptRecoveredJsonStore, countArrayRecords } from "./jsonStoreUpgrade.js";
+import { adoptRecoveredJsonStore, webinarStoreShape } from "./jsonStoreUpgrade.js";
 
 const DEFAULT_EARLY_ENTRY_MINUTES = 10;
 const MAX_EARLY_ENTRY_MINUTES = 240;
@@ -518,7 +518,7 @@ const migrateJsonScheduledWebinarsToSqlite = (
 export const createScheduledWebinarPersistence = (): ScheduledWebinarPersistence => {
   const mode = process.env.SCHEDULED_WEBINARS_PERSISTENCE?.trim().toLowerCase();
   if (mode === "json" || mode === "file") {
-    adoptRecoveredJsonStore(scheduledWebinarsPath(), "scheduled-webinars.json", countArrayRecords);
+    adoptRecoveredJsonStore(scheduledWebinarsPath(), "scheduled-webinars.json", webinarStoreShape);
     return createFileScheduledWebinarPersistence();
   }
 
