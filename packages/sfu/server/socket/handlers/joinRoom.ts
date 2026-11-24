@@ -1209,15 +1209,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           roomId,
           hostUserIds,
         });
-        for (const demoted of demotedForOwner) {
-          demoted.socket.emit("hostRemoved", { roomId, hostUserId });
-          demoted.socket.emit("adminNotice", {
-            roomId,
-            message: "The meeting's owner joined and is hosting now. You're a participant.",
-            level: "info",
-            timestamp: Date.now(),
-          });
-        }
+        room.tellOwnerTookOver(demotedForOwner, hostUserId);
 
         if (context.currentClient instanceof Admin && !context.currentClient.isObserver) {
           const pendingUsers = Array.from(

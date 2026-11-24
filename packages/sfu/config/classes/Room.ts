@@ -2043,6 +2043,18 @@ export class Room {
     return demoted;
   }
 
+  tellOwnerTookOver(demoted: Client[], hostUserId: string | null): void {
+    for (const client of demoted) {
+      client.socket.emit("hostRemoved", { roomId: this.id, hostUserId });
+      client.socket.emit("adminNotice", {
+        roomId: this.id,
+        message: "The meeting's owner joined and is hosting now. You're a participant.",
+        level: "info",
+        timestamp: Date.now(),
+      });
+    }
+  }
+
   // Someone who is in this meeting, hosts it, or was let in. Only they may
   // see how many people are in it.
   isMemberUserKey(userKey: string): boolean {
@@ -2076,6 +2088,9 @@ export class Room {
       Object.setPrototypeOf(client, Admin.prototype);
     }
     this.grantHost(userKey, basis);
+    if (this.hostReasonOf(userKey) === "owner") {
+      this.tellOwnerTookOver(this.welcomeOwner(userKey), userId);
+    }
     this.notifyLifecycle("membership");
     return client as Admin;
   }
