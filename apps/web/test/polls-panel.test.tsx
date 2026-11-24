@@ -240,3 +240,48 @@ it("keeps a participant's choice in place but sends no vote while the view comes
   expect((byTestId("poll-vote") as HTMLButtonElement).disabled).toBe(true);
   expect((optionInput("Yes") as HTMLInputElement).checked).toBe(true);
 });
+
+const later = <T,>() => {
+  let settle!: (value: T) => void;
+  const promise = new Promise<T>((resolve) => {
+    settle = resolve;
+  });
+  return { promise, settle };
+};
+
+it("frees the vote the old connection sent once a new connection's view is in, and shows no late error", async () => {
+  const oldAnswer = later<{ ok: false; error: string } | { ok: true }>();
+  await render({ polls: [poll()], connection: "first", onVote: () => oldAnswer.promise });
+  await click(optionInput("No"));
+  await click(byTestId("poll-vote"));
+  const heldWhileOut = (byTestId("poll-vote") as HTMLButtonElement).disabled;
+
+  await render({ polls: [poll()], connection: "second", onVote: ok });
+  const freeOnTheNewConnection = !(byTestId("poll-vote") as HTMLButtonElement).disabled;
+  await act(async () => oldAnswer.settle({ ok: false, error: "The server did not respond. Try again." }));
+
+  expect(heldWhileOut).toBe(true);
+  expect(freeOnTheNewConnection).toBe(true);
+  expect(container.textContent).not.toContain("did not respond");
+});
+
+it("keeps the host's composer open with its draft when a poll launched on the old connection lands late", async () => {
+  const oldAnswer = later<{ ok: false; error: string } | { ok: true }>();
+  await render({ isHost: true, connection: "first", onCreate: () => oldAnswer.promise });
+  await click(byTestId("poll-start"));
+  await type(byTestId("poll-question-input") as HTMLInputElement, "Lunch?");
+  const [first, second] = container.querySelectorAll<HTMLInputElement>('[data-testid="poll-option-input"]');
+  await type(first, "Tacos");
+  await type(second, "Ramen");
+  await click(byTestId("poll-launch"));
+  const heldWhileOut = (byTestId("poll-launch") as HTMLButtonElement).disabled;
+
+  await render({ isHost: true, connection: "second", onCreate: ok });
+  const freeOnTheNewConnection = !(byTestId("poll-launch") as HTMLButtonElement).disabled;
+  await act(async () => oldAnswer.settle({ ok: true }));
+
+  expect(heldWhileOut).toBe(true);
+  expect(freeOnTheNewConnection).toBe(true);
+  expect(byTestId("poll-composer")).not.toBeNull();
+  expect((byTestId("poll-question-input") as HTMLInputElement).value).toBe("Lunch?");
+});

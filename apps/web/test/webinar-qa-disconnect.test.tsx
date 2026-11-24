@@ -68,6 +68,7 @@ function Webinar({
       onUpvote={qa.onUpvote}
       onModerate={qa.onModerate}
       waiting={qa.waiting}
+      connection={qa.connection}
     />
   );
 }
@@ -139,4 +140,39 @@ it("keeps a webinar's Ask, Enter, Upvote and moderation from sending in the seco
   expect(controls.length).toBeGreaterThan(2);
   expect(controls.every((control) => control.disabled)).toBe(true);
   expect(input.value).toBe("Are the slides public?");
+});
+
+it("frees a webinar's Ask the moment a new connection's list is in, while the old connection's question is still out, on a server without the runtime", async () => {
+  let settle!: (value: { ok: boolean; error?: string }) => void;
+  submit.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        settle = resolve;
+      }),
+  );
+  await render("joined", [question], true);
+  const input = container.querySelector<HTMLTextAreaElement>('[data-testid="qa-input"]')!;
+  const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+  const typeQuestion = async (text: string) =>
+    act(async () => {
+      setValue?.call(input, text);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  await typeQuestion("Asked on the old connection");
+  await act(async () => button("qa-send").click());
+  const heldWhileOut = button("qa-send").disabled;
+
+  await act(async () => {
+    for (const listener of [...(listeners.get("disconnect") ?? [])]) listener();
+  });
+  await render("reconnecting", [question], false);
+  await render("joined", [question], true);
+  await typeQuestion("A new draft");
+  const freeOnTheNewConnection = !button("qa-send").disabled;
+  await act(async () => settle({ ok: false, error: "The server did not respond. Try again." }));
+
+  expect(heldWhileOut).toBe(true);
+  expect(freeOnTheNewConnection).toBe(true);
+  expect(input.value).toBe("A new draft");
+  expect(container.textContent).not.toContain("did not respond");
 });

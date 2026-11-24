@@ -186,6 +186,7 @@ export function usePolls(options?: {
   const ready = state.kind === "ready" ? state : null;
   return {
     isReady: ready !== null,
+    connection: act as unknown,
     isConnecting: state.kind === "connecting",
     isReplacing: state.kind === "connecting" && state.replacing === true,
     polls,

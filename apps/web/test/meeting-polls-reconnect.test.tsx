@@ -315,3 +315,20 @@ it("closes the polls the moment the person leaves, before the connection catches
 
   expect(latest().isAvailable).toBe(false);
 });
+
+it("names each connection of polls by its own token, stable within it and new after a reconnect", async () => {
+  await mount();
+  await offer();
+  await sendView();
+  const first = current.connection;
+  await sendView({ generation: 2 });
+  const afterANewView = current.connection;
+  await mount({ connected: false });
+  await mount();
+  await offer();
+  await sendView();
+
+  expect(afterANewView).toBe(first);
+  expect(current.connection).not.toBe(first);
+});
+

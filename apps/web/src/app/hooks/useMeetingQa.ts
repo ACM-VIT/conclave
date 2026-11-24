@@ -165,6 +165,14 @@ export function useMeetingQa({
   const [shown, setShown] = useState<WebinarQaEntry[]>(NO_ENTRIES);
   if (live !== null && live !== shown) setShown(live);
   const entries = live ?? shown;
+  const [legacyConnection, setLegacyConnection] = useState(() => ({
+    fromThisConnection: legacy.fromThisConnection,
+    token: {},
+  }));
+  if (legacyConnection.fromThisConnection !== legacy.fromThisConnection) {
+    setLegacyConnection({ fromThisConnection: legacy.fromThisConnection, token: {} });
+  }
+  const connection: unknown = fromApp ? qa.connection : legacyConnection.token;
 
   const { ask, toggleUpvote, moderate } = qa;
   const appModerate = useCallback(
@@ -183,6 +191,7 @@ export function useMeetingQa({
       fromApp: false as const,
       waiting: false,
       entries,
+      connection,
       askNeedsIdentity: false,
       onSubmit: undefined,
       onUpvote: undefined,
@@ -196,6 +205,7 @@ export function useMeetingQa({
       fromApp: true as const,
       waiting,
       entries,
+      connection,
       askNeedsIdentity: app.askNeedsIdentity,
       onSubmit: app.canAsk ? (waiting ? waitForView : ask) : undefined,
       onUpvote: app.canUpvote ? (waiting ? waitForView : toggleUpvote) : undefined,
@@ -210,6 +220,7 @@ export function useMeetingQa({
       fromApp: false as const,
       waiting,
       entries,
+      connection,
       askNeedsIdentity: false,
       onSubmit: undefined,
       onUpvote: undefined,
@@ -222,6 +233,7 @@ export function useMeetingQa({
     fromApp: false as const,
     waiting: oldEventsWaiting,
     entries,
+    connection,
     askNeedsIdentity: false,
     onSubmit: legacy.submit && (oldEventsWaiting ? waitForView : legacy.submit),
     onUpvote: legacy.upvote && (oldEventsWaiting ? waitForView : legacy.upvote),

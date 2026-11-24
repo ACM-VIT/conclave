@@ -167,3 +167,79 @@ it("keeps the draft and every control in place but sends nothing while the view 
   expect(input.disabled).toBe(false);
   expect(actionsOf("Is this recorded?")).toEqual(["Answer live", "Mark answered", "Hide"]);
 });
+
+const later = <T,>() => {
+  let settle!: (value: T) => void;
+  const promise = new Promise<T>((resolve) => {
+    settle = resolve;
+  });
+  return { promise, settle };
+};
+const typeQuestion = async (text: string) => {
+  const input = container.querySelector<HTMLTextAreaElement>('[data-testid="qa-input"]')!;
+  const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+  await act(async () => {
+    setValue?.call(input, text);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+};
+const sendButton = () => container.querySelector<HTMLButtonElement>('[data-testid="qa-send"]')!;
+const questionButton = (label: string) =>
+  Array.from(entryCard("Is this recorded?")?.querySelectorAll<HTMLButtonElement>("button") ?? []).find(
+    (button) => button.textContent?.trim() === label,
+  )!;
+
+it("lets a new connection ask at once while the old one's question is out, and keeps the new draft when the old answer lands", async () => {
+  const oldAnswer = later<{ ok: boolean; error?: string }>();
+  await render({ connection: "first", onSubmit: () => oldAnswer.promise });
+  await typeQuestion("Asked on the old connection");
+  await act(async () => sendButton().click());
+  const heldWhileOut = sendButton().disabled;
+
+  await render({ connection: "second", onSubmit: async () => ({ ok: true }) });
+  await typeQuestion("A new draft");
+  const freeOnTheNewConnection = !sendButton().disabled;
+  await act(async () => oldAnswer.settle({ ok: true }));
+
+  expect(heldWhileOut).toBe(true);
+  expect(freeOnTheNewConnection).toBe(true);
+  expect(container.querySelector<HTMLTextAreaElement>('[data-testid="qa-input"]')!.value).toBe("A new draft");
+});
+
+it("shows nothing on a new connection when the old connection's question fails late", async () => {
+  const oldAnswer = later<{ ok: boolean; error?: string }>();
+  await render({ connection: "first", onSubmit: () => oldAnswer.promise });
+  await typeQuestion("Asked on the old connection");
+  await act(async () => sendButton().click());
+  await render({ connection: "second", onSubmit: async () => ({ ok: true }) });
+  await act(async () => oldAnswer.settle({ ok: false, error: "The server did not respond. Try again." }));
+
+  expect(container.textContent).not.toContain("did not respond");
+});
+
+it("frees a question the old connection was hiding once a new connection's view is in, and shows no late error", async () => {
+  const oldAnswer = later<{ ok: boolean; error?: string }>();
+  const entries = [entry({ question: "Is this recorded?" })];
+  await render({ connection: "first", entries, onModerate: () => oldAnswer.promise });
+  await act(async () => questionButton("Hide").click());
+  const heldWhileOut = questionButton("Hide").disabled;
+
+  await render({ connection: "second", entries, onModerate: async () => ({ ok: true }) });
+  const freeOnTheNewConnection = !questionButton("Hide").disabled;
+  await act(async () => oldAnswer.settle({ ok: false, error: "The server did not respond. Try again." }));
+
+  expect(heldWhileOut).toBe(true);
+  expect(freeOnTheNewConnection).toBe(true);
+  expect(container.textContent).not.toContain("did not respond");
+});
+
+it("shows no late error on a new connection for an upvote the old connection sent", async () => {
+  const oldAnswer = later<{ ok: boolean; error?: string }>();
+  const entries = [entry({ question: "Is this recorded?" })];
+  await render({ connection: "first", entries, onUpvote: () => oldAnswer.promise });
+  await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="qa-upvote"]')!.click());
+  await render({ connection: "second", entries, onUpvote: async () => ({ ok: true }) });
+  await act(async () => oldAnswer.settle({ ok: false, error: "You are voting too quickly" }));
+
+  expect(container.textContent).not.toContain("voting too quickly");
+});

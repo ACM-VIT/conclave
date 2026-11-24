@@ -60,3 +60,39 @@ it("keeps a webinar host's question actions in place but sends nothing while the
   expect(actions.map((button) => button.textContent)).toEqual(["Answer live", "Mark answered", "Hide"]);
   expect(actions.every((button) => button.disabled)).toBe(true);
 });
+
+it("frees a question the old connection was hiding once a new connection's list is in, and shows no late error", async () => {
+  let settle!: (value: { ok: boolean; error?: string }) => void;
+  const oldAnswer = new Promise<{ ok: boolean; error?: string }>((resolve) => {
+    settle = resolve;
+  });
+  const panel = (connection: string, onModerateWebinarQuestion: () => Promise<{ ok: boolean; error?: string }>) => (
+    <ParticipantsPanel
+      participants={new Map()}
+      currentUserId="host#1"
+      onClose={() => {}}
+      getDisplayName={(userId) => userId}
+      socket={null}
+      isAdmin
+      webinarEnabled
+      webinarQaEntries={[question]}
+      onModerateWebinarQuestion={onModerateWebinarQuestion}
+      webinarQaConnection={connection}
+    />
+  );
+  const hide = () =>
+    Array.from(
+      container.querySelector<HTMLElement>('[data-testid="webinar-host-question"]')!.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent === "Hide")!;
+  await act(async () => root.render(panel("first", () => oldAnswer)));
+  await act(async () => hide().click());
+  const heldWhileOut = hide().disabled;
+
+  await act(async () => root.render(panel("second", async () => ({ ok: true }))));
+  const freeOnTheNewConnection = !hide().disabled;
+  await act(async () => settle({ ok: false, error: "The server did not respond. Try again." }));
+
+  expect(heldWhileOut).toBe(true);
+  expect(freeOnTheNewConnection).toBe(true);
+  expect(container.textContent).not.toContain("did not respond");
+});
