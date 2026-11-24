@@ -143,7 +143,10 @@ Repair, for each instance whose journal is not idle:
 Every rollback, in repair and after any failed step of a deploy, takes one
 path: the journal goes to `rollback` first; then drain and wait; then the
 last-known-good image starts serving, and the journal goes to idle once it
-serves by the serving rule. With no last-known-good image the instance is
+serves by the serving rule. An instance that takes meetings is drained for a
+rollback only while another instance serves (or when it is the only one); if
+none does, it keeps serving (exit 1) and the next run rolls it back once one
+does. Repair takes instances whose container is not running first. With no last-known-good image the instance is
 stopped instead (exit 5). A promotion also takes one path, in repair and in a
 deploy: journal `promoting`, move the service tag, start it serving, then the
 serving rule; any failure there is a rollback.

@@ -1044,8 +1044,13 @@ promote() {
 }
 
 roll_back() {
-  local svc="$1" url="$2" image_name="$3" lkg="$4" code=0
+  local svc="$1" url="$2" image_name="$3" lkg="$4" code=0 status
   [[ "$(journal_get "$svc" phase)" == "rollback" ]] || journal_set "$svc" phase=rollback
+  status="$(instance_status "$svc" 2>/dev/null)" || status=""
+  if [[ -n "$status" && "$(printf "%s" "$status" | json_field draining)" == "false" ]] && ! peers_serving "$svc"; then
+    echo "${svc} takes meetings and no other instance does, so it is not drained to roll it back now; it keeps serving, and the next run of this script rolls it back once another instance serves." >&2
+    return 1
+  fi
   drain_and_wait "$svc" "$url" || code=$?
   if (( code == 3 )); then
     echo "Deploy paused: ${svc} is drained, but ${DRAIN_WHY}. It goes back to its previous image once its calls end; rerun this script then." >&2
@@ -1059,8 +1064,14 @@ roll_back() {
 
 declare -A REPAIR_CODE=()
 repair_interrupted() {
-  local svc phase lkg candidate prev url image_name state code
+  local svc phase lkg candidate prev url image_name state code first=() rest=()
   for svc in "${ALL_SFU_SERVICES[@]}"; do
+    case "$(container_state "$svc")" in
+      stopped|absent) first+=("$svc") ;;
+      *) rest+=("$svc") ;;
+    esac
+  done
+  for svc in ${first[@]+"${first[@]}"} ${rest[@]+"${rest[@]}"}; do
     phase="$(journal_get "$svc" phase)"
     [[ -z "$phase" || "$phase" == "idle" ]] && continue
     url="$(service_url "$svc")"
@@ -1294,6 +1305,9 @@ deploy_service() {
         ;;
       3)
         return "$EXIT_BLOCKED_BY_ROOMS"
+        ;;
+      1)
+        return 1
         ;;
       *)
         echo "${svc} is not serving. Instances not yet deployed were left untouched and keep serving." >&2

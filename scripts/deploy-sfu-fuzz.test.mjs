@@ -221,6 +221,28 @@ fixed("Greptile: a journal write that fails stops the deploy before the step it 
   });
 });
 
+fixed("Greptile: repair never drains the only instance taking meetings to roll it back", () =>
+  withSfus({ "sfu-a": { onTarget: true }, "sfu-b": { container: "exited" } }, async (sfus, events, context) => {
+    const shared = await sharedDir();
+    context.stateDir = shared.env.SFU_DEPLOY_STATE_DIR;
+    try {
+      const journals = { "sfu-a": { phase: "rollback", lkg: LAST_GOOD, candidate: TARGET } };
+      const first = await deploy(sfus, { env: shared.env, journals });
+      const peerBack = events.indexOf("recreate sfu-b");
+      const drained = events.indexOf("drain sfu-a");
+      assert.ok(drained === -1 || (peerBack !== -1 && drained > peerBack), `sfu-a was drained while sfu-b was down:\n${events.join("\n")}\n${first.output}`);
+      assert.equal(sfus["sfu-b"].container, "running");
+      const second = await deploy(sfus, { env: shared.env });
+      assert.equal(second.code, 0, second.output);
+      assertServes(sfus["sfu-a"], TARGET);
+      assertServes(sfus["sfu-b"], TARGET);
+      assert.deepEqual(cutRooms(sfus), cutRooms(sfus).map(() => 0));
+    } finally {
+      await rm(shared.dir, { recursive: true, force: true });
+    }
+  }),
+);
+
 fixed("fuzz: a public route that is down when the deploy first looks still leaves the image the instance served on to go back to", () =>
   withStack({ "sfu-a": { publicRoute: true } }, async (sfus, shared) => {
     sfus["sfu-a"].publicFailures = 1;
