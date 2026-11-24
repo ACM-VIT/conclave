@@ -393,6 +393,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         if (result.reason !== "closed") signalRefused(appId, replicaId, result.reason);
         return;
       }
+      if (result.unchanged) return;
       if (update.length <= APP_DOCUMENT_UPDATE_MAX_BYTES) {
         socket.to(channelId).emit("apps:yjs:update", { appId, update } satisfies AppsUpdateData);
         return;

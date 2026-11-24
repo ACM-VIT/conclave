@@ -16,7 +16,7 @@ export type Refusal =
   | "unavailable";
 
 export type Refused = { ok: false; reason: Refusal };
-export type ApplyResult = { ok: true } | Refused;
+export type ApplyResult = { ok: true; unchanged?: true } | Refused;
 export type SyncResult = { ok: true; update: Uint8Array; stateVector: Uint8Array } | Refused;
 
 export type AppDocument = {
@@ -241,6 +241,10 @@ export const createAppDocumentPool = ({
       return;
     }
     if (job.kind === "apply" && reply.type === "applied") {
+      if (reply.unchanged) {
+        job.settle({ ok: true, unchanged: true });
+        return;
+      }
       if (reply.compacted) {
         entry.base = reply.compacted;
         entry.tail = [];

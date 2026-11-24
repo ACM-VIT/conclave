@@ -12,7 +12,7 @@ export type ToWorker =
   | { type: "drop"; document: number };
 
 type Answer =
-  | { type: "applied"; compacted: Uint8Array | null }
+  | { type: "applied"; compacted: Uint8Array | null; unchanged?: true }
   | { type: "synced"; update: Uint8Array; stateVector: Uint8Array }
   | { type: "refused"; reason: "too-large" | "invalid" | "missing-dependency"; evicted: boolean };
 
@@ -78,16 +78,24 @@ export const createAppDocumentEngine = ({ maxDocumentBytes, maxUpdateBytes }: En
       return [{ type: "refused", reason: "too-large", evicted: false }, []];
     }
     const started = performance.now();
+    let changed = false;
+    const noteChange = () => {
+      changed = true;
+    };
+    loaded.doc.on("update", noteChange);
     try {
       Y.applyUpdate(loaded.doc, update);
     } catch {
       evict(id);
       return [{ type: "refused", reason: "invalid", evicted: true }, []];
+    } finally {
+      loaded.doc.off("update", noteChange);
     }
     if (hasPending(loaded.doc)) {
       evict(id);
       return [{ type: "refused", reason: "missing-dependency", evicted: true }, []];
     }
+    if (!changed) return [{ type: "applied", compacted: null, unchanged: true }, []];
     loaded.uncompactedMs += performance.now() - started;
     loaded.uncompactedBytes += update.length;
     const growth = update.length * GROWTH_MARGIN;

@@ -184,6 +184,26 @@ describe("app changes sent in parts", () => {
     expect(room.inbox.filter(({ event }) => event === "apps:yjs:update" || event === "apps:state")).toEqual([]);
   });
 
+  it("are not relayed again when a resend changes nothing, so build 63 reloads once", async () => {
+    const room = await boardRoom("replay");
+    const web = await room.peer({ declares: true });
+    const build63 = await room.peer({ encoding: "base64" });
+    const author = new Y.Doc();
+    const small = edit(author, (text) => text.insert(0, "small"));
+    const large = bigChange(author, 300 * KIB, "r");
+
+    room.send(small, "copy-1");
+    room.send(small, "copy-2");
+    sendChange(room, inParts(large), "first", "copy-3");
+    sendChange(room, inParts(large), "again", "copy-4");
+    await settled(room);
+
+    expect(web.updates()).toEqual([small, large]);
+    expect(build63.updates()).toEqual([small]);
+    expect(build63.states()).toEqual([null, "board"]);
+    expect(room.refused).toEqual([]);
+  });
+
   it("never reach a socket in another meeting, even one whose room id is the victim's id plus a suffix", async () => {
     const victim = await boardRoom("victim");
     const stranger = victim.strangerIn("victim:whole-changes");
