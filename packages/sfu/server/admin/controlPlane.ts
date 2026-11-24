@@ -18,6 +18,7 @@ import {
 } from "../webinarNotifications.js";
 import { getSocketContext } from "../socket/context.js";
 import { registerAdminHandlers } from "../socket/handlers/adminHandlers.js";
+import { emitToHosts } from "./hostOnlyEvents.js";
 import { isSuperAdminClient } from "./moderation.js";
 
 type ParticipantRole = "host" | "admin" | "participant" | "attendee";
@@ -306,6 +307,13 @@ export const toPendingUserSnapshots = (room: Room): PendingUserSnapshot[] => {
     displayName: pending.displayName || pending.userKey,
     socketId: pending.socket?.id ?? null,
   }));
+};
+
+export const emitPendingUsersSnapshot = (room: Room): void => {
+  emitToHosts(room, "pendingUsersSnapshot", {
+    users: toPendingUserSnapshots(room),
+    roomId: room.id,
+  });
 };
 
 export const toRoomSnapshot = (room: Room): RoomSnapshot => {

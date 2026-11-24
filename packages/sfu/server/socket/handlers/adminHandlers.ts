@@ -12,6 +12,7 @@ import {
   closeClientProducers,
   closeProducerById,
   closeProducerForMediaKey,
+  emitPendingUsersSnapshot,
   kickClient,
   rejectAllPendingUsers,
   toPendingUserSnapshots,
@@ -943,10 +944,7 @@ export const registerAdminHandlers = (
         }
       }
 
-      io.to(guard.room.channelId).emit("pendingUsersSnapshot", {
-        users: toPendingUserSnapshots(guard.room),
-        roomId: guard.room.id,
-      });
+      emitPendingUsersSnapshot(guard.room);
 
       respond(cb, {
         success: true,
@@ -1026,10 +1024,7 @@ export const registerAdminHandlers = (
         }
       }
 
-      io.to(guard.room.channelId).emit("pendingUsersSnapshot", {
-        users: toPendingUserSnapshots(guard.room),
-        roomId: guard.room.id,
-      });
+      emitPendingUsersSnapshot(guard.room);
 
       Logger.warn(`Admin ${guard.adminId} blocked ${userKeys.join(", ")} in room ${guard.room.id}; kicked ${Array.from(kickedUserIds).join(", ") || "none"}`);
 
@@ -1231,10 +1226,7 @@ export const registerAdminHandlers = (
     }
 
     const admitted = admitAllPendingUsers(guard.room);
-    io.to(guard.room.channelId).emit("pendingUsersSnapshot", {
-      users: toPendingUserSnapshots(guard.room),
-      roomId: guard.room.id,
-    });
+    emitPendingUsersSnapshot(guard.room);
 
     respond(cb, {
       success: true,
@@ -1251,10 +1243,7 @@ export const registerAdminHandlers = (
     }
 
     const rejected = rejectAllPendingUsers(guard.room);
-    io.to(guard.room.channelId).emit("pendingUsersSnapshot", {
-      users: toPendingUserSnapshots(guard.room),
-      roomId: guard.room.id,
-    });
+    emitPendingUsersSnapshot(guard.room);
 
     respond(cb, {
       success: true,

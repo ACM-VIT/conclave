@@ -22,6 +22,7 @@ import {
   clearAllRaisedHands,
   closeClientProducers,
   closeProducerById,
+  emitPendingUsersSnapshot,
   kickClient,
   rejectAllPendingUsers,
   resolveRoom,
@@ -337,19 +338,6 @@ export const createSfuApp = ({
       pendingSocket.disconnect(true);
     }
     return forceCloseRoom(state, roomChannelId);
-  };
-
-  const emitPendingUsersSnapshot = (
-    io: SocketIOServer,
-    room: Room,
-  ): void => {
-    io.to(room.channelId).emit("pendingUsersSnapshot", {
-      users: Array.from(room.pendingClients.values()).map((pending) => ({
-        userId: pending.userKey,
-        displayName: pending.displayName || pending.userKey,
-      })),
-      roomId: room.id,
-    });
   };
 
   const handleUserMediaControl = (
@@ -1326,7 +1314,7 @@ export const createSfuApp = ({
       }
     }
 
-    emitPendingUsersSnapshot(io, lookup.room);
+    emitPendingUsersSnapshot(lookup.room);
 
     res.json({
       success: true,
@@ -1430,7 +1418,7 @@ export const createSfuApp = ({
       }
     }
 
-    emitPendingUsersSnapshot(io, lookup.room);
+    emitPendingUsersSnapshot(lookup.room);
 
     res.json({
       success: true,
@@ -1640,7 +1628,7 @@ export const createSfuApp = ({
       });
     }
 
-    emitPendingUsersSnapshot(io, lookup.room);
+    emitPendingUsersSnapshot(lookup.room);
     res.json({ success: true, roomId: lookup.room.id, userKey });
   });
 
@@ -1681,7 +1669,7 @@ export const createSfuApp = ({
       });
     }
 
-    emitPendingUsersSnapshot(io, lookup.room);
+    emitPendingUsersSnapshot(lookup.room);
     res.json({ success: true, roomId: lookup.room.id, userKey });
   });
 
@@ -1701,7 +1689,7 @@ export const createSfuApp = ({
     }
 
     const admitted = admitAllPendingUsers(lookup.room);
-    emitPendingUsersSnapshot(io, lookup.room);
+    emitPendingUsersSnapshot(lookup.room);
 
     res.json({
       success: true,
@@ -1726,7 +1714,7 @@ export const createSfuApp = ({
     }
 
     const rejected = rejectAllPendingUsers(lookup.room);
-    emitPendingUsersSnapshot(io, lookup.room);
+    emitPendingUsersSnapshot(lookup.room);
 
     res.json({
       success: true,
