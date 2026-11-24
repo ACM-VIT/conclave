@@ -414,7 +414,7 @@ enum WatchSearchPhase: String, CaseIterable, Equatable {
 
 struct WheelNameSubmission: Equatable {
     let requestId: String
-    let text: String
+    let lines: [String]
 }
 
 struct WheelNameDraft: Equatable {
@@ -439,22 +439,30 @@ struct WheelNameDraft: Equatable {
         text = ""
     }
 
-    mutating func didSend(requestId: String) {
-        sent.append(WheelNameSubmission(requestId: requestId, text: text))
+    mutating func didSend(requestId: String, lines: [String]) {
+        sent.append(WheelNameSubmission(requestId: requestId, lines: lines))
         text = ""
     }
 
-    mutating func reply(requestId: String, accepted: Bool) {
+    mutating func reply(requestId: String, accepted: Bool, added: [Int]?) {
         guard let index = sent.firstIndex(where: { $0.requestId == requestId }) else { return }
         let submission = sent[index]
         sent.remove(at: index)
-        if !accepted { restore(submission.text) }
+        var kept: [String] = []
+        var offset = 0
+        for line in submission.lines {
+            var wasAdded = accepted
+            if let list = added { wasAdded = list.contains(offset) }
+            if !wasAdded { kept.append(line) }
+            offset += 1
+        }
+        restore(kept.joined(separator: "\n"))
     }
 
     mutating func abandonAll() {
         let waiting = sent
         sent = []
-        for submission in waiting.reversed() { restore(submission.text) }
+        for submission in waiting.reversed() { restore(submission.lines.joined(separator: "\n")) }
     }
 
     private mutating func restore(_ value: String) {
@@ -477,6 +485,7 @@ struct WheelPageModel: Equatable {
     let spinning: Bool
     let canEdit: Bool
     let canSpin: Bool
+    let canReorder: Bool
     let isFull: Bool
     let isReady: Bool
 
@@ -498,13 +507,15 @@ struct WheelPageModel: Equatable {
 
     func withRevision(_ value: Int) -> WheelPageModel {
         return WheelPageModel(revision: value, entries: entries, results: results, removeWinner: removeWinner, sounds: sounds,
-                              spinning: spinning, canEdit: canEdit, canSpin: canSpin, isFull: isFull, isReady: isReady,
+                              spinning: spinning, canEdit: canEdit, canSpin: canSpin, canReorder: canReorder, isFull: isFull,
+                              isReady: isReady,
                               missingNames: missingNames, pendingKinds: pendingKinds, pendingTargets: pendingTargets,
                               winnerSequence: winnerSequence, winnerLabel: winnerLabel)
     }
 
     static let empty = WheelPageModel(revision: 0, entries: [], results: [], removeWinner: false, sounds: true, spinning: false,
-                                      canEdit: false, canSpin: false, isFull: false, isReady: false, missingNames: [],
+                                      canEdit: false, canSpin: false, canReorder: false, isFull: false, isReady: false,
+                                      missingNames: [],
                                       pendingKinds: [], pendingTargets: [], winnerSequence: 0, winnerLabel: "")
 }
 
@@ -571,6 +582,8 @@ struct AppPagePendingCommand: Equatable {
     let requestId: String
     let kind: AppPageCommandKind
     let target: String
+    let labels: [String]
+    let attempts: Int
 }
 
 enum WatchClassics {
@@ -617,18 +630,15 @@ enum AppPagePolicy {
             }
             collapsed += String(character)
         }
-        return AppBridgeCodec.clipped(collapsed, AppWheelLimits.label)
+        return collapsed
     }
 
-    static func wheelLabels(_ raw: String, room: Int) -> [String] {
+    static func wheelLabels(_ raw: String) -> [String] {
         var labels: [String] = []
-        if room <= 0 { return labels }
         let lines = raw.replacingOccurrences(of: "\r", with: "\n").components(separatedBy: "\n")
         for line in lines {
             let label = normalizedLabel(line)
-            if label.isEmpty { continue }
-            labels.append(label)
-            if labels.count >= room { break }
+            if !label.isEmpty { labels.append(label) }
         }
         return labels
     }
@@ -888,7 +898,7 @@ final class AppHostPresenter {
             if first { seedFixture(app) }
         case .ack:
             if event.appSessionId != appSessionId { return }
-            acknowledge(requestId: event.requestId, ok: event.ok, pngBase64: event.pngBase64)
+            acknowledge(requestId: event.requestId, ok: event.ok, pngBase64: event.pngBase64, added: event.added)
         }
     }
 
@@ -995,10 +1005,9 @@ final class AppHostPresenter {
     @discardableResult
     func addWheelNames(_ raw: String) -> ActivityTapResult {
         if !wheel.canEdit { return ActivityTapResult.explained }
-        if wheel.isFull { return ActivityTapResult.explained }
-        let labels = AppPagePolicy.wheelLabels(raw, room: AppWheelLimits.maxEntries - wheel.entries.count)
+        let labels = AppPagePolicy.wheelLabels(raw)
         if labels.isEmpty { return ActivityTapResult.ignored }
-        return sendPage(AppPageCommandKind.addEntries, target: "", payload: ["labels": labels])
+        return sendPage(AppPageCommandKind.addEntries, target: "", payload: ["labels": labels], labels: labels)
     }
 
     func editWheelDraft(_ value: String) {
@@ -1012,26 +1021,21 @@ final class AppHostPresenter {
             return
         }
         if addWheelNames(text) != ActivityTapResult.dispatched { return }
-        guard let requestId = pagePending.last?.requestId else { return }
-        wheelDraft.didSend(requestId: requestId)
+        guard let command = pagePending.last else { return }
+        wheelDraft.didSend(requestId: command.requestId, lines: command.labels)
     }
 
     @discardableResult
     func addEveryoneToWheel() -> ActivityTapResult {
-        if !wheel.canEdit || wheel.isFull { return ActivityTapResult.explained }
-        let missing = AppPagePolicy.missingNames(roster: rosterNames(), entries: wheel.entries)
-        let room = AppWheelLimits.maxEntries - wheel.entries.count
-        var labels: [String] = []
-        for name in missing {
-            if labels.count >= room { break }
-            labels.append(name)
-        }
+        if !wheel.canEdit { return ActivityTapResult.explained }
+        let labels = AppPagePolicy.missingNames(roster: rosterNames(), entries: wheel.entries)
         if labels.isEmpty { return ActivityTapResult.ignored }
-        return sendPage(AppPageCommandKind.addEntries, target: "everyone", payload: ["labels": labels])
+        return sendPage(AppPageCommandKind.addEntries, target: "everyone", payload: ["labels": labels], labels: labels)
     }
 
     @discardableResult
     func removeWheelEntry(_ entryId: String) -> ActivityTapResult {
+        if wheel.spinning { return ActivityTapResult.explained }
         if !AppBridgeCodec.isValidIdentifier(entryId) || !wheel.entries.contains(where: { $0.id == entryId }) {
             return ActivityTapResult.ignored
         }
@@ -1040,18 +1044,21 @@ final class AppHostPresenter {
 
     @discardableResult
     func shuffleWheel() -> ActivityTapResult {
+        if wheel.spinning { return ActivityTapResult.explained }
         if wheel.entries.count < 2 { return ActivityTapResult.ignored }
         return sendPage(AppPageCommandKind.shuffle)
     }
 
     @discardableResult
     func sortWheel() -> ActivityTapResult {
+        if wheel.spinning { return ActivityTapResult.explained }
         if wheel.entries.count < 2 { return ActivityTapResult.ignored }
         return sendPage(AppPageCommandKind.sort)
     }
 
     @discardableResult
     func clearWheelNames() -> ActivityTapResult {
+        if wheel.spinning { return ActivityTapResult.explained }
         if wheel.entries.isEmpty { return ActivityTapResult.ignored }
         return sendPage(AppPageCommandKind.clearEntries)
     }
@@ -1347,12 +1354,12 @@ final class AppHostPresenter {
         if wheelDraft.scope != draftScope { wheelDraft.enter(draftScope) }
     }
 
-    private func acknowledge(requestId: String, ok: Bool, pngBase64: String) {
+    private func acknowledge(requestId: String, ok: Bool, pngBase64: String, added: [Int]?) {
         if let pageIndex = pagePending.firstIndex(where: { $0.requestId == requestId }) {
             let command = pagePending[pageIndex]
             pagePending.remove(at: pageIndex)
             if command.kind == AppPageCommandKind.addEntries && command.target.isEmpty {
-                wheelDraft.reply(requestId: requestId, accepted: ok)
+                wheelDraft.reply(requestId: requestId, accepted: ok, added: added)
             }
             rebuildPages()
             return
@@ -1382,9 +1389,17 @@ final class AppHostPresenter {
     func fireCommandTimeout(requestId: String) {
         if let pageIndex = pagePending.firstIndex(where: { $0.requestId == requestId }) {
             let command = pagePending[pageIndex]
+            if command.kind == AppPageCommandKind.addEntries && command.attempts < AppBridgeProtocol.commandAttempts
+                && session?.sendCommand(AppPagePolicy.outboundType(command.kind), requestId: requestId,
+                                        payload: ["labels": command.labels]) == true {
+                pagePending[pageIndex] = AppPagePendingCommand(requestId: requestId, kind: command.kind, target: command.target,
+                                                               labels: command.labels, attempts: command.attempts + 1)
+                startCommandTimer(requestId: requestId)
+                return
+            }
             pagePending.remove(at: pageIndex)
             if command.kind == AppPageCommandKind.addEntries && command.target.isEmpty {
-                wheelDraft.reply(requestId: requestId, accepted: false)
+                wheelDraft.reply(requestId: requestId, accepted: false, added: nil)
             }
             rebuildPages()
             return
@@ -1555,7 +1570,8 @@ final class AppHostPresenter {
     }
 
     @discardableResult
-    private func sendPage(_ kind: AppPageCommandKind, target: String = "", payload: [String: Any] = [:]) -> ActivityTapResult {
+    private func sendPage(_ kind: AppPageCommandKind, target: String = "", payload: [String: Any] = [:],
+                          labels: [String] = []) -> ActivityTapResult {
         guard let session = session else { return ActivityTapResult.explained }
         if model.phase != AppHostPhase.ready && model.phase != AppHostPhase.readOnly { return ActivityTapResult.explained }
         if AppPagePolicy.appId(kind) != model.appId || appStatus.kind != model.appId { return ActivityTapResult.explained }
@@ -1571,7 +1587,7 @@ final class AppHostPresenter {
         }
         commandLog.append(kind.rawValue + ":" + requestId)
         if commandLog.count > 40 { commandLog.removeFirst() }
-        pagePending.append(AppPagePendingCommand(requestId: requestId, kind: kind, target: target))
+        pagePending.append(AppPagePendingCommand(requestId: requestId, kind: kind, target: target, labels: labels, attempts: 1))
         startCommandTimer(requestId: requestId)
         rebuildPages()
         return ActivityTapResult.dispatched
@@ -1649,6 +1665,7 @@ final class AppHostPresenter {
             spinning: spinning,
             canEdit: wheelEdit,
             canSpin: wheelEdit && wheelEntries.count >= 2 && !spinning && !kinds.contains(AppPageCommandKind.spin.rawValue),
+            canReorder: wheelEdit && !spinning,
             isFull: wheelEntries.count >= AppWheelLimits.maxEntries,
             isReady: isWheel && ready,
             missingNames: missing,

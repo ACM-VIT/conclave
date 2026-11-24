@@ -770,7 +770,7 @@ struct AppWheelPage: View {
 
     var body: some View {
         let wheel = host.wheel
-        let deleteAction: ((IndexSet) -> Void)? = wheel.canEdit ? { offsets in remove(offsets) } : nil
+        let deleteAction: ((IndexSet) -> Void)? = wheel.canReorder ? { offsets in remove(offsets) } : nil
         List {
             if !wheel.isReady {
                 AppPageUnavailable(appId: "wheel")
@@ -831,13 +831,13 @@ struct AppWheelPage: View {
                 Section {
                     if wheel.canEdit {
                         Button(ConclaveStrings.text("Shuffle")) { _ = host.shuffleWheel() }
-                            .disabled(wheel.entries.count < 2 || wheel.isPending(AppPageCommandKind.shuffle))
+                            .disabled(!wheel.canReorder || wheel.entries.count < 2 || wheel.isPending(AppPageCommandKind.shuffle))
                             .accessibilityIdentifier("app.wheel.shuffle")
                         Button(ConclaveStrings.text("Sort A to Z")) { _ = host.sortWheel() }
-                            .disabled(wheel.entries.count < 2 || wheel.isPending(AppPageCommandKind.sort))
+                            .disabled(!wheel.canReorder || wheel.entries.count < 2 || wheel.isPending(AppPageCommandKind.sort))
                             .accessibilityIdentifier("app.wheel.sort")
                         Button(ConclaveStrings.text("Clear Names…"), role: .destructive) { confirmsClear = true }
-                            .disabled(wheel.entries.isEmpty || wheel.isPending(AppPageCommandKind.clearEntries))
+                            .disabled(!wheel.canReorder || wheel.entries.isEmpty || wheel.isPending(AppPageCommandKind.clearEntries))
                             .accessibilityIdentifier("app.wheel.clear")
                         Toggle(isOn: Binding(get: { host.wheel.removeWinner }, set: { _ = host.setWheelRemoveWinner($0) })) {
                             VStack(alignment: .leading, spacing: 2) {

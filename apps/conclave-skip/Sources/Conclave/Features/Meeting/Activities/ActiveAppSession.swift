@@ -18,13 +18,15 @@ struct ActiveAppEvent: Equatable {
     let requestId: String
     let ok: Bool
     let pngBase64: String
+    let added: [Int]?
 
     static func make(kind: ActiveAppEventKind, appSessionId: String, lifecycle: ActiveAppLifecycle = ActiveAppLifecycle.idle,
                      issue: AppHostIssue = AppHostIssue.none, bundleVersion: String = "",
                      status: AppEmbedStatus = AppEmbedStatus.empty, requestId: String = "", ok: Bool = false,
-                     pngBase64: String = "") -> ActiveAppEvent {
+                     pngBase64: String = "", added: [Int]? = nil) -> ActiveAppEvent {
         return ActiveAppEvent(kind: kind, appSessionId: appSessionId, lifecycle: lifecycle, issue: issue,
-                              bundleVersion: bundleVersion, status: status, requestId: requestId, ok: ok, pngBase64: pngBase64)
+                              bundleVersion: bundleVersion, status: status, requestId: requestId, ok: ok, pngBase64: pngBase64,
+                              added: added)
     }
 }
 
@@ -377,7 +379,8 @@ final class ActiveAppSession {
                                      status: message.status))
         case .ack:
             emit(ActiveAppEvent.make(kind: ActiveAppEventKind.ack, appSessionId: appSessionId, lifecycle: lifecycle,
-                                     requestId: message.requestId, ok: message.ok, pngBase64: message.pngBase64))
+                                     requestId: message.requestId, ok: message.ok, pngBase64: message.pngBase64,
+                                     added: message.added))
         case .resize:
             break
         }

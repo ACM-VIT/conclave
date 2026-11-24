@@ -125,18 +125,72 @@ class WheelDraftBridgeTests {
         }
     }
 
+    private fun status(wheel: Wheel, labels: List<String>, spinning: Boolean = false, requestId: String = "e-9") {
+        val entries = JSONArray()
+        labels.forEachIndexed { index, label -> entries.put(JSONObject().put("id", "e$index").put("label", label)) }
+        val app = JSONObject().put("kind", "wheel").put("entries", entries).put("results", JSONArray()).put("removeWinner", false)
+            .put("sounds", true).put("spinning", spinning).put("winnerSpinId", "").put("winnerLabel", "")
+        receive(wheel, "status", requestId, JSONObject().put("app", app))
+    }
+
+    private fun ack(wheel: Wheel, requestId: String, ok: Boolean, added: List<Int>) {
+        val list = JSONArray()
+        added.forEach { list.put(it) }
+        receive(wheel, "ack", requestId, JSONObject().put("ok", ok).put("added", list))
+    }
+
+    @Test fun aPasteLargerThanTheRoomLeftKeepsTheNamesTheWheelDidNotAdd() {
+        val wheel = readyWheel()
+        status(wheel, (1..63).map { "N$it" })
+        wheel.presenter.editWheelDraft("Cy\nDe\n")
+        assertEquals(listOf(listOf("Cy", "De")), adds(wheel).map { it.second })
+        ack(wheel, adds(wheel)[0].first, true, listOf(0))
+        assertEquals("De", wheel.presenter.wheelDraft.text)
+        assertEquals(0, wheel.presenter.wheelDraft.sent.count)
+    }
+
+    @Test fun aLostAckIsRetriedUnderTheSameRequestIdAndAddsTheNameOnce() {
+        val wheel = readyWheel()
+        wheel.presenter.editWheelDraft("Ada\n")
+        val first = adds(wheel)[0].first
+        wheel.presenter.fireCommandTimeout(requestId = first)
+        assertEquals(listOf(first, first), adds(wheel).map { it.first })
+        assertEquals("", wheel.presenter.wheelDraft.text)
+        ack(wheel, first, true, listOf(0))
+        assertEquals("", wheel.presenter.wheelDraft.text)
+        assertEquals(0, wheel.presenter.wheelDraft.sent.count)
+    }
+
+    @Test fun reorderingIsRefusedWhileTheWheelSpins() {
+        val wheel = readyWheel()
+        status(wheel, listOf("Ada", "Bo", "Cy"), spinning = true)
+        assertEquals(ActivityTapResult.explained, wheel.presenter.sortWheel())
+        assertEquals(ActivityTapResult.explained, wheel.presenter.shuffleWheel())
+        assertEquals(ActivityTapResult.explained, wheel.presenter.removeWheelEntry("e0"))
+        assertEquals(ActivityTapResult.explained, wheel.presenter.clearWheelNames())
+        status(wheel, listOf("Ada", "Bo", "Cy"), requestId = "e-10")
+        assertEquals(ActivityTapResult.dispatched, wheel.presenter.sortWheel())
+    }
+
     @Test fun theDraftNeverRepeatsOrLosesALetterInAnyOrder() {
         var seed = 20261124L
         fun random(limit: Int): Int {
             seed = (seed * 1103515245L + 12345L) % 2147483648L
             return (seed % limit).toInt()
         }
+        fun lines(text: String): List<String> = text.split("\n").map { it.trim() }.filter { it.isNotEmpty() }
         for (run in 0 until 200) {
             var draft = WheelNameDraft()
             var entered = ""
-            val open = mutableListOf<Pair<String, String>>()
+            val open = mutableListOf<Pair<String, List<String>>>()
             var accepted = ""
             var next = 0
+            fun send() {
+                next += 1
+                val sent = lines(draft.text)
+                open.add("h-$next" to sent)
+                draft.didSend(requestId = "h-$next", lines = skip.lib.Array(sent))
+            }
             for (step in 0 until 60) {
                 when (random(7)) {
                     0, 1 -> {
@@ -147,25 +201,23 @@ class WheelDraftBridgeTests {
                     2 -> {
                         val name = ('a' + random(26)).toString() + ('a' + random(26)).toString()
                         entered += name
-                        if (draft.edit(draft.text + name + "\n")) {
-                            next += 1
-                            open.add("h-$next" to draft.text)
-                            draft.didSend(requestId = "h-$next")
-                        }
+                        if (draft.edit(draft.text + name + "\n")) send()
                     }
-                    3 -> if (draft.text.isNotBlank()) {
-                        next += 1
-                        open.add("h-$next" to draft.text)
-                        draft.didSend(requestId = "h-$next")
+                    3 -> if (draft.text.isNotBlank()) send()
+                    4 -> if (open.isNotEmpty()) {
+                        val request = open.removeAt(random(open.size))
+                        val ok = random(3) > 0
+                        if (ok) accepted += request.second.joinToString("")
+                        draft.reply(requestId = request.first, accepted = ok, added = null)
                     }
                     else -> if (open.isNotEmpty()) {
                         val request = open.removeAt(random(open.size))
-                        val ok = random(3) > 0
-                        if (ok) accepted += request.second
-                        draft.reply(requestId = request.first, accepted = ok)
+                        val added = request.second.indices.filter { random(2) == 0 }
+                        added.forEach { accepted += request.second[it] }
+                        draft.reply(requestId = request.first, accepted = added.isNotEmpty(), added = skip.lib.Array(added))
                     }
                 }
-                val held = accepted + open.joinToString("") { it.second } + draft.text
+                val held = accepted + open.joinToString("") { it.second.joinToString("") } + draft.text
                 assertEquals("run $run step $step", entered.toList().sorted(), held.filter { it.isLetter() }.toList().sorted())
             }
         }

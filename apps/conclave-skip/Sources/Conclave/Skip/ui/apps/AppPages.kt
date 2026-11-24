@@ -105,7 +105,7 @@ internal fun AppWheelPage(host: AppHostPresenter, reservation: PaddingValues) {
             } else {
                 items(wheel.entries.toList(), key = { "e:" + it.id }) { entry ->
                     val removing = wheel.isPending(AppPageCommandKind.removeEntry, target = entry.id)
-                    AppSwipeToRemove(enabled = wheel.canEdit && !removing, onRemove = { host.removeWheelEntry(entry.id) }) {
+                    AppSwipeToRemove(enabled = wheel.canReorder && !removing, onRemove = { host.removeWheelEntry(entry.id) }) {
                         ListItem(
                             leadingContent = {
                                 Text(entry.number.toString(), style = MaterialTheme.typography.bodyMedium.copy(fontFeatureSettings = "tnum"),
@@ -122,10 +122,10 @@ internal fun AppWheelPage(host: AppHostPresenter, reservation: PaddingValues) {
                 item(key = "actions") {
                     Column {
                         AppActionRow(conclaveString("app_wheel_shuffle"), "app.wheel.shuffle",
-                            enabled = wheel.entries.count >= 2, pending = wheel.isPending(AppPageCommandKind.shuffle)) { host.shuffleWheel() }
+                            enabled = wheel.canReorder && wheel.entries.count >= 2, pending = wheel.isPending(AppPageCommandKind.shuffle)) { host.shuffleWheel() }
                         AppActionRow(conclaveString("app_wheel_sort"), "app.wheel.sort",
-                            enabled = wheel.entries.count >= 2, pending = wheel.isPending(AppPageCommandKind.sort)) { host.sortWheel() }
-                        AppActionRow(conclaveString("app_wheel_clear_names"), "app.wheel.clear", enabled = wheel.entries.count > 0,
+                            enabled = wheel.canReorder && wheel.entries.count >= 2, pending = wheel.isPending(AppPageCommandKind.sort)) { host.sortWheel() }
+                        AppActionRow(conclaveString("app_wheel_clear_names"), "app.wheel.clear", enabled = wheel.canReorder && wheel.entries.count > 0,
                             pending = wheel.isPending(AppPageCommandKind.clearEntries), destructive = true) { confirmClear = true }
                         AppSwitchRow(conclaveString("app_wheel_remove_winner"), conclaveString("app_wheel_remove_winner_detail"),
                             checked = wheel.removeWinner, enabled = !wheel.isPending(AppPageCommandKind.setRemoveWinner),
