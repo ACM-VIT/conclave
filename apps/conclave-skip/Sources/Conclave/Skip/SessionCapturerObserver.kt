@@ -8,6 +8,14 @@ internal class CaptureSession {
     @Volatile var capturer: VideoCapturer? = null
 }
 
+internal class CaptureClaim(
+    val generation: Long,
+    val cameraOffIntentGeneration: Int?,
+    val capture: CaptureSession?,
+)
+
+internal enum class CaptureDeviceWait { free, busy, stale }
+
 internal class SessionCapturerObserver(
     private val delegate: CapturerObserver?,
     private val isCurrent: () -> Boolean,

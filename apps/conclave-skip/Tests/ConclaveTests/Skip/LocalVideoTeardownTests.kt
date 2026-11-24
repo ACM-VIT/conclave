@@ -133,8 +133,10 @@ class LocalVideoTeardownTests {
         private val events: MutableList<String>? = null,
         private val stopWaitSeconds: Long = 3,
         private val hardware: FakeCameraHardware? = null,
-        private val cameraId: String = "1",
+        val cameraId: String = "1",
     ) : CameraVideoCapturer {
+        @Volatile var reportsTarget = false
+        @Volatile private var front = cameraId == "1"
         @Volatile var stops = 0
         @Volatile var starts = 0
         @Volatile var formatChanges = 0
@@ -170,7 +172,8 @@ class LocalVideoTeardownTests {
                 heldSwitch = handler
                 return
             }
-            handler?.onCameraSwitchDone(true)
+            if (reportsTarget) front = !front
+            handler?.onCameraSwitchDone(if (reportsTarget) front else true)
         }
         override fun switchCamera(handler: CameraVideoCapturer.CameraSwitchHandler?, cameraName: String?) {
             switchCamera(handler)
@@ -195,6 +198,29 @@ class LocalVideoTeardownTests {
                 it.isAccessible = true
                 it.get(null) as Unsafe
             }.allocateInstance(FakeProducer::class.java) as FakeProducer).also { it.fakeId = "produced-$produced" }
+        }
+    }
+
+    class HeldSendTransport : SendTransport(0L) {
+        @Volatile var release: CountDownLatch? = null
+        @Volatile var waiting = false
+        override fun isClosed(): Boolean = false
+        override fun getId(): String = "send-1"
+        override fun close() {}
+        override fun produce(
+            listener: Producer.Listener?,
+            track: MediaStreamTrack?,
+            encodings: MutableList<RtpParameters.Encoding>?,
+            codecOptions: String?,
+            codec: String?,
+            appData: String?,
+        ): Producer {
+            waiting = true
+            release?.await(10, TimeUnit.SECONDS)
+            return (Unsafe::class.java.getDeclaredField("theUnsafe").let {
+                it.isAccessible = true
+                it.get(null) as Unsafe
+            }.allocateInstance(FakeProducer::class.java) as FakeProducer).also { it.fakeId = "held-produced" }
         }
     }
 
@@ -843,5 +869,126 @@ class LocalVideoTeardownTests {
             shadowOf(Looper.getMainLooper()).idle()
         }
         assertEquals("a tile remounted on a closed consumer's track added a sink", emptyList<String>(), remountsThatAddedASink)
+    }
+
+    @Test
+    fun aFlipDuringACameraStartsWaitsOpensOrSwitchesToTheNewlyChosenCamera() {
+        val wrongCameras = mutableListOf<String>()
+        for (wait in listOf("device wait", "helper creation", "produce ack")) {
+            val (media, lane) = joinedCall()
+            val events = CopyOnWriteArrayList<String>()
+            val devices = readyToStart(media, events)
+            val stopping = CountDownLatch(1)
+            val helperGate = CountDownLatch(1)
+            val ack = CountDownLatch(1)
+            val helperEntered = java.util.concurrent.atomic.AtomicBoolean(false)
+            try {
+                when (wait) {
+                    "device wait" -> {
+                        installCamera(media, lane, FakeCapturer(stopping, "slow camera", events, stopWaitSeconds = 30, hardware = hardware))
+                        runBlocking { media.closeLocalMedia(kind = "video", type = ProducerType.webcam.rawValue, producerId = null) }
+                    }
+                    "helper creation" -> media.createTextureHelper = { _ ->
+                        helperEntered.set(true)
+                        helperGate.await(10, TimeUnit.SECONDS)
+                        unsafe.allocateInstance(SurfaceTextureHelper::class.java) as SurfaceTextureHelper
+                    }
+                    "produce ack" -> {
+                        val held = unsafe.allocateInstance(HeldSendTransport::class.java) as HeldSendTransport
+                        held.release = ack
+                        field("sendTransport").set(media, held)
+                        media.openCameraCapturer = { _, name, _ ->
+                            FakeCapturer(null, "next camera", events, hardware = hardware, cameraId = name)
+                                .also { it.reportsTarget = true }
+                                .also { devices.cameras.add(it) }
+                        }
+                    }
+                }
+                val start = scope.async(start = CoroutineStart.UNDISPATCHED) { runCatching { media.startProducingVideo() } }
+                when (wait) {
+                    "device wait" -> advanceMain(CaptureTeardown.DEADLINE_MILLIS + 1_000)
+                    "helper creation" -> advanceMainAtMost(1_000) { helperEntered.get() }
+                    "produce ack" -> {
+                        val held = field("sendTransport").get(media) as HeldSendTransport
+                        advanceMainUntil { held.waiting }
+                    }
+                }
+                assertFalse("$wait: the start finished before the flip", start.isCompleted)
+                runBlocking { media.switchCamera() }
+                stopping.countDown()
+                helperGate.countDown()
+                ack.countDown()
+                advanceMainUntil { start.isCompleted }
+                settle()
+                assertTrue("$wait: ${runBlocking { start.await() }.exceptionOrNull()}", runBlocking { start.await() }.isSuccess)
+                val opened = devices.cameras.map { it.cameraId }
+                val switched = events.contains("next camera switched")
+                val onBack = opened == listOf("0") || (opened == listOf("1") && switched)
+                if (!onBack || media.currentCameraFacing != LocalCameraFacing.back) {
+                    wrongCameras.add("$wait: opened $opened, switched=$switched, facing ${media.currentCameraFacing}")
+                }
+            } finally {
+                stopping.countDown()
+                helperGate.countDown()
+                ack.countDown()
+            }
+            runBlocking { media.cleanup(notifyLocalState = false, preserveCallAudioRouting = true) }
+            settle()
+        }
+        assertEquals("a flip during a camera start was lost", emptyList<String>(), wrongCameras)
+    }
+
+    @Test
+    fun aCameraStartThatTimesOutAfterLeavingLeavesTheNextCallsCameraAlone() {
+        val (media, lane) = joinedCall()
+        val events = CopyOnWriteArrayList<String>()
+        readyToStart(media, events)
+        val never = CountDownLatch(1)
+        try {
+            installCamera(media, lane, FakeCapturer(never, "stuck camera", events, stopWaitSeconds = 60, hardware = hardware))
+            runBlocking { media.closeLocalMedia(kind = "video", type = ProducerType.webcam.rawValue, producerId = null) }
+            val start = scope.async(start = CoroutineStart.UNDISPATCHED) { runCatching { media.startProducingVideo() } }
+            advanceMain(CaptureTeardown.DEADLINE_MILLIS + 1_000)
+            assertFalse(start.isCompleted)
+
+            runBlocking { media.cleanup(notifyLocalState = false, preserveCallAudioRouting = true) }
+            LocalPreviewController.shared.noteCallCameraResumed()
+            advanceMainUntil { start.isCompleted }
+            settle()
+
+            assertEquals("the ended start's timeout paused the next call's camera", PreviewInterruption.none, LocalPreviewController.shared.callCameraInterruption)
+            val failure = runBlocking { start.await() }.exceptionOrNull()?.message ?: ""
+            assertFalse("the ended start reported its device busy: $failure", failure.contains("device busy"))
+        } finally {
+            never.countDown()
+        }
+    }
+
+    @Test
+    fun aCameraFlipThatTimesOutAfterLeavingLeavesTheNextCallsCameraAlone() {
+        val (media, lane) = joinedCall()
+        val events = CopyOnWriteArrayList<String>()
+        readyToStart(media, events)
+        val never = CountDownLatch(1)
+        try {
+            installCamera(media, lane, FakeCapturer(null, "live camera", events, hardware = hardware))
+            val back = FakeCapturer(never, "stuck back camera", events, stopWaitSeconds = 60, hardware = hardware, cameraId = "0")
+            back.holdHardware()
+            CaptureTeardown.camera.release(back, null) {}
+            val flip = scope.async(start = CoroutineStart.UNDISPATCHED) { runCatching { media.switchCamera() } }
+            advanceMain(CaptureTeardown.DEADLINE_MILLIS + 1_000)
+            assertFalse(flip.isCompleted)
+
+            runBlocking { media.cleanup(notifyLocalState = false, preserveCallAudioRouting = true) }
+            LocalPreviewController.shared.noteCallCameraResumed()
+            advanceMainUntil { flip.isCompleted }
+            settle()
+
+            assertEquals("the ended flip's timeout paused the next call's camera", PreviewInterruption.none, LocalPreviewController.shared.callCameraInterruption)
+            val failure = runBlocking { flip.await() }.exceptionOrNull()?.message ?: ""
+            assertFalse("the ended flip reported its device busy: $failure", failure.contains("device busy"))
+        } finally {
+            never.countDown()
+        }
     }
 }
