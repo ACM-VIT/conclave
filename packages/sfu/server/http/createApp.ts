@@ -1487,7 +1487,8 @@ export const createSfuApp = ({
 
     // Snapshot clients before iterating: forceRemoveClientNow mutates room.clients.
     for (const client of [...lookup.room.clients.values()]) {
-      if (client instanceof Admin) {
+      const seatKey = lookup.room.userKeysById.get(client.id);
+      if (client instanceof Admin || (seatKey && lookup.room.isAdminUserKey(seatKey))) {
         continue;
       }
       if (!includeAttendees && client.isWebinarAttendee) {
