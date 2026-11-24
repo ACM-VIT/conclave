@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import android.content.Context
+import android.content.Intent
 import android.media.AudioAttributes
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
@@ -202,6 +203,12 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
 
     private var device: Device? = null
     internal var deviceLoader: (String) -> Device = { capabilities -> Device().also { it.load(capabilities, null) } }
+    internal var openCameraCapturer: (Context, CameraVideoCapturer.CameraEventsHandler) -> VideoCapturer? =
+        { context, events -> createCameraCapturer(context, events) }
+    internal var openScreenCapturer: (Intent, MediaProjection.Callback) -> VideoCapturer =
+        { data, callback -> ScreenCapturerAndroid(data, callback) }
+    internal var createTextureHelper: (String) -> SurfaceTextureHelper? =
+        { threadName -> SurfaceTextureHelper.create(threadName, eglBase.eglBaseContext) }
     private var deviceLoadJob: Job? = null
     private var configurationGeneration: Long = 0
 
@@ -1701,6 +1708,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
     private var videoSource: VideoSource? = null
     private var audioSource: AudioSource? = null
     private var videoCapturer: VideoCapturer? = null
+    @Volatile private var cameraCaptureSession = 0L
     private var isWebcamCaptureActive = false
     @Volatile private var activeWebcamCaptureProfile: WebcamCaptureProfile? = null
     internal val currentCameraFacing: LocalCameraFacing
@@ -1884,6 +1892,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
     )
 
     private var screenCapturer: VideoCapturer? = null
+    @Volatile private var screenCaptureSession = 0L
     private var screenVideoSource: VideoSource? = null
     private var screenSurfaceTextureHelper: SurfaceTextureHelper? = null
     private var screenVideoTrack: VideoTrack? = null
@@ -2412,11 +2421,13 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             }
 
             if (videoCapturer == null) {
-                videoCapturer = createCameraCapturer(ProcessInfo.processInfo.androidContext)
+                val session = takeInFlightToken()
+                cameraCaptureSession = session
+                videoCapturer = openCameraCapturer(ProcessInfo.processInfo.androidContext, cameraEvents(session))
             }
 
             if (surfaceTextureHelper == null) {
-                surfaceTextureHelper = SurfaceTextureHelper.create("CaptureThread", eglBase.eglBaseContext)
+                surfaceTextureHelper = createTextureHelper("CaptureThread")
             }
 
             val capturer = videoCapturer ?: throw ErrorException("No camera capturer")
@@ -2424,7 +2435,12 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             val textureHelper = surfaceTextureHelper ?: throw ErrorException("Camera texture helper unavailable")
             videoSource = peerConnectionFactory?.createVideoSource(false)
             val source = videoSource ?: throw ErrorException("Video source unavailable")
-            capturer.initialize(textureHelper, ProcessInfo.processInfo.androidContext, source.capturerObserver)
+            val session = cameraCaptureSession
+            capturer.initialize(
+                textureHelper,
+                ProcessInfo.processInfo.androidContext,
+                SessionCapturerObserver(source.capturerObserver) { cameraCaptureSession == session },
+            )
             startWebcamCapture(capturer, "start")
 
             localVideoTrack = peerConnectionFactory?.createVideoTrack(nextLocalVideoTrackId(), source)
@@ -2507,17 +2523,23 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         val data = ScreenCaptureManager.getCaptureResultIntent()
             ?: throw ErrorException("No screen capture permission")
 
-        val capturer = ScreenCapturerAndroid(data, object : MediaProjection.Callback() {
+        val session = takeInFlightToken()
+        screenCaptureSession = session
+        val capturer = openScreenCapturer(data, object : MediaProjection.Callback() {
             override fun onStop() {
-                ScreenCaptureManager.onProjectionStoppedExternally()
+                if (screenCaptureSession == session) ScreenCaptureManager.onProjectionStoppedExternally()
             }
         })
         screenCapturer = capturer
 
-        screenSurfaceTextureHelper = SurfaceTextureHelper.create("ScreenCaptureThread", eglBase.eglBaseContext)
+        screenSurfaceTextureHelper = createTextureHelper("ScreenCaptureThread")
         screenVideoSource = peerConnectionFactory?.createVideoSource(true)
         val source = screenVideoSource ?: throw ErrorException("Screen source unavailable")
-        capturer.initialize(screenSurfaceTextureHelper, context, source.capturerObserver)
+        capturer.initialize(
+            screenSurfaceTextureHelper,
+            context,
+            SessionCapturerObserver(source.capturerObserver) { screenCaptureSession == session },
+        )
 
         val metrics = context.resources.displayMetrics
         var pendingProducer: Producer? = null
@@ -3570,6 +3592,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
     }
 
     private fun releaseLocalCameraCapture() {
+        cameraCaptureSession = 0L
         localVideoTrackWrapper?.setTrack(null)
         val capturer = videoCapturer
         val helper = surfaceTextureHelper
@@ -3585,6 +3608,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
     }
 
     private fun releaseScreenCapture() {
+        screenCaptureSession = 0L
         val capturer = screenCapturer
         val helper = screenSurfaceTextureHelper
         val source = screenVideoSource
@@ -8027,7 +8051,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         }
     }
 
-    private fun createCameraCapturer(context: Context): VideoCapturer? {
+    private fun createCameraCapturer(context: Context, events: CameraVideoCapturer.CameraEventsHandler): VideoCapturer? {
         val enumerator = createCameraEnumerator(context)
         val preferredFacing = activeCameraFacing
         val fallbackFacing = oppositeCameraFacing(preferredFacing)
@@ -8037,21 +8061,25 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         val selectedName = preferredName ?: fallbackName ?: return null
 
         activeCameraFacing = selectedFacing
-        return enumerator.createCapturer(selectedName, callCameraEvents)
+        return enumerator.createCapturer(selectedName, events)
     }
 
-    private val callCameraEvents = object : org.webrtc.CameraVideoCapturer.CameraEventsHandler {
+    private fun cameraEvents(session: Long) = object : org.webrtc.CameraVideoCapturer.CameraEventsHandler {
+        private val isCurrent: Boolean get() = cameraCaptureSession == session
         override fun onCameraError(errorDescription: String?) {
+            if (!isCurrent) return
             activeWebcamCaptureProfile = null
             LocalPreviewController.shared.noteCallCameraInterruption(PreviewInterruption.cameraError)
         }
         override fun onCameraDisconnected() {
+            if (!isCurrent) return
             activeWebcamCaptureProfile = null
             LocalPreviewController.shared.noteCallCameraInterruption(PreviewInterruption.inUseByAnotherClient)
         }
         override fun onCameraFreezed(errorDescription: String?) {}
         override fun onCameraOpening(cameraName: String?) {}
         override fun onFirstFrameAvailable() {
+            if (!isCurrent) return
             LocalPreviewController.shared.noteCallCameraResumed()
         }
         override fun onCameraClosed() {}
