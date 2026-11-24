@@ -144,7 +144,13 @@ export default function KnockPrompt({
               disabled={isBusy}
               onClick={() =>
                 startAction([single.userId], (activeSocket) =>
-                  admitPendingUser(activeSocket, single.userId, onPendingUserStale),
+                  admitPendingUser(activeSocket, single.userId, {
+                    onStale: onPendingUserStale,
+                    onNotice: (notice) => {
+                      settleAction();
+                      setError(notice);
+                    },
+                  }),
                 )
               }
               aria-label={`Admit ${single.name}`}
@@ -165,10 +171,10 @@ export default function KnockPrompt({
                 startAction(
                   people.map((person) => person.userId),
                   (activeSocket) =>
-                    admitAllPendingUsers(activeSocket, (failure) => {
-                      if (!failure) return;
+                    admitAllPendingUsers(activeSocket, (outcome) => {
+                      if (!outcome) return;
                       settleAction();
-                      setError(failure);
+                      setError(outcome.text);
                     }),
                 )
               }

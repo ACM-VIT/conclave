@@ -61,7 +61,7 @@ const setup = () => {
   room.addClient(seat);
   room.grantHost("host@example.com", "fallback");
   room.makePrimaryHost("host@example.com");
-  room.allowLockedUser("guest-admitted");
+  room.restoreAdmission("guest-admitted", undefined, { pastLock: true });
   return state;
 };
 

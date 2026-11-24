@@ -1,13 +1,12 @@
 import { config } from "../../../config/config.js";
-import type { AppsAwarenessData } from "../../../types.js";
 import { Logger } from "../../../utilities/loggers.js";
-import { ensureHost } from "../../admin/controlPlane.js";
 import { cleanupRoom } from "../../rooms.js";
 import { leaveNextMeetingLobby } from "../../nextMeetingLobby.js";
 import {
-  emitWebinarAttendeeCountChanged,
-  emitWebinarFeedChanged,
-} from "../../webinarNotifications.js";
+  ensureHost,
+  teardownClient,
+  withdrawWaitingRequest,
+} from "../../admin/controlPlane.js";
 import type { ConnectionContext } from "../context.js";
 import { interruptActiveConclaveAnswers } from "../conclaveRelayLifecycle.js";
 
@@ -53,57 +52,17 @@ export const registerDisconnectHandlers = (
           return;
         }
 
-        const isWebinarAttendee = activeClient.isWebinarAttendee;
-        const awarenessRemovals = activeRoom.clearUserAwareness(userId);
-
-        for (const removal of awarenessRemovals) {
-          io.to(roomChannelId).emit("apps:awareness", {
-            appId: removal.appId,
-            awarenessUpdate: removal.awarenessUpdate,
-          } satisfies AppsAwarenessData);
-        }
-
-        activeRoom.removeClient(userId);
-        state.transcriptRelays
-          .stopRoomForUser({
-            roomKey: activeRoom.channelId,
-            userId,
-            canStopAnyRelay: false,
-          })
-          .catch((error) => {
-            Logger.warn(
-              `Transcript SFU relay stop on disconnect failed for room ${activeRoom.channelId}: ${error}`,
-            );
-          });
-        void state.transcriptRelays.syncRoom(activeRoom);
-        if (!isWebinarAttendee) {
-          io.to(roomChannelId).emit("userLeft", {
-            userId,
-            roomId: activeRoom.id,
-          });
-        }
-        emitWebinarAttendeeCountChanged(io, state, activeRoom);
-        emitWebinarFeedChanged(io, state, activeRoom);
-
+        teardownClient({
+          io,
+          state,
+          room: activeRoom,
+          userId,
+        });
         if (state.rooms.has(roomChannelId)) {
           cleanupRoom(state, roomChannelId);
         }
         ensureHost(io, state, activeRoom);
-
         Logger.info(`User ${userId} left room ${roomId}`);
-
-        if (state.rooms.has(roomChannelId)) {
-          const roomInState = state.rooms.get(roomChannelId);
-          if (roomInState) {
-            const newQuality = roomInState.updateVideoQuality();
-            if (newQuality) {
-              io.to(roomChannelId).emit("setVideoQuality", {
-                quality: newQuality,
-                roomId: roomInState.id,
-              });
-            }
-          }
-        }
       };
 
       const graceMs = config.socket.disconnectGraceMs;
@@ -152,13 +111,7 @@ export const registerDisconnectHandlers = (
       if (pendingRoom) {
         const pending = pendingRoom.pendingClients.get(context.pendingUserKey);
         if (pending?.socket?.id === socket.id) {
-          pendingRoom.removePendingClient(context.pendingUserKey);
-          for (const admin of pendingRoom.getAdmins()) {
-            admin.socket.emit("pendingUserLeft", {
-              userId: context.pendingUserKey,
-              roomId: context.pendingRoomId,
-            });
-          }
+          withdrawWaitingRequest(pendingRoom, context.pendingUserKey);
           if (pendingRoom.isEmpty()) {
             cleanupRoom(state, context.pendingRoomChannelId);
           }

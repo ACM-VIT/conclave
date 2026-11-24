@@ -1,3 +1,6 @@
+import { GUEST_SEAT_KEY_PREFIX } from "@conclave/meeting-core/guest-join-claims";
+import { isGuestUserKey } from "../../server/identity.js";
+import { AdmissionLedger, type AdmissionScope } from "./AdmissionLedger.js";
 import { RoomAiCredentials } from "../../server/roomAiCredentials.js";
 import { newInviteCodeVersion } from "../../server/inviteCodeVersion.js";
 import type {
@@ -10,7 +13,7 @@ import type {
   WebRtcTransport,
 } from "mediasoup/types";
 import type { Socket } from "socket.io";
-import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import type { LostRoom } from "../../server/roomRecoveryLedger.js";
 import {
   Awareness,
@@ -52,14 +55,6 @@ import {
   type WebcamReceiverCapacityEvaluation,
   type WebcamReceiverCapacityTransitionReservation,
 } from "../../server/webcamReceiverCapacityProof.js";
-
-// Someone asking to be let in.
-export type WaitingGuest = {
-  userKey: string;
-  userId: string;
-  socket: Socket;
-  displayName?: string;
-};
 
 export interface RoomOptions {
   id: string;
@@ -122,10 +117,40 @@ export type RoomChatImageAsset = {
 const WEBINAR_AUDIO_LEVEL_THRESHOLD = -70;
 const WEBINAR_AUDIO_LEVEL_INTERVAL_MS = 350;
 const MAX_WEBINAR_QA_ENTRIES = 300;
+// The most passes a room records as one guest: a join token names the pass
+// a tab joins under and up to 15 others.
+export const GUEST_PASS_GROUP_LIMIT = 16;
+
+/** What a host's admission did (see `Room.admitUserKeys`). */
+export type AdmitResult =
+  | { status: "admitted"; admitted: string[]; refused: string[] }
+  | { status: "full"; refused: string[] };
+
+/**
+ * What a join shows the room of its guest through the browser's other
+ * passes, before anything is recorded (see `Room.planGuestLink`).
+ */
+export type GuestLinkPlan = {
+  readonly guestProof: string;
+  // The guest's passes as this join shows them: the ones the room already
+  // links to `guestProof`, and the known ones among the browser's others.
+  readonly passes: ReadonlySet<string>;
+  // A block on any of them refuses the join. Nothing is recorded.
+  readonly blocked: boolean;
+  // Whether the room may record the passes as one guest. It does not
+  // record a guest of more than `GUEST_PASS_GROUP_LIMIT` passes.
+  readonly recordable: boolean;
+};
+
+// The passes a join may lean on for a right: the plan's, when the room
+// would record them, else what the room already links.
+const rightsPassesOf = (link: GuestLinkPlan | undefined) =>
+  link?.recordable ? link.passes : undefined;
 const MAX_WEBINAR_OPEN_QUESTIONS_PER_USER = 3;
 export const MAX_WEBINAR_QA_QUESTION_LENGTH = 500;
 export const MAX_WEBINAR_QA_ANSWER_LENGTH = 1000;
-const MAX_WEBINAR_PROMOTED_USER_KEYS = 200;
+const MAX_OPEN_ADMISSIONS = 50;
+const ADMISSION_TTL_MS = 2 * 60 * 1000;
 // A stage invite should cover one webinar (plus reconnects), not become a
 // permanent skeleton key for this identity.
 const WEBINAR_PROMOTION_TTL_MS = 4 * 60 * 60 * 1000;
@@ -222,11 +247,26 @@ const HOST_REASON_RANK: Record<HostReason, number> = {
   owner: 2,
 };
 
+/** One tab's request to be let into a room. */
+export type WaitingRequest = {
+  userKey: string;
+  userId: string;
+  socket: Socket;
+  displayName?: string;
+};
+
 /**
  * `membership`: a seat was added, removed, replaced or promoted.
  * `closed`: the room is being torn down.
  */
 export type RoomLifecycleEvent = "membership" | "closed";
+
+type GuestRecord = {
+  identity: string;
+  since: number;
+  heldAt: number | null;
+  passes: Set<string>;
+};
 
 export class Room {
   public readonly id: string;
@@ -248,7 +288,7 @@ export class Room {
   // signed up to then are from the ended meeting, not from this one.
   public recoveryPassesVoidUntil: number | null = null;
   public clients: Map<string, Client> = new Map();
-  public pendingClients: Map<string, WaitingGuest> = new Map();
+  public pendingClients: Map<string, WaitingRequest> = new Map();
   public pendingDisconnects: Map<
     string,
     {
@@ -259,7 +299,6 @@ export class Room {
       notificationEmittedAt?: number;
     }
   > = new Map();
-  public allowedUsers: Set<string> = new Set();
   public currentScreenShareProducerId: string | null = null;
   public currentQuality: VideoQuality = "standard";
   public userKeysById: Map<string, string> = new Map();
@@ -271,11 +310,51 @@ export class Room {
   private chatImageAssets: Map<string, RoomChatImageAsset> = new Map();
   private chatImageExpiryTimers: Map<string, NodeJS.Timeout> = new Map();
   private chatImageBytes = 0;
-  public lockedAllowedUsers: Set<string> = new Set();
   public blockedUsers: Set<string> = new Set();
   private cleanupTimer: NodeJS.Timeout | null = null;
   private cleanupTimerDeadline = 0;
   private primaryHostUserKey: string | null = null;
+  /**
+   * Guest identities bound to the proof of the guest pass they entered this
+   * room with. The proof is a keyed hash the web join route signs into the
+   * token; the pass itself never reaches the SFU. A binding only counts while
+   * the identity holds something here (see `claimGuestIdentity`).
+   */
+  private guestProofsByUserKey: Map<string, string> = new Map();
+  // The same bindings by proof: the keys a pass has in this room.
+  private userKeysByGuestProof: Map<string, Set<string>> = new Map();
+  private guestIdentitiesToRelease: Set<string> = new Set();
+  private guestRecords: Map<string, GuestRecord> = new Map();
+  private guestPassClock = 0;
+  // Who waits, by guest: the keys of each guest's waiting tabs, oldest
+  // first, and for each waiting key the guest it was filed under. With it
+  // the lobby shows one row per guest, and a join finds its guest's
+  // requests, without going through every pass the room knows.
+  private waitingKeysByGuest: Map<string, string[]> = new Map();
+  private waitingGuestByKey: Map<string, { guest: string; arrival: number }> =
+    new Map();
+  // One clock for requests to be let in and for every decision about who
+  // may come in, so a decision can be told apart from a request that came
+  // after it.
+  private lobbyClock = 0;
+  // Who may come in is decided from this alone (see `AdmissionLedger`).
+  private admissions = new AdmissionLedger(config.lobbyDecisionRecordLimit, {
+    onEvicted: (userKeys) => {
+      for (const userKey of userKeys) this.releaseGuestIdentity(userKey);
+    },
+    onFull: () =>
+      Logger.warn(
+        `Room ${this.id}: the lobby decision record is full of refusals; an admission was not kept and the guest has to knock again.`,
+      ),
+  });
+  // The request each waiting guest's row shows on the hosts' screens, as
+  // they were last told, and the guests whose rows may have changed since.
+  private shownRowByGuest: Map<string, string> = new Map();
+  private lobbyGuestsToRefresh: Set<string> = new Set();
+  // How requests that left the lobby since the hosts were last told left it.
+  private lobbyOutcomes: Map<string, "admitted" | "rejected"> = new Map();
+  /** Admissions a host created and no join has used yet (code → expiry). */
+  private openAdmissions: Map<string, number> = new Map();
   private _isLocked: boolean = false;
   private _isChatLocked: boolean = false;
   private _noGuests: boolean = false;
@@ -329,7 +408,6 @@ export class Room {
    * gates (webinar room guard, lock, waiting room, invite code, guest policy)
    * without host re-approval.
    */
-  private webinarPromotedUserKeys: Map<string, number> = new Map();
   /**
    * Identities the host moved back to the audience. While webinar mode is on,
    * these may not re-enter as participants — a demoted client that ignores
@@ -371,6 +449,9 @@ export class Room {
     WebcamReceiverCapacityProofCoordinator;
 
   private readonly webcamVp9Enabled: boolean;
+  private readonly guestIdentityMergeListeners = new Set<
+    (from: string, into: string) => void
+  >();
   private readonly lifecycleListeners = new Set<
     (event: RoomLifecycleEvent) => void
   >();
@@ -412,6 +493,11 @@ export class Room {
    * Lets room-scoped state that lives outside this class, such as the apps
    * authority runtime, follow who is in the room and when it closes.
    */
+  onGuestIdentityMerged(listener: (from: string, into: string) => void): () => void {
+    this.guestIdentityMergeListeners.add(listener);
+    return () => this.guestIdentityMergeListeners.delete(listener);
+  }
+
   onLifecycle(listener: (event: RoomLifecycleEvent) => void): () => void {
     this.lifecycleListeners.add(listener);
     return () => this.lifecycleListeners.delete(listener);
@@ -794,13 +880,736 @@ export class Room {
     this.webcamReceiverCapacityProofCoordinator.refreshAll(producerIds);
   }
 
+  // Whether `userKey` still has a seat, a waiting-room entry, or anything a
+  // later join under that key would inherit.
+  private holdsUserKey(userKey: string): boolean {
+    if (
+      this.hostUserKey === userKey ||
+      this.adminUserKeys.has(userKey) ||
+      this.admissions.names(this.principalOf(userKey), userKey) ||
+      this.admissions.holdsRefusalFor(`key:${userKey}`) ||
+      this.blockedUsers.has(userKey) ||
+      this.pendingClients.has(userKey)
+    ) {
+      return true;
+    }
+    for (const key of this.userKeysById.values()) {
+      if (key === userKey) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Decides whether a join may enter as the guest `userKey`, and which pass
+   * proof to bind the identity to once the join gets a seat or a waiting-room
+   * entry (pass `bindTo` on to `setUserIdentity` or `addPendingClient`).
+   *
+   * An identity that holds something here under a proof needs that proof. One
+   * that holds something with no proof entered through a client without a
+   * pass. It stays open, as before guest passes: binding it to a later caller
+   * would lock the original client out.
+   */
+  claimGuestIdentity(
+    userKey: string,
+    guestProof: string | undefined,
+  ): { ok: false } | { ok: true; bindTo: string | undefined } {
+    if (!this.holdsUserKey(userKey)) {
+      this.unbindGuestProof(userKey);
+      return { ok: true, bindTo: guestProof };
+    }
+    const bound = this.guestProofsByUserKey.get(userKey);
+    if (bound !== undefined && bound !== guestProof) {
+      return { ok: false };
+    }
+    return { ok: true, bindTo: bound };
+  }
+
+  /** How many guest identities this room holds a pass proof for. */
+  get boundGuestIdentityCount(): number {
+    return this.guestProofsByUserKey.size;
+  }
+
+  /** How many passes and keys the room's decision record holds. */
+  get decisionRecordCount(): number {
+    return this.admissions.size;
+  }
+
+  /**
+   * Keeps the map from growing with every guest that ever passed through a
+   * long-lived room. Every method that removes something `holdsUserKey`
+   * counts calls this.
+   *
+   * The proof is dropped at the end of the current turn, and only if the key
+   * holds nothing by then. One host action often swaps a right for another,
+   * such as an unblock followed by an admission. Dropping the proof between
+   * the two would leave the new right open to anyone who names the key.
+   */
+  private releaseGuestIdentity(userKey: string): void {
+    if (!this.guestProofsByUserKey.has(userKey)) return;
+    if (this.guestIdentitiesToRelease.size === 0) {
+      queueMicrotask(() => this.releaseUnheldGuestIdentities());
+    }
+    this.guestIdentitiesToRelease.add(userKey);
+  }
+
+  /**
+   * Whether a host action may give `userKey` a right that lets a later join
+   * in. A guest key is public, so on its own it says nothing about who will
+   * use the right. The room has to know who the guest is: its proof is on
+   * record, it is seated or waiting right now, or it is already admitted. A
+   * key that only stands in a list, such as a block set while the guest was
+   * away, is not enough. A guest the room does not know has to knock, and is
+   * admitted from its waiting entry.
+   */
+  private canGrantTo(userKey: string): boolean {
+    if (!isGuestUserKey(userKey)) return true;
+    if (
+      this.guestProofsByUserKey.has(userKey) ||
+      this.pendingClients.has(userKey) ||
+      this.admissions.names(this.principalOf(userKey), userKey)
+    ) {
+      return true;
+    }
+    for (const seatedKey of this.userKeysById.values()) {
+      if (seatedKey === userKey) return true;
+    }
+    return false;
+  }
+
+  private isSameGuestPass(guestProof: string, otherProof: string): boolean {
+    return (
+      guestProof === otherProof ||
+      this.guestRecords.get(guestProof)?.passes.has(otherProof) === true
+    );
+  }
+
+  /**
+   * Whether `userKey` is a key of the guest who presents `guestProof`, or
+   * of one of `passes` when a join shows the guest's passes itself.
+   */
+  private isKeyOfGuest(
+    userKey: string,
+    guestProof: string | undefined,
+    passes?: ReadonlySet<string>,
+  ): boolean {
+    if (guestProof === undefined) return false;
+    const bound = this.guestProofsByUserKey.get(userKey);
+    if (bound === undefined) return false;
+    return passes ? passes.has(bound) : this.isSameGuestPass(bound, guestProof);
+  }
+
+  /**
+   * Whether one of `userKeys` is `userKey` or another key of the same guest.
+   *
+   * A guest has one public key per tab, so that its tabs cannot be linked.
+   * What a guest may do does not depend on the tab: a right a host gave to
+   * one key, and a block on one key, hold for every key of that guest, the
+   * way they hold for every tab of a signed-in account. `guestProof` is what
+   * tells that two keys are one guest.
+   */
+  private guestHolds(
+    userKeys: Iterable<string>,
+    userKey: string,
+    guestProof: string | undefined,
+    passes?: ReadonlySet<string>,
+  ): boolean {
+    for (const key of userKeys) {
+      if (key === userKey || this.isKeyOfGuest(key, guestProof, passes)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private bindGuestProof(userKey: string, guestProof: string): void {
+    const previous = this.guestProofsByUserKey.get(userKey);
+    if (previous === guestProof) return;
+    if (previous !== undefined) this.dropKeyOfPass(userKey, previous);
+    this.guestProofsByUserKey.set(userKey, guestProof);
+    const userKeys = this.userKeysByGuestProof.get(guestProof);
+    if (userKeys) userKeys.add(userKey);
+    else this.userKeysByGuestProof.set(guestProof, new Set([userKey]));
+    if (!this.guestRecords.has(guestProof)) {
+      this.guestRecords.set(guestProof, {
+        identity: guestProof,
+        since: (this.guestPassClock += 1),
+        heldAt: null,
+        passes: new Set([guestProof]),
+      });
+    }
+  }
+
+  private unbindGuestProof(userKey: string): void {
+    const guestProof = this.guestProofsByUserKey.get(userKey);
+    if (guestProof === undefined) return;
+    this.guestProofsByUserKey.delete(userKey);
+    this.dropKeyOfPass(userKey, guestProof);
+  }
+
+  private dropKeyOfPass(userKey: string, guestProof: string): void {
+    const userKeys = this.userKeysByGuestProof.get(guestProof);
+    userKeys?.delete(userKey);
+    if (userKeys?.size === 0) this.userKeysByGuestProof.delete(guestProof);
+  }
+
+  guestProofOf(userKey: string): string | undefined {
+    return this.guestProofsByUserKey.get(userKey);
+  }
+
+  guestIdentityOf(userKey: string): string | undefined {
+    const guestProof = this.guestProofsByUserKey.get(userKey);
+    if (guestProof === undefined) return undefined;
+    return this.guestRecords.get(guestProof)?.identity ?? guestProof;
+  }
+
+  holdGuestIdentityOf(userKey: string): void {
+    const guestProof = this.guestProofsByUserKey.get(userKey);
+    const record = guestProof === undefined ? undefined : this.guestRecords.get(guestProof);
+    if (!record) return;
+    record.heldAt = this.guestPassClock += 1;
+    this.trimGuestRecords();
+  }
+
+  get guestRecordCount(): number {
+    return this.guestRecords.size;
+  }
+
+  private isGuestPassInUse(guestProof: string): boolean {
+    return (
+      this.userKeysByGuestProof.has(guestProof) ||
+      this.admissions.has(`pass:${guestProof}`)
+    );
+  }
+
+  private trimGuestRecords(): void {
+    const heldOnly: GuestRecord[] = [];
+    for (const record of new Set(this.guestRecords.values())) {
+      if ([...record.passes].some((proof) => this.isGuestPassInUse(proof))) continue;
+      if (record.heldAt === null) this.dropGuestRecord(record);
+      else heldOnly.push(record);
+    }
+    const excess = heldOnly.length - config.guestAppIdentityLimit;
+    if (excess <= 0) return;
+    heldOnly.sort((a, b) => (a.heldAt ?? 0) - (b.heldAt ?? 0));
+    for (const record of heldOnly.slice(0, excess)) this.dropGuestRecord(record);
+  }
+
+  private dropGuestRecord(record: GuestRecord): void {
+    for (const proof of record.passes) {
+      if (this.guestRecords.get(proof) === record) this.guestRecords.delete(proof);
+    }
+  }
+
+  private passesOfGuest(guestProof: string): Iterable<string> {
+    return this.guestRecords.get(guestProof)?.passes ?? [guestProof];
+  }
+
+  private tick(): number {
+    return (this.lobbyClock += 1);
+  }
+
+  /**
+   * Where a decision about `userKey` is kept. A seat key the join route
+   * issued from a pass speaks for the pass: a decision about it holds for
+   * every tab of that pass. Any other key, an account's or one a client
+   * chose itself, speaks only for itself.
+   */
+  private principalOf(userKey: string): string {
+    const guestProof = this.guestProofsByUserKey.get(userKey);
+    return guestProof !== undefined && userKey.startsWith(GUEST_SEAT_KEY_PREFIX)
+      ? `pass:${guestProof}`
+      : `key:${userKey}`;
+  }
+
+  /**
+   * Where a refusal of `userKey` is kept: where its decisions are, and
+   * against the pass whenever a proof ties the key to one, so the refusal
+   * reaches the pass's other tabs after this key is gone.
+   */
+  private refusalPrincipalsOf(userKey: string): string[] {
+    const principal = this.principalOf(userKey);
+    const guestProof = this.guestProofsByUserKey.get(userKey);
+    return guestProof === undefined || principal === `pass:${guestProof}`
+      ? [principal]
+      : [principal, `pass:${guestProof}`];
+  }
+
+  /**
+   * The principals whose decisions a join as `userKey` may lean on. A token
+   * issued for this room (`roomGuestProof`) speaks for the whole guest:
+   * every linked pass, and the keys bound to them. Any other token speaks
+   * only for its own key.
+   */
+  private principalsOfJoin(
+    userKey: string,
+    roomGuestProof: string | undefined,
+    passes?: ReadonlySet<string>,
+  ): string[] {
+    if (roomGuestProof === undefined) return [this.principalOf(userKey)];
+    const principals = new Set([`key:${userKey}`]);
+    for (const guestProof of passes ?? this.passesOfGuest(roomGuestProof)) {
+      principals.add(`pass:${guestProof}`);
+      for (const boundKey of this.userKeysByGuestProof.get(guestProof) ?? []) {
+        if (!boundKey.startsWith(GUEST_SEAT_KEY_PREFIX)) {
+          principals.add(`key:${boundKey}`);
+        }
+      }
+    }
+    return [...principals];
+  }
+
+  // The principals a waiting request of `userKey` speaks for.
+  private principalsOfRequest(userKey: string): string[] {
+    const guestProof = userKey.startsWith(GUEST_SEAT_KEY_PREFIX)
+      ? this.guestProofsByUserKey.get(userKey)
+      : undefined;
+    return this.principalsOfJoin(userKey, guestProof);
+  }
+
+  private admitsRequest(principals: string[]): boolean {
+    return this.admissions.admits(
+      principals,
+      this.isLocked ? "lock" : "waitingRoom",
+    );
+  }
+
+  private isKnownGuestPass(guestProof: string): boolean {
+    const record = this.guestRecords.get(guestProof);
+    if (!record) return false;
+    return (
+      record.heldAt !== null ||
+      [...record.passes].some((proof) => this.isGuestPassInUse(proof))
+    );
+  }
+
+  /**
+   * What a join learns from the seats its token names under the browser's
+   * other passes (`guestWas`): the join route found their cookies in the
+   * same browser. The room records nothing yet. A join decides with the
+   * plan (a block or a demotion under any of the passes refuses it, and a
+   * right under any of them counts when the room would record the link),
+   * and only a join that is let in or waits records it (`commitGuestLink`).
+   * A refused join records nothing: no pass, no link, no binding.
+   *
+   * A pass the room has never seen is left out. Returns undefined when the
+   * join shows no pass the room does not already link to `guestProof`.
+   */
+  planGuestLink(
+    otherSeats: ReadonlyArray<{ guestProof: string }>,
+    guestProof: string,
+  ): GuestLinkPlan | undefined {
+    const passes = new Set(this.passesOfGuest(guestProof));
+    let grows = false;
+    for (const seat of otherSeats) {
+      if (!this.isKnownGuestPass(seat.guestProof) || passes.has(seat.guestProof)) {
+        continue;
+      }
+      for (const proof of this.passesOfGuest(seat.guestProof)) passes.add(proof);
+      grows = true;
+    }
+    if (!grows) return undefined;
+    return {
+      guestProof,
+      passes,
+      blocked: this.guestHolds(this.blockedUsers, "", guestProof, passes),
+      recordable: passes.size <= GUEST_PASS_GROUP_LIMIT,
+    };
+  }
+
+  /**
+   * A block on any of a plan's passes wins over every right the guest holds
+   * under any other: the guest loses what a rejoin would honour, host rights
+   * included. Only what the room already records is changed. Returns all of
+   * the guest's keys, so that the caller removes its seats and requests.
+   */
+  refuseBlockedLink(link: GuestLinkPlan): { userKeys: string[] } {
+    const userKeys = [...link.passes].flatMap((proof) => [
+      ...(this.userKeysByGuestProof.get(proof) ?? []),
+    ]);
+    this.dropRejoinGrantsOf(userKeys, { recordedOnly: true });
+    return { userKeys };
+  }
+
+  /**
+   * Records a plan's passes as one guest, for a join that is let in or
+   * waits: from then on decisions and blocks under any of them hold under
+   * all. A plan of more than `GUEST_PASS_GROUP_LIMIT` passes is not
+   * recorded: the room never drops a pass it links to make room.
+   *
+   * The guest's waiting requests are then judged again, now that the room
+   * knows more of the guest (returned). A request is answered only by a
+   * decision made after it arrived: a denial turns it away, and an
+   * admission lets it in while the guest still holds it. Any other request
+   * stays in the lobby. Nothing is recorded: an earlier decision keeps the
+   * time it was made.
+   */
+  commitGuestLink(
+    link: GuestLinkPlan,
+  ): Array<{ request: WaitingRequest; admitted: boolean }> {
+    if (link.blocked) return [];
+    if (!link.recordable) {
+      Logger.warn(
+        `Room ${this.id}: a guest showed ${link.passes.size} passes; the room links at most ${GUEST_PASS_GROUP_LIMIT}, so this link is not recorded.`,
+      );
+      return [];
+    }
+    const guestsBefore = [...new Set([...link.passes].map((proof) => this.guestOfPass(proof)))];
+    const passes = new Set(link.passes);
+    const known = new Set<GuestRecord>();
+    for (const proof of link.passes) {
+      const record = this.guestRecords.get(proof);
+      if (!record) continue;
+      known.add(record);
+      for (const pass of record.passes) passes.add(pass);
+    }
+    const held = [...known].filter((record) => record.heldAt !== null);
+    const kept = (held.length > 0 ? held : [...known]).reduce<GuestRecord | undefined>(
+      (earliest, record) => (!earliest || record.since < earliest.since ? record : earliest),
+      undefined,
+    );
+    const merged: GuestRecord = {
+      identity: kept?.identity ?? link.guestProof,
+      since: kept?.since ?? (this.guestPassClock += 1),
+      heldAt: held.reduce<number | null>(
+        (latest, record) => Math.max(latest ?? 0, record.heldAt ?? 0),
+        null,
+      ),
+      passes,
+    };
+    let seatedIdentityChanged = false;
+    for (const proof of passes) {
+      const before = this.guestRecords.get(proof)?.identity ?? proof;
+      if (before !== merged.identity && this.userKeysByGuestProof.has(proof)) {
+        seatedIdentityChanged = true;
+      }
+      this.guestRecords.set(proof, merged);
+    }
+    for (const record of held) {
+      if (record.identity === merged.identity) continue;
+      for (const listener of this.guestIdentityMergeListeners) {
+        try {
+          listener(record.identity, merged.identity);
+        } catch (error) {
+          Logger.warn(`Room ${this.id}: an identity merge listener failed`, error);
+        }
+      }
+    }
+    if (seatedIdentityChanged) this.notifyLifecycle("membership");
+    this.mergeWaitingGuests(guestsBefore, this.guestOfPass(link.guestProof));
+    const settled: Array<{ request: WaitingRequest; admitted: boolean }> = [];
+    for (const userKey of [
+      ...(this.waitingKeysByGuest.get(this.guestOfPass(link.guestProof)) ?? []),
+    ]) {
+      const request = this.pendingClients.get(userKey);
+      const arrival = this.waitingGuestByKey.get(userKey)?.arrival;
+      if (!request || arrival === undefined) continue;
+      const principals = this.principalsOfRequest(userKey);
+      const answer = this.admissions.latestAnswer(principals);
+      if (!answer || answer.at < arrival) continue;
+      if (!answer.admitted) {
+        this.lobbyOutcomes.set(userKey, "rejected");
+        this.removePendingClient(userKey);
+        settled.push({ request, admitted: false });
+      } else if (this.admitsRequest(principals)) {
+        this.lobbyOutcomes.set(userKey, "admitted");
+        this.removePendingClient(userKey);
+        settled.push({ request, admitted: true });
+      }
+    }
+    return settled;
+  }
+
+  /**
+   * A join's link in one step, as `planGuestLink` and then either
+   * `refuseBlockedLink` or `commitGuestLink`.
+   */
+  linkGuestPasses(
+    otherSeats: ReadonlyArray<{ guestProof: string }>,
+    guestProof: string,
+  ): {
+    blocked: string[];
+    settled: Array<{ request: WaitingRequest; admitted: boolean }>;
+  } {
+    const link = this.planGuestLink(otherSeats, guestProof);
+    if (!link) return { blocked: [], settled: [] };
+    if (link.blocked) return { blocked: this.refuseBlockedLink(link).userKeys, settled: [] };
+    return { blocked: [], settled: this.commitGuestLink(link) };
+  }
+
+  /** How many passes the room links to another, for its memory bound. */
+  get linkedGuestPassCount(): number {
+    let linked = 0;
+    for (const record of this.guestRecords.values()) {
+      if (record.passes.size > 1) linked += 1;
+    }
+    return linked;
+  }
+
+  /** A host turned away the request `userKey` made to be let in. */
+  denyWaitingRequest(userKey: string): void {
+    const at = this.tick();
+    for (const principal of this.refusalPrincipalsOf(userKey)) {
+      this.admissions.deny(principal, at);
+    }
+    if (this.pendingClients.has(userKey)) {
+      this.lobbyOutcomes.set(userKey, "rejected");
+    }
+    this.removePendingClient(userKey);
+  }
+
+  /**
+   * A host lets in the guests behind `grants`, past the waiting room or the
+   * lock as each grant says. A key the room cannot grant to (see
+   * `canGrantTo`) is left out and returned as refused. The rest are recorded
+   * together or not at all: when the decision record has no room left (it
+   * holds only refusals), nothing changes, every request stays in the
+   * lobby and every block stays, and this says "full".
+   */
+  admitUserKeys(
+    grants: ReadonlyArray<{ userKey: string; scopes: readonly AdmissionScope[] }>,
+  ): AdmitResult {
+    const grantable = grants.filter((grant) => this.canGrantTo(grant.userKey));
+    const refused = [
+      ...new Set(
+        grants
+          .filter((grant) => !grantable.includes(grant))
+          .map((grant) => grant.userKey),
+      ),
+    ];
+    const result = this.recordAdmissions(grantable);
+    return result.status === "admitted" ? { ...result, refused } : { status: "full", refused };
+  }
+
+  // Records the admissions of one host action, together or not at all, and
+  // lets the requests they answer out of the lobby.
+  private recordAdmissions(
+    grants: ReadonlyArray<{ userKey: string; scopes: readonly AdmissionScope[] }>,
+  ): AdmitResult {
+    if (grants.length === 0) return { status: "admitted", admitted: [], refused: [] };
+    const kept = this.admissions.admitAll(
+      grants.map((grant) => ({
+        principal: this.principalOf(grant.userKey),
+        userKey: grant.userKey,
+        scopes: grant.scopes,
+      })),
+      this.tick(),
+    );
+    if (!kept) return { status: "full", refused: [] };
+    const admitted = [...new Set(grants.map((grant) => grant.userKey))];
+    for (const userKey of admitted) {
+      for (const key of this.identitiesOfSameGuest(userKey)) {
+        this.setReadmissionRequired(key, false);
+      }
+      this.blockedUsers.delete(userKey);
+      if (this.pendingClients.has(userKey)) {
+        this.lobbyOutcomes.set(userKey, "admitted");
+      }
+      this.removePendingClient(userKey);
+    }
+    return { status: "admitted", admitted, refused: [] };
+  }
+
+  private recordRevocation(userKeys: string[], scopes: AdmissionScope[]): void {
+    this.admissions.revoke(
+      userKeys.flatMap((userKey) => this.refusalPrincipalsOf(userKey)),
+      scopes,
+      this.tick(),
+    );
+    for (const userKey of userKeys) this.releaseGuestIdentity(userKey);
+  }
+
+  // What a guest's waiting requests are filed under: its passes, by the
+  // lowest proof of those the room has linked, or its key when it showed
+  // no pass.
+  private guestOfPass(guestProof: string): string {
+    const passes = this.guestRecords.get(guestProof)?.passes;
+    return `pass:${passes ? [...passes].sort()[0] : guestProof}`;
+  }
+
+  private guestOfKey(userKey: string): string {
+    const guestProof = this.guestProofsByUserKey.get(userKey);
+    return guestProof === undefined
+      ? `key:${userKey}`
+      : this.guestOfPass(guestProof);
+  }
+
+  /**
+   * Files the waiting requests of guests the room just linked under the one
+   * guest they are now.
+   */
+  private mergeWaitingGuests(guestsBefore: string[], guestNow: string): void {
+    for (const guest of [...guestsBefore, guestNow]) {
+      this.lobbyGuestsToRefresh.add(guest);
+    }
+    const merged = [...new Set(guestsBefore)]
+      .flatMap((guest) => this.waitingKeysByGuest.get(guest) ?? [])
+      .sort(
+        (a, b) =>
+          this.waitingGuestByKey.get(a)!.arrival -
+          this.waitingGuestByKey.get(b)!.arrival,
+      );
+    for (const guest of guestsBefore) this.waitingKeysByGuest.delete(guest);
+    if (merged.length === 0) return;
+    this.waitingKeysByGuest.set(guestNow, merged);
+    for (const userKey of merged) {
+      this.waitingGuestByKey.get(userKey)!.guest = guestNow;
+    }
+  }
+
+  /**
+   * What changed in the hosts' lobby since they were last told: the rows to
+   * take off their screens, with how each request left if it did, and the
+   * rows to add. Each waiting guest is one row, its oldest request. Only the
+   * guests whose requests changed are looked at.
+   */
+  takeLobbyChanges(): {
+    removed: Array<{ userKey: string; outcome?: "admitted" | "rejected" }>;
+    added: WaitingRequest[];
+  } {
+    const before = new Set<string>();
+    const after = new Set<string>();
+    for (const guest of this.lobbyGuestsToRefresh) {
+      const shown = this.shownRowByGuest.get(guest);
+      if (shown !== undefined) before.add(shown);
+      const first = this.waitingKeysByGuest.get(guest)?.[0];
+      if (first === undefined) {
+        this.shownRowByGuest.delete(guest);
+      } else {
+        this.shownRowByGuest.set(guest, first);
+        after.add(first);
+      }
+    }
+    this.lobbyGuestsToRefresh.clear();
+    const removed = [...before]
+      .filter((userKey) => !after.has(userKey))
+      .map((userKey) => ({ userKey, outcome: this.lobbyOutcomes.get(userKey) }));
+    const added = [...after]
+      .filter((userKey) => !before.has(userKey))
+      .flatMap((userKey) => this.pendingClients.get(userKey) ?? []);
+    this.lobbyOutcomes.clear();
+    return { removed, added };
+  }
+
+  private startWaiting(request: WaitingRequest): void {
+    this.pendingClients.set(request.userKey, request);
+    if (this.waitingGuestByKey.has(request.userKey)) return;
+    const guest = this.guestOfKey(request.userKey);
+    this.lobbyGuestsToRefresh.add(guest);
+    this.waitingGuestByKey.set(request.userKey, {
+      guest,
+      arrival: (this.lobbyClock += 1),
+    });
+    const userKeys = this.waitingKeysByGuest.get(guest);
+    if (userKeys) userKeys.push(request.userKey);
+    else this.waitingKeysByGuest.set(guest, [request.userKey]);
+  }
+
+  private stopWaiting(userKey: string): void {
+    this.pendingClients.delete(userKey);
+    const filed = this.waitingGuestByKey.get(userKey);
+    if (!filed) return;
+    this.lobbyGuestsToRefresh.add(filed.guest);
+    this.waitingGuestByKey.delete(userKey);
+    const others = (this.waitingKeysByGuest.get(filed.guest) ?? []).filter(
+      (key) => key !== userKey,
+    );
+    if (others.length > 0) this.waitingKeysByGuest.set(filed.guest, others);
+    else this.waitingKeysByGuest.delete(filed.guest);
+  }
+
+  /** Whether the room knows `userKey` as a key of the pass behind `guestProof`. */
+  isGuestKeyOfPass(userKey: string, guestProof: string): boolean {
+    return this.guestProofsByUserKey.get(userKey) === guestProof;
+  }
+
+  /**
+   * Admits `userKey` on behalf of a join that is being decided right now and
+   * that the caller vouches for: one that redeems a host's admission, or one
+   * that presents a recovery pass after a restart. The admission is bound to
+   * the proof the join carries. Returns false for a blocked guest and for a
+   * key that is bound to another proof.
+   */
+  restoreAdmission(
+    userKey: string,
+    guestProof: string | undefined,
+    options: { pastLock?: boolean } = {},
+  ): boolean {
+    const bound = this.guestProofsByUserKey.get(userKey);
+    if (bound !== undefined && bound !== guestProof) return false;
+    if (this.isBlocked(userKey, guestProof)) return false;
+    const newlyBound =
+      guestProof !== undefined && isGuestUserKey(userKey) && bound === undefined;
+    const newGuest = guestProof !== undefined && !this.guestRecords.has(guestProof);
+    if (guestProof !== undefined && isGuestUserKey(userKey)) {
+      this.bindGuestProof(userKey, guestProof);
+    }
+    const kept =
+      this.recordAdmissions([
+        {
+          userKey,
+          scopes: options.pastLock ? ["waitingRoom", "lock"] : ["waitingRoom"],
+        },
+      ]).status === "admitted";
+    if (!kept && newlyBound) this.unbindGuestProof(userKey);
+    if (!kept && newGuest && guestProof !== undefined) this.guestRecords.delete(guestProof);
+    return kept;
+  }
+
+  /**
+   * An admission for one join that the host cannot name by key yet, such as
+   * a voice agent that has not joined. The join presents the code and is let
+   * in past the waiting room and the lock. A code admits one join and
+   * expires after two minutes.
+   */
+  createAdmission(): { admissionCode: string; expiresAt: number } {
+    const now = Date.now();
+    for (const [code, expiresAt] of this.openAdmissions) {
+      if (expiresAt <= now) this.openAdmissions.delete(code);
+    }
+    if (this.openAdmissions.size >= MAX_OPEN_ADMISSIONS) {
+      const oldest = this.openAdmissions.keys().next().value;
+      if (oldest !== undefined) this.openAdmissions.delete(oldest);
+    }
+    const admissionCode = randomBytes(24).toString("base64url");
+    const expiresAt = now + ADMISSION_TTL_MS;
+    this.openAdmissions.set(admissionCode, expiresAt);
+    return { admissionCode, expiresAt };
+  }
+
+  redeemAdmission(
+    admissionCode: string,
+    userKey: string,
+    guestProof: string | undefined,
+  ): boolean {
+    const expiresAt = this.openAdmissions.get(admissionCode);
+    if (expiresAt === undefined || expiresAt <= Date.now()) return false;
+    if (!this.restoreAdmission(userKey, guestProof, { pastLock: true })) {
+      return false;
+    }
+    this.openAdmissions.delete(admissionCode);
+    return true;
+  }
+
+  private releaseUnheldGuestIdentities(): void {
+    for (const userKey of this.guestIdentitiesToRelease) {
+      if (!this.holdsUserKey(userKey)) {
+        this.unbindGuestProof(userKey);
+      }
+    }
+    this.guestIdentitiesToRelease.clear();
+    this.trimGuestRecords();
+  }
+
   setUserIdentity(
     userId: string,
     userKey: string,
     displayName: string,
-    options?: { forceDisplayName?: boolean },
+    options?: { forceDisplayName?: boolean; guestProof?: string },
   ): void {
     this.userKeysById.set(userId, userKey);
+    if (options?.guestProof) {
+      this.bindGuestProof(userKey, options.guestProof);
+    }
     if (options?.forceDisplayName || !this.displayNamesByKey.has(userKey)) {
       this.displayNamesByKey.set(userKey, displayName);
     }
@@ -879,6 +1688,7 @@ export class Room {
       }
       if (!stillPresent) {
         this.displayNamesByKey.delete(departingUserKey);
+        this.releaseGuestIdentity(departingUserKey);
       }
     }
     if (this.webinarActiveSpeakerUserId === clientId) {
@@ -1093,40 +1903,122 @@ export class Room {
     return evictedIds;
   }
 
-  promoteWebinarUserKey(userKey: string): void {
-    if (this.webinarPromotedUserKeys.size >= MAX_WEBINAR_PROMOTED_USER_KEYS) {
-      const oldest = this.webinarPromotedUserKeys.keys().next().value;
-      if (oldest !== undefined) {
-        this.webinarPromotedUserKeys.delete(oldest);
-      }
-    }
-    this.webinarPromotedUserKeys.set(
-      userKey,
-      Date.now() + WEBINAR_PROMOTION_TTL_MS,
+  /**
+   * A host invites the guest behind `userKey` onto the stage. The invite is
+   * the guest's, under every linked pass, so the guest's stage tab is let in
+   * whatever key it comes back under. It also ends an earlier move back to
+   * the audience; nothing else does. Returns false when the decision record
+   * could not keep the invite, and nothing changed.
+   */
+  promoteWebinarUserKey(userKey: string): boolean {
+    const principal = this.principalOf(userKey);
+    return this.admissions.admitAll(
+      [
+        {
+          principal,
+          userKey,
+          scopes: ["stage"],
+          expiresAt: Date.now() + WEBINAR_PROMOTION_TTL_MS,
+        },
+        { principal, userKey, scopes: ["stageDemotion"] },
+      ],
+      this.tick(),
+      { answersRequest: false },
     );
-    this.webinarDemotedUserKeys.delete(userKey);
   }
 
+  /** A host takes back the stage invite of the guest behind `userKey`. */
   revokeWebinarPromotion(userKey: string): boolean {
-    return this.webinarPromotedUserKeys.delete(userKey);
+    const hadInvite = this.isWebinarPromotedUserKey(userKey);
+    this.admissions.revoke(
+      this.refusalPrincipalsOf(userKey),
+      ["stage"],
+      this.tick(),
+    );
+    this.releaseGuestIdentity(userKey);
+    return hadInvite;
   }
 
-  isWebinarPromotedUserKey(userKey: string): boolean {
-    const expiresAt = this.webinarPromotedUserKeys.get(userKey);
-    if (expiresAt === undefined) return false;
-    if (expiresAt <= Date.now()) {
-      this.webinarPromotedUserKeys.delete(userKey);
-      return false;
+  /**
+   * The guest behind `userKey` declines its stage invite. The invite is
+   * used up and nothing is recorded, so a decline never adds to the
+   * decision record. A guest with no invite declines nothing.
+   */
+  declineStageInvite(userKey: string): boolean {
+    if (!this.isWebinarPromotedUserKey(userKey)) return false;
+    const named = this.admissions.consume(
+      this.principalsOfRequest(userKey),
+      "stage",
+    );
+    for (const key of new Set([userKey, ...named])) {
+      this.releaseGuestIdentity(key);
     }
     return true;
   }
 
-  markWebinarDemotedUserKey(userKey: string): void {
-    this.webinarDemotedUserKeys.add(userKey);
+  /**
+   * Whether a join as `userKey` may go on stage: the latest stage decision
+   * across what the join speaks for is an invite that has not expired.
+   */
+  hasStageInvite(
+    userKey: string,
+    roomGuestProof: string | undefined,
+    link?: GuestLinkPlan,
+  ): boolean {
+    return this.admissions.admits(
+      this.principalsOfJoin(userKey, roomGuestProof, rightsPassesOf(link)),
+      "stage",
+    );
   }
 
-  isWebinarDemotedUserKey(userKey: string): boolean {
-    return this.webinarDemotedUserKeys.has(userKey);
+  stageInviteKeys(
+    userKey: string,
+    roomGuestProof: string | undefined,
+    link?: GuestLinkPlan,
+  ): string[] {
+    return this.admissions.namedKeys(
+      this.principalsOfJoin(userKey, roomGuestProof, rightsPassesOf(link)),
+      "stage",
+    );
+  }
+
+  isWebinarPromotedUserKey(userKey: string): boolean {
+    const invited = this.admissions.admits(
+      this.principalsOfRequest(userKey),
+      "stage",
+    );
+    // An invite that ran out no longer holds the key's binding.
+    if (!invited) this.releaseGuestIdentity(userKey);
+    return invited;
+  }
+
+  /**
+   * A host moves the guest behind `userKey` back to the audience. Every stage
+   * invite the guest holds ends, under every linked pass, and the guest may
+   * not come back as a participant until a newer invite.
+   */
+  markWebinarDemotedUserKey(userKey: string): void {
+    this.admissions.revoke(
+      this.refusalPrincipalsOf(userKey),
+      ["stage", "stageDemotion"],
+      this.tick(),
+    );
+    this.releaseGuestIdentity(userKey);
+  }
+
+  /**
+   * Whether the guest behind `userKey` was moved back to the audience and
+   * not invited since. A refusal follows any proof the join carries.
+   */
+  isWebinarDemotedUserKey(
+    userKey: string,
+    guestProof?: string,
+    link?: GuestLinkPlan,
+  ): boolean {
+    return this.admissions.refuses(
+      this.principalsOfJoin(userKey, guestProof, link?.passes),
+      "stageDemotion",
+    );
   }
 
   // Retain the most recent broadcast (non-DM) chat messages so a late-joining
@@ -1782,8 +2674,12 @@ export class Room {
 
   setLocked(locked: boolean): void {
     this._isLocked = locked;
+    // A lock starts afresh: an admission past an earlier lock does not
+    // carry over.
     if (locked) {
-      this.lockedAllowedUsers.clear();
+      for (const userKey of this.admissions.lockStarted(this.tick())) {
+        this.releaseGuestIdentity(userKey);
+      }
     }
   }
 
@@ -2021,20 +2917,15 @@ export class Room {
   }
 
   seatsOf(userKey: string): Client[] {
-    const seats: Client[] = [];
-    for (const [seatId, key] of this.userKeysById) {
-      const client = key === userKey ? this.clients.get(seatId) : undefined;
-      if (client) seats.push(client);
-    }
-    return seats;
+    return this.seatsOfSameGuest(userKey).flatMap((seatId) => this.clients.get(seatId) ?? []);
   }
 
   private promoteSeatsOf(userKey: string): Admin[] {
     const promoted: Admin[] = [];
-    for (const [seatId, key] of this.userKeysById) {
-      if (key !== userKey) continue;
-      const client = this.clients.get(seatId);
-      if (!client || client instanceof Admin || client.isWebinarAttendee || client.isObserver) {
+    for (const client of this.seatsOf(userKey)) {
+      if (client instanceof Admin || client.isWebinarAttendee || client.isObserver) continue;
+      const key = this.userKeysById.get(client.id);
+      if (key === undefined || !this.isAdminUserKey(key, this.guestProofsByUserKey.get(key))) {
         continue;
       }
       Object.setPrototypeOf(client, Admin.prototype);
@@ -2049,23 +2940,30 @@ export class Room {
     this.onRecoverableChange?.();
   }
 
-  private revokeHost(userKey: string): Client[] {
-    const held = this.hostReasonsByKey.delete(userKey);
-    const primary = this.primaryHostUserKey === userKey;
-    if (primary) this.primaryHostUserKey = null;
-    if (held || primary) this.onRecoverableChange?.();
-    return this.demoteSeatsWithoutHostReason();
+  private revokeHostOf(userKeys: readonly string[]): Client[] {
+    let changed = false;
+    for (const userKey of userKeys) {
+      if (this.hostReasonsByKey.delete(userKey)) changed = true;
+      if (this.primaryHostUserKey === userKey) {
+        this.primaryHostUserKey = null;
+        changed = true;
+      }
+    }
+    if (changed) this.onRecoverableChange?.();
+    return this.demoteSeatsWithoutRights();
   }
 
-  private demoteSeatsWithoutHostReason(): Client[] {
+  private demoteSeatsWithoutRights(): Client[] {
     const demoted: Client[] = [];
     for (const [userId, client] of this.clients) {
       if (!(client instanceof Admin) || client.isObserver) continue;
       const userKey = this.userKeysById.get(userId);
-      if (userKey && this.hostReasonsByKey.has(userKey)) continue;
+      if (userKey === undefined) continue;
+      if (this.isAdminUserKey(userKey, this.guestProofsByUserKey.get(userKey))) continue;
       Object.setPrototypeOf(client, Client.prototype);
       demoted.push(client);
     }
+    if (demoted.length > 0) this.notifyLifecycle("membership");
     return demoted;
   }
 
@@ -2092,13 +2990,12 @@ export class Room {
 
   // Someone who is in this meeting, hosts it, or was let in. Only they may
   // see how many people are in it.
-  isMemberUserKey(userKey: string): boolean {
-    if (this.blockedUsers.has(userKey)) return false;
+  isMemberUserKey(userKey: string, guestProof?: string): boolean {
+    if (this.isBlocked(userKey, guestProof)) return false;
     if (
-      this.hostUserKey === userKey ||
-      this.hostReasonsByKey.has(userKey) ||
-      this.allowedUsers.has(userKey) ||
-      this.lockedAllowedUsers.has(userKey)
+      this.isAdminUserKey(userKey, guestProof) ||
+      this.isAllowed(userKey, guestProof) ||
+      this.isLockedAllowed(userKey, guestProof)
     ) {
       return true;
     }
@@ -2108,8 +3005,55 @@ export class Room {
     return false;
   }
 
-  isAdminUserKey(userKey: string): boolean {
-    return this.hostReasonsByKey.has(userKey);
+  /** Whether the guest behind `userKey` is a co-host. A blocked guest never is. */
+  isAdminUserKey(
+    userKey: string,
+    guestProof?: string,
+    link?: GuestLinkPlan,
+  ): boolean {
+    return (
+      !this.isBlocked(userKey, guestProof, link) &&
+      this.guestHolds(
+        this.adminUserKeys,
+        userKey,
+        guestProof,
+        rightsPassesOf(link),
+      )
+    );
+  }
+
+  /** Whether the guest behind `userKey` is the host. A blocked guest never is. */
+  isHostUserKey(
+    userKey: string,
+    guestProof?: string,
+    link?: GuestLinkPlan,
+  ): boolean {
+    return (
+      this.hostUserKey !== null &&
+      !this.isBlocked(userKey, guestProof, link) &&
+      this.guestHolds(
+        [this.hostUserKey],
+        userKey,
+        guestProof,
+        rightsPassesOf(link),
+      )
+    );
+  }
+
+  private dropRejoinGrantsOf(
+    userKeys: Iterable<string>,
+    options: { recordedOnly?: boolean } = {},
+  ): Client[] {
+    const keys = [...userKeys];
+    this.admissions.revoke(
+      keys.flatMap((key) => this.refusalPrincipalsOf(key)),
+      ["waitingRoom", "lock", "stage"],
+      this.tick(),
+      options,
+    );
+    const demoted = this.revokeHostOf(keys);
+    for (const key of keys) this.releaseGuestIdentity(key);
+    return demoted;
   }
 
   promoteClientToAdmin(userId: string, basis: Exclude<HostBasis, "owner">): Admin[] | null {
@@ -2118,9 +3062,11 @@ export class Room {
     if (!client || !userKey || client.isWebinarAttendee) {
       return null;
     }
+    const guestProof = this.guestProofsByUserKey.get(userKey);
+    if (this.isBlocked(userKey, guestProof)) return null;
     if (
       basis === "fallback" &&
-      (this.handingOff || this.needsReadmission(userKey) || this.isBlocked(userKey))
+      (this.handingOff || this.needsReadmission(userKey, guestProof))
     ) {
       return null;
     }
@@ -2134,13 +3080,17 @@ export class Room {
 
   getHostUserId(): string | null {
     if (this.hostUserKey) {
+      // The host's own seat, else another tab of the same guest.
+      const hostProof = this.guestProofsByUserKey.get(this.hostUserKey);
+      let otherTab: string | null = null;
       for (const [userId, userKey] of this.userKeysById.entries()) {
-        if (userKey !== this.hostUserKey) continue;
-        const client = this.clients.get(userId);
-        if (client instanceof Admin) {
-          return userId;
+        if (!(this.clients.get(userId) instanceof Admin)) continue;
+        if (userKey === this.hostUserKey) return userId;
+        if (otherTab === null && this.isKeyOfGuest(userKey, hostProof)) {
+          otherTab = userId;
         }
       }
+      if (otherTab !== null) return otherTab;
     }
 
     const fallbackAdmin = this.getAdmins()[0];
@@ -2594,6 +3544,7 @@ export class Room {
     this.cancelLifecycleTimers();
     this.notifyLifecycle("closed");
     this.lifecycleListeners.clear();
+    this.guestIdentityMergeListeners.clear();
     this.aiCredentials.clear();
     this.cancelWebcamCodecPolicyUpgrade();
     this.webcamReceiverCapacityProofCoordinator.close();
@@ -2638,13 +3589,20 @@ export class Room {
     this.primaryHostUserKey = null;
     this.displayNamesByKey.clear();
     this.blockedUsers.clear();
+    this.guestProofsByUserKey.clear();
+    this.userKeysByGuestProof.clear();
+    this.guestRecords.clear();
+    this.guestIdentitiesToRelease.clear();
+    this.admissions.clear();
+    this.shownRowByGuest.clear();
+    this.lobbyGuestsToRefresh.clear();
+    this.lobbyOutcomes.clear();
+    this.openAdmissions.clear();
     this.webinarActiveSpeakerUserId = null;
     this.webinarDominantSpeakerUserId = null;
     this.webinarFeedProducerIds = [];
     this.webinarRaisedHandAt.clear();
     this.webinarQaEntries.clear();
-    this.webinarPromotedUserKeys.clear();
-    this.webinarDemotedUserKeys.clear();
     this.assignMeetingInviteCodeHash(null);
   }
 
@@ -2770,16 +3728,27 @@ export class Room {
     userId: string,
     socket: Socket,
     displayName?: string,
+    guestProof?: string,
   ) {
-    this.pendingClients.set(userKey, { userKey, userId, socket, displayName });
+    if (guestProof) {
+      this.bindGuestProof(userKey, guestProof);
+    }
+    this.startWaiting({ userKey, userId, socket, displayName });
   }
 
   removePendingClient(userKey: string) {
-    this.pendingClients.delete(userKey);
+    this.stopWaiting(userKey);
+    this.releaseGuestIdentity(userKey);
   }
 
-  needsReadmission(userKey: string): boolean {
-    return this.readmissionRequiredUserKeys.has(userKey);
+  needsReadmission(userKey: string, guestProof?: string, link?: GuestLinkPlan): boolean {
+    return (
+      this.guestHolds(this.readmissionRequiredUserKeys, userKey, guestProof, link?.passes) ||
+      this.admissions.refuses(
+        this.principalsOfJoin(userKey, guestProof, link?.passes),
+        "waitingRoom",
+      )
+    );
   }
 
   // For a mark that was made before this room existed, such as a scheduled
@@ -2879,7 +3848,7 @@ export class Room {
     this.onRecoverableChange = null;
     this.primaryHostUserKey = null;
     this.hostReasonsByKey.clear();
-    this.demoteSeatsWithoutHostReason();
+    this.demoteSeatsWithoutRights();
     this.readmissionRequiredUserKeys.clear();
     this.blockedUsers.clear();
     this.onRecoverableChange = report;
@@ -2917,70 +3886,210 @@ export class Room {
     this.armLifecycleTimer("lostCallTimer", wait + 1, endIfUnclaimed);
   }
 
-  allowUser(userKey: string) {
-    this.setReadmissionRequired(userKey, false);
-    this.blockedUsers.delete(userKey);
-    this.allowedUsers.add(userKey);
-    this.pendingClients.delete(userKey);
+  /**
+   * Turns away the request of `userKey` without a decision of its own: the
+   * guest turned out to be blocked, and the block is the answer.
+   */
+  turnAwayBlockedRequest(userKey: string): void {
+    if (!this.pendingClients.has(userKey)) return;
+    this.lobbyOutcomes.set(userKey, "rejected");
+    this.removePendingClient(userKey);
   }
 
-  isAllowed(userKey: string): boolean {
-    return this.allowedUsers.has(userKey);
+  /**
+   * Returns false when the room cannot admit `userKey` (see `canGrantTo`)
+   * or could not keep the admission (see `admitUserKeys`).
+   */
+  allowUser(userKey: string): boolean {
+    const result = this.admitUserKeys([{ userKey, scopes: ["waitingRoom"] }]);
+    return result.status === "admitted" && result.admitted.length > 0;
+  }
+
+  /**
+   * Whether a join as `userKey` may pass the waiting room: the latest
+   * decision across what the join speaks for admits it (see
+   * `principalsOfJoin`).
+   */
+  isAllowed(
+    userKey: string,
+    roomGuestProof?: string,
+    link?: GuestLinkPlan,
+  ): boolean {
+    return this.admissions.admits(
+      this.principalsOfJoin(userKey, roomGuestProof, rightsPassesOf(link)),
+      "waitingRoom",
+    );
   }
 
   revokeAllowedUser(userKey: string) {
-    this.allowedUsers.delete(userKey);
+    this.recordRevocation(this.identitiesOfSameGuest(userKey), ["waitingRoom"]);
   }
 
-  allowLockedUser(userKey: string) {
-    this.setReadmissionRequired(userKey, false);
-    this.blockedUsers.delete(userKey);
-    this.lockedAllowedUsers.add(userKey);
-    this.pendingClients.delete(userKey);
+  /**
+   * Returns false when the room cannot admit `userKey` (see `canGrantTo`)
+   * or could not keep the admission (see `admitUserKeys`).
+   */
+  allowLockedUser(userKey: string): boolean {
+    const result = this.admitUserKeys([{ userKey, scopes: ["lock"] }]);
+    return result.status === "admitted" && result.admitted.length > 0;
   }
 
-  isLockedAllowed(userKey: string): boolean {
-    return this.lockedAllowedUsers.has(userKey);
+  /** Whether a join as `userKey` may pass the lock (see `isAllowed`). */
+  isLockedAllowed(
+    userKey: string,
+    roomGuestProof?: string,
+    link?: GuestLinkPlan,
+  ): boolean {
+    return this.admissions.admits(
+      this.principalsOfJoin(userKey, roomGuestProof, rightsPassesOf(link)),
+      "lock",
+    );
   }
 
   revokeLockedAllowedUser(userKey: string) {
-    this.setReadmissionRequired(userKey, true);
-    this.lockedAllowedUsers.delete(userKey);
+    const userKeys = this.identitiesOfSameGuest(userKey);
+    for (const key of userKeys) this.setReadmissionRequired(key, true);
+    this.recordRevocation(userKeys, ["lock"]);
+  }
+
+  /**
+   * The keys hosts admitted that still let someone in, for the room's
+   * access lists. A guest whose later decision took the admission back is
+   * not listed.
+   */
+  admittedUserKeys(scope: AdmissionScope): string[] {
+    return this.admissions
+      .admittedKeys(scope, (principal) =>
+        principal.startsWith("pass:")
+          ? this.admissions.admits(
+              this.principalsOfJoin("", principal.slice("pass:".length)),
+              scope,
+            )
+          : true,
+      )
+      .sort();
   }
 
   removeUser(userKey: string): Client[] {
-    this.setReadmissionRequired(userKey, true);
-    this.allowedUsers.delete(userKey);
-    this.lockedAllowedUsers.delete(userKey);
-    this.webinarPromotedUserKeys.delete(userKey);
-    return this.revokeHost(userKey);
+    const userKeys = this.identitiesOfSameGuest(userKey);
+    for (const key of userKeys) this.setReadmissionRequired(key, true);
+    return this.dropRejoinGrantsOf(userKeys);
   }
 
-  keepAdmitted(userKey: string) {
-    if (this.needsReadmission(userKey) || this.isBlocked(userKey)) return;
-    this.lockedAllowedUsers.add(userKey);
+  keepAdmitted(userKeys: readonly string[]): AdmitResult {
+    return this.admitUserKeys(
+      userKeys
+        .filter((key) => {
+          const proof = this.guestProofsByUserKey.get(key);
+          return !this.needsReadmission(key, proof) && !this.isBlocked(key, proof);
+        })
+        .map((userKey) => ({ userKey, scopes: ["lock"] satisfies AdmissionScope[] })),
+    );
   }
 
-  // A block takes admission back as well. Unblocking alone does not return
-  // it: a host lets the person in again.
-  blockUser(userKey: string) {
-    this.removeUser(userKey);
+
+  /**
+   * A block also ends what a rejoin would honour for the guest: admissions,
+   * a stage invite, and host rights. A join that still held host rights
+   * would be let past the block.
+   */
+  blockUser(userKey: string): Client[] {
+    const demoted = this.removeUser(userKey);
     this.blockedUsers.add(userKey);
-    this.pendingClients.delete(userKey);
+    if (this.pendingClients.has(userKey)) {
+      this.lobbyOutcomes.set(userKey, "rejected");
+    }
+    this.stopWaiting(userKey);
+    return demoted;
   }
 
+  /**
+   * Lifts the block that was set on `userKey`. A guest stays out for as long
+   * as any of its keys is still on the list.
+   */
   unblockUser(userKey: string) {
     this.blockedUsers.delete(userKey);
+    this.releaseGuestIdentity(userKey);
   }
 
   // Takes host rights away from everyone in the room with this user key, who
   // stay in it as admitted participants. Returns those who had them.
   demoteToParticipant(userKey: string): Client[] {
-    this.keepAdmitted(userKey);
-    return this.revokeHost(userKey);
+    const userKeys = this.identitiesOfSameGuest(userKey);
+    this.keepAdmitted(userKeys);
+    return this.revokeHostOf(userKeys);
   }
 
-  isBlocked(userKey: string): boolean {
-    return this.blockedUsers.has(userKey);
+  /**
+   * The requests to be let in of one guest, oldest first: that of `userKey`
+   * and those of the guest's other tabs.
+   */
+  waitingRequestsOfGuest(userKey: string): WaitingRequest[] {
+    const guest =
+      this.waitingGuestByKey.get(userKey)?.guest ?? this.guestOfKey(userKey);
+    return (this.waitingKeysByGuest.get(guest) ?? []).flatMap(
+      (key) => this.pendingClients.get(key) ?? [],
+    );
+  }
+
+  /**
+   * What hosts see in the lobby: one request per guest, the oldest one of
+   * each. A guest who waits in two tabs is one person to let in or turn
+   * away, the way an account in two tabs is.
+   */
+  /** How many people wait to be let in: one per guest, as the lobby shows. */
+  get waitingGuestCount(): number {
+    return this.waitingGuests().length;
+  }
+
+  waitingGuests(): WaitingRequest[] {
+    const shown: WaitingRequest[] = [];
+    for (const request of this.pendingClients.values()) {
+      const guest = this.waitingGuestByKey.get(request.userKey)?.guest;
+      if (
+        guest === undefined ||
+        this.waitingKeysByGuest.get(guest)?.[0] === request.userKey
+      ) {
+        shown.push(request);
+      }
+    }
+    return shown;
+  }
+
+  /**
+   * `userKey` and every other key of the same guest: the guest's other
+   * tabs, under the same pass or one the room linked to it. A key with no
+   * proof has no other tabs to find.
+   */
+  identitiesOfSameGuest(userKey: string): string[] {
+    const proof = this.guestProofsByUserKey.get(userKey);
+    const userKeys = [userKey];
+    if (proof === undefined) return userKeys;
+    for (const guestProof of this.passesOfGuest(proof)) {
+      for (const otherKey of this.userKeysByGuestProof.get(guestProof) ?? []) {
+        if (otherKey !== userKey) userKeys.push(otherKey);
+      }
+    }
+    return userKeys;
+  }
+
+  /** The seats held under `userKey` and every other key of the same guest. */
+  seatsOfSameGuest(userKey: string): string[] {
+    const userKeys = new Set(this.identitiesOfSameGuest(userKey));
+    return Array.from(this.userKeysById)
+      .filter(([, key]) => userKeys.has(key))
+      .map(([userId]) => userId);
+  }
+
+  /**
+   * A block on one key keeps out every key of the same guest, for as long
+   * as the blocked key is on the list.
+   */
+  isBlocked(
+    userKey: string,
+    guestProof?: string,
+    link?: GuestLinkPlan,
+  ): boolean {
+    return this.guestHolds(this.blockedUsers, userKey, guestProof, link?.passes);
   }
 }

@@ -295,7 +295,13 @@ export const getOrCreateRoomWithOrigin = async (
       createdRoom.takesOverRecordOf = record.lastWriter;
       createdRoom.awaitingOpener = { lost: record.lost };
       for (const guest of takeNextMeetingLobby(state, channelId)) {
-        createdRoom.pendingClients.set(guest.userKey, guest);
+        createdRoom.addPendingClient(
+          guest.userKey,
+          guest.userId,
+          guest.socket,
+          guest.displayName,
+          guest.guestProof,
+        );
       }
       bindScheduledInvitations(state, createdRoom);
       recordRecoverableChanges(state, createdRoom);
@@ -401,7 +407,10 @@ export const cleanupRoom = (state: SfuState, channelId: string): boolean => {
     return false;
   }
 
-  const waiting = [...room.pendingClients.values()];
+  const waiting = [...room.pendingClients.values()].map((request) => ({
+    ...request,
+    guestProof: room.guestProofOf(request.userKey),
+  }));
   const retryAt =
     room.restorerState(Date.now()) === "awaited" ? room.restorerDeadline : null;
   const closedRoom = cleanupRoomState(state, channelId);

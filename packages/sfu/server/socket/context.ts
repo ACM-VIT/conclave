@@ -45,6 +45,23 @@ export const setSocketContext = (
   (socket.data as SocketContextData).context = context;
 };
 
+export const forgetLostSeat = (context: ConnectionContext): void => {
+  const room = context.currentRoom;
+  const client = context.currentClient;
+  if (!client) return;
+  if (
+    room &&
+    context.state.rooms.get(room.channelId) === room &&
+    room.getClient(client.id) === client &&
+    client.socket === context.socket
+  ) {
+    return;
+  }
+  context.currentRoom = null;
+  context.currentClient = null;
+  context.currentUserKey = null;
+};
+
 export const createConnectionContext = (
   io: SocketIOServer,
   socket: Socket,

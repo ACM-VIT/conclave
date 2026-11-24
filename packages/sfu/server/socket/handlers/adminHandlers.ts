@@ -12,15 +12,21 @@ import {
   closeClientProducers,
   closeProducerById,
   closeProducerForMediaKey,
+  admitWaitingGuest,
+  allowUserKeys,
+  blockUserKey,
   ensureHost,
+  rejectWaitingGuest,
   kickClient,
   rejectAllPendingUsers,
   toPendingUserSnapshots,
   toRoomSnapshot,
 } from "../../admin/controlPlane.js";
 import {
+  decisionRecordFull,
   includesSuperAdminUserKey,
   isSuperAdminClient,
+  NO_ONE_ADMITTED_ERROR,
   SUPER_ADMIN_REMOVAL_ERROR,
 } from "../../admin/moderation.js";
 import { forceCloseRoom, isCurrentRoom, markRoomEnded } from "../../rooms.js";
@@ -924,26 +930,20 @@ export const registerAdminHandlers = (
         return;
       }
 
-      const allowWhenLocked = data?.allowWhenLocked !== false;
-      const admitted: string[] = [];
-      for (const userKey of userKeys) {
-        const pending = guard.room.pendingClients.get(userKey);
-        guard.room.unblockUser(userKey);
-        guard.room.allowUser(userKey);
-        if (allowWhenLocked || guard.room.isLocked) {
-          guard.room.allowLockedUser(userKey);
-        }
-        if (pending) {
-          pending.socket.emit("joinApproved", { roomId: guard.room.id });
-          admitted.push(userKey);
-          for (const admin of guard.room.getAdmins()) {
-            admin.socket.emit("userAdmitted", {
-              userId: userKey,
-              roomId: guard.room.id,
-            });
-          }
-        }
+      const outcome = allowUserKeys(guard.room, userKeys, {
+        allowWhenLocked: data?.allowWhenLocked !== false,
+      });
+      if (!outcome.ok) {
+        respond(cb, {
+          ...decisionRecordFull("admit"),
+          allowed: [],
+          refused: outcome.refused,
+          admitted: [],
+          access: toRoomSnapshot(guard.room).access,
+        });
+        return;
       }
+      const { allowed, refused, admitted } = outcome;
 
       io.to(guard.room.channelId).emit("pendingUsersSnapshot", {
         users: toPendingUserSnapshots(guard.room),
@@ -951,13 +951,25 @@ export const registerAdminHandlers = (
       });
 
       respond(cb, {
-        success: true,
-        allowed: userKeys,
+        ...(allowed.length === 0
+          ? { success: false, error: NO_ONE_ADMITTED_ERROR }
+          : { success: true }),
+        allowed,
+        refused,
         admitted,
         access: toRoomSnapshot(guard.room).access,
       });
     },
   );
+
+  socket.on("admin:createAdmission", (_data: unknown, cb) => {
+    const guard = ensureAdminRoom(context);
+    if ("error" in guard) {
+      respond(cb, guard);
+      return;
+    }
+    respond(cb, { success: true, ...guard.room.createAdmission() });
+  });
 
   socket.on(
     "admin:blockUsers",
@@ -1002,29 +1014,15 @@ export const registerAdminHandlers = (
       const rejectedPending: string[] = [];
 
       for (const userKey of userKeys) {
-        const pending = guard.room.pendingClients.get(userKey);
-        guard.room.blockUser(userKey);
-
-        if (pending) {
-          pending.socket.emit("joinRejected", { roomId: guard.room.id });
-          rejectedPending.push(userKey);
-          for (const admin of guard.room.getAdmins()) {
-            admin.socket.emit("userRejected", {
-              userId: userKey,
-              roomId: guard.room.id,
-            });
-          }
-        }
-
-        if (kickPresent) {
-          for (const [userId, key] of [
-            ...guard.room.userKeysById.entries(),
-          ]) {
-            if (key !== userKey) continue;
-            for (const kickedId of kickClient(guard.room, userId, reason, { io, state })) {
-              kickedUserIds.add(kickedId);
-            }
-          }
+        const result = blockUserKey(guard.room, userKey, {
+          reason,
+          kickPresent,
+          io,
+          state,
+        });
+        rejectedPending.push(...result.rejectedPendingUserKeys);
+        for (const userId of result.kickedUserIds) {
+          kickedUserIds.add(userId);
         }
       }
       ensureHost(io, state, guard.room);
@@ -1170,22 +1168,11 @@ export const registerAdminHandlers = (
       return;
     }
 
-    const pending = guard.room.pendingClients.get(normalizedTargetId);
-    if (pending) {
-      Logger.info(`Admin admitted user ${pending.userKey} to room ${options.roomId}`);
-      if (guard.room.isLocked) {
-        guard.room.allowLockedUser(pending.userKey);
-      }
-      guard.room.allowUser(pending.userKey);
-      pending.socket.emit("joinApproved", { roomId: guard.room.id });
-
-      for (const admin of guard.room.getAdmins()) {
-        admin.socket.emit("userAdmitted", {
-          userId: pending.userKey,
-          roomId: guard.room.id,
-        });
-      }
-
+    const outcome = admitWaitingGuest(guard.room, normalizedTargetId);
+    if (!outcome.ok) {
+      respond(cb, decisionRecordFull("admit"));
+    } else if (outcome.admitted.length > 0) {
+      Logger.info(`Admin admitted ${outcome.admitted.join(", ")} to room ${options.roomId}`);
       respond(cb, { success: true });
     } else {
       respond(cb, { error: "User not found in waiting room" });
@@ -1205,21 +1192,11 @@ export const registerAdminHandlers = (
       return;
     }
 
-    const pending = guard.room.pendingClients.get(normalizedTargetId);
-    if (pending) {
+    const rejected = rejectWaitingGuest(guard.room, normalizedTargetId);
+    if (rejected.length > 0) {
       Logger.info(
-        `Admin rejected user ${pending.userKey} from room ${options.roomId}`,
+        `Admin rejected ${rejected.join(", ")} from room ${options.roomId}`,
       );
-      guard.room.removePendingClient(pending.userKey);
-      pending.socket.emit("joinRejected", { roomId: guard.room.id });
-
-      for (const admin of guard.room.getAdmins()) {
-        admin.socket.emit("userRejected", {
-          userId: pending.userKey,
-          roomId: guard.room.id,
-        });
-      }
-
       respond(cb, { success: true });
     } else {
       respond(cb, { error: "User not found in waiting room" });
@@ -1233,7 +1210,11 @@ export const registerAdminHandlers = (
       return;
     }
 
-    const admitted = admitAllPendingUsers(guard.room);
+    const outcome = admitAllPendingUsers(guard.room);
+    if (!outcome.ok) {
+      respond(cb, decisionRecordFull("admit"));
+      return;
+    }
     io.to(guard.room.channelId).emit("pendingUsersSnapshot", {
       users: toPendingUserSnapshots(guard.room),
       roomId: guard.room.id,
@@ -1241,8 +1222,8 @@ export const registerAdminHandlers = (
 
     respond(cb, {
       success: true,
-      admittedCount: admitted.length,
-      users: admitted,
+      admittedCount: outcome.users.length,
+      users: outcome.users,
     });
   });
 

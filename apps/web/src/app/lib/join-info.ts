@@ -1,3 +1,4 @@
+import type { GuestPassFields } from "./guest-pass-session";
 import { getJoinedRoom } from "./joined-room";
 import type { JoinMode } from "./types";
 import { readResponseError } from "./utils";
@@ -13,12 +14,15 @@ export type JoinInfoRequest = {
   isKnownMeeting: boolean;
   clientId: string;
   joinMode: JoinMode;
+  guestFields?: GuestPassFields;
 };
 
 export type JoinInfo = {
   token: string;
   sfuUrl: string;
   iceServers?: RTCIceServer[];
+  guestId?: string;
+  guestGrant?: string;
 };
 
 const fetchWithTimeout = async (init: RequestInit): Promise<Response> => {
@@ -53,6 +57,7 @@ export const requestJoinInfo = async ({
   isKnownMeeting,
   clientId,
   joinMode,
+  guestFields,
 }: JoinInfoRequest): Promise<JoinInfo> => {
   const response = await fetchWithTimeout({
     method: "POST",
@@ -68,6 +73,7 @@ export const requestJoinInfo = async ({
       allowRoomCreation: isKnownMeeting || getJoinedRoom(roomId) !== null,
       clientId,
       joinMode,
+      ...guestFields,
     }),
   });
 

@@ -150,7 +150,7 @@ type JoinAck = {
 const join = async (
   state: SfuState,
   user: SfuAuthPayload,
-  options: { roomId?: string; roomRecoveryPass?: string } = {},
+  options: { roomId?: string; roomRecoveryPass?: string; admissionCode?: string } = {},
 ) => {
   const peer = makeSocket(`${user.userId}-socket`, user);
   const context = createConnectionContext(io, peer.socket, state);
@@ -162,6 +162,7 @@ const join = async (
       roomId: options.roomId ?? "abc-mnop-xyz",
       sessionId: user.sessionId,
       roomRecoveryPass: options.roomRecoveryPass,
+      admissionCode: options.admissionCode,
     },
     ack,
   ] as never[]);
@@ -170,14 +171,14 @@ const join = async (
 };
 
 // What a host's socket sends: an admin event with a payload and an ack.
-const send = async (
+const send = async <Answer = { success?: boolean; error?: string }>(
   peer: ReturnType<typeof makeSocket>,
   event: string,
   payload: unknown,
 ) => {
   const ack = vi.fn();
   await peer.handlers.get(event)?.(...([payload, ack] as never[]));
-  return ack.mock.calls[0]?.[0] as { success?: boolean; error?: string } | undefined;
+  return ack.mock.calls[0]?.[0] as Answer | undefined;
 };
 
 // What a tab does when the SFU says "joinApproved": it asks again on the
@@ -250,7 +251,7 @@ describe("new meetings make people knock", () => {
     expect(knock?.userId).toBe("guest-visitor");
 
     const room = state.rooms.get("conclave:abc-mnop-xyz")!;
-    room.allowLockedUser("guest-visitor");
+    room.restoreAdmission("guest-visitor", undefined, { pastLock: true });
     expect((await join(state, guest)).status).toBe("joined");
   });
 
@@ -392,12 +393,16 @@ describe("a participant the host admits before it joins", () => {
     const created = await join(state, host);
     expect(roomOf(state).pendingClients.has(agent.userId)).toBe(false);
 
-    const admitted = await send(created.peer, "admin:allowUsers", {
-      userKeys: [agent.userId],
-    });
+    const admitted = await send<{ success?: boolean; admissionCode?: string }>(
+      created.peer,
+      "admin:createAdmission",
+      {},
+    );
     expect(admitted?.success).toBe(true);
 
-    expect((await join(state, agent)).status).toBe("joined");
+    expect((await join(state, agent, { admissionCode: admitted?.admissionCode })).status).toBe(
+      "joined",
+    );
     expect((await join(state, knocker)).status).toBe("waiting");
     expect(roomOf(state).isLocked).toBe(true);
   });
@@ -405,14 +410,19 @@ describe("a participant the host admits before it joins", () => {
   it("cannot be admitted by someone who is not a host", async () => {
     const state = makeState();
     await join(state, host);
-    roomOf(state).allowLockedUser(guest.userId);
+    roomOf(state).restoreAdmission(guest.userId, undefined, { pastLock: true });
     const participant = await join(state, guest);
     expect(participant.status).toBe("joined");
 
-    await send(participant.peer, "admin:allowUsers", {
-      userKeys: [agent.userId],
-    });
-    expect((await join(state, agent)).status).toBe("waiting");
+    const refused = await send<{ admissionCode?: string }>(
+      participant.peer,
+      "admin:createAdmission",
+      {},
+    );
+    expect(refused?.admissionCode).toBeUndefined();
+    expect((await join(state, agent, { admissionCode: refused?.admissionCode })).status).toBe(
+      "waiting",
+    );
   });
 });
 
@@ -422,8 +432,8 @@ describe("a call whose server lost the room", () => {
   const callBeforeRestart = async () => {
     const before = makeState();
     const hostJoin = await join(before, host);
-    roomOf(before).allowLockedUser(guest.userId);
-    roomOf(before).allowLockedUser(second.userId);
+    roomOf(before).restoreAdmission(guest.userId, undefined, { pastLock: true });
+    roomOf(before).restoreAdmission(second.userId, undefined, { pastLock: true });
     const guestJoin = await join(before, guest);
     const secondJoin = await join(before, second);
     const knock = await join(before, knocker);
@@ -503,7 +513,7 @@ describe("a call whose server lost the room", () => {
   it("does not let someone the host removed back in with their old pass", async () => {
     const state = makeState();
     const created = await join(state, host);
-    roomOf(state).allowLockedUser(guest.userId);
+    roomOf(state).restoreAdmission(guest.userId, undefined, { pastLock: true });
     const member = await join(state, guest);
 
     await send(created.peer, "kickUser", { userId: "guest-visitor#v" });
@@ -569,7 +579,7 @@ describe("a call whose server lost the room", () => {
     useTestClock();
     const state = makeState();
     const created = await join(state, host);
-    roomOf(state).allowLockedUser(guest.userId);
+    roomOf(state).restoreAdmission(guest.userId, undefined, { pastLock: true });
     const member = await join(state, guest);
     const stopRefreshing = startRoomRecoveryPassRefresh(state, config.sfuSecret);
     vi.advanceTimersByTime(MINUTE_MS);
@@ -663,7 +673,7 @@ describe("a call whose server lost the room", () => {
     useTestClock();
     const state = makeState();
     const created = await join(state, host);
-    roomOf(state).allowLockedUser(guest.userId);
+    roomOf(state).restoreAdmission(guest.userId, undefined, { pastLock: true });
     const member = await join(state, guest);
     const stopRefreshing = startRoomRecoveryPassRefresh(state, config.sfuSecret);
     vi.advanceTimersByTime(2 * MINUTE_MS);
@@ -690,7 +700,7 @@ describe("a call whose server lost the room", () => {
     const created = await join(state, host);
     const laptop = { userId: "user-9", email: "sam@example.com", clientId: "conclave", sessionId: "laptop" };
     const phone = { ...laptop, sessionId: "phone" };
-    roomOf(state).allowLockedUser("sam@example.com");
+    roomOf(state).restoreAdmission("sam@example.com", undefined, { pastLock: true });
     await join(state, laptop);
     const onPhone = await join(state, phone);
     const stopRefreshing = startRoomRecoveryPassRefresh(state, config.sfuSecret);
@@ -719,7 +729,7 @@ describe("who hosts a call the server lost", () => {
     const before = makeState();
     if (options.scheduled) schedule(before);
     const hostJoin = await join(before, host);
-    roomOf(before).allowLockedUser(guest.userId);
+    roomOf(before).restoreAdmission(guest.userId, undefined, { pastLock: true });
     const guestJoin = await join(before, guest);
     expect((await join(before, knockerAsking)).status).toBe("waiting");
     return {
@@ -837,8 +847,8 @@ describe("who hosts a call the server lost", () => {
       useTestClock();
       const before = makeState();
       const created = await join(before, host);
-      roomOf(before).allowLockedUser(guest.userId);
-      roomOf(before).allowLockedUser(second.userId);
+      roomOf(before).restoreAdmission(guest.userId, undefined, { pastLock: true });
+      roomOf(before).restoreAdmission(second.userId, undefined, { pastLock: true });
       const bob = await join(before, guest);
       const cara = await join(before, second);
       const stopRefreshing = startRoomRecoveryPassRefresh(before, config.sfuSecret);
@@ -1098,7 +1108,7 @@ describe("who hosts a call the server lost", () => {
 
     // A removal there is saved: after a restart the removed guest's pass
     // gets her nowhere.
-    roomOf(state).allowLockedUser(second.userId);
+    roomOf(state).restoreAdmission(second.userId, undefined, { pastLock: true });
     const cara = await join(state, second);
     await send(hostIn.peer, "kickUser", { userId: `${second.userId}#${second.sessionId}` });
     const afterRemoval = await restart(state);
@@ -1127,7 +1137,7 @@ describe("who hosts a call the server lost", () => {
     const second = makeState(durableOf.get(first));
     const hostOnSecond = await join(second, host);
     expect(hostOnSecond.context.currentClient).toBeInstanceOf(Admin);
-    roomOf(second).allowLockedUser(guest.userId);
+    roomOf(second).restoreAdmission(guest.userId, undefined, { pastLock: true });
     await join(second, guest);
     await send(hostOnSecond.peer, "promoteHost", { userId: "guest-visitor#v" });
 
@@ -1327,7 +1337,7 @@ describe("the account a code belongs to", () => {
     };
     const before = makeState();
     await join(before, host);
-    roomOf(before).allowLockedUser("member@example.com");
+    roomOf(before).restoreAdmission("member@example.com", undefined, { pastLock: true });
     const inCall = await join(before, member);
     const elsewhere = makeState();
 
@@ -1345,7 +1355,7 @@ describe("the account a code belongs to", () => {
     useClock();
     const before = makeState();
     const created = await join(before, owner);
-    roomOf(before).allowLockedUser(guest.userId);
+    roomOf(before).restoreAdmission(guest.userId, undefined, { pastLock: true });
     await join(before, guest);
     await send(created.peer, "promoteHost", { userId: "guest-visitor#v" });
     const after = await restart(before);
@@ -2072,7 +2082,7 @@ describe("a meeting a host ended for everyone", () => {
     vi.setSystemTime(new Date("2026-11-22T08:00:00Z"));
     const state = makeState();
     const created = await join(state, host);
-    roomOf(state).allowLockedUser(guest.userId);
+    roomOf(state).restoreAdmission(guest.userId, undefined, { pastLock: true });
     const member = await join(state, guest);
     await send(created.peer, "admin:endRoom", {});
     vi.advanceTimersByTime(2_000);
@@ -2109,7 +2119,7 @@ describe("a meeting a host ended for everyone", () => {
     vi.setSystemTime(new Date("2026-11-22T08:00:00Z"));
     const state = makeState();
     const created = await join(state, host);
-    roomOf(state).allowLockedUser(guest.userId);
+    roomOf(state).restoreAdmission(guest.userId, undefined, { pastLock: true });
     const member = await join(state, guest);
     const stopRefreshing = startRoomRecoveryPassRefresh(state, config.sfuSecret);
 
@@ -2145,7 +2155,7 @@ describe("a meeting a host ended for everyone", () => {
     // second the meeting ended in.
     vi.setSystemTime(new Date("2026-11-22T08:00:00.650Z"));
     await join(state, host);
-    roomOf(state).allowLockedUser(guest.userId);
+    roomOf(state).restoreAdmission(guest.userId, undefined, { pastLock: true });
     const member = await join(state, guest);
 
     const after = await restart(state);
@@ -2161,7 +2171,7 @@ describe("a meeting a host ended for everyone", () => {
     const { state } = await endedMeeting();
     vi.advanceTimersByTime(5_000);
     await join(state, host);
-    roomOf(state).allowLockedUser(guest.userId);
+    roomOf(state).restoreAdmission(guest.userId, undefined, { pastLock: true });
     const member = await join(state, guest);
 
     const after = await restart(state);
@@ -2184,8 +2194,8 @@ describe("a meeting everyone left, opened again at the same code", () => {
     vi.setSystemTime(new Date("2026-11-22T08:00:00Z"));
     const state = makeState();
     const created = await join(state, host);
-    roomOf(state).allowLockedUser(guest.userId);
-    roomOf(state).allowLockedUser(second.userId);
+    roomOf(state).restoreAdmission(guest.userId, undefined, { pastLock: true });
+    roomOf(state).restoreAdmission(second.userId, undefined, { pastLock: true });
     const removed = await join(state, guest);
     const stayed = await join(state, second);
     await send(created.peer, "kickUser", { userId: `${guest.userId}#${guest.sessionId}` });
@@ -2232,7 +2242,7 @@ describe("a meeting everyone left, opened again at the same code", () => {
   it("still brings its own people back if the server then loses it", async () => {
     const { state } = await emptiedMeeting();
     await join(state, host);
-    roomOf(state).allowLockedUser(second.userId);
+    roomOf(state).restoreAdmission(second.userId, undefined, { pastLock: true });
     const member = await join(state, second);
 
     const after = await restart(state);
@@ -2250,7 +2260,7 @@ describe("someone a host blocked without removing them", () => {
     useTestClock();
     const state = makeState();
     const created = await join(state, host);
-    roomOf(state).allowLockedUser(guest.userId);
+    roomOf(state).restoreAdmission(guest.userId, undefined, { pastLock: true });
     const member = await join(state, guest);
     const stopRefreshing = startRoomRecoveryPassRefresh(state, config.sfuSecret);
 

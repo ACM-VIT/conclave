@@ -1,4 +1,4 @@
-import type { WaitingGuest } from "../config/classes/Room.js";
+import type { WaitingRequest } from "../config/classes/Room.js";
 import type { SfuState } from "./state.js";
 
 // What someone still knocking is told when the meeting they knock on ends.
@@ -12,7 +12,7 @@ const MEETING_OPENED_ELSEWHERE =
 // Someone waiting for the next meeting at a code. `retryAt` is their own:
 // when the meeting they knocked on stood in for a lost call, the moment that
 // call stops holding the code, from which they may ask again and open it.
-export type LobbyGuest = WaitingGuest & { retryAt: number | null };
+export type LobbyGuest = WaitingRequest & { retryAt: number | null; guestProof?: string };
 
 export type NextMeetingLobby = {
   roomId: string;
@@ -73,7 +73,7 @@ const place = (
 export const waitForNextMeeting = (
   state: SfuState,
   room: { channelId: string; id: string },
-  waiting: WaitingGuest[],
+  waiting: Array<WaitingRequest & { guestProof?: string }>,
   retryAt: number | null,
 ): void => {
   if (waiting.length === 0) return;

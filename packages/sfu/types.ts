@@ -57,6 +57,8 @@ export interface JoinRoomData {
   displayName?: string;
   webinarInviteCode?: string;
   meetingInviteCode?: string;
+  /** An admission a host created with `admin:createAdmission`. */
+  admissionCode?: string;
   mediaCapabilities?: ClientMediaCapabilities;
   // The pass from an earlier join to this room, sent on every rejoin.
   roomRecoveryPass?: string;

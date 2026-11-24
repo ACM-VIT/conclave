@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Socket } from "socket.io-client";
-import { admitBeforeJoin, revokeAdmission } from "../src/app/lib/admissions";
+import { createAdmission, revokeAdmission } from "../src/app/lib/admissions";
 
 type AckWithError = (error: Error | null, response?: unknown) => void;
 
@@ -22,31 +22,37 @@ const makeHostSocket = () => {
 };
 
 describe("admitting a participant the host brings in", () => {
-  it("asks the SFU to let that one key in and waits for its answer", async () => {
+  it("asks the SFU for a one-time admission and hands back its code", async () => {
     const host = makeHostSocket();
-    const admitted = admitBeforeJoin(host.socket, "guest-agent-session-1");
+    const created = createAdmission(host.socket);
 
-    expect(host.sent).toEqual([
-      { event: "admin:allowUsers", payload: { userKeys: ["guest-agent-session-1"] } },
-    ]);
-    host.answer(null, { success: true });
-    await expect(admitted).resolves.toBeUndefined();
+    expect(host.sent).toEqual([{ event: "admin:createAdmission", payload: {} }]);
+    host.answer(null, { success: true, admissionCode: "code-1", expiresAt: 1 });
+    await expect(created).resolves.toBe("code-1");
   });
 
   it("fails when the SFU refuses, as it does for someone who is not a host", async () => {
     const host = makeHostSocket();
-    const admitted = admitBeforeJoin(host.socket, "guest-agent-session-1");
+    const created = createAdmission(host.socket);
     host.answer(null, { error: "Admin privileges required" });
 
-    await expect(admitted).rejects.toThrow("Admin privileges required");
+    await expect(created).rejects.toThrow("Admin privileges required");
+  });
+
+  it("fails when the SFU answers without a code", async () => {
+    const host = makeHostSocket();
+    const created = createAdmission(host.socket);
+    host.answer(null, { success: true });
+
+    await expect(created).rejects.toThrow("The meeting refused.");
   });
 
   it("fails when the SFU does not answer", async () => {
     const host = makeHostSocket();
-    const admitted = admitBeforeJoin(host.socket, "guest-agent-session-1");
+    const created = createAdmission(host.socket);
     host.answer(new Error("operation has timed out"));
 
-    await expect(admitted).rejects.toThrow();
+    await expect(created).rejects.toThrow("The meeting did not answer.");
   });
 
   it("takes the admission back when the participant is gone", async () => {

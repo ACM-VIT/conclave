@@ -1,7 +1,11 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import MeetsClient from "./meets-client";
+import {
+  createGuestPassSession,
+  guestPassRequestFor,
+} from "./lib/guest-pass-session";
 import type { JoinMode } from "./lib/types";
 import type { RoomInfo } from "@/lib/sfu-types";
 import {
@@ -56,6 +60,10 @@ export default function MeetsClientPage({
   user,
   isAdmin = false,
 }: MeetsClientPageProps) {
+  const [guestPass] = useState(() =>
+    createGuestPassSession(guestPassRequestFor(user)),
+  );
+  useEffect(() => guestPass.pageLoaded(), [guestPass]);
   const defaultUser = user;
   const resolvedIsAdmin = isAdmin;
   const resolvedClientId =
@@ -72,16 +80,19 @@ export default function MeetsClientPage({
         joinMode?: JoinMode;
       }
     ) =>
-      requestJoinInfo({
-        roomId,
-        sessionId,
-        user: options?.user ?? defaultUser,
-        isHost: Boolean(options?.isHost),
-        isKnownMeeting: allowRoomCreation,
-        clientId: resolvedClientId,
-        joinMode: options?.joinMode ?? joinMode,
-      }),
-    [allowRoomCreation, joinMode, defaultUser, resolvedClientId]
+      guestPass.join((guestFields) =>
+        requestJoinInfo({
+          roomId,
+          sessionId,
+          user: options?.user ?? defaultUser,
+          isHost: Boolean(options?.isHost),
+          isKnownMeeting: allowRoomCreation,
+          clientId: resolvedClientId,
+          joinMode: options?.joinMode ?? joinMode,
+          guestFields,
+        }),
+      ),
+    [allowRoomCreation, joinMode, defaultUser, resolvedClientId, guestPass]
   );
 
   const getRooms = useCallback(async () => {

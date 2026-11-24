@@ -27,7 +27,7 @@ import {
   buildMicrophoneOpusCodecOptions,
   type AudioProducerNetworkProfile,
 } from "../lib/constants";
-import { admitBeforeJoin, revokeAdmission } from "../lib/admissions";
+import { createAdmission, revokeAdmission } from "../lib/admissions";
 import { getBrowserNetworkSnapshot } from "../lib/network-information";
 import { resolveBrowserSfuClientId } from "@/lib/sfu-client-id";
 
@@ -468,6 +468,7 @@ const joinRoomAsAgent = async (
   socket: Socket,
   roomId: string,
   sessionId: string,
+  admissionCode: string | undefined,
 ): Promise<JoinRoomResponse> => {
   return new Promise<JoinRoomResponse>((resolve, reject) => {
     let settled = false;
@@ -482,6 +483,7 @@ const joinRoomAsAgent = async (
         roomId,
         sessionId,
         displayName: AGENT_DISPLAY_NAME,
+        ...(admissionCode ? { admissionCode } : {}),
       },
       (response: JoinRoomResponse | JoinRoomErrorResponse) => {
         if (settled) return;
@@ -1314,11 +1316,12 @@ export function useVoiceAgentParticipant({
         flushRevocations();
       };
       const hostSocket = hostSocketRef.current;
-      if (hostSocket?.connected) {
-        await admitBeforeJoin(hostSocket, agentUserKey).catch((error) => {
-          console.warn("[Voice Agent] Could not admit the agent ahead of its join.", error);
-        });
-      }
+      const admissionCode = hostSocket?.connected
+        ? await createAdmission(hostSocket).catch((error) => {
+            console.warn("[Voice Agent] Could not admit the agent ahead of its join.", error);
+            return undefined;
+          })
+        : undefined;
       if (runtimeRef.current !== runtime) {
         revokeAgentAdmission();
         return;
@@ -1344,6 +1347,7 @@ export function useVoiceAgentParticipant({
             agentSocket,
             roomId,
             agentSessionId,
+            admissionCode,
           );
           break;
         } catch (error) {
