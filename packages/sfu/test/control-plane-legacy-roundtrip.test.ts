@@ -87,14 +87,14 @@ const roundTrip = async (files: Files): Promise<string[]> => {
   for (const domain of domains) {
     if (!domain.records || domain.records.length === 0) continue;
     const items = domain.records.map((record) => ({ kind: record.kind, id: record.id, copy: record }));
-    const first = await store.commit(reconcileLegacy(begun.value.ticket, domain.domain, "json", items));
+    const first = await store.commit(reconcileLegacy(begun.value.ticket, domain.domain, "", "json", items));
     if (!first.ok) throw new Error(first.reason);
     for (const record of domain.records) {
       const stored = await store.read((view) => view.get(record.kind, record.id));
       if (!stored) drifts.push(`${record.key} was not stored`);
       else if (hashLegacyValue(stored.value) !== record.hash) drifts.push(`${record.key} reads back changed`);
     }
-    const again = await store.commit(reconcileLegacy(begun.value.ticket, domain.domain, "json", items));
+    const again = await store.commit(reconcileLegacy(begun.value.ticket, domain.domain, "", "json", items));
     if (again.ok && again.value.inserted + again.value.refreshed + again.value.conflicts + again.value.deleted > 0) {
       drifts.push(`${domain.domain} changed on a second import of the same files`);
     }

@@ -21,6 +21,7 @@ import {
   type Kind,
   type LegacyCopy,
   type LegacyDomain,
+  type Deleted,
   type LegacyImportState,
   type Removal,
   type UniqueIndex,
@@ -44,15 +45,23 @@ const decodeLegacyCopy = (raw: unknown): LegacyCopy | null => {
   const { key, kind, id, hash, stamp } = record;
   if (typeof key !== "string" || typeof id !== "string" || typeof hash !== "string") return null;
   if (!DATA_KINDS.includes(kind as DataKind) || typeof stamp !== "number") return null;
-  return { key, kind: kind as DataKind, id, hash, stamp };
+  const source = typeof record.source === "string" ? record.source : "";
+  return { key, source, kind: kind as DataKind, id, hash, stamp };
+};
+
+const decodeDeleted = (raw: unknown): Deleted | null => {
+  const { identity, hash } = asRecord(raw);
+  return typeof identity === "string" && typeof hash === "string" ? { identity, hash } : null;
 };
 
 const decodeRemoval = (raw: unknown): Removal | null => {
   const record = asRecord(raw);
-  const { key, kind, id, identity, hash } = record;
-  if (typeof key !== "string" || typeof id !== "string" || typeof identity !== "string") return null;
-  if (!DATA_KINDS.includes(kind as DataKind) || typeof hash !== "string") return null;
-  return { key, kind: kind as DataKind, id, identity, hash };
+  const { key, kind, id } = record;
+  if (typeof key !== "string" || typeof id !== "string" || !DATA_KINDS.includes(kind as DataKind)) return null;
+  const deleted = (Array.isArray(record.deleted) ? record.deleted : [])
+    .map(decodeDeleted)
+    .filter((entry): entry is Deleted => entry !== null);
+  return { key, kind: kind as DataKind, id, deleted };
 };
 
 const decodeLegacyImport = (raw: unknown): LegacyImportState | null => {

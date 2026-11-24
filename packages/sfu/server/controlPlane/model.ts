@@ -41,19 +41,23 @@ export const domainOf = (kind: DataKind): LegacyDomain =>
 
 export type LegacyCopy = {
   key: string;
+  source: string;
   kind: DataKind;
   id: string;
   hash: string;
   stamp: number;
 };
 
+export type Deleted = { identity: string; hash: string };
+
 export type Removal = {
   key: string;
   kind: DataKind;
   id: string;
-  identity: string;
-  hash: string;
+  deleted: Deleted[];
 };
+
+export const REMEMBERED_DELETES = 64;
 
 export const LEGACY_IMPORT_ID = "legacy";
 
@@ -65,6 +69,11 @@ export type LegacyImportState = {
 };
 
 export const legacyCopyKey = (kind: DataKind, id: string): string => `${kind}:${id}`;
+
+export const PRIMARY_SOURCE = "";
+
+export const shadowKey = (source: string, kind: DataKind, id: string): string =>
+  source === PRIMARY_SOURCE ? legacyCopyKey(kind, id) : `${source}|${legacyCopyKey(kind, id)}`;
 
 export const isDataKind = (kind: string): kind is DataKind => DATA_KINDS.includes(kind as DataKind);
 

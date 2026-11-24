@@ -174,7 +174,7 @@ describe.each(modes)("the %s control-plane store", (mode) => {
       ...gone.map((id) => ({ kind: "meeting" as const, id, copy: null })),
       ...copies.map((record) => ({ kind: record.kind, id: record.id, copy: record })),
     ];
-    const reconcile = (list: LegacyItem[]) => store.commit(reconcileLegacy(begun.value.ticket, "meetings", "sqlite", list));
+    const reconcile = (list: LegacyItem[]) => store.commit(reconcileLegacy(begun.value.ticket, "meetings", "", "sqlite", list));
     const title = async (id: string) => (await store.read(meetingById(id)))?.title ?? null;
 
     expect(await reconcile(items([copy("a", "A", 100), copy("b", "B", 100), copy("c", "C", 100), copy("d", "D", 100)]))).toMatchObject({

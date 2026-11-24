@@ -185,13 +185,14 @@ describe.each(stores)("an SFU combining the old $name with a container copy", (s
     expect(await loaded(store)).toEqual({ a: "From sfu-a", b: "From sfu-b" });
   });
 
-  it("refuses to start when two copies changed a record differently at the same time, and leaves them in place", async () => {
+  it("keeps the first copy's record and logs it when two copies changed it differently at the same time", async () => {
     write(copyPath(store, "sfu-a"), store.encode([{ id: "a", title: "One edit", updatedAt: 100 }]));
     write(copyPath(store, "sfu-b"), store.encode([{ id: "a", title: "Another edit", updatedAt: 100 }]));
 
-    await expect(start()).rejects.toThrow(/differs between/);
-    expect(existsSync(copyPath(store, "sfu-a"))).toBe(true);
-    expect(existsSync(copyPath(store, "sfu-b"))).toBe(true);
+    expect(await loaded(store)).toEqual({ a: "One edit" });
+    expect(warnings().some((line) => /legacy \w+ a was changed in the container copy sfu-b\/.* at the same time/.test(line))).toBe(true);
+    expect(existsSync(`${copyPath(store, "sfu-a")}.adopted`)).toBe(true);
+    expect(existsSync(`${copyPath(store, "sfu-b")}.adopted`)).toBe(true);
   });
 
   it("keeps the old store's record and logs it when a copy changed it differently at the same time", async () => {
@@ -199,7 +200,7 @@ describe.each(stores)("an SFU combining the old $name with a container copy", (s
     write(copyPath(store), store.encode([{ id: "a", title: "Another edit", updatedAt: 100 }]));
 
     expect(await loaded(store)).toEqual({ a: "One edit" });
-    expect(warnings().some((line) => /legacy \w+ a differs between .*sfu-a/.test(line))).toBe(true);
+    expect(warnings().some((line) => /legacy \w+ a was changed in the container copy sfu-a\/.* at the same time/.test(line))).toBe(true);
   });
 
   it("changes nothing when the copy holds nothing new", async () => {
@@ -266,7 +267,7 @@ describe("an SFU combining old scheduled meetings with a container copy", () => 
     const second = await restart(first);
 
     expect(await meetings.load(second)).toEqual({ a: "Changed here" });
-    expect(warnings().some((line) => /legacy meeting a differs between/.test(line))).toBe(true);
+    expect(warnings().some((line) => /legacy meeting a was changed in the container copy sfu-a\/.* and here since it was imported/.test(line))).toBe(true);
   });
 });
 

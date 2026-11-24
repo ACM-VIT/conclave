@@ -360,41 +360,63 @@ const RECOVERED_FILES: Record<LegacyDomain, string> = {
   webinars: "scheduled-webinars.json",
 };
 
-export type RecoveredRecord = HashedLegacyRecord & { from: string };
+export type ClaimedCopy = {
+  domain: LegacyDomain;
+  base: string;
+  path: string;
+  source: string;
+  order: string;
+  hash: string;
+};
 
-export type ClaimedCopy = { domain: LegacyDomain; base: string; path: string; hash: string };
+export type CopySnapshot = { source: string; order: string; domain: LegacyDomain; from: string; records: HashedLegacyRecord[] };
 
-export type RecoveredCopies = { files: ClaimedCopy[]; records: RecoveredRecord[] };
+export type RecoveredCopies = { files: ClaimedCopy[]; snapshots: CopySnapshot[] };
+
+type CopyFile = { domain: LegacyDomain; base: string; path: string; service: string; archive: string | null };
 
 const CLAIM = /^(.+)\.claimed-(\d+)-\d+$/;
+const ARCHIVE = /^(\d{8}T\d+Z)-(.+)$/;
 
 const folders = (path: string): string[] =>
   readdirSync(path, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
-    .map((entry) => join(path, entry.name))
+    .map((entry) => entry.name)
     .sort();
 
-const copyFolders = (dir: string): string[] =>
-  folders(dir).flatMap((service) => [service, ...folders(service)]);
+const copyFolders = (dir: string): Array<{ path: string; service: string; archive: string | null }> =>
+  folders(dir).flatMap((service) => [
+    { path: join(dir, service), service, archive: null },
+    ...folders(join(dir, service)).map((archive) => ({ path: join(dir, service, archive), service, archive })),
+  ]);
 
-const claimable = (dir: string | null, ticket: number): Array<{ domain: LegacyDomain; base: string; path: string }> => {
+const missing = (error: unknown): boolean => (error as NodeJS.ErrnoException).code === "ENOENT";
+
+const claimable = (dir: string | null, ticket: number): CopyFile[] => {
   if (!dir || !existsSync(dir)) return [];
-  const found: Array<{ domain: LegacyDomain; base: string; path: string }> = [];
+  const found: CopyFile[] = [];
   for (const folder of copyFolders(dir)) {
-    for (const name of readdirSync(folder).sort()) {
+    let names: string[];
+    try {
+      names = readdirSync(folder.path).sort();
+    } catch (error) {
+      if (missing(error)) continue;
+      throw error;
+    }
+    for (const name of names) {
       const claimed = CLAIM.exec(name);
       const fileName = claimed ? claimed[1] : name;
       const domain = LEGACY_DOMAINS.find((entry) => RECOVERED_FILES[entry] === fileName);
       if (!domain) continue;
       if (claimed && Number(claimed[2]) >= ticket) continue;
-      found.push({ domain, base: join(folder, fileName), path: join(folder, name) });
+      found.push({ domain, base: join(folder.path, fileName), path: join(folder.path, name), service: folder.service, archive: folder.archive });
     }
   }
   return found;
 };
 
-const claim = (dir: string | null, ticket: number): Array<{ domain: LegacyDomain; base: string; path: string }> => {
-  const mine: Array<{ domain: LegacyDomain; base: string; path: string }> = [];
+const claim = (dir: string | null, ticket: number): CopyFile[] => {
+  const mine: CopyFile[] = [];
   for (let pass = 0; pass < 5; pass += 1) {
     const candidates = claimable(dir, ticket);
     if (candidates.length === 0) break;
@@ -402,9 +424,9 @@ const claim = (dir: string | null, ticket: number): Array<{ domain: LegacyDomain
       const path = `${candidate.base}.claimed-${ticket}-${mine.length}`;
       try {
         renameSync(candidate.path, path);
-        mine.push({ domain: candidate.domain, base: candidate.base, path });
+        mine.push({ ...candidate, path });
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        if (!missing(error)) throw error;
       }
     }
   }
@@ -428,47 +450,75 @@ const recoveredRecords = (domain: LegacyDomain, text: string, path: string): Leg
 
 const sha256 = (text: string): string => createHash("sha256").update(text).digest("hex");
 
+const readClaimed = (path: string): string | null => {
+  try {
+    return readFileSync(path, "utf8");
+  } catch (error) {
+    if (missing(error)) return null;
+    throw error;
+  }
+};
+
 const release = (files: ReadonlyArray<{ base: string; path: string }>): void => {
   for (const file of files) {
-    if (existsSync(file.path) && !existsSync(file.base)) renameSync(file.path, file.base);
-  }
-};
-
-const combine = (files: ClaimedCopy[], texts: string[]): RecoveredRecord[] => {
-  const winners = new Map<string, RecoveredRecord>();
-  const problems: string[] = [];
-  files.forEach((file, index) => {
-    for (const record of recoveredRecords(file.domain, texts[index], file.base).map(hashed)) {
-      const held = winners.get(record.key);
-      if (!held || record.stamp > held.stamp) {
-        winners.set(record.key, { ...record, from: file.base });
-      } else if (record.stamp === held.stamp && record.hash !== held.hash) {
-        problems.push(`${record.key} differs between ${held.from} and ${file.base}, and both were last changed at ${record.stamp}.`);
-      }
+    try {
+      if (existsSync(file.path) && !existsSync(file.base)) renameSync(file.path, file.base);
+    } catch (error) {
+      if (!missing(error)) throw error;
     }
-  });
-  if (problems.length > 0) {
-    throw new Error(
-      `Could not combine the stores older SFUs kept in their containers without losing a change:\n- ${problems.join("\n- ")}\nResolve these records by hand, then rename each copy with a .adopted suffix.`,
-    );
   }
-  return [...winners.values()];
 };
 
-export const claimRecoveredCopies = (dir: string | null, ticket: number): RecoveredCopies => {
-  const claimed = claim(dir, ticket);
+const sourceOf = (candidate: CopyFile, hash: string): { source: string; order: string } => {
+  if (candidate.archive === null) return { source: `${candidate.service}/flat-${hash.slice(0, 16)}`, order: "" };
+  const parsed = ARCHIVE.exec(candidate.archive);
+  return parsed
+    ? { source: `${candidate.service}/${parsed[2]}`, order: candidate.archive }
+    : { source: `${candidate.service}/${candidate.archive}`, order: candidate.archive };
+};
+
+const DOMAIN_ORDER = (domain: LegacyDomain): number => LEGACY_DOMAINS.indexOf(domain);
+
+export type ClaimedFiles = readonly CopyFile[];
+
+export const claimCopies = (dir: string | null, ticket: number): ClaimedFiles => claim(dir, ticket);
+
+export const readClaimedCopies = (claimed: ClaimedFiles): RecoveredCopies => {
   try {
-    const texts = claimed.map((file) => readFileSync(file.path, "utf8"));
-    const files = claimed.map((file, index) => ({ ...file, hash: sha256(texts[index]) }));
-    return { files, records: combine(files, texts) };
+    const files: ClaimedCopy[] = [];
+    const snapshots: CopySnapshot[] = [];
+    for (const candidate of claimed) {
+      const text = readClaimed(candidate.path);
+      if (text === null) continue;
+      const hash = sha256(text);
+      const { source, order } = sourceOf(candidate, hash);
+      files.push({ domain: candidate.domain, base: candidate.base, path: candidate.path, source, order, hash });
+      snapshots.push({
+        source,
+        order,
+        domain: candidate.domain,
+        from: candidate.base,
+        records: recoveredRecords(candidate.domain, text, candidate.base).map(hashed),
+      });
+    }
+    snapshots.sort((a, b) =>
+      a.order !== b.order
+        ? a.order < b.order ? -1 : 1
+        : a.source !== b.source
+          ? a.source < b.source ? -1 : 1
+          : DOMAIN_ORDER(a.domain) - DOMAIN_ORDER(b.domain),
+    );
+    return { files, snapshots };
   } catch (error) {
     release(claimed);
     throw error;
   }
 };
 
-export const stillClaimed = (file: ClaimedCopy): boolean =>
-  existsSync(file.path) && sha256(readFileSync(file.path, "utf8")) === file.hash;
+export const stillClaimed = (file: ClaimedCopy): boolean => {
+  const text = readClaimed(file.path);
+  return text !== null && sha256(text) === file.hash;
+};
 
 export const markAdopted = (file: ClaimedCopy): string | null => {
   if (!stillClaimed(file)) {
@@ -477,6 +527,11 @@ export const markAdopted = (file: ClaimedCopy): string | null => {
   }
   const plain = `${file.base}.adopted`;
   const target = existsSync(plain) ? `${plain}-${file.hash.slice(0, 12)}` : plain;
-  renameSync(file.path, target);
+  try {
+    renameSync(file.path, target);
+  } catch (error) {
+    if (missing(error)) return null;
+    throw error;
+  }
   return target;
 };

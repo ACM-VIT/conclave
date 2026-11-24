@@ -2,21 +2,23 @@ import { Logger } from "../../utilities/loggers.js";
 import type { RedisPersistenceClient } from "../redisPersistence.js";
 import type { StoreMode } from "./backends/backend.js";
 import {
-  claimRecoveredCopies,
+  claimCopies,
   markAdopted,
+  readClaimedCopies,
   readLegacyDomains,
   stillClaimed,
   type HashedLegacyRecord,
   type LegacyPaths,
-  type RecoveredRecord,
 } from "./legacy.js";
 import { hashLegacyValue } from "./legacyHash.js";
 import {
   LEGACY_IMPORT_ID,
+  PRIMARY_SOURCE,
   done,
   domainOf,
   fail,
   legacyCopyKey,
+  shadowKey,
   type DataKind,
   type LegacyDomain,
   type LegacyImportState,
@@ -84,9 +86,13 @@ const legacyImportState: Query<LegacyImportState | null> = (view) =>
 const deletedHere = (tx: Tx, kind: DataKind, id: string, copy: HashedLegacyRecord): "new" | "same" | "changed" => {
   if (tx.tombstone(kind, id) === null) return "new";
   const removal = tx.get("removal", legacyCopyKey(kind, id))?.value ?? null;
-  if (removal && removal.identity !== copy.identity) return "new";
-  return removal && removal.hash === copy.hash ? "same" : "changed";
+  if (!removal) return "changed";
+  const matching = removal.deleted.filter((entry) => entry.identity === copy.identity);
+  if (matching.length === 0) return "new";
+  return matching.some((entry) => entry.hash === copy.hash) ? "same" : "changed";
 };
+
+const where = (source: string): string => (source === PRIMARY_SOURCE ? "the old store" : `the container copy ${source}`);
 
 const conflict = (kind: DataKind, id: string, what: string, counts: ImportCounts): void => {
   counts.conflicts += 1;
@@ -100,25 +106,28 @@ const write = (tx: Tx, record: HashedLegacyRecord, counts: ImportCounts): void =
   counts.notes.push(`[ControlPlane] legacy ${record.key} kept without ${skipped.join(", ")}: another record already holds it`);
 };
 
-const reconcileOne = (tx: Tx, item: LegacyItem, counts: ImportCounts): void => {
+const reconcileOne = (tx: Tx, source: string, item: LegacyItem, counts: ImportCounts): void => {
   const { kind, id, copy } = item;
-  const key = legacyCopyKey(kind, id);
+  const key = shadowKey(source, kind, id);
   const shadow = tx.get("legacyCopy", key)?.value ?? null;
   const live = tx.get(kind, id);
+  const origin = where(source);
+  const liveHash = live ? hashLegacyValue(live.value) : null;
+  const fromHere = shadow !== null && live !== null && live.legacy !== null && liveHash === shadow.hash;
   if (!copy) {
     if (!shadow) return;
     tx.remove("legacyCopy", key);
     if (!live) return;
-    if (live.legacy !== null) {
+    if (fromHere) {
       tx.remove(kind, id);
       counts.deleted += 1;
-      return;
+    } else if (live.legacy === null) {
+      conflict(kind, id, `was deleted in ${origin} and changed here since it was imported`, counts);
     }
-    conflict(kind, id, "was deleted in the old store and changed here since it was imported", counts);
     return;
   }
   if (shadow && shadow.hash === copy.hash) return;
-  tx.put("legacyCopy", { key, kind, id, hash: copy.hash, stamp: copy.stamp });
+  tx.put("legacyCopy", { key, source, kind, id, hash: copy.hash, stamp: copy.stamp });
   if (!live) {
     const deleted = deletedHere(tx, kind, id, copy);
     if (deleted === "new") {
@@ -127,20 +136,21 @@ const reconcileOne = (tx: Tx, item: LegacyItem, counts: ImportCounts): void => {
     } else if (deleted === "same") {
       counts.kept += 1;
     } else {
-      conflict(kind, id, "was changed in the old store and deleted here", counts);
+      conflict(kind, id, `was changed in ${origin} and deleted here`, counts);
     }
     return;
   }
-  if (hashLegacyValue(live.value) === copy.hash) {
+  if (liveHash === copy.hash) {
     counts.kept += 1;
     return;
   }
-  if (live.legacy === null) {
-    conflict(kind, id, "was changed in the old store and here since it was imported", counts);
+  if (!fromHere && live.legacy === null) {
+    conflict(kind, id, `was changed in ${origin} and here since it was imported`, counts);
     return;
   }
-  if (!shadow && copy.stamp <= live.legacy) {
-    counts.kept += 1;
+  if (!fromHere && live.legacy !== null && copy.stamp <= live.legacy) {
+    if (copy.stamp === live.legacy) conflict(kind, id, `was changed in ${origin} and in another old store at the same time`, counts);
+    else counts.kept += 1;
     return;
   }
   write(tx, copy, counts);
@@ -148,72 +158,25 @@ const reconcileOne = (tx: Tx, item: LegacyItem, counts: ImportCounts): void => {
 };
 
 export const reconcileLegacy =
-  (ticket: number, domain: LegacyDomain, source: string, items: readonly LegacyItem[]): Command<ImportCounts> =>
+  (ticket: number, domain: LegacyDomain, source: string, sticky: string | null, items: readonly LegacyItem[]): Command<ImportCounts> =>
   (tx) => {
     const state = currentState(tx);
     if (!state || state.ticket !== ticket) return fail("conflict", STALE);
-    if (state.sources[domain] !== source) {
-      tx.put("legacyImport", { ...state, sources: { ...state.sources, [domain]: source } });
+    if (sticky !== null && state.sources[domain] !== sticky) {
+      tx.put("legacyImport", { ...state, sources: { ...state.sources, [domain]: sticky } });
     }
     const counts = emptyCounts();
-    for (const item of items) reconcileOne(tx, item, counts);
-    return done(counts);
-  };
-
-const adoptOne = (tx: Tx, record: RecoveredRecord, counts: ImportCounts): void => {
-  const { kind, id } = record;
-  const live = tx.get(kind, id);
-  if (live && hashLegacyValue(live.value) === record.hash) {
-    counts.kept += 1;
-    return;
-  }
-  const shadow = tx.get("legacyCopy", record.key)?.value ?? null;
-  const superseded = shadow !== null && (record.hash === shadow.hash || record.stamp < shadow.stamp);
-  if (!live) {
-    const deleted = deletedHere(tx, kind, id, record);
-    if (deleted === "new") {
-      write(tx, record, counts);
-      counts.inserted += 1;
-    } else if (deleted === "same" || superseded) {
-      counts.kept += 1;
-    } else {
-      conflict(kind, id, `is in ${record.from} but was deleted here`, counts);
-    }
-    return;
-  }
-  if (live.legacy !== null && record.stamp !== live.legacy) {
-    if (record.stamp > live.legacy) {
-      write(tx, record, counts);
-      counts.refreshed += 1;
-    } else {
-      counts.kept += 1;
-    }
-    return;
-  }
-  if (superseded) {
-    counts.kept += 1;
-    return;
-  }
-  conflict(kind, id, `differs between ${record.from} and this store`, counts);
-};
-
-export const adoptRecovered =
-  (ticket: number, records: readonly RecoveredRecord[]): Command<ImportCounts> =>
-  (tx) => {
-    const state = currentState(tx);
-    if (!state || state.ticket !== ticket) return fail("conflict", STALE);
-    const counts = emptyCounts();
-    for (const record of records) adoptOne(tx, record, counts);
+    for (const item of items) reconcileOne(tx, source, item, counts);
     return done(counts);
   };
 
 const shadowsOf =
-  (domain: LegacyDomain): Query<Array<{ kind: DataKind; id: string }>> =>
+  (domain: LegacyDomain, source: string): Query<Array<{ kind: DataKind; id: string }>> =>
   (view) =>
     view
       .all("legacyCopy")
       .map((stored) => stored.value)
-      .filter((copy) => domainOf(copy.kind) === domain)
+      .filter((copy) => copy.source === source && domainOf(copy.kind) === domain)
       .map((copy) => ({ kind: copy.kind, id: copy.id }));
 
 const IMPORT_BATCH = 50;
@@ -242,6 +205,7 @@ export type LegacyImportOptions = {
   paths: LegacyPaths;
   redis?: { client: RedisPersistenceClient; prefix: string };
   read?: <T>(read: () => Promise<T>) => Promise<T>;
+  afterClaim?: () => Promise<void>;
   waitMs?: number;
   pollMs?: number;
 };
@@ -292,8 +256,10 @@ const importRound = async (
   const counted = emptyCounts();
   const sources: string[] = [];
   const adopted: string[] = [];
-  const recovered = claimRecoveredCopies(options.paths.fallbackDir, ticket);
-  const stopped = () => ({
+  const claimed = claimCopies(options.paths.fallbackDir, ticket);
+  await options.afterClaim?.();
+  const recovered = readClaimedCopies(claimed);
+  const stopped = (): RoundResult => ({
     ticket,
     superseded: true,
     counted,
@@ -301,21 +267,23 @@ const importRound = async (
     adopted,
     claimedLeft: recovered.files.some(stillClaimed),
   });
+  const apply = async (domain: LegacyDomain, source: string, label: string | null, records: readonly HashedLegacyRecord[]) => {
+    const shadows = await store.read(shadowsOf(domain, source));
+    for (const batch of batches(itemsFor(records, shadows))) {
+      const counts = await committed(store, reconcileLegacy(ticket, domain, source, label, batch));
+      if (!counts) return false;
+      add(counted, counts);
+    }
+    return true;
+  };
   const domains = await read(() => readLegacyDomains({ mode: options.mode, paths: options.paths, redis: options.redis, sticky }));
   for (const domain of domains) {
     if (!domain.source || !domain.records) continue;
     sources.push(`${domain.source} ${domain.domain}`);
-    const shadows = await store.read(shadowsOf(domain.domain));
-    for (const batch of batches(itemsFor(domain.records, shadows))) {
-      const counts = await committed(store, reconcileLegacy(ticket, domain.domain, domain.source, batch));
-      if (!counts) return stopped();
-      add(counted, counts);
-    }
+    if (!(await apply(domain.domain, PRIMARY_SOURCE, domain.source, domain.records))) return stopped();
   }
-  for (const batch of batches([...recovered.records].sort(newestFirst))) {
-    const counts = await committed(store, adoptRecovered(ticket, batch));
-    if (!counts) return stopped();
-    add(counted, counts);
+  for (const snapshot of recovered.snapshots) {
+    if (!(await apply(snapshot.domain, snapshot.source, null, snapshot.records))) return stopped();
   }
   if (!(await committed(store, finishLegacyImport(ticket)))) return stopped();
   for (const file of recovered.files) {

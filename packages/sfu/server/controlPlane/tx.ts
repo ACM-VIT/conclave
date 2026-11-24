@@ -4,6 +4,7 @@ import { hashLegacyValue } from "./legacyHash.js";
 import {
   InvalidInput,
   StoreCorruptionError,
+  REMEMBERED_DELETES,
   isDataKind,
   legacyCopyKey,
   UniqueViolation,
@@ -194,15 +195,12 @@ class TxImpl implements Tx {
     this.pending.set(key, { kind, id, value: null, legacy: null });
     this.removed.set(key, { kind, id });
     if (isDataKind(kind)) {
+      const removalKey = legacyCopyKey(kind, id);
+      const earlier = this.get("removal", removalKey)?.value.deleted ?? [];
+      const deleted = [...earlier, { identity: identityOf<Kind>(kind, current.value), hash: hashLegacyValue(current.value) }];
       this.write(
         "removal",
-        {
-          key: legacyCopyKey(kind, id),
-          kind,
-          id,
-          identity: identityOf<Kind>(kind, current.value),
-          hash: hashLegacyValue(current.value),
-        },
+        { key: removalKey, kind, id, deleted: deleted.slice(-REMEMBERED_DELETES) },
         null,
         false,
       );
