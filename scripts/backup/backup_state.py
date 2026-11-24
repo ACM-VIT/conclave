@@ -48,6 +48,9 @@ from statelib import (  # noqa: E402
     name_room,
     open_parts,
     overlay,
+    redis_key_pattern,
+    redis_key_prefix,
+    redis_source_url,
     relative_target,
     resolve,
     restore_writes,
@@ -395,6 +398,12 @@ def main(argv):
             fenced_command(*args)
         elif command == "containers":
             containers_command(*args)
+        elif command == "redis-source":
+            print(redis_source_url(os.environ))
+        elif command == "redis-prefix":
+            print(redis_key_prefix(os.environ))
+        elif command == "redis-pattern":
+            print(redis_key_pattern(os.environ))
         else:
             print(f"unknown command {command}", file=sys.stderr)
             return 2

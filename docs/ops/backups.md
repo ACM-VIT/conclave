@@ -250,6 +250,10 @@ To apply it:
      copy in that parent and renames from it. Put a dedicated volume one level
      up (`/var/lib/conclave` rather than `.../recordings`), or restore into a
      new dir and move it.
+   The Redis is the one the SFU uses, picked by the SFU's own rule:
+   `SFU_PERSISTENCE_REDIS_URL`, else `SFU_REDIS_URL`, else `REDIS_URL`, each
+   trimmed first, so a blank value falls through to the next as it does for
+   the SFU (the backup suite checks both rules agree over a table of settings).
    The Redis keys
    under the SFU's persistence prefix (`conclave:sfu:persistence:*`, or the
    `SFU_PERSISTENCE_REDIS_KEY_PREFIX` the SFU reads, trimmed and without

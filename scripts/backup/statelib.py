@@ -17,6 +17,7 @@ import errno
 import json
 import os
 import posixpath
+import re
 import shutil
 import stat
 import subprocess
@@ -553,6 +554,23 @@ def is_sfu(found):
     return bool(found["env"].get("SFU_INSTANCE_ID"))
 
 
+JS_SPACE = "\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
+
+
+def redis_source_url(env):
+    for name in ("SFU_PERSISTENCE_REDIS_URL", "SFU_REDIS_URL", "REDIS_URL"):
+        value = (env.get(name) or "").strip(JS_SPACE)
+        if value:
+            return value
+    return ""
+
+
+def redis_key_prefix(env):
+    return ((env.get("SFU_PERSISTENCE_REDIS_KEY_PREFIX") or "").strip(JS_SPACE) or "conclave:sfu:persistence").rstrip(":")
+
+
+def redis_key_pattern(env):
+    return re.sub(r"([*?\[\]\\])", r"\\\1", redis_key_prefix(env)) + ":*"
 
 
 def store_paths(env, fallback=None):

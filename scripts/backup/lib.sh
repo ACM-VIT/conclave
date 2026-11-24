@@ -37,18 +37,9 @@ load_backup_config() {
   STATE_DIR="${CONCLAVE_STATE_DIR:-${RECORDING_STORAGE_PATH:-/var/lib/conclave/recordings}}"
   BACKUP_LOCAL_DIR="${BACKUP_LOCAL_DIR:-/var/backups/conclave}"
   # shellcheck disable=SC2034
-  REDIS_SOURCE_URL="${SFU_PERSISTENCE_REDIS_URL:-${SFU_REDIS_URL:-${REDIS_URL:-}}}"
+  REDIS_SOURCE_URL="$(python3 -I "${BACKUP_SCRIPTS}/backup_state.py" redis-source)" || die "cannot read the Redis URL the SFU uses"
   # shellcheck disable=SC2034
-  REDIS_KEY_PATTERN="${BACKUP_REDIS_PATTERN:-$(redis_key_pattern)}"
-}
-
-redis_key_pattern() {
-  PREFIX_IN="${SFU_PERSISTENCE_REDIS_KEY_PREFIX:-}" python3 -c '
-import os, re
-blank = "\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
-prefix = (os.environ["PREFIX_IN"].strip(blank) or "conclave:sfu:persistence").rstrip(":")
-print(re.sub(r"([*?\[\]\\])", r"\\\1", prefix) + ":*")
-'
+  REDIS_KEY_PATTERN="${BACKUP_REDIS_PATTERN:-$(python3 -I "${BACKUP_SCRIPTS}/backup_state.py" redis-pattern)}"
 }
 
 # Splits a redis:// URL into REDIS_HOST, REDIS_PORT, REDIS_DB, REDIS_USER,

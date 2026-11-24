@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFile, execFileSync, spawn } from "node:child_process";
+import { execFile, execFileSync, spawn, spawnSync } from "node:child_process";
 import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, readlink, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:net";
@@ -2578,6 +2578,71 @@ test("containers that are not SFUs neither choose the stores nor stop a backup o
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("a blank SFU_PERSISTENCE_REDIS_URL falls through to the next Redis URL, as the SFU does", needsRedis, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  const live = await startRedis();
+  try {
+    const { state, backup, latestArchive, restore } = await setUp(root, ['SFU_PERSISTENCE_REDIS_URL=" "', `SFU_REDIS_URL=redis://127.0.0.1:${live.port}/0`]);
+    withDatabase(state);
+    await live.cli("SET", "conclave:sfu:persistence:meeting", "backed up");
+    await backup("--local-only");
+    await live.cli("SET", "conclave:sfu:persistence:meeting", "after the backup");
+    await rm(state, { recursive: true });
+    await restore("--file", await latestArchive(), "--yes");
+    assert.equal((await live.cli("GET", "conclave:sfu:persistence:meeting")).stdout.trim(), "backed up");
+  } finally {
+    live.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the backup resolves the Redis URL and key prefix exactly as the SFU does", needs, () => {
+  const names = ["SFU_PERSISTENCE_REDIS_URL", "SFU_REDIS_URL", "REDIS_URL", "SFU_PERSISTENCE_REDIS_KEY_PREFIX"];
+  const cases = [
+    {},
+    { SFU_PERSISTENCE_REDIS_URL: "redis://p:1/0", SFU_REDIS_URL: "redis://s:2/1" },
+    { SFU_PERSISTENCE_REDIS_URL: " ", SFU_REDIS_URL: "redis://s:2/1" },
+    { SFU_PERSISTENCE_REDIS_URL: "", SFU_REDIS_URL: " ", REDIS_URL: " redis://r:3/2 " },
+    { SFU_REDIS_URL: "\t\n", REDIS_URL: "\u00a0redis://r:4/3\ufeff" },
+    { SFU_PERSISTENCE_REDIS_URL: "\u2028\u3000", REDIS_URL: "\u2029" },
+    { SFU_PERSISTENCE_REDIS_URL: " redis://p:5/4", SFU_REDIS_URL: "redis://s:6/5 " },
+    { SFU_PERSISTENCE_REDIS_KEY_PREFIX: "team:: " },
+    { SFU_PERSISTENCE_REDIS_KEY_PREFIX: "::" },
+    { SFU_PERSISTENCE_REDIS_KEY_PREFIX: " " },
+    { SFU_PERSISTENCE_REDIS_KEY_PREFIX: "\u3000x:\u205f" },
+    { SFU_PERSISTENCE_REDIS_KEY_PREFIX: "a*b?[c]\\d:" },
+    { SFU_PERSISTENCE_REDIS_KEY_PREFIX: "\u180eodd\u180e" },
+  ];
+  const clean = Object.fromEntries(Object.entries(process.env).filter(([name]) => !names.includes(name)));
+  const sfu = spawnSync(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "-e",
+      `import { resolveRedisPersistenceKeyPrefix, resolveRedisPersistenceUrl } from "./server/redisPersistence.ts";
+const names = ${JSON.stringify(names)};
+const results = JSON.parse(process.env.CASES).map((entry) => {
+  for (const name of names) delete process.env[name];
+  Object.assign(process.env, entry);
+  return [resolveRedisPersistenceUrl(), resolveRedisPersistenceKeyPrefix()];
+});
+process.stdout.write(JSON.stringify(results));`,
+    ],
+    { cwd: path.join(scripts, "..", "..", "packages", "sfu"), env: { ...clean, CASES: JSON.stringify(cases) }, encoding: "utf8" },
+  );
+  assert.equal(sfu.status, 0, sfu.stderr);
+  const backupSide = cases.map((entry) =>
+    ["redis-source", "redis-prefix"].map((command) => {
+      const answer = spawnSync("python3", ["-I", path.join(scripts, "backup_state.py"), command], { env: { ...clean, ...entry }, encoding: "utf8" });
+      assert.equal(answer.status, 0, answer.stderr);
+      return answer.stdout.replace(/\n$/, "");
+    }),
+  );
+  assert.deepEqual(backupSide, JSON.parse(sfu.stdout));
 });
 
 describe("backup and restore", { concurrency: 6 }, () => {
