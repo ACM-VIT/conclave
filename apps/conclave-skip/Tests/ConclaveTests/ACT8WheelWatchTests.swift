@@ -391,6 +391,80 @@ struct ACT8WheelWatchTests {
         }
     }
 
+    enum DraftScopeExit: CaseIterable {
+        case leaveAndJoinAnotherCall, newCallWithoutALeave, wheelClosedAndReopened, anotherAppThenTheWheel
+    }
+
+    private func openWheel(_ wire: Wire, _ presenter: AppHostPresenter, _ relay: ActiveAppSession, callSession: Int,
+                           call: String, appId: String = "wheel") {
+        relay.begin(appId: appId, callSessionId: call, isReadOnly: false)
+        presenter.apply(AppHostInputs.make(callSession: callSession, appId: appId, isHost: true))
+        if appId != "wheel" { return }
+        relay.acceptPrimedSnapshot(AppsSyncResponse(syncMessage: Data([1]), stateVector: nil, awarenessUpdate: nil),
+                                   appSessionId: relay.appSessionId)
+        relay.attachBridge(appSessionId: relay.appSessionId) { [wire] json in wire.delivered.append(json) }
+        #expect(ready(relay) == .none)
+        send(relay, "status", ["app": Self.wheelApp(["Ada"])], id: "e-open")
+    }
+
+    @Test(arguments: DraftScopeExit.allCases)
+    func aDraftNeverOutlivesItsCallOrItsWheel(_ exit: DraftScopeExit) {
+        let wire = Wire()
+        let (presenter, relay) = wheelReady(wire)
+        presenter.editWheelDraft("Grace\n")
+        presenter.editWheelDraft("Lin")
+        let unanswered = addRequests(wire).map { $0.id }
+        #expect(unanswered.count == 1 && presenter.wheelDraft.text == "Lin")
+        switch exit {
+        case .leaveAndJoinAnotherCall:
+            presenter.reset()
+            relay.reset()
+            openWheel(wire, presenter, relay, callSession: 2, call: "call-9-next")
+        case .newCallWithoutALeave:
+            openWheel(wire, presenter, relay, callSession: 2, call: "call-9-next")
+        case .wheelClosedAndReopened:
+            relay.end()
+            presenter.apply(AppHostInputs.make(callSession: 1, appId: "", isHost: true))
+            openWheel(wire, presenter, relay, callSession: 1, call: Self.call)
+        case .anotherAppThenTheWheel:
+            openWheel(wire, presenter, relay, callSession: 1, call: Self.call, appId: "whiteboard")
+            openWheel(wire, presenter, relay, callSession: 1, call: Self.call)
+        }
+        #expect(presenter.wheel.isReady, "\(exit) opened a ready wheel")
+        #expect(presenter.wheelDraft.text.isEmpty && presenter.wheelDraft.sent.isEmpty, "\(exit) left \(presenter.wheelDraft)")
+        presenter.fireCommandTimeout(requestId: unanswered[0])
+        #expect(presenter.wheelDraft.text.isEmpty, "a reply from the last scope returns nothing")
+        presenter.editWheelDraft("Mo\n")
+        #expect(addRequests(wire).map { $0.labels } == [["Grace"], ["Mo"]])
+    }
+
+    @Test func aRetryAFailureOrAReconnectInTheSameCallKeepsEveryName() {
+        for reset in ["retry", "failure", "hidden", "reconnect"] {
+            let wire = Wire()
+            let (presenter, relay) = wheelReady(wire)
+            presenter.editWheelDraft("Grace\n")
+            presenter.editWheelDraft("Lin")
+            switch reset {
+            case "retry":
+                presenter.retry()
+            case "failure":
+                presenter.apply(event: ActiveAppEvent.make(kind: .failed, appSessionId: relay.appSessionId, issue: .rendererGone))
+            case "hidden":
+                presenter.setHiddenLocally(true)
+                presenter.setHiddenLocally(false)
+            default:
+                presenter.apply(AppHostInputs.make(callSession: 1, appId: "wheel", isHost: true, isReconnecting: true))
+                presenter.apply(AppHostInputs.make(callSession: 1, appId: "wheel", isHost: true))
+            }
+            if reset == "reconnect" {
+                #expect(presenter.wheelDraft.text == "Lin" && presenter.wheelDraft.sent.count == 1, "the request is still open")
+                ack(relay, addRequests(wire)[0].id, ok: false)
+            }
+            #expect(presenter.wheelDraft.text == "Grace\nLin", "\(reset) keeps every name")
+            #expect(presenter.wheelDraft.sent.isEmpty, "\(reset)")
+        }
+    }
+
     @Test func theWinnerIsAnnouncedOnlyForALiveSettle() {
         let wire = Wire()
         let (presenter, relay) = host(wire, inputs: AppHostInputs.make(callSession: 1, appId: "wheel", isHost: true))

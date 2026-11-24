@@ -418,8 +418,16 @@ struct WheelNameSubmission: Equatable {
 }
 
 struct WheelNameDraft: Equatable {
+    private(set) var scope = ""
     private(set) var text = ""
     private(set) var sent: [WheelNameSubmission] = []
+
+    mutating func enter(_ nextScope: String) {
+        if nextScope == scope { return }
+        scope = nextScope
+        text = ""
+        sent = []
+    }
 
     mutating func edit(_ value: String) -> Bool {
         let addsLine = WheelNameDraft.lineBreaks(value) > WheelNameDraft.lineBreaks(text)
@@ -1238,6 +1246,7 @@ final class AppHostPresenter {
         resetLocal()
         isHiddenLocally = false
         inputs = AppHostInputs.make()
+        followSession()
         trendingItems = []
         trendingRequested = false
         rebuild()
@@ -1319,20 +1328,23 @@ final class AppHostPresenter {
 
     private func followSession() {
         let current = session?.appSessionId ?? ""
-        if current == appSessionId { return }
-        appSessionId = current
-        issue = AppHostIssue.none
-        bundleVersion = ""
-        embedReady = false
-        embedStatus = AppEmbedStatus.empty
-        previousTool = AppWhiteboardTool.pen.rawValue
-        pending = []
-        exportPNGBase64 = ""
-        exportFailed = false
-        cancelReadyTimer()
-        resetPageState()
-        rebuildToolbar()
-        rebuildPages()
+        if current != appSessionId {
+            appSessionId = current
+            issue = AppHostIssue.none
+            bundleVersion = ""
+            embedReady = false
+            embedStatus = AppEmbedStatus.empty
+            previousTool = AppWhiteboardTool.pen.rawValue
+            pending = []
+            exportPNGBase64 = ""
+            exportFailed = false
+            cancelReadyTimer()
+            resetPageState()
+            rebuildToolbar()
+            rebuildPages()
+        }
+        let draftScope = String(inputs.callSession) + "/" + appSessionId
+        if wheelDraft.scope != draftScope { wheelDraft.enter(draftScope) }
     }
 
     private func acknowledge(requestId: String, ok: Bool, pngBase64: String) {
@@ -1602,7 +1614,6 @@ final class AppHostPresenter {
     private func resetPageState() {
         appStatus = AppEmbedAppStatus.empty
         pagePending = []
-        wheelDraft.abandonAll()
         sawAppStatus = false
         lastWinnerSpinId = ""
         winnerLabel = ""
