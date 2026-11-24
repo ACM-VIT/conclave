@@ -184,6 +184,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
     internal var onTransportConnectionStateChanged: ((String, String) -> Unit)? = null
     internal var onCallAudioRouteChanged: (() -> Unit)? = null
     internal var onCameraFacingsChanged: (() -> Unit)? = null
+    internal var onCaptureTeardownStuck: ((String) -> Unit)? = null
     internal var onLocalAudioProducerLost: (() -> Unit)? = null
     internal var onLocalVideoProducerLost: (() -> Unit)? = null
     internal var onLocalScreenProducerLost: (() -> Unit)? = null
@@ -2411,7 +2412,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         var startedCapturer: VideoCapturer? = null
         try {
             releasePreJoinCameraPreview()
-            CaptureTeardown.camera.awaitReleased()
+            awaitCaptureTeardown(CaptureTeardown.camera, "camera")
 
             ensureCurrentConfiguration(generation)
             if (localVideoOffIntentGeneration != offIntentGeneration) {
@@ -2517,7 +2518,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         val sendTransport = sendTransport ?: throw ErrorException("Send transport not ready")
         val context = ProcessInfo.processInfo.androidContext
         ensurePeerConnectionFactory(context)
-        CaptureTeardown.screen.awaitReleased()
+        awaitCaptureTeardown(CaptureTeardown.screen, "screen")
         ensureCurrentConfiguration(generation)
 
         val data = ScreenCaptureManager.getCaptureResultIntent()
@@ -3589,6 +3590,13 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
     private fun nextScreenVideoTrackId(): String {
         screenVideoTrackSequence += 1
         return "screen$screenVideoTrackSequence"
+    }
+
+    private suspend fun awaitCaptureTeardown(teardown: CaptureTeardown, kind: String) {
+        if (teardown.awaitReleased()) return
+        debugLog("[WebRTC] A $kind capture teardown is stuck; starting without it")
+        NativePerformanceDiagnostics.event("capture_teardown_stuck", "kind=$kind")
+        onCaptureTeardownStuck?.invoke(kind)
     }
 
     private fun releaseLocalCameraCapture() {
@@ -7993,7 +8001,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             activeCameraFacing = previousFacing
             throw ErrorException("Camera switch unavailable")
         }
-        CaptureTeardown.camera.awaitReleased()
+        awaitCaptureTeardown(CaptureTeardown.camera, "camera")
         if (videoCapturer !== capturer || !localVideoEnabled) return
 
         suspendCancellableCoroutine<Unit> { cont ->

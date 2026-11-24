@@ -415,6 +415,30 @@ class LocalVideoTeardownTests {
     }
 
     @Test
+    fun aStuckCameraTeardownNeverHoldsUpTheNextCameraStart() {
+        val (media, lane) = joinedCall()
+        val events = CopyOnWriteArrayList<String>()
+        readyToStart(media, events)
+        val stuck = CopyOnWriteArrayList<String>()
+        media.onCaptureTeardownStuck = { stuck.add(it) }
+        val never = CountDownLatch(1)
+        try {
+            installCamera(media, lane, FakeCapturer(never, "stuck camera", events, stopWaitSeconds = 60))
+            runBlocking { media.closeLocalMedia(kind = "video", type = ProducerType.webcam.rawValue, producerId = null) }
+
+            val start = scope.async(start = CoroutineStart.UNDISPATCHED) { runCatching { media.startProducingVideo() } }
+            advanceMain(5_000)
+            pumpMainLooperUntil { start.isCompleted }
+
+            assertTrue("the next camera never opened behind a stuck teardown", events.contains("next camera started"))
+            assertFalse(events.contains("stuck camera stopped"))
+            assertEquals(listOf("camera"), stuck.toList())
+        } finally {
+            never.countDown()
+        }
+    }
+
+    @Test
     fun anEndedSharesStopCallbackLeavesTheNextShareAlone() {
         val (media, _) = joinedCall()
         val events = CopyOnWriteArrayList<String>()

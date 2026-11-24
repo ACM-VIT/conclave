@@ -1,41 +1,52 @@
 package conclave.module
 
-import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withTimeoutOrNull
 import org.webrtc.SurfaceTextureHelper
 import org.webrtc.VideoCapturer
 
-internal class CaptureTeardown(threadName: String) {
-    private val worker = Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, threadName).apply { isDaemon = true }
-    }
+internal class CaptureTeardown(private val kind: String) {
+    private val pending = mutableListOf<CompletableDeferred<Unit>>()
+    private val sequence = AtomicInteger(0)
 
     fun release(capturer: VideoCapturer?, helper: SurfaceTextureHelper?, done: () -> Unit) {
-        worker.execute {
+        val finished = CompletableDeferred<Unit>()
+        synchronized(pending) { pending.add(finished) }
+        Thread({
             try {
-                capturer?.stopCapture()
-            } catch (_: Throwable) {
+                try {
+                    capturer?.stopCapture()
+                } catch (_: Throwable) {
+                }
+                try {
+                    capturer?.dispose()
+                } catch (_: Throwable) {
+                }
+                try {
+                    helper?.dispose()
+                } catch (_: Throwable) {
+                }
+                done()
+            } finally {
+                synchronized(pending) { pending.remove(finished) }
+                finished.complete(Unit)
             }
-            try {
-                capturer?.dispose()
-            } catch (_: Throwable) {
-            }
-            try {
-                helper?.dispose()
-            } catch (_: Throwable) {
-            }
-            done()
-        }
+        }, "Conclave${kind}Teardown-${sequence.incrementAndGet()}").apply { isDaemon = true }.start()
     }
 
-    suspend fun awaitReleased() {
-        val released = CompletableDeferred<Unit>()
-        worker.execute { released.complete(Unit) }
-        released.await()
+    suspend fun awaitReleased(deadlineMillis: Long = DEADLINE_MILLIS): Boolean {
+        val waiting = synchronized(pending) { pending.toList() }
+        if (waiting.isEmpty()) return true
+        return withTimeoutOrNull(deadlineMillis) {
+            for (teardown in waiting) teardown.await()
+            true
+        } ?: false
     }
 
     companion object {
-        val camera = CaptureTeardown("ConclaveCameraTeardown")
-        val screen = CaptureTeardown("ConclaveScreenTeardown")
+        const val DEADLINE_MILLIS = 3_000L
+        val camera = CaptureTeardown("Camera")
+        val screen = CaptureTeardown("Screen")
     }
 }

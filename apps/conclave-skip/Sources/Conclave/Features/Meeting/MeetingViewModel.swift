@@ -2803,6 +2803,9 @@ final class MeetingViewModel {
         }
 
         #if SKIP
+        webRTCClient.onCaptureTeardownStuck = { kind in
+            CallDiagnostics.shared.record(code: "capture.teardownStuck." + kind)
+        }
         webRTCClient.onCameraFacingsChanged = { [weak self] in
             self?.requestStageRefresh()
             self?.requestControlsRefresh()
