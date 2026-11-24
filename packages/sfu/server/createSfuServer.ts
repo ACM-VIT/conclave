@@ -10,6 +10,7 @@ import { sendDueSchedulingEmailReminders } from "./schedulingEmailReminders.js";
 import { createSfuApp } from "./http/createApp.js";
 import { registerAdminGateway, type AdminGateway } from "./admin/adminGateway.js";
 import {
+  notifyRoomConfig,
   startScheduledWebinarTimer,
   stopScheduledWebinarTimer,
 } from "./scheduledWebinarScheduler.js";
@@ -83,7 +84,7 @@ export const createSfuServer = (
     socketAdapterLifecycle = await connectSocketAdapter(io, { config });
     await initMediaSoup(state, () => io, workerShutdown.signal);
     await initControlPlane(state);
-    startScheduledWebinarTimer(state);
+    startScheduledWebinarTimer(state, undefined, notifyRoomConfig(state, () => io));
     roomOwnershipRenewTimer = setInterval(() => {
       renewRoomOwnerships(state).catch((error) => {
         Logger.error("Failed to renew room ownerships", error);

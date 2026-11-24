@@ -1,3 +1,4 @@
+import type { Server as SocketIOServer } from "socket.io";
 import { Logger } from "../utilities/loggers.js";
 import { notifyAuthorityPolicy } from "./apps/authority/index.js";
 import { getRoomChannelId } from "./rooms.js";
@@ -5,6 +6,7 @@ import type { ScheduledWebinar } from "../types.js";
 import { isWithinEarlyEntryWindow } from "./scheduledWebinars.js";
 import { advanceWebinars, openWebinars, webinarsByIds } from "./controlPlane/webinarCommands.js";
 import type { SfuState } from "./state.js";
+import { emitWebinarConfigChanged } from "./webinarNotifications.js";
 import {
   clearWebinarLinkSlug,
   getOrCreateWebinarRoomConfig,
@@ -171,14 +173,27 @@ const releaseRemovedSchedule = (
   notifyAuthorityPolicy(state, channelId);
 };
 
+export type WebinarConfigNotify = (channelId: string) => void;
+
+export const notifyRoomConfig =
+  (state: SfuState, getIo: () => SocketIOServer | null): WebinarConfigNotify =>
+  (channelId) => {
+    const io = getIo();
+    const room = state.rooms.get(channelId);
+    if (io && room) emitWebinarConfigChanged(io, state, room);
+  };
+
 export const advanceScheduledWebinars = async (
   state: SfuState,
   now = Date.now(),
+  notify: WebinarConfigNotify = () => {},
 ): Promise<ScheduledWebinar[]> => {
   const advanced = await state.controlPlane.commit(advanceWebinars);
   const changed = advanced.ok ? advanced.value : [];
+  const touched = new Set<string>();
   for (const webinar of changed) {
     if (webinar.status === "live") applyScheduledWebinarToConfig(state, webinar);
+    touched.add(getRoomChannelId(webinar.clientId, webinar.roomId));
   }
   for (const webinar of await state.controlPlane.read(openWebinars)) {
     if (webinar.status === "scheduled" && isWithinEarlyEntryWindow(webinar, now)) {
@@ -194,12 +209,17 @@ export const advanceScheduledWebinars = async (
     const record = stored.get(id) ?? null;
     if (!record) {
       releaseRemovedSchedule(state, channelId, config);
+      touched.add(channelId);
       continue;
     }
     if (appliedRevisions.get(config) === record.rev) continue;
     if (applyScheduledWebinarToConfig(state, record.value).bound) {
       appliedRevisions.set(config, record.rev);
     }
+    touched.add(channelId);
+  }
+  for (const channelId of touched) {
+    if (state.webinarConfigs.has(channelId)) notify(channelId);
   }
   return changed;
 };
@@ -207,10 +227,11 @@ export const advanceScheduledWebinars = async (
 export const startScheduledWebinarTimer = (
   state: SfuState,
   intervalMs = DEFAULT_TICK_MS,
+  notify?: WebinarConfigNotify,
 ): void => {
   if (state.scheduledWebinarTimer) return;
   state.scheduledWebinarTimer = setInterval(() => {
-    advanceScheduledWebinars(state).catch((error) => {
+    advanceScheduledWebinars(state, Date.now(), notify).catch((error) => {
       Logger.error("scheduled webinar tick failed", error);
     });
   }, intervalMs);

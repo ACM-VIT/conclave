@@ -1,4 +1,6 @@
 import { createServer, type Server } from "node:http";
+import type { Server as SocketIOServer } from "socket.io";
+import type { Room } from "../config/classes/Room.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { config } from "../config/config.js";
 import { createMemoryBackend, createMemoryData, type MemoryData } from "../server/controlPlane/backends/memory.js";
@@ -13,7 +15,7 @@ import {
 import { createSfuApp } from "../server/http/createApp.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
 import { getRoomChannelId } from "../server/rooms.js";
-import { advanceScheduledWebinars, ensureWebinarRoomConfig } from "../server/scheduledWebinarScheduler.js";
+import { advanceScheduledWebinars, ensureWebinarRoomConfig, notifyRoomConfig } from "../server/scheduledWebinarScheduler.js";
 import { createSfuState, type SfuState } from "../server/state.js";
 import {
   clearWebinarLinkSlug,
@@ -171,5 +173,49 @@ describe("the webinar API", () => {
     expect(await call("GET", "/scheduled-webinars/by-slug/hidden-code")).not.toHaveProperty("scheduledWebinar.inviteCodeHash");
     const listed = await call("GET", "/scheduled-webinars");
     expect(listed.scheduledWebinars?.[0]).not.toHaveProperty("inviteCodeHash");
+  });
+});
+
+describe("hosts connected to the SFU that hosts a webinar's room", () => {
+  it("are told when another SFU changes or deletes the webinar, and not on a tick that changes nothing", async () => {
+    const data = createMemoryData();
+    const [hosting, other] = [sfuOn(data, "hosting"), sfuOn(data, "other")];
+    const webinar = await created(other, { linkSlug: "first-code" });
+    ensureWebinarRoomConfig(hosting, webinar);
+    const channelId = getRoomChannelId(webinar.clientId, webinar.roomId);
+    const told: string[] = [];
+    const notify = (channel: string) => told.push(channel);
+    await advanceScheduledWebinars(hosting, Date.now(), notify);
+    told.length = 0;
+
+    await advanceScheduledWebinars(hosting, Date.now(), notify);
+    expect(told).toEqual([]);
+    expect((await other.controlPlane.commit(updateWebinar(webinar.id, { linkSlug: "second-code" }, admin))).ok).toBe(true);
+    await advanceScheduledWebinars(hosting, Date.now(), notify);
+    expect(roomConfig(hosting, webinar)?.linkSlug).toBe("second-code");
+    expect(told).toEqual([channelId]);
+
+    told.length = 0;
+    expect((await other.controlPlane.commit(deleteWebinar(webinar.id, admin))).ok).toBe(true);
+    await advanceScheduledWebinars(hosting, Date.now(), notify);
+    expect(told).toEqual([channelId]);
+  });
+
+  it("get the room's new webinar settings as webinar:configChanged", async () => {
+    const data = createMemoryData();
+    const hosting = sfuOn(data, "hosting");
+    const webinar = await created(hosting, { linkSlug: "shared-code" });
+    ensureWebinarRoomConfig(hosting, webinar);
+    const channelId = getRoomChannelId(webinar.clientId, webinar.roomId);
+    hosting.rooms.set(channelId, { channelId, id: webinar.roomId, getWebinarAttendeeCount: () => 0 } as unknown as Room);
+    const emitted: Array<{ channel: string; event: string; snapshot: { linkSlug?: string | null } }> = [];
+    const io = {
+      to: (channel: string) => ({
+        emit: (event: string, snapshot: { linkSlug?: string | null }) => emitted.push({ channel, event, snapshot }),
+      }),
+    } as unknown as SocketIOServer;
+
+    notifyRoomConfig(hosting, () => io)(channelId);
+    expect(emitted).toMatchObject([{ channel: channelId, event: "webinar:configChanged", snapshot: { linkSlug: "shared-code" } }]);
   });
 });
