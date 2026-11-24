@@ -103,9 +103,10 @@ describe("room occupancy for a viewer", () => {
       const state = setup();
       seatGuest(state);
       const url = await start(state);
-      expect((await occupancy(url, "guest-viewer", ["proof-g"])).viewerIsMember).toBe(true);
-      expect((await occupancy(url, "guest-viewer", ["proof-other"])).viewerIsMember).toBe(false);
-      expect((await occupancy(url, "guest-viewer")).viewerIsMember).toBe(false);
+      expect((await occupancy(url, "guest-tab-2", ["proof-g"])).viewerIsMember).toBe(true);
+      expect((await occupancy(url, undefined, ["proof-g"])).viewerIsMember).toBe(true);
+      expect((await occupancy(url, undefined, ["proof-other"])).viewerIsMember).toBe(false);
+      expect((await occupancy(url, "guest-tab-2")).viewerIsMember).toBe(false);
     });
 
     it("stops vouching for every tab of the guest once a host removes one", async () => {
@@ -113,7 +114,7 @@ describe("room occupancy for a viewer", () => {
       const room = seatGuest(state);
       room.removeUser("guest-gp_first-tab");
       const url = await start(state);
-      expect((await occupancy(url, "guest-viewer", ["proof-g"])).viewerIsMember).toBe(false);
+      expect((await occupancy(url, undefined, ["proof-g"])).viewerIsMember).toBe(false);
     });
   });
 

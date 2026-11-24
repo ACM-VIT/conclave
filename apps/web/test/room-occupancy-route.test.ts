@@ -89,11 +89,16 @@ describe("who may see a room's headcount", () => {
       );
       expect(response.status).toBe(200);
     }
-    for (const call of fetchMock.mock.calls) {
-      const asked = new URL(String((call as unknown[])[0]));
-      expect(asked.searchParams.getAll("viewerProof")).toEqual([joined.claims.guestProof]);
+    const asked = fetchMock.mock.calls.map((call) => new URL(String((call as unknown[])[0])));
+    for (const url of asked) {
+      expect(url.searchParams.getAll("viewerProof")).toEqual([joined.claims.guestProof]);
     }
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(asked.map((url) => url.searchParams.get("viewerKey"))).toEqual([
+      "guest-tab-2",
+      "guest-tab-2",
+      null,
+      null,
+    ]);
   });
 
   it("sends no pass for a request another site made", async () => {

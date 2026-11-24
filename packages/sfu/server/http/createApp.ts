@@ -827,7 +827,8 @@ export const createSfuApp = ({
         )
       );
     };
-    const viewerIsMember = viewerKey ? vouchesFor(viewerKey) : undefined;
+    const viewerIsMember =
+      viewerKey || viewerProofs.length > 0 ? vouchesFor(viewerKey ?? "") : undefined;
     res.set("Cache-Control", "no-store");
     if (!room) {
       return res.json({ room: null, viewerIsMember });

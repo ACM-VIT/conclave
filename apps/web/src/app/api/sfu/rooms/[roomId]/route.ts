@@ -34,10 +34,8 @@ const toNonNegativeInteger = (value: unknown): number => {
 };
 
 // The identity the SFU knows this visitor by, built the way /api/sfu/join
-// builds it: the signed-in account, else the tab's guest session.
-const GUEST_VIEWER_KEY = "guest-viewer";
-
-type Viewer = { key: string; guestProofs: string[] };
+// builds it: the signed-in account, else the guest's session and passes.
+type Viewer = { key: string | null; guestProofs: string[] };
 
 const resolveViewer = async (request: Request, sfuSecret: string): Promise<Viewer | null> => {
   const session = await auth.api
@@ -51,7 +49,7 @@ const resolveViewer = async (request: Request, sfuSecret: string): Promise<Viewe
   if (sessionId && SESSION_ID_PATTERN.test(sessionId)) {
     return { key: `guest-${sessionId}`, guestProofs };
   }
-  return guestProofs.length > 0 ? { key: GUEST_VIEWER_KEY, guestProofs } : null;
+  return guestProofs.length > 0 ? { key: null, guestProofs } : null;
 };
 
 // Only people in the room, its hosts, people let in and invitees see the
@@ -77,7 +75,7 @@ export async function GET(request: Request, context: RouteContext) {
   const results = await Promise.allSettled(resolveSfuUrls().map(async (sfuUrl) => {
     const targetUrl = new URL(`/rooms/${encodeURIComponent(normalizedRoomId)}`, sfuUrl);
     if (clientId) targetUrl.searchParams.set("clientId", clientId);
-    targetUrl.searchParams.set("viewerKey", viewer.key);
+    if (viewer.key) targetUrl.searchParams.set("viewerKey", viewer.key);
     for (const proof of viewer.guestProofs) targetUrl.searchParams.append("viewerProof", proof);
     const response = await fetch(targetUrl.toString(), {
       headers: {
