@@ -190,7 +190,7 @@ deployed serving the target by the serving rule, its public route included
 and answering healthy; any failed look fails the run (exit 1), and the same
 look decides whether the release is recorded.
 
-The fuzz test runs fixed cases (the four recovery holes found in review)
+The fuzz test runs fixed cases (every recovery hole found in review)
 and seeded fault plans: one or two instances, a canary that passes or fails,
 crashes at random steps with reruns, containers that exit at boot, `/status`
 outages, public routes that answer 502, refused drains, and calls joining
@@ -244,11 +244,11 @@ if it is hung, and rerun.
 
 | Code | Meaning | What to do |
 | --- | --- | --- |
-| 0 | Every instance is on the new commit and passed its canary. | Nothing. |
+| 0 | Every instance this run deployed passed its canary and, at one final look, serves the new commit by the serving rule, its public route answering healthy. No other state exits 0. | Nothing. |
 | 3 | A meeting outlasted the drain deadline. That instance was put back into service untouched; or, if the call reached it after its canary, or it needs a rollback with calls still on it, it was left drained, its journal kept. | Rerun later. Instances already deployed are skipped, and a pending rollback finishes once its calls end. |
 | 4 | The canary failed. The instance runs the image it last served calls on, healthy and taking meetings. | Read the canary lines in the log, fix forward, deploy again. |
 | 5 | The canary failed and the instance could not be brought back: it is down or stopped, or it could not be rolled back without risking its calls (its `/status` does not answer, or it will not stay drained) and was left as it is with its journal kept. | Act now: read the log. Fix what stopped it (its `/status`, its route), then rerun, which finishes the rollback; or start it on a known-good release (`--rollback`, or fix forward and deploy). |
-| 1 | Another instance is not serving, a public URL does not reach its instance, an instance deployed in this run stopped serving before it ended, the deploy journal cannot be written, or anything else (preflight, build, Docker). Nothing after the failing step was drained. | Read the log. For a public URL, follow the steps above: fix the route, pass `--preflight-only`, rerun. |
+| 1 | Another instance is not serving, a public URL does not reach its instance, an instance deployed in this run is not serving at the final look (its public route answering anything but healthy included), the deploy journal cannot be written, or anything else (preflight, build, Docker). Nothing after the failing step was drained. | Read the log. For a public URL, follow the steps above: fix the route, pass `--preflight-only`, rerun. |
 
 During an exit 3, 4 or 5 the two instances can run different commits. That is the
 same mixed state every blue-green deploy passes through, and the SFU tolerates
