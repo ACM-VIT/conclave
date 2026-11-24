@@ -438,6 +438,7 @@ export function startTelemetry(): void {
       }
     },
     shape: rebuilt(posthogKey),
+    deadline: typeof AbortSignal.timeout === "function" ? (ms) => AbortSignal.timeout(ms) : undefined,
     newId: randomUuid,
     store: createBatchStore(() => localStorage),
     lock: replayLock,

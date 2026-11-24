@@ -86,6 +86,7 @@ const harness = ({
   clock = { now: at },
   ignoreAbort = false,
   shape = undefined as ((event: OutboxEvent) => OutboxEvent | null) | undefined,
+  deadline = undefined as ((ms: number) => AbortSignal) | undefined,
 } = {}) => {
   const timers: Array<{ at: number; fn: () => void; id: number }> = [];
   let ids = 0;
@@ -135,6 +136,7 @@ const harness = ({
     lock,
     onStale: (batches) => dropped.push(countDropped(batches)),
     ...(shape ? { shape } : {}),
+    ...(deadline ? { deadline } : {}),
   });
   const advance = async (ms: number) => {
     const until = clock.now + ms;
@@ -644,6 +646,29 @@ describe("what a batch carries when it is sent", () => {
     const list = sentHuge.properties.$exception_list as Array<{ type: string; stacktrace?: { frames: unknown[] } }>;
     expect(list[0].type).toBe("TypeError");
     expect((list[0].stacktrace?.frames.length ?? 0) < frames.length).toBe(true);
+  });
+});
+
+describe("a request's own deadline", () => {
+  it("cuts a request off even when the tab's timers do not run, and the batch is tried again", async () => {
+    const deadlines: AbortController[] = [];
+    const h = harness({
+      answers: ["pending", 200],
+      deadline: () => {
+        const limit = new AbortController();
+        deadlines.push(limit);
+        return limit.signal;
+      },
+    });
+    h.outbox.add(event(), { urgent: true });
+    await settle();
+    expect(h.posts).toHaveLength(1);
+
+    deadlines[0].abort();
+    await settle();
+    expect(h.posts[0].signal?.aborted).toBe(true);
+    await h.advance(2000);
+    expect(h.posts).toHaveLength(2);
   });
 });
 

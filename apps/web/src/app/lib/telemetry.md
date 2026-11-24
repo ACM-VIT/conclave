@@ -60,7 +60,12 @@ one owner at a time:
   away too: a batch in backoff, or beaconed less than 30 s ago, is saved, not
   sent again, however many lifecycle events follow. Every request has a 15 s
   deadline (`/ingest` itself allows 2 s for a manifest and 10 s for
-  PostHog); at the deadline it is aborted and counts as no answer.
+  PostHog); at the deadline it is aborted and counts as no answer. The
+  request carries that deadline itself, as an `AbortSignal.timeout`, so it
+  ends even when the tab's timer does not run. A tab the browser freezes runs
+  neither until it thaws, so its request can outlast the lease and meet
+  another tab's replay; `/ingest` does not forward again an event PostHog
+  already took (Retries, below).
 - **Saved.** On `visibilitychange` to hidden, on `pagehide` and on `freeze`,
   everything queued and every batch waiting in memory that is due goes by
   beacon (a keepalive `fetch`), within one 56 KB budget for every keepalive

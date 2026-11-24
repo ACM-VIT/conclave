@@ -66,6 +66,7 @@ export type OutboxDeps = {
   lock: (replay: () => Promise<void>) => void;
   onStale: (dropped: readonly StoredBatch[]) => void;
   shape?: (event: OutboxEvent) => OutboxEvent | null;
+  deadline?: (ms: number) => AbortSignal;
 };
 
 type InFlight = { keepalive: boolean };
@@ -328,6 +329,8 @@ export function createOutbox(deps: OutboxDeps) {
     if (keepalive) keepaliveBytes += bytes;
     batch.inFlight = { keepalive };
     const cancel = new AbortController();
+    const limit = deps.deadline?.(SEND_DEADLINE_MS);
+    const signal = limit && typeof AbortSignal.any === "function" ? AbortSignal.any([cancel.signal, limit]) : cancel.signal;
     let settled = false;
     let deadline: unknown = null;
     const settle = (reply: Reply | null): void => {
@@ -353,7 +356,7 @@ export function createOutbox(deps: OutboxDeps) {
       cancel.abort();
       settle(null);
     }, SEND_DEADLINE_MS);
-    deps.post(body, keepalive, cancel.signal).then(settle, () => settle(null));
+    deps.post(body, keepalive, signal).then(settle, () => settle(null));
   };
 
   const replayPass = (): void => {
