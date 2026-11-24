@@ -53,7 +53,7 @@ const pollBallot = s.object({
 const pollExportPage = s.object({
   poll: pollCard,
   results: pollResults,
-  /** One page of ballots, oldest first. */
+  /** One page of ballots, in the order they are stored. */
   ballots: s.array(pollBallot, { max: 20_000 }),
   /** Where the next page starts, or null after the last one. */
   nextOffset: s.nullable(s.int({ min: 0 })),
@@ -191,7 +191,7 @@ export const buildPollCsv = ({ poll, ballots }: PollExport): string => {
     }),
     "",
     csvRow(["Name", "Answer", "Voted at"]),
-    ...ballots.map((ballot) =>
+    ...[...ballots].sort((a, b) => a.votedAt - b.votedAt).map((ballot) =>
       csvRow([
         ballot.name,
         ballot.optionIds.map((id) => optionText.get(id) ?? id).join("; "),

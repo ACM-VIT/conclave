@@ -42,6 +42,20 @@ describe("poll results", () => {
 });
 
 describe("poll CSV export", () => {
+  it("lists ballots oldest first even when a merge stored one after later ones", () => {
+    const csv = buildPollCsv({
+      poll: poll(),
+      results: { voterCount: 3, votes: { o1: 2, o2: 1 } },
+      ballots: [
+        { name: "Ben", optionIds: ["o2"], votedAt: Date.UTC(2026, 10, 22, 10) },
+        { name: "Cy", optionIds: ["o1"], votedAt: Date.UTC(2026, 10, 22, 11) },
+        { name: "Gita", optionIds: ["o1"], votedAt: Date.UTC(2026, 10, 22, 9) },
+      ],
+    });
+
+    expect(csv.split("\r\n").slice(-4, -1).map((line) => line.split(",")[0])).toEqual(["Gita", "Ben", "Cy"]);
+  });
+
   it("lists tallies and every ballot", () => {
     const csv = buildPollCsv({
       poll: poll({ status: "ended", choiceMode: "multiple" }),
