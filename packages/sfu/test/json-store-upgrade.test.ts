@@ -15,6 +15,7 @@ import {
   scheduledWebinarJsonStore,
 } from "../server/scheduledWebinars.js";
 import {
+  createEventType,
   createSchedulingPersistence,
   createSchedulingStore,
   ensureSchedulingProfile,
@@ -312,6 +313,77 @@ describe("the canonical decode of a stored timestamp", () => {
 
   it.each(nullable.flatMap((store) => store.fields.map((field) => ({ ...store, field }))))("$name keeps a real $field", ({ decode, wrap, row, field }) => {
     expect(JSON.stringify(decode(wrap(withField(row(), field, 1_716_200_000_000))))).toContain(`"${field}":1716200000000`);
+  });
+});
+
+describe("the JSON store merger, for every claim a store declares", () => {
+  type Row = { [field: string]: unknown };
+  type Claim = { key: (row: Row) => string; holds?: (row: Row) => boolean };
+  type Collection = { rows: (snapshot: unknown) => Row[]; key: (row: Row) => string; claims: { [name: string]: Claim } };
+  type Adapter = {
+    decode: (data: unknown) => unknown;
+    write: (path: string, snapshot: unknown) => void;
+    build: (base: unknown, rows: { [name: string]: unknown[] }) => unknown;
+    collections: { [name: string]: Collection };
+  };
+
+  const twoOfEach = (name: string): unknown => {
+    if (name === "scheduled meetings") {
+      const meetings = createScheduledMeetingStore();
+      return [0, 1].map((n) => createScheduledMeeting(meetings, { title: `Meeting ${n}`, scheduledStartAt: later + n * 3_600_000 }, HOST));
+    }
+    if (name === "scheduled webinars") {
+      const webinars = createScheduledWebinarStore();
+      return [0, 1].map((n) => createScheduledWebinar(webinars, { title: `Webinar ${n}`, scheduledStartAt: later, linkSlug: `webinar-${n}` }, HOST).webinar);
+    }
+    const scheduling = createSchedulingStore();
+    const profiles = [0, 1].map((n) => ensureSchedulingProfile(scheduling, { clientId: "conclave", userId: `user-${n}`, email: `host-${n}@example.test` }));
+    return {
+      profiles,
+      availability: [],
+      eventTypes: profiles.map((profile, n) => createEventType(scheduling, profile, { title: `Event ${n}`, slug: `event-${n}` })),
+      calendars: [],
+    };
+  };
+
+  const adapters: Array<[Store, Adapter]> = [
+    [stores[0], scheduledMeetingJsonStore as unknown as Adapter],
+    [stores[1], scheduledWebinarJsonStore as unknown as Adapter],
+    [stores[2], schedulingJsonStore as unknown as Adapter],
+  ];
+  const cases = adapters.flatMap(([store, adapter]) =>
+    Object.entries(adapter.collections).flatMap(([collection, declared]) =>
+      Object.keys(declared.claims).map((claim) => ({ store, adapter, collection, claim, label: `${store.name} ${collection}` })),
+    ),
+  );
+
+  const rivalFor = (declared: Collection, claim: Claim, owner: Row, other: Row): Row => {
+    let rival = { ...other };
+    for (const field of Object.keys(owner)) {
+      if (claim.key(rival) === claim.key(owner)) break;
+      const next = { ...rival, [field]: owner[field] };
+      if (declared.key(next) !== declared.key(owner)) rival = next;
+    }
+    return rival;
+  };
+
+  it.each(cases)("refuses two $label records that both claim one $claim", async ({ store, adapter, collection, claim }) => {
+    const base = adapter.decode(JSON.parse(JSON.stringify(twoOfEach(store.name))));
+    const declared = adapter.collections[collection];
+    const [owner, other] = declared.rows(base);
+    const rival = rivalFor(declared, declared.claims[claim], owner, other);
+    expect(declared.claims[claim].key(rival)).toBe(declared.claims[claim].key(owner));
+    expect(declared.key(rival)).not.toBe(declared.key(owner));
+    for (const row of [owner, rival]) expect(declared.claims[claim].holds?.(row) ?? true).toBe(true);
+
+    const withRow = (row: Row) =>
+      adapter.build(base, Object.fromEntries(Object.entries(adapter.collections).map(([name, entry]) => [name, name === collection ? [row] : entry.rows(base)])));
+    mkdirSync(dirname(activePath(store)), { recursive: true });
+    adapter.write(activePath(store), withRow(owner));
+    mkdirSync(dirname(copyPath(store)), { recursive: true });
+    adapter.write(copyPath(store), withRow(rival));
+
+    await expect(store.load()).rejects.toThrow(new RegExp(`both claim [^\\n]* in ${claim}\\.`));
   });
 });
 
