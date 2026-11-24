@@ -1217,6 +1217,7 @@ export default function MeetsClient({
     refreshScreenAudioProducerForNetworkProfile,
   } = useMeetMedia({
     isObserverMode: isWebinarAttendee,
+    deviceIntents: refs.deviceIntents,
     connectionState,
     isMuted,
     setIsMuted,

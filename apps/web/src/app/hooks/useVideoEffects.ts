@@ -40,7 +40,13 @@ import {
   VIDEO_EFFECTS_OUTPUT_MAX_HEIGHT as MAX_EFFECTS_OUTPUT_HEIGHT,
   VIDEO_EFFECTS_OUTPUT_MAX_WIDTH as MAX_EFFECTS_OUTPUT_WIDTH,
 } from "../lib/media-quality-settings";
-import { captureHeldCanvas, createHeldTrackGenerator, onCapturesReleased } from "../lib/media-captures";
+import {
+  captureGeneration,
+  captureHeldCanvas,
+  createHeldTrackGenerator,
+  holdClone,
+  onCapturesReleased,
+} from "../lib/media-captures";
 
 const SELFIE_SEGMENTATION_CDN =
   "https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1.1675465747";
@@ -4363,7 +4369,7 @@ const prewarmOutputWriterWorker = (
 
     try {
       logVideoEffects(instanceId, "output_writer_worker_prewarm_start");
-      const track = createHeldTrackGenerator(GeneratorCtor, { kind: "video" });
+      const track = createHeldTrackGenerator(GeneratorCtor, { kind: "video" }, captureGeneration());
       generatorTrack = track;
       worker = new Worker("/effects/video-effects-output-writer.js", {
         type: "module",
@@ -10117,6 +10123,7 @@ export function useVideoEffects({
   ]);
 
   useEffect(() => {
+    const pipelineGeneration = captureGeneration();
     if (
       !localPipelineActive ||
       !sourceVideoTrack ||
@@ -10834,7 +10841,7 @@ export function useVideoEffects({
       }
 
       try {
-        trackProcessorSourceTrack = sourceVideoTrack.clone();
+        trackProcessorSourceTrack = holdClone(sourceVideoTrack, pipelineGeneration);
         if ("contentHint" in trackProcessorSourceTrack) {
           trackProcessorSourceTrack.contentHint = "motion";
         }
@@ -12061,7 +12068,7 @@ export function useVideoEffects({
       }
 
       try {
-        const generatorTrack = createHeldTrackGenerator(GeneratorCtor, { kind: "video" });
+        const generatorTrack = createHeldTrackGenerator(GeneratorCtor, { kind: "video" }, pipelineGeneration);
         if ("contentHint" in generatorTrack) {
           generatorTrack.contentHint = "motion";
         }
@@ -12155,7 +12162,7 @@ export function useVideoEffects({
       }
 
       try {
-        const generatorTrack = createHeldTrackGenerator(GeneratorCtor, { kind: "video" });
+        const generatorTrack = createHeldTrackGenerator(GeneratorCtor, { kind: "video" }, pipelineGeneration);
         outputGeneratorWriter = generatorTrack.writable.getWriter();
         outputVideoFrameCtor = VideoFrameCtor;
         outputWriterMode = "main-thread";
@@ -12187,7 +12194,7 @@ export function useVideoEffects({
 
     const createCanvasCaptureOutput = (): ProcessedOutput | null => {
       if (typeof canvas.captureStream === "function") {
-        const capturedStream = captureHeldCanvas(canvas, TARGET_FPS);
+        const capturedStream = captureHeldCanvas(canvas, TARGET_FPS, pipelineGeneration);
         const [capturedTrack] = capturedStream.getVideoTracks() as [
           CanvasCaptureMediaStreamTrack | undefined,
         ];

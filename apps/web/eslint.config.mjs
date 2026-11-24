@@ -92,6 +92,11 @@ export default tseslint.config(
           message:
             "Create track generators with createHeldTrackGenerator from lib/media-captures, so ending the call stops them.",
         },
+        {
+          selector: "CallExpression[callee.property.name='clone'][arguments.length=0]",
+          message:
+            "Clone media tracks with holdClone from lib/media-captures, so ending the call stops the clone.",
+        },
       ],
     },
   },
