@@ -269,4 +269,12 @@ test("pnpm scripts in a partial image workspace must skip the dependency reinsta
   }
   assert.deepEqual(pnpmScriptProblems("x", "FROM node\nRUN npm install --global pnpm@12 && pnpm install --filter a... --frozen-lockfile\nWORKDIR /app/a\nRUN ./node_modules/.bin/tsc\n"), []);
   assert.equal(pnpmScriptProblems("x", "FROM node\nRUN pnpm --filter a build\n").length, 1);
+  assert.deepEqual(pnpmScriptProblems("x", `${install}RUN ["pnpm", "-C", "packages/shared-browser", "run", "build"]\n`), [
+    "x: line 4: `pnpm -C packages/shared-browser run build` runs pnpm in a partial image workspace; pass --config.verify-deps-before-run=false or call the binary directly",
+  ]);
+  assert.equal(pnpmScriptProblems("x", `${install}RUN ["sh", "-c", "cd packages/shared-browser && pnpm run build"]\n`).length, 1);
+  assert.equal(pnpmScriptProblems("x", `${install}RUN --mount=type=cache,target=/root/.cache pnpm -C a run build\n`).length, 1);
+  assert.deepEqual(pnpmScriptProblems("x", `${install}RUN ["pnpm", "-C", "a", "--config.verify-deps-before-run=false", "run", "build"]\n`), []);
+  assert.throws(() => pnpmScriptProblems("x", `${install}RUN <<EOF\nset -e\npnpm -C packages/shared-browser run build\nEOF\n`), UnsupportedShape);
+  assert.deepEqual(pnpmScriptProblems("x", `${install}RUN <<EOF\napt-get update\nEOF\n`), []);
 });

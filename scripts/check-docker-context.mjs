@@ -92,13 +92,26 @@ function contextGap(file, { contextFiles, matcher, ignoreFile }) {
   return matcher.excluded(file) ? `which ${ignoreFile} excludes` : "which is tracked but missing from the build context";
 }
 
+const SHELLS = new Set(["sh", "bash", "/bin/sh", "/bin/bash"]);
+
+function runCommandText({ line, text, exec, heredoc }) {
+  if (heredoc !== null) {
+    if (/(^|[^\w-])pnpm([^\w-]|$)/.test(`${text}\n${heredoc}`)) throw new UnsupportedShape(`line ${line}: a heredoc RUN that calls pnpm`);
+    return "";
+  }
+  if (!exec) return text;
+  const flag = exec.findIndex((arg) => /^-[a-z]*c[a-z]*$/.test(arg));
+  if (SHELLS.has(exec[0]) && flag !== -1) return exec[flag + 1] ?? "";
+  return exec.join(" ");
+}
+
 export function pnpmScriptProblems(dockerfile, text) {
-  return runInstructions(text).flatMap(({ line, text: command }) =>
-    command
+  return runInstructions(text).flatMap((run) =>
+    runCommandText(run)
       .split(/&&|\|\||;/)
       .map((segment) => segment.trim())
       .filter((segment) => /(^|\s)pnpm(\s|$)/.test(segment) && !/(^|\s)pnpm(\s+\S+)*\s+(install|i)(\s|$)/.test(segment) && !segment.includes(VERIFY_DEPS_OFF))
-      .map((segment) => `${dockerfile}: line ${line}: \`${segment}\` runs pnpm in a partial image workspace; pass ${VERIFY_DEPS_OFF} or call the binary directly`),
+      .map((segment) => `${dockerfile}: line ${run.line}: \`${segment}\` runs pnpm in a partial image workspace; pass ${VERIFY_DEPS_OFF} or call the binary directly`),
   );
 }
 
