@@ -350,4 +350,21 @@ describe("loading data saved by the previous release", () => {
       await expectRestartsChangeNothing(store);
     },
   );
+
+  it.skipIf(!hasRedis)(
+    "starts when the only calendar it cannot decrypt was already deleted in the old Redis store",
+    async () => {
+      vi.stubEnv("SFU_PERSISTENCE_REDIS_URL", redis!.url);
+      const prefix = String(process.env.SFU_PERSISTENCE_REDIS_KEY_PREFIX);
+      await writeLegacyRedis(redis!.url, prefix);
+      const client = createClient({ url: redis!.url });
+      await client.connect();
+      await client.hSet(`${prefix}:scheduling:tombstones`, { [`calendar:${profile.id}`]: "990" });
+      await client.quit();
+      vi.stubEnv("SCHEDULING_TOKEN_SECRET", "a-rotated-secret");
+      const store = await start();
+      expect(await store.read(hostCalendar(profile.id))).toBeNull();
+      expect((await store.read((view) => view.all("profile"))).map(({ value }) => value.id)).toContain(profile.id);
+    },
+  );
 });

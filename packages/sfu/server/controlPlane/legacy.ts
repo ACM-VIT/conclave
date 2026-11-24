@@ -244,8 +244,8 @@ const schedulingRecords = (raw: RawScheduling, where: string): LegacyRecord[] =>
       dropped("calendar", entry);
       continue;
     }
-    unreadable.push(...unreadableTokens(entry, value));
     if (tombstoned("calendar", value.profileId, value.updatedAt)) continue;
+    unreadable.push(...unreadableTokens(entry, value));
     records.push({ kind: "calendar", value, stamp: value.updatedAt });
   }
   if (unreadable.length > 0) {
