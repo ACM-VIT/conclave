@@ -291,3 +291,48 @@ it("starts the download again when a merge changes the poll's votes between page
   expect(csv.match(/Gita, first tab/g)).toHaveLength(1);
   expect(csv.match(/Ana,/g)).toHaveLength(1);
 });
+
+it("finishes a download from an older server, whose pages carry no rewrite count", async () => {
+  await serve([card("p1")], { actions: ["create"], needsIdentity: [], queries: ["exportBallots"] });
+  const saved: Blob[] = [];
+  const createUrl = vi.spyOn(URL, "createObjectURL").mockImplementation((file) => {
+    saved.push(file as Blob);
+    return "blob:poll";
+  });
+  const revokeUrl = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+  const ballot = (name: string, votedAt: number) => ({ name, optionIds: ["o1"], votedAt });
+  const olderPage = (ballots: unknown[], nextOffset: number | null) => ({
+    ok: true,
+    value: { poll: card("p1").value, results: { voterCount: 2, votes: { o1: 2 } }, ballots, nextOffset },
+  });
+  const queries = () => sent.filter((entry) => entry.event === AUTHORITY_EVENTS.query);
+
+  let outcome: unknown;
+  await act(async () => {
+    void polls.exportCsv("p1").then((result) => {
+      outcome = result;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  await act(async () => {
+    queries()[0].ack!(olderPage([ballot("Ana", 1)], 1));
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  await act(async () => {
+    queries()[1].ack!(olderPage([ballot("Ben", 2)], null));
+    await vi.advanceTimersByTimeAsync(0);
+  });
+
+  createUrl.mockRestore();
+  revokeUrl.mockRestore();
+  vi.useRealTimers();
+  const csv = saved.length === 1 ? await saved[0].text() : "";
+
+  expect(queries().map((entry) => entry.payload.input)).toEqual([
+    { pollId: "p1", offset: 0 },
+    { pollId: "p1", offset: 1 },
+  ]);
+  expect(outcome).toEqual({ ok: true });
+  expect(csv).toMatch(/Ana,Yes,[^]*Ben,Yes,/);
+});
+

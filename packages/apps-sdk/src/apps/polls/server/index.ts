@@ -197,7 +197,7 @@ export const pollsAuthority = defineAuthority({
       read(_ctx, db, input) {
         const poll = db.get("polls", key(input.pollId));
         if (!poll) return reject("not-found");
-        if ((input.offset ?? 0) > 0 && input.rewrites !== poll.ballotRewrites) reject("export-changed");
+        if ((input.offset ?? 0) > 0 && (input.rewrites ?? 0) !== poll.ballotRewrites) reject("export-changed");
         const ballots: PollBallot[] = [];
         let offset = input.offset ?? 0;
         let bytes = 0;

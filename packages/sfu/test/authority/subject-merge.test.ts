@@ -191,7 +191,7 @@ describe("a poll export with a merge between its pages", () => {
     }
     return { instance, pollId, now };
   };
-  const exportAll = (secondTabVotes: boolean, mergeBeforePage: number | null) => {
+  const exportAll = (secondTabVotes: boolean, mergeBeforePage: number | null, tab: "this build" | "an older build" = "this build") => {
     const { instance, pollId, now } = pollWithBallots(secondTabVotes);
     let at = now;
     const names: string[] = [];
@@ -206,8 +206,9 @@ describe("a poll export with a merge between its pages", () => {
         merged = true;
       }
       at += 1_000;
-      const page = instance.query(host, "exportBallots", { pollId, offset, rewrites }, at);
+      const page = instance.query(host, "exportBallots", tab === "this build" ? { pollId, offset, rewrites } : { pollId, offset }, at);
       if (!page.ok) {
+        if (tab === "an older build") return { names, pages, restarts, refused: page };
         if (page.code !== "rejected" || page.reason !== "export-changed" || restarts > 0) {
           throw new Error(`page at ${offset} failed: ${JSON.stringify(page)}`);
         }
@@ -223,7 +224,7 @@ describe("a poll export with a merge between its pages", () => {
       offset = value.nextOffset;
       rewrites = value.rewrites;
     }
-    return { names, pages, restarts };
+    return { names, pages, restarts, refused: null };
   };
 
   it.each([
@@ -243,6 +244,22 @@ describe("a poll export with a merge between its pages", () => {
     expect(outcomes).toEqual(
       outcomes.map(({ between }) => ({ between, sameAsAfterTheMerge: true, restarts: 1 })),
     );
+  });
+
+  it("lets an older build's tab, which sends no rewrite count, export every page while no merge has rewritten the poll", () => {
+    const thisBuild = exportAll(true, null);
+    const olderTab = exportAll(true, null, "an older build");
+
+    expect(olderTab.refused).toBeNull();
+    expect(olderTab.pages).toBeGreaterThan(2);
+    expect(olderTab.names).toEqual(thisBuild.names);
+  });
+
+  it("refuses an older build's tab a later page once a merge has rewritten the poll, rather than give it the wrong ballots", () => {
+    const afterTheMerge = exportAll(true, 1, "an older build");
+
+    expect(afterTheMerge.refused).toEqual({ ok: false, code: "rejected", reason: "export-changed" });
+    expect(afterTheMerge.restarts).toBe(0);
   });
 });
 
