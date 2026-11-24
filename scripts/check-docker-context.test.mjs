@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -222,7 +222,7 @@ const fixturePackage = {
 test("runtime state anywhere in the context fails the check", (t) => {
   const withoutStateRules = dockerIgnore.split("\n").filter((line) => !/data|sqlite|\.db|-wal|-shm|-journal/.test(line)).join("\n");
   const problems = contextProblems(repoRoot, { dockerIgnore: withoutStateRules });
-  for (const probe of ["packages/sfu/data/conclave.sqlite", "packages/sfu/probe.sqlite-wal", "packages/apps-sdk/src/probe.db", "packages/ai/probe.db-journal"]) {
+  for (const probe of ["packages/sfu/data/scheduling.json", "packages/sfu/probe.sqlite-wal", "packages/apps-sdk/src/probe.db", "packages/ai/probe.db-journal"]) {
     assert.ok(problems.includes(`.dockerignore: ${probe} would enter the build context`), probe);
   }
   const root = fixture(t, { "packages/a/data/conclave.sqlite": "", "packages/a/src/cache.sqlite-shm": "", "packages/a/src/index.ts": "" });
@@ -256,4 +256,98 @@ test("compose builds inherited through a YAML merge key are found", (t) => {
     "docker-compose.yml": "x-sfu: &sfu\n  build:\n    context: .\n    dockerfile: packages/sfu/Dockerfile\nservices:\n  edge:\n    <<: *sfu\n    environment: { A: b }\n",
   });
   assert.deepEqual(rootContextBuilds(root).map(({ service, dockerfile }) => [service, dockerfile]), [["edge", "packages/sfu/Dockerfile"]]);
+});
+
+test("removing any single .dockerignore rule fails the check", () => {
+  const lines = dockerIgnore.split("\n");
+  const rules = lines.map((line, index) => [line.trim(), index]).filter(([line]) => line && !line.startsWith("#"));
+  assert.ok(rules.length > 0);
+  const silent = rules
+    .filter(([, index]) => contextProblems(repoRoot, { dockerIgnore: lines.filter((_, i) => i !== index).join("\n") }).length === 0)
+    .map(([line]) => line);
+  assert.deepEqual(silent, []);
+});
+
+test("dropping the leading ** lets the git directory and unneeded tracked files in", () => {
+  const problems = contextProblems(repoRoot, { dockerIgnore: dockerIgnore.split("\n").filter((line) => line.trim() !== "**").join("\n") });
+  assert.ok(problems.includes(".dockerignore: .git/config would enter the build context"), JSON.stringify(problems.slice(0, 5)));
+  assert.ok(problems.includes(".dockerignore: apps/web/package.json is tracked and in the build context, but no root-context image needs it"));
+  assert.ok(problems.includes(".dockerignore: README.md is tracked and in the build context, but no root-context image needs it"));
+});
+
+test("a runtime state folder is excluded whatever file types it holds", () => {
+  const withoutData = dockerIgnore.split("\n").filter((line) => line.trim() !== "**/data").join("\n");
+  const problems = contextProblems(repoRoot, { dockerIgnore: withoutData });
+  assert.ok(problems.includes(".dockerignore: packages/sfu/data/scheduling.json would enter the build context"), JSON.stringify(problems));
+});
+
+test("the walk never descends into a directory that a later rule excludes for good", () => {
+  const { mayIncludeUnder } = dockerIgnoreMatcher(dockerIgnore);
+  for (const dir of ["packages/sfu/node_modules", "packages/apps-sdk/node_modules/.pnpm", "packages/sfu/dist", "packages/sfu/data", "apps", "node_modules", ".git"]) {
+    assert.equal(mayIncludeUnder(dir), false, dir);
+  }
+  for (const dir of ["packages", "patches"]) assert.equal(mayIncludeUnder(dir), true, dir);
+  assert.equal(dockerIgnoreMatcher("**\n!packages/sfu/\n**/node_modules\n!packages/sfu/node_modules/keep/**\n").mayIncludeUnder("packages/sfu/node_modules"), true);
+});
+
+function seededRandom(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let x = state;
+    x = Math.imul(x ^ (x >>> 15), x | 1);
+    x ^= x + Math.imul(x ^ (x >>> 7), x | 61);
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function bruteForceWalk(root, matcher) {
+  const files = [];
+  const visit = (relative) => {
+    for (const entry of readdirSync(path.join(root, relative), { withFileTypes: true })) {
+      const file = relative ? `${relative}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) visit(file);
+      else if (!matcher.excluded(file)) files.push(file);
+    }
+  };
+  visit("");
+  return files.sort();
+}
+
+test("the pruned walk finds exactly the files a full walk finds, for random trees and rule lists", (t) => {
+  const names = ["packages", "sfu", "ai", "node_modules", "dist", "data", "src", "keep"];
+  const files = ["a.ts", "b.log", "c.sqlite", "package.json", ".env"];
+  const rules = ["**", "!packages/", "!packages/sfu/", "!packages/sfu/**", "!packages/*/src/**", "**/node_modules", "**/dist", "**/data", "**/*.log", "!**/keep/**", "packages/ai", "!packages/ai/src", "*/sfu", "!**/node_modules/keep", "src", "!package.json"];
+  for (let seed = 1; seed <= 150; seed += 1) {
+    const random = seededRandom(seed);
+    const pick = (list) => list[Math.floor(random() * list.length)];
+    const tree = {};
+    for (let i = 0; i < 25; i += 1) {
+      const depth = 1 + Math.floor(random() * 4);
+      tree[[...Array.from({ length: depth }, () => pick(names)), pick(files)].join("/")] = "";
+    }
+    const root = fixture(t, tree);
+    const text = Array.from({ length: 2 + Math.floor(random() * 6) }, () => pick(rules)).join("\n");
+    const matcher = dockerIgnoreMatcher(text);
+    assert.deepEqual(walkContext(root, matcher), bruteForceWalk(root, matcher), `seed ${seed}: ${JSON.stringify(text)}`);
+  }
+});
+
+test("heredocs are read only from whole instruction arguments", () => {
+  const cases = [
+    ["shift operator in a quoted script", 'FROM node\nRUN node -e "console.log(1 << x)"\nCOPY a ./\n', [["a"]]],
+    ["shift operator in shell arithmetic", "FROM node\nRUN echo $((1 << 2))\nCOPY a ./\n", [["a"]]],
+    ["quoted heredoc marker in RUN", "FROM node\nRUN echo '<<EOF'\nCOPY a ./\n", [["a"]]],
+    ["heredoc marker in ENV", "FROM node\nENV X=<<EOF\nCOPY a ./\n", [["a"]]],
+    ["closed RUN heredoc", "FROM node\nRUN <<EOF\nCOPY not/a/copy ./\nEOF\nCOPY a ./\n", [["a"]]],
+    ["quoted and chomped RUN heredoc", "FROM node\nRUN cat <<-\"END\"\n\tCOPY not/a/copy ./\n\tEND\nCOPY a ./\n", [["a"]]],
+    ["fd heredoc", "FROM node\nRUN cat 3<<EOF\nx\nEOF\nCOPY a ./\n", [["a"]]],
+    ["inline-only COPY", "FROM node\nCOPY <<EOF /app/note.txt\nx\nEOF\n", []],
+    ["two inline COPY sources", "FROM node\nCOPY <<A <<B /app/\nx\nA\ny\nB\n", []],
+    ["mixed COPY", "FROM node\nCOPY <<EOF packages/sfu/package.json /app/\nx\nEOF\n", [["packages/sfu/package.json"]]],
+    ["mixed COPY with flags", "FROM node\nCOPY --chown=node <<'EOF' patches ./\nx\nEOF\n", [["patches"]]],
+  ];
+  for (const [name, text, expected] of cases) assert.deepEqual(copies(text), expected, name);
+  assert.throws(() => contextCopies("FROM node\nRUN cat <<EOF\nx\n"), DockerfileError);
+  assert.throws(() => contextCopies("FROM node\nCOPY <<EOF packages/sfu/package.json /app/\nx\n"), DockerfileError);
 });

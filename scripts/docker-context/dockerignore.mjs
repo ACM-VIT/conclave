@@ -59,22 +59,28 @@ export function parseDockerIgnore(text) {
     });
 }
 
+function selfAndAncestors(file) {
+  const segments = file.split("/");
+  return segments.map((_, i) => segments.slice(0, i + 1).join("/"));
+}
+
 export function dockerIgnoreMatcher(text) {
   const patterns = parseDockerIgnore(text);
   const excluded = (file) => {
-    const parents = path.posix.dirname(file) === "." ? [] : path.posix.dirname(file).split("/");
+    const paths = selfAndAncestors(file);
     let isExcluded = false;
     for (const { exclusion, regExp } of patterns) {
       if (exclusion !== isExcluded) continue;
-      const matches = regExp.test(file) || parents.some((_, i) => regExp.test(parents.slice(0, i + 1).join("/")));
-      if (matches) isExcluded = !exclusion;
+      if (paths.some((item) => regExp.test(item))) isExcluded = !exclusion;
     }
     return isExcluded;
   };
   const mayIncludeUnder = (dir) => {
+    const paths = selfAndAncestors(dir);
     const segments = dir.split("/");
-    return patterns.some(({ exclusion, literalSegments }) => {
-      if (!exclusion) return false;
+    const lastCover = patterns.findLastIndex(({ exclusion, regExp }) => !exclusion && paths.some((item) => regExp.test(item)));
+    return patterns.some(({ exclusion, literalSegments }, index) => {
+      if (!exclusion || index < lastCover) return false;
       const overlap = Math.min(segments.length, literalSegments.length);
       return segments.slice(0, overlap).every((segment, i) => segment === literalSegments[i]);
     });

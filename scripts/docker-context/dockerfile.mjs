@@ -1,7 +1,8 @@
 import { UnsupportedShape } from "./unsupported.mjs";
 
 const DIRECTIVE = /^#\s*([a-zA-Z][a-zA-Z0-9_-]*)\s*=\s*(.*?)\s*$/;
-const HEREDOC = /<<-?\s*(["']?)([A-Za-z_][A-Za-z0-9_]*)\1/g;
+const HEREDOC = /^\d*<<(-?)([^<]+)$/;
+const HEREDOC_KEYWORDS = new Set(["RUN", "COPY", "ADD"]);
 const COPY_FLAGS = new Set(["from", "chown", "chmod", "link"]);
 const CONTEXT_READERS = new Set(["ADD", "ONBUILD"]);
 const UNKNOWN = Symbol("unknown");
@@ -19,6 +20,18 @@ function splitDirectives(lines) {
   return { directives, body: lines.slice(index) };
 }
 
+function heredocsOf(text, escape) {
+  const [keyword, ...words] = splitWords(text, escape);
+  if (!HEREDOC_KEYWORDS.has(keyword.toUpperCase())) return [];
+  return words.flatMap((word) => {
+    const match = HEREDOC.exec(word);
+    if (!match) return [];
+    const names = splitWords(match[2], escape);
+    if (names.length !== 1) return [];
+    return [{ word, chomp: match[1] === "-", terminator: expandWord(names[0], {}, escape) }];
+  });
+}
+
 function logicalInstructions(lines, escape) {
   const instructions = [];
   let current = null;
@@ -31,15 +44,12 @@ function logicalInstructions(lines, escape) {
     if (current) current.text += text;
     else current = { line: i + 1, text: text.trimStart() };
     if (continues) continue;
-    const heredocs = [...current.text.matchAll(HEREDOC)].map((match) => match[2]);
-    const keyword = current.text.split(/\s+/, 1)[0].toUpperCase();
-    current.heredoc = heredocs.length > 0 && ["RUN", "COPY", "ADD"].includes(keyword);
-    if (current.heredoc) {
-      for (const terminator of heredocs) {
-        for (i += 1; i < lines.length && lines[i].replace(/^\t+/, "") !== terminator; i += 1);
-        if (i >= lines.length) throw new DockerfileError(`line ${current.line}: heredoc ${terminator} is never closed`);
-      }
+    const heredocs = heredocsOf(current.text, escape);
+    for (const { terminator, chomp } of heredocs) {
+      for (i += 1; i < lines.length && (chomp ? lines[i].replace(/^\t+/, "") : lines[i]) !== terminator; i += 1);
+      if (i >= lines.length) throw new DockerfileError(`line ${current.line}: heredoc ${terminator} is never closed`);
     }
+    current.heredocWords = new Set(heredocs.map(({ word }) => word));
     instructions.push(current);
     current = null;
   }
@@ -210,13 +220,15 @@ export function contextCopies(text, buildArgs = {}) {
       const { flags, rest } = splitFlags(args);
       const unknown = flags.find((flag) => !COPY_FLAGS.has(flag.name));
       if (unknown) throw new UnsupportedShape(`line ${instruction.line}: COPY --${unknown.name}`);
-      if (instruction.heredoc || flags.some((flag) => flag.name === "from")) continue;
+      if (flags.some((flag) => flag.name === "from")) continue;
       const exec = execForm(rest);
-      const words = exec
-        ? exec.map((word) => expandWord(word, scope, escape, { removeQuotes: false }))
-        : splitWords(rest, escape).map((word) => expandWord(word, scope, escape));
-      if (words.length < 2) throw new DockerfileError(`line ${instruction.line}: COPY needs a source and a destination`);
-      copies.push({ line: instruction.line, sources: words.slice(0, -1) });
+      const raw = exec ?? splitWords(rest, escape);
+      if (raw.length < 2) throw new DockerfileError(`line ${instruction.line}: COPY needs a source and a destination`);
+      const sources = raw
+        .slice(0, -1)
+        .filter((word) => exec || !instruction.heredocWords.has(word))
+        .map((word) => expandWord(word, scope, escape, { removeQuotes: !exec }));
+      if (sources.length) copies.push({ line: instruction.line, sources });
     }
   }
   return copies;

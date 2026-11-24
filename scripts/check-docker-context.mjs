@@ -19,7 +19,7 @@ const ARTIFACT_PROBES = [
   ".env",
   ".env.local",
   "probe.log",
-  "data/conclave.sqlite",
+  "data/scheduling.json",
   "probe.sqlite",
   "probe.sqlite3",
   "probe.db",
@@ -27,6 +27,7 @@ const ARTIFACT_PROBES = [
   "probe.sqlite-shm",
   "probe.db-journal",
 ];
+const ROOT_PROBES = [".git/config"];
 const WILDCARD = /[*?[]/;
 
 export function workspacePackages(root = repoRoot) {
@@ -74,9 +75,16 @@ export function artifactProblems(ignoreFile, matcher, files) {
   const onDisk = files.filter((file) => ARTIFACT_PATH.test(file)).map((file) => `${ignoreFile}: ${file} is on disk and would enter the build context`);
   const probes = contextDirectories(files)
     .flatMap((dir) => ARTIFACT_PROBES.map((probe) => (dir ? `${dir}/${probe}` : probe)))
+    .concat(ROOT_PROBES)
     .filter((probe) => !matcher.excluded(probe))
     .map((probe) => `${ignoreFile}: ${probe} would enter the build context`);
   return [...onDisk, ...probes];
+}
+
+export function unneededProblems(ignoreFile, contextFiles, tracked, needs) {
+  return tracked
+    .filter((file) => contextFiles.has(file) && !needs.some((need) => file === need || file.startsWith(`${need}/`)))
+    .map((file) => `${ignoreFile}: ${file} is tracked and in the build context, but no root-context image needs it`);
 }
 
 export function imagePackages(dockerfile, sources, packages) {
@@ -91,7 +99,7 @@ function contextGap(file, { contextFiles, matcher, ignoreFile }) {
   return matcher.excluded(file) ? `which ${ignoreFile} excludes` : "which is tracked but missing from the build context";
 }
 
-export function imageProblems(root, build, { packages, tracked, contextFiles, matcher, ignoreFile }) {
+export function imageProblems(root, build, { packages, tracked, contextFiles, matcher, ignoreFile, needs = [] }) {
   const problems = [];
   const sources = [];
   const text = readFileSync(path.join(root, build.dockerfile), "utf8");
@@ -115,8 +123,10 @@ export function imageProblems(root, build, { packages, tracked, contextFiles, ma
       }
     }
   }
+  needs.push(...sources);
   for (const name of imagePackages(build.dockerfile, sources, packages)) {
     const { dir } = packages.get(name);
+    needs.push(dir);
     for (const file of sourceFiles(dir, tracked).filter((item) => !TEST_PATH.test(item))) {
       const gap = contextGap(file, context);
       if (gap) problems.push(`${build.dockerfile}: ${name} needs ${file}, ${gap}`);
@@ -150,11 +160,21 @@ export function contextProblems(root = repoRoot, { dockerIgnore } = {}) {
       const text = dockerIgnore ?? (existsSync(path.join(root, ignoreFile)) ? readFileSync(path.join(root, ignoreFile), "utf8") : "");
       const matcher = dockerIgnoreMatcher(text);
       const files = walkContext(root, matcher);
-      contexts.set(ignoreFile, { matcher, contextFiles: new Set(files) });
+      contexts.set(ignoreFile, { matcher, contextFiles: new Set(files), needs: [], complete: true });
       problems.push(...artifactProblems(ignoreFile, matcher, files));
     }
-    const { matcher, contextFiles } = contexts.get(ignoreFile);
-    problems.push(...failClosed(build.dockerfile, () => imageProblems(root, build, { packages, tracked, contextFiles, matcher, ignoreFile })));
+    const group = contexts.get(ignoreFile);
+    const { matcher, contextFiles, needs } = group;
+    let read = false;
+    problems.push(...failClosed(build.dockerfile, () => {
+      const result = imageProblems(root, build, { packages, tracked, contextFiles, matcher, ignoreFile, needs });
+      read = true;
+      return result;
+    }));
+    if (!read) group.complete = false;
+  }
+  for (const [ignoreFile, { contextFiles, needs, complete }] of contexts) {
+    if (complete) problems.push(...unneededProblems(ignoreFile, contextFiles, tracked, needs));
   }
   return [...new Set(problems)];
 }
