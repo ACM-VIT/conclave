@@ -118,7 +118,9 @@ try {
   }
 }
 
-Write-Host "Deploying shared browser service..."
+$deployId = [guid]::NewGuid().ToString("N")
+[Environment]::SetEnvironmentVariable("BROWSER_SERVICE_DEPLOY_ID", $deployId, "Process")
+Write-Host "Deploying shared browser service (deploy $deployId)..."
 Invoke-Checked -Command "docker" -Arguments ($composeArgs + @("up", "-d", "--build", "browser-service"))
 
 $browserServicePort = if (-not [string]::IsNullOrWhiteSpace($env:BROWSER_SERVICE_PORT)) {
@@ -154,20 +156,26 @@ $healthUrl = "http://${healthHost}:$browserServicePort/health"
 # its configuration, so wait for the API to answer.
 Write-Host "Waiting for $healthUrl..."
 $healthy = $false
-for ($attempt = 0; $attempt -lt 60; $attempt++) {
+$healthTimeout = if ([string]::IsNullOrWhiteSpace($env:BROWSER_SERVICE_HEALTH_TIMEOUT_SECONDS)) { 120 } else { [int]$env:BROWSER_SERVICE_HEALTH_TIMEOUT_SECONDS }
+$deadline = (Get-Date).AddSeconds($healthTimeout)
+while ((Get-Date) -lt $deadline) {
   try {
     $response = Invoke-WebRequest -Uri $healthUrl -UseBasicParsing -TimeoutSec 3
-    if ($response.StatusCode -eq 200) {
+    $health = $response.Content | ConvertFrom-Json
+    $fields = $health.PSObject.Properties
+    if ($response.StatusCode -eq 200 -and
+        $fields["service"] -and $fields["service"].Value -eq "conclave-shared-browser" -and
+        $fields["deployId"] -and $fields["deployId"].Value -eq $deployId -and
+        $fields["status"] -and $fields["status"].Value -eq "ok") {
       $healthy = $true
       break
     }
   } catch {
-    # Not listening yet.
   }
   Start-Sleep -Seconds 2
 }
 if (-not $healthy) {
-  Exit-WithError "The shared browser service did not become healthy at $healthUrl.`nSee: docker compose -f $composeFile logs browser-service"
+  Exit-WithError "The shared browser service from this deploy ($deployId) did not answer healthy at $healthUrl.`nSee: docker compose -f $composeFile logs browser-service"
 }
 
 Write-Host ""

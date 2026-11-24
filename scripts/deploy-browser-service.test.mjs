@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,6 +14,9 @@ const FAKE_DOCKER = `#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$DOCKER_LOG"
 if [[ "$1" == "compose" && " $* " == *" --check-config "* ]]; then
   exit "\${FAKE_CHECK_STATUS:-0}"
+fi
+if [[ "$1" == "compose" && " $* " == *" up -d "* ]]; then
+  printf '%s' "$BROWSER_SERVICE_DEPLOY_ID" > "$DEPLOY_ID_FILE"
 fi
 exit 0
 `;
@@ -39,11 +42,20 @@ const run = (command, args, env) =>
     child.on("close", (status) => resolve({ status, stdout, stderr }));
   });
 
-const deploy = async (shell, flags = [], { checkStatus = 0 } = {}) => {
+const healthBodies = {
+  deployed: (deployId) => ({ service: "conclave-shared-browser", deployId, status: "ok", sessions: 0 }),
+  previous: () => ({ service: "conclave-shared-browser", deployId: "an-earlier-deploy", status: "ok", sessions: 0 }),
+  empty: () => ({}),
+  sfu: () => ({ status: "healthy", timestamp: new Date().toISOString(), uptime: 40, port: 3031 }),
+};
+
+const deploy = async (shell, flags = [], { checkStatus = 0, answers = "deployed" } = {}) => {
   const root = mkdtempSync(join(tmpdir(), "deploy-browser-service-"));
+  const deployIdFile = join(root, "deploy-id");
   const health = createServer((req, res) => {
+    const deployId = existsSync(deployIdFile) ? readFileSync(deployIdFile, "utf8") : null;
     res.writeHead(req.url === "/health" ? 200 : 404, { "content-type": "application/json" });
-    res.end("{}");
+    res.end(JSON.stringify(healthBodies[answers](deployId)));
   });
   await new Promise((resolve) => health.listen(0, "127.0.0.1", resolve));
   try {
@@ -60,6 +72,8 @@ const deploy = async (shell, flags = [], { checkStatus = 0 } = {}) => {
       PATH: `${join(root, "bin")}:${process.env.PATH}`,
       HOME: root,
       DOCKER_LOG: log,
+      DEPLOY_ID_FILE: deployIdFile,
+      BROWSER_SERVICE_HEALTH_TIMEOUT_SECONDS: "5",
       FAKE_CHECK_STATUS: String(checkStatus),
       BROWSER_SERVICE_HOST: "127.0.0.1",
       BROWSER_SERVICE_PORT: String(health.address().port),
@@ -106,6 +120,15 @@ for (const shell of shells) {
     assert.notEqual(status, 0);
     assert.equal(index(calls, /^tag /), -1, calls.join("\n"));
     assert.equal(index(calls, / up -d /), -1, calls.join("\n"));
+  });
+
+  test(`${shell.name}: only this deploy's browser service counts as healthy`, async () => {
+    for (const answers of ["empty", "sfu", "previous"]) {
+      const { status, calls, stderr } = await deploy(shell, [], { answers });
+      assert.notEqual(status, 0, `${answers} was accepted as healthy`);
+      assert.ok(index(calls, / up -d /) >= 0, calls.join("\n"));
+      assert.match(stderr, /did not answer healthy/, answers);
+    }
   });
 
   test(`${shell.name}: --skip-runtime-image checks the image already on the host`, async () => {

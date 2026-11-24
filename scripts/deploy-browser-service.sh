@@ -73,7 +73,9 @@ if [[ -n "$CANDIDATE_IMAGE_NAME" ]]; then
   docker tag "$CANDIDATE_IMAGE_NAME" "$RUNTIME_IMAGE_NAME"
 fi
 
-echo "Deploying shared browser service..."
+BROWSER_SERVICE_DEPLOY_ID="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+export BROWSER_SERVICE_DEPLOY_ID
+echo "Deploying shared browser service (deploy ${BROWSER_SERVICE_DEPLOY_ID})..."
 "${COMPOSE[@]}" up -d --build browser-service
 
 SERVICE_HOST="${BROWSER_SERVICE_HOST:-127.0.0.1}"
@@ -84,15 +86,17 @@ HEALTH_URL="http://${SERVICE_HOST}:${BROWSER_SERVICE_PORT:-3040}/health"
 # its configuration, so wait for the API to answer.
 echo "Waiting for ${HEALTH_URL}..."
 healthy="false"
-for _ in $(seq 1 60); do
-  if curl -fsS --max-time 3 -o /dev/null "$HEALTH_URL" 2>/dev/null; then
+deadline=$(( $(date +%s) + ${BROWSER_SERVICE_HEALTH_TIMEOUT_SECONDS:-120} ))
+while (( $(date +%s) < deadline )); do
+  body="$(curl -fsS --max-time 3 "$HEALTH_URL" 2>/dev/null || true)"
+  if [[ "$body" == *'"service":"conclave-shared-browser"'* && "$body" == *"\"deployId\":\"${BROWSER_SERVICE_DEPLOY_ID}\""* && "$body" == *'"status":"ok"'* ]]; then
     healthy="true"
     break
   fi
   sleep 2
 done
 if [[ "$healthy" != "true" ]]; then
-  echo "The shared browser service did not become healthy at ${HEALTH_URL}." >&2
+  echo "The shared browser service from this deploy (${BROWSER_SERVICE_DEPLOY_ID}) did not answer healthy at ${HEALTH_URL}." >&2
   echo "See: docker compose -f ${COMPOSE_FILE} logs browser-service" >&2
   exit 1
 fi
