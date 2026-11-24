@@ -15,7 +15,7 @@ The same reducer runs on every backend:
 
 - **Redis:** optimistic transactions. The reducer runs against a snapshot fetched on demand; a key it needs but has not fetched aborts the run, the key is fetched, and the reducer runs again from the start with the same clock and replayed randomness. One commit script checks the revision of every record read, the owner of every unique key read, the version of every tag or kind scanned and every tombstone read, then applies the writes or reports a conflict, and the command retries.
 - **SQLite:** one `BEGIN IMMEDIATE` per command, with the reducer running inside it, so two SFUs may share one file.
-- **JSON:** one SFU only. The process holds a lock file next to the store and renews it every 5 s; a second SFU refuses to start while the lock is younger than 30 s. Writes go to a temporary file renamed over the store.
+- **JSON:** one SFU only. The process holds a lock file next to the store and renews it every 5 s; a second SFU refuses to start while the lock is younger than 30 s. Every commit and every rename first checks that this SFU still holds the lock, so a writer that stalled past 30 s and lost it stops instead of overwriting newer saves. Writes go to a temporary file renamed over the store.
 - **Memory:** for tests, sharing one data object between two SFUs.
 
 Unique keys (`(clientId, userId)`, `(clientId, username)`, `(profileId, slug)`, active `(clientId, roomCode)`, `linkSlug`, `(clientId, roomId)`, co-host token) are index records the entity registry derives from each record and the transaction claims and releases on every put and remove. A claim held by a record that no longer carries the key is treated as free.
@@ -35,6 +35,8 @@ Each start imports the previous release's data: in Redis mode the old Redis meet
 - A booking moved after its Google event was created is recorded as a failed calendar sync with a reason; staging never updated such events either. Deleting or cancelling a booking later still leaves its Google event in the host's calendar, as on staging (found by the model; a follow-up).
 - Lookups still fall back to legacy client ids, read-only; nothing moves namespace on a read. An attendee may join a webinar stored under a legacy alias of the deployment's default client.
 - Legacy records that broke a unique key are kept without that key's index entry, newest first wins, and a warning names them.
+- A webinar's invite code hash is stored on its record, never returned by the API, and applied to the room like the other schedule controls, so the SFU hosting the room enforces a code set through any SFU. Every webinar tick re-applies the stored webinar to each scheduled room the SFU hosts when its revision changed, and releases the room when the webinar is gone, so an end, cancel, delete or edit made through another SFU reaches the room within one tick.
+- A JSON writer frozen for more than 30 s between its lock check and the rename that follows could still overwrite one save; JSON is for a single SFU, and this is the window left.
 - Revisit if a deployment needs more than a few thousand scheduled items per scan, or a second region.
 
 ## Alternatives considered
