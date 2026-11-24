@@ -155,7 +155,7 @@ Drain and wait, the only wait for an instance's calls:
 
 | Container | `/status` | Result |
 | --- | --- | --- |
-| stopped or absent | any | Empty at once: a container that does not run carries no calls. |
+| stopped or absent | any | Empty once Docker cannot bring it back: its restart policy is turned off (`docker update --restart=no`) and it is looked at again. Still down, it carries no calls; back up, it goes through the rows below. |
 | running | unreadable for `HEALTH_TIMEOUT_SECONDS` | Unknown, even for a container that booted drained (a call can still reach a drained candidate): exit 5, left as it is with its journal kept. |
 | running | `draining: false` | The drain is sent again; still not draining after `HEALTH_TIMEOUT_SECONDS` is unknown (exit 5). |
 | running | `draining: true`, 0 rooms from `PLACEMENT_SETTLE_SECONDS` after the last drain | Empty. |
@@ -175,11 +175,20 @@ The rules every path keeps, checked after every run by
 4. No drain wait runs out its deadline on a container that is not running.
 5. Every rollback is in the journal before its first step.
 6. An instance that takes meetings is drained only while another instance
-   serves, unless it is the only instance.
+   serves, unless it is the only instance. A rollback counts an instance as
+   out of rotation only when its container is held down or its `/status`
+   says it is draining, and repair decides an instance serves or not from
+   three looks, never one.
+7. Nothing but this script starts a build before it passes its canary: a
+   candidate is created with restart policy `no` (`SFU_RESTART_POLICY`, which
+   the compose file must use for every SFU service), so Docker never restarts
+   one after a crash, and the service's own image name only ever names a
+   last-known-good image or a build that passed.
 
-A run exits 0 only once every instance it deployed serves the target by the
-serving rule at its end; one that stopped serving while a later instance
-deployed fails the run (exit 1).
+A run exits 0 only when one final look at its end finds every instance it
+deployed serving the target by the serving rule, its public route included
+and answering healthy; any failed look fails the run (exit 1), and the same
+look decides whether the release is recorded.
 
 The fuzz test runs fixed cases (the four recovery holes found in review)
 and seeded fault plans: one or two instances, a canary that passes or fails,
@@ -295,6 +304,12 @@ It fails if either side goes more than 2 s without audio or is disconnected.
 
 ## Known limits
 
+- A peer that fails in the moment between the deploy's peer check and its
+  drain request is not seen; the drain goes ahead, as it would in any
+  blue-green deploy.
+- `docker compose start` (or `restart`) by hand brings back the very
+  container it names, a drained candidate included; use `docker compose up`,
+  which starts the service's last-known-good image.
 - A running container whose `/status` does not answer is never restarted, so
   a build that hangs at startup without exiting is left as it is (exit 5,
   rollback kept in its journal). Stop that container (`docker compose stop

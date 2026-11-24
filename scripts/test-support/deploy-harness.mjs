@@ -51,6 +51,7 @@ export const startSfu = async (
     failRecreate = 0,
     publicRoute = false,
     onRecreate = null,
+    onTag = null,
     dropDrainReply = false,
     refuseDrain = false,
     id = instanceId,
@@ -83,6 +84,27 @@ export const startSfu = async (
     recreates: [],
     stops: [],
     undrains: [],
+    starts: [],
+    canaryPassed: [],
+    publicLog: [],
+    lonelyDrains: [],
+    restartPolicy: "unless-stopped",
+    statusFailures: 0,
+  };
+  sfu.crash = (restartAfterMs) => {
+    if (sfu.container !== "running") return;
+    sfu.container = "exited";
+    sfu.rooms = 0;
+    sfu.crashedAt = Date.now();
+    if (restartAfterMs === null) return;
+    const generation = sfu.recreates.length;
+    setTimeout(() => {
+      if (sfu.container !== "exited" || sfu.restartPolicy === "no" || sfu.recreates.length !== generation) return;
+      sfu.container = "running";
+      sfu.draining = sfu.bootDrained;
+      sfu.crashedAt = null;
+      sfu.starts.push({ image: sfu.image, bootDrained: sfu.bootDrained, by: "restart-policy" });
+    }, restartAfterMs).unref();
   };
   const server = createServer(async (req, res) => {
     let body = "";
@@ -108,7 +130,7 @@ export const startSfu = async (
     if (sfu.container !== "running" && !url.pathname.startsWith("/stand-in/")) return req.socket.destroy();
     if (url.pathname === "/health") return sfu.healthy ? json({ status: "healthy" }) : json({ status: "starting" }, 503);
     if (url.pathname === "/status") {
-      if (!sfu.statusAnswers) return json({ error: "unavailable" }, 503);
+      if (!sfu.statusAnswers || (sfu.statusFailures > 0 && sfu.statusFailures--)) return json({ error: "unavailable" }, 503);
       return json({ instanceId: id, region: "local", healthy: sfu.statusHealthy, rooms: sfu.rooms, draining: sfu.draining });
     }
     if (url.pathname === "/drain" && req.method === "POST") {
@@ -116,6 +138,15 @@ export const startSfu = async (
       if (request.draining && context.beforeDrain) await context.beforeDrain();
       if (sfu.refuseDrain) return json({ error: "drain refused" }, 500);
       if (request.draining === false) sfu.undrains.push({ image: sfu.image, ...journal() });
+      const takesMeetings = (other) => other.container === "running" && !other.draining;
+      const others = Object.values(context.sfus ?? {}).filter((other) => other !== sfu);
+      if (request.draining && takesMeetings(sfu) && others.length > 0 && !others.some(takesMeetings)) {
+        sfu.lonelyDrains.push({
+          image: sfu.image,
+          othersDownMs: Math.min(...others.map((other) => (other.crashedAt ? Date.now() - other.crashedAt : Infinity))),
+          others: others.map((other) => `${other.instanceId} ${other.container} draining=${other.draining}`),
+        });
+      }
       sfu.drains.push(request);
       context.events.push(`drain ${instanceId}`);
       sfu.draining = request.draining === true;
@@ -126,6 +157,19 @@ export const startSfu = async (
       // dropDrainReply: the drain is applied, then its reply is lost.
       if (dropDrainReply && request.draining) return req.socket.destroy();
       return json({ draining: sfu.draining, forced: request.force === true });
+    }
+    if (url.pathname === "/stand-in/update") {
+      if (url.searchParams.get("restart")) sfu.restartPolicy = url.searchParams.get("restart");
+      if (url.searchParams.get("restart") === "no") sfu.heldDown = true;
+      return json({ ok: true });
+    }
+    if (url.pathname === "/stand-in/tagged") {
+      onTag?.(sfu, url.searchParams.get("to"));
+      return json({ ok: true });
+    }
+    if (url.pathname === "/stand-in/canary") {
+      sfu.canaryPassed.push(sfu.image);
+      return json({ ok: true });
     }
     if (url.pathname === "/stand-in/stop") {
       context.events.push(`stop ${instanceId}`);
@@ -150,6 +194,10 @@ export const startSfu = async (
       // The image it ran before the deploy still boots healthy.
       sfu.healthy = replacementHealthy || sfu.image === sfu.firstImage;
       sfu.configHash = url.searchParams.get("hash") ?? "current-hash";
+      sfu.restartPolicy = url.searchParams.get("restart") ?? "unless-stopped";
+      sfu.crashedAt = null;
+      sfu.heldDown = false;
+      sfu.starts.push({ image: sfu.image, bootDrained: sfu.bootDrained, by: "compose" });
       if (bootExit && sfu.image === "sha256:target") sfu.container = bootExit;
       // onRecreate: a test's hook, given the instance as it now is.
       onRecreate?.(sfu);
@@ -164,10 +212,22 @@ export const startSfu = async (
   let proxy = null;
   if (publicRoute) {
     proxy = createServer(async (req, res) => {
-      if (sfu.publicDown || (sfu.publicFailures > 0 && sfu.publicFailures--)) return res.writeHead(502).end("bad gateway");
+      if (sfu.publicDown || (sfu.publicFailures > 0 && sfu.publicFailures--)) {
+        sfu.publicLog.push({ at: Date.now(), healthy: false });
+        return res.writeHead(502).end("bad gateway");
+      }
       const answer = await fetch("http://127.0.0.1:" + sfu.port + req.url, { headers: req.headers }).catch(() => null);
-      if (!answer) return req.socket.destroy();
-      res.writeHead(answer.status, { "content-type": "application/json" }).end(await answer.text());
+      if (!answer) {
+        sfu.publicLog.push({ at: Date.now(), healthy: false });
+        return req.socket.destroy();
+      }
+      const text = await answer.text();
+      let healthy = false;
+      try {
+        healthy = answer.ok && JSON.parse(text).healthy === true;
+      } catch {}
+      if (req.url.startsWith("/status")) sfu.publicLog.push({ at: Date.now(), healthy });
+      res.writeHead(answer.status, { "content-type": "application/json" }).end(text);
     });
     await new Promise((done) => proxy.listen(0, "127.0.0.1", done));
     sfu.publicPort = proxy.address().port;
@@ -192,9 +252,11 @@ const imageVar = (name) => "SFU_IMAGE_" + name.toUpperCase().replaceAll("-", "_"
 const configHash = (name) =>
   "current-hash" +
   (process.env.SFU_START_DRAINING === "true" ? "-drained" : "") +
+  (process.env.SFU_RESTART_POLICY && process.env.SFU_RESTART_POLICY !== "unless-stopped" ? "-restart-" + process.env.SFU_RESTART_POLICY : "") +
   (process.env[imageVar(name)] && process.env[imageVar(name)] !== "vm-" + name ? "-" + process.env[imageVar(name)] : "");
 const service = (name, sfu, index) => ({
   image: process.env[imageVar(name)] || "vm-" + name,
+  restart: process.env.SFU_RESTART_POLICY || "unless-stopped",
   environment: {
     ANNOUNCED_IP: "127.0.0.1",
     // DEPLOY_TEST_OVERLAP gives both services one RTC range, which the full
@@ -255,7 +317,7 @@ const main = async () => {
         ? (process.env.DEPLOY_TEST_UNTAGGED_SERVICE_BUILDS ? "sha256:checkout-build" : (await state(name)).firstImage)
         : "sha256:target";
       const image = process.env.DEPLOY_TEST_COMPOSE_IGNORES_IMAGE ? "sha256:running" : tags[told] || untagged;
-      const response = await fetch("http://127.0.0.1:" + sfus[name].port + "/stand-in/recreate?draining=" + draining + "&image=" + image + "&hash=" + encodeURIComponent(configHash(name)));
+      const response = await fetch("http://127.0.0.1:" + sfus[name].port + "/stand-in/recreate?draining=" + draining + "&image=" + image + "&hash=" + encodeURIComponent(configHash(name)) + "&restart=" + encodeURIComponent(process.env.SFU_RESTART_POLICY || "unless-stopped"));
       if (!response.ok) process.exitCode = 1;
       // DEPLOY_TEST_KILL_AFTER_RECREATES: kill the deploy, as a crash or a
       // closed SSH session would, once that many recreates have run.
@@ -320,7 +382,19 @@ const main = async () => {
   if (args[0] === "image" && args[1] === "inspect") return args[2] === "-f" ? out(tags[args.at(-1)] || "sha256:target") : undefined;
   if (args[0] === "tag") {
     tags[args[2]] = tags[args[1]] || args[1];
-    return fs.writeFileSync(tagsFile, JSON.stringify(tags));
+    fs.writeFileSync(tagsFile, JSON.stringify(tags));
+    for (const name of Object.keys(sfus)) {
+      if (args[2] === "vm-" + name || args[2].endsWith("-" + name)) {
+        await fetch("http://127.0.0.1:" + sfus[name].port + "/stand-in/tagged?to=" + encodeURIComponent(args[2])).catch(() => undefined);
+      }
+    }
+    return;
+  }
+  if (args[0] === "update") {
+    const name = args.at(-1).replace(/^ctr-/, "");
+    const policy = (args.find((arg) => arg.startsWith("--restart=")) || "").slice("--restart=".length);
+    await fetch("http://127.0.0.1:" + sfus[name].port + "/stand-in/update?restart=" + encodeURIComponent(policy));
+    return;
   }
   // DEPLOY_TEST_NO_BUNDLE: images built before the canary bundle existed.
   if (args[0] === "run") {
@@ -338,7 +412,9 @@ const main = async () => {
     if ((process.env.DEPLOY_TEST_NO_BUNDLE || "").split(",").includes(image)) {
       process.stderr.write("Error: Cannot find module '/app/packages/sfu/dist/canary-call.mjs'\\n");
       process.exitCode = 1;
+      return;
     }
+    if (target) await fetch("http://127.0.0.1:" + sfus[target].port + "/stand-in/canary", { method: "POST" });
     return;
   }
   // rmi succeeds.
@@ -462,7 +538,7 @@ export const composeUpByHand = async (sfus, { tags, dir, env: extra = {} }, name
 
 export const withSfus = async (specs, body) => {
   const sfus = {};
-  const context = { events: [], beforeDrain: null };
+  const context = { events: [], beforeDrain: null, sfus };
   try {
     for (const [name, spec] of Object.entries(specs)) sfus[name] = await startSfu(context, name, spec);
     await body(sfus, context.events, context);

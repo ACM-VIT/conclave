@@ -255,6 +255,61 @@ fixed("Greptile: a deploy fails when an instance it already deployed stops servi
   });
 });
 
+fixed("Sol: a stopped container is held down before it counts as empty, so Docker cannot bring it back under a call before it is recreated", () => {
+  const failAndCrash = (sfu) => {
+    if (sfu.image !== TARGET || sfu.bootDrained || sfu.failed) return;
+    sfu.failed = true;
+    sfu.publicDown = true;
+    setTimeout(() => sfu.crash(null), 500).unref();
+  };
+  const comeBackUnderACall = (sfu) => {
+    if (sfu.container !== "exited" || sfu.restartPolicy === "no") return;
+    sfu.container = "running";
+    sfu.draining = sfu.bootDrained;
+    sfu.rooms = 1;
+    sfu.starts.push({ image: sfu.image, bootDrained: sfu.bootDrained, by: "restart-policy" });
+  };
+  return withStack({ "sfu-a": { publicRoute: true, onRecreate: failAndCrash, onTag: comeBackUnderACall }, "sfu-b": {} }, async (sfus, shared) => {
+    const result = await deploy(sfus, { env: { ...shared.env, ...ONLY_A } });
+    assert.deepEqual(cutRooms(sfus), cutRooms(sfus).map(() => 0), result.output);
+  });
+});
+
+fixed("Sol: a single bad /status reading neither rolls back a serving instance nor drains the only one taking meetings", () =>
+  withStack({ "sfu-a": {}, "sfu-b": { container: "exited" } }, async (sfus, shared) => {
+    sfus["sfu-a"].statusFailures = 3;
+    const result = await deploy(sfus, { env: shared.env, journals: { "sfu-a": { phase: "rollback", lkg: LAST_GOOD } } });
+    assert.deepEqual(sfus["sfu-a"].lonelyDrains, [], result.output);
+    assert.deepEqual(cutRooms(sfus), cutRooms(sfus).map(() => 0));
+  }),
+);
+
+fixed("Sol: a candidate whose deploy died is never restarted by Docker before it passes its canary", () =>
+  withStack({ "sfu-a": {}, "sfu-b": {} }, async (sfus, shared) => {
+    const crashed = await deploy(sfus, { env: { ...shared.env, ...ONLY_A, SFU_DEPLOY_TEST_CRASH_AT: "start candidate sfu-a" } });
+    assert.equal(crashed.code, null, crashed.output);
+    sfus["sfu-a"].crash(50);
+    await new Promise((done) => setTimeout(done, 400));
+    assert.deepEqual(sfus["sfu-a"].starts.filter((start) => start.by === "restart-policy"), [], "Docker restarted the untested candidate");
+    const next = await deploy(sfus, { env: { ...shared.env, ...ONLY_A } });
+    assert.equal(next.code, 0, next.output);
+    assertServes(sfus["sfu-a"], TARGET);
+  }),
+);
+
+fixed("Sol: a 502 at the final public check fails the run", () => {
+  let sfusRef = null;
+  const blipAtTheEnd = (sfu, to) => {
+    if (to.endsWith(":rollback-sfu-b") && sfu.image === TARGET) sfusRef["sfu-b"].publicFailures = 1;
+  };
+  return withStack({ "sfu-a": { publicRoute: true }, "sfu-b": { publicRoute: true, onTag: blipAtTheEnd } }, async (sfus, shared) => {
+    sfusRef = sfus;
+    const result = await deploy(sfus, { env: shared.env });
+    assert.notEqual(result.code, 0, result.output);
+    assert.match(result.output, /sfu-b was deployed on .* but is not serving now/);
+  });
+});
+
 fixed("fuzz: a public route that is down when the deploy first looks still leaves the image the instance served on to go back to", () =>
   withStack({ "sfu-a": { publicRoute: true } }, async (sfus, shared) => {
     sfus["sfu-a"].publicFailures = 1;
