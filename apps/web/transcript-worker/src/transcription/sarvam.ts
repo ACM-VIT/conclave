@@ -21,7 +21,7 @@ const SARVAM_DEFAULT_MODE = "codemix";
 const SARVAM_SIGNAL_LOOKBACK_MS = 1_500;
 const SARVAM_SEGMENT_KEPT_MS = 3_000;
 export const SARVAM_EXPIRED_SLOT_KEPT_MS = 60_000;
-const SARVAM_RECENT_ANSWERS = 64;
+export const SARVAM_EXPIRED_SLOTS_KEPT = 16;
 
 type SentChunk = { sequence: number; at: number };
 
@@ -362,7 +362,7 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
   private utteranceCount = 0;
   private awaitingFinal: string[] = [];
   private readonly expiredSlots = new Map<string, number>();
-  private readonly recentAnswers = new Map<string, string>();
+  private lastAnswer: { itemId: string; transcript: string; nextWaiting: string | null } | null = null;
   private openedBeforeSignal: string[] = [];
   private readonly replayedLines = new Set<string>();
   private segments: SpeechSegment[] = [];
@@ -514,8 +514,10 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
     const slot = this.awaitingFinal.indexOf(itemId);
     const newerWaiting = this.awaitingFinal.slice(slot + 1).some((waiting) => !this.expiredSlots.has(waiting));
     const owed = slot >= 0 && heard && newerWaiting;
-    if (owed) this.expiredSlots.set(itemId, Date.now());
+    const now = Date.now();
+    if (owed) this.expiredSlots.set(itemId, now);
     this.settleUtterance(itemId, !owed);
+    this.forgetExpiredSlots(now);
   }
 
   private settleUtterance(itemId: string, answered: boolean): void {
@@ -532,8 +534,10 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
   }
 
   private forgetExpiredSlots(now: number): void {
+    let over = this.expiredSlots.size - SARVAM_EXPIRED_SLOTS_KEPT;
     for (const [itemId, expiredAt] of this.expiredSlots) {
-      if (now - expiredAt <= SARVAM_EXPIRED_SLOT_KEPT_MS) continue;
+      if (over <= 0 && now - expiredAt <= SARVAM_EXPIRED_SLOT_KEPT_MS) continue;
+      over -= 1;
       this.expiredSlots.delete(itemId);
       this.awaitingFinal = this.awaitingFinal.filter((awaiting) => awaiting !== itemId);
     }
@@ -570,7 +574,9 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
 
   private handleSpeechStart(): void {
     this.signalsSpeech = true;
+    this.lastAnswer = null;
     const now = Date.now();
+    this.forgetExpiredSlots(now);
     this.resolveUnheardSignals(now);
     this.signalCount += 1;
     const opened = this.openedBeforeSignal.shift();
@@ -620,6 +626,8 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
   }
 
   private handleSpeechEnd(): void {
+    this.lastAnswer = null;
+    this.forgetExpiredSlots(Date.now());
     if (this.signalledItem) this.resolveNow(this.signalledItem);
   }
 
@@ -712,16 +720,19 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
       this.handleSpeechEnd();
       return;
     }
-    if (this.recentAnswers.get(event.itemId) === event.transcript) return;
     this.forgetExpiredSlots(Date.now());
     const answered = this.awaitingFinal[0];
-    if (!answered && !event.transcript) return;
-    this.recentAnswers.set(event.itemId, event.transcript);
-    if (this.recentAnswers.size > SARVAM_RECENT_ANSWERS) {
-      this.recentAnswers.delete(this.recentAnswers.keys().next().value!);
+    if (
+      this.lastAnswer?.itemId === event.itemId &&
+      this.lastAnswer.transcript === event.transcript &&
+      this.lastAnswer.nextWaiting === (answered ?? null)
+    ) {
+      return;
     }
+    if (!answered && !event.transcript) return;
     if (answered && this.expiredSlots.has(answered)) {
       this.settleUtterance(answered, true);
+      this.rememberAnswer(event);
       return;
     }
     const itemId = answered ?? this.nextUtteranceId();
@@ -736,12 +747,21 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
       });
     }
     this.settleUtterance(itemId, true);
+    this.rememberAnswer(event);
     if (this.turn) {
       this.turn.accepted = false;
       this.turn.needsOnset = true;
     }
     this.callbacks.onCommitted(itemId);
     await this.callbacks.onFinal(itemId, event.transcript);
+  }
+
+  private rememberAnswer(event: { itemId: string; transcript: string }): void {
+    this.lastAnswer = {
+      itemId: event.itemId,
+      transcript: event.transcript,
+      nextWaiting: this.awaitingFinal[0] ?? null,
+    };
   }
 }
 

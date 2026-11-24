@@ -83,17 +83,22 @@ export class CaptionLedger {
     line.audio = [];
     line.deadlineAt = Number.POSITIVE_INFINITY;
     line.endedAt = now;
-    this.forgetOldEnded(now);
+    this.forgetOldEnded(now, line.id);
   }
 
-  forgetOldEnded(now: number): void {
+  forgetOldEnded(now: number, ending?: string): void {
     const shown = this.limits.shown();
     const ended = Array.from(this.lines.values())
       .filter((line) => !isActive(line) && !shown.has(line.id))
-      .sort((left, right) => (right.endedAt ?? 0) - (left.endedAt ?? 0));
+      .sort((left, right) =>
+        left.id === ending ? -1 : right.id === ending ? 1 : right.place.sequence - left.place.sequence,
+      );
     const maxEnded = this.limits.maxEnded();
     const forgotten = ended
-      .filter((line, index) => index >= maxEnded || now - (line.endedAt ?? now) > this.limits.endedKeptMs)
+      .filter(
+        (line, index) =>
+          line.id !== ending && (index >= maxEnded || now - (line.endedAt ?? now) > this.limits.endedKeptMs),
+      )
       .map(({ id }) => id);
     if (forgotten.length === 0) return;
     for (const id of forgotten) this.lines.delete(id);
