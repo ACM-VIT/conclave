@@ -625,6 +625,26 @@ describe("what a batch carries when it is sent", () => {
     expect(h.posts).toEqual([]);
     expect(store.list()).toEqual([]);
   });
+
+  it("cuts an oversized report down to fit, and sends it with the batch it shares", async () => {
+    const h = harness();
+    const normal = event();
+    const frames = Array.from({ length: 5000 }, (_, index) => ({ filename: `/_next/static/chunks/frame-${index}.js`, lineno: index, colno: 1, in_app: true }));
+    const huge: OutboxEvent = {
+      ...event("$exception"),
+      properties: { token: KEY, $exception_list: [{ type: "TypeError", value: "[message withheld]", stacktrace: { type: "raw", frames } }], note: "y".repeat(600_000) },
+    };
+    h.outbox.add(normal);
+    h.outbox.add(huge, { urgent: true });
+    await h.advance(FLUSH_INTERVAL_MS);
+
+    for (const post of h.posts) expect(new TextEncoder().encode(post.body).byteLength).toBeLessThanOrEqual(MAX_BATCH_BYTES);
+    expect(h.posted().sort()).toEqual([normal.uuid, huge.uuid].sort());
+    const sentHuge = h.posts.map((post) => h.batchOf(post.body).batch).flat().find((item) => item.uuid === huge.uuid) as OutboxEvent;
+    const list = sentHuge.properties.$exception_list as Array<{ type: string; stacktrace?: { frames: unknown[] } }>;
+    expect(list[0].type).toBe("TypeError");
+    expect((list[0].stacktrace?.frames.length ?? 0) < frames.length).toBe(true);
+  });
 });
 
 describe("the outbox as the page goes away", () => {

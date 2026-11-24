@@ -21,6 +21,8 @@ export const MAX_SEND_AGE_MS = MAX_EVENT_AGE_MS - 60_000;
 export const SEND_DEADLINE_MS = 15_000;
 export const LEASE_MS = SEND_DEADLINE_MS + 1000;
 export const BEACON_CONFIRM_MS = 30_000;
+export const MAX_EVENT_BYTES = 32 * 1024;
+const MAX_TEXT_CHARS = 1024;
 
 export type StoredBatch = {
   id: string;
@@ -91,6 +93,53 @@ const byteLength = (text: string): number => new TextEncoder().encode(text).byte
 
 const dueAt = (batch: { notBefore: number; nextTry: number; leaseUntil: number }): number =>
   Math.max(batch.notBefore, batch.nextTry, batch.leaseUntil);
+
+const sizeOf = (value: unknown): number => byteLength(JSON.stringify(value) ?? "");
+
+const cutText = (value: unknown, depth = 0): unknown => {
+  if (typeof value === "string") return value.length > MAX_TEXT_CHARS ? value.slice(0, MAX_TEXT_CHARS) : value;
+  if (depth > 8 || value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map((item) => cutText(item, depth + 1));
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, cutText(item, depth + 1)]));
+};
+
+type ExceptionEntry = { stacktrace?: { frames?: unknown[] } } & Record<string, unknown>;
+
+export const fitEvent = (event: OutboxEvent): OutboxEvent => {
+  if (sizeOf(event) <= MAX_EVENT_BYTES) return event;
+  const fits = (properties: Record<string, unknown>) => sizeOf({ ...event, properties }) <= MAX_EVENT_BYTES;
+  let properties: Record<string, unknown> = { ...event.properties };
+  const list = properties.$exception_list;
+  if (Array.isArray(list) && list.length > 0) {
+    let entries = (list as ExceptionEntry[]).map((entry) => ({ ...entry }));
+    while (entries.length > 1 && !fits({ ...properties, $exception_list: entries })) entries = entries.slice(0, -1);
+    const longest = () => entries.reduce((best, entry, index) => ((entry.stacktrace?.frames?.length ?? 0) > (entries[best].stacktrace?.frames?.length ?? 0) ? index : best), 0);
+    while (!fits({ ...properties, $exception_list: entries })) {
+      const index = longest();
+      const frames = entries[index].stacktrace?.frames ?? [];
+      if (frames.length <= 1) break;
+      entries[index] = { ...entries[index], stacktrace: { ...entries[index].stacktrace, frames: frames.slice(-Math.ceil(frames.length / 2)) } };
+    }
+    properties = { ...properties, $exception_list: entries };
+  }
+  if (!fits(properties)) properties = cutText(properties) as Record<string, unknown>;
+  const essential = new Set(["token", "distinct_id", "$exception_list"]);
+  while (!fits(properties)) {
+    const largest = Object.keys(properties)
+      .filter((key) => !essential.has(key))
+      .sort((a, b) => sizeOf(properties[b]) - sizeOf(properties[a]))[0];
+    if (!largest) break;
+    const { [largest]: _dropped, ...rest } = properties;
+    properties = rest;
+  }
+  if (fits(properties)) return { ...event, properties };
+  return {
+    uuid: event.uuid,
+    event: event.event.slice(0, MAX_TEXT_CHARS),
+    ...(event.timestamp ? { timestamp: event.timestamp } : {}),
+    properties: { token: properties.token, distinct_id: properties.distinct_id },
+  };
+};
 
 export function createOutbox(deps: OutboxDeps) {
   const queue: Queued[] = [];
@@ -249,7 +298,7 @@ export function createOutbox(deps: OutboxDeps) {
   const shaped = (batch: Batch): boolean => {
     batch.events = batch.events.flatMap((item) => {
       const built = deps.shape ? deps.shape(item) : item;
-      return built ? [built] : [];
+      return built ? [fitEvent(built)] : [];
     });
     return batch.events.length > 0;
   };
@@ -360,6 +409,7 @@ export function createOutbox(deps: OutboxDeps) {
   return {
     add(event: OutboxEvent, { urgent = false, deferred = false }: { urgent?: boolean; deferred?: boolean } = {}): void {
       if (!remember(event.uuid)) return;
+      event = fitEvent(event);
       const bytes = byteLength(JSON.stringify(event));
       if (deferred) {
         queue.push({ event, bytes });
