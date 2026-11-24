@@ -34,6 +34,7 @@ type WriteCall = {
 type SentWrite = { peer: string; keys: string[]; protectedFromClose: boolean };
 
 const BOARD = "whiteboard";
+const participantOf = (peer: string): string => peer.split("#")[0];
 const { capacity: UPDATE_BURST, refillPerSec: UPDATES_PER_SECOND } = RATE_LIMITS.appsYjsUpdate;
 
 const structsIn = (update: Uint8Array): (Y.Item | Y.GC | Y.Skip)[] => {
@@ -320,7 +321,9 @@ describe("one work queue per room", () => {
       writer.sync(valid);
     }
 
-    expect(calls.filter((call) => call.userId === "writer#1").length).toBeLessThanOrEqual(UPDATE_BURST);
+    const applied = calls.filter((call) => call.userId === participantOf("writer#1")).length;
+    expect(applied).toBeGreaterThanOrEqual(UPDATE_BURST);
+    expect(applied).toBeLessThanOrEqual(UPDATE_BURST);
   });
 
   it.each([
@@ -357,6 +360,7 @@ describe("one work queue per room", () => {
     artist.leave();
     vi.advanceTimersByTime(2000);
 
+    expect(calls.filter((call) => call.userId === participantOf("artist#1")).length).toBeGreaterThan(0);
     expect(calls.filter((call) => call.result === "foreign-id")).toEqual([]);
     expect(room.apps.liveDoc(BOARD)!.getMap("m").size).toBe(UPDATE_BURST + 20);
   });
@@ -388,10 +392,34 @@ describe("one work queue per room", () => {
     vi.advanceTimersByTime(2000);
 
     const byParticipant = (participant: string) => calls.filter((call) => call.userId === participant);
+    expect(byParticipant("guest-gp_pass").length).toBeGreaterThan(0);
     expect(byParticipant("guest-gp_pass").map((call) => call.result).filter((result) => result !== null)).toEqual([]);
     expect(room.apps.liveDoc(BOARD)!.getMap("m").size).toBe(3 + 3 + UPDATE_BURST + 10 + 2);
     expect(byParticipant("guest-gp_other").map((call) => call.result)).toEqual(["foreign-id"]);
     expect(room.apps.liveDoc(BOARD)!.getMap("m").has("forged")).toBe(false);
+  });
+
+  it("answers a host command while a guest sends packets to a locked board", () => {
+    vi.useFakeTimers();
+    const { connect, commands } = makeWorkRoom();
+    const host = connect("host#1", { host: true });
+    host.stage("apps:open", BOARD);
+    const guest = connect("guest#1");
+    guest.sync();
+    guest.write(UPDATE_BURST);
+    guest.write(1);
+    host.lock(true);
+    guest.write(1);
+
+    host.stage("apps:close");
+    const close = commands.at(-1)!;
+    for (let waited = 0; waited < 5000 && close.ackedAt === null; waited += 1) {
+      guest.sendRaw(Y.encodeStateAsUpdate(new Y.Doc()));
+      vi.advanceTimersByTime(1);
+    }
+
+    expect(close.ackedAt).not.toBeNull();
+    expect(close.ackedAt! - close.sentAt).toBeLessThanOrEqual(1000);
   });
 
   it("applies another participant's queued strokes before the host closes the board", () => {
@@ -427,6 +455,17 @@ describe("one work queue per room", () => {
       for (let index = 0; index < 4; index += 1) join();
       const participants = () => [...peers.values()].filter((peer) => peer.connected);
 
+      const proof = {
+        callsChecked: 0,
+        replayed: 0,
+        boardsCompared: 0,
+        keysKept: 0,
+        protectedDecided: 0,
+        blanksSeen: 0,
+        commandsAcked: 0,
+        callsAfterLeave: 0,
+      };
+      const left = new Set<string>();
       const replays = new Map<number, Y.Doc>();
       const sentByKey = new Map<string, SentWrite>();
       const timesByUser = new Map<string, number[]>();
@@ -447,11 +486,22 @@ describe("one work queue per room", () => {
         }
         for (; checkedCalls < calls.length; checkedCalls += 1) {
           const call = calls[checkedCalls];
+          proof.callsChecked += 1;
           timesByUser.set(call.userId, [...(timesByUser.get(call.userId) ?? []), call.at]);
           if (call.result === null && call.appId === BOARD && call.generation !== null) {
             const replay = replays.get(call.generation) ?? new Y.Doc();
             replays.set(call.generation, replay);
             Y.applyUpdate(replay, call.update);
+            proof.replayed += 1;
+          }
+          if (left.has(call.userId)) proof.callsAfterLeave += 1;
+          if (call.result !== "not-live") {
+            for (const key of call.keys) {
+              const write = sentByKey.get(key);
+              if (write?.protectedFromClose === true && participantOf(write.peer) === call.userId) {
+                proof.protectedDecided += 1;
+              }
+            }
           }
           if (call.result === "foreign-id") {
             const own = ownClients.get(call.userId.split("#")[0]) ?? new Set<number>();
@@ -464,8 +514,9 @@ describe("one work queue per room", () => {
           if (call.result === "not-live") {
             for (const key of call.keys) {
               const write = sentByKey.get(key);
-              const lost = write?.protectedFromClose === true && write.peer === call.userId;
-              expect(lost, `${key} sent while the board was live`).toBe(false);
+              if (write?.protectedFromClose !== true || participantOf(write.peer) !== call.userId) continue;
+              proof.protectedDecided += 1;
+              expect(write.keys.includes(key), `${key} sent while the board was live was dropped`).toBe(false);
             }
           }
         }
@@ -476,8 +527,11 @@ describe("one work queue per room", () => {
           expect(replay.getMap("m").toJSON(), "the board is the replay of its accepted writes").toEqual(
             live.getMap("m").toJSON(),
           );
+          proof.boardsCompared += 1;
           for (const key of replay.getMap("m").keys()) {
-            if (key.startsWith("w")) expect(live.getMap("m").has(key), `accepted ${key} kept`).toBe(true);
+            if (!key.startsWith("w")) continue;
+            expect(live.getMap("m").has(key), `accepted ${key} kept`).toBe(true);
+            proof.keysKept += 1;
           }
         }
         for (const [userId, times] of timesByUser) {
@@ -488,15 +542,28 @@ describe("one work queue per room", () => {
         for (const peer of peers.values()) {
           expect(lastDirectStateIsOwed(peer, Date.now()), `${peer.id} owed its stage`).toBe(false);
         }
+        proof.blanksSeen = [...peers.values()].reduce(
+          (sum, peer) =>
+            sum + peer.directStates().filter((entry) => (entry.payload as AppsState).activeAppId === null).length,
+          0,
+        );
         for (const command of commands) {
           const waited = (command.ackedAt ?? Date.now()) - command.sentAt;
           expect(waited, "a host command waited past the bound").toBeLessThanOrEqual(1000);
         }
+        proof.commandsAcked = commands.filter((command) => command.ackedAt !== null).length;
       };
 
       for (let step = 0; step < 400; step += 1) {
         const roll = random();
         const peer = pick(participants());
+        if (step === 100) {
+          const leaving = pick(participants().filter((candidate) => candidate !== host));
+          leaving.write(UPDATE_BURST + 10);
+          leaving.leave();
+          left.add(participantOf(leaving.id));
+          join();
+        }
         if (roll < 0.45) peer.write(1 + Math.floor(random() * 25), random() < 0.1);
         else if (roll < 0.57) peer.sync(random() < 0.6);
         else if (roll < 0.62) host.stage("apps:open", BOARD);
@@ -507,6 +574,7 @@ describe("one work queue per room", () => {
           const leaving = pick(participants().filter((candidate) => candidate !== host));
           if (random() < 0.5) leaving.write(UPDATE_BURST + Math.floor(random() * 20));
           leaving.leave();
+          left.add(participantOf(leaving.id));
           join();
         } else if (roll < 0.69 && participants().length > 1) {
           pick(participants().filter((candidate) => candidate !== host)).flood(200 + Math.floor(random() * 400));
@@ -523,6 +591,19 @@ describe("one work queue per room", () => {
       const vanished = [...admitted].filter((key) => !reached.has(key));
       expect(vanished).toEqual([]);
       expect(admitted.size).toBeGreaterThan(sent.length / 2);
+      expect(proof, "every invariant saw what it checks").toEqual({
+        callsChecked: expect.any(Number) as number,
+        replayed: expect.any(Number) as number,
+        boardsCompared: expect.any(Number) as number,
+        keysKept: expect.any(Number) as number,
+        protectedDecided: expect.any(Number) as number,
+        blanksSeen: expect.any(Number) as number,
+        commandsAcked: expect.any(Number) as number,
+        callsAfterLeave: expect.any(Number) as number,
+      });
+      for (const [name, count] of Object.entries(proof)) {
+        expect(count, `${name} observed`).toBeGreaterThan(0);
+      }
     },
     60_000,
   );
