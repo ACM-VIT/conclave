@@ -415,11 +415,11 @@ function Get-LayerSqliteDatabases {
 }
 
 function Get-SqliteTargetProbe {
-  return 'lines=$(node --import tsx server/storePaths.ts) || exit 1; printf "%s\n" "$lines" | while read -r kind store target; do [ "$kind" = sqlite ] || continue; dir=$(dirname "$target"); if [ -e "$target" ] || [ -e "$target-wal" ] || [ -e "$target-journal" ]; then state=taken; elif [ -d "$dir" ] && check=$(mktemp "$dir/.conclave-write-check-XXXXXX" 2>/dev/null) && rm -f "$check"; then state=free; else state=unwritable; fi; printf "%s %s %s\n" "$store" "$state" "$target"; done'
+  return 'exec node --import tsx server/layerDatabase.ts probe'
 }
 
 function Get-SqliteReceiver {
-  return 'umask 077 && target=$1 && case "$target" in /*) ;; *) echo "The database path $target is not absolute." >&2; exit 1;; esac && case "$3" in ""|*[!A-Za-z0-9]*) echo "The transfer id $3 is not safe to use." >&2; exit 1;; esac && dir=$(dirname "$target") && incoming=$dir/.incoming-sqlite-$3 && find "$dir" -mindepth 1 -maxdepth 1 -type d -name ".incoming-sqlite-*" -mmin +30 -exec rm -rf {} + && for existing in "$target" "$target-wal" "$target-journal"; do if [ -e "$existing" ]; then echo "$existing already exists, and a database is never replaced." >&2; exit 1; fi; done && mkdir "$incoming" && chown node:node "$incoming" && trap ''rm -rf "$incoming"'' EXIT && cat > "$incoming/payload.tar" && got=$(sha256sum "$incoming/payload.tar" | cut -d" " -f1) && if [ "$got" != "$2" ]; then echo "The database arrived with checksum $got, not $2." >&2; exit 1; fi && tar -xf "$incoming/payload.tar" -C "$incoming" && rm "$incoming/payload.tar" && chown node:node "$incoming"/db* && chmod 0600 "$incoming"/db* && for part in -wal -journal; do if [ -e "$incoming/db$part" ]; then mv "$incoming/db$part" "$target$part" || exit 1; fi; done && mv "$incoming/db" "$target"'
+  return 'umask 077 && target=$1 && case "$target" in /*) ;; *) echo "The database path $target is not absolute." >&2; exit 1;; esac && case "$3" in ""|*[!A-Za-z0-9]*) echo "The transfer id $3 is not safe to use." >&2; exit 1;; esac && dir=$(dirname "$target") && incoming=$dir/.incoming-sqlite-$3 && find "$dir" -mindepth 1 -maxdepth 1 -type d -name ".incoming-sqlite-*" -mmin +30 -exec rm -rf {} + && for existing in "$target" "$target-wal" "$target-journal"; do if [ -e "$existing" ]; then echo "$existing already exists, and a database is never replaced." >&2; exit 1; fi; done && mkdir "$incoming" && chown node:node "$incoming" && trap ''rm -rf "$incoming"'' EXIT && cat > "$incoming/payload.tar" && got=$(sha256sum "$incoming/payload.tar" | cut -d" " -f1) && if [ "$got" != "$2" ]; then echo "The database arrived with checksum $got, not $2." >&2; exit 1; fi && tar -xf "$incoming/payload.tar" -C "$incoming" && rm "$incoming/payload.tar" && node --import tsx server/layerDatabase.ts consolidate "$incoming/db" "$4" "$5" && chown node:node "$incoming/db" && chmod 0600 "$incoming/db" && ln "$incoming/db" "$target"'
 }
 
 function Get-LayerSqlitePlan {
@@ -429,36 +429,41 @@ function Get-LayerSqlitePlan {
   if ($layer.Count -eq 0) {
     return @()
   }
+  $started = (@(& docker inspect --format "{{.State.StartedAt}}" $Container) -join "").Trim()
+  if ($LASTEXITCODE -ne 0 -or -not $started) {
+    throw "Could not read when the old $Service container last started."
+  }
   $targets = @($null | & docker @($composeBaseArgs + @("run", "-T", "--rm", "--no-deps", "--user", "root", "--cap-add", "DAC_OVERRIDE", "--entrypoint", "sh", $Service, "-c", (Get-SqliteTargetProbe))))
   if ($LASTEXITCODE -ne 0) {
     throw "Could not check where the new $Service keeps its databases."
   }
   $plan = @()
   foreach ($entry in $layer) {
-    $state = ""
-    $target = ""
+    $found = $null
     foreach ($line in $targets) {
-      $fields = @("$line" -split " ", 3)
-      if ($fields.Count -eq 3 -and $fields[0] -ceq $entry.Store) {
-        $state = $fields[1]
-        $target = $fields[2]
+      $fields = @("$line" -split "`t")
+      if ($fields.Count -eq 5 -and $fields[0] -ceq $entry.Store) {
+        $found = [pscustomobject]@{ State = $fields[1]; Target = $fields[2]; Container = $fields[3]; Started = $fields[4] }
       }
     }
-    switch -CaseSensitive ($state) {
-      "free" {
-        if (-not ($plan | Where-Object { $_.Old -ceq $entry.Path -and $_.Target -ceq $target })) {
-          $plan += [pscustomobject]@{ Old = $entry.Path; Target = $target }
-        }
-      }
-      "taken" {
-        throw "The old $Service container keeps the $($entry.Store) database at $($entry.Path) inside the container, not on the volume, and $target on the volume already holds a database, so a copy cannot carry it over. Copy it out with: docker cp ${Container}:$($entry.Path) <file>, merge it into $target, then deploy again."
-      }
-      "unwritable" {
-        throw "The old $Service container keeps the $($entry.Store) database at $($entry.Path) inside the container, not on the volume, and the new image would keep it at $target, which the new container cannot write. Point CONCLAVE_SQLITE_PATH (or the store's own *_SQLITE_PATH) at the recordings volume, then deploy again."
-      }
-      default {
-        throw "Could not tell where the new $Service keeps the $($entry.Store) database."
-      }
+    if (-not $found) {
+      throw "Could not tell where the new $Service keeps the $($entry.Store) database."
+    }
+    $action = $null
+    if ($found.State -ceq "carried" -and $found.Container -ceq $Container -and $found.Started -ceq $started) {
+      $action = "done"
+    } elseif ($found.State -ceq "free") {
+      $action = "carry"
+    } elseif ($found.State -ceq "taken" -or $found.State -ceq "carried") {
+      $origin = if ($found.Container) { " carried from container $($found.Container) as it was when it started at $($found.Started)" } else { "" }
+      throw "The old $Service container keeps the $($entry.Store) database at $($entry.Path) inside the container, not on the volume, and $($found.Target) on the volume already holds a database$origin, so a copy cannot carry it over. Copy it out with: docker cp ${Container}:$($entry.Path) <file>, merge it into $($found.Target), then deploy again."
+    } elseif ($found.State -ceq "unwritable") {
+      throw "The old $Service container keeps the $($entry.Store) database at $($entry.Path) inside the container, not on the volume, and the new image would keep it at $($found.Target), which the new container cannot write. Point CONCLAVE_SQLITE_PATH (or the store's own *_SQLITE_PATH) at the recordings volume, then deploy again."
+    } else {
+      throw "Could not tell where the new $Service keeps the $($entry.Store) database."
+    }
+    if (-not ($plan | Where-Object { $_.Old -ceq $entry.Path -and $_.Target -ceq $found.Target })) {
+      $plan += [pscustomobject]@{ Old = $entry.Path; Target = $found.Target; Action = $action; Started = $started }
     }
   }
   $shared = @($plan | Group-Object -Property Target -CaseSensitive | Where-Object { $_.Count -gt 1 } | Select-Object -First 1)
@@ -489,6 +494,10 @@ function Copy-LayerSqlite {
   }
   $index = 0
   foreach ($step in $Plan) {
+    if ($step.Action -ceq "done") {
+      Write-Host "The old $Service container's database $($step.Old) is already at $($step.Target) on the volume, carried by an earlier attempt from this container as it is now."
+      continue
+    }
     $index++
     $folder = Join-Path $Directory "$index"
     New-Item -ItemType Directory -Path $folder -Force | Out-Null
@@ -521,38 +530,33 @@ function Copy-LayerSqlite {
     $transfer = [guid]::NewGuid().ToString("N").Substring(0, 12)
     $exitCode = Send-FileToCommand -Path $archive -Command "docker" -Arguments ($composeBaseArgs + @(
       "run", "-T", "--rm", "--no-deps", "--user", "root", "--cap-add", "CHOWN", "--cap-add", "DAC_OVERRIDE", "--cap-add", "FOWNER", "--entrypoint", "sh", $Service, "-c",
-      (Get-SqliteReceiver), "sh", $step.Target, $checksum, $transfer
+      (Get-SqliteReceiver), "sh", $step.Target, $checksum, $transfer, $Container, $step.Started
     ))
     if ($exitCode -ne 0) {
       throw "Could not copy the old $Service container's database $($step.Old) to $($step.Target) on the volume."
     }
-    Write-Host "Copied the old $Service container's database $($step.Old) to $($step.Target) on the volume and verified it: $($parts -join ' ')"
+    Write-Host "Copied the old $Service container's database $($step.Old) to $($step.Target) on the volume, folded its $($parts -join ' ') into one file and verified it."
   }
 }
 
-function Assert-UndividedLayerDatabases {
-  param([string[]]$Services)
+function Assert-NoServingLayerDatabases {
+  param([string]$Serving, [string]$Inactive)
 
-  $holders = @()
-  foreach ($service in $Services) {
-    $container = @(& docker @($composeBaseArgs + @("ps", "-a", "-q", $service))) | Select-Object -First 1
-    if ($LASTEXITCODE -ne 0) {
-      Exit-WithError "Could not look up the old $service container. Nothing was changed."
-    }
-    if ([string]::IsNullOrWhiteSpace($container)) {
-      continue
-    }
-    try {
-      $layer = @(Get-LayerSqliteDatabases -Container $container)
-    } catch {
-      Exit-WithError "Could not list the databases the old $service container kept. Nothing was changed."
-    }
-    if ($layer.Count -gt 0) {
-      $holders += $service
-    }
+  $container = @(& docker @($composeBaseArgs + @("ps", "-a", "-q", $Serving))) | Select-Object -First 1
+  if ($LASTEXITCODE -ne 0) {
+    Exit-WithError "Could not look up the old $Serving container. Nothing was changed."
   }
-  if ($holders.Count -gt 1) {
-    Exit-WithError "The old $($holders -join ' ') containers each keep their own database inside the container, not on the volume. A copy can carry over only one of them, so nothing was changed. Merge them into one database on the recordings volume, then deploy again."
+  if ([string]::IsNullOrWhiteSpace($container)) {
+    return
+  }
+  try {
+    $layer = @(Get-LayerSqliteDatabases -Container $container)
+  } catch {
+    Exit-WithError "Could not list the databases the old $Serving container kept. Nothing was changed."
+  }
+  if ($layer.Count -gt 0) {
+    $paths = @($layer | ForEach-Object { $_.Path } | Sort-Object -Unique) -join " "
+    Exit-WithError "The serving $Serving container keeps its database inside the container, not on the volume: $paths`n$Inactive is replaced first, and its new container would create a new database on the volume before $Serving's could be carried over, so nothing was changed. In a maintenance window, stop $Serving, copy that database onto the recordings volume where the new image keeps it (docker cp), then deploy again."
   }
 }
 
@@ -882,7 +886,7 @@ if ($activeService -eq "sfu-a") {
 Write-Host "Active service: $activeService"
 Write-Host "Inactive service: $inactiveService"
 
-Assert-UndividedLayerDatabases -Services @("sfu-a", "sfu-b")
+Assert-NoServingLayerDatabases -Serving $activeService -Inactive $inactiveService
 
 Write-Host "Building and starting $inactiveService..."
 Start-SfuService -Service $inactiveService -Url $inactiveUrl
