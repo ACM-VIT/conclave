@@ -144,7 +144,7 @@ It needs a local Docker daemon.
 
 - It runs `pnpm check:docker-context` first, then builds `packages/sfu/Dockerfile` and `packages/shared-browser/Dockerfile` from the repository root and boots each one.
 - Each container must answer 200 on `/health` over HTTP from inside the container. The SFU must also import `@conclave/apps-sdk` there.
-- The shared browser gets a random `BROWSER_SERVICE_TOKEN` and binds `127.0.0.1`.
+- The shared browser gets a random `BROWSER_SERVICE_TOKEN`, binds `127.0.0.1`, and gets the session browser image built from `packages/shared-browser/docker` (as `scripts/deploy-browser-service.sh` builds it) as `BROWSER_IMAGE_NAME`.
 - It resolves Docker's effective endpoint the way the CLI does: `DOCKER_HOST` first, otherwise `DOCKER_CONTEXT` or the current context. It refuses that endpoint unless it is a local `unix://` socket.
 - It runs every later Docker call pinned to that endpoint, with every `DOCKER_*` and `BUILDX_*` variable removed. It builds only with the `default` buildx builder, and refuses unless that is the docker driver on the checked endpoint.
 - It never pushes. It gives each run a random container name and tag, and removes only the containers (by the id `docker run` returned) and tags it created, including when interrupted with Ctrl-C.

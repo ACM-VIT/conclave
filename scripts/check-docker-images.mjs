@@ -91,11 +91,12 @@ const BOOTS = {
   },
   "packages/shared-browser/Dockerfile": {
     port: 3040,
+    companions: [{ context: "packages/shared-browser/docker", env: "BROWSER_IMAGE_NAME", slug: "session" }],
     env: () => ({ BROWSER_SERVICE_HOST: "127.0.0.1", BROWSER_SERVICE_PORT: "3040", BROWSER_SERVICE_TOKEN: randomBytes(24).toString("hex") }),
     mounts: ({ socket }) => ["-v", `${socket}:/var/run/docker.sock`],
     async ready(docker, id, { socket }) {
       await waitForHealth(docker, id, 3040);
-      return `/health answered 200 with ${socket} mounted`;
+      return `/health answered 200 with ${socket} mounted and the session image from packages/shared-browser/docker`;
     },
   },
 };
@@ -128,18 +129,26 @@ async function checkImage(build, { docker, resources, builder, socket, noCache, 
   const boot = BOOTS[build.dockerfile];
   if (!boot) throw new Error(`no boot check for ${build.dockerfile}; add one to BOOTS in scripts/check-docker-images.mjs`);
   const slug = build.dockerfile.replace(/\/Dockerfile$/, "").replace(/[^a-z0-9]+/gi, "-").toLowerCase();
-  const tag = `conclave-check-images/${slug}:${run}`;
-  const buildArgs = Object.entries(build.args).flatMap(([name, value]) => ["--build-arg", `${name}=${value}`]);
-  resources.images.add(tag);
+  const buildImage = ({ name, args, file, context }) => {
+    const tag = `conclave-check-images/${name}:${run}`;
+    resources.images.add(tag);
+    const built = docker(["buildx", "build", "--builder", builder, "--load", "--progress=plain", ...(noCache ? ["--no-cache"] : []), ...args, ...(file ? ["-f", file] : []), "-t", tag, context], { allowFailure: true });
+    const log = path.join(logDir, `${name}-build.log`);
+    writeFileSync(log, `${built.stdout}${built.stderr}`);
+    return { tag, ok: built.status === 0, log };
+  };
   const started = Date.now();
-  const built = docker(["buildx", "build", "--builder", builder, "--load", "--progress=plain", ...(noCache ? ["--no-cache"] : []), ...buildArgs, "-f", build.dockerfile, "-t", tag, "."], { allowFailure: true });
-  const buildLog = path.join(logDir, `${slug}-build.log`);
-  writeFileSync(buildLog, `${built.stdout}${built.stderr}`);
+  const buildArgs = Object.entries(build.args).flatMap(([name, value]) => ["--build-arg", `${name}=${value}`]);
+  const image = buildImage({ name: slug, args: buildArgs, file: build.dockerfile, context: "." });
+  const env = boot.env();
+  const companions = (boot.companions ?? []).map((companion) => ({ ...companion, ...buildImage({ name: `${slug}-${companion.slug}`, args: [], context: companion.context }) }));
   const buildSeconds = Math.round((Date.now() - started) / 1000);
   let id = null;
   try {
-    if (built.status !== 0) return { dockerfile: build.dockerfile, ok: false, detail: `build failed after ${buildSeconds} s, see ${buildLog}` };
-    id = await startContainer(docker, resources, { name: `conclave-check-images-${slug}-${run}`, tag, env: boot.env(), mounts: boot.mounts({ socket }) });
+    const failed = [image, ...companions].find((item) => !item.ok);
+    if (failed) return { dockerfile: build.dockerfile, ok: false, detail: `build failed after ${buildSeconds} s, see ${failed.log}` };
+    for (const companion of companions) env[companion.env] = companion.tag;
+    id = await startContainer(docker, resources, { name: `conclave-check-images-${slug}-${run}`, tag: image.tag, env, mounts: boot.mounts({ socket }) });
     const detail = await boot.ready(docker, id, { socket });
     return { dockerfile: build.dockerfile, ok: true, detail: `built in ${buildSeconds} s, ${detail}` };
   } catch (error) {

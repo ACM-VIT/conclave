@@ -259,12 +259,14 @@ test("compose builds inherited through a YAML merge key are found", (t) => {
 });
 
 test("pnpm scripts in a partial image workspace must skip the dependency reinstall", () => {
-  const ours = readFileSync(path.join(repoRoot, "packages/shared-browser/Dockerfile"), "utf8");
-  const staging = ours.replace(" --config.verify-deps-before-run=false", "");
-  assert.deepEqual(pnpmScriptProblems("packages/shared-browser/Dockerfile", staging).map((problem) => problem.replace(/line \d+/, "line N")), [
-    "packages/shared-browser/Dockerfile: line N: `pnpm -C packages/shared-browser run build` runs pnpm in a partial image workspace; pass --config.verify-deps-before-run=false or call the binary directly",
+  const install = "FROM node:22-bookworm-slim\nWORKDIR /app\nRUN pnpm install --filter @conclave/shared-browser... --frozen-lockfile --node-linker=isolated\n";
+  assert.deepEqual(pnpmScriptProblems("x", `${install}RUN pnpm -C packages/shared-browser run build\n`), [
+    "x: line 4: `pnpm -C packages/shared-browser run build` runs pnpm in a partial image workspace; pass --config.verify-deps-before-run=false or call the binary directly",
   ]);
-  assert.deepEqual(pnpmScriptProblems("packages/shared-browser/Dockerfile", ours), []);
+  assert.deepEqual(pnpmScriptProblems("x", `${install}RUN pnpm -C packages/shared-browser --config.verify-deps-before-run=false run build\n`), []);
+  for (const dockerfile of ["packages/sfu/Dockerfile", "packages/shared-browser/Dockerfile"]) {
+    assert.deepEqual(pnpmScriptProblems(dockerfile, readFileSync(path.join(repoRoot, dockerfile), "utf8")), [], dockerfile);
+  }
   assert.deepEqual(pnpmScriptProblems("x", "FROM node\nRUN npm install --global pnpm@12 && pnpm install --filter a... --frozen-lockfile\nWORKDIR /app/a\nRUN ./node_modules/.bin/tsc\n"), []);
   assert.equal(pnpmScriptProblems("x", "FROM node\nRUN pnpm --filter a build\n").length, 1);
 });
