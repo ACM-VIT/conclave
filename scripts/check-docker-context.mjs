@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { rootContextBuilds } from "./docker-context/compose.mjs";
-import { DockerfileError, contextCopies } from "./docker-context/dockerfile.mjs";
+import { DockerfileError, contextCopies, runInstructions } from "./docker-context/dockerfile.mjs";
 import { cleanPattern, contextDirectories, dockerIgnoreMatcher, walkContext } from "./docker-context/dockerignore.mjs";
 import { UnsupportedShape } from "./docker-context/unsupported.mjs";
 
@@ -12,9 +12,23 @@ export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)
 
 const DEPENDENCY_FIELDS = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"];
 const TEST_PATH = /(^|\/)(test|tests|__tests__)\/|\.(test|spec)\.[cm]?[jt]sx?$/;
-const ARTIFACT_PATH = /(^|\/)(node_modules|dist)(\/|$)|(^|\/)\.env(\.[^/]*)?$|\.log$/;
-const ARTIFACT_PROBES = ["node_modules/probe/index.js", "dist/probe.js", ".env", ".env.local", "probe.log"];
+const ARTIFACT_PATH = /(^|\/)(node_modules|dist|data)(\/|$)|(^|\/)\.env(\.[^/]*)?$|\.(log|sqlite|sqlite3|db)$|-(wal|shm|journal)$/;
+const ARTIFACT_PROBES = [
+  "node_modules/probe/index.js",
+  "dist/probe.js",
+  ".env",
+  ".env.local",
+  "probe.log",
+  "data/conclave.sqlite",
+  "probe.sqlite",
+  "probe.sqlite3",
+  "probe.db",
+  "probe.sqlite-wal",
+  "probe.sqlite-shm",
+  "probe.db-journal",
+];
 const WILDCARD = /[*?[]/;
+const VERIFY_DEPS_OFF = "--config.verify-deps-before-run=false";
 
 export function workspacePackages(root = repoRoot) {
   const byName = new Map();
@@ -73,10 +87,27 @@ export function imagePackages(dockerfile, sources, packages) {
   return workspaceClosure(owners, packages);
 }
 
+function contextGap(file, { contextFiles, matcher, ignoreFile }) {
+  if (contextFiles.has(file)) return null;
+  return matcher.excluded(file) ? `which ${ignoreFile} excludes` : "which is tracked but missing from the build context";
+}
+
+export function pnpmScriptProblems(dockerfile, text) {
+  return runInstructions(text).flatMap(({ line, text: command }) =>
+    command
+      .split(/&&|\|\||;/)
+      .map((segment) => segment.trim())
+      .filter((segment) => /(^|\s)pnpm(\s|$)/.test(segment) && !/(^|\s)pnpm(\s+\S+)*\s+(install|i)(\s|$)/.test(segment) && !segment.includes(VERIFY_DEPS_OFF))
+      .map((segment) => `${dockerfile}: line ${line}: \`${segment}\` runs pnpm in a partial image workspace; pass ${VERIFY_DEPS_OFF} or call the binary directly`),
+  );
+}
+
 export function imageProblems(root, build, { packages, tracked, contextFiles, matcher, ignoreFile }) {
   const problems = [];
   const sources = [];
-  for (const copy of contextCopies(readFileSync(path.join(root, build.dockerfile), "utf8"), build.args)) {
+  const text = readFileSync(path.join(root, build.dockerfile), "utf8");
+  const context = { contextFiles, matcher, ignoreFile };
+  for (const copy of contextCopies(text, build.args)) {
     for (const raw of copy.sources) {
       const source = cleanPattern(raw);
       if (WILDCARD.test(source)) throw new UnsupportedShape(`line ${copy.line}: wildcard COPY source ${raw}`);
@@ -89,15 +120,21 @@ export function imageProblems(root, build, { packages, tracked, contextFiles, ma
       if (!contextFiles.has(source) && ![...contextFiles].some((file) => file.startsWith(`${source}/`))) {
         problems.push(`${build.dockerfile}: line ${copy.line}: COPY source ${raw} is not in the build context`);
       }
-      for (const file of sourceFiles(source, tracked).filter(matcher.excluded)) problems.push(`${build.dockerfile}: source ${source} needs ${file}, which ${ignoreFile} excludes`);
+      for (const file of sourceFiles(source, tracked).filter((item) => item === source || !TEST_PATH.test(item))) {
+        const gap = contextGap(file, context);
+        if (gap) problems.push(`${build.dockerfile}: source ${source} needs ${file}, ${gap}`);
+      }
     }
   }
   for (const name of imagePackages(build.dockerfile, sources, packages)) {
     const { dir } = packages.get(name);
-    for (const file of sourceFiles(dir, tracked).filter((item) => !TEST_PATH.test(item) && matcher.excluded(item))) {
-      problems.push(`${build.dockerfile}: ${name} needs ${file}, which ${ignoreFile} excludes`);
+    for (const file of sourceFiles(dir, tracked).filter((item) => !TEST_PATH.test(item))) {
+      const gap = contextGap(file, context);
+      if (gap) problems.push(`${build.dockerfile}: ${name} needs ${file}, ${gap}`);
     }
   }
+  const partialWorkspace = [...packages.values()].some(({ dir }) => !contextFiles.has(`${dir}/package.json`));
+  if (partialWorkspace) problems.push(...pnpmScriptProblems(build.dockerfile, text));
   return problems;
 }
 

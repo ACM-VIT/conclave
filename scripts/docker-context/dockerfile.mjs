@@ -221,3 +221,10 @@ export function contextCopies(text, buildArgs = {}) {
   }
   return copies;
 }
+
+export function runInstructions(text) {
+  const { directives, body } = splitDirectives(text.replace(/^\uFEFF/, "").split(/\r?\n/));
+  return logicalInstructions(body, directives.escape ?? "\\")
+    .filter((instruction) => /^RUN\s/i.test(instruction.text))
+    .map((instruction) => ({ line: instruction.line, text: instruction.text.replace(/^RUN\s+/i, "") }));
+}

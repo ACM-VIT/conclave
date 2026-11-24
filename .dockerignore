@@ -21,3 +21,10 @@
 **/.env
 **/.env.*
 **/*.log
+**/data
+**/*.sqlite
+**/*.sqlite3
+**/*.db
+**/*-wal
+**/*-shm
+**/*-journal

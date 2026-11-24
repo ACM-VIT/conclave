@@ -36,7 +36,7 @@ function buildArgs(args, where) {
 export function composeBuilds(root) {
   const builds = [];
   for (const file of readdirSync(root).filter((name) => COMPOSE_FILE.test(name)).sort()) {
-    const document = parse(readFileSync(path.join(root, file), "utf8")) ?? {};
+    const document = parse(readFileSync(path.join(root, file), "utf8"), { merge: true }) ?? {};
     if (document.include !== undefined) throw unsupported(`${file} uses include`);
     for (const [service, definition] of Object.entries(document.services ?? {})) {
       if (definition?.extends !== undefined) throw unsupported(`${file} services.${service} uses extends`);

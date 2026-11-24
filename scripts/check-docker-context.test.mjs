@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { artifactProblems, contextProblems, imagePackages, repoRoot, workspacePackages } from "./check-docker-context.mjs";
+import { artifactProblems, contextProblems, imagePackages, pnpmScriptProblems, repoRoot, workspacePackages } from "./check-docker-context.mjs";
 import { rootContextBuilds } from "./docker-context/compose.mjs";
 import { DockerfileError, contextCopies } from "./docker-context/dockerfile.mjs";
 import { dockerIgnoreMatcher, walkContext } from "./docker-context/dockerignore.mjs";
@@ -165,7 +165,7 @@ test("the context walk finds nested artifacts on disk and probes every included 
   assert.ok(problems.includes(".dockerignore: packages/a/src/.env.local is on disk and would enter the build context"));
   assert.ok(problems.includes(".dockerignore: packages/a/docker/node_modules/pkg/index.js is on disk and would enter the build context"));
   assert.ok(problems.includes(".dockerignore: packages/a/src/dist/probe.js would enter the build context"));
-  const global = dockerIgnoreMatcher("**\n!packages/a/**\n**/node_modules\n**/dist\n**/.env\n**/.env.*\n**/*.log\n");
+  const global = dockerIgnoreMatcher(`**\n!packages/a/**\n${dockerIgnore.split("\n").filter((line) => line.startsWith("**/")).join("\n")}\n`);
   assert.deepEqual(artifactProblems(".dockerignore", global, walkContext(root, global)), []);
 });
 
@@ -202,3 +202,69 @@ test("re-including all of packages/ without artifact rules leaks them into the c
   assert.ok(problems.includes(".dockerignore: packages/meeting-core/.env would enter the build context"));
 });
 
+
+function gitFixture(t, files) {
+  const root = fixture(t, { "apps/.keep": "", ...files });
+  execFileSync("git", ["init", "-q"], { cwd: root });
+  execFileSync("git", ["add", "-A"], { cwd: root });
+  return root;
+}
+
+const fixturePackage = {
+  "docker-compose.yml": "services:\n  a:\n    build: { context: ., dockerfile: packages/a/Dockerfile }\n",
+  "packages/a/package.json": JSON.stringify({ name: "@fixture/a" }),
+  "packages/a/src/index.ts": "",
+  "packages/a/test/index.test.ts": "",
+  "packages/a/src/index.test.ts": "",
+  "packages/a/src/__tests__/case.ts": "",
+};
+
+test("runtime state anywhere in the context fails the check", (t) => {
+  const withoutStateRules = dockerIgnore.split("\n").filter((line) => !/data|sqlite|\.db|-wal|-shm|-journal/.test(line)).join("\n");
+  const problems = contextProblems(repoRoot, { dockerIgnore: withoutStateRules });
+  for (const probe of ["packages/sfu/data/conclave.sqlite", "packages/sfu/probe.sqlite-wal", "packages/apps-sdk/src/probe.db", "packages/ai/probe.db-journal"]) {
+    assert.ok(problems.includes(`.dockerignore: ${probe} would enter the build context`), probe);
+  }
+  const root = fixture(t, { "packages/a/data/conclave.sqlite": "", "packages/a/src/cache.sqlite-shm": "", "packages/a/src/index.ts": "" });
+  const open = dockerIgnoreMatcher("**\n!packages/a/**\n");
+  const onDisk = artifactProblems(".dockerignore", open, walkContext(root, open)).filter((problem) => problem.includes("on disk"));
+  assert.deepEqual(onDisk, [
+    ".dockerignore: packages/a/data/conclave.sqlite is on disk and would enter the build context",
+    ".dockerignore: packages/a/src/cache.sqlite-shm is on disk and would enter the build context",
+  ]);
+});
+
+test("a directory COPY may leave test files and folders out, but a COPY that names one may not", (t) => {
+  const globalRules = dockerIgnore.split("\n").filter((line) => line.startsWith("**/")).join("\n");
+  const ignore = `**\n!packages/\n!packages/a/**\n${globalRules}\n**/test\n**/__tests__\n**/*.test.*\n`;
+  const directory = gitFixture(t, { ...fixturePackage, ".dockerignore": ignore, "packages/a/Dockerfile": "FROM node\nCOPY packages ./packages\nCOPY packages/a/src packages/a/src\n" });
+  assert.deepEqual(contextProblems(directory), []);
+  const named = gitFixture(t, { ...fixturePackage, ".dockerignore": ignore, "packages/a/Dockerfile": "FROM node\nCOPY packages/a/test/index.test.ts ./\n" });
+  assert.ok(contextProblems(named).includes("packages/a/Dockerfile: source packages/a/test/index.test.ts needs packages/a/test/index.test.ts, which .dockerignore excludes"));
+});
+
+test("a tracked file missing from the context fails even when no rule excludes it", (t) => {
+  const root = gitFixture(t, { ...fixturePackage, ".dockerignore": "**\n!packages/\n!packages/a/**\n", "packages/a/Dockerfile": "FROM node\nCOPY packages/a ./a\n" });
+  rmSync(path.join(root, "packages/a/src/index.ts"));
+  const problems = contextProblems(root);
+  assert.ok(problems.includes("packages/a/Dockerfile: @fixture/a needs packages/a/src/index.ts, which is tracked but missing from the build context"), JSON.stringify(problems));
+  assert.ok(problems.includes("packages/a/Dockerfile: source packages/a needs packages/a/src/index.ts, which is tracked but missing from the build context"));
+});
+
+test("compose builds inherited through a YAML merge key are found", (t) => {
+  const root = fixture(t, {
+    "docker-compose.yml": "x-sfu: &sfu\n  build:\n    context: .\n    dockerfile: packages/sfu/Dockerfile\nservices:\n  edge:\n    <<: *sfu\n    environment: { A: b }\n",
+  });
+  assert.deepEqual(rootContextBuilds(root).map(({ service, dockerfile }) => [service, dockerfile]), [["edge", "packages/sfu/Dockerfile"]]);
+});
+
+test("pnpm scripts in a partial image workspace must skip the dependency reinstall", () => {
+  const ours = readFileSync(path.join(repoRoot, "packages/shared-browser/Dockerfile"), "utf8");
+  const staging = ours.replace(" --config.verify-deps-before-run=false", "");
+  assert.deepEqual(pnpmScriptProblems("packages/shared-browser/Dockerfile", staging).map((problem) => problem.replace(/line \d+/, "line N")), [
+    "packages/shared-browser/Dockerfile: line N: `pnpm -C packages/shared-browser run build` runs pnpm in a partial image workspace; pass --config.verify-deps-before-run=false or call the binary directly",
+  ]);
+  assert.deepEqual(pnpmScriptProblems("packages/shared-browser/Dockerfile", ours), []);
+  assert.deepEqual(pnpmScriptProblems("x", "FROM node\nRUN npm install --global pnpm@12 && pnpm install --filter a... --frozen-lockfile\nWORKDIR /app/a\nRUN ./node_modules/.bin/tsc\n"), []);
+  assert.equal(pnpmScriptProblems("x", "FROM node\nRUN pnpm --filter a build\n").length, 1);
+});
