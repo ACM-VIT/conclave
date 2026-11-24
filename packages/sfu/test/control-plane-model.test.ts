@@ -255,7 +255,8 @@ const runSequence = async (mode: StoreMode, seed: number, steps: number): Promis
     "cancel meeting": { meeting: ["status"] },
     "edit webinar title": { webinar: ["title"] },
     "edit webinar slug": { webinar: ["linkSlug"] },
-    "co-host invite": { webinar: ["coHostInviteTokenHash", "coHostInviteTokenCreatedAt", "coHosts"] },
+    "co-host invite": { webinar: ["coHostInviteTokenHash", "coHostInviteTokenCreatedAt"] },
+    "accept co-host invite": { webinar: ["coHosts"] },
     tick: {
       meeting: ["status", "emailReminderStatus", "emailReminderError", "emailReminderSentAt"],
       webinar: ["status"],
@@ -518,10 +519,13 @@ const runSequence = async (mode: StoreMode, seed: number, steps: number): Promis
             if (invite.status !== 200 || !link) return invite;
             const token = decodeURIComponent(link.split("/").pop() ?? "");
             const other = sfus[sfu.name === "A" ? "B" : "A"]!;
-            return other.call(op, `/scheduled-webinars/cohost-invites/${encodeURIComponent(token)}/accept`, undefined, {
-              "x-user-id": "cohost",
-              "x-user-email": "cohost@example.test",
-            });
+            launch(other, "accept co-host invite", "POST", null, (acceptOp) =>
+              other.call(acceptOp, `/scheduled-webinars/cohost-invites/${encodeURIComponent(token)}/accept`, undefined, {
+                "x-user-id": "cohost",
+                "x-user-email": "cohost@example.test",
+              }),
+            );
+            return invite;
           }, id);
           return;
         }
