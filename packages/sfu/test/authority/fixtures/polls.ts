@@ -265,12 +265,21 @@ export const pollsAuthority = defineAuthority({
     for (const [, ballot] of tx.scan("ballots")) {
       if (ballot.subject !== from) continue;
       tx.delete("ballots", key(ballot.pollId, from));
-      const moved = tx.insertIfAbsent("ballots", key(ballot.pollId, into), { ...ballot, subject: into });
-      if (moved === "inserted") continue;
+      const kept = tx.get("ballots", key(ballot.pollId, into));
+      if (!kept) {
+        tx.put("ballots", key(ballot.pollId, into), { ...ballot, subject: into });
+        continue;
+      }
+      const dropped = kept.votedAt <= ballot.votedAt ? ballot : kept;
+      if (dropped === kept) tx.put("ballots", key(ballot.pollId, into), { ...ballot, subject: into });
       const poll = tx.get("polls", key(ballot.pollId));
       if (!poll) continue;
       const votes = { ...poll.tally.votes };
-      for (const id of ballot.optionIds) votes[id] = Math.max(0, (votes[id] ?? 0) - 1);
+      for (const id of dropped.optionIds) {
+        const left = (votes[id] ?? 0) - 1;
+        if (left > 0) votes[id] = left;
+        else delete votes[id];
+      }
       tx.put("polls", key(poll.id), {
         ...poll,
         tally: { voterCount: Math.max(0, poll.tally.voterCount - 1), votes },

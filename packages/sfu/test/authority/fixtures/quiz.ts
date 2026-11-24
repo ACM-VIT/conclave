@@ -82,7 +82,7 @@ type QuizState = {
   answered: number;
   leaderboard: { name: string; score: number }[] | null;
 };
-type Answer = { round: number; subject: Subject; choice: number; at: number };
+type Answer = { round: number; subject: Subject; choice: number; at: number; points: number };
 type Score = { subject: Subject; name: string; score: number };
 
 const initial: QuizState = {
@@ -94,6 +94,13 @@ const initial: QuizState = {
   answered: 0,
   leaderboard: null,
 };
+
+const leaderboardOf = (tx: { scan(table: "scores"): readonly (readonly [unknown, Score])[] }) =>
+  tx
+    .scan("scores")
+    .map(([, row]) => ({ name: row.name, score: row.score }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 10);
 
 export const quizAuthority = defineAuthority({
   contract: quizContract,
@@ -159,7 +166,7 @@ export const quizAuthority = defineAuthority({
         const inserted = tx.insertIfAbsent(
           "answers",
           key(String(state.index), ctx.subject),
-          { round: state.index, subject: ctx.subject, choice: input.choice, at: ctx.now },
+          { round: state.index, subject: ctx.subject, choice: input.choice, at: ctx.now, points: 0 },
         );
         if (inserted === "exists") reject("already-answered");
         tx.insertIfAbsent("scores", key(ctx.subject), {
@@ -205,19 +212,11 @@ export const quizAuthority = defineAuthority({
           const left = Math.max(0, state.deadline - given.at);
           const score = tx.get("scores", key(given.subject));
           if (!score) continue;
-          tx.put("scores", key(given.subject), {
-            ...score,
-            score:
-              score.score +
-              BASE_POINTS +
-              Math.round((SPEED_POINTS * Math.min(left, roundMs)) / roundMs),
-          });
+          const points = BASE_POINTS + Math.round((SPEED_POINTS * Math.min(left, roundMs)) / roundMs);
+          tx.put("answers", key(String(given.round), given.subject), { ...given, points });
+          tx.put("scores", key(given.subject), { ...score, score: score.score + points });
         }
-        const leaderboard = tx
-          .scan("scores")
-          .map(([, row]) => ({ name: row.name, score: row.score }))
-          .sort((a, b) => b.score - a.score)
-          .slice(0, 10);
+        const leaderboard = leaderboardOf(tx);
         const deadline = ctx.now + REVEAL_MS;
         tx.put("quiz", STATE, { ...state, phase: "reveal", deadline, leaderboard });
         tx.schedule("advance", STATE, deadline, { round: state.index, phase: "reveal" });
@@ -283,20 +282,33 @@ export const quizAuthority = defineAuthority({
     },
   },
   mergeSubjects(_ctx, tx, { from, into }) {
-    for (const [, answer] of tx.scan("answers")) {
-      if (answer.subject !== from) continue;
-      tx.delete("answers", key(String(answer.round), from));
-      tx.insertIfAbsent("answers", key(String(answer.round), into), { ...answer, subject: into });
+    const state = tx.get("quiz", STATE);
+    let answeredDropped = 0;
+    for (const [, mine] of tx.scan("answers")) {
+      if (mine.subject !== from) continue;
+      tx.delete("answers", key(String(mine.round), from));
+      const kept = tx.get("answers", key(String(mine.round), into));
+      if (kept && state && mine.round === state.index) answeredDropped += 1;
+      if (kept && kept.at <= mine.at) continue;
+      tx.put("answers", key(String(mine.round), into), { ...mine, subject: into });
     }
     const fromScore = tx.get("scores", key(from));
-    if (fromScore) {
+    const intoScore = tx.get("scores", key(into));
+    if (fromScore || intoScore) {
       tx.delete("scores", key(from));
-      const intoScore = tx.get("scores", key(into));
-      tx.put(
-        "scores",
-        key(into),
-        intoScore ? { ...intoScore, score: intoScore.score + fromScore.score } : { ...fromScore, subject: into },
-      );
+      const points = tx
+        .scan("answers")
+        .filter(([, answer]) => answer.subject === into)
+        .reduce((sum, [, answer]) => sum + answer.points, 0);
+      const base = intoScore ?? fromScore!;
+      tx.put("scores", key(into), { ...base, subject: into, score: points });
+    }
+    if (state && (answeredDropped > 0 || state.leaderboard)) {
+      tx.put("quiz", STATE, {
+        ...state,
+        answered: state.answered - answeredDropped,
+        leaderboard: state.leaderboard ? leaderboardOf(tx) : null,
+      });
     }
     return undefined;
   },

@@ -101,13 +101,27 @@ export const signUpAuthority = defineAuthority({
     const entry = tx.get("entries", key(from));
     if (!entry) return undefined;
     tx.delete("entries", key(from));
-    tx.insertIfAbsent("entries", key(into), { ...entry, subject: into });
+    const kept = tx.get("entries", key(into));
+    if (!kept || entry.joinedAt < kept.joinedAt) {
+      tx.put("entries", key(into), { ...entry, subject: into });
+    }
     return undefined;
   },
 });
 ```
 
-An app with a personal view keeps rows by person, so it must define `mergeSubjects`. The room can learn late that two subjects are one person, for example a guest whose two tabs got different passes. It then runs `mergeSubjects` once in every app, in one transaction, and moves everything kept under `from` to `into`. Where the person now has two of something that is one per person, such as two ballots in one poll, keep one and fix any counts. After the merge the person has one subject everywhere.
+An app with a personal view keeps rows by person, so it must define `mergeSubjects`. The room can learn late that two subjects are one person, for example a guest whose two tabs got different passes. It then runs `mergeSubjects` once in every app, in one transaction, and moves everything kept under `from` to `into`. After the merge the person has one subject everywhere.
+
+The rule a merge follows: it leaves what one person would have if they had done the surviving actions themselves, in the order they happened.
+
+- Of two actions that are one per person (two ballots in one poll, two answers in one round, two joins), the earlier one survives, because the later one would have been refused.
+- Of two writes of the same row, the later one survives, because it would have overwritten the first.
+- Counts, totals and scores are worked out again from what survives, and stored results (a tally, a leaderboard) are rebuilt.
+- A merge sees the rows, not the history, so store the time a row was written whenever its order decides which one survives.
+- A field that only records when a row last changed, such as `updatedAt`, may keep the later time.
+- An action of one subject that undid or cleared the other subject's rows saw none of them, so a merge cannot reproduce it; both effects stay.
+
+Check a merge with `mergeAgainstOnePerson` in `packages/sfu/test/authority/merge-check.ts`: it plays a script once as two subjects followed by the merge and once as one person, and compares every table.
 
 The four things a module has:
 

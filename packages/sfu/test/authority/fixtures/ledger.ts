@@ -39,7 +39,7 @@ export const ledgerContract = defineContract({
 });
 
 type Card = { id: string; text: string };
-type Secret = { id: string; text: string; subject: Subject };
+type Secret = { id: string; text: string; subject: Subject; at: number };
 
 const everyone = ["moderator", "member"] as const;
 
@@ -74,6 +74,7 @@ export const ledgerAuthority = defineAuthority({
           id: input.id,
           text: input.text,
           subject: ctx.subject,
+          at: ctx.now,
         });
         return null;
       },
@@ -123,6 +124,7 @@ export const ledgerAuthority = defineAuthority({
             id: `k${index}`,
             text: "kept",
             subject: ctx.subject,
+            at: ctx.now,
           });
         }
         return null;
@@ -153,7 +155,9 @@ export const ledgerAuthority = defineAuthority({
   mergeSubjects(_ctx, tx, { from, into }) {
     for (const [, secret] of tx.scan("secrets", key("secret", from))) {
       tx.delete("secrets", key("secret", from, secret.id));
-      tx.insertIfAbsent("secrets", key("secret", into, secret.id), { ...secret, subject: into });
+      const kept = tx.get("secrets", key("secret", into, secret.id));
+      if (kept && kept.at >= secret.at) continue;
+      tx.put("secrets", key("secret", into, secret.id), { ...secret, subject: into });
     }
     return undefined;
   },

@@ -270,6 +270,15 @@ export const qaAuthority = defineAuthority({
     for (const [, question] of tx.scan("questions")) {
       if (question.author === from) tx.put("questions", key(question.id), { ...question, author: into });
     }
+    const open = tx
+      .scan("questions")
+      .map(([, row]) => row)
+      .filter((row) => row.author === into && (row.status === "pending" || row.status === "answering"))
+      .sort((a, b) => a.askedAt - b.askedAt);
+    for (const extra of open.slice(QA_MAX_OPEN_PER_PERSON)) {
+      tx.delete("questions", key(extra.id));
+      tx.clear("upvotes", key(extra.id));
+    }
     for (const [, upvote] of tx.scan("upvotes")) {
       if (upvote.voter !== from) continue;
       tx.delete("upvotes", key(upvote.questionId, from));

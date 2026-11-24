@@ -315,7 +315,10 @@ export const ${camel}Authority = defineAuthority({
     const entry = tx.get("entries", key(from));
     if (!entry) return undefined;
     tx.delete("entries", key(from));
-    tx.insertIfAbsent("entries", key(into), { ...entry, subject: into });
+    const kept = tx.get("entries", key(into));
+    if (!kept || entry.joinedAt < kept.joinedAt) {
+      tx.put("entries", key(into), { ...entry, subject: into });
+    }
     return undefined;
   },
 });
