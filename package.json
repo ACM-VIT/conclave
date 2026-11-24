@@ -29,6 +29,7 @@
     "test:deploy-preflight": "node --test scripts/deploy-sfu-preflight.test.mjs scripts/deploy-sfu.test.mjs",
     "test:deploy-crash": "node --test scripts/deploy-sfu-crash.test.mjs",
     "test:deploy-fuzz": "node --test scripts/deploy-sfu-fuzz.test.mjs",
+    "test:deploy-fuzz-b": "DEPLOY_FUZZ_SEED=101 node --test --test-name-pattern=fault scripts/deploy-sfu-fuzz.test.mjs",
     "test:cloudflare-manifests": "node --test scripts/cloudflare-manifests.test.mjs",
     "test:backup": "node --test scripts/backup/backup-restore.test.mjs",
     "build:conclave-skip:android": "bash scripts/build-conclave-skip-android-debug.sh",

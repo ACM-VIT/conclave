@@ -182,6 +182,23 @@ fixed("fuzz: a call on a drained candidate whose /status stops answering is neve
   });
 });
 
+fixed("Greptile: a container that restarted and runs again is busy, so a call it took after the restart is waited for, not cut", () => {
+  const restartUnderCall = (sfu) => {
+    if (sfu.image !== TARGET || sfu.bootDrained || sfu.failed) return;
+    sfu.failed = true;
+    sfu.publicDown = true;
+    sfu.rooms = 1;
+    sfu.restartsWhileRunning = true;
+  };
+  return withStack({ "sfu-a": { publicRoute: true, onRecreate: restartUnderCall }, "sfu-b": {} }, async (sfus, shared) => {
+    const paused = await deploy(sfus, { env: { ...shared.env, ...ONLY_A } });
+    assert.equal(paused.code, 3, paused.output);
+    assert.equal(sfus["sfu-a"].rooms, 1, "the call is still on it");
+    assert.deepEqual(cutRooms(sfus), cutRooms(sfus).map(() => 0));
+    assert.equal((await journal(shared, "sfu-a")).phase, "rollback");
+  });
+});
+
 fixed("fuzz: a public route that is down when the deploy first looks still leaves the image the instance served on to go back to", () =>
   withStack({ "sfu-a": { publicRoute: true } }, async (sfus, shared) => {
     sfus["sfu-a"].publicFailures = 1;
@@ -368,12 +385,12 @@ const runPlan = async (plan) => {
   });
 };
 
-const runs = Number(process.env.DEPLOY_FUZZ_RUNS ?? 200);
+const runs = Number(process.env.DEPLOY_FUZZ_RUNS ?? 100);
 const firstSeed = Number(process.env.DEPLOY_FUZZ_SEED ?? 1);
 for (let seed = firstSeed; seed < firstSeed + runs; seed += 1) {
   queued.push([`fault plan ${seed}`, () => runPlan(makePlan(seed))]);
 }
 
-describe("deploy-sfu.sh recovery", { concurrency: Number(process.env.DEPLOY_FUZZ_CONCURRENCY ?? 8) }, () => {
+describe("deploy-sfu.sh recovery", { concurrency: Number(process.env.DEPLOY_FUZZ_CONCURRENCY ?? 12) }, () => {
   for (const args of queued) test(...args);
 });

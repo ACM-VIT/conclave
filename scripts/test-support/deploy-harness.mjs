@@ -91,7 +91,7 @@ export const startSfu = async (
     const json = (value, status = 200) => res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(value));
     if (url.pathname === "/stand-in/state") {
       const startedAt = new Date(Date.now() - (["crash-looping", "young"].includes(sfu.container) ? 3_000 : 3_600_000)).toISOString();
-      if (sfu.container === "crash-looping") sfu.restartCount += 1;
+      if (sfu.container === "crash-looping" || sfu.restartsWhileRunning) sfu.restartCount += 1;
       const status = { exited: "exited", "crash-looping": "restarting" }[sfu.container] ?? "running";
       return json({
         status,
