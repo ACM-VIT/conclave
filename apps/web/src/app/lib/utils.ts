@@ -1,5 +1,6 @@
 import { EMOJI_REACTIONS, type ReactionEmoji } from "./constants";
 import { isMediaCaptureTimeoutError } from "./media-capture-timeout";
+import { comparableHost } from "../../lib/comparable-host";
 import type {
   MeetError,
   MeetMediaDevice,
@@ -180,30 +181,6 @@ const fitsDns = (hostname: string) => {
     name.length <= 253 &&
     name.split(".").every((label) => label.length >= 1 && label.length <= 63)
   );
-};
-
-const PRINTABLE_ASCII = /^[\x20-\x7e]*$/;
-
-const comparableHost = (host: string): string | null => {
-  let parsed: URL;
-  try {
-    parsed = new URL(`https://${host}/`);
-  } catch {
-    return null;
-  }
-  const typedLabels = host.toLowerCase().replace(/:\d*$/, "").split(".");
-  const labels = parsed.hostname.split(".");
-  const onlyCaseOrIdn =
-    typedLabels.length === labels.length &&
-    typedLabels.every(
-      (label, index) =>
-        label === labels[index] ||
-        (!PRINTABLE_ASCII.test(label) && labels[index].startsWith("xn--")),
-    );
-  if (!onlyCaseOrIdn) return null;
-  return parsed.port && parsed.port !== "80"
-    ? `${parsed.hostname}:${parsed.port}`
-    : parsed.hostname;
 };
 
 const linkRoomCode = (segment: string) => {

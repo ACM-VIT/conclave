@@ -1,7 +1,7 @@
 import { domainToASCII } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseCodeFieldPaste } from "../src/app/lib/utils";
-import { getMeetingLinkHosts } from "../src/lib/site-url";
+import { getMeetingLinkHosts, getPublicSiteUrl } from "../src/lib/site-url";
 
 const KNOWN_HOSTS = [
   "conclave.acmvit.in",
@@ -54,7 +54,10 @@ const APP_PAGES = new Set([
   "sign-in",
 ]);
 
-const expectedReplacement = (text: string): string | null => {
+const expectedReplacement = (
+  text: string,
+  referenceHosts: readonly (string | null)[] = KNOWN_REFERENCE_HOSTS,
+): string | null => {
   const trimmed = text.trim();
   const scheme = /^https?:\/\//i.exec(trimmed);
   const rest = scheme
@@ -68,7 +71,7 @@ const expectedReplacement = (text: string): string | null => {
   if (/[\s@\\]/.test(host)) return null;
   if (!scheme) {
     const typed = referenceHost(host);
-    if (!typed || !KNOWN_REFERENCE_HOSTS.includes(typed)) return null;
+    if (!typed || !referenceHosts.includes(typed)) return null;
   }
   let hostname: string;
   try {
@@ -124,6 +127,7 @@ const HOSTS = [
   "M\u00dcNCHEN.example", "xn--mnchen-3ya.example", "XN--MNCHEN-3YA.EXAMPLE", "b\u00fccher.example",
   "127.1:3615", "127.0.0.1:3615", "0x7f.0.0.1:3615", "conclave.acmvit.in:443",
   "conclave.acmvit.in:000443", "conclave.acmvit.in:8443", "\uff43onclave.acmvit.in",
+  "m\u00fcnchen.example:8443", "xn--mnchen-3ya.example:8443",
   "conclave%2eacmvit.in",
   "conclave.acmvit.in", "Conclave.ACMVIT.in", "localhost:3615", "localhost:3005", "localhost",
   "11", "2026", "10.0.0.1", "127.0.0.1:3005", "[::1]", "m\u00fcnchen.example", "meet.example",
@@ -266,8 +270,48 @@ describe("pasting into the join code field", () => {
       expect(parse(text), JSON.stringify(text)).toBeNull();
     }
   });
+});
 
-  it("only replaces the field when the text is unambiguously a Conclave meeting link", () => {
+const referenceSettingHost = (setting: string): string | null => {
+  const authority = setting.trim().replace(/^https?:\/\//i, "").split(/[/?#\\]/)[0];
+  if (!/^(?:\[[0-9a-f:.]+\]|[^\s@:[\]]+)(?::\d+)?$/i.test(authority)) return null;
+  const host = referenceHost(authority);
+  if (!host) return null;
+  let hostname: string;
+  try {
+    hostname = new URL(`https://${authority}/`).hostname;
+  } catch {
+    return null;
+  }
+  return host === hostname || host.startsWith(`${hostname}:`) ? host : null;
+};
+
+const PRODUCTION_HOST = "conclave.acmvit.in";
+
+const SITE_SETTINGS = [
+  { label: "the fixed known hosts", setting: null },
+  { label: "a bare Unicode site setting", setting: "m\u00fcnchen.example" },
+  { label: "a punycode site setting", setting: "xn--mnchen-3ya.example" },
+  { label: "a URL-form site setting", setting: "https://M\u00dcNCHEN.example:8443/app" },
+];
+
+describe("replacing the field only for an unambiguous Conclave meeting link", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it.each(SITE_SETTINGS)("holds for $label", ({ setting }) => {
+    let hosts: readonly string[] = KNOWN_HOSTS;
+    let referenceHosts: readonly (string | null)[] = KNOWN_REFERENCE_HOSTS;
+    if (setting !== null) {
+      vi.stubEnv("NEXT_PUBLIC_SITE_URL", setting);
+      vi.stubEnv("NEXT_PUBLIC_APP_URL", "");
+      hosts = getMeetingLinkHosts();
+      referenceHosts = [referenceHost(PRODUCTION_HOST), referenceSettingHost(setting)];
+      expect(referenceHosts[1]).not.toBeNull();
+      expect(hosts.map(referenceHost).sort()).toEqual([...referenceHosts].sort());
+      expect(hosts).toContain(referenceHost(new URL(getPublicSiteUrl()).host));
+    }
     const random = seededRandom(310);
     let replacements = 0;
     const pick = (items: readonly string[]) => items[Math.floor(random() * items.length)];
@@ -280,9 +324,10 @@ describe("pasting into the join code field", () => {
         const count = 1 + Math.floor(random() * 6);
         for (let i = 0; i < count; i += 1) text += pick(PIECES);
       }
-      const got = linkCode(text);
+      const paste = parseCodeFieldPaste(text, hosts);
+      const got = paste?.kind === "replace" ? paste.code : null;
       if (got !== null) replacements += 1;
-      if (got !== expectedReplacement(text)) mismatches.push(JSON.stringify(text));
+      if (got !== expectedReplacement(text, referenceHosts)) mismatches.push(JSON.stringify(text));
     }
     expect(mismatches).toEqual([]);
     expect(replacements).toBeGreaterThan(500);
@@ -307,9 +352,49 @@ describe("hosts a pasted meeting link may use without a scheme", () => {
     );
   });
 
-  it("stores an internationalized site host in its ASCII form", () => {
-    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://m\u00fcnchen.example");
-    expect(getMeetingLinkHosts()).toContain("xn--mnchen-3ya.example");
+  it("stores an internationalized site host in its ASCII form however it is set", () => {
+    for (const setting of [
+      "https://m\u00fcnchen.example",
+      "m\u00fcnchen.example",
+      "M\u00dcNCHEN.example/",
+      "xn--mnchen-3ya.example",
+      "https://XN--MNCHEN-3YA.example/app?x=1",
+    ]) {
+      vi.stubEnv("NEXT_PUBLIC_SITE_URL", setting);
+      expect(getMeetingLinkHosts()).toContain("xn--mnchen-3ya.example");
+      expect(getPublicSiteUrl()).toBe("https://xn--mnchen-3ya.example");
+    }
+  });
+
+  it("reads a site setting the same way for the site URL and for pasted links", () => {
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", "");
+    vi.stubEnv("BETTER_AUTH_URL", "");
+    vi.stubEnv("BETTER_AUTH_BASE_URL", "");
+    vi.stubEnv("VERCEL_URL", "");
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "");
+    const fallback = getPublicSiteUrl();
+    for (const setting of [
+      "m\u00fcnchen.example",
+      "xn--mnchen-3ya.example:8443",
+      "https://staging.example:8443/path",
+      "http://localhost:3615",
+      "app.example/",
+      "11",
+      "127.1",
+      "file:///tmp/conclave",
+      "file:/tmp",
+      "mailto:user@example.com",
+      "https://user:secret@app.example",
+      "ftp://app.example",
+      "app example",
+    ]) {
+      vi.stubEnv("NEXT_PUBLIC_SITE_URL", setting);
+      const expected = referenceSettingHost(setting);
+      const siteHost = getPublicSiteUrl() === fallback ? null : new URL(getPublicSiteUrl()).host;
+      expect({ setting, siteHost: siteHost && referenceHost(siteHost) }).toEqual({ setting, siteHost: expected });
+      const linkHosts = getMeetingLinkHosts().filter((host) => host !== PRODUCTION_HOST);
+      expect({ setting, linkHosts }).toEqual({ setting, linkHosts: expected ? [expected] : [] });
+    }
   });
 
   it("ignores site settings that are not web addresses", () => {

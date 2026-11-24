@@ -1,3 +1,5 @@
+import { comparableHost } from "./comparable-host";
+
 const DEFAULT_PRODUCTION_SITE_URL = "https://conclave.acmvit.in";
 const DEFAULT_DEVELOPMENT_SITE_URL = "http://localhost:3000";
 
@@ -26,16 +28,36 @@ export const normalizeOrigin = (value: string | undefined): string | null => {
   }
 };
 
-export const getPublicSiteUrl = (): string =>
-  normalizeOrigin(
-    firstNonEmpty(
-      process.env.NEXT_PUBLIC_SITE_URL,
-      process.env.NEXT_PUBLIC_APP_URL,
-      process.env.BETTER_AUTH_URL,
-      process.env.BETTER_AUTH_BASE_URL,
-      process.env.VERCEL_URL,
-    ),
-  ) ?? defaultSiteUrl;
+const SITE_SETTING = /^(?:(?<scheme>https?):\/\/)?(?<authority>[^\s/?#\\]+)(?:[/?#\\]\S*)?$/i;
+const SITE_AUTHORITY = /^(?:\[[0-9a-f:.]+\]|[^\s@:[\]]+)(?::\d+)?$/i;
+
+const parseSiteSetting = (
+  value: string | undefined,
+): { origin: string; host: string } | null => {
+  const { scheme, authority } = SITE_SETTING.exec(value?.trim() ?? "")?.groups ?? {};
+  if (!authority || !SITE_AUTHORITY.test(authority)) return null;
+  const host = comparableHost(authority);
+  if (!host) return null;
+  try {
+    return { origin: new URL(`${scheme ?? "https"}://${authority}`).origin, host };
+  } catch {
+    return null;
+  }
+};
+
+export const getPublicSiteUrl = (): string => {
+  for (const value of [
+    process.env.NEXT_PUBLIC_SITE_URL,
+    process.env.NEXT_PUBLIC_APP_URL,
+    process.env.BETTER_AUTH_URL,
+    process.env.BETTER_AUTH_BASE_URL,
+    process.env.VERCEL_URL,
+  ]) {
+    const setting = parseSiteSetting(value);
+    if (setting) return setting.origin;
+  }
+  return defaultSiteUrl;
+};
 
 export const getAuthBaseUrl = (): string =>
   normalizeOrigin(
@@ -48,23 +70,6 @@ export const getAuthBaseUrl = (): string =>
     ),
   ) ?? defaultSiteUrl;
 
-const webHostOf = (url: string | undefined): string | null => {
-  const value = url?.trim();
-  if (!value) return null;
-  const href = /^https?:\/\//i.test(value)
-    ? value
-    : /^[a-z0-9.-]+(?::\d+)?\/?$/i.test(value)
-      ? `https://${value}`
-      : null;
-  if (!href) return null;
-  try {
-    const parsed = new URL(href);
-    return parsed.host && !parsed.username && !parsed.password ? parsed.host : null;
-  } catch {
-    return null;
-  }
-};
-
 export const getMeetingLinkHosts = (): string[] => {
   const hosts = new Set<string>();
   for (const url of [
@@ -72,8 +77,8 @@ export const getMeetingLinkHosts = (): string[] => {
     process.env.NEXT_PUBLIC_SITE_URL,
     process.env.NEXT_PUBLIC_APP_URL,
   ]) {
-    const host = webHostOf(url);
-    if (host) hosts.add(host);
+    const setting = parseSiteSetting(url);
+    if (setting) hosts.add(setting.host);
   }
   if (
     typeof window !== "undefined" &&
