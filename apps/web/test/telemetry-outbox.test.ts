@@ -564,19 +564,35 @@ describe("a batch /ingest asked to wait for", () => {
     expect(store.list()).toEqual([]);
   });
 
-  it("still goes by beacon after an ordinary backoff, which /ingest did not ask for", async () => {
-    const h = harness({ answers: [503] });
+  it("is held back from the beacon while an ordinary backoff runs, and sent at its time", async () => {
+    const h = harness({ answers: [503], store: createBatchStore(fullStorage) });
     const failed = event();
     h.outbox.add(failed);
     await h.advance(FLUSH_INTERVAL_MS);
     h.outbox.flushForUnload();
+    expect(h.beacons).toEqual([]);
 
-    expect(h.uuidsIn(h.beacons)).toEqual([failed.uuid]);
+    await h.advance(2000);
+    expect(h.posts.map((post) => post.at - START)).toEqual([5000, 7000]);
+  });
+
+  it("is beaconed once however many lifecycle events follow, until its confirmation is due", async () => {
+    const h = harness({ store: createBatchStore(fullStorage) });
+    const queued = event();
+    h.outbox.add(queued);
+    h.outbox.flushForUnload();
+    await h.advance(100);
+    h.outbox.flushForUnload();
+    await h.advance(100);
+    h.outbox.flushForUnload();
+
+    expect(h.uuidsIn(h.beacons)).toEqual([queued.uuid]);
+    expect(h.posts).toEqual([]);
   });
 });
 
 describe("the outbox as the page goes away", () => {
-  it("saves every batch not yet answered, beacons the ones not in flight, and confirms each while the page stays", async () => {
+  it("saves every batch not yet answered, beacons only the ones that are due, and confirms each while the page stays", async () => {
     const store = memoryStore();
     const h = harness({ answers: [503, "pending"], store });
     const waiting = event();
@@ -589,7 +605,7 @@ describe("the outbox as the page goes away", () => {
     h.outbox.flushForUnload();
 
     expect(h.posted()).toEqual([waiting.uuid, inFlight.uuid]);
-    expect(h.uuidsIn(h.beacons).sort()).toEqual([waiting.uuid, queued.uuid].sort());
+    expect(h.uuidsIn(h.beacons)).toEqual([queued.uuid]);
     expect(storedUuids(store).sort()).toEqual([waiting.uuid, inFlight.uuid, queued.uuid].sort());
     await h.advance(120_000);
     expect(store.list()).toEqual([]);

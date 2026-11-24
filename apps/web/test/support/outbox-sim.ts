@@ -212,13 +212,14 @@ export async function simulate(
   const checkSend = (key: string, how: "post" | "beacon") => {
     const until = waitUntil.get(key) ?? 0;
     if (clock < until) violate("sent before its Retry-After", `${how} of ${key} ${until - clock} ms early`);
-    if (how === "beacon") return;
     const beaconed = beaconedAt.get(key);
     if (beaconed !== undefined && clock - beaconed < BEACON_CONFIRM_MS) {
-      violate("sent again before its beacon is confirmed", `${key} ${clock - beaconed} ms after its beacon`);
+      violate("sent again before its beacon is confirmed", `${how} of ${key} ${clock - beaconed} ms after its beacon`);
     }
-    const open = (requests.get(key) ?? []).filter((request) => !request.done && request.tab.open);
-    if (open.length > 0) violate("two sends of one batch in flight", key);
+    if (how === "post") {
+      const open = (requests.get(key) ?? []).filter((request) => !request.done && request.tab.open);
+      if (open.length > 0) violate("two sends of one batch in flight", key);
+    }
     const failed = failures.get(key);
     if (failed && failed.count > 0) {
       const gap = SCHEDULE[Math.min(failed.count - 1, SCHEDULE.length - 1)];
@@ -422,7 +423,22 @@ export async function simulate(
           tab.outbox.replaySaved();
         });
       }
-    } else if (roll < 0.8 && open.length > 0) {
+    } else if (roll < 0.7 && open.length > 0) {
+      const tab = open[Math.floor(rng() * open.length)];
+      if (rng() < 0.5) refusingUntil = clock + between(5000, 60_000);
+      note(`tab${tab.id} goes through a burst of lifecycle events`);
+      tab.hidden = true;
+      tab.outbox.flushForUnload();
+      const bursts = 1 + Math.floor(rng() * 2);
+      for (let index = 1; index <= bursts; index++) {
+        schedule(clock + index * between(50, 250), tab, "action", () => tab.outbox.flushForUnload());
+      }
+      schedule(clock + between(1000, 90_000), tab, "action", () => {
+        if (!tab.open) return;
+        tab.hidden = false;
+        tab.outbox.replaySaved();
+      });
+    } else if (roll < 0.85 && open.length > 0) {
       closeTab(open[Math.floor(rng() * open.length)]);
     }
     schedule(clock + between(5000, 60_000), null, "action", act);

@@ -6,6 +6,24 @@ const quiet = { refuseRate: 0, beaconRefuseRate: 1, beaconLossRate: 0, maxTabs: 
 
 export const THREAD_CASES: ThreadCase[] = [
   {
+    name: "a second and third lifecycle event right after the first do not beacon the batch again",
+    thread: "Sol final review of #265 at daf5493f, finding 2",
+    head: "daf5493f",
+    seed: 2026112402,
+    scenario: {
+      profile: { ...quiet, refuseRate: 1, beaconRefuseRate: 0 },
+      actions: [
+        { at: 0, act: "open", tab: 1 },
+        { at: 1000, act: "emit", tab: 1, count: 2 },
+        { at: 2000, act: "hide", tab: 1 },
+        { at: 2100, act: "hide", tab: 1 },
+        { at: 2200, act: "hide", tab: 1 },
+        { at: 40_000, act: "show", tab: 1 },
+      ],
+      replies: [{ latency: 100, status: 200 }],
+    },
+  },
+  {
     name: "a waiting batch beaconed as its tab hides, with storage refusing it, waits for its confirmation",
     thread: "https://github.com/ACM-VIT/conclave/pull/265#discussion_r4669367064",
     head: "223618b7",

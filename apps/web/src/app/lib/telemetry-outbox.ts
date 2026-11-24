@@ -380,7 +380,7 @@ export function createOutbox(deps: OutboxDeps) {
       for (const batch of [...waiting, ...batchesOf(items)]) {
         const body = bodyOf(batch.events);
         const bytes = byteLength(body);
-        if (batch.notBefore <= deps.now() && !tooOld(batch.oldestAt) && bytes <= budget && deps.beacon(body)) {
+        if (dueAt(batch) <= deps.now() && !tooOld(batch.oldestAt) && bytes <= budget && deps.beacon(body)) {
           budget -= bytes;
           beacons.push({ bytes, at: deps.now() });
           batch.sent = true;

@@ -51,14 +51,15 @@ one owner at a time:
   answer's `Retry-After` when that is later (seconds or an HTTP date, held to
   60 s). A `Retry-After` only ever moves the next try later, and no path sends
   a batch before `max(nextTry, notBefore)`: a timer that fires early is set
-  again for the batch's due time. Every request has
-  a 15 s deadline (`/ingest` itself allows 2 s for a manifest and 10 s for
+  again for the batch's due time. That holds for the send as a page goes
+  away too: a batch in backoff, or beaconed less than 30 s ago, is saved, not
+  sent again, however many lifecycle events follow. Every request has a 15 s
+  deadline (`/ingest` itself allows 2 s for a manifest and 10 s for
   PostHog); at the deadline it is aborted and counts as no answer.
 - **Saved.** On `visibilitychange` to hidden, on `pagehide` and on `freeze`,
-  everything queued and every batch waiting in memory goes by beacon (a
-  keepalive `fetch`), within one 56 KB budget for every keepalive request
-  still outstanding, unless its `Retry-After` has not passed; then each is
-  saved in local storage
+  everything queued and every batch waiting in memory that is due goes by
+  beacon (a keepalive `fetch`), within one 56 KB budget for every keepalive
+  request still outstanding; then each is saved in local storage
   under its own key, `conclave:telemetry:batch:<uuid>`, at most 512 KB in
   all. A request in flight is saved too, with its attempt id and a lease. A
   saved batch keeps its place in the retry schedule (`attempt`, `nextTry`,
