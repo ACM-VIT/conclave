@@ -156,13 +156,13 @@ export type RoomPolicyUpdate = {
 
 type ProducerInfo = ReturnType<Client["getProducerInfos"]>[number];
 
-const promoteNextAdmin = (room: Room): Admin | null => {
-  for (const client of room.clients.values()) {
+const promoteNextAdmin = (room: Room): Admin[] | null => {
+  for (const client of [...room.clients.values()]) {
     if (client instanceof Admin || client.isObserver) {
       continue;
     }
     const promoted = room.promoteClientToAdmin(client.id, "fallback");
-    if (promoted) {
+    if (promoted && promoted.length > 0) {
       return promoted;
     }
   }
@@ -187,7 +187,7 @@ const endForNoHost = (io: SocketIOServer, state: SfuState, room: Room): void => 
   forceCloseRoom(state, room.channelId);
 };
 
-const announcePromotedHost = (room: Room, promoted: Admin): void => {
+export const announcePromotedHost = (room: Room, promoted: Admin): void => {
   const roomId = room.id;
   const promotedContext = getSocketContext(promoted.socket);
   if (promotedContext) {
@@ -226,7 +226,7 @@ export const ensureHost = (io: SocketIOServer, state: SfuState, room: Room): voi
   if (!room.hasActiveAdmin()) {
     const promoted = promoteNextAdmin(room);
     if (promoted) {
-      announcePromotedHost(room, promoted);
+      for (const seat of promoted) announcePromotedHost(room, seat);
     } else {
       tellWaitingNoHost(room);
       room.startCleanupTimer(() => {
@@ -237,7 +237,7 @@ export const ensureHost = (io: SocketIOServer, state: SfuState, room: Room): voi
         }
         const late = promoteNextAdmin(room);
         if (late) {
-          announcePromotedHost(room, late);
+          for (const seat of late) announcePromotedHost(room, seat);
           io.to(room.channelId).emit("hostChanged", {
             roomId: room.id,
             hostUserId: room.getHostUserId(),

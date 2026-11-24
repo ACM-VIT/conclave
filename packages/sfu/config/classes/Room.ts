@@ -2010,12 +2010,37 @@ export class Room {
     return this.ownerEmail ? "temporary" : "opener";
   }
 
-  grantHost(userKey: string, basis: HostBasis): void {
+  grantHost(userKey: string, basis: HostBasis): Admin[] {
     const reason = this.hostReasonFor(userKey, basis);
     const held = this.hostReasonsByKey.get(userKey);
-    if (held && HOST_REASON_RANK[held] >= HOST_REASON_RANK[reason]) return;
-    this.hostReasonsByKey.set(userKey, reason);
-    this.onRecoverableChange?.();
+    if (!held || HOST_REASON_RANK[held] < HOST_REASON_RANK[reason]) {
+      this.hostReasonsByKey.set(userKey, reason);
+      this.onRecoverableChange?.();
+    }
+    return this.promoteSeatsOf(userKey);
+  }
+
+  seatsOf(userKey: string): Client[] {
+    const seats: Client[] = [];
+    for (const [seatId, key] of this.userKeysById) {
+      const client = key === userKey ? this.clients.get(seatId) : undefined;
+      if (client) seats.push(client);
+    }
+    return seats;
+  }
+
+  private promoteSeatsOf(userKey: string): Admin[] {
+    const promoted: Admin[] = [];
+    for (const [seatId, key] of this.userKeysById) {
+      if (key !== userKey) continue;
+      const client = this.clients.get(seatId);
+      if (!client || client instanceof Admin || client.isWebinarAttendee || client.isObserver) {
+        continue;
+      }
+      Object.setPrototypeOf(client, Admin.prototype);
+      promoted.push(client as Admin);
+    }
+    return promoted;
   }
 
   makePrimaryHost(userKey: string): void {
@@ -2087,7 +2112,7 @@ export class Room {
     return this.hostReasonsByKey.has(userKey);
   }
 
-  promoteClientToAdmin(userId: string, basis: Exclude<HostBasis, "owner">): Admin | null {
+  promoteClientToAdmin(userId: string, basis: Exclude<HostBasis, "owner">): Admin[] | null {
     const client = this.clients.get(userId);
     const userKey = this.userKeysById.get(userId);
     if (!client || !userKey || client.isWebinarAttendee) {
@@ -2099,15 +2124,12 @@ export class Room {
     ) {
       return null;
     }
-    if (!(client instanceof Admin)) {
-      Object.setPrototypeOf(client, Admin.prototype);
-    }
-    this.grantHost(userKey, basis);
+    const promoted = this.grantHost(userKey, basis);
     if (this.hostReasonOf(userKey) === "owner") {
       this.tellOwnerTookOver(this.welcomeOwner(userKey), userId);
     }
     this.notifyLifecycle("membership");
-    return client as Admin;
+    return promoted;
   }
 
   getHostUserId(): string | null {

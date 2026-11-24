@@ -720,21 +720,19 @@ export const registerAdminHandlers = (
       return;
     }
 
-    const alreadyAdmin = targetClient instanceof Admin;
     const promoted = currentRoom.promoteClientToAdmin(normalizedTargetId, "promoted");
     if (!promoted) {
       respond(cb, { error: "Failed to promote user" });
       return;
     }
 
-    if (!alreadyAdmin) {
-      activatePromotedAdmin(context, promoted, currentRoom.id);
+    for (const seat of promoted) activatePromotedAdmin(context, seat, currentRoom.id);
+    for (const seat of currentRoom.seatsOf(targetUserKey)) {
+      seat.socket.emit("hostAssigned", {
+        roomId: currentRoom.id,
+        hostUserId: currentRoom.getHostUserId() ?? normalizedTargetId,
+      });
     }
-
-    promoted.socket.emit("hostAssigned", {
-      roomId: currentRoom.id,
-      hostUserId: currentRoom.getHostUserId() ?? promoted.id,
-    });
 
     context.io.to(currentRoom.channelId).emit("adminUsersChanged", {
       roomId: currentRoom.id,
@@ -742,13 +740,13 @@ export const registerAdminHandlers = (
     });
 
     Logger.info(
-      `Host privileges granted in room ${currentRoom.id}: ${context.currentClient.id} -> ${promoted.id}`,
+      `Host privileges granted in room ${currentRoom.id}: ${context.currentClient.id} -> ${normalizedTargetId}`,
     );
     respond(cb, {
       success: true,
       hostUserId: currentRoom.getHostUserId() ?? null,
       hostUserIds: currentRoom.getAdminUserIds(),
-      promotedUserId: promoted.id,
+      promotedUserId: normalizedTargetId,
       promotedUserKey: targetUserKey,
     });
   });
@@ -782,7 +780,6 @@ export const registerAdminHandlers = (
       return;
     }
 
-    const alreadyAdmin = targetClient instanceof Admin;
     const promoted = currentRoom.promoteClientToAdmin(normalizedTargetId, "promoted");
     if (!promoted) {
       respond(cb, { error: "Failed to promote user" });
@@ -791,9 +788,7 @@ export const registerAdminHandlers = (
 
     currentRoom.makePrimaryHost(targetUserKey);
 
-    if (!alreadyAdmin) {
-      activatePromotedAdmin(context, promoted, currentRoom.id);
-    }
+    for (const seat of promoted) activatePromotedAdmin(context, seat, currentRoom.id);
 
     io.to(currentRoom.channelId).emit("hostChanged", {
       roomId: currentRoom.id,
@@ -804,16 +799,18 @@ export const registerAdminHandlers = (
       hostUserIds: currentRoom.getAdminUserIds(),
     });
 
-    promoted.socket.emit("hostAssigned", {
-      roomId: currentRoom.id,
-      hostUserId: promoted.id,
-    });
+    for (const seat of currentRoom.seatsOf(targetUserKey)) {
+      seat.socket.emit("hostAssigned", {
+        roomId: currentRoom.id,
+        hostUserId: normalizedTargetId,
+      });
+    }
 
     respond(cb, {
       success: true,
       hostUserId: currentRoom.getHostUserId(),
       hostUserIds: currentRoom.getAdminUserIds(),
-      transferredTo: promoted.id,
+      transferredTo: normalizedTargetId,
     });
   });
 

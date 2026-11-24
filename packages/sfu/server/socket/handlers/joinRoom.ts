@@ -66,7 +66,11 @@ import {
   provesEarlierRoomMembership,
   ROOM_RECOVERY_PASS_TTL_MS,
 } from "../../roomRecoveryPass.js";
-import { offerLapsedRoom, settleUnclaimedRoom } from "../../admin/controlPlane.js";
+import {
+  announcePromotedHost,
+  offerLapsedRoom,
+  settleUnclaimedRoom,
+} from "../../admin/controlPlane.js";
 import type { LostRoom, RecalledRoom } from "../../roomRecoveryLedger.js";
 import { getSocketAuthUser } from "../auth.js";
 import type { ConnectionContext } from "../context.js";
@@ -881,8 +885,9 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
 
         const hostsUnclaimedRoom = isAdminJoin && room.awaitingOpener !== null;
         if (hostsUnclaimedRoom) room.awaitingOpener = null;
+        let otherHostTabs: Admin[] = [];
         if (isAdminJoin) {
-          room.grantHost(
+          otherHostTabs = room.grantHost(
             userKey,
             isCodeOwner
               ? "owner"
@@ -1209,6 +1214,11 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           hostUserIds,
         });
         room.tellOwnerTookOver(demotedForOwner, hostUserId);
+        for (const tab of otherHostTabs) {
+          if (tab.socket.id !== socket.id && room.getClient(tab.id) === tab) {
+            announcePromotedHost(room, tab);
+          }
+        }
 
         if (context.currentClient instanceof Admin && !context.currentClient.isObserver) {
           const pendingUsers = Array.from(
