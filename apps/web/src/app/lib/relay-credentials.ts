@@ -51,9 +51,8 @@ export type RelaySet = {
   issuedAt: number;
 };
 
-type StampableAnswer = {
+type StampedAnswer = {
   iceServers?: RTCIceServer[];
-  iceServersTtlSeconds?: number;
   relayExpiresAt?: number;
   relayIssuedAt?: number;
 };
@@ -61,22 +60,7 @@ type StampableAnswer = {
 const finiteOrNull = (value: unknown): number | null =>
   typeof value === "number" && Number.isFinite(value) ? value : null;
 
-export const stampJoinAnswer = <T extends StampableAnswer>(
-  answer: T,
-  receivedAt: number,
-): T => {
-  const ttlSeconds = finiteOrNull(answer.iceServersTtlSeconds);
-  const expiresAt = finiteOrNull(answer.relayExpiresAt);
-  return {
-    ...answer,
-    relayIssuedAt: finiteOrNull(answer.relayIssuedAt) ?? receivedAt,
-    ...(expiresAt === null && ttlSeconds !== null
-      ? { relayExpiresAt: receivedAt + ttlSeconds * 1000 }
-      : {}),
-  };
-};
-
-export const readAnswerRelay = (answer: StampableAnswer): RelaySet | null => {
+export const readAnswerRelay = (answer: StampedAnswer): RelaySet | null => {
   const { turnIceServers } = splitIceServersByType(answer.iceServers);
   return turnIceServers.length > 0
     ? {
@@ -270,7 +254,7 @@ export const getUsableTurnIceServers = (
  */
 export const applyJoinAnswerToIceServers = (
   current: RuntimeIceServers,
-  answer: StampableAnswer,
+  answer: StampedAnswer,
   now: number,
 ): RuntimeIceServers => {
   const { stunIceServers } = splitIceServersByType(answer.iceServers);

@@ -97,6 +97,7 @@ it("counts the TURN lifetime from when the request was sent", async () => {
 
   expect(answer.relayExpiresAt).toBeGreaterThanOrEqual(sentAt + 60_000);
   expect(answer.relayExpiresAt).toBeLessThan(sentAt + 60_000 + 200);
+  expect(answer.relayIssuedAt).toBe((answer.relayExpiresAt ?? 0) - 60_000);
 });
 
 it("gives an answer without a TURN lifetime no relay deadline", async () => {

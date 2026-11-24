@@ -11,7 +11,6 @@ import {
   transportsToMoveOntoRelay,
   type RelayRefreshChain,
   readAnswerRelay,
-  stampJoinAnswer,
   offerRelays,
   relayCarryingUrl,
   readRelayPairBytes,
@@ -432,18 +431,11 @@ describe("one versioned set of TURN credentials", () => {
   });
 
   it("keeps the expiry an answer was issued with when it is applied again later", () => {
-    const stamped = stampJoinAnswer({ iceServers: [stun, turnB], iceServersTtlSeconds: 30 }, NOW);
+    const stamped = { iceServers: [stun, turnB], relayIssuedAt: NOW, relayExpiresAt: NOW + 30_000 };
     const later = NOW + 60_000;
 
     expect(readAnswerRelay(stamped)).toEqual({ servers: [turnB], expiresAt: NOW + 30_000, issuedAt: NOW });
     expect(getUsableTurnIceServers(applyJoinAnswerToIceServers(NO_RUNTIME_ICE_SERVERS, stamped, later), later)).toBeNull();
-  });
-
-  it("stamps an answer once and keeps the stamps it already has", () => {
-    const stamped = stampJoinAnswer({ iceServers: [stun, turnB], relayIssuedAt: NOW - 5_000, relayExpiresAt: NOW + 1_000 }, NOW);
-
-    expect(stamped).toMatchObject({ relayIssuedAt: NOW - 5_000, relayExpiresAt: NOW + 1_000 });
-    expect(stampJoinAnswer({ iceServers: [stun] }, NOW)).toEqual({ iceServers: [stun], relayIssuedAt: NOW });
   });
 
   it("never lets older proven credentials replace newer proven ones", () => {
