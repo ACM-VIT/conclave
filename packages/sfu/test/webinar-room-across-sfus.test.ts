@@ -1,7 +1,7 @@
 import { createServer, type Server } from "node:http";
 import type { Server as SocketIOServer } from "socket.io";
 import type { Room } from "../config/classes/Room.js";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { config } from "../config/config.js";
 import { createMemoryBackend, createMemoryData, type MemoryData } from "../server/controlPlane/backends/memory.js";
 import { controlPlaneStore } from "../server/controlPlane/store.js";
@@ -25,6 +25,15 @@ import {
   setCustomWebinarLinkSlug,
 } from "../server/webinar.js";
 import type { ScheduledWebinar } from "../types.js";
+
+const policySink = vi.hoisted(() => ({ current: null as Array<{ event: string; payload: string }> | null }));
+
+vi.mock("../server/apps/authority/index.js", async (original) => ({
+  ...(await original<typeof import("../server/apps/authority/index.js")>()),
+  notifyAuthorityPolicy: (state: SfuState, channelId: string) => {
+    if (state.rooms.has(channelId)) policySink.current?.push({ event: "authority:policyChanged", payload: JSON.stringify(channelId) });
+  },
+}));
 
 const admin = { email: null, isAdmin: true };
 const options = { clientId: "conclave", createdBy: "host@example.test", defaultHostEmail: "host@example.test" };
@@ -236,6 +245,7 @@ const recordingIo = () => {
   const io = {
     to: () => ({ emit: (event: string, payload: unknown) => emitted.push({ event, payload: JSON.stringify(payload) }) }),
   } as unknown as SocketIOServer;
+  policySink.current = emitted;
   return { io, emitted };
 };
 
@@ -314,12 +324,16 @@ describe("a webinar change made through this SFU and the same change made throug
     if (name === "a new title only") {
       expect(local).toEqual([]);
     } else {
-      expect(local.map((entry) => entry.event)).toEqual(["webinar:configChanged", "webinar:attendeeCountChanged"]);
+      expect(local.map((entry) => entry.event)).toEqual([
+        "authority:policyChanged",
+        "webinar:configChanged",
+        "webinar:attendeeCountChanged",
+      ]);
     }
   });
 
   it("show hosts the new link code either way", async () => {
-    const [local] = await eventsOnHostingSfu(roomChanges[0][1], "local");
-    expect(JSON.parse(local.payload)).toMatchObject({ linkSlug: "second-<sfu>" });
+    const local = (await eventsOnHostingSfu(roomChanges[0][1], "local")).find((entry) => entry.event === "webinar:configChanged");
+    expect(JSON.parse(local?.payload ?? "null")).toMatchObject({ linkSlug: "second-<sfu>" });
   });
 });
