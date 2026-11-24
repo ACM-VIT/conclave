@@ -79,9 +79,10 @@ Every change an app makes reaches the server through one paced upload path:
 - Every change is all or nothing on the server. An update bigger than that
   cap, such as one large paste or a resend after many edits piled up during a
   catch-up, goes out as numbered parts of one change (`part: { id, index,
-  count }`), cut the way Yjs splits an item. The SFU stages the parts and
-  applies them as one unit when the last arrives, checking the document limit
-  for the whole change, so it keeps all of it or none of it.
+  count }`): plain byte ranges of the encoded update, never re-encoded Yjs
+  structs. The SFU stages the parts, joins them back into the original update
+  when the last arrives, and applies that update once, checking the document
+  limit for the whole change, so it keeps all of it or none of it.
 - The provider sends parts only to an SFU whose sync reply says
   `stagesParts: true`. An older SFU gets the change whole and refuses it as too
   large, never half of it. The native embed does not split yet, because the

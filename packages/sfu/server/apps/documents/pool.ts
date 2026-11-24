@@ -21,7 +21,7 @@ export type SyncResult = { ok: true; update: Uint8Array; stateVector: Uint8Array
 
 export type AppDocument = {
   apply: (update: Uint8Array) => Promise<ApplyResult>;
-  applyChange: (parts: Uint8Array[]) => Promise<ApplyResult>;
+  applyAssembled: (update: Uint8Array) => Promise<ApplyResult>;
   sync: (stateVector: Uint8Array) => Promise<SyncResult>;
   close: () => void;
 };
@@ -63,7 +63,7 @@ export type AppDocumentPoolOptions = {
 };
 
 type Job = { bytes: number } & (
-  | { kind: "apply"; updates: Uint8Array[]; settle: (result: ApplyResult) => void }
+  | { kind: "apply"; update: Uint8Array; assembled: boolean; settle: (result: ApplyResult) => void }
   | { kind: "sync"; stateVector: Uint8Array; settle: (result: SyncResult) => void }
 );
 
@@ -113,7 +113,9 @@ const residentCost = (entry: Entry): number => entry.committedBytes + RESIDENT_O
 
 const operationOf = (job: Job): Operation =>
   job.kind === "apply"
-    ? { kind: "apply", updates: job.updates }
+    ? job.assembled
+      ? { kind: "apply", update: job.update, assembled: true }
+      : { kind: "apply", update: job.update }
     : { kind: "sync", stateVector: job.stateVector };
 
 export const createAppDocumentPool = ({
@@ -243,8 +245,8 @@ export const createAppDocumentPool = ({
         entry.tail = [];
         entry.committedBytes = reply.compacted.length;
       } else {
-        entry.tail.push(...job.updates);
-        entry.committedBytes += job.bytes;
+        entry.tail.push(job.update);
+        entry.committedBytes += job.update.length;
       }
       job.settle({ ok: true });
       return;
@@ -473,16 +475,15 @@ export const createAppDocumentPool = ({
       slot.documents += 1;
       if (!slot.worker) start(slot);
     }
-    const applyChange = (parts: Uint8Array[]): Promise<ApplyResult> =>
+    const applyOne = (update: Uint8Array, assembled: boolean): Promise<ApplyResult> =>
       new Promise((settle) => {
-        const bytes = parts.reduce((total, part) => total + part.length, 0);
-        const refusal = admit(entry, bytes);
+        const refusal = admit(entry, update.length);
         if (refusal) settle({ ok: false, reason: refusal });
-        else enqueue(entry, { kind: "apply", updates: parts.map((part) => new Uint8Array(part)), bytes, settle });
+        else enqueue(entry, { kind: "apply", update: new Uint8Array(update), assembled, bytes: update.length, settle });
       });
     return {
-      apply: (update) => applyChange([update]),
-      applyChange,
+      apply: (update) => applyOne(update, false),
+      applyAssembled: (update) => applyOne(update, true),
       sync: (stateVector) =>
         new Promise((settle) => {
           const refusal = admit(entry, stateVector.length);

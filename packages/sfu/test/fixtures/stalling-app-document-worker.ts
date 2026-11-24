@@ -69,7 +69,7 @@ port.on("message", (message: ToWorker) => {
     engine.handle({ ...message, operations: [] }, (reply, transfer) => post(timedByTheTest(reply, false), transfer));
   }
   for (const [index, operation] of message.operations.entries()) {
-    const update = operation.kind === "apply" ? Buffer.concat(operation.updates) : null;
+    const update = operation.kind === "apply" ? operation.update : null;
     if (holds(update, "STALL")) stallForever("stalled");
     if (holds(update, "HOLD")) holdUntilReleased("HOLD");
     if (holds(update, "OOM")) exhaustHeap();

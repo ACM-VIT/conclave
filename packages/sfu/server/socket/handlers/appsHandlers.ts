@@ -358,6 +358,16 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     }
   );
 
+  const joinParts = (parts: Uint8Array[]): Uint8Array => {
+    const whole = new Uint8Array(parts.reduce((total, part) => total + part.length, 0));
+    let at = 0;
+    for (const part of parts) {
+      whole.set(part, at);
+      at += part.length;
+    }
+    return whole;
+  };
+
   const refusedReplicas: string[] = [];
   const signalRefused = (appId: string, replicaId: string | undefined, reason: string): void => {
     if (!replicaId || refusedReplicas.includes(replicaId)) return;
@@ -366,22 +376,18 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     socket.emit("apps:yjs:refused", { appId, replicaId, reason } satisfies AppsRefusedData);
   };
 
-  const commit = (room: Room, appId: string, replicaId: string | undefined, updates: Uint8Array[]): void => {
+  const commit = (room: Room, appId: string, replicaId: string | undefined, update: Uint8Array, assembled: boolean): void => {
     const { channelId } = room;
-    void room
-      .getOrCreateAppDoc(appId, documents)
-      .applyChange(updates)
-      .then((result) => {
-        if (!result.ok) {
-          const why = UPDATE_REFUSALS[result.reason];
-          if (why) Logger.warn(`[Apps] Dropping update for ${appId}: ${why}`);
-          if (result.reason !== "closed") signalRefused(appId, replicaId, result.reason);
-          return;
-        }
-        for (const update of updates) {
-          socket.to(channelId).emit("apps:yjs:update", { appId, update } satisfies AppsUpdateData);
-        }
-      });
+    const document = room.getOrCreateAppDoc(appId, documents);
+    void (assembled ? document.applyAssembled(update) : document.apply(update)).then((result) => {
+      if (!result.ok) {
+        const why = UPDATE_REFUSALS[result.reason];
+        if (why) Logger.warn(`[Apps] Dropping update for ${appId}: ${why}`);
+        if (result.reason !== "closed") signalRefused(appId, replicaId, result.reason);
+        return;
+      }
+      socket.to(channelId).emit("apps:yjs:update", { appId, update } satisfies AppsUpdateData);
+    });
   };
 
   socket.on("apps:yjs:update", (data: AppsUpdateData) => {
@@ -424,7 +430,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     }
     if (!part) {
       dropStaged();
-      commit(room, appId, replicaId, [update]);
+      commit(room, appId, replicaId, update, false);
       return;
     }
     if (part.index === 0) {
@@ -456,7 +462,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       return;
     }
     dropStaged();
-    commit(room, appId, replicaId, change.parts);
+    commit(room, appId, replicaId, joinParts(change.parts), true);
   });
 
   socket.on("apps:awareness", (data: AppsAwarenessData) => {

@@ -1,7 +1,6 @@
 import * as Y from "yjs";
 import { APP_DOCUMENT_UPDATE_MAX_BYTES, APP_DOCUMENT_UPLOAD_INTERVAL_MS } from "../limits";
 import type { AppsUpdatePart } from "../types/index";
-import { splitUpdate } from "./splitUpdate";
 
 type Item = { update: Uint8Array; part?: AppsUpdatePart };
 type Pending = { appId: string; replicaId: string | undefined; items: Item[] };
@@ -20,10 +19,13 @@ export type UploadQueue = {
 const newChangeId = (): string => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
 
 const itemsFor = (update: Uint8Array, stagesParts: boolean): Item[] => {
-  const pieces = stagesParts ? splitUpdate(update, APP_DOCUMENT_UPDATE_MAX_BYTES) : [update];
-  if (pieces.length === 1) return [{ update }];
+  if (!stagesParts || update.length <= APP_DOCUMENT_UPDATE_MAX_BYTES) return [{ update }];
   const id = newChangeId();
-  return pieces.map((piece, index) => ({ update: piece, part: { id, index, count: pieces.length } }));
+  const count = Math.ceil(update.length / APP_DOCUMENT_UPDATE_MAX_BYTES);
+  return Array.from({ length: count }, (_, index) => ({
+    update: update.slice(index * APP_DOCUMENT_UPDATE_MAX_BYTES, (index + 1) * APP_DOCUMENT_UPDATE_MAX_BYTES),
+    part: { id, index, count },
+  }));
 };
 
 const takeBatch = (items: Item[]): number => {
