@@ -2,6 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/app/lib/telemetry-ingest", () => import("../src/app/lib/telemetry-ingest"));
 vi.mock("@/lib/site-url", () => import("../src/lib/site-url"));
+vi.mock("@/app/lib/ingest-rate-limit", () => import("../src/app/lib/ingest-rate-limit"));
+vi.mock("@opennextjs/cloudflare", () => ({
+  getCloudflareContext: async () => {
+    throw new Error("not running on Cloudflare");
+  },
+}));
 
 const KEY = "phc_test_project";
 const body = JSON.stringify({
@@ -80,4 +86,29 @@ describe("the /ingest route's PostHog host", () => {
       warn.mockRestore();
     },
   );
+});
+
+describe("the /ingest route's rate limit", () => {
+  it("answers 429 with Retry-After once one client passes its limit, and forwards nothing for it", async () => {
+    vi.stubEnv("POSTHOG_INGEST_HOST", "https://ingest.example");
+    const { INGEST_RATE_LIMITS } = await import("../src/app/lib/ingest-rate-limit");
+    const { POST } = await import("../src/app/ingest/[...path]/route");
+    const from = (ip: string) =>
+      POST(
+        new Request("https://conclave.example/ingest/e/", {
+          method: "POST",
+          body,
+          headers: { "content-type": "application/json", "cf-connecting-ip": ip },
+        }),
+        { params: Promise.resolve({ path: ["e"] }) } as never,
+      );
+    for (let index = 0; index < INGEST_RATE_LIMITS.perClient; index++) expect((await from("198.51.100.7")).status).toBe(200);
+    const forwarded = upstream.length;
+
+    const limited = await from("198.51.100.7");
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("retry-after")).toBe("60");
+    expect(upstream).toHaveLength(forwarded);
+    expect((await from("198.51.100.8")).status).toBe(200);
+  });
 });

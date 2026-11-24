@@ -4,6 +4,7 @@ import {
   forwardCapture,
   ingestHostFrom,
 } from "@/app/lib/telemetry-ingest";
+import { takeIngestRateLimit } from "@/app/lib/ingest-rate-limit";
 import { getPublicSiteUrl } from "@/lib/site-url";
 
 // Manifests come from our configured site, never from the request's Host,
@@ -41,6 +42,7 @@ const handle = async (
     siteOrigin,
     now: Date.now,
     forwarded,
+    admit: takeIngestRateLimit,
   });
 };
 

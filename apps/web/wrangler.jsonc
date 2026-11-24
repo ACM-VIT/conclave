@@ -68,6 +68,22 @@
         "limit": 20,
         "period": 60
       }
+    },
+    {
+      "name": "INGEST_RATE_LIMITER",
+      "namespace_id": "2006",
+      "simple": {
+        "limit": 120,
+        "period": 60
+      }
+    },
+    {
+      "name": "INGEST_GLOBAL_RATE_LIMITER",
+      "namespace_id": "2007",
+      "simple": {
+        "limit": 6000,
+        "period": 60
+      }
     }
   ],
   "r2_buckets": [

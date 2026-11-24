@@ -70,6 +70,7 @@ const forward = async (request: Request, path = ["e"], deps: Partial<IngestDeps>
     siteOrigin: "https://conclave.acmvit.in",
     now: () => NOW,
     forwarded: createForwardedEvents(),
+    admit: async () => ({ ok: true }),
     ...deps,
   });
   return { response, upstream };
@@ -303,6 +304,39 @@ describe("forwardCapture", () => {
       { platform: "web:javascript", function: "?", filename: "[path]", lineno: 3 },
       { platform: "web:javascript", function: "?", filename: "[path]", lineno: 4 },
     ]);
+  });
+});
+
+describe("the rate limit at /ingest", () => {
+  const body = () => post(JSON.stringify(captureBody([event()])), "application/json");
+
+  it("answers 429 with its Retry-After, before reading the body or forwarding, when the limit is reached", async () => {
+    const admit = vi.fn(async () => ({ ok: false, status: 429, retryAfterMs: 60_000 }) as const);
+    const request = body();
+    const { response, upstream } = await forward(request, ["e"], { admit });
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("60");
+    expect(admit).toHaveBeenCalledWith(request);
+    expect(request.bodyUsed).toBe(false);
+    expect(upstream).toEqual([]);
+  });
+
+  it("answers 503 when the limiter cannot be asked", async () => {
+    const { response, upstream } = await forward(body(), ["e"], {
+      admit: async () => ({ ok: false, status: 503, retryAfterMs: null }),
+    });
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("retry-after")).toBeNull();
+    expect(upstream).toEqual([]);
+  });
+
+  it("forwards a request the limiter admits", async () => {
+    const { response, upstream } = await forward(body());
+
+    expect(response.status).toBe(200);
+    expect(upstream).toHaveLength(1);
   });
 });
 

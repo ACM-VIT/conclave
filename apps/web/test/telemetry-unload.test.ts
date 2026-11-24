@@ -134,6 +134,7 @@ const sentEvents = async (list: Sent[] = sent): Promise<Event_[]> => {
         siteOrigin: "https://conclave.example",
         now: () => Date.now(),
         forwarded: createForwardedEvents(),
+        admit: async () => ({ ok: true }),
       },
     );
     for (const body of forwarded) events.push(...(JSON.parse(body) as { batch: Event_[] }).batch);

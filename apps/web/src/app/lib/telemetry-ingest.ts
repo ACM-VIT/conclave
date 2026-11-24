@@ -6,6 +6,7 @@ import {
   type OutboundEvent,
   parseChunkManifest,
 } from "./telemetry-privacy";
+import type { IngestAdmission } from "./ingest-rate-limit";
 import { answerOf } from "./telemetry-answers";
 import { createOutboundSchemas, MAX_EVENT_AGE_MS, UNKNOWN_BUILD } from "./telemetry-schema";
 
@@ -71,6 +72,7 @@ export type IngestDeps = {
   now: () => number;
   /** The events this process forwarded, by uuid (createForwardedEvents). */
   forwarded: ForwardedEvents;
+  admit: (request: Request) => Promise<IngestAdmission>;
 };
 
 // How far ahead of when we received it an event's time may be: a browser
@@ -325,6 +327,8 @@ export async function forwardCapture(
   if (!deps.projectKey) return reply(404);
   const { ingestHost } = deps;
   if (!ingestHost) return reply(503);
+  const admission = await deps.admit(request);
+  if (!admission.ok) return reply(admission.status, admission.retryAfterMs);
   let prepared: Awaited<ReturnType<typeof prepareForward>>;
   try {
     prepared = await prepareForward(request, deps);
