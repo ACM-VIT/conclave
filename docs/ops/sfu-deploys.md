@@ -115,7 +115,8 @@ confirms the drain state it had before.
 Every one of these steps is written to the instance's deploy journal
 (`<state dir>/<project>.<service>.journal.json`: phase, candidate, last-known-good
 image, the image it served before a promotion, whether it was draining before)
-before it is taken, whole, fsynced and renamed into place. Every deploy starts
+before it is taken, whole, fsynced and renamed into place; a journal write
+that fails stops the run at once, before the step it records. Every deploy starts
 by repairing what a run that died left behind, by the table below, before it
 drains anything. An instance whose journal is still not idle after that is
 never drained or rebuilt: the deploy stops with the repair's exit code, and a

@@ -867,7 +867,10 @@ try {
   fs.fsyncSync(dir);
   fs.closeSync(dir);
 } catch {}
-' "$(journal_file "$svc")" "$@"
+' "$(journal_file "$svc")" "$@" || {
+    echo "ERROR: could not write ${svc}'s deploy journal ($(journal_file "$svc")), so this run stops before the step it records. Fix the state dir, then rerun this script." >&2
+    exit 1
+  }
   checkpoint "journal ${svc} $*"
 }
 
