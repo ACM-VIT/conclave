@@ -21,6 +21,7 @@ type LegacyQa = {
    * it when webinar mode ends.
    */
   entries: WebinarQaEntry[] | null;
+  fromThisConnection: boolean;
   /** Drops `entries`: the old events rest once the app's view is in. */
   forget: () => void;
   submit?: (question: string) => Promise<Result>;
@@ -174,6 +175,7 @@ export function useMeetingQa({
   const isAvailable = offered && hold.connectionLive && !isWebinar;
   const waiting =
     hold.holdingThroughReconnect || live === null || (app.fromApp && !fromApp);
+  const oldEventsWaiting = live === null || !legacy.fromThisConnection;
   if (!hold.connectionLive) {
     return {
       offered,
@@ -218,11 +220,11 @@ export function useMeetingQa({
     offered,
     isAvailable,
     fromApp: false as const,
-    waiting,
+    waiting: oldEventsWaiting,
     entries,
     askNeedsIdentity: false,
-    onSubmit: legacy.submit && (waiting ? waitForView : legacy.submit),
-    onUpvote: legacy.upvote && (waiting ? waitForView : legacy.upvote),
-    onModerate: legacy.moderate && (waiting ? waitForView : legacy.moderate),
+    onSubmit: legacy.submit && (oldEventsWaiting ? waitForView : legacy.submit),
+    onUpvote: legacy.upvote && (oldEventsWaiting ? waitForView : legacy.upvote),
+    onModerate: legacy.moderate && (oldEventsWaiting ? waitForView : legacy.moderate),
   };
 }

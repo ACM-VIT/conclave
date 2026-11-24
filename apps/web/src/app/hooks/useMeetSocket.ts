@@ -908,6 +908,7 @@ interface UseMeetSocketOptions {
   setWebinarRole: (role: "attendee" | "participant" | "host" | null) => void;
   setWebinarSpeakerUserId: (userId: string | null) => void;
   setWebinarQaEntries: React.Dispatch<React.SetStateAction<WebinarQaEntry[] | null>>;
+  setWebinarQaListFromThisConnection: (fromThisConnection: boolean) => void;
   setWebinarHandQueue: React.Dispatch<
     React.SetStateAction<WebinarHandQueueEntry[]>
   >;
@@ -1026,6 +1027,7 @@ export function useMeetSocket({
   setWebinarRole,
   setWebinarSpeakerUserId,
   setWebinarQaEntries,
+  setWebinarQaListFromThisConnection,
   setWebinarHandQueue,
   setIsWebinarHandRaised,
   setWebinarStageInvite,
@@ -1874,6 +1876,7 @@ export function useMeetSocket({
         window.clearTimeout(timeoutId);
       });
       leaveTimeoutsRef.current.clear();
+      setWebinarQaListFromThisConnection(false);
       if (!preserveMeetingState) {
         clearReactions();
         setPendingUsers(new Map());
@@ -2023,6 +2026,7 @@ export function useMeetSocket({
       setWebinarRole,
       setWebinarSpeakerUserId,
       setWebinarQaEntries,
+      setWebinarQaListFromThisConnection,
       setWebinarHandQueue,
       setIsWebinarHandRaised,
       setWebinarStageInvite,
@@ -7090,6 +7094,7 @@ export function useMeetSocket({
               console.info("[Meets] Disconnected:", reason);
               if (socketRef.current !== socket) return;
               setWebinarQaEntries(null);
+              setWebinarQaListFromThisConnection(false);
               if (intentionalDisconnectRef.current) {
                 setConnectionState("disconnected");
                 return;
@@ -8588,6 +8593,7 @@ export function useMeetSocket({
               (snapshot: WebinarQaSnapshot) => {
                 if (!isRoomEvent(snapshot.roomId)) return;
                 setWebinarQaEntries(qaListFromSnapshot(snapshot));
+                setWebinarQaListFromThisConnection(true);
               },
             );
 
@@ -8758,6 +8764,7 @@ export function useMeetSocket({
       setWebinarSpeakerUserId,
       setWebinarConfig,
       setWebinarQaEntries,
+      setWebinarQaListFromThisConnection,
       setWebinarHandQueue,
       setWebinarStageInvite,
       onWebinarDemoted,

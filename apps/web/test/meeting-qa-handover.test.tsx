@@ -50,6 +50,7 @@ const fromOldEvents: WebinarQaEntry = {
 };
 const legacy: Omit<LegacyQaProps, "entries"> & { entries: WebinarQaList } = {
   entries: [fromOldEvents],
+  fromThisConnection: true,
   submit: vi.fn(async () => ({ ok: true })),
   upvote: vi.fn(),
   moderate: vi.fn(async () => ({ ok: true })),
@@ -758,6 +759,7 @@ it("keeps a webinar's attendee and host actions waiting while the old events' li
   );
   await mount(true, { ...oldServer, entries: [fromOldEvents] });
   const listBackBeforeTheServerAnswers = qa.waiting;
+  const submitBeforeTheServerAnswers = qa.onSubmit;
   await act(async () =>
     last(AUTHORITY_EVENTS.capabilities)!.ack!({
       ok: true,
@@ -766,7 +768,8 @@ it("keeps a webinar's attendee and host actions waiting while the old events' li
   );
 
   expect(beforeTheDrop).toEqual({ waiting: false, submit: oldServer.submit });
-  expect(listBackBeforeTheServerAnswers).toBe(true);
+  expect(listBackBeforeTheServerAnswers).toBe(false);
+  expect(submitBeforeTheServerAnswers).toBe(oldServer.submit);
   expect(oldServer.submit).not.toHaveBeenCalled();
   expect(oldServer.upvote).not.toHaveBeenCalled();
   expect(oldServer.moderate).not.toHaveBeenCalled();
@@ -824,17 +827,17 @@ it("sends nothing from a webinar on a server without the runtime in the second b
   const beforeTheDrop = { waiting: qa.waiting, submit: qa.onSubmit };
 
   await fire("disconnect");
-  await mount(true, oldServer, { connectionState: "reconnecting", socketOpen: true });
+  await mount(true, { ...oldServer, fromThisConnection: false }, { connectionState: "reconnecting", socketOpen: true });
   const waitingAt: boolean[] = [];
   for (const at of [0, 250, 250, 499]) {
     await act(async () => vi.advanceTimersByTimeAsync(at));
     waitingAt.push(qa.waiting);
     await tryEveryAction();
   }
-  await mount(true, { ...oldServer, entries: null }, { connected: false });
+  await mount(true, { ...oldServer, entries: null, fromThisConnection: false }, { connected: false });
   waitingAt.push(qa.waiting);
   await tryEveryAction();
-  await mount(true, oldServer);
+  await mount(true, { ...oldServer, fromThisConnection: false });
   waitingAt.push(qa.waiting);
   await tryEveryAction();
 
@@ -844,7 +847,7 @@ it("sends nothing from a webinar on a server without the runtime in the second b
   expect(oldServer.moderate).not.toHaveBeenCalled();
   expect(waitingAt).toEqual([true, true, true, true, true, true]);
   expect(qa.entries.map((entry) => entry.id)).toEqual(["q1"]);
-  await act(async () => vi.advanceTimersByTimeAsync(5_000));
+  await mount(true, oldServer);
   expect({ waiting: qa.waiting, submit: qa.onSubmit }).toEqual({ waiting: false, submit: oldServer.submit });
 });
 
@@ -873,4 +876,44 @@ it("closes a meeting's Q&A in the same render the meeting ends in an error, befo
   expect(whileLive).toBe(true);
   expect(availability.slice(fromTheError).length).toBeGreaterThan(0);
   expect(availability.slice(fromTheError).every((shown) => shown === false)).toBe(true);
+});
+
+it("lets a webinar act as soon as this connection's own list arrives, before the server answers what it runs", async () => {
+  const oldServer = oldServerSpies();
+  await flagOffWebinar(oldServer);
+  await fire("disconnect");
+  await mount(true, { ...oldServer, entries: null, fromThisConnection: false }, { connected: false });
+
+  await mount(true, { ...oldServer, entries: [fromOldEvents], fromThisConnection: true });
+  const onItsOwnList = { waiting: qa.waiting, submit: qa.onSubmit };
+  await act(async () => vi.advanceTimersByTimeAsync(4_000));
+  const stillUnanswered = { waiting: qa.waiting, submit: qa.onSubmit };
+
+  expect(onItsOwnList).toEqual({ waiting: false, submit: oldServer.submit });
+  expect(stillUnanswered).toEqual({ waiting: false, submit: oldServer.submit });
+});
+
+it("never lets a webinar act on a list an earlier connection gave it, even once the server has answered", async () => {
+  const oldServer = oldServerSpies();
+  await mount(true, oldServer);
+  await act(async () =>
+    last(AUTHORITY_EVENTS.capabilities)!.ack!({ ok: false, code: "unsupported" }),
+  );
+  const onItsOwnList = qa.waiting;
+
+  await fire("disconnect");
+  await mount(true, { ...oldServer, fromThisConnection: false }, { connected: false });
+  await mount(true, { ...oldServer, fromThisConnection: false });
+  await act(async () =>
+    last(AUTHORITY_EVENTS.capabilities)!.ack!({ ok: false, code: "unsupported" }),
+  );
+  const answeredWithTheOldList = qa.waiting;
+  await tryEveryAction();
+
+  expect(onItsOwnList).toBe(false);
+  expect(answeredWithTheOldList).toBe(true);
+  expect(qa.entries.map((entry) => entry.id)).toEqual(["q1"]);
+  expect(oldServer.submit).not.toHaveBeenCalled();
+  expect(oldServer.upvote).not.toHaveBeenCalled();
+  expect(oldServer.moderate).not.toHaveBeenCalled();
 });

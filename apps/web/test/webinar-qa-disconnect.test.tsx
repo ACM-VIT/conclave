@@ -41,10 +41,18 @@ const moderate = vi.fn(async () => ({ ok: true }));
 let root: Root;
 let container: HTMLDivElement;
 
-function Webinar({ connectionState, entries }: { connectionState: ConnectionState; entries: WebinarQaEntry[] | null }) {
+function Webinar({
+  connectionState,
+  entries,
+  fromThisConnection,
+}: {
+  connectionState: ConnectionState;
+  entries: WebinarQaEntry[] | null;
+  fromThisConnection: boolean;
+}) {
   const hold = useReconnectHold({ isJoined: true, connectionState });
   const qa = useMeetingQa({
-    legacy: { entries, forget: () => {}, submit, upvote, moderate },
+    legacy: { entries, fromThisConnection, forget: () => {}, submit, upvote, moderate },
     isWebinar: true,
     hold,
     currentUserId: "host#1",
@@ -64,11 +72,16 @@ function Webinar({ connectionState, entries }: { connectionState: ConnectionStat
   );
 }
 
-const render = async (connectionState: ConnectionState, entries: WebinarQaEntry[] | null, socketOpen = true) =>
+const render = async (
+  connectionState: ConnectionState,
+  entries: WebinarQaEntry[] | null,
+  fromThisConnection: boolean,
+  socketOpen = true,
+) =>
   act(async () =>
     root.render(
       <AuthorityProvider socket={socketOpen ? socket : null} joined={connectionState === "joined"}>
-        <Webinar connectionState={connectionState} entries={entries} />
+        <Webinar connectionState={connectionState} entries={entries} fromThisConnection={fromThisConnection} />
       </AuthorityProvider>,
     ),
   );
@@ -99,8 +112,7 @@ afterEach(async () => {
 });
 
 it("keeps a webinar's Ask, Enter, Upvote and moderation from sending in the second after a drop, on a server without the runtime", async () => {
-  await render("joined", [question]);
-  await act(async () => vi.advanceTimersByTimeAsync(5_000));
+  await render("joined", [question], true);
   const input = container.querySelector<HTMLTextAreaElement>('[data-testid="qa-input"]')!;
   const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
   await act(async () => {
@@ -112,7 +124,7 @@ it("keeps a webinar's Ask, Enter, Upvote and moderation from sending in the seco
   await act(async () => {
     for (const listener of [...(listeners.get("disconnect") ?? [])]) listener();
   });
-  await render("reconnecting", [question]);
+  await render("reconnecting", [question], false);
   await act(async () => vi.advanceTimersByTimeAsync(250));
   await act(async () => {
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));

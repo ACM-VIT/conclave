@@ -608,6 +608,8 @@ export default function MeetsClient({
     setWebinarSpeakerUserId,
     webinarQaEntries,
     setWebinarQaEntries,
+    webinarQaListFromThisConnection,
+    setWebinarQaListFromThisConnection,
     webinarHandQueue,
     setWebinarHandQueue,
     isWebinarHandRaised,
@@ -2376,6 +2378,7 @@ export default function MeetsClient({
     setWebinarRole,
     setWebinarSpeakerUserId,
     setWebinarQaEntries,
+    setWebinarQaListFromThisConnection,
     setWebinarHandQueue,
     setIsWebinarHandRaised,
     setWebinarStageInvite,
@@ -3471,6 +3474,7 @@ export default function MeetsClient({
         webinarLink={webinarLink}
         webinarTitle={webinarTitle}
         webinarQaEntries={webinarQaEntries}
+        webinarQaListFromThisConnection={webinarQaListFromThisConnection}
         onForgetWebinarQaEntries={forgetWebinarQaEntries}
         webinarHandQueue={webinarHandQueue}
         isWebinarHandRaised={isWebinarHandRaised}
