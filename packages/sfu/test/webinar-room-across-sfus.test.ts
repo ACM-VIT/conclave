@@ -3,13 +3,19 @@ import { afterEach, describe, expect, it } from "vitest";
 import { config } from "../config/config.js";
 import { createMemoryBackend, createMemoryData, type MemoryData } from "../server/controlPlane/backends/memory.js";
 import { controlPlaneStore } from "../server/controlPlane/store.js";
-import { createWebinar, deleteWebinar, updateWebinar, webinarById } from "../server/controlPlane/webinarCommands.js";
+import {
+  createWebinar,
+  deleteWebinar,
+  recordWebinarJoin,
+  updateWebinar,
+  webinarById,
+} from "../server/controlPlane/webinarCommands.js";
 import { createSfuApp } from "../server/http/createApp.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
 import { getRoomChannelId } from "../server/rooms.js";
 import { advanceScheduledWebinars, ensureWebinarRoomConfig } from "../server/scheduledWebinarScheduler.js";
 import { createSfuState, type SfuState } from "../server/state.js";
-import { hashWebinarInviteCode } from "../server/webinar.js";
+import { hashWebinarInviteCode, rotateWebinarLinkSlug } from "../server/webinar.js";
 import type { ScheduledWebinar } from "../types.js";
 
 const admin = { email: null, isAdmin: true };
@@ -82,6 +88,29 @@ describe("a scheduled webinar's room on the SFU that hosts it", () => {
     await other.controlPlane.commit(updateWebinar(webinar.id, { maxAttendees: 250, qaEnabled: false }, admin));
     await advanceScheduledWebinars(hosting);
     expect(roomConfig(hosting, webinar)).toMatchObject({ maxAttendees: 250, qaEnabled: false });
+  });
+});
+
+describe("a live webinar's rotated link", () => {
+  it("keeps working while attendees join, and gives way only to a new link code in the schedule", async () => {
+    const data = createMemoryData();
+    const [hosting, other] = [sfuOn(data, "hosting"), sfuOn(data, "other")];
+    const webinar = await created(other, { linkSlug: "stored-code" });
+    const config = ensureWebinarRoomConfig(hosting, webinar);
+    const channelId = getRoomChannelId(webinar.clientId, webinar.roomId);
+    const rotated = rotateWebinarLinkSlug({
+      webinarConfig: config,
+      webinarLinks: hosting.webinarLinks,
+      room: { channelId, id: webinar.roomId, clientId: webinar.clientId },
+    });
+    await other.controlPlane.commit(recordWebinarJoin(webinar.id, 3));
+    await advanceScheduledWebinars(hosting);
+    expect(config.linkSlug).toBe(rotated);
+    expect(hosting.webinarLinks.get(rotated)?.roomChannelId).toBe(channelId);
+
+    await other.controlPlane.commit(updateWebinar(webinar.id, { linkSlug: "new-code" }, admin));
+    await advanceScheduledWebinars(hosting);
+    expect(config.linkSlug).toBe("new-code");
   });
 });
 

@@ -24,6 +24,7 @@ type ScheduledRoomControls = {
   waitingRoomEnabled: boolean;
   qaEnabled: boolean;
   inviteCodeHash: string | null | undefined;
+  linkSlug: string;
 };
 
 /**
@@ -44,7 +45,7 @@ const isTerminalWebinarStatus = (status: ScheduledWebinar["status"]): boolean =>
 const applyScheduledRoomControls = (
   webinarConfig: WebinarRoomConfig,
   webinar: ScheduledWebinar,
-): void => {
+): ScheduledRoomControls | undefined => {
   const next: ScheduledRoomControls = {
     status: webinar.status,
     publicAccess: webinar.publicAccess,
@@ -52,6 +53,7 @@ const applyScheduledRoomControls = (
     waitingRoomEnabled: webinar.waitingRoomEnabled,
     qaEnabled: webinar.qaEnabled,
     inviteCodeHash: webinar.requiresInviteCode ? webinar.inviteCodeHash ?? undefined : null,
+    linkSlug: webinar.linkSlug,
   };
   const previous =
     webinarConfig.scheduledWebinarId === webinar.id
@@ -89,6 +91,7 @@ const applyScheduledRoomControls = (
     setWebinarInviteCodeHash(webinarConfig, next.inviteCodeHash);
   }
   appliedScheduleControls.set(webinarConfig, next);
+  return previous;
 };
 
 const appliedRevisions = new WeakMap<WebinarRoomConfig, number>();
@@ -103,11 +106,11 @@ const applyScheduledWebinarToConfig = (
     channelId,
   );
 
-  applyScheduledRoomControls(webinarConfig, webinar);
+  const previous = applyScheduledRoomControls(webinarConfig, webinar);
   webinarConfig.scheduledWebinarId = webinar.id;
 
-  const previousLinkSlug = webinarConfig.linkSlug;
-  if (previousLinkSlug !== webinar.linkSlug) {
+  const scheduleSlugChanged = !previous || previous.linkSlug !== webinar.linkSlug;
+  if (scheduleSlugChanged && webinarConfig.linkSlug !== webinar.linkSlug) {
     try {
       setCustomWebinarLinkSlug({
         webinarConfig,
