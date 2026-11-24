@@ -4,6 +4,7 @@ import {
   createBatchStore,
   createOutbox,
   type DroppedBatches,
+  fitEvent,
   FLUSH_INTERVAL_MS,
   LEASE_MS,
   MAX_BATCH_BYTES,
@@ -1229,5 +1230,25 @@ describe("an answer to the send as the page goes away", () => {
     await settle();
 
     expect(store.list().map((batch) => batch.events.map((item) => item.uuid))).toEqual([[kept.uuid]]);
+  });
+});
+
+describe("the size cap on one event", () => {
+  const bytesOf = (item: unknown) => new TextEncoder().encode(JSON.stringify(item)).byteLength;
+  const sized = (bytes: number): OutboxEvent => {
+    const base = { ...event(), properties: { token: KEY, distinct_id: "0196f0a1-0000-7000-8000-00000000d15d", note: "" } };
+    return { ...base, properties: { ...base.properties, note: "x".repeat(bytes - bytesOf(base)) } };
+  };
+
+  it("sends an event of exactly 32 KiB as it is, and cuts one a byte larger to fit", () => {
+    const exact = sized(32 * 1024);
+    const over = sized(32 * 1024 + 1);
+    expect([bytesOf(exact), bytesOf(over)]).toEqual([32 * 1024, 32 * 1024 + 1]);
+
+    expect(fitEvent(exact)).toBe(exact);
+    const cut = fitEvent(over);
+    expect(cut).not.toEqual(over);
+    expect(bytesOf(cut)).toBeLessThanOrEqual(32 * 1024);
+    expect(cut).toMatchObject({ uuid: over.uuid, event: over.event, timestamp: over.timestamp });
   });
 });

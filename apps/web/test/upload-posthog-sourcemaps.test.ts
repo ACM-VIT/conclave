@@ -12,7 +12,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const script = path.resolve(import.meta.dirname, "../scripts/upload-posthog-sourcemaps.mjs");
 const dirs: string[] = [];
@@ -326,5 +326,28 @@ describe("upload-posthog-sourcemaps", () => {
     expect(result.stdout).toMatch(/sourcemap upload/);
     expect(result.stdout).toMatch(/\[sourcemaps\] uploaded to PostHog/);
     expect(mapsLeft(fixture.chunks)).toEqual([]);
+  });
+});
+
+describe("next.config.ts and the upload policy", () => {
+  const credentials = { POSTHOG_CLI_API_KEY: "phx_fake_local_key", POSTHOG_CLI_PROJECT_ID: "1" };
+  const keys = ["POSTHOG_SOURCEMAPS", "CI", "POSTHOG_SOURCEMAPS_UPLOAD", "POSTHOG_CLI_API_KEY", "POSTHOG_CLI_PROJECT_ID"];
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it.each([
+    ["cf:build in CI with the opt-in and credentials", { POSTHOG_SOURCEMAPS: "upload", CI: "true", POSTHOG_SOURCEMAPS_UPLOAD: "1", ...credentials }, true],
+    ["a local cf:build with credentials in .env.local", { POSTHOG_SOURCEMAPS: "upload", ...credentials }, false],
+    ["cf:build in CI without the opt-in", { POSTHOG_SOURCEMAPS: "upload", CI: "true", ...credentials }, false],
+    ["cf:build with the opt-in outside CI", { POSTHOG_SOURCEMAPS: "upload", POSTHOG_SOURCEMAPS_UPLOAD: "1", ...credentials }, false],
+    ["any other build in CI with the opt-in", { CI: "true", POSTHOG_SOURCEMAPS_UPLOAD: "1", ...credentials }, false],
+  ])("builds browser source maps for %s", async (_name, env: Record<string, string>, maps) => {
+    for (const key of keys) vi.stubEnv(key, env[key] ?? "");
+    vi.resetModules();
+    const { default: config } = await import("../next.config");
+
+    expect(config.productionBrowserSourceMaps).toBe(maps);
   });
 });
