@@ -7599,18 +7599,14 @@ export function useMeetSocket({
     ],
   );
 
-  const applyJoinAnswerIceServers = useCallback(
-    (answer: JoinInfo) => {
-      if (!Array.isArray(answer.iceServers)) return;
-      runtimeIceServersRef.current = applyJoinAnswerToIceServers(
-        runtimeIceServersRef.current,
-        answer,
-        Date.now(),
-      );
-      reconcileRelayPathsNow();
-    },
-    [reconcileRelayPathsNow],
-  );
+  const applyJoinAnswerIceServers = useCallback((answer: JoinInfo) => {
+    if (!Array.isArray(answer.iceServers)) return;
+    runtimeIceServersRef.current = applyJoinAnswerToIceServers(
+      runtimeIceServersRef.current,
+      answer,
+      Date.now(),
+    );
+  }, []);
 
   // Fetches a fresh join answer for its ICE servers while the socket stays
   // connected, so the user keeps their place in the room instead of going
