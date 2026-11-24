@@ -3645,7 +3645,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             if (remaining.decrementAndGet() == 0) {
                 mainHandler.post {
                     try {
-                        track?.dispose()
+                        track?.let { VideoTrackLedger.dispose(it) }
                     } catch (_: Throwable) {
                     }
                     try {
