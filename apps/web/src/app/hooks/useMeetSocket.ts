@@ -194,8 +194,8 @@ import {
   offerRelays,
   offeredTurnServers,
   planRelayRefresh,
+  reconcileRelayPaths,
   takeRelayRefreshTry,
-  transportsToMoveOntoRelay,
   type RelayRefreshChain,
   relayCarryingUrl,
   type RelayOffer,
@@ -1607,6 +1607,109 @@ export function useMeetSocket({
     if (timeout !== null) window.clearTimeout(timeout);
     relayRefreshRef.current = { chain: null, timeout: null, inFlight: false };
   }, []);
+
+  const relayUsableNow = useCallback(
+    () =>
+      getUsableTurnIceServers(runtimeIceServersRef.current, Date.now()) !==
+      null,
+    [],
+  );
+
+  const reconcileRelayPathsNow = useCallback(
+    (budget: "keep" | "renew" = "keep") => {
+      const reconcile = (nextBudget: "keep" | "renew") => {
+        const state = relayRefreshRef.current;
+        const plan = reconcileRelayPaths(
+          {
+            wanted: relayOnlyIceRef.current,
+            relayUsable: relayUsableNow(),
+            busy:
+              reconnectInFlightRef.current || intentionalDisconnectRef.current,
+            transports: (["producer", "consumer"] as const).flatMap(
+              (direction) => {
+                const transport =
+                  direction === "producer"
+                    ? producerTransportRef.current
+                    : consumerTransportRef.current;
+                if (!transport || transport.closed) return [];
+                return [
+                  {
+                    direction,
+                    offeredRelay:
+                      offeredTurnServers(
+                        relayOffersRef.current.get(transport) ?? [],
+                      ) !== null,
+                    carryingMedia:
+                      transportsCarryingMediaRef.current.has(transport),
+                  },
+                ];
+              },
+            ),
+            chain: state.chain,
+            timerArmed: state.timeout !== null,
+            requestInFlight: state.inFlight,
+          },
+          nextBudget,
+        );
+        state.chain = plan.chain;
+        if (plan.cancelTimer && state.timeout !== null) {
+          window.clearTimeout(state.timeout);
+          state.timeout = null;
+        }
+        if (plan.armRefresh) {
+          const generation = reconnectGenerationRef.current;
+          state.timeout = window.setTimeout(() => {
+            state.timeout = null;
+            const roomId = currentRoomIdRef.current;
+            const refresh = refreshIceServersRef.current;
+            if (
+              relayRefreshRef.current !== state ||
+              generation !== reconnectGenerationRef.current ||
+              intentionalDisconnectRef.current ||
+              !roomId ||
+              !refresh
+            ) {
+              return;
+            }
+            state.chain = takeRelayRefreshTry(
+              planRelayRefresh(state.chain, {
+                wanted: relayOnlyIceRef.current,
+                relayUsable: relayUsableNow(),
+                budget: "keep",
+              }),
+            );
+            if (!state.chain) return;
+            state.inFlight = true;
+            const settle = () => {
+              state.inFlight = false;
+              if (relayRefreshRef.current === state) reconcile("keep");
+            };
+            void refresh(roomId).then(settle, settle);
+          }, RELAY_REFRESH_RETRY_MS);
+        }
+        if (plan.moveOntoRelay.length > 0) {
+          console.warn(
+            `[Meets] TURN credentials are back; moving the ${plan.moveOntoRelay.join(" and ")} transport onto the relay.`,
+          );
+          void handleReconnectRef.current?.({
+            refreshIceServers: false,
+            failedDirections: plan.moveOntoRelay,
+            relayOnly: { reason: "relay credentials are back" },
+          });
+        }
+      };
+      reconcile(budget);
+    },
+    [
+      consumerTransportRef,
+      currentRoomIdRef,
+      handleReconnectRef,
+      intentionalDisconnectRef,
+      producerTransportRef,
+      reconnectInFlightRef,
+      relayUsableNow,
+    ],
+  );
 
   const resolveIceTransportPolicy = useCallback(
     (offers: RelayOffer[]): RTCIceTransportPolicy => {
@@ -3780,6 +3883,7 @@ export function useMeetSocket({
               iceTransportPolicy: resolveIceTransportPolicy(relayOffers),
             });
             relayOffersRef.current.set(transport, relayOffers);
+            reconcileRelayPathsNow();
 
             transport.on(
               "connect",
@@ -3928,6 +4032,7 @@ export function useMeetSocket({
       escalateMediaPathFailure,
       noteMediaPathConnected,
       resolveIceTransportPolicy,
+      reconcileRelayPathsNow,
       resolveIceServers,
     ],
   );
@@ -4061,6 +4166,7 @@ export function useMeetSocket({
               iceTransportPolicy: resolveIceTransportPolicy(relayOffers),
             });
             relayOffersRef.current.set(transport, relayOffers);
+            reconcileRelayPathsNow();
 
             transport.on(
               "connect",
@@ -4173,6 +4279,7 @@ export function useMeetSocket({
       escalateMediaPathFailure,
       noteMediaPathConnected,
       resolveIceTransportPolicy,
+      reconcileRelayPathsNow,
       resolveIceServers,
     ],
   );
@@ -6398,6 +6505,7 @@ export function useMeetSocket({
         }
         updateMediaPathRecovery({ type: "media-flowing", direction: kind });
       }
+      reconcileRelayPathsNow();
       if (result.stalledForMs < MEDIA_PATH_STALL_MS) return;
 
       entry.watch = INITIAL_MEDIA_PATH_WATCH;
@@ -6477,6 +6585,7 @@ export function useMeetSocket({
     return () => window.clearInterval(interval);
   }, [
     attemptIceRestart,
+    reconcileRelayPathsNow,
     audioProducerRef,
     consumerTelemetryRef,
     consumerTransportRef,
@@ -6529,6 +6638,7 @@ export function useMeetSocket({
           reason: "signaling dropped before the producer list arrived",
         };
       }
+      reconcileRelayPathsNow();
 
       const serverProducerIds = new Set(
         producers.map((producer) => producer.producerId),
@@ -6702,6 +6812,7 @@ export function useMeetSocket({
     }
   }, [
     socketRef,
+    reconcileRelayPathsNow,
     deviceRef,
     currentRoomIdRef,
     producerMapRef,
@@ -7457,106 +7568,6 @@ export function useMeetSocket({
     ],
   );
 
-  const relayUsableNow = useCallback(
-    () =>
-      getUsableTurnIceServers(runtimeIceServersRef.current, Date.now()) !==
-      null,
-    [],
-  );
-
-  const driveRelayRefresh = useCallback(
-    (budget: "keep" | "renew") => {
-      const drive = (nextBudget: "keep" | "renew") => {
-        const state = relayRefreshRef.current;
-        state.chain = planRelayRefresh(state.chain, {
-          wanted: relayOnlyIceRef.current,
-          relayUsable: relayUsableNow(),
-          budget: nextBudget,
-        });
-        if (!state.chain) {
-          if (state.timeout !== null) window.clearTimeout(state.timeout);
-          state.timeout = null;
-          return;
-        }
-        if (state.timeout !== null || state.inFlight) return;
-        if (state.chain.triesLeft === 0) return;
-        const generation = reconnectGenerationRef.current;
-        state.timeout = window.setTimeout(() => {
-          state.timeout = null;
-          const roomId = currentRoomIdRef.current;
-          const refresh = refreshIceServersRef.current;
-          if (
-            relayRefreshRef.current !== state ||
-            generation !== reconnectGenerationRef.current ||
-            intentionalDisconnectRef.current ||
-            !roomId ||
-            !refresh
-          ) {
-            return;
-          }
-          state.chain = takeRelayRefreshTry(
-            planRelayRefresh(state.chain, {
-              wanted: relayOnlyIceRef.current,
-              relayUsable: relayUsableNow(),
-              budget: "keep",
-            }),
-          );
-          if (!state.chain) return;
-          state.inFlight = true;
-          const settle = () => {
-            state.inFlight = false;
-            if (relayRefreshRef.current === state) drive("keep");
-          };
-          void refresh(roomId).then(settle, settle);
-        }, RELAY_REFRESH_RETRY_MS);
-      };
-      drive(budget);
-    },
-    [currentRoomIdRef, intentionalDisconnectRef, relayUsableNow],
-  );
-
-  const moveShortTransportsOntoRelay = useCallback(() => {
-    if (reconnectInFlightRef.current || intentionalDisconnectRef.current) {
-      return;
-    }
-    const directions = transportsToMoveOntoRelay({
-      wanted: relayOnlyIceRef.current,
-      relayUsable: relayUsableNow(),
-      transports: (["producer", "consumer"] as const).flatMap((direction) => {
-        const transport =
-          direction === "producer"
-            ? producerTransportRef.current
-            : consumerTransportRef.current;
-        if (!transport || transport.closed) return [];
-        return [
-          {
-            direction,
-            offeredRelay:
-              offeredTurnServers(relayOffersRef.current.get(transport) ?? []) !==
-              null,
-            carryingMedia: transportsCarryingMediaRef.current.has(transport),
-          },
-        ];
-      }),
-    });
-    if (directions.length === 0) return;
-    console.warn(
-      `[Meets] TURN credentials are back; moving the ${directions.join(" and ")} transport onto the relay.`,
-    );
-    void handleReconnectRef.current?.({
-      refreshIceServers: false,
-      failedDirections: directions,
-      relayOnly: { reason: "relay credentials are back" },
-    });
-  }, [
-    consumerTransportRef,
-    handleReconnectRef,
-    intentionalDisconnectRef,
-    producerTransportRef,
-    reconnectInFlightRef,
-    relayUsableNow,
-  ]);
-
   const applyJoinAnswerIceServers = useCallback(
     (
       iceServers: RTCIceServer[] | undefined,
@@ -7568,10 +7579,9 @@ export function useMeetSocket({
         { iceServers, relayExpiresAt },
         Date.now(),
       );
-      driveRelayRefresh("keep");
-      moveShortTransportsOntoRelay();
+      reconcileRelayPathsNow();
     },
-    [driveRelayRefresh, moveShortTransportsOntoRelay],
+    [reconcileRelayPathsNow],
   );
 
   // Fetches a fresh join answer for its ICE servers while the socket stays
@@ -9661,7 +9671,7 @@ export function useMeetSocket({
       });
       const changed = relayOnly !== relayOnlyIceRef.current;
       relayOnlyIceRef.current = relayOnly;
-      driveRelayRefresh("renew");
+      reconcileRelayPathsNow("renew");
       if (!changed) return;
       console.warn(
         relayUsableNow()
@@ -10062,6 +10072,7 @@ export function useMeetSocket({
             escalateMediaPathFailure(direction, transport, reason);
           }
         }
+        reconcileRelayPathsNow();
       }
     }
   }, [
@@ -10071,7 +10082,7 @@ export function useMeetSocket({
     currentRoomIdRef,
     ensureLiveLocalMediaForJoin,
     refreshIceServersOnOpenSocket,
-    driveRelayRefresh,
+    reconcileRelayPathsNow,
     relayUsableNow,
     escalateMediaPathFailure,
     rebuildReceivePath,

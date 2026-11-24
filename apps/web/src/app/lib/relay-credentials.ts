@@ -164,6 +164,44 @@ export const transportsToMoveOntoRelay = <D extends string>({
         .map(({ direction }) => direction)
     : [];
 
+export type RelayPathState<D extends string> = {
+  wanted: boolean;
+  relayUsable: boolean;
+  busy: boolean;
+  transports: RelayShortfall<D>[];
+  chain: RelayRefreshChain;
+  timerArmed: boolean;
+  requestInFlight: boolean;
+};
+
+export type RelayPathPlan<D extends string> = {
+  chain: RelayRefreshChain;
+  armRefresh: boolean;
+  cancelTimer: boolean;
+  moveOntoRelay: D[];
+};
+
+export const reconcileRelayPaths = <D extends string>(
+  state: RelayPathState<D>,
+  budget: "keep" | "renew",
+): RelayPathPlan<D> => {
+  const chain = planRelayRefresh(state.chain, {
+    wanted: state.wanted,
+    relayUsable: state.relayUsable,
+    budget,
+  });
+  return {
+    chain,
+    armRefresh:
+      chain !== null &&
+      chain.triesLeft > 0 &&
+      !state.timerArmed &&
+      !state.requestInFlight,
+    cancelTimer: chain === null && state.timerArmed,
+    moveOntoRelay: state.busy ? [] : transportsToMoveOntoRelay(state),
+  };
+};
+
 export const relayCarryingUrl = (
   offers: RelayOffer[],
   url: string,
