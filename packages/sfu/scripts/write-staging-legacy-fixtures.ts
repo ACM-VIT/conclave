@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { STAGING_COMMIT } from "./write-staging-rollback-fixtures.js";
 
@@ -195,6 +195,8 @@ const filesUnder = (dir: string): string[] =>
 
 const sha256 = (content: string) => createHash("sha256").update(content).digest("hex");
 
+const manifestKey = (dir: string, path: string): string => relative(dir, path).split(sep).join("/");
+
 const generate = async () => {
   if (spawnSync("git", ["cat-file", "-e", `${STAGING_COMMIT}^{commit}`], { cwd: packageDir }).status !== 0) {
     console.error(`These fixtures come from staging's own code at ${STAGING_COMMIT}, which this clone does not have. Run: git fetch origin ${STAGING_COMMIT}`);
@@ -249,7 +251,7 @@ const generate = async () => {
     cpSync(output, stagingLegacyDir, { recursive: true });
     const files = Object.fromEntries(
       filesUnder(stagingLegacyDir)
-        .map((path) => [relative(stagingLegacyDir, path), sha256(readFileSync(path, "utf8"))] as const)
+        .map((path) => [manifestKey(stagingLegacyDir, path), sha256(readFileSync(path, "utf8"))] as const)
         .sort(([a], [b]) => (a < b ? -1 : 1)),
     );
     writeFileSync(join(stagingLegacyDir, MANIFEST), `${JSON.stringify({ stagingCommit: STAGING_COMMIT, files }, null, 2)}\n`);
@@ -266,13 +268,13 @@ export const verifyStagingLegacyFixtures = (dir: string = stagingLegacyDir): str
   const problems: string[] = [];
   if (manifest.stagingCommit !== STAGING_COMMIT) problems.push(`${manifestPath} records ${manifest.stagingCommit}, not ${STAGING_COMMIT}.`);
   const present = filesUnder(dir)
-    .map((path) => relative(dir, path))
+    .map((path) => manifestKey(dir, path))
     .filter((path) => path !== MANIFEST)
     .sort();
   const listed = Object.keys(manifest.files).sort();
   if (present.join("\n") !== listed.join("\n")) problems.push(`${dir} holds ${present.join(", ")}, but ${manifestPath} lists ${listed.join(", ")}.`);
   for (const path of listed) {
-    const full = join(dir, path);
+    const full = join(dir, ...path.split("/"));
     if (existsSync(full) && sha256(readFileSync(full, "utf8")) !== manifest.files[path]) {
       problems.push(`${full} is not the file staging's code wrote (its SHA-256 differs from ${manifestPath}).`);
     }
