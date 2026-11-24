@@ -64,7 +64,12 @@ const readToken = (raw: string | undefined, problems: string[]): string => {
 };
 
 const readListenHost = (raw: string | undefined, problems: string[]): string => {
-    const host = raw?.trim() || DEFAULT_LISTEN_HOST;
+    if (raw === undefined || raw === "") return DEFAULT_LISTEN_HOST;
+    if (raw !== raw.trim()) {
+        problems.push(`BROWSER_SERVICE_HOST=${JSON.stringify(raw)} must be an address with no spaces.`);
+        return DEFAULT_LISTEN_HOST;
+    }
+    const host = raw;
     if (!isLoopbackOrPrivateHost(host)) {
         problems.push(
             `BROWSER_SERVICE_HOST=${host} is not a loopback or private address. Bind the control API to 127.0.0.1 or the private address the SFU reaches it on.`,

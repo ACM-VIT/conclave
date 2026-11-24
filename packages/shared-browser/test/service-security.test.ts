@@ -126,6 +126,9 @@ test("startup configuration fails closed", () => {
     refuses({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_PORT: "70000" });
     refuses({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_PORT: "0" });
     refuses({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_PORT: "00" });
+    for (const host of [" 127.0.0.1 ", "127.0.0.1 ", "\t10.0.4.7", " "]) {
+        assert.throws(() => resolveServiceSecurity({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_HOST: host }), /BROWSER_SERVICE_HOST=.*no spaces/, JSON.stringify(host));
+    }
     assert.equal(resolveServiceSecurity({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_PORT: "43109" }).listenPort, 43109);
 
     assert.equal(resolveServiceSecurity({ BROWSER_SERVICE_TOKEN: ` ${STRONG_TOKEN}\n` }).token, STRONG_TOKEN);
