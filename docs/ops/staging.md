@@ -43,6 +43,14 @@ What A shares, and why it is still safe:
   config whose SFU points at any Redis but the compose file's own. The deploy
   starts that Redis whatever Upstash settings the shell carries, and needs no
   `REDIS_URL` in staging's `.env`.
+- **Shared browser and transcripts**: not shared. The SFUs run with host
+  networking, so production's defaults (`http://localhost:3040` for the
+  shared browser, `http://localhost:8788` for the transcript worker) would
+  reach production's services on the same VM. The staging compose file sets
+  `BROWSER_SERVICE_URL` and `TRANSCRIPT_WORKER_URL` from
+  `STAGING_BROWSER_SERVICE_URL` and `STAGING_TRANSCRIPT_WORKER_URL` only, and
+  refuses to render without them, so the shell or a copied production `.env`
+  never decides where staging sends them.
 - **Disk**: `/var/lib/conclave-staging`, never the production state dir.
 - **Ports**: HTTP 3033, RTC 42001-42200 (production uses 3031, 3032 and
   40000-42000). The WebRTC port budget is pinned to 4 in
@@ -112,6 +120,8 @@ SFU_REGION=staging
 SFU_STAGING_PUBLIC_URL=https://sfu-staging.acmvit.in
 STAGING_STATE_DIR=/var/lib/conclave-staging
 STAGING_REDIS_DIR=/var/lib/conclave-staging-redis
+STAGING_BROWSER_SERVICE_URL=<staging's own shared-browser service URL>
+STAGING_TRANSCRIPT_WORKER_URL=<staging's own transcript worker URL>
 EOF
 chown azureuser:azureuser "$S/.env" && chmod 0600 "$S/.env"
 echo "staging SFU secret: ${STAGING_SFU_SECRET}"   # needed for the Worker secret below
