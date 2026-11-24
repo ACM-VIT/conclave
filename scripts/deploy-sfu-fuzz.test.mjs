@@ -319,6 +319,24 @@ fixed("fuzz: a first deploy that finds an instance down for a moment waits for D
   }),
 );
 
+fixed("fuzz: an instance Docker brings back between two of the deploy's looks at it is looked at again, so a failed canary still rolls back to it", () =>
+  withStack({ "sfu-a": {} }, async (sfus, shared) => {
+    const sfu = sfus["sfu-a"];
+    let last = 0;
+    let retries = 0;
+    sfu.onStatus = () => {
+      const now = Date.now();
+      retries = last && now - last >= 1500 ? retries + 1 : 0;
+      last = now;
+      if (retries === 2) setImmediate(sfu.restart);
+    };
+    sfu.crash(null);
+    const result = await deploy(sfus, { env: { ...shared.env, DEPLOY_STATUS_RETRY_SECONDS: "2", DEPLOY_TEST_BAD_IMAGES: TARGET } });
+    assert.equal(result.code, 4, result.output);
+    assertServes(sfu, LAST_GOOD);
+  }),
+);
+
 fixed("fuzz: a public route that is down when the deploy first looks still leaves the image the instance served on to go back to", () =>
   withStack({ "sfu-a": { publicRoute: true } }, async (sfus, shared) => {
     sfus["sfu-a"].publicFailures = 1;

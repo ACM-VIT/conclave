@@ -615,6 +615,19 @@ hold_down() {
   [[ "$(container_state "$svc")" == "stopped" ]]
 }
 
+wait_status() {
+  local start_ts code
+  start_ts="$(date +%s)"
+  while true; do
+    code=0
+    instance_status "$1" >/dev/null 2>&1 || code=$?
+    (( code == 0 )) && return 0
+    (( code == 2 )) && return 1
+    (( $(date +%s) - start_ts >= HEALTH_TIMEOUT_SECONDS )) && return 1
+    sleep "$POLL_SECONDS"
+  done
+}
+
 serving_confirmed() {
   local i
   for i in 1 2 3; do
@@ -1155,7 +1168,7 @@ repair_interrupted() {
 # and restarted serving. Every step is in the instance's journal before it is
 # taken.
 deploy_service() {
-  local svc="$1"
+  local svc="$1" relooked="${2:-}"
   local url image_name candidate container status="" lkg="" recorded settle_until=0 was_draining="false"
   url="$(service_url "$svc")"
   image_name="$(service_image_name "$svc")"
@@ -1258,13 +1271,17 @@ deploy_service() {
     fi
   elif answers_http "$url"; then
     # Up but its status is unreadable: its rooms are unknown, so leave it.
+    if [[ -z "$relooked" ]] && wait_status "$svc"; then
+      deploy_service "$svc" relooked
+      return
+    fi
     echo "${svc} answers but its /status cannot be read; not rebuilding it." >&2
     return 1
   else
-    if [[ -z "$lkg" && "$(container_state "$svc")" == "stopped" ]]; then
+    if [[ -z "$relooked" && -z "$lkg" && "$(container_state "$svc")" == "stopped" ]]; then
       echo "${svc} is stopped and no image it served on is on record; giving Docker up to ${HEALTH_TIMEOUT_SECONDS}s to bring it back before it is rebuilt."
       if wait_serving "$svc"; then
-        deploy_service "$svc"
+        deploy_service "$svc" relooked
         return
       fi
     fi
@@ -1281,6 +1298,10 @@ deploy_service() {
         return 1
         ;;
       running)
+        if [[ -z "$relooked" ]] && wait_status "$svc"; then
+          deploy_service "$svc" relooked
+          return
+        fi
         echo "${svc}'s container is running but nothing answers at ${url}; check that URL, or stop ${svc} if it is hung. Not rebuilding it." >&2
         return 1
         ;;

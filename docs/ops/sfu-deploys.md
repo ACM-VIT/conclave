@@ -226,13 +226,16 @@ stops again there. An instance that answers HTTP but
 whose `/status` cannot be read is left alone (exit 1), because its rooms are
 unknown. So is one whose container Docker runs while nothing answers at its
 URL (exit 1), however recently it started: a wrong `SFU_A_URL` or proxy can
-hide calls. A silent instance is started without a drain only when Docker
+hide calls. Either can also be an instance Docker restarted between two of the
+deploy's looks, so each is looked at once more, from the start, after up to
+`HEALTH_TIMEOUT_SECONDS` for its `/status` to answer; it is left alone only
+when `/status` still cannot be read or the second look agrees. A silent instance is started without a drain only when Docker
 affirmatively reports its container exited, dead, created or restarting
 right now, or compose has no container for it. A container that crashed and
 runs again counts as running, however often it restarted: it boots with the
 drain state it was created with and can take a call. A stopped instance with no image it
-served on recorded is first given `HEALTH_TIMEOUT_SECONDS` for Docker to bring
-it back, so a container that crashed a moment before the deploy looked comes
+served on recorded is first given `HEALTH_TIMEOUT_SECONDS`, on the first look
+only, for Docker to bring it back, so a container that crashed a moment before the deploy looked comes
 back with its image recorded as last-known-good; only one that stays down is
 rebuilt.
 When compose or `docker inspect` cannot answer, its state is unknown, so it
