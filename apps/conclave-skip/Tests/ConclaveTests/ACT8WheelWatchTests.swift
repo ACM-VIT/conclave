@@ -294,25 +294,101 @@ struct ACT8WheelWatchTests {
         #expect(presenter.openPage() == .dispatched && wire.pages == ["wheel"], "Edit Names opens Activities at the Wheel page")
     }
 
-    @Test func typedNamesCountOnlyOnceTheEmbedAddsThem() {
-        let wire = Wire()
+    private func wheelReady(_ wire: Wire) -> (AppHostPresenter, ActiveAppSession) {
         let (presenter, relay) = host(wire, inputs: AppHostInputs.make(callSession: 1, appId: "wheel", isHost: true),
                                       roster: ["You", "Grace"])
         #expect(ready(relay) == .none)
         send(relay, "status", ["app": Self.wheelApp(["Ada"])], id: "e-2")
-        #expect(presenter.wheel.typedNamesAdded == 0)
-        #expect(presenter.addWheelNames("\u{200B}") == .dispatched)
-        ack(relay, wire.lastRequestId(), ok: false)
-        #expect(presenter.wheel.typedNamesAdded == 0, "a rejected add leaves the typed text alone")
-        #expect(presenter.addWheelNames("Ben") == .dispatched)
-        presenter.fireCommandTimeout(requestId: wire.lastRequestId())
-        #expect(presenter.wheel.typedNamesAdded == 0, "an add that never answered is not counted")
-        #expect(presenter.addWheelNames("Cy") == .dispatched)
-        ack(relay, wire.lastRequestId())
-        #expect(presenter.wheel.typedNamesAdded == 1)
-        #expect(presenter.addEveryoneToWheel() == .dispatched)
-        ack(relay, wire.lastRequestId())
-        #expect(presenter.wheel.typedNamesAdded == 1, "Add everyone is not the typed box")
+        return (presenter, relay)
+    }
+
+    private func addRequests(_ wire: Wire) -> [(id: String, labels: [String])] {
+        var requests: [(id: String, labels: [String])] = []
+        for raw in wire.delivered {
+            let object = AppBridgeCodec.jsonObject(raw) ?? [:]
+            if object["type"] as? String != "addEntries" { continue }
+            let payload = object["payload"] as? [String: Any] ?? [:]
+            requests.append((id: object["requestId"] as? String ?? "", labels: payload["labels"] as? [String] ?? []))
+        }
+        return requests
+    }
+
+    @Test func aSentNameLeavesTheDraftSoTypingCannotSendItAgain() {
+        let wire = Wire()
+        let (presenter, relay) = wheelReady(wire)
+        presenter.editWheelDraft("Ada\n")
+        #expect(addRequests(wire).map { $0.labels } == [["Ada"]])
+        #expect(presenter.wheelDraft.text.isEmpty, "the sent text moved out of the draft")
+        presenter.editWheelDraft("B")
+        presenter.editWheelDraft("Bo")
+        #expect(addRequests(wire).count == 1, "typing after the paste sends nothing")
+        ack(relay, addRequests(wire)[0].id)
+        #expect(presenter.wheelDraft.text == "Bo")
+        presenter.editWheelDraft("Bo\n")
+        #expect(addRequests(wire).map { $0.labels } == [["Ada"], ["Bo"]])
+    }
+
+    @Test func aRefusedOrUnansweredNameReturnsAheadOfLaterTyping() {
+        let wire = Wire()
+        let (presenter, relay) = wheelReady(wire)
+        presenter.editWheelDraft("Cy\n")
+        presenter.editWheelDraft("De")
+        ack(relay, addRequests(wire)[0].id, ok: false)
+        #expect(presenter.wheelDraft.text == "Cy\nDe")
+        presenter.submitWheelDraft()
+        #expect(addRequests(wire).last?.labels == ["Cy", "De"])
+        presenter.editWheelDraft("Ed")
+        presenter.fireCommandTimeout(requestId: addRequests(wire)[1].id)
+        #expect(presenter.wheelDraft.text == "Cy\nDe\nEd")
+        ack(relay, addRequests(wire)[1].id)
+        #expect(presenter.wheelDraft.text == "Cy\nDe\nEd", "a late reply for a request that timed out changes nothing")
+    }
+
+    @Test func typingPastingAndRepliesInAnyOrderNeverRepeatOrLoseANameLetter() {
+        var seed: UInt64 = 20261124
+        func random(_ limit: Int) -> Int {
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            return Int((seed >> 33) % UInt64(limit))
+        }
+        let alphabet = Array("abcdefghijklmnopqrstuvwxyz")
+        func letters(_ text: String) -> [Character] { text.filter { $0.isLetter }.sorted() }
+        for run in 0..<60 {
+            let wire = Wire()
+            let (presenter, relay) = wheelReady(wire)
+            var entered = ""
+            var replied = Set<String>()
+            var accepted: [String] = []
+            for step in 0..<40 {
+                let open = addRequests(wire).filter { !replied.contains($0.id) }
+                switch random(7) {
+                case 0, 1:
+                    let letter = String(alphabet[random(alphabet.count)])
+                    entered += letter
+                    presenter.editWheelDraft(presenter.wheelDraft.text + letter)
+                case 2:
+                    let name = String(alphabet[random(alphabet.count)]) + String(alphabet[random(alphabet.count)])
+                    entered += name
+                    presenter.editWheelDraft(presenter.wheelDraft.text + name + "\n")
+                case 3:
+                    presenter.submitWheelDraft()
+                case 4, 5:
+                    if let request = open.isEmpty ? nil : open[random(open.count)] {
+                        let ok = random(3) > 0
+                        replied.insert(request.id)
+                        if ok { accepted.append(request.labels.joined()) }
+                        ack(relay, request.id, ok: ok)
+                    }
+                default:
+                    if let request = open.isEmpty ? nil : open[random(open.count)] {
+                        replied.insert(request.id)
+                        presenter.fireCommandTimeout(requestId: request.id)
+                    }
+                }
+                let pending = addRequests(wire).filter { !replied.contains($0.id) }.map { $0.labels.joined() }
+                let held = accepted.joined() + pending.joined() + presenter.wheelDraft.text
+                #expect(letters(held) == letters(entered), "run \(run) step \(step)")
+            }
+        }
     }
 
     @Test func theWinnerIsAnnouncedOnlyForALiveSettle() {

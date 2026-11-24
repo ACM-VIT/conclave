@@ -412,6 +412,54 @@ enum WatchSearchPhase: String, CaseIterable, Equatable {
     case idle, searching, results, empty, unavailable, failed
 }
 
+struct WheelNameSubmission: Equatable {
+    let requestId: String
+    let text: String
+}
+
+struct WheelNameDraft: Equatable {
+    private(set) var text = ""
+    private(set) var sent: [WheelNameSubmission] = []
+
+    mutating func edit(_ value: String) -> Bool {
+        let addsLine = WheelNameDraft.lineBreaks(value) > WheelNameDraft.lineBreaks(text)
+        text = value
+        return addsLine
+    }
+
+    mutating func clear() {
+        text = ""
+    }
+
+    mutating func didSend(requestId: String) {
+        sent.append(WheelNameSubmission(requestId: requestId, text: text))
+        text = ""
+    }
+
+    mutating func reply(requestId: String, accepted: Bool) {
+        guard let index = sent.firstIndex(where: { $0.requestId == requestId }) else { return }
+        let submission = sent[index]
+        sent.remove(at: index)
+        if !accepted { restore(submission.text) }
+    }
+
+    mutating func abandonAll() {
+        let waiting = sent
+        sent = []
+        for submission in waiting.reversed() { restore(submission.text) }
+    }
+
+    private mutating func restore(_ value: String) {
+        let kept = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if kept.isEmpty { return }
+        text = text.isEmpty ? kept : kept + "\n" + text
+    }
+
+    private static func lineBreaks(_ value: String) -> Int {
+        return value.components(separatedBy: "\n").count - 1
+    }
+}
+
 struct WheelPageModel: Equatable {
     let revision: Int
     let entries: [WheelEntryModel]
@@ -430,7 +478,6 @@ struct WheelPageModel: Equatable {
     let pendingTargets: [String]
 
     let winnerSequence: Int
-    let typedNamesAdded: Int
     let winnerLabel: String
 
     func isPending(_ kind: AppPageCommandKind) -> Bool {
@@ -445,12 +492,12 @@ struct WheelPageModel: Equatable {
         return WheelPageModel(revision: value, entries: entries, results: results, removeWinner: removeWinner, sounds: sounds,
                               spinning: spinning, canEdit: canEdit, canSpin: canSpin, isFull: isFull, isReady: isReady,
                               missingNames: missingNames, pendingKinds: pendingKinds, pendingTargets: pendingTargets,
-                              winnerSequence: winnerSequence, typedNamesAdded: typedNamesAdded, winnerLabel: winnerLabel)
+                              winnerSequence: winnerSequence, winnerLabel: winnerLabel)
     }
 
     static let empty = WheelPageModel(revision: 0, entries: [], results: [], removeWinner: false, sounds: true, spinning: false,
                                       canEdit: false, canSpin: false, isFull: false, isReady: false, missingNames: [],
-                                      pendingKinds: [], pendingTargets: [], winnerSequence: 0, typedNamesAdded: 0, winnerLabel: "")
+                                      pendingKinds: [], pendingTargets: [], winnerSequence: 0, winnerLabel: "")
 }
 
 struct WatchPageModel: Equatable {
@@ -708,7 +755,7 @@ final class AppHostPresenter {
     @ObservationIgnored private var pagePending: [AppPagePendingCommand] = []
     @ObservationIgnored private var lastWinnerSpinId = ""
     @ObservationIgnored private var winnerSequence = 0
-    @ObservationIgnored private var typedNamesAdded = 0
+    private(set) var wheelDraft = WheelNameDraft()
     @ObservationIgnored private var winnerLabel = ""
     @ObservationIgnored private var announcedVideoId = ""
     @ObservationIgnored private var titleSequence = 0
@@ -811,6 +858,7 @@ final class AppHostPresenter {
             cancelReadyTimer()
             pending = []
             pagePending = []
+            wheelDraft.abandonAll()
             rebuild()
             rebuildToolbar()
         case .status:
@@ -842,6 +890,7 @@ final class AppHostPresenter {
         embedReady = false
         pending = []
         pagePending = []
+        wheelDraft.abandonAll()
         reloadSerial += 1
         cancelReadyTimer()
         rebuild()
@@ -942,6 +991,21 @@ final class AppHostPresenter {
         let labels = AppPagePolicy.wheelLabels(raw, room: AppWheelLimits.maxEntries - wheel.entries.count)
         if labels.isEmpty { return ActivityTapResult.ignored }
         return sendPage(AppPageCommandKind.addEntries, target: "", payload: ["labels": labels])
+    }
+
+    func editWheelDraft(_ value: String) {
+        if wheelDraft.edit(value) { submitWheelDraft() }
+    }
+
+    func submitWheelDraft() {
+        let text = wheelDraft.text
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            wheelDraft.clear()
+            return
+        }
+        if addWheelNames(text) != ActivityTapResult.dispatched { return }
+        guard let requestId = pagePending.last?.requestId else { return }
+        wheelDraft.didSend(requestId: requestId)
     }
 
     @discardableResult
@@ -1275,7 +1339,9 @@ final class AppHostPresenter {
         if let pageIndex = pagePending.firstIndex(where: { $0.requestId == requestId }) {
             let command = pagePending[pageIndex]
             pagePending.remove(at: pageIndex)
-            if ok && command.kind == AppPageCommandKind.addEntries && command.target.isEmpty { typedNamesAdded += 1 }
+            if command.kind == AppPageCommandKind.addEntries && command.target.isEmpty {
+                wheelDraft.reply(requestId: requestId, accepted: ok)
+            }
             rebuildPages()
             return
         }
@@ -1303,7 +1369,11 @@ final class AppHostPresenter {
 
     func fireCommandTimeout(requestId: String) {
         if let pageIndex = pagePending.firstIndex(where: { $0.requestId == requestId }) {
+            let command = pagePending[pageIndex]
             pagePending.remove(at: pageIndex)
+            if command.kind == AppPageCommandKind.addEntries && command.target.isEmpty {
+                wheelDraft.reply(requestId: requestId, accepted: false)
+            }
             rebuildPages()
             return
         }
@@ -1532,6 +1602,7 @@ final class AppHostPresenter {
     private func resetPageState() {
         appStatus = AppEmbedAppStatus.empty
         pagePending = []
+        wheelDraft.abandonAll()
         sawAppStatus = false
         lastWinnerSpinId = ""
         winnerLabel = ""
@@ -1573,7 +1644,6 @@ final class AppHostPresenter {
             pendingKinds: isWheel ? kinds : [],
             pendingTargets: isWheel ? targets : [],
             winnerSequence: winnerSequence,
-            typedNamesAdded: typedNamesAdded,
             winnerLabel: winnerLabel
         )
         if nextWheel != wheel {

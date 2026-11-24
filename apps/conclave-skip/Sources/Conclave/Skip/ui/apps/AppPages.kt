@@ -59,21 +59,8 @@ import kotlinx.coroutines.launch
 @Composable
 internal fun AppWheelPage(host: AppHostPresenter, reservation: PaddingValues) {
     val wheel = host.wheel
-    var draft by rememberSaveable { mutableStateOf("") }
-    var submittedDraft by remember { mutableStateOf<String?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { host.refreshRoster() }
-    LaunchedEffect(wheel.typedNamesAdded) {
-        if (submittedDraft != null && draft == submittedDraft) draft = ""
-        submittedDraft = null
-    }
-    val addDraft: () -> Unit = {
-        if (draft.isBlank()) {
-            draft = ""
-        } else if (host.addWheelNames(draft) == ActivityTapResult.dispatched) {
-            submittedDraft = draft
-        }
-    }
     LazyColumn(Modifier.fillMaxSize().testTag("app.wheel.page"), contentPadding = reservation) {
         if (!wheel.isReady) {
             item(key = "closed") { AppPageClosed("wheel") }
@@ -81,18 +68,14 @@ internal fun AppWheelPage(host: AppHostPresenter, reservation: PaddingValues) {
             if (wheel.canEdit) {
                 item(key = "add") {
                     OutlinedTextField(
-                        value = draft,
-                        onValueChange = { value ->
-                            draft = value
-
-                            if (value.contains('\n')) addDraft()
-                        },
+                        value = host.wheelDraft.text,
+                        onValueChange = { value -> host.editWheelDraft(value) },
                         label = { Text(conclaveString("app_wheel_add_name")) },
                         singleLine = false,
                         maxLines = 4,
                         enabled = !wheel.isFull,
                         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words, imeAction = ImeAction.Done),
-                        keyboardActions = KeyboardActions(onDone = { addDraft() }),
+                        keyboardActions = KeyboardActions(onDone = { host.submitWheelDraft() }),
                         supportingText = if (wheel.isFull) ({ Text(conclaveString("app_wheel_full")) }) else null,
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).testTag("app.wheel.add"),
                     )

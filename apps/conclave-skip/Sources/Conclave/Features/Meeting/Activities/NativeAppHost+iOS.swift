@@ -764,8 +764,6 @@ struct AppPageUnavailable: View {
 
 struct AppWheelPage: View {
     let host: AppHostPresenter
-    @State private var draft = ""
-    @State private var submittedDraft: String?
     @State private var confirmsClear = false
     @FocusState private var focused: Bool
     @Environment(\.panelPromoteToLargeDetent) private var promoteToLarge
@@ -779,22 +777,15 @@ struct AppWheelPage: View {
             } else {
                 if wheel.canEdit {
                     Section {
-                        TextField(ConclaveStrings.text("Add a Name"), text: $draft, axis: .vertical)
+                        TextField(ConclaveStrings.text("Add a Name"),
+                                  text: Binding(get: { host.wheelDraft.text }, set: { host.editWheelDraft($0) }), axis: .vertical)
                             .lineLimit(1...4)
                             .textInputAutocapitalization(.words)
                             .submitLabel(.done)
                             .focused($focused)
                             .disabled(wheel.isFull)
-                            .onSubmit { addDraft() }
-                            .onChange(of: draft) { _, value in
-
-                                if value.contains("\n") { addDraft() }
-                            }
+                            .onSubmit { host.submitWheelDraft() }
                             .onChange(of: focused) { _, isFocused in if isFocused { promoteToLarge() } }
-                            .onChange(of: wheel.typedNamesAdded) { _, _ in
-                                if let submitted = submittedDraft, draft == submitted { draft = "" }
-                                submittedDraft = nil
-                            }
                             .accessibilityIdentifier("app.wheel.add")
                         Button {
                             _ = host.addEveryoneToWheel()
@@ -891,15 +882,6 @@ struct AppWheelPage: View {
             Text(ConclaveStrings.text("The wheel empties for everyone."))
         }
         .accessibilityIdentifier("app.wheel.page")
-    }
-
-    private func addDraft() {
-        let text = draft
-        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            if !text.isEmpty { draft = "" }
-            return
-        }
-        if host.addWheelNames(text) == ActivityTapResult.dispatched { submittedDraft = text }
     }
 
     private func remove(_ offsets: IndexSet) {
