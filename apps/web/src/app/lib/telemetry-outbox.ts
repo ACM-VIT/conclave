@@ -250,6 +250,11 @@ export function createOutbox(deps: OutboxDeps) {
       expire(batch);
       return;
     }
+    if (dueAt(batch) > deps.now()) {
+      if (batch.saved) wakeAt(dueAt(batch));
+      else holdInMemory(batch);
+      return;
+    }
     batch.sendId = deps.newId();
     batch.leaseUntil = deps.now() + LEASE_MS;
     if (batch.saved && !deps.store.save(stored(batch))) leaveStorage(batch);
@@ -381,7 +386,7 @@ export function createOutbox(deps: OutboxDeps) {
           batch.sent = true;
           batch.nextTry = Math.max(batch.nextTry, deps.now() + BEACON_CONFIRM_MS);
         }
-        if (!toStorage(batch) && batch.timer === null) holdInMemory(batch);
+        if (!toStorage(batch)) holdInMemory(batch);
       }
       for (const batch of live.values()) {
         if (batch.inFlight !== null && deps.store.save(stored(batch))) batch.saved = true;

@@ -45,7 +45,9 @@ one owner at a time:
 - **In memory.** A batch only this tab holds is sent by this tab and retried
   by this tab's timer: after 2, 4, 8 and 16 s, then every 30 s, or after the
   answer's `Retry-After` when that is later (seconds or an HTTP date, held to
-  60 s). A `Retry-After` only ever moves the next try later. Every request has
+  60 s). A `Retry-After` only ever moves the next try later, and no path sends
+  a batch before `max(nextTry, notBefore)`: a timer that fires early is set
+  again for the batch's due time. Every request has
   a 15 s deadline (`/ingest` itself allows 2 s for a manifest and 10 s for
   PostHog); at the deadline it is aborted and counts as no answer.
 - **Saved.** On `visibilitychange` to hidden, on `pagehide` and on `freeze`,
@@ -56,7 +58,8 @@ one owner at a time:
   all. A request in flight is saved too, with its attempt id and a lease. A
   saved batch keeps its place in the retry schedule (`attempt`, `nextTry`,
   `notBefore`), and a beaconed one is sent again 30 s later to confirm it,
-  since a beacon is never answered.
+  since a beacon is never answered; when storage refuses a beaconed batch,
+  its retry timer moves to that time too.
 - **Replayed.** A saved batch is sent only by a replay pass, which runs under
   a Web Locks lock (`conclave:telemetry:replay`) at its due time, when a tab
   loads or comes back into view, and when another tab changes a saved batch

@@ -37,6 +37,7 @@ const START = Date.parse("2026-11-23T00:00:00.000Z");
 const PROJECT = "phc_sim_project";
 const SCHEDULE = [2000, 4000, 8000, 16000, 30000];
 const MAX_WAIT_MS = 60_000;
+const BEACON_CONFIRM_MS = 30_000;
 
 const rngOf = (seed: number) => {
   let state = seed >>> 0;
@@ -139,6 +140,8 @@ export async function simulate(
   let exactCounts = true;
   const lostAtClose = new Set<string>();
   const waitUntil = new Map<string, number>();
+  const beaconedAt = new Map<string, number>();
+  let refusingUntil = 0;
   const failures = new Map<string, { count: number; at: number }>();
   const requests = new Map<string, Request[]>();
   let posts = 0;
@@ -165,7 +168,7 @@ export async function simulate(
     key: (index: number) => [...items.keys()][index] ?? null,
     getItem: (key: string) => items.get(key) ?? null,
     setItem: (key: string, value: string) => {
-      if (rng() < profile.refuseRate) {
+      if (clock < refusingUntil || rng() < profile.refuseRate) {
         refusedWrites += 1;
         if (closingTab === tab) {
           try {
@@ -210,6 +213,10 @@ export async function simulate(
     const until = waitUntil.get(key) ?? 0;
     if (clock < until) violate("sent before its Retry-After", `${how} of ${key} ${until - clock} ms early`);
     if (how === "beacon") return;
+    const beaconed = beaconedAt.get(key);
+    if (beaconed !== undefined && clock - beaconed < BEACON_CONFIRM_MS) {
+      violate("sent again before its beacon is confirmed", `${key} ${clock - beaconed} ms after its beacon`);
+    }
     const open = (requests.get(key) ?? []).filter((request) => !request.done && request.tab.open);
     if (open.length > 0) violate("two sends of one batch in flight", key);
     const failed = failures.get(key);
@@ -314,6 +321,7 @@ export async function simulate(
     const uuids = (JSON.parse(body) as { batch: Array<{ uuid: string }> }).batch.map((event) => event.uuid);
     checkSend(keyOf(uuids), "beacon");
     if (rng() < profile.beaconRefuseRate) return false;
+    beaconedAt.set(keyOf(uuids), clock);
     beacons += 1;
     if (rng() >= profile.beaconLossRate) for (const uuid of uuids) delivered.add(uuid);
     return true;
@@ -398,8 +406,12 @@ export async function simulate(
     const roll = rng();
     if (open.length < profile.maxTabs && (open.length === 0 || roll < 0.25)) {
       emit(openTab());
-    } else if (roll < 0.55 && open.length > 0) {
+    } else if (roll < 0.6 && open.length > 0) {
       const tab = open[Math.floor(rng() * open.length)];
+      if (roll >= 0.45) {
+        refusingUntil = clock + between(5000, 60_000);
+        note(`storage refuses every write until ${((refusingUntil - START) / 1000).toFixed(3)}`);
+      }
       if (!tab.hidden) {
         note(`tab${tab.id} hides`);
         tab.hidden = true;
@@ -410,7 +422,7 @@ export async function simulate(
           tab.outbox.replaySaved();
         });
       }
-    } else if (roll < 0.75 && open.length > 0) {
+    } else if (roll < 0.8 && open.length > 0) {
       closeTab(open[Math.floor(rng() * open.length)]);
     }
     schedule(clock + between(5000, 60_000), null, "action", act);

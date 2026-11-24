@@ -6,6 +6,25 @@ const quiet = { refuseRate: 0, beaconRefuseRate: 1, beaconLossRate: 0, maxTabs: 
 
 export const THREAD_CASES: ThreadCase[] = [
   {
+    name: "a waiting batch beaconed as its tab hides, with storage refusing it, waits for its confirmation",
+    thread: "https://github.com/ACM-VIT/conclave/pull/265#discussion_r4669367064",
+    head: "223618b7",
+    seed: 4669367064,
+    scenario: {
+      profile: { ...quiet, refuseRate: 1, beaconRefuseRate: 0 },
+      actions: [
+        { at: 0, act: "open", tab: 1 },
+        { at: 1000, act: "emit", tab: 1, count: 2 },
+        { at: 6500, act: "hide", tab: 1 },
+        { at: 10_000, act: "show", tab: 1 },
+      ],
+      replies: [
+        { latency: 100, status: 503 },
+        { latency: 100, status: 200 },
+      ],
+    },
+  },
+  {
     name: "a replay slower than 10 s is tried again while one tab stays open",
     thread: "https://github.com/ACM-VIT/conclave/pull/265#discussion_r4667867771",
     head: "7800c707",
