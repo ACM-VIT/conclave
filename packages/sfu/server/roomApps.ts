@@ -18,6 +18,7 @@ export const MAX_ROOM_APP_DOC_BYTES = 4 * 1024 * 1024;
 export const MAX_CLIENT_IDS_PER_PARTICIPANT = 1024;
 export const MAX_NEW_CLIENT_IDS_PER_UPDATE = 8;
 export const MAX_PRESENCE_IDS_PER_PARTICIPANT = 4;
+export const MAX_REMOVED_PRESENCE_IDS_PER_CONNECTION = 16;
 
 // An update can grow the encoded document by more than its own size: a
 // deletion splits existing items, and alternating single-character deletions
@@ -177,7 +178,7 @@ export const readUpdate = (doc: Y.Doc, update: Uint8Array): UpdateFacts => {
   return { writers, touched, resolvable, blindlyReplaced };
 };
 
-type AwarenessEntry = { clientID: number; clock: number; state: string };
+type AwarenessEntry = { clientID: number; clock: number; state: string; removal: boolean };
 
 const strictUtf8 = new TextDecoder("utf-8", { fatal: true });
 
@@ -196,8 +197,7 @@ const decodeAwarenessEntries = (update: Uint8Array): AwarenessEntry[] => {
       throw new Error("Truncated awareness update");
     }
     const state = strictUtf8.decode(decoding.readUint8Array(decoder, length));
-    JSON.parse(state);
-    entries.push({ clientID, clock, state });
+    entries.push({ clientID, clock, state, removal: JSON.parse(state) === null });
   }
   if (decoding.hasContent(decoder)) throw new Error("Trailing bytes in awareness update");
   return entries;
@@ -216,7 +216,33 @@ const encodeAwarenessEntries = (entries: AwarenessEntry[]): Uint8Array => {
 
 // Presence lives for one stay on the stage, on a document of its own: an
 // Awareness never lets go of the document it is given.
-const createPresence = (): Awareness => new Awareness(new Y.Doc());
+const createPresence = (): Awareness => {
+  const awareness = new Awareness(new Y.Doc());
+  awareness.setLocalState(null);
+  return awareness;
+};
+
+type Presence = {
+  awareness: Awareness;
+  holders: Map<number, string>;
+  removed: Map<string, Set<number>>;
+};
+
+const planPresence = (awareness: Awareness, entries: AwarenessEntry[]) => {
+  const clocks = new Map<number, number>();
+  const ends = new Map<number, boolean>();
+  const applied: AwarenessEntry[] = [];
+  for (const entry of entries) {
+    const clock = clocks.get(entry.clientID) ?? awareness.meta.get(entry.clientID)?.clock ?? 0;
+    const shown = ends.get(entry.clientID) ?? awareness.states.has(entry.clientID);
+    if (clock < entry.clock || (clock === entry.clock && entry.removal && shown)) {
+      applied.push(entry);
+      clocks.set(entry.clientID, entry.clock);
+      ends.set(entry.clientID, !entry.removal);
+    }
+  }
+  return { applied, ends };
+};
 
 const destroyPresence = (awareness: Awareness): void => {
   try {
@@ -248,9 +274,7 @@ export class RoomApps {
   private clientIdCounts: Map<string, number> = new Map();
   private presenceIds: Map<number, ClientIdClaim> = new Map();
   private presenceIdCounts: Map<string, number> = new Map();
-  private awareness: Map<string, Awareness> = new Map();
-  private awarenessClientIdsByUser: Map<string, Map<string, Set<number>>> =
-    new Map();
+  private presence: Map<string, Presence> = new Map();
 
   // `participantOf` maps a connection's user id to the participant behind it,
   // which stays the same when that participant rejoins.
@@ -258,6 +282,16 @@ export class RoomApps {
 
   get boundClientIdCount(): number {
     return this.clientIdOwners.size;
+  }
+
+  get heldPresenceIds(): ReadonlyMap<number, string> {
+    return new Map(Array.from(this.presenceIds, ([client, claim]) => [client, claim.participant]));
+  }
+
+  presenceRecordCount(appId: string): number {
+    const awareness = this.presence.get(appId)?.awareness;
+    if (!awareness) return 0;
+    return Array.from(awareness.meta.keys()).filter((client) => client !== awareness.clientID).length;
   }
 
   get activeAppId(): string | null {
@@ -515,18 +549,20 @@ export class RoomApps {
     this.clientIdCounts.set(participant, (this.clientIdCounts.get(participant) ?? 0) + claims.length);
   }
 
-  private claimPresenceIds(participant: string, appId: string, clients: Iterable<number>): boolean {
-    const claims: number[] = [];
-    for (const client of new Set(clients)) {
-      const owner = this.clientIdOwners.get(client) ?? this.presenceIds.get(client);
-      if (owner === undefined) claims.push(client);
-      else if (owner.participant !== participant || owner.appId !== appId) return false;
+  private holdPresenceId(client: number, participant: string, appId: string): void {
+    this.presenceIds.set(client, { participant, appId });
+    this.presenceIdCounts.set(participant, (this.presenceIdCounts.get(participant) ?? 0) + 1);
+  }
+
+  private withinPresenceLimit(participant: string, ends: ReadonlyMap<number, boolean>): boolean {
+    let held = this.presenceIdCounts.get(participant) ?? 0;
+    for (const [client, shown] of ends) {
+      if (this.clientIdOwners.has(client)) continue;
+      const holding = this.presenceIds.has(client);
+      if (shown && !holding) held += 1;
+      if (!shown && holding) held -= 1;
     }
-    const held = this.presenceIdCounts.get(participant) ?? 0;
-    if (held + claims.length > MAX_PRESENCE_IDS_PER_PARTICIPANT) return false;
-    for (const client of claims) this.presenceIds.set(client, { participant, appId });
-    if (claims.length > 0) this.presenceIdCounts.set(participant, held + claims.length);
-    return true;
+    return held <= MAX_PRESENCE_IDS_PER_PARTICIPANT;
   }
 
   private releasePresenceIds(clients: Iterable<number>): void {
@@ -548,63 +584,77 @@ export class RoomApps {
   }
 
   private removeAwareness(appId: string): AppAwarenessRemoval | null {
-    const awareness = this.awareness.get(appId);
-    this.awarenessClientIdsByUser.delete(appId);
-    if (!awareness) return null;
+    const presence = this.presence.get(appId);
+    if (!presence) return null;
 
-    const clientIds = Array.from(awareness.getStates().keys());
+    const clientIds = Array.from(presence.awareness.getStates().keys());
     let removal: AppAwarenessRemoval | null = null;
     if (clientIds.length > 0) {
-      removeAwarenessStates(awareness, clientIds, "app-close");
-      removal = { appId, awarenessUpdate: encodeAwarenessUpdate(awareness, clientIds) };
+      removeAwarenessStates(presence.awareness, clientIds, "app-close");
+      removal = { appId, awarenessUpdate: encodeAwarenessUpdate(presence.awareness, clientIds) };
     }
 
-    destroyPresence(awareness);
-    this.awareness.delete(appId);
+    destroyPresence(presence.awareness);
+    this.presence.delete(appId);
     this.releasePresenceIds(
       Array.from(this.presenceIds).filter(([, claim]) => claim.appId === appId).map(([client]) => client),
     );
     return removal;
   }
 
-  private getOrCreateAwarenessUserMap(appId: string): Map<string, Set<number>> {
-    const existing = this.awarenessClientIdsByUser.get(appId);
+  private presenceFor(appId: string): Presence {
+    const existing = this.presence.get(appId);
     if (existing) return existing;
-    const map = new Map<string, Set<number>>();
-    this.awarenessClientIdsByUser.set(appId, map);
-    return map;
+    const presence: Presence = { awareness: createPresence(), holders: new Map(), removed: new Map() };
+    presence.awareness.on("update", ({ removed }: { removed: number[] }, origin: unknown) => {
+      if (origin !== presence) this.settlePresence(presence, removed);
+    });
+    this.presence.set(appId, presence);
+    return presence;
   }
 
-  private trackAwarenessClientForUser(
-    appId: string,
-    userId: string,
-    clientId: number,
+  private settlePresence(
+    presence: Presence,
+    clients: Iterable<number>,
+    sender?: { participant: string; appId: string; userId: string },
   ): void {
-    const users = this.getOrCreateAwarenessUserMap(appId);
-    const existing = users.get(userId);
-    if (existing) {
-      existing.add(clientId);
-      return;
+    for (const client of clients) {
+      const holder = presence.holders.get(client);
+      if (presence.awareness.states.has(client)) {
+        if (!sender) continue;
+        if (holder !== undefined) presence.removed.get(holder)?.delete(client);
+        presence.holders.set(client, sender.userId);
+        if (!this.clientIdOwners.has(client) && !this.presenceIds.has(client)) {
+          this.holdPresenceId(client, sender.participant, sender.appId);
+        }
+        continue;
+      }
+      this.releasePresenceIds([client]);
+      const keeper = holder ?? sender?.userId;
+      if (keeper !== undefined) this.keepRemoved(presence, client, keeper);
     }
-    users.set(userId, new Set([clientId]));
   }
 
-  private untrackAwarenessClientForUser(
-    appId: string,
-    userId: string,
-    clientId: number,
-  ): void {
-    const users = this.awarenessClientIdsByUser.get(appId);
-    if (!users) return;
-    const clientIds = users.get(userId);
-    if (!clientIds) return;
-    clientIds.delete(clientId);
-    if (clientIds.size === 0) {
-      users.delete(userId);
+  private keepRemoved(presence: Presence, client: number, holder: string): void {
+    const removed = presence.removed.get(holder) ?? new Set<number>();
+    presence.removed.set(holder, removed);
+    presence.holders.set(client, holder);
+    removed.delete(client);
+    removed.add(client);
+    for (const oldest of removed) {
+      if (removed.size <= MAX_REMOVED_PRESENCE_IDS_PER_CONNECTION) return;
+      removed.delete(oldest);
+      presence.holders.delete(oldest);
+      presence.awareness.meta.delete(oldest);
     }
-    if (users.size === 0) {
-      this.awarenessClientIdsByUser.delete(appId);
+  }
+
+  private forgetConnection(presence: Presence, userId: string): void {
+    for (const client of presence.removed.get(userId) ?? []) {
+      presence.holders.delete(client);
+      presence.awareness.meta.delete(client);
     }
+    presence.removed.delete(userId);
   }
 
   /**
@@ -614,51 +664,36 @@ export class RoomApps {
    * time out, are dropped, and an update carrying state under someone else's
    * id is refused.
    */
-  applyAwarenessUpdate(
-    appId: string,
-    awarenessUpdate: Uint8Array,
-    userId?: string,
-  ): Uint8Array | null {
-    const doc = this.liveDoc(appId);
-    if (!doc) return null;
-    const participant = this.participantOf(userId ?? "socket");
+  applyAwarenessUpdate(appId: string, awarenessUpdate: Uint8Array, userId: string): Uint8Array | null {
+    if (!this.liveDoc(appId)) return null;
+    const entries = decodeAwarenessEntries(awarenessUpdate);
+    const participant = this.participantOf(userId);
+    const presence = this.presenceFor(appId);
     const own: AwarenessEntry[] = [];
-    const claimed: number[] = [];
-    for (const entry of decodeAwarenessEntries(awarenessUpdate)) {
+    const shownHere = new Set<number>();
+    for (const entry of entries) {
       const owner = this.clientIdOwners.get(entry.clientID) ?? this.presenceIds.get(entry.clientID);
-      const removal = JSON.parse(entry.state) === null;
-      const ours = owner?.participant === participant && owner.appId === appId;
-      if (ours || (owner === undefined && !removal)) {
-        own.push(entry);
-        if (owner === undefined) claimed.push(entry.clientID);
-      } else if (!removal) {
-        return null;
+      const foreign =
+        entry.clientID === presence.awareness.clientID ||
+        (owner !== undefined && (owner.participant !== participant || owner.appId !== appId));
+      if (foreign) {
+        if (!entry.removal) return null;
+        continue;
       }
+      if (owner === undefined && !entry.removal) shownHere.add(entry.clientID);
+      if (owner !== undefined || shownHere.has(entry.clientID)) own.push(entry);
     }
-    if (own.length === 0 || !this.claimPresenceIds(participant, appId, claimed)) return null;
+    const { applied, ends } = planPresence(presence.awareness, own);
+    if (applied.length === 0 || !this.withinPresenceLimit(participant, ends)) return null;
 
-    const forwarded = encodeAwarenessEntries(own);
-    let awareness = this.awareness.get(appId);
-    if (!awareness) {
-      awareness = createPresence();
-      awareness.on("update", ({ removed }: { removed: number[] }) => this.releasePresenceIds(removed));
-      this.awareness.set(appId, awareness);
-    }
-    applyAwarenessUpdate(awareness, forwarded, userId ?? "socket");
-    if (userId) {
-      for (const { clientID } of own) {
-        if (awareness.getStates().has(clientID)) {
-          this.trackAwarenessClientForUser(appId, userId, clientID);
-        } else {
-          this.untrackAwarenessClientForUser(appId, userId, clientID);
-        }
-      }
-    }
+    const forwarded = encodeAwarenessEntries(applied);
+    applyAwarenessUpdate(presence.awareness, forwarded, presence);
+    this.settlePresence(presence, ends.keys(), { participant, appId, userId });
     return forwarded;
   }
 
   encodeAwarenessSnapshot(appId: string): Uint8Array | null {
-    const awareness = this.awareness.get(appId);
+    const awareness = this.presence.get(appId)?.awareness;
     if (!awareness) return null;
     const clientIds = Array.from(awareness.getStates().keys());
     if (clientIds.length === 0) return null;
@@ -667,51 +702,25 @@ export class RoomApps {
 
   clearUserAwareness(userId: string): AppAwarenessRemoval[] {
     const removals: AppAwarenessRemoval[] = [];
-
-    const appIds = new Set<string>([
-      ...this.awareness.keys(),
-      ...this.awarenessClientIdsByUser.keys(),
-    ]);
-
-    for (const appId of appIds) {
-      const awareness = this.awareness.get(appId);
-      if (!awareness) {
-        continue;
+    for (const [appId, presence] of this.presence) {
+      const shown = Array.from(presence.holders)
+        .filter(([client, holder]) => holder === userId && presence.awareness.states.has(client))
+        .map(([client]) => client);
+      if (shown.length > 0) {
+        removeAwarenessStates(presence.awareness, shown, userId);
+        removals.push({ appId, awarenessUpdate: encodeAwarenessUpdate(presence.awareness, shown) });
       }
-
-      const users = this.awarenessClientIdsByUser.get(appId);
-      const trackedClientIds = users?.get(userId);
-      if (users) {
-        users.delete(userId);
-        if (users.size === 0) {
-          this.awarenessClientIdsByUser.delete(appId);
-        }
-      }
-
-      const removableClientIds = Array.from(trackedClientIds ?? []).filter((id) =>
-        awareness.meta.has(id),
-      );
-      if (removableClientIds.length === 0) {
-        continue;
-      }
-
-      removeAwarenessStates(awareness, removableClientIds, userId);
-      removals.push({
-        appId,
-        awarenessUpdate: encodeAwarenessUpdate(awareness, removableClientIds),
-      });
+      this.forgetConnection(presence, userId);
     }
-
     return removals;
   }
 
   /** Room teardown: destroys every document and all presence. */
   clear(): void {
-    for (const awareness of this.awareness.values()) {
-      destroyPresence(awareness);
+    for (const presence of this.presence.values()) {
+      destroyPresence(presence.awareness);
     }
-    this.awareness.clear();
-    this.awarenessClientIdsByUser.clear();
+    this.presence.clear();
 
     for (const [appId, entry] of Array.from(this.docs)) {
       this.destroyDoc(appId, entry);

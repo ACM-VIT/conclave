@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as decoding from "lib0/decoding";
 import * as encoding from "lib0/encoding";
 import * as Y from "yjs";
 import {
@@ -21,6 +22,7 @@ import {
   MAX_CLIENT_IDS_PER_PARTICIPANT,
   MAX_NEW_CLIENT_IDS_PER_UPDATE,
   MAX_PRESENCE_IDS_PER_PARTICIPANT,
+  MAX_REMOVED_PRESENCE_IDS_PER_CONNECTION,
   MAX_ROOM_APP_DOCS,
   RoomApps,
 } from "../server/roomApps.js";
@@ -221,6 +223,17 @@ const presencePacket = (clientIds: number[], clock = 1, state = "{}"): Uint8Arra
     encoding.writeVarUint(encoder, clientId);
     encoding.writeVarUint(encoder, clock);
     encoding.writeVarString(encoder, state);
+  }
+  return encoding.toUint8Array(encoder);
+};
+
+const awarenessPacket = (entries: { client: number; clock: number; state: string }[]): Uint8Array => {
+  const encoder = encoding.createEncoder();
+  encoding.writeVarUint(encoder, entries.length);
+  for (const entry of entries) {
+    encoding.writeVarUint(encoder, entry.client);
+    encoding.writeVarUint(encoder, entry.clock);
+    encoding.writeVarString(encoder, entry.state);
   }
   return encoding.toUint8Array(encoder);
 };
@@ -958,6 +971,152 @@ describe("client id reservations", () => {
     expect(refusals).toHaveLength(1);
     expect(refusals[0].payload).toMatchObject({ appId: "whiteboard", replicaId: "copy-1" });
   });
+});
+
+describe("presence holds an id only while the room shows its cursor", () => {
+  const boardWithPresence = () => {
+    const apps = new RoomApps((userId) => userId.split("#")[0]);
+    apps.present("board");
+    return apps;
+  };
+
+  const shownIds = (apps: RoomApps): number[] => {
+    const snapshot = apps.encodeAwarenessSnapshot("board");
+    if (!snapshot) return [];
+    const decoder = decoding.createDecoder(snapshot);
+    const ids: number[] = [];
+    for (let left = decoding.readVarUint(decoder); left > 0; left -= 1) {
+      ids.push(decoding.readVarUint(decoder));
+      decoding.readVarUint(decoder);
+      decoding.readVarString(decoder);
+    }
+    return ids.sort((a, b) => a - b);
+  };
+
+  it("holds nothing for a cursor the room ignores", () => {
+    const apps = boardWithPresence();
+
+    const ignored = apps.applyAwarenessUpdate("board", presencePacket([7], 0), "viewer#1");
+
+    expect(apps.heldPresenceIds).toEqual(new Map());
+    expect(ignored).toBeNull();
+    expect(apps.applyAwarenessUpdate("board", presencePacket([7]), "peer#1")).not.toBeNull();
+    expect(apps.applyAwarenessUpdate("board", presencePacket([11, 12, 13, 14]), "viewer#1")).not.toBeNull();
+    expect(shownIds(apps)).toEqual([7, 11, 12, 13, 14]);
+  });
+
+  it("ignores a late cursor for an id its owner removed, and holds nothing for it", () => {
+    const apps = boardWithPresence();
+    apps.applyAwarenessUpdate("board", presencePacket([20], 3), "viewer#1");
+    apps.applyAwarenessUpdate("board", presencePacket([20], 4, "null"), "viewer#1");
+
+    const late = apps.applyAwarenessUpdate("board", presencePacket([20], 3), "viewer#1");
+
+    expect(apps.heldPresenceIds).toEqual(new Map());
+    expect(late).toBeNull();
+    expect(shownIds(apps)).toEqual([]);
+  });
+
+  it("frees an id whose cursor the same packet shows and then removes", () => {
+    const apps = boardWithPresence();
+
+    apps.applyAwarenessUpdate(
+      "board",
+      awarenessPacket([
+        { client: 30, clock: 1, state: "{}" },
+        { client: 30, clock: 2, state: "null" },
+      ]),
+      "viewer#1",
+    );
+
+    expect(apps.heldPresenceIds).toEqual(new Map());
+    expect(shownIds(apps)).toEqual([]);
+  });
+
+  it("keeps what it remembers of removed cursors bounded through a long session", () => {
+    const apps = boardWithPresence();
+    for (let index = 0; index < 2000; index += 1) {
+      const client = 50_000 + index;
+      apps.applyAwarenessUpdate("board", presencePacket([client]), "viewer#1");
+      apps.applyAwarenessUpdate("board", presencePacket([client], 2, "null"), "viewer#1");
+    }
+    for (let guest = 0; guest < 300; guest += 1) {
+      const clients = Array.from(
+        { length: MAX_PRESENCE_IDS_PER_PARTICIPANT },
+        (_, index) => 100_000 + guest * 10 + index,
+      );
+      apps.applyAwarenessUpdate("board", presencePacket(clients), `guest${guest}#1`);
+      apps.clearUserAwareness(`guest${guest}#1`);
+    }
+
+    expect(apps.presenceRecordCount("board")).toBeLessThanOrEqual(
+      MAX_REMOVED_PRESENCE_IDS_PER_CONNECTION,
+    );
+    expect(apps.applyAwarenessUpdate("board", presencePacket([51_999], 1), "viewer#1")).toBeNull();
+    expect(apps.heldPresenceIds).toEqual(new Map());
+  });
+
+  it("holds exactly the ids of the cursors it shows, across random presence packets", () => {
+    const apps = boardWithPresence();
+    const random = seededRandom(274);
+    const participants = ["p0", "p1", "p2", "p3"];
+    const connections = participants.map((participant) => `${participant}#0`);
+    const writers = new Set<number>();
+    participants.forEach((participant, index) => {
+      const writer = new Y.Doc();
+      writer.clientID = 900 + index;
+      writer.getMap("m").set(participant, index);
+      expect(
+        apps.write("board", `${participant}#0`, Y.encodeStateAsUpdate(writer), apps.syncMark("board")),
+      ).toBeNull();
+      writers.add(writer.clientID);
+    });
+    const pool = [...Array.from({ length: 10 }, (_, index) => index + 1), ...writers];
+    let fresh = 10_000;
+
+    for (let round = 0; round < 3000; round += 1) {
+      const slot = Math.floor(random() * connections.length);
+      const roll = random();
+      if (roll < 0.04) {
+        apps.clearUserAwareness(connections[slot]);
+        connections[slot] = `${participants[slot]}#${round + 1}`;
+      } else if (roll < 0.06) {
+        apps.close();
+        apps.present("board");
+      } else if (roll < 0.09) {
+        const writer = new Y.Doc();
+        Y.applyUpdate(writer, Y.encodeStateAsUpdate(apps.liveDoc("board")!));
+        writer.clientID = pool[Math.floor(random() * pool.length)];
+        const before = Y.encodeStateVector(writer);
+        writer.getMap("m").set(`round${round}`, round);
+        const update = Y.encodeStateAsUpdate(writer, before);
+        if (apps.write("board", connections[slot], update, apps.syncMark("board")) === null) {
+          writers.add(writer.clientID);
+        }
+      } else {
+        const entries = Array.from({ length: 1 + Math.floor(random() * 4) }, () => ({
+          client: random() < 0.2 ? fresh++ : pool[Math.floor(random() * pool.length)],
+          clock: Math.floor(random() * (8 + round / 10)),
+          state: random() < 0.3 ? "null" : JSON.stringify({ x: Math.floor(random() * 3) }),
+        }));
+        apps.applyAwarenessUpdate("board", awarenessPacket(entries), connections[slot]);
+      }
+
+      const shown = shownIds(apps);
+      const held = apps.heldPresenceIds;
+      expect([...held.keys()].sort((a, b) => a - b)).toEqual(
+        shown.filter((client) => !writers.has(client)),
+      );
+      for (const participant of participants) {
+        expect([...held.values()].filter((owner) => owner === participant).length).toBeLessThanOrEqual(
+          MAX_PRESENCE_IDS_PER_PARTICIPANT,
+        );
+      }
+      expect(apps.presenceRecordCount("board")).toBeLessThanOrEqual(
+        shown.length + MAX_REMOVED_PRESENCE_IDS_PER_CONNECTION * connections.length,
+      );
+    }
+  }, 30_000);
 });
 
 describe("the room applies an update whole or not at all", () => {

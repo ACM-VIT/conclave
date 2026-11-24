@@ -63,11 +63,19 @@ viewer that only syncs binds nothing. One update may bring at most 8 new ids
 and a participant may hold 1024; there is no shared room-wide pool, so no
 participant's ids can stop another from writing.
 
-Presence only holds an id for a while. An id first shown in presence is held
-for that participant until its cursor is removed, times out after 30 s, the
-participant leaves or the app leaves the stage, and a participant may hold
-at most 4 this way; a presence packet that names more is refused. Writing
-under a held id makes it the participant's for good.
+Presence only holds an id while the room shows a cursor under it. An id first
+shown in presence is held for that participant until its cursor is removed,
+times out after 30 s, the participant leaves or the app leaves the stage, and
+a participant may hold at most 4 this way; a presence packet that would leave
+them holding more is refused. An entry the room ignores, such as one whose
+clock is not newer than the room's, holds nothing, and the room forwards only
+the entries it applies. Writing under a held id makes it the participant's for
+good.
+
+For each connection the room remembers the clocks of its 16 most recently
+removed cursors, so a late entry for one of them is still ignored, and forgets
+them when that connection leaves. An entry for an id it no longer remembers is
+taken as a new cursor.
 
 A socket's `apps:yjs:update` is taken only once the room has answered its
 `apps:yjs:sync` for the presented document. That holds across Close and
