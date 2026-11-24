@@ -271,6 +271,52 @@ const cases: { thread: string; model: string; run: (rig: Rig) => Promise<Outcome
       return { shown: shown(rig), replayedChunks };
     },
   },
+  {
+    thread: "Short turns lose replay audio",
+    model: SARVAM,
+    async run(rig) {
+      const socket = await signalsActive(rig);
+      const send = socket.send.bind(socket);
+      socket.send = (raw: string) => {
+        send(raw);
+        vi.setSystemTime(Date.now() + 5);
+      };
+      await rig.speak(ada);
+      await rig.endTurn(ada);
+      await vi.advanceTimersByTimeAsync(300);
+      socket.emit(sarvamSpeechStart());
+      socket.disconnect();
+      await settle();
+      const replacement = rig.providerSockets().at(-1)!;
+      const replayedChunks = audioMessages(replacement);
+      replacement.emit(sarvamSpeechStart());
+      replacement.emit(sarvamFinal("a", "Ada short."));
+      await vi.advanceTimersByTimeAsync(DEADLINE + 100);
+      return { shown: shown(rig), replayedChunks };
+    },
+  },
+  {
+    thread: "Replays change speaking order",
+    model: SARVAM,
+    async run(rig) {
+      const socket = await signalsActive(rig);
+      for (const speaker of [ada, grace, ada]) {
+        await rig.speak(speaker);
+        await rig.endTurn(speaker);
+        await vi.advanceTimersByTimeAsync(200);
+      }
+      socket.disconnect();
+      await settle();
+      const replacement = rig.providerSockets().at(-1)!;
+      const replayedChunks = audioMessages(replacement);
+      for (const [id, text] of [["1", "Ada first."], ["2", "Grace second."], ["3", "Ada third."]]) {
+        replacement.emit(sarvamSpeechStart());
+        replacement.emit(sarvamFinal(id, text));
+      }
+      await vi.advanceTimersByTimeAsync(DEADLINE + 100);
+      return { shown: shown(rig), replayedChunks };
+    },
+  },
 ];
 
 const expected: Record<string, Outcome> = {
@@ -298,6 +344,11 @@ const expected: Record<string, Outcome> = {
   },
   "Late signals miss ongoing speech": { shown: [["Setup.", "grace"], [GAP, "ada"]] },
   "Brief drops end recoverable captions": { shown: [["Recovered.", "ada"]], replayedChunks: 1 },
+  "Short turns lose replay audio": { shown: [["Setup.", "grace"], ["Ada short.", "ada"]], replayedChunks: 1 },
+  "Replays change speaking order": {
+    shown: [["Setup.", "grace"], ["Ada first.", "ada"], ["Grace second.", "grace"], ["Ada third.", "ada"]],
+    replayedChunks: 3,
+  },
 };
 
 describe("the caption model: what each signal claims, what is shown and what is replayed", () => {

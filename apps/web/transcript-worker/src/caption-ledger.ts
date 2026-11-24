@@ -8,6 +8,7 @@ export type AudioChunk = {
   audio: string;
   sampleCount: number;
   createdAt: number;
+  sequence: number;
   voice: VoiceReading;
   turn: number;
 };

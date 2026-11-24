@@ -15,7 +15,7 @@ export type AcceptedUtterance = {
 
 export type HeardSpeech = Pick<AcceptedUtterance, "speaker" | "since" | "turn" | "ownsNewAudio" | "until">;
 
-export type AudioContext = { voice: VoiceReading; turn: number; lineId?: string };
+export type AudioContext = { voice: VoiceReading; turn: number; at: number; lineId?: string };
 
 export type LiveTranscriptionCallbacks = {
   onAccepted?: (itemId: string, utterance: AcceptedUtterance) => void;

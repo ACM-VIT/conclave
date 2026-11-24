@@ -160,6 +160,7 @@ export class TranscriptRoom {
   private readonly ledger = new CaptionLedger();
   private liveConnection: ProviderConnection | null = null;
   private readonly uncommittedAudio = new Map<string, { speaker: TranscriptSpeaker; chunks: AudioChunk[] }>();
+  private audioSequence = 0;
   private readonly speakingLine = new Map<string, string>();
   private readonly voiceChecks = new Map<string, VoiceActivity>();
   private audioTurn = 0;
@@ -1297,7 +1298,7 @@ export class TranscriptRoom {
       }
     }
     try {
-      session.appendAudio(audio, speaker, { voice, turn: this.audioTurn });
+      session.appendAudio(audio, speaker, { voice, turn: this.audioTurn, at: now });
     } catch {
       if (reportFailure) {
         void this.handleTranscriptionFailure(
@@ -1309,7 +1310,14 @@ export class TranscriptRoom {
       }
       return false;
     }
-    this.keepAudio(session.provider, speaker, { audio, sampleCount, createdAt: now, voice, turn: this.audioTurn });
+    this.keepAudio(session.provider, speaker, {
+      audio,
+      sampleCount,
+      createdAt: now,
+      sequence: this.audioSequence++,
+      voice,
+      turn: this.audioTurn,
+    });
     this.latestSpeaker = speaker;
     this.lastAudioAt = now;
     this.hasPendingAudio = true;
@@ -2119,17 +2127,29 @@ export class TranscriptRoom {
     for (const line of owed) {
       if (!replayedUnanswered.includes(line)) this.awaitReplacement(line);
     }
-    const now = Date.now();
-    for (const { speaker, chunks } of this.uncommittedAudio.values()) {
-      const sarvam = live.session.provider === "sarvam";
-      const audio = sarvam ? chunks.filter(({ createdAt }) => now - createdAt <= UNOWNED_AUDIO_KEPT_MS) : chunks;
-      const heard = audio.some(({ voice }) => voice !== "quiet");
-      if (audio.length === 0 || (sarvam && !heard)) continue;
-      this.awaitReplacement(this.newLine(null, { state: "replaying", speaker, heard, audio }));
+    for (const { speaker, audio } of this.unownedSpeakerRuns(live.session.provider === "sarvam")) {
+      this.awaitReplacement(
+        this.newLine(null, { state: "replaying", speaker, heard: audio.some(({ voice }) => voice !== "quiet"), audio }),
+      );
     }
     this.uncommittedAudio.clear();
     this.speakingLine.clear();
     this.ledger.forgetEnded(live.epoch);
+  }
+
+  private unownedSpeakerRuns(sarvam: boolean): { speaker: TranscriptSpeaker; audio: AudioChunk[] }[] {
+    const now = Date.now();
+    const sent = Array.from(this.uncommittedAudio.values())
+      .flatMap(({ speaker, chunks }) => chunks.map((chunk) => ({ speaker, chunk })))
+      .filter(({ chunk }) => !sarvam || now - chunk.createdAt <= UNOWNED_AUDIO_KEPT_MS)
+      .sort((left, right) => left.chunk.sequence - right.chunk.sequence);
+    const runs: { speaker: TranscriptSpeaker; audio: AudioChunk[] }[] = [];
+    for (const { speaker, chunk } of sent) {
+      const run = runs.at(-1);
+      if (run && speakerKey(run.speaker) === speakerKey(speaker)) run.audio.push(chunk);
+      else runs.push({ speaker, audio: [chunk] });
+    }
+    return sarvam ? runs.filter(({ audio }) => audio.some(({ voice }) => voice !== "quiet")) : runs;
   }
 
   private replayOwedLines(connection: ProviderConnection): boolean {
@@ -2154,6 +2174,7 @@ export class TranscriptRoom {
             connection.session.appendAudio(chunk.audio, line.speaker, {
               voice: chunk.voice,
               turn: chunk.turn,
+              at: chunk.createdAt,
               lineId: line.id,
             });
           }

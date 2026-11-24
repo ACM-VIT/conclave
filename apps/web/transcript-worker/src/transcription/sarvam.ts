@@ -383,7 +383,7 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
   appendAudio(audioBase64: string, speaker?: TranscriptSpeaker, context?: AudioContext): void {
     const downsampled = this.downsampler.downsample(audioBase64);
     if (downsampled) this.socket.send(buildSarvamAudioMessage(downsampled));
-    const now = Date.now();
+    const now = context?.at ?? Date.now();
     if (speaker) this.lastSpeaker = speaker;
     if (context) this.lastTurn = context.turn;
     const speakerKey = speaker ? `${speaker.userId}:${speaker.source}` : "unknown";
