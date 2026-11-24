@@ -593,6 +593,7 @@ describe("client id reservations", () => {
     const tooMany = Array.from({ length: MAX_NEW_CLIENT_IDS_PER_UPDATE + 1 }, (_, index) => 31_000 + index);
 
     writer.sendUpdate("whiteboard", authoredBy(tooMany));
+    writer.syncReplyInto("whiteboard");
     writer.sendUpdate("whiteboard", authoredBy(allowed));
 
     expect(writer.relayed.map((sent) => sent.event)).toEqual(["apps:yjs:update"]);

@@ -38,6 +38,8 @@ const REMEMBERED_REFUSED_REPLICAS = 16;
 const MAX_HELD_UPDATE_BYTES = MAX_APPS_UPDATE_BYTES;
 const HELD_UPDATE_FLUSH_MS = Math.ceil(1000 / RATE_LIMITS.appsYjsUpdate.refillPerSec);
 const COPY_RESTART_DELAY_MS = 500;
+const COPY_RESTART_CHECK_MS = 4000;
+const COPY_RESTART_ATTEMPTS = 3;
 
 type HeldUpdate = {
   apps: RoomApps;
@@ -191,25 +193,42 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
   let synced: { apps: RoomApps; mark: AppSyncMark } | null = null;
   const syncMarkHere = (): AppSyncMark | null =>
     synced && synced.apps === context.currentRoom?.apps ? synced.mark : null;
-  let copyRestartPending = false;
-  let copyRestartTimer: ReturnType<typeof setTimeout> | null = null;
   const markSynced = (apps: RoomApps, mark: AppSyncMark): void => {
     synced = { apps, mark };
-    copyRestartPending = false;
   };
-  const restartCopy = (): void => {
-    if (copyRestartPending || !context.currentRoom) return;
-    copyRestartPending = true;
+  let copyRestart: { attempts: number; timer: ReturnType<typeof setTimeout> | null } | null = null;
+  const stopCopyRestart = (): void => {
+    if (copyRestart?.timer) clearTimeout(copyRestart.timer);
+    copyRestart = null;
+  };
+  const sendCopyRestart = (): void => {
+    const restart = copyRestart;
+    if (!restart || !context.currentRoom) {
+      stopCopyRestart();
+      return;
+    }
+    restart.attempts += 1;
+    synced = null;
     socket.emit("apps:state", {
       ...getRoomAppsState(context),
       activeAppId: null,
       docGeneration: null,
     } satisfies AppsState);
-    if (copyRestartTimer) clearTimeout(copyRestartTimer);
-    copyRestartTimer = setTimeout(() => {
-      copyRestartTimer = null;
-      if (context.currentRoom) socket.emit("apps:state", getRoomAppsState(context));
+    restart.timer = setTimeout(() => {
+      if (copyRestart !== restart || !context.currentRoom) return;
+      const state = getRoomAppsState(context);
+      socket.emit("apps:state", state);
+      restart.timer = setTimeout(() => {
+        if (copyRestart !== restart) return;
+        if (restart.attempts < COPY_RESTART_ATTEMPTS && state.activeAppId) sendCopyRestart();
+        else stopCopyRestart();
+      }, COPY_RESTART_CHECK_MS);
     }, COPY_RESTART_DELAY_MS);
+  };
+  const restartCopy = (): void => {
+    if (copyRestart || !context.currentRoom) return;
+    copyRestart = { attempts: 0, timer: null };
+    sendCopyRestart();
   };
   const refusedReplicas: string[] = [];
   const signalRefused = (appId: string, replicaId: string | undefined, reason: string): void => {
@@ -304,8 +323,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     } catch (error) {
       Logger.warn("[Apps] Could not apply held app updates", error);
     }
-    if (copyRestartTimer) clearTimeout(copyRestartTimer);
-    copyRestartTimer = null;
+    stopCopyRestart();
   });
 
   const emitAppsState = (): AppsState => {
@@ -489,7 +507,10 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         return;
       }
       const mark = context.currentRoom.apps.syncMark(appId);
-      if (mark) markSynced(context.currentRoom.apps, mark);
+      if (mark) {
+        markSynced(context.currentRoom.apps, mark);
+        stopCopyRestart();
+      }
       const awarenessSnapshot =
         context.currentRoom.apps.encodeAwarenessSnapshot(appId) ?? undefined;
       const awarenessUpdate =

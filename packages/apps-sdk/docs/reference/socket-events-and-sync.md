@@ -106,9 +106,11 @@ left drawing on a copy the room no longer matches. A client that sends a
 `replicaId` is told with `apps:yjs:refused`. Any other client, such as an
 older web or native build, gets an `apps:state` without an `activeAppId` and,
 half a second later, the room's current state: every client drops its copy of
-an app that leaves the stage and syncs a fresh one when it returns. This
-happens once until that socket syncs again, and never for an update that
-changes nothing.
+an app that leaves the stage and syncs a fresh one when it returns. Until that
+socket syncs a fresh copy the room drops its updates and, a few seconds later,
+sends the two states again, at most three times, so a client that took both
+states at once still starts over. An update that changes nothing never
+restarts a copy.
 
 A socket's updates are taken at up to 30 a second. Updates that arrive faster
 are held, in order, and applied together as one write as soon as the budget

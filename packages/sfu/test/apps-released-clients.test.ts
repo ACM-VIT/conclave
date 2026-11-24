@@ -87,6 +87,46 @@ describe("an older client whose change the room refused", () => {
     expect(stagesSeenBy(early)).toEqual([null, "whiteboard"]);
   });
 
+  it("is restarted again until it syncs a fresh copy, at most three times", () => {
+    vi.useFakeTimers();
+    const { join } = savedBoard();
+    const early = join("early#1", "participant");
+
+    early.sendAsIs("whiteboard", writePage(early.doc, ["early"]));
+    vi.advanceTimersByTime(4800);
+    expect(stagesSeenBy(early)).toEqual([null, "whiteboard", null]);
+    vi.advanceTimersByTime(60_000);
+    expect(stagesSeenBy(early)).toEqual([null, "whiteboard", null, "whiteboard", null, "whiteboard"]);
+
+    const synced = join("synced#1", "participant");
+    synced.sendAsIs("whiteboard", writePage(synced.doc, ["early"]));
+    vi.advanceTimersByTime(1000);
+    synced.freshCopy();
+    synced.syncReplyInto("whiteboard");
+    vi.advanceTimersByTime(60_000);
+    expect(stagesSeenBy(synced)).toEqual([null, "whiteboard"]);
+  });
+
+  it("gets the room's copy for its new copy's empty update when both stages reach it at once", () => {
+    vi.useFakeTimers();
+    const { join, host } = savedBoard();
+    const tab = join("tab#1", "participant");
+    tab.syncReplyInto("whiteboard");
+    host.lock(true, host.state().revision);
+    tab.sendUpdate("whiteboard", writePage(tab.doc, ["while-locked"]));
+    vi.advanceTimersByTime(1000);
+    expect(stagesSeenBy(tab)).toEqual([null, "whiteboard"]);
+    tab.received.length = 0;
+
+    tab.freshCopy();
+    tab.sendAsIs("whiteboard", Y.encodeStateAsUpdate(new Y.Doc()));
+
+    const pushed = tab.received.filter((sent) => sent.event === "apps:yjs:update");
+    expect(pushed.map((sent) => pageOf((sent.payload as { update: Uint8Array }).update))).toEqual([
+      ["kept-1", "kept-2"],
+    ]);
+  });
+
   it("is sent the room's copy, with its stage left alone, for the empty update it opens a copy with", () => {
     vi.useFakeTimers();
     const { join } = savedBoard();
