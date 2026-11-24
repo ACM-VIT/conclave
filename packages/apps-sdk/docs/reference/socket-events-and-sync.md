@@ -123,8 +123,14 @@ independently, since none of them has reached anyone yet. A sync or a stage
 command passes its own checks when it arrives, then waits behind every update
 already queued in the room: a sync never applies anyone's updates early, and a
 host who closes, replaces or clears an app does so after everyone's queued
-strokes are saved. Only an update that would take a socket's held updates past
-256 KiB is refused, as `rate-limited`.
+strokes are saved. The queue is bounded per socket: at most 4 batches of held
+updates (a batch is a run of updates from one copy and one sync), none held for
+a second or more, and 256 KiB in all; an update past any of these is refused,
+as `rate-limited`. A sync or stage command therefore waits at most for each
+socket to earn 4 update tokens, under 150 ms. On a locked board an update from
+someone who is not a host is decided when it arrives and never held. An update
+is applied under the participant and role it arrived with, so one still queued
+when its sender leaves is applied as theirs.
 
 A cleared document stays cleared. The SFU remembers the Yjs clients that wrote
 to it and drops any later `apps:yjs:update`, in any app, from those clients or

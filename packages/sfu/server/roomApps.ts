@@ -453,9 +453,13 @@ export class RoomApps {
     );
   }
 
+  participantFor(userId: string): string {
+    return this.participantOf(userId);
+  }
+
   write(
     appId: string,
-    userId: string,
+    participant: string,
     update: Uint8Array,
     mark: AppSyncMark | null,
     options: { origin?: unknown; host?: boolean } = {},
@@ -477,7 +481,6 @@ export class RoomApps {
     for (const client of facts.touched) {
       if (!this.clientIdOwners.has(client) && this.wasCleared(client)) return "cleared";
     }
-    const participant = this.participantOf(userId);
     const claims = this.planClaims(participant, appId, facts.writers);
     if (typeof claims === "string") return claims;
     if (!this.reserveUpdate(appId, update)) return "too-large";

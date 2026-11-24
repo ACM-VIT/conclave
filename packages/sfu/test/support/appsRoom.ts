@@ -54,6 +54,7 @@ export const makeRoom = () => {
     const socket = {
       id: `socket-${id}`,
       data: { user: {} },
+      connected: true,
       on: (event: string, listener: Listener) => {
         listeners.set(event, listener);
         return socket;

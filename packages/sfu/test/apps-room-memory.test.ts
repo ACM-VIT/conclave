@@ -130,7 +130,7 @@ describe("presence holds an id only while the room shows its cursor", () => {
           return Y.encodeStateAsUpdate(writer, before);
         }),
       );
-      if (apps.write("board", connection, update, apps.syncMark("board")) === null) {
+      if (apps.write("board", apps.participantFor(connection), update, apps.syncMark("board")) === null) {
         for (const client of clients) writers.set(client, connection.split("#")[0]);
       }
     };
@@ -209,7 +209,7 @@ const SEVENTEEN = Array.from({ length: 17 }, (_, index) => 700 + index);
 const writeUnderEach = (apps: RoomApps, appId: string, userId: string, clients: number[]) => {
   for (let start = 0; start < clients.length; start += MAX_NEW_CLIENT_IDS_PER_UPDATE) {
     const batch = clients.slice(start, start + MAX_NEW_CLIENT_IDS_PER_UPDATE);
-    expect(apps.write(appId, userId, authoredBy(batch), apps.syncMark(appId))).toBeNull();
+    expect(apps.write(appId, apps.participantFor(userId), authoredBy(batch), apps.syncMark(appId))).toBeNull();
   }
 };
 

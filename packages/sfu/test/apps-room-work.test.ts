@@ -6,6 +6,7 @@ import { Admin } from "../config/classes/Admin.js";
 import { Client } from "../config/classes/Client.js";
 import { Room } from "../config/classes/Room.js";
 import { RoomApps } from "../server/roomApps.js";
+import { RoomAppsWork } from "../server/roomAppsWork.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
 import { createConnectionContext } from "../server/socket/context.js";
 import { registerAppsHandlers } from "../server/socket/handlers/appsHandlers.js";
@@ -35,13 +36,18 @@ type SentWrite = { peer: string; keys: string[]; protectedFromClose: boolean };
 const BOARD = "whiteboard";
 const { capacity: UPDATE_BURST, refillPerSec: UPDATES_PER_SECOND } = RATE_LIMITS.appsYjsUpdate;
 
-const keysIn = (update: Uint8Array): string[] => {
-  const keys: string[] = [];
-  for (const struct of Y.decodeUpdate(update).structs) {
-    if (struct instanceof Y.Item && struct.parentSub?.startsWith("w")) keys.push(struct.parentSub);
+const structsIn = (update: Uint8Array): (Y.Item | Y.GC | Y.Skip)[] => {
+  try {
+    return Y.decodeUpdate(update).structs;
+  } catch {
+    return [];
   }
-  return keys;
 };
+
+const keysIn = (update: Uint8Array): string[] =>
+  structsIn(update).flatMap((struct) =>
+    struct instanceof Y.Item && struct.parentSub?.startsWith("w") ? [struct.parentSub] : [],
+  );
 
 const recordWrites = (): WriteCall[] => {
   const calls: WriteCall[] = [];
@@ -60,6 +66,23 @@ const recordWrites = (): WriteCall[] => {
   return calls;
 };
 
+const recordAdmissions = (): Set<string> => {
+  const admitted = new Set<string>();
+  const original: (this: RoomAppsWork, ...args: Parameters<RoomAppsWork["hold"]>) => boolean = Reflect.get(
+    RoomAppsWork.prototype,
+    "hold",
+  );
+  vi.spyOn(RoomAppsWork.prototype, "hold").mockImplementation(function (
+    this: RoomAppsWork,
+    ...args: Parameters<RoomAppsWork["hold"]>
+  ) {
+    const held = original.apply(this, args);
+    if (held) for (const key of keysIn(args[0].update)) admitted.add(key);
+    return held;
+  });
+  return admitted;
+};
+
 const makeWorkRoom = () => {
   const state = createSfuState({
     roomRegistry: new LocalRoomRegistry({ instanceId: "apps-work", instanceUrl: "http://localhost", ttlMs: 45000 }),
@@ -75,6 +98,8 @@ const makeWorkRoom = () => {
   let pendingStage = 0;
   let writeSerial = 0;
   const sent: SentWrite[] = [];
+  const commands: { sentAt: number; ackedAt: number | null }[] = [];
+  const ownClients = new Map<string, Set<number>>();
   const io = {
     to: () => ({
       emit: (event: string, payload: unknown) => {
@@ -87,7 +112,11 @@ const makeWorkRoom = () => {
     const handlers = new Map<string, Handler>();
     const received: Received[] = [];
     let connected = true;
+    const participant = id.split("#")[0];
+    const own = ownClients.get(participant) ?? new Set<number>();
+    ownClients.set(participant, own);
     let doc = new Y.Doc();
+    own.add(doc.clientID);
     let replica = 0;
     let view = "";
     let needsSync = false;
@@ -95,6 +124,7 @@ const makeWorkRoom = () => {
     let pushAfterSync: Uint8Array | null = null;
     const freshCopy = () => {
       doc = new Y.Doc();
+      own.add(doc.clientID);
       replica += 1;
       needsSync = room.apps.activeAppId === BOARD;
       pushAfterSync = null;
@@ -138,6 +168,7 @@ const makeWorkRoom = () => {
     } as unknown as Socket;
     const client = options.host ? new Admin({ id, socket }) : new Client({ id, socket });
     room.addClient(client);
+    room.setUserIdentity(id, participant, participant);
     const context = createConnectionContext(io, socket, state);
     context.currentRoom = room;
     context.currentClient = client;
@@ -205,15 +236,26 @@ const makeWorkRoom = () => {
       },
       lock: (locked: boolean) => {
         pendingStage += 1;
+        const command = { sentAt: Date.now(), ackedAt: null as number | null };
+        commands.push(command);
         fire("apps:lock", { locked }, () => {
           pendingStage -= 1;
+          command.ackedAt = Date.now();
         });
       },
       stage: (event: "apps:open" | "apps:close" | "apps:discard", appId?: string) => {
         pendingStage += 1;
+        const command = { sentAt: Date.now(), ackedAt: null as number | null };
+        commands.push(command);
         fire(event, { appId, expectedRevision: undefined }, () => {
           pendingStage -= 1;
+          command.ackedAt = Date.now();
         });
+      },
+      flood: (count: number) => {
+        for (let index = 0; index < count; index += 1) {
+          fire("apps:yjs:update", { appId: BOARD, update: new Uint8Array([index % 250]), replicaId: `flood-${index}` });
+        }
       },
       leave: () => {
         handlers.get("disconnecting")?.();
@@ -228,7 +270,7 @@ const makeWorkRoom = () => {
     return peer;
   }
 
-  return { room, peers, sent, connect };
+  return { room, peers, sent, commands, ownClients, connect };
 };
 
 const lastDirectStateIsOwed = (peer: { connected: boolean; directStates: () => Received[] }, now: number) => {
@@ -280,6 +322,44 @@ describe("one work queue per room", () => {
     expect(calls.filter((call) => call.userId === "writer#1").length).toBeLessThanOrEqual(UPDATE_BURST);
   });
 
+  it.each([
+    ["an open board", false],
+    ["a locked board", true],
+  ])("answers host commands within a second while a guest floods distinct copies on %s", (_, locked) => {
+    vi.useFakeTimers();
+    const { connect, commands } = makeWorkRoom();
+    const host = connect("host#1", { host: true });
+    host.stage("apps:open", BOARD);
+    if (locked) host.lock(true);
+    const guest = connect("guest#1");
+    guest.sync();
+
+    guest.flood(3600);
+    host.stage("apps:close");
+    const close = commands.at(-1)!;
+    for (let waited = 0; waited < 5000 && close.ackedAt === null; waited += 50) vi.advanceTimersByTime(50);
+
+    expect(close.ackedAt).not.toBeNull();
+    expect(close.ackedAt! - close.sentAt).toBeLessThanOrEqual(1000);
+  });
+
+  it("keeps a leaving participant's queued strokes under the participant who wrote them", () => {
+    vi.useFakeTimers();
+    const calls = recordWrites();
+    const { connect, room } = makeWorkRoom();
+    const host = connect("host#1", { host: true });
+    host.stage("apps:open", BOARD);
+    const artist = connect("artist#1");
+    artist.sync();
+
+    artist.write(UPDATE_BURST + 20);
+    artist.leave();
+    vi.advanceTimersByTime(2000);
+
+    expect(calls.filter((call) => call.result === "foreign-id")).toEqual([]);
+    expect(room.apps.liveDoc(BOARD)!.getMap("m").size).toBe(UPDATE_BURST + 20);
+  });
+
   it("applies another participant's queued strokes before the host closes the board", () => {
     vi.useFakeTimers();
     const { connect, room } = makeWorkRoom();
@@ -302,7 +382,8 @@ describe("one work queue per room", () => {
     (seed) => {
       vi.useFakeTimers();
       const calls = recordWrites();
-      const { connect, peers, room, sent } = makeWorkRoom();
+      const admitted = recordAdmissions();
+      const { connect, peers, room, sent, commands, ownClients } = makeWorkRoom();
       const random = seededRandom(seed);
       const pick = <T,>(items: T[]): T => items[Math.floor(random() * items.length)];
       const host = connect("host#1", { host: true });
@@ -338,6 +419,14 @@ describe("one work queue per room", () => {
             replays.set(call.generation, replay);
             Y.applyUpdate(replay, call.update);
           }
+          if (call.result === "foreign-id") {
+            const own = ownClients.get(call.userId.split("#")[0]) ?? new Set<number>();
+            const writers = structsIn(call.update).map((struct) => struct.id.client);
+            expect(
+              writers.length > 0 && writers.every((client) => own.has(client)),
+              `${call.userId} refused its own ids as foreign`,
+            ).toBe(false);
+          }
           if (call.result === "not-live") {
             for (const key of call.keys) {
               const write = sentByKey.get(key);
@@ -365,6 +454,10 @@ describe("one work queue per room", () => {
         for (const peer of peers.values()) {
           expect(lastDirectStateIsOwed(peer, Date.now()), `${peer.id} owed its stage`).toBe(false);
         }
+        for (const command of commands) {
+          const waited = (command.ackedAt ?? Date.now()) - command.sentAt;
+          expect(waited, "a host command waited past the bound").toBeLessThanOrEqual(1000);
+        }
       };
 
       for (let step = 0; step < 400; step += 1) {
@@ -378,9 +471,12 @@ describe("one work queue per room", () => {
         else if (roll < 0.66) host.stage("apps:discard", BOARD);
         else if (roll < 0.68 && participants().length > 2) {
           const leaving = pick(participants().filter((candidate) => candidate !== host));
+          if (random() < 0.5) leaving.write(UPDATE_BURST + Math.floor(random() * 20));
           leaving.leave();
           join();
-        } else vi.advanceTimersByTime(Math.floor(random() * 400));
+        } else if (roll < 0.69 && participants().length > 1) {
+          pick(participants().filter((candidate) => candidate !== host)).flood(200 + Math.floor(random() * 400));
+        } else if (roll < 0.7) host.lock(random() < 0.5); else vi.advanceTimersByTime(Math.floor(random() * 400));
         for (const each of peers.values()) each.react();
         check();
       }
@@ -390,8 +486,9 @@ describe("one work queue per room", () => {
       }
       check();
       const reached = new Set(calls.flatMap((call) => call.keys));
-      const vanished = sent.flatMap((write) => write.keys).filter((key) => !reached.has(key));
+      const vanished = [...admitted].filter((key) => !reached.has(key));
       expect(vanished).toEqual([]);
+      expect(admitted.size).toBeGreaterThan(sent.length / 2);
     },
     60_000,
   );

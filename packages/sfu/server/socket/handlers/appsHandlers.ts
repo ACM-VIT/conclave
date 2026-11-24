@@ -218,7 +218,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     }, COPY_RESTART_CHECK_MS);
   };
   const restartCopy = (): void => {
-    if (copyRestart || !context.currentRoom) return;
+    if (copyRestart || !context.currentRoom || !socket.connected) return;
     sendBlankStage(1);
   };
   const finishCopyRestart = (): void => {
@@ -239,6 +239,17 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     else restartCopy();
   };
 
+  const sendRoomCopyIfUnsynced = (apps: RoomApps, appId: string, doc: Y.Doc): void => {
+    if (context.currentRoom?.apps !== apps || apps.isCurrentSync(syncMarkHere())) return;
+    const resync = apps.syncMark(appId);
+    if (!resync) return;
+    markSynced(apps, resync);
+    socket.emit("apps:yjs:update", {
+      appId,
+      update: Y.encodeStateAsUpdate(doc),
+    } satisfies AppsUpdateData);
+  };
+
   const applyWrite = (write: PendingWrite, update: Uint8Array): void => {
     const { apps, appId, replicaId } = write;
     const refusal = apps.write(appId, write.writer, update, write.mark, {
@@ -255,14 +266,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     }
     const doc = apps.liveDoc(appId);
     if ((refusal === "not-synced" || refusal === "locked") && doc && changesNothingIn(doc, update)) {
-      const resync = refusal === "not-synced" ? apps.syncMark(appId) : null;
-      if (resync && context.currentRoom?.apps === apps) {
-        markSynced(apps, resync);
-        socket.emit("apps:yjs:update", {
-          appId,
-          update: Y.encodeStateAsUpdate(doc),
-        } satisfies AppsUpdateData);
-      }
+      sendRoomCopyIfUnsynced(apps, appId, doc);
       return;
     }
     refuseUpdate(appId, replicaId, refusal);
@@ -494,12 +498,20 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       return;
     }
     const room = context.currentRoom;
+    const host = canControlStage(context);
+    if (room.apps.locked && !host) {
+      const doc = room.apps.liveDoc(appId);
+      const checked = takeToken(socket, "apps:yjs:update", RATE_LIMITS.appsYjsUpdate);
+      if (checked && doc && changesNothingIn(doc, update)) sendRoomCopyIfUnsynced(room.apps, appId, doc);
+      else refuseUpdate(appId, replicaId, "locked");
+      return;
+    }
     const write: PendingWrite = {
       apps: room.apps,
       appId,
       replicaId,
-      writer: context.currentClient.id,
-      host: canControlStage(context),
+      writer: room.apps.participantFor(context.currentClient.id),
+      host,
       mark: syncMarkHere(),
       channel: room.channelId,
     };
