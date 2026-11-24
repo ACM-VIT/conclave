@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { existsSync } from "node:fs";
@@ -9,7 +10,7 @@ import puppeteer from "puppeteer-core";
 import { ContainerManager, VNC_AUTH_IMAGE_LABEL } from "../src/ContainerManager.js";
 import { fakeDocker, fakeDockerEngine, hardenedImage as hardened, listenHttp } from "./support/docker.js";
 
-const STRONG_TOKEN = "3f9c1a7e5b2d8046c1e9a3b7d5f20e84";
+const STRONG_TOKEN = randomBytes(32).toString("hex");
 const packageDir = fileURLToPath(new URL("..", import.meta.url));
 
 const runService = async (env: NodeJS.ProcessEnv, args: string[]) => {

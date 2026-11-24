@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { createServer, type AddressInfo, type Server } from "node:net";
@@ -10,7 +11,7 @@ import { resolveServiceSecurity, ServiceSecurityError } from "../src/serviceSecu
 import type { BrowserManager, BrowserSession } from "../src/types.js";
 import { fakeDocker, fakeDockerEngine, hardenedImage } from "./support/docker.js";
 
-const STRONG_TOKEN = "3f9c1a7e5b2d8046c1e9a3b7d5f20e84";
+const STRONG_TOKEN = randomBytes(32).toString("hex");
 const packageDir = fileURLToPath(new URL("..", import.meta.url));
 
 const fakeManager = (): BrowserManager => ({
@@ -115,7 +116,7 @@ test("startup configuration fails closed", () => {
     refuses({ BROWSER_SERVICE_TOKEN: `\u00a0${STRONG_TOKEN}` });
     refuses({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_HOST: "0.0.0.0" });
     refuses({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_HOST: "::" });
-    refuses({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_HOST: "57.159.28.54" });
+    refuses({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_HOST: "203.0.113.54" });
     // fd0::12 is 0fd0::12, outside the fc00::/7 unique-local range.
     refuses({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_HOST: "fd0::12" });
     refuses({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_HOST: "fc::1" });
