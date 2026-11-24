@@ -43,9 +43,11 @@ docker compose -f docker-compose.sfu.yml run --rm --no-deps --user root \
 Images before this change fell back to JSON files in the container layer
 when SQLite was locked. Before it replaces such a container, the deploy copies
 any of those files onto the volume under `CONCLAVE_FALLBACK_IMPORT_DIR`, readable
-only by the SFU user, so they survive the replacement. The next start imports
-them into the control-plane store in every mode (see below), keeping the newer
-version of each record, and renames each copy with a `.adopted` suffix. It
+only by the SFU user, so they survive the replacement. The next start claims
+each copy by renaming it to `<name>.claimed-<ticket>-<n>`, imports it into the
+control-plane store in every mode (see below), keeping the newer version of
+each record, and renames exactly the bytes it imported with an `.adopted`
+suffix. It
 refuses to start if two copies changed one record differently at the same time,
 or if a calendar token cannot be decrypted with this SFU's secret.
 
@@ -69,7 +71,9 @@ values stop startup with a message naming `CONTROL_PLANE_PERSISTENCE`.
 Every start also reads the previous release's stores and follows what an old
 SFU still running during a deploy created, edited or deleted there, unless the
 same record was changed here since its import; then this store's version stays
-and a warning names the record.
+and a warning names the record. An SFU whose import another SFU superseded
+waits for that import to finish before it serves, and stops after
+`CONTROL_PLANE_LEGACY_IMPORT_WAIT_MS` (120 s by default) if it never does.
 
 At startup the SQLite store proves it can write its file and directory with a
 rolled-back test transaction. If it cannot, or SQLite will not open, a
