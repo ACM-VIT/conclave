@@ -5,18 +5,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { artifactProblems, contextProblems, repoRoot, workspacePackages } from "./check-docker-context.mjs";
+import { artifactProblems, contextProblems, imagePackages, repoRoot, workspacePackages } from "./check-docker-context.mjs";
 import { rootContextBuilds } from "./docker-context/compose.mjs";
-import { DockerfileError, commandsOf, parseDockerfile } from "./docker-context/dockerfile.mjs";
+import { DockerfileError, contextCopies } from "./docker-context/dockerfile.mjs";
 import { dockerIgnoreMatcher, walkContext } from "./docker-context/dockerignore.mjs";
-import { evaluateImage, parsePnpm } from "./docker-context/image.mjs";
 import { UnsupportedShape } from "./docker-context/unsupported.mjs";
 
 const dockerIgnore = readFileSync(path.join(repoRoot, ".dockerignore"), "utf8");
-const sfuDockerfile = readFileSync(path.join(repoRoot, "packages/sfu/Dockerfile"), "utf8");
-const browserDockerfile = readFileSync(path.join(repoRoot, "packages/shared-browser/Dockerfile"), "utf8");
 const packages = workspacePackages(repoRoot);
-const tracked = execFileSync("git", ["ls-files", "-z"], { cwd: repoRoot, encoding: "utf8" }).split("\0").filter(Boolean);
 
 function fixture(t, files) {
   const root = mkdtempSync(path.join(tmpdir(), "docker-context-"));
@@ -28,14 +24,7 @@ function fixture(t, files) {
   return root;
 }
 
-const copies = (text, args) => parseDockerfile(text, args).steps.filter((step) => step.kind === "copy").map((step) => step.sources);
-const pnpmCommands = (text) => parseDockerfile(text).steps.flatMap(commandsOf).map(parsePnpm).filter(Boolean).map((invocation) => invocation.text);
-const evaluate = (text, contextFiles = tracked) => evaluateImage({ dockerfile: "Dockerfile", steps: parseDockerfile(text).steps, contextFiles, packages });
-const problemsOf = (text, contextFiles) => evaluate(text, contextFiles).problems;
-const rootFiles = "COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./";
-const sfuInstall = "RUN pnpm install --filter @conclave/sfu... --frozen-lockfile";
-const missing = (file) => `Dockerfile: line 5: RUN \`pnpm install --filter @conclave/sfu... --frozen-lockfile\` runs before ${file} is copied`;
-const sfuManifests = ["ai", "apps-sdk", "meeting-core", "sfu", "shared-browser", "ui-tokens"].map((name) => `packages/${name}/package.json`);
+const copies = (text, args) => contextCopies(text, args).map((copy) => copy.sources);
 
 test("a re-included directory brings its whole subtree back, as Docker does", () => {
   const { excluded } = dockerIgnoreMatcher("**\n!packages/\n");
@@ -78,81 +67,47 @@ test("the escape directive changes the continuation character", () => {
   assert.deepEqual(copies("# escape=`\nFROM node\nCOPY a `\n  b ./\n"), [["a", "b"]]);
 });
 
-test("shell, exec and heredoc forms all yield the pnpm commands they run", () => {
-  assert.deepEqual(pnpmCommands("FROM node\nRUN npm i -g pnpm@12 && CI=1 pnpm --reporter append-only install --filter '@conclave/sfu...' || exit 1\n"), ["pnpm --reporter append-only install --filter @conclave/sfu..."]);
-  assert.deepEqual(pnpmCommands('FROM node\nCMD ["sh", "-c", "exec pnpm start"]\nENTRYPOINT ["/usr/bin/dumb-init", "--", "pnpm", "--dir", "packages/sfu", "start"]\n'), ["pnpm start", "pnpm --dir packages/sfu start"]);
-  assert.deepEqual(pnpmCommands("FROM node\nRUN --mount=type=cache,target=/root/.cache <<EOF\nset -e\npnpm -C packages/sfu run build\nEOF\n"), ["pnpm -C packages/sfu run build"]);
-});
-
 test("malformed Dockerfiles fail instead of being read wrongly", () => {
-  assert.throws(() => parseDockerfile("FROM node\nCOPY a \\\n"), DockerfileError);
-  assert.throws(() => parseDockerfile("FROM node\nRUN <<EOF\npnpm build\n"), DockerfileError);
-  assert.throws(() => parseDockerfile("COPY a b\n"), DockerfileError);
+  assert.throws(() => contextCopies("FROM node\nCOPY a \\\n"), DockerfileError);
+  assert.throws(() => contextCopies("FROM node\nRUN <<EOF\npnpm build\n"), DockerfileError);
+  assert.throws(() => contextCopies("COPY a b\n"), DockerfileError);
 });
 
-test("shapes the guard cannot evaluate exactly fail closed", () => {
+test("context reads the guard cannot resolve fail closed", () => {
   const cases = {
-    "unknown instruction": "FROM node\nSHELL [\"bash\", \"-c\"]\n",
-    "ADD": "FROM node\nADD https://example.com/x.tgz /x\n",
+    ADD: "FROM node\nADD https://example.com/x.tgz /x\n",
+    ONBUILD: "FROM node\nONBUILD COPY . /app\n",
     "unknown COPY flag": "FROM node\nCOPY --parents packages/*/package.json ./\n",
     "bind mount": "FROM node\nRUN --mount=type=bind,source=packages,target=/src true\n",
+    "default mount type": "FROM node\nRUN --mount=source=packages,target=/src true\n",
     "base image variable": "FROM node\nCOPY $HOME/x ./\n",
-    "unresolved ARG": "FROM node\nCOPY packages/${UNDECLARED}/package.json ./\n",
-    "command substitution": "FROM node\nRUN pnpm install --filter $(cat name)\n",
+    "undeclared ARG": "FROM node\nCOPY packages/${UNDECLARED}/package.json ./\n",
   };
-  for (const [name, text] of Object.entries(cases)) {
-    assert.throws(() => evaluate(text), UnsupportedShape, name);
-  }
-  const unsupportedPnpm = {
-    "wildcard COPY": `FROM node\nWORKDIR /app\nCOPY packages/*/package.json ./\n`,
-    "cd before pnpm": `FROM node\nWORKDIR /app\n${rootFiles}\nRUN cd packages/sfu && pnpm install --filter @conclave/sfu...\n`,
-    "unknown pnpm flag": `FROM node\nWORKDIR /app\n${rootFiles}\nRUN pnpm install --filter @conclave/sfu... --mystery\n`,
-    "install without filter": `FROM node\nWORKDIR /app\n${rootFiles}\nRUN pnpm install --frozen-lockfile\n`,
-    "pnpm add": `FROM node\nWORKDIR /app\n${rootFiles}\nRUN pnpm add left-pad\n`,
-    "pnpm through npx": `FROM node\nWORKDIR /app\n${rootFiles}\nRUN npx pnpm install --filter @conclave/sfu...\n`,
-    "shell variable": `FROM node\nWORKDIR /app\n${rootFiles}\nRUN pnpm install --filter "$PKG"\n`,
-  };
-  for (const [name, text] of Object.entries(unsupportedPnpm)) {
-    assert.throws(() => evaluate(text), UnsupportedShape, name);
-  }
+  for (const [name, text] of Object.entries(cases)) assert.throws(() => contextCopies(text), UnsupportedShape, name);
+  assert.deepEqual(copies("FROM node\nRUN --mount=type=cache,target=/root/.cache true\nCOPY --from=build /app/dist ./dist\nCOPY a ./\n"), [["a"]]);
 });
 
-test("a directory COPY makes every file under it available", () => {
-  for (const copy of ["COPY packages/ packages/", "COPY packages ./packages", "COPY packages /app/packages/"]) {
-    assert.deepEqual(problemsOf(`FROM node\nWORKDIR /app\n${rootFiles}\n${copy}\n${sfuInstall}\n`), [], copy);
-  }
-  assert.deepEqual(problemsOf(`FROM node\nWORKDIR /app\nCOPY . .\nRUN true\n${sfuInstall}\n`), []);
-  assert.deepEqual(problemsOf(`FROM node\nWORKDIR /app\n${rootFiles}\nCOPY packages/sfu packages/\n${sfuInstall}\n`), [
-    ...sfuManifests.map(missing),
-  ]);
+test("an image needs the workspace closure of its own package and of every package it copies from", () => {
+  assert.deepEqual(imagePackages("packages/shared-browser/Dockerfile", ["package.json", "packages/shared-browser/src"], packages), ["@conclave/shared-browser"]);
+  assert.deepEqual(imagePackages("Dockerfile", ["pnpm-lock.yaml", "packages/apps-sdk/package.json"], packages), ["@conclave/ai", "@conclave/apps-sdk"]);
+  assert.deepEqual(imagePackages("packages/sfu/Dockerfile", [], packages), ["@conclave/ai", "@conclave/apps-sdk", "@conclave/meeting-core", "@conclave/sfu", "@conclave/shared-browser", "@conclave/ui-tokens"]);
 });
 
-test("each FROM starts from what that stage can prove, not from earlier copies", () => {
-  const deps = `FROM node AS deps\nWORKDIR /app\n${rootFiles}\nCOPY packages/ packages/\n`;
-  const install = "RUN pnpm install --filter @conclave/sfu... --frozen-lockfile";
-  const line = (n) => (file) => `Dockerfile: line ${n}: RUN \`pnpm install --filter @conclave/sfu... --frozen-lockfile\` runs before ${file} is copied`;
-  assert.deepEqual(problemsOf(`${deps}FROM node\nWORKDIR /app\n${install}\n`), [`Dockerfile: line 7: RUN \`pnpm install --filter @conclave/sfu... --frozen-lockfile\` runs before pnpm-workspace.yaml is copied`]);
-  assert.deepEqual(problemsOf(`${deps}FROM deps\n${install}\n`), []);
-  assert.deepEqual(problemsOf(`${deps}FROM node\nWORKDIR /srv\nCOPY --from=deps /app ./\n${install}\n`), []);
-  assert.deepEqual(problemsOf(`${deps}FROM node\nWORKDIR /app\nCOPY --from=node:22 /app ./\n${rootFiles}\n${install}\n`), [
-    ...sfuManifests.map(line(9)),
-  ]);
-  assert.deepEqual(problemsOf(`FROM node\nWORKDIR /app\n${rootFiles}\nRUN mkdir -p packages && cp -r /src/packages packages\n${install}\n`), [
-    ...sfuManifests.map(line(5)),
-  ]);
-});
-
-test("directory filter selectors resolve, and unknown selectors fail closed", () => {
-  const withSelector = (selector, copy = "COPY packages/ packages/") => `FROM node\nWORKDIR /app\n${rootFiles}\n${copy}\nRUN pnpm install --filter ${selector} --frozen-lockfile\n`;
-  assert.deepEqual(problemsOf(withSelector("./packages/sfu...")), []);
-  assert.deepEqual(evaluate(withSelector("./packages/sfu...")).selected, ["@conclave/ai", "@conclave/apps-sdk", "@conclave/meeting-core", "@conclave/sfu", "@conclave/shared-browser", "@conclave/ui-tokens"]);
-  const withoutAppsSdk = tracked.filter((file) => file !== "packages/apps-sdk/package.json");
-  assert.deepEqual(problemsOf(withSelector("./packages/sfu..."), withoutAppsSdk), [
-    "Dockerfile: line 5: RUN `pnpm install --filter ./packages/sfu... --frozen-lockfile` runs before packages/apps-sdk/package.json is copied",
-  ]);
-  for (const selector of ["...@conclave/sfu", "@conclave/*", "{./packages/sfu}", "@conclave/unknown", "./packages/missing...", "!@conclave/ai"]) {
-    assert.throws(() => evaluate(withSelector(`'${selector}'`)), UnsupportedShape, selector);
-  }
+test("wildcard COPY sources fail closed and missing ones are reported", (t) => {
+  const root = fixture(t, {
+    ".dockerignore": "",
+    "docker-compose.yml": "services:\n  a:\n    build: { context: ., dockerfile: a.Dockerfile }\n  b:\n    build: { context: ., dockerfile: b.Dockerfile }\n",
+    "a.Dockerfile": "FROM node\nCOPY packages/*/package.json ./\n",
+    "b.Dockerfile": "FROM node\nCOPY missing.txt ../outside ./\n",
+    "apps/.keep": "",
+    "packages/.keep": "",
+  });
+  execFileSync("git", ["init", "-q"], { cwd: root });
+  execFileSync("git", ["add", "-A"], { cwd: root });
+  const problems = contextProblems(root);
+  assert.ok(problems.some((problem) => problem.startsWith("a.Dockerfile: unsupported shape: line 2: wildcard COPY source packages/*/package.json")));
+  assert.ok(problems.includes("b.Dockerfile: line 2: COPY source missing.txt is not in the build context"));
+  assert.ok(problems.includes("b.Dockerfile: line 2: COPY source ../outside is outside the build context"));
 });
 
 test("compose builds are found whatever the key order or build form", (t) => {
@@ -232,7 +187,7 @@ test("rules that protect only package roots let nested artifacts in", () => {
 test("dropping a workspace package the SFU depends on fails the check", () => {
   const withoutAppsSdk = dockerIgnore.split("\n").filter((line) => !line.includes("packages/apps-sdk")).join("\n");
   const problems = contextProblems(repoRoot, { dockerIgnore: withoutAppsSdk });
-  assert.ok(problems.includes("packages/sfu/Dockerfile: line 20: COPY source packages/apps-sdk/package.json is not in the build context"));
+  assert.ok(problems.some((problem) => /^packages\/sfu\/Dockerfile: line \d+: COPY source packages\/apps-sdk\/package.json is not in the build context$/.test(problem)));
   assert.ok(problems.includes("packages/sfu/Dockerfile: source packages/apps-sdk/package.json needs packages/apps-sdk/package.json, which .dockerignore excludes"));
   assert.ok(problems.includes("packages/sfu/Dockerfile: @conclave/apps-sdk needs packages/apps-sdk/src/index.ts, which .dockerignore excludes"));
 });
@@ -247,21 +202,3 @@ test("re-including all of packages/ without artifact rules leaks them into the c
   assert.ok(problems.includes(".dockerignore: packages/meeting-core/.env would enter the build context"));
 });
 
-test("the SFU install fails the check when a workspace manifest it needs is not copied first", () => {
-  const withoutAppsSdkManifest = sfuDockerfile.split("\n").filter((line) => !line.includes("packages/apps-sdk/package.json")).join("\n");
-  assert.deepEqual(problemsOf(withoutAppsSdkManifest).map((problem) => problem.replace(/line \d+/, "line N")), [
-    "Dockerfile: line N: RUN `pnpm install --filter @conclave/sfu... --frozen-lockfile --node-linker=isolated` runs before packages/apps-sdk/package.json is copied",
-  ]);
-  assert.deepEqual(problemsOf(sfuDockerfile), []);
-});
-
-test("a pnpm script in a partial image workspace must skip the dependency reinstall", () => {
-  const staging = browserDockerfile.replace(" --config.verify-deps-before-run=false", "");
-  assert.deepEqual(problemsOf(staging), [
-    "Dockerfile: line 14: RUN `pnpm -C packages/shared-browser run build` reinstalls the partial image workspace first; pass --config.verify-deps-before-run=false",
-  ]);
-  assert.deepEqual(problemsOf(browserDockerfile), []);
-  const start = `FROM node\nWORKDIR /app\nCOPY . .\nCMD ["pnpm", "--dir", "packages/sfu", "start"]\n`;
-  assert.equal(problemsOf(start, tracked.filter((file) => !file.startsWith("apps/"))).length, 1);
-  assert.deepEqual(problemsOf(start), []);
-});

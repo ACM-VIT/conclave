@@ -4,9 +4,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { rootContextBuilds } from "./docker-context/compose.mjs";
-import { DockerfileError, parseDockerfile } from "./docker-context/dockerfile.mjs";
+import { DockerfileError, contextCopies } from "./docker-context/dockerfile.mjs";
 import { cleanPattern, contextDirectories, dockerIgnoreMatcher, walkContext } from "./docker-context/dockerignore.mjs";
-import { evaluateImage } from "./docker-context/image.mjs";
 import { UnsupportedShape } from "./docker-context/unsupported.mjs";
 
 export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -15,6 +14,7 @@ const DEPENDENCY_FIELDS = ["dependencies", "devDependencies", "optionalDependenc
 const TEST_PATH = /(^|\/)(test|tests|__tests__)\/|\.(test|spec)\.[cm]?[jt]sx?$/;
 const ARTIFACT_PATH = /(^|\/)(node_modules|dist)(\/|$)|(^|\/)\.env(\.[^/]*)?$|\.log$/;
 const ARTIFACT_PROBES = ["node_modules/probe/index.js", "dist/probe.js", ".env", ".env.local", "probe.log"];
+const WILDCARD = /[*?[]/;
 
 export function workspacePackages(root = repoRoot) {
   const byName = new Map();
@@ -66,17 +66,33 @@ export function artifactProblems(ignoreFile, matcher, files) {
   return [...onDisk, ...probes];
 }
 
+export function imagePackages(dockerfile, sources, packages) {
+  const owners = [...packages]
+    .filter(([, { dir }]) => dockerfile.startsWith(`${dir}/`) || sources.some((source) => source === dir || source.startsWith(`${dir}/`)))
+    .map(([name]) => name);
+  return workspaceClosure(owners, packages);
+}
+
 export function imageProblems(root, build, { packages, tracked, contextFiles, matcher, ignoreFile }) {
-  const { steps } = parseDockerfile(readFileSync(path.join(root, build.dockerfile), "utf8"), build.args);
-  const evaluation = evaluateImage({ dockerfile: build.dockerfile, steps, contextFiles, packages });
-  const problems = [...evaluation.problems];
-  for (const step of steps.filter((item) => item.kind === "copy" && item.from === null)) {
-    for (const source of step.sources.map(cleanPattern).filter((item) => item !== "." && !item.startsWith("../"))) {
+  const problems = [];
+  const sources = [];
+  for (const copy of contextCopies(readFileSync(path.join(root, build.dockerfile), "utf8"), build.args)) {
+    for (const raw of copy.sources) {
+      const source = cleanPattern(raw);
+      if (WILDCARD.test(source)) throw new UnsupportedShape(`line ${copy.line}: wildcard COPY source ${raw}`);
+      if (source === ".." || source.startsWith("../")) {
+        problems.push(`${build.dockerfile}: line ${copy.line}: COPY source ${raw} is outside the build context`);
+        continue;
+      }
+      if (source === ".") continue;
+      sources.push(source);
+      if (!contextFiles.has(source) && ![...contextFiles].some((file) => file.startsWith(`${source}/`))) {
+        problems.push(`${build.dockerfile}: line ${copy.line}: COPY source ${raw} is not in the build context`);
+      }
       for (const file of sourceFiles(source, tracked).filter(matcher.excluded)) problems.push(`${build.dockerfile}: source ${source} needs ${file}, which ${ignoreFile} excludes`);
     }
   }
-  const owner = [...packages].find(([, pkg]) => build.dockerfile.startsWith(`${pkg.dir}/`));
-  for (const name of workspaceClosure(owner ? [owner[0], ...evaluation.selected] : evaluation.selected, packages)) {
+  for (const name of imagePackages(build.dockerfile, sources, packages)) {
     const { dir } = packages.get(name);
     for (const file of sourceFiles(dir, tracked).filter((item) => !TEST_PATH.test(item) && matcher.excluded(item))) {
       problems.push(`${build.dockerfile}: ${name} needs ${file}, which ${ignoreFile} excludes`);

@@ -30,6 +30,7 @@
     "test:cloudflare-manifests": "node --test scripts/cloudflare-manifests.test.mjs",
     "test:docker-context": "node --test scripts/check-docker-context.test.mjs",
     "check:docker-context": "node scripts/check-docker-context.mjs",
+    "check:docker-images": "node scripts/check-docker-images.mjs",
     "build:conclave-skip:android": "bash scripts/build-conclave-skip-android-debug.sh",
     "build": "pnpm --filter conclave-web --filter @conclave/shared-browser run build",
     "test": "pnpm run test:quality-harness && pnpm run test:deploy-preflight && pnpm run test:cloudflare-manifests && pnpm run test:docker-context && pnpm --filter conclave-web --filter @conclave/meeting-core --filter @conclave/ai --filter @conclave/sfu --filter @conclave/shared-browser run test && pnpm run test:native-tokens && pnpm run test:native-icons && pnpm -C packages/apps-sdk run test:native-embed && pnpm -C packages/apps-sdk run test:native-embed-apps && pnpm -C packages/apps-sdk run test:scripts && pnpm run test:native-test-stores",

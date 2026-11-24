@@ -2,11 +2,8 @@ import { UnsupportedShape } from "./unsupported.mjs";
 
 const DIRECTIVE = /^#\s*([a-zA-Z][a-zA-Z0-9_-]*)\s*=\s*(.*?)\s*$/;
 const HEREDOC = /<<-?\s*(["']?)([A-Za-z_][A-Za-z0-9_]*)\1/g;
-const SHELLS = new Set(["sh", "bash", "/bin/sh", "/bin/bash", "/usr/bin/sh", "/usr/bin/bash"]);
-const PASSIVE_INSTRUCTIONS = new Set(["EXPOSE", "LABEL", "USER", "VOLUME", "STOPSIGNAL", "MAINTAINER"]);
 const COPY_FLAGS = new Set(["from", "chown", "chmod", "link"]);
-const RUN_FLAGS = new Set(["mount", "network", "security"]);
-const STATELESS_MOUNTS = new Set(["cache", "secret", "ssh", "tmpfs"]);
+const CONTEXT_READERS = new Set(["ADD", "ONBUILD"]);
 const UNKNOWN = Symbol("unknown");
 
 export class DockerfileError extends Error {}
@@ -36,13 +33,11 @@ function logicalInstructions(lines, escape) {
     if (continues) continue;
     const heredocs = [...current.text.matchAll(HEREDOC)].map((match) => match[2]);
     const keyword = current.text.split(/\s+/, 1)[0].toUpperCase();
-    current.heredocs = [];
-    if (heredocs.length && ["RUN", "COPY", "ADD"].includes(keyword)) {
+    current.heredoc = heredocs.length > 0 && ["RUN", "COPY", "ADD"].includes(keyword);
+    if (current.heredoc) {
       for (const terminator of heredocs) {
-        const body = [];
-        for (i += 1; i < lines.length && lines[i].replace(/^\t+/, "") !== terminator; i += 1) body.push(lines[i]);
+        for (i += 1; i < lines.length && lines[i].replace(/^\t+/, "") !== terminator; i += 1);
         if (i >= lines.length) throw new DockerfileError(`line ${current.line}: heredoc ${terminator} is never closed`);
-        current.heredocs.push({ terminator, body: body.join("\n") });
       }
     }
     instructions.push(current);
@@ -123,12 +118,11 @@ function expandOrUnknown(word, vars, escape) {
   }
 }
 
-function splitFlags(args, allowed, keyword) {
+function splitFlags(args) {
   const flags = [];
   let rest = args.trimStart();
   const pattern = /^--([A-Za-z][A-Za-z0-9-]*)(?:=(\S*))?(?:\s+|$)/;
   for (let match = pattern.exec(rest); match; match = pattern.exec(rest)) {
-    if (!allowed.has(match[1])) throw new UnsupportedShape(`${keyword} --${match[1]}`);
     flags.push({ name: match[1], value: match[2] ?? "" });
     rest = rest.slice(match[0].length);
   }
@@ -183,18 +177,11 @@ function assignments(rest, vars, escape, legacySeparator) {
   });
 }
 
-function checkMounts(flags, line) {
-  for (const flag of flags.filter((item) => item.name === "mount")) {
-    const type = /(?:^|,)type=([^,]+)/.exec(flag.value)?.[1] ?? "bind";
-    if (!STATELESS_MOUNTS.has(type)) throw new UnsupportedShape(`line ${line}: RUN --mount=type=${type}`);
-  }
-}
-
-export function parseDockerfile(text, buildArgs = {}) {
+export function contextCopies(text, buildArgs = {}) {
   const { directives, body } = splitDirectives(text.replace(/^\uFEFF/, "").split(/\r?\n/));
   const escape = directives.escape ?? "\\";
   if (escape !== "\\" && escape !== "`") throw new DockerfileError(`unsupported escape directive "${escape}"`);
-  const steps = [];
+  const copies = [];
   const globalArgs = {};
   let stage = null;
   for (const instruction of logicalInstructions(body, escape)) {
@@ -208,116 +195,29 @@ export function parseDockerfile(text, buildArgs = {}) {
         if (stage) stage.args[name] = value;
         else globalArgs[name] = value;
       }
-      continue;
-    }
-    if (keyword === "FROM") {
-      const { rest } = splitFlags(args, new Set(["platform"]), "FROM");
-      const words = splitWords(rest, escape);
-      if (!(words.length === 1 || (words.length === 3 && words[1].toUpperCase() === "AS"))) throw new UnsupportedShape(`line ${instruction.line}: FROM ${rest}`);
-      steps.push({ kind: "from", line: instruction.line, base: expandWord(words[0], globalArgs, escape).toLowerCase(), name: words[2]?.toLowerCase() ?? null });
+    } else if (keyword === "FROM") {
       stage = { args: {}, env: {} };
-      continue;
-    }
-    if (!stage) throw new DockerfileError(`line ${instruction.line}: ${keyword} comes before the first FROM`);
-    if (keyword === "ENV") {
+    } else if (!stage) {
+      throw new DockerfileError(`line ${instruction.line}: ${keyword} comes before the first FROM`);
+    } else if (keyword === "ENV") {
       for (const [name, value] of assignments(args, scope, escape, true)) stage.env[name] = value;
-    } else if (keyword === "WORKDIR") {
-      steps.push({ kind: "workdir", line: instruction.line, path: expandWord(args.trim(), scope, escape) });
+    } else if (CONTEXT_READERS.has(keyword)) {
+      throw new UnsupportedShape(`line ${instruction.line}: the ${keyword} instruction`);
+    } else if (keyword === "RUN") {
+      const bind = splitFlags(args).flags.find((flag) => flag.name === "mount" && !/(?:^|,)from=/.test(flag.value) && (/(?:^|,)type=bind(?:,|$)/.test(flag.value) || !/(?:^|,)type=/.test(flag.value)));
+      if (bind) throw new UnsupportedShape(`line ${instruction.line}: RUN --mount=${bind.value} reads the build context`);
     } else if (keyword === "COPY") {
-      const { flags, rest } = splitFlags(args, COPY_FLAGS, "COPY");
-      if (instruction.heredocs.length) {
-        steps.push({ kind: "inline", line: instruction.line });
-        continue;
-      }
+      const { flags, rest } = splitFlags(args);
+      const unknown = flags.find((flag) => !COPY_FLAGS.has(flag.name));
+      if (unknown) throw new UnsupportedShape(`line ${instruction.line}: COPY --${unknown.name}`);
+      if (instruction.heredoc || flags.some((flag) => flag.name === "from")) continue;
       const exec = execForm(rest);
       const words = exec
         ? exec.map((word) => expandWord(word, scope, escape, { removeQuotes: false }))
         : splitWords(rest, escape).map((word) => expandWord(word, scope, escape));
       if (words.length < 2) throw new DockerfileError(`line ${instruction.line}: COPY needs a source and a destination`);
-      const from = flags.find((flag) => flag.name === "from");
-      steps.push({ kind: "copy", line: instruction.line, from: from ? expandWord(from.value, scope, escape).toLowerCase() : null, sources: words.slice(0, -1), dest: words.at(-1) });
-    } else if (keyword === "RUN" || keyword === "CMD" || keyword === "ENTRYPOINT") {
-      const { flags, rest } = keyword === "RUN" ? splitFlags(args, RUN_FLAGS, "RUN") : { flags: [], rest: args.trim() };
-      checkMounts(flags, instruction.line);
-      const exec = execForm(rest);
-      const scripts = instruction.heredocs.map((heredoc) => heredoc.body);
-      steps.push({ kind: "command", line: instruction.line, instruction: keyword, argv: exec, shell: exec ? null : rest, scripts });
-    } else if (!PASSIVE_INSTRUCTIONS.has(keyword)) {
-      throw new UnsupportedShape(`line ${instruction.line}: the ${keyword} instruction`);
+      copies.push({ line: instruction.line, sources: words.slice(0, -1) });
     }
   }
-  return { directives, steps };
-}
-
-export function shellCommands(script) {
-  const commands = [];
-  let words = [];
-  let current = "";
-  let quote = null;
-  let started = false;
-  const endWord = () => {
-    if (started) words.push(current);
-    current = "";
-    started = false;
-  };
-  const endCommand = () => {
-    endWord();
-    if (words.length) commands.push(words);
-    words = [];
-  };
-  for (let i = 0; i < script.length; i += 1) {
-    const ch = script[i];
-    if (quote !== "'" && (ch === "`" || (ch === "$" && script[i + 1] === "("))) {
-      throw new UnsupportedShape(`command substitution in "${script.trim()}"`);
-    }
-    if (quote === "'") {
-      if (ch === "'") quote = null;
-      else current += ch;
-    } else if (quote === '"') {
-      if (ch === '"') quote = null;
-      else if (ch === "\\" && i + 1 < script.length) current += script[++i];
-      else current += ch;
-    } else if (ch === "\\" && i + 1 < script.length) {
-      if (script[i + 1] !== "\n") {
-        current += script[i + 1];
-        started = true;
-      }
-      i += 1;
-    } else if (ch === "'" || ch === '"') {
-      quote = ch;
-      started = true;
-    } else if (ch === "#" && !started) {
-      while (i + 1 < script.length && script[i + 1] !== "\n") i += 1;
-    } else if (/[;&|()\n]/.test(ch)) {
-      endCommand();
-    } else if (/\s/.test(ch)) {
-      endWord();
-    } else {
-      current += ch;
-      started = true;
-    }
-  }
-  if (quote) throw new DockerfileError(`unterminated quote in shell script "${script}"`);
-  endCommand();
-  return commands;
-}
-
-export function commandsOf(step) {
-  if (step.kind !== "command") return [];
-  const fromScripts = step.scripts.flatMap(shellCommands);
-  if (step.shell !== null) return [...shellCommands(step.shell), ...fromScripts];
-  const [program, ...args] = step.argv;
-  const flag = args.findIndex((arg) => /^-[a-z]*c[a-z]*$/.test(arg));
-  if (SHELLS.has(program) && flag !== -1 && args[flag + 1] !== undefined) return [...shellCommands(args[flag + 1]), ...fromScripts];
-  return [step.argv, ...fromScripts];
-}
-
-export function stripCommandPrefix(words) {
-  let i = 0;
-  while (i < words.length) {
-    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i += 1;
-    else if (words[i] === "exec" || words[i] === "env" || words[i].endsWith("/dumb-init") || words[i] === "dumb-init" || words[i] === "--") i += 1;
-    else break;
-  }
-  return words.slice(i);
+  return copies;
 }
