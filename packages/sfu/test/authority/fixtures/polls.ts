@@ -10,6 +10,7 @@ import {
   table,
   type Subject,
 } from "@conclave/apps-sdk/authority/server";
+import { actionOrderTable, nextActionOrder } from "./action-order.js";
 
 const POLL_MIN_OPTIONS = 2;
 const POLL_MAX_OPTIONS = 10;
@@ -94,6 +95,7 @@ type Ballot = {
   subject: Subject;
   voterName: string;
   votedAt: number;
+  order: number;
   optionIds: string[];
 };
 
@@ -118,6 +120,7 @@ export const pollsAuthority = defineAuthority({
     polls: table<PollRow>({ maxRows: MAX_POLLS_PER_ROOM }),
     ballots: table<Ballot>({ maxRows: 100_000 }),
     ballotsBySubject: table<{ pollId: string }>({ maxRows: 100_000 }),
+    order: actionOrderTable(),
   },
   timers: {},
   // Webinar attendees never see meeting polls.
@@ -183,6 +186,7 @@ export const pollsAuthority = defineAuthority({
           subject: ctx.subject,
           voterName: ctx.displayName,
           votedAt: ctx.now,
+          order: nextActionOrder(tx),
           optionIds,
         });
         if (inserted === "exists") reject("already-voted");
@@ -275,7 +279,7 @@ export const pollsAuthority = defineAuthority({
         tx.put("ballots", key(pollId, into), { ...ballot, subject: into });
         continue;
       }
-      const dropped = kept.votedAt <= ballot.votedAt ? ballot : kept;
+      const dropped = kept.order < ballot.order ? ballot : kept;
       if (dropped === kept) tx.put("ballots", key(pollId, into), { ...ballot, subject: into });
       const poll = tx.get("polls", key(pollId));
       if (!poll) continue;

@@ -66,6 +66,8 @@ const secret = (by: "into" | "from", id: string, text: string): MergeStep => ({
   input: () => ({ id, text }),
 });
 
+const atOnce = (step: MergeStep): MergeStep => ("by" in step ? { ...step, sameMoment: true } : step);
+
 const activityFields = new Map<AuthorityModule, string[]>([[qaAuthority, ["updatedAt"]]]);
 
 const scripts: Array<[string, AuthorityModule, MergeStep[]]> = [
@@ -82,6 +84,11 @@ const scripts: Array<[string, AuthorityModule, MergeStep[]]> = [
   ["quiz: both answer the round still open", quizAuthority, [...quizStart, answer("into", 1), answer("from", 0)]],
   ["ledger: the same secret, the kept identity later", ledgerAuthority, [secret("from", "s1", "first"), secret("into", "s1", "second"), secret("from", "s2", "other")]],
   ["ledger: the same secret, the merged identity later", ledgerAuthority, [secret("into", "s1", "first"), secret("from", "s1", "second"), secret("into", "s3", "third")]],
+  ["polls: two ballots in one poll in the same millisecond, the merged identity first", pollsAuthority, [pollOf("p"), voteIn("from", "p", "o2"), atOnce(voteIn("into", "p", "o1"))]],
+  ["qa: the third and fourth questions in the same millisecond under two passes (Greptile)", qaAuthority, [ask("into", "q1"), ask("into", "q2"), ask("from", "q3"), atOnce(ask("into", "q4"))]],
+  ["qa: a question answered in the same millisecond as the fourth is asked", qaAuthority, [ask("into", "q1"), ask("into", "q2"), ask("from", "q3"), moderate("q1", "answered"), atOnce(ask("from", "q4"))]],
+  ["quiz: both answer a round in the same millisecond, the merged identity first", quizAuthority, [...quizStart, answer("from", 1), atOnce(answer("into", 0)), ...endRound]],
+  ["ledger: the same secret in the same millisecond, the merged identity later", ledgerAuthority, [secret("into", "s1", "first"), atOnce(secret("from", "s1", "second"))]],
 ];
 
 describe("an app's mergeSubjects leaves what one person would have (Greptile)", () => {

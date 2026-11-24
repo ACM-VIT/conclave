@@ -11,6 +11,7 @@ import {
   table,
   type Subject,
 } from "@conclave/apps-sdk/authority/server";
+import { actionOrderTable, nextActionOrder } from "./action-order.js";
 
 const REVEAL_MS = 5_000;
 const BASE_POINTS = 500;
@@ -82,7 +83,7 @@ type QuizState = {
   answered: number;
   leaderboard: Leaderboard | null;
 };
-type Answer = { round: number; subject: Subject; choice: number; at: number; points: number };
+type Answer = { round: number; subject: Subject; choice: number; at: number; order: number; points: number };
 type Standing = { subject: Subject; name: string; score: number };
 type Leaderboard = { standings: Standing[]; complete: boolean };
 
@@ -134,6 +135,7 @@ export const quizAuthority = defineAuthority({
     answers: table<Answer>({ maxRows: 30 * 1_000 }),
     answersBySubject: table<{ round: number }>({ maxRows: 30 * 1_000 }),
     scores: table<Score>({ maxRows: 1_000 }),
+    order: actionOrderTable(),
   },
   timers: { advance: s.object({ round: s.int({ min: 0 }), phase: s.string({ max: 16 }) }) },
   canView: ({ role }) => role === "moderator" || role === "member",
@@ -192,7 +194,7 @@ export const quizAuthority = defineAuthority({
         const inserted = tx.insertIfAbsent(
           "answers",
           key(String(state.index), ctx.subject),
-          { round: state.index, subject: ctx.subject, choice: input.choice, at: ctx.now, points: 0 },
+          { round: state.index, subject: ctx.subject, choice: input.choice, at: ctx.now, order: nextActionOrder(tx), points: 0 },
         );
         if (inserted === "exists") reject("already-answered");
         tx.put("answersBySubject", key(ctx.subject, String(state.index)), { round: state.index });
@@ -324,7 +326,7 @@ export const quizAuthority = defineAuthority({
       tx.put("answersBySubject", key(into, String(round)), { round });
       const kept = tx.get("answers", key(String(round), into));
       if (kept && state && round === state.index) answeredDropped += 1;
-      if (kept && kept.at <= mine.at) continue;
+      if (kept && kept.order < mine.order) continue;
       tx.put("answers", key(String(round), into), { ...mine, subject: into });
     }
     const fromScore = tx.get("scores", key(from));

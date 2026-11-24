@@ -16,6 +16,7 @@ import {
   type Subject,
   type TableSpec,
 } from "@conclave/apps-sdk/authority/server";
+import { actionOrderTable, nextActionOrder } from "./action-order.js";
 
 const QA_MAX_ENTRIES = 300;
 const QA_MAX_OPEN_PER_PERSON = 3;
@@ -75,7 +76,8 @@ type QuestionCard = Infer<typeof questionCard>;
 type QaStatus = QuestionCard["status"];
 type QuestionRow = QuestionCard & {
   author: Subject;
-  openTimes: { at: number; open: boolean }[];
+  order: number;
+  openTimes: { order: number; open: boolean }[];
 };
 type Upvote = { questionId: string; voter: Subject };
 type QaTables = {
@@ -83,14 +85,15 @@ type QaTables = {
   questionsByAuthor: TableSpec<{ id: string }>;
   upvotes: TableSpec<Upvote>;
   upvotesByVoter: TableSpec<{ questionId: string }>;
+  order: TableSpec<{ last: number }>;
 };
 
 const isOpenStatus = (status: QaStatus): boolean => status === "pending" || status === "answering";
 
-const openAt = (row: QuestionRow, at: number): boolean => {
+const openAt = (row: QuestionRow, order: number): boolean => {
   let open = false;
   for (const change of row.openTimes) {
-    if (change.at >= at) break;
+    if (change.order >= order) break;
     open = change.open;
   }
   return open;
@@ -152,6 +155,7 @@ export const qaAuthority = defineAuthority({
     questionsByAuthor: table<{ id: string }>({ maxRows: QA_MAX_ENTRIES + 1 }),
     upvotes: table<Upvote>({ maxRows: 200_000 }),
     upvotesByVoter: table<{ questionId: string }>({ maxRows: 200_000 }),
+    order: actionOrderTable(),
   },
   timers: {},
   canView: ({ role }, room) =>
@@ -176,6 +180,7 @@ export const qaAuthority = defineAuthority({
           ).length;
         if (open >= QA_MAX_OPEN_PER_PERSON) reject("too-many-open");
         const id = ctx.nextId("q");
+        const order = nextActionOrder(tx);
         tx.insertIfAbsent("questions", key(id), {
           id,
           author: ctx.subject,
@@ -187,7 +192,8 @@ export const qaAuthority = defineAuthority({
           upvotes: 0,
           answerText: null,
           answeredByName: null,
-          openTimes: [{ at: ctx.now, open: true }],
+          order,
+          openTimes: [{ order, open: true }],
         });
         tx.put("questionsByAuthor", key(ctx.subject, id), { id });
         evictOverflow(tx);
@@ -259,7 +265,7 @@ export const qaAuthority = defineAuthority({
             break;
         }
         if (isOpenStatus(question.status) !== isOpenStatus(next.status)) {
-          next.openTimes = [...question.openTimes, { at: ctx.now, open: isOpenStatus(next.status) }];
+          next.openTimes = [...question.openTimes, { order: nextActionOrder(tx), open: isOpenStatus(next.status) }];
         }
         tx.put("questions", key(question.id), next);
         return null;
@@ -300,10 +306,10 @@ export const qaAuthority = defineAuthority({
     const asked = [...intoIds, ...fromIds]
       .map((id) => tx.get("questions", key(id)))
       .filter((row): row is QuestionRow => row !== undefined)
-      .sort((a, b) => a.askedAt - b.askedAt);
+      .sort((a, b) => a.order - b.order);
     const kept: QuestionRow[] = [];
     for (const question of asked) {
-      const open = kept.filter((other) => openAt(other, question.askedAt)).length;
+      const open = kept.filter((other) => openAt(other, question.order)).length;
       if (open >= QA_MAX_OPEN_PER_PERSON) {
         tx.delete("questions", key(question.id));
         tx.clear("upvotes", key(question.id));

@@ -10,6 +10,7 @@ import {
   table,
   type Subject,
 } from "@conclave/apps-sdk/authority/server";
+import { actionOrderTable, nextActionOrder } from "./action-order.js";
 
 const id = s.string({ min: 1, max: 32 });
 const text = s.string({ max: 20_000 });
@@ -39,7 +40,7 @@ export const ledgerContract = defineContract({
 });
 
 type Card = { id: string; text: string };
-type Secret = { id: string; text: string; subject: Subject; at: number };
+type Secret = { id: string; text: string; subject: Subject; at: number; order: number };
 
 const everyone = ["moderator", "member"] as const;
 
@@ -52,6 +53,7 @@ export const ledgerAuthority = defineAuthority({
   tables: {
     cards: table<Card>({ maxRows: 50_000 }),
     secrets: table<Secret>({ maxRows: 100_000 }),
+    order: actionOrderTable(),
   },
   timers: {},
   canView: ({ role }) => role === "moderator" || role === "member",
@@ -75,6 +77,7 @@ export const ledgerAuthority = defineAuthority({
           text: input.text,
           subject: ctx.subject,
           at: ctx.now,
+          order: nextActionOrder(tx),
         });
         return null;
       },
@@ -119,12 +122,14 @@ export const ledgerAuthority = defineAuthority({
       identity: "any",
       rate: RATE,
       run(ctx, tx, input) {
+        const order = nextActionOrder(tx);
         for (let index = 0; index < input.count; index += 1) {
           tx.put("secrets", key("secret", ctx.subject, `k${index}`), {
             id: `k${index}`,
             text: "kept",
             subject: ctx.subject,
             at: ctx.now,
+            order,
           });
         }
         return null;
@@ -156,7 +161,7 @@ export const ledgerAuthority = defineAuthority({
     for (const [, secret] of tx.scan("secrets", key("secret", from))) {
       tx.delete("secrets", key("secret", from, secret.id));
       const kept = tx.get("secrets", key("secret", into, secret.id));
-      if (kept && kept.at >= secret.at) continue;
+      if (kept && kept.order > secret.order) continue;
       tx.put("secrets", key("secret", into, secret.id), { ...secret, subject: into });
     }
     return undefined;

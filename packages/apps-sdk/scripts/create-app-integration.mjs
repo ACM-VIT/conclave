@@ -255,14 +255,16 @@ import {
  * The app's rules. This runs on the SFU and nowhere else: a browser never
  * loads it, and \`check:apps\` fails any web or native file that imports it.
  */
-type Entry = { id: string; subject: Subject; name: string; joinedAt: number };
+type Entry = { id: string; subject: Subject; name: string; joinedAt: number; order: number };
 
 const MAX_ENTRIES = 500;
+const ORDER = key("last");
 
 export const ${camel}Authority = defineAuthority({
   contract: ${camel}Contract,
   tables: {
     entries: table<Entry>({ maxRows: MAX_ENTRIES }),
+    order: table<{ last: number }>({ maxRows: 1 }),
   },
   timers: {},
   canView: ({ role }) => role === "moderator" || role === "member",
@@ -272,6 +274,8 @@ export const ${camel}Authority = defineAuthority({
       rate: { burst: 5, perSecond: 1 },
       run(ctx, tx) {
         if (tx.count("entries") >= MAX_ENTRIES) reject("full");
+        const order = (tx.get("order", ORDER)?.last ?? 0) + 1;
+        tx.put("order", ORDER, { last: order });
         // One entry per person: the key is the person. A second tab, a
         // reconnect or a retry lands on the same key and changes nothing.
         tx.insertIfAbsent("entries", key(ctx.subject), {
@@ -279,6 +283,7 @@ export const ${camel}Authority = defineAuthority({
           subject: ctx.subject,
           name: ctx.displayName,
           joinedAt: ctx.now,
+          order,
         });
         return null;
       },
@@ -316,7 +321,7 @@ export const ${camel}Authority = defineAuthority({
     if (!entry) return undefined;
     tx.delete("entries", key(from));
     const kept = tx.get("entries", key(into));
-    if (!kept || entry.joinedAt < kept.joinedAt) {
+    if (!kept || entry.order < kept.order) {
       tx.put("entries", key(into), { ...entry, subject: into });
     }
     return undefined;

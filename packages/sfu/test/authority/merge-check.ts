@@ -2,6 +2,7 @@ import type { Json } from "@conclave/apps-sdk/authority";
 import type { AuthorityModule, Subject, TimerContext } from "@conclave/apps-sdk/authority/server";
 import { AuthorityInstance, type Actor } from "../../server/apps/authority/instance.js";
 import { DEFAULT_AUTHORITY_LIMITS } from "../../server/apps/authority/limits.js";
+import { ACTION_ORDER_TABLE } from "./fixtures/action-order.js";
 
 export type MergeStep =
   | {
@@ -9,6 +10,7 @@ export type MergeStep =
       action: string;
       input?: (receipts: ReadonlyMap<string, Json>) => unknown;
       keep?: string;
+      sameMoment?: boolean;
     }
   | { wait: number }
   | { crowd: number; action: string; input?: (receipts: ReadonlyMap<string, Json>, member: number) => unknown };
@@ -39,6 +41,36 @@ const mixed = (...parts: number[]): number => {
 
 const withoutFields = (row: object, fields: readonly string[]): object =>
   Object.fromEntries(Object.entries(row).filter(([name]) => !fields.includes(name)));
+
+const collectOrders = (value: unknown, found: Set<number>): void => {
+  if (Array.isArray(value)) {
+    for (const inner of value) collectOrders(inner, found);
+    return;
+  }
+  if (value === null || typeof value !== "object") return;
+  for (const [name, inner] of Object.entries(value)) {
+    if (name === "order" && typeof inner === "number") found.add(inner);
+    else collectOrders(inner, found);
+  }
+};
+
+const ranked = (value: unknown, rank: ReadonlyMap<number, number>): unknown => {
+  if (Array.isArray(value)) return value.map((inner) => ranked(inner, rank));
+  if (value === null || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([name, inner]) => [
+      name,
+      name === "order" && typeof inner === "number" ? rank.get(inner) : ranked(inner, rank),
+    ]),
+  );
+};
+
+const byRank = <T>(tables: T): T => {
+  const orders = new Set<number>();
+  collectOrders(tables, orders);
+  const rank = new Map([...orders].sort((a, b) => a - b).map((order, index) => [order, index]));
+  return ranked(tables, rank) as T;
+};
 
 const play = (
   module: AuthorityModule,
@@ -73,7 +105,7 @@ const play = (
     step = index + 1;
     member = 0;
     draw = 0;
-    now += STEP_MS;
+    if (!("by" in entry && entry.sameMoment)) now += STEP_MS;
     if ("wait" in entry) {
       now += entry.wait;
       instance.runDueTimers(now);
@@ -125,14 +157,14 @@ const play = (
     if (!outcome.ok) throw new Error(`${module.contract.id}: the merge did not commit`);
   }
   const tables = Object.fromEntries(
-    Object.keys(module.runtime.tables).map((table) => [
+    Object.keys(module.runtime.tables).filter((table) => table !== ACTION_ORDER_TABLE).map((table) => [
       table,
       [...instance.store.rows(table)]
         .map(([key, row]) => [String(key), withoutFields(row, activityFields)] as const)
         .sort(([a], [b]) => a.localeCompare(b)),
     ]),
   );
-  return { tables, mergeOps, subjectRows, crowd: crowd.size };
+  return { tables: byRank(tables), mergeOps, subjectRows, crowd: crowd.size };
 };
 
 export const mergeAgainstOnePerson = (
