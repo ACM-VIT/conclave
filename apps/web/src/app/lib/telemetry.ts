@@ -9,7 +9,9 @@ import {
   countDropped,
   createBatchStore,
   createOutbox,
+  MEMORY_ONLY_STORE,
   type Outbox,
+  type OutboxDeps,
   type OutboxEvent,
   type Reply,
   SEND_DEADLINE_MS,
@@ -103,21 +105,15 @@ const buildHeld = (chunks: ReadonlyMap<string, string> | null): void => {
   }
 };
 
-// Batches not yet answered when a page went away, one local storage entry
-// each, which a later page load (or this one, back again) sends. A site's
-// tabs replay one at a time where the browser has the Web Locks API: a
-// replay waits its turn, so one asked for while another tab's runs still
-// happens, after it. Without the API two tabs may send a batch twice, and
-// /ingest takes each uuid once.
 const REPLAY_LOCK = "conclave:telemetry:replay";
 
-const replayLock = (replay: () => Promise<void>): void => {
-  const locks = typeof navigator === "undefined" ? undefined : navigator.locks;
-  if (!locks) {
-    void replay();
-    return;
-  }
-  locks.request(REPLAY_LOCK, replay).catch(() => void replay());
+const outboxStorage = (): Pick<OutboxDeps, "store" | "lock"> => {
+  const locks = typeof navigator === "undefined" ? null : (navigator.locks ?? null);
+  if (!locks) return { store: MEMORY_ONLY_STORE, lock: (run) => void run() };
+  return {
+    store: createBatchStore(() => localStorage),
+    lock: (run) => void locks.request(REPLAY_LOCK, run).catch(() => {}),
+  };
 };
 
 // The page has started to go away: pagehide until a pageshow brings it back,
@@ -469,8 +465,7 @@ export function startTelemetry(): void {
     },
     shape: rebuilt(posthogKey),
     newId: randomUuid,
-    store: createBatchStore(() => localStorage),
-    lock: replayLock,
+    ...outboxStorage(),
     onStale: (dropped) => telemetry.capture("telemetry_reports_dropped", countDropped(dropped)),
   });
   outbox.replaySaved();

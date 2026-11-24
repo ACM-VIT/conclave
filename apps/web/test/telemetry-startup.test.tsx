@@ -53,9 +53,17 @@ beforeEach(() => {
   vi.stubGlobal("Request", browserRequest);
   vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 404 })));
   Object.defineProperty(navigator, "sendBeacon", { configurable: true, value: () => false });
+  let held = Promise.resolve();
+  const request = (name: string, run: (lock: { name: string }) => Promise<void>) => {
+    const granted = held.then(() => run({ name }));
+    held = granted.catch(() => {});
+    return granted;
+  };
+  Object.defineProperty(navigator, "locks", { configurable: true, value: { request } });
 });
 
 afterEach(() => {
+  delete (navigator as unknown as { locks?: unknown }).locks;
   act(() => root?.unmount());
   root = null;
   console.error = originalConsoleError;

@@ -2,28 +2,64 @@ import type { Scenario } from "./outbox-sim";
 
 export type ThreadCase = { name: string; thread: string; head: string; seed: number; scenario: Scenario };
 
-const quiet = { refuseRate: 0, beaconRefuseRate: 1, beaconLossRate: 0, beaconLimitRate: 0, noLocks: false, maxTabs: 3 };
+const quiet = {
+  refuseRate: 0,
+  beaconRefuseRate: 1,
+  beaconLossRate: 0,
+  beaconLimitRate: 0,
+  noLocks: false,
+  raceRate: 0,
+  throttleRate: 0,
+  maxTabs: 3,
+};
 
 export const THREAD_CASES: ThreadCase[] = [
   {
-    name: "a tab whose claim another tab replaced, without Web Locks, never saves over that newer claim's wait as it hides",
+    name: "a tab that read its expired claim never writes it back over the claim another tab made before that write",
+    thread: "Sol third final review of #265 at 6a6d20e2, finding 1",
+    head: "6a6d20e2",
+    seed: 2026112427,
+    scenario: {
+      profile: quiet,
+      actions: [
+        { at: 0, act: "open", tab: 1 },
+        { at: 1000, act: "emit", tab: 1, count: 2 },
+        { at: 6500, act: "hide", tab: 1 },
+        { at: 7000, act: "show", tab: 1 },
+        { at: 9000, act: "open", tab: 2 },
+        { at: 9500, act: "open", tab: 3 },
+        { at: 10_000, act: "hide", tab: 1, throttled: true },
+        { at: 24_100, act: "hide", tab: 1, during: 2 },
+      ],
+      replies: [
+        { latency: 100, status: 503 },
+        { latency: 30_000, status: 503 },
+        { latency: 100, status: 429, retryAfter: "60" },
+        { latency: 100, status: 200 },
+      ],
+    },
+  },
+  {
+    name: "a tab whose claim outlived its lease never saves over the newer claim's wait as it hides",
     thread: "https://github.com/ACM-VIT/conclave/pull/265#discussion_r4676724334",
     head: "8db1926b",
     seed: 4676724334,
     scenario: {
-      profile: { ...quiet, noLocks: true },
+      profile: quiet,
       actions: [
         { at: 0, act: "open", tab: 1 },
-        { at: 500, act: "open", tab: 2 },
         { at: 1000, act: "emit", tab: 1, count: 2 },
-        { at: 6050, act: "hide", tab: 1 },
-        { at: 8100, act: "race", tab: 1, other: 2 },
-        { at: 9000, act: "hide", tab: 1 },
+        { at: 6500, act: "hide", tab: 1 },
+        { at: 7000, act: "show", tab: 1 },
+        { at: 9000, act: "open", tab: 2 },
+        { at: 10_000, act: "hide", tab: 1, throttled: true },
+        { at: 25_000, act: "hide", tab: 1 },
       ],
       replies: [
         { latency: 100, status: 503 },
-        { latency: 10_000, status: 503 },
+        { latency: 30_000, status: 503 },
         { latency: 100, status: 429, retryAfter: "60" },
+        { latency: 100, status: 200 },
       ],
     },
   },

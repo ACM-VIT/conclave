@@ -73,6 +73,7 @@ beforeEach(async () => {
   keepaliveAnswers = [];
   ingestHeld = null;
   localStorage.clear();
+  webLocks();
   manifest = "pending";
   sdk.release = () => {};
   vi.stubEnv("NEXT_PUBLIC_POSTHOG_KEY", KEY);
@@ -127,6 +128,7 @@ afterEach(() => {
   // What that saved would otherwise be sent by a later test's page.
   localStorage.clear();
   window.dispatchEvent(new Event("pageshow"));
+  delete (navigator as unknown as { locks?: unknown }).locks;
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -342,6 +344,25 @@ describe("reports after the page started to go away", () => {
 });
 
 describe("batches the browser will not take as the page goes away", () => {
+  it("stay in the page's memory where the browser has no Web Locks, which no other tab can claim, and go once it comes back", async () => {
+    delete (navigator as unknown as { locks?: unknown }).locks;
+    manifest = "missing";
+    const { telemetry, startTelemetry } = await import("../src/app/lib/telemetry");
+    startTelemetry();
+    await loaded();
+    telemetry.capture("meet_join_attempt", { joinMode: "meeting", isAdmin: false });
+    refuseBeacons = true;
+    hide();
+    expect(sent).toEqual([]);
+    expect(savedKeys()).toEqual([]);
+
+    refuseBeacons = false;
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.waitFor(() => expect(fetches()).toHaveLength(1));
+    expect(await names(fetches())).toEqual(["meet_join_attempt"]);
+    expect(savedKeys()).toEqual([]);
+  });
+
   it("keeps them for the next page load, which sends each of them once", async () => {
     manifest = "missing";
     const { telemetry, startTelemetry } = await import("../src/app/lib/telemetry");

@@ -15,7 +15,7 @@ describe("the outbox in a simulated browser", () => {
 
   it(`keeps every invariant over ${RUNS} random runs of 1 to 3 tabs`, async () => {
     const failures: Array<Pick<SimResult, "seed" | "violations">> = [];
-    const totals = { runs: 0, multiTab: 0, aborted: 0, refusedWrites: 0, retryAfters: 0, closes: 0, counted: 0 };
+    const totals = { runs: 0, multiTab: 0, aborted: 0, refusedWrites: 0, retryAfters: 0, closes: 0, counted: 0, races: 0, throttles: 0 };
     for (let seed = FIRST_SEED; seed < FIRST_SEED + RUNS && failures.length < 5; seed++) {
       const result = await simulate(seed);
       totals.runs += 1;
@@ -25,6 +25,8 @@ describe("the outbox in a simulated browser", () => {
       totals.retryAfters += result.retryAfters;
       totals.closes += result.closes;
       totals.counted += result.counted;
+      totals.races += result.races;
+      totals.throttles += result.throttles;
       if (result.violations.length > 0) failures.push({ seed, violations: result.violations.slice(0, 3) });
     }
 

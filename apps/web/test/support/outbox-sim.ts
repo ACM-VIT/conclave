@@ -31,6 +31,8 @@ export type SimResult = {
   refusedWrites: number;
   retryAfters: number;
   closes: number;
+  races: number;
+  throttles: number;
 };
 
 const START = Date.parse("2026-11-23T00:00:00.000Z");
@@ -38,6 +40,9 @@ const PROJECT = "phc_sim_project";
 const SCHEDULE = [2000, 4000, 8000, 16000, 30000];
 const MAX_WAIT_MS = 60_000;
 const BEACON_CONFIRM_MS = 30_000;
+const LEASE_MS = 16_000;
+const THROTTLE_MS = 60_000;
+const MAX_RACES = 300;
 
 const rngOf = (seed: number) => {
   let state = seed >>> 0;
@@ -50,11 +55,22 @@ const rngOf = (seed: number) => {
   };
 };
 
-type Job = { at: number; seq: number; tab: Tab | null; kind: "timer" | "reply" | "server" | "storage" | "action"; run: () => void; cancelled: boolean };
+type Job = { at: number; due: number; seq: number; tab: Tab | null; kind: "timer" | "reply" | "server" | "storage" | "action"; run: () => void; cancelled: boolean };
 
-type Tab = { id: number; open: boolean; hidden: boolean; outbox: OutboxLike; view: Map<string, string> | null };
+type Tab = { id: number; open: boolean; hidden: boolean; outbox: OutboxLike; throttledFrom: number | null };
 
-type Request = { key: string; uuids: string[]; tab: Tab; keepalive: boolean; latest: boolean; done: boolean; arrived: boolean; aborted: boolean };
+type Request = {
+  key: string;
+  uuids: string[];
+  tab: Tab;
+  keepalive: boolean;
+  latest: boolean;
+  done: boolean;
+  arrived: boolean;
+  aborted: boolean;
+  sentAt: number;
+  throttled: boolean;
+};
 
 export type Profile = {
   maxTabs: number;
@@ -70,10 +86,12 @@ export type Profile = {
   beaconLossRate: number;
   beaconLimitRate: number;
   noLocks: boolean;
+  raceRate: number;
+  throttleRate: number;
   activeMs: number;
 };
 
-const profileOf = (rng: () => number): Omit<Profile, "beaconLimitRate" | "noLocks"> => ({
+const profileOf = (rng: () => number): Omit<Profile, "beaconLimitRate" | "noLocks" | "raceRate" | "throttleRate"> => ({
   maxTabs: 1 + Math.floor(rng() * 3),
   refuseRate: rng() < 0.4 ? 0 : rng() * 0.5,
   slowRate: rng() * 0.3,
@@ -90,7 +108,14 @@ const profileOf = (rng: () => number): Omit<Profile, "beaconLimitRate" | "noLock
 
 export type ScriptedReply = { latency: number; status: number | null; retryAfter?: string };
 
-export type ScriptedAction = { at: number; act: "open" | "emit" | "hide" | "show" | "close" | "race"; tab: number; count?: number; other?: number };
+export type ScriptedAction = {
+  at: number;
+  act: "open" | "emit" | "hide" | "show" | "close";
+  tab: number;
+  count?: number;
+  throttled?: boolean;
+  during?: number;
+};
 
 export type Scenario = { profile?: Partial<Profile>; replies?: ScriptedReply[]; actions?: ScriptedAction[] };
 
@@ -103,12 +128,15 @@ export async function simulate(
   const rng = rngOf(seed);
   const beaconRng = rngOf(seed ^ 0x5bd1e995);
   const lockRng = rngOf(seed ^ 0x27d4eb2f);
+  const raceRng = rngOf(seed ^ 0x2545f491);
   const between = (low: number, high: number) => low + rng() * (high - low);
   const scriptedEnd = scenario.actions ? Math.max(...scenario.actions.map((action) => action.at)) + 1 : null;
   const profile: Profile = {
     ...profileOf(rng),
     beaconLimitRate: beaconRng() * 0.3,
     noLocks: lockRng() < 0.25,
+    raceRate: raceRng() < 0.4 ? 0 : 0.005 + raceRng() * 0.05,
+    throttleRate: raceRng() * 0.4,
     ...(scriptedEnd === null ? {} : { activeMs: scriptedEnd }),
     ...scenario.profile,
   };
@@ -123,8 +151,8 @@ export async function simulate(
 
   const jobs: Job[] = [];
   let seq = 0;
-  const schedule = (at: number, tab: Tab | null, kind: Job["kind"], run: () => void): Job => {
-    const job: Job = { at: Math.max(at, clock), seq: ++seq, tab, kind, run, cancelled: false };
+  const schedule = (at: number, tab: Tab | null, kind: Job["kind"], run: () => void, due = at): Job => {
+    const job: Job = { at: Math.max(at, clock), due, seq: ++seq, tab, kind, run, cancelled: false };
     jobs.push(job);
     return job;
   };
@@ -142,7 +170,6 @@ export async function simulate(
   const refused = new Set<string>();
   const counted = new Set<string>();
   const countedTwice: string[] = [];
-  let racing = false;
   let countedTotal = 0;
   let exactCounts = true;
   const lostAtClose = new Set<string>();
@@ -157,6 +184,8 @@ export async function simulate(
   let refusedWrites = 0;
   let retryAfters = 0;
   let closes = 0;
+  let races = 0;
+  let throttles = 0;
   let ids = 0;
   const tabs: Tab[] = [];
 
@@ -168,14 +197,35 @@ export async function simulate(
       if (tab !== writer && tab.open) schedule(clock + between(0, 30), tab, "storage", () => tab.outbox.replaySaved());
     }
   };
+  let racePlanned: { reader: Tab; other: Tab; done: boolean } | null = null;
+  let interleaving = false;
+  let racedThisStep = false;
   const storageFor = (tab: Tab): Storage => ({
     get length() {
-      return (tab.view ?? items).size;
+      return items.size;
     },
-    key: (index: number) => [...(tab.view ?? items).keys()][index] ?? null,
-    getItem: (key: string) => (tab.view ?? items).get(key) ?? null,
+    key: (index: number) => [...items.keys()][index] ?? null,
+    getItem: (key: string) => {
+      const value = items.get(key) ?? null;
+      if (value !== null && racePlanned?.reader === tab && !racePlanned.done) {
+        racePlanned.done = true;
+        interleave(tab, racePlanned.other, "replay");
+      } else if (
+        !interleaving &&
+        !racedThisStep &&
+        racePlanned === null &&
+        races < MAX_RACES &&
+        profile.raceRate > 0 &&
+        raceRng() < profile.raceRate
+      ) {
+        racedThisStep = true;
+        const others = tabs.filter((other) => other.open && other !== tab);
+        if (others.length > 0) interleave(tab, others[Math.floor(raceRng() * others.length)], raceRng() < 0.6 ? "replay" : "lifecycle");
+      }
+      return value;
+    },
     setItem: (key: string, value: string) => {
-      if (clock < refusingUntil || rng() < profile.refuseRate) {
+      if (profile.noLocks || clock < refusingUntil || rng() < profile.refuseRate) {
         refusedWrites += 1;
         if (closingTab === tab) {
           try {
@@ -185,13 +235,11 @@ export async function simulate(
         throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
       }
       items.set(key, value);
-      tab.view?.set(key, value);
       writtenAt.set(key, clock);
       if (trace) note(`tab${tab.id} saved ${key.slice(-12)} ${value.replace(/"events":\[.*?\],/, "")}`);
       notifyOthers(tab);
     },
     removeItem: (key: string) => {
-      tab.view?.delete(key);
       if (items.delete(key)) {
         note(`tab${tab.id} removed ${key.slice(-12)}`);
         notifyOthers(tab);
@@ -202,13 +250,13 @@ export async function simulate(
 
   const waiting: Array<{ tab: Tab; run: () => Promise<void> }> = [];
   let held = false;
+  let grantAtOnce = false;
   const pump = () => {
     while (!held && waiting.length > 0) {
       const next = waiting.shift() as { tab: Tab; run: () => Promise<void> };
       if (!next.tab.open) continue;
       held = true;
-      void Promise.resolve()
-        .then(next.run)
+      void (grantAtOnce ? next.run() : Promise.resolve().then(next.run))
         .catch(() => {})
         .finally(() => {
           held = false;
@@ -225,8 +273,10 @@ export async function simulate(
     if (beaconed !== undefined && clock - beaconed < BEACON_CONFIRM_MS) {
       violate("sent again before its beacon is confirmed", `${how} of ${key} ${clock - beaconed} ms after its beacon`);
     }
-    if (how === "post" && !profile.noLocks) {
-      const open = (requests.get(key) ?? []).filter((request) => !request.done && request.tab.open);
+    if (how === "post") {
+      const open = (requests.get(key) ?? []).filter(
+        (request) => !request.done && request.tab.open && !(request.throttled && clock - request.sentAt >= LEASE_MS),
+      );
       if (open.length > 0) violate("two sends of one batch in flight", key);
     }
     const failed = failures.get(key);
@@ -249,7 +299,18 @@ export async function simulate(
     posts += 1;
     const earlier = requests.get(key) ?? [];
     for (const request of earlier) request.latest = false;
-    const request: Request = { key, uuids, tab, keepalive, latest: true, done: false, arrived: false, aborted: false };
+    const request: Request = {
+      key,
+      uuids,
+      tab,
+      keepalive,
+      latest: true,
+      done: false,
+      arrived: false,
+      aborted: false,
+      sentAt: clock,
+      throttled: tab.throttledFrom !== null,
+    };
     requests.set(key, [...earlier.filter((each) => !each.done), request]);
     const roll = rng();
     const scripted = scriptedReplies.shift();
@@ -356,7 +417,7 @@ export async function simulate(
     if (Array.isArray(dropped)) {
       for (const batch of dropped as Array<{ events: Array<{ uuid: string }> }>) {
         for (const event of batch.events) {
-          if (counted.has(event.uuid) && !racing) countedTwice.push(event.uuid);
+          if (counted.has(event.uuid)) countedTwice.push(event.uuid);
           counted.add(event.uuid);
         }
       }
@@ -367,11 +428,11 @@ export async function simulate(
   };
 
   const openTab = () => {
-    const tab: Tab = { id: tabs.length + 1, open: true, hidden: false, outbox: undefined as unknown as OutboxLike, view: null };
+    const tab: Tab = { id: tabs.length + 1, open: true, hidden: false, outbox: undefined as unknown as OutboxLike, throttledFrom: null };
     const deps = {
       token: PROJECT,
       now: () => clock,
-      setTimer: (run: () => void, ms: number) => schedule(clock + ms, tab, "timer", run),
+      setTimer: (run: () => void, ms: number) => schedule(throttledAt(tab, clock + ms), tab, "timer", run, clock + ms),
       clearTimer: (job: unknown) => {
         if (job) (job as Job).cancelled = true;
       },
@@ -429,26 +490,62 @@ export async function simulate(
     tab.open = false;
     for (const job of jobs) if (job.tab === tab && job.kind !== "reply") job.cancelled = true;
   };
-  const race = (first: Tab, second: Tab) => {
-    note(`tab${first.id} and tab${second.id} replay at once, without a lock`);
-    const before = new Map(items);
-    racing = true;
-    for (const tab of [first, second]) {
-      tab.view = new Map(before);
-      tab.outbox.replaySaved();
-    }
-    racing = false;
-    first.view = null;
-    second.view = null;
+  function throttledAt(tab: Tab, due: number): number {
+    if (tab.throttledFrom === null) return due;
+    return tab.throttledFrom + Math.ceil(Math.max(due - tab.throttledFrom, 0) / THROTTLE_MS) * THROTTLE_MS;
+  }
+  const throttle = (tab: Tab) => {
+    if (tab.throttledFrom !== null) return;
+    tab.throttledFrom = clock;
+    throttles += 1;
+    for (const job of jobs) if (job.tab === tab && job.kind === "timer" && !job.cancelled) job.at = throttledAt(tab, job.due);
+    for (const list of requests.values()) for (const request of list) if (request.tab === tab && !request.done) request.throttled = true;
   };
+  const unthrottle = (tab: Tab) => {
+    if (tab.throttledFrom === null) return;
+    tab.throttledFrom = null;
+    for (const job of jobs) if (job.tab === tab && job.kind === "timer" && !job.cancelled) job.at = Math.max(clock, job.due);
+  };
+  const showTab = (tab: Tab) => {
+    if (!tab.open) return;
+    note(`tab${tab.id} shows`);
+    tab.hidden = false;
+    unthrottle(tab);
+    tab.outbox.replaySaved();
+  };
+  const hideTab = (tab: Tab, throttled: boolean) => {
+    note(`tab${tab.id} hides${throttled ? ", its timers throttled" : ""}`);
+    tab.hidden = true;
+    if (throttled) throttle(tab);
+    tab.outbox.flushForUnload();
+  };
+  function interleave(reader: Tab, other: Tab, move: "replay" | "lifecycle"): void {
+    if (!other.open) return;
+    races += 1;
+    note(`tab${other.id} acts between a read of tab${reader.id} and what tab${reader.id} writes next: ${move}`);
+    interleaving = true;
+    try {
+      if (move === "replay") {
+        grantAtOnce = true;
+        try {
+          other.outbox.replaySaved();
+          pump();
+        } finally {
+          grantAtOnce = false;
+        }
+      } else if (other.hidden) {
+        other.outbox.flushForUnload();
+      } else {
+        hideTab(other, false);
+        schedule(clock + between(1000, 60_000), other, "action", () => showTab(other));
+      }
+    } finally {
+      interleaving = false;
+    }
+  }
   const act = () => {
     if (!active()) return;
     const open = tabs.filter((tab) => tab.open);
-    if (profile.noLocks && open.length >= 2 && lockRng() < 0.3) {
-      const first = open[Math.floor(lockRng() * open.length)];
-      const others = open.filter((tab) => tab !== first);
-      race(first, others[Math.floor(lockRng() * others.length)]);
-    }
     const roll = rng();
     if (open.length < profile.maxTabs && (open.length === 0 || roll < 0.25)) {
       emit(openTab());
@@ -459,14 +556,17 @@ export async function simulate(
         note(`storage refuses every write until ${((refusingUntil - START) / 1000).toFixed(3)}`);
       }
       if (!tab.hidden) {
-        note(`tab${tab.id} hides`);
-        tab.hidden = true;
-        tab.outbox.flushForUnload();
-        schedule(clock + between(1000, 120_000), tab, "action", () => {
-          if (!tab.open) return;
-          tab.hidden = false;
-          tab.outbox.replaySaved();
-        });
+        hideTab(tab, raceRng() < profile.throttleRate);
+        const shownAt = clock + between(1000, 120_000);
+        schedule(shownAt, tab, "action", () => showTab(tab));
+        const frozenAt = clock + between(5000, 60_000);
+        if (frozenAt < shownAt && raceRng() < 0.5) {
+          schedule(frozenAt, tab, "action", () => {
+            if (!tab.hidden) return;
+            note(`tab${tab.id} freezes`);
+            tab.outbox.flushForUnload();
+          });
+        }
       }
     } else if (roll < 0.7 && open.length > 0) {
       const tab = open[Math.floor(rng() * open.length)];
@@ -478,11 +578,7 @@ export async function simulate(
       for (let index = 1; index <= bursts; index++) {
         schedule(clock + index * between(50, 250), tab, "action", () => tab.outbox.flushForUnload());
       }
-      schedule(clock + between(1000, 90_000), tab, "action", () => {
-        if (!tab.open) return;
-        tab.hidden = false;
-        tab.outbox.replaySaved();
-      });
+      schedule(clock + between(1000, 90_000), tab, "action", () => showTab(tab));
     } else if (roll < 0.85 && open.length > 0) {
       closeTab(open[Math.floor(rng() * open.length)]);
     }
@@ -519,17 +615,16 @@ export async function simulate(
         else if (!tab?.open) return;
         else if (action.act === "emit") emit(tab, action.count ?? 1);
         else if (action.act === "hide") {
-          note(`tab${tab.id} hides`);
-          tab.hidden = true;
-          tab.outbox.flushForUnload();
-        } else if (action.act === "show") {
-          note(`tab${tab.id} shows`);
-          tab.hidden = false;
-          tab.outbox.replaySaved();
-        } else if (action.act === "race") {
-          const other = tabs[(action.other ?? 0) - 1];
-          if (other?.open) race(tab, other);
-        } else closeTab(tab);
+          const other = action.during === undefined ? undefined : tabs[action.during - 1];
+          racePlanned = other ? { reader: tab, other, done: false } : null;
+          hideTab(tab, action.throttled ?? false);
+          if (racePlanned && !racePlanned.done) {
+            racePlanned.done = true;
+            interleave(tab, racePlanned.other, "replay");
+          }
+          racePlanned = null;
+        } else if (action.act === "show") showTab(tab);
+        else closeTab(tab);
       });
     }
   } else {
@@ -554,6 +649,7 @@ export async function simulate(
     if (job.cancelled) continue;
     clock = job.at;
     if (job.tab && !job.tab.open && job.kind !== "reply") continue;
+    racedThisStep = false;
     job.run();
     await drain();
     steps += 1;
@@ -563,7 +659,7 @@ export async function simulate(
       await drain();
     }
     const openTabs = tabs.filter((tab) => tab.open);
-    if (openTabs.length > 0) {
+    if (openTabs.some((tab) => tab.throttledFrom === null)) {
       const stuck = savedWithoutOwner();
       if (stuck) {
         violate("saved batch left with no owner", stuck);
@@ -606,5 +702,7 @@ export async function simulate(
     refusedWrites,
     retryAfters,
     closes,
+    races,
+    throttles,
   };
 }

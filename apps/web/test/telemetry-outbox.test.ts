@@ -1274,4 +1274,59 @@ describe("a stored batch another tab has claimed since", () => {
     expect(h.posts).toHaveLength(1);
     expect(store.list()).toEqual([newer]);
   });
+
+  it("survives a page that read its own claim just before another tab claimed it, and wrote after", async () => {
+    const shared = memoryStore();
+    let claimBetween: (() => void) | null = null;
+    const store = {
+      ...shared,
+      get: (id: string) => {
+        const read = shared.get(id);
+        const claim = claimBetween;
+        claimBetween = null;
+        claim?.();
+        return read;
+      },
+    };
+    shared.save({ id: "saved-claimed", events: [event()], oldestAt: START, sent: false, notBefore: 0, nextTry: 0, attempt: 0, sendId: "", leaseUntil: 0 });
+    const later = answerLater();
+    const h = harness({ store, answers: [later.promise], at: START + 1000 });
+    h.outbox.replaySaved();
+    await h.advance(0);
+    expect(h.posts).toHaveLength(1);
+
+    const [claimed] = shared.list();
+    const newer = { ...claimed, sendId: "another-tab", notBefore: START + 61_000, attempt: 2, leaseUntil: START + 17_000 };
+    claimBetween = () => shared.save(newer);
+    h.outbox.flushForUnload();
+    (claimBetween as (() => void) | null)?.();
+    expect(shared.list()).toEqual([newer]);
+
+    later.answer(503);
+    await h.advance(30_000);
+    expect(h.posts).toHaveLength(1);
+    expect(shared.list()).toEqual([newer]);
+  });
+
+  it("is written by the tab that claimed it only once that tab holds the lock again", async () => {
+    const store = memoryStore();
+    store.save({ id: "saved-claimed", events: [event()], oldestAt: START, sent: false, notBefore: 0, nextTry: 0, attempt: 0, sendId: "", leaseUntil: 0 });
+    const lock = sharedLock();
+    const later = answerLater();
+    const h = harness({ store, lock, answers: [later.promise], at: START + 1000 });
+    h.outbox.replaySaved();
+    await h.advance(0);
+    expect(h.posts).toHaveLength(1);
+    const [claimed] = store.list();
+
+    let release = () => {};
+    lock(() => new Promise<void>((resolve) => (release = resolve)));
+    later.answer(503);
+    await h.advance(0);
+    expect(store.list()).toEqual([claimed]);
+
+    release();
+    await h.advance(0);
+    expect(store.list()).toEqual([{ ...claimed, sent: false, attempt: 1, nextTry: START + 1000 + 2000, leaseUntil: 0 }]);
+  });
 });
