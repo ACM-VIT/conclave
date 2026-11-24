@@ -3,7 +3,7 @@ import { createFixedWindow, type FixedWindow, INGEST_QUOTA_URL, INGEST_RATE_LIMI
 import { rateLimitClientKey } from "./unfurl-rate-limit";
 
 const MAX_LOCAL_CLIENTS = 1_000;
-const SITE_QUOTA_DEADLINE_MS = 2_000;
+const ADMISSION_DEADLINE_MS = 2_000;
 
 type RateLimitBinding = { limit(options: { key: string }): Promise<{ success: boolean }> };
 type QuotaStub = { fetch(url: string, init: RequestInit): Promise<Response> };
@@ -40,16 +40,22 @@ const bindingsOf = (env: Record<string, unknown>): { perClient: RateLimitBinding
 };
 
 const takeSiteQuota = async (quota: QuotaNamespace): Promise<IngestAdmission> => {
+  const response = await quota.get(quota.idFromName("site")).fetch(INGEST_QUOTA_URL, { method: "POST" });
+  return response.status === 204 ? ADMITTED : response.status === 429 ? LIMITED : UNAVAILABLE;
+};
+
+const takeBoth = async (limiters: { perClient: RateLimitBinding; site: QuotaNamespace }, key: string): Promise<IngestAdmission> => {
+  if (!(await limiters.perClient.limit({ key })).success) return LIMITED;
+  return takeSiteQuota(limiters.site);
+};
+
+const withinAdmissionDeadline = async (admission: Promise<IngestAdmission>): Promise<IngestAdmission> => {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const stalled = new Promise<IngestAdmission>((resolve) => {
-    timer = setTimeout(() => resolve(UNAVAILABLE), SITE_QUOTA_DEADLINE_MS);
+    timer = setTimeout(() => resolve(UNAVAILABLE), ADMISSION_DEADLINE_MS);
   });
-  const answered = quota
-    .get(quota.idFromName("site"))
-    .fetch(INGEST_QUOTA_URL, { method: "POST" })
-    .then((response) => (response.status === 204 ? ADMITTED : response.status === 429 ? LIMITED : UNAVAILABLE));
   try {
-    return await Promise.race([answered, stalled]);
+    return await Promise.race([admission.catch(() => UNAVAILABLE), stalled]);
   } finally {
     clearTimeout(timer);
   }
@@ -68,10 +74,5 @@ export async function takeIngestRateLimit(request: Request): Promise<IngestAdmis
   }
   const limiters = bindingsOf(env);
   if (!limiters) return UNAVAILABLE;
-  try {
-    if (!(await limiters.perClient.limit({ key })).success) return LIMITED;
-    return await takeSiteQuota(limiters.site);
-  } catch {
-    return UNAVAILABLE;
-  }
+  return withinAdmissionDeadline(takeBoth(limiters, key));
 }

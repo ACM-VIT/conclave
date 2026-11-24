@@ -138,6 +138,27 @@ describe("the /ingest rate limit", () => {
     expect(await stalled).toEqual({ ok: false, status: 503, retryAfterMs: null });
   });
 
+  it("answers 503 within one 2 s deadline for the whole admission, whichever limiter stalls", async () => {
+    inWorkers();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const never = <T>() => new Promise<T>(() => {});
+    const slow = <T>(value: T) => new Promise<T>((resolve) => setTimeout(() => resolve(value), 1_500));
+    const cases = {
+      "the per-client limiter": { perClient: () => never<{ success: boolean }>(), site: async () => new Response(null, { status: 204 }) },
+      "the site quota": { perClient: async () => ({ success: true }), site: () => never<Response>() },
+      "both, slowly, one after the other": { perClient: () => slow({ success: true }), site: () => slow(new Response(null, { status: 204 })) },
+    };
+    for (const [name, { perClient, site }] of Object.entries(cases)) {
+      cloudflare.context = { env: { INGEST_RATE_LIMITER: { limit: perClient }, INGEST_QUOTA: siteQuota(site).binding } };
+      let answer: unknown = "unanswered";
+      void takeIngestRateLimit(from("203.0.113.10")).then((value) => (answer = value));
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(answer, name).toBe("unanswered");
+      await vi.advanceTimersByTimeAsync(1);
+      expect(answer, name).toEqual({ ok: false, status: 503, retryAfterMs: null });
+    }
+  });
+
   it("admits the site's limit across every location in one minute, then refuses until the next", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const quota = new IngestQuota({ storage: objectStorage() });

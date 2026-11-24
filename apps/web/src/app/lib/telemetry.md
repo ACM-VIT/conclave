@@ -275,7 +275,9 @@ counts every location's requests in one window; a rate limit binding would
 give each location its own 6000. A client over either limit gets 429 with
 `Retry-After: 60`, which the outbox already honours. In the Workers runtime
 (`navigator.userAgent` is `Cloudflare-Workers`) a missing binding, or one
-that fails or takes more than 2 s, answers 503. Anywhere else, `next start`
+that fails, answers 503, and so does an admission that has not finished
+in 2 s: one deadline covers both limiters together, so a stalled per-client
+limiter cannot hold a request open any more than a stalled site quota can. Anywhere else, `next start`
 and `next dev` included, the same two limits are kept in the process: there
 OpenNext's local platform proxy offers wrangler's bindings, but a Durable
 Object does not run in it. It decodes the body
