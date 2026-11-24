@@ -18,6 +18,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY patches ./patches
 COPY packages/ai/package.json packages/ai/package.json
 COPY packages/apps-sdk/package.json packages/apps-sdk/package.json
+COPY packages/meeting-core/package.json packages/meeting-core/package.json
 COPY packages/sfu/package.json packages/sfu/package.json
 COPY packages/shared-browser/package.json packages/shared-browser/package.json
 COPY packages/ui-tokens/package.json packages/ui-tokens/package.json

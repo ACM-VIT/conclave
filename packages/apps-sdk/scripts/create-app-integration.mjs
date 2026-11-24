@@ -244,8 +244,10 @@ export const ${camel}Contract = defineContract({
       path: path.join(appDir, "server", "index.ts"),
       content: `import { ${camel}Contract } from "@conclave/apps-sdk/${appId}/core";
 import {
+  actionOrderTable,
   defineAuthority,
   key,
+  nextActionOrder,
   reject,
   table,
   type Subject,
@@ -255,7 +257,7 @@ import {
  * The app's rules. This runs on the SFU and nowhere else: a browser never
  * loads it, and \`check:apps\` fails any web or native file that imports it.
  */
-type Entry = { id: string; subject: Subject; name: string; joinedAt: number };
+type Entry = { id: string; subject: Subject; name: string; joinedAt: number; order: number };
 
 const MAX_ENTRIES = 500;
 
@@ -263,6 +265,7 @@ export const ${camel}Authority = defineAuthority({
   contract: ${camel}Contract,
   tables: {
     entries: table<Entry>({ maxRows: MAX_ENTRIES }),
+    order: actionOrderTable(),
   },
   timers: {},
   canView: ({ role }) => role === "moderator" || role === "member",
@@ -272,6 +275,7 @@ export const ${camel}Authority = defineAuthority({
       rate: { burst: 5, perSecond: 1 },
       run(ctx, tx) {
         if (tx.count("entries") >= MAX_ENTRIES) reject("full");
+        const order = nextActionOrder(tx);
         // One entry per person: the key is the person. A second tab, a
         // reconnect or a retry lands on the same key and changes nothing.
         tx.insertIfAbsent("entries", key(ctx.subject), {
@@ -279,6 +283,7 @@ export const ${camel}Authority = defineAuthority({
           subject: ctx.subject,
           name: ctx.displayName,
           joinedAt: ctx.now,
+          order,
         });
         return null;
       },
@@ -310,6 +315,16 @@ export const ${camel}Authority = defineAuthority({
       owner: (row) => row.subject,
       project: () => ({ key: "entry", value: {} }),
     },
+  },
+  mergeSubjects(_ctx, tx, { from, into }) {
+    const entry = tx.get("entries", key(from));
+    if (!entry) return undefined;
+    tx.delete("entries", key(from));
+    const kept = tx.get("entries", key(into));
+    if (!kept || entry.order < kept.order) {
+      tx.put("entries", key(into), { ...entry, subject: into });
+    }
+    return undefined;
   },
 });
 `,

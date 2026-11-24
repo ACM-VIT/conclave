@@ -10,8 +10,10 @@ import {
   type PollResults,
 } from "@conclave/apps-sdk/polls/core";
 import {
+  actionOrderTable,
   defineAuthority,
   key,
+  nextActionOrder,
   reject,
   table,
   type Role,
@@ -34,6 +36,7 @@ type Ballot = {
   /** The voter's name when they voted, for the host's export. */
   voterName: string;
   votedAt: number;
+  order: number;
   optionIds: string[];
 };
 
@@ -68,6 +71,7 @@ export const pollsAuthority = defineAuthority({
   tables: {
     polls: table<PollRow>({ maxRows: MAX_POLLS_PER_ROOM }),
     ballots: table<Ballot>({ maxRows: MAX_BALLOTS }),
+    order: actionOrderTable(),
   },
   timers: {},
   // Meeting polls are for the people in the meeting. Webinar attendees never
@@ -136,6 +140,7 @@ export const pollsAuthority = defineAuthority({
           subject: ctx.subject,
           voterName: ctx.displayName,
           votedAt: ctx.now,
+          order: nextActionOrder(tx),
           optionIds,
         });
         if (inserted === "exists") reject("already-voted");
@@ -246,5 +251,30 @@ export const pollsAuthority = defineAuthority({
         value: { optionIds: [...ballot.optionIds] },
       }),
     },
+  },
+  mergeSubjects(_ctx, tx, { from, into }) {
+    for (const [, poll] of tx.scan("polls")) {
+      const ballot = tx.get("ballots", key(poll.id, from));
+      if (!ballot) continue;
+      tx.delete("ballots", key(poll.id, from));
+      const kept = tx.get("ballots", key(poll.id, into));
+      if (!kept) {
+        tx.put("ballots", key(poll.id, into), { ...ballot, subject: into });
+        continue;
+      }
+      const dropped = kept.order < ballot.order ? ballot : kept;
+      if (dropped === kept) tx.put("ballots", key(poll.id, into), { ...ballot, subject: into });
+      const votes = { ...poll.tally.votes };
+      for (const id of dropped.optionIds) {
+        const left = (votes[id] ?? 0) - 1;
+        if (left > 0) votes[id] = left;
+        else delete votes[id];
+      }
+      tx.put("polls", key(poll.id), {
+        ...poll,
+        tally: { voterCount: Math.max(0, poll.tally.voterCount - 1), votes },
+      });
+    }
+    return undefined;
   },
 });

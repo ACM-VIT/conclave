@@ -246,7 +246,7 @@ const toRoomSummary = (
   clientId: room.clientId,
   participants:
     room.getMeetingParticipantCount() + room.getWebinarAttendeeCount(),
-  pending: room.pendingClients.size,
+  pending: room.waitingGuestCount,
   admins: room.getAdmins().length,
   locked: room.isLocked,
   screenShare: Boolean(room.screenShareProducerId),
@@ -383,7 +383,7 @@ export const registerAdminGateway = (
         users,
         screen: Boolean(room.screenShareProducerId),
         locked: room.isLocked,
-        pendingCount: room.pendingClients.size,
+        pendingCount: room.waitingGuestCount,
       });
     }
     return occupancy;

@@ -103,6 +103,25 @@ export const table = <Row extends object>(options: {
   maxRowBytes: options.maxRowBytes ?? DEFAULT_MAX_ROW_BYTES,
 });
 
+export type ActionOrder = { last: number };
+
+export const ACTION_ORDER_TABLE = "order";
+
+const ACTION_ORDER_COUNTER = key("last");
+
+type ActionOrderTransaction = {
+  get(table: typeof ACTION_ORDER_TABLE, key: TableKey): Readonly<ActionOrder> | undefined;
+  put(table: typeof ACTION_ORDER_TABLE, key: TableKey, row: ActionOrder): void;
+};
+
+export const actionOrderTable = (): TableSpec<ActionOrder> => table<ActionOrder>({ maxRows: 1 });
+
+export const nextActionOrder = (tx: ActionOrderTransaction): number => {
+  const order = (tx.get(ACTION_ORDER_TABLE, ACTION_ORDER_COUNTER)?.last ?? 0) + 1;
+  tx.put(ACTION_ORDER_TABLE, ACTION_ORDER_COUNTER, { last: order });
+  return order;
+};
+
 export type Tables = Record<string, TableSpec<object>>;
 type TimerSchemas = Record<string, Schema<unknown>>;
 type RowOf<T extends Tables, K extends keyof T> =
@@ -211,6 +230,8 @@ export type TimerContext = {
   nextId(prefix?: string): string;
 };
 
+export type SubjectMerge = { readonly from: Subject; readonly into: Subject };
+
 export type RateLimit = { burst: number; perSecond: number };
 
 /**
@@ -314,6 +335,11 @@ export type AuthorityDefinition<
     ) => undefined;
   };
   views: { [K in ViewName<C>]: ViewDefinition<T, ViewRow<C, K>> };
+  mergeSubjects?: (
+    ctx: TimerContext,
+    tx: AuthorityTransaction<T, Timers>,
+    merge: SubjectMerge,
+  ) => undefined;
 };
 
 /* ---- What the host runs: the same definition with its types erased. ---- */
@@ -371,6 +397,11 @@ export type RuntimeDefinition = {
     (ctx: TimerContext, tx: RuntimeTransaction, payload: unknown) => unknown
   >;
   views: Record<string, RuntimeView>;
+  mergeSubjects?: (
+    ctx: TimerContext,
+    tx: RuntimeTransaction,
+    merge: SubjectMerge,
+  ) => unknown;
 };
 
 /** A server module: typed for its author, erased for the host. */
@@ -452,6 +483,12 @@ export const defineAuthority = <
         `App ${appId}: view ${name} reads unknown table "${view.source}"`,
       );
     }
+  }
+  const personal = Object.entries(runtime.views).find(([, view]) => view.kind === "personal");
+  if (personal && typeof runtime.mergeSubjects !== "function") {
+    throw new Error(
+      `App ${appId}: view ${personal[0]} keeps rows by person, so the app needs mergeSubjects`,
+    );
   }
 
   return { contract: definition.contract, runtime };
