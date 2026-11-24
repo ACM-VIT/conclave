@@ -562,18 +562,24 @@ class MicrophoneReplacementRecoveryTests {
             events.add("next call device loaded")
             unsafe.allocateInstance(FakeDevice::class.java) as org.mediasoup.droid.Device
         }
-        val (nextSocket, _) = silentSocketManager()
+        val (nextSocket, nextEmitted) = silentSocketManager()
         SocketIOManager::class.java.getDeclaredField("routerRtpCapabilitiesJson").apply { isAccessible = true }
             .set(nextSocket, "{\"codecs\":[],\"headerExtensions\":[]}")
         media.configure(nextSocket, unsafe.allocateInstance(RtpCapabilities::class.java) as RtpCapabilities, null)
+        val transports = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob()).async(start = CoroutineStart.UNDISPATCHED) {
+            runCatching { media.createTransports() }
+        }
         shadowOf(Looper.getMainLooper()).idle()
         assertEquals("the next call loaded its device while the previous call's lane still ran", emptyList<String>(), events.toList())
+        assertFalse("transport creation went ahead before the device loaded", transports.isCompleted)
+        assertEquals("transport creation signalled before the device loaded", emptyList<String>(), nextEmitted.toList())
 
         laneBusy.countDown()
         awaitLane(call.lane)
-        pumpMainLooperUntil { events.contains("next call device loaded") }
+        pumpMainLooperUntil { events.contains("next call device loaded") && nextEmitted.isNotEmpty() }
         assertEquals(listOf("old transport closed", "old call disposed", "next call device loaded"), events.toList())
         assertTrue(field("device").get(media) is FakeDevice)
+        assertTrue("transport creation never resumed after the device loaded", nextEmitted.isNotEmpty())
     }
 
     @Test
