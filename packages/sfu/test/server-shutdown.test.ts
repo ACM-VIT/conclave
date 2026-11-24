@@ -238,3 +238,43 @@ describe("an operator blocking a meeting's only host through the HTTP route", ()
   });
 });
 
+describe("an operator resetting a meeting through the HTTP route", () => {
+  it("keeps everyone who hosts it, through every tab they have open", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const sfu = makeSfu(createMemoryRoomRecoveryStore(), "sfu-a");
+    const hostTab = connect(sfu, host);
+    expect((await ask(hostTab, host)).status).toBe("joined");
+    const memberTab = connect(sfu, member);
+    await ask(memberTab, member);
+    await send(hostTab, "admitUser", { userId: member.userId });
+    expect((await ask(memberTab, member)).status).toBe("joined");
+    const memberAgain = { ...member, sessionId: "m2" } satisfies SfuAuthPayload;
+    const secondTab = connect(sfu, memberAgain);
+    expect((await ask(secondTab, memberAgain)).status).toBe("joined");
+    const otherTab = connect(sfu, removed);
+    await ask(otherTab, removed);
+    await send(hostTab, "admitUser", { userId: removed.userId });
+    expect((await ask(otherTab, removed)).status).toBe("joined");
+    expect(
+      await send(hostTab, "promoteHost", { userId: `${member.userId}#${member.sessionId}` }),
+    ).toMatchObject({ success: true });
+
+    const reset = await fetch(`${await serve(sfu)}/admin/rooms/${CODE}/users/remove-non-admins`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-sfu-secret": config.sfuSecret,
+        "x-sfu-client": "conclave",
+      },
+      body: JSON.stringify({}),
+    });
+    expect(reset.status).toBe(200);
+    const { kickedUserIds } = (await reset.json()) as { kickedUserIds: string[] };
+    expect(kickedUserIds).toEqual([`${removed.userId}#${removed.sessionId}`]);
+    const room = sfu.state.rooms.get(CHANNEL);
+    expect(room?.getClient(`${member.userId}#${member.sessionId}`)).toBeInstanceOf(Admin);
+    expect(room?.getClient(`${member.userId}#${memberAgain.sessionId}`)).toBeInstanceOf(Admin);
+    expect(room?.getClient(`${removed.userId}#${removed.sessionId}`)).toBeUndefined();
+  });
+});

@@ -143,8 +143,9 @@ type Step =
   | { kind: "host"; action: HostAction; by: ActorName; target: ActorName }
   | { kind: "end"; by: ActorName }
   | { kind: "restart" }
-  | { kind: "shutdown"; how: Shutdown; leaver: ActorName | null }
-  | { kind: "tick"; ms: number };
+  | { kind: "shutdown"; how: Shutdown; leaver: ActorName | null; noticeMs?: number }
+  | { kind: "tick"; ms: number }
+  | { kind: "untilDeadline"; beforeMs: number };
 
 type World = {
   random: () => number;
@@ -560,9 +561,13 @@ const describeStep = (step: Step): string => {
         stop: "the SFU is stopped (SIGTERM)",
         worker: "the room's media worker dies",
         handoff: "another SFU takes the room over",
-      }[step.how] + (step.leaver ? `, and ${step.leaver} leaves during the notice` : "");
+      }[step.how] +
+        (step.how === "drain" ? ` with ${(step.noticeMs ?? DRAIN_NOTICE_MS) / SECOND_MS} s notice` : "") +
+        (step.leaver ? `, and ${step.leaver} leaves during the notice` : "");
     case "tick":
       return `${step.ms / SECOND_MS} s pass`;
+    case "untilDeadline":
+      return `time runs to ${step.beforeMs / SECOND_MS} s before the room's next deadline`;
   }
 };
 
@@ -721,8 +726,8 @@ const restart = async (world: World): Promise<void> => {
 const DRAIN_NOTICE_MS = 2_000;
 
 const SHUTDOWNS = {
-  drain: (sfu: Sfu) =>
-    forceDrainRooms(sfu.state, sfu.io, { message: "Restarting", noticeMs: DRAIN_NOTICE_MS }),
+  drain: (sfu: Sfu, noticeMs: number) =>
+    forceDrainRooms(sfu.state, sfu.io, { message: "Restarting", noticeMs }),
   stop: (sfu: Sfu) => {
     handOffRooms(sfu.state);
     for (const peer of [...sfu.peers]) closePeer(sfu, peer, "server shutting down");
@@ -754,11 +759,12 @@ const shutDown = async (world: World, step: Extract<Step, { kind: "shutdown" }>)
   const cause = describeStep(step);
   switch (step.how) {
     case "drain": {
-      const drained = SHUTDOWNS.drain(sfu);
+      const noticeMs = step.noticeMs ?? DRAIN_NOTICE_MS;
+      const drained = SHUTDOWNS.drain(sfu, noticeMs);
       await settle();
       const leaver = step.leaver ? liveTab(world, world.actors[step.leaver]) : null;
       if (leaver) closePeer(sfu, leaver.peer, "client namespace disconnect");
-      await vi.advanceTimersByTimeAsync(DRAIN_NOTICE_MS);
+      await vi.advanceTimersByTimeAsync(noticeMs);
       await drained;
       await settle();
       await switchProcess(world);
@@ -848,6 +854,13 @@ const perform = async (world: World, step: Step): Promise<void> => {
     case "tick":
       await vi.advanceTimersByTimeAsync(step.ms);
       break;
+    case "untilDeadline": {
+      const now = Date.now();
+      const deadlines = roomDeadlines(world).filter((deadline) => deadline - step.beforeMs > now);
+      const target = deadlines.length > 0 ? Math.min(...deadlines) - step.beforeMs : now + SECOND_MS;
+      await vi.advanceTimersByTimeAsync(target - now);
+      break;
+    }
   }
   await settle();
   await followApprovals(world);
@@ -970,6 +983,17 @@ const check = async (
     for (const key of seatedKeys(room)) {
       if (shadow.ejected.has(key)) fail(`${key} still holds a seat after a host removed them`);
     }
+    const roles = new Map<string, Set<boolean>>();
+    for (const [seatId, client] of room.clients) {
+      const key = room.userKeysById.get(seatId);
+      if (!key || client.isObserver || client.isWebinarAttendee) continue;
+      const seen = roles.get(key) ?? new Set<boolean>();
+      seen.add(client instanceof Admin);
+      roles.set(key, seen);
+    }
+    for (const [key, seen] of roles) {
+      if (seen.size > 1) fail(`${key}'s tabs do not all have the same role`);
+    }
   }
 
   if (room && !room.hasEnded) {
@@ -1016,6 +1040,23 @@ const pick = <T>(random: () => number, options: Array<[number, () => T]>): T => 
     if (roll < 0) return make();
   }
   return options[options.length - 1][1]();
+};
+
+const roomDeadlines = (world: World): number[] => {
+  const room = liveRoom(world);
+  if (!room) return [];
+  const now = Date.now();
+  const openedAt = world.firstSeen.get(room.incarnationId);
+  return [
+    room.cleanupDeadline,
+    room.restorerState(now) === "awaited" ? room.restorerDeadline : null,
+    room.awaitingOpener && openedAt !== undefined ? openedAt + ROOM_OPEN_DEADLINE_MS : null,
+  ].filter((deadline): deadline is number => deadline !== null && deadline > now);
+};
+
+const pastNextDeadline = (world: World): number | null => {
+  const deadlines = roomDeadlines(world);
+  return deadlines.length > 0 ? Math.min(...deadlines) - Date.now() + SECOND_MS : null;
 };
 
 const nextStep = (world: World): Step => {
@@ -1079,6 +1120,19 @@ const nextStep = (world: World): Step => {
         kind: "shutdown",
         how,
         leaver: how === "drain" && random() < 0.5 ? anyone() : null,
+        noticeMs: random() < 0.5 ? DRAIN_NOTICE_MS : 30_000,
+      }),
+    ]);
+  }
+  const outlasting = pastNextDeadline(world);
+  if (outlasting !== null) {
+    options.push([
+      1.5,
+      () => ({
+        kind: "shutdown",
+        how: "drain",
+        leaver: random() < 0.3 ? anyone() : null,
+        noticeMs: outlasting,
       }),
     ]);
   }
@@ -1086,6 +1140,10 @@ const nextStep = (world: World): Step => {
   options.push([1.2, () => ({ kind: "tick", ms: ROOM_OPEN_DEADLINE_MS + SECOND_MS })]);
   options.push([0.6, () => ({ kind: "tick", ms: MINUTE_MS + SECOND_MS })]);
   options.push([0.5, () => ({ kind: "tick", ms: 8 * MINUTE_MS })]);
+  options.push([
+    0.6,
+    () => ({ kind: "untilDeadline", beforeMs: [500, 5_000, 20_000][Math.floor(random() * 3)] }),
+  ]);
   return pick(random, options);
 };
 
@@ -1114,9 +1172,10 @@ const runSequence = (seed: number): Promise<Outcome> =>
       follows: () => random() < 0.8,
       scheduled: random() < 0.5,
     });
+    const prelude = random() < 0.25 ? leftWaitingForHost(random) : [];
     for (let index = 0; index < STEPS_PER_SEQUENCE && world.failures.length === 0; index += 1) {
       await vi.advanceTimersByTimeAsync(BETWEEN_STEPS_MS);
-      await perform(world, nextStep(world));
+      await perform(world, prelude[index] ?? nextStep(world));
     }
     return { trace: world.trace, failures: world.failures };
   });
@@ -1152,6 +1211,18 @@ const host = (by: ActorName, action: HostAction, target: ActorName): Step => ({
   by,
   target,
 });
+
+const leftWaitingForHost = (random: () => number): Step[] => {
+  const opener = random() < 0.5 ? "alice" : "owner";
+  const stayer = random() < 0.5 ? "bob" : "carol";
+  return [
+    open(opener),
+    open(stayer),
+    host(opener, "admit", stayer),
+    host(opener, random() < 0.5 ? "revoke" : "blockStay", stayer),
+    { kind: "leave", actor: opener },
+  ];
+};
 
 describe("the room lifecycle model", () => {
   it("keeps the recovery of a lost call when the tab reopening it goes away before the room is claimed", async () => {
@@ -1360,6 +1431,30 @@ describe("the room lifecycle model", () => {
       host("alice", "kick", "owner"),
       { kind: "leave", actor: "alice" },
       host("invitee", "promote", "owner"),
+    ]);
+    expect(outcome.failures, report(outcome)).toEqual([]);
+  });
+
+  it("makes every tab of a person a host promotes a host", async () => {
+    const outcome = await runScript(false, [
+      open("alice"),
+      open("carol"),
+      host("alice", "admit", "carol"),
+      { kind: "second", actor: "carol", action: "open" },
+      host("alice", "promote", "carol"),
+    ]);
+    expect(outcome.failures, report(outcome)).toEqual([]);
+  });
+
+  it("does not let a host-wait timer end the meeting while the SFU drains", async () => {
+    const outcome = await runScript(false, [
+      open("alice"),
+      open("carol"),
+      host("alice", "admit", "carol"),
+      host("alice", "revoke", "carol"),
+      { kind: "leave", actor: "alice" },
+      { kind: "untilDeadline", beforeMs: 20_000 },
+      { kind: "shutdown", how: "drain", leaver: null, noticeMs: 30_000 },
     ]);
     expect(outcome.failures, report(outcome)).toEqual([]);
   });
