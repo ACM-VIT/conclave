@@ -637,10 +637,12 @@ Fixed 2026-10-22 and guarded by `testNativeCallCorrectnessBlockersStayFixed`:
   ready at once; a send transport and its Device are ready only after their
   `SendTransportLane` ran the close as its final operation (`retireAfter`),
   behind any produce still waiting for its ack. Disposal runs only while no
-  Device, transport or lane is live (at the next `configure()` or after
-  45 s idle), because destroying mediasoup's per-Device factory unregisters
-  its voiceengine JNI natives class-wide. Never dispose a transport or
-  Device directly, and never on a lane.
+  Device, transport or lane is live and every retired entry is ready (at the
+  next `configure()` or after 45 s idle), and then it disposes them all, so
+  a newer call's entry never goes ahead of an older call's unfinished lane.
+  Destroying mediasoup's per-Device factory unregisters its voiceengine JNI
+  natives class-wide, which would crash native work still running on any
+  lane. Never dispose a transport or Device directly, and never on a lane.
 - Every input that changes publish settings goes through
   `publishSettingsChanged()` on Android (camera and share settings, video
   quality), which bumps `mediaPublishSettingsRevision`. A video produce in

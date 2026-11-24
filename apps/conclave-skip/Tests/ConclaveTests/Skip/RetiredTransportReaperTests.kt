@@ -113,14 +113,14 @@ class RetiredTransportReaperTests {
         advance(2)
         reaper.disposeIfIdle()
         inCall = true
-        assertEquals(listOf("dispose old receive transport"), disposed())
+        assertEquals(emptyList<String>(), disposed())
 
         ack.countDown()
         produce.await()
         drain(lane)
         advance(120)
         reaper.disposeIfIdle()
-        assertEquals(listOf("dispose old receive transport"), disposed())
+        assertEquals(emptyList<String>(), disposed())
 
         inCall = false
         reaper.retire("new receive transport")
@@ -172,5 +172,68 @@ class RetiredTransportReaperTests {
         assertEquals(listOf("close orphan"), events.toList())
         reaper.disposeIfIdle()
         assertEquals(listOf("close orphan", "dispose orphan"), events.toList())
+    }
+
+    private fun heldLane(name: String): Pair<SendTransportLane, CountDownLatch> {
+        val lane = SendTransportLane(name)
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        lane.post {
+            entered.countDown()
+            release.await(30, TimeUnit.SECONDS)
+        }
+        assertTrue(entered.await(3, TimeUnit.SECONDS))
+        return lane to release
+    }
+
+    @Test
+    fun aNewerCallsReadyEntryWaitsForAnOlderCallsLaneToFinish() {
+        val (olderLane, olderRelease) = heldLane("ReaperOlderCall")
+        reaper.retireAfter(olderLane, "older call") { events.add("close older call") }
+        val (newerLane, newerRelease) = heldLane("ReaperNewerCall")
+        reaper.retireAfter(newerLane, "newer call") { events.add("close newer call") }
+
+        newerRelease.countDown()
+        drain(newerLane)
+        reaper.disposeIfIdle()
+        advance(60)
+        assertEquals(emptyList<String>(), disposed())
+
+        olderRelease.countDown()
+        drain(olderLane)
+        reaper.disposeIfIdle()
+        assertEquals(setOf("dispose older call", "dispose newer call"), disposed().toSet())
+    }
+
+    @Test
+    fun nothingIsDisposedWhileAnyRetiredLaneIsUnfinishedInAnyFinishOrder() {
+        val calls = 5
+        repeat(25) { seed ->
+            val random = java.util.Random(seed.toLong())
+            events.clear()
+            var readyAtOnce = 0
+            val lanes = (0 until calls).map { index ->
+                heldLane("ReaperRandom-$seed-$index").also { (lane, _) ->
+                    reaper.retireAfter(lane, "call $index") { events.add("close call $index") }
+                    if (random.nextBoolean()) {
+                        reaper.retire("receive transport $index")
+                        readyAtOnce += 1
+                    }
+                }
+            }
+            val finishOrder = (0 until calls).shuffled(random)
+            finishOrder.forEachIndexed { step, index ->
+                val (lane, release) = lanes[index]
+                release.countDown()
+                drain(lane)
+                reaper.disposeIfIdle()
+                advance(random.nextInt(90).toLong())
+                if (step < finishOrder.lastIndex) {
+                    assertEquals("seed $seed after ${step + 1} of $calls lanes finished", emptyList<String>(), disposed())
+                }
+            }
+            reaper.disposeIfIdle()
+            assertEquals("seed $seed", calls + readyAtOnce, disposed().size)
+        }
     }
 }

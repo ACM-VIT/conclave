@@ -46,7 +46,8 @@ internal class RetiredTransportReaper<T : Any>(
         if (Looper.myLooper() != handler.looper) return
         if (!isIdle()) return
         val batch = synchronized(retired) {
-            retired.filter { it.ready }.also { ready -> retired.removeAll(ready) }
+            if (retired.any { !it.ready }) return
+            retired.toList().also { retired.clear() }
         }
         for (entry in batch) dispose(entry.item)
     }
