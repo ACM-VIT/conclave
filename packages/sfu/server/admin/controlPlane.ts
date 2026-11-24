@@ -1265,7 +1265,7 @@ export const settleUnclaimedRoom = (
     return;
   }
   room.awaitingOpener = null;
-  if (unclaimed.lost) {
+  if (unclaimed.lost && Date.now() <= unclaimed.lost.claimableUntil) {
     room.awaitRestorer({
       until: unclaimed.lost.claimableUntil,
       rosterKnown: true,
@@ -1273,6 +1273,7 @@ export const settleUnclaimedRoom = (
     });
     return;
   }
+  if (unclaimed.lost) room.endLostCall();
   ensureHost(io, state, room);
 };
 
