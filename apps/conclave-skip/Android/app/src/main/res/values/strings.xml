@@ -263,6 +263,7 @@
     <string name="sys_diag_failed">Couldn’t create the diagnostics file.</string>
     <string name="sys_diag_fixture_error">Record test error</string>
     <string name="sys_diag_fixture_hang">Simulate hang</string>
+    <string name="sys_diag_fixture_crash">Force test crash</string>
     <string name="sys_share_failed">Couldn’t start screen sharing. Try again.</string>
     <string name="sys_share_interrupted">Screen sharing stopped. Share your screen again.</string>
     <string name="sys_err_screen_denied">Screen sharing isn’t allowed on this device.</string>
@@ -1420,6 +1421,7 @@
     <string name="set_message_notifications">Message notifications</string>
     <string name="set_message_notifications_desc">Get notified about private messages and mentions while you’re in another app</string>
     <string name="set_always_show_controls">Always show controls</string>
+    <string name="set_crash_reports">Share crash reports</string>
     <string name="set_haptics">Haptics</string>
     <string name="set_name">Name</string>
     <string name="set_name_reconnect">Reconnect before updating your name</string>

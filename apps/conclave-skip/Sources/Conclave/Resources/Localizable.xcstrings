@@ -2532,6 +2532,9 @@
     "Force Opaque Controls" : {
       "extractionState" : "manual"
     },
+    "Force Test Crash" : {
+      "extractionState" : "manual"
+    },
     "Frame Rate" : {
       "extractionState" : "manual"
     },
@@ -5072,6 +5075,9 @@
       "extractionState" : "manual"
     },
     "Share Again" : {
+      "extractionState" : "manual"
+    },
+    "Share Crash Reports" : {
       "extractionState" : "manual"
     },
     "Share Device Audio" : {
