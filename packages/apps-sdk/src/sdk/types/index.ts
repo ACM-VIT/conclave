@@ -11,6 +11,7 @@ export type AppUser = {
 export type AppsState = {
   activeAppId: string | null;
   locked: boolean;
+  notInRoom?: true;
 };
 
 export type AppsSyncPayload = {

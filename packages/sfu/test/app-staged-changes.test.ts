@@ -298,6 +298,17 @@ describe("app changes sent in parts", () => {
   });
 });
 
+describe("app state answers", () => {
+  it("say a socket is not in a room yet instead of saying no app is open", async () => {
+    const room = await boardRoom("state-answer");
+    expect(await room.getState()).toMatchObject({ activeAppId: "board", locked: false });
+
+    room.leave();
+
+    expect(await room.getState()).toEqual({ activeAppId: null, locked: false, notInRoom: true });
+  });
+});
+
 describe("app changes over random histories, through the real handler and worker", () => {
   const seeded = (seed: number) => {
     let state = seed >>> 0;

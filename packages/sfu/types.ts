@@ -1126,6 +1126,7 @@ export interface AppsState {
   activeAppId: string | null;
   locked: boolean;
   roomId?: string;
+  notInRoom?: true;
 }
 
 export interface AppsOpenData {

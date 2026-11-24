@@ -148,6 +148,10 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
   const documents = context.state.appDocuments;
 
   socket.on("apps:getState", (callback: (state: AppsState) => void) => {
+    if (!context.currentRoom) {
+      respond(callback, { activeAppId: null, locked: false, notInRoom: true });
+      return;
+    }
     respond(callback, getRoomAppsState(context));
   });
 

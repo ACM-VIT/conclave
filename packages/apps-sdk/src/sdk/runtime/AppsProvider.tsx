@@ -209,12 +209,13 @@ export function AppsProvider({
   const unsentAppsRef = useRef<Set<string>>(new Set());
   const syncedAppsRef = useRef<Set<string>>(new Set());
   const catchUpsRef = useRef<Map<string, number[]>>(new Map());
+  const reconnectedRef = useRef(false);
   const stagesPartsRef = useRef<boolean | null>(null);
   const [uploads] = useState(() =>
     createUploadQueue(
       (appId, replicaId, update, part) => {
         const currentSocket = socketRef.current;
-        if (!currentSocket?.connected) return false;
+        if (!currentSocket?.connected || reconnectedRef.current) return false;
         const payload: AppsUpdatePayload = part ? { appId, update, replicaId, part } : { appId, update, replicaId };
         currentSocket.emit("apps:yjs:update", payload);
         return true;
@@ -280,6 +281,7 @@ export function AppsProvider({
     awarenessHandlersRef.current.clear();
     uploads.clear();
     stagesPartsRef.current = null;
+    reconnectedRef.current = false;
     catchUpsRef.current.clear();
     initialUpdateSentRef.current.clear();
     replicaIdsRef.current.clear();
@@ -683,6 +685,9 @@ export function AppsProvider({
 
   const applyServerAppsState = useCallback(
     (next: AppsState) => {
+      if (next.notInRoom) return;
+      const reconnected = reconnectedRef.current;
+      reconnectedRef.current = false;
       const previous = serverActiveAppIdRef.current;
       serverActiveAppIdRef.current = next.activeAppId;
       lockedRef.current = next.locked;
@@ -699,10 +704,12 @@ export function AppsProvider({
         else setSyncStatus("idle");
       } else {
         resumeWrites();
+        const replicaId = previous ? replicaIdsRef.current.get(previous) : undefined;
+        if (reconnected && previous && replicaId && syncedAppsRef.current.has(previous)) catchUp(previous, replicaId);
       }
       setState(next);
     },
-    [discardLocalApp, startSync, stopSync, resumeWrites],
+    [discardLocalApp, startSync, stopSync, resumeWrites, catchUp],
   );
 
   const refreshState = useCallback(() => {
@@ -768,10 +775,7 @@ export function AppsProvider({
     const handleConnect = () => {
       if (interrupted) {
         interrupted = false;
-        refreshState();
-        const appId = serverActiveAppIdRef.current;
-        const replicaId = appId ? replicaIdsRef.current.get(appId) : undefined;
-        if (appId && replicaId && syncedAppsRef.current.has(appId)) catchUp(appId, replicaId);
+        reconnectedRef.current = true;
       }
       uploads.wake();
     };
@@ -793,7 +797,7 @@ export function AppsProvider({
       socket.off("disconnect", handleDisconnect);
       socket.off("connect", handleConnect);
     };
-  }, [socket, getDoc, getAwareness, refreshState, applyServerAppsState, recoverFromRefusal, catchUp, uploads]);
+  }, [socket, getDoc, getAwareness, refreshState, applyServerAppsState, recoverFromRefusal, uploads]);
 
   useEffect(() => {
     resumeWrites();

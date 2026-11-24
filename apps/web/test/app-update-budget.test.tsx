@@ -61,6 +61,8 @@ const budgetedSfu = (appId: string, serverDoc: Y.Doc) => {
     stagesParts: false,
     docLimit: Number.POSITIVE_INFINITY,
     activeAppId: appId as string | null,
+    joined: true,
+    rejoinDelayMs: 0,
     refusedReplicas: new Set<string>(),
   };
   const syncPayloads: Array<{ wholeChanges?: boolean }> = [];
@@ -98,7 +100,7 @@ const budgetedSfu = (appId: string, serverDoc: Y.Doc) => {
     off: (event: string, listener: Listener) => listeners.get(event)?.delete(listener),
     emit: (event: string, payload?: unknown, ack?: Ack) => {
       if (event === "apps:getState" && typeof payload === "function") {
-        (payload as Ack)({ activeAppId: state.activeAppId, locked: false });
+        (payload as Ack)(state.joined ? { activeAppId: state.activeAppId, locked: false } : { activeAppId: null, locked: false, notInRoom: true });
         return;
       }
       if (event === "apps:yjs:sync" && typeof ack === "function") {
@@ -118,7 +120,7 @@ const budgetedSfu = (appId: string, serverDoc: Y.Doc) => {
       sentAt.push(Date.now());
       sentBytes.push(update.length);
       if (part) partsSeen.push(part);
-      if (state.refusedReplicas.has(replicaId)) return;
+      if (!state.joined || state.refusedReplicas.has(replicaId)) return;
       if (!takeToken(limiter, "apps:yjs:update", RATE_LIMITS.appsYjsUpdate)) {
         refuse(replicaId, "rate-limited");
         return;
@@ -148,12 +150,17 @@ const budgetedSfu = (appId: string, serverDoc: Y.Doc) => {
     sentAt.reduce((most, start, index) => Math.max(most, sentAt.slice(index).filter((time) => time < start + 1_000).length), 0);
   const interrupt = () => {
     (socket as unknown as { connected: boolean }).connected = false;
+    state.joined = false;
     staged = null;
     fire("disconnect", "transport close");
   };
   const restore = () => {
     (socket as unknown as { connected: boolean }).connected = true;
     fire("connect", undefined);
+    setTimeout(() => {
+      state.joined = true;
+      fire("apps:state", { activeAppId: state.activeAppId, locked: false });
+    }, state.rejoinDelayMs);
   };
   const dropStaging = () => {
     staged = null;
@@ -566,6 +573,52 @@ describe("app updates stay inside the server's budget", () => {
 
     expect(ctx.state.activeAppId).toBeNull();
     expect(sfu.sentAt).toHaveLength(sentBefore);
+  });
+
+  it("keeps an offline edit through an in-place reconnect whose room rejoin takes 350 ms", async () => {
+    const server = new Y.Doc();
+    const sfu = budgetedSfu("dev-playground", server);
+    sfu.state.stagesParts = true;
+    await mount(sfu.socket, () => null, [{ id: "dev-playground", name: "Dev" } as never]);
+    const live = ctx.getDoc("dev-playground");
+    await act(async () => sfu.interrupt());
+    await act(async () => addItem(live, "drawn offline"));
+    sfu.state.rejoinDelayMs = 350;
+
+    await act(async () => sfu.restore());
+    await advance(100);
+    await act(async () => {
+      ctx.refreshState();
+    });
+    await advance(3_000);
+
+    expect(ctx.getDoc("dev-playground")).toBe(live);
+    expect(getItems(live)).toEqual(["drawn offline"]);
+    expect(getItems(server)).toEqual(["drawn offline"]);
+    expect(sfu.reasons).toEqual([]);
+  });
+
+  it("sends nothing between an in-place reconnect and its room rejoin, and an edit made in between lands after it", async () => {
+    const server = new Y.Doc();
+    addItem(server, "saved");
+    const sfu = budgetedSfu("dev-playground", server);
+    sfu.state.stagesParts = true;
+    await mount(sfu.socket, () => null, [{ id: "dev-playground", name: "Dev" } as never]);
+    const live = ctx.getDoc("dev-playground");
+    await act(async () => sfu.interrupt());
+    sfu.state.rejoinDelayMs = 400;
+    const sentBefore = sfu.sentAt.length;
+
+    await act(async () => sfu.restore());
+    await advance(100);
+    await act(async () => addItem(live, "drawn before the rejoin"));
+    await advance(250);
+    expect(sfu.sentAt).toHaveLength(sentBefore);
+    await advance(3_000);
+
+    expect(ctx.getDoc("dev-playground")).toBe(live);
+    expect(getItems(server)).toEqual(["saved", "drawn before the rejoin"]);
+    expect(sfu.reasons).toEqual([]);
   });
 
   it("treats a refused part as passing: it resends the whole change from a fresh sync and keeps the local copy", async () => {

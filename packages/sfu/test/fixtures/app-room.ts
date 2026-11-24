@@ -172,6 +172,7 @@ export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChang
     },
     peer,
     strangerIn,
+    getState: () => call("apps:getState"),
     open: () => call("apps:open", { appId: "board" }),
     close: () => call("apps:close"),
     send: (update: Uint8Array, replicaId?: string, part?: unknown) =>
