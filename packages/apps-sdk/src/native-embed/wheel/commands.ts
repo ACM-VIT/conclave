@@ -101,6 +101,32 @@ export const runWheelCommand = (
     case "clearResults":
       clearHistory(doc);
       return { ok: true };
+    case "snapshot":
+    case "update":
+    case "awareness":
+    case "status":
+    case "resync":
+    case "close":
+    case "setTool":
+    case "setColor":
+    case "setStrokeWidth":
+    case "setFill":
+    case "undo":
+    case "redo":
+    case "setPage":
+    case "addPage":
+    case "renamePage":
+    case "deletePage":
+    case "zoomToFit":
+    case "export":
+    case "playNow":
+    case "enqueue":
+    case "request":
+    case "approve":
+    case "decline":
+    case "cancelRequest":
+    case "move":
+    case "remove":
     default:
       return { ok: false, error: "unknownCommand" };
   }
