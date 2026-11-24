@@ -378,6 +378,21 @@ const fetchOptionalGoogleBusy = async (
   }
 };
 
+const hostBusyAround = async (
+  state: SfuState,
+  profileId: string,
+  connection: SchedulingCalendarConnection | null,
+  eventType: SchedulingEventType,
+  slotsFrom: number,
+  slotsTo: number,
+): Promise<BusyInterval[]> => {
+  const busyFrom = slotsFrom - eventType.bufferBeforeMinutes * MINUTE_MS;
+  const busyTo = slotsTo + eventType.bufferAfterMinutes * MINUTE_MS;
+  const internal = await state.controlPlane.read(hostBusyIntervals(profileId, busyFrom, busyTo));
+  const google = await fetchOptionalGoogleBusy(state, connection, eventType, busyFrom, busyTo);
+  return [...internal, ...google];
+};
+
 const createGoogleCalendarEvent = async (
   state: SfuState,
   connection: SchedulingCalendarConnection,
@@ -755,23 +770,19 @@ export const registerSchedulingRoutes = (
         res.json({ slots: [] });
         return;
       }
-      const busyFrom = slotFrom - eventType.bufferBeforeMinutes * MINUTE_MS;
-      const busyTo = slotTo + eventType.bufferAfterMinutes * MINUTE_MS;
-      const internalBusy = await state.controlPlane.read(
-        hostBusyIntervals(target.profile.value.id, busyFrom, busyTo),
-      );
-      const googleBusy = await fetchOptionalGoogleBusy(
+      const busyIntervals = await hostBusyAround(
         state,
+        target.profile.value.id,
         isCalendarUsable(target.calendar) ? target.calendar : null,
         eventType,
-        busyFrom,
-        busyTo,
+        slotFrom,
+        slotTo,
       );
       res.json({
         slots: generateAvailableSlots({
           eventType,
           availability: availabilityFor(target),
-          busyIntervals: [...internalBusy, ...googleBusy],
+          busyIntervals,
           from: slotFrom,
           to: slotTo,
           now,
@@ -816,20 +827,11 @@ export const registerSchedulingRoutes = (
         const endAt = startAt + eventType.durationMinutes * MINUTE_MS;
         const rangeFrom = startAt - 60_000;
         const rangeTo = endAt + 60_000;
-        const internalBusy = await state.controlPlane.read(
-          hostBusyIntervals(profile.id, rangeFrom, rangeTo),
-        );
-        const googleBusy = await fetchOptionalGoogleBusy(
-          state,
-          calendar,
-          eventType,
-          rangeFrom,
-          rangeTo,
-        );
+        const busyIntervals = await hostBusyAround(state, profile.id, calendar, eventType, rangeFrom, rangeTo);
         const offered = generateAvailableSlots({
           eventType,
           availability: availabilityFor(target),
-          busyIntervals: [...internalBusy, ...googleBusy],
+          busyIntervals,
           from: rangeFrom,
           to: rangeTo,
           timeZone: profile.timeZone,

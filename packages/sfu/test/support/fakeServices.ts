@@ -39,7 +39,10 @@ export class FakeGoogle {
     }
     if (url.pathname.endsWith("/freeBusy")) {
       await this.gates.admit("freebusy", url.pathname);
-      const busy = this.busy.map((entry) => ({
+      const window = JSON.parse(String(init?.body ?? "{}")) as { timeMin?: string; timeMax?: string };
+      const from = window.timeMin ? Date.parse(window.timeMin) : -Infinity;
+      const to = window.timeMax ? Date.parse(window.timeMax) : Infinity;
+      const busy = this.busy.filter((entry) => entry.startAt < to && entry.endAt > from).map((entry) => ({
         start: new Date(entry.startAt).toISOString(),
         end: new Date(entry.endAt).toISOString(),
       }));

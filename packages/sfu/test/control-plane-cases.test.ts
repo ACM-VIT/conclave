@@ -541,6 +541,26 @@ describe.each(sharedModes)("two SFUs on one %s store", (current) => {
   });
 });
 
+describe("one SFU booking an event type with buffers", () => {
+  it("refuses a time whose buffer overlaps a Google Calendar event, as the slot list does", async () => {
+    const a = await start("A");
+    const { username, eventTypeId } = await setUpHost(a);
+    expect((await host(a, "PATCH", `/scheduling/event-types/${eventTypeId}`, { bufferBeforeMinutes: 15, bufferAfterMinutes: 15 })).status).toBe(200);
+    await connectCalendar(a);
+    const startAt = slotAfter(2 * DAY_MS);
+    google.busy.push({ startAt: startAt - 40 * 60_000, endAt: startAt - 10 * 60_000 });
+    google.busy.push({ startAt: startAt + HALF_HOUR + 5 * 60_000, endAt: startAt + HALF_HOUR + 20 * 60_000 });
+    const slots = field<Array<{ startAt: number }>>(
+      await a.call("GET", `/scheduling/public/${username}/intro/slots?from=${startAt - DAY_MS}&to=${startAt + DAY_MS}`),
+      "slots",
+    );
+    expect(slots.length).toBeGreaterThan(0);
+    expect(slots.some((slot) => slot.startAt === startAt)).toBe(false);
+    expect((await book(a, username, startAt)).status).toBe(409);
+    expect(await bookings(a)).toEqual([]);
+  });
+});
+
 describe("one SFU on a JSON store", () => {
   beforeEach(() => configure("json"));
 
