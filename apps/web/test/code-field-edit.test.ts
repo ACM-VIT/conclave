@@ -15,7 +15,7 @@ const ORIGINS = ["https://conclave.acmvit.in", "http://localhost:3615"];
 const normalizeField = normalizeCodeField;
 
 const plan = (value: string, start: number, end: number, text: string) =>
-  planFieldEdit(value, start, end, text, sanitizeRoomCodeInput, ROOM_CODE_MAX_LENGTH);
+  planFieldEdit(value, start, end, text, sanitizeRoomCodeInput);
 
 const applied = (value: string, edit: FieldEdit) =>
   value.slice(0, edit.start) + edit.text + value.slice(edit.end);
@@ -49,10 +49,15 @@ describe("planning an edit to the join code field", () => {
     expect(plan("abc-def", 0, 3, "")).toEqual({ start: 0, end: 4, text: "" });
   });
 
-  it("keeps the field within its length cap", () => {
-    const nearlyFull = `${"a".repeat(30)}-${"b".repeat(31)}`;
-    expect(plan(nearlyFull, 30, 30, "wxyz")).toEqual({ start: 30, end: 30, text: "wx" });
-    expect(plan("a".repeat(ROOM_CODE_MAX_LENGTH), 10, 10, "b")).toEqual({ start: 10, end: 10, text: "" });
+  it("never truncates what is typed or pasted", () => {
+    const link = `https://conclave.acmvit.in/${"a".repeat(40)}`;
+    expect(planFieldEdit("", 0, 0, link, normalizeField)).toEqual({ start: 0, end: 0, text: link });
+    const long = "a".repeat(ROOM_CODE_MAX_LENGTH + 10);
+    expect(planFieldEdit(long, long.length, long.length, "b", normalizeField)).toEqual({
+      start: long.length,
+      end: long.length,
+      text: "b",
+    });
   });
 
   it("always plans one edit that covers the selection and leaves a final value", () => {
@@ -71,8 +76,7 @@ describe("planning an edit to the join code field", () => {
       const end = start + Math.floor(random() * (value.length - start + 1));
       const text = pickText("aB- 1", 4);
       const edit = plan(value, start, end, text);
-      const fits = text.slice(0, ROOM_CODE_MAX_LENGTH - (value.length - (end - start)));
-      const naive = value.slice(0, start) + fits + value.slice(end);
+      const naive = value.slice(0, start) + text + value.slice(end);
       const result = applied(value, edit);
       const native = edit.start === start && edit.end === end && edit.text === text;
       if (!native) takeOvers += 1;
@@ -81,7 +85,7 @@ describe("planning an edit to the join code field", () => {
         edit.end >= end &&
         result === sanitizeRoomCodeInput(naive) &&
         sanitizeRoomCodeInput(result) === result &&
-        native === (fits === text && sanitizeRoomCodeInput(naive) === naive) &&
+        native === (sanitizeRoomCodeInput(naive) === naive) &&
         JSON.stringify(plan(value, edit.start, edit.end, edit.text)) === JSON.stringify(edit);
       if (!ok) failures.push(JSON.stringify({ value, start, end, text, edit }));
     }
@@ -303,7 +307,7 @@ describe("every kind of edit to the code field", () => {
       const browser = new ReferenceHistory();
       let field = at("", 0);
       const commit = (from: number, to: number, text: string, typing: boolean) => {
-        const planned = planFieldEdit(field.value, from, to, text, normalizeField, ROOM_CODE_MAX_LENGTH);
+        const planned = planFieldEdit(field.value, from, to, text, normalizeField);
         if (planned.start === planned.end && !planned.text) {
           history.seal();
           browser.seal();

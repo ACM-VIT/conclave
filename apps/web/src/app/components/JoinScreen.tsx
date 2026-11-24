@@ -37,13 +37,13 @@ import {
 } from "../lib/constants";
 import {
   generateRoomCode,
-  ROOM_CODE_MAX_LENGTH,
   PASTED_INPUT,
   applyFieldEdit,
   inputEditRange,
   normalizeCodeField,
   parseCodeFieldPaste,
   planFieldEdit,
+  resolveCodeField,
   roomCodeFromField,
   sanitizeInstitutionDisplayName,
   trackFieldHistory,
@@ -336,6 +336,7 @@ function JoinScreen({
   const isRoutedRoom = forceJoinOnly;
   const nameInputId = useId();
   const codeInputId = useId();
+  const codeProblemId = useId();
 
   useEffect(() => {
     prefetchConclaveAnimation();
@@ -1150,14 +1151,7 @@ function JoinScreen({
     text: string,
     nativeTyping: boolean,
   ) => {
-    const edit = planFieldEdit(
-      input.value,
-      start,
-      end,
-      text,
-      normalizeCode,
-      ROOM_CODE_MAX_LENGTH,
-    );
+    const edit = planFieldEdit(input.value, start, end, text, normalizeCode);
     if (nativeTyping && edit.start === start && edit.end === end && edit.text === text) return;
     event.preventDefault();
     applyFieldEdit(input, edit);
@@ -1199,10 +1193,7 @@ function JoinScreen({
     const settleField = () => {
       if (input.value === normalizeCode(input.value)) return;
       const caret = input.selectionEnd ?? input.value.length;
-      applyFieldEdit(
-        input,
-        planFieldEdit(input.value, caret, caret, "", normalizeCode, ROOM_CODE_MAX_LENGTH),
-      );
+      applyFieldEdit(input, planFieldEdit(input.value, caret, caret, "", normalizeCode));
     };
     const onInput = (event: Event) => {
       if (!(event instanceof InputEvent) || event.isComposing) return;
@@ -1221,7 +1212,8 @@ function JoinScreen({
     };
   };
 
-  const joinCode = roomCodeFromField(normalizedRoomId, getMeetingLinkOrigins());
+  const codeResolution = resolveCodeField(normalizedRoomId, getMeetingLinkOrigins());
+  const joinCode = codeResolution.code;
   const canJoin = joinCode.length > 0;
   const nameReady = hasIdentity || liveDisplayName.length > 0;
 
@@ -1658,11 +1650,20 @@ function JoinScreen({
                       joinMeeting();
                     }}
                     placeholder="Enter a code or link"
-                    maxLength={ROOM_CODE_MAX_LENGTH}
                     readOnly={isRoutedRoom}
                     autoFocus={isRoutedRoom}
-                    className={`${FIELD} pr-12`}
+                    aria-invalid={codeResolution.tooLong || undefined}
+                    aria-describedby={codeResolution.tooLong ? codeProblemId : undefined}
+                    className={`${FIELD} ${codeResolution.tooLong ? "pr-32" : "pr-12"}`}
                   />
+                  {codeResolution.tooLong ? (
+                    <span
+                      id={codeProblemId}
+                      className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rounded-md bg-[#141416] px-1.5 text-[12px] text-[#fafafa]/55"
+                    >
+                      Code too long
+                    </span>
+                  ) : null}
                   {inviteLink && linkCopy.status === "failed" ? (
                     <span
                       aria-hidden="true"

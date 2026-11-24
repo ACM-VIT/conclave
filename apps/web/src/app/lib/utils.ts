@@ -152,6 +152,7 @@ export type CodeFieldPaste =
   | { kind: "replace"; code: string };
 
 const ROOM_CODE_TEXT = /^[a-z0-9-]+$/i;
+const ROOM_CODE_SHAPE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const MEETING_LINK = new RegExp(
   String.raw`^(?:(?<scheme>https?:)?\/\/)?(?<authority>[^\/?#\\\s@]+)\/(?<segment>[^\/?#\\\s]+)\/?(?:[?#]\S*)?$`,
   "i",
@@ -175,7 +176,7 @@ const linkRoomCode = (segment: string) => {
   }
   if (!ROOM_CODE_TEXT.test(decoded)) return null;
   const code = decoded.toLowerCase();
-  return !NOT_ROOM_CODES.has(code) && sanitizeRoomCode(code) === code ? code : null;
+  return !NOT_ROOM_CODES.has(code) && ROOM_CODE_SHAPE.test(code) ? code : null;
 };
 
 export function parseCodeFieldPaste(
@@ -194,14 +195,26 @@ export function parseCodeFieldPaste(
 const URL_PUNCTUATION = /[:/.?#@%=&+~\\]/;
 
 export const normalizeCodeField = (value: string) =>
-  URL_PUNCTUATION.test(value) ? value : value.toLowerCase();
+  URL_PUNCTUATION.test(value)
+    ? value
+    : value.toLowerCase().replace(/(\S)\s+(?=\S)/g, "$1-").replace(/-+/g, "-");
 
-export function roomCodeFromField(value: string, conclaveOrigins: readonly string[]): string {
+export type CodeFieldResolution = { code: string; tooLong: boolean };
+
+export function resolveCodeField(
+  value: string,
+  conclaveOrigins: readonly string[],
+): CodeFieldResolution {
   const paste = parseCodeFieldPaste(value, conclaveOrigins);
-  if (paste?.kind === "replace") return paste.code;
-  const code = value.trim();
-  return code && sanitizeRoomCode(code) === code ? code : "";
+  const candidate = paste?.kind === "replace" ? paste.code : value.trim();
+  if (!ROOM_CODE_SHAPE.test(candidate)) return { code: "", tooLong: false };
+  return candidate.length > ROOM_CODE_MAX_LENGTH
+    ? { code: "", tooLong: true }
+    : { code: candidate, tooLong: false };
 }
+
+export const roomCodeFromField = (value: string, conclaveOrigins: readonly string[]) =>
+  resolveCodeField(value, conclaveOrigins).code;
 
 export type FieldEdit = { start: number; end: number; text: string };
 
@@ -211,10 +224,8 @@ export function planFieldEdit(
   end: number,
   text: string,
   normalize: (value: string) => string,
-  maxLength: number,
 ): FieldEdit {
-  const fits = text.slice(0, Math.max(0, maxLength - (value.length - (end - start))));
-  const next = normalize(value.slice(0, start) + fits + value.slice(end));
+  const next = normalize(value.slice(0, start) + text + value.slice(end));
   let head = 0;
   while (head < start && value[head] === next[head]) head += 1;
   let tail = 0;

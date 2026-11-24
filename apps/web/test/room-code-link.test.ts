@@ -1,6 +1,11 @@
 import { domainToASCII } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { normalizeCodeField, parseCodeFieldPaste, roomCodeFromField } from "../src/app/lib/utils";
+import {
+  normalizeCodeField,
+  parseCodeFieldPaste,
+  resolveCodeField,
+  roomCodeFromField,
+} from "../src/app/lib/utils";
 import { getMeetingLinkOrigins, getPublicSiteUrl } from "../src/lib/site-url";
 
 const KNOWN_ORIGINS = [
@@ -170,7 +175,7 @@ const expectedReplacement = (
   }
   const code = decoded.toLowerCase();
   const isCode = /^[a-z0-9]+(?:-[a-z0-9]+)*$/i.test(decoded);
-  return isCode && code.length <= 64 && !APP_PAGES.has(code) ? code : null;
+  return isCode && !APP_PAGES.has(code) ? code : null;
 };
 
 const seededRandom = (seed: number) => () => {
@@ -386,9 +391,12 @@ describe("pasting into the join code field", () => {
 
 const URL_PUNCTUATION = /[:/.?#@%=&+~\\]/;
 
-const typedSoFar = (text: string) => {
+const referenceCodeText = (text: string) =>
+  text.toLowerCase().replace(/(\S)\s+(?=\S)/g, "$1-").replace(/-+/g, "-");
+
+const referenceTyped = (text: string) => {
   const cut = text.search(URL_PUNCTUATION);
-  return cut === -1 ? text.toLowerCase() : text.slice(0, cut).toLowerCase() + text.slice(cut);
+  return cut === -1 ? referenceCodeText(text) : referenceCodeText(text.slice(0, cut)) + text.slice(cut);
 };
 
 const typeIntoField = (text: string) => {
@@ -402,19 +410,23 @@ const typeIntoField = (text: string) => {
 };
 
 const referenceFieldCode = (value: string, origins: readonly string[]) => {
-  const link = expectedReplacement(value, origins);
-  if (link) return link;
-  const code = value.trim();
+  const code = expectedReplacement(value, origins) ?? value.trim();
   return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(code) && code.length <= 64 ? code : "";
 };
+
+const CODE_40 = "abcdefgh-abcdefgh-abcdefgh-abcdefgh-abcd";
 
 const TEAM_ORIGINS = [...KNOWN_ORIGINS, "https://team-meet.example"];
 
 describe("typing into the join code field", () => {
-  it("keeps typed text as typed, lowercasing only text without URL punctuation", () => {
+  it("tidies plain codes and leaves text with URL punctuation exactly as typed", () => {
     expect(normalizeCodeField("ABC-Def")).toBe("abc-def");
-    expect(normalizeCodeField("My Room")).toBe("my room");
-    expect(normalizeCodeField("abc--def")).toBe("abc--def");
+    expect(normalizeCodeField("My Room")).toBe("my-room");
+    expect(normalizeCodeField("abc def ghi")).toBe("abc-def-ghi");
+    expect(normalizeCodeField("abc--def")).toBe("abc-def");
+    expect(normalizeCodeField("abc  -  def")).toBe("abc-def");
+    expect(normalizeCodeField("abc_def")).toBe("abc_def");
+    expect(normalizeCodeField("team--meet.example/other room")).toBe("team--meet.example/other room");
     expect(normalizeCodeField("https://Team--Meet.example/Other-Room")).toBe(
       "https://Team--Meet.example/Other-Room",
     );
@@ -448,7 +460,56 @@ describe("typing into the join code field", () => {
     expect(roomCodeFromField(trailing.value, TEAM_ORIGINS)).toBe("abc-def");
   });
 
-  it("types every known-origin link character by character without rewriting it", () => {
+  it("keeps a space typed before or after a code joinable, as the field did before tidying", () => {
+    expect(typeIntoField("abc def ghi ").value).toBe("abc-def-ghi ");
+    expect(roomCodeFromField(typeIntoField("abc def ghi ").value, TEAM_ORIGINS)).toBe("abc-def-ghi");
+    expect(typeIntoField(" abc-def").value).toBe(" abc-def");
+    expect(roomCodeFromField(typeIntoField(" abc-def").value, TEAM_ORIGINS)).toBe("abc-def");
+    expect(typeIntoField("abc - def").value).toBe("abc-def");
+  });
+
+  it("types a code read aloud and a doubled hyphen into a joinable code", () => {
+    expect(typeIntoField("abc def ghi").value).toBe("abc-def-ghi");
+    expect(roomCodeFromField(typeIntoField("abc def ghi").value, TEAM_ORIGINS)).toBe("abc-def-ghi");
+    expect(typeIntoField("abc--def").value).toBe("abc-def");
+    expect(roomCodeFromField(typeIntoField("abc--def").value, TEAM_ORIGINS)).toBe("abc-def");
+  });
+
+  it("never cuts a long typed link and says when the code is too long", () => {
+    expect(CODE_40).toHaveLength(40);
+    const production = "https://conclave.acmvit.in/";
+    const long = typeIntoField(`${production}${CODE_40}`);
+    expect(long.value).toBe(`${production}${CODE_40}`);
+    expect(resolveCodeField(long.value, KNOWN_ORIGINS)).toEqual({ code: CODE_40, tooLong: false });
+    const boundaryCode = "b".repeat(64 - production.length);
+    const boundary = typeIntoField(`${production}${boundaryCode}`);
+    expect(boundary.value).toHaveLength(64);
+    expect(resolveCodeField(boundary.value, KNOWN_ORIGINS)).toEqual({ code: boundaryCode, tooLong: false });
+    const past = typeIntoField(`${production}${boundaryCode}x`);
+    expect(resolveCodeField(past.value, KNOWN_ORIGINS)).toEqual({ code: `${boundaryCode}x`, tooLong: false });
+    const longest = "c".repeat(64);
+    expect(resolveCodeField(`${production}${longest}`, KNOWN_ORIGINS)).toEqual({ code: longest, tooLong: false });
+    expect(resolveCodeField(`${production}${longest}d`, KNOWN_ORIGINS)).toEqual({ code: "", tooLong: true });
+    expect(resolveCodeField(`${longest}d`, KNOWN_ORIGINS)).toEqual({ code: "", tooLong: true });
+    expect(parseCodeFieldPaste(`${production}${longest}d`, KNOWN_ORIGINS)).toEqual({
+      kind: "replace",
+      code: `${longest}d`,
+    });
+    expect(resolveCodeField("abc--def", KNOWN_ORIGINS)).toEqual({ code: "", tooLong: false });
+  });
+
+  it("only tidies text typed before any URL punctuation", () => {
+    const schemeless = typeIntoField("team--meet.example/other-room");
+    expect(schemeless.value).toBe("team-meet.example/other-room");
+    expect(roomCodeFromField(schemeless.value, TEAM_ORIGINS)).toBe("other-room");
+    const punycode = typeIntoField("xn--mnchen-3ya.example/abc-defg-hij");
+    expect(punycode.value).toBe("xn-mnchen-3ya.example/abc-defg-hij");
+    expect(roomCodeFromField(punycode.value, KNOWN_ORIGINS)).toBe("");
+    const schemed = typeIntoField("https://xn--mnchen-3ya.example/abc-defg-hij");
+    expect(roomCodeFromField(schemed.value, KNOWN_ORIGINS)).toBe("abc-defg-hij");
+  });
+
+  it("types every known-origin link character by character, rewriting nothing after URL punctuation", () => {
     const failures: string[] = [];
     const forms: string[] = [];
     for (const origin of TEAM_ORIGINS) {
@@ -458,21 +519,31 @@ describe("typing into the join code field", () => {
       hosts.push(`${url.hostname}:${url.protocol === "https:" ? "80" : "443"}`, `evil.${url.host}`);
       for (const host of hosts) {
         for (const prefix of [`${url.protocol}//`, url.protocol === "https:" ? "http://" : "https://", "//", ""]) {
-          for (const tail of ["", "/", "?ref=chat", "/?ref=chat#top", "/extra", "?q=a b"]) {
-            forms.push(`${prefix}${host}/abc-defg-hij${tail}`);
+          const base = `${prefix}${host}/`;
+          const codes = ["abc-defg-hij", CODE_40, "e".repeat(65)];
+          if (base.length < 64) codes.push("f".repeat(64 - base.length));
+          for (const code of codes) {
+            for (const tail of ["", "/", "?ref=chat", "/?ref=chat#top", "/extra", "?q=a b"]) {
+              forms.push(`${base}${code}${tail}`);
+            }
           }
         }
       }
     }
     for (const text of forms) {
       const typed = typeIntoField(text);
-      const rewrote = typed.steps.some((step, index) => step !== typedSoFar(text.slice(0, step.length)) || step.length !== index + 1);
+      const firstPunctuation = typed.steps.findIndex((step) => URL_PUNCTUATION.test(step));
+      const rewrote =
+        typed.value !== referenceTyped(text) ||
+        (firstPunctuation !== -1 &&
+          typed.steps.slice(firstPunctuation).some((step, offset) =>
+            offset > 0 && step !== typed.steps[firstPunctuation + offset - 1] + [...text][firstPunctuation + offset]));
       const code = roomCodeFromField(typed.value, TEAM_ORIGINS);
       const expected = referenceFieldCode(typed.value, TEAM_ORIGINS);
       if (rewrote || code !== expected) failures.push(JSON.stringify({ text, value: typed.value, code, expected }));
     }
     expect(failures).toEqual([]);
-    expect(forms.length).toBeGreaterThan(500);
+    expect(forms.length).toBeGreaterThan(2000);
   });
 
   it("is stable and only makes a code from a valid code or a whole Conclave link", () => {
