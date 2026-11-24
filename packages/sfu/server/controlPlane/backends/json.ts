@@ -5,16 +5,15 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
-  renameSync,
   statSync,
   unlinkSync,
   utimesSync,
-  writeFileSync,
   writeSync,
 } from "node:fs";
 import { dirname } from "node:path";
 import { Logger } from "../../../utilities/loggers.js";
 import { asRecord } from "../../../utilities/untrusted.js";
+import { writePrivateFileAtomic } from "../../privateFile.js";
 import { KINDS, StoreCorruptionError, StoreUnavailableError, type Kind } from "../model.js";
 import type { Backend } from "./backend.js";
 import { createMemoryData, readMemory, runOnMemory, type MemoryData } from "./memory.js";
@@ -33,7 +32,7 @@ const acquireLock = (lockPath: string, onLost: () => void): JsonLock => {
   const token = randomUUID();
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      const fd = openSync(lockPath, "wx");
+      const fd = openSync(lockPath, "wx", 0o600);
       writeSync(fd, token);
       closeSync(fd);
       const heartbeat = setInterval(() => {
@@ -152,19 +151,12 @@ export const createJsonBackend = (path: string): Backend => {
     return new StoreUnavailableError(`Another SFU holds ${lockPath}; this SFU no longer writes ${path}.`);
   };
   const persist = (): void => {
-    const tmp = `${path}.${randomUUID()}.tmp`;
     try {
-      writeFileSync(tmp, serialize(data), { encoding: "utf8", flush: true });
+      writePrivateFileAtomic(path, serialize(data), () => {
+        if (!holdsLock(lockPath, lock)) throw lostLock();
+      });
     } catch (error) {
-      throw new StoreUnavailableError(`Could not write ${path}.`, { cause: error });
-    }
-    if (!holdsLock(lockPath, lock)) {
-      unlinkSync(tmp);
-      throw lostLock();
-    }
-    try {
-      renameSync(tmp, path);
-    } catch (error) {
+      if (error instanceof StoreUnavailableError) throw error;
       throw new StoreUnavailableError(`Could not write ${path}.`, { cause: error });
     }
   };
