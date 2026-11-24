@@ -59,6 +59,7 @@ let root: Root;
 let qa: ReturnType<typeof useMeetingQa>;
 /** The ids each render of the hook showed, in order. */
 const renders: string[][] = [];
+const availability: boolean[] = [];
 const offers: { offered: boolean; ids: string[]; asks: "app" | "old events" | "nothing" }[] = [];
 
 /** What the socket was sent on the old events, as `useMeetSocket` keeps it. */
@@ -95,6 +96,7 @@ function Probe({
     currentUserId: "me",
   });
   renders.push(qa.entries.map((entry) => entry.id));
+  availability.push(qa.isAvailable);
   offers.push({
     offered: qa.offered,
     ids: qa.entries.map((entry) => entry.id),
@@ -187,6 +189,7 @@ beforeEach(() => {
   sent.length = 0;
   renders.length = 0;
   offers.length = 0;
+  availability.length = 0;
   root = createRoot(document.createElement("div"));
 });
 
@@ -754,8 +757,16 @@ it("keeps a webinar's attendee and host actions waiting while the old events' li
     ]),
   );
   await mount(true, { ...oldServer, entries: [fromOldEvents] });
+  const listBackBeforeTheServerAnswers = qa.waiting;
+  await act(async () =>
+    last(AUTHORITY_EVENTS.capabilities)!.ack!({
+      ok: true,
+      value: { protocol: 1, roomEpoch: "epoch", serverNowMs: Date.now(), apps: [] },
+    }),
+  );
 
   expect(beforeTheDrop).toEqual({ waiting: false, submit: oldServer.submit });
+  expect(listBackBeforeTheServerAnswers).toBe(true);
   expect(oldServer.submit).not.toHaveBeenCalled();
   expect(oldServer.upvote).not.toHaveBeenCalled();
   expect(oldServer.moderate).not.toHaveBeenCalled();
@@ -785,4 +796,81 @@ it("drops a webinar's questions at once when the person is out of it with the so
 
   expect(qa.entries).toEqual([]);
   expect(qa.onSubmit).toBeUndefined();
+});
+
+const oldServerSpies = () => ({
+  ...legacy,
+  entries: [fromOldEvents],
+  submit: vi.fn(async () => ({ ok: true })),
+  upvote: vi.fn(),
+  moderate: vi.fn(async () => ({ ok: true })),
+});
+const flagOffWebinar = async (oldServer: typeof legacy) => {
+  await mount(true, oldServer);
+  await act(async () => vi.advanceTimersByTimeAsync(5_000));
+};
+const tryEveryAction = async () =>
+  act(async () =>
+    Promise.all([
+      Promise.resolve(qa.onSubmit?.("Will the slides be shared?")),
+      Promise.resolve(qa.onUpvote?.("q1")),
+      Promise.resolve(qa.onModerate?.({ id: "q1", action: "dismissed" })),
+    ]),
+  );
+
+it("sends nothing from a webinar on a server without the runtime in the second before its list is cleared", async () => {
+  const oldServer = oldServerSpies();
+  await flagOffWebinar(oldServer);
+  const beforeTheDrop = { waiting: qa.waiting, submit: qa.onSubmit };
+
+  await fire("disconnect");
+  await mount(true, oldServer, { connectionState: "reconnecting", socketOpen: true });
+  const waitingAt: boolean[] = [];
+  for (const at of [0, 250, 250, 499]) {
+    await act(async () => vi.advanceTimersByTimeAsync(at));
+    waitingAt.push(qa.waiting);
+    await tryEveryAction();
+  }
+  await mount(true, { ...oldServer, entries: null }, { connected: false });
+  waitingAt.push(qa.waiting);
+  await tryEveryAction();
+  await mount(true, oldServer);
+  waitingAt.push(qa.waiting);
+  await tryEveryAction();
+
+  expect(beforeTheDrop).toEqual({ waiting: false, submit: oldServer.submit });
+  expect(oldServer.submit).not.toHaveBeenCalled();
+  expect(oldServer.upvote).not.toHaveBeenCalled();
+  expect(oldServer.moderate).not.toHaveBeenCalled();
+  expect(waitingAt).toEqual([true, true, true, true, true, true]);
+  expect(qa.entries.map((entry) => entry.id)).toEqual(["q1"]);
+  await act(async () => vi.advanceTimersByTimeAsync(5_000));
+  expect({ waiting: qa.waiting, submit: qa.onSubmit }).toEqual({ waiting: false, submit: oldServer.submit });
+});
+
+it("gives a webinar without old-event actions no actions while it waits", async () => {
+  const noActions = { ...legacy, entries: [fromOldEvents], submit: undefined, upvote: undefined, moderate: undefined };
+  await flagOffWebinar(noActions);
+
+  await fire("disconnect");
+  await mount(true, { ...noActions, entries: null }, { connected: false });
+
+  expect(qa.waiting).toBe(true);
+  expect({ submit: qa.onSubmit, upvote: qa.onUpvote, moderate: qa.onModerate }).toEqual({
+    submit: undefined,
+    upvote: undefined,
+    moderate: undefined,
+  });
+});
+
+it("closes a meeting's Q&A in the same render the meeting ends in an error, before the apps client hears of it", async () => {
+  const noOldList = await meetingWithTheApp();
+  const whileLive = qa.isAvailable;
+  const fromTheError = availability.length;
+
+  await mount(false, noOldList, { connectionState: "error", socketOpen: true });
+
+  expect(whileLive).toBe(true);
+  expect(availability.slice(fromTheError).length).toBeGreaterThan(0);
+  expect(availability.slice(fromTheError).every((shown) => shown === false)).toBe(true);
 });

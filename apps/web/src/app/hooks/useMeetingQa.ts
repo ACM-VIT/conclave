@@ -171,10 +171,13 @@ export function useMeetingQa({
     [moderate],
   );
 
-  const waiting = live === null || (app.fromApp && !fromApp);
+  const isAvailable = offered && hold.connectionLive && !isWebinar;
+  const waiting =
+    hold.holdingThroughReconnect || live === null || (app.fromApp && !fromApp);
   if (!hold.connectionLive) {
     return {
       offered,
+      isAvailable,
       fromApp: false as const,
       waiting: false,
       entries,
@@ -187,6 +190,7 @@ export function useMeetingQa({
   if (app.fromApp) {
     return {
       offered,
+      isAvailable,
       fromApp: true as const,
       waiting,
       entries,
@@ -200,6 +204,7 @@ export function useMeetingQa({
     // A view of the app is on its way, and nothing to act through until then.
     return {
       offered,
+      isAvailable,
       fromApp: false as const,
       waiting,
       entries,
@@ -211,12 +216,13 @@ export function useMeetingQa({
   }
   return {
     offered,
+    isAvailable,
     fromApp: false as const,
     waiting,
     entries,
     askNeedsIdentity: false,
-    onSubmit: waiting ? waitForView : legacy.submit,
-    onUpvote: waiting ? waitForView : legacy.upvote,
-    onModerate: waiting ? waitForView : legacy.moderate,
+    onSubmit: legacy.submit && (waiting ? waitForView : legacy.submit),
+    onUpvote: legacy.upvote && (waiting ? waitForView : legacy.upvote),
+    onModerate: legacy.moderate && (waiting ? waitForView : legacy.moderate),
   };
 }

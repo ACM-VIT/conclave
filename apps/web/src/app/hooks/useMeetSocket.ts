@@ -7089,6 +7089,7 @@ export function useMeetSocket({
             socket.on("disconnect", (reason) => {
               console.info("[Meets] Disconnected:", reason);
               if (socketRef.current !== socket) return;
+              setWebinarQaEntries(null);
               if (intentionalDisconnectRef.current) {
                 setConnectionState("disconnected");
                 return;

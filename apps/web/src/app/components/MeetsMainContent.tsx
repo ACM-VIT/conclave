@@ -1550,8 +1550,7 @@ export default function MeetsMainContent({
     if (activityPanel === "polls" && !isPollsAvailable) setActivityPanel(null);
   }, [activityPanel, isPollsAvailable]);
 
-  const isMeetingQaAvailable =
-    meetingQa.offered && isJoined && !webinarConfig?.enabled && !isWebinarAttendee;
+  const isMeetingQaAvailable = meetingQa.isAvailable;
   const isMeetingQaOpen = activityPanel === "qa" && isMeetingQaAvailable;
   useEffect(() => {
     if (activityPanel === "qa" && !isMeetingQaAvailable) setActivityPanel(null);
