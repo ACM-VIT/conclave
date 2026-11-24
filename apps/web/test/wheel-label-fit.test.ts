@@ -14,7 +14,7 @@ import {
   type LabelGeometry,
   type MeasureText,
 } from "../../../packages/apps-sdk/src/apps/wheel/web/labelFit";
-import { graphemes, splitGraphemesFallback } from "../../../packages/apps-sdk/src/apps/wheel/web/graphemes";
+import { graphemes, splitGraphemesFallback } from "../../../packages/apps-sdk/src/sdk/graphemes";
 
 const WIDE = new Set(["M", "W", "H", "m", "w"]);
 const measure: MeasureText = (text) =>

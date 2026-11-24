@@ -96,6 +96,29 @@ struct ACT7AppHostTests {
         }
     }
 
+    @Test func aWheelNameCutAtAnEmojiReachesIOSAsAStatusItCanParse() throws {
+        let data = try Data(contentsOf: act7RepoRoot().appendingPathComponent("packages/apps-sdk/src/native-embed/contract-fixtures.json"))
+        let fixtures = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let scope = try #require(fixtures["scope"] as? [String: Any])
+        let expectation = AppBridgeExpectation(origin: try #require(fixtures["expectedOrigin"] as? String),
+                                               callSessionId: try #require(scope["callSessionId"] as? String),
+                                               appSessionId: try #require(scope["appSessionId"] as? String))
+        let cases = try #require(fixtures["embedToNative"] as? [[String: Any]])
+        func raw(_ prefix: String) throws -> String {
+            let item = try #require(cases.first { ($0["name"] as? String ?? "").hasPrefix(prefix) })
+            return try #require(item["raw"] as? String)
+        }
+        let sent = try raw("wheel status holding half an emoji")
+        let now = try raw("wheel status with the half emoji dropped")
+        #expect(throws: (any Error).self) { try JSONSerialization.jsonObject(with: Data(sent.utf8)) }
+        #expect(AppBridgeCodec.decode(raw: sent, origin: expectation.origin, isMainFrame: true, expectation: expectation).rejection == .malformed)
+        let parsed = try #require(try JSONSerialization.jsonObject(with: Data(now.utf8)) as? [String: Any])
+        let app = try #require((parsed["payload"] as? [String: Any])?["app"] as? [String: Any])
+        let label = try #require((app["entries"] as? [[String: Any]])?.first?["label"] as? String)
+        #expect(label == String(repeating: "A", count: 47))
+        #expect(AppBridgeCodec.decode(raw: now, origin: expectation.origin, isMainFrame: true, expectation: expectation).rejection == .none)
+    }
+
     @Test func protocolPiecesAreStrict() {
         #expect(AppBridgeCodec.isValidIdentifier("app-1a2b:3.c_d"))
         #expect(!AppBridgeCodec.isValidIdentifier("app 1"))

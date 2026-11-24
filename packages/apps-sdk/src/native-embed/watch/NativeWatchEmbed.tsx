@@ -17,6 +17,7 @@ import {
 import { useWatchDocState } from "../../apps/watch/web/hooks/useWatchDocState";
 import { useWatchRequests } from "../../apps/watch/web/hooks/useWatchRequests";
 import { planPlaybackCorrection } from "../../apps/watch/web/playbackSync";
+import { cutText } from "../../sdk/text";
 import {
   APP_EDIT_COMMANDS,
   WATCH_LIMITS,
@@ -66,7 +67,7 @@ const usePlaybackState = (doc: Y.Doc): "playing" | "paused" =>
     () => getPlayback(doc).state,
   );
 
-const clip = (value: string | null | undefined, limit: number): string => (value ?? "").slice(0, limit);
+const clip = (value: string | null | undefined, limit: number): string => cutText(value ?? "", limit);
 
 const recordKey = (doc: Y.Doc): string => {
   const record = getPlayback(doc);

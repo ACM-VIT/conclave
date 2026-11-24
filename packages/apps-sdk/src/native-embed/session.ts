@@ -1,6 +1,7 @@
 import * as Y from "yjs";
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from "y-protocols/awareness";
 import type { NativeTransport } from "./bridge";
+import { cutText } from "../sdk/text";
 import {
   HOST_COMMAND_TYPES,
   NATIVE_EMBED_BUNDLE_VERSION,
@@ -290,8 +291,8 @@ export class NativeEmbedSession {
       connection: payload.connection === "reconnecting" ? "reconnecting" : "live",
       reduceMotion: payload.reduceMotion === true,
       pencilOnly: payload.pencilOnly === true,
-      userId: typeof payload.userId === "string" ? payload.userId.slice(0, 128) : "",
-      userName: typeof payload.userName === "string" ? payload.userName.slice(0, 128) : "",
+      userId: typeof payload.userId === "string" ? cutText(payload.userId, 128) : "",
+      userName: typeof payload.userName === "string" ? cutText(payload.userName, 128) : "",
     };
     if (wasReadOnly !== this.host.readOnly) this.lastStatus = "";
     this.notify();

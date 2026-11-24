@@ -259,6 +259,20 @@
       "isMainFrame": false,
       "raw": "{\"v\":1,\"type\":\"update\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e-3\",\"payload\":{\"update\":\"AQID\"}}",
       "expect": "notMainFrame"
+    },
+    {
+      "name": "wheel status holding half an emoji, as the old encoder sent it",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"type\":\"status\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e-1\",\"payload\":{\"app\":{\"kind\":\"wheel\",\"entries\":[{\"id\":\"e0\",\"label\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\\ud83c\"}],\"results\":[],\"removeWinner\":false,\"sounds\":true,\"spinning\":false,\"winnerSpinId\":\"\",\"winnerLabel\":\"\"}}}",
+      "expect": "malformed"
+    },
+    {
+      "name": "wheel status with the half emoji dropped, as the encoder sends it now",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"type\":\"status\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e-1\",\"payload\":{\"app\":{\"kind\":\"wheel\",\"entries\":[{\"id\":\"e0\",\"label\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}],\"results\":[],\"removeWinner\":false,\"sounds\":true,\"spinning\":false,\"winnerSpinId\":\"\",\"winnerLabel\":\"\"}}}",
+      "expect": "none"
     }
   ],
   "hostToEmbed": [

@@ -35,6 +35,17 @@ test("embed messages decode exactly as the fixtures say", () => {
   }
 });
 
+test("the encoder turns the old half emoji envelope into the one the fixtures say iOS decodes", () => {
+  const byName = (prefix) => fixtures.embedToNative.find((item) => item.name.startsWith(prefix));
+  const sent = byName("wheel status holding half an emoji");
+  const now = byName("wheel status with the half emoji dropped");
+  assert.equal(sent.expect, "malformed");
+  assert.equal(now.expect, "none");
+  const old = JSON.parse(sent.raw);
+  assert.match(old.payload.app.entries[0].label, /[\uD800-\uDFFF]/u);
+  assert.equal(protocol.encodeEnvelope(old.type, fixtures.scope, old.requestId, old.payload), now.raw);
+});
+
 test("host messages decode exactly as the fixtures say", () => {
   for (const item of fixtures.hostToEmbed) {
     const result = protocol.decodeHostMessage(item.raw, fixtures.scope);

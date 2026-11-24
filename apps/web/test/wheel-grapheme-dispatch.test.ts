@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SINGLE_LABEL_SIZE, SINGLE_LABEL_WIDTH } from "../../../packages/apps-sdk/src/apps/wheel/web/geometry";
-import { splitGraphemesFallback } from "../../../packages/apps-sdk/src/apps/wheel/web/graphemes";
+import { splitGraphemesFallback } from "../../../packages/apps-sdk/src/sdk/graphemes";
 
 const DEVANAGARI_NAME = "AAAAA\u0915\u094D\u0937\u094D\u092EAAAAAAAAAA";
 const MYANMAR_NAME = `A${"\u1001\u1014\u1039\u1013\u102C".repeat(4)}`;

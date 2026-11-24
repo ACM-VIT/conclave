@@ -7,7 +7,7 @@ import {
   WHEEL_RADIUS,
   pxPerUnitFor,
 } from "./geometry";
-import { graphemes } from "./graphemes";
+import { graphemes } from "../../../sdk/graphemes";
 import { hasVisibleText } from "../core/labels";
 
 export type MeasureText = (text: string) => number;
