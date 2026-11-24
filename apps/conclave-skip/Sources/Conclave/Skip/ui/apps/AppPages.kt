@@ -60,13 +60,18 @@ import kotlinx.coroutines.launch
 internal fun AppWheelPage(host: AppHostPresenter, reservation: PaddingValues) {
     val wheel = host.wheel
     var draft by rememberSaveable { mutableStateOf("") }
+    var submittedDraft by remember { mutableStateOf<String?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { host.refreshRoster() }
+    LaunchedEffect(wheel.typedNamesAdded) {
+        if (submittedDraft != null && draft == submittedDraft) draft = ""
+        submittedDraft = null
+    }
     val addDraft: () -> Unit = {
         if (draft.isBlank()) {
             draft = ""
         } else if (host.addWheelNames(draft) == ActivityTapResult.dispatched) {
-            draft = ""
+            submittedDraft = draft
         }
     }
     LazyColumn(Modifier.fillMaxSize().testTag("app.wheel.page"), contentPadding = reservation) {

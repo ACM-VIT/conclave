@@ -430,6 +430,7 @@ struct WheelPageModel: Equatable {
     let pendingTargets: [String]
 
     let winnerSequence: Int
+    let typedNamesAdded: Int
     let winnerLabel: String
 
     func isPending(_ kind: AppPageCommandKind) -> Bool {
@@ -444,12 +445,12 @@ struct WheelPageModel: Equatable {
         return WheelPageModel(revision: value, entries: entries, results: results, removeWinner: removeWinner, sounds: sounds,
                               spinning: spinning, canEdit: canEdit, canSpin: canSpin, isFull: isFull, isReady: isReady,
                               missingNames: missingNames, pendingKinds: pendingKinds, pendingTargets: pendingTargets,
-                              winnerSequence: winnerSequence, winnerLabel: winnerLabel)
+                              winnerSequence: winnerSequence, typedNamesAdded: typedNamesAdded, winnerLabel: winnerLabel)
     }
 
     static let empty = WheelPageModel(revision: 0, entries: [], results: [], removeWinner: false, sounds: true, spinning: false,
                                       canEdit: false, canSpin: false, isFull: false, isReady: false, missingNames: [],
-                                      pendingKinds: [], pendingTargets: [], winnerSequence: 0, winnerLabel: "")
+                                      pendingKinds: [], pendingTargets: [], winnerSequence: 0, typedNamesAdded: 0, winnerLabel: "")
 }
 
 struct WatchPageModel: Equatable {
@@ -707,6 +708,7 @@ final class AppHostPresenter {
     @ObservationIgnored private var pagePending: [AppPagePendingCommand] = []
     @ObservationIgnored private var lastWinnerSpinId = ""
     @ObservationIgnored private var winnerSequence = 0
+    @ObservationIgnored private var typedNamesAdded = 0
     @ObservationIgnored private var winnerLabel = ""
     @ObservationIgnored private var announcedVideoId = ""
     @ObservationIgnored private var titleSequence = 0
@@ -1271,7 +1273,9 @@ final class AppHostPresenter {
 
     private func acknowledge(requestId: String, ok: Bool, pngBase64: String) {
         if let pageIndex = pagePending.firstIndex(where: { $0.requestId == requestId }) {
+            let command = pagePending[pageIndex]
             pagePending.remove(at: pageIndex)
+            if ok && command.kind == AppPageCommandKind.addEntries && command.target.isEmpty { typedNamesAdded += 1 }
             rebuildPages()
             return
         }
@@ -1569,6 +1573,7 @@ final class AppHostPresenter {
             pendingKinds: isWheel ? kinds : [],
             pendingTargets: isWheel ? targets : [],
             winnerSequence: winnerSequence,
+            typedNamesAdded: typedNamesAdded,
             winnerLabel: winnerLabel
         )
         if nextWheel != wheel {

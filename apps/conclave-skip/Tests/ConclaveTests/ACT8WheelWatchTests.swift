@@ -294,6 +294,27 @@ struct ACT8WheelWatchTests {
         #expect(presenter.openPage() == .dispatched && wire.pages == ["wheel"], "Edit Names opens Activities at the Wheel page")
     }
 
+    @Test func typedNamesCountOnlyOnceTheEmbedAddsThem() {
+        let wire = Wire()
+        let (presenter, relay) = host(wire, inputs: AppHostInputs.make(callSession: 1, appId: "wheel", isHost: true),
+                                      roster: ["You", "Grace"])
+        #expect(ready(relay) == .none)
+        send(relay, "status", ["app": Self.wheelApp(["Ada"])], id: "e-2")
+        #expect(presenter.wheel.typedNamesAdded == 0)
+        #expect(presenter.addWheelNames("\u{200B}") == .dispatched)
+        ack(relay, wire.lastRequestId(), ok: false)
+        #expect(presenter.wheel.typedNamesAdded == 0, "a rejected add leaves the typed text alone")
+        #expect(presenter.addWheelNames("Ben") == .dispatched)
+        presenter.fireCommandTimeout(requestId: wire.lastRequestId())
+        #expect(presenter.wheel.typedNamesAdded == 0, "an add that never answered is not counted")
+        #expect(presenter.addWheelNames("Cy") == .dispatched)
+        ack(relay, wire.lastRequestId())
+        #expect(presenter.wheel.typedNamesAdded == 1)
+        #expect(presenter.addEveryoneToWheel() == .dispatched)
+        ack(relay, wire.lastRequestId())
+        #expect(presenter.wheel.typedNamesAdded == 1, "Add everyone is not the typed box")
+    }
+
     @Test func theWinnerIsAnnouncedOnlyForALiveSettle() {
         let wire = Wire()
         let (presenter, relay) = host(wire, inputs: AppHostInputs.make(callSession: 1, appId: "wheel", isHost: true))

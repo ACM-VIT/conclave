@@ -26,7 +26,7 @@ export type WheelPanelProps = {
   removeWinnerOnDone: boolean;
   missingParticipantCount: number;
   onToggleSound: () => void;
-  onAddEntries: (labels: string[]) => void;
+  onAddEntries: (labels: string[]) => number;
   onAddParticipants: () => void;
   onRemoveEntry: (entryId: string) => void;
   onShuffle: () => void;
@@ -153,8 +153,7 @@ export function WheelPanel({
   const submitDraft = () => {
     const value = draft.trim();
     if (!value) return;
-    onAddEntries([value]);
-    setDraft("");
+    if (onAddEntries([value]) > 0) setDraft("");
   };
 
   return (
@@ -215,8 +214,7 @@ export function WheelPanel({
                     const names = splitPastedNames(event.clipboardData.getData("text"));
                     if (names.length <= 1) return;
                     event.preventDefault();
-                    onAddEntries(names);
-                    setDraft("");
+                    if (onAddEntries(names) > 0) setDraft("");
                   }}
                   disabled={isSpinning || full}
                   maxLength={48}

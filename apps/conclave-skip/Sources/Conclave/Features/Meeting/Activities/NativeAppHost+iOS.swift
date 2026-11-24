@@ -765,6 +765,7 @@ struct AppPageUnavailable: View {
 struct AppWheelPage: View {
     let host: AppHostPresenter
     @State private var draft = ""
+    @State private var submittedDraft: String?
     @State private var confirmsClear = false
     @FocusState private var focused: Bool
     @Environment(\.panelPromoteToLargeDetent) private var promoteToLarge
@@ -790,6 +791,10 @@ struct AppWheelPage: View {
                                 if value.contains("\n") { addDraft() }
                             }
                             .onChange(of: focused) { _, isFocused in if isFocused { promoteToLarge() } }
+                            .onChange(of: wheel.typedNamesAdded) { _, _ in
+                                if let submitted = submittedDraft, draft == submitted { draft = "" }
+                                submittedDraft = nil
+                            }
                             .accessibilityIdentifier("app.wheel.add")
                         Button {
                             _ = host.addEveryoneToWheel()
@@ -894,7 +899,7 @@ struct AppWheelPage: View {
             if !text.isEmpty { draft = "" }
             return
         }
-        if host.addWheelNames(text) == ActivityTapResult.dispatched { draft = "" }
+        if host.addWheelNames(text) == ActivityTapResult.dispatched { submittedDraft = text }
     }
 
     private func remove(_ offsets: IndexSet) {
