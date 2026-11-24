@@ -343,7 +343,7 @@ send_fallback_json() {
   done
   (( ${#names[@]} > 0 )) || return 0
   archive="${dir}.tar"
-  tar -C "$dir" -cf "$archive" "${names[@]}" || return 1
+  COPYFILE_DISABLE=1 tar -C "$dir" -cf "$archive" "${names[@]}" || return 1
   checksum="$(sha256_file "$archive")"
   name="$(archive_stamp)-${SFU_DEPLOY_ID:?}"
   transfer="$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
@@ -372,7 +372,7 @@ sqlite_target_probe() {
 }
 
 sqlite_receiver() {
-  printf '%s' 'umask 077 && target=$1 && case "$target" in /*) ;; *) echo "The database path $target is not absolute." >&2; exit 1;; esac && case "$3" in ""|*[!A-Za-z0-9]*) echo "The transfer id $3 is not safe to use." >&2; exit 1;; esac && dir=$(dirname "$target") && incoming=$dir/.incoming-sqlite-$3 && find "$dir" -mindepth 1 -maxdepth 1 -type d -name ".incoming-sqlite-*" -mmin +30 -exec rm -rf {} + && for existing in "$target" "$target-wal" "$target-journal"; do if [ -e "$existing" ]; then echo "$existing already exists, and a database is never replaced." >&2; exit 1; fi; done && mkdir "$incoming" && chown node:node "$incoming" && trap '"'"'rm -rf "$incoming"'"'"' EXIT && cat > "$incoming/payload.tar" && got=$(sha256sum "$incoming/payload.tar" | cut -d" " -f1) && if [ "$got" != "$2" ]; then echo "The database arrived with checksum $got, not $2." >&2; exit 1; fi && tar -xf "$incoming/payload.tar" -C "$incoming" && rm "$incoming/payload.tar" && chown node:node "$incoming"/db* && chmod 0600 "$incoming"/db* && for part in -wal -journal; do if [ -e "$incoming/db$part" ]; then mv "$incoming/db$part" "$target$part" || exit 1; fi; done && mv "$incoming/db" "$target" && rmdir "$incoming"'
+  printf '%s' 'umask 077 && target=$1 && case "$target" in /*) ;; *) echo "The database path $target is not absolute." >&2; exit 1;; esac && case "$3" in ""|*[!A-Za-z0-9]*) echo "The transfer id $3 is not safe to use." >&2; exit 1;; esac && dir=$(dirname "$target") && incoming=$dir/.incoming-sqlite-$3 && find "$dir" -mindepth 1 -maxdepth 1 -type d -name ".incoming-sqlite-*" -mmin +30 -exec rm -rf {} + && for existing in "$target" "$target-wal" "$target-journal"; do if [ -e "$existing" ]; then echo "$existing already exists, and a database is never replaced." >&2; exit 1; fi; done && mkdir "$incoming" && chown node:node "$incoming" && trap '"'"'rm -rf "$incoming"'"'"' EXIT && cat > "$incoming/payload.tar" && got=$(sha256sum "$incoming/payload.tar" | cut -d" " -f1) && if [ "$got" != "$2" ]; then echo "The database arrived with checksum $got, not $2." >&2; exit 1; fi && tar -xf "$incoming/payload.tar" -C "$incoming" && rm "$incoming/payload.tar" && chown node:node "$incoming"/db* && chmod 0600 "$incoming"/db* && for part in -wal -journal; do if [ -e "$incoming/db$part" ]; then mv "$incoming/db$part" "$target$part" || exit 1; fi; done && mv "$incoming/db" "$target"'
 }
 
 plan_layer_sqlite() {
@@ -383,7 +383,7 @@ plan_layer_sqlite() {
     return 1
   fi
   [[ -n "$layer" ]] || return 0
-  if ! targets="$("${COMPOSE[@]}" run -T --rm --no-deps --user root --cap-add DAC_OVERRIDE --entrypoint sh "$service" -c "$(sqlite_target_probe)")"; then
+  if ! targets="$("${COMPOSE[@]}" run -T --rm --no-deps --user root --cap-add DAC_OVERRIDE --entrypoint sh "$service" -c "$(sqlite_target_probe)" < /dev/null)"; then
     echo "Could not check where the new ${service} keeps its databases." >&2
     return 1
   fi
@@ -447,7 +447,7 @@ carry_layer_sqlite() {
       parts+=("db${part}")
     done
     archive="${folder}.tar"
-    tar -C "$folder" -cf "$archive" "${parts[@]}" || return 1
+    COPYFILE_DISABLE=1 tar -C "$folder" -cf "$archive" "${parts[@]}" || return 1
     checksum="$(sha256_file "$archive")"
     transfer="$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
     if ! "${COMPOSE[@]}" run -T --rm --no-deps --user root --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --entrypoint sh "$service" -c \

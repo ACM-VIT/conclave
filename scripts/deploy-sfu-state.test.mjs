@@ -39,6 +39,11 @@ if [[ "$1" == "compose" ]]; then
         cd "$FAKE_SFU_DIR" || exit 1
         export CONCLAVE_SQLITE_PATH="\${FAKE_NEW_SQLITE_PATH:-$FAKE_VOLUME/conclave.sqlite}"
         [[ "$script" == *payload.tar* ]] || exec sh -c "$script" "\${rest[@]}"
+        if [[ -z "$FAKE_KILL_TRANSFER$FAKE_CORRUPT" ]]; then
+          payload="$PAYLOAD_DIR/$(ls "$PAYLOAD_DIR" | wc -l | tr -d ' ').tar"
+          cat > "$payload"
+          CONCLAVE_FALLBACK_IMPORT_DIR="$FAKE_IMAGE_IMPORT_DIR" exec sh -c "$script" "\${rest[@]}" < "$payload"
+        fi
         if [[ -n "$FAKE_KILL_TRANSFER" ]]; then
           fifo="$(dirname "$DOCKER_LOG")/transfer.fifo"
           mkfifo "$fifo"
@@ -84,6 +89,7 @@ case "$1" in
     source="$FAKE_FILES/$name"
     [[ -f "$FAKE_STOPPED" && -f "$FAKE_FILES_AFTER_STOP/$name" ]] && source="$FAKE_FILES_AFTER_STOP/$name"
     if [[ -f "$source" ]]; then cat "$source" > "$3"; else echo '[]' > "$3"; fi
+    command -v xattr > /dev/null && xattr -w com.apple.provenance fake-docker-cp "$3" 2> /dev/null
     exit 0 ;;
 esac
 exit 0
@@ -216,6 +222,20 @@ const listArchives = (serviceDir) =>
     return { name, files, bytes: Object.fromEntries(files.map((file) => [file, readFileSync(join(path, file))])), modes: [mode(path), ...files.map((file) => mode(join(path, file)))] };
   });
 
+const tarMembers = (archive) => {
+  const names = [];
+  for (let offset = 0; offset + 512 <= archive.length; ) {
+    const header = archive.subarray(offset, offset + 512);
+    if (header.every((byte) => byte === 0)) break;
+    const text = (start, length) => header.subarray(start, start + length).toString("utf8").replace(/\0.*$/s, "");
+    const size = Number.parseInt(text(124, 12).trim() || "0", 8);
+    const type = text(156, 1);
+    if (type !== "x" && type !== "g") names.push([text(345, 155), text(0, 100)].filter(Boolean).join("/"));
+    offset += 512 + Math.ceil(size / 512) * 512;
+  }
+  return names;
+};
+
 const replaceService = async (
   harness,
   {
@@ -251,6 +271,7 @@ const replaceService = async (
     const bin = join(dir, "bin");
     mkdirSync(bin);
     mkdirSync(join(dir, "tmp"));
+    mkdirSync(join(dir, "payloads"));
     writeFileSync(join(bin, "docker"), FAKE_DOCKER);
     writeFileSync(join(bin, "chown"), FAKE_CHOWN);
     if (!hostHasSha256sum) writeFileSync(join(bin, "sha256sum"), SHA256SUM_SHIM);
@@ -281,6 +302,7 @@ const replaceService = async (
       FAKE_CORRUPT: corrupt ? "kept" : "",
       FAKE_VOLUME: volume,
       FAKE_SFU_DIR: sfuDir,
+      PAYLOAD_DIR: join(dir, "payloads"),
       FAKE_NEW_SQLITE_PATH: newSqlitePath,
       FAKE_IMAGE_IMPORT_DIR: imageImportDir ? importDir : "",
       STAGING_PATH_FILE: join(dir, "staging-path"),
@@ -313,6 +335,7 @@ const replaceService = async (
         : [],
       stagingModes: existsSync(join(dir, "staging-modes")) ? readFileSync(join(dir, "staging-modes"), "utf8").trim().split("\n") : [],
       volumeEntries: listing(volume),
+      payloadMembers: listing(join(dir, "payloads")).map((name) => tarMembers(readFileSync(join(dir, "payloads", name)))),
       volumeFiles: Object.fromEntries(listing(volume).filter((name) => statSync(join(volume, name)).isFile()).map((name) => [name, { text: readFileSync(join(volume, name), "utf8"), mode: mode(join(volume, name)) }])),
     };
   } finally {
@@ -686,6 +709,18 @@ for (const harness of harnesses) {
       assert.match(run.stderr, /start sfu-a/, name);
       assert.deepEqual(run.volumeEntries, [], name);
     }
+  });
+
+  test(`${shell}: sends only the files it names, even when the host's tar would add metadata members for extended attributes`, async () => {
+    const { status, stderr, payloadMembers, volumeEntries, imported } = await replaceService(harness, {
+      containerEnv: "CONCLAVE_SQLITE_PATH=/var/lib/conclave/conclave.sqlite\\n",
+      diff: `${wrote("scheduling.json")}A /var/lib/conclave/conclave.sqlite\\nA /var/lib/conclave/conclave.sqlite-wal\\n`,
+      files: { "scheduling.json": "[]", "conclave.sqlite": "database", "conclave.sqlite-wal": "wal" },
+    });
+    assert.equal(status, 0, stderr);
+    assert.deepEqual(payloadMembers.map((members) => members.sort()), [["scheduling.json"], ["db", "db-wal"]]);
+    assert.deepEqual(imported, ["scheduling.json"]);
+    assert.deepEqual(volumeEntries, ["conclave.sqlite", "conclave.sqlite-wal"]);
   });
 
   test(`${shell}: leaves a database on the volume where it is`, async () => {
