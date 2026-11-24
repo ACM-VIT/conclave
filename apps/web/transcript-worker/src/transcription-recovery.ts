@@ -15,15 +15,20 @@ export type BufferedTranscriptAudioEvent =
       speaker: TranscriptSpeaker;
       sampleCount: number;
       createdAt: number;
+      sequence: number;
     }
   | {
       type: "commit" | "clear";
       speaker: TranscriptSpeaker;
       createdAt: number;
+      after: number;
     };
 
 const eventBytes = (event: BufferedTranscriptAudioEvent): number =>
   event.type === "chunk" ? event.audio.length : 0;
+
+const arrival = (event: BufferedTranscriptAudioEvent): number =>
+  event.type === "chunk" ? event.sequence : event.after - 0.5;
 
 export const isRetryableTranscriptionFailure = (message: string): boolean => {
   if (
@@ -54,10 +59,7 @@ export class TranscriptRecoveryAudioBuffer {
   constructor(private readonly afterEnqueue: () => void = () => {}) {}
 
   enqueue(event: BufferedTranscriptAudioEvent, now = Date.now()): void {
-    this.events.push(event);
-    this.bytes += eventBytes(event);
-    this.prune(now);
-    this.afterEnqueue();
+    this.enqueueMany([event], now);
   }
 
   enqueueMany(events: BufferedTranscriptAudioEvent[], now = Date.now()): void {
@@ -65,6 +67,7 @@ export class TranscriptRecoveryAudioBuffer {
       this.events.push(event);
       this.bytes += eventBytes(event);
     }
+    this.events.sort((left, right) => arrival(left) - arrival(right));
     this.prune(now);
     this.afterEnqueue();
   }

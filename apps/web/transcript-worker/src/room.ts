@@ -1248,6 +1248,7 @@ export class TranscriptRoom {
     const sampleCount = pcm.length;
     if (sampleCount <= 0) return;
     const normalizedSpeaker = normalizeSpeaker(speaker, viewer);
+    const sequence = this.audioSequence++;
     if (!this.transcriptionSession) {
       if (this.shouldBufferTranscriptionAudio()) {
         this.transcriptionRecoveryAudio.enqueue({
@@ -1256,11 +1257,12 @@ export class TranscriptRoom {
           speaker: normalizedSpeaker,
           sampleCount,
           createdAt: Date.now(),
+          sequence,
         });
       }
       return;
     }
-    this.appendNormalizedAudio(audio, normalizedSpeaker, sampleCount);
+    this.appendNormalizedAudio(audio, normalizedSpeaker, sampleCount, sequence);
     if (this.isController(viewer) && this.session?.controller) {
       this.session.controller.lastSeenAt = Date.now();
     }
@@ -1270,6 +1272,7 @@ export class TranscriptRoom {
     audio: string,
     speaker: TranscriptSpeaker,
     sampleCount: number,
+    sequence: number,
     captureFailedEvent = true,
     reportFailure = true,
   ): boolean {
@@ -1292,12 +1295,12 @@ export class TranscriptRoom {
           speaker,
           sampleCount,
           createdAt: Date.now(),
+          sequence,
         });
       }
       return false;
     }
     const now = Date.now();
-    const sequence = this.audioSequence++;
     const key = speakerKey(speaker);
     const voice = this.voiceCheckFor(key).push(parsePcm16Base64(audio) ?? new Int16Array(0), now);
     if (session.provider === "sarvam") {
@@ -1312,7 +1315,7 @@ export class TranscriptRoom {
         void this.handleTranscriptionFailure(
           "Transcript audio stream failed.",
           captureFailedEvent
-            ? [{ type: "chunk", audio, speaker, sampleCount, createdAt: now }]
+            ? [{ type: "chunk", audio, speaker, sampleCount, createdAt: now, sequence }]
             : [],
         );
       }
@@ -1358,7 +1361,7 @@ export class TranscriptRoom {
 
   private keepReplayAudioWithinLimit(): void {
     const lines = this.ledger.activeUnordered();
-    const held: { audio: string; createdAt: number }[] = [
+    const held: { audio: string; sequence: number }[] = [
       ...lines.flatMap(({ audio }) => audio),
       ...Array.from(this.uncommittedAudio.values()).flatMap(({ chunks }) => chunks),
       ...this.transcriptionRecoveryAudio.chunks(),
@@ -1368,7 +1371,7 @@ export class TranscriptRoom {
     if (total <= TRANSCRIPTION_RECOVERY_MAX_AUDIO_BYTES) return;
     const kept = new Set<object>();
     let bytes = 0;
-    for (const chunk of held.sort((left, right) => right.createdAt - left.createdAt)) {
+    for (const chunk of held.sort((left, right) => right.sequence - left.sequence)) {
       if (bytes + chunk.audio.length > TRANSCRIPTION_RECOVERY_MAX_AUDIO_BYTES) break;
       bytes += chunk.audio.length;
       kept.add(chunk);
@@ -1448,6 +1451,7 @@ export class TranscriptRoom {
         type: "commit",
         speaker: normalizedSpeaker,
         createdAt: Date.now(),
+        after: this.audioSequence,
       });
       return;
     }
@@ -1513,6 +1517,7 @@ export class TranscriptRoom {
         type: "clear",
         speaker: normalizeSpeaker(speaker, viewer),
         createdAt: Date.now(),
+        after: this.audioSequence,
       });
       return;
     }
@@ -2447,6 +2452,7 @@ export class TranscriptRoom {
             event.audio,
             event.speaker,
             event.sampleCount,
+            event.sequence,
             false,
             reportFailure,
           )

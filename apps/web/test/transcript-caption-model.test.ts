@@ -16,6 +16,9 @@ import {
   settle,
   transcriptRoomRig,
 } from "./transcript-room-rig";
+import { pcmBase64, voicedPcm } from "./transcript-audio-fixtures";
+
+const LONG_SPEECH = pcmBase64(voicedPcm(-26, 700));
 
 const { lookup } = vi.hoisted(() => ({ lookup: vi.fn() }));
 vi.mock("@conclave/ai/room-server", async (original) => ({
@@ -449,6 +452,27 @@ const cases: { thread: string; model: string; run: (rig: Rig) => Promise<Outcome
       return { shown: shown(rig), threw };
     },
   },
+  {
+    thread: "Later audio gets dropped first",
+    model: OPENAI,
+    async run(rig) {
+      const [socket] = rig.providerSockets();
+      const owedChunks = Math.floor((0.95 * REPLAY_AUDIO_LIMIT) / LONG_SPEECH.length);
+      for (let index = 0; index < owedChunks; index += 1) {
+        await rig.send({ type: "audio.chunk", audio: LONG_SPEECH, speaker: ada });
+      }
+      await rig.commit(ada);
+      socket.emit(openAiCommitted("a"));
+      rig.connectPlans.push(...Array<"unreachable">(30).fill("unreachable"));
+      socket.disconnect();
+      await settle();
+      const newChunks = Math.ceil((0.3 * REPLAY_AUDIO_LIMIT) / LONG_SPEECH.length);
+      for (let index = 0; index < newChunks; index += 1) {
+        await rig.send({ type: "audio.chunk", audio: LONG_SPEECH, speaker: grace });
+      }
+      return { shown: [], bufferedBytes: Math.min(bufferedBytes(rig), newChunks * LONG_SPEECH.length) };
+    },
+  },
 ];
 
 const expected: Record<string, Outcome> = {
@@ -484,6 +508,10 @@ const expected: Record<string, Outcome> = {
   },
   "Switches can lose buffered speech": { shown: [], replayedChunks: 3, supersededChunks: 0 },
   "Corrupt audio escapes error checks": { shown: [["Setup.", "grace"], ["Still heard.", "ada"]], threw: false },
+  "Later audio gets dropped first": {
+    shown: [],
+    bufferedBytes: Math.ceil((0.3 * REPLAY_AUDIO_LIMIT) / LONG_SPEECH.length) * LONG_SPEECH.length,
+  },
   "Recent speech loses its speaker": { shown: [["Setup.", "grace"], ["Ada long.", "ada"]], replayedChunks: 27 },
   "Same-tick audio changes owners": {
     shown: [["Setup.", "grace"], ["One.", "ada"], ["Two.", "grace"], ["Three.", "ada"]],

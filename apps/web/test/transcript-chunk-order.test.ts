@@ -19,7 +19,18 @@ import {
   transcriptRoomRig,
 } from "./transcript-room-rig";
 
-const { lookup } = vi.hoisted(() => ({ lookup: vi.fn() }));
+const { lookup, limit } = vi.hoisted(() => ({ lookup: vi.fn(), limit: { bytes: 0, real: 0 } }));
+vi.mock("../transcript-worker/src/constants", async (original) => {
+  const actual = await original<typeof import("../transcript-worker/src/constants")>();
+  limit.real = actual.TRANSCRIPTION_RECOVERY_MAX_AUDIO_BYTES;
+  limit.bytes = limit.real;
+  return {
+    ...actual,
+    get TRANSCRIPTION_RECOVERY_MAX_AUDIO_BYTES() {
+      return limit.bytes;
+    },
+  };
+});
 vi.mock("@conclave/ai/room-server", async (original) => ({
   ...(await original<typeof import("@conclave/ai/room-server")>()),
   fetchRoomAiEnvironment: lookup,
@@ -34,6 +45,8 @@ afterEach(() => {
 
 const RUNS = Number(process.env.TRANSCRIPT_CHUNK_ORDER_RUNS ?? 300);
 const EXTENDED_RUNS = Number(process.env.TRANSCRIPT_CHUNK_ORDER_EXTENDED_RUNS ?? 300);
+const BURST_RUNS = Number(process.env.TRANSCRIPT_CHUNK_ORDER_BURST_RUNS ?? 200);
+const LIMIT_CHUNKS = 24;
 const MALFORMED = ["%%%%", "@@@@AAAA", "A", "====", "AB=C", "\u0000\u0001"];
 const LANGUAGES = ["ta", "hi", "bn"];
 const SAVE_FAILURE = "Snapshot write failed (injected).";
@@ -98,9 +111,10 @@ const audioCount = (socket: FakeProviderSocket) =>
     return typeof audio === "string" || Boolean((audio as { data?: string } | undefined)?.data);
   }).length;
 
-const runOnce = async (seed: number, extended = false): Promise<string[]> => {
+const runOnce = async (seed: number, extended = false, bursts = false): Promise<string[]> => {
   const random = randomFrom(seed);
   const problems: string[] = [];
+  limit.bytes = bursts ? VOICED[0].length * LIMIT_CHUNKS : limit.real;
   vi.useFakeTimers();
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "info").mockImplementation(() => {});
@@ -205,6 +219,12 @@ const runOnce = async (seed: number, extended = false): Promise<string[]> => {
 
   const describeChunk = (info: Sent) => `#${info.index} ${info.speaker}`;
 
+  const countedByLimit = () => [
+    ...room.ledger.activeUnordered().flatMap(({ audio }) => audio),
+    ...Array.from(room.uncommittedAudio.values()).flatMap(({ chunks }) => chunks),
+    ...room.transcriptionRecoveryAudio.chunks(),
+  ];
+
   const check = (stage: string) => {
     const now = Date.now();
     const holders = new Map<string, string>();
@@ -304,6 +324,17 @@ const runOnce = async (seed: number, extended = false): Promise<string[]> => {
         const lastInRun = lastInUnownedRun.get(runOf.get(info.index) ?? info.index) ?? info.at;
         if (now - lastInTurn > KEPT || now - lastInRun > KEPT) continue;
       }
+      if (bursts) {
+        const counted = countedByLimit();
+        const heldBytes = counted.reduce((sum, chunk) => sum + chunk.audio.length, 0);
+        if (heldBytes + audio.length > limit.bytes) {
+          const older = counted
+            .map((chunk) => sent.get(chunk.audio))
+            .find((other) => other !== undefined && other.index < info.index);
+          if (older) report(`${stage}: the audio limit dropped ${describeChunk(info)} but kept older ${describeChunk(older)}`);
+          continue;
+        }
+      }
       report(`${stage}: ${describeChunk(info)} lost from ${holder}`);
     }
     lastHolder.clear();
@@ -331,6 +362,21 @@ const runOnce = async (seed: number, extended = false): Promise<string[]> => {
     sent.set(audio, info);
     order.push(info);
     await tolerate(() => rig.send({ type: "audio.chunk", audio, speaker }), `chunk #${index}`);
+  };
+
+  const burst = async (step: number) => {
+    if (random() < 0.4) {
+      rig.connectPlans.push(random() < 0.5 ? "unreachable" : { lateMs: 200 + Math.floor(random() * 2_300) });
+      latestSocket().disconnect();
+      await settle();
+      check(`step ${step} burst drop`);
+    }
+    const count = Math.floor(LIMIT_CHUNKS / 2) + Math.floor(random() * LIMIT_CHUNKS);
+    for (let chunk = 0; chunk < count; chunk += 1) {
+      if (random() < 0.15) speaker = speakers[Math.floor(random() * speakers.length)];
+      await sendChunk(true);
+      check(`step ${step} burst chunk ${chunk}`);
+    }
   };
 
   const extendedEvent = async (step: number) => {
@@ -423,6 +469,13 @@ const runOnce = async (seed: number, extended = false): Promise<string[]> => {
   check("setup");
 
   for (let step = 0; step < STEPS; step += 1) {
+    if (bursts && random() < 0.2) {
+      await burst(step);
+      await settle();
+      socket = latestSocket();
+      check(`step ${step} burst`);
+      continue;
+    }
     if (extended && random() < 0.3) {
       await extendedEvent(step);
       await settle();
@@ -474,12 +527,17 @@ const runOnce = async (seed: number, extended = false): Promise<string[]> => {
   await vi.advanceTimersByTimeAsync(DEADLINE + 1_000);
   check("end");
   vi.useRealTimers();
+  limit.bytes = limit.real;
   return problems;
 };
 
 const FIXED_SEEDS: Record<string, number> = {
   "Recent speech loses its speaker": 2,
   "Same-tick audio changes owners": 142,
+};
+
+const BURST_FIXED_SEEDS: Record<string, number> = {
+  "Later audio gets dropped first": 1,
 };
 
 const EXTENDED_FIXED_SEEDS: Record<string, number> = {
@@ -497,6 +555,21 @@ describe("caption chunks under random speech, signals and drops", () => {
   it.each(Object.entries(EXTENDED_FIXED_SEEDS))("%s (extended seed %i)", async (_thread, seed) => {
     expect(await runOnce(seed, true)).toEqual([]);
   });
+
+  it.each(Object.entries(BURST_FIXED_SEEDS))("%s (burst seed %i)", async (_thread, seed) => {
+    expect(await runOnce(seed, true, true)).toEqual([]);
+  });
+
+  it(`drops the oldest audio first at the audio limit under same-millisecond bursts across ${BURST_RUNS} seeded runs`, async () => {
+    const failures: string[] = [];
+    const first = Number(process.env.TRANSCRIPT_CHUNK_ORDER_FROM ?? 1);
+    const maxFailures = Number(process.env.TRANSCRIPT_CHUNK_ORDER_MAX_FAILURES ?? 3);
+    for (let seed = first; seed < first + BURST_RUNS && failures.length < maxFailures; seed += 1) {
+      const problems = await runOnce(seed, true, true);
+      if (problems.length > 0) failures.push(`seed ${seed}: ${problems.join(" | ")}`);
+    }
+    expect(failures).toEqual([]);
+  }, Math.max(600_000, BURST_RUNS * 1_500));
 
   it(`keeps every chunk and every shown word through saves, switches, late reconnects and bad frames across ${EXTENDED_RUNS} seeded runs`, async () => {
     const failures: string[] = [];
