@@ -648,7 +648,16 @@ Fixed 2026-10-22 and guarded by `testNativeCallCorrectnessBlockersStayFixed`:
   loads the Device at once only while no retired entry is waiting on its
   lane; otherwise it defers the load (`deviceLoadJob`) until every lane has
   finished, disposes the retired objects, then loads. Send and receive
-  transport creation wait for that load first (`awaitDeviceLoad`).
+  transport creation wait for that load first (`awaitDeviceLoad`). A stuck
+  native close must never block joining, so that wait has a deadline
+  (`RetiredTransportReaper.LANE_DEADLINE_MILLIS`, 5 s; a session end already
+  cuts short any ack a lane waits on). After it, every entry still waiting is
+  abandoned: its close keeps running on its own lane thread, it stops holding
+  up the Device load and the disposal of other entries, it is disposed only
+  once its close finishes, and `onTeardownStuck` records
+  `media.teardownStuck.transport`. The new load then risks the factory
+  probe running beside that close; that trade was chosen over a call that
+  can never join again.
 - Android disposes every track it creates exactly once, through the field
   that holds it, on every path that drops it. The microphone track
   (`localAudioTrack`, and the route-recovery and noise-suppression
@@ -665,31 +674,60 @@ Fixed 2026-10-22 and guarded by `testNativeCallCorrectnessBlockersStayFixed`:
   capture thread, which takes the shared EGL lock that tile rendering also
   takes, so `CaptureTeardown` stops and disposes each capturer and helper
   on a thread of its own (`CaptureTeardown.camera`, `CaptureTeardown.screen`).
-  Every capture start waits for its kind's earlier teardowns before it opens
-  a device (`awaitCaptureTeardown`): the camera start (which camera recovery
-  and rejoin go through), the camera switch and the share start, each
-  re-checking its session after the wait. The wait has a deadline
-  (`CaptureTeardown.DEADLINE_MILLIS`, 3 s): WebRTC's `stopCapture()` waits
-  while a camera open is pending and a hung driver never releases it, so
-  after the deadline the start goes ahead, the stuck teardown keeps its own
-  thread, and `onCaptureTeardownStuck` records
-  `capture.teardownStuck.<kind>` in the call diagnostics. A camera-off keeps
-  its synchronous `stopCapture()` on the main thread, because a restart must
-  run after it; that call waits only while a camera open is in progress.
-- Every capture-session callback carries the session it was registered for
-  and does nothing once that session has ended (`cameraCaptureSession`,
-  `screenCaptureSession`, cleared by the release): the projection stop
-  callback, the camera events handler (`cameraEvents(session)`) and the
-  capturer observer (`SessionCapturerObserver`). Android delivers those
-  callbacks through queues, so an ended capture can still call back after a
-  new one started: an old projection stop once cleared the new share's
-  consent and stopped its service.
-- Renderers attach sinks through `VideoSinkAttachment`. It removes a sink
-  only if adding it succeeded and never throws on detach: `addSink` on a
-  disposed track inserts its sink entry and then throws, and a later
-  `removeSink` throws on that entry. `CameraFacingCatalog` numbers its scans
-  and keeps a result only if no newer scan has been stored, so a slow older
-  scan cannot bring a vanished camera back.
+  A camera-off keeps its synchronous `stopCapture()` on the main thread,
+  because a restart must run after it; that call waits only while a camera
+  open is in progress.
+- A capture start never opens a device something else may still hold
+  (`awaitCaptureDeviceFree`): the camera start (which camera recovery and
+  rejoin go through), the camera switch and the share start. Each first
+  waits for its kind's earlier teardowns, up to
+  `CaptureTeardown.DEADLINE_MILLIS` (3 s). WebRTC's `stopCapture()` waits
+  while a camera open is pending, a hung driver never releases it, and a
+  healthy stop can take longer than the deadline, so past the deadline the
+  start records `media.teardownStuck.<kind>` (`onTeardownStuck`) and waits
+  up to `CaptureTeardown.DEVICE_WAIT_MILLIS` (5 s) more for the device to be
+  free: for a camera, CameraManager reporting that camera id available
+  (`CameraAvailability`, an `AvailabilityCallback`) or the teardown
+  finishing; for a share, the teardown finishing. A device still held fails
+  the start visibly instead of opening it twice: a camera start marks the
+  call camera `inUseByAnotherClient` and throws a "device busy" error the
+  view model shows as "Another app is using your camera." with the camera
+  left off, and a share start fails into the share failure path. Tapping
+  again retries. So while a teardown of a kind is stuck, no capture of that
+  kind is opened, and none is added for another teardown thread to strand.
+  Camera names are CameraManager ids, except on the Camera1 fallback, where
+  only the finished teardown frees the device.
+- A capture's texture helper is created off the main thread
+  (`CaptureTeardown.createHelper`, 2 s bound, one creation per kind at a
+  time), before its capturer is opened. `SurfaceTextureHelper.create` builds
+  an EGL context under the shared EGL lock, so a stalled swap anywhere can
+  hold it: past the bound the start fails, nothing has been opened, and a
+  helper that arrives late is disposed on its own thread. A start that
+  finds a creation still stuck fails at once instead of adding another.
+- Every capture callback applies its effect through one function on the main
+  thread (`applyCaptureCallback`), which checks the capture's session
+  (`CaptureSession`, held in `cameraCapture` and `screenCapture` and cleared
+  by the release) and that the session's capturer is still the installed one,
+  at the moment of the mutation. That covers the projection stop, the camera
+  events handler (`cameraEvents(capture)`: open, error, disconnect) and the
+  camera switch's done and error. Never check on the callback's thread and
+  then act: an old projection stop passed its check, waited on the share
+  manager's lock, and then cleared the next share's consent. A camera switch
+  that resumes after its session ended changes nothing, and the switch
+  re-checks the session before it restarts capture, so it never calls into a
+  retired capturer. The capturer observer (`SessionCapturerObserver`) checks
+  the session on the capture thread itself, because frames are too frequent
+  to post and each session forwards only to its own source.
+- Renderers attach sinks through `VideoSinkAttachment`. Every local video
+  track is disposed through `VideoTrackLedger.dispose`, and an attach skips
+  `addSink` on a track the ledger has disposed: `addSink` on a disposed track
+  wraps the sink (a native wrapper and a global JNI reference) before it
+  throws, and a later `removeSink` throws before freeing it, so each such
+  attach leaked. The attachment still removes a sink only if adding it
+  succeeded and never throws on detach, for tracks disposed elsewhere.
+  `CameraFacingCatalog` numbers its scans and keeps a result only if no newer
+  scan has been stored, so a slow older scan cannot bring a vanished camera
+  back.
 - Every input that changes publish settings goes through
   `publishSettingsChanged()` on Android (camera and share settings, video
   quality), which bumps `mediaPublishSettingsRevision`. A video produce in
