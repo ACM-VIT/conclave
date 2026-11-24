@@ -18,6 +18,7 @@ import { createSfuState } from "../server/state.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
 import {
   MAX_APP_DOC_BYTES,
+  MAX_CLIENT_IDS_PER_PARTICIPANT,
   MAX_NEW_CLIENT_IDS_PER_UPDATE,
   MAX_PRESENCE_IDS_PER_PARTICIPANT,
   MAX_ROOM_APP_DOCS,
@@ -233,6 +234,83 @@ const authoredBy = (clientIds: number[]): Uint8Array =>
       return Y.encodeStateAsUpdate(author);
     }),
   );
+
+type RawId = { client: number; clock: number };
+type RawStruct = {
+  client: number;
+  clock: number;
+  origin?: RawId;
+  right?: RawId;
+  parent?: string | RawId;
+  key?: string;
+  value?: unknown;
+  type?: "array" | "map";
+};
+
+const writeId = (encoder: encoding.Encoder, id: RawId) => {
+  encoding.writeVarUint(encoder, id.client);
+  encoding.writeVarUint(encoder, id.clock);
+};
+
+const rawUpdate = (structs: RawStruct[], deletes: Array<RawId & { len: number }> = []): Uint8Array => {
+  const encoder = encoding.createEncoder();
+  const byClient = new Map<number, RawStruct[]>();
+  for (const struct of structs) byClient.set(struct.client, [...(byClient.get(struct.client) ?? []), struct]);
+  encoding.writeVarUint(encoder, byClient.size);
+  for (const [client, list] of byClient) {
+    list.sort((a, b) => a.clock - b.clock);
+    encoding.writeVarUint(encoder, list.length);
+    encoding.writeVarUint(encoder, client);
+    encoding.writeVarUint(encoder, list[0].clock);
+    for (const struct of list) {
+      const anchored = struct.origin !== undefined || struct.right !== undefined;
+      const keyed = !anchored && struct.key !== undefined;
+      encoding.writeUint8(
+        encoder,
+        (struct.type ? 7 : 8) | (struct.origin ? 128 : 0) | (struct.right ? 64 : 0) | (keyed ? 32 : 0),
+      );
+      if (struct.origin) writeId(encoder, struct.origin);
+      if (struct.right) writeId(encoder, struct.right);
+      if (!anchored) {
+        if (typeof struct.parent === "string") {
+          encoding.writeVarUint(encoder, 1);
+          encoding.writeVarString(encoder, struct.parent);
+        } else {
+          encoding.writeVarUint(encoder, 0);
+          writeId(encoder, struct.parent ?? { client: 0, clock: 0 });
+        }
+        if (keyed) encoding.writeVarString(encoder, struct.key!);
+      }
+      if (struct.type) {
+        encoding.writeVarUint(encoder, struct.type === "map" ? 1 : 0);
+      } else {
+        encoding.writeVarUint(encoder, 1);
+        encoding.writeAny(encoder, (struct.value ?? 1) as never);
+      }
+    }
+  }
+  const deletesByClient = new Map<number, Array<RawId & { len: number }>>();
+  for (const range of deletes) {
+    deletesByClient.set(range.client, [...(deletesByClient.get(range.client) ?? []), range]);
+  }
+  encoding.writeVarUint(encoder, deletesByClient.size);
+  for (const [client, ranges] of deletesByClient) {
+    encoding.writeVarUint(encoder, client);
+    encoding.writeVarUint(encoder, ranges.length);
+    for (const range of ranges) {
+      encoding.writeVarUint(encoder, range.clock);
+      encoding.writeVarUint(encoder, range.len);
+    }
+  }
+  return encoding.toUint8Array(encoder);
+};
+
+const seededRandom = (seed: number) => () => {
+  seed = (seed + 0x6d2b79f5) | 0;
+  let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+};
 
 const textBy = (doc: Y.Doc, text: string): Uint8Array => {
   const before = Y.encodeStateVector(doc);
@@ -880,6 +958,143 @@ describe("client id reservations", () => {
     expect(refusals).toHaveLength(1);
     expect(refusals[0].payload).toMatchObject({ appId: "whiteboard", replicaId: "copy-1" });
   });
+});
+
+describe("the room applies an update whole or not at all", () => {
+  const presentedBoard = () => {
+    const apps = new RoomApps();
+    apps.present("board");
+    const seed = new Y.Doc();
+    seed.clientID = 1;
+    seed.getMap("m").set("kept", 1);
+    seed.getMap("m").set("nested", new Y.Map());
+    seed.getArray("a").insert(0, [1, 2, 3]);
+    expect(apps.write("board", "host", Y.encodeStateAsUpdate(seed), apps.syncMark("board"))).toBeNull();
+    const live = () => apps.liveDoc("board")!;
+    const snapshot = () => Buffer.from(Y.encodeStateAsUpdate(live())).toString("base64");
+    return { apps, live, snapshot };
+  };
+
+  it("reads the hand-encoded updates these tests send as Yjs does", () => {
+    const update = rawUpdate([
+      { client: 70, clock: 0, parent: "m", key: "fresh", value: 5 },
+      { client: 70, clock: 1, parent: "m", key: "inner", type: "map" },
+    ]);
+    const doc = new Y.Doc();
+    Y.applyUpdate(doc, update);
+    expect(doc.getMap("m").get("fresh")).toBe(5);
+    expect(doc.getMap("m").get("inner")).toBeInstanceOf(Y.Map);
+  });
+
+  it("keeps a participant within their id limit when an update refers to its own item as parent", () => {
+    const { apps, live, snapshot } = presentedBoard();
+    const before = snapshot();
+    const mark = apps.syncMark("board");
+
+    for (let index = 0; index < MAX_CLIENT_IDS_PER_PARTICIPANT + 10; index += 1) {
+      const client = 80_000 + index;
+      apps.write(
+        "board",
+        "guest",
+        rawUpdate([
+          { client, clock: 0, parent: "m", key: `s${client}`, value: 1 },
+          { client, clock: 1, parent: { client, clock: 1 }, key: "self", value: 2 },
+        ]),
+        mark,
+      );
+    }
+
+    expect(snapshot()).toBe(before);
+    expect(apps.boundClientIdCount).toBe(1);
+    expect(live().store.pendingStructs).toBeNull();
+  });
+
+  it("refuses an update whose item refers to a later item of its own as parent", () => {
+    const { apps, live, snapshot } = presentedBoard();
+    const before = snapshot();
+    const client = 90_000;
+
+    const refusal = apps.write(
+      "board",
+      "guest",
+      rawUpdate([
+        { client, clock: 0, parent: "m", key: "first", value: 1 },
+        { client, clock: 1, parent: { client, clock: 2 }, key: "early", value: 2 },
+        { client, clock: 2, parent: "m", key: "later", type: "map" },
+      ]),
+      apps.syncMark("board"),
+    );
+
+    expect(refusal).toBe("unresolved");
+    expect(snapshot()).toBe(before);
+    expect(live().store.pendingStructs).toBeNull();
+  });
+
+  it("changes the document only by updates Yjs takes whole, across random malformed updates", () => {
+    const { apps, live, snapshot } = presentedBoard();
+    const random = seededRandom(270);
+    const pick = <T>(items: T[]): T => items[Math.floor(random() * items.length)];
+    const mark = apps.syncMark("board");
+    let accepted = 0;
+    let refused = 0;
+
+    for (let round = 0; round < 600; round += 1) {
+      const client = 100_000 + round;
+      const start = random() < 0.1 ? 1 : 0;
+      const count = 1 + Math.floor(random() * 4);
+      const liveIds = Array.from(Y.decodeStateVector(Y.encodeStateVector(live()))).flatMap(([owner, clock]) =>
+        clock > 0 ? [{ client: owner, clock: Math.floor(random() * clock) }] : [],
+      );
+      const ref = (clock: number): RawId =>
+        pick([
+          ...liveIds,
+          { client, clock: Math.max(0, clock - 1) },
+          { client, clock },
+          { client, clock: clock + 1 },
+          { client: client + 1, clock: 0 },
+          { client: 1, clock: 999 },
+        ]);
+      const structs: RawStruct[] = Array.from({ length: count }, (_, index) => {
+        const clock = start + index;
+        const shape = random();
+        const content = random() < 0.3 ? { type: pick(["map", "array"] as const) } : { value: round };
+        if (shape < 0.35) return { client, clock, parent: pick(["m", "a"]), key: pick(["kept", `k${round}`]), ...content };
+        if (shape < 0.6) return { client, clock, parent: ref(clock), key: `n${index}`, ...content };
+        if (shape < 0.8) return { client, clock, origin: ref(clock), ...content };
+        return { client, clock, origin: ref(clock), right: ref(clock), ...content };
+      });
+      const deletes = random() < 0.2 ? [{ ...ref(start + count), len: 1 + Math.floor(random() * 3) }] : [];
+      const update = rawUpdate(structs, deletes);
+
+      const before = snapshot();
+      const held = apps.boundClientIdCount;
+      const trial = new Y.Doc();
+      Y.applyUpdate(trial, Y.encodeStateAsUpdate(live()));
+      let trialClean = true;
+      try {
+        Y.applyUpdate(trial, update);
+      } catch {
+        trialClean = false;
+      }
+      trialClean &&= trial.store.pendingStructs === null && trial.store.pendingDs === null;
+
+      const refusal = apps.write("board", "fuzzer", update, mark);
+
+      expect(live().store.pendingStructs).toBeNull();
+      expect(live().store.pendingDs).toBeNull();
+      if (refusal) {
+        refused += 1;
+        expect(snapshot()).toBe(before);
+        expect(apps.boundClientIdCount).toBe(held);
+      } else {
+        accepted += 1;
+        expect(trialClean).toBe(true);
+      }
+    }
+
+    expect(accepted).toBeGreaterThan(20);
+    expect(refused).toBeGreaterThan(20);
+  }, 60_000);
 });
 
 describe("client ids are claimed only by a write the room takes", () => {

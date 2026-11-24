@@ -83,7 +83,10 @@ that:
   value: a client drawing on a fresh copy writes its own page under the
   saved page's key, which would replace it for everyone
 - refers to content the room does not hold, such as content it dropped, so
-  nothing that builds on a dropped update is kept half applied
+  nothing that builds on a dropped update is kept half applied. An item may
+  refer to its own client's content only when that content comes earlier, and
+  to another client's content only when the room already holds it, so Yjs
+  always takes an update whole and never leaves part of it applied
 
 A client that drew on a fresh copy before its sync keeps its own drawing
 locally and cannot write again until the stage changes; everyone else keeps

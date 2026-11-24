@@ -124,7 +124,7 @@ const liveMapValue = (doc: Y.Doc, parent: unknown, key: string): Y.Item | null =
   return value && !value.deleted ? value : null;
 };
 
-type UpdateFacts = {
+export type UpdateFacts = {
   // The Yjs clients the update writes as.
   writers: Set<number>;
   // Every client it writes as, builds on or deletes from.
@@ -137,7 +137,7 @@ type UpdateFacts = {
   blindlyReplaced: Y.ID[];
 };
 
-const readUpdate = (doc: Y.Doc, update: Uint8Array): UpdateFacts => {
+export const readUpdate = (doc: Y.Doc, update: Uint8Array): UpdateFacts => {
   const { structs, ds } = Y.decodeUpdate(update);
   const ends = new Map<number, number>();
   const end = (client: number): number => ends.get(client) ?? Y.getState(doc.store, client);
@@ -158,7 +158,11 @@ const readUpdate = (doc: Y.Doc, update: Uint8Array): UpdateFacts => {
     for (const ref of [struct.origin, struct.rightOrigin, parent instanceof Y.ID ? parent : null]) {
       if (!ref) continue;
       touched.add(ref.client);
-      if (ref.clock >= end(ref.client)) resolvable = false;
+      const integrated =
+        ref.client === struct.id.client
+          ? ref.clock < struct.id.clock
+          : ref.clock < Y.getState(doc.store, ref.client);
+      if (!integrated) resolvable = false;
     }
     if (struct.origin === null && struct.rightOrigin === null && struct.parentSub !== null) {
       const replaced = liveMapValue(doc, parent, struct.parentSub);
