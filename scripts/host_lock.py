@@ -50,6 +50,11 @@ def prepare(path):
     try:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, MODE)
     except FileExistsError:
+        found = os.lstat(path)
+        if not stat.S_ISREG(found.st_mode):
+            sys.exit(f"{path} is a link or not a regular file, so it cannot be the host's deploy lock; remove it and rerun")
+        if not trusted(found.st_uid):
+            sys.exit(f"{path} belongs to uid {found.st_uid}, who is neither root, this user nor in the docker group, so it could be replaced or held by them; remove it and rerun")
         return
     try:
         group = docker_group()

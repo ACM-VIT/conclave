@@ -2521,6 +2521,21 @@ test("a restore loads a snapshot taken from a Redis database above 15", needsRed
   }
 });
 
+test("a pipe at the host deploy lock's path is refused before anything opens it", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, env } = await setUp(root);
+    withDatabase(state);
+    await run("mkfifo", [path.join(root, "deploy.lock")]);
+    await assert.rejects(
+      run("bash", [path.join(scripts, "backup.sh"), "--local-only"], { env, timeout: 30_000 }),
+      (error) => !error.killed && /deploy\.lock is a link or not a regular file/.test(`${error.stdout}${error.stderr}`),
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 describe("backup and restore", { concurrency: 6 }, () => {
   for (const args of queued) nodeTest(...args);
 });
