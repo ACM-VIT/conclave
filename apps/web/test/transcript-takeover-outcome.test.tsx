@@ -572,3 +572,96 @@ describe("caption language support", () => {
     expect(controller.supportsCaptionLanguage).toBe(true);
   });
 });
+
+describe("a relay start this tab no longer wants", () => {
+  const superseded = {
+    mode: "sfu",
+    success: false,
+    status: "error",
+    reason: "A newer SFU transcript relay start superseded this request.",
+    updatedAt: 1,
+  };
+  const holdFirstRelayStart = () => {
+    let answer!: (response: unknown) => void;
+    startRelay.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+    return (response: unknown) => answer(response);
+  };
+  const acceptSwitch = async (socket: FakeSocket, language: string, updatedAt: number, relayToken: string) => {
+    const requestId = socket.sent.filter((message) => message.language === language).at(-1)?.requestId;
+    await act(async () =>
+      socket.frame({
+        type: "session.state",
+        session: { ...liveSession, status: "starting", language, requestId },
+      }),
+    );
+    await act(async () =>
+      socket.frame({ type: "session.state", session: { ...liveSession, language, requestId, updatedAt } }),
+    );
+    await act(async () =>
+      socket.frame({ type: "sfu.relayStartToken", token: relayToken, expiresAt: Date.now() + 60_000 }),
+    );
+  };
+
+  it("stays silent and never retries when the SFU answers a start this tab replaced as superseded", async () => {
+    const socket = await mount();
+    await act(async () => socket.frame({ type: "session.state", session: liveSession }));
+    const answerFirst = holdFirstRelayStart();
+
+    let hindi!: Promise<boolean>;
+    await act(async () => {
+      hindi = controller.takeover({ language: "hi" });
+    });
+    await acceptSwitch(socket, "hi", 2, "relay-hi");
+    expect(startRelay).toHaveBeenCalledTimes(1);
+
+    let tamil!: Promise<boolean>;
+    await act(async () => {
+      tamil = controller.takeover({ language: "ta" });
+    });
+    await acceptSwitch(socket, "ta", 3, "relay-ta");
+    expect(await tamil).toBe(true);
+
+    await act(async () => answerFirst(superseded));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_000);
+    });
+
+    expect(await hindi).toBe(false);
+    expect(startRelay.mock.calls.map(([request]) => request)).toEqual([
+      { relayStartToken: "relay-hi" },
+      { relayStartToken: "relay-ta" },
+    ]);
+    expect(controller.error).toBeNull();
+    expect(controller.sfuRelayStatus?.available).toBe(true);
+    expect(socket.sent.map(({ type }) => type)).not.toContain("session.relayFailed");
+  });
+
+  it("stays silent when a start's answer arrives after Stop", async () => {
+    const socket = await mount();
+    await act(async () => socket.frame({ type: "session.state", session: liveSession }));
+    const answerFirst = holdFirstRelayStart();
+
+    let hindi!: Promise<boolean>;
+    await act(async () => {
+      hindi = controller.takeover({ language: "hi" });
+    });
+    await acceptSwitch(socket, "hi", 2, "relay-hi");
+    await act(async () => {
+      void controller.stop();
+    });
+    await act(async () => answerFirst(superseded));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_000);
+    });
+
+    expect(await hindi).toBe(false);
+    expect(startRelay).toHaveBeenCalledTimes(1);
+    expect(controller.error).toBeNull();
+    expect(socket.sent.map(({ type }) => type)).not.toContain("session.relayFailed");
+  });
+});

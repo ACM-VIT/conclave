@@ -222,6 +222,8 @@ const TRANSCRIPT_HEARTBEAT_INTERVAL_MS = 20_000;
 const TRANSCRIPT_HEARTBEAT_TIMEOUT_MS = 55_000;
 const SFU_RELAY_START_RETRY_DELAYS_MS = [0, 300, 900] as const;
 
+type SfuRelayStartOutcome = "started" | "failed" | "replaced";
+
 const isBufferableTranscriptAudioPayload = (payload: unknown): boolean => {
   if (!payload || typeof payload !== "object" || !("type" in payload)) {
     return false;
@@ -351,6 +353,7 @@ export function useMeetingTranscript({
   const sessionRef = useRef<TranscriptSessionState>(buildIdleSession(roomId));
   const sessionWaitersRef = useRef<Set<TranscriptSessionWaiter>>(new Set());
   const startedRelayTokensRef = useRef<Set<string>>(new Set());
+  const relayStartSequenceRef = useRef(0);
   const nextWaiterOrderRef = useRef(0);
   const replacedRequestIdsRef = useRef<Set<string>>(new Set());
   const sfuRelayStartTokenRef = useRef<TranscriptSfuRelayStartToken | null>(
@@ -1056,19 +1059,21 @@ export function useMeetingTranscript({
 
   const startSfuRelay = useCallback(async (
     providedToken?: TranscriptSfuRelayStartToken,
-  ): Promise<boolean> => {
+  ): Promise<SfuRelayStartOutcome> => {
     if (!startTranscriptSfuRelay) {
       setError("This SFU does not support server-side transcript relay.");
-      return false;
+      return "failed";
     }
     const relayStartToken =
       providedToken ?? (await waitForSfuRelayStartToken());
     if (!relayStartToken?.token || relayStartToken.expiresAt <= Date.now()) {
       setError("Transcript worker did not authorize the SFU relay.");
-      return false;
+      return "failed";
     }
-    if (startedRelayTokensRef.current.has(relayStartToken.token)) return true;
+    if (startedRelayTokensRef.current.has(relayStartToken.token)) return "started";
     startedRelayTokensRef.current.add(relayStartToken.token);
+    const sequence = ++relayStartSequenceRef.current;
+    const replaced = () => relayStartSequenceRef.current !== sequence;
     let relayStart: TranscriptSfuRelayStartResponse | null = null;
     for (
       let attempt = 0;
@@ -1078,10 +1083,12 @@ export function useMeetingTranscript({
       const delay = SFU_RELAY_START_RETRY_DELAYS_MS[attempt] ?? 0;
       if (delay > 0) {
         await new Promise<void>((resolve) => window.setTimeout(resolve, delay));
+        if (replaced()) return "replaced";
       }
       relayStart = await startTranscriptSfuRelay({
         relayStartToken: relayStartToken.token,
       });
+      if (replaced()) return "replaced";
       if (relayStart?.success) break;
     }
     if (!relayStart?.success) {
@@ -1099,7 +1106,7 @@ export function useMeetingTranscript({
         );
         setError(relayStart?.reason || "Could not start SFU transcript relay.");
       }
-      return false;
+      return "failed";
     }
     setSfuRelayStatus({
       mode: "sfu",
@@ -1108,7 +1115,7 @@ export function useMeetingTranscript({
       updatedAt: relayStart.updatedAt,
     });
     setError(clearRecoveredTranscriptError);
-    return true;
+    return "started";
   }, [startTranscriptSfuRelay, waitForSfuRelayStartToken]);
 
   useEffect(() => {
@@ -1233,7 +1240,9 @@ export function useMeetingTranscript({
         if (!token) return true;
         relayToken = token;
       }
-      if (!(await startSfuRelay(relayToken))) {
+      const relayOutcome = await startSfuRelay(relayToken);
+      if (relayOutcome === "replaced") return false;
+      if (relayOutcome === "failed") {
         suppressAutoTakeoverUntilRef.current = Date.now() + 30_000;
         send({
           type: "session.relayFailed",
@@ -1382,6 +1391,7 @@ export function useMeetingTranscript({
     }
     const transportMode = session.transportMode;
     explicitStopSerialRef.current += 1;
+    relayStartSequenceRef.current += 1;
     startedRelayTokensRef.current.clear();
     clearSessionWaiters();
     suppressAutoTakeoverUntilRef.current =
@@ -1509,6 +1519,7 @@ export function useMeetingTranscript({
       clearSessionWaiters();
       replacedRequestIdsRef.current.clear();
       sfuRelayStartTokenRef.current = null;
+      relayStartSequenceRef.current += 1;
       startedRelayTokensRef.current.clear();
       clearSfuRelayStartTokenWaiters();
       setSession(idleSession);
