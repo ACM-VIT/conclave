@@ -41,7 +41,7 @@ const createHarness = (
     const noop = () => {};
     const supplied = {
       refs, roomId: "room-a", userId: "guest-before#session", localStream: null,
-      prewarm: { io, Device: null, isReady: true },
+      prewarm: { io, Device: (overrides as { Device?: unknown }).Device ?? null, isReady: true },
       isMuted: true, isCameraOff: true, displayNameInput: "Viewer",
       primeAudioOutput: noop,
       chat: { setChatMessages: noop, setChatOverlayMessages: noop, setUnreadCount: noop, isChatOpenRef: { current: false } },
@@ -171,6 +171,59 @@ describe("a waiting tab that the host approves twice", () => {
 
     expect(joinsStarted()).toBe(1);
     expect(info).toHaveBeenCalledWith("[Meets] Join already approved; ignoring a repeated approval.");
+    info.mockRestore();
+    error.mockRestore();
+  });
+});
+
+describe("a waiting tab approved while its meeting runs on another SFU", () => {
+  it("follows the redirect to that SFU and asks to join there", async () => {
+    let refs!: ReturnType<typeof useMeetRefs>;
+    const setMeetError = vi.fn();
+    const h = createHarness({
+      adoptJoinIdentity: () => false,
+      joinMode: "webinar_attendee",
+      bypassMediaPermissions: true,
+      setMeetError,
+      Device: class {
+        handlerName = "Chrome111";
+      },
+      captureRefs: (captured: ReturnType<typeof useMeetRefs>) => {
+        refs = captured;
+      },
+    } as Partial<Options>);
+    await h.connect("room-a", 1);
+    refs.currentRoomIdRef.current = "room-a";
+    refs.connectSocketRef.current = h.api.connectSocket;
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const joins: string[] = [];
+    h.socket.emit.mockImplementation((event: string, ...args: unknown[]) => {
+      if (event !== "joinRoom") return;
+      const answer = args.at(-1) as (response: unknown) => void;
+      joins.push(String(h.io.mock.calls.at(-1)?.[0]));
+      answer(
+        joins.length === 1
+          ? {
+              error: "Room is hosted by another SFU instance.",
+              roomId: "room-a",
+              redirectInstanceId: "sfu-b",
+              redirectUrl: "https://sfu-b.example.test",
+            }
+          : { error: "Stopped here." },
+      );
+    });
+
+    h.handlers.get("joinApproved")?.(...([] as never[]));
+    await vi.waitFor(() => expect(h.io).toHaveBeenCalledTimes(2));
+    h.socket.connected = true;
+    h.handlers.get("connect")?.(...([] as never[]));
+    await vi.waitFor(() => expect(joins).toHaveLength(2));
+    await vi.waitFor(() => expect(error).toHaveBeenCalled());
+
+    expect(h.io.mock.calls[1][0]).toBe("https://sfu-b.example.test");
+    expect(joins[1]).toBe("https://sfu-b.example.test");
+    expect(setMeetError).toHaveBeenLastCalledWith(expect.objectContaining({ message: "Stopped here." }));
     info.mockRestore();
     error.mockRestore();
   });

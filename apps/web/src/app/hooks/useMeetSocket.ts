@@ -1260,6 +1260,7 @@ export function useMeetSocket({
     currentRoomIdRef,
     handleRedirectRef,
     handleReconnectRef,
+    connectSocketRef,
     shouldAutoJoinRef,
     joinOptionsRef,
     localStreamRef,
@@ -8454,26 +8455,52 @@ export function useMeetSocket({
                   bypassMediaPermissions ||
                   joinOptions.joinMode === "webinar_attendee")
               ) {
-                await joinRoomInternal(
-                  currentRoomIdRef.current,
-                  stream,
-                  joinOptions,
-                )
-                  .then((joinResult) => {
-                    if (joinResult === "joined") {
-                      prejoinMediaIntentRef.current = null;
-                    }
-                  })
-                  .catch((joinError: unknown) => {
+                const approvedRoomId = currentRoomIdRef.current;
+                const stale = () =>
+                  approvalGeneration !== reconnectGenerationRef.current ||
+                  intentionalDisconnectRef.current;
+                let rerouted = false;
+                try {
+                  let joinResult: Awaited<ReturnType<typeof joinRoomInternal>>;
+                  try {
+                    joinResult = await joinRoomInternal(approvedRoomId, stream, joinOptions);
+                  } catch (joinError) {
+                    const connectToRoutedSfu = connectSocketRef.current;
                     if (
-                      approvalGeneration !== reconnectGenerationRef.current ||
-                      intentionalDisconnectRef.current ||
+                      !(joinError instanceof JoinRoomRedirectError) ||
+                      !connectToRoutedSfu ||
+                      stale() ||
                       socketRef.current !== socket
-                    ) return;
-                    console.error("[Meets] Join after approval failed:", joinError);
-                    setMeetError(createMeetError(joinError));
-                    setConnectionState("error");
-                  });
+                    ) {
+                      throw joinError;
+                    }
+                    console.info(
+                      `[Meets] Reconnecting to routed SFU ${joinError.redirectUrl}`,
+                      {
+                        roomId: approvedRoomId,
+                        redirectInstanceId: joinError.response.redirectInstanceId,
+                      },
+                    );
+                    rerouted = true;
+                    cleanupRoomResources({ resetRoomId: false });
+                    socketRef.current?.disconnect();
+                    socketRef.current = null;
+                    onSocketReady?.(null);
+                    await connectToRoutedSfu(approvedRoomId, {
+                      sfuUrlOverride: joinError.redirectUrl,
+                    });
+                    if (stale()) return;
+                    joinResult = await joinRoomInternal(approvedRoomId, stream, joinOptions);
+                  }
+                  if (joinResult === "joined") {
+                    prejoinMediaIntentRef.current = null;
+                  }
+                } catch (joinError) {
+                  if (stale() || (!rerouted && socketRef.current !== socket)) return;
+                  console.error("[Meets] Join after approval failed:", joinError);
+                  setMeetError(createMeetError(joinError));
+                  setConnectionState("error");
+                }
               } else {
                 console.error(
                   "[Meets] Cannot re-join: missing room ID or local stream",
@@ -8933,8 +8960,14 @@ export function useMeetSocket({
       userId,
       onTtsMessage,
       onSocketReady,
+      cleanupRoomResources,
+      connectSocketRef,
     ],
   );
+
+  useEffect(() => {
+    connectSocketRef.current = connectSocket;
+  }, [connectSocket, connectSocketRef]);
 
   const handleReconnect = useCallback(async (options?: ReconnectRequest) => {
     if (reconnectInFlightRef.current) {
