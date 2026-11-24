@@ -46,10 +46,11 @@ export const splitIceServersByType = (
 /** One join answer's TURN servers and when their credentials run out. */
 export type RelaySet = {
   servers: RTCIceServer[];
-  /** Null when the answer gave no lifetime. */
-  expiresAt: number | null;
+  expiresAt: number;
   issuedAt: number;
 };
+
+export const ASSUMED_RELAY_LIFETIME_MS = 5 * 60_000;
 
 type StampedAnswer = {
   iceServers?: RTCIceServer[];
@@ -60,15 +61,35 @@ type StampedAnswer = {
 const finiteOrNull = (value: unknown): number | null =>
   typeof value === "number" && Number.isFinite(value) ? value : null;
 
+export const stampRelayLifetime = <
+  T extends StampedAnswer & { iceServersTtlSeconds?: number },
+>(
+  answer: T,
+  sentAt: number,
+): T => {
+  const ttlSeconds = finiteOrNull(answer.iceServersTtlSeconds);
+  const hasRelay = splitIceServersByType(answer.iceServers).turnIceServers.length > 0;
+  return {
+    ...answer,
+    relayIssuedAt: sentAt,
+    ...(ttlSeconds !== null
+      ? { relayExpiresAt: sentAt + ttlSeconds * 1000 }
+      : hasRelay
+        ? { relayExpiresAt: sentAt + ASSUMED_RELAY_LIFETIME_MS }
+        : {}),
+  };
+};
+
 export const readAnswerRelay = (answer: StampedAnswer): RelaySet | null => {
   const { turnIceServers } = splitIceServersByType(answer.iceServers);
-  return turnIceServers.length > 0
-    ? {
-        servers: turnIceServers,
-        expiresAt: finiteOrNull(answer.relayExpiresAt),
-        issuedAt: finiteOrNull(answer.relayIssuedAt) ?? 0,
-      }
-    : null;
+  if (turnIceServers.length === 0) return null;
+  const issuedAt = finiteOrNull(answer.relayIssuedAt) ?? 0;
+  return {
+    servers: turnIceServers,
+    expiresAt:
+      finiteOrNull(answer.relayExpiresAt) ?? issuedAt + ASSUMED_RELAY_LIFETIME_MS,
+    issuedAt,
+  };
 };
 
 /** The ICE servers new transports are offered, from the join answers so far. */

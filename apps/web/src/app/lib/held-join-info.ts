@@ -6,7 +6,11 @@ export type JoinGrant = {
 };
 
 import { readJoinTokenUserKey } from "./join-token-identity";
-import { isRelayDueForRefresh, splitIceServersByType } from "./relay-credentials";
+import {
+  ASSUMED_RELAY_LIFETIME_MS,
+  isRelayDueForRefresh,
+  splitIceServersByType,
+} from "./relay-credentials";
 
 type HoldableJoinInfo = {
   token: string;
@@ -77,7 +81,11 @@ export const holdJoinInfo = <T extends HoldableJoinInfo>(
     roomId,
     grant,
     tokenExpiresAt: readTokenExpiryMs(joinInfo.token),
-    relayExpiresAt: hasRelay ? (stampedDeadline ?? deadlineFromReceipt) : null,
+    relayExpiresAt: hasRelay
+      ? (stampedDeadline ??
+        deadlineFromReceipt ??
+        receivedAt + ASSUMED_RELAY_LIFETIME_MS)
+      : null,
   };
 };
 

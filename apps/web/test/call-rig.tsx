@@ -5,6 +5,7 @@ import { useMeetRefs } from "../src/app/hooks/useMeetRefs";
 import { useMeetSocket } from "../src/app/hooks/useMeetSocket";
 import { requestJoinInfo } from "../src/app/lib/join-info-request";
 import { readJoinTokenUserKey } from "../src/app/lib/join-token-identity";
+import { ASSUMED_RELAY_LIFETIME_MS } from "../src/app/lib/relay-credentials";
 
 type Listener = (...args: never[]) => unknown;
 type Ack = (response: unknown) => void;
@@ -59,6 +60,7 @@ export type Generation = {
   username: string;
   sentAt: number;
   expiresAt: number;
+  clientExpiresAt: number;
   urls: string[];
 };
 
@@ -109,6 +111,17 @@ export class FakeTransport extends Emitter {
     return (this.options.iceServers ?? [])
       .map((server) => ({ username: String(server.username), urls: [server.urls].flat().map(String) }))
       .filter(({ urls }) => urls.some((url) => url.startsWith("turn")));
+  }
+
+  clientUsableWorkingEntry(): boolean {
+    return this.offeredEntries.some((entry) => {
+      const generation = this.rig.generations.find((candidate) => candidate.username === entry.username);
+      return (
+        generation !== undefined &&
+        generation.clientExpiresAt - Date.now() > 5_000 &&
+        entry.urls.some((url) => this.rig.workingRelayUrls.has(url))
+      );
+    });
   }
 
   workingEntry(): { generation: Generation; url: string } | null {
@@ -295,6 +308,7 @@ export class CallRig {
   refuseIceRestart = false;
   relayFailsOnExpiry = false;
   answerUrls: string[] = [TURN_A];
+  statesLifetime = true;
   workingRelayUrls = new Set([TURN_A, TURN_B]);
   provenAt = new Map<Generation, number>();
   offerViolations: string[] = [];
@@ -443,12 +457,14 @@ export class CallRig {
     }
   }
 
-  newGeneration(): Generation {
+  newGeneration(requestedAt: number): Generation {
     const sentAt = Date.now();
     const generation = {
       username: `gen-${this.generations.length + 1}`,
       sentAt,
       expiresAt: sentAt + this.ttlSeconds * 1000,
+      clientExpiresAt:
+        requestedAt + (this.statesLifetime ? this.ttlSeconds * 1000 : ASSUMED_RELAY_LIFETIME_MS),
       urls: [...this.answerUrls],
     };
     this.generations.push(generation);
@@ -465,11 +481,11 @@ export class CallRig {
     return `header.${claims}.signature`;
   }
 
-  private answer() {
+  private answer(requestedAt: number) {
     if (this.provider === "down") {
       return { token: this.token(), sfuUrl: "http://sfu.rig.test", iceServers: [STUN] };
     }
-    const generation = this.newGeneration();
+    const generation = this.newGeneration(requestedAt);
     return {
       token: this.token(),
       sfuUrl: "http://sfu.rig.test",
@@ -481,17 +497,18 @@ export class CallRig {
           credential: "secret",
         },
       ],
-      iceServersTtlSeconds: this.ttlSeconds,
+      ...(this.statesLifetime ? { iceServersTtlSeconds: this.ttlSeconds } : {}),
     };
   }
 
   fetch = (_url: string, init?: RequestInit): Promise<unknown> => {
     const signal = init?.signal ?? null;
+    const requestedAt = Date.now();
     return new Promise((resolve, reject) => {
       signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
       const reply = () => {
         if (signal?.aborted) return;
-        const body = this.answer();
+        const body = this.answer(requestedAt);
         this.joinRequests.push({ at: Date.now(), outcome: body.iceServers.length > 1 ? "relay" : "stun-only" });
         this.log.push(`${((Date.now() - RIG_START) / 1000).toFixed(1)}s route answered ${body.iceServers.length > 1 ? this.generations.at(-1)?.username : "stun-only"}`);
         resolve({ ok: true, status: 200, json: async () => body });
@@ -657,7 +674,7 @@ export class CallRig {
 
   checkOffer(transport: FakeTransport) {
     const now = Date.now();
-    const usable = (generation: Generation) => generation.expiresAt - now > 5_000;
+    const usable = (generation: Generation) => generation.clientExpiresAt - now > 5_000;
     const carried = [...this.provenAt.keys()].sort((a, b) => b.sentAt - a.sentAt);
     const proven = carried[0];
     const newestCarrier = this.transports
@@ -856,7 +873,7 @@ export class CallRig {
     await act(async () => {
       let left = ms;
       while (left > 0) {
-        const step = Math.min(250, left);
+        const step = Math.min(left > 20_000 ? 1_000 : 250, left);
         await vi.advanceTimersByTimeAsync(step);
         for (const transport of this.transports) this.accrue(transport);
         this.failRelayPaths();

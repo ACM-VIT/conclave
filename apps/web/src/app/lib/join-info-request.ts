@@ -1,3 +1,4 @@
+import { stampRelayLifetime } from "./relay-credentials";
 import { readResponseError } from "./utils";
 
 export type JoinInfoAnswer = {
@@ -27,15 +28,7 @@ const readJoinInfo = async (
     error.responseStatus = response.status;
     throw error;
   }
-  const answer = (await response.json()) as JoinInfoAnswer;
-  const ttlSeconds = answer.iceServersTtlSeconds;
-  return {
-    ...answer,
-    relayIssuedAt: sentAt,
-    ...(typeof ttlSeconds === "number" && Number.isFinite(ttlSeconds)
-      ? { relayExpiresAt: sentAt + ttlSeconds * 1000 }
-      : {}),
-  };
+  return stampRelayLifetime((await response.json()) as JoinInfoAnswer, sentAt);
 };
 
 /**

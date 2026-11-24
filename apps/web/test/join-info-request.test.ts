@@ -2,6 +2,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, expect, it } from "vitest";
 import { requestJoinInfo } from "../src/app/lib/join-info-request";
+import { ASSUMED_RELAY_LIFETIME_MS } from "../src/app/lib/relay-credentials";
 
 let server: Server | null = null;
 
@@ -98,6 +99,23 @@ it("counts the TURN lifetime from when the request was sent", async () => {
   expect(answer.relayExpiresAt).toBeGreaterThanOrEqual(sentAt + 60_000);
   expect(answer.relayExpiresAt).toBeLessThan(sentAt + 60_000 + 200);
   expect(answer.relayIssuedAt).toBe((answer.relayExpiresAt ?? 0) - 60_000);
+});
+
+it("assumes a short lifetime for TURN credentials the route sends without one", async () => {
+  const url = await serve((_request, response) => {
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(
+      JSON.stringify({
+        token: "t",
+        sfuUrl: "https://sfu.example",
+        iceServers: [{ urls: "turn:turn.example", username: "u", credential: "c" }],
+      }),
+    );
+  });
+
+  const answer = await requestJoinInfo(url, { method: "POST" });
+
+  expect(answer.relayExpiresAt).toBe((answer.relayIssuedAt ?? 0) + ASSUMED_RELAY_LIFETIME_MS);
 });
 
 it("gives an answer without a TURN lifetime no relay deadline", async () => {

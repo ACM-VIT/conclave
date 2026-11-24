@@ -11,6 +11,8 @@ import {
   transportsToMoveOntoRelay,
   type RelayRefreshChain,
   readAnswerRelay,
+  ASSUMED_RELAY_LIFETIME_MS,
+  stampRelayLifetime,
   offerRelays,
   relayCarryingUrl,
   readRelayPairBytes,
@@ -24,7 +26,7 @@ const stun = { urls: "stun:stun.example:3478" };
 const turnA = { urls: "turn:turn.example:3478", username: "a", credential: "a" };
 const turnB = { urls: "turns:turn.example:5349", username: "b", credential: "b" };
 
-const holding = (expiresAt: number | null): RuntimeIceServers => ({
+const holding = (expiresAt: number): RuntimeIceServers => ({
   stun: [stun],
   latestRelay: { servers: [turnA], expiresAt, issuedAt: NOW - 60_000 },
   provenRelay: null,
@@ -54,10 +56,38 @@ describe("ICE servers after a join answer", () => {
     ).toEqual({ stun: [stun], turn: [turnA] });
   });
 
-  it("keeps TURN credentials with no known lifetime when an answer brings no relay", () => {
-    expect(
-      offered(holding(null), { iceServers: [stun] }).turn,
-    ).toEqual([turnA]);
+  it("assumes a short lifetime for TURN credentials an answer gives none", () => {
+    const issued = { iceServers: [stun, turnB], relayIssuedAt: NOW };
+
+    expect(readAnswerRelay(issued)).toEqual({
+      servers: [turnB],
+      expiresAt: NOW + ASSUMED_RELAY_LIFETIME_MS,
+      issuedAt: NOW,
+    });
+    const later = NOW + ASSUMED_RELAY_LIFETIME_MS;
+    expect(getUsableTurnIceServers(applyJoinAnswerToIceServers(NO_RUNTIME_ICE_SERVERS, issued, NOW), later)).toBeNull();
+  });
+
+  it("never keeps credentials with no stated lifetime proven past their assumed lifetime", () => {
+    const issued = { iceServers: [stun, turnB], relayIssuedAt: NOW };
+    const held = applyJoinAnswerToIceServers(NO_RUNTIME_ICE_SERVERS, issued, NOW);
+    const carrier = relayCarryingUrl(offerRelays(held, NOW), "turns:turn.example:5349");
+    const proven = carrier ? noteRelayCarryingMedia(held, carrier, NOW) : held;
+
+    expect(proven.provenRelay).not.toBeNull();
+    expect(offerRelays(proven, NOW + ASSUMED_RELAY_LIFETIME_MS)).toEqual([]);
+  });
+
+  it("stamps an answer with the assumed lifetime only when it has TURN servers and no TTL", () => {
+    expect(stampRelayLifetime({ iceServers: [stun, turnB] }, NOW)).toEqual({
+      iceServers: [stun, turnB],
+      relayIssuedAt: NOW,
+      relayExpiresAt: NOW + ASSUMED_RELAY_LIFETIME_MS,
+    });
+    expect(stampRelayLifetime({ iceServers: [stun, turnB], iceServersTtlSeconds: 60 }, NOW).relayExpiresAt).toBe(
+      NOW + 60_000,
+    );
+    expect(stampRelayLifetime({ iceServers: [stun] }, NOW)).toEqual({ iceServers: [stun], relayIssuedAt: NOW });
   });
 
   it("drops expired TURN credentials when an answer brings no relay", () => {
@@ -370,7 +400,7 @@ describe("fetching TURN credentials again while relay only is wanted", () => {
 });
 
 describe("moving a transport onto the relay once one is usable", () => {
-  const set = (issuedAt: number, expiresAt: number | null) => ({ servers: [turnA], expiresAt, issuedAt });
+  const set = (issuedAt: number, expiresAt: number) => ({ servers: [turnA], expiresAt, issuedAt });
   const holdingRelay = (issuedAt: number, expiresAt: number | null): RuntimeIceServers => ({
     stun: [stun],
     latestRelay: set(issuedAt, expiresAt),
@@ -451,7 +481,7 @@ describe("offering a proven relay next to the newest one", () => {
   const A = "turn:a.example:3478";
   const B = "turns:b.example:5349";
   const C = "turn:c.example:3478?transport=tcp";
-  const set = (urls: string[][], issuedAt: number, expiresAt: number | null) => ({
+  const set = (urls: string[][], issuedAt: number, expiresAt: number) => ({
     servers: urls.map((group, index) => ({ urls: group.length === 1 ? group[0] : group, username: `u${issuedAt}-${index}`, credential: "c" })),
     expiresAt,
     issuedAt,

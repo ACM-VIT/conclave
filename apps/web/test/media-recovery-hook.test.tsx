@@ -231,6 +231,26 @@ describe("moving onto the relay when credentials return", () => {
     expect(rig.offerViolations).toEqual([]);
   });
 
+  it("refreshes credentials an older route gave no lifetime before they can strand a rebuild", async () => {
+    rig = await startRig({ ttlSeconds: 20 * 60, directWorks: false });
+    rig.statesLifetime = false;
+    await rig.join();
+    await recoverThroughTurn(rig);
+    const recoveredAt = Date.now();
+    await rig.advance(21 * 60_000);
+    expect(rig.joinRequests.filter((request) => request.at > recoveredAt).length).toBeGreaterThan(0);
+
+    rig.provider = "down";
+    rig.failRecv();
+    await rig.advance(20_000);
+    rig.provider = "up";
+    await rig.advance(90_000);
+
+    expect(rig.recv?.usableGeneration).not.toBeNull();
+    expect(rig.recv?.carriedBytes).toBeGreaterThan(0);
+    expect(rig.health.consumer).toBe("healthy");
+  });
+
   it("never moves a transport that carries media while its rebuild waits for the producer list", async () => {
     rig = await startRig({ ttlSeconds: 30 });
     await rig.join();
@@ -331,8 +351,10 @@ const RELAY_USABLE_MARGIN_MS = 5_000;
 const playSeed = async (seed: number): Promise<string | null> => {
   const random = mulberry32(seed);
   const pick = <T,>(values: T[]) => values[Math.floor(random() * values.length)];
-  const target = await startRig({ ttlSeconds: 40, directWorks: random() < 0.5 });
+  const statesLifetime = random() < 0.7;
+  const target = await startRig({ ttlSeconds: statesLifetime ? 40 : 900, directWorks: random() < 0.5 });
   rig = target;
+  target.statesLifetime = statesLifetime;
   target.answerUrls = pick([[TURN_A], [TURN_A, TURN_B], [TURN_B, TURN_A]]);
   target.workingRelayUrls = new Set(pick([[TURN_A, TURN_B], [TURN_B], [TURN_A]]));
   const trace: string[] = [];
@@ -342,9 +364,10 @@ const playSeed = async (seed: number): Promise<string | null> => {
     target.failRecv();
     await target.advance(3_000);
     for (let step = 0; step < 24; step++) {
-      const event = pick(["advance", "advance", "provider", "route", "release", "fail", "holdProducers", "announce", "slowRelay", "relayUrls", "workingUrls"]);
+      const event = pick(["advance", "advance", "longAdvance", "provider", "route", "release", "fail", "holdProducers", "announce", "slowRelay", "relayUrls", "workingUrls"]);
       trace.push(event);
       if (event === "advance") await target.advance(500 + Math.floor(random() * 8_000));
+      else if (event === "longAdvance") await target.advance(30_000 + Math.floor(random() * 90_000));
       else if (event === "provider") target.provider = target.provider === "up" ? "down" : "up";
       else if (event === "route") target.route = pick(["up", "down", "hold"] as const);
       else if (event === "release") target.releaseHeldRoutes(pick(["answer", "fail"] as const));
@@ -369,10 +392,10 @@ const playSeed = async (seed: number): Promise<string | null> => {
     }
     const needsRelay = target.log.some((line) => line.includes("Rebuilding through TURN only"));
     const newest = target.generations.at(-1);
-    const relayUsable = Boolean(newest && newest.expiresAt - Date.now() > RELAY_USABLE_MARGIN_MS);
+    const relayUsable = Boolean(newest && newest.clientExpiresAt - Date.now() > RELAY_USABLE_MARGIN_MS);
     const recv = target.recv;
     const workingHeld = Boolean(newest && newest.urls.some((url) => target.workingRelayUrls.has(url)));
-    if (needsRelay && relayUsable && workingHeld && recv && recv.carriedBytes === 0 && recv.usableGeneration === null) {
+    if (needsRelay && relayUsable && workingHeld && recv && recv.carriedBytes === 0 && !recv.clientUsableWorkingEntry()) {
       failures.push(`receive transport ${recv.policy} [${recv.turnUsernames.join(",")}] never carried media and is off the relay`);
     }
     return failures.length > 0
@@ -387,7 +410,8 @@ const playSeed = async (seed: number): Promise<string | null> => {
 describe("the hook under random interleavings", () => {
   it("never strands a transport that needs the relay and never moves one that carried media", async () => {
     const failed: string[] = [];
-    for (let seed = 1; seed <= 60; seed++) {
+    const [first, last] = process.env.RIG_EXTENDED ? [61, 660] : [1, 60];
+    for (let seed = first; seed <= last; seed++) {
       const failure = await playSeed(seed);
       if (failure) failed.push(failure);
     }

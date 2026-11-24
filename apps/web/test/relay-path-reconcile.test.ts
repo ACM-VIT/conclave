@@ -16,7 +16,7 @@ const NOW = Date.UTC(2030, 0, 1, 12, 0, 0);
 const TURN = { urls: "turn:turn.example:3478", username: "u", credential: "c" };
 const relaySet = (credentials: Credentials) => ({
   servers: [TURN],
-  expiresAt: credentials.expired ? NOW - 10_000 : null,
+  expiresAt: credentials.expired ? NOW - 10_000 : NOW + 60 * 60_000,
   issuedAt: credentials.issuedAt,
 });
 

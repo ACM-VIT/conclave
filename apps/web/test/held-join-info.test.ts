@@ -6,6 +6,7 @@ import {
   planJoinInfo,
   type JoinGrant,
 } from "../src/app/lib/held-join-info";
+import { ASSUMED_RELAY_LIFETIME_MS } from "../src/app/lib/relay-credentials";
 
 const NOW = Date.UTC(2030, 0, 1, 12, 0, 0);
 
@@ -244,5 +245,13 @@ describe("keeping the seat's identity when credentials are refreshed", () => {
   it("takes an answer when there is nothing held or no identity can be read", () => {
     expect(keepsJoinIdentity(null, { token: tokenFor({ userId: "guest-b" }) })).toBe(true);
     expect(keepsJoinIdentity(seat, { token: "not-a-token" })).toBe(true);
+  });
+});
+
+describe("holding TURN credentials the route gives no lifetime", () => {
+  it("assumes a short lifetime instead of holding them for ever", () => {
+    const answer = { token: tokenExpiringIn(6 * 60 * 60_000), sfuUrl: "https://sfu", iceServers: [turn] };
+
+    expect(held({ joinInfo: answer }).relayExpiresAt).toBe(NOW + ASSUMED_RELAY_LIFETIME_MS);
   });
 });
