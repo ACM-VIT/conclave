@@ -229,6 +229,13 @@ const isCrossSiteRequest = (request: Request): boolean => {
   return origin !== `${protocol}://${host}`;
 };
 
+export const guestPassProofsOf = (sfuSecret: string, request: Request): string[] =>
+  isCrossSiteRequest(request)
+    ? []
+    : readBrowserPasses(sfuSecret, request.headers.get("cookie")).map((pass) =>
+        proofOf(sfuSecret, pass),
+      );
+
 /**
  * The `Set-Cookie` value that gives a browser a guest pass, when the request
  * shows it has none. A page asks for this as soon as it loads

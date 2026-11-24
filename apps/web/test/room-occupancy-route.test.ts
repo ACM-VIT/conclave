@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GET } from "../src/app/api/sfu/rooms/[roomId]/route";
+import { guestPassCookieForNewBrowser, resolveGuestJoinIdentity } from "../src/lib/guest-pass";
 
 const { getSession } = vi.hoisted(() => ({ getSession: vi.fn() }));
 vi.mock("@/lib/auth", () => ({ auth: { api: { getSession } } }));
 vi.mock("@/lib/sfu-admin-auth", () => ({ resolveSfuClientId: () => "conclave", resolveSfuSecret: () => "fixture" }));
 vi.mock("@/lib/sfu-url", () => ({ resolveSfuUrls: () => ["http://a.test", "http://b.test"] }));
 vi.mock("@/app/lib/utils", () => ({ readResponseError: async () => "Unavailable" }));
+vi.mock("@/lib/guest-pass", () => import("../src/lib/guest-pass"));
 
 const get = (query = "?sessionId=s1") =>
   GET(new Request(`http://localhost/api/sfu/rooms/room${query}`), {
@@ -64,6 +66,51 @@ describe("who may see a room's headcount", () => {
     await get("?sessionId=s1");
     const asked = new URL(String((fetchMock.mock.calls[0] as unknown[])[0]));
     expect(asked.searchParams.get("viewerKey")).toBe("guest-s1");
+  });
+
+  it("asks the SFU about the guest's pass, the one the join token carries, from any tab", async () => {
+    const cookie = guestPassCookieForNewBrowser(
+      "fixture",
+      new Request("http://localhost/api/guest-pass", { method: "POST" }),
+    )!.split(";")[0];
+    const joined = resolveGuestJoinIdentity({
+      sfuSecret: "fixture",
+      seat: { clientId: "conclave", roomId: "room", sessionId: "tab-1" },
+      request: new Request("http://localhost/api/sfu/join", { method: "POST", headers: { cookie } }),
+      body: { sessionId: "tab-1", guestId: "" },
+    });
+    if (!joined.ok) throw new Error(joined.error);
+    const fetchMock = vi.fn(async () => member({ id: "room", userCount: 2 }));
+    vi.stubGlobal("fetch", fetchMock);
+    for (const query of ["?sessionId=tab-2", ""]) {
+      const response = await GET(
+        new Request(`http://localhost/api/sfu/rooms/room${query}`, { headers: { cookie } }),
+        { params: Promise.resolve({ roomId: "room" }) },
+      );
+      expect(response.status).toBe(200);
+    }
+    for (const call of fetchMock.mock.calls) {
+      const asked = new URL(String((call as unknown[])[0]));
+      expect(asked.searchParams.getAll("viewerProof")).toEqual([joined.claims.guestProof]);
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("sends no pass for a request another site made", async () => {
+    const cookie = guestPassCookieForNewBrowser(
+      "fixture",
+      new Request("http://localhost/api/guest-pass", { method: "POST" }),
+    )!.split(";")[0];
+    const fetchMock = vi.fn(async () => member({ id: "room", userCount: 2 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await GET(
+      new Request("http://localhost/api/sfu/rooms/room?sessionId=tab-2", {
+        headers: { cookie, "sec-fetch-site": "cross-site" },
+      }),
+      { params: Promise.resolve({ roomId: "room" }) },
+    );
+    const asked = new URL(String((fetchMock.mock.calls[0] as unknown[])[0]));
+    expect(asked.searchParams.getAll("viewerProof")).toEqual([]);
   });
 
   it("asks the SFU about a signed-in visitor by their email", async () => {

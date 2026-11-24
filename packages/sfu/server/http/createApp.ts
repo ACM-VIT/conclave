@@ -785,6 +785,7 @@ export const createSfuApp = ({
     return res.status(403).json({ error: "Use /admin/rooms for room lists" });
   });
 
+  const MAX_VIEWER_PROOFS = 8;
   app.get("/rooms/:roomId", (req, res) => {
     if (!hasValidSecret(req, config.sfuSecret)) {
       return res.status(401).json({ error: "Unauthorized" });
@@ -802,12 +803,22 @@ export const createSfuApp = ({
     // that visitor belongs to the room or was invited to it. A host blocking
     // or removing someone outranks their invitation.
     const viewerKey = normalizeIdentifier(req.query.viewerKey);
+    const viewerProofs = [req.query.viewerProof]
+      .flat()
+      .flatMap((value) => (typeof value === "string" ? [normalizeIdentifier(value)] : []))
+      .filter((value): value is string => Boolean(value))
+      .slice(0, MAX_VIEWER_PROOFS);
     const vouchesFor = (userKey: string): boolean => {
-      if (room?.isBlocked(userKey) || room?.needsReadmission(userKey)) {
+      const proofs = viewerProofs.length > 0 ? viewerProofs : [undefined];
+      if (
+        proofs.some(
+          (proof) => room?.isBlocked(userKey, proof) || room?.needsReadmission(userKey, proof),
+        )
+      ) {
         return false;
       }
       return (
-        Boolean(room?.isMemberUserKey(userKey)) ||
+        proofs.some((proof) => Boolean(room?.isMemberUserKey(userKey, proof))) ||
         isScheduledMeetingInvitee(
           state.scheduledMeetings,
           clientId,

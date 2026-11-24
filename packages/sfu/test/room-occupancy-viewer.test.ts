@@ -29,9 +29,10 @@ const start = async (state: SfuState) => {
   return `http://127.0.0.1:${address.port}`;
 };
 
-const occupancy = async (url: string, viewerKey?: string) => {
+const occupancy = async (url: string, viewerKey?: string, viewerProofs: string[] = []) => {
   const query = new URLSearchParams({ clientId: "conclave" });
   if (viewerKey) query.set("viewerKey", viewerKey);
+  for (const proof of viewerProofs) query.append("viewerProof", proof);
   const response = await fetch(`${url}/rooms/abc-mnop-xyz?${query}`, {
     headers: { "x-sfu-secret": config.sfuSecret },
   });
@@ -84,6 +85,36 @@ describe("room occupancy for a viewer", () => {
       headers: { "x-sfu-secret": config.sfuSecret },
     });
     expect(await response.json()).toEqual({ room: null, viewerIsMember: false });
+  });
+
+  describe("for a guest with a pass, who has one key per tab", () => {
+    const seatGuest = (state: SfuState) => {
+      const room = state.rooms.get("conclave:abc-mnop-xyz")!;
+      const seat = new Client({
+        id: "guest-gp_first-tab#t1",
+        socket: { id: "t1", emit: () => true } as unknown as Socket,
+      });
+      room.setUserIdentity(seat.id, "guest-gp_first-tab", "Guest", { guestProof: "proof-g" });
+      room.addClient(seat);
+      return room;
+    };
+
+    it("vouches for the guest's reloaded tab, which asks under the pass", async () => {
+      const state = setup();
+      seatGuest(state);
+      const url = await start(state);
+      expect((await occupancy(url, "guest-viewer", ["proof-g"])).viewerIsMember).toBe(true);
+      expect((await occupancy(url, "guest-viewer", ["proof-other"])).viewerIsMember).toBe(false);
+      expect((await occupancy(url, "guest-viewer")).viewerIsMember).toBe(false);
+    });
+
+    it("stops vouching for every tab of the guest once a host removes one", async () => {
+      const state = setup();
+      const room = seatGuest(state);
+      room.removeUser("guest-gp_first-tab");
+      const url = await start(state);
+      expect((await occupancy(url, "guest-viewer", ["proof-g"])).viewerIsMember).toBe(false);
+    });
   });
 
   describe("for someone invited to a scheduled meeting", () => {

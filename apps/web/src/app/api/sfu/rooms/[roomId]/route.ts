@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { guestPassProofsOf } from "@/lib/guest-pass";
 import {
   resolveSfuClientId,
   resolveSfuSecret,
@@ -34,17 +35,23 @@ const toNonNegativeInteger = (value: unknown): number => {
 
 // The identity the SFU knows this visitor by, built the way /api/sfu/join
 // builds it: the signed-in account, else the tab's guest session.
-const resolveViewerKey = async (request: Request): Promise<string | null> => {
+const GUEST_VIEWER_KEY = "guest-viewer";
+
+type Viewer = { key: string; guestProofs: string[] };
+
+const resolveViewer = async (request: Request, sfuSecret: string): Promise<Viewer | null> => {
   const session = await auth.api
     .getSession({ headers: request.headers })
     .catch(() => null);
   const email = session?.user?.email?.trim().toLowerCase();
   const userId = session?.user?.id?.trim();
-  if (email || userId) return email || userId || null;
+  if (email || userId) return { key: email || userId || "", guestProofs: [] };
+  const guestProofs = guestPassProofsOf(sfuSecret, request);
   const sessionId = new URL(request.url).searchParams.get("sessionId")?.trim();
-  return sessionId && SESSION_ID_PATTERN.test(sessionId)
-    ? `guest-${sessionId}`
-    : null;
+  if (sessionId && SESSION_ID_PATTERN.test(sessionId)) {
+    return { key: `guest-${sessionId}`, guestProofs };
+  }
+  return guestProofs.length > 0 ? { key: GUEST_VIEWER_KEY, guestProofs } : null;
 };
 
 // Only people in the room, its hosts, people let in and invitees see the
@@ -57,20 +64,21 @@ export async function GET(request: Request, context: RouteContext) {
     return NextResponse.json({ error: "Missing room ID" }, { status: 400 });
   }
 
-  const viewerKey = await resolveViewerKey(request);
+  const secret = resolveSfuSecret();
+  const viewer = await resolveViewer(request, secret);
   const notAvailable = () =>
     NextResponse.json(
       { error: "Room status is not available" },
       { status: 403, headers },
     );
-  if (!viewerKey) return notAvailable();
+  if (!viewer) return notAvailable();
 
   const clientId = resolveSfuClientId(request);
-  const secret = resolveSfuSecret();
   const results = await Promise.allSettled(resolveSfuUrls().map(async (sfuUrl) => {
     const targetUrl = new URL(`/rooms/${encodeURIComponent(normalizedRoomId)}`, sfuUrl);
     if (clientId) targetUrl.searchParams.set("clientId", clientId);
-    targetUrl.searchParams.set("viewerKey", viewerKey);
+    targetUrl.searchParams.set("viewerKey", viewer.key);
+    for (const proof of viewer.guestProofs) targetUrl.searchParams.append("viewerProof", proof);
     const response = await fetch(targetUrl.toString(), {
       headers: {
         "x-sfu-secret": secret,
