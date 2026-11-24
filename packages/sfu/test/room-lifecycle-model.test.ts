@@ -354,6 +354,11 @@ const boot = async (world: World): Promise<Sfu> => {
     stopRefresh: () => undefined,
   };
   sfu.io = makeIo(sfu);
+  const addRoom = state.rooms.set.bind(state.rooms);
+  state.rooms.set = (channelId, room) => {
+    observeRoom(sfu, room);
+    return addRoom(channelId, room);
+  };
   sfu.stopRefresh = startRoomRecoveryPassRefresh(state, config.sfuSecret);
   if (world.webinar) scheduleWebinar(state, world.webinar);
   return sfu;
@@ -511,13 +516,18 @@ const seatOf = (room: Room, person: string, except: string | null = null): strin
 const pendingKeyOf = (room: Room, person: string): string | null =>
   [...room.pendingClients.keys()].find((key) => personOf(key) === person) ?? null;
 
-const keyOf = (world: World, actor: Actor): string =>
-  actor.name === "dana"
-    ? (liveTab(world, actor)?.user.userId ??
-      liveSecondTab(world, actor)?.user.userId ??
-      actor.lastUser?.userId ??
-      USERS.dana.userId!)
-    : actor.key;
+const keyOf = (world: World, actor: Actor, room: Room): string => {
+  if (actor.name !== "dana") return actor.key;
+  const seat = seatOf(room, actor.key);
+  return (
+    (seat ? room.userKeysById.get(seat) : undefined) ??
+    pendingKeyOf(room, actor.key) ??
+    liveTab(world, actor)?.user.userId ??
+    liveSecondTab(world, actor)?.user.userId ??
+    actor.lastUser?.userId ??
+    USERS.dana.userId!
+  );
+};
 
 const ownsCode = (actor: Actor, ownerEmail: string | null | undefined): boolean =>
   Boolean(actor.user.email) && ownerEmail === actor.user.email;
@@ -771,7 +781,7 @@ const performHostAction = async (
   if (!room) return;
   const ownSeat = by === target ? (liveTab(world, by)?.context.currentClient?.id ?? null) : null;
   const seat = seatOf(room, target.key, ownSeat);
-  const targetKey = keyOf(world, target);
+  const targetKey = keyOf(world, target, room);
   const waitingKey = pendingKeyOf(room, target.key) ?? targetKey;
   const known = target.name !== "dana" || room.guestProofOf(targetKey) !== undefined;
   const seatedTabs = [target.tab, target.second].filter(
@@ -1133,6 +1143,18 @@ const perform = async (world: World, step: Step): Promise<void> => {
   });
 };
 
+const observeRoom = (sfu: Sfu, room: Room): void => {
+  if (sfu.membership.has(room)) return;
+  sfu.membership.set(room, 0);
+  room.onLifecycle((event) => {
+    if (event !== "membership") return;
+    sfu.membership.set(room, (sfu.membership.get(room) ?? 0) + 1);
+    if (room.recordsItsCall && room.hasActiveAdmin()) {
+      sfu.ranThisStep.set(room.incarnationId, room.channelId);
+    }
+  });
+};
+
 const checkRooms = (
   world: World,
   now: number,
@@ -1141,16 +1163,7 @@ const checkRooms = (
 ): void => {
   for (const room of roomsOf(world)) {
     if (!world.firstSeen.has(room.incarnationId)) world.firstSeen.set(room.incarnationId, now);
-    if (!world.sfu.membership.has(room)) {
-      const counts = world.sfu.membership;
-      counts.set(room, 0);
-      const ran = world.sfu.ranThisStep;
-      room.onLifecycle((event) => {
-        if (event !== "membership") return;
-        counts.set(room, (counts.get(room) ?? 0) + 1);
-        if (room.recordsItsCall && room.hasActiveAdmin()) ran.set(room.incarnationId, room.channelId);
-      });
-    }
+    observeRoom(world.sfu, room);
     if (room.hasEnded || room.isHandingOff) continue;
     const label =
       room.channelId === CHANNEL
