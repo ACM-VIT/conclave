@@ -5,6 +5,7 @@ import type { AppsState } from "../types.js";
 import {
   BARRIER_DEADLINE_MS,
   MAX_SLOT_MS,
+  MAX_SLOT_UPDATES,
   RoomAppsScheduler,
   type SlotWrite,
   type WriteOutcome,
@@ -234,17 +235,17 @@ describe("a sender's slot", () => {
     return sender;
   };
   const writesFor = (sender: Socket, key = "copy-1") => {
-    const ran: Uint8Array[] = [];
+    const ran: Uint8Array[][] = [];
     const finished: { outcome: WriteOutcome; at: number }[] = [];
     const write = (update: Uint8Array): SlotWrite => ({
       sender,
       appId: BOARD,
       key,
       host: false,
-      update,
-      run: (merged) => {
-        ran.push(merged);
-        return null;
+      wire: { length: update.length, read: () => update },
+      run: (updates) => {
+        ran.push(updates);
+        return updates.map(() => null);
       },
       finish: (outcome) => finished.push({ outcome, at: Date.now() }),
     });
@@ -307,23 +308,22 @@ describe("a sender's slot", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("refuses the whole slot as one when its updates do not merge", () => {
-    vi.useFakeTimers();
-    const sender = {} as Socket;
-    const scheduler = new RoomAppsScheduler();
-    const { ran, finished, write } = writesFor(sender);
-    const doc = new Y.Doc();
-    for (let index = 0; index < UPDATE_BURST; index += 1) scheduler.submit(write(keyed(doc, `w${index}`)));
-    ran.length = 0;
-    finished.length = 0;
+  it("refuses the whole slot as malformed when its updates do not merge, and settles each update", () => {
+    const { connect, room } = presentedBoard();
+    const writer = connect("writer#1");
+    writer.sync();
+    writer.write(UPDATE_BURST);
+    const settled = vi.spyOn(room.apps.scheduler as unknown as { finish: (...args: unknown[]) => void }, "finish");
 
-    scheduler.submit(write(keyed(doc, "held")));
-    scheduler.submit(write(new Uint8Array([0xff])));
-    scheduler.submit(write(keyed(doc, "after")));
-    vi.advanceTimersByTime(1000);
+    const [held] = writer.write(1);
+    writer.sendRaw(new Uint8Array([0xff]));
+    const [after] = writer.write(1);
+    advance(1000);
 
-    expect(finished.map((entry) => entry.outcome)).toEqual(["malformed"]);
-    expect(ran).toEqual([]);
+    const refusals = writer.received.filter((entry) => entry.event === "apps:yjs:refused");
+    expect(refusals.map((entry) => (entry.payload as { reason: string }).reason)).toEqual(["malformed"]);
+    expect(settled.mock.calls.map(([, outcome]) => outcome)).toEqual(["malformed", "malformed", "malformed"]);
+    expect([boardHas(room, held), boardHas(room, after)]).toEqual([false, false]);
   });
 
   it("refuses an update from a second copy at once while the first copy's updates are held", () => {
@@ -751,5 +751,235 @@ describe("restarting an older client's copy", () => {
     advance(200);
 
     expect(named.received.slice(seen).filter((entry) => entry.direct)).toEqual([]);
+  });
+});
+
+describe("what a payload costs before it is paid for", () => {
+  const countingArray = (length: number, last: unknown) => {
+    const reads = { count: 0 };
+    const target: unknown[] = new Array<unknown>(length).fill(0);
+    target[length - 1] = last;
+    const payload = new Proxy(target, {
+      get(inner, key, receiver) {
+        if (typeof key === "string" && /^[0-9]+$/.test(key)) reads.count += 1;
+        return Reflect.get(inner, key, receiver) as unknown;
+      },
+    });
+    return { reads, payload };
+  };
+  const restores: (() => void)[] = [];
+  afterEach(() => {
+    for (const restore of restores.splice(0)) restore();
+  });
+  const stringScans = (frame: string) => {
+    let count = 0;
+    const seen = (value: unknown) => {
+      if (typeof value === "string" && value.length > 0 && frame.includes(value)) count += 1;
+    };
+    const { test, exec } = RegExp.prototype;
+    const { trim } = String.prototype;
+    const from = Buffer.from;
+    RegExp.prototype.test = function (this: RegExp, value: string) {
+      seen(value);
+      return test.call(this, value);
+    };
+    RegExp.prototype.exec = function (this: RegExp, value: string) {
+      seen(value);
+      return exec.call(this, value);
+    };
+    String.prototype.trim = function (this: string) {
+      seen(String(this));
+      return trim.call(this);
+    };
+    Buffer.from = ((value: unknown, ...rest: unknown[]) => {
+      seen(value);
+      return (from as (...args: unknown[]) => Buffer)(value, ...rest);
+    }) as typeof Buffer.from;
+    restores.push(() => {
+      RegExp.prototype.test = test;
+      RegExp.prototype.exec = exec;
+      String.prototype.trim = trim;
+      Buffer.from = from;
+    });
+    return () => count;
+  };
+  const drained = () => {
+    const { connect, room } = presentedBoard();
+    const guest = connect("guest#1");
+    guest.sync();
+    guest.write(UPDATE_BURST);
+    return { guest, room };
+  };
+
+  it.each([
+    ["a 10,000-element array ending in a string", () => countingArray(10_000, "bad")],
+    ["a JSON Buffer ending in null", () => {
+      const inner = countingArray(10_000, null);
+      return { reads: inner.reads, payload: { type: "Buffer", data: inner.payload } };
+    }],
+  ])("reads nothing of %s while the sender's update budget is spent, and reads it once when its slot drains", (_, make) => {
+    const { guest } = drained();
+    const sent = Array.from({ length: 20 }, () => make());
+
+    for (const { payload } of sent) guest.sendPayload(payload);
+    const readAtArrival = sent.reduce((total, { reads }) => total + reads.count, 0);
+    advance(1000);
+
+    expect(readAtArrival).toBe(0);
+    expect(sent.map(({ reads }) => reads.count)).toEqual(sent.map(() => 10_000));
+    expect(guest.received.filter((entry) => entry.event === "apps:yjs:refused").map((entry) => (entry.payload as { reason: string }).reason)).toEqual(["invalid"]);
+  });
+
+  it("reads none of Neon's invalid base64 updates while the sender's budget is spent", () => {
+    const { guest } = drained();
+    const frame = `${"A".repeat(349_519)}!`;
+    const scans = stringScans(frame);
+
+    for (let index = 0; index < 20; index += 1) guest.sendPayload(frame);
+
+    expect(scans()).toBe(0);
+  });
+
+  it.each([
+    ["900,000 spaces then AAAA (Greptile's frame)", `${" ".repeat(900_000)}AAAA`, 10],
+    ["1,000 spaces then AAAA", `${" ".repeat(1000)}AAAA`, 100],
+    ["AAAA then 1,000 newlines", `AAAA${"\n".repeat(1000)}`, 100],
+  ])("reads no characters of %s before the sender pays, and refuses it", (_, frame, frames) => {
+    const { guest } = drained();
+    const scans = stringScans(frame);
+
+    for (let index = 0; index < frames; index += 1) guest.sendPayload(frame);
+    const atArrival = scans();
+    advance(1000);
+
+    expect(atArrival).toBe(0);
+    expect(scans()).toBeLessThanOrEqual(4 * MAX_SLOT_UPDATES);
+    const reasons = guest.received.filter((entry) => entry.event === "apps:yjs:refused").map((entry) => (entry.payload as { reason: string }).reason);
+    expect(reasons.length).toBeGreaterThan(0);
+    expect(reasons.filter((reason) => !["invalid", "too-large", "rate-limited"].includes(reason))).toEqual([]);
+  });
+
+  it("takes native's empty update in base64 as the free empty update on a locked board", () => {
+    const { connect, host } = presentedBoard();
+    const guest = connect("guest#1");
+    guest.sync();
+    host.command("lock");
+    for (let index = 0; index < 20; index += 1) guest.sendRaw(new Uint8Array([0xff, index]));
+    const before = guest.received.length;
+
+    guest.sendPayload(Buffer.from([0, 0]).toString("base64"));
+
+    expect(Buffer.from([0, 0]).toString("base64")).toBe("AAA=");
+    const answered = guest.received.slice(before).filter((entry) => entry.direct);
+    expect(answered.filter((entry) => entry.event === "apps:yjs:refused" || entry.event === "apps:state")).toEqual([]);
+  });
+});
+
+describe("a sync's budget across stage changes", () => {
+  const counting = (length: number) => {
+    const reads = { count: 0 };
+    const payload = new Proxy(new Array<number>(length).fill(0), {
+      get(target, key, receiver) {
+        if (typeof key === "string" && /^[0-9]+$/.test(key)) reads.count += 1;
+        return Reflect.get(target, key, receiver) as unknown;
+      },
+    });
+    return { reads, payload };
+  };
+  const spent = () => {
+    const rooms = presentedBoard();
+    const viewer = rooms.connect("viewer#1");
+    for (let index = 0; index < 12; index += 1) viewer.sync();
+    expect(viewer.sync().reply).toMatchObject({ retryable: true });
+    return { ...rooms, viewer };
+  };
+
+  it("reads nothing of the syncs a spent socket sends right after a stage change", () => {
+    const { host, viewer } = spent();
+    host.command("lock");
+    let reads = 0;
+
+    for (let index = 0; index < 20; index += 1) {
+      const sent = counting(60_000);
+      viewer.syncPayload(sent.payload);
+      reads += sent.reads.count;
+    }
+
+    expect(reads).toBe(0);
+  });
+
+  it.each([
+    ["a payload that is not a state vector", "%%%"],
+    ["a state vector that does not decode", Uint8Array.from([5])],
+  ])("gives no token back for an invalid first sync of a new stage: %s", (_, payload) => {
+    const { host, viewer } = spent();
+    vi.advanceTimersByTime(500);
+    host.command("lock");
+
+    expect(viewer.syncPayload(payload).reply).toEqual({ error: "Invalid sync payload" });
+    expect(viewer.sync().reply).toMatchObject({ retryable: true });
+  });
+});
+
+describe("the order a stage change tells a writer", () => {
+  it.each([
+    ["Lock", "lock" as const, "locked"],
+    ["Clear", "discard" as const, "not-live"],
+  ])("sends the refusal of a held update before the stage on %s", (_, kind, reason) => {
+    const { connect, host } = presentedBoard();
+    const guest = connect("guest#1");
+    guest.sync();
+    guest.write(UPDATE_BURST + 1);
+    const before = guest.received.length;
+
+    host.command(kind, kind === "discard" ? BOARD : undefined);
+
+    const told = guest.received.slice(before).filter((entry) => entry.event === "apps:yjs:refused" || entry.event === "apps:state");
+    expect(told.map((entry) => entry.event)).toEqual(["apps:yjs:refused", "apps:state"]);
+    expect((told[0].payload as { reason: string }).reason).toBe(reason);
+  });
+});
+
+describe("what a stage change leaves behind", () => {
+  it.each([
+    ["while its blank is out", () => {}],
+    ["while it waits for the client's sync", () => advance(500)],
+  ])("ends an older client's copy restart when the room closes %s", (_, wait) => {
+    const { connect, room } = presentedBoard();
+    const legacy = connect("legacy#1", { legacy: true });
+    legacy.sync();
+    legacy.sendRaw(new Uint8Array([0xff]));
+    wait();
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+    const before = legacy.received.length;
+
+    room.close();
+
+    expect(vi.getTimerCount()).toBe(0);
+    advance(10_000);
+    expect(legacy.received.slice(before).filter((entry) => entry.direct)).toEqual([]);
+  });
+
+  it("refuses an update held for the outgoing app by a sender the Present did not wait for", () => {
+    const { connect, host, room } = presentedBoard();
+    const first = connect("first#1");
+    const late = connect("late#1");
+    first.sync();
+    late.sync();
+    first.write(UPDATE_BURST + 1);
+    advance(20);
+    late.write(UPDATE_BURST);
+    const present = host.command("open", "watch");
+    late.write(1);
+    expect(room.apps.scheduler.slotSummaries()).toHaveLength(2);
+
+    advance(BARRIER_DEADLINE_MS, () => {
+      if (present.reply === undefined) return;
+      expect(room.apps.scheduler.slotSummaries()).toEqual([]);
+    });
+
+    expect(present.reply).toMatchObject({ success: true });
+    expect(room.apps.activeAppId).toBe("watch");
+    expect(late.received.filter((entry) => entry.event === "apps:yjs:refused").map((entry) => (entry.payload as { reason: string }).reason)).toEqual(["not-live"]);
   });
 });

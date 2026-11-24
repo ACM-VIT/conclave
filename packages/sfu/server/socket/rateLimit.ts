@@ -126,6 +126,7 @@ export const RATE_LIMITS = {
   // Yjs document updates: bursty while typing, so allow a generous burst.
   appsYjsUpdate: { capacity: 60, refillPerSec: 30 },
   appsNoopCheck: { capacity: 20, refillPerSec: 10 },
+  appsRefusalLog: { capacity: 5, refillPerSec: 1 },
   // Chat messages: ~5/s sustained, small burst.
   chat: { capacity: 10, refillPerSec: 5 },
   // Image uploads are much heavier than text messages; authorize a small burst.

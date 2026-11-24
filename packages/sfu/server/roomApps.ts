@@ -8,7 +8,7 @@ import * as decoding from "lib0/decoding";
 import * as encoding from "lib0/encoding";
 import * as Y from "yjs";
 import { Logger } from "../utilities/loggers.js";
-import { RoomAppsScheduler } from "./roomAppsScheduler.js";
+import { RoomAppsScheduler, type Pending, type WriteOutcome } from "./roomAppsScheduler.js";
 
 // A document larger than one sync response can no longer reach new joiners,
 // so it is also the most a document may grow to.
@@ -48,7 +48,24 @@ export type AppSyncMark = {
 
 export type WriteRefusal = ContentRefusal | "too-large" | "invalid" | "rate-limited";
 
-export type DocumentExecutor = Pick<RoomApps, "write" | "changesNothing" | "roomCopy">;
+export type WriteIdentity = {
+  readonly participant: string;
+  readonly host: boolean;
+  readonly origin: string;
+  readonly mark: AppSyncMark | null;
+};
+
+export type WriteResult = { readonly outcomes: WriteOutcome[]; readonly landed: Uint8Array[] };
+
+export type SyncAnswer =
+  | { readonly ok: true; readonly update: Uint8Array; readonly stateVector: Uint8Array; readonly mark: AppSyncMark }
+  | { readonly ok: false; readonly reason: "not-live" | "invalid" | "too-large" };
+
+export type DocumentExecutor = {
+  write(appId: string, identity: WriteIdentity, updates: Uint8Array[]): Pending<WriteResult>;
+  sync(appId: string, stateVector: Uint8Array): Pending<SyncAnswer>;
+  changesNothing(appId: string, update: Uint8Array): Pending<boolean>;
+};
 
 export type ContentRefusal =
   | "not-live"
@@ -320,10 +337,35 @@ export class RoomApps {
   private presenceIds: Map<number, ClientIdClaim> = new Map();
   private presence: Map<string, Presence> = new Map();
   scheduler = new RoomAppsScheduler();
+  executor: DocumentExecutor = new InProcessDocuments(this);
+  private followers = new Set<() => void>();
+  private clears = 0;
 
   // `participantOf` maps a connection's user id to the participant behind it,
   // which stays the same when that participant rejoins.
   constructor(private readonly participantOf: (userId: string) => string = (userId) => userId) {}
+
+  get epoch(): number {
+    return this.clears;
+  }
+
+  follow(listener: () => void): void {
+    this.followers.add(listener);
+  }
+
+  unfollow(listener: () => void): void {
+    this.followers.delete(listener);
+  }
+
+  notifyFollowers(): void {
+    for (const listener of [...this.followers]) {
+      try {
+        listener();
+      } catch (error) {
+        Logger.warn("[Apps] Following a stage change failed", error);
+      }
+    }
+  }
 
   get boundClientIdCount(): number {
     return this.clientIdOwners.size;
@@ -492,12 +534,7 @@ export class RoomApps {
   changesNothing(appId: string, update: Uint8Array): boolean {
     const doc = this.liveDoc(appId);
     if (!doc) return false;
-    let decoded: ReturnType<typeof Y.decodeUpdate>;
-    try {
-      decoded = Y.decodeUpdate(update);
-    } catch {
-      return false;
-    }
+    const decoded = Y.decodeUpdate(update);
     for (const struct of decoded.structs) {
       if (struct instanceof Y.Skip) continue;
       if (struct.id.clock + struct.length > Y.getState(doc.store, struct.id.client)) return false;
@@ -505,6 +542,7 @@ export class RoomApps {
     for (const [client, deletes] of decoded.ds.clients) {
       const structs = doc.store.clients.get(client);
       for (const { clock, len } of deletes) {
+        if (len === 0) continue;
         if (!structs || clock + len > Y.getState(doc.store, client)) return false;
         for (let index = Y.findIndexSS(structs, clock); index < structs.length; index += 1) {
           if (structs[index].id.clock >= clock + len) break;
@@ -513,11 +551,6 @@ export class RoomApps {
       }
     }
     return true;
-  }
-
-  roomCopy(appId: string): Uint8Array | null {
-    const doc = this.liveDoc(appId);
-    return doc ? Y.encodeStateAsUpdate(doc) : null;
   }
 
   write(
@@ -890,5 +923,53 @@ export class RoomApps {
     this.presenceIds.clear();
     this.stage = { activeAppId: null, locked: false };
     this.revision += 1;
+    this.clears += 1;
+    this.notifyFollowers();
+  }
+}
+
+const guarded = <T>(label: string, fallback: T, task: () => T): T => {
+  try {
+    return task();
+  } catch (error) {
+    Logger.debug(`[Apps] ${label} refused a malformed payload`, error);
+    return fallback;
+  }
+};
+
+class InProcessDocuments implements DocumentExecutor {
+  constructor(private readonly apps: RoomApps) {}
+
+  write(appId: string, identity: WriteIdentity, updates: Uint8Array[]): WriteResult {
+    if (updates.length === 0) return { outcomes: [], landed: [] };
+    const merged = guarded("Merging app updates", null, () =>
+      updates.length === 1 ? updates[0] : Y.mergeUpdates(updates),
+    );
+    const outcome: WriteOutcome =
+      merged === null
+        ? "malformed"
+        : guarded<WriteOutcome>("Writing an app update", "invalid", () =>
+            this.apps.write(appId, identity.participant, merged, identity.mark, {
+              origin: identity.origin,
+              host: identity.host,
+            }),
+          );
+    return { outcomes: updates.map(() => outcome), landed: outcome === null && merged ? [merged] : [] };
+  }
+
+  sync(appId: string, stateVector: Uint8Array): SyncAnswer {
+    return guarded<SyncAnswer>("Syncing an app", { ok: false, reason: "invalid" }, () => {
+      const doc = this.apps.liveDoc(appId);
+      const mark = this.apps.syncMark(appId);
+      if (!doc || !mark) return { ok: false, reason: "not-live" };
+      Y.decodeStateVector(stateVector);
+      const update = Y.encodeStateAsUpdate(doc, stateVector);
+      if (update.length > MAX_APP_DOC_BYTES) return { ok: false, reason: "too-large" };
+      return { ok: true, update, stateVector: Y.encodeStateVector(doc), mark };
+    });
+  }
+
+  changesNothing(appId: string, update: Uint8Array): boolean {
+    return guarded("Checking an app update", false, () => this.apps.changesNothing(appId, update));
   }
 }

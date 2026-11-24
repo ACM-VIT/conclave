@@ -1,4 +1,3 @@
-import * as Y from "yjs";
 import type {
   AppsAwarenessData,
   AppsCloseData,
@@ -20,15 +19,13 @@ import type {
 import { Admin } from "../../../config/classes/Admin.js";
 import type { Room } from "../../../config/classes/Room.js";
 import {
-  MAX_APP_DOC_BYTES,
   type AppAwarenessRemoval,
   type AppSyncMark,
-  type DocumentExecutor,
   type RoomApps,
   type StageCommand,
   type WriteRefusal,
 } from "../../roomApps.js";
-import type { StageTransition, WriteOutcome } from "../../roomAppsScheduler.js";
+import { afterSettled, whenSettled, type StageTransition, type WriteOutcome } from "../../roomAppsScheduler.js";
 import { Logger } from "../../../utilities/loggers.js";
 import type { ConnectionContext } from "../context.js";
 import { RATE_LIMITS, refundToken, takeToken } from "../rateLimit.js";
@@ -59,6 +56,7 @@ type Admission = {
 type ActiveRestart = {
   state: "blank-sent" | "awaiting-sync";
   apps: RoomApps;
+  epoch: number;
   appId: string;
   revision: number;
   attempt: number;
@@ -79,32 +77,33 @@ type StageOutcome =
   | { success: true; state: AppsState }
   | { success: false; error: string; code?: AppsStageErrorCode };
 
-const stageFollowers = new WeakMap<RoomApps, Set<() => void>>();
-
-const followersOf = (apps: RoomApps): Set<() => void> => {
-  const known = stageFollowers.get(apps);
-  if (known) return known;
-  const created = new Set<() => void>();
-  stageFollowers.set(apps, created);
-  return created;
-};
-
 const heldUpdatesRefusedBy = (command: StageCommand): StageTransition["refuse"] =>
   command.kind === "discard"
     ? { matches: (write) => write.appId === command.appId, outcome: "not-live" }
-    : command.kind === "lock" && command.locked
-      ? { matches: (write) => !write.host, outcome: "locked" }
-      : undefined;
+    : command.kind === "present"
+      ? { matches: (write) => write.appId !== command.appId, outcome: "not-live" }
+      : command.kind === "close"
+        ? { matches: () => true, outcome: "not-live" }
+        : command.locked
+          ? { matches: (write) => !write.host, outcome: "locked" }
+          : undefined;
 
-const notifyRestarts = (apps: RoomApps): void => {
-  for (const follow of [...followersOf(apps)]) {
+const EMPTY_STATE_VECTOR = new Uint8Array([0]);
+
+const SYNC_ERRORS = {
+  "not-live": "App not active",
+  invalid: "Invalid sync payload",
+  "too-large": "App document too large to sync",
+} as const;
+
+const later = (ms: number, task: () => void): ReturnType<typeof setTimeout> =>
+  setTimeout(() => {
     try {
-      follow();
+      task();
     } catch (error) {
-      Logger.warn("[Apps] Following a stage change failed", error);
+      Logger.error("[Apps] A copy restart step failed", error);
     }
-  }
-};
+  }, ms);
 
 const EMPTY_UPDATE_BYTES = 2;
 
@@ -147,26 +146,18 @@ const getRoomAppsState = (context: ConnectionContext): AppsState => {
   return { ...context.currentRoom.apps.snapshot(), roomId: context.currentRoom.id };
 };
 
-type SyncRequest =
-  | { ok: true; appId: string; live: Y.Doc; stateVector: Uint8Array }
-  | { ok: false; error: string };
+type SyncRequest = { ok: true; appId: string; stateVector: Uint8Array } | { ok: false; error: string };
 
 const readSyncRequest = (apps: RoomApps, data: AppsSyncData | undefined): SyncRequest => {
   const appId = normalizeAppId(data?.appId);
   if (!appId) return { ok: false, error: "Invalid app id" };
-  const live = apps.liveDoc(appId);
-  if (!live) return { ok: false, error: "App not active" };
+  if (!apps.liveDoc(appId)) return { ok: false, error: "App not active" };
   const wire = wireBytes(data?.syncMessage);
   if (!wire || wire.length === 0) return { ok: false, error: "Invalid sync payload" };
   if (wire.length > MAX_APPS_SYNC_BYTES) return { ok: false, error: "Sync payload too large" };
   const stateVector = wire.read();
-  if (!stateVector) return { ok: false, error: "Invalid sync payload" };
-  try {
-    Y.decodeStateVector(stateVector);
-  } catch {
-    return { ok: false, error: "Invalid sync payload" };
-  }
-  return { ok: true, appId, live, stateVector };
+  if (!stateVector || stateVector.length !== wire.length) return { ok: false, error: "Invalid sync payload" };
+  return { ok: true, appId, stateVector };
 };
 
 const retryLater = (error: string, retryAfterMs: number): AppsSyncError => ({
@@ -204,7 +195,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     const restart = scope?.restart;
     if (!scope || !restart || restart.state === "idle") return;
     clearTimeout(restart.timer);
-    followersOf(restart.apps).delete(followStage);
+    restart.apps.unfollow(followStage);
     scope.restart = { state: "idle" };
   };
   const scopeFor = (apps: RoomApps): RoomScope => {
@@ -213,8 +204,8 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     scope = { apps, synced: null, refusedReplicas: [], restart: { state: "idle" }, freeSyncRevision: null };
     return scope;
   };
-  const inScope = (apps: RoomApps): boolean =>
-    socket.connected && context.currentRoom?.apps === apps && scope?.apps === apps;
+  const stillIn = (apps: RoomApps): boolean => context.currentRoom?.apps === apps && scope?.apps === apps;
+  const inScope = (apps: RoomApps): boolean => socket.connected && stillIn(apps);
   const showsRestartedApp = (restart: ActiveRestart): boolean => {
     const stage = restart.apps.snapshot();
     return inScope(restart.apps) && stage.activeAppId === restart.appId && stage.docGeneration !== null;
@@ -224,9 +215,17 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     const { apps } = current;
     apps.scheduler.hold(() => {
       current.synced = null;
-      const timer = setTimeout(() => sendRealStage(current), COPY_RESTART_DELAY_MS);
-      current.restart = { state: "blank-sent", apps, appId, revision: apps.stageRevision, attempt, timer };
-      followersOf(apps).add(followStage);
+      const timer = later(COPY_RESTART_DELAY_MS, () => sendRealStage(current));
+      current.restart = {
+        state: "blank-sent",
+        apps,
+        epoch: apps.epoch,
+        appId,
+        revision: apps.stageRevision,
+        attempt,
+        timer,
+      };
+      apps.follow(followStage);
       socket.emit("apps:state", {
         ...getRoomAppsState(context),
         activeAppId: null,
@@ -238,7 +237,12 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
   const followStage = (): void => {
     const current = scope;
     const restart = current?.restart;
-    if (!current || !restart || restart.state === "idle" || restart.apps.stageRevision === restart.revision) return;
+    if (!current || !restart || restart.state === "idle") return;
+    if (restart.apps.epoch !== restart.epoch) {
+      endRestart();
+      return;
+    }
+    if (restart.apps.stageRevision === restart.revision) return;
     if (showsRestartedApp(restart)) {
       if (restart.state === "awaiting-sync") {
         current.restart = { ...restart, revision: restart.apps.stageRevision };
@@ -258,7 +262,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       return;
     }
     socket.emit("apps:state", getRoomAppsState(context));
-    const timer = setTimeout(() => retryRestart(current), COPY_RESTART_CHECK_MS);
+    const timer = later(COPY_RESTART_CHECK_MS, () => retryRestart(current));
     current.restart = { ...restart, state: "awaiting-sync", timer };
   };
   const retryRestart = (current: RoomScope): void => {
@@ -284,30 +288,42 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     if (current.refusedReplicas.length > REMEMBERED_REFUSED_REPLICAS) current.refusedReplicas.shift();
     socket.emit("apps:yjs:refused", { appId, replicaId, reason } satisfies AppsRefusedData);
   };
+  let unloggedRefusals = 0;
+  const logRefusal = (admission: Admission, reason: WriteRefusal): void => {
+    if (!takeToken(socket, "apps:refusal-log", RATE_LIMITS.appsRefusalLog)) {
+      unloggedRefusals += 1;
+      return;
+    }
+    const unlogged = unloggedRefusals > 0 ? ` (${unloggedRefusals} more not logged)` : "";
+    unloggedRefusals = 0;
+    Logger.warn(`[Apps] Dropping update for ${admission.appId} from ${admission.userId}: ${reason}${unlogged}`);
+  };
   const refuse = (admission: Admission, reason: WriteRefusal): void => {
     if (!inScope(admission.apps) || !scope) return;
-    Logger.warn(`[Apps] Dropping update for ${admission.appId} from ${admission.userId}: ${reason}`);
+    logRefusal(admission, reason);
     if (admission.replicaId) signalRefused(scope, admission.appId, admission.replicaId, reason);
     else if (reason !== "not-live") restartCopy(admission);
   };
-  const finishWrite = (admission: Admission, outcome: WriteOutcome, update: Uint8Array | null): void => {
-    if (outcome === null && update) {
+  const finishWrite = (admission: Admission, outcome: WriteOutcome): void => {
+    if (outcome !== null) refuse(admission, outcome);
+  };
+  const relay = (admission: Admission, landed: Uint8Array[]): void => {
+    for (const update of landed) {
       socket.to(admission.channelId).emit("apps:yjs:update", {
         appId: admission.appId,
         update,
       } satisfies AppsUpdateData);
-      return;
     }
-    if (outcome !== null) refuse(admission, outcome);
   };
 
   const sendRoomCopy = (current: RoomScope, appId: string): void => {
     const { apps } = current;
-    const mark = apps.syncMark(appId);
-    const copy = apps.roomCopy(appId);
-    if (!mark || !copy) return;
-    current.synced = mark;
-    socket.emit("apps:yjs:update", { appId, update: copy } satisfies AppsUpdateData);
+    const revision = apps.stageRevision;
+    afterSettled("Sending the room's copy", apps.executor.sync(appId, EMPTY_STATE_VECTOR), (answer) => {
+      if (!answer.ok || scope !== current || !stillIn(apps) || apps.stageRevision !== revision) return;
+      current.synced = answer.mark;
+      socket.emit("apps:yjs:update", { appId, update: answer.update } satisfies AppsUpdateData);
+    });
   };
 
   const runStageCommand = (
@@ -359,7 +375,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
             state = { ...apps.snapshot(), roomId: room.id };
             if (result.ok && result.changed) announceStage(room, result.awarenessRemoval, state);
           },
-          notify: () => notifyRestarts(apps),
+          notify: () => apps.notifyFollowers(),
         });
       }
       reply({ success: true, state });
@@ -497,30 +513,36 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         respond(callback, { error: request.error });
         return;
       }
-      if (current.freeSyncRevision !== apps.stageRevision) {
-        current.freeSyncRevision = apps.stageRevision;
-        refundToken(socket, "apps:yjs:sync", RATE_LIMITS.appsYjsSync);
-      }
-      const { appId, live, stateVector } = request;
-      const update = Y.encodeStateAsUpdate(live, stateVector);
-      if (update.length > MAX_APP_DOC_BYTES) {
-        respond(callback, { error: "App document too large to sync" });
-        return;
-      }
-      const mark = apps.syncMark(appId);
-      if (mark && current.restart.state !== "blank-sent") {
-        current.synced = mark;
-        endRestart();
-      }
-      const awarenessSnapshot = apps.encodeAwarenessSnapshot(appId) ?? undefined;
-      const awarenessUpdate =
-        awarenessSnapshot && awarenessSnapshot.length <= MAX_APPS_AWARENESS_BYTES
-          ? awarenessSnapshot
-          : undefined;
-      respond(callback, {
-        syncMessage: update,
-        stateVector: Y.encodeStateVector(live),
-        awarenessUpdate,
+      const { appId, stateVector } = request;
+      const revision = apps.stageRevision;
+      afterSettled("App sync", apps.executor.sync(appId, stateVector), (answer) => {
+        if (scope !== current || !stillIn(apps)) {
+          respond(callback, { error: SYNC_ERRORS["not-live"] });
+          return;
+        }
+        const valid = answer.ok || answer.reason === "too-large";
+        if (valid && current.freeSyncRevision !== revision) {
+          current.freeSyncRevision = revision;
+          refundToken(socket, "apps:yjs:sync", RATE_LIMITS.appsYjsSync);
+        }
+        if (!answer.ok) {
+          respond(callback, { error: SYNC_ERRORS[answer.reason] });
+          return;
+        }
+        if (apps.stageRevision === revision && current.restart.state !== "blank-sent") {
+          current.synced = answer.mark;
+          endRestart();
+        }
+        const awarenessSnapshot = apps.encodeAwarenessSnapshot(appId) ?? undefined;
+        const awarenessUpdate =
+          awarenessSnapshot && awarenessSnapshot.length <= MAX_APPS_AWARENESS_BYTES
+            ? awarenessSnapshot
+            : undefined;
+        respond(callback, {
+          syncMessage: answer.update,
+          stateVector: answer.stateVector,
+          awarenessUpdate,
+        });
       });
     }
   );
@@ -529,11 +551,12 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     const room = context.currentRoom;
     const client = context.currentClient;
     if (!room || !client || client.isObserver) return;
+    const wire = wireBytes(data?.update);
+    const size = wire?.length ?? 0;
     const appId = normalizeAppId(data?.appId);
     if (!appId) return;
     const { apps } = room;
     const current = scopeFor(apps);
-    const executor: DocumentExecutor = apps;
     const admission: Admission = {
       apps,
       channelId: room.channelId,
@@ -545,8 +568,6 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       replicaId: normalizeReplicaId(data?.replicaId),
       arrivedAt: Date.now(),
     };
-    const wire = wireBytes(data?.update);
-    const size = wire?.length ?? 0;
     if (!wire || size === 0) {
       refuse(admission, "invalid");
       return;
@@ -556,30 +577,36 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       return;
     }
     if (current.restart.state === "blank-sent") return;
-    let converted: Uint8Array | null | undefined;
-    const bytes = (): Uint8Array | null => {
-      if (converted === undefined) converted = wire.read();
-      return converted;
-    };
-    let checked: boolean | null | undefined;
-    const changesNothing = (): boolean | null => {
-      if (checked !== undefined) return checked;
-      const empty = size === EMPTY_UPDATE_BYTES ? bytes() : null;
-      if (empty && isEmptyUpdate(empty)) {
-        checked = true;
-      } else if (!takeToken(socket, "apps:noop-check", RATE_LIMITS.appsNoopCheck)) {
-        checked = null;
-      } else {
-        const update = bytes();
-        checked = update ? executor.changesNothing(appId, update) : null;
+    const revision = apps.stageRevision;
+    const checkNoop = (decide: (changesNothing: boolean | null) => void): void => {
+      if (size === EMPTY_UPDATE_BYTES) {
+        const empty = wire.read();
+        if (empty && isEmptyUpdate(empty)) {
+          decide(true);
+          return;
+        }
       }
-      return checked;
+      if (!takeToken(socket, "apps:noop-check", RATE_LIMITS.appsNoopCheck)) {
+        decide(null);
+        return;
+      }
+      const update = wire.read();
+      if (!update || update.length !== size) {
+        decide(null);
+        return;
+      }
+      afterSettled("Checking an app update", apps.executor.changesNothing(appId, update), (changesNothing) => {
+        if (scope === current && stillIn(apps) && apps.stageRevision === revision) decide(changesNothing);
+      });
     };
     if (current.restart.state === "awaiting-sync") {
-      if (current.restart.apps === apps && current.restart.appId === appId && changesNothing() === true) {
+      const restart = current.restart;
+      if (restart.apps !== apps || restart.appId !== appId) return;
+      checkNoop((changesNothing) => {
+        if (changesNothing !== true || current.restart !== restart) return;
         sendRoomCopy(current, appId);
         endRestart();
-      }
+      });
       return;
     }
     const stage = apps.snapshot();
@@ -588,40 +615,35 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       return;
     }
     if (stage.locked && !admission.host) {
-      if (changesNothing() !== true) refuse(admission, "locked");
-      else if (!apps.isCurrentSync(current.synced)) sendRoomCopy(current, appId);
+      checkNoop((changesNothing) => {
+        if (changesNothing !== true) refuse(admission, "locked");
+        else if (!apps.isCurrentSync(current.synced)) sendRoomCopy(current, appId);
+      });
       return;
     }
     const mark = current.synced;
     if (!apps.isCurrentSync(mark)) {
-      if (changesNothing() === true) sendRoomCopy(current, appId);
-      else refuse(admission, "not-synced");
-      return;
-    }
-    const key = `${appId}\u0000${stage.docGeneration}\u0000${admission.replicaId ?? ""}\u0000${admission.host}`;
-    if (!apps.scheduler.admits(socket, key, size)) {
-      refuse(admission, "rate-limited");
-      return;
-    }
-    const update = bytes();
-    if (!update) {
-      refuse(admission, "invalid");
+      checkNoop((changesNothing) => {
+        if (changesNothing === true) sendRoomCopy(current, appId);
+        else refuse(admission, "not-synced");
+      });
       return;
     }
     apps.scheduler.submit({
       sender: socket,
       appId,
-      key,
+      key: `${appId}\u0000${stage.docGeneration}\u0000${admission.replicaId ?? ""}\u0000${admission.host}`,
       host: admission.host,
-      update,
-      run: (merged) => {
+      wire,
+      run: (updates) => {
         const latest = scope?.apps === apps && apps.isCurrentSync(scope.synced) ? scope.synced : mark;
-        return executor.write(appId, admission.participant, merged, latest, {
-          origin: admission.socketId,
-          host: admission.host,
+        const identity = { participant: admission.participant, host: admission.host, origin: admission.socketId, mark: latest };
+        return whenSettled(apps.executor.write(appId, identity, updates), (result) => {
+          relay(admission, result.landed);
+          return result.outcomes;
         });
       },
-      finish: (outcome, merged) => finishWrite(admission, outcome, merged),
+      finish: (outcome) => finishWrite(admission, outcome),
     });
   });
 
