@@ -21,9 +21,13 @@ first report arrives, and from the moment the module loads every report
 (`telemetry.capture`, `captureException`, and `logCallError`, whose capture is
 installed then) goes into one queue of up to 50. The queue waits while the SDK
 downloads and, once it has loaded, until the build's chunk manifest has too,
-or 3 s have passed, so a first-render error keeps its chunk paths. Then each
+or 5 s have passed, so a first-render error keeps its chunk paths. Then each
 report goes to the SDK, which only builds the event: `before_send` puts it in
-the outbox (`lib/telemetry-outbox.ts`), and posthog-js never sends a request
+the outbox (`lib/telemetry-outbox.ts`). An error posthog-js captures itself
+during that wait is held, as it was captured, until the manifest request is
+answered (then built against the manifest, if there is one) or the 5 s have
+passed (then built without it, so chunk frames are `[path]`). Either way
+posthog-js never sends a request
 of its own, so it holds no queue that a tab hidden and then frozen or dropped
 would lose.
 
@@ -110,8 +114,11 @@ Once the page has started to go away (hidden, `pagehide` or `freeze` seen),
 every later report, such as the call summary the call tracker sends as the
 page closes, goes out at once the same way, whatever state the SDK is in; so
 does a report marked immediate. Held reports are built first:
-through the SDK if it has loaded, with whatever manifest has loaded (none
-leaves chunk frames as `[path]`); before it has, as events we build ourselves
+through the SDK if it has loaded, against the manifest if it has loaded; while
+it is still awaited, a chunk frame keeps its chunk id and file as long as each
+has the right form, so the beacon and the saved copy keep them for `/ingest`
+to check against that build's manifest. Before the SDK has loaded, as events
+we build ourselves
 from the outbound schema. Those carry the fields we can vouch
 for without the SDK: the project token, the stored SDK id (or a new uuid), the
 build, our host and the report's own fields; an exception keeps its type and,
@@ -119,8 +126,9 @@ for a call-log label, its message, but no frames. If the SDK fails to load,
 reports go the same way. Only an answer to the manifest request ends the wait early: a page that
 navigates away aborts that request before the `pagehide` listener runs, and
 the abort must not release the reports as if the page stayed. PostHog's own
-error capture starts as soon as it loads. Each report is built when it is
-sent, and again at every later send:
+error capture starts as soon as it loads, and what it captures waits with
+our own reports. Each report is built when it is sent, and again at every
+later send:
 
 - Unhandled errors and promise rejections (posthog-js autocapture, rate limited per error type by the SDK).
 - Errors caught by `app/error.tsx` and `app/global-error.tsx`: `source: "react_error_boundary"`, `boundary: "route" | "root"`, `digest`. A meeting panel that fails to render or load (`MeetingPanelBoundary`) reports `boundary: "panel"` while the call goes on; the panel's name is not sent.

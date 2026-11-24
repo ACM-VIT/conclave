@@ -317,7 +317,7 @@ describe("what each event carries", () => {
     }
   });
 
-  it("sends held reports after 3 s when the manifest does not come", async () => {
+  it("sends held reports after 5 s when the manifest does not come", async () => {
     vi.stubEnv("NEXT_PUBLIC_CONCLAVE_CLIENT_VERSION", "0b2d3b480f4621392a4151d750c90965b7c8b76c");
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -325,7 +325,7 @@ describe("what each event carries", () => {
       const { telemetry } = await import("../src/app/lib/telemetry");
       telemetry.captureException(new Error("first render"), { source: "react_error_boundary", boundary: "route" });
       await vi.dynamicImportSettled();
-      await vi.advanceTimersByTimeAsync(2900);
+      await vi.advanceTimersByTimeAsync(4900);
       expect(posthog.init).toHaveBeenCalled();
       expect(posthog.captureException).not.toHaveBeenCalled();
 
@@ -457,5 +457,103 @@ describe("what each event carries", () => {
       posthog.persistence.properties.mockReset().mockReturnValue({});
       posthog.sessionPersistence.properties.mockReset().mockReturnValue({});
     }
+  });
+});
+
+describe("an exception the SDK captures before this build's chunk list has loaded", () => {
+  const BUILD = "0b2d3b480f4621392a4151d750c90965b7c8b76c";
+  const CHUNK_ID = "147fc2df-e663-5d76-aa13-f67e1e894071";
+  const CHUNK = "/_next/static/chunks/3u-6_1om1fv26.js";
+  const UUID = "0196f0a1-0000-7000-8000-0000000000e1";
+  type Frame = Record<string, unknown>;
+  type Built = { uuid: string; properties: { $exception_list?: Array<{ stacktrace: { frames: Frame[] } }> } };
+  let releaseManifest: () => void = () => {};
+  let ingest: Array<{ body: string; keepalive: boolean }> = [];
+
+  const captureBeforeTheList = async () => {
+    vi.stubEnv("NEXT_PUBLIC_CONCLAVE_CLIENT_VERSION", BUILD);
+    ingest = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((resource: RequestInfo | URL, init?: RequestInit) => {
+        if (String(resource).includes("/posthog-chunk-ids/")) {
+          return new Promise<Response>((resolve) => {
+            releaseManifest = () => resolve(new Response(JSON.stringify({ [CHUNK_ID]: CHUNK }), { status: 200 }));
+          });
+        }
+        if (String(resource).includes("/ingest/")) ingest.push({ body: String(init?.body), keepalive: init?.keepalive === true });
+        return Promise.resolve(new Response('{"status":1}', { status: 200 }));
+      }),
+    );
+    const { startTelemetry } = await import("../src/app/lib/telemetry");
+    startTelemetry();
+    await vi.dynamicImportSettled();
+    expect(posthog.init).toHaveBeenCalled();
+    const [, config] = posthog.init.mock.calls[0] as [string, { before_send: (event: unknown) => unknown }];
+    const exception = {
+      uuid: UUID,
+      event: "$exception",
+      properties: {
+        token: "phc_test_project",
+        $exception_list: [
+          {
+            type: "TypeError",
+            value: "startup failed",
+            stacktrace: {
+              type: "raw",
+              frames: [{ filename: `http://localhost:3000${CHUNK}`, lineno: 1, colno: 2, in_app: true, chunk_id: CHUNK_ID }],
+            },
+          },
+        ],
+      },
+    };
+    expect(config.before_send(exception)).toBeNull();
+  };
+  const frameIn = (events: Built[]): Frame | undefined =>
+    events.find((event) => event.uuid === UUID)?.properties.$exception_list?.[0].stacktrace.frames[0];
+  const sentFrame = () => frameIn(ingest.flatMap((post) => (JSON.parse(post.body) as { batch: Built[] }).batch));
+  const savedFrame = () =>
+    frameIn(
+      Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index) ?? "")
+        .filter((key) => key.startsWith(STORED_BATCH_PREFIX))
+        .flatMap((key) => (JSON.parse(localStorage.getItem(key) ?? "null") as { events: Built[] } | null)?.events ?? []),
+    );
+
+  it("is held until the list arrives, then keeps its chunk id and file", async () => {
+    await captureBeforeTheList();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(sentFrame()).toBeUndefined();
+
+    releaseManifest();
+    await vi.waitFor(() => expect(sentFrame()).toMatchObject({ filename: CHUNK, chunk_id: CHUNK_ID, lineno: 1, colno: 2 }));
+  });
+
+  it("is built strictly, as before, when the list has not come 5 s after start", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await captureBeforeTheList();
+      await vi.advanceTimersByTimeAsync(4900);
+      expect(sentFrame()).toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(200);
+      expect(sentFrame()).toMatchObject({ filename: "[path]", lineno: 1 });
+      expect(sentFrame()).not.toHaveProperty("chunk_id");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("goes to the outbox as it is when the page hides during the wait, saved and sent", async () => {
+    await captureBeforeTheList();
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    try {
+      document.dispatchEvent(new Event("visibilitychange"));
+    } finally {
+      visibility.mockRestore();
+    }
+
+    expect(savedFrame()).toMatchObject({ filename: CHUNK, chunk_id: CHUNK_ID });
+    expect(sentFrame()).toMatchObject({ filename: CHUNK, chunk_id: CHUNK_ID });
+    expect(ingest.every((post) => post.keepalive)).toBe(true);
   });
 });

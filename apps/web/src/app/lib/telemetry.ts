@@ -15,6 +15,7 @@ import {
   beforeSend,
   buildOutboundEvent,
   chunkManifestUrl,
+  type EventSource,
   isBuildVersion,
   isStoredProperty,
   parseChunkManifest,
@@ -55,8 +56,8 @@ type Report =
  * Where telemetry is in the page's life. Reports wait in `pending` while the
  * SDK downloads and, once it has loaded, until the chunk manifest has too;
  * then each goes straight to the SDK. The SDK only builds events: before_send
- * hands each one to the outbox, which sends them to /ingest in batches, so
- * nothing is ever left queued in posthog-js.
+ * hands each one to the outbox (one it captured during that wait waits too),
+ * so nothing is ever left queued in posthog-js.
  */
 type Phase =
   | { name: "idle" }
@@ -86,6 +87,17 @@ const sendForUnload = (build: () => void): void => {
 
 // Capped so a load that never finishes cannot grow the queue.
 const MAX_PENDING = 50;
+
+type HeldEvent = { event: CaptureResult; source: Omit<EventSource, "chunkFiles"> };
+let awaitingChunks = true;
+const heldEvents: HeldEvent[] = [];
+
+const buildHeld = (chunks: ReadonlyMap<string, string> | null): void => {
+  for (const { event, source } of heldEvents.splice(0)) {
+    const built = beforeSend(event, { ...source, chunkFiles: chunks });
+    if (built) queueBuilt(built);
+  }
+};
 
 // Batches not yet answered when a page went away, one local storage entry
 // each, which a later page load (or this one, back again) sends. A site's
@@ -156,7 +168,7 @@ const loadChunkManifest = async (): Promise<void> => {
 // ends the wait early. A page that navigates away aborts the fetch before
 // the pagehide listener runs, and that rejection must not send the held
 // reports as if the page stayed: the listener sends them, by beacon.
-const MANIFEST_WAIT_MS = 3000;
+const MANIFEST_WAIT_MS = 5000;
 
 const manifestOrTimeout = (): Promise<void> =>
   new Promise((resolve) => {
@@ -272,11 +284,12 @@ const open = (client: PostHog, closing: boolean): void => {
 
 // The page is going away, or may be dropped while hidden or frozen: every
 // pending report and the whole outbox go now, by beacon. With the SDK loaded
-// the reports are built through it, with whatever manifest has loaded (none
-// leaves chunk frames as [path]); before it has, without it. A report is sent
-// once: this empties both queues.
+// the reports are built through it, and during the wait for the manifest a
+// chunk frame goes as it is, for /ingest to check; before it has, without it.
+// A report is sent once: this empties every queue.
 const flushForLifecycle = (): void => {
   sendForUnload(() => {
+    if (awaitingChunks) buildHeld(null);
     if (phase.name === "holding") open(phase.client, true);
     else if (phase.name === "loading") queueWithoutSdk(phase.pending.splice(0));
   });
@@ -355,16 +368,19 @@ const initPostHog = (client: PostHog, key: string): void => {
     // posthog-js only builds events: each goes to the outbox, never out
     // through the SDK's own requests.
     before_send: (event) => {
-      const built =
-        event &&
-        beforeSend(event, {
-          payload: emitting,
-          storedKeys: storedKeys(client),
-          token: key,
-          clientVersion,
-          chunkFiles: chunkFiles ?? NO_CHUNKS,
-          siteOrigin: window.location.origin,
-        });
+      if (!event) return null;
+      const source = {
+        payload: emitting,
+        storedKeys: storedKeys(client),
+        token: key,
+        clientVersion,
+        siteOrigin: window.location.origin,
+      };
+      if (awaitingChunks && !buildingForUnload && !leaving()) {
+        if (heldEvents.length < MAX_PENDING) heldEvents.push({ event, source });
+        return null;
+      }
+      const built = beforeSend(event, { ...source, chunkFiles: awaitingChunks ? null : (chunkFiles ?? NO_CHUNKS) });
       if (built) queueBuilt(built);
       return null;
     },
@@ -412,8 +428,8 @@ const rebuilt = (key: string) => (event: OutboxEvent): OutboxEvent | null => {
  * Starts telemetry once for the page's lifetime: the lifecycle flush at once,
  * then the SDK and the chunk manifest. Every report starts it too, so an
  * error boundary that replaced the root layout can still send. PostHog's own
- * error capture starts as soon as it loads; our reports wait until the
- * manifest has loaded too, or MANIFEST_WAIT_MS has passed, and each is built
+ * error capture starts as soon as it loads; its reports and ours wait until
+ * the manifest has loaded too, or MANIFEST_WAIT_MS has passed, and each is built
  * when it is sent, and again at every later send.
  */
 export function startTelemetry(): void {
@@ -449,7 +465,10 @@ export function startTelemetry(): void {
   });
   outbox.replaySaved();
   installLifecycleFlush();
-  const manifestReady = manifestOrTimeout();
+  const manifestReady = manifestOrTimeout().then(() => {
+    awaitingChunks = false;
+    buildHeld(chunkFiles ?? NO_CHUNKS);
+  });
   void Promise.all([
     import("posthog-js"),
     import("posthog-js/dist/exception-autocapture"),
