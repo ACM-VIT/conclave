@@ -429,3 +429,76 @@ describe("SfuTranscriptRelay realistic audio flow", () => {
     expect(workerEvents.at(-1)).toEqual({ type: "close" });
   });
 });
+
+describe("a relay closed while it starts (Greptile)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const turns = async () => {
+    for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
+  };
+
+  it.each(["connecting to the worker", "opening its transport", "taking the room's audio"] as const)(
+    "opens nothing once it is closed while %s",
+    async (step) => {
+      vi.useFakeTimers();
+      let release = () => {};
+      const held = () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      const directTransport = new FakeDirectTransport();
+      const consume = directTransport.consume.bind(directTransport);
+      directTransport.consume = async (options) => {
+        if (step === "taking the room's audio") await held();
+        return consume(options);
+      };
+      const transportsOpened: FakeDirectTransport[] = [];
+      const room = {
+        id: "room-a",
+        router: {
+          closed: false,
+          rtpCapabilities: { codecs: [] },
+          createDirectTransport: async () => {
+            if (step === "opening its transport") await held();
+            transportsOpened.push(directTransport);
+            return directTransport as unknown as DirectTransport;
+          },
+        },
+        getTranscriptAudioProducerEntries: () => [producerEntry("producer-1", "u2", "Grace")],
+      } as unknown as Room;
+      const workerEvents: WorkerEvent[] = [];
+      let workerClient: FakeWorkerClient | null = null;
+      const relay = new SfuTranscriptRelay({
+        room,
+        workerUrl: "http://transcript-worker.test",
+        workerToken: "relay-token",
+        controllerUserId: "u1",
+        controllerDisplayName: "Ada",
+        createWorkerClient: (options) => {
+          const client = new FakeWorkerClient(workerEvents, options);
+          if (step === "connecting to the worker") {
+            client.connect = async () => {
+              await held();
+              client.connected = true;
+            };
+          }
+          workerClient = client;
+          return client;
+        },
+      });
+
+      const starting = relay.start();
+      await turns();
+      relay.close();
+      release();
+
+      await expect(starting).rejects.toThrow();
+      expect(workerClient!.closed).toBe(true);
+      expect(transportsOpened.every((transport) => transport.closed)).toBe(true);
+      expect([...directTransport.consumers.values()].every((consumer) => consumer.closed)).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+});
