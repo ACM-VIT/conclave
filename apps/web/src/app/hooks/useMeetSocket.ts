@@ -1694,6 +1694,7 @@ export function useMeetSocket({
         }
         decision.running = true;
         try {
+          const sampled = new Map<"producer" | "consumer", Transport>();
           for (const direction of directions) {
             const transport = transportOf(direction);
             if (!transport || transport.closed) continue;
@@ -1705,9 +1706,15 @@ export function useMeetSocket({
               if (hasCarriedMedia(reading)) {
                 transportsCarryingMediaRef.current.add(transport);
               }
+              sampled.set(direction, transport);
             } catch {}
           }
-          const moves = reconcileRelayPaths(readState(), "keep").moveOntoRelay;
+          const moves = reconcileRelayPaths(readState(), "keep").moveOntoRelay.filter(
+            (direction) => {
+              const transport = sampled.get(direction);
+              return transport !== undefined && transport === transportOf(direction);
+            },
+          );
           if (moves.length === 0) return;
           console.warn(
             `[Meets] TURN credentials are back; moving the ${moves.join(" and ")} transport onto the relay.`,

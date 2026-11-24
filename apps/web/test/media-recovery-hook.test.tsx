@@ -251,6 +251,31 @@ describe("moving onto the relay when credentials return", () => {
     expect(rig.health.consumer).toBe("healthy");
   });
 
+  it("never moves a transport whose stats cannot be read when the move is judged", async () => {
+    rig = await startRig({ ttlSeconds: 30 });
+    await rig.join();
+    await recoverThroughTurn(rig);
+    await advanceTo(rig, 25);
+    rig.provider = "down";
+    await advanceTo(rig, 41);
+    rig.holdProducersMs = 12_000;
+    const failedAt = Date.now();
+    rig.failRecv();
+    await rig.advance(1_000);
+    const direct = rig.recv!;
+    expect(direct.policy).toBe("all");
+    rig.announceProducer();
+    rig.provider = "up";
+    await advanceTo(rig, (failedAt - RIG_START) / 1000 + 11.5);
+    direct.failStats = 1;
+    await rig.advance(8_500);
+
+    expect(direct.failStats).toBe(0);
+    expect(direct.carriedBytes).toBeGreaterThan(0);
+    expect(rig.moves).toEqual([]);
+    expect(rig.recv).toBe(direct);
+  });
+
   it("never moves a transport that carries media while its rebuild waits for the producer list", async () => {
     rig = await startRig({ ttlSeconds: 30 });
     await rig.join();

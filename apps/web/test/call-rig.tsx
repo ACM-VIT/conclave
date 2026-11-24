@@ -229,7 +229,13 @@ export class FakeTransport extends Emitter {
     this.rig.onIceRestart(this);
   }
 
+  failStats = 0;
+
   async getStats() {
+    if (this.failStats > 0) {
+      this.failStats -= 1;
+      throw new Error("getStats failed");
+    }
     this.rig.accrue(this);
     const relay = this.rig.carriesOverRelay(this);
     const entries: Array<[string, Record<string, unknown>]> = [
