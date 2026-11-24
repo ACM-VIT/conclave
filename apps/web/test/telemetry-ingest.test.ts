@@ -198,8 +198,11 @@ describe("forwardCapture", () => {
       requested.push(version);
       return manifests.get(version) ?? null;
     };
+    let sequence = 0;
     const exceptionFrom = (release: string | undefined, id: string, file: string) => ({
+      uuid: `0196f0a1-0000-7000-8000-${String(++sequence).padStart(12, "0")}`,
       event: "$exception",
+      timestamp: "2026-11-22T00:00:00.000Z",
       properties: {
         token: KEY,
         distinct_id: UUID,
@@ -264,6 +267,7 @@ describe("forwardCapture", () => {
     const captured = {
       uuid: "0196f0a1-0000-7000-8000-0000000000ab",
       event: "$exception",
+      timestamp: "2026-11-22T00:00:00.000Z",
       properties: {
         token: KEY,
         distinct_id: UUID,
@@ -468,7 +472,7 @@ describe("the outbound schema at /ingest", () => {
     expect(batch.map((sent) => sent.event)).toEqual(["meet_join_attempt"]);
   });
 
-  it("keeps the browser's time near when we received the event, and holds any other to that window", async () => {
+  it("forwards each event's own time unchanged when its window or the browser's own send time vouches for it, and no other", async () => {
     let n = 0;
     const at = (timestamp: string) => ({
       ...event(),
@@ -480,23 +484,17 @@ describe("the outbound schema at /ingest", () => {
       { sent_at: "2031-01-01T00:00:00.000Z" },
     );
     const { batch: unsent } = await send(
-      [at("1999-01-01T00:00:00.000Z"), at("2099-01-01T00:00:00.000Z"), at("not a time"), at("2026-11-22T11:59:30.000Z")],
+      [at("1999-01-01T00:00:00.000Z"), at("2099-01-01T00:00:00.000Z"), at("2026-11-22T11:59:30.000Z")],
       { sent_at: undefined },
     );
 
     expect(skewed.map((sent) => sent.timestamp)).toEqual([
-      "2026-11-22T12:00:00.000Z",
-      "2026-11-22T12:00:00.000Z",
-      "2026-11-22T11:59:58.500Z",
-      "2026-11-22T11:55:00.000Z",
+      "2031-01-01T00:00:00.000Z",
+      "2031-01-01T00:00:00.000Z",
+      "2030-12-31T23:59:58.500Z",
     ]);
     expect(sentBody(upstream)).not.toHaveProperty("sent_at");
-    expect(unsent.map((sent) => sent.timestamp)).toEqual([
-      "2026-11-22T11:55:00.000Z",
-      "2026-11-22T12:00:00.000Z",
-      "2026-11-22T12:00:00.000Z",
-      "2026-11-22T11:59:30.000Z",
-    ]);
+    expect(unsent.map((sent) => sent.timestamp)).toEqual(["2026-11-22T11:59:30.000Z"]);
   });
 
   it("drops every field the schema does not list, at any depth, and any value not in its form", async () => {
@@ -618,7 +616,7 @@ describe("round 9 at /ingest", () => {
 
   const failing = async () => new Response(null, { status: 503 });
 
-  it("sends a retried event as it sent it the first time, timestamp included", async () => {
+  it("sends a retried event as it sent it the first time, and no event too old or too far ahead to vouch for", async () => {
     const forwarded = createForwardedEvents();
     const events = [
       { ...event(), uuid: "0196f0a1-0000-7000-8000-0000000000b1", timestamp: "2026-11-22T11:59:58.000Z" },
@@ -639,11 +637,7 @@ describe("round 9 at /ingest", () => {
     const retry = await forward(post(json, "application/json"), ["e"], at(RECEIVED + 20_000, { forwarded }));
 
     expect(sentBody(retry.upstream).batch).toEqual(sentBody(first.upstream).batch);
-    expect(timesOf(first.upstream)).toEqual([
-      "2026-11-22T11:59:58.000Z",
-      "2026-11-22T11:55:00.000Z",
-      "2026-11-22T12:00:00.000Z",
-    ]);
+    expect(timesOf(first.upstream)).toEqual(["2026-11-22T11:59:58.000Z"]);
   });
 
   it("forwards a retry exactly as the first delivery, even from a browser clock 90 s ahead", async () => {
@@ -663,7 +657,53 @@ describe("round 9 at /ingest", () => {
 
     expect(sentBody(first.upstream).batch).toHaveLength(1);
     expect(sentBody(retry.upstream).batch).toEqual(sentBody(first.upstream).batch);
-    expect(timesOf(first.upstream)).toEqual(["2026-11-22T12:00:00.000Z"]);
+    expect(timesOf(first.upstream)).toEqual(["2026-11-22T12:01:30.000Z"]);
+  });
+
+  it("forwards a replayed event's uuid and timestamp byte for byte, from a skewed clock and a fresh instance", async () => {
+    const captured = { ...event(), uuid: "0196f0a1-0000-7000-8000-0000000000f1", timestamp: "2026-11-22T13:59:50.000Z" };
+    const sent = async (sentAt: string, receivedAt: number) => {
+      const { response, upstream } = await forward(
+        post(JSON.stringify({ ...captureBody([captured]), sent_at: sentAt }), "application/json"),
+        ["e"],
+        at(receivedAt, { forwarded: createForwardedEvents() }),
+      );
+      expect(response.status).toBe(200);
+      const [one] = sentBody(upstream).batch;
+      return { uuid: one.uuid, timestamp: one.timestamp };
+    };
+
+    const first = await sent("2026-11-22T14:00:00.000Z", RECEIVED + 250);
+    const replay = await sent("2026-11-22T14:03:10.000Z", RECEIVED + 190_900);
+    expect(first).toEqual({ uuid: captured.uuid, timestamp: captured.timestamp });
+    expect(replay).toEqual(first);
+  });
+
+  it("forwards an event already in flight on this instance once, and answers the second request by that outcome", async () => {
+    const forwarded = createForwardedEvents();
+    const calls: string[] = [];
+    const answers: Array<(response: Response) => void> = [];
+    const slow = async (_url: string, init: RequestInit) => {
+      calls.push(String(init.body));
+      return new Promise<Response>((resolve) => answers.push(resolve));
+    };
+    const json = JSON.stringify(captureBody([event()]));
+    const twice = async (status: number) => {
+      const earlier = calls.length;
+      const first = forward(post(json, "application/json"), ["e"], at(RECEIVED, { forwarded, fetch: slow }));
+      const second = forward(post(json, "application/json"), ["e"], at(RECEIVED, { forwarded, fetch: slow }));
+      await vi.waitFor(() => expect(calls.length).toBeGreaterThan(earlier));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const before = calls.length;
+      for (const answer of answers.splice(0)) answer(new Response(status === 200 ? '{"status":1}' : null, { status }));
+      return { before, statuses: [(await first).response.status, (await second).response.status] };
+    };
+
+    const failed = await twice(503);
+    expect(failed).toEqual({ before: 1, statuses: [503, 503] });
+    const delivered = await twice(200);
+    expect(delivered).toEqual({ before: 2, statuses: [200, 200] });
+    expect(calls).toHaveLength(2);
   });
 
   it("forwards nothing again for events PostHog already took, and answers the browser that they arrived", async () => {

@@ -51,8 +51,8 @@ export const telemetryEnabled =
 
 /** One report our code made, kept as data until it can be sent. */
 type Report =
-  | { kind: "event"; name: TelemetryEventName; props: TelemetryProps; immediate: boolean }
-  | { kind: "exception"; error: unknown; props: ExceptionProps };
+  | { kind: "event"; name: TelemetryEventName; props: TelemetryProps; immediate: boolean; at: number }
+  | { kind: "exception"; error: unknown; props: ExceptionProps; at: number };
 
 /**
  * Where telemetry is in the page's life. Reports wait in `pending` while the
@@ -90,14 +90,14 @@ const sendForUnload = (build: () => void): void => {
 // Capped so a load that never finishes cannot grow the queue.
 const MAX_PENDING = 50;
 
-type HeldEvent = { event: CaptureResult; source: Omit<EventSource, "chunkFiles"> };
+type HeldEvent = { event: CaptureResult; source: Omit<EventSource, "chunkFiles">; at: number | null };
 let awaitingChunks = true;
 const heldEvents: HeldEvent[] = [];
 
 const buildHeld = (chunks: ReadonlyMap<string, string> | null): void => {
-  for (const { event, source } of heldEvents.splice(0)) {
+  for (const { event, source, at } of heldEvents.splice(0)) {
     const built = beforeSend(event, { ...source, chunkFiles: chunks });
-    if (built) queueBuilt(built);
+    if (built) queueBuilt(built, at);
   }
 };
 
@@ -146,6 +146,7 @@ const storedKeys = (client: PostHog): Set<string> =>
 // capture, so the scrubber takes our fields from here, never from what storage
 // merged into the event. An event the SDK raised itself has none.
 let emitting: TelemetryProps | null = null;
+let emittingAt: number | null = null;
 
 // This build's chunk ids by file, null until it loads. A report built before
 // then keeps no chunk path; a saved one resent keeps its own for /ingest.
@@ -184,20 +185,20 @@ const manifestOrTimeout = (): Promise<void> =>
     );
   });
 
-const emit = (payload: TelemetryProps, capture: () => void): void => {
-  const outer = emitting;
-  emitting = payload;
+const emit = (payload: TelemetryProps, at: number, capture: () => void): void => {
+  const [outer, outerAt] = [emitting, emittingAt];
+  [emitting, emittingAt] = [payload, at];
   try {
     capture();
   } finally {
-    emitting = outer;
+    [emitting, emittingAt] = [outer, outerAt];
   }
 };
 
 /** Has the SDK build one report, which before_send puts in the outbox. */
 const buildWithSdk = (client: PostHog, report: Report): void => {
   try {
-    emit(report.props, () => {
+    emit(report.props, report.at, () => {
       if (report.kind === "event") client.capture(report.name, report.props);
       else client.captureException(report.error, report.props);
     });
@@ -208,14 +209,17 @@ const buildWithSdk = (client: PostHog, report: Report): void => {
 // unloads does.
 const isImmediate = (report: Report): boolean => report.kind === "event" && report.immediate;
 
-const queueBuilt = (built: CaptureResult): void => {
-  const timestamp: unknown = built.timestamp;
-  const event: OutboxEvent = {
-    uuid: built.uuid,
-    event: built.event,
-    properties: built.properties,
-    ...(timestamp instanceof Date ? { timestamp: timestamp.toISOString() } : typeof timestamp === "string" ? { timestamp } : {}),
-  };
+const queueBuilt = (built: CaptureResult, at: number | null): void => {
+  const own: unknown = built.timestamp;
+  const timestamp =
+    at !== null
+      ? new Date(at).toISOString()
+      : own instanceof Date
+        ? own.toISOString()
+        : typeof own === "string"
+          ? own
+          : new Date().toISOString();
+  const event: OutboxEvent = { uuid: built.uuid, event: built.event, properties: built.properties, timestamp };
   outbox?.add(event, { urgent: built.event === "$exception", deferred: buildingForUnload });
 };
 
@@ -267,7 +271,7 @@ const queueWithoutSdk = (reports: Report[]): void => {
       },
       { ...source, payload: report.props },
     );
-    return built ? [{ ...built, timestamp: new Date().toISOString() }] : [];
+    return built ? [{ ...built, timestamp: new Date(report.at).toISOString() }] : [];
   });
   for (const event of batch) outbox?.add(event, { urgent: event.event === "$exception", deferred: buildingForUnload });
 };
@@ -379,11 +383,11 @@ const initPostHog = (client: PostHog, key: string): void => {
         siteOrigin: window.location.origin,
       };
       if (awaitingChunks && !buildingForUnload && !leaving()) {
-        if (heldEvents.length < MAX_PENDING) heldEvents.push({ event, source });
+        if (heldEvents.length < MAX_PENDING) heldEvents.push({ event, source, at: emittingAt });
         return null;
       }
       const built = beforeSend(event, { ...source, chunkFiles: awaitingChunks ? null : (chunkFiles ?? NO_CHUNKS) });
-      if (built) queueBuilt(built);
+      if (built) queueBuilt(built, emittingAt);
       return null;
     },
   });
@@ -521,7 +525,7 @@ const report = (next: Report): void => {
 };
 
 const captureException = (error: unknown, props: ExceptionProps): void =>
-  report({ kind: "exception", error, props });
+  report({ kind: "exception", error, props, at: Date.now() });
 
 // Installed as this module loads, before the SDK downloads, so a call failure
 // logged at any point is queued like any other report.
@@ -533,7 +537,7 @@ export const telemetry = {
     props: TelemetryEventProps<N>,
     options?: TelemetryCaptureOptions,
   ): void {
-    report({ kind: "event", name: event, props, immediate: options?.immediate ?? false });
+    report({ kind: "event", name: event, props, immediate: options?.immediate ?? false, at: Date.now() });
   },
   captureException,
 };

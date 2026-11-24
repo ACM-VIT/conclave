@@ -546,6 +546,27 @@ describe("what a telemetry request carries", () => {
   });
 });
 
+describe("when a report happened", () => {
+  it("dates a report held for the SDK by when it was captured, not when it was built", async () => {
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.parse("2026-11-24T10:00:00.000Z") });
+    try {
+      manifest = "missing";
+      holdSdk();
+      const { telemetry } = await import("../src/app/lib/telemetry");
+      telemetry.capture("meet_join_attempt", { joinMode: "meeting", isAdmin: false });
+      vi.setSystemTime(Date.parse("2026-11-24T10:01:30.000Z"));
+      sdk.release();
+      await loaded();
+      hide();
+
+      const [batch] = await Promise.all(beacons().map(async (item) => JSON.parse(await new Response(item.body).text()) as { batch: Array<{ event: string; timestamp: string }> }));
+      expect(batch.batch.find((event) => event.event === "meet_join_attempt")?.timestamp).toBe("2026-11-24T10:00:00.000Z");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("a saved report replayed on another page", () => {
   const OLDER_BUILD = "5f1c0e9a7d2b4c6e8f0a1b3c5d7e9f1a2b4c6d8e";
   const CHUNK_ID = "147fc2df-e663-5d76-aa13-f67e1e894071";

@@ -16,6 +16,7 @@ const body = JSON.stringify({
     {
       uuid: "0196f0a1-0000-7000-8000-0000000000aa",
       event: "meet_join_attempt",
+      timestamp: new Date().toISOString(),
       properties: { token: KEY, distinct_id: "0196f0a1-0000-7000-8000-000000000000", joinMode: "meeting", isAdmin: false },
     },
   ],

@@ -7,7 +7,7 @@ import {
   parseChunkManifest,
 } from "./telemetry-privacy";
 import type { IngestAdmission } from "./ingest-rate-limit";
-import { answerOf } from "./telemetry-answers";
+import { type Answer, answerOf } from "./telemetry-answers";
 import { createOutboundSchemas, MAX_EVENT_AGE_MS, UNKNOWN_BUILD } from "./telemetry-schema";
 
 /**
@@ -87,6 +87,8 @@ export type ForwardedEvents = {
   remember: (event: ForwardedEvent) => void;
   /** PostHog took these events. */
   delivered: (uuids: readonly string[]) => void;
+  sending: (uuids: readonly string[], outcome: Promise<boolean>) => void;
+  inFlight: (uuid: string) => Promise<boolean> | undefined;
 };
 
 /**
@@ -97,9 +99,17 @@ export type ForwardedEvents = {
  */
 export const createForwardedEvents = (): ForwardedEvents => {
   const events = new Map<string, { event: ForwardedEvent; bytes: number; delivered: boolean }>();
+  const forwarding = new Map<string, Promise<boolean>>();
   let total = 0;
   return {
     get: (uuid) => events.get(uuid),
+    sending(uuids, outcome) {
+      for (const uuid of uuids) forwarding.set(uuid, outcome);
+      void outcome.finally(() => {
+        for (const uuid of uuids) if (forwarding.get(uuid) === outcome) forwarding.delete(uuid);
+      });
+    },
+    inFlight: (uuid) => forwarding.get(uuid),
     delivered(uuids) {
       for (const uuid of uuids) {
         const known = events.get(uuid);
@@ -147,9 +157,9 @@ const CapturedException = z.object({
 });
 
 const CapturedEvent = z.object({
-  uuid: z.uuid().optional(),
+  uuid: z.uuid(),
   event: z.string().min(1).max(200),
-  timestamp: z.string().max(64).optional(),
+  timestamp: z.iso.datetime(),
   properties: z
     .object({ $exception_list: z.array(CapturedException).max(50).optional() })
     .catchall(z.unknown()),
@@ -256,25 +266,10 @@ const clientSentAt = (url: URL, body: unknown): number | null => {
   return body !== null && typeof body === "object" && "sent_at" in body ? timeOf(body.sent_at) : null;
 };
 
-/**
- * A new event's time: the browser's own when it lies within MAX_EVENT_AGE_MS
- * before we received it (or a minute after). Otherwise a skewed or made-up
- * clock moves nothing: the event is as old as the browser says it was when
- * sent, at most MAX_EVENT_AGE_MS, or with no send time, held to that window.
- * A retry never comes here: it is forwarded as its first delivery was.
- */
-const eventTime = (timestamp: unknown, sentAt: number | null, receivedAt: number): string => {
-  const time = timeOf(timestamp);
-  if (time !== null && time >= receivedAt - MAX_EVENT_AGE_MS && time <= receivedAt + MAX_EVENT_LEAD_MS) {
-    return new Date(time).toISOString();
-  }
-  const at =
-    time === null
-      ? receivedAt
-      : sentAt === null
-        ? Math.min(Math.max(time, receivedAt - MAX_EVENT_AGE_MS), receivedAt)
-        : receivedAt - Math.min(Math.max(sentAt - time, 0), MAX_EVENT_AGE_MS);
-  return new Date(at).toISOString();
+const fresh = (timestamp: string, sentAt: number | null, receivedAt: number): boolean => {
+  const time = Date.parse(timestamp);
+  if (time >= receivedAt - MAX_EVENT_AGE_MS && time <= receivedAt + MAX_EVENT_LEAD_MS) return true;
+  return sentAt !== null && sentAt - time <= MAX_EVENT_AGE_MS && sentAt - time >= -MAX_EVENT_LEAD_MS;
 };
 
 const reply = (status: number, retryAfterMs: number | null = null) =>
@@ -338,13 +333,29 @@ export async function forwardCapture(
   // Every event in it already reached PostHog: a page sending what it saved
   // as it went away, or a beacon's batch again.
   if (!prepared) return reply(200);
+  const { body, sent, waits } = prepared;
+  let answer: Answer = { outcome: "delivered" };
+  try {
+    if (body.batch.length > 0) answer = await sendUpstream(ingestHost, body, deps);
+  } finally {
+    sent(answer.outcome === "delivered");
+  }
+  if (answer.outcome !== "delivered") return answer.outcome === "retry" ? reply(503, answer.afterMs) : reply(400);
+  return (await Promise.all(waits)).every(Boolean) ? reply(200) : reply(503);
+}
+
+const sendUpstream = async (
+  ingestHost: string,
+  body: { api_key: string; batch: ForwardedEvent[] },
+  deps: IngestDeps,
+): Promise<Answer> => {
   let upstream: { status: number; retryAfter: string | null };
   try {
     upstream = await withinDeadline(UPSTREAM_DEADLINE_MS, async (signal) => {
       const response = await deps.fetch(`${ingestHost}/e/`, {
         method: "POST",
         headers: { "content-type": "application/json", "user-agent": INGEST_USER_AGENT },
-        body: JSON.stringify(prepared),
+        body: JSON.stringify(body),
         redirect: "manual",
         signal,
       });
@@ -353,16 +364,13 @@ export async function forwardCapture(
       return { status: response.status, retryAfter: response.headers.get("retry-after") };
     });
   } catch {
-    return reply(503);
+    return { outcome: "retry", afterMs: null };
   }
   // PostHog's answer, through the table the browser's outbox reads ours by.
   const answer = answerOf(upstream.status, upstream.retryAfter, deps.now());
-  if (answer.outcome === "delivered") {
-    deps.forwarded.delivered(prepared.batch.map((event) => event.uuid));
-    return reply(200);
-  }
-  return answer.outcome === "retry" ? reply(503, answer.afterMs) : reply(400);
-}
+  if (answer.outcome === "delivered") deps.forwarded.delivered(body.batch.map((event) => event.uuid));
+  return answer;
+};
 
 /**
  * The batch to send PostHog for one request; null when PostHog already took
@@ -396,7 +404,7 @@ const prepareForward = async (request: Request, deps: IngestDeps) => {
   const inRequest = new Set<string>();
   let delivered = 0;
   const batch = sameBuild.flatMap((event) => {
-    const uuid = event.uuid ?? crypto.randomUUID();
+    const { uuid } = event;
     if (inRequest.has(uuid)) return [];
     inRequest.add(uuid);
     // A retry, or an event sent again, goes exactly as it went the first
@@ -404,6 +412,7 @@ const prepareForward = async (request: Request, deps: IngestDeps) => {
     const known = deps.forwarded.get(uuid);
     if (known?.delivered) delivered += 1;
     if (known) return known.delivered ? [] : [known.event];
+    if (!fresh(event.timestamp, sentAt, receivedAt)) return [];
     const built = buildOutboundEvent(
       { uuid, event: event.event, properties: event.properties },
       // Our fields are the event's own: the browser took them from the
@@ -412,7 +421,7 @@ const prepareForward = async (request: Request, deps: IngestDeps) => {
       schemas,
     );
     if (!built) return [];
-    const forwarded = { ...built, timestamp: eventTime(event.timestamp, sentAt, receivedAt) };
+    const forwarded = { ...built, timestamp: event.timestamp };
     deps.forwarded.remember(forwarded);
     return [forwarded];
   });
@@ -420,7 +429,15 @@ const prepareForward = async (request: Request, deps: IngestDeps) => {
     if (delivered > 0) return null;
     throw new Refused(400);
   }
-  return { api_key: deps.projectKey, batch };
+  const waits: Array<Promise<boolean>> = [];
+  const own = batch.filter((event) => {
+    const elsewhere = deps.forwarded.inFlight(event.uuid);
+    if (elsewhere) waits.push(elsewhere);
+    return !elsewhere;
+  });
+  let sent: (delivered: boolean) => void = () => {};
+  deps.forwarded.sending(own.map((event) => event.uuid), new Promise<boolean>((resolve) => (sent = resolve)));
+  return { body: { api_key: deps.projectKey, batch: own }, sent, waits };
 };
 
 const MANIFEST_TTL_MS = 10 * 60_000;

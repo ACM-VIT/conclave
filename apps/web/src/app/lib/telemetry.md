@@ -333,18 +333,27 @@ shapes the values of listed properties:
   An id the build never produced, or a real id on another file, proves nothing,
   so until the manifest loads, and in a build without one, chunk frames are
   `[path]`.
-- **Times.** `/ingest` keeps an event's own time when it lies within 5 minutes
-  before receipt (or a minute after). A time outside that window moves
-  nothing: the event is as old as the browser says it was when sent
-  (the outbox's send time against the event's own), at most 5 minutes, or with
-  no send time it is held to the window. The browser's send time is not
-  forwarded.
+- **Times.** Each event's uuid and timestamp are fixed when it is captured
+  (a report held for the SDK or the chunk manifest keeps the time it was
+  made), stored with its batch, and never computed again, by the browser or
+  by `/ingest`: `/ingest` forwards the event's own timestamp string
+  unchanged. It takes an event only when that time lies within 5 minutes
+  before receipt (or a minute after), or when the browser's own send time
+  says the event is at most 5 minutes old (a skewed clock is judged against
+  itself); any other event is refused, and so is one with no uuid or no
+  timestamp. A browser whose clock is off therefore reports its own clock's
+  time. The browser's send time is not forwarded.
 - **Retries.** `/ingest` keeps every event it forwarded by uuid (the last
   10,000, within 4 MB) and checks that first: a retry, or an event sent again,
-  is forwarded exactly as the first delivery was, timestamp included, without
-  being built again, and an event PostHog already took is not forwarded at
-  all (a request of only those is answered 200). One request naming a uuid
-  twice forwards it once.
+  is forwarded exactly as the first delivery was, without being built again,
+  and an event PostHog already took is not forwarded at all (a request of
+  only those is answered 200). One request naming a uuid twice forwards it
+  once, and a request naming a uuid whose forward is still in flight on the
+  same instance waits for that forward instead of sending it again: 200 if
+  it delivered, 503 if not. Across instances (two isolates, or one started
+  after a cutover) an event can reach PostHog twice; since its uuid and
+  timestamp are the same every time, PostHog folds the duplicates on uuid
+  plus timestamp.
 - **Required fields.** An `$exception` with no exception list, or an empty
   one, is not sent.
 
