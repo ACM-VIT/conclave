@@ -144,13 +144,17 @@ presented app when they arrive, so strokes already sent are saved first, but
 never more than 100 ms: a slot still held then is refused as `rate-limited`.
 Updates keep arriving and landing while they wait. A waiting command is checked
 again before it runs; if the stage has changed so that it would be refused or
-change nothing, it is answered at once and refuses no held update. Discard
+change nothing, it is answered at once and refuses no held update. Present and
+Close refuse the held updates of the app leaving the stage as `not-live`, Discard
 refuses the cleared app's held updates, and locking refuses the held
 updates of everyone who is not a host. A stage change always runs in one fixed
 order: it refuses the held updates it ends, then applies and announces the new
 stage, then tells each restarting client, and nothing else queued in the room
-runs in between. When the room closes, every held update is refused and every
-waiting command fails. An update is applied under the
+runs in between. Every update reaches exactly one outcome, applied or refused,
+whether it lands at once, drains with its slot, overflows, expires, is refused by
+a stage change or is held when the room closes. When the room closes, every held
+update is refused, every waiting command fails, and an older client's copy
+restart ends. An update is applied under the
 participant and role it arrived with, so one still held when its sender leaves
 is applied as theirs.
 
@@ -263,7 +267,10 @@ budget; repeated syncs of the same stage still spend it, and so does a sync the
 room refuses for its content, which leaves the refund for the next valid one.
 Every app event is checked for its budget, payload size, sender's role and the
 stage on the frame as it arrives, before the room converts or decodes any of
-it. A sync refused by the limit acks `{ error, retryable: true, retryAfterMs }`, and the client tries
+it, and the size check itself never scans the payload. An update is read only
+once something has paid for it: its sender's update budget when it lands or its
+slot drains, or the no-op check's own budget on a locked board or before a
+sync. A sync refused by the limit acks `{ error, retryable: true, retryAfterMs }`, and the client tries
 again after at least `retryAfterMs`. An older SFU sends that refusal as only
 `{ error: "Too many app sync requests" }`; the client retries it with its own
 backoff. Any other refusal acks `{ error }` and is final.
@@ -371,7 +378,7 @@ Runtime accepts multiple binary-like payload forms:
 - `number[]`
 - Node-style `{ type: "Buffer", data: number[] }`
 - standard base64 string with its `=` padding, as native sends it
-  (validated before decode; surrounding whitespace is ignored, unpadded or
+  (validated before decode; base64 with surrounding whitespace, unpadded or
   URL-safe base64 is refused as invalid)
 
 This keeps sync stable across browser, native, and server runtimes. Every size
