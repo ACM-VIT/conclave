@@ -106,31 +106,46 @@ left drawing on a copy the room no longer matches. A client that sends a
 `replicaId` is told with `apps:yjs:refused`. Any other client, such as an
 older web or native build, gets an `apps:state` without an `activeAppId` and,
 half a second later, the room's current state: every client drops its copy of
-an app that leaves the stage and syncs a fresh one when it returns. The room
-always sends that second state; only the socket leaving cancels it. A sync
-counts as the fresh copy only once the second state has gone out. Until then
-the room drops that socket's updates, and if no such sync comes it sends the
-two states again a few seconds later, at most three times, so a client that
-took both states at once still starts over. An update that changes nothing
-never restarts a copy.
+an app that leaves the stage and syncs a fresh one when it returns. Until that
+second state has gone out the room takes nothing from the socket: it drops its
+updates, empty ones included, and a sync it answers then does not count as the
+fresh copy. A stage change in that half second that still shows the app is
+followed at once by another state without an `activeAppId` to that socket, and
+the room waits half a second again, so the client never shows the app before
+it starts over; a stage change that takes the app away ends the restart, since
+the client drops its copy anyway. After the second state, the socket's first
+sync ends the restart, and so does an update that changes nothing, which the
+room answers with its copy. Until then the room drops that socket's updates,
+and if neither comes it sends the two states again a few seconds later, at
+most three times, so a client that took both states at once still starts
+over. The restart also ends when the socket leaves or moves to another room.
+An update that changes nothing never restarts a copy.
 
-Each room applies app work in one queue, in arrival order. A socket's updates
-are applied at up to 30 a second, counted against that socket whoever's event
-drains the queue; updates that arrive faster are held and applied together as
-one write as soon as their sender's budget allows, so a stroke drawn at
-pointer speed is never cut in two. Held updates from different sockets apply
-independently, since none of them has reached anyone yet. A sync or a stage
-command passes its own checks when it arrives, then waits behind every update
-already queued in the room: a sync never applies anyone's updates early, and a
-host who closes, replaces or clears an app does so after everyone's queued
-strokes are saved. The queue is bounded per socket: at most 4 batches of held
-updates (a batch is a run of updates from one copy and one sync), none held for
-a second or more, and 256 KiB in all; an update past any of these is refused,
-as `rate-limited`. A sync or stage command therefore waits at most for each
-socket to earn 4 update tokens, under 150 ms. On a locked board an update from
-someone who is not a host is decided when it arrives and never held. An update
-is applied under the participant and role it arrived with, so one still queued
-when its sender leaves is applied as theirs.
+The room applies each socket's updates at up to 30 a second, and one update
+token pays for exactly one write. A socket that sends faster has its updates
+held in one slot, which the room applies as one write, for one token, as soon
+as that socket earns it, so a stroke drawn at pointer speed is never cut in
+two. A slot holds the updates of one copy under one stage and role: at most 64
+updates and 256 KiB, for under a second. An update past these limits, or from
+a second copy while the slot holds updates, is refused at once as
+`rate-limited`, and if the held updates do not merge the whole slot is refused
+as one. Slots of different sockets drain in turn and never wait on each other.
+Everything else is decided when it arrives and never waits on a slot:
+refusals, updates to a locked board from someone who is not a host, syncs,
+lock and discard. A sync acks at once, and the updates its socket sent before
+it still land. Close and present wait for the slots that hold updates for the
+presented app when they arrive, so strokes already sent are saved first, but
+never more than 100 ms: a slot still held then is refused as `rate-limited`.
+Discard refuses the cleared app's held updates, and locking refuses the held
+updates of everyone who is not a host. When the room closes, every held update
+is refused and every waiting command fails. An update is applied under the
+participant and role it arrived with, so one still held when its sender leaves
+is applied as theirs.
+
+Telling whether an update to a locked board changes nothing costs the room
+work, so it checks at most 10 such updates a second from each socket (20 at
+once). Past that, a non-empty update to a locked board from someone who is not
+a host is refused as `locked`.
 
 A cleared document stays cleared. The SFU remembers the Yjs clients that wrote
 to it and drops any later `apps:yjs:update`, in any app, from those clients or
@@ -264,8 +279,8 @@ Client -> server (`apps:yjs:update`):
 - ignored until the socket has synced the presented document, and when it
   replaces a value it never saw or builds on content the room does not hold
   (see Document lifetime)
-- held in the room's queue and applied together when a socket sends faster
-  than its budget
+- held in its socket's slot and applied together, for one token, when a
+  socket sends faster than its budget
 
 Server -> peers (`apps:yjs:update`):
 
