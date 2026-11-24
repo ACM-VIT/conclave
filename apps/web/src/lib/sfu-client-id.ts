@@ -38,8 +38,22 @@ export const resolveSfuClientIdCandidates = (
   return Array.from(new Set([resolveServerSfuClientId(), ...CONCLAVE_CLIENT_IDS]));
 };
 
+const isAnotherTenantsBooking = async <Meeting extends { clientId?: string; id?: string }>(
+  meeting: Meeting,
+  named: string,
+  lookup: (clientId: string) => Promise<Meeting | null>,
+): Promise<boolean> => {
+  if (!meeting.id) return false;
+  const fallbacks = new Set([resolveServerSfuClientId(), CONCLAVE_SFU_CLIENT_ID]);
+  fallbacks.delete(named);
+  for (const fallback of fallbacks) {
+    if ((await lookup(fallback))?.id === meeting.id) return true;
+  }
+  return false;
+};
+
 export const findScheduledMeetingForLink = async <
-  Meeting extends { clientId?: string },
+  Meeting extends { clientId?: string; id?: string },
 >(
   linkedClientId: string | null | undefined,
   lookup: (clientId: string) => Promise<Meeting | null>,
@@ -49,7 +63,8 @@ export const findScheduledMeetingForLink = async <
     const meeting = await lookup(candidate);
     if (!meeting) continue;
     const booked = meeting.clientId?.trim();
-    if (named && (!booked || canonicalizeSfuClientId(booked) !== named)) continue;
+    if (named && booked && canonicalizeSfuClientId(booked) !== named) continue;
+    if (named && !booked && (await isAnotherTenantsBooking(meeting, named, lookup))) continue;
     return { clientId: booked || candidate, meeting };
   }
   return null;
