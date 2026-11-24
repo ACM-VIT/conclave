@@ -116,6 +116,42 @@ describe("room occupancy for a viewer", () => {
       const url = await start(state);
       expect((await occupancy(url, undefined, ["proof-g"])).viewerIsMember).toBe(false);
     });
+
+    it("weighs a block under every pass the web sends, however many it sends", async () => {
+      const state = setup();
+      const room = seatGuest(state);
+      const blocked = new Client({
+        id: "guest-gp_blocked-tab#t9",
+        socket: { id: "t9", emit: () => true } as unknown as Socket,
+      });
+      room.setUserIdentity(blocked.id, "guest-gp_blocked-tab", "Guest", {
+        guestProof: "proof-blocked",
+      });
+      room.addClient(blocked);
+      room.blockUser("guest-gp_blocked-tab");
+      const url = await start(state);
+      const unknown = Array.from({ length: 14 }, (_, index) => `proof-unknown-${index}`);
+      expect((await occupancy(url, undefined, ["proof-g", ...unknown])).viewerIsMember).toBe(true);
+      expect(
+        (await occupancy(url, undefined, ["proof-g", ...unknown, "proof-blocked"])).viewerIsMember,
+      ).toBe(false);
+      expect(
+        (await occupancy(url, undefined, ["proof-g", ...unknown.slice(0, 8), "proof-blocked"]))
+          .viewerIsMember,
+      ).toBe(false);
+      expect(
+        (await occupancy(url, undefined, ["proof-g", ...unknown, "proof-more", "proof-blocked"]))
+          .viewerIsMember,
+      ).toBe(false);
+    });
+
+    it("does not vouch for an old app's own key through the guest's pass", async () => {
+      const state = setup();
+      seatGuest(state);
+      const url = await start(state);
+      expect((await occupancy(url, "guest-old-app", ["proof-g"])).viewerIsMember).toBe(true);
+      expect((await occupancy(url, "guest-old-app")).viewerIsMember).toBe(false);
+    });
   });
 
   describe("for someone invited to a scheduled meeting", () => {

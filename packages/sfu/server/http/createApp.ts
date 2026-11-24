@@ -2,6 +2,7 @@ import { AI_PROVIDERS, getProviderApiKey, readAiEnvironment, type AiEnvironment 
 import { isRoomAiProvider } from "@conclave/ai/room";
 import { isAiFeature, resolveAiFeatureSettings } from "@conclave/ai/room-settings";
 import { ROOM_AI_ENV_FIELDS } from "@conclave/ai/room-server";
+import { MAX_BROWSER_GUEST_PASSES } from "@conclave/meeting-core/guest-join-claims";
 import type { MediaKind } from "mediasoup/types";
 import { randomBytes } from "node:crypto";
 import cors from "cors";
@@ -785,7 +786,6 @@ export const createSfuApp = ({
     return res.status(403).json({ error: "Use /admin/rooms for room lists" });
   });
 
-  const MAX_VIEWER_PROOFS = 8;
   app.get("/rooms/:roomId", (req, res) => {
     if (!hasValidSecret(req, config.sfuSecret)) {
       return res.status(401).json({ error: "Unauthorized" });
@@ -806,9 +806,9 @@ export const createSfuApp = ({
     const viewerProofs = [req.query.viewerProof]
       .flat()
       .flatMap((value) => (typeof value === "string" ? [normalizeIdentifier(value)] : []))
-      .filter((value): value is string => Boolean(value))
-      .slice(0, MAX_VIEWER_PROOFS);
+      .filter((value): value is string => Boolean(value));
     const vouchesFor = (userKey: string): boolean => {
+      if (viewerProofs.length > MAX_BROWSER_GUEST_PASSES) return false;
       const proofs = viewerProofs.length > 0 ? viewerProofs : [undefined];
       if (
         proofs.some(
@@ -818,7 +818,8 @@ export const createSfuApp = ({
         return false;
       }
       return (
-        proofs.some((proof) => Boolean(room?.isMemberUserKey(userKey, proof))) ||
+        Boolean(room?.isMemberUserKey(userKey)) ||
+        viewerProofs.some((proof) => Boolean(room?.isMemberUserKey("", proof))) ||
         isScheduledMeetingInvitee(
           state.scheduledMeetings,
           clientId,

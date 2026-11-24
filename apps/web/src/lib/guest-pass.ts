@@ -4,7 +4,7 @@ import { z } from "zod";
 import {
   issueRoomScopedClaims,
   issueSelfNamedGuestClaims,
-  MAX_OTHER_GUEST_SEATS,
+  MAX_BROWSER_GUEST_PASSES,
   type RoomScopedClaims,
   type SelfNamedGuestClaims,
 } from "@conclave/meeting-core/guest-join-claims";
@@ -13,8 +13,6 @@ const PASS_AUDIENCE = "conclave-guest-pass";
 const GRANT_AUDIENCE = "conclave-guest-grant";
 const PASS_TTL_SECONDS = 30 * 24 * 60 * 60;
 const GRANT_TTL_SECONDS = 24 * 60 * 60;
-// A token has room for every pass this reads (see MAX_OTHER_GUEST_SEATS).
-const MAX_BROWSER_PASSES = MAX_OTHER_GUEST_SEATS + 1;
 // Signatures checked per request, whatever a client puts in its cookies.
 const MAX_PASS_COOKIES_CHECKED = 64;
 
@@ -187,19 +185,19 @@ const readBrowserPasses = (
     if (pass) passes.add(pass);
   }
   const [lowest, ...others] = [...passes].sort();
-  if (others.length < MAX_BROWSER_PASSES) {
+  if (others.length < MAX_BROWSER_GUEST_PASSES) {
     return lowest === undefined ? [] : [lowest, ...others];
   }
   // More passes than a token can name. None is dropped without a trace, and
   // the ones this tab joined under go first: its rights are under those.
   console.warn(
-    `[Guest pass] A browser sent ${passes.size} passes. A join token names ${MAX_BROWSER_PASSES}.`,
+    `[Guest pass] A browser sent ${passes.size} passes. A join token names ${MAX_BROWSER_GUEST_PASSES}.`,
   );
   return [
     lowest,
     ...others.filter((pass) => joinedAs.includes(pass)),
     ...others.filter((pass) => !joinedAs.includes(pass)),
-  ].slice(0, MAX_BROWSER_PASSES);
+  ].slice(0, MAX_BROWSER_GUEST_PASSES);
 };
 
 const passCookie = (sfuSecret: string, guestId: GuestPassId): string =>
