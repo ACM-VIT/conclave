@@ -1,3 +1,4 @@
+import { isCaptureReleased } from "./media-captures";
 import type { MediaDeviceFailures } from "./utils";
 
 interface AcquireLocalTracksOptions {
@@ -18,6 +19,11 @@ export async function acquireLocalTracks({
     streams.push(await request(audio, video));
     return { streams, failures };
   } catch (error) {
+    if (isCaptureReleased(error)) {
+      if (audio) failures.microphone = error;
+      if (video) failures.camera = error;
+      return { streams, failures };
+    }
     if (!audio || !video) {
       failures[audio ? "microphone" : "camera"] = error;
       return { streams, failures };
@@ -27,6 +33,10 @@ export async function acquireLocalTracks({
     streams.push(await request(true, false));
   } catch (error) {
     failures.microphone = error;
+    if (isCaptureReleased(error)) {
+      failures.camera = error;
+      return { streams, failures };
+    }
   }
   try {
     streams.push(await request(false, true));

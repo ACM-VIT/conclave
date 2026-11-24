@@ -6,14 +6,21 @@ import {
   useLocalCameraPreview,
   type LocalCameraPreviewController,
 } from "../src/app/hooks/useLocalCameraPreview";
+import { useMeetMedia } from "../src/app/hooks/useMeetMedia";
 import { useMeetRefs } from "../src/app/hooks/useMeetRefs";
 import { useMeetSocket } from "../src/app/hooks/useMeetSocket";
 import { useMicTest } from "../src/app/hooks/useMicTest";
 import { getUserMediaWithTimeout } from "../src/app/lib/media-capture-timeout";
+import { DEFAULT_MEDIA_QUALITY_SETTINGS } from "../src/app/lib/media-quality-settings";
 
 type SocketApi = ReturnType<typeof useMeetSocket>;
 type Refs = ReturnType<typeof useMeetRefs>;
-type Rig = { api: SocketApi; refs: Refs; preview: LocalCameraPreviewController };
+type Rig = {
+  api: SocketApi;
+  refs: Refs;
+  preview: LocalCameraPreviewController;
+  media: ReturnType<typeof useMeetMedia>;
+};
 
 class FakeTrack {
   readyState: MediaStreamTrackState = "live";
@@ -190,7 +197,28 @@ const createRig = async () => {
             : undefined,
     }) as unknown as Parameters<typeof useMeetSocket>[0];
     const api = useMeetSocket(options);
-    rig = { api, refs, preview };
+    const mediaRefs = useMeetRefs();
+    const mediaOptions = new Proxy(
+      {
+        ...mediaRefs,
+        connectionState: "disconnected",
+        isMuted: false,
+        isCameraOff: false,
+        localStream: null,
+        mediaQualitySettings: DEFAULT_MEDIA_QUALITY_SETTINGS,
+        mediaQualitySettingsRef: { current: DEFAULT_MEDIA_QUALITY_SETTINGS },
+      },
+      {
+        get: (target, key) =>
+          key in target
+            ? Reflect.get(target, key)
+            : typeof key === "string" && (key.startsWith("set") || key.startsWith("on"))
+              ? noop
+              : undefined,
+      },
+    ) as unknown as Parameters<typeof useMeetMedia>[0];
+    const media = useMeetMedia(mediaOptions);
+    rig = { api, refs, preview, media };
     return inCall ? createElement(CallSettingsPanel) : null;
   }
 
@@ -303,5 +331,36 @@ describe("every way a call ends with the client still mounted", () => {
     );
     expect(liveTracks()).toEqual([]);
     expect(current.rig().preview.stream).toBeNull();
+  });
+
+  it.each(ENDINGS)("%s stops a combined microphone and camera request and tries none of its fallbacks", async (_name, end) => {
+    current = await createRig();
+    holdRequests = true;
+    const requestsBefore = fakeDevices.getUserMedia.mock.calls.length;
+    const request = current.rig().media.requestMediaPermissions({
+      audio: true,
+      video: true,
+      audioRequired: true,
+      videoRequired: true,
+    });
+    await vi.waitFor(() => expect(waiting).toHaveLength(1));
+
+    await act(async () => {
+      await end(current!.rig(), current!.dispatch);
+    });
+    await current.showEndScreen();
+    for (let round = 0; round < 3; round += 1) {
+      await act(async () => {
+        waiting.splice(0).forEach((grant) => grant());
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(liveTracks()).toEqual([]);
+    }
+    await act(async () => {
+      await request;
+    });
+
+    expect(liveTracks()).toEqual([]);
+    expect(fakeDevices.getUserMedia.mock.calls.length - requestsBefore).toBe(1);
   });
 });

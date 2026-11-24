@@ -6,6 +6,7 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useHotkey } from "@tanstack/react-hotkeys";
 import { isDevicePublishing, retryFailedMediaDevices } from "./lib/media-retry";
+import { captureGeneration } from "./lib/media-captures";
 import { HOTKEYS } from "./lib/hotkeys";
 import type { Socket } from "socket.io-client";
 import { SFU_EVENTS } from "@conclave/meeting-core/sfu-events";
@@ -1369,8 +1370,10 @@ export default function MeetsClient({
     const device = mediaError?.device;
     if (!device) return;
     if (mediaRetryRef.current) return;
+    const generation = captureGeneration();
     mediaRetryRef.current = retryFailedMediaDevices({
       device,
+      callEnded: () => generation !== captureGeneration(),
       isOn: (target) => {
         const intent = mediaIntentRef.current;
         return target === "camera"

@@ -8,15 +8,23 @@ const stopTrack = (track: MediaStreamTrack) => {
   } catch {}
 };
 
-const releasedError = () =>
-  new DOMException("The call ended before this capture started.", "AbortError");
+export class CaptureReleasedError extends Error {
+  constructor() {
+    super("The call ended before this capture started.");
+    this.name = "AbortError";
+  }
+}
 
-const hold = async (request: Promise<MediaStream>): Promise<MediaStream> => {
-  const requestedIn = generation;
-  const stream = await request;
+export const isCaptureReleased = (error: unknown): boolean => error instanceof CaptureReleasedError;
+
+export const captureGeneration = (): number => generation;
+
+const hold = async (requestedIn: number, request: () => Promise<MediaStream>): Promise<MediaStream> => {
+  if (requestedIn !== generation) throw new CaptureReleasedError();
+  const stream = await request();
   if (requestedIn !== generation) {
     stream.getTracks().forEach(stopTrack);
-    throw releasedError();
+    throw new CaptureReleasedError();
   }
   for (const track of heldTracks) {
     if (track.readyState === "ended") heldTracks.delete(track);
@@ -27,11 +35,13 @@ const hold = async (request: Promise<MediaStream>): Promise<MediaStream> => {
 
 export const captureUserMedia = (
   constraints: MediaStreamConstraints,
-): Promise<MediaStream> => hold(navigator.mediaDevices.getUserMedia(constraints));
+  requestedIn = generation,
+): Promise<MediaStream> => hold(requestedIn, () => navigator.mediaDevices.getUserMedia(constraints));
 
 export const captureDisplayMedia = (
   options?: DisplayMediaStreamOptions,
-): Promise<MediaStream> => hold(navigator.mediaDevices.getDisplayMedia(options));
+  requestedIn = generation,
+): Promise<MediaStream> => hold(requestedIn, () => navigator.mediaDevices.getDisplayMedia(options));
 
 export const onCapturesReleased = (listener: () => void): (() => void) => {
   releaseListeners.add(listener);
