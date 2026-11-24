@@ -205,21 +205,25 @@ const isSpin = (value: unknown): value is WheelSpin => {
   );
 };
 
-const readSpins = new WeakMap<WheelSpin, WheelSpin | null>();
+const readSpins = new WeakMap<WheelSpin, WheelSpin>();
 
-const readSpinEntries = (spin: WheelSpin): WheelSpin | null => {
-  const entries: WheelEntry[] = [];
-  for (const raw of spin.entries as unknown[]) {
-    const entry = readEntry(raw);
-    if (entry === null) return null;
-    entries.push(entry);
-  }
+const readSlot = (raw: unknown, index: number): WheelEntry =>
+  readEntry(raw) ?? { id: `slot-${index}`, label: "" };
+
+const readSpinEntries = (spin: WheelSpin): WheelSpin => {
+  const entries = (spin.entries as unknown[]).map(readSlot);
   return entries.every((entry, index) => entry === spin.entries[index]) ? spin : { ...spin, entries };
 };
 
-const readSpin = (spin: WheelSpin): WheelSpin | null => {
-  if (!readSpins.has(spin)) readSpins.set(spin, readSpinEntries(spin));
-  return readSpins.get(spin) ?? null;
+export const slotLabel = (spin: WheelSpin, index: number): string =>
+  spin.entries[index]?.label || String(index + 1);
+
+const readSpin = (spin: WheelSpin): WheelSpin => {
+  const cached = readSpins.get(spin);
+  if (cached) return cached;
+  const read = readSpinEntries(spin);
+  readSpins.set(spin, read);
+  return read;
 };
 
 export const getSpin = (doc: Y.Doc): WheelSpin | null => {

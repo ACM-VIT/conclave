@@ -250,16 +250,16 @@ export const labelFlipSignature = (rotation: number, count: number): string => {
   return signature;
 };
 
+export type SingleLabel = { text: string; numbered: boolean };
+
 export const fitSingleLabel = (
   label: string,
   wheelPx: number,
   measure: MeasureText
-): string | null => {
+): SingleLabel | null => {
   if (!(wheelPx > 0) || !(SINGLE_LABEL_SIZE * pxPerUnitFor(wheelPx) >= MIN_LABEL_PX)) {
     return null;
   }
-  return (
-    truncateToWidth(label, (text) => measure(text) * SINGLE_LABEL_SIZE, SINGLE_LABEL_WIDTH)
-      ?.text ?? null
-  );
+  const fitted = truncateToWidth(label, (text) => measure(text) * SINGLE_LABEL_SIZE, SINGLE_LABEL_WIDTH);
+  return fitted ? { text: fitted.text, numbered: false } : { text: "1", numbered: true };
 };

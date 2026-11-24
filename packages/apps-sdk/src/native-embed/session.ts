@@ -6,6 +6,7 @@ import {
   HOST_COMMAND_TYPES,
   NATIVE_EMBED_BUNDLE_VERSION,
   NATIVE_EMBED_LIMITS,
+  WHEEL_LIMITS,
   base64FromBytes,
   bytesFromBase64,
   decodeHostMessage,
@@ -65,7 +66,7 @@ export type WatchAppStatus = {
 
 export type AppStatusPayload = { app: WheelAppStatus | WatchAppStatus };
 
-export type CommandResult = { ok: boolean; error?: string; pngBase64?: string };
+export type CommandResult = { ok: boolean; error?: string; pngBase64?: string; added?: number[] };
 export type CommandHandler = (envelope: Envelope<NativeToEmbedType>) => CommandResult;
 
 type AwarenessChange = { added: number[]; updated: number[]; removed: number[] };
@@ -96,6 +97,7 @@ export class NativeEmbedSession {
   private closed = false;
   private requestNumber = 0;
   private readonly seen: string[] = [];
+  private readonly answers = new Map<string, Record<string, unknown>>();
   private readonly listeners = new Set<() => void>();
   private commandHandler: CommandHandler | null = null;
   private readonly pendingAwareness = new Set<number>();
@@ -161,7 +163,11 @@ export class NativeEmbedSession {
     const decoded = decodeHostMessage(raw, this.scope);
     if (!decoded.ok) return this.reject(decoded.reason);
     const envelope = decoded.envelope;
-    if (this.seen.includes(envelope.requestId)) return this.reject("duplicateRequest");
+    if (this.seen.includes(envelope.requestId)) {
+      const answer = this.answers.get(envelope.requestId);
+      if (answer) this.send("ack", answer, envelope.requestId);
+      return this.reject("duplicateRequest");
+    }
     this.seen.push(envelope.requestId);
     if (this.seen.length > NATIVE_EMBED_LIMITS.requestMemory) this.seen.shift();
     const payload = envelope.payload;
@@ -311,6 +317,12 @@ export class NativeEmbedSession {
     const payload: Record<string, unknown> = { ok: result.ok };
     if (result.error) payload.error = result.error.slice(0, 64);
     if (result.pngBase64) payload.pngBase64 = result.pngBase64;
+    if (result.added) payload.added = result.added.slice(0, WHEEL_LIMITS.entries);
+    this.answers.set(envelope.requestId, payload);
+    if (this.answers.size > NATIVE_EMBED_LIMITS.requestMemory) {
+      const oldest = this.answers.keys().next().value;
+      if (oldest !== undefined) this.answers.delete(oldest);
+    }
     this.send("ack", payload, envelope.requestId);
   }
 

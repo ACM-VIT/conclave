@@ -20,6 +20,7 @@ import {
   removeEntryById,
   replaceEntries,
   setRemoveWinnerOnDone,
+  slotLabel,
   startSpin,
   type WheelSpin,
 } from "../../core/doc/index";
@@ -99,6 +100,8 @@ export function WheelWebApp() {
   const reducedMotion = useReducedMotion();
 
   const [isSpinning, setIsSpinning] = useState(false);
+  const isSpinningRef = useRef(isSpinning);
+  isSpinningRef.current = isSpinning;
   const [landedSpinId, setLandedSpinId] = useState<string | null>(null);
   const [revealedSpinId, setRevealedSpinId] = useState<string | null>(null);
   const [dismissedSpinId, setDismissedSpinId] = useState<string | null>(null);
@@ -115,6 +118,7 @@ export function WheelWebApp() {
   const frozen = spin && spin.spinId !== dismissedSpinId ? spin : null;
   const landed = Boolean(frozen && !isSpinning && landedSpinId === frozen.spinId);
   const winner = frozen && landed ? frozen.entries[frozen.winnerIndex] ?? null : null;
+  const winnerLabel = frozen && winner ? slotLabel(frozen, frozen.winnerIndex) : "";
   const showReveal = Boolean(winner && frozen && revealedSpinId === frozen.spinId);
 
   const soundsRef = useRef<WheelSounds | null>(null);
@@ -191,7 +195,7 @@ export function WheelWebApp() {
       const winner = settled.entries[settled.winnerIndex];
       if (!winner) return;
       spinCountRef.current += 1;
-      setAnnouncement(`Spin ${spinCountRef.current} winner: ${winner.label}`);
+      setAnnouncement(`Spin ${spinCountRef.current} winner: ${slotLabel(settled, settled.winnerIndex)}`);
       if (!fresh) {
         setRevealedSpinId(settled.spinId);
         return;
@@ -255,6 +259,7 @@ export function WheelWebApp() {
   }, [doc, missingParticipantLabels]);
 
   const handleShuffle = useCallback(() => {
+    if (isSpinningRef.current) return;
     const current = getEntries(doc);
     if (current.length < 2) return;
     const shuffled = [...current];
@@ -266,6 +271,7 @@ export function WheelWebApp() {
   }, [doc]);
 
   const handleSort = useCallback(() => {
+    if (isSpinningRef.current) return;
     const current = getEntries(doc);
     if (current.length < 2) return;
     const sorted = [...current].sort((a, b) =>
@@ -355,9 +361,9 @@ export function WheelWebApp() {
         (winner ? (
           <p
             data-wheel-readout
-            className={`max-w-full text-balance font-semibold [overflow-wrap:anywhere] ${readoutSize(winner.label, roomy)}`}
+            className={`max-w-full text-balance font-semibold [overflow-wrap:anywhere] ${readoutSize(winnerLabel, roomy)}`}
           >
-            {winner.label}
+            {winnerLabel}
           </p>
         ) : (
           <div className="h-[38px]" />
@@ -460,10 +466,14 @@ export function WheelWebApp() {
       onToggleSound={() => setSoundOn((value) => !value)}
       onAddEntries={(labels) => addEntries(doc, labels)}
       onAddParticipants={handleAddParticipants}
-      onRemoveEntry={(entryId) => removeEntryById(doc, entryId)}
+      onRemoveEntry={(entryId) => {
+        if (!isSpinningRef.current) removeEntryById(doc, entryId);
+      }}
       onShuffle={handleShuffle}
       onSort={handleSort}
-      onClearEntries={() => clearEntries(doc)}
+      onClearEntries={() => {
+        if (!isSpinningRef.current) clearEntries(doc);
+      }}
       onClearHistory={() => clearHistory(doc)}
       onToggleRemoveWinner={(value) => setRemoveWinnerOnDone(doc, value)}
     />

@@ -273,6 +273,20 @@
       "isMainFrame": true,
       "raw": "{\"v\":1,\"type\":\"status\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e-1\",\"payload\":{\"app\":{\"kind\":\"wheel\",\"entries\":[{\"id\":\"e0\",\"label\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}],\"results\":[],\"removeWinner\":false,\"sounds\":true,\"spinning\":false,\"winnerSpinId\":\"\",\"winnerLabel\":\"\"}}}",
       "expect": "none"
+    },
+    {
+      "name": "ack listing the sent names it added",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"type\":\"ack\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"h-4\",\"payload\":{\"ok\":true,\"added\":[0,2]}}",
+      "expect": "none"
+    },
+    {
+      "name": "ack whose added list is not whole numbers",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"type\":\"ack\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"h-4\",\"payload\":{\"ok\":true,\"added\":[1.5]}}",
+      "expect": "badPayload"
     }
   ],
   "hostToEmbed": [

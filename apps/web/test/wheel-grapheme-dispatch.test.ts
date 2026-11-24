@@ -37,8 +37,8 @@ afterEach(() => {
 describe("wheel label grapheme splitter choice", () => {
   it("shortens on whole clusters when the browser has no grapheme segmenter", async () => {
     const { fitSingleLabel } = await loadFitter(undefined);
-    expect(fitSingleLabel(DEVANAGARI_NAME, 600, fitsCodePoints(9))).toBe("AAAAA\u2026");
-    expect(fitSingleLabel(MYANMAR_NAME, 600, fitsCodePoints(5))).toBe("A\u1001\u2026");
+    expect(fitSingleLabel(DEVANAGARI_NAME, 600, fitsCodePoints(9))?.text).toBe("AAAAA\u2026");
+    expect(fitSingleLabel(MYANMAR_NAME, 600, fitsCodePoints(5))?.text).toBe("A\u1001\u2026");
   });
 
   it("does not trust a browser segmenter that splits Myanmar stacked consonants", async () => {
@@ -47,7 +47,7 @@ describe("wheel label grapheme splitter choice", () => {
     );
     const { fitSingleLabel } = await loadFitter(unicode16.FakeSegmenter);
     unicode16.calls.count = 0;
-    expect(fitSingleLabel(MYANMAR_NAME, 600, fitsCodePoints(5))).toBe("A\u1001\u2026");
+    expect(fitSingleLabel(MYANMAR_NAME, 600, fitsCodePoints(5))?.text).toBe("A\u1001\u2026");
     expect(unicode16.calls.count).toBe(0);
   });
 
@@ -60,7 +60,7 @@ describe("wheel label grapheme splitter choice", () => {
     );
     const { fitSingleLabel } = await loadFitter(wrongCut.FakeSegmenter);
     wrongCut.calls.count = 0;
-    expect(fitSingleLabel(MYANMAR_NAME, 600, fitsCodePoints(5))).toBe("A\u1001\u2026");
+    expect(fitSingleLabel(MYANMAR_NAME, 600, fitsCodePoints(5))?.text).toBe("A\u1001\u2026");
     expect(wrongCut.calls.count).toBe(0);
   });
 
@@ -70,14 +70,14 @@ describe("wheel label grapheme splitter choice", () => {
         throw new Error("blocked");
       },
     });
-    expect(fitSingleLabel(DEVANAGARI_NAME, 600, fitsCodePoints(9))).toBe("AAAAA\u2026");
+    expect(fitSingleLabel(DEVANAGARI_NAME, 600, fitsCodePoints(9))?.text).toBe("AAAAA\u2026");
   });
 
   it("keeps using a browser segmenter that splits every probe correctly", async () => {
     const correct = fakeSegmenter(splitGraphemesFallback);
     const { fitSingleLabel } = await loadFitter(correct.FakeSegmenter);
     correct.calls.count = 0;
-    expect(fitSingleLabel(DEVANAGARI_NAME, 600, fitsCodePoints(9))).toBe("AAAAA\u2026");
+    expect(fitSingleLabel(DEVANAGARI_NAME, 600, fitsCodePoints(9))?.text).toBe("AAAAA\u2026");
     expect(correct.calls.count).toBeGreaterThan(0);
   });
 });

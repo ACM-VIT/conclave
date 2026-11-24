@@ -217,7 +217,6 @@ export function WheelPanel({
                     if (onAddEntries(names) > 0) setDraft("");
                   }}
                   disabled={isSpinning || full}
-                  maxLength={48}
                   placeholder={full ? "The wheel is full" : "Add a name or paste a list"}
                   aria-label="Add a name"
                   className="h-9 w-full rounded-lg border border-white/[0.14] bg-transparent pl-3 pr-10 text-[13px] text-[#fafafa] outline-none transition-colors duration-100 placeholder:text-[#fafafa]/40 disabled:opacity-50"

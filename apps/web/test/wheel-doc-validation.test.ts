@@ -12,6 +12,7 @@ import {
   recordResult,
   removeEntryById,
   replaceEntries,
+  slotLabel,
   startSpin,
   type WheelEntry,
   type WheelSpin,
@@ -215,6 +216,50 @@ describe("wheel names never split a character", () => {
   });
 });
 
+describe("wheel spin replay", () => {
+  const build63Spin = (entries: unknown[], winnerIndex: number) => ({ ...validSpin(), spinId: "s-63", entries, winnerIndex });
+
+  it("replays a build 63 spin with exactly its slices and numbers the slot it cannot show", () => {
+    const doc = createWheelDoc();
+    doc.getMap("wheel").set(
+      "spin",
+      build63Spin([{ id: "a", label: "Ada" }, { id: "b", label: "Bo" }, { id: "z", label: "\u200B" }], 2)
+    );
+    const spin = getSpin(doc)!;
+    expect(spin.entries.map((entry) => entry.label)).toEqual(["Ada", "Bo", ""]);
+    expect(spin.winnerIndex).toBe(2);
+    expect(slotLabel(spin, 2)).toBe("3");
+    expect(slotLabel(spin, 0)).toBe("Ada");
+  });
+
+  it("keeps every slot of a spin whatever an entry holds, so every client lands on the same slice", () => {
+    const doc = createWheelDoc();
+    const slots: unknown[] = [
+      { id: "a", label: "  Ada  " },
+      { id: "a b", label: "Cy" },
+      { id: "x", label: "x".repeat(60) },
+      { id: "t", label: "A".repeat(47) + "\uD83C" },
+      null,
+      { id: "d", label: "Dee" },
+    ];
+    doc.getMap("wheel").set("spin", build63Spin(slots, 1));
+    const spin = getSpin(doc)!;
+    expect(spin.entries).toHaveLength(6);
+    expect(spin.entries.map((entry) => entry.label)).toEqual(["Ada", "", "", "A".repeat(47), "", "Dee"]);
+    expect(new Set(spin.entries.map((entry) => entry.id)).size).toBe(6);
+    expect(slotLabel(spin, spin.winnerIndex)).toBe("2");
+    expect(getSpin(doc)).toBe(spin);
+  });
+
+  it("never writes a result for a slot it cannot show", () => {
+    const doc = createWheelDoc();
+    doc.getMap("wheel").set("spin", build63Spin([{ id: "a", label: "Ada" }, { id: "z", label: "\u200B" }], 1));
+    const spin = getSpin(doc)!;
+    recordResult(doc, { spinId: spin.spinId, label: spin.entries[1].label, at: 1, byName: "Host" });
+    expect(getHistory(doc)).toEqual([]);
+  });
+});
+
 describe("wheel accept rule", () => {
   const storeHistory = (doc: Y.Doc, records: unknown[]) => {
     const history = new Y.Array<unknown>();
@@ -307,7 +352,7 @@ describe("wheel label visibility", () => {
         { id: "blank", label: "\u200B\u200F" },
       ],
     });
-    expect(getSpin(doc)).toBeNull();
+    expect(getSpin(doc)?.entries.map((entry) => entry.label)).toEqual(["One", ""]);
 
     const history = new Y.Array<unknown>();
     wheel.set("history", history);

@@ -114,19 +114,19 @@ describe("wheel label fitting", () => {
 
   it("cuts a lone long name to the width of the wheel, and hides it on a tiny wheel", () => {
     const name = "Maximiliana Featherstonehaugh-Worthington of Somewhere";
-    const text = fitSingleLabel(name, 600, measure)!;
+    const text = fitSingleLabel(name, 600, measure)!.text;
     expect(text.endsWith("…")).toBe(true);
     expect(measure(text) * SINGLE_LABEL_SIZE).toBeLessThanOrEqual(SINGLE_LABEL_WIDTH);
-    expect(fitSingleLabel("Ada", 600, measure)).toBe("Ada");
+    expect(fitSingleLabel("Ada", 600, measure)).toEqual({ text: "Ada", numbered: false });
     expect(fitSingleLabel("Ada", 120, measure)).toBeNull();
   });
 
   it("trims trailing whitespace by whole clusters, never from inside one", () => {
     const fitsCodePoints = (count: number) => (text: string) =>
       (Array.from(text).length * SINGLE_LABEL_WIDTH) / (SINGLE_LABEL_SIZE * (count + 0.5));
-    expect(fitSingleLabel("AAAAA\u0600 BBBBBBBBBBB", 600, fitsCodePoints(8))).toBe("AAAAA\u0600 \u2026");
-    expect(fitSingleLabel("AAAAA BBBBBBBBBBB", 600, fitsCodePoints(7))).toBe("AAAAA\u2026");
-    expect(fitSingleLabel(" \u0600 BBBBBBBBBBB", 600, fitsCodePoints(3))).toBeNull();
+    expect(fitSingleLabel("AAAAA\u0600 BBBBBBBBBBB", 600, fitsCodePoints(8))?.text).toBe("AAAAA\u0600 \u2026");
+    expect(fitSingleLabel("AAAAA BBBBBBBBBBB", 600, fitsCodePoints(7))?.text).toBe("AAAAA\u2026");
+    expect(fitSingleLabel(" \u0600 BBBBBBBBBBB", 600, fitsCodePoints(3))).toEqual({ text: "1", numbered: true });
   });
 
   it("numbers a slice whose name cannot fit even one cluster while the others show", () => {
@@ -145,10 +145,18 @@ describe("wheel label fitting", () => {
     expect(fitted.labels[11]).toMatchObject({ text: "12", numbered: true });
   });
 
+  it("numbers a lone name that cannot keep one cluster, instead of leaving the dial blank", () => {
+    const fifteen = Array.from({ length: 15 }, () => "\u{1F468}").join("\u200D");
+    expect(graphemes(fifteen)).toHaveLength(1);
+    expect(fitSingleLabel(fifteen, 1018, measure)).toEqual({ text: "1", numbered: true });
+    expect(fitSingleLabel("", 600, measure)).toEqual({ text: "1", numbered: true });
+    expect(fitSingleLabel(fifteen, 120, measure)).toBeNull();
+  });
+
   it("never shortens a label to a prefix with nothing visible in it", () => {
     const fitsCodePoints = (count: number) => (text: string) =>
       (Array.from(text).length * SINGLE_LABEL_WIDTH) / (SINGLE_LABEL_SIZE * (count + 0.5));
-    expect(fitSingleLabel("\u200B\u200BAAAAAAAAAA", 600, fitsCodePoints(3))).toBeNull();
+    expect(fitSingleLabel("\u200B\u200BAAAAAAAAAA", 600, fitsCodePoints(3))).toEqual({ text: "1", numbered: true });
   });
 
   it("keeps 64 names readable at the smallest allowed size, or hides them when nothing fits", () => {
@@ -318,7 +326,8 @@ describe("wheel label emoji", () => {
     const whole = graphemes(label);
     let shortened = 0;
     for (let scale = 0.5; scale <= 6; scale += 0.05) {
-      const text = fitSingleLabel(label, 600, (value) => measure(value) * scale);
+      const fitted = fitSingleLabel(label, 600, (value) => measure(value) * scale);
+      const text = fitted && !fitted.numbered ? fitted.text : null;
       if (!text || !text.endsWith("\u2026")) continue;
       shortened += 1;
       const kept = text.slice(0, -1).trimEnd();

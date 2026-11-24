@@ -387,8 +387,8 @@ export function WheelStage({
           !holdingStill && (animationRef.current || restingRef.current)
             ? pointerIndex(rotationRef.current, segments)
             : -1;
-        const label =
-          index >= 0 ? displayedEntriesRef.current[index]?.label ?? null : null;
+        const slot = index >= 0 ? displayedEntriesRef.current[index] : undefined;
+        const label = slot ? slot.label || String(index + 1) : null;
         const key = holdingStill ? HOLDING_STILL : label;
         if (key !== pointerLabelRef.current) {
           pointerLabelRef.current = key;
@@ -441,7 +441,11 @@ export function WheelStage({
       measure
     );
   }, [count, displayedEntries, measure, wheelPx]);
-  hasNumbersRef.current = Boolean(fitted?.labels.some((label) => label?.numbered));
+  const single = useMemo(
+    () => (count === 1 ? fitSingleLabel(displayedEntries[0].label, wheelPx, measure) : null),
+    [count, displayedEntries, measure, wheelPx]
+  );
+  hasNumbersRef.current = Boolean(single?.numbered || fitted?.labels.some((label) => label?.numbered));
 
   const segments = useMemo(() => {
     if (count === 0) {
@@ -466,23 +470,30 @@ export function WheelStage({
 
   const labels = useMemo(() => {
     if (count === 1) {
-      const text = fitSingleLabel(displayedEntries[0].label, wheelPx, measure);
-      return text ? (
+      if (!single) return null;
+      const flipped = isLabelFlipped(0, 1, flipRotation);
+      return (
         <text
           x={0}
           y={SINGLE_LABEL_Y}
+          data-wheel-number={single.numbered ? "" : undefined}
           transform={
-            isLabelFlipped(0, 1, flipRotation) ? `rotate(180 0 ${SINGLE_LABEL_Y})` : undefined
+            single.numbered
+              ? `rotate(${uprightAngle(flipRotation)} 0 ${SINGLE_LABEL_Y})`
+              : flipped
+                ? `rotate(180 0 ${SINGLE_LABEL_Y})`
+                : undefined
           }
           textAnchor="middle"
           dominantBaseline="central"
           fontSize={SINGLE_LABEL_SIZE}
           fontWeight={600}
-          fill={COLOR.ink}
+          fill={single.numbered ? COLOR.numberInk : COLOR.ink}
+          style={single.numbered ? { fontVariantNumeric: "tabular-nums" } : undefined}
         >
-          {text}
+          {single.text}
         </text>
-      ) : null;
+      );
     }
     if (!fitted) return null;
     const sweep = 360 / count;
@@ -512,7 +523,7 @@ export function WheelStage({
         </text>
       );
     });
-  }, [displayedEntries, count, fitted, flipRotation, highlightIndex, hasHighlight, measure, wheelPx]);
+  }, [displayedEntries, count, fitted, single, flipRotation, highlightIndex, hasHighlight]);
 
   return (
     <div className="flex h-full w-full items-center justify-center p-4">

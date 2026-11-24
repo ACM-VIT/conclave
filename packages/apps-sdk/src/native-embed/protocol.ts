@@ -397,6 +397,11 @@ const isWatchItem = (value: unknown): boolean =>
 const isWatchRequest = (value: unknown): boolean =>
   isWatchItem(value) && isRecord(value) && isBoundedText(value.byId ?? "", WATCH_LIMITS.userId, true);
 
+export const isAddedList = (value: unknown): value is number[] =>
+  Array.isArray(value) &&
+  value.length <= WHEEL_LIMITS.entries &&
+  value.every((index) => typeof index === "number" && Number.isSafeInteger(index) && index >= 0);
+
 export const isValidAppStatus = (value: unknown): boolean => {
   if (value === undefined) return true;
   if (!isRecord(value)) return false;
@@ -477,6 +482,7 @@ export const decodeEmbedMessage = (
       if (typeof png === "string" && png.length > base64CharacterLimit(NATIVE_EMBED_LIMITS.exportBytes)) {
         return { ok: false, reason: "payloadTooLarge" };
       }
+      if (payload.added !== undefined && !isAddedList(payload.added)) return { ok: false, reason: "badPayload" };
       return { ok: true, envelope };
     }
     case "resize": {

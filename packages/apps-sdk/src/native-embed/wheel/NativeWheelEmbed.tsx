@@ -3,30 +3,25 @@ import { WheelStage } from "../../apps/wheel/web/components/WheelStage";
 import { useWheelDocState } from "../../apps/wheel/web/hooks/useWheelDocState";
 import { WheelSounds } from "../../apps/wheel/web/sounds";
 import {
-  clearEntries,
-  clearHistory,
   createEntryId,
   getEntries,
   getHistory,
   getRemoveWinnerOnDone,
   recordResult,
   removeEntryById,
-  replaceEntries,
-  setRemoveWinnerOnDone,
+  slotLabel,
   startSpin,
   type WheelSpin,
 } from "../../apps/wheel/core/doc/index";
-import { APP_EDIT_COMMANDS, isValidIdentifier, type Envelope, type NativeToEmbedType } from "../protocol";
+import { APP_EDIT_COMMANDS, type Envelope, type NativeToEmbedType } from "../protocol";
 import {
-  payloadBoolean,
-  payloadString,
   type AppStatusPayload,
   type CommandResult,
   type HostStatus,
   type NativeEmbedSession,
   type WheelAppStatus,
 } from "../session";
-import { addNames, wheelStatus } from "./commands";
+import { runWheelCommand, wheelStatus } from "./commands";
 
 const SPIN_MIN_DURATION_MS = 7200;
 const SPIN_DURATION_SPREAD_MS = 1600;
@@ -60,6 +55,8 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
   const { entries, spin, history, removeWinnerOnDone } = useWheelDocState(doc);
 
   const [isSpinning, setIsSpinning] = useState(false);
+  const spinningRef = useRef(isSpinning);
+  spinningRef.current = isSpinning;
   const [highlightIndex, setHighlightIndex] = useState<number | null>(null);
   const [winner, setWinner] = useState<Winner | null>(null);
   const [overlay, setOverlay] = useState<Winner | null>(null);
@@ -131,9 +128,8 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
   );
 
   const reveal = useCallback((settled: WheelSpin) => {
-    const winnerEntry = settled.entries[settled.winnerIndex];
-    if (!winnerEntry) return;
-    const shown = { spinId: settled.spinId, label: winnerEntry.label };
+    if (!settled.entries[settled.winnerIndex]) return;
+    const shown = { spinId: settled.spinId, label: slotLabel(settled, settled.winnerIndex) };
     setHighlightIndex(null);
     soundsRef.current?.win();
     setOverlay(shown);
@@ -215,81 +211,14 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
       const payload = envelope.payload;
       if (!session.isSynced && envelope.type !== "setSounds") return { ok: false, error: "notSynced" };
       if (EDIT_COMMANDS.has(envelope.type) && !canEditRef.current) return { ok: false, error: "readOnly" };
-      switch (envelope.type) {
-        case "addEntries":
-          return addNames(doc, payload);
-        case "removeEntry": {
-          const entryId = payloadString(payload, "entryId");
-          if (!isValidIdentifier(entryId)) return { ok: false, error: "badEntry" };
-          removeEntryById(doc, entryId);
-          return { ok: true };
-        }
-        case "shuffle": {
-          const current = getEntries(doc);
-          if (current.length < 2) return { ok: true };
-          const shuffled = [...current];
-          for (let index = shuffled.length - 1; index > 0; index -= 1) {
-            const other = Math.floor(Math.random() * (index + 1));
-            [shuffled[index], shuffled[other]] = [shuffled[other], shuffled[index]];
-          }
-          replaceEntries(doc, shuffled);
-          return { ok: true };
-        }
-        case "sort": {
-          const current = getEntries(doc);
-          if (current.length < 2) return { ok: true };
-          replaceEntries(doc, [...current].sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" })));
-          return { ok: true };
-        }
-        case "clearEntries":
-          clearEntries(doc);
-          return { ok: true };
-        case "spin":
-          return requestSpin();
-        case "setRemoveWinner": {
-          const value = payloadBoolean(payload, "value");
-          if (value === null) return { ok: false, error: "badValue" };
-          setRemoveWinnerOnDone(doc, value);
-          return { ok: true };
-        }
-        case "setSounds": {
-          const value = payloadBoolean(payload, "value");
-          if (value === null) return { ok: false, error: "badValue" };
+      return runWheelCommand(doc, envelope.type, payload, {
+        spinning: spinningRef.current,
+        requestSpin,
+        setSounds: (value) => {
           setSoundOn(value);
           return respond({ sounds: value });
-        }
-        case "clearResults":
-          clearHistory(doc);
-          return { ok: true };
-        case "snapshot":
-        case "update":
-        case "awareness":
-        case "status":
-        case "resync":
-        case "close":
-        case "setTool":
-        case "setColor":
-        case "setStrokeWidth":
-        case "setFill":
-        case "undo":
-        case "redo":
-        case "setPage":
-        case "addPage":
-        case "renamePage":
-        case "deletePage":
-        case "zoomToFit":
-        case "export":
-        case "playNow":
-        case "enqueue":
-        case "request":
-        case "approve":
-        case "decline":
-        case "cancelRequest":
-        case "move":
-        case "remove":
-        default:
-          return { ok: false, error: "unknownCommand" };
-      }
+        },
+      });
     };
     session.setCommandHandler(handler);
     return () => {

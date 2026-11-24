@@ -46,6 +46,18 @@ test("the encoder turns the old half emoji envelope into the one the fixtures sa
   assert.equal(protocol.encodeEnvelope(old.type, fixtures.scope, old.requestId, old.payload), now.raw);
 });
 
+test("an ack may list the sent names it added, as whole numbers", () => {
+  const decode = (payload) => {
+    const result = protocol.decodeEmbedMessage(envelope("ack", payload), fixtures.scope, fixtures.expectedOrigin, fixtures.expectedOrigin, true);
+    return result.ok ? "none" : result.reason;
+  };
+  assert.equal(decode({ ok: true, added: [0, 2] }), "none");
+  assert.equal(decode({ ok: false, error: "full", added: [] }), "none");
+  for (const added of ["0", [1.5], [-1], [0, "1"], Array.from({ length: 65 }, (_, index) => index)]) {
+    assert.equal(decode({ ok: true, added }), "badPayload", JSON.stringify(added));
+  }
+});
+
 test("host messages decode exactly as the fixtures say", () => {
   for (const item of fixtures.hostToEmbed) {
     const result = protocol.decodeHostMessage(item.raw, fixtures.scope);
@@ -313,6 +325,29 @@ test("commands answer with an ack carrying their request id", { skip: skipConver
   harness.deliver(ada, "undo", {}, "h-2");
   harness.pump();
   assert.deepEqual(ada.acks.map((ack) => [ack.requestId, ack.payload.ok]), [["h-1", true], ["h-2", false]]);
+});
+
+test("a repeated command id gets its first answer again and runs once", { skip: skipConvergence }, (context) => {
+  const harness = makeRoom(sessionModule, context);
+  const ada = harness.join("ada");
+  let runs = 0;
+  ada.session.setCommandHandler(() => {
+    runs += 1;
+    return { ok: true, added: [0, 2] };
+  });
+  assert.equal(harness.deliver(ada, "addEntries", { labels: ["Ada", "", "Bo"] }, "h-5"), "none");
+  assert.equal(harness.deliver(ada, "addEntries", { labels: ["Ada", "", "Bo"] }, "h-5"), "duplicateRequest");
+  assert.equal(harness.deliver(ada, "zoomToFit", {}, "h-6"), "none");
+  harness.pump();
+  assert.equal(runs, 2);
+  assert.deepEqual(
+    ada.acks.map((ack) => [ack.requestId, ack.payload]),
+    [
+      ["h-5", { ok: true, added: [0, 2] }],
+      ["h-5", { ok: true, added: [0, 2] }],
+      ["h-6", { ok: true, added: [0, 2] }],
+    ],
+  );
 });
 
 test("close invalidates the session for good", { skip: skipConvergence }, (context) => {

@@ -108,6 +108,15 @@ describe("wheel names box", () => {
     expect(event.defaultPrevented).toBe(false);
   });
 
+  it("puts no UTF-16 limit on the box, so the wheel cuts a long name on whole characters", () => {
+    const add = vi.fn(() => 1);
+    renderPanel(add);
+    const long = "e\u0301".repeat(30);
+    const input = typeAndSubmit(long);
+    expect(input.hasAttribute("maxlength")).toBe(false);
+    expect(add).toHaveBeenCalledWith([long]);
+  });
+
   it("clears the box once the name was added", () => {
     const add = vi.fn(() => 1);
     renderPanel(add);

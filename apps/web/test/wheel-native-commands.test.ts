@@ -12,7 +12,13 @@ import {
   encodeEnvelope,
   isValidAppStatus,
 } from "../../../packages/apps-sdk/src/native-embed/protocol";
-import { addNames, labelsFrom, wheelStatus } from "../../../packages/apps-sdk/src/native-embed/wheel/commands";
+import {
+  addNames,
+  labelsFrom,
+  runWheelCommand,
+  wheelStatus,
+  type WheelCommandContext,
+} from "../../../packages/apps-sdk/src/native-embed/wheel/commands";
 
 const LONE_SURROGATE = /[\uD800-\uDFFF]/u;
 const SCOPE = { callSessionId: "call-7-3f2a9c1e", appSessionId: "app-5b1d7a2e", appId: "wheel" };
@@ -40,8 +46,8 @@ describe("native wheel commands", () => {
   it("normalises the names a native app sends before counting them", () => {
     const hidden = Array.from({ length: 64 }, () => "\u200B");
     expect(labelsFrom({ labels: [...hidden, "  Ada  ", 7, "A".repeat(47) + "\u{1F389}"] })).toEqual([
-      "Ada",
-      "A".repeat(47),
+      { index: 64, label: "Ada" },
+      { index: 66, label: "A".repeat(47) },
     ]);
     expect(labelsFrom({ labels: "Ada" })).toEqual([]);
     expect(labelsFrom({ labels: Array.from({ length: 70 }, (_, index) => `N${index}`) })).toHaveLength(64);
@@ -49,12 +55,42 @@ describe("native wheel commands", () => {
 
   it("answers by what the wheel added", () => {
     const doc = createWheelDoc();
-    expect(addNames(doc, { labels: ["\u200B", " "] })).toEqual({ ok: false, error: "noNames" });
+    expect(addNames(doc, { labels: ["\u200B", " "] })).toEqual({ ok: false, error: "noNames", added: [] });
     expect(getEntries(doc)).toEqual([]);
-    expect(addNames(doc, { labels: ["Ada"] })).toEqual({ ok: true });
+    expect(addNames(doc, { labels: ["Ada"] })).toEqual({ ok: true, added: [0] });
     addEntries(doc, Array.from({ length: 63 }, (_, index) => `N${index}`));
-    expect(addNames(doc, { labels: ["Late"] })).toEqual({ ok: false, error: "full" });
+    expect(addNames(doc, { labels: ["Late"] })).toEqual({ ok: false, error: "full", added: [] });
     expect(getEntries(doc)).toHaveLength(64);
+  });
+
+  it("lists exactly which sent names it added, by their place in the request", () => {
+    const doc = createWheelDoc();
+    addEntries(doc, Array.from({ length: 62 }, (_, index) => `N${index}`));
+    expect(addNames(doc, { labels: [7, "  ", "Ada", "\u200B", "Bo", "Cy"] })).toEqual({ ok: true, added: [2, 4] });
+    expect(getEntries(doc).slice(-2).map((entry) => entry.label)).toEqual(["Ada", "Bo"]);
+  });
+
+  it("refuses to reorder or remove names while a spin is on, so dial and list numbers always match", () => {
+    const doc = createWheelDoc();
+    addEntries(doc, ["Cy", "Ada", "Bo"]);
+    const before = getEntries(doc);
+    const context = (spinning: boolean): WheelCommandContext => ({
+      spinning,
+      requestSpin: () => ({ ok: true }),
+      setSounds: () => ({ ok: true }),
+    });
+    for (const [type, payload] of [
+      ["sort", {}],
+      ["shuffle", {}],
+      ["removeEntry", { entryId: before[0].id }],
+      ["clearEntries", {}],
+    ] as const) {
+      expect(runWheelCommand(doc, type, payload, context(true)), type).toEqual({ ok: false, error: "spinning" });
+      expect(getEntries(doc), type).toEqual(before);
+    }
+    expect(runWheelCommand(doc, "addEntries", { labels: ["Dee"] }, context(true))).toEqual({ ok: true, added: [0] });
+    expect(runWheelCommand(doc, "sort", {}, context(false))).toEqual({ ok: true });
+    expect(getEntries(doc).map((entry) => entry.label)).toEqual(["Ada", "Bo", "Cy", "Dee"]);
   });
 
   it("sends native exactly the names and results the web shows, for any stored mix", () => {
