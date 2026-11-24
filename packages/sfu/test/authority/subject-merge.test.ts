@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { Json } from "@conclave/apps-sdk/authority";
-import type { AuthorityModule } from "@conclave/apps-sdk/authority/server";
+import type { AuthorityModule, Subject } from "@conclave/apps-sdk/authority/server";
+import { AuthorityInstance, type Actor } from "../../server/apps/authority/instance.js";
+import { DEFAULT_AUTHORITY_LIMITS } from "../../server/apps/authority/limits.js";
 import { ledgerAuthority } from "./fixtures/ledger.js";
 import { pollsAuthority } from "./fixtures/polls.js";
 import { qaAuthority } from "./fixtures/qa.js";
@@ -89,6 +91,89 @@ describe("an app's mergeSubjects leaves what one person would have (Greptile)", 
     });
 
     expect(merged).toEqual(onePerson);
+  });
+});
+
+describe("quiz results after several merges (Greptile)", () => {
+  const room = { mode: "meeting" as const, qaEnabled: true };
+  const host: Actor = { subject: "host" as Subject, role: "moderator", verified: true, displayName: "Host" };
+  const player = (index: number): Actor => ({
+    subject: `player-${String(index).padStart(3, "0")}` as Subject,
+    role: "member",
+    verified: true,
+    displayName: `Player ${index}`,
+  });
+  const seeded = (seed: number) => {
+    let state = seed >>> 0;
+    return () => {
+      state = (state + 0x6d2b79f5) >>> 0;
+      let value = state;
+      value = Math.imul(value ^ (value >>> 15), value | 1);
+      value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+      return ((value ^ (value >>> 14)) >>> 0) / 4_294_967_296;
+    };
+  };
+  type Shown = { name: string; score: number };
+  const shown = (instance: AuthorityInstance): Shown[] | null => {
+    const quiz = instance.snapshot(host).rows.find(({ row }) => row.bucket === "quiz")?.row.value as
+      | { leaderboard: Shown[] | null }
+      | undefined;
+    return quiz?.leaderboard ?? null;
+  };
+  const topTen = (instance: AuthorityInstance): Shown[] =>
+    [...instance.store.rows("scores").values()]
+      .map((row) => row as { subject: string; name: string; score: number })
+      .sort((a, b) => b.score - a.score || (a.subject < b.subject ? -1 : a.subject > b.subject ? 1 : 0))
+      .slice(0, 10)
+      .map(({ name, score }) => ({ name, score }));
+  const playedQuiz = (players: number, choiceOf: (index: number) => number) => {
+    const instance = new AuthorityInstance("quiz.merges", quizAuthority, room, {
+      limits: DEFAULT_AUTHORITY_LIMITS,
+      random: { next: () => 0.5, int: () => 0, shuffle: (list) => [...list] },
+      verifyViews: true,
+    });
+    let now = 1_000_000;
+    const act = (who: Actor, action: string, input: unknown) => {
+      const result = instance.act(who, action, input, null, now);
+      if (!result.ok) throw new Error(`${action} by ${who.subject} failed: ${JSON.stringify(result)}`);
+    };
+    act(host, "load", { secondsPerQuestion: 120, questions: [{ prompt: "One?", choices: ["a", "b"], answer: 0 }] });
+    now += 1_000;
+    act(host, "begin", null);
+    for (let index = 0; index < players; index += 1) {
+      now += 1_000;
+      act(player(index), "answer", { choice: choiceOf(index) });
+    }
+    now += 1_000;
+    act(host, "endRound", null);
+    instance.runDueTimers(now);
+    return { instance, now };
+  };
+
+  it("shows the top ten after eleven passes of one person are linked to the first (Greptile)", () => {
+    const { instance, now } = playedQuiz(22, () => 0);
+    instance.runDueTimers(now + 6_000);
+    for (let index = 1; index <= 11; index += 1) {
+      instance.mergeSubjects({ from: player(index).subject, into: player(0).subject }, now + 6_000 + index);
+      expect(shown(instance)).toEqual(topTen(instance));
+    }
+    expect(shown(instance)).toHaveLength(10);
+  });
+
+  it.each(Array.from({ length: 24 }, (_, seed) => seed + 1))("shows the top ten after every merge of a random room, seed %i", (seed) => {
+    const random = seeded(seed);
+    const players = 11 + Math.floor(random() * 30);
+    const { instance, now } = playedQuiz(players, () => (random() < 0.7 ? 0 : 1));
+    let at = now;
+    const left = Array.from({ length: players }, (_, index) => index);
+    const merges = 1 + Math.floor(random() * (players - 1));
+    for (let merge = 0; merge < merges; merge += 1) {
+      if (merge === Math.floor(merges / 2)) instance.runDueTimers((at += 6_000));
+      const from = left.splice(Math.floor(random() * left.length), 1)[0];
+      const into = left[Math.floor(random() * left.length)];
+      instance.mergeSubjects({ from: player(from).subject, into: player(into).subject }, (at += 1));
+      expect(shown(instance)).toEqual(topTen(instance));
+    }
   });
 });
 

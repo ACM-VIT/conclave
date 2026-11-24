@@ -80,10 +80,11 @@ type QuizState = {
   secondsPerQuestion: number;
   deadline: number;
   answered: number;
-  leaderboard: Standing[] | null;
+  leaderboard: Leaderboard | null;
 };
 type Answer = { round: number; subject: Subject; choice: number; at: number; points: number };
 type Standing = { subject: Subject; name: string; score: number };
+type Leaderboard = { standings: Standing[]; complete: boolean };
 
 const LEADERBOARD_SHOWN = 10;
 const LEADERBOARD_KEPT = 20;
@@ -102,28 +103,28 @@ const initial: QuizState = {
   leaderboard: null,
 };
 
-const leaderboardOf = (tx: { scan(table: "scores"): readonly (readonly [unknown, Score])[] }) =>
-  tx
+const leaderboardOf = (tx: { scan(table: "scores"): readonly (readonly [unknown, Score])[] }): Leaderboard => {
+  const standings = tx
     .scan("scores")
     .map(([, row]) => ({ subject: row.subject, name: row.name, score: row.score }))
-    .sort(byStanding)
-    .slice(0, LEADERBOARD_KEPT);
+    .sort(byStanding);
+  return { standings: standings.slice(0, LEADERBOARD_KEPT), complete: standings.length <= LEADERBOARD_KEPT };
+};
 
 const mergedLeaderboard = (
   tx: { scan(table: "scores"): readonly (readonly [unknown, Score])[] },
-  board: readonly Standing[],
+  board: Leaderboard,
   gone: readonly Subject[],
   merged: Score | null,
-): Standing[] => {
-  const holdsEveryone = board.length < LEADERBOARD_KEPT;
-  const lowest = board[board.length - 1];
-  const rest = board.filter((entry) => !gone.includes(entry.subject));
+): Leaderboard => {
+  const lowest = board.standings[board.standings.length - 1];
+  const standings = board.standings.filter((entry) => !gone.includes(entry.subject));
   if (merged) {
     const entry = { subject: merged.subject, name: merged.name, score: merged.score };
-    if (holdsEveryone || !lowest || byStanding(entry, lowest) <= 0) rest.push(entry);
+    if (board.complete || !lowest || byStanding(entry, lowest) <= 0) standings.push(entry);
   }
-  if (!holdsEveryone && rest.length < LEADERBOARD_SHOWN) return leaderboardOf(tx);
-  return rest.sort(byStanding);
+  if (!board.complete && standings.length < LEADERBOARD_SHOWN) return leaderboardOf(tx);
+  return { standings: standings.sort(byStanding), complete: board.complete };
 };
 
 export const quizAuthority = defineAuthority({
@@ -291,7 +292,7 @@ export const quizAuthority = defineAuthority({
             answered: state.answered,
             leaderboard:
               revealed && state.leaderboard
-                ? state.leaderboard
+                ? state.leaderboard.standings
                     .slice(0, LEADERBOARD_SHOWN)
                     .map(({ name, score }) => ({ name, score }))
                 : null,
