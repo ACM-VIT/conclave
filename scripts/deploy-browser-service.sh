@@ -63,8 +63,12 @@ fi
 # Run the service's own startup checks in the new image, against the runtime
 # image it would launch, before anything is replaced or retagged.
 echo "Checking the shared browser service configuration..."
+PREVIOUS_CONTAINER="$("${COMPOSE[@]}" ps -q browser-service 2>/dev/null | head -n 1 || true)"
+if [[ -n "$PREVIOUS_CONTAINER" && "$(docker inspect --format '{{.State.Running}}' "$PREVIOUS_CONTAINER" 2>/dev/null || true)" != "true" ]]; then
+  PREVIOUS_CONTAINER=""
+fi
 "${COMPOSE[@]}" build browser-service
-"${COMPOSE[@]}" run --rm --no-deps -e "BROWSER_IMAGE_NAME=${CHECK_IMAGE_NAME}" browser-service node packages/shared-browser/dist/server.js --check-config
+"${COMPOSE[@]}" run --rm --no-deps -e "BROWSER_IMAGE_NAME=${CHECK_IMAGE_NAME}" -e "BROWSER_SERVICE_PREVIOUS_CONTAINER=${PREVIOUS_CONTAINER}" browser-service node packages/shared-browser/dist/server.js --check-config
 if [[ "$CHECK_CONFIG_ONLY" == "true" ]]; then
   exit 0
 fi

@@ -15,6 +15,14 @@ printf '%s\\n' "$*" >> "$DOCKER_LOG"
 if [[ "$1" == "compose" && " $* " == *" --check-config "* ]]; then
   exit "\${FAKE_CHECK_STATUS:-0}"
 fi
+if [[ "$1" == "compose" && " $* " == *" ps -q browser-service "* ]]; then
+  [[ -n "$FAKE_PREVIOUS_CONTAINER" ]] && echo "$FAKE_PREVIOUS_CONTAINER"
+  exit 0
+fi
+if [[ "$1" == "inspect" ]]; then
+  echo "\${FAKE_PREVIOUS_RUNNING:-true}"
+  exit 0
+fi
 if [[ "$1" == "compose" && " $* " == *" up -d "* ]]; then
   printf '%s' "$BROWSER_SERVICE_DEPLOY_ID" > "$DEPLOY_ID_FILE"
 fi
@@ -49,7 +57,7 @@ const healthBodies = {
   sfu: () => ({ status: "healthy", timestamp: new Date().toISOString(), uptime: 40, port: 3031 }),
 };
 
-const deploy = async (shell, flags = [], { checkStatus = 0, answers = "deployed" } = {}) => {
+const deploy = async (shell, flags = [], { checkStatus = 0, answers = "deployed", previousContainer = "", previousRunning = "true" } = {}) => {
   const root = mkdtempSync(join(tmpdir(), "deploy-browser-service-"));
   const deployIdFile = join(root, "deploy-id");
   const health = createServer((req, res) => {
@@ -75,6 +83,8 @@ const deploy = async (shell, flags = [], { checkStatus = 0, answers = "deployed"
       DEPLOY_ID_FILE: deployIdFile,
       BROWSER_SERVICE_HEALTH_TIMEOUT_SECONDS: "5",
       FAKE_CHECK_STATUS: String(checkStatus),
+      FAKE_PREVIOUS_CONTAINER: previousContainer,
+      FAKE_PREVIOUS_RUNNING: previousRunning,
       BROWSER_SERVICE_HOST: "127.0.0.1",
       BROWSER_SERVICE_PORT: String(health.address().port),
     });
@@ -87,7 +97,7 @@ const deploy = async (shell, flags = [], { checkStatus = 0, answers = "deployed"
 
 const index = (calls, pattern) => calls.findIndex((call) => pattern.test(call));
 const candidateOf = (calls) => calls.map((call) => call.match(/^build -t (conclave-browser-candidate:\S+) /)?.[1]).find(Boolean);
-const checkedImage = (calls) => calls.map((call) => call.match(/ -e BROWSER_IMAGE_NAME=(\S+) browser-service .*--check-config/)?.[1]).find(Boolean);
+const checkedImage = (calls) => calls.map((call) => call.match(/ -e BROWSER_IMAGE_NAME=(\S+) .*browser-service .*--check-config/)?.[1]).find(Boolean);
 
 for (const shell of shells) {
   test(`${shell.name}: checks the runtime image it built before retagging it and deploying`, async () => {
@@ -129,6 +139,17 @@ for (const shell of shells) {
       assert.ok(index(calls, / up -d /) >= 0, calls.join("\n"));
       assert.match(stderr, /did not answer healthy/, answers);
     }
+  });
+
+  test(`${shell.name}: tells the check which running container it is replacing, and only a running one`, async () => {
+    const previous = (calls) => calls.map((call) => call.match(/-e BROWSER_SERVICE_PREVIOUS_CONTAINER=(\S*) /)?.[1]).find((value) => value !== undefined);
+    const running = await deploy(shell, ["--check-config"], { previousContainer: "4f2c1d" });
+    assert.equal(running.status, 0, running.stderr);
+    assert.equal(previous(running.calls), "4f2c1d", running.calls.join("\n"));
+    const stopped = await deploy(shell, ["--check-config"], { previousContainer: "4f2c1d", previousRunning: "false" });
+    assert.equal(previous(stopped.calls), "", stopped.calls.join("\n"));
+    const none = await deploy(shell, ["--check-config"]);
+    assert.equal(previous(none.calls), "", none.calls.join("\n"));
   });
 
   test(`${shell.name}: --skip-runtime-image checks the image already on the host`, async () => {

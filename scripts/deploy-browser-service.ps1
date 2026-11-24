@@ -103,8 +103,17 @@ try {
   # Run the service's own startup checks in the new image, against the runtime
   # image it would launch, before anything is replaced or retagged.
   Write-Host "Checking the shared browser service configuration..."
+  $previousContainer = (@(& docker @($composeArgs + @("ps", "-q", "browser-service")) 2>$null) | Select-Object -First 1)
+  if ($previousContainer) {
+    $running = (@(& docker inspect --format "{{.State.Running}}" $previousContainer 2>$null) -join "").Trim()
+    if ($running -ne "true") {
+      $previousContainer = ""
+    }
+  } else {
+    $previousContainer = ""
+  }
   Invoke-Checked -Command "docker" -Arguments ($composeArgs + @("build", "browser-service"))
-  Invoke-Checked -Command "docker" -Arguments ($composeArgs + @("run", "--rm", "--no-deps", "-e", "BROWSER_IMAGE_NAME=$checkImageName", "browser-service", "node", "packages/shared-browser/dist/server.js", "--check-config"))
+  Invoke-Checked -Command "docker" -Arguments ($composeArgs + @("run", "--rm", "--no-deps", "-e", "BROWSER_IMAGE_NAME=$checkImageName", "-e", "BROWSER_SERVICE_PREVIOUS_CONTAINER=$previousContainer", "browser-service", "node", "packages/shared-browser/dist/server.js", "--check-config"))
   if ($checkConfigOnly) {
     exit 0
   }

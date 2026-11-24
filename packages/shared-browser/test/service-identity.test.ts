@@ -28,9 +28,9 @@ const runService = async (env: NodeJS.ProcessEnv, args: string[]) => {
     return { code, output };
 };
 
-const holdPort = async (port: number, body: unknown) => {
+const holdPort = async (port: number, body: unknown, status = 200) => {
     const server = createHttpServer((_req, res) => {
-        res.writeHead(200, { "content-type": "application/json" });
+        res.writeHead(status, { "content-type": "application/json" });
         res.end(JSON.stringify(body));
     });
     server.listen(port, "127.0.0.1");
@@ -77,33 +77,46 @@ test("/health names the shared browser service and the deploy it came from, heal
     }
 });
 
-test("--check-config refuses a configured port that another program holds", async () => {
+test("--check-config accepts a port held only by the browser service the deploy is replacing", async () => {
     const engine = await fakeDockerEngine({ "conclave-browser:latest": hardenedImage });
     try {
-        const check = async (holder: unknown) => {
+        const check = async (holder: { body: unknown; status?: number } | undefined, previousContainer = "") => {
             const port = await freePort();
-            const release = holder === undefined ? async () => undefined : await holdPort(port, holder);
+            const release = holder ? await holdPort(port, holder.body, holder.status) : async () => undefined;
             try {
-                return await runService({ BROWSER_SERVICE_PORT: String(port), DOCKER_HOST: engine.host }, ["--check-config"]);
+                return await runService(
+                    { BROWSER_SERVICE_PORT: String(port), DOCKER_HOST: engine.host, BROWSER_SERVICE_PREVIOUS_CONTAINER: previousContainer },
+                    ["--check-config"],
+                );
             } finally {
                 await release();
             }
         };
-        const sfu = await check({ status: "healthy", timestamp: new Date().toISOString(), uptime: 12, port: 3031 });
-        assert.equal(sfu.code, 1, sfu.output);
-        assert.match(sfu.output, /refused to start[\s\S]*BROWSER_SERVICE_PORT=\d+[\s\S]*not the shared browser service/);
-        const empty = await check({});
-        assert.equal(empty.code, 1, empty.output);
+        const sfu = { body: { status: "healthy", timestamp: new Date().toISOString(), uptime: 12, port: 3031 } };
+        const earlierHealthy = { body: { status: "ok", sessions: 0, capabilities: { provider: "kitesurf", audio: true, video: true, agentic: true } } };
+        const earlierUnhealthy = { body: { status: "unavailable" }, status: 503 };
+        const current = { body: { service: "conclave-shared-browser", deployId: "older", status: "unavailable" }, status: 503 };
 
-        for (const previous of [
-            { status: "ok", service: "conclave-shared-browser", deployId: "older" },
-            { status: "ok", sessions: 0, capabilities: { provider: "chromium", audio: true, video: true, agentic: false } },
-        ]) {
-            const replaced = await check(previous);
-            assert.equal(replaced.code, 0, replaced.output);
-        }
-        const free = await check(undefined);
-        assert.equal(free.code, 0, free.output);
+        const outcomes = {
+            "free port": (await check(undefined)).code,
+            "current service, unhealthy": (await check(current)).code,
+            "earlier service, unhealthy, managed container named": (await check(earlierUnhealthy, "4f2c1d")).code,
+            "earlier service, healthy, managed container named": (await check(earlierHealthy, "4f2c1d")).code,
+            "earlier service shape, no managed container": (await check(earlierUnhealthy)).code,
+            "SFU, managed container named": (await check(sfu, "4f2c1d")).code,
+            "empty answer, managed container named": (await check({ body: {} }, "4f2c1d")).code,
+        };
+        assert.deepEqual(outcomes, {
+            "free port": 0,
+            "current service, unhealthy": 0,
+            "earlier service, unhealthy, managed container named": 0,
+            "earlier service, healthy, managed container named": 0,
+            "earlier service shape, no managed container": 1,
+            "SFU, managed container named": 1,
+            "empty answer, managed container named": 1,
+        });
+        const refused = await check(sfu, "4f2c1d");
+        assert.match(refused.output, /refused to start[\s\S]*BROWSER_SERVICE_PORT=\d+[\s\S]*not the shared browser service/);
     } finally {
         await engine.close();
     }

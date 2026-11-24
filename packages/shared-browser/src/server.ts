@@ -2,7 +2,7 @@ import { createServer } from "node:net";
 import { createApp } from "./app.js";
 import { createBrowserManager } from "./createBrowserManager.js";
 import { resolveServiceSecurity, ServiceSecurityError } from "./serviceSecurity.js";
-import { isSharedBrowserHealth } from "./serviceIdentity.js";
+import { isCurrentSharedBrowserHealth, isEarlierSharedBrowserHealth, previousManagedContainer } from "./serviceIdentity.js";
 import { defaultConfig } from "./types.js";
 
 const resolveSecurityOrExit = () => {
@@ -41,7 +41,8 @@ const heldBySharedBrowser = async (host: string, port: number): Promise<boolean>
     try {
         const address = host.includes(":") ? `[${host}]` : host;
         const response = await fetch(`http://${address}:${port}/health`, { signal: AbortSignal.timeout(3_000) });
-        return isSharedBrowserHealth(await response.json());
+        const body: unknown = await response.json();
+        return isCurrentSharedBrowserHealth(body) || (previousManagedContainer() !== null && isEarlierSharedBrowserHealth(body));
     } catch {
         return false;
     }
