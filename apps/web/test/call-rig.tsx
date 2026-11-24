@@ -961,6 +961,19 @@ export class CallRig {
     });
   }
 
+  async leave() {
+    await act(async () => {
+      this.api.cleanup();
+    });
+  }
+
+  async retry() {
+    await act(async () => {
+      void this.api.retryReconnect();
+      await vi.advanceTimersByTimeAsync(250);
+    });
+  }
+
   failRecv() {
     const transport = this.recv;
     if (!transport) throw new Error("no receive transport");

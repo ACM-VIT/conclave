@@ -2412,7 +2412,6 @@ export function useMeetSocket({
     onSocketReady?.(null);
     joinInfoRequestRef.current?.abort();
     joinInfoRequestRef.current = null;
-    stopRelayRefresh();
     heldJoinInfoRef.current = null;
     deviceRef.current = null;
     webcamCodecPolicyRef.current = { ...BASELINE_WEBCAM_CODEC_POLICY };

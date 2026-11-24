@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { RIG_START, TURN_A, TURN_B, startRig, stopRig, type CallRig, type FakeTransport } from "./call-rig";
 import { readJoinTokenUserKey } from "../src/app/lib/join-token-identity";
 
@@ -627,4 +627,53 @@ describe("the hook under random interleavings", () => {
     }
     expect(failed).toEqual([]);
   }, 300_000);
+});
+
+describe("leaving a call and pressing Try again", () => {
+  const blockedEverywhere = async () => {
+    const target = await startRig({ directWorks: false });
+    target.relayWorks = false;
+    await target.join();
+    expect(await waitFor(target, () => target.health.consumer === "blocked", 90_000)).toBe(true);
+    return target;
+  };
+
+  it("clears a blocked direction on leave, and the next call starts healthy with a fresh ladder", async () => {
+    rig = await blockedEverywhere();
+    await rig.leave();
+    expect(rig.health).toEqual({ producer: "healthy", consumer: "healthy" });
+
+    await rig.join();
+    expect(rig.health).toEqual({ producer: "healthy", consumer: "healthy" });
+    const firstRecv = rig.recv!;
+    expect(await waitFor(rig, () => rig!.recv !== firstRecv, 60_000)).toBe(true);
+  });
+
+  it("cancels the background credential retries on leave, leaving nothing scheduled to run", async () => {
+    rig = await startRig({ ttlSeconds: 30, directWorks: false });
+    await rig.join();
+    await recoverThroughTurn(rig);
+    rig.provider = "down";
+    await rig.advance(32_000);
+    const requestsBeforeLeave = rig.joinRequests.length;
+    expect(rig.joinRequests.slice(-2).map(({ outcome }) => outcome)).toEqual(["stun-only", "stun-only"]);
+    await rig.leave();
+    const pendingAfterLeave = vi.getTimerCount();
+    await rig.advance(120_000);
+
+    expect(vi.getTimerCount()).toBe(pendingAfterLeave);
+    expect(rig.joinRequests.length).toBe(requestsBeforeLeave);
+  });
+
+  it("an idle Try again drops the need for TURN alone, so a path that works directly is used", async () => {
+    rig = await startRig({ directWorks: false });
+    await rig.join();
+    await recoverThroughTurn(rig);
+    rig.directWorks = true;
+    const before = rig.recvTransports.length;
+    await rig.retry();
+    expect(await waitFor(rig, () => rig!.recvTransports.length > before && rig!.recv!.carriedBytes > 0, 30_000)).toBe(true);
+
+    expect(rig.recv!.policy).toBe("all");
+  });
 });
