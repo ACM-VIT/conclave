@@ -74,6 +74,47 @@ export type MediaPathSample = MediaPathReading & {
   connectionState: string;
   /** A live, unpaused stream should be crossing this transport right now. */
   expectsMedia: boolean;
+  framesOptional: boolean;
+};
+
+export type PublishedStream = {
+  kind: "audio" | "video";
+  source: "webcam" | "screen";
+  live: boolean;
+  sending: boolean;
+};
+
+export const sendPathExpectation = (
+  streams: PublishedStream[],
+  connected: boolean,
+): { expectsMedia: boolean; framesOptional: boolean } => {
+  if (!connected) {
+    return { expectsMedia: streams.some(({ live }) => live), framesOptional: false };
+  }
+  const sending = streams.filter((stream) => stream.sending);
+  return {
+    expectsMedia: sending.length > 0,
+    framesOptional:
+      sending.length > 0 &&
+      sending.every(({ kind, source }) => kind === "video" && source === "screen"),
+  };
+};
+
+export const mediaReachedFarEnd = (
+  previous: MediaPathReading | null,
+  current: MediaPathReading,
+  framesOptional: boolean,
+): boolean => {
+  if (deliveredRtpBytes(previous, current) > 0) return true;
+  return (
+    framesOptional &&
+    previous !== null &&
+    previous.direction === "send" &&
+    current.direction === "send" &&
+    current.receiverReportAt !== null &&
+    (previous.receiverReportAt === null ||
+      current.receiverReportAt > previous.receiverReportAt)
+  );
 };
 
 export type MediaPathCondition =
@@ -124,11 +165,13 @@ export const advanceMediaPathWatch = (
   const deliveredBytes = connected
     ? deliveredRtpBytes(watch.lastReading, reading)
     : 0;
+  const reached =
+    connected && mediaReachedFarEnd(watch.lastReading, reading, sample.framesOptional);
   const condition: MediaPathCondition = !sample.expectsMedia
     ? "idle"
     : !connected
       ? "not-connected"
-      : watch.lastReading === null || deliveredBytes > 0
+      : watch.lastReading === null || reached
         ? "flowing"
         : "connected-without-media";
   const inTrouble =
@@ -142,19 +185,19 @@ export const advanceMediaPathWatch = (
     condition,
     stalledForMs: troubleSince === null ? 0 : sample.at - troubleSince,
     deliveredBytes,
-    mediaMoved: deliveredBytes > 0,
+    mediaMoved: reached,
   };
 };
 
 export const iceRestartBroughtMediaBack = ({
   replaced,
   expectsMedia,
-  deliveredBytes,
+  mediaReached,
 }: {
   replaced: boolean;
   expectsMedia: boolean;
-  deliveredBytes: number;
-}): boolean => replaced || !expectsMedia || deliveredBytes > 0;
+  mediaReached: boolean;
+}): boolean => replaced || !expectsMedia || mediaReached;
 
 export type MediaPathEscalation =
   /**

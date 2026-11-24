@@ -19,6 +19,9 @@ import {
   deliveredRtpBytes,
   iceRestartBroughtMediaBack,
   readMediaPath,
+  mediaReachedFarEnd,
+  sendPathExpectation,
+  type PublishedStream,
   resolveRebuildRelayOnly,
   takeDeferredRebuilds,
   type MediaPathFailure,
@@ -31,6 +34,7 @@ const sample = (overrides: Partial<MediaPathSample>): MediaPathSample => ({
   at: 0,
   connectionState: "connected",
   expectsMedia: true,
+  framesOptional: false,
   direction: "recv",
   rtpBytes: 0,
   receiverReportAt: null,
@@ -529,7 +533,7 @@ describe("verifying an ICE restart on a silent path", () => {
 
   it("passes once media reaches the far end again", () => {
     expect(
-      iceRestartBroughtMediaBack({ replaced: false, expectsMedia: true, deliveredBytes: 4_000 }),
+      iceRestartBroughtMediaBack({ replaced: false, expectsMedia: true, mediaReached: true }),
     ).toBe(true);
   });
 
@@ -538,7 +542,7 @@ describe("verifying an ICE restart on a silent path", () => {
       iceRestartBroughtMediaBack({
         replaced: false,
         expectsMedia: receivePathExpectsMedia([lastCamera(false)], true),
-        deliveredBytes: 0,
+        mediaReached: false,
       }),
     ).toBe(false);
   });
@@ -548,14 +552,14 @@ describe("verifying an ICE restart on a silent path", () => {
       iceRestartBroughtMediaBack({
         replaced: false,
         expectsMedia: receivePathExpectsMedia([lastCamera(true)], true),
-        deliveredBytes: 0,
+        mediaReached: false,
       }),
     ).toBe(true);
   });
 
   it("leaves a transport replaced during the check to the rebuild that replaced it", () => {
     expect(
-      iceRestartBroughtMediaBack({ replaced: true, expectsMedia: true, deliveredBytes: 0 }),
+      iceRestartBroughtMediaBack({ replaced: true, expectsMedia: true, mediaReached: false }),
     ).toBe(true);
   });
 });
@@ -678,5 +682,74 @@ describe("which received streams should keep media flowing", () => {
     expect(
       receivePathExpectsMedia([stream({ kind: "audio", source: "screen", on: true })], true),
     ).toBe(true);
+  });
+});
+
+describe("what a send path is expected to carry", () => {
+  const stream = (kind: "audio" | "video", source: "webcam" | "screen", sending: boolean): PublishedStream => ({
+    kind,
+    source,
+    live: true,
+    sending,
+  });
+  const cases: Array<[string, boolean, boolean, boolean, boolean, { expectsMedia: boolean; framesOptional: boolean }]> = [];
+  for (const mic of [false, true])
+    for (const camera of [false, true])
+      for (const screenVideo of [false, true])
+        for (const screenAudio of [false, true]) {
+          const sending = mic || camera || screenVideo || screenAudio;
+          cases.push([
+            `mic ${mic}, camera ${camera}, screen video ${screenVideo}, screen audio ${screenAudio}`,
+            mic,
+            camera,
+            screenVideo,
+            screenAudio,
+            { expectsMedia: sending, framesOptional: screenVideo && !mic && !camera && !screenAudio },
+          ]);
+        }
+
+  it.each(cases)("%s", (_name, mic, camera, screenVideo, screenAudio, expected) => {
+    expect(
+      sendPathExpectation(
+        [
+          stream("audio", "webcam", mic),
+          stream("video", "webcam", camera),
+          stream("video", "screen", screenVideo),
+          stream("audio", "screen", screenAudio),
+        ],
+        true,
+      ),
+    ).toEqual(expected);
+  });
+
+  it("expects media from any live producer before the path connects", () => {
+    expect(sendPathExpectation([{ kind: "audio", source: "screen", live: true, sending: false }], false)).toEqual({
+      expectsMedia: true,
+      framesOptional: false,
+    });
+    expect(sendPathExpectation([{ kind: "audio", source: "screen", live: false, sending: false }], false).expectsMedia).toBe(
+      false,
+    );
+  });
+});
+
+describe("knowing that a static screen share still reaches the SFU", () => {
+  const sent = (rtpBytes: number, receiverReportAt: number | null) => ({
+    direction: "send" as const,
+    rtpBytes,
+    receiverReportAt,
+  });
+
+  it("counts a newer receiver report as delivery when frames are optional", () => {
+    expect(mediaReachedFarEnd(sent(1_000, 5_000), sent(1_000, 6_100), true)).toBe(true);
+  });
+
+  it("still needs a newer receiver report when frames are optional", () => {
+    expect(mediaReachedFarEnd(sent(1_000, 5_000), sent(9_000, 5_000), true)).toBe(false);
+  });
+
+  it("needs bytes as well as a report while other streams are sending", () => {
+    expect(mediaReachedFarEnd(sent(1_000, 5_000), sent(1_000, 6_100), false)).toBe(false);
+    expect(mediaReachedFarEnd(sent(1_000, 5_000), sent(9_000, 6_100), false)).toBe(true);
   });
 });

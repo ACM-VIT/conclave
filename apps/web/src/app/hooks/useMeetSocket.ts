@@ -173,8 +173,10 @@ import {
   MEDIA_PATH_STALL_MS,
   MEDIA_PATH_VERIFY_MS,
   advanceMediaPathWatch,
-  deliveredRtpBytes,
   hasCarriedMedia,
+  mediaReachedFarEnd,
+  sendPathExpectation,
+  type PublishedStream,
   iceRestartBroughtMediaBack,
   readMediaPath,
   type MediaPathReading,
@@ -6425,23 +6427,33 @@ export function useMeetSocket({
       }
       return streams;
     };
-    const expectsMedia = (
+    const published = (): PublishedStream[] =>
+      (
+        [
+          ["audio", "webcam", audioProducerRef.current],
+          ["video", "webcam", videoProducerRef.current],
+          ["video", "screen", screenProducerRef.current],
+          ["audio", "screen", screenAudioProducerRef.current],
+        ] as const
+      ).map(([kind, source, producer]) => ({
+        kind,
+        source,
+        live: Boolean(producer && !producer.closed),
+        sending: isSending(producer),
+      }));
+    const expectation = (
       kind: "producer" | "consumer",
       connected: boolean,
-    ): boolean => {
-      if (kind === "producer") {
-        return connected
-          ? isSending(audioProducerRef.current) ||
-              isSending(videoProducerRef.current)
-          : [audioProducerRef, videoProducerRef, screenProducerRef].some(
-              (ref) => ref.current && !ref.current.closed,
-            );
-      }
-      return receivePathExpectsMedia(
-        consumedStreams().map(({ stream }) => stream),
-        connected,
-      );
-    };
+    ): { expectsMedia: boolean; framesOptional: boolean } =>
+      kind === "producer"
+        ? sendPathExpectation(published(), connected)
+        : {
+            expectsMedia: receivePathExpectsMedia(
+              consumedStreams().map(({ stream }) => stream),
+              connected,
+            ),
+            framesOptional: false,
+          };
 
     const readPath = async (
       kind: "producer" | "consumer",
@@ -6480,14 +6492,19 @@ export function useMeetSocket({
             ? producerTransportRef.current
             : consumerTransportRef.current;
         const replaced = transport.closed || current !== transport;
+        const now = replaced
+          ? null
+          : expectation(kind, transport.connectionState === "connected");
         return iceRestartBroughtMediaBack({
           replaced,
-          expectsMedia:
-            !replaced &&
-            expectsMedia(kind, transport.connectionState === "connected"),
-          deliveredBytes: replaced
-            ? 0
-            : deliveredRtpBytes(before, (await readPath(kind, transport)).reading),
+          expectsMedia: now?.expectsMedia ?? false,
+          mediaReached:
+            now !== null &&
+            mediaReachedFarEnd(
+              before,
+              (await readPath(kind, transport)).reading,
+              now.framesOptional,
+            ),
         });
       } catch {
         return false;
@@ -6533,12 +6550,9 @@ export function useMeetSocket({
 
       const result = advanceMediaPathWatch(entry.watch, {
         ...reading,
+        ...expectation(kind, transport.connectionState === "connected"),
         at: Date.now(),
         connectionState: transport.connectionState,
-        expectsMedia: expectsMedia(
-          kind,
-          transport.connectionState === "connected",
-        ),
       });
       entry.watch = result.watch;
       const provenRelayUrl = relayProvenByMedia({
@@ -6659,6 +6673,7 @@ export function useMeetSocket({
     producerPausedStateRef,
     producerTransportRef,
     reconnectInFlightRef,
+    screenAudioProducerRef,
     screenProducerRef,
     videoProducerRef,
   ]);

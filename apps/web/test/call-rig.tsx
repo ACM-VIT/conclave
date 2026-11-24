@@ -303,6 +303,7 @@ export class CallRig {
   holdProducersMs = 0;
   mediaFlows = true;
   outgoingDropped = false;
+  sendStatic = false;
   identity: string | undefined;
   seatedAs: string | null = null;
   identityChanges: string[] = [];
@@ -419,7 +420,7 @@ export class CallRig {
       }
     }
     if (transport.direction === "send") {
-      transport.carriedBytes += Math.round((now - since) * 4);
+      if (!this.sendStatic) transport.carriedBytes += Math.round((now - since) * 4);
       if (!this.outgoingDropped) transport.reportAt = now;
       return;
     }
@@ -705,6 +706,26 @@ export class CallRig {
         timestamp: Date.now(),
       });
     }
+  }
+
+  async shareScreen({ video, audio }: { video: boolean; audio: boolean }) {
+    await act(async () => {
+      if (!(await this.api.ensureProducerTransport())) throw new Error("no send transport");
+      const transport = this.send;
+      if (!transport) throw new Error("no send transport");
+      if (video) {
+        this.refs.screenProducerRef.current = (await transport.produce({
+          track: fakeTrack("video"),
+          appData: { type: "screen" },
+        })) as unknown as typeof this.refs.screenProducerRef.current;
+      }
+      if (audio) {
+        this.refs.screenAudioProducerRef.current = (await transport.produce({
+          track: fakeTrack("audio"),
+          appData: { type: "screen" },
+        })) as unknown as typeof this.refs.screenAudioProducerRef.current;
+      }
+    });
   }
 
   announceProducer() {

@@ -64,6 +64,34 @@ describe("the media path recovery the hook runs", () => {
     expect(rig.log.some((line) => line.includes("producer transport has carried no media"))).toBe(true);
   });
 
+  it("restarts ICE when shared screen audio stops reaching the SFU with the mic and camera off", async () => {
+    rig = await startRig();
+    await rig.join();
+    await rig.shareScreen({ video: false, audio: true });
+    await rig.advance(5_000);
+    const send = rig.send!;
+    expect(send.reportAt).not.toBeNull();
+    rig.outgoingDropped = true;
+
+    expect(await waitFor(rig, () => send.restartIceCalls > 0, 25_000)).toBe(true);
+    expect(rig.log.some((line) => line.includes("producer transport has carried no media"))).toBe(true);
+  });
+
+  it("leaves a static screen share alone while the SFU reports on it and restarts it once reports stop", async () => {
+    rig = await startRig();
+    await rig.join();
+    await rig.shareScreen({ video: true, audio: false });
+    await rig.advance(5_000);
+    const send = rig.send!;
+    rig.sendStatic = true;
+    await rig.advance(25_000);
+    expect(send.restartIceCalls).toBe(0);
+    expect(rig.log.some((line) => line.includes("producer transport has carried no media"))).toBe(false);
+
+    rig.outgoingDropped = true;
+    expect(await waitFor(rig, () => send.restartIceCalls > 0, 25_000)).toBe(true);
+  });
+
   it("does not rebuild when the last remote stream pauses while an ICE restart is checked", async () => {
     rig = await startRig();
     await rig.join();
