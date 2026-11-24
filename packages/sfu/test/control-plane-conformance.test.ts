@@ -321,6 +321,31 @@ describe("the JSON store", () => {
     expect(readFileSync(join(dir, "control-plane.json"), "utf8")).toBe(before);
   });
 
+  it("stops answering reads from its copy once another SFU has taken over its lock", async () => {
+    const store = await open("json");
+    const meeting = await mustCreate(store, "first-room");
+    writeFileSync(join(dir, "control-plane.json.lock"), "another-holder");
+    await expect(store.read(meetingById(meeting.id))).rejects.toBeInstanceOf(StoreUnavailableError);
+    writeFileSync(join(dir, "control-plane.json.lock"), "back-to-anyone");
+    await expect(store.read(meetingById(meeting.id))).rejects.toBeInstanceOf(StoreUnavailableError);
+  });
+
+  it("stops answering reads once its heartbeat finds the lock gone", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const store = await open("json");
+      const meeting = await mustCreate(store, "first-room");
+      const lockPath = join(dir, "control-plane.json.lock");
+      const token = readFileSync(lockPath, "utf8");
+      rmSync(lockPath);
+      vi.advanceTimersByTime(5_000);
+      writeFileSync(lockPath, token);
+      await expect(store.read(meetingById(meeting.id))).rejects.toBeInstanceOf(StoreUnavailableError);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("takes over a lock whose holder stopped renewing it", async () => {
     const lockPath = join(dir, "control-plane.json.lock");
     writeFileSync(lockPath, "stale-holder");

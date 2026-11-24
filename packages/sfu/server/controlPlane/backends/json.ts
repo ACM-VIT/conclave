@@ -160,14 +160,20 @@ export const createJsonBackend = (path: string): Backend => {
       throw new StoreUnavailableError(`Could not write ${path}.`, { cause: error });
     }
   };
+  const ensureHeld = (): void => {
+    if (closed) throw new StoreUnavailableError("The control-plane store is closed.");
+    if (!holdsLock(lockPath, lock)) throw lostLock();
+  };
   return {
     mode: "json",
     commit: async (command, now) => {
-      if (closed) throw new StoreUnavailableError("The control-plane store is closed.");
-      if (!holdsLock(lockPath, lock)) throw lostLock();
+      ensureHeld();
       return runOnMemory(data, command, now, persist);
     },
-    read: async (read, now) => readMemory(data, read, now),
+    read: async (read, now) => {
+      ensureHeld();
+      return readMemory(data, read, now);
+    },
     close: async () => {
       if (closed) return;
       closed = true;
