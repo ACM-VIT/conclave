@@ -352,6 +352,8 @@ const makePlan = (seed) => {
     callRate: pick([0, 0, 0.05, 0.2]),
     callMs: pick([300, 1200, 3000]),
     crashes: [chance(0.85) ? 1 + Math.floor(rand() * 30) : 0, chance(0.35) ? 1 + Math.floor(rand() * 30) : 0],
+    crashRestarts: Array.from({ length: pick([0, 0, 1, 2]) }, () => ({ who: pick(names), atMs: Math.floor(rand() * 8000), restartMs: pick([50, 300, 1500]) })),
+    statusBlips: Array.from({ length: pick([0, 1, 3]) }, () => ({ who: pick(names), atMs: Math.floor(rand() * 8000) })),
   };
 };
 
@@ -362,6 +364,13 @@ const checkRun = async ({ sfus, shared, plan, result, label, quiet }) => {
   const problems = [];
   for (const [name, sfu] of Object.entries(sfus)) {
     for (const cut of [...sfu.recreates, ...sfu.stops].filter((entry) => entry.roomsCut > 0)) problems.push(`${name}: ${cut.roomsCut} call(s) cut by a restart`);
+    for (const drain of sfu.lonelyDrains.filter((entry) => entry.othersDownMs >= 3000)) {
+      problems.push(`${name}: drained on ${drain.image} while no other instance had taken meetings for ${drain.othersDownMs} ms (${drain.others.join(", ")})`);
+    }
+    for (const start of sfu.starts.filter((entry) => entry.image === TARGET)) {
+      if (start.by === "restart-policy" && start.bootDrained) problems.push(`${name}: Docker restarted the candidate ${TARGET} before it passed its canary`);
+      if (!start.bootDrained && !sfu.canaryPassed.includes(TARGET)) problems.push(`${name}: started ${TARGET} taking meetings (${start.by}) before it passed its canary`);
+    }
     for (const undrain of sfu.undrains) {
       if (!["idle", "drained", undefined, ""].includes(undrain.phase) || (undrain.lkg && undrain.image !== undrain.lkg)) {
         problems.push(`${name}: undrained on ${undrain.image} while its journal said ${undrain.phase} with last-known-good ${undrain.lkg}`);
@@ -372,7 +381,8 @@ const checkRun = async ({ sfus, shared, plan, result, label, quiet }) => {
         problems.push(`${name}: rolled back to ${recreate.to} while its journal said ${recreate.phase}, not rollback`);
       }
     }
-    if (result.code !== null) {
+    const crashedByFault = sfu.container === "exited" && sfu.crashedAt && !sfu.heldDown;
+    if (result.code !== null && !crashedByFault) {
       const { phase } = await journal(shared, name);
       if (!(sfu.container === "running" && allowed.includes(sfu.image)) && phase !== "rollback") {
         problems.push(`${name}: left ${sfu.container} on ${sfu.image} with its journal at ${phase}, so nothing serves and no rollback is under way`);
@@ -381,6 +391,12 @@ const checkRun = async ({ sfus, shared, plan, result, label, quiet }) => {
       if ((result.code === 0 && !(serves && settledPhase(phase))) || (result.code === 4 && !serves)) {
         problems.push(`${name}: exit ${result.code}, but it is ${sfu.container}, draining ${sfu.draining}, on ${sfu.image}, journal ${phase}`);
       }
+    }
+  }
+  if (result.code === 0) {
+    for (const name of plan.only ? [plan.only] : plan.names) {
+      const last = sfus[name].publicLog.at(-1);
+      if (last && !last.healthy) problems.push(`${name}: exit 0, but the last answer on its public route was not healthy`);
     }
   }
   if (result.code === 3 && !quiet && !Object.values(sfus).some((sfu) => sfu.rooms > 0 || Date.now() - (sfu.lastCallAt ?? 0) < 8000)) {
@@ -433,6 +449,8 @@ const runPlan = async (plan) => {
       ...plan.routeOutages.map((w) => [w, "publicDown", true]),
       ...plan.drainRefusals.map((w) => [w, "refuseDrain", true]),
     ];
+    for (const crash of plan.crashRestarts) later(crash.atMs, () => faults && sfus[crash.who].crash(crash.restartMs));
+    for (const blip of plan.statusBlips) later(blip.atMs, () => faults && (sfus[blip.who].statusFailures += 1));
     for (const [w, field, value] of windows) {
       later(w.atMs, () => {
         if (!faults) return;
@@ -474,7 +492,7 @@ const runPlan = async (plan) => {
       for (const timer of timers) clearTimeout(timer);
       timers.clear();
       calls.length = 0;
-      for (const sfu of Object.values(sfus)) Object.assign(sfu, { rooms: 0, statusAnswers: true, publicDown: false, refuseDrain: false });
+      for (const sfu of Object.values(sfus)) Object.assign(sfu, { rooms: 0, statusAnswers: true, publicDown: false, refuseDrain: false, statusFailures: 0, publicFailures: 0 });
       let result = null;
       for (let attempt = 1; attempt <= 4; attempt += 1) {
         result = await deploy(sfus, { env });
