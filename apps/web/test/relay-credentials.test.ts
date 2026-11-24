@@ -3,6 +3,7 @@ import {
   NO_RUNTIME_ICE_SERVERS,
   applyJoinAnswerToIceServers,
   getUsableTurnIceServers,
+  icePolicyForOffers,
   noteRelayCarryingMedia,
   offerRelays,
   relayCarryingUrl,
@@ -277,5 +278,33 @@ describe("knowing that a relay works", () => {
     const next = proven ? noteRelayCarryingMedia(rotated, proven) : rotated;
 
     expect(getUsableTurnIceServers(next, NOW)).toEqual([relayBServer, relayAServer]);
+  });
+});
+
+describe("the ICE policy a transport is built with", () => {
+  const afterTurnOnlyRecovery = (expiresAt: number): RuntimeIceServers => ({
+    stun: [stun],
+    latestRelay: { servers: [turnA], expiresAt },
+    provenRelay: { servers: [turnA], expiresAt },
+  });
+
+  it("asks for relay only while a usable relay is offered", () => {
+    const servers = afterTurnOnlyRecovery(NOW + HOUR_MS);
+
+    expect(icePolicyForOffers(true, offerRelays(servers, NOW))).toBe("relay");
+    expect(icePolicyForOffers(false, offerRelays(servers, NOW))).toBe("all");
+  });
+
+  it("uses every candidate once the relay credentials expired and could not be refreshed", () => {
+    const servers = afterTurnOnlyRecovery(NOW + 40_000);
+    const later = NOW + 60_000;
+    const offers = offerRelays(servers, later);
+
+    expect(offers).toEqual([]);
+    expect(icePolicyForOffers(true, offers)).toBe("all");
+  });
+
+  it("never asks for relay only with no relay at all", () => {
+    expect(icePolicyForOffers(true, offerRelays(NO_RUNTIME_ICE_SERVERS, NOW))).toBe("all");
   });
 });

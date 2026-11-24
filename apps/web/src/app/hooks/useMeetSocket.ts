@@ -188,6 +188,7 @@ import {
   NO_RUNTIME_ICE_SERVERS,
   applyJoinAnswerToIceServers,
   getUsableTurnIceServers,
+  icePolicyForOffers,
   normalizeIceServerUrls,
   noteRelayCarryingMedia,
   offerRelays,
@@ -249,6 +250,9 @@ type ConsumerTelemetryPayload = Omit<
   ConsumerTelemetrySnapshot,
   "receivedAt"
 >;
+
+const RELAY_REFRESH_RETRY_MS = 10_000;
+const RELAY_REFRESH_RETRIES = 6;
 
 type ConsumeProducerOptions = {
   replaceExisting?: boolean;
@@ -1101,6 +1105,7 @@ export function useMeetSocket({
   const runtimeIceServersRef = useRef<RuntimeIceServers>(NO_RUNTIME_ICE_SERVERS);
   const relayOffersRef = useRef(new WeakMap<Transport, RelayOffer[]>());
   const relayOnlyIceRef = useRef(false);
+  const relayRefreshRetryRef = useRef<{ timeout: number | null } | null>(null);
   // Each direction's health, escalated transport, rebuild step and held
   // rebuild live in one record, so they change together. Its health is the
   // only source of the blocked warning and its Try again.
@@ -1587,7 +1592,15 @@ export function useMeetSocket({
   );
 
   const resolveIceTransportPolicy = useCallback(
-    (): RTCIceTransportPolicy => (relayOnlyIceRef.current ? "relay" : "all"),
+    (offers: RelayOffer[]): RTCIceTransportPolicy => {
+      const policy = icePolicyForOffers(relayOnlyIceRef.current, offers);
+      if (relayOnlyIceRef.current && policy === "all") {
+        console.warn(
+          "[Meets] No usable TURN credentials; building the transport with every candidate.",
+        );
+      }
+      return policy;
+    },
     [],
   );
 
@@ -2189,6 +2202,10 @@ export function useMeetSocket({
     onSocketReady?.(null);
     joinInfoRequestRef.current?.abort();
     joinInfoRequestRef.current = null;
+    if (relayRefreshRetryRef.current?.timeout != null) {
+      window.clearTimeout(relayRefreshRetryRef.current.timeout);
+    }
+    relayRefreshRetryRef.current = null;
     heldJoinInfoRef.current = null;
     deviceRef.current = null;
     webcamCodecPolicyRef.current = { ...BASELINE_WEBCAM_CODEC_POLICY };
@@ -3745,7 +3762,7 @@ export function useMeetSocket({
             const transport = device.createSendTransport({
               ...response,
               iceServers: resolveIceServers(relayOffers),
-              iceTransportPolicy: resolveIceTransportPolicy(),
+              iceTransportPolicy: resolveIceTransportPolicy(relayOffers),
             });
             relayOffersRef.current.set(transport, relayOffers);
 
@@ -4026,7 +4043,7 @@ export function useMeetSocket({
             const transport = device.createRecvTransport({
               ...response,
               iceServers: resolveIceServers(relayOffers),
-              iceTransportPolicy: resolveIceTransportPolicy(),
+              iceTransportPolicy: resolveIceTransportPolicy(relayOffers),
             });
             relayOffersRef.current.set(transport, relayOffers);
 
@@ -7492,6 +7509,42 @@ export function useMeetSocket({
     ],
   );
 
+  const retryRelayRefreshInBackground = useCallback(
+    (roomId: string) => {
+      if (relayRefreshRetryRef.current) return;
+      const generation = reconnectGenerationRef.current;
+      const chain: { timeout: number | null } = { timeout: null };
+      relayRefreshRetryRef.current = chain;
+      const stillNeeded = () =>
+        relayRefreshRetryRef.current === chain &&
+        generation === reconnectGenerationRef.current &&
+        !intentionalDisconnectRef.current &&
+        relayOnlyIceRef.current &&
+        getUsableTurnIceServers(runtimeIceServersRef.current, Date.now()) ===
+          null;
+      const finish = () => {
+        if (relayRefreshRetryRef.current === chain) {
+          relayRefreshRetryRef.current = null;
+        }
+      };
+      const retry = (triesLeft: number) => {
+        chain.timeout = window.setTimeout(() => {
+          chain.timeout = null;
+          if (!stillNeeded()) {
+            finish();
+            return;
+          }
+          void refreshIceServersOnOpenSocket(roomId).then(() => {
+            if (stillNeeded() && triesLeft > 1) retry(triesLeft - 1);
+            else finish();
+          });
+        }, RELAY_REFRESH_RETRY_MS);
+      };
+      retry(RELAY_REFRESH_RETRIES);
+    },
+    [intentionalDisconnectRef, refreshIceServersOnOpenSocket],
+  );
+
   const connectSocket = useCallback(
     (
       targetRoomId: string,
@@ -9522,14 +9575,16 @@ export function useMeetSocket({
     const reconnectGeneration = reconnectGenerationRef.current;
     let attemptState = freshReconnectAttemptState(options);
     let rejoined = false;
-    const applyRequestedRelayPolicy = () => {
+    const applyRequestedRelayPolicy = (roomId: string) => {
+      const hasTurnServers =
+        getUsableTurnIceServers(runtimeIceServersRef.current, Date.now()) !==
+        null;
       const relayOnly = resolveRebuildRelayOnly({
         requested: attemptState.relayOnlyRequest !== null,
         relayOnly: relayOnlyIceRef.current,
-        hasTurnServers:
-          getUsableTurnIceServers(runtimeIceServersRef.current, Date.now()) !==
-          null,
+        hasTurnServers,
       });
+      if (relayOnly && !hasTurnServers) retryRelayRefreshInBackground(roomId);
       if (relayOnly === relayOnlyIceRef.current) return;
       relayOnlyIceRef.current = relayOnly;
       console.warn("[Meets] Rebuilding through TURN only.");
@@ -9559,7 +9614,7 @@ export function useMeetSocket({
         }
         if (reconnectGeneration !== reconnectGenerationRef.current) return;
         if (intentionalDisconnectRef.current) return;
-        applyRequestedRelayPolicy();
+        applyRequestedRelayPolicy(scopedRoomId);
         const result =
           scopedDirection === "consumer"
             ? await rebuildReceivePath()
@@ -9686,7 +9741,7 @@ export function useMeetSocket({
           }
           if (reconnectGeneration !== reconnectGenerationRef.current) return;
           if (intentionalDisconnectRef.current) return;
-          applyRequestedRelayPolicy();
+          applyRequestedRelayPolicy(reconnectRoomId);
 
           const joinOptions = joinOptionsRef.current;
           const mediaNeeds = getJoinMediaNeeds(
@@ -9936,6 +9991,7 @@ export function useMeetSocket({
     currentRoomIdRef,
     ensureLiveLocalMediaForJoin,
     refreshIceServersOnOpenSocket,
+    retryRelayRefreshInBackground,
     escalateMediaPathFailure,
     rebuildReceivePath,
     rebuildSendPath,

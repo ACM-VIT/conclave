@@ -115,6 +115,12 @@ export const offeredTurnServers = (
   return servers.length > 0 ? servers : null;
 };
 
+export const icePolicyForOffers = (
+  relayOnly: boolean,
+  offers: RelayOffer[],
+): RTCIceTransportPolicy =>
+  relayOnly && offeredTurnServers(offers) !== null ? "relay" : "all";
+
 export const relayCarryingUrl = (
   offers: RelayOffer[],
   url: string,
