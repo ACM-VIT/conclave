@@ -32,6 +32,7 @@ import {
 import { pollsContract } from "../test/authority/fixtures/polls.js";
 import { qaContract } from "../test/authority/fixtures/qa.js";
 import { LoadAudit } from "./authority-load-audit.js";
+import { loadTestClientPolicies } from "./load-test-policy.js";
 
 const flag = (name: string, fallback: number): number => {
   const index = process.argv.indexOf(`--${name}`);
@@ -94,9 +95,7 @@ const startSfu = async (): Promise<ChildProcess> => {
         SFU_PORT: String(PORT),
         SFU_SECRET: SECRET,
         SFU_CLIENT_ID: CLIENT_ID,
-        SFU_CLIENT_POLICIES: JSON.stringify({
-          [CLIENT_ID]: { useWaitingRoom: false },
-        }),
+        SFU_CLIENT_POLICIES: loadTestClientPolicies(CLIENT_ID),
         SFU_WORKER_COUNT: "1",
         ANNOUNCED_IP: "127.0.0.1",
         RTC_MIN_PORT: "56000",

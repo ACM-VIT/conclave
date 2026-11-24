@@ -194,7 +194,7 @@ const defaultClientPolicies: Record<string, ClientPolicy> = {
   },
 };
 
-const normalizeClientPolicies = (
+export const normalizeClientPolicies = (
   value: string | undefined,
 ): Record<string, ClientPolicy> => {
   if (!value) return defaultClientPolicies;
