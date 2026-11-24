@@ -907,14 +907,12 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
               staleSameIdentitySeats.some((seat) => seat.isWebinarAttendee),
           );
 
-        let replacedHostSeat = false;
         const removeClientForRejoin = (
           targetUserId: string,
           options?: { notifyPeers?: boolean },
         ) => {
           const client = room.getClient(targetUserId);
           if (!client) return;
-          if (client instanceof Admin && !client.isObserver) replacedHostSeat = true;
 
           const awarenessRemovals = room.clearUserAwareness(targetUserId);
           for (const removal of awarenessRemovals) {
@@ -1417,28 +1415,13 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           });
         }
 
-        // A tab that waited for this meeting and is now in it is not also
-        // knocking on it.
-        if (context.currentRoom.pendingClients.get(userKey)?.socket.id === socket.id) {
-          context.currentRoom.removePendingClient(userKey);
-        }
         context.currentRoom.setUserIdentity(userId, userKey, displayName, {
           forceDisplayName: hasDisplayNameOverride,
           guestProof: guestClaim.bindTo,
         });
+        const joiningChannel = socket.join(roomChannelId);
         context.currentRoom.addClient(context.currentClient);
-        if (replacedHostSeat && !room.hasActiveAdmin()) ensureHost(io, state, room);
-
-        // The previous room's channel is left only now. Nothing awaits between
-        // the identity checks above and this seat, so a second join under the
-        // same user key is always judged against the seat.
-        if (previousChannelIdToLeave) {
-          await socket.leave(previousChannelIdToLeave);
-          cleanupRoom(state, previousChannelIdToLeave);
-          if (stopped()) return;
-        }
-        await socket.join(roomChannelId);
-        if (stopped()) return;
+        if (!room.hasActiveAdmin()) ensureHost(io, state, room);
 
         const hostUserId = room.getHostUserId();
         const hostUserIds = room.getAdminUserIds();
@@ -1456,7 +1439,19 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           roomId,
           hostUserIds,
         });
-        room.tellOwnerTookOver(demotedForOwner, hostUserId);
+
+        // The previous room's channel is left only now. Nothing awaits between
+        // the identity checks above and this seat, so a second join under the
+        // same user key is always judged against the seat.
+        if (previousChannelIdToLeave) {
+          await socket.leave(previousChannelIdToLeave);
+          cleanupRoom(state, previousChannelIdToLeave);
+          if (stopped()) return;
+        }
+        await joiningChannel;
+        if (stopped()) return;
+
+        room.tellOwnerTookOver(demotedForOwner);
         for (const tab of otherHostTabs) {
           if (tab.socket.id !== socket.id && room.getClient(tab.id) === tab) {
             announcePromotedHost(room, tab);

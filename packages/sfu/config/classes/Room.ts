@@ -2931,6 +2931,7 @@ export class Room {
       Object.setPrototypeOf(client, Admin.prototype);
       promoted.push(client as Admin);
     }
+    if (promoted.length > 0) this.publishRoles({ promoted });
     return promoted;
   }
 
@@ -2938,6 +2939,24 @@ export class Room {
     if (!this.hostReasonsByKey.has(userKey) || this.primaryHostUserKey === userKey) return;
     this.primaryHostUserKey = userKey;
     this.onRecoverableChange?.();
+    this.publishRoles({});
+  }
+
+  private publishRoles(change: { promoted?: readonly Client[]; demoted?: readonly Client[] }): void {
+    this.notifyLifecycle("membership");
+    const roomId = this.id;
+    const hostUserId = this.getHostUserId();
+    const hostUserIds = this.getAdminUserIds();
+    for (const seat of change.promoted ?? []) {
+      seat.socket.emit("hostAssigned", { roomId, hostUserId: hostUserId ?? seat.id });
+    }
+    for (const seat of change.demoted ?? []) {
+      seat.socket.emit("hostRemoved", { roomId, hostUserId });
+    }
+    for (const client of this.clients.values()) {
+      client.socket.emit("hostChanged", { roomId, hostUserId });
+      client.socket.emit("adminUsersChanged", { roomId, hostUserIds });
+    }
   }
 
   private revokeHostOf(userKeys: readonly string[]): Client[] {
@@ -2950,7 +2969,9 @@ export class Room {
       }
     }
     if (changed) this.onRecoverableChange?.();
-    return this.demoteSeatsWithoutRights();
+    const demoted = this.demoteSeatsWithoutRights();
+    if (changed && demoted.length === 0) this.publishRoles({});
+    return demoted;
   }
 
   private demoteSeatsWithoutRights(): Client[] {
@@ -2963,7 +2984,7 @@ export class Room {
       Object.setPrototypeOf(client, Client.prototype);
       demoted.push(client);
     }
-    if (demoted.length > 0) this.notifyLifecycle("membership");
+    if (demoted.length > 0) this.publishRoles({ demoted });
     return demoted;
   }
 
@@ -2976,9 +2997,8 @@ export class Room {
     return demoted;
   }
 
-  tellOwnerTookOver(demoted: Client[], hostUserId: string | null): void {
+  tellOwnerTookOver(demoted: Client[]): void {
     for (const client of demoted) {
-      client.socket.emit("hostRemoved", { roomId: this.id, hostUserId });
       client.socket.emit("adminNotice", {
         roomId: this.id,
         message: "The meeting's owner joined and is hosting now. You're a participant.",
@@ -3072,7 +3092,7 @@ export class Room {
     }
     const promoted = this.grantHost(userKey, basis);
     if (this.hostReasonOf(userKey) === "owner") {
-      this.tellOwnerTookOver(this.welcomeOwner(userKey), userId);
+      this.tellOwnerTookOver(this.welcomeOwner(userKey));
     }
     this.notifyLifecycle("membership");
     return promoted;

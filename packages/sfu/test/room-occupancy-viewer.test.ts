@@ -56,7 +56,7 @@ const setup = () => {
     router: {} as Router,
   });
   state.rooms.set(room.channelId, room);
-  const seat = new Client({ id: "guest-in#s", socket: { id: "s" } as Socket });
+  const seat = new Client({ id: "guest-in#s", socket: { id: "s", emit: () => true } as unknown as Socket });
   room.setUserIdentity(seat.id, "guest-in", "In");
   room.addClient(seat);
   room.grantHost("host@example.com", "fallback");
