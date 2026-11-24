@@ -2,9 +2,7 @@ import { chmodSync, existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createScheduledMeetingPersistence } from "../server/scheduledMeetings.js";
-import { createScheduledWebinarPersistence } from "../server/scheduledWebinars.js";
-import { createSchedulingPersistence } from "../server/scheduling.js";
+import { createSqliteBackend } from "../server/controlPlane/backends/sqlite.js";
 
 // An image built before the non-root switch leaves the SQLite file owned by
 // root. The SFU user can still open it, read-only, so only a real write shows
@@ -12,9 +10,13 @@ import { createSchedulingPersistence } from "../server/scheduling.js";
 const runsAsRoot = process.getuid?.() === 0;
 
 const stores = [
-  { name: "scheduling", open: () => createSchedulingPersistence() },
-  { name: "scheduled meetings", open: () => createScheduledMeetingPersistence() },
-  { name: "scheduled webinars", open: () => createScheduledWebinarPersistence() },
+  {
+    name: "control-plane",
+    open: () => {
+      const backend = createSqliteBackend(join(dir, "conclave.sqlite"));
+      return { close: () => backend.close() };
+    },
+  },
 ];
 
 let dir = "";

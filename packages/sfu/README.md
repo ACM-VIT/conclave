@@ -51,15 +51,30 @@ then run the new `scripts/deploy-sfu.sh`. Do not start the upgrade with the
 deploy script already on the host: it pulls the new revision and then keeps
 running its own old commands, which skip the ownership step.
 
-Both SFUs keep scheduled meetings, webinars and scheduling records in one
-SQLite file on the recordings volume. At startup each store proves it can
-write that file and its directory with a rolled-back test transaction. If it
-cannot, or SQLite will not open, a production SFU exits before it reports
-healthy, instead of accepting saves it cannot keep or falling back to a JSON
-copy that the other instance would overwrite and SQLite would never import
-back. A permission failure names the ownership step above. The container
-restart then retries. Set `SCHEDULING_PERSISTENCE`, `SCHEDULED_MEETINGS_PERSISTENCE`
-or `SCHEDULED_WEBINARS_PERSISTENCE` to `json` only for a single instance.
+Scheduling profiles, availability, event types, calendar connections,
+scheduled meetings and scheduled webinars live in one control-plane store that
+both SFUs share (ADR 0024). Every change is one atomic command against that
+store, and every read goes to it, so an SFU never answers from a stale copy.
+The store is Redis when a Redis URL is configured, and otherwise SQLite on the
+recordings volume. Set `CONTROL_PLANE_PERSISTENCE` to `redis`, `sqlite` or
+`json` to choose explicitly. JSON serves a single SFU only: it holds a lock
+file next to `CONTROL_PLANE_JSON_PATH`, and a second SFU refuses to start on
+it. The per-store `SCHEDULING_PERSISTENCE`, `SCHEDULED_MEETINGS_PERSISTENCE`
+and `SCHEDULED_WEBINARS_PERSISTENCE` still work when all three agree; mixed
+values stop startup with a message naming `CONTROL_PLANE_PERSISTENCE`.
+
+At startup the SQLite store proves it can write its file and directory with a
+rolled-back test transaction. If it cannot, or SQLite will not open, a
+production SFU exits before it reports healthy instead of accepting saves it
+cannot keep. A permission failure names the ownership step above, and the
+container restart retries.
+
+Each start copies data from the stores of earlier releases into the shared
+store, inserting only records it does not have and never one that was deleted
+(the old Redis hashes in Redis mode, else the old SQLite tables, else the old
+JSON files; webinars come from SQLite or JSON). The old data stays where it is,
+so a rollback still finds it, but changes made after the upgrade are not
+copied back.
 
 ## To apply in production
 

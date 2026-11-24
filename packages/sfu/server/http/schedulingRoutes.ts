@@ -11,46 +11,45 @@ import {
 } from "../../utilities/untrusted.js";
 import { secretsMatch } from "../secret.js";
 import {
-  clearGoogleCalendarConnection,
-  createEventType,
-  deleteEventType,
-  ensureSchedulingProfile,
+  calendarSummary,
+  defaultWeeklyAvailability,
   generateAvailableSlots,
-  getCalendarSummary,
-  getProfileByUser,
-  getProfileAvailability,
-  getPublicEventType,
-  getPublicProfile,
-  listEventTypes,
-  moveSchedulingProfileToClient,
-  persistScheduling,
-  setGoogleCalendarConnection,
-  setProfileAvailability,
-  updateEventType,
-  updateSchedulingProfile,
+  isCalendarUsable,
   type BusyInterval,
 } from "../scheduling.js";
 import {
-  createScheduledMeeting,
-  deleteScheduledMeeting,
-  moveScheduledMeetingToClient,
-  persistScheduledMeetingChanges,
-  updateScheduledMeeting,
-  type BookingSlotLease,
-} from "../scheduledMeetings.js";
+  BOOKING_GONE,
+  BOOKING_PAGE_CHANGED,
+  SLOT_TAKEN,
+  bookSlot,
+  bookingTarget,
+  connectHostCalendar,
+  createHostEventType,
+  deleteHostEventType,
+  disconnectHostCalendar,
+  ensureHostProfile,
+  hostBookings,
+  hostBusyIntervals,
+  hostDashboard,
+  patchCalendarToken,
+  recordBookingCalendarFailure,
+  recordBookingEmailResult,
+  setHostHours,
+  settleBookingCalendar,
+  updateHostEventType,
+  updateHostProfile,
+  type BookingTarget,
+  type HostDashboard,
+} from "../controlPlane/schedulingCommands.js";
+import { commitFollowUp } from "../controlPlane/followUp.js";
+import { StoreCorruptionError, StoreUnavailableError } from "../controlPlane/model.js";
 import {
   isSchedulingEmailConfigured,
   sendSchedulingBookingEmails,
-  type SchedulingEmailDeliveryResult,
 } from "../schedulingEmails.js";
 import { buildSchedulingMeetingLink } from "../schedulingLinks.js";
 import type { SfuState } from "../state.js";
-import {
-  canonicalizeClientId,
-  canMigrateClientNamespace,
-  clientIdCandidates,
-  resolveDefaultClientId,
-} from "../clientIds.js";
+import { canonicalizeClientId, resolveDefaultClientId } from "../clientIds.js";
 import type {
   BookingConfirmation,
   CalendarConnectionSummary,
@@ -60,6 +59,11 @@ import type {
   SchedulingEventType,
   SchedulingProfile,
 } from "../../types.js";
+import {
+  STORE_UNAVAILABLE_MESSAGE,
+  controlPlaneRoute,
+  sendFailure,
+} from "./controlPlaneReplies.js";
 
 type RegisterOptions = {
   state: SfuState;
@@ -76,7 +80,6 @@ const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_FREEBUSY_URL = "https://www.googleapis.com/calendar/v3/freeBusy";
 const GOOGLE_CALENDAR_API = "https://www.googleapis.com/calendar/v3";
-const localBookingSlotLocks = new Set<string>();
 
 const hasValidSecret = (req: Request, secret: string): boolean => {
   const provided = req.header("x-sfu-secret");
@@ -178,189 +181,6 @@ const publicCalendarSummary = (
   error: summary.status === "connected" ? null : summary.error,
 });
 
-const profilePayload = (
-  state: SfuState,
-  profile: SchedulingProfile,
-) => ({
-  profile,
-  availability: getProfileAvailability(state.scheduling, profile),
-  eventTypes: listEventTypes(state.scheduling, profile.id),
-  calendar: getCalendarSummary(state.scheduling, profile.id),
-});
-
-const migrateProfileNamespace = async (
-  state: SfuState,
-  profile: SchedulingProfile,
-  clientId: string,
-): Promise<void> => {
-  const previousClientId = profile.clientId;
-  if (previousClientId === clientId) return;
-  const eventTypeIds = new Set(
-    Array.from(state.scheduling.eventTypesById.values())
-      .filter((eventType) => eventType.profileId === profile.id)
-      .map((eventType) => eventType.id),
-  );
-
-  moveSchedulingProfileToClient(state.scheduling, profile, clientId);
-
-  const changedMeetings: ScheduledMeeting[] = [];
-  for (const meeting of state.scheduledMeetings.byId.values()) {
-    if (meeting.clientId !== previousClientId) continue;
-    if (meeting.source !== "booking_link") continue;
-    const belongsToProfile =
-      (meeting.eventTypeId && eventTypeIds.has(meeting.eventTypeId)) ||
-      (meeting.hostUserId && meeting.hostUserId === profile.userId) ||
-      meeting.hostEmail.trim().toLowerCase() === profile.email;
-    if (!belongsToProfile) continue;
-    try {
-      const moved = moveScheduledMeetingToClient(
-        state.scheduledMeetings,
-        meeting.id,
-        clientId,
-      );
-      if (moved) changedMeetings.push(moved);
-    } catch (error) {
-      Logger.warn(
-        `Skipped scheduled meeting namespace migration for ${meeting.id}`,
-        error,
-      );
-    }
-  }
-
-  if (changedMeetings.length > 0 && state.scheduledMeetingPersistence) {
-    await persistScheduledMeetingChanges(
-      state.scheduledMeetings,
-      state.scheduledMeetingPersistence,
-      changedMeetings,
-    );
-  }
-};
-
-const requireHostProfile = async (
-  req: Request,
-  res: Response,
-  state: SfuState,
-): Promise<SchedulingProfile | null> => {
-  const user = resolveUserContext(req);
-  if (!user.email || !user.userId) {
-    res.status(400).json({ error: "User context required" });
-    return null;
-  }
-  const clientId = resolveClientId(req);
-  const existingProfile = getProfileByUser(
-    state.scheduling,
-    clientId,
-    user.userId,
-  );
-  if (!existingProfile) {
-    for (const legacyClientId of clientIdCandidates(clientId).slice(1)) {
-      const legacyProfile = getProfileByUser(
-        state.scheduling,
-        legacyClientId,
-        user.userId,
-      );
-      if (!legacyProfile) continue;
-      // Only into the deployment's default client: the requested id comes
-      // from the request and must not move a profile's booking meetings out.
-      if (!canMigrateClientNamespace(legacyProfile.clientId, clientId)) break;
-      await migrateProfileNamespace(state, legacyProfile, clientId);
-      break;
-    }
-  }
-  const profile = ensureSchedulingProfile(state.scheduling, {
-    clientId,
-    userId: user.userId,
-    email: user.email,
-    name: user.name,
-    timeZone: readString(requestBody(req), "timeZone"),
-  });
-  await persistScheduling(state.scheduling, state.schedulingPersistence);
-  return profile;
-};
-
-const requireConnectedCalendar = (
-  state: SfuState,
-  profile: SchedulingProfile,
-): SchedulingCalendarConnection | null => {
-  const connection = state.scheduling.calendarByProfileId.get(profile.id);
-  if (!connection || connection.status !== "connected" || !connection.refreshToken) {
-    return null;
-  }
-  return connection;
-};
-
-const hasCalendarConnectionProblem = (
-  state: SfuState,
-  profile: SchedulingProfile,
-  eventType: SchedulingEventType,
-): boolean => {
-  if (!eventType.requiresCalendar) return false;
-  const summary = getCalendarSummary(state.scheduling, profile.id);
-  return summary.status !== "connected";
-};
-
-const sendCalendarUnavailable = (res: Response): void => {
-  res.status(503).json({
-    error:
-      "Calendar availability is temporarily unavailable. Ask the host to reconnect Google Calendar.",
-  });
-};
-
-const bookingSlotLockKey = (
-  profile: SchedulingProfile,
-): string => `${profile.clientId}:${profile.email.toLowerCase()}`;
-
-const acquireBookingSlotLease = async (
-  state: SfuState,
-  profile: SchedulingProfile,
-  startAt: number,
-  endAt: number,
-): Promise<BookingSlotLease | null> => {
-  const key = bookingSlotLockKey(profile);
-  if (localBookingSlotLocks.has(key)) return null;
-  localBookingSlotLocks.add(key);
-
-  let remoteLease: BookingSlotLease | null = null;
-  try {
-    if (state.scheduledMeetingPersistence?.reserveBookingSlot) {
-      remoteLease = await state.scheduledMeetingPersistence.reserveBookingSlot({
-        clientId: profile.clientId,
-        hostEmail: profile.email,
-        startAt,
-        endAt,
-      });
-      if (!remoteLease) {
-        localBookingSlotLocks.delete(key);
-        return null;
-      }
-    }
-
-    return {
-      release: async () => {
-        try {
-          await remoteLease?.release();
-        } finally {
-          localBookingSlotLocks.delete(key);
-        }
-      },
-    };
-  } catch (error) {
-    localBookingSlotLocks.delete(key);
-    throw error;
-  }
-};
-
-const persistMeetingChange = async (
-  state: SfuState,
-  meeting: ScheduledMeeting,
-): Promise<void> => {
-  if (!state.scheduledMeetingPersistence) return;
-  await persistScheduledMeetingChanges(
-    state.scheduledMeetings,
-    state.scheduledMeetingPersistence,
-    [meeting],
-  );
-};
 
 class GoogleCalendarApiError extends Error {
   status: number;
@@ -410,18 +230,67 @@ const googleFetchJson = async <T>(
   return data as T;
 };
 
+const shouldMarkCalendarReconnectRequired = (error: unknown): boolean =>
+  error instanceof GoogleCalendarApiError &&
+  (error.status === 401 ||
+    error.code === "invalid_grant" ||
+    error.code === "invalid_client" ||
+    error.code === "unauthorized_client");
+
+
+const buildConfirmation = (
+  meeting: ScheduledMeeting,
+  appOrigin: string,
+): BookingConfirmation => ({
+  id: meeting.id,
+  title: meeting.title,
+  roomCode: meeting.roomCode,
+  meetingLink: buildSchedulingMeetingLink(appOrigin, meeting),
+  startsAt: meeting.scheduledStartAt,
+  endsAt: meeting.scheduledEndAt,
+  hostName: meeting.hostName,
+  attendeeName: meeting.attendeeName || "",
+  attendeeEmail: meeting.attendeeEmail || "",
+  calendarEventId: meeting.googleCalendarEventId ?? null,
+  syncStatus: meeting.calendarSyncStatus ?? "not_required",
+  emailNotificationStatus: meeting.emailNotificationStatus ?? "not_configured",
+});
+
+const isStoreError = (error: unknown): boolean =>
+  error instanceof StoreUnavailableError || error instanceof StoreCorruptionError;
+
+const markCalendarError = async (
+  state: SfuState,
+  connection: SchedulingCalendarConnection,
+  error: unknown,
+): Promise<void> => {
+  state.googleAccessTokens.delete(connection.grantId);
+  try {
+    await state.controlPlane.commit(
+      patchCalendarToken(connection.profileId, connection.grantId, {
+        status: "needs_reconnect",
+        error: (error as Error).message || "Google Calendar sync failed.",
+      }),
+    );
+  } catch (storeError) {
+    Logger.warn("Failed to record that Google Calendar needs a reconnect", storeError);
+  }
+};
+
 const refreshGoogleAccessToken = async (
   state: SfuState,
   connection: SchedulingCalendarConnection,
 ): Promise<string> => {
+  const freshAfter = Date.now() + 60_000;
+  const cached = state.googleAccessTokens.get(connection.grantId);
+  if (cached && cached.expiresAt > freshAfter) return cached.token;
   if (
     connection.accessToken &&
     connection.accessTokenExpiresAt &&
-    connection.accessTokenExpiresAt > Date.now() + 60_000
+    connection.accessTokenExpiresAt > freshAfter
   ) {
     return connection.accessToken;
   }
-
   const config = requireGoogleConfig();
   const body = new URLSearchParams({
     client_id: config.clientId,
@@ -429,21 +298,16 @@ const refreshGoogleAccessToken = async (
     refresh_token: connection.refreshToken || "",
     grant_type: "refresh_token",
   });
-  let token: {
-    access_token?: string;
-    expires_in?: number;
-    scope?: string;
-  };
+  let token: { access_token?: string; expires_in?: number };
   try {
-    token = await googleFetchJson<{
-      access_token?: string;
-      expires_in?: number;
-      scope?: string;
-    }>(GOOGLE_TOKEN_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body,
-    });
+    token = await googleFetchJson<{ access_token?: string; expires_in?: number }>(
+      GOOGLE_TOKEN_URL,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body,
+      },
+    );
   } catch (error) {
     if (shouldMarkCalendarReconnectRequired(error)) {
       await markCalendarError(state, connection, error);
@@ -453,33 +317,12 @@ const refreshGoogleAccessToken = async (
   if (!token.access_token) {
     throw new Error("Google did not return an access token.");
   }
-  connection.accessToken = token.access_token;
-  connection.accessTokenExpiresAt =
-    Date.now() + Math.max(token.expires_in ?? 3600, 60) * 1000;
-  connection.status = "connected";
-  connection.error = null;
-  connection.updatedAt = Date.now();
-  await persistScheduling(state.scheduling, state.schedulingPersistence);
-  return connection.accessToken;
+  state.googleAccessTokens.set(connection.grantId, {
+    token: token.access_token,
+    expiresAt: Date.now() + Math.max(token.expires_in ?? 3600, 60) * 1000,
+  });
+  return token.access_token;
 };
-
-const markCalendarError = async (
-  state: SfuState,
-  connection: SchedulingCalendarConnection,
-  error: unknown,
-): Promise<void> => {
-  connection.status = "needs_reconnect";
-  connection.error = (error as Error).message || "Google Calendar sync failed.";
-  connection.updatedAt = Date.now();
-  await persistScheduling(state.scheduling, state.schedulingPersistence);
-};
-
-const shouldMarkCalendarReconnectRequired = (error: unknown): boolean =>
-  error instanceof GoogleCalendarApiError &&
-  (error.status === 401 ||
-    error.code === "invalid_grant" ||
-    error.code === "invalid_client" ||
-    error.code === "unauthorized_client");
 
 const fetchGoogleBusy = async (
   state: SfuState,
@@ -512,9 +355,7 @@ const fetchGoogleBusy = async (
       startAt: entry.start ? new Date(entry.start).getTime() : NaN,
       endAt: entry.end ? new Date(entry.end).getTime() : NaN,
     }))
-    .filter(
-      (entry) => Number.isFinite(entry.startAt) && Number.isFinite(entry.endAt),
-    );
+    .filter((entry) => Number.isFinite(entry.startAt) && Number.isFinite(entry.endAt));
 };
 
 const fetchOptionalGoogleBusy = async (
@@ -566,20 +407,9 @@ const createGoogleCalendarEvent = async (
         summary: input.title,
         location: "Conclave room",
         description: `${input.description ? `${input.description}\n\n` : ""}Join Conclave: ${input.meetingLink}`,
-        start: {
-          dateTime: new Date(input.startAt).toISOString(),
-          timeZone: input.timeZone,
-        },
-        end: {
-          dateTime: new Date(input.endAt).toISOString(),
-          timeZone: input.timeZone,
-        },
-        attendees: [
-          {
-            email: input.attendeeEmail,
-            displayName: input.attendeeName,
-          },
-        ],
+        start: { dateTime: new Date(input.startAt).toISOString(), timeZone: input.timeZone },
+        end: { dateTime: new Date(input.endAt).toISOString(), timeZone: input.timeZone },
+        attendees: [{ email: input.attendeeEmail, displayName: input.attendeeName }],
       }),
     });
     if (!data.id) throw new Error("Google did not return an event id.");
@@ -592,141 +422,41 @@ const createGoogleCalendarEvent = async (
   }
 };
 
-const meetingMatchesProfile = (
-  meeting: ScheduledMeeting,
-  profile: SchedulingProfile,
-  eventType?: SchedulingEventType | null,
-): boolean => {
-  if (eventType?.profileId === profile.id) return true;
-  if (meeting.clientId !== profile.clientId) return false;
-  if (meeting.hostUserId && profile.userId) {
-    return meeting.hostUserId === profile.userId;
-  }
-  return meeting.hostEmail.trim().toLowerCase() === profile.email.trim().toLowerCase();
-};
-
-const collectInternalBusy = (
+const deleteGoogleCalendarEvent = async (
   state: SfuState,
-  profile: SchedulingProfile,
-  from: number,
-  to: number,
-): BusyInterval[] =>
-  Array.from(state.scheduledMeetings.byId.values())
-    .map((meeting) => ({
-      meeting,
-      eventType: meeting.eventTypeId
-        ? state.scheduling.eventTypesById.get(meeting.eventTypeId) ?? null
-        : null,
-    }))
-    .map(({ meeting, eventType }) => ({
-      meeting,
-      startAt:
-        meeting.scheduledStartAt -
-        (eventType?.bufferBeforeMinutes ?? 0) * MINUTE_MS,
-      endAt:
-        meeting.scheduledEndAt +
-        (eventType?.bufferAfterMinutes ?? 0) * MINUTE_MS,
-    }))
-    .filter(({ meeting, startAt, endAt }) => {
-      const eventType = meeting.eventTypeId
-        ? state.scheduling.eventTypesById.get(meeting.eventTypeId) ?? null
-        : null;
-      if (!meetingMatchesProfile(meeting, profile, eventType)) return false;
-      if (meeting.status === "cancelled" || meeting.status === "ended") return false;
-      return startAt < to && from < endAt;
-    })
-    .map(({ startAt, endAt }) => ({ startAt, endAt }));
-
-const resolvePublicTarget = (
-  state: SfuState,
-  clientId: string,
-  username: string,
-  slug: string,
-):
-  | {
-      profile: SchedulingProfile;
-      eventType: SchedulingEventType;
-      calendar: SchedulingCalendarConnection | null;
-    }
-  | { error: string; status: number } => {
-  const profile = getPublicProfile(state.scheduling, clientId, username);
-  if (!profile) return { error: "Scheduling page not found.", status: 404 };
-  const eventType = getPublicEventType(state.scheduling, profile, slug);
-  if (!eventType || !eventType.isActive) {
-    return { error: "Event type is not available.", status: 404 };
-  }
-  const calendar = requireConnectedCalendar(state, profile);
-  return { profile, eventType, calendar };
-};
-
-const resolvePublicTargetForClients = (
-  state: SfuState,
-  clientId: string,
-  username: string,
-  slug: string,
-): ReturnType<typeof resolvePublicTarget> => {
-  let lastNotFound: ReturnType<typeof resolvePublicTarget> = {
-    error: "Scheduling page not found.",
-    status: 404,
-  };
-  for (const candidateClientId of clientIdCandidates(clientId)) {
-    const target = resolvePublicTarget(
-      state,
-      candidateClientId,
-      username,
-      slug,
-    );
-    if (!("error" in target)) return target;
-    if (target.status !== 404) return target;
-    lastNotFound = target;
-  }
-  return lastNotFound;
-};
-
-const buildConfirmation = (
-  meeting: ScheduledMeeting,
-  appOrigin: string,
-): BookingConfirmation => ({
-  id: meeting.id,
-  title: meeting.title,
-  roomCode: meeting.roomCode,
-  meetingLink: buildSchedulingMeetingLink(appOrigin, meeting),
-  startsAt: meeting.scheduledStartAt,
-  endsAt: meeting.scheduledEndAt,
-  hostName: meeting.hostName,
-  attendeeName: meeting.attendeeName || "",
-  attendeeEmail: meeting.attendeeEmail || "",
-  calendarEventId: meeting.googleCalendarEventId ?? null,
-  syncStatus: meeting.calendarSyncStatus ?? "not_required",
-  emailNotificationStatus: meeting.emailNotificationStatus ?? "not_configured",
-});
-
-const sendBookingEmailNotifications = async (
-  state: SfuState,
-  input: {
-    profile: SchedulingProfile;
-    eventType: SchedulingEventType;
-    meeting: ScheduledMeeting;
-    appOrigin: string;
-    calendarError?: string | null;
-  },
-): Promise<{
-  meeting: ScheduledMeeting;
-  emailResult: SchedulingEmailDeliveryResult;
-}> => {
-  const emailResult = await sendSchedulingBookingEmails(input);
-  const next = updateScheduledMeeting(state.scheduledMeetings, input.meeting.id, {
-    emailNotificationStatus: emailResult.status,
-    emailNotificationError: emailResult.error,
-    emailNotificationSentAt: emailResult.sentAt,
-  });
+  connection: SchedulingCalendarConnection,
+  eventId: string,
+): Promise<void> => {
   try {
-    await persistMeetingChange(state, next);
+    const accessToken = await refreshGoogleAccessToken(state, connection);
+    const response = await fetch(
+      `${GOOGLE_CALENDAR_API}/calendars/${encodeURIComponent(
+        connection.calendarId || "primary",
+      )}/events/${encodeURIComponent(eventId)}?sendUpdates=none`,
+      { method: "DELETE", headers: { Authorization: `Bearer ${accessToken}` } },
+    );
+    if (!response.ok && response.status !== 404 && response.status !== 410) {
+      throw new Error(`Google answered ${response.status}`);
+    }
   } catch (error) {
-    Logger.warn("Failed to persist scheduling email status", error);
+    Logger.warn(`Failed to remove orphaned Google Calendar event ${eventId}`, error);
   }
-  return { meeting: next, emailResult };
 };
+
+const hasCalendarConnectionProblem = (target: BookingTarget): boolean =>
+  target.eventType.value.requiresCalendar &&
+  calendarSummary(target.calendar).status !== "connected";
+
+const sendCalendarUnavailable = (res: Response): void => {
+  res.status(503).json({
+    error:
+      "Calendar availability is temporarily unavailable. Ask the host to reconnect Google Calendar.",
+  });
+};
+
+const availabilityFor = (target: BookingTarget) =>
+  target.hours?.value.availability ??
+  defaultWeeklyAvailability(target.profile.value.timeZone, target.profile.value.updatedAt);
 
 export const registerSchedulingRoutes = (
   app: Express,
@@ -740,491 +470,518 @@ export const registerSchedulingRoutes = (
     return false;
   };
 
-  app.get("/scheduling/profile", async (req, res) => {
-    if (!requireSecret(req, res)) return;
-    const profile = await requireHostProfile(req, res, state);
-    if (!profile) return;
-    res.json(profilePayload(state, profile));
-  });
-
-  app.put("/scheduling/profile", async (req, res) => {
-    if (!requireSecret(req, res)) return;
-    const profile = await requireHostProfile(req, res, state);
-    if (!profile) return;
-    const body = requestBody(req);
-    try {
-      const updated = updateSchedulingProfile(state.scheduling, profile.id, {
-        name: readString(body, "name"),
-        username: readString(body, "username"),
-        timeZone: readString(body, "timeZone"),
-      });
-      if (typeof body.timeZone === "string") {
-        setProfileAvailability(state.scheduling, updated, {
-          ...getProfileAvailability(state.scheduling, updated),
-          timeZone: updated.timeZone,
-        });
-      }
-      await persistScheduling(state.scheduling, state.schedulingPersistence);
-      res.json(profilePayload(state, updated));
-    } catch (error) {
-      res.status(400).json({ error: (error as Error).message });
+  const requireHostProfile = async (
+    req: Request,
+    res: Response,
+    options: { syncIdentity: boolean },
+  ): Promise<SchedulingProfile | null> => {
+    const user = resolveUserContext(req);
+    if (!user.email || !user.userId) {
+      res.status(400).json({ error: "User context required" });
+      return null;
     }
-  });
-
-  app.get("/scheduling/availability/default", async (req, res) => {
-    if (!requireSecret(req, res)) return;
-    const profile = await requireHostProfile(req, res, state);
-    if (!profile) return;
-    res.json({ availability: getProfileAvailability(state.scheduling, profile) });
-  });
-
-  app.put("/scheduling/availability/default", async (req, res) => {
-    if (!requireSecret(req, res)) return;
-    const profile = await requireHostProfile(req, res, state);
-    if (!profile) return;
-    const availability = setProfileAvailability(
-      state.scheduling,
-      profile,
-      requestBody(req),
-    );
-    await persistScheduling(state.scheduling, state.schedulingPersistence);
-    res.json({ availability, profile });
-  });
-
-  app.get("/scheduling/event-types", async (req, res) => {
-    if (!requireSecret(req, res)) return;
-    const profile = await requireHostProfile(req, res, state);
-    if (!profile) return;
-    res.json({ eventTypes: listEventTypes(state.scheduling, profile.id) });
-  });
-
-  app.post("/scheduling/event-types", async (req, res) => {
-    if (!requireSecret(req, res)) return;
-    const profile = await requireHostProfile(req, res, state);
-    if (!profile) return;
-    try {
-      const eventType = createEventType(
-        state.scheduling,
-        profile,
-        eventTypeInput(requestBody(req)),
-      );
-      await persistScheduling(state.scheduling, state.schedulingPersistence);
-      res.status(201).json({ eventType });
-    } catch (error) {
-      res.status(400).json({ error: (error as Error).message });
-    }
-  });
-
-  app.patch("/scheduling/event-types/:id", async (req, res) => {
-    if (!requireSecret(req, res)) return;
-    const profile = await requireHostProfile(req, res, state);
-    if (!profile) return;
-    try {
-      const eventType = updateEventType(
-        state.scheduling,
-        profile,
-        req.params.id,
-        eventTypeInput(requestBody(req)),
-      );
-      await persistScheduling(state.scheduling, state.schedulingPersistence);
-      res.json({ eventType });
-    } catch (error) {
-      res.status(400).json({ error: (error as Error).message });
-    }
-  });
-
-  app.delete("/scheduling/event-types/:id", async (req, res) => {
-    if (!requireSecret(req, res)) return;
-    const profile = await requireHostProfile(req, res, state);
-    if (!profile) return;
-    const eventType = deleteEventType(state.scheduling, profile, req.params.id);
-    if (!eventType) {
-      res.status(404).json({ error: "Event type not found." });
-      return;
-    }
-    await persistScheduling(state.scheduling, state.schedulingPersistence);
-    res.json({ success: true, id: eventType.id });
-  });
-
-  app.get("/scheduling/calendar/google", async (req, res) => {
-    if (!requireSecret(req, res)) return;
-    const profile = await requireHostProfile(req, res, state);
-    if (!profile) return;
-    res.json({ calendar: getCalendarSummary(state.scheduling, profile.id) });
-  });
-
-  app.post("/scheduling/calendar/google", async (req, res) => {
-    if (!requireSecret(req, res)) return;
-    const profile = await requireHostProfile(req, res, state);
-    if (!profile) return;
-    const body = requestBody(req);
-    const existing = state.scheduling.calendarByProfileId.get(profile.id);
-    const refreshToken = normalizeIdentifier(body.refreshToken, 4096);
-    if (!refreshToken && !existing?.refreshToken) {
-      res.status(400).json({
-        error:
-          "Google did not return offline access. Disconnect and connect Google Calendar again.",
-      });
-      return;
-    }
-    const connection = setGoogleCalendarConnection(state.scheduling, profile, {
-      email: normalizeEmail(body.email) || profile.email,
-      accessToken: normalizeIdentifier(body.accessToken, 4096),
-      refreshToken,
-      accessTokenExpiresAt: readNumber(body, "accessTokenExpiresAt") ?? null,
-      scopes: (asArray(body.scopes) ?? [])
-        .map((scope) => normalizeText(scope, 200))
-        .filter(Boolean),
-      status: "connected",
-      error: null,
-    });
-    await persistScheduling(state.scheduling, state.schedulingPersistence);
-    res.json({ calendar: getCalendarSummary(state.scheduling, connection.profileId) });
-  });
-
-  app.delete("/scheduling/calendar/google", async (req, res) => {
-    if (!requireSecret(req, res)) return;
-    const profile = await requireHostProfile(req, res, state);
-    if (!profile) return;
-    clearGoogleCalendarConnection(state.scheduling, profile);
-    await persistScheduling(state.scheduling, state.schedulingPersistence);
-    res.json({
-      calendar: getCalendarSummary(state.scheduling, profile.id),
-      eventTypes: listEventTypes(state.scheduling, profile.id),
-    });
-  });
-
-  app.get("/scheduling/bookings", async (req, res) => {
-    if (!requireSecret(req, res)) return;
-    const profile = await requireHostProfile(req, res, state);
-    if (!profile) return;
-    const bookings = Array.from(state.scheduledMeetings.byId.values())
-      .filter(
-        (meeting) => {
-          const eventType = meeting.eventTypeId
-            ? state.scheduling.eventTypesById.get(meeting.eventTypeId) ?? null
-            : null;
-          return (
-            meetingMatchesProfile(meeting, profile, eventType) &&
-            meeting.source === "booking_link"
-          );
+    const result = await state.controlPlane.commit(
+      ensureHostProfile(
+        {
+          clientId: resolveClientId(req),
+          userId: user.userId,
+          email: user.email,
+          name: user.name,
+          timeZone: readString(requestBody(req), "timeZone"),
         },
-      )
-      .sort((a, b) => b.scheduledStartAt - a.scheduledStartAt);
-    res.json({ bookings });
-  });
+        options,
+      ),
+    );
+    if (!result.ok) {
+      sendFailure(res, result);
+      return null;
+    }
+    return result.value;
+  };
 
-  app.get("/scheduling/public/:username/:slug", (req, res) => {
-    if (!requireSecret(req, res)) return;
-    const target = resolvePublicTargetForClients(
-      state,
-      resolveClientId(req),
-      req.params.username,
-      req.params.slug,
+  const readDashboard = async (
+    req: Request,
+    res: Response,
+  ): Promise<HostDashboard | null> => {
+    const profile = await requireHostProfile(req, res, { syncIdentity: false });
+    if (!profile) return null;
+    const dashboard = await state.controlPlane.read(hostDashboard(profile.id));
+    if (!dashboard) {
+      res.status(404).json({ error: "Scheduling profile not found." });
+      return null;
+    }
+    return dashboard;
+  };
+
+  const resolveTarget = async (
+    req: Request,
+    res: Response,
+  ): Promise<BookingTarget | null> => {
+    const target = await state.controlPlane.read(
+      bookingTarget(resolveClientId(req), String(req.params.username), String(req.params.slug)),
     );
     if ("error" in target) {
       res.status(target.status).json({ error: target.error });
-      return;
+      return null;
     }
-    res.json({
-      schedulingPage: {
-        profile: {
-          name: target.profile.name,
-          username: target.profile.username,
-          timeZone: target.profile.timeZone,
+    return target;
+  };
+
+  app.get(
+    "/scheduling/profile",
+    controlPlaneRoute("read the scheduling profile", async (req, res) => {
+      if (!requireSecret(req, res)) return;
+      const dashboard = await readDashboard(req, res);
+      if (dashboard) res.json(dashboard);
+    }),
+  );
+
+  app.put(
+    "/scheduling/profile",
+    controlPlaneRoute("update the scheduling profile", async (req, res) => {
+      if (!requireSecret(req, res)) return;
+      const profile = await requireHostProfile(req, res, { syncIdentity: true });
+      if (!profile) return;
+      const body = requestBody(req);
+      const result = await state.controlPlane.commit(
+        updateHostProfile(profile.id, {
+          name: readString(body, "name"),
+          username: readString(body, "username"),
+          timeZone: readString(body, "timeZone"),
+        }),
+      );
+      if (!result.ok) {
+        sendFailure(res, result);
+        return;
+      }
+      res.json(result.value);
+    }),
+  );
+
+  app.get(
+    "/scheduling/availability/default",
+    controlPlaneRoute("read availability", async (req, res) => {
+      if (!requireSecret(req, res)) return;
+      const dashboard = await readDashboard(req, res);
+      if (dashboard) res.json({ availability: dashboard.availability });
+    }),
+  );
+
+  app.put(
+    "/scheduling/availability/default",
+    controlPlaneRoute("save availability", async (req, res) => {
+      if (!requireSecret(req, res)) return;
+      const profile = await requireHostProfile(req, res, { syncIdentity: true });
+      if (!profile) return;
+      const result = await state.controlPlane.commit(setHostHours(profile.id, requestBody(req)));
+      if (!result.ok) {
+        sendFailure(res, result);
+        return;
+      }
+      res.json(result.value);
+    }),
+  );
+
+  app.get(
+    "/scheduling/event-types",
+    controlPlaneRoute("list event types", async (req, res) => {
+      if (!requireSecret(req, res)) return;
+      const dashboard = await readDashboard(req, res);
+      if (dashboard) res.json({ eventTypes: dashboard.eventTypes });
+    }),
+  );
+
+  app.post(
+    "/scheduling/event-types",
+    controlPlaneRoute("create an event type", async (req, res) => {
+      if (!requireSecret(req, res)) return;
+      const profile = await requireHostProfile(req, res, { syncIdentity: true });
+      if (!profile) return;
+      const result = await state.controlPlane.commit(
+        createHostEventType(profile.id, eventTypeInput(requestBody(req))),
+      );
+      if (!result.ok) {
+        sendFailure(res, result);
+        return;
+      }
+      res.status(201).json({ eventType: result.value });
+    }),
+  );
+
+  app.patch(
+    "/scheduling/event-types/:id",
+    controlPlaneRoute("update an event type", async (req, res) => {
+      if (!requireSecret(req, res)) return;
+      const profile = await requireHostProfile(req, res, { syncIdentity: true });
+      if (!profile) return;
+      const result = await state.controlPlane.commit(
+        updateHostEventType(profile.id, String(req.params.id), eventTypeInput(requestBody(req))),
+      );
+      if (!result.ok) {
+        sendFailure(res, result);
+        return;
+      }
+      res.json({ eventType: result.value });
+    }),
+  );
+
+  app.delete(
+    "/scheduling/event-types/:id",
+    controlPlaneRoute("delete an event type", async (req, res) => {
+      if (!requireSecret(req, res)) return;
+      const profile = await requireHostProfile(req, res, { syncIdentity: true });
+      if (!profile) return;
+      const result = await state.controlPlane.commit(
+        deleteHostEventType(profile.id, String(req.params.id)),
+      );
+      if (!result.ok) {
+        sendFailure(res, result);
+        return;
+      }
+      res.json({ success: true, id: result.value.id });
+    }),
+  );
+
+  app.get(
+    "/scheduling/calendar/google",
+    controlPlaneRoute("read the calendar connection", async (req, res) => {
+      if (!requireSecret(req, res)) return;
+      const dashboard = await readDashboard(req, res);
+      if (dashboard) res.json({ calendar: dashboard.calendar });
+    }),
+  );
+
+  app.post(
+    "/scheduling/calendar/google",
+    controlPlaneRoute("connect Google Calendar", async (req, res) => {
+      if (!requireSecret(req, res)) return;
+      const profile = await requireHostProfile(req, res, { syncIdentity: true });
+      if (!profile) return;
+      const body = requestBody(req);
+      const result = await state.controlPlane.commit(
+        connectHostCalendar(profile.id, {
+          email: normalizeEmail(body.email) || profile.email,
+          accessToken: normalizeIdentifier(body.accessToken, 4096),
+          refreshToken: normalizeIdentifier(body.refreshToken, 4096),
+          accessTokenExpiresAt: readNumber(body, "accessTokenExpiresAt") ?? null,
+          scopes: (asArray(body.scopes) ?? [])
+            .map((scope) => normalizeText(scope, 200))
+            .filter(Boolean),
+        }),
+      );
+      if (!result.ok) {
+        sendFailure(res, result);
+        return;
+      }
+      res.json({ calendar: result.value });
+    }),
+  );
+
+  app.delete(
+    "/scheduling/calendar/google",
+    controlPlaneRoute("disconnect Google Calendar", async (req, res) => {
+      if (!requireSecret(req, res)) return;
+      const profile = await requireHostProfile(req, res, { syncIdentity: true });
+      if (!profile) return;
+      const result = await state.controlPlane.commit(disconnectHostCalendar(profile.id));
+      if (!result.ok) {
+        sendFailure(res, result);
+        return;
+      }
+      res.json(result.value);
+    }),
+  );
+
+  app.get(
+    "/scheduling/bookings",
+    controlPlaneRoute("list bookings", async (req, res) => {
+      if (!requireSecret(req, res)) return;
+      const profile = await requireHostProfile(req, res, { syncIdentity: false });
+      if (!profile) return;
+      res.json({ bookings: await state.controlPlane.read(hostBookings(profile.id)) });
+    }),
+  );
+
+  app.get(
+    "/scheduling/public/:username/:slug",
+    controlPlaneRoute("read a booking page", async (req, res) => {
+      if (!requireSecret(req, res)) return;
+      const target = await resolveTarget(req, res);
+      if (!target) return;
+      const profile = target.profile.value;
+      const eventType = target.eventType.value;
+      res.json({
+        schedulingPage: {
+          profile: { name: profile.name, username: profile.username, timeZone: profile.timeZone },
+          eventType: {
+            id: eventType.id,
+            slug: eventType.slug,
+            title: eventType.title,
+            description: eventType.description,
+            durationMinutes: eventType.durationMinutes,
+            minimumNoticeMinutes: eventType.minimumNoticeMinutes,
+            bookingWindowDays: eventType.bookingWindowDays,
+          },
+          calendar: publicCalendarSummary(calendarSummary(target.calendar)),
         },
-        eventType: {
-          id: target.eventType.id,
-          slug: target.eventType.slug,
-          title: target.eventType.title,
-          description: target.eventType.description,
-          durationMinutes: target.eventType.durationMinutes,
-          minimumNoticeMinutes: target.eventType.minimumNoticeMinutes,
-          bookingWindowDays: target.eventType.bookingWindowDays,
-        },
-        calendar: publicCalendarSummary(
-          getCalendarSummary(state.scheduling, target.profile.id),
-        ),
-      },
-    });
-  });
+      });
+    }),
+  );
 
   app.get("/scheduling/public/:username/:slug/slots", async (req, res) => {
     if (!requireSecret(req, res)) return;
-    const target = resolvePublicTargetForClients(
-      state,
-      resolveClientId(req),
-      req.params.username,
-      req.params.slug,
-    );
-    if ("error" in target) {
-      res.status(target.status).json({ error: target.error });
-      return;
-    }
-    if (hasCalendarConnectionProblem(state, target.profile, target.eventType)) {
-      sendCalendarUnavailable(res);
-      return;
-    }
-    const now = Date.now();
-    const requestedFrom = Number(req.query.from ?? now);
-    const requestedTo = Number(req.query.to ?? now + 14 * DAY_MS);
-    if (
-      !Number.isFinite(requestedFrom) ||
-      !Number.isFinite(requestedTo) ||
-      requestedTo <= requestedFrom
-    ) {
-      res.status(400).json({ error: "Invalid slot range." });
-      return;
-    }
-    const slotFrom = Math.max(
-      requestedFrom,
-      now + target.eventType.minimumNoticeMinutes * MINUTE_MS,
-    );
-    const slotTo = Math.min(
-      requestedTo,
-      now + target.eventType.bookingWindowDays * DAY_MS,
-    );
-    if (slotTo <= slotFrom) {
-      res.json({ slots: [] });
-      return;
-    }
-    const busyFrom =
-      slotFrom - target.eventType.bufferBeforeMinutes * MINUTE_MS;
-    const busyTo = slotTo + target.eventType.bufferAfterMinutes * MINUTE_MS;
     try {
-      const internalBusy = collectInternalBusy(
-        state,
-        target.profile,
-        busyFrom,
-        busyTo,
+      const target = await resolveTarget(req, res);
+      if (!target) return;
+      if (hasCalendarConnectionProblem(target)) {
+        sendCalendarUnavailable(res);
+        return;
+      }
+      const eventType = target.eventType.value;
+      const now = Date.now();
+      const requestedFrom = Number(req.query.from ?? now);
+      const requestedTo = Number(req.query.to ?? now + 14 * DAY_MS);
+      if (
+        !Number.isFinite(requestedFrom) ||
+        !Number.isFinite(requestedTo) ||
+        requestedTo <= requestedFrom
+      ) {
+        res.status(400).json({ error: "Invalid slot range." });
+        return;
+      }
+      const slotFrom = Math.max(requestedFrom, now + eventType.minimumNoticeMinutes * MINUTE_MS);
+      const slotTo = Math.min(requestedTo, now + eventType.bookingWindowDays * DAY_MS);
+      if (slotTo <= slotFrom) {
+        res.json({ slots: [] });
+        return;
+      }
+      const busyFrom = slotFrom - eventType.bufferBeforeMinutes * MINUTE_MS;
+      const busyTo = slotTo + eventType.bufferAfterMinutes * MINUTE_MS;
+      const internalBusy = await state.controlPlane.read(
+        hostBusyIntervals(target.profile.value.id, busyFrom, busyTo),
       );
       const googleBusy = await fetchOptionalGoogleBusy(
         state,
-        target.calendar,
-        target.eventType,
+        isCalendarUsable(target.calendar) ? target.calendar : null,
+        eventType,
         busyFrom,
         busyTo,
       );
-      const slots = generateAvailableSlots({
-        eventType: target.eventType,
-        availability: getProfileAvailability(state.scheduling, target.profile),
-        busyIntervals: [...internalBusy, ...googleBusy],
-        from: slotFrom,
-        to: slotTo,
-        now,
-        timeZone: target.profile.timeZone,
+      res.json({
+        slots: generateAvailableSlots({
+          eventType,
+          availability: availabilityFor(target),
+          busyIntervals: [...internalBusy, ...googleBusy],
+          from: slotFrom,
+          to: slotTo,
+          now,
+          timeZone: target.profile.value.timeZone,
+        }),
       });
-      res.json({ slots });
     } catch (error) {
+      if (isStoreError(error)) {
+        Logger.error("[ControlPlane] slot lookup failed", error);
+        res.status(503).json({ error: STORE_UNAVAILABLE_MESSAGE });
+        return;
+      }
       res.status(502).json({ error: (error as Error).message });
     }
   });
 
   app.post("/scheduling/public/:username/:slug/book", async (req, res) => {
     if (!requireSecret(req, res)) return;
-    const target = resolvePublicTargetForClients(
-      state,
-      resolveClientId(req),
-      req.params.username,
-      req.params.slug,
-    );
-    if ("error" in target) {
-      res.status(target.status).json({ error: target.error });
-      return;
-    }
-    if (hasCalendarConnectionProblem(state, target.profile, target.eventType)) {
-      sendCalendarUnavailable(res);
-      return;
-    }
-
     const body = (req.body ?? {}) as CreateBookingRequest;
     const startAt = Number(body.startAt);
     const attendeeName = normalizeText(body.attendeeName, MAX_NAME_LENGTH);
     const attendeeEmail = normalizeEmail(body.attendeeEmail);
     const attendeeNote = normalizeText(body.attendeeNote, MAX_TEXT_LENGTH);
-    const attendeeTimeZone =
-      normalizeIdentifier(body.attendeeTimeZone, 80) || target.profile.timeZone;
-    if (!Number.isFinite(startAt) || !attendeeName || !attendeeEmail) {
-      res.status(400).json({ error: "Name, email, and a valid time are required." });
-      return;
-    }
-
-    const endAt = startAt + target.eventType.durationMinutes * 60 * 1000;
-    const rangeFrom = startAt - 60_000;
-    const rangeTo = endAt + 60_000;
+    const appOrigin = resolveAppOrigin(req);
     try {
-      const bookingSlotLease = await acquireBookingSlotLease(
-        state,
-        target.profile,
-        startAt,
-        endAt,
-      );
-      if (!bookingSlotLease) {
-        res.status(409).json({ error: "That time is no longer available." });
-        return;
-      }
-      let slotLeaseReleased = false;
-      const releaseSlotLease = async (): Promise<void> => {
-        if (slotLeaseReleased) return;
-        slotLeaseReleased = true;
-        await bookingSlotLease.release();
-      };
-
-      const checkAvailability = async (): Promise<boolean> => {
-        const internalBusy = collectInternalBusy(
-          state,
-          target.profile,
-          rangeFrom,
-          rangeTo,
+      const commitBooking = async (
+        retriesLeft: number,
+      ): Promise<{ target: BookingTarget; meeting: ScheduledMeeting; calendar: SchedulingCalendarConnection | null } | null> => {
+        const target = await resolveTarget(req, res);
+        if (!target) return null;
+        if (hasCalendarConnectionProblem(target)) {
+          sendCalendarUnavailable(res);
+          return null;
+        }
+        if (!Number.isFinite(startAt) || !attendeeName || !attendeeEmail) {
+          res.status(400).json({ error: "Name, email, and a valid time are required." });
+          return null;
+        }
+        const profile = target.profile.value;
+        const eventType = target.eventType.value;
+        const calendar = isCalendarUsable(target.calendar) ? target.calendar : null;
+        const endAt = startAt + eventType.durationMinutes * MINUTE_MS;
+        const rangeFrom = startAt - 60_000;
+        const rangeTo = endAt + 60_000;
+        const internalBusy = await state.controlPlane.read(
+          hostBusyIntervals(profile.id, rangeFrom, rangeTo),
         );
         const googleBusy = await fetchOptionalGoogleBusy(
           state,
-          target.calendar,
-          target.eventType,
+          calendar,
+          eventType,
           rangeFrom,
           rangeTo,
         );
-        return generateAvailableSlots({
-          eventType: target.eventType,
-          availability: getProfileAvailability(state.scheduling, target.profile),
+        const offered = generateAvailableSlots({
+          eventType,
+          availability: availabilityFor(target),
           busyIntervals: [...internalBusy, ...googleBusy],
           from: rangeFrom,
           to: rangeTo,
-          timeZone: target.profile.timeZone,
+          timeZone: profile.timeZone,
         }).some((slot) => slot.startAt === startAt);
-      };
-
-      try {
-        const available = await checkAvailability();
-        if (!available) {
-          await releaseSlotLease();
-          res.status(409).json({ error: "That time is no longer available." });
-          return;
+        if (!offered) {
+          res.status(409).json({ error: SLOT_TAKEN });
+          return null;
         }
-      } catch (availabilityError) {
-        await releaseSlotLease();
-        throw availabilityError;
-      }
-
-      const appOrigin = resolveAppOrigin(req);
-      let meeting: ScheduledMeeting;
-      try {
-        meeting = createScheduledMeeting(
-          state.scheduledMeetings,
-          {
-            title: target.eventType.title,
-            scheduledStartAt: startAt,
-            scheduledEndAt: endAt,
-            hostEmail: target.profile.email,
-            hostName: target.profile.name,
-            source: "booking_link",
-            eventTypeId: target.eventType.id,
-            attendeeName,
-            attendeeEmail,
-            attendeeNote,
-            attendeeTimeZone,
-            calendarSyncStatus: target.calendar ? "pending" : "not_required",
-            emailNotificationStatus: isSchedulingEmailConfigured()
-              ? "pending"
-              : "not_configured",
-          },
-          {
-            clientId: target.profile.clientId,
-            createdBy: attendeeEmail,
-            defaultHostEmail: target.profile.email,
-            defaultHostName: target.profile.name,
-            defaultHostUserId: target.profile.userId,
-          },
-        );
-      } catch (createError) {
-        await releaseSlotLease();
-        throw createError;
-      }
-      try {
-        await persistMeetingChange(state, meeting);
-      } catch (persistError) {
-        deleteScheduledMeeting(state.scheduledMeetings, meeting.id);
-        await releaseSlotLease();
-        throw persistError;
-      }
-      try {
-        await releaseSlotLease();
-      } catch (releaseError) {
-        Logger.warn("Failed to release booking slot lock", releaseError);
-      }
-
-      const calendar = target.calendar;
-      if (!calendar) {
-        const { meeting: notified, emailResult } =
-          await sendBookingEmailNotifications(state, {
-            profile: target.profile,
-            eventType: target.eventType,
-            meeting,
-            appOrigin,
-          });
-        res.status(201).json({
-          booking: buildConfirmation(notified, appOrigin),
-          ...(emailResult.error ? { emailError: emailResult.error } : {}),
-        });
-        return;
-      }
-
-      try {
-        const meetingLink = buildSchedulingMeetingLink(appOrigin, meeting);
-        const calendarEventId = await createGoogleCalendarEvent(
-          state,
-          calendar,
-          {
-            title: target.eventType.title,
-            description: attendeeNote,
-            meetingLink,
+        const result = await state.controlPlane.commit(
+          bookSlot({
+            profileId: profile.id,
+            eventTypeId: eventType.id,
+            expect: {
+              profileRev: target.profile.rev,
+              eventTypeRev: target.eventType.rev,
+              hoursRev: target.hours?.rev ?? 0,
+              grantId: calendar?.grantId ?? null,
+            },
             startAt,
             endAt,
-            timeZone: target.profile.timeZone,
-            attendeeName,
-            attendeeEmail,
-          },
+            request: {
+              title: eventType.title,
+              scheduledStartAt: startAt,
+              scheduledEndAt: endAt,
+              hostEmail: profile.email,
+              hostName: profile.name,
+              source: "booking_link",
+              eventTypeId: eventType.id,
+              attendeeName,
+              attendeeEmail,
+              attendeeNote,
+              attendeeTimeZone:
+                normalizeIdentifier(body.attendeeTimeZone, 80) || profile.timeZone,
+              calendarSyncStatus: calendar ? "pending" : "not_required",
+              emailNotificationStatus: isSchedulingEmailConfigured() ? "pending" : "not_configured",
+            },
+            options: {
+              clientId: profile.clientId,
+              createdBy: attendeeEmail,
+              defaultHostEmail: profile.email,
+              defaultHostName: profile.name,
+              defaultHostUserId: profile.userId,
+            },
+          }),
         );
-        const synced = updateScheduledMeeting(state.scheduledMeetings, meeting.id, {
-          googleCalendarEventId: calendarEventId,
-          calendarSyncStatus: "synced",
-          calendarSyncError: null,
-        });
-        await persistMeetingChange(state, synced);
-        const { meeting: notified, emailResult } =
-          await sendBookingEmailNotifications(state, {
-            profile: target.profile,
-            eventType: target.eventType,
-            meeting: synced,
-            appOrigin,
+        if (result.ok) return { target, meeting: result.value, calendar };
+        if (result.message === BOOKING_PAGE_CHANGED && retriesLeft > 0) {
+          return commitBooking(retriesLeft - 1);
+        }
+        if (result.reason === "conflict") {
+          res.status(409).json({ error: SLOT_TAKEN });
+          return null;
+        }
+        sendFailure(res, result);
+        return null;
+      };
+
+      const booked = await commitBooking(1);
+      if (!booked) return;
+      const { target, calendar } = booked;
+      let latest = booked.meeting;
+      let calendarError: string | null = null;
+      const profile = target.profile.value;
+      const eventType = target.eventType.value;
+
+      const bookingGone = (): void => {
+        res.status(409).json({ error: BOOKING_GONE });
+      };
+
+      if (calendar) {
+        let eventId: string | null = null;
+        try {
+          eventId = await createGoogleCalendarEvent(state, calendar, {
+            title: eventType.title,
+            description: attendeeNote,
+            meetingLink: buildSchedulingMeetingLink(appOrigin, latest),
+            startAt: latest.scheduledStartAt,
+            endAt: latest.scheduledEndAt,
+            timeZone: profile.timeZone,
+            attendeeName,
+            attendeeEmail: attendeeEmail ?? "",
           });
-        res.status(201).json({
-          booking: buildConfirmation(notified, appOrigin),
-          ...(emailResult.error ? { emailError: emailResult.error } : {}),
-        });
-      } catch (calendarError) {
-        const message =
-          (calendarError as Error).message || "Could not create the calendar event.";
-        const failed = updateScheduledMeeting(state.scheduledMeetings, meeting.id, {
-          calendarSyncStatus: "failed",
-          calendarSyncError: message,
-        });
-        await persistMeetingChange(state, failed);
-        const { meeting: notified, emailResult } =
-          await sendBookingEmailNotifications(state, {
-            profile: target.profile,
-            eventType: target.eventType,
-            meeting: failed,
-            appOrigin,
-            calendarError: message,
-          });
-        res.status(201).json({
-          booking: buildConfirmation(notified, appOrigin),
-          calendarError: message,
-          ...(emailResult.error ? { emailError: emailResult.error } : {}),
-        });
+        } catch (error) {
+          calendarError = (error as Error).message || "Could not create the calendar event.";
+        }
+        if (eventId) {
+          const settled = await commitFollowUp(
+            state.controlPlane,
+            `calendar event ${eventId} for booking ${latest.id}`,
+            settleBookingCalendar({
+              meetingId: latest.id,
+              profileId: profile.id,
+              grantId: calendar.grantId,
+              eventId,
+              startAt: latest.scheduledStartAt,
+              endAt: latest.scheduledEndAt,
+            }),
+          );
+          if (settled && !settled.ok) {
+            await deleteGoogleCalendarEvent(state, calendar, eventId);
+            bookingGone();
+            return;
+          }
+          if (settled?.ok && settled.value.orphaned) {
+            await deleteGoogleCalendarEvent(state, calendar, eventId);
+            bookingGone();
+            return;
+          }
+          if (settled?.ok) latest = settled.value.meeting;
+        } else if (calendarError) {
+          const failed = await commitFollowUp(
+            state.controlPlane,
+            `calendar failure for booking ${latest.id}`,
+            recordBookingCalendarFailure(latest.id, calendarError),
+          );
+          if (failed && !failed.ok) {
+            bookingGone();
+            return;
+          }
+          if (failed?.ok) latest = failed.value;
+        }
       }
+
+      const emailResult = await sendSchedulingBookingEmails({
+        profile,
+        eventType,
+        meeting: latest,
+        appOrigin,
+        calendarError,
+      });
+      const recorded = await commitFollowUp(
+        state.controlPlane,
+        `booking email result for ${latest.id}`,
+        recordBookingEmailResult(latest.id, emailResult),
+      );
+      if (recorded && !recorded.ok) {
+        bookingGone();
+        return;
+      }
+      if (recorded?.ok) latest = recorded.value;
+      res.status(201).json({
+        booking: buildConfirmation(latest, appOrigin),
+        ...(calendarError ? { calendarError } : {}),
+        ...(emailResult.error ? { emailError: emailResult.error } : {}),
+      });
     } catch (error) {
+      if (res.headersSent) return;
+      if (isStoreError(error)) {
+        Logger.error("[ControlPlane] booking failed", error);
+        res.status(503).json({ error: STORE_UNAVAILABLE_MESSAGE });
+        return;
+      }
       Logger.warn("Booking request failed", error);
       res.status(502).json({ error: (error as Error).message });
     }

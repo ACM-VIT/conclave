@@ -4,16 +4,8 @@ import type { Express } from "express";
 import type { Server as SocketIOServer } from "socket.io";
 import { config as defaultConfig } from "../config/config.js";
 import { Logger } from "../utilities/loggers.js";
-import {
-  initMediaSoup,
-  initScheduling,
-  initScheduledMeetings,
-  initScheduledWebinars,
-} from "./init.js";
-import {
-  advanceScheduledMeetings,
-  persistScheduledMeetingChanges,
-} from "./scheduledMeetings.js";
+import { advanceMeetings } from "./controlPlane/meetingCommands.js";
+import { initControlPlane, initMediaSoup } from "./init.js";
 import { sendDueSchedulingEmailReminders } from "./schedulingEmailReminders.js";
 import { createSfuApp } from "./http/createApp.js";
 import { registerAdminGateway, type AdminGateway } from "./admin/adminGateway.js";
@@ -39,7 +31,6 @@ import { shutdownAnalytics } from "./analytics/posthog.js";
 import { createSfuState } from "./state.js";
 import type { SfuState } from "./state.js";
 import { shutdownBrowserBackend } from "./browserServiceClient.js";
-import { retryWhileSqliteLocked } from "./sqliteWriteCheck.js";
 
 export type SfuServer = {
   app: Express;
@@ -91,10 +82,8 @@ export const createSfuServer = (
     await state.roomRegistry.start();
     socketAdapterLifecycle = await connectSocketAdapter(io, { config });
     await initMediaSoup(state, () => io, workerShutdown.signal);
-    await retryWhileSqliteLocked(() => initScheduledWebinars(state));
-    await retryWhileSqliteLocked(() => initScheduledMeetings(state));
-    await retryWhileSqliteLocked(() => initScheduling(state));
-    startScheduledWebinarTimer(state, () => io, undefined);
+    await initControlPlane(state);
+    startScheduledWebinarTimer(state);
     roomOwnershipRenewTimer = setInterval(() => {
       renewRoomOwnerships(state).catch((error) => {
         Logger.error("Failed to renew room ownerships", error);
@@ -104,16 +93,9 @@ export const createSfuServer = (
       roomOwnershipRenewTimer.unref();
     }
     scheduledMeetingTickTimer = setInterval(() => {
-      const changedMeetings = advanceScheduledMeetings(state.scheduledMeetings);
-      if (changedMeetings.length > 0 && state.scheduledMeetingPersistence) {
-        persistScheduledMeetingChanges(
-          state.scheduledMeetings,
-          state.scheduledMeetingPersistence,
-          changedMeetings,
-        ).catch((error) => {
-          Logger.warn("Failed to persist scheduled-meeting tick", error);
-        });
-      }
+      state.controlPlane.commit(advanceMeetings).catch((error) => {
+        Logger.warn("Failed to advance scheduled meetings", error);
+      });
       sendDueSchedulingEmailReminders(state).catch((error) => {
         Logger.warn("Failed to send scheduling reminders", error);
       });
@@ -156,12 +138,7 @@ export const createSfuServer = (
       clearInterval(audioConsumerHealTimer);
       audioConsumerHealTimer = null;
     }
-    state.scheduledWebinarPersistence?.close?.();
-    state.scheduledWebinarPersistence = null;
-    await state.scheduledMeetingPersistence?.close?.();
-    state.scheduledMeetingPersistence = null;
-    await state.schedulingPersistence?.close?.();
-    state.schedulingPersistence = null;
+    await state.controlPlane.close();
     await releaseAllRoomOwnerships(state);
     await socketAdapterLifecycle?.close();
     socketAdapterLifecycle = null;

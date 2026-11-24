@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { seed } from "./support/controlPlane.js";
 import type { Consumer, Router, Worker } from "mediasoup/types";
 import type { Server as SocketIOServer, Socket } from "socket.io";
 import { Admin } from "../config/classes/Admin.js";
@@ -570,9 +571,7 @@ describe("scheduled webinar link codes", () => {
       updatedAt: now, liveStartedAt: now, endedAt: null, totalJoinCount: 0, peakAttendeeCount: 0,
       webinarLink: "http://localhost/w/launch", coHostInviteTokenHash: null, coHostInviteTokenCreatedAt: null,
     } as ScheduledWebinar;
-    state.scheduledWebinars.byId.set(webinar.id, webinar);
-    state.scheduledWebinars.bySlug.set(webinar.linkSlug, webinar.id);
-    state.scheduledWebinars.byRoomChannel.set("conclave:sched-real", webinar.id);
+    await seed(state.controlPlane, "webinar", webinar);
 
     for (const id of ["sched-real", "squat"]) {
       const room = new Room({ id, clientId: "conclave", workerPid: null, router: { closed: false, close: vi.fn() } as unknown as Router });

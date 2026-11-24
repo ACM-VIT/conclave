@@ -1,13 +1,9 @@
-import type { Server as SocketIOServer } from "socket.io";
 import { Logger } from "../utilities/loggers.js";
 import { notifyAuthorityPolicy } from "./apps/authority/index.js";
 import { getRoomChannelId } from "./rooms.js";
 import type { ScheduledWebinar } from "../types.js";
-import {
-  hasWebinarEnded,
-  isWithinEarlyEntryWindow,
-  persistScheduledWebinarChanges,
-} from "./scheduledWebinars.js";
+import { isWithinEarlyEntryWindow } from "./scheduledWebinars.js";
+import { advanceWebinars, openWebinars } from "./controlPlane/webinarCommands.js";
 import type { SfuState } from "./state.js";
 import {
   getOrCreateWebinarRoomConfig,
@@ -164,65 +160,37 @@ export const ensureWebinarRoomConfig = (
 ): WebinarRoomConfig =>
   applyScheduledWebinarToConfig(state, webinar, inviteCodeHash);
 
-const advanceScheduledWebinars = (
+export const advanceScheduledWebinars = async (
   state: SfuState,
-  io: SocketIOServer | null,
   now = Date.now(),
-): number => {
-  let changed = 0;
-  const changedWebinars: ScheduledWebinar[] = [];
-  for (const webinar of state.scheduledWebinars.byId.values()) {
-    if (webinar.status === "cancelled") continue;
-
+): Promise<ScheduledWebinar[]> => {
+  const advanced = await state.controlPlane.commit(advanceWebinars);
+  const changed = advanced.ok ? advanced.value : [];
+  for (const webinar of changed) {
+    if (webinar.status === "live") {
+      applyScheduledWebinarToConfig(state, webinar, null);
+      continue;
+    }
+    const cfg = state.webinarConfigs.get(getRoomChannelId(webinar.clientId, webinar.roomId));
+    if (cfg) recordScheduledWebinarEnded(cfg, webinar);
+  }
+  for (const webinar of await state.controlPlane.read(openWebinars)) {
     if (webinar.status === "scheduled" && isWithinEarlyEntryWindow(webinar, now)) {
       applyScheduledWebinarToConfig(state, webinar, null);
-      if (now >= webinar.scheduledStartAt) {
-        webinar.status = "live";
-        if (!webinar.liveStartedAt) {
-          webinar.liveStartedAt = now;
-        }
-        webinar.updatedAt = now;
-        changedWebinars.push(webinar);
-        changed += 1;
-      }
-    } else if (webinar.status === "live" && hasWebinarEnded(webinar, now)) {
-      webinar.status = "ended";
-      webinar.endedAt = now;
-      webinar.updatedAt = now;
-      changedWebinars.push(webinar);
-      const channelId = getRoomChannelId(webinar.clientId, webinar.roomId);
-      const cfg = state.webinarConfigs.get(channelId);
-      if (cfg) {
-        recordScheduledWebinarEnded(cfg, webinar);
-      }
-      void io;
-      changed += 1;
     }
   }
-
-  if (changed > 0 && state.scheduledWebinarPersistence) {
-    persistScheduledWebinarChanges(
-      state.scheduledWebinars,
-      state.scheduledWebinarPersistence,
-      changedWebinars,
-    );
-  }
-
   return changed;
 };
 
 export const startScheduledWebinarTimer = (
   state: SfuState,
-  getIo: () => SocketIOServer | null,
   intervalMs = DEFAULT_TICK_MS,
 ): void => {
   if (state.scheduledWebinarTimer) return;
   state.scheduledWebinarTimer = setInterval(() => {
-    try {
-      advanceScheduledWebinars(state, getIo(), Date.now());
-    } catch (error) {
+    advanceScheduledWebinars(state).catch((error) => {
       Logger.error("scheduled webinar tick failed", error);
-    }
+    });
   }, intervalMs);
   if (state.scheduledWebinarTimer.unref) {
     state.scheduledWebinarTimer.unref();

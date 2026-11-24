@@ -575,6 +575,7 @@ export interface SchedulingEventType {
 
 export interface SchedulingCalendarConnection {
   id: string;
+  grantId: string;
   clientId: string;
   profileId: string;
   userId: string;

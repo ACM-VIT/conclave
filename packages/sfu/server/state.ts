@@ -2,21 +2,8 @@ import type { Worker } from "mediasoup/types";
 import { config } from "../config/config.js";
 import { Room } from "../config/classes/Room.js";
 import type { WebinarLinkTarget, WebinarRoomConfig } from "./webinar.js";
-import {
-  createScheduledWebinarStore,
-  type ScheduledWebinarPersistence,
-  type ScheduledWebinarStore,
-} from "./scheduledWebinars.js";
-import {
-  createScheduledMeetingStore,
-  type ScheduledMeetingPersistence,
-  type ScheduledMeetingStore,
-} from "./scheduledMeetings.js";
-import {
-  createSchedulingStore,
-  type SchedulingPersistence,
-  type SchedulingStore,
-} from "./scheduling.js";
+import { createMemoryBackend } from "./controlPlane/backends/memory.js";
+import { controlPlaneStore, type ControlPlaneStore } from "./controlPlane/store.js";
 import { createRoomRegistry, type RoomRegistry } from "./roomRegistry.js";
 import {
   createTranscriptRelayRegistry,
@@ -43,13 +30,10 @@ export type SfuState = {
   endedRooms: Map<string, EndedRoom>;
   webinarConfigs: Map<string, WebinarRoomConfig>;
   webinarLinks: Map<string, WebinarLinkTarget>;
-  scheduledWebinars: ScheduledWebinarStore;
-  scheduledWebinarPersistence: ScheduledWebinarPersistence | null;
+  controlPlane: ControlPlaneStore;
+  googleAccessTokens: Map<string, { token: string; expiresAt: number }>;
   scheduledWebinarTimer: NodeJS.Timeout | null;
-  scheduledMeetings: ScheduledMeetingStore;
-  scheduledMeetingPersistence: ScheduledMeetingPersistence | null;
-  scheduling: SchedulingStore;
-  schedulingPersistence: SchedulingPersistence | null;
+  reminderScanRunning: boolean;
   roomRegistry: RoomRegistry;
   transcriptRelays: TranscriptRelayRegistry;
   /** Null when this SFU does not run authority apps. */
@@ -61,6 +45,7 @@ export const createSfuState = (options?: {
   isDraining?: boolean;
   roomRegistry?: RoomRegistry;
   appsAuthority?: AppsAuthorityRuntime | null;
+  controlPlane?: ControlPlaneStore;
 }): SfuState => {
   return {
     workers: [],
@@ -70,13 +55,10 @@ export const createSfuState = (options?: {
     endedRooms: new Map(),
     webinarConfigs: new Map(),
     webinarLinks: new Map(),
-    scheduledWebinars: createScheduledWebinarStore(),
-    scheduledWebinarPersistence: null,
+    controlPlane: options?.controlPlane ?? controlPlaneStore(createMemoryBackend()),
+    googleAccessTokens: new Map(),
     scheduledWebinarTimer: null,
-    scheduledMeetings: createScheduledMeetingStore(),
-    scheduledMeetingPersistence: null,
-    scheduling: createSchedulingStore(),
-    schedulingPersistence: null,
+    reminderScanRunning: false,
     roomRegistry: options?.roomRegistry ?? createRoomRegistry(config),
     transcriptRelays: createTranscriptRelayRegistry(config.transcriptRelay),
     appsAuthority:

@@ -8,6 +8,7 @@ import type {
   JoinRoomData,
   JoinRoomErrorResponse,
   JoinRoomResponse,
+  ScheduledWebinar,
 } from "../../../types.js";
 import { Logger } from "../../../utilities/loggers.js";
 import { canonicalizeClientId } from "../../clientIds.js";
@@ -42,11 +43,13 @@ import {
   verifyInviteCode,
 } from "../../webinar.js";
 import {
-  getScheduledWebinarForRoom,
-  persistScheduledWebinarChanges,
-  recordWebinarJoin,
   resolveScheduledWebinarAttendeeEntry,
 } from "../../scheduledWebinars.js";
+import {
+  recordWebinarJoin,
+  webinarBySlug,
+  webinarForRoom,
+} from "../../controlPlane/webinarCommands.js";
 import { ensureWebinarRoomConfig } from "../../scheduledWebinarScheduler.js";
 import { getSocketAuthUser } from "../auth.js";
 import type { ConnectionContext } from "../context.js";
@@ -150,8 +153,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         >["webinar"] = null;
         if (isWebinarAttendeeJoin) {
           const scheduledEntry = resolveScheduledWebinarAttendeeEntry(
-            state.scheduledWebinars,
-            requestedRoomId,
+            await state.controlPlane.read(webinarBySlug(requestedRoomId)),
             clientId,
           );
           if (scheduledEntry.kind === "closed") {
@@ -187,14 +189,10 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           roomId = webinarTarget.roomId;
         }
 
-        let scheduledWebinarForRoom: ReturnType<
-          typeof getScheduledWebinarForRoom
-        > = null;
+        let scheduledWebinarForRoom: ScheduledWebinar | null = null;
         if (!isWebinarAttendeeJoin) {
-          scheduledWebinarForRoom = getScheduledWebinarForRoom(
-            state.scheduledWebinars,
-            clientId,
-            roomId,
+          scheduledWebinarForRoom = await state.controlPlane.read(
+            webinarForRoom(clientId, roomId),
           );
           if (
             scheduledWebinarForRoom &&
@@ -1030,22 +1028,11 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           !existingClient
         ) {
           const attendeeCount = context.currentRoom.getWebinarAttendeeCount();
-          const webinarWithJoinMetric = recordWebinarJoin(
-            state.scheduledWebinars,
-            webinarConfig.scheduledWebinarId,
-            attendeeCount,
-          );
-          if (state.scheduledWebinarPersistence && webinarWithJoinMetric) {
-            try {
-              persistScheduledWebinarChanges(
-                state.scheduledWebinars,
-                state.scheduledWebinarPersistence,
-                [webinarWithJoinMetric],
-              );
-            } catch (error) {
-              Logger.warn("Failed to persist join metric", error);
-            }
-          }
+          state.controlPlane
+            .commit(recordWebinarJoin(webinarConfig.scheduledWebinarId, attendeeCount))
+            .catch((error: unknown) => {
+              Logger.warn("Failed to record the webinar join metric", error);
+            });
         }
 
         const webinarSnapshot = toWebinarConfigSnapshot(

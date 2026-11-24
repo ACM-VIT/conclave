@@ -51,7 +51,8 @@ ENV CONCLAVE_SQLITE_PATH=/var/lib/conclave/conclave.sqlite \
     CONCLAVE_FALLBACK_IMPORT_DIR=/var/lib/conclave/recordings/json-fallback-import \
     SCHEDULING_PATH=/var/lib/conclave/recordings/scheduling.json \
     SCHEDULED_MEETINGS_PATH=/var/lib/conclave/recordings/scheduled-meetings.json \
-    SCHEDULED_WEBINARS_PATH=/var/lib/conclave/recordings/scheduled-webinars.json
+    SCHEDULED_WEBINARS_PATH=/var/lib/conclave/recordings/scheduled-webinars.json \
+    CONTROL_PLANE_JSON_PATH=/var/lib/conclave/recordings/control-plane.json
 
 USER node
 WORKDIR /app/packages/sfu

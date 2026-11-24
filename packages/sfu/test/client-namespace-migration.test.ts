@@ -6,6 +6,8 @@ import { canMigrateClientNamespace } from "../server/clientIds.js";
 import { createSfuApp } from "../server/http/createApp.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
 import { createSfuState } from "../server/state.js";
+import { webinarById } from "../server/controlPlane/webinarCommands.js";
+import { seed } from "./support/controlPlane.js";
 
 const servers: Server[] = [];
 afterEach(async () => {
@@ -35,9 +37,7 @@ describe("client namespace migration", () => {
       updatedAt: now, liveStartedAt: null, endedAt: null, totalJoinCount: 0, peakAttendeeCount: 0,
       webinarLink: "http://localhost/w/launch", coHostInviteTokenHash: null, coHostInviteTokenCreatedAt: null,
     } as ScheduledWebinar;
-    state.scheduledWebinars.byId.set(webinar.id, webinar);
-    state.scheduledWebinars.bySlug.set(webinar.linkSlug, webinar.id);
-    state.scheduledWebinars.byRoomChannel.set("conclave:sched-abc", webinar.id);
+    await seed(state.controlPlane, "webinar", webinar);
 
     const server = createServer(createSfuApp({ state, config, getIo: () => null }));
     servers.push(server);
@@ -48,6 +48,6 @@ describe("client namespace migration", () => {
       headers: { "x-sfu-secret": config.sfuSecret, "x-sfu-client": "evil" },
     });
     expect(response.status).toBe(200);
-    expect(state.scheduledWebinars.byId.get("w1")?.clientId).toBe("conclave");
+    expect((await state.controlPlane.read(webinarById("w1")))?.clientId).toBe("conclave");
   });
 });

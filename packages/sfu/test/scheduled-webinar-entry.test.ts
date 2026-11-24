@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ScheduledWebinar } from "../types.js";
-import {
-  createScheduledWebinarStore,
-  resolveScheduledWebinarAttendeeEntry,
-  type ScheduledWebinarStore,
-} from "../server/scheduledWebinars.js";
+import { resolveScheduledWebinarAttendeeEntry } from "../server/scheduledWebinars.js";
 
 const START_AT = Date.UTC(2026, 6, 11, 12);
 
@@ -44,26 +40,13 @@ const scheduledWebinar = (
   ...overrides,
 });
 
-const storeWith = (webinar: ScheduledWebinar): ScheduledWebinarStore => {
-  const store = createScheduledWebinarStore();
-  store.byId.set(webinar.id, webinar);
-  store.bySlug.set(webinar.linkSlug, webinar.id);
-  store.byRoomChannel.set(
-    `${webinar.clientId}:${webinar.roomId}`,
-    webinar.id,
-  );
-  return store;
-};
-
 describe("scheduled webinar attendee entry", () => {
   it("opens the public slug at the configured early-entry time", () => {
     const webinar = scheduledWebinar();
-    const store = storeWith(webinar);
 
     expect(
       resolveScheduledWebinarAttendeeEntry(
-        store,
-        webinar.linkSlug,
+        webinar,
         webinar.clientId,
         START_AT - 10 * 60 * 1000,
       ),
@@ -72,12 +55,10 @@ describe("scheduled webinar attendee entry", () => {
 
   it("keeps a known scheduled slug closed before early entry", () => {
     const webinar = scheduledWebinar();
-    const store = storeWith(webinar);
 
     expect(
       resolveScheduledWebinarAttendeeEntry(
-        store,
-        webinar.linkSlug,
+        webinar,
         webinar.clientId,
         START_AT - 10 * 60 * 1000 - 1,
       ),
@@ -86,12 +67,10 @@ describe("scheduled webinar attendee entry", () => {
 
   it("opens a manually started webinar before its scheduled entry time", () => {
     const webinar = scheduledWebinar({ status: "live" });
-    const store = storeWith(webinar);
 
     expect(
       resolveScheduledWebinarAttendeeEntry(
-        store,
-        webinar.linkSlug,
+        webinar,
         webinar.clientId,
         START_AT - 60 * 60 * 1000,
       ),
@@ -101,8 +80,7 @@ describe("scheduled webinar attendee entry", () => {
   it("leaves instant webinar links to the existing link policy", () => {
     expect(
       resolveScheduledWebinarAttendeeEntry(
-        createScheduledWebinarStore(),
-        "instant-link",
+        null,
         "conclave",
         START_AT,
       ),
@@ -113,12 +91,10 @@ describe("scheduled webinar attendee entry", () => {
     "rejects a webinar whose status is %s",
     (status) => {
       const webinar = scheduledWebinar({ status });
-      const store = storeWith(webinar);
 
       expect(
         resolveScheduledWebinarAttendeeEntry(
-          store,
-          webinar.linkSlug,
+          webinar,
           webinar.clientId,
           START_AT,
         ),
