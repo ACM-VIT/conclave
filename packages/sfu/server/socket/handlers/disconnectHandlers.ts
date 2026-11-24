@@ -1,6 +1,6 @@
 import { config } from "../../../config/config.js";
 import { Logger } from "../../../utilities/loggers.js";
-import { cleanupRoom, isCurrentRoom } from "../../rooms.js";
+import { cleanupRoom } from "../../rooms.js";
 import {
   handOffRoom,
   teardownClient,

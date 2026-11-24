@@ -174,7 +174,6 @@ export const handOffRoom = (
   peers: { emit: (event: string, payload: unknown) => unknown } = io.to(room.channelId),
 ): void => {
   const roomId = room.id;
-  const roomChannelId = room.channelId;
 
   if (!room.hasActiveAdmin()) {
     const promoted = room.promoteNextAdmin(excludedUserKeys);
