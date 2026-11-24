@@ -64,6 +64,10 @@ class MicrophoneReplacementRecoveryTests {
     }
 
     /** A connected socket whose acknowledgements never arrive. */
+    class FakeDevice : org.mediasoup.droid.Device() {
+        override fun dispose() {}
+    }
+
     class RecordingSendTransport : SendTransport(0L) {
         var events: MutableList<String>? = null
         @Volatile var closed = false
@@ -520,6 +524,56 @@ class MicrophoneReplacementRecoveryTests {
         newLane.retire {}
         reaper.disposeIfIdle()
         assertEquals(listOf<Any?>(oldTransport), disposed.toList())
+    }
+
+    @Test
+    fun aQuickRejoinLoadsItsDeviceOnlyAfterThePreviousCallsLaneClosedItsTransport() {
+        skip.foundation.ProcessInfo.launch(org.robolectric.RuntimeEnvironment.getApplication())
+        val call = liveCall()
+        val media = call.media
+        prepareForCleanup(call)
+        val events = CopyOnWriteArrayList<String>()
+        val oldTransport = unsafe.allocateInstance(RecordingSendTransport::class.java) as RecordingSendTransport
+        oldTransport.events = events
+        field("sendTransport").set(media, oldTransport)
+        field("retiredTransports").set(media, RetiredTransportReaper<Any>(
+            idleDelayMs = 45_000L,
+            isIdle = {
+                listOf("device", "sendTransport", "receiveTransport", "sendTransportLane").all { field(it).get(media) == null }
+            },
+            dispose = { events.add("old call disposed") },
+        ))
+        val (oldSocket, _) = silentSocketManager()
+        startSendSession(media, oldSocket)
+        val laneBusy = CountDownLatch(1)
+        val laneEntered = CountDownLatch(1)
+        call.lane.post {
+            laneEntered.countDown()
+            laneBusy.await(10, TimeUnit.SECONDS)
+        }
+        assertTrue(laneEntered.await(3, TimeUnit.SECONDS))
+        runBlocking { media.cleanup(notifyLocalState = false, preserveCallAudioRouting = true) }
+
+        field("mediasoupInitialized").setBoolean(media, true)
+        field("mediaStackLock").set(media, Any())
+        field("transportConnectScope").set(media, CoroutineScope(Dispatchers.Main.immediate + SupervisorJob()))
+        field("peerConnectionFactory").set(media, unsafe.allocateInstance(FakeAudioPeerConnectionFactory::class.java))
+        media.deviceLoader = { _ ->
+            events.add("next call device loaded")
+            unsafe.allocateInstance(FakeDevice::class.java) as org.mediasoup.droid.Device
+        }
+        val (nextSocket, _) = silentSocketManager()
+        SocketIOManager::class.java.getDeclaredField("routerRtpCapabilitiesJson").apply { isAccessible = true }
+            .set(nextSocket, "{\"codecs\":[],\"headerExtensions\":[]}")
+        media.configure(nextSocket, unsafe.allocateInstance(RtpCapabilities::class.java) as RtpCapabilities, null)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals("the next call loaded its device while the previous call's lane still ran", emptyList<String>(), events.toList())
+
+        laneBusy.countDown()
+        awaitLane(call.lane)
+        pumpMainLooperUntil { events.contains("next call device loaded") }
+        assertEquals(listOf("old transport closed", "old call disposed", "next call device loaded"), events.toList())
+        assertTrue(field("device").get(media) is FakeDevice)
     }
 
     @Test

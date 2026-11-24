@@ -643,6 +643,12 @@ Fixed 2026-10-22 and guarded by `testNativeCallCorrectnessBlockersStayFixed`:
   Destroying mediasoup's per-Device factory unregisters its voiceengine JNI
   natives class-wide, which would crash native work still running on any
   lane. Never dispose a transport or Device directly, and never on a lane.
+  Creating a factory is as dangerous as destroying one, and `Device.load`
+  builds and destroys a temporary factory to probe codecs. So `configure()`
+  loads the Device at once only while no retired entry is waiting on its
+  lane; otherwise it defers the load (`deviceLoadJob`) until every lane has
+  finished, disposes the retired objects, then loads. Send and receive
+  transport creation wait for that load first (`awaitDeviceLoad`).
 - Every input that changes publish settings goes through
   `publishSettingsChanged()` on Android (camera and share settings, video
   quality), which bumps `mediaPublishSettingsRevision`. A video produce in

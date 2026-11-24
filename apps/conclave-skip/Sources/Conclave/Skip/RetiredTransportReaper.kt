@@ -2,6 +2,7 @@ package conclave.module
 
 import android.os.Handler
 import android.os.Looper
+import kotlinx.coroutines.CompletableDeferred
 
 internal class RetiredTransportReaper<T : Any>(
     private val idleDelayMs: Long,
@@ -12,7 +13,18 @@ internal class RetiredTransportReaper<T : Any>(
     private class Entry<T>(val item: T, var ready: Boolean)
 
     private val retired: MutableList<Entry<T>> = mutableListOf()
+    private val laneWaiters: MutableList<CompletableDeferred<Unit>> = mutableListOf()
     private val idleCheck = Runnable { disposeIfIdle() }
+
+    val isWaitingOnLanes: Boolean get() = synchronized(retired) { retired.any { !it.ready } }
+
+    suspend fun awaitLanes() {
+        val waiter = synchronized(retired) {
+            if (retired.none { !it.ready }) return
+            CompletableDeferred<Unit>().also { laneWaiters.add(it) }
+        }
+        waiter.await()
+    }
 
     fun retire(item: T) {
         synchronized(retired) { retired.add(Entry(item, ready = true)) }
@@ -36,7 +48,11 @@ internal class RetiredTransportReaper<T : Any>(
             } catch (_: Throwable) {
             }
             handler.post {
-                synchronized(retired) { entry.ready = true }
+                val released = synchronized(retired) {
+                    entry.ready = true
+                    if (retired.any { !it.ready }) emptyList() else laneWaiters.toList().also { laneWaiters.clear() }
+                }
+                for (waiter in released) waiter.complete(Unit)
                 restartIdleCheck()
             }
         }

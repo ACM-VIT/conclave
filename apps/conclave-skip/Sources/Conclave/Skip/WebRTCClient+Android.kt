@@ -200,6 +200,8 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
     private var localVideoTrackWrapper: VideoTrackWrapper? = null
 
     private var device: Device? = null
+    internal var deviceLoader: (String) -> Device = { capabilities -> Device().also { it.load(capabilities, null) } }
+    private var deviceLoadJob: Job? = null
     private var configurationGeneration: Long = 0
 
     internal val isConfigured: Boolean get() = device != null
@@ -1909,6 +1911,8 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         NativePerformanceDiagnostics.timingAlways("webrtc_configure_media_stack", startedAt)
 
         this.device = null
+        deviceLoadJob?.cancel()
+        deviceLoadJob = null
 
         val capabilities = socketManager.routerRtpCapabilitiesJson
         if (capabilities.isNullOrBlank()) {
@@ -1916,16 +1920,36 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             return
         }
 
-        val device = Device()
+        val preferred = RouterCodecSendOrder.preferringVp8(capabilities)
+        if (!retiredTransports.isWaitingOnLanes) {
+            loadDevice(preferred)
+            return
+        }
+        val generation = configurationGeneration
+        deviceLoadJob = transportConnectScope.launch {
+            retiredTransports.awaitLanes()
+            if (generation != configurationGeneration) return@launch
+            disposeRetiredTransportsIfIdle()
+            loadDevice(preferred)
+        }
+    }
+
+    private fun loadDevice(capabilities: String) {
         try {
             val loadStartedAt = System.nanoTime()
-            device.load(RouterCodecSendOrder.preferringVp8(capabilities), null)
-            this.device = device
+            device = deviceLoader(capabilities)
             NativePerformanceDiagnostics.timingAlways("webrtc_device_load", loadStartedAt)
         } catch (error: Throwable) {
             debugLog("[WebRTC] Failed to load device capabilities: ${error}")
-            this.device = null
+            device = null
         }
+    }
+
+    private suspend fun awaitDeviceLoad() {
+        val load = deviceLoadJob ?: return
+        val generation = configurationGeneration
+        load.join()
+        ensureCurrentConfiguration(generation)
     }
 
     internal suspend fun createTransports() {
@@ -1946,6 +1970,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         }
 
         val startedAt = System.nanoTime()
+        awaitDeviceLoad()
         val socket = socketManager ?: throw ErrorException("Socket not configured")
         val device = device ?: throw ErrorException("Device not configured")
         val generation = configurationGeneration
@@ -2008,6 +2033,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         }
 
         val startedAt = System.nanoTime()
+        awaitDeviceLoad()
         val socket = socketManager ?: throw ErrorException("Socket not configured")
         val device = device ?: throw ErrorException("Device not configured")
         val generation = configurationGeneration
@@ -4997,6 +5023,8 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         preserveCallAudioRouting: Boolean = false,
     ) {
         configurationGeneration += 1
+        deviceLoadJob?.cancel()
+        deviceLoadJob = null
         endSendSession()
         plannedConsumerResetCandidates.clear()
         val consumerResetJob = plannedConsumerResetCoordinatorJob
