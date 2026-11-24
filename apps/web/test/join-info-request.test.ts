@@ -61,6 +61,7 @@ it("returns a complete answer", async () => {
   await expect(requestJoinInfo(url, { method: "POST" })).resolves.toEqual({
     token: "t",
     sfuUrl: "https://sfu.example",
+    relayIssuedAt: expect.any(Number),
   });
 });
 

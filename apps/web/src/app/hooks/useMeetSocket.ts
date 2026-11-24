@@ -195,6 +195,7 @@ import {
   offeredTurnServers,
   planRelayRefresh,
   reconcileRelayPaths,
+  stampJoinAnswer,
   takeRelayRefreshTry,
   type RelayRefreshChain,
   relayCarryingUrl,
@@ -299,6 +300,7 @@ type JoinInfo = {
   iceServers?: RTCIceServer[];
   iceServersTtlSeconds?: number;
   relayExpiresAt?: number;
+  relayIssuedAt?: number;
 };
 
 const MAX_JOIN_ROOM_REDIRECTS = 1;
@@ -7569,14 +7571,11 @@ export function useMeetSocket({
   );
 
   const applyJoinAnswerIceServers = useCallback(
-    (
-      iceServers: RTCIceServer[] | undefined,
-      relayExpiresAt: number | null,
-    ) => {
-      if (!Array.isArray(iceServers)) return;
+    (answer: JoinInfo) => {
+      if (!Array.isArray(answer.iceServers)) return;
       runtimeIceServersRef.current = applyJoinAnswerToIceServers(
         runtimeIceServersRef.current,
-        { iceServers, relayExpiresAt },
+        answer,
         Date.now(),
       );
       reconcileRelayPathsNow();
@@ -7605,13 +7604,13 @@ export function useMeetSocket({
         ) {
           return;
         }
-        const held = holdJoinInfo(joinInfo, {
+        const answer = stampJoinAnswer(joinInfo, Date.now());
+        heldJoinInfoRef.current = holdJoinInfo(answer, {
           roomId,
           grant: { joinMode, userId: user?.id ?? "", isHost: isAdmin },
           receivedAt: Date.now(),
         });
-        heldJoinInfoRef.current = held;
-        applyJoinAnswerIceServers(joinInfo.iceServers, held.relayExpiresAt);
+        applyJoinAnswerIceServers(answer);
       } catch (error) {
         console.warn(
           "[Meets] Could not refresh ICE servers; keeping the current ones:",
@@ -7721,11 +7720,15 @@ export function useMeetSocket({
                     return joinInfoPlan.fallback;
                   });
 
-            const [joinInfo, { io }] = await Promise.all([
+            const [answeredJoinInfo, { io }] = await Promise.all([
               tokenPromise,
               socketIoPromise,
             ]);
-            const { token, sfuUrl, iceServers } = joinInfo;
+            const joinInfo =
+              lastJoinInfoSourceRef.current === "fresh"
+                ? stampJoinAnswer(answeredJoinInfo, Date.now())
+                : answeredJoinInfo;
+            const { token, sfuUrl } = joinInfo;
             // An answer that arrives after a leave or a newer join belongs to
             // a connection nobody wants now, so it must not touch any state.
             if (
@@ -7745,13 +7748,7 @@ export function useMeetSocket({
             }
             const socketUrl = sfuUrlOverride ?? sfuUrl;
 
-            const answerHold = heldJoinInfoRef.current;
-            applyJoinAnswerIceServers(
-              iceServers,
-              answerHold?.joinInfo === joinInfo
-                ? answerHold.relayExpiresAt
-                : null,
-            );
+            applyJoinAnswerIceServers(joinInfo);
 
             const socket = io(socketUrl, {
               transports: ["websocket", "polling"],

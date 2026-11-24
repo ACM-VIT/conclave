@@ -11,6 +11,7 @@ export type JoinInfoAnswer = {
    * this is never late, and it needs no agreement between the two clocks.
    */
   relayExpiresAt?: number;
+  relayIssuedAt?: number;
 };
 
 export const JOIN_INFO_REQUEST_TIMEOUT_MS = 15000;
@@ -28,9 +29,13 @@ const readJoinInfo = async (
   }
   const answer = (await response.json()) as JoinInfoAnswer;
   const ttlSeconds = answer.iceServersTtlSeconds;
-  return typeof ttlSeconds === "number" && Number.isFinite(ttlSeconds)
-    ? { ...answer, relayExpiresAt: sentAt + ttlSeconds * 1000 }
-    : answer;
+  return {
+    ...answer,
+    relayIssuedAt: sentAt,
+    ...(typeof ttlSeconds === "number" && Number.isFinite(ttlSeconds)
+      ? { relayExpiresAt: sentAt + ttlSeconds * 1000 }
+      : {}),
+  };
 };
 
 /**

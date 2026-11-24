@@ -48,6 +48,43 @@ export type RelaySet = {
   servers: RTCIceServer[];
   /** Null when the answer gave no lifetime. */
   expiresAt: number | null;
+  issuedAt: number;
+};
+
+type StampableAnswer = {
+  iceServers?: RTCIceServer[];
+  iceServersTtlSeconds?: number;
+  relayExpiresAt?: number;
+  relayIssuedAt?: number;
+};
+
+const finiteOrNull = (value: unknown): number | null =>
+  typeof value === "number" && Number.isFinite(value) ? value : null;
+
+export const stampJoinAnswer = <T extends StampableAnswer>(
+  answer: T,
+  receivedAt: number,
+): T => {
+  const ttlSeconds = finiteOrNull(answer.iceServersTtlSeconds);
+  const expiresAt = finiteOrNull(answer.relayExpiresAt);
+  return {
+    ...answer,
+    relayIssuedAt: finiteOrNull(answer.relayIssuedAt) ?? receivedAt,
+    ...(expiresAt === null && ttlSeconds !== null
+      ? { relayExpiresAt: receivedAt + ttlSeconds * 1000 }
+      : {}),
+  };
+};
+
+export const readAnswerRelay = (answer: StampableAnswer): RelaySet | null => {
+  const { turnIceServers } = splitIceServersByType(answer.iceServers);
+  return turnIceServers.length > 0
+    ? {
+        servers: turnIceServers,
+        expiresAt: finiteOrNull(answer.relayExpiresAt),
+        issuedAt: finiteOrNull(answer.relayIssuedAt) ?? 0,
+      }
+    : null;
 };
 
 /** The ICE servers new transports are offered, from the join answers so far. */
@@ -221,19 +258,18 @@ export const getUsableTurnIceServers = (
  */
 export const applyJoinAnswerToIceServers = (
   current: RuntimeIceServers,
-  answer: { iceServers: RTCIceServer[]; relayExpiresAt: number | null },
+  answer: StampableAnswer,
   now: number,
 ): RuntimeIceServers => {
-  const { stunIceServers, turnIceServers } = splitIceServersByType(
-    answer.iceServers,
-  );
-  const answerRelay =
-    turnIceServers.length > 0 && isRelayUsable(answer.relayExpiresAt, now)
-      ? { servers: turnIceServers, expiresAt: answer.relayExpiresAt }
-      : null;
+  const { stunIceServers } = splitIceServersByType(answer.iceServers);
+  const latest = usableRelay(current.latestRelay, now);
+  const incoming = usableRelay(readAnswerRelay(answer), now);
   return {
     stun: stunIceServers.length > 0 ? stunIceServers : null,
-    latestRelay: answerRelay ?? usableRelay(current.latestRelay, now),
+    latestRelay:
+      incoming && (!latest || incoming.issuedAt > latest.issuedAt)
+        ? incoming
+        : latest,
     provenRelay: usableRelay(current.provenRelay, now),
   };
 };
@@ -242,10 +278,14 @@ export const noteRelayCarryingMedia = (
   current: RuntimeIceServers,
   carrier: RelaySet,
   now: number,
-): RuntimeIceServers =>
-  carrier === current.provenRelay || !isRelayUsable(carrier.expiresAt, now)
+): RuntimeIceServers => {
+  const proven = usableRelay(current.provenRelay, now);
+  return carrier === current.provenRelay ||
+    !isRelayUsable(carrier.expiresAt, now) ||
+    (proven !== null && proven.issuedAt > carrier.issuedAt)
     ? current
     : { ...current, provenRelay: carrier };
+};
 
 type StatsEntry = {
   type?: string;

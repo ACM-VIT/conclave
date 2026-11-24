@@ -10,6 +10,8 @@ import {
   takeRelayRefreshTry,
   transportsToMoveOntoRelay,
   type RelayRefreshChain,
+  readAnswerRelay,
+  stampJoinAnswer,
   offerRelays,
   relayCarryingUrl,
   readRelayPairBytes,
@@ -25,15 +27,15 @@ const turnB = { urls: "turns:turn.example:5349", username: "b", credential: "b" 
 
 const holding = (expiresAt: number | null): RuntimeIceServers => ({
   stun: [stun],
-  latestRelay: { servers: [turnA], expiresAt },
+  latestRelay: { servers: [turnA], expiresAt, issuedAt: NOW - 60_000 },
   provenRelay: null,
 });
 
 const offered = (
   current: RuntimeIceServers,
-  answer: { iceServers: RTCIceServer[]; relayExpiresAt: number | null },
+  answer: { iceServers: RTCIceServer[]; relayExpiresAt?: number; relayIssuedAt?: number },
 ) => {
-  const next = applyJoinAnswerToIceServers(current, answer, NOW);
+  const next = applyJoinAnswerToIceServers(current, { relayIssuedAt: NOW, ...answer }, NOW);
   return { stun: next.stun, turn: getUsableTurnIceServers(next, NOW) };
 };
 
@@ -49,19 +51,19 @@ describe("ICE servers after a join answer", () => {
 
   it("keeps unexpired TURN credentials when an answer brings no relay", () => {
     expect(
-      offered(holding(NOW + HOUR_MS), { iceServers: [stun], relayExpiresAt: null }),
+      offered(holding(NOW + HOUR_MS), { iceServers: [stun] }),
     ).toEqual({ stun: [stun], turn: [turnA] });
   });
 
   it("keeps TURN credentials with no known lifetime when an answer brings no relay", () => {
     expect(
-      offered(holding(null), { iceServers: [stun], relayExpiresAt: null }).turn,
+      offered(holding(null), { iceServers: [stun] }).turn,
     ).toEqual([turnA]);
   });
 
   it("drops expired TURN credentials when an answer brings no relay", () => {
     expect(
-      offered(holding(NOW + 2_000), { iceServers: [stun], relayExpiresAt: null }),
+      offered(holding(NOW + 2_000), { iceServers: [stun] }),
     ).toEqual({ stun: [stun], turn: null });
   });
 
@@ -76,7 +78,7 @@ describe("ICE servers after a join answer", () => {
 
   it("keeps held TURN credentials with under a minute left over an answer without a relay", () => {
     expect(
-      offered(holding(NOW + 45_000), { iceServers: [stun], relayExpiresAt: null }).turn,
+      offered(holding(NOW + 45_000), { iceServers: [stun] }).turn,
     ).toEqual([turnA]);
   });
 
@@ -106,12 +108,12 @@ describe("a relay that is carrying media", () => {
   const relayB = { urls: urlB, username: "b", credential: "b" };
   const provenA: RuntimeIceServers = {
     stun: [stun],
-    latestRelay: { servers: [relayA], expiresAt: NOW + HOUR_MS },
-    provenRelay: { servers: [relayA], expiresAt: NOW + HOUR_MS },
+    latestRelay: { servers: [relayA], expiresAt: NOW + HOUR_MS, issuedAt: NOW - 60_000 },
+    provenRelay: { servers: [relayA], expiresAt: NOW + HOUR_MS, issuedAt: NOW - 60_000 },
   };
   const rotatedToB = applyJoinAnswerToIceServers(
     provenA,
-    { iceServers: [stun, relayB], relayExpiresAt: NOW + HOUR_MS },
+    { iceServers: [stun, relayB], relayExpiresAt: NOW + HOUR_MS, relayIssuedAt: NOW },
     NOW,
   );
   const carriedOver = (servers: RuntimeIceServers, url: string, at = NOW) => {
@@ -133,8 +135,8 @@ describe("a relay that is carrying media", () => {
 
   it("is no longer offered once it expires", () => {
     const next = applyJoinAnswerToIceServers(
-      { ...provenA, provenRelay: { servers: [relayA], expiresAt: NOW + 2_000 } },
-      { iceServers: [stun, relayB], relayExpiresAt: NOW + HOUR_MS },
+      { ...provenA, provenRelay: { servers: [relayA], expiresAt: NOW + 2_000, issuedAt: NOW - 60_000 } },
+      { iceServers: [stun, relayB], relayExpiresAt: NOW + HOUR_MS, relayIssuedAt: NOW },
       NOW,
     );
 
@@ -148,8 +150,8 @@ describe("refreshed credentials for the same relay URL", () => {
   const fresher = { urls: url, username: "1700003600:guest", credential: "new" };
   const refreshed: RuntimeIceServers = {
     stun: [stun],
-    latestRelay: { servers: [fresher], expiresAt: NOW + HOUR_MS },
-    provenRelay: { servers: [older], expiresAt: NOW + 30_000 },
+    latestRelay: { servers: [fresher], expiresAt: NOW + HOUR_MS, issuedAt: NOW - 1_000 },
+    provenRelay: { servers: [older], expiresAt: NOW + 30_000, issuedAt: NOW - HOUR_MS },
   };
 
   it("offers one set of credentials per URL, the newest", () => {
@@ -173,7 +175,7 @@ describe("refreshed credentials for the same relay URL", () => {
       getUsableTurnIceServers(
         applyJoinAnswerToIceServers(
           proven,
-          { iceServers: [stun, relayB], relayExpiresAt: later + HOUR_MS },
+          { iceServers: [stun, relayB], relayExpiresAt: later + HOUR_MS, relayIssuedAt: later },
           later,
         ),
         later,
@@ -182,7 +184,7 @@ describe("refreshed credentials for the same relay URL", () => {
   });
 
   it("never credits credentials that have expired", () => {
-    const expired = { servers: [older], expiresAt: NOW - 1_000 };
+    const expired = { servers: [older], expiresAt: NOW - 1_000, issuedAt: NOW - 2 * HOUR_MS };
 
     expect(noteRelayCarryingMedia(refreshed, expired, NOW)).toBe(refreshed);
   });
@@ -269,10 +271,10 @@ describe("knowing that a relay works", () => {
     const rotated = applyJoinAnswerToIceServers(
       {
         stun: [stun],
-        latestRelay: { servers: [relayAServer], expiresAt: NOW + HOUR_MS },
-        provenRelay: { servers: [relayAServer], expiresAt: NOW + HOUR_MS },
+        latestRelay: { servers: [relayAServer], expiresAt: NOW + HOUR_MS, issuedAt: NOW - 60_000 },
+        provenRelay: { servers: [relayAServer], expiresAt: NOW + HOUR_MS, issuedAt: NOW - 60_000 },
       },
-      { iceServers: [stun, relayBServer], relayExpiresAt: NOW + HOUR_MS },
+      { iceServers: [stun, relayBServer], relayExpiresAt: NOW + HOUR_MS, relayIssuedAt: NOW },
       NOW,
     );
     const proven = relayProvenByMedia({
@@ -289,8 +291,8 @@ describe("knowing that a relay works", () => {
 describe("the ICE policy a transport is built with", () => {
   const afterTurnOnlyRecovery = (expiresAt: number): RuntimeIceServers => ({
     stun: [stun],
-    latestRelay: { servers: [turnA], expiresAt },
-    provenRelay: { servers: [turnA], expiresAt },
+    latestRelay: { servers: [turnA], expiresAt, issuedAt: NOW - 60_000 },
+    provenRelay: { servers: [turnA], expiresAt, issuedAt: NOW - 60_000 },
   });
 
   it("asks for relay only while a usable relay is offered", () => {
@@ -393,5 +395,44 @@ describe("moving a transport onto the relay once one is usable", () => {
         transports: [{ direction: "consumer", offeredRelay: true, carryingMedia: false }],
       }),
     ).toEqual([]);
+  });
+});
+
+
+describe("one versioned set of TURN credentials", () => {
+  const answer = (relayIssuedAt: number, relayExpiresAt: number) => ({
+    iceServers: [stun, turnB],
+    relayIssuedAt,
+    relayExpiresAt,
+  });
+
+  it("never lets an older answer replace newer credentials", () => {
+    const fresh = applyJoinAnswerToIceServers(NO_RUNTIME_ICE_SERVERS, answer(NOW, NOW + HOUR_MS), NOW);
+    const older = { iceServers: [stun, turnA], relayIssuedAt: NOW - 60_000, relayExpiresAt: NOW + HOUR_MS };
+
+    expect(applyJoinAnswerToIceServers(fresh, older, NOW).latestRelay).toBe(fresh.latestRelay);
+  });
+
+  it("keeps the expiry an answer was issued with when it is applied again later", () => {
+    const stamped = stampJoinAnswer({ iceServers: [stun, turnB], iceServersTtlSeconds: 30 }, NOW);
+    const later = NOW + 60_000;
+
+    expect(readAnswerRelay(stamped)).toEqual({ servers: [turnB], expiresAt: NOW + 30_000, issuedAt: NOW });
+    expect(getUsableTurnIceServers(applyJoinAnswerToIceServers(NO_RUNTIME_ICE_SERVERS, stamped, later), later)).toBeNull();
+  });
+
+  it("stamps an answer once and keeps the stamps it already has", () => {
+    const stamped = stampJoinAnswer({ iceServers: [stun, turnB], relayIssuedAt: NOW - 5_000, relayExpiresAt: NOW + 1_000 }, NOW);
+
+    expect(stamped).toMatchObject({ relayIssuedAt: NOW - 5_000, relayExpiresAt: NOW + 1_000 });
+    expect(stampJoinAnswer({ iceServers: [stun] }, NOW)).toEqual({ iceServers: [stun], relayIssuedAt: NOW });
+  });
+
+  it("never lets older proven credentials replace newer proven ones", () => {
+    const newer = { servers: [turnB], expiresAt: NOW + HOUR_MS, issuedAt: NOW };
+    const older = { servers: [turnA], expiresAt: NOW + HOUR_MS, issuedAt: NOW - 60_000 };
+    const servers: RuntimeIceServers = { stun: [stun], latestRelay: newer, provenRelay: newer };
+
+    expect(noteRelayCarryingMedia(servers, older, NOW)).toBe(servers);
   });
 });
