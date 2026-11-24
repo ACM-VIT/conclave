@@ -36,6 +36,15 @@ export function pinnedDocker(daemon, env = process.env) {
   return (args, options) => runDocker(["--host", daemon.host, ...args], rest, options);
 }
 
+const VM_DAEMON_SOCKET = "/var/run/docker.sock";
+
+export function browserSocketSource(docker, { socket, env = process.env, platform = process.platform }) {
+  if (env.BROWSER_DOCKER_SOCKET) return env.BROWSER_DOCKER_SOCKET;
+  const info = JSON.parse(docker(["info", "--format", "{{json .}}"]).stdout);
+  const inVm = platform !== "linux" || /docker desktop|orbstack/i.test(info.OperatingSystem ?? "") || /^(colima|lima)/i.test(info.Name ?? "");
+  return inVm ? VM_DAEMON_SOCKET : socket;
+}
+
 function freePort() {
   return new Promise((resolve, reject) => {
     const server = createServer();
@@ -151,10 +160,11 @@ async function main() {
   const run = `${head}-${process.pid}`;
   const logDir = mkdtempSync(path.join(tmpdir(), "conclave-check-images-"));
   console.log(`building root-context images at ${head} on ${daemon.host}${noCache ? " without cache" : ""}; nothing is pushed`);
+  const socket = browserSocketSource(docker, { socket: daemon.socket });
   const builds = [...new Map(rootContextBuilds(repoRoot).map((build) => [build.dockerfile, build])).values()];
   const results = [];
   for (const build of builds) {
-    const result = await checkImage(build, { docker, resources, socket: process.env.BROWSER_DOCKER_SOCKET || daemon.socket, noCache, logDir, run });
+    const result = await checkImage(build, { docker, resources, socket, noCache, logDir, run });
     console.log(`${result.ok ? "ok" : "FAIL"} ${result.dockerfile}: ${result.detail}`);
     results.push(result);
   }

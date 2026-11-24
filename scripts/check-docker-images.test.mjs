@@ -7,7 +7,7 @@ import test from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { repoRoot } from "./check-docker-context.mjs";
-import { localSocket, pinnedDocker, resolveDockerEndpoint } from "./check-docker-images.mjs";
+import { browserSocketSource, localSocket, pinnedDocker, resolveDockerEndpoint } from "./check-docker-images.mjs";
 
 const FAKE_DOCKER = `#!/usr/bin/env node
 const fs = require("node:fs");
@@ -20,6 +20,7 @@ else if (args[0] === "context" && args[1] === "inspect") {
   process.stdout.write(contexts[args[2]] + "\\n");
 } else if (args[0] === "run") process.stdout.write("fake-container-id\\n");
 else if (args[0] === "inspect") process.stdout.write("true\\n");
+else if (args[0] === "info") process.stdout.write((process.env.FAKE_DOCKER_INFO ?? JSON.stringify({ OperatingSystem: "OrbStack", Name: "orbstack" })) + "\\n");
 `;
 
 function fakeDocker(t, { contexts = {}, current = "default", ...extra } = {}) {
@@ -58,7 +59,7 @@ test("DOCKER_CONTEXT, then the current context, decide the endpoint when DOCKER_
   ]);
 });
 
-test("only a local unix socket is accepted, and its path is the one mounted", () => {
+test("only a local unix socket is accepted", () => {
   assert.deepEqual(localSocket("unix:///run/user/1000/docker.sock"), { host: "unix:///run/user/1000/docker.sock", socket: "/run/user/1000/docker.sock" });
   for (const endpoint of ["tcp://203.0.113.1:2376", "ssh://deploy@example.com", "npipe:////./pipe/docker_engine", "unix://docker.sock", ""]) {
     assert.throws(() => localSocket(endpoint), /is not a local unix socket/, endpoint);
@@ -103,4 +104,30 @@ test("SIGINT during the readiness wait removes the container and image tag this 
   assert.ok(calls.some((args) => args.slice(2).join(" ") === "rm -f fake-container-id"), JSON.stringify(calls));
   assert.ok(calls.some((args) => args.slice(2).join(" ") === `rmi ${tag}`), JSON.stringify(calls));
   assert.ok(calls.every((args) => args[0] === "context" || args[1] === "unix:///run/fake-docker.sock"));
+});
+
+test("the shared browser mounts the daemon-side socket: the VM path for VM daemons, the resolved path for a native Linux engine", (t) => {
+  const socket = "/run/user/1000/docker.sock";
+  const cases = [
+    ["OrbStack on macOS", "darwin", { OperatingSystem: "OrbStack", Name: "orbstack" }, "/var/run/docker.sock"],
+    ["Docker Desktop on macOS", "darwin", { OperatingSystem: "Docker Desktop", Name: "docker-desktop" }, "/var/run/docker.sock"],
+    ["Docker Desktop on Linux", "linux", { OperatingSystem: "Docker Desktop", Name: "docker-desktop" }, "/var/run/docker.sock"],
+    ["Colima on macOS", "darwin", { OperatingSystem: "Ubuntu 24.04.1 LTS", Name: "colima" }, "/var/run/docker.sock"],
+    ["Colima on Linux", "linux", { OperatingSystem: "Ubuntu 24.04.1 LTS", Name: "colima" }, "/var/run/docker.sock"],
+    ["rootless engine on Linux", "linux", { OperatingSystem: "Ubuntu 24.04.1 LTS", Name: "build-box" }, socket],
+    ["system engine on Linux", "linux", { OperatingSystem: "Debian GNU/Linux 13 (trixie)", Name: "build-box" }, socket],
+  ];
+  for (const [name, platform, info, expected] of cases) {
+    const fake = fakeDocker(t, { FAKE_DOCKER_INFO: JSON.stringify(info) });
+    const docker = pinnedDocker({ host: `unix://${socket}` }, fake.env);
+    assert.equal(browserSocketSource(docker, { socket, env: fake.env, platform }), expected, name);
+    assert.deepEqual(fake.calls().map((call) => call.args.slice(2)), [["info", "--format", "{{json .}}"]], name);
+  }
+});
+
+test("BROWSER_DOCKER_SOCKET overrides the mount source without asking docker", (t) => {
+  const fake = fakeDocker(t);
+  const docker = pinnedDocker({ host: "unix:///var/run/docker.sock" }, fake.env);
+  assert.equal(browserSocketSource(docker, { socket: "/var/run/docker.sock", env: { ...fake.env, BROWSER_DOCKER_SOCKET: "/srv/docker.sock" }, platform: "linux" }), "/srv/docker.sock");
+  assert.deepEqual(fake.calls(), []);
 });
