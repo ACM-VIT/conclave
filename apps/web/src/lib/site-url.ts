@@ -1,4 +1,4 @@
-import { canonicalHost } from "./comparable-host";
+import { webOrigin } from "./meeting-origin";
 
 const DEFAULT_PRODUCTION_SITE_URL = "https://conclave.acmvit.in";
 const DEFAULT_DEVELOPMENT_SITE_URL = "http://localhost:3000";
@@ -28,24 +28,15 @@ export const normalizeOrigin = (value: string | undefined): string | null => {
   }
 };
 
-const WEB_URL = /^https?:\/\//i;
+const WEB_URL = /^https?:/i;
 const SCHEMELESS_AUTHORITY = /^(?:\[[0-9a-f:.]+\]|[^\s@:[\]]+)(?::\d+)?$/i;
 
-const parseSiteSetting = (
-  value: string | undefined,
-): { origin: string; host: string } | null => {
+const siteSettingOrigin = (value: string | undefined): string | null => {
   const setting = value?.trim();
   if (!setting) return null;
-  const explicit = WEB_URL.test(setting);
-  if (!explicit && !SCHEMELESS_AUTHORITY.test(setting.split(/[/?#\\]/)[0])) return null;
-  let url: URL;
-  try {
-    url = new URL(explicit ? setting : `https://${setting}`);
-  } catch {
-    return null;
-  }
-  const host = url.hostname ? canonicalHost(url.host) : null;
-  return host ? { origin: url.origin, host } : null;
+  if (WEB_URL.test(setting)) return webOrigin(setting);
+  if (!SCHEMELESS_AUTHORITY.test(setting.split(/[/?#\\]/)[0])) return null;
+  return webOrigin(`https://${setting}`);
 };
 
 export const getPublicSiteUrl = (): string => {
@@ -56,8 +47,8 @@ export const getPublicSiteUrl = (): string => {
     process.env.BETTER_AUTH_BASE_URL,
     process.env.VERCEL_URL,
   ]) {
-    const setting = parseSiteSetting(value);
-    if (setting) return setting.origin;
+    const origin = siteSettingOrigin(value);
+    if (origin) return origin;
   }
   return defaultSiteUrl;
 };
@@ -73,22 +64,19 @@ export const getAuthBaseUrl = (): string =>
     ),
   ) ?? defaultSiteUrl;
 
-export const getMeetingLinkHosts = (): string[] => {
-  const hosts = new Set<string>();
-  for (const url of [
+export const getMeetingLinkOrigins = (): string[] => {
+  const origins = new Set<string>();
+  for (const value of [
     DEFAULT_PRODUCTION_SITE_URL,
     process.env.NEXT_PUBLIC_SITE_URL,
     process.env.NEXT_PUBLIC_APP_URL,
   ]) {
-    const setting = parseSiteSetting(url);
-    if (setting) hosts.add(setting.host);
+    const origin = siteSettingOrigin(value);
+    if (origin) origins.add(origin);
   }
-  if (
-    typeof window !== "undefined" &&
-    /^https?:$/.test(window.location.protocol) &&
-    window.location.host
-  ) {
-    hosts.add(window.location.host);
+  if (typeof window !== "undefined") {
+    const current = webOrigin(`${window.location.protocol}//${window.location.host}/`);
+    if (current) origins.add(current);
   }
-  return [...hosts];
+  return [...origins];
 };

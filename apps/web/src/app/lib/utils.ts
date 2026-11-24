@@ -1,6 +1,6 @@
 import { EMOJI_REACTIONS, type ReactionEmoji } from "./constants";
 import { isMediaCaptureTimeoutError } from "./media-capture-timeout";
-import { canonicalHost, canonicalTypedHost } from "../../lib/comparable-host";
+import { linkOriginIsKnown } from "../../lib/meeting-origin";
 import type {
   MeetError,
   MeetMediaDevice,
@@ -180,17 +180,32 @@ const linkRoomCode = (segment: string) => {
 
 export function parseCodeFieldPaste(
   text: string,
-  conclaveHosts: readonly string[],
+  conclaveOrigins: readonly string[],
 ): CodeFieldPaste | null {
   const trimmed = text.trim();
   if (ROOM_CODE_TEXT.test(trimmed)) return { kind: "insert", text: trimmed.toLowerCase() };
   const { scheme, authority, segment } = MEETING_LINK.exec(trimmed)?.groups ?? {};
   if (!authority || !segment) return null;
-  const linkHost = scheme ? canonicalHost(authority) : canonicalTypedHost(authority);
-  if (!linkHost || !conclaveHosts.some((host) => canonicalHost(host) === linkHost)) return null;
+  if (!linkOriginIsKnown(scheme, authority, conclaveOrigins)) return null;
   const code = linkRoomCode(segment);
   return code ? { kind: "replace", code } : null;
 }
+
+const NOT_CODE_OR_LINK_TEXT = /[^a-z0-9\-:/.?#@%=&+~\\]+/g;
+
+export function normalizeCodeField(value: string, conclaveOrigins: readonly string[]): string {
+  const cleaned = value
+    .toLowerCase()
+    .replace(NOT_CODE_OR_LINK_TEXT, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+/, "")
+    .slice(0, ROOM_CODE_MAX_LENGTH);
+  const link = parseCodeFieldPaste(cleaned, conclaveOrigins);
+  return link?.kind === "replace" ? link.code : cleaned;
+}
+
+export const roomCodeFromField = (value: string) =>
+  /^[a-z0-9-]+$/.test(value) ? sanitizeRoomCode(value) : "";
 
 export type FieldEdit = { start: number; end: number; text: string };
 
@@ -217,21 +232,87 @@ export function planFieldEdit(
   return { start: head, end: value.length - tail, text: next.slice(head, next.length - tail) };
 }
 
+const INSERT_INPUT = new Set([
+  "insertText",
+  "insertReplacementText",
+  "insertFromPaste",
+  "insertFromPasteAsQuotation",
+  "insertFromDrop",
+  "insertFromYank",
+]);
+const DELETE_INPUT = new Set([
+  "deleteContent",
+  "deleteContentBackward",
+  "deleteContentForward",
+  "deleteWordBackward",
+  "deleteWordForward",
+  "deleteSoftLineBackward",
+  "deleteSoftLineForward",
+  "deleteHardLineBackward",
+  "deleteHardLineForward",
+  "deleteEntireSoftLine",
+  "deleteByCut",
+  "deleteByDrag",
+]);
+export const PASTED_INPUT = new Set([
+  "insertFromPaste",
+  "insertFromPasteAsQuotation",
+  "insertFromDrop",
+  "insertFromYank",
+]);
+const WORD_CHAR = /[\p{L}\p{N}]/u;
+
+const wordStartBefore = (value: string, at: number) => {
+  let index = at;
+  while (index > 0 && !WORD_CHAR.test(value[index - 1])) index -= 1;
+  while (index > 0 && WORD_CHAR.test(value[index - 1])) index -= 1;
+  return index;
+};
+
+const wordEndAfter = (value: string, at: number) => {
+  let index = at;
+  while (index < value.length && !WORD_CHAR.test(value[index])) index += 1;
+  while (index < value.length && WORD_CHAR.test(value[index])) index += 1;
+  return index;
+};
+
 export function inputEditRange(
   inputType: string,
   start: number,
   end: number,
-  length: number,
+  value: string,
 ): readonly [number, number] | null {
-  if (inputType === "insertText") return [start, end];
-  if (!inputType.startsWith("deleteContent")) return null;
+  if (INSERT_INPUT.has(inputType)) return [start, end];
+  if (!DELETE_INPUT.has(inputType)) return null;
   if (start !== end) return [start, end];
-  if (inputType === "deleteContentBackward") return [Math.max(0, start - 1), start];
-  if (inputType === "deleteContentForward") return [start, Math.min(length, start + 1)];
-  return null;
+  switch (inputType) {
+    case "deleteContentBackward":
+      return [Math.max(0, start - 1), start];
+    case "deleteContentForward":
+      return [start, Math.min(value.length, start + 1)];
+    case "deleteWordBackward":
+      return [wordStartBefore(value, start), start];
+    case "deleteWordForward":
+      return [start, wordEndAfter(value, start)];
+    case "deleteSoftLineBackward":
+    case "deleteHardLineBackward":
+      return [0, start];
+    case "deleteSoftLineForward":
+    case "deleteHardLineForward":
+      return [start, value.length];
+    case "deleteEntireSoftLine":
+      return [0, value.length];
+    default:
+      return [start, end];
+  }
 }
 
-export type FieldState = { value: string; selection: readonly [number, number] };
+export type SelectionDirection = "forward" | "backward" | "none";
+export type FieldState = {
+  value: string;
+  selection: readonly [number, number];
+  direction?: SelectionDirection;
+};
 type FieldStep = { before: FieldState; after: FieldState };
 
 const sameFieldState = (a: FieldState, b: FieldState) =>
@@ -303,6 +384,7 @@ const fieldStateOf = (input: HTMLInputElement): FieldState => ({
     input.selectionStart ?? input.value.length,
     input.selectionEnd ?? input.selectionStart ?? input.value.length,
   ],
+  direction: input.selectionDirection ?? "none",
 });
 
 const fieldTrackerFor = (input: HTMLInputElement) => {
@@ -341,9 +423,11 @@ export function applyFieldEdit(input: HTMLInputElement, edit: FieldEdit) {
   const before = fieldStateOf(input);
   writeField(input, tracker, () => {
     input.setSelectionRange(edit.start, edit.end);
-    const applied = edit.text
-      ? document.execCommand("insertText", false, edit.text)
-      : document.execCommand("delete");
+    const applied =
+      typeof document.execCommand === "function" &&
+      (edit.text
+        ? document.execCommand("insertText", false, edit.text)
+        : document.execCommand("delete"));
     if (applied) {
       input.setSelectionRange(caret, caret);
     } else {
@@ -368,7 +452,7 @@ export function trackFieldHistory(input: HTMLInputElement) {
         event.inputType === "historyUndo"
           ? tracker.history.undone(input.value)
           : tracker.history.redone(input.value);
-      if (state) input.setSelectionRange(state.selection[0], state.selection[1]);
+      if (state) input.setSelectionRange(state.selection[0], state.selection[1], state.direction);
     } else {
       const before = tracker.pending ?? tracker.last;
       const after = fieldStateOf(input);

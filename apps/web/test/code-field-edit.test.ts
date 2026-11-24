@@ -3,11 +3,16 @@ import {
   ROOM_CODE_MAX_LENGTH,
   inputEditRange,
   FieldHistory,
+  normalizeCodeField,
+  parseCodeFieldPaste,
   planFieldEdit,
   sanitizeRoomCodeInput,
   type FieldEdit,
   type FieldState,
 } from "../src/app/lib/utils";
+
+const ORIGINS = ["https://conclave.acmvit.in", "http://localhost:3615"];
+const normalizeField = (value: string) => normalizeCodeField(value, ORIGINS);
 
 const plan = (value: string, start: number, end: number, text: string) =>
   planFieldEdit(value, start, end, text, sanitizeRoomCodeInput, ROOM_CODE_MAX_LENGTH);
@@ -86,25 +91,47 @@ describe("planning an edit to the join code field", () => {
 });
 
 describe("the range a browser edit touches", () => {
-  it("is the selection for typed text and any deletion over a selection", () => {
-    expect(inputEditRange("insertText", 2, 2, 7)).toEqual([2, 2]);
-    expect(inputEditRange("insertText", 2, 5, 7)).toEqual([2, 5]);
-    expect(inputEditRange("deleteContentBackward", 2, 5, 7)).toEqual([2, 5]);
-    expect(inputEditRange("deleteContentForward", 2, 5, 7)).toEqual([2, 5]);
+  it("is the selection for inserted text and any deletion over a selection", () => {
+    for (const type of ["insertText", "insertReplacementText", "insertFromPaste", "insertFromDrop"]) {
+      expect(inputEditRange(type, 2, 2, "abc-def")).toEqual([2, 2]);
+      expect(inputEditRange(type, 2, 5, "abc-def")).toEqual([2, 5]);
+    }
+    for (const type of ["deleteContentBackward", "deleteWordForward", "deleteByCut", "deleteSoftLineBackward"]) {
+      expect(inputEditRange(type, 2, 5, "abc-def")).toEqual([2, 5]);
+    }
   });
 
   it("is one character either side of the caret for Backspace and Delete", () => {
-    expect(inputEditRange("deleteContentBackward", 3, 3, 7)).toEqual([2, 3]);
-    expect(inputEditRange("deleteContentBackward", 0, 0, 7)).toEqual([0, 0]);
-    expect(inputEditRange("deleteContentForward", 3, 3, 7)).toEqual([3, 4]);
-    expect(inputEditRange("deleteContentForward", 7, 7, 7)).toEqual([7, 7]);
+    expect(inputEditRange("deleteContentBackward", 3, 3, "abc-def")).toEqual([2, 3]);
+    expect(inputEditRange("deleteContentBackward", 0, 0, "abc-def")).toEqual([0, 0]);
+    expect(inputEditRange("deleteContentForward", 3, 3, "abc-def")).toEqual([3, 4]);
+    expect(inputEditRange("deleteContentForward", 7, 7, "abc-def")).toEqual([7, 7]);
   });
 
-  it("leaves other edits to the browser", () => {
-    expect(inputEditRange("deleteWordBackward", 3, 3, 7)).toBeNull();
-    expect(inputEditRange("insertFromPaste", 3, 3, 7)).toBeNull();
-    expect(inputEditRange("insertCompositionText", 3, 3, 7)).toBeNull();
-    expect(inputEditRange("historyUndo", 3, 3, 7)).toBeNull();
+  it("is the word before or after the caret for Option+Backspace and Option+Delete", () => {
+    expect(inputEditRange("deleteWordBackward", 5, 5, "abc-x-def")).toEqual([4, 5]);
+    expect(inputEditRange("deleteWordBackward", 4, 4, "abc-x-def")).toEqual([0, 4]);
+    expect(inputEditRange("deleteWordBackward", 9, 9, "abc-x-def")).toEqual([6, 9]);
+    expect(inputEditRange("deleteWordForward", 4, 4, "abc-x-def")).toEqual([4, 5]);
+    expect(inputEditRange("deleteWordForward", 5, 5, "abc-x-def")).toEqual([5, 9]);
+    expect(inputEditRange("deleteWordForward", 0, 0, "abc-x-def")).toEqual([0, 3]);
+  });
+
+  it("runs to the start or end of the field for line deletions", () => {
+    expect(inputEditRange("deleteSoftLineBackward", 5, 5, "abc-x-def")).toEqual([0, 5]);
+    expect(inputEditRange("deleteHardLineBackward", 5, 5, "abc-x-def")).toEqual([0, 5]);
+    expect(inputEditRange("deleteSoftLineForward", 5, 5, "abc-x-def")).toEqual([5, 9]);
+    expect(inputEditRange("deleteEntireSoftLine", 5, 5, "abc-x-def")).toEqual([0, 9]);
+  });
+
+  it("cuts nothing without a selection", () => {
+    expect(inputEditRange("deleteByCut", 3, 3, "abc-def")).toEqual([3, 3]);
+  });
+
+  it("leaves composition and history to the browser", () => {
+    expect(inputEditRange("insertCompositionText", 3, 3, "abc-def")).toBeNull();
+    expect(inputEditRange("historyUndo", 3, 3, "abc-def")).toBeNull();
+    expect(inputEditRange("formatBold", 3, 3, "abc-def")).toBeNull();
   });
 });
 
@@ -242,5 +269,103 @@ describe("the code field's undo mirror of the browser's stack", () => {
     }
     expect(failures).toEqual([]);
     expect(undos).toBeGreaterThan(1000);
+  });
+});
+
+const FIELD_TYPES = [
+  "insertText",
+  "insertText",
+  "insertReplacementText",
+  "insertFromPaste",
+  "insertFromDrop",
+  "compositionEnd",
+  "deleteContentBackward",
+  "deleteContentForward",
+  "deleteWordBackward",
+  "deleteWordForward",
+  "deleteSoftLineBackward",
+  "deleteByCut",
+  "caret",
+  "undo",
+  "redo",
+] as const;
+const INSERTED = ["a", "B", "-", " ", ".", "/", ":", "x", "conclave.acmvit.in/", "https://example.org/about"];
+const PASTED = ["new-room", "  ABC-DEF ", "https://conclave.acmvit.in/room-two", "https://example.org/about", "x-"];
+
+describe("every kind of edit to the code field", () => {
+  it("leaves a final value after each step and keeps the history in step with the browser", () => {
+    const random = seededRandom(4676948843 % 2147483647);
+    const pick = <T,>(items: readonly T[]) => items[Math.floor(random() * items.length)];
+    const failures: string[] = [];
+    const seen = new Set<string>();
+    for (let run = 0; run < 300; run += 1) {
+      const history = new FieldHistory();
+      const browser = new ReferenceHistory();
+      let field = at("", 0);
+      const commit = (from: number, to: number, text: string, typing: boolean) => {
+        const planned = planFieldEdit(field.value, from, to, text, normalizeField, ROOM_CODE_MAX_LENGTH);
+        if (planned.start === planned.end && !planned.text) {
+          history.seal();
+          browser.seal();
+          return;
+        }
+        const native = typing && planned.start === from && planned.end === to && planned.text === text;
+        const next = at(applied(field.value, planned), planned.start + planned.text.length);
+        history.record(field, next, native);
+        browser.record(field, next, native);
+        field = next;
+      };
+      for (let step = 0; step < 40; step += 1) {
+        const type = pick(FIELD_TYPES);
+        seen.add(type);
+        const [start, end] = field.selection;
+        if (type === "undo" || type === "redo") {
+          const want = type === "undo" ? browser.undo() : browser.redo();
+          if (!want) continue;
+          const got = type === "undo" ? history.undone(want.value) : history.redone(want.value);
+          if (JSON.stringify(got) !== JSON.stringify(want)) {
+            failures.push(JSON.stringify({ run, step, type, got, want }));
+            break;
+          }
+          field = want;
+          continue;
+        }
+        if (type === "caret") {
+          const a = Math.floor(random() * (field.value.length + 1));
+          const b = random() < 0.5 ? a : a + Math.floor(random() * (field.value.length - a + 1));
+          field = at(field.value, a, b);
+          history.seal();
+          browser.seal();
+          continue;
+        }
+        if (type === "compositionEnd") {
+          const composed = pick(["\uff21", "x", " ", "AB"]);
+          const raw = at(field.value.slice(0, start) + composed + field.value.slice(end), start + composed.length);
+          history.record(field, raw, true);
+          browser.record(field, raw, true);
+          field = raw;
+          commit(raw.selection[1], raw.selection[1], "", false);
+        } else if (type === "insertFromPaste" || type === "insertFromDrop") {
+          const paste = parseCodeFieldPaste(pick(PASTED), ORIGINS);
+          if (!paste) continue;
+          if (paste.kind === "replace") commit(0, field.value.length, paste.code, false);
+          else commit(start, end, paste.text, false);
+        } else {
+          const range = inputEditRange(type, start, end, field.value);
+          if (!range) {
+            failures.push(JSON.stringify({ run, step, type, missing: "range" }));
+            break;
+          }
+          const text = type.startsWith("insert") ? pick(INSERTED) : "";
+          commit(range[0], range[1], text, type === "insertText");
+        }
+        if (normalizeField(field.value) !== field.value) {
+          failures.push(JSON.stringify({ run, step, type, value: field.value, final: false }));
+          break;
+        }
+      }
+    }
+    expect(failures).toEqual([]);
+    expect([...seen].sort()).toEqual([...new Set(FIELD_TYPES)].sort());
   });
 });

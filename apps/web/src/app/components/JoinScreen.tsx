@@ -18,13 +18,13 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useId, useRef, useState } from "react";
 import { prefetchConclaveAnimation } from "../lib/conclaveAnimation";
 import { prefetchConclaveLock } from "../lib/conclaveSound";
 import type { Dispatch, SetStateAction } from "react";
 import { Avatar } from "@conclave/ui-tokens/web";
 import { signOut, useSession } from "@/lib/auth-client";
-import { getMeetingLinkHosts } from "@/lib/site-url";
+import { getMeetingLinkOrigins } from "@/lib/site-url";
 import type { RoomInfo } from "@/lib/sfu-types";
 import type {
   ConnectionState,
@@ -38,14 +38,14 @@ import {
 import {
   generateRoomCode,
   ROOM_CODE_MAX_LENGTH,
+  PASTED_INPUT,
   applyFieldEdit,
-  extractRoomCode,
   inputEditRange,
+  normalizeCodeField,
   parseCodeFieldPaste,
   planFieldEdit,
+  roomCodeFromField,
   sanitizeInstitutionDisplayName,
-  sanitizeRoomCodeInput,
-  sanitizeRoomCode,
   trackFieldHistory,
   isMediaDeviceBlocked,
 } from "../lib/utils";
@@ -334,7 +334,8 @@ function JoinScreen({
   const normalizedRoomId =
     roomId === "undefined" || roomId === "null" ? "" : roomId;
   const isRoutedRoom = forceJoinOnly;
-  const enforceShortCode = enableRoomRouting || forceJoinOnly;
+  const nameInputId = useId();
+  const codeInputId = useId();
 
   useEffect(() => {
     prefetchConclaveAnimation();
@@ -1105,9 +1106,7 @@ function JoinScreen({
     setPending({ mode: "new", roomId: generateRoomCode() });
   };
   const joinMeeting = () => {
-    const candidate = enforceShortCode
-      ? sanitizeRoomCode(normalizedRoomId)
-      : normalizedRoomId.trim();
+    const candidate = roomCodeFromField(normalizedRoomId);
     if (!candidate) return;
     if (!ensureGuest()) return;
     onEnterStart?.("join");
@@ -1142,9 +1141,8 @@ function JoinScreen({
     setIsSigningOut(false);
   };
 
-  const normalizeCode = (raw: string) =>
-    enforceShortCode ? sanitizeRoomCodeInput(raw) : extractRoomCode(raw);
-  const onCodeChange = (raw: string) => onRoomIdChange(normalizeCode(raw));
+  const normalizeCode = (raw: string) => normalizeCodeField(raw, getMeetingLinkOrigins());
+  const onCodeChange = (raw: string) => onRoomIdChange(raw);
   const shapeCodeEdit = (
     event: { preventDefault(): void },
     input: HTMLInputElement,
@@ -1164,31 +1162,70 @@ function JoinScreen({
     event.preventDefault();
     applyFieldEdit(input, edit);
   };
+  const pasteIntoCode = (
+    event: { preventDefault(): void },
+    input: HTMLInputElement,
+    text: string,
+  ) => {
+    const paste = parseCodeFieldPaste(text, getMeetingLinkOrigins());
+    if (!paste) {
+      event.preventDefault();
+      return;
+    }
+    const start = input.selectionStart ?? input.value.length;
+    const end = input.selectionEnd ?? start;
+    if (paste.kind === "replace") {
+      shapeCodeEdit(event, input, [0, input.value.length], paste.code, false);
+    } else {
+      shapeCodeEdit(event, input, [start, end], paste.text, false);
+    }
+  };
   const shapeTypedCodeEdits = (input: HTMLInputElement | null) => {
     if (!input) return;
     const onBeforeInput = (event: InputEvent) => {
       if (event.isComposing) return;
+      const text = event.data ?? event.dataTransfer?.getData("text/plain") ?? "";
+      if (PASTED_INPUT.has(event.inputType)) {
+        pasteIntoCode(event, input, text);
+        return;
+      }
       const start = input.selectionStart ?? input.value.length;
       const end = input.selectionEnd ?? start;
-      const range = inputEditRange(event.inputType, start, end, input.value.length);
+      const range = inputEditRange(event.inputType, start, end, input.value);
       if (!range) return;
-      const text = event.inputType === "insertText" ? (event.data ?? "") : "";
-      shapeCodeEdit(event, input, range, text, event.inputType === "insertText");
+      const inserts = event.inputType.startsWith("insert");
+      shapeCodeEdit(event, input, range, inserts ? text : "", event.inputType === "insertText");
+    };
+    const settleField = () => {
+      if (input.value === normalizeCode(input.value)) return;
+      const caret = input.selectionEnd ?? input.value.length;
+      applyFieldEdit(
+        input,
+        planFieldEdit(input.value, caret, caret, "", normalizeCode, ROOM_CODE_MAX_LENGTH),
+      );
+    };
+    const onInput = (event: Event) => {
+      if (!(event instanceof InputEvent) || event.isComposing) return;
+      if (event.inputType === "historyUndo" || event.inputType === "historyRedo") return;
+      settleField();
     };
     input.addEventListener("beforeinput", onBeforeInput);
+    input.addEventListener("compositionend", settleField);
     const stopTrackingHistory = trackFieldHistory(input);
+    input.addEventListener("input", onInput);
     return () => {
       input.removeEventListener("beforeinput", onBeforeInput);
+      input.removeEventListener("compositionend", settleField);
+      input.removeEventListener("input", onInput);
       stopTrackingHistory();
     };
   };
 
-  const canJoin = normalizedRoomId.trim().length > 0;
+  const joinCode = roomCodeFromField(normalizedRoomId);
+  const canJoin = joinCode.length > 0;
   const nameReady = hasIdentity || liveDisplayName.length > 0;
 
-  const presenceTarget = enforceShortCode
-    ? sanitizeRoomCode(normalizedRoomId)
-    : normalizedRoomId.trim();
+  const presenceTarget = joinCode;
   useEffect(() => {
     if (roomsStatus === "loading") setPresenceChecked(true);
     else if (roomsStatus === "idle" && presenceChecked) setPresenceSettled(true);
@@ -1530,10 +1567,14 @@ function JoinScreen({
                 </div>
               ) : (
                 <div className="space-y-1.5">
-                  <label className="block text-[11.5px] font-semibold text-[#fafafa]/40">
+                  <label
+                    htmlFor={nameInputId}
+                    className="block text-[11.5px] font-semibold text-[#fafafa]/40"
+                  >
                     Your name
                   </label>
                   <input
+                    id={nameInputId}
                     type="text"
                     value={nameInputValue}
                     onChange={(e) => handleNameInputChange(e.target.value)}
@@ -1584,7 +1625,10 @@ function JoinScreen({
 
               <div className="space-y-1.5">
                 <div className="flex min-h-[16px] items-center justify-between gap-3">
-                  <label className="text-[11.5px] font-semibold text-[#fafafa]/40">
+                  <label
+                    htmlFor={codeInputId}
+                    className="text-[11.5px] font-semibold text-[#fafafa]/40"
+                  >
                     {isRoutedRoom ? "Room" : "Join with a code"}
                   </label>
                   {showPresence ? (
@@ -1596,26 +1640,14 @@ function JoinScreen({
                 </div>
                 <div className="relative">
                   <input
+                    id={codeInputId}
                     type="text"
                     value={normalizedRoomId}
                     ref={shapeTypedCodeEdits}
                     onChange={(e) => onCodeChange(e.target.value)}
                     onPaste={(e) => {
                       if (isRoutedRoom) return;
-                      const input = e.currentTarget;
-                      const text = e.clipboardData.getData("text");
-                      const paste = parseCodeFieldPaste(text, getMeetingLinkHosts());
-                      if (!paste) {
-                        e.preventDefault();
-                        return;
-                      }
-                      const start = input.selectionStart ?? input.value.length;
-                      const end = input.selectionEnd ?? start;
-                      if (paste.kind === "replace") {
-                        shapeCodeEdit(e, input, [0, input.value.length], paste.code, false);
-                      } else {
-                        shapeCodeEdit(e, input, [start, end], paste.text, false);
-                      }
+                      pasteIntoCode(e, e.currentTarget, e.clipboardData.getData("text"));
                     }}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && canJoin) joinMeeting();
