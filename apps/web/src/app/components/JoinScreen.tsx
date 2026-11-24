@@ -1346,8 +1346,8 @@ function JoinScreen({
   };
 
   return (
-    <div className="relative min-h-screen w-full bg-[#0a0a0b] text-[#fafafa]">
-      <main className="flex min-h-dvh w-full flex-col items-stretch px-0 pb-6 pt-[calc(env(safe-area-inset-top,0px)+5rem)] sm:items-center sm:justify-center sm:px-4 sm:py-10 sm:pt-10">
+    <div className="relative min-h-screen w-full bg-[#0a0a0b] text-[#fafafa] [&_:is(a,button,input,select,textarea)]:scroll-mt-[calc(env(safe-area-inset-top,0px)+5rem)]">
+      <main className="flex min-h-dvh w-full flex-col items-stretch px-0 pb-6 pt-[calc(env(safe-area-inset-top,0px)+5rem)] sm:items-center sm:justify-center sm:px-4 sm:pb-10">
         <div className="flex w-full flex-1 flex-col overflow-hidden bg-[#0e0e10] sm:block sm:flex-none sm:max-w-4xl sm:rounded-2xl sm:border sm:border-white/10 md:grid md:min-h-[520px] md:grid-cols-2">
           <div className="relative flex min-h-[calc(76px+9.25rem)] flex-1 flex-col bg-[#121214] sm:aspect-video sm:h-auto sm:flex-none md:aspect-auto md:min-h-[520px]">
                 <video
