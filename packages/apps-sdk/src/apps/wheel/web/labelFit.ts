@@ -8,6 +8,7 @@ import {
   pxPerUnitFor,
 } from "./geometry";
 import { graphemes } from "./graphemes";
+import { hasVisibleText } from "../core/labels";
 
 export type MeasureText = (text: string) => number;
 
@@ -76,11 +77,9 @@ const largestFittingSize = (
   return Math.min(geometry.maxFontSize, byLength, byWedge);
 };
 
-const WHITESPACE_CLUSTER = /^\s+$/u;
-
 const keptClusters = (clusters: string[], count: number): number => {
   let end = count;
-  while (end > 0 && WHITESPACE_CLUSTER.test(clusters[end - 1])) end -= 1;
+  while (end > 0 && !hasVisibleText(clusters[end - 1])) end -= 1;
   return end;
 };
 
@@ -92,7 +91,9 @@ const truncateToWidth = (
   widthAtSize: (text: string) => number,
   limit: number
 ): FittedLabel | null => {
-  if (widthAtSize(label) <= limit) return { text: label, truncated: false, numbered: false };
+  const width = widthAtSize(label);
+  if (!(width > 0)) return null;
+  if (width <= limit) return { text: label, truncated: false, numbered: false };
   const characters = graphemes(label);
   let low = 0;
   let high = characters.length - 1;

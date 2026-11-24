@@ -5,6 +5,7 @@ import {
   ensureAppMap,
   getAppRoot,
 } from "../../../../sdk/doc/createAppDoc";
+import { hasVisibleText } from "../labels";
 
 const ROOT_KEY = "wheel";
 const ENTRIES_KEY = "entries";
@@ -53,8 +54,16 @@ const readEntriesArray = (doc: Y.Doc): EntriesArray | null => {
   return value instanceof Y.Array ? (value as EntriesArray) : null;
 };
 
-const normalizeLabel = (rawLabel: string): string =>
-  rawLabel.replace(/\s+/g, " ").trim().slice(0, MAX_ENTRY_LABEL_LENGTH);
+const CONTROL_CHARACTERS = /\p{Cc}/gu;
+
+export const normalizeLabel = (rawLabel: string): string => {
+  const label = rawLabel
+    .replace(/\s+/g, " ")
+    .replace(CONTROL_CHARACTERS, "")
+    .trim()
+    .slice(0, MAX_ENTRY_LABEL_LENGTH);
+  return hasVisibleText(label) ? label : "";
+};
 
 const isEntry = (value: unknown): value is WheelEntry => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -62,7 +71,7 @@ const isEntry = (value: unknown): value is WheelEntry => {
   return (
     typeof record.id === "string" &&
     typeof record.label === "string" &&
-    record.label.trim().length > 0 &&
+    hasVisibleText(record.label) &&
     record.label.length <= MAX_ENTRY_LABEL_LENGTH
   );
 };
@@ -204,6 +213,7 @@ const isResult = (value: unknown): value is WheelResult => {
   return (
     typeof record.spinId === "string" &&
     typeof record.label === "string" &&
+    hasVisibleText(record.label) &&
     typeof record.at === "number" &&
     typeof record.byName === "string"
   );

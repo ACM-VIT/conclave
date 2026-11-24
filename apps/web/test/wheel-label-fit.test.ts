@@ -123,6 +123,19 @@ describe("wheel label fitting", () => {
     expect(fitted.labels.slice(0, 11).every((label) => label?.numbered === false)).toBe(true);
   });
 
+  it("numbers a slice whose label measures zero width instead of drawing nothing", () => {
+    const names = [...twelve.slice(0, 11), "\u2063"];
+    const zeroWidth: MeasureText = (text) => (text === "\u2063" ? 0 : measure(text));
+    const fitted = fitWheelLabels(names, geometry(12), zeroWidth);
+    expect(fitted.labels[11]).toMatchObject({ text: "12", numbered: true });
+  });
+
+  it("never shortens a label to a prefix with nothing visible in it", () => {
+    const fitsCodePoints = (count: number) => (text: string) =>
+      (Array.from(text).length * SINGLE_LABEL_WIDTH) / (SINGLE_LABEL_SIZE * (count + 0.5));
+    expect(fitSingleLabel("\u200B\u200BAAAAAAAAAA", 600, fitsCodePoints(3))).toBeNull();
+  });
+
   it("keeps 64 names readable at the smallest allowed size, or hides them when nothing fits", () => {
     const names = Array.from({ length: 64 }, (_, i) => `Person ${i + 1}`);
     const desktop = fitWheelLabels(names, geometry(64), measure);

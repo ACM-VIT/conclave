@@ -10,6 +10,7 @@ import {
   getEntries,
   getHistory,
   getRemoveWinnerOnDone,
+  normalizeLabel,
   recordResult,
   removeEntryById,
   replaceEntries,
@@ -55,7 +56,7 @@ const labelsFrom = (payload: Record<string, unknown>): string[] => {
   const labels: string[] = [];
   for (const value of raw as unknown[]) {
     if (typeof value !== "string") continue;
-    const label = value.replace(/\s+/g, " ").trim().slice(0, WHEEL_LIMITS.label);
+    const label = normalizeLabel(value).slice(0, WHEEL_LIMITS.label);
     if (label.length > 0) labels.push(label);
     if (labels.length >= WHEEL_LIMITS.entries) break;
   }
@@ -251,8 +252,7 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
           const labels = labelsFrom(payload);
           if (labels.length === 0) return { ok: false, error: "noNames" };
           if (getEntries(doc).length >= WHEEL_LIMITS.entries) return { ok: false, error: "full" };
-          addEntries(doc, labels);
-          return { ok: true };
+          return addEntries(doc, labels) > 0 ? { ok: true } : { ok: false, error: "noNames" };
         }
         case "removeEntry": {
           const entryId = payloadString(payload, "entryId");
