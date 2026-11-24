@@ -492,6 +492,25 @@ test("compose forwards SCHEDULING_TOKEN_SECRET to both SFUs, padding included", 
   }
 });
 
+test("compose forwards the control-plane store choice and JSON path to both SFUs", { skip: composeSkip }, () => {
+  const render = (extra) => {
+    const rendered = spawnSync("docker", ["compose", "--env-file", "/dev/null", "-f", "docker-compose.sfu.yml", "config", "--format", "json"], {
+      cwd: fileURLToPath(new URL("..", import.meta.url)),
+      env: { PATH: process.env.PATH, HOME: process.env.HOME, ANNOUNCED_IP: "127.0.0.1", SFU_SECRET: "clean-secret-value", ...extra },
+      encoding: "utf8",
+    });
+    assert.equal(rendered.status, 0, rendered.stderr);
+    return JSON.parse(rendered.stdout).services;
+  };
+  const chosen = render({ CONTROL_PLANE_PERSISTENCE: "sqlite", CONTROL_PLANE_JSON_PATH: "/var/lib/conclave/recordings/elsewhere.json" });
+  const defaults = render({});
+  for (const name of ["sfu-a", "sfu-b"]) {
+    assert.equal(chosen[name].environment.CONTROL_PLANE_PERSISTENCE, "sqlite", name);
+    assert.equal(chosen[name].environment.CONTROL_PLANE_JSON_PATH, "/var/lib/conclave/recordings/elsewhere.json", name);
+    assert.equal(defaults[name].environment.CONTROL_PLANE_JSON_PATH, "/var/lib/conclave/recordings/control-plane.json", name);
+  }
+});
+
 const storePathErrors = (environment, volumes) => {
   const compose = makeCompose();
   for (const service of Object.values(compose.services)) {
