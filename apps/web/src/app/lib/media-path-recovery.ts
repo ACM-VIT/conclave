@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 /** How long a transport may carry no media before it is treated as stalled. */
 export const MEDIA_PATH_STALL_MS = 15_000;
 /** How long an ICE restart gets to bring a transport back. */
@@ -545,3 +547,74 @@ export const receivePathExpectsMedia = (
   streams: ConsumedStream[],
   connected: boolean,
 ): boolean => (connected ? streams.some(streamShouldFlow) : streams.length > 0);
+
+export const screenVideoAwaitingSenderCheck = (
+  streams: Array<{ consumerId: string; stream: ConsumedStream }>,
+  connected: boolean,
+): string[] =>
+  connected &&
+  !receivePathExpectsMedia(
+    streams.map(({ stream }) => stream),
+    connected,
+  )
+    ? streams
+        .filter(
+          ({ stream }) =>
+            stream.kind === "video" &&
+            stream.source === "screen" &&
+            !stream.pausedHere &&
+            !stream.pausedOnServer &&
+            !stream.producerPaused,
+        )
+        .map(({ consumerId }) => consumerId)
+    : [];
+
+export type SenderPacketCounts = Record<string, number>;
+
+const SenderPacketCountsAnswer = z.object({
+  counts: z.record(z.string(), z.number().int().nonnegative()),
+});
+
+export const readSenderPacketCounts = (answer: unknown): SenderPacketCounts | null => {
+  const parsed = SenderPacketCountsAnswer.safeParse(answer);
+  return parsed.success ? parsed.data.counts : null;
+};
+
+export const senderSentMore = (
+  previous: SenderPacketCounts | null,
+  current: SenderPacketCounts | null,
+): boolean =>
+  previous !== null &&
+  current !== null &&
+  Object.entries(current).some(
+    ([consumerId, sent]) =>
+      consumerId in previous && sent > previous[consumerId],
+  );
+
+export const SCREEN_PACKETS_LOST_SAMPLES = 2;
+
+export type ScreenShareWatch = {
+  sent: SenderPacketCounts | null;
+  samplesSentWithoutArrival: number;
+};
+
+export const INITIAL_SCREEN_SHARE_WATCH: ScreenShareWatch = {
+  sent: null,
+  samplesSentWithoutArrival: 0,
+};
+
+export const advanceScreenShareWatch = (
+  watch: ScreenShareWatch,
+  { sent, received }: { sent: SenderPacketCounts | null; received: boolean },
+): ScreenShareWatch => {
+  if (sent === null) return INITIAL_SCREEN_SHARE_WATCH;
+  if (received) return { sent, samplesSentWithoutArrival: 0 };
+  return {
+    sent,
+    samplesSentWithoutArrival:
+      watch.samplesSentWithoutArrival + (senderSentMore(watch.sent, sent) ? 1 : 0),
+  };
+};
+
+export const screenPacketsGoMissing = (watch: ScreenShareWatch): boolean =>
+  watch.samplesSentWithoutArrival >= SCREEN_PACKETS_LOST_SAMPLES;

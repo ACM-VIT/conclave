@@ -163,6 +163,15 @@ import {
   receivePathExpectsMedia,
   streamShouldFlow,
   type ConsumedStream,
+  INITIAL_SCREEN_SHARE_WATCH,
+  advanceScreenShareWatch,
+  deliveredRtpBytes,
+  readSenderPacketCounts,
+  screenPacketsGoMissing,
+  screenVideoAwaitingSenderCheck,
+  senderSentMore,
+  type ScreenShareWatch,
+  type SenderPacketCounts,
   resolveRebuildRelayOnly,
   takeDeferredRebuilds,
   type MediaPathHealth,
@@ -325,6 +334,7 @@ const JOIN_ROOM_ACK_TIMEOUT_MS = 15000;
 const HELD_JOIN_INFO_TTL_MS = 30000;
 const RESTART_ICE_ACK_TIMEOUT_MS = 5000;
 const MEDIA_PATH_SAMPLE_INTERVAL_MS = 2500;
+const SENDER_PACKET_COUNT_TIMEOUT_MS = 2000;
 const PARTICIPANT_RECONNECTING_STATUS_FALLBACK_MS = 30000;
 const PARTICIPANT_RECONNECTING_STATUS_BUFFER_MS = 5000;
 const PARTICIPANT_RECONNECTED_STATUS_MS = 4500;
@@ -6379,6 +6389,7 @@ export function useMeetSocket({
         watch: MediaPathWatch;
         relayBytes: Record<string, number> | null;
         reportedRemoteSilence: boolean;
+        screen: ScreenShareWatch;
       }
     > = {
       producer: {
@@ -6386,12 +6397,14 @@ export function useMeetSocket({
         watch: INITIAL_MEDIA_PATH_WATCH,
         relayBytes: null,
         reportedRemoteSilence: false,
+        screen: INITIAL_SCREEN_SHARE_WATCH,
       },
       consumer: {
         transport: null,
         watch: INITIAL_MEDIA_PATH_WATCH,
         relayBytes: null,
         reportedRemoteSilence: false,
+        screen: INITIAL_SCREEN_SHARE_WATCH,
       },
     };
     // Transports seen carrying media. Connecting alone does not count: a path
@@ -6410,13 +6423,19 @@ export function useMeetSocket({
       );
     const consumedStreams = (): Array<{
       producerId: string;
+      consumerId: string;
       stream: ConsumedStream;
     }> => {
-      const streams: Array<{ producerId: string; stream: ConsumedStream }> = [];
+      const streams: Array<{
+        producerId: string;
+        consumerId: string;
+        stream: ConsumedStream;
+      }> = [];
       for (const [producerId, consumer] of consumersRef.current) {
         if (consumer.closed) continue;
         streams.push({
           producerId,
+          consumerId: consumer.id,
           stream: describeConsumedStream({
             kind: consumer.kind,
             source:
@@ -6455,12 +6474,40 @@ export function useMeetSocket({
       kind === "producer"
         ? sendPathExpectation(published(), connected)
         : {
-            expectsMedia: receivePathExpectsMedia(
-              consumedStreams().map(({ stream }) => stream),
-              connected,
-            ),
+            expectsMedia:
+              receivePathExpectsMedia(
+                consumedStreams().map(({ stream }) => stream),
+                connected,
+              ) ||
+              (connected && screenPacketsGoMissing(watched.consumer.screen)),
             framesOptional: false,
           };
+
+    const unansweredSockets = new WeakSet<Socket>();
+    const screenSenderPackets = async (): Promise<SenderPacketCounts | null> => {
+      const consumerIds = screenVideoAwaitingSenderCheck(consumedStreams(), true);
+      const socket = socketRef.current;
+      if (
+        consumerIds.length === 0 ||
+        !socket?.connected ||
+        unansweredSockets.has(socket)
+      ) {
+        return null;
+      }
+      return new Promise<SenderPacketCounts | null>((resolve) => {
+        emitWithAckTimeout(
+          socket,
+          SENDER_PACKET_COUNT_TIMEOUT_MS,
+          () => {
+            unansweredSockets.add(socket);
+            resolve(null);
+          },
+          "getSenderPacketCounts",
+          { consumerIds },
+          (answer: unknown) => resolve(readSenderPacketCounts(answer)),
+        );
+      });
+    };
 
     const readPath = async (
       kind: "producer" | "consumer",
@@ -6491,9 +6538,16 @@ export function useMeetSocket({
       try {
         const before = (await readPath(kind, transport)).reading;
         if (!(await attemptIceRestart(kind))) return false;
-        await new Promise<void>((resolve) =>
-          window.setTimeout(resolve, MEDIA_PATH_FLOW_CHECK_MS),
-        );
+        const halfWindow = () =>
+          new Promise<void>((resolve) =>
+            window.setTimeout(resolve, MEDIA_PATH_FLOW_CHECK_MS / 2),
+          );
+        await halfWindow();
+        const sentBefore =
+          kind === "consumer" && !transport.closed
+            ? await screenSenderPackets()
+            : null;
+        await halfWindow();
         const current =
           kind === "producer"
             ? producerTransportRef.current
@@ -6502,9 +6556,12 @@ export function useMeetSocket({
         const now = replaced
           ? null
           : expectation(kind, transport.connectionState === "connected");
+        const sentAfter =
+          now !== null && kind === "consumer" ? await screenSenderPackets() : null;
         return iceRestartBroughtMediaBack({
           replaced,
-          expectsMedia: now?.expectsMedia ?? false,
+          expectsMedia:
+            (now?.expectsMedia ?? false) || senderSentMore(sentBefore, sentAfter),
           mediaReached:
             now !== null &&
             mediaReachedFarEnd(
@@ -6533,6 +6590,7 @@ export function useMeetSocket({
         entry.transport = transport ?? null;
         entry.watch = INITIAL_MEDIA_PATH_WATCH;
         entry.relayBytes = null;
+        entry.screen = INITIAL_SCREEN_SHARE_WATCH;
         return;
       }
       // A new transport starts a fresh watch, and this sample already counts
@@ -6542,8 +6600,14 @@ export function useMeetSocket({
         entry.watch = INITIAL_MEDIA_PATH_WATCH;
         entry.reportedRemoteSilence = false;
         entry.relayBytes = null;
+        entry.screen = INITIAL_SCREEN_SHARE_WATCH;
       }
 
+      const sent =
+        kind === "consumer" && transport.connectionState === "connected"
+          ? await screenSenderPackets()
+          : null;
+      if (entry.transport !== transport) return;
       let reading: MediaPathReading;
       let relayBytes: Record<string, number>;
       try {
@@ -6554,6 +6618,13 @@ export function useMeetSocket({
         return;
       }
       if (entry.transport !== transport) return;
+      entry.screen =
+        transport.connectionState === "connected"
+          ? advanceScreenShareWatch(entry.screen, {
+              sent,
+              received: deliveredRtpBytes(entry.watch.lastReading, reading) > 0,
+            })
+          : INITIAL_SCREEN_SHARE_WATCH;
 
       const result = advanceMediaPathWatch(entry.watch, {
         ...reading,
@@ -6592,6 +6663,7 @@ export function useMeetSocket({
       if (result.stalledForMs < MEDIA_PATH_STALL_MS) return;
 
       entry.watch = INITIAL_MEDIA_PATH_WATCH;
+      entry.screen = INITIAL_SCREEN_SHARE_WATCH;
       const isSilentWhileConnected =
         result.condition === "connected-without-media";
       if (isSilentWhileConnected && kind === "consumer") {
@@ -6682,6 +6754,7 @@ export function useMeetSocket({
     reconnectInFlightRef,
     screenAudioProducerRef,
     screenProducerRef,
+    socketRef,
     videoProducerRef,
   ]);
 

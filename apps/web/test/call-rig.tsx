@@ -297,6 +297,15 @@ export type RigOptions = {
   ttlSeconds?: number;
   relayConnectMs?: number;
   remoteProducers?: number;
+  remoteMedia?: "mic" | "screen";
+};
+
+type RemoteProducer = {
+  producerId: string;
+  producerUserId: string;
+  kind: "audio" | "video";
+  type: "webcam" | "screen";
+  paused: boolean;
 };
 
 type Pending = { resolve: (value: unknown) => void; reject: (error: unknown) => void };
@@ -324,6 +333,10 @@ export class CallRig {
   mediaFlows = true;
   outgoingDropped = false;
   sendStatic = false;
+  screenChanging = true;
+  answersSenderCounts = true;
+  senderPackets = new Map<string, number>();
+  senderCountQueries = 0;
   identity: string | undefined;
   seatedAs: string | null = null;
   identityChanges: string[] = [];
@@ -338,7 +351,7 @@ export class CallRig {
   heldRoutes: Pending[] = [];
   log: string[] = [];
   private nextId = 1;
-  private remoteProducers: Array<{ producerId: string; producerUserId: string; kind: "audio"; type: "webcam"; paused: boolean }>;
+  private remoteProducers: RemoteProducer[];
 
   constructor(options: RigOptions = {}) {
     this.publish = options.publish ?? false;
@@ -346,11 +359,12 @@ export class CallRig {
     this.directWorks = options.directWorks ?? true;
     this.ttlSeconds = options.ttlSeconds ?? 3600;
     this.relayConnectMs = options.relayConnectMs ?? 200;
+    const screen = options.remoteMedia === "screen";
     this.remoteProducers = Array.from({ length: options.remoteProducers ?? 1 }, (_, index) => ({
-      producerId: `remote-mic-${index}`,
+      producerId: screen ? `remote-screen-${index}` : `remote-mic-${index}`,
       producerUserId: `remote-${index}#s`,
-      kind: "audio" as const,
-      type: "webcam" as const,
+      kind: screen ? ("video" as const) : ("audio" as const),
+      type: screen ? ("screen" as const) : ("webcam" as const),
       paused: false,
     }));
   }
@@ -444,9 +458,21 @@ export class CallRig {
       if (!this.outgoingDropped) transport.reportAt = now;
       return;
     }
-    if (this.mediaFlows && this.remoteProducers.some((producer) => !producer.paused)) {
+    if (this.mediaFlows && this.remoteProducers.some((producer) => this.remoteSending(producer))) {
       transport.carriedBytes += Math.round((now - since) * 1.6);
       transport.reportAt = now;
+    }
+  }
+
+  remoteSending(producer: RemoteProducer): boolean {
+    return !producer.paused && (producer.type !== "screen" || this.screenChanging);
+  }
+
+  accrueSenderPackets(ms: number) {
+    for (const producer of this.remoteProducers) {
+      const consumerId = this.consumerIds.get(producer.producerId);
+      if (!consumerId || !this.remoteSending(producer)) continue;
+      this.senderPackets.set(consumerId, (this.senderPackets.get(consumerId) ?? 0) + Math.round(ms / 100));
     }
   }
 
@@ -583,12 +609,23 @@ export class CallRig {
         const producer = this.remoteProducers.find((entry) => entry.producerId === payload?.producerId);
         const consumerId = `consumer-${this.nextId++}`;
         this.consumerIds.set(String(payload?.producerId), consumerId);
+        this.senderPackets.set(consumerId, 0);
         return this.ack(ack, {
           id: consumerId,
           producerId: payload?.producerId,
           kind: producer?.kind ?? "audio",
           rtpParameters: { codecs: [], encodings: [], headerExtensions: [], rtcp: {} },
           producerPaused: producer?.paused ?? false,
+        });
+      }
+      case "getSenderPacketCounts": {
+        this.senderCountQueries += 1;
+        if (!this.answersSenderCounts) return;
+        const ids = Array.isArray(payload?.consumerIds) ? (payload.consumerIds as string[]) : [];
+        return this.ack(ack, {
+          counts: Object.fromEntries(
+            ids.filter((id) => this.senderPackets.has(id)).map((id) => [id, this.senderPackets.get(id)]),
+          ),
         });
       }
       case "restartIce":
@@ -881,6 +918,7 @@ export class CallRig {
       while (left > 0) {
         const step = Math.min(left > 20_000 ? 1_000 : 250, left);
         await vi.advanceTimersByTimeAsync(step);
+        this.accrueSenderPackets(step);
         for (const transport of this.transports) this.accrue(transport);
         this.failRelayPaths();
         left -= step;

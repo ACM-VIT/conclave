@@ -106,6 +106,84 @@ describe("the media path recovery the hook runs", () => {
   });
 });
 
+describe("a viewer whose only incoming media is a screen share", () => {
+  it("restarts ICE when a changing share stops arriving and gets it back", async () => {
+    rig = await startRig({ remoteMedia: "screen" });
+    await rig.join();
+    await rig.advance(5_000);
+    const transport = rig.recv!;
+    expect(transport.carriedBytes).toBeGreaterThan(0);
+    rig.mediaFlows = false;
+
+    expect(await waitFor(rig, () => transport.restartIceCalls > 0, 30_000)).toBe(true);
+    expect(rig.log.some((line) => line.includes("consumer transport has carried no media"))).toBe(true);
+    rig.mediaFlows = true;
+    const resumedFrom = transport.carriedBytes;
+    await rig.advance(10_000);
+
+    expect(transport.carriedBytes).toBeGreaterThan(resumedFrom);
+    expect(rig.recvTransports).toEqual([transport]);
+  });
+
+  it("restarts once when the share goes still just as the path comes back", async () => {
+    rig = await startRig({ remoteMedia: "screen" });
+    await rig.join();
+    await rig.advance(5_000);
+    const transport = rig.recv!;
+    rig.mediaFlows = false;
+    expect(await waitFor(rig, () => transport.restartIceCalls > 0, 30_000)).toBe(true);
+    rig.mediaFlows = true;
+    rig.screenChanging = false;
+    await rig.advance(90_000);
+
+    expect(transport.restartIceCalls).toBe(1);
+    expect(rig.recvTransports).toEqual([transport]);
+  });
+
+  it("leaves a share that stays still for five minutes alone", async () => {
+    rig = await startRig({ remoteMedia: "screen" });
+    await rig.join();
+    await rig.advance(5_000);
+    const transport = rig.recv!;
+    rig.screenChanging = false;
+    await rig.advance(300_000);
+
+    expect(rig.senderCountQueries).toBeGreaterThan(100);
+    expect(transport.restartIceCalls).toBe(0);
+    expect(rig.recvTransports).toEqual([transport]);
+    expect(rig.log.filter((line) => line.includes("carried no media"))).toEqual([]);
+  });
+
+  it("rebuilds when an ICE restart brings back nothing while the sharer keeps sending", async () => {
+    rig = await startRig({ remoteMedia: "screen" });
+    await rig.join();
+    await rig.advance(5_000);
+    const transport = rig.recv!;
+    rig.mediaFlows = false;
+    expect(await waitFor(rig, () => transport.restartIceCalls > 0, 30_000)).toBe(true);
+
+    expect(await waitFor(rig, () => rig!.recvTransports.length > 1, 15_000)).toBe(true);
+    rig.mediaFlows = true;
+    await rig.advance(10_000);
+    expect(rig.recv).not.toBe(transport);
+    expect(rig.recv?.carriedBytes).toBeGreaterThan(0);
+  });
+
+  it("asks an SFU that cannot count once, then stays exempt as before", async () => {
+    rig = await startRig({ remoteMedia: "screen" });
+    rig.answersSenderCounts = false;
+    await rig.join();
+    await rig.advance(5_000);
+    const transport = rig.recv!;
+    rig.screenChanging = false;
+    await rig.advance(60_000);
+
+    expect(rig.senderCountQueries).toBe(1);
+    expect(transport.restartIceCalls).toBe(0);
+    expect(rig.log.filter((line) => line.includes("carried no media"))).toEqual([]);
+  });
+});
+
 describe("moving onto the relay when credentials return", () => {
   const blockedWithoutRelay = async () => {
     const target = await startRig({ ttlSeconds: 30, directWorks: false });

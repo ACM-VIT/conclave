@@ -15,7 +15,14 @@ import {
   describeConsumedStream,
   receivePathExpectsMedia,
   streamShouldFlow,
+  INITIAL_SCREEN_SHARE_WATCH,
+  advanceScreenShareWatch,
+  screenPacketsGoMissing,
+  screenVideoAwaitingSenderCheck,
+  senderSentMore,
+  readSenderPacketCounts,
   type ConsumedStream,
+  type ScreenShareWatch,
   deliveredRtpBytes,
   iceRestartBroughtMediaBack,
   readMediaPath,
@@ -751,5 +758,158 @@ describe("knowing that a static screen share still reaches the SFU", () => {
   it("needs bytes as well as a report while other streams are sending", () => {
     expect(mediaReachedFarEnd(sent(1_000, 5_000), sent(1_000, 6_100), false)).toBe(false);
     expect(mediaReachedFarEnd(sent(1_000, 5_000), sent(9_000, 6_100), false)).toBe(true);
+  });
+});
+
+describe("telling a still screen share apart from one whose packets never arrive", () => {
+  const screen = (pause: "none" | "here" | "server" | "producer" = "none"): ConsumedStream =>
+    describeConsumedStream({
+      kind: "video",
+      source: "screen",
+      consumerPaused: pause === "here",
+      adaptivelyPaused: false,
+      producerPausedHere: pause === "producer",
+      server: { paused: pause === "server" },
+    });
+  const mic = (on: boolean): ConsumedStream =>
+    describeConsumedStream({
+      kind: "audio",
+      source: "webcam",
+      consumerPaused: false,
+      adaptivelyPaused: false,
+      producerPausedHere: !on,
+      server: undefined,
+    });
+
+  it("asks the SFU about a screen share only when nothing else on a connected path should flow", () => {
+    expect(screenVideoAwaitingSenderCheck([{ consumerId: "s", stream: screen() }], true)).toEqual(["s"]);
+    expect(
+      screenVideoAwaitingSenderCheck(
+        [
+          { consumerId: "s", stream: screen() },
+          { consumerId: "m", stream: mic(false) },
+        ],
+        true,
+      ),
+    ).toEqual(["s"]);
+    expect(
+      screenVideoAwaitingSenderCheck(
+        [
+          { consumerId: "s", stream: screen() },
+          { consumerId: "m", stream: mic(true) },
+        ],
+        true,
+      ),
+    ).toEqual([]);
+    expect(screenVideoAwaitingSenderCheck([{ consumerId: "s", stream: screen() }], false)).toEqual([]);
+    for (const pause of ["here", "server", "producer"] as const) {
+      expect(screenVideoAwaitingSenderCheck([{ consumerId: "s", stream: screen(pause) }], true)).toEqual([]);
+    }
+  });
+
+  it("reads only a well formed answer from the SFU", () => {
+    expect(readSenderPacketCounts({ counts: { s: 12 } })).toEqual({ s: 12 });
+    expect(readSenderPacketCounts({ counts: {} })).toEqual({});
+    expect(readSenderPacketCounts({ error: "Too many requests" })).toBeNull();
+    expect(readSenderPacketCounts({ counts: { s: -1 } })).toBeNull();
+    expect(readSenderPacketCounts({ counts: { s: "12" } })).toBeNull();
+    expect(readSenderPacketCounts(undefined)).toBeNull();
+  });
+
+  it("counts only the sharer's growth on consumers both answers name", () => {
+    expect(senderSentMore(null, { s: 5 })).toBe(false);
+    expect(senderSentMore({ s: 5 }, null)).toBe(false);
+    expect(senderSentMore({ s: 5 }, { s: 5 })).toBe(false);
+    expect(senderSentMore({ s: 5 }, { s: 6 })).toBe(true);
+    expect(senderSentMore({ s: 5 }, { t: 900 })).toBe(false);
+    expect(senderSentMore({ s: 5, t: 2 }, { s: 5, t: 3 })).toBe(true);
+  });
+
+  type Step = { sent: Record<string, number> | null; received: boolean };
+  const run = (steps: Step[]): { watch: ScreenShareWatch; missing: boolean[] } => {
+    let watch = INITIAL_SCREEN_SHARE_WATCH;
+    const missing: boolean[] = [];
+    for (const step of steps) {
+      watch = advanceScreenShareWatch(watch, step);
+      missing.push(screenPacketsGoMissing(watch));
+    }
+    return { watch, missing };
+  };
+
+  it.each<[string, Step[], boolean[]]>([
+    [
+      "a static share: the sharer sends nothing and nothing arrives",
+      Array.from({ length: 120 }, () => ({ sent: { s: 40 }, received: false })),
+      Array.from({ length: 120 }, () => false),
+    ],
+    [
+      "a changing share that arrives",
+      [1, 2, 3, 4].map((n) => ({ sent: { s: n * 25 }, received: true })),
+      [false, false, false, false],
+    ],
+    [
+      "a changing share whose packets stop arriving",
+      [
+        { sent: { s: 25 }, received: true },
+        { sent: { s: 50 }, received: false },
+        { sent: { s: 75 }, received: false },
+        { sent: { s: 100 }, received: false },
+      ],
+      [false, false, true, true],
+    ],
+    [
+      "a share that pauses between bursts that never arrive",
+      [
+        { sent: { s: 25 }, received: true },
+        { sent: { s: 30 }, received: false },
+        { sent: { s: 30 }, received: false },
+        { sent: { s: 30 }, received: false },
+        { sent: { s: 31 }, received: false },
+        { sent: { s: 31 }, received: false },
+      ],
+      [false, false, false, false, true, true],
+    ],
+    [
+      "one burst counted before it arrives, then a static share",
+      [
+        { sent: { s: 25 }, received: true },
+        { sent: { s: 27 }, received: false },
+        { sent: { s: 27 }, received: true },
+        ...Array.from({ length: 60 }, () => ({ sent: { s: 27 }, received: false })),
+      ],
+      Array.from({ length: 63 }, () => false),
+    ],
+    [
+      "one lost burst, then a static share",
+      [
+        { sent: { s: 25 }, received: true },
+        { sent: { s: 27 }, received: false },
+        ...Array.from({ length: 60 }, () => ({ sent: { s: 27 }, received: false })),
+      ],
+      Array.from({ length: 62 }, () => false),
+    ],
+    [
+      "an SFU that cannot answer stays exempt",
+      [
+        { sent: { s: 25 }, received: false },
+        { sent: { s: 50 }, received: false },
+        { sent: null, received: false },
+        { sent: { s: 75 }, received: false },
+        { sent: null, received: false },
+      ],
+      [false, false, false, false, false],
+    ],
+    [
+      "a replaced consumer starts from its own first count",
+      [
+        { sent: { s: 25 }, received: false },
+        { sent: { t: 900 }, received: false },
+        { sent: { t: 900 }, received: false },
+        { sent: { t: 950 }, received: false },
+      ],
+      [false, false, false, false],
+    ],
+  ])("%s", (_name, steps, expected) => {
+    expect(run(steps).missing).toEqual(expected);
   });
 });
