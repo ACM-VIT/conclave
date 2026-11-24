@@ -15,7 +15,13 @@ import { LocalRoomRegistry } from "../server/roomRegistry.js";
 import { getRoomChannelId } from "../server/rooms.js";
 import { advanceScheduledWebinars, ensureWebinarRoomConfig } from "../server/scheduledWebinarScheduler.js";
 import { createSfuState, type SfuState } from "../server/state.js";
-import { hashWebinarInviteCode, rotateWebinarLinkSlug } from "../server/webinar.js";
+import {
+  clearWebinarLinkSlug,
+  getOrCreateWebinarRoomConfig,
+  hashWebinarInviteCode,
+  rotateWebinarLinkSlug,
+  setCustomWebinarLinkSlug,
+} from "../server/webinar.js";
 import type { ScheduledWebinar } from "../types.js";
 
 const admin = { email: null, isAdmin: true };
@@ -111,6 +117,30 @@ describe("a live webinar's rotated link", () => {
     await other.controlPlane.commit(updateWebinar(webinar.id, { linkSlug: "new-code" }, admin));
     await advanceScheduledWebinars(hosting);
     expect(config.linkSlug).toBe("new-code");
+  });
+});
+
+describe("a new link code saved for a live webinar", () => {
+  it("binds once another room on the SFU lets go of it", async () => {
+    const data = createMemoryData();
+    const [hosting, other] = [sfuOn(data, "hosting"), sfuOn(data, "other")];
+    const webinar = await created(other, { linkSlug: "first-code" });
+    const config = ensureWebinarRoomConfig(hosting, webinar);
+    const squatter = getOrCreateWebinarRoomConfig(hosting.webinarConfigs, "conclave:squatter");
+    setCustomWebinarLinkSlug({
+      webinarConfig: squatter,
+      webinarLinks: hosting.webinarLinks,
+      room: { channelId: "conclave:squatter", id: "squatter", clientId: "conclave" },
+      slug: "wanted-code",
+    });
+    await other.controlPlane.commit(updateWebinar(webinar.id, { linkSlug: "wanted-code" }, admin));
+    await advanceScheduledWebinars(hosting);
+    expect(config.linkSlug).toBe("first-code");
+
+    clearWebinarLinkSlug({ webinarConfig: squatter, webinarLinks: hosting.webinarLinks, roomChannelId: "conclave:squatter" });
+    await advanceScheduledWebinars(hosting);
+    expect(config.linkSlug).toBe("wanted-code");
+    expect(hosting.webinarLinks.get("wanted-code")?.roomChannelId).toBe(getRoomChannelId(webinar.clientId, webinar.roomId));
   });
 });
 

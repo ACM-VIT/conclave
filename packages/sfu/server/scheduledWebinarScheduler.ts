@@ -99,7 +99,7 @@ const appliedRevisions = new WeakMap<WebinarRoomConfig, number>();
 const applyScheduledWebinarToConfig = (
   state: SfuState,
   webinar: ScheduledWebinar,
-): WebinarRoomConfig => {
+): { webinarConfig: WebinarRoomConfig; bound: boolean } => {
   const channelId = getRoomChannelId(webinar.clientId, webinar.roomId);
   const webinarConfig = getOrCreateWebinarRoomConfig(
     state.webinarConfigs,
@@ -110,6 +110,7 @@ const applyScheduledWebinarToConfig = (
   webinarConfig.scheduledWebinarId = webinar.id;
 
   const scheduleSlugChanged = !previous || previous.linkSlug !== webinar.linkSlug;
+  let bound = true;
   if (scheduleSlugChanged && webinarConfig.linkSlug !== webinar.linkSlug) {
     try {
       setCustomWebinarLinkSlug({
@@ -123,6 +124,11 @@ const applyScheduledWebinarToConfig = (
         slug: webinar.linkSlug,
       });
     } catch (error) {
+      bound = false;
+      appliedScheduleControls.set(webinarConfig, {
+        ...(appliedScheduleControls.get(webinarConfig) as ScheduledRoomControls),
+        linkSlug: previous?.linkSlug ?? "",
+      });
       Logger.warn(
         `Failed to bind webinar link slug ${webinar.linkSlug}: ${(error as Error).message}`,
       );
@@ -140,13 +146,13 @@ const applyScheduledWebinarToConfig = (
 
   // A schedule can open, cancel or reopen the webinar and switch its Q&A.
   notifyAuthorityPolicy(state, channelId);
-  return webinarConfig;
+  return { webinarConfig, bound };
 };
 
 export const ensureWebinarRoomConfig = (
   state: SfuState,
   webinar: ScheduledWebinar,
-): WebinarRoomConfig => applyScheduledWebinarToConfig(state, webinar);
+): WebinarRoomConfig => applyScheduledWebinarToConfig(state, webinar).webinarConfig;
 
 const releaseRemovedSchedule = (
   state: SfuState,
@@ -191,8 +197,9 @@ export const advanceScheduledWebinars = async (
       continue;
     }
     if (appliedRevisions.get(config) === record.rev) continue;
-    applyScheduledWebinarToConfig(state, record.value);
-    appliedRevisions.set(config, record.rev);
+    if (applyScheduledWebinarToConfig(state, record.value).bound) {
+      appliedRevisions.set(config, record.rev);
+    }
   }
   return changed;
 };
