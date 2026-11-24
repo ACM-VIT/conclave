@@ -21,6 +21,9 @@ import {
   screenVideoAwaitingSenderCheck,
   senderSentMore,
   readSenderPacketCounts,
+  INITIAL_SENDER_COUNT_SUPPORT,
+  mayAskForSenderCounts,
+  noteSenderCountReply,
   senderPacketCountsRequestFor,
   type ConsumedStream,
   type ScreenShareWatch,
@@ -899,7 +902,12 @@ describe("telling a still screen share apart from one whose packets never arrive
       Array.from({ length: 62 }, () => false),
     ],
     [
-      "an SFU that cannot answer stays exempt",
+      "an SFU that never answers stays exempt",
+      Array.from({ length: 20 }, () => ({ sent: null, received: false })),
+      Array.from({ length: 20 }, () => false),
+    ],
+    [
+      "a lost answer keeps the watch where it was",
       [
         { sent: { s: 25 }, received: false },
         { sent: { s: 50 }, received: false },
@@ -907,7 +915,17 @@ describe("telling a still screen share apart from one whose packets never arrive
         { sent: { s: 75 }, received: false },
         { sent: null, received: false },
       ],
-      [false, false, false, false, false],
+      [false, false, false, true, true],
+    ],
+    [
+      "bytes that arrive during a lost answer still clear the count",
+      [
+        { sent: { s: 25 }, received: false },
+        { sent: { s: 50 }, received: false },
+        { sent: null, received: true },
+        { sent: { s: 75 }, received: false },
+      ],
+      [false, false, false, false],
     ],
     [
       "a replaced consumer starts from its own first count",
@@ -921,5 +939,21 @@ describe("telling a still screen share apart from one whose packets never arrive
     ],
   ])("%s", (_name, steps, expected) => {
     expect(run(steps).missing).toEqual(expected);
+  });
+});
+
+describe("whether to keep asking an SFU for the sharer's packets", () => {
+  const after = (replies: boolean[]) =>
+    replies.reduce(noteSenderCountReply, INITIAL_SENDER_COUNT_SUPPORT);
+
+  it.each<[string, boolean[], boolean]>([
+    ["a socket not asked yet", [], true],
+    ["one unanswered ask", [false], true],
+    ["two unanswered asks", [false, false], true],
+    ["three unanswered asks from a socket that never answered", [false, false, false], false],
+    ["an answer, then many unanswered asks", [true, false, false, false, false, false], true],
+    ["unanswered asks, then an answer", [false, false, true], true],
+  ])("%s", (_name, replies, mayAsk) => {
+    expect(mayAskForSenderCounts(after(replies))).toBe(mayAsk);
   });
 });

@@ -169,7 +169,31 @@ describe("a viewer whose only incoming media is a screen share", () => {
     expect(rig.recv?.carriedBytes).toBeGreaterThan(0);
   });
 
-  it("asks an SFU that cannot count once, then stays exempt as before", async () => {
+  it("keeps checking a screen share on an SFU that answered, however many answers go missing", async () => {
+    rig = await startRig({ remoteMedia: "screen" });
+    await rig.join();
+    await rig.advance(5_000);
+    const transport = rig.recv!;
+    rig.dropSenderCountAnswers = 4;
+    await rig.advance(20_000);
+    expect(rig.dropSenderCountAnswers).toBe(0);
+    rig.mediaFlows = false;
+
+    expect(await waitFor(rig, () => transport.restartIceCalls > 0, 30_000)).toBe(true);
+  });
+
+  it("still notices a cut share when every other answer goes missing", async () => {
+    rig = await startRig({ remoteMedia: "screen" });
+    await rig.join();
+    await rig.advance(5_000);
+    const transport = rig.recv!;
+    rig.dropEveryOtherSenderCountAnswer = true;
+    rig.mediaFlows = false;
+
+    expect(await waitFor(rig, () => transport.restartIceCalls > 0, 45_000)).toBe(true);
+  });
+
+  it("asks an SFU that cannot count a few times, then stays exempt as before", async () => {
     rig = await startRig({ remoteMedia: "screen" });
     rig.answersSenderCounts = false;
     await rig.join();
@@ -178,7 +202,7 @@ describe("a viewer whose only incoming media is a screen share", () => {
     rig.screenChanging = false;
     await rig.advance(60_000);
 
-    expect(rig.senderCountQueries).toBe(1);
+    expect(rig.senderCountQueries).toBe(3);
     expect(transport.restartIceCalls).toBe(0);
     expect(rig.log.filter((line) => line.includes("carried no media"))).toEqual([]);
   });

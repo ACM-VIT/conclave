@@ -168,6 +168,10 @@ import {
   deliveredRtpBytes,
   readSenderPacketCounts,
   senderPacketCountsRequestFor,
+  INITIAL_SENDER_COUNT_SUPPORT,
+  mayAskForSenderCounts,
+  noteSenderCountReply,
+  type SenderCountSupport,
   screenPacketsGoMissing,
   screenVideoAwaitingSenderCheck,
   senderSentMore,
@@ -336,6 +340,12 @@ const HELD_JOIN_INFO_TTL_MS = 30000;
 const RESTART_ICE_ACK_TIMEOUT_MS = 5000;
 const MEDIA_PATH_SAMPLE_INTERVAL_MS = 2500;
 const SENDER_PACKET_COUNT_TIMEOUT_MS = 2000;
+
+type SenderPacketsReading =
+  | { asked: false }
+  | { asked: true; sent: SenderPacketCounts | null };
+
+const NOT_ASKED: SenderPacketsReading = { asked: false };
 const PARTICIPANT_RECONNECTING_STATUS_FALLBACK_MS = 30000;
 const PARTICIPANT_RECONNECTING_STATUS_BUFFER_MS = 5000;
 const PARTICIPANT_RECONNECTED_STATUS_MS = 4500;
@@ -6484,29 +6494,48 @@ export function useMeetSocket({
             framesOptional: false,
           };
 
-    const unansweredSockets = new WeakSet<Socket>();
-    const screenSenderPackets = async (): Promise<SenderPacketCounts | null> => {
+    const senderCountSupport = new WeakMap<Socket, SenderCountSupport>();
+    const noteSenderCountReplyOn = (socket: Socket, replied: boolean) =>
+      senderCountSupport.set(
+        socket,
+        noteSenderCountReply(
+          senderCountSupport.get(socket) ?? INITIAL_SENDER_COUNT_SUPPORT,
+          replied,
+        ),
+      );
+    const screenSenderPackets = async (): Promise<SenderPacketsReading> => {
       const request = senderPacketCountsRequestFor(
         screenVideoAwaitingSenderCheck(consumedStreams(), true),
       );
       const socket = socketRef.current;
-      if (!request || !socket?.connected || unansweredSockets.has(socket)) {
-        return null;
+      if (
+        !request ||
+        !socket?.connected ||
+        !mayAskForSenderCounts(
+          senderCountSupport.get(socket) ?? INITIAL_SENDER_COUNT_SUPPORT,
+        )
+      ) {
+        return NOT_ASKED;
       }
-      return new Promise<SenderPacketCounts | null>((resolve) => {
+      return new Promise<SenderPacketsReading>((resolve) => {
         emitWithAckTimeout(
           socket,
           SENDER_PACKET_COUNT_TIMEOUT_MS,
           () => {
-            unansweredSockets.add(socket);
-            resolve(null);
+            noteSenderCountReplyOn(socket, false);
+            resolve({ asked: true, sent: null });
           },
           "getSenderPacketCounts",
           request,
-          (answer: unknown) => resolve(readSenderPacketCounts(answer)),
+          (answer: unknown) => {
+            noteSenderCountReplyOn(socket, true);
+            resolve({ asked: true, sent: readSenderPacketCounts(answer) });
+          },
         );
       });
     };
+    const sentIn = (reading: SenderPacketsReading): SenderPacketCounts | null =>
+      reading.asked ? reading.sent : null;
 
     const readPath = async (
       kind: "producer" | "consumer",
@@ -6545,7 +6574,7 @@ export function useMeetSocket({
         const sentBefore =
           kind === "consumer" && !transport.closed
             ? await screenSenderPackets()
-            : null;
+            : NOT_ASKED;
         await halfWindow();
         const current =
           kind === "producer"
@@ -6556,11 +6585,14 @@ export function useMeetSocket({
           ? null
           : expectation(kind, transport.connectionState === "connected");
         const sentAfter =
-          now !== null && kind === "consumer" ? await screenSenderPackets() : null;
+          now !== null && kind === "consumer"
+            ? await screenSenderPackets()
+            : NOT_ASKED;
         return iceRestartBroughtMediaBack({
           replaced,
           expectsMedia:
-            (now?.expectsMedia ?? false) || senderSentMore(sentBefore, sentAfter),
+            (now?.expectsMedia ?? false) ||
+            senderSentMore(sentIn(sentBefore), sentIn(sentAfter)),
           mediaReached:
             now !== null &&
             mediaReachedFarEnd(
@@ -6602,10 +6634,10 @@ export function useMeetSocket({
         entry.screen = INITIAL_SCREEN_SHARE_WATCH;
       }
 
-      const sent =
+      const sender =
         kind === "consumer" && transport.connectionState === "connected"
           ? await screenSenderPackets()
-          : null;
+          : NOT_ASKED;
       if (entry.transport !== transport) return;
       let reading: MediaPathReading;
       let relayBytes: Record<string, number>;
@@ -6618,9 +6650,9 @@ export function useMeetSocket({
       }
       if (entry.transport !== transport) return;
       entry.screen =
-        transport.connectionState === "connected"
+        transport.connectionState === "connected" && sender.asked
           ? advanceScreenShareWatch(entry.screen, {
-              sent,
+              sent: sender.sent,
               received: deliveredRtpBytes(entry.watch.lastReading, reading) > 0,
             })
           : INITIAL_SCREEN_SHARE_WATCH;

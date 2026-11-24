@@ -336,6 +336,8 @@ export class CallRig {
   sendStatic = false;
   screenChanging = true;
   answersSenderCounts = true;
+  dropSenderCountAnswers = 0;
+  dropEveryOtherSenderCountAnswer = false;
   senderPackets = new Map<string, number>();
   senderCountQueries = 0;
   identity: string | undefined;
@@ -622,6 +624,11 @@ export class CallRig {
       case "getSenderPacketCounts": {
         this.senderCountQueries += 1;
         if (!this.answersSenderCounts) return;
+        if (this.dropSenderCountAnswers > 0) {
+          this.dropSenderCountAnswers -= 1;
+          return;
+        }
+        if (this.dropEveryOtherSenderCountAnswer && this.senderCountQueries % 2 === 0) return;
         const request = senderPacketCountsRequestSchema.safeParse(payload);
         if (!request.success) return this.ack(ack, { error: "Invalid request" });
         return this.ack(ack, {
