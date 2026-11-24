@@ -41,7 +41,7 @@ const asMode = (value: string, variable: string): StoreMode => {
 export const resolveControlPlaneMode = (env: NodeJS.ProcessEnv = process.env): StoreMode => {
   const explicit = env.CONTROL_PLANE_PERSISTENCE?.trim().toLowerCase();
   if (explicit) return asMode(explicit, "CONTROL_PLANE_PERSISTENCE");
-  const derived: StoreMode = resolveRedisPersistenceUrl() ? "redis" : "sqlite";
+  const derived: StoreMode = resolveRedisPersistenceUrl(env) ? "redis" : "sqlite";
   const legacy = LEGACY_MODE_VARIABLES.map((variable) => ({
     variable,
     value: env[variable]?.trim().toLowerCase() ?? "",
@@ -61,7 +61,7 @@ export const resolveControlPlaneConfig = (
   env: NodeJS.ProcessEnv = process.env,
 ): ControlPlaneConfig => {
   const mode = resolveControlPlaneMode(env);
-  const redisUrl = resolveRedisPersistenceUrl();
+  const redisUrl = resolveRedisPersistenceUrl(env);
   if (mode === "redis" && !redisUrl) {
     throw new Error(
       "Redis control-plane persistence requires SFU_PERSISTENCE_REDIS_URL, SFU_REDIS_URL, or REDIS_URL.",
@@ -79,7 +79,7 @@ export const resolveControlPlaneConfig = (
       ? resolve(env.CONTROL_PLANE_JSON_PATH.trim())
       : resolve(process.cwd(), "data", "control-plane.json"),
     redisUrl,
-    keyPrefix: resolveRedisPersistenceKeyPrefix(),
+    keyPrefix: resolveRedisPersistenceKeyPrefix(env),
     legacy: resolveLegacyPaths(env),
   };
 };
