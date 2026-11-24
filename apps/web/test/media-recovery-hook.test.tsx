@@ -209,6 +209,18 @@ describe("a viewer whose only incoming media is a screen share", () => {
     expect(await waitFor(rig, () => transport.restartIceCalls > 0, 30_000)).toBe(true);
   });
 
+  it("keeps checking a screen share on an SFU whose first answers are all slow", async () => {
+    rig = await startRig({ remoteMedia: "screen" });
+    rig.slowSenderCountAnswers = 4;
+    await rig.join();
+    await rig.advance(20_000);
+    expect(rig.slowSenderCountAnswers).toBe(0);
+    const transport = rig.recv!;
+    rig.mediaFlows = false;
+
+    expect(await waitFor(rig, () => transport.restartIceCalls > 0, 30_000)).toBe(true);
+  });
+
   it("never asks an SFU whose join does not offer sender counts, and stays exempt as before", async () => {
     rig = await startRig({ remoteMedia: "screen" });
     rig.advertisesSenderCounts = false;
