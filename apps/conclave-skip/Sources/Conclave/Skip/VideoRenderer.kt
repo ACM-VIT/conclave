@@ -62,12 +62,9 @@ private fun HostedVideoTrack(
         if (clearBeforeAttach || track == null) {
             host.clearImage()
         }
-        try {
-            track?.addSink(host.sink)
-        } catch (_: IllegalStateException) {
-        }
+        val attachment = VideoSinkAttachment.attach(track, host.sink)
         onDispose {
-            track?.removeSink(host.sink)
+            attachment.detach()
         }
     }
 
