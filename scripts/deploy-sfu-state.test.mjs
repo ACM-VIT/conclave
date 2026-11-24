@@ -50,7 +50,12 @@ if [[ "$1" == "compose" ]]; then
           exit 137
         fi
         if [[ -n "$FAKE_CORRUPT" ]]; then
-          LC_ALL=C tr 'A' 'B' | CONCLAVE_FALLBACK_IMPORT_DIR="$FAKE_IMAGE_IMPORT_DIR" sh -c "$script" "\${rest[@]}"
+          received="$(dirname "$DOCKER_LOG")/received.tar"
+          cat > "$received"
+          before="$(sha256sum "$received" | cut -d' ' -f1)"
+          node -e 'const fs = require("fs"); const [path, marker] = process.argv.slice(1); const bytes = fs.readFileSync(path); const at = bytes.indexOf(marker); if (at < 0) process.exit(3); bytes[at] ^= 0x20; fs.writeFileSync(path, bytes);' "$received" "$FAKE_CORRUPT" &&
+          printf '%s %s\\n' "$before" "$(sha256sum "$received" | cut -d' ' -f1)" >> "$CORRUPTION_LOG"
+          CONCLAVE_FALLBACK_IMPORT_DIR="$FAKE_IMAGE_IMPORT_DIR" sh -c "$script" "\${rest[@]}" < "$received"
           exit $?
         fi
         CONCLAVE_FALLBACK_IMPORT_DIR="$FAKE_IMAGE_IMPORT_DIR" exec sh -c "$script" "\${rest[@]}" ;;
@@ -267,7 +272,7 @@ const replaceService = async (
       FAKE_FILES: join(dir, "files"),
       FAKE_FILES_AFTER_STOP: join(dir, "files-after-stop"),
       FAKE_STOPPED: join(dir, "stopped"),
-      FAKE_CORRUPT: corrupt ? "1" : "",
+      FAKE_CORRUPT: corrupt ? "kept" : "",
       FAKE_VOLUME: volume,
       FAKE_IMAGE_IMPORT_DIR: imageImportDir ? importDir : "",
       STAGING_PATH_FILE: join(dir, "staging-path"),
@@ -280,6 +285,7 @@ const replaceService = async (
       FAKE_KILL_TRANSFER: killTransfer ? "1" : "",
       FAKE_FAIL_UNPACK: failUnpack ? "1" : "",
       OWNERSHIP_LOG: join(dir, "ownership.log"),
+      CORRUPTION_LOG: join(dir, "corruption.log"),
     });
     const listing = (path) => (existsSync(path) ? readdirSync(path).sort() : []);
     const containerDir = join(importDir, "sfu-a");
@@ -294,6 +300,9 @@ const replaceService = async (
       importModes: latest ? [mode(importDir), mode(containerDir), ...latest.modes] : [],
       importLeftovers: listing(importDir).filter((name) => name !== "sfu-a"),
       strays: strayDirectories(importDir, join(dir, "ownership.log")),
+      corruptions: existsSync(join(dir, "corruption.log"))
+        ? readFileSync(join(dir, "corruption.log"), "utf8").trim().split("\n").filter(Boolean).map((line) => line.split(" "))
+        : [],
       stagingModes: existsSync(join(dir, "staging-modes")) ? readFileSync(join(dir, "staging-modes"), "utf8").trim().split("\n") : [],
       volumeEntries: listing(volume),
     };
@@ -302,6 +311,12 @@ const replaceService = async (
     rmSync(dir, { recursive: true, force: true });
   }
 };
+
+const assertChangedInTransit = (corruptions) =>
+  assert.ok(
+    corruptions.length > 0 && corruptions.every(([before, after]) => /^[0-9a-f]{64}$/.test(before) && /^[0-9a-f]{64}$/.test(after) && before !== after),
+    `the fake did not change the payload: ${JSON.stringify(corruptions)}`,
+  );
 
 const callIndex = (calls, pattern) => calls.findIndex((call) => pattern.test(call));
 const receives = (calls) => calls.filter((call) => /^compose .* run .*--entrypoint sh sfu-a -c /.test(call));
@@ -452,6 +467,7 @@ for (const harness of harnesses) {
       const importDir = join(shared, "json-fallback-import");
       try {
         const run = await replaceService(harness, { ...options, sharedImportDir: importDir, diff: wrote("scheduling.json"), files: { "scheduling.json": '["kept"]' } });
+        if (options.corrupt) assertChangedInTransit(run.corruptions);
         outcomes[name] = { failed: run.status !== 0, strays: run.strays };
       } finally {
         rmSync(shared, { recursive: true, force: true });
@@ -494,11 +510,12 @@ for (const harness of harnesses) {
   });
 
   test(`${shell}: a payload that arrives changed stops the deploy before anything is stopped`, async () => {
-    const { status, calls, imported } = await replaceService(harness, {
+    const { status, calls, imported, corruptions } = await replaceService(harness, {
       diff: wrote("scheduling.json"),
-      files: { "scheduling.json": "[\"AAAA\"]" },
+      files: { "scheduling.json": "[\"kept\"]" },
       corrupt: true,
     });
+    assertChangedInTransit(corruptions);
     assert.notEqual(status, 0);
     assert.equal(stopped(calls), false, calls.join("\n"));
     assert.equal(callIndex(calls, / up -d /), -1, calls.join("\n"));
