@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { captureUserMedia } from "../lib/media-captures";
 import { DEFAULT_AUDIO_CONSTRAINTS } from "../lib/constants";
 import { createNoiseCancellationPipeline } from "../lib/noise-cancellation";
 
@@ -163,7 +164,7 @@ export function useMicTest({
 
     const run = async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
+        const stream = await captureUserMedia({
           audio: {
             ...DEFAULT_AUDIO_CONSTRAINTS,
             ...(deviceId ? { deviceId: { exact: deviceId } } : {}),

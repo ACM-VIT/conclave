@@ -1013,7 +1013,7 @@ export default function MeetsClient({
     joinMode === "webinar_attendee" || webinarRole === "attendee";
   const isReadOnlyObserver = isWebinarAttendee;
   const canModerateMeeting = isAdminFlag && !isReadOnlyObserver;
-  const shouldRunVideoEffects = shouldRunVisualVideoEffects;
+  const shouldRunVideoEffects = shouldRunVisualVideoEffects && !callOutcome;
   const shouldPublishProcessedVideo = shouldRunVisualVideoEffects;
   const normalizedCurrentUserName =
     typeof currentUser?.name === "string"
@@ -2665,7 +2665,7 @@ export default function MeetsClient({
   }, [cancelVoiceKeyStart, stopVoiceAgent]);
 
   const { mounted } = useMeetLifecycle({
-    cleanup: socket.cleanup,
+    cleanup: socket.closeConnection,
     abortControllerRef: refs.abortControllerRef,
   });
 

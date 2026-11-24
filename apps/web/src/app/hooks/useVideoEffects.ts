@@ -40,6 +40,7 @@ import {
   VIDEO_EFFECTS_OUTPUT_MAX_HEIGHT as MAX_EFFECTS_OUTPUT_HEIGHT,
   VIDEO_EFFECTS_OUTPUT_MAX_WIDTH as MAX_EFFECTS_OUTPUT_WIDTH,
 } from "../lib/media-quality-settings";
+import { onCapturesReleased } from "../lib/media-captures";
 
 const SELFIE_SEGMENTATION_CDN =
   "https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1.1675465747";
@@ -3723,6 +3724,8 @@ const disposePrewarmedOutputWriterWorker = (reason: string) => {
     } catch {}
   }
 };
+
+onCapturesReleased(() => disposePrewarmedOutputWriterWorker("call-ended"));
 
 const storePrewarmedOutputWriterWorker = (
   worker: Worker,

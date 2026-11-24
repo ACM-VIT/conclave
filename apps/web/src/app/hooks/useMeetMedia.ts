@@ -34,6 +34,7 @@ import {
   MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
   MEDIA_CAPTURE_RECOVERY_TIMEOUT_MS,
 } from "../lib/media-capture-timeout";
+import { captureDisplayMedia } from "../lib/media-captures";
 import {
   clearMediaDeviceError,
   createMediaDeviceError,
@@ -5824,7 +5825,7 @@ export function useMeetMedia({
             : {}),
           ...(controller ? { controller } : {}),
         };
-        return navigator.mediaDevices.getDisplayMedia(options);
+        return captureDisplayMedia(options);
       };
 
       let stream: MediaStream;

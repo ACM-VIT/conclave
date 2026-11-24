@@ -176,6 +176,7 @@ import type {
   RequestMediaPermissionsOptions,
   ScreenShareRepublishOptions,
 } from "./useMeetMedia";
+import { releaseAllCaptures } from "../lib/media-captures";
 
 type ConsumerTelemetryPayload = Omit<
   ConsumerTelemetrySnapshot,
@@ -2059,7 +2060,7 @@ export function useMeetSocket({
     ],
   );
 
-  const cleanup = useCallback(() => {
+  const closeConnection = useCallback(() => {
     console.info("[Meets] Running full cleanup...");
 
     intentionalDisconnectRef.current = true;
@@ -2123,6 +2124,11 @@ export function useMeetSocket({
     updateReconnectRecoveryStatus,
     onSocketReady,
   ]);
+
+  const cleanup = useCallback(() => {
+    closeConnection();
+    releaseAllCaptures();
+  }, [closeConnection]);
 
   const finishLocalRoomEnded = useCallback(() => {
     if (localRoomEndedHandledRef.current) return;
@@ -10194,6 +10200,7 @@ export function useMeetSocket({
 
   return {
     cleanup,
+    closeConnection,
     cleanupRoomResources,
     connectSocket,
     ensureProducerTransport,
