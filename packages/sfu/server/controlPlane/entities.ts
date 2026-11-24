@@ -74,7 +74,11 @@ const decodeLegacyImport = (raw: unknown): LegacyImportState | null => {
     }
   }
   const completed = typeof record.completed === "number" ? record.completed : 0;
-  return { id: LEGACY_IMPORT_ID, ticket: record.ticket, completed, sources };
+  const applied: Record<string, string> = {};
+  for (const [key, order] of Object.entries(asRecord(record.applied))) {
+    if (typeof order === "string") applied[key] = order;
+  }
+  return { id: LEGACY_IMPORT_ID, ticket: record.ticket, completed, sources, applied };
 };
 
 export const entities: Registry = {

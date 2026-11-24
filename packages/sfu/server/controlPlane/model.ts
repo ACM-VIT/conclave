@@ -66,7 +66,10 @@ export type LegacyImportState = {
   ticket: number;
   completed: number;
   sources: Partial<Record<LegacyDomain, string>>;
+  applied: Record<string, string>;
 };
+
+export const appliedKey = (source: string, domain: LegacyDomain): string => `${source}|${domain}`;
 
 export const legacyCopyKey = (kind: DataKind, id: string): string => `${kind}:${id}`;
 

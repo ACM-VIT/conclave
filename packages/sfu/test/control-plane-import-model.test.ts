@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createClient } from "redis";
@@ -136,6 +136,26 @@ const leftCopies = (): string[] => {
   return found.sort();
 };
 
+const unadopt = (): string[] => {
+  const folders: string[] = [];
+  if (!existsSync(fallback())) return folders;
+  for (const service of readdirSync(fallback())) {
+    for (const archive of readdirSync(join(fallback(), service))) {
+      const folder = join(fallback(), service, archive);
+      if (!statSync(folder).isDirectory()) continue;
+      let any = false;
+      for (const name of readdirSync(folder)) {
+        const match = /^(.+\.json)\.adopted(?:-[0-9a-f]+)?$/.exec(name);
+        if (!match) continue;
+        renameSync(join(folder, name), join(folder, match[1]));
+        any = true;
+      }
+      if (any) folders.push(`${service}/${archive}`);
+    }
+  }
+  return folders;
+};
+
 const conflictsLogged = (): string[] =>
   warn.mock.calls
     .map((call) => String(call.join(" ")))
@@ -179,6 +199,20 @@ describe.each(modes)("Greptile's import cases on a %s store", (mode) => {
     await shut(first);
     const second = await open();
     expect(await second.read(meetingById("gone"))).toBeNull();
+  });
+
+  it("keep a meeting a later copy added when a restart replays both copies an import did not mark adopted", async () => {
+    const state: ContainerState = { meetings: new Map(), calendars: new Map() };
+    writeSnapshot("sfu-a", "sfu-deploy-1", state);
+    state.meetings.set("late", { title: "Made between the copies", stamp: 100 });
+    writeSnapshot("sfu-a", "sfu-deploy-1", state);
+    const first = await open();
+    expect((await first.read(meetingById("late")))?.title).toBe("Made between the copies");
+    await shut(first);
+    expect(unadopt()).toHaveLength(2);
+    const second = await open();
+    expect((await second.read(meetingById("late")))?.title).toBe("Made between the copies");
+    expect(leftCopies()).toEqual([]);
   });
 
   it("keep every connection a host disconnected deleted, not only the last", async () => {
@@ -542,6 +576,14 @@ const runSequence = async (mode: OldMode, seed: number) => {
       }
       if (roll < 0.62) {
         await oldChange(step);
+        continue;
+      }
+      if (roll < 0.66) {
+        const replayed = unadopt();
+        if (replayed.length > 0) {
+          trace.push(`an SFU crashed before marking ${replayed.join(" ")} adopted`);
+          pendingFolders.push(...replayed);
+        }
         continue;
       }
       const on = pick(serving);

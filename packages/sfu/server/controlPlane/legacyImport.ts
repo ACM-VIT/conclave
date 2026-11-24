@@ -14,6 +14,7 @@ import { hashLegacyValue } from "./legacyHash.js";
 import {
   LEGACY_IMPORT_ID,
   PRIMARY_SOURCE,
+  appliedKey,
   done,
   domainOf,
   fail,
@@ -66,6 +67,7 @@ export const beginLegacyImport = (): Command<LegacyImportState> => (tx) => {
     ticket: (current?.ticket ?? 0) + 1,
     completed: current?.completed ?? 0,
     sources: current?.sources ?? {},
+    applied: current?.applied ?? {},
   };
   tx.put("legacyImport", next);
   return done(next);
@@ -157,14 +159,26 @@ const reconcileOne = (tx: Tx, source: string, item: LegacyItem, counts: ImportCo
   counts.refreshed += 1;
 };
 
+export type SnapshotMark = { key: string; order: string };
+
 export const reconcileLegacy =
-  (ticket: number, domain: LegacyDomain, source: string, sticky: string | null, items: readonly LegacyItem[]): Command<ImportCounts> =>
+  (
+    ticket: number,
+    domain: LegacyDomain,
+    source: string,
+    sticky: string | null,
+    items: readonly LegacyItem[],
+    mark: SnapshotMark | null = null,
+  ): Command<ImportCounts> =>
   (tx) => {
     const state = currentState(tx);
     if (!state || state.ticket !== ticket) return fail("conflict", STALE);
-    if (sticky !== null && state.sources[domain] !== sticky) {
-      tx.put("legacyImport", { ...state, sources: { ...state.sources, [domain]: sticky } });
-    }
+    const sources = sticky !== null && state.sources[domain] !== sticky ? { ...state.sources, [domain]: sticky } : state.sources;
+    const applied =
+      mark && (!(mark.key in state.applied) || state.applied[mark.key] < mark.order)
+        ? { ...state.applied, [mark.key]: mark.order }
+        : state.applied;
+    if (sources !== state.sources || applied !== state.applied) tx.put("legacyImport", { ...state, sources, applied });
     const counts = emptyCounts();
     for (const item of items) reconcileOne(tx, source, item, counts);
     return done(counts);
@@ -267,10 +281,19 @@ const importRound = async (
     adopted,
     claimedLeft: recovered.files.some(stillClaimed),
   });
-  const apply = async (domain: LegacyDomain, source: string, label: string | null, records: readonly HashedLegacyRecord[]) => {
+  const apply = async (
+    domain: LegacyDomain,
+    source: string,
+    label: string | null,
+    records: readonly HashedLegacyRecord[],
+    mark: SnapshotMark | null,
+  ) => {
     const shadows = await store.read(shadowsOf(domain, source));
-    for (const batch of batches(itemsFor(records, shadows))) {
-      const counts = await committed(store, reconcileLegacy(ticket, domain, source, label, batch));
+    const parts = batches(itemsFor(records, shadows));
+    if (parts.length === 0 && mark) parts.push([]);
+    for (const [index, batch] of parts.entries()) {
+      const last = index === parts.length - 1;
+      const counts = await committed(store, reconcileLegacy(ticket, domain, source, label, batch, last ? mark : null));
       if (!counts) return false;
       add(counted, counts);
     }
@@ -280,10 +303,13 @@ const importRound = async (
   for (const domain of domains) {
     if (!domain.source || !domain.records) continue;
     sources.push(`${domain.source} ${domain.domain}`);
-    if (!(await apply(domain.domain, PRIMARY_SOURCE, domain.source, domain.records))) return stopped();
+    if (!(await apply(domain.domain, PRIMARY_SOURCE, domain.source, domain.records, null))) return stopped();
   }
   for (const snapshot of recovered.snapshots) {
-    if (!(await apply(snapshot.domain, snapshot.source, null, snapshot.records))) return stopped();
+    const key = appliedKey(snapshot.source, snapshot.domain);
+    const state = await store.read(legacyImportState);
+    if (state && key in state.applied && snapshot.order <= state.applied[key]) continue;
+    if (!(await apply(snapshot.domain, snapshot.source, null, snapshot.records, { key, order: snapshot.order }))) return stopped();
   }
   if (!(await committed(store, finishLegacyImport(ticket)))) return stopped();
   for (const file of recovered.files) {
