@@ -20,6 +20,7 @@ import { Admin } from "../../config/classes/Admin.js";
 import { Client } from "../../config/classes/Client.js";
 import { LocalRoomRegistry } from "../../server/roomRegistry.js";
 import { forceRemoveClientNow, toRoomSnapshot } from "../../server/admin/controlPlane.js";
+import { REOPENED_TOO_OFTEN } from "../../server/apps/authority/legacyWebinarQa.js";
 import { createSfuState } from "../../server/state.js";
 import type {
   WebinarQaChangedNotification,
@@ -732,6 +733,41 @@ describe("webinar Q&A with old and new clients in one room", () => {
   });
 });
 
+
+describe("a question at its reopen limit, on the old events", () => {
+  const build63QaModerationCopy = (message: string): string => {
+    const text = message.trim().toLowerCase();
+    const any = (words: string[]) => words.some((word) => text.includes(word));
+    if (text.includes("super admin")) return "cantRemove";
+    if (any(["too many admin requests", "too many requests", "rate limit", "too quickly", "retry shortly"])) return "rateLimited";
+    if (any(["not in a room", "room not found", "reconnect to use host controls", "reconnect before"])) return "reconnect";
+    if (any(["not connected", "socket is not connected", "no internet", "network is unreachable", "offline"])) return "reconnect";
+    return "Couldn\u2019t update the question.";
+  };
+
+  it("tells an old host the question cannot be reopened again, which build 63 shows as a question it could not update", async () => {
+    const stack = await startWebinar();
+    const host = await oldClient(stack, asha);
+    const attendee = await oldClient(stack, vik, asAttendee);
+    const asked = await attendee.submit("Reopen me as often as you like");
+    const id = asked.id ?? "";
+    await until(() => host.entries.has(id), "the host sees it");
+    const reopened: (boolean | undefined)[] = [];
+    for (let round = 0; round < 16; round += 1) {
+      await host.moderate(id, "answered");
+      reopened.push((await host.moderate(id, "reopen")).success);
+    }
+    await host.moderate(id, "answered");
+    const refused = await host.moderate(id, "reopen");
+    await wait(120);
+
+    expect(reopened.every(Boolean)).toBe(true);
+    expect(refused).toEqual({ error: REOPENED_TOO_OFTEN });
+    expect(host.entries.get(id)?.status).toBe("answered");
+    expect(build63QaModerationCopy(REOPENED_TOO_OFTEN)).toBe("Couldn\u2019t update the question.");
+    expect(build63QaModerationCopy("Question not found")).toBe("Couldn\u2019t update the question.");
+  });
+});
 
 describe("a webinar turned off and back on at once", () => {
   const roundTrip = async (stack: Stack) => {

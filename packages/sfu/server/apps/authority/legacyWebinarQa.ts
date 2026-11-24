@@ -711,6 +711,8 @@ export const legacyQaUpvote = (
   return { success: true, upvotes, hasUpvoted };
 };
 
+export const REOPENED_TOO_OFTEN = "This question cannot be reopened again";
+
 export const legacyQaModerate = (
   authority: RoomAuthority,
   context: ConnectionContext,
@@ -731,6 +733,9 @@ export const legacyQaModerate = (
   }
   if (result.code === "rate-limited" || result.code === "busy") {
     return { error: "Too many host actions; please retry shortly" };
+  }
+  if (result.code === "rejected" && result.reason === "reopened-too-often") {
+    return { error: REOPENED_TOO_OFTEN };
   }
   return { error: "Question not found" };
 };
