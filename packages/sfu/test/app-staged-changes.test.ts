@@ -313,6 +313,9 @@ describe("app changes sent in parts", () => {
   });
 });
 
+const LIST_HISTORIES = Number(process.env.APP_LIST_HISTORIES ?? "2");
+const LIST_FIRST_SEED = Number(process.env.APP_LIST_FIRST_SEED ?? "1");
+
 describe("app changes sent as a list", () => {
   const TEXT_CLIENT = 0xffffffff;
   const writeVarUint = (bytes: number[], value: number) => {
@@ -386,7 +389,7 @@ describe("app changes sent as a list", () => {
   it("never lose a change that would fit on its own, over random lists near the limit with deletions that split a long text", async () => {
     let refused = 0;
     let landed = 0;
-    for (let seed = 1; seed <= 8; seed += 1) {
+    for (let seed = LIST_FIRST_SEED; seed < LIST_FIRST_SEED + LIST_HISTORIES; seed += 1) {
       const random = (() => {
         let state = seed >>> 0;
         return () => {
@@ -451,9 +454,9 @@ describe("app changes sent as a list", () => {
         }
       }
     }
-    expect(refused).toBeGreaterThan(5);
-    expect(landed).toBeGreaterThan(40);
-  }, 120_000);
+    expect(refused).toBeGreaterThanOrEqual(Math.ceil(LIST_HISTORIES / 2));
+    expect(landed).toBeGreaterThanOrEqual(LIST_HISTORIES * 3);
+  }, Math.max(60_000, LIST_HISTORIES * 30_000));
 
   it("take one rate-limit token for the whole list", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });

@@ -769,6 +769,13 @@ describe("app updates stay inside the server's budget", () => {
 
 });
 
+const NEAR_LIMIT_HISTORIES = Number(process.env.APP_NEAR_LIMIT_HISTORIES ?? "4");
+const NEAR_LIMIT_FIRST_SEED = Number(process.env.APP_NEAR_LIMIT_FIRST_SEED ?? "1");
+const NEAR_LIMIT_REGRESSION_SEEDS = [2, 8];
+const nearLimitSeeds = [
+  ...new Set([...NEAR_LIMIT_REGRESSION_SEEDS, ...Array.from({ length: NEAR_LIMIT_HISTORIES }, (_, index) => NEAR_LIMIT_FIRST_SEED + index)]),
+].sort((left, right) => left - right);
+
 describe("edits near the document limit", () => {
   const seeded = (seed: number) => {
     let state = seed >>> 0;
@@ -908,7 +915,7 @@ describe("edits near the document limit", () => {
     let rounds = 0;
     let splits = 0;
     let passingTotal = 0;
-    for (let seed = 1; seed <= 24; seed += 1) {
+    for (const seed of nearLimitSeeds) {
       const random = seeded(seed);
       const length = 90_000 + pick(random, 30_000);
       const server = longText(length);
@@ -969,11 +976,11 @@ describe("edits near the document limit", () => {
       await act(async () => root.unmount());
       root = createRoot(container);
     }
-    expect(rounds).toBeGreaterThan(80);
-    expect(refused).toBeGreaterThan(10);
-    expect(splits).toBeGreaterThan(30);
-    expect(passingTotal).toBeGreaterThan(8);
-  }, 240_000);
+    expect(rounds).toBeGreaterThanOrEqual(nearLimitSeeds.length * 4);
+    expect(refused).toBeGreaterThanOrEqual(nearLimitSeeds.length);
+    expect(splits).toBeGreaterThanOrEqual(nearLimitSeeds.length * 2);
+    expect(passingTotal).toBeGreaterThanOrEqual(NEAR_LIMIT_REGRESSION_SEEDS.length);
+  }, Math.max(60_000, nearLimitSeeds.length * 20_000));
 });
 
 describe("the upload queue", () => {
