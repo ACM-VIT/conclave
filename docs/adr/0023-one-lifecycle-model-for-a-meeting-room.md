@@ -42,7 +42,7 @@ A room's stage follows from these: **Opening** (`awaitingOpener` set), **Recover
 | A join into a claimed room | No change | Host only as the owner, a recorded host who is not removed (keeping their reason), someone from a Recovering call, or someone who may open a Lapsed one (both as a fallback) | Seated if admitted, invited and not removed, or the room is unlocked; else knocks | Pass if Running |
 | Admit | No change | No change | Admission given; that person's removal and block cleared (the host decided) | Running record; schedule decision |
 | Reject | No change | No change | Knock dropped | Nothing |
-| Kick, block (with or without removing them) | No change | That key's host reason cleared, every tab of theirs stops hosting and is told so, then the host follow-up | Admissions cleared; removal set; block also blocks | Running record; schedule decision |
+| Kick, block (with or without removing them) | No change | That key's host reason cleared, every tab of theirs stops hosting, then the host follow-up. A kick, and a block that removes, takes every tab of the person out of the call, each told it was removed | Admissions cleared; removal set; block also blocks | Running record; schedule decision |
 | Revoke admission | No change | Kept, but a kept host right no longer gets past the removal | Removal set | Running record; schedule decision |
 | Promote, transfer | No change | Co-host, whatever reason they had; transfer also makes them primary. Promoting the owner's tab is the owner arriving | No change | Running record |
 | Owner arrives | Recovering or Lapsed: Running | Owner hosts and is primary; every temporary host is demoted; co-hosts keep their seat | Demoted host stays admitted only if not removed; the owner's own removal is cleared (nobody removes the owner from its code) | Running record |
@@ -95,6 +95,7 @@ A reason belongs to a person (a user key) and a seat to a tab, so one person can
 7. No seat is a host (`Admin`) without a recorded host reason for its user key, whichever of the person's tabs it is.
 8. A server-initiated shutdown (drain, stop, dead worker, another SFU taking the room) never ends a meeting, never voids its passes, and never adds to, clears or changes its hosts or removals.
 9. A fallback never chooses a removed, blocked or needs-readmission person.
+10. No seat belongs to a person a host kicked or blocked with removal, until a host lets them in again.
 
 ## Consequences
 
@@ -104,7 +105,7 @@ A reason belongs to a person (a user key) and a seat to a tab, so one person can
 - An Opening room with people in it at 10 s is handed to them instead of staying locked with no host.
 - A Lapsed room with nobody in it closes and parks its knockers for the next meeting, even if their tabs never ask again.
 - Only a Running room hands out recovery passes. Someone seated in a Recovering room gets one at the next refresh after the call is running again, within a minute.
-- When the last host goes and only people a host removed are left, nobody is promoted; the meeting ends 2 minutes later unless a host comes back. Blocking a meeting's only host promotes someone else, as removing them does.
+- A kick removes the person, not the tab: all of their tabs leave the call and are each told why, and a host cannot kick their own other tab. Taking admission back, and a block that does not remove, stay entry-only: that person keeps their seat but is never a fallback host. When the last host goes and only such people are left, nobody is promoted; the meeting ends 2 minutes later unless a host comes back. Blocking a meeting's only host promotes someone else, as removing them does.
 - A drain or a stop no longer ends the calls on that SFU: they come back on the next SFU as recovered calls, with their hosts, removals and passes.
 - A revoked co-host keeps their reason across a restart, so letting them back in makes them a co-host again whether or not the SFU restarted.
 - Anyone who hosts an owned code only as a fallback (a pass takeover, a lapse, the last host leaving, the 10 s handover) loses host rights when the owner arrives; a co-host a host promoted keeps them.
