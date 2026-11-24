@@ -1,10 +1,14 @@
 import * as Y from "yjs";
 import { APP_DOCUMENT_UPDATE_MAX_BYTES, APP_DOCUMENT_UPLOAD_INTERVAL_MS } from "../limits";
+import type { AppsUpdatePart } from "../types/index";
 import { splitUpdate } from "./splitUpdate";
 
-type Pending = { appId: string; replicaId: string | undefined; updates: Uint8Array[] };
+type Item = { update: Uint8Array; part?: AppsUpdatePart };
+type Pending = { appId: string; replicaId: string | undefined; items: Item[] };
 
-export type SendUpload = (appId: string, replicaId: string | undefined, update: Uint8Array) => boolean;
+export type SendUpload = (appId: string, replicaId: string | undefined, update: Uint8Array, part?: AppsUpdatePart) => boolean;
+
+export type UploadQueueOptions = { stagesParts?: () => boolean };
 
 export type UploadQueue = {
   add: (appId: string, replicaId: string | undefined, update: Uint8Array) => void;
@@ -13,19 +17,29 @@ export type UploadQueue = {
   clear: () => void;
 };
 
-const takeBatch = (updates: Uint8Array[]): number => {
-  let bytes = updates[0].length;
+const newChangeId = (): string => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+
+const itemsFor = (update: Uint8Array, stagesParts: boolean): Item[] => {
+  const pieces = stagesParts ? splitUpdate(update, APP_DOCUMENT_UPDATE_MAX_BYTES) : [update];
+  if (pieces.length === 1) return [{ update }];
+  const id = newChangeId();
+  return pieces.map((piece, index) => ({ update: piece, part: { id, index, count: pieces.length } }));
+};
+
+const takeBatch = (items: Item[]): number => {
+  if (items[0].part) return 1;
+  let bytes = items[0].update.length;
   let count = 1;
-  while (count < updates.length && bytes + updates[count].length <= APP_DOCUMENT_UPDATE_MAX_BYTES) {
-    bytes += updates[count].length;
+  while (count < items.length && !items[count].part && bytes + items[count].update.length <= APP_DOCUMENT_UPDATE_MAX_BYTES) {
+    bytes += items[count].update.length;
     count += 1;
   }
   return count;
 };
 
-const merge = (updates: Uint8Array[]): Uint8Array => (updates.length === 1 ? updates[0] : Y.mergeUpdates(updates));
+const merge = (items: Item[]): Uint8Array => (items.length === 1 ? items[0].update : Y.mergeUpdates(items.map((item) => item.update)));
 
-export const createUploadQueue = (send: SendUpload): UploadQueue => {
+export const createUploadQueue = (send: SendUpload, { stagesParts = () => false }: UploadQueueOptions = {}): UploadQueue => {
   const pending = new Map<string, Pending>();
   let lastSentAt = Number.NEGATIVE_INFINITY;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -35,11 +49,10 @@ export const createUploadQueue = (send: SendUpload): UploadQueue => {
     const next = pending.entries().next();
     if (next.done) return;
     const [key, entry] = next.value;
-    const count = takeBatch(entry.updates);
-    const update = merge(entry.updates.slice(0, count));
-    if (!send(entry.appId, entry.replicaId, update)) return;
-    entry.updates.splice(0, count);
-    if (entry.updates.length === 0) pending.delete(key);
+    const batch = entry.items.slice(0, takeBatch(entry.items));
+    if (!send(entry.appId, entry.replicaId, merge(batch), batch[0].part)) return;
+    entry.items.splice(0, batch.length);
+    if (entry.items.length === 0) pending.delete(key);
     lastSentAt = Date.now();
     schedule();
   };
@@ -64,10 +77,10 @@ export const createUploadQueue = (send: SendUpload): UploadQueue => {
   return {
     add: (appId, replicaId, update) => {
       const key = `${appId}\u0000${replicaId ?? ""}`;
-      const pieces = splitUpdate(update, APP_DOCUMENT_UPDATE_MAX_BYTES);
+      const items = itemsFor(update, stagesParts());
       const entry = pending.get(key);
-      if (entry) entry.updates.push(...pieces);
-      else pending.set(key, { appId, replicaId, updates: pieces });
+      if (entry) entry.items.push(...items);
+      else pending.set(key, { appId, replicaId, items });
       schedule();
     },
     drop: (appId) => {

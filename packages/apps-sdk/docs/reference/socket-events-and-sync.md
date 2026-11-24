@@ -99,6 +99,12 @@ Client -> server (`apps:yjs:update`):
 - emitted for local doc changes
 - ignored if app is not active
 - ignored for non-admins when room is locked
+- optional `part: { id, index, count }` marks one of the numbered parts of a
+  change over 256 KiB; the SFU stages them (one change per socket, in order, at
+  most the document limit in bytes, dropped after 5 s without the next part or
+  when the client sends anything else) and applies them as one unit on the last
+  part, so the change is kept whole or refused whole
+- clients send parts only after a sync reply with `stagesParts: true`
 
 Server -> peers (`apps:yjs:update`):
 

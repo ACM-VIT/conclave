@@ -20,6 +20,7 @@ import {
   updateElement,
 } from "../../../packages/apps-sdk/src/apps/whiteboard/core/doc/index";
 import { wheelApp } from "../../../packages/apps-sdk/src/apps/wheel/web/index";
+import { addItem, getItems, getNotes, setNotes } from "../../../packages/apps-sdk/src/apps/dev-playground/core/doc/index";
 import { addEntry, createWheelDoc, getEntries, getHistory, startSpin } from "../../../packages/apps-sdk/src/apps/wheel/core/doc/index";
 import { useSyncedPlayback } from "../../../packages/apps-sdk/src/apps/watch/web/hooks/useSyncedPlayback";
 import { createWatchDoc, getPlayback, getVideoId, setVideo } from "../../../packages/apps-sdk/src/apps/watch/core/doc/index";
@@ -39,6 +40,8 @@ const budgetedSfu = (appId: string, serverDoc: Y.Doc) => {
   const sentAt: number[] = [];
   const sentBytes: number[] = [];
   const reasons: string[] = [];
+  const partsSeen: Array<{ id: string; index: number; count: number }> = [];
+  let staged: { id: string; parts: Uint8Array[] } | null = null;
   const state = {
     refusals: 0,
     refuseNext: null as null | ((after: Y.Doc) => boolean),
@@ -46,7 +49,36 @@ const budgetedSfu = (appId: string, serverDoc: Y.Doc) => {
     refusalsLeft: 1,
     refusalDelayMs: 0,
     syncDelayMs: 0,
+    stagesParts: false,
+    docLimit: Number.POSITIVE_INFINITY,
     refusedReplicas: new Set<string>(),
+  };
+  const refuse = (replicaId: string, reason: string, delayMs = 0) => {
+    state.refusals += 1;
+    reasons.push(reason);
+    state.refusedReplicas.add(replicaId);
+    staged = null;
+    setTimeout(() => fire("apps:yjs:refused", { appId, replicaId, reason }), delayMs);
+  };
+  const accept = (replicaId: string, updates: Uint8Array[]) => {
+    const after = new Y.Doc();
+    Y.applyUpdate(after, Y.encodeStateAsUpdate(serverDoc));
+    updates.forEach((update) => Y.applyUpdate(after, update));
+    const refusedByTest = state.refuseNext?.(after) ?? false;
+    if (refusedByTest) {
+      if (--state.refusalsLeft === 0) state.refuseNext = null;
+      refuse(replicaId, state.refusalReason, state.refusalDelayMs);
+      return;
+    }
+    if (after.store.pendingStructs !== null || after.store.pendingDs !== null) {
+      refuse(replicaId, "missing-dependency");
+      return;
+    }
+    if (Y.encodeStateAsUpdate(after).length > state.docLimit) {
+      refuse(replicaId, "too-large");
+      return;
+    }
+    updates.forEach((update) => Y.applyUpdate(serverDoc, update));
   };
   const fire = (event: string, payload: unknown) => listeners.get(event)?.forEach((listener) => listener(payload));
   const socket = {
@@ -59,44 +91,50 @@ const budgetedSfu = (appId: string, serverDoc: Y.Doc) => {
         return;
       }
       if (event === "apps:yjs:sync" && typeof ack === "function") {
-        const answer = () => ack({ syncMessage: Y.encodeStateAsUpdate(serverDoc), stateVector: Y.encodeStateVector(serverDoc) });
+        const answer = () =>
+          ack({
+            syncMessage: Y.encodeStateAsUpdate(serverDoc),
+            stateVector: Y.encodeStateVector(serverDoc),
+            ...(state.stagesParts ? { stagesParts: true } : {}),
+          });
         if (state.syncDelayMs > 0) setTimeout(answer, state.syncDelayMs);
         else answer();
         return;
       }
       if (event !== "apps:yjs:update") return;
-      const { update, replicaId } = payload as { update: Uint8Array; replicaId: string };
+      const { update, replicaId, part } = payload as { update: Uint8Array; replicaId: string; part?: { id: string; index: number; count: number } };
       sentAt.push(Date.now());
       sentBytes.push(update.length);
+      if (part) partsSeen.push(part);
       if (state.refusedReplicas.has(replicaId)) return;
+      if (!takeToken(limiter, "apps:yjs:update", RATE_LIMITS.appsYjsUpdate)) {
+        refuse(replicaId, "rate-limited");
+        return;
+      }
       if (update.length > APP_DOCUMENT_UPDATE_MAX_BYTES) {
-        state.refusals += 1;
-        reasons.push("too-large");
-        state.refusedReplicas.add(replicaId);
-        setTimeout(() => fire("apps:yjs:refused", { appId, replicaId, reason: "too-large" }), 0);
+        refuse(replicaId, "too-large");
         return;
       }
-      const after = new Y.Doc();
-      Y.applyUpdate(after, Y.encodeStateAsUpdate(serverDoc));
-      Y.applyUpdate(after, update);
-      const refusedByTest = state.refuseNext?.(after) ?? false;
-      const missing = after.store.pendingStructs !== null || after.store.pendingDs !== null;
-      const limited = !takeToken(limiter, "apps:yjs:update", RATE_LIMITS.appsYjsUpdate);
-      if (refusedByTest || limited || missing) {
-        if (refusedByTest && --state.refusalsLeft === 0) state.refuseNext = null;
-        state.refusals += 1;
-        state.refusedReplicas.add(replicaId);
-        const reason = refusedByTest ? state.refusalReason : limited ? "rate-limited" : "missing-dependency";
-        reasons.push(reason);
-        setTimeout(() => fire("apps:yjs:refused", { appId, replicaId, reason }), refusedByTest ? state.refusalDelayMs : 0);
+      if (!part || !state.stagesParts) {
+        staged = null;
+        accept(replicaId, [update]);
         return;
       }
-      Y.applyUpdate(serverDoc, update);
+      if (part.index === 0) staged = { id: part.id, parts: [] };
+      if (!staged || staged.id !== part.id || staged.parts.length !== part.index) {
+        refuse(replicaId, "invalid");
+        return;
+      }
+      staged.parts.push(update);
+      if (staged.parts.length < part.count) return;
+      const { parts } = staged;
+      staged = null;
+      accept(replicaId, parts);
     },
   } as unknown as Socket;
   const busiestSecond = () =>
     sentAt.reduce((most, start, index) => Math.max(most, sentAt.slice(index).filter((time) => time < start + 1_000).length), 0);
-  return { socket, state, sentAt, sentBytes, reasons, busiestSecond, fire };
+  return { socket, state, sentAt, sentBytes, reasons, partsSeen, busiestSecond, fire };
 };
 
 const mount = async (socket: Socket, Body: ComponentType, apps: never[]) => {
@@ -312,10 +350,11 @@ describe("app updates stay inside the server's budget", () => {
     expect(getPageElements(server, pageId).map((element) => element.id).sort()).toEqual(["during", "refused"]);
   });
 
-  it("sends more than the server takes in one update, made while it resends, as ordered pieces with nothing refused as too large", async () => {
+  const pileUpDuringResend = async (stagesParts: boolean) => {
     const server = createWhiteboardDoc();
     ensureDefaultPage(server);
     const sfu = budgetedSfu("whiteboard", server);
+    sfu.state.stagesParts = stagesParts;
     await mount(sfu.socket, () => null, [whiteboardApp as never]);
     const pageId = getActivePageId(ctx.getDoc("whiteboard"))!;
     const live = ctx.getDoc("whiteboard");
@@ -333,15 +372,116 @@ describe("app updates stay inside the server's budget", () => {
       await advance(10);
     }
     await advance(5_000);
+    return { sfu, server, pageId, live };
+  };
+
+  it("sends a resend bigger than one update as numbered parts of one change to a server that stages them, and all of it lands", async () => {
+    const { sfu, server, pageId, live } = await pileUpDuringResend(true);
 
     expect(sfu.reasons).toEqual(["timed-out"]);
     expect(Math.max(...sfu.sentBytes)).toBeLessThanOrEqual(APP_DOCUMENT_UPDATE_MAX_BYTES);
-    expect(sfu.sentBytes.reduce((total, bytes) => total + bytes, 0)).toBeGreaterThan(APP_DOCUMENT_UPDATE_MAX_BYTES);
+    expect(sfu.partsSeen.length).toBeGreaterThan(1);
+    expect(new Set(sfu.partsSeen.map((part) => part.id)).size).toBe(1);
+    expect(sfu.partsSeen.map((part) => part.index)).toEqual(sfu.partsSeen.map((_, index) => index));
     expect(ctx.getDoc("whiteboard")).toBe(live);
-    expect(getPageElements(server, pageId).map((element) => element.id).sort()).toEqual(
-      getPageElements(live, pageId).map((element) => element.id).sort(),
-    );
     expect(getPageElements(server, pageId)).toHaveLength(41);
+  });
+
+  it("sends a resend bigger than one update whole to a server that does not stage parts, so none of it is saved in part", async () => {
+    const { sfu, server, pageId } = await pileUpDuringResend(false);
+
+    expect(sfu.partsSeen).toEqual([]);
+    expect(sfu.reasons).toEqual(["timed-out", "too-large"]);
+    expect(getPageElements(server, pageId)).toEqual([]);
+    expect(ctx.rejectedChangeReason).toBe("too-large");
+  });
+
+  const nearTheDocumentLimit = async (pasted: number) => {
+    const server = new Y.Doc();
+    for (let index = 0; index < 3; index += 1) addItem(server, `${index}`.padEnd(220 * 1024, "i"));
+    const sfu = budgetedSfu("dev-playground", server);
+    sfu.state.stagesParts = true;
+    sfu.state.docLimit = 1024 * 1024;
+    await mount(sfu.socket, () => null, [{ id: "dev-playground", name: "Dev" } as never]);
+    const paste = "p".repeat(pasted);
+
+    await act(async () => setNotes(ctx.getDoc("dev-playground"), paste));
+    await advance(2_000);
+    return { sfu, server, paste };
+  };
+
+  it("saves none of a large paste that would push the document past its limit, never part of it", async () => {
+    const { sfu, server } = await nearTheDocumentLimit(400 * 1024);
+
+    expect(sfu.partsSeen.length).toBeGreaterThan(1);
+    expect(sfu.reasons).toEqual(["too-large"]);
+    expect(getNotes(server)).toBe("");
+    expect(getNotes(ctx.getDoc("dev-playground"))).toBe("");
+    expect(ctx.rejectedChangeReason).toBe("too-large");
+  });
+
+  it("saves all of a large paste that fits under the document limit", async () => {
+    const { sfu, server, paste } = await nearTheDocumentLimit(300 * 1024);
+
+    expect(sfu.partsSeen.length).toBeGreaterThan(1);
+    expect(sfu.reasons).toEqual([]);
+    expect(getNotes(server)).toBe(paste);
+  });
+
+  it("stops sending parts once it moves to a server that has not offered to stage them", async () => {
+    const staging = budgetedSfu("dev-playground", new Y.Doc());
+    staging.state.stagesParts = true;
+    await mount(staging.socket, () => null, [{ id: "dev-playground", name: "Dev" } as never]);
+    await act(async () => setNotes(ctx.getDoc("dev-playground"), "s".repeat(300 * 1024)));
+    await advance(1_000);
+    expect(staging.partsSeen.length).toBeGreaterThan(1);
+
+    const older = budgetedSfu("dev-playground", new Y.Doc());
+    older.state.syncDelayMs = 5_000;
+    await mount(older.socket, () => null, [{ id: "dev-playground", name: "Dev" } as never]);
+    await act(async () => setNotes(ctx.getDoc("dev-playground"), "o".repeat(300 * 1024)));
+    await advance(6_000);
+
+    expect(older.partsSeen).toEqual([]);
+  });
+
+  const catchUpWithThreeChanges = async (docLimit: number) => {
+    const server = new Y.Doc();
+    addItem(server, "already saved");
+    const sfu = budgetedSfu("dev-playground", server);
+    sfu.state.stagesParts = true;
+    sfu.state.docLimit = docLimit;
+    await mount(sfu.socket, () => null, [{ id: "dev-playground", name: "Dev" } as never]);
+    const live = ctx.getDoc("dev-playground");
+    sfu.state.refuseNext = (after) => getItems(after).includes("refused once");
+    sfu.state.syncDelayMs = 500;
+    const paste = "n".repeat(300 * 1024);
+
+    await act(async () => addItem(live, "refused once"));
+    await advance(100);
+    await act(async () => addItem(live, "first"));
+    await act(async () => setNotes(live, paste));
+    await act(async () => addItem(live, "last"));
+    await advance(3_000);
+    return { sfu, server, paste };
+  };
+
+  it("keeps every change in a large resend whole: all of them land when they fit", async () => {
+    const { sfu, server, paste } = await catchUpWithThreeChanges(Number.POSITIVE_INFINITY);
+
+    expect(sfu.reasons).toEqual(["timed-out"]);
+    expect(sfu.partsSeen.length).toBeGreaterThan(1);
+    expect(getItems(server)).toEqual(["already saved", "refused once", "first", "last"]);
+    expect(getNotes(server)).toBe(paste);
+  });
+
+  it("keeps every change in a large resend whole: none of them land in part when one would pass the document limit", async () => {
+    const { sfu, server } = await catchUpWithThreeChanges(200 * 1024);
+
+    expect(sfu.reasons).toEqual(["timed-out", "too-large"]);
+    expect(getItems(server)).toEqual(["already saved"]);
+    expect(getNotes(server)).toBe("");
+    expect(getItems(ctx.getDoc("dev-playground"))).toEqual(["already saved"]);
   });
 
   it("holds its changes while the socket is down and sends them as one upload when it connects", async () => {
@@ -548,19 +688,65 @@ describe("splitting an update", () => {
     expect(splitUpdate(unreadable, MAX)).toEqual([unreadable]);
   });
 
-  it("splits what a queue is handed before it merges, so every upload fits", async () => {
+  it("sends a change in parts on its own, never merged with the changes queued before or after it", async () => {
     const { missing } = editedCopy();
-    const sent: Uint8Array[] = [];
-    const queue = createUploadQueue((_appId, _replicaId, update) => {
-      sent.push(update);
-      return true;
-    });
+    const before = new Y.Doc();
+    const small = (text: string) => {
+      let captured: Uint8Array | null = null;
+      const capture = (update: Uint8Array) => {
+        captured = update;
+      };
+      before.on("update", capture);
+      before.getText("t").insert(0, text);
+      before.off("update", capture);
+      return captured!;
+    };
+    const sent: Array<{ update: Uint8Array; part?: { index: number } }> = [];
+    const queue = createUploadQueue(
+      (_appId, _replicaId, update, part) => {
+        sent.push({ update, part });
+        return true;
+      },
+      { stagesParts: () => true },
+    );
+    const first = small("before");
+    const last = small("after");
+
+    queue.add("board", "r", first);
+    queue.add("board", "r", missing);
+    queue.add("board", "r", last);
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(sent[0]).toEqual({ update: first, part: undefined });
+    expect(sent.at(-1)).toEqual({ update: last, part: undefined });
+    expect(sent.slice(1, -1).map(({ part }) => part?.index)).toEqual(sent.slice(1, -1).map((_, index) => index));
+  });
+
+  it("hands a server that stages parts a change over the cap as numbered parts of one change, and any other server the whole change", async () => {
+    const { missing } = editedCopy();
+    const sent: Array<{ update: Uint8Array; part?: { id: string; index: number; count: number } }> = [];
+    let stages = true;
+    const queue = createUploadQueue(
+      (_appId, _replicaId, update, part) => {
+        sent.push({ update, part });
+        return true;
+      },
+      { stagesParts: () => stages },
+    );
 
     queue.add("board", "r", missing);
     await vi.advanceTimersByTimeAsync(2_000);
 
     expect(sent.length).toBeGreaterThan(2);
-    expect(sent.every((update) => update.length <= MAX)).toBe(true);
-    expect(Y.encodeStateVectorFromUpdate(Y.mergeUpdates(sent))).toEqual(Y.encodeStateVectorFromUpdate(missing));
+    expect(sent.every(({ update }) => update.length <= MAX)).toBe(true);
+    expect(sent.map(({ part }) => part?.index)).toEqual(sent.map((_, index) => index));
+    expect(new Set(sent.map(({ part }) => `${part?.id}/${part?.count}`))).toEqual(new Set([`${sent[0].part?.id}/${sent.length}`]));
+    expect(Y.encodeStateVectorFromUpdate(Y.mergeUpdates(sent.map(({ update }) => update)))).toEqual(Y.encodeStateVectorFromUpdate(missing));
+
+    sent.length = 0;
+    stages = false;
+    queue.add("board", "r", missing);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(sent).toEqual([{ update: missing, part: undefined }]);
   });
 });

@@ -310,7 +310,7 @@ test("a fast stroke leaves the embed no faster than the server refills, and land
   assert.deepEqual(text(harness.Y, ben.session.doc), { stroke: 375 });
 });
 
-test("a resync bigger than one update reaches the room in pieces that each fit", { skip: skipConvergence }, async (context) => {
+test("a resync or a change bigger than one update never reaches the room in part, since the bridge cannot stage parts", { skip: skipConvergence }, async (context) => {
   const harness = makeRoom(sessionModule, context);
   const ada = await harness.join("ada");
   const ben = await harness.join("ben");
@@ -319,25 +319,24 @@ test("a resync bigger than one update reaches the room in pieces that each fit",
   const strokes = ada.session.doc.getArray("strokes");
   for (let index = 0; index < 40; index += 1) strokes.push([`${index}`.padEnd(10_000, "s")]);
   await harness.pump();
-  assert.equal(harness.roomUpdates.length, 0, "nothing leaves while reconnecting");
   ada.host = { ...ada.host, connection: "live" };
   harness.deliver(ada, "status", ada.host);
   harness.deliver(ada, "resync", {});
   await harness.pump();
 
-  assert.ok(ada.updateSizes.length > 1, `${ada.updateSizes.length} updates`);
-  assert.ok(Math.max(...ada.updateSizes) <= limits.APP_DOCUMENT_UPDATE_MAX_BYTES, `largest ${Math.max(...ada.updateSizes)} bytes`);
-  assert.equal(harness.room.getArray("strokes").length, 40);
-  assert.deepEqual(ben.session.doc.getArray("strokes").toJSON(), strokes.toJSON());
+  assert.deepEqual(ada.updateSizes, [], "the oversized resync is not sent");
+  assert.equal(harness.room.getArray("strokes").length, 0);
 
-  const sentBefore = ada.updateSizes.length;
-  ada.session.doc.transact(() => {
-    for (let index = 0; index < 30; index += 1) strokes.push([`live ${index}`.padEnd(10_000, "l")]);
+  const small = await harness.join("cy");
+  small.session.doc.transact(() => {
+    for (let index = 0; index < 30; index += 1) small.session.doc.getArray("big").push([`${index}`.padEnd(10_000, "b")]);
   });
+  small.session.doc.getMap("whiteboard").set("note", "fits");
   await harness.pump();
-  assert.ok(ada.updateSizes.length - sentBefore > 1, "one big change leaves in pieces");
-  assert.ok(Math.max(...ada.updateSizes) <= limits.APP_DOCUMENT_UPDATE_MAX_BYTES);
-  assert.equal(harness.room.getArray("strokes").length, 70);
+
+  assert.ok(small.updateSizes.every((size) => size <= limits.APP_DOCUMENT_UPDATE_MAX_BYTES));
+  assert.equal(harness.room.getArray("big").length, 0, "no part of the oversized change lands");
+  assert.deepEqual(ben.session.doc.getArray("big").toJSON(), []);
 });
 
 test("read-only embeds draw nothing into the room", { skip: skipConvergence }, async (context) => {

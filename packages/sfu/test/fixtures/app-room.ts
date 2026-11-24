@@ -5,6 +5,7 @@ import type { Server as SocketIOServer, Socket } from "socket.io";
 import { Admin } from "../../config/classes/Admin.js";
 import { Room } from "../../config/classes/Room.js";
 import type { AppDocumentPool } from "../../server/apps/documents/pool.js";
+import type { StagingBudget } from "../../server/apps/documents/staging.js";
 import { LocalRoomRegistry } from "../../server/roomRegistry.js";
 import { createConnectionContext } from "../../server/socket/context.js";
 import { registerAppsHandlers } from "../../server/socket/handlers/appsHandlers.js";
@@ -19,7 +20,7 @@ export const edit = (doc: Y.Doc, change: (text: Y.Text) => void): Uint8Array => 
   return Y.encodeStateAsUpdate(doc, before);
 };
 
-export const inAppRoom = (pool: AppDocumentPool, id: string) => {
+export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChangeStaging?: StagingBudget } = {}) => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
   const listeners = new Map<string, Listener>();
@@ -44,6 +45,7 @@ export const inAppRoom = (pool: AppDocumentPool, id: string) => {
   const state = createSfuState({
     roomRegistry: new LocalRoomRegistry({ instanceId: id, instanceUrl: "http://localhost", ttlMs: 45000 }),
     appDocuments: pool,
+    appChangeStaging: options.appChangeStaging,
   });
   const room = new Room({ id, clientId: "conclave", workerPid: null, router: {} as Router });
   state.rooms.set(room.channelId, room);
@@ -74,12 +76,13 @@ export const inAppRoom = (pool: AppDocumentPool, id: string) => {
     return { doc, encodedBytes: syncMessage.length };
   };
   return {
+    state,
     relayed,
     refused,
     open: () => call("apps:open", { appId: "board" }),
     close: () => call("apps:close"),
-    send: (update: Uint8Array, replicaId?: string) =>
-      listeners.get("apps:yjs:update")!({ appId: "board", update, replicaId }),
+    send: (update: Uint8Array, replicaId?: string, part?: unknown) =>
+      listeners.get("apps:yjs:update")!({ appId: "board", update, replicaId, ...(part === undefined ? {} : { part }) }),
     disconnect: () => listeners.get("disconnect")!(),
     leave: () => {
       context.currentRoom = null;

@@ -160,7 +160,7 @@ describe("app document engine", () => {
     const author = new Y.Doc();
     return words.map((word) => ({
       kind: "apply" as const,
-      update: edit(author, (text) => text.insert(text.length, word)),
+      updates: [edit(author, (text) => text.insert(text.length, word))],
     }));
   };
   const engineFor = (options: { maxUpdateBytes?: number } = {}) =>
@@ -210,7 +210,7 @@ describe("app document engine", () => {
         type: "run",
         document: 1,
         load: { base: null, tail: [] },
-        operations: [base, dependent, missing].map((update) => ({ kind: "apply" as const, update })),
+        operations: [base, dependent, missing].map((update) => ({ kind: "apply" as const, updates: [update] })),
       },
       (reply) => replies.push(reply),
     );
@@ -233,8 +233,8 @@ describe("app document engine", () => {
         document: 1,
         load: { base: null, tail: [] },
         operations: [
-          { kind: "apply", update: small },
-          { kind: "apply", update: large },
+          { kind: "apply", updates: [small] },
+          { kind: "apply", updates: [large] },
           { kind: "sync", stateVector: Y.encodeStateVector(new Y.Doc()) },
         ],
       },

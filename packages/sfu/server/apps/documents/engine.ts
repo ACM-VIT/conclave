@@ -4,7 +4,7 @@ import * as Y from "yjs";
 export type Snapshot = { base: Uint8Array | null; tail: Uint8Array[] };
 
 export type Operation =
-  | { kind: "apply"; update: Uint8Array }
+  | { kind: "apply"; updates: Uint8Array[] }
   | { kind: "sync"; stateVector: Uint8Array };
 
 export type ToWorker =
@@ -73,13 +73,13 @@ export const createAppDocumentEngine = ({ maxDocumentBytes, maxUpdateBytes }: En
     return loaded;
   };
 
-  const apply = (id: number, loaded: Loaded, update: Uint8Array): [Answer, ArrayBuffer[]] => {
-    if (update.length > maxUpdateBytes) {
+  const apply = (id: number, loaded: Loaded, updates: Uint8Array[]): [Answer, ArrayBuffer[]] => {
+    if (updates.some((update) => update.length > maxUpdateBytes)) {
       return [{ type: "refused", reason: "too-large", evicted: false }, []];
     }
     const started = performance.now();
     try {
-      Y.applyUpdate(loaded.doc, update);
+      for (const update of updates) Y.applyUpdate(loaded.doc, update);
     } catch {
       evict(id);
       return [{ type: "refused", reason: "invalid", evicted: true }, []];
@@ -88,9 +88,10 @@ export const createAppDocumentEngine = ({ maxDocumentBytes, maxUpdateBytes }: En
       evict(id);
       return [{ type: "refused", reason: "missing-dependency", evicted: true }, []];
     }
+    const bytes = updates.reduce((total, update) => total + update.length, 0);
     loaded.uncompactedMs += performance.now() - started;
-    loaded.uncompactedBytes += update.length;
-    const growth = update.length * GROWTH_MARGIN;
+    loaded.uncompactedBytes += bytes;
+    const growth = bytes * GROWTH_MARGIN;
     if (
       loaded.measuredBytes + loaded.estimatedGrowth + growth <= maxDocumentBytes &&
       loaded.uncompactedBytes < COMPACT_AFTER_BYTES &&
@@ -144,7 +145,7 @@ export const createAppDocumentEngine = ({ maxDocumentBytes, maxUpdateBytes }: En
       const [answer, transfer] =
         operation.kind === "sync"
           ? sync(loaded, operation.stateVector)
-          : apply(message.document, loaded, operation.update);
+          : apply(message.document, loaded, operation.updates);
       post({ ...answer, elapsedMs: performance.now() - started }, transfer);
       if (answer.type === "refused" && answer.evicted) return;
       if (index < operations.length - 1 && performance.now() - runStarted >= RUN_SLICE_MS) {

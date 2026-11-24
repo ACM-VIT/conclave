@@ -16,7 +16,8 @@ import type {
 import { Admin } from "../../../config/classes/Admin.js";
 import { Logger } from "../../../utilities/loggers.js";
 import type { Room } from "../../../config/classes/Room.js";
-import type { AppDocument, Refusal } from "../../apps/documents/pool.js";
+import { MAX_APP_DOCUMENT_BYTES, type AppDocument, type Refusal } from "../../apps/documents/pool.js";
+import { readChangePart, STAGED_CHANGE_IDLE_MS } from "../../apps/documents/staging.js";
 import type { ConnectionContext } from "../context.js";
 import { RATE_LIMITS, takeToken } from "../rateLimit.js";
 import { respond } from "./ack.js";
@@ -240,8 +241,25 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
   );
 
   const openLegacySyncs = new Set<() => void>();
+  type StagedChange = {
+    appId: string;
+    replicaId: string | undefined;
+    id: string;
+    count: number;
+    parts: Uint8Array[];
+    bytes: number;
+    idle?: ReturnType<typeof setTimeout>;
+  };
+  let staged: StagedChange | null = null;
+  const dropStaged = (): void => {
+    if (!staged) return;
+    clearTimeout(staged.idle);
+    context.state.appChangeStaging.give(staged.bytes);
+    staged = null;
+  };
   socket.on("disconnect", () => {
     for (const stop of [...openLegacySyncs]) stop();
+    dropStaged();
   });
 
   const activeDocument = (room: Room, appId: string): AppDocument | null =>
@@ -276,6 +294,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     return {
       syncMessage: result.update,
       stateVector: result.stateVector,
+      stagesParts: true,
       awarenessUpdate:
         awarenessSnapshot && awarenessSnapshot.length <= MAX_APPS_AWARENESS_BYTES ? awarenessSnapshot : undefined,
     };
@@ -347,41 +366,11 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     socket.emit("apps:yjs:refused", { appId, replicaId, reason } satisfies AppsRefusedData);
   };
 
-  socket.on("apps:yjs:update", (data: AppsUpdateData) => {
-    if (!context.currentRoom || !context.currentClient) return;
-    if (context.currentClient.isObserver) return;
-
-    const appId = normalizeAppId(data?.appId);
-    if (!appId) return;
-    if (context.currentRoom.appsState.activeAppId !== appId) return;
-    const replicaId = normalizeReplicaId(data?.replicaId);
-
-    if (!takeToken(socket, "apps:yjs:update", RATE_LIMITS.appsYjsUpdate)) {
-      signalRefused(appId, replicaId, "rate-limited");
-      return;
-    }
-    if (
-      context.currentRoom.appsState.locked &&
-      (!(context.currentClient instanceof Admin) || context.currentClient.isObserver)
-    ) {
-      signalRefused(appId, replicaId, "locked");
-      return;
-    }
-
-    const update = toUint8Array(data.update);
-    if (!update || update.length === 0) {
-      signalRefused(appId, replicaId, "invalid");
-      return;
-    }
-    if (update.length > APP_DOCUMENT_UPDATE_MAX_BYTES) {
-      signalRefused(appId, replicaId, "too-large");
-      return;
-    }
-
-    const { channelId } = context.currentRoom;
-    void context.currentRoom
+  const commit = (room: Room, appId: string, replicaId: string | undefined, updates: Uint8Array[]): void => {
+    const { channelId } = room;
+    void room
       .getOrCreateAppDoc(appId, documents)
-      .apply(update)
+      .applyChange(updates)
       .then((result) => {
         if (!result.ok) {
           const why = UPDATE_REFUSALS[result.reason];
@@ -389,11 +378,85 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
           if (result.reason !== "closed") signalRefused(appId, replicaId, result.reason);
           return;
         }
-        socket.to(channelId).emit("apps:yjs:update", {
-          appId,
-          update,
-        } satisfies AppsUpdateData);
+        for (const update of updates) {
+          socket.to(channelId).emit("apps:yjs:update", { appId, update } satisfies AppsUpdateData);
+        }
       });
+  };
+
+  socket.on("apps:yjs:update", (data: AppsUpdateData) => {
+    const room = context.currentRoom;
+    if (!room || !context.currentClient) return;
+    if (context.currentClient.isObserver) return;
+
+    const appId = normalizeAppId(data?.appId);
+    if (!appId) return;
+    if (room.appsState.activeAppId !== appId) return;
+    const replicaId = normalizeReplicaId(data?.replicaId);
+    const refuse = (reason: string): void => {
+      dropStaged();
+      signalRefused(appId, replicaId, reason);
+    };
+
+    if (!takeToken(socket, "apps:yjs:update", RATE_LIMITS.appsYjsUpdate)) {
+      refuse("rate-limited");
+      return;
+    }
+    if (room.appsState.locked && (!(context.currentClient instanceof Admin) || context.currentClient.isObserver)) {
+      refuse("locked");
+      return;
+    }
+
+    const update = toUint8Array(data.update);
+    if (!update || update.length === 0) {
+      refuse("invalid");
+      return;
+    }
+    if (update.length > APP_DOCUMENT_UPDATE_MAX_BYTES) {
+      refuse("too-large");
+      return;
+    }
+
+    const part = readChangePart(data?.part);
+    if (part === "invalid") {
+      refuse("invalid");
+      return;
+    }
+    if (!part) {
+      dropStaged();
+      commit(room, appId, replicaId, [update]);
+      return;
+    }
+    if (part.index === 0) {
+      dropStaged();
+      staged = { appId, replicaId, id: part.id, count: part.count, parts: [], bytes: 0 };
+    }
+    const change = staged;
+    if (!change || change.appId !== appId || change.id !== part.id || change.count !== part.count || change.parts.length !== part.index) {
+      refuse("invalid");
+      return;
+    }
+    if (change.bytes + update.length > MAX_APP_DOCUMENT_BYTES) {
+      refuse("too-large");
+      return;
+    }
+    if (!context.state.appChangeStaging.take(update.length)) {
+      refuse("queue-full");
+      return;
+    }
+    change.parts.push(update);
+    change.bytes += update.length;
+    clearTimeout(change.idle);
+    if (change.parts.length < change.count) {
+      change.idle = setTimeout(() => {
+        if (staged !== change) return;
+        dropStaged();
+        signalRefused(change.appId, change.replicaId, "timed-out");
+      }, STAGED_CHANGE_IDLE_MS);
+      return;
+    }
+    dropStaged();
+    commit(room, appId, replicaId, change.parts);
   });
 
   socket.on("apps:awareness", (data: AppsAwarenessData) => {

@@ -23,6 +23,7 @@ export type AppsSyncResponse = {
   syncMessage: Uint8Array;
   stateVector?: Uint8Array;
   awarenessUpdate?: Uint8Array;
+  stagesParts?: true;
 };
 
 export type AppsSyncError = {
@@ -40,10 +41,17 @@ export type AppDocuments = {
   writeOnce: (appId: string, key: string, write: (doc: Y.Doc) => void) => void;
 };
 
+export type AppsUpdatePart = {
+  id: string;
+  index: number;
+  count: number;
+};
+
 export type AppsUpdatePayload = {
   appId: string;
   update: Uint8Array;
   replicaId?: string;
+  part?: AppsUpdatePart;
 };
 
 export type AppsRefusedPayload = {

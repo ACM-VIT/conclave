@@ -209,14 +209,18 @@ export function AppsProvider({
   const unsentAppsRef = useRef<Set<string>>(new Set());
   const syncedAppsRef = useRef<Set<string>>(new Set());
   const catchUpsRef = useRef<Map<string, number[]>>(new Map());
+  const stagesPartsRef = useRef(false);
   const [uploads] = useState(() =>
-    createUploadQueue((appId, replicaId, update) => {
-      const currentSocket = socketRef.current;
-      if (!currentSocket?.connected) return false;
-      const payload: AppsUpdatePayload = { appId, update, replicaId };
-      currentSocket.emit("apps:yjs:update", payload);
-      return true;
-    })
+    createUploadQueue(
+      (appId, replicaId, update, part) => {
+        const currentSocket = socketRef.current;
+        if (!currentSocket?.connected) return false;
+        const payload: AppsUpdatePayload = part ? { appId, update, replicaId, part } : { appId, update, replicaId };
+        currentSocket.emit("apps:yjs:update", payload);
+        return true;
+      },
+      { stagesParts: () => stagesPartsRef.current },
+    )
   );
   const automaticWritesRef = useRef<Map<string, Map<string, AutomaticWrite>>>(new Map());
   const socketRef = useRef<Socket | null>(null);
@@ -275,6 +279,7 @@ export function AppsProvider({
     docHandlersRef.current.clear();
     awarenessHandlersRef.current.clear();
     uploads.clear();
+    stagesPartsRef.current = false;
     catchUpsRef.current.clear();
     initialUpdateSentRef.current.clear();
     replicaIdsRef.current.clear();
@@ -499,6 +504,7 @@ export function AppsProvider({
     (run: SyncRun, response: AppsSyncResponse): boolean => {
       const update = toUint8Array(response.syncMessage);
       if (!update) return false;
+      stagesPartsRef.current = response.stagesParts === true;
       try {
         Y.applyUpdate(run.doc, update, "remote");
       } catch (err) {

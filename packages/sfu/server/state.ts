@@ -27,6 +27,7 @@ import {
   MAX_APP_DOCUMENT_BYTES,
   type AppDocumentPool,
 } from "./apps/documents/pool.js";
+import { createStagingBudget, type StagingBudget } from "./apps/documents/staging.js";
 import {
   createAppsAuthorityRuntime,
   type AppsAuthorityRuntime,
@@ -60,6 +61,7 @@ export type SfuState = {
   transcriptRelays: TranscriptRelayRegistry;
   workerPlan: WorkerPlan;
   appDocuments: AppDocumentPool;
+  appChangeStaging: StagingBudget;
   /** Null when this SFU does not run authority apps. */
   appsAuthority: AppsAuthorityRuntime | null;
   isDraining: boolean;
@@ -69,6 +71,7 @@ export const createSfuState = (options?: {
   isDraining?: boolean;
   roomRegistry?: RoomRegistry;
   appDocuments?: AppDocumentPool;
+  appChangeStaging?: StagingBudget;
   appsAuthority?: AppsAuthorityRuntime | null;
   config?: typeof defaultConfig;
 }): SfuState => {
@@ -100,6 +103,7 @@ export const createSfuState = (options?: {
         deadlineMs: config.appDocuments.deadlineMs,
         maxDocumentBytes: MAX_APP_DOCUMENT_BYTES,
       }),
+    appChangeStaging: options?.appChangeStaging ?? createStagingBudget(),
     appsAuthority:
       options?.appsAuthority !== undefined
         ? options.appsAuthority
