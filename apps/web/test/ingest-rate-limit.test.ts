@@ -42,7 +42,10 @@ const siteQuota = (answer: () => Promise<Response> = async () => new Response(nu
 afterEach(() => {
   cloudflare.context = null;
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
+
+const inWorkers = () => vi.stubGlobal("navigator", { userAgent: "Cloudflare-Workers" });
 
 describe("the /ingest rate limit", () => {
   it("limits each client and the whole site, in this process, off Cloudflare", async () => {
@@ -67,7 +70,20 @@ describe("the /ingest rate limit", () => {
     expect(await takeIngestRateLimit(from("10.0.0.1"))).toEqual({ ok: true });
   });
 
+  it("keeps both limits in this process under next start, where OpenNext offers wrangler's local bindings", async () => {
+    const perClient = vi.fn(async () => ({ success: true }));
+    const quota = siteQuota(async () => {
+      throw new Error("a Durable Object does not run in the local platform proxy");
+    });
+    cloudflare.context = { env: { INGEST_RATE_LIMITER: { limit: perClient }, INGEST_QUOTA: quota.binding } };
+    for (let index = 0; index < limits.perClient; index++) expect(await takeIngestRateLimit(from("10.0.0.1"))).toEqual({ ok: true });
+    expect(await takeIngestRateLimit(from("10.0.0.1"))).toEqual({ ok: false, status: 429, retryAfterMs: 60_000 });
+    expect(perClient).not.toHaveBeenCalled();
+    expect(quota.take).not.toHaveBeenCalled();
+  });
+
   it("asks the per-client limiter first, and the one site-wide quota only for a client within its limit, on Cloudflare", async () => {
+    inWorkers();
     const perClient = vi.fn(async () => ({ success: true }));
     const quota = siteQuota();
     cloudflare.context = { env: { INGEST_RATE_LIMITER: { limit: perClient }, INGEST_QUOTA: quota.binding } };
@@ -85,6 +101,7 @@ describe("the /ingest rate limit", () => {
   });
 
   it("refuses with 503 on Cloudflare when a limiter is missing, failing or stalled", async () => {
+    inWorkers();
     const allowed = { limit: async () => ({ success: true }) };
     cloudflare.context = { env: { INGEST_RATE_LIMITER: allowed } };
     expect(await takeIngestRateLimit(from("203.0.113.9"))).toEqual({ ok: false, status: 503, retryAfterMs: null });

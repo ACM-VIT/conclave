@@ -55,13 +55,16 @@ const takeSiteQuota = async (quota: QuotaNamespace): Promise<IngestAdmission> =>
   }
 };
 
+const inWorkers = (): boolean => typeof navigator !== "undefined" && navigator.userAgent === "Cloudflare-Workers";
+
 export async function takeIngestRateLimit(request: Request): Promise<IngestAdmission> {
   const key = `ingest:${rateLimitClientKey(request)}`;
+  if (!inWorkers()) return takeLocal(key);
   let env: Record<string, unknown>;
   try {
     env = (await getCloudflareContext({ async: true })).env as Record<string, unknown>;
   } catch {
-    return takeLocal(key);
+    return UNAVAILABLE;
   }
   const limiters = bindingsOf(env);
   if (!limiters) return UNAVAILABLE;

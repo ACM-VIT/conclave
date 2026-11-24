@@ -270,9 +270,12 @@ Object, `IngestQuota` (`lib/ingest-quota.ts`, exported by the Worker entry
 `worker.ts` next to the OpenNext handler, bound as `INGEST_QUOTA`), which
 counts every location's requests in one window; a rate limit binding would
 give each location its own 6000. A client over either limit gets 429 with
-`Retry-After: 60`, which the outbox already honours. On Cloudflare a missing
-binding, or one that fails or takes more than 2 s, answers 503; off
-Cloudflare (`next start`) the same two limits are kept in the process. It decodes the body
+`Retry-After: 60`, which the outbox already honours. In the Workers runtime
+(`navigator.userAgent` is `Cloudflare-Workers`) a missing binding, or one
+that fails or takes more than 2 s, answers 503. Anywhere else, `next start`
+and `next dev` included, the same two limits are kept in the process: there
+OpenNext's local platform proxy offers wrangler's bindings, but a Durable
+Object does not run in it. It decodes the body
 (gzip, base64 or JSON), drops events for any project but ours, and builds
 every event again from the outbound schema, so the
 browser's before_send is not the only guard. Each event is judged by its own
