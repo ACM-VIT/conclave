@@ -144,6 +144,7 @@ A reason belongs to a person and a seat to a tab, so one person can hold several
 21. A store never applies a write from an ownership generation older than one that has fenced it, whatever the writer's clock or cached lease says.
 22. No host command crashes or stalls the SFU on arguments it does not take: each is answered with a failure as it arrives.
 23. Nobody a host removed gets in by opening the room first: a removed person who creates a room knocks in it, as anywhere else (the code's owner and a configured host excepted). Their knock claims the opening only where the room then waits for a lost call's people, so the room keeps what their knock showed of them; elsewhere the room stays unopened for whoever may open it, and the knock waits for the next meeting.
+24. Turning away a knock never takes a host right from the person behind it: only a removal does. A tab of a person who holds a right gets that right back when it rejoins, as their other tabs keep it.
 
 ## Consequences
 

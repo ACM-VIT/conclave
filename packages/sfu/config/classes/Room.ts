@@ -3144,7 +3144,13 @@ export class Room {
 
   mayGrantHost(userKey: string, basis: HostBasis, guestProof?: string): boolean {
     if (this.isBlocked(userKey, guestProof)) return false;
-    if (basis !== "fallback" || this.hasLiveHostSeat(userKey, guestProof)) return true;
+    if (
+      basis !== "fallback" ||
+      this.hasLiveHostSeat(userKey, guestProof) ||
+      this.isAdminUserKey(userKey, guestProof)
+    ) {
+      return true;
+    }
     return !this.handingOff && !this.needsReadmission(userKey, guestProof);
   }
 
