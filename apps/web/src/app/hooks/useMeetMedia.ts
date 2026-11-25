@@ -30,7 +30,7 @@ import {
 import { clampMeetVolume, DEFAULT_MEET_VOLUME } from "../lib/meet-volume";
 import { applyAudioOutputDevice } from "../lib/audio-output";
 import {
-  getUserMediaWithTimeout,
+  getUserMediaWithTimeout as captureMediaWithTimeout,
   MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
   MEDIA_CAPTURE_RECOVERY_TIMEOUT_MS,
 } from "../lib/media-capture-timeout";
@@ -817,6 +817,7 @@ export function useMeetMedia({
     isMediaRecoveryBlocked,
   ]);
   const cameraProducerTrackRepairInFlightRef = useRef(false);
+  const cameraStallRepairQueuedRef = useRef(false);
   const cameraRecoveryPublishOverrideRef = useRef<
     WebcamCodecRecoveryOverride<ReturnType<typeof getPreferredWebcamCodec>> | null
   >(null);
@@ -1581,12 +1582,31 @@ export function useMeetMedia({
     [commitLocalStream, localStreamRef, stopLocalTrack],
   );
 
-  const cameraTracksAwaitingSwapRef = useRef<Set<MediaStreamTrack>>(new Set());
-  const stopCameraTracksAwaitingSwap = useCallback(() => {
-    const tracks = [...cameraTracksAwaitingSwapRef.current];
-    cameraTracksAwaitingSwapRef.current.clear();
-    tracks.forEach((track) => stopLocalTrack(track));
-  }, [stopLocalTrack]);
+  const callCameraTracksRef = useRef<Set<MediaStreamTrack>>(new Set());
+  const getUserMediaWithTimeout = useCallback(
+    async (...args: Parameters<typeof captureMediaWithTimeout>) => {
+      const stream = await captureMediaWithTimeout(...args);
+      const cameras = callCameraTracksRef.current;
+      cameras.forEach((track) => {
+        if (track.readyState === "ended") cameras.delete(track);
+      });
+      stream.getVideoTracks().forEach((track) => cameras.add(track));
+      return stream;
+    },
+    [],
+  );
+  useEffect(() => {
+    let cameraChosenNow = deviceIntents.get().video.chosen;
+    return deviceIntents.subscribe(() => {
+      const chosen = deviceIntents.get().video.chosen;
+      if (cameraChosenNow && !chosen) {
+        const tracks = [...callCameraTracksRef.current];
+        callCameraTracksRef.current.clear();
+        tracks.forEach((track) => stopLocalTrack(track));
+      }
+      cameraChosenNow = chosen;
+    });
+  }, [deviceIntents, stopLocalTrack]);
   const stopTracksExcept = useCallback(
     (
       tracks: readonly MediaStreamTrack[],
@@ -2674,10 +2694,6 @@ export function useMeetMedia({
       forceCaptureRefresh = false,
       requestedIn = captureGeneration(),
     ) => {
-      const topologyReplacement = cameraTopologyReplacementPromiseRef.current;
-      if (topologyReplacement) {
-        await topologyReplacement;
-      }
       const claim = { ...claimDevice("video"), generation: requestedIn };
       if (!claimHolds(claim)) return;
       const currentStream = localStreamRef.current ?? localStream;
@@ -2686,6 +2702,7 @@ export function useMeetMedia({
       let rollbackStream: MediaStream | null = null;
       let replacementTrack: MediaStreamTrack | null = null;
       let oldVideoTracksToStop: MediaStreamTrack[] = [];
+      let swapCommitted = false;
       let constrainedExistingTrack: MediaStreamTrack | null = null;
       let rollbackTrackConstraints: MediaTrackConstraints | null = null;
       let fencedPreviousProducer: Producer | null = null;
@@ -2819,7 +2836,6 @@ export function useMeetMedia({
           const previousStream = localStreamRef.current ?? currentStream;
           rollbackStream = previousStream;
           oldVideoTracksToStop = previousStream?.getVideoTracks() ?? [];
-          oldVideoTracksToStop.forEach((track) => cameraTracksAwaitingSwapRef.current.add(track));
           const remainingTracks = previousStream
             .getTracks()
             .filter((track) => track.kind !== "video");
@@ -2881,6 +2897,7 @@ export function useMeetMedia({
               await replaceCameraProducerTrack(previousProducer, nextVideoTrack);
             }
           }
+          swapCommitted = true;
           if (!claimHolds(claim)) {
             return;
           }
@@ -2969,6 +2986,7 @@ export function useMeetMedia({
           }
           return;
         }
+        swapCommitted = true;
         const nextProducerId = nextProducer.id;
         nextProducer.on("transportclose", () => {
           if (videoProducerRef.current?.id === nextProducerId) {
@@ -3008,7 +3026,7 @@ export function useMeetMedia({
           return;
         }
         console.error("[Meets] Failed to update video quality:", err);
-        if (rollbackStream && replacementTrack) {
+        if (rollbackStream && replacementTrack && !swapCommitted) {
           const restoredStream = new MediaStream([
             ...(localStreamRef.current?.getTracks().filter((track) => track.kind !== "video") ?? []),
             ...oldVideoTracksToStop.filter((track) => track.readyState === "live"),
@@ -3038,7 +3056,6 @@ export function useMeetMedia({
         if (producerTrack) inUse.add(producerTrack);
         for (const track of [replacementTrack, ...oldVideoTracksToStop]) {
           if (!track) continue;
-          cameraTracksAwaitingSwapRef.current.delete(track);
           if (!inUse.has(track)) stopLocalTrack(track);
         }
       }
@@ -3486,7 +3503,9 @@ export function useMeetMedia({
   if (!webcamTopologyReplacementQueueRef.current) {
     webcamTopologyReplacementQueueRef.current =
       createLatestWinsTopologyReplacementQueue((request) =>
-        applyWebcamProducerTopologyReplacementRef.current(request),
+        runCameraTrackOperation(() =>
+          applyWebcamProducerTopologyReplacementRef.current(request),
+        ),
       );
   }
 
@@ -4083,11 +4102,15 @@ export function useMeetMedia({
       }
       audioRecoveryInFlightRef.current = true;
       const generation = switchGeneration;
+      let preparedTrack: MediaStreamTrack | null = null;
       try {
         const producer = audioProducerRef.current;
         const nextTrack = isNoiseCancellationEnabled
           ? await prepareAudioPublishTrack(currentAudioTrack, generation)
           : getNoiseCancellationSourceTrack(currentAudioTrack);
+        if (nextTrack && nextTrack.id !== currentAudioTrack.id && isNoiseCancellationProcessedTrack(nextTrack)) {
+          preparedTrack = nextTrack;
+        }
 
         if (!switchHolds()) {
           if (
@@ -4145,6 +4168,13 @@ export function useMeetMedia({
           requestAudioProducerRecovery();
         }
       } catch (error) {
+        if (
+          preparedTrack &&
+          !(localStreamRef.current?.getTracks() ?? []).includes(preparedTrack)
+        ) {
+          detachNoiseCancellationSourceHandler(preparedTrack);
+          stopNoiseCancellationForTrack(preparedTrack, { stopOutput: true, stopSource: false });
+        }
         if (isCaptureReleased(error)) return;
         console.warn("[Meets] Failed to switch microphone processing:", error);
         if (microphoneChosen()) {
@@ -4198,7 +4228,6 @@ export function useMeetMedia({
       setIsCameraOff(true);
       const producer = videoProducerRef.current;
       if (producer) closeCameraProducer(producer);
-      stopCameraTracksAwaitingSwap();
       const previousStream = localStreamRef.current;
       if (previousStream) {
         previousStream.getVideoTracks().forEach((track) => {
@@ -4428,7 +4457,6 @@ export function useMeetMedia({
     produceCameraTrackWithRawFallback,
     requestCameraProducerRecovery,
     resumeProducerWithServerConfirmation,
-    stopCameraTracksAwaitingSwap,
   ]);
 
   useEffect(() => {
@@ -4467,12 +4495,14 @@ export function useMeetMedia({
         if (cameraProducerTrackRepairInFlightRef.current) return;
         cameraProducerTrackRepairInFlightRef.current = true;
         const claim = claimDevice("video");
-        void (async () => {
+        void runCameraTrackOperation(async () => {
           try {
             if (
               !claimHolds(claim) ||
               videoProducerRef.current?.id !== producer.id ||
               producer.closed ||
+              producer.track !== producerTrack ||
+              !(localStreamRef.current?.getVideoTracks() ?? []).includes(rawCameraTrack) ||
               isMediaRecoveryBlocked()
             ) {
               return;
@@ -4517,7 +4547,7 @@ export function useMeetMedia({
           } finally {
             cameraProducerTrackRepairInFlightRef.current = false;
           }
-        })();
+        });
         return;
       }
 
@@ -4726,6 +4756,7 @@ export function useMeetMedia({
           if (policy.codec === "vp9" && sample.frames === 0) {
             try {
               diagnosticTrack = holdClone(rawCameraTrack, claim.generation);
+              callCameraTracksRef.current.add(diagnosticTrack);
               applyCameraContentHint(diagnosticTrack);
             } catch (error) {
               if (isCaptureReleased(error)) return;
@@ -4984,12 +5015,18 @@ export function useMeetMedia({
             return;
           }
 
-          void recoverStalledProducer({
-            producer,
-            producerTrack,
-            sample,
-            state: nextState,
-            allowProducerRecreate,
+          if (cameraStallRepairQueuedRef.current) return;
+          cameraStallRepairQueuedRef.current = true;
+          void runCameraTrackOperation(async () => {
+            cameraStallRepairQueuedRef.current = false;
+            if (producer.track !== producerTrack) return;
+            await recoverStalledProducer({
+              producer,
+              producerTrack,
+              sample,
+              state: nextState,
+              allowProducerRecreate,
+            });
           });
         })
         .catch(() => {
@@ -5431,7 +5468,6 @@ export function useMeetMedia({
       currentStream?.getVideoTracks().forEach((track) => {
         stopLocalTrack(track);
       });
-      stopCameraTracksAwaitingSwap();
       const remainingTracks =
         currentStream?.getTracks().filter((track) => track.kind !== "video") ??
         [];
@@ -5447,7 +5483,6 @@ export function useMeetMedia({
       currentStream?.getVideoTracks().forEach((track) => {
         stopLocalTrack(track);
       });
-      stopCameraTracksAwaitingSwap();
       const remainingTracks =
         currentStream?.getTracks().filter((track) => track.kind !== "video") ??
         [];
@@ -5714,7 +5749,6 @@ export function useMeetMedia({
     closeLocalVideoProducerForReplacement,
     requestCameraProducerRecovery,
     finishCameraRecovery,
-    stopCameraTracksAwaitingSwap,
     claimDevice,
     claimHolds,
   ]);

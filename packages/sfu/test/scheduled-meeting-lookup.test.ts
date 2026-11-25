@@ -51,13 +51,14 @@ async function bookingService() {
 }
 
 describe("looking a booking up by room code", () => {
-  it("never moves the booking to the tenant a bare link asked under", async () => {
+  it("answers only for the tenant asked and never moves the booking", async () => {
     vi.stubEnv("SFU_CLIENT_ID", "acme");
     const { store, meeting, lookUp } = await bookingService();
 
-    expect(await lookUp("acme")).toMatchObject({ clientId: "conclave" });
-
+    expect(await lookUp("acme")).toBeNull();
+    expect(await lookUp("beta")).toBeNull();
     expect(getScheduledMeetingById(store, meeting.id)?.clientId).toBe("conclave");
     expect(await lookUp("conclave")).toMatchObject({ clientId: "conclave" });
+    expect(await lookUp("default")).toMatchObject({ clientId: "conclave" });
   });
 });

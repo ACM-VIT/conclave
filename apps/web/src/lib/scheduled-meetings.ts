@@ -8,19 +8,13 @@ import {
   canonicalizeSfuClientId,
   CONCLAVE_SFU_CLIENT_ID,
 } from "@/lib/sfu-client-id";
+import {
+  fetchPublicScheduledMeeting,
+  isSfuTooOldForBookings,
+  type PublicScheduledMeeting,
+} from "@/lib/scheduled-meeting-lookup";
 
-export interface PublicScheduledMeeting {
-  id: string;
-  clientId?: string;
-  roomCode: string;
-  title: string;
-  hostName: string;
-  scheduledStartAt: number;
-  scheduledEndAt: number;
-  status: "scheduled" | "live" | "ended" | "cancelled";
-  startedAt: number | null;
-  endedAt: number | null;
-}
+export type { PublicScheduledMeeting };
 
 export const resolveScheduledMeetingsBase = (): string => {
   const base = resolveSfuUrl().replace(/\/$/, "");
@@ -41,24 +35,14 @@ export const lookupPublicScheduledMeetingByRoomCode = async (
   roomCode: string,
 ): Promise<PublicScheduledMeeting | null> => {
   try {
-    const resolvedClientId =
-      canonicalizeSfuClientId(clientId) || CONCLAVE_SFU_CLIENT_ID;
-    const base = resolveScheduledMeetingsBase();
-    const url = `${base}/public/by-room/${encodeURIComponent(roomCode)}?clientId=${encodeURIComponent(resolvedClientId)}`;
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        "x-sfu-secret": resolveSfuSecret(),
-        accept: "application/json",
-      },
-      cache: "no-store",
-    });
-    if (!response.ok) return null;
-    const data = (await response.json()) as {
-      scheduledMeeting?: PublicScheduledMeeting;
-    };
-    return data?.scheduledMeeting ?? null;
-  } catch {
+    return await fetchPublicScheduledMeeting(
+      resolveScheduledMeetingsBase(),
+      resolveSfuSecret(),
+      canonicalizeSfuClientId(clientId) || CONCLAVE_SFU_CLIENT_ID,
+      roomCode,
+    );
+  } catch (error) {
+    if (isSfuTooOldForBookings(error)) throw error;
     return null;
   }
 };

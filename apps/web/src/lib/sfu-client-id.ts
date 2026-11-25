@@ -25,44 +25,25 @@ export const resolveServerSfuClientId = (): string =>
   canonicalizeSfuClientId(process.env.SFU_CLIENT_ID) ||
   resolveBrowserSfuClientId();
 
-const CONCLAVE_CLIENT_IDS = [
-  CONCLAVE_SFU_CLIENT_ID,
-  ...LEGACY_CONCLAVE_SFU_CLIENT_IDS,
-];
-
 export const resolveSfuClientIdCandidates = (
   preferred?: string | null,
 ): string[] => {
   const named = canonicalizeSfuClientId(preferred);
-  if (named) return named === CONCLAVE_SFU_CLIENT_ID ? CONCLAVE_CLIENT_IDS : [named];
-  return Array.from(new Set([resolveServerSfuClientId(), ...CONCLAVE_CLIENT_IDS]));
-};
-
-const isAnotherTenantsBooking = async <Meeting extends { clientId?: string; id?: string }>(
-  meeting: Meeting,
-  named: string,
-  lookup: (clientId: string) => Promise<Meeting | null>,
-): Promise<boolean> => {
-  if (!meeting.id) return false;
-  const serverDefault = resolveServerSfuClientId();
-  if (named === serverDefault || named === CONCLAVE_SFU_CLIENT_ID) return false;
-  return (await lookup(serverDefault))?.id === meeting.id;
+  if (named) return [named];
+  return Array.from(new Set([resolveServerSfuClientId(), CONCLAVE_SFU_CLIENT_ID]));
 };
 
 export const findScheduledMeetingForLink = async <
-  Meeting extends { clientId?: string; id?: string },
+  Meeting extends { clientId?: string },
 >(
   linkedClientId: string | null | undefined,
   lookup: (clientId: string) => Promise<Meeting | null>,
 ): Promise<{ clientId: string; meeting: Meeting } | null> => {
-  const named = canonicalizeSfuClientId(linkedClientId);
   for (const candidate of resolveSfuClientIdCandidates(linkedClientId)) {
     const meeting = await lookup(candidate);
-    if (!meeting) continue;
-    const booked = meeting.clientId?.trim();
-    if (named && booked && canonicalizeSfuClientId(booked) !== named) continue;
-    if (named && !booked && (await isAnotherTenantsBooking(meeting, named, lookup))) continue;
-    return { clientId: booked || candidate, meeting };
+    const booked = meeting?.clientId?.trim();
+    if (!meeting || !booked || canonicalizeSfuClientId(booked) !== candidate) continue;
+    return { clientId: booked, meeting };
   }
   return null;
 };
