@@ -89,6 +89,7 @@ export type RoomRegistry = {
   }) => Promise<RoomOwnershipClaim>;
   releaseRoom: (channelId: string) => Promise<void>;
   isLocalOwner: (owner: RoomAssignmentRecord | null | undefined) => boolean;
+  holdsLease: (channelId: string) => boolean;
 };
 
 export const DEFAULT_ROOM_PLACEMENT_TTL_MS = 20_000;
@@ -408,6 +409,10 @@ export class LocalRoomRegistry implements RoomRegistry {
     );
   }
 
+  holdsLease(): boolean {
+    return true;
+  }
+
   private createOwner(input: {
     channelId: string;
     clientId: string;
@@ -715,6 +720,10 @@ class RedisRoomRegistry implements RoomRegistry {
         owner.instanceId === this.instanceId &&
         (owner.instanceUrl ?? "") === (this.instanceUrl ?? ""),
     );
+  }
+
+  holdsLease(channelId: string): boolean {
+    return hasUsableLeaseDeadline(this.confirmedLeaseServeUntil.get(channelId), performance.now());
   }
 
   private async claimOrRenew(input: {

@@ -26,6 +26,7 @@ import {
   clearEndedRoom,
   getEndedRoom,
   getOrCreateRoomWithOrigin,
+  holdsRoomLease,
   renewLocalRoom,
   getRoomChannelId,
 } from "../../rooms.js";
@@ -1293,7 +1294,9 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         }
         if (isAdminJoin && (claimsOpening || restorerState !== "none")) {
           room.markRestored();
-          state.roomRecovery.noteRunning(room);
+          if (holdsRoomLease(state, room, "its recovery record")) {
+            state.roomRecovery.noteRunning(room);
+          }
         }
         const attempts = attemptsOf(state);
         const tabAttempts = attempts.byTab.get(joinKey);
@@ -1649,11 +1652,9 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           );
         }
 
-        const roomRecoveryPass = issueRoomRecoveryPass(
-          context.currentRoom,
-          context.currentClient,
-          config.sfuSecret,
-        );
+        const roomRecoveryPass = holdsRoomLease(state, context.currentRoom, "a recovery pass")
+          ? issueRoomRecoveryPass(context.currentRoom, context.currentClient, config.sfuSecret)
+          : null;
         respond(callback, {
           roomId,
           rtpCapabilities: context.currentRoom.rtpCapabilities,

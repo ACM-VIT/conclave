@@ -81,6 +81,10 @@ class SharedTestRoomRegistry implements RoomRegistry {
     }
   }
 
+  holdsLease(): boolean {
+    return true;
+  }
+
   isLocalOwner(owner: RoomAssignmentRecord | null | undefined): boolean {
     return Boolean(
       owner &&

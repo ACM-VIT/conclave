@@ -95,6 +95,16 @@ export const markRoomEnded = (
  * one count for nothing there, and the people a host removed from this one
  * are invited again, as anyone a booking invites is.
  */
+export const holdsRoomLease = (
+  state: Pick<SfuState, "roomRegistry">,
+  room: Pick<Room, "id" | "channelId">,
+  write: string,
+): boolean => {
+  if (state.roomRegistry.holdsLease(room.channelId)) return true;
+  Logger.warn(`Room ${room.id} no longer holds its lease, so it does not write ${write}.`);
+  return false;
+};
+
 const noteMeetingOver = (
   state: SfuState,
   room: Pick<
@@ -102,6 +112,7 @@ const noteMeetingOver = (
     "id" | "clientId" | "channelId" | "incarnationId" | "takesOverRecordOf" | "ownerEmail"
   >,
 ): void => {
+  if (!holdsRoomLease(state, room, "the end of its meeting")) return;
   state.roomRecovery.noteOver(room);
   endScheduledMeetingRemovals(
     state.scheduledMeetings,
@@ -118,7 +129,9 @@ const noteMeetingOver = (
 // ledger at once. The SFU may not live to the next renewal sweep.
 const recordRecoverableChanges = (state: SfuState, room: Room): void => {
   room.onRecoverableChange = () => {
-    if (room.recordsItsCall) state.roomRecovery.noteRunning(room);
+    if (room.recordsItsCall && holdsRoomLease(state, room, "its recovery record")) {
+      state.roomRecovery.noteRunning(room);
+    }
   };
   // A lost call whose time ran out is a meeting that is over, as one that
   // emptied or was ended is.
@@ -148,6 +161,7 @@ const bindScheduledInvitations = (state: SfuState, room: Room): void => {
       required,
     );
     if (!decided || !state.scheduledMeetingPersistence) return;
+    if (!holdsRoomLease(state, room, "an invitee's removal")) return;
     persistInviteeReadmission(
       state.scheduledMeetings,
       state.scheduledMeetingPersistence,
