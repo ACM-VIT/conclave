@@ -584,6 +584,7 @@ struct AppPagePendingCommand: Equatable {
     let target: String
     let labels: [String]
     let attempts: Int
+    let sentAtMillis: Double
 }
 
 enum WatchClassics {
@@ -740,6 +741,7 @@ final class AppHostPresenter {
     @ObservationIgnored var sleep: (Double) async -> Void = { millis in
         try? await Task.sleep(nanoseconds: UInt64(max(0.0, millis) * 1_000_000.0))
     }
+    @ObservationIgnored var nowMillis: () -> Double = { DiagnosticsClock.wallMillis() }
 
     @ObservationIgnored private(set) var session: ActiveAppSession? = nil
 
@@ -1389,11 +1391,14 @@ final class AppHostPresenter {
     func fireCommandTimeout(requestId: String) {
         if let pageIndex = pagePending.firstIndex(where: { $0.requestId == requestId }) {
             let command = pagePending[pageIndex]
-            if command.kind == AppPageCommandKind.addEntries && command.attempts < AppBridgeProtocol.commandAttempts
+            let elapsed = nowMillis() - command.sentAtMillis
+            let inDeadline = elapsed >= 0.0 && elapsed < AppBridgeProtocol.commandRetryDeadlineMillis
+            if command.kind == AppPageCommandKind.addEntries && command.attempts < AppBridgeProtocol.commandAttempts && inDeadline
                 && session?.sendCommand(AppPagePolicy.outboundType(command.kind), requestId: requestId,
                                         payload: ["labels": command.labels]) == true {
                 pagePending[pageIndex] = AppPagePendingCommand(requestId: requestId, kind: command.kind, target: command.target,
-                                                               labels: command.labels, attempts: command.attempts + 1)
+                                                               labels: command.labels, attempts: command.attempts + 1,
+                                                               sentAtMillis: command.sentAtMillis)
                 startCommandTimer(requestId: requestId)
                 return
             }
@@ -1587,7 +1592,8 @@ final class AppHostPresenter {
         }
         commandLog.append(kind.rawValue + ":" + requestId)
         if commandLog.count > 40 { commandLog.removeFirst() }
-        pagePending.append(AppPagePendingCommand(requestId: requestId, kind: kind, target: target, labels: labels, attempts: 1))
+        pagePending.append(AppPagePendingCommand(requestId: requestId, kind: kind, target: target, labels: labels, attempts: 1,
+                                                 sentAtMillis: nowMillis()))
         startCommandTimer(requestId: requestId)
         rebuildPages()
         return ActivityTapResult.dispatched

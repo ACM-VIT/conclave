@@ -122,6 +122,7 @@ test("the Swift twin matches protocol.ts", () => {
   assert.equal(Number(constant("requestMemory")), limits.requestMemory);
   assert.equal(Number(constant("commandAttempts")), protocol.COMMAND_RETRY.attempts);
   assert.equal(Number(constant("commandTimeoutMillis")), protocol.COMMAND_RETRY.timeoutMs);
+  assert.equal(Number(constant("commandRetryDeadlineMillis")), protocol.COMMAND_RETRY.deadlineMs);
   const cases = (enumName) => {
     const block = swift.match(new RegExp(`enum ${enumName}: String, CaseIterable, Equatable \\{([\\s\\S]*?)\\n\\}`));
     assert.ok(block, `missing Swift enum ${enumName}`);
@@ -417,7 +418,38 @@ test("an add's answer is kept for two minutes and the byte cap never drops one i
   assert.equal(ada.acks.filter((ack) => ack.requestId === "h-late").length, 2);
 });
 
-test("close invalidates the session for good", { skip: skipConvergence }, (context) => {
+test("a lost add ack, 64 sync frames and a retry after the answer expired still add the names once", { skip: skipConvergence }, (context) => {
+  const harness = makeRoom(sessionModule, context);
+  let now = 5_000;
+  const ada = harness.join("ada", {}, () => now);
+  const names = [];
+  ada.session.setCommandHandler((command) => {
+    if (command.type !== "addEntries") return { ok: true };
+    names.push(...command.payload.labels);
+    return { ok: true, added: [names.length - 1] };
+  });
+  assert.equal(harness.deliver(ada, "addEntries", { labels: ["Ada"] }, "h-1"), "none");
+  ada.outbox.length = 0;
+  for (let index = 0; index < 32; index += 1) {
+    harness.deliver(ada, "update", { update: "" }, `u-${index}`);
+    harness.deliver(ada, "awareness", { update: "" }, `a-${index}`);
+  }
+  now += protocol.COMMAND_RETRY.keepMs + 1_000;
+  harness.deliver(ada, "zoomToFit", {}, "h-tick");
+  assert.equal(ada.session.rememberedAnswers, 0, "the saved answer has expired");
+  assert.equal(harness.deliver(ada, "addEntries", { labels: ["Ada"] }, "h-1"), "duplicateRequest");
+  assert.deepEqual(names, ["Ada"]);
+});
+
+test("the native retry deadline ends inside every window the embed keeps an add's answer", () => {
+  const retry = protocol.COMMAND_RETRY;
+  const overCapWindow = retry.attempts * retry.timeoutMs + retry.timeoutMs;
+  assert.ok(retry.deadlineMs < overCapWindow && overCapWindow < retry.keepMs);
+  assert.ok(retry.deadlineMs > (retry.attempts - 1) * retry.timeoutMs, "every scheduled retry still goes out");
+  assert.ok(protocol.NATIVE_EMBED_LIMITS.executedCommands >= 1_024);
+});
+
+test("close invalidates the session for good",{ skip: skipConvergence }, (context) => {
   const harness = makeRoom(sessionModule, context);
   const ada = harness.join("ada");
   harness.deliver(ada, "close", {});

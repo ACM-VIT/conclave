@@ -99,6 +99,7 @@ export class NativeEmbedSession {
   private closed = false;
   private requestNumber = 0;
   private readonly seen: string[] = [];
+  private readonly executed = new Set<string>();
   private readonly answers = new Map<string, { payload: Record<string, unknown>; at: number; bytes: number }>();
   private answerBytes = 0;
   private readonly clock: () => number;
@@ -108,7 +109,7 @@ export class NativeEmbedSession {
   private awarenessTimer: ReturnType<typeof setTimeout> | null = null;
   private lastStatus = "";
 
-  constructor(transport: NativeTransport, scope: SessionScope, doc: Y.Doc, clock: () => number = Date.now) {
+  constructor(transport: NativeTransport, scope: SessionScope, doc: Y.Doc, clock: () => number = () => performance.now()) {
     this.clock = clock;
     this.transport = transport;
     this.scope = scope;
@@ -174,9 +175,9 @@ export class NativeEmbedSession {
       this.send("ack", answer.payload, envelope.requestId);
       return this.reject("duplicateRequest");
     }
-    if (this.seen.includes(envelope.requestId)) return this.reject("duplicateRequest");
-    this.seen.push(envelope.requestId);
-    if (this.seen.length > NATIVE_EMBED_LIMITS.requestMemory) this.seen.shift();
+    if (this.executed.has(envelope.requestId) || this.seen.includes(envelope.requestId)) return this.reject("duplicateRequest");
+    if (COMMAND_TYPES.has(envelope.type)) this.markExecuted(envelope.requestId);
+    else this.noteSeen(envelope.requestId);
     const payload = envelope.payload;
     switch (envelope.type) {
       case "snapshot":
@@ -364,6 +365,18 @@ export class NativeEmbedSession {
 
   get rememberedAnswers(): number {
     return this.answers.size;
+  }
+
+  private markExecuted(requestId: string): void {
+    this.executed.add(requestId);
+    if (this.executed.size <= NATIVE_EMBED_LIMITS.executedCommands) return;
+    const oldest = this.executed.values().next();
+    if (!oldest.done) this.executed.delete(oldest.value);
+  }
+
+  private noteSeen(requestId: string): void {
+    this.seen.push(requestId);
+    if (this.seen.length > NATIVE_EMBED_LIMITS.requestMemory) this.seen.shift();
   }
 
   private remember(requestId: string, payload: Record<string, unknown>): void {

@@ -345,6 +345,28 @@ struct ACT8WheelWatchTests {
         #expect(presenter.wheelDraft.text == "Cy\nDe\nEd", "a late reply for a request that timed out changes nothing")
     }
 
+    @Test func anAddIsNeverRetriedPastTheDeadlineEvenWhenTheTimerWakesLate() {
+        let wire = Wire()
+        let (presenter, _) = wheelReady(wire)
+        var now = 1_000_000.0
+        presenter.nowMillis = { now }
+        presenter.editWheelDraft("Ada\n")
+        let first = addRequests(wire)[0].id
+        now += AppBridgeProtocol.commandTimeoutMillis
+        presenter.fireCommandTimeout(requestId: first)
+        #expect(addRequests(wire).filter { $0.id == first }.count == 2, "a retry inside the deadline goes out")
+        now += AppBridgeProtocol.commandRetryDeadlineMillis
+        presenter.fireCommandTimeout(requestId: first)
+        #expect(addRequests(wire).filter { $0.id == first }.count == 2, "a timer that woke after the deadline sends nothing")
+        #expect(presenter.wheelDraft.text == "Ada", "the unanswered name returns to the draft")
+
+        presenter.editWheelDraft("Bo\n")
+        let second = addRequests(wire).last?.id ?? ""
+        now -= 1.0
+        presenter.fireCommandTimeout(requestId: second)
+        #expect(addRequests(wire).filter { $0.id == second }.count == 1, "a clock that ran backwards ends the retries")
+    }
+
     @Test func typingPastingAndRepliesInAnyOrderNeverRepeatOrLoseANameLetter() {
         var seed: UInt64 = 20261124
         func random(_ limit: Int) -> Int {

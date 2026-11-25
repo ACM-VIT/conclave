@@ -18,6 +18,7 @@ export const NATIVE_EMBED_LIMITS = {
   pages: 50,
   pageName: 40,
   requestMemory: 64,
+  executedCommands: 4_096,
 } as const;
 
 export const EMBED_TO_NATIVE_TYPES = ["ready", "sync", "update", "awareness", "status", "ack", "resize"] as const;
@@ -156,6 +157,7 @@ export const COMMAND_RETRY = {
   attempts: 3,
   timeoutMs: 10_000,
   keepMs: 120_000,
+  deadlineMs: 25_000,
   answerBytes: 65_536,
 } as const;
 
