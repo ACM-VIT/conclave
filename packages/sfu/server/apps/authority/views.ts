@@ -352,6 +352,28 @@ export type LiveAudiences = {
  * never carries a row that was hidden, changed or removed a moment before.
  * Only telling the viewers who already hold a view waits for the flush.
  */
+type Guarded<T> = { ok: true; value: T } | { ok: false; error: unknown };
+
+const guarded = <T>(run: () => T): Guarded<T> => {
+  try {
+    return { ok: true, value: run() };
+  } catch (error) {
+    return { ok: false, error };
+  }
+};
+
+type Projection = { key: string; value: Json } | null;
+
+type PreparedView =
+  | { kind: "shared"; byRole: ReadonlyMap<Role, Projection> }
+  | { kind: "personal"; owner: Subject | undefined; projected: Projection };
+
+export type PreparedRows = ReadonlyMap<string, ReadonlyMap<TableKey, ReadonlyMap<string, PreparedView>>>;
+
+const FAULT_RETRIES = 3;
+
+const faultKey = (table: string, key: TableKey): string => `${table}\u0000${key}`;
+
 export class ViewTracker {
   private policy: RoomPolicy;
   private readonly roles = new Map<Role, Audience>();
@@ -375,6 +397,9 @@ export class ViewTracker {
   /** Counts each time committed writes are taken in. */
   private version = 0;
   private readonly faults: Error[] = [];
+  private readonly faulted = new Map<string, Map<TableKey, number>>();
+  private retrying = new Map<string, Set<TableKey>>();
+  private passFaults: Set<string> | null = null;
 
   constructor(
     private readonly definition: RuntimeDefinition,
@@ -419,7 +444,7 @@ export class ViewTracker {
                 audience,
                 name,
                 key,
-                this.project(name, () => view.project(row, role, this.policy)),
+                this.project(view.source, key, name, () => view.project(row, role, this.policy)),
               );
             }
           }
@@ -433,7 +458,7 @@ export class ViewTracker {
               audience,
               name,
               key,
-              this.project(name, () => view.project(row, this.policy)),
+              this.project(view.source, key, name, () => view.project(row, this.policy)),
             );
           }
         }
@@ -503,12 +528,15 @@ export class ViewTracker {
     if (view.kind === "shared") {
       if (!("role" in audience.of)) return null;
       const { role } = audience.of;
-      return this.project(name, () => view.project(row, role, this.policy));
+      return this.project(view.source, source, name, () => view.project(row, role, this.policy));
     }
-    if (!("subject" in audience.of) || this.rowOwner(name, () => view.owner(row)) !== audience.of.subject) {
+    if (
+      !("subject" in audience.of) ||
+      this.rowOwner(view.source, source, name, () => view.owner(row)) !== audience.of.subject
+    ) {
       return null;
     }
-    return this.project(name, () => view.project(row, this.policy));
+    return this.project(view.source, source, name, () => view.project(row, this.policy));
   }
 
   /** Whether some viewer has yet to be told of a change, or of a clear. */
@@ -531,8 +559,8 @@ export class ViewTracker {
    * the views are always the committed rows, and reading them, as a viewer
    * who has just opened the app does, never changes them.
    */
-  takeIn(): void {
-    this.absorb();
+  takeIn(prepared?: PreparedRows): void {
+    this.absorb(prepared);
   }
 
   /** How many audiences' views are kept. */
@@ -832,6 +860,7 @@ export class ViewTracker {
    */
   flush(live: LiveAudiences): ViewFlush {
     this.keep(live);
+    this.retryFaulted();
     this.absorb();
     this.walks.clear();
     this.reportWithheld();
@@ -873,36 +902,52 @@ export class ViewTracker {
    * notes each change for the viewers who have yet to hear of it. It runs
    * before anything is read from the views.
    */
-  private absorb(): void {
-    if (!this.store.hasCleared && !this.store.hasDirty) return;
+  private absorb(prepared?: PreparedRows): void {
+    if (!this.store.hasCleared && !this.store.hasDirty && this.retrying.size === 0) return;
     this.version += 1;
     this.absorbCleared();
-    this.absorbDirty();
+    this.absorbDirty(prepared);
     this.orderOwing();
   }
 
-  private absorbDirty(): void {
-    const dirty = this.store.takeDirty();
+  private absorbDirty(prepared?: PreparedRows): void {
+    const written = this.store.takeDirty();
+    const keys = new Map<string, Set<TableKey>>();
+    for (const [tableName, tableKeys] of written) keys.set(tableName, new Set(tableKeys));
+    for (const [tableName, tableKeys] of this.retrying) {
+      const all = keys.get(tableName) ?? new Set<TableKey>();
+      for (const key of tableKeys) all.add(key);
+      keys.set(tableName, all);
+    }
+    this.retrying = new Map();
+    const faults = new Set<string>();
+    this.passFaults = faults;
     this.reconcile((change) => {
-      for (const [tableName, keys] of dirty) {
+      for (const [tableName, tableKeys] of keys) {
         const views = this.viewsByTable.get(tableName);
         if (!views) continue;
-        for (const key of keys) {
+        for (const key of tableKeys) {
           const row = this.store.get(tableName, key);
+          const ready = prepared?.get(tableName)?.get(key);
           for (const [name, view] of views) {
+            const readyView = ready?.get(name);
             if (view.kind === "shared") {
               for (const [role, audience] of this.roles) {
-                change(
-                  audience,
-                  name,
-                  key,
-                  row ? this.project(name, () => view.project(row, role, this.policy)) : null,
-                );
+                const projected = !row
+                  ? null
+                  : readyView?.kind === "shared"
+                    ? (readyView.byRole.get(role) ?? null)
+                    : this.project(tableName, key, name, () => view.project(row, role, this.policy));
+                change(audience, name, key, projected);
               }
               continue;
             }
             const previousOwner = this.ownerOf.get(name)!.get(key);
-            const nextOwner = row ? this.rowOwner(name, () => view.owner(row)) : undefined;
+            const nextOwner = !row
+              ? undefined
+              : readyView?.kind === "personal"
+                ? readyView.owner
+                : this.rowOwner(tableName, key, name, () => view.owner(row));
             if (previousOwner !== undefined && previousOwner !== nextOwner) {
               this.disown(name, previousOwner, key);
               const audience = this.subjects.get(previousOwner);
@@ -916,13 +961,48 @@ export class ViewTracker {
                 audience,
                 name,
                 key,
-                this.project(name, () => view.project(row, this.policy)),
+                readyView?.kind === "personal"
+                  ? readyView.projected
+                  : this.project(tableName, key, name, () => view.project(row, this.policy)),
               );
             }
           }
         }
       }
     });
+    this.passFaults = null;
+    for (const [tableName, tableKeys] of keys) {
+      const tracked = this.faulted.get(tableName);
+      if (!tracked) continue;
+      for (const key of tableKeys) {
+        if (!faults.has(faultKey(tableName, key))) tracked.delete(key);
+        else if (written.get(tableName)?.has(key)) tracked.set(key, 0);
+      }
+      if (tracked.size === 0) this.faulted.delete(tableName);
+    }
+  }
+
+  private retryFaulted(): void {
+    for (const [tableName, tracked] of this.faulted) {
+      for (const [key, tries] of tracked) {
+        if (tries >= FAULT_RETRIES) {
+          tracked.delete(key);
+          Logger.error(
+            `[Authority] ${this.definition.contract.id}: a row in ${tableName} still fails its view after ${FAULT_RETRIES} tries, and stays withheld until it is written again`,
+          );
+          continue;
+        }
+        tracked.set(key, tries + 1);
+        const due = this.retrying.get(tableName) ?? new Set<TableKey>();
+        due.add(key);
+        this.retrying.set(tableName, due);
+      }
+      if (tracked.size === 0) this.faulted.delete(tableName);
+    }
+  }
+
+  get hasRetries(): boolean {
+    return this.faulted.size > 0;
   }
 
   /**
@@ -1036,7 +1116,7 @@ export class ViewTracker {
       if (view.kind !== "shared") continue;
       bucketOf(audience, name);
       for (const [key, row] of this.store.rows(view.source)) {
-        const projected = this.project(name, () => view.project(row, role, this.policy));
+        const projected = this.project(view.source, key, name, () => view.project(row, role, this.policy));
         if (projected) this.place(audience, name, key, projected, false);
       }
     }
@@ -1050,8 +1130,8 @@ export class ViewTracker {
       bucketOf(audience, name);
       for (const key of this.owned.get(name)!.get(subject) ?? []) {
         const row = this.store.get(view.source, key);
-        if (!row || this.rowOwner(name, () => view.owner(row)) !== subject) continue;
-        const projected = this.project(name, () => view.project(row, this.policy));
+        if (!row || this.rowOwner(view.source, key, name, () => view.owner(row)) !== subject) continue;
+        const projected = this.project(view.source, key, name, () => view.project(row, this.policy));
         if (projected) this.place(audience, name, key, projected, false);
       }
     }
@@ -1080,21 +1160,18 @@ export class ViewTracker {
    * leak, so the row is withheld, never sent as it is.
    */
   private project(
+    table: string,
+    key: TableKey,
     view: string,
     run: () => { key: string; value: unknown } | null,
-  ): { key: string; value: Json } | null {
-    try {
-      return this.checked(view, run());
-    } catch (error) {
-      this.fault(view, error);
-      return null;
-    }
+  ): Projection {
+    const outcome = guarded(() => this.checked(view, run()));
+    if (outcome.ok) return outcome.value;
+    this.faultAt(table, key, view, outcome.error);
+    return null;
   }
 
-  private checked(
-    view: string,
-    projected: { key: string; value: unknown } | null,
-  ): { key: string; value: Json } | null {
+  private checked(view: string, projected: { key: string; value: unknown } | null): Projection {
     if (projected === null) return null;
     if (typeof projected.key !== "string" || projected.key.length === 0) {
       throw new Error("A projected row needs a key");
@@ -1107,43 +1184,62 @@ export class ViewTracker {
     return { key: projected.key, value };
   }
 
-  private rowOwner(view: string, run: () => Subject): Subject | undefined {
-    try {
-      return run();
-    } catch (error) {
-      this.fault(view, error);
-      return undefined;
-    }
+  private rowOwner(
+    table: string,
+    key: TableKey,
+    view: string,
+    run: () => Subject,
+  ): Subject | undefined {
+    const outcome = guarded(run);
+    if (outcome.ok) return outcome.value;
+    this.faultAt(table, key, view, outcome.error);
+    return undefined;
   }
 
-  private fault(view: string, error: unknown): void {
+  private faultAt(table: string, key: TableKey, view: string, error: unknown): void {
     if (this.options.verify) {
       this.faults.push(error instanceof Error ? error : new Error(String(error)));
-      return;
+    } else {
+      Logger.error(
+        `[Authority] ${this.definition.contract.id}: view ${view} withheld a row`,
+        error,
+      );
     }
-    Logger.error(
-      `[Authority] ${this.definition.contract.id}: view ${view} withheld a row`,
-      error,
-    );
+    const tracked = this.faulted.get(table) ?? new Map<TableKey, number>();
+    if (!tracked.has(key)) tracked.set(key, 0);
+    this.faulted.set(table, tracked);
+    this.passFaults?.add(faultKey(table, key));
   }
 
-  faultIn(written: Iterable<readonly [string, TableKey, object | undefined]>): unknown {
-    for (const [tableName, , row] of written) {
-      if (!row) continue;
-      for (const [name, view] of this.viewsByTable.get(tableName) ?? []) {
-        try {
-          if (view.kind === "shared") {
-            for (const role of AUTHORITY_ROLES) this.checked(name, view.project(row, role, this.policy));
-          } else {
-            view.owner(row);
-            this.checked(name, view.project(row, this.policy));
-          }
-        } catch (error) {
-          return error;
-        }
+  prepare(written: Iterable<readonly [string, TableKey, object | undefined]>): Guarded<PreparedRows> {
+    const prepared = new Map<string, Map<TableKey, Map<string, PreparedView>>>();
+    for (const [tableName, key, row] of written) {
+      const views = this.viewsByTable.get(tableName);
+      if (!row || !views) continue;
+      const forRow = new Map<string, PreparedView>();
+      for (const [name, view] of views) {
+        const outcome = guarded((): PreparedView =>
+          view.kind === "shared"
+            ? {
+                kind: "shared",
+                byRole: new Map(
+                  AUTHORITY_ROLES.map((role) => [role, this.checked(name, view.project(row, role, this.policy))]),
+                ),
+              }
+            : {
+                kind: "personal",
+                owner: view.owner(row),
+                projected: this.checked(name, view.project(row, this.policy)),
+              },
+        );
+        if (!outcome.ok) return outcome;
+        forRow.set(name, outcome.value);
       }
+      const byKey = prepared.get(tableName) ?? new Map<TableKey, Map<string, PreparedView>>();
+      byKey.set(key, forRow);
+      prepared.set(tableName, byKey);
     }
-    return undefined;
+    return { ok: true, value: prepared };
   }
 
   /**
@@ -1297,8 +1393,8 @@ export class ViewTracker {
       if (view.kind !== "personal") continue;
       bucketOf(audience, name);
       for (const [key, row] of this.store.rows(view.source)) {
-        if (this.rowOwner(name, () => view.owner(row)) !== subject) continue;
-        const projected = this.project(name, () => view.project(row, this.policy));
+        if (this.rowOwner(view.source, key, name, () => view.owner(row)) !== subject) continue;
+        const projected = this.project(view.source, key, name, () => view.project(row, this.policy));
         if (projected) this.place(audience, name, key, projected, false);
       }
     }

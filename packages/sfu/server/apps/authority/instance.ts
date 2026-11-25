@@ -405,16 +405,19 @@ export class AuthorityInstance {
       );
       return null;
     }
-    const fault = this.views.faultIn(staged.written());
-    if (fault !== undefined) {
-      Logger.error(`[Authority] ${this.appId}: a merged row fails its view, so the subjects are not merged`, fault);
+    const prepared = this.views.prepare(staged.written());
+    if (!prepared.ok) {
+      Logger.error(
+        `[Authority] ${this.appId}: a merged row fails its view, so the subjects are not merged`,
+        prepared.error,
+      );
       return null;
     }
     return {
       fresh: () => staged.fresh() && this.receipts.mergeFits(merges, now),
       commit: () => {
         const changed = staged.commit();
-        this.views.takeIn();
+        this.views.takeIn(prepared.value);
         for (const { from, into } of merges) this.receipts.merge(from, into);
         return changed;
       },
@@ -482,7 +485,7 @@ export class AuthorityInstance {
 
   /** Rows the views have yet to take in, or viewers have yet to be told of. */
   get hasPendingChanges(): boolean {
-    return this.store.hasDirty || this.views.hasUntold;
+    return this.store.hasDirty || this.views.hasUntold || this.views.hasRetries;
   }
 
   flushViews(live: LiveAudiences): ViewFlush {
