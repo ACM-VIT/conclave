@@ -298,6 +298,7 @@ interface MeetsMainContentProps {
   mediaError?: MeetError | null;
   setupNotice?: SetupNotice | null;
   prejoinInitialMedia?: RejoinMedia | null;
+  onPrejoinInitialMediaUsed?: () => void;
   onDismissSetupNotice?: () => void;
   browserAudioNeedsGesture: boolean;
   browserAudioPlaybackAttemptToken?: number;
@@ -584,6 +585,7 @@ export default function MeetsMainContent({
   mediaError,
   setupNotice,
   prejoinInitialMedia,
+  onPrejoinInitialMediaUsed,
   onDismissSetupNotice,
   isPopoutActive,
   isPopoutSupported,
@@ -2283,6 +2285,7 @@ export default function MeetsMainContent({
             mediaError={mediaError}
             setupNotice={setupNotice}
             initialMedia={prejoinInitialMedia}
+            onInitialMediaUsed={onPrejoinInitialMediaUsed}
             onDismissSetupNotice={onDismissSetupNotice}
             videoEffects={videoEffects}
             onVideoEffectsChange={onVideoEffectsChange}

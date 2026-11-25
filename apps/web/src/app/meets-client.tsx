@@ -430,7 +430,7 @@ export default function MeetsClient({
   const [pendingNewMeetingRoomId, setPendingNewMeetingRoomId] =
     useState<string | null>(null);
   const [setupNotice, setSetupNotice] = useState<SetupNotice | null>(null);
-  const [rejoinMedia] = useState(() =>
+  const [rejoinMedia, setRejoinMedia] = useState(() =>
     typeof window === "undefined"
       ? null
       : readRejoinIntent({
@@ -634,6 +634,8 @@ export default function MeetsClient({
     adminNotice,
     setAdminNotice,
   } = useMeetState({ initialRoomId });
+  if (rejoinMedia && connectionState === "joined") setRejoinMedia(null);
+  const consumeRejoinMedia = useCallback(() => setRejoinMedia(null), []);
 
   const [serverActiveSpeakerAvailable, setServerActiveSpeakerAvailable] =
     useState(false);
@@ -3485,6 +3487,7 @@ export default function MeetsClient({
         mediaError={mediaError}
         setupNotice={setupNotice}
         prejoinInitialMedia={rejoinMedia}
+        onPrejoinInitialMediaUsed={consumeRejoinMedia}
         onDismissSetupNotice={() => setSetupNotice(null)}
         isPopoutActive={isPopoutActive}
         isPopoutSupported={isPopoutSupported}

@@ -177,6 +177,7 @@ interface JoinScreenProps {
   setupNotice?: SetupNotice | null;
   onDismissSetupNotice?: () => void;
   initialMedia?: RejoinMedia | null;
+  onInitialMediaUsed?: () => void;
   videoEffects: VideoEffectsState;
   onVideoEffectsChange: Dispatch<SetStateAction<VideoEffectsState>>;
   onPrejoinMediaCommit?: (handoff: PrejoinMediaHandoff) => void;
@@ -333,6 +334,7 @@ function JoinScreen({
   setupNotice,
   onDismissSetupNotice,
   initialMedia,
+  onInitialMediaUsed,
   videoEffects,
   onVideoEffectsChange,
   onPrejoinMediaCommit,
@@ -1108,8 +1110,9 @@ function JoinScreen({
     return true;
   };
 
-  const restoringMedia = useRejoinMediaRestore(initialMedia, (media) =>
-    applyRejoinMedia(media, {
+  const restoringMedia = useRejoinMediaRestore(initialMedia, (media) => {
+    onInitialMediaUsed?.();
+    return applyRejoinMedia(media, {
       userChoices: () => userMediaChoicesRef.current,
       isAudioOnly: () => audioOnlyRef.current,
       isMicOn: () => micIntentRef.current,
@@ -1117,8 +1120,8 @@ function JoinScreen({
       turnOnAudioOnly: toggleAudioOnly,
       turnOnMic: toggleMic,
       turnOnCamera: toggleCamera,
-    }),
-  );
+    });
+  });
   const userMediaChoice =
     <Args extends unknown[]>(run: (...args: Args) => unknown) =>
     (...args: Args) => {
