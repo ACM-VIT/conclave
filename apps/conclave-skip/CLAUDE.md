@@ -201,9 +201,10 @@ registers a JVM-wide URL stream handler factory, which Java allows once. The
 `SandboxAssetUrlHandler` plugin (`Tests/ConclaveTests/Skip/resources/META-INF/services`)
 registers it in every sandbox before every test and accepts "factory already
 defined", so whichever sandbox comes first owns it and no class needs a
-per-class reset. The Kotlin test runner must put `Tests/ConclaveTests/Skip/resources`
-on the test resources path (the conclave-tools init script does), or a class on
-another SDK breaks every diagnostics store write in a later sandbox.
+per-class reset. `Sources/Conclave/Skip/skip.yml` adds `Tests/ConclaveTests/Skip/resources`
+to the `:Conclave` test resources (found by walking up from the generated module,
+so it works in the app build and in Skip's own test project). Without it a class
+on another SDK breaks every diagnostics store write in a later sandbox.
 `SandboxAssetUrlHandlerTests` runs on sdk 28 and 33 and fails if the plugin
 is not loaded.
 
