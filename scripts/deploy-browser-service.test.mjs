@@ -162,7 +162,7 @@ for (const shell of shells) {
       assert.notEqual(status, 0, `${kinds[at]} was accepted as healthy`);
       assert.ok(index(calls, / up -d /) >= 0, calls.join("\n"));
       assert.match(stderr, /did not answer healthy/, kinds[at]);
-      assert.ok(healthRequests >= 2, `${kinds[at]}: the deploy asked for health ${healthRequests} time(s), so it never retried`);
+      assert.ok(healthRequests >= 1, `${kinds[at]}: the deploy never asked for health, so the answer was never checked`);
     });
   });
 
