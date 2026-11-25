@@ -2718,9 +2718,10 @@ test(
   async () => {
     const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
     try {
-      const modes = ['SCHEDULING_PERSISTENCE=" JSON "', "SCHEDULED_MEETINGS_PERSISTENCE=file", "SCHEDULED_WEBINARS_PERSISTENCE=json"];
+      const paths = ["SCHEDULING_PATH=/var/lib/conclave/recordings/data/scheduling.json", "SCHEDULED_MEETINGS_PATH=/var/lib/conclave/recordings/data/scheduled-meetings.json", "SCHEDULED_WEBINARS_PATH=/var/lib/conclave/recordings/data/scheduled-webinars.json"];
+      const modes = ['SCHEDULING_PERSISTENCE=" JSON "', "SCHEDULED_MEETINGS_PERSISTENCE=file", "SCHEDULED_WEBINARS_PERSISTENCE=json", ...paths];
       const { state, backup, latestArchive, restore, setDocker } = await setUp(root, modes);
-      await setDocker([{ id: "sfu-a", mounts: [state], status: "exited", env: ["SFU_PORT=9", "SFU_INSTANCE_ID=sfu-a", "SCHEDULING_PERSISTENCE= JSON ", "SCHEDULED_MEETINGS_PERSISTENCE=file", "SCHEDULED_WEBINARS_PERSISTENCE=json"] }]);
+      await setDocker([{ id: "sfu-a", mounts: [state], status: "exited", env: ["SFU_PORT=9", "SFU_INSTANCE_ID=sfu-a", "SCHEDULING_PERSISTENCE= JSON ", "SCHEDULED_MEETINGS_PERSISTENCE=file", "SCHEDULED_WEBINARS_PERSISTENCE=json", ...paths] }]);
       await mkdir(path.join(state, "data"));
       for (const name of ["scheduling.json", "scheduled-meetings.json", "scheduled-webinars.json"]) await writeFile(path.join(state, "data", name), `{"kept":"${name}"}`);
       await backup("--local-only");
@@ -2800,6 +2801,51 @@ test("an SFU whose own Redis the backup config does not name stops the backup an
     await writeFile(config, `${await readFile(config, "utf8")}\nSFU_PERSISTENCE_REDIS_URL=redis://:secret-pass@127.0.0.1:6380/0\n`);
     await setDocker([{ id: "sfu-staging", mounts: [state], status: "exited", env: [...staging, "SFU_PERSISTENCE_REDIS_KEY_PREFIX=staging"] }]);
     await assert.rejects(backup("--local-only"), /sfu-staging keeps its state under the Redis key prefix staging/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a JSON store whose file is not in the state dir stops the backup", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, local, setDocker, backup } = await setUp(root);
+    withDatabase(state);
+    const sfu = (env) => setDocker([{ id: "sfu-a", mounts: [state], status: "exited", env: ["SFU_PORT=9", "SFU_INSTANCE_ID=sfu-a", ...env] }]);
+    await sfu(["SCHEDULING_PERSISTENCE=json"]);
+    await assert.rejects(backup("--local-only"), /SCHEDULING_PERSISTENCE=json keeps its file at the SFU's working directory default .*set SCHEDULING_PATH/);
+    await sfu(["SCHEDULED_WEBINARS_PERSISTENCE=file", "SCHEDULED_WEBINARS_PATH=/tmp/webinars.json"]);
+    await assert.rejects(backup("--local-only"), /SCHEDULED_WEBINARS_PATH=\/tmp\/webinars\.json .* is outside the state dir/);
+    await sfu(["SCHEDULED_MEETINGS_PERSISTENCE=json", "SCHEDULED_MEETINGS_PATH=relative/meetings.json"]);
+    await assert.rejects(backup("--local-only"), /SCHEDULED_MEETINGS_PATH=relative\/meetings\.json .* is not an absolute path/);
+    assert.deepEqual(await archives(local), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a Redis password with spaces at either end reaches Redis whole", needsRedis, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  const live = await startRedis(" sec ret ");
+  try {
+    const { state, local, backup } = await setUp(root, [`SFU_PERSISTENCE_REDIS_URL=redis://:%20sec%20ret%20@127.0.0.1:${live.port}/0`]);
+    withDatabase(state);
+    await live.cli("SET", "conclave:sfu:persistence:meeting", "kept");
+    await backup("--local-only");
+    assert.equal((await archives(local)).length, 1);
+  } finally {
+    live.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a Redis URL with a line break in a decoded field is refused before anything is read", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, local, backup } = await setUp(root, ["SFU_PERSISTENCE_REDIS_URL=redis://:pass%0Aword@127.0.0.1:9/0"]);
+    withDatabase(state);
+    await assert.rejects(backup("--local-only"), /line break/);
+    assert.deepEqual(await archives(local), []);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

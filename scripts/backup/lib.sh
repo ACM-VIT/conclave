@@ -47,22 +47,20 @@ load_backup_config() {
 parse_redis_url() {
   local fields
   fields="$(REDIS_URL_IN="$1" python3 -c '
-import os, urllib.parse as u
+import os, sys, urllib.parse as u
 p = u.urlsplit(os.environ["REDIS_URL_IN"])
-print(p.hostname or "127.0.0.1")
-print(p.port or 6379)
-print(p.path.strip("/") or "0")
-print(u.unquote(p.username or ""))
-print(u.unquote(p.password or ""))
-print("1" if p.scheme == "rediss" else "0")
-')"
+fields = [p.hostname or "127.0.0.1", str(p.port or 6379), p.path.strip("/") or "0", u.unquote(p.username or ""), u.unquote(p.password or ""), "1" if p.scheme == "rediss" else "0"]
+if any("\n" in field or "\r" in field for field in fields):
+    sys.exit("the Redis URL has a line break in one of its fields")
+print("\n".join(fields))
+')" || die "cannot read the Redis URL"
   {
-    read -r REDIS_HOST
-    read -r REDIS_PORT
-    read -r REDIS_DB
-    read -r REDIS_USER
-    read -r REDIS_PASS
-    read -r REDIS_TLS
+    IFS= read -r REDIS_HOST
+    IFS= read -r REDIS_PORT
+    IFS= read -r REDIS_DB
+    IFS= read -r REDIS_USER
+    IFS= read -r REDIS_PASS
+    IFS= read -r REDIS_TLS
   } <<< "$fields"
 }
 

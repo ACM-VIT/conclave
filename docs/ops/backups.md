@@ -161,8 +161,12 @@ Every store's database (`CONCLAVE_SQLITE_PATH`, or a store's own
 env, each store's precedence applied) must point inside the state dir. A
 store whose `SCHEDULING_PERSISTENCE`, `SCHEDULED_MEETINGS_PERSISTENCE` or
 `SCHEDULED_WEBINARS_PERSISTENCE` is `json` or `file` (trimmed, any case, as
-the SFU reads it) opens no database, so none is required for it; its files are
-backed up with the rest of the state dir. An SFU
+the SFU reads it) opens no database, so none is required for it. It keeps
+its records in one file, `SCHEDULING_PATH`, `SCHEDULED_MEETINGS_PATH` or
+`SCHEDULED_WEBINARS_PATH`, which must be set and lie inside the state dir: the
+SFU's default (`data/<store>.json` under its working directory) is inside the
+container, not on the volume, so the backup and the restore refuse it. The
+file is backed up with the rest of the state dir. An SFU
 container is one whose env sets `SFU_INSTANCE_ID`, the rule the deploy uses to
 pick its SFU services; another container on the state dir (a maintenance one,
 say) neither chooses the stores nor stops a backup, though any running
