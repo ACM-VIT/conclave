@@ -137,6 +137,24 @@ describe("a chosen device ends up sending", () => {
     expect(unwanted(world, rig.rig())).toEqual([]);
   });
 
+  it("muting while a microphone recovery publishes keeps the client and the SFU agreeing when the SFU refuses the mute", async () => {
+    const rig = await join({ camera: false });
+    world.holds.add("produce");
+    await act(async () => liveMicrophoneSource()?.lose());
+    await until("the recovery publish", () => pendingOf("produce") === 1);
+
+    world.refusals.set("toggleMute", 1);
+    await act(async () => {
+      await rig.rig().media.toggleMute();
+    });
+    await releaseAll(rig);
+
+    const [producer] = world.producers.filter((candidate) => !candidate.closed && candidate.kind === "audio");
+    expect([producer?.paused, world.sfu.get(producer?.id ?? "")?.paused]).toEqual([false, false]);
+    expect(rig.rig().state.isMuted).toBe(false);
+    expect(unwanted(world, rig.rig())).toEqual([]);
+  });
+
   it("unmuting while a muted microphone recovery is publishing sends the microphone", async () => {
     const rig = await join({ camera: false });
     await act(async () => {
