@@ -1,0 +1,395 @@
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import test from "node:test";
+
+import { artifactProblems, contextProblems, imagePackages, repoRoot, workspacePackages } from "./check-docker-context.mjs";
+import { composeBuilds, rootContextBuilds } from "./docker-context/compose.mjs";
+import { DockerfileError, contextCopies } from "./docker-context/dockerfile.mjs";
+import { dockerIgnoreMatcher, walkContext } from "./docker-context/dockerignore.mjs";
+import { UnsupportedShape } from "./docker-context/unsupported.mjs";
+
+const dockerIgnore = readFileSync(path.join(repoRoot, ".dockerignore"), "utf8");
+const packages = workspacePackages(repoRoot);
+
+function fixture(t, files) {
+  const root = mkdtempSync(path.join(tmpdir(), "docker-context-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  for (const [file, content] of Object.entries(files)) {
+    mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+    writeFileSync(path.join(root, file), content);
+  }
+  return root;
+}
+
+const copies = (text, args) => contextCopies(text, args).map((copy) => copy.sources);
+
+test("a re-included directory brings its whole subtree back, as Docker does", () => {
+  const { excluded } = dockerIgnoreMatcher("**\n!packages/\n");
+  assert.equal(excluded("packages/apps-sdk/src/index.ts"), false);
+  assert.equal(excluded("apps/web/package.json"), true);
+});
+
+test("the last matching pattern wins and single stars stay inside one segment", () => {
+  const { excluded } = dockerIgnoreMatcher("**\n!packages/sfu/**\npackages/sfu/*.log\n**/node_modules\n");
+  assert.equal(excluded("packages/sfu/server.ts"), false);
+  assert.equal(excluded("packages/sfu/boot.log"), true);
+  assert.equal(excluded("packages/sfu/logs/boot.log"), false);
+  assert.equal(excluded("packages/sfu/node_modules/tsx/package.json"), true);
+});
+
+test("JSON-form COPY with flags before it reads the array, not the raw text", () => {
+  assert.deepEqual(copies('FROM node\nCOPY --chown=node:node --link ["packages/sfu/package.json", "packages/sfu/"]\n'), [["packages/sfu/package.json"]]);
+  assert.deepEqual(copies('FROM node\nCOPY ["a b.txt", "dest/"]\n'), [["a b.txt"]]);
+});
+
+test("continuations skip comments and blank lines, and ARG, ENV and build args expand in COPY", () => {
+  const text = [
+    "ARG BASE=node:22",
+    "FROM ${BASE}",
+    "ARG PKG=sfu",
+    "ENV ROOT=packages",
+    "COPY ${ROOT}/${PKG}/package.json \\",
+    "# a comment inside the continuation",
+    "",
+    "     ${ROOT}/${PKG:-ai}/src \"${ROOT}/ui tokens\" ./",
+    "COPY <<EOF /app/note.txt",
+    "inline",
+    "EOF",
+  ].join("\n");
+  assert.deepEqual(copies(text), [["packages/sfu/package.json", "packages/sfu/src", "packages/ui tokens"]]);
+  assert.deepEqual(copies(text, { PKG: "apps-sdk" })[0][0], "packages/apps-sdk/package.json");
+});
+
+test("the escape directive changes the continuation character", () => {
+  assert.deepEqual(copies("# escape=`\nFROM node\nCOPY a `\n  b ./\n"), [["a", "b"]]);
+});
+
+test("malformed Dockerfiles fail instead of being read wrongly", () => {
+  assert.throws(() => contextCopies("FROM node\nCOPY a \\\n"), DockerfileError);
+  assert.throws(() => contextCopies("FROM node\nRUN <<EOF\npnpm build\n"), DockerfileError);
+  assert.throws(() => contextCopies("COPY a b\n"), DockerfileError);
+});
+
+test("context reads the guard cannot resolve fail closed", () => {
+  const cases = {
+    ADD: "FROM node\nADD https://example.com/x.tgz /x\n",
+    ONBUILD: "FROM node\nONBUILD COPY . /app\n",
+    "unknown COPY flag": "FROM node\nCOPY --parents packages/*/package.json ./\n",
+    "bind mount": "FROM node\nRUN --mount=type=bind,source=packages,target=/src true\n",
+    "default mount type": "FROM node\nRUN --mount=source=packages,target=/src true\n",
+    "base image variable": "FROM node\nCOPY $HOME/x ./\n",
+    "undeclared ARG": "FROM node\nCOPY packages/${UNDECLARED}/package.json ./\n",
+  };
+  for (const [name, text] of Object.entries(cases)) assert.throws(() => contextCopies(text), UnsupportedShape, name);
+  assert.deepEqual(copies("FROM node\nRUN --mount=type=cache,target=/root/.cache true\nCOPY --from=build /app/dist ./dist\nCOPY a ./\n"), [["a"]]);
+});
+
+test("an image needs the workspace closure of its own package and of every package it copies from", () => {
+  assert.deepEqual(imagePackages("packages/shared-browser/Dockerfile", ["package.json", "packages/shared-browser/src"], packages), ["@conclave/shared-browser"]);
+  assert.deepEqual(imagePackages("Dockerfile", ["pnpm-lock.yaml", "packages/apps-sdk/package.json"], packages), ["@conclave/ai", "@conclave/apps-sdk"]);
+  assert.deepEqual(imagePackages("packages/sfu/Dockerfile", [], packages), ["@conclave/ai", "@conclave/apps-sdk", "@conclave/meeting-core", "@conclave/sfu", "@conclave/shared-browser", "@conclave/ui-tokens"]);
+});
+
+test("wildcard COPY sources fail closed and missing ones are reported", (t) => {
+  const root = fixture(t, {
+    ".dockerignore": "",
+    "docker-compose.yml": "services:\n  a:\n    build: { context: ., dockerfile: a.Dockerfile }\n  b:\n    build: { context: ., dockerfile: b.Dockerfile }\n",
+    "a.Dockerfile": "FROM node\nCOPY packages/*/package.json ./\n",
+    "b.Dockerfile": "FROM node\nCOPY missing.txt ../outside ./\n",
+    "apps/.keep": "",
+    "packages/.keep": "",
+  });
+  execFileSync("git", ["init", "-q"], { cwd: root });
+  execFileSync("git", ["add", "-A"], { cwd: root });
+  const problems = contextProblems(root);
+  assert.ok(problems.some((problem) => problem.startsWith("a.Dockerfile: unsupported shape: line 2: wildcard COPY source packages/*/package.json")));
+  assert.ok(problems.includes("b.Dockerfile: line 2: COPY source missing.txt is not in the build context"));
+  assert.ok(problems.includes("b.Dockerfile: line 2: COPY source ../outside is outside the build context"));
+});
+
+test("compose builds are found whatever the key order or build form", (t) => {
+  const root = fixture(t, {
+    "docker-compose.yml": [
+      "services:",
+      "  reversed:",
+      "    build:",
+      "      dockerfile: packages/a/Dockerfile",
+      "      context: ./",
+      "      args: [\"PKG=a\"]",
+      "  short:",
+      "    build: .",
+      "  elsewhere:",
+      "    build:",
+      "      context: packages/b",
+      "  image-only:",
+      "    image: redis",
+    ].join("\n"),
+    "compose.yaml": "services:\n  flow: { build: { context: '.', dockerfile: 'packages/c/Dockerfile', args: { PKG: c, N: 2 } } }\n",
+  });
+  assert.deepEqual(rootContextBuilds(root).map(({ service, dockerfile, args }) => [service, dockerfile, args]), [
+    ["short", "Dockerfile", {}],
+    ["reversed", "packages/a/Dockerfile", { PKG: "a" }],
+    ["flow", "packages/c/Dockerfile", { PKG: "c", N: "2" }],
+  ]);
+});
+
+test("compose builds the guard cannot resolve fail closed", (t) => {
+  const compose = (build) => fixture(t, { "docker-compose.yml": `services:\n  x:\n    build:\n${build}\n` });
+  for (const build of [
+    "      context: .\n      args: [PKG]",
+    "      context: .\n      args:\n        PKG:",
+    "      context: .\n      dockerfile: ${DOCKERFILE}",
+    "      dockerfile_inline: FROM node",
+    "      context: .\n      additional_contexts:\n        extra: ./x",
+  ]) {
+    assert.throws(() => rootContextBuilds(compose(build)), UnsupportedShape, build);
+  }
+});
+
+test("the context walk finds nested artifacts on disk and probes every included directory", (t) => {
+  const root = fixture(t, {
+    "packages/a/package.json": "{}",
+    "packages/a/src/index.ts": "",
+    "packages/a/src/.env.local": "SECRET=1",
+    "packages/a/docker/node_modules/pkg/index.js": "",
+    "packages/a/node_modules/pkg/index.js": "",
+    "node_modules/huge/index.js": "",
+  });
+  const rootOnly = dockerIgnoreMatcher("**\n!packages/a/**\npackages/a/node_modules\npackages/a/dist\npackages/a/.env\npackages/a/.env.*\npackages/a/*.log\n");
+  const files = walkContext(root, rootOnly);
+  assert.deepEqual(files, ["packages/a/docker/node_modules/pkg/index.js", "packages/a/package.json", "packages/a/src/.env.local", "packages/a/src/index.ts"]);
+  const problems = artifactProblems(".dockerignore", rootOnly, files);
+  assert.ok(problems.includes(".dockerignore: packages/a/src/.env.local is on disk and would enter the build context"));
+  assert.ok(problems.includes(".dockerignore: packages/a/docker/node_modules/pkg/index.js is on disk and would enter the build context"));
+  assert.ok(problems.includes(".dockerignore: packages/a/src/dist/probe.js would enter the build context"));
+  const global = dockerIgnoreMatcher(`**\n!packages/a/**\n${dockerIgnore.split("\n").filter((line) => line.startsWith("**/")).join("\n")}\n`);
+  assert.deepEqual(artifactProblems(".dockerignore", global, walkContext(root, global)), []);
+});
+
+test("every root-context image gets all of its workspace packages and none of their build artifacts", () => {
+  assert.deepEqual(contextProblems(repoRoot), []);
+});
+
+test("rules that protect only package roots let nested artifacts in", () => {
+  const rootOnly = dockerIgnore
+    .split("\n")
+    .filter((line) => !line.startsWith("**/"))
+    .concat([...packages.values()].flatMap(({ dir }) => ["node_modules", "dist", ".env", ".env.*", "*.log"].map((name) => `${dir}/${name}`)))
+    .join("\n");
+  const problems = contextProblems(repoRoot, { dockerIgnore: rootOnly });
+  assert.ok(problems.includes(".dockerignore: packages/apps-sdk/src/.env.local would enter the build context"));
+  assert.ok(problems.includes(".dockerignore: packages/shared-browser/docker/node_modules/probe/index.js would enter the build context"));
+});
+
+test("dropping a workspace package the SFU depends on fails the check", () => {
+  const withoutAppsSdk = dockerIgnore.split("\n").filter((line) => !line.includes("packages/apps-sdk")).join("\n");
+  const problems = contextProblems(repoRoot, { dockerIgnore: withoutAppsSdk });
+  assert.ok(problems.some((problem) => /^packages\/sfu\/Dockerfile: line \d+: COPY source packages\/apps-sdk\/package.json is not in the build context$/.test(problem)));
+  assert.ok(problems.includes("packages/sfu/Dockerfile: source packages/apps-sdk/package.json needs packages/apps-sdk/package.json, which .dockerignore excludes"));
+  assert.ok(problems.includes("packages/sfu/Dockerfile: @conclave/apps-sdk needs packages/apps-sdk/src/index.ts, which .dockerignore excludes"));
+});
+
+test("an image may leave test files out of its packages", () => {
+  assert.deepEqual(contextProblems(repoRoot, { dockerIgnore: `${dockerIgnore}\npackages/ai/test\npackages/sfu/test\npackages/shared-browser/test\n` }), []);
+});
+
+test("re-including all of packages/ without artifact rules leaks them into the context", () => {
+  const problems = contextProblems(repoRoot, { dockerIgnore: "**\n!package.json\n!pnpm-lock.yaml\n!pnpm-workspace.yaml\n!patches/\n!packages/\n" });
+  assert.ok(problems.includes(".dockerignore: packages/apps-sdk/node_modules/probe/index.js would enter the build context"));
+  assert.ok(problems.includes(".dockerignore: packages/meeting-core/.env would enter the build context"));
+});
+
+
+function gitFixture(t, files) {
+  const root = fixture(t, { "apps/.keep": "", ...files });
+  execFileSync("git", ["init", "-q"], { cwd: root });
+  execFileSync("git", ["add", "-A"], { cwd: root });
+  return root;
+}
+
+const fixturePackage = {
+  "docker-compose.yml": "services:\n  a:\n    build: { context: ., dockerfile: packages/a/Dockerfile }\n",
+  "packages/a/package.json": JSON.stringify({ name: "@fixture/a" }),
+  "packages/a/src/index.ts": "",
+  "packages/a/test/index.test.ts": "",
+  "packages/a/src/index.test.ts": "",
+  "packages/a/src/__tests__/case.ts": "",
+};
+
+test("runtime state anywhere in the context fails the check", (t) => {
+  const withoutStateRules = dockerIgnore.split("\n").filter((line) => !/data|sqlite|\.db|-wal|-shm|-journal/.test(line)).join("\n");
+  const problems = contextProblems(repoRoot, { dockerIgnore: withoutStateRules });
+  for (const probe of ["packages/sfu/data/scheduling.json", "packages/sfu/probe.sqlite-wal", "packages/apps-sdk/src/probe.db", "packages/ai/probe.db-journal"]) {
+    assert.ok(problems.includes(`.dockerignore: ${probe} would enter the build context`), probe);
+  }
+  const root = fixture(t, { "packages/a/data/conclave.sqlite": "", "packages/a/src/cache.sqlite-shm": "", "packages/a/src/index.ts": "" });
+  const open = dockerIgnoreMatcher("**\n!packages/a/**\n");
+  const onDisk = artifactProblems(".dockerignore", open, walkContext(root, open)).filter((problem) => problem.includes("on disk"));
+  assert.deepEqual(onDisk, [
+    ".dockerignore: packages/a/data/conclave.sqlite is on disk and would enter the build context",
+    ".dockerignore: packages/a/src/cache.sqlite-shm is on disk and would enter the build context",
+  ]);
+});
+
+test("a directory COPY may leave test files and folders out, but a COPY that names one may not", (t) => {
+  const globalRules = dockerIgnore.split("\n").filter((line) => line.startsWith("**/")).join("\n");
+  const ignore = `**\n!packages/\n!packages/a/**\n${globalRules}\n**/test\n**/__tests__\n**/*.test.*\n`;
+  const directory = gitFixture(t, { ...fixturePackage, ".dockerignore": ignore, "packages/a/Dockerfile": "FROM node\nCOPY packages ./packages\nCOPY packages/a/src packages/a/src\n" });
+  assert.deepEqual(contextProblems(directory), []);
+  const named = gitFixture(t, { ...fixturePackage, ".dockerignore": ignore, "packages/a/Dockerfile": "FROM node\nCOPY packages/a/test/index.test.ts ./\n" });
+  assert.ok(contextProblems(named).includes("packages/a/Dockerfile: source packages/a/test/index.test.ts needs packages/a/test/index.test.ts, which .dockerignore excludes"));
+});
+
+test("a tracked file missing from the context fails even when no rule excludes it", (t) => {
+  const root = gitFixture(t, { ...fixturePackage, ".dockerignore": "**\n!packages/\n!packages/a/**\n", "packages/a/Dockerfile": "FROM node\nCOPY packages/a ./a\n" });
+  rmSync(path.join(root, "packages/a/src/index.ts"));
+  const problems = contextProblems(root);
+  assert.ok(problems.includes("packages/a/Dockerfile: @fixture/a needs packages/a/src/index.ts, which is tracked but missing from the build context"), JSON.stringify(problems));
+  assert.ok(problems.includes("packages/a/Dockerfile: source packages/a needs packages/a/src/index.ts, which is tracked but missing from the build context"));
+});
+
+test("compose builds inherited through a YAML merge key are found", (t) => {
+  const root = fixture(t, {
+    "docker-compose.yml": "x-sfu: &sfu\n  build:\n    context: .\n    dockerfile: packages/sfu/Dockerfile\nservices:\n  edge:\n    <<: *sfu\n    environment: { A: b }\n",
+  });
+  assert.deepEqual(rootContextBuilds(root).map(({ service, dockerfile }) => [service, dockerfile]), [["edge", "packages/sfu/Dockerfile"]]);
+});
+
+test("compose builds inherited through extends are found, from the same file or one beside it", (t) => {
+  const root = fixture(t, {
+    "docker-compose.sfu.yml": "services:\n  sfu-a:\n    build:\n      context: .\n      dockerfile: packages/sfu/Dockerfile\n  sfu-b:\n    extends: sfu-a\n",
+    "docker-compose.sfu-staging.yml": "services:\n  sfu-staging:\n    extends:\n      file: ./docker-compose.sfu.yml\n      service: sfu-b\n    image: staging\n  redis:\n    image: redis\n",
+  });
+  assert.deepEqual(composeBuilds(root).map(({ file, service, dockerfile }) => [file, service, dockerfile]), [
+    ["docker-compose.sfu-staging.yml", "sfu-staging", "packages/sfu/Dockerfile"],
+    ["docker-compose.sfu.yml", "sfu-a", "packages/sfu/Dockerfile"],
+    ["docker-compose.sfu.yml", "sfu-b", "packages/sfu/Dockerfile"],
+  ]);
+});
+
+test("extends the guard cannot resolve fails closed", (t) => {
+  const base = "services:\n  base:\n    build:\n      context: .\n      dockerfile: packages/sfu/Dockerfile\n";
+  for (const service of [
+    "    extends: base\n    build: .",
+    "    extends: { file: ../docker-compose.yml, service: base }",
+    "    extends: { file: other/docker-compose.yml, service: base }",
+    "    extends: { file: docker-compose.yml, service: missing }",
+    "    extends: { service: base, from: elsewhere }",
+    "    extends: [base]",
+    "    extends: x",
+  ]) {
+    const root = fixture(t, { "docker-compose.yml": `${base}  x:\n${service}\n` });
+    assert.throws(() => composeBuilds(root), UnsupportedShape, service);
+  }
+});
+
+test("removing any single .dockerignore rule fails the check", () => {
+  const lines = dockerIgnore.split("\n");
+  const rules = lines.map((line, index) => [line.trim(), index]).filter(([line]) => line && !line.startsWith("#"));
+  assert.ok(rules.length > 0);
+  const silent = rules
+    .filter(([, index]) => contextProblems(repoRoot, { dockerIgnore: lines.filter((_, i) => i !== index).join("\n") }).length === 0)
+    .map(([line]) => line);
+  assert.deepEqual(silent, []);
+});
+
+test("dropping the leading ** lets the git directory and unneeded tracked files in", () => {
+  const problems = contextProblems(repoRoot, { dockerIgnore: dockerIgnore.split("\n").filter((line) => line.trim() !== "**").join("\n") });
+  assert.ok(problems.includes(".dockerignore: .git/config would enter the build context"), JSON.stringify(problems.slice(0, 5)));
+  assert.ok(problems.includes(".dockerignore: apps/web/package.json is tracked and in the build context, but no root-context image needs it"));
+  assert.ok(problems.includes(".dockerignore: README.md is tracked and in the build context, but no root-context image needs it"));
+});
+
+test("a runtime state folder is excluded whatever file types it holds", () => {
+  const withoutData = dockerIgnore.split("\n").filter((line) => line.trim() !== "**/data").join("\n");
+  const problems = contextProblems(repoRoot, { dockerIgnore: withoutData });
+  assert.ok(problems.includes(".dockerignore: packages/sfu/data/scheduling.json would enter the build context"), JSON.stringify(problems));
+});
+
+test("the walk never descends into a directory that a later rule excludes for good", () => {
+  const { mayIncludeUnder } = dockerIgnoreMatcher(dockerIgnore);
+  for (const dir of ["packages/sfu/node_modules", "packages/apps-sdk/node_modules/.pnpm", "packages/sfu/dist", "packages/sfu/data", "apps", "node_modules", ".git"]) {
+    assert.equal(mayIncludeUnder(dir), false, dir);
+  }
+  for (const dir of ["packages", "patches"]) assert.equal(mayIncludeUnder(dir), true, dir);
+  assert.equal(dockerIgnoreMatcher("**\n!packages/sfu/\n**/node_modules\n!packages/sfu/node_modules/keep/**\n").mayIncludeUnder("packages/sfu/node_modules"), true);
+});
+
+function seededRandom(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let x = state;
+    x = Math.imul(x ^ (x >>> 15), x | 1);
+    x ^= x + Math.imul(x ^ (x >>> 7), x | 61);
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function bruteForceWalk(root, matcher) {
+  const files = [];
+  const visit = (relative) => {
+    for (const entry of readdirSync(path.join(root, relative), { withFileTypes: true })) {
+      const file = relative ? `${relative}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) visit(file);
+      else if (!matcher.excluded(file)) files.push(file);
+    }
+  };
+  visit("");
+  return files.sort();
+}
+
+test("the pruned walk finds exactly the files a full walk finds, for random trees and rule lists", (t) => {
+  const names = ["packages", "sfu", "ai", "node_modules", "dist", "data", "src", "keep"];
+  const files = ["a.ts", "b.log", "c.sqlite", "package.json", ".env"];
+  const rules = ["**", "!packages/", "!packages/sfu/", "!packages/sfu/**", "!packages/*/src/**", "**/node_modules", "**/dist", "**/data", "**/*.log", "!**/keep/**", "packages/ai", "!packages/ai/src", "*/sfu", "!**/node_modules/keep", "src", "!package.json"];
+  for (let seed = 1; seed <= 150; seed += 1) {
+    const random = seededRandom(seed);
+    const pick = (list) => list[Math.floor(random() * list.length)];
+    const tree = {};
+    for (let i = 0; i < 25; i += 1) {
+      const depth = 1 + Math.floor(random() * 4);
+      tree[[...Array.from({ length: depth }, () => pick(names)), pick(files)].join("/")] = "";
+    }
+    const root = fixture(t, tree);
+    const text = Array.from({ length: 2 + Math.floor(random() * 6) }, () => pick(rules)).join("\n");
+    const matcher = dockerIgnoreMatcher(text);
+    assert.deepEqual(walkContext(root, matcher), bruteForceWalk(root, matcher), `seed ${seed}: ${JSON.stringify(text)}`);
+  }
+});
+
+test("heredocs are read only from whole instruction arguments", () => {
+  const cases = [
+    ["shift operator in a quoted script", 'FROM node\nRUN node -e "console.log(1 << x)"\nCOPY a ./\n', [["a"]]],
+    ["shift operator glued to a word", "FROM node\nRUN echo a<<b\nCOPY a ./\n", [["a"]]],
+    ["here-string", "FROM node\nRUN cat <<< x\nCOPY a ./\n", [["a"]]],
+    ["bare << at the end", "FROM node\nRUN cat <<\nCOPY a ./\n", [["a"]]],
+    ["bare << that takes a word with <", "FROM node\nRUN cat << <<EOF\nCOPY a ./\n", [["a"]]],
+    ["chomp marker apart from its word", "FROM node\nRUN cat <<- EOF\nCOPY a ./\n", [["a"]]],
+    ["spaced RUN heredoc", "FROM node\nRUN cat << EOF\nCOPY not/a/copy ./\nEOF\nCOPY a ./\n", [["a"]]],
+    ["wide-spaced quoted RUN heredoc", "FROM node\nRUN cat <<   \"E F\"\nCOPY not/a/copy ./\nE F\nCOPY a ./\n", [["a"]]],
+    ["spaced fd heredoc", "FROM node\nRUN cat 3<< EOF\nCOPY not/a/copy ./\nEOF\nCOPY a ./\n", [["a"]]],
+    ["glued chomped heredoc", "FROM node\nRUN cat <<-EOF\n\tCOPY not/a/copy ./\n\tEOF\nCOPY a ./\n", [["a"]]],
+    ["unchomped heredoc ends only at an exact line", "FROM node\nRUN cat <<EOF\n\tEOF\n EOF\nCOPY not/a/copy ./\nEOF\nCOPY a ./\n", [["a"]]],
+    ["spaced inline-only COPY", "FROM node\nCOPY << EOF /app/note.txt\nx\nEOF\n", []],
+    ["spaced mixed COPY", "FROM node\nCOPY << EOF packages/sfu/package.json /app/\nx\nEOF\n", [["packages/sfu/package.json"]]],
+    ["mixed COPY whose source is named like the delimiter", "FROM node\nCOPY <<EOF EOF /app/\nx\nEOF\n", [["EOF"]]],
+    ["quoted heredoc marker in RUN", "FROM node\nRUN echo '<<EOF'\nCOPY a ./\n", [["a"]]],
+    ["heredoc marker in ENV", "FROM node\nENV X=<<EOF\nCOPY a ./\n", [["a"]]],
+    ["closed RUN heredoc", "FROM node\nRUN <<EOF\nCOPY not/a/copy ./\nEOF\nCOPY a ./\n", [["a"]]],
+    ["quoted and chomped RUN heredoc", "FROM node\nRUN cat <<-\"END\"\n\tCOPY not/a/copy ./\n\tEND\nCOPY a ./\n", [["a"]]],
+    ["fd heredoc", "FROM node\nRUN cat 3<<EOF\nx\nEOF\nCOPY a ./\n", [["a"]]],
+    ["inline-only COPY", "FROM node\nCOPY <<EOF /app/note.txt\nx\nEOF\n", []],
+    ["two inline COPY sources", "FROM node\nCOPY <<A <<B /app/\nx\nA\ny\nB\n", []],
+    ["mixed COPY", "FROM node\nCOPY <<EOF packages/sfu/package.json /app/\nx\nEOF\n", [["packages/sfu/package.json"]]],
+    ["mixed COPY with flags", "FROM node\nCOPY --chown=node <<'EOF' patches ./\nx\nEOF\n", [["patches"]]],
+  ];
+  for (const [name, text, expected] of cases) assert.deepEqual(copies(text), expected, name);
+  assert.throws(() => contextCopies("FROM node\nRUN cat <<EOF\nx\n"), DockerfileError);
+  assert.throws(() => contextCopies("FROM node\nRUN echo $((1 << 2))\nCOPY a ./\n"), /heredoc 2\)\) is never closed/);
+  assert.throws(() => contextCopies("FROM node\nRUN cat << EOF\nx\n"), DockerfileError);
+  assert.throws(() => contextCopies("FROM node\nCOPY <<EOF packages/sfu/package.json /app/\nx\n"), DockerfileError);
+});

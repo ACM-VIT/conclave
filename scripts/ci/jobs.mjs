@@ -66,6 +66,7 @@ export const jobs = {
     tasks: [
       { dir: ".", script: "test:quality-harness" },
       { dir: ".", script: "test:cloudflare-manifests" },
+      { dir: ".", script: "test:docker-context" },
       { dir: ".", script: "test:native-tokens" },
       { dir: ".", script: "test:native-icons" },
       { dir: "packages/apps-sdk", script: "test:native-embed" },
@@ -81,6 +82,7 @@ export const jobs = {
       { dir: ".", script: "check:native-test-stores" },
       { dir: ".", script: "test:native-test-stores" },
       { dir: ".", script: "check:native-game-fixtures" },
+      { dir: ".", script: "check:docker-context" },
       { dir: ".", exec: "node --test scripts/ci/*.test.mjs" },
     ],
   },
