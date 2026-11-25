@@ -15,6 +15,7 @@ Assert-PowerShellVersion
 function Exit-WithError {
   param([string]$Message)
   [Console]::Error.WriteLine($Message)
+  $script:deployExiting = $true
   exit 1
 }
 
@@ -593,6 +594,7 @@ function Get-FrozenIdentity {
 function Assert-StillFrozen {
   param([string]$Service, [string]$Container, [string]$Frozen)
 
+  Assert-NotInterrupted -Service $Service
   $state = Get-ContainerState -Container $Container
   if ($state.Running -or $state.Identity -cne $Frozen) {
     throw "The old $Service container started again while its files were being copied (it was stopped as $Frozen; now running=$($state.Running.ToString().ToLowerInvariant()), $($state.Identity)), so the copy may be missing its later saves."
@@ -673,6 +675,12 @@ function Enable-RestartGuard {
         private static string container;
         private static string policy;
         private static string startCommand;
+        private static volatile int interrupted;
+
+        public static int Interrupted
+        {
+            get { return interrupted; }
+        }
 
         public static void Arm(string serviceName, string containerId, string restartPolicy, string start)
         {
@@ -682,6 +690,7 @@ function Enable-RestartGuard {
                 container = containerId;
                 policy = restartPolicy;
                 startCommand = start;
+            interrupted = 0;
                 if (registrations == null && !OperatingSystem.IsWindows())
                 {
                     registrations = new[]
@@ -746,7 +755,15 @@ function Enable-RestartGuard {
 
         private static void OnSignal(PosixSignalContext context)
         {
-            Release(null, "Interrupted. ");
+            lock (Gate)
+            {
+                if (container == null)
+                {
+                    return;
+                }
+                context.Cancel = true;
+                interrupted = context.Signal == PosixSignal.SIGHUP ? 129 : 143;
+            }
         }
 
         private static ProcessStartInfo Shielded(string[] arguments)
@@ -797,6 +814,16 @@ function Enable-RestartGuard {
   [SfuRestartGuard]::Arm($Service, $Container, $Policy, $StartCommand)
 }
 
+function Assert-NotInterrupted {
+  param([string]$Service)
+
+  if (("SfuRestartGuard" -as [type]) -and [SfuRestartGuard]::Interrupted -ne 0) {
+    [Console]::Error.WriteLine("Interrupted by a signal. Stopped before replacing $Service.")
+    $script:deployExiting = $true
+    exit ([SfuRestartGuard]::Interrupted)
+  }
+}
+
 function Start-SfuService {
   param([string]$Service, [string]$Url)
 
@@ -815,6 +842,8 @@ function Start-SfuService {
   }
   $policy = ""
   $frozenPolicy = ""
+  $completed = $false
+  $script:deployExiting = $false
   try {
     if ($hasContainer) {
       try {
@@ -829,11 +858,13 @@ function Start-SfuService {
       if (-not (Set-RestartPolicy -Container $container -Policy "no")) {
         Exit-WithError "Could not keep the old $Service container from restarting while it is copied. Stopped before replacing $Service; nothing was stopped."
       }
+      Assert-NotInterrupted -Service $Service
     }
     & docker @($composeBaseArgs + @("stop", $Service))
     if ($LASTEXITCODE -ne 0) {
       Exit-WithError "Could not stop the old $Service. Stopped before replacing it."
     }
+    Assert-NotInterrupted -Service $Service
     & docker @($composeBaseArgs + @(
       "run", "--rm", "--no-deps", "--user", "root", "--cap-add", "CHOWN", "--cap-add", "DAC_READ_SEARCH", "--entrypoint", "find", $Service,
       "/var/lib/conclave/recordings", "(", "!", "-user", "node", "-o", "!", "-group", "node", ")",
@@ -842,6 +873,7 @@ function Start-SfuService {
     if ($LASTEXITCODE -ne 0) {
       Exit-WithError "Could not hand the recordings volume to the SFU user. Stopped before replacing $Service."
     }
+    Assert-NotInterrupted -Service $Service
     if ($hasContainer) {
       try {
         $frozen = Get-FrozenIdentity -Service $Service -Container $container
@@ -857,16 +889,22 @@ function Start-SfuService {
       } catch {
         Exit-WithError "$($_.Exception.Message) Stopped before replacing $Service."
       }
+      Assert-NotInterrupted -Service $Service
       if (-not [SfuRestartGuard]::RestoreBeforeReplacing()) {
         Exit-WithError "Could not restore the old $Service container's restart policy ($frozenPolicy) before replacing it. Stopped before replacing $Service."
       }
       $frozenPolicy = ""
     }
+    $completed = $true
   } finally {
     if ("SfuRestartGuard" -as [type]) {
       [SfuRestartGuard]::Release($staging, "")
     } else {
       Remove-Item -Recurse -Force -LiteralPath $staging -ErrorAction SilentlyContinue
+    }
+    if (-not $completed -and -not $script:deployExiting) {
+      [Console]::Error.WriteLine("Interrupted. Stopped before replacing $Service.")
+      exit 130
     }
   }
   Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @("up", "-d", $Service))

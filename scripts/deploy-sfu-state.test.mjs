@@ -34,6 +34,7 @@ if [[ "$1" == "compose" ]]; then
         if [[ -z "$script" ]]; then
           [[ "$FAKE_FAIL_AT" == ownership ]] && exit 1
           [[ "$FAKE_FAIL_AT" == signal ]] && kill -TERM "$PPID"
+          if [[ "$FAKE_FAIL_AT" == int-ownership ]]; then kill -INT -- "-$(ps -o pgid= -p $$ | tr -d ' ')"; sleep 5; exit 0; fi
           exit 0
         fi
         [[ "$FAKE_FAIL_AT" == probe && -f "$FAKE_STOPPED" && "$script" == *"layerDatabase.ts probe"* ]] && exit 1
@@ -110,6 +111,7 @@ if [[ "$1" == "compose" ]]; then
   done
   exit 0
 fi
+if [[ "$1" == update && "$2" == --restart=no && "$FAKE_FAIL_AT" == term-after-freeze ]]; then kill -TERM "$PPID"; exit 0; fi
 case "$1" in
   inspect)
     if [[ "$*" == *WorkingDir* ]]; then printf '%s\n' "\${FAKE_WORKDIR-/app/packages/sfu}"; exit 0; fi
@@ -225,7 +227,7 @@ const hostHasSha256sum = spawnSync("sh", ["-c", "command -v sha256sum"]).status 
 
 const run = (command, args, env) =>
   new Promise((resolve) => {
-    const child = spawn(command, args, { env });
+    const child = spawn(command, args, { env, detached: true });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => { stdout += chunk; });
@@ -965,6 +967,8 @@ for (const harness of harnesses) {
       "the stop fails": { failAt: "stop", running: true, state: "still running" },
       "the ownership helper fails": { failAt: "ownership" },
       "a TERM signal arrives during the ownership step": { failAt: "signal" },
+      "a TERM signal arrives right after restarts are turned off": { failAt: "term-after-freeze", running: true, state: "still running" },
+      "Ctrl+C (INT to the whole process group) during the ownership step": { failAt: "int-ownership" },
       "it is running again after the stop": { runningAfterStop: true, state: "still running" },
       "copying a JSON file fails": { cpFailAfterStop: "scheduling.json" },
       "the JSON files fail to unpack": { failUnpack: true },
