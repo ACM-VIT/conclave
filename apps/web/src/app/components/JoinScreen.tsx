@@ -43,8 +43,6 @@ import {
   normalizeCodeField,
   parseCodeFieldPaste,
   planFieldEdit,
-  resolveCodeField,
-  roomCodeFromField,
   sanitizeInstitutionDisplayName,
   trackFieldHistory,
   isMediaDeviceBlocked,
@@ -53,6 +51,7 @@ import type { SetupNotice } from "../lib/setup-notice";
 import RoomPresenceBadge from "./RoomPresenceBadge";
 import { useCameraPermissionState } from "../hooks/useCameraPermissionState";
 import { useClipboardCopy } from "../hooks/useClipboardCopy";
+import { useCodeField } from "../hooks/useCodeField";
 import {
   useBandwidthHeavyPreloadDeferred,
 } from "../hooks/useBandwidthHeavyPreloadDeferred";
@@ -333,6 +332,7 @@ function JoinScreen({
 }: JoinScreenProps) {
   const normalizedRoomId =
     roomId === "undefined" || roomId === "null" ? "" : roomId;
+  const codeField = useCodeField(normalizedRoomId, onRoomIdChange, getMeetingLinkOrigins());
   const isRoutedRoom = forceJoinOnly;
   const nameInputId = useId();
   const codeInputId = useId();
@@ -1107,7 +1107,7 @@ function JoinScreen({
     setPending({ mode: "new", roomId: generateRoomCode() });
   };
   const joinMeeting = () => {
-    const candidate = roomCodeFromField(normalizedRoomId, getMeetingLinkOrigins());
+    const candidate = codeField.resolution.code;
     if (!candidate) return;
     if (!ensureGuest()) return;
     onEnterStart?.("join");
@@ -1143,7 +1143,6 @@ function JoinScreen({
   };
 
   const normalizeCode = normalizeCodeField;
-  const onCodeChange = (raw: string) => onRoomIdChange(raw);
   const shapeCodeEdit = (
     event: { preventDefault(): void },
     input: HTMLInputElement,
@@ -1212,7 +1211,7 @@ function JoinScreen({
     };
   };
 
-  const codeResolution = resolveCodeField(normalizedRoomId, getMeetingLinkOrigins());
+  const codeResolution = codeField.resolution;
   const joinCode = codeResolution.code;
   const canJoin = joinCode.length > 0;
   const nameReady = hasIdentity || liveDisplayName.length > 0;
@@ -1634,9 +1633,9 @@ function JoinScreen({
                   <input
                     id={codeInputId}
                     type="text"
-                    value={normalizedRoomId}
+                    value={codeField.text}
                     ref={shapeTypedCodeEdits}
-                    onChange={(e) => onCodeChange(e.target.value)}
+                    onChange={(e) => codeField.change(e.target.value)}
                     onPaste={(e) => {
                       if (isRoutedRoom) return;
                       pasteIntoCode(e, e.currentTarget, e.clipboardData.getData("text"));
