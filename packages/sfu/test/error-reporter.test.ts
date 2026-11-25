@@ -26,7 +26,11 @@ const SFU_ID = "sfu_0123456789abcdef";
 const RELEASE = "0b2d3b48";
 
 // The SFU's beforeSend, for a release and the socket events a test registered.
-const outboundFor = (frames: FramePathOptions = { root: SFU_ROOT, cwd: () => process.cwd() }) =>
+const SHIPPED_HERE = new Set([
+  ...(JSON.parse(readFileSync(path.join(SFU_ROOT, "server/analytics/source-manifest.json"), "utf8")) as string[]),
+  "test/error-reporter.test.ts",
+]);
+const outboundFor = (frames: FramePathOptions = { root: SFU_ROOT, cwd: () => process.cwd(), sources: SHIPPED_HERE }) =>
   createOutboundEvent({
     release: RELEASE,
     framePath: createFramePath(frames),
@@ -425,7 +429,7 @@ describe("SFU error reporter", () => {
     const root = path.resolve(import.meta.dirname, "..");
     const own = "server/analytics/errorReporter.ts";
     const sentFrame = (cwd: string, filename: string) => {
-      const scrub = outboundFor({ root, cwd: () => cwd });
+      const scrub = outboundFor({ root, cwd: () => cwd, sources: SHIPPED_HERE });
       const scrubbed = scrub(
         exception({
           $exception_list: [
@@ -453,7 +457,7 @@ describe("SFU error reporter", () => {
         mkdirSync(path.join(fixture, "node_modules", "Fixture Operator extensions"), { recursive: true });
         writeFileSync(path.join(fixture, "server", "main.ts"), "");
         writeFileSync(path.join(fixture, "node_modules", "Fixture Operator extensions", "local-helper.js"), "");
-        const scrub = outboundFor({ root: fixture, cwd: () => fixture });
+        const scrub = outboundFor({ root: fixture, cwd: () => fixture, sources: new Set(["server/main.ts"]) });
         const sent = (filename: string, in_app: boolean) =>
           (scrub(
             exception({
@@ -483,14 +487,11 @@ describe("SFU error reporter", () => {
       ["a library file", root, path.resolve(root, "../../node_modules/posthog-node/package.json"), "[path]"],
       ["a Node internal", root, "node:internal/process/task_queues", "[path]"],
     ])("sends %s as its path in the SFU, or [path] and no function", (_case, cwd, filename, sent) => {
-      expect(sentFrame(cwd, filename)).toEqual({
-        platform: "node:javascript",
-        filename: sent,
-        function: sent === "[path]" ? "?" : "createErrorReporter",
-        lineno: 3,
-        colno: 9,
-        in_app: true,
-      });
+      expect(sentFrame(cwd, filename)).toEqual(
+        sent === "[path]"
+          ? { platform: "node:javascript", filename: "[path]", function: "?", in_app: false }
+          : { platform: "node:javascript", filename: sent, function: "?", lineno: 3, in_app: true },
+      );
     });
   });
 

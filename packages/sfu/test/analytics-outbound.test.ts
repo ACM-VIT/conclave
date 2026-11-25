@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -79,7 +79,7 @@ const waitFor = async (check: () => boolean, timeoutMs = 3000) => {
 };
 
 describe("the SFU's outbound schema", () => {
-  it("keeps a frame's function only where it keeps the frame's path: our own source", async () => {
+  it("sends no function name and no frame of a file it does not ship", async () => {
     const outside = mkdtempSync(path.join(tmpdir(), "Review Operator-"));
     dirs.push(outside);
     const fixture = path.join(outside, "roster.mjs");
@@ -106,12 +106,9 @@ describe("the SFU's outbound schema", () => {
     const frames = (JSON.parse(body) as { batch: Array<{ properties: { $exception_list: Array<{ stacktrace: { frames: Array<{ filename: string; function: string }> } }> } }> })
       .batch[0].properties.$exception_list[0].stacktrace.frames;
     expect(frames.length).toBeGreaterThan(1);
-    for (const frame of frames) {
-      if (frame.filename === "[path]") expect(frame.function).toBe("?");
-    }
-    expect(frames).toContainEqual(
-      expect.objectContaining({ filename: "test/analytics-outbound.test.ts", function: "ownCaller", in_app: true }),
-    );
+    for (const frame of frames) expect(frame.function).toBe("?");
+    expect(frames).toContainEqual({ platform: "node:javascript", filename: "[path]", function: "?", in_app: false });
+    expect(body).not.toMatch(/ownCaller|"colno"/);
     expect(body).not.toMatch(/operatorRosterFixture|Review Operator|roster\.mjs/);
   });
 
@@ -187,9 +184,8 @@ describe("the SFU's outbound schema", () => {
                 {
                   platform: "node:javascript",
                   filename: "server/analytics/errorReporter.ts",
-                  function: "report",
+                  function: "?",
                   lineno: 1,
-                  colno: 2,
                   in_app: true,
                 },
               ],
@@ -287,11 +283,84 @@ describe("the SFU's outbound schema", () => {
           type: "raw",
           frames: [
             { platform: "node:javascript", filename: "server/analytics/errorReporter.ts", function: "?", lineno: 4, in_app: true },
-            { platform: "node:javascript", filename: "server/analytics/errorReporter.ts", function: "createErrorReporter", lineno: 5, in_app: true },
+            { platform: "node:javascript", filename: "server/analytics/errorReporter.ts", function: "?", lineno: 5, in_app: true },
           ],
         },
       },
     ]);
+  });
+
+  describe("the frames it sends", () => {
+    const shipped = JSON.parse(readFileSync(path.join(SFU_ROOT, "server/analytics/source-manifest.json"), "utf8")) as string[];
+    const linesOf = (file: string) => readFileSync(path.join(SFU_ROOT, file), "utf8").split("\n").length;
+    const EXTERNAL = { platform: "node:javascript", filename: "[path]", function: "?", in_app: false };
+    const framesSent = (frames: unknown[]) =>
+      (beforeSend({
+        distinctId: SFU_ID,
+        event: "$exception",
+        properties: { $exception_list: [{ type: "Error", value: "x", stacktrace: { type: "raw", frames } }] },
+      } as unknown as Message)?.properties?.$exception_list as Array<{ stacktrace: { frames: unknown[] } }>)[0].stacktrace.frames;
+
+    it.each([
+      ["a numeric function name", { filename: OWN_FILE, function: "1234567890", lineno: 2, in_app: true }, { lineno: 2 }],
+      ["a name made of words the runtime uses", { filename: OWN_FILE, function: "async new Object get set", lineno: 2, in_app: true }, { lineno: 2 }],
+      ["a column far past any line", { filename: OWN_FILE, function: "report", lineno: 2, colno: 99_999_999, in_app: true }, { lineno: 2 }],
+      ["a line past the end of the file", { filename: OWN_FILE, function: "report", lineno: 99_999, in_app: true }, null],
+      ["coordinates on a frame that is not the app's", { filename: OWN_FILE, function: "report", lineno: 2, colno: 4, in_app: false }, null],
+      ["a file that is not source we ship", { filename: path.join(SFU_ROOT, "package.json"), function: "version", lineno: 2, in_app: true }, null],
+      ["a test file", { filename: path.join(SFU_ROOT, "test/analytics-outbound.test.ts"), function: "it", lineno: 2, in_app: true }, null],
+    ])("sends %s as no more than a shipped file and a line in it", (_case, frame, kept) => {
+      expect(framesSent([{ platform: "node:javascript", ...frame }])).toEqual([
+        kept ? { platform: "node:javascript", filename: "server/analytics/errorReporter.ts", function: "?", ...kept, in_app: true } : EXTERNAL,
+      ]);
+    });
+
+    it("lets no text of 2000 random frames through but shipped paths and line numbers within them", () => {
+      let state = 4688;
+      const random = () => {
+        state = (state * 1_103_515_245 + 12_345) % 2_147_483_648;
+        return state / 2_147_483_648;
+      };
+      const pick = <T,>(list: readonly T[]): T => list[Math.floor(random() * list.length)];
+      const canary = () => `Canary${Math.floor(random() * 1e9)}`;
+      const files = () => [
+        path.join(SFU_ROOT, pick(shipped)),
+        pick(shipped),
+        `${path.basename(SFU_ROOT)}/${pick(shipped)}`,
+        path.join(SFU_ROOT, "package.json"),
+        path.join(SFU_ROOT, `server/${canary()}.ts`),
+        `../${canary()}/server.ts`,
+        `/home/${canary()}/sfu/server.ts`,
+        "node:internal/process/task_queues",
+        canary(),
+      ];
+      const values = () => [canary(), Math.floor(random() * 3000), -1, 0, 1.5, Number.MAX_SAFE_INTEGER, `${Math.floor(random() * 50)}`, null, undefined, true];
+      const frames = Array.from({ length: 2000 }, () => ({
+        platform: pick(["node:javascript", canary()]),
+        filename: pick(files()),
+        function: pick([canary(), `${canary()}.<anonymous>`, "async new Object", String(Math.floor(random() * 1e6))]),
+        lineno: pick(values()),
+        colno: pick(values()),
+        in_app: pick([true, true, false, canary()]),
+        abs_path: canary(),
+        module: canary(),
+        context_line: canary(),
+      }));
+      const sent = framesSent(frames.slice(0, 500)).concat(framesSent(frames.slice(500, 1000)), framesSent(frames.slice(1000, 1500)), framesSent(frames.slice(1500)));
+
+      expect(sent).toHaveLength(2000);
+      for (const frame of sent as Array<Record<string, unknown>>) {
+        if (frame.in_app === false) {
+          expect(frame).toEqual(EXTERNAL);
+          continue;
+        }
+        expect(Object.keys(frame).sort()).toEqual(["filename", "function", "in_app", "lineno", "platform"]);
+        expect(shipped).toContain(frame.filename);
+        expect(frame.function).toBe("?");
+        expect(Number.isInteger(frame.lineno) && (frame.lineno as number) >= 1 && (frame.lineno as number) <= linesOf(frame.filename as string)).toBe(true);
+      }
+      expect(JSON.stringify(sent)).not.toMatch(/Canary|anonymous|Object|abs_path|module|context/);
+    });
   });
 
   it("names a socket event only when the server registered a handler for it", () => {

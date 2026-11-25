@@ -31,12 +31,11 @@ const PATH_WITHHELD = "[path]";
 const FUNCTION_WITHHELD = "?";
 const MAX_KNOWN_PATHS = 1000;
 const MAX_SOURCE_BYTES = 2 * 1024 * 1024;
-const RUNTIME_NAME_WORDS = new Set(["async", "new", "get", "set", "Object", "anonymous", "Function", "Module"]);
+const SOURCE_MANIFEST = "server/analytics/source-manifest.json";
 
-export type SourceFacts = { names: ReadonlySet<string>; lines: number };
 export type FramePath = {
   path: (filename: string) => string;
-  source: (sent: string) => SourceFacts | null;
+  lines: (sent: string) => number | null;
 };
 const MAX_POSITION = 100_000_000;
 const MAX_EXCEPTIONS = 10;
@@ -47,6 +46,19 @@ export type FramePathOptions = {
   root: string;
   /** The folder posthog-node made frame paths relative to. */
   cwd: () => string;
+  /** The shipped source files a frame may name; the root's source manifest when left out. */
+  sources?: ReadonlySet<string>;
+};
+
+const ManifestForm = z.array(z.string().max(300)).max(10_000);
+
+const readManifest = (root: string): ReadonlySet<string> => {
+  try {
+    const parsed = ManifestForm.safeParse(JSON.parse(readFileSync(path.join(root, SOURCE_MANIFEST), "utf8")));
+    return new Set(parsed.success ? parsed.data : []);
+  } catch {
+    return new Set();
+  }
 };
 
 /**
@@ -55,7 +67,8 @@ export type FramePathOptions = {
  * once links are followed and is not under node_modules. A name alone, a home
  * folder, a library's file or a Node internal is never sent.
  */
-export const createFramePath = ({ root, cwd }: FramePathOptions): FramePath => {
+export const createFramePath = ({ root, cwd, sources }: FramePathOptions): FramePath => {
+  const shipped = sources ?? readManifest(root);
   let realRoot: string | null = null;
   try {
     realRoot = realpathSync(root);
@@ -70,31 +83,27 @@ export const createFramePath = ({ root, cwd }: FramePathOptions): FramePath => {
       if (realRoot) {
         const inRoot = path.relative(realRoot, realpathSync(path.resolve(cwd(), filename)));
         const segments = inRoot.split(path.sep);
-        if (inRoot && !path.isAbsolute(inRoot) && segments[0] !== ".." && !segments.includes("node_modules")) {
-          sent = segments.join("/");
-        }
+        const relative = segments.join("/");
+        if (inRoot && !path.isAbsolute(inRoot) && segments[0] !== ".." && shipped.has(relative)) sent = relative;
       }
     } catch {}
     if (known.size < MAX_KNOWN_PATHS) known.set(key, sent);
     return sent;
   };
-  const sources = new Map<string, SourceFacts | null>();
-  const source = (sent: string): SourceFacts | null => {
-    if (sources.has(sent)) return sources.get(sent) ?? null;
-    let facts: SourceFacts | null = null;
+  const lineCounts = new Map<string, number | null>();
+  const lines = (sent: string): number | null => {
+    if (lineCounts.has(sent)) return lineCounts.get(sent) ?? null;
+    let count: number | null = null;
     try {
-      if (realRoot) {
+      if (realRoot && shipped.has(sent)) {
         const file = path.join(realRoot, ...sent.split("/"));
-        if (statSync(file).size <= MAX_SOURCE_BYTES) {
-          const text = readFileSync(file, "utf8");
-          facts = { names: new Set(text.match(/[A-Za-z_$][\w$]*/g) ?? []), lines: text.split("\n").length };
-        }
+        if (statSync(file).size <= MAX_SOURCE_BYTES) count = readFileSync(file, "utf8").split("\n").length;
       }
     } catch {}
-    if (sources.size < MAX_KNOWN_PATHS) sources.set(sent, facts);
-    return facts;
+    if (lineCounts.size < MAX_KNOWN_PATHS) lineCounts.set(sent, count);
+    return count;
   };
-  return { path: framePath, source };
+  return { path: framePath, lines };
 };
 
 // The forms of a frame's file and function, which the shaper checks one by
@@ -103,7 +112,6 @@ const FRAME_FILE = z
   .string()
   .regex(/^(?!\.\.?\/)(?!.*\/\.\.?\/)[\w.@+-]+(?:\/[\w.@+-]+)*$/)
   .max(300);
-const FUNCTION_NAME = z.string().regex(/^[\w$.<>[\] ]{1,200}$/);
 const MECHANISM_TYPES = ["generic", "chained", "onuncaughtexception", "onunhandledrejection"] as const;
 const mechanismTypes = new Set<string>(MECHANISM_TYPES);
 
@@ -112,31 +120,18 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const isPosition = (value: unknown): value is number =>
   typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= MAX_POSITION;
 
-/**
- * A frame keeps its position and in-app flag, and its path and function name
- * only when it is an in-app frame of our own source. The module name
- * posthog-node derives from the full path, the source lines it reads from
- * disk and anything else are left out.
- */
-const namedInSource = (name: unknown, facts: SourceFacts | null): name is string =>
-  facts !== null &&
-  FUNCTION_NAME.safeParse(name).success &&
-  ((name as string).match(/[A-Za-z_$][\w$]*/g) ?? []).every((word) => RUNTIME_NAME_WORDS.has(word) || facts.names.has(word));
+const EXTERNAL_FRAME = { platform: "node:javascript", filename: PATH_WITHHELD, function: FUNCTION_WITHHELD, in_app: false } as const;
 
 const shapeFrame = (frame: Record<string, unknown>, framePath: FramePath) => {
-  const ownPath =
-    frame.in_app === true && typeof frame.filename === "string" ? framePath.path(frame.filename) : PATH_WITHHELD;
-  const own = ownPath !== PATH_WITHHELD && FRAME_FILE.safeParse(ownPath).success;
-  const facts = own ? framePath.source(ownPath) : null;
-  const lineInSource = !own || (facts !== null && isPosition(frame.lineno) && frame.lineno <= facts.lines);
-  return {
-    platform: "node:javascript",
-    ...(typeof frame.filename === "string" ? { filename: own ? ownPath : PATH_WITHHELD } : {}),
-    function: own && lineInSource && namedInSource(frame.function, facts) ? frame.function : FUNCTION_WITHHELD,
-    ...(isPosition(frame.lineno) && lineInSource ? { lineno: frame.lineno } : {}),
-    ...(isPosition(frame.colno) ? { colno: frame.colno } : {}),
-    ...(typeof frame.in_app === "boolean" ? { in_app: frame.in_app } : {}),
-  };
+  if (frame.in_app !== true || typeof frame.filename !== "string") return { ...EXTERNAL_FRAME };
+  const sent = framePath.path(frame.filename);
+  if (sent === PATH_WITHHELD || !FRAME_FILE.safeParse(sent).success) return { ...EXTERNAL_FRAME };
+  const lines = framePath.lines(sent);
+  const { lineno } = frame;
+  if (lines === null || typeof lineno !== "number" || !Number.isInteger(lineno) || lineno < 1 || lineno > lines) {
+    return { ...EXTERNAL_FRAME };
+  }
+  return { platform: "node:javascript", filename: sent, function: FUNCTION_WITHHELD, lineno, in_app: true } as const;
 };
 
 const sentTypes = new Set(SENT_ERROR_TYPES);
@@ -207,16 +202,21 @@ const exceptionListForm = z
           type: z.literal("raw"),
           frames: z
             .array(
-              z.object({
-                platform: z.literal("node:javascript"),
-                // A path in the SFU's folder, which shapeFrame checked exists there.
-                filename: z.union([z.literal(PATH_WITHHELD), FRAME_FILE]).optional(),
-                // A function of our own source, or none.
-                function: z.union([z.literal(FUNCTION_WITHHELD), FUNCTION_NAME]),
-                lineno: position.optional(),
-                colno: position.optional(),
-                in_app: flag.optional(),
-              }),
+              z.union([
+                z.strictObject({
+                  platform: z.literal("node:javascript"),
+                  filename: z.literal(PATH_WITHHELD),
+                  function: z.literal(FUNCTION_WITHHELD),
+                  in_app: z.literal(false),
+                }),
+                z.strictObject({
+                  platform: z.literal("node:javascript"),
+                  filename: FRAME_FILE,
+                  function: z.literal(FUNCTION_WITHHELD),
+                  lineno: position.min(1),
+                  in_app: z.literal(true),
+                }),
+              ]),
             )
             .max(MAX_FRAMES),
         })
