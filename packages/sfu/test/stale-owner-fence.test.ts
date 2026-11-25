@@ -4,7 +4,6 @@ import { join as joinPath } from "node:path";
 import type { Router, Worker } from "mediasoup/types";
 import type { Server as SocketIOServer, Socket } from "socket.io";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Admin } from "../config/classes/Admin.js";
 import { config } from "../config/config.js";
 import { initScheduledMeetings } from "../server/init.js";
 import { createMemoryRoomRecoveryStore } from "../server/roomRecoveryLedger.js";
@@ -12,8 +11,10 @@ import { startRoomRecoveryPassRefresh } from "../server/roomRecoveryPass.js";
 import type {
   RoomAssignmentRecord,
   RoomOwnerRecord,
+  RoomOwnershipClaim,
   RoomRegistry,
 } from "../server/roomRegistry.js";
+import { ROOM_LEASE_UNCONFIRMED_ERROR } from "../server/rooms.js";
 import {
   createScheduledMeeting,
   createScheduledMeetingPersistence,
@@ -33,6 +34,7 @@ const CHANNEL = `conclave:${CODE}`;
 const LEASE_MS = 45_000;
 const LEASE_MARGIN_MS = 5_000;
 const INVITEE = "invitee@example.com";
+const INVITEE_SEAT = `${INVITEE}#i`;
 const host = (sessionId: string): SfuAuthPayload => ({
   userId: "host@example.com",
   email: "host@example.com",
@@ -41,29 +43,36 @@ const host = (sessionId: string): SfuAuthPayload => ({
 });
 const invitee: SfuAuthPayload = { userId: "user-2", email: INVITEE, clientId: "conclave", sessionId: "i" };
 
-const sharedLeases = () => {
+type Leases = {
+  forInstance: (instanceId: string) => RoomRegistry;
+  ownerOf: (channelId: string) => string | null;
+  holdRenewals: () => void;
+  releaseRenewals: () => void;
+};
+
+const sharedLeases = (): Leases => {
   const owners = new Map<string, RoomOwnerRecord>();
   const live = (channelId: string) => {
     const owner = owners.get(channelId);
     return owner && owner.expiresAt > Date.now() ? owner : null;
   };
-  return (instanceId: string): RoomRegistry => {
+  let holding = false;
+  const held: Array<() => void> = [];
+  const forInstance = (instanceId: string): RoomRegistry => {
     const servesUntil = new Map<string, number>();
-    const claim = async (input: { channelId: string; clientId: string; roomId: string }) => {
+    const claimNow = (input: { channelId: string; clientId: string; roomId: string }): RoomOwnershipClaim => {
       const current = live(input.channelId);
-      if (current && current.instanceId !== instanceId) return { ok: false as const, owner: current };
+      if (current && current.instanceId !== instanceId) return { ok: false, owner: current };
       const now = Date.now();
-      const owner: RoomOwnerRecord = {
-        kind: "owner",
-        ...input,
-        instanceId,
-        updatedAt: now,
-        expiresAt: now + LEASE_MS,
-      };
+      const owner: RoomOwnerRecord = { kind: "owner", ...input, instanceId, updatedAt: now, expiresAt: now + LEASE_MS };
       owners.set(input.channelId, owner);
       servesUntil.set(input.channelId, now + LEASE_MS - LEASE_MARGIN_MS);
-      return { ok: true as const, owner };
+      return { ok: true, owner, continuous: current !== null };
     };
+    const claim = (input: { channelId: string; clientId: string; roomId: string }) =>
+      holding
+        ? new Promise<RoomOwnershipClaim>((resolve) => held.push(() => resolve(claimNow(input))))
+        : Promise.resolve(claimNow(input));
     return {
       mode: "redis",
       instanceId,
@@ -74,13 +83,7 @@ const sharedLeases = () => {
       getAssignment: async (channelId) => live(channelId),
       reservePlacement: async (input) => ({
         ok: true,
-        placement: {
-          kind: "placement",
-          ...input,
-          instanceId,
-          updatedAt: Date.now(),
-          expiresAt: Date.now() + LEASE_MS,
-        },
+        placement: { kind: "placement", ...input, instanceId, updatedAt: Date.now(), expiresAt: Date.now() + LEASE_MS },
       }),
       claimRoom: claim,
       renewRoom: claim,
@@ -88,10 +91,20 @@ const sharedLeases = () => {
         servesUntil.delete(channelId);
         if (owners.get(channelId)?.instanceId === instanceId) owners.delete(channelId);
       },
-      isLocalOwner: (owner: RoomAssignmentRecord | null | undefined) =>
-        owner?.instanceId === instanceId,
+      isLocalOwner: (owner: RoomAssignmentRecord | null | undefined) => owner?.instanceId === instanceId,
       holdsLease: (channelId) => (servesUntil.get(channelId) ?? 0) > Date.now(),
     };
+  };
+  return {
+    forInstance,
+    ownerOf: (channelId) => live(channelId)?.instanceId ?? null,
+    holdRenewals: () => {
+      holding = true;
+    },
+    releaseRenewals: () => {
+      holding = false;
+      for (const resume of held.splice(0)) resume();
+    },
   };
 };
 
@@ -111,6 +124,8 @@ const startSfu = async (registry: RoomRegistry): Promise<SfuState> => {
   await initScheduledMeetings(state, createScheduledMeetingPersistence());
   return state;
 };
+
+type Answer = { success?: boolean; error?: string; status?: string };
 
 const join = async (state: SfuState, user: SfuAuthPayload) => {
   const handlers = new Map<string, (...args: never[]) => unknown>();
@@ -133,19 +148,17 @@ const join = async (state: SfuState, user: SfuAuthPayload) => {
   setSocketContext(socket, context);
   registerJoinRoomHandler(context);
   registerDisconnectHandlers(context);
-  const ack = vi.fn();
-  await handlers.get("joinRoom")!(...([{ roomId: CODE, sessionId: user.sessionId }, ack] as never[]));
-  const drop = async () => {
+  const send = (event: string, payload: unknown): Promise<Answer> =>
+    new Promise((resolve) => {
+      void handlers.get(event)?.(...([payload, resolve] as never[]));
+    });
+  const joined = await send("joinRoom", { roomId: CODE, sessionId: user.sessionId });
+  const leave = async (reason = "client namespace disconnect") => {
     wire.connected = false;
-    await handlers.get("disconnect")?.(...(["transport close"] as never[]));
-  };
-  const send = async (event: string, payload: unknown) => {
-    const answer = vi.fn();
-    await handlers.get(event)?.(...([payload, answer] as never[]));
-    return answer.mock.calls[0]?.[0] as { success?: boolean; error?: string } | undefined;
+    await handlers.get("disconnect")?.(...([reason] as never[]));
   };
   const passes = () => emit.mock.calls.filter(([event]) => event === "roomRecoveryPass").length;
-  return { context, ack, drop, send, passes, status: (ack.mock.calls[0]?.[0] as { status?: string })?.status };
+  return { context, send, leave, passes, status: joined.status };
 };
 
 const dirs: string[] = [];
@@ -195,26 +208,111 @@ const inviteeIsInvited = async () => {
   return isScheduledMeetingInvitee(later, "conclave", CODE, INVITEE);
 };
 
+const settle = () => vi.advanceTimersByTimeAsync(10);
+
+type LeaseState = "held" | "renewing" | "lapsed but still the owner" | "lost";
+type Action = "kick the invitee" | "admit the invitee" | "end the meeting" | "the last person leaves";
+
+const LEASE_STATES: LeaseState[] = ["held", "renewing", "lapsed but still the owner", "lost"];
+const ACTIONS: Array<{
+  action: Action;
+  inviteeRemovedFirst: boolean;
+  invitedAfter: boolean;
+  answers: boolean;
+}> = [
+  { action: "kick the invitee", inviteeRemovedFirst: false, invitedAfter: false, answers: true },
+  { action: "admit the invitee", inviteeRemovedFirst: true, invitedAfter: true, answers: true },
+  { action: "end the meeting", inviteeRemovedFirst: true, invitedAfter: true, answers: true },
+  { action: "the last person leaves", inviteeRemovedFirst: true, invitedAfter: true, answers: false },
+];
+
+const runCase = async (action: (typeof ACTIONS)[number], lease: LeaseState) => {
+  useSharedSchedule();
+  await book();
+  const leases = sharedLeases();
+  const sfuA = await startSfu(leases.forInstance("sfu-a"));
+  const hostOnA = await join(sfuA, host("a"));
+  expect(hostOnA.status).toBe("joined");
+  if (action.inviteeRemovedFirst || action.action === "kick the invitee") {
+    expect((await join(sfuA, invitee)).status).toBe("joined");
+  }
+  if (action.inviteeRemovedFirst) {
+    expect(await hostOnA.send("kickUser", { userId: INVITEE_SEAT })).toEqual({ success: true });
+    await settle();
+    expect(await inviteeIsInvited()).toBe(false);
+  }
+  if (action.action === "admit the invitee") {
+    expect((await join(sfuA, invitee)).status).toBe("waiting");
+  }
+
+  if (lease !== "held") await vi.advanceTimersByTimeAsync(LEASE_MS - LEASE_MARGIN_MS + 2_000);
+  if (lease === "renewing") leases.holdRenewals();
+  if (lease === "lost") {
+    await vi.advanceTimersByTimeAsync(LEASE_MARGIN_MS);
+    expect((await leases.forInstance("sfu-b").claimRoom({ channelId: CHANNEL, clientId: "conclave", roomId: CODE })).ok).toBe(true);
+  }
+  const invitedBefore = await inviteeIsInvited();
+
+  let answer: Promise<Answer> | null = null;
+  switch (action.action) {
+    case "kick the invitee":
+      answer = hostOnA.send("kickUser", { userId: INVITEE_SEAT });
+      break;
+    case "admit the invitee":
+      answer = hostOnA.send("admitUser", { userId: INVITEE });
+      break;
+    case "end the meeting":
+      answer = hostOnA.send("admin:endRoom", {});
+      break;
+    case "the last person leaves":
+      await hostOnA.leave();
+      break;
+  }
+  await settle();
+  if (lease === "renewing") {
+    expect(await inviteeIsInvited()).toBe(invitedBefore);
+    expect(leases.ownerOf(CHANNEL)).toBe("sfu-a");
+    leases.releaseRenewals();
+    await settle();
+  }
+  if (lease === "lost") expect(leases.ownerOf(CHANNEL)).toBe("sfu-b");
+  await vi.advanceTimersByTimeAsync(30_000);
+
+  const written = lease !== "lost";
+  if (action.answers) {
+    expect(await answer).toEqual(
+      written ? expect.objectContaining({ success: true }) : { error: ROOM_LEASE_UNCONFIRMED_ERROR },
+    );
+  }
+  expect(await inviteeIsInvited()).toBe(written ? action.invitedAfter : invitedBefore);
+  if (written && (action.action === "the last person leaves" || action.action === "end the meeting")) {
+    expect(leases.ownerOf(CHANNEL)).toBeNull();
+  }
+};
+
+describe("what an SFU writes for a room, by the state of the room's lease", () => {
+  for (const action of ACTIONS) {
+    for (const lease of LEASE_STATES) {
+      it(`${action.action}, lease ${lease}`, async () => {
+        await runCase(action, lease);
+      });
+    }
+  }
+});
+
 describe("an SFU that lost a room's lease while it was paused", () => {
-  it("writes nothing shared about the room: no invitee's removal, no recovery pass", async () => {
+  it("signs no recovery pass until the lease is confirmed again", async () => {
     useSharedSchedule();
     await book();
-    const sfuA = await startSfu(sharedLeases()("sfu-a"));
+    const sfuA = await startSfu(sharedLeases().forInstance("sfu-a"));
     const hostOnA = await join(sfuA, host("a"));
-    const inviteeOnA = await join(sfuA, invitee);
-    expect(inviteeOnA.status).toBe("joined");
     const stopRefresh = startRoomRecoveryPassRefresh(sfuA, config.sfuSecret);
     try {
-      await vi.advanceTimersByTimeAsync(LEASE_MS);
-      expect(await hostOnA.send("kickUser", { userId: `${INVITEE}#i` })).toEqual({ success: true });
-      await vi.advanceTimersByTimeAsync(60_000);
-
-      expect(sfuA.rooms.get(CHANNEL)?.needsReadmission(INVITEE)).toBe(true);
-      expect(await inviteeIsInvited()).toBe(true);
+      await vi.advanceTimersByTimeAsync(65_000);
       expect(hostOnA.passes()).toBe(0);
-
+      await vi.advanceTimersByTimeAsync(45_000);
       await sfuA.roomRegistry.renewRoom({ channelId: CHANNEL, clientId: "conclave", roomId: CODE });
-      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(15_000);
       expect(hostOnA.passes()).toBe(1);
     } finally {
       stopRefresh();
@@ -228,26 +326,23 @@ describe("an SFU that lost a room's lease while it was paused", () => {
     try {
       await book();
       const leases = sharedLeases();
-      const sfuA = await startSfu(leases("sfu-a"));
-      const sfuB = await startSfu(leases("sfu-b"));
+      const sfuA = await startSfu(leases.forInstance("sfu-a"));
+      const sfuB = await startSfu(leases.forInstance("sfu-b"));
 
       const hostOnA = await join(sfuA, host("a"));
       expect(hostOnA.status).toBe("joined");
-      await hostOnA.drop();
+      await hostOnA.leave("transport close");
       expect(sfuA.rooms.get(CHANNEL)?.clients.size).toBe(1);
 
       await vi.advanceTimersByTimeAsync(LEASE_MS + 5_000);
       const hostOnB = await join(sfuB, host("b"));
       expect(hostOnB.status).toBe("joined");
-      expect(hostOnB.context.currentClient).toBeInstanceOf(Admin);
-      const inviteeOnB = await join(sfuB, invitee);
-      expect(inviteeOnB.status).toBe("joined");
-      expect(await hostOnB.send("kickUser", { userId: `${INVITEE}#i` })).toEqual({ success: true });
-      await vi.advanceTimersByTimeAsync(10);
+      expect((await join(sfuB, invitee)).status).toBe("joined");
+      expect(await hostOnB.send("kickUser", { userId: INVITEE_SEAT })).toEqual({ success: true });
+      await settle();
 
       await vi.advanceTimersByTimeAsync(120_000);
       expect(sfuA.rooms.get(CHANNEL)).toBeUndefined();
-
       expect(await inviteeIsInvited()).toBe(false);
     } finally {
       config.socket.disconnectGraceMs = graceBefore;

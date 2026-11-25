@@ -31,7 +31,14 @@ import {
   NO_ONE_ADMITTED_ERROR,
   SUPER_ADMIN_REMOVAL_ERROR,
 } from "../../admin/moderation.js";
-import { forceCloseRoom, isCurrentRoom, markRoomEnded } from "../../rooms.js";
+import {
+  confirmRoomLease,
+  forceCloseRoom,
+  holdsRoomLease,
+  isCurrentRoom,
+  markRoomEnded,
+  ROOM_LEASE_UNCONFIRMED_ERROR,
+} from "../../rooms.js";
 import { getSocketAuthUser } from "../auth.js";
 import type { ConnectionContext } from "../context.js";
 import { RATE_LIMITS, takeToken } from "../rateLimit.js";
@@ -356,7 +363,23 @@ export const registerAdminHandlers = (
   }
   context.adminHandlersRegistered = true;
 
-  socket.on("kickUser", ({ userId: targetId }: { userId: string }, cb) => {
+  const onHostAction = ((event: string, handler: (...args: unknown[]) => unknown) => {
+    const leased = (...args: unknown[]) => {
+      const room = context.currentRoom;
+      if (!room || holdsRoomLease(state, room)) return handler(...args);
+      const answer = args.at(-1);
+      void confirmRoomLease(state, room).then((held) => {
+        if (held && context.currentRoom === room) return handler(...args);
+        if (typeof answer === "function") respond(answer, { error: ROOM_LEASE_UNCONFIRMED_ERROR });
+        return undefined;
+      });
+      return undefined;
+    };
+    Object.defineProperty(leased, "length", { value: handler.length });
+    return socket.on(event, leased);
+  }) as typeof socket.on;
+
+  onHostAction("kickUser", ({ userId: targetId }: { userId: string }, cb) => {
     const guard = ensureAdminRoom(context);
     if ("error" in guard) {
       respond(cb, guard);
@@ -398,7 +421,7 @@ export const registerAdminHandlers = (
     respond(cb, { success: true });
   });
 
-  socket.on("closeRemoteProducer", ({ producerId }, cb) => {
+  onHostAction("closeRemoteProducer", ({ producerId }, cb) => {
     const guard = ensureAdminRoom(context);
     if ("error" in guard) {
       respond(cb, guard);
@@ -425,7 +448,7 @@ export const registerAdminHandlers = (
     });
   });
 
-  socket.on(
+  onHostAction(
     "admin:closeUserMedia",
     (
       data: {
@@ -489,7 +512,7 @@ export const registerAdminHandlers = (
     },
   );
 
-  socket.on("admin:muteUser", ({ userId: targetId }, cb) => {
+  onHostAction("admin:muteUser", ({ userId: targetId }, cb) => {
     const guard = ensureAdminRoom(context);
     if ("error" in guard) {
       respond(cb, guard);
@@ -519,7 +542,7 @@ export const registerAdminHandlers = (
     });
   });
 
-  socket.on("admin:closeUserVideo", ({ userId: targetId }, cb) => {
+  onHostAction("admin:closeUserVideo", ({ userId: targetId }, cb) => {
     const guard = ensureAdminRoom(context);
     if ("error" in guard) {
       respond(cb, guard);
@@ -549,7 +572,7 @@ export const registerAdminHandlers = (
     });
   });
 
-  socket.on("admin:stopUserScreenShare", ({ userId: targetId }, cb) => {
+  onHostAction("admin:stopUserScreenShare", ({ userId: targetId }, cb) => {
     const guard = ensureAdminRoom(context);
     if ("error" in guard) {
       respond(cb, guard);
@@ -579,7 +602,7 @@ export const registerAdminHandlers = (
     });
   });
 
-  socket.on("muteAll", (input: unknown, maybeCb?: (data: unknown) => void) => {
+  onHostAction("muteAll", (input: unknown, maybeCb?: (data: unknown) => void) => {
     const callback = typeof input === "function" ? input : maybeCb;
     const data = typeof input === "function" ? {} : input;
     if (!callback) return;
@@ -607,7 +630,7 @@ export const registerAdminHandlers = (
     });
   });
 
-  socket.on("closeAllVideo", (input: unknown, maybeCb?: (data: unknown) => void) => {
+  onHostAction("closeAllVideo", (input: unknown, maybeCb?: (data: unknown) => void) => {
     const callback = typeof input === "function" ? input : maybeCb;
     const data = typeof input === "function" ? {} : input;
     if (!callback) return;
@@ -635,7 +658,7 @@ export const registerAdminHandlers = (
     });
   });
 
-  socket.on("admin:stopAllScreenShare", (input: unknown, maybeCb?: (data: unknown) => void) => {
+  onHostAction("admin:stopAllScreenShare", (input: unknown, maybeCb?: (data: unknown) => void) => {
     const callback = typeof input === "function" ? input : maybeCb;
     const data = typeof input === "function" ? {} : input;
     if (!callback) return;
@@ -663,7 +686,7 @@ export const registerAdminHandlers = (
     });
   });
 
-  socket.on("promoteHost", ({ userId: targetId }: { userId: string }, cb) => {
+  onHostAction("promoteHost", ({ userId: targetId }: { userId: string }, cb) => {
     if (!takeToken(socket, "admin:action", RATE_LIMITS.adminAction)) {
       respond(cb, { error: "Too many admin requests; please retry shortly" });
       return;
@@ -720,7 +743,7 @@ export const registerAdminHandlers = (
     });
   });
 
-  socket.on("admin:transferHost", ({ userId: targetId }: { userId: string }, cb) => {
+  onHostAction("admin:transferHost", ({ userId: targetId }: { userId: string }, cb) => {
     const guard = ensureAdminRoom(context);
     if ("error" in guard) {
       respond(cb, guard);
@@ -769,7 +792,7 @@ export const registerAdminHandlers = (
   const canSeeOtherRooms = () =>
     getSocketAuthUser(socket)?.isSuperAdmin === true;
 
-  socket.on("getRooms", (cb) => {
+  onHostAction("getRooms", (cb) => {
     const clientId = resolveClientId(context);
     const ownRoom = context.currentRoom;
     const roomList = Array.from(state.rooms.values())
@@ -784,7 +807,7 @@ export const registerAdminHandlers = (
     respond(cb, { rooms: roomList });
   });
 
-  socket.on("admin:getRoomsDetailed", (cb) => {
+  onHostAction("admin:getRoomsDetailed", (cb) => {
     const guard = ensureAdminRoom(context);
     if ("error" in guard) {
       respond(cb, guard);
@@ -800,7 +823,7 @@ export const registerAdminHandlers = (
     respond(cb, { rooms });
   });
 
-  socket.on("admin:getRoomState", (cb) => {
+  onHostAction("admin:getRoomState", (cb) => {
     const guard = ensureAdminRoom(context);
     if ("error" in guard) {
       respond(cb, guard);
@@ -810,7 +833,7 @@ export const registerAdminHandlers = (
     respond(cb, { room: toRoomSnapshot(guard.room) });
   });
 
-  socket.on("admin:getParticipants", (cb) => {
+  onHostAction("admin:getParticipants", (cb) => {
     const guard = ensureAdminRoom(context);
     if ("error" in guard) {
       respond(cb, guard);
@@ -823,7 +846,7 @@ export const registerAdminHandlers = (
     });
   });
 
-  socket.on("admin:getPendingUsers", (cb) => {
+  onHostAction("admin:getPendingUsers", (cb) => {
     const guard = ensureAdminRoom(context);
     if ("error" in guard) {
       respond(cb, guard);
@@ -836,7 +859,7 @@ export const registerAdminHandlers = (
     });
   });
 
-  socket.on("admin:getAccessLists", (cb) => {
+  onHostAction("admin:getAccessLists", (cb) => {
     const guard = ensureAdminRoom(context);
     if ("error" in guard) {
       respond(cb, guard);
@@ -849,7 +872,7 @@ export const registerAdminHandlers = (
     });
   });
 
-  socket.on(
+  onHostAction(
     "admin:allowUsers",
     (
       data: {
@@ -903,7 +926,7 @@ export const registerAdminHandlers = (
     },
   );
 
-  socket.on("admin:createAdmission", (_data: unknown, cb) => {
+  onHostAction("admin:createAdmission", (_data: unknown, cb) => {
     const guard = ensureAdminRoom(context);
     if ("error" in guard) {
       respond(cb, guard);
@@ -912,7 +935,7 @@ export const registerAdminHandlers = (
     respond(cb, { success: true, ...guard.room.createAdmission() });
   });
 
-  socket.on(
+  onHostAction(
     "admin:blockUsers",
     (
       data: {
@@ -982,7 +1005,7 @@ export const registerAdminHandlers = (
     },
   );
 
-  socket.on(
+  onHostAction(
     "admin:unblockUsers",
     (
       data: {
@@ -1018,7 +1041,7 @@ export const registerAdminHandlers = (
     },
   );
 
-  socket.on(
+  onHostAction(
     "admin:revokeAllowedUsers",
     (
       data: {
@@ -1059,7 +1082,7 @@ export const registerAdminHandlers = (
     },
   );
 
-  socket.on(
+  onHostAction(
     "redirectUser",
     ({ userId: targetId, newRoomId }: RedirectData, cb) => {
       const guard = ensureAdminRoom(context);
@@ -1093,7 +1116,7 @@ export const registerAdminHandlers = (
     },
   );
 
-  socket.on("admitUser", ({ userId: targetId }, cb) => {
+  onHostAction("admitUser", ({ userId: targetId }, cb) => {
     const guard = ensureAdminRoom(context);
     if ("error" in guard) {
       respond(cb, guard);
@@ -1117,7 +1140,7 @@ export const registerAdminHandlers = (
     }
   });
 
-  socket.on("rejectUser", ({ userId: targetId }, cb) => {
+  onHostAction("rejectUser", ({ userId: targetId }, cb) => {
     const guard = ensureAdminRoom(context);
     if ("error" in guard) {
       respond(cb, guard);
@@ -1146,7 +1169,7 @@ export const registerAdminHandlers = (
     }
   });
 
-  socket.on("admin:admitAllPending", (cb) => {
+  onHostAction("admin:admitAllPending", (cb) => {
     const guard = ensureAdminRoom(context, { bulk: true });
     if ("error" in guard) {
       respond(cb, guard);
@@ -1167,7 +1190,7 @@ export const registerAdminHandlers = (
     });
   });
 
-  socket.on("admin:rejectAllPending", (cb) => {
+  onHostAction("admin:rejectAllPending", (cb) => {
     const guard = ensureAdminRoom(context, { bulk: true });
     if ("error" in guard) {
       respond(cb, guard);
@@ -1186,7 +1209,7 @@ export const registerAdminHandlers = (
     });
   });
 
-  socket.on("lockRoom", ({ locked }: { locked: boolean }, cb) => {
+  onHostAction("lockRoom", ({ locked }: { locked: boolean }, cb) => {
     const guard = ensureAdminRoom(context);
     if ("error" in guard) {
       respond(cb, guard);
@@ -1203,7 +1226,7 @@ export const registerAdminHandlers = (
     });
   });
 
-  socket.on("setNoGuests", ({ noGuests }: { noGuests: boolean }, cb) => {
+  onHostAction("setNoGuests", ({ noGuests }: { noGuests: boolean }, cb) => {
     const guard = ensureAdminRoom(context);
     if ("error" in guard) {
       respond(cb, guard);
@@ -1222,7 +1245,7 @@ export const registerAdminHandlers = (
     });
   });
 
-  socket.on("lockChat", ({ locked }: { locked: boolean }, cb) => {
+  onHostAction("lockChat", ({ locked }: { locked: boolean }, cb) => {
     const guard = ensureAdminRoom(context);
     if ("error" in guard) {
       respond(cb, guard);
@@ -1241,7 +1264,7 @@ export const registerAdminHandlers = (
     });
   });
 
-  socket.on("getRoomLockStatus", (cb) => {
+  onHostAction("getRoomLockStatus", (cb) => {
     const guard = ensureAdminRoom(context);
     if ("error" in guard) {
       respond(cb, guard);
@@ -1250,7 +1273,7 @@ export const registerAdminHandlers = (
     respond(cb, { locked: guard.room.isLocked });
   });
 
-  socket.on("getChatLockStatus", (cb) => {
+  onHostAction("getChatLockStatus", (cb) => {
     const guard = ensureAdminRoom(context);
     if ("error" in guard) {
       respond(cb, guard);
@@ -1259,7 +1282,7 @@ export const registerAdminHandlers = (
     respond(cb, { locked: guard.room.isChatLocked });
   });
 
-  socket.on("setTtsDisabled", ({ disabled }: { disabled: boolean }, cb) => {
+  onHostAction("setTtsDisabled", ({ disabled }: { disabled: boolean }, cb) => {
     const guard = ensureAdminRoom(context);
     if ("error" in guard) {
       respond(cb, guard);
@@ -1280,7 +1303,7 @@ export const registerAdminHandlers = (
     });
   });
 
-  socket.on("getTtsDisabledStatus", (cb) => {
+  onHostAction("getTtsDisabledStatus", (cb) => {
     const guard = ensureAdminRoom(context);
     if ("error" in guard) {
       respond(cb, guard);
@@ -1289,7 +1312,7 @@ export const registerAdminHandlers = (
     respond(cb, { disabled: guard.room.isTtsDisabled });
   });
 
-  socket.on("setDmEnabled", ({ enabled }: { enabled: boolean }, cb) => {
+  onHostAction("setDmEnabled", ({ enabled }: { enabled: boolean }, cb) => {
     const guard = ensureAdminRoom(context);
     if ("error" in guard) {
       respond(cb, guard);
@@ -1314,7 +1337,7 @@ export const registerAdminHandlers = (
     });
   });
 
-  socket.on(
+  onHostAction(
     "setImageAttachmentsEnabled",
     ({ enabled }: { enabled: boolean }, cb) => {
       const guard = ensureAdminRoom(context);
@@ -1336,7 +1359,7 @@ export const registerAdminHandlers = (
     },
   );
 
-  socket.on("getDmEnabledStatus", (cb) => {
+  onHostAction("getDmEnabledStatus", (cb) => {
     const guard = ensureAdminRoom(context);
     if ("error" in guard) {
       respond(cb, guard);
@@ -1345,7 +1368,7 @@ export const registerAdminHandlers = (
     respond(cb, { enabled: guard.room.isDmEnabled });
   });
 
-  socket.on("setReactionsDisabled", ({ disabled }: { disabled: boolean }, cb) => {
+  onHostAction("setReactionsDisabled", ({ disabled }: { disabled: boolean }, cb) => {
     const guard = ensureAdminRoom(context);
     if ("error" in guard) {
       respond(cb, guard);
@@ -1366,7 +1389,7 @@ export const registerAdminHandlers = (
     });
   });
 
-  socket.on("getReactionsDisabledStatus", (cb) => {
+  onHostAction("getReactionsDisabledStatus", (cb) => {
     const guard = ensureAdminRoom(context);
     if ("error" in guard) {
       respond(cb, guard);
@@ -1375,7 +1398,7 @@ export const registerAdminHandlers = (
     respond(cb, { disabled: guard.room.isReactionsDisabled });
   });
 
-  socket.on(
+  onHostAction(
     "setParticipantMediaPermissions",
     (
       data: { unmuteAllowed?: boolean; videoAllowed?: boolean },
@@ -1410,7 +1433,7 @@ export const registerAdminHandlers = (
     },
   );
 
-  socket.on(
+  onHostAction(
     "admin:setPolicies",
     (
       data: {
@@ -1477,7 +1500,7 @@ export const registerAdminHandlers = (
     },
   );
 
-  socket.on("admin:clearRaisedHands", (cb) => {
+  onHostAction("admin:clearRaisedHands", (cb) => {
     const guard = ensureAdminRoom(context);
     if ("error" in guard) {
       respond(cb, guard);
@@ -1488,7 +1511,7 @@ export const registerAdminHandlers = (
     respond(cb, { success: true, clearedCount });
   });
 
-  socket.on("admin:broadcastNotice", (data: { message?: string; level?: string }, cb) => {
+  onHostAction("admin:broadcastNotice", (data: { message?: string; level?: string }, cb) => {
     const guard = ensureAdminRoom(context);
     if ("error" in guard) {
       respond(cb, guard);
@@ -1601,7 +1624,7 @@ export const registerAdminHandlers = (
     });
   };
 
-  socket.on(
+  onHostAction(
     "admin:endRoom",
     (
       data: {
@@ -1614,7 +1637,7 @@ export const registerAdminHandlers = (
     },
   );
 
-  socket.on(
+  onHostAction(
     "admin:closeRoom",
     (
       data: {
@@ -1627,7 +1650,7 @@ export const registerAdminHandlers = (
     },
   );
 
-  socket.on("admin:muteUserAudio", ({ userId: targetId }, cb) => {
+  onHostAction("admin:muteUserAudio", ({ userId: targetId }, cb) => {
     const guard = ensureAdminRoom(context);
     if ("error" in guard) {
       respond(cb, guard);

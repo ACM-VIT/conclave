@@ -42,6 +42,12 @@ export type EndedRoom = {
   endedBy: string;
 };
 
+export type DeferredRoomWrites = {
+  room: { id: string; clientId: string; channelId: string };
+  writes: Array<{ label: string; perform: () => void }>;
+  releaseAfter: boolean;
+};
+
 export type SfuState = {
   workers: Worker[];
   rooms: Map<string, Room>;
@@ -61,6 +67,7 @@ export type SfuState = {
   scheduling: SchedulingStore;
   schedulingPersistence: SchedulingPersistence | null;
   roomRegistry: RoomRegistry;
+  deferredRoomWrites: Map<string, DeferredRoomWrites>;
   roomRecovery: RoomRecoveryLedger;
   transcriptRelays: TranscriptRelayRegistry;
   /** Null when this SFU does not run authority apps. */
@@ -91,6 +98,7 @@ export const createSfuState = (options?: {
     scheduling: createSchedulingStore(),
     schedulingPersistence: null,
     roomRegistry: options?.roomRegistry ?? createRoomRegistry(config),
+    deferredRoomWrites: new Map(),
     roomRecovery: createRoomRecoveryLedger(
       options?.roomRecoveryStore ?? createMemoryRoomRecoveryStore(),
     ),

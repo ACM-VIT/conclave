@@ -7,10 +7,12 @@ import { Logger } from "../utilities/loggers.js";
 import {
   RoomLeaseExpiredError,
   RoomOwnershipError,
+  type RoomOwnershipClaim,
 } from "./roomRegistry.js";
 import {
   endScheduledMeetingRemovals,
   getScheduledMeetingByRoomCode,
+  inviteeDecisionTime,
   persistInviteeReadmission,
   refreshScheduledMeeting,
   setScheduledInviteeReadmission,
@@ -95,14 +97,146 @@ export const markRoomEnded = (
  * one count for nothing there, and the people a host removed from this one
  * are invited again, as anyone a booking invites is.
  */
+type LeasedRoom = Pick<Room, "id" | "clientId" | "channelId">;
+
+export const ROOM_LEASE_CONFIRM_MS = 5_000;
+export const ROOM_LEASE_UNCONFIRMED_ERROR =
+  "This meeting is moving between servers. Try again in a moment.";
+
 export const holdsRoomLease = (
-  state: Pick<SfuState, "roomRegistry">,
-  room: Pick<Room, "id" | "channelId">,
-  write: string,
-): boolean => {
-  if (state.roomRegistry.holdsLease(room.channelId)) return true;
-  Logger.warn(`Room ${room.id} no longer holds its lease, so it does not write ${write}.`);
-  return false;
+  state: Pick<SfuState, "roomRegistry" | "deferredRoomWrites">,
+  room: Pick<Room, "channelId">,
+): boolean =>
+  state.roomRegistry.holdsLease(room.channelId) && !state.deferredRoomWrites.has(room.channelId);
+
+const releaseLease = (state: SfuState, channelId: string): void => {
+  void state.roomRegistry.releaseRoom(channelId).catch((error) => {
+    Logger.warn(`Failed to release room ownership for ${channelId}`, error);
+  });
+};
+
+const releaseRoomLease = (state: SfuState, channelId: string): void => {
+  const deferred = state.deferredRoomWrites.get(channelId);
+  if (deferred) {
+    deferred.releaseAfter = true;
+    return;
+  }
+  releaseLease(state, channelId);
+};
+
+const settleRoomLease = (
+  state: SfuState,
+  channelId: string,
+  outcome: "continuous" | "reclaimed" | "lost",
+): void => {
+  const deferred = state.deferredRoomWrites.get(channelId);
+  if (!deferred) return;
+  state.deferredRoomWrites.delete(channelId);
+  if (outcome === "continuous") {
+    for (const write of deferred.writes) {
+      try {
+        write.perform();
+      } catch (error) {
+        Logger.error(`Room ${deferred.room.id} failed to write ${write.label}`, error);
+      }
+    }
+  } else {
+    Logger.error(
+      `Room ${deferred.room.id} dropped ${deferred.writes.map((write) => write.label).join(", ")}: ${
+        outcome === "lost" ? "another SFU owns it now" : "its lease ran out before it was renewed"
+      }.`,
+    );
+  }
+  if (deferred.releaseAfter && outcome !== "lost" && !state.rooms.has(channelId)) {
+    releaseLease(state, channelId);
+  }
+};
+
+const settleOwnership = (
+  state: SfuState,
+  channelId: string,
+  ownership: RoomOwnershipClaim,
+): void =>
+  settleRoomLease(
+    state,
+    channelId,
+    !ownership.ok ? "lost" : ownership.continuous ? "continuous" : "reclaimed",
+  );
+
+const leaseConfirmations = new WeakMap<SfuState, Map<string, Promise<boolean>>>();
+
+const renewForConfirmation = (state: SfuState, room: LeasedRoom): Promise<boolean> => {
+  const pending = leaseConfirmations.get(state) ?? new Map<string, Promise<boolean>>();
+  leaseConfirmations.set(state, pending);
+  const inFlight = pending.get(room.channelId);
+  if (inFlight) return inFlight;
+  const renewal = state.roomRegistry
+    .renewRoom({ channelId: room.channelId, clientId: room.clientId, roomId: room.id })
+    .then(
+      (ownership) => {
+        settleOwnership(state, room.channelId, ownership);
+        if (ownership.ok) return true;
+        if (state.rooms.has(room.channelId)) {
+          Logger.warn(
+            `Closing room ${room.id} (${room.clientId}) because ownership moved to ${ownership.owner.instanceId}`,
+          );
+          handOffRoomState(state, room.channelId);
+        }
+        return false;
+      },
+      (error: unknown) => {
+        settleRoomLease(state, room.channelId, "lost");
+        if (error instanceof RoomLeaseExpiredError && state.rooms.has(room.channelId)) {
+          handOffRoomState(state, room.channelId);
+        }
+        return false;
+      },
+    )
+    .finally(() => pending.delete(room.channelId));
+  pending.set(room.channelId, renewal);
+  return renewal;
+};
+
+/**
+ * Whether this SFU may act on `room` now: it holds the room's lease, or a
+ * renewal confirms it within `ROOM_LEASE_CONFIRM_MS`. Writes the room put off
+ * meanwhile are written first.
+ */
+export const confirmRoomLease = (state: SfuState, room: LeasedRoom): Promise<boolean> => {
+  if (holdsRoomLease(state, room)) return Promise.resolve(true);
+  const renewal = renewForConfirmation(state, room);
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), ROOM_LEASE_CONFIRM_MS);
+  });
+  return Promise.race([renewal, deadline]).finally(() => clearTimeout(timer));
+};
+
+/**
+ * The one way a room writes what other servers read: at once while it holds
+ * its lease, else in order once a renewal confirms the lease has not lapsed.
+ * When it has, or another SFU owns the room, the writes are dropped and the
+ * room is handed off.
+ */
+export const writeSharedRoomState = (
+  state: SfuState,
+  room: LeasedRoom,
+  label: string,
+  perform: () => void,
+): void => {
+  if (holdsRoomLease(state, room)) {
+    perform();
+    return;
+  }
+  const deferred = state.deferredRoomWrites.get(room.channelId) ?? {
+    room: { id: room.id, clientId: room.clientId, channelId: room.channelId },
+    writes: [],
+    releaseAfter: false,
+  };
+  deferred.writes.push({ label, perform });
+  state.deferredRoomWrites.set(room.channelId, deferred);
+  Logger.warn(`Room ${room.id} waits for its lease to write ${label}.`);
+  void renewForConfirmation(state, room);
 };
 
 const noteMeetingOver = (
@@ -112,16 +246,18 @@ const noteMeetingOver = (
     "id" | "clientId" | "channelId" | "incarnationId" | "takesOverRecordOf" | "ownerEmail"
   >,
 ): void => {
-  if (!holdsRoomLease(state, room, "the end of its meeting")) return;
-  state.roomRecovery.noteOver(room);
-  endScheduledMeetingRemovals(
-    state.scheduledMeetings,
-    state.scheduledMeetingPersistence,
-    room.clientId,
-    room.id,
-    Date.now(),
-  ).catch((error) => {
-    Logger.warn(`Failed to persist the end of the removals from ${room.id}`, error);
+  const endedAt = Date.now();
+  writeSharedRoomState(state, room, "the end of its meeting", () => {
+    state.roomRecovery.noteOver(room);
+    endScheduledMeetingRemovals(
+      state.scheduledMeetings,
+      state.scheduledMeetingPersistence,
+      room.clientId,
+      room.id,
+      endedAt,
+    ).catch((error) => {
+      Logger.warn(`Failed to persist the end of the removals from ${room.id}`, error);
+    });
   });
 };
 
@@ -129,9 +265,10 @@ const noteMeetingOver = (
 // ledger at once. The SFU may not live to the next renewal sweep.
 const recordRecoverableChanges = (state: SfuState, room: Room): void => {
   room.onRecoverableChange = () => {
-    if (room.recordsItsCall && holdsRoomLease(state, room, "its recovery record")) {
-      state.roomRecovery.noteRunning(room);
-    }
+    if (!room.recordsItsCall) return;
+    writeSharedRoomState(state, room, "its recovery record", () => {
+      if (room.recordsItsCall) state.roomRecovery.noteRunning(room);
+    });
   };
   // A lost call whose time ran out is a meeting that is over, as one that
   // emptied or was ended is.
@@ -160,16 +297,20 @@ const bindScheduledInvitations = (state: SfuState, room: Room): void => {
       userKey,
       required,
     );
-    if (!decided || !state.scheduledMeetingPersistence) return;
-    if (!holdsRoomLease(state, room, "an invitee's removal")) return;
-    persistInviteeReadmission(
-      state.scheduledMeetings,
-      state.scheduledMeetingPersistence,
-      decided,
-      userKey,
-      required,
-    ).catch((error) => {
-      Logger.warn(`Failed to persist an invitee's removal from ${room.id}`, error);
+    const persistence = state.scheduledMeetingPersistence;
+    if (!decided || !persistence) return;
+    const at = inviteeDecisionTime(decided, userKey);
+    writeSharedRoomState(state, room, "an invitee's removal", () => {
+      persistInviteeReadmission(
+        state.scheduledMeetings,
+        persistence,
+        decided,
+        userKey,
+        required,
+        at,
+      ).catch((error) => {
+        Logger.warn(`Failed to persist an invitee's removal from ${room.id}`, error);
+      });
     });
   };
 };
@@ -218,10 +359,12 @@ export const renewLocalRoom = async (
       Logger.warn(
         `Closing room ${roomId} (${clientId}) before its unconfirmed shared lease can expire`,
       );
+      settleRoomLease(state, channelId, "lost");
       handOffRoomState(state, channelId);
     }
     throw error;
   }
+  settleOwnership(state, channelId, ownership);
   if (!ownership.ok) {
     Logger.warn(
       `Closing local room ${roomId} (${clientId}) because ownership belongs to ${ownership.owner.instanceId}`,
@@ -271,6 +414,7 @@ export const getOrCreateRoomWithOrigin = async (
       clientId,
       roomId,
     });
+    settleOwnership(state, channelId, ownership);
     if (!ownership.ok) {
       throw new RoomOwnershipError(ownership.owner);
     }
@@ -368,9 +512,7 @@ const cleanupRoomState = (state: SfuState, channelId: string): Room | null => {
   room.close();
   state.transcriptRelays.stopRoom(room.channelId);
   state.rooms.delete(channelId);
-  void state.roomRegistry.releaseRoom(channelId).catch((error) => {
-    Logger.warn(`Failed to release room ownership for ${channelId}`, error);
-  });
+  releaseRoomLease(state, channelId);
   void cleanupRoomBrowser(channelId);
   return room;
 };
@@ -427,14 +569,12 @@ export const cleanupRoom = (state: SfuState, channelId: string): boolean => {
   }));
   const retryAt =
     room.restorerState(Date.now()) === "awaited" ? room.restorerDeadline : null;
+  if (room.endsWhenEmpty) {
+    noteMeetingOver(state, room);
+  }
   const closedRoom = cleanupRoomState(state, channelId);
   if (!closedRoom) {
     return false;
-  }
-  // An emptied room's meeting is over. Not so for a room that only stood in
-  // for a lost call, or one a host ended, which was over already.
-  if (closedRoom.endsWhenEmpty) {
-    noteMeetingOver(state, closedRoom);
   }
   // Those knocking on a meeting a host ended were told so, and are let go.
   if (!closedRoom.hasEnded) {
@@ -468,11 +608,13 @@ export const renewRoomOwnerships = async (state: SfuState): Promise<void> => {
         Logger.warn(
           `Closing room ${room.id} (${room.clientId}) before its unconfirmed shared lease can expire`,
         );
+        settleRoomLease(state, room.channelId, "lost");
         handOffRoomState(state, room.channelId);
         continue;
       }
       throw error;
     }
+    settleOwnership(state, room.channelId, ownership);
     if (ownership.ok) {
       continue;
     }

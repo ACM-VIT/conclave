@@ -77,13 +77,18 @@ export const issueRoomRecoveryPass = (
  * ledger that the room is still running. Returns how to stop.
  */
 export const startRoomRecoveryPassRefresh = (
-  state: Pick<SfuState, "rooms" | "roomRecovery" | "roomRegistry">,
+  state: Pick<SfuState, "rooms" | "roomRecovery" | "roomRegistry" | "deferredRoomWrites">,
   secret: string,
 ): (() => void) => {
   const timer = setInterval(() => {
     try {
       for (const room of state.rooms.values()) {
-        if (!state.roomRegistry.holdsLease(room.channelId)) continue;
+        if (
+          !state.roomRegistry.holdsLease(room.channelId) ||
+          state.deferredRoomWrites.has(room.channelId)
+        ) {
+          continue;
+        }
         if (room.recordsItsCall) state.roomRecovery.noteRunning(room);
         for (const client of room.clients.values()) {
           if (!client.socket.connected) continue;

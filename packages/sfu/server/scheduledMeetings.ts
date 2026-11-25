@@ -1946,7 +1946,7 @@ export const endScheduledMeetingRemovals = (
 // its own decisions about one person never share a time and land in the
 // order it made them.
 const lastDecisionAt = new WeakMap<ScheduledMeeting, Map<string, number>>();
-const decisionTime = (meeting: ScheduledMeeting, email: string): number => {
+export const inviteeDecisionTime = (meeting: ScheduledMeeting, email: string): number => {
   const made = lastDecisionAt.get(meeting) ?? new Map<string, number>();
   lastDecisionAt.set(meeting, made);
   const at = Math.max(Date.now(), (made.get(email) ?? 0) + 1);
@@ -1962,17 +1962,13 @@ export const persistInviteeReadmission = (
   meeting: ScheduledMeeting,
   email: string,
   required: boolean,
+  at: number = inviteeDecisionTime(meeting, email),
 ): Promise<void> => {
   if (!persistence.setInviteeReadmission) {
     return persistScheduledMeetingChanges(store, persistence, [meeting]);
   }
   return Promise.resolve(
-    persistence.setInviteeReadmission(
-      meeting.id,
-      email,
-      required,
-      decisionTime(meeting, email),
-    ),
+    persistence.setInviteeReadmission(meeting.id, email, required, at),
   ).then(() => persistence.flush?.());
 };
 

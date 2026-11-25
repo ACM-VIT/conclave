@@ -45,7 +45,15 @@ import {
 } from "../admin/moderation.js";
 import { recordAdminAudit } from "../admin/adminAudit.js";
 import { createTranscriptSpectatorToken } from "../socket/handlers/transcriptHandlers.js";
-import { forceCloseRoom, getRoomChannelId, isCurrentRoom, markRoomEnded } from "../rooms.js";
+import {
+  confirmRoomLease,
+  forceCloseRoom,
+  getRoomChannelId,
+  holdsRoomLease,
+  isCurrentRoom,
+  markRoomEnded,
+  ROOM_LEASE_UNCONFIRMED_ERROR,
+} from "../rooms.js";
 import { forceDrainRooms } from "../serverShutdown.js";
 import { resolveCorsOrigins } from "../cors.js";
 import { secretsMatch } from "../secret.js";
@@ -1021,6 +1029,23 @@ export const createSfuApp = ({
       }
     });
     next();
+  });
+
+  app.use("/admin/rooms", (req, res, next) => {
+    if (req.method === "GET" || req.method === "HEAD" || !hasValidSecret(req, config.sfuSecret)) {
+      next();
+      return;
+    }
+    const roomId = normalizeIdentifier(decodeURIComponent(req.path.split("/")[1] ?? ""));
+    const lookup = roomId ? resolveRoom(state, roomId, { clientId: resolveClientId(req) }) : null;
+    if (!lookup || "error" in lookup || holdsRoomLease(state, lookup.room)) {
+      next();
+      return;
+    }
+    void confirmRoomLease(state, lookup.room).then((held) => {
+      if (held) next();
+      else res.status(503).json({ error: ROOM_LEASE_UNCONFIRMED_ERROR });
+    });
   });
 
   app.get("/admin/overview", (req, res) => {
