@@ -769,10 +769,9 @@ restore_service_when_none_serves() {
 
 # True when every SFU instance, deployed in this run or not, runs the image.
 all_on_image() {
-  local svc container
+  local svc
   for svc in "${ALL_SFU_SERVICES[@]}"; do
-    container="$(service_container "$svc")"
-    [[ -n "$container" && "$(docker inspect -f '{{.Image}}' "$container")" == "$1" ]] || return 1
+    [[ -n "$1" && "$(container_image "$svc")" == "$1" ]] || return 1
   done
 }
 
@@ -792,10 +791,18 @@ run_canary() {
 
 # The image ID a service's container runs, or nothing.
 container_image() {
-  local container
+  local container image i
   container="$(service_container "$1")" || return 0
   [[ -n "$container" ]] || return 0
-  docker inspect -f '{{.Image}}' "$container" 2>/dev/null || true
+  for i in 1 2 3; do
+    image="$(docker inspect -f '{{.Image}}' "$container" 2>/dev/null)" || image=""
+    if [[ -n "$image" ]]; then
+      printf "%s\n" "$image"
+      return 0
+    fi
+    (( i < 3 )) && sleep "$STATUS_RETRY_SECONDS"
+  done
+  return 0
 }
 
 # Compose starts whatever its own image name for a service points at, so after
@@ -907,11 +914,14 @@ serving_config_hash() {
 # healthy, its own /status says healthy and not draining, and its public route
 # reaches it. One look, no waiting; SERVING_WHY says what failed.
 SERVING_WHY=""
+SERVING_IMAGE=""
 serving() {
   local svc="$1" image="${2:-}" container env url status running
+  SERVING_IMAGE=""
   container="$(service_container "$svc")" || container=""
   if [[ -z "$container" ]]; then SERVING_WHY="it has no container"; return 1; fi
-  running="$(docker inspect -f '{{.Image}}' "$container" 2>/dev/null)" || running=""
+  running="$(container_image "$svc")"
+  if [[ -z "$running" ]]; then SERVING_WHY="Docker cannot read its container's image"; return 1; fi
   if [[ -n "$image" && "$running" != "$image" ]]; then SERVING_WHY="its container runs ${running:-no image}, not ${image}"; return 1; fi
   if ! env="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$container" 2>/dev/null)"; then
     SERVING_WHY="Docker cannot read its container's env"; return 1
@@ -939,6 +949,7 @@ process.stdout.write(why);
 ' "$svc" "${EXPECTED_ID[$svc]:-$svc}" "$url" "$(service_public_url "$svc")")"
   if [[ -n "$verdict" ]]; then SERVING_WHY="$verdict"; return 1; fi
   SERVING_WHY=""
+  SERVING_IMAGE="$running"
 }
 
 # serving, waited for up to HEALTH_TIMEOUT_SECONDS.
@@ -1015,7 +1026,7 @@ seed_service_tag() {
   local svc="$1" lkg="" image_name
   image_name="$(service_image_name "$svc")"
   docker image inspect "$image_name" >/dev/null 2>&1 && return 0
-  serving "$svc" && lkg="$(container_image "$svc")"
+  serving "$svc" && lkg="$SERVING_IMAGE"
   [[ -n "$lkg" ]] || lkg="$(journal_get "$svc" lkg)"
   [[ -n "$lkg" ]] || lkg="$(docker image inspect -f '{{.Id}}' "${IMAGE_REPO}:rollback-${svc}" 2>/dev/null || true)"
   if [[ -z "$lkg" ]] || ! docker image inspect "$lkg" >/dev/null 2>&1; then
@@ -1199,7 +1210,7 @@ deploy_service() {
   lkg="$recorded"
   [[ -n "$lkg" ]] || lkg="$(docker image inspect -f '{{.Id}}' "${IMAGE_REPO}:rollback-${svc}" 2>/dev/null || true)"
   if serving "$svc"; then
-    lkg="$(container_image "$svc")"
+    lkg="$SERVING_IMAGE"
   fi
   if [[ -n "$lkg" ]] && ! docker image inspect "$lkg" >/dev/null 2>&1; then
     lkg=""
@@ -1238,7 +1249,7 @@ deploy_service() {
       return 1
     fi
     if serving "$svc" || { [[ -z "$lkg" ]] && wait_serving "$svc"; }; then
-      lkg="$(container_image "$svc")"
+      lkg="$SERVING_IMAGE"
     elif [[ -z "$lkg" ]]; then
       echo "" >&2
       echo "Deploy stopped: ${svc} is not serving (${SERVING_WHY}) and no image it served on is on record, so a failed canary would leave it nothing to go back to. It was not drained or rebuilt; fix it, then rerun this script." >&2
@@ -1482,6 +1493,12 @@ for svc in "${ALL_SFU_SERVICES[@]}"; do
     exit "${REPAIR_CODE[$svc]}"
   fi
 done
+if [[ "$DEPLOY_BROWSER_LOCAL" == "true" ]]; then
+  echo ""
+  echo "=== Deploying Browser Service (local) ==="
+  "${ROOT_DIR}/scripts/deploy-browser-service.sh"
+fi
+
 declare -A FINAL_SERVING=()
 for svc in "${ALL_SFU_SERVICES[@]}"; do
   if [[ "$(journal_get "$svc" lkg)" != "$TARGET_IMAGE" ]]; then
@@ -1533,12 +1550,6 @@ elif [[ "$TARGET_IMAGE" != "$LAST_GOOD_IMAGE" ]] && all_final_serving; then
   save_deploy_state
 fi
 echo "Last good release: ${LAST_GOOD_COMMIT}${PREVIOUS_GOOD_COMMIT:+ (--rollback returns to ${PREVIOUS_GOOD_COMMIT})}."
-
-if [[ "$DEPLOY_BROWSER_LOCAL" == "true" ]]; then
-  echo ""
-  echo "=== Deploying Browser Service (local) ==="
-  "${ROOT_DIR}/scripts/deploy-browser-service.sh"
-fi
 
 echo ""
 echo "SFU deploy complete: ${ORDERED_SERVICES[*]} on ${TARGET_COMMIT}."

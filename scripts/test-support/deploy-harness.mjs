@@ -90,6 +90,7 @@ export const startSfu = async (
     lonelyDrains: [],
     restartPolicy: "unless-stopped",
     statusFailures: 0,
+    imageReads: 0,
   };
   sfu.restart = () => {
     if (sfu.container !== "exited" || sfu.restartPolicy === "no") return;
@@ -115,6 +116,7 @@ export const startSfu = async (
     const url = new URL(req.url, "http://sfu");
     const json = (value, status = 200) => res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(value));
     if (url.pathname === "/stand-in/state") {
+      const imageReadFails = url.searchParams.get("read") === "image" && Boolean(sfu.failImageRead?.(++sfu.imageReads));
       const startedAt = new Date(Date.now() - (["crash-looping", "young"].includes(sfu.container) ? 3_000 : 3_600_000)).toISOString();
       if (sfu.container === "crash-looping" || sfu.restartsWhileRunning) sfu.restartCount += 1;
       const status = { exited: "exited", "crash-looping": "restarting" }[sfu.container] ?? "running";
@@ -127,6 +129,7 @@ export const startSfu = async (
         configHash: sfu.configHash,
         stateInspectFails,
         envInspectFails,
+        imageReadFails,
         firstImage: sfu.firstImage,
       });
     }
@@ -250,7 +253,7 @@ const out = (text) => process.stdout.write(text + "\\n");
 // runs as one host would: a recreated container gets the image tagged for it.
 const tagsFile = process.env.DEPLOY_TEST_DOCKER_TAGS || process.env.DEPLOY_TEST_DOCKER_LOG + ".tags";
 const tags = fs.existsSync(tagsFile) ? JSON.parse(fs.readFileSync(tagsFile, "utf8")) : {};
-const state = async (name) => (await fetch("http://127.0.0.1:" + sfus[name].port + "/stand-in/state")).json();
+const state = async (name, read = "") => (await fetch("http://127.0.0.1:" + sfus[name].port + "/stand-in/state" + (read ? "?read=" + read : ""))).json();
 // The variable a service's image name reads, as in the compose files.
 const imageVar = (name) => "SFU_IMAGE_" + name.toUpperCase().replaceAll("-", "_");
 const configHash = (name) =>
@@ -357,7 +360,14 @@ const main = async () => {
       return out(format.includes(".State.StartedAt") ? current.status + " " + current.startedAt : current.status);
     }
     if (format.includes("config-hash")) return out((await state(name)).configHash);
-    if (format.includes(".Image")) return out((await state(name)).image);
+    if (format.includes(".Image")) {
+      const current = await state(name, "image");
+      if (current.imageReadFails) {
+        process.exitCode = 1;
+        return;
+      }
+      return out(current.image);
+    }
     return out(args.at(-1));
   }
   if (args[0] === "build") {
@@ -432,7 +442,7 @@ main();
 // deploy-sfu.sh the checkout starts with, in place of the current one.
 export const deploy = async (
   sfus,
-  { args: extraArgs = [], env: extraEnv = {}, envLines = [], upstream, powershell = false, withoutFlock = false, script, noRedisUrl = false, journals = {} } = {},
+  { args: extraArgs = [], env: extraEnv = {}, envLines = [], upstream, powershell = false, withoutFlock = false, script, noRedisUrl = false, journals = {}, checkoutFiles = {} } = {},
 ) => {
   // On macOS this path sits behind the /var symlink, so the preflight also
   // runs through one.
@@ -453,6 +463,10 @@ export const deploy = async (
       path.join(src, "packages", "sfu", "config", "workerSettings.mjs"),
     );
     await copyFile(path.join(scripts, "..", "docker-compose.sfu.yml"), path.join(src, "docker-compose.sfu.yml"));
+    for (const [file, content] of Object.entries(checkoutFiles)) {
+      await mkdir(path.dirname(path.join(src, file)), { recursive: true });
+      await writeFile(path.join(src, file), content, { mode: 0o755 });
+    }
     // Fixed dates, so the same files make the same commit in every run, as a
     // rerun on the VM sees the same checkout.
     const git = (...args) =>
