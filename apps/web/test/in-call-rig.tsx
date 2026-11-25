@@ -34,6 +34,13 @@ export class World {
   sfu = new Map<string, { kind: Kind; type: string; paused: boolean; closed: boolean }>();
   private count = 0;
 
+  refuse(name: string) {
+    const left = this.refusals.get(name) ?? 0;
+    if (left <= 0) return false;
+    this.refusals.set(name, left - 1);
+    return true;
+  }
+
   nextId(prefix: string) {
     this.count += 1;
     return `${prefix}-${this.count}`;
@@ -110,7 +117,7 @@ export class FakeTrack {
   }
 
   async applyConstraints() {
-    if (this.kind === "video" && this.world.cameraRefusesConstraints) {
+    if (this.kind === "video" && (this.world.cameraRefusesConstraints || this.world.refuse("applyConstraints"))) {
       const error = new Error("the rig camera refuses new constraints");
       error.name = "OverconstrainedError";
       throw error;
@@ -325,7 +332,9 @@ export class FakeProducer {
     };
     this.rtpSender = {
       getParameters: () => ({ encodings: parameters }),
-      setParameters: async () => {},
+      setParameters: async () => {
+        if (world.refuse("setParameters")) throw new Error("the rig refused setParameters");
+      },
     };
     world.producers.push(this);
     world.sent.push({ producer: id, source: track?.source ?? null });
@@ -348,17 +357,17 @@ export class FakeProducer {
   async replaceTrack({ track }: { track: FakeTrack | null }) {
     await this.world.wait("replaceTrack");
     if (this.closed) throw new Error("closed");
-    const refusals = this.world.refusals.get("replaceTrack") ?? 0;
-    if (refusals > 0) {
-      this.world.refusals.set("replaceTrack", refusals - 1);
-      throw new Error("the rig refused replaceTrack");
-    }
+    if (this.world.refuse("replaceTrack")) throw new Error("the rig refused replaceTrack");
     this.track = track;
     this.world.sent.push({ producer: this.id, source: track?.source ?? null });
   }
 
-  async setRtpEncodingParameters() {}
-  async setMaxSpatialLayer() {}
+  async setRtpEncodingParameters() {
+    if (this.world.refuse("setParameters")) throw new Error("the rig refused setParameters");
+  }
+  async setMaxSpatialLayer() {
+    if (this.world.refuse("setParameters")) throw new Error("the rig refused setParameters");
+  }
 
   async getStats() {
     const frames = this.world.framesSent.get(this.id) ?? 0;
@@ -634,6 +643,11 @@ export const installMediaWorld = (world: World) => {
   const mediaDevices = {
     getUserMedia: vi.fn(async (constraints?: MediaStreamConstraints) => {
       await world.wait("capture");
+      if (world.refuse("getUserMedia")) {
+        const error = new Error("the rig refused getUserMedia");
+        error.name = "NotReadableError";
+        throw error;
+      }
       const kinds: Kind[] = [];
       if (constraints?.audio) kinds.push("audio");
       if (constraints?.video) kinds.push("video");
@@ -913,6 +927,16 @@ export const unwanted = (world: World, rig: RigApi): string[] => {
       problems.push(`audio producer ${id} is ${local.paused ? "paused" : "live"} here but ${producer.paused ? "paused" : "live"} on the SFU`);
     }
   });
+  const liveCameras = live.filter((track) => track.kind === "video" && track.source === "device");
+  if (liveCameras.length > 1) problems.push(`${liveCameras.length} live cameras: ${liveCameras.map((track) => track.id).join(", ")}`);
+  const streamCameras = new Set(rig.refs.localStreamRef.current?.getVideoTracks() ?? []);
+  openProducers
+    .filter((producer) => producer.kind === "video" && producer.appData.type !== "screen" && producer.track?.source === "device")
+    .forEach((producer) => {
+      if (producer.track?.readyState === "live" && !streamCameras.has(producer.track as unknown as MediaStreamTrack)) {
+        problems.push(`camera producer ${producer.id} sends ${producer.track.id} but the local stream shows another camera`);
+      }
+    });
   if (!intents.video.chosen) {
     live
       .filter((track) => track.kind === "video" && track.source !== "screen")

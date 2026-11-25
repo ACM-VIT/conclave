@@ -507,6 +507,27 @@ describe("presses and publishes that race each other", () => {
     expect(unwanted(world, rig.rig())).toEqual([]);
   });
 
+  it("a quality reopen whose network profile fails after the swap keeps one camera and turning it off stops it", async () => {
+    const rig = await join({ mic: false });
+    world.cameraRefusesConstraints = true;
+    world.refusals.set("setParameters", 20);
+
+    await act(async () => {
+      await rig.rig().media.updateVideoQualityRef.current?.("low").catch(() => {});
+    });
+    await rig.settle();
+    world.refusals.delete("setParameters");
+    expect(notLive(world, rig.rig())).toEqual([]);
+    expect(unwanted(world, rig.rig())).toEqual([]);
+
+    await act(async () => {
+      await rig.rig().media.toggleCamera();
+    });
+    await rig.settle();
+    expect(world.tracks.filter((track) => track.kind === "video" && track.source === "device" && track.readyState === "live")).toEqual([]);
+    expect(unwanted(world, rig.rig())).toEqual([]);
+  });
+
   it("a quality reopen whose camera swap fails keeps sending the previous camera and stops the new one", async () => {
     const rig = await join({ mic: false });
     const previous = liveCameraTrack(rig);
@@ -843,6 +864,14 @@ const STEPS: Array<[string, (model: Model) => void | Promise<void>]> = [
   [
     "change the video quality",
     (model) => start(model, model.rig.rig().media.updateVideoQualityRef.current?.(pick(model, ["low", "standard"] as const))),
+  ],
+  [
+    "the next media call fails",
+    (model) => {
+      const name = pick(model, ["getUserMedia", "applyConstraints", "replaceTrack", "produce", "setParameters"] as const);
+      world.refusals.set(name, (world.refusals.get(name) ?? 0) + 1 + Math.floor(model.random() * 3));
+      model.log.push(`   the next ${name} calls fail`);
+    },
   ],
   ["hold the next step", (model) => void world.holds.add(pick(model, HOLDS))],
   ["release the oldest held step", () => world.releaseOne(0)],
