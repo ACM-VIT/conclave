@@ -299,7 +299,7 @@ describe("the SFU's outbound schema", () => {
         distinctId: SFU_ID,
         event: "$exception",
         properties: { $exception_list: [{ type: "Error", value: "x", stacktrace: { type: "raw", frames } }] },
-      } as unknown as Message)?.properties?.$exception_list as Array<{ stacktrace: { frames: unknown[] } }>)[0].stacktrace.frames;
+      })?.properties?.$exception_list as Array<{ stacktrace: { frames: unknown[] } }>)[0].stacktrace.frames;
 
     it.each([
       ["a numeric function name", { filename: OWN_FILE, function: "1234567890", lineno: 2, in_app: true }, { lineno: 2 }],
