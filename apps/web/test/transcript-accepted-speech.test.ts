@@ -580,7 +580,7 @@ describe("one owner and one release point per line", () => {
   const ada = { userId: "ada", displayName: "Ada" };
   const grace = { userId: "grace", displayName: "Grace" };
 
-  it("Sarvam: words answered before a reconnect are replayed with their turn, so they show once", async () => {
+  it("Sarvam: words answered before a reconnect are never replayed; a turn still open keeps them and marks the rest as not captioned", async () => {
     vi.useFakeTimers();
     quiet();
     const { providerSockets, start, speak, endTurn, savedTexts, viewerTranscript } = await rig(SARVAM);
@@ -592,14 +592,15 @@ describe("one owner and one release point per line", () => {
 
     socket.disconnect();
     await settle();
-    const replacement = providerSockets()[1];
-    expect(replacement.sent.filter((message) => (message as { audio?: unknown }).audio)).toHaveLength(1);
-    replacement.emit(sarvamFinal("again", "Already captioned."));
     await endTurn(ada);
     await vi.advanceTimersByTimeAsync(DEADLINE + 100);
+    const resent = providerSockets()
+      .slice(1)
+      .flatMap(({ sent }) => sent.filter((message) => (message as { audio?: unknown }).audio));
 
-    expect(savedTexts()).toEqual(["Already captioned."]);
-    expect(viewerTranscript().segments.map(({ text }) => text)).toEqual(["Already captioned."]);
+    expect(resent).toHaveLength(0);
+    expect(savedTexts()).toEqual([`Already captioned. ${GAP}`]);
+    expect(viewerTranscript().segments.map(({ text }) => text)).toEqual([`Already captioned. ${GAP}`]);
   });
 
   it("OpenAI: a replayed line that became a gap before the replacement's final came is corrected under the same itemId", async () => {

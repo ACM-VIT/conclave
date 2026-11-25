@@ -123,7 +123,8 @@ type Utterance = {
   pauseEpoch: number;
 };
 type Tag = { utterance: Utterance; chunk: number };
-type Line = { itemId: string; text: string; speakerUserId?: string; sequence: number; startMs: number };
+type Line = { itemId: string; text: string; speakerUserId?: string; source?: string; sequence: number; startMs: number };
+const sourceOf = (line: Line) => `${line.speakerUserId}:${line.source ?? "mixed"}`;
 
 const tokensOf = (text: string) =>
   Array.from(text.matchAll(/U(\d+)\.(\d+):([a-z]+)/g), ([, uid, chunk, speaker]) => ({
@@ -175,7 +176,7 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
   const answeredLive = new Set<number>();
   const committedLive = new Set<number>();
   const used = new Map<Kind, number>(KINDS.map((kind) => [kind, 0]));
-  const timeline: { at: number; speaker: string; uid: number; heard: boolean }[] = [];
+  const timeline: { at: number; speaker: string; who: string; uid: number; heard: boolean }[] = [];
   const lastHeardAt = new Map<string, number>();
   let pauseEpoch = 0;
 
@@ -562,10 +563,10 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
   };
 
   const runsFrom = (line: Line) =>
-    timeline.flatMap(({ at, speaker }, start) => {
-      if (at !== line.startMs || speaker !== line.speakerUserId) return [];
+    timeline.flatMap(({ at, who }, start) => {
+      if (at !== line.startMs || who !== sourceOf(line)) return [];
       let end = start;
-      while (end + 1 < timeline.length && timeline[end + 1].speaker === line.speakerUserId) end += 1;
+      while (end + 1 < timeline.length && timeline[end + 1].who === sourceOf(line)) end += 1;
       return [timeline.slice(start, end + 1)];
     });
   const runFrom = (line: Line) => runsFrom(line).flat();
@@ -669,7 +670,7 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
     const audible = pool.heard[index] || (heardBefore !== undefined && Date.now() - heardBefore <= VOICE_HANGOVER_MS);
     if (pool.heard[index]) lastHeardAt.set(keyOf(utterance.speaker), Date.now());
     if (utterance.accepted) {
-      timeline.push({ at: Date.now(), speaker: utterance.speaker.userId, uid: utterance.uid, heard: audible });
+      timeline.push({ at: Date.now(), speaker: utterance.speaker.userId, who: `${utterance.speaker.userId}:${utterance.speaker.source ?? "mixed"}`, uid: utterance.uid, heard: audible });
     }
     await tolerate(
       () => rig.send({ type: "audio.chunk", audio: pool.wire24[index], speaker: utterance.speaker }),
@@ -845,7 +846,10 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
     }
   }
   if (!switchesSettled) report("a language switch never settled");
-  if (paused) await togglePause(STEPS);
+  for (let round = 0; round < 3 && statusOf() === "paused"; round += 1) {
+    await togglePause(STEPS + round);
+    if (statusOf() === "paused") await vi.advanceTimersByTimeAsync(61_000);
+  }
   await tolerate(() => rig.endTurn(speaker), "final turn end");
   for (let round = 0; round < 4; round += 1) await vi.advanceTimersByTimeAsync(DEADLINE + 20_000);
   for (let round = 0; round < 60 && savesInFlight > 0; round += 1) await vi.advanceTimersByTimeAsync(500);
@@ -865,16 +869,16 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
   const nextLineOf = (line: Line) =>
     lines.reduce(
       (next, other) =>
-        other.speakerUserId === line.speakerUserId && other.startMs > line.startMs ? Math.min(next, other.startMs) : next,
+        sourceOf(other) === sourceOf(line) && other.startMs > line.startMs ? Math.min(next, other.startMs) : next,
       Number.POSITIVE_INFINITY,
     );
   const stretchOf = (line: Line) => {
-    const start = timeline.findIndex(({ at, speaker }) => at === line.startMs && speaker === line.speakerUserId);
+    const start = timeline.findIndex(({ at, who }) => at === line.startMs && who === sourceOf(line));
     if (start < 0) return [];
     let first = start;
-    while (first > 0 && timeline[first - 1].speaker === line.speakerUserId) first -= 1;
+    while (first > 0 && timeline[first - 1].who === sourceOf(line)) first -= 1;
     const until = nextLineOf(line);
-    const untilNextLine = timeline.slice(start).filter(({ at, speaker }) => speaker === line.speakerUserId && at < until);
+    const untilNextLine = timeline.slice(start).filter(({ at, who }) => who === sourceOf(line) && at < until);
     return Array.from(new Set([...timeline.slice(first, start), ...runFrom(line), ...untilNextLine]));
   };
   const gapRuns = gaps.map((gap) => ({ gap, run: stretchOf(gap) }));

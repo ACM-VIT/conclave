@@ -426,10 +426,7 @@ const cases: { thread: string; model: string; env?: Record<string, string>; run:
       await vi.advanceTimersByTimeAsync(3_500);
       socket.disconnect();
       await settle();
-      const replacement = await rig.lane(ada);
-      const replayedChunks = audioMessages(replacement);
-      replacement.emit(sarvamSpeechStart());
-      replacement.emit(sarvamFinal("c", "Short. Continued."));
+      const replayedChunks = rig.providerSockets().slice(1).filter((each) => each !== socket).reduce((sum, each) => sum + audioMessages(each), 0);
       await vi.advanceTimersByTimeAsync(DEADLINE + 100);
       return { shown: shown(rig), replayedChunks };
     },
@@ -560,10 +557,7 @@ const cases: { thread: string; model: string; env?: Record<string, string>; run:
       await settle();
       socket.disconnect();
       await settle();
-      await answerSarvamReplays(rig, [
-        [ada, "a", "Ada words."],
-        [grace, "g2", "Grace words."],
-      ]);
+      await answerSarvamReplays(rig, [[ada, "a", "Ada words."]]);
       await vi.advanceTimersByTimeAsync(DEADLINE + 100);
       return { shown: shown(rig), saved: rig.lastSnapshotTexts() };
     },
@@ -702,8 +696,8 @@ const expected: Record<string, Outcome> = {
   "Short turns lose replay audio": { shown: [["Setup.", "grace"], ["Ada short.", "ada"]], replayedChunks: 1 },
   "Shown words are not saved": { shown: [], saved: ["Hello there"] },
   "Early starts miss continuing speech": {
-    shown: [["Setup.", "grace"], ["Short. Continued.", "ada"]],
-    replayedChunks: 4,
+    shown: [["Setup.", "grace"], [`Short. ${GAP}`, "ada"]],
+    replayedChunks: 0,
   },
   "Switches can lose buffered speech": { shown: [], replayedChunks: 3, supersededChunks: 0 },
   "Corrupt audio escapes error checks": { shown: [["Setup.", "grace"], ["Still heard.", "ada"]], threw: false },
@@ -715,8 +709,8 @@ const expected: Record<string, Outcome> = {
     shown: [["Setup.", "grace"], ["Ada words.", "ada"], ["Grace words.", "grace"]],
   },
   "Replays land after later finals": {
-    shown: [["Setup.", "grace"], ["Ada words.", "ada"], ["Grace words.", "grace"]],
-    saved: ["Setup.", "Ada words.", "Grace words."],
+    shown: [["Setup.", "grace"], ["Ada words.", "ada"], [`Grace words. ${GAP}`, "grace"]],
+    saved: ["Setup.", "Ada words.", `Grace words. ${GAP}`],
   },
   "A failed save strands a switch": { shown: [], opened: 1, status: "live", oldProviderAudio: 1 },
   "Restarts erase words viewers saw": { shown: [], restarted: ["First then second"] },

@@ -346,7 +346,6 @@ type LaneListener = (event: { data?: unknown }) => void;
 type LaneWindow = {
   readonly itemId: string;
   heard: boolean;
-  readonly replay: boolean;
   flushedAt: number | null;
   starts: number;
   finals: number;
@@ -476,7 +475,6 @@ class SarvamLane {
       const window: LaneWindow = {
         itemId: createSarvamSegmentItemId(`sarvam-${this.connectionId}`, this.windowCount),
         heard,
-        replay: context.lineId !== undefined,
         flushedAt: null,
         starts: 0,
         finals: 0,
@@ -562,11 +560,24 @@ class SarvamLane {
     }, Math.max(0, this.settleAt(window) - Date.now()));
   }
 
+  finishIfAnswered(): void {
+    const window = this.window;
+    if (!this.closed && window && window.flushedAt !== null && this.answered(window)) void this.complete(window);
+  }
+
+  private answered(window: LaneWindow): boolean {
+    return window.finals >= Math.max(window.starts, window.heard ? 1 : 0);
+  }
+
   private async settle(): Promise<void> {
     const window = this.window;
     if (this.closed || !window || window.flushedAt === null) return;
     if (Date.now() < this.settleAt(window)) return;
-    if (window.finals < Math.max(window.starts, window.heard || window.replay ? 1 : 0)) return;
+    if (!this.answered(window)) return;
+    await this.complete(window);
+  }
+
+  private async complete(window: LaneWindow): Promise<void> {
     if (this.settleTimer !== null) clearTimeout(this.settleTimer);
     this.settleTimer = null;
     this.window = null;
@@ -719,6 +730,10 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
     if (this.lanes.get(lane.key) === lane) this.lanes.delete(lane.key);
     this.draining.delete(lane);
     lane.close();
+  }
+
+  finishAnswered(): void {
+    for (const lane of [...this.lanes.values(), ...this.draining]) lane.finishIfAnswered();
   }
 
   fence(providerItemId: string): void {

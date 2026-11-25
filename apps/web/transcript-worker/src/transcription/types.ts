@@ -58,6 +58,7 @@ export interface LiveTranscriptionSession {
   commitAudio(): void;
   clearAudio(speaker?: TranscriptSpeaker): void;
   fence?(providerItemId: string): void;
+  finishAnswered?(): void;
   finishAudio(): void;
   close(): void;
 }

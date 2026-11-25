@@ -294,18 +294,20 @@ describe("each Sarvam lane owns its own turns and answers", () => {
 
   it("a clear from one speaker never splits another speaker's turn, so a reconnect replays none of that speaker's answered audio as a new line (Greptile r4688831704)", async () => {
     const rig = await startRig(SARVAM);
-    await sendNamed(rig, named(150), ada);
+    const adaFirst = named(150);
+    const adaSecond = named(160);
+    await sendNamed(rig, adaFirst, ada);
     await rig.clear(grace);
-    await sendNamed(rig, named(160), ada);
+    await sendNamed(rig, adaSecond, ada);
     await answerTurn(rig, ada, "a", "Ada said both.");
     await rig.clear(ada);
     await vi.advanceTimersByTimeAsync(2_000);
-    (await laneOf(rig, ada)).disconnect();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await answerTurn(rig, ada, "again", "Ada said both.");
-    await vi.advanceTimersByTimeAsync(3_000);
+    const lane = await laneOf(rig, ada);
+    lane.disconnect();
+    await vi.advanceTimersByTimeAsync(4_000);
 
-    expect(shown(rig).filter(([text]) => text === "Ada said both.")).toEqual([["Ada said both.", "ada"]]);
+    const resent = rig.providerSockets().filter((socket) => socket !== lane && (carriesAudio(socket, adaFirst) || carriesAudio(socket, adaSecond)));
+    expect([shown(rig), resent]).toEqual([[["Ada said both.", "ada"]], []]);
   });
 
   it("speech under our voice threshold keeps Sarvam's words when a second START comes over three seconds later (Greptile r4688831705)", async () => {
@@ -454,7 +456,7 @@ describe("each Sarvam lane owns its own turns and answers", () => {
     ]);
   });
 
-  it("a whisper Sarvam transcribed is replayed after a reconnect and waits for its own answer, so the speaker's next turn never takes it (oracle seed 1723)", async () => {
+  it("a whisper Sarvam already answered keeps its words across a reconnect and is never replayed into the speaker's next turn (oracle seed 1723)", async () => {
     const rig = await startRig(SARVAM);
     const [first] = rig.providerSockets();
     await sendNamed(rig, whisper, ada);
@@ -463,18 +465,15 @@ describe("each Sarvam lane owns its own turns and answers", () => {
     first.emit(sarvamFinal("w", "Whisper words."));
     await vi.advanceTimersByTimeAsync(1_000);
     first.disconnect();
-    await settle();
-    const replacement = await laneOf(rig, ada);
     await vi.advanceTimersByTimeAsync(3_000);
     await sendNamed(rig, named(180), ada);
     await rig.clear(ada);
-    replacement.emit(sarvamSpeechStart());
-    replacement.emit(sarvamFinal("w2", "Whisper words."));
-    await vi.advanceTimersByTimeAsync(3_000);
+    const replacement = await laneOf(rig, ada);
     replacement.emit(sarvamSpeechStart());
     replacement.emit(sarvamFinal("n", "Next words."));
     await vi.advanceTimersByTimeAsync(3_000);
 
+    expect(carriesAudio(replacement, whisper)).toBe(false);
     expect(shown(rig)).toEqual([
       ["Whisper words.", "ada"],
       ["Next words.", "ada"],
@@ -513,6 +512,7 @@ describe("each Sarvam lane owns its own turns and answers", () => {
 
     expect(shown(rig)).toEqual([[`One. Two. ${GAP}`, "lin"]]);
   });
+
   it("a long outage with repeated commits and clears holds one boundary per speaker, not one per message (Greptile r4688831730)", async () => {
     const rig = await startRig(SARVAM);
     await rig.speak(ada);

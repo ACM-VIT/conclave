@@ -2202,7 +2202,7 @@ export class TranscriptRoom {
     const ended = owed.filter(
       (line) =>
         (ackTimedOut && line.state === "pending_ack" && line.replayed) ||
-        (sarvam && !line.heard && !line.text.trim()) ||
+        (sarvam && (line.text.trim() !== "" || !line.heard)) ||
         !this.audio.owns(line.id),
     );
     if (this.endUnfinishedLines(ended, "A line could not be replayed to a replacement", live)) {
@@ -2394,6 +2394,7 @@ export class TranscriptRoom {
   }
 
   private detachConnection(connection: ProviderConnection, ackTimedOut: boolean): void {
+    connection.session.finishAnswered?.();
     if (this.liveConnection === connection) {
       this.liveConnection = null;
       this.transcriptionSession = null;
