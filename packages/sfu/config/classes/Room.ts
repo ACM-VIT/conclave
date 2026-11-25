@@ -139,15 +139,24 @@ export type GuestLinkPlan = {
   // Whether the room may record the passes as one guest. It does not
   // record a guest of more than `GUEST_PASS_GROUP_LIMIT` passes.
   readonly recordable: boolean;
+  readonly merges: readonly GuestIdentityMerge[];
+  readonly staged: StagedGuestMerge | null;
 };
 
 export type GuestIdentityMerge = { readonly from: string; readonly into: string };
 
-export type StagedGuestMerge = { commit(): void };
+export type StagedGuestMerge = { commit(): boolean };
 
 export type GuestIdentityMerger = (
   merges: readonly GuestIdentityMerge[],
 ) => StagedGuestMerge | null;
+
+const sameMerges = (
+  one: readonly GuestIdentityMerge[],
+  other: readonly GuestIdentityMerge[],
+): boolean =>
+  one.length === other.length &&
+  one.every((merge, index) => merge.from === other[index].from && merge.into === other[index].into);
 
 // The passes a join may lean on for a right: the plan's, when the room
 // would record them, else what the room already links.
@@ -1149,13 +1158,15 @@ export class Room {
       grows = true;
     }
     if (!grows) return undefined;
+    const { merges } = this.guestLinkOf(passes);
+    const staged = passes.size <= GUEST_PASS_GROUP_LIMIT ? this.stageGuestMerges(merges) : null;
     return {
       guestProof,
       passes,
       blocked: this.guestHolds(this.blockedUsers, "", guestProof, passes),
-      recordable:
-        passes.size <= GUEST_PASS_GROUP_LIMIT &&
-        this.stageGuestMerges(this.guestLinkOf(passes).merges) !== null,
+      recordable: staged !== null,
+      merges,
+      staged,
     };
   }
 
@@ -1186,19 +1197,25 @@ export class Room {
    * stays in the lobby. Nothing is recorded: an earlier decision keeps the
    * time it was made.
    */
-  commitGuestLink(
-    link: GuestLinkPlan,
-  ): Array<{ request: WaitingRequest; admitted: boolean }> {
-    if (link.blocked) return [];
+  commitGuestLink(link: GuestLinkPlan): {
+    linked: boolean;
+    settled: Array<{ request: WaitingRequest; admitted: boolean }>;
+  } {
+    if (link.blocked) return { linked: false, settled: [] };
     const { passes, held, kept, merges } = this.guestLinkOf(link.passes);
-    const merge = link.recordable ? this.stageGuestMerges(merges) : null;
-    if (!merge) {
+    if (!link.staged) {
       Logger.warn(
         link.passes.size > GUEST_PASS_GROUP_LIMIT
           ? `Room ${this.id}: a guest showed ${link.passes.size} passes; the room links at most ${GUEST_PASS_GROUP_LIMIT}, so this link is not recorded.`
-          : `Room ${this.id}: an app could not merge what a guest keeps under ${merges.length + 1} of its passes, so this link is not recorded.`,
+          : `Room ${this.id}: an app could not merge what a guest keeps under ${link.merges.length + 1} of its passes, so this link is not recorded.`,
       );
-      return [];
+      return { linked: false, settled: [] };
+    }
+    if (!sameMerges(merges, link.merges) || !link.staged.commit()) {
+      Logger.warn(
+        `Room ${this.id}: what a guest keeps in the room's apps changed after this link was planned, so it is not recorded.`,
+      );
+      return { linked: false, settled: [] };
     }
     const guestsBefore = [...new Set([...link.passes].map((proof) => this.guestOfPass(proof)))];
     const merged: GuestRecord = {
@@ -1218,7 +1235,6 @@ export class Room {
       }
       this.guestRecords.set(proof, merged);
     }
-    merge.commit();
     if (seatedIdentityChanged) this.notifyLifecycle("membership");
     this.mergeWaitingGuests(guestsBefore, this.guestOfPass(link.guestProof));
     const settled: Array<{ request: WaitingRequest; admitted: boolean }> = [];
@@ -1241,7 +1257,7 @@ export class Room {
         settled.push({ request, admitted: true });
       }
     }
-    return settled;
+    return { linked: true, settled };
   }
 
   private guestLinkOf(linkPasses: ReadonlySet<string>): {
@@ -1272,7 +1288,7 @@ export class Room {
   }
 
   private stageGuestMerges(merges: readonly GuestIdentityMerge[]): StagedGuestMerge | null {
-    if (merges.length === 0 || !this.guestIdentityMerger) return { commit: () => undefined };
+    if (merges.length === 0 || !this.guestIdentityMerger) return { commit: () => true };
     return this.guestIdentityMerger(merges);
   }
 
@@ -1290,7 +1306,7 @@ export class Room {
     const link = this.planGuestLink(otherSeats, guestProof);
     if (!link) return { blocked: [], settled: [] };
     if (link.blocked) return { blocked: this.refuseBlockedLink(link).userKeys, settled: [] };
-    return { blocked: [], settled: this.commitGuestLink(link) };
+    return { blocked: [], settled: this.commitGuestLink(link).settled };
   }
 
   /** How many passes the room links to another, for its memory bound. */

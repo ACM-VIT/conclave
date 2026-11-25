@@ -81,6 +81,8 @@ const GUEST_NOT_VERIFIED_ERROR =
 const WAITING_ROOM_FULL_ERROR =
   "The waiting room is full. Try again in a moment.";
 const MEETING_FULL_ERROR = "This meeting is full.";
+const GUEST_LINK_CHANGED_ERROR =
+  "Your other tabs in this meeting changed while this one joined. Join again.";
 
 // A new request to be let in past the room's limit is refused. A tab that
 // already waits keeps its place.
@@ -595,9 +597,13 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           isWebinarPromotedJoin = false;
         }
         const joinedRoom = room;
-        const commitLink = () => {
-          if (!guestLink) return;
-          answerSettledRequests(joinedRoom, joinedRoom.commitGuestLink(guestLink));
+        const commitLink = (): boolean => {
+          if (!guestLink) return true;
+          const { linked, settled } = joinedRoom.commitGuestLink(guestLink);
+          answerSettledRequests(joinedRoom, settled);
+          if (linked || !guestLink.recordable) return true;
+          respond(callback, { error: GUEST_LINK_CHANGED_ERROR });
+          return false;
         };
 
         const guestClaim = room.claimGuestIdentity(userKey, guestProof);
@@ -894,7 +900,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             respond(callback, { error: WAITING_ROOM_FULL_ERROR });
             return;
           }
-          commitLink();
+          if (!commitLink()) return;
           Logger.info(
             `User ${userKey} trying to join locked room ${roomId}, adding to waiting room`,
           );
@@ -955,7 +961,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             respond(callback, { error: WAITING_ROOM_FULL_ERROR });
             return;
           }
-          commitLink();
+          if (!commitLink()) return;
           Logger.info(`User ${userKey} added to waiting room ${roomId}`);
           room.addPendingClient(
             userKey,
@@ -1008,7 +1014,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           respond(callback, { error: MEETING_FULL_ERROR });
           return;
         }
-        commitLink();
+        if (!commitLink()) return;
         const attempts = attemptsOf(state);
         const tabAttempts = attempts.byTab.get(joinKey);
         if (tabAttempts) tabAttempts.seated = Math.max(tabAttempts.seated, attempt);

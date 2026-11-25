@@ -997,7 +997,7 @@ export const rejectWaitingGuest = (room: Room, userKey: string): string[] => {
  */
 export const answerSettledRequests = (
   room: Room,
-  settled: ReturnType<Room["commitGuestLink"]>,
+  settled: ReturnType<Room["commitGuestLink"]>["settled"],
 ): void => {
   for (const { request, admitted } of settled) {
     request.socket.emit(admitted ? "joinApproved" : "joinRejected", {
