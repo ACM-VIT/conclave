@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  TRANSCRIPTION_COMMIT_ACK_TIMEOUT_MS,
   TRANSCRIPTION_GAP_MARKER as GAP,
   TRANSCRIPTION_LINE_DEADLINE_MS as DEADLINE,
 } from "../transcript-worker/src/constants";
@@ -451,6 +452,48 @@ describe("each Sarvam lane owns its own turns and answers", () => {
       ["Grace first.", "grace"],
       ["Grace second.", "grace"],
     ]);
+  });
+
+  it("a whisper Sarvam transcribed is replayed after a reconnect and waits for its own answer, so the speaker's next turn never takes it (oracle seed 1723)", async () => {
+    const rig = await startRig(SARVAM);
+    const [first] = rig.providerSockets();
+    await sendNamed(rig, whisper, ada);
+    await rig.clear(ada);
+    first.emit(sarvamSpeechStart());
+    first.emit(sarvamFinal("w", "Whisper words."));
+    await vi.advanceTimersByTimeAsync(1_000);
+    first.disconnect();
+    await settle();
+    const replacement = await laneOf(rig, ada);
+    await vi.advanceTimersByTimeAsync(3_000);
+    await sendNamed(rig, named(180), ada);
+    await rig.clear(ada);
+    replacement.emit(sarvamSpeechStart());
+    replacement.emit(sarvamFinal("w2", "Whisper words."));
+    await vi.advanceTimersByTimeAsync(3_000);
+    replacement.emit(sarvamSpeechStart());
+    replacement.emit(sarvamFinal("n", "Next words."));
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(shown(rig)).toEqual([
+      ["Whisper words.", "ada"],
+      ["Next words.", "ada"],
+    ]);
+  });
+
+  it("speech that joins a replayed line across a second failed reconnect still shows a gap when nothing answers it (oracle seed 722)", async () => {
+    const rig = await startRig(OPENAI);
+    const [first] = rig.providerSockets();
+    await rig.sendAudio("silence", ada);
+    rig.connectPlans.push("unreachable", 1);
+    first.disconnect();
+    await settle();
+    await rig.speak(ada);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(TRANSCRIPTION_COMMIT_ACK_TIMEOUT_MS + 1_000);
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(shown(rig).filter(([, speaker]) => speaker === "ada")).toEqual([[GAP, "ada"]]);
   });
 
   it("a long outage with repeated commits and clears holds one boundary per speaker, not one per message (Greptile r4688831730)", async () => {
