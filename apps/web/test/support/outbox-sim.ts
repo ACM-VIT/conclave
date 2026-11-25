@@ -34,6 +34,7 @@ export type SimResult = {
   races: number;
   throttles: number;
   lockRejects: number;
+  readFailures: number;
 };
 
 const START = Date.parse("2026-11-23T00:00:00.000Z");
@@ -44,6 +45,9 @@ const BEACON_CONFIRM_MS = 30_000;
 const LEASE_MS = 16_000;
 const THROTTLE_MS = 60_000;
 const MAX_RACES = 300;
+const BATCH_PREFIX = "conclave:telemetry:batch:";
+const MARK_PREFIX = "conclave:telemetry:mark:";
+const MAX_MARKS = 512;
 
 const rngOf = (seed: number) => {
   let state = seed >>> 0;
@@ -58,7 +62,7 @@ const rngOf = (seed: number) => {
 
 type Job = { at: number; due: number; seq: number; tab: Tab | null; kind: "timer" | "reply" | "server" | "storage" | "action"; run: () => void; cancelled: boolean };
 
-type Tab = { id: number; open: boolean; hidden: boolean; outbox: OutboxLike; throttledFrom: number | null };
+type Tab = { id: number; open: boolean; hidden: boolean; outbox: OutboxLike; throttledFrom: number | null; closedLossy?: boolean };
 
 type Request = {
   key: string;
@@ -90,10 +94,11 @@ export type Profile = {
   raceRate: number;
   throttleRate: number;
   lockRejectRate: number;
+  readFailRate: number;
   activeMs: number;
 };
 
-const profileOf = (rng: () => number): Omit<Profile, "beaconLimitRate" | "noLocks" | "raceRate" | "throttleRate" | "lockRejectRate"> => ({
+const profileOf = (rng: () => number): Omit<Profile, "beaconLimitRate" | "noLocks" | "raceRate" | "throttleRate" | "lockRejectRate" | "readFailRate"> => ({
   maxTabs: 1 + Math.floor(rng() * 3),
   refuseRate: rng() < 0.4 ? 0 : rng() * 0.5,
   slowRate: rng() * 0.3,
@@ -132,6 +137,7 @@ export async function simulate(
   const lockRng = rngOf(seed ^ 0x27d4eb2f);
   const raceRng = rngOf(seed ^ 0x2545f491);
   const lockRejectRng = rngOf(seed ^ 0x165667b1);
+  const readFailRng = rngOf(seed ^ 0x3c6ef372);
   const between = (low: number, high: number) => low + rng() * (high - low);
   const scriptedEnd = scenario.actions ? Math.max(...scenario.actions.map((action) => action.at)) + 1 : null;
   const profile: Profile = {
@@ -141,6 +147,7 @@ export async function simulate(
     raceRate: raceRng() < 0.4 ? 0 : 0.005 + raceRng() * 0.05,
     throttleRate: raceRng() * 0.4,
     lockRejectRate: lockRejectRng() < 0.3 ? 0.02 + lockRejectRng() * 0.08 : 0,
+    readFailRate: readFailRng() < 0.25 ? 0.05 + readFailRng() * 0.15 : 0,
     ...(scriptedEnd === null ? {} : { activeMs: scriptedEnd }),
     ...scenario.profile,
   };
@@ -182,14 +189,17 @@ export async function simulate(
     key: string;
     tab: Tab;
     at: number;
-    kind: "wait" | "failure";
+    kind: "wait" | "failure" | "settled";
     until: number;
     late: boolean;
-    owed: boolean;
-    state: "pending" | "bound" | "running" | "carried" | "lost";
+    state: "pending" | "carried" | "lost";
   };
   const learned: Learned[] = [];
-  let writingFor: Learned[] = [];
+  const idToKey = new Map<string, string>();
+  let readFailures = 0;
+  const lastHolder = new Map<string, Tab>();
+  let closeFailed = false;
+  let lastReadFailAt = Number.NEGATIVE_INFINITY;
   let refuseNext = 0;
   let rejectLocks = 0;
   let lockRejects = 0;
@@ -220,12 +230,23 @@ export async function simulate(
   let racePlanned: { reader: Tab; other: Tab; done: boolean } | null = null;
   let interleaving = false;
   let racedThisStep = false;
+  let unreadableUntil = 0;
+  const readFails = () => clock < unreadableUntil;
+  const unreadable = () => {
+    readFailures += 1;
+    lastReadFailAt = clock;
+    if (closingTab) closeFailed = true;
+    note("storage read failed");
+    return new DOMException("The storage is unavailable.", "SecurityError");
+  };
   const storageFor = (tab: Tab): Storage => ({
     get length() {
+      if (readFails()) throw unreadable();
       return items.size;
     },
     key: (index: number) => [...items.keys()][index] ?? null,
     getItem: (key: string) => {
+      if (readFails()) throw unreadable();
       const value = items.get(key) ?? null;
       if (value !== null && racePlanned?.reader === tab && !racePlanned.done) {
         racePlanned.done = true;
@@ -245,20 +266,30 @@ export async function simulate(
       return value;
     },
     setItem: (key: string, value: string) => {
-      const storedKey = writingFor.length > 0 ? keyOfStored(value) : null;
-      const mine = writingFor.filter((item) => item.tab === tab && item.key === storedKey);
+      const markedKey = key.startsWith(MARK_PREFIX) ? (idToKey.get(key.slice(MARK_PREFIX.length).split(":")[0]) ?? null) : null;
+      const marked = learned.filter(
+        (item) => item.tab === tab && item.key === markedKey && item.at === clock && item.state !== "carried" && item.state !== "lost",
+      );
       if (refuseNext > 0 || profile.noLocks || clock < refusingUntil || rng() < profile.refuseRate) {
         if (refuseNext > 0) refuseNext -= 1;
         refusedWrites += 1;
-        for (const item of mine) item.state = "lost";
+        for (const item of marked) item.state = "lost";
         if (closingTab === tab) {
+          closeFailed = true;
           try {
             for (const event of (JSON.parse(value) as { events: Array<{ uuid: string }> }).events) lostAtClose.add(event.uuid);
           } catch {}
         }
         throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
       }
-      for (const item of mine) item.state = "carried";
+      for (const item of marked) carry(item);
+      if (key.startsWith(BATCH_PREFIX)) {
+        try {
+          const id = (JSON.parse(value) as { id?: string }).id;
+          const batchKey = keyOfStored(value);
+          if (id && batchKey) idToKey.set(id, batchKey);
+        } catch {}
+      }
       items.set(key, value);
       writtenAt.set(key, clock);
       if (trace) note(`tab${tab.id} saved ${key.slice(-12)} ${value.replace(/"events":\[.*?\],/, "")}`);
@@ -278,43 +309,14 @@ export async function simulate(
     const previous = failures.get(item.key);
     failures.set(item.key, { count: (previous?.count ?? 0) + 1, at: Math.max(previous?.at ?? 0, item.at) });
   };
+  const carry = (item: Learned) => {
+    item.state = "carried";
+    if (item.kind === "failure") applyFailure(item);
+  };
   const learn = (tab: Tab, key: string, kind: Learned["kind"], until: number, late: boolean) => {
-    const item: Learned = { key, tab, at: clock, kind, until, late, owed: false, state: "pending" };
-    if (!late && !storedNow(key)) {
-      item.state = "carried";
-      if (kind === "failure") applyFailure(item);
-    }
+    const item: Learned = { key, tab, at: clock, kind, until, late, state: "pending" };
+    if (!late && !storedNow(key)) carry(item);
     learned.push(item);
-  };
-  const bindLearned = (tab: Tab) => {
-    const bound = learned.filter((item) => item.tab === tab && item.state === "pending" && (item.owed || item.at === clock));
-    for (const item of bound) item.state = "bound";
-    return bound;
-  };
-  const learnedRun = (bound: Learned[], run: () => Promise<void>): (() => Promise<void>) => {
-    if (bound.length === 0) return run;
-    return () => {
-      const running: Learned[] = [];
-      for (const item of bound) {
-        const superseded = item.late || (requests.get(item.key) ?? []).some((request) => request.tab !== item.tab && request.sentAt > item.at);
-        if (!superseded) {
-          item.state = "carried";
-          if (item.kind === "failure") applyFailure(item);
-        } else if (item.kind === "failure" || !storedNow(item.key)) {
-          item.state = "lost";
-        } else {
-          item.state = "running";
-          running.push(item);
-        }
-      }
-      writingFor = running;
-      try {
-        return run();
-      } finally {
-        writingFor = [];
-        for (const item of running) if (item.state === "running") item.state = "carried";
-      }
-    };
   };
   const waiting: Array<{ tab: Tab; run: () => Promise<void> }> = [];
   let held = false;
@@ -341,10 +343,11 @@ export async function simulate(
       return null;
     }
   }
-  const knownTo = (item: Learned, sender: Tab) =>
-    item.state === "carried" || (item.tab === sender && item.state !== "lost");
+  const knownTo = (item: Learned) => item.state === "carried";
+  const settledFor = (key: string) => learned.some((item) => item.kind === "settled" && item.key === key && knownTo(item));
   const checkSend = (key: string, how: "post" | "beacon", sender: Tab) => {
-    const known = learned.filter((item) => item.key === key && knownTo(item, sender));
+    if (settledFor(key)) violate("sent after it was settled", `${how} of ${key}`);
+    const known = learned.filter((item) => item.key === key && knownTo(item));
     const until = Math.max(0, ...known.filter((item) => item.kind === "wait").map((item) => item.until));
     if (clock < until) violate("sent before its Retry-After", `${how} of ${key} ${until - clock} ms early`);
     const beaconed = beaconedAt.get(key);
@@ -357,12 +360,7 @@ export async function simulate(
       );
       if (open.length > 0) violate("two sends of one batch in flight", key);
     }
-    const owedFailures = known.filter((item) => item.kind === "failure" && item.state !== "carried");
-    const applied = failures.get(key);
-    const failed =
-      owedFailures.length > 0
-        ? { count: (applied?.count ?? 0) + owedFailures.length, at: Math.max(applied?.at ?? 0, ...owedFailures.map((item) => item.at)) }
-        : applied;
+    const failed = failures.get(key);
     if (failed && failed.count > 0) {
       const gap = SCHEDULE[Math.min(failed.count - 1, SCHEDULE.length - 1)];
       if (clock - failed.at < gap) violate("sent sooner than its backoff", `${key} after ${clock - failed.at} ms, needs ${gap}`);
@@ -379,6 +377,7 @@ export async function simulate(
     checkSend(key, "post", tab);
     note(`tab${tab.id} post ${key.slice(0, 40)} keepalive=${keepalive}`);
     posts += 1;
+    for (const uuid of uuids) lastHolder.set(uuid, tab);
     const earlier = requests.get(key) ?? [];
     for (const request of earlier) request.latest = false;
     const request: Request = {
@@ -446,6 +445,10 @@ export async function simulate(
       schedule(sentAt + latency, tab, "reply", () => {
         if (!tab.open) {
           request.done = true;
+          if (tab.closedLossy) {
+            const stored = storedUuids();
+            for (const uuid of uuids) if (!delivered.has(uuid) && !stored.has(uuid)) lostAtClose.add(uuid);
+          }
           return;
         }
         if (request.done) return;
@@ -456,6 +459,7 @@ export async function simulate(
           return;
         }
         const status = outcome.status;
+        if (status === 200 || status === 400) learn(tab, key, "settled", 0, !request.latest);
         if (status === 429 || status >= 500) {
           if (outcome.retryAfter !== null) retryAfters += 1;
           if (outcome.retryAfter !== null) {
@@ -492,6 +496,7 @@ export async function simulate(
           const status = scripted.status;
           const retryAfter = scripted.retryAfter ?? null;
           if (status >= 200 && status < 300) for (const uuid of uuids) delivered.add(uuid);
+          if (status >= 200 && status < 300) learn(tab, key, "settled", 0, (requests.get(key) ?? []).some((request) => request.sentAt > sentAt));
           if (retryAfter !== null && (status === 429 || status >= 500)) beaconWait(tab, key, sentAt, retryAfter);
           note(`tab${tab.id} beacon answered ${status} ra=${retryAfter} for ${key.slice(0, 40)}`);
           resolve({ status, retryAfter });
@@ -543,19 +548,14 @@ export async function simulate(
       newId: () => `sim-${seed}-${++ids}`,
       store: outboxModule.createBatchStore(() => storageFor(tab)),
       lock: (granted: () => Promise<void>) => {
-        const bound = bindLearned(tab);
         if (!profile.noLocks && (rejectLocks > 0 || (profile.lockRejectRate > 0 && lockRejectRng() < profile.lockRejectRate))) {
           if (rejectLocks > 0) rejectLocks -= 1;
           lockRejects += 1;
           lastLockRejectAt = clock;
-          for (const item of bound) {
-            item.state = "pending";
-            item.owed = true;
-          }
           note(`tab${tab.id} lock request rejected`);
           return Promise.reject(new DOMException("The lock request was aborted.", "AbortError"));
         }
-        const run = learnedRun(bound, granted);
+        const run = granted;
         if (profile.noLocks) {
           void run();
           return;
@@ -581,6 +581,7 @@ export async function simulate(
       const urgent = rng() < 0.1;
       const uuid = `0196f0a1-0000-7000-8000-${((seed % 1_000_000_000) * 100_000 + ++eventIds).toString(16).padStart(12, "0")}`;
       allEvents.add(uuid);
+      lastHolder.set(uuid, tab);
       const event = {
         uuid,
         event: urgent ? "$exception" : "meet_join_attempt",
@@ -596,14 +597,36 @@ export async function simulate(
     }
     if (scriptedCount === undefined) schedule(clock + between(500, 12_000), tab, "action", () => emit(tab));
   };
+  const storedUuids = () =>
+    new Set(
+      [...items.entries()].flatMap(([key, text]) => {
+        if (!key.startsWith(BATCH_PREFIX)) return [];
+        try {
+          return (JSON.parse(text) as { events: Array<{ uuid: string }> }).events.map((event) => event.uuid);
+        } catch {
+          return [];
+        }
+      }),
+    );
   const closeTab = (tab: Tab) => {
     note(`tab${tab.id} closes`);
     closes += 1;
     closingTab = tab;
+    closeFailed = false;
     tab.outbox.flushForUnload();
     closingTab = null;
     tab.open = false;
-    for (const item of learned) if (item.tab === tab && (item.state === "pending" || item.state === "bound")) item.state = "lost";
+    tab.closedLossy = closeFailed;
+    if (closeFailed) {
+      const stored = storedUuids();
+      const sending = new Set(
+        [...requests.values()].flat().flatMap((request) => (!request.done && (request.keepalive || request.tab.open) ? request.uuids : [])),
+      );
+      for (const [uuid, holder] of lastHolder) {
+        if (holder === tab && !delivered.has(uuid) && !stored.has(uuid) && !sending.has(uuid)) lostAtClose.add(uuid);
+      }
+    }
+    for (const item of learned) if (item.tab === tab && item.state === "pending") item.state = "lost";
     for (const job of jobs) if (job.tab === tab && job.kind !== "reply") job.cancelled = true;
   };
   function throttledAt(tab: Tab, due: number): number {
@@ -661,6 +684,10 @@ export async function simulate(
   }
   const act = () => {
     if (!active()) return;
+    if (profile.readFailRate > 0 && readFailRng() < profile.readFailRate) {
+      unreadableUntil = clock + 1000 + readFailRng() * 9000;
+      note(`storage cannot be read until ${((unreadableUntil - START) / 1000).toFixed(3)}`);
+    }
     const open = tabs.filter((tab) => tab.open);
     const roll = rng();
     if (open.length < profile.maxTabs && (open.length === 0 || roll < 0.25)) {
@@ -708,13 +735,25 @@ export async function simulate(
   const savedWithoutOwner = (): string | null => {
     for (const [key, text] of items) {
       if (!key.startsWith("conclave:telemetry:batch:")) continue;
-      let saved: { events: Array<{ uuid: string }>; notBefore?: number; nextTry?: number; leaseUntil?: number };
+      let saved: { id?: string; events: Array<{ uuid: string }>; notBefore?: number; nextTry?: number; leaseUntil?: number };
       try {
         saved = JSON.parse(text);
       } catch {
         continue;
       }
-      const due = Math.max(saved.notBefore ?? 0, saved.nextTry ?? 0, saved.leaseUntil ?? 0, writtenAt.get(key) ?? 0);
+      const marks = [...items.entries()].flatMap(([markKey, text]) => {
+        if (!markKey.startsWith(`${MARK_PREFIX}${saved.id}:`)) return [];
+        try {
+          return [{ ...(JSON.parse(text) as { delivered: boolean; notBefore: number }), writtenAt: writtenAt.get(markKey) ?? 0 }];
+        } catch {
+          return [];
+        }
+      });
+      const settledAt = marks.filter((mark) => mark.delivered).map((mark) => mark.writtenAt);
+      const due =
+        settledAt.length > 0
+          ? Math.min(...settledAt)
+          : Math.max(saved.notBefore ?? 0, saved.nextTry ?? 0, saved.leaseUntil ?? 0, writtenAt.get(key) ?? 0, ...marks.map((mark) => mark.notBefore));
       if (clock - due <= GRACE_MS) continue;
       const batchKey = keyOf(saved.events.map((event) => event.uuid));
       if ((requests.get(batchKey) ?? []).some((request) => !request.done && request.tab.open)) continue;
@@ -776,8 +815,13 @@ export async function simulate(
       if (!tabs.some((tab) => tab.open)) openTab();
       await drain();
     }
+    const markCount = [...items.keys()].filter((key) => key.startsWith(MARK_PREFIX)).length;
+    if (markCount > MAX_MARKS) {
+      violate("marks grew past their bound", `${markCount}`);
+      break;
+    }
     const openTabs = tabs.filter((tab) => tab.open);
-    if (openTabs.some((tab) => tab.throttledFrom === null) && clock - lastLockRejectAt > 35_000) {
+    if (openTabs.some((tab) => tab.throttledFrom === null) && clock - lastLockRejectAt > 35_000 && clock - lastReadFailAt > 35_000) {
       const stuck = savedWithoutOwner();
       if (stuck) {
         violate("saved batch left with no owner", stuck);
@@ -825,5 +869,6 @@ export async function simulate(
     races,
     throttles,
     lockRejects,
+    readFailures,
   };
 }

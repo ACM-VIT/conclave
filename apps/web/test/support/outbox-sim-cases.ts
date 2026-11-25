@@ -11,6 +11,7 @@ const quiet = {
   raceRate: 0,
   throttleRate: 0,
   lockRejectRate: 0,
+  readFailRate: 0,
   maxTabs: 3,
 };
 
