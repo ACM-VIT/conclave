@@ -155,7 +155,7 @@ Drain and wait, the only wait for an instance's calls:
 
 | Container | `/status` | Result |
 | --- | --- | --- |
-| stopped or absent | any | Empty once Docker cannot bring it back: its restart policy is turned off (`docker update --restart=no`) and it is looked at again. Still down, it carries no calls; back up, it goes through the rows below. |
+| stopped, restarting or absent | any | Its restart policy is turned off (`docker update --restart=no`), then it is watched until it settles: exited on two looks `CONTAINER_SETTLE_SECONDS` (3) apart is empty; running goes through the rows below. A restarting container is never empty, because Docker still runs a restart it queued before the policy changed; one that has not settled within `HEALTH_TIMEOUT_SECONDS` is left alone (exit 1). |
 | running | unreadable for `HEALTH_TIMEOUT_SECONDS` | Unknown, even for a container that booted drained (a call can still reach a drained candidate): exit 5, left as it is with its journal kept. |
 | running | `draining: false` | The drain is sent again; still not draining after `HEALTH_TIMEOUT_SECONDS` is unknown (exit 5). |
 | running | `draining: true`, 0 rooms from `PLACEMENT_SETTLE_SECONDS` after the last drain | Empty. |
@@ -175,7 +175,9 @@ The rules every path keeps, checked after every run by
 4. No drain wait runs out its deadline on a container that is not running.
 5. Every rollback is in the journal before its first step.
 6. An instance that takes meetings is drained only while another instance
-   serves, unless it is the only instance. A rollback counts an instance as
+   serves, unless it is the only instance. Serving is the serving rule, its
+   `/status` saying healthy included, checked again immediately before every
+   drain request, the drain wait's re-sends included. A rollback counts an instance as
    out of rotation only when its container is held down or its `/status`
    says it is draining, and repair decides an instance serves or not from
    three looks, never one.
@@ -183,7 +185,12 @@ The rules every path keeps, checked after every run by
    candidate is created with restart policy `no` (`SFU_RESTART_POLICY`, which
    the compose file must use for every SFU service), so Docker never restarts
    one after a crash, and the service's own image name only ever names a
-   last-known-good image or a build that passed.
+   last-known-good image or a build that passed. The SFU services have no
+   `build` and `pull_policy: never`; the build is the `sfu-image` service in
+   the `build` profile, which the deploy builds from. A plain `docker compose
+   up` therefore starts only an image that is already there, and with no
+   known-good image it refuses ("No such image") instead of building or
+   pulling the checkout. The deploy refuses a compose file that breaks this.
 
 A run exits 0 only when one final look at its end finds every instance it
 deployed serving the target by the serving rule, its public route included

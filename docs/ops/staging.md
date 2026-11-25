@@ -42,7 +42,12 @@ What A shares, and why it is still safe:
   production `.env` never reaches it, and the deploy preflight refuses a
   config whose SFU points at any Redis but the compose file's own. The deploy
   starts that Redis whatever Upstash settings the shell carries, and needs no
-  `REDIS_URL` in staging's `.env`.
+  `REDIS_URL` in staging's `.env`. An address alone does not say which Redis
+  owns it (if staging's Redis cannot bind its port because another Redis holds
+  it, it crash-loops while the other answers), so before any SFU starts the
+  deploy requires staging's Redis container to be running and every SFU Redis
+  URL to answer with the run id that container's own server reports on its
+  socket `/tmp/redis.sock`; otherwise it stops.
 - **Shared browser and transcripts**: not shared. The SFUs run with host
   networking, so production's defaults (`http://localhost:3040` for the
   shared browser, `http://localhost:8788` for the transcript worker) would

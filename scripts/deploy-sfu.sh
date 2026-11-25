@@ -416,6 +416,53 @@ if [[ "$HAS_REDIS_SERVICE" != "true" && "$HAS_UPSTASH" != "true" && -z "${REDIS_
   echo "REDIS_PASSWORD, REDIS_URL, or SFU_REDIS_URL is required in .env when not using Upstash" >&2
   exit 1
 fi
+own_redis_check() {
+  local container own svc variable url endpoint password answer start_ts checked=0
+  local -a auth
+  container="$("${COMPOSE[@]}" ps -q redis 2>/dev/null)" || container=""
+  container="${container%%$'\n'*}"
+  if [[ -z "$container" ]]; then
+    echo "${COMPOSE_FILE}'s own Redis has no container after compose started it." >&2
+    return 1
+  fi
+  start_ts="$(date +%s)"
+  while true; do
+    if [[ "$(docker inspect -f '{{.State.Status}}' "$container" 2>/dev/null)" == "running" ]]; then
+      own="$(docker exec "$container" sh -c 'if [ -n "${REDIS_PASSWORD:-}" ]; then export REDISCLI_AUTH="$REDIS_PASSWORD"; fi; exec redis-cli -s /tmp/redis.sock --no-auth-warning INFO server' 2>/dev/null | sed -nE 's/^run_id:([[:alnum:]-]+).*/\1/p')"
+      [[ -n "$own" ]] && break
+    fi
+    if (( $(date +%s) - start_ts >= HEALTH_TIMEOUT_SECONDS )); then
+      echo "${COMPOSE_FILE}'s own Redis is not running or does not answer on its socket /tmp/redis.sock, so the SFU could reach another Redis on its port; not starting anything." >&2
+      return 1
+    fi
+    sleep "$POLL_SECONDS"
+  done
+  for svc in "${ALL_SFU_SERVICES[@]}"; do
+    for variable in REDIS_URL SFU_REDIS_URL SFU_PERSISTENCE_REDIS_URL; do
+      url="$(compose_service_env "$svc" "$variable")"
+      [[ -n "$url" ]] || continue
+      endpoint="$(REDIS_URL_IN="$url" node -e 'const u=new URL(process.env.REDIS_URL_IN);process.stdout.write((u.hostname||"127.0.0.1")+" "+(u.port||"6379"))')" || endpoint=""
+      password="$(REDIS_URL_IN="$url" node -e 'const u=new URL(process.env.REDIS_URL_IN);process.stdout.write(decodeURIComponent(u.password))')" || password=""
+      auth=()
+      [[ -n "$password" ]] && auth=(-e REDISCLI_AUTH)
+      answer=""
+      if [[ -n "$endpoint" ]]; then
+        answer="$(REDISCLI_AUTH="$password" docker exec ${auth[@]+"${auth[@]}"} "$container" redis-cli -h "${endpoint% *}" -p "${endpoint#* }" --no-auth-warning INFO server 2>/dev/null | sed -nE 's/^run_id:([[:alnum:]-]+).*/\1/p')"
+      fi
+      if [[ "$answer" != "$own" ]]; then
+        echo "${svc}'s ${variable} reaches a Redis whose run id is ${answer:-unknown}, not ${COMPOSE_FILE}'s own Redis (${own}); another Redis holds that address. Not starting anything." >&2
+        return 1
+      fi
+      checked=$(( checked + 1 ))
+    done
+  done
+  if (( checked == 0 )); then
+    echo "No SFU in ${COMPOSE_FILE} names a Redis URL to check against its own Redis; not starting anything." >&2
+    return 1
+  fi
+  echo "Every SFU's Redis URL reaches ${COMPOSE_FILE}'s own Redis (run id ${own})."
+}
+
 if [[ "$HAS_REDIS_SERVICE" == "true" ]]; then
   echo "Ensuring Redis is running..."
   "${COMPOSE[@]}" up -d redis
@@ -430,6 +477,9 @@ fi
 # The pulled compose file decides the services, ports and image names.
 COMPOSE_JSON="$("${COMPOSE[@]}" config --format json)"
 read -ra ALL_SFU_SERVICES <<< "$(printf "%s" "$COMPOSE_JSON" | node -e "const c=JSON.parse(require('fs').readFileSync(0,'utf8'));const env=(s)=>Array.isArray(s.environment)?Object.fromEntries(s.environment.map((e)=>e.split('='))):(s.environment??{});console.log(Object.entries(c.services).filter(([,s])=>env(s).SFU_INSTANCE_ID).map(([n])=>n).join(' '));")"
+if [[ "$HAS_REDIS_SERVICE" == "true" ]]; then
+  own_redis_check || exit 1
+fi
 if [[ -n "${SFU_DEPLOY_SERVICES:-}" ]]; then
   IFS=',' read -ra SERVICES <<< "${SFU_DEPLOY_SERVICES// /}"
 else
@@ -439,6 +489,7 @@ fi
 DRAIN_TIMEOUT_SECONDS="${DRAIN_TIMEOUT_SECONDS:-3600}"
 DRAIN_POLL_SECONDS="${DRAIN_POLL_SECONDS:-10}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-120}"
+CONTAINER_SETTLE_SECONDS="${CONTAINER_SETTLE_SECONDS:-3}"
 # A placement reserved just before a drain can still turn into a room on that
 # instance until it expires (the SFU's placement TTL is 20 s), so an instance
 # only counts as empty once that long has passed since its drain.
@@ -514,8 +565,8 @@ service_image_name() {
 }
 
 # The build context and the Dockerfile compose uses for a service, one per line.
-service_build() {
-  printf "%s" "$COMPOSE_JSON" | node -e "const c=JSON.parse(require('fs').readFileSync(0,'utf8'));const b=c.services[process.argv[1]].build||{};const p=require('path');const ctx=p.resolve(process.argv[2],b.context||'.');console.log(ctx);console.log(p.resolve(ctx,b.dockerfile||'Dockerfile'));" "$1" "$ROOT_DIR"
+image_build() {
+  "${COMPOSE[@]}" --profile build config --format json | node -e "const c=JSON.parse(require('fs').readFileSync(0,'utf8'));const b=c.services?.['sfu-image']?.build;if(!b)process.exit(1);const p=require('path');const ctx=p.resolve(process.argv[1],b.context||'.');console.log(ctx);console.log(p.resolve(ctx,b.dockerfile||'Dockerfile'));" "$ROOT_DIR"
 }
 
 service_container() {
@@ -547,7 +598,8 @@ container_state() {
   [[ -n "$container" ]] || { echo absent; return; }
   state="$(docker inspect -f '{{.State.Status}}' "$container" 2>/dev/null)" || { echo unknown; return; }
   case "$state" in
-    exited|dead|created|restarting) echo stopped ;;
+    exited|dead|created) echo stopped ;;
+    restarting) echo restarting ;;
     running) echo running ;;
     *) echo unknown ;;
   esac
@@ -576,7 +628,7 @@ deploy_rank() {
     fi
     return
   fi
-  if ! answers_http "$url" && [[ "$(container_state "$svc")" =~ ^(stopped|absent)$ ]]; then
+  if ! answers_http "$url" && [[ "$(container_state "$svc")" =~ ^(stopped|restarting|absent)$ ]]; then
     echo "0 0"
   else
     echo "3 0"
@@ -605,12 +657,26 @@ booted_drained() {
 }
 
 hold_down() {
-  local svc="$1" container
+  local svc="$1" container state exited="" start_ts
   container="$(service_container "$svc")" || return 1
   [[ -n "$container" ]] || return 0
-  [[ "$(container_state "$svc")" == "stopped" ]] || return 1
+  [[ "$(container_state "$svc")" =~ ^(stopped|restarting)$ ]] || return 1
   docker update --restart=no "$container" >/dev/null 2>&1 || return 1
-  [[ "$(container_state "$svc")" == "stopped" ]]
+  start_ts="$(date +%s)"
+  while (( $(date +%s) - start_ts < HEALTH_TIMEOUT_SECONDS )); do
+    state="$(container_state "$svc")"
+    case "$state" in
+      absent) return 0 ;;
+      stopped)
+        [[ -n "$exited" ]] && return 0
+        exited="yes"
+        ;;
+      restarting) exited="" ;;
+      *) return 1 ;;
+    esac
+    sleep "$CONTAINER_SETTLE_SECONDS"
+  done
+  return 1
 }
 
 wait_status() {
@@ -667,6 +733,10 @@ drain_and_wait() {
           DRAIN_WHY="it does not stay drained, so new meetings can still reach it"
           return 5
         fi
+        if ! peers_serving "$svc"; then
+          DRAIN_WHY="it is taking meetings again and no other instance is serving, so it was not drained again"
+          return 5
+        fi
         FORCE_DRAIN=false set_draining "$url" true >/dev/null 2>&1 || true
         settle_until=$(( $(date +%s) + PLACEMENT_SETTLE_SECONDS ))
       else
@@ -709,31 +779,11 @@ wait_for_healthy() {
 # HEALTH_TIMEOUT_SECONDS is unknown, and unknown is unsafe. Every SFU counts,
 # whatever SFU_DEPLOY_SERVICES selects.
 peers_serving() {
-  local svc="$1" peer url status start_ts code
+  local svc="$1" peer
   for peer in "${ALL_SFU_SERVICES[@]}"; do
     [[ "$peer" == "$svc" ]] && continue
-    url="$(service_url "$peer")"
-    if ! is_healthy "$url"; then
-      echo "Not draining ${svc}: ${peer} does not report healthy at ${url}, so new meetings would have nowhere to go." >&2
-      return 1
-    fi
-    start_ts="$(date +%s)"
-    while true; do
-      code=0
-      status="$(instance_status "$peer")" || code=$?
-      (( code == 0 )) && break
-      if (( code == 2 )) || (( $(date +%s) - start_ts >= HEALTH_TIMEOUT_SECONDS )); then
-        echo "Not draining ${svc}: ${peer}'s /status cannot be read at ${url}, so whether it takes new meetings is unknown." >&2
-        return 1
-      fi
-      sleep "$POLL_SECONDS"
-    done
-    if [[ "$(printf "%s" "$status" | json_field draining || true)" != "false" ]]; then
-      echo "Not draining ${svc}: ${peer} is draining too, so new meetings would have nowhere to go." >&2
-      return 1
-    fi
-    if ! validate_public_route "$peer" "$(service_public_url "$peer")"; then
-      echo "Not draining ${svc}: clients cannot reach ${peer} at its public URL, so new meetings would have nowhere to go." >&2
+    if ! wait_serving "$peer"; then
+      echo "Not draining ${svc}: ${peer} is not serving (${SERVING_WHY}), so new meetings would have nowhere to go." >&2
       return 1
     fi
   done
@@ -1102,7 +1152,7 @@ repair_interrupted() {
   local svc phase lkg candidate prev url image_name state code first=() rest=()
   for svc in "${ALL_SFU_SERVICES[@]}"; do
     case "$(container_state "$svc")" in
-      stopped|absent) first+=("$svc") ;;
+      stopped|restarting|absent) first+=("$svc") ;;
       *) rest+=("$svc") ;;
     esac
   done
@@ -1119,7 +1169,7 @@ repair_interrupted() {
     case "$phase" in
       drained)
         state="$(container_state "$svc")"
-        if [[ "$state" == "stopped" || "$state" == "absent" ]]; then
+        if [[ "$state" =~ ^(stopped|restarting|absent)$ ]]; then
           if [[ -n "$lkg" ]]; then
             roll_back "$svc" "$url" "$image_name" "$lkg" || code=$?
           else
@@ -1150,7 +1200,7 @@ repair_interrupted() {
           journal_set "$svc" phase=idle lkg="$prev" candidate= prevLkg=
         else
           state="$(container_state "$svc")"
-          if [[ -n "$candidate" ]] && { [[ "$state" == "stopped" || "$state" == "absent" ]] || { [[ "$(container_image "$svc")" == "$candidate" ]] && booted_drained "$svc"; }; }; then
+          if [[ -n "$candidate" ]] && { [[ "$state" =~ ^(stopped|restarting|absent)$ ]] || { [[ "$(container_image "$svc")" == "$candidate" ]] && booted_drained "$svc"; }; }; then
             drain_and_wait "$svc" "$url" || code=$?
             if (( code == 0 )) && ! promote "$svc" "$url" "$image_name" "$candidate" "$prev"; then
               echo "${PROMOTE_WHY}; rolling ${svc} back." >&2
@@ -1259,6 +1309,11 @@ deploy_service() {
     [[ -n "$lkg" ]] && docker tag "$lkg" "${IMAGE_REPO}:rollback-${svc}"
     echo "Draining ${svc}..."
     local drain_response="" code=0
+    if ! peers_serving "$svc"; then
+      echo "${svc} was not drained or rebuilt. Bring the other instance back, then rerun this script." >&2
+      restore_drain_state "$svc" "$url" "$was_draining" || true
+      return 1
+    fi
     drain_response="$(set_draining "$url" true)" || drain_response=""
     checkpoint "drain ${svc}"
     settle_until=$(( $(date +%s) + PLACEMENT_SETTLE_SECONDS ))
@@ -1287,7 +1342,7 @@ deploy_service() {
     echo "${svc} answers but its /status cannot be read; not rebuilding it." >&2
     return 1
   else
-    if [[ -z "$relooked" && -z "$lkg" && "$(container_state "$svc")" == "stopped" ]]; then
+    if [[ -z "$relooked" && -z "$lkg" && "$(container_state "$svc")" =~ ^(stopped|restarting)$ ]]; then
       echo "${svc} is stopped and no image it served on is on record; giving Docker up to ${HEALTH_TIMEOUT_SECONDS}s to bring it back before it is rebuilt."
       if wait_serving "$svc"; then
         deploy_service "$svc" relooked
@@ -1302,7 +1357,7 @@ deploy_service() {
         journal_set "$svc" phase=drained lkg="$lkg" wasDraining=true candidate= prevLkg= commit="$TARGET_COMMIT"
         settle_until=$(( $(date +%s) + PLACEMENT_SETTLE_SECONDS ))
         ;;
-      stopped)
+      stopped|restarting)
         echo "Docker could not keep ${svc}'s stopped container from restarting, so it could take calls while it is rebuilt; not rebuilding it." >&2
         return 1
         ;;
@@ -1376,8 +1431,8 @@ deploy_service() {
 # or a candidate could only run under the service's own tag.
 for svc in "${ALL_SFU_SERVICES[@]}"; do
   probe="conclave-deploy-probe:${svc}"
-  named="$(env "$(image_var "$svc")=${probe}" SFU_RESTART_POLICY=no "${COMPOSE[@]}" config --format json | node -e "const c=JSON.parse(require('fs').readFileSync(0,'utf8'));const s=c.services[process.argv[1]];process.stdout.write(String(s.image||'')+' '+String(s.restart||''))" "$svc")"
-  if [[ "${named% *}" != "$probe" ]]; then
+  named="$(env "$(image_var "$svc")=${probe}" SFU_RESTART_POLICY=no "${COMPOSE[@]}" config --format json | node -e "const c=JSON.parse(require('fs').readFileSync(0,'utf8'));const s=c.services[process.argv[1]];process.stdout.write(String(s.image||'')+' '+(s.build?'build':String(s.pull_policy||'missing'))+' '+String(s.restart||''))" "$svc")"
+  if [[ "${named%% *}" != "$probe" ]]; then
     echo "${COMPOSE_FILE} must name ${svc}'s image as \${$(image_var "$svc"):-<name>}, so a candidate runs under its own tag and never under ${svc}'s." >&2
     exit 1
   fi
@@ -1385,7 +1440,16 @@ for svc in "${ALL_SFU_SERVICES[@]}"; do
     echo "${COMPOSE_FILE} must set ${svc}'s restart policy as \${SFU_RESTART_POLICY:-unless-stopped}, so Docker never restarts a candidate that has not passed its canary." >&2
     exit 1
   fi
+  pull="${named#* }"
+  if [[ "${pull% *}" != "never" ]]; then
+    echo "${COMPOSE_FILE} must give ${svc} pull_policy: never and no build, so a plain compose up refuses an image that is not there instead of building or pulling one that never passed a canary; the build belongs to the sfu-image service in the build profile." >&2
+    exit 1
+  fi
 done
+if ! image_build >/dev/null; then
+  echo "${COMPOSE_FILE} must define the SFU build as the sfu-image service in the build profile." >&2
+  exit 1
+fi
 
 for svc in "${ALL_SFU_SERVICES[@]}"; do
   EXPECTED_ID[$svc]="$(compose_service_env "$svc" SFU_INSTANCE_ID)"
@@ -1452,7 +1516,7 @@ else
     # drained, right before its canary, so a deploy paused by a call leaves
     # nothing untested for a later compose up to start.
     echo "Building the SFU image for ${TARGET_COMMIT}..."
-    mapfile -t target_build < <(service_build "${ORDERED_SERVICES[0]}")
+    mapfile -t target_build < <(image_build)
     docker build -t "${IMAGE_REPO}:${TARGET_COMMIT}-candidate" -f "${target_build[1]}" "${target_build[0]}"
     TARGET_IMAGE="$(docker image inspect -f '{{.Id}}' "${IMAGE_REPO}:${TARGET_COMMIT}-candidate")"
     if [[ "$build_inputs_clean" == "true" ]]; then
@@ -1474,7 +1538,7 @@ if [[ "$ROLLBACK" == "true" ]]; then
   canary_tag="${IMAGE_REPO}-canary:${checkout_commit}"
   if ! CANARY_IMAGE="$(docker image inspect -f '{{.Id}}' "${IMAGE_REPO}:${checkout_commit}" 2>/dev/null)" &&
      ! CANARY_IMAGE="$(docker image inspect -f '{{.Id}}' "$canary_tag" 2>/dev/null)"; then
-    mapfile -t canary_build < <(service_build "${ORDERED_SERVICES[0]}")
+    mapfile -t canary_build < <(image_build)
     echo "Building ${checkout_commit} as ${canary_tag} for its canary; the instances still go back to ${TARGET_COMMIT}."
     docker build -t "$canary_tag" -f "${canary_build[1]}" "${canary_build[0]}"
     CANARY_IMAGE="$(docker image inspect -f '{{.Id}}' "$canary_tag")"

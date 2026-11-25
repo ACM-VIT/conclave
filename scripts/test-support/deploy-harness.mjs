@@ -101,14 +101,25 @@ export const startSfu = async (
   };
   sfu.crash = (restartAfterMs) => {
     if (sfu.container !== "running") return;
-    sfu.container = "exited";
     sfu.rooms = 0;
     sfu.crashedAt = Date.now();
-    if (restartAfterMs === null) return;
+    if (restartAfterMs === null || sfu.restartPolicy === "no") {
+      sfu.container = "exited";
+      return;
+    }
+    sfu.container = "restarting";
     const generation = sfu.recreates.length;
     setTimeout(() => {
-      if (sfu.recreates.length === generation) sfu.restart();
+      if (sfu.recreates.length === generation) sfu.runQueuedRestart();
     }, restartAfterMs).unref();
+  };
+  sfu.runQueuedRestart = () => {
+    if (sfu.container !== "restarting") return;
+    sfu.container = "running";
+    sfu.draining = sfu.bootDrained;
+    sfu.crashedAt = null;
+    sfu.starts.push({ image: sfu.image, bootDrained: sfu.bootDrained, by: "restart-policy" });
+    sfu.onRestart?.(sfu);
   };
   const server = createServer(async (req, res) => {
     let body = "";
@@ -119,7 +130,7 @@ export const startSfu = async (
       const imageReadFails = url.searchParams.get("read") === "image" && Boolean(sfu.failImageRead?.(++sfu.imageReads));
       const startedAt = new Date(Date.now() - (["crash-looping", "young"].includes(sfu.container) ? 3_000 : 3_600_000)).toISOString();
       if (sfu.container === "crash-looping" || sfu.restartsWhileRunning) sfu.restartCount += 1;
-      const status = { exited: "exited", "crash-looping": "restarting" }[sfu.container] ?? "running";
+      const status = { exited: "exited", "crash-looping": "restarting", restarting: "restarting" }[sfu.container] ?? "running";
       return json({
         status,
         startedAt,
@@ -168,6 +179,13 @@ export const startSfu = async (
     if (url.pathname === "/stand-in/update") {
       if (url.searchParams.get("restart")) sfu.restartPolicy = url.searchParams.get("restart");
       if (url.searchParams.get("restart") === "no") sfu.heldDown = true;
+      sfu.onUpdate?.(sfu, url.searchParams.get("restart"));
+      if (url.searchParams.get("restart") === "no" && sfu.container === "crash-looping") {
+        const generation = sfu.recreates.length;
+        setTimeout(() => {
+          if (sfu.recreates.length === generation && sfu.container === "crash-looping") sfu.container = "exited";
+        }, 300).unref();
+      }
       return json({ ok: true });
     }
     if (url.pathname === "/stand-in/tagged") {
@@ -180,13 +198,13 @@ export const startSfu = async (
     }
     if (url.pathname === "/stand-in/stop") {
       context.events.push(`stop ${instanceId}`);
-      sfu.stops.push({ roomsCut: ["exited", "crash-looping"].includes(sfu.container) ? 0 : sfu.rooms });
+      sfu.stops.push({ roomsCut: ["exited", "crash-looping", "restarting"].includes(sfu.container) ? 0 : sfu.rooms });
       sfu.rooms = 0;
       sfu.container = "exited";
       return json({ ok: true });
     }
     if (url.pathname === "/stand-in/recreate") {
-      sfu.recreates.push({ roomsCut: ["exited", "crash-looping"].includes(sfu.container) ? 0 : sfu.rooms, draining: sfu.draining, bootDrained: sfu.bootDrained, from: sfu.image, to: url.searchParams.get("image"), ...journal() });
+      sfu.recreates.push({ roomsCut: ["exited", "crash-looping", "restarting"].includes(sfu.container) ? 0 : sfu.rooms, draining: sfu.draining, bootDrained: sfu.bootDrained, from: sfu.image, to: url.searchParams.get("image"), ...journal() });
       context.events.push(`recreate ${instanceId}`);
       sfu.rooms = 0;
       if (sfu.failRecreate === sfu.recreates.length) {
@@ -264,6 +282,8 @@ const configHash = (name) =>
 const service = (name, sfu, index) => ({
   image: process.env[imageVar(name)] || "vm-" + name,
   restart: process.env.SFU_RESTART_POLICY || "unless-stopped",
+  pull_policy: process.env.DEPLOY_TEST_COMPOSE_BUILDS ? "missing" : "never",
+  ...(process.env.DEPLOY_TEST_COMPOSE_BUILDS ? { build: { context: ".", dockerfile: "packages/sfu/Dockerfile" } } : {}),
   environment: {
     ANNOUNCED_IP: "127.0.0.1",
     // DEPLOY_TEST_OVERLAP gives both services one RTC range, which the full
@@ -286,13 +306,15 @@ const service = (name, sfu, index) => ({
 });
 const main = async () => {
   if (args[0] === "compose") {
-    const rest = args.slice(1).filter((arg, i, all) => !["--env-file", "-f"].includes(arg) && !["--env-file", "-f"].includes(all[i - 1]));
+    const profiles = args.filter((arg, i, all) => all[i - 1] === "--profile");
+    const rest = args.slice(1).filter((arg, i, all) => !["--env-file", "-f", "--profile"].includes(arg) && !["--env-file", "-f", "--profile"].includes(all[i - 1]));
     const names = Object.keys(sfus);
     // DEPLOY_TEST_REDIS_SERVICE: the compose file runs its own Redis, as
     // staging's does.
     if (rest[0] === "config" && rest[1] === "--services") return out([...names, ...(process.env.DEPLOY_TEST_REDIS_SERVICE ? ["redis"] : [])].join("\\n"));
     if (rest[0] === "config" && rest[1] === "--format") {
-      return out(JSON.stringify({ name: "vm", services: Object.fromEntries(names.map((n, i) => [n, service(n, sfus[n], i)])) }));
+      const build = profiles.includes("build") && !process.env.DEPLOY_TEST_NO_IMAGE_SERVICE ? { "sfu-image": { image: "vm-sfu-build", build: { context: ".", dockerfile: "packages/sfu/Dockerfile" } } } : {};
+      return out(JSON.stringify({ name: "vm", services: { ...build, ...Object.fromEntries(names.map((n, i) => [n, service(n, sfus[n], i)])) } }));
     }
     // The hash covers the rendered config, so it changes with what the
     // service's env and image name render to, as Compose's does.
@@ -339,6 +361,13 @@ const main = async () => {
     }
     return;
   }
+  if (args[0] === "exec") {
+    const own = process.env.DEPLOY_TEST_REDIS_OWN_RUN_ID || "own-redis";
+    if ((process.env.DEPLOY_TEST_REDIS_STATE || "running") !== "running") return void (process.exitCode = 1);
+    const answer = args.join(" ").includes("/tmp/redis.sock") ? own : process.env.DEPLOY_TEST_REDIS_URL_RUN_ID || own;
+    return out("# Server\\nredis_version:7.2.0\\nrun_id:" + answer);
+  }
+  if (args[0] === "inspect" && args.at(-1) === "ctr-redis") return out(process.env.DEPLOY_TEST_REDIS_STATE || "running");
   if (args[0] === "inspect") {
     const format = args[2];
     const name = args.at(-1).replace(/^ctr-/, "");
@@ -514,7 +543,7 @@ export const deploy = async (
       DRAIN_POLL_SECONDS: "0.2",
       PLACEMENT_SETTLE_SECONDS: "0",
       HEALTH_TIMEOUT_SECONDS: "5",
-      CONTAINER_SAMPLE_SECONDS: "0.2",
+      CONTAINER_SETTLE_SECONDS: "0.2",
       DEPLOY_POLL_SECONDS: "0.1",
       DEPLOY_STATUS_RETRY_SECONDS: "0.2",
       SFU_DEPLOY_LOCK_FILE: path.join(root, "deploy.lock"),

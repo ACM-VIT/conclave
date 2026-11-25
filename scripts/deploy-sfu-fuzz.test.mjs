@@ -275,6 +275,45 @@ fixed("Sol: a stopped container is held down before it counts as empty, so Docke
   });
 });
 
+fixed("Sol: a restarting container whose restart policy is turned off is waited for, since Docker still runs the restart it queued", () =>
+  withStack({ "sfu-a": { onTag: (tagged) => tagged.heldDown && tagged.runQueuedRestart() }, "sfu-b": {} }, async (sfus, shared) => {
+    const sfu = sfus["sfu-a"];
+    sfu.onRestart = (restarted) => (restarted.rooms = 1);
+    sfu.crash(60_000);
+    const result = await deploy(sfus, { env: { ...shared.env, ...ONLY_A }, journals: { "sfu-a": { phase: "idle", lkg: LAST_GOOD } } });
+    assert.deepEqual(cutRooms(sfus).filter(Boolean), [], result.output);
+    assert.notEqual(result.code, 0, result.output);
+  }),
+);
+
+fixed("Sol: a peer whose /status says unhealthy is not serving, so the instance is never drained toward it", () =>
+  withStack({ "sfu-a": {}, "sfu-b": { statusHealthy: false } }, async (sfus, shared) => {
+    const result = await deploy(sfus, { env: { ...shared.env, ...ONLY_A } });
+    assert.deepEqual(sfus["sfu-a"].drains.filter((drain) => drain.draining), [], result.output);
+    assert.notEqual(result.code, 0, result.output);
+  }),
+);
+
+fixed("Sol: an instance that takes meetings again during its drain wait is not drained again while no other instance serves", () =>
+  withStack({ "sfu-a": { rooms: 1 }, "sfu-b": {} }, async (sfus, shared) => {
+    const [a, b] = [sfus["sfu-a"], sfus["sfu-b"]];
+    const watch = setInterval(() => {
+      if (a.drains.some((drain) => drain.draining) && b.container === "running") {
+        b.crash(null);
+        a.draining = false;
+      }
+    }, 50);
+    try {
+      const result = await deploy(sfus, { env: { ...shared.env, ...ONLY_A } });
+      assert.deepEqual(a.lonelyDrains, [], result.output);
+      assert.equal(a.drains.filter((drain) => drain.draining).length, 1, result.output);
+      assert.deepEqual(cutRooms(sfus).filter(Boolean), [], result.output);
+    } finally {
+      clearInterval(watch);
+    }
+  }),
+);
+
 fixed("Sol: a single bad /status reading neither rolls back a serving instance nor drains the only one taking meetings", () =>
   withStack({ "sfu-a": {}, "sfu-b": { container: "exited" } }, async (sfus, shared) => {
     sfus["sfu-a"].statusFailures = 3;
@@ -444,7 +483,7 @@ const checkRun = async ({ sfus, shared, plan, result, label, quiet, history }) =
         problems.push(`${name}: rolled back to ${recreate.to} while its journal said ${recreate.phase}, not rollback`);
       }
     }
-    const crashedByFault = sfu.container === "exited" && sfu.crashedAt && !sfu.heldDown;
+    const crashedByFault = ["exited", "restarting"].includes(sfu.container) && sfu.crashedAt && !sfu.heldDown;
     if (result.code !== null && !crashedByFault) {
       const { phase } = await journal(shared, name);
       if (!(sfu.container === "running" && allowed.includes(sfu.image)) && phase !== "rollback") {
