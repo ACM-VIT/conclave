@@ -10,13 +10,13 @@ describe("the outbox in a simulated browser", () => {
     const result = await simulate(thread.seed, undefined, undefined, thread.scenario);
 
     expect(result.violations).toEqual([]);
-    expect(result.delivered).toBe(result.events);
+    expect(result.delivered + result.refused).toBe(result.events);
     if (thread.posts !== undefined) expect(result.posts).toBe(thread.posts);
   });
 
   it(`keeps every invariant over ${RUNS} random runs of 1 to 3 tabs`, async () => {
     const failures: Array<Pick<SimResult, "seed" | "violations">> = [];
-    const totals = { runs: 0, multiTab: 0, aborted: 0, refusedWrites: 0, retryAfters: 0, closes: 0, counted: 0, races: 0, throttles: 0, lockRejects: 0, readFailures: 0 };
+    const totals = { runs: 0, multiTab: 0, aborted: 0, refusedWrites: 0, retryAfters: 0, closes: 0, counted: 0, races: 0, throttles: 0, lockRejects: 0, readFailures: 0, partials: 0 };
     for (let seed = FIRST_SEED; seed < FIRST_SEED + RUNS && failures.length < 5; seed++) {
       const result = await simulate(seed);
       totals.runs += 1;
@@ -30,6 +30,7 @@ describe("the outbox in a simulated browser", () => {
       totals.throttles += result.throttles;
       totals.lockRejects += result.lockRejects;
       totals.readFailures += result.readFailures;
+      totals.partials += result.partials;
       if (result.violations.length > 0) failures.push({ seed, violations: result.violations.slice(0, 3) });
     }
 

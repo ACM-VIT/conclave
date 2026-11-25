@@ -12,10 +12,100 @@ const quiet = {
   throttleRate: 0,
   lockRejectRate: 0,
   readFailRate: 0,
+  partialRate: 0,
   maxTabs: 3,
 };
 
 export const THREAD_CASES: ThreadCase[] = [
+  {
+    name: "a page that opens while storage is full still replays and removes what was saved",
+    thread: "https://github.com/ACM-VIT/conclave/pull/265#discussion_r4689976665",
+    head: "61dc0cf5",
+    seed: 2026112504,
+    scenario: {
+      profile: quiet,
+      actions: [
+        { at: 0, act: "open", tab: 1 },
+        { at: 1000, act: "emit", tab: 1, count: 2 },
+        { at: 1500, act: "hide", tab: 1 },
+        { at: 2000, act: "close", tab: 1 },
+        { at: 2500, act: "refuseWritesFor", tab: 1, ms: 120_000 },
+        { at: 3000, act: "open", tab: 2 },
+      ],
+      replies: [
+        { latency: 30_000, status: null },
+        { latency: 100, status: 200 },
+        { latency: 100, status: 200 },
+        { latency: 100, status: 200 },
+      ],
+    },
+  },
+  {
+    name: "a report that was never saved goes out while storage cannot be read",
+    thread: "https://github.com/ACM-VIT/conclave/pull/265#discussion_r4689976674",
+    head: "61dc0cf5",
+    seed: 2026112504,
+    scenario: {
+      profile: quiet,
+      actions: [
+        { at: 0, act: "open", tab: 1 },
+        { at: 500, act: "unreadableFor", tab: 1, ms: 300_000 },
+        { at: 1000, act: "emit", tab: 1, count: 2 },
+      ],
+      replies: [
+        { latency: 100, status: 200 },
+        { latency: 100, status: 200 },
+      ],
+    },
+  },
+  {
+    name: "a delivered answer whose mark write and lock request both fail is never sent again by its tab",
+    thread: "https://github.com/ACM-VIT/conclave/pull/265#discussion_r4689976680",
+    head: "61dc0cf5",
+    seed: 2026112504,
+    posts: 2,
+    scenario: {
+      profile: quiet,
+      actions: [
+        { at: 0, act: "open", tab: 1 },
+        { at: 1000, act: "emit", tab: 1, count: 2 },
+        { at: 1500, act: "hide", tab: 1 },
+        { at: 2000, act: "show", tab: 1 },
+        { at: 3500, act: "refuseNext", tab: 1, count: 1 },
+        { at: 3500, act: "rejectLock", tab: 1, count: 1 },
+      ],
+      replies: [
+        { latency: 3000, status: 200 },
+        { latency: 100, status: 200 },
+        { latency: 100, status: 200 },
+        { latency: 100, status: 200 },
+      ],
+    },
+  },
+  {
+    name: "events an answer refused are never uploaded again when its lock request is refused",
+    thread: "https://github.com/ACM-VIT/conclave/pull/265#discussion_r4690021085",
+    head: "61dc0cf5",
+    seed: 2026112504,
+    posts: 3,
+    scenario: {
+      profile: quiet,
+      actions: [
+        { at: 0, act: "open", tab: 1 },
+        { at: 1000, act: "emit", tab: 1, count: 6 },
+        { at: 1500, act: "hide", tab: 1 },
+        { at: 2000, act: "show", tab: 1 },
+        { at: 3500, act: "rejectLock", tab: 1, count: 1 },
+      ],
+      replies: [
+        { latency: 100, status: 200 },
+        { latency: 3000, status: 503, rejected: [0] },
+        { latency: 100, status: 200 },
+        { latency: 100, status: 200 },
+        { latency: 100, status: 200 },
+      ],
+    },
+  },
   {
     name: "a delivered answer whose lock request is refused still reaches every send, and nothing is sent again",
     thread: "Sol delta review of #265 at ee08a3c9, finding 1 (200)",

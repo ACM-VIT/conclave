@@ -1,6 +1,6 @@
 import * as currentOutbox from "../../src/app/lib/telemetry-outbox";
 
-type Reply = { status: number; retryAfter: string | null };
+type Reply = { status: number; retryAfter: string | null; rejected?: number[] };
 
 type OutboxLike = {
   add: (event: { uuid: string; event: string; timestamp?: string; properties: Record<string, unknown> }, options?: { urgent?: boolean; deferred?: boolean }) => void;
@@ -35,6 +35,7 @@ export type SimResult = {
   throttles: number;
   lockRejects: number;
   readFailures: number;
+  partials: number;
 };
 
 const START = Date.parse("2026-11-23T00:00:00.000Z");
@@ -95,10 +96,11 @@ export type Profile = {
   throttleRate: number;
   lockRejectRate: number;
   readFailRate: number;
+  partialRate: number;
   activeMs: number;
 };
 
-const profileOf = (rng: () => number): Omit<Profile, "beaconLimitRate" | "noLocks" | "raceRate" | "throttleRate" | "lockRejectRate" | "readFailRate"> => ({
+const profileOf = (rng: () => number): Omit<Profile, "beaconLimitRate" | "noLocks" | "raceRate" | "throttleRate" | "lockRejectRate" | "readFailRate" | "partialRate"> => ({
   maxTabs: 1 + Math.floor(rng() * 3),
   refuseRate: rng() < 0.4 ? 0 : rng() * 0.5,
   slowRate: rng() * 0.3,
@@ -113,13 +115,14 @@ const profileOf = (rng: () => number): Omit<Profile, "beaconLimitRate" | "noLock
   activeMs: 120_000 + Math.floor(rng() * 240_000),
 });
 
-export type ScriptedReply = { latency: number; status: number | null; retryAfter?: string };
+export type ScriptedReply = { latency: number; status: number | null; retryAfter?: string; rejected?: number[] };
 
 export type ScriptedAction = {
   at: number;
-  act: "open" | "emit" | "hide" | "show" | "close" | "refuseNext" | "rejectLock";
+  act: "open" | "emit" | "hide" | "show" | "close" | "refuseNext" | "rejectLock" | "refuseWritesFor" | "unreadableFor";
   tab: number;
   count?: number;
+  ms?: number;
   throttled?: boolean;
   during?: number;
 };
@@ -138,6 +141,7 @@ export async function simulate(
   const raceRng = rngOf(seed ^ 0x2545f491);
   const lockRejectRng = rngOf(seed ^ 0x165667b1);
   const readFailRng = rngOf(seed ^ 0x3c6ef372);
+  const partialRng = rngOf(seed ^ 0x6a09e667);
   const between = (low: number, high: number) => low + rng() * (high - low);
   const scriptedEnd = scenario.actions ? Math.max(...scenario.actions.map((action) => action.at)) + 1 : null;
   const profile: Profile = {
@@ -148,6 +152,7 @@ export async function simulate(
     throttleRate: raceRng() * 0.4,
     lockRejectRate: lockRejectRng() < 0.3 ? 0.02 + lockRejectRng() * 0.08 : 0,
     readFailRate: readFailRng() < 0.25 ? 0.05 + readFailRng() * 0.15 : 0,
+    partialRate: partialRng() < 0.3 ? 0.1 + partialRng() * 0.3 : 0,
     ...(scriptedEnd === null ? {} : { activeMs: scriptedEnd }),
     ...scenario.profile,
   };
@@ -189,7 +194,8 @@ export async function simulate(
     key: string;
     tab: Tab;
     at: number;
-    kind: "wait" | "failure" | "settled";
+    kind: "wait" | "failure" | "settled" | "refused";
+    uuids: readonly string[];
     until: number;
     late: boolean;
     state: "pending" | "carried" | "lost";
@@ -312,8 +318,8 @@ export async function simulate(
     item.state = "carried";
     if (item.kind === "failure") applyFailure(item);
   };
-  const learn = (tab: Tab, key: string, kind: Learned["kind"], until: number, late: boolean) => {
-    const item: Learned = { key, tab, at: clock, kind, until, late, state: "pending" };
+  const learn = (tab: Tab, key: string, kind: Learned["kind"], until: number, late: boolean, uuids: readonly string[] = []) => {
+    const item: Learned = { key, tab, at: clock, kind, until, late, uuids, state: "pending" };
     if (!late && !storedNow(key)) carry(item);
     learned.push(item);
   };
@@ -342,11 +348,14 @@ export async function simulate(
       return null;
     }
   }
-  const knownTo = (item: Learned) => item.state === "carried";
-  const settledFor = (key: string) => learned.some((item) => item.kind === "settled" && item.key === key && knownTo(item));
+  const knownTo = (item: Learned, sender: Tab) => item.state === "carried" || item.tab === sender;
+  const settledFor = (key: string, sender: Tab) => learned.some((item) => item.kind === "settled" && item.key === key && knownTo(item, sender));
   const checkSend = (key: string, how: "post" | "beacon", sender: Tab) => {
-    if (settledFor(key)) violate("sent after it was settled", `${how} of ${key}`);
-    const known = learned.filter((item) => item.key === key && knownTo(item));
+    if (settledFor(key, sender)) violate("sent after it was settled", `${how} of ${key}`);
+    const sending = new Set(key.split(","));
+    const refusedAgain = learned.find((item) => item.kind === "refused" && knownTo(item, sender) && item.uuids.some((uuid) => sending.has(uuid)));
+    if (refusedAgain) violate("sent an event refused for good again", `${how} of ${key}`);
+    const known = learned.filter((item) => item.key === key && knownTo(item, sender));
     const until = Math.max(0, ...known.filter((item) => item.kind === "wait").map((item) => item.until));
     if (clock < until) violate("sent before its Retry-After", `${how} of ${key} ${until - clock} ms early`);
     const beaconed = beaconedAt.get(key);
@@ -402,8 +411,8 @@ export async function simulate(
           ? between(1000, 9000)
           : between(20, 800);
     const kindRoll = rng();
-    const outcome: { status: number | null; retryAfter: string | null } = scripted
-      ? { status: scripted.status, retryAfter: scripted.retryAfter ?? null }
+    const outcome: { status: number | null; retryAfter: string | null; rejected?: number[] } = scripted
+      ? { status: scripted.status, retryAfter: scripted.retryAfter ?? null, rejected: scripted.rejected }
       : kindRoll < profile.okRate
         ? { status: 200, retryAfter: null }
         : kindRoll < profile.okRate + profile.refuseBodyRate
@@ -413,6 +422,10 @@ export async function simulate(
             : rng() < profile.errorRate
               ? { status: null, retryAfter: null }
               : { status: rng() < 0.5 ? 503 : 500, retryAfter: rng() < profile.waitRate ? String(1 + Math.floor(rng() * 90)) : null };
+    if (!scripted && outcome.status !== null && (outcome.status === 429 || outcome.status >= 500) && uuids.length > 1 && profile.partialRate > 0 && partialRng() < profile.partialRate) {
+      const rejected = uuids.flatMap((_, index) => (partialRng() < 0.5 ? [index] : []));
+      if (rejected.length > 0 && rejected.length < uuids.length) outcome.rejected = rejected;
+    }
     const sentAt = clock;
     return new Promise<Reply>((resolve, reject) => {
       const finish = (act: () => void) => {
@@ -440,6 +453,7 @@ export async function simulate(
         }
         if (outcome.status === 200) for (const uuid of uuids) delivered.add(uuid);
         if (outcome.status === 400) for (const uuid of uuids) if (!delivered.has(uuid)) refused.add(uuid);
+        if (outcome.status !== 200) for (const index of outcome.rejected ?? []) if (!delivered.has(uuids[index])) refused.add(uuids[index]);
       });
       schedule(sentAt + latency, tab, "reply", () => {
         if (!tab.open) {
@@ -467,8 +481,10 @@ export async function simulate(
           }
           failed(request);
         }
-        note(`tab${tab.id} reply ${status} ra=${outcome.retryAfter} for ${key.slice(0, 40)} latest=${request.latest}`);
-        finish(() => resolve({ status, retryAfter: outcome.retryAfter }));
+        const rejectedUuids = (outcome.rejected ?? []).map((index) => uuids[index]);
+        if (rejectedUuids.length > 0) learn(tab, key, "refused", 0, !request.latest, rejectedUuids);
+        note(`tab${tab.id} reply ${status} ra=${outcome.retryAfter} rejected=${outcome.rejected?.length ?? 0} for ${key.slice(0, 40)} latest=${request.latest}`);
+        finish(() => resolve({ status, retryAfter: outcome.retryAfter, ...(outcome.rejected ? { rejected: outcome.rejected } : {}) }));
       });
     });
   };
@@ -787,6 +803,8 @@ export async function simulate(
         } else if (action.act === "show") showTab(tab);
         else if (action.act === "refuseNext") refuseNext += action.count ?? 1;
         else if (action.act === "rejectLock") rejectLocks += action.count ?? 1;
+        else if (action.act === "refuseWritesFor") refusingUntil = clock + (action.ms ?? 0);
+        else if (action.act === "unreadableFor") unreadableUntil = clock + (action.ms ?? 0);
         else closeTab(tab);
       });
     }
@@ -877,5 +895,6 @@ export async function simulate(
     throttles,
     lockRejects,
     readFailures,
+    partials: learned.filter((item) => item.kind === "refused").length,
   };
 }
