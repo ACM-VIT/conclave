@@ -2723,6 +2723,7 @@ export default function MeetsMainContent({
           key="video-effects"
           name="Backgrounds and effects"
           onClose={handleCloseVideoEffects}
+          onFailed={onStopCameraPreview}
         >
           <VideoEffectsPanel
             effects={videoEffects}
@@ -2753,6 +2754,7 @@ export default function MeetsMainContent({
           key="device-settings"
           name="Settings"
           onClose={handleCloseDeviceSettings}
+          onFailed={onStopCameraPreview}
         >
           <DeviceSettingsPanel
             roomAi={roomAi}
