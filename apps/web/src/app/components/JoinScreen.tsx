@@ -431,6 +431,7 @@ function JoinScreen({
     (cameraPermissionState === "prompt" ||
       cameraPermissionState === "denied" ||
       isCameraBlocked);
+  const tightAudioChip = shouldShowPermissionCta && isAudioOnly;
   const prewarmLiveCameraEffects = (reason: string) => {
     if (activeVideoEffectsCount <= 0 && !isEffectsOpen) return;
     if (shouldDeferPreviewVideoEffectsPreload) return;
@@ -1403,7 +1404,7 @@ function JoinScreen({
                   className={`absolute inset-0 h-full w-full -scale-x-100 object-cover ${isCameraOn ? "" : "hidden"}`}
                 />
                 <div className="pointer-events-none relative z-10 flex min-h-0 flex-1 flex-col gap-2 p-3 pb-4">
-                  <div className="flex h-8 shrink-0 items-start justify-between gap-2">
+                  <div className="@container flex h-8 shrink-0 items-start justify-between gap-2">
                     {shouldShowPermissionCta ? (
                       <button
                         type="button"
@@ -1419,12 +1420,22 @@ function JoinScreen({
                         <span className="whitespace-nowrap">Allow microphone and camera</span>
                       </button>
                     ) : null}
-                    <div className="inline-flex h-8 min-w-0 items-center rounded-full bg-black/55 px-3 text-[12.5px] font-medium backdrop-blur-sm">
-                      <span className="truncate">{previewName}</span>
+                    <div className="inline-flex h-8 min-w-0 items-center overflow-hidden rounded-full bg-black/55 px-3 text-[12.5px] font-medium backdrop-blur-sm">
+                      <span className={`truncate ${tightAudioChip ? "[@container(width<380px)]:sr-only" : ""}`}>
+                        {previewName}
+                      </span>
                       {isAudioOnly ? (
-                        <span className="ml-2 inline-flex shrink-0 items-center gap-1 border-l border-white/20 pl-2 text-white/85">
-                          <Headphones size={13} aria-hidden="true" />
-                          Audio only
+                        <span
+                          className={`ml-1.5 inline-flex shrink-0 items-center gap-1 border-l border-white/20 pl-1.5 text-white/85 ${
+                            tightAudioChip
+                              ? "[@container(width<380px)]:ml-0 [@container(width<380px)]:border-l-0 [@container(width<380px)]:pl-0"
+                              : ""
+                          }`}
+                        >
+                          <Headphones size={13} aria-hidden="true" className="shrink-0" />
+                          <span className={tightAudioChip ? "[@container(width<380px)]:sr-only" : undefined}>
+                            Audio only
+                          </span>
                         </span>
                       ) : null}
                     </div>
