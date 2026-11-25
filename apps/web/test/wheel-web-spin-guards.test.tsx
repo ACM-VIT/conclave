@@ -96,7 +96,7 @@ const panel = (): PanelProps => {
 };
 
 beforeEach(() => {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
   vi.setSystemTime(1_800_000_000_000);
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   harness.doc = new Y.Doc();
@@ -200,4 +200,35 @@ describe("wheel web app while a shared spin runs, even when the dial reports it 
     expect(seen).toEqual([["Cy", "Ada"], ["Cy", "Ada"]]);
     expect(action("sort")!.disabled).toBe(false);
   });
+
+  it("keeps a finished spin finished when the device clock steps back, so controls and handlers agree", () => {
+    startSharedSpin();
+    endSharedSpin();
+    act(() => {
+      vi.setSystemTime(Date.now() - 10_000);
+    });
+    act(() => {
+      vi.advanceTimersByTime(10);
+    });
+    expect(panel().isSpinning).toBe(false);
+    expect(action("sort")!.disabled).toBe(false);
+    act(() => panel().onSort());
+    expect(labels()).toEqual(["Ada", "Bo", "Cy"]);
+  });
+
+  it("ends a spin on schedule when the device clock steps back mid-spin", () => {
+    startSharedSpin();
+    act(() => {
+      vi.advanceTimersByTime(DURATION / 2);
+      vi.setSystemTime(Date.now() - 10_000);
+    });
+    expect(action("sort")!.disabled).toBe(true);
+    act(() => {
+      vi.advanceTimersByTime(DURATION / 2 + 50);
+    });
+    expect(action("sort")!.disabled).toBe(false);
+    act(() => panel().onSort());
+    expect(labels()).toEqual(["Ada", "Bo", "Cy"]);
+  });
 });
+

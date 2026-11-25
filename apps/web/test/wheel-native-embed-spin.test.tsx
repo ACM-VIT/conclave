@@ -91,7 +91,7 @@ const mount = (reduceMotion: boolean) => {
 };
 
 beforeEach(() => {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
   vi.setSystemTime(START);
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   harness.stage = null;
@@ -182,4 +182,33 @@ describe("native wheel embed while a shared spin runs", () => {
     expect(stage().entries.map((entry) => entry.label)).toEqual(["Ada", "Bo", "Dee"]);
     expect(lastStatus()?.spinning).toBe(false);
   });
+
+  it("keeps a finished spin finished when the device clock steps back, so status and the command guard agree", () => {
+    addEntries(doc, ["Cy", "Ada", "Bo"]);
+    mount(false);
+    spinBy(getEntries(doc), 0);
+    advance(DURATION + 50);
+    act(() => {
+      vi.setSystemTime(Date.now() - 10_000);
+    });
+    advance(10);
+    expect(lastStatus()?.spinning).toBe(false);
+    expect(ackFor(deliver("sort", {}))).toEqual({ ok: true });
+    expect(getEntries(doc).map((entry) => entry.label)).toEqual(["Ada", "Bo", "Cy"]);
+  });
+
+  it("ends a spin on schedule when the device clock steps back mid-spin", () => {
+    addEntries(doc, ["Cy", "Ada", "Bo"]);
+    mount(false);
+    spinBy(getEntries(doc), 0);
+    advance(DURATION / 2);
+    act(() => {
+      vi.setSystemTime(Date.now() - 10_000);
+    });
+    expect(ackFor(deliver("sort", {}))).toEqual({ ok: false, error: "spinning" });
+    advance(DURATION / 2 + 50);
+    expect(lastStatus()?.spinning).toBe(false);
+    expect(ackFor(deliver("sort", {}))).toEqual({ ok: true });
+  });
 });
+
