@@ -33,7 +33,6 @@ export type LiveTranscriptionCallbacks = {
   onDelta: (itemId: string, delta: string) => void;
   onFinal: (itemId: string, transcript: string) => void | Promise<void>;
   onItemFailed?: (itemId: string, message: string) => void | Promise<void>;
-  onWithdrawn?: (itemId: string) => void;
   onReady?: () => void;
   onFailure: (message: string) => void | Promise<void>;
 };
@@ -58,6 +57,7 @@ export interface LiveTranscriptionSession {
   appendAudio(audioBase64: string, speaker?: TranscriptSpeaker, context?: AudioContext): string | null;
   commitAudio(): void;
   clearAudio(speaker?: TranscriptSpeaker): void;
+  fence?(providerItemId: string): void;
   finishAudio(): void;
   close(): void;
 }

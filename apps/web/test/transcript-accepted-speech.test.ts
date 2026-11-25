@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  SARVAM_WINDOW_SETTLE_MS as SETTLE,
   TRANSCRIPTION_GAP_MARKER as GAP,
   TRANSCRIPTION_LINE_DEADLINE_MS as DEADLINE,
 } from "../transcript-worker/src/constants";
@@ -70,7 +71,7 @@ describe("speech a provider accepted is never lost without a trace", () => {
     await vi.advanceTimersByTimeAsync(15_000);
     expect(bengali.closed).toBe(false);
     bengali.emit(sarvamFinal("bn", "Bengali line."));
-    await settle();
+    await vi.advanceTimersByTimeAsync(600);
 
     expect(savedTexts()).toEqual(["Bengali line.", "Hindi line."]);
     expect(bengali.closed).toBe(true);
@@ -266,10 +267,12 @@ describe("every accepted line ends once, as its text or a gap", () => {
     await speak();
     await endTurn();
     expect(await restartedTexts()).toEqual([GAP]);
+    await vi.advanceTimersByTimeAsync(SETTLE + 100);
+    expect(await restartedTexts()).toEqual([GAP]);
 
     socket.emit(sarvamSpeechStart());
     socket.emit(sarvamFinal("spoken", "Spoken."));
-    await settle();
+    await vi.advanceTimersByTimeAsync(SETTLE);
     expect(await restartedTexts()).toEqual(["Spoken."]);
     await vi.advanceTimersByTimeAsync(DEADLINE + 100);
     expect(savedTexts()).toEqual(["Spoken."]);
@@ -292,13 +295,13 @@ describe("every accepted line ends once, as its text or a gap", () => {
     expect(before.closed).toBe(false);
     before.emit(sarvamFinal("one", "One."));
     before.emit(sarvamFinal("two", "Two."));
-    await settle();
+    await vi.advanceTimersByTimeAsync(600);
 
-    expect(savedTexts()).toEqual(["One.", "Two."]);
+    expect(savedTexts()).toEqual(["One. Two."]);
     expect(before.closed).toBe(true);
   });
 
-  it("Sarvam: an utterance that never gets its final ends as a gap and replaces its connection, live and after a switch", async () => {
+  it("Sarvam: an utterance that never gets its final ends as a gap and replaces its speaker's connection, live and after a switch", async () => {
     vi.useFakeTimers();
     quiet();
     const { providerSockets, start, switchTo, speak, endTurn, savedTexts } = await rig(SARVAM);
@@ -309,11 +312,12 @@ describe("every accepted line ends once, as its text or a gap", () => {
     await vi.advanceTimersByTimeAsync(DEADLINE + 100);
     expect(savedTexts()).toEqual([GAP]);
     expect(first.closed).toBe(true);
-    const before = providerSockets().at(-1)!;
-    expect(before).not.toBe(first);
 
     await speak();
     await endTurn();
+    await settle();
+    const before = providerSockets().at(-1)!;
+    expect(before).not.toBe(first);
     await switchTo("ta");
     await vi.advanceTimersByTimeAsync(DEADLINE - 1_000);
     expect(before.closed).toBe(false);
@@ -360,7 +364,7 @@ describe("a gap means our side heard speech", () => {
     socket.emit(sarvamSpeechStart());
     await endTurn();
     socket.emit(sarvamFinal("one", "First."));
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(SETTLE + 500);
 
     await sendAudio("noise");
     socket.emit(sarvamSpeechStart());
@@ -380,16 +384,17 @@ describe("a gap means our side heard speech", () => {
     socket.emit(sarvamSpeechStart());
     await endTurn();
     socket.emit(sarvamFinal("one", "First."));
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(SETTLE + 500);
 
     await sendAudio("noise");
     await endTurn();
     socket.emit(sarvamSpeechStart());
     await vi.advanceTimersByTimeAsync(400);
     await speak();
+    socket.emit(sarvamFinal("two", ""));
+    await vi.advanceTimersByTimeAsync(SETTLE);
     socket.emit(sarvamSpeechStart());
     await endTurn();
-    socket.emit(sarvamFinal("two", ""));
     socket.emit(sarvamFinal("three", "Second."));
     await vi.advanceTimersByTimeAsync(DEADLINE + 100);
     expect(savedTexts()).toEqual(["First.", "Second."]);
@@ -405,22 +410,23 @@ describe("a gap means our side heard speech", () => {
     socket.emit(sarvamSpeechStart());
     await endTurn();
     socket.emit(sarvamFinal("one", "First."));
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(SETTLE + 500);
 
     await sendAudio("noise");
     await endTurn();
     socket.emit(sarvamSpeechStart());
     await speak();
-    socket.emit(sarvamSpeechStart());
+    socket.emit(sarvamFinal("two", ""));
     for (const _ of [1, 2, 3, 4, 5, 6]) {
       await vi.advanceTimersByTimeAsync(250);
       await speak();
     }
+    await vi.advanceTimersByTimeAsync(SETTLE);
+    socket.emit(sarvamSpeechStart());
     await endTurn();
     await vi.advanceTimersByTimeAsync(1_600);
     expect(await restartedTexts()).toEqual(["First.", GAP]);
 
-    socket.emit(sarvamFinal("two", ""));
     socket.emit(sarvamFinal("three", "Second."));
     await vi.advanceTimersByTimeAsync(DEADLINE + 100);
     expect(savedTexts()).toEqual(["First.", "Second."]);
@@ -436,7 +442,7 @@ describe("a gap means our side heard speech", () => {
     socket.emit(sarvamSpeechStart());
     await endTurn();
     socket.emit(sarvamFinal("one", "First."));
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(SETTLE + 500);
 
     await speak();
     socket.emit(sarvamSpeechStart());
@@ -455,7 +461,7 @@ describe("a gap means our side heard speech", () => {
     socket.emit(sarvamSpeechStart());
     await endTurn();
     socket.emit(sarvamFinal("one", "First."));
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(SETTLE + 500);
 
     socket.emit(sarvamSpeechStart());
     expect(await restartedTexts()).toEqual(["First."]);
@@ -474,7 +480,7 @@ describe("a line's state lives on its record", () => {
   const ada = { userId: "ada", displayName: "Ada" };
   const guest = { userId: "guest", displayName: "Guest" };
 
-  it("Sarvam: a line's deadline drops only its own replay audio, so a later line still replays", async () => {
+  it("Sarvam: a line's deadline closes only its own connection, so the speaker's next turn still goes out and gets its answer", async () => {
     vi.useFakeTimers();
     quiet();
     const { providerSockets, start, speak, endTurn, savedTexts } = await rig(SARVAM);
@@ -486,15 +492,13 @@ describe("a line's state lives on its record", () => {
     await speak();
     await endTurn();
     await vi.advanceTimersByTimeAsync(10_100);
-    expect(savedTexts()).toEqual([GAP]);
+    expect([savedTexts(), socket.closed]).toEqual([[GAP], true]);
 
-    socket.disconnect();
-    await settle();
     const replacement = providerSockets()[1];
     const replayed = replacement.sent.filter((message) => (message as { audio?: unknown }).audio).length;
     expect(replayed).toBe(1);
     replacement.emit(sarvamFinal("b", "Second line."));
-    await settle();
+    await vi.advanceTimersByTimeAsync(SETTLE);
     expect(savedTexts()).toEqual([GAP, "Second line."]);
   });
 
@@ -576,7 +580,7 @@ describe("one owner and one release point per line", () => {
   const ada = { userId: "ada", displayName: "Ada" };
   const grace = { userId: "grace", displayName: "Grace" };
 
-  it("Sarvam: words finished before the relay's next commit are never replayed into a second caption", async () => {
+  it("Sarvam: words answered before a reconnect are replayed with their turn, so they show once", async () => {
     vi.useFakeTimers();
     quiet();
     const { providerSockets, start, speak, endTurn, savedTexts, viewerTranscript } = await rig(SARVAM);
@@ -589,7 +593,8 @@ describe("one owner and one release point per line", () => {
     socket.disconnect();
     await settle();
     const replacement = providerSockets()[1];
-    expect(replacement.sent.filter((message) => (message as { audio?: unknown }).audio)).toHaveLength(0);
+    expect(replacement.sent.filter((message) => (message as { audio?: unknown }).audio)).toHaveLength(1);
+    replacement.emit(sarvamFinal("again", "Already captioned."));
     await endTurn(ada);
     await vi.advanceTimersByTimeAsync(DEADLINE + 100);
 
@@ -691,7 +696,7 @@ describe("one owner and one release point per line", () => {
     socket.emit(sarvamSpeechStart());
     socket.emit(sarvamFinal("first", "First."));
     await endTurn(ada);
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(SETTLE + 500);
 
     await speak(ada);
     socket.emit(sarvamSpeechStart());

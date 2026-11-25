@@ -14,7 +14,6 @@ export type CaptionLine = {
   text: string;
   freshText: boolean;
   replayed: boolean;
-  replayedAfterTimeout: boolean;
   epoch: number | null;
   deadlineAt: number;
   endedAt?: number;
@@ -66,14 +65,13 @@ export class CaptionLedger {
   }
 
   add(
-    line: Omit<CaptionLine, "id" | "text" | "freshText" | "replayed" | "replayedAfterTimeout"> & { text?: string },
+    line: Omit<CaptionLine, "id" | "text" | "freshText" | "replayed"> & { text?: string },
   ): CaptionLine {
     const created: CaptionLine = {
       id: crypto.randomUUID(),
       text: "",
       freshText: false,
       replayed: false,
-      replayedAfterTimeout: false,
       ...line,
     };
     this.lines.set(created.id, created);
@@ -138,7 +136,6 @@ export class ProviderConnection {
   quietAt = 0;
   block: { next: number; end: number } | null = null;
   timer: ReturnType<typeof setTimeout> | null = null;
-  replay: { lineId: string; timer: ReturnType<typeof setTimeout> | null } | null = null;
 
   constructor(
     readonly epoch: number,

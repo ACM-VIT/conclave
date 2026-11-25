@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { TranscriptSegment } from "@conclave/meeting-core/transcript-types";
+import { QUEUED_MARKER_BYTES } from "../transcript-worker/src/audio-store";
 import {
+  SARVAM_MAX_LANES,
   TRANSCRIPTION_GAP_MARKER as GAP,
   TRANSCRIPTION_LINE_DEADLINE_MS as DEADLINE,
 } from "../transcript-worker/src/constants";
 import { Pcm24To16Downsampler } from "../transcript-worker/src/transcription/sarvam";
-import { VoiceActivity } from "../transcript-worker/src/transcription/voice-activity";
+import { VOICE_HANGOVER_MS, VoiceActivity } from "../transcript-worker/src/transcription/voice-activity";
 import { orderTranscriptSegments } from "../src/app/lib/transcript-reducer";
 import { clicksPcm, noisePcm, pcmBase64, silencePcm, voicedPcm } from "./transcript-audio-fixtures";
 import { FakeProviderSocket, OPENAI, SARVAM, transcriptRoomRig } from "./transcript-room-rig";
@@ -36,7 +38,6 @@ afterEach(() => {
 });
 
 const RUNS = Number(process.env.TRANSCRIPT_ORACLE_RUNS ?? 300);
-const SAME_SPEAKER_RESIDUAL_BUDGET = Number(process.env.TRANSCRIPT_ORACLE_RESIDUAL_BUDGET ?? 28);
 const FIRST = Number(process.env.TRANSCRIPT_ORACLE_FROM ?? 1);
 const MAX_FAILURES = Number(process.env.TRANSCRIPT_ORACLE_MAX_FAILURES ?? 3);
 const STEPS = 36;
@@ -87,12 +88,19 @@ const poolOf = (kind: Kind) => {
   return pool;
 };
 
-const speakers = [
+type Speaker = { userId: string; displayName: string; source?: "screen" };
+const speakers: Speaker[] = [
   { userId: "ada", displayName: "Ada" },
   { userId: "grace", displayName: "Grace" },
   { userId: "lin", displayName: "Lin" },
 ];
-type Speaker = (typeof speakers)[number];
+const crowd: Speaker[] = [
+  ...speakers,
+  { userId: "mo", displayName: "Mo" },
+  { userId: "kit", displayName: "Kit" },
+  { userId: "ada", displayName: "Ada", source: "screen" },
+];
+const keyOf = (speaker: Speaker) => `${speaker.userId}:${speaker.source ?? ""}`;
 
 const randomFrom = (seed: number) => {
   let state = seed >>> 0;
@@ -136,22 +144,23 @@ const suiteCounters = {
   failedSavesBeforeStop: 0,
   restarts: 0,
   closedSocketEvents: 0,
+  lateStarts: 0,
+  repeatedStarts: 0,
+  interleavedClears: 0,
+  outageStorms: 0,
+  leaves: 0,
+  speakersWaitingForALane: 0,
 };
 
-type Mode = { burst?: boolean; pauses?: boolean };
+type Mode = { burst?: boolean; pauses?: boolean; crowd?: boolean };
 
-const runOnce = async (seed: number, mode: Mode = {}): Promise<{ problems: string[]; residuals: string[] }> => {
+const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
   const random = randomFrom(seed);
   const problems: string[] = [];
-  const residuals: string[] = [];
   const report = (message: string) => {
     if (problems.length < 5) problems.push(message);
   };
   const openai = seed % 2 === 0;
-  const sameSpeakerResidual = (message: string) => {
-    if (openai) report(message);
-    else if (residuals.length < 5) residuals.push(message);
-  };
   const sarvamSignals = random() < 0.8;
   limit.bytes = mode.burst ? poolOf("speech").wire24[0].length * BURST_LIMIT_CHUNKS : limit.real;
   vi.useFakeTimers();
@@ -167,6 +176,7 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<{ problems: strin
   const committedLive = new Set<number>();
   const used = new Map<Kind, number>(KINDS.map((kind) => [kind, 0]));
   const timeline: { at: number; speaker: string; uid: number; heard: boolean }[] = [];
+  const lastHeardAt = new Map<string, number>();
   let pauseEpoch = 0;
 
   const fakes = new Map<FakeProviderSocket, { receive(message: Record<string, unknown>): void }>();
@@ -264,6 +274,7 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<{ problems: strin
       heardAt: number;
       startAt: number;
       falseStart: boolean;
+      lateStart: boolean;
     } | null = null;
     let lastAnswerAt = 0;
     let lastSignalAt = 0;
@@ -274,6 +285,12 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<{ problems: strin
       if (!closing) return;
       current = null;
       const now = Date.now();
+      if (closing.lateStart) {
+        closing.startAt = Math.max(now + 500 + random() * 4_500, lastSignalAt + 1);
+        lastSignalAt = closing.startAt;
+        suiteCounters.lateStarts += 1;
+        emitAt(closing.startAt, socket, { type: "events", data: { signal_type: "START_SPEECH" } });
+      }
       if (sarvamSignals && random() < 0.9) {
         lastSignalAt = Math.max(now + 20 + random() * 200, closing.startAt + 1, lastSignalAt + 1);
         emitAt(lastSignalAt, socket, { type: "events", data: { signal_type: "END_SPEECH" } });
@@ -306,7 +323,8 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<{ problems: strin
       const roll = random();
       const wanted = roll < 0.75 ? random() * 300 : roll < 0.95 ? 300 + random() * 1_100 : 1_600 + random() * 800;
       const delay = sarvamSignals ? Math.max(wanted, lastSignalAt + 1 - now) : wanted;
-      if (sarvamSignals) lastSignalAt = now + delay;
+      const lateStart = sarvamSignals && !falseStart && random() < 0.06;
+      if (sarvamSignals && !lateStart) lastSignalAt = now + delay;
       const opened = {
         tags: [tag],
         utterances: [tag.utterance],
@@ -315,12 +333,19 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<{ problems: strin
         heardAt: now,
         startAt: now + delay,
         falseStart,
+        lateStart,
       };
       current = opened;
-      if (!sarvamSignals) return;
+      if (!sarvamSignals || lateStart) return;
       emitAt(now + delay, socket, { type: "events", data: { signal_type: "START_SPEECH" } }, (live) => {
         if (live && delay <= LOOKBACK_MS - 100) for (const { uid } of opened.utterances) startedPromptly.add(uid);
       });
+      if (random() < 0.04) {
+        const again = now + delay + 200 + random() * 3_500;
+        lastSignalAt = Math.max(lastSignalAt, again);
+        suiteCounters.repeatedStarts += 1;
+        emitAt(again, socket, { type: "events", data: { signal_type: "START_SPEECH" } });
+      }
     };
     return {
       receive(message: Record<string, unknown>) {
@@ -390,14 +415,22 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<{ problems: strin
     { onProviderSend: (socket, message) => onWire(socket, message) },
   );
   type Store = {
-    all(): readonly { audio: string; sequence: number; sentAt: number | null; owner: { kind: string; lineId?: string } }[];
+    all(): readonly {
+      audio: string;
+      sequence: number;
+      sentAt: number | null;
+      speaker: { userId: string; source?: string };
+      owner: { kind: string; lineId?: string };
+    }[];
+    queuedEvents(): readonly { type: string; speaker?: { userId: string; source?: string } }[];
     bytes: number;
     enforceBudget(bytes: number): { sequence: number }[];
   };
   type Internals = {
     audio: Store;
     ledger: { get(id: string): { state: string; epoch: number | null } | undefined };
-    liveConnection: { epoch: number } | null;
+    liveConnection: { epoch: number; session: { lanes?: Map<string, unknown> } } | null;
+    providerDrains: Map<number, { session: { lanes?: Map<string, unknown> } }>;
   };
   const internals = rig.room as unknown as Internals;
   const enforce = internals.audio.enforceBudget.bind(internals.audio);
@@ -522,7 +555,7 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<{ problems: strin
       for (const { uid, chunk } of tokensOf(line.text)) {
         const key = `U${uid}.${chunk}`;
         const before = shownIn.get(key);
-        if (before !== undefined && before !== line.itemId) sameSpeakerResidual(`${stage}: ${key} is shown in two lines`);
+        if (before !== undefined && before !== line.itemId) report(`${stage}: ${key} is shown in two lines`);
         shownIn.set(key, line.itemId);
       }
     }
@@ -551,9 +584,31 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<{ problems: strin
   const checkStore = (stage: string) => {
     const store = internals.audio;
     const chunks = store.all();
-    const total = chunks.reduce((sum, { audio }) => sum + audio.length, 0);
+    const markers = store.queuedEvents().filter(({ type }) => type !== "chunk").length;
+    const total = chunks.reduce((sum, { audio }) => sum + audio.length, 0) + markers * QUEUED_MARKER_BYTES;
     if (total !== store.bytes) report(`${stage}: the store counts ${store.bytes} bytes but holds ${total}`);
     if (total > limit.bytes) report(`${stage}: the room holds ${total} bytes of audio, over the ${limit.bytes} limit`);
+    const held = new Map<string, { chunks: number; boundaries: number }>();
+    const heldBy = (speaker: { userId: string; source?: string }) => {
+      const key = `${speaker.userId}:${speaker.source}`;
+      const entry = held.get(key) ?? { chunks: 0, boundaries: 0 };
+      held.set(key, entry);
+      return entry;
+    };
+    for (const chunk of chunks) if (chunk.owner.kind === "queued") heldBy(chunk.speaker).chunks += 1;
+    for (const event of store.queuedEvents()) if (event.type !== "chunk" && event.speaker) heldBy(event.speaker).boundaries += 1;
+    const queuedChunks = chunks.filter(({ owner }) => owner.kind === "queued").length;
+    for (const [key, { boundaries }] of held) {
+      if (boundaries > queuedChunks + 1) report(`${stage}: ${key} has ${boundaries} turn boundaries held around ${queuedChunks} queued chunks`);
+    }
+    for (const session of [internals.liveConnection?.session, ...Array.from(internals.providerDrains.values(), (drain) => drain.session)]) {
+      const lanes = session?.lanes?.size ?? 0;
+      if (lanes > SARVAM_MAX_LANES) report(`${stage}: one Sarvam session holds ${lanes} lanes, over the cap of ${SARVAM_MAX_LANES}`);
+    }
+    const lanes = internals.liveConnection?.session.lanes;
+    if (lanes?.size === SARVAM_MAX_LANES && Array.from(held.keys()).some((key) => !lanes.has(key) && (held.get(key)?.chunks ?? 0) > 0)) {
+      suiteCounters.speakersWaitingForALane += 1;
+    }
     const live = internals.liveConnection?.epoch ?? null;
     for (const chunk of chunks) {
       if (chunk.owner.kind === "queued" && chunk.sentAt !== null) report(`${stage}: a queued chunk was already sent`);
@@ -610,8 +665,11 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<{ problems: strin
     utterance.arrivals.push(Date.now());
     if (pool.heard[index]) utterance.heard = true;
     trace(`send U${utterance.uid}:${utterance.speaker.userId} ${utterance.kind}#${tag.chunk} status=${status}`);
+    const heardBefore = lastHeardAt.get(keyOf(utterance.speaker));
+    const audible = pool.heard[index] || (heardBefore !== undefined && Date.now() - heardBefore <= VOICE_HANGOVER_MS);
+    if (pool.heard[index]) lastHeardAt.set(keyOf(utterance.speaker), Date.now());
     if (utterance.accepted) {
-      timeline.push({ at: Date.now(), speaker: utterance.speaker.userId, uid: utterance.uid, heard: pool.heard[index] });
+      timeline.push({ at: Date.now(), speaker: utterance.speaker.userId, uid: utterance.uid, heard: audible });
     }
     await tolerate(
       () => rig.send({ type: "audio.chunk", audio: pool.wire24[index], speaker: utterance.speaker }),
@@ -620,18 +678,20 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<{ problems: strin
     return true;
   };
 
-  let speaker = speakers[0];
+  const pool = mode.crowd ? crowd : speakers;
+  let active = [...pool];
+  let speaker = pool[0];
   let paused = false;
   const switches: Promise<unknown>[] = [];
 
   const turnOpen = new Map<string, number>();
   const speakUtterance = async (step: number) => {
     const previous = speaker;
-    if (random() < 0.35) speaker = speakers[Math.floor(random() * speakers.length)];
-    for (const other of speakers) {
-      const lastAt = turnOpen.get(other.userId);
+    if (random() < 0.35 || !active.includes(speaker)) speaker = active[Math.floor(random() * active.length)];
+    for (const other of pool) {
+      const lastAt = turnOpen.get(keyOf(other));
       if (other === speaker || lastAt === undefined || Date.now() - lastAt < RELAY_TURN_END_MS) continue;
-      turnOpen.delete(other.userId);
+      turnOpen.delete(keyOf(other));
       await tolerate(() => rig.clear(other), `step ${step} relay turn end for ${other.userId}`);
     }
     if (previous !== speaker) trace(`driver speaker ${speaker.userId}`);
@@ -644,6 +704,14 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<{ problems: strin
     const count = mode.burst ? 4 + Math.floor(random() * BURST_LIMIT_CHUNKS) : long ? 10 + Math.floor(random() * 14) : 1 + Math.floor(random() * 3);
     for (let chunk = 0; chunk < count; chunk += 1) {
       if (!(await sendChunk(utterance))) break;
+      if (chunk + 1 < count && random() < 0.08) {
+        const other = pool[Math.floor(random() * pool.length)];
+        if (other !== speaker) {
+          suiteCounters.interleavedClears += 1;
+          trace(`driver clear ${keyOf(other)} inside U${utterance.uid}`);
+          await tolerate(() => rig.clear(other), `step ${step} interleaved clear`);
+        }
+      }
       const gap = random();
       await vi.advanceTimersByTimeAsync(mode.burst ? 0 : gap < 0.4 ? 0 : gap < 0.8 ? 20 : 120 + Math.floor(random() * 330));
       check(`step ${step} U${utterance.uid} chunk ${chunk}`);
@@ -651,14 +719,14 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<{ problems: strin
     const end = random();
     trace(`driver end ${end < 0.55 ? "turn" : end < 0.65 ? "clear" : end < 0.7 ? "commit" : "none"}`);
     if (end < 0.55) {
-      turnOpen.delete(speaker.userId);
+      turnOpen.delete(keyOf(speaker));
       await tolerate(() => rig.endTurn(speaker), `step ${step} turn end`);
     } else if (end < 0.65) {
       suiteCounters.clearsWithoutCommit += 1;
-      turnOpen.delete(speaker.userId);
+      turnOpen.delete(keyOf(speaker));
       await tolerate(() => rig.clear(speaker), `step ${step} clear`);
     } else {
-      turnOpen.set(speaker.userId, Date.now());
+      turnOpen.set(keyOf(speaker), Date.now());
       if (end < 0.7) await tolerate(() => rig.commit(speaker), `step ${step} commit`);
     }
     await vi.advanceTimersByTimeAsync(Math.floor(random() * 800));
@@ -678,6 +746,37 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<{ problems: strin
     paused = statusOf() === "paused";
     if (paused && wanted) pauseEpoch += 1;
     if (!paused && !wanted) pauseEpoch += 1;
+  };
+
+  const leave = async (step: number) => {
+    if (active.length < 2) return;
+    const leaving = active[Math.floor(random() * active.length)];
+    trace(`driver leave ${keyOf(leaving)}`);
+    suiteCounters.leaves += 1;
+    active = active.filter((each) => each !== leaving);
+    turnOpen.delete(keyOf(leaving));
+    await tolerate(() => rig.clear(leaving), `step ${step} leave`);
+  };
+
+  const outageStorm = async (step: number) => {
+    const open = rig.providerSockets().filter(({ closed }) => !closed);
+    if (open.length === 0) return;
+    suiteCounters.outageStorms += 1;
+    rig.connectPlans.push({ lateMs: 10_000 + Math.floor(random() * 25_000) });
+    trace("driver outage storm");
+    open[Math.floor(random() * open.length)].disconnect();
+    const messages = 20 + Math.floor(random() * 60);
+    for (let index = 0; index < messages; index += 1) {
+      const who = pool[Math.floor(random() * pool.length)];
+      await tolerate(() => (random() < 0.5 ? rig.commit(who) : rig.clear(who)), `step ${step} storm`);
+      if (random() < 0.1) {
+        const utterance: Utterance = { uid: utterances.length, speaker: who, kind: "speech", arrivals: [], heard: false, accepted: true, pauseEpoch };
+        utterances.push(utterance);
+        await sendChunk(utterance);
+      }
+      await vi.advanceTimersByTimeAsync(100);
+      if (index % 10 === 9) check(`step ${step} storm ${index}`);
+    }
   };
 
   const dropProvider = () => {
@@ -721,6 +820,10 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<{ problems: strin
       );
     } else if (roll < pauseChance + 0.27) {
       await vi.advanceTimersByTimeAsync(5_000 + Math.floor(random() * 35_000));
+    } else if (roll < pauseChance + 0.29) {
+      await outageStorm(step);
+    } else if (mode.crowd && roll < pauseChance + 0.32) {
+      await leave(step);
     } else {
       await speakUtterance(step);
     }
@@ -747,6 +850,8 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<{ problems: strin
   for (let round = 0; round < 4; round += 1) await vi.advanceTimersByTimeAsync(DEADLINE + 20_000);
   for (let round = 0; round < 60 && savesInFlight > 0; round += 1) await vi.advanceTimersByTimeAsync(500);
   check("end");
+  const idleLanes = internals.liveConnection?.session.lanes?.size ?? 0;
+  if (!openai && idleLanes > 0) report(`after a long silence the Sarvam session still holds ${idleLanes} open lanes`);
 
   const lines = viewerLines();
   checkChunksOnce("end", lines);
@@ -756,18 +861,26 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<{ problems: strin
       shownWith.set(uid, (shownWith.get(uid) ?? new Set()).add(line.itemId));
     }
   }
-  const gaps = lines.filter(({ text }) => text === GAP);
+  const gaps = lines.filter(({ text }) => text === GAP || text.endsWith(` ${GAP}`));
+  const nextLineOf = (line: Line) =>
+    lines.reduce(
+      (next, other) =>
+        other.speakerUserId === line.speakerUserId && other.startMs > line.startMs ? Math.min(next, other.startMs) : next,
+      Number.POSITIVE_INFINITY,
+    );
   const stretchOf = (line: Line) => {
     const start = timeline.findIndex(({ at, speaker }) => at === line.startMs && speaker === line.speakerUserId);
     if (start < 0) return [];
     let first = start;
     while (first > 0 && timeline[first - 1].speaker === line.speakerUserId) first -= 1;
-    return [...timeline.slice(first, start), ...runFrom(line)];
+    const until = nextLineOf(line);
+    const untilNextLine = timeline.slice(start).filter(({ at, speaker }) => speaker === line.speakerUserId && at < until);
+    return Array.from(new Set([...timeline.slice(first, start), ...runFrom(line), ...untilNextLine]));
   };
   const gapRuns = gaps.map((gap) => ({ gap, run: stretchOf(gap) }));
   for (const { gap, run } of gapRuns) {
-    if (!run.some(({ heard }) => heard)) {
-      sameSpeakerResidual(`a gap under ${gap.speakerUserId} at ${gap.startMs} covers no speech our check heard`);
+    if (gap.text === GAP && !run.some(({ heard }) => heard)) {
+      report(`a gap under ${gap.speakerUserId} at ${gap.startMs} covers no speech our check heard`);
     }
   }
   if (!mode.burst) {
@@ -780,7 +893,7 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<{ problems: strin
       const shown =
         shownWith.has(utterance.uid) ||
         gapRuns.some(({ gap, run }) => gap.speakerUserId === utterance.speaker.userId && run.some(({ uid }) => uid === utterance.uid));
-      if (!shown) sameSpeakerResidual(`U${utterance.uid} (${utterance.speaker.userId}, ${utterance.kind}) was heard and sent but shows neither words nor a gap`);
+      if (!shown) report(`U${utterance.uid} (${utterance.speaker.userId}, ${utterance.kind}) was heard and sent but shows neither words nor a gap`);
     }
   }
 
@@ -827,17 +940,14 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<{ problems: strin
     fs.writeFileSync(TRACE, traceLines.join("\n"));
     traceLines.length = 0;
   }
-  return { problems, residuals };
+  return problems;
 };
-
-const residualRuns: string[] = [];
 
 const sweep = async (mode: Mode) => {
   const failures: string[] = [];
   for (let seed = FIRST; seed < FIRST + RUNS && failures.length < MAX_FAILURES; seed += 1) {
-    const { problems, residuals } = await runOnce(seed, mode);
+    const problems = await runOnce(seed, mode);
     if (problems.length > 0) failures.push(`seed ${seed}: ${problems.join(" | ")}`);
-    if (residuals.length > 0) residualRuns.push(`${JSON.stringify(mode)} seed ${seed}: ${residuals.join(" | ")}`);
   }
   return failures;
 };
@@ -855,12 +965,11 @@ describe("captions against an independent speech script", () => {
     expect(await sweep({ burst: true })).toEqual([]);
   }, Math.max(600_000, RUNS * 2_000));
 
+  it(`the same holds for six sources that join, leave and wait for a capped Sarvam lane, across ${RUNS} runs`, async () => {
+    expect(await sweep({ crowd: true })).toEqual([]);
+  }, Math.max(600_000, RUNS * 2_000));
+
   it("each hard transition happened in the runs above", () => {
     expect(Object.entries(suiteCounters).filter(([, count]) => count === 0)).toEqual([]);
-  });
-
-  it(`Sarvam answers that drift within one speaker's lane stay under ${SAME_SPEAKER_RESIDUAL_BUDGET} runs`, () => {
-    if (process.env.TRANSCRIPT_ORACLE_SHOW_RESIDUALS) console.info(residualRuns.join("\n"));
-    expect(residualRuns.length).toBeLessThanOrEqual(SAME_SPEAKER_RESIDUAL_BUDGET);
   });
 });

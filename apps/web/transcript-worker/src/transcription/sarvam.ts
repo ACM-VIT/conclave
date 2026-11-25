@@ -1,11 +1,19 @@
 import { AI_ENDPOINTS } from "@conclave/ai/models";
-import { DEFAULT_TRANSCRIPTION_LOCALE, TRANSCRIPTION_CONNECT_TIMEOUT_MS } from "../constants";
-import { normalizeLocale, safeJsonParse, trimText } from "../utils";
+import {
+  DEFAULT_TRANSCRIPTION_LOCALE,
+  SARVAM_ANSWER_QUIET_MS,
+  TRANSCRIPTION_LINE_DEADLINE_MS,
+  SARVAM_LANE_IDLE_MS,
+  SARVAM_MAX_LANES,
+  SARVAM_WINDOW_QUIET_MS,
+  SARVAM_WINDOW_ROTATE_MS,
+  SARVAM_WINDOW_SETTLE_MS,
+  TRANSCRIPTION_CONNECT_TIMEOUT_MS,
+} from "../constants";
+import { normalizeLocale, safeJsonParse, speakerKey, trimText } from "../utils";
 import type { TranscriptSpeaker } from "@conclave/meeting-core/transcript-types";
 import type {
-  AcceptedUtterance,
   AudioContext,
-  HeardSpeech,
   LiveTranscriptionCallbacks,
   LiveTranscriptionConnectOptions,
   LiveTranscriptionSession,
@@ -18,30 +26,6 @@ const SARVAM_AUDIO_ENCODING = "audio/wav";
 const SARVAM_INPUT_AUDIO_CODEC = "pcm_s16le";
 const SARVAM_DEFAULT_LANGUAGE_CODE = "unknown";
 const SARVAM_DEFAULT_MODE = "codemix";
-const SARVAM_SIGNAL_LOOKBACK_MS = 1_500;
-const SARVAM_SEGMENT_KEPT_MS = 3_000;
-const SARVAM_SPEAKER_LOG_LIMIT = 4_096;
-
-type SentChunk = { sequence: number; at: number; order: number; createdAt: number };
-
-type SpeechSegment = {
-  speaker: TranscriptSpeaker;
-  speakerKey: string;
-  heardAt: number;
-  turnId: number;
-  turn: number;
-  leadIn: SentChunk[];
-  firstInTurn: boolean;
-  startedAt: number;
-  first: SentChunk;
-  endSequence: number | null;
-  afterSignal: number;
-  claimed: boolean;
-  itemId: string | null;
-  answered: boolean;
-  continued: SentChunk | null;
-  claimedFrom?: number;
-};
 export const SARVAM_SUPPORTED_LANGUAGE_CODES = new Set([
   "unknown",
   "en-IN",
@@ -356,380 +340,191 @@ export const parseSarvamEvent = (raw: string): ParsedSarvamEvent => {
   };
 };
 
-type UnheardSignal = { itemId: string; at: number; signal: number };
-
-type LaneChunk = { sent: SentChunk; turn: number };
-
 type LaneEvent = "message" | "close" | "error";
 type LaneListener = (event: { data?: unknown }) => void;
-type LaneSocket = {
-  send(raw: string): void;
-  close(): void;
-  addEventListener(type: LaneEvent, listener: LaneListener): void;
+
+type LaneWindow = {
+  readonly itemId: string;
+  heard: boolean;
+  flushedAt: number | null;
+  starts: number;
+  finals: number;
+  readonly words: string[];
 };
+
+class LaneSocket {
+  private socket: WebSocket | null = null;
+  private readonly listeners: [LaneEvent, LaneListener][] = [];
+  private closed = false;
+
+  constructor(opened: WebSocket | Promise<WebSocket>, onOpen: () => void) {
+    if (!(opened instanceof Promise)) {
+      this.socket = opened;
+      return;
+    }
+    opened.then(
+      (socket) => {
+        if (this.closed) {
+          try {
+            socket.close();
+          } catch {}
+          return;
+        }
+        this.socket = socket;
+        for (const [type, listener] of this.listeners) socket.addEventListener(type, listener as EventListener);
+        onOpen();
+      },
+      () => {
+        if (this.closed) return;
+        for (const [type, listener] of this.listeners) if (type === "error") listener({});
+      },
+    );
+  }
+
+  get open(): boolean {
+    return this.socket !== null && !this.closed;
+  }
+
+  send(raw: string): void {
+    if (!this.socket || this.closed) throw new Error("Sarvam lane is not open.");
+    this.socket.send(raw);
+  }
+
+  close(): void {
+    this.closed = true;
+    try {
+      this.socket?.close();
+    } catch {}
+  }
+
+  addEventListener(type: LaneEvent, listener: LaneListener): void {
+    this.listeners.push([type, listener]);
+    this.socket?.addEventListener(type, listener as EventListener);
+  }
+}
 
 class SarvamLane {
   private closed = false;
   private readonly downsampler = new Pcm24To16Downsampler();
   private readonly connectionId = crypto.randomUUID();
-  private speaker: TranscriptSpeaker | null = null;
-  private utteranceCount = 0;
-  private awaitingFinal: string[] = [];
-  private lastAnswer: { itemId: string; transcript: string; nextWaiting: string | null } | null = null;
-  private openedBeforeSignal: string[] = [];
-  private readonly replayedLines = new Set<string>();
-  private segments: SpeechSegment[] = [];
-  private openSegment: SpeechSegment | null = null;
-  private unheardSignals: UnheardSignal[] = [];
-  private signalCount = 0;
-  private resolveTimer: ReturnType<typeof setTimeout> | null = null;
-  private turnCount = 0;
-  private turn: {
-    id: number;
-    first: SentChunk;
-    leadIn: SentChunk[];
-    ended: boolean;
-    accepted: boolean;
-    needsOnset: boolean;
-    segments: number;
-  } | null = null;
-  private signalledItem: string | null = null;
-  private sentSinceAnswer: LaneChunk[] = [];
-  private readonly utteranceStarts = new Map<string, number>();
-  private readonly voiceOpened = new Set<string>();
-  private nextSequence = 0;
+  private windowCount = 0;
+  private window: LaneWindow | null = null;
+  private last: { itemId: string; words: string[] } | null = null;
+  private tailOwed = 0;
+  private lastAnswer: { itemId: string; transcript: string } | null = null;
+  private lastEventAt = Number.NEGATIVE_INFINITY;
+  private settleTimer: ReturnType<typeof setTimeout> | null = null;
+  private quietTimer: ReturnType<typeof setTimeout> | null = null;
+  private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  lastActiveAt = Date.now();
+  draining = false;
 
   constructor(
+    readonly key: string,
     private readonly socket: LaneSocket,
+    private readonly speaker: TranscriptSpeaker,
     private readonly callbacks: LiveTranscriptionCallbacks,
-    private readonly signals: { speech: boolean },
-  ) {}
-
-  private get signalsSpeech(): boolean {
-    return this.signals.speech;
+    private readonly onIdle: (lane: SarvamLane) => void,
+  ) {
+    this.armIdle();
   }
 
-  appendAudio(audioBase64: string, speaker: TranscriptSpeaker, context?: AudioContext): string | null {
+  get busy(): boolean {
+    return this.window !== null;
+  }
+
+  get spareable(): boolean {
+    return this.windowCount > 0 && this.window === null;
+  }
+
+  get ready(): boolean {
+    return !this.closed && this.socket.open && this.window?.flushedAt == null && (this.window !== null || this.tailOwed === 0);
+  }
+
+  get stalled(): boolean {
+    const flushedAt = this.window?.flushedAt;
+    return this.tailOwed > 0 || (flushedAt != null && Date.now() >= flushedAt + SARVAM_WINDOW_ROTATE_MS);
+  }
+
+  drain(): void {
+    this.draining = true;
+    this.stopIdle();
+    if (this.window || this.tailOwed === 0) return;
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = null;
+      if (!this.closed) this.onIdle(this);
+    }, TRANSCRIPTION_LINE_DEADLINE_MS);
+  }
+
+  owns(itemId: string): boolean {
+    return this.window?.itemId === itemId || this.last?.itemId === itemId;
+  }
+
+  appendAudio(audioBase64: string, context?: AudioContext): string | null {
+    if (!this.ready) throw new Error("Sarvam lane is waiting for its answer.");
     const downsampled = this.downsampler.downsample(audioBase64);
     if (downsampled) this.socket.send(buildSarvamAudioMessage(downsampled));
+    this.lastActiveAt = Date.now();
+    this.stopIdle();
+    this.armQuiet();
     if (!context) return null;
-    this.speaker = speaker;
-    const sent: SentChunk = {
-      sequence: context.sequence,
-      at: context.at,
-      order: context.order,
-      createdAt: context.createdAt,
-    };
-    this.nextSequence = Math.max(this.nextSequence, sent.sequence + 1);
-    if (!this.turn || this.turn.ended) {
-      this.endOpenSegment(sent.sequence);
-      this.turnCount += 1;
-      this.turn = { id: this.turnCount, first: sent, leadIn: [], ended: false, accepted: false, needsOnset: false, segments: 0 };
-    }
-    const voice = context.voice;
-    if (this.turn.segments === 0) {
-      this.turn.leadIn = [...this.turn.leadIn, sent].filter(({ at }) => sent.at - at <= SARVAM_SIGNAL_LOOKBACK_MS);
-    }
-    this.sentSinceAnswer.push({ sent, turn: context.turn });
-    if (this.sentSinceAnswer.length > SARVAM_SPEAKER_LOG_LIMIT) this.sentSinceAnswer.shift();
-    if (voice === "onset") this.endOpenSegment(sent.sequence);
-    if (context.lineId) {
-      if (!this.replayedLines.has(context.lineId)) {
-        this.replayedLines.add(context.lineId);
-        this.turn.accepted = true;
-        this.openedBeforeSignal.push(
-          this.acceptUtterance({
-            heard: voice !== "quiet",
-            speaker,
-            fromSequence: this.turn.first.sequence,
-            turn: context.turn,
-            lineId: context.lineId,
-          }),
-        );
-      }
-      return null;
-    }
-    if (voice === "quiet") return this.ownerOfOpenSegment();
-    if (!this.signalsSpeech && !this.turn.accepted && (!this.turn.needsOnset || voice === "onset")) {
-      this.turn.accepted = true;
-      const opened = this.beginSegment(speaker, context.turn, sent);
-      opened.claimed = true;
-      const first = this.turn.first;
-      opened.itemId = this.acceptUtterance({
-        heard: true,
-        speaker,
-        fromSequence: first.sequence,
-        turn: context.turn,
-        place: { order: first.order, startMs: first.createdAt },
+    const heard = context.voice !== "quiet";
+    const open = this.window;
+    if (!open) {
+      this.windowCount += 1;
+      const window: LaneWindow = {
+        itemId: createSarvamSegmentItemId(`sarvam-${this.connectionId}`, this.windowCount),
+        heard,
+        flushedAt: null,
+        starts: 0,
+        finals: 0,
+        words: [],
+      };
+      this.window = window;
+      this.callbacks.onAccepted?.(window.itemId, {
+        heard,
+        speaker: this.speaker,
+        fromSequence: context.sequence,
+        untilSequence: context.sequence + 1,
+        place: { order: context.order, startMs: context.createdAt },
+        lineId: context.lineId,
       });
-      this.openedBeforeSignal.push(opened.itemId);
-      this.voiceOpened.add(opened.itemId);
-      return opened.itemId;
+      return window.itemId;
     }
-    const open = this.openSegment;
-    if (open && !open.answered && open.endSequence === null && voice !== "onset" && open.turnId === this.turn.id) {
-      open.heardAt = sent.at;
-      if (open.claimed && open.continued === null) open.continued = sent;
-      return this.ownerOfOpenSegment();
+    if (heard && !open.heard) {
+      open.heard = true;
+      this.callbacks.onHeard?.(open.itemId, {
+        speaker: this.speaker,
+        fromSequence: context.sequence,
+        untilSequence: context.sequence + 1,
+      });
     }
-    this.beginSegment(speaker, context.turn, sent);
-    this.scheduleResolve();
-    return null;
+    return open.itemId;
   }
 
-  private ownerOfOpenSegment(): string | null {
-    const open = this.openSegment;
-    if (!open?.claimed || !open.itemId || open.answered || open.endSequence !== null) return null;
-    return open.turnId === this.turn?.id ? open.itemId : null;
-  }
-
-  private beginSegment(speaker: TranscriptSpeaker, turn: number, sent: SentChunk): SpeechSegment {
-    const current = this.turn!;
-    this.endOpenSegment(sent.sequence);
-    const windowStart = this.sentSinceAnswer[0]?.sent.sequence ?? Number.POSITIVE_INFINITY;
-    this.segments = this.segments.filter(
-      ({ heardAt, first }) => sent.at - heardAt <= SARVAM_SEGMENT_KEPT_MS || first.sequence >= windowStart,
-    );
-    const segment: SpeechSegment = {
-      speaker,
-      speakerKey: `${speaker.userId}:${speaker.source}`,
-      heardAt: sent.at,
-      turnId: current.id,
-      turn,
-      leadIn: current.segments === 0 ? current.leadIn : [],
-      firstInTurn: current.segments === 0,
-      startedAt: sent.at,
-      first: sent,
-      endSequence: null,
-      afterSignal: this.signalCount,
-      claimed: false,
-      itemId: null,
-      answered: false,
-      continued: null,
-    };
-    current.segments += 1;
-    this.segments.push(segment);
-    this.openSegment = segment;
-    return segment;
-  }
-
-  clearAudio(): void {
-    this.socket.send(buildSarvamFlushMessage());
+  flush(): void {
+    this.stopQuiet();
     this.downsampler.reset();
-    this.endTurn();
-  }
-
-  finishAudio(): void {
+    const window = this.window;
+    if (!window || window.flushedAt !== null) return;
     this.socket.send(buildSarvamFlushMessage());
-    this.endTurn();
-  }
-
-  private endTurn(): void {
-    if (this.turn) this.turn.ended = true;
-    this.endOpenSegment(this.nextSequence);
-    this.openSegment = null;
-  }
-
-  private settleUtterance(itemId: string): void {
-    for (const segment of this.segments) {
-      if (segment.itemId === itemId) segment.answered = true;
-    }
-    if (this.openSegment?.itemId === itemId) this.openSegment.answered = true;
-    this.awaitingFinal = this.awaitingFinal.filter((awaiting) => awaiting !== itemId);
-    this.openedBeforeSignal = this.openedBeforeSignal.filter((opened) => opened !== itemId);
-    this.unheardSignals = this.unheardSignals.filter((signal) => signal.itemId !== itemId);
-    if (this.signalledItem === itemId) this.signalledItem = null;
-    this.voiceOpened.delete(itemId);
-  }
-
-  private nextUtteranceId(): string {
-    this.utteranceCount += 1;
-    return createSarvamSegmentItemId(`sarvam-${this.connectionId}`, this.utteranceCount);
-  }
-
-  private acceptUtterance(utterance: AcceptedUtterance): string {
-    const itemId = this.nextUtteranceId();
-    this.awaitingFinal.push(itemId);
-    this.rememberStart(itemId, utterance);
-    this.callbacks.onAccepted?.(itemId, utterance);
-    return itemId;
-  }
-
-  private rememberStart(itemId: string, speech: HeardSpeech): void {
-    if (Number.isFinite(speech.fromSequence)) this.utteranceStarts.set(itemId, speech.fromSequence);
-  }
-
-  private endOpenSegment(sequence: number): void {
-    if (this.openSegment && this.openSegment.endSequence === null) this.openSegment.endSequence = sequence;
-  }
-
-  private segmentSpeech(segment: SpeechSegment, from: number): HeardSpeech {
-    const index = this.segments.indexOf(segment);
-    const next = this.segments.find((_, at) => at > index);
-    const leadIn = segment.firstInTurn ? segment.leadIn.find(({ at }) => at >= from) : undefined;
-    const first = leadIn && leadIn.sequence < segment.first.sequence ? leadIn : segment.first;
-    return {
-      speaker: segment.speaker,
-      fromSequence: first.sequence,
-      turn: segment.turn,
-      untilSequence: segment.endSequence ?? next?.first.sequence,
-      place: { order: first.order, startMs: first.createdAt },
-    };
-  }
-
-  private withdrawVoiceOpened(): void {
-    for (const itemId of this.voiceOpened) {
-      this.awaitingFinal = this.awaitingFinal.filter((awaiting) => awaiting !== itemId);
-      this.openedBeforeSignal = this.openedBeforeSignal.filter((opened) => opened !== itemId);
-      this.utteranceStarts.delete(itemId);
-      for (const segment of [...this.segments, this.openSegment]) {
-        if (segment?.itemId !== itemId) continue;
-        segment.claimed = false;
-        segment.itemId = null;
-      }
-      this.callbacks.onWithdrawn?.(itemId);
-    }
-    this.voiceOpened.clear();
-  }
-
-  private handleSpeechStart(): void {
-    this.withdrawVoiceOpened();
-    this.signals.speech = true;
-    this.lastAnswer = null;
-    const now = Date.now();
-    this.resolveUnheardSignals(now);
-    this.signalCount += 1;
-    const opened = this.openedBeforeSignal.shift();
-    if (opened) {
-      this.signalledItem = opened;
-      return;
-    }
-    const segment = this.segments.find(({ claimed, heardAt }) => !claimed && now - heardAt <= SARVAM_SIGNAL_LOOKBACK_MS);
-    if (segment) {
-      segment.claimed = true;
-      this.signalledItem = this.acceptUtterance({
-        heard: true,
-        ...this.segmentSpeech(segment, segment.startedAt - SARVAM_SIGNAL_LOOKBACK_MS),
-      });
-      segment.itemId = this.signalledItem;
-      return;
-    }
-    const running = this.openSegment;
-    if (
-      running?.claimed &&
-      !running.answered &&
-      running.endSequence === null &&
-      running.continued !== null &&
-      running.turnId === this.turn?.id
-    ) {
-      const continued = running.continued;
-      running.continued = null;
-      this.signalledItem = this.acceptUtterance({
-        heard: true,
-        speaker: running.speaker,
-        fromSequence: continued.sequence,
-        turn: running.turn,
-        fromItem: running.itemId ?? undefined,
-        place: { order: continued.order, startMs: continued.createdAt },
-      });
-      running.itemId = this.signalledItem;
-      return;
-    }
-    const itemId = this.acceptUtterance({ heard: false, speaker: null, fromSequence: Number.POSITIVE_INFINITY });
-    this.unheardSignals.push({ itemId, at: now, signal: this.signalCount });
-    this.signalledItem = itemId;
-  }
-
-  private handleSpeechEnd(): void {
-    this.lastAnswer = null;
-    const ended = this.signalledItem;
-    if (!ended) return;
-    this.resolveNow(ended);
-    if (this.openSegment?.itemId === ended) this.endOpenSegment(this.nextSequence);
-  }
-
-  private resolveNow(itemId: string): void {
-    const signal = this.unheardSignals.find((unheard) => unheard.itemId === itemId);
-    const segment = signal ? this.segmentAfter(signal) : undefined;
-    if (signal && segment) this.resolve(signal, segment);
-  }
-
-  private segmentAfter(signal: UnheardSignal): SpeechSegment | undefined {
-    return this.segments.find(
-      ({ claimed, afterSignal, startedAt }) =>
-        !claimed && afterSignal === signal.signal && startedAt - signal.at <= SARVAM_SIGNAL_LOOKBACK_MS,
-    );
-  }
-
-  private resolve(signal: UnheardSignal, segment: SpeechSegment): void {
-    segment.claimed = true;
-    segment.itemId = signal.itemId;
-    this.unheardSignals.splice(this.unheardSignals.indexOf(signal), 1);
-    const speech = this.segmentSpeech(segment, Math.min(signal.at, segment.startedAt) - SARVAM_SIGNAL_LOOKBACK_MS);
-    this.rememberStart(signal.itemId, speech);
-    this.callbacks.onHeard?.(signal.itemId, speech);
-  }
-
-  private firstUnclaimedChunk(): LaneChunk | undefined {
-    const claimed = this.segments.filter(({ claimed }) => claimed);
-    return this.sentSinceAnswer.find(
-      ({ sent }) =>
-        !claimed.some(
-          ({ first, endSequence }) => sent.sequence >= first.sequence && sent.sequence < (endSequence ?? this.nextSequence),
-        ),
-    );
-  }
-
-  private bindAnswered(itemId: string): void {
-    const signal = this.unheardSignals.find((unheard) => unheard.itemId === itemId);
-    if (!signal || !this.speaker) return;
-    const oldest = this.segments.find(({ claimed }) => !claimed);
-    if (oldest) {
-      this.resolve(signal, oldest);
-      return;
-    }
-    this.unheardSignals.splice(this.unheardSignals.indexOf(signal), 1);
-    const from = this.firstUnclaimedChunk();
-    if (from) this.utteranceStarts.set(itemId, from.sent.sequence);
-    this.callbacks.onHeard?.(itemId, {
-      speaker: this.speaker,
-      fromSequence: from?.sent.sequence ?? this.nextSequence,
-      untilSequence: this.nextSequence,
-      place: from ? { order: from.sent.order, startMs: from.sent.createdAt } : undefined,
-    });
-  }
-
-  private resolveUnheardSignals(now: number): void {
-    for (const signal of [...this.unheardSignals]) {
-      const segment = this.segmentAfter(signal);
-      if (segment && now - segment.startedAt > SARVAM_SIGNAL_LOOKBACK_MS) {
-        this.resolve(signal, segment);
-      } else if (now - signal.at > 2 * SARVAM_SIGNAL_LOOKBACK_MS) {
-        this.unheardSignals.splice(this.unheardSignals.indexOf(signal), 1);
-      }
-    }
-  }
-
-  private scheduleResolve(): void {
-    if (this.resolveTimer !== null || this.unheardSignals.length === 0) return;
-    this.resolveTimer = setTimeout(() => {
-      this.resolveTimer = null;
-      if (this.closed) return;
-      this.resolveUnheardSignals(Date.now());
-      if (this.segments.some(({ claimed }) => !claimed)) this.scheduleResolve();
-    }, SARVAM_SIGNAL_LOOKBACK_MS + 1);
+    window.flushedAt = Date.now();
+    this.armSettle();
   }
 
   close(): void {
+    if (this.closed) return;
     this.closed = true;
-    if (this.resolveTimer !== null) clearTimeout(this.resolveTimer);
-    try {
-      this.socket.send(buildSarvamFlushMessage());
-      this.socket.send(buildSarvamEndOfStreamMessage());
-    } catch {}
-    try {
-      this.socket.close();
-    } catch {}
+    if (this.settleTimer !== null) clearTimeout(this.settleTimer);
+    this.stopQuiet();
+    this.stopIdle();
+    if (this.socket.open) {
+      try {
+        this.socket.send(buildSarvamFlushMessage());
+        this.socket.send(buildSarvamEndOfStreamMessage());
+      } catch {}
+    }
+    this.socket.close();
   }
 
   attach(): void {
@@ -744,6 +539,75 @@ class SarvamLane {
     });
   }
 
+  private settleAt(window: LaneWindow): number {
+    return Math.max((window.flushedAt ?? Date.now()) + SARVAM_WINDOW_SETTLE_MS, this.lastEventAt + SARVAM_ANSWER_QUIET_MS);
+  }
+
+  private armSettle(): void {
+    const window = this.window;
+    if (!window || window.flushedAt === null || this.closed) return;
+    if (this.settleTimer !== null) clearTimeout(this.settleTimer);
+    const flushedAt = window.flushedAt;
+    this.settleTimer = setTimeout(() => {
+      this.settleTimer = null;
+      void this.settle().then(() => {
+        if (this.window !== window || this.closed || this.settleTimer !== null) return;
+        this.settleTimer = setTimeout(() => {
+          this.settleTimer = null;
+          if (this.window === window && !this.closed) this.callbacks.onReady?.();
+        }, Math.max(0, flushedAt + SARVAM_WINDOW_ROTATE_MS - Date.now()));
+      });
+    }, Math.max(0, this.settleAt(window) - Date.now()));
+  }
+
+  private async settle(): Promise<void> {
+    const window = this.window;
+    if (this.closed || !window || window.flushedAt === null) return;
+    if (Date.now() < this.settleAt(window)) return;
+    if (window.finals < Math.max(window.starts, window.heard ? 1 : 0)) return;
+    if (this.settleTimer !== null) clearTimeout(this.settleTimer);
+    this.settleTimer = null;
+    this.window = null;
+    this.last = { itemId: window.itemId, words: window.words };
+    this.callbacks.onCommitted(window.itemId);
+    await this.callbacks.onFinal(window.itemId, window.words.join(" "));
+    if (this.closed) return;
+    if (this.draining) {
+      this.onIdle(this);
+      return;
+    }
+    this.armIdle();
+    this.callbacks.onReady?.();
+  }
+
+  private armQuiet(): void {
+    this.stopQuiet();
+    this.quietTimer = setTimeout(() => {
+      this.quietTimer = null;
+      try {
+        this.flush();
+      } catch {}
+    }, SARVAM_WINDOW_QUIET_MS);
+  }
+
+  private stopQuiet(): void {
+    if (this.quietTimer !== null) clearTimeout(this.quietTimer);
+    this.quietTimer = null;
+  }
+
+  private armIdle(): void {
+    this.stopIdle();
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = null;
+      if (!this.closed && !this.busy) this.onIdle(this);
+    }, SARVAM_LANE_IDLE_MS);
+  }
+
+  private stopIdle(): void {
+    if (this.idleTimer !== null) clearTimeout(this.idleTimer);
+    this.idleTimer = null;
+  }
+
   private async handleEvent(raw: string): Promise<void> {
     if (this.closed) return;
     const event = parseSarvamEvent(raw);
@@ -752,189 +616,138 @@ class SarvamLane {
       await this.callbacks.onFailure(event.message);
       return;
     }
+    this.lastEventAt = Date.now();
     if (event.type === "speech_start") {
-      this.handleSpeechStart();
+      this.lastAnswer = null;
+      if (this.window) this.window.starts += 1;
+      else {
+        this.tailOwed += 1;
+        this.callbacks.onReady?.();
+      }
+      this.armSettle();
       return;
     }
     if (event.type === "speech_end") {
-      this.handleSpeechEnd();
+      this.armSettle();
       return;
     }
-    const answered = this.awaitingFinal[0];
-    if (
-      !event.generatedId &&
-      this.lastAnswer?.itemId === event.itemId &&
-      this.lastAnswer.transcript === event.transcript &&
-      this.lastAnswer.nextWaiting === (answered ?? null)
-    ) {
+    if (!event.generatedId && this.lastAnswer?.itemId === event.itemId && this.lastAnswer.transcript === event.transcript) {
       return;
     }
-    if (!answered && !event.transcript) return;
-    let itemId = answered;
-    if (itemId) {
-      this.resolveNow(itemId);
-      this.bindAnswered(itemId);
-    } else {
-      if (!this.speaker) {
-        this.rememberAnswer(event);
-        return;
+    this.lastAnswer = event.generatedId ? null : { itemId: event.itemId, transcript: event.transcript };
+    const words = event.transcript.trim();
+    const window = this.window;
+    if (!window || this.tailOwed > 0) {
+      this.tailOwed = Math.max(0, this.tailOwed - 1);
+      const last = this.last;
+      if (words && last) {
+        last.words.push(words);
+        await this.callbacks.onFinal(last.itemId, last.words.join(" "));
       }
-      const from = this.firstUnclaimedChunk();
-      itemId = this.nextUtteranceId();
-      this.callbacks.onAccepted?.(itemId, {
-        heard: true,
-        speaker: this.speaker,
-        fromSequence: from?.sent.sequence ?? this.nextSequence,
-        untilSequence: this.nextSequence,
-        place: from ? { order: from.sent.order, startMs: from.sent.createdAt } : undefined,
-      });
+      if (this.tailOwed === 0 && !this.window && this.draining && !this.closed) this.onIdle(this);
+      else if (this.tailOwed === 0 && !this.window) this.callbacks.onReady?.();
+      return;
     }
-    const answeredFrom = this.utteranceStarts.get(itemId);
-    this.utteranceStarts.delete(itemId);
-    if (answeredFrom !== undefined) {
-      this.sentSinceAnswer = this.sentSinceAnswer.filter(({ sent }) => sent.sequence >= answeredFrom);
+    window.finals += 1;
+    if (words) {
+      this.callbacks.onDelta(window.itemId, window.words.length > 0 ? ` ${words}` : words);
+      window.words.push(words);
     }
-    this.settleUtterance(itemId);
-    this.rememberAnswer(event);
-    if (this.turn) {
-      this.turn.accepted = false;
-      this.turn.needsOnset = true;
-    }
-    this.callbacks.onCommitted(itemId);
-    await this.callbacks.onFinal(itemId, event.transcript);
-  }
-
-  private rememberAnswer(event: { itemId: string; transcript: string }): void {
-    this.lastAnswer = {
-      itemId: event.itemId,
-      transcript: event.transcript,
-      nextWaiting: this.awaitingFinal[0] ?? null,
-    };
-  }
-}
-
-class PendingSarvamSocket implements LaneSocket {
-  private socket: WebSocket | null = null;
-  private pending: string[] = [];
-  private readonly listeners: [LaneEvent, LaneListener][] = [];
-  private closed = false;
-
-  constructor(opened: Promise<WebSocket>, onOpen: () => void) {
-    opened.then(
-      (socket) => {
-        if (this.closed) {
-          try {
-            socket.close();
-          } catch {}
-          return;
-        }
-        this.socket = socket;
-        for (const [type, listener] of this.listeners) socket.addEventListener(type, listener as EventListener);
-        for (const raw of this.pending) socket.send(raw);
-        this.pending = [];
-        onOpen();
-      },
-      () => {
-        if (this.closed) return;
-        for (const [type, listener] of this.listeners) if (type === "error") listener({});
-      },
-    );
-  }
-
-  get open(): boolean {
-    return this.socket !== null;
-  }
-
-  send(raw: string): void {
-    if (this.closed) throw new Error("Sarvam lane closed.");
-    if (this.socket) this.socket.send(raw);
-    else this.pending.push(raw);
-  }
-
-  close(): void {
-    this.closed = true;
-    this.pending = [];
-    try {
-      this.socket?.close();
-    } catch {}
-  }
-
-  addEventListener(type: LaneEvent, listener: LaneListener): void {
-    this.listeners.push([type, listener]);
-    this.socket?.addEventListener(type, listener as EventListener);
+    this.armSettle();
   }
 }
 
 class SarvamTranscriptionSession implements LiveTranscriptionSession {
   readonly provider = "sarvam" as const;
-  private readonly lanes = new Map<string, { lane: SarvamLane; socket: LaneSocket | PendingSarvamSocket }>();
-  private unassigned: SarvamLane | null;
-  private unassignedSocket: WebSocket | null;
+  private readonly lanes = new Map<string, SarvamLane>();
+  private readonly draining = new Set<SarvamLane>();
+  private spare: WebSocket | null;
   private closed = false;
-  private readonly signals = { speech: false };
 
   constructor(
     socket: WebSocket,
     private readonly openSocket: () => Promise<WebSocket>,
     private readonly callbacks: LiveTranscriptionCallbacks,
   ) {
-    this.unassigned = this.lane(socket);
-    this.unassignedSocket = socket;
+    this.spare = socket;
   }
 
   ready(speaker: TranscriptSpeaker): boolean {
-    const { socket } = this.laneFor(speaker);
-    return !(socket instanceof PendingSarvamSocket) || socket.open;
+    return this.laneFor(speaker)?.ready ?? false;
   }
 
   appendAudio(audioBase64: string, speaker?: TranscriptSpeaker, context?: AudioContext): string | null {
     if (!speaker) return null;
-    return this.laneFor(speaker).lane.appendAudio(audioBase64, speaker, context);
+    const lane = this.laneFor(speaker);
+    if (!lane) throw new Error("No Sarvam lane is free for this speaker.");
+    return lane.appendAudio(audioBase64, context);
   }
 
-  private lane(socket: LaneSocket): SarvamLane {
-    const lane = new SarvamLane(socket, this.callbacks, this.signals);
+  private laneFor(speaker: TranscriptSpeaker): SarvamLane | null {
+    const key = speakerKey(speaker);
+    const known = this.lanes.get(key);
+    if (this.closed) return known ?? null;
+    if (known && (known.ready || !known.stalled || this.lanes.size + this.draining.size >= SARVAM_MAX_LANES)) return known;
+    if (known) {
+      known.drain();
+      this.lanes.delete(key);
+      this.draining.add(known);
+    }
+    if (this.lanes.size + this.draining.size >= SARVAM_MAX_LANES) {
+      const idle = Array.from(this.lanes.values())
+        .filter(({ spareable }) => spareable)
+        .sort((left, right) => left.lastActiveAt - right.lastActiveAt)[0];
+      if (!idle) return null;
+      this.retire(idle);
+    }
+    const socket = new LaneSocket(this.spare ?? this.openSocket(), () => {
+      if (!this.closed) this.callbacks.onReady?.();
+    });
+    this.spare = null;
+    const lane = new SarvamLane(key, socket, speaker, this.callbacks, (done) => {
+      this.retire(done);
+      this.callbacks.onReady?.();
+    });
     lane.attach();
+    this.lanes.set(key, lane);
     return lane;
   }
 
-  private laneFor(speaker: TranscriptSpeaker): { lane: SarvamLane; socket: LaneSocket | PendingSarvamSocket } {
-    const key = `${speaker.userId}:${speaker.source}`;
-    let entry = this.lanes.get(key);
-    if (!entry) {
-      if (this.unassigned && this.unassignedSocket) {
-        entry = { lane: this.unassigned, socket: this.unassignedSocket };
-      } else {
-        const socket = new PendingSarvamSocket(this.openSocket(), () => {
-          if (!this.closed) this.callbacks.onReady?.();
-        });
-        entry = { lane: this.lane(socket), socket };
-      }
-      this.unassigned = null;
-      this.unassignedSocket = null;
-      this.lanes.set(key, entry);
+  private retire(lane: SarvamLane): void {
+    if (this.lanes.get(lane.key) === lane) this.lanes.delete(lane.key);
+    this.draining.delete(lane);
+    lane.close();
+  }
+
+  fence(providerItemId: string): void {
+    for (const lane of [...this.lanes.values(), ...this.draining]) {
+      if (lane.owns(providerItemId)) this.retire(lane);
     }
-    return entry;
   }
 
   commitAudio(): void {}
 
   clearAudio(speaker?: TranscriptSpeaker): void {
     if (speaker) {
-      this.lanes.get(`${speaker.userId}:${speaker.source}`)?.lane.clearAudio();
+      this.lanes.get(speakerKey(speaker))?.flush();
       return;
     }
-    for (const { lane } of this.lanes.values()) lane.clearAudio();
+    for (const lane of this.lanes.values()) lane.flush();
   }
 
   finishAudio(): void {
-    for (const { lane } of this.lanes.values()) lane.finishAudio();
+    for (const lane of this.lanes.values()) lane.flush();
   }
 
   close(): void {
     this.closed = true;
-    this.unassigned?.close();
-    for (const { lane } of this.lanes.values()) lane.close();
+    try {
+      this.spare?.close();
+    } catch {}
+    this.spare = null;
+    for (const lane of [...this.lanes.values(), ...this.draining]) lane.close();
+    this.lanes.clear();
+    this.draining.clear();
   }
 }
 

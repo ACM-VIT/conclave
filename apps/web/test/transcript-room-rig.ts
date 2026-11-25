@@ -1,5 +1,5 @@
 import { vi, type Mock } from "vitest";
-import { SARVAM_REPLAY_SETTLE_MS } from "../transcript-worker/src/constants";
+import { SARVAM_WINDOW_SETTLE_MS } from "../transcript-worker/src/constants";
 import { TranscriptRoom } from "../transcript-worker/src/room";
 import type { Env, Viewer } from "../transcript-worker/src/types";
 import { clicksPcm, noisePcm, pcmBase64, silencePcm, voicedPcm } from "./transcript-audio-fixtures";
@@ -372,6 +372,6 @@ export const answerSarvamReplays = async (
     const socket = await rig.lane(speaker);
     socket.emit(sarvamSpeechStart());
     socket.emit(sarvamFinal(requestId, text));
-    await vi.advanceTimersByTimeAsync(SARVAM_REPLAY_SETTLE_MS + 50);
+    await vi.advanceTimersByTimeAsync(SARVAM_WINDOW_SETTLE_MS + 50);
   }
 };

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  SARVAM_REPLAY_SETTLE_MS as SETTLE,
+  SARVAM_WINDOW_SETTLE_MS as SETTLE,
   TRANSCRIPTION_COMMIT_ACK_TIMEOUT_MS as COMMIT_ACK_TIMEOUT,
   TRANSCRIPTION_GAP_MARKER as GAP,
   TRANSCRIPTION_LINE_DEADLINE_MS as DEADLINE,
@@ -59,17 +59,19 @@ describe("Neon C1: an unanswered Sarvam utterance never takes a later utterance'
       socket.emit(sarvamSpeechStart());
       await endTurn(ada);
       socket.emit(sarvamFinal("first", "First."));
-      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.advanceTimersByTimeAsync(SETTLE + 500);
 
       if (unanswered === "a false start on noise") await sendAudio("noise", ada);
       else await speak(ada);
       socket.emit(sarvamSpeechStart());
       await endTurn(ada);
       await vi.advanceTimersByTimeAsync(DEADLINE + 100);
-      const replacement = providerSockets().at(-1)!;
-      expect(replacement).not.toBe(socket);
+      expect(socket.closed).toBe(true);
 
       await speak(grace);
+      await settle();
+      const replacement = providerSockets().at(-1)!;
+      expect(replacement).not.toBe(socket);
       replacement.emit(sarvamSpeechStart());
       await endTurn(grace);
       socket.emit(sarvamFinal("late", "The unanswered utterance, late."));
@@ -85,7 +87,7 @@ describe("Neon C1: an unanswered Sarvam utterance never takes a later utterance'
 });
 
 describe("Neon C3: finished or unowned Sarvam audio is never replayed", () => {
-  it("a commit that arrives after the final does not keep the finished words for a replay", async () => {
+  it("a turn whose answer has settled is never replayed", async () => {
     vi.useFakeTimers();
     quiet();
     const { providerSockets, start, speak, endTurn, savedTexts } = await rig(SARVAM);
@@ -95,6 +97,7 @@ describe("Neon C3: finished or unowned Sarvam audio is never replayed", () => {
     socket.emit(sarvamFinal("hello", "Hello."));
     await settle();
     await endTurn(ada);
+    await vi.advanceTimersByTimeAsync(SETTLE + 600);
 
     socket.disconnect();
     await settle();
@@ -102,7 +105,7 @@ describe("Neon C3: finished or unowned Sarvam audio is never replayed", () => {
     expect(savedTexts()).toEqual(["Hello."]);
   });
 
-  it("speech no signal claimed in time is never replayed into a gap", async () => {
+  it("heard speech Sarvam never signalled is replayed after a reconnect and ends as a gap if still unanswered", async () => {
     vi.useFakeTimers();
     quiet();
     const { providerSockets, lane, start, speak, endTurn, savedTexts } = await rig(SARVAM);
@@ -112,7 +115,7 @@ describe("Neon C3: finished or unowned Sarvam audio is never replayed", () => {
     socket.emit(sarvamSpeechStart());
     await endTurn(ada);
     socket.emit(sarvamFinal("one", "First."));
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(SETTLE + 500);
 
     await speak(grace);
     await endTurn(grace);
@@ -121,9 +124,9 @@ describe("Neon C3: finished or unowned Sarvam audio is never replayed", () => {
     graceLane.disconnect();
     await settle();
 
-    expect(providerSockets().filter(({ closed }) => !closed).reduce((sum, open) => sum + speechSent(open), 0)).toBe(0);
+    expect(providerSockets().filter(({ closed }) => !closed).reduce((sum, open) => sum + speechSent(open), 0)).toBe(1);
     await vi.advanceTimersByTimeAsync(DEADLINE + 100);
-    expect(savedTexts()).toEqual(["First."]);
+    expect(savedTexts()).toEqual(["First.", GAP]);
   });
 
   it("noise turns are never replayed", async () => {
@@ -135,9 +138,16 @@ describe("Neon C3: finished or unowned Sarvam audio is never replayed", () => {
       await sendAudio(kind, ada);
       await endTurn(ada);
     }
+    const sentBefore = socket.sent.flatMap((message) => {
+      const data = (message as { audio?: { data?: string } }).audio?.data;
+      return data ? [data] : [];
+    });
     socket.disconnect();
     await settle();
-    expect(providerSockets()[1].sent.filter((message) => (message as { audio?: unknown }).audio)).toHaveLength(0);
+    const resent = providerSockets()[1].sent.filter((message) =>
+      sentBefore.includes((message as { audio?: { data?: string } }).audio?.data ?? ""),
+    );
+    expect([sentBefore.length, resent]).toEqual([1, []]);
   });
 });
 
@@ -163,7 +173,7 @@ describe("Neon C4 and H1: replayed lines are claimed by their own audio", () => 
     const graceLane = await harness.lane(grace);
     graceLane.emit(sarvamSpeechStart());
     graceLane.emit(sarvamFinal("g", "Grace's words."));
-    await settle();
+    await vi.advanceTimersByTimeAsync(SETTLE + 600);
 
     expect(speakers(room.segments)).toEqual([["Ada's words.", "ada"], ["Grace's words.", "grace"]]);
   });
@@ -203,7 +213,7 @@ describe("Neon C4 and H1: replayed lines are claimed by their own audio", () => 
     connectPlans.push(1);
     (await harness.lane(ada)).disconnect();
     await vi.advanceTimersByTimeAsync(300);
-    expect(providerSockets().filter(({ closed }) => !closed)).toHaveLength(1);
+    expect(providerSockets().filter(({ closed }) => !closed)).toHaveLength(2);
     await answerSarvamReplays(harness, [
       [ada, "a", "Ada first."],
       [grace, "g", "Grace second."],
@@ -215,7 +225,7 @@ describe("Neon C4 and H1: replayed lines are claimed by their own audio", () => 
 });
 
 describe("Neon H2: two utterances in one commit window each keep their own audio", () => {
-  it("the first's final releases only its own audio, and the second still replays", async () => {
+  it("a partial answer keeps its whole turn's audio, so a reconnect replays the turn once and its answer replaces the partial words", async () => {
     vi.useFakeTimers();
     quiet();
     const { providerSockets, start, speak, endTurn, savedTexts } = await rig(SARVAM);
@@ -224,7 +234,8 @@ describe("Neon H2: two utterances in one commit window each keep their own audio
     await speak(ada);
     socket.emit(sarvamSpeechStart());
     socket.emit(sarvamFinal("first", "First."));
-    await vi.advanceTimersByTimeAsync(2_000);
+    await endTurn(ada);
+    await vi.advanceTimersByTimeAsync(SETTLE + 500);
 
     await speak(ada);
     socket.emit(sarvamSpeechStart());
@@ -238,10 +249,10 @@ describe("Neon H2: two utterances in one commit window each keep their own audio
     socket.disconnect();
     await settle();
     const replacement = providerSockets()[1];
-    expect(speechSent(replacement)).toBe(1);
-    replacement.emit(sarvamFinal("two", "Two."));
+    expect(speechSent(replacement)).toBe(2);
+    replacement.emit(sarvamFinal("two", "One. Two."));
     await vi.advanceTimersByTimeAsync(DEADLINE + 100);
-    expect(savedTexts()).toEqual(["First.", "One.", "Two."]);
+    expect(savedTexts()).toEqual(["First.", "One. Two."]);
   });
 });
 
@@ -344,7 +355,7 @@ describe("Neon H3: committed or buffered speech is never lost without a trace", 
     socket.emit(sarvamSpeechStart());
     socket.emit(sarvamFinal("first", "First."));
     await endTurn(ada);
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(SETTLE + 500);
 
     await sendAudio("softSpeech", ada);
     socket.emit(sarvamSpeechStart());
@@ -391,7 +402,7 @@ describe("Neon H5: every Sarvam line takes the speaker of its own audio", () => 
     socket.emit(sarvamSpeechStart());
     socket.emit(sarvamFinal("a", "Ada first."));
     await endTurn(ada);
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(SETTLE + 500);
 
     await sendAudio("silence", grace);
     const graceLane = await lane(grace);
@@ -401,7 +412,7 @@ describe("Neon H5: every Sarvam line takes the speaker of its own audio", () => 
     await endTurn(grace);
     await vi.advanceTimersByTimeAsync(1_700);
     graceLane.emit(sarvamFinal("g", "Grace next."));
-    await settle();
+    await vi.advanceTimersByTimeAsync(SETTLE);
 
     expect(speakers(room.segments)).toEqual([["Ada first.", "ada"], ["Grace next.", "grace"]]);
   });
@@ -418,7 +429,7 @@ describe("Neon H5: every Sarvam line takes the speaker of its own audio", () => 
     await endTurn(grace);
     (await lane(ada)).emit(sarvamFinal("a", "Ada starts."));
     (await lane(grace)).emit(sarvamFinal("g", "Grace interrupts."));
-    await settle();
+    await vi.advanceTimersByTimeAsync(6_000);
 
     expect(speakers(room.segments)).toEqual([["Ada starts.", "ada"], ["Grace interrupts.", "grace"]]);
   });
@@ -432,7 +443,7 @@ describe("Neon H5: every Sarvam line takes the speaker of its own audio", () => 
     socket.emit(sarvamSpeechStart());
     socket.emit(sarvamFinal("first", "First."));
     await endTurn(ada);
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(SETTLE + 500);
 
     await speak(ada);
     await endTurn(ada);
@@ -441,7 +452,7 @@ describe("Neon H5: every Sarvam line takes the speaker of its own audio", () => 
     await vi.advanceTimersByTimeAsync(100);
     socket.emit(sarvamSpeechStart());
     socket.emit(sarvamFinal("late", "Ada again."));
-    await settle();
+    await vi.advanceTimersByTimeAsync(SETTLE);
 
     expect(speakers(room.segments)).toEqual([["First.", "ada"], ["Ada again.", "ada"]]);
   });
@@ -617,7 +628,7 @@ describe("Sarvam: a line heard after its speech signal owns that speech", () => 
     first.emit(sarvamSpeechStart());
     await harness.endTurn(ada);
     first.emit(sarvamFinal("one", "First."));
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(SETTLE + 500);
 
     await harness.sendAudio("silence", grace);
     const socket = await harness.lane(grace);
@@ -649,7 +660,7 @@ describe("Sarvam: a line heard after its speech signal owns that speech", () => 
     quiet();
     const { room, providerSockets, socket, retainedLineState } = await signalBeforeSpeech();
     socket.emit(sarvamFinal("two", "Second."));
-    await settle();
+    await vi.advanceTimersByTimeAsync(SETTLE);
     expect(retainedLineState().unownedAudio).toBe(0);
 
     socket.disconnect();
@@ -671,7 +682,7 @@ describe("Sarvam: a final that comes before our check resolved its signal", () =
     first.emit(sarvamSpeechStart());
     await endTurn(ada);
     first.emit(sarvamFinal("one", "First."));
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(SETTLE + 500);
 
     await sendAudio("silence", grace);
     const socket = await lane(grace);
@@ -681,7 +692,7 @@ describe("Sarvam: a final that comes before our check resolved its signal", () =
     await endTurn(grace);
     await vi.advanceTimersByTimeAsync(300);
     socket.emit(sarvamFinal("two", "Yes."));
-    await settle();
+    await vi.advanceTimersByTimeAsync(SETTLE);
     expect(retainedLineState().unownedAudio).toBe(0);
 
     socket.disconnect();
@@ -707,7 +718,7 @@ describe("Sarvam: a line waits while its speaker is still talking", () => {
       socket.emit(sarvamSpeechStart());
       await endTurn(grace);
       socket.emit(sarvamFinal("one", "First."));
-      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.advanceTimersByTimeAsync(SETTLE + 500);
     }
 
     await speak(ada);
@@ -726,7 +737,7 @@ describe("Sarvam: a line waits while its speaker is still talking", () => {
 });
 
 describe("Sarvam: a line's wait follows its own audio", () => {
-  it("a second utterance in the same turn takes its audio's wait with it, so the first still ends on time", async () => {
+  it("a turn with two speech signals and one late answer ends at its own deadline with the answer and a gap marker", async () => {
     vi.useFakeTimers();
     quiet();
     const { providerSockets, start, speak, endTurn, savedTexts } = await rig(SARVAM);
@@ -743,7 +754,7 @@ describe("Sarvam: a line's wait follows its own audio", () => {
     socket.emit(sarvamFinal("two", "Second."));
     await vi.advanceTimersByTimeAsync(DEADLINE + 100);
 
-    expect(savedTexts()).toEqual([GAP, GAP]);
+    expect(savedTexts()).toEqual([`Second. ${GAP}`]);
   });
 });
 
@@ -791,7 +802,7 @@ describe("Sarvam: speech evidence belongs to its own turn", () => {
     socket.emit(sarvamSpeechStart());
     await endTurn(ada);
     socket.emit(sarvamFinal("one", "First."));
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(SETTLE + 500);
 
     await speak(ada);
     await endTurn(ada);
@@ -814,7 +825,7 @@ describe("Sarvam: speech evidence belongs to its own turn", () => {
     socket.emit(sarvamSpeechStart());
     await endTurn(grace);
     socket.emit(sarvamFinal("zero", "First."));
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(SETTLE + 500);
 
     await speak(ada);
     await endTurn(ada);
@@ -824,8 +835,9 @@ describe("Sarvam: speech evidence belongs to its own turn", () => {
     await vi.advanceTimersByTimeAsync(400);
     const adaLane = await lane(ada);
     adaLane.emit(sarvamSpeechStart());
-    adaLane.emit(sarvamSpeechStart());
     adaLane.emit(sarvamFinal("one", "Ada one."));
+    await vi.advanceTimersByTimeAsync(SETTLE);
+    adaLane.emit(sarvamSpeechStart());
     await settle();
 
     adaLane.disconnect();
@@ -1018,7 +1030,7 @@ describe("Sol: one line model across connections", () => {
     socket.emit(sarvamSpeechEnd());
     socket.emit(sarvamFinal("setup", "Setup."));
     await endTurn(grace);
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(SETTLE + 500);
 
     await speak(ada);
     const adaLane = await lane(ada);
@@ -1084,8 +1096,8 @@ describe("Sol: one line model across connections", () => {
   });
 });
 
-describe("Sarvam: an utterance's speech runs from its signal to the next onset in its turn", () => {
-  it("a final that comes first takes only its own speech, so the next utterance in the turn still replays", async () => {
+describe("Sarvam: one turn is one line, whatever Sarvam's signals inside it", () => {
+  it("a turn Sarvam answers in parts is one line, and a reconnect before it settles replays the whole turn once", async () => {
     vi.useFakeTimers();
     quiet();
     const { providerSockets, lane, start, speak, sendAudio, endTurn, savedTexts } = await rig(SARVAM);
@@ -1095,13 +1107,11 @@ describe("Sarvam: an utterance's speech runs from its signal to the next onset i
     first.emit(sarvamSpeechStart());
     await endTurn(ada);
     first.emit(sarvamFinal("zero", "First."));
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(SETTLE + 500);
 
-    await sendAudio("silence", grace);
+    await speak(grace);
     const socket = await lane(grace);
     socket.emit(sarvamSpeechStart());
-    await vi.advanceTimersByTimeAsync(100);
-    await speak(grace);
     for (const _ of [1, 2, 3, 4]) {
       await vi.advanceTimersByTimeAsync(200);
       await sendAudio("silence", grace);
@@ -1109,101 +1119,17 @@ describe("Sarvam: an utterance's speech runs from its signal to the next onset i
     await vi.advanceTimersByTimeAsync(200);
     await speak(grace);
     socket.emit(sarvamFinal("one", "Grace one."));
-    await settle();
-
-    socket.disconnect();
-    await settle();
-    const replacement = await lane(grace);
-    expect(speechSent(replacement)).toBe(1);
-    replacement.emit(sarvamSpeechStart());
-    replacement.emit(sarvamFinal("two", "Grace two."));
-    await vi.advanceTimersByTimeAsync(DEADLINE + 100);
-    expect(savedTexts()).toEqual(["First.", "Grace one.", "Grace two."]);
-  });
-
-  const secondUtteranceInTurn = async () => {
-    const harness = await rig(SARVAM);
-    await harness.start("hi");
-    const [first] = harness.providerSockets();
-    await harness.speak(ada);
-    first.emit(sarvamSpeechStart());
-    await harness.endTurn(ada);
-    first.emit(sarvamFinal("zero", "First."));
-    await vi.advanceTimersByTimeAsync(2_000);
-
-    await harness.speak(grace);
-    const socket = await harness.lane(grace);
-    socket.emit(sarvamSpeechStart());
-    for (const _ of [1, 2, 3, 4]) {
-      await vi.advanceTimersByTimeAsync(200);
-      await harness.sendAudio("silence", grace);
-    }
-    await vi.advanceTimersByTimeAsync(200);
-    await harness.speak(grace);
-    socket.emit(sarvamFinal("one", "Grace one."));
-    await vi.advanceTimersByTimeAsync(300);
-    socket.emit(sarvamSpeechStart());
-    await settle();
-    return { ...harness, socket };
-  };
-
-  it("the next utterance's speech stays its own when the one before it ends, so its late signal still hears it", async () => {
-    vi.useFakeTimers();
-    quiet();
-    const { savedTexts } = await secondUtteranceInTurn();
-    await vi.advanceTimersByTimeAsync(DEADLINE + 100);
-    expect(savedTexts()).toEqual(["First.", "Grace one.", GAP]);
-  });
-
-  it("an end-of-speech signal for a late signal takes only its own speech, so the next utterance's signal takes the rest", async () => {
-    vi.useFakeTimers();
-    quiet();
-    const { providerSockets, start, speak, sendAudio, endTurn, savedTexts } = await rig(SARVAM);
-    await start("hi");
-    const [socket] = providerSockets();
-    await speak(ada);
-    socket.emit(sarvamSpeechStart());
-    await endTurn(ada);
-    socket.emit(sarvamFinal("zero", "First."));
-    await vi.advanceTimersByTimeAsync(2_000);
-
-    await sendAudio("silence", grace);
-    socket.emit(sarvamSpeechStart());
-    await vi.advanceTimersByTimeAsync(100);
-    await speak(grace);
-    for (const _ of [1, 2, 3, 4]) {
-      await vi.advanceTimersByTimeAsync(200);
-      await sendAudio("silence", grace);
-    }
-    await vi.advanceTimersByTimeAsync(200);
-    await speak(grace);
-    socket.emit(sarvamSpeechEnd());
     socket.emit(sarvamSpeechStart());
     await endTurn(grace);
 
     socket.disconnect();
     await settle();
-    const replacement = providerSockets().at(-1)!;
-    replacement.emit(sarvamSpeechStart());
-    replacement.emit(sarvamFinal("one", "Grace one."));
-    replacement.emit(sarvamSpeechStart());
-    replacement.emit(sarvamFinal("two", "Grace two."));
-    await vi.advanceTimersByTimeAsync(DEADLINE + 100);
-    expect(savedTexts()).toEqual(["First.", "Grace one.", "Grace two."]);
-  });
-
-  it("a line that owned its turn's new audio gives the next utterance's speech back when it ends, so a reconnect replays it as that utterance", async () => {
-    vi.useFakeTimers();
-    quiet();
-    const { lane, socket, savedTexts } = await secondUtteranceInTurn();
-    socket.disconnect();
-    await settle();
     const replacement = await lane(grace);
-    expect(speechSent(replacement)).toBe(1);
+    expect(replacement.sent.filter((message) => (message as { audio?: unknown }).audio)).toHaveLength(6);
     replacement.emit(sarvamSpeechStart());
-    replacement.emit(sarvamFinal("two", "Grace two."));
+    replacement.emit(sarvamFinal("two", "Grace one. Grace two."));
     await vi.advanceTimersByTimeAsync(DEADLINE + 100);
-    expect(savedTexts()).toEqual(["First.", "Grace one.", "Grace two."]);
+    expect(savedTexts()).toEqual(["First.", "Grace one. Grace two."]);
   });
 });
 
@@ -1244,7 +1170,7 @@ describe("Greptile: Sarvam answers and owed slots", () => {
       socket.emit(sarvamSpeechStart());
       await room.endTurn(ada);
       socket.emit(sarvamFinal("shared", text));
-      await vi.advanceTimersByTimeAsync(600);
+      await vi.advanceTimersByTimeAsync(SETTLE + 600);
     }
     await vi.advanceTimersByTimeAsync(DEADLINE + 100);
 
@@ -1264,12 +1190,12 @@ describe("Greptile: Sarvam answers and owed slots", () => {
     await room.speak(ada);
     socket.emit(sarvamSpeechStart());
     await room.endTurn(ada);
-    await vi.advanceTimersByTimeAsync(600);
+    socket.emit(sarvamFinal("shared", "Yes."));
+    socket.emit(sarvamFinal("shared", "Yes."));
+    await vi.advanceTimersByTimeAsync(SETTLE + 600);
     await room.speak(ada);
     socket.emit(sarvamSpeechStart());
     await room.endTurn(ada);
-    socket.emit(sarvamFinal("shared", "Yes."));
-    socket.emit(sarvamFinal("shared", "Yes."));
     socket.emit(sarvamFinal("shared", "Ada again."));
     await settle();
     await vi.advanceTimersByTimeAsync(DEADLINE + 100);
@@ -1280,12 +1206,12 @@ describe("Greptile: Sarvam answers and owed slots", () => {
     ]);
   });
 
-  it("a connection that signals speech but never answers is replaced at each timeout, so answers never pile up on it", async () => {
+  it("a connection that signals speech but never answers is replaced at each deadline, so every turn ends as its own gap", async () => {
     vi.useFakeTimers();
     quiet();
     const room = await rig(SARVAM);
     await room.start("hi");
-    let mostWaiting = 0;
+    let mostOpen = 0;
     for (let utterance = 0; utterance < 40; utterance += 1) {
       const speaker = utterance % 2 === 0 ? ada : grace;
       await room.speak(speaker);
@@ -1293,14 +1219,11 @@ describe("Greptile: Sarvam answers and owed slots", () => {
       socket?.emit(sarvamSpeechStart());
       await room.endTurn(speaker);
       await vi.advanceTimersByTimeAsync(DEADLINE / 2);
-      const lanes = (room.room as unknown as {
-        liveConnection: { session: { lanes: Map<string, { lane: { awaitingFinal: string[] } }> } } | null;
-      }).liveConnection?.session.lanes;
-      for (const { lane } of lanes?.values() ?? []) mostWaiting = Math.max(mostWaiting, lane.awaitingFinal.length);
+      mostOpen = Math.max(mostOpen, room.providerSockets().filter(({ closed }) => !closed).length);
     }
+    await vi.advanceTimersByTimeAsync(DEADLINE + 100);
 
-    expect(mostWaiting).toBeLessThanOrEqual(3);
-    expect(room.providerSockets().filter(({ closed }) => !closed).length).toBeLessThanOrEqual(2);
-    expect(room.savedTexts().every((text) => text === GAP)).toBe(true);
+    expect(mostOpen).toBeLessThanOrEqual(2);
+    expect(room.savedTexts()).toEqual(Array.from({ length: 40 }, () => GAP));
   });
 });

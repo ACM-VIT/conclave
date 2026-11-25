@@ -45,7 +45,6 @@ import {
   TRANSCRIPTION_PROVIDER_DRAIN_MS,
   TRANSCRIPTION_RECOVERY_MAX_AUDIO_BYTES,
   UNOWNED_AUDIO_KEPT_MS,
-  SARVAM_REPLAY_SETTLE_MS,
   TRANSCRIPT_PERSIST_RETRY_MS,
   TRANSCRIPT_PERSIST_RETRY_MAX_MS,
   TRANSCRIPTION_ENDED_LINE_KEPT_MS,
@@ -97,6 +96,7 @@ import {
   runsOf,
   type AudioRun,
   type HeldChunk,
+  type QueuedEvent,
   type QueuedMarker,
 } from "./audio-store";
 import { VoiceActivity } from "./transcription/voice-activity";
@@ -178,17 +178,15 @@ export class TranscriptRoom {
         connection?.forgetLinesExcept((lineId) => !forgotten.has(lineId));
       }
     },
-    onRelease: (lineId) => {
-      this.audio.releaseOwner(lineId);
-      this.lineReleased(lineId);
-    },
+    onRelease: (lineId) => this.audio.releaseOwner(lineId),
   });
   private readonly audio = new AudioStore();
   private droppedAudioChunks = 0;
   private liveConnection: ProviderConnection | null = null;
   private audioSequence = 0;
   private readonly voiceChecks = new Map<string, VoiceActivity>();
-  private audioTurn = 0;
+  private lastProvider: LiveTranscriptionSession["provider"] | null = null;
+  private readonly speakerTurns = new Map<string, { speaker: TranscriptSpeaker; turn: number }>();
   private lineTimer: ReturnType<typeof setTimeout> | null = null;
   private switchingProvider = false;
   private persistRetryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1276,9 +1274,10 @@ export class TranscriptRoom {
       order: this.sequence++,
       createdAt,
       voice: this.voiceCheckFor(speakerKey(normalizedSpeaker)).push(pcm, createdAt),
-      turn: this.audioTurn,
+      turn: this.turnFor(normalizedSpeaker),
       sentAt: null,
       owner: { kind: "queued" },
+      savedUnsent: false,
     };
     if (!this.transcriptionSession && !this.shouldBufferTranscriptionAudio()) return;
     this.audio.add(chunk);
@@ -1429,6 +1428,7 @@ export class TranscriptRoom {
       speaker: normalizeSpeaker(speaker, this.latestSpeaker ?? viewer),
       after: this.audioSequence,
     });
+    this.enforceAudioBudget();
     this.flushToLive();
   }
 
@@ -1483,16 +1483,35 @@ export class TranscriptRoom {
       speaker: normalizeSpeaker(speaker, this.latestSpeaker ?? viewer),
       after: this.audioSequence,
     });
-    this.audioTurn += 1;
+    this.enforceAudioBudget();
+    this.endTurnOf(normalizeSpeaker(speaker, this.latestSpeaker ?? viewer));
     this.flushToLive();
+  }
+
+  private turnFor(speaker: TranscriptSpeaker): number {
+    const key = speakerKey(speaker);
+    const known = this.speakerTurns.get(key);
+    if (known) return known.turn;
+    this.speakerTurns.set(key, { speaker, turn: 0 });
+    return 0;
+  }
+
+  private endTurnOf(speaker: TranscriptSpeaker): void {
+    this.speakerTurns.set(speakerKey(speaker), { speaker, turn: this.turnFor(speaker) + 1 });
   }
 
   private endRelayTurn(speaker: TranscriptSpeaker, failureMessage: string, reportFailure = true): boolean {
     const session = this.transcriptionSession;
-    const held = this.audio.hasQueued() || this.liveConnection?.replay != null || this.hasOwedReplays();
-    this.audioTurn += 1;
+    const held = this.audio.hasQueued() || this.hasOwedReplays();
+    const known = Array.from(this.speakerTurns.values(), ({ speaker: each }) => each);
+    for (const each of known) this.endTurnOf(each);
     if (!this.liveConnection || !session || held) {
-      if (held) this.audio.queueMarker({ type: "pause", speaker, after: this.audioSequence });
+      if (!held) return true;
+      for (const each of this.lastProvider === "sarvam" ? known : [speaker]) {
+        this.audio.queueMarker({ type: "pause", speaker: each, after: this.audioSequence });
+      }
+      this.enforceAudioBudget();
+      this.flushToLive();
       return true;
     }
     if (session.provider === "openai" && this.hasPendingAudio && this.latestSpeaker) {
@@ -1521,7 +1540,7 @@ export class TranscriptRoom {
       return this.commitTranscriptionBuffer(this.latestSpeaker, "Transcript audio commit failed.", false);
     }
     try {
-      session.clearAudio(marker.type === "pause" ? undefined : marker.speaker);
+      session.clearAudio(marker.type === "pause" && session.provider === "openai" ? undefined : marker.speaker);
     } catch {
       return false;
     }
@@ -1745,10 +1764,6 @@ export class TranscriptRoom {
             const connection = this.connectionFor(epoch);
             if (connection) return this.applyLineFailure(connection, itemId);
           },
-          onWithdrawn: (itemId) => {
-            const connection = this.connectionFor(epoch);
-            if (connection) this.withdrawLine(connection, itemId);
-          },
           onReady: () => {
             if (this.liveConnection?.epoch === epoch) this.flushToLive();
           },
@@ -1778,6 +1793,7 @@ export class TranscriptRoom {
   }
 
   private useLiveConnection(connection: ProviderConnection): void {
+    this.lastProvider = connection.session.provider;
     this.liveConnection = connection;
     this.transcriptionSession = connection.session;
   }
@@ -1800,7 +1816,6 @@ export class TranscriptRoom {
     this.transcriptionSession = null;
     this.transcriptionConnectionOptions = null;
     if (!keepOwed) this.audio.clear();
-    if (live) this.stopReplay(live);
     if (live) this.handOffLiveLines(live, false);
     this.resetTranscriptionAudioState();
     if (!live) return;
@@ -1823,7 +1838,6 @@ export class TranscriptRoom {
     try {
       live.session.finishAudio();
     } catch {}
-    this.stopReplay(live);
     live.role = "draining";
     live.quietAt = live.session.provider === "sarvam" ? this.lastAudioAt + TRANSCRIPTION_PROVIDER_DRAIN_MS : 0;
     live.block = { next: this.sequence, end: this.sequence + TRANSCRIPTION_DRAIN_SEQUENCE_BLOCK };
@@ -2029,6 +2043,9 @@ export class TranscriptRoom {
       if (text && isPlaced(line)) {
         this.ledger.end(line, "final", text);
         changed = this.recordFinalSegment(this.lineSegment(line), text);
+      } else if (line.heard && isPlaced(line) && connection.session.provider === "sarvam") {
+        this.ledger.end(line, "dropped", "");
+        changed = true;
       } else {
         this.forgetLine(connection, line);
         changed = true;
@@ -2068,8 +2085,10 @@ export class TranscriptRoom {
         this.forgetLine(connection, line);
         changed = true;
       } else if (words) {
-        this.ledger.end(line, "final", words);
-        changed = this.recordFinalSegment(this.lineSegment(line), words) || changed;
+        const shown = (connection?.session.provider ?? this.lastProvider) === "sarvam" ? `${words} ${TRANSCRIPTION_GAP_MARKER}` : words;
+        this.ledger.end(line, "final", shown);
+        changed = this.recordFinalSegment(this.lineSegment(line), shown) || changed;
+        gaps += shown === words ? 0 : 1;
       } else if (line.heard) {
         this.ledger.end(line, "gap", TRANSCRIPTION_GAP_MARKER);
         changed = this.recordFinalSegment(this.lineSegment(line), TRANSCRIPTION_GAP_MARKER) || changed;
@@ -2089,14 +2108,6 @@ export class TranscriptRoom {
       );
     }
     return changed;
-  }
-
-  private withdrawLine(connection: ProviderConnection, providerItemId: string): void {
-    const line = this.ledger.get(connection.lineOf(providerItemId) ?? "");
-    if (!line || !isActive(line)) return;
-    this.audio.setOwner(this.audio.ownedBy(line.id), { kind: "unowned" });
-    this.forgetLine(connection, line);
-    this.persistInBackground();
   }
 
   private forgetLine(connection: ProviderConnection | null, line: CaptionLine): void {
@@ -2124,7 +2135,7 @@ export class TranscriptRoom {
     const now = Date.now();
     const live = this.liveConnection;
     let changed = false;
-    let fenced = false;
+    const fenced: string[] = [];
     for (const connection of [live, ...this.providerDrains.values(), null]) {
       const active = this.ledger.active().filter((line) => line.epoch === (connection?.epoch ?? null));
       const owed = active.filter((line) => line.deadlineAt <= now);
@@ -2132,8 +2143,8 @@ export class TranscriptRoom {
       if (connection?.session.provider !== "sarvam") {
         changed = this.endUnfinishedLines(owed, "A provider did not finish in time", connection) || changed;
       } else if (connection === live) {
+        fenced.push(...owed.flatMap((line) => connection.providerIdsOf(line.id)));
         changed = this.endUnfinishedLines(owed, "Sarvam did not answer in time", connection) || changed;
-        fenced = true;
       } else {
         changed = this.endUnfinishedLines(active, "A replaced Sarvam connection did not answer in time", connection) || changed;
         this.closeDrain(connection);
@@ -2145,8 +2156,9 @@ export class TranscriptRoom {
       this.persistInBackground();
       this.scheduleMinutes();
     }
-    if (fenced && live && this.liveConnection === live) {
-      await this.handleTranscriptionFailure("Sarvam answers timed out; reconnecting.", false, true);
+    if (fenced.length > 0 && live && this.liveConnection === live) {
+      for (const providerItemId of fenced) live.session.fence?.(providerItemId);
+      this.flushToLive();
     }
   }
 
@@ -2184,12 +2196,13 @@ export class TranscriptRoom {
     }, delay);
   }
 
-  private handOffLiveLines(live: ProviderConnection, ackTimedOut: boolean, fenced = false): void {
+  private handOffLiveLines(live: ProviderConnection, ackTimedOut: boolean): void {
     const owed = this.ledger.active().filter(({ epoch }) => epoch === live.epoch);
+    const sarvam = live.session.provider === "sarvam";
     const ended = owed.filter(
       (line) =>
         (ackTimedOut && line.state === "pending_ack" && line.replayed) ||
-        (fenced && line.replayedAfterTimeout) ||
+        (sarvam && !line.heard && !line.text.trim()) ||
         !this.audio.owns(line.id),
     );
     if (this.endUnfinishedLines(ended, "A line could not be replayed to a replacement", live)) {
@@ -2199,7 +2212,6 @@ export class TranscriptRoom {
     const waiting: CaptionLine[] = [];
     for (const line of owed) {
       if (ended.includes(line)) continue;
-      if (fenced) line.replayedAfterTimeout = true;
       this.awaitReplacement(line);
       waiting.push(line);
     }
@@ -2230,89 +2242,117 @@ export class TranscriptRoom {
     return runs.filter((run) => runHeard(run) && now - lastHeardSentAt(run) <= UNOWNED_AUDIO_KEPT_MS);
   }
 
-  private replayOwedLines(connection: ProviderConnection): "done" | "busy" | "failed" {
-    if (connection.replay) return "busy";
-    const owed = this.ledger.active().filter(({ state, epoch }) => state === "replaying" && epoch === null);
+  private owedReplays(): CaptionLine[] {
+    return this.ledger.active().filter(({ state, epoch }) => state === "replaying" && epoch === null);
+  }
+
+  private replayOwedLines(connection: ProviderConnection): boolean {
     const sentAt = Date.now();
     try {
-      for (const line of owed) {
+      for (const line of this.owedReplays()) {
         const audio = this.audio.ownedBy(line.id);
         if (audio.length === 0) {
           this.endUnfinishedLines([line], "A waiting line had no audio left to replay", null);
           continue;
         }
-        if (line.speaker && connection.session.ready && !connection.session.ready(line.speaker)) return "busy";
         line.epoch = connection.epoch;
-        if (connection.session.provider === "openai") {
-          const samples = audio.reduce((sum, chunk) => sum + chunk.sampleCount, 0);
-          for (const chunk of audio) {
-            connection.session.appendAudio(chunk.audio);
-            chunk.sentAt = sentAt;
-          }
-          if (samples < MIN_OPENAI_COMMIT_AUDIO_SAMPLES) {
-            connection.session.appendAudio(createSilentPcm16Base64(MIN_OPENAI_COMMIT_AUDIO_SAMPLES - samples));
-          }
-          connection.session.commitAudio();
-          line.state = "pending_ack";
-          line.replayed = true;
-          line.freshText = true;
-          connection.commitQueue.push({ lineId: line.id, committedAt: Date.now() });
-          continue;
-        }
-        connection.replay = { lineId: line.id, timer: null };
+        const samples = audio.reduce((sum, chunk) => sum + chunk.sampleCount, 0);
         for (const chunk of audio) {
-          connection.session.appendAudio(chunk.audio, chunk.speaker, {
-            voice: chunk.voice,
-            turn: chunk.turn,
-            at: sentAt,
-            sequence: chunk.sequence,
-            order: chunk.order,
-            createdAt: chunk.createdAt,
-            lineId: line.id,
-          });
+          connection.session.appendAudio(chunk.audio);
           chunk.sentAt = sentAt;
         }
-        connection.session.clearAudio(line.speaker ?? undefined);
-        return "busy";
+        if (samples < MIN_OPENAI_COMMIT_AUDIO_SAMPLES) {
+          connection.session.appendAudio(createSilentPcm16Base64(MIN_OPENAI_COMMIT_AUDIO_SAMPLES - samples));
+        }
+        connection.session.commitAudio();
+        line.state = "pending_ack";
+        line.replayed = true;
+        line.freshText = true;
+        connection.commitQueue.push({ lineId: line.id, committedAt: Date.now() });
       }
     } catch {
-      return "failed";
+      return false;
     }
-    return "done";
+    return true;
   }
 
-  private lineReleased(lineId: string): void {
-    const live = this.liveConnection;
-    if (live?.replay && this.ledger.get(lineId)?.epoch === live.epoch) this.armReplaySettle(live);
-  }
-
-  private armReplaySettle(connection: ProviderConnection): void {
-    const replay = connection.replay;
-    if (!replay) return;
-    if (replay.timer !== null) clearTimeout(replay.timer);
-    replay.timer = setTimeout(() => {
-      replay.timer = null;
-      if (connection !== this.liveConnection || connection.replay !== replay) return;
-      if (this.ledger.activeUnordered().some(({ epoch }) => epoch === connection.epoch)) return;
-      connection.replay = null;
-      this.flushToLive();
-    }, SARVAM_REPLAY_SETTLE_MS);
-  }
-
-  private stopReplay(connection: ProviderConnection): void {
-    if (connection.replay?.timer) clearTimeout(connection.replay.timer);
-    connection.replay = null;
+  private replayToLane(connection: ProviderConnection, line: CaptionLine, audio: readonly HeldChunk[]): void {
+    const sentAt = Date.now();
+    line.epoch = connection.epoch;
+    for (const chunk of audio) {
+      connection.session.appendAudio(chunk.audio, chunk.speaker, {
+        voice: chunk.voice,
+        turn: chunk.turn,
+        at: sentAt,
+        sequence: chunk.sequence,
+        order: chunk.order,
+        createdAt: chunk.createdAt,
+        lineId: line.id,
+      });
+      chunk.sentAt = sentAt;
+    }
+    connection.session.clearAudio(line.speaker ?? undefined);
   }
 
   private forwardHeldAudio(connection: ProviderConnection): boolean {
+    const forwarded = this.forwardEachSpeaker(connection);
+    this.audio.compact();
+    return forwarded;
+  }
+
+  private forwardEachSpeaker(connection: ProviderConnection): boolean {
     if (this.audioPaused) return true;
-    const replay = this.replayOwedLines(connection);
-    if (replay === "failed") return false;
-    if (replay === "busy") return true;
-    for (const event of this.audio.queuedEvents()) {
+    if (connection.session.provider !== "sarvam") {
+      if (!this.replayOwedLines(connection)) return false;
+      return this.forwardInOrder(this.audio.queuedEvents(), () => true);
+    }
+    type Held =
+      | { arrival: number; speaker: TranscriptSpeaker; line: CaptionLine; audio: HeldChunk[] }
+      | { arrival: number; speaker: TranscriptSpeaker; event: QueuedEvent };
+    const replays: Held[] = this.owedReplays().flatMap((line) => {
+      const audio = this.audio.ownedBy(line.id);
+      if (audio.length === 0) {
+        this.endUnfinishedLines([line], "A waiting line had no audio left to replay", null);
+        return [];
+      }
+      return [{ arrival: audio[0].sequence - 0.75, speaker: audio[0].speaker, line, audio }];
+    });
+    const queued: Held[] = this.audio.queuedEvents().map((event) =>
+      event.type === "chunk"
+        ? { arrival: event.chunk.sequence, speaker: event.chunk.speaker, event }
+        : { arrival: event.after - 0.5, speaker: event.speaker, event },
+    );
+    const waiting = new Set<string>();
+    try {
+      for (const item of [...replays, ...queued].sort((left, right) => left.arrival - right.arrival)) {
+        const key = speakerKey(item.speaker);
+        if (waiting.has(key)) continue;
+        if ("line" in item) {
+          if (connection.session.ready?.(item.speaker) === false) {
+            waiting.add(key);
+            continue;
+          }
+          this.replayToLane(connection, item.line, item.audio);
+          waiting.add(key);
+          continue;
+        }
+        const forwarded = this.forwardInOrder([item.event], () => {
+          waiting.add(key);
+          return true;
+        });
+        if (!forwarded) return false;
+      }
+    } catch {
+      return false;
+    }
+    return true;
+  }
+
+  private forwardInOrder(events: readonly QueuedEvent[], onWait: () => boolean): boolean {
+    for (const event of events) {
       if (event.type === "chunk") {
         const sent = this.sendChunk(event.chunk);
-        if (sent === "wait") return true;
+        if (sent === "wait") return onWait();
         if (sent === "failed") return false;
         continue;
       }
@@ -2323,7 +2363,7 @@ export class TranscriptRoom {
   }
 
   private hasOwedReplays(): boolean {
-    return this.ledger.activeUnordered().some(({ state, epoch }) => state === "replaying" && epoch === null);
+    return this.owedReplays().length > 0;
   }
 
   private flushToLive(): void {
@@ -2331,8 +2371,12 @@ export class TranscriptRoom {
     if (!live || this.audioPaused) return;
     const replays = this.hasOwedReplays();
     if (!replays && !this.audio.hasQueued()) return;
-    if (this.forwardHeldAudio(live)) {
+    const savedUnsent = () => this.audio.queued().filter((chunk) => chunk.savedUnsent).length;
+    const savedBefore = savedUnsent();
+    const forwarded = this.forwardHeldAudio(live);
+    if (forwarded) {
       if (replays) this.settleReplayedLines(live);
+      if (savedUnsent() < savedBefore) this.persistInBackground();
       return;
     }
     void this.handleTranscriptionFailure("Transcript audio stream failed.");
@@ -2344,18 +2388,17 @@ export class TranscriptRoom {
       this.settleReplayedLines(connection);
       return true;
     }
-    this.detachConnection(connection, false, false);
+    this.detachConnection(connection, false);
     return false;
   }
 
-  private detachConnection(connection: ProviderConnection, ackTimedOut: boolean, fenced: boolean): void {
-    this.stopReplay(connection);
+  private detachConnection(connection: ProviderConnection, ackTimedOut: boolean): void {
     if (this.liveConnection === connection) {
       this.liveConnection = null;
       this.transcriptionSession = null;
     }
     this.transcriptionConnectionEpoch += 1;
-    this.handOffLiveLines(connection, ackTimedOut, fenced);
+    this.handOffLiveLines(connection, ackTimedOut);
     connection.commitQueue.length = 0;
     connection.providerToLine.clear();
     try {
@@ -2377,7 +2420,6 @@ export class TranscriptRoom {
   private async handleTranscriptionFailure(
     message: string,
     ackTimedOut = false,
-    fenced = false,
   ): Promise<void> {
     const redactedMessage = redactSensitiveText(message);
     console.warn("[TranscriptWorker] transcription provider failure", {
@@ -2400,7 +2442,7 @@ export class TranscriptRoom {
     }
     if (this.switchingProvider) {
       const failed = this.liveConnection;
-      if (failed) this.detachConnection(failed, ackTimedOut, fenced);
+      if (failed) this.detachConnection(failed, ackTimedOut);
       return;
     }
     if (
@@ -2412,7 +2454,7 @@ export class TranscriptRoom {
     }
 
     const failed = this.liveConnection;
-    if (failed) this.detachConnection(failed, ackTimedOut, fenced);
+    if (failed) this.detachConnection(failed, ackTimedOut);
 
     const generation = this.transcriptionRecoveryGeneration + 1;
     this.transcriptionRecoveryGeneration = generation;
@@ -2467,7 +2509,7 @@ export class TranscriptRoom {
       } catch (error) {
         if (replacement && this.liveConnection === replacement) {
           this.pendingTranscriptionRecoveryFailure = null;
-          this.detachConnection(replacement, false, false);
+          this.detachConnection(replacement, false);
         }
         lastMessage = redactSensitiveText(
           error instanceof Error
@@ -2552,6 +2594,7 @@ export class TranscriptRoom {
 
   private forgetAllLines(): void {
     this.switchingProvider = false;
+    this.speakerTurns.clear();
     this.ledger.clear();
     this.closeTranscriptionProvider(false);
     this.closeDrains();
@@ -2588,6 +2631,7 @@ export class TranscriptRoom {
       ...runsOf(this.audio.queued(), true),
     ].filter(runHeard);
     for (const run of unsent) {
+      for (const chunk of run.chunks) chunk.savedUnsent = true;
       const [first] = run.chunks;
       const itemId = `unsent-${speakerKey(run.speaker)}-${first.order}`;
       owed.set(itemId, {

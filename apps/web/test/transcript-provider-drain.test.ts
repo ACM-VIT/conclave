@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  SARVAM_WINDOW_SETTLE_MS,
   TRANSCRIPTION_LINE_DEADLINE_MS,
   TRANSCRIPTION_GAP_MARKER,
 } from "../transcript-worker/src/constants";
@@ -43,7 +44,7 @@ describe("switching the caption language keeps speech the old provider already h
     expect(before.closed).toBe(false);
     expect(before.sentTypes().at(-1)).toBe("flush");
     before.emit({ type: "data", data: { transcript: "Friday at noon", request_id: "utterance" } });
-    await settle();
+    await vi.advanceTimersByTimeAsync(SARVAM_WINDOW_SETTLE_MS);
 
     expect(savedTexts()).toEqual(["Friday at noon"]);
     expect(before.closed).toBe(false);
@@ -134,7 +135,7 @@ describe("switching the caption language keeps speech the old provider already h
 });
 
 describe("drain cases reproduced across review rounds", () => {
-  it("Sarvam: keeps the old socket open for a second buffered utterance after the first final", async () => {
+  it("Sarvam: keeps the old socket open for a second answer to the flushed turn, and joins it to that turn's line", async () => {
     vi.useFakeTimers();
     const { sockets, start, switchTo, speak, savedTexts } = await fixture(SARVAM);
     await start("hi");
@@ -147,10 +148,10 @@ describe("drain cases reproduced across review rounds", () => {
     expect(before.closed).toBe(false);
     await vi.advanceTimersByTimeAsync(1_000);
     before.emit(sarvamFinal("second", "Second utterance."));
-    await settle();
+    await vi.advanceTimersByTimeAsync(SARVAM_WINDOW_SETTLE_MS);
 
-    expect(savedTexts()).toEqual(["First utterance.", "Second utterance."]);
-    await vi.advanceTimersByTimeAsync(9_100);
+    expect(savedTexts()).toEqual(["First utterance. Second utterance."]);
+    await vi.advanceTimersByTimeAsync(9_100 - SARVAM_WINDOW_SETTLE_MS);
     expect(before.closed).toBe(true);
   });
 
@@ -356,7 +357,7 @@ describe("drain cases reproduced across review rounds", () => {
     expect(sockets.every(({ closed }) => closed)).toBe(true);
   });
 
-  it("Sarvam: keeps a tail when the turn before it finalized just before the switch", async () => {
+  it("Sarvam: keeps a tail answered after the switch on the line of the turn it belongs to", async () => {
     vi.useFakeTimers();
     const { sockets, start, switchTo, speak, savedTexts } = await fixture(SARVAM);
     await start("hi");
@@ -369,9 +370,9 @@ describe("drain cases reproduced across review rounds", () => {
     await switchTo("ta");
     expect(before.closed).toBe(false);
     before.emit(sarvamFinal("turn2", "Turn two."));
-    await settle();
+    await vi.advanceTimersByTimeAsync(SARVAM_WINDOW_SETTLE_MS);
 
-    expect(savedTexts()).toEqual(["Turn one.", "Turn two."]);
+    expect(savedTexts()).toEqual(["Turn one. Turn two."]);
   });
 
   it("Sarvam: ends three drains with unanswered flushes at their deadlines", async () => {
@@ -429,10 +430,10 @@ describe("Sarvam drains until 10 s after its last audio", () => {
       await vi.advanceTimersByTimeAsync(gapSeconds * 1_000);
       expect(before.closed).toBe(false);
       before.emit(sarvamFinal("second", "Second utterance."));
-      await settle();
+      await vi.advanceTimersByTimeAsync(SARVAM_WINDOW_SETTLE_MS);
 
-      expect(savedTexts()).toEqual(["First utterance.", "Second utterance."]);
-      await vi.advanceTimersByTimeAsync(spokeAt + 10_100 - Date.now());
+      expect(savedTexts()).toEqual(["First utterance. Second utterance."]);
+      await vi.advanceTimersByTimeAsync(Math.max(0, spokeAt + 10_100 - Date.now()));
       expect(before.closed).toBe(true);
     },
   );
@@ -795,8 +796,10 @@ describe("one place per line, fixed at commit", () => {
       }
       await settle();
     }
+    await vi.advanceTimersByTimeAsync(10_000);
 
-    expect(savedTexts()).toEqual([...oldIds, ...newIds].map((id) => `${id}.`));
+    const said = (ids: string[]) => ids.map((id) => `${id}.`).join(" ");
+    expect(savedTexts()).toEqual([said(oldIds), ...(newIds.length > 0 ? [said(newIds)] : [])]);
   });
 });
 

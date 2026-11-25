@@ -15,6 +15,7 @@ export type HeldChunk = {
   readonly turn: number;
   sentAt: number | null;
   owner: AudioOwner;
+  savedUnsent: boolean;
 };
 
 export type QueuedMarker = { type: "commit" | "clear" | "pause"; speaker: TranscriptSpeaker; after: number };
@@ -22,6 +23,10 @@ export type QueuedMarker = { type: "commit" | "clear" | "pause"; speaker: Transc
 export type QueuedEvent = { type: "chunk"; chunk: HeldChunk } | QueuedMarker;
 
 export type AudioRun = { speaker: TranscriptSpeaker; turn: number; chunks: HeldChunk[] };
+
+export const QUEUED_MARKER_BYTES = 64;
+
+const MARKER_RANK: Record<QueuedMarker["type"], number> = { commit: 0, clear: 1, pause: 2 };
 
 const isVoiced = (chunk: HeldChunk): boolean => chunk.voice !== "quiet";
 
@@ -96,6 +101,27 @@ export class AudioStore {
 
   queueMarker(marker: QueuedMarker): void {
     this.markers.push(marker);
+    this.total += QUEUED_MARKER_BYTES;
+    this.compact();
+  }
+
+  compact(): void {
+    const queued = this.queued().map(({ sequence }) => sequence);
+    const kept: QueuedMarker[] = [];
+    const lastKept = new Map<string, QueuedMarker>();
+    for (const marker of [...this.markers].sort((left, right) => left.after - right.after)) {
+      const key = speakerKey(marker.speaker);
+      const before = lastKept.get(key);
+      if (before && !queued.some((sequence) => sequence >= before.after && sequence < marker.after)) {
+        if (MARKER_RANK[marker.type] > MARKER_RANK[before.type]) before.type = marker.type;
+        continue;
+      }
+      kept.push(marker);
+      lastKept.set(key, marker);
+    }
+    if (kept.length === this.markers.length) return;
+    this.markers = kept;
+    this.recount(this.chunks);
   }
 
   queuedEvents(): QueuedEvent[] {
@@ -107,11 +133,15 @@ export class AudioStore {
   }
 
   consumeMarker(marker: QueuedMarker): void {
-    this.markers = this.markers.filter((queued) => queued !== marker);
+    const kept = this.markers.filter((queued) => queued !== marker);
+    this.total -= (this.markers.length - kept.length) * QUEUED_MARKER_BYTES;
+    this.markers = kept;
   }
 
   setOwner(chunks: readonly HeldChunk[], owner: AudioOwner): void {
+    const wasQueued = chunks.some((chunk) => chunk.owner.kind === "queued");
     for (const chunk of chunks) chunk.owner = owner;
+    if (wasQueued && owner.kind !== "queued") this.compact();
   }
 
   releaseOwner(lineId: string): void {
@@ -130,13 +160,22 @@ export class AudioStore {
   enforceBudget(limit: number): HeldChunk[] {
     let excess = this.total - limit;
     if (excess <= 0) return [];
+    const oldestFirst = [
+      ...this.chunks.map((chunk) => ({ arrival: chunk.sequence, chunk, marker: null })),
+      ...this.markers.map((marker) => ({ arrival: marker.after - 0.5, chunk: null, marker })),
+    ].sort((left, right) => left.arrival - right.arrival);
     const evicted: HeldChunk[] = [];
-    for (const chunk of this.chunks) {
+    const dropped = new Set<QueuedMarker>();
+    for (const { chunk, marker } of oldestFirst) {
       if (excess <= 0) break;
-      evicted.push(chunk);
-      excess -= chunk.audio.length;
+      if (chunk) evicted.push(chunk);
+      if (marker) dropped.add(marker);
+      excess -= chunk ? chunk.audio.length : QUEUED_MARKER_BYTES;
     }
-    this.remove(evicted);
+    const gone = new Set(evicted);
+    this.markers = this.markers.filter((marker) => !dropped.has(marker));
+    this.recount(this.chunks.filter((chunk) => !gone.has(chunk)));
+    this.compact();
     return evicted;
   }
 
@@ -149,7 +188,13 @@ export class AudioStore {
   private keep(kept: (chunk: HeldChunk) => boolean): void {
     const next = this.chunks.filter(kept);
     if (next.length === this.chunks.length) return;
-    this.chunks = next;
-    this.total = next.reduce((sum, { audio }) => sum + audio.length, 0);
+    this.recount(next);
+    this.compact();
+  }
+
+  private recount(chunks: HeldChunk[]): void {
+    this.chunks = chunks;
+    this.total =
+      chunks.reduce((sum, { audio }) => sum + audio.length, 0) + this.markers.length * QUEUED_MARKER_BYTES;
   }
 }

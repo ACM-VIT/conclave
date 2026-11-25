@@ -192,7 +192,7 @@ describe("one row per violation in the caption ownership design read", () => {
     first.emit(sarvamSpeechStart());
     await rig.endTurn(ada);
     first.emit(sarvamFinal("setup", "Setup."));
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(3_000);
 
     await rig.speak(ada);
     await rig.speak(grace);
@@ -317,9 +317,9 @@ describe("each Sarvam lane owns its own turns and answers", () => {
     first.emit(sarvamSpeechStart());
     first.emit(sarvamFinal("w1", "Whispered first."));
     await rig.clear(ada);
-    await vi.advanceTimersByTimeAsync(3_000);
+    await vi.advanceTimersByTimeAsync(DEADLINE + 1_000);
 
-    expect(shown(rig)).toEqual([["Whispered first.", "ada"]]);
+    expect(shown(rig)).toEqual([[`Whispered first. ${GAP}`, "ada"]]);
   });
 
   it("with one saved segment, quiet utterances keep their speaking order (Greptile r4688831713)", async () => {
