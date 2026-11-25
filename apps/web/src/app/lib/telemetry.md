@@ -117,11 +117,18 @@ one owner at a time:
   time (`notBefore`) and the events it names as refused are dropped, while
   the stored copy is still that beacon's; if storage refuses that write, the
   tab takes the batch back into memory with the new due time and removes the
-  stale stored copy.
+  stale stored copy. When the page reads a final answer (delivered, or refused
+  for good), the batch is settled at once instead of confirmed 30 s later.
+  Either answer applies only while the batch still carries the attempt id the
+  beacon went out with; once it has been sent again, only a `Retry-After` is
+  carried over, as for any late answer.
 - **Replayed.** A saved batch is sent only by a replay pass, which runs under
   a Web Locks lock (`conclave:telemetry:replay`) at its due time, when a tab
   loads or comes back into view, and when another tab changes a saved batch
-  (the `storage` event). The pass claims a due batch by writing a new attempt
+  (the `storage` event). A lock request the browser rejects before running
+  it leaves nothing waiting on it: the next trigger asks again, and an answer
+  that could not get the lock lets the batch go to whichever tab replays it
+  after its lease. The pass claims a due batch by writing a new attempt
   id and a lease until 16 s after the send, so another tab leaves it alone
   until the request has settled. An answer from an earlier attempt, one
   that arrives after another tab took the batch over, changes nothing but

@@ -88,7 +88,7 @@ const harness = ({
   clock = { now: at },
   ignoreAbort = false,
   shape = undefined as ((event: OutboxEvent) => OutboxEvent | null) | undefined,
-  beaconReplies = [] as Reply[],
+  beaconReplies = [] as Array<Reply | Promise<Reply | null>>,
 } = {}) => {
   const timers: Array<{ at: number; fn: () => void; id: number }> = [];
   let ids = 0;
@@ -1230,6 +1230,86 @@ describe("an answer to the send as the page goes away", () => {
     await settle();
 
     expect(store.list().map((batch) => batch.events.map((item) => item.uuid))).toEqual([[kept.uuid]]);
+  });
+
+  it.each([
+    ["delivered", { status: 200, retryAfter: null }],
+    ["refused for good", { status: 400, retryAfter: null }],
+  ])("settles the saved batch when the page reads that its send was %s, and sends it no more", async (_case, reply) => {
+    const store = memoryStore();
+    const h = harness({ store, beaconReplies: [reply] });
+    h.outbox.add(event());
+    h.outbox.flushForUnload();
+    await settle();
+
+    expect(store.list()).toEqual([]);
+    h.outbox.replaySaved();
+    await h.advance(5 * MINUTE);
+    expect(h.posts).toEqual([]);
+  });
+
+  it("settles a batch held in memory the same way when storage refused it", async () => {
+    const h = harness({ store: createBatchStore(fullStorage), beaconReplies: [{ status: 200, retryAfter: null }] });
+    h.outbox.add(event());
+    h.outbox.flushForUnload();
+    await settle();
+
+    await h.advance(5 * MINUTE);
+    expect(h.posts).toEqual([]);
+  });
+
+  it("applies an answer only to the send it answered, after the batch was sent again under a new claim", async () => {
+    const store = memoryStore();
+    let saves = 0;
+    const refusedSaves = new Set([0, 2]);
+    const flaky = { ...store, save: (batch: StoredBatch) => (refusedSaves.has(saves++) ? false : store.save(batch)) };
+    const beaconAnswer = answerLater();
+    const resend = answerLater();
+    const h = harness({ store: flaky, beaconReplies: [beaconAnswer.promise.then((value) => value as Reply)], answers: [resend.promise] });
+    const report = event();
+    h.outbox.add(report);
+    h.outbox.flushForUnload();
+    await h.advance(30_000);
+    expect(h.posted()).toEqual([report.uuid]);
+    h.outbox.flushForUnload();
+    expect(storedUuids(store)).toEqual([report.uuid]);
+
+    beaconAnswer.answer({ status: 503, retryAfter: "1" });
+    await settle();
+    resend.answer(200);
+    await settle();
+    h.outbox.replaySaved();
+    await h.advance(5 * MINUTE);
+
+    expect(h.posted()).toEqual([report.uuid]);
+    expect(store.list()).toEqual([]);
+  });
+});
+
+describe("the replay lock", () => {
+  it("runs a replay again after a lock request that failed without running it", async () => {
+    const store = memoryStore();
+    store.save({
+      id: "saved-before",
+      events: [event()],
+      oldestAt: START,
+      sent: false,
+      notBefore: 0,
+      nextTry: 0,
+      attempt: 0,
+      sendId: "",
+      leaseUntil: 0,
+    });
+    let failures = 1;
+    const flakyLock = (run: () => Promise<void>) => (failures-- > 0 ? Promise.reject(new DOMException("The lock request was aborted.", "AbortError")) : run());
+    const h = harness({ store, lock: flakyLock });
+    h.outbox.replaySaved();
+    await settle();
+    expect(h.posts).toEqual([]);
+
+    h.outbox.replaySaved();
+    await settle();
+    expect(h.posts).toHaveLength(1);
   });
 });
 

@@ -78,7 +78,7 @@ export type OutboxDeps = {
   beacon: (body: string) => Promise<Reply | null> | null;
   newId: () => string;
   store: BatchStore;
-  lock: (replay: () => Promise<void>) => void;
+  lock: (replay: () => Promise<void>) => Promise<void> | void;
   onStale: (dropped: readonly StoredBatch[]) => void;
   shape?: (event: OutboxEvent) => OutboxEvent | null;
 };
@@ -264,8 +264,10 @@ export function createOutbox(deps: OutboxDeps) {
     return deps.store.save(next) ? "written" : "refused";
   };
 
-  const locked = (run: (store: LockedStore) => void): void => {
-    deps.lock(async () => {
+  const locked = (run: (store: LockedStore) => void, refused: () => void = () => {}): void => {
+    let ran = false;
+    const requested = deps.lock(async () => {
+      ran = true;
       let open = true;
       const owns = (id: string, owned: string): boolean => open && deps.store.get(id)?.sendId === owned;
       try {
@@ -286,9 +288,14 @@ export function createOutbox(deps: OutboxDeps) {
         open = false;
       }
     });
+    Promise.resolve(requested).catch(() => {
+      if (!ran) refused();
+    });
   };
 
   const finish = (batch: Batch, store: LockedStore | null): void => {
+    if (batch.timer !== null) deps.clearTimer(batch.timer);
+    batch.timer = null;
     live.delete(batch.id);
     if (batch.saved) store?.remove(batch.id, batch.sendId);
   };
@@ -422,7 +429,8 @@ export function createOutbox(deps: OutboxDeps) {
         applyAnswer(batch, events, reply, null);
         return;
       }
-      locked((held) => {
+      locked(
+        (held) => {
         batch.inFlight = null;
         batch.leaseUntil = 0;
         const current = deps.store.get(batch.id);
@@ -433,7 +441,12 @@ export function createOutbox(deps: OutboxDeps) {
         }
         batch.notBefore = Math.max(batch.notBefore, current.notBefore);
         applyAnswer(batch, events, reply, held);
-      });
+        },
+        () => {
+          batch.inFlight = null;
+          live.delete(batch.id);
+        },
+      );
     };
     deadline = deps.setTimer(() => {
       cancel.abort();
@@ -442,30 +455,35 @@ export function createOutbox(deps: OutboxDeps) {
     deps.post(body, keepalive, cancel.signal).then(settle, () => settle(null));
   };
 
-  const beaconAnswered = (batch: Batch, events: OutboxEvent[], reply: Reply | null): void => {
-    if (!reply || answerOf(reply.status, reply.retryAfter, deps.now()).outcome !== "retry") return;
-    const until = waitAsked(reply);
+  const beaconAnswered = (batch: Batch, events: OutboxEvent[], reply: Reply | null, sentWith: string): void => {
+    if (!reply) return;
+    const final = answerOf(reply.status, reply.retryAfter, deps.now()).outcome !== "retry";
+    const settleAnswered = (answered: Batch, store: LockedStore | null): void => {
+      if (final) {
+        finish(answered, store);
+        return;
+      }
+      answered.notBefore = Math.max(answered.notBefore, waitAsked(reply));
+      answered.events = withoutRefused(answered.events, events, reply);
+      if (answered.events.length === 0) finish(answered, store);
+      else if (store) keepSaved(answered, store);
+      else holdInMemory(answered);
+    };
     if (batch.saved) {
       locked((store) => {
         const current = deps.store.get(batch.id);
-        if (!current || current.sendId !== batch.sendId) {
-          carryWait(batch.id, reply, store);
+        if (!current || current.sendId !== sentWith) {
+          if (!final) carryWait(batch.id, reply, store);
           return;
         }
-        const answered = fromStorage(current);
-        answered.notBefore = Math.max(answered.notBefore, until);
-        answered.events = withoutRefused(answered.events, events, reply);
-        if (answered.events.length === 0) finish(answered, store);
-        else keepSaved(answered, store);
+        settleAnswered(fromStorage(current), store);
       });
       return;
     }
     if (live.get(batch.id) !== batch) return;
-    batch.notBefore = Math.max(batch.notBefore, until);
-    batch.events = withoutRefused(batch.events, events, reply);
-    if (batch.inFlight !== null) return;
-    if (batch.events.length === 0) finish(batch, null);
-    else holdInMemory(batch);
+    if (!final) batch.notBefore = Math.max(batch.notBefore, waitAsked(reply));
+    if (batch.sendId !== sentWith || batch.inFlight !== null) return;
+    settleAnswered(batch, null);
   };
 
   const replayPass = (store: LockedStore): void => {
@@ -496,17 +514,22 @@ export function createOutbox(deps: OutboxDeps) {
       return;
     }
     replay = "waiting";
-    locked((store) => {
-      replay = "running";
-      try {
-        do {
-          replayAgain = false;
-          replayPass(store);
-        } while (replayAgain);
-      } finally {
+    locked(
+      (store) => {
+        replay = "running";
+        try {
+          do {
+            replayAgain = false;
+            replayPass(store);
+          } while (replayAgain);
+        } finally {
+          replay = "idle";
+        }
+      },
+      () => {
         replay = "idle";
-      }
-    });
+      },
+    );
   }
 
   function flush(): void {
@@ -565,7 +588,8 @@ export function createOutbox(deps: OutboxDeps) {
           beacons.push({ bytes, at: deps.now() });
           batch.sent = true;
           batch.nextTry = Math.max(batch.nextTry, deps.now() + BEACON_CONFIRM_MS);
-          answer.then((reply) => beaconAnswered(batch, events, reply), () => {});
+          const sentWith = batch.sendId;
+          answer.then((reply) => beaconAnswered(batch, events, reply, sentWith), () => {});
         }
         if (!saveOwn(batch)) holdInMemory(batch);
       }

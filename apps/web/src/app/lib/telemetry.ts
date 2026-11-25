@@ -112,7 +112,7 @@ const outboxStorage = (): Pick<OutboxDeps, "store" | "lock"> => {
   if (!locks) return { store: MEMORY_ONLY_STORE, lock: (run) => void run() };
   return {
     store: createBatchStore(() => localStorage),
-    lock: (run) => void locks.request(REPLAY_LOCK, run).catch(() => {}),
+    lock: (run) => locks.request(REPLAY_LOCK, run),
   };
 };
 
