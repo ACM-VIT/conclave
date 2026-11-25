@@ -110,7 +110,7 @@ export type ScriptedReply = { latency: number; status: number | null; retryAfter
 
 export type ScriptedAction = {
   at: number;
-  act: "open" | "emit" | "hide" | "show" | "close";
+  act: "open" | "emit" | "hide" | "show" | "close" | "refuseNext";
   tab: number;
   count?: number;
   throttled?: boolean;
@@ -174,8 +174,10 @@ export async function simulate(
   let exactCounts = true;
   const lostAtClose = new Set<string>();
   const waitUntil = new Map<string, number>();
-  const lateWaits: Array<{ key: string; until: number; at: number }> = [];
-  const refusedAt: number[] = [];
+  type LateWait = { key: string; until: number; at: number; tab: Tab; state: "pending" | "bound" | "running" | "carried" | "lost" };
+  const lateWaits: LateWait[] = [];
+  let writingFor: LateWait | null = null;
+  let refuseNext = 0;
   const beaconedAt = new Map<string, number>();
   let refusingUntil = 0;
   const failures = new Map<string, { count: number; at: number }>();
@@ -227,9 +229,11 @@ export async function simulate(
       return value;
     },
     setItem: (key: string, value: string) => {
-      if (profile.noLocks || clock < refusingUntil || rng() < profile.refuseRate) {
+      const mine = writingFor?.tab === tab && writingFor.key === keyOfStored(value) ? writingFor : null;
+      if (refuseNext > 0 || profile.noLocks || clock < refusingUntil || rng() < profile.refuseRate) {
+        if (refuseNext > 0) refuseNext -= 1;
         refusedWrites += 1;
-        refusedAt.push(clock);
+        if (mine) mine.state = "lost";
         if (closingTab === tab) {
           try {
             for (const event of (JSON.parse(value) as { events: Array<{ uuid: string }> }).events) lostAtClose.add(event.uuid);
@@ -237,6 +241,7 @@ export async function simulate(
         }
         throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
       }
+      if (mine) mine.state = "carried";
       items.set(key, value);
       writtenAt.set(key, clock);
       if (trace) note(`tab${tab.id} saved ${key.slice(-12)} ${value.replace(/"events":\[.*?\],/, "")}`);
@@ -251,6 +256,25 @@ export async function simulate(
     clear: () => items.clear(),
   });
 
+  const lateWaitRun = (tab: Tab, run: () => Promise<void>): (() => Promise<void>) => {
+    const late = lateWaits.find((wait) => wait.tab === tab && wait.state === "pending" && wait.at === clock);
+    if (!late) return run;
+    late.state = "bound";
+    return () => {
+      if (![...items.values()].some((value) => keyOfStored(value) === late.key)) {
+        late.state = "lost";
+        return run();
+      }
+      late.state = "running";
+      writingFor = late;
+      try {
+        return run();
+      } finally {
+        writingFor = null;
+        if (late.state === "running") late.state = "carried";
+      }
+    };
+  };
   const waiting: Array<{ tab: Tab; run: () => Promise<void> }> = [];
   let held = false;
   let grantAtOnce = false;
@@ -269,21 +293,17 @@ export async function simulate(
   };
 
   const keyOf = (uuids: string[]) => [...uuids].sort().join(",");
-  const storedKeys = () =>
-    new Set(
-      [...items.values()].flatMap((value) => {
-        try {
-          return [keyOf((JSON.parse(value) as { events: Array<{ uuid: string }> }).events.map((event) => event.uuid))];
-        } catch {
-          return [];
-        }
-      }),
-    );
-  const carried = (wait: { at: number }) => !refusedAt.some((at) => at >= wait.at && at <= wait.at + 1000);
+  function keyOfStored(value: string): string | null {
+    try {
+      return keyOf((JSON.parse(value) as { events: Array<{ uuid: string }> }).events.map((event) => event.uuid));
+    } catch {
+      return null;
+    }
+  }
   const checkSend = (key: string, how: "post" | "beacon") => {
     const until = Math.max(
       waitUntil.get(key) ?? 0,
-      ...lateWaits.filter((wait) => wait.key === key && carried(wait)).map((wait) => wait.until),
+      ...lateWaits.filter((wait) => wait.key === key && wait.state !== "lost").map((wait) => wait.until),
     );
     if (clock < until) violate("sent before its Retry-After", `${how} of ${key} ${until - clock} ms early`);
     const beaconed = beaconedAt.get(key);
@@ -396,7 +416,7 @@ export async function simulate(
           if (outcome.retryAfter !== null) {
             const until = clock + Math.min(Number(outcome.retryAfter) * 1000, MAX_WAIT_MS);
             if (request.latest) waitUntil.set(key, Math.max(waitUntil.get(key) ?? 0, until));
-            else if (storedKeys().has(key)) lateWaits.push({ key, until, at: clock });
+            else lateWaits.push({ key, until, at: clock, tab, state: "pending" });
           }
           failed(request);
         }
@@ -458,7 +478,8 @@ export async function simulate(
       beacon: beaconFor(tab),
       newId: () => `sim-${seed}-${++ids}`,
       store: outboxModule.createBatchStore(() => storageFor(tab)),
-      lock: (run: () => Promise<void>) => {
+      lock: (granted: () => Promise<void>) => {
+        const run = lateWaitRun(tab, granted);
         if (profile.noLocks) {
           void run();
           return;
@@ -642,6 +663,7 @@ export async function simulate(
           }
           racePlanned = null;
         } else if (action.act === "show") showTab(tab);
+        else if (action.act === "refuseNext") refuseNext += action.count ?? 1;
         else closeTab(tab);
       });
     }

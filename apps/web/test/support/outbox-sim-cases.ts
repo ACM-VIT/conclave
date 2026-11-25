@@ -15,6 +15,36 @@ const quiet = {
 
 export const THREAD_CASES: ThreadCase[] = [
   {
+    name: "a late Retry-After still holds the new owner when storage refuses another batch's write right after it",
+    thread: "https://github.com/ACM-VIT/conclave/pull/265#discussion_r4688169874",
+    head: "57a8f5b0",
+    seed: 2026112504,
+    scenario: {
+      profile: quiet,
+      actions: [
+        { at: 0, act: "open", tab: 1 },
+        { at: 1000, act: "emit", tab: 1, count: 2 },
+        { at: 6500, act: "hide", tab: 1 },
+        { at: 7000, act: "show", tab: 1 },
+        { at: 9000, act: "open", tab: 2 },
+        { at: 10_000, act: "hide", tab: 1, throttled: true },
+        { at: 33_300, act: "refuseNext", tab: 2 },
+        { at: 33_300, act: "emit", tab: 2, count: 1 },
+        { at: 33_350, act: "hide", tab: 2 },
+        { at: 33_500, act: "show", tab: 2 },
+      ],
+      replies: [
+        { latency: 100, status: 503 },
+        { latency: 30_000, status: 429, retryAfter: "60" },
+        { latency: 100, status: 200 },
+        { latency: 20_000, status: 503 },
+        { latency: 100, status: 200 },
+        { latency: 100, status: 200 },
+        { latency: 100, status: 200 },
+      ],
+    },
+  },
+  {
     name: "a Retry-After that answers a send after another tab took over the batch still holds that tab's resend",
     thread: "Sol fourth final review of #265 at 57a8f5b0, finding 2",
     head: "57a8f5b0",
