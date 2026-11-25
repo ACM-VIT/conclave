@@ -18,7 +18,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useEffectEvent, useId, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useId, useRef, useState } from "react";
 import { prefetchConclaveAnimation } from "../lib/conclaveAnimation";
 import { prefetchConclaveLock } from "../lib/conclaveSound";
 import type { Dispatch, SetStateAction } from "react";
@@ -54,7 +54,8 @@ import RoomPresenceBadge from "./RoomPresenceBadge";
 import { useCameraPermissionState } from "../hooks/useCameraPermissionState";
 import { useClipboardCopy } from "../hooks/useClipboardCopy";
 import { useCodeField } from "../hooks/useCodeField";
-import { savePrejoinHandoff, takePrejoinHandoff, type PrejoinMedia } from "../lib/prejoin-handoff";
+import { applyRejoinMedia, saveRejoinIntent, type RejoinMedia } from "../lib/rejoin-intent";
+import { useRejoinMediaRestore } from "../hooks/useRejoinMediaRestore";
 import {
   useBandwidthHeavyPreloadDeferred,
 } from "../hooks/useBandwidthHeavyPreloadDeferred";
@@ -175,6 +176,7 @@ interface JoinScreenProps {
   mediaError?: MeetError | null;
   setupNotice?: SetupNotice | null;
   onDismissSetupNotice?: () => void;
+  initialMedia?: RejoinMedia | null;
   videoEffects: VideoEffectsState;
   onVideoEffectsChange: Dispatch<SetStateAction<VideoEffectsState>>;
   onPrejoinMediaCommit?: (handoff: PrejoinMediaHandoff) => void;
@@ -330,6 +332,7 @@ function JoinScreen({
   mediaError,
   setupNotice,
   onDismissSetupNotice,
+  initialMedia,
   videoEffects,
   onVideoEffectsChange,
   onPrejoinMediaCommit,
@@ -362,6 +365,7 @@ function JoinScreen({
   // Join without sending or receiving video (for slow connections). Carried
   // into the meeting through the prejoin media handoff.
   const [isAudioOnly, setIsAudioOnly] = useState(false);
+  const userMediaChoicesRef = useRef(0);
   // Read by async camera paths, which must not start video once audio-only
   // mode is on even if they began before it was turned on.
   const audioOnlyRef = useRef(false);
@@ -1104,7 +1108,25 @@ function JoinScreen({
     return true;
   };
 
+  const restoringMedia = useRejoinMediaRestore(initialMedia, (media) =>
+    applyRejoinMedia(media, {
+      userChoices: () => userMediaChoicesRef.current,
+      isAudioOnly: () => audioOnlyRef.current,
+      isMicOn: () => micIntentRef.current,
+      isCameraOn: () => cameraIntentRef.current,
+      turnOnAudioOnly: toggleAudioOnly,
+      turnOnMic: toggleMic,
+      turnOnCamera: toggleCamera,
+    }),
+  );
+  const userMediaChoice =
+    <Args extends unknown[]>(run: (...args: Args) => unknown) =>
+    (...args: Args) => {
+      userMediaChoicesRef.current += 1;
+      void run(...args);
+    };
   const startMeeting = () => {
+    if (restoringMedia) return;
     if (!ensureGuest()) return;
     onEnterStart?.("new");
     commitPrejoinMedia();
@@ -1113,15 +1135,18 @@ function JoinScreen({
   };
   const joinMeeting = () => {
     const candidate = codeField.resolution.code;
-    if (!candidate) return;
+    if (!candidate || restoringMedia) return;
     if (!ensureGuest()) return;
     if (!codeField.tenant.onThisPage) {
       const target = { roomCode: candidate, clientId: codeField.tenant.clientId };
-      savePrejoinHandoff(target, {
-        isMicOn: micIntentRef.current,
-        isCameraOn: cameraIntentRef.current && !isAudioOnly,
-        isAudioOnly,
-      });
+      saveRejoinIntent(
+        { roomId: target.roomCode, clientId: target.clientId },
+        {
+          isMicOn: micIntentRef.current,
+          isCameraOn: cameraIntentRef.current && !isAudioOnly,
+          isAudioOnly,
+        },
+      );
       window.location.assign(buildMeetingPath(target));
       return;
     }
@@ -1130,18 +1155,6 @@ function JoinScreen({
     onIsAdminChange(false);
     setPending({ mode: "join", roomId: candidate });
   };
-
-  const restorePrejoinMedia = useEffectEvent(async (media: PrejoinMedia) => {
-    if (media.isAudioOnly && !audioOnlyRef.current) toggleAudioOnly();
-    if (media.isMicOn && !micIntentRef.current) await toggleMic();
-    if (media.isCameraOn && !cameraIntentRef.current) await toggleCamera();
-  });
-  const handoffRoomCode = isRoutedRoom ? codeField.resolution.code : "";
-  useEffect(() => {
-    if (!handoffRoomCode) return;
-    const media = takePrejoinHandoff({ roomCode: handoffRoomCode, clientId: pageClientId });
-    if (media) void restorePrejoinMedia(media);
-  }, [handoffRoomCode, pageClientId]);
 
   const handleSignOut = async () => {
     if (isSigningOut) return;
@@ -1245,7 +1258,7 @@ function JoinScreen({
   const joinCode = codeResolution.code;
   const canJoin = joinCode.length > 0;
   const nameReady = hasIdentity || liveDisplayName.length > 0;
-  const canSubmit = canJoin && nameReady && !isLoading;
+  const canSubmit = canJoin && nameReady && !isLoading && !restoringMedia;
 
   const presenceTarget = codeField.tenant.onThisPage ? joinCode : "";
   useEffect(() => {
@@ -1421,7 +1434,7 @@ function JoinScreen({
                     {shouldShowPermissionCta ? (
                       <button
                         type="button"
-                        onClick={requestMicrophoneAndCamera}
+                        onClick={userMediaChoice(requestMicrophoneAndCamera)}
                         disabled={isRequestingPermissions}
                         className="pointer-events-auto inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-[#F95F4A] px-3 text-[12.5px] font-medium text-white transition-[background-color,opacity] duration-150 hover:bg-[#e8553f] disabled:cursor-wait disabled:opacity-75"
                       >
@@ -1493,7 +1506,7 @@ function JoinScreen({
                   </div>
                   <div className="pointer-events-auto flex shrink-0 items-center justify-center gap-2.5">
                     <button
-                      onClick={toggleMic}
+                      onClick={userMediaChoice(toggleMic)}
                       aria-label={isMicOn ? "Turn off microphone" : "Turn on microphone"}
                       className={`inline-flex h-11 w-11 items-center justify-center rounded-full text-white transition-colors duration-150 ${
                         isMicOn ? "bg-[#232327] hover:bg-[#2e2e33]" : "bg-[#ea4335] hover:brightness-105"
@@ -1502,7 +1515,7 @@ function JoinScreen({
                       {isMicOn ? <Mic size={18} /> : <MicOff size={18} />}
                     </button>
                     <button
-                      onClick={toggleCamera}
+                      onClick={userMediaChoice(toggleCamera)}
                       disabled={isAudioOnly}
                       aria-label={
                         isAudioOnly
@@ -1551,7 +1564,7 @@ function JoinScreen({
                     <button
                       type="button"
                       data-testid="prejoin-audio-only"
-                      onClick={toggleAudioOnly}
+                      onClick={userMediaChoice(toggleAudioOnly)}
                       aria-pressed={isAudioOnly}
                       aria-label="Audio only: join without video"
                       title="Audio only: join without video"
@@ -1627,7 +1640,7 @@ function JoinScreen({
                       ? "Camera"
                       : deviceLabel(videoInputs, selectedVideoId) ?? "Camera off"
                   }
-                  onChange={handleSelectVideoDevice}
+                  onChange={userMediaChoice(handleSelectVideoDevice)}
                 />
                 <DeviceSelect
                   icon={isMicOn ? Mic : MicOff}
@@ -1639,7 +1652,7 @@ function JoinScreen({
                       ? "Microphone"
                       : deviceLabel(audioInputs, selectedAudioId) ?? "Mic off"
                   }
-                  onChange={handleSelectAudioDevice}
+                  onChange={userMediaChoice(handleSelectAudioDevice)}
                 />
               </div>
 

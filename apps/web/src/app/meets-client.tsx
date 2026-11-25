@@ -124,6 +124,8 @@ import {
 } from "./lib/utils";
 import type { VideoEffectsBridgeState } from "./components/VideoEffectsBridge";
 import type { SetupNotice } from "./lib/setup-notice";
+import { clearRejoinIntent, readRejoinIntent } from "./lib/rejoin-intent";
+import { canonicalizeSfuClientId, resolveBrowserSfuClientId } from "@/lib/sfu-client-id";
 
 type MeetUser = {
   id?: string;
@@ -428,6 +430,17 @@ export default function MeetsClient({
   const [pendingNewMeetingRoomId, setPendingNewMeetingRoomId] =
     useState<string | null>(null);
   const [setupNotice, setSetupNotice] = useState<SetupNotice | null>(null);
+  const [rejoinMedia] = useState(() =>
+    typeof window === "undefined"
+      ? null
+      : readRejoinIntent({
+          roomId: initialRoomId ?? "",
+          clientId: canonicalizeSfuClientId(clientId) ?? resolveBrowserSfuClientId(),
+        }),
+  );
+  useEffect(() => {
+    if (rejoinMedia) clearRejoinIntent();
+  }, [rejoinMedia]);
   const [guestStorageReady, setGuestStorageReady] = useState(false);
   const [appsSocket, setAppsSocket] = useState<Socket | null>(null);
   const [viewSettings, setViewSettings] = useState<MeetViewSettings>(
@@ -3471,6 +3484,7 @@ export default function MeetsClient({
         meetError={meetError}
         mediaError={mediaError}
         setupNotice={setupNotice}
+        prejoinInitialMedia={rejoinMedia}
         onDismissSetupNotice={() => setSetupNotice(null)}
         isPopoutActive={isPopoutActive}
         isPopoutSupported={isPopoutSupported}
