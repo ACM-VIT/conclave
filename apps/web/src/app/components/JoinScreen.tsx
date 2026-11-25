@@ -18,7 +18,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useId, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useEffectEvent, useId, useRef, useState } from "react";
 import { prefetchConclaveAnimation } from "../lib/conclaveAnimation";
 import { prefetchConclaveLock } from "../lib/conclaveSound";
 import type { Dispatch, SetStateAction } from "react";
@@ -54,6 +54,7 @@ import RoomPresenceBadge from "./RoomPresenceBadge";
 import { useCameraPermissionState } from "../hooks/useCameraPermissionState";
 import { useClipboardCopy } from "../hooks/useClipboardCopy";
 import { useCodeField } from "../hooks/useCodeField";
+import { savePrejoinHandoff, takePrejoinHandoff, type PrejoinMedia } from "../lib/prejoin-handoff";
 import {
   useBandwidthHeavyPreloadDeferred,
 } from "../hooks/useBandwidthHeavyPreloadDeferred";
@@ -1115,9 +1116,13 @@ function JoinScreen({
     if (!candidate) return;
     if (!ensureGuest()) return;
     if (!codeField.tenant.onThisPage) {
-      window.location.assign(
-        buildMeetingPath({ roomCode: candidate, clientId: codeField.tenant.clientId }),
-      );
+      const target = { roomCode: candidate, clientId: codeField.tenant.clientId };
+      savePrejoinHandoff(target, {
+        isMicOn: micIntentRef.current,
+        isCameraOn: cameraIntentRef.current && !isAudioOnly,
+        isAudioOnly,
+      });
+      window.location.assign(buildMeetingPath(target));
       return;
     }
     onEnterStart?.("join");
@@ -1125,6 +1130,18 @@ function JoinScreen({
     onIsAdminChange(false);
     setPending({ mode: "join", roomId: candidate });
   };
+
+  const restorePrejoinMedia = useEffectEvent(async (media: PrejoinMedia) => {
+    if (media.isAudioOnly && !audioOnlyRef.current) toggleAudioOnly();
+    if (media.isMicOn && !micIntentRef.current) await toggleMic();
+    if (media.isCameraOn && !cameraIntentRef.current) await toggleCamera();
+  });
+  const handoffRoomCode = isRoutedRoom ? codeField.resolution.code : "";
+  useEffect(() => {
+    if (!handoffRoomCode) return;
+    const media = takePrejoinHandoff({ roomCode: handoffRoomCode, clientId: pageClientId });
+    if (media) void restorePrejoinMedia(media);
+  }, [handoffRoomCode, pageClientId]);
 
   const handleSignOut = async () => {
     if (isSigningOut) return;
