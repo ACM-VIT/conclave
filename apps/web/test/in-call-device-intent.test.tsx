@@ -236,6 +236,26 @@ describe("a chosen device ends up sending", () => {
     expect(unwanted(world, rig.rig())).toEqual([]);
   });
 
+  it.each([false, true])(
+    "a camera request queued while reconnecting is kept for a camera recovery still publishing (its publish refused: %s)",
+    async (publishRefused) => {
+      const rig = await join({ mic: false });
+      world.holds.add("produce");
+      await act(async () => liveCameraTrack(rig).lose());
+      await until("the camera recovery publish", () => pendingOf("produce") === 1);
+
+      rig.rig().refs.reconnectInFlightRef.current = true;
+      await act(async () => liveCameraTrack(rig).lose());
+      rig.rig().refs.reconnectInFlightRef.current = false;
+      await rig.tick(250);
+      if (publishRefused) world.refusals.set("produce", 1);
+      await releaseAll(rig);
+
+      expect(notLive(world, rig.rig())).toEqual([]);
+      expect(unwanted(world, rig.rig())).toEqual([]);
+    },
+  );
+
   it("a camera request queued during a topology replacement is kept for a camera recovery still publishing", async () => {
     const rig = await join({ mic: false });
     const camera = world.producers.find((producer) => !producer.closed && producer.kind === "video")!;
