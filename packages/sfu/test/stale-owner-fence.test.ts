@@ -550,3 +550,48 @@ describe("a host command as the apps in the field send it", () => {
     expect(ack.mock.calls[0]?.[0]).not.toEqual({ error: INVALID_HOST_COMMAND_ERROR });
   });
 });
+
+describe("a tab of the web on staging, on this SFU before the web deploys", () => {
+  const stagingJoin = (displayName: string) => ({
+    displayName,
+    mediaCapabilities: { webcamCodecs: ["vp8"] },
+  });
+  const fromCodePage = (userId: string, sessionId: string): SfuAuthPayload => ({
+    userId,
+    clientId: "conclave",
+    sessionId,
+    allowRoomCreation: true,
+  });
+
+  it("knocks in a room that starts locked, shows its host the knock, and is let in", async () => {
+    useSharedSchedule();
+    const sfuA = await startSfu(sharedLeases().forInstance("sfu-a"));
+    const opener = await join(
+      sfuA,
+      { ...fromCodePage("ana@example.com", "a"), email: "ana@example.com" },
+      stagingJoin("Ana"),
+    );
+    expect(opener.status).toBe("joined");
+    expect(sfuA.rooms.get(CHANNEL)?.isLocked).toBe(true);
+
+    const knocker = await join(sfuA, fromCodePage("guest-ben", "b"), stagingJoin("Ben"));
+    expect(knocker.status).toBe("waiting");
+    expect(knocker.told("waitingRoomStatus")).not.toHaveLength(0);
+
+    const pendingUsers = new Map<string, string>();
+    for (const { userId, displayName } of opener.told("userRequestedJoin") as Array<{
+      userId: string;
+      displayName: string;
+    }>) {
+      pendingUsers.set(userId, displayName);
+    }
+    expect([...pendingUsers.values()]).toEqual(["Ben"]);
+
+    const [userId] = [...pendingUsers.keys()];
+    expect(await opener.send("admitUser", { userId })).toEqual(expect.objectContaining({ success: true }));
+    expect(knocker.told("joinApproved")).toHaveLength(1);
+    expect(
+      await knocker.send("joinRoom", { roomId: CODE, sessionId: "b", ...stagingJoin("Ben") }),
+    ).toEqual(expect.objectContaining({ status: "joined" }));
+  });
+});
