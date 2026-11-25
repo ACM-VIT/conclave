@@ -2467,8 +2467,14 @@ export function useMeetMedia({
               requestCameraProducerRecovery();
             }
 
-            localStreamRef.current = nextStream;
-            setLocalStream(nextStream);
+            const committedStream = new MediaStream([
+              ...(localStreamRef.current ?? previousStream)
+                ?.getTracks()
+                .filter((track) => track.kind !== "video") ?? [],
+              newVideoTrack,
+            ]);
+            localStreamRef.current = committedStream;
+            setLocalStream(committedStream);
             committedNewVideoTrack = newVideoTrack;
             stopTracksExcept(previousVideoTracks, [
               newVideoTrack,
@@ -3003,8 +3009,12 @@ export function useMeetMedia({
         }
         console.error("[Meets] Failed to update video quality:", err);
         if (rollbackStream && replacementTrack) {
-          localStreamRef.current = rollbackStream;
-          setLocalStream(rollbackStream);
+          const restoredStream = new MediaStream([
+            ...(localStreamRef.current?.getTracks().filter((track) => track.kind !== "video") ?? []),
+            ...oldVideoTracksToStop.filter((track) => track.readyState === "live"),
+          ]);
+          localStreamRef.current = restoredStream;
+          setLocalStream(restoredStream);
         }
         if (
           constrainedExistingTrack?.readyState === "live" &&

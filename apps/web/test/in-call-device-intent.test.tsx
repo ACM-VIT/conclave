@@ -454,6 +454,58 @@ describe("presses and publishes that race each other", () => {
     },
   );
 
+  const streamMicrophoneMatchesProducer = (rig: InCallRig) => {
+    const streamMicrophones = (rig.rig().refs.localStreamRef.current?.getAudioTracks() ?? []).map((track) => track.id);
+    const producerMicrophone = world.producers.find((producer) => !producer.closed && producer.kind === "audio")?.track?.id;
+    return [streamMicrophones, producerMicrophone ? [producerMicrophone] : []];
+  };
+
+  it("a microphone switch that lands while a camera switch swaps keeps the new microphone in the local stream", async () => {
+    const rig = await join();
+    world.holds.add("replaceTrack");
+    let switchingMicrophone: Promise<unknown> = Promise.resolve();
+    let switchingCamera: Promise<unknown> = Promise.resolve();
+    await act(async () => {
+      switchingMicrophone = rig.rig().media.handleAudioInputDeviceChange("mic-2");
+    });
+    await until("the microphone swap", () => pendingOf("replaceTrack") === 1);
+    await act(async () => {
+      switchingCamera = rig.rig().media.handleVideoInputDeviceChange("cam-2");
+    });
+    await until("the camera swap", () => pendingOf("replaceTrack") === 2);
+
+    await releaseAll(rig, switchingMicrophone, switchingCamera);
+
+    const [streamMicrophones, producerMicrophone] = streamMicrophoneMatchesProducer(rig);
+    expect(streamMicrophones).toEqual(producerMicrophone);
+    expect(unwanted(world, rig.rig())).toEqual([]);
+  });
+
+  it("a quality reopen that rolls back after a microphone switch landed keeps the new microphone in the local stream", async () => {
+    const rig = await join();
+    world.cameraRefusesConstraints = true;
+    world.holds.add("replaceTrack");
+    let updating: Promise<unknown> = Promise.resolve();
+    let switchingMicrophone: Promise<unknown> = Promise.resolve();
+    await act(async () => {
+      updating = rig.rig().media.updateVideoQualityRef.current?.("low").catch(() => {}) ?? Promise.resolve();
+    });
+    await until("the reopen swap", () => pendingOf("replaceTrack") === 1);
+    await act(async () => {
+      switchingMicrophone = rig.rig().media.handleAudioInputDeviceChange("mic-2");
+    });
+    await until("the microphone swap", () => pendingOf("replaceTrack") === 2);
+
+    await act(async () => world.releaseOne(1));
+    await rig.settle();
+    world.refusals.set("replaceTrack", 1);
+    await releaseAll(rig, updating, switchingMicrophone);
+
+    const [streamMicrophones, producerMicrophone] = streamMicrophoneMatchesProducer(rig);
+    expect(streamMicrophones).toEqual(producerMicrophone);
+    expect(unwanted(world, rig.rig())).toEqual([]);
+  });
+
   it("a quality reopen whose camera swap fails keeps sending the previous camera and stops the new one", async () => {
     const rig = await join({ mic: false });
     const previous = liveCameraTrack(rig);
@@ -853,7 +905,7 @@ const runSeed = async (seed: number, steps: number) => {
         `   mic ${intents.audio.chosen}/${intents.audio.request} cam ${intents.video.chosen}/${intents.video.request} held ${world.pending.map((entry) => entry.hold).join(",")} producers ${world.producers
           .filter((producer) => !producer.closed)
           .map((producer) => `${producer.id}:${producer.kind}:${producer.paused ? "paused" : "live"}:${producer.track?.id}`)
-          .join(" ")}`,
+          .join(" ")} stream ${(current.rig().refs.localStreamRef.current?.getTracks() ?? []).map((track) => track.id).join(",")}`,
       );
     }
     if (settled) {
