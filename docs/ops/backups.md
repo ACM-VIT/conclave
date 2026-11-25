@@ -158,7 +158,11 @@ systemctl list-timers conclave-backup.timer
 Every store's database (`CONCLAVE_SQLITE_PATH`, or a store's own
 `SCHEDULING_SQLITE_PATH`, `SCHEDULED_MEETINGS_SQLITE_PATH` or
 `SCHEDULED_WEBINARS_SQLITE_PATH`, in the repo `.env` or an SFU container's
-env, each store's precedence applied) must point inside the state dir. An SFU
+env, each store's precedence applied) must point inside the state dir. A
+store whose `SCHEDULING_PERSISTENCE`, `SCHEDULED_MEETINGS_PERSISTENCE` or
+`SCHEDULED_WEBINARS_PERSISTENCE` is `json` or `file` (trimmed, any case, as
+the SFU reads it) opens no database, so none is required for it; its files are
+backed up with the rest of the state dir. An SFU
 container is one whose env sets `SFU_INSTANCE_ID`, the rule the deploy uses to
 pick its SFU services; another container on the state dir (a maintenance one,
 say) neither chooses the stores nor stops a backup, though any running

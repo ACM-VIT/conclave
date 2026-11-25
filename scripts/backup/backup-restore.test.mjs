@@ -2645,6 +2645,44 @@ process.stdout.write(JSON.stringify(results));`,
   assert.deepEqual(backupSide, JSON.parse(sfu.stdout));
 });
 
+test("the backup reads a store's persistence mode as the SFU's factories do", () => {
+  const values = ["json", "file", " JSON ", "\u00a0file\ufeff", "\u2028Json\u3000", "sqlite", "redis", "", "jsonx", "\u180ejson", "FILE\n"];
+  const sfuSide = values.map((value) => {
+    const mode = value.trim().toLowerCase();
+    return mode === "json" || mode === "file";
+  });
+  const backupSide = spawnSync(
+    "python3",
+    ["-I", "-c", "import json, sys; sys.path.insert(0, sys.argv[1]); from statelib import file_backed; print(json.dumps([file_backed({'SCHEDULING_PERSISTENCE': v}, 'SCHEDULING_SQLITE_PATH') for v in json.loads(sys.argv[2])]))", scripts, JSON.stringify(values)],
+    { encoding: "utf8" },
+  );
+  assert.equal(backupSide.status, 0, backupSide.stderr);
+  assert.deepEqual(JSON.parse(backupSide.stdout), sfuSide);
+});
+
+test(
+  "stores the SFU keeps in JSON files need no SQLite database to back up or restore",
+  needs,
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    try {
+      const modes = ['SCHEDULING_PERSISTENCE=" JSON "', "SCHEDULED_MEETINGS_PERSISTENCE=file", "SCHEDULED_WEBINARS_PERSISTENCE=json"];
+      const { state, backup, latestArchive, restore, setDocker } = await setUp(root, modes);
+      await setDocker([{ id: "sfu-a", mounts: [state], status: "exited", env: ["SFU_PORT=9", "SFU_INSTANCE_ID=sfu-a", "SCHEDULING_PERSISTENCE= JSON ", "SCHEDULED_MEETINGS_PERSISTENCE=file", "SCHEDULED_WEBINARS_PERSISTENCE=json"] }]);
+      await mkdir(path.join(state, "data"));
+      for (const name of ["scheduling.json", "scheduled-meetings.json", "scheduled-webinars.json"]) await writeFile(path.join(state, "data", name), `{"kept":"${name}"}`);
+      await backup("--local-only");
+      const archive = await latestArchive();
+      await rm(path.join(state, "data"), { recursive: true });
+      await restore("--file", archive, "--yes");
+      assert.equal(await readFile(path.join(state, "data", "scheduling.json"), "utf8"), '{"kept":"scheduling.json"}');
+      assert.deepEqual((await readdir(path.join(state, "data"))).sort(), ["scheduled-meetings.json", "scheduled-webinars.json", "scheduling.json"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
 describe("backup and restore", { concurrency: 6 }, () => {
   for (const args of queued) nodeTest(...args);
 });

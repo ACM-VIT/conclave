@@ -573,13 +573,21 @@ def redis_key_pattern(env):
     return re.sub(r"([*?\[\]\\])", r"\\\1", redis_key_prefix(env)) + ":*"
 
 
+def file_backed(env, variable):
+    mode = (env.get(variable.replace("_SQLITE_PATH", "_PERSISTENCE")) or "").strip(JS_SPACE).lower()
+    return mode in ("json", "file")
+
+
 def store_paths(env, fallback=None):
     """(variable, path) for each store's database, the way the SFU picks it:
     the store's own variable, else CONCLAVE_SQLITE_PATH, else fallback (the
-    compose default), or nothing when there is no fallback."""
+    compose default), or nothing when there is no fallback. A store whose
+    persistence mode is json or file opens no database."""
     shared = env.get("CONCLAVE_SQLITE_PATH", "").strip()
     picked = []
     for variable in STORE_VARIABLES:
+        if file_backed(env, variable):
+            continue
         own = env.get(variable, "").strip()
         if own:
             picked.append((variable, own))
