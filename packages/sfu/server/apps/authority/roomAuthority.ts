@@ -391,10 +391,14 @@ export class RoomAuthority {
       this.now(),
     );
     this.afterWrite(instance);
-    if (!result.ok) return result;
-    if (actor.verified && context.currentClient) {
+    if (
+      actor.verified &&
+      context.currentClient &&
+      (result.ok || instance.keepsAnswer(actor, request.operation))
+    ) {
       this.options.identity.hold(this.room, context.currentClient);
     }
+    if (!result.ok) return result;
     return { ...result, revision: this.answerRevision(subscription) };
   }
 

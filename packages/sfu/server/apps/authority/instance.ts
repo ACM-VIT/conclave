@@ -175,11 +175,13 @@ export class AuthorityInstance {
       : undefined;
     const spec = action ? this.module.contract.actions[name] : undefined;
     if (!action || !spec) return failure("forbidden");
+    if (!this.canView(actor)) return failure("forbidden");
+
+    const saved = operation && this.savedAnswer(actor, name, spec.input, rawInput, operation, now);
+    if (saved) return saved;
 
     const ctx = this.gateContext(actor, now);
-    if (!this.canView(actor) || !this.passesGate(action, ctx)) {
-      return failure("forbidden");
-    }
+    if (!this.passesGate(action, ctx)) return failure("forbidden");
     if (identityOf(action, ctx) === "verified" && !actor.verified) {
       return failure("identity-required");
     }
@@ -187,16 +189,11 @@ export class AuthorityInstance {
     const parsed = this.parseInput(spec.input, rawInput);
     if (!parsed.ok) return parsed;
 
-    // A repeat of an operation that already ran gets its first answer before
-    // any budget is charged: it is not new work, and a client whose ack was
-    // lost must not be told "slow down" in place of what happened.
     let digest = "";
     if (operation) {
       const outside = this.receipts.window(operation, now);
       if (outside) return outside;
       digest = requestDigest(name, parsed.value);
-      const replayed = this.receipts.replay(actor.subject, operation, digest);
-      if (replayed) return replayed;
     }
 
     const limited = this.rates.take(
@@ -261,6 +258,26 @@ export class AuthorityInstance {
       this.receipts.record(actor.subject, operation, digest, result);
     }
     return result;
+  }
+
+  keepsAnswer(actor: Actor, operation: OperationId): boolean {
+    return this.receipts.holds(actor.subject, operation);
+  }
+
+  private savedAnswer(
+    actor: Actor,
+    name: string,
+    schema: { parse(input: unknown, mode?: "strip" | "strict"): unknown },
+    rawInput: unknown,
+    operation: OperationId,
+    now: number,
+  ): AuthorityResult<Json> | null {
+    if (!this.receipts.holds(actor.subject, operation)) return null;
+    const outside = this.receipts.window(operation, now);
+    if (outside) return outside;
+    const parsed = this.parseInput(schema, rawInput);
+    if (!parsed.ok) return parsed;
+    return this.receipts.replay(actor.subject, operation, requestDigest(name, parsed.value));
   }
 
   /** A one-shot read for the caller alone. Changes nothing. */
@@ -359,7 +376,6 @@ export class AuthorityInstance {
 
   mergeSubjects(merge: SubjectMerge, now: number): boolean {
     const handler = this.module.runtime.mergeSubjects;
-    if (!handler) return false;
     const ctx: TimerContext = {
       room: this.policy,
       now,
@@ -367,12 +383,17 @@ export class AuthorityInstance {
       nextId: (prefix) => this.nextId(prefix),
     };
     const outcome = this.transact((tx) => {
-      finished(handler(ctx, tx, merge), "Subject merge");
+      if (handler) finished(handler(ctx, tx, merge), "Subject merge");
     });
-    if (!outcome.ok && outcome.kind === "fault") {
-      Logger.error(`[Authority] ${this.appId}: merging two subjects failed`, outcome.error);
+    if (!outcome.ok) {
+      Logger.error(
+        `[Authority] ${this.appId}: merging two subjects failed (${outcome.kind})`,
+        outcome.kind === "fault" ? outcome.error : outcome,
+      );
+      return false;
     }
-    return outcome.ok && outcome.changed;
+    this.receipts.merge(merge.from, merge.into);
+    return outcome.changed;
   }
 
   /**
