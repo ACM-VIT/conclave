@@ -448,6 +448,7 @@ export class AuthoritySession<C extends AuthorityContract> {
     const deadline =
       this.client.now() + AUTHORITY_LIMITS.operationMaxAgeMs - RETRY_PAUSE_MS * 4;
     let sentToEpoch: string | null = null;
+    let mayHaveRun = false;
 
     for (;;) {
       if (this.closed || this.client.isDisposed) return failure("unknown-outcome");
@@ -480,7 +481,12 @@ export class AuthoritySession<C extends AuthorityContract> {
         request,
       );
       if (reply === LOST) {
+        mayHaveRun = true;
         await pause(RETRY_PAUSE_MS);
+        continue;
+      }
+      if (!reply.ok && reply.code === "rate-limited" && mayHaveRun) {
+        await pause(Math.max(RETRY_PAUSE_MS, reply.retryAfterMs ?? 0));
         continue;
       }
       if (!reply.ok && RESUBSCRIBE_CODES.has(reply.code)) {
