@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ROOM_LEASE_UNCONFIRMED_ERROR } from "@conclave/meeting-core/host-commands";
 import { createCoalescedRunner } from "../lib/coalesced-run";
 import { createProducerSlotOrder } from "../lib/producer-slot-order";
 import { toError } from "../lib/utils";
@@ -498,7 +499,7 @@ export const isRecoverableReconnectFailure = (error: unknown): boolean => {
   // it, or its request is lost and its host never sees it again.
   if (createMeetError(error).code === "ROOM_NOT_FOUND") return true;
   const message = getRawReconnectErrorMessage(error).trim();
-  if (!message) return true;
+  if (!message || message === ROOM_LEASE_UNCONFIRMED_ERROR) return true;
   return /timeout|xhr poll|websocket|transport|socket|network|fetch|load failed|connection|still opening/i.test(
     message,
   );

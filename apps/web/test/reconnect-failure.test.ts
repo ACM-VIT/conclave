@@ -1,3 +1,4 @@
+import { ROOM_LEASE_UNCONFIRMED_ERROR } from "@conclave/meeting-core/host-commands";
 import { describe, expect, it } from "vitest";
 import { isRecoverableReconnectFailure } from "../src/app/hooks/useMeetSocket";
 
@@ -18,6 +19,10 @@ describe("whether a failed reconnect is worth another try", () => {
         new Error("The meeting is still opening. Try again in a moment."),
       ),
     ).toBe(true);
+  });
+
+  it("keeps trying while the meeting is moving between servers", () => {
+    expect(isRecoverableReconnectFailure(new Error(ROOM_LEASE_UNCONFIRMED_ERROR))).toBe(true);
   });
 
   it("keeps trying when the server cannot be reached or is failing", () => {
