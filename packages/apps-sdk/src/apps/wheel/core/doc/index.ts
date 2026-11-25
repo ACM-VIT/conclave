@@ -170,7 +170,7 @@ export const getAddOutcome = (doc: Y.Doc, key: string): AddOutcome | null => {
 
 export const recordAddOutcome = (doc: Y.Doc, key: string, outcome: AddOutcome): void => {
   doc.transact(() => {
-    const adds = ensureAppMap(getRoot(doc), ADDS_KEY) as Y.Map<unknown>;
+    const adds = ensureAppMap(getRoot(doc), ADDS_KEY);
     adds.set(key, { ...outcome, at: Date.now() });
     if (adds.size <= MAX_ADD_RECORDS) return;
     const byAge = [...adds.entries()].sort(

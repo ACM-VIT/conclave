@@ -106,22 +106,48 @@ class WheelDraftBridgeTests {
         }
     }
 
-    @Test fun aRetryOrAFailureInTheSameCallReturnsEveryName() {
+    private fun outcomeQueries(wheel: Wheel): List<Pair<String, String>> =
+        wheel.delivered.map { JSONObject(it) }.filter { it.getString("type") == "addOutcome" }.map { sent ->
+            sent.getString("requestId") to sent.getJSONObject("payload").getString("requestId")
+        }
+
+    private fun reload(wheel: Wheel) {
+        wheel.relay.releaseEmbed()
+        wheel.relay.acceptPrimedSnapshot(AppsSyncResponse(syncMessage = skip.foundation.Data(), stateVector = null, awarenessUpdate = null), appSessionId = wheel.relay.appSessionId)
+        wheel.relay.attachBridge(appSessionId = wheel.relay.appSessionId) { json -> wheel.delivered.add(json) }
+        receive(wheel, "ready", "e-reload", JSONObject().put("bundleVersion", "1.0.0").put("appId", "wheel").put("stateVector", "AA=="))
+    }
+
+    @Test fun aRetryOrAFailureAsksTheWheelBeforeReturningAName() {
         for (reset in listOf("retry", "failure", "hidden")) {
-            val wheel = readyWheel()
-            wheel.presenter.editWheelDraft("Grace\n")
-            wheel.presenter.editWheelDraft("Lin")
-            when (reset) {
-                "retry" -> wheel.presenter.retry()
-                "failure" -> wheel.presenter.apply(event = ActiveAppEvent.make(kind = ActiveAppEventKind.failed,
-                    appSessionId = wheel.relay.appSessionId, issue = AppHostIssue.rendererGone))
-                else -> {
-                    wheel.presenter.setHiddenLocally(true)
-                    wheel.presenter.setHiddenLocally(false)
+            for (applied in listOf(false, true)) {
+                val wheel = readyWheel()
+                wheel.presenter.editWheelDraft("Grace\n")
+                wheel.presenter.editWheelDraft("Lin")
+                when (reset) {
+                    "retry" -> wheel.presenter.retry()
+                    "failure" -> wheel.presenter.apply(event = ActiveAppEvent.make(kind = ActiveAppEventKind.failed,
+                        appSessionId = wheel.relay.appSessionId, issue = AppHostIssue.rendererGone))
+                    else -> {
+                        wheel.presenter.setHiddenLocally(true)
+                        wheel.presenter.setHiddenLocally(false)
+                    }
                 }
+                assertEquals(reset, "Lin", wheel.presenter.wheelDraft.text)
+                assertEquals(reset, 1, wheel.presenter.wheelDraft.sent.count)
+                reload(wheel)
+                val query = outcomeQueries(wheel).last()
+                assertEquals(reset, adds(wheel)[0].first, query.second)
+                if (applied) {
+                    receive(wheel, "ack", query.first, JSONObject().put("ok", true).put("added", JSONArray().put(0)))
+                    assertEquals(reset, "Lin", wheel.presenter.wheelDraft.text)
+                } else {
+                    receive(wheel, "ack", query.first, JSONObject().put("ok", false).put("error", "notApplied"))
+                    assertEquals(reset, "Grace\nLin", wheel.presenter.wheelDraft.text)
+                }
+                assertEquals(reset, 0, wheel.presenter.wheelDraft.sent.count)
+                assertEquals(reset, 1, adds(wheel).size)
             }
-            assertEquals(reset, "Grace\nLin", wheel.presenter.wheelDraft.text)
-            assertEquals(reset, 0, wheel.presenter.wheelDraft.sent.count)
         }
     }
 
