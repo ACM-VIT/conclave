@@ -8,6 +8,7 @@ import type {
 } from "../transcript-worker/src/transcription/types";
 import type { Env, Viewer } from "../transcript-worker/src/types";
 import type { TranscriptSessionState } from "@conclave/meeting-core/transcript-types";
+import { pcmBase64, voicedPcm } from "./transcript-audio-fixtures";
 
 const { connectProvider, lookup } = vi.hoisted(() => ({
   connectProvider: vi.fn(),
@@ -98,6 +99,12 @@ async function fixture(env: Partial<Env> = {}) {
 
 const savedTexts = (room: TestRoom) => room.segments.map(({ text }) => text);
 
+const SPEECH = pcmBase64(voicedPcm(-26));
+const commitSpeech = async (room: TestRoom, viewer: Viewer) => {
+  await room.handleMessage(viewer, JSON.stringify({ type: "audio.chunk", audio: SPEECH }));
+  await room.handleMessage(viewer, JSON.stringify({ type: "audio.commit" }));
+};
+
 const moveRoomToSarvam = () =>
   lookup.mockResolvedValue({
     OPENAI_API_KEY: "sk-room",
@@ -110,8 +117,10 @@ describe("switching the caption language mid-sentence", () => {
     const { room, viewer, providers } = await fixture();
     await room.startSession(viewer, { ...roomSession, type: "session.start", language: "en" });
     const before = providers[0];
+    await commitSpeech(room, viewer);
     before.callbacks.onCommitted("earlier");
     await before.callbacks.onFinal("earlier", "This line finished before switching.");
+    await commitSpeech(room, viewer);
     before.callbacks.onCommitted("utterance");
     before.callbacks.onDelta("utterance", "The release date is");
 
@@ -131,6 +140,7 @@ describe("switching the caption language mid-sentence", () => {
     const { room, viewer, providers } = await fixture();
     await room.startSession(viewer, { ...roomSession, type: "session.start", language: "en" });
     const before = providers[0];
+    await commitSpeech(room, viewer);
     before.callbacks.onCommitted("utterance");
     before.callbacks.onDelta("utterance", "The release date is");
 
@@ -146,6 +156,7 @@ describe("switching the caption language mid-sentence", () => {
     const { room, viewer, providers } = await fixture();
     await room.startSession(viewer, { ...roomSession, type: "session.start", language: "en" });
     const before = providers[0];
+    await commitSpeech(room, viewer);
     before.callbacks.onCommitted("utterance");
     before.callbacks.onDelta("utterance", "Hello");
 

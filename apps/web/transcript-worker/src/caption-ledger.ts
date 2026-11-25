@@ -1,44 +1,36 @@
 import type { TranscriptSpeaker } from "@conclave/meeting-core/transcript-types";
 import type { LiveTranscriptionSession } from "./transcription/types";
-import type { VoiceReading } from "./transcription/voice-activity";
 
 export type LinePlace = { sequence: number; startMs: number };
-
-export type AudioChunk = {
-  audio: string;
-  sampleCount: number;
-  createdAt: number;
-  sentAt: number;
-  sequence: number;
-  order: number;
-  voice: VoiceReading;
-  turn: number;
-};
 
 export type CaptionLineState = "pending_ack" | "open" | "replaying" | "gap" | "final" | "dropped";
 
 export type CaptionLine = {
   readonly id: string;
   state: CaptionLineState;
-  place: LinePlace;
-  placedByAudio: boolean;
-  speaker: TranscriptSpeaker;
+  place: LinePlace | null;
+  speaker: TranscriptSpeaker | null;
   heard: boolean;
-  refused?: boolean;
   text: string;
   freshText: boolean;
   replayed: boolean;
-  audio: AudioChunk[];
+  replayedAfterTimeout: boolean;
   epoch: number | null;
   deadlineAt: number;
   endedAt?: number;
 };
+
+export type ShownLine = CaptionLine & { place: LinePlace; speaker: TranscriptSpeaker };
 
 export type QueuedCommit = { lineId: string; committedAt: number };
 
 const ACTIVE: ReadonlySet<CaptionLineState> = new Set(["pending_ack", "open", "replaying"]);
 
 export const isActive = (line: CaptionLine): boolean => ACTIVE.has(line.state);
+
+export const isPlaced = (line: CaptionLine): line is ShownLine => line.place !== null && line.speaker !== null;
+
+const placeOrder = (line: CaptionLine): number => line.place?.sequence ?? Number.POSITIVE_INFINITY;
 
 export class CaptionLedger {
   private readonly lines = new Map<string, CaptionLine>();
@@ -49,6 +41,7 @@ export class CaptionLedger {
       endedKeptMs: number;
       shown: () => ReadonlySet<string>;
       onForget: (lineIds: string[]) => void;
+      onRelease: (lineId: string) => void;
     },
   ) {}
 
@@ -61,9 +54,7 @@ export class CaptionLedger {
   }
 
   all(): CaptionLine[] {
-    return Array.from(this.lines.values()).sort(
-      (left, right) => left.place.sequence - right.place.sequence,
-    );
+    return Array.from(this.lines.values()).sort((left, right) => placeOrder(left) - placeOrder(right));
   }
 
   active(): CaptionLine[] {
@@ -74,8 +65,17 @@ export class CaptionLedger {
     return Array.from(this.lines.values()).filter(isActive);
   }
 
-  add(line: Omit<CaptionLine, "id" | "text" | "freshText" | "replayed"> & { text?: string }): CaptionLine {
-    const created: CaptionLine = { id: crypto.randomUUID(), text: "", freshText: false, replayed: false, ...line };
+  add(
+    line: Omit<CaptionLine, "id" | "text" | "freshText" | "replayed" | "replayedAfterTimeout"> & { text?: string },
+  ): CaptionLine {
+    const created: CaptionLine = {
+      id: crypto.randomUUID(),
+      text: "",
+      freshText: false,
+      replayed: false,
+      replayedAfterTimeout: false,
+      ...line,
+    };
     this.lines.set(created.id, created);
     return created;
   }
@@ -83,9 +83,9 @@ export class CaptionLedger {
   end(line: CaptionLine, state: "gap" | "final" | "dropped", text = line.text, now = Date.now()): void {
     line.state = state;
     line.text = text;
-    line.audio = [];
     line.deadlineAt = Number.POSITIVE_INFINITY;
     line.endedAt = now;
+    this.limits.onRelease(line.id);
     this.forgetOldEnded(now, line.id);
   }
 
@@ -94,7 +94,7 @@ export class CaptionLedger {
     const ended = Array.from(this.lines.values())
       .filter((line) => !isActive(line) && !shown.has(line.id))
       .sort((left, right) =>
-        left.id === ending ? -1 : right.id === ending ? 1 : right.place.sequence - left.place.sequence,
+        left.id === ending ? -1 : right.id === ending ? 1 : placeOrder(right) - placeOrder(left),
       );
     const maxEnded = this.limits.maxEnded();
     const forgotten = ended
@@ -109,6 +109,7 @@ export class CaptionLedger {
   }
 
   remove(id: string): void {
+    this.limits.onRelease(id);
     this.lines.delete(id);
   }
 
@@ -125,6 +126,7 @@ export class CaptionLedger {
   }
 
   clear(): void {
+    for (const id of this.lines.keys()) this.limits.onRelease(id);
     this.lines.clear();
   }
 }
@@ -136,6 +138,7 @@ export class ProviderConnection {
   quietAt = 0;
   block: { next: number; end: number } | null = null;
   timer: ReturnType<typeof setTimeout> | null = null;
+  replay: { lineId: string; timer: ReturnType<typeof setTimeout> | null } | null = null;
 
   constructor(
     readonly epoch: number,
@@ -150,6 +153,10 @@ export class ProviderConnection {
     return Array.from(this.providerToLine.entries()).flatMap(([providerItemId, id]) =>
       id === lineId ? [providerItemId] : [],
     );
+  }
+
+  lineOf(providerItemId: string): string | undefined {
+    return this.providerToLine.get(providerItemId);
   }
 
   forgetLinesExcept(kept: (lineId: string) => boolean): void {

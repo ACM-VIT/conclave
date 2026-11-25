@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  SARVAM_REPLAY_SETTLE_MS as SETTLE,
   TRANSCRIPTION_GAP_MARKER as GAP,
   TRANSCRIPTION_LINE_DEADLINE_MS as DEADLINE,
   TRANSCRIPTION_RECOVERY_MAX_AUDIO_BYTES as REPLAY_AUDIO_LIMIT,
@@ -8,6 +9,7 @@ import {
   AUDIO,
   OPENAI,
   SARVAM,
+  answerSarvamReplays,
   openAiCommitted,
   openAiDelta,
   openAiFinal,
@@ -66,7 +68,15 @@ const forwardedTo = (sockets: { sent: Record<string, unknown>[] }[]) =>
     0,
   );
 const bufferedBytes = (rig: Rig) =>
-  (rig.room as unknown as { transcriptionRecoveryAudio: { bytes: number } }).transcriptionRecoveryAudio.bytes;
+  (rig.room as unknown as { audio: { queued(): { audio: string }[] } }).audio
+    .queued()
+    .reduce((sum, { audio }) => sum + audio.length, 0);
+
+const replayedOnLanes = async (rig: Rig, speakers: readonly { userId: string; displayName: string }[]) => {
+  let total = 0;
+  for (const speaker of speakers) total += audioMessages(await rig.lane(speaker));
+  return total;
+};
 
 const signalsActive = async (rig: Rig) => {
   const [socket] = rig.providerSockets();
@@ -83,22 +93,24 @@ const cases: { thread: string; model: string; env?: Record<string, string>; run:
     thread: "Replay signals hide new speech",
     model: SARVAM,
     async run(rig) {
-      const [socket] = rig.providerSockets();
       for (const speaker of [ada, grace]) {
         await rig.speak(speaker);
-        socket.emit(sarvamSpeechStart());
+        (await rig.lane(speaker)).emit(sarvamSpeechStart());
         await rig.endTurn(speaker);
       }
-      socket.disconnect();
+      (await rig.lane(ada)).disconnect();
       await settle();
-      const replacement = rig.providerSockets().at(-1)!;
-      replacement.emit(sarvamSpeechStart());
+      const adaReplay = await rig.lane(ada);
+      adaReplay.emit(sarvamSpeechStart());
       await rig.speak(ada);
       await rig.endTurn(ada);
-      replacement.emit(sarvamSpeechStart());
-      replacement.emit(sarvamSpeechStart());
-      replacement.emit(sarvamFinal("a", "Ada replayed."));
-      replacement.emit(sarvamFinal("g", "Grace replayed."));
+      adaReplay.emit(sarvamFinal("a", "Ada replayed."));
+      await vi.advanceTimersByTimeAsync(SETTLE + 50);
+      const graceReplay = await rig.lane(grace);
+      graceReplay.emit(sarvamSpeechStart());
+      graceReplay.emit(sarvamFinal("g", "Grace replayed."));
+      await vi.advanceTimersByTimeAsync(SETTLE + 50);
+      (await rig.lane(ada)).emit(sarvamSpeechStart());
       await vi.advanceTimersByTimeAsync(DEADLINE + 100);
       return { shown: shown(rig) };
     },
@@ -148,23 +160,20 @@ const cases: { thread: string; model: string; env?: Record<string, string>; run:
     async run(rig) {
       const socket = await signalsActive(rig);
       await rig.speak(ada);
-      socket.emit(sarvamSpeechStart());
+      const adaLane = await rig.lane(ada);
+      adaLane.emit(sarvamSpeechStart());
       await vi.advanceTimersByTimeAsync(100);
       await rig.speak(grace);
       socket.emit(sarvamSpeechStart());
       await vi.advanceTimersByTimeAsync(100);
       await rig.speak(ada);
-      socket.emit(sarvamFinal("one", "Ada one."));
-      socket.emit(sarvamSpeechStart());
+      adaLane.emit(sarvamFinal("one", "Ada one."));
+      adaLane.emit(sarvamSpeechStart());
       await rig.endTurn(ada);
       socket.disconnect();
       await settle();
-      const replacement = rig.providerSockets().at(-1)!;
-      const replayedChunks = audioMessages(replacement);
-      replacement.emit(sarvamSpeechStart());
-      replacement.emit(sarvamSpeechStart());
-      replacement.emit(sarvamFinal("g", "Grace words."));
-      replacement.emit(sarvamFinal("a", "Ada again."));
+      await answerSarvamReplays(rig, [[grace, "g", "Grace words."]]);
+      const replayedChunks = await replayedOnLanes(rig, [grace]);
       await vi.advanceTimersByTimeAsync(DEADLINE + 100);
       return { shown: shown(rig), replayedChunks };
     },
@@ -173,7 +182,7 @@ const cases: { thread: string; model: string; env?: Record<string, string>; run:
     thread: "Delayed signals hide speech",
     model: SARVAM,
     async run(rig) {
-      const socket = await signalsActive(rig);
+      await signalsActive(rig);
       await rig.speak(ada);
       for (const _ of [1, 2, 3, 4]) {
         await vi.advanceTimersByTimeAsync(200);
@@ -183,6 +192,7 @@ const cases: { thread: string; model: string; env?: Record<string, string>; run:
       await rig.speak(ada);
       await rig.endTurn(ada);
       await vi.advanceTimersByTimeAsync(300);
+      const socket = await rig.lane(ada);
       socket.emit(sarvamSpeechStart());
       socket.emit(sarvamSpeechStart());
       await vi.advanceTimersByTimeAsync(DEADLINE + 100);
@@ -208,8 +218,9 @@ const cases: { thread: string; model: string; env?: Record<string, string>; run:
     thread: "Same-tick speech disappears",
     model: SARVAM,
     async run(rig) {
-      const socket = await signalsActive(rig);
-      socket.emit(sarvamSpeechStart());
+      await signalsActive(rig);
+      await rig.sendAudio("silence", ada);
+      (await rig.lane(ada)).emit(sarvamSpeechStart());
       await rig.speak(ada);
       await rig.endTurn(ada);
       await vi.advanceTimersByTimeAsync(DEADLINE + 100);
@@ -221,13 +232,15 @@ const cases: { thread: string; model: string; env?: Record<string, string>; run:
     model: SARVAM,
     async run(rig) {
       const socket = await signalsActive(rig);
-      socket.emit(sarvamSpeechStart());
+      await rig.sendAudio("silence", ada);
+      const adaLane = await rig.lane(ada);
+      adaLane.emit(sarvamSpeechStart());
       await vi.advanceTimersByTimeAsync(50);
       await rig.speak(ada);
       await rig.endTurn(ada);
       await rig.speak(grace);
       await rig.endTurn(grace);
-      socket.emit(sarvamFinal("one", "Ada words."));
+      adaLane.emit(sarvamFinal("one", "Ada words."));
       await vi.advanceTimersByTimeAsync(300);
       socket.emit(sarvamSpeechStart());
       await vi.advanceTimersByTimeAsync(DEADLINE + 100);
@@ -245,17 +258,16 @@ const cases: { thread: string; model: string; env?: Record<string, string>; run:
       await vi.advanceTimersByTimeAsync(100);
       await rig.speak(ada);
       await vi.advanceTimersByTimeAsync(300);
-      for (const _ of [1, 2, 3]) socket.emit(sarvamSpeechStart());
-      socket.emit(sarvamFinal("one", "Ada one."));
+      const adaLane = await rig.lane(ada);
+      adaLane.emit(sarvamSpeechStart());
+      socket.emit(sarvamSpeechStart());
+      adaLane.emit(sarvamSpeechStart());
+      adaLane.emit(sarvamFinal("one", "Ada one."));
       await rig.endTurn(ada);
       socket.disconnect();
       await settle();
-      const replacement = rig.providerSockets().at(-1)!;
-      const replayedChunks = audioMessages(replacement);
-      replacement.emit(sarvamSpeechStart());
-      replacement.emit(sarvamSpeechStart());
-      replacement.emit(sarvamFinal("g", "Grace words."));
-      replacement.emit(sarvamFinal("a", "Ada again."));
+      await answerSarvamReplays(rig, [[grace, "g", "Grace words."]]);
+      const replayedChunks = await replayedOnLanes(rig, [grace]);
       await vi.advanceTimersByTimeAsync(DEADLINE + 100);
       return { shown: shown(rig), replayedChunks };
     },
@@ -264,12 +276,12 @@ const cases: { thread: string; model: string; env?: Record<string, string>; run:
     thread: "Late signals miss ongoing speech",
     model: SARVAM,
     async run(rig) {
-      const socket = await signalsActive(rig);
+      await signalsActive(rig);
       for (let elapsed = 0; elapsed <= 2_500; elapsed += 250) {
         await rig.speak(ada);
         await vi.advanceTimersByTimeAsync(250);
       }
-      socket.emit(sarvamSpeechStart());
+      (await rig.lane(ada)).emit(sarvamSpeechStart());
       await rig.endTurn(ada);
       await vi.advanceTimersByTimeAsync(DEADLINE + 100);
       return { shown: shown(rig) };
@@ -331,12 +343,12 @@ const cases: { thread: string; model: string; env?: Record<string, string>; run:
       }
       socket.disconnect();
       await settle();
-      const replacement = rig.providerSockets().at(-1)!;
-      const replayedChunks = audioMessages(replacement);
-      for (const [id, text] of [["1", "Ada first."], ["2", "Grace second."], ["3", "Ada third."]]) {
-        replacement.emit(sarvamSpeechStart());
-        replacement.emit(sarvamFinal(id, text));
-      }
+      await answerSarvamReplays(rig, [
+        [ada, "1", "Ada first."],
+        [grace, "2", "Grace second."],
+        [ada, "3", "Ada third."],
+      ]);
+      const replayedChunks = await replayedOnLanes(rig, [ada, grace]);
       await vi.advanceTimersByTimeAsync(DEADLINE + 100);
       return { shown: shown(rig), replayedChunks };
     },
@@ -369,17 +381,15 @@ const cases: { thread: string; model: string; env?: Record<string, string>; run:
       await rig.speak(ada);
       await rig.speak(grace);
       await rig.speak(ada);
-      socket.emit(sarvamSpeechStart());
-      socket.emit(sarvamSpeechStart());
+      (await rig.lane(ada)).emit(sarvamSpeechStart());
       socket.emit(sarvamSpeechStart());
       socket.disconnect();
       await settle();
-      const replacement = rig.providerSockets().at(-1)!;
-      const replayedChunks = audioMessages(replacement);
-      for (const [id, text] of [["1", "One."], ["2", "Two."], ["3", "Three."]]) {
-        replacement.emit(sarvamSpeechStart());
-        replacement.emit(sarvamFinal(id, text));
-      }
+      await answerSarvamReplays(rig, [
+        [ada, "1", "One."],
+        [grace, "2", "Two."],
+      ]);
+      const replayedChunks = await replayedOnLanes(rig, [ada, grace]);
       await vi.advanceTimersByTimeAsync(DEADLINE + 100);
       return { shown: shown(rig), replayedChunks };
     },
@@ -403,8 +413,9 @@ const cases: { thread: string; model: string; env?: Record<string, string>; run:
     thread: "Early starts miss continuing speech",
     model: SARVAM,
     async run(rig) {
-      const socket = await signalsActive(rig);
+      await signalsActive(rig);
       await rig.speak(ada);
+      const socket = await rig.lane(ada);
       socket.emit(sarvamSpeechStart());
       socket.emit(sarvamFinal("s", "Short."));
       socket.emit(sarvamSpeechStart());
@@ -415,7 +426,7 @@ const cases: { thread: string; model: string; env?: Record<string, string>; run:
       await vi.advanceTimersByTimeAsync(3_500);
       socket.disconnect();
       await settle();
-      const replacement = rig.providerSockets().at(-1)!;
+      const replacement = await rig.lane(ada);
       const replayedChunks = audioMessages(replacement);
       replacement.emit(sarvamSpeechStart());
       replacement.emit(sarvamFinal("c", "Continued."));
@@ -449,7 +460,7 @@ const cases: { thread: string; model: string; env?: Record<string, string>; run:
     thread: "Corrupt audio escapes error checks",
     model: SARVAM,
     async run(rig) {
-      const socket = await signalsActive(rig);
+      await signalsActive(rig);
       let threw = false;
       for (const audio of ["%%%%", "@@@@AAAA", "A"]) {
         try {
@@ -459,8 +470,9 @@ const cases: { thread: string; model: string; env?: Record<string, string>; run:
         }
       }
       await rig.speak(ada);
-      socket.emit(sarvamSpeechStart());
-      socket.emit(sarvamFinal("a", "Still heard."));
+      const adaLane = await rig.lane(ada);
+      adaLane.emit(sarvamSpeechStart());
+      adaLane.emit(sarvamFinal("a", "Still heard."));
       await settle();
       return { shown: shown(rig), threw };
     },
@@ -499,15 +511,20 @@ const cases: { thread: string; model: string; env?: Record<string, string>; run:
     async run(rig) {
       const socket = await signalsActive(rig);
       await rig.speak(ada);
-      socket.emit(sarvamSpeechStart());
+      const adaLane = await rig.lane(ada);
+      adaLane.emit(sarvamSpeechStart());
       await rig.endTurn(ada);
       await vi.advanceTimersByTimeAsync(20_000);
       await rig.speak(grace);
       socket.emit(sarvamSpeechStart());
       await rig.endTurn(grace);
       await vi.advanceTimersByTimeAsync(DEADLINE - 20_000 + 1_000);
-      socket.emit(sarvamFinal("ada-late", "Ada late."));
-      socket.emit(sarvamFinal("grace", "Grace words."));
+      adaLane.emit(sarvamFinal("ada-late", "Ada late."));
+      socket.emit(sarvamFinal("grace", "Grace late on the old connection."));
+      await settle();
+      const replacement = await rig.lane(grace);
+      replacement.emit(sarvamSpeechStart());
+      replacement.emit(sarvamFinal("grace", "Grace words."));
       await vi.advanceTimersByTimeAsync(DEADLINE + 100);
       return { shown: shown(rig) };
     },
@@ -518,14 +535,15 @@ const cases: { thread: string; model: string; env?: Record<string, string>; run:
     async run(rig) {
       const socket = await signalsActive(rig);
       await rig.speak(ada);
-      socket.emit(sarvamSpeechStart());
+      const adaLane = await rig.lane(ada);
+      adaLane.emit(sarvamSpeechStart());
       await rig.endTurn(ada);
       await vi.advanceTimersByTimeAsync(500);
       await rig.speak(grace);
       socket.emit(sarvamSpeechStart());
       await rig.endTurn(grace);
-      socket.emit(sarvamFinal("ada", "Ada words."));
-      socket.emit(sarvamFinal("ada", "Ada words."));
+      adaLane.emit(sarvamFinal("ada", "Ada words."));
+      adaLane.emit(sarvamFinal("ada", "Ada words."));
       socket.emit(sarvamFinal("grace", "Grace words."));
       await vi.advanceTimersByTimeAsync(DEADLINE + 100);
       return { shown: shown(rig) };
@@ -545,9 +563,7 @@ const cases: { thread: string; model: string; env?: Record<string, string>; run:
       await settle();
       socket.disconnect();
       await settle();
-      const replacement = rig.providerSockets().at(-1)!;
-      replacement.emit(sarvamSpeechStart());
-      replacement.emit(sarvamFinal("a", "Ada words."));
+      await answerSarvamReplays(rig, [[ada, "a", "Ada words."]]);
       await vi.advanceTimersByTimeAsync(DEADLINE + 100);
       return { shown: shown(rig), saved: rig.lastSnapshotTexts() };
     },
@@ -567,7 +583,7 @@ const cases: { thread: string; model: string; env?: Record<string, string>; run:
       const sentBefore = audioMessages(socket);
       const switching = rig.switchTo("ta").catch(() => undefined);
       await settle();
-      await rig.speak(ada);
+      await rig.speak(grace);
       const oldProviderAudio = audioMessages(socket) - sentBefore;
       await vi.advanceTimersByTimeAsync(10_000);
       await switching;
@@ -668,8 +684,8 @@ const expected: Record<string, Outcome> = {
     bufferedBytes: Math.ceil((0.3 * REPLAY_AUDIO_LIMIT) / AUDIO.speech.length) * AUDIO.speech.length,
   },
   "Returning speakers lose replay audio": {
-    shown: [["Setup.", "grace"], ["Ada one.", "ada"], ["Grace words.", "grace"], ["Ada again.", "ada"]],
-    replayedChunks: 2,
+    shown: [["Setup.", "grace"], ["Ada one.", "ada"], ["Grace words.", "grace"]],
+    replayedChunks: 1,
   },
   "Delayed signals hide speech": { shown: [["Setup.", "grace"], [GAP, "ada"], [GAP, "ada"]] },
   "Empty answers leave false gaps": { shown: [] },
@@ -678,8 +694,8 @@ const expected: Record<string, Outcome> = {
     shown: [["Setup.", "grace"], ["Ada words.", "ada"], [GAP, "grace"]],
   },
   "Delayed claims steal later audio": {
-    shown: [["Setup.", "grace"], ["Ada one.", "ada"], ["Grace words.", "grace"], ["Ada again.", "ada"]],
-    replayedChunks: 2,
+    shown: [["Setup.", "grace"], ["Ada one.", "ada"], ["Grace words.", "grace"]],
+    replayedChunks: 1,
   },
   "Late signals miss ongoing speech": { shown: [["Setup.", "grace"], [GAP, "ada"]] },
   "Brief drops end recoverable captions": { shown: [["Recovered.", "ada"]], replayedChunks: 1 },
@@ -712,7 +728,7 @@ const expected: Record<string, Outcome> = {
   },
   "Recent speech loses its speaker": { shown: [["Setup.", "grace"], ["Ada long.", "ada"]], replayedChunks: 27 },
   "Same-tick audio changes owners": {
-    shown: [["Setup.", "grace"], ["One.", "ada"], ["Two.", "grace"], ["Three.", "ada"]],
+    shown: [["Setup.", "grace"], ["One.", "ada"], ["Two.", "grace"]],
     replayedChunks: 3,
   },
   "Replays change speaking order": {
@@ -748,8 +764,9 @@ const startRig = async (model: string) => {
 describe("a line's place and start come from its first audio and never move (Greptile at 52d2f420)", () => {
   it("a long Sarvam caption keeps its first audio's place and start when the audio limit trims its oldest chunks", async () => {
     const rig = await startRig(SARVAM);
-    const socket = await signalsActive(rig);
+    await signalsActive(rig);
     await rig.send({ type: "audio.chunk", audio: LONG_SPEECH, speaker: ada });
+    const socket = await rig.lane(ada);
     socket.emit(sarvamSpeechStart());
     await settle();
     const line = ledgerOf(rig).activeUnordered().find(({ speaker }) => speaker.userId === "ada")!;
@@ -784,139 +801,5 @@ describe("a line's place and start come from its first audio and never move (Gre
     await settle();
 
     expect(segmentOf(rig, "Ada buffered.")?.startMs).toBe(reachedRoomAt);
-  });
-});
-
-describe("Sarvam answer positions stay open for their whole window (Greptile at 52d2f420)", () => {
-  const speakerFor = (index: number) => (index % 2 === 0 ? grace : ada);
-  const owe = async (rig: Rig, socket: { emit: (event: unknown) => void }, count: number) => {
-    for (let index = 0; index < count; index += 1) {
-      await rig.speak(speakerFor(index));
-      socket.emit(sarvamSpeechStart());
-      await rig.endTurn(speakerFor(index));
-      await vi.advanceTimersByTimeAsync(1_000);
-    }
-  };
-
-  it("never gives a late answer to a newer line after more than 16 lines time out with answers owed", async () => {
-    const rig = await startRig(SARVAM);
-    const socket = await signalsActive(rig);
-    await owe(rig, socket, 20);
-    await vi.advanceTimersByTimeAsync(10_000);
-    await rig.speak(ada);
-    socket.emit(sarvamSpeechStart());
-    await rig.endTurn(ada);
-    await vi.advanceTimersByTimeAsync(DEADLINE - 2_000);
-    expect(shown(rig).filter(([text]) => text === GAP)).toHaveLength(20);
-    for (let index = 0; index < 20; index += 1) socket.emit(sarvamFinal("late", `Late ${index}.`));
-    socket.emit(sarvamFinal("fresh", "Fresh."));
-    await settle();
-
-    const texts = shown(rig).map(([text]) => text);
-    expect(texts.filter((text) => text.startsWith("Late"))).toEqual([]);
-    expect(shown(rig).at(-1)).toEqual(["Fresh.", "ada"]);
-  });
-
-  it("a refused line keeps its speaker's utterance until it ends, so continuing speech opens no second line or position", async () => {
-    const rig = await startRig(SARVAM);
-    const socket = await signalsActive(rig);
-    await owe(rig, socket, 17);
-    await rig.speak(ada);
-    socket.emit(sarvamSpeechStart());
-    await rig.endTurn(ada);
-    await vi.advanceTimersByTimeAsync(DEADLINE - 500);
-    const session = (rig.room as unknown as {
-      liveConnection: { session: { utteranceCount: number } };
-    }).liveConnection.session;
-    const linesOf = (userId: string) =>
-      (rig.room as unknown as { ledger: { all(): PlacedLine[] } }).ledger
-        .all()
-        .filter(({ speaker }) => speaker.userId === userId).length;
-    const graceLinesBefore = linesOf("grace");
-    const utterancesBefore = session.utteranceCount;
-    await rig.speak(grace);
-    socket.emit(sarvamSpeechStart());
-    for (let chunk = 0; chunk < 8; chunk += 1) {
-      await vi.advanceTimersByTimeAsync(120);
-      await rig.speak(grace);
-    }
-    await vi.advanceTimersByTimeAsync(120);
-    await rig.speak(ada);
-    socket.emit(sarvamSpeechStart());
-    await rig.endTurn(ada);
-    await vi.advanceTimersByTimeAsync(2_000);
-
-    expect(session.utteranceCount - utterancesBefore).toBe(2);
-    expect(linesOf("grace") - graceLinesBefore).toBe(1);
-    expect(shown(rig).at(-1)).toEqual([GAP, "ada"]);
-  });
-
-  it("a refused utterance's continuing speech is not replayed as a second line after a reconnect", async () => {
-    const rig = await startRig(SARVAM);
-    const socket = await signalsActive(rig);
-    await owe(rig, socket, 17);
-    await rig.speak(ada);
-    socket.emit(sarvamSpeechStart());
-    await rig.endTurn(ada);
-    await vi.advanceTimersByTimeAsync(DEADLINE - 500);
-    const graceShownBefore = shown(rig).filter(([, speaker]) => speaker === "grace").length;
-    await rig.speak(grace);
-    socket.emit(sarvamSpeechStart());
-    for (let chunk = 0; chunk < 8; chunk += 1) {
-      await vi.advanceTimersByTimeAsync(120);
-      await rig.speak(grace);
-    }
-    socket.disconnect();
-    await vi.advanceTimersByTimeAsync(3_000);
-    const replacement = rig.providerSockets().at(-1)!;
-    expect(replacement).not.toBe(socket);
-    await vi.advanceTimersByTimeAsync(DEADLINE + 1_000);
-
-    expect(ledgerOf(rig).activeUnordered().filter(({ speaker }) => speaker.userId === "grace")).toHaveLength(0);
-    expect(shown(rig).filter(([, speaker]) => speaker === "grace").length - graceShownBefore).toBe(1);
-  });
-
-  it("a refused line stops owning its speaker's speech when Sarvam ends the utterance", async () => {
-    const rig = await startRig(SARVAM);
-    const socket = await signalsActive(rig);
-    await owe(rig, socket, 17);
-    await rig.speak(ada);
-    socket.emit(sarvamSpeechStart());
-    await rig.endTurn(ada);
-    await vi.advanceTimersByTimeAsync(DEADLINE - 500);
-    await rig.speak(grace);
-    socket.emit(sarvamSpeechStart());
-    const refused = () =>
-      (rig.room as unknown as { ledger: { all(): (PlacedLine & { refused?: boolean; audio: unknown[] })[] } }).ledger
-        .all()
-        .filter((line) => line.refused);
-    await vi.advanceTimersByTimeAsync(120);
-    await rig.speak(grace);
-    const heldWhileSpeaking = refused()[0]?.audio.length ?? 0;
-    socket.emit(sarvamSpeechEnd());
-    await vi.advanceTimersByTimeAsync(120);
-    await rig.speak(grace);
-
-    expect(refused()).toHaveLength(1);
-    expect(heldWhileSpeaking).toBe(1);
-    expect(refused()[0].audio).toHaveLength(heldWhileSpeaking);
-  });
-
-  it("shows a new heard line as a gap at once while 16 answers are owed, and keeps later answers on their own lines", async () => {
-    const rig = await startRig(SARVAM);
-    const socket = await signalsActive(rig);
-    await owe(rig, socket, 17);
-    await rig.speak(ada);
-    socket.emit(sarvamSpeechStart());
-    await rig.endTurn(ada);
-    await vi.advanceTimersByTimeAsync(DEADLINE - 2_000);
-    const gapsBefore = shown(rig).filter(([text]) => text === GAP).length;
-    await rig.speak(grace);
-    socket.emit(sarvamSpeechStart());
-    await rig.endTurn(grace);
-    await vi.advanceTimersByTimeAsync(100);
-
-    expect(shown(rig).filter(([text]) => text === GAP).length).toBe(gapsBefore + 1);
-    expect(shown(rig).at(-1)).toEqual([GAP, "grace"]);
   });
 });

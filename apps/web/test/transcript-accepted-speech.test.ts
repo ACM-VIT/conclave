@@ -1,36 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  TRANSCRIPTION_COMMIT_ACK_TIMEOUT_MS as COMMIT_ACK_TIMEOUT,
   TRANSCRIPTION_GAP_MARKER as GAP,
   TRANSCRIPTION_LINE_DEADLINE_MS as DEADLINE,
-  TRANSCRIPTION_RECOVERY_MAX_AUDIO_BYTES as REPLAY_AUDIO_LIMIT,
 } from "../transcript-worker/src/constants";
 import {
-  Pcm24To16Downsampler,
-  SARVAM_EXPIRED_SLOT_KEPT_MS as SARVAM_OWED_KEPT,
-} from "../transcript-worker/src/transcription/sarvam";
-import {
-  AUDIO,
   OPENAI,
   SARVAM,
+  answerSarvamReplays,
   openAiCommitted,
   openAiDelta,
   openAiFinal,
   sarvamFinal,
-  sarvamSpeechEnd,
   sarvamSpeechStart,
-  seeded,
   settle,
   transcriptRoomRig,
-  type FakeProviderSocket,
 } from "./transcript-room-rig";
 
 const { lookup } = vi.hoisted(() => ({ lookup: vi.fn() }));
-const { SPEECH_CHUNK_BYTES, FLOOD_CHUNKS } = vi.hoisted(() => ({ SPEECH_CHUNK_BYTES: 12_800, FLOOD_CHUNKS: 240 }));
-vi.mock("../transcript-worker/src/constants", async (original) => ({
-  ...(await original<typeof import("../transcript-worker/src/constants")>()),
-  TRANSCRIPTION_RECOVERY_MAX_AUDIO_BYTES: FLOOD_CHUNKS * SPEECH_CHUNK_BYTES,
-}));
 vi.mock("@conclave/ai/room-server", async (original) => ({
   ...(await original<typeof import("@conclave/ai/room-server")>()),
   fetchRoomAiEnvironment: lookup,
@@ -312,16 +298,19 @@ describe("every accepted line ends once, as its text or a gap", () => {
     expect(before.closed).toBe(true);
   });
 
-  it("Sarvam: an utterance that never gets its final ends as a gap, live and after a switch", async () => {
+  it("Sarvam: an utterance that never gets its final ends as a gap and replaces its connection, live and after a switch", async () => {
     vi.useFakeTimers();
     quiet();
     const { providerSockets, start, switchTo, speak, endTurn, savedTexts } = await rig(SARVAM);
     await start("hi");
-    const [before] = providerSockets();
+    const [first] = providerSockets();
     await speak();
     await endTurn();
     await vi.advanceTimersByTimeAsync(DEADLINE + 100);
     expect(savedTexts()).toEqual([GAP]);
+    expect(first.closed).toBe(true);
+    const before = providerSockets().at(-1)!;
+    expect(before).not.toBe(first);
 
     await speak();
     await endTurn();
@@ -473,7 +462,7 @@ describe("a gap means our side heard speech", () => {
     await vi.advanceTimersByTimeAsync(250);
     await speak();
     await endTurn();
-    expect(await restartedTexts()).toEqual(["First."]);
+    expect(await restartedTexts()).toEqual(["First.", GAP]);
     await vi.advanceTimersByTimeAsync(1_600);
     expect(await restartedTexts()).toEqual(["First.", GAP]);
     await vi.advanceTimersByTimeAsync(DEADLINE + 100);
@@ -659,7 +648,8 @@ describe("one owner and one release point per line", () => {
   it("Sarvam: a speech signal that comes after the audio was committed takes that audio and its speaker into a replay", async () => {
     vi.useFakeTimers();
     quiet();
-    const { providerSockets, start, speak, endTurn, room, viewerTranscript } = await rig(SARVAM);
+    const harness = await rig(SARVAM);
+    const { providerSockets, start, speak, endTurn, room, viewerTranscript } = harness;
     await start("hi");
     const [socket] = providerSockets();
     await speak(ada);
@@ -673,17 +663,15 @@ describe("one owner and one release point per line", () => {
     await endTurn(grace);
     await vi.advanceTimersByTimeAsync(700);
     socket.emit(sarvamSpeechStart());
-    socket.emit(sarvamSpeechStart());
+    (await harness.lane(grace)).emit(sarvamSpeechStart());
     await settle();
 
     socket.disconnect();
     await settle();
-    const replacement = providerSockets()[1];
-    replacement.emit(sarvamSpeechStart());
-    replacement.emit(sarvamSpeechStart());
-    replacement.emit(sarvamFinal("a", "Ada again."));
-    replacement.emit(sarvamFinal("g", "Grace now."));
-    await settle();
+    await answerSarvamReplays(harness, [
+      [ada, "a", "Ada again."],
+      [grace, "g", "Grace now."],
+    ]);
 
     expect(room.segments.map(({ text, speakerUserId }) => [text, speakerUserId])).toEqual([
       ["First.", "ada"],
@@ -696,7 +684,7 @@ describe("one owner and one release point per line", () => {
   it("Sarvam: the second of two close utterances whose final never comes ends as a gap", async () => {
     vi.useFakeTimers();
     quiet();
-    const { providerSockets, start, speak, endTurn, savedTexts } = await rig(SARVAM);
+    const { providerSockets, lane, start, speak, endTurn, savedTexts } = await rig(SARVAM);
     await start("hi");
     const [socket] = providerSockets();
     await speak(ada);
@@ -711,641 +699,10 @@ describe("one owner and one release point per line", () => {
     await speak(grace);
     await endTurn(grace);
     await vi.advanceTimersByTimeAsync(700);
-    socket.emit(sarvamSpeechStart());
+    (await lane(grace)).emit(sarvamSpeechStart());
     socket.emit(sarvamFinal("second", "Second."));
     await vi.advanceTimersByTimeAsync(DEADLINE + 100);
 
     expect(savedTexts()).toEqual(["First.", "Second.", GAP]);
-  });
-});
-
-type Provider = "openai" | "sarvam";
-type Speaker = { userId: string; displayName: string };
-type Connection = {
-  socket: FakeProviderSocket;
-  provider: Provider;
-  unacknowledged: Utterance[];
-  awaiting: Utterance[];
-  stalled: boolean;
-  dead: boolean;
-  signalled: boolean;
-};
-type Utterance = {
-  index: number;
-  text: string;
-  noise: boolean;
-  speaker: Speaker;
-  chunks: number;
-  itemId: string;
-  connection: Connection;
-  placedAt: number | null;
-  acceptedAt: number | null;
-  owedLate: boolean;
-  deadlineAt: number | null;
-  claiming: boolean;
-  lost: boolean;
-  partial: string | null;
-  final: "pending" | "shown" | "ignored" | "failed";
-};
-
-const LANGUAGES: Record<Provider, string[]> = { openai: ["en", "fr", "de", "hi"], sarvam: ["hi", "ta", "bn"] };
-const SPEAKERS: Speaker[] = [
-  { userId: "ada", displayName: "Ada" },
-  { userId: "grace", displayName: "Grace" },
-  { userId: "guest", displayName: "Guest" },
-];
-const NOISE_KINDS = ["noise", "clicks", "silence"] as const;
-const sarvamSpeechPayload = new Pcm24To16Downsampler().downsample(AUDIO.speech);
-const audioOf = (message: Record<string, unknown>) =>
-  typeof message.audio === "string"
-    ? message.audio
-    : (message.audio as { data?: string } | undefined)?.data;
-
-describe("invariant: every utterance a provider accepted ends as its text or a gap in its place", () => {
-  it.each(Array.from({ length: 400 }, (_, index) => index + 1))("seed %i", async (seed) => {
-    vi.useFakeTimers();
-    quiet();
-    const random = seeded(seed);
-    const pick = <T,>(items: readonly T[]): T => items[Math.floor(random() * items.length)];
-    const sarvamSignalsSpeech = random() < 0.5;
-    let provider: Provider = random() < 0.5 ? "openai" : "sarvam";
-    const model = (of: Provider) => (of === "openai" ? OPENAI : SARVAM);
-    const harness = await rig(model(provider));
-    const { providerSockets, connectPlans, start, switchTo, useModel, speak, sendAudio, commit, endTurn, stop } = harness;
-    await start(pick(LANGUAGES[provider]));
-
-    const connections: Connection[] = [];
-    const connect = () => {
-      const connection: Connection = {
-        socket: providerSockets().at(-1)!,
-        provider,
-        unacknowledged: [],
-        awaiting: [],
-        stalled: false,
-        dead: false,
-        signalled: false,
-      };
-      connections.push(connection);
-      return connection;
-    };
-    let live = connect();
-    const signalSpeech = (connection: Connection) => {
-      connection.signalled = true;
-      connection.socket.emit(sarvamSpeechStart());
-    };
-    const utterances: Utterance[] = [];
-    let acks = 0;
-    const place = (utterance: Utterance, at = Date.now()) => {
-      utterance.placedAt ??= at;
-      utterance.deadlineAt ??= at + DEADLINE;
-    };
-    const awaitAnswer = (connection: Connection, utterance: Utterance) => {
-      utterance.acceptedAt = Date.now();
-      utterance.owedLate = false;
-      connection.awaiting.push(utterance);
-    };
-    const acknowledge = (connection: Connection) => {
-      const utterance = connection.unacknowledged.shift()!;
-      utterance.itemId = `ack_${(acks += 1)}`;
-      connection.socket.emit(openAiCommitted(utterance.itemId));
-      place(utterance);
-      if (connection === live) utterance.deadlineAt = Date.now() + DEADLINE;
-      if (utterance.claiming && !connection.socket.closed) utterance.claiming = false;
-      awaitAnswer(connection, utterance);
-    };
-    const acknowledgeLive = () => {
-      while (live.provider === "openai" && live.unacknowledged.length) acknowledge(live);
-    };
-    const real = () => utterances.filter(({ noise }) => !noise);
-    const expectedText = (utterance: Utterance) =>
-      utterance.final === "shown" ? utterance.text : utterance.partial || GAP;
-    const retireExpired = (connection: Connection) => {
-      const now = Date.now();
-      while (connection.provider === "sarvam" && connection.awaiting[0] && now >= connection.awaiting[0].deadlineAt!) {
-        const expired = connection.awaiting[0];
-        expired.owedLate ||= !expired.noise &&
-          connection.awaiting
-            .slice(1)
-            .some((later) => !later.owedLate && later.acceptedAt! <= expired.deadlineAt! && later.deadlineAt! >= expired.deadlineAt!);
-        if (expired.owedLate && now - expired.deadlineAt! <= SARVAM_OWED_KEPT) return;
-        connection.awaiting.shift();
-      }
-    };
-    const answerable = (connection: Connection) => {
-      retireExpired(connection);
-      return connection.provider === "openai" ? connection.awaiting.filter(({ lost }) => !lost) : connection.awaiting;
-    };
-    const answering = () =>
-      connections.filter((connection) => answerable(connection).length && !connection.stalled && !connection.dead);
-    const newUtterance = (noise: boolean): Utterance => {
-      const utterance: Utterance = {
-        index: utterances.length,
-        text: noise ? "" : `Line ${utterances.length}.`,
-        noise,
-        speaker: pick(SPEAKERS),
-        chunks: 1,
-        itemId: `u${utterances.length}`,
-        connection: live,
-        placedAt: null,
-        acceptedAt: null,
-        owedLate: false,
-        deadlineAt: null,
-        claiming: false,
-        lost: false,
-        partial: null,
-        final: "pending",
-      };
-      utterances.push(utterance);
-      return utterance;
-    };
-
-    const roomCommitQueue = () =>
-      (harness.room as unknown as { liveConnection: { commitQueue: { committedAt: number }[] } | null }).liveConnection
-        ?.commitQueue ?? [];
-    const failLive = async (cause: "drop" | "ackTimeout", handOffTo?: Provider) => {
-      if (live.dead) return;
-      const failed = live;
-      if (cause === "ackTimeout") {
-        const head = roomCommitQueue()[0];
-        if (!head) return;
-        await vi.advanceTimersByTimeAsync(Math.max(0, head.committedAt + COMMIT_ACK_TIMEOUT - Date.now()));
-      }
-      const owed = [...failed.awaiting]
-        .filter(({ noise, deadlineAt }) => !noise && Date.now() < deadlineAt!)
-        .sort((left, right) => left.index - right.index);
-      const unanswered = cause === "ackTimeout" ? failed.unacknowledged.filter(({ claiming }) => claiming) : [];
-      const unacknowledged = failed.unacknowledged.filter((utterance) => !unanswered.includes(utterance));
-      for (const utterance of unanswered) utterance.deadlineAt = Date.now();
-      const picked = handOffTo
-        ? "unreachable"
-        : cause === "drop"
-          ? pick(["plain", "plain", "midReplay", "unreachable"] as const)
-          : "plain";
-      const kind = picked === "midReplay" && owed.length + unacknowledged.length === 0 ? "plain" : picked;
-      if (kind === "midReplay") connectPlans.push(1);
-      if (kind === "unreachable") connectPlans.push("unreachable");
-      if (cause === "drop") failed.socket.disconnect();
-      await settle();
-      failed.dead = true;
-      failed.awaiting = failed.awaiting.filter((utterance) => !owed.includes(utterance));
-      failed.unacknowledged = [];
-      const buffered: Utterance[] = [];
-      if (kind === "unreachable") {
-        while (random() < 0.5) {
-          const utterance = newUtterance(false);
-          buffered.push(utterance);
-          await speak(utterance.speaker);
-          await endTurn(utterance.speaker);
-        }
-        if (handOffTo || random() < 0.4) {
-          if (handOffTo || random() < 0.4) {
-            provider = handOffTo ?? (provider === "openai" ? "sarvam" : "openai");
-            useModel(model(provider));
-          }
-          await switchTo(pick(LANGUAGES[provider]));
-        } else {
-          await vi.advanceTimersByTimeAsync(300);
-        }
-      } else if (kind === "midReplay") {
-        await vi.advanceTimersByTimeAsync(300);
-      }
-      await settle();
-      live = connect();
-      const now = Date.now();
-      for (const utterance of [...owed, ...unacknowledged]) {
-        utterance.claiming = true;
-        utterance.lost = false;
-        utterance.deadlineAt = now + DEADLINE;
-      }
-      for (const utterance of buffered) {
-        utterance.placedAt = now;
-        utterance.deadlineAt = now + DEADLINE;
-      }
-      const replayed = [...owed, ...unacknowledged, ...buffered].sort((left, right) => left.index - right.index);
-      for (const utterance of replayed) utterance.connection = live;
-      const replayedChunks = replayed.reduce((sum, { chunks }) => sum + chunks, 0);
-      const sent = live.socket.sent;
-      if (live.provider === "openai") {
-        const commits = sent.filter(({ type }) => type === "input_audio_buffer.commit").length;
-        const speech = sent.filter((message) => audioOf(message) === AUDIO.speech).length;
-        expect(commits, "every owed line's audio is replayed with its commit").toBe(replayed.length);
-        expect(speech, "no line's replay audio was dropped by another line ending").toBe(replayedChunks);
-        live.unacknowledged = replayed;
-      } else {
-        const speech = sent.filter((message) => audioOf(message) === sarvamSpeechPayload).length;
-        expect(speech, "no line's replay audio was dropped by another line ending").toBe(replayedChunks);
-        if (sarvamSignalsSpeech) for (const _ of replayed) signalSpeech(live);
-        live.awaiting = [];
-        for (const utterance of replayed) awaitAnswer(live, utterance);
-      }
-    };
-
-    const moves: Record<string, () => Promise<void>> = {
-      async utter() {
-        const utterance = newUtterance(false);
-        await speak(utterance.speaker);
-        if (live.provider === "openai") {
-          await commit(utterance.speaker);
-          place(utterance);
-          live.unacknowledged.push(utterance);
-          if (random() < 0.7) acknowledge(live);
-          return;
-        }
-        if (sarvamSignalsSpeech) signalSpeech(live);
-        place(utterance);
-        awaitAnswer(live, utterance);
-        const tail = sarvamSignalsSpeech && random() < 0.3;
-        if (tail) {
-          await vi.advanceTimersByTimeAsync(200);
-          await speak(utterance.speaker);
-          utterance.chunks += 1;
-          utterance.deadlineAt = Date.now() + DEADLINE;
-        }
-        if (live.awaiting.length === 1 && !live.stalled && random() < (tail ? 0.6 : 0.25)) {
-          live.awaiting.shift();
-          utterance.final = "shown";
-          live.socket.emit(sarvamFinal(utterance.itemId, utterance.text));
-          await settle();
-        } else if (tail) {
-          live.socket.emit(sarvamSpeechEnd());
-        }
-        await endTurn(utterance.speaker);
-      },
-      async utterLate() {
-        if (live.provider !== "sarvam" || !sarvamSignalsSpeech) return moves.utter();
-        const utterance = newUtterance(false);
-        await speak(utterance.speaker);
-        place(utterance);
-        await endTurn(utterance.speaker);
-        await vi.advanceTimersByTimeAsync(600 + random() * 800);
-        signalSpeech(live);
-        utterance.deadlineAt = Date.now() + DEADLINE;
-        awaitAnswer(live, utterance);
-      },
-      async signalEarly() {
-        if (live.provider !== "sarvam" || !sarvamSignalsSpeech) return moves.utter();
-        await vi.advanceTimersByTimeAsync(1_600);
-        const utterance = newUtterance(false);
-        signalSpeech(live);
-        place(utterance);
-        awaitAnswer(live, utterance);
-        await vi.advanceTimersByTimeAsync(50 + random() * 400);
-        await speak(utterance.speaker);
-        utterance.deadlineAt = Date.now() + DEADLINE;
-        await endTurn(utterance.speaker);
-        if (answerable(live).length === 1 && !live.stalled && random() < 0.4) {
-          await vi.advanceTimersByTimeAsync(100 + random() * 500);
-          live.awaiting.shift();
-          utterance.final = "shown";
-          live.socket.emit(sarvamFinal(utterance.itemId, utterance.text));
-          await settle();
-          return;
-        }
-        await vi.advanceTimersByTimeAsync(1_600);
-      },
-      async monologue() {
-        if (live.provider !== "sarvam" || utterances.some(({ chunks, final }) => chunks > 1 && final === "pending")) {
-          return moves.utter();
-        }
-        const utterance = newUtterance(false);
-        await speak(utterance.speaker);
-        if (sarvamSignalsSpeech) signalSpeech(live);
-        place(utterance);
-        awaitAnswer(live, utterance);
-        for (let elapsed = 0; elapsed < DEADLINE + 2_000; elapsed += 250) {
-          await vi.advanceTimersByTimeAsync(250);
-          await speak(utterance.speaker);
-          utterance.chunks += 1;
-        }
-        utterance.deadlineAt = Date.now() + DEADLINE;
-        await endTurn(utterance.speaker);
-        if (sarvamSignalsSpeech) live.socket.emit(sarvamSpeechEnd());
-      },
-      async lateTurns() {
-        if (live.provider !== "sarvam" || !sarvamSignalsSpeech) return moves.utter();
-        await vi.advanceTimersByTimeAsync(1_600);
-        const first = newUtterance(false);
-        const second = newUtterance(false);
-        if (random() < 0.5) second.speaker = first.speaker;
-        for (const utterance of [first, second]) {
-          await speak(utterance.speaker);
-          place(utterance);
-          await endTurn(utterance.speaker);
-          await vi.advanceTimersByTimeAsync(100 + random() * 200);
-        }
-        await vi.advanceTimersByTimeAsync(200 + random() * 400);
-        for (const utterance of [first, second]) {
-          signalSpeech(live);
-          utterance.deadlineAt = Date.now() + DEADLINE;
-          awaitAnswer(live, utterance);
-        }
-      },
-      async lateEnd() {
-        if (live.provider !== "sarvam" || !sarvamSignalsSpeech) return moves.utter();
-        await vi.advanceTimersByTimeAsync(1_600);
-        const first = newUtterance(false);
-        await speak(first.speaker);
-        signalSpeech(live);
-        place(first);
-        awaitAnswer(live, first);
-        await endTurn(first.speaker);
-        await vi.advanceTimersByTimeAsync(100 + random() * 400);
-        const second = newUtterance(false);
-        await speak(second.speaker);
-        await endTurn(second.speaker);
-        live.socket.emit(sarvamSpeechEnd());
-        await vi.advanceTimersByTimeAsync(random() * 300);
-        signalSpeech(live);
-        place(second);
-        awaitAnswer(live, second);
-      },
-      async cough() {
-        if (live.provider !== "sarvam" || !live.signalled) return moves.noise();
-        await vi.advanceTimersByTimeAsync(1_600);
-        const utterance = newUtterance(true);
-        await speak(utterance.speaker);
-        await endTurn(utterance.speaker);
-        await vi.advanceTimersByTimeAsync(3_100);
-      },
-      async crosstalk() {
-        if (live.provider !== "sarvam" || !sarvamSignalsSpeech) return moves.utter();
-        await vi.advanceTimersByTimeAsync(1_600);
-        const first = newUtterance(false);
-        const second = newUtterance(false);
-        second.speaker = SPEAKERS.find(({ userId }) => userId !== first.speaker.userId)!;
-        for (const utterance of [first, second]) {
-          await speak(utterance.speaker);
-          await endTurn(utterance.speaker);
-        }
-        for (const utterance of [first, second]) {
-          signalSpeech(live);
-          place(utterance);
-          awaitAnswer(live, utterance);
-        }
-      },
-      async noise() {
-        acknowledgeLive();
-        await settle();
-        await vi.advanceTimersByTimeAsync(600 + random() * 1_000);
-        const utterance = newUtterance(true);
-        await sendAudio(pick(NOISE_KINDS), utterance.speaker);
-        if (live.provider === "openai") {
-          await commit(utterance.speaker);
-          live.socket.emit(openAiCommitted(`noise_${utterance.index}`));
-          live.socket.emit(openAiFinal(`noise_${utterance.index}`, ""));
-          return;
-        }
-        await endTurn(utterance.speaker);
-        if (sarvamSignalsSpeech && random() < 0.5) {
-          signalSpeech(live);
-          place(utterance);
-          awaitAnswer(live, utterance);
-        }
-      },
-      async acknowledge() {
-        const waiting = connections.filter(({ unacknowledged, dead }) => unacknowledged.length && !dead);
-        if (waiting.length) acknowledge(pick(waiting));
-      },
-      async final() {
-        const ready = answering();
-        if (!ready.length) return;
-        const connection = pick(ready);
-        const utterance = connection.provider === "openai" ? pick(answerable(connection)) : connection.awaiting[0];
-        connection.awaiting.splice(connection.awaiting.indexOf(utterance), 1);
-        if (Date.now() < utterance.deadlineAt!) {
-          expect(connection.socket.closed, `${utterance.text}: its socket stays open until its deadline`).toBe(false);
-        }
-        if (!utterance.owedLate) utterance.final = connection.socket.closed ? "ignored" : "shown";
-        connection.socket.emit(
-          connection.provider === "openai"
-            ? openAiFinal(utterance.itemId, utterance.text)
-            : sarvamFinal(utterance.itemId, utterance.text),
-        );
-      },
-      async delta() {
-        const showing = connections
-          .filter(({ provider: of, dead }) => of === "openai" && !dead)
-          .flatMap(({ awaiting }) => awaiting.filter(({ partial, noise }) => partial === null && !noise));
-        if (!showing.length) return;
-        const utterance = pick(showing);
-        const words = `${utterance.text} so far`;
-        utterance.connection.socket.emit(openAiDelta(utterance.itemId, words));
-        const shown = !utterance.connection.socket.closed && Date.now() < utterance.deadlineAt!;
-        utterance.partial = shown ? words : "";
-      },
-      async lose() {
-        const ready = answering();
-        if (!ready.length) return;
-        const connection = pick(ready);
-        if (connection.provider === "sarvam") {
-          connection.stalled = true;
-        } else {
-          pick(answerable(connection)).lost = true;
-        }
-      },
-      async wait() {
-        acknowledgeLive();
-        await settle();
-        await vi.advanceTimersByTimeAsync(random() < 0.7 ? 200 + random() * 3_000 : 5_000 + random() * 30_000);
-      },
-      async switch() {
-        const previous = live;
-        if (random() < 0.4) {
-          provider = provider === "openai" ? "sarvam" : "openai";
-          useModel(model(provider));
-        }
-        const opened = providerSockets().length;
-        await switchTo(pick(LANGUAGES[provider]));
-        expect(providerSockets()).toHaveLength(opened + 1);
-        const now = Date.now();
-        for (const utterance of previous.unacknowledged) {
-          place(utterance, now);
-          utterance.deadlineAt = now + DEADLINE;
-        }
-        live = connect();
-      },
-      async disconnect() {
-        await failLive("drop");
-      },
-      async handOffToSarvam() {
-        if (live.provider !== "openai" || live.dead) return moves.utter();
-        await failLive("drop", "sarvam");
-      },
-      async ackTimeout() {
-        if (live.provider !== "openai" || live.dead) return moves.utter();
-        const utterance = newUtterance(false);
-        await speak(utterance.speaker);
-        await commit(utterance.speaker);
-        place(utterance);
-        live.unacknowledged.push(utterance);
-        const opened = providerSockets().length;
-        await failLive("ackTimeout");
-        expect(providerSockets(), "the ack watchdog reconnects a provider that stopped acknowledging").toHaveLength(opened + 1);
-      },
-      async whisper() {
-        if (live.provider !== "openai") return moves.utter();
-        const utterance = newUtterance(false);
-        utterance.chunks = 0;
-        await sendAudio("whisper", utterance.speaker);
-        await commit(utterance.speaker);
-        place(utterance);
-        live.unacknowledged.push(utterance);
-        acknowledgeLive();
-        utterance.partial = `${utterance.text} so far`;
-        live.socket.emit(openAiDelta(utterance.itemId, utterance.partial));
-      },
-      async flood() {
-        if (live.provider !== "openai" || harness.heldAudioBytes() > 0) return moves.utter();
-        expect(AUDIO.speech.length).toBe(SPEECH_CHUNK_BYTES);
-        const utterance = newUtterance(false);
-        for (let index = 0; index < FLOOD_CHUNKS + 10; index += 1) {
-          await speak(utterance.speaker);
-          await vi.advanceTimersByTimeAsync(20);
-        }
-        expect(harness.heldAudioBytes(), "a relay that never commits stays within the replay audio limit").toBeLessThanOrEqual(
-          REPLAY_AUDIO_LIMIT,
-        );
-        await commit(utterance.speaker);
-        place(utterance);
-        live.unacknowledged.push(utterance);
-        acknowledgeLive();
-        live.awaiting.splice(live.awaiting.indexOf(utterance), 1);
-        utterance.final = "shown";
-        live.socket.emit(openAiFinal(utterance.itemId, utterance.text));
-      },
-      async lateAck() {
-        if (live.provider !== "openai" || live.dead || live.unacknowledged.length === 0) return;
-        const now = Date.now();
-        if (live.unacknowledged.some(({ placedAt }) => now - placedAt! > 10_000)) return;
-        await vi.advanceTimersByTimeAsync(DEADLINE + 1_000);
-        acknowledgeLive();
-      },
-      async turnPair() {
-        if (live.provider !== "sarvam" || live.dead || (!sarvamSignalsSpeech && live.awaiting.length > 0)) {
-          return moves.utter();
-        }
-        const first = newUtterance(false);
-        await speak(first.speaker);
-        if (sarvamSignalsSpeech) signalSpeech(live);
-        place(first);
-        awaitAnswer(live, first);
-        if (!sarvamSignalsSpeech) {
-          live.awaiting.shift();
-          first.final = "shown";
-          live.socket.emit(sarvamFinal(first.itemId, first.text));
-          await settle();
-        }
-        await vi.advanceTimersByTimeAsync(700);
-        const second = newUtterance(false);
-        second.speaker = first.speaker;
-        await speak(second.speaker);
-        if (sarvamSignalsSpeech) signalSpeech(live);
-        place(second);
-        awaitAnswer(live, second);
-        await endTurn(second.speaker);
-      },
-      async itemFails() {
-        const failing = connections
-          .filter(({ provider: of, dead, socket }) => of === "openai" && !dead && !socket.closed)
-          .flatMap(({ awaiting }) => awaiting.filter(({ noise, lost, deadlineAt }) => !noise && !lost && Date.now() < deadlineAt!));
-        if (failing.length === 0) return;
-        const utterance = pick(failing);
-        utterance.connection.awaiting.splice(utterance.connection.awaiting.indexOf(utterance), 1);
-        utterance.final = "failed";
-        utterance.connection.socket.emit({
-          type: "conversation.item.input_audio_transcription.failed",
-          item_id: utterance.itemId,
-          error: { message: "This item could not be transcribed" },
-        });
-      },
-      async restart() {
-        const viewer = harness.viewerTranscript();
-        expect(
-          viewer.segments.map(({ itemId, text }) => [itemId, text]),
-          "a viewer shows exactly what the room saved",
-        ).toEqual(harness.room.segments.map(({ itemId, text }) => [itemId, text]));
-        const joined = (await harness.viewerSnapshot()) as {
-          segments: { itemId: string; text: string }[];
-          partials: { itemId: string; text: string }[];
-        };
-        expect(
-          joined.segments.map(({ itemId, text }) => [itemId, text]),
-          "a viewer that joins now sees every line other viewers see",
-        ).toEqual(viewer.segments.map(({ itemId, text }) => [itemId, text]));
-        expect(
-          new Map(joined.partials.map(({ itemId, text }) => [itemId, text])),
-          "and the same words in progress",
-        ).toEqual(new Map(Array.from(viewer.partials.values(), ({ itemId, text }) => [itemId, text])));
-        const placed = real().filter(({ placedAt }) => placedAt !== null);
-        const saved = await harness.restartedSegments();
-        expect(
-          saved.map(({ text }) => text),
-          `a restart keeps one place per accepted utterance, and none for noise: expected ${JSON.stringify(placed.map(({ text, final, partial }) => [text, final, partial]))} saved ${JSON.stringify(saved.map(({ text, itemId }) => [text, itemId]))}`,
-        ).toHaveLength(placed.length);
-        placed.forEach((utterance, index) => {
-          const allowed = utterance.final === "shown" ? [utterance.text] : [GAP, ...(utterance.partial ? [utterance.partial] : [])];
-          expect(allowed, `${utterance.text} after a restart`).toContain(saved[index]?.text);
-          expect(saved[index]?.speakerUserId, `${utterance.text} keeps its speaker after a restart`).toBe(utterance.speaker.userId);
-        });
-      },
-    };
-    const weights: [string, number][] = [
-      ["utter", 22],
-      ["utterLate", 5],
-      ["signalEarly", 3],
-      ["monologue", 2],
-      ["crosstalk", 3],
-      ["lateTurns", 3],
-      ["lateEnd", 3],
-      ["cough", 2],
-      ["whisper", 4],
-      ["flood", 3],
-      ["ackTimeout", 3],
-      ["handOffToSarvam", 3],
-      ["turnPair", 4],
-      ["lateAck", 3],
-      ["itemFails", 3],
-      ["noise", 10],
-      ["final", 22],
-      ["delta", 7],
-      ["wait", 12],
-      ["switch", 8],
-      ["disconnect", 5],
-      ["lose", 4],
-      ["acknowledge", 4],
-      ["restart", 8],
-    ];
-    const total = weights.reduce((sum, [, weight]) => sum + weight, 0);
-    for (let step = 0; step < 32; step += 1) {
-      let roll = random() * total;
-      const [move] = weights.find(([, weight]) => (roll -= weight) < 0) ?? weights[0];
-      await moves[move]();
-      await settle();
-    }
-
-    acknowledgeLive();
-    await settle();
-    await moves.restart();
-    await vi.advanceTimersByTimeAsync(2 * DEADLINE + 15_000);
-    const lines = harness.room.segments;
-    expect(lines.map(({ text }) => text)).toEqual(real().map(expectedText));
-    expect(lines.map(({ speakerUserId }) => speakerUserId), "every line keeps the speaker of its own audio").toEqual(
-      real().map(({ speaker }) => speaker.userId),
-    );
-    expect(await harness.restartedTexts()).toEqual(real().map(expectedText));
-    expect(connections.slice(0, -1).every(({ socket }) => socket.closed), "every replaced socket closes").toBe(true);
-    const viewer = harness.viewerTranscript();
-    expect(viewer.segments.map(({ text }) => text), "a viewer shows each line once, in place").toEqual(real().map(expectedText));
-    const words = viewer.segments.map(({ text }) => text).filter((text) => text !== GAP);
-    expect(new Set(words).size, "no words appear in two captions").toBe(words.length);
-    expect(viewer.partials.size, "no partial outlives its line").toBe(0);
-    await stop();
-    expect(harness.retainedLineState(), "nothing a line held outlives the session").toEqual({
-      lines: 0,
-      connections: 0,
-      unownedAudio: 0,
-      bufferedAudio: 0,
-      timers: 0,
-    });
   });
 });

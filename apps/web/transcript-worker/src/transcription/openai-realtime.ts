@@ -30,10 +30,11 @@ class OpenAiRealtimeTranscriptionSession implements LiveTranscriptionSession {
     private readonly callbacks: LiveTranscriptionCallbacks,
   ) {}
 
-  appendAudio(audioBase64: string): void {
+  appendAudio(audioBase64: string): null {
     this.socket.send(
       JSON.stringify({ type: "input_audio_buffer.append", audio: audioBase64 }),
     );
+    return null;
   }
 
   commitAudio(): void {

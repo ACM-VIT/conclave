@@ -1,4 +1,5 @@
 import { vi, type Mock } from "vitest";
+import { SARVAM_REPLAY_SETTLE_MS } from "../transcript-worker/src/constants";
 import { TranscriptRoom } from "../transcript-worker/src/room";
 import type { Env, Viewer } from "../transcript-worker/src/types";
 import { clicksPcm, noisePcm, pcmBase64, silencePcm, voicedPcm } from "./transcript-audio-fixtures";
@@ -107,6 +108,7 @@ export async function transcriptRoomRig(
   );
   lookup.mockResolvedValue(roomSettings(transcriptModel));
   const snapshots: { segments: TestSegment[] }[] = [];
+  const stored = { snapshot: false };
   const room = new TranscriptRoom(
     {
       storage: {
@@ -115,8 +117,12 @@ export async function transcriptRoomRig(
           const copy = structuredClone(value);
           await saves.before?.();
           snapshots.push(copy);
+          stored.snapshot = true;
         },
-        delete: async () => true,
+        delete: async () => {
+          stored.snapshot = false;
+          return true;
+        },
         setAlarm: async () => {},
       },
       waitUntil: () => undefined,
@@ -198,36 +204,29 @@ export async function transcriptRoomRig(
     }
     return { segments, partials };
   };
-  const retainedLineState = () => {
-    const internals = room as unknown as {
+  type StoredChunk = { audio: string; owner: { kind: string } };
+  const internals = () =>
+    room as unknown as {
       ledger: { size: number };
       liveConnection: { commitQueue: unknown[]; providerToLine: Map<string, string> } | null;
       providerDrains: Map<number, unknown>;
-      uncommittedAudio: Map<string, unknown>;
-      speakingLine: Map<string, string>;
-      transcriptionRecoveryAudio: { drain(): unknown[] };
+      audio: { all(): readonly StoredChunk[]; bytes: number; hasQueued(): boolean };
       lineTimer: unknown;
+      persistRetryTimer: unknown;
     };
-    return {
-      lines: internals.ledger.size,
-      connections: (internals.liveConnection ? 1 : 0) + internals.providerDrains.size,
-      unownedAudio: internals.uncommittedAudio.size + internals.speakingLine.size,
-      bufferedAudio: internals.transcriptionRecoveryAudio.drain().length,
-      timers: internals.lineTimer === null ? 0 : 1,
-    };
-  };
-  const retainedAudioBytes = () => {
-    const internals = room as unknown as {
-      ledger: { all(): { audio: { audio: string }[] }[] };
-      uncommittedAudio: Map<string, { chunks: { audio: string }[] }>;
-    };
-    return [
-      ...internals.ledger.all().flatMap(({ audio }) => audio),
-      ...Array.from(internals.uncommittedAudio.values()).flatMap(({ chunks }) => chunks),
-    ].reduce((sum, { audio }) => sum + audio.length, 0);
-  };
-  const heldAudioBytes = () =>
-    retainedAudioBytes() + (room as unknown as { transcriptionRecoveryAudio: { bytes: number } }).transcriptionRecoveryAudio.bytes;
+  const storedChunks = () => internals().audio.all();
+  const retainedLineState = () => ({
+    lines: internals().ledger.size,
+    connections: (internals().liveConnection ? 1 : 0) + internals().providerDrains.size,
+    unownedAudio: storedChunks().filter(({ owner }) => owner.kind === "unowned").length,
+    bufferedAudio: storedChunks().filter(({ owner }) => owner.kind === "queued").length,
+    timers: (internals().lineTimer === null ? 0 : 1) + (internals().persistRetryTimer === null ? 0 : 1),
+  });
+  const retainedAudioBytes = () =>
+    storedChunks()
+      .filter(({ owner }) => owner.kind !== "queued")
+      .reduce((sum, { audio }) => sum + audio.length, 0);
+  const heldAudioBytes = () => internals().audio.bytes;
   const lastSnapshotSegment = (text: string) =>
     snapshots.at(-1)?.segments.find((segment) => segment.text === text);
   const snapshotCount = () => snapshots.length;
@@ -278,6 +277,16 @@ export async function transcriptRoomRig(
       send: (message: object) => restarted.handleMessage(viewer, JSON.stringify(message)),
     };
   };
+  const lane = async (speaker?: TestSpeaker) => {
+    await settle();
+    const session = (room as unknown as {
+      liveConnection: { session: { lanes?: Map<string, { socket: FakeProviderSocket | { socket: FakeProviderSocket | null } }> } } | null;
+    }).liveConnection?.session;
+    const key = `${speaker?.userId ?? viewer.userId}:${speaker?.source ?? "mixed"}`;
+    const socket = session?.lanes?.get(key)?.socket;
+    if (!socket) throw new Error(`No Sarvam lane is open for ${key}.`);
+    return socket instanceof FakeProviderSocket ? socket : socket.socket!;
+  };
   const viewerSnapshot = async () => {
     await send({ type: "export.snapshot" });
     return sentMessages()
@@ -289,6 +298,9 @@ export async function transcriptRoomRig(
     send,
     saves,
     snapshots,
+    stored,
+    sentMessages,
+    lane,
     providerRequestCount: () => providerRequests,
     sockets,
     connectPlans,
@@ -350,4 +362,16 @@ export const seeded = (seed: number) => () => {
   let value = Math.imul(seed ^ (seed >>> 15), seed | 1);
   value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
   return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+};
+
+export const answerSarvamReplays = async (
+  rig: { lane: (speaker?: TestSpeaker) => Promise<FakeProviderSocket> },
+  answers: readonly (readonly [TestSpeaker | undefined, string, string])[],
+) => {
+  for (const [speaker, requestId, text] of answers) {
+    const socket = await rig.lane(speaker);
+    socket.emit(sarvamSpeechStart());
+    socket.emit(sarvamFinal(requestId, text));
+    await vi.advanceTimersByTimeAsync(SARVAM_REPLAY_SETTLE_MS + 50);
+  }
 };
