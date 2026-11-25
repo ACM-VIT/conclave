@@ -126,7 +126,7 @@ const scheduleWebinarFor = (state: SfuState) => {
   state.scheduledWebinars.byRoomChannel.set("conclave:room", webinar.id);
 };
 
-const lockedWebinarWithAnInvite = async (mergeFits: (call: number) => boolean) => {
+const lockedWebinarWithAnInvite = async (mergeFits: (call: number) => boolean, commits = true) => {
   const state = makeState();
   expect((await join(state, host)).ack).toHaveBeenCalledWith(joined);
   const room = state.rooms.get("conclave:room")!;
@@ -146,7 +146,7 @@ const lockedWebinarWithAnInvite = async (mergeFits: (call: number) => boolean) =
   room.holdGuestIdentityOf(invitedViewer.userId);
   room.holdGuestIdentityOf(otherViewer.userId);
   let calls = 0;
-  room.setGuestIdentityMerger(() => (mergeFits((calls += 1)) ? { commit: () => undefined } : null));
+  room.setGuestIdentityMerger(() => (mergeFits((calls += 1)) ? { commit: () => commits } : null));
   return { state, room };
 };
 
@@ -168,6 +168,18 @@ describe("a stage invite held under another of a guest's passes (Greptile)", () 
     const attempt = await join(state, onStage);
 
     expect(attempt.ack).not.toHaveBeenCalledWith(joined);
+    expect(room.getClient(`${onStage.userId}#${onStage.sessionId}`)).toBeUndefined();
+    expect(room.guestIdentityOf(invitedViewer.userId)).toBe(invitedViewer.guestProof);
+    expect(room.isWebinarPromotedUserKey(onStage.userId)).toBe(false);
+  });
+
+  it("is not used when the link the join relied on cannot be committed (Sol)", async () => {
+    const { state, room } = await lockedWebinarWithAnInvite(() => true, false);
+
+    const attempt = await join(state, onStage);
+
+    expect(attempt.ack).not.toHaveBeenCalledWith(joined);
+    expect(attempt.ack).toHaveBeenCalledWith(expect.objectContaining({ error: expect.any(String) as unknown }));
     expect(room.getClient(`${onStage.userId}#${onStage.sessionId}`)).toBeUndefined();
     expect(room.guestIdentityOf(invitedViewer.userId)).toBe(invitedViewer.guestProof);
     expect(room.isWebinarPromotedUserKey(onStage.userId)).toBe(false);
