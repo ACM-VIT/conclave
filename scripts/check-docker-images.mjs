@@ -10,6 +10,8 @@ import { contextProblems, repoRoot } from "./check-docker-context.mjs";
 import { rootContextBuilds } from "./docker-context/compose.mjs";
 
 const BOOT_TIMEOUT_MS = 120_000;
+const READY_EXEC_TIMEOUT_MS = 60_000;
+const LOGS_TIMEOUT_MS = 30_000;
 const VM_DAEMON_SOCKET = "/var/run/docker.sock";
 const LOCAL_BUILDER = "default";
 const OWNER_LABEL = "conclave-check-images.owner";
@@ -37,7 +39,7 @@ export class DockerSession {
     for (const child of this.children) child.kill(signal);
   }
 
-  run(args, env, { allowFailure = false, cleanup = false } = {}) {
+  run(args, env, { allowFailure = false, cleanup = false, timeoutMs } = {}) {
     if (this.signal && !cleanup) return Promise.reject(new Interrupted(this.signal));
     return new Promise((resolve, reject) => {
       const child = spawn("docker", args, { cwd: repoRoot, env, detached: cleanup, stdio: ["ignore", "pipe", "pipe"] });
@@ -47,9 +49,15 @@ export class DockerSession {
       child.stdout.setEncoding("utf8").on("data", (chunk) => (stdout += chunk));
       child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
       let settled = false;
+      let timedOut = false;
+      const timer = timeoutMs === undefined ? null : setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGKILL");
+      }, Math.max(0, timeoutMs));
       const settle = (error, result) => {
         if (settled) return;
         settled = true;
+        clearTimeout(timer);
         this.children.delete(child);
         if (error) reject(error);
         else resolve(result);
@@ -57,6 +65,10 @@ export class DockerSession {
       child.on("error", (error) => settle(error));
       child.on("close", (status) => {
         if (this.signal && !cleanup) return settle(new Interrupted(this.signal));
+        if (timedOut) {
+          if (!allowFailure) return settle(new Error(`docker ${args.join(" ")} did not finish within ${timeoutMs / 1000} s`));
+          return settle(null, { status: null, timedOut: true, stdout, stderr });
+        }
         if (status !== 0 && !allowFailure) return settle(new Error(`docker ${args.join(" ")} failed:\n${stderr.trim()}`));
         settle(null, { status, stdout, stderr });
       });
@@ -113,19 +125,22 @@ function healthProbe(port) {
   return `fetch("http://127.0.0.1:${port}/health").then((r) => { console.log(r.status); }, () => { console.log(0); })`;
 }
 
-async function waitForHealth(docker, id, port) {
-  const deadline = Date.now() + BOOT_TIMEOUT_MS;
+export async function waitForHealth(docker, id, port, { budgetMs = BOOT_TIMEOUT_MS } = {}) {
+  const deadline = Date.now() + budgetMs;
+  const remaining = () => deadline - Date.now();
   let last = "no answer";
-  while (Date.now() < deadline) {
-    const probe = await docker(["exec", id, "node", "-e", healthProbe(port)], { allowFailure: true });
+  while (remaining() > 0) {
+    const probe = await docker(["exec", id, "node", "-e", healthProbe(port)], { allowFailure: true, timeoutMs: remaining() });
     if (probe.stdout.trim() === "200") return;
-    last = probe.status === 0 ? `HTTP ${probe.stdout.trim()}` : probe.stderr.trim().split("\n").at(-1) || "exec failed";
-    if ((await docker(["inspect", "-f", "{{.State.Running}}", id], { allowFailure: true })).stdout.trim() !== "true") {
-      throw new Error(`the container exited before /health answered 200 (last: ${last})`);
-    }
-    await sleep(500);
+    if (probe.timedOut) last = "the probe did not finish";
+    else last = probe.status === 0 ? `HTTP ${probe.stdout.trim()}` : probe.stderr.trim().split("\n").at(-1) || "exec failed";
+    if (remaining() <= 0) break;
+    const state = await docker(["inspect", "-f", "{{.State.Running}}", id], { allowFailure: true, timeoutMs: remaining() });
+    if (state.timedOut) break;
+    if (state.stdout.trim() !== "true") throw new Error(`the container exited before /health answered 200 (last: ${last})`);
+    await sleep(Math.max(0, Math.min(500, remaining())));
   }
-  throw new Error(`/health did not answer 200 within ${BOOT_TIMEOUT_MS / 1000} s (last: ${last})`);
+  throw new Error(`/health did not answer 200 within ${budgetMs / 1000} s (last: ${last})`);
 }
 
 const BOOTS = {
@@ -135,7 +150,7 @@ const BOOTS = {
     mounts: () => [],
     async ready(docker, id) {
       await waitForHealth(docker, id, 3031);
-      await docker(["exec", "-w", "/app/packages/sfu", id, "node", "--import", "tsx", "-e", 'await import("@conclave/apps-sdk/authority/server");']);
+      await docker(["exec", "-w", "/app/packages/sfu", id, "node", "--import", "tsx", "-e", 'await import("@conclave/apps-sdk/authority/server");'], { timeoutMs: READY_EXEC_TIMEOUT_MS });
       return "/health answered 200 and @conclave/apps-sdk/authority/server imported";
     },
   },
@@ -180,8 +195,17 @@ export class RunResources {
       if (removed) this.owners.delete(owner);
     }
     for (const image of [...this.images]) {
-      if ((await this.docker(["rmi", image], { allowFailure: true, cleanup: true })).status === 0) this.images.delete(image);
+      if ((await this.docker(["rmi", image], { allowFailure: true, cleanup: true })).status === 0) {
+        this.images.delete(image);
+        continue;
+      }
+      const listed = await this.docker(["image", "ls", "-q", "--filter", `reference=${image}`], { allowFailure: true, cleanup: true });
+      if (listed.status === 0 && !listed.stdout.trim()) this.images.delete(image);
     }
+  }
+
+  leftovers() {
+    return [...[...this.owners].map((owner) => `containers labelled ${owner}`), ...this.images];
   }
 }
 
@@ -235,7 +259,7 @@ async function checkImage(build, { docker, resources, builder, socket, noCache, 
     return { dockerfile: build.dockerfile, ok: false, detail: `${stage}: ${error.message}` };
   } finally {
     if (id && !docker.session.signal) {
-      const logs = await docker(["logs", id], { allowFailure: true });
+      const logs = await docker(["logs", id], { allowFailure: true, timeoutMs: LOGS_TIMEOUT_MS });
       writeFileSync(path.join(logDir, `${slug}-boot.log`), `${logs.stdout}${logs.stderr}`);
     }
     await resources.removeAll();
@@ -260,6 +284,7 @@ async function main(session) {
   const builds = [...new Map(rootContextBuilds(repoRoot).map((build) => [build.dockerfile, build])).values()];
   const resources = new RunResources(docker);
   const results = [];
+  let cleanedUp = false;
   try {
     for (const build of builds) {
       const result = await checkImage(build, { docker, resources, builder, socket, noCache, logDir, run });
@@ -268,9 +293,12 @@ async function main(session) {
     }
   } finally {
     await resources.removeAll();
+    const left = resources.leftovers();
+    if (left.length) console.error(`cleanup could not remove ${left.join(", ")}; remove them by hand`);
+    cleanedUp = left.length === 0;
     console.log(`logs in ${logDir}`);
   }
-  return results.every((result) => result.ok);
+  return cleanedUp && results.every((result) => result.ok);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

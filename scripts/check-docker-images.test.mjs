@@ -7,7 +7,7 @@ import test from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { repoRoot } from "./check-docker-context.mjs";
-import { RunResources, assertLocalBuilder, browserSocketSource, localSocket, pinnedDocker, pinnedEnv, resolveDockerEndpoint, startContainer } from "./check-docker-images.mjs";
+import { RunResources, waitForHealth, assertLocalBuilder, browserSocketSource, localSocket, pinnedDocker, pinnedEnv, resolveDockerEndpoint, startContainer } from "./check-docker-images.mjs";
 
 const FAKE_DOCKER = `#!/usr/bin/env node
 const fs = require("node:fs");
@@ -40,10 +40,16 @@ else if (args[0] === "create") {
   process.exit(1);
 } else if (args[0] === "rm") {
   fs.appendFileSync(process.env.FAKE_DOCKER_STATE, JSON.stringify({ removed: args[2] }) + "\\n");
-} else if (args[0] === "rmi") {
+} else if (args[0] === "rmi" || (args[0] === "image" && args[1] === "ls")) {
   const state = fs.existsSync(process.env.FAKE_DOCKER_STATE) ? fs.readFileSync(process.env.FAKE_DOCKER_STATE, "utf8").trim().split("\\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
   const removed = new Set(state.filter((entry) => entry.removed).map((entry) => entry.removed));
-  if (state.some((entry) => entry.id && !removed.has(entry.id))) { process.stderr.write("conflict: unable to remove repository reference (must force) - container is using its referenced image\\n"); process.exit(1); }
+  const tag = args[0] === "rmi" ? args[1] : args[args.indexOf("--filter") + 1].replace(/^reference=/, "");
+  const live = state.filter((entry) => entry.image === tag).length > state.filter((entry) => entry.removedImage === tag).length;
+  if (args[0] === "image") { if (live) process.stdout.write("sha256:0f0f0f0f0f0f\\n"); }
+  else if (!live) { process.stderr.write("Error response from daemon: No such image: " + tag + "\\n"); process.exit(1); }
+  else if (process.env.FAKE_DOCKER_RMI_FAIL) { process.stderr.write("Error response from daemon: dial unix docker.sock: connect: connection refused\\n"); process.exit(1); }
+  else if (state.some((entry) => entry.id && !removed.has(entry.id))) { process.stderr.write("conflict: unable to remove repository reference (must force) - container is using its referenced image\\n"); process.exit(1); }
+  else fs.appendFileSync(process.env.FAKE_DOCKER_STATE, JSON.stringify({ removedImage: tag }) + "\\n");
 } else if (args[0] === "ps") {
   const filter = args[args.indexOf("--filter") + 1].replace(/^label=/, "");
   const state = fs.existsSync(process.env.FAKE_DOCKER_STATE) ? fs.readFileSync(process.env.FAKE_DOCKER_STATE, "utf8").trim().split("\\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
@@ -56,6 +62,11 @@ else if (args[0] === "buildx" && args[1] === "build" && process.env.FAKE_DOCKER_
   for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { fs.appendFileSync(process.env.FAKE_DOCKER_LOG, JSON.stringify({ received: signal }) + "\\n"); process.exit(1); });
   setInterval(() => {}, 1000);
 } else if (args[0] === "buildx" && args[1] === "build" && process.env.FAKE_DOCKER_BUILD_FAIL && args[args.indexOf("-t") + 1].includes(process.env.FAKE_DOCKER_BUILD_FAIL)) { process.stderr.write("build failed\\n"); process.exit(1); }
+else if (args[0] === "buildx" && args[1] === "build") fs.appendFileSync(process.env.FAKE_DOCKER_STATE, JSON.stringify({ image: args[args.indexOf("-t") + 1] }) + "\\n");
+else if (args[0] === "exec" && process.env.FAKE_DOCKER_EXEC_HANG) {
+  fs.appendFileSync(process.env.FAKE_DOCKER_LOG, JSON.stringify({ execPid: process.pid }) + "\\n");
+  setInterval(() => {}, 1000);
+}
 else if (args[0] === "exec" && process.env.FAKE_DOCKER_HEALTHY) process.stdout.write("200\\n");
 else if (args[0] === "inspect") process.stdout.write("true\\n");
 else if (args[0] === "info") process.stdout.write((process.env.FAKE_DOCKER_INFO ?? JSON.stringify({ OperatingSystem: "OrbStack", Name: "orbstack" })) + "\\n");
@@ -273,7 +284,7 @@ function assertStoppedDuringFirstBuild(calls) {
   const tag = tagOf(builds[0]);
   assert.match(tag, /^conclave-check-images\/packages-sfu:[0-9a-f]+-[0-9a-f]{12}$/);
   const after = calls.slice(calls.indexOf(builds[0]) + 1).map((args) => args.slice(2).join(" "));
-  assert.deepEqual(after, [`rmi ${tag}`]);
+  assert.deepEqual(after, [`rmi ${tag}`, `image ls -q --filter reference=${tag}`]);
 }
 
 test("SIGINT to the process group during an image build stops the run before any later step and removes the tag", { timeout: 30_000 }, async (t) => {
@@ -308,7 +319,8 @@ test("a failed image build skips its companion builds and its boot, and removes 
   const tags = calls.filter(isBuild).map(tagOf);
   assert.deepEqual(tags.map((tag) => tag.split(":")[0]), ["conclave-check-images/packages-sfu", "conclave-check-images/packages-shared-browser"]);
   const failed = calls.findIndex((args) => isBuild(args) && tagOf(args) === tags[1]);
-  assert.deepEqual(calls.slice(failed + 1).map((args) => args.slice(2).join(" ")), [`rmi ${tags[1]}`]);
+  assert.deepEqual(calls.slice(failed + 1).map((args) => args.slice(2).join(" ")), [`rmi ${tags[1]}`, `image ls -q --filter reference=${tags[1]}`]);
+  assert.doesNotMatch(stderr, /cleanup could not remove/);
 });
 
 test("SIGTERM after docker create made the container but before it exited still removes that container", { timeout: 30_000 }, async (t) => {
@@ -332,6 +344,7 @@ test("a container or tag whose removal failed stays registered and is removed on
     const docker = pinnedDocker({ host: "unix:///var/run/docker.sock" }, fake.env);
     const resources = new RunResources(docker);
     const tag = resources.claimImage("conclave-check-images/x:run");
+    await docker(["buildx", "build", "-t", tag, "."]);
     await startContainer(docker, resources, { name: "conclave-check-images-x", tag, env: {}, mounts: [] });
     await resources.removeAll();
     assert.equal(resources.owners.size, 1, failing);
@@ -340,7 +353,7 @@ test("a container or tag whose removal failed stays registered and is removed on
     assert.equal(resources.owners.size, 0, failing);
     assert.deepEqual([...resources.images], [], failing);
     const calls = fake.calls().map((call) => call.args.slice(2, 4).join(" "));
-    assert.deepEqual(calls.slice(2), failing === "ps" ? ["ps -a", "rmi " + tag, "ps -a", "rm -f", "rmi " + tag] : ["ps -a", "rm -f", "rmi " + tag, "ps -a", "rm -f", "rmi " + tag], failing);
+    assert.deepEqual(calls.slice(3), failing === "ps" ? ["ps -a", "rmi " + tag, "image ls", "ps -a", "rm -f", "rmi " + tag] : ["ps -a", "rm -f", "rmi " + tag, "image ls", "ps -a", "rm -f", "rmi " + tag], failing);
   }
 });
 
@@ -361,6 +374,7 @@ test("several containers are each removed exactly once when one removal fails an
   const docker = pinnedDocker({ host: "unix:///var/run/docker.sock" }, fake.env);
   const resources = new RunResources(docker);
   const tag = resources.claimImage("conclave-check-images/x:run");
+  await docker(["buildx", "build", "-t", tag, "."]);
   for (const name of ["a", "b", "c"]) await startContainer(docker, resources, { name: `conclave-check-images-${name}`, tag, env: {}, mounts: [] });
   await resources.removeAll();
   assert.equal(resources.owners.size, 1);
@@ -378,5 +392,29 @@ test("a full run removes every container it created exactly once", { timeout: 30
   const { exited } = runScript(t, { ...fake.env, FAKE_DOCKER_HEALTHY: "1" });
   const { code, stderr } = await exited;
   assert.equal(code, 0, stderr);
+  assertEachRemovedOnce(fake, 2);
+});
+
+test("the readiness wait is bounded even when a /health probe hangs inside docker exec", { timeout: 15_000 }, async (t) => {
+  const fake = fakeDocker(t, { FAKE_DOCKER_EXEC_HANG: "1" });
+  const docker = pinnedDocker({ host: "unix:///var/run/docker.sock" }, fake.env);
+  const started = Date.now();
+  await assert.rejects(waitForHealth(docker, "0123456789abcdef0123", 3031, { budgetMs: 1500 }), /\/health did not answer 200 within 1\.5 s \(last: the probe did not finish\)/);
+  assert.ok(Date.now() - started < 4000, `took ${Date.now() - started} ms`);
+  const pids = readFileSync(fake.env.FAKE_DOCKER_LOG, "utf8").trim().split("\n").map((line) => JSON.parse(line)).filter((entry) => entry.execPid).map((entry) => entry.execPid);
+  assert.ok(pids.length >= 1);
+  await sleep(200);
+  for (const pid of pids) assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+});
+
+test("a cleanup failure left after the final pass fails the run and names what is left", { timeout: 30_000 }, async (t) => {
+  const fake = fakeDocker(t, { contexts: { default: "unix:///run/fake-docker.sock" } });
+  const { exited } = runScript(t, { ...fake.env, FAKE_DOCKER_HEALTHY: "1", FAKE_DOCKER_RMI_FAIL: "1" });
+  const { code, stderr } = await exited;
+  assert.equal(code, 1, stderr);
+  const tags = fake.calls().map((call) => call.args).filter(isBuild).map(tagOf);
+  assert.equal(tags.length, 3);
+  assert.match(stderr, /cleanup could not remove /);
+  for (const tag of tags) assert.ok(stderr.includes(tag), `${tag} missing from ${stderr}`);
   assertEachRemovedOnce(fake, 2);
 });
