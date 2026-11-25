@@ -26,7 +26,7 @@ build:
       contents:
         - block: 'sourceSets'
           contents:
-            - 'generateSequence(projectDir.canonicalFile) { it.parentFile }.map { it.resolve("Tests/ConclaveTests/Skip/resources") }.firstOrNull { it.isDirectory }?.let { getByName("test").resources.srcDir(it) }'
+            - 'getByName("test").apply { kotlin.directories.map { project.file(it).resolve("resources") }.filter { it.isDirectory }.forEach { resources.srcDir(it) } }'
 
 skip:
   mode: 'transpiled'
