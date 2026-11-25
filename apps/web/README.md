@@ -98,6 +98,12 @@ Optional worker configuration:
 - `OPENAI_REALTIME_URL`: override for the OpenAI Realtime WebSocket endpoint.
 - `CLOUDFLARE_AI_GATEWAY_ANTHROPIC_URL` / `ANTHROPIC_BASE_URL`: Anthropic API base URL for Claude Ask/Minutes.
 
+Sarvam connections:
+- Each speaker and audio source gets its own Sarvam streaming WebSocket, so an answer can only belong to the speaker whose audio went down that socket.
+- A socket carries one turn at a time. The next turn's audio waits until Sarvam has answered every speech start of the turn before it, at least 2.5 s after that turn's flush and 0.5 s after Sarvam's last event. If an answer is still missing 5 s after the flush and the speaker has new audio, that audio moves to a fresh socket and the old one stays open only for its own turn. A turn nobody answers ends as a gap at the 30 s line deadline, and only that turn's socket closes.
+- A room holds at most 4 Sarvam sockets. Sarvam allows 20 concurrent streaming sockets per account on pay-as-you-go and 100 on Pro and Growth ([rate limits](https://docs.sarvam.ai/api-reference-docs/ratelimits)), and the limit is shared by every room, so 4 leaves room for several meetings. A fifth speaker's audio is held, within the shared 8 MiB audio limit, until a socket that has finished its turn can be closed for them. Audio is never sent to another speaker's socket.
+- A socket with no turn in flight closes after 30 s, which also covers people who leave or stop sharing (the relay ends their turn), and their next audio opens a new one. Sarvam's own inactivity timeout is 60 s for its realtime API.
+
 The active controller's provider keys are sent to the worker only for the live
 session. They stay in Durable Object memory, are not persisted to Durable Object
 storage, and are redacted from worker errors before responses are sent.
