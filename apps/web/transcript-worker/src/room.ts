@@ -2233,6 +2233,7 @@ export class TranscriptRoom {
       last = next;
     }
     this.audio.setOwner(taken, { kind: "line", lineId: line.id });
+    if (taken.some(({ voice }) => voice !== "quiet")) line.heard = true;
   }
 
   private unownedRuns(sarvam: boolean): AudioRun[] {

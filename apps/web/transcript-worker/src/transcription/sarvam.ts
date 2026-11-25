@@ -346,6 +346,7 @@ type LaneListener = (event: { data?: unknown }) => void;
 type LaneWindow = {
   readonly itemId: string;
   heard: boolean;
+  readonly replay: boolean;
   flushedAt: number | null;
   starts: number;
   finals: number;
@@ -475,6 +476,7 @@ class SarvamLane {
       const window: LaneWindow = {
         itemId: createSarvamSegmentItemId(`sarvam-${this.connectionId}`, this.windowCount),
         heard,
+        replay: context.lineId !== undefined,
         flushedAt: null,
         starts: 0,
         finals: 0,
@@ -564,7 +566,7 @@ class SarvamLane {
     const window = this.window;
     if (this.closed || !window || window.flushedAt === null) return;
     if (Date.now() < this.settleAt(window)) return;
-    if (window.finals < Math.max(window.starts, window.heard ? 1 : 0)) return;
+    if (window.finals < Math.max(window.starts, window.heard || window.replay ? 1 : 0)) return;
     if (this.settleTimer !== null) clearTimeout(this.settleTimer);
     this.settleTimer = null;
     this.window = null;
