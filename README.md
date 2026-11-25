@@ -151,7 +151,7 @@ It needs a local Docker daemon.
 - Ctrl-C or SIGTERM is passed on to the running Docker command, including a build in progress. No later step runs, the run's containers and tags are removed, and it exits 130 or 143.
 - Supported setups: OrbStack, Docker Desktop and Colima, which run the daemon in a VM and get `/var/run/docker.sock` (the socket inside that VM) mounted into the shared browser container. Also a native Linux engine, rootless included, which gets the resolved socket path mounted. `BROWSER_DOCKER_SOCKET` overrides the mounted path, as with `docker-compose.browser.yml`.
 - Pass `--no-cache` for a cold build.
-- The context check supports heredocs with a plain delimiter only (a word of letters, digits, `.`, `_` and `-`, optionally quoted whole, under the default escape) and fails on any other shape. `pnpm check:heredoc-buildkit` compares its heredoc table with the local BuildKit through `docker buildx build --call=check`, which builds nothing. Run it when changing those rules.
+- `pnpm check:docker-context` reads Dockerfiles with a deliberately small grammar: plain ASCII, no parser directives, no heredocs, a fixed list of instructions, and COPY words made only of plain path characters. Anything else fails with `unsupported Dockerfile syntax on line N`; extend `scripts/docker-context` or rewrite the Dockerfile. The real build in `pnpm check:docker-images` is the authority on build behaviour.
 
 Do not deploy if it fails.
 

@@ -7,8 +7,8 @@ import test from "node:test";
 
 import { artifactProblems, contextProblems, imagePackages, repoRoot, workspacePackages } from "./check-docker-context.mjs";
 import { rootContextBuilds } from "./docker-context/compose.mjs";
-import { DockerfileError, contextCopies } from "./docker-context/dockerfile.mjs";
-import { HEREDOC_CASES } from "./docker-context/heredoc-cases.mjs";
+import { contextCopies } from "./docker-context/dockerfile.mjs";
+import { ACCEPTED_DOCKERFILES, REJECTED_DOCKERFILES } from "./docker-context/dockerfile-cases.mjs";
 import { dockerIgnoreMatcher, walkContext } from "./docker-context/dockerignore.mjs";
 import { UnsupportedShape } from "./docker-context/unsupported.mjs";
 
@@ -25,7 +25,7 @@ function fixture(t, files) {
   return root;
 }
 
-const copies = (text, args) => contextCopies(text, args).map((copy) => copy.sources);
+const copies = (text) => contextCopies(text).map((copy) => copy.sources);
 
 test("a re-included directory brings its whole subtree back, as Docker does", () => {
   const { excluded } = dockerIgnoreMatcher("**\n!packages/\n");
@@ -41,51 +41,34 @@ test("the last matching pattern wins and single stars stay inside one segment", 
   assert.equal(excluded("packages/sfu/node_modules/tsx/package.json"), true);
 });
 
-test("JSON-form COPY with flags before it reads the array, not the raw text", () => {
-  assert.deepEqual(copies('FROM node\nCOPY --chown=node:node --link ["packages/sfu/package.json", "packages/sfu/"]\n'), [["packages/sfu/package.json"]]);
-  assert.deepEqual(copies('FROM node\nCOPY ["a b.txt", "dest/"]\n'), [["a b.txt"]]);
+test("the Dockerfile reader accepts only its small grammar", () => {
+  for (const [name, text, expected] of ACCEPTED_DOCKERFILES) assert.deepEqual(copies(text), expected, name);
+  for (const [name, text] of REJECTED_DOCKERFILES) assert.throws(() => contextCopies(text), /^Error: unsupported Dockerfile syntax on line \d+: .*; extend scripts\/docker-context or rewrite the Dockerfile$/, name);
+  assert.throws(() => contextCopies("FROM node\nLABEL x \\\\\nCOPY hidden ./\n"), /on line 2: a line that ends in two backslashes/);
+  assert.throws(() => contextCopies("FROM node\n\nCOPY --from= hidden ./\n"), /on line 3: COPY --from=;/);
 });
 
-test("continuations skip comments and blank lines, and ARG, ENV and build args expand in COPY", () => {
-  const text = [
-    "ARG BASE=node:22",
-    "FROM ${BASE}",
-    "ARG PKG=sfu",
-    "ENV ROOT=packages",
-    "COPY ${ROOT}/${PKG}/package.json \\",
-    "# a comment inside the continuation",
-    "",
-    "     ${ROOT}/${PKG:-ai}/src \"${ROOT}/ui tokens\" ./",
-    "COPY <<EOF /app/note.txt",
-    "inline",
-    "EOF",
-  ].join("\n");
-  assert.deepEqual(copies(text), [["packages/sfu/package.json", "packages/sfu/src", "packages/ui tokens"]]);
-  assert.deepEqual(copies(text, { PKG: "apps-sdk" })[0][0], "packages/apps-sdk/package.json");
-});
-
-test("the escape directive changes the continuation character", () => {
-  assert.deepEqual(copies("# escape=`\nFROM node\nCOPY a `\n  b ./\n"), [["a", "b"]]);
+test("the repository's Dockerfiles stay inside the grammar and read as written", () => {
+  const read = (file) => contextCopies(readFileSync(path.join(repoRoot, file), "utf8")).map(({ line, sources }) => [line, sources]);
+  assert.deepEqual(read("packages/sfu/Dockerfile"), [
+    [17, ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"]],
+    [18, ["patches"]],
+    ...["ai", "apps-sdk", "meeting-core", "sfu", "shared-browser", "ui-tokens"].map((name, i) => [19 + i, [`packages/${name}/package.json`]]),
+    [27, ["."]],
+  ]);
+  assert.deepEqual(read("packages/shared-browser/Dockerfile"), [
+    [7, ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"]],
+    [8, ["patches"]],
+    [9, ["packages/shared-browser/package.json"]],
+    [12, ["packages/shared-browser/tsconfig.json"]],
+    [13, ["packages/shared-browser/src"]],
+  ]);
 });
 
 test("malformed Dockerfiles fail instead of being read wrongly", () => {
-  assert.throws(() => contextCopies("FROM node\nCOPY a \\\n"), DockerfileError);
-  assert.throws(() => contextCopies("FROM node\nRUN <<EOF\npnpm build\n"), DockerfileError);
-  assert.throws(() => contextCopies("COPY a b\n"), DockerfileError);
-});
-
-test("context reads the guard cannot resolve fail closed", () => {
-  const cases = {
-    ADD: "FROM node\nADD https://example.com/x.tgz /x\n",
-    ONBUILD: "FROM node\nONBUILD COPY . /app\n",
-    "unknown COPY flag": "FROM node\nCOPY --parents packages/*/package.json ./\n",
-    "bind mount": "FROM node\nRUN --mount=type=bind,source=packages,target=/src true\n",
-    "default mount type": "FROM node\nRUN --mount=source=packages,target=/src true\n",
-    "base image variable": "FROM node\nCOPY $HOME/x ./\n",
-    "undeclared ARG": "FROM node\nCOPY packages/${UNDECLARED}/package.json ./\n",
-  };
-  for (const [name, text] of Object.entries(cases)) assert.throws(() => contextCopies(text), UnsupportedShape, name);
-  assert.deepEqual(copies("FROM node\nRUN --mount=type=cache,target=/root/.cache true\nCOPY --from=build /app/dist ./dist\nCOPY a ./\n"), [["a"]]);
+  assert.throws(() => contextCopies("FROM node\nCOPY a \\\n"), /line 2: the Dockerfile ends inside a line continuation/);
+  assert.throws(() => contextCopies("COPY a b\n"), /line 1: COPY comes before the first FROM/);
+  assert.throws(() => contextCopies("FROM node\nCOPY a\n"), /line 2: COPY needs a source and a destination/);
 });
 
 test("an image needs the workspace closure of its own package and of every package it copies from", () => {
@@ -106,7 +89,7 @@ test("wildcard COPY sources fail closed and missing ones are reported", (t) => {
   execFileSync("git", ["init", "-q"], { cwd: root });
   execFileSync("git", ["add", "-A"], { cwd: root });
   const problems = contextProblems(root);
-  assert.ok(problems.some((problem) => problem.startsWith("a.Dockerfile: unsupported shape: line 2: wildcard COPY source packages/*/package.json")));
+  assert.ok(problems.includes('a.Dockerfile: unsupported Dockerfile syntax on line 2: the COPY word "packages/*/package.json"; extend scripts/docker-context or rewrite the Dockerfile'), JSON.stringify(problems));
   assert.ok(problems.includes("b.Dockerfile: line 2: COPY source missing.txt is not in the build context"));
   assert.ok(problems.includes("b.Dockerfile: line 2: COPY source ../outside is outside the build context"));
 });
@@ -334,12 +317,3 @@ test("the pruned walk finds exactly the files a full walk finds, for random tree
   }
 });
 
-test("heredocs match BuildKit for plain delimiters and fail closed on every other shape", () => {
-  for (const { name, text, copies: expected, unclosed, unsupported } of HEREDOC_CASES) {
-    if (unsupported) assert.throws(() => contextCopies(text), /unsupported heredoc/, name);
-    else if (unclosed) assert.throws(() => contextCopies(text), /is never closed/, name);
-    else assert.deepEqual(copies(text), expected, name);
-  }
-  assert.throws(() => contextCopies("# escape=`\nFROM node\nRUN cat <<EOF\nx\nEOF\n"), /^Error: line 3: unsupported heredoc under the escape directive `/);
-  assert.throws(() => contextCopies("# syntax=docker/dockerfile:1\nFROM node\nRUN cat <<$X\nx\n$X\n"), /^Error: line 3: unsupported heredoc delimiter \$X; use a plain word/);
-});
