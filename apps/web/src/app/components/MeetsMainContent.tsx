@@ -40,6 +40,7 @@ import MeetSettingsPanel from "./MeetSettingsPanel";
 import MeetViewPanel from "./MeetViewPanel";
 import ReactionOverlay from "./ReactionOverlay";
 import MeetingAppLayout from "./MeetingAppLayout";
+import CameraPreviewPanelBoundary from "./CameraPreviewPanelBoundary";
 import SharedBrowserStage from "./SharedBrowserStage";
 import ScreenShareAudioPlayers from "./ScreenShareAudioPlayers";
 import SystemAudioPlayers from "./SystemAudioPlayers";
@@ -2719,11 +2720,11 @@ export default function MeetsMainContent({
         )}
 
       {isJoined && !isWebinarAttendee && isVideoEffectsOpen && (
-        <MeetingPanelBoundary
+        <CameraPreviewPanelBoundary
           key="video-effects"
           name="Backgrounds and effects"
           onClose={handleCloseVideoEffects}
-          onFailed={onStopCameraPreview}
+          onStopCameraPreview={onStopCameraPreview}
         >
           <VideoEffectsPanel
             effects={videoEffects}
@@ -2746,15 +2747,15 @@ export default function MeetsMainContent({
             onStopCameraPreview={onStopCameraPreview}
             onClose={handleCloseVideoEffects}
           />
-        </MeetingPanelBoundary>
+        </CameraPreviewPanelBoundary>
       )}
 
       {isJoined && !isWebinarAttendee && isDeviceSettingsOpen && (
-        <MeetingPanelBoundary
+        <CameraPreviewPanelBoundary
           key="device-settings"
           name="Settings"
           onClose={handleCloseDeviceSettings}
-          onFailed={onStopCameraPreview}
+          onStopCameraPreview={onStopCameraPreview}
         >
           <DeviceSettingsPanel
             roomAi={roomAi}
@@ -2794,7 +2795,7 @@ export default function MeetsMainContent({
             }
             onClose={handleCloseDeviceSettings}
           />
-        </MeetingPanelBoundary>
+        </CameraPreviewPanelBoundary>
       )}
 
       {isJoined && !isWebinarAttendee && isViewPanelOpen && (
