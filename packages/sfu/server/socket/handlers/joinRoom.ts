@@ -365,7 +365,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         // a full participant; the promotion registry lives on the live room.
         // Honored only while webinar mode is on, so a stale invite can never
         // bypass an ordinary meeting's lock or invite code later.
-        const isWebinarPromotedJoin =
+        let isWebinarPromotedJoin =
           !isWebinarAttendeeJoin &&
           Boolean(preexistingWebinarConfig?.enabled) &&
           Boolean(
@@ -584,6 +584,15 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             io,
             state,
           });
+        }
+        if (isWebinarPromotedJoin && !room.hasStageInvite(userKey, roomGuestProof, guestLink)) {
+          if (isActiveScheduledWebinarRoom && !forcedHostJoin && !hostRequested) {
+            respond(callback, {
+              error: "Use the public webinar link to join as an attendee.",
+            });
+            return;
+          }
+          isWebinarPromotedJoin = false;
         }
         const joinedRoom = room;
         const commitLink = () => {
