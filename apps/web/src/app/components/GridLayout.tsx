@@ -47,11 +47,12 @@ import ParticipantConnectionOverlay from "./ParticipantConnectionOverlay";
 import LocalVideoTile from "./LocalVideoTile";
 import StageNotice from "./StageNotice";
 import StageSourcePill from "./StageSourcePill";
+import TileNameplate from "./TileNameplate";
 import {
-  STAGE_HOST_CLASS,
-  STAGE_RAIL_CLASS,
-  STAGE_RAIL_TILE_CLASS,
-  STAGE_SPLIT_CLASS,
+  stageRailClass,
+  stageRailStyle,
+  stageRailTileClass,
+  stageSplitClass,
 } from "./stage-layout";
 import ParticipantVideo from "./ParticipantVideo";
 import { Avatar } from "@conclave/ui-tokens/web";
@@ -80,6 +81,11 @@ import {
 } from "../lib/captured-surface-control";
 import { useElementSize } from "../hooks/useElementSize";
 import { computeTileChrome } from "../lib/tile-chrome";
+import {
+  COMPANION_RAIL,
+  PARTICIPANT_RAIL,
+  chooseStageSplit,
+} from "../lib/stage-split";
 import { readVideoAspect, resolveTileAspect } from "../lib/tile-video-framing";
 
 interface GridLayoutProps {
@@ -1974,6 +1980,11 @@ function GridLayout({
 
   const gridUsableWidth = Math.max(0, gridSize.width - GRID_PADDING * 2);
   const gridUsableHeight = Math.max(0, gridSize.height - GRID_PADDING * 2);
+  const stageSize = { width: gridUsableWidth, height: gridUsableHeight };
+  const stageSplit = chooseStageSplit(stageSize, PARTICIPANT_RAIL);
+  const companionSplit = chooseStageSplit(stageSize, COMPANION_RAIL);
+  const stageTileClass = stageRailTileClass(stageSplit.mode);
+  const companionTileClass = stageRailTileClass(companionSplit.mode);
   const isMobilePortraitGrid = isMobilePortrait(
     isMobile,
     gridUsableWidth,
@@ -2664,7 +2675,7 @@ function GridLayout({
         data-meet-room-tiling-warm-hold={RECENTLY_VISIBLE_WARM_HOLD_MS}
         data-meet-room-tiling-warm-reasons={roomTilingWarmReasonsJson}
         data-meet-room-tiling-scores={roomTilingScoresJson}
-        className={`relative flex flex-1 min-h-0 p-4 ${STAGE_HOST_CLASS} ${
+        className={`relative flex flex-1 min-h-0 p-4 ${
           usesMobileScrollGrid
             ? "overflow-y-auto overflow-x-hidden"
             : "overflow-hidden"
@@ -2677,7 +2688,8 @@ function GridLayout({
       >
         {usesSideBySideLayout && presentationStream ? (
           <div
-            className={STAGE_SPLIT_CLASS}
+            className={stageSplitClass(companionSplit.mode)}
+            data-meet-stage-split={companionSplit.mode}
             data-meet-side-by-side
             data-meet-side-by-side-companion-kind={sideBySideCompanionKind}
             data-meet-side-by-side-companion={
@@ -2687,7 +2699,7 @@ function GridLayout({
             }
           >
             <div
-              className="relative min-w-0 flex-1 @xl/stage:flex-[1.7]"
+              className="relative min-h-0 min-w-0 flex-1"
               data-meet-stage-main={PRESENTATION_TILE_ID}
             >
               <PresentationVideoTile
@@ -2702,7 +2714,16 @@ function GridLayout({
               />
             </div>
 
-            <div className="flex h-40 w-full shrink-0 flex-row gap-3 @xl/stage:h-auto @xl/stage:w-[min(32cqw,28rem)] @xl/stage:min-w-[17rem] @xl/stage:max-w-[28rem] @xl/stage:flex-col">
+            <div
+              className={
+                companionSplit.mode === "main-only"
+                  ? "hidden"
+                  : companionSplit.mode === "stack"
+                    ? "flex w-full shrink-0 flex-row gap-3"
+                    : "flex shrink-0 flex-col gap-3"
+              }
+              style={stageRailStyle(companionSplit)}
+            >
               <div className="relative min-h-0 min-w-0 flex-[1.15]">
                 {sideBySideCompanionKind === "local" ? (
                   <LocalVideoTile
@@ -2718,7 +2739,6 @@ function GridLayout({
                     onTogglePin={toggleLocalPin}
                     tracking={localVideoTracking}
                     cropPosition={localTrackingObjectPosition}
-                    size="stage"
                   />
                 ) : sideBySideCompanionParticipant ? (
                   <ParticipantVideo
@@ -2747,11 +2767,15 @@ function GridLayout({
               </div>
 
               <div
-                className="flex h-full min-w-0 flex-1 flex-row gap-3 overflow-x-auto pb-1 @xl/stage:h-auto @xl/stage:max-h-[35%] @xl/stage:min-h-[7rem] @xl/stage:flex-none @xl/stage:flex-col @xl/stage:overflow-x-visible @xl/stage:overflow-y-auto @xl/stage:pb-0 @xl/stage:pr-1"
+                className={
+                  companionSplit.mode === "stack"
+                    ? "flex h-full min-w-0 flex-1 flex-row gap-3 overflow-x-auto overflow-y-hidden pb-1"
+                    : "flex max-h-[35%] min-h-[7rem] flex-none flex-col gap-3 overflow-y-auto overflow-x-hidden pr-1"
+                }
                 data-meet-stage-rail
               >
                 {shouldShowSelfAsTile && sideBySideCompanionKind !== "local" ? (
-                  <div className={STAGE_RAIL_TILE_CLASS}>
+                  <div className={companionTileClass}>
                     <LocalVideoTile
                       stream={localStream}
                       isCameraOff={isCameraOff}
@@ -2765,7 +2789,6 @@ function GridLayout({
                       onTogglePin={toggleLocalPin}
                       tracking={localVideoTracking}
                       cropPosition={localTrackingObjectPosition}
-                      size="rail"
                     />
                   </div>
                 ) : null}
@@ -2773,7 +2796,7 @@ function GridLayout({
                 {stageSideParticipants.map((participant) => (
                   <div
                     key={participant.userId}
-                    className={STAGE_RAIL_TILE_CLASS}
+                    className={companionTileClass}
                     data-userid={participant.userId}
                   >
                     <ParticipantVideo
@@ -2797,7 +2820,7 @@ function GridLayout({
                     aria-expanded={isOverflowOpen}
                     aria-label={`Show ${hiddenParticipantsCount} more participants`}
                     title={`Show ${hiddenParticipantsCount} more participants`}
-                    className="acm-video-tile group relative flex h-full w-28 shrink-0 flex-col items-center justify-center bg-[#131316] text-[#fafafa] transition-colors hover:border-[#fafafa]/15 @xl/stage:h-28 @xl/stage:w-auto"
+                    className={`acm-video-tile group flex flex-col items-center justify-center bg-[#131316] text-[#fafafa] transition-colors hover:border-[#fafafa]/15 ${companionTileClass}`}
                   >
                     <div className="absolute inset-2 grid grid-cols-2 grid-rows-2 gap-1 opacity-30 transition-opacity duration-200 group-hover:opacity-50">
                       {overflowPreviewParticipants.map((participant) => (
@@ -2823,9 +2846,12 @@ function GridLayout({
             </div>
           </div>
         ) : usesStageLayout && stageMainKind ? (
-          <div className={STAGE_SPLIT_CLASS}>
+          <div
+            className={stageSplitClass(stageSplit.mode)}
+            data-meet-stage-split={stageSplit.mode}
+          >
             <div
-              className="relative min-w-0 flex-1"
+              className="relative min-h-0 min-w-0 flex-1"
               data-meet-stage-main={
                 stageMainKind === "presentation"
                   ? PRESENTATION_TILE_ID
@@ -2859,7 +2885,6 @@ function GridLayout({
                   onTogglePin={toggleLocalPin}
                   tracking={localVideoTracking}
                   videoObjectFit="contain"
-                  size="stage"
                 />
               ) : stageMainParticipant ? (
                 <ParticipantVideo
@@ -2889,11 +2914,12 @@ function GridLayout({
                 detached) so the stage fills the space instead. */}
             {!usesSpotlightLayout && stageRailTileCount > 0 ? (
               <div
-                className={STAGE_RAIL_CLASS}
+                className={stageRailClass(stageSplit.mode)}
+                style={stageRailStyle(stageSplit)}
                 data-meet-stage-rail
               >
                 {shouldShowSelfAsTile && stageMainKind !== "local" ? (
-                  <div className={STAGE_RAIL_TILE_CLASS}>
+                  <div className={stageTileClass}>
                     <LocalVideoTile
                       stream={localStream}
                       isCameraOff={isCameraOff}
@@ -2907,7 +2933,6 @@ function GridLayout({
                       onTogglePin={toggleLocalPin}
                       tracking={localVideoTracking}
                       cropPosition={localTrackingObjectPosition}
-                      size="rail"
                     />
                   </div>
                 ) : null}
@@ -2915,7 +2940,7 @@ function GridLayout({
                 {hasPresentation &&
                 stageMainKind !== "presentation" &&
                 presentationStream ? (
-                  <div className={STAGE_RAIL_TILE_CLASS}>
+                  <div className={stageTileClass}>
                     <PresentationVideoTile
                       stream={presentationStream}
                       presenterName={presenterName}
@@ -2931,7 +2956,7 @@ function GridLayout({
                 {stageSideParticipants.map((participant) => (
                   <div
                     key={participant.userId}
-                    className={STAGE_RAIL_TILE_CLASS}
+                    className={stageTileClass}
                     data-userid={participant.userId}
                   >
                     <ParticipantVideo
@@ -2955,7 +2980,7 @@ function GridLayout({
                     aria-expanded={isOverflowOpen}
                     aria-label={`Show ${hiddenParticipantsCount} more participants`}
                     title={`Show ${hiddenParticipantsCount} more participants`}
-                    className="acm-video-tile group relative flex h-full w-28 shrink-0 flex-col items-center justify-center bg-[#131316] text-[#fafafa] transition-colors hover:border-[#fafafa]/15 @xl/stage:h-28 @xl/stage:w-auto"
+                    className={`acm-video-tile group flex flex-col items-center justify-center bg-[#131316] text-[#fafafa] transition-colors hover:border-[#fafafa]/15 ${stageTileClass}`}
                   >
                     <div className="absolute inset-2 grid grid-cols-2 grid-rows-2 gap-1 opacity-30 transition-opacity duration-200 group-hover:opacity-50">
                       {overflowPreviewParticipants.map((participant) => (
@@ -3118,42 +3143,13 @@ function GridLayout({
                   <Hand size={localTileChrome.dense ? 14 : 18} strokeWidth={1.75} />
                 </div>
               )}
-              <div
-                className={`absolute flex max-w-[80%] items-center rounded-full border border-[#fafafa]/10 bg-[#0a0a0b]/70 ${
-                  localTileChrome.dense
-                    ? "bottom-1.5 left-1.5 gap-1 px-2 py-0.5"
-                    : "bottom-3 left-3 gap-1.5 px-3 py-1.5"
-                }`}
-              >
-                <span
-                  className={`truncate font-medium text-[#fafafa] ${
-                    localTileChrome.dense ? "text-[10px]" : "text-[13px]"
-                  }`}
-                >
-                  {localDisplayName}
-                </span>
-                <span
-                  className={`font-medium text-[#F95F4A] ${
-                    localTileChrome.dense ? "text-[9px]" : "text-[11px]"
-                  }`}
-                >
-                  You
-                </span>
-                {isLocalActiveSpeaker && !isMuted ? (
-                  <span className="acm-voice-activity" aria-label="Speaking">
-                    <span />
-                    <span />
-                    <span />
-                  </span>
-                ) : null}
-                {isMuted && (
-                  <MicOff
-                    size={localTileChrome.dense ? 11 : 14}
-                    strokeWidth={1.75}
-                    className="shrink-0 text-[#F95F4A]"
-                  />
-                )}
-              </div>
+              <TileNameplate
+                name={localDisplayName}
+                dense={localTileChrome.dense}
+                isLocal
+                isMuted={isMuted}
+                isSpeaking={isLocalActiveSpeaker && !isMuted}
+              />
               {isSolo && (isMobile || !isCameraOff) ? (
               <button
                 type="button"
@@ -3372,7 +3368,7 @@ function GridLayout({
 
       {showFloatingSelfView ? (
         <div
-          className={`group absolute z-20 w-[min(15rem,32vw)] min-w-[10rem] overflow-hidden rounded-2xl shadow-[0_16px_42px_rgba(0,0,0,0.38)] ${
+          className={`group absolute z-20 h-28 w-[min(15rem,32vw)] min-w-[10rem] overflow-hidden rounded-2xl shadow-[0_16px_42px_rgba(0,0,0,0.38)] ${
             selfViewDragPoint ? "" : selfViewCornerClass
           }`}
           style={selfViewDragStyle}
@@ -3394,7 +3390,6 @@ function GridLayout({
             onTogglePin={toggleLocalPin}
             tracking={localVideoTracking}
             cropPosition={localTrackingObjectPosition}
-            size="rail"
           />
           <div className="absolute left-2 top-2 z-10 flex gap-1.5 opacity-0 transition-opacity duration-[120ms] group-hover:opacity-100 focus-within:opacity-100">
             <button
@@ -3686,9 +3681,7 @@ const PresentationVideoTile = memo(function PresentationVideoTile({
       onPointerDownCapture={
         showCaptureControls ? () => void startForwardingWheel() : undefined
       }
-      className={`acm-video-tile group relative flex overflow-hidden bg-[#131316] ${
-        compact ? "h-28 shrink-0" : "h-full w-full"
-      }`}
+      className="acm-video-tile group relative flex h-full w-full overflow-hidden bg-[#131316]"
       data-meet-presentation-tile
       data-meet-presentation-presenter-id={presenterId ?? undefined}
       data-meet-presentation-size={size}

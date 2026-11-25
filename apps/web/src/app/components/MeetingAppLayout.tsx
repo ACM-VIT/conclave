@@ -1,18 +1,20 @@
 "use client";
 
-import { memo, useMemo, type ReactNode } from "react";
+import { memo, useMemo, useRef, type ReactNode } from "react";
 import { LogOut } from "lucide-react";
+import { useElementSize } from "../hooks/useElementSize";
 import { useSmartParticipantOrder } from "../hooks/useSmartParticipantOrder";
+import { PARTICIPANT_RAIL, chooseStageSplit } from "../lib/stage-split";
 import type { Participant } from "../lib/types";
 import { isSystemUserId } from "../lib/utils";
 import LocalVideoTile from "./LocalVideoTile";
 import ParticipantVideo from "./ParticipantVideo";
 import {
-  STAGE_HOST_CLASS,
-  STAGE_RAIL_CLASS,
   STAGE_RAIL_SHORT_LANDSCAPE_HIDDEN_CLASS,
-  STAGE_RAIL_TILE_CLASS,
-  STAGE_SPLIT_CLASS,
+  stageRailClass,
+  stageRailStyle,
+  stageRailTileClass,
+  stageSplitClass,
 } from "./stage-layout";
 
 interface MeetingAppLayoutProps {
@@ -71,10 +73,18 @@ function MeetingAppLayout({
     remoteParticipants,
     activeSpeakerId,
   );
+  const splitRef = useRef<HTMLDivElement>(null);
+  const splitSize = useElementSize(splitRef);
+  const split = chooseStageSplit(splitSize, PARTICIPANT_RAIL);
+  const railTileClass = stageRailTileClass(split.mode);
 
   return (
-    <div className={`relative flex min-h-0 min-w-0 flex-1 p-4 ${STAGE_HOST_CLASS}`}>
-      <div className={STAGE_SPLIT_CLASS}>
+    <div className="relative flex min-h-0 min-w-0 flex-1 p-4">
+      <div
+        ref={splitRef}
+        className={stageSplitClass(split.mode)}
+        data-meet-stage-split={split.mode}
+      >
         <div
           className="flex min-h-0 min-w-0 flex-1 flex-col gap-2"
           data-meet-stage-main={stageId}
@@ -110,10 +120,11 @@ function MeetingAppLayout({
           className={fullStageBelowLarge ? "hidden lg:contents" : "contents"}
         >
           <div
-            className={`${STAGE_RAIL_CLASS} ${STAGE_RAIL_SHORT_LANDSCAPE_HIDDEN_CLASS}`}
+            className={`${stageRailClass(split.mode)} ${STAGE_RAIL_SHORT_LANDSCAPE_HIDDEN_CLASS}`}
+            style={stageRailStyle(split)}
             data-meet-stage-rail
           >
-            <div className={STAGE_RAIL_TILE_CLASS} data-userid={currentUserId}>
+            <div className={railTileClass} data-userid={currentUserId}>
               <LocalVideoTile
                 stream={localStream}
                 isCameraOff={isCameraOff}
@@ -123,13 +134,12 @@ function MeetingAppLayout({
                 displayName={getDisplayName(currentUserId)}
                 userEmail={userEmail}
                 isActiveSpeaker={activeSpeakerId === currentUserId}
-                size="rail"
               />
             </div>
             {participantsList.map((participant) => (
               <div
                 key={participant.userId}
-                className={STAGE_RAIL_TILE_CLASS}
+                className={railTileClass}
                 data-userid={participant.userId}
               >
                 <ParticipantVideo
