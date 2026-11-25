@@ -30,6 +30,7 @@ import org.webrtc.FakeAudioPeerConnectionFactory
 import org.webrtc.MediaStreamTrack
 import org.webrtc.RtpParameters
 import sun.misc.Unsafe
+import org.junit.Rule
 
 /**
  * A microphone replacement (bandwidth refresh or route recovery) whose SFU acknowledgement fails. The SFU
@@ -39,6 +40,7 @@ import sun.misc.Unsafe
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [33])
 class MicrophoneReplacementRecoveryTests {
+    @get:Rule val urlHandlerSandbox = SharedUrlHandlerSandbox()
     private val unsafe: Unsafe = Unsafe::class.java.getDeclaredField("theUnsafe").let {
         it.isAccessible = true
         it.get(null) as Unsafe

@@ -16,10 +16,12 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.junit.Rule
 
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [33])
 class S6ReviewBridgeTests {
+    @get:Rule val urlHandlerSandbox = SharedUrlHandlerSandbox()
     @Test fun successiveTranscriptExportsKeepTheFirstSnapshotReadable() = runBlocking {
         val context = RuntimeEnvironment.getApplication()
         val first = requireNotNull(TranscriptExport.write(context, TranscriptExportFile(fileName = "same.md", content = "first", byteCount = 5)))

@@ -19,10 +19,12 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.junit.Rule
 
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [33])
 class S5ShareFoldBridgeTests {
+    @get:Rule val urlHandlerSandbox = SharedUrlHandlerSandbox()
     private val context get() = RuntimeEnvironment.getApplication()
     private val recorded = mutableListOf<Pair<Intent, Boolean>>()
     private var service: CallForegroundService? = null
