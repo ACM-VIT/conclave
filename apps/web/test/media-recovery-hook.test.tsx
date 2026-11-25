@@ -868,3 +868,121 @@ describe("acting only on the path that was sampled", () => {
     expect(await waitFor(rig, () => rig!.recv !== recv, 10_000)).toBe(true);
   });
 });
+
+describe("what proves a path works, with bounded waits", () => {
+  const stalledRecv = async () => {
+    const target = await startRig();
+    await target.join();
+    await target.advance(5_000);
+    target.refuseIceRestart = true;
+    target.route = "hold";
+    target.mediaFlows = false;
+    expect(await waitFor(target, () => target.heldRoutes.length > 0, 40_000)).toBe(true);
+    return target;
+  };
+
+  it("reconnects a dropped socket while the rebuild's check is stuck on a stats read", async () => {
+    rig = await stalledRecv();
+    const socket = rig.socket!;
+    const old = rig.recv!;
+    const release = old.holdNextStats();
+    rig.route = "up";
+    rig.releaseHeldRoutes("answer");
+    await rig.flush();
+    expect(old.statsHold).toBeNull();
+    await rig.dropSocket();
+    rig.mediaFlows = true;
+
+    expect(await waitFor(rig, () => rig!.socket !== socket && Boolean(rig!.socket?.connected), 15_000)).toBe(true);
+    release();
+  });
+
+  it("runs Try again while the rebuild's check is stuck on a stats read", async () => {
+    rig = await stalledRecv();
+    const socket = rig.socket!;
+    const old = rig.recv!;
+    const release = old.holdNextStats();
+    rig.route = "up";
+    rig.releaseHeldRoutes("answer");
+    await rig.flush();
+    rig.mediaFlows = true;
+    const joinsBefore = rig.joinRequests.length;
+    await rig.retry();
+
+    expect(await waitFor(rig, () => rig!.joinRequests.length > joinsBefore, 5_000)).toBe(true);
+    release();
+    expect(await waitFor(rig, () => Boolean(rig!.socket?.connected) && rig!.recv !== old, 30_000)).toBe(true);
+    void socket;
+  });
+
+  it("rebuilds when a failed camera sends no packets during the check before the rebuild", async () => {
+    rig = await startRig({ publish: true, camera: true });
+    await rig.join();
+    await rig.advance(5_000);
+    const target = rig;
+    const send = target.send!;
+    const camera = send.sending.find(({ producer }) => producer.kind === "video")!;
+    target.droppedSendKinds.add("video");
+    target.route = "hold";
+    expect(await waitFor(target, () => target.heldRoutes.length > 0, 40_000)).toBe(true);
+    const accrue = target.accrue.bind(target);
+    target.accrue = (transport) => {
+      const packets = camera.packetsSent;
+      const bytes = camera.bytesSent;
+      accrue(transport);
+      if (transport === send) {
+        camera.packetsSent = packets;
+        camera.bytesSent = bytes;
+      }
+    };
+    target.route = "up";
+    target.releaseHeldRoutes("answer");
+
+    expect(await waitFor(target, () => target.send !== send, 10_000)).toBe(true);
+    target.accrue = accrue;
+  });
+
+  it("starts the rebuild within a bounded wait when the count replies time out", async () => {
+    rig = await startRig({ publish: true, camera: true });
+    await rig.join();
+    await rig.advance(5_000);
+    const target = rig;
+    const send = target.send!;
+    target.droppedSendKinds.add("video");
+    target.route = "hold";
+    expect(await waitFor(target, () => target.heldRoutes.length > 0, 40_000)).toBe(true);
+    const asked = target.ownCountQueries;
+    target.answersSenderCounts = false;
+    target.route = "up";
+    target.releaseHeldRoutes("answer");
+    await target.flush();
+    const released = Date.now();
+
+    expect(await waitFor(target, () => target.send !== send, 10_000)).toBe(true);
+    expect(Date.now() - released).toBeLessThanOrEqual(3_500);
+    expect(target.ownCountQueries - asked).toBeLessThanOrEqual(1);
+  });
+
+  it("escalates when a known-failed camera's stats row is missing from an ICE restart sample", async () => {
+    rig = await startRig({ publish: true, camera: true });
+    await rig.join();
+    await rig.advance(5_000);
+    const target = rig;
+    const send = target.send!;
+    const camera = send.sending.find(({ producer }) => producer.kind === "video")!;
+    const read = send.getStats.bind(send);
+    let afterRestart = 0;
+    send.getStats = async () => {
+      const stats = await read();
+      if (send.restartIceCalls === 1 && ++afterRestart === 1) {
+        stats.delete(`OUT-${camera.mid}`);
+        stats.delete(`RI-${camera.mid}`);
+      }
+      return stats;
+    };
+    target.droppedSendKinds.add("video");
+
+    expect(await waitFor(target, () => send.restartIceCalls === 1, 40_000)).toBe(true);
+    expect(await waitFor(target, () => target.send !== send, 20_000)).toBe(true);
+  });
+});

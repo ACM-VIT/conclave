@@ -27,6 +27,8 @@ import {
   deliveredRtpBytes,
   iceRestartBroughtMediaBack,
   advanceProducerDeliveries,
+  judgeProducerDelivery,
+  verdictProves,
   producersNotReachingSfu,
   producersUnprovenInWindow,
   readMediaPath,
@@ -1171,5 +1173,89 @@ describe("proving every producer reached the SFU over a short window", () => {
         mustProve: ["camera"],
       }),
     ).toEqual(["camera"]);
+  });
+});
+
+describe("the one rule for whether a producer reached the SFU", () => {
+  type Row = "present" | "missing";
+  type Reply = "growth" | "no-growth" | "missing";
+  type Sending = "sent" | "quiet" | "paused";
+  const rows: Row[] = ["present", "missing"];
+  const replies: Reply[] = ["growth", "no-growth", "missing"];
+  const sendings: Sending[] = ["sent", "quiet", "paused"];
+  const expected = (row: Row, reply: Reply, sending: Sending) => {
+    if (sending === "paused") return "cleared";
+    if (reply === "growth") return "delivered";
+    if (row === "missing") return "no-row";
+    if (sending === "quiet") return "quiet";
+    return reply === "missing" ? "no-reply" : "undelivered";
+  };
+  const cases = rows.flatMap((row) =>
+    replies.flatMap((reply) => sendings.map((sending) => [row, reply, sending] as const)),
+  );
+
+  it.each(cases)("browser row %s, SFU reply %s, producer %s", (row, reply, sending) => {
+    const verdict = judgeProducerDelivery({
+      sending: sending !== "paused",
+      before: row === "present" ? { packetsSent: 100, receiverReportAt: 1_000 } : undefined,
+      after:
+        row === "present"
+          ? { packetsSent: sending === "sent" ? 200 : 100, receiverReportAt: 2_000 }
+          : undefined,
+      arrivedBefore: reply === "missing" ? undefined : 90,
+      arrivedAfter: reply === "missing" ? undefined : reply === "growth" ? 190 : 90,
+      sfuReports: true,
+    });
+
+    expect(verdict).toBe(expected(row, reply, sending));
+    expect(verdictProves(verdict, { failing: true })).toBe(verdict === "delivered" || verdict === "cleared");
+    expect(verdictProves(verdict, { failing: false })).toBe(verdict !== "undelivered" && verdict !== "no-reply");
+  });
+
+  it.each<[string, number, number | null, string]>([
+    ["sent with a newer report", 200, 2_000, "delivered"],
+    ["sent with no newer report", 200, 1_000, "undelivered"],
+    ["quiet with no newer report", 100, 1_000, "quiet"],
+  ])("on an SFU that cannot count, a producer %s is %s", (_name, packetsSent, reportAt, verdict) => {
+    expect(
+      judgeProducerDelivery({
+        sending: true,
+        before: { packetsSent: 100, receiverReportAt: 1_000 },
+        after: { packetsSent, receiverReportAt: reportAt },
+        arrivedBefore: undefined,
+        arrivedAfter: undefined,
+        sfuReports: false,
+      }),
+    ).toBe(verdict);
+  });
+
+  it("keeps a failing camera failing through a sample with no stats row", () => {
+    const sample = (camera: number | null) =>
+      readMediaPath(
+        camera === null
+          ? []
+          : [{ type: "outbound-rtp", id: "OUT-1", mid: "1", packetsSent: camera, bytesSent: camera * 100 }],
+        "send",
+      );
+    const producers = [{ producerId: "camera", mid: "1" }];
+    const step = (
+      deliveries: ReturnType<typeof advanceProducerDeliveries>,
+      camera: number | null,
+      sfuCamera: number,
+      at: number,
+    ) =>
+      advanceProducerDeliveries(
+        deliveries,
+        sample(camera),
+        { producers, sfuCounts: { camera: sfuCamera }, sfuReports: true },
+        at,
+      );
+    const first = step({}, 100, 90, 0);
+    const failing = step(first, 200, 90, 2_500);
+    const noRow = step(failing, null, 90, 5_000);
+
+    expect(failing.camera.failingSince).toBe(2_500);
+    expect(noRow.camera.failingSince).toBe(2_500);
+    expect(step(noRow, 300, 150, 7_500).camera.failingSince).toBeNull();
   });
 });

@@ -110,15 +110,57 @@ export type SendingProducersSample = {
 const newerReport = (now: number | null, before: number | null) =>
   now !== null && (before === null || now > before);
 
-const delivered = (
-  stream: SentStreamReading,
-  arrived: number | null,
-): ProducerDelivery => ({
-  sent: stream.packetsSent,
-  reportAt: stream.receiverReportAt,
-  arrived,
-  failingSince: null,
-});
+export type ProducerDeliveryVerdict =
+  | "delivered"
+  | "undelivered"
+  | "quiet"
+  | "no-reply"
+  | "no-row"
+  | "cleared";
+
+export const judgeProducerDelivery = ({
+  sending,
+  before,
+  after,
+  arrivedBefore,
+  arrivedAfter,
+  sfuReports,
+}: {
+  sending: boolean;
+  before: SentStreamReading | undefined;
+  after: SentStreamReading | undefined;
+  arrivedBefore: number | undefined;
+  arrivedAfter: number | undefined;
+  sfuReports: boolean;
+}): ProducerDeliveryVerdict => {
+  if (!sending) return "cleared";
+  if (
+    sfuReports &&
+    arrivedBefore !== undefined &&
+    arrivedAfter !== undefined &&
+    arrivedAfter > arrivedBefore
+  ) {
+    return "delivered";
+  }
+  if (!before || !after) return "no-row";
+  const sent = after.packetsSent > before.packetsSent;
+  if (!sfuReports) {
+    if (newerReport(after.receiverReportAt, before.receiverReportAt)) return "delivered";
+    return sent ? "undelivered" : "quiet";
+  }
+  if (arrivedBefore === undefined || arrivedAfter === undefined) {
+    return sent ? "no-reply" : "quiet";
+  }
+  return sent ? "undelivered" : "quiet";
+};
+
+export const verdictProves = (
+  verdict: ProducerDeliveryVerdict,
+  { failing }: { failing: boolean },
+): boolean =>
+  failing
+    ? verdict === "delivered" || verdict === "cleared"
+    : verdict !== "undelivered" && verdict !== "no-reply";
 
 export const advanceProducerDeliveries = (
   deliveries: ProducerDeliveries,
@@ -129,35 +171,44 @@ export const advanceProducerDeliveries = (
   const next: ProducerDeliveries = {};
   for (const { producerId, mid } of producers) {
     const stream = mid ? reading.sent[mid] : undefined;
-    if (!stream) continue;
     const known = deliveries[producerId];
     const arrivedNow = sfuCounts?.[producerId];
     if (!known) {
-      next[producerId] = delivered(stream, arrivedNow ?? null);
+      if (stream) {
+        next[producerId] = {
+          sent: stream.packetsSent,
+          reportAt: stream.receiverReportAt,
+          arrived: arrivedNow ?? null,
+          failingSince: null,
+        };
+      }
       continue;
     }
-    const sentMore = stream.packetsSent > known.sent;
-    if (!sfuReports) {
-      next[producerId] = !sentMore
-        ? newerReport(stream.receiverReportAt, known.reportAt)
-          ? delivered(stream, null)
-          : known
-        : newerReport(stream.receiverReportAt, known.reportAt)
-          ? delivered(stream, null)
-          : { ...known, sent: stream.packetsSent, failingSince: known.failingSince ?? at };
+    if (sfuReports && known.arrived === null && arrivedNow !== undefined) {
+      next[producerId] = {
+        ...known,
+        sent: stream?.packetsSent ?? known.sent,
+        reportAt: stream?.receiverReportAt ?? known.reportAt,
+        arrived: arrivedNow,
+      };
       continue;
     }
-    if (arrivedNow === undefined) {
-      next[producerId] = known;
-      continue;
-    }
-    if (known.arrived === null) {
-      next[producerId] = { ...known, sent: stream.packetsSent, arrived: arrivedNow };
-      continue;
-    }
-    if (arrivedNow > known.arrived) {
-      next[producerId] = delivered(stream, arrivedNow);
-    } else if (sentMore) {
+    const verdict = judgeProducerDelivery({
+      sending: true,
+      before: { packetsSent: known.sent, receiverReportAt: known.reportAt },
+      after: stream,
+      arrivedBefore: known.arrived ?? undefined,
+      arrivedAfter: arrivedNow,
+      sfuReports,
+    });
+    if (verdict === "delivered") {
+      next[producerId] = {
+        sent: stream?.packetsSent ?? known.sent,
+        reportAt: stream?.receiverReportAt ?? known.reportAt,
+        arrived: arrivedNow ?? known.arrived,
+        failingSince: null,
+      };
+    } else if (verdict === "undelivered" && stream) {
       next[producerId] = {
         ...known,
         sent: stream.packetsSent,
@@ -192,17 +243,15 @@ export const producersUnprovenInWindow = ({
 }: DeliveryWindow): string[] =>
   producers
     .filter(({ producerId, mid }) => {
-      const before = mid ? start.sent[mid] : undefined;
-      const after = mid ? end.sent[mid] : undefined;
-      if (!before || !after) return mustProve.includes(producerId);
-      const sent = after.packetsSent > before.packetsSent;
-      if (!sent) return mustProve.includes(producerId);
-      if (!sfuReports) return !newerReport(after.receiverReportAt, before.receiverReportAt);
-      const arrivedBefore = sfuStart?.[producerId];
-      const arrivedAfter = sfuEnd?.[producerId];
-      return !(
-        arrivedBefore !== undefined && arrivedAfter !== undefined && arrivedAfter > arrivedBefore
-      );
+      const verdict = judgeProducerDelivery({
+        sending: true,
+        before: mid ? start.sent[mid] : undefined,
+        after: mid ? end.sent[mid] : undefined,
+        arrivedBefore: sfuStart?.[producerId],
+        arrivedAfter: sfuEnd?.[producerId],
+        sfuReports,
+      });
+      return !verdictProves(verdict, { failing: mustProve.includes(producerId) });
     })
     .map(({ producerId }) => producerId);
 
