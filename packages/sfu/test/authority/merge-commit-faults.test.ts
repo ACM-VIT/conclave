@@ -44,7 +44,10 @@ const ownerCalls = { count: 0 };
 const nothing: unknown = undefined;
 type Note = { id: string; subject: Subject; moved: boolean };
 
-const notesApp = (id: string, faults: { fault?: Fault; mergeBy?: number } = {}) => {
+const notesApp = (
+  id: string,
+  faults: { fault?: Fault; mergeBy?: number; rate?: { burst: number; perSecond: number } } = {},
+) => {
   const calls = new Map<string, number>();
   const nthCall = (kind: string, row: Note) => {
     const name = `${kind} ${row.subject} ${row.id}`;
@@ -71,7 +74,7 @@ const notesApp = (id: string, faults: { fault?: Fault; mergeBy?: number } = {}) 
     actions: {
       note: {
         roles: ["moderator", "member"],
-        rate: { burst: 1_000, perSecond: 1_000 },
+        rate: faults.rate ?? { burst: 1_000, perSecond: 1_000 },
         run(ctx, tx, input) {
           tx.put("notes", key(ctx.subject, input.id), { id: input.id, subject: ctx.subject, moved: false });
           return null;
@@ -352,6 +355,36 @@ describe("a resend that meets the socket's act limit (Sol)", () => {
     expect(throttled).toBe(true);
     expect(answer(result)).toEqual({ ok: true, value: null });
     expect(tab.rows("mine")).toEqual([{ id: "once" }]);
+  });
+});
+
+describe("a resend that the action's own rate limit holds off past the id's deadline (Greptile)", () => {
+  it("ends as unknown-outcome by the deadline instead of waiting out the limit", async () => {
+    const app = notesApp("notes", { rate: { burst: 1, perSecond: 1 / 3_600 } });
+    const room = new Harness([app.authority]);
+    const tab = await guestTab(room, app.contract, "pass-a", "tab-1");
+    expect((await tab.act("note", { id: "first" })).ok).toBe(true);
+    const socket = tab.socket as unknown as {
+      emit: (event: string, payload?: unknown, ack?: (reply: unknown) => void) => void;
+    };
+    const send = socket.emit;
+    let dropped = false;
+    socket.emit = (event, payload, ack) => {
+      if (event === AUTHORITY_EVENTS.act && !dropped) {
+        dropped = true;
+        return;
+      }
+      send.call(socket, event, payload, ack);
+    };
+    const outcome: { result?: AuthorityResult<Json> } = {};
+    void (tab.session.act("note", { id: "second" }) as Promise<AuthorityResult<Json>>).then((result) => {
+      outcome.result = result;
+    });
+
+    for (let second = 0; second < 130 && !outcome.result; second += 1) await room.advance(1_000);
+
+    expect(dropped).toBe(true);
+    expect(outcome.result).toEqual({ ok: false, code: "unknown-outcome" });
   });
 });
 
