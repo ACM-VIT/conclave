@@ -12,7 +12,7 @@ import { getNoiseCancellationSourceTrack } from "../src/app/lib/noise-cancellati
 type Kind = "audio" | "video";
 type Listener = (event: Event) => void;
 
-export type Hold = "capture" | "noiseSetup" | "replaceTrack" | "produce" | "consumerTransport";
+export type Hold = "capture" | "noiseSetup" | "replaceTrack" | "produce" | "consumerTransport" | "toggleMute" | "resume";
 
 export class World {
   tracks: FakeTrack[] = [];
@@ -22,6 +22,12 @@ export class World {
   pending: Array<{ hold: Hold; release: () => void }> = [];
   failCaptures: Kind[] = [];
   joinRefusal: string | null = null;
+  produceRoundTripMs = Number(process.env.IN_CALL_PRODUCE_RTT_MS ?? 0);
+  roundTripsInFlight = 0;
+  sent: Array<{ producer: string; source: string | null }> = [];
+  refusals = new Map<string, number>();
+  cameraRefusesConstraints = false;
+  contextsStartSuspended = false;
   deviceListeners = new Set<() => void>();
   socketEvents: Array<{ event: string; payload: unknown }> = [];
   framesSent = new Map<string, number>();
@@ -89,9 +95,10 @@ export class FakeTrack {
   }
 
   getSettings() {
-    return this.kind === "video"
-      ? { deviceId: this.deviceId, width: 1280, height: 720, frameRate: 30 }
-      : { deviceId: this.deviceId, sampleRate: 48000, channelCount: 1 };
+    if (this.kind === "audio") return { deviceId: this.deviceId, sampleRate: 48000, channelCount: 1 };
+    return this.world.cameraRefusesConstraints
+      ? { deviceId: this.deviceId, width: 160, height: 90, frameRate: 10 }
+      : { deviceId: this.deviceId, width: 1280, height: 720, frameRate: 30 };
   }
 
   getConstraints() {
@@ -102,7 +109,13 @@ export class FakeTrack {
     return {};
   }
 
-  async applyConstraints() {}
+  async applyConstraints() {
+    if (this.kind === "video" && this.world.cameraRefusesConstraints) {
+      const error = new Error("the rig camera refuses new constraints");
+      error.name = "OverconstrainedError";
+      throw error;
+    }
+  }
 
   addEventListener(type: string, listener: Listener) {
     const set = this.listeners.get(type) ?? new Set<Listener>();
@@ -153,6 +166,7 @@ class FakeParam {
   value = 0;
   setValueAtTime() {}
   linearRampToValueAtTime() {}
+  exponentialRampToValueAtTime() {}
   setTargetAtTime() {}
   cancelScheduledValues() {}
 }
@@ -184,13 +198,15 @@ class FakeAudioNode {
     this.outputs.clear();
   }
 
+  start() {}
+  stop() {}
   getFloatTimeDomainData() {}
   getByteFrequencyData() {}
   getByteTimeDomainData() {}
 }
 
 export class FakeAudioContext {
-  state: AudioContextState = "running";
+  state: AudioContextState;
   sampleRate = 48000;
   currentTime = 0;
   readonly destination: FakeAudioNode;
@@ -200,6 +216,7 @@ export class FakeAudioContext {
 
   constructor() {
     this.world = activeWorld();
+    this.state = this.world.contextsStartSuspended ? "suspended" : "running";
     this.destination = new FakeAudioNode(this);
     this.world.contexts.push(this);
   }
@@ -212,6 +229,7 @@ export class FakeAudioContext {
   };
 
   async resume() {
+    await this.world.wait("resume");
     if (this.state !== "closed") this.state = "running";
   }
 
@@ -240,6 +258,10 @@ export class FakeAudioContext {
   }
 
   createAnalyser() {
+    return new FakeAudioNode(this);
+  }
+
+  createOscillator() {
     return new FakeAudioNode(this);
   }
 
@@ -306,6 +328,7 @@ export class FakeProducer {
       setParameters: async () => {},
     };
     world.producers.push(this);
+    world.sent.push({ producer: id, source: track?.source ?? null });
   }
 
   pause() {
@@ -325,7 +348,13 @@ export class FakeProducer {
   async replaceTrack({ track }: { track: FakeTrack | null }) {
     await this.world.wait("replaceTrack");
     if (this.closed) throw new Error("closed");
+    const refusals = this.world.refusals.get("replaceTrack") ?? 0;
+    if (refusals > 0) {
+      this.world.refusals.set("replaceTrack", refusals - 1);
+      throw new Error("the rig refused replaceTrack");
+    }
     this.track = track;
+    this.world.sent.push({ producer: this.id, source: track?.source ?? null });
   }
 
   async setRtpEncodingParameters() {}
@@ -413,7 +442,13 @@ class FakeTransport {
     const id = await new Promise<string>((resolve, reject) =>
       this.handlers.get("produce")?.(
         { kind: options.track.kind, rtpParameters: {}, appData: options.appData ?? {} },
-        ({ id: producerId }: { id: string }) => resolve(producerId),
+        ({ id: producerId }: { id: string }) => {
+          this.world.roundTripsInFlight += 1;
+          setTimeout(() => {
+            this.world.roundTripsInFlight -= 1;
+            resolve(producerId);
+          }, this.world.produceRoundTripMs);
+        },
         reject,
       ),
     );
@@ -513,6 +548,11 @@ const SFU_ACKS: Record<string, (payload: Record<string, unknown>, world: World) 
   syncProducers: () => ({ producers: [] }),
 };
 
+const ACK_HOLDS: Partial<Record<string, Hold>> = {
+  createConsumerTransport: "consumerTransport",
+  toggleMute: "toggleMute",
+};
+
 const createSocket = (world: World) => {
   const handlers = new Map<string, Set<(...args: never[]) => void>>();
   const respond = (event: string, args: unknown[], withError: boolean) => {
@@ -520,8 +560,12 @@ const createSocket = (world: World) => {
     const payload = (typeof args[0] === "object" && args[0] !== null ? args[0] : {}) as Record<string, unknown>;
     world.socketEvents.push({ event, payload });
     if (typeof ack !== "function") return;
-    const response = SFU_ACKS[event]?.(payload, world) ?? { success: true };
-    void (event === "createConsumerTransport" ? world.wait("consumerTransport") : Promise.resolve()).then(() => {
+    const refusals = world.refusals.get(event) ?? 0;
+    if (refusals > 0) world.refusals.set(event, refusals - 1);
+    const response =
+      refusals > 0 ? { error: `the rig refused ${event}` } : (SFU_ACKS[event]?.(payload, world) ?? { success: true });
+    const held = ACK_HOLDS[event];
+    void (held ? world.wait(held) : Promise.resolve()).then(() => {
       if (withError) (ack as (error: null, response: unknown) => void)(null, response);
       else (ack as (response: unknown) => void)(response);
     });
@@ -895,6 +939,33 @@ export const unwanted = (world: World, rig: RigApi): string[] => {
         problems.push(`orphan open audio context ${index}`);
       }
     });
+  return problems;
+};
+
+export const notLive = (world: World, rig: RigApi): string[] => {
+  if (rig.state.connectionState !== "joined") return [];
+  const intents = rig.refs.deviceIntents.get();
+  const problems: string[] = [];
+  const open = world.producers.filter((producer) => !producer.closed && producer.appData.type !== "screen");
+  const sending = (kind: Kind) =>
+    open.filter((producer) => {
+      const onSfu = world.sfu.get(producer.id);
+      return (
+        producer.kind === kind &&
+        !producer.paused &&
+        producer.track?.readyState === "live" &&
+        producer.track.enabled &&
+        onSfu !== undefined &&
+        !onSfu.closed &&
+        !onSfu.paused
+      );
+    });
+  if (intents.audio.chosen && sending("audio").length !== 1) {
+    problems.push(`the microphone is on but ${sending("audio").length} audio producers are sending`);
+  }
+  if (intents.video.chosen && sending("video").length !== 1) {
+    problems.push(`the camera is on but ${sending("video").length} camera producers are sending`);
+  }
   return problems;
 };
 

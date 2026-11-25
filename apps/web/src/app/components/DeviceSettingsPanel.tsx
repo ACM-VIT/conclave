@@ -718,9 +718,13 @@ export default function DeviceSettingsPanel({
   const handlePlayTestSound = useCallback(() => {
     if (isPlayingTestSound) return;
     setIsPlayingTestSound(true);
-    void playSpeakerTestSound(selectedAudioOutputDeviceId).finally(() => {
-      setIsPlayingTestSound(false);
-    });
+    void playSpeakerTestSound(selectedAudioOutputDeviceId)
+      .catch((error) => {
+        console.warn("[Meets] Speaker test failed:", error);
+      })
+      .finally(() => {
+        setIsPlayingTestSound(false);
+      });
   }, [isPlayingTestSound, selectedAudioOutputDeviceId]);
 
   const loopbackLabel =

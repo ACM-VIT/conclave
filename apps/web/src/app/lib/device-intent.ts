@@ -43,9 +43,6 @@ export const reduceDeviceIntents = (state: DeviceIntents, action: DeviceIntentAc
   }
 };
 
-export const acceptsCapture = (state: DeviceIntents, device: Device, request: number): boolean =>
-  state[device].capturing && state[device].request === request;
-
 export const publishIntent = (state: DeviceIntents): { isMicOn: boolean; isCameraOn: boolean } => ({
   isMicOn: state.audio.chosen,
   isCameraOn: state.video.chosen,
@@ -118,7 +115,7 @@ export const captureDevices = async (
   });
   const isCurrent = (device: Device) => {
     const request = requests.get(device);
-    return request !== undefined && acceptsCapture(store.get(), device, request);
+    return request !== undefined && store.get()[device].request === request;
   };
   let tracks: readonly MediaStreamTrack[] = [];
   let error: unknown = null;
