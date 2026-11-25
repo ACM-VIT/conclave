@@ -1099,7 +1099,8 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         const previousAdminUserIds = mayChangeRoster ? room.getAdminUserIds() : [];
 
         const claimsOpening =
-          (createdRoom && !removedHere) || (isAdminJoin && room.awaitingOpener !== null);
+          (createdRoom && (!removedHere || restorerState === "awaited")) ||
+          (isAdminJoin && room.awaitingOpener !== null);
         const releaseClaim = (): void => {
           if (claimsOpening) room.awaitingOpener = null;
         };

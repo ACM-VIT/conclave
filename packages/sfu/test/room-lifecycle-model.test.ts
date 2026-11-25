@@ -2518,6 +2518,25 @@ describe("the room lifecycle model", () => {
     expect(outcome.failures, report(outcome)).toEqual([]);
   });
 
+  it("keeps a removed guest knocking on every pass when they are first back at a lost call", async () => {
+    const outcome = await runScript(
+      false,
+      [
+        open("alice"),
+        open("dana"),
+        host("alice", "admit", "dana"),
+        host("alice", "kick", "dana"),
+        { kind: "restart" },
+        { kind: "open", actor: "dana", pass: true, hold: false, claim: true },
+        { kind: "expect", actor: "dana", tab: "main", role: "out" },
+        { kind: "open", actor: "olddana", pass: true, hold: false, claim: true },
+        { kind: "expect", actor: "olddana", tab: "main", role: "out" },
+      ],
+      { hostClaims: true },
+    );
+    expect(outcome.failures, report(outcome)).toEqual([]);
+  });
+
   it(
     `keeps every invariant over ${SEQUENCES} random sequences from seed ${FIRST_SEED}`,
     async () => {

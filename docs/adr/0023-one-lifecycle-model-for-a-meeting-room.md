@@ -143,7 +143,7 @@ A reason belongs to a person and a seat to a tab, so one person can hold several
 20. No shared write is silently lost: a host's action answers success only once its writes landed, teardown writes before it releases the lease, and a write that waits for the lease is written in order or dropped with an error only when the lease was broken or a newer owner fenced it.
 21. A store never applies a write from an ownership generation older than one that has fenced it, whatever the writer's clock or cached lease says.
 22. No host command crashes or stalls the SFU on arguments it does not take: each is answered with a failure as it arrives.
-23. Nobody a host removed gets in by opening the room first: a removed person who creates a room knocks in it, as anywhere else (the code's owner and a configured host excepted).
+23. Nobody a host removed gets in by opening the room first: a removed person who creates a room knocks in it, as anywhere else (the code's owner and a configured host excepted). Their knock claims the opening only where the room then waits for a lost call's people, so the room keeps what their knock showed of them; elsewhere the room stays unopened for whoever may open it, and the knock waits for the next meeting.
 
 ## Consequences
 
