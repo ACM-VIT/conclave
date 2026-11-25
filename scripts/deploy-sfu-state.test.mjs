@@ -38,7 +38,7 @@ if [[ "$1" == "compose" ]]; then
         fi
         [[ "$FAKE_FAIL_AT" == probe && -f "$FAKE_STOPPED" && "$script" == *"layerDatabase.ts probe"* ]] && exit 1
         [[ "$FAKE_FAIL_AT" == carry && "$script" == *"layerDatabase.ts consolidate"* ]] && exit 1
-        if [[ -s "$STAGING_PATH_FILE" ]]; then
+        if [[ -s "$STAGING_PATH_FILE" && "$script" == *payload.tar* ]]; then
           staging="$(cat "$STAGING_PATH_FILE")"
           ls -ld "$staging" | cut -c1-10 >> "$STAGING_MODES"
           for file in "$staging"/*; do ls -l "$file" | cut -c1-10 >> "$STAGING_MODES"; done
@@ -54,7 +54,7 @@ if [[ "$1" == "compose" ]]; then
         cd "$FAKE_SFU_DIR" || exit 1
         export CONCLAVE_SQLITE_PATH="\${FAKE_NEW_SQLITE_PATH:-$FAKE_VOLUME/conclave.sqlite}"
         if [[ "$script" != *payload.tar* ]]; then
-          sh -c "$script" "\${rest[@]}"
+          CONCLAVE_FALLBACK_IMPORT_DIR="$FAKE_IMAGE_IMPORT_DIR" sh -c "$script" "\${rest[@]}"
           code=$?
           [[ $code == 0 && "$FAKE_RESTART_AT" == probe && -f "$FAKE_STOPPED" && "$script" == *"layerDatabase.ts probe"* ]] && : > "$FAKE_RESTARTED"
           exit $code
@@ -269,11 +269,14 @@ const strayDirectories = (root, ownershipLog) => {
 };
 
 const listArchives = (serviceDir) =>
-  (existsSync(serviceDir) ? readdirSync(serviceDir).sort() : []).map((name) => {
+  (existsSync(serviceDir) ? readdirSync(serviceDir).filter((name) => !name.startsWith(".")).sort() : []).map((name) => {
     const path = join(serviceDir, name);
-    const files = readdirSync(path).sort();
-    return { name, files, bytes: Object.fromEntries(files.map((file) => [file, readFileSync(join(path, file))])), modes: [mode(path), ...files.map((file) => mode(join(path, file)))] };
+    const files = readdirSync(path).filter((file) => !file.startsWith(".")).sort();
+    const source = existsSync(join(path, ".source")) ? readFileSync(join(path, ".source"), "utf8").trim() : null;
+    return { name, files, source, bytes: Object.fromEntries(files.map((file) => [file, readFileSync(join(path, file))])), modes: [mode(path), ...files.map((file) => mode(join(path, file)))] };
   });
+
+const stagedArchives = (serviceDir) => (existsSync(serviceDir) ? readdirSync(serviceDir).filter((name) => name.startsWith(".staged-")).sort() : []);
 
 const WRITE_DATABASE = `const { DatabaseSync } = require("node:sqlite");
 const [path, mode, ids] = process.argv.slice(1);
@@ -451,12 +454,14 @@ const replaceService = async (
     const listing = (path) => (existsSync(path) ? readdirSync(path).sort() : []);
     const containerDir = join(importDir, "sfu-a");
     const archives = listArchives(containerDir);
+    const staged = stagedArchives(containerDir);
     const latest = archives.at(-1);
     return {
       ...result,
       healthRequests,
       calls: readFileSync(log, "utf8").trim().split("\n").filter(Boolean),
       archives,
+      staged,
       imported: latest?.files ?? [],
       importedBytes: (name) => latest?.bytes[name] ?? Buffer.alloc(0),
       importModes: latest ? [mode(importDir), mode(containerDir), ...latest.modes] : [],
@@ -486,7 +491,7 @@ const assertChangedInTransit = (corruptions) =>
   );
 
 const callIndex = (calls, pattern) => calls.findIndex((call) => pattern.test(call));
-const receives = (calls) => calls.filter((call) => /^compose .* run .*--entrypoint sh sfu-a -c /.test(call));
+const receives = (calls) => calls.filter((call) => /^compose .* run .*--entrypoint sh sfu-a -c .*payload\.tar/.test(call));
 const stopped = (calls) => callIndex(calls, /^compose .* stop sfu-a$/) >= 0;
 const wrote = (name) => `A ${DATA}/${name}\\n`;
 const leftStoppedAndRestored = (calls) => {
@@ -570,6 +575,26 @@ for (const harness of harnesses) {
     const start = callIndex(calls, /^compose .* up -d sfu-a$/);
     assert.ok(froze >= 0 && stop > froze && copies.length === 1 && copies[0] > stop && sends.length === 1 && sends[0] > copies[0] && restored > sends[0] && start > restored, calls.join("\n"));
     assert.deepEqual(archives.map((archive) => archive.bytes["scheduling.json"].toString()), ["[1,2]"]);
+  });
+
+  test(`${shell}: publishes the JSON fallback files only once every check after the copy has passed, and a retry discards an earlier unpublished copy`, async () => {
+    const shared = mkdtempSync(join(tmpdir(), "deploy-sfu-import-"));
+    try {
+      const options = { sharedImportDir: shared, diff: wrote("scheduling.json") };
+      const aborted = await replaceService(harness, { ...options, files: { "scheduling.json": '["copied before the restart"]' }, restartAt: "json-send" });
+      assert.notEqual(aborted.status, 0);
+      assert.deepEqual(aborted.archives, [], "a copy from a deploy that refused was published");
+      assert.equal(aborted.staged.length, 1, aborted.calls.join("\n"));
+      const retried = await replaceService(harness, { ...options, files: { "scheduling.json": '["as it stopped"]' }, startedAt: "2026-11-25T09:30:00.000000000Z", finishedAt: "2026-11-25T10:00:00.000000000Z" });
+      assert.equal(retried.status, 0, retried.stderr);
+      assert.deepEqual(retried.archives.map((archive) => archive.bytes["scheduling.json"].toString()), ['["as it stopped"]']);
+      assert.deepEqual(retried.staged, []);
+      assert.equal(retried.archives[0].source, `${OLD_CONTAINER} 2026-11-25T09:30:00.000000000Z_2026-11-25T10:00:00.000000000Z`);
+      const publish = callIndex(retried.calls, /^compose .* run .*--entrypoint sh sfu-a -c .*staged copy/);
+      assert.ok(publish > callIndex(retried.calls, /^compose .* stop sfu-a$/) && callIndex(retried.calls, /^compose .* up -d sfu-a$/) > publish, retried.calls.join("\n"));
+    } finally {
+      rmSync(shared, { recursive: true, force: true });
+    }
   });
 
   test(`${shell}: a later deploy keeps the copy an earlier deploy saved`, async () => {

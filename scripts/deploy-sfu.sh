@@ -316,7 +316,11 @@ collect_fallback_json() {
 
 
 fallback_receiver() {
-  printf '%s' 'umask 077 && own() { chown node:node "$@" && chmod 0700 "$@"; } && base=${CONCLAVE_FALLBACK_IMPORT_DIR:?} && case "$3" in ""|.*|*[!A-Za-z0-9._-]*) echo "The archive name $3 is not safe to use." >&2; exit 1;; esac && case "$4" in ""|*[!A-Za-z0-9]*) echo "The transfer id $4 is not safe to use." >&2; exit 1;; esac && folder=$base/$1 && dest=$folder/$3 && incoming=$base/.incoming-$1-$3-$4 && mkdir -p "$base" && own "$base" && mkdir -p "$folder" && own "$folder" && find "$base" -mindepth 1 -maxdepth 1 -type d -name ".incoming-*" -mmin +30 -exec rm -rf {} + && if [ -e "$dest" ]; then echo "$dest already exists, and a saved copy is never replaced." >&2; exit 1; fi && mkdir "$incoming" && own "$incoming" && trap '"'"'rm -rf "$incoming"'"'"' EXIT && cat > "$incoming/payload.tar" && got=$(sha256sum "$incoming/payload.tar" | cut -d" " -f1) && if [ "$got" != "$2" ]; then echo "The fallback files arrived with checksum $got, not $2." >&2; rm -rf "$incoming"; exit 1; fi && mkdir "$incoming/files" && own "$incoming/files" && tar -xf "$incoming/payload.tar" -C "$incoming/files" && rm "$incoming/payload.tar" && chown node:node "$incoming/files"/*.json && chmod 0600 "$incoming/files"/*.json && mv "$incoming/files" "$dest" && rmdir "$incoming" && chown -R node:node "$base"'
+  printf '%s' 'umask 077 && own() { chown node:node "$@" && chmod 0700 "$@"; } && base=${CONCLAVE_FALLBACK_IMPORT_DIR:?} && case "$3" in ""|.*|*[!A-Za-z0-9._-]*) echo "The archive name $3 is not safe to use." >&2; exit 1;; esac && case "$4" in ""|*[!A-Za-z0-9]*) echo "The transfer id $4 is not safe to use." >&2; exit 1;; esac && folder=$base/$1 && dest=$folder/$3 && incoming=$base/.incoming-$1-$3-$4 && mkdir -p "$base" && own "$base" && mkdir -p "$folder" && own "$folder" && find "$base" -mindepth 1 -maxdepth 1 -type d -name ".incoming-*" -mmin +30 -exec rm -rf {} + && if [ -e "$dest" ]; then echo "$dest already exists, and a saved copy is never replaced." >&2; exit 1; fi && find "$folder" -mindepth 1 -maxdepth 1 -name ".staged-*" -exec rm -rf {} + && mkdir "$incoming" && own "$incoming" && trap '"'"'rm -rf "$incoming"'"'"' EXIT && cat > "$incoming/payload.tar" && got=$(sha256sum "$incoming/payload.tar" | cut -d" " -f1) && if [ "$got" != "$2" ]; then echo "The fallback files arrived with checksum $got, not $2." >&2; rm -rf "$incoming"; exit 1; fi && mkdir "$incoming/files" && own "$incoming/files" && tar -xf "$incoming/payload.tar" -C "$incoming/files" && rm "$incoming/payload.tar" && chown node:node "$incoming/files"/*.json && chmod 0600 "$incoming/files"/*.json && printf "%s %s\n" "$5" "$6" > "$incoming/files/.source" && chown node:node "$incoming/files/.source" && chmod 0600 "$incoming/files/.source" && mv "$incoming/files" "$folder/.staged-$3" && rmdir "$incoming" && chown -R node:node "$base"'
+}
+
+fallback_publisher() {
+  printf '%s' 'base=${CONCLAVE_FALLBACK_IMPORT_DIR:?} && case "$2" in ""|.*|*[!A-Za-z0-9._-]*) echo "The archive name $2 is not safe to use." >&2; exit 1;; esac && folder=$base/$1 && if [ -e "$folder/$2" ]; then echo "$folder/$2 already exists, and a saved copy is never replaced." >&2; exit 1; fi && if [ ! -d "$folder/.staged-$2" ]; then echo "The staged copy $folder/.staged-$2 is gone, so nothing was published." >&2; exit 1; fi && mv "$folder/.staged-$2" "$folder/$2"'
 }
 
 archive_stamp() {
@@ -324,8 +328,9 @@ archive_stamp() {
 }
 
 send_fallback_json() {
-  local service="$1" dir="$2" archive checksum file name transfer
+  local service="$1" dir="$2" container="$3" identity="$4" archive checksum file name transfer
   local -a names=()
+  STAGED_FALLBACK=""
   for file in "$dir"/*.json; do
     [[ -e "$file" ]] && names+=("${file##*/}")
   done
@@ -336,11 +341,24 @@ send_fallback_json() {
   name="$(archive_stamp)-${SFU_DEPLOY_ID:?}"
   transfer="$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
   if ! "${COMPOSE[@]}" run -T --rm --no-deps --user root --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --entrypoint sh "$service" -c \
-    "$(fallback_receiver)" sh "$service" "$checksum" "$name" "$transfer" < "$archive"; then
+    "$(fallback_receiver)" sh "$service" "$checksum" "$name" "$transfer" "$container" "$identity" < "$archive"; then
     echo "Could not copy the old ${service} container's JSON fallback files onto the volume." >&2
     return 1
   fi
-  echo "Saved the old ${service} container's JSON fallback files on the volume as ${name} and verified them: ${names[*]}"
+  STAGED_FALLBACK="$name"
+  echo "Staged the old ${service} container's JSON fallback files on the volume as ${name} and verified them: ${names[*]}"
+}
+
+publish_fallback_json() {
+  local service="$1"
+  [[ -n "${STAGED_FALLBACK:-}" ]] || return 0
+  if ! "${COMPOSE[@]}" run -T --rm --no-deps --user root --cap-add DAC_OVERRIDE --cap-add FOWNER --entrypoint sh "$service" -c \
+    "$(fallback_publisher)" sh "$service" "$STAGED_FALLBACK" < /dev/null; then
+    echo "Could not publish the old ${service} container's staged JSON fallback files (${STAGED_FALLBACK})." >&2
+    return 1
+  fi
+  echo "Saved the old ${service} container's JSON fallback files as ${STAGED_FALLBACK}."
+  STAGED_FALLBACK=""
 }
 
 layer_sqlite_databases() {
@@ -541,6 +559,7 @@ build_and_start() (
   staging="$(mktemp -d)"
   release_source() {
     local state="left stopped"
+    trap '' INT TERM HUP
     if [[ -n "$frozen_policy" ]]; then
       container_running "$container" 2> /dev/null && state="still running"
       if ! docker update --restart="$frozen_policy" "$container" > /dev/null; then
@@ -563,11 +582,11 @@ build_and_start() (
       echo "Stopped before replacing ${service}; nothing was stopped." >&2
       exit 1
     fi
+    frozen_policy="$policy"
     if ! docker update --restart=no "$container" > /dev/null; then
       echo "Could not keep the old ${service} container from restarting while it is copied. Stopped before replacing ${service}; nothing was stopped." >&2
       exit 1
     fi
-    frozen_policy="$policy"
   fi
   if ! "${COMPOSE[@]}" stop "$service"; then
     echo "Could not stop the old ${service}. Stopped before replacing it." >&2
@@ -581,12 +600,13 @@ build_and_start() (
   if [[ -n "$container" ]]; then
     if ! frozen="$(freeze_source "$service" "$container")" ||
       ! collect_fallback_json "$service" "$container" "$staging/json" ||
-      ! send_fallback_json "$service" "$staging/json" ||
+      ! send_fallback_json "$service" "$staging/json" "$container" "$frozen" ||
       ! still_frozen "$service" "$container" "$frozen" ||
       ! plan_layer_sqlite "$service" "$container" "$staging/sqlite-plan" "$frozen" ||
       ! still_frozen "$service" "$container" "$frozen" ||
       ! carry_layer_sqlite "$service" "$container" "$staging/sqlite" "$staging/sqlite-plan" ||
-      ! still_frozen "$service" "$container" "$frozen"; then
+      ! still_frozen "$service" "$container" "$frozen" ||
+      ! publish_fallback_json "$service"; then
       echo "Stopped before replacing ${service}." >&2
       exit 1
     fi

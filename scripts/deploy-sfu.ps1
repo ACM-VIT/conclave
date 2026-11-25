@@ -354,11 +354,11 @@ function Get-ArchiveStamp {
 }
 
 function Send-FallbackJson {
-  param([string]$Service, [string]$Directory)
+  param([string]$Service, [string]$Directory, [string]$Container, [string]$Identity)
 
   $names = @(Get-ChildItem -LiteralPath $Directory -Filter "*.json" -File | Sort-Object Name | ForEach-Object { $_.Name })
   if ($names.Count -eq 0) {
-    return
+    return ""
   }
   $archive = "$Directory.tar"
   $env:COPYFILE_DISABLE = "1"
@@ -375,15 +375,33 @@ function Send-FallbackJson {
   }
   $name = "$(Get-ArchiveStamp)-$($env:SFU_DEPLOY_ID)"
   $transfer = [guid]::NewGuid().ToString("N").Substring(0, 12)
-  $receive = 'umask 077 && own() { chown node:node "$@" && chmod 0700 "$@"; } && base=${CONCLAVE_FALLBACK_IMPORT_DIR:?} && case "$3" in ""|.*|*[!A-Za-z0-9._-]*) echo "The archive name $3 is not safe to use." >&2; exit 1;; esac && case "$4" in ""|*[!A-Za-z0-9]*) echo "The transfer id $4 is not safe to use." >&2; exit 1;; esac && folder=$base/$1 && dest=$folder/$3 && incoming=$base/.incoming-$1-$3-$4 && mkdir -p "$base" && own "$base" && mkdir -p "$folder" && own "$folder" && find "$base" -mindepth 1 -maxdepth 1 -type d -name ".incoming-*" -mmin +30 -exec rm -rf {} + && if [ -e "$dest" ]; then echo "$dest already exists, and a saved copy is never replaced." >&2; exit 1; fi && mkdir "$incoming" && own "$incoming" && trap ''rm -rf "$incoming"'' EXIT && cat > "$incoming/payload.tar" && got=$(sha256sum "$incoming/payload.tar" | cut -d" " -f1) && if [ "$got" != "$2" ]; then echo "The fallback files arrived with checksum $got, not $2." >&2; rm -rf "$incoming"; exit 1; fi && mkdir "$incoming/files" && own "$incoming/files" && tar -xf "$incoming/payload.tar" -C "$incoming/files" && rm "$incoming/payload.tar" && chown node:node "$incoming/files"/*.json && chmod 0600 "$incoming/files"/*.json && mv "$incoming/files" "$dest" && rmdir "$incoming" && chown -R node:node "$base"'
+  $receive = 'umask 077 && own() { chown node:node "$@" && chmod 0700 "$@"; } && base=${CONCLAVE_FALLBACK_IMPORT_DIR:?} && case "$3" in ""|.*|*[!A-Za-z0-9._-]*) echo "The archive name $3 is not safe to use." >&2; exit 1;; esac && case "$4" in ""|*[!A-Za-z0-9]*) echo "The transfer id $4 is not safe to use." >&2; exit 1;; esac && folder=$base/$1 && dest=$folder/$3 && incoming=$base/.incoming-$1-$3-$4 && mkdir -p "$base" && own "$base" && mkdir -p "$folder" && own "$folder" && find "$base" -mindepth 1 -maxdepth 1 -type d -name ".incoming-*" -mmin +30 -exec rm -rf {} + && if [ -e "$dest" ]; then echo "$dest already exists, and a saved copy is never replaced." >&2; exit 1; fi && find "$folder" -mindepth 1 -maxdepth 1 -name ".staged-*" -exec rm -rf {} + && mkdir "$incoming" && own "$incoming" && trap ''rm -rf "$incoming"'' EXIT && cat > "$incoming/payload.tar" && got=$(sha256sum "$incoming/payload.tar" | cut -d" " -f1) && if [ "$got" != "$2" ]; then echo "The fallback files arrived with checksum $got, not $2." >&2; rm -rf "$incoming"; exit 1; fi && mkdir "$incoming/files" && own "$incoming/files" && tar -xf "$incoming/payload.tar" -C "$incoming/files" && rm "$incoming/payload.tar" && chown node:node "$incoming/files"/*.json && chmod 0600 "$incoming/files"/*.json && printf "%s %s\n" "$5" "$6" > "$incoming/files/.source" && chown node:node "$incoming/files/.source" && chmod 0600 "$incoming/files/.source" && mv "$incoming/files" "$folder/.staged-$3" && rmdir "$incoming" && chown -R node:node "$base"'
   $exitCode = Send-FileToCommand -Path $archive -Command "docker" -Arguments ($composeBaseArgs + @(
     "run", "-T", "--rm", "--no-deps", "--user", "root", "--cap-add", "CHOWN", "--cap-add", "DAC_OVERRIDE", "--cap-add", "FOWNER", "--entrypoint", "sh", $Service, "-c",
-    $receive, "sh", $Service, $checksum, $name, $transfer
+    $receive, "sh", $Service, $checksum, $name, $transfer, $Container, $Identity
   ))
   if ($exitCode -ne 0) {
     throw "Could not copy the old $Service container's JSON fallback files onto the volume."
   }
-  Write-Host "Saved the old $Service container's JSON fallback files on the volume as $name and verified them: $($names -join ' ')"
+  Write-Host "Staged the old $Service container's JSON fallback files on the volume as $name and verified them: $($names -join ' ')"
+  return $name
+}
+
+function Publish-FallbackJson {
+  param([string]$Service, [string]$Name)
+
+  if (-not $Name) {
+    return
+  }
+  $publish = 'base=${CONCLAVE_FALLBACK_IMPORT_DIR:?} && case "$2" in ""|.*|*[!A-Za-z0-9._-]*) echo "The archive name $2 is not safe to use." >&2; exit 1;; esac && folder=$base/$1 && if [ -e "$folder/$2" ]; then echo "$folder/$2 already exists, and a saved copy is never replaced." >&2; exit 1; fi && if [ ! -d "$folder/.staged-$2" ]; then echo "The staged copy $folder/.staged-$2 is gone, so nothing was published." >&2; exit 1; fi && mv "$folder/.staged-$2" "$folder/$2"'
+  $null | & docker @($composeBaseArgs + @(
+    "run", "-T", "--rm", "--no-deps", "--user", "root", "--cap-add", "DAC_OVERRIDE", "--cap-add", "FOWNER", "--entrypoint", "sh", $Service, "-c",
+    $publish, "sh", $Service, $Name
+  ))
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not publish the old $Service container's staged JSON fallback files ($Name)."
+  }
+  Write-Host "Saved the old $Service container's JSON fallback files as $Name."
 }
 
 function Get-LayerSqliteDatabases {
@@ -644,6 +662,7 @@ function Enable-RestartGuard {
     Add-Type -TypeDefinition @'
     using System;
     using System.Diagnostics;
+    using System.IO;
     using System.Runtime.InteropServices;
 
     public static class SfuRestartGuard
@@ -654,7 +673,6 @@ function Enable-RestartGuard {
         private static string container;
         private static string policy;
         private static string startCommand;
-        private static bool stopped;
 
         public static void Arm(string serviceName, string containerId, string restartPolicy, string start)
         {
@@ -664,63 +682,113 @@ function Enable-RestartGuard {
                 container = containerId;
                 policy = restartPolicy;
                 startCommand = start;
-                stopped = false;
-                if (registrations == null)
+                if (registrations == null && !OperatingSystem.IsWindows())
                 {
                     registrations = new[]
                     {
-                        PosixSignalRegistration.Create(PosixSignal.SIGTERM, Restore),
-                        PosixSignalRegistration.Create(PosixSignal.SIGHUP, Restore),
+                        PosixSignalRegistration.Create(PosixSignal.SIGTERM, OnSignal),
+                        PosixSignalRegistration.Create(PosixSignal.SIGHUP, OnSignal),
                     };
                 }
             }
         }
 
-        public static void MarkStopped()
-        {
-            lock (Gate)
-            {
-                stopped = true;
-            }
-        }
-
-        public static void Disarm()
-        {
-            lock (Gate)
-            {
-                container = null;
-            }
-        }
-
-        private static void Restore(PosixSignalContext context)
+        public static bool RestoreBeforeReplacing()
         {
             lock (Gate)
             {
                 if (container == null)
                 {
-                    return;
+                    return true;
                 }
-                var start = new ProcessStartInfo("docker") { UseShellExecute = false };
-                start.ArgumentList.Add("update");
-                start.ArgumentList.Add("--restart=" + policy);
-                start.ArgumentList.Add(container);
-                using (var process = Process.Start(start))
+                if (!Docker("update", "--restart=" + policy, container))
                 {
-                    process.WaitForExit();
-                    if (process.ExitCode != 0)
+                    return false;
+                }
+                container = null;
+                return true;
+            }
+        }
+
+        public static void Release(string staging, string prefix)
+        {
+            lock (Gate)
+            {
+                if (container != null)
+                {
+                    var running = DockerOutput("inspect", "--format", "{{.State.Running}}", container) == "true";
+                    if (!Docker("update", "--restart=" + policy, container))
                     {
-                        Console.Error.WriteLine("Interrupted, and the old " + service + " container's restart policy could not be restored; set it with: docker update --restart=" + policy + " " + container);
+                        Console.Error.WriteLine(prefix + "The old " + service + " container is " + (running ? "still running" : "left stopped") + ", and its restart policy could not be restored; set it with: docker update --restart=" + policy + " " + container);
                     }
-                    else if (stopped)
+                    else if (running)
                     {
-                        Console.Error.WriteLine("Interrupted. The old " + service + " container is left stopped, not removed, with its restart policy (" + policy + ") restored; start it again with: " + startCommand);
+                        Console.Error.WriteLine(prefix + "The old " + service + " container is still running, with its restart policy (" + policy + ") restored.");
                     }
                     else
                     {
-                        Console.Error.WriteLine("Interrupted. The old " + service + " container is still running, with its restart policy (" + policy + ") restored.");
+                        Console.Error.WriteLine(prefix + "The old " + service + " container is left stopped, not removed, with its restart policy (" + policy + ") restored; start it again with: " + startCommand);
+                    }
+                    container = null;
+                }
+                if (!string.IsNullOrEmpty(staging))
+                {
+                    try
+                    {
+                        Directory.Delete(staging, true);
+                    }
+                    catch (Exception)
+                    {
                     }
                 }
-                container = null;
+            }
+        }
+
+        private static void OnSignal(PosixSignalContext context)
+        {
+            Release(null, "Interrupted. ");
+        }
+
+        private static ProcessStartInfo Shielded(string[] arguments)
+        {
+            ProcessStartInfo start;
+            if (OperatingSystem.IsWindows())
+            {
+                start = new ProcessStartInfo("docker");
+            }
+            else
+            {
+                start = new ProcessStartInfo("sh");
+                start.ArgumentList.Add("-c");
+                start.ArgumentList.Add("trap '' INT TERM HUP; exec docker \"$@\"");
+                start.ArgumentList.Add("sh");
+            }
+            foreach (var argument in arguments)
+            {
+                start.ArgumentList.Add(argument);
+            }
+            start.UseShellExecute = false;
+            start.RedirectStandardOutput = true;
+            return start;
+        }
+
+        private static bool Docker(params string[] arguments)
+        {
+            using (var process = Process.Start(Shielded(arguments)))
+            {
+                process.StandardOutput.ReadToEnd();
+                process.WaitForExit();
+                return process.ExitCode == 0;
+            }
+        }
+
+        private static string DockerOutput(params string[] arguments)
+        {
+            using (var process = Process.Start(Shielded(arguments)))
+            {
+                var output = process.StandardOutput.ReadToEnd().Trim();
+                process.WaitForExit();
+                return process.ExitCode == 0 ? output : "";
             }
         }
     }
@@ -756,18 +824,15 @@ function Start-SfuService {
       } catch {
         Exit-WithError "$($_.Exception.Message) Stopped before replacing $Service; nothing was stopped."
       }
+      $frozenPolicy = $policy
+      Enable-RestartGuard -Service $Service -Container $container -Policy $policy -StartCommand "docker $($composeBaseArgs -join ' ') start $Service"
       if (-not (Set-RestartPolicy -Container $container -Policy "no")) {
         Exit-WithError "Could not keep the old $Service container from restarting while it is copied. Stopped before replacing $Service; nothing was stopped."
       }
-      $frozenPolicy = $policy
-      Enable-RestartGuard -Service $Service -Container $container -Policy $policy -StartCommand "docker $($composeBaseArgs -join ' ') start $Service"
     }
     & docker @($composeBaseArgs + @("stop", $Service))
     if ($LASTEXITCODE -ne 0) {
       Exit-WithError "Could not stop the old $Service. Stopped before replacing it."
-    }
-    if ($hasContainer) {
-      [SfuRestartGuard]::MarkStopped()
     }
     & docker @($composeBaseArgs + @(
       "run", "--rm", "--no-deps", "--user", "root", "--cap-add", "CHOWN", "--cap-add", "DAC_READ_SEARCH", "--entrypoint", "find", $Service,
@@ -782,41 +847,27 @@ function Start-SfuService {
         $frozen = Get-FrozenIdentity -Service $Service -Container $container
         $json = Join-Path $staging "json"
         Copy-FallbackJson -Service $Service -Container $container -Directory $json
-        Send-FallbackJson -Service $Service -Directory $json
+        $stagedJson = @(Send-FallbackJson -Service $Service -Directory $json -Container $container -Identity $frozen) | Select-Object -Last 1
         Assert-StillFrozen -Service $Service -Container $container -Frozen $frozen
         $sqlitePlan = @(Get-LayerSqlitePlan -Service $Service -Container $container -Started $frozen)
         Assert-StillFrozen -Service $Service -Container $container -Frozen $frozen
         Copy-LayerSqlite -Service $Service -Container $container -Directory (Join-Path $staging "sqlite") -Plan $sqlitePlan
         Assert-StillFrozen -Service $Service -Container $container -Frozen $frozen
+        Publish-FallbackJson -Service $Service -Name $stagedJson
       } catch {
         Exit-WithError "$($_.Exception.Message) Stopped before replacing $Service."
       }
-      if (-not (Set-RestartPolicy -Container $container -Policy $frozenPolicy)) {
+      if (-not [SfuRestartGuard]::RestoreBeforeReplacing()) {
         Exit-WithError "Could not restore the old $Service container's restart policy ($frozenPolicy) before replacing it. Stopped before replacing $Service."
       }
       $frozenPolicy = ""
-      [SfuRestartGuard]::Disarm()
     }
   } finally {
-    if ($frozenPolicy) {
-      [SfuRestartGuard]::Disarm()
-      $state = "left stopped"
-      try {
-        if (Test-ContainerRunning -Container $container) {
-          $state = "still running"
-        }
-      } catch {
-      }
-      if (-not (Set-RestartPolicy -Container $container -Policy $frozenPolicy)) {
-        [Console]::Error.WriteLine("The old $Service container is $state, and its restart policy could not be restored; set it with: docker update --restart=$frozenPolicy $container")
-      } elseif ($state -eq "still running") {
-        [Console]::Error.WriteLine("The old $Service container is still running, with its restart policy ($frozenPolicy) restored.")
-      } else {
-        [Console]::Error.WriteLine("The old $Service container is left stopped, not removed, with its restart policy ($frozenPolicy) restored; start it again with: docker $($composeBaseArgs -join ' ') start $Service")
-      }
-      $frozenPolicy = ""
+    if ("SfuRestartGuard" -as [type]) {
+      [SfuRestartGuard]::Release($staging, "")
+    } else {
+      Remove-Item -Recurse -Force -LiteralPath $staging -ErrorAction SilentlyContinue
     }
-    Remove-Item -Recurse -Force -LiteralPath $staging -ErrorAction SilentlyContinue
   }
   Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @("up", "-d", $Service))
   $timeoutSeconds = Get-Int -Value $env:SFU_HEALTH_TIMEOUT_SECONDS -DefaultValue 180
