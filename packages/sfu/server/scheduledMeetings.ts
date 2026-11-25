@@ -1,3 +1,4 @@
+import { runDetached } from "./runDetached.js";
 import { randomBytes, randomUUID } from "node:crypto";
 import {
   existsSync,
@@ -598,11 +599,17 @@ export type ScheduledMeetingPersistence = {
     email: string,
     required: boolean,
     at: number,
-  ) => MaybePromise<void>;
+    generation?: number,
+  ) => MaybePromise<boolean | void>;
   // Takes back the removals of a meeting that is over: those made at or
   // before `endedAt`, also any that arrive after this does. One made for the
   // next meeting, after this end, stays even if this lands later.
-  endRemovals?: (meetingId: string, endedAt: number) => MaybePromise<void>;
+  endRemovals?: (
+    meetingId: string,
+    endedAt: number,
+    generation?: number,
+  ) => MaybePromise<boolean | void>;
+  fenceMeeting?: (meetingId: string, generation: number) => MaybePromise<void>;
   close?: () => MaybePromise<void>;
   flush?: () => Promise<void>;
 };
@@ -807,10 +814,10 @@ const handOver = (
 ): void => {
   for (const meeting of meetings) {
     for (const email of meeting.readmissionRequiredEmails ?? []) {
-      void store.setInviteeReadmission?.(meeting.id, email, true, carriedRemovalAt(meeting));
+      runDetached("Saving an invitee's removal", () => store.setInviteeReadmission?.(meeting.id, email, true, carriedRemovalAt(meeting)));
     }
   }
-  void store.save(meetings);
+  runDetached("Saving scheduled meetings", () => store.save(meetings));
 };
 
 // Removed invitees as a store lists them, one (meeting, email) pair at a
@@ -924,6 +931,38 @@ const createSqliteScheduledMeetingPersistence = (
           OR (excluded.removed_at = scheduled_meeting_removed_invitees.removed_at
               AND excluded.readmitted < scheduled_meeting_removed_invitees.readmitted)`,
   );
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS scheduled_meeting_write_generations (
+      meeting_id TEXT PRIMARY KEY,
+      generation INTEGER NOT NULL
+    )
+  `);
+  const readWriteGeneration = db.prepare(
+    "SELECT generation FROM scheduled_meeting_write_generations WHERE meeting_id = ?",
+  );
+  const raiseWriteGeneration = db.prepare(
+    `INSERT INTO scheduled_meeting_write_generations (meeting_id, generation) VALUES (?, ?)
+     ON CONFLICT(meeting_id) DO UPDATE SET generation = MAX(generation, excluded.generation)`,
+  );
+  const isStaleWrite = (meetingId: string, generation: number | undefined): boolean => {
+    if (generation === undefined) return false;
+    const row = readWriteGeneration.get(meetingId) as { generation?: unknown } | undefined;
+    return typeof row?.generation === "number" && row.generation > generation;
+  };
+  const inTransaction = (what: string, run: () => boolean): boolean => {
+    try {
+      db.exec("BEGIN IMMEDIATE");
+      const applied = run();
+      db.exec(applied ? "COMMIT" : "ROLLBACK");
+      return applied;
+    } catch (error) {
+      try {
+        db.exec("ROLLBACK");
+      } catch {}
+      Logger.error(`Failed to ${what}`, error);
+      return false;
+    }
+  };
   const markEnded = db.prepare(
     `INSERT INTO scheduled_meeting_removals_ended (meeting_id, ended_at) VALUES (?, ?)
      ON CONFLICT(meeting_id) DO UPDATE SET ended_at = MAX(ended_at, excluded.ended_at)`,
@@ -1104,31 +1143,25 @@ const createSqliteScheduledMeetingPersistence = (
       }
       return meeting;
     },
-    setInviteeReadmission: (meetingId, email, required, at) => {
-      try {
-        db.exec("BEGIN IMMEDIATE");
+    setInviteeReadmission: (meetingId, email, required, at, generation) =>
+      inTransaction("persist a removed invitee", () => {
+        if (isStaleWrite(meetingId, generation)) return false;
         decide.run(meetingId, email, at, required ? 0 : 1);
         markRemovalsMoved.run(meetingId);
-        db.exec("COMMIT");
-      } catch (error) {
-        try {
-          db.exec("ROLLBACK");
-        } catch {}
-        Logger.error("Failed to persist a removed invitee", error);
-      }
-    },
-    endRemovals: (meetingId, endedAt) => {
-      try {
-        db.exec("BEGIN IMMEDIATE");
+        return true;
+      }),
+    endRemovals: (meetingId, endedAt, generation) =>
+      inTransaction("take back a meeting's removals", () => {
+        if (isStaleWrite(meetingId, generation)) return false;
         markEnded.run(meetingId, endedAt);
         clearEndedDecisions.run(meetingId, meetingId);
-        db.exec("COMMIT");
-      } catch (error) {
-        try {
-          db.exec("ROLLBACK");
-        } catch {}
-        Logger.error("Failed to take back a meeting's removals", error);
-      }
+        return true;
+      }),
+    fenceMeeting: (meetingId, generation) => {
+      inTransaction("fence a meeting's writes", () => {
+        raiseWriteGeneration.run(meetingId, generation);
+        return true;
+      });
     },
     close: () => db.close(),
   };
@@ -1163,6 +1196,7 @@ type StoredDecisions = {
   decisions: Record<string, InviteeDecision>;
   // When the meeting was last over, if it was.
   endedAt: number | null;
+  writeGeneration: number | null;
 };
 
 // A stored meeting's decisions about its invitees. A file written before
@@ -1191,8 +1225,13 @@ const storedDecisionsOf = (raw: Record<string, unknown>): StoredDecisions => {
   return {
     decisions,
     endedAt: typeof raw.readmissionEndedAt === "number" ? raw.readmissionEndedAt : null,
+    writeGeneration:
+      typeof raw.readmissionWriteGeneration === "number" ? raw.readmissionWriteGeneration : null,
   };
 };
+
+const isStaleFor = (stored: StoredDecisions, generation: number | undefined): boolean =>
+  generation !== undefined && stored.writeGeneration !== null && stored.writeGeneration > generation;
 
 const stillRemovedIn = ({ decisions, endedAt }: StoredDecisions): string[] =>
   Object.entries(decisions)
@@ -1207,6 +1246,7 @@ const withDecisions = (
   readmissionRequiredEmails: stillRemovedIn(stored),
   readmissionDecisions: stored.decisions,
   readmissionEndedAt: stored.endedAt,
+  readmissionWriteGeneration: stored.writeGeneration,
 });
 
 // One file holding every meeting, rewritten whole. A save keeps the
@@ -1254,30 +1294,55 @@ const createFileScheduledMeetingPersistence = (
         Logger.error("Failed to persist scheduled meetings to JSON", error);
       }
     },
-    setInviteeReadmission: (meetingId, email, required, at) => {
+    setInviteeReadmission: (meetingId, email, required, at, generation) => {
+      let applied = true;
       try {
         rewriteDecisions(meetingId, (stored) => {
+          if (isStaleFor(stored, generation)) {
+            applied = false;
+            return stored;
+          }
           const next = { removed: required, at };
           if (!replacesDecision(stored.decisions[email], next)) return stored;
           return { ...stored, decisions: { ...stored.decisions, [email]: next } };
         });
       } catch (error) {
         Logger.error("Failed to persist a removed invitee to JSON", error);
+        return false;
       }
+      return applied;
     },
-    endRemovals: (meetingId, endedAt) => {
+    endRemovals: (meetingId, endedAt, generation) => {
+      let applied = true;
       try {
-        rewriteDecisions(meetingId, ({ decisions, endedAt: before }) => {
-          const over = Math.max(before ?? -1, endedAt);
+        rewriteDecisions(meetingId, (stored) => {
+          if (isStaleFor(stored, generation)) {
+            applied = false;
+            return stored;
+          }
+          const over = Math.max(stored.endedAt ?? -1, endedAt);
           return {
             decisions: Object.fromEntries(
-              Object.entries(decisions).filter(([, decision]) => decision.at > over),
+              Object.entries(stored.decisions).filter(([, decision]) => decision.at > over),
             ),
             endedAt: over,
+            writeGeneration: stored.writeGeneration,
           };
         });
       } catch (error) {
         Logger.error("Failed to take back a meeting's removals in JSON", error);
+        return false;
+      }
+      return applied;
+    },
+    fenceMeeting: (meetingId, generation) => {
+      try {
+        rewriteDecisions(meetingId, (stored) => ({
+          ...stored,
+          writeGeneration: Math.max(stored.writeGeneration ?? 0, generation),
+        }));
+      } catch (error) {
+        Logger.error("Failed to fence a meeting's writes in JSON", error);
       }
     },
   load: () => {
@@ -1390,6 +1455,11 @@ return 1
 // An invitee's decision is "<when>:removed" or "<when>:readmitted". A write
 // lands only if newer than the one stored (see replacesDecision).
 const DECIDE_SCRIPT = `
+local fenced = tonumber(redis.call("HGET", KEYS[3], ARGV[4]) or "")
+local generation = tonumber(ARGV[5] or "")
+if fenced ~= nil and generation ~= nil and fenced > generation then
+  return -1
+end
 local stored = redis.call("HGET", KEYS[1], ARGV[1])
 local at = tonumber(ARGV[2])
 local replaces = true
@@ -1411,6 +1481,11 @@ return replaces and 1 or 0
 // decisions made up to then. A removal made up to then that arrives later
 // still counts for nothing; one made after stays.
 const END_REMOVALS_SCRIPT = `
+local fenced = tonumber(redis.call("HGET", KEYS[3], ARGV[1]) or "")
+local generation = tonumber(ARGV[3] or "")
+if fenced ~= nil and generation ~= nil and fenced > generation then
+  return -1
+end
 local endedAt = tonumber(ARGV[2])
 local before = tonumber(redis.call("HGET", KEYS[2], ARGV[1]))
 if before ~= nil and before > endedAt then
@@ -1426,6 +1501,15 @@ for i = 1, #decided, 2 do
       redis.call("HDEL", KEYS[1], decided[i])
     end
   end
+end
+return 1
+`;
+
+const FENCE_MEETING_SCRIPT = `
+local fenced = tonumber(redis.call("HGET", KEYS[1], ARGV[1]) or "")
+local generation = tonumber(ARGV[2])
+if fenced == nil or generation > fenced then
+  redis.call("HSET", KEYS[1], ARGV[1], ARGV[2])
 end
 return 1
 `;
@@ -1495,6 +1579,10 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
   }
 
   // When each meeting was last over (see END_REMOVALS_SCRIPT).
+  private get writeGenerationsKey(): string {
+    return `${this.key}:write-generations`;
+  }
+
   private get removalsEndedKey(): string {
     return `${this.key}:removed-invitees-ended`;
   }
@@ -1563,11 +1651,8 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     ]);
     if (Number(moved) === 1) {
       for (const email of carried) {
-        void this.fallback.setInviteeReadmission?.(
-          meeting.id,
-          email,
-          true,
-          carriedRemovalAt(meeting),
+        runDetached("Saving an invitee's removal", () =>
+          this.fallback.setInviteeReadmission?.(meeting.id, email, true, carriedRemovalAt(meeting)),
         );
       }
     }
@@ -1584,7 +1669,7 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
 
   save(snapshot: ScheduledMeeting[]): void {
     this.knownMeetings = new Map(snapshot.map((meeting) => [meeting.id, meeting]));
-    void this.fallback.save(snapshot);
+    runDetached("Saving scheduled meetings", () => this.fallback.save(snapshot));
     const payload = snapshot.map((meeting) => [
       meeting.id,
       meetingRecord(meeting),
@@ -1604,7 +1689,7 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     for (const meeting of meetings) {
       this.knownMeetings.set(meeting.id, meeting);
     }
-    void this.fallback.save(Array.from(this.knownMeetings.values()));
+    runDetached("Saving scheduled meetings", () => this.fallback.save(Array.from(this.knownMeetings.values())));
     const payload = Object.fromEntries(
       meetings.map((meeting) => [meeting.id, meetingRecord(meeting)]),
     );
@@ -1618,37 +1703,72 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     email: string,
     required: boolean,
     at: number,
-  ): void {
-    void this.fallback.setInviteeReadmission?.(meetingId, email, required, at);
+    generation?: number,
+  ): Promise<boolean> {
+    runDetached("Saving an invitee's removal", () =>
+      this.fallback.setInviteeReadmission?.(meetingId, email, required, at, generation),
+    );
     const member = this.removedInvitee(meetingId, email);
-    this.queueWrite("set a removed invitee", async () => {
-      await this.client.sendCommand([
+    return this.queueCheckedWrite("set a removed invitee", () =>
+      this.client.sendCommand([
         "EVAL",
         DECIDE_SCRIPT,
-        "2",
+        "3",
         this.removedInviteesKey,
         this.removalsMovedKey,
+        this.writeGenerationsKey,
         member,
         String(at),
         required ? "removed" : "readmitted",
         meetingId,
-      ]);
-    });
+        generation === undefined ? "" : String(generation),
+      ]),
+    );
   }
 
-  endRemovals(meetingId: string, endedAt: number): void {
-    void this.fallback.endRemovals?.(meetingId, endedAt);
-    this.queueWrite("end a meeting's removals", async () => {
-      await this.client.sendCommand([
+  endRemovals(meetingId: string, endedAt: number, generation?: number): Promise<boolean> {
+    runDetached("Ending a meeting's removals", () =>
+      this.fallback.endRemovals?.(meetingId, endedAt, generation),
+    );
+    return this.queueCheckedWrite("end a meeting's removals", () =>
+      this.client.sendCommand([
         "EVAL",
         END_REMOVALS_SCRIPT,
-        "2",
+        "3",
         this.removedInviteesKey,
         this.removalsEndedKey,
+        this.writeGenerationsKey,
         meetingId,
         String(endedAt),
-      ]);
+        generation === undefined ? "" : String(generation),
+      ]),
+    );
+  }
+
+  fenceMeeting(meetingId: string, generation: number): Promise<void> {
+    runDetached("Fencing a meeting's writes", () => this.fallback.fenceMeeting?.(meetingId, generation));
+    return this.queueCheckedWrite("fence a meeting's writes", () =>
+      this.client.sendCommand([
+        "EVAL",
+        FENCE_MEETING_SCRIPT,
+        "1",
+        this.writeGenerationsKey,
+        meetingId,
+        String(generation),
+      ]),
+    ).then(() => undefined);
+  }
+
+  private queueCheckedWrite(label: string, write: () => Promise<unknown>): Promise<boolean> {
+    let landed = false;
+    this.queueWrite(label, async () => {
+      const answer = await write();
+      landed = Number(answer) !== -1;
     });
+    return this.pendingWrite.then(
+      () => landed,
+      () => false,
+    );
   }
 
   deleteIds(ids: string[]): void {
@@ -1656,7 +1776,7 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     for (const id of ids) {
       this.knownMeetings.delete(id);
     }
-    void this.fallback.save(Array.from(this.knownMeetings.values()));
+    runDetached("Saving scheduled meetings", () => this.fallback.save(Array.from(this.knownMeetings.values())));
     this.queueWrite("delete meetings", async () => {
       await this.client.hDel(this.key, ids);
       const gone = [...(await this.decisions()).keys()].filter((member) =>
@@ -1920,6 +2040,43 @@ export const persistScheduledMeetingChanges = (
  * this one arriving late. The end is saved even when this SFU knows of no
  * removal: one another SFU made before it may still be on its way.
  */
+export type ClearedMeetingRemovals = {
+  readonly meeting: Readonly<ScheduledMeeting>;
+  readonly hadRemovals: boolean;
+};
+
+export const clearScheduledMeetingRemovals = (
+  store: ScheduledMeetingStore,
+  clientId: string,
+  roomCode: string,
+): ClearedMeetingRemovals | null => {
+  const meeting = getScheduledMeetingByRoomCode(store, clientId, roomCode);
+  if (!meeting) return null;
+  const hadRemovals = (meeting.readmissionRequiredEmails ?? []).length > 0;
+  meeting.readmissionRequiredEmails = [];
+  return Object.freeze({ meeting: Object.freeze(structuredClone(meeting)), hadRemovals });
+};
+
+export const persistScheduledMeetingRemovalsEnd = (
+  store: ScheduledMeetingStore,
+  persistence: ScheduledMeetingPersistence,
+  cleared: ClearedMeetingRemovals,
+  endedAt: number,
+  generation?: number,
+): Promise<boolean> => {
+  if (!persistence.endRemovals) {
+    return cleared.hadRemovals
+      ? persistScheduledMeetingChanges(store, persistence, [{ ...cleared.meeting }]).then(() => true)
+      : Promise.resolve(true);
+  }
+  return Promise.resolve(persistence.endRemovals(cleared.meeting.id, endedAt, generation)).then(
+    async (applied) => {
+      await persistence.flush?.();
+      return applied !== false;
+    },
+  );
+};
+
 export const endScheduledMeetingRemovals = (
   store: ScheduledMeetingStore,
   persistence: ScheduledMeetingPersistence | null,
@@ -1927,17 +2084,21 @@ export const endScheduledMeetingRemovals = (
   roomCode: string,
   endedAt: number,
 ): Promise<void> => {
+  const cleared = clearScheduledMeetingRemovals(store, clientId, roomCode);
+  if (!cleared || !persistence) return Promise.resolve();
+  return persistScheduledMeetingRemovalsEnd(store, persistence, cleared, endedAt).then(() => undefined);
+};
+
+export const fenceScheduledMeeting = (
+  store: ScheduledMeetingStore,
+  persistence: ScheduledMeetingPersistence | null,
+  clientId: string,
+  roomCode: string,
+  generation: number,
+): Promise<void> => {
   const meeting = getScheduledMeetingByRoomCode(store, clientId, roomCode);
-  if (!meeting) return Promise.resolve();
-  const hadRemovals = (meeting.readmissionRequiredEmails ?? []).length > 0;
-  meeting.readmissionRequiredEmails = [];
-  if (!persistence) return Promise.resolve();
-  if (!persistence.endRemovals) {
-    return hadRemovals
-      ? persistScheduledMeetingChanges(store, persistence, [meeting])
-      : Promise.resolve();
-  }
-  return Promise.resolve(persistence.endRemovals(meeting.id, endedAt)).then(() =>
+  if (!meeting || !persistence?.fenceMeeting) return Promise.resolve();
+  return Promise.resolve(persistence.fenceMeeting(meeting.id, generation)).then(() =>
     persistence.flush?.(),
   );
 };
@@ -1963,13 +2124,17 @@ export const persistInviteeReadmission = (
   email: string,
   required: boolean,
   at: number = inviteeDecisionTime(meeting, email),
-): Promise<void> => {
+  generation?: number,
+): Promise<boolean> => {
   if (!persistence.setInviteeReadmission) {
-    return persistScheduledMeetingChanges(store, persistence, [meeting]);
+    return persistScheduledMeetingChanges(store, persistence, [{ ...meeting }]).then(() => true);
   }
   return Promise.resolve(
-    persistence.setInviteeReadmission(meeting.id, email, required, at),
-  ).then(() => persistence.flush?.());
+    persistence.setInviteeReadmission(meeting.id, email, required, at, generation),
+  ).then(async (applied) => {
+    await persistence.flush?.();
+    return applied !== false;
+  });
 };
 
 export const persistScheduledMeetingDeletes = (

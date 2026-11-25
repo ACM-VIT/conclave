@@ -53,6 +53,7 @@ import {
   isCurrentRoom,
   markRoomEnded,
   ROOM_LEASE_UNCONFIRMED_ERROR,
+  withSharedWriteScope,
 } from "../rooms.js";
 import { forceDrainRooms } from "../serverShutdown.js";
 import { resolveCorsOrigins } from "../cors.js";
@@ -1038,14 +1039,41 @@ export const createSfuApp = ({
     }
     const roomId = normalizeIdentifier(decodeURIComponent(req.path.split("/")[1] ?? ""));
     const lookup = roomId ? resolveRoom(state, roomId, { clientId: resolveClientId(req) }) : null;
+    const answerOnceWritten = () => {
+      const json = res.json.bind(res);
+      let landed: boolean | null = null;
+      let held: { body: unknown } | null = null;
+      const deliver = (body: unknown) =>
+        landed === false
+          ? res.status(503) && json({ error: ROOM_LEASE_UNCONFIRMED_ERROR })
+          : json(body);
+      res.json = ((body: unknown) => {
+        if (landed !== null) return deliver(body);
+        held = { body };
+        return res;
+      }) as typeof res.json;
+      const { writes, settled } = withSharedWriteScope(() => next());
+      const finish = (ok: boolean) => {
+        landed = ok;
+        const waiting = held;
+        if (waiting) deliver(waiting.body);
+      };
+      if (writes === 0) {
+        finish(true);
+        return;
+      }
+      settled.then(finish).catch(next);
+    };
     if (!lookup || "error" in lookup || holdsRoomLease(state, lookup.room)) {
-      next();
+      answerOnceWritten();
       return;
     }
-    void confirmRoomLease(state, lookup.room).then((held) => {
-      if (held) next();
-      else res.status(503).json({ error: ROOM_LEASE_UNCONFIRMED_ERROR });
-    });
+    confirmRoomLease(state, lookup.room)
+      .then((confirmed) => {
+        if (confirmed) answerOnceWritten();
+        else res.status(503).json({ error: ROOM_LEASE_UNCONFIRMED_ERROR });
+      })
+      .catch(next);
   });
 
   app.get("/admin/overview", (req, res) => {

@@ -4,9 +4,17 @@ import { join as joinPath } from "node:path";
 import type { Router, Worker } from "mediasoup/types";
 import type { Server as SocketIOServer, Socket } from "socket.io";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  HOST_COMMANDS,
+  isValidHostCommand,
+  ROOM_LEASE_UNCONFIRMED_ERROR,
+} from "@conclave/meeting-core/host-commands";
 import { config } from "../config/config.js";
 import { initScheduledMeetings } from "../server/init.js";
-import { createMemoryRoomRecoveryStore } from "../server/roomRecoveryLedger.js";
+import {
+  createMemoryRoomRecoveryStore,
+  type RoomRecoveryStore,
+} from "../server/roomRecoveryLedger.js";
 import { startRoomRecoveryPassRefresh } from "../server/roomRecoveryPass.js";
 import type {
   RoomAssignmentRecord,
@@ -14,7 +22,7 @@ import type {
   RoomOwnershipClaim,
   RoomRegistry,
 } from "../server/roomRegistry.js";
-import { ROOM_LEASE_UNCONFIRMED_ERROR } from "../server/rooms.js";
+import { forceCloseRoom } from "../server/rooms.js";
 import {
   createScheduledMeeting,
   createScheduledMeetingPersistence,
@@ -22,9 +30,12 @@ import {
   isScheduledMeetingInvitee,
   loadPersistedMeetings,
   persistScheduledMeetingChanges,
+  type ScheduledMeetingPersistence,
 } from "../server/scheduledMeetings.js";
+import { forceDrainRooms } from "../server/serverShutdown.js";
 import type { SfuAuthPayload } from "../server/socket/auth.js";
 import { createConnectionContext, setSocketContext } from "../server/socket/context.js";
+import { INVALID_HOST_COMMAND_ERROR } from "../server/socket/handlers/adminHandlers.js";
 import { registerDisconnectHandlers } from "../server/socket/handlers/disconnectHandlers.js";
 import { registerJoinRoomHandler } from "../server/socket/handlers/joinRoom.js";
 import { createSfuState, type SfuState } from "../server/state.js";
@@ -52,6 +63,7 @@ type Leases = {
 
 const sharedLeases = (): Leases => {
   const owners = new Map<string, RoomOwnerRecord>();
+  let lastGeneration = 0;
   const live = (channelId: string) => {
     const owner = owners.get(channelId);
     return owner && owner.expiresAt > Date.now() ? owner : null;
@@ -64,10 +76,19 @@ const sharedLeases = (): Leases => {
       const current = live(input.channelId);
       if (current && current.instanceId !== instanceId) return { ok: false, owner: current };
       const now = Date.now();
-      const owner: RoomOwnerRecord = { kind: "owner", ...input, instanceId, updatedAt: now, expiresAt: now + LEASE_MS };
+      const continuous = current !== null && current.generation !== undefined;
+      const generation = continuous ? current.generation! : (lastGeneration = Math.max(now, lastGeneration + 1));
+      const owner: RoomOwnerRecord = {
+        kind: "owner",
+        ...input,
+        instanceId,
+        updatedAt: now,
+        expiresAt: now + LEASE_MS,
+        generation,
+      };
       owners.set(input.channelId, owner);
       servesUntil.set(input.channelId, now + LEASE_MS - LEASE_MARGIN_MS);
-      return { ok: true, owner, continuous: current !== null };
+      return { ok: true, owner, continuous, generation };
     };
     const claim = (input: { channelId: string; clientId: string; roomId: string }) =>
       holding
@@ -113,15 +134,21 @@ const io = {
   in: () => ({ disconnectSockets: vi.fn() }),
 } as unknown as SocketIOServer;
 
-const startSfu = async (registry: RoomRegistry): Promise<SfuState> => {
+const startSfu = async (
+  registry: RoomRegistry,
+  options: { recovery?: RoomRecoveryStore; persistence?: ScheduledMeetingPersistence } = {},
+): Promise<SfuState> => {
   const router = {
     closed: false,
     rtpCapabilities: { codecs: [], headerExtensions: [] },
     close: vi.fn(),
   } as unknown as Router;
-  const state = createSfuState({ roomRegistry: registry, roomRecoveryStore: createMemoryRoomRecoveryStore() });
+  const state = createSfuState({
+    roomRegistry: registry,
+    roomRecoveryStore: options.recovery ?? createMemoryRoomRecoveryStore(),
+  });
   state.workers = [{ pid: 1, closed: false, createRouter: vi.fn(async () => router) } as unknown as Worker];
-  await initScheduledMeetings(state, createScheduledMeetingPersistence());
+  await initScheduledMeetings(state, options.persistence ?? createScheduledMeetingPersistence());
   return state;
 };
 
@@ -148,9 +175,10 @@ const join = async (state: SfuState, user: SfuAuthPayload) => {
   setSocketContext(socket, context);
   registerJoinRoomHandler(context);
   registerDisconnectHandlers(context);
+  const raw = (event: string, ...args: unknown[]) => handlers.get(event)?.(...(args as never[]));
   const send = (event: string, payload: unknown): Promise<Answer> =>
     new Promise((resolve) => {
-      void handlers.get(event)?.(...([payload, resolve] as never[]));
+      void raw(event, payload, resolve);
     });
   const joined = await send("joinRoom", { roomId: CODE, sessionId: user.sessionId });
   const leave = async (reason = "client namespace disconnect") => {
@@ -158,7 +186,7 @@ const join = async (state: SfuState, user: SfuAuthPayload) => {
     await handlers.get("disconnect")?.(...([reason] as never[]));
   };
   const passes = () => emit.mock.calls.filter(([event]) => event === "roomRecoveryPass").length;
-  return { context, send, leave, passes, status: joined.status };
+  return { context, send, raw, leave, passes, status: joined.status };
 };
 
 const dirs: string[] = [];
@@ -210,30 +238,55 @@ const inviteeIsInvited = async () => {
 
 const settle = () => vi.advanceTimersByTimeAsync(10);
 
-type LeaseState = "held" | "renewing" | "lapsed but still the owner" | "lost";
-type Action = "kick the invitee" | "admit the invitee" | "end the meeting" | "the last person leaves";
+const withGrace = async <T>(graceMs: number, run: () => Promise<T>): Promise<T> => {
+  const before = config.socket.disconnectGraceMs;
+  config.socket.disconnectGraceMs = graceMs;
+  try {
+    return await run();
+  } finally {
+    config.socket.disconnectGraceMs = before;
+  }
+};
 
-const LEASE_STATES: LeaseState[] = ["held", "renewing", "lapsed but still the owner", "lost"];
-const ACTIONS: Array<{
-  action: Action;
-  inviteeRemovedFirst: boolean;
-  invitedAfter: boolean;
-  answers: boolean;
-}> = [
-  { action: "kick the invitee", inviteeRemovedFirst: false, invitedAfter: false, answers: true },
-  { action: "admit the invitee", inviteeRemovedFirst: true, invitedAfter: true, answers: true },
-  { action: "end the meeting", inviteeRemovedFirst: true, invitedAfter: true, answers: true },
-  { action: "the last person leaves", inviteeRemovedFirst: true, invitedAfter: true, answers: false },
+type LeaseState =
+  | "held"
+  | "renewing"
+  | "lapsed but still the owner"
+  | "lost"
+  | "renewing, then drained"
+  | "renewing, then closed";
+type Action =
+  | "kick the invitee"
+  | "admit the invitee"
+  | "end the meeting"
+  | "the last person leaves"
+  | "a participant takes over from a dropped host";
+
+const LEASE_STATES: LeaseState[] = [
+  "held",
+  "renewing",
+  "lapsed but still the owner",
+  "lost",
+  "renewing, then drained",
+  "renewing, then closed",
+];
+const ACTIONS: Array<{ action: Action; command: boolean; inviteeRemovedFirst: boolean; invitedAfter: boolean }> = [
+  { action: "kick the invitee", command: true, inviteeRemovedFirst: false, invitedAfter: false },
+  { action: "admit the invitee", command: true, inviteeRemovedFirst: true, invitedAfter: true },
+  { action: "end the meeting", command: true, inviteeRemovedFirst: true, invitedAfter: true },
+  { action: "the last person leaves", command: false, inviteeRemovedFirst: true, invitedAfter: true },
+  { action: "a participant takes over from a dropped host", command: false, inviteeRemovedFirst: false, invitedAfter: true },
 ];
 
 const runCase = async (action: (typeof ACTIONS)[number], lease: LeaseState) => {
   useSharedSchedule();
   await book();
   const leases = sharedLeases();
-  const sfuA = await startSfu(leases.forInstance("sfu-a"));
+  const recovery = createMemoryRoomRecoveryStore();
+  const sfuA = await startSfu(leases.forInstance("sfu-a"), { recovery });
   const hostOnA = await join(sfuA, host("a"));
   expect(hostOnA.status).toBe("joined");
-  if (action.inviteeRemovedFirst || action.action === "kick the invitee") {
+  if (action.inviteeRemovedFirst || action.action !== "admit the invitee") {
     expect((await join(sfuA, invitee)).status).toBe("joined");
   }
   if (action.inviteeRemovedFirst) {
@@ -245,8 +298,9 @@ const runCase = async (action: (typeof ACTIONS)[number], lease: LeaseState) => {
     expect((await join(sfuA, invitee)).status).toBe("waiting");
   }
 
+  const renewing = lease.startsWith("renewing");
   if (lease !== "held") await vi.advanceTimersByTimeAsync(LEASE_MS - LEASE_MARGIN_MS + 2_000);
-  if (lease === "renewing") leases.holdRenewals();
+  if (renewing) leases.holdRenewals();
   if (lease === "lost") {
     await vi.advanceTimersByTimeAsync(LEASE_MARGIN_MS);
     expect((await leases.forInstance("sfu-b").claimRoom({ channelId: CHANNEL, clientId: "conclave", roomId: CODE })).ok).toBe(true);
@@ -267,24 +321,36 @@ const runCase = async (action: (typeof ACTIONS)[number], lease: LeaseState) => {
     case "the last person leaves":
       await hostOnA.leave();
       break;
+    case "a participant takes over from a dropped host":
+      await withGrace(0, () => hostOnA.leave("transport close"));
+      break;
   }
   await settle();
-  if (lease === "renewing") {
+  if (lease === "renewing, then drained") await forceDrainRooms(sfuA, io, { message: "Restarting", noticeMs: 0 });
+  if (lease === "renewing, then closed") forceCloseRoom(sfuA, CHANNEL);
+  if (renewing) {
     expect(await inviteeIsInvited()).toBe(invitedBefore);
-    expect(leases.ownerOf(CHANNEL)).toBe("sfu-a");
+    if (!action.command || lease === "renewing") expect(leases.ownerOf(CHANNEL)).toBe("sfu-a");
     leases.releaseRenewals();
     await settle();
   }
   if (lease === "lost") expect(leases.ownerOf(CHANNEL)).toBe("sfu-b");
   await vi.advanceTimersByTimeAsync(30_000);
 
-  const written = lease !== "lost";
-  if (action.answers) {
+  const commandRan = lease === "held" || lease === "renewing" || lease === "lapsed but still the owner";
+  const written = action.command ? commandRan : lease !== "lost";
+  if (action.command) {
     expect(await answer).toEqual(
       written ? expect.objectContaining({ success: true }) : { error: ROOM_LEASE_UNCONFIRMED_ERROR },
     );
   }
-  expect(await inviteeIsInvited()).toBe(written ? action.invitedAfter : invitedBefore);
+  if (action.action === "a participant takes over from a dropped host") {
+    const saved = (await recovery.read(CHANNEL)) as { adminUserKeys?: string[] } | null;
+    if (written) expect(saved?.adminUserKeys).toContain(INVITEE);
+    else expect(saved?.adminUserKeys ?? []).not.toContain(INVITEE);
+  } else {
+    expect(await inviteeIsInvited()).toBe(written ? action.invitedAfter : invitedBefore);
+  }
   if (written && (action.action === "the last person leaves" || action.action === "end the meeting")) {
     expect(leases.ownerOf(CHANNEL)).toBeNull();
   }
@@ -321,9 +387,7 @@ describe("an SFU that lost a room's lease while it was paused", () => {
 
   it("does not end an invitee's removal that the SFU now running the call made", async () => {
     useSharedSchedule();
-    const graceBefore = config.socket.disconnectGraceMs;
-    config.socket.disconnectGraceMs = 120_000;
-    try {
+    await withGrace(120_000, async () => {
       await book();
       const leases = sharedLeases();
       const sfuA = await startSfu(leases.forInstance("sfu-a"));
@@ -344,8 +408,84 @@ describe("an SFU that lost a room's lease while it was paused", () => {
       await vi.advanceTimersByTimeAsync(120_000);
       expect(sfuA.rooms.get(CHANNEL)).toBeUndefined();
       expect(await inviteeIsInvited()).toBe(false);
-    } finally {
-      config.socket.disconnectGraceMs = graceBefore;
-    }
+    });
   });
+
+  it("is refused at commit when it pauses between its lease check and its write", async () => {
+    useSharedSchedule();
+    await book();
+    const leases = sharedLeases();
+    const persistenceA = createScheduledMeetingPersistence();
+    const decide = persistenceA.setInviteeReadmission!.bind(persistenceA);
+    let resume: () => void = () => {};
+    const paused = new Promise<void>((resolve) => (resume = resolve));
+    let reachedCommit = false;
+    persistenceA.setInviteeReadmission = async (...args) => {
+      reachedCommit = true;
+      await paused;
+      return decide(...args);
+    };
+    const sfuA = await startSfu(leases.forInstance("sfu-a"), { persistence: persistenceA });
+    const sfuB = await startSfu(leases.forInstance("sfu-b"));
+    const hostOnA = await join(sfuA, host("a"));
+    expect((await join(sfuA, invitee)).status).toBe("joined");
+
+    const kickOnA = hostOnA.send("kickUser", { userId: INVITEE_SEAT });
+    await settle();
+    expect(reachedCommit).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(LEASE_MS + 5_000);
+    const hostOnB = await join(sfuB, host("b"));
+    expect(hostOnB.status).toBe("joined");
+
+    resume();
+    await settle();
+    expect(await kickOnA).toEqual({ error: ROOM_LEASE_UNCONFIRMED_ERROR });
+    expect(await inviteeIsInvited()).toBe(true);
+    expect((await join(sfuB, invitee)).status).toBe("joined");
+  });
+});
+
+describe("a host command with arguments it does not take", () => {
+  const MALFORMED: unknown[][] = [
+    [null],
+    [undefined],
+    [42],
+    ["kick"],
+    [[]],
+    [{ userId: {} }],
+    [{ userId: 7, locked: "yes", enabled: 1, userKeys: [3], message: {} }],
+  ];
+
+  for (const lease of ["held", "renewing"] as const) {
+    it(`answers each with a failure and keeps serving, lease ${lease}`, async () => {
+      useSharedSchedule();
+      await book();
+      const leases = sharedLeases();
+      const sfuA = await startSfu(leases.forInstance("sfu-a"));
+      const hostOnA = await join(sfuA, host("a"));
+      expect((await join(sfuA, invitee)).status).toBe("joined");
+      if (lease === "renewing") {
+        await vi.advanceTimersByTimeAsync(LEASE_MS - LEASE_MARGIN_MS + 2_000);
+        leases.holdRenewals();
+      }
+      let tried = 0;
+      for (const command of HOST_COMMANDS) {
+        for (const payload of MALFORMED) {
+          const ack = vi.fn();
+          if (isValidHostCommand(command, [...payload, ack])) continue;
+          expect(() => hostOnA.raw(command, ...payload, ack)).not.toThrow();
+          await settle();
+          expect(ack, `${command} ${JSON.stringify(payload)}`).toHaveBeenCalledWith({
+            error: INVALID_HOST_COMMAND_ERROR,
+          });
+          tried += 1;
+        }
+      }
+      expect(tried).toBeGreaterThan(HOST_COMMANDS.length * 3);
+      leases.releaseRenewals();
+      await settle();
+      expect(await hostOnA.send("kickUser", { userId: INVITEE_SEAT })).toEqual({ success: true });
+    });
+  }
 });

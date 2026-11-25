@@ -27,8 +27,8 @@ import {
   getEndedRoom,
   getOrCreateRoomWithOrigin,
   holdsRoomLease,
+  noteRoomRunning,
   renewLocalRoom,
-  writeSharedRoomState,
   getRoomChannelId,
 } from "../../rooms.js";
 import {
@@ -1044,14 +1044,16 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           }
         }
         const restorerState = room.restorerState(Date.now());
+        const removedHere = needsReadmission && !isCodeOwner && !forcedHostJoin;
         const takesOverRecreatedRoom =
-          restorerState === "awaited"
+          !removedHere &&
+          (restorerState === "awaited"
             ? hostsLostCall || (provesMembership && room.knowsLostRoster)
-            : restorerState === "lapsed" && (allowRoomCreation || claimsHost);
+            : restorerState === "lapsed" && (allowRoomCreation || claimsHost));
         const isAdminJoin = isWebinarAttendeeJoin
           ? false
           : createdRoom
-            ? restorerState === "none"
+            ? restorerState === "none" && !removedHere
             : isAdminForExistingRoom || takesOverRecreatedRoom;
         const hasPrivilegedJoinAccess = isAdminJoin;
 
@@ -1096,7 +1098,8 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         const previousHostUserId = mayChangeRoster ? room.getHostUserId() : null;
         const previousAdminUserIds = mayChangeRoster ? room.getAdminUserIds() : [];
 
-        const claimsOpening = createdRoom || (isAdminJoin && room.awaitingOpener !== null);
+        const claimsOpening =
+          (createdRoom && !removedHere) || (isAdminJoin && room.awaitingOpener !== null);
         const releaseClaim = (): void => {
           if (claimsOpening) room.awaitingOpener = null;
         };
@@ -1295,9 +1298,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         }
         if (isAdminJoin && (claimsOpening || restorerState !== "none")) {
           room.markRestored();
-          writeSharedRoomState(state, room, "its recovery record", () =>
-            state.roomRecovery.noteRunning(room),
-          );
+          noteRoomRunning(state, room);
         }
         const attempts = attemptsOf(state);
         const tabAttempts = attempts.byTab.get(joinKey);

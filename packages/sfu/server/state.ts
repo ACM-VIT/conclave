@@ -44,7 +44,7 @@ export type EndedRoom = {
 
 export type DeferredRoomWrites = {
   room: { id: string; clientId: string; channelId: string };
-  writes: Array<{ label: string; perform: () => void }>;
+  writes: Array<{ label: string; commit: () => Promise<boolean>; settle: (landed: boolean) => void }>;
   releaseAfter: boolean;
 };
 

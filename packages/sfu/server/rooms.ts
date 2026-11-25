@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { runDetached } from "./runDetached.js";
 import { Room } from "../config/classes/Room.js";
 import { config } from "../config/config.js";
 import getWorker, { type WorkerLoad } from "../utilities/getWorker.js";
@@ -10,8 +12,10 @@ import {
   type RoomOwnershipClaim,
 } from "./roomRegistry.js";
 import {
-  endScheduledMeetingRemovals,
+  clearScheduledMeetingRemovals,
+  fenceScheduledMeeting,
   getScheduledMeetingByRoomCode,
+  persistScheduledMeetingRemovalsEnd,
   inviteeDecisionTime,
   persistInviteeReadmission,
   refreshScheduledMeeting,
@@ -97,11 +101,13 @@ export const markRoomEnded = (
  * one count for nothing there, and the people a host removed from this one
  * are invited again, as anyone a booking invites is.
  */
-type LeasedRoom = Pick<Room, "id" | "clientId" | "channelId">;
+type LeasedRoom = Pick<Room, "id" | "clientId" | "channelId"> & {
+  ownershipGeneration?: number | null;
+};
 
 export const ROOM_LEASE_CONFIRM_MS = 5_000;
-export const ROOM_LEASE_UNCONFIRMED_ERROR =
-  "This meeting is moving between servers. Try again in a moment.";
+export const ROOM_WRITE_COMMIT_MS = 5_000;
+export { ROOM_LEASE_UNCONFIRMED_ERROR } from "@conclave/meeting-core/host-commands";
 
 export const holdsRoomLease = (
   state: Pick<SfuState, "roomRegistry" | "deferredRoomWrites">,
@@ -109,10 +115,63 @@ export const holdsRoomLease = (
 ): boolean =>
   state.roomRegistry.holdsLease(room.channelId) && !state.deferredRoomWrites.has(room.channelId);
 
-const releaseLease = (state: SfuState, channelId: string): void => {
-  void state.roomRegistry.releaseRoom(channelId).catch((error) => {
-    Logger.warn(`Failed to release room ownership for ${channelId}`, error);
+const commitsInFlight = new WeakMap<SfuState, Map<string, Set<Promise<boolean>>>>();
+const commitsOf = (state: SfuState, channelId: string): Set<Promise<boolean>> => {
+  const byChannel = commitsInFlight.get(state) ?? new Map<string, Set<Promise<boolean>>>();
+  commitsInFlight.set(state, byChannel);
+  const commits = byChannel.get(channelId) ?? new Set<Promise<boolean>>();
+  byChannel.set(channelId, commits);
+  return commits;
+};
+const trackCommit = (state: SfuState, channelId: string, commit: Promise<boolean>): void => {
+  const commits = commitsOf(state, channelId);
+  commits.add(commit);
+  runDetached("Tracking a shared room write", () =>
+    commit.then(() => {
+      commits.delete(commit);
+    }),
+  );
+};
+
+let activeWriteScope: Set<Promise<boolean>> | null = null;
+
+/**
+ * Runs a host action and collects the shared writes it makes, so its answer
+ * can wait for them: `settled` says whether every one landed, within
+ * `ROOM_WRITE_COMMIT_MS`.
+ */
+export const withSharedWriteScope = <T>(
+  run: () => T,
+): { result: T; writes: number; settled: Promise<boolean> } => {
+  const outer = activeWriteScope;
+  const scope = new Set<Promise<boolean>>();
+  activeWriteScope = scope;
+  let result: T;
+  try {
+    result = run();
+  } finally {
+    activeWriteScope = outer;
+  }
+  const settled =
+    scope.size === 0
+      ? Promise.resolve(true)
+      : withDeadline(Promise.all(scope).then((landed) => landed.every(Boolean)), false);
+  return { result, writes: scope.size, settled };
+};
+
+const withDeadline = <T>(work: Promise<T>, fallback: T): Promise<T> => {
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(fallback), ROOM_WRITE_COMMIT_MS);
   });
+  return Promise.race([work, deadline]).finally(() => clearTimeout(timer));
+};
+
+const isUnused = (state: SfuState, channelId: string): boolean =>
+  !state.rooms.has(channelId) && !state.roomCreations.has(channelId);
+
+const releaseLease = (state: SfuState, channelId: string): void => {
+  runDetached(`Releasing the lease of ${channelId}`, () => state.roomRegistry.releaseRoom(channelId));
 };
 
 const releaseRoomLease = (state: SfuState, channelId: string): void => {
@@ -121,7 +180,15 @@ const releaseRoomLease = (state: SfuState, channelId: string): void => {
     deferred.releaseAfter = true;
     return;
   }
-  releaseLease(state, channelId);
+  const commits = [...commitsOf(state, channelId)];
+  if (commits.length === 0) {
+    releaseLease(state, channelId);
+    return;
+  }
+  runDetached(`Releasing the lease of ${channelId} once its writes land`, async () => {
+    await withDeadline(Promise.allSettled(commits), []);
+    if (isUnused(state, channelId)) releaseLease(state, channelId);
+  });
 };
 
 const settleRoomLease = (
@@ -134,11 +201,7 @@ const settleRoomLease = (
   state.deferredRoomWrites.delete(channelId);
   if (outcome === "continuous") {
     for (const write of deferred.writes) {
-      try {
-        write.perform();
-      } catch (error) {
-        Logger.error(`Room ${deferred.room.id} failed to write ${write.label}`, error);
-      }
+      write.commit().then(write.settle, () => write.settle(false));
     }
   } else {
     Logger.error(
@@ -146,9 +209,10 @@ const settleRoomLease = (
         outcome === "lost" ? "another SFU owns it now" : "its lease ran out before it was renewed"
       }.`,
     );
+    for (const write of deferred.writes) write.settle(false);
   }
-  if (deferred.releaseAfter && outcome !== "lost" && !state.rooms.has(channelId)) {
-    releaseLease(state, channelId);
+  if (deferred.releaseAfter && outcome !== "lost" && isUnused(state, channelId)) {
+    releaseRoomLease(state, channelId);
   }
 };
 
@@ -156,12 +220,25 @@ const settleOwnership = (
   state: SfuState,
   channelId: string,
   ownership: RoomOwnershipClaim,
-): void =>
+): void => {
   settleRoomLease(
     state,
     channelId,
     !ownership.ok ? "lost" : ownership.continuous ? "continuous" : "reclaimed",
   );
+  const room = state.rooms.get(channelId);
+  if (
+    ownership.ok &&
+    room &&
+    room.ownershipGeneration !== null &&
+    room.ownershipGeneration !== ownership.generation
+  ) {
+    Logger.warn(
+      `Handing room ${room.id} (${room.clientId}) off: its lease lapsed and was claimed again, so what it holds may be stale.`,
+    );
+    handOffRoomState(state, channelId);
+  }
+};
 
 const leaseConfirmations = new WeakMap<SfuState, Map<string, Promise<boolean>>>();
 
@@ -175,7 +252,7 @@ const renewForConfirmation = (state: SfuState, room: LeasedRoom): Promise<boolea
     .then(
       (ownership) => {
         settleOwnership(state, room.channelId, ownership);
-        if (ownership.ok) return true;
+        if (ownership.ok) return ownership.continuous;
         if (state.rooms.has(room.channelId)) {
           Logger.warn(
             `Closing room ${room.id} (${room.clientId}) because ownership moved to ${ownership.owner.instanceId}`,
@@ -192,6 +269,10 @@ const renewForConfirmation = (state: SfuState, room: LeasedRoom): Promise<boolea
         return false;
       },
     )
+    .catch((error: unknown) => {
+      Logger.error(`Confirming the lease of ${room.channelId} failed`, error);
+      return false;
+    })
     .finally(() => pending.delete(room.channelId));
   pending.set(room.channelId, renewal);
   return renewal;
@@ -199,44 +280,72 @@ const renewForConfirmation = (state: SfuState, room: LeasedRoom): Promise<boolea
 
 /**
  * Whether this SFU may act on `room` now: it holds the room's lease, or a
- * renewal confirms it within `ROOM_LEASE_CONFIRM_MS`. Writes the room put off
- * meanwhile are written first.
+ * renewal confirms within `ROOM_LEASE_CONFIRM_MS` that the lease never
+ * lapsed. Writes the room put off meanwhile are written first.
  */
 export const confirmRoomLease = (state: SfuState, room: LeasedRoom): Promise<boolean> => {
   if (holdsRoomLease(state, room)) return Promise.resolve(true);
-  const renewal = renewForConfirmation(state, room);
   let timer: NodeJS.Timeout | undefined;
   const deadline = new Promise<boolean>((resolve) => {
     timer = setTimeout(() => resolve(false), ROOM_LEASE_CONFIRM_MS);
   });
-  return Promise.race([renewal, deadline]).finally(() => clearTimeout(timer));
+  return Promise.race([renewForConfirmation(state, room), deadline]).finally(() =>
+    clearTimeout(timer),
+  );
 };
 
+const commitNow = (
+  state: SfuState,
+  room: LeasedRoom,
+  label: string,
+  commit: () => Promise<boolean>,
+): Promise<boolean> =>
+  commit()
+    .catch((error: unknown) => {
+      Logger.error(`Room ${room.id} failed to write ${label}`, error);
+      return false;
+    })
+    .then((landed) => {
+      if (!landed && state.rooms.get(room.channelId)?.ownershipGeneration === room.ownershipGeneration) {
+        Logger.error(`Room ${room.id} was refused ${label}: a newer owner of the room wrote first.`);
+      }
+      return landed;
+    });
+
 /**
- * The one way a room writes what other servers read: at once while it holds
- * its lease, else in order once a renewal confirms the lease has not lapsed.
- * When it has, or another SFU owns the room, the writes are dropped and the
- * room is handed off.
+ * The one way a room writes what other servers read. `commit` saves a value
+ * decided before this call, under the room's ownership generation, and says
+ * whether the store took it: a store refuses a write from a generation older
+ * than the newest it has seen. The write runs at once while the room holds
+ * its lease, else waits, in order, until a renewal settles the lease.
  */
 export const writeSharedRoomState = (
   state: SfuState,
   room: LeasedRoom,
   label: string,
-  perform: () => void,
-): void => {
+  commit: (generation: number | undefined) => Promise<boolean>,
+): Promise<boolean> => {
+  const generation = room.ownershipGeneration ?? undefined;
+  const run = () => commitNow(state, room, label, () => commit(generation));
+  let landed: Promise<boolean>;
   if (holdsRoomLease(state, room)) {
-    perform();
-    return;
+    landed = run();
+  } else {
+    const deferred = state.deferredRoomWrites.get(room.channelId) ?? {
+      room: { id: room.id, clientId: room.clientId, channelId: room.channelId },
+      writes: [],
+      releaseAfter: false,
+    };
+    landed = new Promise<boolean>((settle) => {
+      deferred.writes.push({ label, commit: run, settle });
+    });
+    state.deferredRoomWrites.set(room.channelId, deferred);
+    Logger.warn(`Room ${room.id} waits for its lease to write ${label}.`);
+    runDetached("Confirming the room's lease", () => renewForConfirmation(state, room));
   }
-  const deferred = state.deferredRoomWrites.get(room.channelId) ?? {
-    room: { id: room.id, clientId: room.clientId, channelId: room.channelId },
-    writes: [],
-    releaseAfter: false,
-  };
-  deferred.writes.push({ label, perform });
-  state.deferredRoomWrites.set(room.channelId, deferred);
-  Logger.warn(`Room ${room.id} waits for its lease to write ${label}.`);
-  void renewForConfirmation(state, room);
+  trackCommit(state, room.channelId, landed);
+  activeWriteScope?.add(landed);
+  return landed;
 };
 
 const noteMeetingOver = (
@@ -244,32 +353,39 @@ const noteMeetingOver = (
   room: Pick<
     Room,
     "id" | "clientId" | "channelId" | "incarnationId" | "takesOverRecordOf" | "ownerEmail"
-  >,
+  > & { ownershipGeneration?: number | null },
 ): void => {
-  const endedAt = Date.now();
-  writeSharedRoomState(state, room, "the end of its meeting", () => {
-    state.roomRecovery.noteOver(room);
-    endScheduledMeetingRemovals(
-      state.scheduledMeetings,
-      state.scheduledMeetingPersistence,
-      room.clientId,
-      room.id,
-      endedAt,
-    ).catch((error) => {
-      Logger.warn(`Failed to persist the end of the removals from ${room.id}`, error);
-    });
-  });
+  const over = state.roomRecovery.overRecord(room);
+  const cleared = clearScheduledMeetingRemovals(state.scheduledMeetings, room.clientId, room.id);
+  const persistence = state.scheduledMeetingPersistence;
+  void writeSharedRoomState(state, room, "the end of its meeting", (generation) =>
+    Promise.all([
+      state.roomRecovery.saveRecord(room, over),
+      cleared && persistence
+        ? persistScheduledMeetingRemovalsEnd(
+            state.scheduledMeetings,
+            persistence,
+            cleared,
+            over.overAt ?? Date.now(),
+            generation,
+          )
+        : Promise.resolve(true),
+    ]).then((landed) => landed.every(Boolean)),
+  );
+};
+
+export const noteRoomRunning = (state: SfuState, room: Room): void => {
+  if (!room.recordsItsCall) return;
+  const record = state.roomRecovery.runningRecord(room);
+  void writeSharedRoomState(state, room, "its recovery record", () =>
+    state.roomRecovery.saveRecord(room, record),
+  );
 };
 
 // A change to who hosts, or to who has to be let in again, goes to the
 // ledger at once. The SFU may not live to the next renewal sweep.
 const recordRecoverableChanges = (state: SfuState, room: Room): void => {
-  room.onRecoverableChange = () => {
-    if (!room.recordsItsCall) return;
-    writeSharedRoomState(state, room, "its recovery record", () => {
-      if (room.recordsItsCall) state.roomRecovery.noteRunning(room);
-    });
-  };
+  room.onRecoverableChange = () => noteRoomRunning(state, room);
   // A lost call whose time ran out is a meeting that is over, as one that
   // emptied or was ended is.
   room.onLostCallEnded = () => noteMeetingOver(state, room);
@@ -300,18 +416,18 @@ const bindScheduledInvitations = (state: SfuState, room: Room): void => {
     const persistence = state.scheduledMeetingPersistence;
     if (!decided || !persistence) return;
     const at = inviteeDecisionTime(decided, userKey);
-    writeSharedRoomState(state, room, "an invitee's removal", () => {
+    const meeting = Object.freeze(structuredClone(decided));
+    void writeSharedRoomState(state, room, "an invitee's removal", (generation) =>
       persistInviteeReadmission(
         state.scheduledMeetings,
         persistence,
-        decided,
+        meeting,
         userKey,
         required,
         at,
-      ).catch((error) => {
-        Logger.warn(`Failed to persist an invitee's removal from ${room.id}`, error);
-      });
-    });
+        generation,
+      ),
+    );
   };
 };
 
@@ -418,6 +534,18 @@ export const getOrCreateRoomWithOrigin = async (
     if (!ownership.ok) {
       throw new RoomOwnershipError(ownership.owner);
     }
+    const incarnationId = randomUUID();
+    await state.roomRecovery.fence(
+      { channelId, incarnationId, takesOverRecordOf: null },
+      ownership.generation,
+    );
+    await fenceScheduledMeeting(
+      state.scheduledMeetings,
+      state.scheduledMeetingPersistence,
+      clientId,
+      roomId,
+      ownership.generation,
+    );
     // Read only now that this SFU holds the code, and before the room is in
     // anyone's hands. A room that came and went while this join waited has
     // written its last by now, so the record this room takes over is the
@@ -444,11 +572,13 @@ export const getOrCreateRoomWithOrigin = async (
       });
       const createdRoom = new Room({
         id: roomId,
+        incarnationId,
         router,
         clientId,
         webRtcServer: getWorkerWebRtcServer(worker),
         workerPid: typeof worker.pid === "number" ? worker.pid : null,
       });
+      createdRoom.ownershipGeneration = ownership.generation;
       createdRoom.recoveryPassesVoidUntil = record.passesVoidUntil;
       createdRoom.takesOverRecordOf = record.lastWriter;
       createdRoom.awaitingOpener = { lost: record.lost };
@@ -513,7 +643,7 @@ const cleanupRoomState = (state: SfuState, channelId: string): Room | null => {
   state.transcriptRelays.stopRoom(room.channelId);
   state.rooms.delete(channelId);
   releaseRoomLease(state, channelId);
-  void cleanupRoomBrowser(channelId);
+  runDetached("Closing the room's shared browser", () => cleanupRoomBrowser(channelId));
   return room;
 };
 

@@ -60,6 +60,7 @@ import {
 } from "../../server/webcamReceiverCapacityProof.js";
 
 export interface RoomOptions {
+  incarnationId?: string;
   id: string;
   router: Router;
   webRtcServer?: WebRtcServer;
@@ -290,7 +291,8 @@ export class Room {
   public readonly workerPid: number | null;
   public readonly channelId: string;
   // Tells this room apart from an earlier or later one at the same code.
-  public readonly incarnationId: string = randomUUID();
+  public readonly incarnationId: string;
+  public ownershipGeneration: number | null = null;
   // The room whose recovery record this one took over when it was created,
   // the writer of the newest record then. It may write over that room's
   // records, and over no one else's but its own.
@@ -472,6 +474,7 @@ export class Room {
   >();
 
   constructor(options: RoomOptions) {
+    this.incarnationId = options.incarnationId ?? randomUUID();
     this.id = options.id;
     this.router = options.router;
     this.webRtcServer = options.webRtcServer;

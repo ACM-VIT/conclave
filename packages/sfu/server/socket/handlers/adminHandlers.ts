@@ -38,11 +38,19 @@ import {
   isCurrentRoom,
   markRoomEnded,
   ROOM_LEASE_UNCONFIRMED_ERROR,
+  withSharedWriteScope,
 } from "../../rooms.js";
 import { getSocketAuthUser } from "../auth.js";
 import type { ConnectionContext } from "../context.js";
+import {
+  isValidHostCommand,
+  WAITING_REQUEST_GONE_ERROR,
+  type HostCommand,
+} from "@conclave/meeting-core/host-commands";
 import { RATE_LIMITS, takeToken } from "../rateLimit.js";
 import { respond } from "./ack.js";
+
+export const INVALID_HOST_COMMAND_ERROR = "That request was not valid.";
 
 const DEFAULT_END_ROOM_MESSAGE =
   "This meeting has been ended by the host.";
@@ -363,21 +371,55 @@ export const registerAdminHandlers = (
   }
   context.adminHandlersRegistered = true;
 
-  const onHostAction = ((event: string, handler: (...args: unknown[]) => unknown) => {
-    const leased = (...args: unknown[]) => {
-      const room = context.currentRoom;
-      if (!room || holdsRoomLease(state, room)) return handler(...args);
+  const onHostAction = ((command: HostCommand, handler: (...args: unknown[]) => unknown) => {
+    const answerOnceWritten = (args: unknown[]): unknown => {
       const answer = args.at(-1);
-      void confirmRoomLease(state, room).then((held) => {
-        if (held && context.currentRoom === room) return handler(...args);
-        if (typeof answer === "function") respond(answer, { error: ROOM_LEASE_UNCONFIRMED_ERROR });
+      if (typeof answer !== "function") return handler(...args);
+      let landed: boolean | null = null;
+      let held: { value: unknown } | null = null;
+      const deliver = (value: unknown) =>
+        respond(answer, landed === false ? { error: ROOM_LEASE_UNCONFIRMED_ERROR } : value);
+      const reply = (value: unknown) => {
+        if (landed === null) held = { value };
+        else deliver(value);
+      };
+      const { result, writes, settled } = withSharedWriteScope(() =>
+        handler(...args.slice(0, -1), reply),
+      );
+      const finish = (ok: boolean) => {
+        landed = ok;
+        const waiting = held;
+        if (waiting) deliver(waiting.value);
+      };
+      const isPending = Boolean(
+        result && typeof (result as PromiseLike<unknown>).then === "function",
+      );
+      if (!isPending && writes === 0) {
+        finish(true);
+        return undefined;
+      }
+      return Promise.resolve(result)
+        .then(() => settled)
+        .then(finish);
+    };
+    const leased = (...args: unknown[]) => {
+      if (!isValidHostCommand(command, args)) {
+        respond(args.at(-1), { error: INVALID_HOST_COMMAND_ERROR });
+        return undefined;
+      }
+      const room = context.currentRoom;
+      if (!room || holdsRoomLease(state, room)) return answerOnceWritten(args);
+      return confirmRoomLease(state, room).then((confirmed) => {
+        if (confirmed && context.currentRoom === room && isCurrentRoom(state, room)) {
+          return answerOnceWritten(args);
+        }
+        respond(args.at(-1), { error: ROOM_LEASE_UNCONFIRMED_ERROR });
         return undefined;
       });
-      return undefined;
     };
     Object.defineProperty(leased, "length", { value: handler.length });
-    return socket.on(event, leased);
-  }) as typeof socket.on;
+    return socket.on(command, leased);
+  }) as (command: HostCommand, handler: (...args: never[]) => unknown) => unknown;
 
   onHostAction("kickUser", ({ userId: targetId }: { userId: string }, cb) => {
     const guard = ensureAdminRoom(context);
@@ -1136,7 +1178,7 @@ export const registerAdminHandlers = (
       Logger.info(`Admin admitted ${outcome.admitted.join(", ")} to room ${options.roomId}`);
       respond(cb, { success: true });
     } else {
-      respond(cb, { error: "User not found in waiting room" });
+      respond(cb, { error: WAITING_REQUEST_GONE_ERROR });
     }
   });
 
@@ -1165,7 +1207,7 @@ export const registerAdminHandlers = (
       );
       respond(cb, { success: true });
     } else {
-      respond(cb, { error: "User not found in waiting room" });
+      respond(cb, { error: WAITING_REQUEST_GONE_ERROR });
     }
   });
 

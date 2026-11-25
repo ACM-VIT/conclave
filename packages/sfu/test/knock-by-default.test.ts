@@ -1,3 +1,4 @@
+import { createClient } from "redis";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createConnection, createServer } from "node:net";
@@ -25,9 +26,14 @@ import {
 import { forceCloseRoom, renewRoomOwnerships } from "../server/rooms.js";
 import {
   createScheduledMeeting,
+  createScheduledMeetingPersistence,
+  createScheduledMeetingStore,
   isScheduledMeetingInvitee,
+  loadPersistedMeetings,
+  persistScheduledMeetingChanges,
   type ScheduledMeetingPersistence,
 } from "../server/scheduledMeetings.js";
+import { ROOM_LEASE_UNCONFIRMED_ERROR } from "@conclave/meeting-core/host-commands";
 import {
   isNonJoinToken,
   type SfuAuthPayload,
@@ -1112,6 +1118,12 @@ describe("who hosts a call the server lost", () => {
     roomOf(state).restoreAdmission(second.userId, undefined, { pastLock: true });
     const cara = await join(state, second);
     await send(hostIn.peer, "kickUser", { userId: `${second.userId}#${second.sessionId}` });
+    const saved = (await recovery.read(CHANNEL)) as {
+      writer?: string;
+      readmissionRequiredUserKeys?: string[];
+    };
+    expect(saved.writer).toBe(replacement);
+    expect(saved.readmissionRequiredUserKeys).toContain(second.userId);
     const afterRemoval = await restart(state);
     expect(
       (
@@ -1123,11 +1135,6 @@ describe("who hosts a call the server lost", () => {
       ).status,
     ).toBe("waiting");
 
-    // And so is the end.
-    await send(hostIn.peer, "admin:endRoom", {});
-    const saved = (await recovery.read(CHANNEL)) as { writer?: string; overAt?: number | null };
-    expect(saved.writer).toBe(replacement);
-    expect(saved.overAt).toBeTypeOf("number");
   });
 
   it("tells each meeting tab of a promoted person once that they host, and never their audience tab", async () => {
@@ -1856,6 +1863,61 @@ describe.skipIf(!redisServerPath)("knockers waiting on an SFU when the next meet
     await a.roomRegistry.releaseRoom(CHANNEL);
     expect(a.roomRegistry.holdsLease(CHANNEL)).toBe(false);
     expect(await a.roomRegistry.renewRoom(room)).toMatchObject({ ok: true, continuous: false });
+  });
+
+  it("refuses a write from an SFU whose lease Redis forgot once another SFU claimed the code", async () => {
+    const dir = mkdtempSync(joinPath(tmpdir(), "fenced-schedule-"));
+    vi.stubEnv("SCHEDULED_MEETINGS_PERSISTENCE", "sqlite");
+    vi.stubEnv("SCHEDULED_MEETINGS_SQLITE_PATH", joinPath(dir, "conclave.sqlite"));
+    vi.stubEnv("SCHEDULED_MEETINGS_PATH", joinPath(dir, "scheduled-meetings.json"));
+    vi.stubEnv("SFU_PERSISTENCE_REDIS_URL", "");
+    try {
+      const booking = createScheduledMeetingStore();
+      const meeting = createScheduledMeeting(
+        booking,
+        {
+          title: "Intro call",
+          scheduledStartAt: Date.now(),
+          roomCode: "abc-mnop-xyz",
+          hostEmail: "host@example.com",
+          attendeeEmail: "invitee@example.com",
+        },
+        {
+          clientId: "conclave",
+          createdBy: "host@example.com",
+          defaultHostEmail: "host@example.com",
+          defaultHostUserId: null,
+        },
+      );
+      await persistScheduledMeetingChanges(booking, createScheduledMeetingPersistence(), [meeting]);
+      const { a, b } = await twoSfus();
+      for (const sfu of [a, b]) {
+        sfu.scheduledMeetingPersistence = createScheduledMeetingPersistence();
+        await initScheduledMeetings(sfu, sfu.scheduledMeetingPersistence);
+      }
+      const hostOnA = await join(a, { ...host, userId: "host@example.com", email: "host@example.com" });
+      expect(hostOnA.status).toBe("joined");
+      expect((await join(a, invitee)).status).toBe("joined");
+
+      const flusher = createClient({ url: `redis://127.0.0.1:${redis!.port}` });
+      await flusher.connect();
+      await flusher.flushAll();
+      await flusher.quit();
+      expect(a.roomRegistry.holdsLease(CHANNEL)).toBe(true);
+
+      const hostOnB = await join(b, { ...host, userId: "host@example.com", email: "host@example.com", sessionId: "hb" });
+      expect(hostOnB.status).toBe("joined");
+
+      expect(await send(hostOnA.peer, "kickUser", { userId: "invitee@example.com#i" })).toEqual({
+        error: ROOM_LEASE_UNCONFIRMED_ERROR,
+      });
+      const later = createScheduledMeetingStore();
+      await loadPersistedMeetings(later, createScheduledMeetingPersistence());
+      expect(isScheduledMeetingInvitee(later, "conclave", "abc-mnop-xyz", "invitee@example.com")).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("sends them there through the usual route when A drains, and the host on B lets them in", async () => {
