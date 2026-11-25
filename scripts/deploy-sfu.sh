@@ -534,12 +534,30 @@ wait_for_sfu() {
 }
 
 build_and_start() (
-  local service="$1" url="$2" container="" staging policy="" frozen identity
+  local service="$1" url="$2" container="" staging policy="" frozen_policy="" frozen identity
   umask 077
   "${COMPOSE[@]}" build "$service"
   container="$("${COMPOSE[@]}" ps -a -q "$service" | head -n 1)"
   staging="$(mktemp -d)"
-  trap 'rm -rf "$staging"' EXIT
+  release_source() {
+    local state="left stopped"
+    if [[ -n "$frozen_policy" ]]; then
+      container_running "$container" 2> /dev/null && state="still running"
+      if ! docker update --restart="$frozen_policy" "$container" > /dev/null; then
+        echo "The old ${service} container is ${state}, and its restart policy could not be restored; set it with: docker update --restart=${frozen_policy} ${container}" >&2
+      elif [[ "$state" == "still running" ]]; then
+        echo "The old ${service} container is still running, with its restart policy (${frozen_policy}) restored." >&2
+      else
+        echo "The old ${service} container is left stopped, not removed, with its restart policy (${frozen_policy}) restored; start it again with: ${COMPOSE[*]} start ${service}" >&2
+      fi
+      frozen_policy=""
+    fi
+    rm -rf "$staging"
+  }
+  trap release_source EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  trap 'exit 129' HUP
   if [[ -n "$container" ]]; then
     if ! identity="$(source_identity "$container")" || ! plan_layer_sqlite "$service" "$container" "$staging/sqlite-check" "$identity" || ! policy="$(restart_policy "$container")" || [[ -z "$policy" ]]; then
       echo "Stopped before replacing ${service}; nothing was stopped." >&2
@@ -549,14 +567,17 @@ build_and_start() (
       echo "Could not keep the old ${service} container from restarting while it is copied. Stopped before replacing ${service}; nothing was stopped." >&2
       exit 1
     fi
+    frozen_policy="$policy"
   fi
   if ! "${COMPOSE[@]}" stop "$service"; then
-    [[ -n "$container" ]] && docker update --restart="$policy" "$container" > /dev/null
-    echo "Could not stop the old ${service}." >&2
+    echo "Could not stop the old ${service}. Stopped before replacing it." >&2
     exit 1
   fi
-  "${COMPOSE[@]}" run --rm --no-deps --user root --cap-add CHOWN --cap-add DAC_READ_SEARCH --entrypoint find "$service" \
-    /var/lib/conclave/recordings \( ! -user node -o ! -group node \) -exec chown node:node {} +
+  if ! "${COMPOSE[@]}" run --rm --no-deps --user root --cap-add CHOWN --cap-add DAC_READ_SEARCH --entrypoint find "$service" \
+    /var/lib/conclave/recordings \( ! -user node -o ! -group node \) -exec chown node:node {} +; then
+    echo "Could not hand the recordings volume to the SFU user. Stopped before replacing ${service}." >&2
+    exit 1
+  fi
   if [[ -n "$container" ]]; then
     if ! frozen="$(freeze_source "$service" "$container")" ||
       ! collect_fallback_json "$service" "$container" "$staging/json" ||
@@ -566,14 +587,14 @@ build_and_start() (
       ! still_frozen "$service" "$container" "$frozen" ||
       ! carry_layer_sqlite "$service" "$container" "$staging/sqlite" "$staging/sqlite-plan" ||
       ! still_frozen "$service" "$container" "$frozen"; then
-      docker update --restart="$policy" "$container" > /dev/null || echo "Could not restore the old ${service} container's restart policy (${policy}); set it with: docker update --restart=${policy} ${container}" >&2
-      echo "Stopped before replacing ${service}. Its old container is stopped, not removed, with its restart policy (${policy}) restored; start it again with: ${COMPOSE[*]} start ${service}" >&2
+      echo "Stopped before replacing ${service}." >&2
       exit 1
     fi
-    if ! docker update --restart="$policy" "$container" > /dev/null; then
-      echo "Could not restore the old ${service} container's restart policy (${policy}) before replacing it; set it with: docker update --restart=${policy} ${container}, then deploy again." >&2
+    if ! docker update --restart="$frozen_policy" "$container" > /dev/null; then
+      echo "Could not restore the old ${service} container's restart policy (${frozen_policy}) before replacing it. Stopped before replacing ${service}." >&2
       exit 1
     fi
+    frozen_policy=""
   fi
   "${COMPOSE[@]}" up -d "$service"
   echo "Waiting for the new ${service} to answer healthy at ${url} as deploy ${SFU_DEPLOY_ID}..."

@@ -31,7 +31,13 @@ if [[ "$1" == "compose" ]]; then
             -c) script="\${args[j + 1]}"; rest=("\${args[@]:j + 2}"); break ;;
           esac
         done
-        [[ -n "$script" ]] || exit 0
+        if [[ -z "$script" ]]; then
+          [[ "$FAKE_FAIL_AT" == ownership ]] && exit 1
+          [[ "$FAKE_FAIL_AT" == signal ]] && kill -TERM "$PPID"
+          exit 0
+        fi
+        [[ "$FAKE_FAIL_AT" == probe && -f "$FAKE_STOPPED" && "$script" == *"layerDatabase.ts probe"* ]] && exit 1
+        [[ "$FAKE_FAIL_AT" == carry && "$script" == *"layerDatabase.ts consolidate"* ]] && exit 1
         if [[ -s "$STAGING_PATH_FILE" ]]; then
           staging="$(cat "$STAGING_PATH_FILE")"
           ls -ld "$staging" | cut -c1-10 >> "$STAGING_MODES"
@@ -98,7 +104,7 @@ if [[ "$1" == "compose" ]]; then
           exit $?
         fi
         CONCLAVE_FALLBACK_IMPORT_DIR="$FAKE_IMAGE_IMPORT_DIR" exec sh -c "$script" "\${rest[@]}" ;;
-      stop) : > "$FAKE_STOPPED"; exit 0 ;;
+      stop) [[ "$FAKE_FAIL_AT" == stop ]] && exit 1; : > "$FAKE_STOPPED"; exit 0 ;;
       build|up|start) exit 0 ;;
     esac
   done
@@ -365,6 +371,8 @@ const replaceService = async (
     linkTo = "",
     finishedAt = "2026-11-25T08:45:00.000000000Z",
     restartAt = "",
+    failAt = "",
+    running = false,
   } = {},
 ) => {
   const dir = mkdtempSync(join(tmpdir(), "deploy-sfu-state-"));
@@ -423,6 +431,8 @@ const replaceService = async (
       FAKE_LINK_FROM: linkFrom,
       FAKE_FINISHED_AT: finishedAt,
       FAKE_RESTART_AT: restartAt,
+      FAKE_FAIL_AT: failAt,
+      FAKE_RUNNING: running ? "true" : "",
       FAKE_RESTARTED: join(dir, "restarted"),
       FAKE_LINK_TO: linkTo,
       FAKE_IMAGE_IMPORT_DIR: imageImportDir ? importDir : "",
@@ -920,6 +930,40 @@ for (const harness of harnesses) {
     assert.deepEqual(outcomes, Object.fromEntries(Object.keys(scenarios).map((name) => [name, { status: 0, stderr: "", rows: later, started: true }])));
   });
 
+  test(`${shell}: every way a deploy can end after the old SFU's restarts are turned off gives it its restart policy back and says whether it is still running`, async () => {
+    const base = {
+      containerEnv: "CONCLAVE_SQLITE_PATH=/var/lib/conclave/conclave.sqlite\\n",
+      diff: `${wrote("scheduling.json")}A /var/lib/conclave/conclave.sqlite\\nA /var/lib/conclave/conclave.sqlite-wal\\n`,
+      files: { "scheduling.json": "[1]", ...sqliteFiles("conclave.sqlite", ["kept"]) },
+    };
+    const steps = {
+      "the stop fails": { failAt: "stop", running: true, state: "still running" },
+      "the ownership helper fails": { failAt: "ownership" },
+      "a TERM signal arrives during the ownership step": { failAt: "signal" },
+      "it is running again after the stop": { runningAfterStop: true, state: "still running" },
+      "copying a JSON file fails": { cpFailAfterStop: "scheduling.json" },
+      "the JSON files fail to unpack": { failUnpack: true },
+      "the probe fails": { failAt: "probe" },
+      "copying the database fails": { cpFailAfterStop: "conclave.sqlite" },
+      "the database receiver fails": { failAt: "carry" },
+      "it started again after the copy": { startedAfterCarry: "2026-11-25T09:30:00.000000000Z" },
+    };
+    const runs = await Promise.all(Object.values(steps).map(({ state, ...options }) => replaceService(harness, { ...base, ...options })));
+    const outcomes = Object.fromEntries(
+      Object.keys(steps).map((name, at) => {
+        const { status, calls, stderr } = runs[at];
+        const froze = calls.indexOf(`update --restart=no ${OLD_CONTAINER}`);
+        return [name, {
+          failed: status !== 0,
+          startedNew: callIndex(calls, / up -d /) >= 0,
+          restoredAfterFreeze: froze >= 0 && calls.lastIndexOf(`update --restart=unless-stopped ${OLD_CONTAINER}`) > froze,
+          said: stderr.match(/The old sfu-a container is (still running|left stopped)[^\n]*restart policy \(unless-stopped\) restored/)?.[1] ?? stderr.trim().split("\n").slice(-2).join(" | "),
+        }];
+      }),
+    );
+    assert.deepEqual(outcomes, Object.fromEntries(Object.entries(steps).map(([name, { state = "left stopped" }]) => [name, { failed: true, startedNew: false, restoredAfterFreeze: true, said: state }])));
+  });
+
   test(`${shell}: a restart at any copy step never lets a copy stand for a later state of the old container, and the next deploy carries that later state`, async () => {
     const frozen = "2026-11-25T08:00:00.000000000Z_2026-11-25T08:45:00.000000000Z";
     const later = ["kept", "saved after the restart"];
@@ -979,7 +1023,7 @@ for (const harness of harnesses) {
       assert.notEqual(run.status, 0, name);
       assert.equal(callIndex(run.calls, / up -d /), -1, `${name}\n${run.calls.join("\n")}`);
       assert.match(run.stderr, /running again|started again/, name);
-      assert.match(run.stderr, /start sfu-a/, name);
+      assert.match(run.stderr, name === "still running after the stop" ? /is still running, with its restart policy \(unless-stopped\) restored/ : /left stopped, not removed, with its restart policy \(unless-stopped\) restored; start it again with: .* start sfu-a/, name);
     }
   });
 
