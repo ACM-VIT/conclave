@@ -293,6 +293,7 @@ export class Room {
   // Tells this room apart from an earlier or later one at the same code.
   public readonly incarnationId: string;
   public ownershipGeneration: number | null = null;
+  public recoveryPassGeneration: number | null = null;
   // The room whose recovery record this one took over when it was created,
   // the writer of the newest record then. It may write over that room's
   // records, and over no one else's but its own.

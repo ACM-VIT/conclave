@@ -1,10 +1,14 @@
 import jwt from "jsonwebtoken";
+import {
+  parseRoomRecoveryPassClaims,
+  ROOM_RECOVERY_PASS_USE,
+  type RoomRecoveryPassClaims,
+} from "@conclave/meeting-core/room-recovery-pass";
 import type { Client } from "../config/classes/Client.js";
 import type { Room } from "../config/classes/Room.js";
 import { Logger } from "../utilities/loggers.js";
 import type { SfuState } from "./state.js";
 
-const TOKEN_USE = "room-recovery";
 const MAX_PASS_LENGTH = 2048;
 
 // A pass lasts five minutes and the SFU renews it every minute. A pass that
@@ -27,9 +31,9 @@ export const LOST_ROOM_WINDOW_MS =
 
 type RecoveryRoom = Pick<
   Room,
-  "channelId" | "incarnationId" | "recoveryPassesVoidUntil"
+  "channelId" | "incarnationId" | "recoveryPassesVoidUntil" | "recoveryPassGeneration"
 >;
-type PassIssuingRoom = RecoveryRoom &
+type PassIssuingRoom = Pick<Room, "channelId" | "incarnationId" | "ownershipGeneration"> &
   Pick<Room, "userKeysById" | "needsReadmission" | "recordsItsCall">;
 type PassHolder = Pick<Client, "id" | "isObserver">;
 
@@ -58,13 +62,14 @@ export const issueRoomRecoveryPass = (
   }
   return jwt.sign(
     {
-      tokenUse: TOKEN_USE,
+      tokenUse: ROOM_RECOVERY_PASS_USE,
       channelId: room.channelId,
       userKey,
       incarnationId: room.incarnationId,
       // `iat` is in whole seconds. The end of a meeting is known to the
       // millisecond, and the two are compared.
       issuedAtMs: Date.now(),
+      ...(typeof room.ownershipGeneration === "number" ? { generation: room.ownershipGeneration } : {}),
     },
     secret,
     { algorithm: "HS256", expiresIn: TTL_SECONDS },
@@ -108,58 +113,40 @@ export const startRoomRecoveryPassRefresh = (
   return () => clearInterval(timer);
 };
 
+const verifiedClaims = (pass: unknown, secret: string): RoomRecoveryPassClaims | null => {
+  if (typeof pass !== "string" || !pass || pass.length > MAX_PASS_LENGTH) return null;
+  try {
+    return parseRoomRecoveryPassClaims(jwt.verify(pass, secret, { algorithms: ["HS256"] }));
+  } catch {
+    return null;
+  }
+};
+
+export const isRecoveryPassFor = (
+  pass: unknown,
+  channelId: string,
+  secret: string,
+): boolean => verifiedClaims(pass, secret)?.channelId === channelId;
+
 /**
  * Whether `pass` proves `userKey` was in an earlier incarnation of `room`.
  * A pass this incarnation issued proves nothing new: the live room already
  * knows who it admitted and who it removed. A pass from before a host ended
  * the meeting for everyone proves nothing either: that call is over.
  */
-// Whether `pass` is a recovery pass this SFU's secret signed for this code,
-// from any room at it: proof that a call ran at the code before.
-export const isRecoveryPassFor = (
-  pass: unknown,
-  channelId: string,
-  secret: string,
-): boolean => {
-  if (typeof pass !== "string" || !pass || pass.length > MAX_PASS_LENGTH) {
-    return false;
-  }
-  try {
-    const claims = jwt.verify(pass, secret, { algorithms: ["HS256"] });
-    return (
-      typeof claims === "object" &&
-      claims.tokenUse === TOKEN_USE &&
-      claims.channelId === channelId
-    );
-  } catch {
-    return false;
-  }
-};
-
 export const provesEarlierRoomMembership = (
   pass: unknown,
   room: RecoveryRoom,
   userKey: string,
   secret: string,
 ): boolean => {
-  if (typeof pass !== "string" || !pass || pass.length > MAX_PASS_LENGTH) {
-    return false;
-  }
-  let claims: string | jwt.JwtPayload;
-  try {
-    claims = jwt.verify(pass, secret, { algorithms: ["HS256"] });
-  } catch {
-    return false;
-  }
+  const claims = verifiedClaims(pass, secret);
   return (
-    typeof claims === "object" &&
-    claims.tokenUse === TOKEN_USE &&
+    claims !== null &&
     claims.channelId === room.channelId &&
     claims.userKey === userKey &&
-    typeof claims.incarnationId === "string" &&
     claims.incarnationId !== room.incarnationId &&
-    typeof claims.issuedAtMs === "number" &&
-    (room.recoveryPassesVoidUntil === null ||
-      claims.issuedAtMs > room.recoveryPassesVoidUntil)
+    (room.recoveryPassesVoidUntil === null || claims.issuedAtMs > room.recoveryPassesVoidUntil) &&
+    (room.recoveryPassGeneration === null || claims.generation === room.recoveryPassGeneration)
   );
 };

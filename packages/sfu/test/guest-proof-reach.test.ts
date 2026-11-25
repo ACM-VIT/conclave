@@ -184,6 +184,7 @@ describe("how far a guest's proof reaches", () => {
       readmissionRequiredUserKeys: [OTHER_ROOM_TAB],
       guestPasses: { [ROOM_TAB]: [PASS], [OTHER_ROOM_TAB]: ["proof-other"] },
       claimableUntil: Date.now() + 60_000,
+      passGeneration: null,
     });
     expect(room.boundGuestIdentityCount).toBe(2);
     room.endLostCall();

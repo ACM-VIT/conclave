@@ -49,6 +49,7 @@ export type RoomRecoveryRecord = {
   coHostUserKeys: string[];
   guestPasses: Record<string, string[]>;
   generation?: number;
+  passGeneration?: number;
 };
 
 /**
@@ -85,6 +86,7 @@ export type LostRoom = {
   // After this no pass from the lost call can still be good, so the room is
   // anyone's to open again.
   claimableUntil: number;
+  passGeneration: number | null;
 };
 
 export type RecalledRoom = {
@@ -159,6 +161,7 @@ const parseRoomRecoveryRecord = (raw: unknown): RoomRecoveryRecord | null => {
     coHostUserKeys,
     guestPasses = {},
     generation,
+    passGeneration,
   } = raw as Record<string, unknown>;
   if (liveAt !== null && typeof liveAt !== "number") return null;
   if (overAt !== null && typeof overAt !== "number") return null;
@@ -185,6 +188,7 @@ const parseRoomRecoveryRecord = (raw: unknown): RoomRecoveryRecord | null => {
       coHostUserKeys ?? adminUserKeys.filter((userKey) => userKey !== temporaryHostUserKey),
     guestPasses,
     ...(typeof generation === "number" ? { generation } : {}),
+    ...(typeof passGeneration === "number" ? { passGeneration } : {}),
   };
 };
 
@@ -348,7 +352,9 @@ export const createRoomRecoveryLedger = (
           ...room.adminUserKeys,
           ...room.usersNeedingReadmission,
         ]),
-        ...(typeof room.ownershipGeneration === "number" ? { generation: room.ownershipGeneration } : {}),
+        ...(typeof room.ownershipGeneration === "number"
+          ? { generation: room.ownershipGeneration, passGeneration: room.ownershipGeneration }
+          : {}),
       });
   const overRecord = (room: OverRoom): Readonly<RoomRecoveryRecord> =>
     Object.freeze({
@@ -442,6 +448,7 @@ export const createRoomRecoveryLedger = (
                 readmissionRequiredUserKeys: record.readmissionRequiredUserKeys,
                 guestPasses: record.guestPasses,
                 claimableUntil: liveAt + LOST_ROOM_WINDOW_MS,
+                passGeneration: record.passGeneration ?? null,
               }
             : null,
         passesVoidUntil: stillVoids(record?.overAt ?? null),

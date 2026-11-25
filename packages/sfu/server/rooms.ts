@@ -631,6 +631,7 @@ export const getOrCreateRoomWithOrigin = async (
       });
       createdRoom.ownershipGeneration = ownership.generation;
       createdRoom.recoveryPassesVoidUntil = record.passesVoidUntil;
+      createdRoom.recoveryPassGeneration = record.lost?.passGeneration ?? null;
       createdRoom.takesOverRecordOf = record.lastWriter;
       createdRoom.awaitingOpener = { lost: record.lost };
       for (const guest of takeNextMeetingLobby(state, channelId)) {

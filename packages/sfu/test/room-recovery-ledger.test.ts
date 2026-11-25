@@ -57,6 +57,7 @@ describe("what the SFU remembers about a room across a restart", () => {
         readmissionRequiredUserKeys: ["guest-removed"],
         guestPasses: { "guest-removed": ["proof-of-pass", "proof-of-linked-pass"] },
         claimableUntil: Date.now() + 7 * MINUTE_MS,
+        passGeneration: null,
       },
       passesVoidUntil: null,
       lastWriter: "room-1",

@@ -12,6 +12,7 @@
     "./guest-join-claims": "./src/guest-join-claims.ts",
     "./host-commands": "./src/host-commands.ts",
     "./participant-reducer": "./src/participant-reducer.ts",
+    "./room-recovery-pass": "./src/room-recovery-pass.ts",
     "./scheduling": "./src/scheduling.ts",
     "./sfu-events": "./src/sfu-events.ts",
     "./sfu-types": "./src/sfu-types.ts",
