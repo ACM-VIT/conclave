@@ -152,6 +152,7 @@ interface MeetsMainContentProps {
   isWebinarAttendee?: boolean;
   enableRoomRouting: boolean;
   forceJoinOnly: boolean;
+  clientId?: string;
   user?: {
     id?: string;
     email?: string | null;
@@ -444,6 +445,7 @@ export default function MeetsMainContent({
   isWebinarAttendee = false,
   enableRoomRouting,
   forceJoinOnly,
+  clientId,
   user,
   userEmail,
   isAdmin,
@@ -2265,6 +2267,7 @@ export default function MeetsMainContent({
             isAdmin={isAdmin}
             enableRoomRouting={enableRoomRouting}
             forceJoinOnly={forceJoinOnly}
+            clientId={clientId}
             showPermissionHint={showPermissionHint}
             rooms={availableRooms}
             roomsStatus={roomsStatus}

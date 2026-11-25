@@ -25,6 +25,8 @@ import type { Dispatch, SetStateAction } from "react";
 import { Avatar } from "@conclave/ui-tokens/web";
 import { signOut, useSession } from "@/lib/auth-client";
 import { getMeetingLinkOrigins } from "@/lib/site-url";
+import { buildMeetingPath, buildMeetingUrl } from "@/lib/meeting-links";
+import { canonicalizeSfuClientId, resolveBrowserSfuClientId } from "@/lib/sfu-client-id";
 import type { RoomInfo } from "@/lib/sfu-types";
 import type {
   ConnectionState,
@@ -160,6 +162,7 @@ interface JoinScreenProps {
   isAdmin: boolean;
   enableRoomRouting: boolean;
   forceJoinOnly: boolean;
+  clientId?: string;
   showPermissionHint: boolean;
   rooms: RoomInfo[];
   roomsStatus: "idle" | "loading" | "error";
@@ -314,6 +317,7 @@ function JoinScreen({
   user,
   userEmail,
   forceJoinOnly,
+  clientId,
   enableRoomRouting,
   showPermissionHint,
   rooms,
@@ -330,9 +334,8 @@ function JoinScreen({
   onPrejoinMediaCommit,
   onEnterStart,
 }: JoinScreenProps) {
-  const normalizedRoomId =
-    roomId === "undefined" || roomId === "null" ? "" : roomId;
-  const codeField = useCodeField(normalizedRoomId, onRoomIdChange, getMeetingLinkOrigins());
+  const pageClientId = canonicalizeSfuClientId(clientId) ?? resolveBrowserSfuClientId();
+  const codeField = useCodeField(roomId, onRoomIdChange, getMeetingLinkOrigins(), pageClientId);
   const isRoutedRoom = forceJoinOnly;
   const nameInputId = useId();
   const codeInputId = useId();
@@ -1110,6 +1113,12 @@ function JoinScreen({
     const candidate = codeField.resolution.code;
     if (!candidate) return;
     if (!ensureGuest()) return;
+    if (!codeField.tenant.onThisPage) {
+      window.location.assign(
+        buildMeetingPath({ roomCode: candidate, clientId: codeField.tenant.clientId }),
+      );
+      return;
+    }
     onEnterStart?.("join");
     commitPrejoinMedia();
     onIsAdminChange(false);
@@ -1168,10 +1177,13 @@ function JoinScreen({
     const start = input.selectionStart ?? input.value.length;
     const end = input.selectionEnd ?? start;
     if (paste.kind === "replace") {
-      shapeCodeEdit(event, input, [0, input.value.length], paste.code, false);
+      const keepsTenant = paste.clientId !== null && paste.clientId !== pageClientId;
+      const replacement = keepsTenant ? text.trim() : paste.code;
+      shapeCodeEdit(event, input, [0, input.value.length], replacement, false);
     } else {
       shapeCodeEdit(event, input, [start, end], paste.text, false);
     }
+    codeField.settle();
   };
   const shapeTypedCodeEdits = (input: HTMLInputElement | null) => {
     if (!input) return;
@@ -1217,7 +1229,7 @@ function JoinScreen({
   const nameReady = hasIdentity || liveDisplayName.length > 0;
   const canSubmit = canJoin && nameReady && !isLoading;
 
-  const presenceTarget = joinCode;
+  const presenceTarget = codeField.tenant.onThisPage ? joinCode : "";
   useEffect(() => {
     if (roomsStatus === "loading") setPresenceChecked(true);
     else if (roomsStatus === "idle" && presenceChecked) setPresenceSettled(true);
@@ -1228,8 +1240,9 @@ function JoinScreen({
       )
     : undefined;
   const showPresence = presenceTarget.length > 0 && presenceChecked;
-  const presenceCount = presenceSettled ? matchedRoom?.userCount ?? 0 : null;
-  const presenceLoading = !presenceSettled;
+  const presenceCount =
+    presenceSettled && codeField.settled ? matchedRoom?.userCount ?? 0 : null;
+  const presenceLoading = !presenceSettled || !codeField.settled;
 
   const refreshDevices = useCallback(async () => {
     if (!navigator.mediaDevices?.enumerateDevices) return;
@@ -1363,8 +1376,11 @@ function JoinScreen({
       ? ""
       : isRoutedRoom
         ? window.location.href
-        : presenceTarget
-          ? `${window.location.origin}/${presenceTarget}`
+        : joinCode
+          ? buildMeetingUrl(window.location.origin, {
+              roomCode: joinCode,
+              clientId: codeField.tenant.clientId,
+            })
           : "";
   const linkCopy = useClipboardCopy(inviteLink);
   const previewHint =
@@ -1637,6 +1653,7 @@ function JoinScreen({
                     value={codeField.text}
                     ref={shapeTypedCodeEdits}
                     onChange={(e) => codeField.change(e.target.value)}
+                    onBlur={codeField.settle}
                     onPaste={(e) => {
                       if (isRoutedRoom) return;
                       pasteIntoCode(e, e.currentTarget, e.clipboardData.getData("text"));
@@ -1644,7 +1661,7 @@ function JoinScreen({
                     onKeyDown={(e) => {
                       if (e.key !== "Enter" || e.nativeEvent.isComposing || !canSubmit) return;
                       const input = e.currentTarget;
-                      if (input.value !== joinCode) {
+                      if (codeField.tenant.onThisPage && input.value !== joinCode) {
                         applyFieldEdit(input, { start: 0, end: input.value.length, text: joinCode });
                       }
                       joinMeeting();

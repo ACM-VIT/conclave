@@ -372,6 +372,7 @@ const normalizeSessionUser = (user: {
 
 export type MeetsClientProps = {
   initialRoomId?: string;
+  clientId?: string;
   enableRoomRouting?: boolean;
   forceJoinOnly?: boolean;
   bypassMediaPermissions?: boolean;
@@ -405,6 +406,7 @@ export type MeetsClientProps = {
 
 export default function MeetsClient({
   initialRoomId,
+  clientId,
   enableRoomRouting = false,
   forceJoinOnly = false,
   bypassMediaPermissions = false,
@@ -3295,6 +3297,7 @@ export default function MeetsClient({
         isWebinarAttendee={isWebinarAttendee}
         enableRoomRouting={enableRoomRouting}
         forceJoinOnly={forceJoinOnly}
+        clientId={clientId}
         user={currentUser}
         userEmail={userEmail}
         isAdmin={canModerateMeeting}
