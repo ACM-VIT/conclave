@@ -752,7 +752,14 @@ export async function simulate(
       const due =
         settledAt.length > 0
           ? Math.min(...settledAt)
-          : Math.max(saved.notBefore ?? 0, saved.nextTry ?? 0, saved.leaseUntil ?? 0, writtenAt.get(key) ?? 0, ...marks.map((mark) => mark.notBefore));
+          : Math.max(
+              saved.notBefore ?? 0,
+              saved.nextTry ?? 0,
+              saved.leaseUntil ?? 0,
+              writtenAt.get(key) ?? 0,
+              ...marks.map((mark) => mark.notBefore),
+              ...learned.filter((item) => item.kind === "wait" && item.tab.open && item.key === keyOf(saved.events.map((event) => event.uuid))).map((item) => item.until),
+            );
       if (clock - due <= GRACE_MS) continue;
       const batchKey = keyOf(saved.events.map((event) => event.uuid));
       if ((requests.get(batchKey) ?? []).some((request) => !request.done && request.tab.open)) continue;
