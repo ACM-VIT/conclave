@@ -868,6 +868,7 @@ const performHostAction = async (
   const waitingKey = pendingKeyOf(room, target.key) ?? targetKey;
   const known = target.name !== "dana" || room.guestProofOf(targetKey) !== undefined;
   const reach = removalReachOf(room, target);
+  const reachedPeople = rightsPeopleWithin(world, room, reach);
   const reached = Object.values(world.actors).filter(
     (actor) => actor === target || (known && removalKeyIn(room, actor) === reach),
   );
@@ -921,7 +922,7 @@ const performHostAction = async (
     }
   }
   if (step.action === "admit" || step.action === "allow") {
-    for (const lifted of [reach, target.key, ...rightsPeopleWithin(world, room, reach)]) {
+    for (const lifted of [reach, target.key, ...reachedPeople]) {
       world.shadow.removed.delete(lifted);
       world.shadow.ejected.delete(lifted);
     }
@@ -929,7 +930,7 @@ const performHostAction = async (
   const removal = ["kick", "block", "blockStay", "revoke"].includes(step.action);
   if (removal) removes(world, target, known, reach);
   if (removal && step.action !== "revoke") {
-    for (const person of rightsPeopleWithin(world, room, reach)) {
+    for (const person of reachedPeople) {
       world.shadow.cohosts.delete(person);
       world.claimed.delete(person);
     }
@@ -1251,7 +1252,6 @@ const perform = async (world: World, step: Step): Promise<void> => {
   await followApprovals(world);
   await settle();
   keepNewestPasses(world);
-  creditClaims(world);
   await check(world, {
     beforeIncarnation,
     beforeHosts,
@@ -1427,15 +1427,8 @@ const check = async (
   if (earlier.kind === "running" && opened?.incarnationId !== earlier.incarnation) {
     callOver(world, "the room it ran in closed");
   }
-  const completions = world.completions.splice(0);
-  for (const done of completions) {
-    if (done.channelId !== CHANNEL || done.response.status !== "joined") continue;
-    if (done.admin && done.claim && world.hostClaims && !ownsCode(done.actor, done.ownerEmail)) {
-      shadow.cohosts.add(done.actor.key);
-      world.claimed.add(done.actor.key);
-    }
-  }
-  for (const done of completions) {
+  creditClaims(world);
+  for (const done of world.completions.splice(0)) {
     if (done.channelId !== CHANNEL || done.response.status !== "joined") continue;
     const { actor } = done;
     const owner = ownsCode(actor, done.ownerEmail);
