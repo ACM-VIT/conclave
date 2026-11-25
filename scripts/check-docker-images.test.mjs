@@ -22,8 +22,10 @@ else if (args[0] === "context" && args[1] === "inspect") {
 else if (args[0] === "create" && process.env.FAKE_DOCKER_RUN_CONFLICT) { process.stderr.write("Conflict. The container name is already in use by container \\"0ther0ther0ther0\\".\\n"); process.exit(125); }
 else if (args[0] === "create") {
   const labels = args.flatMap((arg, i) => (args[i - 1] === "--label" ? [arg] : []));
-  fs.appendFileSync(process.env.FAKE_DOCKER_STATE, JSON.stringify({ id: "0123456789abcdef0123", labels }) + "\\n");
-  process.stdout.write("0123456789abcdef0123\\n");
+  const created = fs.existsSync(process.env.FAKE_DOCKER_STATE) ? fs.readFileSync(process.env.FAKE_DOCKER_STATE, "utf8").split("\\n").filter((line) => line.includes('"id"')).length : 0;
+  const id = "0123456789abcdef" + (0x0123 + created).toString(16).padStart(4, "0");
+  fs.appendFileSync(process.env.FAKE_DOCKER_STATE, JSON.stringify({ id, labels }) + "\\n");
+  process.stdout.write(id + "\\n");
   if (process.env.FAKE_DOCKER_CREATE_HANG) {
     for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { fs.appendFileSync(process.env.FAKE_DOCKER_LOG, JSON.stringify({ received: signal }) + "\\n"); process.exit(1); });
     setInterval(() => {}, 1000);
@@ -340,4 +342,41 @@ test("a container or tag whose removal failed stays registered and is removed on
     const calls = fake.calls().map((call) => call.args.slice(2, 4).join(" "));
     assert.deepEqual(calls.slice(2), failing === "ps" ? ["ps -a", "rmi " + tag, "ps -a", "rm -f", "rmi " + tag] : ["ps -a", "rm -f", "rmi " + tag, "ps -a", "rm -f", "rmi " + tag], failing);
   }
+});
+
+function fakeState(fake) {
+  return existsSync(fake.env.FAKE_DOCKER_STATE) ? readFileSync(fake.env.FAKE_DOCKER_STATE, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
+}
+
+function assertEachRemovedOnce(fake, count) {
+  const state = fakeState(fake);
+  const created = state.filter((entry) => entry.id).map((entry) => entry.id);
+  assert.equal(created.length, count, JSON.stringify(state));
+  assert.equal(new Set(created).size, count, JSON.stringify(created));
+  assert.deepEqual(state.filter((entry) => entry.removed).map((entry) => entry.removed).sort(), [...created].sort());
+}
+
+test("several containers are each removed exactly once when one removal fails and is retried", async (t) => {
+  const fake = fakeDocker(t, { FAKE_DOCKER_FAIL_ONCE: "rm" });
+  const docker = pinnedDocker({ host: "unix:///var/run/docker.sock" }, fake.env);
+  const resources = new RunResources(docker);
+  const tag = resources.claimImage("conclave-check-images/x:run");
+  for (const name of ["a", "b", "c"]) await startContainer(docker, resources, { name: `conclave-check-images-${name}`, tag, env: {}, mounts: [] });
+  await resources.removeAll();
+  assert.equal(resources.owners.size, 1);
+  assert.deepEqual([...resources.images], [tag]);
+  await resources.removeAll();
+  assert.equal(resources.owners.size, 0);
+  assert.deepEqual([...resources.images], []);
+  assertEachRemovedOnce(fake, 3);
+  const rms = fake.calls().map((call) => call.args.slice(2)).filter((args) => args[0] === "rm").map((args) => args[2]);
+  assert.deepEqual(rms, ["0123456789abcdef0123", "0123456789abcdef0124", "0123456789abcdef0125", "0123456789abcdef0123"]);
+});
+
+test("a full run removes every container it created exactly once", { timeout: 30_000 }, async (t) => {
+  const fake = fakeDocker(t, { contexts: { default: "unix:///run/fake-docker.sock" } });
+  const { exited } = runScript(t, { ...fake.env, FAKE_DOCKER_HEALTHY: "1" });
+  const { code, stderr } = await exited;
+  assert.equal(code, 0, stderr);
+  assertEachRemovedOnce(fake, 2);
 });
