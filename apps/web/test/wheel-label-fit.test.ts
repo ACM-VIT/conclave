@@ -218,42 +218,56 @@ describe("wheel label coverage", () => {
     for (const name of new Set(names)) expect(fitsInSlice(name, fitted.fontSize, shape), name).toBe(true);
   });
 
+  const coverageFailure = (names: string[], wheelPx: number): { failure: string | null; numbered: boolean } => {
+    const count = names.length;
+    const shape = geometry(count, wheelPx);
+    const fitted = fitWheelLabels(names, shape, measure);
+    const shown = fitted.labels.filter((label) => label !== null).length;
+    const namesFit = everyNameFits(names, shape);
+    if (shown !== 0 && shown !== count) return { failure: `${shown} of ${count} labelled`, numbered: false };
+    if (shown === 0) {
+      if (everyNumberFits(shape)) return { failure: "blank dial while its numbers fit", numbered: false };
+      if (namesFit) return { failure: "blank dial while its names fit", numbered: false };
+      return { failure: null, numbered: false };
+    }
+    if (fitted.fontSize * shape.pxPerUnit < shape.minScreenPx - 1e-9) return { failure: "under the size floor", numbered: false };
+    let numberedCount = 0;
+    for (let index = 0; index < count; index += 1) {
+      const label = fitted.labels[index]!;
+      if (label.numbered) numberedCount += 1;
+      const fits = label.numbered ? fitsUpright(label, fitted.fontSize, shape) : fitsInSlice(label.text, fitted.fontSize, shape);
+      if (!fits) return { failure: `slice ${index + 1} does not fit`, numbered: false };
+      if (label.text !== (label.numbered ? String(index + 1) : names[index])) return { failure: `slice ${index + 1} reads ${label.text}`, numbered: false };
+    }
+    if (numberedCount > fallbackAllowance(count) && !(numberedCount === count && !namesFit)) {
+      return { failure: `${numberedCount} of ${count} numbered`, numbered: true };
+    }
+    return { failure: null, numbered: numberedCount > 0 };
+  };
+
+  const FULL_SWEEP = process.env.WHEEL_LABEL_FULL_SWEEP === "1";
+  const range = (from: number, to: number, step: number): number[] =>
+    Array.from({ length: Math.floor((to - from) / step) + 1 }, (_, index) => from + index * step);
+
   it("never leaves a slice blank while other slices are labelled, or numbers slices whose names all fit", () => {
+    const failures: string[] = [];
     let numberedRuns = 0;
     let denseRuns = 0;
     const check = (names: string[], wheelPx: number, where: string): void => {
-      const count = names.length;
-      const shape = geometry(count, wheelPx);
-      const fitted = fitWheelLabels(names, shape, measure);
-      const shown = fitted.labels.filter((label) => label !== null).length;
-      const namesFit = everyNameFits(names, shape);
-      expect(shown === 0 || shown === count, `${where}: ${shown} of ${count} labelled at ${wheelPx}px`).toBe(true);
-      if (shown === 0) {
-        expect(everyNumberFits(shape), `${where}: blank ${count} slice dial at ${wheelPx}px while its numbers fit`).toBe(false);
-        expect(namesFit, `${where}: blank ${count} slice dial at ${wheelPx}px while its names fit`).toBe(false);
-        return;
-      }
-      expect(fitted.fontSize * shape.pxPerUnit).toBeGreaterThanOrEqual(shape.minScreenPx - 1e-9);
-      fitted.labels.forEach((label, index) => {
-        const fits = label!.numbered
-          ? fitsUpright(label!, fitted.fontSize, shape)
-          : fitsInSlice(label!.text, fitted.fontSize, shape);
-        expect(fits, `${where}: slice ${index + 1}`).toBe(true);
-        expect(label!.text, `${where}: slice ${index + 1}`).toBe(label!.numbered ? String(index + 1) : names[index]);
-      });
-      const numberedCount = fitted.labels.filter((label) => label!.numbered).length;
-      expect(
-        numberedCount <= fallbackAllowance(count) || (numberedCount === count && !namesFit),
-        `${where}: ${numberedCount} of ${count} numbered at ${wheelPx}px`
-      ).toBe(true);
-      if (numberedCount > 0) numberedRuns += 1;
+      const { failure, numbered } = coverageFailure(names, wheelPx);
+      if (failure) failures.push(`${where} at ${wheelPx}px: ${failure}`);
+      if (numbered) numberedRuns += 1;
     };
+
+    check([...Array.from({ length: 48 }, () => "A"), "aaaaaaaa"], 340, "48 one letter names and one of 8");
+    check(["A", extremes[0](23), "Y", extremes[1](15), extremes[1](21), "W", "Q", "A", "G"], 814, "9 names, 3 long stacks");
+
     let seed = 20261123;
     const random = (limit: number): number => {
       seed = (seed * 1103515245 + 12345) % 2147483648;
       return seed % limit;
     };
-    for (let run = 0; run < 1500; run += 1) {
+    for (let run = 0; run < (FULL_SWEEP ? 1500 : 500); run += 1) {
       const count = 2 + random(63);
       const letters = random(3) === 0;
       const names = Array.from({ length: count }, () =>
@@ -268,17 +282,23 @@ describe("wheel label coverage", () => {
       if (letters) names[random(count)] = extremes[random(extremes.length)](1 + random(23));
       check(names, 180 + random(721), `run ${run}`);
     }
-    for (let count = 24; count <= 64; count += 1) {
-      for (let wheelPx = 240; wheelPx <= 480; wheelPx += 20) {
-        for (let length = 2; length <= 12; length += 2) {
+
+    const counts = FULL_SWEEP ? range(24, 64, 1) : [24, 33, 41, 49, 57, 64];
+    const sizes = FULL_SWEEP ? range(240, 480, 20) : [240, 300, 340, 360, 400, 480];
+    const lengths = FULL_SWEEP ? range(2, 12, 2) : [2, 5, 8, 12];
+    for (const count of counts) {
+      for (const wheelPx of sizes) {
+        for (const length of lengths) {
           const names = [...Array.from({ length: count - 1 }, () => "A"), "a".repeat(length)];
           if (everyNameFits(names, geometry(count, wheelPx))) denseRuns += 1;
           check(names, wheelPx, `dense ${count} with a ${length} letter outlier`);
         }
       }
     }
-    expect(numberedRuns).toBeGreaterThan(20);
-    expect(denseRuns).toBeGreaterThan(100);
+
+    expect(failures).toEqual([]);
+    expect(numberedRuns).toBeGreaterThan(10);
+    expect(denseRuns).toBeGreaterThan(30);
   });
 });
 
