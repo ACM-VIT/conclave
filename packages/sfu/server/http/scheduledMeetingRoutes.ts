@@ -14,7 +14,7 @@ import {
 import type { SfuState } from "../state.js";
 import {
   canonicalizeClientId,
-  canMigrateClientNamespace,
+  clientNamespaceIncludes,
   clientIdCandidates,
   clientIdFamily,
   resolveDefaultClientId,
@@ -199,10 +199,7 @@ export const registerScheduledMeetingRoutes = (
       });
       for (const meeting of meetings) {
         if (seenRoomCodes.has(meeting.roomCode)) continue;
-        const belongsHere =
-          meeting.clientId === options.clientId ||
-          canMigrateClientNamespace(meeting.clientId, options.clientId);
-        if (!belongsHere) continue;
+        if (!clientNamespaceIncludes(options.clientId, meeting.clientId)) continue;
         seenRoomCodes.add(meeting.roomCode);
         byId.set(meeting.id, meeting);
       }

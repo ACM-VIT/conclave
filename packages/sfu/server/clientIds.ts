@@ -60,3 +60,10 @@ export const canMigrateClientNamespace = (
   return clientIdCandidates(target).includes(source) ||
     LEGACY_CONCLAVE_CLIENT_IDS.has(source.toLowerCase());
 };
+
+export const clientNamespaceIncludes = (
+  viewClientId: string,
+  storedClientId: string,
+): boolean =>
+  storedClientId === viewClientId ||
+  canMigrateClientNamespace(storedClientId, viewClientId);
