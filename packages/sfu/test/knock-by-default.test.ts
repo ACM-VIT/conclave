@@ -1846,6 +1846,18 @@ describe.skipIf(!redisServerPath)("knockers waiting on an SFU when the next meet
         event === "serverRestarting" && (sent as { reconnecting?: boolean }).reconnecting === true,
     ) && member.peer.disconnect.mock.calls.length > 0;
 
+  it("tells an SFU whether a renewal kept its lease unbroken or had to claim the code again", async () => {
+    const { a } = await twoSfus();
+    const room = { channelId: CHANNEL, clientId: "conclave", roomId: "abc-mnop-xyz" };
+    const first = await a.roomRegistry.claimRoom(room);
+    expect(first).toMatchObject({ ok: true, continuous: false });
+    expect(a.roomRegistry.holdsLease(CHANNEL)).toBe(true);
+    expect(await a.roomRegistry.renewRoom(room)).toMatchObject({ ok: true, continuous: true });
+    await a.roomRegistry.releaseRoom(CHANNEL);
+    expect(a.roomRegistry.holdsLease(CHANNEL)).toBe(false);
+    expect(await a.roomRegistry.renewRoom(room)).toMatchObject({ ok: true, continuous: false });
+  });
+
   it("sends them there through the usual route when A drains, and the host on B lets them in", async () => {
     const { a, b } = await twoSfus();
     const created = await join(a, host);

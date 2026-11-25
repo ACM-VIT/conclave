@@ -29,8 +29,8 @@ export type RoomPlacementRecord = {
 
 export type RoomAssignmentRecord = RoomOwnerRecord | RoomPlacementRecord;
 
-type RoomOwnershipClaim =
-  | { ok: true; owner: RoomOwnerRecord }
+export type RoomOwnershipClaim =
+  | { ok: true; owner: RoomOwnerRecord; continuous: boolean }
   | { ok: false; owner: RoomAssignmentRecord };
 
 export type RoomPlacementClaim =
@@ -134,9 +134,14 @@ if current then
   if decoded.instanceId ~= instanceId or decodedUrl ~= instanceUrl then
     return {0, current}
   end
+  redis.call("PSETEX", key, ttlMs, value)
+  if decoded.kind == "placement" then
+    return {3, value}
+  end
+  return {1, value}
 end
 redis.call("PSETEX", key, ttlMs, value)
-return {1, value}
+return {3, value}
 `;
 
 const RESERVE_PLACEMENT_SCRIPT = `
@@ -238,11 +243,12 @@ const parseClaimResult = (value: unknown): RoomOwnershipClaim => {
     throw new Error("Invalid room owner record");
   }
 
-  if (okValue === 1 || okValue === "1") {
+  const renewed = okValue === 1 || okValue === "1";
+  if (renewed || okValue === 3 || okValue === "3") {
     if (owner.kind === "placement") {
       throw new Error("Invalid room owner claim response");
     }
-    return { ok: true, owner };
+    return { ok: true, owner, continuous: renewed };
   }
   return { ok: false, owner };
 };
@@ -386,7 +392,7 @@ export class LocalRoomRegistry implements RoomRegistry {
     const owner = this.createOwner(input);
     this.owners.set(input.channelId, owner);
     this.placements.delete(input.channelId);
-    return { ok: true, owner };
+    return { ok: true, owner, continuous: true };
   }
 
   async renewRoom(input: {
@@ -694,7 +700,7 @@ class RedisRoomRegistry implements RoomRegistry {
           performance.now(),
         )
       ) {
-        return { ok: true, owner: confirmedOwner };
+        return { ok: true, owner: confirmedOwner, continuous: true };
       }
       throw new RoomLeaseExpiredError(input.channelId, { cause: error });
     }
