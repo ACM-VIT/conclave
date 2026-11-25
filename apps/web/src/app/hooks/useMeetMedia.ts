@@ -1224,7 +1224,9 @@ export function useMeetMedia({
       console.warn("[Meets] toggleMute failed, rolling back mute:", toggleResult.error);
       if (
         muteClaim.generation !== captureGeneration() ||
-        deviceIntents.get().audio.request !== muteClaim.request
+        deviceIntents.get().audio.request !== muteClaim.request ||
+        producer.closed ||
+        audioProducerRef.current?.id !== producer.id
       ) {
         return;
       }
@@ -1242,7 +1244,7 @@ export function useMeetMedia({
         device: "microphone",
       });
     },
-    [deviceIntents, emitToggleMute, localStreamRef, setIsMuted, setMeetError],
+    [audioProducerRef, deviceIntents, emitToggleMute, localStreamRef, setIsMuted, setMeetError],
   );
 
   const confirmAudioProducerUnmuted = useCallback(
