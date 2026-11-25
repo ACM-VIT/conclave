@@ -87,7 +87,7 @@ export async function transcriptRoomRig(
   hooks: { onProviderSend?: (socket: FakeProviderSocket, message: Record<string, unknown>) => void } = {},
 ) {
   const sockets: FakeProviderSocket[] = [];
-  const connectPlans: Array<"unreachable" | number | { lateMs: number }> = [];
+  const connectPlans: Array<"unreachable" | number | { lateMs: number } | { status: number }> = [];
   const saves: { before?: () => Promise<void> } = {};
   let providerRequests = 0;
   vi.stubGlobal(
@@ -97,6 +97,7 @@ export async function transcriptRoomRig(
       const requestIndex = isProvider ? providerRequests++ : -1;
       const plan = isProvider ? connectPlans.shift() : undefined;
       if (plan === "unreachable") throw new Error("Provider connection timed out.");
+      if (typeof plan === "object" && "status" in plan) return { webSocket: null, status: plan.status };
       if (typeof plan === "object") await new Promise((resolve) => setTimeout(resolve, plan.lateMs));
       const socket = new FakeProviderSocket(String(url));
       socket.requestIndex = requestIndex;
