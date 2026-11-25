@@ -817,6 +817,7 @@ export function useMeetMedia({
     isMediaRecoveryBlocked,
   ]);
   const cameraProducerTrackRepairInFlightRef = useRef(false);
+  const cameraStallRepairQueuedRef = useRef(false);
   const cameraRecoveryPublishOverrideRef = useRef<
     WebcamCodecRecoveryOverride<ReturnType<typeof getPreferredWebcamCodec>> | null
   >(null);
@@ -2693,10 +2694,6 @@ export function useMeetMedia({
       forceCaptureRefresh = false,
       requestedIn = captureGeneration(),
     ) => {
-      const topologyReplacement = cameraTopologyReplacementPromiseRef.current;
-      if (topologyReplacement) {
-        await topologyReplacement;
-      }
       const claim = { ...claimDevice("video"), generation: requestedIn };
       if (!claimHolds(claim)) return;
       const currentStream = localStreamRef.current ?? localStream;
@@ -3506,7 +3503,9 @@ export function useMeetMedia({
   if (!webcamTopologyReplacementQueueRef.current) {
     webcamTopologyReplacementQueueRef.current =
       createLatestWinsTopologyReplacementQueue((request) =>
-        applyWebcamProducerTopologyReplacementRef.current(request),
+        runCameraTrackOperation(() =>
+          applyWebcamProducerTopologyReplacementRef.current(request),
+        ),
       );
   }
 
@@ -4496,12 +4495,14 @@ export function useMeetMedia({
         if (cameraProducerTrackRepairInFlightRef.current) return;
         cameraProducerTrackRepairInFlightRef.current = true;
         const claim = claimDevice("video");
-        void (async () => {
+        void runCameraTrackOperation(async () => {
           try {
             if (
               !claimHolds(claim) ||
               videoProducerRef.current?.id !== producer.id ||
               producer.closed ||
+              producer.track !== producerTrack ||
+              !(localStreamRef.current?.getVideoTracks() ?? []).includes(rawCameraTrack) ||
               isMediaRecoveryBlocked()
             ) {
               return;
@@ -4546,7 +4547,7 @@ export function useMeetMedia({
           } finally {
             cameraProducerTrackRepairInFlightRef.current = false;
           }
-        })();
+        });
         return;
       }
 
@@ -5014,12 +5015,18 @@ export function useMeetMedia({
             return;
           }
 
-          void recoverStalledProducer({
-            producer,
-            producerTrack,
-            sample,
-            state: nextState,
-            allowProducerRecreate,
+          if (cameraStallRepairQueuedRef.current) return;
+          cameraStallRepairQueuedRef.current = true;
+          void runCameraTrackOperation(async () => {
+            cameraStallRepairQueuedRef.current = false;
+            if (producer.track !== producerTrack) return;
+            await recoverStalledProducer({
+              producer,
+              producerTrack,
+              sample,
+              state: nextState,
+              allowProducerRecreate,
+            });
           });
         })
         .catch(() => {

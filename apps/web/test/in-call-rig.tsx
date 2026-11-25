@@ -97,8 +97,12 @@ export class FakeTrack {
     this.listeners.get("ended")?.forEach((listener) => listener(new Event("ended")));
   }
 
+  origin: FakeTrack | null = null;
+
   clone() {
-    return this.world.track(this.kind, "clone", this.deviceId);
+    const clone = this.world.track(this.kind, "clone", this.deviceId);
+    clone.origin = this;
+    return clone;
   }
 
   getSettings() {
@@ -929,13 +933,19 @@ export const unwanted = (world: World, rig: RigApi): string[] => {
   });
   const liveCameras = live.filter((track) => track.kind === "video" && track.source === "device");
   if (liveCameras.length > 1) problems.push(`${liveCameras.length} live cameras: ${liveCameras.map((track) => track.id).join(", ")}`);
-  const streamCameras = new Set(rig.refs.localStreamRef.current?.getVideoTracks() ?? []);
+  const streamCameras = new Set((rig.refs.localStreamRef.current?.getVideoTracks() ?? []) as unknown as FakeTrack[]);
+  const processed = rig.refs.processedVideoTrackRef.current as unknown as FakeTrack | null;
+  const showsCamera = [...streamCameras].some((track) => track.readyState === "live");
   openProducers
-    .filter((producer) => producer.kind === "video" && producer.appData.type !== "screen" && producer.track?.source === "device")
+    .filter((producer) => producer.kind === "video" && producer.appData.type !== "screen")
     .forEach((producer) => {
-      if (producer.track?.readyState === "live" && !streamCameras.has(producer.track as unknown as MediaStreamTrack)) {
-        problems.push(`camera producer ${producer.id} sends ${producer.track.id} but the local stream shows another camera`);
-      }
+      const sent = producer.track;
+      if (!sent || sent.readyState !== "live") return;
+      const agrees =
+        streamCameras.has(sent) ||
+        (sent === processed && showsCamera) ||
+        (sent.source === "clone" && sent.origin !== null && streamCameras.has(sent.origin));
+      if (!agrees) problems.push(`camera producer ${producer.id} sends ${sent.id} but the local stream shows ${[...streamCameras].map((track) => track.id).join(", ") || "no camera"}`);
     });
   if (!intents.video.chosen) {
     live
