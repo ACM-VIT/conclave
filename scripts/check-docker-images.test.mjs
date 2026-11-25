@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -29,7 +29,7 @@ else if (args[0] === "create") {
   process.stdout.write(id + "\\n");
   if (process.env.FAKE_DOCKER_CREATE_HANG) {
     for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { fs.appendFileSync(process.env.FAKE_DOCKER_LOG, JSON.stringify({ received: signal }) + "\\n"); process.exit(1); });
-    setInterval(() => {}, 1000);
+    setTimeout(() => process.exit(70), 60000);
   }
 } else if (args[0] === "ps" && process.env.FAKE_DOCKER_FAIL_ONCE?.split(",").includes("ps") && !fs.existsSync(process.env.FAKE_DOCKER_STATE + ".ps-failed")) {
   fs.writeFileSync(process.env.FAKE_DOCKER_STATE + ".ps-failed", "");
@@ -37,7 +37,7 @@ else if (args[0] === "create") {
   process.exit(1);
 } else if (args[0] === "rm" && process.env.FAKE_DOCKER_RM_HANG) {
   fs.appendFileSync(process.env.FAKE_DOCKER_LOG, JSON.stringify({ execPid: process.pid }) + "\\n");
-  setInterval(() => {}, 1000);
+  setTimeout(() => process.exit(70), 60000);
 } else if (args[0] === "rm" && process.env.FAKE_DOCKER_FAIL_ONCE?.split(",").includes("rm") && !fs.existsSync(process.env.FAKE_DOCKER_STATE + ".rm-failed")) {
   fs.writeFileSync(process.env.FAKE_DOCKER_STATE + ".rm-failed", "");
   process.stderr.write("Error response from daemon: removal already in progress\\n");
@@ -69,7 +69,7 @@ else if (args[0] === "buildx" && args[1] === "build" && process.env.FAKE_DOCKER_
     if (process.env.FAKE_DOCKER_BUILD_EXIT_AFTER_MS) setTimeout(() => process.exit(0), Number(process.env.FAKE_DOCKER_BUILD_EXIT_AFTER_MS));
   };
   if (process.env.FAKE_DOCKER_GRANDCHILD) {
-    const plugin = require("node:child_process").spawn(process.execPath, ["-e", "for (const s of ['SIGINT', 'SIGTERM']) process.on(s, () => {}); require('node:fs').appendFileSync(process.env.FAKE_DOCKER_LOG, JSON.stringify({ pluginPid: process.pid }) + String.fromCharCode(10)); setInterval(() => {}, 1000);", require("node:path").dirname(process.env.FAKE_DOCKER_LOG)], { stdio: ["ignore", "inherit", "inherit"] });
+    const plugin = require("node:child_process").spawn(process.execPath, ["-e", "for (const s of ['SIGINT', 'SIGTERM']) process.on(s, () => {}); require('node:fs').appendFileSync(process.env.FAKE_DOCKER_LOG, JSON.stringify({ pluginPid: process.pid }) + String.fromCharCode(10)); setTimeout(() => process.exit(0), 60000);"], { stdio: ["ignore", "inherit", "inherit"] });
     const waiting = setInterval(() => {
       if (fs.readFileSync(process.env.FAKE_DOCKER_LOG, "utf8").includes('"pluginPid":' + plugin.pid)) {
         clearInterval(waiting);
@@ -77,12 +77,12 @@ else if (args[0] === "buildx" && args[1] === "build" && process.env.FAKE_DOCKER_
       }
     }, 20);
   } else ready();
-  setInterval(() => {}, 1000);
+  setTimeout(() => process.exit(70), 60000);
 } else if (args[0] === "buildx" && args[1] === "build" && process.env.FAKE_DOCKER_BUILD_FAIL && args[args.indexOf("-t") + 1].includes(process.env.FAKE_DOCKER_BUILD_FAIL)) { process.stderr.write("build failed\\n"); process.exit(1); }
 else if (args[0] === "buildx" && args[1] === "build") fs.appendFileSync(process.env.FAKE_DOCKER_STATE, JSON.stringify({ image: args[args.indexOf("-t") + 1] }) + "\\n");
 else if ((args[0] === "exec" && process.env.FAKE_DOCKER_EXEC_HANG) || (args[0] === "exec" && args.includes("--import") && process.env.FAKE_DOCKER_IMPORT_HANG)) {
   fs.appendFileSync(process.env.FAKE_DOCKER_LOG, JSON.stringify({ execPid: process.pid }) + "\\n");
-  setInterval(() => {}, 1000);
+  setTimeout(() => process.exit(70), 60000);
 }
 else if (args[0] === "exec" && process.env.FAKE_DOCKER_PROBE_OUTPUT) process.stdout.write(process.env.FAKE_DOCKER_PROBE_OUTPUT);
 else if (args[0] === "exec" && process.env.FAKE_DOCKER_HEALTHY) process.stdout.write("200\\n");
@@ -91,11 +91,15 @@ else if (args[0] === "info") process.stdout.write((process.env.FAKE_DOCKER_INFO 
 `;
 
 const FIXTURE_PID_KEYS = ["buildPid", "execPid", "pluginPid"];
-const fixtures = [];
+const fixtures = new Set();
 
-function isLiveFixture(pid, dir) {
-  const listed = spawnSync("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf8" });
-  return listed.status === 0 && listed.stdout.includes(dir);
+function alive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
 }
 
 function recordedFixturePids(log) {
@@ -104,16 +108,17 @@ function recordedFixturePids(log) {
 }
 
 after(async () => {
-  await sleep(300);
-  assert.deepEqual(fixtures.filter(({ pid, dir }) => isLiveFixture(pid, dir)), []);
+  const deadline = Date.now() + 3000;
+  while ([...fixtures].some(alive) && Date.now() < deadline) await sleep(100);
+  assert.deepEqual([...fixtures].filter(alive), []);
 });
 
 function fakeDocker(t, { contexts = {}, current = "default", ...extra } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "fake-docker-"));
   t.after(() => {
     for (const pid of recordedFixturePids(path.join(dir, "calls.jsonl"))) {
-      fixtures.push({ pid, dir });
-      if (!isLiveFixture(pid, dir)) continue;
+      fixtures.add(pid);
+      if (!alive(pid)) continue;
       try {
         process.kill(pid, "SIGKILL");
       } catch {}
