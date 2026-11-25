@@ -339,6 +339,17 @@ describe("a chosen device ends up sending", () => {
     expect(recovered).toEqual([[true, true]]);
   });
 
+  it("turning noise cancellation on when the microphone swap fails leaves no noise cancellation output behind", async () => {
+    const rig = await join({ camera: false });
+    world.refusals.set("replaceTrack", 1);
+
+    await act(async () => rig.rig().setNoiseCancellation(true));
+    await rig.settle();
+
+    expect(notLive(world, rig.rig())).toEqual([]);
+    expect(unwanted(world, rig.rig())).toEqual([]);
+  });
+
   it("turning noise cancellation on and straight back off never sends the noise-cancelled microphone", async () => {
     const rig = await join({ camera: false });
     world.holds.add("noiseSetup");

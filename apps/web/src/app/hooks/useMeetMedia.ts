@@ -4096,11 +4096,15 @@ export function useMeetMedia({
       }
       audioRecoveryInFlightRef.current = true;
       const generation = switchGeneration;
+      let preparedTrack: MediaStreamTrack | null = null;
       try {
         const producer = audioProducerRef.current;
         const nextTrack = isNoiseCancellationEnabled
           ? await prepareAudioPublishTrack(currentAudioTrack, generation)
           : getNoiseCancellationSourceTrack(currentAudioTrack);
+        if (nextTrack && nextTrack.id !== currentAudioTrack.id && isNoiseCancellationProcessedTrack(nextTrack)) {
+          preparedTrack = nextTrack;
+        }
 
         if (!switchHolds()) {
           if (
@@ -4158,6 +4162,13 @@ export function useMeetMedia({
           requestAudioProducerRecovery();
         }
       } catch (error) {
+        if (
+          preparedTrack &&
+          !(localStreamRef.current?.getTracks() ?? []).includes(preparedTrack)
+        ) {
+          detachNoiseCancellationSourceHandler(preparedTrack);
+          stopNoiseCancellationForTrack(preparedTrack, { stopOutput: true, stopSource: false });
+        }
         if (isCaptureReleased(error)) return;
         console.warn("[Meets] Failed to switch microphone processing:", error);
         if (microphoneChosen()) {
