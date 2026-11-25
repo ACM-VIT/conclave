@@ -166,6 +166,7 @@ class FakeParam {
   value = 0;
   setValueAtTime() {}
   linearRampToValueAtTime() {}
+  exponentialRampToValueAtTime() {}
   setTargetAtTime() {}
   cancelScheduledValues() {}
 }

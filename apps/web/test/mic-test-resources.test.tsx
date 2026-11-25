@@ -32,6 +32,16 @@ beforeEach(() => {
   installMediaWorld(world);
   vi.stubGlobal("requestAnimationFrame", () => 1);
   vi.stubGlobal("cancelAnimationFrame", () => {});
+  vi.stubGlobal(
+    "Audio",
+    class {
+      srcObject: unknown = null;
+      play() {
+        return Promise.resolve();
+      }
+      pause() {}
+    },
+  );
   pipelineFailure.next = null;
 });
 
@@ -157,6 +167,12 @@ describe("the Settings microphone test owns everything one run opens", () => {
 
     closeSettings();
     await flush();
+    expect(leftOpen()).toEqual([]);
+  });
+
+  it("leaves nothing live after a speaker test plays to the end", async () => {
+    await playSpeakerTestSound();
+
     expect(leftOpen()).toEqual([]);
   });
 

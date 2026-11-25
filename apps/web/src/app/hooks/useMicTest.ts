@@ -452,11 +452,12 @@ export async function playSpeakerTestSound(
   const context = new AudioContextConstructor();
   const audio = new Audio();
   let master: GainNode | null = null;
+  let destination: MediaStreamAudioDestinationNode | null = null;
   try {
     if (context.state === "suspended") {
       await context.resume().catch(() => {});
     }
-    const destination = createHeldDestination(context, generation);
+    destination = createHeldDestination(context, generation);
     master = context.createGain();
     master.gain.value = 0.5;
     master.connect(destination);
@@ -505,6 +506,7 @@ export async function playSpeakerTestSound(
     try {
       master?.disconnect();
     } catch {}
+    destination?.stream.getTracks().forEach((track) => track.stop());
     await context.close().catch(() => {});
   }
 }
