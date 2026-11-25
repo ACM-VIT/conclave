@@ -135,11 +135,10 @@ describe("native wheel embed while a shared spin runs", () => {
     const slices = () => stage().entries.map((entry) => entry.label);
     expect(slices()).toEqual(["Ada", "Bo", ""]);
 
-    if (!reduceMotion) {
-      act(() => stage().onSpinningChange(false));
-      act(() => stage().onSettled(stage().spin ?? stored, true));
-    }
-    advance(DURATION + 5_000);
+    advance(DURATION);
+    act(() => stage().onSpinningChange(false));
+    act(() => stage().onSettled(stage().spin ?? stored, true));
+    advance(5_000);
     expect(slices()).toEqual(["Ada", "Bo", ""]);
     expect(lastStatus()?.winnerLabel).toBe("3");
     const overlay = container.querySelector<HTMLElement>(".wheel-winner");

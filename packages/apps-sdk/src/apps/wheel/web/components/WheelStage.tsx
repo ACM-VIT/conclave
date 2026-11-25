@@ -28,6 +28,7 @@ import {
   type MeasureText,
 } from "../labelFit";
 import type { WheelSounds } from "../sounds";
+import { isSpinRunning, spinElapsed } from "../spinTimeline";
 
 const POINTER_ANGLE = 90;
 const POINTER_BASE = WHEEL_RADIUS + RIM_WIDTH + 3;
@@ -38,7 +39,6 @@ const EMPTY_SEGMENT_COUNT = 8;
 const IDLE_DEG_PER_SEC = 3.6;
 const FLAPPER_STIFFNESS = 640;
 const FLAPPER_DAMPING = 16;
-const MIN_VISIBLE_TAIL_MS = 1500;
 const REDUCED_TAIL_MS = 1100;
 
 const PROFILE_STEPS = 600;
@@ -79,7 +79,6 @@ export type WheelStageProps = {
 
 type ActiveAnimation = {
   spin: WheelSpin;
-  anchor: number;
   startDeg: number;
   restDeg: number;
   delta: number;
@@ -277,9 +276,7 @@ export function WheelStage({
     }
     if (settledSpinIdsRef.current.has(spin.spinId)) return;
 
-    const now = Date.now();
-    let anchor = Math.min(spin.startedAt, now);
-    if (now - anchor >= spin.durationMs) {
+    if (!isSpinRunning(spin)) {
       settledSpinIdsRef.current.add(spin.spinId);
       rotationRef.current = restingAngle(spin);
       restingRef.current = true;
@@ -290,10 +287,6 @@ export function WheelStage({
       onSettledRef.current(spin, false);
       return;
     }
-    if (now - anchor > spin.durationMs - MIN_VISIBLE_TAIL_MS) {
-      anchor = now - (spin.durationMs - MIN_VISIBLE_TAIL_MS);
-    }
-
     const startDeg = mod360(rotationRef.current);
     rotationRef.current = startDeg;
     restingRef.current = false;
@@ -301,7 +294,6 @@ export function WheelStage({
     const restDeg = restingAngle(spin);
     animationRef.current = {
       spin,
-      anchor,
       startDeg,
       restDeg,
       delta: mod360(restDeg - startDeg) + (reduced ? 1 : spin.turns) * 360,
@@ -321,7 +313,6 @@ export function WheelStage({
     const frame = (frameAt: number) => {
       const dt = Math.min(0.05, Math.max(0.001, (frameAt - lastFrameAt) / 1000));
       lastFrameAt = frameAt;
-      const frameNow = Date.now();
 
       const previousDeg = rotationRef.current;
       const animation = animationRef.current;
@@ -329,7 +320,7 @@ export function WheelStage({
       let unwrappedDeg = previousDeg;
 
       if (animation) {
-        const elapsed = frameNow - animation.anchor;
+        const elapsed = spinElapsed(animation.spin);
         const launchAt = animation.reduced ? animation.flipAt : WINDUP_MS;
         if (!animation.launched && elapsed >= launchAt) {
           animation.launched = true;
@@ -381,7 +372,7 @@ export function WheelStage({
 
       if (onPointerLabelRef.current && segments > 0) {
         const holdingStill = Boolean(
-          animation?.reduced && frameNow - animation.anchor < animation.flipAt
+          animation?.reduced && spinElapsed(animation.spin) < animation.flipAt
         );
         const index =
           !holdingStill && (animationRef.current || restingRef.current)

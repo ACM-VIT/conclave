@@ -157,21 +157,6 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
     [doc, reveal, scheduleFinalize],
   );
 
-  useEffect(() => {
-    if (!reduceMotion || !spin || handledRef.current.has(spin.spinId)) return;
-    const remaining = spin.startedAt + spin.durationMs - Date.now();
-    if (remaining <= 0) return;
-    handledRef.current.add(spin.spinId);
-    setResultSpinId(spin.spinId);
-    reveal(spin);
-    scheduleFinalize(spin, remaining);
-  }, [reduceMotion, spin, reveal, scheduleFinalize]);
-
-  const stageSpin = useMemo<WheelSpin | null>(() => {
-    if (!spin || !reduceMotion) return spin;
-    return { ...spin, startedAt: Math.min(spin.startedAt, Date.now()) - spin.durationMs };
-  }, [spin, reduceMotion]);
-
   const requestSpin = useCallback((): CommandResult => {
     if (!canEditRef.current) return { ok: false, error: "readOnly" };
     if (isLive() || animating || revealTimerRef.current) return { ok: false, error: "busy" };
@@ -235,7 +220,7 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
     <div className="wheel-page">
       <WheelStage
         entries={dialEntries}
-        spin={stageSpin}
+        spin={spin}
         canSpin={canEdit && synced}
         sounds={soundsRef.current}
         reducedMotion={reduceMotion}
