@@ -420,7 +420,7 @@ const makePlan = (seed) => {
 
 const settledPhase = (phase) => phase === undefined || phase === "" || phase === "idle";
 
-const checkRun = async ({ sfus, shared, plan, result, label, quiet }) => {
+const checkRun = async ({ sfus, shared, plan, result, label, quiet, history }) => {
   const allowed = plan.canaryFails ? [LAST_GOOD] : [LAST_GOOD, TARGET];
   const problems = [];
   for (const [name, sfu] of Object.entries(sfus)) {
@@ -467,7 +467,7 @@ const checkRun = async ({ sfus, shared, plan, result, label, quiet }) => {
   }
   if (result.code === 3 && quiet) problems.push("paused for calls (exit 3) with no calls running");
   if (problems.length) {
-    throw new Error(`seed ${plan.seed}, ${label}, exit ${result.code}:\n  ${problems.join("\n  ")}\nplan: ${JSON.stringify(plan)}\n--- output ---\n${result.output}`);
+    throw new Error(`seed ${plan.seed}, ${label}, exit ${result.code}:\n  ${problems.join("\n  ")}\nplan: ${JSON.stringify(plan)}\n${history.join("\n")}`);
   }
 };
 
@@ -546,6 +546,7 @@ const runPlan = async (plan) => {
       ...(plan.only ? { SFU_DEPLOY_SERVICES: plan.only } : {}),
       ...(plan.canaryFails ? { DEPLOY_TEST_BAD_IMAGES: TARGET } : {}),
     };
+    const history = [];
     try {
       for (const [index, crash] of plan.crashes.entries()) {
         if (index > 0 && plan.statusOutageAtRerun) {
@@ -554,7 +555,9 @@ const runPlan = async (plan) => {
           later(plan.statusOutageAtRerun.ms, () => (sfu.statusAnswers = true));
         }
         const result = await deploy(sfus, { env: { ...env, ...(crash ? { SFU_DEPLOY_TEST_CRASH_AT_STEP: String(crash) } : {}) } });
-        await checkRun({ sfus, shared, plan, result, label: `run ${index + 1}${crash ? `, killed at step ${crash}` : ""}` });
+        const label = `run ${index + 1}${crash ? `, killed at step ${crash}` : ""}`;
+        history.push(`--- output of ${label}, exit ${result.code} ---\n${result.output}`);
+        await checkRun({ sfus, shared, plan, result, label, history });
       }
       faults = false;
       for (const timer of timers) clearTimeout(timer);
@@ -564,7 +567,8 @@ const runPlan = async (plan) => {
       let result = null;
       for (let attempt = 1; attempt <= 4; attempt += 1) {
         result = await deploy(sfus, { env });
-        await checkRun({ sfus, shared, plan, result, label: `settling run ${attempt}`, quiet: true });
+        history.push(`--- output of settling run ${attempt}, exit ${result.code} ---\n${result.output}`);
+        await checkRun({ sfus, shared, plan, result, label: `settling run ${attempt}`, quiet: true, history });
         if ([0, 4].includes(result.code)) break;
       }
       const deployed = plan.only ? [plan.only] : plan.names;
@@ -574,7 +578,7 @@ const runPlan = async (plan) => {
       for (const [name, sfu] of Object.entries(sfus)) {
         if (!(sfu.container === "running" && !sfu.draining && sfu.image === expected[name])) problems.push(`${name} ends ${sfu.container}, draining ${sfu.draining}, on ${sfu.image}, not serving ${expected[name]}`);
       }
-      if (problems.length) throw new Error(`seed ${plan.seed}, settled:\n  ${problems.join("\n  ")}\nplan: ${JSON.stringify(plan)}\n--- output ---\n${result.output}`);
+      if (problems.length) throw new Error(`seed ${plan.seed}, settled:\n  ${problems.join("\n  ")}\nplan: ${JSON.stringify(plan)}\n${history.join("\n")}`);
     } finally {
       clearInterval(tick);
       for (const timer of timers) clearTimeout(timer);
