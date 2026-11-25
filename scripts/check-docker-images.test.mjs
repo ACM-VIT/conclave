@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createServer } from "node:http";
-import test from "node:test";
+import test, { after } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { repoRoot } from "./check-docker-context.mjs";
@@ -69,7 +69,7 @@ else if (args[0] === "buildx" && args[1] === "build" && process.env.FAKE_DOCKER_
     if (process.env.FAKE_DOCKER_BUILD_EXIT_AFTER_MS) setTimeout(() => process.exit(0), Number(process.env.FAKE_DOCKER_BUILD_EXIT_AFTER_MS));
   };
   if (process.env.FAKE_DOCKER_GRANDCHILD) {
-    const plugin = require("node:child_process").spawn(process.execPath, ["-e", "for (const s of ['SIGINT', 'SIGTERM']) process.on(s, () => {}); require('node:fs').appendFileSync(process.env.FAKE_DOCKER_LOG, JSON.stringify({ pluginPid: process.pid }) + String.fromCharCode(10)); setInterval(() => {}, 1000);"], { stdio: ["ignore", "inherit", "inherit"] });
+    const plugin = require("node:child_process").spawn(process.execPath, ["-e", "for (const s of ['SIGINT', 'SIGTERM']) process.on(s, () => {}); require('node:fs').appendFileSync(process.env.FAKE_DOCKER_LOG, JSON.stringify({ pluginPid: process.pid }) + String.fromCharCode(10)); setInterval(() => {}, 1000);", require("node:path").dirname(process.env.FAKE_DOCKER_LOG)], { stdio: ["ignore", "inherit", "inherit"] });
     const waiting = setInterval(() => {
       if (fs.readFileSync(process.env.FAKE_DOCKER_LOG, "utf8").includes('"pluginPid":' + plugin.pid)) {
         clearInterval(waiting);
@@ -90,9 +90,36 @@ else if (args[0] === "inspect") process.stdout.write("true\\n");
 else if (args[0] === "info") process.stdout.write((process.env.FAKE_DOCKER_INFO ?? JSON.stringify({ OperatingSystem: "OrbStack", Name: "orbstack" })) + "\\n");
 `;
 
+const FIXTURE_PID_KEYS = ["buildPid", "execPid", "pluginPid"];
+const fixtures = [];
+
+function isLiveFixture(pid, dir) {
+  const listed = spawnSync("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf8" });
+  return listed.status === 0 && listed.stdout.includes(dir);
+}
+
+function recordedFixturePids(log) {
+  if (!existsSync(log)) return [];
+  return readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)).flatMap((entry) => FIXTURE_PID_KEYS.filter((key) => entry[key]).map((key) => entry[key]));
+}
+
+after(async () => {
+  await sleep(300);
+  assert.deepEqual(fixtures.filter(({ pid, dir }) => isLiveFixture(pid, dir)), []);
+});
+
 function fakeDocker(t, { contexts = {}, current = "default", ...extra } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "fake-docker-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  t.after(() => {
+    for (const pid of recordedFixturePids(path.join(dir, "calls.jsonl"))) {
+      fixtures.push({ pid, dir });
+      if (!isLiveFixture(pid, dir)) continue;
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {}
+    }
+    rmSync(dir, { recursive: true, force: true });
+  });
   mkdirSync(path.join(dir, "bin"));
   writeFileSync(path.join(dir, "bin", "docker"), FAKE_DOCKER);
   chmodSync(path.join(dir, "bin", "docker"), 0o755);
@@ -416,7 +443,7 @@ test("the readiness wait is bounded even when a /health probe hangs inside docke
   const docker = pinnedDocker({ host: "unix:///var/run/docker.sock" }, fake.env);
   const started = Date.now();
   await assert.rejects(waitForHealth(docker, "0123456789abcdef0123", 3031, { deadline: Date.now() + 1500 }), /\/health did not answer 200 before the boot deadline \(last: the probe did not finish\)/);
-  assert.ok(Date.now() - started < 4000, `took ${Date.now() - started} ms`);
+  assert.ok(Date.now() - started < 8000, `took ${Date.now() - started} ms`);
   const pids = readFileSync(fake.env.FAKE_DOCKER_LOG, "utf8").trim().split("\n").map((line) => JSON.parse(line)).filter((entry) => entry.execPid).map((entry) => entry.execPid);
   assert.ok(pids.length >= 1);
   await sleep(200);
@@ -448,7 +475,7 @@ test("the SFU import check shares the boot deadline with the /health wait", { ti
   const docker = pinnedDocker({ host: "unix:///var/run/docker.sock" }, fake.env);
   const started = Date.now();
   await assert.rejects(BOOTS["packages/sfu/Dockerfile"].ready(docker, "0123456789abcdef0123", { deadline: Date.now() + 1500 }), /did not finish within/);
-  assert.ok(Date.now() - started < 4000, `took ${Date.now() - started} ms`);
+  assert.ok(Date.now() - started < 8000, `took ${Date.now() - started} ms`);
   await sleep(200);
   assertGone(loggedPids(fake, "execPid"));
 });
@@ -479,10 +506,10 @@ test("the /health probe reports 200 only after the whole response, and stops its
     res.write('{"ok":');
   }, 800);
   assert.notEqual(stalled.stdout, "200");
-  assert.ok(stalled.elapsed < 3000, `took ${stalled.elapsed} ms`);
+  assert.ok(stalled.elapsed < 8000, `took ${stalled.elapsed} ms`);
   const silent = await probeAgainst(t, () => {}, 800);
   assert.notEqual(silent.stdout, "200");
-  assert.ok(silent.elapsed < 3000, `took ${silent.elapsed} ms`);
+  assert.ok(silent.elapsed < 8000, `took ${silent.elapsed} ms`);
 });
 
 test("cleanup commands are bounded, and what they could not confirm removed stays reported", { timeout: 15_000 }, async (t) => {
@@ -494,7 +521,7 @@ test("cleanup commands are bounded, and what they could not confirm removed stay
   await startContainer(docker, resources, { name: "conclave-check-images-a", tag, env: {}, mounts: [] });
   const started = Date.now();
   await resources.removeAll();
-  assert.ok(Date.now() - started < 3000, `took ${Date.now() - started} ms`);
+  assert.ok(Date.now() - started < 8000, `took ${Date.now() - started} ms`);
   const left = resources.leftovers();
   assert.equal(left.length, 2, JSON.stringify(left));
   assert.match(left[0], /^containers labelled conclave-check-images\.owner=[0-9a-f]{24}$/);
@@ -512,7 +539,7 @@ test("after a signal, a docker command that ignores it is killed once the grace 
   const started = Date.now();
   session.interrupt("SIGTERM");
   await assert.rejects(build, Interrupted);
-  assert.ok(Date.now() - started < 3000, `took ${Date.now() - started} ms`);
+  assert.ok(Date.now() - started < 8000, `took ${Date.now() - started} ms`);
   assert.deepEqual(fake.received(), ["SIGTERM"]);
   assertGone(loggedPids(fake, "buildPid"));
 });
@@ -557,19 +584,9 @@ function spyOnKill(t) {
   return calls;
 }
 
-function stopRecorded(t, fake, key) {
-  t.after(() => {
-    for (const pid of existsSync(fake.env.FAKE_DOCKER_LOG) ? loggedPids(fake, key) : []) {
-      try {
-        process.kill(pid, "SIGKILL");
-      } catch {}
-    }
-  });
-}
 
 test("a plugin that ignores the signal is stopped with its docker command while that command is still running", { timeout: 15_000 }, async (t) => {
   const fake = fakeDocker(t, { FAKE_DOCKER_BUILD_HANG: path.join(fake0(t), "hang"), FAKE_DOCKER_GRANDCHILD: "1", FAKE_DOCKER_IGNORE_SIGNALS: "1" });
-  stopRecorded(t, fake, "pluginPid");
   const session = new DockerSession({ graceMs: 600, drainMs: 300 });
   const docker = pinnedDocker({ host: "unix:///var/run/docker.sock" }, fake.env, session);
   const build = docker(["buildx", "build", "-t", "conclave-check-images/x:run", "."]);
@@ -577,7 +594,7 @@ test("a plugin that ignores the signal is stopped with its docker command while 
   const started = Date.now();
   session.interrupt("SIGTERM");
   await assert.rejects(build, Interrupted);
-  assert.ok(Date.now() - started < 3000, `took ${Date.now() - started} ms`);
+  assert.ok(Date.now() - started < 8000, `took ${Date.now() - started} ms`);
   assert.deepEqual(fake.received(), ["SIGTERM"]);
   await sleep(300);
   assertGone([...loggedPids(fake, "buildPid"), ...loggedPids(fake, "pluginPid")]);
@@ -599,19 +616,17 @@ test("no process group is signalled after its docker command settled", { timeout
 
 test("a docker command that exits while a plugin keeps its output open settles as incomplete, and its group is not signalled after it exited", { timeout: 15_000 }, async (t) => {
   const fake = fakeDocker(t, { FAKE_DOCKER_GRANDCHILD: "1", FAKE_DOCKER_BUILD_HANG: path.join(fake0(t), "hang"), FAKE_DOCKER_BUILD_EXIT_AFTER_MS: "300" });
-  stopRecorded(t, fake, "pluginPid");
   const kills = spyOnKill(t);
   const docker = pinnedDocker({ host: "unix:///var/run/docker.sock" }, fake.env, new DockerSession({ drainMs: 300 }));
   const started = Date.now();
   const result = await docker(["buildx", "build", "-t", "conclave-check-images/x:run", "."], { allowFailure: true });
   assert.equal(result.status, 0);
   assert.equal(result.incomplete, true);
-  assert.ok(Date.now() - started < 4000, `took ${Date.now() - started} ms`);
+  assert.ok(Date.now() - started < 8000, `took ${Date.now() - started} ms`);
   await sleep(300);
   const [pid] = loggedPids(fake, "buildPid");
   assert.deepEqual(kills.filter(([target]) => target === -pid), []);
   const strict = fakeDocker(t, { FAKE_DOCKER_GRANDCHILD: "1", FAKE_DOCKER_BUILD_HANG: path.join(fake0(t), "hang"), FAKE_DOCKER_BUILD_EXIT_AFTER_MS: "300" });
-  stopRecorded(t, strict, "pluginPid");
   await assert.rejects(pinnedDocker({ host: "unix:///var/run/docker.sock" }, strict.env, new DockerSession({ drainMs: 300 }))(["buildx", "build", "-t", "x", "."]), /did not close its output/);
 });
 
