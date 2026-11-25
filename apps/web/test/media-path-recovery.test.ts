@@ -28,6 +28,7 @@ import {
   iceRestartBroughtMediaBack,
   advanceProducerDeliveries,
   producersNotReachingSfu,
+  producersUnprovenInWindow,
   readMediaPath,
   windowProvesDelivery,
   type SendingProducer,
@@ -1144,7 +1145,31 @@ describe("proving every producer reached the SFU over a short window", () => {
     ["a failing camera that sent nothing", { camera: [100, 100], sfuEnd: { mic: 90, camera: 90 }, mustProve: ["camera"] }, false],
     ["a failing camera that reached the SFU again", { mustProve: ["camera"] }, true],
     ["an SFU that cannot count, with newer reports", { sfuReports: false, sfuStart: null, sfuEnd: null }, true],
+    ["a failing camera that sent nothing while the microphone reached the SFU", { camera: [100, 100], sfuEnd: { mic: 90, camera: 90 }, mustProve: ["camera"] }, false],
   ])("%s: %s", (_name, over, proven) => {
     expect(prove(over)).toBe(proven);
+  });
+
+  it("names the producers it could not prove, so the next step still knows them", () => {
+    const start = reading(100, 50, 1_000);
+    const end = reading(100, 100, 2_000);
+    const window = {
+      start,
+      end,
+      producers,
+      sfuStart: { mic: 40, camera: 90 },
+      sfuEnd: { mic: 90, camera: 90 },
+      sfuReports: true,
+    };
+
+    expect(producersUnprovenInWindow({ ...window, mustProve: ["camera"] })).toEqual(["camera"]);
+    expect(producersUnprovenInWindow({ ...window, mustProve: [] })).toEqual([]);
+    expect(
+      producersUnprovenInWindow({
+        ...window,
+        end: readMediaPath([], "send"),
+        mustProve: ["camera"],
+      }),
+    ).toEqual(["camera"]);
   });
 });

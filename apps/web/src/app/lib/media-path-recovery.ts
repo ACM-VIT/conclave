@@ -171,15 +171,7 @@ export const advanceProducerDeliveries = (
   return next;
 };
 
-export const windowProvesDelivery = ({
-  start,
-  end,
-  producers,
-  sfuStart,
-  sfuEnd,
-  sfuReports,
-  mustProve,
-}: {
+export type DeliveryWindow = {
   start: MediaPathReading;
   end: MediaPathReading;
   producers: SendingProducer[];
@@ -187,20 +179,35 @@ export const windowProvesDelivery = ({
   sfuEnd: SenderPacketCounts | null;
   sfuReports: boolean;
   mustProve: string[];
-}): boolean =>
-  producers.every(({ producerId, mid }) => {
-    const before = mid ? start.sent[mid] : undefined;
-    const after = mid ? end.sent[mid] : undefined;
-    if (!before || !after) return true;
-    const sent = after.packetsSent > before.packetsSent;
-    if (!sent && !mustProve.includes(producerId)) return true;
-    if (!sfuReports) return newerReport(after.receiverReportAt, before.receiverReportAt);
-    const arrivedBefore = sfuStart?.[producerId];
-    const arrivedAfter = sfuEnd?.[producerId];
-    return (
-      arrivedBefore !== undefined && arrivedAfter !== undefined && arrivedAfter > arrivedBefore
-    );
-  });
+};
+
+export const producersUnprovenInWindow = ({
+  start,
+  end,
+  producers,
+  sfuStart,
+  sfuEnd,
+  sfuReports,
+  mustProve,
+}: DeliveryWindow): string[] =>
+  producers
+    .filter(({ producerId, mid }) => {
+      const before = mid ? start.sent[mid] : undefined;
+      const after = mid ? end.sent[mid] : undefined;
+      if (!before || !after) return mustProve.includes(producerId);
+      const sent = after.packetsSent > before.packetsSent;
+      if (!sent) return mustProve.includes(producerId);
+      if (!sfuReports) return !newerReport(after.receiverReportAt, before.receiverReportAt);
+      const arrivedBefore = sfuStart?.[producerId];
+      const arrivedAfter = sfuEnd?.[producerId];
+      return !(
+        arrivedBefore !== undefined && arrivedAfter !== undefined && arrivedAfter > arrivedBefore
+      );
+    })
+    .map(({ producerId }) => producerId);
+
+export const windowProvesDelivery = (window: DeliveryWindow): boolean =>
+  producersUnprovenInWindow(window).length === 0;
 
 export const producersNotReachingSfu = (deliveries: ProducerDeliveries): string[] =>
   Object.entries(deliveries)

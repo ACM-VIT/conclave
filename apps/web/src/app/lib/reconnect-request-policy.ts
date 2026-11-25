@@ -27,6 +27,7 @@ export type FailedMediaPath = {
   transportId: string;
   flowEpoch: number;
   generation: number;
+  failingProducers: string[];
 };
 
 /**

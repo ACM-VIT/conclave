@@ -110,6 +110,23 @@ describe("the media path recovery the hook runs", () => {
     expect(rig.log.some((line) => line.includes("Rebuilding the producer transport"))).toBe(true);
   });
 
+  it("still rebuilds when the failed camera goes quiet just before the rebuild", async () => {
+    rig = await startRig({ publish: true, camera: true });
+    await rig.join();
+    await rig.advance(5_000);
+    const send = rig.send!;
+    rig.route = "hold";
+    rig.droppedSendKinds.add("video");
+    expect(await waitFor(rig, () => rig!.heldRoutes.length > 0, 60_000)).toBe(true);
+    expect(rig.send).toBe(send);
+    rig.videoQuiet = true;
+    rig.route = "up";
+    rig.releaseHeldRoutes("answer");
+
+    expect(await waitFor(rig, () => rig!.send !== send, 10_000)).toBe(true);
+    expect(rig.log.some((line) => line.includes("not rebuilding it"))).toBe(false);
+  });
+
   it.each<[string, { dropEveryOther?: boolean; bursty?: boolean }]>([
     ["every other SFU reply goes missing", { dropEveryOther: true }],
     ["the camera sends in bursts", { bursty: true }],

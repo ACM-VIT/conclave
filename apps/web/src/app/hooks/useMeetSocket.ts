@@ -174,6 +174,7 @@ import {
   producersNotReachingSfu,
   readSenderPacketCounts,
   senderPacketCountsRequestFor,
+  producersUnprovenInWindow,
   type SendingProducer,
   windowProvesDelivery,
   screenPacketsGoMissing,
@@ -1206,7 +1207,7 @@ export function useMeetSocket({
   });
   const rebuildCredentialFetchRef = useRef(false);
   const carriesMediaNowRef = useRef<
-    (direction: "producer" | "consumer") => Promise<boolean>
+    (direction: "producer" | "consumer", mustProve: string[]) => Promise<boolean>
   >(async () => false);
   const reconnectBackoffCancelRef = useRef<(() => void) | null>(null);
   const manualReconnectRetryRequestedRef = useRef(false);
@@ -1589,6 +1590,7 @@ export function useMeetSocket({
       transportKind: "producer" | "consumer",
       transport: Transport,
       reason: string,
+      failingProducers: string[] = [],
     ) => {
       const currentTransport =
         transportKind === "producer"
@@ -1632,6 +1634,7 @@ export function useMeetSocket({
           transportId: transport.id,
           flowEpoch: mediaFlowEpochRef.current[transportKind],
           generation: reconnectGenerationRef.current,
+          failingProducers,
         },
         ...(step === "reconnect-relay-only" ? { relayOnly: { reason } } : {}),
       });
@@ -6606,7 +6609,9 @@ export function useMeetSocket({
       kind: "producer" | "consumer",
       transport: Transport,
       failingProducers: string[],
+      unproven: Set<string>,
     ): Promise<boolean> => {
+      for (const producerId of failingProducers) unproven.add(producerId);
       if (!carriedMediaOnce.has(transport)) return false;
       try {
         const before = (await readPath(kind, transport)).reading;
@@ -6642,11 +6647,9 @@ export function useMeetSocket({
         const ownAfter =
           now !== null && kind === "producer" ? await ownPackets() : NOT_ASKED;
         const after = now !== null ? (await readPath(kind, transport)).reading : null;
-        const producersDelivered = () =>
-          kind !== "producer" ||
-          midway === null ||
-          after === null ||
-          windowProvesDelivery({
+        const producersDelivered = () => {
+          if (kind !== "producer" || midway === null || after === null) return true;
+          const stillUnproven = producersUnprovenInWindow({
             start: midway,
             end: after,
             producers: sendingProducers(),
@@ -6655,6 +6658,10 @@ export function useMeetSocket({
             sfuReports: sfuReportsPackets(),
             mustProve: failingProducers,
           });
+          unproven.clear();
+          for (const producerId of stillUnproven) unproven.add(producerId);
+          return stillUnproven.length === 0;
+        };
         return iceRestartBroughtMediaBack({
           replaced,
           expectsMedia:
@@ -6814,7 +6821,8 @@ export function useMeetSocket({
       if (isSilentWhileConnected) {
         // ICE says connected but nothing arrives, so treat it as a failed
         // path: restart ICE, and rebuild if media still does not move.
-        if (await restartIceAndCheckMedia(kind, transport, failingProducers)) return;
+        const unproven = new Set<string>();
+        if (await restartIceAndCheckMedia(kind, transport, failingProducers, unproven)) return;
         if (!sampled()) return;
         escalateMediaPathFailure(
           kind,
@@ -6822,6 +6830,7 @@ export function useMeetSocket({
           kind === "producer"
             ? "Producer transport carried no media"
             : "Consumer transport carried no media",
+          [...unproven],
         );
         return;
       }
@@ -6840,10 +6849,11 @@ export function useMeetSocket({
         kind === "producer"
           ? "Producer transport could not connect"
           : "Consumer transport could not connect",
+        failingProducers,
       );
     };
 
-    carriesMediaNowRef.current = async (kind) => {
+    carriesMediaNowRef.current = async (kind, mustProve) => {
       const transport =
         kind === "producer" ? producerTransportRef.current : consumerTransportRef.current;
       if (!transport || transport.closed || transport.connectionState !== "connected") {
@@ -6873,7 +6883,7 @@ export function useMeetSocket({
             sfuStart: sentIn(ownStart),
             sfuEnd: sentIn(ownEnd),
             sfuReports: sfuReportsPackets(),
-            mustProve: [],
+            mustProve,
           })
         );
       } catch {
@@ -10082,7 +10092,11 @@ export function useMeetSocket({
         let outcome: ScopedRebuildOutcome;
         let failure: string | null = null;
         const carriesMediaNow =
-          !failedPathChanged() && (await carriesMediaNowRef.current(scopedDirection));
+          !failedPathChanged() &&
+          (await carriesMediaNowRef.current(
+            scopedDirection,
+            failedPath?.direction === scopedDirection ? failedPath.failingProducers : [],
+          ));
         if (reconnectGeneration !== reconnectGenerationRef.current) return;
         if (intentionalDisconnectRef.current) return;
         if (failedPathChanged() || carriesMediaNow) {

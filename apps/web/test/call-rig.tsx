@@ -371,6 +371,7 @@ export class CallRig {
   outgoingDropped = false;
   droppedSendKinds = new Set<string>();
   burstyVideo = false;
+  videoQuiet = false;
   dropEveryOtherOwnCountAnswer = false;
   ownCountQueries = 0;
   sendStatic = false;
@@ -508,7 +509,8 @@ export class CallRig {
       live.forEach((stream, index) => {
         const share = Math.floor(sent / live.length) + (index === 0 ? sent % live.length : 0);
         const bursting =
-          !this.burstyVideo || stream.producer.kind !== "video" || Math.floor(now / 5_000) % 2 === 0;
+          stream.producer.kind !== "video" ||
+          (!this.videoQuiet && (!this.burstyVideo || Math.floor(now / 5_000) % 2 === 0));
         const packets = this.sendStatic || !bursting ? 0 : Math.round((now - since) / 20);
         stream.bytesSent += share;
         stream.packetsSent += packets;
