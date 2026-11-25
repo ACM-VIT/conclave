@@ -754,7 +754,7 @@ describe("a room whose lease the shared registry forgot", () => {
     expect(room.ownershipGeneration).not.toBe(before);
     expect(sentOn(knocker)).toEqual({ told: [], disconnected: [] });
     const [request] = hostOnA.told("userRequestedJoin") as Array<{ userId: string }>;
-    expect(await hostOnA.send("admitUser", { userId: request!.userId })).toEqual(
+    expect(await hostOnA.send("admitUser", { userId: request.userId })).toEqual(
       expect.objectContaining({ success: true }),
     );
     expect(knocker.told("joinApproved")).toHaveLength(1);
