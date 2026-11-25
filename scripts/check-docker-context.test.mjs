@@ -8,6 +8,7 @@ import test from "node:test";
 import { artifactProblems, contextProblems, imagePackages, repoRoot, workspacePackages } from "./check-docker-context.mjs";
 import { rootContextBuilds } from "./docker-context/compose.mjs";
 import { DockerfileError, contextCopies } from "./docker-context/dockerfile.mjs";
+import { HEREDOC_CASES } from "./docker-context/heredoc-cases.mjs";
 import { dockerIgnoreMatcher, walkContext } from "./docker-context/dockerignore.mjs";
 import { UnsupportedShape } from "./docker-context/unsupported.mjs";
 
@@ -333,50 +334,12 @@ test("the pruned walk finds exactly the files a full walk finds, for random tree
   }
 });
 
-test("heredocs are read only from whole instruction arguments", () => {
-  const cases = [
-    ["shift operator in a quoted script", 'FROM node\nRUN node -e "console.log(1 << x)"\nCOPY a ./\n', [["a"]]],
-    ["shift operator glued to a word", "FROM node\nRUN echo a<<b\nCOPY a ./\n", [["a"]]],
-    ["here-string", "FROM node\nRUN cat <<< x\nCOPY a ./\n", [["a"]]],
-    ["bare << at the end", "FROM node\nRUN cat <<\nCOPY a ./\n", [["a"]]],
-    ["bare << that takes a word with <", "FROM node\nRUN cat << <<EOF\nCOPY a ./\n", [["a"]]],
-    ["chomp marker apart from its word", "FROM node\nRUN cat <<- EOF\nCOPY a ./\n", [["a"]]],
-    ["spaced RUN heredoc", "FROM node\nRUN cat << EOF\nCOPY not/a/copy ./\nEOF\nCOPY a ./\n", [["a"]]],
-    ["wide-spaced quoted RUN heredoc", "FROM node\nRUN cat <<   \"E F\"\nCOPY not/a/copy ./\nE F\nCOPY a ./\n", [["a"]]],
-    ["spaced fd heredoc", "FROM node\nRUN cat 3<< EOF\nCOPY not/a/copy ./\nEOF\nCOPY a ./\n", [["a"]]],
-    ["glued chomped heredoc", "FROM node\nRUN cat <<-EOF\n\tCOPY not/a/copy ./\n\tEOF\nCOPY a ./\n", [["a"]]],
-    ["unchomped heredoc ends only at an exact line", "FROM node\nRUN cat <<EOF\n\tEOF\n EOF\nCOPY not/a/copy ./\nEOF\nCOPY a ./\n", [["a"]]],
-    ["spaced inline-only COPY", "FROM node\nCOPY << EOF /app/note.txt\nx\nEOF\n", []],
-    ["spaced mixed COPY", "FROM node\nCOPY << EOF packages/sfu/package.json /app/\nx\nEOF\n", [["packages/sfu/package.json"]]],
-    ["empty double-quoted delimiter", 'FROM node\nRUN echo <<""\nCOPY a ./\n', [["a"]]],
-    ["empty single-quoted delimiter", "FROM node\nRUN echo <<''\nCOPY a ./\n", [["a"]]],
-    ["spaced empty double-quoted delimiter", 'FROM node\nRUN echo << ""\nCOPY a ./\n', [["a"]]],
-    ["spaced empty single-quoted delimiter", "FROM node\nRUN echo << ''\nCOPY a ./\n", [["a"]]],
-    ["chomped empty delimiter", 'FROM node\nRUN echo <<-""\nCOPY a ./\n', [["a"]]],
-    ["empty-delimiter COPY", 'FROM node\nCOPY <<"" a ./\n', [["<<", "a"]]],
-    ["variable delimiter ends at its literal text", "FROM node\nARG FOO=BAR\nRUN cat <<$FOO\nBAR\nCOPY not/a/copy ./\n$FOO\nCOPY a ./\n", [["a"]]],
-    ["braced variable delimiter", "FROM node\nRUN cat <<${X}\nCOPY not/a/copy ./\n${X}\nCOPY a ./\n", [["a"]]],
-    ["quoted variable delimiter", 'FROM node\nRUN cat <<"$X"\nCOPY not/a/copy ./\n$X\nCOPY a ./\n', [["a"]]],
-    ["backslash outside quotes is removed", "FROM node\nRUN cat <<a\\b\na\\b\nCOPY not/a/copy ./\nab\nCOPY a ./\n", [["a"]]],
-    ["backslash in double quotes stays unless it escapes", 'FROM node\nRUN cat <<"a\\b"\nab\nCOPY not/a/copy ./\na\\b\nCOPY a ./\n', [["a"]]],
-    ["escaped quote in double quotes", 'FROM node\nRUN cat <<"a\\"b"\nCOPY not/a/copy ./\na"b\nCOPY a ./\n', [["a"]]],
-    ["backslash in single quotes stays", "FROM node\nRUN cat <<'a\\b'\nab\nCOPY not/a/copy ./\na\\b\nCOPY a ./\n", [["a"]]],
-    ["backtick escape directive does not apply to delimiters", "# escape=`\nFROM node\nRUN cat <<a`b\nab\nCOPY not/a/copy ./\na`b\nCOPY a ./\n", [["a"]]],
-    ["backslash is still removed under the backtick escape", "# escape=`\nFROM node\nRUN cat <<a\\b\na\\b\nCOPY not/a/copy ./\nab\nCOPY a ./\n", [["a"]]],
-    ["mixed COPY whose source is named like the delimiter", "FROM node\nCOPY <<EOF EOF /app/\nx\nEOF\n", [["EOF"]]],
-    ["quoted heredoc marker in RUN", "FROM node\nRUN echo '<<EOF'\nCOPY a ./\n", [["a"]]],
-    ["heredoc marker in ENV", "FROM node\nENV X=<<EOF\nCOPY a ./\n", [["a"]]],
-    ["closed RUN heredoc", "FROM node\nRUN <<EOF\nCOPY not/a/copy ./\nEOF\nCOPY a ./\n", [["a"]]],
-    ["quoted and chomped RUN heredoc", "FROM node\nRUN cat <<-\"END\"\n\tCOPY not/a/copy ./\n\tEND\nCOPY a ./\n", [["a"]]],
-    ["fd heredoc", "FROM node\nRUN cat 3<<EOF\nx\nEOF\nCOPY a ./\n", [["a"]]],
-    ["inline-only COPY", "FROM node\nCOPY <<EOF /app/note.txt\nx\nEOF\n", []],
-    ["two inline COPY sources", "FROM node\nCOPY <<A <<B /app/\nx\nA\ny\nB\n", []],
-    ["mixed COPY", "FROM node\nCOPY <<EOF packages/sfu/package.json /app/\nx\nEOF\n", [["packages/sfu/package.json"]]],
-    ["mixed COPY with flags", "FROM node\nCOPY --chown=node <<'EOF' patches ./\nx\nEOF\n", [["patches"]]],
-  ];
-  for (const [name, text, expected] of cases) assert.deepEqual(copies(text), expected, name);
-  assert.throws(() => contextCopies("FROM node\nRUN cat <<EOF\nx\n"), DockerfileError);
-  assert.throws(() => contextCopies("FROM node\nRUN echo $((1 << 2))\nCOPY a ./\n"), /heredoc 2\)\) is never closed/);
-  assert.throws(() => contextCopies("FROM node\nRUN cat << EOF\nx\n"), DockerfileError);
-  assert.throws(() => contextCopies("FROM node\nCOPY <<EOF packages/sfu/package.json /app/\nx\n"), DockerfileError);
+test("heredocs match BuildKit for plain delimiters and fail closed on every other shape", () => {
+  for (const { name, text, copies: expected, unclosed, unsupported } of HEREDOC_CASES) {
+    if (unsupported) assert.throws(() => contextCopies(text), /unsupported heredoc/, name);
+    else if (unclosed) assert.throws(() => contextCopies(text), /is never closed/, name);
+    else assert.deepEqual(copies(text), expected, name);
+  }
+  assert.throws(() => contextCopies("# escape=`\nFROM node\nRUN cat <<EOF\nx\nEOF\n"), /^Error: line 3: unsupported heredoc under the escape directive `/);
+  assert.throws(() => contextCopies("# syntax=docker/dockerfile:1\nFROM node\nRUN cat <<$X\nx\n$X\n"), /^Error: line 3: unsupported heredoc delimiter \$X; use a plain word/);
 });

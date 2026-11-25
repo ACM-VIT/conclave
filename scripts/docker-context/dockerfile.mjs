@@ -3,6 +3,8 @@ import { UnsupportedShape } from "./unsupported.mjs";
 const DIRECTIVE = /^#\s*([a-zA-Z][a-zA-Z0-9_-]*)\s*=\s*(.*?)\s*$/;
 const HEREDOC = /^\d*<<(-?)([^<]*)$/;
 const HEREDOC_KEYWORDS = new Set(["RUN", "COPY", "ADD"]);
+const EMPTY_DELIMITER = /^(?:""|'')$/;
+const PLAIN_DELIMITER = /^(?:([A-Za-z0-9_.-]+)|"([A-Za-z0-9_.-]+)"|'([A-Za-z0-9_.-]+)')$/;
 const COPY_FLAGS = new Set(["from", "chown", "chmod", "link"]);
 const CONTEXT_READERS = new Set(["ADD", "ONBUILD"]);
 const UNKNOWN = Symbol("unknown");
@@ -17,33 +19,10 @@ function splitDirectives(lines) {
     if (!match || match[1].toLowerCase() in directives) break;
     directives[match[1].toLowerCase()] = match[2];
   }
-  return { directives, body: lines.slice(index) };
+  return { directives, body: lines.slice(index), offset: index };
 }
 
-function delimiterOf(word) {
-  let out = "";
-  let quote = null;
-  for (let i = 0; i < word.length; i += 1) {
-    const ch = word[i];
-    if (quote === "'") {
-      if (ch === "'") quote = null;
-      else out += ch;
-    } else if (quote === '"') {
-      if (ch === '"') quote = null;
-      else if (ch === "\\" && "\"\\$`".includes(word[i + 1] ?? "")) out += word[(i += 1)];
-      else out += ch;
-    } else if (ch === "'" || ch === '"') {
-      quote = ch;
-    } else if (ch === "\\" && i + 1 < word.length) {
-      out += word[(i += 1)];
-    } else {
-      out += ch;
-    }
-  }
-  return quote ? "" : out;
-}
-
-export function heredocsIn(words, escape = "\\") {
+export function heredocsIn(words, where = "") {
   const found = [];
   for (let i = 0; i < words.length; i += 1) {
     const match = HEREDOC.exec(words[i]);
@@ -58,19 +37,24 @@ export function heredocsIn(words, escape = "\\") {
       indices.push(i);
       if (name.includes("<")) continue;
     }
-    const names = splitWords(name, "\\");
-    const terminator = names.length === 1 ? delimiterOf(names[0]) : "";
-    if (terminator) found.push({ indices, chomp, terminator });
+    if (EMPTY_DELIMITER.test(name)) continue;
+    const plain = PLAIN_DELIMITER.exec(name);
+    if (!plain) throw new DockerfileError(`${where}unsupported heredoc delimiter ${name}; use a plain word such as EOF, optionally quoted whole`);
+    found.push({ indices, chomp, terminator: plain[1] ?? plain[2] ?? plain[3] });
   }
   return found;
 }
 
-function heredocsOf(text, escape) {
+function heredocsOf(text, escape, line) {
   const words = splitWords(text, escape);
-  return HEREDOC_KEYWORDS.has(words[0].toUpperCase()) ? heredocsIn(words.slice(1), escape) : [];
+  if (!HEREDOC_KEYWORDS.has(words[0].toUpperCase())) return [];
+  if (escape !== "\\" && text.includes("<<")) {
+    throw new DockerfileError(`line ${line}: unsupported heredoc under the escape directive ${escape}; use the default escape for a Dockerfile with heredocs`);
+  }
+  return heredocsIn(words.slice(1), `line ${line}: `);
 }
 
-function logicalInstructions(lines, escape) {
+function logicalInstructions(lines, escape, offset) {
   const instructions = [];
   let current = null;
   for (let i = 0; i < lines.length; i += 1) {
@@ -80,9 +64,9 @@ function logicalInstructions(lines, escape) {
     const continues = raw.trimEnd().endsWith(escape);
     const text = continues ? raw.trimEnd().slice(0, -1) : raw;
     if (current) current.text += text;
-    else current = { line: i + 1, text: text.trimStart() };
+    else current = { line: offset + i + 1, text: text.trimStart() };
     if (continues) continue;
-    const heredocs = heredocsOf(current.text, escape);
+    const heredocs = heredocsOf(current.text, escape, current.line);
     for (const { terminator, chomp } of heredocs) {
       for (i += 1; i < lines.length && (chomp ? lines[i].replace(/^\t+/, "") : lines[i]) !== terminator; i += 1);
       if (i >= lines.length) throw new DockerfileError(`line ${current.line}: heredoc ${terminator} is never closed`);
@@ -225,13 +209,13 @@ function assignments(rest, vars, escape, legacySeparator) {
 }
 
 export function contextCopies(text, buildArgs = {}) {
-  const { directives, body } = splitDirectives(text.replace(/^\uFEFF/, "").split(/\r?\n/));
+  const { directives, body, offset } = splitDirectives(text.replace(/^\uFEFF/, "").split(/\r?\n/));
   const escape = directives.escape ?? "\\";
   if (escape !== "\\" && escape !== "`") throw new DockerfileError(`unsupported escape directive "${escape}"`);
   const copies = [];
   const globalArgs = {};
   let stage = null;
-  for (const instruction of logicalInstructions(body, escape)) {
+  for (const instruction of logicalInstructions(body, escape, offset)) {
     const match = /^(\S+)\s*([\s\S]*)$/.exec(instruction.text);
     const keyword = match[1].toUpperCase();
     const args = match[2];
@@ -261,7 +245,7 @@ export function contextCopies(text, buildArgs = {}) {
       const exec = execForm(rest);
       const raw = exec ?? splitWords(rest, escape);
       if (raw.length < 2) throw new DockerfileError(`line ${instruction.line}: COPY needs a source and a destination`);
-      const inline = new Set(exec ? [] : heredocsIn(raw, escape).flatMap(({ indices }) => indices));
+      const inline = new Set(exec ? [] : heredocsIn(raw, `line ${instruction.line}: `).flatMap(({ indices }) => indices));
       const sources = raw
         .slice(0, -1)
         .filter((_, index) => !inline.has(index))
