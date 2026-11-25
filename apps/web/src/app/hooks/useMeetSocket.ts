@@ -19,6 +19,7 @@ import {
   buildScreenShareAudioOpusCodecOptions,
 } from "../lib/constants";
 import { emitWithAckTimeout } from "../lib/socket-ack";
+import { retireSocket } from "../lib/retire-socket";
 import { beginJoinRequest } from "../lib/join-requests";
 import { JOIN_ROOM_ACK_TIMEOUT_MS } from "../lib/join-timeouts";
 import {
@@ -2111,9 +2112,7 @@ export function useMeetSocket({
     localStreamRef.current = null;
     localTracks.forEach(stopLocalTrack);
 
-    socketRef.current?.disconnect();
-    socketRef.current = null;
-    onSocketReady?.(null);
+    retireSocket(socketRef, onSocketReady);
     deviceRef.current = null;
     webcamCodecPolicyRef.current = { ...BASELINE_WEBCAM_CODEC_POLICY };
 
@@ -7060,11 +7059,7 @@ export function useMeetSocket({
               resolve(socketRef.current);
               return;
             }
-            if (socketRef.current) {
-              socketRef.current.disconnect();
-              socketRef.current = null;
-              onSocketReady?.(null);
-            }
+            if (socketRef.current) retireSocket(socketRef, onSocketReady);
 
             setConnectionState("connecting");
 
@@ -8483,9 +8478,7 @@ export function useMeetSocket({
                     );
                     rerouted = true;
                     cleanupRoomResources({ resetRoomId: false });
-                    socketRef.current?.disconnect();
-                    socketRef.current = null;
-                    onSocketReady?.(null);
+                    retireSocket(socketRef, onSocketReady);
                     await connectToRoutedSfu(approvedRoomId, {
                       sfuUrlOverride: joinError.redirectUrl,
                     });
@@ -9112,9 +9105,7 @@ export function useMeetSocket({
             preserveMeetingState: true,
           });
           if (!canReuseSocket) {
-            socketRef.current?.disconnect();
-            socketRef.current = null;
-            onSocketReady?.(null);
+            retireSocket(socketRef, onSocketReady);
             await connectSocket(reconnectRoomId);
           } else {
             setMeetError(null);
@@ -9166,9 +9157,7 @@ export function useMeetSocket({
               resetRoomId: false,
               preserveMeetingState: true,
             });
-            socketRef.current?.disconnect();
-            socketRef.current = null;
-            onSocketReady?.(null);
+            retireSocket(socketRef, onSocketReady);
             await connectSocket(reconnectRoomId, {
               sfuUrlOverride: joinError.redirectUrl,
             });
@@ -9575,9 +9564,7 @@ export function useMeetSocket({
                 },
               );
               cleanupRoomResources({ resetRoomId: false });
-              socketRef.current?.disconnect();
-              socketRef.current = null;
-              onSocketReady?.(null);
+              retireSocket(socketRef, onSocketReady);
               await connectSocket(targetRoomId, {
                 sfuUrlOverride: joinError.redirectUrl,
               });

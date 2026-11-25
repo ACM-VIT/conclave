@@ -370,3 +370,99 @@ describe("a reconnect that starts over under the identity its token named", () =
     expect(refs.joinOptionsRef.current?.webinarInviteCode).toBeUndefined();
   });
 });
+
+describe("a tab that follows a redirect to another SFU", () => {
+  const sockets: Array<{
+    url: string;
+    connected: boolean;
+    handlers: Map<string, (...args: never[]) => void>;
+    joins: number;
+    on: ReturnType<typeof vi.fn>;
+    emit: ReturnType<typeof vi.fn>;
+    disconnect: ReturnType<typeof vi.fn>;
+  }> = [];
+  const io = vi.fn((url: string) => {
+    const handlers = new Map<string, (...args: never[]) => void>();
+    const socket = {
+      url,
+      connected: false,
+      handlers,
+      joins: 0,
+      on: vi.fn((event: string, handler: (...args: never[]) => void) => handlers.set(event, handler)),
+      emit: vi.fn((event: string, ...args: unknown[]) => {
+        if (event !== "joinRoom") return;
+        socket.joins += 1;
+        const answer = args.at(-1) as (response: unknown) => void;
+        answer(
+          url === "https://sfu-b.example.test"
+            ? { error: "Stopped here." }
+            : {
+                error: "Room is hosted by another SFU instance.",
+                roomId: "room-a",
+                redirectInstanceId: "sfu-b",
+                redirectUrl: "https://sfu-b.example.test",
+              },
+        );
+      }),
+      disconnect: vi.fn(() => {
+        if (!socket.connected) return;
+        socket.connected = false;
+        handlers.get("disconnect")?.(...(["io client disconnect"] as never[]));
+      }),
+    };
+    sockets.push(socket);
+    return socket;
+  });
+  const open = (index: number) => {
+    sockets[index].connected = true;
+    sockets[index].handlers.get("connect")?.(...([] as never[]));
+  };
+
+  it.each([
+    ["a waiting tab the host approved", "approval"],
+    ["a tab that reconnects", "reconnect"],
+  ] as const)("joins there once: %s", async (_name, path) => {
+    sockets.length = 0;
+    io.mockClear();
+    let refs!: ReturnType<typeof useMeetRefs>;
+    const h = createHarness({
+      adoptJoinIdentity: () => false,
+      joinMode: "webinar_attendee",
+      bypassMediaPermissions: true,
+      prewarm: { io, Device: class { handlerName = "Chrome111"; }, isReady: true },
+      captureRefs: (captured: ReturnType<typeof useMeetRefs>) => {
+        refs = captured;
+      },
+    } as unknown as Partial<Options>);
+    const connected = h.api.connectSocket("room-a");
+    await vi.waitFor(() => expect(io).toHaveBeenCalledTimes(1));
+    open(0);
+    await connected;
+    refs.currentRoomIdRef.current = "room-a";
+    refs.connectSocketRef.current = h.api.connectSocket;
+    const reconnectsStarted = vi.fn();
+    refs.handleReconnectRef.current = reconnectsStarted;
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    if (path === "approval") {
+      sockets[0].handlers.get("joinApproved")?.(...([] as never[]));
+    } else {
+      void h.api.retryReconnect();
+    }
+    await vi.waitFor(() => expect(io).toHaveBeenCalledTimes(2));
+    open(1);
+    await vi.waitFor(() => expect(sockets[1].joins).toBe(1));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    expect(sockets[0].disconnect).toHaveBeenCalled();
+    expect(reconnectsStarted).not.toHaveBeenCalled();
+    expect(io).toHaveBeenCalledTimes(2);
+    expect(sockets[0].joins).toBe(1);
+    expect(sockets[1].joins).toBe(1);
+    info.mockRestore();
+    error.mockRestore();
+    warn.mockRestore();
+  }, 10_000);
+});
