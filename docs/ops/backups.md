@@ -165,7 +165,8 @@ the SFU reads it) opens no database, so none is required for it. It keeps
 its records in one file, `SCHEDULING_PATH`, `SCHEDULED_MEETINGS_PATH` or
 `SCHEDULED_WEBINARS_PATH`, which must be set and lie inside the state dir: the
 SFU's default (`data/<store>.json` under its working directory) is inside the
-container, not on the volume, so the backup and the restore refuse it. The
+container, not on the volume, so the backup and a restore of files refuse it
+(a restore of SQLite or Redis alone does not read it). The
 file is backed up with the rest of the state dir. An SFU
 container is one whose env sets `SFU_INSTANCE_ID`, the rule the deploy uses to
 pick its SFU services; another container on the state dir (a maintenance one,

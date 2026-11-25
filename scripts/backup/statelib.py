@@ -695,6 +695,23 @@ def state_view_problems(state, containers):
     return problems
 
 
+def json_store_problems(state, container, containers, env=None):
+    env = os.environ if env is None else env
+    roots = mount_roots(state, container)
+    sources = [("the backup config", json_store_paths(env), lambda path: under_root(path, roots))]
+    for found in containers:
+        if found["relation"] in ("exact", "related") and is_sfu(found):
+            sources.append((f"the container {found['id']}", json_store_paths(found["env"]), lambda path, mounts=found["mounts"]: state_path(path, mounts, state)))
+    for where, picked, locate in sources:
+        for mode, variable, value in picked:
+            if not value:
+                raise Refused(f"{mode} keeps its file at the SFU's working directory default ({where}), outside the state dir, so it is not on the volume; set {variable} under {container}")
+            if not value.startswith("/"):
+                raise Refused(f"{variable}={value} ({where}) is not an absolute path, so it is not on the volume; set it under {container}")
+            if not locate(posixpath.normpath(value)):
+                raise Refused(f"{variable}={value} ({where}) is outside the state dir, so it is not on the volume; move it under {container}")
+
+
 def configured_stores(state, container, containers, env=None):
     """Every database a store opens, as this host's config sets it and as the
     env of each SFU container that mounts the state dir sets it, each store's
@@ -708,7 +725,6 @@ def configured_stores(state, container, containers, env=None):
     roots = mount_roots(state, container)
     sources = [("the backup config", variable, value, lambda path: under_root(path, roots))
                for variable, value in store_paths(env, f"{container.rstrip('/')}/conclave.sqlite")]
-    json_sources = [("the backup config", json_store_paths(env), lambda path: under_root(path, roots))]
     for found in containers:
         if found["relation"] in ("exact", "related") and is_sfu(found):
             # A container without any of the variables runs with whatever its
@@ -716,15 +732,7 @@ def configured_stores(state, container, containers, env=None):
             # read through that container's own mounts.
             sources += [(f"the container {found['id']}", variable, value, lambda path, mounts=found["mounts"]: state_path(path, mounts, state))
                         for variable, value in store_paths(found["env"])]
-            json_sources.append((f"the container {found['id']}", json_store_paths(found["env"]), lambda path, mounts=found["mounts"]: state_path(path, mounts, state)))
-    for where, picked, locate in json_sources:
-        for mode, variable, value in picked:
-            if not value:
-                raise Refused(f"{mode} keeps its file at the SFU's working directory default ({where}), outside the state dir, so it is not on the volume; set {variable} under {container}")
-            if not value.startswith("/"):
-                raise Refused(f"{variable}={value} ({where}) is not an absolute path, so it is not on the volume; set it under {container}")
-            if not locate(posixpath.normpath(value)):
-                raise Refused(f"{variable}={value} ({where}) is outside the state dir, so it is not on the volume; move it under {container}")
+
     stores = []
     for where, variable, value, locate in sources:
         shown = f"{variable}={value}" if variable != "the compose default" else f"the compose default {value}"

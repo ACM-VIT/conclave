@@ -2889,6 +2889,23 @@ test("listing the backups needs no Docker", needs, async () => {
   }
 });
 
+test("a SQLite-only restore is not stopped by a JSON store it does not restore", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, setDocker, backup, latestArchive, restore } = await setUp(root);
+    makeDb(path.join(state, "conclave.sqlite"), "backed up");
+    await backup("--local-only");
+    const archive = await latestArchive();
+    await setDocker([{ id: "sfu-a", mounts: [state], status: "exited", env: ["SFU_PORT=9", "SFU_INSTANCE_ID=sfu-a", "SCHEDULING_PERSISTENCE=json"] }]);
+    await rm(path.join(state, "conclave.sqlite"));
+    await restore("--file", archive, "--only", "sqlite", "--yes");
+    assert.deepEqual(rows(path.join(state, "conclave.sqlite")), ["backed up"]);
+    await assert.rejects(restore("--file", archive, "--only", "files", "--yes"), /SCHEDULING_PERSISTENCE=json keeps its file at the SFU's working directory default/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 describe("backup and restore", { concurrency: 6 }, () => {
   for (const args of queued) nodeTest(...args);
 });

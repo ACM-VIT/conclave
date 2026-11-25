@@ -54,6 +54,7 @@ from statelib import (  # noqa: E402
     database_paths,
     docker_containers,
     folded,
+    json_store_problems,
     log,
     mount_roots,
     open_dir,
@@ -852,6 +853,8 @@ def restore(args):
         missing = coverage_problems(archive, args.state, args.container)
         if missing:
             raise Refused("\n".join(missing + ["use a backup that has it, or leave SQLite out with --only redis,files (or --only files); nothing was changed"]))
+    if "files" in wants:
+        json_store_problems(args.state, args.container, state_mounts(docker_containers(), args.state))
     redis = None
     if "redis" in wants:
         if os.environ.get("REDIS_SOURCE_URL") and not archive.has_redis:

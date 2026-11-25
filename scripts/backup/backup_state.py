@@ -43,6 +43,7 @@ from statelib import (  # noqa: E402
     docker_containers,
     is_database_name,
     is_sfu,
+    json_store_problems,
     log,
     mount_roots,
     name_room,
@@ -216,7 +217,9 @@ def preflight_command(state, container, local_dir):
         local = os.path.realpath(local_dir)
         if within(local, real) or within(real, local):
             raise Refused(f"BACKUP_LOCAL_DIR ({local_dir}) and the state dir ({state}) overlap; keep the archives outside the state dir")
-        configured = [store["rel"] for store in configured_stores(state, container, state_mounts(docker_containers(), state))]
+        containers = state_mounts(docker_containers(), state)
+        configured = [store["rel"] for store in configured_stores(state, container, containers)]
+        json_store_problems(state, container, containers)
         plan(state_fd, state, mount_roots(state, container), configured)
     finally:
         os.close(state_fd)
