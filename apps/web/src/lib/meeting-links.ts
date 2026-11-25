@@ -1,6 +1,6 @@
 import {
   canonicalizeSfuClientId,
-  CONCLAVE_SFU_CLIENT_ID,
+  resolveBrowserSfuClientId,
 } from "@/lib/sfu-client-id";
 
 type MeetingLinkInput = {
@@ -11,7 +11,7 @@ type MeetingLinkInput = {
 export const buildMeetingPath = (meeting: MeetingLinkInput): string => {
   const path = `/${encodeURIComponent(meeting.roomCode)}`;
   const clientId = canonicalizeSfuClientId(meeting.clientId);
-  if (!clientId || clientId === CONCLAVE_SFU_CLIENT_ID) {
+  if (!clientId || clientId === resolveBrowserSfuClientId()) {
     return path;
   }
   return `${path}?clientId=${encodeURIComponent(clientId)}`;
