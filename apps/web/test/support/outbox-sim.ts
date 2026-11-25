@@ -33,6 +33,7 @@ export type SimResult = {
   closes: number;
   races: number;
   throttles: number;
+  lockRejects: number;
 };
 
 const START = Date.parse("2026-11-23T00:00:00.000Z");
@@ -88,10 +89,11 @@ export type Profile = {
   noLocks: boolean;
   raceRate: number;
   throttleRate: number;
+  lockRejectRate: number;
   activeMs: number;
 };
 
-const profileOf = (rng: () => number): Omit<Profile, "beaconLimitRate" | "noLocks" | "raceRate" | "throttleRate"> => ({
+const profileOf = (rng: () => number): Omit<Profile, "beaconLimitRate" | "noLocks" | "raceRate" | "throttleRate" | "lockRejectRate"> => ({
   maxTabs: 1 + Math.floor(rng() * 3),
   refuseRate: rng() < 0.4 ? 0 : rng() * 0.5,
   slowRate: rng() * 0.3,
@@ -110,7 +112,7 @@ export type ScriptedReply = { latency: number; status: number | null; retryAfter
 
 export type ScriptedAction = {
   at: number;
-  act: "open" | "emit" | "hide" | "show" | "close" | "refuseNext";
+  act: "open" | "emit" | "hide" | "show" | "close" | "refuseNext" | "rejectLock";
   tab: number;
   count?: number;
   throttled?: boolean;
@@ -129,6 +131,7 @@ export async function simulate(
   const beaconRng = rngOf(seed ^ 0x5bd1e995);
   const lockRng = rngOf(seed ^ 0x27d4eb2f);
   const raceRng = rngOf(seed ^ 0x2545f491);
+  const lockRejectRng = rngOf(seed ^ 0x165667b1);
   const between = (low: number, high: number) => low + rng() * (high - low);
   const scriptedEnd = scenario.actions ? Math.max(...scenario.actions.map((action) => action.at)) + 1 : null;
   const profile: Profile = {
@@ -137,6 +140,7 @@ export async function simulate(
     noLocks: lockRng() < 0.25,
     raceRate: raceRng() < 0.4 ? 0 : 0.005 + raceRng() * 0.05,
     throttleRate: raceRng() * 0.4,
+    lockRejectRate: lockRejectRng() < 0.3 ? 0.02 + lockRejectRng() * 0.08 : 0,
     ...(scriptedEnd === null ? {} : { activeMs: scriptedEnd }),
     ...scenario.profile,
   };
@@ -175,10 +179,13 @@ export async function simulate(
   let exactCounts = true;
   const lostAtClose = new Set<string>();
   const waitUntil = new Map<string, number>();
-  type LateWait = { key: string; until: number; at: number; tab: Tab; state: "pending" | "bound" | "running" | "carried" | "lost" };
+  type LateWait = { key: string; until: number; at: number; tab: Tab; owed: boolean; state: "pending" | "bound" | "running" | "carried" | "lost" };
   const lateWaits: LateWait[] = [];
   let writingFor: LateWait | null = null;
   let refuseNext = 0;
+  let rejectLocks = 0;
+  let lockRejects = 0;
+  let lastLockRejectAt = Number.NEGATIVE_INFINITY;
   const beaconedAt = new Map<string, number>();
   let refusingUntil = 0;
   const failures = new Map<string, { count: number; at: number }>();
@@ -257,10 +264,13 @@ export async function simulate(
     clear: () => items.clear(),
   });
 
-  const lateWaitRun = (tab: Tab, run: () => Promise<void>): (() => Promise<void>) => {
-    const late = lateWaits.find((wait) => wait.tab === tab && wait.state === "pending" && wait.at === clock);
+  const lateWaitFor = (tab: Tab) => {
+    const late = lateWaits.find((wait) => wait.tab === tab && wait.state === "pending" && (wait.owed || wait.at === clock));
+    if (late) late.state = "bound";
+    return late ?? null;
+  };
+  const lateWaitRun = (late: LateWait | null, run: () => Promise<void>): (() => Promise<void>) => {
     if (!late) return run;
-    late.state = "bound";
     return () => {
       if (![...items.values()].some((value) => keyOfStored(value) === late.key)) {
         late.state = "lost";
@@ -417,7 +427,7 @@ export async function simulate(
           if (outcome.retryAfter !== null) {
             const until = clock + Math.min(Number(outcome.retryAfter) * 1000, MAX_WAIT_MS);
             if (request.latest) waitUntil.set(key, Math.max(waitUntil.get(key) ?? 0, until));
-            else lateWaits.push({ key, until, at: clock, tab, state: "pending" });
+            else lateWaits.push({ key, until, at: clock, tab, owed: false, state: "pending" });
           }
           failed(request);
         }
@@ -431,7 +441,7 @@ export async function simulate(
     retryAfters += 1;
     const until = clock + Math.min(Number(retryAfter) * 1000, MAX_WAIT_MS);
     const sentSince = (requests.get(key) ?? []).some((request) => request.sentAt > sentAt);
-    if (sentSince) lateWaits.push({ key, until, at: clock, tab, state: "pending" });
+    if (sentSince) lateWaits.push({ key, until, at: clock, tab, owed: false, state: "pending" });
     else waitUntil.set(key, Math.max(waitUntil.get(key) ?? 0, until));
   };
   const beaconFor = (tab: Tab) => (body: string): Promise<Reply | null> | null => {
@@ -501,7 +511,19 @@ export async function simulate(
       newId: () => `sim-${seed}-${++ids}`,
       store: outboxModule.createBatchStore(() => storageFor(tab)),
       lock: (granted: () => Promise<void>) => {
-        const run = lateWaitRun(tab, granted);
+        const late = lateWaitFor(tab);
+        if (!profile.noLocks && (rejectLocks > 0 || (profile.lockRejectRate > 0 && lockRejectRng() < profile.lockRejectRate))) {
+          if (rejectLocks > 0) rejectLocks -= 1;
+          lockRejects += 1;
+          lastLockRejectAt = clock;
+          if (late) {
+            late.state = "pending";
+            late.owed = true;
+          }
+          note(`tab${tab.id} lock request rejected`);
+          return Promise.reject(new DOMException("The lock request was aborted.", "AbortError"));
+        }
+        const run = lateWaitRun(late, granted);
         if (profile.noLocks) {
           void run();
           return;
@@ -686,6 +708,7 @@ export async function simulate(
           racePlanned = null;
         } else if (action.act === "show") showTab(tab);
         else if (action.act === "refuseNext") refuseNext += action.count ?? 1;
+        else if (action.act === "rejectLock") rejectLocks += action.count ?? 1;
         else closeTab(tab);
       });
     }
@@ -721,7 +744,7 @@ export async function simulate(
       await drain();
     }
     const openTabs = tabs.filter((tab) => tab.open);
-    if (openTabs.some((tab) => tab.throttledFrom === null)) {
+    if (openTabs.some((tab) => tab.throttledFrom === null) && clock - lastLockRejectAt > 35_000) {
       const stuck = savedWithoutOwner();
       if (stuck) {
         violate("saved batch left with no owner", stuck);
@@ -739,6 +762,8 @@ export async function simulate(
     }
   }
 
+  const leftInStorage = [...items.keys()].filter((key) => key.startsWith("conclave:telemetry:batch:"));
+  if (leftInStorage.length > 0) violate("saved batch left in storage at the end", leftInStorage[0].slice("conclave:telemetry:batch:".length));
   const left = unsettled();
   if (exactCounts) {
     if (left.length > 0) violate("never delivered or counted", `${left.length} reports, first ${left[0]}`);
@@ -766,5 +791,6 @@ export async function simulate(
     closes,
     races,
     throttles,
+    lockRejects,
   };
 }

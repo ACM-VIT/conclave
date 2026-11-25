@@ -1,6 +1,6 @@
 import type { Scenario } from "./outbox-sim";
 
-export type ThreadCase = { name: string; thread: string; head: string; seed: number; scenario: Scenario };
+export type ThreadCase = { name: string; thread: string; head: string; seed: number; scenario: Scenario; posts?: number };
 
 const quiet = {
   refuseRate: 0,
@@ -10,10 +10,80 @@ const quiet = {
   noLocks: false,
   raceRate: 0,
   throttleRate: 0,
+  lockRejectRate: 0,
   maxTabs: 3,
 };
 
 export const THREAD_CASES: ThreadCase[] = [
+  {
+    name: "a delivered answer whose lock request is refused is kept and applied, and nothing is sent again",
+    thread: "Sol delta review of #265 at ee08a3c9, finding 1 (200)",
+    head: "ee08a3c9",
+    seed: 2026112504,
+    posts: 2,
+    scenario: {
+      profile: { ...quiet, lockRejectRate: 0 },
+      actions: [
+        { at: 0, act: "open", tab: 1 },
+        { at: 1000, act: "emit", tab: 1, count: 2 },
+        { at: 1500, act: "hide", tab: 1 },
+        { at: 2000, act: "show", tab: 1 },
+        { at: 3500, act: "rejectLock", tab: 1, count: 1 },
+      ],
+      replies: [
+        { latency: 3000, status: 200 },
+        { latency: 100, status: 200 },
+        { latency: 100, status: 200 },
+        { latency: 100, status: 200 },
+      ],
+    },
+  },
+  {
+    name: "a Retry-After whose lock request is refused is kept, and nothing goes before it",
+    thread: "Sol delta review of #265 at ee08a3c9, finding 1 (503 with Retry-After)",
+    head: "ee08a3c9",
+    seed: 2026112504,
+    posts: 3,
+    scenario: {
+      profile: { ...quiet, lockRejectRate: 0 },
+      actions: [
+        { at: 0, act: "open", tab: 1 },
+        { at: 1000, act: "emit", tab: 1, count: 2 },
+        { at: 1500, act: "hide", tab: 1 },
+        { at: 2000, act: "show", tab: 1 },
+        { at: 3500, act: "rejectLock", tab: 1, count: 1 },
+      ],
+      replies: [
+        { latency: 3000, status: 503, retryAfter: "60" },
+        { latency: 100, status: 200 },
+        { latency: 100, status: 200 },
+        { latency: 100, status: 200 },
+      ],
+    },
+  },
+  {
+    name: "a batch whose answer meets a run of refused lock requests is never stranded",
+    thread: "Sol delta review of #265 at ee08a3c9, finding 1 (expiry)",
+    head: "ee08a3c9",
+    seed: 2026112504,
+    posts: 3,
+    scenario: {
+      profile: { ...quiet, lockRejectRate: 0 },
+      actions: [
+        { at: 0, act: "open", tab: 1 },
+        { at: 1000, act: "emit", tab: 1, count: 2 },
+        { at: 1500, act: "hide", tab: 1 },
+        { at: 2000, act: "show", tab: 1 },
+        { at: 3500, act: "rejectLock", tab: 1, count: 8 },
+      ],
+      replies: [
+        { latency: 3000, status: 503 },
+        { latency: 100, status: 200 },
+        { latency: 100, status: 200 },
+        { latency: 100, status: 200 },
+      ],
+    },
+  },
   {
     name: "a late, shorter Retry-After never brings the new owner's wait forward",
     thread: "Neon final review of #265 at 71254939, minor 1 (never-earlier guard)",
