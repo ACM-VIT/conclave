@@ -28,10 +28,8 @@ export class Interrupted extends Error {
   }
 }
 
-function signalGroup(pid, signal) {
-  try {
-    process.kill(-pid, signal);
-  } catch {}
+export function completed(result) {
+  return result.status === 0 && !result.incomplete && !result.timedOut;
 }
 
 export class DockerSession {
@@ -39,7 +37,7 @@ export class DockerSession {
     this.graceMs = graceMs;
     this.drainMs = drainMs;
     this.signal = null;
-    this.children = new Set();
+    this.running = new Set();
   }
 
   get exitCode() {
@@ -49,12 +47,9 @@ export class DockerSession {
   interrupt(signal) {
     if (this.signal) return;
     this.signal = signal;
-    const groups = [...this.children].map((child) => child.pid);
-    for (const pid of groups) signalGroup(pid, signal);
-    if (groups.length) {
-      setTimeout(() => {
-        for (const pid of groups) signalGroup(pid, "SIGKILL");
-      }, this.graceMs).unref();
+    for (const command of this.running) {
+      command.signal(signal);
+      command.escalate(this.graceMs);
     }
   }
 
@@ -62,24 +57,33 @@ export class DockerSession {
     if (this.signal && !cleanup) return Promise.reject(new Interrupted(this.signal));
     return new Promise((resolve, reject) => {
       const child = spawn("docker", args, { cwd: repoRoot, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
-      if (!cleanup) this.children.add(child);
       let stdout = "";
       let stderr = "";
       child.stdout.setEncoding("utf8").on("data", (chunk) => (stdout += chunk));
       child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
+      let exited = false;
       let settled = false;
       let timedOut = false;
-      let drain = null;
-      const timer = timeoutMs === undefined ? null : setTimeout(() => {
-        timedOut = true;
-        signalGroup(child.pid, "SIGKILL");
-      }, Math.max(0, timeoutMs));
-      const finish = (status) => {
-        if (settled) return;
+      const timers = new Set();
+      const later = (ms, action) => timers.add(setTimeout(action, Math.max(0, ms)));
+      const command = {
+        signal: (name) => {
+          if (exited || settled) return;
+          try {
+            process.kill(-child.pid, name);
+          } catch {}
+        },
+        escalate: (ms) => later(ms, () => command.signal("SIGKILL")),
+      };
+      if (!cleanup) this.running.add(command);
+      const stop = () => {
         settled = true;
-        clearTimeout(timer);
-        clearTimeout(drain);
-        this.children.delete(child);
+        for (const timer of timers) clearTimeout(timer);
+        this.running.delete(command);
+      };
+      const finish = (status, incomplete) => {
+        if (settled) return;
+        stop();
         child.stdout.destroy();
         child.stderr.destroy();
         if (this.signal && !cleanup) return reject(new Interrupted(this.signal));
@@ -87,23 +91,27 @@ export class DockerSession {
           if (!allowFailure) return reject(new Error(`docker ${args.join(" ")} did not finish within ${timeoutMs / 1000} s`));
           return resolve({ status: null, timedOut: true, stdout, stderr });
         }
+        if (incomplete && !allowFailure) return reject(new Error(`docker ${args.join(" ")} exited but did not close its output within ${this.drainMs / 1000} s`));
         if (status !== 0 && !allowFailure) return reject(new Error(`docker ${args.join(" ")} failed:\n${stderr.trim()}`));
-        resolve({ status, stdout, stderr });
+        resolve(incomplete ? { status, incomplete: true, stdout, stderr } : { status, stdout, stderr });
       };
+      if (timeoutMs !== undefined) {
+        later(timeoutMs, () => {
+          timedOut = true;
+          if (exited) finish(null, false);
+          else command.signal("SIGKILL");
+        });
+      }
       child.on("error", (error) => {
         if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        this.children.delete(child);
+        stop();
         reject(error);
       });
       child.on("exit", (status) => {
-        drain = setTimeout(() => {
-          signalGroup(child.pid, "SIGKILL");
-          finish(status);
-        }, this.drainMs);
+        exited = true;
+        later(this.drainMs, () => finish(status, true));
       });
-      child.on("close", (status) => finish(status));
+      child.on("close", (status) => finish(status, false));
     });
   }
 }
@@ -171,6 +179,7 @@ function insideTimeout(remaining) {
 export function probeVerdict(probe) {
   const answer = probe.stdout.trim();
   if (probe.timedOut || answer === "timeout") return { healthy: false, last: "the probe did not finish" };
+  if (probe.incomplete) return { healthy: false, last: "the probe output was cut off" };
   if (!answer && probe.status !== 0) return { healthy: false, last: probe.stderr.trim().split("\n").at(-1) || "exec failed" };
   if (!PROBE_ANSWER.test(answer)) return { healthy: false, last: `unexpected probe output ${JSON.stringify(answer)}` };
   if (answer === "200") return { healthy: true, last: "HTTP 200" };
@@ -188,7 +197,7 @@ export async function waitForHealth(docker, id, port, { deadline = Date.now() + 
     if (remaining() <= 0) break;
     const state = await docker(["inspect", "-f", "{{.State.Running}}", id], { allowFailure: true, timeoutMs: remaining() });
     if (state.timedOut) break;
-    if (state.stdout.trim() !== "true") throw new Error(`the container exited before /health answered 200 (last: ${last})`);
+    if (!state.incomplete && state.stdout.trim() !== "true") throw new Error(`the container exited before /health answered 200 (last: ${last})`);
     await sleep(Math.max(0, Math.min(500, remaining())));
   }
   throw new Error(`/health did not answer 200 before the boot deadline (last: ${last})`);
@@ -252,20 +261,20 @@ export class RunResources {
     };
     for (const owner of [...this.owners]) {
       const listed = await cleanup(["ps", "-a", "-q", "--no-trunc", "--filter", `label=${owner}`]);
-      if (listed.status !== 0) continue;
+      if (!completed(listed)) continue;
       let removed = true;
       for (const id of listed.stdout.split("\n").map((line) => line.trim()).filter(Boolean)) {
-        removed = (await cleanup(["rm", "-f", id])).status === 0 && removed;
+        removed = completed(await cleanup(["rm", "-f", id])) && removed;
       }
       if (removed) this.owners.delete(owner);
     }
     for (const image of [...this.images]) {
-      if ((await cleanup(["rmi", image])).status === 0) {
+      if (completed(await cleanup(["rmi", image]))) {
         this.images.delete(image);
         continue;
       }
       const listed = await cleanup(["image", "ls", "-q", "--filter", `reference=${image}`]);
-      if (listed.status === 0 && !listed.stdout.trim()) this.images.delete(image);
+      if (completed(listed) && !listed.stdout.trim()) this.images.delete(image);
     }
   }
 
@@ -279,9 +288,9 @@ export async function startContainer(docker, resources, { name, tag, env, mounts
   const owner = resources.claimContainer();
   const created = await docker(["create", "--name", name, "--label", owner, ...envArgs, ...mounts, tag], { allowFailure: true });
   const id = created.stdout.trim();
-  if (created.status !== 0 || !/^[0-9a-f]{12,64}$/.test(id)) throw new Error(`docker create failed: ${created.stderr.trim() || id}`);
+  if (!completed(created) || !/^[0-9a-f]{12,64}$/.test(id)) throw new Error(`docker create failed: ${created.stderr.trim() || id}`);
   const started = await docker(["start", id], { allowFailure: true });
-  if (started.status !== 0) throw new Error(`docker start failed: ${started.stderr.trim()}`);
+  if (!completed(started)) throw new Error(`docker start failed: ${started.stderr.trim()}`);
   return id;
 }
 
@@ -294,7 +303,7 @@ async function checkImage(build, { docker, resources, builder, socket, noCache, 
     const built = await docker(["buildx", "build", "--builder", builder, "--load", "--progress=plain", ...(noCache ? ["--no-cache"] : []), ...args, ...(file ? ["-f", file] : []), "-t", tag, context], { allowFailure: true });
     const log = path.join(logDir, `${name}-build.log`);
     writeFileSync(log, `${built.stdout}${built.stderr}`);
-    return { tag, ok: built.status === 0, log };
+    return { tag, ok: completed(built), log };
   };
   const buildArgs = Object.entries(build.args).flatMap(([name, value]) => ["--build-arg", `${name}=${value}`]);
   const images = [
