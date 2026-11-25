@@ -1,6 +1,7 @@
 import { EMOJI_REACTIONS, type ReactionEmoji } from "./constants";
 import { isMediaCaptureTimeoutError } from "./media-capture-timeout";
 import { linkOriginIsKnown } from "../../lib/meeting-origin";
+import { canonicalizeSfuClientId } from "../../lib/sfu-client-id";
 import type {
   MeetError,
   MeetMediaDevice,
@@ -149,12 +150,12 @@ export function extractRoomCode(input: string): string {
 
 export type CodeFieldPaste =
   | { kind: "insert"; text: string }
-  | { kind: "replace"; code: string };
+  | { kind: "replace"; code: string; clientId: string | null };
 
 const ROOM_CODE_TEXT = /^[a-z0-9-]+$/i;
 const ROOM_CODE_SHAPE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const MEETING_LINK = new RegExp(
-  String.raw`^(?:(?<scheme>https?:)?\/\/)?(?<authority>[^\/?#\\\s@]+)\/(?<segment>[^\/?#\\\s]+)\/?(?:[?#]\S*)?$`,
+  String.raw`^(?:(?<scheme>https?:)?\/\/)?(?<authority>[^\/?#\\\s@]+)\/(?<segment>[^\/?#\\\s]+)\/?(?:\?(?<query>[^#\s]*))?(?:#\S*)?$`,
   "i",
 );
 export const APP_ROUTE_SEGMENTS = [
@@ -169,6 +170,8 @@ export const APP_ROUTE_SEGMENTS = [
 ] as const;
 const NOT_ROOM_CODES = new Set<string>(["null", "undefined", ...APP_ROUTE_SEGMENTS]);
 
+const isRoomCodeShaped = (code: string) => ROOM_CODE_SHAPE.test(code) && !NOT_ROOM_CODES.has(code);
+
 const linkRoomCode = (segment: string) => {
   let decoded: string;
   try {
@@ -178,7 +181,7 @@ const linkRoomCode = (segment: string) => {
   }
   if (!ROOM_CODE_TEXT.test(decoded)) return null;
   const code = decoded.toLowerCase();
-  return !NOT_ROOM_CODES.has(code) && ROOM_CODE_SHAPE.test(code) ? code : null;
+  return isRoomCodeShaped(code) ? code : null;
 };
 
 export function parseCodeFieldPaste(
@@ -187,11 +190,13 @@ export function parseCodeFieldPaste(
 ): CodeFieldPaste | null {
   const trimmed = text.trim();
   if (ROOM_CODE_TEXT.test(trimmed)) return { kind: "insert", text: trimmed.toLowerCase() };
-  const { scheme, authority, segment } = MEETING_LINK.exec(trimmed)?.groups ?? {};
+  const { scheme, authority, segment, query } = MEETING_LINK.exec(trimmed)?.groups ?? {};
   if (!authority || !segment) return null;
   if (!linkOriginIsKnown(scheme, authority, conclaveOrigins)) return null;
   const code = linkRoomCode(segment);
-  return code ? { kind: "replace", code } : null;
+  if (!code) return null;
+  const clientId = canonicalizeSfuClientId(new URLSearchParams(query ?? "").get("clientId"));
+  return { kind: "replace", code, clientId };
 }
 
 const URL_PUNCTUATION = /[:/.?#@%=&+~\\]/;
@@ -201,19 +206,26 @@ export const normalizeCodeField = (value: string) =>
     ? value
     : value.toLowerCase().replace(/(\S)\s+(?=\S)/g, "$1-").replace(/-+/g, "-");
 
-export type CodeFieldResolution = { code: string; tooLong: boolean };
+export type CodeFieldResolution = { code: string; clientId: string | null; tooLong: boolean };
 
 export function resolveCodeField(
   value: string,
   conclaveOrigins: readonly string[],
 ): CodeFieldResolution {
   const paste = parseCodeFieldPaste(value, conclaveOrigins);
-  const candidate = paste?.kind === "replace" ? paste.code : value.trim();
-  if (!ROOM_CODE_SHAPE.test(candidate)) return { code: "", tooLong: false };
+  const link = paste?.kind === "replace" ? paste : null;
+  const candidate = link ? link.code : value.trim();
+  const clientId = link?.clientId ?? null;
+  if (!isRoomCodeShaped(candidate)) return { code: "", clientId: null, tooLong: false };
   return candidate.length > ROOM_CODE_MAX_LENGTH
-    ? { code: "", tooLong: true }
-    : { code: candidate, tooLong: false };
+    ? { code: "", clientId, tooLong: true }
+    : { code: candidate, clientId, tooLong: false };
 }
+
+export const codeFieldTenant = (resolution: CodeFieldResolution, pageClientId: string) => {
+  const clientId = resolution.clientId ?? pageClientId;
+  return { clientId, onThisPage: clientId === pageClientId };
+};
 
 export const roomCodeFromField = (value: string, conclaveOrigins: readonly string[]) =>
   resolveCodeField(value, conclaveOrigins).code;

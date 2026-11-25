@@ -4,6 +4,7 @@ import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import {
   APP_ROUTE_SEGMENTS,
+  codeFieldTenant,
   normalizeCodeField,
   parseCodeFieldPaste,
   resolveCodeField,
@@ -305,6 +306,54 @@ describe("pasting into the join code field", () => {
     expect(linkCode("M%C3%9CNCHEN.example/abc-def")).toBeNull();
   });
 
+  it("refuses the app's own pages and empty-like words as typed codes too, with one rule", () => {
+    for (const word of ["null", "undefined", ...APP_ROUTE_SEGMENTS]) {
+      expect({ word, typed: resolveCodeField(word, KNOWN_ORIGINS) }).toEqual({
+        word,
+        typed: { code: "", clientId: null, tooLong: false },
+      });
+      expect({ word, link: linkCode(`https://conclave.acmvit.in/${word}`) }).toEqual({ word, link: null });
+    }
+    for (const word of ["nullable-room", "undefined-x", "true", "0", "null-0", "scheduled", "w-x", "api-team"]) {
+      expect({ word, code: roomCodeFromField(word, KNOWN_ORIGINS) }).toEqual({ word, code: word });
+    }
+  });
+
+  it("keeps the tenant a Conclave link names", () => {
+    const resolve = (link: string) => resolveCodeField(link, KNOWN_ORIGINS);
+    expect(resolve("https://conclave.acmvit.in/review-room?clientId=review-alt")).toEqual({
+      code: "review-room",
+      clientId: "review-alt",
+      tooLong: false,
+    });
+    expect(resolve("conclave.acmvit.in/review-room/?ref=chat&clientId=review-alt#top").clientId).toBe("review-alt");
+    expect(resolve("https://conclave.acmvit.in/review-room?clientId=default").clientId).toBe("conclave");
+    expect(resolve("https://conclave.acmvit.in/review-room?clientId=public").clientId).toBe("conclave");
+    expect(resolve("https://conclave.acmvit.in/review-room?clientId=a%20b")).toEqual({
+      code: "review-room",
+      clientId: null,
+      tooLong: false,
+    });
+    expect(resolve(`https://conclave.acmvit.in/review-room?clientId=${"x".repeat(65)}`).clientId).toBeNull();
+    expect(resolve("https://conclave.acmvit.in/review-room?clientId=first&clientId=second").clientId).toBe("first");
+    expect(resolve("https://conclave.acmvit.in/review-room#clientId=review-alt").clientId).toBeNull();
+    expect(resolve("review-room?clientId=review-alt")).toEqual({ code: "", clientId: null, tooLong: false });
+    expect(parseCodeFieldPaste("http://localhost:3615/review-room?clientId=review-alt", KNOWN_ORIGINS)).toEqual({
+      kind: "replace",
+      code: "review-room",
+      clientId: "review-alt",
+    });
+    expect(codeFieldTenant(resolve("https://conclave.acmvit.in/review-room?clientId=review-alt"), "conclave")).toEqual({
+      clientId: "review-alt",
+      onThisPage: false,
+    });
+    expect(codeFieldTenant(resolve("https://conclave.acmvit.in/review-room?clientId=default"), "conclave")).toEqual({
+      clientId: "conclave",
+      onThisPage: true,
+    });
+    expect(codeFieldTenant(resolve("review-room"), "review-alt")).toEqual({ clientId: "review-alt", onThisPage: true });
+  });
+
   it("ignores a link to any of the app's own top-level pages", () => {
     expect(TOP_LEVEL_ROUTES).toEqual([...APP_ROUTE_SEGMENTS].sort());
     for (const page of ["book", "w", "api", "sign-in", "privacy", "schedule", "sfu-admin", "delete-account"]) {
@@ -433,7 +482,7 @@ const typeIntoField = (text: string) => {
 
 const referenceResolution = (value: string, origins: readonly string[]) => {
   const candidate = expectedReplacement(value, origins) ?? value.trim();
-  const shaped = /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(candidate);
+  const shaped = /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(candidate) && !APP_PAGES.has(candidate);
   return {
     code: shaped && candidate.length <= 64 ? candidate : "",
     tooLong: shaped && candidate.length > 64,
@@ -515,27 +564,28 @@ describe("typing into the join code field", () => {
     const production = "https://conclave.acmvit.in/";
     const long = typeIntoField(`${production}${CODE_40}`);
     expect(long.value).toBe(`${production}${CODE_40}`);
-    expect(resolveCodeField(long.value, KNOWN_ORIGINS)).toEqual({ code: CODE_40, tooLong: false });
+    expect(resolveCodeField(long.value, KNOWN_ORIGINS)).toEqual({ code: CODE_40, clientId: null, tooLong: false });
     const boundaryCode = "b".repeat(64 - production.length);
     const boundary = typeIntoField(`${production}${boundaryCode}`);
     expect(boundary.value).toHaveLength(64);
-    expect(resolveCodeField(boundary.value, KNOWN_ORIGINS)).toEqual({ code: boundaryCode, tooLong: false });
+    expect(resolveCodeField(boundary.value, KNOWN_ORIGINS)).toEqual({ code: boundaryCode, clientId: null, tooLong: false });
     const past = typeIntoField(`${production}${boundaryCode}x`);
-    expect(resolveCodeField(past.value, KNOWN_ORIGINS)).toEqual({ code: `${boundaryCode}x`, tooLong: false });
+    expect(resolveCodeField(past.value, KNOWN_ORIGINS)).toEqual({ code: `${boundaryCode}x`, clientId: null, tooLong: false });
     const longest = "c".repeat(64);
-    expect(resolveCodeField(`${production}${longest}`, KNOWN_ORIGINS)).toEqual({ code: longest, tooLong: false });
-    expect(resolveCodeField(`${production}${longest}d`, KNOWN_ORIGINS)).toEqual({ code: "", tooLong: true });
-    expect(resolveCodeField(`${longest}d`, KNOWN_ORIGINS)).toEqual({ code: "", tooLong: true });
+    expect(resolveCodeField(`${production}${longest}`, KNOWN_ORIGINS)).toEqual({ code: longest, clientId: null, tooLong: false });
+    expect(resolveCodeField(`${production}${longest}d`, KNOWN_ORIGINS)).toEqual({ code: "", clientId: null, tooLong: true });
+    expect(resolveCodeField(`${longest}d`, KNOWN_ORIGINS)).toEqual({ code: "", clientId: null, tooLong: true });
     expect(parseCodeFieldPaste(`${production}${longest}d`, KNOWN_ORIGINS)).toEqual({
       kind: "replace",
       code: `${longest}d`,
+      clientId: null,
     });
-    expect(resolveCodeField("abc--def", KNOWN_ORIGINS)).toEqual({ code: "", tooLong: false });
+    expect(resolveCodeField("abc--def", KNOWN_ORIGINS)).toEqual({ code: "", clientId: null, tooLong: false });
     const foreign = `https://example.org/${"a".repeat(50)}`;
     expect(foreign).toHaveLength(70);
-    expect(resolveCodeField(foreign, KNOWN_ORIGINS)).toEqual({ code: "", tooLong: false });
-    expect(resolveCodeField("a--".repeat(22), KNOWN_ORIGINS)).toEqual({ code: "", tooLong: false });
-    expect(resolveCodeField(`${"a".repeat(65)}-`, KNOWN_ORIGINS)).toEqual({ code: "", tooLong: false });
+    expect(resolveCodeField(foreign, KNOWN_ORIGINS)).toEqual({ code: "", clientId: null, tooLong: false });
+    expect(resolveCodeField("a--".repeat(22), KNOWN_ORIGINS)).toEqual({ code: "", clientId: null, tooLong: false });
+    expect(resolveCodeField(`${"a".repeat(65)}-`, KNOWN_ORIGINS)).toEqual({ code: "", clientId: null, tooLong: false });
   });
 
   it("only tidies text typed before any URL punctuation", () => {
@@ -811,7 +861,7 @@ describe("origins a pasted meeting link may point at", () => {
       for (const link of links) {
         expect({ link, paste: parseCodeFieldPaste(link, getMeetingLinkOrigins()) }).toEqual({
           link,
-          paste: { kind: "replace", code: "abc-defg" },
+          paste: { kind: "replace", code: "abc-defg", clientId: null },
         });
       }
     }
