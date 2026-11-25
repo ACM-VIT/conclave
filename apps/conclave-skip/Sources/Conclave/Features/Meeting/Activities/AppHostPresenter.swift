@@ -141,6 +141,7 @@ enum AppWheelLimits {
     static let label = 48
     static let results = 25
     static let name = 64
+    static let pasteLines = 256
 }
 
 enum AppWatchLimits {
@@ -439,9 +440,9 @@ struct WheelNameDraft: Equatable {
         text = ""
     }
 
-    mutating func didSend(requestId: String, lines: [String]) {
+    mutating func didSend(requestId: String, lines: [String], rest: String = "") {
         sent.append(WheelNameSubmission(requestId: requestId, lines: lines))
-        text = ""
+        text = rest
     }
 
     mutating func reply(requestId: String, accepted: Bool, added: [Int]?) {
@@ -638,6 +639,15 @@ enum AppPagePolicy {
         return labels
     }
 
+    static func pasteBatch(_ lines: [String]) -> [String] {
+        var batch: [String] = []
+        for line in lines {
+            if batch.count >= AppWheelLimits.pasteLines { break }
+            batch.append(line)
+        }
+        return batch
+    }
+
     static func missingNames(roster: [String], entries: [WheelEntryModel]) -> [String] {
         var existing: [String] = []
         for entry in entries {
@@ -658,7 +668,7 @@ enum AppPagePolicy {
     }
 
     static func settlesAdd(ok: Bool, error: String) -> Bool {
-        return ok || error == "notApplied" || error == "noNames" || error == "full"
+        return ok || error == "notApplied" || error == "noNames" || error == "full" || error == "tooManyLines"
     }
 
     static func isEditCommand(_ kind: AppPageCommandKind) -> Bool {
@@ -1005,7 +1015,7 @@ final class AppHostPresenter {
     @discardableResult
     func addWheelNames(_ raw: String) -> ActivityTapResult {
         if !wheel.canEdit { return ActivityTapResult.explained }
-        let labels = AppPagePolicy.wheelLabels(raw)
+        let labels = AppPagePolicy.pasteBatch(AppPagePolicy.wheelLabels(raw))
         if labels.isEmpty { return ActivityTapResult.ignored }
         return sendPage(AppPageCommandKind.addEntries, target: "", payload: ["labels": labels], labels: labels)
     }
@@ -1020,15 +1030,23 @@ final class AppHostPresenter {
             wheelDraft.clear()
             return
         }
-        if addWheelNames(text) != ActivityTapResult.dispatched { return }
+        let lines = AppPagePolicy.wheelLabels(text)
+        let batch = AppPagePolicy.pasteBatch(lines)
+        var rest: [String] = []
+        var index = 0
+        for line in lines {
+            if index >= batch.count { rest.append(line) }
+            index += 1
+        }
+        if addWheelNames(batch.joined(separator: "\n")) != ActivityTapResult.dispatched { return }
         guard let command = pagePending.last else { return }
-        wheelDraft.didSend(requestId: command.requestId, lines: command.labels)
+        wheelDraft.didSend(requestId: command.requestId, lines: command.labels, rest: rest.joined(separator: "\n"))
     }
 
     @discardableResult
     func addEveryoneToWheel() -> ActivityTapResult {
         if !wheel.canEdit { return ActivityTapResult.explained }
-        let labels = AppPagePolicy.missingNames(roster: rosterNames(), entries: wheel.entries)
+        let labels = AppPagePolicy.pasteBatch(AppPagePolicy.missingNames(roster: rosterNames(), entries: wheel.entries))
         if labels.isEmpty { return ActivityTapResult.ignored }
         return sendPage(AppPageCommandKind.addEntries, target: "everyone", payload: ["labels": labels], labels: labels)
     }

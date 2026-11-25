@@ -17,7 +17,7 @@ const SETTINGS_KEY = "settings";
 const REMOVE_WINNER_KEY = "removeWinnerOnDone";
 const RETIRED_ROOT = "wheel.retired";
 const RETIRED_KEEP_MS = 24 * 60 * 60 * 1000;
-const MAX_ADD_INDEX = 4_096;
+const MAX_ADD_INDEX = WHEEL_LIMITS.pasteLines;
 
 export const MAX_WHEEL_ENTRIES = WHEEL_LIMITS.entries;
 export const MAX_ENTRY_LABEL_LENGTH = WHEEL_LIMITS.label;

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import {
   addEntries,
+  normalizeLabel,
   removeEntryById,
   clearEntries,
   createWheelDoc,
@@ -219,6 +220,52 @@ describe("native wheel add records", () => {
     add(doc, "app-other", "h-2", ["Cy"]);
     removeEntryById(doc, getEntries(doc)[0].id);
     expect([...doc.getMap("wheel.retired").keys()].sort()).toEqual(["app-other/h-1#0", "app-other/h-2#0"]);
+  });
+
+  it("refuses a paste longer than the line limit before adding anything, so no slot is ever unrecordable", () => {
+    const doc = createWheelDoc();
+    const flood = [...Array.from({ length: 4_096 }, () => "\u200B"), "Ada"];
+    expect(add(doc, "app-ada1", "h-1", flood)).toEqual({ ok: false, error: "tooManyLines", added: [] });
+    expect(labels(doc)).toEqual([]);
+    const edge = [...Array.from({ length: 255 }, () => "\u200B"), "Ada"];
+    expect(add(doc, "app-ada1", "h-2", edge)).toEqual({ ok: true, added: [255] });
+    expect(outcome(doc, "app-ada1", "h-2")).toEqual({ ok: true, added: [255] });
+    expect(add(doc, "app-ada1", "h-2", edge)).toEqual({ ok: true, added: [255] });
+    expect(labels(doc)).toEqual(["Ada"]);
+  });
+
+  it("points every added index at a name that is on the wheel, and never adds a replayed paste twice", () => {
+    let seed = 20261125;
+    const random = (limit: number): number => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed % limit;
+    };
+    const pool = ["Ada", " Bo ", "e\u0301", "\u200B", "\u0301", "   ", "\u200B\u200F", "\u2060", "\u0915\u094D\u0937", "Cy\u200B", "\t", "x".repeat(60)];
+    let checked = 0;
+    for (let run = 0; run < 250; run += 1) {
+      const doc = createWheelDoc();
+      addEntries(doc, Array.from({ length: random(70) }, (_, index) => `Old ${index}`));
+      const lines = Array.from({ length: 1 + random(300) }, () => pool[random(pool.length)]);
+      const before = getEntries(doc).length;
+      const result = add(doc, "app-r1", `h-${run}`, lines);
+      const created = getEntries(doc).filter((entry) => entry.addedBy === `app-r1/h-${run}`);
+      if (lines.length > 256) {
+        expect(result, `run ${run}`).toEqual({ ok: false, error: "tooManyLines", added: [] });
+        expect(getEntries(doc).length, `run ${run}`).toBe(before);
+        continue;
+      }
+      checked += 1;
+      const added = result.ok ? (result.added ?? []) : [];
+      expect(created.map((entry) => entry.slot), `run ${run}`).toEqual(added);
+      for (const entry of created) {
+        expect(entry.label, `run ${run} slot ${entry.slot}`).toBe(normalizeLabel(lines[entry.slot!]));
+        expect(entry.label.length, `run ${run}`).toBeGreaterThan(0);
+      }
+      const replay = add(doc, "app-r1", `h-${run}`, lines);
+      expect(getEntries(doc).length, `run ${run}`).toBe(before + created.length);
+      if (created.length > 0) expect(replay, `run ${run}`).toEqual({ ok: true, added });
+    }
+    expect(checked).toBeGreaterThan(100);
   });
 });
 

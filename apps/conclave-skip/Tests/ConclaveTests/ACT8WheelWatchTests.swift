@@ -603,6 +603,19 @@ struct ACT8WheelWatchTests {
         #expect(addRequests(wire).count == 2 && presenter.wheelDraft.text.isEmpty, "a timer for an answered request changes nothing")
     }
 
+    @Test func aPasteLongerThanTheLineLimitSendsTheLimitAndKeepsTheRestInTheDraft() throws {
+        let wire = Wire()
+        let (presenter, relay) = wheelReady(wire)
+        let names = (0..<300).map { "P" + String($0) }
+        presenter.editWheelDraft(names.joined(separator: "\n") + "\n")
+        let request = try #require(addRequests(wire).first)
+        #expect(request.labels == Array(names[0..<AppWheelLimits.pasteLines]))
+        #expect(presenter.wheelDraft.text == names[AppWheelLimits.pasteLines...].joined(separator: "\n"))
+        ackAdded(relay, request.id, ok: true, added: [0, 1])
+        #expect(presenter.wheelDraft.text == names[2...].joined(separator: "\n"), "unadded sent lines return ahead of the rest")
+        #expect(addRequests(wire).count == 1)
+    }
+
     @Test func noNameIsClippedBeforeTheWheelCutsIt() {
         let wire = Wire()
         let (presenter, _) = wheelReady(wire)

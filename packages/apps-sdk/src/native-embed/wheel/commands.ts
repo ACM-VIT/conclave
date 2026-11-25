@@ -18,9 +18,10 @@ import { payloadBoolean, payloadString, type CommandResult, type WheelAppStatus 
 
 export type SentName = { index: number; label: string };
 
-export const labelsFrom = (payload: Record<string, unknown>): SentName[] => {
+export const labelsFrom = (payload: Record<string, unknown>): SentName[] | null => {
   const raw = payload.labels;
   if (!Array.isArray(raw)) return [];
+  if (raw.length > WHEEL_LIMITS.pasteLines) return null;
   const names: SentName[] = [];
   (raw as unknown[]).forEach((value, index) => {
     if (names.length >= WHEEL_LIMITS.entries || typeof value !== "string") return;
@@ -32,6 +33,7 @@ export const labelsFrom = (payload: Record<string, unknown>): SentName[] => {
 
 const addOnce = (doc: Y.Doc, payload: Record<string, unknown>, requestKey?: string): CommandResult => {
   const names = labelsFrom(payload);
+  if (names === null) return { ok: false, error: "tooManyLines", added: [] };
   if (names.length === 0) return { ok: false, error: "noNames", added: [] };
   const origin = requestKey === undefined ? undefined : { key: requestKey, slots: names.map((name) => name.index) };
   const count = addEntries(doc, names.map((name) => name.label), origin);

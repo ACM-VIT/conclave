@@ -170,6 +170,7 @@ export const WHEEL_LIMITS = {
   label: 48,
   results: 25,
   name: 64,
+  pasteLines: 256,
 } as const;
 
 export const WATCH_LIMITS = {
