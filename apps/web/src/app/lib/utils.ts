@@ -157,15 +157,17 @@ const MEETING_LINK = new RegExp(
   String.raw`^(?:(?<scheme>https?:)?\/\/)?(?<authority>[^\/?#\\\s@]+)\/(?<segment>[^\/?#\\\s]+)\/?(?:[?#]\S*)?$`,
   "i",
 );
-const NOT_ROOM_CODES = new Set([
-  "null",
-  "undefined",
+export const APP_ROUTE_SEGMENTS = [
+  "api",
+  "book",
   "delete-account",
   "privacy",
   "schedule",
   "sfu-admin",
   "sign-in",
-]);
+  "w",
+] as const;
+const NOT_ROOM_CODES = new Set<string>(["null", "undefined", ...APP_ROUTE_SEGMENTS]);
 
 const linkRoomCode = (segment: string) => {
   let decoded: string;

@@ -1,6 +1,9 @@
 import { domainToASCII } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
 import {
+  APP_ROUTE_SEGMENTS,
   normalizeCodeField,
   parseCodeFieldPaste,
   resolveCodeField,
@@ -131,15 +134,22 @@ const linkCode = (text: string) => {
   return paste?.kind === "replace" ? paste.code : null;
 };
 
-const APP_PAGES = new Set([
-  "null",
-  "undefined",
-  "delete-account",
-  "privacy",
-  "schedule",
-  "sfu-admin",
-  "sign-in",
-]);
+const APP_DIR = join(__dirname, "../src/app");
+
+const routesUnder = (dir: string): boolean =>
+  readdirSync(dir, { withFileTypes: true }).some((entry) =>
+    entry.isDirectory()
+      ? routesUnder(join(dir, entry.name))
+      : /^(page|route)\.(t|j)sx?$/.test(entry.name),
+  );
+
+const TOP_LEVEL_ROUTES = readdirSync(APP_DIR, { withFileTypes: true })
+  .filter((entry) => entry.isDirectory() && /^[a-z0-9-]+$/.test(entry.name))
+  .filter((entry) => routesUnder(join(APP_DIR, entry.name)))
+  .map((entry) => entry.name)
+  .sort();
+
+const APP_PAGES = new Set(["null", "undefined", ...TOP_LEVEL_ROUTES]);
 
 const expectedReplacement = (
   text: string,
@@ -188,7 +198,8 @@ const PIECES = [
   "10.0.0.1", "127.0.0.1:3005", "999.999.999.999", "[::1]", "[:::]",
   "m\u00fcnchen.example", "xn--mnchen-3ya.example", "meet.example", "conclave.app",
   "conclave.acmvit.in", "Conclave.ACMVIT.in", "localhost:3615", "localhost:3005", "localhost",
-  "abc-defg-hij", "WXYZ", "new-", "-abc", "sign-in", "null", "w",
+  "abc-defg-hij", "WXYZ", "new-", "-abc", "sign-in", "null", "w", "book", "api",
+  "a".repeat(40), "a--".repeat(22), "e".repeat(64),
   "%2F", "%41bc", "%E0%A4%A", "%2e%2e",
   " ", "  ", "\n", "\t",
   "http:", "https:", "http:/", "https://", "http://", "//", "www.", "javascript:", "mailto:",
@@ -205,14 +216,15 @@ const HOSTS = [
   "[2001:db8::1]:8443", "[2001:0db8:0:0:0:0:0:1]:8443", "[2001:DB8:0::1]:8443", "[2001:db8::2]:8443",
   "127.1:3005", "conclave.example", "conclave.example:443", "conclave.example:80", "Conclave.Example",
   "conclave.acmvit.in:80", "staging.example", "localhost:80", "127.0.0.1:80", "0.0.0.11", "0x0.0.0.0xb",
-  "conclave%2eacmvit.in",
+  "conclave%2eacmvit.in", "m%c3%bcnchen.example", "M%C3%9CNCHEN.example",
   "conclave.acmvit.in", "Conclave.ACMVIT.in", "localhost:3615", "localhost:3005", "localhost",
   "11", "2026", "10.0.0.1", "127.0.0.1:3005", "[::1]", "m\u00fcnchen.example", "meet.example",
   "conclave.app", "999.999.999.999", "user@meet.example", "", " ",
 ];
 const SEGMENTS = [
   "abc-defg-hij", "23", "WXYZ", "sign-in", "null", "w/public-slug", "abc%2Ddefg", "%2F", "%E0%A4%A",
-  "", "abc--defg", "\u212A-abc", "abc_defg", "a b",
+  "", "abc--defg", "\u212A-abc", "abc_defg", "a b", "book", "api", "w",
+  "c".repeat(64), "d".repeat(65), "a--".repeat(22),
 ];
 const SUFFIXES = ["", "", "", "/", "?ref=chat", "#top", "//", " ", "\\", "\n"];
 
@@ -289,6 +301,16 @@ describe("pasting into the join code field", () => {
     expect(linkCode("xn--mnchen-3ya.example/abc-defg-hij")).toBe("abc-defg-hij");
     expect(linkCode("XN--MNCHEN-3YA.EXAMPLE/abc-defg-hij")).toBe("abc-defg-hij");
     expect(linkCode("b\u00fccher.example/abc-defg-hij")).toBeNull();
+    expect(linkCode("m%c3%bcnchen.example/abc-def")).toBeNull();
+    expect(linkCode("M%C3%9CNCHEN.example/abc-def")).toBeNull();
+  });
+
+  it("ignores a link to any of the app's own top-level pages", () => {
+    expect(TOP_LEVEL_ROUTES).toEqual([...APP_ROUTE_SEGMENTS].sort());
+    for (const page of ["book", "w", "api", "sign-in", "privacy", "schedule", "sfu-admin", "delete-account"]) {
+      expect({ page, code: linkCode(`https://conclave.acmvit.in/${page}`) }).toEqual({ page, code: null });
+      expect({ page, code: linkCode(`conclave.acmvit.in/${page}/`) }).toEqual({ page, code: null });
+    }
   });
 
   it("never lets URL rewriting turn a typed host into a known one", () => {
@@ -409,10 +431,17 @@ const typeIntoField = (text: string) => {
   return { value, steps };
 };
 
-const referenceFieldCode = (value: string, origins: readonly string[]) => {
-  const code = expectedReplacement(value, origins) ?? value.trim();
-  return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(code) && code.length <= 64 ? code : "";
+const referenceResolution = (value: string, origins: readonly string[]) => {
+  const candidate = expectedReplacement(value, origins) ?? value.trim();
+  const shaped = /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(candidate);
+  return {
+    code: shaped && candidate.length <= 64 ? candidate : "",
+    tooLong: shaped && candidate.length > 64,
+  };
 };
+
+const referenceFieldCode = (value: string, origins: readonly string[]) =>
+  referenceResolution(value, origins).code;
 
 const CODE_40 = "abcdefgh-abcdefgh-abcdefgh-abcdefgh-abcd";
 
@@ -426,6 +455,12 @@ describe("typing into the join code field", () => {
     expect(normalizeCodeField("abc--def")).toBe("abc-def");
     expect(normalizeCodeField("abc  -  def")).toBe("abc-def");
     expect(normalizeCodeField("abc_def")).toBe("abc_def");
+    for (const mark of [":", "/", ".", "?", "#", "@", "%", "=", "&", "+", "~", "\\"]) {
+      const typed = `Team--Name ${mark}X`;
+      expect({ mark, value: normalizeCodeField(typed) }).toEqual({ mark, value: typed });
+    }
+    expect(normalizeCodeField("mailto:Team--Name")).toBe("mailto:Team--Name");
+    expect(normalizeCodeField("LOCALHOST:3615")).toBe("LOCALHOST:3615");
     expect(normalizeCodeField("team--meet.example/other room")).toBe("team--meet.example/other room");
     expect(normalizeCodeField("https://Team--Meet.example/Other-Room")).toBe(
       "https://Team--Meet.example/Other-Room",
@@ -496,6 +531,11 @@ describe("typing into the join code field", () => {
       code: `${longest}d`,
     });
     expect(resolveCodeField("abc--def", KNOWN_ORIGINS)).toEqual({ code: "", tooLong: false });
+    const foreign = `https://example.org/${"a".repeat(50)}`;
+    expect(foreign).toHaveLength(70);
+    expect(resolveCodeField(foreign, KNOWN_ORIGINS)).toEqual({ code: "", tooLong: false });
+    expect(resolveCodeField("a--".repeat(22), KNOWN_ORIGINS)).toEqual({ code: "", tooLong: false });
+    expect(resolveCodeField(`${"a".repeat(65)}-`, KNOWN_ORIGINS)).toEqual({ code: "", tooLong: false });
   });
 
   it("only tidies text typed before any URL punctuation", () => {
@@ -551,6 +591,7 @@ describe("typing into the join code field", () => {
     const pick = (items: readonly string[]) => items[Math.floor(random() * items.length)];
     const failures: string[] = [];
     let linkCodes = 0;
+    let tooLong = 0;
     for (let run = 0; run < 20_000; run += 1) {
       let text = "";
       if (random() < 0.5) {
@@ -560,15 +601,24 @@ describe("typing into the join code field", () => {
         for (let i = 0; i < count; i += 1) text += pick(PIECES);
       }
       const value = normalizeCodeField(text);
+      const resolution = resolveCodeField(value, KNOWN_ORIGINS);
       const code = roomCodeFromField(value, KNOWN_ORIGINS);
       if (URL_PUNCTUATION.test(value) && code) linkCodes += 1;
+      if (resolution.tooLong) tooLong += 1;
       const stable = normalizeCodeField(value) === value;
-      if (!stable || code !== referenceFieldCode(value, KNOWN_ORIGINS)) {
-        failures.push(JSON.stringify({ text, value, code }));
+      const expected = referenceResolution(value, KNOWN_ORIGINS);
+      if (
+        !stable ||
+        code !== expected.code ||
+        resolution.code !== expected.code ||
+        resolution.tooLong !== expected.tooLong
+      ) {
+        failures.push(JSON.stringify({ text, value, resolution }));
       }
     }
     expect(failures).toEqual([]);
     expect(linkCodes).toBeGreaterThan(300);
+    expect(tooLong).toBeGreaterThan(100);
   });
 });
 
