@@ -57,7 +57,7 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
 
   const { live, isLive } = useSpinLive(doc, spin);
   const [animating, setAnimating] = useState(false);
-  const [heldSpinId, setHeldSpinId] = useState<string | null>(null);
+  const [resultSpinId, setResultSpinId] = useState<string | null>(null);
   const [highlightIndex, setHighlightIndex] = useState<number | null>(null);
   const [winner, setWinner] = useState<Winner | null>(null);
   const [overlay, setOverlay] = useState<Winner | null>(null);
@@ -97,10 +97,6 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
   }, [clearTimers]);
 
   const activeSpinId = spin?.spinId;
-  useEffect(() => {
-    if (live && activeSpinId) setHeldSpinId(activeSpinId);
-  }, [live, activeSpinId]);
-
   useEffect(() => {
     setOverlay(null);
     setHighlightIndex(null);
@@ -147,6 +143,7 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
       handledRef.current.add(settled.spinId);
       const winnerEntry = settled.entries[settled.winnerIndex];
       if (!winnerEntry) return;
+      setResultSpinId(settled.spinId);
       const liveEntries = getEntries(doc);
       const flashable = liveEntries.length === settled.entries.length && liveEntries[settled.winnerIndex]?.id === winnerEntry.id;
       if (flashable) setHighlightIndex(settled.winnerIndex);
@@ -165,6 +162,7 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
     const remaining = spin.startedAt + spin.durationMs - Date.now();
     if (remaining <= 0) return;
     handledRef.current.add(spin.spinId);
+    setResultSpinId(spin.spinId);
     reveal(spin);
     scheduleFinalize(spin, remaining);
   }, [reduceMotion, spin, reveal, scheduleFinalize]);
@@ -231,7 +229,7 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
     };
   }, [session, status, doc, requestSpin, isLive]);
 
-  const dialEntries = spin && (live || heldSpinId === spin.spinId) ? spin.entries : entries;
+  const dialEntries = spin && (live || resultSpinId === spin.spinId) ? spin.entries : entries;
 
   return (
     <div className="wheel-page">
@@ -254,7 +252,7 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
           aria-hidden="true"
           onClick={() => {
             setOverlay(null);
-            setHeldSpinId(null);
+            setResultSpinId(null);
           }}
         >
           <div className="wheel-winner-card">

@@ -3,18 +3,19 @@ import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
-import { addEntries, getEntries, startSpin, type WheelSpin } from "../../../packages/apps-sdk/src/apps/wheel/core/doc/index";
+import { addEntries, getEntries, removeEntryById, startSpin, type WheelSpin } from "../../../packages/apps-sdk/src/apps/wheel/core/doc/index";
 import type { WheelStage as RealWheelStage } from "../../../packages/apps-sdk/src/apps/wheel/web/components/WheelStage";
 import { encodeEnvelope } from "../../../packages/apps-sdk/src/native-embed/protocol";
 import { NativeEmbedSession } from "../../../packages/apps-sdk/src/native-embed/session";
 
 type StageProps = ComponentProps<typeof RealWheelStage>;
 
-const harness = vi.hoisted(() => ({ stage: null as StageProps | null }));
+const harness = vi.hoisted(() => ({ stage: null as StageProps | null, dials: [] as string[][] }));
 
 vi.mock("../../../packages/apps-sdk/src/apps/wheel/web/components/WheelStage", () => ({
   WheelStage: (props: StageProps) => {
     harness.stage = props;
+    harness.dials.push(props.entries.map((entry) => entry.label));
     return null;
   },
 }));
@@ -59,12 +60,12 @@ const advance = (ms: number) => {
   });
 };
 
-const spinBy = (entries: unknown[], winnerIndex: number): WheelSpin => {
+const spinBy = (entries: unknown[], winnerIndex: number, spinId = "spin-remote", startedAt = Date.now()): WheelSpin => {
   const spin = {
-    spinId: "spin-remote",
+    spinId,
     entries,
     winnerIndex,
-    startedAt: Date.now(),
+    startedAt,
     durationMs: DURATION,
     turns: 8,
     jitter: 0.5,
@@ -94,6 +95,7 @@ beforeEach(() => {
   vi.setSystemTime(START);
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   harness.stage = null;
+  harness.dials = [];
   doc = new Y.Doc();
   container = document.createElement("div");
   document.body.append(container);
@@ -145,5 +147,39 @@ describe("native wheel embed while a shared spin runs", () => {
 
     act(() => overlay!.click());
     expect(slices()).toEqual(["Ada", "Bo"]);
+  });
+
+  it("shows the current names, never an older spin's, when a finished spin arrives while the app was suspended", () => {
+    addEntries(doc, ["Ada", "Bo", "Cy"]);
+    mount(false);
+    spinBy(getEntries(doc), 2, "spin-a");
+    expect(stage().entries.map((entry) => entry.label)).toEqual(["Ada", "Bo", "Cy"]);
+
+    vi.setSystemTime(Date.now() + 60_000);
+    harness.dials = [];
+    act(() => {
+      doc.transact(() => {
+        removeEntryById(doc, getEntries(doc)[2].id);
+        startSpin(doc, {
+          spinId: "spin-b",
+          entries: getEntries(doc),
+          winnerIndex: 1,
+          startedAt: Date.now() - 20_000,
+          durationMs: DURATION,
+          turns: 8,
+          jitter: 0.5,
+          spunById: "someone-else",
+          spunByName: "Grace",
+        });
+      });
+    });
+    act(() => stage().onSettled(stage().spin!, false));
+    advance(DURATION + 5_000);
+    act(() => {
+      addEntries(doc, ["Dee"]);
+    });
+    expect(harness.dials.some((labels) => labels.join() === "Ada,Bo,Cy")).toBe(false);
+    expect(stage().entries.map((entry) => entry.label)).toEqual(["Ada", "Bo", "Dee"]);
+    expect(lastStatus()?.spinning).toBe(false);
   });
 });

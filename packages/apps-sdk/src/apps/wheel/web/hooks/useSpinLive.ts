@@ -21,16 +21,20 @@ export const useSpinLive = (doc: Y.Doc, spin: WheelSpin | null): SpinLive => {
     return current !== null && now < endOf(current, now);
   }, [doc, endOf]);
 
-  const [live, setLive] = useState(isLive);
+  const [liveSpinId, setLiveSpinId] = useState<string | null>(() => (isLive() ? getSpin(doc)?.spinId ?? null : null));
 
   useLayoutEffect(() => {
+    if (!spin) {
+      setLiveSpinId(null);
+      return;
+    }
     const now = Date.now();
-    const remaining = spin ? endOf(spin, now) - now : 0;
-    setLive(remaining > 0);
+    const remaining = endOf(spin, now) - now;
+    setLiveSpinId(remaining > 0 ? spin.spinId : null);
     if (remaining <= 0) return;
-    const timer = setTimeout(() => setLive(false), remaining);
+    const timer = setTimeout(() => setLiveSpinId((current) => (current === spin.spinId ? null : current)), remaining);
     return () => clearTimeout(timer);
   }, [spin, endOf]);
 
-  return { live, isLive };
+  return { live: spin !== null && liveSpinId === spin.spinId, isLive };
 };

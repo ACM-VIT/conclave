@@ -3,7 +3,7 @@ import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
-import { addEntries, getEntries, startSpin, type WheelSpin } from "../../../packages/apps-sdk/src/apps/wheel/core/doc/index";
+import { addEntries, getEntries, removeEntryById, startSpin, type WheelSpin } from "../../../packages/apps-sdk/src/apps/wheel/core/doc/index";
 import type { WheelPanel as RealWheelPanel } from "../../../packages/apps-sdk/src/apps/wheel/web/components/WheelPanel";
 import type { WheelStage as RealWheelStage } from "../../../packages/apps-sdk/src/apps/wheel/web/components/WheelStage";
 
@@ -167,5 +167,37 @@ describe("wheel web app while a shared spin runs, even when the dial reports it 
     expect(harness.stage!.entries.map((entry) => entry.label)).toEqual(["Ada", "Bo", ""]);
     endSharedSpin();
     expect(harness.stage!.entries.map((entry) => entry.label)).toEqual(["Ada", "Bo", ""]);
+  });
+
+  it("draws the newest spin, never an older one, when a finished spin arrives while the tab was suspended", () => {
+    startSharedSpin();
+    expect(harness.stage!.spin?.spinId).toBe("spin-remote");
+    vi.setSystemTime(Date.now() + 60_000);
+    const seen: string[][] = [];
+    act(() => {
+      harness.doc.transact(() => {
+        removeEntryById(harness.doc, getEntries(harness.doc)[2].id);
+        startSpin(harness.doc, {
+          spinId: "spin-b",
+          entries: getEntries(harness.doc),
+          winnerIndex: 1,
+          startedAt: Date.now() - 20_000,
+          durationMs: DURATION,
+          turns: 8,
+          jitter: 0.5,
+          spunById: "someone-else",
+          spunByName: "Grace",
+        } as WheelSpin);
+      });
+    });
+    seen.push(harness.stage!.entries.map((entry) => entry.label));
+    expect(harness.stage!.spin?.spinId).toBe("spin-b");
+    expect(panel().isSpinning).toBe(false);
+    act(() => {
+      vi.advanceTimersByTime(DURATION + 5_000);
+    });
+    seen.push(harness.stage!.entries.map((entry) => entry.label));
+    expect(seen).toEqual([["Cy", "Ada"], ["Cy", "Ada"]]);
+    expect(action("sort")!.disabled).toBe(false);
   });
 });
