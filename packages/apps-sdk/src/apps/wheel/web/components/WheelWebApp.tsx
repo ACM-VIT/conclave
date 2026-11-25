@@ -24,6 +24,7 @@ import {
   startSpin,
   type WheelSpin,
 } from "../../core/doc/index";
+import { useSpinLive } from "../hooks/useSpinLive";
 import { useWheelDocState } from "../hooks/useWheelDocState";
 import { WheelSounds } from "../sounds";
 import { GHOST_BUTTON, PRIMARY_BUTTON, SECONDARY_BUTTON } from "./buttons";
@@ -100,8 +101,7 @@ export function WheelWebApp() {
   const reducedMotion = useReducedMotion();
 
   const [isSpinning, setIsSpinning] = useState(false);
-  const isSpinningRef = useRef(isSpinning);
-  isSpinningRef.current = isSpinning;
+  const { live: spinLive, isLive } = useSpinLive(doc, spin);
   const [landedSpinId, setLandedSpinId] = useState<string | null>(null);
   const [revealedSpinId, setRevealedSpinId] = useState<string | null>(null);
   const [dismissedSpinId, setDismissedSpinId] = useState<string | null>(null);
@@ -170,7 +170,7 @@ export function WheelWebApp() {
   }, [shownSpinId, closeReveal]);
 
   const handleRequestSpin = useCallback(() => {
-    if (!canEdit || isSpinning || revealTimerRef.current) return;
+    if (!canEdit || isLive() || isSpinning || revealTimerRef.current) return;
     const liveEntries = getEntries(doc);
     if (liveEntries.length < 2) return;
 
@@ -187,7 +187,7 @@ export function WheelWebApp() {
       spunByName: user?.name ?? user?.email ?? "Someone",
     };
     startSpin(doc, record);
-  }, [canEdit, isSpinning, doc, user]);
+  }, [canEdit, isLive, isSpinning, doc, user]);
 
   const handleSettled = useCallback(
     (settled: WheelSpin, fresh: boolean) => {
@@ -259,7 +259,7 @@ export function WheelWebApp() {
   }, [doc, missingParticipantLabels]);
 
   const handleShuffle = useCallback(() => {
-    if (isSpinningRef.current) return;
+    if (isLive()) return;
     const current = getEntries(doc);
     if (current.length < 2) return;
     const shuffled = [...current];
@@ -268,17 +268,17 @@ export function WheelWebApp() {
       [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
     }
     replaceEntries(doc, shuffled);
-  }, [doc]);
+  }, [doc, isLive]);
 
   const handleSort = useCallback(() => {
-    if (isSpinningRef.current) return;
+    if (isLive()) return;
     const current = getEntries(doc);
     if (current.length < 2) return;
     const sorted = [...current].sort((a, b) =>
       a.label.localeCompare(b.label, undefined, { sensitivity: "base" })
     );
     replaceEntries(doc, sorted);
-  }, [doc]);
+  }, [doc, isLive]);
 
   const winnerOnWheel = Boolean(
     winner && entries.some((entry) => entry.id === winner.id)
@@ -459,7 +459,7 @@ export function WheelWebApp() {
       canEdit={canEdit}
       locked={locked}
       isAdmin={Boolean(isAdmin)}
-      isSpinning={isSpinning}
+      isSpinning={spinLive}
       soundOn={soundOn}
       removeWinnerOnDone={removeWinnerOnDone}
       missingParticipantCount={missingParticipantLabels.length}
@@ -467,12 +467,12 @@ export function WheelWebApp() {
       onAddEntries={(labels) => addEntries(doc, labels)}
       onAddParticipants={handleAddParticipants}
       onRemoveEntry={(entryId) => {
-        if (!isSpinningRef.current) removeEntryById(doc, entryId);
+        if (!isLive()) removeEntryById(doc, entryId);
       }}
       onShuffle={handleShuffle}
       onSort={handleSort}
       onClearEntries={() => {
-        if (!isSpinningRef.current) clearEntries(doc);
+        if (!isLive()) clearEntries(doc);
       }}
       onClearHistory={() => clearHistory(doc)}
       onToggleRemoveWinner={(value) => setRemoveWinnerOnDone(doc, value)}

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { WheelStage } from "../../apps/wheel/web/components/WheelStage";
+import { useSpinLive } from "../../apps/wheel/web/hooks/useSpinLive";
 import { useWheelDocState } from "../../apps/wheel/web/hooks/useWheelDocState";
 import { WheelSounds } from "../../apps/wheel/web/sounds";
 import {
@@ -54,9 +55,9 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
   const reduceMotion = host.reduceMotion;
   const { entries, spin, history, removeWinnerOnDone } = useWheelDocState(doc);
 
-  const [isSpinning, setIsSpinning] = useState(false);
-  const spinningRef = useRef(isSpinning);
-  spinningRef.current = isSpinning;
+  const { live, isLive } = useSpinLive(doc, spin);
+  const [animating, setAnimating] = useState(false);
+  const [heldSpinId, setHeldSpinId] = useState<string | null>(null);
   const [highlightIndex, setHighlightIndex] = useState<number | null>(null);
   const [winner, setWinner] = useState<Winner | null>(null);
   const [overlay, setOverlay] = useState<Winner | null>(null);
@@ -96,6 +97,10 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
   }, [clearTimers]);
 
   const activeSpinId = spin?.spinId;
+  useEffect(() => {
+    if (live && activeSpinId) setHeldSpinId(activeSpinId);
+  }, [live, activeSpinId]);
+
   useEffect(() => {
     setOverlay(null);
     setHighlightIndex(null);
@@ -171,7 +176,7 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
 
   const requestSpin = useCallback((): CommandResult => {
     if (!canEditRef.current) return { ok: false, error: "readOnly" };
-    if (isSpinning || revealTimerRef.current) return { ok: false, error: "busy" };
+    if (isLive() || animating || revealTimerRef.current) return { ok: false, error: "busy" };
     const liveEntries = getEntries(doc);
     if (liveEntries.length < 2) return { ok: false, error: "notEnoughNames" };
     const current = hostRef.current;
@@ -188,12 +193,12 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
     };
     startSpin(doc, record);
     return { ok: true };
-  }, [doc, isSpinning]);
+  }, [doc, isLive, animating]);
 
   const status = useMemo<WheelAppStatus>(
     () =>
-      wheelStatus({ entries, history, removeWinner: removeWinnerOnDone, sounds: soundOn, spinning: isSpinning, winner }),
-    [entries, history, removeWinnerOnDone, soundOn, isSpinning, winner],
+      wheelStatus({ entries, history, removeWinner: removeWinnerOnDone, sounds: soundOn, spinning: live, winner }),
+    [entries, history, removeWinnerOnDone, soundOn, live, winner],
   );
 
   useEffect(() => {
@@ -212,7 +217,7 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
       if (!session.isSynced && envelope.type !== "setSounds") return { ok: false, error: "notSynced" };
       if (EDIT_COMMANDS.has(envelope.type) && !canEditRef.current) return { ok: false, error: "readOnly" };
       return runWheelCommand(doc, envelope.type, payload, {
-        spinning: spinningRef.current,
+        spinning: isLive(),
         requestSpin,
         setSounds: (value) => {
           setSoundOn(value);
@@ -224,12 +229,14 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
     return () => {
       session.setCommandHandler(null);
     };
-  }, [session, status, doc, requestSpin]);
+  }, [session, status, doc, requestSpin, isLive]);
+
+  const dialEntries = spin && (live || heldSpinId === spin.spinId) ? spin.entries : entries;
 
   return (
     <div className="wheel-page">
       <WheelStage
-        entries={entries}
+        entries={dialEntries}
         spin={stageSpin}
         canSpin={canEdit && synced}
         sounds={soundsRef.current}
@@ -239,10 +246,17 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
           requestSpin();
         }}
         onSettled={handleSettled}
-        onSpinningChange={setIsSpinning}
+        onSpinningChange={setAnimating}
       />
       {overlay ? (
-        <div className="wheel-winner" aria-hidden="true" onClick={() => setOverlay(null)}>
+        <div
+          className="wheel-winner"
+          aria-hidden="true"
+          onClick={() => {
+            setOverlay(null);
+            setHeldSpinId(null);
+          }}
+        >
           <div className="wheel-winner-card">
             <span className="wheel-winner-label">{overlay.label}</span>
           </div>
