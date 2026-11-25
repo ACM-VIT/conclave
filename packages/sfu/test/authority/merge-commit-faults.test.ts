@@ -29,15 +29,25 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-type Fault = "merge" | "owner" | "project";
+type Fault = "merge" | "owner" | "project" | "ownerAtCommit" | "projectAtCommit";
 type Note = { id: string; subject: Subject; moved: boolean };
 
 const notesApp = (id: string, faults: { fault?: Fault; mergeBy?: number } = {}) => {
+  const calls = new Map<string, number>();
+  const nthCall = (kind: string, row: Note) => {
+    const name = `${kind} ${row.subject} ${row.id}`;
+    const count = (calls.get(name) ?? 0) + 1;
+    calls.set(name, count);
+    return count;
+  };
   const contract = defineContract({
     id,
     major: 1,
     surface: "panel",
-    actions: { note: { input: s.object({ id: s.string({ min: 1, max: 32 }) }), receipt: s.null() } },
+    actions: {
+      note: { input: s.object({ id: s.string({ min: 1, max: 32 }) }), receipt: s.null() },
+      refuse: { input: s.object({ id: s.string({ min: 1, max: 32 }) }), receipt: s.null() },
+    },
     queries: {},
     views: { mine: s.object({ id: s.string({ min: 1, max: 32 }) }) },
   });
@@ -55,6 +65,13 @@ const notesApp = (id: string, faults: { fault?: Fault; mergeBy?: number } = {}) 
           return null;
         },
       },
+      refuse: {
+        roles: ["moderator", "member"],
+        rate: { burst: 1_000, perSecond: 1_000 },
+        run() {
+          return reject("refused");
+        },
+      },
     },
     queries: {},
     onTimer: {},
@@ -64,10 +81,16 @@ const notesApp = (id: string, faults: { fault?: Fault; mergeBy?: number } = {}) 
         source: "notes",
         owner: (row) => {
           if (faults.fault === "owner" && row.moved) throw new Error(`${id}: the owner of a moved note failed`);
+          if (faults.fault === "ownerAtCommit" && row.moved && nthCall("owner", row) === 2) {
+            throw new Error(`${id}: the owner of a moved note failed while the merge committed`);
+          }
           return row.subject;
         },
         project: (row) => {
           if (faults.fault === "project" && row.moved) throw new Error(`${id}: a moved note failed to project`);
+          if (faults.fault === "projectAtCommit" && row.moved && nthCall("project", row) === 2) {
+            throw new Error(`${id}: a moved note failed to project while the merge committed`);
+          }
           return { key: row.id, value: { id: row.id } };
         },
       },
@@ -158,7 +181,81 @@ describe("a guest merge where one of three apps faults (Sol)", () => {
   });
 });
 
+describe("a guest merge where one of three apps faults only while the merge commits (Sol)", () => {
+  const cases = [0, 1, 2].flatMap((at) =>
+    (["ownerAtCommit", "projectAtCommit"] as const).map((fault) => ({ at, fault })),
+  );
+
+  it.each(cases)("a $fault fault in app $at moves every app's rows and receipts, and withholds only that row", async ({ at, fault }) => {
+    const apps = [0, 1, 2].map((index) => notesApp(`notes-${index}`, index === at ? { fault } : {}));
+    const room = new Harness(apps.map((app) => app.authority), { runtime: { verifyViews: false } });
+    const tabs: Tab[] = [];
+    for (const pass of ["pass-a", "pass-b"]) {
+      for (const [index, app] of apps.entries()) tabs.push(await guestTab(room, app.contract, pass, `${pass}-${index}`));
+    }
+    const sent: Array<[Tab, OperationId, AuthorityResult<Json>]> = [];
+    for (const [index, tab] of tabs.entries()) {
+      const op = operation();
+      sent.push([tab, op, await tab.actWith(op, "note", { id: `n${index}` })]);
+    }
+    await allViewsIn(room);
+
+    linkPasses(room, "pass-b", "pass-a");
+    await allViewsIn(room);
+
+    expect(sameGuest(room, tabs[0], tabs[3])).toBe(true);
+    for (const index of [0, 1, 2]) {
+      const shown = index === at ? [`{"id":"n${index}"}`] : [`{"id":"n${index}"}`, `{"id":"n${index + 3}"}`].sort();
+      expect(notesOf(tabs[index])).toEqual(shown);
+      expect(notesOf(tabs[index + 3])).toEqual(shown);
+    }
+    for (const [index, [tab, op, first]] of sent.entries()) {
+      expect(answer(await tab.actWith(op, "note", { id: `n${index}` }))).toEqual(answer(first));
+    }
+  });
+});
+
+describe("with views verified, a guest merge where one of three apps faults only while the merge commits (Sol)", () => {
+  const cases = [0, 1, 2].flatMap((at) =>
+    (["ownerAtCommit", "projectAtCommit"] as const).map((fault) => ({ at, fault })),
+  );
+
+  it.each(cases)("a $fault fault in app $at still commits every app, and the next flush reports it", async ({ at, fault }) => {
+    const apps = [0, 1, 2].map((index) => notesApp(`notes-${index}`, index === at ? { fault } : {}));
+    const room = new Harness(apps.map((app) => app.authority), { runtime: { verifyViews: true } });
+    const tabs: Tab[] = [];
+    for (const pass of ["pass-a", "pass-b"]) {
+      for (const [index, app] of apps.entries()) tabs.push(await guestTab(room, app.contract, pass, `${pass}-${index}`));
+    }
+    for (const [index, tab] of tabs.entries()) expect((await tab.act("note", { id: `n${index}` })).ok).toBe(true);
+    await allViewsIn(room);
+
+    expect(() => linkPasses(room, "pass-b", "pass-a")).not.toThrow();
+
+    expect(sameGuest(room, tabs[0], tabs[3])).toBe(true);
+    expect(() => room.authority.flushNow()).toThrow(/while the merge committed/);
+  });
+});
+
 describe("a guest link plan (Sol)", () => {
+  it("is not recorded when a pass took on app state after the plan", async () => {
+    const app = notesApp("notes");
+    const room = new Harness([app.authority]);
+    const onA = await guestTab(room, app.contract, "pass-a", "tab-1");
+    const onB = await guestTab(room, app.contract, "pass-b", "tab-2");
+    expect((await onA.act("note", { id: "a" })).ok).toBe(true);
+    const link = room.room.planGuestLink([{ guestProof: "pass-a" }], "pass-b");
+    expect(link?.recordable).toBe(true);
+    expect((await onB.act("note", { id: "b" })).ok).toBe(true);
+
+    expect(room.room.commitGuestLink(link!).linked).toBe(false);
+    await allViewsIn(room);
+
+    expect(sameGuest(room, onA, onB)).toBe(false);
+    expect(notesOf(onA)).toEqual(['{"id":"a"}']);
+    expect(notesOf(onB)).toEqual(['{"id":"b"}']);
+  });
+
   it("commits the merge it staged, and does not run it again with a later clock", async () => {
     const mergeBy = Date.now() + 1_000;
     const app = notesApp("notes", { mergeBy });
@@ -248,6 +345,18 @@ describe("saved answers when two subjects merge, against the per-person cap (Sol
     expect(book.hasRoom(from, now + 600)).toBe(true);
   });
 
+  it("are swept on a timer once they expire, with no new action", async () => {
+    const app = notesApp("notes");
+    const room = new Harness([app.authority]);
+    const tab = await guestTab(room, app.contract, "pass-a", "tab-1");
+    expect((await tab.act("note", { id: "a" })).ok).toBe(true);
+    expect(room.authority.receiptsHeld).toBe(1);
+
+    await room.advance(2 * DEFAULT_AUTHORITY_LIMITS.operationMaxAgeMs + 1_000);
+
+    expect(room.authority.receiptsHeld).toBe(0);
+  });
+
   it("refuses an app's merge whose answers would not fit", () => {
     const app = notesApp("notes");
     const instance = new AuthorityInstance("notes.1", app.authority, { mode: "meeting", qaEnabled: true }, {
@@ -265,5 +374,23 @@ describe("saved answers when two subjects merge, against the per-person cap (Sol
 
     expect(instance.stageMerge([{ from, into }], now)).toBeNull();
     expect(instance.act(actor(from), "note", { id: "a" }, op("a"), now)).toEqual({ ok: true, value: null });
+  });
+
+  it("cannot commit a staged merge once refused answers have pushed it past the cap", () => {
+    const app = notesApp("notes");
+    const instance = new AuthorityInstance("notes.1", app.authority, { mode: "meeting", qaEnabled: true }, {
+      limits,
+      random: { next: () => 0, int: () => 0, shuffle: (list) => [...list] },
+      verifyViews: true,
+    });
+    const actor = (subject: Subject) => ({ subject, role: "member" as const, verified: true, displayName: "Gita" });
+    for (const nonce of ["a", "b"]) expect(instance.act(actor(from), "note", { id: nonce }, op(nonce), now).ok).toBe(true);
+    for (const nonce of ["e", "f"]) expect(instance.act(actor(into), "note", { id: nonce }, op(nonce), now).ok).toBe(true);
+    const staged = instance.stageMerge([{ from, into }], now);
+    expect(staged?.fresh()).toBe(true);
+
+    expect(instance.act(actor(from), "refuse", { id: "c" }, op("c"), now)).toEqual({ ok: false, code: "rejected", reason: "refused" });
+
+    expect(staged?.fresh()).toBe(false);
   });
 });
