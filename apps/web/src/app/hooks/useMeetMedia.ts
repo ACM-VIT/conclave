@@ -1594,11 +1594,18 @@ export function useMeetMedia({
     },
     [],
   );
-  const stopCallCameraTracks = useCallback(() => {
-    const tracks = [...callCameraTracksRef.current];
-    callCameraTracksRef.current.clear();
-    tracks.forEach((track) => stopLocalTrack(track));
-  }, [stopLocalTrack]);
+  useEffect(() => {
+    let cameraChosenNow = deviceIntents.get().video.chosen;
+    return deviceIntents.subscribe(() => {
+      const chosen = deviceIntents.get().video.chosen;
+      if (cameraChosenNow && !chosen) {
+        const tracks = [...callCameraTracksRef.current];
+        callCameraTracksRef.current.clear();
+        tracks.forEach((track) => stopLocalTrack(track));
+      }
+      cameraChosenNow = chosen;
+    });
+  }, [deviceIntents, stopLocalTrack]);
   const stopTracksExcept = useCallback(
     (
       tracks: readonly MediaStreamTrack[],
@@ -4222,7 +4229,6 @@ export function useMeetMedia({
       setIsCameraOff(true);
       const producer = videoProducerRef.current;
       if (producer) closeCameraProducer(producer);
-      stopCallCameraTracks();
       const previousStream = localStreamRef.current;
       if (previousStream) {
         previousStream.getVideoTracks().forEach((track) => {
@@ -4452,7 +4458,6 @@ export function useMeetMedia({
     produceCameraTrackWithRawFallback,
     requestCameraProducerRecovery,
     resumeProducerWithServerConfirmation,
-    stopCallCameraTracks,
   ]);
 
   useEffect(() => {
@@ -5456,7 +5461,6 @@ export function useMeetMedia({
       currentStream?.getVideoTracks().forEach((track) => {
         stopLocalTrack(track);
       });
-      stopCallCameraTracks();
       const remainingTracks =
         currentStream?.getTracks().filter((track) => track.kind !== "video") ??
         [];
@@ -5472,7 +5476,6 @@ export function useMeetMedia({
       currentStream?.getVideoTracks().forEach((track) => {
         stopLocalTrack(track);
       });
-      stopCallCameraTracks();
       const remainingTracks =
         currentStream?.getTracks().filter((track) => track.kind !== "video") ??
         [];
@@ -5739,7 +5742,6 @@ export function useMeetMedia({
     closeLocalVideoProducerForReplacement,
     requestCameraProducerRecovery,
     finishCameraRecovery,
-    stopCallCameraTracks,
     claimDevice,
     claimHolds,
   ]);
