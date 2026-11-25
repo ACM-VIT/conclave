@@ -168,8 +168,11 @@ import {
   INITIAL_SCREEN_SHARE_WATCH,
   advanceScreenShareWatch,
   deliveredRtpBytes,
+  ownPacketCountsRequestFor,
+  producersNotReachingSfu,
   readSenderPacketCounts,
   senderPacketCountsRequestFor,
+  type SendingProducer,
   screenPacketsGoMissing,
   screenVideoAwaitingSenderCheck,
   senderSentMore,
@@ -6393,6 +6396,7 @@ export function useMeetSocket({
         relayBytes: Record<string, number> | null;
         reportedRemoteSilence: boolean;
         screen: ScreenShareWatch;
+        produced: SenderPacketCounts | null;
       }
     > = {
       producer: {
@@ -6401,6 +6405,7 @@ export function useMeetSocket({
         relayBytes: null,
         reportedRemoteSilence: false,
         screen: INITIAL_SCREEN_SHARE_WATCH,
+        produced: null,
       },
       consumer: {
         transport: null,
@@ -6408,6 +6413,7 @@ export function useMeetSocket({
         relayBytes: null,
         reportedRemoteSilence: false,
         screen: INITIAL_SCREEN_SHARE_WATCH,
+        produced: null,
       },
     };
     // Transports seen carrying media. Connecting alone does not count: a path
@@ -6470,6 +6476,17 @@ export function useMeetSocket({
         live: Boolean(producer && !producer.closed),
         sending: isSending(producer),
       }));
+    const sendingProducers = (): SendingProducer[] =>
+      [
+        audioProducerRef.current,
+        videoProducerRef.current,
+        screenProducerRef.current,
+        screenAudioProducerRef.current,
+      ].flatMap((producer) =>
+        producer && isSending(producer)
+          ? [{ producerId: producer.id, mid: producer.rtpParameters.mid ?? null }]
+          : [],
+      );
     const expectation = (
       kind: "producer" | "consumer",
       connected: boolean,
@@ -6513,6 +6530,31 @@ export function useMeetSocket({
     const sentIn = (reading: SenderPacketsReading): SenderPacketCounts | null =>
       reading.asked ? reading.sent : null;
 
+    const ownPackets = async (): Promise<SenderPacketsReading> => {
+      const request = ownPacketCountsRequestFor(
+        sendingProducers().map(({ producerId }) => producerId),
+      );
+      const socket = socketRef.current;
+      if (
+        !request ||
+        !socket?.connected ||
+        !senderPacketCountSocketsRef.current.has(socket)
+      ) {
+        return NOT_ASKED;
+      }
+      return new Promise<SenderPacketsReading>((resolve) => {
+        emitWithAckTimeout(
+          socket,
+          SENDER_PACKET_COUNT_TIMEOUT_MS,
+          () => resolve({ asked: true, sent: null }),
+          "getOwnPacketCounts",
+          request,
+          (answer: unknown) =>
+            resolve({ asked: true, sent: readSenderPacketCounts(answer) }),
+        );
+      });
+    };
+
     const readPath = async (
       kind: "producer" | "consumer",
       transport: Transport,
@@ -6551,6 +6593,12 @@ export function useMeetSocket({
           kind === "consumer" && !transport.closed
             ? await screenSenderPackets()
             : NOT_ASKED;
+        const ownBefore =
+          kind === "producer" && !transport.closed ? await ownPackets() : NOT_ASKED;
+        const midway =
+          kind === "producer" && !transport.closed
+            ? (await readPath(kind, transport)).reading
+            : null;
         await halfWindow();
         const current =
           kind === "producer"
@@ -6564,6 +6612,9 @@ export function useMeetSocket({
           now !== null && kind === "consumer"
             ? await screenSenderPackets()
             : NOT_ASKED;
+        const ownAfter =
+          now !== null && kind === "producer" ? await ownPackets() : NOT_ASKED;
+        const after = now !== null ? (await readPath(kind, transport)).reading : null;
         return iceRestartBroughtMediaBack({
           replaced,
           expectsMedia:
@@ -6571,11 +6622,15 @@ export function useMeetSocket({
             senderSentMore(sentIn(sentBefore), sentIn(sentAfter)),
           mediaReached:
             now !== null &&
-            mediaReachedFarEnd(
-              before,
-              (await readPath(kind, transport)).reading,
-              now.framesOptional,
-            ),
+            after !== null &&
+            mediaReachedFarEnd(before, after, now.framesOptional) &&
+            producersNotReachingSfu({
+              producers: sendingProducers(),
+              previous: midway,
+              current: after,
+              sfuBefore: sentIn(ownBefore),
+              sfuNow: sentIn(ownAfter),
+            }).length === 0,
         });
       } catch {
         return false;
@@ -6598,6 +6653,7 @@ export function useMeetSocket({
         entry.watch = INITIAL_MEDIA_PATH_WATCH;
         entry.relayBytes = null;
         entry.screen = INITIAL_SCREEN_SHARE_WATCH;
+        entry.produced = null;
         return;
       }
       // A new transport starts a fresh watch, and this sample already counts
@@ -6608,12 +6664,13 @@ export function useMeetSocket({
         entry.reportedRemoteSilence = false;
         entry.relayBytes = null;
         entry.screen = INITIAL_SCREEN_SHARE_WATCH;
+        entry.produced = null;
       }
 
+      const connectedNow = transport.connectionState === "connected";
       const sender =
-        kind === "consumer" && transport.connectionState === "connected"
-          ? await screenSenderPackets()
-          : NOT_ASKED;
+        kind === "consumer" && connectedNow ? await screenSenderPackets() : NOT_ASKED;
+      const own = kind === "producer" && connectedNow ? await ownPackets() : NOT_ASKED;
       if (entry.transport !== transport) return;
       let reading: MediaPathReading;
       let relayBytes: Record<string, number>;
@@ -6633,11 +6690,23 @@ export function useMeetSocket({
             })
           : INITIAL_SCREEN_SHARE_WATCH;
 
+      const undeliveredProducers =
+        kind === "producer"
+          ? producersNotReachingSfu({
+              producers: sendingProducers(),
+              previous: entry.watch.lastReading,
+              current: reading,
+              sfuBefore: entry.produced,
+              sfuNow: sentIn(own),
+            })
+          : [];
+      entry.produced = own.asked ? (own.sent ?? entry.produced) : null;
       const result = advanceMediaPathWatch(entry.watch, {
         ...reading,
         ...expectation(kind, transport.connectionState === "connected"),
         at: Date.now(),
         connectionState: transport.connectionState,
+        undeliveredProducers,
       });
       entry.watch = result.watch;
       const provenRelayUrl = relayProvenByMedia({
@@ -6671,6 +6740,7 @@ export function useMeetSocket({
 
       entry.watch = INITIAL_MEDIA_PATH_WATCH;
       entry.screen = INITIAL_SCREEN_SHARE_WATCH;
+      entry.produced = null;
       const isSilentWhileConnected =
         result.condition === "connected-without-media";
       if (isSilentWhileConnected && kind === "consumer") {

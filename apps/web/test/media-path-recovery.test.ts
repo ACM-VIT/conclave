@@ -26,6 +26,7 @@ import {
   type ScreenShareWatch,
   deliveredRtpBytes,
   iceRestartBroughtMediaBack,
+  producersNotReachingSfu,
   readMediaPath,
   mediaReachedFarEnd,
   sendPathExpectation,
@@ -46,6 +47,7 @@ const sample = (overrides: Partial<MediaPathSample>): MediaPathSample => ({
   direction: "recv",
   rtpBytes: 0,
   receiverReportAt: null,
+  sent: {},
   ...overrides,
 });
 
@@ -84,6 +86,7 @@ describe("reading a transport's media from a stats report", () => {
       direction: "send",
       rtpBytes: 0,
       receiverReportAt: null,
+      sent: {},
     });
   });
 });
@@ -746,6 +749,7 @@ describe("knowing that a static screen share still reaches the SFU", () => {
     direction: "send" as const,
     rtpBytes,
     receiverReportAt,
+    sent: {},
   });
 
   it("counts a newer receiver report as delivery when frames are optional", () => {
@@ -937,5 +941,144 @@ describe("telling a still screen share apart from one whose packets never arrive
     ],
   ])("%s", (_name, steps, expected) => {
     expect(run(steps).missing).toEqual(expected);
+  });
+});
+
+describe("judging each sending producer on its own", () => {
+  type Stream = { mid: string; packetsSent: number; bytesSent: number; reportAt: number | null; layers?: number };
+  const sendStats = (streams: Stream[]) =>
+    streams.flatMap(({ mid, packetsSent, bytesSent, reportAt, layers = 1 }) =>
+      Array.from({ length: layers }, (_, layer) => {
+        const id = `OUT-${mid}-${layer}`;
+        return [
+          { type: "outbound-rtp", id, mid, packetsSent: packetsSent / layers, bytesSent: bytesSent / layers },
+          ...(reportAt === null ? [] : [{ type: "remote-inbound-rtp", id: `RI-${mid}-${layer}`, localId: id, timestamp: reportAt }]),
+        ];
+      }).flat(),
+    );
+  const producers = [
+    { producerId: "mic", mid: "0" },
+    { producerId: "camera", mid: "1" },
+  ];
+  const watchBoth = (
+    first: Stream[],
+    second: Stream[],
+    sfu: { before: Record<string, number> | null; now: Record<string, number> | null } = { before: null, now: null },
+  ) => {
+    const previous = readMediaPath(sendStats(first), "send");
+    const current = readMediaPath(sendStats(second), "send");
+    const undelivered = producersNotReachingSfu({
+      producers,
+      previous,
+      current,
+      sfuBefore: sfu.before,
+      sfuNow: sfu.now,
+    });
+    const start = advanceMediaPathWatch(INITIAL_MEDIA_PATH_WATCH, { ...previous, at: 0, connectionState: "connected", expectsMedia: true, framesOptional: false });
+    const next = advanceMediaPathWatch(start.watch, {
+      ...current,
+      at: 2_500,
+      connectionState: "connected",
+      expectsMedia: true,
+      framesOptional: false,
+      undeliveredProducers: undelivered,
+    });
+    return { undelivered, next };
+  };
+
+  it("reads each transceiver's packets and its own receiver report, adding simulcast layers by mid", () => {
+    const reading = readMediaPath(
+      sendStats([
+        { mid: "0", packetsSent: 50, bytesSent: 5_000, reportAt: 9_000 },
+        { mid: "1", packetsSent: 300, bytesSent: 300_000, reportAt: 7_000, layers: 3 },
+      ]),
+      "send",
+    );
+
+    expect(reading.sent).toEqual({
+      "0": { packetsSent: 50, receiverReportAt: 9_000 },
+      "1": { packetsSent: 300, receiverReportAt: 7_000 },
+    });
+    expect(reading.receiverReportAt).toBe(9_000);
+    expect(reading.rtpBytes).toBe(305_000);
+  });
+
+  it("notices a camera whose reports stopped while the microphone keeps reaching the SFU", () => {
+    const { undelivered, next } = watchBoth(
+      [
+        { mid: "0", packetsSent: 50, bytesSent: 5_000, reportAt: 1_000 },
+        { mid: "1", packetsSent: 300, bytesSent: 300_000, reportAt: 1_000 },
+      ],
+      [
+        { mid: "0", packetsSent: 175, bytesSent: 17_500, reportAt: 3_400 },
+        { mid: "1", packetsSent: 600, bytesSent: 600_000, reportAt: 1_000 },
+      ],
+    );
+
+    expect(undelivered).toEqual(["camera"]);
+    expect(next.condition).toBe("connected-without-media");
+    expect(next.mediaMoved).toBe(false);
+  });
+
+  it("notices a camera the SFU stopped counting even while its receiver reports keep coming", () => {
+    const { undelivered, next } = watchBoth(
+      [
+        { mid: "0", packetsSent: 50, bytesSent: 5_000, reportAt: 1_000 },
+        { mid: "1", packetsSent: 300, bytesSent: 300_000, reportAt: 1_000 },
+      ],
+      [
+        { mid: "0", packetsSent: 175, bytesSent: 17_500, reportAt: 3_400 },
+        { mid: "1", packetsSent: 600, bytesSent: 600_000, reportAt: 3_300 },
+      ],
+      { before: { mic: 40, camera: 280 }, now: { mic: 165, camera: 280 } },
+    );
+
+    expect(undelivered).toEqual(["camera"]);
+    expect(next.condition).toBe("connected-without-media");
+  });
+
+  it("calls the path flowing when every producer that sent reached the SFU", () => {
+    const { undelivered, next } = watchBoth(
+      [
+        { mid: "0", packetsSent: 50, bytesSent: 5_000, reportAt: 1_000 },
+        { mid: "1", packetsSent: 300, bytesSent: 300_000, reportAt: 1_000 },
+      ],
+      [
+        { mid: "0", packetsSent: 175, bytesSent: 17_500, reportAt: 3_400 },
+        { mid: "1", packetsSent: 600, bytesSent: 600_000, reportAt: 3_300 },
+      ],
+      { before: { mic: 40, camera: 280 }, now: { mic: 165, camera: 570 } },
+    );
+
+    expect(undelivered).toEqual([]);
+    expect(next.condition).toBe("flowing");
+  });
+
+  it.each<[string, Stream, Record<string, number> | null]>([
+    ["a camera that sent nothing, like a still share or a source with no frames", { mid: "1", packetsSent: 300, bytesSent: 300_000, reportAt: 1_000 }, null],
+    ["a camera whose report is newer and the SFU did not answer", { mid: "1", packetsSent: 600, bytesSent: 600_000, reportAt: 3_300 }, null],
+  ])("does not blame %s", (_name, camera, sfuNow) => {
+    const { undelivered } = watchBoth(
+      [
+        { mid: "0", packetsSent: 50, bytesSent: 5_000, reportAt: 1_000 },
+        { mid: "1", packetsSent: 300, bytesSent: 300_000, reportAt: 1_000 },
+      ],
+      [{ mid: "0", packetsSent: 175, bytesSent: 17_500, reportAt: 3_400 }, camera],
+      { before: sfuNow === null ? null : { camera: 280 }, now: sfuNow },
+    );
+
+    expect(undelivered).toEqual([]);
+  });
+
+  it("judges nothing per producer when the browser gives no mid", () => {
+    const strip = (streams: Stream[]) =>
+      sendStats(streams).map(({ mid: _mid, ...stat }) => stat);
+    const previous = readMediaPath(strip([{ mid: "1", packetsSent: 300, bytesSent: 300_000, reportAt: 1_000 }]), "send");
+    const current = readMediaPath(strip([{ mid: "1", packetsSent: 600, bytesSent: 600_000, reportAt: 1_000 }]), "send");
+
+    expect(current.sent).toEqual({});
+    expect(
+      producersNotReachingSfu({ producers, previous, current, sfuBefore: null, sfuNow: null }),
+    ).toEqual([]);
   });
 });

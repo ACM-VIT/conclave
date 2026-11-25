@@ -1,4 +1,7 @@
 import {
+  OWN_PACKET_COUNTS_MAX_PRODUCERS,
+  ownPacketCountsRequestSchema,
+  type OwnPacketCountsRequest,
   SENDER_PACKET_COUNTS_MAX_CONSUMERS,
   senderPacketCountsAnswerSchema,
   senderPacketCountsRequestSchema,
@@ -20,16 +23,31 @@ export type MediaPathDirection = "send" | "recv";
 
 type RtpStat = {
   type?: string;
+  id?: string;
+  mid?: string;
+  localId?: string;
   bytesSent?: number;
   bytesReceived?: number;
+  packetsSent?: number;
   timestamp?: number;
+};
+
+export type SentStreamReading = {
+  packetsSent: number;
+  receiverReportAt: number | null;
 };
 
 export type MediaPathReading = {
   direction: MediaPathDirection;
   rtpBytes: number;
   receiverReportAt: number | null;
+  sent: Record<string, SentStreamReading>;
 };
+
+const finiteTimestamp = (stat: RtpStat): number | null =>
+  typeof stat.timestamp === "number" && Number.isFinite(stat.timestamp)
+    ? stat.timestamp
+    : null;
 
 export const readMediaPath = (
   stats: Iterable<RtpStat>,
@@ -37,26 +55,73 @@ export const readMediaPath = (
 ): MediaPathReading => {
   let rtpBytes = 0;
   let receiverReportAt: number | null = null;
+  const midByOutboundId = new Map<string, string>();
+  const sent: Record<string, SentStreamReading> = {};
+  const reports: RtpStat[] = [];
   for (const stat of stats) {
     if (direction === "send" && stat.type === "outbound-rtp") {
       rtpBytes += stat.bytesSent ?? 0;
+      if (typeof stat.mid === "string" && stat.mid.length > 0) {
+        if (stat.id) midByOutboundId.set(stat.id, stat.mid);
+        const stream = (sent[stat.mid] ??= { packetsSent: 0, receiverReportAt: null });
+        stream.packetsSent += stat.packetsSent ?? 0;
+      }
     } else if (direction === "recv" && stat.type === "inbound-rtp") {
       rtpBytes += stat.bytesReceived ?? 0;
-    } else if (
-      direction === "send" &&
-      stat.type === "remote-inbound-rtp" &&
-      typeof stat.timestamp === "number" &&
-      Number.isFinite(stat.timestamp)
-    ) {
-      receiverReportAt = Math.max(receiverReportAt ?? stat.timestamp, stat.timestamp);
+    } else if (direction === "send" && stat.type === "remote-inbound-rtp") {
+      const at = finiteTimestamp(stat);
+      if (at === null) continue;
+      receiverReportAt = Math.max(receiverReportAt ?? at, at);
+      reports.push(stat);
     }
+  }
+  for (const report of reports) {
+    const mid = report.localId ? midByOutboundId.get(report.localId) : undefined;
+    const at = finiteTimestamp(report);
+    if (!mid || at === null) continue;
+    const stream = sent[mid];
+    stream.receiverReportAt = Math.max(stream.receiverReportAt ?? at, at);
   }
   return {
     direction,
     rtpBytes,
     receiverReportAt: direction === "send" ? receiverReportAt : null,
+    sent: direction === "send" ? sent : {},
   };
 };
+
+export type SendingProducer = { producerId: string; mid: string | null };
+
+export const producersNotReachingSfu = ({
+  producers,
+  previous,
+  current,
+  sfuBefore,
+  sfuNow,
+}: {
+  producers: SendingProducer[];
+  previous: MediaPathReading | null;
+  current: MediaPathReading;
+  sfuBefore: SenderPacketCounts | null;
+  sfuNow: SenderPacketCounts | null;
+}): string[] =>
+  producers
+    .filter(({ producerId, mid }) => {
+      if (!mid || !previous || previous.direction !== "send") return false;
+      const before = previous.sent[mid];
+      const now = current.sent[mid];
+      if (!before || !now || now.packetsSent <= before.packetsSent) return false;
+      const reported =
+        now.receiverReportAt !== null &&
+        (before.receiverReportAt === null || now.receiverReportAt > before.receiverReportAt);
+      if (!reported) return true;
+      const arrivedBefore = sfuBefore?.[producerId];
+      const arrivedNow = sfuNow?.[producerId];
+      return (
+        arrivedBefore !== undefined && arrivedNow !== undefined && arrivedNow <= arrivedBefore
+      );
+    })
+    .map(({ producerId }) => producerId);
 
 export const hasCarriedMedia = (reading: MediaPathReading): boolean =>
   reading.rtpBytes > 0 &&
@@ -83,6 +148,7 @@ export type MediaPathSample = MediaPathReading & {
   /** A live, unpaused stream should be crossing this transport right now. */
   expectsMedia: boolean;
   framesOptional: boolean;
+  undeliveredProducers?: string[];
 };
 
 export type PublishedStream = {
@@ -147,10 +213,12 @@ const toReading = ({
   direction,
   rtpBytes,
   receiverReportAt,
+  sent,
 }: MediaPathSample): MediaPathReading => ({
   direction,
   rtpBytes,
   receiverReportAt,
+  sent,
 });
 
 /**
@@ -174,7 +242,9 @@ export const advanceMediaPathWatch = (
     ? deliveredRtpBytes(watch.lastReading, reading)
     : 0;
   const reached =
-    connected && mediaReachedFarEnd(watch.lastReading, reading, sample.framesOptional);
+    connected &&
+    mediaReachedFarEnd(watch.lastReading, reading, sample.framesOptional) &&
+    (sample.undeliveredProducers ?? []).length === 0;
   const condition: MediaPathCondition = !sample.expectsMedia
     ? "idle"
     : !connected
@@ -583,6 +653,16 @@ export const senderPacketCountsRequestFor = (
   if (consumerIds.length === 0) return null;
   const parsed = senderPacketCountsRequestSchema.safeParse({
     consumerIds: [...new Set(consumerIds)].slice(0, SENDER_PACKET_COUNTS_MAX_CONSUMERS),
+  });
+  return parsed.success ? parsed.data : null;
+};
+
+export const ownPacketCountsRequestFor = (
+  producerIds: string[],
+): OwnPacketCountsRequest | null => {
+  if (producerIds.length === 0) return null;
+  const parsed = ownPacketCountsRequestSchema.safeParse({
+    producerIds: [...new Set(producerIds)].slice(0, OWN_PACKET_COUNTS_MAX_PRODUCERS),
   });
   return parsed.success ? parsed.data : null;
 };

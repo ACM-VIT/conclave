@@ -81,6 +81,14 @@ export class FakeTransport extends Emitter {
   relayCarriedMs = 0;
   reportAt: number | null = null;
   restartIceCalls = 0;
+  sending: Array<{
+    producer: { id: string; kind: string; paused: boolean; closed: boolean };
+    mid: string;
+    packetsSent: number;
+    bytesSent: number;
+    sfuPackets: number;
+    reportAt: number | null;
+  }> = [];
 
   constructor(
     private readonly rig: CallRig,
@@ -197,6 +205,7 @@ export class FakeTransport extends Emitter {
       );
     });
     this.hasConsumers = true;
+    const mid = String(this.sending.length);
     const producer = {
       id,
       kind: options.track.kind,
@@ -204,7 +213,7 @@ export class FakeTransport extends Emitter {
       paused: false,
       closed: false,
       appData: options.appData ?? {},
-      rtpParameters: { encodings: [{}] },
+      rtpParameters: { encodings: [{}], mid },
       observer: new Emitter(),
       on() {},
       off() {},
@@ -222,6 +231,7 @@ export class FakeTransport extends Emitter {
       setRtpEncodingParameters: async () => {},
       getStats: async () => new Map(),
     };
+    this.sending.push({ producer, mid, packetsSent: 0, bytesSent: 0, sfuPackets: 0, reportAt: null });
     return producer;
   }
 
@@ -262,6 +272,17 @@ export class FakeTransport extends Emitter {
     ];
     if (this.direction === "recv") {
       entries.push(["IN1", { type: "inbound-rtp", id: "IN1", kind: "audio", bytesReceived: this.carriedBytes }]);
+    } else if (this.sending.length > 0) {
+      for (const stream of this.sending) {
+        const id = `OUT-${stream.mid}`;
+        entries.push([
+          id,
+          { type: "outbound-rtp", id, mid: stream.mid, kind: stream.producer.kind, packetsSent: stream.packetsSent, bytesSent: stream.bytesSent },
+        ]);
+        if (stream.reportAt !== null) {
+          entries.push([`RI-${stream.mid}`, { type: "remote-inbound-rtp", id: `RI-${stream.mid}`, localId: id, timestamp: stream.reportAt }]);
+        }
+      }
     } else {
       entries.push(["OUT1", { type: "outbound-rtp", id: "OUT1", kind: "audio", bytesSent: this.carriedBytes }]);
       if (this.reportAt !== null) {
@@ -294,6 +315,7 @@ type FakeSocket = {
 export type RigOptions = {
   identity?: string;
   publish?: boolean;
+  camera?: boolean;
   directWorks?: boolean;
   ttlSeconds?: number;
   relayConnectMs?: number;
@@ -333,6 +355,8 @@ export class CallRig {
   holdProducersMs = 0;
   mediaFlows = true;
   outgoingDropped = false;
+  droppedSendKinds = new Set<string>();
+  ownCountQueries = 0;
   sendStatic = false;
   screenChanging = true;
   answersSenderCounts = true;
@@ -347,6 +371,7 @@ export class CallRig {
   identityChanges: string[] = [];
   meetErrors: Array<{ code?: string } | null> = [];
   publish: boolean;
+  camera: boolean;
   consumerIds = new Map<string, string>();
   moves: Array<{ at: number; closing: FakeTransport | undefined; bytes: number }> = [];
   transports: FakeTransport[] = [];
@@ -360,6 +385,7 @@ export class CallRig {
 
   constructor(options: RigOptions = {}) {
     this.publish = options.publish ?? false;
+    this.camera = options.camera ?? false;
     this.identity = options.identity;
     this.directWorks = options.directWorks ?? true;
     this.ttlSeconds = options.ttlSeconds ?? 3600;
@@ -459,8 +485,20 @@ export class CallRig {
       }
     }
     if (transport.direction === "send") {
-      if (!this.sendStatic) transport.carriedBytes += Math.round((now - since) * 4);
+      const sent = this.sendStatic ? 0 : Math.round((now - since) * 4);
+      transport.carriedBytes += sent;
       if (!this.outgoingDropped) transport.reportAt = now;
+      const live = transport.sending.filter(({ producer }) => !producer.closed && !producer.paused);
+      live.forEach((stream, index) => {
+        const share = Math.floor(sent / live.length) + (index === 0 ? sent % live.length : 0);
+        const packets = this.sendStatic ? 0 : Math.round((now - since) / 20);
+        stream.bytesSent += share;
+        stream.packetsSent += packets;
+        if (!this.outgoingDropped) {
+          stream.reportAt = now;
+          if (!this.droppedSendKinds.has(stream.producer.kind)) stream.sfuPackets += packets;
+        }
+      });
       return;
     }
     if (this.mediaFlows && this.remoteProducers.some((producer) => this.remoteSending(producer))) {
@@ -623,6 +661,18 @@ export class CallRig {
           rtpParameters: { codecs: [], encodings: [], headerExtensions: [], rtcp: {} },
           producerPaused: producer?.paused ?? false,
         });
+      }
+      case "getOwnPacketCounts": {
+        this.ownCountQueries += 1;
+        if (!this.answersSenderCounts) return;
+        const ids = new Set((payload as { producerIds?: string[] } | undefined)?.producerIds ?? []);
+        const counts: Record<string, number> = {};
+        for (const transport of this.transports) {
+          for (const stream of transport.sending) {
+            if (ids.has(stream.producer.id) && !stream.producer.closed) counts[stream.producer.id] = stream.sfuPackets;
+          }
+        }
+        return this.ack(ack, { counts });
       }
       case "getSenderPacketCounts": {
         this.senderCountQueries += 1;
@@ -846,13 +896,15 @@ export class CallRig {
     const noop = () => {};
     const rig = this;
     const microphone = fakeTrack("audio");
+    const camera = fakeTrack("video");
+    const videoTracks = this.camera ? [camera] : [];
     const stream = this.publish
       ? {
           id: "local-stream",
           active: true,
-          getTracks: () => [microphone],
+          getTracks: () => [microphone, ...videoTracks],
           getAudioTracks: () => [microphone],
-          getVideoTracks: () => [],
+          getVideoTracks: () => videoTracks,
           addEventListener() {},
           removeEventListener() {},
         }
@@ -864,7 +916,7 @@ export class CallRig {
       displayNameInput: "Viewer",
       localStream: stream,
       isMuted: !this.publish,
-      isCameraOff: true,
+      isCameraOff: !this.camera,
       isTtsDisabled: false,
       getJoinInfo: (roomId: string, sessionId: string, options?: { signal?: AbortSignal }) =>
         requestJoinInfo(

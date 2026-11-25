@@ -64,6 +64,31 @@ describe("the media path recovery the hook runs", () => {
     expect(rig.log.some((line) => line.includes("producer transport has carried no media"))).toBe(true);
   });
 
+  it("restarts ICE when the camera stops reaching the SFU while the microphone still gets through", async () => {
+    rig = await startRig({ publish: true, camera: true });
+    await rig.join();
+    await rig.advance(5_000);
+    const send = rig.send!;
+    expect(send.sending.map(({ producer }) => producer.kind).sort()).toEqual(["audio", "video"]);
+    rig.droppedSendKinds.add("video");
+    const microphone = send.sending.find(({ producer }) => producer.kind === "audio")!;
+    const reachedBefore = microphone.sfuPackets;
+
+    expect(await waitFor(rig, () => send.restartIceCalls > 0, 25_000)).toBe(true);
+    expect(microphone.sfuPackets).toBeGreaterThan(reachedBefore);
+    expect(rig.log.some((line) => line.includes("producer transport has carried no media"))).toBe(true);
+  });
+
+  it("leaves a microphone and camera alone while both reach the SFU", async () => {
+    rig = await startRig({ publish: true, camera: true });
+    await rig.join();
+    await rig.advance(60_000);
+
+    expect(rig.ownCountQueries).toBeGreaterThan(15);
+    expect(rig.send!.restartIceCalls).toBe(0);
+    expect(rig.log.some((line) => line.includes("carried no media"))).toBe(false);
+  });
+
   it("restarts ICE when shared screen audio stops reaching the SFU with the mic and camera off", async () => {
     rig = await startRig();
     await rig.join();
