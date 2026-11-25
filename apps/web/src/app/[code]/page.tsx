@@ -4,6 +4,8 @@ import MeetsClientShell from "../meets-client-shell";
 import RouteLoadingState from "../components/RouteLoadingState";
 import { sanitizeRoomCode, sanitizeWebinarLinkCode } from "../lib/utils";
 import ScheduledMeetingLanding from "../components/ScheduledMeetingLanding";
+import ErrorStateView from "../components/ErrorStateView";
+import { isSfuTooOldForBookings } from "@/lib/scheduled-meeting-lookup";
 import {
   isMeetingJoinable,
   lookupPublicScheduledMeetingByRoomCode,
@@ -116,10 +118,23 @@ async function MeetRoomContent({ params, searchParams }: MeetRoomPageProps) {
     devOverridesEnabled && isTruthyParam(resolvedSearchParams.admin);
 
   if (sanitizedRoomCode && !bypassMediaPermissions) {
-    const scheduledCandidate = await lookupScheduledMeetingCandidate(
-      sanitizedRoomCode,
-      sfuClientId,
-    );
+    let scheduledCandidate: Awaited<ReturnType<typeof lookupScheduledMeetingCandidate>>;
+    try {
+      scheduledCandidate = await lookupScheduledMeetingCandidate(
+        sanitizedRoomCode,
+        sfuClientId,
+      );
+    } catch (error) {
+      if (!isSfuTooOldForBookings(error)) throw error;
+      return (
+        <ErrorStateView
+          eyebrow="Meetings are updating"
+          title="This meeting link can't open yet"
+          message="The meeting service is being updated. Try this link again in a few minutes."
+          homeLabel="Go home"
+        />
+      );
+    }
     const scheduled = scheduledCandidate?.meeting ?? null;
     if (scheduledCandidate) {
       resolvedSfuClientId = scheduledCandidate.clientId;

@@ -16,6 +16,7 @@ import {
   canonicalizeClientId,
   canMigrateClientNamespace,
   clientIdCandidates,
+  clientIdFamily,
   resolveDefaultClientId,
 } from "../clientIds.js";
 import type {
@@ -170,7 +171,7 @@ export const registerScheduledMeetingRoutes = (
     clientId: string,
     roomCode: string,
   ): ScheduledMeeting | null => {
-    for (const candidateClientId of clientIdCandidates(clientId)) {
+    for (const candidateClientId of clientIdFamily(clientId)) {
       const meeting = getScheduledMeetingByRoomCode(
         state.scheduledMeetings,
         candidateClientId,
@@ -293,6 +294,20 @@ export const registerScheduledMeetingRoutes = (
       return;
     }
     res.json({ scheduledMeeting: publicMeetingView(meeting) });
+  });
+
+  app.get("/scheduled-meetings/public/v2/by-room/:roomCode", async (req, res) => {
+    if (!requireSecret(req, res)) return;
+    const roomCode = normalizeIdentifier(
+      req.params.roomCode,
+      MAX_ROOM_CODE_LENGTH,
+    )?.toLowerCase();
+    if (!roomCode) {
+      res.status(400).json({ error: "Room code is required" });
+      return;
+    }
+    const meeting = findMeetingByRoomCode(resolveClientId(req), roomCode);
+    res.json({ scheduledMeeting: meeting ? publicMeetingView(meeting) : null });
   });
 
   const requireMeetingAccess = (
