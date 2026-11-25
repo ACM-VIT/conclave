@@ -100,7 +100,6 @@ import {
   formatDisplayName,
   isBrowserVideoUserId,
   isSystemUserId,
-  isCameraAccessBlocked,
 } from "../lib/utils";
 import { hiddenSetupView, type SetupNotice } from "../lib/setup-notice";
 import { useApps, useGame } from "@conclave/apps-sdk";
@@ -112,7 +111,7 @@ import {
   GAME_DOCK_MAX_WIDTH,
   GAME_DOCK_MIN_WIDTH,
 } from "./games/gameUi";
-import { useCameraPermissionState } from "../hooks/useCameraPermissionState";
+import { useCameraAccessBlocked } from "../hooks/useCameraAccessBlocked";
 import { useStableSpeakerId } from "../hooks/useStableSpeakerId";
 import {
   type VideoEffectsState,
@@ -846,12 +845,13 @@ export default function MeetsMainContent({
     useState<MediaStream | null>(null);
   const [devCameraStream, setDevCameraStream] =
     useState<MediaStream | null>(null);
-  const cameraPermissionState = useCameraPermissionState();
   const hasLiveLocalCamera = Boolean(getLiveVideoStream(localStream));
   const hasLiveDevCamera = Boolean(getLiveVideoStream(devCameraStream));
-  const isCameraPermissionBlocked = isCameraAccessBlocked({
-    hasLiveCamera: hasLiveLocalCamera || hasLiveDevCamera,
-    permissionState: cameraPermissionState,
+  const isCameraPermissionBlocked = useCameraAccessBlocked({
+    hasLiveCamera:
+      hasLiveLocalCamera ||
+      hasLiveDevCamera ||
+      Boolean(getLiveVideoStream(cameraPreviewStream)),
     mediaError,
   });
   const isLocalPresenter = isScreenSharing && Boolean(presentationStream);

@@ -41,11 +41,10 @@ import {
   sanitizeInstitutionDisplayName,
   sanitizeRoomCodeInput,
   sanitizeRoomCode,
-  isCameraAccessBlocked,
 } from "../lib/utils";
 import type { SetupNotice } from "../lib/setup-notice";
 import RoomPresenceBadge from "./RoomPresenceBadge";
-import { useCameraPermissionState } from "../hooks/useCameraPermissionState";
+import { useCameraAccessBlocked } from "../hooks/useCameraAccessBlocked";
 import {
   useBandwidthHeavyPreloadDeferred,
 } from "../hooks/useBandwidthHeavyPreloadDeferred";
@@ -390,15 +389,13 @@ function JoinScreen({
     ? videoEffectsBridgeState.debugStats
     : null;
   const previewStream = processedPreviewStream ?? localStream;
-  const cameraPermissionState = useCameraPermissionState();
   const hasLivePreviewCamera = Boolean(
     localStream
       ?.getVideoTracks()
       .some((track) => track.readyState === "live" && track.enabled),
   );
-  const isCameraPermissionBlocked = isCameraAccessBlocked({
+  const isCameraPermissionBlocked = useCameraAccessBlocked({
     hasLiveCamera: hasLivePreviewCamera,
-    permissionState: cameraPermissionState,
     mediaError,
   });
   const shouldShowPermissionCta = !isCameraOn && isCameraPermissionBlocked;

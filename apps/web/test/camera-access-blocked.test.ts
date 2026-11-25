@@ -20,13 +20,16 @@ it.each([
   [true, "denied", deniedCamera, false],
   [true, "prompt", null, false],
   [true, "unknown", deniedCamera, false],
-  [false, "granted", deniedCamera, true],
+  [false, "granted", deniedCamera, false],
+  [false, "denied", deniedCamera, true],
+  [false, "prompt", deniedCamera, true],
   [false, "unknown", deniedCamera, true],
   [false, "denied", null, true],
   [false, "prompt", null, true],
   [false, "granted", null, false],
   [false, "unknown", null, false],
   [false, "granted", deniedMicrophone, false],
+  [false, "unknown", deniedMicrophone, false],
 ] as const)(
   "live camera %s, permission %s, saved error %o: blocked is %s",
   (hasLiveCamera, permissionState, mediaError, blocked) => {
