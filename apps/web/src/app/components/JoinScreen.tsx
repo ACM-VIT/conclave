@@ -41,7 +41,7 @@ import {
   sanitizeInstitutionDisplayName,
   sanitizeRoomCodeInput,
   sanitizeRoomCode,
-  isMediaDeviceBlocked,
+  isCameraAccessBlocked,
 } from "../lib/utils";
 import type { SetupNotice } from "../lib/setup-notice";
 import RoomPresenceBadge from "./RoomPresenceBadge";
@@ -396,18 +396,12 @@ function JoinScreen({
       ?.getVideoTracks()
       .some((track) => track.readyState === "live" && track.enabled),
   );
-  const isCameraBlocked = isMediaDeviceBlocked(mediaError, "camera");
-  const isCameraPermissionBlocked =
-    isCameraBlocked ||
-    (!hasLivePreviewCamera &&
-      (cameraPermissionState === "prompt" ||
-        cameraPermissionState === "denied"));
-  const shouldShowPermissionCta =
-    !hasLivePreviewCamera &&
-    !isCameraOn &&
-    (cameraPermissionState === "prompt" ||
-      cameraPermissionState === "denied" ||
-      isCameraBlocked);
+  const isCameraPermissionBlocked = isCameraAccessBlocked({
+    hasLiveCamera: hasLivePreviewCamera,
+    permissionState: cameraPermissionState,
+    mediaError,
+  });
+  const shouldShowPermissionCta = !isCameraOn && isCameraPermissionBlocked;
   const prewarmLiveCameraEffects = (reason: string) => {
     if (activeVideoEffectsCount <= 0 && !isEffectsOpen) return;
     if (shouldDeferPreviewVideoEffectsPreload) return;

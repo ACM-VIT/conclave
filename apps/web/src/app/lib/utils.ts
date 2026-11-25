@@ -280,6 +280,20 @@ export const isMediaDeviceBlocked = (
   device: MediaDevice,
 ): boolean => error?.causes?.[device]?.kind === "blocked";
 
+export const isCameraAccessBlocked = ({
+  hasLiveCamera,
+  permissionState,
+  mediaError,
+}: {
+  hasLiveCamera: boolean;
+  permissionState: PermissionState | "unknown";
+  mediaError: MeetError | null | undefined;
+}): boolean =>
+  !hasLiveCamera &&
+  (isMediaDeviceBlocked(mediaError, "camera") ||
+    permissionState === "prompt" ||
+    permissionState === "denied");
+
 export function mediaErrorAdvice(error: MeetError): string | null {
   const camera = error.causes?.camera;
   const microphone = error.causes?.microphone;
