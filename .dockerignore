@@ -21,6 +21,4 @@
 **/*-wal
 **/*-shm
 **/*-journal
-packages/ai/test
-packages/sfu/test
-packages/shared-browser/test
+**/test
