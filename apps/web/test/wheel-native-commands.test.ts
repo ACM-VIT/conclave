@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import {
   addEntries,
+  removeEntryById,
+  clearEntries,
   createWheelDoc,
   getEntries,
   getHistory,
@@ -137,3 +139,86 @@ describe("native wheel commands", () => {
     }
   });
 });
+
+describe("native wheel add records", () => {
+  const contextFor = (appSessionId: string, requestId: string): WheelCommandContext => ({
+    requestId,
+    addKey: (id) => `${appSessionId}/${id}`,
+    spinning: false,
+    requestSpin: () => ({ ok: true }),
+    setSounds: () => ({ ok: true }),
+  });
+  const add = (doc: Y.Doc, appSessionId: string, requestId: string, labels: string[]) =>
+    runWheelCommand(doc, "addEntries", { labels }, contextFor(appSessionId, requestId));
+  const outcome = (doc: Y.Doc, appSessionId: string, requestId: string) =>
+    runWheelCommand(doc, "addOutcome", { requestId }, contextFor(appSessionId, "q-1"));
+  const labels = (doc: Y.Doc) => getEntries(doc).map((entry) => entry.label);
+  const sync = (from: Y.Doc, to: Y.Doc) => Y.applyUpdate(to, Y.encodeStateAsUpdate(from, Y.encodeStateVector(to)));
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("finds both adds after two peers add before seeing each other", () => {
+    const base = createWheelDoc();
+    addEntries(base, ["Host"]);
+    const ada = createWheelDoc();
+    const ben = createWheelDoc();
+    sync(base, ada);
+    sync(base, ben);
+    expect(add(ada, "app-ada1", "h-1", ["Ada"])).toEqual({ ok: true, added: [0] });
+    expect(add(ben, "app-ben1", "h-1", ["Ben"])).toEqual({ ok: true, added: [0] });
+    sync(ada, ben);
+    sync(ben, ada);
+    for (const doc of [ada, ben]) {
+      expect(outcome(doc, "app-ada1", "h-1")).toEqual({ ok: true, added: [0] });
+      expect(outcome(doc, "app-ben1", "h-1")).toEqual({ ok: true, added: [0] });
+      expect(add(doc, "app-ada1", "h-1", ["Ada"])).toEqual({ ok: true, added: [0] });
+    }
+    expect(labels(ada).sort()).toEqual(["Ada", "Ben", "Host"]);
+    expect(labels(ben).sort()).toEqual(["Ada", "Ben", "Host"]);
+  });
+
+  it("still knows an add ran after 300 other adds and removals while its client was away", () => {
+    const doc = createWheelDoc();
+    add(doc, "app-away1", "h-1", ["Ada"]);
+    for (let index = 0; index < 300; index += 1) {
+      add(doc, "app-busy1", `h-${index + 1}`, [`N${index}`]);
+      removeEntryById(doc, getEntries(doc).find((entry) => entry.label === `N${index}`)!.id);
+    }
+    expect(add(doc, "app-away1", "h-1", ["Ada"])).toEqual({ ok: true, added: [0] });
+    expect(labels(doc)).toEqual(["Ada"]);
+  });
+
+  it("does not add a name again after someone removed it, sorted or cleared the wheel", () => {
+    for (const change of ["remove", "sort", "clear"] as const) {
+      const doc = createWheelDoc();
+      add(doc, "app-ada1", "h-1", ["Zed", "", "Ada"]);
+      if (change === "remove") removeEntryById(doc, getEntries(doc)[0].id);
+      if (change === "sort") runWheelCommand(doc, "sort", {}, contextFor("app-other", "h-9"));
+      if (change === "clear") clearEntries(doc);
+      expect(outcome(doc, "app-ada1", "h-1"), change).toEqual({ ok: true, added: [0, 2] });
+      add(doc, "app-ada1", "h-1", ["Zed", "", "Ada"]);
+      expect(labels(doc), change).toEqual({ remove: ["Ada"], sort: ["Ada", "Zed"], clear: [] }[change]);
+    }
+  });
+
+  it("answers notApplied for an add that never ran, and forgets a removed add only after a day", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(1_800_000_000_000);
+    const doc = createWheelDoc();
+    expect(outcome(doc, "app-ada1", "h-7")).toEqual({ ok: false, error: "notApplied" });
+    add(doc, "app-ada1", "h-1", ["Ada"]);
+    removeEntryById(doc, getEntries(doc)[0].id);
+    vi.setSystemTime(Date.now() + 23 * 3_600_000);
+    add(doc, "app-other", "h-1", ["Bo"]);
+    removeEntryById(doc, getEntries(doc)[0].id);
+    expect(outcome(doc, "app-ada1", "h-1")).toEqual({ ok: true, added: [0] });
+    vi.setSystemTime(Date.now() + 2 * 3_600_000);
+    expect(outcome(doc, "app-ada1", "h-1")).toEqual({ ok: false, error: "notApplied" });
+    add(doc, "app-other", "h-2", ["Cy"]);
+    removeEntryById(doc, getEntries(doc)[0].id);
+    expect([...doc.getMap("wheel.retired").keys()].sort()).toEqual(["app-other/h-1#0", "app-other/h-2#0"]);
+  });
+});
+

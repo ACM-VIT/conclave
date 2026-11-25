@@ -15,8 +15,8 @@ const SPIN_KEY = "spin";
 const HISTORY_KEY = "history";
 const SETTINGS_KEY = "settings";
 const REMOVE_WINNER_KEY = "removeWinnerOnDone";
-const ADDS_KEY = "adds";
-const MAX_ADD_RECORDS = 256;
+const RETIRED_ROOT = "wheel.retired";
+const RETIRED_KEEP_MS = 24 * 60 * 60 * 1000;
 const MAX_ADD_INDEX = 4_096;
 
 export const MAX_WHEEL_ENTRIES = WHEEL_LIMITS.entries;
@@ -29,7 +29,11 @@ const MAX_SPIN_TURNS = 20;
 export type WheelEntry = {
   id: string;
   label: string;
+  addedBy?: string;
+  slot?: number;
 };
+
+export type AddOrigin = { key: string; slots: number[] };
 
 export type WheelSpin = {
   spinId: string;
@@ -115,8 +119,29 @@ const pruneTo = (array: Y.Array<unknown>, indexes: number[]): void => {
 const acceptEntries = (records: readonly unknown[]): Accepted<WheelEntry> =>
   accept(records, MAX_WHEEL_ENTRIES, readEntry, (entry) => entry.id);
 
+const originOf = (value: unknown): { key: string; slot: number } | null => {
+  if (!isRecord(value) || typeof value.addedBy !== "string" || value.addedBy === "") return null;
+  const slot = value.slot;
+  if (typeof slot !== "number" || !Number.isInteger(slot) || slot < 0 || slot >= MAX_ADD_INDEX) return null;
+  return { key: value.addedBy, slot };
+};
+
+const retire = (doc: Y.Doc | null, removed: readonly unknown[]): void => {
+  if (!doc) return;
+  const origins = removed.map(originOf).filter((origin) => origin !== null);
+  if (origins.length === 0) return;
+  const retired = doc.getMap<unknown>(RETIRED_ROOT);
+  const now = Date.now();
+  for (const origin of origins) retired.set(`${origin.key}#${origin.slot}`, now);
+  const stale = [...retired.entries()].filter(([, at]) => typeof at !== "number" || at < now - RETIRED_KEEP_MS);
+  for (const [key] of stale) retired.delete(key);
+};
+
 const prunedEntries = (entries: EntriesArray): WheelEntry[] => {
-  const accepted = acceptEntries(entries.toArray());
+  const records = entries.toArray();
+  const accepted = acceptEntries(records);
+  const kept = new Set(accepted.indexes);
+  retire(entries.doc, records.filter((_, index) => !kept.has(index)));
   pruneTo(entries as Y.Array<unknown>, accepted.indexes);
   return accepted.kept;
 };
@@ -131,10 +156,10 @@ export const getEntries = (doc: Y.Doc): WheelEntry[] => {
   return entries ? acceptEntries(entries.toArray()).kept : [];
 };
 
-export const addEntries = (doc: Y.Doc, rawLabels: string[]): number => {
+export const addEntries = (doc: Y.Doc, rawLabels: string[], origin?: AddOrigin): number => {
   const labels = rawLabels
-    .map(normalizeLabel)
-    .filter((label) => label.length > 0);
+    .map((raw, index) => ({ label: normalizeLabel(raw), slot: origin?.slots[index] }))
+    .filter((item) => item.label.length > 0);
   if (labels.length === 0) return 0;
 
   let added = 0;
@@ -144,7 +169,9 @@ export const addEntries = (doc: Y.Doc, rawLabels: string[]): number => {
     if (room <= 0) return;
     const batch = labels
       .slice(0, room)
-      .map((label) => ({ id: createEntryId(), label }));
+      .map(({ label, slot }): WheelEntry =>
+        origin && slot !== undefined ? { id: createEntryId(), label, addedBy: origin.key, slot } : { id: createEntryId(), label }
+      );
     entries.push(batch);
     added = batch.length;
   });
@@ -153,31 +180,20 @@ export const addEntries = (doc: Y.Doc, rawLabels: string[]): number => {
 
 export type AddOutcome = { ok: boolean; error?: string; added: number[] };
 
-const readAddOutcome = (value: unknown): AddOutcome | null => {
-  if (!isRecord(value) || typeof value.ok !== "boolean" || !Array.isArray(value.added)) return null;
-  const added = (value.added as unknown[]).filter(
-    (index): index is number => Number.isInteger(index) && (index as number) >= 0 && (index as number) < MAX_ADD_INDEX
-  );
-  if (added.length !== value.added.length || added.length > MAX_WHEEL_ENTRIES) return null;
-  if (value.error !== undefined && typeof value.error !== "string") return null;
-  return typeof value.error === "string" ? { ok: value.ok, error: cutText(value.error, 64), added } : { ok: value.ok, added };
-};
-
 export const getAddOutcome = (doc: Y.Doc, key: string): AddOutcome | null => {
-  const adds = getRoot(doc).get(ADDS_KEY);
-  return adds instanceof Y.Map ? readAddOutcome(adds.get(key)) : null;
-};
-
-export const recordAddOutcome = (doc: Y.Doc, key: string, outcome: AddOutcome): void => {
-  doc.transact(() => {
-    const adds = ensureAppMap(getRoot(doc), ADDS_KEY);
-    adds.set(key, { ...outcome, at: Date.now() });
-    if (adds.size <= MAX_ADD_RECORDS) return;
-    const byAge = [...adds.entries()].sort(
-      ([, a], [, b]) => (isRecord(a) && typeof a.at === "number" ? a.at : 0) - (isRecord(b) && typeof b.at === "number" ? b.at : 0)
-    );
-    for (const [stale] of byAge.slice(0, adds.size - MAX_ADD_RECORDS)) adds.delete(stale);
-  });
+  const slots = new Set<number>();
+  for (const record of readEntriesArray(doc)?.toArray() ?? []) {
+    const origin = originOf(record);
+    if (origin && origin.key === key) slots.add(origin.slot);
+  }
+  const prefix = `${key}#`;
+  const oldest = Date.now() - RETIRED_KEEP_MS;
+  for (const [retiredKey, at] of doc.getMap<unknown>(RETIRED_ROOT).entries()) {
+    if (!retiredKey.startsWith(prefix) || typeof at !== "number" || at < oldest) continue;
+    const slot = Number(retiredKey.slice(prefix.length));
+    if (Number.isInteger(slot) && slot >= 0 && slot < MAX_ADD_INDEX) slots.add(slot);
+  }
+  return slots.size > 0 ? { ok: true, added: [...slots].sort((a, b) => a - b) } : null;
 };
 
 export const addEntry = (doc: Y.Doc, rawLabel: string): boolean =>
@@ -188,21 +204,29 @@ export const removeEntryById = (doc: Y.Doc, entryId: string): void => {
   if (!entries) return;
   doc.transact(() => {
     const index = prunedEntries(entries).findIndex((entry) => entry.id === entryId);
-    if (index >= 0) entries.delete(index, 1);
+    if (index < 0) return;
+    retire(doc, [entries.get(index)]);
+    entries.delete(index, 1);
   });
 };
 
 export const clearEntries = (doc: Y.Doc): void => {
   const entries = readEntriesArray(doc);
   if (!entries || entries.length === 0) return;
-  entries.delete(0, entries.length);
+  doc.transact(() => {
+    retire(doc, entries.toArray());
+    entries.delete(0, entries.length);
+  });
 };
 
 export const replaceEntries = (doc: Y.Doc, next: WheelEntry[]): void => {
   doc.transact(() => {
     const entries = ensureAppArray(getRoot(doc), ENTRIES_KEY) as EntriesArray;
+    const kept = acceptEntries(next).kept;
+    const keptIds = new Set(kept.map((entry) => entry.id));
+    retire(doc, entries.toArray().filter((record) => !(isRecord(record) && keptIds.has(record.id))));
     entries.delete(0, entries.length);
-    entries.push(acceptEntries(next).kept);
+    entries.push(kept);
   });
 };
 

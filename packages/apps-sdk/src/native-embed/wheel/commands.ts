@@ -6,7 +6,6 @@ import {
   getAddOutcome,
   getEntries,
   normalizeLabel,
-  recordAddOutcome,
   removeEntryById,
   replaceEntries,
   setRemoveWinnerOnDone,
@@ -31,24 +30,18 @@ export const labelsFrom = (payload: Record<string, unknown>): SentName[] => {
   return names;
 };
 
-const addOnce = (doc: Y.Doc, payload: Record<string, unknown>): CommandResult & { added: number[] } => {
+const addOnce = (doc: Y.Doc, payload: Record<string, unknown>, requestKey?: string): CommandResult => {
   const names = labelsFrom(payload);
   if (names.length === 0) return { ok: false, error: "noNames", added: [] };
-  const count = addEntries(doc, names.map((name) => name.label));
+  const origin = requestKey === undefined ? undefined : { key: requestKey, slots: names.map((name) => name.index) };
+  const count = addEntries(doc, names.map((name) => name.label), origin);
   if (count === 0) return { ok: false, error: "full", added: [] };
   return { ok: true, added: names.slice(0, count).map((name) => name.index) };
 };
 
 export const addNames = (doc: Y.Doc, payload: Record<string, unknown>, requestKey?: string): CommandResult => {
   if (requestKey === undefined) return addOnce(doc, payload);
-  const known = getAddOutcome(doc, requestKey);
-  if (known) return known;
-  let outcome: CommandResult & { added: number[] } = { ok: false, error: "failed", added: [] };
-  doc.transact(() => {
-    outcome = addOnce(doc, payload);
-    recordAddOutcome(doc, requestKey, outcome);
-  });
-  return outcome;
+  return getAddOutcome(doc, requestKey) ?? addOnce(doc, payload, requestKey);
 };
 
 const addOutcome = (doc: Y.Doc, payload: Record<string, unknown>, keyOf: (requestId: string) => string): CommandResult => {
