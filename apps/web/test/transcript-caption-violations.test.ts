@@ -4,7 +4,7 @@ import {
   TRANSCRIPTION_LINE_DEADLINE_MS as DEADLINE,
 } from "../transcript-worker/src/constants";
 import { Pcm24To16Downsampler } from "../transcript-worker/src/transcription/sarvam";
-import { pcmBase64, voicedPcm } from "./transcript-audio-fixtures";
+import { clicksPcm, pcmBase64, voicedPcm } from "./transcript-audio-fixtures";
 import {
   OPENAI,
   SARVAM,
@@ -226,6 +226,211 @@ describe("one row per violation in the caption ownership design read", () => {
     const graceLane = await laneOf(rig, grace);
     expect([carries(adaLane, adaAudio), carries(adaLane, graceAudio)]).toEqual([true, false]);
     expect([carries(graceLane, adaAudio), carries(graceLane, graceAudio)]).toEqual([false, true]);
+  });
+});
+
+const mo = { userId: "mo", displayName: "Mo" };
+const kit = { userId: "kit", displayName: "Kit" };
+const clicks = pcmBase64(clicksPcm(-12, 200, 5));
+const openSockets = (rig: Rig) => rig.providerSockets().filter(({ closed }) => !closed);
+const carriesAudio = (socket: FakeProviderSocket, audio: string) => {
+  const wire = new Pcm24To16Downsampler().downsample(audio);
+  return socket.sent.some((message) => (message.audio as { data?: string } | undefined)?.data === wire);
+};
+const answerTurn = async (rig: Rig, speaker: Speaker, requestId: string, text: string) => {
+  const socket = await laneOf(rig, speaker);
+  socket.emit(sarvamSpeechStart());
+  socket.emit(sarvamFinal(requestId, text));
+};
+const signalOnce = async (rig: Rig) => {
+  await sendNamed(rig, named(140), ada);
+  await answerTurn(rig, ada, "setup", "Setup.");
+  await rig.clear(ada);
+  await vi.advanceTimersByTimeAsync(3_000);
+};
+
+describe("each Sarvam lane owns its own turns and answers", () => {
+  it("an utterance Sarvam never answers shows its gap at its own audio, never at quiet audio our check counted before it (residual seed 11)", async () => {
+    const rig = await startRig(SARVAM);
+    await signalOnce(rig);
+    await sendNamed(rig, clicks, lin);
+    await rig.clear(lin);
+    await vi.advanceTimersByTimeAsync(400);
+    const spokeAt = Date.now();
+    await sendNamed(rig, named(170), lin);
+    await rig.clear(lin);
+    await vi.advanceTimersByTimeAsync(3_000);
+    (await laneOf(rig, lin)).emit(sarvamSpeechStart());
+    await vi.advanceTimersByTimeAsync(DEADLINE + 5_000);
+
+    const gaps = rig.viewerTranscript().segments.filter(({ text, speakerUserId }) => text === GAP && speakerUserId === "lin");
+    expect(gaps.map(({ startMs }) => startMs >= spokeAt)).toEqual([true]);
+  });
+
+  it("when Sarvam answers one turn in two parts, the second part stays on that turn's line and never takes the speaker's next turn", async () => {
+    const rig = await startRig(SARVAM);
+    await signalOnce(rig);
+    await sendNamed(rig, named(150), ada);
+    await sendNamed(rig, named(152), ada);
+    await rig.clear(ada);
+    await vi.advanceTimersByTimeAsync(100);
+    await answerTurn(rig, ada, "p1", "Part one.");
+    await vi.advanceTimersByTimeAsync(100);
+    await sendNamed(rig, named(210), ada);
+    await rig.clear(ada);
+    await vi.advanceTimersByTimeAsync(1_300);
+    await answerTurn(rig, ada, "p2", "Part two.");
+    await vi.advanceTimersByTimeAsync(1_600);
+    await answerTurn(rig, ada, "p3", "Next turn.");
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(shown(rig).filter(([, speaker]) => speaker === "ada").map(([text]) => text)).toEqual([
+      "Setup.",
+      "Part one. Part two.",
+      "Next turn.",
+    ]);
+  });
+
+  it("a clear from one speaker never splits another speaker's turn, so a reconnect replays none of that speaker's answered audio as a new line (Greptile r4688831704)", async () => {
+    const rig = await startRig(SARVAM);
+    await sendNamed(rig, named(150), ada);
+    await rig.clear(grace);
+    await sendNamed(rig, named(160), ada);
+    await answerTurn(rig, ada, "a", "Ada said both.");
+    await rig.clear(ada);
+    await vi.advanceTimersByTimeAsync(2_000);
+    (await laneOf(rig, ada)).disconnect();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await answerTurn(rig, ada, "again", "Ada said both.");
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(shown(rig).filter(([text]) => text === "Ada said both.")).toEqual([["Ada said both.", "ada"]]);
+  });
+
+  it("speech under our voice threshold keeps Sarvam's words when a second START comes over three seconds later (Greptile r4688831705)", async () => {
+    const rig = await startRig(SARVAM);
+    const [first] = rig.providerSockets();
+    await sendNamed(rig, whisper, ada);
+    first.emit(sarvamSpeechStart());
+    await vi.advanceTimersByTimeAsync(3_200);
+    await sendNamed(rig, pcmBase64(voicedPcm(-56, 200, 190)), ada);
+    first.emit(sarvamSpeechStart());
+    first.emit(sarvamFinal("w1", "Whispered first."));
+    await rig.clear(ada);
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(shown(rig)).toEqual([["Whispered first.", "ada"]]);
+  });
+
+  it("with one saved segment, quiet utterances keep their speaking order (Greptile r4688831713)", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    const rig = await transcriptRoomRig(lookup, SARVAM, { TRANSCRIPT_MAX_SEGMENTS: "1" });
+    await rig.start("hi");
+    for (const [index, text] of ["First quiet.", "Second quiet.", "Third quiet."].entries()) {
+      await sendNamed(rig, pcmBase64(voicedPcm(-56, 200, 170 + index * 9)), ada);
+      await answerTurn(rig, ada, `q${index}`, text);
+      await rig.clear(ada);
+      await vi.advanceTimersByTimeAsync(3_000);
+    }
+
+    const places = rig.broadcastPlacesByWords();
+    expect(Math.max(...(places.get("Second") ?? [])) < Math.min(...(places.get("Third") ?? []))).toBe(true);
+  });
+
+  it("an idle speaker's connection closes once their last answer is in, and their next audio opens a new one (Greptile r4688831726)", async () => {
+    const rig = await startRig(SARVAM);
+    await signalOnce(rig);
+    await sendNamed(rig, named(200), grace);
+    const graceLane = await laneOf(rig, grace);
+    await answerTurn(rig, grace, "g1", "Grace before.");
+    await rig.clear(grace);
+    await vi.advanceTimersByTimeAsync(3_000);
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(graceLane.closed).toBe(true);
+
+    const again = named(230);
+    await sendNamed(rig, again, grace);
+    await settle();
+    const reopened = await laneOf(rig, grace);
+    await answerTurn(rig, grace, "g2", "Grace after.");
+    await rig.clear(grace);
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect([reopened === graceLane, carriesAudio(reopened, again)]).toEqual([false, true]);
+    expect(shown(rig).filter(([, speaker]) => speaker === "grace")).toEqual([
+      ["Grace before.", "grace"],
+      ["Grace after.", "grace"],
+    ]);
+  });
+
+  it("a stopped screen share's connection closes while the same person's microphone keeps its own", async () => {
+    const rig = await startRig(SARVAM);
+    const mic = { ...ada, source: "local" as const };
+    const screen = { ...ada, source: "screen" as const };
+    await rig.speak(mic);
+    await rig.speak(screen);
+    const screenLane = await laneOf(rig, screen);
+    await answerTurn(rig, screen, "s", "Shared clip.");
+    await rig.clear(screen);
+    for (let step = 0; step < 9; step += 1) {
+      await vi.advanceTimersByTimeAsync(2_000);
+      await answerTurn(rig, mic, `m${step}`, `Mic ${step}.`);
+      await rig.clear(mic);
+      await vi.advanceTimersByTimeAsync(3_000);
+      await rig.speak(mic);
+    }
+
+    expect([screenLane.closed, (await laneOf(rig, mic)).closed, rig.providerSockets().length]).toEqual([true, false, 2]);
+  });
+
+  it("at most four speakers hold a Sarvam connection at once; a fifth waits for a free one and still gets only its own words", async () => {
+    const rig = await startRig(SARVAM);
+    await signalOnce(rig);
+    const audioOf = new Map<Speaker, string>();
+    for (const [index, person] of [ada, grace, lin, mo].entries()) {
+      audioOf.set(person, named(150 + index * 30));
+      await sendNamed(rig, audioOf.get(person)!, person);
+    }
+    await settle();
+    const kitAudio = named(290);
+    await sendNamed(rig, kitAudio, kit);
+    await settle();
+    const whileFull = openSockets(rig).length;
+    const kitWaited = !openSockets(rig).some((socket) => carriesAudio(socket, kitAudio));
+
+    await answerTurn(rig, ada, "a", "Ada first.");
+    await rig.clear(ada);
+    await vi.advanceTimersByTimeAsync(3_000);
+    const kitLane = openSockets(rig).find((socket) => carriesAudio(socket, kitAudio));
+    kitLane?.emit(sarvamSpeechStart());
+    kitLane?.emit(sarvamFinal("k", "Kit words."));
+    await rig.clear(kit);
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect([whileFull, kitWaited, openSockets(rig).length <= 4]).toEqual([4, true, true]);
+    expect(shown(rig).filter(([text]) => text !== "Setup.")).toEqual([
+      ["Ada first.", "ada"],
+      ["Kit words.", "kit"],
+    ]);
+  });
+
+  it("a long outage with repeated commits and clears holds one boundary per speaker, not one per message (Greptile r4688831730)", async () => {
+    const rig = await startRig(SARVAM);
+    await rig.speak(ada);
+    rig.connectPlans.push({ lateMs: 30_000 });
+    rig.providerSockets()[0].disconnect();
+    await settle();
+    for (let step = 0; step < 150; step += 1) {
+      await rig.commit(ada);
+      await rig.clear(ada);
+      await rig.clear(grace);
+      await vi.advanceTimersByTimeAsync(100);
+    }
+    const held = (rig.room as unknown as { audio: { queuedEvents(): unknown[] } }).audio.queuedEvents().length;
+
+    expect(held).toBeLessThanOrEqual(2);
   });
 });
 
