@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  type BatchFacts,
   countDropped,
   createBatchStore,
   createOutbox,
@@ -9,10 +10,15 @@ import {
   LEASE_MS,
   MAX_BATCH_BYTES,
   MAX_BATCH_EVENTS,
+  MARK_TTL_MS,
+  MAX_MARKS,
   MAX_STORED_CHARS,
+  mergeFacts,
+  NO_FACTS,
   type OutboxEvent,
   SEND_DEADLINE_MS,
   STORED_BATCH_PREFIX,
+  STORED_MARK_PREFIX,
   type StoredBatch,
   UNLOAD_BUDGET_BYTES,
   URGENT_FLUSH_GAP_MS,
@@ -28,6 +34,7 @@ type Answer = number | Reply | "offline" | "pending" | Promise<number | Reply>;
 /** Storage the next page load reads, shared by the outboxes a test makes: one entry per batch. */
 const memoryStore = () => {
   const saved = new Map<string, StoredBatch>();
+  const marks = new Map<string, BatchFacts & { at: number }>();
   return {
     save: (batch: StoredBatch) => {
       saved.set(batch.id, structuredClone(batch));
@@ -39,6 +46,18 @@ const memoryStore = () => {
     },
     remove: (id: string) => void saved.delete(id),
     list: () => [...saved.values()].map((batch) => structuredClone(batch)),
+    mark: (id: string, writer: string, facts: BatchFacts, at: number) => {
+      const key = `${id}:${writer}`;
+      const previous = marks.get(key);
+      marks.set(key, { ...(previous ? mergeFacts(previous, facts) : facts), at });
+      return true;
+    },
+    facts: (id: string) =>
+      [...marks.entries()].filter(([key]) => key.startsWith(`${id}:`)).reduce<BatchFacts>((facts, [, mark]) => mergeFacts(facts, mark), NO_FACTS),
+    pruneMarks: (before: number) => {
+      for (const [key, mark] of marks) if (mark.at < before) marks.delete(key);
+    },
+    marks,
   };
 };
 
@@ -170,7 +189,7 @@ const harness = ({
   };
 };
 
-const storedUuids = (store: Store) => store.list().flatMap((batch) => batch.events.map((event) => event.uuid));
+const storedUuids = (store: Store) => (store.list() ?? []).flatMap((batch) => batch.events.map((event) => event.uuid));
 
 const memoryWebStorage = (): Storage => {
   const items = new Map<string, string>();
@@ -866,7 +885,7 @@ describe("saved batches across tabs", () => {
     nextLoad.outbox.replaySaved();
     await nextLoad.advance(0);
     expect(nextLoad.posted().sort()).toEqual(saved.flat().map((item) => item.uuid).sort());
-    expect(site.items.size).toBe(0);
+    expect([...site.items.keys()].filter((key) => key.startsWith(STORED_BATCH_PREFIX))).toEqual([]);
   });
 
   it("removes only what a replay sent, never what another tab saved while it ran", async () => {
@@ -1371,6 +1390,97 @@ describe("an answer whose lock request is refused", () => {
 
     expect(h.posts.map((post) => post.at)).toEqual([START + 60_000]);
     expect(store.list()).toEqual([]);
+  });
+});
+
+describe("what an answer teaches every tab, with no lock", () => {
+  const twoTabs = (answer: Reply) => {
+    const shared = memoryWebStorage();
+    const clock = { now: START };
+    let aLocks = 0;
+    const aLock = (run: () => Promise<void>) =>
+      ++aLocks === 1 ? run() : Promise.reject(new DOMException("The lock request was aborted.", "AbortError"));
+    const sent = answerLater();
+    const a = harness({ store: createBatchStore(() => shared), clock, lock: aLock, answers: [sent.promise] });
+    const b = harness({ store: createBatchStore(() => shared), clock, answers: [200, 200] });
+    return { shared, clock, a, b, answer: () => sent.answer(answer) };
+  };
+  const start = async ({ a }: ReturnType<typeof twoTabs>) => {
+    a.refuseBeacons();
+    a.outbox.add(event());
+    a.outbox.flushForUnload();
+    await a.advance(0);
+    expect(a.posts.map((post) => post.at)).toEqual([START]);
+  };
+
+  it("holds a second tab to a Retry-After the first could not write under the lock", async () => {
+    const tabs = twoTabs({ status: 503, retryAfter: "60" });
+    await start(tabs);
+    await tabs.a.advance(14_500);
+    tabs.answer();
+    await settle();
+    await tabs.a.advance(1500);
+    tabs.b.outbox.replaySaved();
+    await tabs.b.advance(0);
+    expect(tabs.b.posts).toEqual([]);
+
+    await tabs.b.advance(60_000);
+    expect(tabs.b.posts.map((post) => post.at)).toEqual([START + 74_500]);
+  });
+
+  it("never sends again from a second tab what the first was told PostHog has", async () => {
+    const tabs = twoTabs({ status: 200, retryAfter: null });
+    await start(tabs);
+    await tabs.a.advance(14_500);
+    tabs.answer();
+    await settle();
+    await tabs.a.advance(1500);
+    tabs.b.outbox.replaySaved();
+    await tabs.b.advance(5 * MINUTE);
+
+    expect(tabs.b.posts).toEqual([]);
+    expect([...Array(tabs.shared.length).keys()].map((index) => tabs.shared.key(index)).filter((key) => key?.startsWith(STORED_BATCH_PREFIX))).toEqual([]);
+  });
+
+  it("strands nothing when storage cannot be read for a while", async () => {
+    const shared = memoryWebStorage();
+    let unreadable = false;
+    const flaky: Storage = {
+      get length() {
+        if (unreadable) throw new DOMException("Storage is unavailable.", "SecurityError");
+        return shared.length;
+      },
+      key: (index) => shared.key(index),
+      getItem: (key) => {
+        if (unreadable) throw new DOMException("Storage is unavailable.", "SecurityError");
+        return shared.getItem(key);
+      },
+      setItem: (key, value) => shared.setItem(key, value),
+      removeItem: (key) => shared.removeItem(key),
+      clear: () => shared.clear(),
+    };
+    const h = harness({ store: createBatchStore(() => flaky), answers: [200] });
+    h.refuseBeacons();
+    h.outbox.add(event());
+    h.outbox.flushForUnload();
+    unreadable = true;
+    await h.advance(5000);
+    expect(h.posts).toEqual([]);
+    unreadable = false;
+    await h.advance(MINUTE);
+
+    expect(h.posts).toHaveLength(1);
+  });
+
+  it("keeps at most a bounded number of marks, dropping those older than any batch could be", async () => {
+    const shared = memoryWebStorage();
+    const store = createBatchStore(() => shared);
+    for (let index = 0; index < MAX_MARKS; index++) store.mark(`old-${index}`, "tab", { delivered: true, notBefore: 0, attempt: 0 }, START);
+    const marks = () => [...Array(shared.length).keys()].map((index) => shared.key(index)).filter((key) => key?.startsWith(STORED_MARK_PREFIX));
+
+    expect(store.mark("new", "tab", { delivered: true, notBefore: 0, attempt: 0 }, START + 1000)).toBe(false);
+    expect(store.mark("new", "tab", { delivered: true, notBefore: 0, attempt: 0 }, START + MARK_TTL_MS + 1)).toBe(true);
+    expect(marks()).toHaveLength(1);
   });
 });
 

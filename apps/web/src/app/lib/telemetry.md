@@ -125,26 +125,30 @@ one owner at a time:
 - **Replayed.** A saved batch is sent only by a replay pass, which runs under
   a Web Locks lock (`conclave:telemetry:replay`) at its due time, when a tab
   loads or comes back into view, and when another tab changes a saved batch
-  (the `storage` event). A lock request the browser rejects before running
-  it leaves nothing waiting on it. An answer that could not get the lock is
-  kept in its tab, with its outcome, its Retry-After and the attempt id it
-  answered, and the tab asks again every 100 ms while that send's lease runs,
-  then with a backoff from 1 s to 30 s; the next lock the tab is granted, for
-  any purpose, applies its kept answers before anything else (delivered or
-  refused settles the batch, a retry keeps its wait from when the answer
-  arrived), or, if another tab has claimed the batch since, carries only its
-  Retry-After. A tab that closes, or stays frozen past the lease, before then
-  takes the answer with it, as any page that dies before writing does. A replay whose lock
-  request is refused asks again the same way. The pass claims a due batch by writing a new attempt
+  (the `storage` event). The pass claims a due batch by writing a new attempt
   id and a lease until 16 s after the send, so another tab leaves it alone
-  until the request has settled. An answer from an earlier attempt, one
-  that arrives after another tab took the batch over, changes nothing but
-  the wait: a Retry-After it carries still moves the stored batch's
-  `notBefore` later (never earlier), so whichever tab holds the batch waits
-  it out. A Retry-After is about the batch, whichever send it answered.
-  Storage is the only way it reaches another tab: when storage refuses that
-  write, or holds no copy because it refused the new owner's claim, the wait
-  is lost like any other write storage refuses. Local storage has no compare-and-set across tabs, so the lock is
+  until the request has settled.
+- **What an answer teaches every tab.** Two facts about a stored batch must
+  reach every tab whatever happens to the lock: that it was settled
+  (delivered, or refused for good), and the earliest time it may be sent
+  again (its Retry-After and its backoff, with its attempt count). A tab
+  publishes them as soon as it reads an answer for a stored batch, its own
+  send's or a late one, under a key of its own,
+  `conclave:telemetry:mark:<batch>:<tab>`, with no lock: each key has one
+  writer, which keeps its last facts in memory and only ever adds to them,
+  and readers merge every tab's key (settled if any says so, the latest time,
+  the highest attempt), so no write can undo another. Every send, beacon and
+  replay of a batch reads its marks first: a settled batch is dropped, never
+  sent, and a wait is kept. The lock only orders writes to the batch itself.
+  An answer whose lock request is refused, or whose batch cannot be read
+  then, changes nothing else: its facts are already published, and the tab
+  wakes for another pass. Marks are pruned once they are older than any batch
+  could be (5 minutes), and there are never more than 512. When storage
+  refuses a mark, that fact cannot reach other tabs, like any other write
+  storage refuses. A read that fails is never taken as an answer: the pass
+  that met it wakes again a second later, and a batch it could not finish is
+  never sent from memory while a stored copy may remain. A replay whose lock
+  request is refused asks again after 1 s, then up to every 30 s. Local storage has no compare-and-set across tabs, so the lock is
   what orders writes: a stored batch is written or removed only by a tab
   holding the lock (a claim, the answer to a claimed send, the answer to a
   keepalive send, a removal), which checks first that the stored copy still

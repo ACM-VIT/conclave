@@ -107,9 +107,21 @@ const buildHeld = (chunks: ReadonlyMap<string, string> | null): void => {
 
 const REPLAY_LOCK = "conclave:telemetry:replay";
 
+const STORAGE_PROBE = "conclave:telemetry:probe";
+
+const storageWorks = (): boolean => {
+  try {
+    localStorage.setItem(STORAGE_PROBE, "1");
+    localStorage.removeItem(STORAGE_PROBE);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 const outboxStorage = (): Pick<OutboxDeps, "store" | "lock"> => {
   const locks = typeof navigator === "undefined" ? null : (navigator.locks ?? null);
-  if (!locks) return { store: MEMORY_ONLY_STORE, lock: (run) => void run() };
+  if (!locks || !storageWorks()) return { store: MEMORY_ONLY_STORE, lock: (run) => void run() };
   return {
     store: createBatchStore(() => localStorage),
     lock: (run) => locks.request(REPLAY_LOCK, run),

@@ -23,8 +23,9 @@ export const LEASE_MS = SEND_DEADLINE_MS + 1000;
 export const BEACON_CONFIRM_MS = 30_000;
 export const MAX_EVENT_BYTES = 32 * 1024;
 export const LOCK_RETRY_MS = 1000;
-export const KEPT_ANSWER_RETRY_MS = 100;
 const MAX_LOCK_RETRY_MS = 30_000;
+export const MARK_TTL_MS = MAX_EVENT_AGE_MS;
+export const MAX_MARKS = 512;
 const MAX_TEXT_CHARS = 1024;
 
 export type StoredBatch = {
@@ -39,11 +40,24 @@ export type StoredBatch = {
   leaseUntil: number;
 };
 
+export type BatchFacts = { delivered: boolean; notBefore: number; attempt: number };
+
+export const NO_FACTS: BatchFacts = { delivered: false, notBefore: 0, attempt: 0 };
+
+export const mergeFacts = (a: BatchFacts, b: BatchFacts): BatchFacts => ({
+  delivered: a.delivered || b.delivered,
+  notBefore: Math.max(a.notBefore, b.notBefore),
+  attempt: Math.max(a.attempt, b.attempt),
+});
+
 export type BatchStore = {
   save: (batch: StoredBatch) => boolean;
   get: (id: string) => StoredBatch | null;
   remove: (id: string) => void;
-  list: () => StoredBatch[];
+  list: () => StoredBatch[] | null;
+  mark: (id: string, writer: string, facts: BatchFacts, at: number) => boolean;
+  facts: (id: string) => BatchFacts | null;
+  pruneMarks: (before: number) => void;
 };
 
 export const MEMORY_ONLY_STORE: BatchStore = {
@@ -51,6 +65,9 @@ export const MEMORY_ONLY_STORE: BatchStore = {
   get: () => null,
   remove: () => {},
   list: () => [],
+  mark: () => false,
+  facts: () => NO_FACTS,
+  pruneMarks: () => {},
 };
 
 type Written = "written" | "refused" | "lost";
@@ -58,7 +75,7 @@ type Written = "written" | "refused" | "lost";
 type LockedStore = {
   write: (owned: string, next: StoredBatch) => Written;
   remove: (id: string, owned: string) => boolean;
-  delay: (id: string, until: number) => boolean;
+  drop: (id: string) => void;
 };
 
 export type DroppedBatches = { batches: number; events: number; unsent: number };
@@ -87,8 +104,6 @@ export type OutboxDeps = {
 };
 
 type InFlight = { keepalive: boolean };
-
-type KeptAnswer = { sendId: string; reply: Reply | null; at: number; leaseUntil: number; retry: boolean; apply: (current: StoredBatch, store: LockedStore) => void };
 
 type Batch = {
   id: string;
@@ -178,8 +193,9 @@ export function createOutbox(deps: OutboxDeps) {
   let replay: "idle" | "waiting" | "running" = "idle";
   let replayAgain = false;
   let wakeTimer: { handle: unknown; at: number } | null = null;
-  const kept = new Map<string, KeptAnswer[]>();
   let lockRetryMs = LOCK_RETRY_MS;
+  const writer = deps.newId();
+  const published = new Map<string, BatchFacts & { at: number }>();
 
   const overhead = byteLength(
     JSON.stringify({ api_key: deps.token, batch: [], sent_at: new Date(0).toISOString() }),
@@ -285,14 +301,11 @@ export function createOutbox(deps: OutboxDeps) {
           deps.store.remove(id);
           return true;
         },
-        delay: (id, until) => {
-          const current = open ? deps.store.get(id) : null;
-          if (!current) return false;
-          return until <= current.notBefore || deps.store.save({ ...current, notBefore: until });
+        drop: (id) => {
+          if (open) deps.store.remove(id);
         },
       };
       try {
-        for (const id of [...kept.keys()]) applyKept(id, store);
         run(store);
       } finally {
         open = false;
@@ -303,16 +316,23 @@ export function createOutbox(deps: OutboxDeps) {
     });
   };
 
-  const finish = (batch: Batch, store: LockedStore | null): void => {
+  const forget = (batch: Batch): void => {
     if (batch.timer !== null) deps.clearTimer(batch.timer);
     batch.timer = null;
     live.delete(batch.id);
-    if (batch.saved) store?.remove(batch.id, batch.sendId);
+  };
+
+  const finish = (batch: Batch, store: LockedStore | null): void => {
+    forget(batch);
+    if (batch.saved && store && !store.remove(batch.id, batch.sendId)) readAgainSoon();
   };
 
   const expire = (batch: Batch, store: LockedStore | null): void => {
     live.delete(batch.id);
-    if (batch.saved && !store?.remove(batch.id, batch.sendId)) return;
+    if (batch.saved && !store?.remove(batch.id, batch.sendId)) {
+      readAgainSoon();
+      return;
+    }
     deps.onStale([stored(batch)]);
   };
 
@@ -327,21 +347,11 @@ export function createOutbox(deps: OutboxDeps) {
   };
 
   const retryLock = (): void => {
-    const leased = [...kept.values()].flat().some((answer) => answer.leaseUntil > deps.now());
-    if (leased) {
-      wakeAt(deps.now() + KEPT_ANSWER_RETRY_MS);
-      return;
-    }
     wakeAt(deps.now() + lockRetryMs);
     lockRetryMs = Math.min(lockRetryMs * 2, MAX_LOCK_RETRY_MS);
   };
 
-  const keepAnswer = (id: string, answer: KeptAnswer): void => {
-    kept.set(id, [...(kept.get(id) ?? []), answer]);
-    retryLock();
-  };
-
-  const isRetry = (reply: Reply | null): boolean => !reply || answerOf(reply.status, reply.retryAfter, deps.now()).outcome === "retry";
+  const readAgainSoon = (): void => wakeAt(deps.now() + LOCK_RETRY_MS);
 
   const holdInMemory = (batch: Batch): void => {
     live.set(batch.id, batch);
@@ -366,8 +376,12 @@ export function createOutbox(deps: OutboxDeps) {
     live.delete(batch.id);
     const written = store.write(batch.sendId, stored(batch));
     if (written === "written") wakeAt(dueAt(batch));
+    if (written === "lost") readAgainSoon();
     if (written !== "refused") return;
-    store.remove(batch.id, batch.sendId);
+    if (!store.remove(batch.id, batch.sendId)) {
+      readAgainSoon();
+      return;
+    }
     batch.saved = false;
     holdInMemory(batch);
   };
@@ -377,9 +391,32 @@ export function createOutbox(deps: OutboxDeps) {
     return answer?.outcome === "retry" && answer.afterMs !== null ? at + answer.afterMs : 0;
   };
 
-  const carryWait = (id: string, reply: Reply | null, store: LockedStore, at = deps.now()): void => {
-    const until = waitAsked(reply, at);
-    if (until > 0 && store.delay(id, until)) wakeAt(until);
+  const factsOf = (reply: Reply | null, at: number, attempt: number, backoff: boolean): BatchFacts => {
+    const answer = reply ? answerOf(reply.status, reply.retryAfter, at) : null;
+    if (answer && answer.outcome !== "retry") return { delivered: true, notBefore: 0, attempt };
+    return {
+      delivered: false,
+      notBefore: Math.max(waitAsked(reply, at), backoff ? at + retryDelay(attempt) : 0),
+      attempt: backoff ? attempt + 1 : attempt,
+    };
+  };
+
+  const publish = (batch: Batch, facts: BatchFacts): void => {
+    if (!batch.saved) return;
+    const at = deps.now();
+    for (const [id, mark] of published) if (mark.at < at - MARK_TTL_MS) published.delete(id);
+    const merged = mergeFacts(published.get(batch.id) ?? NO_FACTS, facts);
+    published.set(batch.id, { ...merged, at });
+    deps.store.mark(batch.id, writer, merged, at);
+  };
+
+  const learned = (batch: { id: string; notBefore: number; attempt: number }): "delivered" | "unreadable" | "known" => {
+    const facts = deps.store.facts(batch.id);
+    if (facts === null) return "unreadable";
+    if (facts.delivered) return "delivered";
+    batch.notBefore = Math.max(batch.notBefore, facts.notBefore);
+    batch.attempt = Math.max(batch.attempt, facts.attempt);
+    return "known";
   };
 
   const applyAnswer = (batch: Batch, events: OutboxEvent[], reply: Reply | null, store: LockedStore | null, at = deps.now()): void => {
@@ -411,6 +448,22 @@ export function createOutbox(deps: OutboxDeps) {
       expire(batch, store);
       return;
     }
+    const known = learned(batch);
+    if (known === "delivered") {
+      if (batch.saved) store?.drop(batch.id);
+      forget(batch);
+      return;
+    }
+    if (known === "unreadable") {
+      if (batch.saved) {
+        live.delete(batch.id);
+        readAgainSoon();
+      } else {
+        batch.nextTry = Math.max(batch.nextTry, deps.now() + LOCK_RETRY_MS);
+        holdInMemory(batch);
+      }
+      return;
+    }
     if (dueAt(batch) > deps.now()) {
       if (batch.saved) wakeAt(dueAt(batch));
       else holdInMemory(batch);
@@ -432,10 +485,15 @@ export function createOutbox(deps: OutboxDeps) {
       const written = store?.write(owned, stored(batch)) ?? "lost";
       if (written === "lost") {
         live.delete(batch.id);
+        readAgainSoon();
         return;
       }
       if (written === "refused") {
-        store?.remove(batch.id, owned);
+        if (!store?.remove(batch.id, owned)) {
+          live.delete(batch.id);
+          readAgainSoon();
+          return;
+        }
         batch.saved = false;
       }
     }
@@ -456,36 +514,31 @@ export function createOutbox(deps: OutboxDeps) {
         applyAnswer(batch, events, reply, null);
         return;
       }
+      const facts = factsOf(reply, deps.now(), batch.attempt, true);
+      publish(batch, facts);
       locked(
         (held) => {
-        batch.inFlight = null;
-        batch.leaseUntil = 0;
-        const current = deps.store.get(batch.id);
-        if (current?.sendId !== sendId) {
-          live.delete(batch.id);
-          carryWait(batch.id, reply, held);
-          return;
-        }
-        batch.notBefore = Math.max(batch.notBefore, current.notBefore);
-        applyAnswer(batch, events, reply, held);
+          batch.inFlight = null;
+          batch.leaseUntil = 0;
+          const current = deps.store.get(batch.id);
+          if (current?.sendId !== sendId) {
+            live.delete(batch.id);
+            readAgainSoon();
+            return;
+          }
+          batch.notBefore = Math.max(batch.notBefore, current.notBefore);
+          if (deps.store.facts(batch.id)?.delivered) {
+            held.drop(batch.id);
+            forget(batch);
+            return;
+          }
+          applyAnswer(batch, events, reply, held);
         },
         () => {
           const leaseUntil = batch.leaseUntil;
           batch.inFlight = null;
           live.delete(batch.id);
-          const at = deps.now();
-          keepAnswer(batch.id, {
-            sendId,
-            reply,
-            at,
-            leaseUntil,
-            retry: isRetry(reply),
-            apply: (current, store) => {
-              const answered = fromStorage(current);
-              answered.leaseUntil = 0;
-              applyAnswer(answered, events, reply, store, at);
-            },
-          });
+          wakeAt(Math.max(leaseUntil, facts.notBefore, deps.now() + LOCK_RETRY_MS));
         },
       );
     };
@@ -500,6 +553,8 @@ export function createOutbox(deps: OutboxDeps) {
     if (!reply) return;
     const at = deps.now();
     const final = answerOf(reply.status, reply.retryAfter, at).outcome !== "retry";
+    const facts = factsOf(reply, at, batch.attempt, false);
+    publish(batch, facts);
     const settleAnswered = (answered: Batch, store: LockedStore | null): void => {
       if (final) {
         finish(answered, store);
@@ -516,20 +571,12 @@ export function createOutbox(deps: OutboxDeps) {
         (store) => {
           const current = deps.store.get(batch.id);
           if (!current || current.sendId !== sentWith) {
-            if (!final) carryWait(batch.id, reply, store);
+            readAgainSoon();
             return;
           }
           settleAnswered(fromStorage(current), store);
         },
-        () =>
-          keepAnswer(batch.id, {
-            sendId: sentWith,
-            reply,
-            at,
-            leaseUntil: 0,
-            retry: !final,
-            apply: (current, store) => settleAnswered(fromStorage(current), store),
-          }),
+        () => wakeAt(Math.max(facts.notBefore, deps.now() + LOCK_RETRY_MS)),
       );
       return;
     }
@@ -539,21 +586,25 @@ export function createOutbox(deps: OutboxDeps) {
     settleAnswered(batch, null);
   };
 
-  const applyKept = (id: string, store: LockedStore): void => {
-    const answers = kept.get(id) ?? [];
-    kept.delete(id);
-    for (const answer of answers) {
-      const current = deps.store.get(id);
-      if (!current) return;
-      if (current.sendId === answer.sendId) answer.apply(current, store);
-      else if (answer.retry) carryWait(id, answer.reply, store, answer.at);
-    }
-  };
-
   const replayPass = (store: LockedStore): void => {
     const stale: StoredBatch[] = [];
-    for (const saved of deps.store.list()) {
+    deps.store.pruneMarks(deps.now() - MARK_TTL_MS);
+    const listed = deps.store.list();
+    if (listed === null) {
+      readAgainSoon();
+      return;
+    }
+    for (const saved of listed) {
       if (live.has(saved.id)) continue;
+      const known = learned(saved);
+      if (known === "delivered") {
+        store.drop(saved.id);
+        continue;
+      }
+      if (known === "unreadable") {
+        readAgainSoon();
+        continue;
+      }
       if (saved.leaseUntil > deps.now()) {
         wakeAt(saved.leaseUntil);
         continue;
@@ -640,6 +691,10 @@ export function createOutbox(deps: OutboxDeps) {
       let budget = UNLOAD_BUDGET_BYTES - keepaliveBytes - beaconBytes();
       const waiting = [...live.values()].filter((batch) => batch.inFlight === null);
       for (const batch of [...waiting, ...batchesOf(items)]) {
+        if (learned(batch) === "delivered") {
+          forget(batch);
+          continue;
+        }
         const events = outgoing(batch);
         if (events.length === 0) {
           finish(batch, null);
@@ -698,23 +753,52 @@ const StoredBatchSchema = z.object({
   leaseUntil: z.number().default(0),
 });
 
+export const STORED_MARK_PREFIX = "conclave:telemetry:mark:";
+
+const StoredMark = z.object({
+  delivered: z.boolean(),
+  notBefore: z.number(),
+  attempt: z.number().int().min(0).max(1000),
+  at: z.number(),
+});
+
 export function createBatchStore(storage: () => Storage): BatchStore {
   const keyOf = (id: string) => `${STORED_BATCH_PREFIX}${id}`;
-  const entries = (area: Storage): Array<{ key: string; text: string }> => {
-    const found: Array<{ key: string; text: string }> = [];
+  const markKeyOf = (id: string, writer: string) => `${STORED_MARK_PREFIX}${id}:${writer}`;
+  const keysWith = (area: Storage, prefix: string): string[] => {
+    const found: string[] = [];
     for (let index = 0; index < area.length; index++) {
       const key = area.key(index);
-      const text = key?.startsWith(STORED_BATCH_PREFIX) ? area.getItem(key) : null;
-      if (key && text !== null) found.push({ key, text });
+      if (key?.startsWith(prefix)) found.push(key);
     }
     return found;
   };
+  const entries = (area: Storage): Array<{ key: string; text: string }> =>
+    keysWith(area, STORED_BATCH_PREFIX).flatMap((key) => {
+      const text = area.getItem(key);
+      return text === null ? [] : [{ key, text }];
+    });
   const parse = (key: string, text: string): StoredBatch | null => {
     try {
       const parsed = StoredBatchSchema.safeParse(JSON.parse(text));
       return parsed.success && keyOf(parsed.data.id) === key ? parsed.data : null;
     } catch {
       return null;
+    }
+  };
+  const parseMark = (text: string | null): z.infer<typeof StoredMark> | null => {
+    if (text === null) return null;
+    try {
+      const parsed = StoredMark.safeParse(JSON.parse(text));
+      return parsed.success ? parsed.data : null;
+    } catch {
+      return null;
+    }
+  };
+  const prune = (area: Storage, before: number): void => {
+    for (const key of keysWith(area, STORED_MARK_PREFIX)) {
+      const mark = parseMark(area.getItem(key));
+      if (!mark || mark.at < before) area.removeItem(key);
     }
   };
   return {
@@ -755,8 +839,43 @@ export function createBatchStore(storage: () => Storage): BatchStore {
           return batch ? [batch] : [];
         });
       } catch {
-        return [];
+        return null;
       }
+    },
+    mark(id, writer, facts, at) {
+      try {
+        const area = storage();
+        const key = markKeyOf(id, writer);
+        try {
+          const marks = keysWith(area, STORED_MARK_PREFIX);
+          if (!marks.includes(key) && marks.length >= MAX_MARKS) {
+            prune(area, at - MARK_TTL_MS);
+            if (keysWith(area, STORED_MARK_PREFIX).length >= MAX_MARKS) return false;
+          }
+        } catch {}
+        area.setItem(key, JSON.stringify({ ...facts, at }));
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    facts(id) {
+      try {
+        const area = storage();
+        let facts = NO_FACTS;
+        for (const key of keysWith(area, `${STORED_MARK_PREFIX}${id}:`)) {
+          const mark = parseMark(area.getItem(key));
+          if (mark) facts = mergeFacts(facts, mark);
+        }
+        return facts;
+      } catch {
+        return null;
+      }
+    },
+    pruneMarks(before) {
+      try {
+        prune(storage(), before);
+      } catch {}
     },
   };
 }
