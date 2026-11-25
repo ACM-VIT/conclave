@@ -268,6 +268,7 @@ export function NativeWhiteboardEmbed({ session }: { session: NativeEmbedSession
         case "setRemoveWinner":
         case "setSounds":
         case "clearResults":
+        case "addOutcome":
         case "playNow":
         case "enqueue":
         case "request":

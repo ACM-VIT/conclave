@@ -75,6 +75,8 @@ describe("native wheel commands", () => {
     addEntries(doc, ["Cy", "Ada", "Bo"]);
     const before = getEntries(doc);
     const context = (spinning: boolean): WheelCommandContext => ({
+      requestId: `h-${spinning}`,
+      addKey: (requestId) => `app-1/${requestId}`,
       spinning,
       requestSpin: () => ({ ok: true }),
       setSounds: () => ({ ok: true }),

@@ -15,6 +15,9 @@ const SPIN_KEY = "spin";
 const HISTORY_KEY = "history";
 const SETTINGS_KEY = "settings";
 const REMOVE_WINNER_KEY = "removeWinnerOnDone";
+const ADDS_KEY = "adds";
+const MAX_ADD_RECORDS = 256;
+const MAX_ADD_INDEX = 4_096;
 
 export const MAX_WHEEL_ENTRIES = WHEEL_LIMITS.entries;
 export const MAX_ENTRY_LABEL_LENGTH = WHEEL_LIMITS.label;
@@ -146,6 +149,35 @@ export const addEntries = (doc: Y.Doc, rawLabels: string[]): number => {
     added = batch.length;
   });
   return added;
+};
+
+export type AddOutcome = { ok: boolean; error?: string; added: number[] };
+
+const readAddOutcome = (value: unknown): AddOutcome | null => {
+  if (!isRecord(value) || typeof value.ok !== "boolean" || !Array.isArray(value.added)) return null;
+  const added = (value.added as unknown[]).filter(
+    (index): index is number => Number.isInteger(index) && (index as number) >= 0 && (index as number) < MAX_ADD_INDEX
+  );
+  if (added.length !== value.added.length || added.length > MAX_WHEEL_ENTRIES) return null;
+  if (value.error !== undefined && typeof value.error !== "string") return null;
+  return typeof value.error === "string" ? { ok: value.ok, error: cutText(value.error, 64), added } : { ok: value.ok, added };
+};
+
+export const getAddOutcome = (doc: Y.Doc, key: string): AddOutcome | null => {
+  const adds = getRoot(doc).get(ADDS_KEY);
+  return adds instanceof Y.Map ? readAddOutcome(adds.get(key)) : null;
+};
+
+export const recordAddOutcome = (doc: Y.Doc, key: string, outcome: AddOutcome): void => {
+  doc.transact(() => {
+    const adds = ensureAppMap(getRoot(doc), ADDS_KEY) as Y.Map<unknown>;
+    adds.set(key, { ...outcome, at: Date.now() });
+    if (adds.size <= MAX_ADD_RECORDS) return;
+    const byAge = [...adds.entries()].sort(
+      ([, a], [, b]) => (isRecord(a) && typeof a.at === "number" ? a.at : 0) - (isRecord(b) && typeof b.at === "number" ? b.at : 0)
+    );
+    for (const [stale] of byAge.slice(0, adds.size - MAX_ADD_RECORDS)) adds.delete(stale);
+  });
 };
 
 export const addEntry = (doc: Y.Doc, rawLabel: string): boolean =>

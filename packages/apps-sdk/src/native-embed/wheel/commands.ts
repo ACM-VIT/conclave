@@ -3,8 +3,10 @@ import {
   addEntries,
   clearEntries,
   clearHistory,
+  getAddOutcome,
   getEntries,
   normalizeLabel,
+  recordAddOutcome,
   removeEntryById,
   replaceEntries,
   setRemoveWinnerOnDone,
@@ -29,7 +31,7 @@ export const labelsFrom = (payload: Record<string, unknown>): SentName[] => {
   return names;
 };
 
-export const addNames = (doc: Y.Doc, payload: Record<string, unknown>): CommandResult => {
+const addOnce = (doc: Y.Doc, payload: Record<string, unknown>): CommandResult & { added: number[] } => {
   const names = labelsFrom(payload);
   if (names.length === 0) return { ok: false, error: "noNames", added: [] };
   const count = addEntries(doc, names.map((name) => name.label));
@@ -37,7 +39,27 @@ export const addNames = (doc: Y.Doc, payload: Record<string, unknown>): CommandR
   return { ok: true, added: names.slice(0, count).map((name) => name.index) };
 };
 
+export const addNames = (doc: Y.Doc, payload: Record<string, unknown>, requestKey?: string): CommandResult => {
+  if (requestKey === undefined) return addOnce(doc, payload);
+  const known = getAddOutcome(doc, requestKey);
+  if (known) return known;
+  let outcome: CommandResult & { added: number[] } = { ok: false, error: "failed", added: [] };
+  doc.transact(() => {
+    outcome = addOnce(doc, payload);
+    recordAddOutcome(doc, requestKey, outcome);
+  });
+  return outcome;
+};
+
+const addOutcome = (doc: Y.Doc, payload: Record<string, unknown>, keyOf: (requestId: string) => string): CommandResult => {
+  const requestId = payloadString(payload, "requestId");
+  if (!isValidIdentifier(requestId)) return { ok: false, error: "badRequest" };
+  return getAddOutcome(doc, keyOf(requestId)) ?? { ok: false, error: "notApplied" };
+};
+
 export type WheelCommandContext = {
+  requestId: string;
+  addKey: (requestId: string) => string;
   spinning: boolean;
   requestSpin: () => CommandResult;
   setSounds: (value: boolean) => CommandResult;
@@ -63,7 +85,9 @@ export const runWheelCommand = (
   if (REORDERING.has(type) && context.spinning) return { ok: false, error: "spinning" };
   switch (type) {
     case "addEntries":
-      return addNames(doc, payload);
+      return addNames(doc, payload, context.addKey(context.requestId));
+    case "addOutcome":
+      return addOutcome(doc, payload, context.addKey);
     case "removeEntry": {
       const entryId = payloadString(payload, "entryId");
       if (!isValidIdentifier(entryId)) return { ok: false, error: "badEntry" };

@@ -93,7 +93,7 @@ enum AppBridgeInboundType: String, CaseIterable, Equatable {
 enum AppBridgeOutboundType: String, CaseIterable, Equatable {
     case snapshot, update, awareness, status, resync, close
     case setTool, setColor, setStrokeWidth, setFill, undo, redo, setPage, addPage, renamePage, deletePage, zoomToFit, export
-    case addEntries, removeEntry, shuffle, sort, clearEntries, spin, setRemoveWinner, setSounds, clearResults
+    case addEntries, removeEntry, shuffle, sort, clearEntries, spin, setRemoveWinner, setSounds, clearResults, addOutcome
     case playNow, enqueue, request, approve, decline, cancelRequest, move, remove
 }
 

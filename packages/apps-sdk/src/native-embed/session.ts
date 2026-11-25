@@ -232,6 +232,7 @@ export class NativeEmbedSession {
       case "setRemoveWinner":
       case "setSounds":
       case "clearResults":
+      case "addOutcome":
       case "playNow":
       case "enqueue":
       case "request":

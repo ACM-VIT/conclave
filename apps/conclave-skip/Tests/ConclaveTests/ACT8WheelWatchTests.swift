@@ -327,7 +327,7 @@ struct ACT8WheelWatchTests {
         #expect(addRequests(wire).map { $0.labels } == [["Ada"], ["Bo"]])
     }
 
-    @Test func aRefusedOrUnansweredNameReturnsAheadOfLaterTyping() {
+    @Test func aRefusedOrUnansweredNameReturnsAheadOfLaterTyping() throws {
         let wire = Wire()
         let (presenter, relay) = wheelReady(wire)
         presenter.editWheelDraft("Cy\n")
@@ -340,14 +340,18 @@ struct ACT8WheelWatchTests {
         let second = addRequests(wire)[1].id
         for _ in 0..<AppBridgeProtocol.commandAttempts { presenter.fireCommandTimeout(requestId: second) }
         #expect(addRequests(wire).filter { $0.id == second }.count == AppBridgeProtocol.commandAttempts)
+        #expect(presenter.wheelDraft.text == "Ed", "an unanswered add stays out of the draft until the wheel says whether it ran")
+        let query = try #require(outcomeQueries(wire).last)
+        #expect(query.original == second)
+        answerOutcome(relay, query.id, applied: nil)
         #expect(presenter.wheelDraft.text == "Cy\nDe\nEd")
         ack(relay, second)
         #expect(presenter.wheelDraft.text == "Cy\nDe\nEd", "a late reply for a request that timed out changes nothing")
     }
 
-    @Test func anAddIsNeverRetriedPastTheDeadlineEvenWhenTheTimerWakesLate() {
+    @Test func anAddIsNeverRetriedPastTheDeadlineEvenWhenTheTimerWakesLate() throws {
         let wire = Wire()
-        let (presenter, _) = wheelReady(wire)
+        let (presenter, relay) = wheelReady(wire)
         var now = 1_000_000.0
         presenter.nowMillis = { now }
         presenter.editWheelDraft("Ada\n")
@@ -358,7 +362,12 @@ struct ACT8WheelWatchTests {
         now += AppBridgeProtocol.commandRetryDeadlineMillis
         presenter.fireCommandTimeout(requestId: first)
         #expect(addRequests(wire).filter { $0.id == first }.count == 2, "a timer that woke after the deadline sends nothing")
-        #expect(presenter.wheelDraft.text == "Ada", "the unanswered name returns to the draft")
+        #expect(presenter.wheelDraft.text.isEmpty, "a late wake never puts the name back on a guess")
+        let query = try #require(outcomeQueries(wire).last)
+        #expect(query.original == first, "it asks the wheel whether the add ran")
+        answerOutcome(relay, query.id, applied: [0])
+        #expect(presenter.wheelDraft.text.isEmpty && presenter.wheelDraft.sent.isEmpty, "the add ran, so the name stays added")
+        #expect(addRequests(wire).allSatisfy { $0.id == first }, "no fresh request ever sends the same name again")
 
         presenter.editWheelDraft("Bo\n")
         let second = addRequests(wire).last?.id ?? ""
@@ -382,6 +391,7 @@ struct ACT8WheelWatchTests {
             var replied = Set<String>()
             var accepted: [String] = []
             var timeouts: [String: Int] = [:]
+            var unsettled: [String] = []
             func requests() -> [(id: String, labels: [String])] {
                 var unique: [(id: String, labels: [String])] = []
                 for request in addRequests(wire) where !unique.contains(where: { $0.id == request.id }) { unique.append(request) }
@@ -389,7 +399,7 @@ struct ACT8WheelWatchTests {
             }
             for step in 0..<40 {
                 let open = requests().filter { !replied.contains($0.id) }
-                switch random(7) {
+                switch random(8) {
                 case 0, 1:
                     let letter = String(alphabet[random(alphabet.count)])
                     entered += letter
@@ -415,12 +425,27 @@ struct ACT8WheelWatchTests {
                         for index in added { accepted.append(request.labels[index]) }
                         ackAdded(relay, request.id, ok: !added.isEmpty, added: added)
                     }
-                default:
+                case 6:
                     if let request = open.isEmpty ? nil : open[random(open.count)] {
                         let fired = random(2) == 0 ? 1 : AppBridgeProtocol.commandAttempts
                         for _ in 0..<fired { presenter.fireCommandTimeout(requestId: request.id) }
                         timeouts[request.id, default: 0] += fired
-                        if timeouts[request.id, default: 0] >= AppBridgeProtocol.commandAttempts { replied.insert(request.id) }
+                        if timeouts[request.id, default: 0] >= AppBridgeProtocol.commandAttempts && !unsettled.contains(request.id) {
+                            unsettled.append(request.id)
+                        }
+                    }
+                default:
+                    let waiting = unsettled.filter { !replied.contains($0) }
+                    if let original = waiting.isEmpty ? nil : waiting[random(waiting.count)],
+                       let query = outcomeQueries(wire).last(where: { $0.original == original }),
+                       let request = requests().first(where: { $0.id == original }) {
+                        replied.insert(original)
+                        if random(2) == 0 {
+                            accepted.append(request.labels.joined())
+                            answerOutcome(relay, query.id, applied: Array(0..<request.labels.count))
+                        } else {
+                            answerOutcome(relay, query.id, applied: nil)
+                        }
                     }
                 }
                 let pending = requests().filter { !replied.contains($0.id) }.map { $0.labels.joined() }
@@ -495,9 +520,18 @@ struct ACT8WheelWatchTests {
                 presenter.apply(AppHostInputs.make(callSession: 1, appId: "wheel", isHost: true, isReconnecting: true))
                 presenter.apply(AppHostInputs.make(callSession: 1, appId: "wheel", isHost: true))
             }
+            #expect(presenter.wheelDraft.text == "Lin" && presenter.wheelDraft.sent.count == 1, "\(reset) never guesses the add failed")
             if reset == "reconnect" {
-                #expect(presenter.wheelDraft.text == "Lin" && presenter.wheelDraft.sent.count == 1, "the request is still open")
                 ack(relay, addRequests(wire)[0].id, ok: false)
+            } else {
+                relay.releaseEmbed()
+                relay.acceptPrimedSnapshot(AppsSyncResponse(syncMessage: Data([1]), stateVector: nil, awarenessUpdate: nil),
+                                           appSessionId: relay.appSessionId)
+                _ = relay.attachBridge(appSessionId: relay.appSessionId) { [wire] json in wire.delivered.append(json) }
+                #expect(ready(relay) == .none)
+                let query = outcomeQueries(wire).last
+                #expect(query?.original == addRequests(wire)[0].id, "\(reset) asks the reloaded wheel whether the add ran")
+                answerOutcome(relay, query?.id ?? "", applied: nil)
             }
             #expect(presenter.wheelDraft.text == "Grace\nLin", "\(reset) keeps every name")
             #expect(presenter.wheelDraft.sent.isEmpty, "\(reset)")
@@ -506,6 +540,25 @@ struct ACT8WheelWatchTests {
 
     private func ackAdded(_ session: ActiveAppSession, _ requestId: String, ok: Bool, added: [Int]) {
         send(session, "ack", ["ok": ok, "added": added], id: requestId)
+    }
+
+    private func outcomeQueries(_ wire: Wire) -> [(id: String, original: String)] {
+        var queries: [(id: String, original: String)] = []
+        for raw in wire.delivered {
+            let object = AppBridgeCodec.jsonObject(raw) ?? [:]
+            if object["type"] as? String != "addOutcome" { continue }
+            let payload = object["payload"] as? [String: Any] ?? [:]
+            queries.append((id: object["requestId"] as? String ?? "", original: payload["requestId"] as? String ?? ""))
+        }
+        return queries
+    }
+
+    private func answerOutcome(_ session: ActiveAppSession, _ queryId: String, applied: [Int]?, error: String = "notApplied") {
+        if let applied = applied {
+            send(session, "ack", ["ok": true, "added": applied], id: queryId)
+        } else {
+            send(session, "ack", ["ok": false, "error": error], id: queryId)
+        }
     }
 
     private static func names(_ count: Int) -> [String] {

@@ -200,6 +200,8 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
       if (!session.isSynced && envelope.type !== "setSounds") return { ok: false, error: "notSynced" };
       if (EDIT_COMMANDS.has(envelope.type) && !canEditRef.current) return { ok: false, error: "readOnly" };
       return runWheelCommand(doc, envelope.type, payload, {
+        requestId: envelope.requestId,
+        addKey: (requestId) => `${session.scope.appSessionId}/${requestId}`,
         spinning: isLive(),
         requestSpin,
         setSounds: (value) => {

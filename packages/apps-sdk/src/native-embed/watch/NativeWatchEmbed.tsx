@@ -362,6 +362,7 @@ export function NativeWatchEmbed({ session }: { session: NativeEmbedSession }) {
         case "setRemoveWinner":
         case "setSounds":
         case "clearResults":
+        case "addOutcome":
         default:
           return { ok: false, error: "unknownCommand" };
       }

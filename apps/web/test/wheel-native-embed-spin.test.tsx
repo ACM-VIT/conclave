@@ -211,3 +211,52 @@ describe("native wheel embed while a shared spin runs", () => {
   });
 });
 
+describe("native wheel adds across embed reloads", () => {
+  type Embed = { send: (type: string, payload: Record<string, unknown>, requestId: string) => Record<string, unknown> | undefined };
+
+  const openEmbed = (appSessionId = SCOPE.appSessionId): Embed => {
+    const scope = { ...SCOPE, appSessionId };
+    const sent: { type: string; requestId: string; payload: Record<string, unknown> }[] = [];
+    const embed = new NativeEmbedSession({ platform: "ios", post: (message: string) => sent.push(JSON.parse(message)), onMessage: () => {} }, scope, doc);
+    act(() => root.unmount());
+    root = createRoot(container);
+    act(() => root.render(<NativeWheelEmbed session={embed} />));
+    const send = (type: string, payload: Record<string, unknown>, requestId: string) => {
+      act(() => {
+        embed.receive(encodeEnvelope(type as never, scope, requestId, payload));
+      });
+      return sent.find((message) => message.type === "ack" && message.requestId === requestId)?.payload;
+    };
+    send("status", { readOnly: false, connection: "live", reduceMotion: false, pencilOnly: false, userId: "me", userName: "Me" }, "boot-status");
+    send("snapshot", { syncMessage: "", awarenessUpdate: "", stateVector: "" }, "boot-snapshot");
+    return { send };
+  };
+
+  const names = () => getEntries(doc).map((entry) => entry.label);
+
+  it("adds a name once when its ack was lost, the embed reloaded and native retried the same request", () => {
+    const first = openEmbed();
+    expect(first.send("addEntries", { labels: ["Ada"] }, "h-1")).toEqual({ ok: true, added: [0] });
+    const reloaded = openEmbed();
+    expect(reloaded.send("addEntries", { labels: ["Ada"] }, "h-1")).toEqual({ ok: true, added: [0] });
+    expect(names()).toEqual(["Ada"]);
+  });
+
+  it("tells native whether an add was applied, from the document, in any embed", () => {
+    const first = openEmbed();
+    first.send("addEntries", { labels: ["", "Ada", "Bo"] }, "h-1");
+    const reloaded = openEmbed();
+    expect(reloaded.send("addOutcome", { requestId: "h-1" }, "h-2")).toEqual({ ok: true, added: [1, 2] });
+    expect(reloaded.send("addOutcome", { requestId: "h-9" }, "h-3")).toEqual({ ok: false, error: "notApplied" });
+    expect(names()).toEqual(["Ada", "Bo"]);
+  });
+
+  it("keeps the same request id from another native app session apart", () => {
+    openEmbed("app-1111aaaa").send("addEntries", { labels: ["Ada"] }, "h-1");
+    const other = openEmbed("app-2222bbbb");
+    expect(other.send("addOutcome", { requestId: "h-1" }, "h-2")).toEqual({ ok: false, error: "notApplied" });
+    expect(other.send("addEntries", { labels: ["Cy"] }, "h-1")).toEqual({ ok: true, added: [0] });
+    expect(names()).toEqual(["Ada", "Cy"]);
+  });
+});
+
