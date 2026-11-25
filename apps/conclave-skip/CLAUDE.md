@@ -196,6 +196,17 @@ and does not reach `AppState.shared`, `MeetingViewModel.shared` or the other
 singletons listed in `scripts/check-native-test-stores.mjs`. `pnpm check`
 runs that guard.
 
+Robolectric runs each SDK in its own sandbox in one JVM, and Skip's `Bundle`
+registers a JVM-wide URL stream handler factory, which Java allows once. The
+`SandboxAssetUrlHandler` plugin (`Tests/ConclaveTests/Skip/resources/META-INF/services`)
+registers it in every sandbox before every test and accepts "factory already
+defined", so whichever sandbox comes first owns it and no class needs a
+per-class reset. The Kotlin test runner must put `Tests/ConclaveTests/Skip/resources`
+on the test resources path (the conclave-tools init script does), or a class on
+another SDK breaks every diagnostics store write in a later sandbox.
+`SandboxAssetUrlHandlerTests` runs on sdk 28 and 33 and fails if the plugin
+is not loaded.
+
 ## Performance Learnings
 
 The app felt sluggish mostly because of over-broad recomposition, not because

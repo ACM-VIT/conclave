@@ -19,12 +19,10 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowVibrator
 import org.robolectric.util.ReflectionHelpers
-import org.junit.Rule
 
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [31, 33])
 class ConclaveHapticsBridgeTests {
-    @get:Rule val urlHandlerSandbox = SharedUrlHandlerSandbox()
     private val application = RuntimeEnvironment.getApplication()
     private val vibrator = application.getSystemService(VibratorManager::class.java).defaultVibrator
     private val shadow = shadowOf(vibrator)

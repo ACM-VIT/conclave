@@ -12,13 +12,11 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import sun.misc.Unsafe
-import org.junit.Rule
 
 /** A camera start that waits behind a slow one belongs to the call it was asked in, not the next one. */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [33])
 class QueuedCameraStartBridgeTests {
-    @get:Rule val urlHandlerSandbox = SharedUrlHandlerSandbox()
     private val unsafe: Unsafe = Unsafe::class.java.getDeclaredField("theUnsafe").let {
         it.isAccessible = true
         it.get(null) as Unsafe

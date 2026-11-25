@@ -13,13 +13,11 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.LooperMode
 import org.webrtc.VideoTrack
 import sun.misc.Unsafe
-import org.junit.Rule
 
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [33])
 @LooperMode(LooperMode.Mode.PAUSED)
 class S6CFenceRegressionTests {
-    @get:Rule val urlHandlerSandbox = SharedUrlHandlerSandbox()
     private fun unsafe(): Unsafe = Unsafe::class.java.getDeclaredField("theUnsafe").let {
         it.isAccessible = true
         it.get(null) as Unsafe

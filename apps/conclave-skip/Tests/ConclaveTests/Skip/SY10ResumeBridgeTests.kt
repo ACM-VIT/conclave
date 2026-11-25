@@ -21,12 +21,10 @@ import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowActivityManager
 import skip.foundation.Date
 import skip.foundation.UserDefaults
-import org.junit.Rule
 
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [31])
 class SY10ResumeBridgeTests {
-    @get:Rule val urlHandlerSandbox = SharedUrlHandlerSandbox()
     private val context: Context
         get() = RuntimeEnvironment.getApplication()
 

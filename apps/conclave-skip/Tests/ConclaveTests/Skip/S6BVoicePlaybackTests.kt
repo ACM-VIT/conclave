@@ -7,12 +7,10 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import org.junit.Rule
 
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [33])
 class S6BVoicePlaybackTests {
-    @get:Rule val urlHandlerSandbox = SharedUrlHandlerSandbox()
     private fun item(id: String) = TtsQueueItem.make(messageId = id, userId = "speaker", displayName = "Speaker", text = id)
 
     private fun queue(): TtsPlaybackQueue = TtsPlaybackQueue(defaults = IsolatedDefaults.make()).apply {

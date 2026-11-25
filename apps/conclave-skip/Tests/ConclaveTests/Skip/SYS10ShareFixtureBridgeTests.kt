@@ -12,12 +12,10 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import java.util.concurrent.TimeUnit
-import org.junit.Rule
 
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [33])
 class SYS10ShareFixtureBridgeTests {
-    @get:Rule val urlHandlerSandbox = SharedUrlHandlerSandbox()
     private data class Expected(val share: String, val window: String, val isOn: Boolean, val isPending: Boolean)
 
     private val androidTable = linkedMapOf(

@@ -13,12 +13,10 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.w3c.dom.Element
-import org.junit.Rule
 
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [31])
 class SYS9AppLinkMatcherTests {
-    @get:Rule val urlHandlerSandbox = SharedUrlHandlerSandbox()
     private val androidNamespace = "http://schemas.android.com/apk/res/android"
     private val hosts = listOf("conclave.acmvit.in", "www.conclave.acmvit.in")
     private val accepted = listOf(

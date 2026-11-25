@@ -11,13 +11,11 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.LooperMode
-import org.junit.Rule
 
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [33])
 @LooperMode(LooperMode.Mode.PAUSED)
 class S6BPermissionTimeoutTests {
-    @get:Rule val urlHandlerSandbox = SharedUrlHandlerSandbox()
     @Test fun unansweredTimeoutDoesNotConsumeTheAnsweredFlagAndLateEmptyResultRemainsUnanswered() {
         val helper = PermissionHelper
         val helperClass = helper.javaClass

@@ -18,13 +18,11 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowActivityManager
-import org.junit.Rule
 
 /** Android exit records collected on the next launch, from ApplicationExitInfo to the uploaded event. */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [33])
 class ExitReasonCollectionBridgeTests {
-    @get:Rule val urlHandlerSandbox = SharedUrlHandlerSandbox()
     private class Proto {
         val out = ByteArrayOutputStream()
         fun varint(value: Long) {

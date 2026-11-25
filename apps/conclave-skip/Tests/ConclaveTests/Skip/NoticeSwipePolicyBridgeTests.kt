@@ -6,12 +6,10 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import org.junit.Rule
 
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [33])
 class NoticeSwipePolicyBridgeTests {
-    @get:Rule val urlHandlerSandbox = SharedUrlHandlerSandbox()
     @Test fun theTranspiledPolicyMatchesTheSwiftDecisions() {
         assertEquals(NoticeSwipeOutcome.dismissUp, NoticeSwipePolicy.outcome(0.0, -50.0, 0.0, -60.0, true))
         assertEquals(NoticeSwipeOutcome.dismissLeft, NoticeSwipePolicy.outcome(-40.0, 5.0, -260.0, 5.0, true))

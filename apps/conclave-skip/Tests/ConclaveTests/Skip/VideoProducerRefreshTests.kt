@@ -23,12 +23,10 @@ import org.webrtc.RtpParameters
 import org.webrtc.ScreenCapturerAndroid
 import org.webrtc.VideoTrack
 import sun.misc.Unsafe
-import org.junit.Rule
 
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [33])
 class VideoProducerRefreshTests {
-    @get:Rule val urlHandlerSandbox = SharedUrlHandlerSandbox()
     private val unsafe: Unsafe = Unsafe::class.java.getDeclaredField("theUnsafe").let {
         it.isAccessible = true
         it.get(null) as Unsafe

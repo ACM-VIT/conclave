@@ -10,13 +10,11 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import org.junit.Rule
 
 /** Camera and microphone starts share one gate each, so a second start never reuses the first one's capture. */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [33])
 class SingleFlightGateBridgeTests {
-    @get:Rule val urlHandlerSandbox = SharedUrlHandlerSandbox()
     @Test
     fun aSecondStartWaitsUntilTheFirstHasFinished() = runBlocking {
         val gate = SingleFlightGate()

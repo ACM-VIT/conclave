@@ -21,7 +21,6 @@ import java.util.concurrent.LinkedBlockingDeque
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
-import org.junit.Rule
 
 private class RecordingBackend(private val eglLock: Any = Any()) : VideoRenderBackend {
     private val queue = LinkedBlockingDeque<Runnable>()
@@ -196,7 +195,6 @@ private class CountingTexture : SurfaceTexture(0) {
 
 @RunWith(RobolectricTestRunner::class)
 class VideoRenderingTests {
-    @get:Rule val urlHandlerSandbox = SharedUrlHandlerSandbox()
     private val backend = RecordingBackend()
     private val buffers = mutableListOf<CountingBuffer>()
     private val frameSizes: MutableList<String> = Collections.synchronizedList(mutableListOf())
