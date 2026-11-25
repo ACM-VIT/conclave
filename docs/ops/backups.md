@@ -9,7 +9,7 @@ IST to Azure Blob Storage in another region.
 | Data | Where it lives | How it is copied |
 | --- | --- | --- |
 | Scheduled meetings, scheduling, webinars | Every `*.sqlite` under the state dir (`/var/lib/conclave/recordings`, the SFU volume), at any depth, and each store's own database: `SCHEDULING_SQLITE_PATH`, `SCHEDULED_MEETINGS_SQLITE_PATH` or `SCHEDULED_WEBINARS_SQLITE_PATH`, else `CONCLAVE_SQLITE_PATH`, else the compose default `conclave.sqlite`, as the host config and every SFU container's env set them | SQLite's online backup API (from Python, so no path passes through a shell), then `PRAGMA integrity_check`. Each keeps its path below the state dir. |
-| Scheduled meetings and scheduling (Redis mode) | Host Redis, keys `conclave:sfu:persistence:*` | `redis-cli --rdb`: the server forks a fresh snapshot, the same way `BGSAVE` does, and streams it |
+| Scheduled meetings and scheduling (Redis mode) | Host Redis, keys `conclave:sfu:persistence:*` | `redis-cli --rdb`: the server forks a fresh snapshot, the same way `BGSAVE` does, and streams it. The host's `redis-check-rdb` checks it when installed; when that rejects it (an older package than the live Redis), `redis:<live major.minor>` checks it in Docker, and only a rejection there fails the backup |
 | Anything else in the state dir | JSON stores and similar files | A tar written in Python while the fence still holds |
 
 SQLite and Redis are copied at one point in time. Before either copy, the

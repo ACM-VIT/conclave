@@ -51,6 +51,14 @@ const out = (lines) => process.stdout.write(lines.map((line) => line + "\\n").jo
 // docker run of a redis image: the real redis-server (BACKUP_TEST_REAL_REDIS)
 // with the volume's /data mapped to its host dir, and docker rm -f to stop it.
 const runs = process.env.BACKUP_TEST_DOCKER + ".runs.json";
+if (args[0] === "run" && args[args.indexOf("--entrypoint") + 1] === "redis-check-rdb") {
+  const dir = args[args.indexOf("-v") + 1].split(":")[0];
+  const image = args.find((arg) => arg.startsWith("redis:"));
+  fs.appendFileSync(process.env.BACKUP_TEST_DOCKER + ".checks", image + "\\n");
+  const rest = args.slice(args.indexOf(image) + 1).map((arg) => arg.replaceAll("/data", dir));
+  const checked = require("node:child_process").spawnSync(process.env.BACKUP_TEST_REAL_CHECK_RDB, rest, { stdio: "inherit" });
+  process.exit(checked.status ?? 1);
+}
 if (args[0] === "run" && args.some((arg) => arg.startsWith("redis:"))) {
   const dir = args[args.indexOf("-v") + 1].split(":")[0];
   const name = args[args.indexOf("--name") + 1];
@@ -2252,6 +2260,50 @@ test("a dump the host's redis-server cannot read is loaded with the live server'
       env: { ...env, PATH: `${old}:${env.PATH}`, BACKUP_TEST_REAL_REDIS: real },
     });
     assert.equal((await live.cli("GET", "conclave:sfu:persistence:meeting")).stdout.trim(), "kept");
+  } finally {
+    live.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+const olderCheckRdb = async (root) => {
+  const old = path.join(root, "old-check-rdb");
+  await mkdir(old);
+  await writeFile(path.join(old, "redis-check-rdb"), "#!/bin/sh\necho \"Can't handle RDB format version 99\"\nexit 1\n", { mode: 0o755 });
+  return old;
+};
+
+test("a snapshot the host's redis-check-rdb cannot read is checked with the live server's version in Docker", needsRedis, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  const live = await startRedis();
+  try {
+    const { state, env, local } = await setUp(root, [`SFU_PERSISTENCE_REDIS_URL=redis://127.0.0.1:${live.port}/0`]);
+    withDatabase(state);
+    await live.cli("SET", "conclave:sfu:persistence:meeting", "kept");
+    const old = await olderCheckRdb(root);
+    const real = execFileSync("sh", ["-c", "command -v redis-check-rdb"], { encoding: "utf8" }).trim();
+    await run("bash", [path.join(scripts, "backup.sh"), "--local-only"], { env: { ...env, PATH: `${old}:${env.PATH}`, BACKUP_TEST_REAL_CHECK_RDB: real } });
+    assert.equal((await archives(local)).length, 1);
+    const version = (await live.cli("INFO", "server")).stdout.match(/^redis_version:(\d+\.\d+)/m)[1];
+    assert.deepEqual((await readFile(`${env.BACKUP_TEST_DOCKER}.checks`, "utf8")).trim().split("\n"), [`redis:${version}`]);
+  } finally {
+    live.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a snapshot both the host's redis-check-rdb and the live server's version reject keeps no archive", needsRedis, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  const live = await startRedis();
+  try {
+    const { state, env, local } = await setUp(root, [`SFU_PERSISTENCE_REDIS_URL=redis://127.0.0.1:${live.port}/0`]);
+    withDatabase(state);
+    const old = await olderCheckRdb(root);
+    await assert.rejects(
+      run("bash", [path.join(scripts, "backup.sh"), "--local-only"], { env: { ...env, PATH: `${old}:${env.PATH}`, BACKUP_TEST_REAL_CHECK_RDB: path.join(old, "redis-check-rdb") } }),
+      /redis-check-rdb rejected the snapshot, on this host and in redis:/,
+    );
+    assert.deepEqual(await archives(local), []);
   } finally {
     live.close();
     await rm(root, { recursive: true, force: true });

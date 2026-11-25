@@ -186,8 +186,14 @@ if [[ -n "$REDIS_SOURCE_URL" ]]; then
   log "Redis snapshot from ${REDIS_HOST}:${REDIS_PORT}"
   redis_cli --rdb "${payload}/redis/dump.rdb" >/dev/null
   printf '%s\n' "$REDIS_DB" > "${payload}/redis/database"
-  if command -v redis-check-rdb >/dev/null; then
-    redis-check-rdb "${payload}/redis/dump.rdb" >/dev/null || die "redis-check-rdb rejected the snapshot"
+  if command -v redis-check-rdb >/dev/null && ! redis-check-rdb "${payload}/redis/dump.rdb" >/dev/null 2>&1; then
+    live_version="$(redis_cli INFO server | sed -nE 's/^redis_version:([0-9]+\.[0-9]+).*/\1/p')"
+    if [[ -z "$live_version" ]] || ! command -v docker >/dev/null; then
+      die "this host's redis-check-rdb rejected the snapshot, and the live Redis's own version cannot check it here (no Docker or no version); install a redis-check-rdb at least as new as the live Redis"
+    fi
+    docker run --rm --network none --entrypoint redis-check-rdb -v "${payload}/redis:/data:ro" "redis:${live_version}" /data/dump.rdb >/dev/null 2>&1 ||
+      die "redis-check-rdb rejected the snapshot, on this host and in redis:${live_version}, the live Redis's version"
+    log "This host's redis-check-rdb cannot read the snapshot; redis:${live_version}, the live Redis's version, accepts it"
   fi
   {
     echo "redis.version=$(redis_cli INFO server | sed -nE 's/^redis_version:([^[:space:]]+).*/\1/p')"
