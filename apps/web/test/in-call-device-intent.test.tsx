@@ -589,6 +589,25 @@ describe("presses and publishes that race each other", () => {
     expect(unwanted(world, rig.rig())).toEqual([]);
   });
 
+  it("turning the camera off while a VP9 stall repair swaps in its clone stops the clone at once", async () => {
+    const rig = await join({ mic: false });
+    rig.rig().refs.webcamCodecPolicyRef.current = { ...rig.rig().refs.webcamCodecPolicyRef.current, codec: "vp9" };
+    world.holds.add("replaceTrack");
+    for (let sample = 0; sample < 6 && pendingOf("replaceTrack") === 0; sample += 1) {
+      await rig.tick(2000);
+    }
+    expect(world.tracks.some((track) => track.source === "clone" && track.readyState === "live")).toBe(true);
+
+    await act(async () => {
+      await rig.rig().media.toggleCamera();
+    });
+    expect(cameraOffButLive(world, rig.rig())).toEqual([]);
+
+    await releaseAll(rig);
+    expect(cameraOffButLive(world, rig.rig())).toEqual([]);
+    expect(unwanted(world, rig.rig())).toEqual([]);
+  });
+
   it("a quality reopen whose camera swap fails keeps sending the previous camera and stops the new one", async () => {
     const rig = await join({ mic: false });
     const previous = liveCameraTrack(rig);

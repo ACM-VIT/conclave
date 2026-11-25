@@ -4750,6 +4750,7 @@ export function useMeetMedia({
           if (policy.codec === "vp9" && sample.frames === 0) {
             try {
               diagnosticTrack = holdClone(rawCameraTrack, claim.generation);
+              callCameraTracksRef.current.add(diagnosticTrack);
               applyCameraContentHint(diagnosticTrack);
             } catch (error) {
               if (isCaptureReleased(error)) return;
