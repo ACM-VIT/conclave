@@ -880,6 +880,18 @@ describe("createChunkManifestLoader", () => {
     expect(await load("local")).toBeNull();
     expect(urls).toHaveLength(3);
   });
+
+  it.each([404, 500, 302])("lets the connection go without reading the body of a %i manifest answer", async (status) => {
+    let cancelled = 0;
+    const body = new ReadableStream({ pull: () => new Promise(() => {}), cancel: () => void cancelled++ });
+    const load = createChunkManifestLoader({
+      origin: "https://conclave.acmvit.in",
+      fetch: async () => new Response(body, { status }),
+    });
+
+    expect(await load(BUILD)).toBeNull();
+    expect(cancelled).toBe(1);
+  });
 });
 
 describe("PostHog's answers and slow requests at /ingest", () => {

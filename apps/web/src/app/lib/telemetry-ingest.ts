@@ -549,7 +549,9 @@ export function createChunkManifestLoader({
           headers: { "user-agent": INGEST_USER_AGENT },
           signal,
         });
-        return response.ok ? parseChunkManifest(await response.json()) : null;
+        if (response.ok) return parseChunkManifest(await response.json());
+        await response.body?.cancel().catch(() => {});
+        return null;
       });
     } catch {}
     const loaded = files ?? known.get(version)?.files ?? null;
