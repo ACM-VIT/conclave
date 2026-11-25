@@ -187,7 +187,8 @@ const join = async (state: SfuState, user: SfuAuthPayload, payload: Record<strin
     await handlers.get("disconnect")?.(...([reason] as never[]));
   };
   const passes = () => emit.mock.calls.filter(([event]) => event === "roomRecoveryPass").length;
-  const told = (event: string) => emit.mock.calls.filter(([name]) => name === event).map(([, body]) => body);
+  const told = (event: string): unknown[] =>
+    (emit.mock.calls as unknown[][]).filter(([name]) => name === event).map(([, body]) => body);
   return { context, send, raw, leave, passes, told, status: joined.status };
 };
 
