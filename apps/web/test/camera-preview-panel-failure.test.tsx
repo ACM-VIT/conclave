@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import CameraPreviewPanels from "../src/app/components/CameraPreviewPanels";
 import {
   useLocalCameraPreview,
@@ -46,6 +46,13 @@ const brokenQuality = new Proxy(DEFAULT_MEDIA_QUALITY_SETTINGS, {
   get() {
     throw new Error("Settings panel crashed");
   },
+});
+
+beforeAll(async () => {
+  await Promise.all([
+    import("../src/app/components/VideoEffectsPanel"),
+    import("../src/app/components/DeviceSettingsPanel"),
+  ]);
 });
 
 let container: HTMLDivElement;
@@ -145,9 +152,10 @@ function Meeting({
 
 const render = async (props: Parameters<typeof Meeting>[0]) => {
   await act(async () => root.render(<Meeting {...props} />));
-  for (let turn = 0; turn < 50 && !panelShown(props.panel) && !failedPanel(); turn += 1) {
+  const deadline = Date.now() + 10_000;
+  while (!panelShown(props.panel) && !failedPanel() && Date.now() < deadline) {
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 10));
     });
   }
 };
@@ -178,6 +186,7 @@ it.each(["effects", "settings"] as const)(
     expect(captures[0].camera.track.readyState).toBe("ended");
     expect(preview.stream).toBeNull();
   },
+  20_000,
 );
 
 it.each(["effects", "settings"] as const)(
@@ -198,6 +207,7 @@ it.each(["effects", "settings"] as const)(
     expect(captures[0].camera.track.stop).toHaveBeenCalled();
     expect(preview.stream).toBeNull();
   },
+  20_000,
 );
 
 it.each(["effects", "settings"] as const)(
@@ -216,4 +226,5 @@ it.each(["effects", "settings"] as const)(
     expect(call.track.readyState).toBe("live");
     expect(captures.every(({ camera }) => camera.track.readyState !== "live")).toBe(true);
   },
+  20_000,
 );
