@@ -40,14 +40,15 @@ export type StoredBatch = {
   leaseUntil: number;
 };
 
-export type BatchFacts = { delivered: boolean; notBefore: number; attempt: number };
+export type BatchFacts = { delivered: boolean; notBefore: number; attempt: number; refused: readonly string[] };
 
-export const NO_FACTS: BatchFacts = { delivered: false, notBefore: 0, attempt: 0 };
+export const NO_FACTS: BatchFacts = { delivered: false, notBefore: 0, attempt: 0, refused: [] };
 
 export const mergeFacts = (a: BatchFacts, b: BatchFacts): BatchFacts => ({
   delivered: a.delivered || b.delivered,
   notBefore: Math.max(a.notBefore, b.notBefore),
   attempt: Math.max(a.attempt, b.attempt),
+  refused: [...new Set([...a.refused, ...b.refused])].slice(0, MAX_BATCH_EVENTS),
 });
 
 export type BatchStore = {
@@ -116,6 +117,7 @@ type Batch = {
   sendId: string;
   leaseUntil: number;
   saved: boolean;
+  everStored: boolean;
   timer: unknown;
   inFlight: InFlight | null;
 };
@@ -251,6 +253,7 @@ export function createOutbox(deps: OutboxDeps) {
       sendId: "",
       leaseUntil: 0,
       saved: false,
+      everStored: false,
       timer: null,
       inFlight: null,
     }));
@@ -276,6 +279,7 @@ export function createOutbox(deps: OutboxDeps) {
   const fromStorage = (saved: StoredBatch): Batch => ({
     ...saved,
     saved: true,
+    everStored: true,
     timer: null,
     inFlight: null,
   });
@@ -365,6 +369,7 @@ export function createOutbox(deps: OutboxDeps) {
   const saveOwn = (batch: Batch): boolean => {
     if (create(stored(batch)) !== "written") return false;
     batch.saved = true;
+    batch.everStored = true;
     if (batch.timer !== null) deps.clearTimer(batch.timer);
     batch.timer = null;
     live.delete(batch.id);
@@ -391,13 +396,15 @@ export function createOutbox(deps: OutboxDeps) {
     return answer?.outcome === "retry" && answer.afterMs !== null ? at + answer.afterMs : 0;
   };
 
-  const factsOf = (reply: Reply | null, at: number, attempt: number, backoff: boolean): BatchFacts => {
+  const factsOf = (reply: Reply | null, at: number, attempt: number, backoff: boolean, events: readonly OutboxEvent[]): BatchFacts => {
     const answer = reply ? answerOf(reply.status, reply.retryAfter, at) : null;
-    if (answer && answer.outcome !== "retry") return { delivered: true, notBefore: 0, attempt };
+    const refused = (reply?.rejected ?? []).flatMap((index) => (events[index] ? [events[index].uuid] : []));
+    if (answer && answer.outcome !== "retry") return { delivered: true, notBefore: 0, attempt, refused };
     return {
       delivered: false,
       notBefore: Math.max(waitAsked(reply, at), backoff ? at + retryDelay(attempt) : 0),
       attempt: backoff ? attempt + 1 : attempt,
+      refused,
     };
   };
 
@@ -410,10 +417,24 @@ export function createOutbox(deps: OutboxDeps) {
     deps.store.mark(batch.id, writer, merged, at);
   };
 
-  const learned = (batch: { id: string; notBefore: number; attempt: number }): "delivered" | "unreadable" | "known" => {
-    const facts = deps.store.facts(batch.id);
-    if (facts === null) return "unreadable";
+  const learned = (batch: {
+    id: string;
+    events: OutboxEvent[];
+    notBefore: number;
+    attempt: number;
+    everStored?: boolean;
+  }): "delivered" | "unreadable" | "known" => {
+    const own = published.get(batch.id) ?? NO_FACTS;
+    const fromStore = batch.everStored === false ? NO_FACTS : deps.store.facts(batch.id);
+    if (own.delivered) return "delivered";
+    if (fromStore === null) return "unreadable";
+    const facts = mergeFacts(own, fromStore);
     if (facts.delivered) return "delivered";
+    if (facts.refused.length > 0) {
+      const refused = new Set(facts.refused);
+      batch.events = batch.events.filter((event) => !refused.has(event.uuid));
+      if (batch.events.length === 0) return "delivered";
+    }
     batch.notBefore = Math.max(batch.notBefore, facts.notBefore);
     batch.attempt = Math.max(batch.attempt, facts.attempt);
     return "known";
@@ -514,7 +535,7 @@ export function createOutbox(deps: OutboxDeps) {
         applyAnswer(batch, events, reply, null);
         return;
       }
-      const facts = factsOf(reply, deps.now(), batch.attempt, true);
+      const facts = factsOf(reply, deps.now(), batch.attempt, true, events);
       publish(batch, facts);
       locked(
         (held) => {
@@ -553,7 +574,7 @@ export function createOutbox(deps: OutboxDeps) {
     if (!reply) return;
     const at = deps.now();
     const final = answerOf(reply.status, reply.retryAfter, at).outcome !== "retry";
-    const facts = factsOf(reply, at, batch.attempt, false);
+    const facts = factsOf(reply, at, batch.attempt, false, events);
     publish(batch, facts);
     const settleAnswered = (answered: Batch, store: LockedStore | null): void => {
       if (final) {
@@ -714,7 +735,10 @@ export function createOutbox(deps: OutboxDeps) {
         if (!saveOwn(batch)) holdInMemory(batch);
       }
       for (const batch of live.values()) {
-        if (batch.inFlight !== null && !batch.saved && create(stored(batch)) === "written") batch.saved = true;
+        if (batch.inFlight !== null && !batch.saved && create(stored(batch)) === "written") {
+          batch.saved = true;
+          batch.everStored = true;
+        }
       }
     },
 
@@ -759,6 +783,7 @@ const StoredMark = z.object({
   delivered: z.boolean(),
   notBefore: z.number(),
   attempt: z.number().int().min(0).max(1000),
+  refused: z.array(z.uuid()).max(MAX_BATCH_EVENTS).default([]),
   at: z.number(),
 });
 

@@ -1475,12 +1475,98 @@ describe("what an answer teaches every tab, with no lock", () => {
   it("keeps at most a bounded number of marks, dropping those older than any batch could be", async () => {
     const shared = memoryWebStorage();
     const store = createBatchStore(() => shared);
-    for (let index = 0; index < MAX_MARKS; index++) store.mark(`old-${index}`, "tab", { delivered: true, notBefore: 0, attempt: 0 }, START);
+    for (let index = 0; index < MAX_MARKS; index++) store.mark(`old-${index}`, "tab", { delivered: true, notBefore: 0, attempt: 0, refused: [] }, START);
     const marks = () => [...Array(shared.length).keys()].map((index) => shared.key(index)).filter((key) => key?.startsWith(STORED_MARK_PREFIX));
 
-    expect(store.mark("new", "tab", { delivered: true, notBefore: 0, attempt: 0 }, START + 1000)).toBe(false);
-    expect(store.mark("new", "tab", { delivered: true, notBefore: 0, attempt: 0 }, START + MARK_TTL_MS + 1)).toBe(true);
+    expect(store.mark("new", "tab", { delivered: true, notBefore: 0, attempt: 0, refused: [] }, START + 1000)).toBe(false);
+    expect(store.mark("new", "tab", { delivered: true, notBefore: 0, attempt: 0, refused: [] }, START + MARK_TTL_MS + 1)).toBe(true);
     expect(marks()).toHaveLength(1);
+  });
+});
+
+describe("what a tab knows without storage", () => {
+  const refusingLock = (refused: ReadonlySet<number>) => {
+    let requests = 0;
+    return (run: () => Promise<void>) =>
+      refused.has(++requests) ? Promise.reject(new DOMException("The lock request was aborted.", "AbortError")) : run();
+  };
+
+  it("sends a report that was never saved while storage cannot be read", async () => {
+    const unreadable: Storage = {
+      get length(): number {
+        throw new DOMException("Storage is unavailable.", "SecurityError");
+      },
+      key: () => {
+        throw new DOMException("Storage is unavailable.", "SecurityError");
+      },
+      getItem: () => {
+        throw new DOMException("Storage is unavailable.", "SecurityError");
+      },
+      setItem: () => {},
+      removeItem: () => {},
+      clear: () => {},
+    };
+    const h = harness({ store: createBatchStore(() => unreadable) });
+    const report = event();
+    h.outbox.add(report);
+    await h.advance(FLUSH_INTERVAL_MS);
+
+    expect(h.posted()).toEqual([report.uuid]);
+  });
+
+  it("never sends again what it was told was delivered, though neither its mark nor its lock went through", async () => {
+    const store = memoryStore();
+    const noMarks = { ...store, mark: () => false };
+    const h = harness({ store: noMarks, answers: [200, 200], lock: refusingLock(new Set([2])) });
+    h.refuseBeacons();
+    h.outbox.add(event());
+    h.outbox.flushForUnload();
+    await h.advance(0);
+    expect(h.posts).toHaveLength(1);
+    await h.advance(30_000);
+    h.outbox.replaySaved();
+    await h.advance(5 * MINUTE);
+
+    expect(h.posts).toHaveLength(1);
+    expect(store.list()).toEqual([]);
+  });
+
+  it("never uploads again the events an answer refused, though its lock request was refused", async () => {
+    const store = memoryStore();
+    const h = harness({ store, answers: [{ status: 503, retryAfter: null, rejected: [0] }, 200], lock: refusingLock(new Set([2])) });
+    h.refuseBeacons();
+    const [refused, kept] = [event(), event()];
+    h.outbox.add(refused);
+    h.outbox.add(kept);
+    h.outbox.flushForUnload();
+    await h.advance(0);
+    expect(h.posted()).toEqual([refused.uuid, kept.uuid]);
+    await h.advance(5 * MINUTE);
+
+    expect(h.batchOf(h.posts[1].body).batch.map((item) => item.uuid)).toEqual([kept.uuid]);
+    expect(h.posts).toHaveLength(2);
+  });
+
+  it("tells a second tab which events were refused, through the marks", async () => {
+    const shared = memoryWebStorage();
+    const clock = { now: START };
+    const a = harness({
+      store: createBatchStore(() => shared),
+      clock,
+      answers: [{ status: 503, retryAfter: "10", rejected: [0] }],
+      lock: refusingLock(new Set(Array.from({ length: 100 }, (_, index) => index + 2))),
+    });
+    const b = harness({ store: createBatchStore(() => shared), clock, answers: [200] });
+    a.refuseBeacons();
+    const [refused, kept] = [event(), event()];
+    a.outbox.add(refused);
+    a.outbox.add(kept);
+    a.outbox.flushForUnload();
+    await a.advance(LEASE_MS);
+    b.outbox.replaySaved();
+    await b.advance(MINUTE);
+
+    expect(b.posts.map((post) => b.batchOf(post.body).batch.map((item) => item.uuid))).toEqual([[kept.uuid]]);
   });
 });
 

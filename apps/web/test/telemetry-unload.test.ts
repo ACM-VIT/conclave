@@ -424,6 +424,31 @@ describe("batches the browser will not take as the page goes away", () => {
     expect(events[0].properties).toMatchObject({ batches: 1, events: 2, unsent: 1 });
   });
 
+  it("replays and removes what was saved when storage is full and takes no new writes", async () => {
+    manifest = "missing";
+    const id = "0196f0a1-0000-7000-9000-0000000000f0";
+    const saved = {
+      uuid: "0196f0a1-0000-7000-8000-0000000000f1",
+      event: "meet_join_attempt",
+      timestamp: new Date().toISOString(),
+      properties: { token: KEY, distinct_id: "0196f0a1-0000-7000-8000-00000000d15d", joinMode: "meeting", isAdmin: false },
+    };
+    localStorage.setItem(`${STORED_BATCH_PREFIX}${id}`, JSON.stringify({ id, events: [saved], oldestAt: Date.now(), sent: false }));
+    const full = vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+      throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
+    });
+    try {
+      const { startTelemetry } = await import("../src/app/lib/telemetry");
+      startTelemetry();
+      await vi.waitFor(() => expect(fetches().length).toBeGreaterThan(0));
+
+      expect((await sentEvents()).map((event) => event.uuid)).toContain(saved.uuid);
+      await vi.waitFor(() => expect(savedKeys()).toEqual([]));
+    } finally {
+      full.mockRestore();
+    }
+  });
+
   it("waits its turn for the tabs' lock, and replays once the tab holding it lets go", async () => {
     manifest = "missing";
     const id = "0196f0a1-0000-7000-9000-0000000000e0";

@@ -128,18 +128,27 @@ one owner at a time:
   (the `storage` event). The pass claims a due batch by writing a new attempt
   id and a lease until 16 s after the send, so another tab leaves it alone
   until the request has settled.
-- **What an answer teaches every tab.** Two facts about a stored batch must
-  reach every tab whatever happens to the lock: that it was settled
-  (delivered, or refused for good), and the earliest time it may be sent
-  again (its Retry-After and its backoff, with its attempt count). A tab
+- **What an answer teaches every tab.** An answer from `/ingest` carries a
+  status, a `Retry-After` and the list of events it refused for good, and
+  each reaches every tab whatever happens to the lock: the status as whether
+  the batch is settled (delivered, or refused for good), the `Retry-After`
+  and the backoff as the earliest time it may be sent again (with its attempt
+  count), and the refused list as the events never to upload again. Nothing
+  else in an answer changes what any tab sends. A tab
   publishes them as soon as it reads an answer for a stored batch, its own
   send's or a late one, under a key of its own,
   `conclave:telemetry:mark:<batch>:<tab>`, with no lock: each key has one
   writer, which keeps its last facts in memory and only ever adds to them,
   and readers merge every tab's key (settled if any says so, the latest time,
-  the highest attempt), so no write can undo another. Every send, beacon and
-  replay of a batch reads its marks first: a settled batch is dropped, never
-  sent, and a wait is kept. The lock only orders writes to the batch itself.
+  the highest attempt, every refused event), so no write can undo another.
+  Every send, beacon and replay of a batch reads its marks first, merged with
+  what the tab itself has published, whether or not that write went through:
+  a settled batch, or one with no events left, is dropped, never sent; a wait
+  is kept; refused events are left out. A batch that was never stored has no
+  marks to read, so storage that cannot be read never holds it back. The
+  lock only orders writes to the batch itself. Whether storage can be read,
+  written or neither is found out by each operation, never once at startup:
+  storage that is full still replays and removes what it holds.
   An answer whose lock request is refused, or whose batch cannot be read
   then, changes nothing else: its facts are already published, and the tab
   wakes for another pass. Marks are pruned once they are older than any batch
