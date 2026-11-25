@@ -272,7 +272,11 @@ export class AuthorityClient {
   }
 
   /** @internal Emits with an ack, resolving `LOST` when none arrives. */
-  request<Reply>(event: string, payload: unknown): Promise<Reply | typeof LOST> {
+  request<Reply>(
+    event: string,
+    payload: unknown,
+    within = Number.POSITIVE_INFINITY,
+  ): Promise<Reply | typeof LOST> {
     return new Promise((resolve) => {
       if (!this.socket.connected) {
         resolve(LOST);
@@ -283,7 +287,7 @@ export class AuthorityClient {
         if (settled) return;
         settled = true;
         resolve(LOST);
-      }, this.ackTimeoutMs);
+      }, Math.max(0, Math.min(this.ackTimeoutMs, within)));
       this.socket.emit(event, payload, (reply: unknown) => {
         if (settled) return;
         settled = true;
@@ -481,6 +485,7 @@ export class AuthoritySession<C extends AuthorityContract> {
       const reply = await this.client.request<AuthorityResult<Json>>(
         AUTHORITY_EVENTS.act,
         request,
+        timeLeft(),
       );
       if (reply === LOST) {
         mayHaveRun = true;
