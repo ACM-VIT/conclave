@@ -581,6 +581,51 @@ describe("SFU error reporter", () => {
     expect(sent).toHaveLength(7);
   });
 
+  describe("the frames it sends", () => {
+    const forged = `    at forgedHandler (${path.join(SFU_ROOT, "server/socket/forged.ts")}:1:1)`;
+    const sentStack = (error: Error): string => {
+      const sent: unknown[] = [];
+      const reporter = reporterFor({
+        captureException: (reported) => sent.push(reported),
+        captureExceptionImmediate: async () => {},
+        flush: async () => {},
+      });
+      reporter.report(error, { source: "socket_handler" });
+      return (sent[0] as Error).stack ?? "";
+    };
+    const realFrame = (error: Error) => error.stack!.split("\n").find((line) => line.includes("error-reporter.test.ts"))!;
+
+    it("never takes a line of a many-line message for a frame", () => {
+      const error = new TypeError(`handler failed\n${forged}\nand more`);
+      const stack = sentStack(error);
+
+      expect(stack).not.toContain("forgedHandler");
+      expect(stack).toContain(realFrame(error));
+    });
+
+    it.each([
+      ["a message", () => new Error("boom")],
+      ["no message", () => new Error()],
+      ["a name set after the stack was taken", () => {
+        const error = new RangeError("out of range");
+        error.name = "CustomFailure";
+        return error;
+      }],
+    ])("keeps the real frames of an error with %s", (_case, make) => {
+      const error = make();
+
+      expect(sentStack(error)).toContain(realFrame(error));
+    });
+
+    it("sends no frames when the message no longer matches the stack it was read with", () => {
+      const error = new Error("first");
+      expect(error.stack).toContain("Error: first");
+      error.message = `changed\n${forged}`;
+
+      expect(sentStack(error)).not.toMatch(/\n\s+at /);
+    });
+  });
+
   it("still sends and flushes a crash that follows a burst of errors", async () => {
     const sent: Array<{ error: unknown; level: string }> = [];
     let flushes = 0;

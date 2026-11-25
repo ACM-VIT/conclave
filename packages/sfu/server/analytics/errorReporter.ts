@@ -138,10 +138,23 @@ const chooseMessage = (error: Error, trusted: boolean): string => {
     : MESSAGE_WITHHELD;
 };
 
-// V8 writes "Name: message" above the frames.
-const framesOf = (stack: string | undefined): string => {
-  const firstFrame = stack?.indexOf("\n    at ") ?? -1;
-  return stack && firstFrame >= 0 ? stack.slice(firstFrame) : "";
+const headerEnd = (stack: string, message: string): number => {
+  if (message === "") {
+    const lineEnd = stack.indexOf("\n");
+    return lineEnd < 0 ? stack.length : lineEnd;
+  }
+  const separator = stack.indexOf(": ");
+  if (separator < 0 || stack.slice(0, separator).includes("\n")) return -1;
+  return stack.startsWith(message, separator + 2) ? separator + 2 + message.length : -1;
+};
+
+const framesOf = (error: Error): string => {
+  const { stack } = error;
+  if (!stack) return "";
+  const end = headerEnd(stack, typeof error.message === "string" ? error.message : "");
+  if (end < 0) return "";
+  const firstFrame = stack.indexOf("\n    at ", end);
+  return firstFrame === end ? stack.slice(firstFrame) : "";
 };
 
 /**
@@ -162,7 +175,7 @@ const reportedError = (thrown: unknown, depth = 0): Error => {
       : undefined;
   const reported = new Error(message, cause);
   reported.name = name;
-  reported.stack = `${name}: ${message}${framesOf(error.stack)}`;
+  reported.stack = `${name}: ${message}${framesOf(error)}`;
   return reported;
 };
 
