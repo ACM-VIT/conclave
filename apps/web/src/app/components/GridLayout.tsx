@@ -1173,8 +1173,15 @@ function GridLayout({
         ? autoStageMode
         : "tiled"
       : viewSettings.mode;
+  const pinsCameraOverPresentation =
+    Boolean(pinnedId) && pinnedId !== PRESENTATION_TILE_ID && hasPresentation;
   const renderedViewMode: EffectiveMeetViewMode =
-    pinnedId && effectiveViewMode === "tiled" ? "spotlight" : effectiveViewMode;
+    pinsCameraOverPresentation &&
+    (effectiveViewMode === "tiled" || effectiveViewMode === "spotlight")
+      ? "sidebar"
+      : pinnedId && effectiveViewMode === "tiled"
+        ? "spotlight"
+        : effectiveViewMode;
   const usesAutoDynamicCrop =
     viewSettings.mode === "auto" && renderedViewMode === "tiled";
   const gridVideoObjectFit: "cover" | "contain" = usesAutoDynamicCrop
@@ -1346,18 +1353,26 @@ function GridLayout({
       (participant) => !visibleIds.has(participant.userId)
     );
   }, [orderedRemoteParticipants, visibleParticipants]);
+  const stageSize = {
+    width: Math.max(0, gridSize.width - GRID_PADDING * 2),
+    height: Math.max(0, gridSize.height - GRID_PADDING * 2),
+  };
+  const stageSplit = chooseStageSplit(stageSize, PARTICIPANT_RAIL);
+  const companionSplit = chooseStageSplit(stageSize, COMPANION_RAIL);
   const stageMainKind: "presentation" | "local" | "remote" | null =
-    isLocalPinned
-      ? "local"
-      : pinnedParticipant
-        ? "remote"
-        : hasPresentation
-          ? "presentation"
-          : isLocalFeaturedSpeaker && hasFeaturedVideoSpeaker
-            ? "local"
-            : featuredRemoteParticipant || orderedRemoteParticipants[0]
-              ? "remote"
-              : null;
+    hasPresentation && stageSplit.mode !== "side"
+      ? "presentation"
+      : isLocalPinned
+        ? "local"
+        : pinnedParticipant
+          ? "remote"
+          : hasPresentation
+            ? "presentation"
+            : isLocalFeaturedSpeaker && hasFeaturedVideoSpeaker
+              ? "local"
+              : featuredRemoteParticipant || orderedRemoteParticipants[0]
+                ? "remote"
+                : null;
   const stageMainParticipant =
     stageMainKind === "remote"
       ? pinnedParticipant ??
@@ -1980,9 +1995,6 @@ function GridLayout({
 
   const gridUsableWidth = Math.max(0, gridSize.width - GRID_PADDING * 2);
   const gridUsableHeight = Math.max(0, gridSize.height - GRID_PADDING * 2);
-  const stageSize = { width: gridUsableWidth, height: gridUsableHeight };
-  const stageSplit = chooseStageSplit(stageSize, PARTICIPANT_RAIL);
-  const companionSplit = chooseStageSplit(stageSize, COMPANION_RAIL);
   const stageTileClass = stageRailTileClass(stageSplit.mode);
   const companionTileClass = stageRailTileClass(companionSplit.mode);
   const isMobilePortraitGrid = isMobilePortrait(

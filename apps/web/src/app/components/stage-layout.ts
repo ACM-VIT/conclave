@@ -9,7 +9,7 @@ export const stageRailClass = (mode: StageSplitMode) =>
     ? "hidden"
     : mode === "stack"
       ? "flex w-full shrink-0 flex-row gap-3 overflow-x-auto overflow-y-hidden pb-1"
-      : "flex shrink-0 flex-col gap-3 overflow-y-auto overflow-x-hidden pr-1";
+      : "flex shrink-0 flex-col gap-3 overflow-y-auto overflow-x-hidden";
 
 export const stageRailStyle = ({ mode, railSize }: StageSplit): CSSProperties | undefined =>
   mode === "stack"
