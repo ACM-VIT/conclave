@@ -347,6 +347,11 @@ export class FakeProducer {
   async replaceTrack({ track }: { track: FakeTrack | null }) {
     await this.world.wait("replaceTrack");
     if (this.closed) throw new Error("closed");
+    const refusals = this.world.refusals.get("replaceTrack") ?? 0;
+    if (refusals > 0) {
+      this.world.refusals.set("replaceTrack", refusals - 1);
+      throw new Error("the rig refused replaceTrack");
+    }
     this.track = track;
     this.world.sent.push({ producer: this.id, source: track?.source ?? null });
   }

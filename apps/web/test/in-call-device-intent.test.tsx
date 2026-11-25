@@ -293,6 +293,53 @@ describe("presses and publishes that race each other", () => {
     expect(unwanted(world, rig.rig())).toEqual([]);
   });
 
+  it.each(["replaceTrack"] as const)(
+    "turning the camera off while a quality reopen waits on %s stops the old and the new camera at once",
+    async (held) => {
+      const rig = await join({ mic: false });
+      world.cameraRefusesConstraints = true;
+      world.holds.add(held);
+      let updating: Promise<unknown> = Promise.resolve();
+      await act(async () => {
+        updating = rig.rig().media.updateVideoQualityRef.current?.("low") ?? Promise.resolve();
+      });
+      await until(`the reopen waiting on ${held}`, () => pendingOf(held) === 1);
+      const liveCameras = () =>
+        world.tracks.filter((track) => track.kind === "video" && track.source === "device" && track.readyState === "live").map((track) => track.id);
+      const openCameraProducers = () =>
+        world.producers.filter((producer) => !producer.closed && producer.kind === "video").map((producer) => producer.id);
+      expect(liveCameras()).toHaveLength(2);
+
+      await act(async () => {
+        await rig.rig().media.toggleCamera();
+      });
+      expect(liveCameras()).toEqual([]);
+      expect(openCameraProducers()).toEqual([]);
+
+      await releaseAll(rig, updating);
+      expect(rig.rig().state.isCameraOff).toBe(true);
+      expect(liveCameras()).toEqual([]);
+      expect(openCameraProducers()).toEqual([]);
+      expect(unwanted(world, rig.rig())).toEqual([]);
+    },
+  );
+
+  it("a quality reopen whose camera swap fails keeps sending the previous camera and stops the new one", async () => {
+    const rig = await join({ mic: false });
+    const previous = liveCameraTrack(rig);
+    world.cameraRefusesConstraints = true;
+    world.refusals.set("replaceTrack", 1);
+
+    await act(async () => {
+      await rig.rig().media.updateVideoQualityRef.current?.("low").catch(() => {});
+    });
+    await rig.settle();
+
+    expect(world.tracks.filter((track) => track.kind === "video" && track.source === "device" && track.readyState === "live")).toEqual([previous]);
+    expect(notLive(world, rig.rig())).toEqual([]);
+    expect(unwanted(world, rig.rig())).toEqual([]);
+  });
+
   it("a quality change still reopening the camera when the camera is turned off leaves no camera in the call", async () => {
     const rig = await join({ mic: false });
     world.cameraRefusesConstraints = true;
@@ -602,6 +649,12 @@ const STEPS: Array<[string, (model: Model) => void | Promise<void>]> = [
         codec: pick(model, ["vp8", "vp9"] as const),
       };
       for (let sample = 0; sample < 4; sample += 1) await model.rig.tick(2000);
+    },
+  ],
+  [
+    "the camera starts or stops refusing new constraints",
+    () => {
+      world.cameraRefusesConstraints = !world.cameraRefusesConstraints;
     },
   ],
   [
