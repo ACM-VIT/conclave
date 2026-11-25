@@ -234,12 +234,51 @@ const settleOwnership = (
     room.ownershipGeneration !== null &&
     room.ownershipGeneration !== ownership.generation
   ) {
-    Logger.warn(
-      `Handing room ${room.id} (${room.clientId}) off: its lease lapsed and was claimed again, so what it holds may be stale.`,
-    );
-    handOffRoomState(state, channelId);
+    reclaimRoom(state, room, ownership.generation);
   }
 };
+
+const reclaims = new WeakMap<Room, number>();
+
+const reclaimRoom = (state: SfuState, room: Room, generation: number): void => {
+  if (reclaims.get(room) === generation) return;
+  reclaims.set(room, generation);
+  runDetached(`Keeping room ${room.id} once its lease was claimed again`, async () => {
+    const [record, booking] = await Promise.all([
+      state.roomRecovery.reclaim(room, generation),
+      fenceScheduledMeeting(
+        state.scheduledMeetings,
+        state.scheduledMeetingPersistence,
+        room.clientId,
+        room.id,
+        generation,
+      ).catch((error: unknown) => {
+        Logger.error(`Failed to fence the booking of ${room.channelId}`, error);
+        return false;
+      }),
+    ]);
+    if (!isCurrentRoom(state, room) || reclaims.get(room) !== generation) return;
+    if (!record || !booking) {
+      Logger.warn(
+        `Handing room ${room.id} (${room.clientId}) off: another room wrote the code's state while its lease was gone.`,
+      );
+      handOffRoomState(state, room.channelId);
+      return;
+    }
+    await refreshScheduledMeeting(
+      state.scheduledMeetings,
+      state.scheduledMeetingPersistence,
+      room.clientId,
+      room.id,
+    );
+    if (!isCurrentRoom(state, room) || reclaims.get(room) !== generation) return;
+    bindScheduledInvitations(state, room);
+    room.ownershipGeneration = generation;
+    Logger.warn(`Kept room ${room.id} (${room.clientId}) after its lease was claimed again.`);
+  });
+};
+
+const ROOM_HANDED_OFF_MESSAGE = "The meeting is moving to another server. Reconnecting you.";
 
 const leaseConfirmations = new WeakMap<SfuState, Map<string, Promise<boolean>>>();
 
@@ -660,8 +699,24 @@ const cleanupRoomState = (state: SfuState, channelId: string): Room | null => {
 };
 
 const handOffRoomState = (state: SfuState, channelId: string): Room | null => {
-  state.rooms.get(channelId)?.beginHandOff();
-  return cleanupRoomState(state, channelId);
+  const room = state.rooms.get(channelId);
+  room?.beginHandOff();
+  const seated = new Set(
+    [...state.rooms.values()].flatMap((live) => [...live.clients.values()].map((client) => client.socket)),
+  );
+  const waiting = room
+    ? [...room.pendingClients.values()].map((pending) => pending.socket).filter((socket) => !seated.has(socket))
+    : [];
+  const closed = cleanupRoomState(state, channelId);
+  for (const socket of waiting) {
+    socket.emit("serverRestarting", {
+      roomId: room?.id,
+      message: ROOM_HANDED_OFF_MESSAGE,
+      reconnecting: true,
+    });
+    socket.disconnect(true);
+  }
+  return closed;
 };
 
 /**

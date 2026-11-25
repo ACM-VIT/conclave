@@ -1921,6 +1921,28 @@ describe.skipIf(!redisServerPath)("knockers waiting on an SFU when the next meet
     }
   });
 
+  it("keeps a room, its host and its knocker when Redis forgets the lease and the same SFU claims the code again", async () => {
+    const { a } = await twoSfus();
+    const created = await join(a, host);
+    const knocking = await join(a, knocker);
+    expect(knocking.status).toBe("waiting");
+    const room = roomOf(a);
+    const before = room.ownershipGeneration;
+
+    const flusher = createClient({ url: `redis://127.0.0.1:${redis!.port}` });
+    await flusher.connect();
+    await flusher.flushAll();
+    await flusher.quit();
+    await renewRoomOwnerships(a);
+    await vi.waitFor(() => expect(room.ownershipGeneration).not.toBe(before));
+
+    expect(roomOf(a)).toBe(room);
+    expect(toldToReconnect(knocking)).toBe(false);
+    expect(await send(created.peer, "admitUser", { userId: knocker.userId })).toEqual(
+      expect.objectContaining({ success: true }),
+    );
+  });
+
   it("sends them there through the usual route when A drains, and the host on B lets them in", async () => {
     const { a, b } = await twoSfus();
     const created = await join(a, host);

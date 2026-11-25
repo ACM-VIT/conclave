@@ -25,7 +25,7 @@ import type {
   RoomOwnershipClaim,
   RoomRegistry,
 } from "../server/roomRegistry.js";
-import { forceCloseRoom } from "../server/rooms.js";
+import { forceCloseRoom, renewRoomOwnerships } from "../server/rooms.js";
 import {
   createScheduledMeeting,
   createScheduledMeetingPersistence,
@@ -62,6 +62,7 @@ type Leases = {
   ownerOf: (channelId: string) => string | null;
   holdRenewals: () => void;
   releaseRenewals: () => void;
+  forget: () => void;
 };
 
 const sharedLeases = (): Leases => {
@@ -129,6 +130,7 @@ const sharedLeases = (): Leases => {
       holding = false;
       for (const resume of held.splice(0)) resume();
     },
+    forget: () => owners.clear(),
   };
 };
 
@@ -718,5 +720,89 @@ describe("who a code belongs to", () => {
     expect((await join(sfuA, ana("a", { createsCode: true }))).status).toBe("joined");
     expect(sfuA.rooms.get(CHANNEL)?.ownerEmail).toBeNull();
     expect(await ownerOnRecord(recovery)).toEqual({ email: null });
+  });
+});
+
+describe("a room whose lease the shared registry forgot", () => {
+  const ben: SfuAuthPayload = { userId: "guest-ben", clientId: "conclave", sessionId: "b" };
+  const knockOn = async (state: SfuState) => {
+    const knocker = await join(state, ben);
+    expect(knocker.status).toBe("waiting");
+    return knocker;
+  };
+  const sentOn = (knocker: Awaited<ReturnType<typeof join>>) => ({
+    told: knocker.told("serverRestarting"),
+    disconnected: (knocker.context.socket.disconnect as ReturnType<typeof vi.fn>).mock.calls,
+  });
+
+  it("keeps its seats and its waiting guests when its own SFU claims the code again", async () => {
+    useSharedSchedule();
+    await book();
+    const leases = sharedLeases();
+    const sfuA = await startSfu(leases.forInstance("sfu-a"));
+    const hostOnA = await join(sfuA, host("a"));
+    const knocker = await knockOn(sfuA);
+    const room = sfuA.rooms.get(CHANNEL)!;
+    const before = room.ownershipGeneration;
+
+    leases.forget();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await renewRoomOwnerships(sfuA);
+    await settle();
+
+    expect(sfuA.rooms.get(CHANNEL)).toBe(room);
+    expect(room.ownershipGeneration).not.toBe(before);
+    expect(sentOn(knocker)).toEqual({ told: [], disconnected: [] });
+    const [request] = hostOnA.told("userRequestedJoin") as Array<{ userId: string }>;
+    expect(await hostOnA.send("admitUser", { userId: request!.userId })).toEqual(
+      expect.objectContaining({ success: true }),
+    );
+    expect(knocker.told("joinApproved")).toHaveLength(1);
+  });
+
+  it("sends its waiting guests on with its seats when another SFU took the code", async () => {
+    useSharedSchedule();
+    await book();
+    const leases = sharedLeases();
+    const sfuA = await startSfu(leases.forInstance("sfu-a"));
+    const sfuB = await startSfu(leases.forInstance("sfu-b"));
+    await join(sfuA, host("a"));
+    const knocker = await knockOn(sfuA);
+
+    leases.forget();
+    expect((await join(sfuB, host("b"))).status).toBe("joined");
+    await renewRoomOwnerships(sfuA).catch(() => undefined);
+    await settle();
+
+    expect(sfuA.rooms.has(CHANNEL)).toBe(false);
+    expect(sentOn(knocker)).toEqual({
+      told: [expect.objectContaining({ reconnecting: true })],
+      disconnected: [[true]],
+    });
+  });
+
+  it("sends everyone on when another room wrote the code's record while the lease was gone", async () => {
+    useSharedSchedule();
+    await book();
+    const leases = sharedLeases();
+    const recovery = createMemoryRoomRecoveryStore();
+    const sfuA = await startSfu(leases.forInstance("sfu-a"), { recovery });
+    const sfuB = await startSfu(leases.forInstance("sfu-b"), { recovery });
+    await join(sfuA, host("a"));
+    const knocker = await knockOn(sfuA);
+
+    leases.forget();
+    const hostOnB = await join(sfuB, host("b"));
+    expect(hostOnB.status).toBe("joined");
+    await hostOnB.leave();
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(sfuB.rooms.has(CHANNEL)).toBe(false);
+    expect(leases.ownerOf(CHANNEL)).toBeNull();
+
+    await renewRoomOwnerships(sfuA);
+    await settle();
+
+    expect(sfuA.rooms.has(CHANNEL)).toBe(false);
+    expect(sentOn(knocker).told).toEqual([expect.objectContaining({ reconnecting: true })]);
   });
 });
