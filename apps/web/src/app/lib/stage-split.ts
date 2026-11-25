@@ -22,6 +22,8 @@ export const STAGE_GAP = 12;
 
 export const STAGE_MAIN_MIN: StageSize = { width: 160, height: 90 };
 
+export const SIDE_BY_SIDE_PREFERRED_MAIN: StageSize = { width: 400, height: 225 };
+
 export const PARTICIPANT_RAIL: StageRailSpec = {
   sideRatio: 0.22,
   sideMin: 160,
@@ -41,9 +43,12 @@ export const COMPANION_RAIL: StageRailSpec = {
 const clamp = (value: number, min: number, max: number) =>
   Math.min(Math.max(value, min), max);
 
-const fittedArea = ({ width, height }: StageSize) => {
-  const fittedWidth = Math.max(0, Math.min(width, (height * 16) / 9));
-  return fittedWidth * ((fittedWidth * 9) / 16);
+const fittedWidth = ({ width, height }: StageSize) =>
+  Math.max(0, Math.min(width, (height * 16) / 9));
+
+const fittedArea = (size: StageSize) => {
+  const width = fittedWidth(size);
+  return width * ((width * 9) / 16);
 };
 
 export function stageMainSize(size: StageSize, split: StageSplit): StageSize {
@@ -85,7 +90,15 @@ export function chooseStageSplit(
   if (!size || size.width <= 0 || size.height <= 0) {
     return { mode: "side", railSize: rail.sideMin };
   }
-  return stageSplitCandidates(size, rail).reduce<StageSplit>(
+  const candidates = stageSplitCandidates(size, rail);
+  const side = candidates.find((split) => split.mode === "side");
+  if (
+    side &&
+    fittedWidth(stageMainSize(size, side)) >= SIDE_BY_SIDE_PREFERRED_MAIN.width
+  ) {
+    return side;
+  }
+  return candidates.reduce<StageSplit>(
     (best, split) =>
       best.mode === "main-only" ||
       fittedArea(stageMainSize(size, split)) > fittedArea(stageMainSize(size, best))
