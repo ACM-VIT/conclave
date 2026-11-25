@@ -14,6 +14,7 @@ import {
   planRoomUnavailableRetry,
   resolveInFlightReconnectRequest,
   resolveReconnectStartAttempts,
+  nextStepAfterScopedRebuild,
 } from "../src/app/lib/reconnect-request-policy";
 import {
   INITIAL_MEDIA_PATH_RECOVERY,
@@ -364,5 +365,18 @@ describe("the recovery a Retry starts fresh", () => {
     expect(planMediaPathFailure(rebuiltOnce.recovery, receiveFailure("t3", true)).step).toBe(
       "report-blocked",
     );
+  });
+});
+
+describe("what a reconnect run does after a one-direction rebuild step", () => {
+  it.each<["rebuilt" | "stale" | "failed", boolean, string]>([
+    ["rebuilt", true, "settle-recovered"],
+    ["rebuilt", false, "settle-recovered"],
+    ["stale", true, "settle-unchanged"],
+    ["stale", false, "rejoin"],
+    ["failed", true, "rejoin"],
+    ["failed", false, "rejoin"],
+  ])("after %s with signaling connected %s it will %s", (outcome, socketConnected, next) => {
+    expect(nextStepAfterScopedRebuild(outcome, { socketConnected })).toBe(next);
   });
 });

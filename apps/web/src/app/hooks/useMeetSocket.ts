@@ -34,6 +34,7 @@ import {
   classifyReconnectFailure,
   freshReconnectAttemptState,
   noteRoomUnavailable,
+  nextStepAfterScopedRebuild,
   planMediaRebuildScope,
   planReconnectSettlement,
   resolveInFlightReconnectRequest,
@@ -42,6 +43,7 @@ import {
   type ReconnectAttemptState,
   type ReconnectFailureKind,
   type ReconnectRequest,
+  type ScopedRebuildOutcome,
 } from "../lib/reconnect-request-policy";
 import type {
   ActiveSpeakerChangedNotification,
@@ -168,12 +170,12 @@ import {
   INITIAL_SCREEN_SHARE_WATCH,
   advanceScreenShareWatch,
   deliveredRtpBytes,
-  advanceProducerDeliveries,
   ownPacketCountsRequestFor,
   producersNotReachingSfu,
   readSenderPacketCounts,
   senderPacketCountsRequestFor,
   type SendingProducer,
+  windowProvesDelivery,
   screenPacketsGoMissing,
   screenVideoAwaitingSenderCheck,
   senderSentMore,
@@ -336,6 +338,7 @@ const HELD_JOIN_INFO_TTL_MS = 30000;
 const RESTART_ICE_ACK_TIMEOUT_MS = 5000;
 const MEDIA_PATH_SAMPLE_INTERVAL_MS = 2500;
 const SENDER_PACKET_COUNT_TIMEOUT_MS = 2000;
+const MEDIA_PATH_PROOF_INTERVAL_MS = 1500;
 
 type SenderPacketsReading =
   | { asked: false }
@@ -1202,6 +1205,9 @@ export function useMeetSocket({
     consumer: 0,
   });
   const rebuildCredentialFetchRef = useRef(false);
+  const carriesMediaNowRef = useRef<
+    (direction: "producer" | "consumer") => Promise<boolean>
+  >(async () => false);
   const reconnectBackoffCancelRef = useRef<(() => void) | null>(null);
   const manualReconnectRetryRequestedRef = useRef(false);
   const retryReconnectRef = useRef<() => Promise<void>>(async () => {});
@@ -6599,6 +6605,7 @@ export function useMeetSocket({
     const restartIceAndCheckMedia = async (
       kind: "producer" | "consumer",
       transport: Transport,
+      failingProducers: string[],
     ): Promise<boolean> => {
       if (!carriedMediaOnce.has(transport)) return false;
       try {
@@ -6635,23 +6642,19 @@ export function useMeetSocket({
         const ownAfter =
           now !== null && kind === "producer" ? await ownPackets() : NOT_ASKED;
         const after = now !== null ? (await readPath(kind, transport)).reading : null;
-        const producersDelivered = () => {
-          if (kind !== "producer" || midway === null || after === null) return true;
-          const sfuReports = sfuReportsPackets();
-          const baseline = advanceProducerDeliveries(
-            {},
-            midway,
-            { producers: sendingProducers(), sfuCounts: sentIn(ownBefore), sfuReports },
-            0,
-          );
-          const verified = advanceProducerDeliveries(
-            baseline,
-            after,
-            { producers: sendingProducers(), sfuCounts: sentIn(ownAfter), sfuReports },
-            1,
-          );
-          return producersNotReachingSfu(verified).length === 0;
-        };
+        const producersDelivered = () =>
+          kind !== "producer" ||
+          midway === null ||
+          after === null ||
+          windowProvesDelivery({
+            start: midway,
+            end: after,
+            producers: sendingProducers(),
+            sfuStart: sentIn(ownBefore),
+            sfuEnd: sentIn(ownAfter),
+            sfuReports: sfuReportsPackets(),
+            mustProve: failingProducers,
+          });
         return iceRestartBroughtMediaBack({
           replaced,
           expectsMedia:
@@ -6774,6 +6777,7 @@ export function useMeetSocket({
       reconcileRelayPathsNow();
       if (result.stalledForMs < MEDIA_PATH_STALL_MS || reconnectInFlightRef.current) return;
 
+      const failingProducers = producersNotReachingSfu(result.watch.deliveries);
       entry.watch = INITIAL_MEDIA_PATH_WATCH;
       entry.screen = INITIAL_SCREEN_SHARE_WATCH;
       const isSilentWhileConnected =
@@ -6810,7 +6814,7 @@ export function useMeetSocket({
       if (isSilentWhileConnected) {
         // ICE says connected but nothing arrives, so treat it as a failed
         // path: restart ICE, and rebuild if media still does not move.
-        if (await restartIceAndCheckMedia(kind, transport)) return;
+        if (await restartIceAndCheckMedia(kind, transport, failingProducers)) return;
         if (!sampled()) return;
         escalateMediaPathFailure(
           kind,
@@ -6837,6 +6841,44 @@ export function useMeetSocket({
           ? "Producer transport could not connect"
           : "Consumer transport could not connect",
       );
+    };
+
+    carriesMediaNowRef.current = async (kind) => {
+      const transport =
+        kind === "producer" ? producerTransportRef.current : consumerTransportRef.current;
+      if (!transport || transport.closed || transport.connectionState !== "connected") {
+        return false;
+      }
+      const stillOn = () =>
+        !transport.closed &&
+        transport ===
+          (kind === "producer" ? producerTransportRef.current : consumerTransportRef.current);
+      try {
+        const ownStart = kind === "producer" ? await ownPackets() : NOT_ASKED;
+        const start = (await readPath(kind, transport)).reading;
+        await new Promise<void>((resolve) =>
+          window.setTimeout(resolve, MEDIA_PATH_PROOF_INTERVAL_MS),
+        );
+        if (!stillOn()) return false;
+        const ownEnd = kind === "producer" ? await ownPackets() : NOT_ASKED;
+        const end = (await readPath(kind, transport)).reading;
+        if (!stillOn()) return false;
+        if (kind === "consumer") return deliveredRtpBytes(start, end) > 0;
+        return (
+          mediaReachedFarEnd(start, end, expectation(kind, true).framesOptional) &&
+          windowProvesDelivery({
+            start,
+            end,
+            producers: sendingProducers(),
+            sfuStart: sentIn(ownStart),
+            sfuEnd: sentIn(ownEnd),
+            sfuReports: sfuReportsPackets(),
+            mustProve: [],
+          })
+        );
+      } catch {
+        return false;
+      }
     };
 
     const interval = window.setInterval(() => {
@@ -9976,6 +10018,7 @@ export function useMeetSocket({
     const reconnectGeneration = reconnectGenerationRef.current;
     let attemptState = freshReconnectAttemptState(options);
     let rejoined = false;
+    let signalingIntact = false;
     const applyRequestedRelayPolicy = (budget: RelayRefreshBudget) => {
       const relayOnly = resolveRebuildRelayOnly({
         requested: attemptState.relayOnlyRequest !== null,
@@ -10022,39 +10065,58 @@ export function useMeetSocket({
         if (reconnectGeneration !== reconnectGenerationRef.current) return;
         if (intentionalDisconnectRef.current) return;
         const failedPath = options?.failedPath;
-        if (failedPath && failedPath.direction === scopedDirection) {
+        const failedPathChanged = (): boolean => {
+          if (!failedPath || failedPath.direction !== scopedDirection) return false;
           const transport =
             scopedDirection === "producer"
               ? producerTransportRef.current
               : consumerTransportRef.current;
-          if (
+          return (
             !transport ||
             transport.closed ||
             transport.id !== failedPath.transportId ||
             failedPath.generation !== reconnectGenerationRef.current ||
             failedPath.flowEpoch !== mediaFlowEpochRef.current[scopedDirection]
-          ) {
-            console.info(
-              `[Meets] The ${scopedDirection} path changed while its credentials were fetched; not rebuilding it.`,
-            );
-            rejoined = true;
-            return;
-          }
-        }
-        applyRequestedRelayPolicy("restart");
-        const result =
-          scopedDirection === "consumer"
-            ? await rebuildReceivePath()
-            : await rebuildSendPath();
+          );
+        };
+        let outcome: ScopedRebuildOutcome;
+        let failure: string | null = null;
+        const carriesMediaNow =
+          !failedPathChanged() && (await carriesMediaNowRef.current(scopedDirection));
         if (reconnectGeneration !== reconnectGenerationRef.current) return;
         if (intentionalDisconnectRef.current) return;
-        if (result.rebuilt) {
+        if (failedPathChanged() || carriesMediaNow) {
+          outcome = "stale";
+        } else {
+          applyRequestedRelayPolicy("restart");
+          const result =
+            scopedDirection === "consumer"
+              ? await rebuildReceivePath()
+              : await rebuildSendPath();
+          if (reconnectGeneration !== reconnectGenerationRef.current) return;
+          if (intentionalDisconnectRef.current) return;
+          outcome = result.rebuilt ? "rebuilt" : "failed";
+          failure = result.rebuilt ? null : result.reason;
+        }
+        const next = nextStepAfterScopedRebuild(outcome, {
+          socketConnected: socketRef.current?.connected === true,
+        });
+        if (next === "settle-recovered") {
           reconnectAttemptsRef.current = 0;
           rejoined = true;
           return;
         }
+        if (next === "settle-unchanged") {
+          console.info(
+            `[Meets] The ${scopedDirection} path is carrying media again or was replaced; not rebuilding it.`,
+          );
+          signalingIntact = true;
+          return;
+        }
         console.warn(
-          `[Meets] Could not rebuild the ${scopedDirection} transport on its own (${result.reason}); rejoining.`,
+          outcome === "stale"
+            ? `[Meets] The ${scopedDirection} path needs no rebuild, but signaling dropped; rejoining.`
+            : `[Meets] Could not rebuild the ${scopedDirection} transport on its own (${failure}); rejoining.`,
         );
       }
       setMeetError(null);
@@ -10398,7 +10460,7 @@ export function useMeetSocket({
         );
         commitMediaPathRecovery(recovery);
         const settlement = planReconnectSettlement({
-          rejoined,
+          rejoined: rejoined || signalingIntact,
           userRetryQueued: manualReconnectRetryRequestedRef.current,
           leaving: intentionalDisconnectRef.current,
         });

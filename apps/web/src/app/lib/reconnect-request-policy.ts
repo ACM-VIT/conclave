@@ -92,6 +92,17 @@ export const planReconnectSettlement = ({
   };
 };
 
+export type ScopedRebuildOutcome = "rebuilt" | "stale" | "failed";
+
+export const nextStepAfterScopedRebuild = (
+  outcome: ScopedRebuildOutcome,
+  { socketConnected }: { socketConnected: boolean },
+): "settle-recovered" | "settle-unchanged" | "rejoin" => {
+  if (outcome === "rebuilt") return "settle-recovered";
+  if (outcome === "stale" && socketConnected) return "settle-unchanged";
+  return "rejoin";
+};
+
 export const resolveReconnectStartAttempts = (
   previousAttempts: number,
   maxAttempts: number,

@@ -98,6 +98,18 @@ describe("the media path recovery the hook runs", () => {
     expect(await waitFor(rig, () => send.restartIceCalls > 0, 40_000)).toBe(true);
   });
 
+  it("rebuilds a send path whose ICE restart never proves the camera reaches the SFU, with every other reply missing", async () => {
+    rig = await startRig({ publish: true, camera: true });
+    await rig.join();
+    await rig.advance(5_000);
+    const send = rig.send!;
+    rig.dropEveryOtherOwnCountAnswer = true;
+    rig.droppedSendKinds.add("video");
+
+    expect(await waitFor(rig, () => rig!.send !== send, 100_000)).toBe(true);
+    expect(rig.log.some((line) => line.includes("Rebuilding the producer transport"))).toBe(true);
+  });
+
   it.each<[string, { dropEveryOther?: boolean; bursty?: boolean }]>([
     ["every other SFU reply goes missing", { dropEveryOther: true }],
     ["the camera sends in bursts", { bursty: true }],
@@ -778,6 +790,49 @@ describe("acting only on the path that was sampled", () => {
     expect(rig.recvTransports).toEqual([recv]);
     expect(recv.carriedBytes).toBeGreaterThan(flowedBefore);
     expect(rig.health.consumer).toBe("healthy");
+  });
+
+  it("still reconnects a socket that drops after the stale rebuild's media came back", async () => {
+    rig = await startRig();
+    await rig.join();
+    await rig.advance(5_000);
+    const socket = rig.socket!;
+    rig.refuseIceRestart = true;
+    rig.route = "hold";
+    rig.mediaFlows = false;
+    expect(await waitFor(rig, () => rig!.heldRoutes.length > 0, 40_000)).toBe(true);
+    rig.mediaFlows = true;
+    await rig.advance(5_000);
+    await rig.dropSocket();
+    rig.route = "up";
+    rig.releaseHeldRoutes("answer");
+
+    expect(await waitFor(rig, () => rig!.socket !== socket && rig!.socket!.connected, 30_000)).toBe(true);
+    const recv = rig.recv!;
+    const flowedBefore = recv.carriedBytes;
+    await rig.advance(6_000);
+    expect(recv.carriedBytes).toBeGreaterThan(flowedBefore);
+  });
+
+  it("keeps a receive path that carries media again just before its credentials arrive", async () => {
+    rig = await startRig();
+    await rig.join();
+    await rig.advance(5_000);
+    const recv = rig.recv!;
+    rig.refuseIceRestart = true;
+    rig.route = "hold";
+    rig.mediaFlows = false;
+    expect(await waitFor(rig, () => rig!.heldRoutes.length > 0, 40_000)).toBe(true);
+    rig.relayWorks = false;
+    rig.mediaFlows = true;
+    rig.route = "up";
+    rig.releaseHeldRoutes("answer");
+    await rig.advance(8_000);
+
+    expect(rig.recvTransports).toEqual([recv]);
+    const flowedBefore = recv.carriedBytes;
+    await rig.advance(5_000);
+    expect(recv.carriedBytes).toBeGreaterThan(flowedBefore);
   });
 
   it("still rebuilds a receive path that stays dead while its credentials are fetched", async () => {

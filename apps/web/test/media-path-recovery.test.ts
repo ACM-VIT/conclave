@@ -29,6 +29,7 @@ import {
   advanceProducerDeliveries,
   producersNotReachingSfu,
   readMediaPath,
+  windowProvesDelivery,
   type SendingProducer,
   mediaReachedFarEnd,
   sendPathExpectation,
@@ -1096,5 +1097,54 @@ describe("judging each sending producer on its own", () => {
 
     expect(reading.sent).toEqual({});
     expect(producersNotReachingSfu(deliveries)).toEqual([]);
+  });
+});
+
+describe("proving every producer reached the SFU over a short window", () => {
+  const reading = (camera: number, mic: number, reportAt = 2_000) =>
+    readMediaPath(
+      [
+        { type: "outbound-rtp", id: "OUT-0", mid: "0", packetsSent: mic, bytesSent: mic * 100 },
+        { type: "remote-inbound-rtp", id: "RI-0", localId: "OUT-0", timestamp: reportAt },
+        { type: "outbound-rtp", id: "OUT-1", mid: "1", packetsSent: camera, bytesSent: camera * 100 },
+        { type: "remote-inbound-rtp", id: "RI-1", localId: "OUT-1", timestamp: reportAt },
+      ],
+      "send",
+    );
+  const producers = [
+    { producerId: "mic", mid: "0" },
+    { producerId: "camera", mid: "1" },
+  ];
+  const prove = (over: {
+    camera?: [number, number];
+    sfuStart?: Record<string, number> | null;
+    sfuEnd?: Record<string, number> | null;
+    sfuReports?: boolean;
+    mustProve?: string[];
+  }) => {
+    const [cameraStart, cameraEnd] = over.camera ?? [100, 200];
+    return windowProvesDelivery({
+      start: reading(cameraStart, 50, 1_000),
+      end: reading(cameraEnd, 100, 2_000),
+      producers,
+      sfuStart: over.sfuStart === undefined ? { mic: 40, camera: 90 } : over.sfuStart,
+      sfuEnd: over.sfuEnd === undefined ? { mic: 90, camera: 190 } : over.sfuEnd,
+      sfuReports: over.sfuReports ?? true,
+      mustProve: over.mustProve ?? [],
+    });
+  };
+
+  it.each<[string, Parameters<typeof prove>[0], boolean]>([
+    ["every producer that sent reached the SFU", {}, true],
+    ["the camera sent and its count did not grow", { sfuEnd: { mic: 90, camera: 90 } }, false],
+    ["the reply at the start is missing", { sfuStart: null }, false],
+    ["the reply at the end is missing", { sfuEnd: null }, false],
+    ["the camera's count is left out of a reply", { sfuEnd: { mic: 90 } }, false],
+    ["a camera that sent nothing and was not failing", { camera: [100, 100], sfuEnd: { mic: 90, camera: 90 } }, true],
+    ["a failing camera that sent nothing", { camera: [100, 100], sfuEnd: { mic: 90, camera: 90 }, mustProve: ["camera"] }, false],
+    ["a failing camera that reached the SFU again", { mustProve: ["camera"] }, true],
+    ["an SFU that cannot count, with newer reports", { sfuReports: false, sfuStart: null, sfuEnd: null }, true],
+  ])("%s: %s", (_name, over, proven) => {
+    expect(prove(over)).toBe(proven);
   });
 });
