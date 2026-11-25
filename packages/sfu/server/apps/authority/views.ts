@@ -3,13 +3,14 @@ import type {
   ProjectedRow,
   RowRef,
 } from "@conclave/apps-sdk/authority";
-import type {
-  Role,
-  RoomPolicy,
-  RuntimeDefinition,
-  RuntimeView,
-  Subject,
-  TableKey,
+import {
+  AUTHORITY_ROLES,
+  type Role,
+  type RoomPolicy,
+  type RuntimeDefinition,
+  type RuntimeView,
+  type Subject,
+  type TableKey,
 } from "@conclave/apps-sdk/authority/server";
 import { Logger } from "../../../utilities/loggers.js";
 import type { AuthorityStore } from "./store.js";
@@ -373,6 +374,7 @@ export class ViewTracker {
   private work = 0;
   /** Counts each time committed writes are taken in. */
   private version = 0;
+  private readonly faults: Error[] = [];
 
   constructor(
     private readonly definition: RuntimeDefinition,
@@ -503,7 +505,9 @@ export class ViewTracker {
       const { role } = audience.of;
       return this.project(name, () => view.project(row, role, this.policy));
     }
-    if (!("subject" in audience.of) || view.owner(row) !== audience.of.subject) return null;
+    if (!("subject" in audience.of) || this.rowOwner(name, () => view.owner(row)) !== audience.of.subject) {
+      return null;
+    }
     return this.project(name, () => view.project(row, this.policy));
   }
 
@@ -832,7 +836,12 @@ export class ViewTracker {
     this.walks.clear();
     this.reportWithheld();
     const flushed = this.tell();
-    if (this.options.verify) this.verify();
+    if (this.options.verify) {
+      const fault = this.faults.shift();
+      this.faults.length = 0;
+      if (fault !== undefined) throw fault;
+      this.verify();
+    }
     return flushed;
   }
 
@@ -893,7 +902,7 @@ export class ViewTracker {
               continue;
             }
             const previousOwner = this.ownerOf.get(name)!.get(key);
-            const nextOwner = row ? view.owner(row) : undefined;
+            const nextOwner = row ? this.rowOwner(name, () => view.owner(row)) : undefined;
             if (previousOwner !== undefined && previousOwner !== nextOwner) {
               this.disown(name, previousOwner, key);
               const audience = this.subjects.get(previousOwner);
@@ -1041,7 +1050,7 @@ export class ViewTracker {
       bucketOf(audience, name);
       for (const key of this.owned.get(name)!.get(subject) ?? []) {
         const row = this.store.get(view.source, key);
-        if (!row || view.owner(row) !== subject) continue;
+        if (!row || this.rowOwner(name, () => view.owner(row)) !== subject) continue;
         const projected = this.project(name, () => view.project(row, this.policy));
         if (projected) this.place(audience, name, key, projected, false);
       }
@@ -1075,25 +1084,66 @@ export class ViewTracker {
     run: () => { key: string; value: unknown } | null,
   ): { key: string; value: Json } | null {
     try {
-      const projected = run();
-      if (projected === null) return null;
-      if (typeof projected.key !== "string" || projected.key.length === 0) {
-        throw new Error("A projected row needs a key");
-      }
-      const value = this.definition.contract.views[view].parse(
-        projected.value,
-        "strict",
-        view,
-      ) as Json;
-      return { key: projected.key, value };
+      return this.checked(view, run());
     } catch (error) {
-      if (this.options.verify) throw error;
-      Logger.error(
-        `[Authority] ${this.definition.contract.id}: view ${view} withheld a row`,
-        error,
-      );
+      this.fault(view, error);
       return null;
     }
+  }
+
+  private checked(
+    view: string,
+    projected: { key: string; value: unknown } | null,
+  ): { key: string; value: Json } | null {
+    if (projected === null) return null;
+    if (typeof projected.key !== "string" || projected.key.length === 0) {
+      throw new Error("A projected row needs a key");
+    }
+    const value = this.definition.contract.views[view].parse(
+      projected.value,
+      "strict",
+      view,
+    ) as Json;
+    return { key: projected.key, value };
+  }
+
+  private rowOwner(view: string, run: () => Subject): Subject | undefined {
+    try {
+      return run();
+    } catch (error) {
+      this.fault(view, error);
+      return undefined;
+    }
+  }
+
+  private fault(view: string, error: unknown): void {
+    if (this.options.verify) {
+      this.faults.push(error instanceof Error ? error : new Error(String(error)));
+      return;
+    }
+    Logger.error(
+      `[Authority] ${this.definition.contract.id}: view ${view} withheld a row`,
+      error,
+    );
+  }
+
+  faultIn(written: Iterable<readonly [string, TableKey, object | undefined]>): unknown {
+    for (const [tableName, , row] of written) {
+      if (!row) continue;
+      for (const [name, view] of this.viewsByTable.get(tableName) ?? []) {
+        try {
+          if (view.kind === "shared") {
+            for (const role of AUTHORITY_ROLES) this.checked(name, view.project(row, role, this.policy));
+          } else {
+            view.owner(row);
+            this.checked(name, view.project(row, this.policy));
+          }
+        } catch (error) {
+          return error;
+        }
+      }
+    }
+    return undefined;
   }
 
   /**
@@ -1247,7 +1297,7 @@ export class ViewTracker {
       if (view.kind !== "personal") continue;
       bucketOf(audience, name);
       for (const [key, row] of this.store.rows(view.source)) {
-        if (view.owner(row) !== subject) continue;
+        if (this.rowOwner(name, () => view.owner(row)) !== subject) continue;
         const projected = this.project(name, () => view.project(row, this.policy));
         if (projected) this.place(audience, name, key, projected, false);
       }

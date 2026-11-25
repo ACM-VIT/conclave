@@ -85,6 +85,7 @@ export class ReceiptBook {
 
   hasRoom(subject: Subject, now: number): boolean {
     if (now - this.lastSweepAt >= SWEEP_INTERVAL_MS) this.sweep(now);
+    else this.sweepSubject(subject, now);
     return (
       this.count < this.limits.receiptsPerInstance &&
       (this.bySubject.get(subject)?.size ?? 0) < this.limits.receiptsPerSubject
@@ -111,6 +112,26 @@ export class ReceiptBook {
     });
   }
 
+  mergeFits(merges: readonly { from: Subject; into: Subject }[], now: number): boolean {
+    const keys = new Map<Subject, Set<string>>();
+    const keysOf = (subject: Subject): Set<string> => {
+      let held = keys.get(subject);
+      if (!held) {
+        this.sweepSubject(subject, now);
+        held = new Set(this.bySubject.get(subject)?.keys() ?? []);
+        keys.set(subject, held);
+      }
+      return held;
+    };
+    for (const { from, into } of merges) {
+      const kept = keysOf(into);
+      for (const key of keysOf(from)) kept.add(key);
+      keys.set(from, new Set());
+      if (kept.size > this.limits.receiptsPerSubject) return false;
+    }
+    return true;
+  }
+
   merge(from: Subject, into: Subject): void {
     const moving = this.bySubject.get(from);
     if (!moving) return;
@@ -130,16 +151,20 @@ export class ReceiptBook {
     return this.count;
   }
 
-  private sweep(now: number): void {
+  sweep(now: number): void {
     this.lastSweepAt = now;
-    for (const [subject, receipts] of this.bySubject) {
-      for (const [key, receipt] of receipts) {
-        if (receipt.expiresAt >= now) continue;
-        receipts.delete(key);
-        this.count -= 1;
-      }
-      if (receipts.size === 0) this.bySubject.delete(subject);
+    for (const subject of [...this.bySubject.keys()]) this.sweepSubject(subject, now);
+  }
+
+  private sweepSubject(subject: Subject, now: number): void {
+    const receipts = this.bySubject.get(subject);
+    if (!receipts) return;
+    for (const [key, receipt] of receipts) {
+      if (receipt.expiresAt >= now) continue;
+      receipts.delete(key);
+      this.count -= 1;
     }
+    if (receipts.size === 0) this.bySubject.delete(subject);
   }
 }
 

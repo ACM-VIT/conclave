@@ -34,7 +34,13 @@ export type TransactionOutcome<R> =
   | { ok: false; kind: "fault"; error: unknown };
 
 export type StagedTransaction<R> =
-  | { ok: true; value: R; commit(): boolean }
+  | {
+      ok: true;
+      value: R;
+      written(): Array<readonly [string, TableKey, Row | undefined]>;
+      fresh(): boolean;
+      commit(): boolean;
+    }
   | Exclude<TransactionOutcome<R>, { ok: true }>;
 
 /**
@@ -259,6 +265,11 @@ export class AuthorityStore {
     return {
       ok: true,
       value,
+      written: () =>
+        [...draft.writes].flatMap(([table, writes]) =>
+          [...writes].map(([key, staged]) => [table, key, staged === DELETED ? undefined : staged] as const),
+        ),
+      fresh: () => this.commits === stagedAt,
       commit: () => {
         if (this.commits !== stagedAt) {
           throw new Error("A staged transaction must commit before any other transaction does");

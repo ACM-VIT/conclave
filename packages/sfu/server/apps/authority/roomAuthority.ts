@@ -268,6 +268,7 @@ export class RoomAuthority {
   private wakeTimer: NodeJS.Timeout | null = null;
   private lagTimer: NodeJS.Timeout | null = null;
   private pruneTimer: NodeJS.Timeout | null = null;
+  private receiptSweepTimer: NodeJS.Timeout | null = null;
   /** Apps a viewer has left since their unheld views were last forgotten. */
   private readonly left = new Set<AuthorityInstance>();
   /** Apps whose viewers are due a word on what they may now do. */
@@ -395,6 +396,7 @@ export class RoomAuthority {
       this.now(),
     );
     this.afterWrite(instance);
+    this.armReceiptSweep();
     if (
       actor.verified &&
       context.currentClient &&
@@ -483,7 +485,7 @@ export class RoomAuthority {
   }
 
   stageGuestMerges(merges: readonly GuestIdentityMerge[]): StagedGuestMerge | null {
-    if (this.closed) return { commit: () => undefined };
+    if (this.closed) return { commit: () => true };
     const subjects = merges.map(({ from, into }) => ({
       from: this.options.identity.guestSubject(from),
       into: this.options.identity.guestSubject(into),
@@ -497,10 +499,12 @@ export class RoomAuthority {
     }
     return {
       commit: () => {
+        if (!staged.every(([, merge]) => merge.fresh())) return false;
         for (const [instance, merge] of staged) {
           if (merge.commit()) this.afterWrite(instance);
         }
         this.scheduleSweep();
+        return true;
       },
     };
   }
@@ -534,11 +538,12 @@ export class RoomAuthority {
       this.wakeTimer,
       this.lagTimer,
       this.pruneTimer,
+      this.receiptSweepTimer,
     ]) {
       if (timer) clearTimeout(timer);
     }
     this.flushTimer = this.sweepTimer = this.wakeTimer = this.lagTimer = null;
-    this.pruneTimer = null;
+    this.pruneTimer = this.receiptSweepTimer = null;
     this.left.clear();
     for (const timer of this.stalled) clearTimeout(timer);
     this.stalled.clear();
@@ -561,6 +566,24 @@ export class RoomAuthority {
       held.subjects += subjects;
     }
     return held;
+  }
+
+  get receiptsHeld(): number {
+    let held = 0;
+    for (const instance of this.instances.values()) held += instance.receiptCount;
+    return held;
+  }
+
+  private armReceiptSweep(): void {
+    if (this.receiptSweepTimer || this.closed) return;
+    this.receiptSweepTimer = setTimeout(() => {
+      this.receiptSweepTimer = null;
+      const now = this.now();
+      let held = false;
+      for (const instance of this.instances.values()) held = instance.sweepReceipts(now) || held;
+      if (held) this.armReceiptSweep();
+    }, this.limits.operationMaxAgeMs);
+    this.receiptSweepTimer.unref?.();
   }
 
   /** Flushes pending view changes now. For tests and orderly shutdown. */

@@ -47,7 +47,7 @@ export type Actor = {
   displayName: string;
 };
 
-export type StagedMerge = { commit(): boolean };
+export type StagedMerge = { fresh(): boolean; commit(): boolean };
 
 export type InstanceOptions = {
   limits: AuthorityLimits;
@@ -381,6 +381,12 @@ export class AuthorityInstance {
   }
 
   stageMerge(merges: readonly SubjectMerge[], now: number): StagedMerge | null {
+    if (!this.receipts.mergeFits(merges, now)) {
+      Logger.warn(
+        `[Authority] ${this.appId}: two subjects hold more saved answers than one may keep, so they are not merged`,
+      );
+      return null;
+    }
     const handler = this.module.runtime.mergeSubjects;
     const ctx: TimerContext = {
       room: this.policy,
@@ -399,7 +405,13 @@ export class AuthorityInstance {
       );
       return null;
     }
+    const fault = this.views.faultIn(staged.written());
+    if (fault !== undefined) {
+      Logger.error(`[Authority] ${this.appId}: a merged row fails its view, so the subjects are not merged`, fault);
+      return null;
+    }
     return {
+      fresh: () => staged.fresh() && this.receipts.mergeFits(merges, now),
       commit: () => {
         const changed = staged.commit();
         this.views.takeIn();
@@ -407,6 +419,15 @@ export class AuthorityInstance {
         return changed;
       },
     };
+  }
+
+  sweepReceipts(now: number): boolean {
+    this.receipts.sweep(now);
+    return this.receipts.size > 0;
+  }
+
+  get receiptCount(): number {
+    return this.receipts.size;
   }
 
   /**
