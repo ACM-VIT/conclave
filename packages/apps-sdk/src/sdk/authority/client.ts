@@ -449,13 +449,15 @@ export class AuthoritySession<C extends AuthorityContract> {
       this.client.now() + AUTHORITY_LIMITS.operationMaxAgeMs - RETRY_PAUSE_MS * 4;
     let sentToEpoch: string | null = null;
     let mayHaveRun = false;
+    const timeLeft = () => deadline - this.client.now();
+    const waitWithin = (ms: number) => pause(Math.max(0, Math.min(ms, timeLeft())));
 
     for (;;) {
       if (this.closed || this.client.isDisposed) return failure("unknown-outcome");
       // Only a view that is on its way is worth waiting for.
       if (this.state.kind === "unsupported") return failure("unsupported");
       if (this.state.kind === "revoked") return failure("forbidden");
-      const remaining = deadline - this.client.now();
+      const remaining = timeLeft();
       if (remaining <= 0) return failure("unknown-outcome");
       if (!(await this.whenReady(remaining))) continue;
       const epoch = this.subscribedEpoch;
@@ -482,11 +484,13 @@ export class AuthoritySession<C extends AuthorityContract> {
       );
       if (reply === LOST) {
         mayHaveRun = true;
-        await pause(RETRY_PAUSE_MS);
+        await waitWithin(RETRY_PAUSE_MS);
         continue;
       }
       if (!reply.ok && reply.code === "rate-limited" && mayHaveRun) {
-        await pause(Math.max(RETRY_PAUSE_MS, reply.retryAfterMs ?? 0));
+        const wait = Math.max(RETRY_PAUSE_MS, reply.retryAfterMs ?? 0);
+        if (wait >= timeLeft()) return failure("unknown-outcome");
+        await pause(wait);
         continue;
       }
       if (!reply.ok && RESUBSCRIBE_CODES.has(reply.code)) {
@@ -497,7 +501,7 @@ export class AuthoritySession<C extends AuthorityContract> {
         // it has, send again at once under the new generation.
         const replaced =
           this.state.kind === "ready" && this.generation !== request.generation;
-        if (!replaced) await pause(RETRY_PAUSE_MS);
+        if (!replaced) await waitWithin(RETRY_PAUSE_MS);
         continue;
       }
       const answer =
