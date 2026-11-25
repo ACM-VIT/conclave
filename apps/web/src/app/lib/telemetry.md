@@ -477,6 +477,15 @@ function name only for an in-app frame of our own source: a file that exists
 inside the SFU's own folder (`packages/sfu`) and is not under `node_modules`,
 sent relative to that folder. Any other frame, a library's, a Node internal, a
 home folder or a name that only looks like ours, is `[path]` with function `?`.
+An own frame's function name is sent only when every identifier in it occurs
+in that file (or is one of V8's own words: `async`, `new`, `get`, `set`,
+`Object`, `<anonymous>`, `Function`, `Module`), and its line only when the
+file has that line. A stack is text V8 formats once, with whatever message
+the error had then, so a message changed afterwards can make lines of the old
+message look like frames; this rule keeps any such line to names and places
+that already exist in our source. Frames are read only after the exact
+`name: message` header, and an error whose message no longer matches its stack
+sends none.
 Game events group by a keyed hash of the room (`room_<hmac>`), never its code.
 Without a real `SFU_SECRET` they are not grouped at all, and distinct ids use a
 key that lives only in that process.

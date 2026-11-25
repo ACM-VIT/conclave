@@ -10,7 +10,7 @@
  * function only for our own source.
  */
 
-import { realpathSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { namesGuestPassIdentifier } from "@conclave/meeting-core/guest-pass-identifiers";
@@ -30,6 +30,14 @@ import {
 const PATH_WITHHELD = "[path]";
 const FUNCTION_WITHHELD = "?";
 const MAX_KNOWN_PATHS = 1000;
+const MAX_SOURCE_BYTES = 2 * 1024 * 1024;
+const RUNTIME_NAME_WORDS = new Set(["async", "new", "get", "set", "Object", "anonymous", "Function", "Module"]);
+
+export type SourceFacts = { names: ReadonlySet<string>; lines: number };
+export type FramePath = {
+  path: (filename: string) => string;
+  source: (sent: string) => SourceFacts | null;
+};
 const MAX_POSITION = 100_000_000;
 const MAX_EXCEPTIONS = 10;
 const MAX_FRAMES = 500;
@@ -47,13 +55,13 @@ export type FramePathOptions = {
  * once links are followed and is not under node_modules. A name alone, a home
  * folder, a library's file or a Node internal is never sent.
  */
-export const createFramePath = ({ root, cwd }: FramePathOptions) => {
+export const createFramePath = ({ root, cwd }: FramePathOptions): FramePath => {
   let realRoot: string | null = null;
   try {
     realRoot = realpathSync(root);
   } catch {}
   const known = new Map<string, string>();
-  return (filename: string): string => {
+  const framePath = (filename: string): string => {
     const key = `${cwd()}\0${filename}`;
     const cached = known.get(key);
     if (cached !== undefined) return cached;
@@ -70,6 +78,23 @@ export const createFramePath = ({ root, cwd }: FramePathOptions) => {
     if (known.size < MAX_KNOWN_PATHS) known.set(key, sent);
     return sent;
   };
+  const sources = new Map<string, SourceFacts | null>();
+  const source = (sent: string): SourceFacts | null => {
+    if (sources.has(sent)) return sources.get(sent) ?? null;
+    let facts: SourceFacts | null = null;
+    try {
+      if (realRoot) {
+        const file = path.join(realRoot, ...sent.split("/"));
+        if (statSync(file).size <= MAX_SOURCE_BYTES) {
+          const text = readFileSync(file, "utf8");
+          facts = { names: new Set(text.match(/[A-Za-z_$][\w$]*/g) ?? []), lines: text.split("\n").length };
+        }
+      }
+    } catch {}
+    if (sources.size < MAX_KNOWN_PATHS) sources.set(sent, facts);
+    return facts;
+  };
+  return { path: framePath, source };
 };
 
 // The forms of a frame's file and function, which the shaper checks one by
@@ -93,15 +118,22 @@ const isPosition = (value: unknown): value is number =>
  * posthog-node derives from the full path, the source lines it reads from
  * disk and anything else are left out.
  */
-const shapeFrame = (frame: Record<string, unknown>, framePath: (filename: string) => string) => {
+const namedInSource = (name: unknown, facts: SourceFacts | null): name is string =>
+  facts !== null &&
+  FUNCTION_NAME.safeParse(name).success &&
+  ((name as string).match(/[A-Za-z_$][\w$]*/g) ?? []).every((word) => RUNTIME_NAME_WORDS.has(word) || facts.names.has(word));
+
+const shapeFrame = (frame: Record<string, unknown>, framePath: FramePath) => {
   const ownPath =
-    frame.in_app === true && typeof frame.filename === "string" ? framePath(frame.filename) : PATH_WITHHELD;
+    frame.in_app === true && typeof frame.filename === "string" ? framePath.path(frame.filename) : PATH_WITHHELD;
   const own = ownPath !== PATH_WITHHELD && FRAME_FILE.safeParse(ownPath).success;
+  const facts = own ? framePath.source(ownPath) : null;
+  const lineInSource = !own || (facts !== null && isPosition(frame.lineno) && frame.lineno <= facts.lines);
   return {
     platform: "node:javascript",
     ...(typeof frame.filename === "string" ? { filename: own ? ownPath : PATH_WITHHELD } : {}),
-    function: own && FUNCTION_NAME.safeParse(frame.function).success ? frame.function : FUNCTION_WITHHELD,
-    ...(isPosition(frame.lineno) ? { lineno: frame.lineno } : {}),
+    function: own && lineInSource && namedInSource(frame.function, facts) ? frame.function : FUNCTION_WITHHELD,
+    ...(isPosition(frame.lineno) && lineInSource ? { lineno: frame.lineno } : {}),
     ...(isPosition(frame.colno) ? { colno: frame.colno } : {}),
     ...(typeof frame.in_app === "boolean" ? { in_app: frame.in_app } : {}),
   };
@@ -109,7 +141,7 @@ const shapeFrame = (frame: Record<string, unknown>, framePath: (filename: string
 
 const sentTypes = new Set(SENT_ERROR_TYPES);
 
-const shapeExceptionList = (value: unknown, framePath: (filename: string) => string) => {
+const shapeExceptionList = (value: unknown, framePath: FramePath) => {
   if (!Array.isArray(value)) return undefined;
   return value.filter(isRecord).slice(0, MAX_EXCEPTIONS).map((entry) => {
     const { mechanism, stacktrace } = entry;
@@ -198,7 +230,7 @@ export type GameCatalog = ReadonlyArray<{ id: string; options: readonly GameOpti
 export type OutboundOptions = {
   /** The SFU's release, SFU_RELEASE. */
   release: string;
-  framePath: (filename: string) => string;
+  framePath: FramePath;
   /** The games the SFU runs, whose ids and options game events may name; the same array until they change. */
   games: () => GameCatalog;
   /** Whether the server registered a handler for this socket event. */

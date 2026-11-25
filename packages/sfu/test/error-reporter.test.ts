@@ -435,7 +435,7 @@ describe("SFU error reporter", () => {
               stacktrace: {
                 type: "raw",
                 frames: [
-                  { platform: "node:javascript", filename, abs_path: filename, module: "Review Operator.service:main", function: "main", lineno: 3, colno: 9, in_app: true },
+                  { platform: "node:javascript", filename, abs_path: filename, module: "Review Operator.service:main", function: "createErrorReporter", lineno: 3, colno: 9, in_app: true },
                 ],
               },
             },
@@ -486,7 +486,7 @@ describe("SFU error reporter", () => {
       expect(sentFrame(cwd, filename)).toEqual({
         platform: "node:javascript",
         filename: sent,
-        function: sent === "[path]" ? "?" : "main",
+        function: sent === "[path]" ? "?" : "createErrorReporter",
         lineno: 3,
         colno: 9,
         in_app: true,
@@ -615,6 +615,28 @@ describe("SFU error reporter", () => {
       const error = make();
 
       expect(sentStack(error)).toContain(realFrame(error));
+    });
+
+    it.each([
+      ["kept as it was", null],
+      ["changed", "changed"],
+      ["cut to its first line", "first"],
+      ["cleared", ""],
+    ])("sends no function a message named once its stack was read, with the message %s", async (_case, replacement) => {
+      const fake = await startFakePostHog();
+      servers.push(fake.server);
+      const canary = `ReviewCanary${String(replacement).length}`;
+      const error = new Error(`first\n    at ${canary} (${path.join(SFU_ROOT, "server/analytics/errorReporter.ts")}:1:1)`);
+      expect(error.stack).toContain(canary);
+      if (replacement !== null) error.message = replacement;
+      await reporterFor(posthogClient(fake.host)).reportFatal(error, { source: "socket_handler" }, 2500);
+
+      await waitFor(() => fake.events.some((event) => event.event === "$exception"));
+      expect(JSON.stringify(fake.events)).not.toContain(canary);
+      const [entry] = fake.events.find((event) => event.event === "$exception")!.properties.$exception_list as Array<{
+        stacktrace: { frames: Array<{ filename?: string; function?: string }> };
+      }>;
+      expect(entry.stacktrace.frames.some((frame) => frame.filename === "test/error-reporter.test.ts")).toBe(replacement !== "changed");
     });
 
     it("sends no frames when the message no longer matches the stack it was read with", () => {
