@@ -4,8 +4,12 @@ import { prewarmVideoEffectsRuntime } from "../src/app/hooks/useVideoEffects";
 import { releaseAllCaptures } from "../src/app/lib/media-captures";
 
 class FakeGenerator {
+  static created: FakeGenerator[] = [];
   readonly kind = "video";
   readyState: MediaStreamTrackState = "live";
+  constructor() {
+    FakeGenerator.created.push(this);
+  }
   stop() {
     this.readyState = "ended";
   }
@@ -44,6 +48,23 @@ afterEach(() => {
 });
 
 describe("the effects output writer warmed up before a call ends", () => {
+  it("is shut down when its output track ended before it reported ready", async () => {
+    const warming = prewarmVideoEffectsRuntime({ reason: "test" });
+    await vi.waitFor(() => {
+      if (FakeWorker.created.length === 0) throw new Error("the writer worker has not started");
+    });
+    const [writer] = FakeWorker.created;
+    FakeGenerator.created.forEach((track) => track.stop());
+
+    writer!.onmessage?.({
+      data: { type: "READY", hasVideoFrame: true, hasWritableStream: true, hasOffscreenCanvas: true, renderer: "2d" },
+    } as MessageEvent);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await warming;
+
+    expect(writer!.terminated).toBe(true);
+  });
+
   it("is shut down instead of kept for later when it reports ready after the call ended", async () => {
     const warming = prewarmVideoEffectsRuntime({ reason: "test" });
     await vi.waitFor(() => {

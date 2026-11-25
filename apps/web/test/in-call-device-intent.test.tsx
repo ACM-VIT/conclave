@@ -300,6 +300,44 @@ describe("a chosen device ends up sending", () => {
     expect(world.producers.filter((producer) => !producer.closed).map((producer) => producer.id)).toEqual([]);
   });
 
+  it("leaving the meeting page while a camera recovery publishes leaves no camera producer open", async () => {
+    const rig = await join({ mic: false });
+    world.holds.add("produce");
+    await act(async () => liveCameraTrack(rig).lose());
+    await until("the recovery publish", () => pendingOf("produce") === 1);
+
+    const publishedBefore = world.producers.length;
+    rig.unmount();
+    current = null;
+    world.releaseAll();
+    await until("the recovery publish answer", () => world.producers.length > publishedBefore && world.roundTripsInFlight === 0);
+    await act(async () => {
+      for (let turn = 0; turn < 6; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(world.producers.filter((producer) => !producer.closed && producer.kind === "video").map((producer) => producer.id)).toEqual([]);
+  });
+
+  it("a microphone recovery whose publish answers after the call stopped being joined closes what it published", async () => {
+    const rig = await join({ camera: false });
+    world.holds.add("produce");
+    await act(async () => liveMicrophoneSource()?.lose());
+    await until("the recovery publish", () => pendingOf("produce") === 1);
+    const publishedBefore = world.producers.length;
+
+    await act(async () => rig.rig().state.setConnectionState("reconnecting"));
+    const recovered: Array<[boolean, boolean | undefined]> = [];
+    await act(async () => {
+      world.releaseAll();
+      for (let turn = 0; turn < 6; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+      world.producers
+        .slice(publishedBefore)
+        .forEach((producer) => recovered.push([producer.closed, world.sfu.get(producer.id)?.closed]));
+    });
+
+    expect(recovered).toEqual([[true, true]]);
+  });
+
   it("turning noise cancellation on and straight back off never sends the noise-cancelled microphone", async () => {
     const rig = await join({ camera: false });
     world.holds.add("noiseSetup");
