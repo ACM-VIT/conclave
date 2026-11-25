@@ -573,9 +573,17 @@ def redis_key_prefix(env):
 def redis_where(url):
     try:
         parts = urllib.parse.urlsplit(url)
-        return f"{parts.hostname or '?'}:{parts.port or 6379}{parts.path or '/0'}"
+        return f"{(parts.hostname or '127.0.0.1').lower()}:{parts.port or 6379}/{parts.path.strip('/') or '0'}"
     except ValueError:
         return "an unreadable URL"
+
+
+def redis_target(url):
+    try:
+        parts = urllib.parse.urlsplit(url)
+        return (parts.scheme.lower(), (parts.hostname or "127.0.0.1").lower(), parts.port or 6379, parts.path.strip("/") or "0")
+    except ValueError:
+        return ("unreadable", url)
 
 
 def sfu_redis_source(env, containers, pattern_set=False):
@@ -588,7 +596,7 @@ def sfu_redis_source(env, containers, pattern_set=False):
         if not theirs:
             continue
         name = found["env"].get("SFU_INSTANCE_ID") or found["id"]
-        if theirs != url:
+        if not url or redis_target(theirs) != redis_target(url):
             named = redis_where(url) if url else "no Redis"
             raise Refused(f"the SFU {name} keeps its state in the Redis at {redis_where(theirs)}, and the backup config names {named}; set SFU_PERSISTENCE_REDIS_URL in the backup config to that Redis, as this host reaches it")
         if not pattern_set and redis_key_prefix(found["env"]) != prefix:

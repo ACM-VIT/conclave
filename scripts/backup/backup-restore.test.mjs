@@ -2851,6 +2851,44 @@ test("a Redis URL with a line break in a decoded field is refused before anythin
   }
 });
 
+test("an SFU that reaches the backup's Redis with its own account and default database does not stop the backup", needsRedis, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  const live = await startRedis();
+  try {
+    const { state, local, setDocker, backup } = await setUp(root, [`SFU_PERSISTENCE_REDIS_URL=redis://127.0.0.1:${live.port}/0`]);
+    withDatabase(state);
+    await setDocker([{ id: "sfu-a", mounts: [state], status: "exited", env: ["SFU_PORT=9", "SFU_INSTANCE_ID=sfu-a", `SFU_PERSISTENCE_REDIS_URL=redis://sfu:sfu-pass@LOCALHOST.invalid:${live.port}`] }]);
+    await assert.rejects(backup("--local-only"), /sfu-a keeps its state in the Redis at localhost\.invalid:/);
+    await setDocker([{ id: "sfu-a", mounts: [state], status: "exited", env: ["SFU_PORT=9", "SFU_INSTANCE_ID=sfu-a", `SFU_PERSISTENCE_REDIS_URL=redis://sfu:sfu-pass@127.0.0.1:${live.port}`] }]);
+    await backup("--local-only");
+    assert.equal((await archives(local)).length, 1);
+  } finally {
+    live.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("listing the backups needs no Docker", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  const name = "daily/2026/11/conclave-test-20261122T030000Z.tar.gz.age";
+  const blob = createHttpServer((req, res) => {
+    if (req.url.startsWith("/metadata/")) return res.end('{"access_token":"token"}');
+    if (req.url.includes("comp=list")) return res.end(`<Blobs><Blob><Name>${name}</Name></Blob></Blobs>`);
+    res.writeHead(404).end();
+  });
+  await new Promise((done) => blob.listen(0, "127.0.0.1", done));
+  try {
+    const origin = `http://127.0.0.1:${blob.address().port}`;
+    const { setDocker, restore } = await setUp(root, ["AZURE_STORAGE_CONTAINER=sfu-backups", `AZURE_BLOB_ENDPOINT=${origin}`, `AZURE_IMDS_ENDPOINT=${origin}`]);
+    await setDocker({ fail: true });
+    const { stdout } = await restore("--list");
+    assert.match(stdout, /conclave-test-20261122T030000Z/);
+  } finally {
+    blob.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 describe("backup and restore", { concurrency: 6 }, () => {
   for (const args of queued) nodeTest(...args);
 });

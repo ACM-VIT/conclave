@@ -53,7 +53,11 @@ while (( $# > 0 )); do
   shift
 done
 
-load_backup_config
+if [[ "$list" == "true" ]]; then
+  load_backup_config listing
+else
+  load_backup_config
+fi
 [[ -n "$pattern" ]] && REDIS_KEY_PATTERN="$pattern"
 wants() { [[ ",${only}," == *",$1,"* ]]; }
 

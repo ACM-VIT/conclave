@@ -267,10 +267,13 @@ To apply it:
    trimmed first, so a blank value falls through to the next as it does for
    the SFU (the backup suite checks both rules agree over a table of settings).
    Every SFU container that mounts the state dir and names a Redis of its own
-   (staging builds its URL in its compose file) must name the same Redis and
-   key prefix as the backup config, or the backup and the restore both stop
-   before anything is read or written; set `SFU_PERSISTENCE_REDIS_URL` (and
-   the prefix) in the backup config to that Redis as this host reaches it.
+   (staging builds its URL in its compose file) must name the same Redis
+   (scheme, host, port and database, defaults filled in; its own account may
+   differ) and key prefix as the backup config, or the backup and the restore
+   both stop before anything is read or written; set
+   `SFU_PERSISTENCE_REDIS_URL` (and the prefix) in the backup config to that
+   Redis as this host reaches it. `restore.sh --list` reads no containers, so
+   it lists the archives with Docker down.
    The Redis keys
    under the SFU's persistence prefix (`conclave:sfu:persistence:*`, or the
    `SFU_PERSISTENCE_REDIS_KEY_PREFIX` the SFU reads, trimmed and without
