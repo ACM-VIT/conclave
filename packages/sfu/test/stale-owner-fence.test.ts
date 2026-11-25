@@ -8,6 +8,7 @@ import {
   HOST_COMMANDS,
   isValidHostCommand,
   ROOM_LEASE_UNCONFIRMED_ERROR,
+  type HostCommand,
 } from "@conclave/meeting-core/host-commands";
 import { config } from "../config/config.js";
 import { initScheduledMeetings } from "../server/init.js";
@@ -154,7 +155,7 @@ const startSfu = async (
 
 type Answer = { success?: boolean; error?: string; status?: string };
 
-const join = async (state: SfuState, user: SfuAuthPayload) => {
+const join = async (state: SfuState, user: SfuAuthPayload, payload: Record<string, unknown> = {}) => {
   const handlers = new Map<string, (...args: never[]) => unknown>();
   const wire = { connected: true };
   const emit = vi.fn();
@@ -180,13 +181,14 @@ const join = async (state: SfuState, user: SfuAuthPayload) => {
     new Promise((resolve) => {
       void raw(event, payload, resolve);
     });
-  const joined = await send("joinRoom", { roomId: CODE, sessionId: user.sessionId });
+  const joined = await send("joinRoom", { roomId: CODE, sessionId: user.sessionId, ...payload });
   const leave = async (reason = "client namespace disconnect") => {
     wire.connected = false;
     await handlers.get("disconnect")?.(...([reason] as never[]));
   };
   const passes = () => emit.mock.calls.filter(([event]) => event === "roomRecoveryPass").length;
-  return { context, send, raw, leave, passes, status: joined.status };
+  const told = (event: string) => emit.mock.calls.filter(([name]) => name === event).map(([, body]) => body);
+  return { context, send, raw, leave, passes, told, status: joined.status };
 };
 
 const dirs: string[] = [];
@@ -488,4 +490,63 @@ describe("a host command with arguments it does not take", () => {
       expect(await hostOnA.send("kickUser", { userId: INVITEE_SEAT })).toEqual({ success: true });
     });
   }
+});
+
+const STAGING_WEB = "staging web";
+const IOS_63 = "iOS build 63";
+const ANDROID_63 = "Android build 63";
+
+const SHIPPED: Array<{ client: string; command: HostCommand; args: unknown[] }> = [
+  { client: STAGING_WEB, command: "closeRemoteProducer", args: [{ producerId: "producer-1" }] },
+  { client: STAGING_WEB, command: "muteAll", args: [] },
+  { client: STAGING_WEB, command: "closeAllVideo", args: [] },
+  { client: STAGING_WEB, command: "admin:admitAllPending", args: [] },
+  { client: STAGING_WEB, command: "promoteHost", args: [{ userId: INVITEE_SEAT }] },
+  { client: STAGING_WEB, command: "kickUser", args: [{ userId: INVITEE_SEAT }] },
+  { client: STAGING_WEB, command: "admitUser", args: [{ userId: INVITEE }] },
+  { client: STAGING_WEB, command: "rejectUser", args: [{ userId: INVITEE }] },
+  { client: STAGING_WEB, command: "lockRoom", args: [{ locked: false }] },
+  { client: STAGING_WEB, command: "setNoGuests", args: [{ noGuests: true }] },
+  { client: STAGING_WEB, command: "lockChat", args: [{ locked: true }] },
+  { client: STAGING_WEB, command: "setTtsDisabled", args: [{ disabled: true }] },
+  { client: STAGING_WEB, command: "setDmEnabled", args: [{ enabled: false }] },
+  { client: STAGING_WEB, command: "setImageAttachmentsEnabled", args: [{ enabled: false }] },
+  { client: STAGING_WEB, command: "setReactionsDisabled", args: [{ disabled: true }] },
+  { client: STAGING_WEB, command: "setParticipantMediaPermissions", args: [{ unmuteAllowed: false }] },
+  { client: STAGING_WEB, command: "admin:endRoom", args: [{ message: "This meeting has been ended by the host.", delayMs: 0 }] },
+  { client: IOS_63, command: "admin:muteUserAudio", args: [{ userId: INVITEE_SEAT }] },
+  { client: IOS_63, command: "admin:closeUserMedia", args: [{ userId: INVITEE_SEAT, kinds: ["audio"] }] },
+  { client: IOS_63, command: "admin:stopAllScreenShare", args: [] },
+  { client: IOS_63, command: "admin:clearRaisedHands", args: [] },
+  { client: IOS_63, command: "admin:getRoomState", args: [] },
+  { client: IOS_63, command: "admin:allowUsers", args: [{ userKeys: [INVITEE], allowWhenLocked: true }] },
+  { client: IOS_63, command: "admin:blockUsers", args: [{ userKeys: [INVITEE], kickPresent: true }] },
+  { client: IOS_63, command: "admin:unblockUsers", args: [{ userKeys: [INVITEE] }] },
+  { client: IOS_63, command: "admin:revokeAllowedUsers", args: [{ userKeys: [INVITEE], revokeLocked: true }] },
+  { client: IOS_63, command: "admin:broadcastNotice", args: [{ message: "Back in five", level: "info" }] },
+  { client: IOS_63, command: "admin:setPolicies", args: [{ locked: true }] },
+  { client: IOS_63, command: "admin:transferHost", args: [{ userId: INVITEE_SEAT }] },
+  { client: IOS_63, command: "redirectUser", args: [{ userId: INVITEE_SEAT, newRoomId: "def-ghij-klm" }] },
+  { client: IOS_63, command: "admin:endRoom", args: [{ delayMs: 0 }] },
+  { client: ANDROID_63, command: "admin:blockUsers", args: [{ userKeys: [INVITEE], kickPresent: false, reason: null }] },
+  { client: ANDROID_63, command: "admin:closeUserMedia", args: [{ userId: INVITEE_SEAT, kinds: null, types: null, reason: null }] },
+  { client: ANDROID_63, command: "admin:setPolicies", args: [{ locked: null, noGuests: true, chatLocked: null }] },
+  { client: ANDROID_63, command: "admin:endRoom", args: [{ message: null, delayMs: 0 }] },
+  { client: ANDROID_63, command: "admin:closeRoom", args: [{ message: null, delayMs: null }] },
+];
+
+describe("a host command as the apps in the field send it", () => {
+  it.each(SHIPPED)("$client: $command", async ({ command, args }) => {
+    useSharedSchedule();
+    await book();
+    const sfuA = await startSfu(sharedLeases().forInstance("sfu-a"));
+    const hostOnA = await join(sfuA, host("a"));
+    expect((await join(sfuA, invitee)).status).toBe("joined");
+    const ack = vi.fn();
+    expect(isValidHostCommand(command, [...args, ack])).toBe(true);
+    await hostOnA.raw(command, ...args, ack);
+    await settle();
+    expect(ack).toHaveBeenCalledTimes(1);
+    expect(ack.mock.calls[0]?.[0]).not.toEqual({ error: INVALID_HOST_COMMAND_ERROR });
+  });
 });

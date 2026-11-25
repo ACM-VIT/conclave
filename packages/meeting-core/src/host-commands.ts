@@ -8,12 +8,12 @@ const userKeys = z.union([z.string(), z.array(z.string())]);
 const target = z.looseObject({ userId: z.string() });
 const flag = <Name extends string>(name: Name) => z.looseObject({ [name]: z.boolean() } as Record<Name, z.ZodBoolean>);
 const bulkMedia = z.looseObject({
-  includeAdmins: z.boolean().optional(),
-  includeAttendees: z.boolean().optional(),
+  includeAdmins: z.boolean().nullish(),
+  includeAttendees: z.boolean().nullish(),
 });
 const closing = z.looseObject({
-  message: z.string().optional(),
-  delayMs: z.number().optional(),
+  message: z.string().nullish(),
+  delayMs: z.number().nullish(),
 });
 
 /** What a host command carries before its ack, one schema per command. */
@@ -22,9 +22,9 @@ export const HOST_COMMAND_PAYLOADS = {
   closeRemoteProducer: z.looseObject({ producerId: z.string() }),
   "admin:closeUserMedia": z.looseObject({
     userId: z.string(),
-    kinds: z.unknown().optional(),
-    types: z.unknown().optional(),
-    reason: z.string().optional(),
+    kinds: z.unknown().nullish(),
+    types: z.unknown().nullish(),
+    reason: z.string().nullish(),
   }),
   "admin:muteUser": target,
   "admin:closeUserVideo": target,
@@ -33,19 +33,19 @@ export const HOST_COMMAND_PAYLOADS = {
   promoteHost: target,
   "admin:transferHost": target,
   "admin:allowUsers": z.looseObject({
-    userKeys: userKeys.optional(),
-    allowWhenLocked: z.boolean().optional(),
+    userKeys: userKeys.nullish(),
+    allowWhenLocked: z.boolean().nullish(),
   }),
   "admin:createAdmission": z.unknown(),
   "admin:blockUsers": z.looseObject({
-    userKeys: userKeys.optional(),
-    kickPresent: z.boolean().optional(),
-    reason: z.string().optional(),
+    userKeys: userKeys.nullish(),
+    kickPresent: z.boolean().nullish(),
+    reason: z.string().nullish(),
   }),
-  "admin:unblockUsers": z.looseObject({ userKeys: userKeys.optional() }),
+  "admin:unblockUsers": z.looseObject({ userKeys: userKeys.nullish() }),
   "admin:revokeAllowedUsers": z.looseObject({
-    userKeys: userKeys.optional(),
-    revokeLocked: z.boolean().optional(),
+    userKeys: userKeys.nullish(),
+    revokeLocked: z.boolean().nullish(),
   }),
   redirectUser: z.looseObject({ userId: z.string(), newRoomId: z.string() }),
   admitUser: target,
@@ -58,23 +58,23 @@ export const HOST_COMMAND_PAYLOADS = {
   setImageAttachmentsEnabled: flag("enabled"),
   setReactionsDisabled: flag("disabled"),
   setParticipantMediaPermissions: z.looseObject({
-    unmuteAllowed: z.boolean().optional(),
-    videoAllowed: z.boolean().optional(),
+    unmuteAllowed: z.boolean().nullish(),
+    videoAllowed: z.boolean().nullish(),
   }),
   "admin:setPolicies": z.looseObject({
-    locked: z.boolean().optional(),
-    noGuests: z.boolean().optional(),
-    chatLocked: z.boolean().optional(),
-    ttsDisabled: z.boolean().optional(),
-    dmEnabled: z.boolean().optional(),
-    imageAttachmentsEnabled: z.boolean().optional(),
-    reactionsDisabled: z.boolean().optional(),
-    participantUnmuteAllowed: z.boolean().optional(),
-    participantVideoAllowed: z.boolean().optional(),
+    locked: z.boolean().nullish(),
+    noGuests: z.boolean().nullish(),
+    chatLocked: z.boolean().nullish(),
+    ttsDisabled: z.boolean().nullish(),
+    dmEnabled: z.boolean().nullish(),
+    imageAttachmentsEnabled: z.boolean().nullish(),
+    reactionsDisabled: z.boolean().nullish(),
+    participantUnmuteAllowed: z.boolean().nullish(),
+    participantVideoAllowed: z.boolean().nullish(),
   }),
   "admin:broadcastNotice": z.looseObject({
-    message: z.string().optional(),
-    level: z.string().optional(),
+    message: z.string().nullish(),
+    level: z.string().nullish(),
   }),
   "admin:endRoom": closing,
   "admin:closeRoom": closing,
