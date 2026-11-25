@@ -47,7 +47,12 @@ if [[ "$1" == "compose" ]]; then
         fi
         cd "$FAKE_SFU_DIR" || exit 1
         export CONCLAVE_SQLITE_PATH="\${FAKE_NEW_SQLITE_PATH:-$FAKE_VOLUME/conclave.sqlite}"
-        [[ "$script" == *payload.tar* ]] || exec sh -c "$script" "\${rest[@]}"
+        if [[ "$script" != *payload.tar* ]]; then
+          sh -c "$script" "\${rest[@]}"
+          code=$?
+          [[ $code == 0 && "$FAKE_RESTART_AT" == probe && -f "$FAKE_STOPPED" && "$script" == *"layerDatabase.ts probe"* ]] && : > "$FAKE_RESTARTED"
+          exit $code
+        fi
         if [[ "$script" == *"layerDatabase.ts consolidate"* && -n "$FAKE_LINK_FROM" ]]; then
           rm -rf "$FAKE_LINK_FROM" && ln -s "$FAKE_LINK_TO" "$FAKE_LINK_FROM"
         fi
@@ -57,6 +62,8 @@ if [[ "$1" == "compose" ]]; then
           CONCLAVE_FALLBACK_IMPORT_DIR="$FAKE_IMAGE_IMPORT_DIR" sh -c "$script" "\${rest[@]}" < "$payload"
           code=$?
           [[ $code == 0 && "$script" == *"layerDatabase.ts consolidate"* ]] && : > "$FAKE_CARRIED"
+          [[ $code == 0 && "$FAKE_RESTART_AT" == carry && "$script" == *"layerDatabase.ts consolidate"* ]] && : > "$FAKE_RESTARTED"
+          [[ $code == 0 && "$FAKE_RESTART_AT" == json-send && "$script" != *"layerDatabase.ts consolidate"* ]] && : > "$FAKE_RESTARTED"
           exit $code
         fi
         if [[ -n "$FAKE_KILL_TRANSFER" ]]; then
@@ -101,16 +108,17 @@ case "$1" in
   inspect)
     if [[ "$*" == *WorkingDir* ]]; then printf '%s\n' "\${FAKE_WORKDIR-/app/packages/sfu}"; exit 0; fi
     if [[ "$*" == *Config.Env* ]]; then printf '%b' "$FAKE_ENV"; exit 0; fi
-    if [[ "$*" == *State.StartedAt* ]]; then
-      if [[ -f "$FAKE_CARRIED" && -n "$FAKE_STARTED_AFTER_CARRY" ]]; then printf '%s\n' "$FAKE_STARTED_AFTER_CARRY"
-      elif [[ -f "$FAKE_STOPPED" && -n "$FAKE_STARTED_AFTER_STOP" ]]; then printf '%s\n' "$FAKE_STARTED_AFTER_STOP"
-      else printf '%s\n' "$FAKE_STARTED_AT"; fi
-      exit 0
+    if [[ "$*" == *RestartPolicy* ]]; then echo "\${FAKE_RESTART_POLICY:-unless-stopped}"; exit 0; fi
+    if [[ -f "$FAKE_RESTARTED" ]]; then running=true; started="2026-11-25T09:30:00.000000000Z"
+    else
+      if [[ -f "$FAKE_STOPPED" ]]; then running="\${FAKE_RUNNING_AFTER_STOP:-false}"; else running="\${FAKE_RUNNING:-false}"; fi
+      if [[ -f "$FAKE_CARRIED" && -n "$FAKE_STARTED_AFTER_CARRY" ]]; then started="$FAKE_STARTED_AFTER_CARRY"
+      elif [[ -f "$FAKE_STOPPED" && -n "$FAKE_STARTED_AFTER_STOP" ]]; then started="$FAKE_STARTED_AFTER_STOP"
+      else started="$FAKE_STARTED_AT"; fi
     fi
-    if [[ "$*" == *State.Running* ]]; then
-      if [[ -f "$FAKE_STOPPED" ]]; then echo "\${FAKE_RUNNING_AFTER_STOP:-false}"; else echo "\${FAKE_RUNNING:-false}"; fi
-      exit 0
-    fi
+    if [[ "$*" == *State.FinishedAt* ]]; then echo "$running $started $FAKE_FINISHED_AT"; exit 0; fi
+    if [[ "$*" == *State.Running* ]]; then echo "$running"; exit 0; fi
+    if [[ "$*" == *State.StartedAt* ]]; then echo "$started"; exit 0; fi
     exit 0 ;;
   diff)
     if [[ -f "$FAKE_STOPPED" && -n "$FAKE_DIFF_AFTER_STOP" ]]; then printf '%b' "$FAKE_DIFF_AFTER_STOP"; else printf '%b' "$FAKE_DIFF"; fi
@@ -125,6 +133,10 @@ case "$1" in
     [[ -f "$FAKE_STOPPED" && -f "$FAKE_FILES_AFTER_STOP/$name" ]] && source="$FAKE_FILES_AFTER_STOP/$name"
     if [[ -f "$source" ]]; then cat "$source" > "$3"; else echo '[]' > "$3"; fi
     command -v xattr > /dev/null && xattr -w com.apple.provenance fake-docker-cp "$3" 2> /dev/null
+    if [[ -f "$FAKE_STOPPED" ]]; then
+      [[ "$FAKE_RESTART_AT" == json-copy && "$name" == *.json ]] && : > "$FAKE_RESTARTED"
+      [[ "$FAKE_RESTART_AT" == sqlite-copy && "$name" != *.json ]] && : > "$FAKE_RESTARTED"
+    fi
     exit 0 ;;
 esac
 exit 0
@@ -270,7 +282,14 @@ const READ_DATABASE = `const { DatabaseSync } = require("node:sqlite");
 const db = new DatabaseSync(process.argv[1], { readOnly: true });
 process.stdout.write(JSON.stringify(db.prepare("SELECT id FROM meetings ORDER BY id").all().map((row) => row.id)));`;
 
+const sqliteFixtures = new Map();
 const sqliteFiles = (name, ids, { mode = "wal" } = {}) => {
+  const key = JSON.stringify([name, ids, mode]);
+  if (!sqliteFixtures.has(key)) sqliteFixtures.set(key, writeSqliteFixture(name, ids, mode));
+  return sqliteFixtures.get(key);
+};
+
+const writeSqliteFixture = (name, ids, mode) => {
   const dir = mkdtempSync(join(tmpdir(), "deploy-sfu-db-"));
   try {
     const path = join(dir, "source.sqlite");
@@ -284,9 +303,19 @@ const sqliteFiles = (name, ids, { mode = "wal" } = {}) => {
   }
 };
 
-const databaseRows = (path) => {
-  const read = spawnSync(process.execPath, ["--no-warnings", "-e", READ_DATABASE, path], { encoding: "utf8" });
+const databaseRows = async (path) => {
+  const read = await run(process.execPath, ["--no-warnings", "-e", READ_DATABASE, path], process.env);
   return read.status === 0 ? JSON.parse(read.stdout) : `unreadable: ${read.stderr.trim().split("\n").at(-1)}`;
+};
+
+const READ_CARRY_STAMP = `const { DatabaseSync } = require("node:sqlite");
+const db = new DatabaseSync(process.argv[1], { readOnly: true });
+const row = db.prepare("SELECT started_at FROM conclave_deploy_carry ORDER BY rowid DESC LIMIT 1").get();
+process.stdout.write(row ? row.started_at : "");`;
+
+const carryStamp = async (path) => {
+  const read = await run(process.execPath, ["--no-warnings", "-e", READ_CARRY_STAMP, path], process.env);
+  return read.status === 0 && read.stdout ? read.stdout : null;
 };
 
 const tarMembers = (archive) => {
@@ -334,6 +363,8 @@ const replaceService = async (
     diffAfterStop = "",
     linkFrom = "",
     linkTo = "",
+    finishedAt = "2026-11-25T08:45:00.000000000Z",
+    restartAt = "",
   } = {},
 ) => {
   const dir = mkdtempSync(join(tmpdir(), "deploy-sfu-state-"));
@@ -390,13 +421,16 @@ const replaceService = async (
       FAKE_DIFF_AFTER_STOP: diffAfterStop,
       FAKE_CARRIED: join(dir, "carried"),
       FAKE_LINK_FROM: linkFrom,
+      FAKE_FINISHED_AT: finishedAt,
+      FAKE_RESTART_AT: restartAt,
+      FAKE_RESTARTED: join(dir, "restarted"),
       FAKE_LINK_TO: linkTo,
       FAKE_IMAGE_IMPORT_DIR: imageImportDir ? importDir : "",
       STAGING_PATH_FILE: join(dir, "staging-path"),
       STAGING_MODES: join(dir, "staging-modes"),
       SFU_HEALTH_URL: healthUrl,
       SFU_DEPLOY_ID: deployId,
-      SFU_HEALTH_TIMEOUT_SECONDS: "1",
+      SFU_HEALTH_TIMEOUT_SECONDS: health === "deployed" ? "30" : "1",
       SFU_HEALTH_POLL_SECONDS: "1",
       FIXED_STAMP: fixedStamp,
       FAKE_KILL_TRANSFER: killTransfer ? "1" : "",
@@ -425,7 +459,7 @@ const replaceService = async (
       volumeEntries: listing(volume),
       visibleVolumeEntries: listing(volume).filter((name) => !name.startsWith(".")),
       ownershipGrants: existsSync(join(dir, "ownership.log")) ? readFileSync(join(dir, "ownership.log"), "utf8").trim().split("\n").filter(Boolean) : [],
-      volumeRows: Object.fromEntries(listing(volume).filter((name) => /\.(sqlite|db)$/.test(name)).map((name) => [name, databaseRows(join(volume, name))])),
+      volumeRows: Object.fromEntries(await Promise.all(listing(volume).filter((name) => /\.(sqlite|db)$/.test(name)).map(async (name) => [name, await databaseRows(join(volume, name))]))),
       payloadMembers: listing(join(dir, "payloads")).map((name) => tarMembers(readFileSync(join(dir, "payloads", name)))),
       volumeFiles: Object.fromEntries(listing(volume).filter((name) => statSync(join(volume, name)).isFile()).map((name) => [name, { text: readFileSync(join(volume, name), "utf8"), mode: mode(join(volume, name)) }])),
     };
@@ -445,6 +479,12 @@ const callIndex = (calls, pattern) => calls.findIndex((call) => pattern.test(cal
 const receives = (calls) => calls.filter((call) => /^compose .* run .*--entrypoint sh sfu-a -c /.test(call));
 const stopped = (calls) => callIndex(calls, /^compose .* stop sfu-a$/) >= 0;
 const wrote = (name) => `A ${DATA}/${name}\\n`;
+const leftStoppedAndRestored = (calls) => {
+  const froze = calls.indexOf(`update --restart=no ${OLD_CONTAINER}`);
+  const stop = callIndex(calls, /^compose .* stop sfu-a$/);
+  const restored = calls.lastIndexOf(`update --restart=unless-stopped ${OLD_CONTAINER}`);
+  assert.ok(froze >= 0 && stop > froze && restored > stop && callIndex(calls, / up -d /) === -1, calls.join("\n"));
+};
 
 const BINARY = Buffer.concat([
   Buffer.from('{"id":"A","note":"'),
@@ -481,7 +521,7 @@ for (const { binary, version } of powerShells) {
 for (const harness of harnesses) {
   const shell = harness.name;
 
-  test(`${shell}: never stops the old SFU unless its fallback files arrived byte for byte`, async () => {
+  test(`${shell}: never starts the new SFU unless the old one's fallback files arrived byte for byte`, async () => {
     const files = { "scheduling.json": BINARY, "scheduled-meetings.json": Buffer.from("[]\n") };
     const { status, calls, stderr, imported, importedBytes } = await replaceService(harness, {
       diff: wrote("scheduling.json") + wrote("scheduled-meetings.json"),
@@ -491,7 +531,7 @@ for (const harness of harnesses) {
       assert.deepEqual(imported, ["scheduled-meetings.json", "scheduling.json"]);
       for (const [name, content] of Object.entries(files)) assert.ok(importedBytes(name).equals(content), `${name} changed in transit`);
     } else {
-      assert.equal(stopped(calls), false, `stopped the old SFU and then failed:\n${stderr}`);
+      assert.equal(callIndex(calls, / up -d /), -1, `started the new SFU after a failed copy:\n${stderr}`);
     }
   });
 
@@ -505,31 +545,21 @@ for (const harness of harnesses) {
     continue;
   }
 
-  test(`${shell}: copies and verifies the old SFU's fallback files before stopping it, and starts the new one only after`, async () => {
-    const { status, calls, stderr } = await replaceService(harness, { diff: `C ${DATA}\\n${wrote("scheduling.json")}` });
-    assert.equal(status, 0, stderr);
-    const copy = callIndex(calls, new RegExp(`^cp ${OLD_CONTAINER}:${DATA}/scheduling\\.json `));
-    const receive = calls.indexOf(receives(calls)[0]);
-    const stop = callIndex(calls, /^compose .* stop sfu-a$/);
-    const start = callIndex(calls, /^compose .* up -d sfu-a$/);
-    assert.ok(copy >= 0 && receive > copy && stop > receive && start > stop, calls.join("\n"));
-  });
-
-  test(`${shell}: after the stop, sends the files again only when one changed`, async () => {
-    const unchanged = await replaceService(harness, { diff: wrote("scheduling.json"), files: { "scheduling.json": "[1]" } });
-    assert.equal(unchanged.status, 0, unchanged.stderr);
-    assert.equal(receives(unchanged.calls).length, 1, unchanged.calls.join("\n"));
-
-    const changed = await replaceService(harness, {
-      diff: wrote("scheduling.json"),
+  test(`${shell}: keeps the old SFU from restarting, stops it, and only then copies its fallback files once, as they were when it stopped`, async () => {
+    const { status, calls, stderr, archives } = await replaceService(harness, {
+      diff: `C ${DATA}\\n${wrote("scheduling.json")}`,
       files: { "scheduling.json": "[1]" },
       filesAfterStop: { "scheduling.json": "[1,2]" },
     });
-    assert.equal(changed.status, 0, changed.stderr);
-    const sends = receives(changed.calls).map((call) => changed.calls.indexOf(call));
-    assert.equal(sends.length, 2, changed.calls.join("\n"));
-    assert.ok(sends[1] > callIndex(changed.calls, /^compose .* stop sfu-a$/), changed.calls.join("\n"));
-    assert.deepEqual(changed.archives.map((archive) => archive.bytes["scheduling.json"].toString()), ["[1]", "[1,2]"]);
+    assert.equal(status, 0, stderr);
+    const froze = calls.indexOf(`update --restart=no ${OLD_CONTAINER}`);
+    const stop = callIndex(calls, /^compose .* stop sfu-a$/);
+    const copies = calls.filter((call) => call.startsWith(`cp ${OLD_CONTAINER}:`)).map((call) => calls.indexOf(call));
+    const sends = receives(calls).map((call) => calls.indexOf(call));
+    const restored = calls.indexOf(`update --restart=unless-stopped ${OLD_CONTAINER}`);
+    const start = callIndex(calls, /^compose .* up -d sfu-a$/);
+    assert.ok(froze >= 0 && stop > froze && copies.length === 1 && copies[0] > stop && sends.length === 1 && sends[0] > copies[0] && restored > sends[0] && start > restored, calls.join("\n"));
+    assert.deepEqual(archives.map((archive) => archive.bytes["scheduling.json"].toString()), ["[1,2]"]);
   });
 
   test(`${shell}: a later deploy keeps the copy an earlier deploy saved`, async () => {
@@ -557,7 +587,7 @@ for (const harness of harnesses) {
       const options = { sharedImportDir: shared, diff: wrote("scheduling.json"), files: { "scheduling.json": '["kept"]' } };
       const killed = await replaceService(harness, { ...options, killTransfer: true });
       assert.notEqual(killed.status, 0);
-      assert.equal(stopped(killed.calls), false, killed.calls.join("\n"));
+      leftStoppedAndRestored(killed.calls);
       assert.deepEqual(killed.archives, []);
       const retried = await replaceService(harness, options);
       assert.equal(retried.status, 0, retried.stderr);
@@ -569,11 +599,11 @@ for (const harness of harnesses) {
     }
   });
 
-  test(`${shell}: a transfer that fails while unpacking leaves no staging folder and stops before anything is stopped`, async () => {
+  test(`${shell}: a transfer that fails while unpacking leaves no staging folder and never starts the new SFU`, async () => {
     const { status, calls, archives, importLeftovers, stderr } = await replaceService(harness, { diff: wrote("scheduling.json"), failUnpack: true });
     assert.notEqual(status, 0);
     assert.match(stderr, /unpack-fails/);
-    assert.equal(stopped(calls), false, calls.join("\n"));
+    leftStoppedAndRestored(calls);
     assert.deepEqual(archives, []);
     assert.deepEqual(importLeftovers, []);
   });
@@ -604,7 +634,7 @@ for (const harness of harnesses) {
     });
   });
 
-  test(`${shell}: never replaces a saved copy, and stops before anything is stopped`, async () => {
+  test(`${shell}: never replaces a saved copy, and never starts the new SFU`, async () => {
     const shared = mkdtempSync(join(tmpdir(), "deploy-sfu-import-"));
     try {
       const options = { sharedImportDir: shared, fixedStamp: "20261124T000000000Z", diff: wrote("scheduling.json") };
@@ -613,7 +643,7 @@ for (const harness of harnesses) {
       const second = await replaceService(harness, { ...options, files: { "scheduling.json": '["second"]' } });
       assert.notEqual(second.status, 0);
       assert.match(second.stderr, /never replaced/);
-      assert.equal(stopped(second.calls), false, second.calls.join("\n"));
+      leftStoppedAndRestored(second.calls);
       assert.deepEqual(second.archives.map((archive) => archive.bytes["scheduling.json"].toString()), ['["first"]']);
       assert.deepEqual(second.importLeftovers, []);
     } finally {
@@ -635,7 +665,7 @@ for (const harness of harnesses) {
     });
   });
 
-  test(`${shell}: a payload that arrives changed stops the deploy before anything is stopped`, async () => {
+  test(`${shell}: a payload that arrives changed never starts the new SFU and leaves the old one stopped with its restart policy back`, async () => {
     const { status, calls, imported, corruptions } = await replaceService(harness, {
       diff: wrote("scheduling.json"),
       files: { "scheduling.json": "[\"kept\"]" },
@@ -643,7 +673,7 @@ for (const harness of harnesses) {
     });
     assertChangedInTransit(corruptions);
     assert.notEqual(status, 0);
-    assert.equal(stopped(calls), false, calls.join("\n"));
+    leftStoppedAndRestored(calls);
     assert.equal(callIndex(calls, / up -d /), -1, calls.join("\n"));
     assert.deepEqual(imported, []);
   });
@@ -669,10 +699,10 @@ for (const harness of harnesses) {
     assert.ok(callIndex(calls, /^chown -R node:node /) >= 0, calls.join("\n"));
   });
 
-  test(`${shell}: an image that does not name the import folder stops the deploy before anything is stopped`, async () => {
+  test(`${shell}: an image that does not name the import folder never starts the new SFU and leaves the old one stopped with its restart policy back`, async () => {
     const { status, calls, imported, volumeEntries } = await replaceService(harness, { diff: wrote("scheduling.json"), imageImportDir: false });
     assert.notEqual(status, 0);
-    assert.equal(stopped(calls), false, calls.join("\n"));
+    leftStoppedAndRestored(calls);
     assert.equal(callIndex(calls, / up -d /), -1, calls.join("\n"));
     assert.deepEqual([...imported, ...volumeEntries], []);
   });
@@ -685,13 +715,13 @@ for (const harness of harnesses) {
     ]);
   });
 
-  test(`${shell}: a failed copy stops the deploy before anything is stopped`, async () => {
+  test(`${shell}: a failed copy never starts the new SFU and leaves the old one stopped with its restart policy back`, async () => {
     const { status, calls } = await replaceService(harness, {
       diff: wrote("scheduling.json") + wrote("scheduled-meetings.json"),
       cpFail: "scheduled-meetings.json",
     });
     assert.notEqual(status, 0);
-    assert.equal(stopped(calls), false, calls.join("\n"));
+    leftStoppedAndRestored(calls);
     assert.equal(callIndex(calls, / up -d /), -1, calls.join("\n"));
   });
 
@@ -796,7 +826,7 @@ for (const harness of harnesses) {
       };
       const nested = await replaceService(harness, { ...options, newSqlitePath: join(volume, "state", "deeper", "conclave.sqlite") });
       assert.equal(nested.status, 0, nested.stderr);
-      assert.deepEqual(databaseRows(join(volume, "state", "deeper", "conclave.sqlite")), ["kept"]);
+      assert.deepEqual(await databaseRows(join(volume, "state", "deeper", "conclave.sqlite")), ["kept"]);
       assert.deepEqual([mode(join(volume, "state")), mode(join(volume, "state", "deeper"))], ["700", "700"]);
       for (const folder of [join(volume, "state"), join(volume, "state", "deeper")]) {
         assert.ok(nested.ownershipGrants.includes(`node:node one ${folder}`), `${folder} was not handed to node:\n${nested.ownershipGrants.join("\n")}`);
@@ -888,6 +918,51 @@ for (const harness of harnesses) {
       }
     }
     assert.deepEqual(outcomes, Object.fromEntries(Object.keys(scenarios).map((name) => [name, { status: 0, stderr: "", rows: later, started: true }])));
+  });
+
+  test(`${shell}: a restart at any copy step never lets a copy stand for a later state of the old container, and the next deploy carries that later state`, async () => {
+    const frozen = "2026-11-25T08:00:00.000000000Z_2026-11-25T08:45:00.000000000Z";
+    const later = ["kept", "saved after the restart"];
+    const steps = ["json-copy", "json-send", "probe", "sqlite-copy", "carry"];
+    const runs = await Promise.all(
+      steps.map(async (step) => {
+        const volume = mkdtempSync(join(tmpdir(), "deploy-sfu-volume-"));
+        const importDir = mkdtempSync(join(tmpdir(), "deploy-sfu-import-"));
+        try {
+          const base = {
+            containerEnv: "CONCLAVE_SQLITE_PATH=/var/lib/conclave/conclave.sqlite\\n",
+            diff: `${wrote("scheduling.json")}A /var/lib/conclave/conclave.sqlite\\nA /var/lib/conclave/conclave.sqlite-wal\\n`,
+            sharedVolume: volume,
+            sharedImportDir: importDir,
+          };
+          const first = await replaceService(harness, { ...base, files: { "scheduling.json": "[1]", ...sqliteFiles("conclave.sqlite", ["kept"]) }, restartAt: step });
+          const stamp = existsSync(join(volume, "conclave.sqlite")) ? await carryStamp(join(volume, "conclave.sqlite")) : null;
+          const restoredAfterStop = first.calls.lastIndexOf(`update --restart=unless-stopped ${OLD_CONTAINER}`) > callIndex(first.calls, /^compose .* stop sfu-a$/);
+          const retry = await replaceService(harness, {
+            ...base,
+            files: { "scheduling.json": "[1,2]", ...sqliteFiles("conclave.sqlite", later) },
+            startedAt: "2026-11-25T09:30:00.000000000Z",
+            finishedAt: "2026-11-25T10:00:00.000000000Z",
+          });
+          return {
+            refused: first.status !== 0,
+            saidWhy: /started again while its files were being copied|running again/.test(first.stderr),
+            startedNew: callIndex(first.calls, / up -d /) >= 0,
+            restoredAfterStop,
+            stampIsFrozen: stamp === null || stamp === frozen,
+            retried: retry.status,
+            retriedError: retry.status === 0 ? "" : retry.stderr,
+            rows: retry.volumeRows["conclave.sqlite"],
+          };
+        } finally {
+          rmSync(volume, { recursive: true, force: true });
+          rmSync(importDir, { recursive: true, force: true });
+        }
+      }),
+    );
+    const outcomes = Object.fromEntries(steps.map((step, at) => [step, runs[at]]));
+    const expected = { refused: true, saidWhy: true, startedNew: false, restoredAfterStop: true, stampIsFrozen: true, retried: 0, retriedError: "", rows: later };
+    assert.deepEqual(outcomes, Object.fromEntries(steps.map((step) => [step, expected])));
   });
 
   test(`${shell}: never starts the new SFU while the old one is running again or started again after its database was copied`, async () => {
@@ -1117,8 +1192,11 @@ case "$1" in
     case "$*" in
       *WorkingDir*) echo /app/packages/sfu ;;
       *Config.Env*) holds "$service" && echo "CONCLAVE_SQLITE_PATH=/var/lib/conclave/conclave.sqlite" ;;
-      *State.StartedAt*) echo "2026-11-25T08:00:00.000000000Z" ;;
-      *State.Running*) if [[ " $FAKE_RUNNING " == *" \${service#old-} "* && ! -f "$FAKE_STATE/$service.stopped" ]]; then echo true; else echo false; fi ;;
+      *RestartPolicy*) echo unless-stopped ;;
+      *State.Running*)
+        running=false
+        [[ " $FAKE_RUNNING " == *" \${service#old-} "* && ! -f "$FAKE_STATE/$service.stopped" ]] && running=true
+        if [[ "$*" == *State.FinishedAt* ]]; then echo "$running 2026-11-25T08:00:00.000000000Z 2026-11-25T08:45:00.000000000Z"; else echo "$running"; fi ;;
     esac ;;
   diff) holds "$2" && printf 'A /var/lib/conclave/conclave.sqlite\\nA /var/lib/conclave/conclave.sqlite-wal\\n' ;;
   cp) cat "$FAKE_FILES/\${2##*/}" > "$3" ;;
@@ -1202,12 +1280,12 @@ const deploySfus = async (shell, replacements, { containers = "", layerHolders =
       SFU_A_URL: urls["sfu-a"],
       SFU_B_URL: urls["sfu-b"],
       SFU_DEPLOY_ID: "sfu-flow-deploy",
-      SFU_HEALTH_TIMEOUT_SECONDS: "1",
+      SFU_HEALTH_TIMEOUT_SECONDS: Object.values(replacements).every((answer) => answer === "deployed") ? "30" : "1",
       SFU_HEALTH_POLL_SECONDS: "1",
       DRAIN_POLL_SECONDS: "1",
     });
     const calls = readFileSync(log, "utf8").trim().split("\n").filter(Boolean);
-    return { ...result, calls, rows: existsSync(join(volume, "conclave.sqlite")) ? databaseRows(join(volume, "conclave.sqlite")) : null };
+    return { ...result, calls, rows: existsSync(join(volume, "conclave.sqlite")) ? await databaseRows(join(volume, "conclave.sqlite")) : null };
   } finally {
     await Promise.all(Object.values(servers).map(close));
     rmSync(root, { recursive: true, force: true });

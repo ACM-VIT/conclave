@@ -215,10 +215,6 @@ function Get-PublicUrl {
 # images ran as root and left root-owned files (the SQLite database among them)
 # in the recordings volume. Hand anything node does not own over before a new
 # container starts. Safe to repeat; it only touches mismatched files.
-# Older images fell back to JSON files in the container layer when SQLite was
-# locked. Before the old container stops, its files are copied out, sent to the
-# folder the new image names (CONCLAVE_FALLBACK_IMPORT_DIR) and checked there
-# by SHA-256; after the stop they are copied again and resent if they changed.
 function Send-FileToCommand {
   param([string]$Path, [string]$Command, [string[]]$Arguments)
 
@@ -352,14 +348,6 @@ function Copy-FallbackJson {
   }
 }
 
-function Get-FallbackFingerprint {
-  param([string]$Directory)
-
-  $entries = @(Get-ChildItem -LiteralPath $Directory -Filter "*.json" -File -ErrorAction SilentlyContinue | Sort-Object Name | ForEach-Object {
-    "$($_.Name) $((Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash)"
-  })
-  return ($entries -join "`n")
-}
 
 function Get-ArchiveStamp {
   return [DateTime]::UtcNow.ToString("yyyyMMdd'T'HHmmssfff'Z'")
@@ -423,15 +411,15 @@ function Get-SqliteReceiver {
 }
 
 function Get-LayerSqlitePlan {
-  param([string]$Service, [string]$Container)
+  param([string]$Service, [string]$Container, [string]$Started)
 
   $layer = @(Get-LayerSqliteDatabases -Container $Container)
   if ($layer.Count -eq 0) {
     return @()
   }
-  $started = (@(& docker inspect --format "{{.State.StartedAt}}" $Container) -join "").Trim()
-  if ($LASTEXITCODE -ne 0 -or -not $started) {
-    throw "Could not read when the old $Service container last started."
+  $started = $Started
+  if (-not $started) {
+    throw "Could not read when the old $Service container last started and stopped."
   }
   $targets = @($null | & docker @($composeBaseArgs + @("run", "-T", "--rm", "--no-deps", "--user", "root", "--cap-add", "DAC_OVERRIDE", "--entrypoint", "sh", $Service, "-c", (Get-SqliteTargetProbe))))
   if ($LASTEXITCODE -ne 0) {
@@ -457,7 +445,7 @@ function Get-LayerSqlitePlan {
     } elseif ($found.State -ceq "free") {
       $action = "carry"
     } elseif ($found.State -ceq "taken" -or $found.State -ceq "carried") {
-      $origin = if ($found.Container) { " carried from container $($found.Container) as it was when it started at $($found.Started)" } else { "" }
+      $origin = if ($found.Container) { " carried from container $($found.Container) as it was at $($found.Started)" } else { "" }
       throw "The old $Service container keeps the $($entry.Store) database at $($entry.Path) inside the container, not on the volume, and $($found.Target) on the volume already holds a database$origin, so a copy cannot carry it over. Copy it out with: docker cp ${Container}:$($entry.Path) <file>, merge it into $($found.Target), then deploy again."
     } elseif ($found.State -ceq "unwritable") {
       throw "The old $Service container keeps the $($entry.Store) database at $($entry.Path) inside the container, not on the volume, and the new image would keep it at $($found.Target), where the nearest folder that exists cannot take new files. Make that folder writable, then deploy again."
@@ -543,14 +531,54 @@ function Copy-LayerSqlite {
   }
 }
 
-function Get-ContainerStarted {
+function Get-ContainerState {
   param([string]$Container)
 
-  $started = (@(& docker inspect --format "{{.State.StartedAt}}" $Container) -join "").Trim()
-  if ($LASTEXITCODE -ne 0 -or -not $started) {
-    throw "Could not read when the old container last started."
+  $line = (@(& docker inspect --format "{{.State.Running}} {{.State.StartedAt}} {{.State.FinishedAt}}" $Container) -join "").Trim()
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not read the old container's state."
   }
-  return $started
+  $fields = @($line -split " ")
+  if ($fields.Count -ne 3 -or -not $fields[1] -or -not $fields[2]) {
+    throw "Could not read the old container's state."
+  }
+  return [pscustomobject]@{ Running = ($fields[0] -ceq "true"); Identity = "$($fields[1])_$($fields[2])" }
+}
+
+function Get-RestartPolicy {
+  param([string]$Container)
+
+  $policy = (@(& docker inspect --format "{{.HostConfig.RestartPolicy.Name}}{{if .HostConfig.RestartPolicy.MaximumRetryCount}}:{{.HostConfig.RestartPolicy.MaximumRetryCount}}{{end}}" $Container) -join "").Trim()
+  if ($LASTEXITCODE -ne 0 -or -not $policy) {
+    throw "Could not read the old container's restart policy."
+  }
+  return $policy
+}
+
+function Set-RestartPolicy {
+  param([string]$Container, [string]$Policy)
+
+  & docker update "--restart=$Policy" $Container | Out-Null
+  return $LASTEXITCODE -eq 0
+}
+
+function Get-FrozenIdentity {
+  param([string]$Service, [string]$Container)
+
+  $state = Get-ContainerState -Container $Container
+  if ($state.Running) {
+    throw "The old $Service container is running again after the stop."
+  }
+  return $state.Identity
+}
+
+function Assert-StillFrozen {
+  param([string]$Service, [string]$Container, [string]$Frozen)
+
+  $state = Get-ContainerState -Container $Container
+  if ($state.Running -or $state.Identity -cne $Frozen) {
+    throw "The old $Service container started again while its files were being copied (it was stopped as $Frozen; now running=$($state.Running.ToString().ToLowerInvariant()), $($state.Identity)), so the copy may be missing its later saves."
+  }
 }
 
 function Test-ContainerRunning {
@@ -563,17 +591,6 @@ function Test-ContainerRunning {
   return $running -ceq "true"
 }
 
-function Assert-SourceStoppedSince {
-  param([string]$Service, [string]$Container, [string]$Started)
-
-  if (Test-ContainerRunning -Container $Container) {
-    throw "The old $Service container is running again."
-  }
-  $now = Get-ContainerStarted -Container $Container
-  if ($now -cne $Started) {
-    throw "The old $Service container started again (at $now) after its files were copied."
-  }
-}
 
 function Get-LayerSlotState {
   param([string]$Service)
@@ -636,19 +653,27 @@ function Start-SfuService {
   if (-not $IsWindows) {
     & chmod 0700 $staging
   }
+  $policy = ""
   try {
-    $before = Join-Path $staging "before"
-    $after = Join-Path $staging "after"
     if ($hasContainer) {
       try {
-        $null = @(Get-LayerSqlitePlan -Service $Service -Container $container)
-        Copy-FallbackJson -Service $Service -Container $container -Directory $before
-        Send-FallbackJson -Service $Service -Directory $before
+        $identity = (Get-ContainerState -Container $container).Identity
+        $null = @(Get-LayerSqlitePlan -Service $Service -Container $container -Started $identity)
+        $policy = Get-RestartPolicy -Container $container
       } catch {
         Exit-WithError "$($_.Exception.Message) Stopped before replacing $Service; nothing was stopped."
       }
+      if (-not (Set-RestartPolicy -Container $container -Policy "no")) {
+        Exit-WithError "Could not keep the old $Service container from restarting while it is copied. Stopped before replacing $Service; nothing was stopped."
+      }
     }
-    Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @("stop", $Service))
+    & docker @($composeBaseArgs + @("stop", $Service))
+    if ($LASTEXITCODE -ne 0) {
+      if ($hasContainer) {
+        $null = Set-RestartPolicy -Container $container -Policy $policy
+      }
+      Exit-WithError "Could not stop the old $Service."
+    }
     Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @(
       "run", "--rm", "--no-deps", "--user", "root", "--cap-add", "CHOWN", "--cap-add", "DAC_READ_SEARCH", "--entrypoint", "find", $Service,
       "/var/lib/conclave/recordings", "(", "!", "-user", "node", "-o", "!", "-group", "node", ")",
@@ -656,19 +681,24 @@ function Start-SfuService {
     ))
     if ($hasContainer) {
       try {
-        if (Test-ContainerRunning -Container $container) {
-          throw "The old $Service container is running again after the stop."
-        }
-        $started = Get-ContainerStarted -Container $container
-        Copy-FallbackJson -Service $Service -Container $container -Directory $after
-        if ((Get-FallbackFingerprint -Directory $before) -ne (Get-FallbackFingerprint -Directory $after)) {
-          Send-FallbackJson -Service $Service -Directory $after
-        }
-        $sqlitePlan = @(Get-LayerSqlitePlan -Service $Service -Container $container)
+        $frozen = Get-FrozenIdentity -Service $Service -Container $container
+        $json = Join-Path $staging "json"
+        Copy-FallbackJson -Service $Service -Container $container -Directory $json
+        Send-FallbackJson -Service $Service -Directory $json
+        Assert-StillFrozen -Service $Service -Container $container -Frozen $frozen
+        $sqlitePlan = @(Get-LayerSqlitePlan -Service $Service -Container $container -Started $frozen)
+        Assert-StillFrozen -Service $Service -Container $container -Frozen $frozen
         Copy-LayerSqlite -Service $Service -Container $container -Directory (Join-Path $staging "sqlite") -Plan $sqlitePlan
-        Assert-SourceStoppedSince -Service $Service -Container $container -Started $started
+        Assert-StillFrozen -Service $Service -Container $container -Frozen $frozen
       } catch {
-        Exit-WithError "$($_.Exception.Message) Stopped before replacing $Service. Its old container is stopped, not removed; start it again with: docker $($composeBaseArgs -join ' ') start $Service"
+        $message = $_.Exception.Message
+        if (-not (Set-RestartPolicy -Container $container -Policy $policy)) {
+          [Console]::Error.WriteLine("Could not restore the old $Service container's restart policy ($policy); set it with: docker update --restart=$policy $container")
+        }
+        Exit-WithError "$message Stopped before replacing $Service. Its old container is stopped, not removed, with its restart policy ($policy) restored; start it again with: docker $($composeBaseArgs -join ' ') start $Service"
+      }
+      if (-not (Set-RestartPolicy -Container $container -Policy $policy)) {
+        Exit-WithError "Could not restore the old $Service container's restart policy ($policy) before replacing it; set it with: docker update --restart=$policy $container, then deploy again."
       }
     }
   } finally {

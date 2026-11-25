@@ -234,11 +234,6 @@ COMPOSE=(docker compose "${COMPOSE_ENV_FILES[@]}" -f "$COMPOSE_FILE")
 # container starts. Safe to repeat; it only touches mismatched files.
 # Compose drops every capability, so root also needs DAC_READ_SEARCH to walk
 # directories it does not own.
-#
-# Older images fell back to JSON files in the container layer when SQLite was
-# locked. Before the old container stops, its files are copied out, sent to the
-# folder the new image names (CONCLAVE_FALLBACK_IMPORT_DIR) and checked there
-# by SHA-256; after the stop they are copied again and resent if they changed.
 sha256_file() {
   if command -v sha256sum >/dev/null 2>&1; then
     sha256sum "$1" | cut -d' ' -f1
@@ -319,13 +314,6 @@ collect_fallback_json() {
   done <<<"$paths"
 }
 
-fallback_fingerprint() {
-  local file
-  for file in "$1"/*.json; do
-    [[ -e "$file" ]] && printf '%s %s\n' "${file##*/}" "$(sha256_file "$file")"
-  done
-  return 0
-}
 
 fallback_receiver() {
   printf '%s' 'umask 077 && own() { chown node:node "$@" && chmod 0700 "$@"; } && base=${CONCLAVE_FALLBACK_IMPORT_DIR:?} && case "$3" in ""|.*|*[!A-Za-z0-9._-]*) echo "The archive name $3 is not safe to use." >&2; exit 1;; esac && case "$4" in ""|*[!A-Za-z0-9]*) echo "The transfer id $4 is not safe to use." >&2; exit 1;; esac && folder=$base/$1 && dest=$folder/$3 && incoming=$base/.incoming-$1-$3-$4 && mkdir -p "$base" && own "$base" && mkdir -p "$folder" && own "$folder" && find "$base" -mindepth 1 -maxdepth 1 -type d -name ".incoming-*" -mmin +30 -exec rm -rf {} + && if [ -e "$dest" ]; then echo "$dest already exists, and a saved copy is never replaced." >&2; exit 1; fi && mkdir "$incoming" && own "$incoming" && trap '"'"'rm -rf "$incoming"'"'"' EXIT && cat > "$incoming/payload.tar" && got=$(sha256sum "$incoming/payload.tar" | cut -d" " -f1) && if [ "$got" != "$2" ]; then echo "The fallback files arrived with checksum $got, not $2." >&2; rm -rf "$incoming"; exit 1; fi && mkdir "$incoming/files" && own "$incoming/files" && tar -xf "$incoming/payload.tar" -C "$incoming/files" && rm "$incoming/payload.tar" && chown node:node "$incoming/files"/*.json && chmod 0600 "$incoming/files"/*.json && mv "$incoming/files" "$dest" && rmdir "$incoming" && chown -R node:node "$base"'
@@ -376,15 +364,15 @@ sqlite_receiver() {
 }
 
 plan_layer_sqlite() {
-  local service="$1" container="$2" plan="$3" layer targets started store old name state target mark_container mark_started found_state found_target found_container found_started
+  local service="$1" container="$2" plan="$3" started="$4" layer targets store old name state target mark_container mark_started found_state found_target found_container found_started
   : > "$plan"
   if ! layer="$(layer_sqlite_databases "$container")"; then
     echo "Could not list the databases the old ${service} container kept." >&2
     return 1
   fi
   [[ -n "$layer" ]] || return 0
-  if ! started="$(docker inspect --format '{{.State.StartedAt}}' "$container")" || [[ -z "$started" ]]; then
-    echo "Could not read when the old ${service} container last started." >&2
+  if [[ -z "$started" ]]; then
+    echo "Could not read when the old ${service} container last started and stopped." >&2
     return 1
   fi
   if ! targets="$("${COMPOSE[@]}" run -T --rm --no-deps --user root --cap-add DAC_OVERRIDE --entrypoint sh "$service" -c "$(sqlite_target_probe)" < /dev/null)"; then
@@ -415,7 +403,7 @@ plan_layer_sqlite() {
     case "$found_state" in
       free) printf '%s\t%s\t%s\t%s\t%s\n' "$old" "$found_target" carry "$started" "" >> "$plan" ;;
       taken | carried)
-        echo "The old ${service} container keeps the ${store} database at ${old} inside the container, not on the volume, and ${found_target} on the volume already holds a database${found_container:+ carried from container ${found_container} as it was when it started at ${found_started}}, so a copy cannot carry it over. Copy it out with: docker cp ${container}:${old} <file>, merge it into ${found_target}, then deploy again." >&2
+        echo "The old ${service} container keeps the ${store} database at ${old} inside the container, not on the volume, and ${found_target} on the volume already holds a database${found_container:+ carried from container ${found_container} as it was at ${found_started}}, so a copy cannot carry it over. Copy it out with: docker cp ${container}:${old} <file>, merge it into ${found_target}, then deploy again." >&2
         return 1 ;;
       unwritable)
         echo "The old ${service} container keeps the ${store} database at ${old} inside the container, not on the volume, and the new image would keep it at ${found_target}, where the nearest folder that exists cannot take new files. Make that folder writable, then deploy again." >&2
@@ -480,24 +468,52 @@ carry_layer_sqlite() {
   done < "$plan"
 }
 
-container_started() {
-  docker inspect --format '{{.State.StartedAt}}' "$1"
-}
 
 container_running() {
   [[ "$(docker inspect --format '{{.State.Running}}' "$1")" == true ]]
 }
 
-source_stopped_since() {
-  local service="$1" container="$2" started="$3" now
-  if container_running "$container"; then
-    echo "The old ${service} container is running again." >&2
+container_state() {
+  docker inspect --format '{{.State.Running}} {{.State.StartedAt}} {{.State.FinishedAt}}' "$1"
+}
+
+source_identity() {
+  local state
+  state="$(container_state "$1")" || return 1
+  read -r _ started finished <<<"$state"
+  [[ -n "$started" && -n "$finished" ]] || return 1
+  printf '%s_%s\n' "$started" "$finished"
+}
+
+freeze_source() {
+  local service="$1" container="$2" state running started finished
+  if ! state="$(container_state "$container")"; then
+    echo "Could not read the old ${service} container's state after the stop." >&2
     return 1
   fi
-  if ! now="$(container_started "$container")" || [[ "$now" != "$started" ]]; then
-    echo "The old ${service} container started again (at ${now:-an unknown time}) after its files were copied." >&2
+  read -r running started finished <<<"$state"
+  if [[ "$running" != false || -z "$started" || -z "$finished" ]]; then
+    echo "The old ${service} container is running again after the stop." >&2
     return 1
   fi
+  printf '%s_%s\n' "$started" "$finished"
+}
+
+still_frozen() {
+  local service="$1" container="$2" frozen="$3" state running started finished
+  if ! state="$(container_state "$container")"; then
+    echo "Could not read the old ${service} container's state." >&2
+    return 1
+  fi
+  read -r running started finished <<<"$state"
+  if [[ "$running" != false || "${started}_${finished}" != "$frozen" ]]; then
+    echo "The old ${service} container started again while its files were being copied (it was stopped as ${frozen}; now running=${running}, ${started}_${finished}), so the copy may be missing its later saves." >&2
+    return 1
+  fi
+}
+
+restart_policy() {
+  docker inspect --format '{{.HostConfig.RestartPolicy.Name}}{{if .HostConfig.RestartPolicy.MaximumRetryCount}}:{{.HostConfig.RestartPolicy.MaximumRetryCount}}{{end}}' "$1"
 }
 
 sfu_answers_as_deployed() {
@@ -518,27 +534,44 @@ wait_for_sfu() {
 }
 
 build_and_start() (
-  local service="$1" url="$2" container staging started
+  local service="$1" url="$2" container="" staging policy="" frozen identity
   umask 077
   "${COMPOSE[@]}" build "$service"
   container="$("${COMPOSE[@]}" ps -a -q "$service" | head -n 1)"
   staging="$(mktemp -d)"
   trap 'rm -rf "$staging"' EXIT
-  if [[ -n "$container" ]] && ! { plan_layer_sqlite "$service" "$container" "$staging/sqlite-check" && collect_fallback_json "$service" "$container" "$staging/before" && send_fallback_json "$service" "$staging/before"; }; then
-    echo "Stopped before replacing ${service}; nothing was stopped." >&2
+  if [[ -n "$container" ]]; then
+    if ! identity="$(source_identity "$container")" || ! plan_layer_sqlite "$service" "$container" "$staging/sqlite-check" "$identity" || ! policy="$(restart_policy "$container")" || [[ -z "$policy" ]]; then
+      echo "Stopped before replacing ${service}; nothing was stopped." >&2
+      exit 1
+    fi
+    if ! docker update --restart=no "$container" > /dev/null; then
+      echo "Could not keep the old ${service} container from restarting while it is copied. Stopped before replacing ${service}; nothing was stopped." >&2
+      exit 1
+    fi
+  fi
+  if ! "${COMPOSE[@]}" stop "$service"; then
+    [[ -n "$container" ]] && docker update --restart="$policy" "$container" > /dev/null
+    echo "Could not stop the old ${service}." >&2
     exit 1
   fi
-  "${COMPOSE[@]}" stop "$service"
   "${COMPOSE[@]}" run --rm --no-deps --user root --cap-add CHOWN --cap-add DAC_READ_SEARCH --entrypoint find "$service" \
     /var/lib/conclave/recordings \( ! -user node -o ! -group node \) -exec chown node:node {} +
   if [[ -n "$container" ]]; then
-    if { container_running "$container" && echo "The old ${service} container is running again after the stop." >&2; } || ! started="$(container_started "$container")" ||
-      ! collect_fallback_json "$service" "$container" "$staging/after" ||
-      { [[ "$(fallback_fingerprint "$staging/before")" != "$(fallback_fingerprint "$staging/after")" ]] && ! send_fallback_json "$service" "$staging/after"; } ||
-      ! plan_layer_sqlite "$service" "$container" "$staging/sqlite-plan" ||
+    if ! frozen="$(freeze_source "$service" "$container")" ||
+      ! collect_fallback_json "$service" "$container" "$staging/json" ||
+      ! send_fallback_json "$service" "$staging/json" ||
+      ! still_frozen "$service" "$container" "$frozen" ||
+      ! plan_layer_sqlite "$service" "$container" "$staging/sqlite-plan" "$frozen" ||
+      ! still_frozen "$service" "$container" "$frozen" ||
       ! carry_layer_sqlite "$service" "$container" "$staging/sqlite" "$staging/sqlite-plan" ||
-      ! source_stopped_since "$service" "$container" "$started"; then
-      echo "Stopped before replacing ${service}. Its old container is stopped, not removed; start it again with: ${COMPOSE[*]} start ${service}" >&2
+      ! still_frozen "$service" "$container" "$frozen"; then
+      docker update --restart="$policy" "$container" > /dev/null || echo "Could not restore the old ${service} container's restart policy (${policy}); set it with: docker update --restart=${policy} ${container}" >&2
+      echo "Stopped before replacing ${service}. Its old container is stopped, not removed, with its restart policy (${policy}) restored; start it again with: ${COMPOSE[*]} start ${service}" >&2
+      exit 1
+    fi
+    if ! docker update --restart="$policy" "$container" > /dev/null; then
+      echo "Could not restore the old ${service} container's restart policy (${policy}) before replacing it; set it with: docker update --restart=${policy} ${container}, then deploy again." >&2
       exit 1
     fi
   fi
