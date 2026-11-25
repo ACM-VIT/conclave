@@ -2,9 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import CameraPreviewPanelBoundary from "../src/app/components/CameraPreviewPanelBoundary";
-import DeviceSettingsPanel from "../src/app/components/DeviceSettingsPanel";
-import VideoEffectsPanel from "../src/app/components/VideoEffectsPanel";
+import CameraPreviewPanels from "../src/app/components/CameraPreviewPanels";
 import {
   useLocalCameraPreview,
   type LocalCameraPreviewController,
@@ -102,56 +100,63 @@ function Meeting({
 }) {
   preview = useLocalCameraPreview({});
   const shown = callCamera ?? preview.stream;
-  return panel === "effects" ? (
-    <CameraPreviewPanelBoundary
-      name="Backgrounds and effects"
-      onClose={noop}
-      onStopCameraPreview={preview.stop}
-    >
-      <VideoEffectsPanel
-        effects={broken ? brokenEffects : DEFAULT_VIDEO_EFFECTS}
-        onEffectsChange={noop}
-        localStream={shown}
-        isCameraOff={!shown}
-        status="off"
-        error={null}
-        activeCount={0}
-        isCameraPreviewActive={!callCamera && Boolean(preview.stream)}
-        isCameraPreviewStarting={preview.isStarting}
-        cameraPreviewError={preview.error}
-        onStartCameraPreview={preview.start}
-        onStopCameraPreview={preview.stop}
-        onClose={noop}
-        deferPreload
-      />
-    </CameraPreviewPanelBoundary>
-  ) : (
-    <CameraPreviewPanelBoundary
-      name="Settings"
-      onClose={noop}
-      onStopCameraPreview={preview.stop}
-    >
-      <DeviceSettingsPanel
-        localStream={shown}
-        isLocalVideoLive={Boolean(callCamera)}
-        isPreviewOnly={!callCamera && Boolean(preview.stream)}
-        mirrorLocalPreview={false}
-        mediaQualitySettings={broken ? brokenQuality : DEFAULT_MEDIA_QUALITY_SETTINGS}
-        onMediaQualitySettingsChange={noop}
-        isCameraPreviewStarting={preview.isStarting}
-        cameraPreviewError={preview.error}
-        onStartCameraPreview={preview.start}
-        onStopCameraPreview={preview.stop}
-        onClose={noop}
-      />
-    </CameraPreviewPanelBoundary>
+  return (
+    <CameraPreviewPanels
+      effects={
+        panel === "effects"
+          ? {
+              effects: broken ? brokenEffects : DEFAULT_VIDEO_EFFECTS,
+              onEffectsChange: noop,
+              localStream: shown,
+              isCameraOff: !shown,
+              status: "off",
+              error: null,
+              activeCount: 0,
+              isCameraPreviewActive: !callCamera && Boolean(preview.stream),
+              isCameraPreviewStarting: preview.isStarting,
+              cameraPreviewError: preview.error,
+              onStartCameraPreview: preview.start,
+              onStopCameraPreview: preview.stop,
+              onClose: noop,
+              deferPreload: true,
+            }
+          : null
+      }
+      settings={
+        panel === "settings"
+          ? {
+              localStream: shown,
+              isLocalVideoLive: Boolean(callCamera),
+              isPreviewOnly: !callCamera && Boolean(preview.stream),
+              mirrorLocalPreview: false,
+              mediaQualitySettings: broken ? brokenQuality : DEFAULT_MEDIA_QUALITY_SETTINGS,
+              onMediaQualitySettingsChange: noop,
+              isCameraPreviewStarting: preview.isStarting,
+              cameraPreviewError: preview.error,
+              onStartCameraPreview: preview.start,
+              onStopCameraPreview: preview.stop,
+              onClose: noop,
+            }
+          : null
+      }
+    />
   );
 }
 
-const render = (props: Parameters<typeof Meeting>[0]) =>
-  act(async () => root.render(<Meeting {...props} />));
+const render = async (props: Parameters<typeof Meeting>[0]) => {
+  await act(async () => root.render(<Meeting {...props} />));
+  for (let turn = 0; turn < 50 && !panelShown(props.panel) && !failedPanel(); turn += 1) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+};
 
 const failedPanel = () => container.querySelector('aside [role="alert"]');
+const panelShown = (panel: "effects" | "settings") =>
+  container.querySelector(
+    panel === "effects" ? '[data-testid="video-effects-panel"]' : '[data-testid="device-settings-panel"]',
+  );
 
 it.each(["effects", "settings"] as const)(
   "stops a running camera preview when the %s panel fails",
@@ -162,6 +167,7 @@ it.each(["effects", "settings"] as const)(
     await act(async () => captures[0].resolve(captures[0].camera.stream));
     expect(caught).toEqual([]);
     expect(failedPanel()).toBeNull();
+    expect(panelShown(panel)).not.toBeNull();
     expect(preview.stream).toBe(captures[0].camera.stream);
 
     await render({ panel, broken: true, callCamera: null });
@@ -182,6 +188,7 @@ it.each(["effects", "settings"] as const)(
     expect(captures).toHaveLength(1);
     expect(caught).toEqual([]);
     expect(failedPanel()).toBeNull();
+    expect(panelShown(panel)).not.toBeNull();
 
     await render({ panel, broken: true, callCamera: null });
     expect(failedPanel()).not.toBeNull();
@@ -200,6 +207,7 @@ it.each(["effects", "settings"] as const)(
     await render({ panel, broken: false, callCamera: call.stream });
     expect(caught).toEqual([]);
     expect(failedPanel()).toBeNull();
+    expect(panelShown(panel)).not.toBeNull();
     await render({ panel, broken: true, callCamera: call.stream });
 
     expect(failedPanel()).not.toBeNull();

@@ -40,7 +40,7 @@ import MeetSettingsPanel from "./MeetSettingsPanel";
 import MeetViewPanel from "./MeetViewPanel";
 import ReactionOverlay from "./ReactionOverlay";
 import MeetingAppLayout from "./MeetingAppLayout";
-import CameraPreviewPanelBoundary from "./CameraPreviewPanelBoundary";
+import CameraPreviewPanels from "./CameraPreviewPanels";
 import SharedBrowserStage from "./SharedBrowserStage";
 import ScreenShareAudioPlayers from "./ScreenShareAudioPlayers";
 import SystemAudioPlayers from "./SystemAudioPlayers";
@@ -129,8 +129,6 @@ const loadChatPanel = () => import("./ChatPanel");
 const loadTranscriptPanel = () => import("./TranscriptPanel");
 const ChatPanel = lazy(loadChatPanel);
 const TranscriptPanel = lazy(loadTranscriptPanel);
-const VideoEffectsPanel = lazy(() => import("./VideoEffectsPanel"));
-const DeviceSettingsPanel = lazy(() => import("./DeviceSettingsPanel"));
 const DevMeetToolsPanel = lazy(() => import("./DevMeetToolsPanel"));
 
 interface MeetsMainContentProps {
@@ -2719,84 +2717,73 @@ export default function MeetsMainContent({
           />
         )}
 
-      {isJoined && !isWebinarAttendee && isVideoEffectsOpen && (
-        <CameraPreviewPanelBoundary
-          key="video-effects"
-          name="Backgrounds and effects"
-          onClose={handleCloseVideoEffects}
-          onStopCameraPreview={onStopCameraPreview}
-        >
-          <VideoEffectsPanel
-            effects={videoEffects}
-            onEffectsChange={onVideoEffectsChange}
-            onRecenterFraming={onVideoEffectsRecenter}
-            localStream={panelPreviewStream}
-            isCameraOff={effectiveIsCameraOff && !panelPreviewIsLocalOnly}
-            status={videoEffectsStatus}
-            error={videoEffectsError}
-            debugStats={videoEffectsDebugStats}
-            activeCount={activeVideoEffectsCount}
-            deferPreload={deferVideoEffectsPreload}
-            cameraPermissionBlocked={isCameraPermissionBlocked}
-            cameraActivationBlocked={isParticipantCameraActivationBlocked}
-            onToggleCamera={toggleCamera}
-            isCameraPreviewActive={panelPreviewIsLocalOnly}
-            isCameraPreviewStarting={isCameraPreviewStarting}
-            cameraPreviewError={cameraPreviewError}
-            onStartCameraPreview={onStartCameraPreview}
-            onStopCameraPreview={onStopCameraPreview}
-            onClose={handleCloseVideoEffects}
-          />
-        </CameraPreviewPanelBoundary>
-      )}
-
-      {isJoined && !isWebinarAttendee && isDeviceSettingsOpen && (
-        <CameraPreviewPanelBoundary
-          key="device-settings"
-          name="Settings"
-          onClose={handleCloseDeviceSettings}
-          onStopCameraPreview={onStopCameraPreview}
-        >
-          <DeviceSettingsPanel
-            roomAi={roomAi}
-            localStream={panelPreviewStream}
-            isLocalVideoLive={Boolean(getLiveVideoStream(effectiveLocalStream))}
-            isPreviewOnly={panelPreviewIsLocalOnly}
-            mirrorLocalPreview={mirrorLocalPreview}
-            isMirrorCamera={isMirrorCamera}
-            onToggleMirror={onToggleMirror}
-            activeVideoEffectsCount={activeVideoEffectsCount}
-            mediaQualitySettings={mediaQualitySettings}
-            onMediaQualitySettingsChange={onMediaQualitySettingsChange}
-            selectedAudioInputDeviceId={selectedAudioInputDeviceId}
-            selectedAudioOutputDeviceId={selectedAudioOutputDeviceId}
-            ttsSystemVoices={ttsSystemVoices}
-            selectedTtsSystemVoiceUri={selectedTtsSystemVoiceUri}
-            onTtsSystemVoiceChange={onTtsSystemVoiceChange}
-            clonedTtsVoice={clonedTtsVoice}
-            onClonedTtsVoiceChange={onClonedTtsVoiceChange}
-            onClonedTtsVoiceClear={onClonedTtsVoiceClear}
-            canCloneTtsVoice={canCloneTtsVoice}
-            ttsVoiceOwnerName={ttsVoiceOwnerName}
-            selectedVideoInputDeviceId={selectedVideoInputDeviceId}
-            onAudioInputDeviceChange={onAudioInputDeviceChange}
-            onAudioOutputDeviceChange={onAudioOutputDeviceChange}
-            onVideoInputDeviceChange={onVideoInputDeviceChange}
-            isNoiseCancellationEnabled={isNoiseCancellationEnabled}
-            onToggleNoiseCancellation={onToggleNoiseCancellation}
-            isCameraPreviewStarting={isCameraPreviewStarting}
-            cameraPreviewError={cameraPreviewError}
-            onStartCameraPreview={onStartCameraPreview}
-            onStopCameraPreview={onStopCameraPreview}
-            connectionStats={connectionStats}
-            isCameraPermissionBlocked={isCameraPermissionBlocked}
-            onOpenEffects={
-              isCameraPermissionBlocked ? undefined : handleToggleVideoEffects
-            }
-            onClose={handleCloseDeviceSettings}
-          />
-        </CameraPreviewPanelBoundary>
-      )}
+      <CameraPreviewPanels
+        effects={
+          isJoined && !isWebinarAttendee && isVideoEffectsOpen
+            ? {
+                effects: videoEffects,
+                onEffectsChange: onVideoEffectsChange,
+                onRecenterFraming: onVideoEffectsRecenter,
+                localStream: panelPreviewStream,
+                isCameraOff: effectiveIsCameraOff && !panelPreviewIsLocalOnly,
+                status: videoEffectsStatus,
+                error: videoEffectsError,
+                debugStats: videoEffectsDebugStats,
+                activeCount: activeVideoEffectsCount,
+                deferPreload: deferVideoEffectsPreload,
+                cameraPermissionBlocked: isCameraPermissionBlocked,
+                cameraActivationBlocked: isParticipantCameraActivationBlocked,
+                onToggleCamera: toggleCamera,
+                isCameraPreviewActive: panelPreviewIsLocalOnly,
+                isCameraPreviewStarting,
+                cameraPreviewError,
+                onStartCameraPreview,
+                onStopCameraPreview,
+                onClose: handleCloseVideoEffects,
+              }
+            : null
+        }
+        settings={
+          isJoined && !isWebinarAttendee && isDeviceSettingsOpen
+            ? {
+                roomAi,
+                localStream: panelPreviewStream,
+                isLocalVideoLive: Boolean(getLiveVideoStream(effectiveLocalStream)),
+                isPreviewOnly: panelPreviewIsLocalOnly,
+                mirrorLocalPreview,
+                isMirrorCamera,
+                onToggleMirror,
+                activeVideoEffectsCount,
+                mediaQualitySettings,
+                onMediaQualitySettingsChange,
+                selectedAudioInputDeviceId,
+                selectedAudioOutputDeviceId,
+                ttsSystemVoices,
+                selectedTtsSystemVoiceUri,
+                onTtsSystemVoiceChange,
+                clonedTtsVoice,
+                onClonedTtsVoiceChange,
+                onClonedTtsVoiceClear,
+                canCloneTtsVoice,
+                ttsVoiceOwnerName,
+                selectedVideoInputDeviceId,
+                onAudioInputDeviceChange,
+                onAudioOutputDeviceChange,
+                onVideoInputDeviceChange,
+                isNoiseCancellationEnabled,
+                onToggleNoiseCancellation,
+                isCameraPreviewStarting,
+                cameraPreviewError,
+                onStartCameraPreview,
+                onStopCameraPreview,
+                connectionStats,
+                isCameraPermissionBlocked,
+                onOpenEffects: isCameraPermissionBlocked ? undefined : handleToggleVideoEffects,
+                onClose: handleCloseDeviceSettings,
+              }
+            : null
+        }
+      />
 
       {isJoined && !isWebinarAttendee && isViewPanelOpen && (
         <MeetViewPanel
