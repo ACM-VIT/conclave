@@ -282,7 +282,6 @@ export async function simulate(
         }
         throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
       }
-      for (const item of marked) carry(item);
       if (key.startsWith(BATCH_PREFIX)) {
         try {
           const id = (JSON.parse(value) as { id?: string }).id;
@@ -807,6 +806,7 @@ export async function simulate(
     clock = job.at;
     if (job.tab && !job.tab.open && job.kind !== "reply") continue;
     racedThisStep = false;
+    for (const item of learned) if (item.state === "pending" && item.at < clock) carry(item);
     job.run();
     await drain();
     steps += 1;

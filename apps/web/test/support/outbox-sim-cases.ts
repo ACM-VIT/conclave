@@ -17,7 +17,7 @@ const quiet = {
 
 export const THREAD_CASES: ThreadCase[] = [
   {
-    name: "a delivered answer whose lock request is refused is kept and applied, and nothing is sent again",
+    name: "a delivered answer whose lock request is refused still reaches every send, and nothing is sent again",
     thread: "Sol delta review of #265 at ee08a3c9, finding 1 (200)",
     head: "ee08a3c9",
     seed: 2026112504,
@@ -40,7 +40,7 @@ export const THREAD_CASES: ThreadCase[] = [
     },
   },
   {
-    name: "a Retry-After whose lock request is refused is kept, and nothing goes before it",
+    name: "a Retry-After whose lock request is refused still holds every send, and nothing goes before it",
     thread: "Sol delta review of #265 at ee08a3c9, finding 1 (503 with Retry-After)",
     head: "ee08a3c9",
     seed: 2026112504,
