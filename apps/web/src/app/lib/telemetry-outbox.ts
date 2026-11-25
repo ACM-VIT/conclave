@@ -22,6 +22,9 @@ export const SEND_DEADLINE_MS = 15_000;
 export const LEASE_MS = SEND_DEADLINE_MS + 1000;
 export const BEACON_CONFIRM_MS = 30_000;
 export const MAX_EVENT_BYTES = 32 * 1024;
+export const LOCK_RETRY_MS = 1000;
+export const KEPT_ANSWER_RETRY_MS = 100;
+const MAX_LOCK_RETRY_MS = 30_000;
 const MAX_TEXT_CHARS = 1024;
 
 export type StoredBatch = {
@@ -84,6 +87,8 @@ export type OutboxDeps = {
 };
 
 type InFlight = { keepalive: boolean };
+
+type KeptAnswer = { sendId: string; reply: Reply | null; at: number; leaseUntil: number; retry: boolean; apply: (current: StoredBatch, store: LockedStore) => void };
 
 type Batch = {
   id: string;
@@ -173,6 +178,8 @@ export function createOutbox(deps: OutboxDeps) {
   let replay: "idle" | "waiting" | "running" = "idle";
   let replayAgain = false;
   let wakeTimer: { handle: unknown; at: number } | null = null;
+  const kept = new Map<string, KeptAnswer[]>();
+  let lockRetryMs = LOCK_RETRY_MS;
 
   const overhead = byteLength(
     JSON.stringify({ api_key: deps.token, batch: [], sent_at: new Date(0).toISOString() }),
@@ -268,6 +275,7 @@ export function createOutbox(deps: OutboxDeps) {
     let ran = false;
     const requested = deps.lock(async () => {
       ran = true;
+      lockRetryMs = LOCK_RETRY_MS;
       let open = true;
       const owns = (id: string, owned: string): boolean => open && deps.store.get(id)?.sendId === owned;
       try {
@@ -316,6 +324,23 @@ export function createOutbox(deps: OutboxDeps) {
     wakeTimer = { handle, at };
   };
 
+  const retryLock = (): void => {
+    const leased = [...kept.values()].flat().some((answer) => answer.leaseUntil > deps.now());
+    if (leased) {
+      wakeAt(deps.now() + KEPT_ANSWER_RETRY_MS);
+      return;
+    }
+    wakeAt(deps.now() + lockRetryMs);
+    lockRetryMs = Math.min(lockRetryMs * 2, MAX_LOCK_RETRY_MS);
+  };
+
+  const keepAnswer = (id: string, answer: KeptAnswer): void => {
+    kept.set(id, [...(kept.get(id) ?? []), answer]);
+    retryLock();
+  };
+
+  const isRetry = (reply: Reply | null): boolean => !reply || answerOf(reply.status, reply.retryAfter, deps.now()).outcome === "retry";
+
   const holdInMemory = (batch: Batch): void => {
     live.set(batch.id, batch);
     if (batch.timer !== null) deps.clearTimer(batch.timer);
@@ -345,18 +370,18 @@ export function createOutbox(deps: OutboxDeps) {
     holdInMemory(batch);
   };
 
-  const waitAsked = (reply: Reply | null): number => {
-    const answer = reply ? answerOf(reply.status, reply.retryAfter, deps.now()) : null;
-    return answer?.outcome === "retry" && answer.afterMs !== null ? deps.now() + answer.afterMs : 0;
+  const waitAsked = (reply: Reply | null, at = deps.now()): number => {
+    const answer = reply ? answerOf(reply.status, reply.retryAfter, at) : null;
+    return answer?.outcome === "retry" && answer.afterMs !== null ? at + answer.afterMs : 0;
   };
 
-  const carryWait = (id: string, reply: Reply | null, store: LockedStore): void => {
-    const until = waitAsked(reply);
+  const carryWait = (id: string, reply: Reply | null, store: LockedStore, at = deps.now()): void => {
+    const until = waitAsked(reply, at);
     if (until > 0 && store.delay(id, until)) wakeAt(until);
   };
 
-  const applyAnswer = (batch: Batch, events: OutboxEvent[], reply: Reply | null, store: LockedStore | null): void => {
-    const answer = reply ? answerOf(reply.status, reply.retryAfter, deps.now()) : null;
+  const applyAnswer = (batch: Batch, events: OutboxEvent[], reply: Reply | null, store: LockedStore | null, at = deps.now()): void => {
+    const answer = reply ? answerOf(reply.status, reply.retryAfter, at) : null;
     if (answer && answer.outcome !== "retry") {
       finish(batch, store);
       return;
@@ -366,9 +391,9 @@ export function createOutbox(deps: OutboxDeps) {
       finish(batch, store);
       return;
     }
-    batch.nextTry = deps.now() + retryDelay(batch.attempt);
+    batch.nextTry = at + retryDelay(batch.attempt);
     batch.attempt += 1;
-    batch.notBefore = Math.max(batch.notBefore, waitAsked(reply));
+    batch.notBefore = Math.max(batch.notBefore, waitAsked(reply, at));
     if (store) keepSaved(batch, store);
     else holdInMemory(batch);
   };
@@ -443,8 +468,22 @@ export function createOutbox(deps: OutboxDeps) {
         applyAnswer(batch, events, reply, held);
         },
         () => {
+          const leaseUntil = batch.leaseUntil;
           batch.inFlight = null;
           live.delete(batch.id);
+          const at = deps.now();
+          keepAnswer(batch.id, {
+            sendId,
+            reply,
+            at,
+            leaseUntil,
+            retry: isRetry(reply),
+            apply: (current, store) => {
+              const answered = fromStorage(current);
+              answered.leaseUntil = 0;
+              applyAnswer(answered, events, reply, store, at);
+            },
+          });
         },
       );
     };
@@ -457,38 +496,68 @@ export function createOutbox(deps: OutboxDeps) {
 
   const beaconAnswered = (batch: Batch, events: OutboxEvent[], reply: Reply | null, sentWith: string): void => {
     if (!reply) return;
-    const final = answerOf(reply.status, reply.retryAfter, deps.now()).outcome !== "retry";
+    const at = deps.now();
+    const final = answerOf(reply.status, reply.retryAfter, at).outcome !== "retry";
     const settleAnswered = (answered: Batch, store: LockedStore | null): void => {
       if (final) {
         finish(answered, store);
         return;
       }
-      answered.notBefore = Math.max(answered.notBefore, waitAsked(reply));
+      answered.notBefore = Math.max(answered.notBefore, waitAsked(reply, at));
       answered.events = withoutRefused(answered.events, events, reply);
       if (answered.events.length === 0) finish(answered, store);
       else if (store) keepSaved(answered, store);
       else holdInMemory(answered);
     };
     if (batch.saved) {
-      locked((store) => {
-        const current = deps.store.get(batch.id);
-        if (!current || current.sendId !== sentWith) {
-          if (!final) carryWait(batch.id, reply, store);
-          return;
-        }
-        settleAnswered(fromStorage(current), store);
-      });
+      locked(
+        (store) => {
+          const current = deps.store.get(batch.id);
+          if (!current || current.sendId !== sentWith) {
+            if (!final) carryWait(batch.id, reply, store);
+            return;
+          }
+          settleAnswered(fromStorage(current), store);
+        },
+        () =>
+          keepAnswer(batch.id, {
+            sendId: sentWith,
+            reply,
+            at,
+            leaseUntil: 0,
+            retry: !final,
+            apply: (current, store) => settleAnswered(fromStorage(current), store),
+          }),
+      );
       return;
     }
     if (live.get(batch.id) !== batch) return;
-    if (!final) batch.notBefore = Math.max(batch.notBefore, waitAsked(reply));
+    if (!final) batch.notBefore = Math.max(batch.notBefore, waitAsked(reply, at));
     if (batch.sendId !== sentWith || batch.inFlight !== null) return;
     settleAnswered(batch, null);
   };
 
+  const applyKept = (id: string, store: LockedStore): void => {
+    const answers = kept.get(id) ?? [];
+    kept.delete(id);
+    for (const answer of answers) {
+      const current = deps.store.get(id);
+      if (!current) return;
+      if (current.sendId === answer.sendId) answer.apply(current, store);
+      else if (answer.retry) carryWait(id, answer.reply, store, answer.at);
+    }
+  };
+
   const replayPass = (store: LockedStore): void => {
     const stale: StoredBatch[] = [];
-    for (const saved of deps.store.list()) {
+    const listed = deps.store.list();
+    for (const id of [...kept.keys()]) {
+      if (listed.some((saved) => saved.id === id)) applyKept(id, store);
+      else kept.delete(id);
+    }
+    for (const listedCopy of listed) {
+      const saved = deps.store.get(listedCopy.id);
+      if (!saved) continue;
       if (live.has(saved.id)) continue;
       if (saved.leaseUntil > deps.now()) {
         wakeAt(saved.leaseUntil);
@@ -528,6 +597,7 @@ export function createOutbox(deps: OutboxDeps) {
       },
       () => {
         replay = "idle";
+        retryLock();
       },
     );
   }

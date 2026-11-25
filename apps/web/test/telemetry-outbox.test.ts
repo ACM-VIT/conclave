@@ -1313,6 +1313,67 @@ describe("the replay lock", () => {
   });
 });
 
+describe("an answer whose lock request is refused", () => {
+  const rejectingLock = (refused: ReadonlySet<number>) => {
+    let requests = 0;
+    return (run: () => Promise<void>) =>
+      refused.has(++requests) ? Promise.reject(new DOMException("The lock request was aborted.", "AbortError")) : run();
+  };
+  const probe = (answers: Answer[], refused: ReadonlySet<number>) => {
+    const store = memoryStore();
+    const h = harness({ store, answers, lock: rejectingLock(refused) });
+    h.refuseBeacons();
+    h.outbox.add(event());
+    h.outbox.flushForUnload();
+    return { h, store };
+  };
+
+  it("keeps a delivered answer and applies it at the next lock, sending nothing again", async () => {
+    const { h, store } = probe([200], new Set([2]));
+    await h.advance(10 * MINUTE);
+
+    expect(h.posts.map((post) => post.at)).toEqual([START]);
+    expect(store.list()).toEqual([]);
+    expect(h.dropped).toEqual([]);
+  });
+
+  it("keeps a Retry-After and sends nothing before it", async () => {
+    const { h, store } = probe([{ status: 503, retryAfter: "60" }, 200], new Set([2]));
+    await h.advance(10 * MINUTE);
+
+    expect(h.posts.map((post) => post.at)).toEqual([START, START + 60_000]);
+    expect(store.list()).toEqual([]);
+  });
+
+  it("never strands the batch until it expires, however many lock requests in a row are refused", async () => {
+    const { h, store } = probe([503, 200], new Set([2, 3, 4, 5]));
+    await h.advance(10 * MINUTE);
+
+    expect(h.posts).toHaveLength(2);
+    expect(store.list()).toEqual([]);
+    expect(h.dropped).toEqual([]);
+  });
+
+  it("asks again when the first replay's lock request is refused", async () => {
+    const { h, store } = probe([200], new Set([1]));
+    await h.advance(10 * MINUTE);
+
+    expect(h.posts).toHaveLength(1);
+    expect(store.list()).toEqual([]);
+  });
+
+  it("keeps the answer to a keepalive send the same way", async () => {
+    const store = memoryStore();
+    const h = harness({ store, lock: rejectingLock(new Set([1])), beaconReplies: [{ status: 429, retryAfter: "60" }], answers: [200] });
+    h.outbox.add(event());
+    h.outbox.flushForUnload();
+    await h.advance(10 * MINUTE);
+
+    expect(h.posts.map((post) => post.at)).toEqual([START + 60_000]);
+    expect(store.list()).toEqual([]);
+  });
+});
+
 describe("the size cap on one event", () => {
   const bytesOf = (item: unknown) => new TextEncoder().encode(JSON.stringify(item)).byteLength;
   const sized = (bytes: number): OutboxEvent => {

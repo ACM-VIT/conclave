@@ -126,9 +126,14 @@ one owner at a time:
   a Web Locks lock (`conclave:telemetry:replay`) at its due time, when a tab
   loads or comes back into view, and when another tab changes a saved batch
   (the `storage` event). A lock request the browser rejects before running
-  it leaves nothing waiting on it: the next trigger asks again, and an answer
-  that could not get the lock lets the batch go to whichever tab replays it
-  after its lease. The pass claims a due batch by writing a new attempt
+  it leaves nothing waiting on it. An answer that could not get the lock is
+  kept in its tab, with its outcome, its Retry-After and the attempt id it
+  answered, and the tab asks again every 100 ms while that send's lease runs,
+  then with a backoff from 1 s to 30 s; its next locked pass applies the kept
+  answer before anything else (delivered or refused settles the batch, a retry
+  keeps its wait from when the answer arrived), or, if another tab has
+  claimed the batch since, carries only its Retry-After. A replay whose lock
+  request is refused asks again the same way. The pass claims a due batch by writing a new attempt
   id and a lease until 16 s after the send, so another tab leaves it alone
   until the request has settled. An answer from an earlier attempt, one
   that arrives after another tab took the batch over, changes nothing but
