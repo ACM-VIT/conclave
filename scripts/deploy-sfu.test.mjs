@@ -12,8 +12,42 @@ import { composeUpByHand, cutRooms, deploy, dockerStandIn, passedPreflight, run,
 // Every helper lives in test-support/deploy-harness.mjs. The tests run side
 // by side (see the end of the file).
 const queued = [];
+const composeBuilds = (args) => args[0] === "compose" && args.slice(1).filter((arg, i, all) => !arg.startsWith("-") && !["-f", "--env-file", "--profile"].includes(all[i - 1]))[0] === "build";
 const test = (...args) => queued.push(args);
 
+
+const hasCompose = spawnSync("docker", ["compose", "version"], { encoding: "utf8" }).status === 0;
+
+test("a plain compose up has nothing to build or pull for any SFU service, and the build lives in the build profile", { skip: !hasCompose && "needs docker compose" }, async () => {
+  const root = path.join(scripts, "..");
+  const env = { ...process.env, STAGING_REDIS_PASSWORD: "x", STAGING_BROWSER_SERVICE_URL: "http://127.0.0.1:1", STAGING_TRANSCRIPT_WORKER_URL: "http://127.0.0.1:1" };
+  const rendered = (file, ...more) => JSON.parse(execFileSync("docker", ["compose", "-f", path.join(root, file), "--project-directory", root, "--env-file", "/dev/null", ...more, "config", "--format", "json"], { env, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
+  for (const file of ["docker-compose.sfu.yml", "docker-compose.sfu-staging.yml"]) {
+    const plain = rendered(file);
+    const sfus = Object.entries(plain.services).filter(([, service]) => JSON.stringify(service.environment ?? {}).includes("SFU_INSTANCE_ID"));
+    assert.ok(sfus.length > 0, file);
+    for (const [name, service] of sfus) {
+      assert.equal(service.build, undefined, `${file} ${name} must not build`);
+      assert.equal(service.pull_policy, "never", `${file} ${name} must never pull`);
+    }
+    assert.equal(plain.services["sfu-image"], undefined, `${file} starts no build service on a plain up`);
+    assert.equal(rendered(file, "--profile", "build").services["sfu-image"]?.build?.dockerfile, "packages/sfu/Dockerfile", file);
+  }
+});
+
+test("a compose file whose SFU service could build or pull an image is refused before anything changes", async () => {
+  await withSfus({ "sfu-a": {}, "sfu-b": {} }, async (sfus) => {
+    const result = await deploy(sfus, { env: { DEPLOY_TEST_COMPOSE_BUILDS: "1" } });
+    assert.equal(result.code, 1, result.output);
+    assert.match(result.output, /must give sfu-a pull_policy: never and no build/);
+    assert.deepEqual(Object.values(sfus).flatMap((sfu) => sfu.recreates), []);
+  });
+  await withSfus({ "sfu-a": {}, "sfu-b": {} }, async (sfus) => {
+    const result = await deploy(sfus, { env: { DEPLOY_TEST_NO_IMAGE_SERVICE: "1" } });
+    assert.equal(result.code, 1, result.output);
+    assert.match(result.output, /must define the SFU build as the sfu-image service/);
+  });
+});
 
 test("with calls on both instances, the deploy rebuilds neither while those calls run", async () => {
   await withSfus({ "sfu-a": { rooms: 2 }, "sfu-b": { rooms: 1 } }, async (sfus) => {
@@ -44,7 +78,7 @@ test("an instance whose status cannot be read is neither taken for the idle one 
     const result = await deploy(sfus);
     assert.equal(result.code, 1, result.output);
     assert.equal(result.order, "sfu-b sfu-a");
-    assert.match(result.output, /Not draining sfu-b: sfu-a's \/status cannot be read/);
+    assert.match(result.output, /Not draining sfu-b: sfu-a is not serving \(its \/status cannot be read\)/);
     assert.deepEqual(events, [], "unknown is unsafe: nothing is drained or rebuilt");
   });
 });
@@ -110,7 +144,7 @@ test("no instance is drained while another is down, even one outside the deploy"
   await withSfus({ "sfu-a": { rooms: 0 }, "sfu-b": { container: "exited" } }, async (sfus, events) => {
     const result = await deploy(sfus, { env: { SFU_DEPLOY_SERVICES: "sfu-a" } });
     assert.equal(result.code, 1, result.output);
-    assert.match(result.output, /Not draining sfu-a: sfu-b does not report healthy/);
+    assert.match(result.output, /Not draining sfu-a: sfu-b is not serving \(.*\/health does not say healthy\)/);
     assert.deepEqual(events, []);
   });
 });
@@ -315,7 +349,7 @@ test("a management URL that answers as another instance is refused before any dr
     // sfu-a's management URL reaches sfu-b, as in Astra's probe.
     const result = await deploy(sfus, { envLines: [`SFU_A_URL=http://127.0.0.1:${sfus["sfu-b"].port}`] });
     assert.equal(result.code, 1, result.output);
-    assert.match(result.output, /sfu-a's management URL .* answers as 'sfu-b', not sfu-a/);
+    assert.match(result.output, /sfu-a is not serving \(its management URL answers as sfu-b, not sfu-a\)/);
     assert.deepEqual(events, []);
   });
 });
@@ -333,7 +367,7 @@ test("a deploy of one instance refuses while the other is not publicly reachable
   await withSfus({ "sfu-a": { rooms: 1 }, "sfu-b": {} }, async (sfus) => {
     const result = await deploy(sfus, { env: { SFU_DEPLOY_SERVICES: "sfu-a" }, envLines: ["SFU_B_PUBLIC_URL=http://127.0.0.1:9"] });
     assert.equal(result.code, 1, result.output);
-    assert.match(result.output, /Not draining sfu-a: clients cannot reach sfu-b/);
+    assert.match(result.output, /Not draining sfu-a: sfu-b is not serving \(its public URL/);
     assert.equal(sfus["sfu-a"].drains.length, 0);
   });
 });
@@ -571,7 +605,7 @@ test("a deploy paused by a call leaves that instance's compose image on the rele
     assert.equal(result.code, 3, result.output);
     assert.equal(result.order, "sfu-a sfu-b");
     assert.equal(result.tags["vm-sfu-a"], undefined, "sfu-a's compose image was never moved to the untested build");
-    assert.ok(!result.docker.some((args) => args[0] === "compose" && args.includes("build")), "no service image is built");
+    assert.ok(!result.docker.some(composeBuilds), "no service image is built");
     const built = result.docker.find((args) => args[0] === "build");
     assert.match(built[built.indexOf("-t") + 1], /^vm-sfu:[0-9a-f]{12}-candidate$/);
     assert.deepEqual(cutRooms(sfus), []);
@@ -686,7 +720,7 @@ test("a rollback whose checkout was never built builds its canary under its own 
       assert.equal(retry.tags["vm-sfu-a"], "sha256:previous", "sfu-a's compose image still names the rollback release");
       assert.equal(retry.tags["vm-sfu-b"], "sha256:previous");
       for (const run of [partial, retry]) {
-        assert.ok(!run.docker.some((args) => args[0] === "compose" && args.includes("build")), "no service image is rebuilt");
+        assert.ok(!run.docker.some(composeBuilds), "no service image is rebuilt");
       }
       assert.match(partial.output, /Building [0-9a-f]{12} as vm-sfu-canary:[0-9a-f]{12} for its canary; the instances still go back to good/);
       assert.doesNotMatch(retry.output, /Building/, "the retry reuses the canary image");
@@ -845,6 +879,25 @@ test("the deploy lock is made so no other user can open it, and one that is a li
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+test("a compose file's own Redis must be the one its SFUs reach, checked by run id before any SFU starts", async () => {
+  for (const [env, why] of [
+    [{ DEPLOY_TEST_REDIS_URL_RUN_ID: "another-redis" }, /sfu-a's SFU_REDIS_URL reaches a Redis whose run id is another-redis, not .*own Redis \(own-redis\)/],
+    [{ DEPLOY_TEST_REDIS_STATE: "exited" }, /own Redis is not running or does not answer on its socket/],
+  ]) {
+    await withSfus({ "sfu-a": {}, "sfu-b": {} }, async (sfus) => {
+      const result = await deploy(sfus, { env: { DEPLOY_TEST_REDIS_SERVICE: "1", HEALTH_TIMEOUT_SECONDS: "1", ...env }, noRedisUrl: true });
+      assert.equal(result.code, 1, result.output);
+      assert.match(result.output, why);
+      assert.deepEqual(Object.values(sfus).flatMap((sfu) => [...sfu.recreates, ...sfu.drains]), [], result.output);
+    });
+  }
+  await withSfus({ "sfu-a": {}, "sfu-b": {} }, async (sfus) => {
+    const result = await deploy(sfus, { env: { DEPLOY_TEST_REDIS_SERVICE: "1" }, noRedisUrl: true });
+    assert.equal(result.code, 0, result.output);
+    assert.match(result.output, /Every SFU's Redis URL reaches .*own Redis \(run id own-redis\)/);
   });
 });
 

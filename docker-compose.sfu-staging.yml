@@ -9,6 +9,13 @@
 x-staging-redis-url: &staging-redis-url "redis://:${STAGING_REDIS_PASSWORD:?set STAGING_REDIS_PASSWORD in .env}@127.0.0.1:${STAGING_REDIS_PORT:-6380}/0"
 
 services:
+  sfu-image:
+    image: conclave-staging-sfu-build
+    build:
+      context: .
+      dockerfile: packages/sfu/Dockerfile
+    profiles: ["build"]
+
   sfu-staging:
     extends:
       file: docker-compose.sfu.yml
@@ -63,7 +70,7 @@ services:
       - -c
       - >-
         printf 'requirepass "%s"\n' "$$(printf '%s' "$$REDIS_PASSWORD" | sed 's/[\\"]/\\&/g')" |
-        exec docker-entrypoint.sh redis-server - --port "$$REDIS_PORT" --bind 127.0.0.1 --appendonly yes
+        exec docker-entrypoint.sh redis-server - --port "$$REDIS_PORT" --bind 127.0.0.1 --unixsocket /tmp/redis.sock --unixsocketperm 700 --appendonly yes
     # A sibling of the SFU's state dir, never inside it: whatever walks that
     # dir (a restore's ownership fix, a backup's file archive) never reaches
     # Redis's own files.

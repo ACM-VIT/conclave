@@ -1,13 +1,18 @@
 services:
+  sfu-image:
+    image: conclave-sfu-build
+    build:
+      context: .
+      dockerfile: packages/sfu/Dockerfile
+    profiles: ["build"]
+
   sfu-a:
     # Named here, so the image deploy-sfu.sh tags is the one compose starts
     # whatever compose's own naming (COMPOSE_COMPATIBILITY uses underscores).
     # deploy-sfu.sh sets SFU_IMAGE_SFU_A on every start: a candidate runs under its
     # own tag, and conclave-sfu-a only ever names a build that passed.
     image: ${SFU_IMAGE_SFU_A:-conclave-sfu-a}
-    build:
-      context: .
-      dockerfile: packages/sfu/Dockerfile
+    pull_policy: never
     network_mode: "host"
     environment:
       SFU_PORT: "${SFU_A_PORT:-3031}"
@@ -73,9 +78,7 @@ services:
     # deploy-sfu.sh sets SFU_IMAGE_SFU_B on every start: a candidate runs under its
     # own tag, and conclave-sfu-b only ever names a build that passed.
     image: ${SFU_IMAGE_SFU_B:-conclave-sfu-b}
-    build:
-      context: .
-      dockerfile: packages/sfu/Dockerfile
+    pull_policy: never
     network_mode: "host"
     environment:
       SFU_PORT: "${SFU_B_PORT:-3032}"
