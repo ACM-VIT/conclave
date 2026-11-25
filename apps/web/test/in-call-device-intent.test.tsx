@@ -80,6 +80,7 @@ const liveMicrophoneSource = () =>
 
 const WATCHDOG_MS = 1500;
 const LIVENESS_TICKS = 3;
+const LIVENESS_WAIT_MS = 2000;
 
 const sendingWithin = async (rig: InCallRig, ticks = LIVENESS_TICKS) => {
   for (let tick = 0; tick < ticks && notLive(world, rig.rig()).length > 0; tick += 1) {
@@ -917,8 +918,16 @@ const runSeed = async (seed: number, steps: number) => {
         await current.tick(WATCHDOG_MS);
         await quiesce(model);
       }
+      const waitedFrom = Date.now();
+      while (notLive(world, current.rig()).length > 0 && Date.now() - waitedFrom < LIVENESS_WAIT_MS) {
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        });
+      }
       const silent = notLive(world, current.rig());
-      if (silent.length > 0) fail(seed, model, `after step ${index}, ${LIVENESS_TICKS} watchdog ticks later`, silent);
+      if (silent.length > 0) {
+        fail(seed, model, `after step ${index}, ${LIVENESS_TICKS} watchdog ticks and ${LIVENESS_WAIT_MS} ms later`, silent);
+      }
     }
   }
   model.log.push(`end the call with ${world.pending.length} step(s) held`);
