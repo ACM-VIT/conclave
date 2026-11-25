@@ -155,7 +155,7 @@ export type CodeFieldPaste =
 const ROOM_CODE_TEXT = /^[a-z0-9-]+$/i;
 const ROOM_CODE_SHAPE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const MEETING_LINK = new RegExp(
-  String.raw`^(?:(?<scheme>https?:)?\/\/)?(?<authority>[^\/?#\\\s@]+)\/(?<segment>[^\/?#\\\s]+)\/?(?:\?(?<query>[^#\s]*))?(?:#\S*)?$`,
+  String.raw`^(?:(?<scheme>https?:)?\/\/)?(?<authority>[^\/?#\\\s@]+)\/(?<segment>[^\/?#\\\s]+)\/?(?:[?#]\S*)?$`,
   "i",
 );
 export const APP_ROUTE_SEGMENTS = [
@@ -184,19 +184,28 @@ const linkRoomCode = (segment: string) => {
   return isRoomCodeShaped(code) ? code : null;
 };
 
+const linkAsNavigated = (link: string, scheme: string | undefined) => {
+  try {
+    return new URL(scheme ? link : `https:${link.startsWith("//") ? "" : "//"}${link}`);
+  } catch {
+    return null;
+  }
+};
+
 export function parseCodeFieldPaste(
   text: string,
   conclaveOrigins: readonly string[],
 ): CodeFieldPaste | null {
   const trimmed = text.trim();
   if (ROOM_CODE_TEXT.test(trimmed)) return { kind: "insert", text: trimmed.toLowerCase() };
-  const { scheme, authority, segment, query } = MEETING_LINK.exec(trimmed)?.groups ?? {};
+  const { scheme, authority, segment } = MEETING_LINK.exec(trimmed)?.groups ?? {};
   if (!authority || !segment) return null;
   if (!linkOriginIsKnown(scheme, authority, conclaveOrigins)) return null;
   const code = linkRoomCode(segment);
   if (!code) return null;
-  const clientId = canonicalizeSfuClientId(new URLSearchParams(query ?? "").get("clientId"));
-  return { kind: "replace", code, clientId };
+  const url = linkAsNavigated(trimmed, scheme);
+  if (!url) return null;
+  return { kind: "replace", code, clientId: canonicalizeSfuClientId(url.searchParams.get("clientId")) };
 }
 
 const URL_PUNCTUATION = /[:/.?#@%=&+~\\]/;
