@@ -29,7 +29,19 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-type Fault = "merge" | "owner" | "project" | "ownerAtCommit" | "projectAtCommit";
+type Fault =
+  | "merge"
+  | "owner"
+  | "project"
+  | "ownerUndefined"
+  | "projectUndefined"
+  | "ownerAtCommit"
+  | "projectAtCommit"
+  | "ownerOnce"
+  | "ownerAlways";
+
+const ownerCalls = { count: 0 };
+const nothing: unknown = undefined;
 type Note = { id: string; subject: Subject; moved: boolean };
 
 const notesApp = (id: string, faults: { fault?: Fault; mergeBy?: number } = {}) => {
@@ -80,7 +92,13 @@ const notesApp = (id: string, faults: { fault?: Fault; mergeBy?: number } = {}) 
         kind: "personal",
         source: "notes",
         owner: (row) => {
+          ownerCalls.count += 1;
           if (faults.fault === "owner" && row.moved) throw new Error(`${id}: the owner of a moved note failed`);
+          if (faults.fault === "ownerUndefined" && row.moved) throw nothing;
+          if (faults.fault === "ownerOnce" && nthCall("owner", row) === 1) {
+            throw new Error(`${id}: the owner failed once`);
+          }
+          if (faults.fault === "ownerAlways" && row.id.startsWith("bad")) throw new Error(`${id}: the owner always fails`);
           if (faults.fault === "ownerAtCommit" && row.moved && nthCall("owner", row) === 2) {
             throw new Error(`${id}: the owner of a moved note failed while the merge committed`);
           }
@@ -88,6 +106,7 @@ const notesApp = (id: string, faults: { fault?: Fault; mergeBy?: number } = {}) 
         },
         project: (row) => {
           if (faults.fault === "project" && row.moved) throw new Error(`${id}: a moved note failed to project`);
+          if (faults.fault === "projectUndefined" && row.moved) throw nothing;
           if (faults.fault === "projectAtCommit" && row.moved && nthCall("project", row) === 2) {
             throw new Error(`${id}: a moved note failed to project while the merge committed`);
           }
@@ -115,7 +134,7 @@ const notesOf = (tab: Tab) => tab.rows("mine").map((row) => JSON.stringify(row))
 
 describe("a guest merge where one of three apps faults (Sol)", () => {
   const cases = [0, 1, 2].flatMap((at) =>
-    (["merge", "owner", "project"] as const).flatMap((fault) =>
+    (["merge", "owner", "project", "ownerUndefined", "projectUndefined"] as const).flatMap((fault) =>
       [true, false].map((verifyViews) => ({ at, fault, verifyViews })),
     ),
   );
@@ -186,7 +205,7 @@ describe("a guest merge where one of three apps faults only while the merge comm
     (["ownerAtCommit", "projectAtCommit"] as const).map((fault) => ({ at, fault })),
   );
 
-  it.each(cases)("a $fault fault in app $at moves every app's rows and receipts, and withholds only that row", async ({ at, fault }) => {
+  it.each(cases)("a $fault fault in app $at moves every app's rows and receipts, and the row is shown once the fault passes", async ({ at, fault }) => {
     const apps = [0, 1, 2].map((index) => notesApp(`notes-${index}`, index === at ? { fault } : {}));
     const room = new Harness(apps.map((app) => app.authority), { runtime: { verifyViews: false } });
     const tabs: Tab[] = [];
@@ -205,7 +224,7 @@ describe("a guest merge where one of three apps faults only while the merge comm
 
     expect(sameGuest(room, tabs[0], tabs[3])).toBe(true);
     for (const index of [0, 1, 2]) {
-      const shown = index === at ? [`{"id":"n${index}"}`] : [`{"id":"n${index}"}`, `{"id":"n${index + 3}"}`].sort();
+      const shown = [`{"id":"n${index}"}`, `{"id":"n${index + 3}"}`].sort();
       expect(notesOf(tabs[index])).toEqual(shown);
       expect(notesOf(tabs[index + 3])).toEqual(shown);
     }
@@ -234,6 +253,37 @@ describe("with views verified, a guest merge where one of three apps faults only
 
     expect(sameGuest(room, tabs[0], tabs[3])).toBe(true);
     expect(() => room.authority.flushNow()).toThrow(/while the merge committed/);
+  });
+});
+
+describe("a row whose view callback faults while it is taken in (Sol)", () => {
+  it("is shown once the owner stops failing, to the tab that holds the view and to a new one", async () => {
+    const app = notesApp("notes", { fault: "ownerOnce" });
+    const room = new Harness([app.authority], { runtime: { verifyViews: false } });
+    const tab = await guestTab(room, app.contract, "pass-a", "tab-1");
+
+    expect((await tab.act("note", { id: "a" })).ok).toBe(true);
+    await allViewsIn(room);
+    await room.advance(1_000);
+    const fresh = await guestTab(room, app.contract, "pass-a", "tab-2");
+    await allViewsIn(room);
+
+    expect(notesOf(tab)).toEqual(['{"id":"a"}']);
+    expect(notesOf(fresh)).toEqual(['{"id":"a"}']);
+  });
+
+  it("is tried again only a few times when its owner always fails", async () => {
+    const app = notesApp("notes", { fault: "ownerAlways" });
+    const room = new Harness([app.authority], { runtime: { verifyViews: false } });
+    const tab = await guestTab(room, app.contract, "pass-a", "tab-1");
+    ownerCalls.count = 0;
+
+    expect((await tab.act("note", { id: "bad" })).ok).toBe(true);
+    expect((await tab.act("note", { id: "fine" })).ok).toBe(true);
+    for (let second = 0; second < 30; second += 1) await room.advance(1_000);
+
+    expect(notesOf(tab)).toEqual(['{"id":"fine"}']);
+    expect(ownerCalls.count).toBeLessThanOrEqual(8);
   });
 });
 
