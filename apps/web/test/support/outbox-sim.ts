@@ -178,10 +178,18 @@ export async function simulate(
   let countedTotal = 0;
   let exactCounts = true;
   const lostAtClose = new Set<string>();
-  const waitUntil = new Map<string, number>();
-  type LateWait = { key: string; until: number; at: number; tab: Tab; owed: boolean; state: "pending" | "bound" | "running" | "carried" | "lost" };
-  const lateWaits: LateWait[] = [];
-  let writingFor: LateWait | null = null;
+  type Learned = {
+    key: string;
+    tab: Tab;
+    at: number;
+    kind: "wait" | "failure";
+    until: number;
+    late: boolean;
+    owed: boolean;
+    state: "pending" | "bound" | "running" | "carried" | "lost";
+  };
+  const learned: Learned[] = [];
+  let writingFor: Learned[] = [];
   let refuseNext = 0;
   let rejectLocks = 0;
   let lockRejects = 0;
@@ -237,11 +245,12 @@ export async function simulate(
       return value;
     },
     setItem: (key: string, value: string) => {
-      const mine = writingFor?.tab === tab && writingFor.key === keyOfStored(value) ? writingFor : null;
+      const storedKey = writingFor.length > 0 ? keyOfStored(value) : null;
+      const mine = writingFor.filter((item) => item.tab === tab && item.key === storedKey);
       if (refuseNext > 0 || profile.noLocks || clock < refusingUntil || rng() < profile.refuseRate) {
         if (refuseNext > 0) refuseNext -= 1;
         refusedWrites += 1;
-        if (mine) mine.state = "lost";
+        for (const item of mine) item.state = "lost";
         if (closingTab === tab) {
           try {
             for (const event of (JSON.parse(value) as { events: Array<{ uuid: string }> }).events) lostAtClose.add(event.uuid);
@@ -249,7 +258,7 @@ export async function simulate(
         }
         throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
       }
-      if (mine) mine.state = "carried";
+      for (const item of mine) item.state = "carried";
       items.set(key, value);
       writtenAt.set(key, clock);
       if (trace) note(`tab${tab.id} saved ${key.slice(-12)} ${value.replace(/"events":\[.*?\],/, "")}`);
@@ -264,25 +273,46 @@ export async function simulate(
     clear: () => items.clear(),
   });
 
-  const lateWaitFor = (tab: Tab) => {
-    const late = lateWaits.find((wait) => wait.tab === tab && wait.state === "pending" && (wait.owed || wait.at === clock));
-    if (late) late.state = "bound";
-    return late ?? null;
+  const storedNow = (key: string) => [...items.values()].some((value) => keyOfStored(value) === key);
+  const applyFailure = (item: Learned) => {
+    const previous = failures.get(item.key);
+    failures.set(item.key, { count: (previous?.count ?? 0) + 1, at: Math.max(previous?.at ?? 0, item.at) });
   };
-  const lateWaitRun = (late: LateWait | null, run: () => Promise<void>): (() => Promise<void>) => {
-    if (!late) return run;
+  const learn = (tab: Tab, key: string, kind: Learned["kind"], until: number, late: boolean) => {
+    const item: Learned = { key, tab, at: clock, kind, until, late, owed: false, state: "pending" };
+    if (!late && !storedNow(key)) {
+      item.state = "carried";
+      if (kind === "failure") applyFailure(item);
+    }
+    learned.push(item);
+  };
+  const bindLearned = (tab: Tab) => {
+    const bound = learned.filter((item) => item.tab === tab && item.state === "pending" && (item.owed || item.at === clock));
+    for (const item of bound) item.state = "bound";
+    return bound;
+  };
+  const learnedRun = (bound: Learned[], run: () => Promise<void>): (() => Promise<void>) => {
+    if (bound.length === 0) return run;
     return () => {
-      if (![...items.values()].some((value) => keyOfStored(value) === late.key)) {
-        late.state = "lost";
-        return run();
+      const running: Learned[] = [];
+      for (const item of bound) {
+        const superseded = item.late || (requests.get(item.key) ?? []).some((request) => request.tab !== item.tab && request.sentAt > item.at);
+        if (!superseded) {
+          item.state = "carried";
+          if (item.kind === "failure") applyFailure(item);
+        } else if (item.kind === "failure" || !storedNow(item.key)) {
+          item.state = "lost";
+        } else {
+          item.state = "running";
+          running.push(item);
+        }
       }
-      late.state = "running";
-      writingFor = late;
+      writingFor = running;
       try {
         return run();
       } finally {
-        writingFor = null;
-        if (late.state === "running") late.state = "carried";
+        writingFor = [];
+        for (const item of running) if (item.state === "running") item.state = "carried";
       }
     };
   };
@@ -311,11 +341,11 @@ export async function simulate(
       return null;
     }
   }
-  const checkSend = (key: string, how: "post" | "beacon") => {
-    const until = Math.max(
-      waitUntil.get(key) ?? 0,
-      ...lateWaits.filter((wait) => wait.key === key && wait.state !== "lost").map((wait) => wait.until),
-    );
+  const knownTo = (item: Learned, sender: Tab) =>
+    item.state === "carried" || (item.tab === sender && item.state !== "lost");
+  const checkSend = (key: string, how: "post" | "beacon", sender: Tab) => {
+    const known = learned.filter((item) => item.key === key && knownTo(item, sender));
+    const until = Math.max(0, ...known.filter((item) => item.kind === "wait").map((item) => item.until));
     if (clock < until) violate("sent before its Retry-After", `${how} of ${key} ${until - clock} ms early`);
     const beaconed = beaconedAt.get(key);
     if (beaconed !== undefined && clock - beaconed < BEACON_CONFIRM_MS) {
@@ -327,7 +357,12 @@ export async function simulate(
       );
       if (open.length > 0) violate("two sends of one batch in flight", key);
     }
-    const failed = failures.get(key);
+    const owedFailures = known.filter((item) => item.kind === "failure" && item.state !== "carried");
+    const applied = failures.get(key);
+    const failed =
+      owedFailures.length > 0
+        ? { count: (applied?.count ?? 0) + owedFailures.length, at: Math.max(applied?.at ?? 0, ...owedFailures.map((item) => item.at)) }
+        : applied;
     if (failed && failed.count > 0) {
       const gap = SCHEDULE[Math.min(failed.count - 1, SCHEDULE.length - 1)];
       if (clock - failed.at < gap) violate("sent sooner than its backoff", `${key} after ${clock - failed.at} ms, needs ${gap}`);
@@ -335,14 +370,13 @@ export async function simulate(
   };
   const failed = (request: Request) => {
     if (!request.latest) return;
-    const previous = failures.get(request.key);
-    failures.set(request.key, { count: (previous?.count ?? 0) + 1, at: clock });
+    learn(request.tab, request.key, "failure", 0, false);
   };
 
   const network = (tab: Tab) => (body: string, keepalive: boolean, signal?: AbortSignal): Promise<Reply> => {
     const uuids = (JSON.parse(body) as { batch: Array<{ uuid: string }> }).batch.map((event) => event.uuid);
     const key = keyOf(uuids);
-    checkSend(key, "post");
+    checkSend(key, "post", tab);
     note(`tab${tab.id} post ${key.slice(0, 40)} keepalive=${keepalive}`);
     posts += 1;
     const earlier = requests.get(key) ?? [];
@@ -426,8 +460,7 @@ export async function simulate(
           if (outcome.retryAfter !== null) retryAfters += 1;
           if (outcome.retryAfter !== null) {
             const until = clock + Math.min(Number(outcome.retryAfter) * 1000, MAX_WAIT_MS);
-            if (request.latest) waitUntil.set(key, Math.max(waitUntil.get(key) ?? 0, until));
-            else lateWaits.push({ key, until, at: clock, tab, owed: false, state: "pending" });
+            learn(tab, key, "wait", until, !request.latest);
           }
           failed(request);
         }
@@ -441,13 +474,12 @@ export async function simulate(
     retryAfters += 1;
     const until = clock + Math.min(Number(retryAfter) * 1000, MAX_WAIT_MS);
     const sentSince = (requests.get(key) ?? []).some((request) => request.sentAt > sentAt);
-    if (sentSince) lateWaits.push({ key, until, at: clock, tab, owed: false, state: "pending" });
-    else waitUntil.set(key, Math.max(waitUntil.get(key) ?? 0, until));
+    learn(tab, key, "wait", until, sentSince);
   };
   const beaconFor = (tab: Tab) => (body: string): Promise<Reply | null> | null => {
     const uuids = (JSON.parse(body) as { batch: Array<{ uuid: string }> }).batch.map((event) => event.uuid);
     const key = keyOf(uuids);
-    checkSend(key, "beacon");
+    checkSend(key, "beacon", tab);
     const scripted = scriptedBeacons.shift();
     if (!scripted && rng() < profile.beaconRefuseRate) return null;
     const sentAt = clock;
@@ -511,19 +543,19 @@ export async function simulate(
       newId: () => `sim-${seed}-${++ids}`,
       store: outboxModule.createBatchStore(() => storageFor(tab)),
       lock: (granted: () => Promise<void>) => {
-        const late = lateWaitFor(tab);
+        const bound = bindLearned(tab);
         if (!profile.noLocks && (rejectLocks > 0 || (profile.lockRejectRate > 0 && lockRejectRng() < profile.lockRejectRate))) {
           if (rejectLocks > 0) rejectLocks -= 1;
           lockRejects += 1;
           lastLockRejectAt = clock;
-          if (late) {
-            late.state = "pending";
-            late.owed = true;
+          for (const item of bound) {
+            item.state = "pending";
+            item.owed = true;
           }
           note(`tab${tab.id} lock request rejected`);
           return Promise.reject(new DOMException("The lock request was aborted.", "AbortError"));
         }
-        const run = lateWaitRun(late, granted);
+        const run = learnedRun(bound, granted);
         if (profile.noLocks) {
           void run();
           return;
@@ -571,6 +603,7 @@ export async function simulate(
     tab.outbox.flushForUnload();
     closingTab = null;
     tab.open = false;
+    for (const item of learned) if (item.tab === tab && (item.state === "pending" || item.state === "bound")) item.state = "lost";
     for (const job of jobs) if (job.tab === tab && job.kind !== "reply") job.cancelled = true;
   };
   function throttledAt(tab: Tab, due: number): number {
