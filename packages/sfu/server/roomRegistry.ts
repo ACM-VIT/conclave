@@ -52,6 +52,13 @@ export class RoomLeaseExpiredError extends RoomRegistryUnavailableError {
   }
 }
 
+export class RoomFenceError extends Error {
+  constructor(channelId: string) {
+    super(`The writes of ${channelId} could not be fenced for its new room`);
+    this.name = "RoomFenceError";
+  }
+}
+
 export class RoomOwnershipError extends Error {
   owner: RoomAssignmentRecord;
 

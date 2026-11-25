@@ -30,6 +30,7 @@ import {
   noteRoomRunning,
   renewLocalRoom,
   getRoomChannelId,
+  ROOM_LEASE_UNCONFIRMED_ERROR,
 } from "../../rooms.js";
 import {
   MEETING_ENDED_WHILE_WAITING,
@@ -39,6 +40,7 @@ import {
 import type { EndedRoom } from "../../state.js";
 import { ROOM_OPEN_DEADLINE_MS } from "../../joinDeadlines.js";
 import {
+  RoomFenceError,
   RoomOwnershipError,
   type RoomAssignmentRecord,
 } from "../../roomRegistry.js";
@@ -648,11 +650,16 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             // Several joiners can miss the lookup above while the room is
             // still being created; only the one whose call created it is the
             // creator (and so the host). The rest join it as an existing room.
-            const result = await getOrCreateRoomWithOrigin(
-              state,
-              clientId,
-              roomId,
-            );
+            const createdBy =
+              user?.createsCode === true &&
+              !isWebinarAttendeeJoin &&
+              normalizedJoinEmail &&
+              !isRecoveryPassFor(data?.roomRecoveryPass, roomChannelId, config.sfuSecret)
+                ? normalizedJoinEmail
+                : null;
+            const result = await getOrCreateRoomWithOrigin(state, clientId, roomId, {
+              createdBy,
+            });
             const openedRoom = result.room;
             const created = result.created;
             // The recovery record was read once this SFU held the code, so
@@ -661,26 +668,11 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             const recalled = result.recalled;
             if (created && recalled) {
               lost = recalled.lost;
-              // A code no one has recorded an owner for is made by this
-              // join, and belongs to its account if it is signed in, unless
-              // the join brings a recovery pass for the code: then a call ran
-              // here before, on an SFU whose record this one cannot read, and
-              // nobody here knows whose it was.
               const recordedOwner = recordedOwnerOf(
                 getScheduledMeetingByRoomCode(state.scheduledMeetings, clientId, roomId),
                 recalled,
               );
-              openedRoom.ownerEmail =
-                recordedOwner !== undefined
-                  ? recordedOwner
-                  : isWebinarAttendeeJoin ||
-                      isRecoveryPassFor(
-                        data?.roomRecoveryPass,
-                        roomChannelId,
-                        config.sfuSecret,
-                      )
-                    ? null
-                    : normalizedJoinEmail || null;
+              openedRoom.ownerEmail = recordedOwner !== undefined ? recordedOwner : createdBy;
             }
             if (created && endedRoom) {
               clearEndedRoom(state, roomChannelId);
@@ -712,6 +704,10 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           } catch (error) {
             if (error instanceof RoomOwnershipError) {
               respondWithRoomOwner(error.owner);
+              return null;
+            }
+            if (error instanceof RoomFenceError) {
+              respond(callback, { error: ROOM_LEASE_UNCONFIRMED_ERROR });
               return null;
             }
             throw error;

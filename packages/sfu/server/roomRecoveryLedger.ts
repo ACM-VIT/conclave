@@ -67,6 +67,13 @@ export type RoomRecoveryStore = {
     record: RoomRecoveryRecord,
     takesOver: string | null,
   ) => Promise<boolean>;
+  // Lands what `decide` makes of the newest record, as one step: a write that
+  // lands first is what `decide` sees. Null from `decide` writes nothing.
+  // Says whether it landed.
+  update: (
+    channelId: string,
+    decide: (current: unknown) => RoomRecoveryRecord | null,
+  ) => Promise<boolean>;
 };
 
 export type LostRoom = {
@@ -119,7 +126,12 @@ export type RoomRecoveryLedger = {
   fence: (
     room: Pick<Room, "channelId" | "incarnationId" | "takesOverRecordOf">,
     generation: number,
-  ) => Promise<void>;
+    createdBy: string | null,
+  ) => Promise<boolean>;
+  reclaim: (
+    room: Pick<Room, "channelId" | "incarnationId">,
+    generation: number,
+  ) => Promise<boolean>;
   recall: (channelId: string) => Promise<RecalledRoom>;
 };
 
@@ -191,6 +203,11 @@ const generationOf = (raw: unknown): number | null => {
   return typeof generation === "number" ? generation : null;
 };
 
+const writeIfFollowing =
+  (record: RoomRecoveryRecord, takesOver: string | null) =>
+  (current: unknown): RoomRecoveryRecord | null =>
+    mayFollow(current, record, takesOver) ? record : null;
+
 const mayFollow = (
   newest: unknown,
   record: Pick<RoomRecoveryRecord, "writer" | "generation">,
@@ -237,6 +254,7 @@ const tombstoneOf = (raw: unknown): Record<string, unknown> => {
     ...(writer === null ? {} : { writer }),
     ownerEmail: record?.ownerEmail ?? null,
     temporaryHostUserKey: null,
+    ...(record?.generation === undefined ? {} : { generation: record.generation }),
   };
 };
 const isTombstone = (raw: unknown): boolean =>
@@ -358,13 +376,46 @@ export const createRoomRecoveryLedger = (
     runningRecord,
     overRecord,
     saveRecord,
-    fence: async (room, generation) => {
-      const newest = parseRoomRecoveryRecord(await store.read(room.channelId).catch(() => null));
-      if (!newest) return;
-      await store
-        .write(room.channelId, { ...newest, writer: room.incarnationId, generation }, newest.writer)
+    fence: async (room, generation, createdBy) => {
+      await Promise.all([...(settling.get(room.channelId) ?? new Set<Promise<void>>())]);
+      return store
+        .update(room.channelId, (current) => {
+          const fenced = generationOf(current);
+          if (fenced !== null && fenced > generation) return null;
+          const newest = parseRoomRecoveryRecord(current);
+          return newest
+            ? { ...newest, writer: room.incarnationId, generation }
+            : {
+                liveAt: null,
+                hostUserKey: null,
+                adminUserKeys: [],
+                readmissionRequiredUserKeys: [],
+                overAt: null,
+                writer: room.incarnationId,
+                ownerEmail: createdBy,
+                temporaryHostUserKey: null,
+                coHostUserKeys: [],
+                guestPasses: {},
+                generation,
+              };
+        })
         .catch((error) => {
-          Logger.warn(`Failed to fence the recovery record of ${room.channelId}`, error);
+          Logger.error(`Failed to fence the recovery record of ${room.channelId}`, error);
+          return false;
+        });
+    },
+    reclaim: async (room, generation) => {
+      await Promise.all([...(settling.get(room.channelId) ?? new Set<Promise<void>>())]);
+      return store
+        .update(room.channelId, (current) => {
+          const newest = parseRoomRecoveryRecord(current);
+          if (!newest || newest.writer !== room.incarnationId) return null;
+          if (newest.generation !== undefined && newest.generation > generation) return null;
+          return { ...newest, generation };
+        })
+        .catch((error) => {
+          Logger.error(`Failed to reclaim the recovery record of ${room.channelId}`, error);
+          return false;
         });
     },
     noteRunning: (room) => {
@@ -407,13 +458,17 @@ export const createMemoryRoomRecoveryStore = (): RoomRecoveryStore => {
     const stored = records.get(channelId);
     return stored === undefined ? null : JSON.parse(stored);
   };
+  const update: RoomRecoveryStore["update"] = async (channelId, decide) => {
+    const next = decide(read(channelId));
+    if (!next) return false;
+    records.set(channelId, JSON.stringify(next));
+    return true;
+  };
   return {
     read: async (channelId) => read(channelId),
-    write: async (channelId, record, takesOver) => {
-      if (!mayFollow(read(channelId), record, takesOver)) return false;
-      records.set(channelId, JSON.stringify(record));
-      return true;
-    },
+    write: (channelId, record, takesOver) =>
+      update(channelId, writeIfFollowing(record, takesOver)),
+    update,
   };
 };
 
@@ -596,24 +651,26 @@ export const createFileRoomRecoveryStore = (
       Logger.warn(`Failed to clear out old recovery records in ${directory}`, error);
     }
   };
+  const update: RoomRecoveryStore["update"] = async (channelId, decide) => {
+    mkdirSync(directory, { recursive: true });
+    tidy();
+    const room = roomOf(channelId);
+    for (let attempt = 0; attempt < WRITE_ATTEMPTS; attempt += 1) {
+      const newest = newestIn(room);
+      const next = decide(newest?.stored ?? null);
+      if (!next) return false;
+      // Someone wrote first: decide again on what they wrote.
+      if (publish(room, (newest?.version ?? 0) + 1, next)) {
+        written.add(room);
+        return true;
+      }
+    }
+    throw new Error(`Gave up writing the recovery record of ${channelId}`);
+  };
   return {
     read: async (channelId) => newestIn(roomOf(channelId))?.stored ?? null,
-    write: async (channelId, record, takesOver) => {
-      mkdirSync(directory, { recursive: true });
-      tidy();
-      const room = roomOf(channelId);
-      for (let attempt = 0; attempt < WRITE_ATTEMPTS; attempt += 1) {
-        const newest = newestIn(room);
-        if (newest && !mayFollow(newest.stored, record, takesOver)) {
-          return false;
-        }
-        // Someone wrote first: look again.
-        if (publish(room, (newest?.version ?? 0) + 1, record)) {
-          written.add(room);
-          return true;
-        }
-      }
-      throw new Error(`Gave up writing the recovery record of ${channelId}`);
-    },
+    write: (channelId, record, takesOver) =>
+      update(channelId, writeIfFollowing(record, takesOver)),
+    update,
   };
 };

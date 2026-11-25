@@ -8,6 +8,7 @@ import type { Worker } from "mediasoup/types";
 import { Logger } from "../utilities/loggers.js";
 import {
   RoomLeaseExpiredError,
+  RoomFenceError,
   RoomOwnershipError,
   type RoomOwnershipClaim,
 } from "./roomRegistry.js";
@@ -510,6 +511,7 @@ export const getOrCreateRoomWithOrigin = async (
   state: SfuState,
   requestedClientId: string,
   roomId: string,
+  options: { createdBy?: string | null } = {},
 ): Promise<{ room: Room; created: boolean; recalled: RecalledRoom | null }> => {
   const clientId = canonicalizeClientId(requestedClientId);
   const channelId = getRoomChannelId(clientId, roomId);
@@ -535,17 +537,27 @@ export const getOrCreateRoomWithOrigin = async (
       throw new RoomOwnershipError(ownership.owner);
     }
     const incarnationId = randomUUID();
-    await state.roomRecovery.fence(
-      { channelId, incarnationId, takesOverRecordOf: null },
-      ownership.generation,
-    );
-    await fenceScheduledMeeting(
-      state.scheduledMeetings,
-      state.scheduledMeetingPersistence,
-      clientId,
-      roomId,
-      ownership.generation,
-    );
+    const fenced = await Promise.all([
+      state.roomRecovery.fence(
+        { channelId, incarnationId, takesOverRecordOf: null },
+        ownership.generation,
+        options.createdBy ?? null,
+      ),
+      fenceScheduledMeeting(
+        state.scheduledMeetings,
+        state.scheduledMeetingPersistence,
+        clientId,
+        roomId,
+        ownership.generation,
+      ).catch((error: unknown) => {
+        Logger.error(`Failed to fence the booking of ${channelId}`, error);
+        return false;
+      }),
+    ]);
+    if (!fenced.every(Boolean)) {
+      await state.roomRegistry.releaseRoom(channelId);
+      throw new RoomFenceError(channelId);
+    }
     // Read only now that this SFU holds the code, and before the room is in
     // anyone's hands. A room that came and went while this join waited has
     // written its last by now, so the record this room takes over is the

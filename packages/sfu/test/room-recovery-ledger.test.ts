@@ -7,6 +7,7 @@ import {
   createFileRoomRecoveryStore,
   createMemoryRoomRecoveryStore,
   createRoomRecoveryLedger,
+  type RoomRecoveryStore,
 } from "../server/roomRecoveryLedger.js";
 import { Logger } from "../utilities/loggers.js";
 
@@ -259,3 +260,99 @@ const filesIn = (dir: string): string[] =>
     const path = join(dir, name);
     return statSync(path).isDirectory() ? filesIn(path) : [path];
   });
+
+describe("fencing a code's record when a room takes the code over", () => {
+  const takingOver = { channelId: CHANNEL, incarnationId: "room-2", takesOverRecordOf: null };
+  const running = (generation: number, usersNeedingReadmission: string[]) => ({
+    ...room,
+    usersNeedingReadmission,
+    ownershipGeneration: generation,
+  });
+
+  const withHeldReads = () => {
+    const inner = createMemoryRoomRecoveryStore();
+    let held: Promise<void> | null = null;
+    let release = () => undefined as void;
+    const store: RoomRecoveryStore = {
+      ...inner,
+      read: async (channelId) => {
+        const seen = await inner.read(channelId);
+        if (held) await held;
+        return seen;
+      },
+    };
+    return {
+      inner,
+      store,
+      holdReads: () => {
+        held = new Promise<void>((resolve) => {
+          release = () => {
+            held = null;
+            resolve();
+          };
+        });
+      },
+      release: () => release(),
+    };
+  };
+
+  it("never loses a removal the room it took over was told it saved while the fence ran", async () => {
+    vi.spyOn(Logger, "error").mockImplementation(() => undefined);
+    const { inner, store, holdReads, release } = withHeldReads();
+    const old = createRoomRecoveryLedger(inner);
+    expect(await old.saveRecord(room, old.runningRecord(running(5, ["guest-removed"])))).toBe(true);
+
+    const takeover = createRoomRecoveryLedger(store);
+    holdReads();
+    const fencing = takeover.fence(takingOver, 6, null);
+    await Promise.resolve();
+    const landed = await old.saveRecord(
+      room,
+      old.runningRecord(running(5, ["guest-removed", "guest-removed-later"])),
+    );
+    release();
+    await fencing;
+
+    const kept = (await takeover.recall(CHANNEL)).lost?.readmissionRequiredUserKeys ?? [];
+    expect(kept.includes("guest-removed-later")).toBe(landed);
+    expect(kept).toContain("guest-removed");
+  });
+
+  it("stamps the generation on the record as it stands when the fence lands in a shared directory", async () => {
+    const store = createFileRoomRecoveryStore(directory);
+    const other = createFileRoomRecoveryStore(directory);
+    const first = createRoomRecoveryLedger(store);
+    await first.saveRecord(room, first.runningRecord(running(5, ["guest-removed"])));
+    const later = first.runningRecord(running(5, ["guest-removed", "guest-removed-later"]));
+    let raced = false;
+    const landed = await store.update(CHANNEL, (current) => {
+      if (!raced) {
+        raced = true;
+        void other.write(CHANNEL, { ...later }, "room-1");
+      }
+      return { ...(current as typeof later), writer: "room-2", generation: 6 };
+    });
+
+    expect(landed).toBe(true);
+    expect(await sfu().recall(CHANNEL)).toMatchObject({
+      lastWriter: "room-2",
+      lost: { readmissionRequiredUserKeys: ["guest-removed", "guest-removed-later"] },
+    });
+  });
+
+  it("fences a code with no record yet, so a room of an older generation cannot write first", async () => {
+    vi.spyOn(Logger, "error").mockImplementation(() => undefined);
+    expect(await sfu().fence(takingOver, 6, null)).toBe(true);
+    const stale = sfu();
+
+    expect(await stale.saveRecord(room, stale.runningRecord(running(5, [])))).toBe(false);
+    expect(await sfu().recall(CHANNEL)).toMatchObject({ lost: null, lastWriter: "room-2" });
+  });
+
+  it("is refused once a newer generation has fenced the record", async () => {
+    expect(await sfu().fence(takingOver, 6, null)).toBe(true);
+
+    expect(await sfu().fence({ ...takingOver, incarnationId: "room-3" }, 4, null)).toBe(false);
+    expect((await sfu().recall(CHANNEL)).lastWriter).toBe("room-2");
+  });
+});

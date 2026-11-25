@@ -10,6 +10,7 @@ import {
   advanceScheduledMeetings,
   endScheduledMeetingRemovals,
   createScheduledMeeting,
+  fenceScheduledMeeting,
   createScheduledMeetingPersistence,
   createScheduledMeetingStore,
   isScheduledMeetingInvitee,
@@ -210,6 +211,23 @@ describe.each(["sqlite", "json", "redis"] as const)(
     });
   },
 );
+
+describe.each(["sqlite", "json", "redis"] as const)("a fence on a %s schedule store", (kind) => {
+  const test = kind === "redis" && !redisServerPath ? it.skip : it;
+  const fence = (sfu: Sfu, generation: number) =>
+    fenceScheduledMeeting(sfu.meetings, sfu.persistence, "conclave", CODE, generation);
+
+  test("refuses a generation older than one that fenced the meeting, and takes that one again", async () => {
+    useStore(kind);
+    const sfuA = await startSfu(kind);
+    await scheduleIntroCall(sfuA);
+
+    expect(await fence(sfuA, 20)).toBe(true);
+    expect(await fence(sfuA, 10)).toBe(false);
+    expect(await fence(sfuA, 20)).toBe(true);
+    expect(await fence(await startSfu(kind), 15)).toBe(false);
+  });
+});
 
 describe("the end of a meeting on one SFU and a removal at the next on another", () => {
   const test = redisServerPath ? it : it.skip;

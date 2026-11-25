@@ -609,7 +609,7 @@ export type ScheduledMeetingPersistence = {
     endedAt: number,
     generation?: number,
   ) => MaybePromise<boolean | void>;
-  fenceMeeting?: (meetingId: string, generation: number) => MaybePromise<void>;
+  fenceMeeting?: (meetingId: string, generation: number) => MaybePromise<boolean>;
   close?: () => MaybePromise<void>;
   flush?: () => Promise<void>;
 };
@@ -1157,12 +1157,12 @@ const createSqliteScheduledMeetingPersistence = (
         clearEndedDecisions.run(meetingId, meetingId);
         return true;
       }),
-    fenceMeeting: (meetingId, generation) => {
+    fenceMeeting: (meetingId, generation) =>
       inTransaction("fence a meeting's writes", () => {
+        if (isStaleWrite(meetingId, generation)) return false;
         raiseWriteGeneration.run(meetingId, generation);
         return true;
-      });
-    },
+      }),
     close: () => db.close(),
   };
 };
@@ -1336,14 +1336,20 @@ const createFileScheduledMeetingPersistence = (
       return applied;
     },
     fenceMeeting: (meetingId, generation) => {
+      let applied = true;
       try {
-        rewriteDecisions(meetingId, (stored) => ({
-          ...stored,
-          writeGeneration: Math.max(stored.writeGeneration ?? 0, generation),
-        }));
+        rewriteDecisions(meetingId, (stored) => {
+          if (isStaleFor(stored, generation)) {
+            applied = false;
+            return stored;
+          }
+          return { ...stored, writeGeneration: Math.max(stored.writeGeneration ?? 0, generation) };
+        });
       } catch (error) {
         Logger.error("Failed to fence a meeting's writes in JSON", error);
+        return false;
       }
+      return applied;
     },
   load: () => {
     try {
@@ -1508,9 +1514,10 @@ return 1
 const FENCE_MEETING_SCRIPT = `
 local fenced = tonumber(redis.call("HGET", KEYS[1], ARGV[1]) or "")
 local generation = tonumber(ARGV[2])
-if fenced == nil or generation > fenced then
-  redis.call("HSET", KEYS[1], ARGV[1], ARGV[2])
+if fenced ~= nil and fenced > generation then
+  return -1
 end
+redis.call("HSET", KEYS[1], ARGV[1], ARGV[2])
 return 1
 `;
 
@@ -1745,7 +1752,7 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     );
   }
 
-  fenceMeeting(meetingId: string, generation: number): Promise<void> {
+  fenceMeeting(meetingId: string, generation: number): Promise<boolean> {
     runDetached("Fencing a meeting's writes", () => this.fallback.fenceMeeting?.(meetingId, generation));
     return this.queueCheckedWrite("fence a meeting's writes", () =>
       this.client.sendCommand([
@@ -1756,7 +1763,7 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
         meetingId,
         String(generation),
       ]),
-    ).then(() => undefined);
+    );
   }
 
   private queueCheckedWrite(label: string, write: () => Promise<unknown>): Promise<boolean> {
@@ -2095,12 +2102,13 @@ export const fenceScheduledMeeting = (
   clientId: string,
   roomCode: string,
   generation: number,
-): Promise<void> => {
+): Promise<boolean> => {
   const meeting = getScheduledMeetingByRoomCode(store, clientId, roomCode);
-  if (!meeting || !persistence?.fenceMeeting) return Promise.resolve();
-  return Promise.resolve(persistence.fenceMeeting(meeting.id, generation)).then(() =>
-    persistence.flush?.(),
-  );
+  if (!meeting || !persistence?.fenceMeeting) return Promise.resolve(true);
+  return Promise.resolve(persistence.fenceMeeting(meeting.id, generation)).then(async (landed) => {
+    await persistence.flush?.();
+    return landed;
+  });
 };
 
 // The time of this SFU's last decision about each invitee of a meeting, so

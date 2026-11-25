@@ -341,6 +341,10 @@ const boot = async (world: World): Promise<Sfu> => {
       alive()
         ? world.durable.recovery.write(channelId, record, takesOver)
         : new Promise<boolean>(() => undefined),
+    update: (channelId, decide) =>
+      alive()
+        ? world.durable.recovery.update(channelId, decide)
+        : new Promise<boolean>(() => undefined),
   };
   const meetings = () => JSON.parse(world.durable.schedule) as ScheduledMeeting[];
   const schedule: ScheduledMeetingPersistence = {

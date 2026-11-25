@@ -10,10 +10,12 @@ import {
   ROOM_LEASE_UNCONFIRMED_ERROR,
   type HostCommand,
 } from "@conclave/meeting-core/host-commands";
+import { Admin } from "../config/classes/Admin.js";
 import { config } from "../config/config.js";
 import { initScheduledMeetings } from "../server/init.js";
 import {
   createMemoryRoomRecoveryStore,
+  createRoomRecoveryLedger,
   type RoomRecoveryStore,
 } from "../server/roomRecoveryLedger.js";
 import { startRoomRecoveryPassRefresh } from "../server/roomRecoveryPass.js";
@@ -189,7 +191,7 @@ const join = async (state: SfuState, user: SfuAuthPayload, payload: Record<strin
   const passes = () => emit.mock.calls.filter(([event]) => event === "roomRecoveryPass").length;
   const told = (event: string): unknown[] =>
     (emit.mock.calls as unknown[][]).filter(([name]) => name === event).map(([, body]) => body);
-  return { context, send, raw, leave, passes, told, status: joined.status };
+  return { context, send, raw, leave, passes, told, status: joined.status, answer: joined };
 };
 
 const dirs: string[] = [];
@@ -449,6 +451,64 @@ describe("an SFU that lost a room's lease while it was paused", () => {
   });
 });
 
+describe("a room whose fence did not land", () => {
+  it("does not open when its booking could not be fenced, and opens once it can", async () => {
+    useSharedSchedule();
+    await book();
+    const leases = sharedLeases();
+    const persistence = createScheduledMeetingPersistence();
+    const fence = persistence.fenceMeeting!.bind(persistence);
+    let fails = true;
+    persistence.fenceMeeting = (meetingId, generation) =>
+      fails ? false : fence(meetingId, generation);
+    const sfuA = await startSfu(leases.forInstance("sfu-a"), { persistence });
+
+    const refused = await join(sfuA, host("a"));
+    expect(refused.answer).toEqual({ error: ROOM_LEASE_UNCONFIRMED_ERROR });
+    expect(sfuA.rooms.has(CHANNEL)).toBe(false);
+    expect(leases.ownerOf(CHANNEL)).toBeNull();
+
+    fails = false;
+    expect((await join(sfuA, host("b"))).status).toBe("joined");
+  });
+
+  it("does not open while another connection holds the booking store's write lock", async () => {
+    useSharedSchedule();
+    await book();
+    const sqlite = (await import("node:sqlite")) as unknown as {
+      DatabaseSync: new (path: string) => { exec: (sql: string) => void; close: () => void };
+    };
+    const locker = new sqlite.DatabaseSync(process.env.SCHEDULED_MEETINGS_SQLITE_PATH!);
+    const leases = sharedLeases();
+    const sfuA = await startSfu(leases.forInstance("sfu-a"));
+    locker.exec("BEGIN IMMEDIATE");
+    try {
+      expect((await join(sfuA, host("a"))).answer).toEqual({ error: ROOM_LEASE_UNCONFIRMED_ERROR });
+      expect(sfuA.rooms.has(CHANNEL)).toBe(false);
+    } finally {
+      locker.exec("ROLLBACK");
+      locker.close();
+    }
+    expect((await join(sfuA, host("b"))).status).toBe("joined");
+  }, 20_000);
+
+  it("does not open when a newer generation fenced the code's recovery record", async () => {
+    useSharedSchedule();
+    await book();
+    const recovery = createMemoryRoomRecoveryStore();
+    const ahead = createRoomRecoveryLedger(recovery);
+    expect(
+      await ahead.fence({ channelId: CHANNEL, incarnationId: "elsewhere", takesOverRecordOf: null }, Date.now() * 10, null),
+    ).toBe(true);
+    const leases = sharedLeases();
+    const sfuA = await startSfu(leases.forInstance("sfu-a"), { recovery });
+
+    expect((await join(sfuA, host("a"))).answer).toEqual({ error: ROOM_LEASE_UNCONFIRMED_ERROR });
+    expect(sfuA.rooms.has(CHANNEL)).toBe(false);
+    expect(leases.ownerOf(CHANNEL)).toBeNull();
+  });
+});
+
 describe("a host command with arguments it does not take", () => {
   const MALFORMED: unknown[][] = [
     [null],
@@ -564,6 +624,22 @@ describe("a tab of the web on staging, on this SFU before the web deploys", () =
     allowRoomCreation: true,
   });
 
+  it("opens an empty code as its host and makes it nobody's", async () => {
+    useSharedSchedule();
+    const recovery = createMemoryRoomRecoveryStore();
+    const sfuA = await startSfu(sharedLeases().forInstance("sfu-a"), { recovery });
+    const opener = await join(
+      sfuA,
+      { ...fromCodePage("ana@example.com", "a"), email: "ana@example.com" },
+      stagingJoin("Ana"),
+    );
+
+    expect(opener.status).toBe("joined");
+    expect(opener.context.currentClient).toBeInstanceOf(Admin);
+    expect(sfuA.rooms.get(CHANNEL)?.ownerEmail).toBeNull();
+    expect((await createRoomRecoveryLedger(recovery).recall(CHANNEL)).owner).toEqual({ email: null });
+  });
+
   it("knocks in a room that starts locked, shows its host the knock, and is let in", async () => {
     useSharedSchedule();
     const sfuA = await startSfu(sharedLeases().forInstance("sfu-a"));
@@ -594,5 +670,53 @@ describe("a tab of the web on staging, on this SFU before the web deploys", () =
     expect(
       await knocker.send("joinRoom", { roomId: CODE, sessionId: "b", ...stagingJoin("Ben") }),
     ).toEqual(expect.objectContaining({ status: "joined" }));
+  });
+});
+
+describe("who a code belongs to", () => {
+  const ana = (sessionId: string, claims: Partial<SfuAuthPayload> = {}): SfuAuthPayload => ({
+    userId: "ana@example.com",
+    email: "ana@example.com",
+    clientId: "conclave",
+    sessionId,
+    allowRoomCreation: true,
+    ...claims,
+  });
+  const ownerOnRecord = async (recovery: RoomRecoveryStore) =>
+    (await createRoomRecoveryLedger(recovery).recall(CHANNEL)).owner;
+
+  it("is the account whose join the web marked as creating the code", async () => {
+    useSharedSchedule();
+    const recovery = createMemoryRoomRecoveryStore();
+    const sfuA = await startSfu(sharedLeases().forInstance("sfu-a"), { recovery });
+    expect((await join(sfuA, ana("a", { createsCode: true }))).status).toBe("joined");
+
+    expect(sfuA.rooms.get(CHANNEL)?.ownerEmail).toBe("ana@example.com");
+    expect(await ownerOnRecord(recovery)).toEqual({ email: "ana@example.com" });
+  });
+
+  it("is nobody when a join says only in its own message that it creates the code", async () => {
+    useSharedSchedule();
+    const recovery = createMemoryRoomRecoveryStore();
+    const sfuA = await startSfu(sharedLeases().forInstance("sfu-a"), { recovery });
+    expect((await join(sfuA, ana("a"), { createsCode: true, createsMeeting: true })).status).toBe("joined");
+
+    expect(sfuA.rooms.get(CHANNEL)?.ownerEmail).toBeNull();
+    expect(await ownerOnRecord(recovery)).toEqual({ email: null });
+  });
+
+  it("stays nobody when a join marked as creating comes to a code that already had a room", async () => {
+    useSharedSchedule();
+    const recovery = createMemoryRoomRecoveryStore();
+    const sfuA = await startSfu(sharedLeases().forInstance("sfu-a"), { recovery });
+    const first = await join(sfuA, { userId: "guest-ben", clientId: "conclave", sessionId: "b", allowRoomCreation: true });
+    expect(first.status).toBe("joined");
+    await first.leave();
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(sfuA.rooms.has(CHANNEL)).toBe(false);
+
+    expect((await join(sfuA, ana("a", { createsCode: true }))).status).toBe("joined");
+    expect(sfuA.rooms.get(CHANNEL)?.ownerEmail).toBeNull();
+    expect(await ownerOnRecord(recovery)).toEqual({ email: null });
   });
 });

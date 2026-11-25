@@ -1280,6 +1280,7 @@ describe("the account a code belongs to", () => {
     sessionId: "o",
     allowRoomCreation: true,
   };
+  const creator = { ...owner, createsCode: true };
   const guestOpener = { ...guest, allowRoomCreation: true };
   const anotherGuest = { ...knocker, allowRoomCreation: true };
   const scheduledHost = {
@@ -1304,7 +1305,7 @@ describe("the account a code belongs to", () => {
   it("hosts again when they come back to a meeting a guest reopened, and the guest is a participant", async () => {
     useClock();
     const state = makeState();
-    const created = await join(state, owner);
+    const created = await join(state, creator);
     await emptyOut(state, created.peer);
 
     const opener = await join(state, guestOpener);
@@ -1328,7 +1329,7 @@ describe("the account a code belongs to", () => {
   it("is let in without knocking even though the guest locked the meeting", async () => {
     useClock();
     const state = makeState();
-    const created = await join(state, owner);
+    const created = await join(state, creator);
     await emptyOut(state, created.peer);
     await join(state, guestOpener);
     expect(roomOf(state).isLocked).toBe(true);
@@ -1339,7 +1340,7 @@ describe("the account a code belongs to", () => {
   it("still owns the code after the SFU restarts", async () => {
     useClock();
     const before = makeState();
-    const created = await join(before, owner);
+    const created = await join(before, creator);
     await emptyOut(before, created.peer);
     const after = await restart(before);
 
@@ -1388,7 +1389,7 @@ describe("the account a code belongs to", () => {
   it("keeps a real co-host who brought the call back first", async () => {
     useClock();
     const before = makeState();
-    const created = await join(before, owner);
+    const created = await join(before, creator);
     roomOf(before).restoreAdmission(guest.userId, undefined, { pastLock: true });
     await join(before, guest);
     await send(created.peer, "promoteHost", { userId: "guest-visitor#v" });
@@ -1404,7 +1405,7 @@ describe("the account a code belongs to", () => {
   it("does not undo a promotion of their own when they reconnect", async () => {
     useClock();
     const state = makeState();
-    const created = await join(state, owner);
+    const created = await join(state, creator);
     await emptyOut(state, created.peer);
     const opener = await join(state, guestOpener);
     const back = await join(state, owner);
@@ -1419,7 +1420,7 @@ describe("the account a code belongs to", () => {
   it("leaves the guest they took the host's seat from in the meeting, without knocking again", async () => {
     useClock();
     const state = makeState();
-    const created = await join(state, owner);
+    const created = await join(state, creator);
     await emptyOut(state, created.peer);
     await join(state, guestOpener);
     await join(state, owner);
@@ -1430,7 +1431,7 @@ describe("the account a code belongs to", () => {
   it("takes the seat back from a guest who reopened the meeting, also after the SFU restarts", async () => {
     useClock();
     const before = makeState();
-    const created = await join(before, owner);
+    const created = await join(before, creator);
     await emptyOut(before, created.peer);
     await join(before, guestOpener);
     const after = await restart(before);
@@ -1466,7 +1467,7 @@ describe("the account a code belongs to", () => {
   ])("reopens their emptied meeting from %s, as its host", async (_, sessionId) => {
     useClock();
     const state = makeState();
-    const created = await join(state, owner);
+    const created = await join(state, creator);
     await emptyOut(state, created.peer);
 
     const back = await join(state, inAFreshTab(owner, sessionId));
@@ -1477,7 +1478,7 @@ describe("the account a code belongs to", () => {
   it("reopens it from a fresh tab after the SFU restarts", async () => {
     useClock();
     const before = makeState();
-    const created = await join(before, owner);
+    const created = await join(before, creator);
     await emptyOut(before, created.peer);
     const after = await restart(before);
 
@@ -1500,7 +1501,7 @@ describe("the account a code belongs to", () => {
   const overBy = async (ending: "ended" | "emptied", restarted: boolean) => {
     useClock();
     const state = makeState();
-    const created = await join(state, owner);
+    const created = await join(state, creator);
     if (ending === "ended") await send(created.peer, "admin:endRoom", {});
     await emptyOut(state, created.peer);
     return restarted ? restart(state) : state;
@@ -1536,7 +1537,7 @@ describe("the account a code belongs to", () => {
   it("does not let another account or a guest open the emptied code from a fresh tab", async () => {
     useClock();
     const state = makeState();
-    const created = await join(state, owner);
+    const created = await join(state, creator);
     await emptyOut(state, created.peer);
     const other = { ...owner, userId: "other@example.com", email: "other@example.com" };
 
