@@ -198,8 +198,14 @@ export const fitWheelLabels = (
   const typical = sizes[Math.floor((sizes.length - 1) / 2)];
   const chosen = sizes[0] >= typical * OUTLIER_RATIO ? sizes[0] : typical;
   const fontSize = Math.max(minFontSize, sizeStep(Math.min(geometry.maxFontSize, chosen)));
+  const everyName = (): FittedLabels | null => {
+    if (!(sizes[0] >= minFontSize)) return null;
+    const smallest = Math.max(minFontSize, sizeStep(Math.min(geometry.maxFontSize, sizes[0])));
+    const names = fitAtSize(labels, smallest, geometry, measure);
+    return names.every((label) => label !== null && !label.numbered) ? { fontSize: smallest, labels: names } : null;
+  };
   const numbered = (): FittedLabels =>
-    numberEverySlice(labels.length, geometry, measure, minFontSize) ?? hidden(fontSize);
+    everyName() ?? numberEverySlice(labels.length, geometry, measure, minFontSize) ?? hidden(fontSize);
   const fitted = fitAtSize(labels, fontSize, geometry, measure);
   if (fallbackCount(fitted) > fallbackAllowance(labels.length)) return numbered();
   if (fitted.every((label) => label !== null)) return { fontSize, labels: fitted };
@@ -209,7 +215,7 @@ export const fitWheelLabels = (
       label ? [] : [largestUprightSize(measure(String(index + 1)), geometry)]
     )
   );
-  if (needed < minFontSize) return hidden(fontSize);
+  if (needed < minFontSize) return everyName() ?? hidden(fontSize);
   const smaller = Math.max(minFontSize, sizeStep(needed));
   const refitted = fitAtSize(labels, smaller, geometry, measure);
   return refitted.every((label) => label !== null)
