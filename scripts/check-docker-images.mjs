@@ -10,8 +10,11 @@ import { contextProblems, repoRoot } from "./check-docker-context.mjs";
 import { rootContextBuilds } from "./docker-context/compose.mjs";
 
 const BOOT_TIMEOUT_MS = 120_000;
-const READY_EXEC_TIMEOUT_MS = 60_000;
+const PROBE_MARGIN_MS = 1_000;
 const LOGS_TIMEOUT_MS = 30_000;
+const INTERRUPT_GRACE_MS = 15_000;
+const CLEANUP_BUDGET_MS = 60_000;
+const CLEANUP_COMMAND_TIMEOUT_MS = 20_000;
 const VM_DAEMON_SOCKET = "/var/run/docker.sock";
 const LOCAL_BUILDER = "default";
 const OWNER_LABEL = "conclave-check-images.owner";
@@ -24,7 +27,8 @@ export class Interrupted extends Error {
 }
 
 export class DockerSession {
-  constructor() {
+  constructor({ graceMs = INTERRUPT_GRACE_MS } = {}) {
+    this.graceMs = graceMs;
     this.signal = null;
     this.children = new Set();
   }
@@ -37,6 +41,12 @@ export class DockerSession {
     if (this.signal) return;
     this.signal = signal;
     for (const child of this.children) child.kill(signal);
+    const children = [...this.children];
+    if (children.length) {
+      setTimeout(() => {
+        for (const child of children) if (this.children.has(child)) child.kill("SIGKILL");
+      }, this.graceMs).unref();
+    }
   }
 
   run(args, env, { allowFailure = false, cleanup = false, timeoutMs } = {}) {
@@ -121,18 +131,27 @@ export async function browserSocketSource(docker, { socket, env = process.env, p
   return inVm ? VM_DAEMON_SOCKET : socket;
 }
 
-function healthProbe(port) {
-  return `fetch("http://127.0.0.1:${port}/health").then((r) => { console.log(r.status); }, () => { console.log(0); })`;
+export function healthProbe(port, ms) {
+  return [
+    `const stop = setTimeout(() => { console.log("timeout"); process.exit(3); }, ${ms});`,
+    `fetch("http://127.0.0.1:${port}/health", { signal: AbortSignal.timeout(${ms}) })`,
+    `  .then(async (response) => { await response.text(); console.log(response.status); })`,
+    `  .catch(() => console.log(0))`,
+    `  .finally(() => clearTimeout(stop));`,
+  ].join("\n");
 }
 
-export async function waitForHealth(docker, id, port, { budgetMs = BOOT_TIMEOUT_MS } = {}) {
-  const deadline = Date.now() + budgetMs;
+function insideTimeout(remaining) {
+  return Math.max(100, remaining - PROBE_MARGIN_MS);
+}
+
+export async function waitForHealth(docker, id, port, { deadline = Date.now() + BOOT_TIMEOUT_MS } = {}) {
   const remaining = () => deadline - Date.now();
   let last = "no answer";
   while (remaining() > 0) {
-    const probe = await docker(["exec", id, "node", "-e", healthProbe(port)], { allowFailure: true, timeoutMs: remaining() });
+    const probe = await docker(["exec", id, "node", "-e", healthProbe(port, insideTimeout(remaining()))], { allowFailure: true, timeoutMs: remaining() });
     if (probe.stdout.trim() === "200") return;
-    if (probe.timedOut) last = "the probe did not finish";
+    if (probe.timedOut || probe.stdout.trim() === "timeout") last = "the probe did not finish";
     else last = probe.status === 0 ? `HTTP ${probe.stdout.trim()}` : probe.stderr.trim().split("\n").at(-1) || "exec failed";
     if (remaining() <= 0) break;
     const state = await docker(["inspect", "-f", "{{.State.Running}}", id], { allowFailure: true, timeoutMs: remaining() });
@@ -140,17 +159,23 @@ export async function waitForHealth(docker, id, port, { budgetMs = BOOT_TIMEOUT_
     if (state.stdout.trim() !== "true") throw new Error(`the container exited before /health answered 200 (last: ${last})`);
     await sleep(Math.max(0, Math.min(500, remaining())));
   }
-  throw new Error(`/health did not answer 200 within ${budgetMs / 1000} s (last: ${last})`);
+  throw new Error(`/health did not answer 200 before the boot deadline (last: ${last})`);
 }
 
-const BOOTS = {
+function importCheck(ms) {
+  return `const stop = setTimeout(() => { console.error("the import did not finish"); process.exit(3); }, ${ms}); await import("@conclave/apps-sdk/authority/server"); clearTimeout(stop);`;
+}
+
+export const BOOTS = {
   "packages/sfu/Dockerfile": {
     port: 3031,
     env: () => ({ SFU_PORT: "3031", SFU_SECRET: randomBytes(24).toString("hex"), NODE_ENV: "development" }),
     mounts: () => [],
-    async ready(docker, id) {
-      await waitForHealth(docker, id, 3031);
-      await docker(["exec", "-w", "/app/packages/sfu", id, "node", "--import", "tsx", "-e", 'await import("@conclave/apps-sdk/authority/server");'], { timeoutMs: READY_EXEC_TIMEOUT_MS });
+    async ready(docker, id, { deadline }) {
+      await waitForHealth(docker, id, 3031, { deadline });
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new Error("the boot deadline passed before the @conclave/apps-sdk import check");
+      await docker(["exec", "-w", "/app/packages/sfu", id, "node", "--import", "tsx", "-e", importCheck(insideTimeout(remaining))], { timeoutMs: remaining });
       return "/health answered 200 and @conclave/apps-sdk/authority/server imported";
     },
   },
@@ -159,16 +184,18 @@ const BOOTS = {
     companions: [{ context: "packages/shared-browser/docker", env: "BROWSER_IMAGE_NAME", slug: "session" }],
     env: () => ({ BROWSER_SERVICE_HOST: "127.0.0.1", BROWSER_SERVICE_PORT: "3040", BROWSER_SERVICE_TOKEN: randomBytes(24).toString("hex") }),
     mounts: ({ socket }) => ["-v", `${socket}:/var/run/docker.sock`],
-    async ready(docker, id, { socket }) {
-      await waitForHealth(docker, id, 3040);
+    async ready(docker, id, { socket, deadline }) {
+      await waitForHealth(docker, id, 3040, { deadline });
       return `/health answered 200 with ${socket} mounted and the session image from packages/shared-browser/docker`;
     },
   },
 };
 
 export class RunResources {
-  constructor(docker) {
+  constructor(docker, { budgetMs = CLEANUP_BUDGET_MS, commandTimeoutMs = CLEANUP_COMMAND_TIMEOUT_MS } = {}) {
     this.docker = docker;
+    this.budgetMs = budgetMs;
+    this.commandTimeoutMs = commandTimeoutMs;
     this.owners = new Set();
     this.images = new Set();
   }
@@ -185,21 +212,27 @@ export class RunResources {
   }
 
   async removeAll() {
+    const deadline = Date.now() + this.budgetMs;
+    const cleanup = async (args) => {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return { status: null, timedOut: true, stdout: "", stderr: "" };
+      return this.docker(args, { allowFailure: true, cleanup: true, timeoutMs: Math.min(this.commandTimeoutMs, remaining) });
+    };
     for (const owner of [...this.owners]) {
-      const listed = await this.docker(["ps", "-a", "-q", "--no-trunc", "--filter", `label=${owner}`], { allowFailure: true, cleanup: true });
+      const listed = await cleanup(["ps", "-a", "-q", "--no-trunc", "--filter", `label=${owner}`]);
       if (listed.status !== 0) continue;
       let removed = true;
       for (const id of listed.stdout.split("\n").map((line) => line.trim()).filter(Boolean)) {
-        removed = (await this.docker(["rm", "-f", id], { allowFailure: true, cleanup: true })).status === 0 && removed;
+        removed = (await cleanup(["rm", "-f", id])).status === 0 && removed;
       }
       if (removed) this.owners.delete(owner);
     }
     for (const image of [...this.images]) {
-      if ((await this.docker(["rmi", image], { allowFailure: true, cleanup: true })).status === 0) {
+      if ((await cleanup(["rmi", image])).status === 0) {
         this.images.delete(image);
         continue;
       }
-      const listed = await this.docker(["image", "ls", "-q", "--filter", `reference=${image}`], { allowFailure: true, cleanup: true });
+      const listed = await cleanup(["image", "ls", "-q", "--filter", `reference=${image}`]);
       if (listed.status === 0 && !listed.stdout.trim()) this.images.delete(image);
     }
   }
@@ -251,7 +284,7 @@ async function checkImage(build, { docker, resources, builder, socket, noCache, 
     }
     buildSeconds = seconds();
     id = await startContainer(docker, resources, { name: `conclave-check-images-${slug}-${run}`, tag, env, mounts: boot.mounts({ socket }) });
-    const detail = await boot.ready(docker, id, { socket });
+    const detail = await boot.ready(docker, id, { socket, deadline: Date.now() + BOOT_TIMEOUT_MS });
     return { dockerfile: build.dockerfile, ok: true, detail: `built in ${buildSeconds} s, ${detail}` };
   } catch (error) {
     if (error instanceof Interrupted) throw error;
@@ -294,7 +327,7 @@ async function main(session) {
   } finally {
     await resources.removeAll();
     const left = resources.leftovers();
-    if (left.length) console.error(`cleanup could not remove ${left.join(", ")}; remove them by hand`);
+    if (left.length) console.error(`cleanup could not confirm the removal of ${left.join(", ")}; remove them by hand`);
     cleanedUp = left.length === 0;
     console.log(`logs in ${logDir}`);
   }
