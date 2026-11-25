@@ -117,7 +117,7 @@ export type ScriptedAction = {
   during?: number;
 };
 
-export type Scenario = { profile?: Partial<Profile>; replies?: ScriptedReply[]; actions?: ScriptedAction[] };
+export type Scenario = { profile?: Partial<Profile>; replies?: ScriptedReply[]; beacons?: ScriptedReply[]; actions?: ScriptedAction[] };
 
 export async function simulate(
   seed: number,
@@ -141,6 +141,7 @@ export async function simulate(
     ...scenario.profile,
   };
   const scriptedReplies = [...(scenario.replies ?? [])];
+  const scriptedBeacons = [...(scenario.beacons ?? [])];
   const violations: Violation[] = [];
   let clock = START;
   const note = (line: string) => trace?.(`${((clock - START) / 1000).toFixed(3)} ${line}`);
@@ -426,13 +427,35 @@ export async function simulate(
     });
   };
 
+  const beaconWait = (tab: Tab, key: string, sentAt: number, retryAfter: string) => {
+    retryAfters += 1;
+    const until = clock + Math.min(Number(retryAfter) * 1000, MAX_WAIT_MS);
+    const sentSince = (requests.get(key) ?? []).some((request) => request.sentAt > sentAt);
+    if (sentSince) lateWaits.push({ key, until, at: clock, tab, state: "pending" });
+    else waitUntil.set(key, Math.max(waitUntil.get(key) ?? 0, until));
+  };
   const beaconFor = (tab: Tab) => (body: string): Promise<Reply | null> | null => {
     const uuids = (JSON.parse(body) as { batch: Array<{ uuid: string }> }).batch.map((event) => event.uuid);
     const key = keyOf(uuids);
     checkSend(key, "beacon");
-    if (rng() < profile.beaconRefuseRate) return null;
+    const scripted = scriptedBeacons.shift();
+    if (!scripted && rng() < profile.beaconRefuseRate) return null;
+    const sentAt = clock;
     beaconedAt.set(key, clock);
     beacons += 1;
+    if (scripted) {
+      return new Promise<Reply | null>((resolve) => {
+        schedule(sentAt + scripted.latency, tab, "reply", () => {
+          if (!tab.open || scripted.status === null) return;
+          const status = scripted.status;
+          const retryAfter = scripted.retryAfter ?? null;
+          if (status >= 200 && status < 300) for (const uuid of uuids) delivered.add(uuid);
+          if (retryAfter !== null && (status === 429 || status >= 500)) beaconWait(tab, key, sentAt, retryAfter);
+          note(`tab${tab.id} beacon answered ${status} ra=${retryAfter} for ${key.slice(0, 40)}`);
+          resolve({ status, retryAfter });
+        });
+      });
+    }
     if (beaconRng() < profile.beaconLimitRate) {
       const status = beaconRng() < 0.7 ? 429 : 503;
       const retryAfter = String(1 + Math.floor(beaconRng() * 120));
@@ -440,8 +463,7 @@ export async function simulate(
       return new Promise<Reply | null>((resolve) => {
         schedule(answeredAt, tab, "reply", () => {
           if (!tab.open) return;
-          retryAfters += 1;
-          waitUntil.set(key, Math.max(waitUntil.get(key) ?? 0, clock + Math.min(Number(retryAfter) * 1000, MAX_WAIT_MS)));
+          beaconWait(tab, key, sentAt, retryAfter);
           note(`tab${tab.id} beacon answered ${status} ra=${retryAfter} for ${key.slice(0, 40)}`);
           resolve({ status, retryAfter });
         });

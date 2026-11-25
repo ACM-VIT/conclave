@@ -15,6 +15,53 @@ const quiet = {
 
 export const THREAD_CASES: ThreadCase[] = [
   {
+    name: "a late, shorter Retry-After never brings the new owner's wait forward",
+    thread: "Neon final review of #265 at 71254939, minor 1 (never-earlier guard)",
+    head: "71254939",
+    seed: 2026112504,
+    scenario: {
+      profile: quiet,
+      actions: [
+        { at: 0, act: "open", tab: 1 },
+        { at: 1000, act: "emit", tab: 1, count: 2 },
+        { at: 6500, act: "hide", tab: 1 },
+        { at: 7000, act: "show", tab: 1 },
+        { at: 9000, act: "open", tab: 2 },
+        { at: 10_000, act: "hide", tab: 1, throttled: true },
+      ],
+      replies: [
+        { latency: 100, status: 503 },
+        { latency: 30_000, status: 429, retryAfter: "1" },
+        { latency: 100, status: 200 },
+        { latency: 100, status: 429, retryAfter: "60" },
+        { latency: 100, status: 200 },
+        { latency: 100, status: 200 },
+      ],
+    },
+  },
+  {
+    name: "a keepalive send answered after the batch was claimed again still holds that claim to its Retry-After",
+    thread: "Neon final review of #265 at 71254939, minor 1 (late keepalive answer)",
+    head: "71254939",
+    seed: 2026112504,
+    scenario: {
+      profile: { ...quiet, beaconRefuseRate: 0 },
+      actions: [
+        { at: 0, act: "open", tab: 1 },
+        { at: 1000, act: "emit", tab: 1, count: 2 },
+        { at: 1500, act: "hide", tab: 1 },
+        { at: 3000, act: "open", tab: 2 },
+      ],
+      beacons: [{ latency: 40_000, status: 429, retryAfter: "60" }],
+      replies: [
+        { latency: 100, status: 200 },
+        { latency: 20_000, status: 503 },
+        { latency: 100, status: 200 },
+        { latency: 100, status: 200 },
+      ],
+    },
+  },
+  {
     name: "a late Retry-After still holds the new owner when storage refuses another batch's write right after it",
     thread: "https://github.com/ACM-VIT/conclave/pull/265#discussion_r4688169874",
     head: "57a8f5b0",
