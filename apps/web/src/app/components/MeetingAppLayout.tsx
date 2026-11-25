@@ -8,6 +8,7 @@ import { isSystemUserId } from "../lib/utils";
 import LocalVideoTile from "./LocalVideoTile";
 import ParticipantVideo from "./ParticipantVideo";
 import {
+  STAGE_HOST_CLASS,
   STAGE_RAIL_CLASS,
   STAGE_RAIL_SHORT_LANDSCAPE_HIDDEN_CLASS,
   STAGE_RAIL_TILE_CLASS,
@@ -72,7 +73,7 @@ function MeetingAppLayout({
   );
 
   return (
-    <div className="relative flex min-h-0 min-w-0 flex-1 p-4">
+    <div className={`relative flex min-h-0 min-w-0 flex-1 p-4 ${STAGE_HOST_CLASS}`}>
       <div className={STAGE_SPLIT_CLASS}>
         <div
           className="flex min-h-0 min-w-0 flex-1 flex-col gap-2"

@@ -48,6 +48,7 @@ import LocalVideoTile from "./LocalVideoTile";
 import StageNotice from "./StageNotice";
 import StageSourcePill from "./StageSourcePill";
 import {
+  STAGE_HOST_CLASS,
   STAGE_RAIL_CLASS,
   STAGE_RAIL_TILE_CLASS,
   STAGE_SPLIT_CLASS,
@@ -2663,7 +2664,7 @@ function GridLayout({
         data-meet-room-tiling-warm-hold={RECENTLY_VISIBLE_WARM_HOLD_MS}
         data-meet-room-tiling-warm-reasons={roomTilingWarmReasonsJson}
         data-meet-room-tiling-scores={roomTilingScoresJson}
-        className={`relative flex flex-1 min-h-0 p-4 ${
+        className={`relative flex flex-1 min-h-0 p-4 ${STAGE_HOST_CLASS} ${
           usesMobileScrollGrid
             ? "overflow-y-auto overflow-x-hidden"
             : "overflow-hidden"
@@ -2686,7 +2687,7 @@ function GridLayout({
             }
           >
             <div
-              className="relative min-w-0 flex-1 sm:flex-[1.7]"
+              className="relative min-w-0 flex-1 @xl/stage:flex-[1.7]"
               data-meet-stage-main={PRESENTATION_TILE_ID}
             >
               <PresentationVideoTile
@@ -2701,7 +2702,7 @@ function GridLayout({
               />
             </div>
 
-            <div className="flex h-40 w-full shrink-0 flex-row gap-3 sm:h-auto sm:w-[min(32vw,28rem)] sm:min-w-[17rem] sm:max-w-[28rem] sm:flex-col">
+            <div className="flex h-40 w-full shrink-0 flex-row gap-3 @xl/stage:h-auto @xl/stage:w-[min(32cqw,28rem)] @xl/stage:min-w-[17rem] @xl/stage:max-w-[28rem] @xl/stage:flex-col">
               <div className="relative min-h-0 min-w-0 flex-[1.15]">
                 {sideBySideCompanionKind === "local" ? (
                   <LocalVideoTile
@@ -2746,7 +2747,7 @@ function GridLayout({
               </div>
 
               <div
-                className="flex h-full min-w-0 flex-1 flex-row gap-3 overflow-x-auto pb-1 sm:h-auto sm:max-h-[35%] sm:min-h-[7rem] sm:flex-none sm:flex-col sm:overflow-x-visible sm:overflow-y-auto sm:pb-0 sm:pr-1"
+                className="flex h-full min-w-0 flex-1 flex-row gap-3 overflow-x-auto pb-1 @xl/stage:h-auto @xl/stage:max-h-[35%] @xl/stage:min-h-[7rem] @xl/stage:flex-none @xl/stage:flex-col @xl/stage:overflow-x-visible @xl/stage:overflow-y-auto @xl/stage:pb-0 @xl/stage:pr-1"
                 data-meet-stage-rail
               >
                 {shouldShowSelfAsTile && sideBySideCompanionKind !== "local" ? (
@@ -2796,7 +2797,7 @@ function GridLayout({
                     aria-expanded={isOverflowOpen}
                     aria-label={`Show ${hiddenParticipantsCount} more participants`}
                     title={`Show ${hiddenParticipantsCount} more participants`}
-                    className="acm-video-tile group relative flex h-full w-28 shrink-0 flex-col items-center justify-center bg-[#131316] text-[#fafafa] transition-colors hover:border-[#fafafa]/15 sm:h-28 sm:w-auto"
+                    className="acm-video-tile group relative flex h-full w-28 shrink-0 flex-col items-center justify-center bg-[#131316] text-[#fafafa] transition-colors hover:border-[#fafafa]/15 @xl/stage:h-28 @xl/stage:w-auto"
                   >
                     <div className="absolute inset-2 grid grid-cols-2 grid-rows-2 gap-1 opacity-30 transition-opacity duration-200 group-hover:opacity-50">
                       {overflowPreviewParticipants.map((participant) => (
@@ -2954,7 +2955,7 @@ function GridLayout({
                     aria-expanded={isOverflowOpen}
                     aria-label={`Show ${hiddenParticipantsCount} more participants`}
                     title={`Show ${hiddenParticipantsCount} more participants`}
-                    className="acm-video-tile group relative flex h-full w-28 shrink-0 flex-col items-center justify-center bg-[#131316] text-[#fafafa] transition-colors hover:border-[#fafafa]/15 sm:h-28 sm:w-auto"
+                    className="acm-video-tile group relative flex h-full w-28 shrink-0 flex-col items-center justify-center bg-[#131316] text-[#fafafa] transition-colors hover:border-[#fafafa]/15 @xl/stage:h-28 @xl/stage:w-auto"
                   >
                     <div className="absolute inset-2 grid grid-cols-2 grid-rows-2 gap-1 opacity-30 transition-opacity duration-200 group-hover:opacity-50">
                       {overflowPreviewParticipants.map((participant) => (
