@@ -397,6 +397,6 @@ for (const shell of shells) {
   });
 }
 
-describe(SUITE, { concurrency: Math.min(16, availableParallelism() * 2) }, () => {
+describe(SUITE, { concurrency: Math.min(8, availableParallelism()) }, () => {
   for (const { name, body } of registered) nodeTest(name, body);
 });
