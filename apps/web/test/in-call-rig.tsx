@@ -993,6 +993,13 @@ export const notLive = (world: World, rig: RigApi): string[] => {
   return problems;
 };
 
+export const cameraOffButLive = (world: World, rig: RigApi): string[] =>
+  rig.refs.deviceIntents.get().video.chosen
+    ? []
+    : world.tracks
+        .filter((track) => track.kind === "video" && track.source !== "screen" && track.readyState === "live")
+        .map((track) => `camera is off but ${track.id} is still live`);
+
 export const leftAfterEnd = (world: World): string[] => [
   ...world.tracks.filter((track) => track.readyState === "live").map((track) => `live ${track.kind} track ${track.id}`),
   ...world.producers.filter((producer) => !producer.closed).map((producer) => `open producer ${producer.id}`),

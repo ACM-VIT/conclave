@@ -5,6 +5,7 @@ import { releaseAllCaptures } from "../src/app/lib/media-captures";
 import {
   createInCallRig,
   installMediaWorld,
+  cameraOffButLive,
   leftAfterEnd,
   notLive,
   unwanted,
@@ -539,6 +540,55 @@ describe("presses and publishes that race each other", () => {
     expect(unwanted(world, rig.rig())).toEqual([]);
   });
 
+  const liveCameraIds = () =>
+    world.tracks.filter((track) => track.kind === "video" && track.source === "device" && track.readyState === "live").map((track) => track.id);
+
+  it("a camera switch that supersedes a failing quality swap leaves no camera live after Turn off camera", async () => {
+    const rig = await join({ mic: false });
+    world.cameraRefusesConstraints = true;
+    world.holds.add("replaceTrack");
+    let reopening: Promise<unknown> = Promise.resolve();
+    let switching: Promise<unknown> = Promise.resolve();
+    await act(async () => {
+      reopening = rig.rig().media.updateVideoQualityRef.current?.("low").catch(() => {}) ?? Promise.resolve();
+    });
+    await until("the reopen swap", () => pendingOf("replaceTrack") === 1);
+    world.refusals.set("replaceTrack", 1);
+    await act(async () => {
+      switching = rig.rig().media.handleVideoInputDeviceChange("cam-2");
+    });
+    await releaseAll(rig, reopening, switching);
+    expect(liveCameraTrack(rig).deviceId).toBe("cam-2");
+    expect(notLive(world, rig.rig())).toEqual([]);
+
+    await act(async () => {
+      await rig.rig().media.toggleCamera();
+    });
+
+    expect(liveCameraIds()).toEqual([]);
+    expect(world.producers.filter((producer) => !producer.closed && producer.kind === "video")).toEqual([]);
+  });
+
+  it("turning the camera off while a camera switch swaps stops the newly opened camera at once", async () => {
+    const rig = await join({ mic: false });
+    world.holds.add("replaceTrack");
+    let switching: Promise<unknown> = Promise.resolve();
+    await act(async () => {
+      switching = rig.rig().media.handleVideoInputDeviceChange("cam-2");
+    });
+    await until("the switch swap", () => pendingOf("replaceTrack") === 1);
+
+    await act(async () => {
+      await rig.rig().media.toggleCamera();
+    });
+    expect(liveCameraIds()).toEqual([]);
+
+    await releaseAll(rig, switching);
+    expect(rig.rig().state.isCameraOff).toBe(true);
+    expect(liveCameraIds()).toEqual([]);
+    expect(unwanted(world, rig.rig())).toEqual([]);
+  });
+
   it("a quality reopen whose camera swap fails keeps sending the previous camera and stops the new one", async () => {
     const rig = await join({ mic: false });
     const previous = liveCameraTrack(rig);
@@ -939,6 +989,8 @@ const runSeed = async (seed: number, steps: number) => {
     await act(async () => {
       await run(model);
     });
+    const cameraStillLive = cameraOffButLive(world, current.rig());
+    if (cameraStillLive.length > 0) fail(seed, model, `right after step ${index}`, cameraStillLive);
     const settled = await quiesce(model);
     if (process.env.IN_CALL_MODEL_TRACE) {
       const intents = current.rig().refs.deviceIntents.get();
