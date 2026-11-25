@@ -19,7 +19,7 @@ import { DEFAULT_AUTHORITY_LIMITS } from "../../server/apps/authority/limits.js"
 import { ReceiptBook } from "../../server/apps/authority/receipts.js";
 import { answer } from "./answer.js";
 import { allViewsIn, guestTab, linkPasses, sameGuest, startWithLostAnswer } from "./guest-links.js";
-import { Harness, type Tab } from "./harness.js";
+import { Harness, person, type Tab } from "./harness.js";
 
 beforeEach(() => {
   vi.useFakeTimers({ now: 1_000_000 });
@@ -400,6 +400,34 @@ describe("a resend that the action's own rate limit holds off past the id's dead
 
     expect(dropped).toBe(true);
     expect(outcome.result).toEqual({ ok: false, code: "unknown-outcome" });
+  });
+});
+
+describe("an action whose answers never come back (Sol)", () => {
+  it("ends as unknown-outcome by the id's deadline, however long the socket waits for an answer", async () => {
+    const app = notesApp("notes");
+    const room = new Harness([app.authority]);
+    const tab = await room.open(person("ana@example.com", "Ana"), app.contract, { ackTimeoutMs: 600_000 });
+    const socket = tab.socket as unknown as {
+      emit: (event: string, payload?: unknown, ack?: (reply: unknown) => void) => void;
+    };
+    const send = socket.emit;
+    let sends = 0;
+    socket.emit = (event, payload, ack) => {
+      if (event !== AUTHORITY_EVENTS.act) return send.call(socket, event, payload, ack);
+      sends += 1;
+      return send.call(socket, event, payload, () => undefined);
+    };
+    const outcome: { result?: AuthorityResult<Json> } = {};
+    void (tab.session.act("note", { id: "unanswered" }) as Promise<AuthorityResult<Json>>).then((result) => {
+      outcome.result = result;
+    });
+
+    for (let second = 0; second < 130 && !outcome.result; second += 1) await room.advance(1_000);
+
+    expect(sends).toBeGreaterThan(0);
+    expect(outcome.result).toEqual({ ok: false, code: "unknown-outcome" });
+    expect(tab.rows("mine")).toEqual([{ id: "unanswered" }]);
   });
 });
 
