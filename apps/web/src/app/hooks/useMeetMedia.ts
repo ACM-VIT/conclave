@@ -40,6 +40,7 @@ import {
   holdClone,
   isCaptureReleased,
 } from "../lib/media-captures";
+import { createCameraSession, type CameraSession } from "../lib/camera-session";
 import { installProducer } from "../lib/producer-slot";
 import type { Device as IntentDevice, DeviceIntentStore } from "../lib/device-intent";
 import {
@@ -882,12 +883,19 @@ export function useMeetMedia({
     micTrackOperationRef.current = run.catch(() => {});
     return run;
   }, []);
-  const cameraTrackOperationRef = useRef<Promise<unknown>>(Promise.resolve());
-  const runCameraTrackOperation = useCallback(<T,>(operation: () => Promise<T>): Promise<T> => {
-    const run = cameraTrackOperationRef.current.then(operation);
-    cameraTrackOperationRef.current = run.catch(() => {});
-    return run;
-  }, []);
+  const stopCameraTrackRef = useRef<(track: MediaStreamTrack) => void>(() => {});
+  const reconcileCameraRef = useRef<() => Promise<void>>(async () => {});
+  const cameraSessionRef = useRef<CameraSession | null>(null);
+  if (!cameraSessionRef.current) {
+    cameraSessionRef.current = createCameraSession({
+      isChosen: () => deviceIntents.get().video.chosen,
+      committed: () => getFirstLiveTrack(localStreamRef.current?.getVideoTracks() ?? []),
+      stop: (track) => stopCameraTrackRef.current(track),
+      reconcile: () => reconcileCameraRef.current(),
+    });
+  }
+  const cameraSession = cameraSessionRef.current;
+  const runCameraTrackOperation = cameraSession.run;
   const toggleCameraInFlightRef = useRef(false);
   const screenShareStartInFlightRef = useRef(false);
   const markAudioTrackForSpeech = useCallback(
@@ -1582,31 +1590,23 @@ export function useMeetMedia({
     [commitLocalStream, localStreamRef, stopLocalTrack],
   );
 
-  const callCameraTracksRef = useRef<Set<MediaStreamTrack>>(new Set());
+  stopCameraTrackRef.current = stopLocalTrack;
   const getUserMediaWithTimeout = useCallback(
     async (...args: Parameters<typeof captureMediaWithTimeout>) => {
       const stream = await captureMediaWithTimeout(...args);
-      const cameras = callCameraTracksRef.current;
-      cameras.forEach((track) => {
-        if (track.readyState === "ended") cameras.delete(track);
-      });
-      stream.getVideoTracks().forEach((track) => cameras.add(track));
+      cameraSession.admit(stream.getVideoTracks());
       return stream;
     },
-    [],
+    [cameraSession],
   );
   useEffect(() => {
     let cameraChosenNow = deviceIntents.get().video.chosen;
     return deviceIntents.subscribe(() => {
       const chosen = deviceIntents.get().video.chosen;
-      if (cameraChosenNow && !chosen) {
-        const tracks = [...callCameraTracksRef.current];
-        callCameraTracksRef.current.clear();
-        tracks.forEach((track) => stopLocalTrack(track));
-      }
+      if (cameraChosenNow && !chosen) cameraSession.drain();
       cameraChosenNow = chosen;
     });
-  }, [deviceIntents, stopLocalTrack]);
+  }, [cameraSession, deviceIntents]);
   const stopTracksExcept = useCallback(
     (
       tracks: readonly MediaStreamTrack[],
@@ -1664,6 +1664,44 @@ export function useMeetMedia({
       videoProducerRef,
     ],
   );
+
+  reconcileCameraRef.current = async () => {
+    const producer = videoProducerRef.current;
+    if (!deviceIntents.get().video.chosen) {
+      cameraSession.drain();
+      if (producer && !producer.closed) closeLocalVideoProducerForReplacement(producer);
+      return;
+    }
+    const stream = localStreamRef.current;
+    const raw = getFirstLiveTrack(stream?.getVideoTracks() ?? []);
+    if (raw) cameraSession.own(raw);
+    if (raw && producer && !producer.closed) {
+      const candidate = getVideoPublishTrackRef?.current?.(stream) ?? null;
+      const preferred = candidate?.readyState === "live" ? candidate : raw;
+      const sent = producer.track;
+      const agrees =
+        sent?.readyState === "live" &&
+        (sent === raw || sent === preferred || cameraSession.originOf(sent) === raw);
+      if (!agrees) {
+        try {
+          await replaceCameraProducerTrack(producer, preferred);
+        } catch {
+          try {
+            if (preferred === raw) throw new Error("The camera could not be sent");
+            await replaceCameraProducerTrack(producer, raw);
+          } catch {
+            closeLocalVideoProducerForReplacement(producer);
+            requestCameraProducerRecovery();
+          }
+        }
+      }
+    }
+    const keep = new Set<MediaStreamTrack>();
+    if (raw) keep.add(raw);
+    const current = videoProducerRef.current;
+    if (current && !current.closed && current.track) keep.add(current.track);
+    cameraSession.keepOnly(keep);
+  };
 
   useEffect(
     () => () => {
@@ -3050,14 +3088,6 @@ export function useMeetMedia({
           }
         }
         throw err;
-      } finally {
-        const inUse = new Set<MediaStreamTrack>(localStreamRef.current?.getTracks() ?? []);
-        const producerTrack = videoProducerRef.current?.track;
-        if (producerTrack) inUse.add(producerTrack);
-        for (const track of [replacementTrack, ...oldVideoTracksToStop]) {
-          if (!track) continue;
-          if (!inUse.has(track)) stopLocalTrack(track);
-        }
       }
     },
     [
@@ -4756,7 +4786,7 @@ export function useMeetMedia({
           if (policy.codec === "vp9" && sample.frames === 0) {
             try {
               diagnosticTrack = holdClone(rawCameraTrack, claim.generation);
-              callCameraTracksRef.current.add(diagnosticTrack);
+              cameraSession.own(diagnosticTrack, rawCameraTrack);
               applyCameraContentHint(diagnosticTrack);
             } catch (error) {
               if (isCaptureReleased(error)) return;
@@ -6477,6 +6507,7 @@ export function useMeetMedia({
     handleAudioOutputDeviceChange,
     updateVideoQuality,
     updateVideoQualityRef,
+    runCameraTrackOperation,
     replaceWebcamProducerTopology,
     requestAudioProducerRecovery,
     requestCameraProducerRecovery,

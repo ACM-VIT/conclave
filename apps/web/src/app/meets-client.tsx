@@ -1222,6 +1222,7 @@ export default function MeetsClient({
     handleVideoInputDeviceChange,
     handleAudioOutputDeviceChange,
     updateVideoQualityRef,
+    runCameraTrackOperation,
     replaceWebcamProducerTopology,
     requestAudioProducerRecovery,
     requestCameraProducerRecovery,
@@ -2057,11 +2058,9 @@ export default function MeetsClient({
     }
 
     const sequence = publishTrackSwitchRef.current.sequence + 1;
-    const previousSwitch = publishTrackSwitchRef.current.promise;
     publishTrackSwitchRef.current.sequence = sequence;
 
     const runSwitch = async () => {
-      await previousSwitch.catch(() => {});
       if (publishTrackSwitchRef.current.sequence !== sequence) return;
 
       const producer = refs.videoProducerRef.current;
@@ -2187,7 +2186,7 @@ export default function MeetsClient({
       }
     };
 
-    const switchPromise = runSwitch();
+    const switchPromise = runCameraTrackOperation(runSwitch);
     publishTrackSwitchRef.current.promise = switchPromise;
   }, [
     buildMeetVideoDebugSnapshot,
@@ -2201,6 +2200,7 @@ export default function MeetsClient({
     refs.localStreamRef,
     refs.videoProducerRef,
     refs.processedVideoTrackRef,
+    runCameraTrackOperation,
   ]);
 
   const { toggleHandRaised, setHandRaisedState } = useMeetHandRaise({
@@ -2471,6 +2471,7 @@ export default function MeetsClient({
     requestMediaPermissions,
     requestAudioProducerRecovery,
     requestCameraProducerRecovery,
+    runCameraTrackOperation,
     prepareAudioPublishTrack,
     stopLocalTrack,
     handleLocalTrackEnded,

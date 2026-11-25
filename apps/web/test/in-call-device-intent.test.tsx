@@ -267,7 +267,7 @@ describe("a chosen device ends up sending", () => {
     const recovered: Array<[boolean, boolean | undefined]> = [];
     await act(async () => {
       world.releaseAll();
-      for (let turn = 0; turn < 6; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+      for (let turn = 0; turn < 6 || world.roundTripsInFlight > 0; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0));
       world.producers
         .slice(publishedBefore)
         .forEach((producer) => recovered.push([producer.closed, world.sfu.get(producer.id)?.closed]));
@@ -288,7 +288,7 @@ describe("a chosen device ends up sending", () => {
     world.releaseAll();
     await until("the recovery publish answer", () => world.producers.length > publishedBefore && world.roundTripsInFlight === 0);
     await act(async () => {
-      for (let turn = 0; turn < 6; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+      for (let turn = 0; turn < 6 || world.roundTripsInFlight > 0; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
     expect(world.producers.filter((producer) => !producer.closed).map((producer) => producer.id)).toEqual([]);
@@ -306,7 +306,7 @@ describe("a chosen device ends up sending", () => {
     world.releaseAll();
     await until("the recovery publish answer", () => world.producers.length > publishedBefore && world.roundTripsInFlight === 0);
     await act(async () => {
-      for (let turn = 0; turn < 6; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+      for (let turn = 0; turn < 6 || world.roundTripsInFlight > 0; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
     expect(world.producers.filter((producer) => !producer.closed && producer.kind === "video").map((producer) => producer.id)).toEqual([]);
@@ -323,7 +323,7 @@ describe("a chosen device ends up sending", () => {
     const recovered: Array<[boolean, boolean | undefined]> = [];
     await act(async () => {
       world.releaseAll();
-      for (let turn = 0; turn < 6; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+      for (let turn = 0; turn < 6 || world.roundTripsInFlight > 0; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0));
       world.producers
         .slice(publishedBefore)
         .forEach((producer) => recovered.push([producer.closed, world.sfu.get(producer.id)?.closed]));
@@ -882,6 +882,104 @@ describe("an in-call capture that completes after the choice changed", () => {
   });
 });
 
+describe("camera ownership races", () => {
+  it("a refused quality reopen overtaken by a refused camera switch leaves the preview and the sender on one camera", async () => {
+    const rig = await join({ mic: false });
+    const original = liveCameraTrack(rig);
+    world.cameraRefusesConstraints = true;
+    world.holds.add("replaceTrack");
+    let reopening: Promise<unknown> = Promise.resolve();
+    let switching: Promise<unknown> = Promise.resolve();
+    await act(async () => {
+      reopening = rig.rig().media.updateVideoQualityRef.current?.("low").catch(() => {}) ?? Promise.resolve();
+    });
+    await until("quality reopen replacing", () => pendingOf("replaceTrack") === 1);
+    expect(liveCameraTrack(rig)).not.toBe(original);
+    world.refusals.set("replaceTrack", 1);
+    world.refusals.set("getUserMedia", 1);
+    await act(async () => {
+      switching = rig.rig().media.handleVideoInputDeviceChange("cam-2");
+    });
+    await releaseAll(rig, reopening, switching);
+    expect(rig.rig().state.isCameraOff).toBe(false);
+    expect(unwanted(world, rig.rig())).toEqual([]);
+  });
+
+  it("a camera switch overtaken by a switch to an unavailable camera keeps sending", async () => {
+    const rig = await join({ mic: false });
+    world.holds.add("replaceTrack");
+    let first: Promise<unknown> = Promise.resolve();
+    let second: Promise<unknown> = Promise.resolve();
+    await act(async () => { first = rig.rig().media.handleVideoInputDeviceChange("cam-2"); });
+    await until("first switch replacing", () => pendingOf("replaceTrack") === 1);
+    world.refusals.set("getUserMedia", 1);
+    await act(async () => { second = rig.rig().media.handleVideoInputDeviceChange("default"); });
+    await releaseAll(rig, first, second);
+    expect(rig.rig().state.isCameraOff).toBe(false);
+    expect(notLive(world, rig.rig())).toEqual([]);
+  });
+
+  it("a camera switch after a refused quality reopen leaves no earlier camera running", async () => {
+    const rig = await join({ mic: false });
+    world.cameraRefusesConstraints = true;
+    world.holds.add("replaceTrack");
+    let reopening: Promise<unknown> = Promise.resolve();
+    let switching: Promise<unknown> = Promise.resolve();
+    await act(async () => {
+      reopening = rig.rig().media.updateVideoQualityRef.current?.("low").catch(() => {}) ?? Promise.resolve();
+    });
+    await until("quality reopen replacing", () => pendingOf("replaceTrack") === 1);
+    world.refusals.set("replaceTrack", 1);
+    await act(async () => {
+      switching = rig.rig().media.handleVideoInputDeviceChange("cam-2");
+    });
+    await releaseAll(rig, reopening, switching);
+    expect(liveCameraTrack(rig).deviceId).toBe("cam-2");
+    expect(notLive(world, rig.rig())).toEqual([]);
+    for (let tick = 0; tick < 3; tick++) await rig.tick(WATCHDOG_MS);
+    expect(unwanted(world, rig.rig())).toEqual([]);
+  });
+
+  it("turning the camera off and on during a held topology publish sends the camera once that publish settles", async () => {
+    const rig = await join({ mic: false });
+    const producer = world.producers.find((candidate) => !candidate.closed && candidate.kind === "video")!;
+    world.holds.add("produce");
+    let replacing: Promise<unknown> = Promise.resolve();
+    let reenable: Promise<unknown> = Promise.resolve();
+    await act(async () => {
+      replacing = rig.rig().media.replaceWebcamProducerTopology({
+        target: "single-receiver", expectedProducerId: producer.id, quality: "standard", networkProfile: "good",
+        transition: { fromProducerId: producer.id, nonce: "sol" },
+      });
+    });
+    await until("topology publish", () => pendingOf("produce") === 1);
+    await act(async () => { await rig.rig().media.toggleCamera(); });
+    expect(cameraOffButLive(world, rig.rig())).toEqual([]);
+    await act(async () => { reenable = rig.rig().media.toggleCamera(); });
+    expect(opened("video")).toBe(1);
+    await releaseAll(rig, replacing, reenable);
+    expect(notLive(world, rig.rig())).toEqual([]);
+    expect(unwanted(world, rig.rig())).toEqual([]);
+  });
+
+  it("a camera grant that arrives after Turn off camera during the join is stopped before audio setup finishes", async () => {
+    current = await createInCallRig(world, { noiseCancellation: true });
+    await setIntents(current, false, true);
+    world.holds.add("capture");
+    world.holds.add("noiseSetup");
+    let joining: Promise<unknown> = Promise.resolve();
+    await act(async () => { joining = current!.rig().socket.joinRoom(); });
+    await until("the combined device grant", () => pendingOf("capture") === 1);
+    await act(async () => { await current!.rig().media.toggleCamera(); });
+    await act(async () => world.releaseOne(0));
+    await until("the pending noise cancellation setup", () => pendingOf("noiseSetup") > 0);
+    const whileAudioSetupWaits = cameraOffButLive(world, current!.rig());
+    await releaseAll(current, joining);
+    expect(cameraOffButLive(world, current!.rig())).toEqual([]);
+    expect(whileAudioSetupWaits).toEqual([]);
+  });
+});
+
 const mulberry32 = (seed: number) => () => {
   seed = (seed + 0x6d2b79f5) | 0;
   let value = Math.imul(seed ^ (seed >>> 15), 1 | seed);
@@ -996,7 +1094,8 @@ const fail = (seed: number, model: Model, when: string, problems: string[]) => {
   throw new Error(`seed ${seed}: ${when}\n${problems.join("\n")}\nsteps:\n${model.log.join("\n")}`);
 };
 
-const runSeed = async (seed: number, steps: number) => {
+const runSeed = async (seed: number, steps: number, produceRoundTripMs = world.produceRoundTripMs) => {
+  world.produceRoundTripMs = produceRoundTripMs;
   const random = mulberry32(seed);
   const noiseCancellation = random() < 0.5;
   current = await createInCallRig(world, { noiseCancellation });
@@ -1086,4 +1185,20 @@ describe("seeded in-call model: nothing live the current choice does not call fo
     },
     600_000,
   );
+});
+
+describe("fixed in-call model runs from reviews", () => {
+  it("seed 13240, a camera grant arriving after Turn off camera during the join", async () => {
+    world = new World();
+    installMediaWorld(world);
+    await runSeed(13240, MODEL_STEPS);
+  }, 120_000);
+
+  it("a 13 ms produce round trip with 32 steps, seeds 1 to 30", async () => {
+    for (let seed = 1; seed <= 30; seed += 1) {
+      world = new World();
+      installMediaWorld(world);
+      await runSeed(seed, 32, 13);
+    }
+  }, 600_000);
 });
