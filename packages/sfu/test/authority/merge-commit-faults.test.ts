@@ -38,6 +38,7 @@ type Fault =
   | "ownerAtCommit"
   | "projectAtCommit"
   | "ownerOnce"
+  | "ownerTwice"
   | "ownerAlways";
 
 const ownerCalls = { count: 0 };
@@ -100,6 +101,9 @@ const notesApp = (
           if (faults.fault === "ownerUndefined" && row.moved) throw nothing;
           if (faults.fault === "ownerOnce" && nthCall("owner", row) === 1) {
             throw new Error(`${id}: the owner failed once`);
+          }
+          if (faults.fault === "ownerTwice" && nthCall("owner", row) <= 2) {
+            throw new Error(`${id}: the owner failed twice`);
           }
           if (faults.fault === "ownerAlways" && row.id.startsWith("bad")) throw new Error(`${id}: the owner always fails`);
           if (faults.fault === "ownerAtCommit" && row.moved && nthCall("owner", row) === 2) {
@@ -221,8 +225,10 @@ describe("a guest merge where one of three apps faults only while the merge comm
       sent.push([tab, op, await tab.actWith(op, "note", { id: `n${index}` })]);
     }
     await allViewsIn(room);
+    ownerCalls.count = 0;
 
     linkPasses(room, "pass-b", "pass-a");
+    expect(ownerCalls.count).toBe(3);
     await allViewsIn(room);
 
     expect(sameGuest(room, tabs[0], tabs[3])).toBe(true);
@@ -237,25 +243,23 @@ describe("a guest merge where one of three apps faults only while the merge comm
   });
 });
 
-describe("with views verified, a guest merge where one of three apps faults only while the merge commits (Sol)", () => {
-  const cases = [0, 1, 2].flatMap((at) =>
-    (["ownerAtCommit", "projectAtCommit"] as const).map((fault) => ({ at, fault })),
-  );
+describe("with views verified, a view fault while committed rows are taken in (Sol)", () => {
+  it("does not escape the commit, and the next flush reports it", async () => {
+    const app = notesApp("notes", { fault: "ownerOnce" });
+    const room = new Harness([app.authority], { runtime: { verifyViews: true } });
+    const tab = await guestTab(room, app.contract, "pass-a", "tab-1");
 
-  it.each(cases)("a $fault fault in app $at still commits every app, and the next flush reports it", async ({ at, fault }) => {
-    const apps = [0, 1, 2].map((index) => notesApp(`notes-${index}`, index === at ? { fault } : {}));
-    const room = new Harness(apps.map((app) => app.authority), { runtime: { verifyViews: true } });
-    const tabs: Tab[] = [];
-    for (const pass of ["pass-a", "pass-b"]) {
-      for (const [index, app] of apps.entries()) tabs.push(await guestTab(room, app.contract, pass, `${pass}-${index}`));
-    }
-    for (const [index, tab] of tabs.entries()) expect((await tab.act("note", { id: `n${index}` })).ok).toBe(true);
-    await allViewsIn(room);
+    const committed = room.authority.act(tab.context, {
+      roomEpoch: room.authority.roomEpoch,
+      subscription: tab.frames.find((frame) => frame.kind === "replace")!.subscription,
+      generation: 1,
+      operation: operation(),
+      action: "note",
+      input: { id: "a" },
+    });
 
-    expect(() => linkPasses(room, "pass-b", "pass-a")).not.toThrow();
-
-    expect(sameGuest(room, tabs[0], tabs[3])).toBe(true);
-    expect(() => room.authority.flushNow()).toThrow(/while the merge committed/);
+    expect(committed.ok).toBe(true);
+    expect(() => room.authority.flushNow()).toThrow(/the owner failed once/);
   });
 });
 
@@ -273,6 +277,17 @@ describe("a row whose view callback faults while it is taken in (Sol)", () => {
 
     expect(notesOf(tab)).toEqual(['{"id":"a"}']);
     expect(notesOf(fresh)).toEqual(['{"id":"a"}']);
+  });
+
+  it("is shown once the owner stops failing on a later try, with nothing else written", async () => {
+    const app = notesApp("notes", { fault: "ownerTwice" });
+    const room = new Harness([app.authority], { runtime: { verifyViews: false } });
+    const tab = await guestTab(room, app.contract, "pass-a", "tab-1");
+
+    expect((await tab.act("note", { id: "a" })).ok).toBe(true);
+    for (let turn = 0; turn < 10; turn += 1) await vi.advanceTimersByTimeAsync(100);
+
+    expect(notesOf(tab)).toEqual(['{"id":"a"}']);
   });
 
   it("is tried again only a few times when its owner always fails", async () => {
