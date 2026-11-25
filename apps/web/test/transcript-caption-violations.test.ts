@@ -496,6 +496,23 @@ describe("each Sarvam lane owns its own turns and answers", () => {
     expect(shown(rig).filter(([, speaker]) => speaker === "ada")).toEqual([[GAP, "ada"]]);
   });
 
+  it("a partly answered turn keeps the words viewers saw across a reconnect, even when a replacement answers only part of it (oracle seed 3035)", async () => {
+    const rig = await startRig(SARVAM);
+    const [first] = rig.providerSockets();
+    await sendNamed(rig, named(150), lin);
+    first.emit(sarvamFinal("one", "One."));
+    await vi.advanceTimersByTimeAsync(700);
+    await sendNamed(rig, named(190), lin);
+    first.emit(sarvamFinal("two", "Two."));
+    await settle();
+    first.disconnect();
+    await settle();
+    const replacement = rig.providerSockets().at(-1)!;
+    replacement.emit(sarvamFinal("again", "One."));
+    await vi.advanceTimersByTimeAsync(DEADLINE + 1_000);
+
+    expect(shown(rig)).toEqual([[`One. Two. ${GAP}`, "lin"]]);
+  });
   it("a long outage with repeated commits and clears holds one boundary per speaker, not one per message (Greptile r4688831730)", async () => {
     const rig = await startRig(SARVAM);
     await rig.speak(ada);
