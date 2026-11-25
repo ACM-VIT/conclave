@@ -1,7 +1,4 @@
-import {
-  canonicalizeSfuClientId,
-  resolveBrowserSfuClientId,
-} from "@/lib/sfu-client-id";
+import { canonicalizeSfuClientId } from "@/lib/sfu-client-id";
 
 type MeetingLinkInput = {
   roomCode: string;
@@ -11,10 +8,7 @@ type MeetingLinkInput = {
 export const buildMeetingPath = (meeting: MeetingLinkInput): string => {
   const path = `/${encodeURIComponent(meeting.roomCode)}`;
   const clientId = canonicalizeSfuClientId(meeting.clientId);
-  if (!clientId || clientId === resolveBrowserSfuClientId()) {
-    return path;
-  }
-  return `${path}?clientId=${encodeURIComponent(clientId)}`;
+  return clientId ? `${path}?clientId=${encodeURIComponent(clientId)}` : path;
 };
 
 export const buildMeetingUrl = (

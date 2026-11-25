@@ -1390,16 +1390,12 @@ function JoinScreen({
   };
 
   const inviteLink =
-    typeof window === "undefined"
-      ? ""
-      : isRoutedRoom
-        ? window.location.href
-        : joinCode
-          ? buildMeetingUrl(window.location.origin, {
-              roomCode: joinCode,
-              clientId: codeField.tenant.clientId,
-            })
-          : "";
+    typeof window !== "undefined" && joinCode
+      ? buildMeetingUrl(window.location.origin, {
+          roomCode: joinCode,
+          clientId: codeField.tenant.clientId,
+        })
+      : "";
   const linkCopy = useClipboardCopy(inviteLink);
   const previewHint =
     permissionRequestError ?? (showPermissionHint ? "Permission needed" : null);
