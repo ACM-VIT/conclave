@@ -1215,6 +1215,7 @@ function JoinScreen({
   const joinCode = codeResolution.code;
   const canJoin = joinCode.length > 0;
   const nameReady = hasIdentity || liveDisplayName.length > 0;
+  const canSubmit = canJoin && nameReady && !isLoading;
 
   const presenceTarget = joinCode;
   useEffect(() => {
@@ -1641,7 +1642,7 @@ function JoinScreen({
                       pasteIntoCode(e, e.currentTarget, e.clipboardData.getData("text"));
                     }}
                     onKeyDown={(e) => {
-                      if (e.key !== "Enter" || !canJoin) return;
+                      if (e.key !== "Enter" || e.nativeEvent.isComposing || !canSubmit) return;
                       const input = e.currentTarget;
                       if (input.value !== joinCode) {
                         applyFieldEdit(input, { start: 0, end: input.value.length, text: joinCode });
@@ -1696,7 +1697,7 @@ function JoinScreen({
                 </div>
                 <button
                   onClick={joinMeeting}
-                  disabled={isLoading || !canJoin || !nameReady}
+                  disabled={!canSubmit}
                   className={CTA_GHOST}
                 >
                   Join
