@@ -4,6 +4,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createServer } from "node:http";
+import { createConnection } from "node:net";
 import test, { after } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 
@@ -69,7 +70,7 @@ else if (args[0] === "buildx" && args[1] === "build" && process.env.FAKE_DOCKER_
     if (process.env.FAKE_DOCKER_BUILD_EXIT_AFTER_MS) setTimeout(() => process.exit(0), Number(process.env.FAKE_DOCKER_BUILD_EXIT_AFTER_MS));
   };
   if (process.env.FAKE_DOCKER_GRANDCHILD) {
-    const plugin = require("node:child_process").spawn(process.execPath, ["-e", "for (const s of ['SIGINT', 'SIGTERM']) process.on(s, () => {}); require('node:fs').appendFileSync(process.env.FAKE_DOCKER_LOG, JSON.stringify({ pluginPid: process.pid }) + String.fromCharCode(10)); setTimeout(() => process.exit(0), 60000);"], { stdio: ["ignore", "inherit", "inherit"] });
+    const plugin = require("node:child_process").spawn(process.execPath, ["-e", "for (const s of ['SIGINT', 'SIGTERM']) process.on(s, () => {}); const socket = require('node:path').join(require('node:path').dirname(process.env.FAKE_DOCKER_LOG), 'p' + process.pid + '.sock'); require('node:net').createServer(() => process.exit(0)).listen(socket, () => require('node:fs').appendFileSync(process.env.FAKE_DOCKER_LOG, JSON.stringify({ pluginPid: process.pid, pluginSocket: socket }) + String.fromCharCode(10))); setTimeout(() => process.exit(0), 60000);"], { stdio: ["ignore", "inherit", "inherit"] });
     const waiting = setInterval(() => {
       if (fs.readFileSync(process.env.FAKE_DOCKER_LOG, "utf8").includes('"pluginPid":' + plugin.pid)) {
         clearInterval(waiting);
@@ -90,40 +91,58 @@ else if (args[0] === "inspect") process.stdout.write("true\\n");
 else if (args[0] === "info") process.stdout.write((process.env.FAKE_DOCKER_INFO ?? JSON.stringify({ OperatingSystem: "OrbStack", Name: "orbstack" })) + "\\n");
 `;
 
-const FIXTURE_PID_KEYS = ["buildPid", "execPid", "pluginPid"];
-const fixtures = new Set();
+const pluginSockets = [];
+const fixtureDirs = [];
 
-function alive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error.code === "EPERM";
-  }
+function recordedPluginSockets(log) {
+  if (!existsSync(log)) return [];
+  return readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)).filter((entry) => entry.pluginSocket).map((entry) => entry.pluginSocket);
 }
 
-function recordedFixturePids(log) {
-  if (!existsSync(log)) return [];
-  return readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)).flatMap((entry) => FIXTURE_PID_KEYS.filter((key) => entry[key]).map((key) => entry[key]));
+function stopPlugin(socket) {
+  return new Promise((resolve) => {
+    const connection = createConnection(socket);
+    const timer = setTimeout(() => {
+      connection.destroy();
+      resolve(false);
+    }, 2000);
+    connection.on("connect", () => connection.on("close", () => {
+      clearTimeout(timer);
+      resolve(true);
+    }));
+    connection.on("error", () => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
+}
+
+function pluginGone(socket) {
+  return new Promise((resolve) => {
+    const connection = createConnection(socket);
+    connection.on("connect", () => {
+      connection.destroy();
+      resolve(false);
+    });
+    connection.on("error", () => resolve(true));
+  });
 }
 
 after(async () => {
-  const deadline = Date.now() + 3000;
-  while ([...fixtures].some(alive) && Date.now() < deadline) await sleep(100);
-  assert.deepEqual([...fixtures].filter(alive), []);
+  const alive = [];
+  for (const socket of pluginSockets) if (!(await pluginGone(socket))) alive.push(socket);
+  for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true });
+  assert.deepEqual(alive, []);
 });
 
 function fakeDocker(t, { contexts = {}, current = "default", ...extra } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "fake-docker-"));
-  t.after(() => {
-    for (const pid of recordedFixturePids(path.join(dir, "calls.jsonl"))) {
-      fixtures.add(pid);
-      if (!alive(pid)) continue;
-      try {
-        process.kill(pid, "SIGKILL");
-      } catch {}
+  fixtureDirs.push(dir);
+  t.after(async () => {
+    for (const socket of recordedPluginSockets(path.join(dir, "calls.jsonl"))) {
+      pluginSockets.push(socket);
+      await stopPlugin(socket);
     }
-    rmSync(dir, { recursive: true, force: true });
   });
   mkdirSync(path.join(dir, "bin"));
   writeFileSync(path.join(dir, "bin", "docker"), FAKE_DOCKER);
