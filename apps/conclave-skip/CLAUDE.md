@@ -201,12 +201,15 @@ registers a JVM-wide URL stream handler factory, which Java allows once. The
 `SandboxAssetUrlHandler` plugin (`Tests/ConclaveTests/Skip/resources/META-INF/services`)
 registers it in every sandbox before every test and accepts "factory already
 defined", so whichever sandbox comes first owns it and no class needs a
-per-class reset. `Sources/Conclave/Skip/skip.yml` adds `Tests/ConclaveTests/Skip/resources`
-to the `:Conclave` test resources (found by walking up from the generated module,
-so it works in the app build and in Skip's own test project). Without it a class
-on another SDK breaks every diagnostics store write in a later sandbox.
-`SandboxAssetUrlHandlerTests` runs on sdk 28 and 33 and fails if the plugin
-is not loaded.
+per-class reset. `Sources/Conclave/Skip/skip.yml` adds the `resources` folder of
+each `:Conclave` test Kotlin source dir to the test resources, so the descriptor
+follows the bridge tests wherever they are compiled from (the repo's `Skip`
+folder in the app build, `src/test/kotlin` in Skip's own test project) and never
+depends on where the Gradle project was generated. Without it a class on another
+SDK breaks every diagnostics store write in a later sandbox. The plugin checks
+once per sandbox that `asset:` URLs open Skip's connection, and
+`SandboxAssetUrlHandlerTests` (sdk 28 and 33) fails in every sandbox when the
+plugin did not run and compares an `asset:` read with the AssetManager's bytes.
 
 ## Performance Learnings
 
