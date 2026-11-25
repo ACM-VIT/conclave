@@ -8,7 +8,7 @@ import test from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { repoRoot } from "./check-docker-context.mjs";
-import { BOOTS, DockerSession, Interrupted, RunResources, healthProbe, waitForHealth, assertLocalBuilder, browserSocketSource, localSocket, pinnedDocker, pinnedEnv, resolveDockerEndpoint, startContainer } from "./check-docker-images.mjs";
+import { BOOTS, DockerSession, Interrupted, RunResources, healthProbe, probeVerdict, waitForHealth, assertLocalBuilder, browserSocketSource, localSocket, pinnedDocker, pinnedEnv, resolveDockerEndpoint, startContainer } from "./check-docker-images.mjs";
 
 const FAKE_DOCKER = `#!/usr/bin/env node
 const fs = require("node:fs");
@@ -64,7 +64,12 @@ else if (args[0] === "start" && process.env.FAKE_DOCKER_START_FAIL) { process.st
 else if (args[0] === "buildx" && args[1] === "build" && process.env.FAKE_DOCKER_BUILD_HANG && !fs.existsSync(process.env.FAKE_DOCKER_BUILD_HANG)) {
   fs.writeFileSync(process.env.FAKE_DOCKER_BUILD_HANG, "");
   fs.appendFileSync(process.env.FAKE_DOCKER_LOG, JSON.stringify({ buildPid: process.pid }) + "\\n");
+  if (process.env.FAKE_DOCKER_GRANDCHILD) {
+    const plugin = require("node:child_process").spawn(process.execPath, ["-e", "for (const s of ['SIGINT', 'SIGTERM']) process.on(s, () => {}); setInterval(() => {}, 1000);"], { stdio: ["ignore", "inherit", "inherit"] });
+    fs.appendFileSync(process.env.FAKE_DOCKER_LOG, JSON.stringify({ pluginPid: plugin.pid }) + "\\n");
+  }
   for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { fs.appendFileSync(process.env.FAKE_DOCKER_LOG, JSON.stringify({ received: signal }) + "\\n"); if (!process.env.FAKE_DOCKER_IGNORE_SIGNALS) process.exit(1); });
+  if (process.env.FAKE_DOCKER_BUILD_EXIT_AFTER_MS) setTimeout(() => process.exit(0), Number(process.env.FAKE_DOCKER_BUILD_EXIT_AFTER_MS));
   setInterval(() => {}, 1000);
 } else if (args[0] === "buildx" && args[1] === "build" && process.env.FAKE_DOCKER_BUILD_FAIL && args[args.indexOf("-t") + 1].includes(process.env.FAKE_DOCKER_BUILD_FAIL)) { process.stderr.write("build failed\\n"); process.exit(1); }
 else if (args[0] === "buildx" && args[1] === "build") fs.appendFileSync(process.env.FAKE_DOCKER_STATE, JSON.stringify({ image: args[args.indexOf("-t") + 1] }) + "\\n");
@@ -72,6 +77,7 @@ else if ((args[0] === "exec" && process.env.FAKE_DOCKER_EXEC_HANG) || (args[0] =
   fs.appendFileSync(process.env.FAKE_DOCKER_LOG, JSON.stringify({ execPid: process.pid }) + "\\n");
   setInterval(() => {}, 1000);
 }
+else if (args[0] === "exec" && process.env.FAKE_DOCKER_PROBE_OUTPUT) process.stdout.write(process.env.FAKE_DOCKER_PROBE_OUTPUT);
 else if (args[0] === "exec" && process.env.FAKE_DOCKER_HEALTHY) process.stdout.write("200\\n");
 else if (args[0] === "inspect") process.stdout.write("true\\n");
 else if (args[0] === "info") process.stdout.write((process.env.FAKE_DOCKER_INFO ?? JSON.stringify({ OperatingSystem: "OrbStack", Name: "orbstack" })) + "\\n");
@@ -446,7 +452,7 @@ async function probeAgainst(t, handler, ms) {
   const server = createServer(handler);
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => server.closeAllConnections() || server.close());
-  const child = spawn(process.execPath, ["-e", healthProbe(server.address().port, ms)], { stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, ["-e", healthProbe(server.address().port, ms)], { env: { ...process.env, FORCE_COLOR: "3" }, stdio: ["ignore", "pipe", "pipe"] });
   t.after(() => child.exitCode === null && child.kill("SIGKILL"));
   let stdout = "";
   child.stdout.on("data", (chunk) => (stdout += chunk));
@@ -458,6 +464,11 @@ async function probeAgainst(t, handler, ms) {
 test("the /health probe reports 200 only after the whole response, and stops itself at its own deadline", { timeout: 15_000 }, async (t) => {
   const complete = await probeAgainst(t, (req, res) => res.end('{"ok":true}'), 2000);
   assert.equal(complete.stdout, "200");
+  const failing = await probeAgainst(t, (req, res) => {
+    res.writeHead(503);
+    res.end("down");
+  }, 2000);
+  assert.equal(failing.stdout, "503");
   const stalled = await probeAgainst(t, (req, res) => {
     res.writeHead(200, { "content-type": "application/json" });
     res.write('{"ok":');
@@ -506,3 +517,51 @@ function fake0(t) {
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }
+
+test("only a probe line that is exactly a status, 0 or timeout counts, so coloured or extra output never passes as 200", { timeout: 30_000 }, async (t) => {
+  const verdict = (stdout, extra = {}) => probeVerdict({ status: 0, stdout, stderr: "", ...extra });
+  const cases = [
+    ["200\n", { healthy: true, last: "HTTP 200" }],
+    ["200\r\n", { healthy: true, last: "HTTP 200" }],
+    ["503\n", { healthy: false, last: "HTTP 503" }],
+    ["0\n", { healthy: false, last: "no connection" }],
+    ["timeout\n", { healthy: false, last: "the probe did not finish" }],
+    ["\u001b[33m200\u001b[39m\n", { healthy: false, last: 'unexpected probe output "\\u001b[33m200\\u001b[39m"' }],
+    ["200 OK\n", { healthy: false, last: 'unexpected probe output "200 OK"' }],
+    ["200\n200\n", { healthy: false, last: 'unexpected probe output "200\\n200"' }],
+    [" 2000\n", { healthy: false, last: 'unexpected probe output "2000"' }],
+    ["", { healthy: false, last: "exec failed" }, { status: 1 }],
+    ["", { healthy: false, last: "OCI runtime exec failed" }, { status: 126, stderr: "x\nOCI runtime exec failed\n" }],
+    ["200\n", { healthy: false, last: "the probe did not finish" }, { status: null, timedOut: true }],
+  ];
+  for (const [stdout, expected, extra] of cases) assert.deepEqual(verdict(stdout, extra), expected, JSON.stringify(stdout));
+  const fake = fakeDocker(t, { FAKE_DOCKER_PROBE_OUTPUT: "\u001b[33m200\u001b[39m\n" });
+  await assert.rejects(waitForHealth(pinnedDocker({ host: "unix:///var/run/docker.sock" }, fake.env), "0123456789abcdef0123", 3031, { deadline: Date.now() + 1500 }), /did not answer 200/);
+});
+
+test("an interrupt stops the whole docker command, including a plugin it started that ignores the signal and holds the output open", { timeout: 15_000 }, async (t) => {
+  const fake = fakeDocker(t, { FAKE_DOCKER_BUILD_HANG: path.join(fake0(t), "hang"), FAKE_DOCKER_GRANDCHILD: "1" });
+  const session = new DockerSession({ graceMs: 600, drainMs: 300 });
+  const docker = pinnedDocker({ host: "unix:///var/run/docker.sock" }, fake.env, session);
+  const build = docker(["buildx", "build", "-t", "conclave-check-images/x:run", "."]);
+  await waitFor(() => existsSync(fake.env.FAKE_DOCKER_LOG) && loggedPids(fake, "pluginPid").length > 0, "the plugin");
+  const started = Date.now();
+  session.interrupt("SIGTERM");
+  await assert.rejects(build, Interrupted);
+  assert.ok(Date.now() - started < 3000, `took ${Date.now() - started} ms`);
+  assert.deepEqual(fake.received(), ["SIGTERM"]);
+  await sleep(300);
+  assertGone([...loggedPids(fake, "buildPid"), ...loggedPids(fake, "pluginPid")]);
+});
+
+test("a docker command that exits while a plugin it started keeps the output open still settles, and the plugin is stopped", { timeout: 15_000 }, async (t) => {
+  const fake = fakeDocker(t, { FAKE_DOCKER_GRANDCHILD: "1", FAKE_DOCKER_BUILD_HANG: path.join(fake0(t), "hang"), FAKE_DOCKER_BUILD_EXIT_AFTER_MS: "300" });
+  const session = new DockerSession({ drainMs: 300 });
+  const docker = pinnedDocker({ host: "unix:///var/run/docker.sock" }, fake.env, session);
+  const started = Date.now();
+  const result = await docker(["buildx", "build", "-t", "conclave-check-images/x:run", "."], { allowFailure: true });
+  assert.equal(result.status, 0);
+  assert.ok(Date.now() - started < 4000, `took ${Date.now() - started} ms`);
+  await sleep(300);
+  assertGone(loggedPids(fake, "pluginPid"));
+});

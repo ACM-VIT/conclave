@@ -11,10 +11,12 @@ import { rootContextBuilds } from "./docker-context/compose.mjs";
 
 const BOOT_TIMEOUT_MS = 120_000;
 const PROBE_MARGIN_MS = 1_000;
+const PROBE_ANSWER = /^(?:[1-5][0-9]{2}|0|timeout)$/;
 const LOGS_TIMEOUT_MS = 30_000;
 const INTERRUPT_GRACE_MS = 15_000;
 const CLEANUP_BUDGET_MS = 60_000;
 const CLEANUP_COMMAND_TIMEOUT_MS = 20_000;
+const EXIT_DRAIN_MS = 2_000;
 const VM_DAEMON_SOCKET = "/var/run/docker.sock";
 const LOCAL_BUILDER = "default";
 const OWNER_LABEL = "conclave-check-images.owner";
@@ -26,9 +28,16 @@ export class Interrupted extends Error {
   }
 }
 
+function signalGroup(pid, signal) {
+  try {
+    process.kill(-pid, signal);
+  } catch {}
+}
+
 export class DockerSession {
-  constructor({ graceMs = INTERRUPT_GRACE_MS } = {}) {
+  constructor({ graceMs = INTERRUPT_GRACE_MS, drainMs = EXIT_DRAIN_MS } = {}) {
     this.graceMs = graceMs;
+    this.drainMs = drainMs;
     this.signal = null;
     this.children = new Set();
   }
@@ -40,11 +49,11 @@ export class DockerSession {
   interrupt(signal) {
     if (this.signal) return;
     this.signal = signal;
-    for (const child of this.children) child.kill(signal);
-    const children = [...this.children];
-    if (children.length) {
+    const groups = [...this.children].map((child) => child.pid);
+    for (const pid of groups) signalGroup(pid, signal);
+    if (groups.length) {
       setTimeout(() => {
-        for (const child of children) if (this.children.has(child)) child.kill("SIGKILL");
+        for (const pid of groups) signalGroup(pid, "SIGKILL");
       }, this.graceMs).unref();
     }
   }
@@ -52,7 +61,7 @@ export class DockerSession {
   run(args, env, { allowFailure = false, cleanup = false, timeoutMs } = {}) {
     if (this.signal && !cleanup) return Promise.reject(new Interrupted(this.signal));
     return new Promise((resolve, reject) => {
-      const child = spawn("docker", args, { cwd: repoRoot, env, detached: cleanup, stdio: ["ignore", "pipe", "pipe"] });
+      const child = spawn("docker", args, { cwd: repoRoot, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
       if (!cleanup) this.children.add(child);
       let stdout = "";
       let stderr = "";
@@ -60,28 +69,41 @@ export class DockerSession {
       child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
       let settled = false;
       let timedOut = false;
+      let drain = null;
       const timer = timeoutMs === undefined ? null : setTimeout(() => {
         timedOut = true;
-        child.kill("SIGKILL");
+        signalGroup(child.pid, "SIGKILL");
       }, Math.max(0, timeoutMs));
-      const settle = (error, result) => {
+      const finish = (status) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        clearTimeout(drain);
+        this.children.delete(child);
+        child.stdout.destroy();
+        child.stderr.destroy();
+        if (this.signal && !cleanup) return reject(new Interrupted(this.signal));
+        if (timedOut) {
+          if (!allowFailure) return reject(new Error(`docker ${args.join(" ")} did not finish within ${timeoutMs / 1000} s`));
+          return resolve({ status: null, timedOut: true, stdout, stderr });
+        }
+        if (status !== 0 && !allowFailure) return reject(new Error(`docker ${args.join(" ")} failed:\n${stderr.trim()}`));
+        resolve({ status, stdout, stderr });
+      };
+      child.on("error", (error) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
         this.children.delete(child);
-        if (error) reject(error);
-        else resolve(result);
-      };
-      child.on("error", (error) => settle(error));
-      child.on("close", (status) => {
-        if (this.signal && !cleanup) return settle(new Interrupted(this.signal));
-        if (timedOut) {
-          if (!allowFailure) return settle(new Error(`docker ${args.join(" ")} did not finish within ${timeoutMs / 1000} s`));
-          return settle(null, { status: null, timedOut: true, stdout, stderr });
-        }
-        if (status !== 0 && !allowFailure) return settle(new Error(`docker ${args.join(" ")} failed:\n${stderr.trim()}`));
-        settle(null, { status, stdout, stderr });
+        reject(error);
       });
+      child.on("exit", (status) => {
+        drain = setTimeout(() => {
+          signalGroup(child.pid, "SIGKILL");
+          finish(status);
+        }, this.drainMs);
+      });
+      child.on("close", (status) => finish(status));
     });
   }
 }
@@ -133,10 +155,11 @@ export async function browserSocketSource(docker, { socket, env = process.env, p
 
 export function healthProbe(port, ms) {
   return [
-    `const stop = setTimeout(() => { console.log("timeout"); process.exit(3); }, ${ms});`,
+    `const say = (value) => process.stdout.write(String(value) + "\\n");`,
+    `const stop = setTimeout(() => { say("timeout"); process.exit(3); }, ${ms});`,
     `fetch("http://127.0.0.1:${port}/health", { signal: AbortSignal.timeout(${ms}) })`,
-    `  .then(async (response) => { await response.text(); console.log(response.status); })`,
-    `  .catch(() => console.log(0))`,
+    `  .then(async (response) => { await response.text(); say(response.status); })`,
+    `  .catch(() => say(0))`,
     `  .finally(() => clearTimeout(stop));`,
   ].join("\n");
 }
@@ -145,14 +168,23 @@ function insideTimeout(remaining) {
   return Math.max(100, remaining - PROBE_MARGIN_MS);
 }
 
+export function probeVerdict(probe) {
+  const answer = probe.stdout.trim();
+  if (probe.timedOut || answer === "timeout") return { healthy: false, last: "the probe did not finish" };
+  if (!answer && probe.status !== 0) return { healthy: false, last: probe.stderr.trim().split("\n").at(-1) || "exec failed" };
+  if (!PROBE_ANSWER.test(answer)) return { healthy: false, last: `unexpected probe output ${JSON.stringify(answer)}` };
+  if (answer === "200") return { healthy: true, last: "HTTP 200" };
+  return { healthy: false, last: answer === "0" ? "no connection" : `HTTP ${answer}` };
+}
+
 export async function waitForHealth(docker, id, port, { deadline = Date.now() + BOOT_TIMEOUT_MS } = {}) {
   const remaining = () => deadline - Date.now();
   let last = "no answer";
   while (remaining() > 0) {
     const probe = await docker(["exec", id, "node", "-e", healthProbe(port, insideTimeout(remaining()))], { allowFailure: true, timeoutMs: remaining() });
-    if (probe.stdout.trim() === "200") return;
-    if (probe.timedOut || probe.stdout.trim() === "timeout") last = "the probe did not finish";
-    else last = probe.status === 0 ? `HTTP ${probe.stdout.trim()}` : probe.stderr.trim().split("\n").at(-1) || "exec failed";
+    const verdict = probeVerdict(probe);
+    if (verdict.healthy) return;
+    last = verdict.last;
     if (remaining() <= 0) break;
     const state = await docker(["inspect", "-f", "{{.State.Running}}", id], { allowFailure: true, timeoutMs: remaining() });
     if (state.timedOut) break;
@@ -163,7 +195,7 @@ export async function waitForHealth(docker, id, port, { deadline = Date.now() + 
 }
 
 function importCheck(ms) {
-  return `const stop = setTimeout(() => { console.error("the import did not finish"); process.exit(3); }, ${ms}); await import("@conclave/apps-sdk/authority/server"); clearTimeout(stop);`;
+  return `const stop = setTimeout(() => { process.stderr.write("the import did not finish\\n"); process.exit(3); }, ${ms}); await import("@conclave/apps-sdk/authority/server"); clearTimeout(stop);`;
 }
 
 export const BOOTS = {
