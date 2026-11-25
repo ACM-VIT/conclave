@@ -4402,7 +4402,6 @@ const prewarmOutputWriterWorker = (
             !message.hasVideoFrame ||
             !worker ||
             !generatorTrack ||
-            generation !== captureGeneration() ||
             generatorTrack.readyState !== "live"
           ) {
             logVideoEffects(instanceId, "output_writer_worker_prewarm_done", {
@@ -4411,7 +4410,7 @@ const prewarmOutputWriterWorker = (
               hasOffscreenCanvas: message.hasOffscreenCanvas,
               renderer: message.renderer,
               stored: false,
-              released: generation !== captureGeneration(),
+              outputTrackEnded: generatorTrack?.readyState === "ended",
               elapsedMs: Math.round(performance.now() - startedAt),
             });
             finish();
