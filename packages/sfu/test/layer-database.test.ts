@@ -1,14 +1,14 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
-import { CARRY_TABLE, consolidateForCarry, readCarryMark, targetState } from "../server/layerDatabase.js";
+import { CARRY_TABLE, consolidateForCarry, prepareFolder, readCarryMark, targetState } from "../server/layerDatabase.js";
 
 const dirs: string[] = [];
 const scratch = (): string => {
-  const dir = mkdtempSync(join(tmpdir(), "layer-database-"));
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "layer-database-")));
   dirs.push(dir);
   return dir;
 };
@@ -71,16 +71,20 @@ describe("carrying a database out of an old container's layer", () => {
     writeFileSync(`${logOnly}-wal`, "kept");
     const journalOnly = join(dir, "journal-only.sqlite");
     writeFileSync(`${journalOnly}-journal`, "");
+    writeFileSync(join(dir, "a-file"), "");
 
     expect({
-      free: targetState(join(dir, "free.sqlite")),
-      carried: targetState(carried),
-      unmarked: targetState(unmarked),
-      "a database with its log beside it": targetState(markedButOpen),
-      "not a database": targetState(notADatabase),
-      "a log with no database": targetState(logOnly),
-      "a journal with no database": targetState(journalOnly),
-      "a folder that does not exist": targetState(join(dir, "missing", "db.sqlite")),
+      free: targetState(join(dir, "free.sqlite"), dir),
+      carried: targetState(carried, dir),
+      unmarked: targetState(unmarked, dir),
+      "a database with its log beside it": targetState(markedButOpen, dir),
+      "not a database": targetState(notADatabase, dir),
+      "a log with no database": targetState(logOnly, dir),
+      "a journal with no database": targetState(journalOnly, dir),
+      "folders that do not exist yet": targetState(join(dir, "missing", "deeper", "db.sqlite"), dir),
+      "under a file, not a folder": targetState(join(dir, "a-file", "db.sqlite"), dir),
+      "off the volume": targetState(join(scratch(), "db.sqlite"), dir),
+      "the volume folder itself": targetState(dir, dir),
     }).toEqual({
       free: { state: "free" },
       carried: { state: "carried", mark },
@@ -89,9 +93,24 @@ describe("carrying a database out of an old container's layer", () => {
       "not a database": { state: "taken" },
       "a log with no database": { state: "taken" },
       "a journal with no database": { state: "taken" },
-      "a folder that does not exist": { state: "unwritable" },
+      "folders that do not exist yet": { state: "free" },
+      "under a file, not a folder": { state: "unwritable" },
+      "off the volume": { state: "outside" },
+      "the volume folder itself": { state: "outside" },
     });
     expect(readdirSync(dir).filter((name) => name.startsWith(".conclave-write-check-"))).toEqual([]);
+  });
+
+  it("creates every missing folder inside the volume with mode 0700 for the given owner, and nothing outside it", () => {
+    const volume = scratch();
+    mkdirSync(join(volume, "existing"));
+    const owner = `${process.getuid?.() ?? 0}:${process.getgid?.() ?? 0}`;
+    prepareFolder(join(volume, "existing", "state", "deeper"), volume, owner);
+    expect([join(volume, "existing", "state"), join(volume, "existing", "state", "deeper")].map((folder) => (statSync(folder).mode & 0o777).toString(8))).toEqual(["700", "700"]);
+    prepareFolder(join(volume, "existing", "state", "deeper"), volume, owner);
+    const outside = join(scratch(), "elsewhere");
+    expect(() => prepareFolder(outside, volume, owner)).toThrow(/not on the recordings volume/);
+    expect(existsSync(outside)).toBe(false);
   });
 
   it("keeps every earlier mark and reads the latest", () => {

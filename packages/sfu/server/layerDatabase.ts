@@ -1,6 +1,7 @@
-import { existsSync, mkdtempSync, rmdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmdirSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { STORES, storeSqlitePath } from "./storePaths.js";
 
@@ -51,21 +52,56 @@ const canCreateIn = (dir: string): boolean => {
   }
 };
 
-export type TargetState = { state: "free" | "taken" | "unwritable" } | { state: "carried"; mark: CarryMark };
+const isInside = (path: string, root: string): boolean => {
+  const rest = relative(resolve(root), resolve(path));
+  return rest !== "" && rest !== ".." && !rest.startsWith(`..${sep}`) && !isAbsolute(rest);
+};
 
-export const targetState = (path: string): TargetState => {
+const isFolder = (path: string): boolean => {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+};
+
+const nearestExisting = (path: string): string => {
+  let current = resolve(path);
+  while (!existsSync(current) && dirname(current) !== current) current = dirname(current);
+  return current;
+};
+
+export type TargetState = { state: "free" | "taken" | "unwritable" | "outside" } | { state: "carried"; mark: CarryMark };
+
+export const targetState = (path: string, volumeRoot: string): TargetState => {
+  if (!isInside(path, volumeRoot)) return { state: "outside" };
   if (existsSync(path)) {
     const mark = readCarryMark(path);
     return mark ? { state: "carried", mark } : { state: "taken" };
   }
   if (PUBLISHED_COMPANIONS.some((suffix) => existsSync(`${path}${suffix}`))) return { state: "taken" };
-  return canCreateIn(dirname(path)) ? { state: "free" } : { state: "unwritable" };
+  const folder = nearestExisting(dirname(path));
+  const usable = (folder === resolve(volumeRoot) || isInside(folder, volumeRoot)) && isFolder(folder) && canCreateIn(folder);
+  return usable ? { state: "free" } : { state: "unwritable" };
 };
 
-export const probeLines = (env: Record<string, string | undefined> = process.env, cwd: string = process.cwd()): string[] =>
+export const prepareFolder = (dir: string, volumeRoot: string, owner: string): void => {
+  const target = resolve(dir);
+  if (target !== resolve(volumeRoot) && !isInside(target, volumeRoot)) throw new Error(`${target} is not on the recordings volume ${volumeRoot}.`);
+  const missing: string[] = [];
+  for (let current = target; !existsSync(current); current = dirname(current)) missing.unshift(current);
+  for (const folder of missing) {
+    mkdirSync(folder, { mode: 0o700 });
+    chmodSync(folder, 0o700);
+    execFileSync("chown", [owner, folder], { stdio: ["ignore", "ignore", "inherit"] });
+  }
+  if (!isFolder(target)) throw new Error(`${target} is not a folder.`);
+};
+
+export const probeLines = (volumeRoot: string, env: Record<string, string | undefined> = process.env, cwd: string = process.cwd()): string[] =>
   STORES.map((store) => {
     const target = storeSqlitePath(store, env, cwd);
-    const found = targetState(target);
+    const found = targetState(target, volumeRoot);
     const mark = found.state === "carried" ? [found.mark.container, found.mark.startedAt] : ["", ""];
     return [store, found.state, target, ...mark].join("\t");
   });
@@ -92,12 +128,14 @@ export const consolidateForCarry = (path: string, mark: CarryMark): void => {
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const [command, ...args] = process.argv.slice(2);
   try {
-    if (command === "probe" && args.length === 0) {
-      process.stdout.write(`${probeLines().join("\n")}\n`);
+    if (command === "probe" && args.length === 1 && args[0]) {
+      process.stdout.write(`${probeLines(args[0]).join("\n")}\n`);
+    } else if (command === "prepare-folder" && args.length === 3 && args.every(Boolean)) {
+      prepareFolder(args[0], args[1], args[2]);
     } else if (command === "consolidate" && args.length === 3 && args.every(Boolean)) {
       consolidateForCarry(args[0], { container: args[1], startedAt: args[2] });
     } else {
-      process.stderr.write("Usage: layerDatabase.ts probe | consolidate <database> <container> <started-at>\n");
+      process.stderr.write("Usage: layerDatabase.ts probe <volume> | prepare-folder <folder> <volume> <owner> | consolidate <database> <container> <started-at>\n");
       process.exit(2);
     }
   } catch (error) {

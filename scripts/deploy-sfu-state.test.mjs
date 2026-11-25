@@ -386,6 +386,7 @@ const replaceService = async (
       stagingModes: existsSync(join(dir, "staging-modes")) ? readFileSync(join(dir, "staging-modes"), "utf8").trim().split("\n") : [],
       volumeEntries: listing(volume),
       visibleVolumeEntries: listing(volume).filter((name) => !name.startsWith(".")),
+      ownershipGrants: existsSync(join(dir, "ownership.log")) ? readFileSync(join(dir, "ownership.log"), "utf8").trim().split("\n").filter(Boolean) : [],
       volumeRows: Object.fromEntries(listing(volume).filter((name) => /\.(sqlite|db)$/.test(name)).map((name) => [name, databaseRows(join(volume, name))])),
       payloadMembers: listing(join(dir, "payloads")).map((name) => tarMembers(readFileSync(join(dir, "payloads", name)))),
       volumeFiles: Object.fromEntries(listing(volume).filter((name) => statSync(join(volume, name)).isFile()).map((name) => [name, { text: readFileSync(join(volume, name), "utf8"), mode: mode(join(volume, name)) }])),
@@ -727,7 +728,7 @@ for (const harness of harnesses) {
     const cases = {
       "the volume already holds one": { options: { containerEnv: legacy, diff: inLayer, volumeFiles: { "conclave.sqlite": "kept" } }, reason: /already holds a database/ },
       "the volume holds a write-ahead log": { options: { containerEnv: legacy, diff: inLayer, volumeFiles: { "conclave.sqlite-wal": "kept" } }, reason: /already holds a database/ },
-      "the new image cannot write there": { options: { containerEnv: legacy, diff: inLayer, newSqlitePath: "/nonexistent-conclave-folder/conclave.sqlite" }, reason: /cannot write/ },
+      "the new place is off the recordings volume": { options: { containerEnv: legacy, diff: inLayer, newSqlitePath: "/nonexistent-conclave-folder/conclave.sqlite" }, reason: /not on the recordings volume/ },
       "two databases would land in one place": {
         options: { containerEnv: "SCHEDULING_SQLITE_PATH=/srv/scheduling.sqlite\\n", diff: `A /srv/scheduling.sqlite\\n${wrote("conclave.sqlite")}` },
         reason: /more than one database/,
@@ -744,6 +745,37 @@ for (const harness of harnesses) {
       assert.deepEqual(run.archives, [], name);
       for (const [file, text] of Object.entries(options.volumeFiles ?? {})) assert.equal(run.volumeFiles[file]?.text, text, name);
     });
+  });
+
+  test(`${shell}: creates the folders a database path on the volume names, as the stores do, and refuses only a folder that cannot take files`, async () => {
+    const volume = realpathSync(mkdtempSync(join(tmpdir(), "deploy-sfu-volume-")));
+    try {
+      const options = {
+        containerEnv: "CONCLAVE_SQLITE_PATH=/var/lib/conclave/conclave.sqlite\\n",
+        diff: "A /var/lib/conclave/conclave.sqlite\\nA /var/lib/conclave/conclave.sqlite-wal\\n",
+        files: sqliteFiles("conclave.sqlite", ["kept"]),
+        sharedVolume: volume,
+      };
+      const nested = await replaceService(harness, { ...options, newSqlitePath: join(volume, "state", "deeper", "conclave.sqlite") });
+      assert.equal(nested.status, 0, nested.stderr);
+      assert.deepEqual(databaseRows(join(volume, "state", "deeper", "conclave.sqlite")), ["kept"]);
+      assert.deepEqual([mode(join(volume, "state")), mode(join(volume, "state", "deeper"))], ["700", "700"]);
+      for (const folder of [join(volume, "state"), join(volume, "state", "deeper")]) {
+        assert.ok(nested.ownershipGrants.includes(`node:node one ${folder}`), `${folder} was not handed to node:\n${nested.ownershipGrants.join("\n")}`);
+      }
+      if (process.getuid?.() !== 0) {
+        mkdirSync(join(volume, "locked"), { mode: 0o555 });
+        const locked = await replaceService(harness, { ...options, newSqlitePath: join(volume, "locked", "inner", "conclave.sqlite") });
+        assert.notEqual(locked.status, 0);
+        assert.match(locked.stderr, /nearest folder that exists cannot take new files/);
+        assert.equal(stopped(locked.calls), false, locked.calls.join("\n"));
+        assert.deepEqual(readdirSync(join(volume, "locked")), []);
+      }
+    } finally {
+      chmodSync(volume, 0o700);
+      if (existsSync(join(volume, "locked"))) chmodSync(join(volume, "locked"), 0o700);
+      rmSync(volume, { recursive: true, force: true });
+    }
   });
 
   test(`${shell}: a database copy that fails, arrives changed, fails to unpack or is not a sound database leaves the new SFU unstarted and the volume untouched`, async () => {
