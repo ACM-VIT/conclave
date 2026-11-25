@@ -478,7 +478,10 @@ function ParticipantsPanel({
                         type="button"
                         onClick={() => {
                           if (socket) {
-                            denyPendingUser(socket, userId, onPendingUserStale);
+                            denyPendingUser(socket, userId, {
+                              onStale: onPendingUserStale,
+                              onNotice: setHostActionNotice,
+                            });
                           }
                         }}
                         className={neutralActionClass}

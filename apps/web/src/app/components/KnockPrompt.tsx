@@ -131,7 +131,13 @@ export default function KnockPrompt({
               disabled={isBusy}
               onClick={() =>
                 startAction([single.userId], (activeSocket) =>
-                  denyPendingUser(activeSocket, single.userId, onPendingUserStale),
+                  denyPendingUser(activeSocket, single.userId, {
+                    onStale: onPendingUserStale,
+                    onNotice: (notice) => {
+                      settleAction();
+                      setError(notice);
+                    },
+                  }),
                 )
               }
               aria-label={`Deny ${single.name}`}

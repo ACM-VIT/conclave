@@ -1,5 +1,6 @@
 import type { Socket } from "socket.io-client";
 import { z } from "zod";
+import { WAITING_REQUEST_GONE_ERROR } from "@conclave/meeting-core/host-commands";
 import { hostDecisionLimitNotice } from "./host-decision-limit";
 
 const ADMISSION_ACK_TIMEOUT_MS = 10000;
@@ -30,17 +31,27 @@ export const admitPendingUser = (
       handlers.onNotice?.(notice);
       return;
     }
-    if (response?.error) handlers.onStale?.(userId);
+    settleDecision(response, userId, handlers);
   });
+};
+
+const settleDecision = (
+  response: AdmissionAck,
+  userId: string,
+  handlers: { onStale?: (userId: string) => void; onNotice?: (text: string) => void },
+) => {
+  if (!response?.error) return;
+  if (response.error === WAITING_REQUEST_GONE_ERROR) handlers.onStale?.(userId);
+  else handlers.onNotice?.(response.error);
 };
 
 export const denyPendingUser = (
   socket: Socket,
   userId: string,
-  onStale?: (userId: string) => void,
+  handlers: { onStale?: (userId: string) => void; onNotice?: (text: string) => void } = {},
 ) => {
   socket.emit("rejectUser", { userId }, (response: AdmissionAck) => {
-    if (response?.error) onStale?.(userId);
+    settleDecision(response, userId, handlers);
   });
 };
 
