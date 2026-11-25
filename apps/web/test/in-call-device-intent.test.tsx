@@ -170,6 +170,80 @@ describe("a chosen device ends up sending", () => {
     expect(unwanted(world, rig.rig())).toEqual([]);
   });
 
+  it("finishing a microphone recovery never starts camera recovery while a camera topology replacement publishes", async () => {
+    const rig = await join();
+    const camera = world.producers.find((producer) => !producer.closed && producer.kind === "video")!;
+    world.holds.add("produce");
+    let replacing: Promise<unknown> = Promise.resolve();
+    await act(async () => {
+      replacing = rig.rig().media.replaceWebcamProducerTopology({
+        target: "single-receiver",
+        expectedProducerId: camera.id,
+        quality: "standard",
+        networkProfile: "good",
+        transition: { fromProducerId: camera.id, nonce: "rig" },
+      });
+    });
+    await until("the topology publish", () => pendingOf("produce") === 1);
+    await act(async () => liveCameraTrack(rig).lose());
+    await act(async () => liveMicrophoneSource()?.lose());
+    await until("the microphone recovery publish", () => pendingOf("produce") === 2);
+    await act(async () => liveMicrophoneSource()?.lose());
+    const camerasOpened = opened("video");
+
+    await act(async () => world.releaseOne(1));
+    await rig.settle();
+    expect(opened("video")).toBe(camerasOpened);
+
+    await releaseAll(rig, replacing);
+    expect(await sendingWithin(rig)).toEqual([]);
+    expect(unwanted(world, rig.rig())).toEqual([]);
+  });
+
+  it("a microphone request queued while reconnecting is kept for a recovery that is still publishing", async () => {
+    const rig = await join({ camera: false });
+    world.holds.add("produce");
+    await act(async () => liveMicrophoneSource()?.lose());
+    await until("the microphone recovery publish", () => pendingOf("produce") === 1);
+
+    rig.rig().refs.reconnectInFlightRef.current = true;
+    await act(async () => liveMicrophoneSource()?.lose());
+    rig.rig().refs.reconnectInFlightRef.current = false;
+    await rig.tick(250);
+    await releaseAll(rig);
+
+    expect(notLive(world, rig.rig())).toEqual([]);
+    expect(unwanted(world, rig.rig())).toEqual([]);
+  });
+
+  it("a camera request queued during a topology replacement is kept for a camera recovery still publishing", async () => {
+    const rig = await join({ mic: false });
+    const camera = world.producers.find((producer) => !producer.closed && producer.kind === "video")!;
+    world.holds.add("produce");
+    let replacing: Promise<unknown> = Promise.resolve();
+    await act(async () => {
+      replacing = rig.rig().media.replaceWebcamProducerTopology({
+        target: "single-receiver",
+        expectedProducerId: camera.id,
+        quality: "standard",
+        networkProfile: "good",
+        transition: { fromProducerId: camera.id, nonce: "rig" },
+      });
+    });
+    await until("the topology publish", () => pendingOf("produce") === 1);
+    await act(async () => liveCameraTrack(rig).lose());
+    await act(async () => rig.rig().setVideoEffects(1));
+    await until("the camera recovery publish", () => pendingOf("produce") === 2);
+
+    await act(async () => liveCameraTrack(rig).lose());
+    await act(async () => world.releaseOne(0));
+    await rig.settle();
+    await releaseAll(rig, replacing);
+
+    await until("the camera sending again", () => notLive(world, rig.rig()).length === 0);
+    expect(unwanted(world, rig.rig())).toEqual([]);
+  });
+
   it("captures released while a microphone recovery publishes leave its producer closed", async () => {
     const rig = await join({ camera: false });
     world.holds.add("produce");

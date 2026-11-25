@@ -700,16 +700,26 @@ export function useMeetMedia({
   const pendingCameraProducerRecoveryRef = useRef(false);
   const [blockedProducerRecoveryFlushPulse, setBlockedProducerRecoveryFlushPulse] =
     useState(0);
-  const flushQueuedProducerRecoveries = useCallback(() => {
-    if (pendingAudioProducerRecoveryRef.current && !audioRecoveryInFlightRef.current) {
-      pendingAudioProducerRecoveryRef.current = false;
-      setAudioProducerRecoveryPulse((value) => value + 1);
-    }
-    if (pendingCameraProducerRecoveryRef.current && !cameraRecoveryInFlightRef.current) {
-      pendingCameraProducerRecoveryRef.current = false;
-      setCameraProducerRecoveryPulse((value) => value + 1);
-    }
+  const flushQueuedAudioRecovery = useCallback(() => {
+    if (!pendingAudioProducerRecoveryRef.current || audioRecoveryInFlightRef.current) return;
+    pendingAudioProducerRecoveryRef.current = false;
+    setAudioProducerRecoveryPulse((value) => value + 1);
   }, []);
+  const flushQueuedCameraRecovery = useCallback(() => {
+    if (
+      !pendingCameraProducerRecoveryRef.current ||
+      cameraRecoveryInFlightRef.current ||
+      cameraTopologyReplacementInFlightRef.current
+    ) {
+      return;
+    }
+    pendingCameraProducerRecoveryRef.current = false;
+    setCameraProducerRecoveryPulse((value) => value + 1);
+  }, []);
+  const flushQueuedProducerRecoveries = useCallback(() => {
+    flushQueuedAudioRecovery();
+    flushQueuedCameraRecovery();
+  }, [flushQueuedAudioRecovery, flushQueuedCameraRecovery]);
   const queueBlockedProducerRecovery = useCallback(
     (kind: "audio" | "camera") => {
       if (kind === "audio") {
@@ -745,11 +755,11 @@ export function useMeetMedia({
     if (isMediaRecoveryBlocked()) {
       queueBlockedProducerRecovery("audio");
     } else {
-      flushQueuedProducerRecoveries();
+      flushQueuedAudioRecovery();
     }
   }, [
     flushPendingAudioProcessingSwitch,
-    flushQueuedProducerRecoveries,
+    flushQueuedAudioRecovery,
     isMediaRecoveryBlocked,
     queueBlockedProducerRecovery,
   ]);
@@ -759,9 +769,9 @@ export function useMeetMedia({
     if (isMediaRecoveryBlocked()) {
       queueBlockedProducerRecovery("camera");
     } else {
-      flushQueuedProducerRecoveries();
+      flushQueuedCameraRecovery();
     }
-  }, [flushQueuedProducerRecoveries, isMediaRecoveryBlocked, queueBlockedProducerRecovery]);
+  }, [flushQueuedCameraRecovery, isMediaRecoveryBlocked, queueBlockedProducerRecovery]);
   const mediaOperationsDisposedRef = useRef(false);
   useEffect(() => {
     mediaOperationsDisposedRef.current = false;
@@ -3392,9 +3402,7 @@ export function useMeetMedia({
         };
       } finally {
         cameraTopologyReplacementInFlightRef.current = false;
-        if (pendingCameraProducerRecoveryRef.current) {
-          flushQueuedProducerRecoveries();
-        }
+        flushQueuedCameraRecovery();
       }
     },
     [
@@ -3402,7 +3410,7 @@ export function useMeetMedia({
       claimHolds,
       closeLocalVideoProducerForReplacement,
       deviceRef,
-      flushQueuedProducerRecoveries,
+      flushQueuedCameraRecovery,
       getVideoPublishTrackRef,
       intentionalLocalProducerCloseIdsRef,
       isMediaRecoveryBlocked,
