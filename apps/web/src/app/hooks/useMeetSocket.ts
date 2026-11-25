@@ -168,6 +168,7 @@ import {
   INITIAL_SCREEN_SHARE_WATCH,
   advanceScreenShareWatch,
   deliveredRtpBytes,
+  advanceProducerDeliveries,
   ownPacketCountsRequestFor,
   producersNotReachingSfu,
   readSenderPacketCounts,
@@ -1196,6 +1197,11 @@ export function useMeetSocket({
     [commitMediaPathRecovery],
   );
   const reconnectGenerationRef = useRef(0);
+  const mediaFlowEpochRef = useRef<Record<"producer" | "consumer", number>>({
+    producer: 0,
+    consumer: 0,
+  });
+  const rebuildCredentialFetchRef = useRef(false);
   const reconnectBackoffCancelRef = useRef<(() => void) | null>(null);
   const manualReconnectRetryRequestedRef = useRef(false);
   const retryReconnectRef = useRef<() => Promise<void>>(async () => {});
@@ -1615,6 +1621,12 @@ export function useMeetSocket({
       void handleReconnectRef.current?.({
         refreshIceServers: true,
         failedDirections: [transportKind],
+        failedPath: {
+          direction: transportKind,
+          transportId: transport.id,
+          flowEpoch: mediaFlowEpochRef.current[transportKind],
+          generation: reconnectGenerationRef.current,
+        },
         ...(step === "reconnect-relay-only" ? { relayOnly: { reason } } : {}),
       });
     },
@@ -3874,12 +3886,17 @@ export function useMeetSocket({
   );
 
   const attemptIceRestart = useCallback(
-    async (transportKind: "producer" | "consumer"): Promise<boolean> => {
-      const transport =
-        transportKind === "producer"
-          ? producerTransportRef.current
-          : consumerTransportRef.current;
-      if (!transport) return false;
+    async (
+      transportKind: "producer" | "consumer",
+      transport: Transport,
+    ): Promise<boolean> => {
+      const isCurrent = () =>
+        !transport.closed &&
+        transport ===
+          (transportKind === "producer"
+            ? producerTransportRef.current
+            : consumerTransportRef.current);
+      if (!isCurrent()) return false;
 
       const existingRestart = iceRestartsRef.current.get(transport);
       if (existingRestart) return existingRestart;
@@ -3914,6 +3931,7 @@ export function useMeetSocket({
             },
           );
 
+          if (!isCurrent()) return false;
           await transport.restartIce({ iceParameters: response.iceParameters });
           // The acknowledgement only means new credentials were exchanged.
           // The restart worked if the transport is connected again.
@@ -4060,7 +4078,7 @@ export function useMeetSocket({
                         !intentionalDisconnectRef.current &&
                         transport.connectionState === "disconnected"
                       ) {
-                        void attemptIceRestart("producer").then((restarted) => {
+                        void attemptIceRestart("producer", transport).then((restarted) => {
                           if (!restarted) {
                             escalateMediaPathFailure(
                               "producer",
@@ -4084,7 +4102,7 @@ export function useMeetSocket({
 
               if (state === "failed") {
                 if (!intentionalDisconnectRef.current) {
-                  void attemptIceRestart("producer").then((restarted) => {
+                  void attemptIceRestart("producer", transport).then((restarted) => {
                     if (!restarted) {
                       escalateMediaPathFailure(
                         "producer",
@@ -4310,7 +4328,7 @@ export function useMeetSocket({
                         !intentionalDisconnectRef.current &&
                         transport.connectionState === "disconnected"
                       ) {
-                        void attemptIceRestart("consumer").then((restarted) => {
+                        void attemptIceRestart("consumer", transport).then((restarted) => {
                           if (!restarted) {
                             escalateMediaPathFailure(
                               "consumer",
@@ -4334,7 +4352,7 @@ export function useMeetSocket({
 
               if (state === "failed") {
                 if (!intentionalDisconnectRef.current) {
-                  void attemptIceRestart("consumer").then((restarted) => {
+                  void attemptIceRestart("consumer", transport).then((restarted) => {
                     if (!restarted) {
                       escalateMediaPathFailure(
                         "consumer",
@@ -6396,7 +6414,6 @@ export function useMeetSocket({
         relayBytes: Record<string, number> | null;
         reportedRemoteSilence: boolean;
         screen: ScreenShareWatch;
-        produced: SenderPacketCounts | null;
       }
     > = {
       producer: {
@@ -6405,7 +6422,6 @@ export function useMeetSocket({
         relayBytes: null,
         reportedRemoteSilence: false,
         screen: INITIAL_SCREEN_SHARE_WATCH,
-        produced: null,
       },
       consumer: {
         transport: null,
@@ -6413,7 +6429,6 @@ export function useMeetSocket({
         relayBytes: null,
         reportedRemoteSilence: false,
         screen: INITIAL_SCREEN_SHARE_WATCH,
-        produced: null,
       },
     };
     // Transports seen carrying media. Connecting alone does not count: a path
@@ -6530,6 +6545,11 @@ export function useMeetSocket({
     const sentIn = (reading: SenderPacketsReading): SenderPacketCounts | null =>
       reading.asked ? reading.sent : null;
 
+    const sfuReportsPackets = (): boolean => {
+      const socket = socketRef.current;
+      return Boolean(socket && senderPacketCountSocketsRef.current.has(socket));
+    };
+
     const ownPackets = async (): Promise<SenderPacketsReading> => {
       const request = ownPacketCountsRequestFor(
         sendingProducers().map(({ producerId }) => producerId),
@@ -6583,7 +6603,7 @@ export function useMeetSocket({
       if (!carriedMediaOnce.has(transport)) return false;
       try {
         const before = (await readPath(kind, transport)).reading;
-        if (!(await attemptIceRestart(kind))) return false;
+        if (!(await attemptIceRestart(kind, transport))) return false;
         const halfWindow = () =>
           new Promise<void>((resolve) =>
             window.setTimeout(resolve, MEDIA_PATH_FLOW_CHECK_MS / 2),
@@ -6615,6 +6635,23 @@ export function useMeetSocket({
         const ownAfter =
           now !== null && kind === "producer" ? await ownPackets() : NOT_ASKED;
         const after = now !== null ? (await readPath(kind, transport)).reading : null;
+        const producersDelivered = () => {
+          if (kind !== "producer" || midway === null || after === null) return true;
+          const sfuReports = sfuReportsPackets();
+          const baseline = advanceProducerDeliveries(
+            {},
+            midway,
+            { producers: sendingProducers(), sfuCounts: sentIn(ownBefore), sfuReports },
+            0,
+          );
+          const verified = advanceProducerDeliveries(
+            baseline,
+            after,
+            { producers: sendingProducers(), sfuCounts: sentIn(ownAfter), sfuReports },
+            1,
+          );
+          return producersNotReachingSfu(verified).length === 0;
+        };
         return iceRestartBroughtMediaBack({
           replaced,
           expectsMedia:
@@ -6624,13 +6661,7 @@ export function useMeetSocket({
             now !== null &&
             after !== null &&
             mediaReachedFarEnd(before, after, now.framesOptional) &&
-            producersNotReachingSfu({
-              producers: sendingProducers(),
-              previous: midway,
-              current: after,
-              sfuBefore: sentIn(ownBefore),
-              sfuNow: sentIn(ownAfter),
-            }).length === 0,
+            producersDelivered(),
         });
       } catch {
         return false;
@@ -6647,13 +6678,12 @@ export function useMeetSocket({
         !transport ||
         transport.closed ||
         intentionalDisconnectRef.current ||
-        reconnectInFlightRef.current
+        (reconnectInFlightRef.current && !rebuildCredentialFetchRef.current)
       ) {
         entry.transport = transport ?? null;
         entry.watch = INITIAL_MEDIA_PATH_WATCH;
         entry.relayBytes = null;
         entry.screen = INITIAL_SCREEN_SHARE_WATCH;
-        entry.produced = null;
         return;
       }
       // A new transport starts a fresh watch, and this sample already counts
@@ -6664,14 +6694,23 @@ export function useMeetSocket({
         entry.reportedRemoteSilence = false;
         entry.relayBytes = null;
         entry.screen = INITIAL_SCREEN_SHARE_WATCH;
-        entry.produced = null;
       }
 
+      const generation = reconnectGenerationRef.current;
+      const sampled = () =>
+        entry.transport === transport &&
+        !transport.closed &&
+        transport ===
+          (kind === "producer"
+            ? producerTransportRef.current
+            : consumerTransportRef.current) &&
+        generation === reconnectGenerationRef.current &&
+        !intentionalDisconnectRef.current;
       const connectedNow = transport.connectionState === "connected";
       const sender =
         kind === "consumer" && connectedNow ? await screenSenderPackets() : NOT_ASKED;
       const own = kind === "producer" && connectedNow ? await ownPackets() : NOT_ASKED;
-      if (entry.transport !== transport) return;
+      if (!sampled()) return;
       let reading: MediaPathReading;
       let relayBytes: Record<string, number>;
       try {
@@ -6681,7 +6720,7 @@ export function useMeetSocket({
       } catch {
         return;
       }
-      if (entry.transport !== transport) return;
+      if (!sampled()) return;
       entry.screen =
         transport.connectionState === "connected" && sender.asked
           ? advanceScreenShareWatch(entry.screen, {
@@ -6690,23 +6729,19 @@ export function useMeetSocket({
             })
           : INITIAL_SCREEN_SHARE_WATCH;
 
-      const undeliveredProducers =
-        kind === "producer"
-          ? producersNotReachingSfu({
-              producers: sendingProducers(),
-              previous: entry.watch.lastReading,
-              current: reading,
-              sfuBefore: entry.produced,
-              sfuNow: sentIn(own),
-            })
-          : [];
-      entry.produced = own.asked ? (own.sent ?? entry.produced) : null;
       const result = advanceMediaPathWatch(entry.watch, {
         ...reading,
         ...expectation(kind, transport.connectionState === "connected"),
         at: Date.now(),
         connectionState: transport.connectionState,
-        undeliveredProducers,
+        sending:
+          kind === "producer"
+            ? {
+                producers: sendingProducers(),
+                sfuCounts: sentIn(own),
+                sfuReports: sfuReportsPackets(),
+              }
+            : undefined,
       });
       entry.watch = result.watch;
       const provenRelayUrl = relayProvenByMedia({
@@ -6733,14 +6768,14 @@ export function useMeetSocket({
             Date.now(),
           );
         }
+        mediaFlowEpochRef.current[kind] += 1;
         updateMediaPathRecovery({ type: "media-flowing", direction: kind });
       }
       reconcileRelayPathsNow();
-      if (result.stalledForMs < MEDIA_PATH_STALL_MS) return;
+      if (result.stalledForMs < MEDIA_PATH_STALL_MS || reconnectInFlightRef.current) return;
 
       entry.watch = INITIAL_MEDIA_PATH_WATCH;
       entry.screen = INITIAL_SCREEN_SHARE_WATCH;
-      entry.produced = null;
       const isSilentWhileConnected =
         result.condition === "connected-without-media";
       if (isSilentWhileConnected && kind === "consumer") {
@@ -6776,7 +6811,7 @@ export function useMeetSocket({
         // ICE says connected but nothing arrives, so treat it as a failed
         // path: restart ICE, and rebuild if media still does not move.
         if (await restartIceAndCheckMedia(kind, transport)) return;
-        if (entry.transport !== transport) return;
+        if (!sampled()) return;
         escalateMediaPathFailure(
           kind,
           transport,
@@ -6789,12 +6824,12 @@ export function useMeetSocket({
       // An ICE restart can revive a path that carried media before. One that
       // never did needs different candidates, so go straight to a rebuild.
       const restarted =
-        carriedMediaOnce.has(transport) && (await attemptIceRestart(kind));
+        carriedMediaOnce.has(transport) && (await attemptIceRestart(kind, transport));
       if (restarted) {
         if (kind === "consumer") void syncProducersRef.current();
         return;
       }
-      if (entry.transport !== transport) return;
+      if (!sampled()) return;
       escalateMediaPathFailure(
         kind,
         transport,
@@ -7304,7 +7339,10 @@ export function useMeetSocket({
             : consumerTransportRef.current;
         const restartedTransports = disconnectedTransportKinds.map(currentTransport);
         void Promise.all(
-          disconnectedTransportKinds.map((kind) => attemptIceRestart(kind)),
+          disconnectedTransportKinds.map((kind, index) => {
+            const transport = restartedTransports[index];
+            return transport ? attemptIceRestart(kind, transport) : Promise.resolve(false);
+          }),
         ).then((results) => {
           if (intentionalDisconnectRef.current) return;
           // A transport replaced on purpose while its restart was checked
@@ -9974,10 +10012,35 @@ export function useMeetSocket({
       if (scopedDirection && scopedRoomId) {
         if (attemptState.refreshIceServers) {
           attemptState.refreshIceServers = false;
-          await refreshIceServersOnOpenSocket(scopedRoomId);
+          rebuildCredentialFetchRef.current = true;
+          try {
+            await refreshIceServersOnOpenSocket(scopedRoomId);
+          } finally {
+            rebuildCredentialFetchRef.current = false;
+          }
         }
         if (reconnectGeneration !== reconnectGenerationRef.current) return;
         if (intentionalDisconnectRef.current) return;
+        const failedPath = options?.failedPath;
+        if (failedPath && failedPath.direction === scopedDirection) {
+          const transport =
+            scopedDirection === "producer"
+              ? producerTransportRef.current
+              : consumerTransportRef.current;
+          if (
+            !transport ||
+            transport.closed ||
+            transport.id !== failedPath.transportId ||
+            failedPath.generation !== reconnectGenerationRef.current ||
+            failedPath.flowEpoch !== mediaFlowEpochRef.current[scopedDirection]
+          ) {
+            console.info(
+              `[Meets] The ${scopedDirection} path changed while its credentials were fetched; not rebuilding it.`,
+            );
+            rejoined = true;
+            return;
+          }
+        }
         applyRequestedRelayPolicy("restart");
         const result =
           scopedDirection === "consumer"

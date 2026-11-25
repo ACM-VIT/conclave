@@ -77,6 +77,39 @@ describe("the media path recovery the hook runs", () => {
     expect(await waitFor(rig, () => send.restartIceCalls > 0, 25_000)).toBe(true);
     expect(microphone.sfuPackets).toBeGreaterThan(reachedBefore);
     expect(rig.log.some((line) => line.includes("producer transport has carried no media"))).toBe(true);
+
+    expect(await waitFor(rig, () => rig!.send !== send, 20_000)).toBe(true);
+    expect(rig.log.some((line) => line.includes("Rebuilding the producer transport"))).toBe(true);
+  });
+
+  it.each<[string, { dropEveryOther?: boolean; bursty?: boolean }]>([
+    ["every other SFU reply goes missing", { dropEveryOther: true }],
+    ["the camera sends in bursts", { bursty: true }],
+    ["the camera sends in bursts and every other reply goes missing", { bursty: true, dropEveryOther: true }],
+  ])("notices a camera that never reaches the SFU when %s", async (_name, { dropEveryOther, bursty }) => {
+    rig = await startRig({ publish: true, camera: true });
+    await rig.join();
+    await rig.advance(5_000);
+    const send = rig.send!;
+    rig.dropEveryOtherOwnCountAnswer = Boolean(dropEveryOther);
+    rig.burstyVideo = Boolean(bursty);
+    rig.droppedSendKinds.add("video");
+
+    expect(await waitFor(rig, () => send.restartIceCalls > 0, 40_000)).toBe(true);
+  });
+
+  it.each<[string, { dropEveryOther?: boolean; bursty?: boolean }]>([
+    ["every other SFU reply goes missing", { dropEveryOther: true }],
+    ["the camera sends in bursts", { bursty: true }],
+  ])("leaves a camera that reaches the SFU alone when %s", async (_name, { dropEveryOther, bursty }) => {
+    rig = await startRig({ publish: true, camera: true });
+    await rig.join();
+    rig.dropEveryOtherOwnCountAnswer = Boolean(dropEveryOther);
+    rig.burstyVideo = Boolean(bursty);
+    await rig.advance(90_000);
+
+    expect(rig.send!.restartIceCalls).toBe(0);
+    expect(rig.log.some((line) => line.includes("carried no media"))).toBe(false);
   });
 
   it("leaves a microphone and camera alone while both reach the SFU", async () => {
@@ -700,5 +733,66 @@ describe("leaving a call and pressing Try again", () => {
     expect(await waitFor(rig, () => rig!.recvTransports.length > before && rig!.recv!.carriedBytes > 0, 30_000)).toBe(true);
 
     expect(rig.recv!.policy).toBe("all");
+  });
+});
+
+describe("acting only on the path that was sampled", () => {
+  it("never restarts the next call's transport from a stats read held over a leave and rejoin", async () => {
+    rig = await startRig({ publish: true });
+    await rig.join();
+    await rig.advance(5_000);
+    const oldSend = rig.send!;
+    rig.outgoingDropped = true;
+    await rig.advance(11_000);
+    const release = oldSend.holdNextStats();
+    await rig.advance(3_000);
+    await rig.leave();
+    rig.outgoingDropped = false;
+    await rig.join();
+    const newSend = rig.send!;
+    expect(newSend).not.toBe(oldSend);
+    await rig.advance(5_000);
+    release();
+    await rig.advance(12_000);
+
+    expect(newSend.restartIceCalls).toBe(0);
+    expect(rig.health.producer).toBe("healthy");
+  });
+
+  it("does not rebuild a receive path whose media came back while its credentials were fetched", async () => {
+    rig = await startRig();
+    await rig.join();
+    await rig.advance(5_000);
+    const recv = rig.recv!;
+    rig.refuseIceRestart = true;
+    rig.route = "hold";
+    rig.mediaFlows = false;
+    expect(await waitFor(rig, () => rig!.heldRoutes.length > 0, 40_000)).toBe(true);
+    rig.mediaFlows = true;
+    await rig.advance(5_000);
+    const flowedBefore = recv.carriedBytes;
+    rig.route = "up";
+    rig.releaseHeldRoutes("answer");
+    await rig.advance(8_000);
+
+    expect(rig.recvTransports).toEqual([recv]);
+    expect(recv.carriedBytes).toBeGreaterThan(flowedBefore);
+    expect(rig.health.consumer).toBe("healthy");
+  });
+
+  it("still rebuilds a receive path that stays dead while its credentials are fetched", async () => {
+    rig = await startRig();
+    await rig.join();
+    await rig.advance(5_000);
+    const recv = rig.recv!;
+    rig.refuseIceRestart = true;
+    rig.route = "hold";
+    rig.mediaFlows = false;
+    expect(await waitFor(rig, () => rig!.heldRoutes.length > 0, 40_000)).toBe(true);
+    await rig.advance(5_000);
+    rig.route = "up";
+    rig.releaseHeldRoutes("answer");
+
+    expect(await waitFor(rig, () => rig!.recv !== recv, 10_000)).toBe(true);
   });
 });

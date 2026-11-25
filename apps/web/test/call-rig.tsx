@@ -241,8 +241,22 @@ export class FakeTransport extends Emitter {
   }
 
   failStats = 0;
+  statsHold: Promise<void> | null = null;
+
+  holdNextStats(): () => void {
+    let release = () => {};
+    this.statsHold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return release;
+  }
 
   async getStats() {
+    const hold = this.statsHold;
+    if (hold) {
+      this.statsHold = null;
+      await hold;
+    }
     if (this.failStats > 0) {
       this.failStats -= 1;
       throw new Error("getStats failed");
@@ -356,6 +370,8 @@ export class CallRig {
   mediaFlows = true;
   outgoingDropped = false;
   droppedSendKinds = new Set<string>();
+  burstyVideo = false;
+  dropEveryOtherOwnCountAnswer = false;
   ownCountQueries = 0;
   sendStatic = false;
   screenChanging = true;
@@ -491,7 +507,9 @@ export class CallRig {
       const live = transport.sending.filter(({ producer }) => !producer.closed && !producer.paused);
       live.forEach((stream, index) => {
         const share = Math.floor(sent / live.length) + (index === 0 ? sent % live.length : 0);
-        const packets = this.sendStatic ? 0 : Math.round((now - since) / 20);
+        const bursting =
+          !this.burstyVideo || stream.producer.kind !== "video" || Math.floor(now / 5_000) % 2 === 0;
+        const packets = this.sendStatic || !bursting ? 0 : Math.round((now - since) / 20);
         stream.bytesSent += share;
         stream.packetsSent += packets;
         if (!this.outgoingDropped) {
@@ -665,6 +683,7 @@ export class CallRig {
       case "getOwnPacketCounts": {
         this.ownCountQueries += 1;
         if (!this.answersSenderCounts) return;
+        if (this.dropEveryOtherOwnCountAnswer && this.ownCountQueries % 2 === 0) return;
         const ids = new Set((payload as { producerIds?: string[] } | undefined)?.producerIds ?? []);
         const counts: Record<string, number> = {};
         for (const transport of this.transports) {

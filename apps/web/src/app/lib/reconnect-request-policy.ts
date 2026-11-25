@@ -19,6 +19,14 @@ export type ReconnectRequest = {
    * for the rebuild have a relay, and the failure that asked for it.
    */
   relayOnly?: { reason: string };
+  failedPath?: FailedMediaPath;
+};
+
+export type FailedMediaPath = {
+  direction: MediaDirection;
+  transportId: string;
+  flowEpoch: number;
+  generation: number;
 };
 
 /**

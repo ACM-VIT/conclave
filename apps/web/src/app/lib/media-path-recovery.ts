@@ -92,36 +92,89 @@ export const readMediaPath = (
 
 export type SendingProducer = { producerId: string; mid: string | null };
 
-export const producersNotReachingSfu = ({
-  producers,
-  previous,
-  current,
-  sfuBefore,
-  sfuNow,
-}: {
+export type ProducerDelivery = {
+  sent: number;
+  reportAt: number | null;
+  arrived: number | null;
+  failingSince: number | null;
+};
+
+export type ProducerDeliveries = Record<string, ProducerDelivery>;
+
+export type SendingProducersSample = {
   producers: SendingProducer[];
-  previous: MediaPathReading | null;
-  current: MediaPathReading;
-  sfuBefore: SenderPacketCounts | null;
-  sfuNow: SenderPacketCounts | null;
-}): string[] =>
-  producers
-    .filter(({ producerId, mid }) => {
-      if (!mid || !previous || previous.direction !== "send") return false;
-      const before = previous.sent[mid];
-      const now = current.sent[mid];
-      if (!before || !now || now.packetsSent <= before.packetsSent) return false;
-      const reported =
-        now.receiverReportAt !== null &&
-        (before.receiverReportAt === null || now.receiverReportAt > before.receiverReportAt);
-      if (!reported) return true;
-      const arrivedBefore = sfuBefore?.[producerId];
-      const arrivedNow = sfuNow?.[producerId];
-      return (
-        arrivedBefore !== undefined && arrivedNow !== undefined && arrivedNow <= arrivedBefore
-      );
-    })
-    .map(({ producerId }) => producerId);
+  sfuCounts: SenderPacketCounts | null;
+  sfuReports: boolean;
+};
+
+const newerReport = (now: number | null, before: number | null) =>
+  now !== null && (before === null || now > before);
+
+const delivered = (
+  stream: SentStreamReading,
+  arrived: number | null,
+): ProducerDelivery => ({
+  sent: stream.packetsSent,
+  reportAt: stream.receiverReportAt,
+  arrived,
+  failingSince: null,
+});
+
+export const advanceProducerDeliveries = (
+  deliveries: ProducerDeliveries,
+  reading: MediaPathReading,
+  { producers, sfuCounts, sfuReports }: SendingProducersSample,
+  at: number,
+): ProducerDeliveries => {
+  const next: ProducerDeliveries = {};
+  for (const { producerId, mid } of producers) {
+    const stream = mid ? reading.sent[mid] : undefined;
+    if (!stream) continue;
+    const known = deliveries[producerId];
+    const arrivedNow = sfuCounts?.[producerId];
+    if (!known) {
+      next[producerId] = delivered(stream, arrivedNow ?? null);
+      continue;
+    }
+    const sentMore = stream.packetsSent > known.sent;
+    if (!sfuReports) {
+      next[producerId] = !sentMore
+        ? newerReport(stream.receiverReportAt, known.reportAt)
+          ? delivered(stream, null)
+          : known
+        : newerReport(stream.receiverReportAt, known.reportAt)
+          ? delivered(stream, null)
+          : { ...known, sent: stream.packetsSent, failingSince: known.failingSince ?? at };
+      continue;
+    }
+    if (arrivedNow === undefined) {
+      next[producerId] = known;
+      continue;
+    }
+    if (known.arrived === null) {
+      next[producerId] = { ...known, sent: stream.packetsSent, arrived: arrivedNow };
+      continue;
+    }
+    if (arrivedNow > known.arrived) {
+      next[producerId] = delivered(stream, arrivedNow);
+    } else if (sentMore) {
+      next[producerId] = {
+        ...known,
+        sent: stream.packetsSent,
+        reportAt: stream.receiverReportAt,
+        failingSince: known.failingSince ?? at,
+      };
+    } else {
+      next[producerId] = known;
+    }
+  }
+  return next;
+};
+
+export const producersNotReachingSfu = (deliveries: ProducerDeliveries): string[] =>
+  Object.entries(deliveries)
+    .filter(([, delivery]) => delivery.failingSince !== null)
+    .map(([producerId]) => producerId);
 
 export const hasCarriedMedia = (reading: MediaPathReading): boolean =>
   reading.rtpBytes > 0 &&
@@ -148,7 +201,7 @@ export type MediaPathSample = MediaPathReading & {
   /** A live, unpaused stream should be crossing this transport right now. */
   expectsMedia: boolean;
   framesOptional: boolean;
-  undeliveredProducers?: string[];
+  sending?: SendingProducersSample;
 };
 
 export type PublishedStream = {
@@ -202,11 +255,13 @@ export type MediaPathCondition =
 export type MediaPathWatch = {
   troubleSince: number | null;
   lastReading: MediaPathReading | null;
+  deliveries: ProducerDeliveries;
 };
 
 export const INITIAL_MEDIA_PATH_WATCH: MediaPathWatch = {
   troubleSince: null,
   lastReading: null,
+  deliveries: {},
 };
 
 const toReading = ({
@@ -241,10 +296,14 @@ export const advanceMediaPathWatch = (
   const deliveredBytes = connected
     ? deliveredRtpBytes(watch.lastReading, reading)
     : 0;
+  const deliveries =
+    connected && sample.sending
+      ? advanceProducerDeliveries(watch.deliveries, reading, sample.sending, sample.at)
+      : {};
   const reached =
     connected &&
     mediaReachedFarEnd(watch.lastReading, reading, sample.framesOptional) &&
-    (sample.undeliveredProducers ?? []).length === 0;
+    producersNotReachingSfu(deliveries).length === 0;
   const condition: MediaPathCondition = !sample.expectsMedia
     ? "idle"
     : !connected
@@ -259,6 +318,7 @@ export const advanceMediaPathWatch = (
     watch: {
       troubleSince,
       lastReading: connected ? reading : null,
+      deliveries,
     },
     condition,
     stalledForMs: troubleSince === null ? 0 : sample.at - troubleSince,
