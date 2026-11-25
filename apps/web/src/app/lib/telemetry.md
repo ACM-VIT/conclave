@@ -417,7 +417,10 @@ shapes the values of listed properties:
   only those is answered 200). One request naming a uuid twice forwards it
   once, and a request naming a uuid whose forward is still in flight on the
   same instance waits for that forward instead of sending it again, and takes
-  its whole answer. Every answer from `/ingest` is built from what happened
+  its whole answer. Whether an event was taken, is in flight or is this
+  request's to send is decided in one step after the request's last wait (its
+  manifest loads), which claims the ones it sends until their answer, so a
+  forward that finishes while another request waits is never repeated. Every answer from `/ingest` is built from what happened
   to each event in the request (its own forward, a forward it shared, an
   event PostHog already took, or a refusal): if any is worth sending again
   it is 503 with the longest `Retry-After` any of them was given; every event

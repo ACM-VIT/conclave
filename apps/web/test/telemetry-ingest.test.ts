@@ -1188,6 +1188,90 @@ describe("every answer from /ingest carries everything the outcome needs", () =>
   });
 });
 
+describe("two requests carrying one event across a manifest load", () => {
+  const SLOW_BUILD = "5".repeat(40);
+  const shared = { ...event({ client_version: BUILD }), uuid: "0196f0a1-0000-7000-8000-0000000000e1" };
+  const slow = { ...event({ client_version: SLOW_BUILD }), uuid: "0196f0a1-0000-7000-8000-0000000000e2" };
+
+  const rig = () => {
+    const forwarded = createForwardedEvents();
+    const bodies: string[] = [];
+    const answers: Array<(response: Response) => void> = [];
+    let releaseManifest: () => void = () => {};
+    const manifestHeld = new Promise<void>((resolve) => (releaseManifest = resolve));
+    const deps: Partial<IngestDeps> = {
+      forwarded,
+      fetch: async (_url, init) => {
+        bodies.push(String(init?.body));
+        return new Promise<Response>((resolve) => answers.push(resolve));
+      },
+      manifest: async (version) => {
+        if (version === SLOW_BUILD) await manifestHeld;
+        return new Map();
+      },
+    };
+    const send = (events: unknown[]) => forward(post(JSON.stringify(captureBody(events)), "application/json"), ["e"], deps);
+    const answer = async (status: number) => {
+      await vi.waitFor(() => expect(answers.length).toBeGreaterThan(0));
+      answers.shift()?.(new Response(status === 200 ? '{"status":1}' : null, { status }));
+    };
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+    const sent = () => bodies.map((body) => (JSON.parse(body) as { batch: Array<{ uuid: string }> }).batch.map((item) => item.uuid));
+    return { send, answer, settle, sent, releaseManifest };
+  };
+
+  const orders = {
+    "the other request's send of it finishes while this one waits for a manifest": async (sim: ReturnType<typeof rig>) => {
+      const first = sim.send([shared]);
+      await vi.waitFor(() => expect(sim.sent()).toHaveLength(1));
+      const second = sim.send([shared, slow]);
+      await sim.settle();
+      await sim.answer(200);
+      await first;
+      sim.releaseManifest();
+      return second;
+    },
+    "the other request starts and finishes sending it while this one waits for a manifest": async (sim: ReturnType<typeof rig>) => {
+      const second = sim.send([shared, slow]);
+      await sim.settle();
+      const first = sim.send([shared]);
+      await vi.waitFor(() => expect(sim.sent()).toHaveLength(1));
+      await sim.answer(200);
+      await first;
+      sim.releaseManifest();
+      return second;
+    },
+  };
+
+  it.each(Object.entries(orders))("forwards it once when %s", async (_name, run) => {
+    const sim = rig();
+    const second = run(sim);
+    await vi.waitFor(() => expect(sim.sent()).toHaveLength(2));
+    await sim.answer(200);
+    const { response } = await second;
+
+    expect(sim.sent()).toEqual([[shared.uuid], [slow.uuid]]);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: 1 });
+  });
+
+  it("forwards it again once the other request's send of it failed while this one waited", async () => {
+    const sim = rig();
+    const first = sim.send([shared]);
+    await vi.waitFor(() => expect(sim.sent()).toHaveLength(1));
+    const second = sim.send([shared, slow]);
+    await sim.settle();
+    await sim.answer(503);
+    await first;
+    sim.releaseManifest();
+    await vi.waitFor(() => expect(sim.sent()).toHaveLength(2));
+    await sim.answer(200);
+
+    expect((await second).response.status).toBe(200);
+    expect(sim.sent()).toEqual([[shared.uuid], [shared.uuid, slow.uuid]]);
+  });
+});
+
 describe("guest pass identifiers at /ingest", () => {
   const PASS_ID = "gp_AbCdEfGhIjKlMnOpQrStUv";
   const SEAT_KEY = "guest-gp_ZyXwVuTsRqPoNmLkJiHgFe";

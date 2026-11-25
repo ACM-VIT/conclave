@@ -82,13 +82,16 @@ const MAX_FORWARDED_BYTES = 4 * 1024 * 1024;
 
 type ForwardedEvent = OutboundEvent & { timestamp: string };
 
+export type Claim =
+  | { kind: "delivered" }
+  | { kind: "elsewhere"; outcome: Promise<Answer> }
+  | { kind: "own"; event: ForwardedEvent };
+
 export type ForwardedEvents = {
   get: (uuid: string) => { event: ForwardedEvent; delivered: boolean } | undefined;
-  remember: (event: ForwardedEvent) => void;
   /** PostHog took these events. */
   delivered: (uuids: readonly string[]) => void;
-  sending: (uuids: readonly string[], outcome: Promise<Answer>) => void;
-  inFlight: (uuid: string) => Promise<Answer> | undefined;
+  claim: (candidates: readonly ForwardedEvent[], outcome: Promise<Answer>) => Claim[];
 };
 
 /**
@@ -101,30 +104,40 @@ export const createForwardedEvents = (): ForwardedEvents => {
   const events = new Map<string, { event: ForwardedEvent; bytes: number; delivered: boolean }>();
   const forwarding = new Map<string, Promise<Answer>>();
   let total = 0;
+  const remember = (event: ForwardedEvent): ForwardedEvent => {
+    const known = events.get(event.uuid);
+    if (known) return known.event;
+    const bytes = JSON.stringify(event).length;
+    events.set(event.uuid, { event, bytes, delivered: false });
+    total += bytes;
+    while (events.size > MAX_FORWARDED_EVENTS || total > MAX_FORWARDED_BYTES) {
+      const [uuid, oldest] = events.entries().next().value as [string, { bytes: number }];
+      events.delete(uuid);
+      total -= oldest.bytes;
+    }
+    return event;
+  };
   return {
     get: (uuid) => events.get(uuid),
-    sending(uuids, outcome) {
-      for (const uuid of uuids) forwarding.set(uuid, outcome);
-      void outcome.finally(() => {
-        for (const uuid of uuids) if (forwarding.get(uuid) === outcome) forwarding.delete(uuid);
+    claim(candidates, outcome) {
+      const owned: string[] = [];
+      const claims = candidates.map((candidate): Claim => {
+        if (events.get(candidate.uuid)?.delivered) return { kind: "delivered" };
+        const elsewhere = forwarding.get(candidate.uuid);
+        if (elsewhere) return { kind: "elsewhere", outcome: elsewhere };
+        forwarding.set(candidate.uuid, outcome);
+        owned.push(candidate.uuid);
+        return { kind: "own", event: remember(candidate) };
       });
+      void outcome.finally(() => {
+        for (const uuid of owned) if (forwarding.get(uuid) === outcome) forwarding.delete(uuid);
+      });
+      return claims;
     },
-    inFlight: (uuid) => forwarding.get(uuid),
     delivered(uuids) {
       for (const uuid of uuids) {
         const known = events.get(uuid);
         if (known) known.delivered = true;
-      }
-    },
-    remember(event) {
-      if (events.has(event.uuid)) return;
-      const bytes = JSON.stringify(event).length;
-      events.set(event.uuid, { event, bytes, delivered: false });
-      total += bytes;
-      while (events.size > MAX_FORWARDED_EVENTS || total > MAX_FORWARDED_BYTES) {
-        const [uuid, oldest] = events.entries().next().value as [string, { bytes: number }];
-        events.delete(uuid);
-        total -= oldest.bytes;
       }
     },
   };
@@ -434,10 +447,6 @@ const prepareForward = async (request: Request, deps: IngestDeps) => {
     if (inRequest.has(event.uuid)) return [];
     inRequest.add(event.uuid);
     const known = deps.forwarded.get(event.uuid);
-    if (known?.delivered) {
-      taken.push(index);
-      return [];
-    }
     if (known) return [{ index, known: known.event }];
     if (!isOutboundEventName(event.event) || !fresh(event.timestamp, sentAt, receivedAt)) {
       rejected.push(index);
@@ -473,19 +482,19 @@ const prepareForward = async (request: Request, deps: IngestDeps) => {
       rejected.push(index);
       return [];
     }
-    const forwarded = { ...built, timestamp: event.timestamp };
-    deps.forwarded.remember(forwarded);
-    return [{ index, event: forwarded }];
+    return [{ index, event: { ...built, timestamp: event.timestamp } }];
   });
-  if (batch.length === 0 && taken.length === 0) throw new Refused(400);
-  const waits: Array<{ index: number; outcome: Promise<Answer> }> = [];
-  const own = batch.filter(({ index, event }) => {
-    const elsewhere = deps.forwarded.inFlight(event.uuid);
-    if (elsewhere) waits.push({ index, outcome: elsewhere });
-    return !elsewhere;
-  });
+  if (batch.length === 0) throw new Refused(400);
   let sent: (answer: Answer) => void = () => {};
-  deps.forwarded.sending(own.map(({ event }) => event.uuid), new Promise<Answer>((resolve) => (sent = resolve)));
+  const outcome = new Promise<Answer>((resolve) => (sent = resolve));
+  const waits: Array<{ index: number; outcome: Promise<Answer> }> = [];
+  const own: Array<{ index: number; event: ForwardedEvent }> = [];
+  deps.forwarded.claim(batch.map(({ event }) => event), outcome).forEach((claim, position) => {
+    const { index } = batch[position];
+    if (claim.kind === "delivered") taken.push(index);
+    else if (claim.kind === "elsewhere") waits.push({ index, outcome: claim.outcome });
+    else own.push({ index, event: claim.event });
+  });
   return {
     body: { api_key: deps.projectKey, batch: own.map(({ event }) => event) },
     own: own.map(({ index }) => index),
