@@ -337,6 +337,39 @@ fixed("fuzz: an instance Docker brings back between two of the deploy's looks at
   }),
 );
 
+for (let failing = 1; failing <= 8; failing += 1) {
+  fixed(`Greptile: a failed read of the container's image (read ${failing}) never loses the image a failed canary rolls back to`, () =>
+    withStack({ "sfu-a": {} }, async (sfus, shared) => {
+      const sfu = sfus["sfu-a"];
+      sfu.failImageRead = (read) => read === failing;
+      const result = await deploy(sfus, { env: { ...shared.env, DEPLOY_TEST_BAD_IMAGES: TARGET } });
+      assert.ok([1, 4].includes(result.code), result.output);
+      assertServes(sfu, LAST_GOOD);
+      assert.deepEqual(cutRooms(sfus).filter(Boolean), []);
+    }),
+  );
+}
+
+const releaseRecord = async (shared) => readFile(path.join(shared.env.SFU_DEPLOY_STATE_DIR, "vm.env"), "utf8").catch(() => "");
+
+fixed("Greptile: a browser deploy that fails leaves the release record where it was", () =>
+  withStack({ "sfu-a": {} }, async (sfus, shared) => {
+    const result = await deploy(sfus, { env: shared.env, args: ["--with-browser"], checkoutFiles: { "scripts/deploy-browser-service.sh": "#!/bin/sh\nexit 7\n" } });
+    assert.equal(result.code, 7, result.output);
+    assert.doesNotMatch(await releaseRecord(shared), new RegExp(`LAST_GOOD_IMAGE=${TARGET}`));
+  }),
+);
+
+fixed("Greptile: an SFU that stops while the browser deploys fails the run", () =>
+  withStack({ "sfu-a": {} }, async (sfus, shared) => {
+    const stop = `#!/bin/sh\nexec node -e 'fetch("http://127.0.0.1:${sfus["sfu-a"].port}/stand-in/stop").then(() => process.exit(0))'\n`;
+    const result = await deploy(sfus, { env: shared.env, args: ["--with-browser"], checkoutFiles: { "scripts/deploy-browser-service.sh": stop } });
+    assert.notEqual(result.code, 0, result.output);
+    assert.match(result.output, /sfu-a was deployed on .* but is not serving now/);
+    assert.doesNotMatch(await releaseRecord(shared), new RegExp(`LAST_GOOD_IMAGE=${TARGET}`));
+  }),
+);
+
 fixed("fuzz: a public route that is down when the deploy first looks still leaves the image the instance served on to go back to", () =>
   withStack({ "sfu-a": { publicRoute: true } }, async (sfus, shared) => {
     sfus["sfu-a"].publicFailures = 1;
@@ -381,6 +414,7 @@ const makePlan = (seed) => {
     crashes: [chance(0.85) ? 1 + Math.floor(rand() * 30) : 0, chance(0.35) ? 1 + Math.floor(rand() * 30) : 0],
     crashRestarts: Array.from({ length: pick([0, 0, 1, 2]) }, () => ({ who: pick(names), atMs: Math.floor(rand() * 8000), restartMs: pick([50, 300, 1500]) })),
     statusBlips: Array.from({ length: pick([0, 1, 3]) }, () => ({ who: pick(names), atMs: Math.floor(rand() * 8000) })),
+    imageReadBlips: Array.from({ length: pick([0, 0, 1, 2]) }, () => ({ who: pick(names), atMs: Math.floor(rand() * 8000) })),
   };
 };
 
@@ -480,6 +514,11 @@ const runPlan = async (plan) => {
     ];
     for (const crash of plan.crashRestarts) later(crash.atMs, () => faults && sfus[crash.who].crash(crash.restartMs));
     for (const blip of plan.statusBlips) later(blip.atMs, () => faults && (sfus[blip.who].statusFailures += 1));
+    for (const sfu of Object.values(sfus)) {
+      sfu.imageReadFailures = 0;
+      sfu.failImageRead = () => sfu.imageReadFailures > 0 && sfu.imageReadFailures-- > 0;
+    }
+    for (const blip of plan.imageReadBlips) later(blip.atMs, () => faults && (sfus[blip.who].imageReadFailures += 1));
     for (const [w, field, value] of windows) {
       later(w.atMs, () => {
         if (!faults) return;
@@ -521,7 +560,7 @@ const runPlan = async (plan) => {
       for (const timer of timers) clearTimeout(timer);
       timers.clear();
       calls.length = 0;
-      for (const sfu of Object.values(sfus)) Object.assign(sfu, { rooms: 0, statusAnswers: true, publicDown: false, refuseDrain: false, statusFailures: 0, publicFailures: 0 });
+      for (const sfu of Object.values(sfus)) Object.assign(sfu, { rooms: 0, statusAnswers: true, publicDown: false, refuseDrain: false, statusFailures: 0, publicFailures: 0, imageReadFailures: 0 });
       let result = null;
       for (let attempt = 1; attempt <= 4; attempt += 1) {
         result = await deploy(sfus, { env });

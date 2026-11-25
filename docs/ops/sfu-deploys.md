@@ -187,7 +187,12 @@ The rules every path keeps, checked after every run by
 A run exits 0 only when one final look at its end finds every instance it
 deployed serving the target by the serving rule, its public route included
 and answering healthy; any failed look fails the run (exit 1), and the same
-look decides whether the release is recorded.
+look decides whether the release is recorded. With `--with-browser` the
+browser service deploys before that look, so the look sees the SFUs after
+everything the run does, and a failed browser deploy stops the run before the
+release is recorded. A read of a container's image that comes back empty is
+unknown, never a different image: it is read up to three times, and the image
+recorded as last-known-good is the one the serving rule itself read.
 
 The fuzz test runs fixed cases (every recovery hole found in review)
 and seeded fault plans: one or two instances, a canary that passes or fails,
