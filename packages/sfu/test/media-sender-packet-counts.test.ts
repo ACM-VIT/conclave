@@ -23,7 +23,9 @@ const register = ({
   socketId = "viewer-socket",
   producers = new Map<string, Producer>([["shared-screen", sharer("shared-screen").producer]]),
   consumerProducers = { screen: "shared-screen" },
+  ownProducers = [] as Producer[],
 }: {
+  ownProducers?: Producer[];
   inRoom?: boolean;
   socketId?: string;
   producers?: Map<string, Producer>;
@@ -54,6 +56,7 @@ const register = ({
   const client = {
     id: `viewer-${socketId}`,
     getConsumerById: (id: string) => consumers.get(id),
+    producers: new Map(ownProducers.map((producer, index) => [`own-${index}`, producer])),
   } as unknown as Client;
   const room = {
     id: "room",
@@ -73,8 +76,8 @@ const register = ({
     activeConclaveAnswers: new Map(),
     adminHandlersRegistered: false,
   });
-  const ask = async (data: unknown) => {
-    const handler = handlers.get("getSenderPacketCounts") as unknown as (
+  const ask = async (data: unknown, event = "getSenderPacketCounts") => {
+    const handler = handlers.get(event) as unknown as (
       data: unknown,
       callback: (response: Counts) => void,
     ) => Promise<void>;
@@ -185,6 +188,61 @@ describe("telling a viewer how many packets the sharers behind its consumers sen
     }
 
     expect(answers.slice(0, 6)).toEqual(Array.from({ length: 6 }, () => ({ counts: { screen: 120 } })));
+    expect(answers[6]).toEqual({ error: "Too many requests" });
+  });
+});
+
+describe("telling a sender how many of its own packets reached the SFU", () => {
+  const askOwn = (target: ReturnType<typeof register>, data: unknown) =>
+    target.ask(data, "getOwnPacketCounts");
+
+  it("counts what the SFU received from each of the caller's own live producers, and nobody else's", async () => {
+    const microphone = sharer("mic", [40]);
+    const camera = sharer("camera", [300, 200]);
+    const target = register({
+      ownProducers: [microphone.producer, camera.producer],
+      producers: new Map<string, Producer>([["shared-screen", sharer("shared-screen").producer]]),
+    });
+
+    expect(await askOwn(target, { producerIds: ["mic", "camera", "shared-screen", "gone"] })).toEqual({
+      counts: { mic: 40, camera: 500 },
+    });
+  });
+
+  it("leaves out an own producer whose read fails and still answers for the rest", async () => {
+    const microphone = sharer("mic", [40]);
+    const camera = sharer("camera");
+    camera.getStats.mockRejectedValue(new Error("Producer closed"));
+    const target = register({ ownProducers: [microphone.producer, camera.producer] });
+
+    expect(await askOwn(target, { producerIds: ["mic", "camera"] })).toEqual({ counts: { mic: 40 } });
+  });
+
+  it("answers nothing outside a room", async () => {
+    expect(await askOwn(register({ inRoom: false }), { producerIds: ["mic"] })).toEqual({
+      error: "Not in a room",
+    });
+  });
+
+  it.each<[string, unknown]>([
+    ["no request", undefined],
+    ["the same id twice", { producerIds: ["mic", "mic"] }],
+    ["more ids than a sender has producers", { producerIds: ["a", "b", "c", "d", "e"] }],
+    ["consumer ids instead", { consumerIds: ["screen"] }],
+  ])("refuses %s", async (_name, request) => {
+    expect(await askOwn(register(), request)).toEqual({ error: "Invalid request" });
+  });
+
+  it("answers a burst of six and refuses the seventh", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const target = register({ ownProducers: [sharer("mic", [40]).producer] });
+    const answers = [];
+    for (let index = 0; index < 7; index += 1) {
+      answers.push(await askOwn(target, { producerIds: ["mic"] }));
+    }
+    vi.useRealTimers();
+
+    expect(answers.slice(0, 6)).toEqual(Array.from({ length: 6 }, () => ({ counts: { mic: 40 } })));
     expect(answers[6]).toEqual({ error: "Too many requests" });
   });
 });

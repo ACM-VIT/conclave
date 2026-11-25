@@ -140,6 +140,7 @@ export const RATE_LIMITS = {
   // Producer allocation is expensive enough to reject rapid churn.
   mediaProduce: { capacity: 12, refillPerSec: 2 },
   senderPacketCounts: { capacity: 6, refillPerSec: 1 },
+  ownPacketCounts: { capacity: 6, refillPerSec: 1 },
   // Capabilities are stable per WebRTC handler; permit one refinement/retry,
   // but prevent a client from repeatedly churning the room codec policy.
   mediaCapabilities: { capacity: 2, refillPerSec: 0.05 },

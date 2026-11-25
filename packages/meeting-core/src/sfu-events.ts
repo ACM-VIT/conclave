@@ -42,6 +42,7 @@ export const SFU_EVENTS = {
     getProducers: "getProducers",
     restartIce: "restartIce",
     getSenderPacketCounts: "getSenderPacketCounts",
+    getOwnPacketCounts: "getOwnPacketCounts",
     toggleMute: "toggleMute",
     toggleCamera: "toggleCamera",
     closeRemoteProducer: "closeRemoteProducer",
