@@ -278,20 +278,22 @@ export function createOutbox(deps: OutboxDeps) {
       lockRetryMs = LOCK_RETRY_MS;
       let open = true;
       const owns = (id: string, owned: string): boolean => open && deps.store.get(id)?.sendId === owned;
+      const store: LockedStore = {
+        write: (owned, next) => (!owns(next.id, owned) ? "lost" : deps.store.save(next) ? "written" : "refused"),
+        remove: (id, owned) => {
+          if (!owns(id, owned)) return false;
+          deps.store.remove(id);
+          return true;
+        },
+        delay: (id, until) => {
+          const current = open ? deps.store.get(id) : null;
+          if (!current) return false;
+          return until <= current.notBefore || deps.store.save({ ...current, notBefore: until });
+        },
+      };
       try {
-        run({
-          write: (owned, next) => (!owns(next.id, owned) ? "lost" : deps.store.save(next) ? "written" : "refused"),
-          remove: (id, owned) => {
-            if (!owns(id, owned)) return false;
-            deps.store.remove(id);
-            return true;
-          },
-          delay: (id, until) => {
-            const current = open ? deps.store.get(id) : null;
-            if (!current) return false;
-            return until <= current.notBefore || deps.store.save({ ...current, notBefore: until });
-          },
-        });
+        for (const id of [...kept.keys()]) applyKept(id, store);
+        run(store);
       } finally {
         open = false;
       }
@@ -550,14 +552,7 @@ export function createOutbox(deps: OutboxDeps) {
 
   const replayPass = (store: LockedStore): void => {
     const stale: StoredBatch[] = [];
-    const listed = deps.store.list();
-    for (const id of [...kept.keys()]) {
-      if (listed.some((saved) => saved.id === id)) applyKept(id, store);
-      else kept.delete(id);
-    }
-    for (const listedCopy of listed) {
-      const saved = deps.store.get(listedCopy.id);
-      if (!saved) continue;
+    for (const saved of deps.store.list()) {
       if (live.has(saved.id)) continue;
       if (saved.leaseUntil > deps.now()) {
         wakeAt(saved.leaseUntil);

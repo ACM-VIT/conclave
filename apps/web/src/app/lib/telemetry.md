@@ -129,10 +129,12 @@ one owner at a time:
   it leaves nothing waiting on it. An answer that could not get the lock is
   kept in its tab, with its outcome, its Retry-After and the attempt id it
   answered, and the tab asks again every 100 ms while that send's lease runs,
-  then with a backoff from 1 s to 30 s; its next locked pass applies the kept
-  answer before anything else (delivered or refused settles the batch, a retry
-  keeps its wait from when the answer arrived), or, if another tab has
-  claimed the batch since, carries only its Retry-After. A replay whose lock
+  then with a backoff from 1 s to 30 s; the next lock the tab is granted, for
+  any purpose, applies its kept answers before anything else (delivered or
+  refused settles the batch, a retry keeps its wait from when the answer
+  arrived), or, if another tab has claimed the batch since, carries only its
+  Retry-After. A tab that closes, or stays frozen past the lease, before then
+  takes the answer with it, as any page that dies before writing does. A replay whose lock
   request is refused asks again the same way. The pass claims a due batch by writing a new attempt
   id and a lease until 16 s after the send, so another tab leaves it alone
   until the request has settled. An answer from an earlier attempt, one
