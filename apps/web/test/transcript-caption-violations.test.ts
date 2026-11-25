@@ -416,6 +416,43 @@ describe("each Sarvam lane owns its own turns and answers", () => {
     ]);
   });
 
+  it("a heard turn whose first START_SPEECH comes seconds after the turn ended keeps a caption or a gap, never nothing (Greptile r4689037540)", async () => {
+    const rig = await startRig(SARVAM);
+    const [first] = rig.providerSockets();
+    await rig.speak(ada);
+    await rig.clear(ada);
+    await vi.advanceTimersByTimeAsync(4_000);
+    first.emit(sarvamSpeechStart());
+    await vi.advanceTimersByTimeAsync(DEADLINE + 5_000);
+
+    expect(shown(rig)).toEqual([[GAP, "ada"]]);
+  });
+
+  it("a turn whose answer is late moves the speaker's next turn to a fresh connection, and the late answer still lands on its own turn", async () => {
+    const rig = await startRig(SARVAM);
+    await signalOnce(rig);
+    await sendNamed(rig, named(200), grace);
+    const slow = await laneOf(rig, grace);
+    slow.emit(sarvamSpeechStart());
+    await rig.clear(grace);
+    await vi.advanceTimersByTimeAsync(6_000);
+    const next = named(240);
+    await sendNamed(rig, next, grace);
+    await settle();
+    const fresh = await laneOf(rig, grace);
+    fresh.emit(sarvamSpeechStart());
+    fresh.emit(sarvamFinal("g2", "Grace second."));
+    await rig.clear(grace);
+    slow.emit(sarvamFinal("g1", "Grace first."));
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect([fresh === slow, carriesAudio(fresh, next), carriesAudio(slow, next), slow.closed]).toEqual([false, true, false, true]);
+    expect(shown(rig).filter(([, speaker]) => speaker === "grace")).toEqual([
+      ["Grace first.", "grace"],
+      ["Grace second.", "grace"],
+    ]);
+  });
+
   it("a long outage with repeated commits and clears holds one boundary per speaker, not one per message (Greptile r4688831730)", async () => {
     const rig = await startRig(SARVAM);
     await rig.speak(ada);
