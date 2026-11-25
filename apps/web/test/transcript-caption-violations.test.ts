@@ -5,7 +5,7 @@ import {
   TRANSCRIPTION_LINE_DEADLINE_MS as DEADLINE,
 } from "../transcript-worker/src/constants";
 import { Pcm24To16Downsampler } from "../transcript-worker/src/transcription/sarvam";
-import { clicksPcm, pcmBase64, voicedPcm } from "./transcript-audio-fixtures";
+import { clicksPcm, noisePcm, pcmBase64, voicedPcm } from "./transcript-audio-fixtures";
 import {
   OPENAI,
   SARVAM,
@@ -511,6 +511,53 @@ describe("each Sarvam lane owns its own turns and answers", () => {
     await vi.advanceTimersByTimeAsync(DEADLINE + 1_000);
 
     expect(shown(rig)).toEqual([[`One. Two. ${GAP}`, "lin"]]);
+  });
+
+  it("two answers Sarvam sends moments apart for one turn, after its settle, stay on that turn", async () => {
+    const rig = await startRig(SARVAM);
+    const [first] = rig.providerSockets();
+    await sendNamed(rig, named(150), ada);
+    await rig.clear(ada);
+    await vi.advanceTimersByTimeAsync(3_000);
+    await sendNamed(rig, named(210), ada);
+    await rig.clear(ada);
+    first.emit(sarvamFinal("a1", "Part one."));
+    await vi.advanceTimersByTimeAsync(100);
+    first.emit(sarvamFinal("a2", "Part two."));
+    await vi.advanceTimersByTimeAsync(1_000);
+    first.emit(sarvamFinal("b", "Next."));
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(shown(rig)).toEqual([
+      ["Part one. Part two.", "ada"],
+      ["Next.", "ada"],
+    ]);
+  });
+
+  it("a heard turn whose only answer was empty still shows the late answer its own connection sends after it", async () => {
+    const rig = await startRig(SARVAM);
+    const [first] = rig.providerSockets();
+    await sendNamed(rig, named(150), ada);
+    await rig.clear(ada);
+    first.emit(sarvamSpeechStart());
+    first.emit(sarvamFinal("empty", ""));
+    await vi.advanceTimersByTimeAsync(3_000);
+    first.emit(sarvamSpeechStart());
+    first.emit(sarvamFinal("late", "Late words."));
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(shown(rig)).toEqual([["Late words.", "ada"]]);
+  });
+
+  it("a noise turn still open at a reconnect is let go, never replayed", async () => {
+    const rig = await startRig(SARVAM);
+    const [first] = rig.providerSockets();
+    const noise = pcmBase64(noisePcm(-60, 200, 3));
+    await sendNamed(rig, noise, ada);
+    first.disconnect();
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect([carriesAudio(first, noise), rig.providerSockets().slice(1).some((socket) => carriesAudio(socket, noise))]).toEqual([true, false]);
   });
 
   it("a long outage with repeated commits and clears holds one boundary per speaker, not one per message (Greptile r4688831730)", async () => {
