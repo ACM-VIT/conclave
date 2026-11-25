@@ -37,7 +37,7 @@ load_backup_config() {
   STATE_DIR="${CONCLAVE_STATE_DIR:-${RECORDING_STORAGE_PATH:-/var/lib/conclave/recordings}}"
   BACKUP_LOCAL_DIR="${BACKUP_LOCAL_DIR:-/var/backups/conclave}"
   # shellcheck disable=SC2034
-  REDIS_SOURCE_URL="$(python3 -I "${BACKUP_SCRIPTS}/backup_state.py" redis-source)" || die "cannot read the Redis URL the SFU uses"
+  REDIS_SOURCE_URL="$(python3 -I "${BACKUP_SCRIPTS}/backup_state.py" redis-source "$STATE_DIR")" || die "cannot read the Redis URL the SFU uses"
   # shellcheck disable=SC2034
   REDIS_KEY_PATTERN="${BACKUP_REDIS_PATTERN:-$(python3 -I "${BACKUP_SCRIPTS}/backup_state.py" redis-pattern)}"
 }

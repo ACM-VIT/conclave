@@ -51,6 +51,7 @@ from statelib import (  # noqa: E402
     redis_key_pattern,
     redis_key_prefix,
     redis_source_url,
+    sfu_redis_source,
     relative_target,
     resolve,
     restore_writes,
@@ -398,6 +399,8 @@ def main(argv):
             fenced_command(*args)
         elif command == "containers":
             containers_command(*args)
+        elif command == "redis-source" and args:
+            print(sfu_redis_source(os.environ, state_mounts(docker_containers(), args[0]), bool(os.environ.get("BACKUP_REDIS_PATTERN"))))
         elif command == "redis-source":
             print(redis_source_url(os.environ))
         elif command == "redis-prefix":

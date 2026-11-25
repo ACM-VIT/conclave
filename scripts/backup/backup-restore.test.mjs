@@ -2705,7 +2705,7 @@ test("the backup reads a store's persistence mode as the SFU's factories do", ()
   });
   const backupSide = spawnSync(
     "python3",
-    ["-I", "-c", "import json, sys; sys.path.insert(0, sys.argv[1]); from statelib import file_backed; print(json.dumps([file_backed({'SCHEDULING_PERSISTENCE': v}, 'SCHEDULING_SQLITE_PATH') for v in json.loads(sys.argv[2])]))", scripts, JSON.stringify(values)],
+    ["-I", "-B", "-c", "import json, sys; sys.path.insert(0, sys.argv[1]); from statelib import file_backed; print(json.dumps([file_backed({'SCHEDULING_PERSISTENCE': v}, 'SCHEDULING_SQLITE_PATH') for v in json.loads(sys.argv[2])]))", scripts, JSON.stringify(values)],
     { encoding: "utf8" },
   );
   assert.equal(backupSide.status, 0, backupSide.stderr);
@@ -2734,6 +2734,76 @@ test(
     }
   },
 );
+
+const stopAfterFirstPlace = `
+import os, signal, sys
+sys.path.insert(0, sys.argv[1])
+import restore_state
+place = restore_state.Swap.place
+sent = []
+def stopping(self, rel):
+    place(self, rel)
+    if not sent:
+        sent.append(rel)
+        os.kill(os.getpid(), int(os.environ["STOP_SIGNAL"]))
+restore_state.Swap.place = stopping
+sys.argv = ["restore_state.py", *sys.argv[2:]]
+sys.exit(restore_state.main())
+`;
+
+for (const [name, number] of [["SIGTERM", 15], ["SIGHUP", 1], ["SIGINT", 2]]) {
+  test(`a restore stopped by ${name} in the middle of its swap undoes every rename`, needs, async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    try {
+      const { state, env, backup, latestArchive } = await setUp(root);
+      makeDb(path.join(state, "conclave.sqlite"), "backed up");
+      await mkdir(path.join(state, "data"));
+      for (const file of ["a.json", "b.json", "c.json"]) await writeFile(path.join(state, "data", file), `backed up ${file}`);
+      await backup("--local-only");
+      const work = await mkdtemp(path.join(tmpdir(), "conclave-restore-work-"));
+      try {
+        await run("age", ["--decrypt", "-i", path.join(root, "key.txt"), "-o", path.join(work, "backup.tar.gz"), await latestArchive()]);
+        await rm(path.join(state, "conclave.sqlite"));
+        makeDb(path.join(state, "conclave.sqlite"), "live");
+        for (const file of ["a.json", "b.json", "c.json"]) await writeFile(path.join(state, "data", file), `live ${file}`);
+        const stopped = spawnSync(
+          "python3",
+          ["-I", "-B", "-c", stopAfterFirstPlace, scripts, "--archive", path.join(work, "backup.tar.gz"), "--work", work, "--state", state, "--container", "/var/lib/conclave/recordings", "--only", "sqlite,files", "--apply"],
+          { env: { ...env, STOP_SIGNAL: String(number), REDIS_SOURCE_URL: "", REDIS_KEY_PATTERN: "", SFU_HEALTH_URLS: "http://127.0.0.1:9/health" }, encoding: "utf8" },
+        );
+        assert.notEqual(stopped.status, 0, stopped.stdout + stopped.stderr);
+        for (const file of ["a.json", "b.json", "c.json"]) assert.equal(await readFile(path.join(state, "data", file), "utf8").catch(() => "missing"), `live ${file}`);
+        assert.deepEqual(rows(path.join(state, "conclave.sqlite")), ["live"]);
+        assert.deepEqual((await readdir(path.dirname(state))).filter((entry) => entry.startsWith(".conclave-restore")), []);
+        assert.match(stopped.stderr, /stopped by/);
+      } finally {
+        await rm(work, { recursive: true, force: true });
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+}
+
+test("an SFU whose own Redis the backup config does not name stops the backup and the restore", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, local, config, setDocker, backup, latestArchive, restore } = await setUp(root);
+    withDatabase(state);
+    await backup("--local-only");
+    const archive = await latestArchive();
+    const staging = ["SFU_PORT=9", "SFU_INSTANCE_ID=sfu-staging", "SFU_PERSISTENCE_REDIS_URL=redis://:secret-pass@127.0.0.1:6380/0"];
+    await setDocker([{ id: "sfu-staging", mounts: [state], status: "exited", env: staging }]);
+    await assert.rejects(backup("--local-only"), (error) => /sfu-staging keeps its state in the Redis at 127\.0\.0\.1:6380\/0/.test(error.stderr) && !error.stderr.includes("secret-pass"));
+    assert.equal((await archives(local)).length, 1);
+    await assert.rejects(restore("--file", archive, "--yes"), /sfu-staging keeps its state in the Redis at 127\.0\.0\.1:6380\/0/);
+    await writeFile(config, `${await readFile(config, "utf8")}\nSFU_PERSISTENCE_REDIS_URL=redis://:secret-pass@127.0.0.1:6380/0\n`);
+    await setDocker([{ id: "sfu-staging", mounts: [state], status: "exited", env: [...staging, "SFU_PERSISTENCE_REDIS_KEY_PREFIX=staging"] }]);
+    await assert.rejects(backup("--local-only"), /sfu-staging keeps its state under the Redis key prefix staging/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 describe("backup and restore", { concurrency: 6 }, () => {
   for (const args of queued) nodeTest(...args);

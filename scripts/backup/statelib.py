@@ -24,6 +24,7 @@ import subprocess
 import tarfile
 import time
 import unicodedata
+import urllib.parse
 
 SIDE_SUFFIXES = ("-wal", "-shm", "-journal")
 LONGEST_SIDE = max(len(suffix) for suffix in SIDE_SUFFIXES)
@@ -567,6 +568,32 @@ def redis_source_url(env):
 
 def redis_key_prefix(env):
     return ((env.get("SFU_PERSISTENCE_REDIS_KEY_PREFIX") or "").strip(JS_SPACE) or "conclave:sfu:persistence").rstrip(":")
+
+
+def redis_where(url):
+    try:
+        parts = urllib.parse.urlsplit(url)
+        return f"{parts.hostname or '?'}:{parts.port or 6379}{parts.path or '/0'}"
+    except ValueError:
+        return "an unreadable URL"
+
+
+def sfu_redis_source(env, containers, pattern_set=False):
+    url = redis_source_url(env)
+    prefix = redis_key_prefix(env)
+    for found in containers:
+        if found["relation"] not in ("exact", "related") or not is_sfu(found):
+            continue
+        theirs = redis_source_url(found["env"])
+        if not theirs:
+            continue
+        name = found["env"].get("SFU_INSTANCE_ID") or found["id"]
+        if theirs != url:
+            named = redis_where(url) if url else "no Redis"
+            raise Refused(f"the SFU {name} keeps its state in the Redis at {redis_where(theirs)}, and the backup config names {named}; set SFU_PERSISTENCE_REDIS_URL in the backup config to that Redis, as this host reaches it")
+        if not pattern_set and redis_key_prefix(found["env"]) != prefix:
+            raise Refused(f"the SFU {name} keeps its state under the Redis key prefix {redis_key_prefix(found['env'])}, not {prefix}; set SFU_PERSISTENCE_REDIS_KEY_PREFIX in the backup config to it")
+    return url
 
 
 def redis_key_pattern(env):

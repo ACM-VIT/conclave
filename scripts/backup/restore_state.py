@@ -24,6 +24,7 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import sqlite3
 import stat
 import subprocess
@@ -378,12 +379,36 @@ class Swap:
     each live entry it replaces first moved into the aside dir. Every rename
     is journaled, so undo puts back exactly what was there."""
 
+    STOPS = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+
     def __init__(self, state_fd, staging_fd, aside_fd):
         self.state_fd = state_fd
         self.staging_fd = staging_fd
         self.aside_fd = aside_fd
         self.journal = []
         self.placed_dirs = []
+        self.stopped = []
+        self.handlers = {}
+
+    def __enter__(self):
+        for number in self.STOPS:
+            self.handlers[number] = signal.signal(number, lambda received, frame: self.stopped.append(received))
+        return self
+
+    def __exit__(self, *exc):
+        for number, handler in self.handlers.items():
+            signal.signal(number, handler)
+        return False
+
+    def stop_after(self, kept):
+        if self.stopped:
+            where = f", the entries they replaced are in {kept}" if kept else ""
+            raise Refused(f"stopped by {signal.Signals(self.stopped[0]).name} once every rename was done; the files are restored{where} and nothing after them ran")
+        return kept
+
+    def check_stop(self):
+        if self.stopped:
+            raise Refused(f"stopped by {signal.Signals(self.stopped[0]).name} before every rename was done; undoing them")
 
     @staticmethod
     def rename(src_root, dst_root, rel, make_dst=False):
@@ -416,10 +441,12 @@ class Swap:
             raise
 
     def aside(self, rel):
+        self.check_stop()
         self.rename(self.state_fd, self.aside_fd, rel, make_dst=True)
         self.journal.append(("aside", rel))
 
     def place(self, rel):
+        self.check_stop()
         self.rename(self.staging_fd, self.state_fd, rel)
         self.journal.append(("placed", rel))
 
@@ -538,36 +565,36 @@ def apply_restore(state, archive, writes, sides, roots, stamp, owner, sqlite):
             os.mkdir(aside_name, 0o700, dir_fd=parent_fd)
             aside_fd = open_dir(parent_fd, aside_name, aside_name)
             try:
-                swap = Swap(state.fd, staging_fd, aside_fd)
-                try:
-                    for rel in sorted(sides):
-                        parts = rel.split("/")
-                        try:
-                            holder = open_parts(state.fd, parts[:-1])
-                        except FileNotFoundError:
-                            continue
-                        try:
-                            present = at(holder, parts[-1], rel) is not None
-                        finally:
-                            os.close(holder)
-                        if present:
-                            swap.aside(rel)
-                    swap.merge()
-                    problems = chain_problems(Tree(state.fd), archive, roots) if sqlite else []
-                    if problems:
-                        raise Refused("after the restore, " + "; ".join(problems))
-                except BaseException:
+                with Swap(state.fd, staging_fd, aside_fd) as swap:
                     try:
-                        swap.undo()
+                        for rel in sorted(sides):
+                            parts = rel.split("/")
+                            try:
+                                holder = open_parts(state.fd, parts[:-1])
+                            except FileNotFoundError:
+                                continue
+                            try:
+                                present = at(holder, parts[-1], rel) is not None
+                            finally:
+                                os.close(holder)
+                            if present:
+                                swap.aside(rel)
+                        swap.merge()
+                        problems = chain_problems(Tree(state.fd), archive, roots) if sqlite else []
+                        if problems:
+                            raise Refused("after the restore, " + "; ".join(problems))
                     except BaseException:
-                        log(f"Could not undo every rename; the entries the restore replaced are in {state.parent_real}/{aside_name}")
+                        try:
+                            swap.undo()
+                        except BaseException:
+                            log(f"Could not undo every rename; the entries the restore replaced are in {state.parent_real}/{aside_name}")
+                            raise
+                        log("Undid every rename: the state dir is as it was")
+                        os.close(aside_fd)
+                        aside_fd = None
+                        if not holds_files(parent_fd, aside_name):
+                            remove_tree(parent_fd, aside_name)
                         raise
-                    log("Undid every rename: the state dir is as it was")
-                    os.close(aside_fd)
-                    aside_fd = None
-                    if not holds_files(parent_fd, aside_name):
-                        remove_tree(parent_fd, aside_name)
-                    raise
                 placed = [rel for rel in builder.dirs if any(rel == top or rel.startswith(top + "/") for top in swap.placed_dirs)]
                 builder.set_modes(state.fd, placed)
             finally:
@@ -575,8 +602,8 @@ def apply_restore(state, archive, writes, sides, roots, stamp, owner, sqlite):
                     os.close(aside_fd)
             if is_empty(parent_fd, aside_name):
                 os.rmdir(aside_name, dir_fd=parent_fd)
-                return None
-            return f"{state.parent_real}/{aside_name}"
+                return swap.stop_after(None)
+            return swap.stop_after(f"{state.parent_real}/{aside_name}")
         finally:
             os.close(staging_fd)
             if staging_name is not None:

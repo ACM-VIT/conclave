@@ -247,7 +247,11 @@ To apply it:
      `<state dir>.pre-restore-<stamp>` beside the state dir, under its own
      name, together with a live database's `-wal`, `-shm` and `-journal`, so a
      stale journal never replays onto the restored copy. Any failure from the
-     first rename on undoes every rename. A populated dir restores the same as
+     first rename on undoes every rename. So does a SIGTERM, SIGHUP or SIGINT
+     (a closed SSH session, a stopped command): during the renames it is held
+     until the next safe point, then every rename is undone and the restore
+     exits with an error; one that comes after the last rename leaves the
+     restored files and stops the restore there. A populated dir restores the same as
      an empty one, and a lost state dir is the staging tree renamed into place.
    - The state dir's parent must be writable by its owner alone, and the state
      dir must not be a mount point of its own: the restore keeps its staging
@@ -258,6 +262,11 @@ To apply it:
    `SFU_PERSISTENCE_REDIS_URL`, else `SFU_REDIS_URL`, else `REDIS_URL`, each
    trimmed first, so a blank value falls through to the next as it does for
    the SFU (the backup suite checks both rules agree over a table of settings).
+   Every SFU container that mounts the state dir and names a Redis of its own
+   (staging builds its URL in its compose file) must name the same Redis and
+   key prefix as the backup config, or the backup and the restore both stop
+   before anything is read or written; set `SFU_PERSISTENCE_REDIS_URL` (and
+   the prefix) in the backup config to that Redis as this host reaches it.
    The Redis keys
    under the SFU's persistence prefix (`conclave:sfu:persistence:*`, or the
    `SFU_PERSISTENCE_REDIS_KEY_PREFIX` the SFU reads, trimmed and without
