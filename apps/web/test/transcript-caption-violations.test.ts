@@ -578,6 +578,80 @@ describe("each Sarvam lane owns its own turns and answers", () => {
   });
 });
 
+describe("every Sarvam timer and limit has one owner", () => {
+  it("a language switch drains each turn on its own deadline, so one speaker's timeout never cuts off another's answer (Greptile r4689923380)", async () => {
+    const rig = await startRig(SARVAM);
+    await sendNamed(rig, named(150), ada);
+    await rig.clear(ada);
+    (await laneOf(rig, ada)).emit(sarvamSpeechStart());
+    await vi.advanceTimersByTimeAsync(25_000);
+    await sendNamed(rig, named(200), grace);
+    await rig.clear(grace);
+    const graceLane = await laneOf(rig, grace);
+    graceLane.emit(sarvamSpeechStart());
+    await rig.switchTo("ta");
+    await vi.advanceTimersByTimeAsync(10_000);
+    graceLane.emit(sarvamFinal("g", "Grace in time."));
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(shown(rig)).toEqual([
+      [GAP, "ada"],
+      ["Grace in time.", "grace"],
+    ]);
+  });
+
+  it("a quiet turn keeps its caption when Sarvam's first speech signal and answer come seconds after the turn ended (Greptile r4689923385)", async () => {
+    const rig = await startRig(SARVAM);
+    const [first] = rig.providerSockets();
+    await sendNamed(rig, whisper, ada);
+    await rig.clear(ada);
+    await vi.advanceTimersByTimeAsync(4_000);
+    first.emit(sarvamSpeechStart());
+    first.emit(sarvamFinal("q", "Quiet words."));
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(shown(rig)).toEqual([["Quiet words.", "ada"]]);
+  });
+
+  it("a language switch keeps the whole room within four Sarvam sockets, and the new connection waits for the old one to free them (Greptile r4689923391)", async () => {
+    const rig = await startRig(SARVAM);
+    const people = [ada, grace, lin, mo];
+    const oldLanes: FakeProviderSocket[] = [];
+    for (const [index, person] of people.entries()) {
+      await sendNamed(rig, named(150 + index * 30), person);
+      await rig.clear(person);
+      const lane = await laneOf(rig, person);
+      lane.emit(sarvamSpeechStart());
+      oldLanes.push(lane);
+    }
+    let most = openSockets(rig).length;
+    const watch = () => {
+      most = Math.max(most, openSockets(rig).length);
+    };
+    void rig.switchTo("ta");
+    await settle();
+    watch();
+    const kitAudio = named(300);
+    await sendNamed(rig, kitAudio, kit);
+    await rig.clear(kit);
+    await settle();
+    watch();
+    for (const [index, lane] of oldLanes.entries()) {
+      lane.emit(sarvamFinal(`old${index}`, `Old ${index}.`));
+      await vi.advanceTimersByTimeAsync(3_000);
+      watch();
+    }
+    const kitLane = openSockets(rig).find((socket) => carriesAudio(socket, kitAudio));
+    kitLane?.emit(sarvamSpeechStart());
+    kitLane?.emit(sarvamFinal("k", "Kit after the switch."));
+    await vi.advanceTimersByTimeAsync(3_000);
+    watch();
+
+    expect(most).toBeLessThanOrEqual(4);
+    expect(shown(rig).filter(([, speaker]) => speaker === "kit")).toEqual([["Kit after the switch.", "kit"]]);
+  });
+});
+
 describe("the gap is the accepted cost, never another speaker", () => {
   it("a Sarvam utterance that never gets its answer shows as a gap under its own speaker", async () => {
     const rig = await startRig(SARVAM);
