@@ -141,6 +141,14 @@ export type GuestLinkPlan = {
   readonly recordable: boolean;
 };
 
+export type GuestIdentityMerge = { readonly from: string; readonly into: string };
+
+export type StagedGuestMerge = { commit(): void };
+
+export type GuestIdentityMerger = (
+  merges: readonly GuestIdentityMerge[],
+) => StagedGuestMerge | null;
+
 // The passes a join may lean on for a right: the plan's, when the room
 // would record them, else what the room already links.
 const rightsPassesOf = (link: GuestLinkPlan | undefined) =>
@@ -389,9 +397,7 @@ export class Room {
     WebcamReceiverCapacityProofCoordinator;
 
   private readonly webcamVp9Enabled: boolean;
-  private readonly guestIdentityMergeListeners = new Set<
-    (from: string, into: string) => void
-  >();
+  private guestIdentityMerger: GuestIdentityMerger | null = null;
   private readonly lifecycleListeners = new Set<
     (event: RoomLifecycleEvent) => void
   >();
@@ -433,9 +439,8 @@ export class Room {
    * Lets room-scoped state that lives outside this class, such as the apps
    * authority runtime, follow who is in the room and when it closes.
    */
-  onGuestIdentityMerged(listener: (from: string, into: string) => void): () => void {
-    this.guestIdentityMergeListeners.add(listener);
-    return () => this.guestIdentityMergeListeners.delete(listener);
+  setGuestIdentityMerger(merger: GuestIdentityMerger): void {
+    this.guestIdentityMerger = merger;
   }
 
   onLifecycle(listener: (event: RoomLifecycleEvent) => void): () => void {
@@ -1148,7 +1153,9 @@ export class Room {
       guestProof,
       passes,
       blocked: this.guestHolds(this.blockedUsers, "", guestProof, passes),
-      recordable: passes.size <= GUEST_PASS_GROUP_LIMIT,
+      recordable:
+        passes.size <= GUEST_PASS_GROUP_LIMIT &&
+        this.stageGuestMerges(this.guestLinkOf(passes).merges) !== null,
     };
   }
 
@@ -1183,26 +1190,17 @@ export class Room {
     link: GuestLinkPlan,
   ): Array<{ request: WaitingRequest; admitted: boolean }> {
     if (link.blocked) return [];
-    if (!link.recordable) {
+    const { passes, held, kept, merges } = this.guestLinkOf(link.passes);
+    const merge = link.recordable ? this.stageGuestMerges(merges) : null;
+    if (!merge) {
       Logger.warn(
-        `Room ${this.id}: a guest showed ${link.passes.size} passes; the room links at most ${GUEST_PASS_GROUP_LIMIT}, so this link is not recorded.`,
+        link.passes.size > GUEST_PASS_GROUP_LIMIT
+          ? `Room ${this.id}: a guest showed ${link.passes.size} passes; the room links at most ${GUEST_PASS_GROUP_LIMIT}, so this link is not recorded.`
+          : `Room ${this.id}: an app could not merge what a guest keeps under ${merges.length + 1} of its passes, so this link is not recorded.`,
       );
       return [];
     }
     const guestsBefore = [...new Set([...link.passes].map((proof) => this.guestOfPass(proof)))];
-    const passes = new Set(link.passes);
-    const known = new Set<GuestRecord>();
-    for (const proof of link.passes) {
-      const record = this.guestRecords.get(proof);
-      if (!record) continue;
-      known.add(record);
-      for (const pass of record.passes) passes.add(pass);
-    }
-    const held = [...known].filter((record) => record.heldAt !== null);
-    const kept = (held.length > 0 ? held : [...known]).reduce<GuestRecord | undefined>(
-      (earliest, record) => (!earliest || record.since < earliest.since ? record : earliest),
-      undefined,
-    );
     const merged: GuestRecord = {
       identity: kept?.identity ?? link.guestProof,
       since: kept?.since ?? (this.guestPassClock += 1),
@@ -1220,16 +1218,7 @@ export class Room {
       }
       this.guestRecords.set(proof, merged);
     }
-    for (const record of held) {
-      if (record.identity === merged.identity) continue;
-      for (const listener of this.guestIdentityMergeListeners) {
-        try {
-          listener(record.identity, merged.identity);
-        } catch (error) {
-          Logger.warn(`Room ${this.id}: an identity merge listener failed`, error);
-        }
-      }
-    }
+    merge.commit();
     if (seatedIdentityChanged) this.notifyLifecycle("membership");
     this.mergeWaitingGuests(guestsBefore, this.guestOfPass(link.guestProof));
     const settled: Array<{ request: WaitingRequest; admitted: boolean }> = [];
@@ -1253,6 +1242,38 @@ export class Room {
       }
     }
     return settled;
+  }
+
+  private guestLinkOf(linkPasses: ReadonlySet<string>): {
+    passes: Set<string>;
+    held: GuestRecord[];
+    kept: GuestRecord | undefined;
+    merges: GuestIdentityMerge[];
+  } {
+    const passes = new Set(linkPasses);
+    const known = new Set<GuestRecord>();
+    for (const proof of linkPasses) {
+      const record = this.guestRecords.get(proof);
+      if (!record) continue;
+      known.add(record);
+      for (const pass of record.passes) passes.add(pass);
+    }
+    const held = [...known].filter((record) => record.heldAt !== null);
+    const kept = (held.length > 0 ? held : [...known]).reduce<GuestRecord | undefined>(
+      (earliest, record) => (!earliest || record.since < earliest.since ? record : earliest),
+      undefined,
+    );
+    const merges = kept
+      ? held
+          .filter((record) => record.identity !== kept.identity)
+          .map((record) => ({ from: record.identity, into: kept.identity }))
+      : [];
+    return { passes, held, kept, merges };
+  }
+
+  private stageGuestMerges(merges: readonly GuestIdentityMerge[]): StagedGuestMerge | null {
+    if (merges.length === 0 || !this.guestIdentityMerger) return { commit: () => undefined };
+    return this.guestIdentityMerger(merges);
   }
 
   /**
@@ -3416,7 +3437,7 @@ export class Room {
   close(): void {
     this.notifyLifecycle("closed");
     this.lifecycleListeners.clear();
-    this.guestIdentityMergeListeners.clear();
+    this.guestIdentityMerger = null;
     this.aiCredentials.clear();
     this.stopCleanupTimer();
     this.cancelWebcamCodecPolicyUpgrade();

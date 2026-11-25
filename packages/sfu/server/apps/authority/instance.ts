@@ -47,6 +47,8 @@ export type Actor = {
   displayName: string;
 };
 
+export type StagedMerge = { commit(): boolean };
+
 export type InstanceOptions = {
   limits: AuthorityLimits;
   random: AuthorityRandom;
@@ -375,6 +377,10 @@ export class AuthorityInstance {
   }
 
   mergeSubjects(merge: SubjectMerge, now: number): boolean {
+    return this.stageMerge([merge], now)?.commit() ?? false;
+  }
+
+  stageMerge(merges: readonly SubjectMerge[], now: number): StagedMerge | null {
     const handler = this.module.runtime.mergeSubjects;
     const ctx: TimerContext = {
       room: this.policy,
@@ -382,18 +388,25 @@ export class AuthorityInstance {
       random: this.options.random,
       nextId: (prefix) => this.nextId(prefix),
     };
-    const outcome = this.transact((tx) => {
-      if (handler) finished(handler(ctx, tx, merge), "Subject merge");
+    const staged = this.store.stage((tx) => {
+      if (!handler) return;
+      for (const merge of merges) finished(handler(ctx, tx, merge), "Subject merge");
     });
-    if (!outcome.ok) {
+    if (!staged.ok) {
       Logger.error(
-        `[Authority] ${this.appId}: merging two subjects failed (${outcome.kind})`,
-        outcome.kind === "fault" ? outcome.error : outcome,
+        `[Authority] ${this.appId}: merging two subjects failed (${staged.kind})`,
+        staged.kind === "fault" ? staged.error : staged,
       );
-      return false;
+      return null;
     }
-    this.receipts.merge(merge.from, merge.into);
-    return outcome.changed;
+    return {
+      commit: () => {
+        const changed = staged.commit();
+        this.views.takeIn();
+        for (const { from, into } of merges) this.receipts.merge(from, into);
+        return changed;
+      },
+    };
   }
 
   /**

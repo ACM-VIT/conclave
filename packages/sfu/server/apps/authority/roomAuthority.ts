@@ -28,10 +28,14 @@ import {
   type Subject,
 } from "@conclave/apps-sdk/authority/server";
 import type { Client } from "../../../config/classes/Client.js";
-import type { Room } from "../../../config/classes/Room.js";
+import type {
+  GuestIdentityMerge,
+  Room,
+  StagedGuestMerge,
+} from "../../../config/classes/Room.js";
 import type { ConnectionContext } from "../../socket/context.js";
 import type { IdentityAdapter } from "./identity.js";
-import { AuthorityInstance, type Actor } from "./instance.js";
+import { AuthorityInstance, type Actor, type StagedMerge } from "./instance.js";
 import type { AuthorityLimits } from "./limits.js";
 import {
   ARRAY_BYTES,
@@ -474,21 +478,31 @@ export class RoomAuthority {
    * subscription is checked against the room as it is now. A missed call
    * only delays this: nothing is ever sent without the same check.
    */
-  guestIdentityMerged(from: string, into: string): void {
-    if (this.closed) return;
-    const merge = {
-      from: this.options.identity.guestSubject(from),
-      into: this.options.identity.guestSubject(into),
-    };
-    const now = this.now();
-    for (const instance of this.instances.values()) {
-      if (instance.mergeSubjects(merge, now)) this.afterWrite(instance);
-    }
+  membershipChanged(): void {
     this.scheduleSweep();
   }
 
-  membershipChanged(): void {
-    this.scheduleSweep();
+  stageGuestMerges(merges: readonly GuestIdentityMerge[]): StagedGuestMerge | null {
+    if (this.closed) return { commit: () => undefined };
+    const subjects = merges.map(({ from, into }) => ({
+      from: this.options.identity.guestSubject(from),
+      into: this.options.identity.guestSubject(into),
+    }));
+    const now = this.now();
+    const staged: Array<[AuthorityInstance, StagedMerge]> = [];
+    for (const instance of this.instances.values()) {
+      const merge = instance.stageMerge(subjects, now);
+      if (!merge) return null;
+      staged.push([instance, merge]);
+    }
+    return {
+      commit: () => {
+        for (const [instance, merge] of staged) {
+          if (merge.commit()) this.afterWrite(instance);
+        }
+        this.scheduleSweep();
+      },
+    };
   }
 
   /** The room's mode or a flag changed. */
