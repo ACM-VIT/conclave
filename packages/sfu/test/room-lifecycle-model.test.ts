@@ -456,7 +456,7 @@ const createWorld = async (options: {
       name,
       {
         name,
-        user: USERS[name],
+        user: name === "invitee" && options.scheduled ? { ...USERS.invitee, allowRoomCreation: true } : USERS[name],
         key: name === "dana" ? DANA : (USERS[name].email ?? USERS[name].userId!),
         removalKey: name === "dana" || name === "olddana" ? DANA : (USERS[name].email ?? USERS[name].userId!),
         tabsOpened: 0,
@@ -2502,6 +2502,18 @@ describe("the room lifecycle model", () => {
       { kind: "expect", actor: "bob", tab: "main", role: "participant" },
       open("alice"),
       { kind: "expect", actor: "alice", tab: "main", role: "participant" },
+    ]);
+    expect(outcome.failures, report(outcome)).toEqual([]);
+  });
+
+  it("keeps a removed invitee knocking when they are first back on an SFU with no record of the call", async () => {
+    const outcome = await runScript(true, [
+      open("owner"),
+      open("invitee"),
+      host("owner", "kick", "invitee"),
+      { kind: "restart", elsewhere: true },
+      open("invitee"),
+      { kind: "expect", actor: "invitee", tab: "main", role: "out" },
     ]);
     expect(outcome.failures, report(outcome)).toEqual([]);
   });
