@@ -43,6 +43,7 @@ import {
   sanitizeRoomCode,
   isMediaDeviceBlocked,
 } from "../lib/utils";
+import { markMeetingCreatedHere } from "../lib/new-meeting";
 import type { SetupNotice } from "../lib/setup-notice";
 import RoomPresenceBadge from "./RoomPresenceBadge";
 import BlockedMediaDialog from "./BlockedMediaDialog";
@@ -1147,7 +1148,9 @@ function JoinScreen({
     onEnterStart?.("new");
     commitPrejoinMedia();
     onIsAdminChange(true);
-    setPending({ mode: "new", roomId: generateRoomCode() });
+    const roomId = generateRoomCode();
+    markMeetingCreatedHere(roomId);
+    setPending({ mode: "new", roomId });
   };
   const joinMeeting = () => {
     const candidate = enforceShortCode

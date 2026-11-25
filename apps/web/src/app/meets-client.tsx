@@ -124,6 +124,7 @@ import {
   sanitizeInstitutionDisplayName,
   sanitizeRoomCode,
 } from "./lib/utils";
+import { markMeetingCreatedHere } from "./lib/new-meeting";
 import type { VideoEffectsBridgeState } from "./components/VideoEffectsBridge";
 import type { SetupNotice } from "./lib/setup-notice";
 
@@ -2712,6 +2713,7 @@ export default function MeetsClient({
 
   const startNewMeeting = useCallback((keepAudioOnly: boolean) => {
     const targetRoomId = generateRoomCode();
+    markMeetingCreatedHere(targetRoomId);
     // A join that never landed still owes the visitor the camera and mic
     // they picked on setup; cleanup would otherwise forget that choice. The
     // mute and camera state must agree with it, as on the first handoff.

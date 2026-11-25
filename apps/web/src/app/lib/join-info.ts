@@ -1,5 +1,6 @@
 import type { GuestPassFields } from "./guest-pass-session";
 import { getJoinedRoom } from "./joined-room";
+import { isMeetingCreatedHere } from "./new-meeting";
 import type { JoinMode } from "./types";
 import { readResponseError } from "./utils";
 
@@ -71,6 +72,7 @@ export const requestJoinInfo = async ({
       user,
       isHost,
       allowRoomCreation: isKnownMeeting || getJoinedRoom(roomId) !== null,
+      createsMeeting: isMeetingCreatedHere(roomId),
       clientId,
       joinMode,
       ...guestFields,
