@@ -1,7 +1,13 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { prewarmVideoEffectsRuntime } from "../src/app/hooks/useVideoEffects";
-import { releaseAllCaptures } from "../src/app/lib/media-captures";
+const freshModules = async () => {
+  vi.resetModules();
+  const [{ prewarmVideoEffectsRuntime }, { releaseAllCaptures }] = await Promise.all([
+    import("../src/app/hooks/useVideoEffects"),
+    import("../src/app/lib/media-captures"),
+  ]);
+  return { prewarmVideoEffectsRuntime, releaseAllCaptures };
+};
 
 class FakeGenerator {
   static created: FakeGenerator[] = [];
@@ -34,6 +40,7 @@ class FakeWorker {
 beforeEach(() => {
   vi.useFakeTimers();
   FakeWorker.created = [];
+  FakeGenerator.created = [];
   vi.stubGlobal("MediaStreamTrackGenerator", FakeGenerator);
   vi.stubGlobal("Worker", FakeWorker);
   vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 404 })));
@@ -49,6 +56,7 @@ afterEach(() => {
 
 describe("the effects output writer warmed up before a call ends", () => {
   it("is shut down when its output track ended before it reported ready", async () => {
+    const { prewarmVideoEffectsRuntime } = await freshModules();
     const warming = prewarmVideoEffectsRuntime({ reason: "test" });
     await vi.waitFor(() => {
       if (FakeWorker.created.length === 0) throw new Error("the writer worker has not started");
@@ -66,6 +74,7 @@ describe("the effects output writer warmed up before a call ends", () => {
   });
 
   it("is shut down instead of kept for later when it reports ready after the call ended", async () => {
+    const { prewarmVideoEffectsRuntime, releaseAllCaptures } = await freshModules();
     const warming = prewarmVideoEffectsRuntime({ reason: "test" });
     await vi.waitFor(() => {
       if (FakeWorker.created.length === 0) throw new Error("the writer worker has not started");
