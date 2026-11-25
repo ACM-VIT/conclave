@@ -1,3 +1,4 @@
+import { runDetached } from "../runDetached.js";
 import type { MediaKind, Worker } from "mediasoup/types";
 import type { Server as SocketIOServer } from "socket.io";
 import { Admin } from "../../config/classes/Admin.js";
@@ -722,7 +723,7 @@ export const closeClientProducers = (options: {
         muted: true,
         roomId: room.id,
       });
-      void state.transcriptRelays.syncRoom(room);
+      runDetached("Syncing the room's transcript relay", () => state.transcriptRelays.syncRoom(room));
     }
     if (webcamVideoClosed) {
       target.isCameraOff = true;
@@ -1189,7 +1190,7 @@ export const teardownClient = (options: {
         `Transcript SFU relay stop for ${userId} in room ${roomChannelId} failed: ${error}`,
       );
     });
-  void state.transcriptRelays.syncRoom(room);
+  runDetached("Syncing the room's transcript relay", () => state.transcriptRelays.syncRoom(room));
 
   if (!target.isWebinarAttendee) {
     peers.emit("userLeft", { userId, roomId: room.id });

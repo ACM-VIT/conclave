@@ -1,3 +1,4 @@
+import { runDetached } from "./runDetached.js";
 import { createServer as createHttpServer } from "http";
 import type { Server as HttpServer } from "http";
 import type { Express } from "express";
@@ -180,7 +181,7 @@ export const createSfuServer = (
     state.transcriptRelays.closeAll();
     // Fire-and-forget: io.close() also initiates closing the attached HTTP
     // server; the explicit httpServer.close below is what we await on.
-    void io.close();
+    runDetached("Closing the socket server", () => io.close());
 
     await new Promise<void>((resolve, reject) => {
       httpServer.close((error) => {

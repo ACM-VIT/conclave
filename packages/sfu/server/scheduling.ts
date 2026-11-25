@@ -1,3 +1,4 @@
+import { runDetached } from "./runDetached.js";
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from "node:crypto";
 import {
   existsSync,
@@ -1343,7 +1344,7 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
   }
 
   save(snapshot: SchedulingSnapshot): void {
-    void this.fallback.save(snapshot);
+    runDetached("Saving the schedule", () => this.fallback.save(snapshot));
     const profileRecords = snapshot.profiles.map((profile) => ({
       id: profile.id,
       updatedAt: profile.updatedAt,

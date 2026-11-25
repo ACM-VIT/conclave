@@ -1,3 +1,4 @@
+import { runDetached } from "../../runDetached.js";
 import type { Consumer, ConsumerLayers, Producer } from "mediasoup/types";
 import type {
   AbortConsumerHandoffData,
@@ -928,7 +929,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
 
           emitWebinarFeedChanged(io, state, activeRoom);
           if (kind === "audio") {
-            void state.transcriptRelays.syncRoom(activeRoom);
+            runDetached("Syncing the room's transcript relay", () => state.transcriptRelays.syncRoom(activeRoom));
           }
         };
 
@@ -966,15 +967,15 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           }
           emitWebinarFeedChanged(io, state, activeRoom);
           if (kind === "audio") {
-            void state.transcriptRelays.syncRoom(activeRoom);
+            runDetached("Syncing the room's transcript relay", () => state.transcriptRelays.syncRoom(activeRoom));
           }
         };
 
         producer.observer.on("pause", () => {
-          void syncProducerPausedState();
+          runDetached("Syncing a producer's paused state", () => syncProducerPausedState());
         });
         producer.observer.on("resume", () => {
-          void syncProducerPausedState();
+          runDetached("Syncing a producer's paused state", () => syncProducerPausedState());
         });
         if (type === "webcam" && kind === "video") {
           producer.observer.on("score", () => {
@@ -1014,7 +1015,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           type,
         );
         if (kind === "audio") {
-          void state.transcriptRelays.syncRoom(room);
+          runDetached("Syncing the room's transcript relay", () => state.transcriptRelays.syncRoom(room));
         }
 
         const activeRoom = state.rooms.get(roomChannelId);
@@ -1780,7 +1781,8 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           roomId: context.currentRoom.id,
         });
         emitWebinarFeedChanged(io, state, context.currentRoom);
-        void state.transcriptRelays.syncRoom(context.currentRoom);
+        const syncedRoom = context.currentRoom;
+        runDetached("Syncing the room's transcript relay", () => state.transcriptRelays.syncRoom(syncedRoom));
 
         respond(
           callback,
@@ -1930,7 +1932,8 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           }
           emitWebinarFeedChanged(io, state, context.currentRoom);
           if (removed.kind === "audio") {
-            void state.transcriptRelays.syncRoom(context.currentRoom);
+            const syncedRoom = context.currentRoom;
+            runDetached("Syncing the room's transcript relay", () => state.transcriptRelays.syncRoom(syncedRoom));
           }
 
           respond(callback, { success: true });
