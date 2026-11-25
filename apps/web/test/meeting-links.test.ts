@@ -120,46 +120,56 @@ describe("meeting links", () => {
     expect(await tenantOpenedBy(`/${ROOM}`, ["acme"], acmeSfu)).toBe("acme");
   });
 
-  it("keeps gating a named link's own booking on an older SFU that names no tenant", async () => {
-    deployment("conclave", "conclave");
-
-    expect(await findScheduledMeetingForLink("acme", sfuLookup(["acme"], olderSfu))).toEqual({
-      clientId: "acme",
-      meeting: { id: "booking-acme", roomCode: ROOM },
-    });
-    expect(await findScheduledMeetingForLink("conclave", sfuLookup(["conclave"], olderSfu))).toEqual({
-      clientId: "conclave",
-      meeting: { id: "booking-conclave", roomCode: ROOM },
-    });
-    expect(await findScheduledMeetingForLink("acme", sfuLookup(["acme", "conclave"], olderSfu))).toEqual({
-      clientId: "acme",
-      meeting: { id: "booking-acme", roomCode: ROOM },
-    });
-  });
+  const stagingCandidates = (primary: string, serverDefault: string) => {
+    const canonical = (clientId: string) => (["default", "public"].includes(clientId) ? "conclave" : clientId);
+    return [...new Set([canonical(primary), serverDefault, "conclave", "default", "public"])];
+  };
+  const stagingSfu =
+    (serverDefault: string, bookedUnder: string[], reportsClientId: boolean) => async (clientId: string) => {
+      const tenant = stagingCandidates(clientId, serverDefault).find((candidate) => bookedUnder.includes(candidate));
+      if (!tenant) return null;
+      return reportsClientId
+        ? { id: `booking-${tenant}`, clientId: tenant, roomCode: ROOM }
+        : { id: `booking-${tenant}`, roomCode: ROOM };
+    };
 
   it.each([
-    ["the server default's", "beta", ["beta"]],
-    ["Conclave's", "conclave", ["conclave"]],
-    ["a legacy alias's", "conclave", ["default"]],
+    ["conclave", "acme", ["acme"], true, "booking-acme"],
+    ["conclave", "acme", ["conclave"], true, null],
+    ["conclave", "acme", ["default"], true, null],
+    ["conclave", "acme", ["acme", "conclave"], true, "booking-acme"],
+    ["conclave", "conclave", ["conclave"], true, "booking-conclave"],
+    ["conclave", "conclave", ["default"], true, "booking-default"],
+    ["acme", "acme", ["acme"], true, "booking-acme"],
+    ["acme", "acme", ["conclave"], true, "booking-conclave"],
+    ["acme", "acme", ["acme", "conclave"], true, "booking-acme"],
+    ["acme", "conclave", ["conclave"], true, "booking-conclave"],
+    ["acme", "conclave", ["acme"], true, "booking-acme"],
+    ["acme", "conclave", ["acme", "conclave"], true, "booking-conclave"],
+    ["acme", "beta", ["beta"], true, "booking-beta"],
+    ["acme", "beta", ["beta", "acme"], true, "booking-beta"],
+    ["acme", "beta", ["acme"], true, null],
+    ["acme", "beta", ["conclave"], true, null],
+    ["beta", "beta", ["beta"], true, "booking-beta"],
+    ["beta", "beta", ["beta", "conclave"], true, "booking-beta"],
+    ["beta", "conclave", ["conclave"], true, "booking-conclave"],
+    ["beta", "acme", ["beta"], true, null],
+    ["beta", "acme", ["acme", "beta"], true, "booking-acme"],
+    ["acme", "acme", ["acme"], false, "booking-acme"],
+    ["conclave", "acme", ["conclave"], false, null],
+    ["acme", "conclave", ["acme"], false, null],
+    ["beta", "beta", ["beta"], false, "booking-beta"],
   ])(
-    "never takes %s booking, which an older SFU falls back to, for a link that names another tenant",
-    async (_name, serverDefault, bookedUnder) => {
-      deployment("conclave", serverDefault);
+    "server default %s, link for %s, booked under %j, older SFU %s: shows %s",
+    async (serverDefault, linked, bookedUnder, olderSfuAnswers, expected) => {
+      deployment(serverDefault, serverDefault);
 
-      expect(await findScheduledMeetingForLink("acme", sfuLookup(bookedUnder, { ...olderSfu, sfuDefault: serverDefault }))).toBeNull();
-      expect(await tenantOpenedBy(`/${ROOM}?clientId=acme`, bookedUnder, { ...olderSfu, sfuDefault: serverDefault })).toBe("acme");
+      const found = await findScheduledMeetingForLink(linked, stagingSfu(serverDefault, bookedUnder, !olderSfuAnswers));
+
+      expect(found?.meeting.id ?? null).toBe(expected);
+      if (found) expect(found.clientId).toBe(found.meeting.clientId ?? linked);
     },
   );
-
-  it("never takes a current SFU's booking that names a different tenant", async () => {
-    deployment("conclave", "conclave");
-
-    expect(await findScheduledMeetingForLink("acme", sfuLookup(["conclave"]))).toBeNull();
-    expect(await findScheduledMeetingForLink("acme", sfuLookup(["acme"]))).toEqual({
-      clientId: "acme",
-      meeting: { id: "booking-acme", clientId: "acme", roomCode: ROOM },
-    });
-  });
 
   it("labels an older SFU's booking with the server's default when one is set", async () => {
     deployment("acme", "beta");

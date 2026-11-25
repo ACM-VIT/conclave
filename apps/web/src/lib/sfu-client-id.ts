@@ -44,12 +44,9 @@ const isAnotherTenantsBooking = async <Meeting extends { clientId?: string; id?:
   lookup: (clientId: string) => Promise<Meeting | null>,
 ): Promise<boolean> => {
   if (!meeting.id) return false;
-  const fallbacks = new Set([resolveServerSfuClientId(), CONCLAVE_SFU_CLIENT_ID]);
-  fallbacks.delete(named);
-  for (const fallback of fallbacks) {
-    if ((await lookup(fallback))?.id === meeting.id) return true;
-  }
-  return false;
+  const serverDefault = resolveServerSfuClientId();
+  if (named === serverDefault || named === CONCLAVE_SFU_CLIENT_ID) return false;
+  return (await lookup(serverDefault))?.id === meeting.id;
 };
 
 export const findScheduledMeetingForLink = async <
