@@ -284,6 +284,7 @@ describe("native wheel add receipts", () => {
     const tokens = tokensFor(["Ada", "Bo"]);
     expect(add(doc, ["Ada", "Bo"], tokens)).toEqual({ ok: true, added: [0, 1] });
     expect(add(doc, ["Ada", "Bo"], tokens, { repeat: true })).toEqual({ ok: true, added: [0, 1] });
+    expect(add(doc, ["Ada", "Bo"], tokens, { synced: false, canEdit: false })).toEqual({ ok: true, added: [0, 1] });
     const refused = tokensFor(["Cy"]);
     expect(add(doc, ["Cy"], refused, { synced: false })).toEqual({ ok: false, error: "notSynced", added: [] });
     expect(add(doc, ["Cy"], refused, { repeat: true })).toEqual(NOTHING_ADDED);
