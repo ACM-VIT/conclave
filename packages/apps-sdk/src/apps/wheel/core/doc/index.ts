@@ -170,18 +170,18 @@ const acceptReceipts = (records: readonly unknown[]): Accepted<AddReceipt> => {
   return { kept, indexes };
 };
 
-const readAddedTokens = (receipts: Y.Array<unknown>): Set<string> =>
-  new Set(acceptReceipts(receipts.toArray()).kept.flat());
+const tokensIn = (records: readonly unknown[]): Set<string> => new Set(acceptReceipts(records).kept.flat());
 
 export const getAddedTokens = (doc: Y.Doc): ReadonlySet<string> =>
-  readAddedTokens(doc.getArray<unknown>(ADD_RECEIPTS_ROOT));
+  tokensIn(doc.getArray<unknown>(ADD_RECEIPTS_ROOT).toArray());
 
 export type TokenedLabel = { token: string; label: string };
 
-export const addEntriesOnce = (doc: Y.Doc, lines: readonly TokenedLabel[]): void =>
+export const addEntriesOnce = (doc: Y.Doc, lines: readonly TokenedLabel[]): string[] =>
   doc.transact(() => {
     const receipts = doc.getArray<unknown>(ADD_RECEIPTS_ROOT);
-    const taken = readAddedTokens(receipts);
+    const records = receipts.toArray();
+    const taken = tokensIn(records);
     const fresh = lines
       .map((line) => ({ token: line.token, label: normalizeLabel(line.label) }))
       .filter((line) => {
@@ -190,9 +190,11 @@ export const addEntriesOnce = (doc: Y.Doc, lines: readonly TokenedLabel[]): void
         return true;
       });
     const count = pushLabels(doc, fresh.map((line) => line.label));
-    if (count === 0) return;
-    receipts.push([fresh.slice(0, count).map((line) => line.token)]);
-    pruneTo(receipts, acceptReceipts(receipts.toArray()).indexes);
+    if (count === 0) return [];
+    const tokens = fresh.slice(0, count).map((line) => line.token);
+    receipts.push([tokens]);
+    pruneTo(receipts, acceptReceipts([...records, tokens]).indexes);
+    return tokens;
   });
 
 export const addEntry = (doc: Y.Doc, rawLabel: string): boolean =>

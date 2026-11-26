@@ -40,10 +40,10 @@ const readTokens = (value: unknown): string[] | null => {
   return tokens.every(isValidIdentifier) && new Set(tokens).size === tokens.length ? tokens : null;
 };
 
-const slotsOnRecord = (doc: Y.Doc, tokens: readonly string[]): number[] => {
-  const added = getAddedTokens(doc);
-  return tokens.flatMap((token, index) => (added.has(token) ? [index] : []));
-};
+const slotsOf = (tokens: readonly string[], added: ReadonlySet<string>): number[] =>
+  tokens.flatMap((token, index) => (added.has(token) ? [index] : []));
+
+const slotsOnRecord = (doc: Y.Doc, tokens: readonly string[]): number[] => slotsOf(tokens, getAddedTokens(doc));
 
 export type AddContext = { synced: boolean; canEdit: boolean; repeat: boolean };
 
@@ -67,8 +67,8 @@ export const addNames = (doc: Y.Doc, payload: Record<string, unknown>, context: 
     const count = addEntries(doc, names.map((name) => name.label));
     return count === 0 ? refusal("full") : { ok: true, added: names.slice(0, count).map((name) => name.index) };
   }
-  addEntriesOnce(doc, names.map((name) => ({ token: tokens[name.index], label: name.label })));
-  const added = slotsOnRecord(doc, tokens);
+  const recorded = addEntriesOnce(doc, names.map((name) => ({ token: tokens[name.index], label: name.label })));
+  const added = slotsOf(tokens, new Set(recorded));
   return added.length === 0 ? refusal("full") : { ok: true, added };
 };
 
