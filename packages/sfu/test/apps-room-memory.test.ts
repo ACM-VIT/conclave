@@ -16,6 +16,7 @@ import {
   RoomApps,
   type StageCommandResult,
 } from "../server/roomApps.js";
+import { MAX_SLOT_BYTES, MAX_SLOT_UPDATES } from "../server/roomAppsScheduler.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
 import { createConnectionContext } from "../server/socket/context.js";
 import { registerDisconnectHandlers } from "../server/socket/handlers/disconnectHandlers.js";
@@ -417,4 +418,88 @@ describe("what a room keeps about writers over a meeting", () => {
     );
     expect(mistaken.length).toBeLessThanOrEqual(5);
   }, 60_000);
+});
+
+describe("what a sender's held updates keep in memory", () => {
+  it("keeps no more than the slot's byte limit for every payload form, measured on the heap", () => {
+    const module = (path: string) => JSON.stringify(new URL(path, import.meta.url).href);
+    const code = `
+      import * as Y from "yjs";
+      import { Room } from ${module("../config/classes/Room.ts")};
+      import { Client } from ${module("../config/classes/Client.ts")};
+      import { createSfuState } from ${module("../server/state.ts")};
+      import { LocalRoomRegistry } from ${module("../server/roomRegistry.ts")};
+      import { createConnectionContext } from ${module("../server/socket/context.ts")};
+      import { registerAppsHandlers } from ${module("../server/socket/handlers/appsHandlers.ts")};
+      import { MAX_SLOT_UPDATES } from ${module("../server/roomAppsScheduler.ts")};
+      import { RATE_LIMITS } from ${module("../server/socket/rateLimit.ts")};
+      const state = createSfuState({ roomRegistry: new LocalRoomRegistry({ instanceId: "held", instanceUrl: "http://localhost", ttlMs: 45000 }) });
+      const room = new Room({ id: "room", clientId: "conclave", workerPid: null, router: { closed: false, close: () => {} } });
+      state.rooms.set(room.channelId, room);
+      room.apps.present("whiteboard");
+      const io = { to: () => ({ emit: () => true }) };
+      const sender = (id) => {
+        const handlers = new Map();
+        const socket = { id: "socket-" + id, data: { user: {} }, connected: true, on: (event, handler) => handlers.set(event, handler), emit: () => true, to: () => ({ emit: () => true }), join() {}, leave() {}, disconnect() {} };
+        const seat = new Client({ id, socket });
+        room.addClient(seat);
+        room.setUserIdentity(id, id, id);
+        const context = createConnectionContext(io, socket, state);
+        context.currentRoom = room;
+        context.currentClient = seat;
+        registerAppsHandlers(context);
+        handlers.get("apps:yjs:sync")({ appId: "whiteboard", syncMessage: Y.encodeStateVector(new Y.Doc()) }, () => {});
+        const send = (update) => handlers.get("apps:yjs:update")({ appId: "whiteboard", update, replicaId: "copy-1" });
+        for (let index = 0; index < RATE_LIMITS.appsYjsUpdate.capacity; index += 1) send(new Uint8Array([0, 0]));
+        return send;
+      };
+      const retained = () => {
+        globalThis.gc();
+        globalThis.gc();
+        const usage = process.memoryUsage();
+        return usage.heapUsed + usage.external;
+      };
+      const longText = "x".repeat(900000);
+      const byteText = JSON.stringify(Array.from({ length: 4096 }, (_, index) => index % 256));
+      const base64 = Buffer.from(Array.from({ length: 4096 }, (_, index) => index % 256)).toString("base64");
+      const forms = {
+        "a list holding one 900,000-character string": () => JSON.parse('["' + longText + '"]'),
+        "a JSON Buffer holding one 900,000-character string": () => JSON.parse('{"type":"Buffer","data":["' + longText + '"]}'),
+        "a list of 4,096 byte values": () => JSON.parse(byteText),
+        "a JSON Buffer of 4,096 byte values": () => JSON.parse('{"type":"Buffer","data":' + byteText + "}"),
+        "4,096 bytes in base64": () => (base64 + " ").slice(0, -1),
+        "invalid base64 of 4,098 bytes": () => "A".repeat(5460) + "!!!!",
+        "16 bytes viewed in a 1 MiB buffer": () => new Uint8Array(new ArrayBuffer(1 << 20), 8, 16),
+        "16 bytes in a DataView of a 1 MiB buffer": () => new DataView(new ArrayBuffer(1 << 20), 8, 16),
+        "a 4,096-byte Buffer": () => Buffer.from(Array.from({ length: 4096 }, (_, index) => index % 256)),
+      };
+      const flood = (send, make) => {
+        for (let index = 0; index < MAX_SLOT_UPDATES; index += 1) send(make());
+      };
+      const kept = {};
+      for (const [name, make] of Object.entries(forms)) {
+        const send = sender(name);
+        const before = retained();
+        flood(send, make);
+        kept[name] = retained() - before;
+      }
+      console.log("KEPT " + JSON.stringify(kept));
+    `;
+    const result = spawnSync(process.execPath, ["--expose-gc", "--import", "tsx", "--input-type=module", "-e", code], {
+      cwd: fileURLToPath(new URL("..", import.meta.url)),
+      encoding: "utf8",
+      timeout: 60_000,
+      env: { ...process.env, SFU_LOG_LEVEL: "error" },
+    });
+
+    expect(result.stderr).not.toMatch(/TypeError|Uncaught/);
+    expect(result.status).toBe(0);
+    const line = result.stdout.split("\n").find((entry) => entry.startsWith("KEPT "));
+    const kept = JSON.parse(line!.slice("KEPT ".length)) as Record<string, number>;
+    expect(Object.keys(kept)).toHaveLength(9);
+    const bookkeepingPerWrite = 4 * 1024;
+    for (const [form, bytes] of Object.entries(kept)) {
+      expect(bytes, `${form} kept ${bytes} bytes`).toBeLessThanOrEqual(MAX_SLOT_BYTES + MAX_SLOT_UPDATES * bookkeepingPerWrite);
+    }
+  }, 70_000);
 });
