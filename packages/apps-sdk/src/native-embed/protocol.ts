@@ -162,6 +162,7 @@ export const DOC_ANSWERED_COMMANDS: readonly string[] = ["addEntries", "addOutco
 export const WHEEL_ADD_RECOVERY = {
   asks: 4,
   windowMs: 60_000,
+  unknown: "outcomeUnknown",
 } as const;
 
 const ROOM_ADDS_PER_SECOND = 2;

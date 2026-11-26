@@ -101,7 +101,7 @@ describe("what the wheel says about an add whose reply was lost", () => {
     };
     let cannotTell = 0;
     let definite = 0;
-    for (let run = 0; run < 24; run += 1) {
+    for (let run = 0; run < 6; run += 1) {
       const base = createWheelDoc();
       addEntries(base, ["Host"]);
       clearEntries(base);

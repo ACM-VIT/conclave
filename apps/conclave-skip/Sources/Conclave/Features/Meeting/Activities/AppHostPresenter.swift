@@ -1075,11 +1075,13 @@ final class AppHostPresenter {
             }
             index += 1
         }
-        if sendPage(AppPageCommandKind.addEntries, target: "", payload: ["labels": batch, "tokens": tokens]) != ActivityTapResult.dispatched {
+        let sentAt = nowMillis().rounded(.down)
+        let payload: [String: Any] = ["labels": batch, "tokens": tokens, "sentAt": sentAt]
+        if sendPage(AppPageCommandKind.addEntries, target: "", payload: payload) != ActivityTapResult.dispatched {
             return
         }
         guard let command = pagePending.last else { return }
-        wheelDraft.didSend(requestId: command.requestId, lines: batch, tokens: tokens, sentAtMillis: nowMillis(),
+        wheelDraft.didSend(requestId: command.requestId, lines: batch, tokens: tokens, sentAtMillis: sentAt,
                            rest: rest.joined(separator: "\n"))
         startAddDeadline(requestId: command.requestId)
     }
@@ -1418,16 +1420,16 @@ final class AppHostPresenter {
             let command = pagePending[pageIndex]
             pagePending.remove(at: pageIndex)
             if command.kind == AppPageCommandKind.addOutcome {
-                settleAdd(command.target, added: added)
+                resolveAdd(command.target, error: error, added: added)
             } else if command.kind == AppPageCommandKind.addEntries && command.target.isEmpty {
-                settleAdd(requestId, added: added)
+                resolveAdd(requestId, error: error, added: added)
                 askAddOutcome(requestId)
             }
             rebuildPages()
             return
         }
-        if added != nil && wheelDraft.sent.contains(where: { $0.requestId == requestId }) {
-            settleAdd(requestId, added: added)
+        if wheelDraft.sent.contains(where: { $0.requestId == requestId }) && (added != nil || error == AppBridgeProtocol.addOutcomeUnknown) {
+            resolveAdd(requestId, error: error, added: added)
             rebuildPages()
             return
         }
@@ -1490,6 +1492,14 @@ final class AppHostPresenter {
         rebuildPages()
     }
 
+    private func resolveAdd(_ original: String, error: String, added: [Int]?) {
+        if added == nil && error == AppBridgeProtocol.addOutcomeUnknown {
+            giveUpAdd(original)
+            return
+        }
+        settleAdd(original, added: added)
+    }
+
     private func settleAdd(_ original: String, added: [Int]?) {
         guard let list = added else { return }
         pagePending.removeAll(where: { $0.kind == AppPageCommandKind.addOutcome && $0.target == original })
@@ -1515,7 +1525,8 @@ final class AppHostPresenter {
         if !embedReady { return }
         nextRequestNumber += 1
         let requestId = "h-" + String(nextRequestNumber)
-        if session?.sendCommand(AppBridgeOutboundType.addOutcome, requestId: requestId, payload: ["tokens": submission.tokens]) != true {
+        let question: [String: Any] = ["tokens": submission.tokens, "sentAt": submission.sentAtMillis]
+        if session?.sendCommand(AppBridgeOutboundType.addOutcome, requestId: requestId, payload: question) != true {
             return
         }
         wheelDraft.asked(requestId: original)

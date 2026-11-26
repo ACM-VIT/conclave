@@ -8,6 +8,7 @@ vi.mock("../../../packages/apps-sdk/src/apps/wheel/web/components/WheelStage", (
 }));
 
 const SCOPE = { callSessionId: "call-4-9c2e7b1a", appSessionId: "app-6f3a1d8e", appId: "wheel" };
+const SENT_AT = 1_800_000_000_000;
 
 type Posted = { type: string; requestId: string; payload: Record<string, unknown> };
 type EmbedWindow = Window & {
@@ -38,9 +39,9 @@ describe("native wheel embed boot", () => {
             if (message.type !== "ready") return;
             send("status", { readOnly: false, connection: "live", userId: "me", userName: "Me" }, "n-1");
             send("snapshot", { syncMessage: "", stateVector: "" }, message.requestId);
-            send("addOutcome", { tokens: ["t-lost"] }, "h-1");
-            send("addEntries", { labels: ["Ada"], tokens: ["t-ada"] }, "h-2");
-            send("addOutcome", { tokens: ["t-ada"] }, "h-3");
+            send("addOutcome", { tokens: ["t-lost"], sentAt: SENT_AT }, "h-1");
+            send("addEntries", { labels: ["Ada"], tokens: ["t-ada"], sentAt: SENT_AT }, "h-2");
+            send("addOutcome", { tokens: ["t-ada"], sentAt: SENT_AT }, "h-3");
           },
         },
       },

@@ -147,44 +147,62 @@ export const addEntries = (doc: Y.Doc, rawLabels: string[]): number => {
   return labels.length === 0 ? 0 : doc.transact(() => pushLabels(doc, labels));
 };
 
-type AddReceipt = readonly string[];
+type AddReceipt = { at: number; floor: number; tokens: readonly string[] };
+
+const RECEIPT_FIXED_BYTES = 32;
+
+const isStamp = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0;
 
 const readReceipt = (value: unknown): AddReceipt | null => {
-  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_WHEEL_ENTRIES) return null;
-  const tokens: unknown[] = value;
-  return tokens.every(isValidIdentifier) ? tokens : null;
+  if (!isRecord(value) || !isStamp(value.at) || !isStamp(value.floor)) return null;
+  const tokens: unknown = value.tokens;
+  if (!Array.isArray(tokens) || tokens.length === 0 || tokens.length > MAX_WHEEL_ENTRIES) return null;
+  const list: unknown[] = tokens;
+  return list.every(isValidIdentifier) ? { at: value.at, floor: value.floor, tokens: list } : null;
 };
 
 const receiptBytes = (receipt: AddReceipt): number =>
-  receipt.reduce((bytes, token) => bytes + token.length + 2, 2);
+  receipt.tokens.reduce((bytes, token) => bytes + token.length + 2, RECEIPT_FIXED_BYTES);
 
-const acceptReceipts = (records: readonly unknown[]): Accepted<AddReceipt> => {
-  const kept: AddReceipt[] = [];
+type ReceiptLedger = { tokens: Set<string>; floor: number; indexes: number[] };
+
+const readLedger = (records: readonly unknown[]): ReceiptLedger => {
+  const tokens = new Set<string>();
   const indexes: number[] = [];
+  let floor = 0;
   let bytes = 0;
-  for (let index = records.length - 1; index >= 0 && kept.length < WHEEL_RECEIPT_LIMITS.count; index -= 1) {
+  let held = true;
+  for (let index = records.length - 1; index >= 0; index -= 1) {
     const receipt = readReceipt(records[index]);
     if (receipt === null) continue;
+    floor = Math.max(floor, receipt.floor);
     bytes += receiptBytes(receipt);
-    if (bytes > WHEEL_RECEIPT_LIMITS.bytes) break;
-    kept.push(receipt);
+    held &&= indexes.length < WHEEL_RECEIPT_LIMITS.count && bytes <= WHEEL_RECEIPT_LIMITS.bytes;
+    if (!held) {
+      floor = Math.max(floor, receipt.at);
+      continue;
+    }
     indexes.push(index);
+    for (const token of receipt.tokens) tokens.add(token);
   }
-  return { kept, indexes };
+  return { tokens, floor, indexes };
 };
 
-const tokensIn = (records: readonly unknown[]): Set<string> => new Set(acceptReceipts(records).kept.flat());
+export type AddRecord = { added: ReadonlySet<string>; reachesBack: boolean };
 
-export const getAddedTokens = (doc: Y.Doc): ReadonlySet<string> =>
-  tokensIn(doc.getArray<unknown>(ADD_RECEIPTS_ROOT).toArray());
+export const readAddRecord = (doc: Y.Doc, sentAt: number): AddRecord => {
+  const ledger = readLedger(doc.getArray<unknown>(ADD_RECEIPTS_ROOT).toArray());
+  return { added: ledger.tokens, reachesBack: sentAt > ledger.floor };
+};
 
 export type TokenedLabel = { token: string; label: string };
 
-export const addEntriesOnce = (doc: Y.Doc, lines: readonly TokenedLabel[]): string[] =>
+export const addEntriesOnce = (doc: Y.Doc, lines: readonly TokenedLabel[], sentAt: number): string[] =>
   doc.transact(() => {
     const receipts = doc.getArray<unknown>(ADD_RECEIPTS_ROOT);
     const records = receipts.toArray();
-    const taken = tokensIn(records);
+    const taken = readLedger(records).tokens;
     const fresh = lines
       .map((line) => ({ token: line.token, label: normalizeLabel(line.label) }))
       .filter((line) => {
@@ -195,8 +213,9 @@ export const addEntriesOnce = (doc: Y.Doc, lines: readonly TokenedLabel[]): stri
     const count = pushLabels(doc, fresh.map((line) => line.label));
     if (count === 0) return [];
     const tokens = fresh.slice(0, count).map((line) => line.token);
-    receipts.push([tokens]);
-    pruneTo(receipts, acceptReceipts([...records, tokens]).indexes);
+    const ledger = readLedger([...records, { at: sentAt, floor: 0, tokens }]);
+    receipts.push([{ at: sentAt, floor: ledger.floor, tokens }]);
+    pruneTo(receipts, ledger.indexes);
     return tokens;
   });
 

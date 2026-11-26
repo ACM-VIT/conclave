@@ -327,6 +327,85 @@ class WheelDraftBridgeTests {
         assertEquals(false, wheel.presenter.wheelDraft.isUnconfirmed)
     }
 
+    private fun sentAt(wheel: Wheel, requestId: String): Double? {
+        val sent = wheel.delivered.map { JSONObject(it) }.firstOrNull { it.getString("requestId") == requestId } ?: return null
+        val payload = sent.getJSONObject("payload")
+        return if (payload.has("sentAt")) payload.getDouble("sentAt") else null
+    }
+
+    @Test fun anOutcomeTheWheelCanNoLongerTellReturnsTheNamesWithTheNoticeAtOnce() {
+        for (path in listOf("question", "add reply", "late add reply")) {
+            val wheel = readyWheel()
+            wheel.presenter.editWheelDraft("Ada\nBo\n")
+            wheel.presenter.editWheelDraft("Cy")
+            val add = adds(wheel)[0].first
+            val unknown = JSONObject().put("ok", false).put("error", "outcomeUnknown")
+            when (path) {
+                "question" -> {
+                    wheel.presenter.fireCommandTimeout(requestId = add)
+                    receive(wheel, "ack", outcomeQueries(wheel).last().first, unknown)
+                }
+                "add reply" -> receive(wheel, "ack", add, unknown)
+                else -> {
+                    wheel.presenter.fireCommandTimeout(requestId = add)
+                    assertEquals(path, true, wheel.presenter.wheel.isPending(AppPageCommandKind.addOutcome, target = add))
+                    receive(wheel, "ack", add, unknown)
+                }
+            }
+            assertEquals(path, "Ada\nBo\nCy", wheel.presenter.wheelDraft.text)
+            assertEquals(path, true, wheel.presenter.wheelDraft.isUnconfirmed)
+            assertEquals(path, 0, wheel.presenter.wheelDraft.sent.count)
+            assertEquals(path, 0, wheel.presenter.wheel.pendingKinds.count)
+            val asked = outcomeQueries(wheel).size
+            wheel.presenter.fireCommandTimeout(requestId = add)
+            wheel.presenter.fireAddDeadline(requestId = add)
+            assertEquals(path, asked, outcomeQueries(wheel).size)
+            assertEquals(path, 1, adds(wheel).size)
+            assertEquals(path, "Ada\nBo\nCy", wheel.presenter.wheelDraft.text)
+            assertEquals(path, true, wheel.presenter.wheelDraft.isUnconfirmed)
+        }
+        assertEquals("outcomeUnknown", AppBridgeProtocol.addOutcomeUnknown)
+    }
+
+    @Test fun anAddAndEveryQuestionAboutItCarryTheTimeItWasSent() {
+        val wheel = readyWheel()
+        var now = 1_800_000_000_123.75
+        wheel.presenter.nowMillis = { now }
+        wheel.presenter.editWheelDraft("Ada\n")
+        val add = adds(wheel)[0].first
+        assertEquals(1_800_000_000_123.0, sentAt(wheel, add)!!, 0.0)
+        assertEquals(1_800_000_000_123.0, wheel.presenter.wheelDraft.sent.toList()[0].sentAtMillis, 0.0)
+        now += 12_000.0
+        wheel.presenter.fireCommandTimeout(requestId = add)
+        val first = outcomeQueries(wheel).last().first
+        wheel.presenter.fireCommandTimeout(requestId = first)
+        val second = outcomeQueries(wheel).last().first
+        assertEquals(false, first == second)
+        assertEquals(1_800_000_000_123.0, sentAt(wheel, first)!!, 0.0)
+        assertEquals(1_800_000_000_123.0, sentAt(wheel, second)!!, 0.0)
+    }
+
+    @Test fun theNamesPageKnowsHowManyAcceptedNamesWaitForAPlace() {
+        val wheel = readyWheel()
+        assertEquals(0, wheel.presenter.wheel.waitingNames)
+        val entries = JSONArray()
+        for (index in 0 until 64) entries.put(JSONObject().put("id", "e$index").put("label", "N$index"))
+        fun status(waiting: Int?): JSONObject {
+            val app = JSONObject().put("kind", "wheel").put("entries", entries).put("results", JSONArray()).put("removeWinner", false)
+                .put("sounds", true).put("spinning", false).put("winnerSpinId", "").put("winnerLabel", "")
+            if (waiting != null) app.put("waiting", waiting)
+            return JSONObject().put("app", app)
+        }
+        receive(wheel, "status", "e-3", status(3))
+        assertEquals(true, wheel.presenter.wheel.isFull)
+        assertEquals(3, wheel.presenter.wheel.waitingNames)
+        receive(wheel, "status", "e-4", status(AppWheelLimits.waiting + 1))
+        assertEquals(3, wheel.presenter.wheel.waitingNames)
+        receive(wheel, "status", "e-5", status(null))
+        assertEquals(0, wheel.presenter.wheel.waitingNames)
+        assertEquals(true, wheel.presenter.wheel.isFull)
+    }
+
     @Test fun theWindowEndsTheWaitHoweverTheClockMoves() {
         for (ending in listOf("deadline timer", "deadline timer while detached", "late wake", "clock ran backwards")) {
             val wheel = readyWheel()

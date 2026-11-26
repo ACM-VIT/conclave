@@ -24,6 +24,7 @@ const { NativeWheelEmbed } = await import("../../../packages/apps-sdk/src/native
 
 const SCOPE = { callSessionId: "call-9-5e1c7a2b", appSessionId: "app-3d9f1b6c", appId: "wheel" };
 const START = 1_800_000_000_000;
+const SENT_AT = START - 5_000;
 const DURATION = 8_000;
 
 let root: Root;
@@ -242,7 +243,7 @@ describe("native wheel adds across embed reloads", () => {
 
   it("adds a name once when the same add reaches a reloaded embed again", () => {
     const first = openEmbed();
-    const add = { labels: ["Ada"], tokens: ["t-ada"] };
+    const add = { labels: ["Ada"], tokens: ["t-ada"], sentAt: SENT_AT };
     expect(first.send("addEntries", add, "h-1")).toEqual({ ok: true, added: [0] });
     const reloaded = openEmbed();
     expect(reloaded.send("addEntries", add, "h-1")).toEqual({ ok: true, added: [0] });
@@ -252,31 +253,31 @@ describe("native wheel adds across embed reloads", () => {
   it("tells native whether an add was applied, from the document, in any embed", () => {
     const first = openEmbed();
     const tokens = ["t-blank", "t-ada", "t-bo"];
-    first.send("addEntries", { labels: ["", "Ada", "Bo"], tokens }, "h-1");
+    first.send("addEntries", { labels: ["", "Ada", "Bo"], tokens, sentAt: SENT_AT }, "h-1");
     const reloaded = openEmbed();
-    expect(reloaded.send("addOutcome", { tokens }, "h-2")).toEqual({ ok: true, added: [1, 2] });
-    expect(reloaded.send("addOutcome", { tokens: ["t-never"] }, "h-3")).toEqual({ ok: false, error: "notApplied", added: [] });
+    expect(reloaded.send("addOutcome", { tokens, sentAt: SENT_AT }, "h-2")).toEqual({ ok: true, added: [1, 2] });
+    expect(reloaded.send("addOutcome", { tokens: ["t-never"], sentAt: SENT_AT }, "h-3")).toEqual({ ok: false, error: "notApplied", added: [] });
     expect(names()).toEqual(["Ada", "Bo"]);
   });
 
   it("keeps the same request id from another native app session apart", () => {
-    openEmbed("app-1111aaaa").send("addEntries", { labels: ["Ada"], tokens: ["t-ada"] }, "h-1");
+    openEmbed("app-1111aaaa").send("addEntries", { labels: ["Ada"], tokens: ["t-ada"], sentAt: SENT_AT }, "h-1");
     const other = openEmbed("app-2222bbbb");
-    expect(other.send("addOutcome", { tokens: ["t-cy"] }, "h-2")).toEqual({ ok: false, error: "notApplied", added: [] });
-    expect(other.send("addEntries", { labels: ["Cy"], tokens: ["t-cy"] }, "h-1")).toEqual({ ok: true, added: [0] });
+    expect(other.send("addOutcome", { tokens: ["t-cy"], sentAt: SENT_AT }, "h-2")).toEqual({ ok: false, error: "notApplied", added: [] });
+    expect(other.send("addEntries", { labels: ["Cy"], tokens: ["t-cy"], sentAt: SENT_AT }, "h-1")).toEqual({ ok: true, added: [0] });
     expect(names()).toEqual(["Ada", "Cy"]);
   });
 
   it("takes an add in the same turn as the host status that unlocked it", () => {
     const embed = openEmbed();
     embed.send("status", { readOnly: true, connection: "live", reduceMotion: false, pencilOnly: false, userId: "me", userName: "Me" }, "lock");
-    const refused = { labels: ["Ada"], tokens: ["t-ada"] };
+    const refused = { labels: ["Ada"], tokens: ["t-ada"], sentAt: SENT_AT };
     expect(embed.send("addEntries", refused, "h-1")).toEqual({ ok: false, error: "readOnly", added: [] });
-    expect(embed.send("addOutcome", { tokens: refused.tokens }, "h-2")).toEqual({ ok: false, error: "notApplied", added: [] });
+    expect(embed.send("addOutcome", { tokens: refused.tokens, sentAt: refused.sentAt }, "h-2")).toEqual({ ok: false, error: "notApplied", added: [] });
     const answers: (Record<string, unknown> | undefined)[] = [];
     act(() => {
       embed.raw("status", { readOnly: false, connection: "live", reduceMotion: false, pencilOnly: false, userId: "me", userName: "Me" }, "unlock");
-      answers.push(embed.raw("addEntries", { labels: ["Bo"], tokens: ["t-bo"] }, "h-3"));
+      answers.push(embed.raw("addEntries", { labels: ["Bo"], tokens: ["t-bo"], sentAt: SENT_AT }, "h-3"));
     });
     expect(answers).toEqual([{ ok: true, added: [0] }]);
     expect(names()).toEqual(["Bo"]);
