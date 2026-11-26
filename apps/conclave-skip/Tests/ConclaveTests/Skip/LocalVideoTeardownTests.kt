@@ -17,7 +17,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.After
-import org.junit.Before
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -42,7 +41,6 @@ import org.webrtc.VideoFrame
 import org.webrtc.VideoSink
 import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
-import skip.foundation.AssetURLProtocol
 import sun.misc.Unsafe
 
 @RunWith(RobolectricTestRunner::class)
@@ -281,11 +279,6 @@ class LocalVideoTeardownTests {
     }
 
     private val hardware = FakeCameraHardware()
-
-    @Before
-    fun leaveTheAssetUrlHandlerToTheSharedSandbox() {
-        AssetURLProtocol::class.java.getDeclaredField("registered").apply { isAccessible = true }.setBoolean(null, true)
-    }
 
     private suspend fun awaitFakeCamera(name: String, timeoutMillis: Long): Boolean =
         withTimeoutOrNull(timeoutMillis) {
