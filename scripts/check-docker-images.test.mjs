@@ -54,7 +54,16 @@ else if (args[0] === "create") {
   else if (!live) { process.stderr.write("Error response from daemon: No such image: " + tag + "\\n"); process.exit(1); }
   else if (process.env.FAKE_DOCKER_RMI_FAIL) { process.stderr.write("Error response from daemon: dial unix docker.sock: connect: connection refused\\n"); process.exit(1); }
   else if (state.some((entry) => entry.id && !removed.has(entry.id))) { process.stderr.write("conflict: unable to remove repository reference (must force) - container is using its referenced image\\n"); process.exit(1); }
-  else fs.appendFileSync(process.env.FAKE_DOCKER_STATE, JSON.stringify({ removedImage: tag }) + "\\n");
+  else {
+    const remove = () => fs.appendFileSync(process.env.FAKE_DOCKER_STATE, JSON.stringify({ removedImage: tag }) + "\\n");
+    if (process.env.FAKE_DOCKER_RMI_RELEASE) {
+      const wait = setInterval(() => {
+        if (!fs.existsSync(process.env.FAKE_DOCKER_RMI_RELEASE)) return;
+        clearInterval(wait);
+        remove();
+      }, 20);
+    } else remove();
+  }
 } else if (args[0] === "ps") {
   const filter = args[args.indexOf("--filter") + 1].replace(/^label=/, "");
   const state = fs.existsSync(process.env.FAKE_DOCKER_STATE) ? fs.readFileSync(process.env.FAKE_DOCKER_STATE, "utf8").trim().split("\\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
@@ -377,6 +386,30 @@ test("SIGTERM to the script during an image build is forwarded to docker, stops 
   assertStoppedDuringFirstBuild(fake.calls().map((call) => call.args));
 });
 
+test("SIGINT during the first image cleanup never claims or removes a second image tag", { timeout: 30_000 }, async (t) => {
+  const fake = fakeDocker(t, { contexts: { default: "unix:///run/fake-docker.sock" }, FAKE_DOCKER_HEALTHY: "1" });
+  const release = path.join(fake.dir, "release-rmi");
+  const { child, exited } = runScript(t, { ...fake.env, FAKE_DOCKER_RMI_RELEASE: release });
+  let signalLogged = false;
+  child.stderr.on("data", (chunk) => {
+    if (chunk.toString().includes("SIGINT: stopping")) signalLogged = true;
+  });
+  try {
+    await waitFor(() => fake.calls().some(({ args }) => args[2] === "rmi"), "the first image cleanup");
+    assert.equal(child.kill("SIGINT"), true);
+    await waitFor(() => signalLogged, "the SIGINT handler");
+  } finally {
+    writeFileSync(release, "");
+  }
+  const { code, stderr } = await exited;
+  assert.equal(code, 130, stderr);
+  const calls = fake.calls().map(({ args }) => args);
+  const tags = calls.filter(isBuild).map(tagOf);
+  assert.equal(tags.length, 1);
+  assert.deepEqual(calls.filter((args) => args[2] === "rmi").map((args) => args[3]), tags);
+  assert.deepEqual(fakeState(fake).filter(({ removedImage }) => removedImage).map(({ removedImage }) => removedImage), tags);
+});
+
 test("a failed image build skips its companion builds and its boot, and removes its tag", { timeout: 30_000 }, async (t) => {
   const fake = fakeDocker(t, { contexts: { default: "unix:///run/fake-docker.sock" } });
   const { exited } = runScript(t, { ...fake.env, FAKE_DOCKER_HEALTHY: "1", FAKE_DOCKER_BUILD_FAIL: "packages-shared-browser:" });
@@ -652,6 +685,32 @@ test("a docker command that exits while a plugin keeps its output open settles a
   assert.deepEqual(kills.filter(([target]) => target === -pid), []);
   const strict = fakeDocker(t, { FAKE_DOCKER_GRANDCHILD: "1", FAKE_DOCKER_BUILD_HANG: path.join(fake0(t), "hang"), FAKE_DOCKER_BUILD_EXIT_AFTER_MS: "300" });
   await assert.rejects(pinnedDocker({ host: "unix:///var/run/docker.sock" }, strict.env, new DockerSession({ drainMs: 300 }))(["buildx", "build", "-t", "x", "."]), /did not close its output/);
+});
+
+test("interrupting during output drain never signals the exited docker leader's group", { timeout: 15_000 }, async (t) => {
+  const fake = fakeDocker(t, { FAKE_DOCKER_GRANDCHILD: "1", FAKE_DOCKER_BUILD_HANG: path.join(fake0(t), "hang"), FAKE_DOCKER_BUILD_EXIT_AFTER_MS: "100" });
+  const session = new DockerSession({ graceMs: 100, drainMs: 1_000 });
+  const docker = pinnedDocker({ host: "unix:///var/run/docker.sock" }, fake.env, session);
+  let settled = false;
+  const build = docker(["buildx", "build", "-t", "x", "."]).finally(() => { settled = true; });
+  const rejected = assert.rejects(build, Interrupted);
+  rejected.catch(() => {});
+  await waitFor(() => existsSync(fake.env.FAKE_DOCKER_LOG) && loggedPids(fake, "buildPid").length > 0, "the docker leader");
+  const [pid] = loggedPids(fake, "buildPid");
+  await waitFor(() => {
+    try {
+      process.kill(pid, 0);
+      return false;
+    } catch (error) {
+      if (error.code !== "ESRCH") throw error;
+      return true;
+    }
+  }, "the docker leader to exit");
+  const kill = t.mock.method(process, "kill", () => true);
+  assert.equal(settled, false);
+  session.interrupt("SIGTERM");
+  await rejected;
+  assert.deepEqual(kill.mock.calls.map(({ arguments: args }) => args).filter(([target]) => target === -pid), []);
 });
 
 test("output cut off by the drain never counts as a healthy probe or a confirmed removal", async () => {

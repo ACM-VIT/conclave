@@ -4,6 +4,8 @@ export const ACCEPTED_DOCKERFILES = [
   ["JSON-form COPY after flags", 'FROM node\nCOPY --chown=node:node --link ["packages/sfu/package.json", "packages/sfu/"]\n', [["packages/sfu/package.json"]]],
   ["COPY from another stage is not a context read", "FROM node AS build\nRUN true\nFROM node\nCOPY --from=build /app/dist ./dist\nCOPY a ./\n", [["a"]]],
   ["cache mount", "FROM node\nRUN --mount=type=cache,target=/root/.cache true\nCOPY a ./\n", [["a"]]],
+  ["multiple mounts", 'FROM node\nRUN --mount=type=cache,dst=/cache,id=check-v1,sharing=locked,mode=0755,uid=1000,gid=1000,readonly=true --mount=type=tmpfs,target=/scratch,size=16m ["true"]\nCOPY a ./\n', [["a"]]],
+  ["optional secret and SSH mounts", "FROM node\nRUN --mount=type=secret,id=demo,env=DEMO,required=false --mount=type=ssh,id=default,destination=/agent,required=false true\nCOPY a ./\n", [["a"]]],
   ["continuation with a comment and a blank line inside", "FROM node\nCOPY a \\\n# a comment inside the continuation\n\n    b ./\n", [["a", "b"]]],
   ["continuation with spaces after the backslash", "FROM node\nCOPY a \\  \t\n  b ./\n", [["a", "b"]]],
   ["ARG before FROM", "ARG BASE=node:22\nFROM node\nCOPY a ./\n", [["a"]]],

@@ -7,7 +7,7 @@ import test from "node:test";
 
 import { artifactProblems, contextProblems, imagePackages, repoRoot, workspacePackages } from "./check-docker-context.mjs";
 import { rootContextBuilds } from "./docker-context/compose.mjs";
-import { contextCopies } from "./docker-context/dockerfile.mjs";
+import { DockerfileError, contextCopies } from "./docker-context/dockerfile.mjs";
 import { ACCEPTED_DOCKERFILES, REJECTED_DOCKERFILES } from "./docker-context/dockerfile-cases.mjs";
 import { dockerIgnoreMatcher, walkContext } from "./docker-context/dockerignore.mjs";
 import { UnsupportedShape } from "./docker-context/unsupported.mjs";
@@ -46,6 +46,62 @@ test("the Dockerfile reader accepts only its small grammar", () => {
   for (const [name, text] of REJECTED_DOCKERFILES) assert.throws(() => contextCopies(text), /^Error: unsupported Dockerfile syntax on line \d+: .*; extend scripts\/docker-context or rewrite the Dockerfile$/, name);
   assert.throws(() => contextCopies("FROM node\nLABEL x \\\\\nCOPY hidden ./\n"), /on line 2: a line that ends in two backslashes/);
   assert.throws(() => contextCopies("FROM node\n\nCOPY --from= hidden ./\n"), /on line 3: COPY --from=;/);
+});
+
+test("RUN flags use plain words and mount options are unique allowlisted pairs", async (t) => {
+  const rejected = [
+    ["double-quoted target", 'type=cache,target="/a b"'],
+    ["single-quoted target", "type=cache,target='/a b'"],
+    ["escaped space in target", String.raw`type=cache,target=/a\ b`],
+    ["double-quoted id", 'type=cache,target=/cache,id="a b"'],
+    ["double-quoted pair", 'type=cache,target=/cache,"id=b"'],
+    ["single-quoted pair", "type=cache,target=/cache,'id=b'"],
+    ["quoted key", 'type=cache,target=/cache,"id"=b'],
+    ["escaped key", String.raw`type=cache,target=/cache,i\d=b`],
+    ["variable value", "type=cache,target=/cache,id=$CACHE"],
+    ["non-plain value", "type=cache,target=/cache,id=a*b"],
+    ["duplicate key", "type=cache,target=/cache,id=a,id=b"],
+    ["duplicate target alias", "type=cache,target=/cache,dst=/other"],
+    ["bare option", "type=cache,target=/cache,ro"],
+    ["empty value", "type=cache,target=/cache,id="],
+    ["extra separator", "type=cache,target=/cache,id=a=b"],
+    ["empty pair", "type=cache,target=/cache,"],
+    ["unknown key", "type=cache,target=/cache,unexpected=value"],
+    ["wrong key for type", "type=tmpfs,target=/scratch,id=a"],
+    ["case variant of disallowed key", "type=cache,target=/cache,FROM=build"],
+  ];
+  for (const [name, mount] of rejected) {
+    await t.test(name, () => assert.throws(() => copies(`FROM node\nRUN --mount=${mount} true\n`), DockerfileError));
+  }
+  await t.test("unknown flag after a valid mount", () => {
+    assert.throws(() => copies("FROM node\nRUN --mount=type=cache,target=/cache --unknown=value true\n"), DockerfileError);
+  });
+  await t.test("unknown flag on an instruction without builder flags", () => {
+    assert.throws(() => copies("FROM node\nWORKDIR --unknown /app\n"), DockerfileError);
+  });
+});
+
+test("a bare leading continuation fails as an unsupported Dockerfile shape", () => {
+  for (const [line, text] of [
+    [1, "\\\n  FROM scratch\n"],
+    [2, "FROM scratch\n\\\n  COPY a.txt /\n"],
+    [2, "FROM scratch\n \t\\\n # a comment\n  COPY a.txt /\n"],
+  ]) {
+    assert.throws(() => contextCopies(text), { constructor: DockerfileError, message: new RegExp(`line ${line}: .*continuation`) });
+  }
+});
+
+test("arbitrary Dockerfile text returns copies or raises a DockerfileError", () => {
+  const random = seededRandom(154);
+  const chunks = ["FROM scratch", "COPY a /", "RUN true", "# comment", "\\", "  ", "\t", "\n", "\r\n", "\0", " << ", " --mount=", "x"];
+  for (let i = 0; i < 1_000; i += 1) {
+    const text = Array.from({ length: 1 + Math.floor(random() * 12) }, () => chunks[Math.floor(random() * chunks.length)]).join("");
+    try {
+      assert.ok(Array.isArray(contextCopies(text)));
+    } catch (error) {
+      assert.ok(error instanceof DockerfileError, `${JSON.stringify(text)}: ${error}`);
+    }
+  }
 });
 
 test("the repository's Dockerfiles stay inside the grammar and read as written", () => {
