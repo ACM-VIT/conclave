@@ -20,9 +20,11 @@ import {
   removeEntryById,
   replaceEntries,
   setRemoveWinnerOnDone,
+  slotLabel,
   startSpin,
   type WheelSpin,
 } from "../../core/doc/index";
+import { useSpinLive } from "../hooks/useSpinLive";
 import { useWheelDocState } from "../hooks/useWheelDocState";
 import { WheelSounds } from "../sounds";
 import { GHOST_BUTTON, PRIMARY_BUTTON, SECONDARY_BUTTON } from "./buttons";
@@ -99,6 +101,7 @@ export function WheelWebApp() {
   const reducedMotion = useReducedMotion();
 
   const [isSpinning, setIsSpinning] = useState(false);
+  const { live: spinLive, isLive } = useSpinLive(doc, spin);
   const [landedSpinId, setLandedSpinId] = useState<string | null>(null);
   const [revealedSpinId, setRevealedSpinId] = useState<string | null>(null);
   const [dismissedSpinId, setDismissedSpinId] = useState<string | null>(null);
@@ -115,6 +118,7 @@ export function WheelWebApp() {
   const frozen = spin && spin.spinId !== dismissedSpinId ? spin : null;
   const landed = Boolean(frozen && !isSpinning && landedSpinId === frozen.spinId);
   const winner = frozen && landed ? frozen.entries[frozen.winnerIndex] ?? null : null;
+  const winnerLabel = frozen && winner ? slotLabel(frozen, frozen.winnerIndex) : "";
   const showReveal = Boolean(winner && frozen && revealedSpinId === frozen.spinId);
 
   const soundsRef = useRef<WheelSounds | null>(null);
@@ -166,7 +170,7 @@ export function WheelWebApp() {
   }, [shownSpinId, closeReveal]);
 
   const handleRequestSpin = useCallback(() => {
-    if (!canEdit || isSpinning || revealTimerRef.current) return;
+    if (!canEdit || isLive() || isSpinning || revealTimerRef.current) return;
     const liveEntries = getEntries(doc);
     if (liveEntries.length < 2) return;
 
@@ -183,7 +187,7 @@ export function WheelWebApp() {
       spunByName: user?.name ?? user?.email ?? "Someone",
     };
     startSpin(doc, record);
-  }, [canEdit, isSpinning, doc, user]);
+  }, [canEdit, isLive, isSpinning, doc, user]);
 
   const handleSettled = useCallback(
     (settled: WheelSpin, fresh: boolean) => {
@@ -191,7 +195,7 @@ export function WheelWebApp() {
       const winner = settled.entries[settled.winnerIndex];
       if (!winner) return;
       spinCountRef.current += 1;
-      setAnnouncement(`Spin ${spinCountRef.current} winner: ${winner.label}`);
+      setAnnouncement(`Spin ${spinCountRef.current} winner: ${slotLabel(settled, settled.winnerIndex)}`);
       if (!fresh) {
         setRevealedSpinId(settled.spinId);
         return;
@@ -255,6 +259,7 @@ export function WheelWebApp() {
   }, [doc, missingParticipantLabels]);
 
   const handleShuffle = useCallback(() => {
+    if (isLive()) return;
     const current = getEntries(doc);
     if (current.length < 2) return;
     const shuffled = [...current];
@@ -263,16 +268,17 @@ export function WheelWebApp() {
       [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
     }
     replaceEntries(doc, shuffled);
-  }, [doc]);
+  }, [doc, isLive]);
 
   const handleSort = useCallback(() => {
+    if (isLive()) return;
     const current = getEntries(doc);
     if (current.length < 2) return;
     const sorted = [...current].sort((a, b) =>
       a.label.localeCompare(b.label, undefined, { sensitivity: "base" })
     );
     replaceEntries(doc, sorted);
-  }, [doc]);
+  }, [doc, isLive]);
 
   const winnerOnWheel = Boolean(
     winner && entries.some((entry) => entry.id === winner.id)
@@ -355,9 +361,9 @@ export function WheelWebApp() {
         (winner ? (
           <p
             data-wheel-readout
-            className={`max-w-full text-balance font-semibold [overflow-wrap:anywhere] ${readoutSize(winner.label, roomy)}`}
+            className={`max-w-full text-balance font-semibold [overflow-wrap:anywhere] ${readoutSize(winnerLabel, roomy)}`}
           >
-            {winner.label}
+            {winnerLabel}
           </p>
         ) : (
           <div className="h-[38px]" />
@@ -453,17 +459,21 @@ export function WheelWebApp() {
       canEdit={canEdit}
       locked={locked}
       isAdmin={Boolean(isAdmin)}
-      isSpinning={isSpinning}
+      isSpinning={spinLive}
       soundOn={soundOn}
       removeWinnerOnDone={removeWinnerOnDone}
       missingParticipantCount={missingParticipantLabels.length}
       onToggleSound={() => setSoundOn((value) => !value)}
       onAddEntries={(labels) => addEntries(doc, labels)}
       onAddParticipants={handleAddParticipants}
-      onRemoveEntry={(entryId) => removeEntryById(doc, entryId)}
+      onRemoveEntry={(entryId) => {
+        if (!isLive()) removeEntryById(doc, entryId);
+      }}
       onShuffle={handleShuffle}
       onSort={handleSort}
-      onClearEntries={() => clearEntries(doc)}
+      onClearEntries={() => {
+        if (!isLive()) clearEntries(doc);
+      }}
       onClearHistory={() => clearHistory(doc)}
       onToggleRemoveWinner={(value) => setRemoveWinnerOnDone(doc, value)}
     />

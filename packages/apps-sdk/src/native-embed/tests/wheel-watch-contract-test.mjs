@@ -141,7 +141,7 @@ test("Wheel and Watch commands reach the renderer and are acked under their requ
     session.doc.destroy();
   });
   const seen = [];
-  session.setCommandHandler((command) => {
+  session.start((command) => {
     seen.push(command.type);
     return { ok: command.type !== "spin" };
   });

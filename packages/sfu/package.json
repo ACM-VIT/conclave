@@ -42,6 +42,7 @@
     "react-email": "^6.11.16",
     "redis": "^6.3.1",
     "socket.io": "^4.8.4",
+    "tsx": "^4.23.15",
     "y-protocols": "^1.0.7",
     "yjs": "13.6.33"
   },
@@ -54,7 +55,6 @@
     "@types/react-dom": "^19.3.0",
     "@typescript/native": "npm:typescript@^7.0.2",
     "socket.io-client": "^4.8.4",
-    "tsx": "^4.23.15",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
     "vitest": "^5.1.1"
   }

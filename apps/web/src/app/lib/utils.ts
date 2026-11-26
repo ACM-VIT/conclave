@@ -1,5 +1,8 @@
+import { resolveViewerUrl } from "../../lib/novnc-viewer";
 import { EMOJI_REACTIONS, type ReactionEmoji } from "./constants";
 import { isMediaCaptureTimeoutError } from "./media-capture-timeout";
+import { linkOriginIsKnown } from "../../lib/meeting-origin";
+import { canonicalizeSfuClientId } from "../../lib/sfu-client-id";
 import type {
   MeetError,
   MeetMediaDevice,
@@ -144,6 +147,360 @@ export function extractRoomCode(input: string): string {
   }
 
   return sanitizeRoomCode(trimmed);
+}
+
+export type CodeFieldPaste =
+  | { kind: "insert"; text: string }
+  | { kind: "replace"; code: string; clientId: string | null };
+
+const ROOM_CODE_TEXT = /^[a-z0-9-]+$/i;
+const ROOM_CODE_SHAPE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const MEETING_LINK = new RegExp(
+  String.raw`^(?:(?<scheme>https?:)?\/\/)?(?<authority>[^\/?#\\\s@]+)\/(?<segment>[^\/?#\\\s]+)\/?(?:[?#]\S*)?$`,
+  "i",
+);
+export const APP_ROUTE_SEGMENTS = [
+  "api",
+  "book",
+  "delete-account",
+  "privacy",
+  "schedule",
+  "sfu-admin",
+  "sign-in",
+  "w",
+] as const;
+const NOT_ROOM_CODES = new Set<string>(["null", "undefined", ...APP_ROUTE_SEGMENTS]);
+
+const isRoomCodeShaped = (code: string) => ROOM_CODE_SHAPE.test(code) && !NOT_ROOM_CODES.has(code);
+
+const linkRoomCode = (segment: string) => {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(segment);
+  } catch {
+    return null;
+  }
+  if (!ROOM_CODE_TEXT.test(decoded)) return null;
+  const code = decoded.toLowerCase();
+  return isRoomCodeShaped(code) ? code : null;
+};
+
+const linkAsNavigated = (link: string, scheme: string | undefined) => {
+  try {
+    return new URL(scheme ? link : `https:${link.startsWith("//") ? "" : "//"}${link}`);
+  } catch {
+    return null;
+  }
+};
+
+export function parseCodeFieldPaste(
+  text: string,
+  conclaveOrigins: readonly string[],
+): CodeFieldPaste | null {
+  const trimmed = text.trim();
+  if (ROOM_CODE_TEXT.test(trimmed)) return { kind: "insert", text: trimmed.toLowerCase() };
+  const { scheme, authority, segment } = MEETING_LINK.exec(trimmed)?.groups ?? {};
+  if (!authority || !segment) return null;
+  if (!linkOriginIsKnown(scheme, authority, conclaveOrigins)) return null;
+  const code = linkRoomCode(segment);
+  if (!code) return null;
+  const url = linkAsNavigated(trimmed, scheme);
+  if (!url) return null;
+  return { kind: "replace", code, clientId: canonicalizeSfuClientId(url.searchParams.get("clientId")) };
+}
+
+const URL_PUNCTUATION = /[:/.?#@%=&+~\\]/;
+
+export const normalizeCodeField = (value: string) =>
+  URL_PUNCTUATION.test(value)
+    ? value
+    : value.toLowerCase().replace(/(\S)\s+(?=\S)/g, "$1-").replace(/-+/g, "-");
+
+export type CodeFieldResolution = { code: string; clientId: string | null; tooLong: boolean };
+
+export function resolveCodeField(
+  value: string,
+  conclaveOrigins: readonly string[],
+): CodeFieldResolution {
+  const paste = parseCodeFieldPaste(value, conclaveOrigins);
+  const link = paste?.kind === "replace" ? paste : null;
+  const candidate = link ? link.code : value.trim();
+  const clientId = link?.clientId ?? null;
+  if (!isRoomCodeShaped(candidate)) return { code: "", clientId: null, tooLong: false };
+  return candidate.length > ROOM_CODE_MAX_LENGTH
+    ? { code: "", clientId, tooLong: true }
+    : { code: candidate, clientId, tooLong: false };
+}
+
+export const codeFieldTenant = (resolution: CodeFieldResolution, pageClientId: string) => {
+  const clientId = resolution.clientId ?? pageClientId;
+  return { clientId, onThisPage: clientId === pageClientId };
+};
+
+export const roomCodeFromField = (value: string, conclaveOrigins: readonly string[]) =>
+  resolveCodeField(value, conclaveOrigins).code;
+
+export type FieldEdit = { start: number; end: number; text: string };
+
+export function planFieldEdit(
+  value: string,
+  start: number,
+  end: number,
+  text: string,
+  normalize: (value: string) => string,
+): FieldEdit {
+  const next = normalize(value.slice(0, start) + text + value.slice(end));
+  let head = 0;
+  while (head < start && value[head] === next[head]) head += 1;
+  let tail = 0;
+  while (
+    tail < value.length - end &&
+    tail < next.length - head &&
+    value[value.length - 1 - tail] === next[next.length - 1 - tail]
+  ) {
+    tail += 1;
+  }
+  return { start: head, end: value.length - tail, text: next.slice(head, next.length - tail) };
+}
+
+const INSERT_INPUT = new Set([
+  "insertText",
+  "insertReplacementText",
+  "insertFromPaste",
+  "insertFromPasteAsQuotation",
+  "insertFromDrop",
+  "insertFromYank",
+]);
+const DELETE_INPUT = new Set([
+  "deleteContent",
+  "deleteContentBackward",
+  "deleteContentForward",
+  "deleteWordBackward",
+  "deleteWordForward",
+  "deleteSoftLineBackward",
+  "deleteSoftLineForward",
+  "deleteHardLineBackward",
+  "deleteHardLineForward",
+  "deleteEntireSoftLine",
+  "deleteByCut",
+  "deleteByDrag",
+]);
+export const PASTED_INPUT = new Set([
+  "insertFromPaste",
+  "insertFromPasteAsQuotation",
+  "insertFromDrop",
+  "insertFromYank",
+]);
+const WORD_CHAR = /[\p{L}\p{N}]/u;
+
+const wordStartBefore = (value: string, at: number) => {
+  let index = at;
+  while (index > 0 && !WORD_CHAR.test(value[index - 1])) index -= 1;
+  while (index > 0 && WORD_CHAR.test(value[index - 1])) index -= 1;
+  return index;
+};
+
+const wordEndAfter = (value: string, at: number) => {
+  let index = at;
+  while (index < value.length && !WORD_CHAR.test(value[index])) index += 1;
+  while (index < value.length && WORD_CHAR.test(value[index])) index += 1;
+  return index;
+};
+
+export function inputEditRange(
+  inputType: string,
+  start: number,
+  end: number,
+  value: string,
+): readonly [number, number] | null {
+  if (INSERT_INPUT.has(inputType)) return [start, end];
+  if (!DELETE_INPUT.has(inputType)) return null;
+  if (start !== end) return [start, end];
+  switch (inputType) {
+    case "deleteContentBackward":
+      return [Math.max(0, start - 1), start];
+    case "deleteContentForward":
+      return [start, Math.min(value.length, start + 1)];
+    case "deleteWordBackward":
+      return [wordStartBefore(value, start), start];
+    case "deleteWordForward":
+      return [start, wordEndAfter(value, start)];
+    case "deleteSoftLineBackward":
+    case "deleteHardLineBackward":
+      return [0, start];
+    case "deleteSoftLineForward":
+    case "deleteHardLineForward":
+      return [start, value.length];
+    case "deleteEntireSoftLine":
+      return [0, value.length];
+    default:
+      return [start, end];
+  }
+}
+
+export type SelectionDirection = "forward" | "backward" | "none";
+export type FieldState = {
+  value: string;
+  selection: readonly [number, number];
+  direction?: SelectionDirection;
+};
+type FieldStep = { before: FieldState; after: FieldState };
+
+const sameFieldState = (a: FieldState, b: FieldState) =>
+  a.value === b.value && a.selection[0] === b.selection[0] && a.selection[1] === b.selection[1];
+
+export class FieldHistory {
+  private steps: FieldStep[] = [];
+  private cursor = 0;
+  private typingOpen = false;
+
+  record(before: FieldState, after: FieldState, typing: boolean) {
+    this.steps.length = this.cursor;
+    const last = this.steps[this.cursor - 1];
+    if (typing && this.typingOpen && last && sameFieldState(last.after, before)) {
+      last.after = after;
+    } else {
+      this.steps.push({ before, after });
+      this.cursor = this.steps.length;
+    }
+    this.typingOpen = typing;
+  }
+
+  undone(value: string): FieldState | null {
+    const step = this.steps[this.cursor - 1];
+    if (!step || step.before.value !== value) {
+      this.clear();
+      return null;
+    }
+    this.typingOpen = false;
+    this.cursor -= 1;
+    return step.before;
+  }
+
+  redone(value: string): FieldState | null {
+    const step = this.steps[this.cursor];
+    if (!step || step.after.value !== value) {
+      this.clear();
+      return null;
+    }
+    this.typingOpen = false;
+    this.cursor += 1;
+    return step.after;
+  }
+
+  seal() {
+    this.typingOpen = false;
+  }
+
+  clear() {
+    this.steps = [];
+    this.cursor = 0;
+    this.typingOpen = false;
+  }
+}
+
+type FieldTracker = {
+  history: FieldHistory;
+  last: FieldState;
+  pending: FieldState | null;
+  applying: boolean;
+};
+
+const TYPING_INPUT = new Set(["insertText", "insertCompositionText"]);
+const fieldTrackers = new WeakMap<HTMLInputElement, FieldTracker>();
+
+const fieldStateOf = (input: HTMLInputElement): FieldState => ({
+  value: input.value,
+  selection: [
+    input.selectionStart ?? input.value.length,
+    input.selectionEnd ?? input.selectionStart ?? input.value.length,
+  ],
+  direction: input.selectionDirection ?? "none",
+});
+
+const fieldTrackerFor = (input: HTMLInputElement) => {
+  let tracker = fieldTrackers.get(input);
+  if (!tracker) {
+    tracker = { history: new FieldHistory(), last: fieldStateOf(input), pending: null, applying: false };
+    fieldTrackers.set(input, tracker);
+  }
+  if (!tracker.applying && tracker.last.value !== input.value) {
+    tracker.history.clear();
+    tracker.last = fieldStateOf(input);
+    tracker.pending = null;
+  }
+  return tracker;
+};
+
+const writeField = (input: HTMLInputElement, tracker: FieldTracker, write: () => void) => {
+  tracker.applying = true;
+  try {
+    write();
+  } finally {
+    tracker.applying = false;
+  }
+  tracker.last = fieldStateOf(input);
+  tracker.pending = null;
+};
+
+export function applyFieldEdit(input: HTMLInputElement, edit: FieldEdit) {
+  const caret = edit.start + edit.text.length;
+  const tracker = fieldTrackerFor(input);
+  if (edit.start === edit.end && !edit.text) {
+    input.setSelectionRange(caret, caret);
+    tracker.history.seal();
+    return;
+  }
+  const before = fieldStateOf(input);
+  writeField(input, tracker, () => {
+    input.setSelectionRange(edit.start, edit.end);
+    const applied =
+      typeof document.execCommand === "function" &&
+      (edit.text
+        ? document.execCommand("insertText", false, edit.text)
+        : document.execCommand("delete"));
+    if (applied) {
+      input.setSelectionRange(caret, caret);
+    } else {
+      input.setRangeText(edit.text, edit.start, edit.end, "end");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  });
+  tracker.history.record(before, tracker.last, false);
+}
+
+export function trackFieldHistory(input: HTMLInputElement) {
+  const onBeforeInput = (event: InputEvent) => {
+    const tracker = fieldTrackerFor(input);
+    if (tracker.applying || event.defaultPrevented) return;
+    tracker.pending = fieldStateOf(input);
+  };
+  const onInput = (event: Event) => {
+    const tracker = fieldTrackers.get(input);
+    if (!tracker || tracker.applying || !(event instanceof InputEvent)) return;
+    if (event.inputType === "historyUndo" || event.inputType === "historyRedo") {
+      const state =
+        event.inputType === "historyUndo"
+          ? tracker.history.undone(input.value)
+          : tracker.history.redone(input.value);
+      if (state) input.setSelectionRange(state.selection[0], state.selection[1], state.direction);
+    } else {
+      const before = tracker.pending ?? tracker.last;
+      const after = fieldStateOf(input);
+      if (after.value !== before.value) {
+        tracker.history.record(before, after, TYPING_INPUT.has(event.inputType));
+      }
+    }
+    tracker.last = fieldStateOf(input);
+    tracker.pending = null;
+  };
+  fieldTrackerFor(input);
+  input.addEventListener("beforeinput", onBeforeInput);
+  input.addEventListener("input", onInput);
+  return () => {
+    input.removeEventListener("beforeinput", onBeforeInput);
+    input.removeEventListener("input", onInput);
+  };
 }
 
 type MediaDevice = "camera" | "microphone";
@@ -525,20 +882,6 @@ export function isBrowserVideoUserId(userId: string): boolean {
 }
 
 export function resolveNoVncUrl(noVncUrl: string): string {
-  if (!noVncUrl) return noVncUrl;
-  if (typeof window === "undefined") return noVncUrl;
-
-  try {
-    const parsed = new URL(noVncUrl);
-    const isLocalHost =
-      parsed.hostname === "localhost" ||
-      parsed.hostname === "127.0.0.1" ||
-      parsed.hostname === "0.0.0.0";
-    if (isLocalHost) {
-      parsed.hostname = window.location.hostname;
-    }
-    return parsed.toString();
-  } catch {
-    return noVncUrl;
-  }
+  if (!noVncUrl || typeof window === "undefined") return noVncUrl;
+  return resolveViewerUrl(noVncUrl, window.location.hostname);
 }

@@ -1,22 +1,30 @@
-import { useEffect, useEffectEvent, useRef, useState } from "react";
-import type { RejoinMedia } from "../lib/call-outcome";
+import { useEffect, useEffectEvent, useRef } from "react";
+import type { RejoinMedia } from "../lib/rejoin-intent";
 
 export function useRejoinMediaRestore(
   initialMedia: RejoinMedia | null | undefined,
-  apply: (media: RejoinMedia) => Promise<unknown>,
-): boolean {
-  const [restoring, setRestoring] = useState(false);
-  const applied = useRef(false);
-  const restore = useEffectEvent((media: RejoinMedia) => {
-    setRestoring(true);
-    void apply(media)
-      .catch(() => {})
-      .finally(() => setRestoring(false));
-  });
+  apply: (media: RejoinMedia, signal: AbortSignal) => Promise<void>,
+): () => void {
+  const controller = useRef<AbortController | null>(null);
+  const started = useRef(false);
+  const restore = useEffectEvent(apply);
+  useEffect(() => () => controller.current?.abort(), []);
   useEffect(() => {
-    if (!initialMedia || applied.current) return;
-    applied.current = true;
-    restore(initialMedia);
+    if (!initialMedia || started.current) return;
+    let disposed = false;
+    // StrictMode replays setup before the browser should open a device.
+    queueMicrotask(() => {
+      if (disposed) return;
+      started.current = true;
+      controller.current ??= new AbortController();
+      void restore(initialMedia, controller.current.signal).catch(() => {});
+    });
+    return () => {
+      disposed = true;
+    };
   }, [initialMedia]);
-  return restoring;
+  return () => {
+    controller.current ??= new AbortController();
+    controller.current.abort();
+  };
 }

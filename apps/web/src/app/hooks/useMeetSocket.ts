@@ -1270,6 +1270,7 @@ export function useMeetSocket({
     joinOptionsRef,
     localStreamRef,
     deviceIntents,
+    skipMutedMicWarmupRef,
     sessionIdRef,
     producerTransportDisconnectTimeoutRef,
     consumerTransportDisconnectTimeoutRef,
@@ -1989,6 +1990,7 @@ export function useMeetSocket({
       consumerTransportRef.current = null;
       producerTransportCreatePromiseRef.current = null;
       pendingCameraCodecTransportResetEpochRef.current = null;
+      skipMutedMicWarmupRef.current = false;
       if (producerTransportDisconnectTimeoutRef.current) {
         window.clearTimeout(producerTransportDisconnectTimeoutRef.current);
         producerTransportDisconnectTimeoutRef.current = null;
@@ -2083,6 +2085,7 @@ export function useMeetSocket({
       mutedConsumerSinceRef,
       producerPausedStateRef,
       consumerRecoveryInFlightRef,
+      skipMutedMicWarmupRef,
       stopScreenShareCapture,
     ],
   );
@@ -2210,13 +2213,14 @@ export function useMeetSocket({
     () => {
       const mediaIntent = resolveMediaPublishIntent();
       return {
-        needsAudio: true,
+        needsAudio:
+          mediaIntent.isMicOn || !skipMutedMicWarmupRef.current,
         needsVideo: mediaIntent.isCameraOn,
         requiredAudio: mediaIntent.isMicOn,
         requiredVideo: mediaIntent.isCameraOn,
       };
     },
-    [resolveMediaPublishIntent],
+    [resolveMediaPublishIntent, skipMutedMicWarmupRef],
   );
 
   const dropVideoTracksForCameraOff = useCallback(
@@ -7025,6 +7029,7 @@ export function useMeetSocket({
               assertJoinCurrent();
 
               setConnectionState("joined");
+              skipMutedMicWarmupRef.current = false;
               setHostUserId(response.hostUserId ?? null);
               setHostUserIds(
                 response.hostUserIds ??
@@ -7045,6 +7050,7 @@ export function useMeetSocket({
       socketRef,
       intentionalDisconnectRef,
       sessionIdRef,
+      skipMutedMicWarmupRef,
       applyWebcamCodecPolicyNotification,
       setWaitingMessage,
       setConnectionState,

@@ -104,6 +104,7 @@ import {
   isMediaDeviceBlocked,
 } from "../lib/utils";
 import { hiddenSetupView, type SetupNotice } from "../lib/setup-notice";
+import type { RejoinMedia } from "../lib/rejoin-intent";
 import { useApps, useGame } from "@conclave/apps-sdk";
 import { GamePanel } from "./games/GamePanel";
 import { GamesPanel } from "./games/GamesPanel";
@@ -119,7 +120,6 @@ import {
   type VideoEffectsState,
 } from "../lib/video-effects";
 import type { MeetViewSettings } from "../lib/meet-view";
-import type { RejoinMedia } from "../lib/call-outcome";
 import type { MediaQualitySettings } from "../lib/media-quality-settings";
 import type {
   ClonedTtsVoice,
@@ -147,7 +147,6 @@ interface MeetsMainContentProps {
   connectionState: ConnectionState;
   isLoading: boolean;
   roomId: string;
-  clientId?: string;
   setRoomId: Dispatch<SetStateAction<string>>;
   joinRoomById: (roomId: string) => void;
   retryReconnect?: () => Promise<void> | void;
@@ -156,6 +155,7 @@ interface MeetsMainContentProps {
   isWebinarAttendee?: boolean;
   enableRoomRouting: boolean;
   forceJoinOnly: boolean;
+  clientId?: string;
   user?: {
     id?: string;
     email?: string | null;
@@ -237,7 +237,6 @@ interface MeetsMainContentProps {
   onGoHome?: () => void;
   onStartNewMeeting?: () => void;
   onEnterMeetingStart?: (action: "new" | "join") => void;
-  prejoinInitialMedia?: RejoinMedia | null;
   isParticipantsOpen: boolean;
   setIsParticipantsOpen: Dispatch<SetStateAction<boolean>>;
   pendingUsers: Map<string, string>;
@@ -300,6 +299,8 @@ interface MeetsMainContentProps {
   meetError?: MeetError | null;
   mediaError?: MeetError | null;
   setupNotice?: SetupNotice | null;
+  prejoinInitialMedia?: RejoinMedia | null;
+  onPrejoinInitialMediaUsed?: () => void;
   onDismissSetupNotice?: () => void;
   browserAudioNeedsGesture: boolean;
   browserAudioPlaybackAttemptToken?: number;
@@ -441,7 +442,6 @@ export default function MeetsMainContent({
   connectionState,
   isLoading,
   roomId,
-  clientId,
   setRoomId,
   joinRoomById,
   retryReconnect,
@@ -450,6 +450,7 @@ export default function MeetsMainContent({
   isWebinarAttendee = false,
   enableRoomRouting,
   forceJoinOnly,
+  clientId,
   user,
   userEmail,
   isAdmin,
@@ -525,7 +526,6 @@ export default function MeetsMainContent({
   onGoHome,
   onStartNewMeeting,
   onEnterMeetingStart,
-  prejoinInitialMedia,
   isParticipantsOpen,
   setIsParticipantsOpen,
   pendingUsers,
@@ -586,6 +586,8 @@ export default function MeetsMainContent({
   meetError,
   mediaError,
   setupNotice,
+  prejoinInitialMedia,
+  onPrejoinInitialMediaUsed,
   onDismissSetupNotice,
   isPopoutActive,
   isPopoutSupported,
@@ -2286,6 +2288,7 @@ export default function MeetsMainContent({
             isAdmin={isAdmin}
             enableRoomRouting={enableRoomRouting}
             forceJoinOnly={forceJoinOnly}
+            clientId={clientId}
             showPermissionHint={showPermissionHint}
             rooms={availableRooms}
             roomsStatus={roomsStatus}
@@ -2297,13 +2300,13 @@ export default function MeetsMainContent({
             onIsAdminChange={onIsAdminChange}
             mediaError={mediaError}
             setupNotice={setupNotice}
+            initialMedia={prejoinInitialMedia}
+            onInitialMediaUsed={onPrejoinInitialMediaUsed}
             onDismissSetupNotice={onDismissSetupNotice}
             videoEffects={videoEffects}
             onVideoEffectsChange={onVideoEffectsChange}
             onPrejoinMediaCommit={onPrejoinMediaCommit}
             onEnterStart={onEnterMeetingStart}
-            initialMedia={prejoinInitialMedia}
-            clientId={clientId}
           />
         )
       ) : isWebinarAttendee ? (

@@ -4,9 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import MeetingOutcomeScreen from "../src/app/components/MeetingOutcomeScreen";
 import {
-  readRejoinIntent,
   reconnectEndedCall,
-  saveRejoinIntent,
   type CallOutcome,
   type CallOutcomeKind,
 } from "../src/app/lib/call-outcome";
@@ -122,24 +120,6 @@ describe("MeetingOutcomeScreen", () => {
     expect(container.querySelector('[role="status"]')?.textContent).toBe(
       "Thanks for the feedback.",
     );
-  });
-});
-
-describe("rejoin intent", () => {
-  const media = { isMicOn: true, isCameraOn: false, isAudioOnly: true };
-
-  it("hands the device choices to the same meeting's pre-join", () => {
-    saveRejoinIntent("abc-defg-hij", media);
-
-    expect(readRejoinIntent("ABC-DEFG-HIJ")).toEqual(media);
-  });
-
-  it("ignores a different meeting or a stale choice", () => {
-    saveRejoinIntent("abc-defg-hij", media);
-
-    expect(readRejoinIntent("xyz-defg-hij")).toBeNull();
-    expect(readRejoinIntent(undefined)).toBeNull();
-    expect(readRejoinIntent("abc-defg-hij", Date.now() + 11 * 60 * 1000)).toBeNull();
   });
 });
 

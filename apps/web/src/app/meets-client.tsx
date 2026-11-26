@@ -30,13 +30,9 @@ import MeetsWaitingScreen from "./components/MeetsWaitingScreen";
 import MeetingEnterOverlay from "./components/MeetingEnterOverlay";
 import MeetingOutcomeScreen from "./components/MeetingOutcomeScreen";
 import {
-  clearRejoinIntent,
-  readRejoinIntent,
   reconnectEndedCall,
-  saveRejoinIntent,
   type CallOutcome,
   type CallOutcomeKind,
-  type RejoinMedia,
 } from "./lib/call-outcome";
 import { telemetry } from "./lib/telemetry";
 import { buildMeetingPath } from "@/lib/meeting-links";
@@ -138,6 +134,16 @@ import {
 } from "./lib/utils";
 import type { VideoEffectsBridgeState } from "./components/VideoEffectsBridge";
 import type { SetupNotice } from "./lib/setup-notice";
+import {
+  clearRejoinIntent,
+  readRejoinIntent,
+  saveRejoinIntent,
+  type RejoinMedia,
+} from "./lib/rejoin-intent";
+import { canonicalizeSfuClientId, resolveBrowserSfuClientId } from "@/lib/sfu-client-id";
+
+const pageTenant = (clientId: string | undefined): string =>
+  canonicalizeSfuClientId(clientId) ?? resolveBrowserSfuClientId();
 
 type MeetUser = {
   id?: string;
@@ -443,8 +449,10 @@ export default function MeetsClient({
     useState<string | null>(null);
   const [setupNotice, setSetupNotice] = useState<SetupNotice | null>(null);
   const [callOutcome, setCallOutcome] = useState<CallOutcome | null>(null);
-  const [rejoinMedia] = useState(() =>
-    typeof window === "undefined" ? null : readRejoinIntent(initialRoomId),
+  const [rejoinMedia, setRejoinMedia] = useState(() =>
+    typeof window === "undefined"
+      ? null
+      : readRejoinIntent({ roomId: initialRoomId ?? "", clientId: pageTenant(clientId) }),
   );
   useEffect(() => {
     if (rejoinMedia) clearRejoinIntent();
@@ -642,6 +650,8 @@ export default function MeetsClient({
     adminNotice,
     setAdminNotice,
   } = useMeetState({ initialRoomId, deviceIntents: refs.deviceIntents });
+  if (rejoinMedia && connectionState === "joined") setRejoinMedia(null);
+  const consumeRejoinMedia = useCallback(() => setRejoinMedia(null), []);
 
   const [serverActiveSpeakerAvailable, setServerActiveSpeakerAvailable] =
     useState(false);
@@ -1463,6 +1473,7 @@ export default function MeetsClient({
         audio: handoff.isMicOn,
         video: handoff.isCameraOn,
       });
+      refs.skipMutedMicWarmupRef.current = handoff.skipMutedMicWarmup;
       setLocalStream(nextStream);
       const joinAudioOnly = handoff.isAudioOnly === true;
       setViewSettings((settings) =>
@@ -1491,6 +1502,7 @@ export default function MeetsClient({
       localStream,
       refs.deviceIntents,
       refs.localStreamRef,
+      refs.skipMutedMicWarmupRef,
       setLocalStream,
       setMeetError,
       stopLocalTrack,
@@ -3317,7 +3329,10 @@ export default function MeetsClient({
         outcome={outcome}
         onRejoin={() => {
           if (outcome.rejoinMedia) {
-            saveRejoinIntent(outcome.roomId, outcome.rejoinMedia);
+            saveRejoinIntent(
+              { roomId: outcome.roomId, clientId: pageTenant(clientId) },
+              outcome.rejoinMedia,
+            );
           }
           window.location.assign(
             buildMeetingPath({ roomCode: outcome.roomId, clientId }),
@@ -3388,6 +3403,7 @@ export default function MeetsClient({
         isWebinarAttendee={isWebinarAttendee}
         enableRoomRouting={enableRoomRouting}
         forceJoinOnly={forceJoinOnly}
+        clientId={clientId}
         user={currentUser}
         userEmail={userEmail}
         isAdmin={canModerateMeeting}
@@ -3473,8 +3489,6 @@ export default function MeetsClient({
           joinMode === "meeting" ? handleStartNewMeeting : undefined
         }
         onEnterMeetingStart={handleEnterMeetingStart}
-        prejoinInitialMedia={rejoinMedia}
-        clientId={clientId}
         isParticipantsOpen={isParticipantsOpen}
         setIsParticipantsOpen={setIsParticipantsOpen}
         pendingUsers={pendingUsers}
@@ -3563,6 +3577,8 @@ export default function MeetsClient({
         meetError={meetError}
         mediaError={mediaError}
         setupNotice={setupNotice}
+        prejoinInitialMedia={rejoinMedia}
+        onPrejoinInitialMediaUsed={consumeRejoinMedia}
         onDismissSetupNotice={() => setSetupNotice(null)}
         isPopoutActive={isPopoutActive}
         isPopoutSupported={isPopoutSupported}
