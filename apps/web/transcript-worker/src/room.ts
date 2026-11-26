@@ -45,6 +45,7 @@ import {
   TRANSCRIPTION_PROVIDER_DRAIN_MS,
   TRANSCRIPTION_RECOVERY_MAX_AUDIO_BYTES,
   UNOWNED_AUDIO_KEPT_MS,
+  SARVAM_MAX_LANES,
   TRANSCRIPT_PERSIST_RETRY_MS,
   TRANSCRIPT_PERSIST_RETRY_MAX_MS,
   TRANSCRIPTION_ENDED_LINE_KEPT_MS,
@@ -100,6 +101,7 @@ import {
   type QueuedMarker,
 } from "./audio-store";
 import { VoiceActivity } from "./transcription/voice-activity";
+import { SocketBudget } from "./transcription/socket-budget";
 import {
   canRefreshTranscriptMinutes,
   canStopTranscriptSession,
@@ -125,7 +127,7 @@ import {
   connectLiveTranscriptionProvider,
   type LiveTranscriptionSession,
 } from "./transcription";
-import type { AcceptedUtterance, HeardSpeech, SpeechPlace } from "./transcription/types";
+import { AudioNotSent, type AcceptedUtterance, type HeardSpeech, type SpeechPlace } from "./transcription/types";
 import {
   isRetryableTranscriptionFailure,
   transcriptionRecoveryDelayMs,
@@ -181,6 +183,7 @@ export class TranscriptRoom {
     onRelease: (lineId) => this.audio.releaseOwner(lineId),
   });
   private readonly audio = new AudioStore();
+  private readonly sarvamSockets = new SocketBudget(SARVAM_MAX_LANES);
   private droppedAudioChunks = 0;
   private liveConnection: ProviderConnection | null = null;
   private audioSequence = 0;
@@ -1099,6 +1102,7 @@ export class TranscriptRoom {
       this.broadcastSession();
       if (!wasIdle) this.scheduleMinutes();
       await this.sendSfuRelayStartToken(viewer);
+      if (acceptedRevision !== this.sessionRevision) return;
       await this.persist();
     } catch (error) {
       if (acceptedRevision !== this.sessionRevision || this.session?.status !== "starting") return;
@@ -1293,6 +1297,11 @@ export class TranscriptRoom {
     const session = this.transcriptionSession;
     const live = this.liveConnection;
     if (!session || !live || this.audioPaused) return "failed";
+    if (session.withholds?.(chunk.speaker, chunk.voice, chunk.createdAt)) {
+      chunk.sentAt = Date.now();
+      chunk.owner = { kind: "unowned" };
+      return "sent";
+    }
     if (session.ready && !session.ready(chunk.speaker)) return "wait";
     if (
       this.hasPendingAudio &&
@@ -1315,10 +1324,10 @@ export class TranscriptRoom {
         order: chunk.order,
         createdAt: chunk.createdAt,
       });
-    } catch {
+    } catch (error) {
       chunk.sentAt = null;
       chunk.owner = { kind: "queued" };
-      return "failed";
+      return error instanceof AudioNotSent ? "wait" : "failed";
     }
     const owner = ownerItem ? this.ledger.get(live.lineOf(ownerItem) ?? "") : undefined;
     if (owner?.state === "open") {
@@ -1739,6 +1748,7 @@ export class TranscriptRoom {
         env: { ...this.env, ...(this.responseEnvironment ?? {}) },
         ...options,
         signal: controller.signal,
+        socketBudget: this.sarvamSockets,
         callbacks: {
           onAccepted: (itemId, utterance) => {
             const connection = this.connectionFor(epoch);
@@ -1763,6 +1773,10 @@ export class TranscriptRoom {
           onItemFailed: (itemId) => {
             const connection = this.connectionFor(epoch);
             if (connection) return this.applyLineFailure(connection, itemId);
+          },
+          onItemLost: (itemId) => {
+            const connection = this.connectionFor(epoch);
+            if (connection) this.loseLine(connection, itemId);
           },
           onReady: () => {
             if (this.liveConnection?.epoch === epoch) this.flushToLive();
@@ -1810,6 +1824,7 @@ export class TranscriptRoom {
     this.transcriptionProviderOpeningGeneration = null;
     this.transcriptionRecoveryPromise = null;
     this.pendingTranscriptionRecoveryFailure = null;
+    this.liveConnection?.session.settle?.();
     this.transcriptionConnectionEpoch += 1;
     const live = this.liveConnection;
     this.liveConnection = null;
@@ -1859,7 +1874,8 @@ export class TranscriptRoom {
     if (this.providerDrains.get(drain.epoch) !== drain) return;
     if (drain.timer !== null) clearTimeout(drain.timer);
     drain.timer = null;
-    const owesLines = this.ledger.active().some(({ epoch }) => epoch === drain.epoch);
+    const owesLines =
+      this.ledger.active().some(({ epoch }) => epoch === drain.epoch) || drain.session.owes?.() === true;
     const now = Date.now();
     if (!owesLines && now >= drain.quietAt) {
       this.closeDrain(drain);
@@ -1887,6 +1903,7 @@ export class TranscriptRoom {
 
   private async endDrain(drain: ProviderConnection, reason: string): Promise<void> {
     if (this.providerDrains.get(drain.epoch) !== drain) return;
+    drain.session.settle?.();
     const owed = this.ledger.active().filter(({ epoch }) => epoch === drain.epoch);
     if (this.endUnfinishedLines(owed, `A replaced provider ${reason}`, drain)) {
       this.persistInBackground();
@@ -1985,6 +2002,7 @@ export class TranscriptRoom {
   private markLineHeard(connection: ProviderConnection, providerItemId: string, heard: HeardSpeech): void {
     const line = this.ledger.get(connection.lineOf(providerItemId) ?? "");
     if (!line || !isActive(line)) return;
+    if (!line.heard && !line.text.trim()) line.place = null;
     line.heard = true;
     this.bindSpeech(connection, line, heard);
     this.persistInBackground();
@@ -2021,6 +2039,7 @@ export class TranscriptRoom {
     const shownBefore = line.text;
     line.text = line.freshText ? delta : `${line.text}${delta}`;
     line.freshText = false;
+    if (!line.text.trim()) return;
     const segment = this.lineSegment(line, now);
     if (line.text !== shownBefore) this.persistInBackground();
     this.broadcast({
@@ -2043,7 +2062,10 @@ export class TranscriptRoom {
       if (text && isPlaced(line)) {
         this.ledger.end(line, "final", text);
         changed = this.recordFinalSegment(this.lineSegment(line), text);
-      } else if (line.heard && isPlaced(line) && connection.session.provider === "sarvam") {
+      } else if (isPlaced(line) && connection.session.provider === "sarvam" && line.heard) {
+        this.ledger.end(line, "gap", TRANSCRIPTION_GAP_MARKER);
+        changed = this.recordFinalSegment(this.lineSegment(line), TRANSCRIPTION_GAP_MARKER);
+      } else if (isPlaced(line) && connection.session.provider === "sarvam") {
         this.ledger.end(line, "dropped", "");
         changed = true;
       } else {
@@ -2066,6 +2088,20 @@ export class TranscriptRoom {
     const changed = this.endUnfinishedLines([line], "A provider failed one line", connection);
     if (connection.role === "draining") this.settleDrain(connection);
     if (changed) {
+      this.persistInBackground();
+      this.scheduleMinutes();
+    }
+  }
+
+  private loseLine(connection: ProviderConnection, providerItemId: string): void {
+    const line = this.namedLine(connection, providerItemId);
+    if (!line || !isActive(line)) return;
+    if (!line.text.trim() && line.heard && !line.replayed && this.audio.owns(line.id)) {
+      for (const id of connection.providerIdsOf(line.id)) connection.providerToLine.delete(id);
+      line.replayed = true;
+      this.awaitReplacement(line);
+      this.flushToLive();
+    } else if (this.endUnfinishedLines([line], "A Sarvam connection dropped one turn", connection)) {
       this.persistInBackground();
       this.scheduleMinutes();
     }
@@ -2135,30 +2171,19 @@ export class TranscriptRoom {
     const now = Date.now();
     const live = this.liveConnection;
     let changed = false;
-    const fenced: string[] = [];
     for (const connection of [live, ...this.providerDrains.values(), null]) {
-      const active = this.ledger.active().filter((line) => line.epoch === (connection?.epoch ?? null));
-      const owed = active.filter((line) => line.deadlineAt <= now);
-      if (owed.length === 0) continue;
-      if (connection?.session.provider !== "sarvam") {
-        changed = this.endUnfinishedLines(owed, "A provider did not finish in time", connection) || changed;
-      } else if (connection === live) {
-        fenced.push(...owed.flatMap((line) => connection.providerIdsOf(line.id)));
-        changed = this.endUnfinishedLines(owed, "Sarvam did not answer in time", connection) || changed;
-      } else {
-        changed = this.endUnfinishedLines(active, "A replaced Sarvam connection did not answer in time", connection) || changed;
-        this.closeDrain(connection);
-      }
+      const owed = this.ledger
+        .active()
+        .filter((line) => line.epoch === (connection?.epoch ?? null) && line.deadlineAt <= now);
+      const providerItemIds = owed.flatMap((line) => connection?.providerIdsOf(line.id) ?? []);
+      changed = this.endUnfinishedLines(owed, "A provider did not finish in time", connection) || changed;
+      for (const providerItemId of providerItemIds) connection?.session.fence?.(providerItemId);
     }
     for (const drain of Array.from(this.providerDrains.values())) this.settleDrain(drain);
     this.armLineTimer();
     if (changed) {
       this.persistInBackground();
       this.scheduleMinutes();
-    }
-    if (fenced.length > 0 && live && this.liveConnection === live) {
-      for (const providerItemId of fenced) live.session.fence?.(providerItemId);
-      this.flushToLive();
     }
   }
 
@@ -2280,17 +2305,23 @@ export class TranscriptRoom {
   private replayToLane(connection: ProviderConnection, line: CaptionLine, audio: readonly HeldChunk[]): void {
     const sentAt = Date.now();
     line.epoch = connection.epoch;
-    for (const chunk of audio) {
-      connection.session.appendAudio(chunk.audio, chunk.speaker, {
-        voice: chunk.voice,
-        turn: chunk.turn,
-        at: sentAt,
-        sequence: chunk.sequence,
-        order: chunk.order,
-        createdAt: chunk.createdAt,
-        lineId: line.id,
-      });
-      chunk.sentAt = sentAt;
+    try {
+      for (const chunk of audio) {
+        connection.session.appendAudio(chunk.audio, chunk.speaker, {
+          voice: chunk.voice,
+          turn: chunk.turn,
+          at: sentAt,
+          sequence: chunk.sequence,
+          order: chunk.order,
+          createdAt: chunk.createdAt,
+          lineId: line.id,
+        });
+        chunk.sentAt = sentAt;
+      }
+    } catch (error) {
+      if (!(error instanceof AudioNotSent)) throw error;
+      if (line.state === "replaying") line.epoch = null;
+      return;
     }
     connection.session.clearAudio(line.speaker ?? undefined);
   }
@@ -2329,12 +2360,13 @@ export class TranscriptRoom {
         const key = speakerKey(item.speaker);
         if (waiting.has(key)) continue;
         if ("line" in item) {
+          connection.session.clearAudio(item.speaker);
           if (connection.session.ready?.(item.speaker) === false) {
             waiting.add(key);
             continue;
           }
           this.replayToLane(connection, item.line, item.audio);
-          waiting.add(key);
+          if (item.line.state === "replaying") waiting.add(key);
           continue;
         }
         const forwarded = this.forwardInOrder([item.event], () => {
@@ -2394,7 +2426,7 @@ export class TranscriptRoom {
   }
 
   private detachConnection(connection: ProviderConnection, ackTimedOut: boolean): void {
-    connection.session.finishAnswered?.();
+    connection.session.settle?.();
     if (this.liveConnection === connection) {
       this.liveConnection = null;
       this.transcriptionSession = null;

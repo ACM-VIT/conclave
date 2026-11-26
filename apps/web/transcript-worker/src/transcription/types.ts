@@ -2,8 +2,15 @@ import type { TranscriptTranscriptionProvider } from "@conclave/meeting-core/tra
 import type { TranscriptSpeaker } from "@conclave/meeting-core/transcript-types";
 import type { Env } from "../types";
 import type { VoiceReading } from "./voice-activity";
+import type { SocketBudget } from "./socket-budget";
 
 export type SpeechPlace = { order: number; startMs: number };
+
+export class AudioNotSent extends Error {
+  constructor() {
+    super("The provider connection for this speaker is not taking audio.");
+  }
+}
 
 export type HeardSpeech = {
   speaker: TranscriptSpeaker | null;
@@ -33,6 +40,7 @@ export type LiveTranscriptionCallbacks = {
   onDelta: (itemId: string, delta: string) => void;
   onFinal: (itemId: string, transcript: string) => void | Promise<void>;
   onItemFailed?: (itemId: string, message: string) => void | Promise<void>;
+  onItemLost?: (itemId: string) => void | Promise<void>;
   onReady?: () => void;
   onFailure: (message: string) => void | Promise<void>;
 };
@@ -48,6 +56,7 @@ export type LiveTranscriptionConnectOptions = {
   locale: string;
   localizationPrompt?: string;
   signal?: AbortSignal;
+  socketBudget?: SocketBudget;
   callbacks: LiveTranscriptionCallbacks;
 };
 
@@ -58,7 +67,9 @@ export interface LiveTranscriptionSession {
   commitAudio(): void;
   clearAudio(speaker?: TranscriptSpeaker): void;
   fence?(providerItemId: string): void;
-  finishAnswered?(): void;
+  withholds?(speaker: TranscriptSpeaker, voice: VoiceReading, at: number): boolean;
+  owes?(): boolean;
+  settle?(): void;
   finishAudio(): void;
   close(): void;
 }
