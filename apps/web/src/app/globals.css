@@ -4,6 +4,8 @@
 @source "../../../../node_modules/streamdown/dist/**/*.js";
 @source "../../../../packages/apps-sdk/src/**/*.{ts,tsx}";
 
+@custom-variant short-screen (@media (min-width: 40rem) and (max-height: 45rem));
+
 @font-face {
   font-family: "Virgil";
   src: url("/assets/fonts/Virgil-Regular.woff2") format("woff2");

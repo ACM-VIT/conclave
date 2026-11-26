@@ -1,3 +1,5 @@
+import { cutText } from "#sdk/text";
+
 export type Json =
   | null
   | boolean
@@ -88,7 +90,7 @@ const string = (options: StringOptions): Schema<string> => {
       let value = options.collapse ? input.replace(/\s+/g, " ").trim() : input;
       if (value.length > options.max) {
         if (!options.truncate) return fail(path, `longer than ${options.max}`);
-        value = value.slice(0, options.max);
+        value = cutText(value, options.max);
       }
       if (value.length < (options.min ?? 0)) {
         return fail(path, `shorter than ${options.min}`);
