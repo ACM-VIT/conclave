@@ -183,9 +183,12 @@ describe("native wheel add records", () => {
 
   it.each(["remove", "clear"] as const)("keeps the exact accepted slots when a staging client uses %s before native reloads", (change) => {
     const origin = createWheelDoc();
+    const updates: Uint8Array[] = [];
+    origin.on("update", (update: Uint8Array) => updates.push(update));
     expect(add(origin, "app-ada1", "h-1", ["Ada", "", "Bo"])).toEqual({ ok: true, added: [0, 2] });
+    expect(updates).toHaveLength(1);
     const legacy = createWheelDoc();
-    sync(origin, legacy);
+    Y.applyUpdate(legacy, updates[0]);
 
     if (change === "remove") legacyRemoveEntry(legacy, getEntries(origin)[0].id);
     else legacyClearEntries(legacy);
@@ -239,22 +242,18 @@ describe("native wheel add records", () => {
     }
   });
 
-  it("answers notApplied for an add that never ran, and forgets a removed add only after a day", () => {
+  it("distinguishes a missing add from one removed before a long outage", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(1_800_000_000_000);
     const doc = createWheelDoc();
-    expect(outcome(doc, "app-ada1", "h-7")).toEqual({ ok: false, error: "notApplied" });
     add(doc, "app-ada1", "h-1", ["Ada"]);
     removeEntryById(doc, getEntries(doc)[0].id);
-    vi.setSystemTime(Date.now() + 23 * 3_600_000);
-    add(doc, "app-other", "h-1", ["Bo"]);
-    removeEntryById(doc, getEntries(doc)[0].id);
-    expect(outcome(doc, "app-ada1", "h-1")).toEqual({ ok: true, added: [0] });
-    vi.setSystemTime(Date.now() + 2 * 3_600_000);
-    expect(outcome(doc, "app-ada1", "h-1")).toEqual({ ok: false, error: "notApplied" });
-    add(doc, "app-other", "h-2", ["Cy"]);
-    removeEntryById(doc, getEntries(doc)[0].id);
-    expect([...doc.getMap("wheel.retired").keys()].sort()).toEqual(["app-other/h-1#0", "app-other/h-2#0"]);
+    vi.setSystemTime(Date.now() + 25 * 3_600_000);
+    const reloaded = createWheelDoc();
+    sync(doc, reloaded);
+    expect(outcome(reloaded, "app-ada1", "h-7")).toEqual({ ok: false, error: "notApplied" });
+    expect(outcome(reloaded, "app-ada1", "h-1")).toEqual({ ok: true, added: [0] });
+    expect(labels(reloaded)).toEqual([]);
   });
 
   it("refuses a paste longer than the line limit before adding anything, so no slot is ever unrecordable", () => {
@@ -283,7 +282,7 @@ describe("native wheel add records", () => {
       const lines = Array.from({ length: 1 + random(300) }, () => pool[random(pool.length)]);
       const before = getEntries(doc).length;
       const result = add(doc, "app-r1", `h-${run}`, lines);
-      const created = getEntries(doc).filter((entry) => entry.addedBy === `app-r1/h-${run}`);
+      const created = getEntries(doc).slice(before);
       if (lines.length > 256) {
         expect(result, `run ${run}`).toEqual({ ok: false, error: "tooManyLines", added: [] });
         expect(getEntries(doc).length, `run ${run}`).toBe(before);
@@ -291,14 +290,11 @@ describe("native wheel add records", () => {
       }
       checked += 1;
       const added = result.ok ? (result.added ?? []) : [];
-      expect(created.map((entry) => entry.slot), `run ${run}`).toEqual(added);
-      for (const entry of created) {
-        expect(entry.label, `run ${run} slot ${entry.slot}`).toBe(normalizeLabel(lines[entry.slot!]));
-        expect(entry.label.length, `run ${run}`).toBeGreaterThan(0);
-      }
+      expect(created.map((entry) => entry.label), `run ${run}`).toEqual(added.map((slot) => normalizeLabel(lines[slot])));
+      expect(created.every((entry) => entry.label.length > 0), `run ${run}`).toBe(true);
       const replay = add(doc, "app-r1", `h-${run}`, lines);
       expect(getEntries(doc).length, `run ${run}`).toBe(before + created.length);
-      if (created.length > 0) expect(replay, `run ${run}`).toEqual({ ok: true, added });
+      expect(replay, `run ${run}`).toEqual(result);
     }
     expect(checked).toBeGreaterThan(100);
   });

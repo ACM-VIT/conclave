@@ -872,6 +872,8 @@ final class AppHostPresenter {
             if event.appSessionId != appSessionId { return }
             cancelReadyTimer()
             embedReady = false
+            pagePending.removeAll(where: { $0.kind == .addEntries || $0.kind == .addOutcome })
+            rebuildPages()
         case .ready:
             if event.appSessionId != appSessionId { return }
             embedReady = true
@@ -1422,7 +1424,7 @@ final class AppHostPresenter {
             let command = pagePending[pageIndex]
             let elapsed = nowMillis() - command.sentAtMillis
             let inDeadline = elapsed >= 0.0 && elapsed < AppBridgeProtocol.commandRetryDeadlineMillis
-            if command.kind == AppPageCommandKind.addEntries && command.attempts < AppBridgeProtocol.commandAttempts && inDeadline
+            if embedReady && command.kind == AppPageCommandKind.addEntries && command.attempts < AppBridgeProtocol.commandAttempts && inDeadline
                 && session?.sendCommand(AppPagePolicy.outboundType(command.kind), requestId: requestId,
                                         payload: ["labels": command.labels]) == true {
                 pagePending[pageIndex] = AppPagePendingCommand(requestId: requestId, kind: command.kind, target: command.target,
@@ -1433,9 +1435,9 @@ final class AppHostPresenter {
             }
             pagePending.remove(at: pageIndex)
             if command.kind == AppPageCommandKind.addOutcome {
-                askAddOutcome(command.target, labels: command.labels)
+                askAddOutcome(command.target)
             } else if command.kind == AppPageCommandKind.addEntries && command.target.isEmpty {
-                askAddOutcome(requestId, labels: command.labels)
+                askAddOutcome(requestId)
             }
             rebuildPages()
             return
@@ -1447,13 +1449,15 @@ final class AppHostPresenter {
         rebuildToolbar()
     }
 
-    private func askAddOutcome(_ original: String, labels: [String]) {
-        if !wheelDraft.sent.contains(where: { $0.requestId == original }) { return }
+    private func askAddOutcome(_ original: String) {
+        if !embedReady || !wheelDraft.sent.contains(where: { $0.requestId == original }) { return }
         nextRequestNumber += 1
         let requestId = "h-" + String(nextRequestNumber)
+        if session?.sendCommand(AppBridgeOutboundType.addOutcome, requestId: requestId, payload: ["requestId": original]) != true {
+            return
+        }
         pagePending.append(AppPagePendingCommand(requestId: requestId, kind: AppPageCommandKind.addOutcome, target: original,
-                                                 labels: labels, attempts: 1, sentAtMillis: nowMillis()))
-        _ = session?.sendCommand(AppBridgeOutboundType.addOutcome, requestId: requestId, payload: ["requestId": original])
+                                                 labels: [], attempts: 1, sentAtMillis: nowMillis()))
         startCommandTimer(requestId: requestId)
     }
 
@@ -1462,7 +1466,7 @@ final class AppHostPresenter {
             let waiting = pagePending.contains(where: {
                 $0.requestId == submission.requestId || ($0.kind == AppPageCommandKind.addOutcome && $0.target == submission.requestId)
             })
-            if !waiting { askAddOutcome(submission.requestId, labels: submission.lines) }
+            if !waiting { askAddOutcome(submission.requestId) }
         }
     }
 

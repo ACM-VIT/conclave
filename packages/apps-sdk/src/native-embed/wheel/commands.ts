@@ -1,14 +1,16 @@
 import type * as Y from "yjs";
 import {
   addEntries,
+  addWithReceipt,
   clearEntries,
   clearHistory,
-  getAddOutcome,
+  getAddReceipt,
   getEntries,
   normalizeLabel,
   removeEntryById,
   replaceEntries,
   setRemoveWinnerOnDone,
+  type AddReceipt,
   type WheelEntry,
   type WheelResult,
 } from "../../apps/wheel/core/doc/index";
@@ -31,25 +33,27 @@ export const labelsFrom = (payload: Record<string, unknown>): SentName[] | null 
   return names;
 };
 
-const addOnce = (doc: Y.Doc, payload: Record<string, unknown>, requestKey?: string): CommandResult => {
+const applyAdd = (doc: Y.Doc, payload: Record<string, unknown>): AddReceipt => {
   const names = labelsFrom(payload);
-  if (names === null) return { ok: false, error: "tooManyLines", added: [] };
-  if (names.length === 0) return { ok: false, error: "noNames", added: [] };
-  const origin = requestKey === undefined ? undefined : { key: requestKey, slots: names.map((name) => name.index) };
-  const count = addEntries(doc, names.map((name) => name.label), origin);
-  if (count === 0) return { ok: false, error: "full", added: [] };
-  return { ok: true, added: names.slice(0, count).map((name) => name.index) };
+  if (names === null) return "tooManyLines";
+  if (names.length === 0) return "noNames";
+  const count = addEntries(doc, names.map((name) => name.label));
+  return count === 0 ? "full" : names.slice(0, count).map((name) => name.index);
 };
 
-export const addNames = (doc: Y.Doc, payload: Record<string, unknown>, requestKey?: string): CommandResult => {
-  if (requestKey === undefined) return addOnce(doc, payload);
-  return getAddOutcome(doc, requestKey) ?? addOnce(doc, payload, requestKey);
-};
+const toAddResult = (receipt: AddReceipt): CommandResult =>
+  typeof receipt === "string" ? { ok: false, error: receipt, added: [] } : { ok: true, added: [...receipt] };
+
+export const addNames = (doc: Y.Doc, payload: Record<string, unknown>, requestKey?: string): CommandResult =>
+  toAddResult(requestKey === undefined
+    ? applyAdd(doc, payload)
+    : addWithReceipt(doc, requestKey, () => applyAdd(doc, payload)));
 
 const addOutcome = (doc: Y.Doc, payload: Record<string, unknown>, keyOf: (requestId: string) => string): CommandResult => {
   const requestId = payloadString(payload, "requestId");
   if (!isValidIdentifier(requestId)) return { ok: false, error: "badRequest" };
-  return getAddOutcome(doc, keyOf(requestId)) ?? { ok: false, error: "notApplied" };
+  const receipt = getAddReceipt(doc, keyOf(requestId));
+  return receipt === undefined ? { ok: false, error: "notApplied" } : toAddResult(receipt);
 };
 
 export type WheelCommandContext = {

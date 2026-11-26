@@ -15,9 +15,7 @@ const SPIN_KEY = "spin";
 const HISTORY_KEY = "history";
 const SETTINGS_KEY = "settings";
 const REMOVE_WINNER_KEY = "removeWinnerOnDone";
-const RETIRED_ROOT = "wheel.retired";
-const RETIRED_KEEP_MS = 24 * 60 * 60 * 1000;
-const MAX_ADD_INDEX = WHEEL_LIMITS.pasteLines;
+const ADD_RECEIPTS_ROOT = "wheel.addReceipts";
 
 export const MAX_WHEEL_ENTRIES = WHEEL_LIMITS.entries;
 export const MAX_ENTRY_LABEL_LENGTH = WHEEL_LIMITS.label;
@@ -29,11 +27,7 @@ const MAX_SPIN_TURNS = 20;
 export type WheelEntry = {
   id: string;
   label: string;
-  addedBy?: string;
-  slot?: number;
 };
-
-export type AddOrigin = { key: string; slots: number[] };
 
 export type WheelSpin = {
   spinId: string;
@@ -119,29 +113,8 @@ const pruneTo = (array: Y.Array<unknown>, indexes: number[]): void => {
 const acceptEntries = (records: readonly unknown[]): Accepted<WheelEntry> =>
   accept(records, MAX_WHEEL_ENTRIES, readEntry, (entry) => entry.id);
 
-const originOf = (value: unknown): { key: string; slot: number } | null => {
-  if (!isRecord(value) || typeof value.addedBy !== "string" || value.addedBy === "") return null;
-  const slot = value.slot;
-  if (typeof slot !== "number" || !Number.isInteger(slot) || slot < 0 || slot >= MAX_ADD_INDEX) return null;
-  return { key: value.addedBy, slot };
-};
-
-const retire = (doc: Y.Doc | null, removed: readonly unknown[]): void => {
-  if (!doc) return;
-  const origins = removed.map(originOf).filter((origin) => origin !== null);
-  if (origins.length === 0) return;
-  const retired = doc.getMap<unknown>(RETIRED_ROOT);
-  const now = Date.now();
-  for (const origin of origins) retired.set(`${origin.key}#${origin.slot}`, now);
-  const stale = [...retired.entries()].filter(([, at]) => typeof at !== "number" || at < now - RETIRED_KEEP_MS);
-  for (const [key] of stale) retired.delete(key);
-};
-
 const prunedEntries = (entries: EntriesArray): WheelEntry[] => {
-  const records = entries.toArray();
-  const accepted = acceptEntries(records);
-  const kept = new Set(accepted.indexes);
-  retire(entries.doc, records.filter((_, index) => !kept.has(index)));
+  const accepted = acceptEntries(entries.toArray());
   pruneTo(entries as Y.Array<unknown>, accepted.indexes);
   return accepted.kept;
 };
@@ -156,45 +129,42 @@ export const getEntries = (doc: Y.Doc): WheelEntry[] => {
   return entries ? acceptEntries(entries.toArray()).kept : [];
 };
 
-export const addEntries = (doc: Y.Doc, rawLabels: string[], origin?: AddOrigin): number => {
-  const labels = rawLabels
-    .map((raw, index) => ({ label: normalizeLabel(raw), slot: origin?.slots[index] }))
-    .filter((item) => item.label.length > 0);
+export const addEntries = (doc: Y.Doc, rawLabels: string[]): number => {
+  const labels = rawLabels.map(normalizeLabel).filter((label) => label.length > 0);
   if (labels.length === 0) return 0;
 
-  let added = 0;
-  doc.transact(() => {
+  return doc.transact(() => {
     const entries = ensureAppArray(getRoot(doc), ENTRIES_KEY) as EntriesArray;
     const room = MAX_WHEEL_ENTRIES - prunedEntries(entries).length;
-    if (room <= 0) return;
-    const batch = labels
-      .slice(0, room)
-      .map(({ label, slot }): WheelEntry =>
-        origin && slot !== undefined ? { id: createEntryId(), label, addedBy: origin.key, slot } : { id: createEntryId(), label }
-      );
+    if (room <= 0) return 0;
+    const batch = labels.slice(0, room).map((label) => ({ id: createEntryId(), label }));
     entries.push(batch);
-    added = batch.length;
+    return batch.length;
   });
-  return added;
 };
 
-export type AddOutcome = { ok: boolean; error?: string; added: number[] };
+export type AddReceipt = readonly number[] | "noNames" | "full" | "tooManyLines";
 
-export const getAddOutcome = (doc: Y.Doc, key: string): AddOutcome | null => {
-  const slots = new Set<number>();
-  for (const record of readEntriesArray(doc)?.toArray() ?? []) {
-    const origin = originOf(record);
-    if (origin && origin.key === key) slots.add(origin.slot);
-  }
-  const prefix = `${key}#`;
-  const oldest = Date.now() - RETIRED_KEEP_MS;
-  for (const [retiredKey, at] of doc.getMap<unknown>(RETIRED_ROOT).entries()) {
-    if (!retiredKey.startsWith(prefix) || typeof at !== "number" || at < oldest) continue;
-    const slot = Number(retiredKey.slice(prefix.length));
-    if (Number.isInteger(slot) && slot >= 0 && slot < MAX_ADD_INDEX) slots.add(slot);
-  }
-  return slots.size > 0 ? { ok: true, added: [...slots].sort((a, b) => a - b) } : null;
+export const getAddReceipt = (doc: Y.Doc, key: string): AddReceipt | undefined => {
+  const value = doc.getMap<unknown>(ADD_RECEIPTS_ROOT).get(key);
+  if (value === "noNames" || value === "full" || value === "tooManyLines") return value;
+  if (!Array.isArray(value) || value.length === 0 || value.length > WHEEL_LIMITS.entries) return undefined;
+  const slots: unknown[] = value;
+  return slots.every((slot): slot is number =>
+    typeof slot === "number" && Number.isInteger(slot) && slot >= 0 && slot < WHEEL_LIMITS.pasteLines
+  ) ? slots : undefined;
 };
+
+// A named root type merges concurrent first writes. Keep receipts for the life of the document:
+// an embed can recover a pending add long after a peer removed its entries.
+export const addWithReceipt = (doc: Y.Doc, key: string, apply: () => AddReceipt): AddReceipt =>
+  doc.transact(() => {
+    const previous = getAddReceipt(doc, key);
+    if (previous !== undefined) return previous;
+    const receipt = apply();
+    doc.getMap<AddReceipt>(ADD_RECEIPTS_ROOT).set(key, receipt);
+    return receipt;
+  });
 
 export const addEntry = (doc: Y.Doc, rawLabel: string): boolean =>
   addEntries(doc, [rawLabel]) === 1;
@@ -205,7 +175,6 @@ export const removeEntryById = (doc: Y.Doc, entryId: string): void => {
   doc.transact(() => {
     const index = prunedEntries(entries).findIndex((entry) => entry.id === entryId);
     if (index < 0) return;
-    retire(doc, [entries.get(index)]);
     entries.delete(index, 1);
   });
 };
@@ -213,18 +182,13 @@ export const removeEntryById = (doc: Y.Doc, entryId: string): void => {
 export const clearEntries = (doc: Y.Doc): void => {
   const entries = readEntriesArray(doc);
   if (!entries || entries.length === 0) return;
-  doc.transact(() => {
-    retire(doc, entries.toArray());
-    entries.delete(0, entries.length);
-  });
+  entries.delete(0, entries.length);
 };
 
 export const replaceEntries = (doc: Y.Doc, next: WheelEntry[]): void => {
   doc.transact(() => {
     const entries = ensureAppArray(getRoot(doc), ENTRIES_KEY) as EntriesArray;
     const kept = acceptEntries(next).kept;
-    const keptIds = new Set(kept.map((entry) => entry.id));
-    retire(doc, entries.toArray().filter((record) => !(isRecord(record) && keptIds.has(record.id))));
     entries.delete(0, entries.length);
     entries.push(kept);
   });
