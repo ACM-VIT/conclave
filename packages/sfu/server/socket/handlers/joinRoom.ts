@@ -114,6 +114,7 @@ type JoinAttempts = {
   byTab: Map<string, { seated: number; inFlight: number }>;
   byRoom: Map<string, number>;
   unclaimedRooms: Map<string, string>;
+  turns: Map<string, Promise<void>>;
 };
 const joinAttemptsByState = new WeakMap<ConnectionContext["state"], JoinAttempts>();
 let joinAttemptCount = 0;
@@ -121,7 +122,7 @@ let joinAttemptCount = 0;
 const attemptsOf = (state: ConnectionContext["state"]): JoinAttempts => {
   let attempts = joinAttemptsByState.get(state);
   if (!attempts) {
-    attempts = { byTab: new Map(), byRoom: new Map(), unclaimedRooms: new Map() };
+    attempts = { byTab: new Map(), byRoom: new Map(), unclaimedRooms: new Map(), turns: new Map() };
     joinAttemptsByState.set(state, attempts);
   }
   return attempts;
@@ -138,6 +139,25 @@ const beginJoinAttempt = (
   else attempts.byTab.set(key, { seated: 0, inFlight: 1 });
   attempts.byRoom.set(channelId, (attempts.byRoom.get(channelId) ?? 0) + 1);
   return (joinAttemptCount += 1);
+};
+
+const takeJoinTurn = async (
+  state: ConnectionContext["state"],
+  tab: string,
+): Promise<() => void> => {
+  const turns = attemptsOf(state).turns;
+  const earlier = turns.get(tab);
+  let end!: () => void;
+  const mine = new Promise<void>((resolve) => {
+    end = resolve;
+  });
+  const queued = (earlier ?? Promise.resolve()).then(() => mine);
+  turns.set(tab, queued);
+  void queued.then(() => {
+    if (turns.get(tab) === queued) turns.delete(tab);
+  });
+  await earlier;
+  return end;
 };
 
 const endJoinAttempt = (
@@ -178,6 +198,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
     ) => {
       let attemptKey: string | null = null;
       let attemptRoom: string | null = null;
+      let endJoinTurn = (): void => {};
       try {
         const requestedRoomId = normalizeIdentifier(
           data?.roomId,
@@ -251,6 +272,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           return;
         }
 
+        endJoinTurn = await takeJoinTurn(state, userId);
         let roomId = requestedRoomId;
         let scheduledWebinarForAttendee: ReturnType<
           typeof resolveScheduledWebinarAttendeeEntry
@@ -306,6 +328,8 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             ensureWebinarRoomConfig(state, scheduledWebinarForRoom, notifyRoomConfig(state, () => io));
           }
         }
+
+        if (!socket.connected) return;
 
         const resolvedChannelId = getRoomChannelId(clientId, roomId);
         const preexistingWebinarConfig =
@@ -417,6 +441,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         attemptKey = joinKey;
         attemptRoom = roomChannelId;
         const attempt = beginJoinAttempt(state, roomChannelId, joinKey);
+        endJoinTurn();
         const superseded = (): boolean => {
           if (socket.connected && (attemptsOf(state).byTab.get(joinKey)?.seated ?? 0) <= attempt) {
             return false;
@@ -1381,6 +1406,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         Logger.error("Error joining room:", error);
         respond(callback, { error: (error as Error).message });
       } finally {
+        endJoinTurn();
         if (attemptKey !== null && attemptRoom !== null) {
           endJoinAttempt(context, attemptRoom, attemptKey);
         }

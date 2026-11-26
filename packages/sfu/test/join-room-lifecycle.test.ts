@@ -12,7 +12,8 @@ import { registerAdminHandlers } from "../server/socket/handlers/adminHandlers.j
 import { registerDisconnectHandlers } from "../server/socket/handlers/disconnectHandlers.js";
 import { registerJoinRoomHandler } from "../server/socket/handlers/joinRoom.js";
 import { registerTransportHandlers } from "../server/socket/handlers/transportHandlers.js";
-import { getOrCreateRoomWithOrigin } from "../server/rooms.js";
+import { registerWebinarHandlers } from "../server/socket/handlers/webinarHandlers.js";
+import { forceCloseRoom, getOrCreateRoomWithOrigin } from "../server/rooms.js";
 import { createSfuState, type SfuState } from "../server/state.js";
 import { getOrCreateWebinarRoomConfig, setCustomWebinarLinkSlug } from "../server/webinar.js";
 import type { ScheduledWebinar } from "../types.js";
@@ -35,18 +36,20 @@ const makeSocket = (id: string, user: SfuAuthPayload = {}) => {
     return recorder;
   };
   const to = (channelId: string) => ({ emit: emitToRoom(channelId) });
+  const disconnect = vi.fn();
+  const joinChannel = vi.fn();
   const socket = {
     id,
     data: { user },
     on: (event: string, handler: Handler) => handlers.set(event, handler),
     emit,
-    disconnect: vi.fn(),
+    disconnect,
     connected: true,
-    join: vi.fn(),
+    join: joinChannel,
     leave: vi.fn(),
     to,
   } as unknown as Socket;
-  return { socket, handlers, emit, emitToRoom };
+  return { socket, handlers, emit, emitToRoom, disconnect, joinChannel };
 };
 
 const makeState = (workers: Worker[] = []): SfuState => {
@@ -629,5 +632,158 @@ describe("joining a room that closes during its lease renewal", () => {
     expect(createRouter).toHaveBeenCalledOnce();
     expect(context.currentClient).toBeInstanceOf(Admin);
     expect(state.rooms.get("conclave:room")?.hostUserKey).toBe("carol");
+  });
+});
+
+const holdStoreReads = (state: SfuState, held: (read: number) => boolean = () => true) => {
+  const store = state.controlPlane;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let reads = 0;
+  let waiting = 0;
+  state.controlPlane = {
+    ...store,
+    read: async (query) => {
+      reads += 1;
+      if (held(reads)) {
+        waiting += 1;
+        await gate;
+      }
+      return store.read(query);
+    },
+  };
+  return { release, reached: () => vi.waitFor(() => expect(waiting).toBe(1)) };
+};
+
+const openRoom = (state: SfuState, id = "room"): Room => {
+  const room = new Room({ id, clientId: "conclave", workerPid: null, router: { closed: false, close: vi.fn() } as unknown as Router });
+  state.rooms.set(room.channelId, room);
+  return room;
+};
+
+describe("a webinar link code saved across the store read", () => {
+  type Update = (data: Record<string, unknown>, ack: (response: unknown) => void) => Promise<void>;
+
+  const hostedRoom = async (state: SfuState) => {
+    const room = openRoom(state);
+    const host = await join(state, "host-socket", { userId: "host", clientId: "conclave", sessionId: "h", isForcedHost: true });
+    registerWebinarHandlers(host.context);
+    return { room, host, update: host.peer.handlers.get("webinar:updateConfig") as unknown as Update };
+  };
+
+  it("binds no link for a room that closed during the read, so the code stays free", async () => {
+    const state = makeState();
+    const { room, update } = await hostedRoom(state);
+    const reads = holdStoreReads(state);
+    const ack = vi.fn();
+    const saving = update({ enabled: true, linkSlug: "launch-day" }, ack);
+    await reads.reached();
+    expect(forceCloseRoom(state, room.channelId)).toBe(true);
+    reads.release();
+    await saving;
+
+    expect(ack).toHaveBeenCalledWith({ error: "Not in a room" });
+    expect(state.webinarLinks.has("launch-day")).toBe(false);
+    expect(state.webinarConfigs.has(room.channelId)).toBe(false);
+    const other = openRoom(state, "other");
+    expect(
+      setCustomWebinarLinkSlug({
+        webinarConfig: getOrCreateWebinarRoomConfig(state.webinarConfigs, other.channelId),
+        webinarLinks: state.webinarLinks,
+        room: other,
+        slug: "launch-day",
+      }).changed,
+    ).toBe(true);
+  });
+
+  it("leaves a room reopened on the same channel during the read as it was", async () => {
+    const state = makeState();
+    const { room, update } = await hostedRoom(state);
+    const reads = holdStoreReads(state);
+    const ack = vi.fn();
+    const saving = update({ enabled: true, linkSlug: "launch-day" }, ack);
+    await reads.reached();
+    forceCloseRoom(state, room.channelId);
+    const reopened = openRoom(state);
+    const fresh = getOrCreateWebinarRoomConfig(state.webinarConfigs, reopened.channelId);
+    reads.release();
+    await saving;
+
+    expect(ack).toHaveBeenCalledWith({ error: "Not in a room" });
+    expect(state.webinarLinks.has("launch-day")).toBe(false);
+    expect(state.webinarConfigs.get(reopened.channelId)).toBe(fresh);
+    expect(fresh).toMatchObject({ enabled: false, linkSlug: null });
+  });
+
+  it("refuses a host who stopped being an admin during the read", async () => {
+    const state = makeState();
+    const { room, host, update } = await hostedRoom(state);
+    const reads = holdStoreReads(state);
+    const ack = vi.fn();
+    const saving = update({ enabled: true, linkSlug: "launch-day" }, ack);
+    await reads.reached();
+    const demoted = new Client({ id: host.context.currentClient!.id, socket: host.peer.socket });
+    room.removeClient(demoted.id);
+    room.addClient(demoted);
+    host.context.currentClient = demoted;
+    reads.release();
+    await saving;
+
+    expect(ack).toHaveBeenCalledWith({ error: "Only admins can manage webinar settings" });
+    expect(state.webinarLinks.has("launch-day")).toBe(false);
+    expect(state.webinarConfigs.get(room.channelId)).toMatchObject({ enabled: false, linkSlug: null });
+  });
+
+  it("still saves the code when the room and the host are unchanged after the read", async () => {
+    const state = makeState();
+    const { room, update } = await hostedRoom(state);
+    const reads = holdStoreReads(state);
+    const ack = vi.fn();
+    const saving = update({ enabled: true, linkSlug: "launch-day" }, ack);
+    await reads.reached();
+    reads.release();
+    await saving;
+
+    expect(ack).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+    expect(state.webinarLinks.get("launch-day")).toMatchObject({ roomChannelId: room.channelId });
+    expect(state.webinarConfigs.get(room.channelId)).toMatchObject({ enabled: true, linkSlug: "launch-day" });
+  });
+});
+
+describe("two joins for one tab across the store read", () => {
+  it("lets the join that was asked last win when the earlier one's read is slower", async () => {
+    const state = makeState();
+    const room = openRoom(state);
+    const reads = holdStoreReads(state, (read) => read === 1);
+    const user = { userId: "alice", clientId: "conclave", sessionId: "a", isForcedHost: true };
+    const earlier = join(state, "old-socket", user);
+    await reads.reached();
+    const asked = join(state, "new-socket", user);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    reads.release();
+    const [, later] = await Promise.all([earlier, asked]);
+
+    expect(later.ack).toHaveBeenCalledWith(expect.objectContaining({ status: "joined" }));
+    expect(room.getClient("alice#a")?.socket).toBe(later.peer.socket);
+    expect(later.peer.disconnect).not.toHaveBeenCalled();
+  });
+
+  it("stops a join whose socket closed during the read", async () => {
+    const state = makeState();
+    const room = openRoom(state);
+    const reads = holdStoreReads(state);
+    const peer = makeSocket("gone-socket", { userId: "bob", clientId: "conclave", sessionId: "b", isForcedHost: true });
+    const context = createConnectionContext(io, peer.socket, state);
+    registerJoinRoomHandler(context);
+    const ack = vi.fn();
+    const joining = peer.handlers.get("joinRoom")!(...[{ roomId: room.id, sessionId: "b" }, ack] as never[]);
+    await reads.reached();
+    (peer.socket as { connected: boolean }).connected = false;
+    reads.release();
+    await joining;
+
+    expect(room.getClient("bob#b")).toBeUndefined();
+    expect(context.currentRoom).toBeNull();
+    expect(peer.joinChannel).not.toHaveBeenCalled();
   });
 });
