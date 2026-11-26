@@ -7,6 +7,7 @@ import {
 import type { Client } from "../config/classes/Client.js";
 import type { Room } from "../config/classes/Room.js";
 import { Logger } from "../utilities/loggers.js";
+import { holdsRoomLease } from "./roomLease.js";
 import type { SfuState } from "./state.js";
 
 const MAX_PASS_LENGTH = 2048;
@@ -88,12 +89,7 @@ export const startRoomRecoveryPassRefresh = (
   const timer = setInterval(() => {
     try {
       for (const room of state.rooms.values()) {
-        if (
-          !state.roomRegistry.holdsLease(room.channelId) ||
-          state.deferredRoomWrites.has(room.channelId)
-        ) {
-          continue;
-        }
+        if (!holdsRoomLease(state, room)) continue;
         if (room.recordsItsCall) state.roomRecovery.noteRunning(room);
         for (const client of room.clients.values()) {
           if (!client.socket.connected) continue;

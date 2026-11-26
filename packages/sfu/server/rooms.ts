@@ -23,8 +23,9 @@ import {
   setScheduledInviteeReadmission,
 } from "./scheduledMeetings.js";
 import { cleanupRoomBrowser } from "./socket/handlers/sharedBrowserHandlers.js";
-import type { EndedRoom, SfuState } from "./state.js";
+import type { DeferredRoomWrites, EndedRoom, SfuState } from "./state.js";
 import type { RecalledRoom } from "./roomRecoveryLedger.js";
+import { holdsRoomLease, type LeasedRoom } from "./roomLease.js";
 import { clearWebinarLinkSlug } from "./webinar.js";
 import {
   followMeetingsOpenedElsewhere,
@@ -102,19 +103,10 @@ export const markRoomEnded = (
  * one count for nothing there, and the people a host removed from this one
  * are invited again, as anyone a booking invites is.
  */
-type LeasedRoom = Pick<Room, "id" | "clientId" | "channelId"> & {
-  ownershipGeneration?: number | null;
-};
-
 export const ROOM_LEASE_CONFIRM_MS = 5_000;
 export const ROOM_WRITE_COMMIT_MS = 5_000;
 export { ROOM_LEASE_UNCONFIRMED_ERROR } from "@conclave/meeting-core/host-commands";
-
-export const holdsRoomLease = (
-  state: Pick<SfuState, "roomRegistry" | "deferredRoomWrites">,
-  room: Pick<Room, "channelId">,
-): boolean =>
-  state.roomRegistry.holdsLease(room.channelId) && !state.deferredRoomWrites.has(room.channelId);
+export { holdsRoomLease };
 
 const commitsInFlight = new WeakMap<SfuState, Map<string, Set<Promise<boolean>>>>();
 const commitsOf = (state: SfuState, channelId: string): Set<Promise<boolean>> => {
@@ -176,9 +168,9 @@ const releaseLease = (state: SfuState, channelId: string): void => {
 };
 
 const releaseRoomLease = (state: SfuState, channelId: string): void => {
-  const deferred = state.deferredRoomWrites.get(channelId);
-  if (deferred) {
-    deferred.releaseAfter = true;
+  const held = state.deferredRoomWrites.get(channelId);
+  if (held) {
+    held.releaseAfter = true;
     return;
   }
   const commits = [...commitsOf(state, channelId)];
@@ -192,27 +184,41 @@ const releaseRoomLease = (state: SfuState, channelId: string): void => {
   });
 };
 
-const settleRoomLease = (
-  state: SfuState,
-  channelId: string,
-  outcome: "continuous" | "reclaimed" | "lost",
-): void => {
-  const deferred = state.deferredRoomWrites.get(channelId);
-  if (!deferred) return;
+const holdRoom = (state: SfuState, room: LeasedRoom): DeferredRoomWrites => {
+  const held = state.deferredRoomWrites.get(room.channelId) ?? {
+    room,
+    writes: [],
+    releaseAfter: false,
+  };
+  state.deferredRoomWrites.set(room.channelId, held);
+  return held;
+};
+
+const writeHeld = (state: SfuState, channelId: string): void => {
+  const held = state.deferredRoomWrites.get(channelId);
+  if (!held) return;
   state.deferredRoomWrites.delete(channelId);
-  if (outcome === "continuous") {
-    for (const write of deferred.writes) {
-      write.commit().then(write.settle, () => write.settle(false));
-    }
-  } else {
+  for (const write of held.writes) {
+    write.commit().then(write.settle, () => write.settle(false));
+  }
+  if (held.releaseAfter && isUnused(state, channelId)) releaseRoomLease(state, channelId);
+};
+
+const dropHeld = (state: SfuState, channelId: string, why: "lost" | "fenced"): void => {
+  const held = state.deferredRoomWrites.get(channelId);
+  if (!held) return;
+  state.deferredRoomWrites.delete(channelId);
+  if (held.writes.length > 0) {
     Logger.error(
-      `Room ${deferred.room.id} dropped ${deferred.writes.map((write) => write.label).join(", ")}: ${
-        outcome === "lost" ? "another SFU owns it now" : "its lease ran out before it was renewed"
+      `Room ${held.room.id} dropped ${held.writes.map((write) => write.label).join(", ")}: ${
+        why === "lost"
+          ? "another SFU owns it now"
+          : "its fences did not land once its lease was claimed again"
       }.`,
     );
-    for (const write of deferred.writes) write.settle(false);
   }
-  if (deferred.releaseAfter && outcome !== "lost" && isUnused(state, channelId)) {
+  for (const write of held.writes) write.settle(false);
+  if (held.releaseAfter && why !== "lost" && isUnused(state, channelId)) {
     releaseRoomLease(state, channelId);
   }
 };
@@ -221,30 +227,45 @@ const settleOwnership = (
   state: SfuState,
   channelId: string,
   ownership: RoomOwnershipClaim,
-): void => {
-  settleRoomLease(
-    state,
-    channelId,
-    !ownership.ok ? "lost" : ownership.continuous ? "continuous" : "reclaimed",
-  );
-  const room = state.rooms.get(channelId);
-  if (
-    ownership.ok &&
-    room &&
-    room.ownershipGeneration !== null &&
-    room.ownershipGeneration !== ownership.generation
-  ) {
-    reclaimRoom(state, room, ownership.generation);
+): Promise<void> | null => {
+  if (!ownership.ok) {
+    dropHeld(state, channelId, "lost");
+    return null;
   }
+  const room = state.rooms.get(channelId) ?? state.deferredRoomWrites.get(channelId)?.room;
+  const fenced = room?.ownershipGeneration ?? null;
+  if (!room || fenced === null || fenced === ownership.generation) {
+    writeHeld(state, channelId);
+    return null;
+  }
+  return reclaimRoom(state, room, ownership.generation);
 };
 
-const reclaims = new WeakMap<Room, number>();
+const reclaims = new WeakMap<LeasedRoom, { generation: number; settled: Promise<void> }>();
 
-const reclaimRoom = (state: SfuState, room: Room, generation: number): void => {
-  if (reclaims.get(room) === generation) return;
-  reclaims.set(room, generation);
-  runDetached(`Keeping room ${room.id} once its lease was claimed again`, async () => {
-    const [record, booking] = await Promise.all([
+const reclaimRoom = (state: SfuState, room: LeasedRoom, generation: number): Promise<void> => {
+  const running = reclaims.get(room);
+  if (running?.generation === generation) return running.settled;
+  holdRoom(state, room);
+  const settled = (running?.settled ?? Promise.resolve())
+    .then(() => fenceAgain(state, room, generation))
+    .finally(() => {
+      if (reclaims.get(room)?.settled === settled) reclaims.delete(room);
+    });
+  reclaims.set(room, { generation, settled });
+  return settled;
+};
+
+const fenceAgain = async (state: SfuState, room: LeasedRoom, generation: number): Promise<void> => {
+  const held = room.ownershipGeneration ?? undefined;
+  const isHeld = () => state.deferredRoomWrites.get(room.channelId)?.room === room;
+  if (!isHeld()) return;
+  if (held === generation) {
+    writeHeld(state, room.channelId);
+    return;
+  }
+  const [record, booking] = await withDeadline(
+    Promise.all([
       state.roomRecovery.reclaim(room, generation),
       fenceScheduledMeeting(
         state.scheduledMeetings,
@@ -252,30 +273,28 @@ const reclaimRoom = (state: SfuState, room: Room, generation: number): void => {
         room.clientId,
         room.id,
         generation,
+        held,
       ).catch((error: unknown) => {
         Logger.error(`Failed to fence the booking of ${room.channelId}`, error);
         return false;
       }),
-    ]);
-    if (!isCurrentRoom(state, room) || reclaims.get(room) !== generation) return;
-    if (!record || !booking) {
-      Logger.warn(
-        `Handing room ${room.id} (${room.clientId}) off: another room wrote the code's state while its lease was gone.`,
-      );
-      handOffRoomState(state, room.channelId);
-      return;
-    }
-    await refreshScheduledMeeting(
-      state.scheduledMeetings,
-      state.scheduledMeetingPersistence,
-      room.clientId,
-      room.id,
+    ]),
+    [false, false],
+  );
+  if (!isHeld()) return;
+  if (!record || !booking) {
+    Logger.warn(
+      `Handing room ${room.id} (${room.clientId}) off: its fences did not land once its lease was claimed again.`,
     );
-    if (!isCurrentRoom(state, room) || reclaims.get(room) !== generation) return;
-    bindScheduledInvitations(state, room);
-    room.ownershipGeneration = generation;
-    Logger.warn(`Kept room ${room.id} (${room.clientId}) after its lease was claimed again.`);
-  });
+    dropHeld(state, room.channelId, "fenced");
+    if (isCurrentRoom(state, room)) handOffRoomState(state, room.channelId);
+    return;
+  }
+  room.ownershipGeneration = generation;
+  if (reclaims.get(room)?.generation !== generation) return;
+  writeHeld(state, room.channelId);
+  if (room instanceof Room && isCurrentRoom(state, room)) noteRoomRunning(state, room);
+  Logger.warn(`Kept room ${room.id} (${room.clientId}) after its lease was claimed again.`);
 };
 
 const ROOM_HANDED_OFF_MESSAGE = "The meeting is moving to another server. Reconnecting you.";
@@ -291,8 +310,10 @@ const renewForConfirmation = (state: SfuState, room: LeasedRoom): Promise<boolea
     .renewRoom({ channelId: room.channelId, clientId: room.clientId, roomId: room.id })
     .then(
       (ownership) => {
-        settleOwnership(state, room.channelId, ownership);
-        if (ownership.ok) return ownership.continuous;
+        const reclaiming = settleOwnership(state, room.channelId, ownership);
+        if (ownership.ok) {
+          return (reclaiming ?? Promise.resolve()).then(() => holdsRoomLease(state, room));
+        }
         if (state.rooms.has(room.channelId)) {
           Logger.warn(
             `Closing room ${room.id} (${room.clientId}) because ownership moved to ${ownership.owner.instanceId}`,
@@ -302,7 +323,7 @@ const renewForConfirmation = (state: SfuState, room: LeasedRoom): Promise<boolea
         return false;
       },
       (error: unknown) => {
-        settleRoomLease(state, room.channelId, "lost");
+        dropHeld(state, room.channelId, "lost");
         if (error instanceof RoomLeaseExpiredError && state.rooms.has(room.channelId)) {
           handOffRoomState(state, room.channelId);
         }
@@ -365,21 +386,16 @@ export const writeSharedRoomState = (
   label: string,
   commit: (generation: number | undefined) => Promise<boolean>,
 ): Promise<boolean> => {
-  const generation = room.ownershipGeneration ?? undefined;
-  const run = () => commitNow(state, room, label, () => commit(generation));
+  const run = () =>
+    commitNow(state, room, label, () => commit(room.ownershipGeneration ?? undefined));
   let landed: Promise<boolean>;
   if (holdsRoomLease(state, room)) {
     landed = run();
   } else {
-    const deferred = state.deferredRoomWrites.get(room.channelId) ?? {
-      room: { id: room.id, clientId: room.clientId, channelId: room.channelId },
-      writes: [],
-      releaseAfter: false,
-    };
+    const held = holdRoom(state, room);
     landed = new Promise<boolean>((settle) => {
-      deferred.writes.push({ label, commit: run, settle });
+      held.writes.push({ label, commit: run, settle });
     });
-    state.deferredRoomWrites.set(room.channelId, deferred);
     Logger.warn(`Room ${room.id} waits for its lease to write ${label}.`);
     runDetached("Confirming the room's lease", () => renewForConfirmation(state, room));
   }
@@ -400,7 +416,7 @@ const noteMeetingOver = (
   const persistence = state.scheduledMeetingPersistence;
   void writeSharedRoomState(state, room, "the end of its meeting", (generation) =>
     Promise.all([
-      state.roomRecovery.saveRecord(room, over),
+      state.roomRecovery.saveRecord(room, over, generation),
       cleared && persistence
         ? persistScheduledMeetingRemovalsEnd(
             state.scheduledMeetings,
@@ -417,8 +433,8 @@ const noteMeetingOver = (
 export const noteRoomRunning = (state: SfuState, room: Room): void => {
   if (!room.recordsItsCall) return;
   const record = state.roomRecovery.runningRecord(room);
-  void writeSharedRoomState(state, room, "its recovery record", () =>
-    state.roomRecovery.saveRecord(room, record),
+  void writeSharedRoomState(state, room, "its recovery record", (generation) =>
+    state.roomRecovery.saveRecord(room, record, generation),
   );
 };
 
@@ -515,12 +531,12 @@ export const renewLocalRoom = async (
       Logger.warn(
         `Closing room ${roomId} (${clientId}) before its unconfirmed shared lease can expire`,
       );
-      settleRoomLease(state, channelId, "lost");
+      dropHeld(state, channelId, "lost");
       handOffRoomState(state, channelId);
     }
     throw error;
   }
-  settleOwnership(state, channelId, ownership);
+  const reclaiming = settleOwnership(state, channelId, ownership);
   if (!ownership.ok) {
     Logger.warn(
       `Closing local room ${roomId} (${clientId}) because ownership belongs to ${ownership.owner.instanceId}`,
@@ -528,6 +544,7 @@ export const renewLocalRoom = async (
     handOffRoomState(state, channelId);
     throw new RoomOwnershipError(ownership.owner);
   }
+  if (reclaiming) await reclaiming;
   // The last client can leave during the renew await, which closes the room
   // and removes it from the map; never hand back a closed room. If another
   // joiner already created its successor, that is the live room.
@@ -571,10 +588,11 @@ export const getOrCreateRoomWithOrigin = async (
       clientId,
       roomId,
     });
-    settleOwnership(state, channelId, ownership);
+    const reclaiming = settleOwnership(state, channelId, ownership);
     if (!ownership.ok) {
       throw new RoomOwnershipError(ownership.owner);
     }
+    if (reclaiming) await reclaiming;
     const incarnationId = randomUUID();
     const fenced = await Promise.all([
       state.roomRecovery.fence(
@@ -806,14 +824,17 @@ export const renewRoomOwnerships = async (state: SfuState): Promise<void> => {
         Logger.warn(
           `Closing room ${room.id} (${room.clientId}) before its unconfirmed shared lease can expire`,
         );
-        settleRoomLease(state, room.channelId, "lost");
+        dropHeld(state, room.channelId, "lost");
         handOffRoomState(state, room.channelId);
         continue;
       }
       throw error;
     }
-    settleOwnership(state, room.channelId, ownership);
+    const reclaiming = settleOwnership(state, room.channelId, ownership);
     if (ownership.ok) {
+      if (reclaiming) {
+        runDetached(`Keeping room ${room.id} once its lease was claimed again`, () => reclaiming);
+      }
       continue;
     }
 

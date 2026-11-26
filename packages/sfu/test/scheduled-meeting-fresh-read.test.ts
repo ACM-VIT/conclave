@@ -227,6 +227,34 @@ describe.each(["sqlite", "json", "redis"] as const)("a fence on a %s schedule st
     expect(await fence(sfuA, 20)).toBe(true);
     expect(await fence(await startSfu(kind), 15)).toBe(false);
   });
+
+  test("lets a room that claims its code again fence only while the fence it held still stands", async () => {
+    useStore(kind);
+    const sfuA = await startSfu(kind);
+    await scheduleIntroCall(sfuA);
+    const sfuB = await startSfu(kind);
+    const again = (sfu: Sfu, generation: number, held: number) =>
+      fenceScheduledMeeting(sfu.meetings, sfu.persistence, "conclave", CODE, generation, held);
+
+    expect(await fence(sfuA, 5)).toBe(true);
+    expect(await again(sfuA, 7, 5)).toBe(true);
+    expect(await again(sfuA, 7, 5)).toBe(true);
+
+    expect(await fence(sfuB, 8)).toBe(true);
+    expect(await again(sfuA, 9, 7)).toBe(false);
+    expect(await fence(sfuB, 8)).toBe(true);
+  });
+
+  test("lets a room that claims its code again fence a meeting booked after the room opened", async () => {
+    useStore(kind);
+    const sfuA = await startSfu(kind);
+    await scheduleIntroCall(sfuA);
+
+    expect(
+      await fenceScheduledMeeting(sfuA.meetings, sfuA.persistence, "conclave", CODE, 7, 5),
+    ).toBe(true);
+    expect(await fence(sfuA, 6)).toBe(false);
+  });
 });
 
 describe("the end of a meeting on one SFU and a removal at the next on another", () => {

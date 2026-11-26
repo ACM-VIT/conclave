@@ -60,7 +60,7 @@ describe("the generation a lost call's passes were signed under", () => {
   it("is the generation of the room that last ran the call, and stays so when a new room fences the record", async () => {
     const store = createMemoryRoomRecoveryStore();
     const ledger = createRoomRecoveryLedger(store);
-    await ledger.saveRecord(ledgerRoom("room-2", 6), ledger.runningRecord(ledgerRoom("room-2", 6)));
+    await ledger.saveRecord(ledgerRoom("room-2", 6), ledger.runningRecord(ledgerRoom("room-2", 6)), 6);
     expect(await ledger.fence({ channelId: CHANNEL, incarnationId: "room-3", takesOverRecordOf: null }, 7, null)).toBe(true);
 
     expect((await ledger.recall(CHANNEL)).lost?.passGeneration).toBe(6);

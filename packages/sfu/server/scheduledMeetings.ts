@@ -609,7 +609,11 @@ export type ScheduledMeetingPersistence = {
     endedAt: number,
     generation?: number,
   ) => MaybePromise<boolean | void>;
-  fenceMeeting?: (meetingId: string, generation: number) => MaybePromise<boolean>;
+  fenceMeeting?: (
+    meetingId: string,
+    generation: number,
+    held?: number,
+  ) => MaybePromise<boolean>;
   close?: () => MaybePromise<void>;
   flush?: () => Promise<void>;
 };
@@ -1157,9 +1161,12 @@ const createSqliteScheduledMeetingPersistence = (
         clearEndedDecisions.run(meetingId, meetingId);
         return true;
       }),
-    fenceMeeting: (meetingId, generation) =>
+    fenceMeeting: (meetingId, generation, held) =>
       inTransaction("fence a meeting's writes", () => {
         if (isStaleWrite(meetingId, generation)) return false;
+        const row = readWriteGeneration.get(meetingId) as { generation?: unknown } | undefined;
+        const standing = typeof row?.generation === "number" ? row.generation : null;
+        if (fencedByAnother(standing, generation, held)) return false;
         raiseWriteGeneration.run(meetingId, generation);
         return true;
       }),
@@ -1232,6 +1239,13 @@ const storedDecisionsOf = (raw: Record<string, unknown>): StoredDecisions => {
 
 const isStaleFor = (stored: StoredDecisions, generation: number | undefined): boolean =>
   generation !== undefined && stored.writeGeneration !== null && stored.writeGeneration > generation;
+
+const fencedByAnother = (
+  standing: number | null,
+  generation: number,
+  held: number | undefined,
+): boolean =>
+  held !== undefined && standing !== null && standing !== held && standing !== generation;
 
 const stillRemovedIn = ({ decisions, endedAt }: StoredDecisions): string[] =>
   Object.entries(decisions)
@@ -1335,11 +1349,14 @@ const createFileScheduledMeetingPersistence = (
       }
       return applied;
     },
-    fenceMeeting: (meetingId, generation) => {
+    fenceMeeting: (meetingId, generation, held) => {
       let applied = true;
       try {
         rewriteDecisions(meetingId, (stored) => {
-          if (isStaleFor(stored, generation)) {
+          if (
+            isStaleFor(stored, generation) ||
+            fencedByAnother(stored.writeGeneration, generation, held)
+          ) {
             applied = false;
             return stored;
           }
@@ -1514,7 +1531,11 @@ return 1
 const FENCE_MEETING_SCRIPT = `
 local fenced = tonumber(redis.call("HGET", KEYS[1], ARGV[1]) or "")
 local generation = tonumber(ARGV[2])
+local held = tonumber(ARGV[3] or "")
 if fenced ~= nil and fenced > generation then
+  return -1
+end
+if held ~= nil and fenced ~= nil and fenced ~= held and fenced ~= generation then
   return -1
 end
 redis.call("HSET", KEYS[1], ARGV[1], ARGV[2])
@@ -1752,8 +1773,10 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     );
   }
 
-  fenceMeeting(meetingId: string, generation: number): Promise<boolean> {
-    runDetached("Fencing a meeting's writes", () => this.fallback.fenceMeeting?.(meetingId, generation));
+  fenceMeeting(meetingId: string, generation: number, held?: number): Promise<boolean> {
+    runDetached("Fencing a meeting's writes", () =>
+      this.fallback.fenceMeeting?.(meetingId, generation, held),
+    );
     return this.queueCheckedWrite("fence a meeting's writes", () =>
       this.client.sendCommand([
         "EVAL",
@@ -1762,6 +1785,7 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
         this.writeGenerationsKey,
         meetingId,
         String(generation),
+        held === undefined ? "" : String(held),
       ]),
     );
   }
@@ -2102,10 +2126,11 @@ export const fenceScheduledMeeting = (
   clientId: string,
   roomCode: string,
   generation: number,
+  held?: number,
 ): Promise<boolean> => {
   const meeting = getScheduledMeetingByRoomCode(store, clientId, roomCode);
   if (!meeting || !persistence?.fenceMeeting) return Promise.resolve(true);
-  return Promise.resolve(persistence.fenceMeeting(meeting.id, generation)).then(async (landed) => {
+  return Promise.resolve(persistence.fenceMeeting(meeting.id, generation, held)).then(async (landed) => {
     await persistence.flush?.();
     return landed;
   });

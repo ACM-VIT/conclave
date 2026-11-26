@@ -52,6 +52,8 @@ export type RoomRecoveryRecord = {
   passGeneration?: number;
 };
 
+export type RoomRecoverySnapshot = Readonly<Omit<RoomRecoveryRecord, "generation">>;
+
 /**
  * Where records are kept. A room writes only on top of a record it wrote
  * itself, or of the one it took over when it was created, so a room an SFU
@@ -119,11 +121,12 @@ type OverRoom = Pick<Room, "channelId" | "incarnationId" | "takesOverRecordOf" |
 export type RoomRecoveryLedger = {
   noteRunning: (room: LedgerRoom) => void;
   noteOver: (room: OverRoom) => void;
-  runningRecord: (room: LedgerRoom) => Readonly<RoomRecoveryRecord>;
-  overRecord: (room: OverRoom) => Readonly<RoomRecoveryRecord>;
+  runningRecord: (room: LedgerRoom) => RoomRecoverySnapshot;
+  overRecord: (room: OverRoom) => RoomRecoverySnapshot;
   saveRecord: (
     room: Pick<Room, "channelId" | "takesOverRecordOf">,
-    record: Readonly<RoomRecoveryRecord>,
+    record: RoomRecoverySnapshot,
+    generation: number | undefined,
   ) => Promise<boolean>;
   fence: (
     room: Pick<Room, "channelId" | "incarnationId" | "takesOverRecordOf">,
@@ -334,7 +337,7 @@ export const createRoomRecoveryLedger = (
     return landing;
   };
 
-  const runningRecord = (room: LedgerRoom): Readonly<RoomRecoveryRecord> =>
+  const runningRecord = (room: LedgerRoom): RoomRecoverySnapshot =>
     Object.freeze({
         liveAt: Date.now(),
         hostUserKey: room.hostUserKey,
@@ -353,10 +356,10 @@ export const createRoomRecoveryLedger = (
           ...room.usersNeedingReadmission,
         ]),
         ...(typeof room.ownershipGeneration === "number"
-          ? { generation: room.ownershipGeneration, passGeneration: room.ownershipGeneration }
+          ? { passGeneration: room.ownershipGeneration }
           : {}),
       });
-  const overRecord = (room: OverRoom): Readonly<RoomRecoveryRecord> =>
+  const overRecord = (room: OverRoom): RoomRecoverySnapshot =>
     Object.freeze({
       liveAt: null,
       hostUserKey: null,
@@ -368,14 +371,14 @@ export const createRoomRecoveryLedger = (
       temporaryHostUserKey: null,
       coHostUserKeys: [],
       guestPasses: {},
-      ...(typeof room.ownershipGeneration === "number" ? { generation: room.ownershipGeneration } : {}),
     });
   const saveRecord = (
     room: Pick<Room, "channelId" | "takesOverRecordOf">,
-    record: Readonly<RoomRecoveryRecord>,
+    record: RoomRecoverySnapshot,
+    generation: number | undefined,
   ): Promise<boolean> => {
     if (record.liveAt === null && record.overAt !== null) noteFinished(record.writer);
-    return save(room, { ...record });
+    return save(room, { ...record, ...(generation === undefined ? {} : { generation }) });
   };
 
   return {
@@ -425,10 +428,14 @@ export const createRoomRecoveryLedger = (
         });
     },
     noteRunning: (room) => {
-      runDetached("Saving the recovery record", () => save(room, runningRecord(room)));
+      runDetached("Saving the recovery record", () =>
+        saveRecord(room, runningRecord(room), room.ownershipGeneration ?? undefined),
+      );
     },
     noteOver: (room) => {
-      runDetached("Saving the end of a meeting", () => saveRecord(room, overRecord(room)));
+      runDetached("Saving the end of a meeting", () =>
+        saveRecord(room, overRecord(room), room.ownershipGeneration ?? undefined),
+      );
     },
     recall: async (channelId) => {
       await Promise.all([...(settling.get(channelId) ?? new Set<Promise<void>>())]);

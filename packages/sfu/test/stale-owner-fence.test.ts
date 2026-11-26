@@ -25,7 +25,7 @@ import type {
   RoomOwnershipClaim,
   RoomRegistry,
 } from "../server/roomRegistry.js";
-import { forceCloseRoom, renewRoomOwnerships } from "../server/rooms.js";
+import { forceCloseRoom, renewRoomOwnerships, ROOM_WRITE_COMMIT_MS } from "../server/rooms.js";
 import {
   createScheduledMeeting,
   createScheduledMeetingPersistence,
@@ -42,6 +42,7 @@ import { INVALID_HOST_COMMAND_ERROR } from "../server/socket/handlers/adminHandl
 import { registerDisconnectHandlers } from "../server/socket/handlers/disconnectHandlers.js";
 import { registerJoinRoomHandler } from "../server/socket/handlers/joinRoom.js";
 import { createSfuState, type SfuState } from "../server/state.js";
+import { Logger } from "../utilities/loggers.js";
 
 const CODE = "abc-mnop-xyz";
 const CHANNEL = `conclave:${CODE}`;
@@ -76,6 +77,7 @@ const sharedLeases = (): Leases => {
   const held: Array<() => void> = [];
   const forInstance = (instanceId: string): RoomRegistry => {
     const servesUntil = new Map<string, number>();
+    const servesUnder = new Map<string, number>();
     const claimNow = (input: { channelId: string; clientId: string; roomId: string }): RoomOwnershipClaim => {
       const current = live(input.channelId);
       if (current && current.instanceId !== instanceId) return { ok: false, owner: current };
@@ -92,6 +94,7 @@ const sharedLeases = (): Leases => {
       };
       owners.set(input.channelId, owner);
       servesUntil.set(input.channelId, now + LEASE_MS - LEASE_MARGIN_MS);
+      servesUnder.set(input.channelId, generation);
       return { ok: true, owner, continuous, generation };
     };
     const claim = (input: { channelId: string; clientId: string; roomId: string }) =>
@@ -117,7 +120,9 @@ const sharedLeases = (): Leases => {
         if (owners.get(channelId)?.instanceId === instanceId) owners.delete(channelId);
       },
       isLocalOwner: (owner: RoomAssignmentRecord | null | undefined) => owner?.instanceId === instanceId,
-      holdsLease: (channelId) => (servesUntil.get(channelId) ?? 0) > Date.now(),
+      holdsLease: (channelId, generation) =>
+        (servesUntil.get(channelId) ?? 0) > Date.now() &&
+        (generation === undefined || servesUnder.get(channelId) === generation),
     };
   };
   return {
@@ -198,6 +203,7 @@ const join = async (state: SfuState, user: SfuAuthPayload, payload: Record<strin
 
 const dirs: string[] = [];
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
   vi.unstubAllEnvs();
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
@@ -260,6 +266,7 @@ type LeaseState =
   | "renewing"
   | "lapsed but still the owner"
   | "lost"
+  | "forgotten, then claimed again"
   | "renewing, then drained"
   | "renewing, then closed";
 type Action =
@@ -274,6 +281,7 @@ const LEASE_STATES: LeaseState[] = [
   "renewing",
   "lapsed but still the owner",
   "lost",
+  "forgotten, then claimed again",
   "renewing, then drained",
   "renewing, then closed",
 ];
@@ -308,6 +316,7 @@ const runCase = async (action: (typeof ACTIONS)[number], lease: LeaseState) => {
   const renewing = lease.startsWith("renewing");
   if (lease !== "held") await vi.advanceTimersByTimeAsync(LEASE_MS - LEASE_MARGIN_MS + 2_000);
   if (renewing) leases.holdRenewals();
+  if (lease === "forgotten, then claimed again") leases.forget();
   if (lease === "lost") {
     await vi.advanceTimersByTimeAsync(LEASE_MARGIN_MS);
     expect((await leases.forInstance("sfu-b").claimRoom({ channelId: CHANNEL, clientId: "conclave", roomId: CODE })).ok).toBe(true);
@@ -344,7 +353,11 @@ const runCase = async (action: (typeof ACTIONS)[number], lease: LeaseState) => {
   if (lease === "lost") expect(leases.ownerOf(CHANNEL)).toBe("sfu-b");
   await vi.advanceTimersByTimeAsync(30_000);
 
-  const commandRan = lease === "held" || lease === "renewing" || lease === "lapsed but still the owner";
+  const commandRan =
+    lease === "held" ||
+    lease === "renewing" ||
+    lease === "lapsed but still the owner" ||
+    lease === "forgotten, then claimed again";
   const written = action.command ? commandRan : lease !== "lost";
   if (action.command) {
     expect(await answer).toEqual(
@@ -384,7 +397,7 @@ describe("an SFU that lost a room's lease while it was paused", () => {
       await vi.advanceTimersByTimeAsync(65_000);
       expect(hostOnA.passes()).toBe(0);
       await vi.advanceTimersByTimeAsync(45_000);
-      await sfuA.roomRegistry.renewRoom({ channelId: CHANNEL, clientId: "conclave", roomId: CODE });
+      await renewRoomOwnerships(sfuA);
       await vi.advanceTimersByTimeAsync(15_000);
       expect(hostOnA.passes()).toBe(1);
     } finally {
@@ -758,6 +771,136 @@ describe("a room whose lease the shared registry forgot", () => {
       expect.objectContaining({ success: true }),
     );
     expect(knocker.told("joinApproved")).toHaveLength(1);
+  });
+
+  it.each(["fence", "read"] as const)(
+    "ends its meeting, and the removals made in it, when its last person leaves while the booking's %s is still on its way",
+    async (waitsOn) => {
+      useSharedSchedule();
+      await book();
+      const leases = sharedLeases();
+      const recovery = createMemoryRoomRecoveryStore();
+      const persistence = createScheduledMeetingPersistence();
+      const fence = persistence.fenceMeeting!.bind(persistence);
+      const read = persistence.loadOne!.bind(persistence);
+      let arrived: () => void = () => {};
+      let onItsWay: Promise<void> | null = null;
+      persistence.fenceMeeting = async (...args) => {
+        if (waitsOn === "fence") await onItsWay;
+        return fence(...args);
+      };
+      persistence.loadOne = async (id) => {
+        if (waitsOn === "read") await onItsWay;
+        return read(id);
+      };
+      const sfuA = await startSfu(leases.forInstance("sfu-a"), { recovery, persistence });
+      const hostOnA = await join(sfuA, host("a"));
+      expect((await join(sfuA, invitee)).status).toBe("joined");
+      expect(await hostOnA.send("kickUser", { userId: INVITEE_SEAT })).toEqual({ success: true });
+      await settle();
+      expect(await inviteeIsInvited()).toBe(false);
+
+      leases.forget();
+      await vi.advanceTimersByTimeAsync(1_000);
+      onItsWay = new Promise<void>((resolve) => (arrived = resolve));
+      const renewing = renewRoomOwnerships(sfuA);
+      await settle();
+      expect(sfuA.roomRegistry.holdsLease(CHANNEL)).toBe(true);
+
+      await hostOnA.leave();
+      await settle();
+      arrived();
+      await renewing;
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      expect(sfuA.rooms.has(CHANNEL)).toBe(false);
+      const recalled = await createRoomRecoveryLedger(recovery).recall(CHANNEL);
+      expect(recalled.lost).toBeNull();
+      expect(recalled.passesVoidUntil).not.toBeNull();
+      expect(await inviteeIsInvited()).toBe(true);
+      expect(leases.ownerOf(CHANNEL)).toBeNull();
+    },
+  );
+
+  it("signs no pass and runs no host command while it is being claimed again, and runs the command once it is", async () => {
+    useSharedSchedule();
+    await book();
+    const leases = sharedLeases();
+    const persistence = createScheduledMeetingPersistence();
+    const fence = persistence.fenceMeeting!.bind(persistence);
+    let arrived: () => void = () => {};
+    let onItsWay: Promise<void> | null = null;
+    persistence.fenceMeeting = async (...args) => {
+      await onItsWay;
+      return fence(...args);
+    };
+    const sfuA = await startSfu(leases.forInstance("sfu-a"), { persistence });
+    const hostOnA = await join(sfuA, host("a"));
+    expect((await join(sfuA, invitee)).status).toBe("joined");
+    const room = sfuA.rooms.get(CHANNEL)!;
+    const before = room.ownershipGeneration;
+    const stopRefresh = startRoomRecoveryPassRefresh(sfuA, config.sfuSecret);
+    try {
+      await vi.advanceTimersByTimeAsync(30_000);
+      await renewRoomOwnerships(sfuA);
+      await vi.advanceTimersByTimeAsync(28_000);
+      leases.forget();
+      onItsWay = new Promise<void>((resolve) => (arrived = resolve));
+      await renewRoomOwnerships(sfuA);
+      await settle();
+      expect(sfuA.roomRegistry.holdsLease(CHANNEL)).toBe(true);
+      expect(room.ownershipGeneration).toBe(before);
+
+      const kick = hostOnA.send("kickUser", { userId: INVITEE_SEAT });
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(await inviteeIsInvited()).toBe(true);
+      expect(room.clients.size).toBe(2);
+      expect(hostOnA.passes()).toBe(0);
+
+      arrived();
+      await settle();
+      expect(room.ownershipGeneration).not.toBe(before);
+      expect(await kick).toEqual({ success: true });
+      await settle();
+      expect(await inviteeIsInvited()).toBe(false);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await renewRoomOwnerships(sfuA);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(hostOnA.passes()).toBe(1);
+    } finally {
+      stopRefresh();
+    }
+  });
+
+  it("hands off, and writes nothing it decided meanwhile, when its fences have not landed in time", async () => {
+    vi.spyOn(Logger, "error").mockImplementation(() => undefined);
+    useSharedSchedule();
+    await book();
+    const leases = sharedLeases();
+    const recovery = createMemoryRoomRecoveryStore();
+    const persistence = createScheduledMeetingPersistence();
+    const fence = persistence.fenceMeeting!.bind(persistence);
+    let stalls = false;
+    persistence.fenceMeeting = (...args) =>
+      stalls ? new Promise<boolean>(() => undefined) : fence(...args);
+    const sfuA = await startSfu(leases.forInstance("sfu-a"), { recovery, persistence });
+    const hostOnA = await join(sfuA, host("a"));
+    expect((await join(sfuA, invitee)).status).toBe("joined");
+    const knocker = await knockOn(sfuA);
+
+    leases.forget();
+    await vi.advanceTimersByTimeAsync(1_000);
+    stalls = true;
+    await renewRoomOwnerships(sfuA);
+    await settle();
+    const kick = hostOnA.send("kickUser", { userId: INVITEE_SEAT });
+    await vi.advanceTimersByTimeAsync(ROOM_WRITE_COMMIT_MS + 1_000);
+
+    expect(await kick).toEqual({ error: ROOM_LEASE_UNCONFIRMED_ERROR });
+    expect(sfuA.rooms.has(CHANNEL)).toBe(false);
+    expect(sentOn(knocker).told).toEqual([expect.objectContaining({ reconnecting: true })]);
+    expect(await inviteeIsInvited()).toBe(true);
+    expect((await createRoomRecoveryLedger(recovery).recall(CHANNEL)).lost).not.toBeNull();
   });
 
   it("sends its waiting guests on with its seats when another SFU took the code", async () => {

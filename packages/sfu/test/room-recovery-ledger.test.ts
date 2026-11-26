@@ -301,16 +301,13 @@ describe("fencing a code's record when a room takes the code over", () => {
     vi.spyOn(Logger, "error").mockImplementation(() => undefined);
     const { inner, store, holdReads, release } = withHeldReads();
     const old = createRoomRecoveryLedger(inner);
-    expect(await old.saveRecord(room, old.runningRecord(running(5, ["guest-removed"])))).toBe(true);
+    expect(await old.saveRecord(room, old.runningRecord(running(5, ["guest-removed"])), 5)).toBe(true);
 
     const takeover = createRoomRecoveryLedger(store);
     holdReads();
     const fencing = takeover.fence(takingOver, 6, null);
     await Promise.resolve();
-    const landed = await old.saveRecord(
-      room,
-      old.runningRecord(running(5, ["guest-removed", "guest-removed-later"])),
-    );
+    const landed = await old.saveRecord(room, old.runningRecord(running(5, ["guest-removed", "guest-removed-later"])), 5);
     release();
     await fencing;
 
@@ -323,7 +320,7 @@ describe("fencing a code's record when a room takes the code over", () => {
     const store = createFileRoomRecoveryStore(directory);
     const other = createFileRoomRecoveryStore(directory);
     const first = createRoomRecoveryLedger(store);
-    await first.saveRecord(room, first.runningRecord(running(5, ["guest-removed"])));
+    await first.saveRecord(room, first.runningRecord(running(5, ["guest-removed"])), 5);
     const later = first.runningRecord(running(5, ["guest-removed", "guest-removed-later"]));
     let raced = false;
     const landed = await store.update(CHANNEL, (current) => {
@@ -346,7 +343,7 @@ describe("fencing a code's record when a room takes the code over", () => {
     expect(await sfu().fence(takingOver, 6, null)).toBe(true);
     const stale = sfu();
 
-    expect(await stale.saveRecord(room, stale.runningRecord(running(5, [])))).toBe(false);
+    expect(await stale.saveRecord(room, stale.runningRecord(running(5, [])), 5)).toBe(false);
     expect(await sfu().recall(CHANNEL)).toMatchObject({ lost: null, lastWriter: "room-2" });
   });
 

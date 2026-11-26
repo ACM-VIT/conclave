@@ -18,6 +18,7 @@ import {
   type SchedulingPersistence,
   type SchedulingStore,
 } from "./scheduling.js";
+import type { LeasedRoom } from "./roomLease.js";
 import { createRoomRegistry, type RoomRegistry } from "./roomRegistry.js";
 import {
   createMemoryRoomRecoveryStore,
@@ -43,7 +44,7 @@ export type EndedRoom = {
 };
 
 export type DeferredRoomWrites = {
-  room: { id: string; clientId: string; channelId: string };
+  room: LeasedRoom;
   writes: Array<{ label: string; commit: () => Promise<boolean>; settle: (landed: boolean) => void }>;
   releaseAfter: boolean;
 };

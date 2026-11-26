@@ -97,7 +97,7 @@ export type RoomRegistry = {
   }) => Promise<RoomOwnershipClaim>;
   releaseRoom: (channelId: string) => Promise<void>;
   isLocalOwner: (owner: RoomAssignmentRecord | null | undefined) => boolean;
-  holdsLease: (channelId: string) => boolean;
+  holdsLease: (channelId: string, generation?: number) => boolean;
 };
 
 export const DEFAULT_ROOM_PLACEMENT_TTL_MS = 20_000;
@@ -451,8 +451,9 @@ export class LocalRoomRegistry implements RoomRegistry {
     );
   }
 
-  holdsLease(): boolean {
-    return true;
+  holdsLease(channelId: string, generation?: number): boolean {
+    const held = this.heldGenerations.get(channelId);
+    return generation === undefined || held === undefined || held === generation;
   }
 
   private createOwner(input: {
@@ -506,7 +507,7 @@ class RedisRoomRegistry implements RoomRegistry {
   private placementTtlMs: number;
   private leaseSafetyMarginMs: number;
   private commandTimeoutMs: number;
-  private confirmedLeaseServeUntil = new Map<string, number>();
+  private confirmedLeases = new Map<string, { serveUntil: number; generation: number }>();
   private startPromise: Promise<void> | null = null;
   private started = false;
 
@@ -592,7 +593,7 @@ class RedisRoomRegistry implements RoomRegistry {
 
   async close(): Promise<void> {
     this.startPromise = null;
-    this.confirmedLeaseServeUntil.clear();
+    this.confirmedLeases.clear();
     if (!this.started) {
       await this.localFallback.close();
       return;
@@ -732,10 +733,7 @@ class RedisRoomRegistry implements RoomRegistry {
       if (
         confirmedOwner &&
         confirmedOwner.generation !== undefined &&
-        hasUsableLeaseDeadline(
-          this.confirmedLeaseServeUntil.get(input.channelId),
-          performance.now(),
-        )
+        this.holdsLease(input.channelId, confirmedOwner.generation)
       ) {
         return {
           ok: true,
@@ -749,7 +747,7 @@ class RedisRoomRegistry implements RoomRegistry {
   }
 
   async releaseRoom(channelId: string): Promise<void> {
-    this.confirmedLeaseServeUntil.delete(channelId);
+    this.confirmedLeases.delete(channelId);
     await this.localFallback.releaseRoom(channelId);
     try {
       await this.start();
@@ -770,8 +768,12 @@ class RedisRoomRegistry implements RoomRegistry {
     );
   }
 
-  holdsLease(channelId: string): boolean {
-    return hasUsableLeaseDeadline(this.confirmedLeaseServeUntil.get(channelId), performance.now());
+  holdsLease(channelId: string, generation?: number): boolean {
+    const lease = this.confirmedLeases.get(channelId);
+    return (
+      hasUsableLeaseDeadline(lease?.serveUntil, performance.now()) &&
+      (generation === undefined || lease?.generation === generation)
+    );
   }
 
   private async claimOrRenew(input: {
@@ -795,10 +797,10 @@ class RedisRoomRegistry implements RoomRegistry {
     const ownership = parseClaimResult(result);
     if (ownership.ok) {
       this.localFallback.rememberOwner(ownership.owner);
-      this.confirmedLeaseServeUntil.set(
-        input.channelId,
-        attemptStartedAt + this.ttlMs - this.leaseSafetyMarginMs,
-      );
+      this.confirmedLeases.set(input.channelId, {
+        serveUntil: attemptStartedAt + this.ttlMs - this.leaseSafetyMarginMs,
+        generation: ownership.generation,
+      });
     }
     return ownership;
   }
