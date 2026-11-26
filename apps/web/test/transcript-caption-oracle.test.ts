@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { TranscriptSegment } from "@conclave/meeting-core/transcript-types";
 import { QUEUED_MARKER_BYTES } from "../transcript-worker/src/audio-store";
 import {
+  SARVAM_HUM_MS,
   SARVAM_MAX_LANES,
+  SARVAM_WINDOW_QUIET_MS,
   TRANSCRIPTION_GAP_MARKER as GAP,
   TRANSCRIPTION_LINE_DEADLINE_MS as DEADLINE,
 } from "../transcript-worker/src/constants";
@@ -46,6 +48,8 @@ const BURST_LIMIT_CHUNKS = 24;
 const LOOKBACK_MS = 1_500;
 const VAD_PAUSE_MS = 500;
 const RELAY_TURN_END_MS = 1_200;
+const HELD_AUDIO_WAIT_LIMIT_MS = 12_000;
+const QUIET_TURN_END_MS = 3_500;
 const SAVE_FAILURE = "Snapshot write failed (injected).";
 const LANGUAGES = ["ta", "hi", "bn"];
 const MALFORMED = ["%%%%", "@@@@AAAA", "A", "====", "AB=C", "\u0000\u0001"];
@@ -151,6 +155,15 @@ const suiteCounters = {
   outageStorms: 0,
   leaves: 0,
   speakersWaitingForALane: 0,
+  switchesMidTurn: 0,
+  quietAnswersAfterTheirTurn: 0,
+  slowSarvamAnswers: 0,
+  emptyAnswers: 0,
+  outOfOrderSaves: 0,
+  whisperCaptions: 0,
+  turnsAfterAQuietEnd: 0,
+  hums: 0,
+  humHeldBack: 0,
 };
 
 type Mode = { burst?: boolean; pauses?: boolean; crowd?: boolean };
@@ -174,14 +187,31 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
   const pausedPayloads = new Set<string>();
   const startedPromptly = new Set<number>();
   const answeredLive = new Set<number>();
+  const answeredOn = new Map<number, Set<number>>();
+  const emptyOn = new Map<number, number>();
   const committedLive = new Set<number>();
   const used = new Map<Kind, number>(KINDS.map((kind) => [kind, 0]));
-  const timeline: { at: number; speaker: string; who: string; uid: number; heard: boolean }[] = [];
+  const timeline: { at: number; speaker: string; who: string; uid: number; heard: boolean; event: number }[] = [];
   const lastHeardAt = new Map<string, number>();
+  const turnEnds = new Map<string, number[]>();
+  const sentAs = new Map<string, number>();
+  const lastChunkAt = new Map<string, number>();
+  const lastChunkEvent = new Map<string, number>();
+  const reached = new Set<string>();
+  const reachedAt = new Map<string, number>();
+  const quietRuns = new Map<string, { first: string; lastAt: number }>();
+  const quietRunOf = new Map<string, string>();
+  const heldBack = new Set<string>();
+  const lastCarriedOn = new Map<number, number>();
+  const answeredAfterClose = new Map<number, number>();
+  const sarvamSpoke = new Map<string, { at: number; epoch: number | null }[]>();
+  const sentBy = new Map<string, string[]>();
+  let driverEvents = 0;
   let pauseEpoch = 0;
 
   const fakes = new Map<FakeProviderSocket, { receive(message: Record<string, unknown>): void }>();
   const wireTurns = new Map<FakeProviderSocket, { epoch: number | null; bounded: boolean }>();
+  const wireSources = new Map<FakeProviderSocket, { who: string | null; flushed: boolean }>();
   const statusOf = () => {
     const messages = rig?.sentMessages() ?? [];
     for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -195,9 +225,11 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
     socket: FakeProviderSocket,
     event: object,
     onEmit?: (open: boolean) => void,
+    onClosed?: () => void,
   ) => {
     setTimeout(() => {
       const open = !socket.closed;
+      if (!open) onClosed?.();
       if (!open && random() >= 0.3) return;
       if (!open) suiteCounters.closedSocketEvents += 1;
       onEmit?.(open);
@@ -281,20 +313,38 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
     let lastSignalAt = 0;
     let answers = 0;
     let stalled = false;
-    const close = () => {
+    const live = { starts: 0, answers: 0, speaking: false };
+    const carried = new Set<string>();
+    let epoch: number | null = null;
+    const spoke = () => {
+      for (const run of carried) sarvamSpoke.set(run, [...(sarvamSpoke.get(run) ?? []), { at: Date.now(), epoch }]);
+    };
+    const startSignal = (at: number, onEmit?: (open: boolean) => void) =>
+      emitAt(at, socket, { type: "events", data: { signal_type: "START_SPEECH" } }, (open) => {
+        if (open && !live.speaking) live.starts += 1;
+        if (open) live.speaking = true;
+        if (open) spoke();
+        onEmit?.(open);
+      });
+    const endSignal = (at: number) =>
+      emitAt(at, socket, { type: "events", data: { signal_type: "END_SPEECH" } }, (open) => {
+        if (open) live.speaking = false;
+        if (open) spoke();
+      });
+    const close = (atFlush = false) => {
       const closing = current;
       if (!closing) return;
       current = null;
       const now = Date.now();
       if (closing.lateStart) {
-        closing.startAt = Math.max(now + 500 + random() * 4_500, lastSignalAt + 1);
+        closing.startAt = Math.max(now + (random() < 0.7 ? 500 + random() * 4_500 : 5_000 + random() * 25_000), lastSignalAt + 1);
         lastSignalAt = closing.startAt;
         suiteCounters.lateStarts += 1;
-        emitAt(closing.startAt, socket, { type: "events", data: { signal_type: "START_SPEECH" } });
+        startSignal(closing.startAt);
       }
-      if (sarvamSignals && random() < 0.9) {
+      if (sarvamSignals && (!atFlush || random() < 0.9)) {
         lastSignalAt = Math.max(now + 20 + random() * 200, closing.startAt + 1, lastSignalAt + 1);
-        emitAt(lastSignalAt, socket, { type: "events", data: { signal_type: "END_SPEECH" } });
+        endSignal(lastSignalAt);
       }
       if (stalled) return;
       const roll = random();
@@ -304,19 +354,43 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
         return;
       }
       const late = roll < 0.1;
+      const slow = !late && roll < 0.25;
+      if (slow) suiteCounters.slowSarvamAnswers += 1;
       const at = Math.max(
-        now + (late ? DEADLINE + 1_000 + random() * 34_000 : 150 + random() * 2_300),
+        now + (late ? DEADLINE + 1_000 + random() * 34_000 : slow ? 2_500 + random() * 22_500 : 150 + random() * 2_300),
         lastAnswerAt + 1,
         closing.startAt + 2,
       );
       lastAnswerAt = at;
-      const transcript = closing.falseStart ? "" : Array.from(new Set(closing.tags.map(tokenOf))).join(" ");
+      const empty = !closing.falseStart && random() < 0.03;
+      const transcript = closing.falseStart || empty ? "" : Array.from(new Set(closing.tags.map(tokenOf))).join(" ");
       const requestId = random() < 0.1 ? null : `r${socket.requestIndex}-${(answers += 1)}`;
       const answer = { type: "data", data: { transcript, ...(requestId ? { request_id: requestId } : {}) } };
+      const afterClose = () => {
+        if (live.answers < 1 || live.starts > live.answers) return;
+        for (const { uid } of closing.utterances) answeredAfterClose.set(uid, socket.requestIndex);
+      };
       emitAt(at, socket, answer, (open) => {
+        if (open) {
+          live.answers += 1;
+          live.speaking = false;
+          if (transcript) spoke();
+        }
         if (late) suiteCounters.lateSarvamAnswers += 1;
-        if (open && transcript) for (const { uid } of closing.utterances) answeredLive.add(uid);
-      });
+        if (open && empty) {
+          suiteCounters.emptyAnswers += 1;
+          for (const { uid } of closing.utterances) emptyOn.set(uid, socket.requestIndex);
+        }
+        if (open && transcript) {
+          for (const { uid } of closing.utterances) {
+            answeredLive.add(uid);
+            answeredOn.set(uid, (answeredOn.get(uid) ?? new Set()).add(socket.requestIndex));
+          }
+        }
+        if (open && transcript && closing.lateStart && closing.utterances.some((each) => !each.heard)) {
+          suiteCounters.quietAnswersAfterTheirTurn += 1;
+        }
+      }, afterClose);
       if (requestId && random() < 0.04) emitAt(at, socket, answer);
     };
     const open = (tag: Tag, falseStart: boolean) => {
@@ -338,14 +412,14 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
       };
       current = opened;
       if (!sarvamSignals || lateStart) return;
-      emitAt(now + delay, socket, { type: "events", data: { signal_type: "START_SPEECH" } }, (live) => {
-        if (live && delay <= LOOKBACK_MS - 100) for (const { uid } of opened.utterances) startedPromptly.add(uid);
+      startSignal(now + delay, (open) => {
+        if (open && delay <= LOOKBACK_MS - 100) for (const { uid } of opened.utterances) startedPromptly.add(uid);
       });
       if (random() < 0.04) {
         const again = now + delay + 200 + random() * 3_500;
         lastSignalAt = Math.max(lastSignalAt, again);
         suiteCounters.repeatedStarts += 1;
-        emitAt(again, socket, { type: "events", data: { signal_type: "START_SPEECH" } });
+        startSignal(again);
       }
     };
     return {
@@ -354,6 +428,10 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
         if (typeof data === "string" && data) {
           const tag = tag16.get(data);
           if (!tag) return;
+          lastCarriedOn.set(tag.utterance.uid, socket.requestIndex);
+          const run = quietRunOf.get(`${tag.utterance.uid}.${tag.chunk}`);
+          if (run) carried.add(run);
+          epoch ??= internals.liveConnection?.epoch ?? null;
           if (SPOKEN.has(tag.utterance.kind)) {
             const now = Date.now();
             if (current && !current.falseStart && current.speaker === tag.utterance.speaker.userId && now - current.heardAt < VAD_PAUSE_MS) {
@@ -373,7 +451,7 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
           }
           return;
         }
-        if (message.type === "flush" || message.type === "end_of_stream") close();
+        if (message.type === "flush" || message.type === "end_of_stream") close(true);
       },
     };
   };
@@ -390,6 +468,10 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
     if (tag && pausedPayloads.has(audio)) report(`U${tag.utterance.uid} was sent while paused yet reached a provider`);
     trace(`wire r${socket.requestIndex} ${tag ? `U${tag.utterance.uid}:${tag.utterance.speaker.userId}#${tag.chunk}` : String(message.type ?? (audio ? "unknown audio" : "?"))}`);
     const turn = wireTurns.get(socket) ?? { epoch: null, bounded: true };
+    if (rig) noteWhatBlocksSending();
+    const quietRunOnWire = tag ? quietRunOf.get(`${tag.utterance.uid}.${tag.chunk}`) : undefined;
+    if (quietRunOnWire !== undefined && !reachedAt.has(quietRunOnWire)) reachedAt.set(quietRunOnWire, Date.now());
+    if (tag) reached.add(`${tag.utterance.uid}.${tag.chunk}`);
     if (tag) {
       if (turn.epoch !== null && turn.epoch !== tag.utterance.pauseEpoch && !turn.bounded) {
         report(`U${tag.utterance.uid} joined pre-pause audio in one provider turn on request ${socket.requestIndex}`);
@@ -400,6 +482,20 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
       turn.bounded = true;
     }
     wireTurns.set(socket, turn);
+    if (!openaiSocket(socket)) {
+      const carried = wireSources.get(socket) ?? { who: null, flushed: false };
+      wireSources.set(socket, carried);
+      if (tag) {
+        const who = keyOf(tag.utterance.speaker);
+        if (carried.who !== null && carried.who !== who) {
+          report(`request ${socket.requestIndex} carried audio of ${carried.who} and of ${who}`);
+        }
+        if (carried.flushed) report(`request ${socket.requestIndex} took U${tag.utterance.uid} after its turn had ended`);
+        carried.who = who;
+      } else if (message.type === "flush") {
+        carried.flushed = true;
+      }
+    }
     let fake = fakes.get(socket);
     if (!fake) {
       fake = openaiSocket(socket) ? fakeOpenAi(socket) : fakeSarvam(socket);
@@ -408,6 +504,23 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
     fake.receive(message);
   };
   const openaiSocket = (socket: FakeProviderSocket) => /\/v1\/realtime/.test(socket.url);
+  const openSarvamSockets = () => rig.providerSockets().filter((socket) => !socket.closed && !openaiSocket(socket)).length;
+  const whoOf = (speaker: Speaker) => `${speaker.userId}:${speaker.source ?? "mixed"}`;
+  let scannedForRefusals = 0;
+  let refusals = 0;
+  const refusedSoFar = () => {
+    const messages = rig.sentMessages();
+    for (; scannedForRefusals < messages.length; scannedForRefusals += 1) {
+      if (messages[scannedForRefusals].type === "error") refusals += 1;
+    }
+    return refusals;
+  };
+  const endTurnOf = async (who: Speaker, stage: string, how: "clear" | "commit and clear" = "clear") => {
+    const refusedBefore = refusedSoFar();
+    await tolerate(() => (how === "clear" ? rig.clear(who) : rig.endTurn(who)), stage);
+    if (refusedSoFar() !== refusedBefore) return;
+    turnEnds.set(whoOf(who), [...(turnEnds.get(whoOf(who)) ?? []), (driverEvents += 1)]);
+  };
 
   const rig = await transcriptRoomRig(
     lookup,
@@ -430,8 +543,7 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
   type Internals = {
     audio: Store;
     ledger: { get(id: string): { state: string; epoch: number | null } | undefined };
-    liveConnection: { epoch: number; session: { lanes?: Map<string, unknown> } } | null;
-    providerDrains: Map<number, { session: { lanes?: Map<string, unknown> } }>;
+    liveConnection: { epoch: number } | null;
   };
   const internals = rig.room as unknown as Internals;
   const enforce = internals.audio.enforceBudget.bind(internals.audio);
@@ -448,7 +560,7 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
     return evicted;
   };
 
-  const saveMode = { delayMs: 0, fail: false, failOnce: false };
+  const saveMode = { delayMs: 0, fail: false, failOnce: false, jitter: false };
   let savesInFlight = 0;
   let lastSaveFailed = false;
   {
@@ -457,32 +569,40 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
     }).state.storage;
     const put = storage.put.bind(storage);
     const remove = storage.delete.bind(storage);
-    let writes: Promise<unknown> = Promise.resolve();
+    let called = 0;
+    let settledUpTo = 0;
+    const settleAfter = (delayMs: number) => {
+      const wait = delayMs > 0 ? delayMs * (0.5 + random()) : saveMode.jitter && random() < 0.3 ? random() * 40 : 0;
+      return wait > 0 ? new Promise((resolve) => setTimeout(resolve, wait)) : Promise.resolve();
+    };
+    const track = (order: number) => {
+      if (order < settledUpTo) suiteCounters.outOfOrderSaves += 1;
+      settledUpTo = Math.max(settledUpTo, order);
+    };
     storage.delete = (key) => {
-      const done = writes.then(() => remove(key));
-      writes = done.catch(() => undefined);
-      return done;
+      const order = (called += 1);
+      const done = remove(key);
+      return settleAfter(saveMode.delayMs).then(() => {
+        track(order);
+        return done;
+      });
     };
     storage.put = (key, value) => {
-      const { delayMs } = saveMode;
+      const order = (called += 1);
       const fail = saveMode.fail || saveMode.failOnce;
       saveMode.failOnce = false;
       savesInFlight += 1;
-      const write = writes.then(async () => {
+      lastSaveFailed = fail;
+      const stored = fail ? null : put(key, structuredClone(value));
+      return settleAfter(saveMode.delayMs).then(async () => {
         try {
-          if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+          track(order);
           if (fail) throw new Error(SAVE_FAILURE);
-          await put(key, value);
-          lastSaveFailed = false;
-        } catch (error) {
-          lastSaveFailed = true;
-          throw error;
+          await stored;
         } finally {
           savesInFlight -= 1;
         }
       });
-      writes = write.catch(() => undefined);
-      return write;
     };
   }
 
@@ -582,6 +702,83 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
     }
   };
 
+  const checkTurns = (stage: string, lines: Line[]) => {
+    for (const line of lines) {
+      const sent = tokensOf(line.text)
+        .map(({ uid, chunk }) => sentAs.get(`${uid}.${chunk}`))
+        .filter((event): event is number => event !== undefined);
+      if (sent.length === 0) continue;
+      const first = Math.min(...sent);
+      const last = Math.max(...sent);
+      const ends = turnEnds.get(sourceOf(line)) ?? [];
+      const crossesATurnEnd = (from: number, to: number) => ends.some((end) => end > from && end < to);
+      if (crossesATurnEnd(first, last)) {
+        report(`${stage}: one line under ${line.speakerUserId} joins speech from before and after that speaker's turn ended`);
+      }
+      if (openai) continue;
+      const starts = timeline.filter(({ at, who }) => at === line.startMs && who === sourceOf(line));
+      if (starts.length > 0 && starts.every(({ event }) => crossesATurnEnd(Math.min(event, first), Math.max(event, last)))) {
+        report(`${stage}: the line showing U${tokensOf(line.text)[0].uid} starts in another turn of ${line.speakerUserId} than the speech it shows`);
+      }
+    }
+  };
+
+  const waitingSince = new Map<number, number>();
+  let blockedAt = 0;
+  const noteWhatBlocksSending = () => {
+    const couldSend =
+      statusOf() === "live" &&
+      internals.liveConnection !== null &&
+      rig.openingProviderSockets() === 0 &&
+      (openai || openSarvamSockets() < SARVAM_MAX_LANES);
+    if (!couldSend) blockedAt = Date.now();
+    return couldSend;
+  };
+  const checkHeldAudio = (stage: string) => {
+    if (!noteWhatBlocksSending()) {
+      waitingSince.clear();
+      return;
+    }
+    const now = Date.now();
+    const freeSince = Math.max(blockedAt, rig.lastOpeningSettledAt());
+    const queued = new Set(internals.audio.all().filter(({ owner }) => owner.kind === "queued").map(({ sequence }) => sequence));
+    for (const sequence of Array.from(waitingSince.keys())) if (!queued.has(sequence)) waitingSince.delete(sequence);
+    for (const sequence of queued) {
+      const since = Math.max(waitingSince.get(sequence) ?? now, freeSince);
+      waitingSince.set(sequence, since);
+      if (now - since > HELD_AUDIO_WAIT_LIMIT_MS) {
+        report(`${stage}: audio #${sequence} waited ${now - since} ms in the room while a connection could take it`);
+        waitingSince.delete(sequence);
+      }
+    }
+  };
+
+  const checkHeldBack = (stage: string) => {
+    for (const chunk of internals.audio.all()) {
+      const tag = chunk.sentAt === null ? undefined : tag24.get(chunk.audio);
+      if (!tag) continue;
+      const key = `${tag.utterance.uid}.${tag.chunk}`;
+      if (reached.has(key) || heldBack.has(key)) continue;
+      heldBack.add(key);
+      const decidedAt = chunk.sentAt ?? Date.now();
+      const run = quietRunOf.get(key);
+      const quiet = decidedAt - (run === undefined ? decidedAt : (reachedAt.get(run) ?? decidedAt));
+      const order = sentBy.get(whoOf(tag.utterance.speaker)) ?? [];
+      const before = order[order.indexOf(key) - 1];
+      const firstHeldBack = before === undefined || reached.has(before);
+      const heardInThisAudio = (run === undefined ? [] : (sarvamSpoke.get(run) ?? [])).find(
+        ({ at, epoch }) => epoch === (internals.liveConnection?.epoch ?? null) && at > decidedAt - SARVAM_HUM_MS && at <= decidedAt,
+      )?.at;
+      if (openai || quiet < SARVAM_HUM_MS) {
+        report(`${stage}: the room held U${key} back from its provider after only ${quiet} ms of quiet audio`);
+      } else if (firstHeldBack && heardInThisAudio !== undefined) {
+        report(`${stage}: the room held U${key} back as hum ${decidedAt - heardInThisAudio} ms after Sarvam heard speech in that audio`);
+      } else {
+        suiteCounters.humHeldBack += 1;
+      }
+    }
+  };
+
   const checkStore = (stage: string) => {
     const store = internals.audio;
     const chunks = store.all();
@@ -602,14 +799,11 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
     for (const [key, { boundaries }] of held) {
       if (boundaries > queuedChunks + 1) report(`${stage}: ${key} has ${boundaries} turn boundaries held around ${queuedChunks} queued chunks`);
     }
-    for (const session of [internals.liveConnection?.session, ...Array.from(internals.providerDrains.values(), (drain) => drain.session)]) {
-      const lanes = session?.lanes?.size ?? 0;
-      if (lanes > SARVAM_MAX_LANES) report(`${stage}: one Sarvam session holds ${lanes} lanes, over the cap of ${SARVAM_MAX_LANES}`);
+    const sarvamSockets = openai ? 0 : openSarvamSockets() + rig.openingProviderSockets();
+    if (sarvamSockets > SARVAM_MAX_LANES) {
+      report(`${stage}: the room holds ${sarvamSockets} Sarvam sockets, open or opening, over the cap of ${SARVAM_MAX_LANES}`);
     }
-    const lanes = internals.liveConnection?.session.lanes;
-    if (lanes?.size === SARVAM_MAX_LANES && Array.from(held.keys()).some((key) => !lanes.has(key) && (held.get(key)?.chunks ?? 0) > 0)) {
-      suiteCounters.speakersWaitingForALane += 1;
-    }
+    if (sarvamSockets === SARVAM_MAX_LANES && queuedChunks > 0) suiteCounters.speakersWaitingForALane += 1;
     const live = internals.liveConnection?.epoch ?? null;
     for (const chunk of chunks) {
       if (chunk.owner.kind === "queued" && chunk.sentAt !== null) report(`${stage}: a queued chunk was already sent`);
@@ -638,7 +832,10 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
     checkSpeakers(stage, lines, "viewers");
     checkOrder(stage, lines.filter(({ text }) => text !== GAP), "viewers");
     checkStarts(stage, lines);
+    checkTurns(stage, lines);
     checkStore(stage);
+    checkHeldAudio(stage);
+    checkHeldBack(stage);
   };
 
   const describeLine = ({ itemId, text, speakerUserId, sequence, startMs }: Line) =>
@@ -664,18 +861,35 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
       if (status === "paused") pausedPayloads.add(pool.wire24[index]);
     }
     utterance.arrivals.push(Date.now());
+    sentAs.set(`${utterance.uid}.${tag.chunk}`, (driverEvents += 1));
+    const who = whoOf(utterance.speaker);
+    const before = lastChunkAt.get(who);
+    if (before !== undefined && Date.now() - before > QUIET_TURN_END_MS && (turnEnds.get(who)?.at(-1) ?? 0) < (lastChunkEvent.get(who) ?? 0)) {
+      suiteCounters.turnsAfterAQuietEnd += 1;
+    }
+    lastChunkAt.set(who, Date.now());
+    lastChunkEvent.set(who, driverEvents);
+    const chunkKey = `${utterance.uid}.${tag.chunk}`;
+    if (!pool.heard[index]) {
+      const quietRun = quietRuns.get(who);
+      if (!quietRun || Date.now() - quietRun.lastAt > SARVAM_WINDOW_QUIET_MS) quietRuns.set(who, { first: chunkKey, lastAt: Date.now() });
+      else quietRun.lastAt = Date.now();
+      quietRunOf.set(chunkKey, quietRuns.get(who)!.first);
+    }
+    sentBy.set(who, [...(sentBy.get(who) ?? []), chunkKey]);
     if (pool.heard[index]) utterance.heard = true;
     trace(`send U${utterance.uid}:${utterance.speaker.userId} ${utterance.kind}#${tag.chunk} status=${status}`);
     const heardBefore = lastHeardAt.get(keyOf(utterance.speaker));
     const audible = pool.heard[index] || (heardBefore !== undefined && Date.now() - heardBefore <= VOICE_HANGOVER_MS);
     if (pool.heard[index]) lastHeardAt.set(keyOf(utterance.speaker), Date.now());
-    if (utterance.accepted) {
-      timeline.push({ at: Date.now(), speaker: utterance.speaker.userId, who: `${utterance.speaker.userId}:${utterance.speaker.source ?? "mixed"}`, uid: utterance.uid, heard: audible });
+    if (status === "live" || status === "starting") {
+      timeline.push({ at: Date.now(), speaker: utterance.speaker.userId, who, uid: utterance.uid, heard: audible, event: driverEvents });
     }
     await tolerate(
       () => rig.send({ type: "audio.chunk", audio: pool.wire24[index], speaker: utterance.speaker }),
       `U${utterance.uid}`,
     );
+    if (pool.heard[index] && reached.has(chunkKey)) quietRuns.delete(who);
     return true;
   };
 
@@ -693,7 +907,7 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
       const lastAt = turnOpen.get(keyOf(other));
       if (other === speaker || lastAt === undefined || Date.now() - lastAt < RELAY_TURN_END_MS) continue;
       turnOpen.delete(keyOf(other));
-      await tolerate(() => rig.clear(other), `step ${step} relay turn end for ${other.userId}`);
+      await endTurnOf(other, `step ${step} relay turn end for ${other.userId}`);
     }
     if (previous !== speaker) trace(`driver speaker ${speaker.userId}`);
     const kindRoll = random();
@@ -710,8 +924,16 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
         if (other !== speaker) {
           suiteCounters.interleavedClears += 1;
           trace(`driver clear ${keyOf(other)} inside U${utterance.uid}`);
-          await tolerate(() => rig.clear(other), `step ${step} interleaved clear`);
+          await endTurnOf(other, `step ${step} interleaved clear`);
         }
+      }
+      if (chunk + 1 < count && random() < 0.03) {
+        suiteCounters.switchesMidTurn += 1;
+        const language = LANGUAGES[Math.floor(random() * LANGUAGES.length)];
+        trace(`driver switch ${language} inside U${utterance.uid}`);
+        if (paused) suiteCounters.takeoversWhilePaused += 1;
+        switches.push(tolerate(() => rig.switchTo(language), `step ${step} switch inside a turn`));
+        paused = false;
       }
       const gap = random();
       await vi.advanceTimersByTimeAsync(mode.burst ? 0 : gap < 0.4 ? 0 : gap < 0.8 ? 20 : 120 + Math.floor(random() * 330));
@@ -721,16 +943,33 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
     trace(`driver end ${end < 0.55 ? "turn" : end < 0.65 ? "clear" : end < 0.7 ? "commit" : "none"}`);
     if (end < 0.55) {
       turnOpen.delete(keyOf(speaker));
-      await tolerate(() => rig.endTurn(speaker), `step ${step} turn end`);
+      await endTurnOf(speaker, `step ${step} turn end`, "commit and clear");
     } else if (end < 0.65) {
       suiteCounters.clearsWithoutCommit += 1;
       turnOpen.delete(keyOf(speaker));
-      await tolerate(() => rig.clear(speaker), `step ${step} clear`);
+      await endTurnOf(speaker, `step ${step} clear`);
     } else {
       turnOpen.set(keyOf(speaker), Date.now());
       if (end < 0.7) await tolerate(() => rig.commit(speaker), `step ${step} commit`);
     }
     await vi.advanceTimersByTimeAsync(Math.floor(random() * 800));
+  };
+
+  const hum = async (step: number) => {
+    const who = active[Math.floor(random() * active.length)];
+    const kindRoll = random();
+    const kind: Kind = kindRoll < 0.4 ? "whisper" : kindRoll < 0.7 ? "noise" : "silence";
+    const utterance: Utterance = { uid: utterances.length, speaker: who, kind, arrivals: [], heard: false, accepted: true, pauseEpoch };
+    utterances.push(utterance);
+    suiteCounters.hums += 1;
+    trace(`driver hum ${who.userId} ${kind}`);
+    const count = 45 + Math.floor(random() * 30);
+    for (let chunk = 0; chunk < count; chunk += 1) {
+      if (!(await sendChunk(utterance))) break;
+      await vi.advanceTimersByTimeAsync(180 + Math.floor(random() * 120));
+      if (chunk % 10 === 9) check(`step ${step} hum ${chunk}`);
+    }
+    turnOpen.set(keyOf(who), Date.now());
   };
 
   const togglePause = async (step: number) => {
@@ -756,7 +995,7 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
     suiteCounters.leaves += 1;
     active = active.filter((each) => each !== leaving);
     turnOpen.delete(keyOf(leaving));
-    await tolerate(() => rig.clear(leaving), `step ${step} leave`);
+    await endTurnOf(leaving, `step ${step} leave`);
   };
 
   const outageStorm = async (step: number) => {
@@ -769,7 +1008,8 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
     const messages = 20 + Math.floor(random() * 60);
     for (let index = 0; index < messages; index += 1) {
       const who = pool[Math.floor(random() * pool.length)];
-      await tolerate(() => (random() < 0.5 ? rig.commit(who) : rig.clear(who)), `step ${step} storm`);
+      if (random() < 0.5) await tolerate(() => rig.commit(who), `step ${step} storm`);
+      else await endTurnOf(who, `step ${step} storm`);
       if (random() < 0.1) {
         const utterance: Utterance = { uid: utterances.length, speaker: who, kind: "speech", arrivals: [], heard: false, accepted: true, pauseEpoch };
         utterances.push(utterance);
@@ -794,6 +1034,7 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
   };
 
   await rig.start(openai ? "en" : "hi");
+  saveMode.jitter = true;
 
   for (let step = 0; step < STEPS; step += 1) {
     const roll = random();
@@ -823,7 +1064,9 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
       await vi.advanceTimersByTimeAsync(5_000 + Math.floor(random() * 35_000));
     } else if (roll < pauseChance + 0.29) {
       await outageStorm(step);
-    } else if (mode.crowd && roll < pauseChance + 0.32) {
+    } else if (roll < pauseChance + 0.305) {
+      await hum(step);
+    } else if (mode.crowd && roll < pauseChance + 0.335) {
       await leave(step);
     } else {
       await speakUtterance(step);
@@ -835,6 +1078,7 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
 
   saveMode.delayMs = 0;
   saveMode.fail = false;
+  saveMode.jitter = false;
   let switchesSettled = false;
   void Promise.all(switches).then(() => {
     switchesSettled = true;
@@ -850,12 +1094,11 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
     await togglePause(STEPS + round);
     if (statusOf() === "paused") await vi.advanceTimersByTimeAsync(61_000);
   }
-  await tolerate(() => rig.endTurn(speaker), "final turn end");
+  await endTurnOf(speaker, "final turn end", "commit and clear");
   for (let round = 0; round < 4; round += 1) await vi.advanceTimersByTimeAsync(DEADLINE + 20_000);
   for (let round = 0; round < 60 && savesInFlight > 0; round += 1) await vi.advanceTimersByTimeAsync(500);
   check("end");
-  const idleLanes = internals.liveConnection?.session.lanes?.size ?? 0;
-  if (!openai && idleLanes > 0) report(`after a long silence the Sarvam session still holds ${idleLanes} open lanes`);
+  if (!openai && openSarvamSockets() > 0) report(`after a long silence the room still holds ${openSarvamSockets()} open Sarvam sockets`);
 
   const lines = viewerLines();
   checkChunksOnce("end", lines);
@@ -887,6 +1130,13 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
       report(`a gap under ${gap.speakerUserId} at ${gap.startMs} covers no speech our check heard`);
     }
   }
+  if (!openai) {
+    for (const utterance of utterances) {
+      if (!utterance.heard && shownWith.has(utterance.uid)) suiteCounters.whisperCaptions += 1;
+      if (!SPOKEN.has(utterance.kind) || !answeredLive.has(utterance.uid) || shownWith.has(utterance.uid)) continue;
+      report(`U${utterance.uid} (${utterance.speaker.userId}, ${utterance.kind}) was answered on an open connection but its words never showed`);
+    }
+  }
   if (!mode.burst) {
     for (const utterance of utterances) {
       if (!utterance.heard || !SPOKEN.has(utterance.kind) || !utterance.accepted || utterance.arrivals.length === 0) continue;
@@ -894,9 +1144,14 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
         ? committedLive.has(utterance.uid)
         : startedPromptly.has(utterance.uid) || answeredLive.has(utterance.uid);
       if (!told) continue;
+      const emptyAnswerOn = emptyOn.get(utterance.uid);
       const shown =
         shownWith.has(utterance.uid) ||
-        gapRuns.some(({ gap, run }) => gap.speakerUserId === utterance.speaker.userId && run.some(({ uid }) => uid === utterance.uid));
+        gapRuns.some(({ gap, run }) => gap.speakerUserId === utterance.speaker.userId && run.some(({ uid }) => uid === utterance.uid)) ||
+        (emptyAnswerOn !== undefined &&
+          utterances.some((other) => answeredOn.get(other.uid)?.has(emptyAnswerOn) && shownWith.has(other.uid)));
+      const closedOn = answeredAfterClose.get(utterance.uid);
+      if (!shown && closedOn !== undefined && closedOn === lastCarriedOn.get(utterance.uid)) continue;
       if (!shown) report(`U${utterance.uid} (${utterance.speaker.userId}, ${utterance.kind}) was heard and sent but shows neither words nor a gap`);
     }
   }
@@ -918,6 +1173,9 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
           break;
         }
       }
+      const shownNow = new Map(viewerLines().map((line) => [line.itemId, line.text]));
+      const stale = kept.find((line) => line.text.trim() !== "" && shownNow.get(line.itemId) !== line.text);
+      if (stale) report(`${where} holds "${stale.text}" under ${stale.speakerUserId}, which viewers do not see`);
       checkSpeakers("after a restart", kept, where);
     }
   }
