@@ -88,6 +88,7 @@ export class FakeTransport extends Emitter {
     bytesSent: number;
     sfuPackets: number;
     reportAt: number | null;
+    closeWithTransport: () => void;
   }> = [];
 
   constructor(
@@ -206,6 +207,7 @@ export class FakeTransport extends Emitter {
     });
     this.hasConsumers = true;
     const mid = String(this.sending.length);
+    const events = new Emitter();
     const producer = {
       id,
       kind: options.track.kind,
@@ -215,8 +217,14 @@ export class FakeTransport extends Emitter {
       appData: options.appData ?? {},
       rtpParameters: { encodings: [{}], mid },
       observer: new Emitter(),
-      on() {},
-      off() {},
+      on(event: string, listener: Listener) {
+        events.on(event, listener);
+        return producer;
+      },
+      off(event: string, listener: Listener) {
+        events.off(event, listener);
+        return producer;
+      },
       pause() {
         producer.paused = true;
       },
@@ -231,7 +239,19 @@ export class FakeTransport extends Emitter {
       setRtpEncodingParameters: async () => {},
       getStats: async () => new Map(),
     };
-    this.sending.push({ producer, mid, packetsSent: 0, bytesSent: 0, sfuPackets: 0, reportAt: null });
+    this.sending.push({
+      producer,
+      mid,
+      packetsSent: 0,
+      bytesSent: 0,
+      sfuPackets: 0,
+      reportAt: null,
+      closeWithTransport: () => {
+        if (producer.closed) return;
+        producer.closed = true;
+        events.emit("transportclose");
+      },
+    });
     return producer;
   }
 
@@ -310,6 +330,7 @@ export class FakeTransport extends Emitter {
     if (this.closed) return;
     this.closed = true;
     this.connectionState = "closed";
+    for (const stream of this.sending) stream.closeWithTransport();
   }
 }
 
@@ -346,6 +367,8 @@ type RemoteProducer = {
 };
 
 type Pending = { resolve: (value: unknown) => void; reject: (error: unknown) => void };
+type LocalKind = "audio" | "video";
+const REPUBLISH_POLL_MS = 250;
 
 export class CallRig {
   api!: SocketApi;
@@ -398,6 +421,10 @@ export class CallRig {
   joinRequests: Array<{ at: number; outcome: string }> = [];
   heldRoutes: Pending[] = [];
   log: string[] = [];
+  republishDelayMs: Record<LocalKind, number> = { audio: 0, video: 0 };
+  private localTracks: Partial<Record<LocalKind, ReturnType<typeof fakeTrack>>> = {};
+  private republishQueued = new Set<LocalKind>();
+  private inCall = false;
   private nextId = 1;
   private remoteProducers: RemoteProducer[];
 
@@ -841,6 +868,42 @@ export class CallRig {
     return transport;
   }
 
+  private requestRepublish(kind: LocalKind) {
+    if (this.republishQueued.has(kind)) return;
+    this.republishQueued.add(kind);
+    const whenRecoveryIsFree = () => {
+      if (!this.inCall) {
+        this.republishQueued.delete(kind);
+        return;
+      }
+      if (this.refs.reconnectInFlightRef.current) {
+        window.setTimeout(whenRecoveryIsFree, REPUBLISH_POLL_MS);
+        return;
+      }
+      window.setTimeout(() => {
+        this.republishQueued.delete(kind);
+        void this.republish(kind);
+      }, this.republishDelayMs[kind]);
+    };
+    whenRecoveryIsFree();
+  }
+
+  private async republish(kind: LocalKind) {
+    const ref = kind === "audio" ? this.refs.audioProducerRef : this.refs.videoProducerRef;
+    const track = this.localTracks[kind];
+    if (!this.inCall || !track || (ref.current && !ref.current.closed)) return;
+    if (!(await this.api.ensureProducerTransport())) return;
+    const transport = this.send;
+    if (!transport || transport.closed) return;
+    const producer = await transport.produce({ track, appData: { type: "webcam" } });
+    ref.current = producer as unknown as typeof ref.current;
+    producer.on("transportclose", () => {
+      if ((ref.current as unknown) !== producer) return;
+      ref.current = null;
+      this.requestRepublish(kind);
+    });
+  }
+
   pauseRemoteProducers(paused: boolean) {
     for (const producer of this.remoteProducers) {
       producer.paused = paused;
@@ -920,6 +983,7 @@ export class CallRig {
     const microphone = fakeTrack("audio");
     const camera = fakeTrack("video");
     const videoTracks = this.camera ? [camera] : [];
+    this.localTracks = this.publish ? { audio: microphone, ...(this.camera ? { video: camera } : {}) } : {};
     const stream = this.publish
       ? {
           id: "local-stream",
@@ -951,6 +1015,8 @@ export class CallRig {
       mediaQualitySettingsRef: { current: {} },
       updateVideoQualityRef: { current: async () => {} },
       requestMediaPermissions: async () => null,
+      requestAudioProducerRecovery: () => this.requestRepublish("audio"),
+      requestCameraProducerRecovery: () => this.requestRepublish("video"),
       setMeetError: (error: { code?: string } | null) => {
         this.meetErrors.push(error);
       },
@@ -996,6 +1062,7 @@ export class CallRig {
 
   async join() {
     let joined = false;
+    this.inCall = true;
     await act(async () => {
       void this.api.joinRoomById(ROOM).then(() => {
         joined = true;
@@ -1036,6 +1103,7 @@ export class CallRig {
   }
 
   async leave() {
+    this.inCall = false;
     await act(async () => {
       this.api.cleanup();
     });
@@ -1059,6 +1127,7 @@ export class CallRig {
   }
 
   async unmount() {
+    this.inCall = false;
     await act(async () => {
       this.api.cleanup();
       this.root?.unmount();
