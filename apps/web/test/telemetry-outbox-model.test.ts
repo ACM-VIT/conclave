@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { type SimResult, simulate } from "./support/outbox-sim";
-import { THREAD_CASES } from "./support/outbox-sim-cases";
+import { createBatchStore, createOutbox, type OutboxDeps } from "../src/app/lib/telemetry-outbox";
+import { type OutboxModule, type SimResult, simulate } from "./support/outbox-sim";
+import { PARTIAL_HANDOFF, PARTIAL_RETRY, THREAD_CASES } from "./support/outbox-sim-cases";
 
 const RUNS = Number(process.env.OUTBOX_SIM_RUNS ?? 300);
 const FIRST_SEED = Number(process.env.OUTBOX_SIM_FIRST_SEED ?? 1);
@@ -9,9 +10,61 @@ describe("the outbox in a simulated browser", () => {
   it.each(THREAD_CASES.map((thread) => [thread.name, thread] as const))("%s", async (_name, thread) => {
     const result = await simulate(thread.seed, undefined, undefined, thread.scenario);
 
+    for (const [metric, minimum] of Object.entries(thread.covers)) {
+      expect(result[metric as keyof typeof thread.covers], metric).toBeGreaterThanOrEqual(minimum);
+    }
     expect(result.violations).toEqual([]);
     expect(result.delivered + result.refused).toBe(result.events);
     if (thread.posts !== undefined) expect(result.posts).toBe(thread.posts);
+  });
+
+  const standIn = (mutate: (deps: OutboxDeps) => OutboxDeps): OutboxModule => ({
+    createBatchStore,
+    createOutbox: (deps) => createOutbox(mutate(deps)),
+  });
+
+  it("catches an outbox that ignores Retry-After on a partial reply", async () => {
+    const mutant = standIn((deps) => ({
+      ...deps,
+      post: async (...args) => ({ ...(await deps.post(...args)), retryAfter: null }),
+    }));
+    const result = await simulate(4661287478, mutant, undefined, PARTIAL_RETRY);
+    expect(result.violations.map(({ kind }) => kind)).toContain("sent before its Retry-After");
+  });
+
+  it("catches a replay that ignores the stored not-before after a partial reply", async () => {
+    const mutant = standIn((deps) => ({
+      ...deps,
+      store: {
+        ...deps.store,
+        facts: (id) => {
+          const facts = deps.store.facts(id);
+          return facts && { ...facts, notBefore: 0 };
+        },
+      },
+    }));
+    const result = await simulate(4661287478, mutant, undefined, PARTIAL_HANDOFF);
+    expect(result.violations.map(({ kind }) => kind)).toContain("sent before its Retry-After");
+  });
+
+  it("catches an outbox that treats refused writes as successful", async () => {
+    const mutant = standIn((deps) => ({
+      ...deps,
+      store: {
+        ...deps.store,
+        save: (batch) => {
+          deps.store.save(batch);
+          return true;
+        },
+      },
+    }));
+    const result = await simulate(4661287478, mutant, undefined, {
+      ...PARTIAL_RETRY,
+      profile: { ...PARTIAL_RETRY.profile, refuseRate: 1 },
+      actions: [...(PARTIAL_RETRY.actions ?? []), { at: 7000, act: "hide", tab: 1 }],
+    });
+    expect(result.refusedWrites).toBeGreaterThan(0);
+    expect(result.violations.map(({ kind }) => kind)).toContain("work left with no owner");
   });
 
   it(`keeps every invariant over ${RUNS} random runs of 1 to 3 tabs`, async () => {

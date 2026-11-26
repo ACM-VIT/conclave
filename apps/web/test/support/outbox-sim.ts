@@ -36,6 +36,16 @@ export type SimResult = {
   lockRejects: number;
   readFailures: number;
   partials: number;
+  partialRetries: number;
+  postsWhileUnreadable: number;
+  refusedMarks: number;
+  lateWaits: number;
+  shorterLateWaits: number;
+  lateBeaconWaits: number;
+  leaseHandoffs: number;
+  lifecycleDuringConfirmation: number;
+  savedAborts: number;
+  savedRetries: number;
 };
 
 const START = Date.parse("2026-11-23T00:00:00.000Z");
@@ -117,15 +127,17 @@ const profileOf = (rng: () => number): Omit<Profile, "beaconLimitRate" | "noLock
 
 export type ScriptedReply = { latency: number; status: number | null; retryAfter?: string; rejected?: number[] };
 
-export type ScriptedAction = {
-  at: number;
-  act: "open" | "emit" | "hide" | "show" | "close" | "refuseNext" | "rejectLock" | "refuseWritesFor" | "unreadableFor";
-  tab: number;
-  count?: number;
-  ms?: number;
-  throttled?: boolean;
-  during?: number;
-};
+export type ScriptedAction =
+  | { at: number; act: "refuseWritesFor"; ms: number }
+  | { at: number; act: "unreadableFor"; ms: number }
+  | {
+      at: number;
+      act: "open" | "emit" | "hide" | "show" | "close" | "refuseNext" | "rejectLock";
+      tab: number;
+      count?: number;
+      throttled?: boolean;
+      during?: number;
+    };
 
 export type Scenario = { profile?: Partial<Profile>; replies?: ScriptedReply[]; beacons?: ScriptedReply[]; actions?: ScriptedAction[] };
 
@@ -202,6 +214,14 @@ export async function simulate(
   };
   const learned: Learned[] = [];
   const idToKey = new Map<string, string>();
+  const eventToKey = new Map<string, string>();
+  const batchKey = (uuids: string[]): string => {
+    const keys = new Set(uuids.flatMap((uuid) => eventToKey.get(uuid) ?? []));
+    const key = keys.values().next().value ?? [...uuids].sort().join(",");
+    if (keys.size > 1) violate("combined events from existing batches", key);
+    for (const uuid of uuids) eventToKey.set(uuid, key);
+    return key;
+  };
   let readFailures = 0;
   const lastHolder = new Map<string, Tab>();
   let closeFailed = false;
@@ -210,7 +230,7 @@ export async function simulate(
   let rejectLocks = 0;
   let lockRejects = 0;
   let lastLockRejectAt = Number.NEGATIVE_INFINITY;
-  const beaconedAt = new Map<string, number>();
+  const beaconedAt = new Map<string, { at: number; tab: Tab }>();
   let refusingUntil = 0;
   const failures = new Map<string, { count: number; at: number }>();
   const requests = new Map<string, Request[]>();
@@ -223,6 +243,16 @@ export async function simulate(
   let races = 0;
   let throttles = 0;
   let ids = 0;
+  let partialRetries = 0;
+  let postsWhileUnreadable = 0;
+  let refusedMarks = 0;
+  let lateWaits = 0;
+  let shorterLateWaits = 0;
+  let lateBeaconWaits = 0;
+  let leaseHandoffs = 0;
+  let lifecycleDuringConfirmation = 0;
+  let savedAborts = 0;
+  let savedRetries = 0;
   const tabs: Tab[] = [];
 
   const items = new Map<string, string>();
@@ -279,6 +309,7 @@ export async function simulate(
       if (refuseNext > 0 || profile.noLocks || clock < refusingUntil || rng() < profile.refuseRate) {
         if (refuseNext > 0) refuseNext -= 1;
         refusedWrites += 1;
+        if (markedKey !== null) refusedMarks += 1;
         for (const item of marked) item.state = "lost";
         if (closingTab === tab) {
           closeFailed = true;
@@ -290,9 +321,9 @@ export async function simulate(
       }
       if (key.startsWith(BATCH_PREFIX)) {
         try {
-          const id = (JSON.parse(value) as { id?: string }).id;
-          const batchKey = keyOfStored(value);
-          if (id && batchKey) idToKey.set(id, batchKey);
+          const batch = JSON.parse(value) as { id: string; events: Array<{ uuid: string }> };
+          const key = batchKey(batch.events.map((event) => event.uuid));
+          idToKey.set(batch.id, key);
         } catch {}
       }
       items.set(key, value);
@@ -309,7 +340,8 @@ export async function simulate(
     clear: () => items.clear(),
   });
 
-  const storedNow = (key: string) => [...items.values()].some((value) => keyOfStored(value) === key);
+  const storedNow = (key: string) =>
+    [...items.keys()].some((item) => item.startsWith(BATCH_PREFIX) && idToKey.get(item.slice(BATCH_PREFIX.length)) === key);
   const applyFailure = (item: Learned) => {
     const previous = failures.get(item.key);
     failures.set(item.key, { count: (previous?.count ?? 0) + 1, at: Math.max(previous?.at ?? 0, item.at) });
@@ -340,33 +372,26 @@ export async function simulate(
     }
   };
 
-  const keyOf = (uuids: string[]) => [...uuids].sort().join(",");
-  function keyOfStored(value: string): string | null {
-    try {
-      return keyOf((JSON.parse(value) as { events: Array<{ uuid: string }> }).events.map((event) => event.uuid));
-    } catch {
-      return null;
-    }
-  }
   const knownTo = (item: Learned, sender: Tab) => item.state === "carried" || item.tab === sender;
   const settledFor = (key: string, sender: Tab) => learned.some((item) => item.kind === "settled" && item.key === key && knownTo(item, sender));
-  const checkSend = (key: string, how: "post" | "beacon", sender: Tab) => {
+  const checkSend = (key: string, uuids: string[], how: "post" | "beacon", sender: Tab) => {
     if (settledFor(key, sender)) violate("sent after it was settled", `${how} of ${key}`);
-    const sending = new Set(key.split(","));
+    const sending = new Set(uuids);
     const refusedAgain = learned.find((item) => item.kind === "refused" && knownTo(item, sender) && item.uuids.some((uuid) => sending.has(uuid)));
     if (refusedAgain) violate("sent an event refused for good again", `${how} of ${key}`);
     const known = learned.filter((item) => item.key === key && knownTo(item, sender));
+    if (known.some((item) => item.kind === "refused") && !refusedAgain) partialRetries += 1;
     const until = Math.max(0, ...known.filter((item) => item.kind === "wait").map((item) => item.until));
     if (clock < until) violate("sent before its Retry-After", `${how} of ${key} ${until - clock} ms early`);
     const beaconed = beaconedAt.get(key);
-    if (beaconed !== undefined && clock - beaconed < BEACON_CONFIRM_MS) {
-      violate("sent again before its beacon is confirmed", `${how} of ${key} ${clock - beaconed} ms after its beacon`);
+    if (beaconed && clock - beaconed.at < BEACON_CONFIRM_MS) {
+      violate("sent again before its beacon is confirmed", `${how} of ${key} ${clock - beaconed.at} ms after its beacon`);
     }
     if (how === "post") {
-      const open = (requests.get(key) ?? []).filter(
-        (request) => !request.done && request.tab.open && !(request.throttled && clock - request.sentAt >= LEASE_MS),
-      );
-      if (open.length > 0) violate("two sends of one batch in flight", key);
+      const open = (requests.get(key) ?? []).filter((request) => !request.done && request.tab.open);
+      const outlivedLease = (request: Request) => request.throttled && clock - request.sentAt >= LEASE_MS;
+      if (open.some((request) => request.tab !== sender && outlivedLease(request))) leaseHandoffs += 1;
+      if (open.some((request) => !outlivedLease(request))) violate("two sends of one batch in flight", key);
     }
     const failed = failures.get(key);
     if (failed && failed.count > 0) {
@@ -381,8 +406,10 @@ export async function simulate(
 
   const network = (tab: Tab) => (body: string, keepalive: boolean, signal?: AbortSignal): Promise<Reply> => {
     const uuids = (JSON.parse(body) as { batch: Array<{ uuid: string }> }).batch.map((event) => event.uuid);
-    const key = keyOf(uuids);
-    checkSend(key, "post", tab);
+    const key = batchKey(uuids);
+    checkSend(key, uuids, "post", tab);
+    if (readFails()) postsWhileUnreadable += 1;
+    if (storedNow(key) && failures.has(key)) savedRetries += 1;
     note(`tab${tab.id} post ${key.slice(0, 40)} keepalive=${keepalive}`);
     posts += 1;
     for (const uuid of uuids) lastHolder.set(uuid, tab);
@@ -439,6 +466,7 @@ export async function simulate(
           if (request.done) return;
           request.aborted = true;
           aborted += 1;
+          if (storedNow(key)) savedAborts += 1;
           failed(request);
           finish(() => reject(new DOMException("The operation was aborted.", "AbortError")));
         },
@@ -474,11 +502,7 @@ export async function simulate(
         const status = outcome.status;
         if (status === 200 || status === 400) learn(tab, key, "settled", 0, !request.latest);
         if (status === 429 || status >= 500) {
-          if (outcome.retryAfter !== null) retryAfters += 1;
-          if (outcome.retryAfter !== null) {
-            const until = clock + Math.min(Number(outcome.retryAfter) * 1000, MAX_WAIT_MS);
-            learn(tab, key, "wait", until, !request.latest);
-          }
+          if (outcome.retryAfter !== null) learnWait(tab, key, outcome.retryAfter, !request.latest);
           failed(request);
         }
         const rejectedUuids = (outcome.rejected ?? []).map((index) => uuids[index]);
@@ -489,20 +513,30 @@ export async function simulate(
     });
   };
 
-  const beaconWait = (tab: Tab, key: string, sentAt: number, retryAfter: string) => {
+  const learnWait = (tab: Tab, key: string, retryAfter: string, late: boolean) => {
     retryAfters += 1;
     const until = clock + Math.min(Number(retryAfter) * 1000, MAX_WAIT_MS);
+    if (late) {
+      lateWaits += 1;
+      if (learned.some((item) => item.key === key && item.kind === "wait" && item.state === "carried" && item.until > until)) {
+        shorterLateWaits += 1;
+      }
+    }
+    learn(tab, key, "wait", until, late);
+  };
+  const beaconWait = (tab: Tab, key: string, sentAt: number, retryAfter: string) => {
     const sentSince = (requests.get(key) ?? []).some((request) => request.sentAt > sentAt);
-    learn(tab, key, "wait", until, sentSince);
+    if (sentSince) lateBeaconWaits += 1;
+    learnWait(tab, key, retryAfter, sentSince);
   };
   const beaconFor = (tab: Tab) => (body: string): Promise<Reply | null> | null => {
     const uuids = (JSON.parse(body) as { batch: Array<{ uuid: string }> }).batch.map((event) => event.uuid);
-    const key = keyOf(uuids);
-    checkSend(key, "beacon", tab);
+    const key = batchKey(uuids);
+    checkSend(key, uuids, "beacon", tab);
     const scripted = scriptedBeacons.shift();
     if (!scripted && rng() < profile.beaconRefuseRate) return null;
     const sentAt = clock;
-    beaconedAt.set(key, clock);
+    beaconedAt.set(key, { at: clock, tab });
     beacons += 1;
     if (scripted) {
       return new Promise<Reply | null>((resolve) => {
@@ -670,6 +704,9 @@ export async function simulate(
   const hideTab = (tab: Tab, throttled: boolean) => {
     note(`tab${tab.id} hides${throttled ? ", its timers throttled" : ""}`);
     tab.hidden = true;
+    if ([...beaconedAt.values()].some((beacon) => beacon.tab === tab && clock - beacon.at < BEACON_CONFIRM_MS)) {
+      lifecycleDuringConfirmation += 1;
+    }
     if (throttled) throttle(tab);
     tab.outbox.flushForUnload();
   };
@@ -750,7 +787,7 @@ export async function simulate(
   const savedWithoutOwner = (): string | null => {
     for (const [key, text] of items) {
       if (!key.startsWith("conclave:telemetry:batch:")) continue;
-      let saved: { id?: string; events: Array<{ uuid: string }>; notBefore?: number; nextTry?: number; leaseUntil?: number };
+      let saved: { id: string; notBefore?: number; nextTry?: number; leaseUntil?: number };
       try {
         saved = JSON.parse(text);
       } catch {
@@ -764,6 +801,7 @@ export async function simulate(
           return [];
         }
       });
+      const identity = idToKey.get(saved.id);
       const settledAt = marks.filter((mark) => mark.delivered).map((mark) => mark.writtenAt);
       const due =
         settledAt.length > 0
@@ -774,11 +812,10 @@ export async function simulate(
               saved.leaseUntil ?? 0,
               writtenAt.get(key) ?? 0,
               ...marks.map((mark) => mark.notBefore),
-              ...learned.filter((item) => item.kind === "wait" && item.tab.open && item.key === keyOf(saved.events.map((event) => event.uuid))).map((item) => item.until),
+              ...learned.filter((item) => item.kind === "wait" && item.tab.open && item.key === identity).map((item) => item.until),
             );
       if (clock - due <= GRACE_MS) continue;
-      const batchKey = keyOf(saved.events.map((event) => event.uuid));
-      if ((requests.get(batchKey) ?? []).some((request) => !request.done && request.tab.open)) continue;
+      if (identity && requests.get(identity)?.some((request) => !request.done && request.tab.open)) continue;
       return `${key.slice("conclave:telemetry:batch:".length)} due ${clock - due} ms ago`;
     }
     return null;
@@ -787,6 +824,14 @@ export async function simulate(
   if (scenario.actions) {
     for (const action of scenario.actions) {
       schedule(START + action.at, null, "action", () => {
+        if (action.act === "refuseWritesFor") {
+          refusingUntil = clock + action.ms;
+          return;
+        }
+        if (action.act === "unreadableFor") {
+          unreadableUntil = clock + action.ms;
+          return;
+        }
         const tab = tabs[action.tab - 1];
         if (action.act === "open") openTab();
         else if (!tab?.open) return;
@@ -803,8 +848,6 @@ export async function simulate(
         } else if (action.act === "show") showTab(tab);
         else if (action.act === "refuseNext") refuseNext += action.count ?? 1;
         else if (action.act === "rejectLock") rejectLocks += action.count ?? 1;
-        else if (action.act === "refuseWritesFor") refusingUntil = clock + (action.ms ?? 0);
-        else if (action.act === "unreadableFor") unreadableUntil = clock + (action.ms ?? 0);
         else closeTab(tab);
       });
     }
@@ -896,5 +939,15 @@ export async function simulate(
     lockRejects,
     readFailures,
     partials: learned.filter((item) => item.kind === "refused").length,
+    partialRetries,
+    postsWhileUnreadable,
+    refusedMarks,
+    lateWaits,
+    shorterLateWaits,
+    lateBeaconWaits,
+    leaseHandoffs,
+    lifecycleDuringConfirmation,
+    savedAborts,
+    savedRetries,
   };
 }
