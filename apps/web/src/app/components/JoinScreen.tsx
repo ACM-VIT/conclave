@@ -362,6 +362,7 @@ function JoinScreen({
   const localStreamRef = useRef<MediaStream | null>(null);
   const handedOffTrackIdsRef = useRef<Set<string>>(new Set());
   const captureSlotsRef = useRef<PrejoinCaptureSlots>({});
+  const hadCarriedMediaRef = useRef(false);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [isCameraOn, setIsCameraOn] = useState(false);
   // Join without sending or receiving video (for slow connections). Carried
@@ -688,7 +689,7 @@ function JoinScreen({
     isAudioOnly: audioOnlyRef.current,
   });
 
-  const commitPrejoinMedia = () => {
+  const commitPrejoinMedia = (skipMutedMicWarmup: boolean) => {
     if (!onPrejoinMediaCommit) return;
     const tracks = livePreviewTracks();
     handedOffTrackIdsRef.current = new Set(tracks.map((track) => track.id));
@@ -698,7 +699,7 @@ function JoinScreen({
       handoffStream: getJoinStreamDebugSnapshot(stream),
       ...media,
     });
-    onPrejoinMediaCommit({ stream, ...media });
+    onPrejoinMediaCommit({ stream, ...media, skipMutedMicWarmup });
   };
 
   const setPreviewAudioOnly = (enabled: boolean) => {
@@ -791,6 +792,7 @@ function JoinScreen({
   };
 
   const cancelRejoinRestore = useRejoinMediaRestore(initialMedia, (media, signal) => {
+    hadCarriedMediaRef.current = true;
     onInitialMediaUsed?.();
     return applyRejoinMedia(media, {
       canRestore: () => !signal.aborted,
@@ -803,21 +805,26 @@ function JoinScreen({
     });
   });
   const settlePreviewForEntry = () => {
+    const skipMutedMicWarmup =
+      Boolean(initialMedia) ||
+      hadCarriedMediaRef.current ||
+      PREJOIN_MEDIA_KINDS.some((kind) => captureSlotsRef.current[kind]);
     cancelRejoinRestore();
     cancelCaptures(() => true);
+    return skipMutedMicWarmup;
   };
   const startMeeting = () => {
     if (!ensureGuest()) return;
-    settlePreviewForEntry();
+    const skipMutedMicWarmup = settlePreviewForEntry();
     onEnterStart?.("new");
-    commitPrejoinMedia();
+    commitPrejoinMedia(skipMutedMicWarmup);
     onIsAdminChange(true);
     setPending({ mode: "new", roomId: generateRoomCode() });
   };
   const joinMeeting = () => {
     const candidate = codeField.resolution.code;
     if (!candidate || !ensureGuest()) return;
-    settlePreviewForEntry();
+    const skipMutedMicWarmup = settlePreviewForEntry();
     if (!codeField.tenant.onThisPage) {
       const target = { roomCode: candidate, clientId: codeField.tenant.clientId };
       saveRejoinIntent(
@@ -828,7 +835,7 @@ function JoinScreen({
       return;
     }
     onEnterStart?.("join");
-    commitPrejoinMedia();
+    commitPrejoinMedia(skipMutedMicWarmup);
     onIsAdminChange(false);
     setPending({ mode: "join", roomId: candidate });
   };

@@ -200,6 +200,7 @@ it.each(["audio", "video"] as const)(
       isMicOn: true,
       isCameraOn: true,
       isAudioOnly: false,
+      skipMutedMicWarmup: true,
     });
     expect(commitMedia.mock.lastCall?.[0].stream?.getTracks().map((track) => track.kind).sort())
       .toEqual(["audio", "video"]);
@@ -248,7 +249,7 @@ it("allows Enter to join audio-only without waiting for mic or camera restore", 
     new browser.KeyboardEvent("keydown", { key: "Enter", bubbles: true }) as unknown as Event,
   ));
   expect(commitMedia).toHaveBeenCalledExactlyOnceWith({
-    stream: null, isAudioOnly: true, isMicOn: false, isCameraOn: false,
+    stream: null, isAudioOnly: true, isMicOn: false, isCameraOn: false, skipMutedMicWarmup: true,
   });
   const late = capture("audio");
   await act(async () => stale.resolve(late));
@@ -280,7 +281,7 @@ it("starts a new meeting on a non-default tenant while restore is pending", asyn
   await click("New meeting");
   expect(button("Leave call")).toBeDefined();
   expect(commitMedia).toHaveBeenCalledExactlyOnceWith({
-    stream: null, isAudioOnly: false, isMicOn: false, isCameraOn: false,
+    stream: null, isAudioOnly: false, isMicOn: false, isCameraOn: false, skipMutedMicWarmup: true,
   });
   const late = capture("audio");
   await act(async () => stale.resolve(late));

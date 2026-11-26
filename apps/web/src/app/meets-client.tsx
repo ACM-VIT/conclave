@@ -952,6 +952,7 @@ export default function MeetsClient({
         ),
         isCameraOn: false,
         isMicOn: false,
+        skipMutedMicWarmup: false,
       };
     }
     refs.shouldAutoJoinRef.current = true;
@@ -1473,6 +1474,7 @@ export default function MeetsClient({
         trackIds: liveTrackIds,
         isCameraOn: handoff.isCameraOn && hasLiveVideo,
         isMicOn: handoff.isMicOn && hasLiveAudio,
+        skipMutedMicWarmup: handoff.skipMutedMicWarmup,
       };
       setLocalStream(nextStream);
       setIsCameraOff(!(handoff.isCameraOn && hasLiveVideo));
