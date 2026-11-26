@@ -11,6 +11,7 @@ import {
   type SlotWrite,
   type WriteOutcome,
 } from "../server/roomAppsScheduler.js";
+import type { WireBytes } from "../server/socket/wireBytes.js";
 import { RATE_LIMITS } from "../server/socket/rateLimit.js";
 import type { AppsState } from "../types.js";
 import { BOARD, UPDATE_BURST, makeWorkRooms } from "./support/appsWorkRoom.js";
@@ -40,17 +41,16 @@ const writer = (
 ) => {
   const settled: Settled[] = [];
   let next = 0;
-  const write = (update: Uint8Array | null = new Uint8Array([0, 0])): SlotWrite => {
+  const write = (update: Uint8Array | null = new Uint8Array([0, 0])): [SlotWrite, WireBytes] => {
     const id = (next += 1);
-    return {
+    return [{
       sender,
       appId: options.appId ?? BOARD,
       key: options.key ?? "copy-1",
       host: options.host ?? false,
-      wire: { length: update?.length ?? 2, read: () => update },
       run,
       finish: (outcome) => settled.push({ id, outcome }),
-    };
+    }, { length: update?.length ?? 2, read: () => update }];
   };
   return { settled, write, sent: () => next };
 };
@@ -70,7 +70,7 @@ describe("every held update reaches exactly one terminal outcome", () => {
       (scheduler) => {
         const sender = {} as Socket;
         const w = writer(sender, allLanded);
-        for (let index = 0; index < UPDATE_BURST + 5; index += 1) scheduler.submit(w.write());
+        for (let index = 0; index < UPDATE_BURST + 5; index += 1) scheduler.submit(...w.write());
         vi.advanceTimersByTime(1000);
         return w;
       },
@@ -82,10 +82,10 @@ describe("every held update reaches exactly one terminal outcome", () => {
         const sender = starved();
         const w = writer(sender, allLanded);
         const other = writer(sender, allLanded, { key: "copy-2" });
-        for (let index = 0; index < MAX_SLOT_UPDATES + 3; index += 1) scheduler.submit(w.write());
-        scheduler.submit(w.write(new Uint8Array(256 * 1024)));
+        for (let index = 0; index < MAX_SLOT_UPDATES + 3; index += 1) scheduler.submit(...w.write());
+        scheduler.submit(...w.write(new Uint8Array(256 * 1024)));
         other.settled.length = 0;
-        scheduler.submit(other.write());
+        scheduler.submit(...other.write());
         expect(other.settled.map((entry) => entry.outcome)).toEqual(["rate-limited"]);
         scheduler.close();
         return w;
@@ -96,7 +96,7 @@ describe("every held update reaches exactly one terminal outcome", () => {
       "expired after the slot's time limit",
       (scheduler) => {
         const w = writer(starved(), allLanded);
-        for (let index = 0; index < 5; index += 1) scheduler.submit(w.write());
+        for (let index = 0; index < 5; index += 1) scheduler.submit(...w.write());
         vi.advanceTimersByTime(MAX_SLOT_MS);
         return w;
       },
@@ -106,7 +106,7 @@ describe("every held update reaches exactly one terminal outcome", () => {
       "evicted at a barrier's deadline",
       (scheduler) => {
         const w = writer(starved(), allLanded);
-        for (let index = 0; index < 5; index += 1) scheduler.submit(w.write());
+        for (let index = 0; index < 5; index += 1) scheduler.submit(...w.write());
         scheduler.afterHeld(BOARD, { changes: () => true, run: () => {}, cancel: () => {} });
         vi.advanceTimersByTime(BARRIER_DEADLINE_MS);
         return w;
@@ -117,7 +117,7 @@ describe("every held update reaches exactly one terminal outcome", () => {
       "purged by a stage change",
       (scheduler) => {
         const w = writer(starved(), allLanded);
-        for (let index = 0; index < 5; index += 1) scheduler.submit(w.write());
+        for (let index = 0; index < 5; index += 1) scheduler.submit(...w.write());
         scheduler.transition({ refuse: { matches: () => true, outcome: "locked" }, apply: () => {}, notify: () => {} });
         return w;
       },
@@ -128,9 +128,9 @@ describe("every held update reaches exactly one terminal outcome", () => {
       (scheduler) => {
         const sender = {} as Socket;
         const w = writer(sender, () => new Promise<WriteOutcome[]>(() => {}));
-        for (let index = 0; index < 5; index += 1) scheduler.submit(w.write());
+        for (let index = 0; index < 5; index += 1) scheduler.submit(...w.write());
         scheduler.close();
-        scheduler.submit(w.write());
+        scheduler.submit(...w.write());
         return w;
       },
       ["not-live"],
@@ -139,8 +139,8 @@ describe("every held update reaches exactly one terminal outcome", () => {
       "unreadable when its slot drains",
       (scheduler) => {
         const w = writer({} as Socket, allLanded);
-        scheduler.submit(w.write(null));
-        scheduler.submit(w.write(new Uint8Array([1, 2, 3])));
+        scheduler.submit(...w.write(null));
+        scheduler.submit(...w.write(new Uint8Array([1, 2, 3])));
         return w;
       },
       ["invalid", null],
@@ -156,7 +156,7 @@ describe("every held update reaches exactly one terminal outcome", () => {
           if (calls === 2) return Promise.reject(new Error("worker crashed"));
           return updates.slice(1).map(() => null);
         });
-        for (let index = 0; index < 3; index += 1) scheduler.submit(w.write());
+        for (let index = 0; index < 3; index += 1) scheduler.submit(...w.write());
         return w;
       },
       ["invalid"],
@@ -218,14 +218,14 @@ const asyncRoom = (ms: number) => {
 const countFinishes = (scheduler: RoomAppsScheduler): WriteOutcome[] => {
   const outcomes: WriteOutcome[] = [];
   const submit = scheduler.submit.bind(scheduler);
-  vi.spyOn(scheduler, "submit").mockImplementation((write: SlotWrite) =>
+  vi.spyOn(scheduler, "submit").mockImplementation((write, wire) =>
     submit({
       ...write,
       finish: (outcome) => {
         outcomes.push(outcome);
         write.finish(outcome);
       },
-    }),
+    }, wire),
   );
   return outcomes;
 };
@@ -238,6 +238,30 @@ const settle = async (ms: number, each: () => void = () => {}) => {
 };
 
 describe("an executor that answers later", () => {
+  it("relays an in-flight write to the replacement copy even after it has synced", async () => {
+    vi.useFakeTimers();
+    const { connect, roomFor } = makeWorkRooms();
+    const room = roomFor("room");
+    const inner = room.apps.executor;
+    const { executor } = delayed(inner, 50);
+    room.apps.executor = { ...executor, sync: inner.sync.bind(inner) };
+    connect("host#1", { host: true }).command("open", BOARD);
+    const artist = connect("artist#1");
+    const viewer = connect("viewer#1");
+    artist.sync();
+    viewer.sync();
+    const [inFlight] = artist.write(1);
+
+    artist.sendPayload([]);
+    expect(artist.sync().reply).toHaveProperty("syncMessage");
+    expect(artist.doc.getMap("m").has(inFlight)).toBe(false);
+
+    await settle(60);
+
+    expect(viewer.doc.getMap("m").has(inFlight)).toBe(true);
+    expect(artist.doc.getMap("m").toJSON()).toEqual(viewer.doc.getMap("m").toJSON());
+  });
+
   it("answers a sync once the executor does, and still gives the stage's first valid sync back", async () => {
     const { connect, seen } = asyncRoom(20);
     const viewer = connect("viewer#1");

@@ -10,6 +10,8 @@ export const MAX_SLOT_MS = 1000;
 export const BARRIER_DEADLINE_MS = 100;
 
 const UPDATE_BUDGET = "apps:yjs:update";
+const SLOT_ADMISSION_BUDGET = "apps:slot-admission";
+const SLOT_ADMISSION_LIMIT = { capacity: MAX_SLOT_BYTES, refillPerSec: MAX_SLOT_BYTES };
 
 export type WriteOutcome = WriteRefusal | null;
 
@@ -20,12 +22,12 @@ export type SlotWrite = {
   readonly appId: string;
   readonly key: string;
   readonly host: boolean;
-  readonly wire: WireBytes;
   readonly run: (updates: Uint8Array[]) => Pending<WriteOutcome[]>;
   readonly finish: (outcome: WriteOutcome) => void;
 };
 
-type Slot = { first: SlotWrite; writes: SlotWrite[]; bytes: number; admittedAt: number };
+type ReadyWrite = { work: SlotWrite; update: Uint8Array };
+type Slot = { first: SlotWrite; writes: ReadyWrite[]; bytes: number; admittedAt: number };
 
 type Job = { sender: Socket; appId: string; writes: SlotWrite[] };
 
@@ -91,27 +93,35 @@ export class RoomAppsScheduler {
     }));
   }
 
-  submit(write: SlotWrite): void {
+  submit(write: SlotWrite, wire: WireBytes): void {
     if (this.closed) {
       this.finish(write, "not-live");
       return;
     }
     const slot = this.slots.get(write.sender);
-    if (!slot) {
-      if (!this.job && takeToken(write.sender, UPDATE_BUDGET, RATE_LIMITS.appsYjsUpdate)) {
-        this.execute(write, [write]);
-        return;
-      }
-      this.slots.set(write.sender, { first: write, writes: [write], bytes: write.wire.length, admittedAt: Date.now() });
-      this.schedule();
+    if (!slot && !this.job && takeToken(write.sender, UPDATE_BUDGET, RATE_LIMITS.appsYjsUpdate)) {
+      const update = this.read(write, wire);
+      if (update) this.execute(write, [{ work: write, update }]);
       return;
     }
-    if (!this.fits(slot, write.key, write.wire.length)) {
+    if (
+      !this.fits(slot, write.key, wire.length) ||
+      !takeToken(write.sender, SLOT_ADMISSION_BUDGET, SLOT_ADMISSION_LIMIT, wire.length)
+    ) {
       this.finish(write, "rate-limited");
       return;
     }
-    slot.writes.push(write);
-    slot.bytes += write.wire.length;
+    const read = this.read(write, wire);
+    if (!read) return;
+    const update = new Uint8Array(read);
+    const ready = { work: write, update };
+    if (slot) {
+      slot.writes.push(ready);
+      slot.bytes += update.buffer.byteLength;
+    } else {
+      this.slots.set(write.sender, { first: write, writes: [ready], bytes: update.buffer.byteLength, admittedAt: Date.now() });
+      this.schedule();
+    }
   }
 
   hold(task: () => void): void {
@@ -140,7 +150,7 @@ export class RoomAppsScheduler {
     for (const [sender, slot] of [...this.slots]) {
       if (!matches(slot.first)) continue;
       this.slots.delete(sender);
-      this.finishAll(slot.writes, outcome);
+      this.finishSlot(slot, outcome);
     }
     this.pump();
   }
@@ -169,7 +179,7 @@ export class RoomAppsScheduler {
     this.slots.clear();
     this.barriers = [];
     this.job = null;
-    for (const slot of slots) this.finishAll(slot.writes, "not-live");
+    for (const slot of slots) this.finishSlot(slot, "not-live");
     if (job) this.finishAll(job.writes, "not-live");
     for (const barrier of barriers) settle("App stage command", barrier.command.cancel);
   }
@@ -184,33 +194,34 @@ export class RoomAppsScheduler {
     for (const write of writes) this.finish(write, outcome);
   }
 
-  private execute(first: SlotWrite, writes: SlotWrite[]): void {
-    const readable: SlotWrite[] = [];
-    const updates: Uint8Array[] = [];
-    for (const write of writes) {
-      let update: Uint8Array | null = null;
-      settle("Reading an app update", () => {
-        update = write.wire.read();
-      });
-      const read = update as Uint8Array | null;
-      if (read && read.length === write.wire.length) {
-        readable.push(write);
-        updates.push(read);
-      } else {
-        this.finish(write, "invalid");
-      }
+  private finishSlot(slot: Slot, outcome: WriteOutcome): void {
+    for (const { work } of slot.writes) this.finish(work, outcome);
+  }
+
+  private read(write: SlotWrite, wire: WireBytes): Uint8Array | null {
+    try {
+      const update = wire.read();
+      if (update?.length === wire.length) return update;
+    } catch (error) {
+      Logger.warn("[Apps] Reading an app update failed", error);
     }
-    if (readable.length === 0) return;
+    this.finish(write, "invalid");
+    return null;
+  }
+
+  private execute(first: SlotWrite, ready: ReadyWrite[]): void {
+    const writes = ready.map(({ work }) => work);
+    const updates = ready.map(({ update }) => update);
     let result: Pending<WriteOutcome[]> | null = null;
     settle("App update", () => {
       result = first.run(updates);
     });
     const ran = result as Pending<WriteOutcome[]> | null;
     if (!ran || !isPending(ran)) {
-      this.complete(readable, ran);
+      this.complete(writes, ran);
       return;
     }
-    const job: Job = { sender: first.sender, appId: first.appId, writes: readable };
+    const job: Job = { sender: first.sender, appId: first.appId, writes };
     this.job = job;
     ran.then(
       (outcomes) => this.completeJob(job, outcomes),
@@ -232,7 +243,8 @@ export class RoomAppsScheduler {
     writes.forEach((write, index) => this.finish(write, outcomes?.[index] === undefined ? "invalid" : outcomes[index]));
   }
 
-  private fits(slot: Slot, key: string, bytes: number): boolean {
+  private fits(slot: Slot | undefined, key: string, bytes: number): boolean {
+    if (!slot) return bytes <= MAX_SLOT_BYTES;
     return (
       slot.first.key === key &&
       slot.writes.length < MAX_SLOT_UPDATES &&
@@ -262,7 +274,7 @@ export class RoomAppsScheduler {
       for (const [sender, slot] of [...this.slots]) {
         if (now - slot.admittedAt < MAX_SLOT_MS) continue;
         this.slots.delete(sender);
-        this.finishAll(slot.writes, "rate-limited");
+        this.finishSlot(slot, "rate-limited");
       }
       for (const [sender, slot] of [...this.slots]) {
         if (this.job || this.closed) break;
@@ -283,7 +295,7 @@ export class RoomAppsScheduler {
             const slot = this.slots.get(sender);
             if (!slot) continue;
             this.slots.delete(sender);
-            this.finishAll(slot.writes, "rate-limited");
+            this.finishSlot(slot, "rate-limited");
           }
         }
         this.barriers.shift();

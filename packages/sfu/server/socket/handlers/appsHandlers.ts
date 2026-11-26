@@ -25,7 +25,7 @@ import {
   type StageCommand,
   type WriteRefusal,
 } from "../../roomApps.js";
-import { afterSettled, whenSettled, type StageTransition, type WriteOutcome } from "../../roomAppsScheduler.js";
+import { afterSettled, whenSettled, type SlotWrite, type StageTransition } from "../../roomAppsScheduler.js";
 import { Logger } from "../../../utilities/loggers.js";
 import type { ConnectionContext } from "../context.js";
 import { RATE_LIMITS, refundToken, takeToken } from "../rateLimit.js";
@@ -300,16 +300,34 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     if (admission.replicaId) signalRefused(scope, admission.appId, admission.replicaId, reason);
     else if (reason !== "not-live") restartCopy(admission);
   };
-  const finishWrite = (admission: Admission, outcome: WriteOutcome): void => {
-    if (outcome !== null) refuse(admission, outcome);
-  };
-  const relay = (admission: Admission, landed: Uint8Array[]): void => {
+  const relay = (admission: Admission, mark: AppSyncMark, landed: Uint8Array[]): void => {
+    if (!admission.apps.isCurrentSync(mark)) return;
+    const includeWriter = admission.replicaId !== undefined && inScope(admission.apps);
     for (const update of landed) {
-      socket.to(admission.channelId).emit("apps:yjs:update", {
-        appId: admission.appId,
-        update,
-      } satisfies AppsUpdateData);
+      const message: AppsUpdateData = { appId: admission.appId, update };
+      socket.to(admission.channelId).emit("apps:yjs:update", message);
+      if (includeWriter) socket.emit("apps:yjs:update", message);
     }
+  };
+  const writeFor = (admission: Admission, mark: AppSyncMark): SlotWrite => {
+    const { apps, appId, host, participant, replicaId, socketId } = admission;
+    return {
+      sender: socket,
+      appId,
+      key: `${appId}\u0000${mark.generation}\u0000${replicaId ?? ""}\u0000${host}`,
+      host,
+      run: (updates) => {
+        const latest = scope?.apps === apps && apps.isCurrentSync(scope.synced) ? scope.synced : mark;
+        const identity = { participant, host, origin: socketId, mark: latest };
+        return whenSettled(apps.executor.write(appId, identity, updates), (result) => {
+          relay(admission, mark, result.landed);
+          return result.outcomes;
+        });
+      },
+      finish: (outcome) => {
+        if (outcome !== null) refuse(admission, outcome);
+      },
+    };
   };
 
   const sendRoomCopy = (current: RoomScope, appId: string): void => {
@@ -625,22 +643,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       });
       return;
     }
-    apps.scheduler.submit({
-      sender: socket,
-      appId,
-      key: `${appId}\u0000${stage.docGeneration}\u0000${admission.replicaId ?? ""}\u0000${admission.host}`,
-      host: admission.host,
-      wire,
-      run: (updates) => {
-        const latest = scope?.apps === apps && apps.isCurrentSync(scope.synced) ? scope.synced : mark;
-        const identity = { participant: admission.participant, host: admission.host, origin: admission.socketId, mark: latest };
-        return whenSettled(apps.executor.write(appId, identity, updates), (result) => {
-          relay(admission, result.landed);
-          return result.outcomes;
-        });
-      },
-      finish: (outcome) => finishWrite(admission, outcome),
-    });
+    apps.scheduler.submit(writeFor(admission, mark), wire);
   });
 
   socket.on("apps:awareness", (data: AppsAwarenessData) => {

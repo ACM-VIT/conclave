@@ -11,7 +11,9 @@ import {
   type SlotWrite,
   type WriteOutcome,
 } from "../server/roomAppsScheduler.js";
+import { wireBytes } from "../server/socket/wireBytes.js";
 import { RATE_LIMITS } from "../server/socket/rateLimit.js";
+import { seededRandom } from "./support/appsRoom.js";
 import { BOARD, UPDATE_BURST, isBlank, makeWorkRooms, recordWrites } from "./support/appsWorkRoom.js";
 
 afterEach(() => {
@@ -238,18 +240,17 @@ describe("a sender's slot", () => {
   const writesFor = (sender: Socket, key = "copy-1") => {
     const ran: Uint8Array[][] = [];
     const finished: { outcome: WriteOutcome; at: number }[] = [];
-    const write = (update: Uint8Array): SlotWrite => ({
+    const write = (update: Uint8Array) => [{
       sender,
       appId: BOARD,
       key,
       host: false,
-      wire: { length: update.length, read: () => update },
       run: (updates) => {
         ran.push(updates);
         return updates.map(() => null);
       },
       finish: (outcome) => finished.push({ outcome, at: Date.now() }),
-    });
+    } satisfies SlotWrite, wireBytes(update)!] as const;
     return { ran, finished, write };
   };
   const keyed = (doc: Y.Doc, key: string): Uint8Array => {
@@ -262,7 +263,7 @@ describe("a sender's slot", () => {
     vi.useFakeTimers();
     const scheduler = new RoomAppsScheduler();
     const { ran, finished, write } = writesFor(starved());
-    scheduler.submit(write(keyed(new Y.Doc(), "a")));
+    scheduler.submit(...write(keyed(new Y.Doc(), "a")));
     const started = Date.now();
     let ranAt: number | null = null;
 
@@ -279,7 +280,7 @@ describe("a sender's slot", () => {
     vi.useFakeTimers();
     const scheduler = new RoomAppsScheduler();
     const { ran, finished, write } = writesFor(starved());
-    scheduler.submit(write(keyed(new Y.Doc(), "a")));
+    scheduler.submit(...write(keyed(new Y.Doc(), "a")));
     let changes = true;
     let ranAt: number | null = null;
     scheduler.afterHeld(BOARD, { changes: () => changes, run: () => (ranAt = Date.now()), cancel: () => {} });
@@ -300,7 +301,7 @@ describe("a sender's slot", () => {
     const scheduler = new RoomAppsScheduler();
     const { ran, finished, write } = writesFor(starved());
     const started = Date.now();
-    scheduler.submit(write(keyed(new Y.Doc(), "a")));
+    scheduler.submit(...write(keyed(new Y.Doc(), "a")));
 
     vi.advanceTimersByTime(MAX_SLOT_MS);
 
@@ -334,9 +335,9 @@ describe("a sender's slot", () => {
     const first = writesFor(sender, "copy-1");
     const second = writesFor(sender, "copy-2");
     const doc = new Y.Doc();
-    for (let index = 0; index <= UPDATE_BURST; index += 1) scheduler.submit(first.write(keyed(doc, `w${index}`)));
+    for (let index = 0; index <= UPDATE_BURST; index += 1) scheduler.submit(...first.write(keyed(doc, `w${index}`)));
 
-    scheduler.submit(second.write(keyed(new Y.Doc(), "other")));
+    scheduler.submit(...second.write(keyed(new Y.Doc(), "other")));
 
     expect(second.finished).toEqual([{ outcome: "rate-limited", at: Date.now() }]);
     vi.advanceTimersByTime(1000);
@@ -348,13 +349,13 @@ describe("a sender's slot", () => {
     vi.useFakeTimers();
     const scheduler = new RoomAppsScheduler();
     const { ran, finished, write } = writesFor(starved());
-    scheduler.submit(write(keyed(new Y.Doc(), "a")));
+    scheduler.submit(...write(keyed(new Y.Doc(), "a")));
     let executed = false;
     let cancelled = false;
     scheduler.afterHeld(BOARD, { changes: () => true, run: () => (executed = true), cancel: () => (cancelled = true) });
 
     scheduler.close();
-    scheduler.submit(write(keyed(new Y.Doc(), "late")));
+    scheduler.submit(...write(keyed(new Y.Doc(), "late")));
     vi.advanceTimersByTime(10_000);
 
     expect(finished.map((entry) => entry.outcome)).toEqual(["not-live", "not-live"]);
@@ -846,78 +847,94 @@ describe("what a payload costs before it is paid for", () => {
     return { guest, room };
   };
 
-  it("retains only bounded byte storage for queued views", () => {
+  it("retains only bounded byte storage across queued encodings", () => {
     vi.useFakeTimers();
     const scheduler = new RoomAppsScheduler();
     const sender = {} as Socket;
+    const random = seededRandom(270);
     let heldBytes = 0;
-    const write = (update: Uint8Array, held: boolean): SlotWrite => ({
+    const write = (payload: unknown, held: boolean) => [{
       sender,
       appId: BOARD,
       key: "copy-1",
       host: false,
-      wire: { length: update.length, read: () => update },
       run: (updates) => {
         if (held) heldBytes += updates.reduce((bytes, value) => bytes + value.buffer.byteLength, 0);
         return updates.map(() => null);
       },
       finish: () => {},
-    });
-    for (let index = 0; index < UPDATE_BURST; index += 1) scheduler.submit(write(EMPTY_UPDATE, false));
+    } satisfies SlotWrite, wireBytes(payload)!] as const;
+    for (let index = 0; index < UPDATE_BURST; index += 1) scheduler.submit(...write(EMPTY_UPDATE, false));
 
-    for (let index = 0; index < 5; index += 1) {
-      const view = new Uint8Array(new ArrayBuffer(MAX_SLOT_BYTES / 4), index, index + 1);
-      scheduler.submit(write(view, true));
+    let bytes = 0;
+    let accepted = 0;
+    for (let index = 0; index < MAX_SLOT_UPDATES; index += 1) {
+      const length = 1 + Math.floor(random() * 12_000);
+      const view = new Uint8Array(new ArrayBuffer(MAX_SLOT_BYTES / 4), 1, length);
+      const list = Array.from(view);
+      const forms = [view, new DataView(view.buffer, 1, length), Buffer.from(view).toString("base64"), list, { type: "Buffer", data: list }];
+      scheduler.submit(...write(forms[index % forms.length], true));
+      if (bytes + length <= MAX_SLOT_BYTES) {
+        bytes += length;
+        accepted += 1;
+      }
+      expect(scheduler.slotSummaries()).toEqual([{ updates: accepted, bytes, age: 0 }]);
     }
-    expect(scheduler.slotSummaries()).toEqual([{ updates: 5, bytes: 15, age: 0 }]);
+    expect(accepted).toBeLessThan(MAX_SLOT_UPDATES);
     advance(100);
 
-    expect(heldBytes).toBe(15);
+    expect(heldBytes).toBe(bytes);
   });
 
   it.each([
-    ["a 10,000-element array ending in a string", () => countingArray(10_000, "bad")],
+    ["an array ending in a string", () => countingArray(4, "bad")],
     ["a JSON Buffer ending in null", () => {
-      const inner = countingArray(10_000, null);
+      const inner = countingArray(4, null);
       return { reads: inner.reads, payload: { type: "Buffer", data: inner.payload } };
     }],
-  ])("reads nothing of %s while the sender's update budget is spent, and reads it once when its slot drains", (_, make) => {
-    const { guest } = drained();
-    const sent = Array.from({ length: 20 }, () => make());
+  ])("refuses %s without retaining it in a slot", (_, make) => {
+    const { guest, room } = drained();
+    const { payload, reads } = make();
 
-    for (const { payload } of sent) guest.sendPayload(payload);
-    const readAtArrival = sent.reduce((total, { reads }) => total + reads.count, 0);
-    advance(1000);
+    guest.sendPayload(payload);
 
-    expect(readAtArrival).toBe(0);
-    expect(sent.map(({ reads }) => reads.count)).toEqual(sent.map(() => 10_000));
+    expect(reads.count).toBe(4);
+    expect(room.apps.scheduler.slotSummaries()).toEqual([]);
     expect(guest.received.filter((entry) => entry.event === "apps:yjs:refused").map((entry) => (entry.payload as { reason: string }).reason)).toEqual(["invalid"]);
   });
 
-  it("reads none of Neon's invalid base64 updates while the sender's budget is spent", () => {
-    const { guest } = drained();
-    const frame = `${"A".repeat(349_519)}!`;
-    const scans = stringScans(frame);
+  it("charges failed reads against slot admission even though they leave no retained bytes", () => {
+    vi.useFakeTimers();
+    const scheduler = new RoomAppsScheduler();
+    const sender = {} as Socket;
+    const finish = vi.fn();
+    const work = (): SlotWrite => ({ sender, appId: BOARD, key: "copy-1", host: false, run: (updates) => updates.map(() => null), finish });
+    for (let index = 0; index < UPDATE_BURST; index += 1) scheduler.submit(work(), wireBytes(EMPTY_UPDATE)!);
+    finish.mockClear();
+    const read = vi.fn(() => null);
+    const unreadable = { length: MAX_SLOT_BYTES / 2, read };
+    for (let index = 0; index < 3; index += 1) scheduler.submit(work(), unreadable);
 
-    for (let index = 0; index < 20; index += 1) guest.sendPayload(frame);
-
-    expect(scans()).toBe(0);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(finish.mock.calls).toEqual([["invalid"], ["invalid"], ["rate-limited"]]);
+    expect(scheduler.slotSummaries()).toEqual([]);
   });
 
   it.each([
     ["900,000 spaces then AAAA (Greptile's frame)", `${" ".repeat(900_000)}AAAA`, 10],
     ["1,000 spaces then AAAA", `${" ".repeat(1000)}AAAA`, 100],
     ["AAAA then 1,000 newlines", `AAAA${"\n".repeat(1000)}`, 100],
-  ])("reads no characters of %s before the sender pays, and refuses it", (_, frame, frames) => {
+  ])("does not retain whitespace-padded base64 with %s", (_, frame, frames) => {
     const { guest } = drained();
+    expect(wireBytes(frame)?.length ?? 0).toBeGreaterThan(0);
     const scans = stringScans(frame);
 
     for (let index = 0; index < frames; index += 1) guest.sendPayload(frame);
     const atArrival = scans();
     advance(1000);
 
-    expect(atArrival).toBe(0);
-    expect(scans()).toBeLessThanOrEqual(4 * MAX_SLOT_UPDATES);
+    expect(scans()).toBe(atArrival);
+    if (wireBytes(frame)!.length > MAX_SLOT_BYTES) expect(atArrival).toBe(0);
     const reasons = guest.received.filter((entry) => entry.event === "apps:yjs:refused").map((entry) => (entry.payload as { reason: string }).reason);
     expect(reasons.length).toBeGreaterThan(0);
     expect(reasons.filter((reason) => !["invalid", "too-large", "rate-limited"].includes(reason))).toEqual([]);

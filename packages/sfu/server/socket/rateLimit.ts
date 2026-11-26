@@ -61,6 +61,7 @@ export const takeToken = (
   socket: Socket,
   key: string,
   options: TokenBucketOptions,
+  cost = 1,
 ): boolean => {
   const store = getBucketStore(socket);
   const nowMs = Date.now();
@@ -82,8 +83,8 @@ export const takeToken = (
     refill(bucket, nowMs);
   }
 
-  if (bucket.tokens >= 1) {
-    bucket.tokens -= 1;
+  if (bucket.tokens >= cost) {
+    bucket.tokens -= cost;
     return true;
   }
 
