@@ -290,7 +290,8 @@ const fenceAgain = async (state: SfuState, room: LeasedRoom, generation: number)
     if (isCurrentRoom(state, room)) handOffRoomState(state, room.channelId);
     return;
   }
-  room.ownershipGeneration = generation;
+  if (room instanceof Room) room.adoptGeneration(generation);
+  else room.ownershipGeneration = generation;
   if (reclaims.get(room)?.generation !== generation) return;
   writeHeld(state, room.channelId);
   if (room instanceof Room && isCurrentRoom(state, room)) noteRoomRunning(state, room);
@@ -649,7 +650,8 @@ export const getOrCreateRoomWithOrigin = async (
       });
       createdRoom.ownershipGeneration = ownership.generation;
       createdRoom.recoveryPassesVoidUntil = record.passesVoidUntil;
-      createdRoom.recoveryPassGeneration = record.lost?.passGeneration ?? null;
+      createdRoom.recoveryPassGenerations = record.lost?.passGenerations ?? null;
+      createdRoom.earlierPassGenerations = [...(record.lost?.passGenerations ?? [])];
       createdRoom.takesOverRecordOf = record.lastWriter;
       createdRoom.awaitingOpener = { lost: record.lost };
       for (const guest of takeNextMeetingLobby(state, channelId)) {

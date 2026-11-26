@@ -517,6 +517,85 @@ describe("a call whose server lost the room", () => {
     expect(again.status).toBe("joined");
   });
 
+  describe("and then lost it again before a member came back", () => {
+    const lostTwice = async () => {
+      useTestClock();
+      const { before, passes } = await callBeforeRestart();
+      vi.setSystemTime(Date.now() + 20_000);
+      const once = await restart(before);
+      const hostBack = await join(once, rejoining(host), { roomRecoveryPass: passes.host });
+      expect(hostBack.status).toBe("joined");
+      vi.setSystemTime(Date.now() + 20_000);
+      const twice = await restart(once);
+      return { twice, passes, hostPass: hostBack.response.roomRecoveryPass };
+    };
+
+    it("lets a member in on the pass the first room gave them, once a host is back", async () => {
+      const { twice, passes, hostPass } = await lostTwice();
+      const hostBack = await join(twice, rejoining(host), { roomRecoveryPass: hostPass });
+      expect(hostBack.status).toBe("joined");
+
+      const member = await join(twice, rejoining(second), { roomRecoveryPass: passes.second });
+      expect(member.status).toBe("joined");
+      expect(knocksShownTo(hostBack)).toEqual([]);
+      expect((await join(twice, knocker, { roomRecoveryPass: passes.second })).status).toBe("waiting");
+    });
+
+    it("lets a member who is first back take the call over on the pass the first room gave them", async () => {
+      const { twice, passes } = await lostTwice();
+
+      const member = await join(twice, rejoining(guest), { roomRecoveryPass: passes.guest });
+      expect(member.status).toBe("joined");
+      expect(member.context.currentClient).toBeInstanceOf(Admin);
+    });
+
+    it("still keeps out someone a host removed in the first recovered room", async () => {
+      useTestClock();
+      const { before, passes } = await callBeforeRestart();
+      vi.setSystemTime(Date.now() + 20_000);
+      const once = await restart(before);
+      const hostBack = await join(once, rejoining(host), { roomRecoveryPass: passes.host });
+      const memberBack = await join(once, rejoining(second), { roomRecoveryPass: passes.second });
+      expect(memberBack.status).toBe("joined");
+      await send(hostBack.peer, "kickUser", { userId: memberBack.context.currentClient!.id });
+      vi.setSystemTime(Date.now() + 20_000);
+      const twice = await restart(once);
+      await join(twice, rejoining(host), { roomRecoveryPass: hostBack.response.roomRecoveryPass });
+
+      expect((await join(twice, rejoining(second), { roomRecoveryPass: passes.second })).status).toBe(
+        "waiting",
+      );
+    });
+
+    it("still turns away a pass from a meeting that ended before the call that was lost", async () => {
+      useTestClock();
+      const ended = makeState();
+      const earlierHost = await join(ended, host);
+      roomOf(ended).restoreAdmission(second.userId, undefined, { pastLock: true });
+      const earlier = await join(ended, second);
+      await hangUp(earlier.peer);
+      await hangUp(earlierHost.peer);
+      expect(ended.rooms.has(CHANNEL)).toBe(false);
+      vi.setSystemTime(Date.now() + 20_000);
+      const hostAgain = await join(ended, host);
+      expect(hostAgain.status).toBe("joined");
+      vi.setSystemTime(Date.now() + 20_000);
+      const once = await restart(ended);
+      const hostBack = await join(once, rejoining(host), {
+        roomRecoveryPass: hostAgain.response.roomRecoveryPass,
+      });
+      expect(hostBack.status).toBe("joined");
+      vi.setSystemTime(Date.now() + 20_000);
+      const twice = await restart(once);
+      await join(twice, rejoining(host), { roomRecoveryPass: hostBack.response.roomRecoveryPass });
+
+      expect(
+        (await join(twice, rejoining(second), { roomRecoveryPass: earlier.response.roomRecoveryPass }))
+          .status,
+      ).toBe("waiting");
+    });
+  });
+
   it("does not let someone the host removed back in with their old pass", async () => {
     const state = makeState();
     const created = await join(state, host);

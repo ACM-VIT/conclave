@@ -30,9 +30,26 @@ export const ROOM_RECOVERY_PASS_TTL_MS = TTL_SECONDS * 1000 + CLOCK_SKEW_MS;
 export const LOST_ROOM_WINDOW_MS =
   REFRESH_INTERVAL_MS + ROOM_RECOVERY_PASS_TTL_MS;
 
+export type PassGeneration = { generation: number; until: number };
+
+export const passesStillOut = (
+  generations: readonly PassGeneration[],
+  now: number = Date.now(),
+): PassGeneration[] =>
+  generations.filter(({ until }) => now <= until + ROOM_RECOVERY_PASS_TTL_MS);
+
+const signedUnder = (
+  generations: readonly PassGeneration[],
+  claims: RoomRecoveryPassClaims,
+): boolean =>
+  generations.some(
+    ({ generation, until }) =>
+      claims.generation === generation && claims.issuedAtMs <= until + CLOCK_SKEW_MS,
+  );
+
 type RecoveryRoom = Pick<
   Room,
-  "channelId" | "incarnationId" | "recoveryPassesVoidUntil" | "recoveryPassGeneration"
+  "channelId" | "incarnationId" | "recoveryPassesVoidUntil" | "recoveryPassGenerations"
 >;
 type PassIssuingRoom = Pick<Room, "channelId" | "incarnationId" | "ownershipGeneration"> &
   Pick<Room, "userKeysById" | "needsReadmission" | "recordsItsCall">;
@@ -143,6 +160,6 @@ export const provesEarlierRoomMembership = (
     claims.userKey === userKey &&
     claims.incarnationId !== room.incarnationId &&
     (room.recoveryPassesVoidUntil === null || claims.issuedAtMs > room.recoveryPassesVoidUntil) &&
-    (room.recoveryPassGeneration === null || claims.generation === room.recoveryPassGeneration)
+    (room.recoveryPassGenerations === null || signedUnder(room.recoveryPassGenerations, claims))
   );
 };

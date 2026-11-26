@@ -29,6 +29,7 @@ const room = {
   usersNeedingReadmission: ["guest-removed"],
   recoveryPassesVoidUntil: null,
   guestPassesFor: () => ({ "guest-removed": ["proof-of-pass", "proof-of-linked-pass"] }),
+  earlierPassGenerations: [],
 };
 
 let directory: string;
@@ -57,7 +58,7 @@ describe("what the SFU remembers about a room across a restart", () => {
         readmissionRequiredUserKeys: ["guest-removed"],
         guestPasses: { "guest-removed": ["proof-of-pass", "proof-of-linked-pass"] },
         claimableUntil: Date.now() + 7 * MINUTE_MS,
-        passGeneration: null,
+        passGenerations: null,
       },
       passesVoidUntil: null,
       lastWriter: "room-1",

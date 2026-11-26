@@ -19,6 +19,8 @@ import { Logger } from "../utilities/loggers.js";
 import {
   LOST_ROOM_WINDOW_MS,
   ROOM_RECOVERY_PASS_TTL_MS,
+  passesStillOut,
+  type PassGeneration,
 } from "./roomRecoveryPass.js";
 
 /**
@@ -50,6 +52,7 @@ export type RoomRecoveryRecord = {
   guestPasses: Record<string, string[]>;
   generation?: number;
   passGeneration?: number;
+  earlierPassGenerations?: PassGeneration[];
 };
 
 export type RoomRecoverySnapshot = Readonly<Omit<RoomRecoveryRecord, "generation">>;
@@ -88,7 +91,7 @@ export type LostRoom = {
   // After this no pass from the lost call can still be good, so the room is
   // anyone's to open again.
   claimableUntil: number;
-  passGeneration: number | null;
+  passGenerations: PassGeneration[] | null;
 };
 
 export type RecalledRoom = {
@@ -112,6 +115,7 @@ type LedgerRoom = Pick<
   | "recoveryPassesVoidUntil"
   | "hostReasons"
   | "guestPassesFor"
+  | "earlierPassGenerations"
 > & { ownershipGeneration?: number | null };
 
 type OverRoom = Pick<Room, "channelId" | "incarnationId" | "takesOverRecordOf" | "ownerEmail"> & {
@@ -149,6 +153,16 @@ const isStringListRecord = (value: unknown): value is Record<string, string[]> =
   !Array.isArray(value) &&
   Object.values(value as Record<string, unknown>).every(isStringList);
 
+const isPassGenerationList = (value: unknown): value is PassGeneration[] =>
+  Array.isArray(value) &&
+  value.every(
+    (item: unknown) =>
+      Boolean(item) &&
+      typeof item === "object" &&
+      typeof (item as PassGeneration).generation === "number" &&
+      typeof (item as PassGeneration).until === "number",
+  );
+
 // The one place a stored record is read back into its shape.
 const parseRoomRecoveryRecord = (raw: unknown): RoomRecoveryRecord | null => {
   if (!raw || typeof raw !== "object") return null;
@@ -165,6 +179,7 @@ const parseRoomRecoveryRecord = (raw: unknown): RoomRecoveryRecord | null => {
     guestPasses = {},
     generation,
     passGeneration,
+    earlierPassGenerations,
   } = raw as Record<string, unknown>;
   if (liveAt !== null && typeof liveAt !== "number") return null;
   if (overAt !== null && typeof overAt !== "number") return null;
@@ -192,6 +207,7 @@ const parseRoomRecoveryRecord = (raw: unknown): RoomRecoveryRecord | null => {
     guestPasses,
     ...(typeof generation === "number" ? { generation } : {}),
     ...(typeof passGeneration === "number" ? { passGeneration } : {}),
+    ...(isPassGenerationList(earlierPassGenerations) ? { earlierPassGenerations } : {}),
   };
 };
 
@@ -356,7 +372,10 @@ export const createRoomRecoveryLedger = (
           ...room.usersNeedingReadmission,
         ]),
         ...(typeof room.ownershipGeneration === "number"
-          ? { passGeneration: room.ownershipGeneration }
+          ? {
+              passGeneration: room.ownershipGeneration,
+              earlierPassGenerations: passesStillOut(room.earlierPassGenerations),
+            }
           : {}),
       });
   const overRecord = (room: OverRoom): RoomRecoverySnapshot =>
@@ -455,7 +474,15 @@ export const createRoomRecoveryLedger = (
                 readmissionRequiredUserKeys: record.readmissionRequiredUserKeys,
                 guestPasses: record.guestPasses,
                 claimableUntil: liveAt + LOST_ROOM_WINDOW_MS,
-                passGeneration: record.passGeneration ?? null,
+                passGenerations:
+                  record.passGeneration === undefined
+                    ? null
+                    : [
+                        ...passesStillOut(record.earlierPassGenerations ?? []).filter(
+                          ({ generation }) => generation !== record.passGeneration,
+                        ),
+                        { generation: record.passGeneration, until: Date.now() },
+                      ],
               }
             : null,
         passesVoidUntil: stillVoids(record?.overAt ?? null),

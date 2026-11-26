@@ -18,6 +18,7 @@ import type {
 import type { Socket } from "socket.io";
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import type { LostRoom } from "../../server/roomRecoveryLedger.js";
+import type { PassGeneration } from "../../server/roomRecoveryPass.js";
 import {
   Awareness,
   applyAwarenessUpdate,
@@ -293,7 +294,8 @@ export class Room {
   // Tells this room apart from an earlier or later one at the same code.
   public readonly incarnationId: string;
   public ownershipGeneration: number | null = null;
-  public recoveryPassGeneration: number | null = null;
+  public recoveryPassGenerations: readonly PassGeneration[] | null = null;
+  public earlierPassGenerations: PassGeneration[] = [];
   // The room whose recovery record this one took over when it was created,
   // the writer of the newest record then. It may write over that room's
   // records, and over no one else's but its own.
@@ -3881,6 +3883,17 @@ export class Room {
     this.cancelLifecycleTimers();
   }
 
+  adoptGeneration(generation: number): void {
+    const earlier = this.ownershipGeneration;
+    if (earlier !== null && earlier !== generation) {
+      this.earlierPassGenerations = [
+        ...this.earlierPassGenerations.filter((passed) => passed.generation !== earlier),
+        { generation: earlier, until: Date.now() },
+      ];
+    }
+    this.ownershipGeneration = generation;
+  }
+
   get isHandingOff(): boolean {
     return this.handingOff;
   }
@@ -3932,6 +3945,7 @@ export class Room {
   endLostCall() {
     if (this.lostCallEnded) return;
     this.lostCallEnded = true;
+    this.earlierPassGenerations = [];
     const report = this.onRecoverableChange;
     this.onRecoverableChange = null;
     const released = [
