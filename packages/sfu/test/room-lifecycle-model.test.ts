@@ -1,3 +1,4 @@
+import jwt from "jsonwebtoken";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Router, Worker } from "mediasoup/types";
 import type { Server as SocketIOServer, Socket } from "socket.io";
@@ -11,7 +12,7 @@ import {
   type RoomRecoveryStore,
 } from "../server/roomRecoveryLedger.js";
 import { startRoomRecoveryPassRefresh } from "../server/roomRecoveryPass.js";
-import { LocalRoomRegistry } from "../server/roomRegistry.js";
+import { LocalRoomRegistry, type RoomRegistry } from "../server/roomRegistry.js";
 import { renewRoomOwnerships } from "../server/rooms.js";
 import {
   createScheduledMeeting,
@@ -103,6 +104,7 @@ type Peer = {
 type Sfu = {
   generation: number;
   state: SfuState;
+  forgetLease: (channelId: string) => void;
   io: SocketIOServer;
   channels: Map<string, Set<Peer>>;
   peers: Set<Peer>;
@@ -137,6 +139,8 @@ type Completion = {
   actor: Actor;
   channelId: string;
   response: JoinAck;
+  presented: string | null;
+  knockedAt: string | null;
   admin: boolean;
   claim: boolean;
   incarnation: string | null;
@@ -157,6 +161,7 @@ type Phase =
     };
 type Shadow = {
   phase: Phase;
+  rooms: Set<string>;
   removed: Set<string>;
   ejected: Set<string>;
   members: Set<string>;
@@ -201,6 +206,7 @@ type Step =
   | { kind: "host"; action: HostAction; by: ActorName; target: ActorName }
   | { kind: "end"; by: ActorName }
   | { kind: "restart"; elsewhere?: boolean }
+  | { kind: "reclaim"; leaver: ActorName | null; slow: "record" | "booking" | null }
   | { kind: "shutdown"; how: Shutdown; leaver: ActorName | null; noticeMs?: number }
   | { kind: "tick"; ms: number }
   | { kind: "untilDeadline"; beforeMs: number }
@@ -211,7 +217,8 @@ type Step =
 type World = {
   random: () => number;
   follows: () => boolean;
-  durable: { recovery: RoomRecoveryStore; schedule: string };
+  durable: { recovery: RoomRecoveryStore; schedule: string; fences: Map<string, number> };
+  slowed: { what: "record" | "booking"; until: Promise<void> } | null;
   sfu: Sfu;
   generation: number;
   held: Array<() => void>;
@@ -331,6 +338,42 @@ const makeIo = (sfu: Sfu): SocketIOServer =>
     }),
   }) as unknown as SocketIOServer;
 
+const forgetfulRegistry = (
+  local: LocalRoomRegistry,
+): { registry: RoomRegistry; forget: (channelId: string) => void } => {
+  const forgotten = new Set<string>();
+  const claim: RoomRegistry["claimRoom"] = async (input) => {
+    if (!forgotten.delete(input.channelId)) return local.claimRoom(input);
+    await local.releaseRoom(input.channelId);
+    const claimed = await local.claimRoom(input);
+    return claimed.ok ? { ...claimed, continuous: false } : claimed;
+  };
+  return {
+    forget: (channelId) => {
+      forgotten.add(channelId);
+    },
+    registry: {
+      mode: local.mode,
+      instanceId: local.instanceId,
+      instanceUrl: local.instanceUrl,
+      start: () => local.start(),
+      close: () => local.close(),
+      getOwner: (channelId) => local.getOwner(channelId),
+      getPlacement: (channelId) => local.getPlacement(channelId),
+      getAssignment: (channelId) => local.getAssignment(channelId),
+      reservePlacement: (input) => local.reservePlacement(input),
+      claimRoom: claim,
+      renewRoom: claim,
+      releaseRoom: (channelId) => {
+        forgotten.delete(channelId);
+        return local.releaseRoom(channelId);
+      },
+      isLocalOwner: (owner) => local.isLocalOwner(owner),
+      holdsLease: (channelId, generation) => local.holdsLease(channelId, generation),
+    },
+  };
+};
+
 const boot = async (world: World): Promise<Sfu> => {
   world.generation += 1;
   const generation = world.generation;
@@ -341,10 +384,13 @@ const boot = async (world: World): Promise<Sfu> => {
       alive()
         ? world.durable.recovery.write(channelId, record, takesOver)
         : new Promise<boolean>(() => undefined),
-    update: (channelId, decide) =>
-      alive()
-        ? world.durable.recovery.update(channelId, decide)
-        : new Promise<boolean>(() => undefined),
+    update: (channelId, decide) => {
+      if (!alive()) return new Promise<boolean>(() => undefined);
+      const slowed = world.slowed;
+      return slowed?.what === "record"
+        ? slowed.until.then(() => world.durable.recovery.update(channelId, decide))
+        : world.durable.recovery.update(channelId, decide);
+    },
   };
   const meetings = () => JSON.parse(world.durable.schedule) as ScheduledMeeting[];
   const schedule: ScheduledMeetingPersistence = {
@@ -353,6 +399,20 @@ const boot = async (world: World): Promise<Sfu> => {
     },
     load: () => meetings(),
     loadOne: (id) => meetings().find((meeting) => meeting.id === id) ?? null,
+    fenceMeeting: (id, fence, held) => {
+      const land = (): boolean => {
+        if (!alive()) return false;
+        const standing = world.durable.fences.get(id);
+        if (standing !== undefined && standing > fence) return false;
+        if (held !== undefined && standing !== undefined && standing !== held && standing !== fence) {
+          return false;
+        }
+        world.durable.fences.set(id, fence);
+        return true;
+      };
+      const slowed = world.slowed;
+      return slowed?.what === "booking" ? slowed.until.then(land) : land();
+    },
   };
   const router = {
     closed: false,
@@ -370,19 +430,20 @@ const boot = async (world: World): Promise<Sfu> => {
       return router;
     },
   } as unknown as Worker;
-  const state = createSfuState({
-    roomRegistry: new LocalRoomRegistry({
+  const leases = forgetfulRegistry(
+    new LocalRoomRegistry({
       instanceId: `model-sfu-${generation}`,
       instanceUrl: "http://localhost",
       ttlMs: 45_000,
     }),
-    roomRecoveryStore: recovery,
-  });
+  );
+  const state = createSfuState({ roomRegistry: leases.registry, roomRecoveryStore: recovery });
   state.workers = [worker];
   await initScheduledMeetings(state, schedule);
   const sfu: Sfu = {
     generation,
     state,
+    forgetLease: leases.forget,
     channels: new Map(),
     peers: new Set(),
     heldLeaves: [],
@@ -475,7 +536,8 @@ const createWorld = async (options: {
   const world: World = {
     random: options.random,
     follows: options.follows,
-    durable: { recovery: createMemoryRoomRecoveryStore(), schedule: "[]" },
+    durable: { recovery: createMemoryRoomRecoveryStore(), schedule: "[]", fences: new Map() },
+    slowed: null,
     sfu: undefined as unknown as Sfu,
     generation: 0,
     held: [],
@@ -483,6 +545,7 @@ const createWorld = async (options: {
     actors,
     shadow: {
       phase: { kind: "none" },
+      rooms: new Set(),
       removed: new Set(),
       ejected: new Set(),
       members: new Set(),
@@ -669,6 +732,8 @@ const startJoin = (
   const handler = tab.peer.handlers.get("joinRoom");
   if (!handler) throw new Error(`${actor.name}'s tab has no join handler`);
   let answered = false;
+  const presented =
+    presentPass && actor.pass && actor.passKey === tab.user.userId ? actor.pass : null;
   const ack = (response: JoinAck) => {
     if (tab.generation !== world.sfu.generation) return;
     if (answered) {
@@ -685,6 +750,9 @@ const startJoin = (
       actor,
       channelId: `conclave:${roomId}`,
       response,
+      presented,
+      knockedAt:
+        world.sfu.state.rooms.get(tab.context.pendingRoomChannelId ?? "")?.incarnationId ?? null,
       admin: tab.context.currentClient instanceof Admin,
       claim: tab.user.isHost === true,
       incarnation: tab.context.currentRoom?.incarnationId ?? null,
@@ -695,9 +763,7 @@ const startJoin = (
   const payload = {
     roomId,
     sessionId: tab.user.sessionId,
-    ...(presentPass && actor.pass && actor.passKey === tab.user.userId
-      ? { roomRecoveryPass: actor.pass }
-      : {}),
+    ...(presented ? { roomRecoveryPass: presented } : {}),
   };
   void Promise.resolve(handler(payload, ack)).catch((error: unknown) => {
     if (tab.generation === world.sfu.generation) {
@@ -806,6 +872,14 @@ const describeStep = (step: Step): string => {
       return step.elsewhere
         ? "the call moves to an SFU that has no record of it"
         : "the SFU restarts";
+    case "reclaim":
+      return `the registry forgets the room's lease and the SFU claims it again${
+        step.slow === "record"
+          ? ", the record's fence slow to land"
+          : step.slow === "booking"
+            ? ", the booking's fence slow to land"
+            : ""
+      }${step.leaver ? `, and ${step.leaver} leaves meanwhile` : ""}`;
     case "shutdown":
       return {
         drain: "the SFU is force drained",
@@ -825,6 +899,7 @@ const describeStep = (step: Step): string => {
 const callOver = (world: World, why: string): void => {
   world.trace.push(`  (the call is over: ${why})`);
   world.shadow.phase = { kind: "none" };
+  world.shadow.rooms.clear();
   world.shadow.removed.clear();
   world.shadow.ejected.clear();
   world.shadow.members.clear();
@@ -975,6 +1050,7 @@ const switchProcess = async (world: World): Promise<void> => {
   vi.setSystemTime(now);
   world.held = [];
   world.holdNext = false;
+  world.slowed = null;
   world.sfu = await boot(world);
 };
 
@@ -1031,6 +1107,22 @@ const restartElsewhere = async (world: World): Promise<void> => {
   world.durable.recovery = createMemoryRoomRecoveryStore();
   await switchProcess(world);
   callOver(world, "an SFU with no record of it took over, so only passes carry over");
+};
+
+const claimAgain = async (world: World, step: Extract<Step, { kind: "reclaim" }>): Promise<void> => {
+  const sfu = world.sfu;
+  sfu.forgetLease(CHANNEL);
+  let land: () => void = () => undefined;
+  if (step.slow) {
+    world.slowed = { what: step.slow, until: new Promise<void>((resolve) => (land = resolve)) };
+  }
+  await renewRoomOwnerships(sfu.state);
+  await settle();
+  const leaver = step.leaver ? liveTab(world, world.actors[step.leaver]) : null;
+  if (leaver) closePeer(sfu, leaver.peer, "client namespace disconnect");
+  await settle();
+  world.slowed = null;
+  land();
 };
 
 const DRAIN_NOTICE_MS = 2_000;
@@ -1206,6 +1298,9 @@ const perform = async (world: World, step: Step): Promise<void> => {
     case "restart":
       if (step.elsewhere) await restartElsewhere(world);
       else await restart(world);
+      break;
+    case "reclaim":
+      await claimAgain(world, step);
       break;
     case "shutdown":
       await shutDown(world, step);
@@ -1425,14 +1520,39 @@ const check = async (
   const fail = (message: string) => world.failures.push(message);
   const opened = liveRoom(world);
   const earlier = shadow.phase;
+  const overIn = async (incarnation: string, why: string): Promise<void> => {
+    callOver(world, why);
+    const kept = await world.sfu.state.roomRecovery.recall(CHANNEL);
+    if (kept.lastWriter === incarnation && kept.lost) {
+      fail("the meeting is over and the server still holds it as a call to bring back");
+    }
+  };
   if (earlier.kind === "lost" && now >= earlier.until) {
     callOver(world, "the lost call's time ran out");
   }
   if (earlier.kind === "running" && opened?.incarnationId !== earlier.incarnation) {
-    callOver(world, "the room it ran in closed");
+    await overIn(earlier.incarnation, "the room it ran in closed");
   }
   creditClaims(world);
   for (const done of world.completions.splice(0)) {
+    if (done.channelId === CHANNEL && done.response.status === "waiting" && done.presented) {
+      const pass = jwt.decode(done.presented) as { incarnationId: string; userKey: string; exp: number };
+      const answered = liveRoom(world);
+      const proof = answered?.guestProofOf(pass.userKey);
+      if (
+        answered &&
+        answered.incarnationId === done.knockedAt &&
+        pass.incarnationId !== done.knockedAt &&
+        shadow.rooms.has(pass.incarnationId) &&
+        now < pass.exp * SECOND_MS &&
+        !shadow.removed.has(removalKeyIn(answered, done.actor)) &&
+        !shadow.removed.has(done.actor.key) &&
+        !answered.needsReadmission(pass.userKey, proof) &&
+        !answered.isBlocked(pass.userKey, proof)
+      ) {
+        fail(`${done.actor.name} came back with a pass still good for the call and was made to knock`);
+      }
+    }
     if (done.channelId !== CHANNEL || done.response.status !== "joined") continue;
     const { actor } = done;
     const owner = ownsCode(actor, done.ownerEmail);
@@ -1468,7 +1588,7 @@ const check = async (
     world.trace.push("  (the lost call came back)");
     shadow.phase = { kind: "running", incarnation: ranHere[0], since: lost.callSince };
     if (liveRoom(world)?.incarnationId !== ranHere[0]) {
-      callOver(world, "it came back and the room it ran in closed");
+      await overIn(ranHere[0], "it came back and the room it ran in closed");
     }
   }
   const room = liveRoom(world);
@@ -1500,6 +1620,7 @@ const check = async (
     shadow.phase = { kind: "running", incarnation: room.incarnationId, since: now };
   }
   if (shadow.phase.kind === "running") {
+    shadow.rooms.add(shadow.phase.incarnation);
     for (const key of seatedKeys(room)) shadow.members.add(key);
   }
 
@@ -1727,6 +1848,16 @@ const nextStep = (world: World): Step => {
   }
   options.push([0.6, () => ({ kind: "restart" })]);
   options.push([0.2, () => ({ kind: "restart", elsewhere: true })]);
+  if (room) {
+    options.push([
+      0.5,
+      () => ({
+        kind: "reclaim",
+        leaver: random() < 0.6 ? anyone() : null,
+        slow: ([null, "record", "booking", "booking"] as const)[Math.floor(random() * 4)],
+      }),
+    ]);
+  }
   for (const how of ["drain", "stop", "worker", "handoff"] as const) {
     options.push([
       0.2,
@@ -1822,7 +1953,9 @@ const runSeeded = async (
     hostClaims,
   });
   world.trace.push(`  (a dropped tab keeps its seat for ${graceMs / SECOND_MS} s)`);
-  const prelude = random() < 0.25 ? leftWaitingForHost(random) : [];
+  const start = random();
+  const prelude =
+    start < 0.25 ? leftWaitingForHost(random) : start < 0.4 ? lostTwice(random) : [];
   for (let index = 0; index < STEPS_PER_SEQUENCE && world.failures.length === 0; index += 1) {
     await vi.advanceTimersByTimeAsync(BETWEEN_STEPS_MS);
     await perform(world, prelude[index] ?? nextStep(world));
@@ -1890,6 +2023,19 @@ const leftWaitingForHost = (random: () => number): Step[] => {
     host(opener, "admit", stayer),
     host(opener, random() < 0.5 ? "revoke" : "blockStay", stayer),
     { kind: "leave", actor: opener },
+  ];
+};
+
+const lostTwice = (random: () => number): Step[] => {
+  const opener = random() < 0.5 ? "alice" : "owner";
+  const member = random() < 0.5 ? "bob" : "carol";
+  return [
+    open(opener),
+    open(member),
+    host(opener, "admit", member),
+    { kind: "restart" },
+    open(opener),
+    { kind: "restart" },
   ];
 };
 
@@ -2557,6 +2703,89 @@ describe("the room lifecycle model", () => {
       ],
       { hostClaims: true },
     );
+    expect(outcome.failures, report(outcome)).toEqual([]);
+  });
+
+  it.each([
+    ["once a host is back", ["alice", "bob"], "participant"],
+    ["when they are first back", ["bob"], "host"],
+  ] as const)(
+    "lets a member back in on the pass they hold after the SFU lost the room twice, %s",
+    async (_when, returning, role) => {
+      const outcome = await runScript(false, [
+        open("alice"),
+        open("bob"),
+        host("alice", "admit", "bob"),
+        { kind: "restart" },
+        open("alice"),
+        { kind: "tick", ms: 20 * SECOND_MS },
+        { kind: "restart" },
+        ...returning.map((actor) => open(actor)),
+        { kind: "expect", actor: "bob", tab: "main", role },
+      ]);
+      expect(outcome.failures, report(outcome)).toEqual([]);
+    },
+  );
+
+  it("lets a member back in on a pass from before the room's lease was claimed again", async () => {
+    const outcome = await runScript(false, [
+      open("alice"),
+      open("bob"),
+      host("alice", "admit", "bob"),
+      { kind: "leave", actor: "bob" },
+      { kind: "reclaim", leaver: null, slow: "record" },
+      { kind: "tick", ms: MINUTE_MS + SECOND_MS },
+      { kind: "restart" },
+      open("bob"),
+      { kind: "expect", actor: "bob", tab: "main", role: "host" },
+    ]);
+    expect(outcome.failures, report(outcome)).toEqual([]);
+  });
+
+  it.each(["record", "booking"] as const)(
+    "ends a booked meeting, and the removals made in it, when its last person leaves while its lease is being claimed again (slow %s)",
+    async (slow) => {
+      const outcome = await runScript(true, [
+        open("owner"),
+        open("invitee"),
+        host("owner", "kick", "invitee"),
+        { kind: "reclaim", leaver: "owner", slow },
+        { kind: "tick", ms: SECOND_MS },
+        open("carol"),
+        { kind: "expect", actor: "carol", tab: "main", role: "out" },
+        open("owner"),
+        open("invitee"),
+        { kind: "expect", actor: "invitee", tab: "main", role: "participant" },
+      ]);
+      expect(outcome.failures, report(outcome)).toEqual([]);
+    },
+  );
+
+  it("opens a new meeting for whoever comes next when the last person left while the room's lease was being claimed again", async () => {
+    const outcome = await runScript(false, [
+      open("alice"),
+      { kind: "reclaim", leaver: "alice", slow: "record" },
+      { kind: "tick", ms: SECOND_MS },
+      open("bob"),
+      { kind: "expect", actor: "bob", tab: "main", role: "host" },
+    ]);
+    expect(outcome.failures, report(outcome)).toEqual([]);
+  });
+
+  it("keeps the call and everyone in it when a member leaves while the room's lease is being claimed again", async () => {
+    const outcome = await runScript(false, [
+      open("alice"),
+      open("bob"),
+      host("alice", "admit", "bob"),
+      open("carol"),
+      host("alice", "admit", "carol"),
+      { kind: "reclaim", leaver: "carol", slow: "record" },
+      { kind: "expect", actor: "alice", tab: "main", role: "host" },
+      { kind: "expect", actor: "bob", tab: "main", role: "participant" },
+      { kind: "restart" },
+      open("bob"),
+      { kind: "expect", actor: "bob", tab: "main", role: "host" },
+    ]);
     expect(outcome.failures, report(outcome)).toEqual([]);
   });
 
