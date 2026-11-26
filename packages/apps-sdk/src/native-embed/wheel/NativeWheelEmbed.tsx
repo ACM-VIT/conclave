@@ -214,6 +214,7 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
     <div className="wheel-page">
       <WheelStage
         entries={dialEntries}
+        listEntries={entries}
         spin={spin}
         canSpin={canEdit && synced}
         sounds={soundsRef.current}
