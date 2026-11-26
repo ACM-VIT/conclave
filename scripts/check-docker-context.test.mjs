@@ -110,7 +110,7 @@ test("the repository's Dockerfiles stay inside the grammar and read as written",
     [17, ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"]],
     [18, ["patches"]],
     ...["ai", "apps-sdk", "meeting-core", "sfu", "shared-browser", "ui-tokens"].map((name, i) => [19 + i, [`packages/${name}/package.json`]]),
-    [27, ["."]],
+    [27, ["packages"]],
   ]);
   assert.deepEqual(read("packages/shared-browser/Dockerfile"), [
     [7, ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"]],
