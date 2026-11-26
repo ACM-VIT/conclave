@@ -25,7 +25,6 @@ export type ReconnectRequest = {
 export type FailedMediaPath = {
   direction: MediaDirection;
   transportId: string;
-  flowEpoch: number;
   generation: number;
   failingProducers: string[];
 };

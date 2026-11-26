@@ -340,8 +340,11 @@ const RESTART_ICE_ACK_TIMEOUT_MS = 5000;
 const MEDIA_PATH_SAMPLE_INTERVAL_MS = 2500;
 const SENDER_PACKET_COUNT_TIMEOUT_MS = 2000;
 const MEDIA_PATH_PROOF_INTERVAL_MS = 1500;
-const MEDIA_PATH_PROOF_DEADLINE_MS = 3000;
 const MEDIA_PATH_STATS_DEADLINE_MS = 2000;
+const MEDIA_PATH_PROOF_SAMPLE_DEADLINE_MS = Math.max(
+  SENDER_PACKET_COUNT_TIMEOUT_MS,
+  MEDIA_PATH_STATS_DEADLINE_MS,
+);
 
 type PathProbe = "carrying" | "not-carrying" | "cancelled";
 
@@ -1220,11 +1223,6 @@ export function useMeetSocket({
     [commitMediaPathRecovery],
   );
   const reconnectGenerationRef = useRef(0);
-  const mediaFlowEpochRef = useRef<Record<"producer" | "consumer", number>>({
-    producer: 0,
-    consumer: 0,
-  });
-  const rebuildCredentialFetchRef = useRef(false);
   const carriesMediaNowRef = useRef<
     (direction: "producer" | "consumer", mustProve: string[]) => Promise<PathProbe>
   >(async () => "not-carrying");
@@ -1652,7 +1650,6 @@ export function useMeetSocket({
         failedPath: {
           direction: transportKind,
           transportId: transport.id,
-          flowEpoch: mediaFlowEpochRef.current[transportKind],
           generation: reconnectGenerationRef.current,
           failingProducers,
         },
@@ -3961,7 +3958,10 @@ export function useMeetSocket({
           );
 
           if (!isCurrent()) return false;
-          await transport.restartIce({ iceParameters: response.iceParameters });
+          await withDeadline(
+            transport.restartIce({ iceParameters: response.iceParameters }),
+            MEDIA_PATH_VERIFY_MS,
+          );
           // The acknowledgement only means new credentials were exchanged.
           // The restart worked if the transport is connected again.
           const connected = await waitForTransportConnected(
@@ -6710,7 +6710,7 @@ export function useMeetSocket({
         !transport ||
         transport.closed ||
         intentionalDisconnectRef.current ||
-        (reconnectInFlightRef.current && !rebuildCredentialFetchRef.current)
+        reconnectInFlightRef.current
       ) {
         entry.transport = transport ?? null;
         entry.watch = INITIAL_MEDIA_PATH_WATCH;
@@ -6800,7 +6800,6 @@ export function useMeetSocket({
             Date.now(),
           );
         }
-        mediaFlowEpochRef.current[kind] += 1;
         updateMediaPathRecovery({ type: "media-flowing", direction: kind });
       }
       reconcileRelayPathsNow();
@@ -6883,6 +6882,7 @@ export function useMeetSocket({
       }
       const stillOn = () =>
         !transport.closed &&
+        transport.connectionState === "connected" &&
         transport ===
           (kind === "producer" ? producerTransportRef.current : consumerTransportRef.current);
       const probe = async (): Promise<PathProbe> => {
@@ -6923,8 +6923,9 @@ export function useMeetSocket({
       });
       cancelPathProbeRef.current = cancel;
       try {
+        const deadline = MEDIA_PATH_PROOF_INTERVAL_MS + 2 * MEDIA_PATH_PROOF_SAMPLE_DEADLINE_MS;
         return await Promise.race([
-          withDeadline(probe(), MEDIA_PATH_PROOF_DEADLINE_MS).catch(
+          withDeadline(probe(), deadline).catch(
             (): PathProbe => "not-carrying",
           ),
           cancelled,
@@ -10109,12 +10110,7 @@ export function useMeetSocket({
       if (scopedDirection && scopedRoomId) {
         if (attemptState.refreshIceServers) {
           attemptState.refreshIceServers = false;
-          rebuildCredentialFetchRef.current = true;
-          try {
-            await refreshIceServersOnOpenSocket(scopedRoomId);
-          } finally {
-            rebuildCredentialFetchRef.current = false;
-          }
+          await refreshIceServersOnOpenSocket(scopedRoomId);
         }
         if (reconnectGeneration !== reconnectGenerationRef.current) return;
         if (intentionalDisconnectRef.current) return;
@@ -10129,8 +10125,7 @@ export function useMeetSocket({
             !transport ||
             transport.closed ||
             transport.id !== failedPath.transportId ||
-            failedPath.generation !== reconnectGenerationRef.current ||
-            failedPath.flowEpoch !== mediaFlowEpochRef.current[scopedDirection]
+            failedPath.generation !== reconnectGenerationRef.current
           );
         };
         let outcome: ScopedRebuildOutcome;
