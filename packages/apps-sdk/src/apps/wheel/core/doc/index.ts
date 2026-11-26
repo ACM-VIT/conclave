@@ -5,6 +5,9 @@ import {
   ensureAppMap,
   getAppRoot,
 } from "../../../../sdk/doc/createAppDoc";
+import { WHEEL_LIMITS, WHEEL_RECEIPT_LIMITS, isValidIdentifier, withoutLoneSurrogates } from "../../../../native-embed/protocol";
+import { cutText } from "../../../../sdk/text";
+import { hasVisibleText } from "../labels";
 
 const ROOT_KEY = "wheel";
 const ENTRIES_KEY = "entries";
@@ -12,10 +15,11 @@ const SPIN_KEY = "spin";
 const HISTORY_KEY = "history";
 const SETTINGS_KEY = "settings";
 const REMOVE_WINNER_KEY = "removeWinnerOnDone";
+const ADD_RECEIPTS_ROOT = "wheel.addReceipts";
 
-export const MAX_WHEEL_ENTRIES = 64;
-export const MAX_ENTRY_LABEL_LENGTH = 48;
-const MAX_HISTORY_LENGTH = 25;
+export const MAX_WHEEL_ENTRIES = WHEEL_LIMITS.entries;
+export const MAX_ENTRY_LABEL_LENGTH = WHEEL_LIMITS.label;
+const MAX_HISTORY_LENGTH = WHEEL_LIMITS.results;
 const MIN_SPIN_DURATION_MS = 250;
 const MAX_SPIN_DURATION_MS = 30_000;
 const MAX_SPIN_TURNS = 20;
@@ -53,18 +57,66 @@ const readEntriesArray = (doc: Y.Doc): EntriesArray | null => {
   return value instanceof Y.Array ? (value as EntriesArray) : null;
 };
 
-const normalizeLabel = (rawLabel: string): string =>
-  rawLabel.replace(/\s+/g, " ").trim().slice(0, MAX_ENTRY_LABEL_LENGTH);
+const CONTROL_CHARACTERS = /\p{Cc}/gu;
 
-const isEntry = (value: unknown): value is WheelEntry => {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const record = value as { id?: unknown; label?: unknown };
-  return (
-    typeof record.id === "string" &&
-    typeof record.label === "string" &&
-    record.label.trim().length > 0 &&
-    record.label.length <= MAX_ENTRY_LABEL_LENGTH
+export const normalizeLabel = (rawLabel: string): string => {
+  const label = cutText(
+    withoutLoneSurrogates(rawLabel).replace(/\s+/g, " ").replace(CONTROL_CHARACTERS, "").trim(),
+    MAX_ENTRY_LABEL_LENGTH
   );
+  return hasVisibleText(label) ? label : "";
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  !!value && typeof value === "object" && !Array.isArray(value);
+
+const readLabel = (value: unknown): string =>
+  typeof value === "string" && value.length <= MAX_ENTRY_LABEL_LENGTH ? normalizeLabel(value) : "";
+
+const readEntry = (value: unknown): WheelEntry | null => {
+  if (!isRecord(value) || !isValidIdentifier(value.id)) return null;
+  const label = readLabel(value.label);
+  if (label === "") return null;
+  const entry = value as WheelEntry;
+  return label === entry.label ? entry : { ...entry, label };
+};
+
+type Accepted<T> = { kept: T[]; indexes: number[] };
+
+const accept = <T>(
+  records: readonly unknown[],
+  limit: number,
+  read: (record: unknown) => T | null,
+  keyOf: (record: T) => string
+): Accepted<T> => {
+  const seen = new Set<string>();
+  const kept: T[] = [];
+  const indexes: number[] = [];
+  records.forEach((record, index) => {
+    if (kept.length >= limit) return;
+    const value = read(record);
+    if (value === null || seen.has(keyOf(value))) return;
+    seen.add(keyOf(value));
+    kept.push(value);
+    indexes.push(index);
+  });
+  return { kept, indexes };
+};
+
+const pruneTo = (array: Y.Array<unknown>, indexes: number[]): void => {
+  const keep = new Set(indexes);
+  for (let index = array.length - 1; index >= 0; index -= 1) {
+    if (!keep.has(index)) array.delete(index, 1);
+  }
+};
+
+const acceptEntries = (records: readonly unknown[]): Accepted<WheelEntry> =>
+  accept(records, MAX_WHEEL_ENTRIES, readEntry, (entry) => entry.id);
+
+const prunedEntries = (entries: EntriesArray): WheelEntry[] => {
+  const accepted = acceptEntries(entries.toArray());
+  pruneTo(entries as Y.Array<unknown>, accepted.indexes);
+  return accepted.kept;
 };
 
 export const createEntryId = (): string =>
@@ -74,37 +126,76 @@ export const createWheelDoc = (): Y.Doc => createAppDoc(ROOT_KEY);
 
 export const getEntries = (doc: Y.Doc): WheelEntry[] => {
   const entries = readEntriesArray(doc);
-  if (!entries) return [];
-  const seen = new Set<string>();
-  const result: WheelEntry[] = [];
-  for (const entry of entries.toArray()) {
-    if (!isEntry(entry) || seen.has(entry.id)) continue;
-    seen.add(entry.id);
-    result.push(entry);
-    if (result.length >= MAX_WHEEL_ENTRIES) break;
-  }
-  return result;
+  return entries ? acceptEntries(entries.toArray()).kept : [];
+};
+
+const pushLabels = (doc: Y.Doc, labels: readonly string[]): number => {
+  if (labels.length === 0) return 0;
+  const entries = ensureAppArray(getRoot(doc), ENTRIES_KEY) as EntriesArray;
+  const room = MAX_WHEEL_ENTRIES - prunedEntries(entries).length;
+  if (room <= 0) return 0;
+  const batch = labels.slice(0, room).map((label) => ({ id: createEntryId(), label }));
+  entries.push(batch);
+  return batch.length;
 };
 
 export const addEntries = (doc: Y.Doc, rawLabels: string[]): number => {
-  const labels = rawLabels
-    .map(normalizeLabel)
-    .filter((label) => label.length > 0);
-  if (labels.length === 0) return 0;
-
-  let added = 0;
-  doc.transact(() => {
-    const entries = ensureAppArray(getRoot(doc), ENTRIES_KEY) as EntriesArray;
-    const room = MAX_WHEEL_ENTRIES - entries.length;
-    if (room <= 0) return;
-    const batch = labels
-      .slice(0, room)
-      .map((label) => ({ id: createEntryId(), label }));
-    entries.push(batch);
-    added = batch.length;
-  });
-  return added;
+  const labels = rawLabels.map(normalizeLabel).filter((label) => label.length > 0);
+  return labels.length === 0 ? 0 : doc.transact(() => pushLabels(doc, labels));
 };
+
+type AddReceipt = readonly string[];
+
+const readReceipt = (value: unknown): AddReceipt | null => {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_WHEEL_ENTRIES) return null;
+  const tokens: unknown[] = value;
+  return tokens.every(isValidIdentifier) ? tokens : null;
+};
+
+const receiptBytes = (receipt: AddReceipt): number =>
+  receipt.reduce((bytes, token) => bytes + token.length + 2, 2);
+
+const acceptReceipts = (records: readonly unknown[]): Accepted<AddReceipt> => {
+  const kept: AddReceipt[] = [];
+  const indexes: number[] = [];
+  let bytes = 0;
+  for (let index = records.length - 1; index >= 0 && kept.length < WHEEL_RECEIPT_LIMITS.count; index -= 1) {
+    const receipt = readReceipt(records[index]);
+    if (receipt === null) continue;
+    bytes += receiptBytes(receipt);
+    if (bytes > WHEEL_RECEIPT_LIMITS.bytes) break;
+    kept.push(receipt);
+    indexes.push(index);
+  }
+  return { kept, indexes };
+};
+
+const tokensIn = (records: readonly unknown[]): Set<string> => new Set(acceptReceipts(records).kept.flat());
+
+export const getAddedTokens = (doc: Y.Doc): ReadonlySet<string> =>
+  tokensIn(doc.getArray<unknown>(ADD_RECEIPTS_ROOT).toArray());
+
+export type TokenedLabel = { token: string; label: string };
+
+export const addEntriesOnce = (doc: Y.Doc, lines: readonly TokenedLabel[]): string[] =>
+  doc.transact(() => {
+    const receipts = doc.getArray<unknown>(ADD_RECEIPTS_ROOT);
+    const records = receipts.toArray();
+    const taken = tokensIn(records);
+    const fresh = lines
+      .map((line) => ({ token: line.token, label: normalizeLabel(line.label) }))
+      .filter((line) => {
+        if (line.label.length === 0 || !isValidIdentifier(line.token) || taken.has(line.token)) return false;
+        taken.add(line.token);
+        return true;
+      });
+    const count = pushLabels(doc, fresh.map((line) => line.label));
+    if (count === 0) return [];
+    const tokens = fresh.slice(0, count).map((line) => line.token);
+    receipts.push([tokens]);
+    pruneTo(receipts, acceptReceipts([...records, tokens]).indexes);
+    return tokens;
+  });
 
 export const addEntry = (doc: Y.Doc, rawLabel: string): boolean =>
   addEntries(doc, [rawLabel]) === 1;
@@ -113,10 +204,9 @@ export const removeEntryById = (doc: Y.Doc, entryId: string): void => {
   const entries = readEntriesArray(doc);
   if (!entries) return;
   doc.transact(() => {
-    const index = entries
-      .toArray()
-      .findIndex((entry) => isEntry(entry) && entry.id === entryId);
-    if (index >= 0) entries.delete(index, 1);
+    const index = prunedEntries(entries).findIndex((entry) => entry.id === entryId);
+    if (index < 0) return;
+    entries.delete(index, 1);
   });
 };
 
@@ -129,20 +219,20 @@ export const clearEntries = (doc: Y.Doc): void => {
 export const replaceEntries = (doc: Y.Doc, next: WheelEntry[]): void => {
   doc.transact(() => {
     const entries = ensureAppArray(getRoot(doc), ENTRIES_KEY) as EntriesArray;
+    const kept = acceptEntries(next).kept;
     entries.delete(0, entries.length);
-    entries.push(next.filter(isEntry).slice(0, MAX_WHEEL_ENTRIES));
+    entries.push(kept);
   });
 };
 
 const isSpin = (value: unknown): value is WheelSpin => {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
+  if (!isRecord(value)) return false;
+  const record = value;
   return (
     typeof record.spinId === "string" &&
     Array.isArray(record.entries) &&
     record.entries.length > 0 &&
     record.entries.length <= MAX_WHEEL_ENTRIES &&
-    record.entries.every(isEntry) &&
     typeof record.winnerIndex === "number" &&
     Number.isInteger(record.winnerIndex) &&
     record.winnerIndex >= 0 &&
@@ -166,9 +256,40 @@ const isSpin = (value: unknown): value is WheelSpin => {
   );
 };
 
+const readSpins = new WeakMap<WheelSpin, WheelSpin>();
+
+const readSpinEntries = (spin: WheelSpin): WheelSpin => {
+  const read = (spin.entries as unknown[]).map(readEntry);
+  const taken = new Set<string>();
+  const ownsId = read.map((entry) => {
+    if (entry === null || taken.has(entry.id)) return false;
+    taken.add(entry.id);
+    return true;
+  });
+  const entries = read.map((entry, index): WheelEntry => {
+    if (entry !== null && ownsId[index]) return entry;
+    let id = `slot-${index}`;
+    for (let suffix = 1; taken.has(id); suffix += 1) id = `slot-${index}.${suffix}`;
+    taken.add(id);
+    return { id, label: entry?.label ?? "" };
+  });
+  return entries.every((entry, index) => entry === spin.entries[index]) ? spin : { ...spin, entries };
+};
+
+export const slotLabel = (spin: WheelSpin, index: number): string =>
+  spin.entries[index]?.label || String(index + 1);
+
+const readSpin = (spin: WheelSpin): WheelSpin => {
+  const cached = readSpins.get(spin);
+  if (cached) return cached;
+  const read = readSpinEntries(spin);
+  readSpins.set(spin, read);
+  return read;
+};
+
 export const getSpin = (doc: Y.Doc): WheelSpin | null => {
   const value = getRoot(doc).get(SPIN_KEY);
-  return isSpin(value) ? value : null;
+  return isSpin(value) ? readSpin(value) : null;
 };
 
 export const startSpin = (doc: Y.Doc, spin: WheelSpin): void => {
@@ -180,27 +301,21 @@ export const clearSpin = (doc: Y.Doc): void => {
   if (root.get(SPIN_KEY) != null) root.set(SPIN_KEY, null);
 };
 
-const isResult = (value: unknown): value is WheelResult => {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
-  return (
-    typeof record.spinId === "string" &&
-    typeof record.label === "string" &&
-    typeof record.at === "number" &&
-    typeof record.byName === "string"
-  );
+const readResult = (value: unknown): WheelResult | null => {
+  if (!isRecord(value) || !isValidIdentifier(value.spinId)) return null;
+  if (typeof value.at !== "number" || typeof value.byName !== "string") return null;
+  const label = readLabel(value.label);
+  if (label === "") return null;
+  const result = value as WheelResult;
+  return label === result.label ? result : { ...result, label };
 };
+
+const acceptResults = (records: readonly unknown[]): Accepted<WheelResult> =>
+  accept(records, MAX_HISTORY_LENGTH, readResult, (result) => result.spinId);
 
 export const getHistory = (doc: Y.Doc): WheelResult[] => {
   const value = getRoot(doc).get(HISTORY_KEY);
-  if (!(value instanceof Y.Array)) return [];
-  const results = (value as Y.Array<WheelResult>).toArray().filter(isResult);
-  const seen = new Set<string>();
-  return results.filter((result) => {
-    if (seen.has(result.spinId)) return false;
-    seen.add(result.spinId);
-    return true;
-  });
+  return value instanceof Y.Array ? acceptResults(value.toArray()).kept : [];
 };
 
 export const recordResult = (doc: Y.Doc, result: WheelResult): void => {
@@ -209,11 +324,11 @@ export const recordResult = (doc: Y.Doc, result: WheelResult): void => {
       getRoot(doc),
       HISTORY_KEY
     ) as Y.Array<WheelResult>;
-    const existing = history
-      .toArray()
-      .some((item) => isResult(item) && item.spinId === result.spinId);
-    if (existing) return;
-    history.insert(0, [result]);
+    const accepted = acceptResults(history.toArray());
+    pruneTo(history as Y.Array<unknown>, accepted.indexes);
+    const read = readResult({ ...result, label: normalizeLabel(result.label) });
+    if (read === null || accepted.kept.some((item) => item.spinId === read.spinId)) return;
+    history.insert(0, [read]);
     if (history.length > MAX_HISTORY_LENGTH) {
       history.delete(MAX_HISTORY_LENGTH, history.length - MAX_HISTORY_LENGTH);
     }

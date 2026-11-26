@@ -763,7 +763,6 @@ struct AppPageUnavailable: View {
 
 struct AppWheelPage: View {
     let host: AppHostPresenter
-    @State private var draft = ""
     @State private var confirmsClear = false
     @FocusState private var focused: Bool
     @Environment(\.panelPromoteToLargeDetent) private var promoteToLarge
@@ -777,17 +776,14 @@ struct AppWheelPage: View {
             } else {
                 if wheel.canEdit {
                     Section {
-                        TextField(ConclaveStrings.text("Add a Name"), text: $draft, axis: .vertical)
+                        TextField(ConclaveStrings.text("Add a Name"),
+                                  text: Binding(get: { host.wheelDraft.text }, set: { host.editWheelDraft($0) }), axis: .vertical)
                             .lineLimit(1...4)
                             .textInputAutocapitalization(.words)
                             .submitLabel(.done)
                             .focused($focused)
                             .disabled(wheel.isFull)
-                            .onSubmit { addDraft() }
-                            .onChange(of: draft) { _, value in
-
-                                if value.contains("\n") { addDraft() }
-                            }
+                            .onSubmit { host.submitWheelDraft() }
                             .onChange(of: focused) { _, isFocused in if isFocused { promoteToLarge() } }
                             .accessibilityIdentifier("app.wheel.add")
                         Button {
@@ -807,6 +803,9 @@ struct AppWheelPage: View {
                         if wheel.isFull {
                             Text(ConclaveStrings.text("The wheel is full."))
                                 .accessibilityIdentifier("app.wheel.full")
+                        } else if host.wheelDraft.isUnconfirmed {
+                            Text(ConclaveStrings.text("Couldn’t confirm these names were added. Check the list before adding them again."))
+                                .accessibilityIdentifier("app.wheel.unconfirmed")
                         }
                     }
                 }
@@ -817,9 +816,17 @@ struct AppWheelPage: View {
                             .accessibilityIdentifier("app.wheel.empty")
                     } else {
                         ForEach(wheel.entries) { entry in
-                            Text(verbatim: entry.label)
-                                .opacity(wheel.isPending(AppPageCommandKind.removeEntry, target: entry.id) ? HostingTheme.disabledOpacity : 1)
-                                .accessibilityIdentifier("app.wheel.entry")
+                            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                                Text(verbatim: String(entry.number))
+                                    .font(.subheadline.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                                    .frame(minWidth: 20, alignment: .trailing)
+                                Text(verbatim: entry.label)
+                            }
+                            .opacity(wheel.isPending(AppPageCommandKind.removeEntry, target: entry.id) ? HostingTheme.disabledOpacity : 1)
+                            .accessibilityElement(children: .combine)
+                            .accessibilityIdentifier("app.wheel.entry")
+                            .deleteDisabled(!wheel.canReorder)
                         }
                         .onDelete(perform: deleteAction)
                     }
@@ -827,13 +834,13 @@ struct AppWheelPage: View {
                 Section {
                     if wheel.canEdit {
                         Button(ConclaveStrings.text("Shuffle")) { _ = host.shuffleWheel() }
-                            .disabled(wheel.entries.count < 2 || wheel.isPending(AppPageCommandKind.shuffle))
+                            .disabled(!wheel.canReorder || wheel.entries.count < 2 || wheel.isPending(AppPageCommandKind.shuffle))
                             .accessibilityIdentifier("app.wheel.shuffle")
                         Button(ConclaveStrings.text("Sort A to Z")) { _ = host.sortWheel() }
-                            .disabled(wheel.entries.count < 2 || wheel.isPending(AppPageCommandKind.sort))
+                            .disabled(!wheel.canReorder || wheel.entries.count < 2 || wheel.isPending(AppPageCommandKind.sort))
                             .accessibilityIdentifier("app.wheel.sort")
                         Button(ConclaveStrings.text("Clear Names…"), role: .destructive) { confirmsClear = true }
-                            .disabled(wheel.entries.isEmpty || wheel.isPending(AppPageCommandKind.clearEntries))
+                            .disabled(!wheel.canReorder || wheel.entries.isEmpty || wheel.isPending(AppPageCommandKind.clearEntries))
                             .accessibilityIdentifier("app.wheel.clear")
                         Toggle(isOn: Binding(get: { host.wheel.removeWinner }, set: { _ = host.setWheelRemoveWinner($0) })) {
                             VStack(alignment: .leading, spacing: 2) {
@@ -878,15 +885,6 @@ struct AppWheelPage: View {
             Text(ConclaveStrings.text("The wheel empties for everyone."))
         }
         .accessibilityIdentifier("app.wheel.page")
-    }
-
-    private func addDraft() {
-        let text = draft
-        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            if !text.isEmpty { draft = "" }
-            return
-        }
-        if host.addWheelNames(text) == ActivityTapResult.dispatched { draft = "" }
     }
 
     private func remove(_ offsets: IndexSet) {

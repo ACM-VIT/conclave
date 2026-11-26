@@ -1,10 +1,13 @@
 import * as Y from "yjs";
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from "y-protocols/awareness";
 import type { NativeTransport } from "./bridge";
+import { cutText } from "../sdk/text";
 import {
+  DOC_ANSWERED_COMMANDS,
   HOST_COMMAND_TYPES,
   NATIVE_EMBED_BUNDLE_VERSION,
   NATIVE_EMBED_LIMITS,
+  WHEEL_LIMITS,
   base64FromBytes,
   bytesFromBase64,
   decodeHostMessage,
@@ -64,8 +67,10 @@ export type WatchAppStatus = {
 
 export type AppStatusPayload = { app: WheelAppStatus | WatchAppStatus };
 
-export type CommandResult = { ok: boolean; error?: string; pngBase64?: string };
-export type CommandHandler = (envelope: Envelope<NativeToEmbedType>) => CommandResult;
+export type CommandResult = { ok: boolean; error?: string; pngBase64?: string; added?: number[] };
+export type CommandHandler = (envelope: Envelope<NativeToEmbedType>, repeat: boolean) => CommandResult;
+
+type HeldCommand = { envelope: Envelope<NativeToEmbedType>; repeat: boolean };
 
 type AwarenessChange = { added: number[]; updated: number[]; removed: number[] };
 
@@ -79,6 +84,7 @@ const INITIAL_HOST_STATUS: HostStatus = {
 };
 
 const COMMAND_TYPES: ReadonlySet<string> = new Set<string>(HOST_COMMAND_TYPES);
+const DOC_ANSWERED: ReadonlySet<string> = new Set<string>(DOC_ANSWERED_COMMANDS);
 
 const AWARENESS_INTERVAL_MS = 50;
 const REMOTE = "remote";
@@ -95,8 +101,11 @@ export class NativeEmbedSession {
   private closed = false;
   private requestNumber = 0;
   private readonly seen: string[] = [];
+  private readonly executed = new Set<string>();
   private readonly listeners = new Set<() => void>();
   private commandHandler: CommandHandler | null = null;
+  private started = false;
+  private readonly held: HeldCommand[] = [];
   private readonly pendingAwareness = new Set<number>();
   private awarenessTimer: ReturnType<typeof setTimeout> | null = null;
   private lastStatus = "";
@@ -111,12 +120,17 @@ export class NativeEmbedSession {
     transport.onMessage((raw) => this.receive(raw));
   }
 
-  start(): void {
-    this.send("ready", {
-      bundleVersion: NATIVE_EMBED_BUNDLE_VERSION,
-      appId: this.scope.appId,
-      stateVector: base64FromBytes(Y.encodeStateVector(this.doc)),
-    });
+  start(handler: CommandHandler): void {
+    this.commandHandler = handler;
+    if (!this.started) {
+      this.started = true;
+      this.send("ready", {
+        bundleVersion: NATIVE_EMBED_BUNDLE_VERSION,
+        appId: this.scope.appId,
+        stateVector: base64FromBytes(Y.encodeStateVector(this.doc)),
+      });
+    }
+    for (const command of this.held.splice(0)) this.runCommand(command.envelope, command.repeat);
   }
 
   get hostStatus(): HostStatus {
@@ -138,10 +152,6 @@ export class NativeEmbedSession {
     };
   }
 
-  setCommandHandler(handler: CommandHandler | null): void {
-    this.commandHandler = handler;
-  }
-
   sendStatus(status: EmbedStatusPayload | AppStatusPayload): void {
     if (this.closed) return;
     const key = JSON.stringify(status);
@@ -160,9 +170,10 @@ export class NativeEmbedSession {
     const decoded = decodeHostMessage(raw, this.scope);
     if (!decoded.ok) return this.reject(decoded.reason);
     const envelope = decoded.envelope;
-    if (this.seen.includes(envelope.requestId)) return this.reject("duplicateRequest");
-    this.seen.push(envelope.requestId);
-    if (this.seen.length > NATIVE_EMBED_LIMITS.requestMemory) this.seen.shift();
+    const repeat = this.executed.has(envelope.requestId) || this.seen.includes(envelope.requestId);
+    if (repeat && !DOC_ANSWERED.has(envelope.type)) return this.reject("duplicateRequest");
+    if (COMMAND_TYPES.has(envelope.type)) this.markExecuted(envelope.requestId);
+    else this.noteSeen(envelope.requestId);
     const payload = envelope.payload;
     switch (envelope.type) {
       case "snapshot":
@@ -217,6 +228,7 @@ export class NativeEmbedSession {
       case "setRemoveWinner":
       case "setSounds":
       case "clearResults":
+      case "addOutcome":
       case "playNow":
       case "enqueue":
       case "request":
@@ -227,7 +239,7 @@ export class NativeEmbedSession {
       case "remove":
       default:
         if (!COMMAND_TYPES.has(envelope.type)) return this.reject("unknownType");
-        this.runCommand(envelope);
+        this.runCommand(envelope, repeat);
         return "none";
     }
   }
@@ -290,19 +302,23 @@ export class NativeEmbedSession {
       connection: payload.connection === "reconnecting" ? "reconnecting" : "live",
       reduceMotion: payload.reduceMotion === true,
       pencilOnly: payload.pencilOnly === true,
-      userId: typeof payload.userId === "string" ? payload.userId.slice(0, 128) : "",
-      userName: typeof payload.userName === "string" ? payload.userName.slice(0, 128) : "",
+      userId: typeof payload.userId === "string" ? cutText(payload.userId, 128) : "",
+      userName: typeof payload.userName === "string" ? cutText(payload.userName, 128) : "",
     };
     if (wasReadOnly !== this.host.readOnly) this.lastStatus = "";
     this.notify();
   }
 
-  private runCommand(envelope: Envelope<NativeToEmbedType>): void {
+  private runCommand(envelope: Envelope<NativeToEmbedType>, repeat: boolean): void {
     const handler = this.commandHandler;
+    if (handler === null && this.held.length < NATIVE_EMBED_LIMITS.requestMemory) {
+      this.held.push({ envelope, repeat });
+      return;
+    }
     let result: CommandResult = { ok: false, error: "notReady" };
     if (handler) {
       try {
-        result = handler(envelope);
+        result = handler(envelope, repeat);
       } catch {
         result = { ok: false, error: "failed" };
       }
@@ -310,6 +326,7 @@ export class NativeEmbedSession {
     const payload: Record<string, unknown> = { ok: result.ok };
     if (result.error) payload.error = result.error.slice(0, 64);
     if (result.pngBase64) payload.pngBase64 = result.pngBase64;
+    if (result.added) payload.added = result.added.slice(0, WHEEL_LIMITS.entries);
     this.send("ack", payload, envelope.requestId);
   }
 
@@ -346,6 +363,18 @@ export class NativeEmbedSession {
     const message = encodeEnvelope(type, this.scope, id, payload);
     if (message.length > NATIVE_EMBED_LIMITS.envelopeCharacters) return;
     this.transport.post(message);
+  }
+
+  private markExecuted(requestId: string): void {
+    this.executed.add(requestId);
+    if (this.executed.size <= NATIVE_EMBED_LIMITS.executedCommands) return;
+    const oldest = this.executed.values().next();
+    if (!oldest.done) this.executed.delete(oldest.value);
+  }
+
+  private noteSeen(requestId: string): void {
+    this.seen.push(requestId);
+    if (this.seen.length > NATIVE_EMBED_LIMITS.requestMemory) this.seen.shift();
   }
 
   private reject(reason: RejectionReason): RejectionReason {

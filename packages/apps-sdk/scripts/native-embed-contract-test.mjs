@@ -35,6 +35,29 @@ test("embed messages decode exactly as the fixtures say", () => {
   }
 });
 
+test("the encoder turns the old half emoji envelope into the one the fixtures say iOS decodes", () => {
+  const byName = (prefix) => fixtures.embedToNative.find((item) => item.name.startsWith(prefix));
+  const sent = byName("wheel status holding half an emoji");
+  const now = byName("wheel status with the half emoji dropped");
+  assert.equal(sent.expect, "malformed");
+  assert.equal(now.expect, "none");
+  const old = JSON.parse(sent.raw);
+  assert.match(old.payload.app.entries[0].label, /[\uD800-\uDFFF]/u);
+  assert.equal(protocol.encodeEnvelope(old.type, fixtures.scope, old.requestId, old.payload), now.raw);
+});
+
+test("an ack may list the sent names it added, as whole numbers", () => {
+  const decode = (payload) => {
+    const result = protocol.decodeEmbedMessage(envelope("ack", payload), fixtures.scope, fixtures.expectedOrigin, fixtures.expectedOrigin, true);
+    return result.ok ? "none" : result.reason;
+  };
+  assert.equal(decode({ ok: true, added: [0, 2] }), "none");
+  assert.equal(decode({ ok: false, error: "full", added: [] }), "none");
+  for (const added of ["0", [1.5], [-1], [0, "1"], Array.from({ length: 65 }, (_, index) => index)]) {
+    assert.equal(decode({ ok: true, added }), "badPayload", JSON.stringify(added));
+  }
+});
+
 test("host messages decode exactly as the fixtures say", () => {
   for (const item of fixtures.hostToEmbed) {
     const result = protocol.decodeHostMessage(item.raw, fixtures.scope);
@@ -97,6 +120,9 @@ test("the Swift twin matches protocol.ts", () => {
   assert.equal(Number(constant("pageLimit")), limits.pages);
   assert.equal(Number(constant("pageNameLimit")), limits.pageName);
   assert.equal(Number(constant("requestMemory")), limits.requestMemory);
+  assert.equal(Number(constant("commandTimeoutMillis")), protocol.COMMAND_TIMEOUT_MS);
+  assert.equal(Number(constant("addOutcomeAsks")), protocol.WHEEL_ADD_RECOVERY.asks);
+  assert.equal(Number(constant("addOutcomeWindowMillis")), protocol.WHEEL_ADD_RECOVERY.windowMs);
   const cases = (enumName) => {
     const block = swift.match(new RegExp(`enum ${enumName}: String, CaseIterable, Equatable \\{([\\s\\S]*?)\\n\\}`));
     assert.ok(block, `missing Swift enum ${enumName}`);
@@ -122,8 +148,14 @@ const loadSessionModule = async () => {
   }
   const result = await esbuild.build({
     stdin: {
-      contents:
-        'export * from "./session.ts"; export * from "./protocol.ts"; export * as Y from "yjs"; export * as awarenessProtocol from "y-protocols/awareness";',
+      contents: [
+        'export * from "./session.ts";',
+        'export * from "./protocol.ts";',
+        'export * as Y from "yjs";',
+        'export * as awarenessProtocol from "y-protocols/awareness";',
+        'export { runWheelCommand } from "./wheel/commands.ts";',
+        'export { createWheelDoc, getEntries } from "../apps/wheel/core/doc/index.ts";',
+      ].join("\n"),
       resolveDir: embedDir,
       loader: "ts",
     },
@@ -212,11 +244,11 @@ const makeRoom = (mod, context) => {
       }
     }
   };
-  const join = (name, host = {}) => {
+  const join = (name, host = {}, wheel = false) => {
     const outbox = [];
     const client = {
       name,
-      scope: { callSessionId: "call-1-contract", appSessionId: `app-${name}`, appId: "whiteboard" },
+      scope: { callSessionId: "call-1-contract", appSessionId: `app-${name}`, appId: wheel ? "wheel" : "whiteboard" },
       host: { readOnly: false, connection: "live", reduceMotion: false, pencilOnly: false, userId: name, userName: name, ...host },
       outbox,
       received: [],
@@ -232,14 +264,27 @@ const makeRoom = (mod, context) => {
         client.handler = next;
       },
     };
-    client.session = new mod.NativeEmbedSession(transport, client.scope, new Y.Doc());
+    client.session = new mod.NativeEmbedSession(transport, client.scope, wheel ? mod.createWheelDoc() : new Y.Doc());
     clients.push(client);
-    client.session.start();
+    client.session.start(wheel ? wheelRunner(mod, client) : () => ({ ok: true }));
     pump();
     return client;
   };
   return { Y, room, roomUpdates, join, pump, deliver };
 };
+
+const wheelRunner = (mod, client) => (envelope, repeat) =>
+  mod.runWheelCommand(client.session.doc, envelope.type, envelope.payload, {
+    synced: client.session.isSynced,
+    canEdit: !client.session.hostStatus.readOnly,
+    repeat,
+    spinning: false,
+    requestSpin: () => ({ ok: true }),
+    setSounds: () => ({ ok: true }),
+  });
+
+const namesOn = (mod, client) => mod.getEntries(client.session.doc).map((entry) => entry.label);
+const acksFor = (client, requestId) => client.acks.filter((ack) => ack.requestId === requestId).map((ack) => ack.payload);
 
 const text = (Y, doc) => doc.getMap("whiteboard").toJSON();
 
@@ -330,14 +375,102 @@ test("hostile host messages are dropped and counted by reason", { skip: skipConv
 test("commands answer with an ack carrying their request id", { skip: skipConvergence }, (context) => {
   const harness = makeRoom(sessionModule, context);
   const ada = harness.join("ada");
-  ada.session.setCommandHandler((command) => ({ ok: command.type === "setTool" }));
+  ada.session.start((command) => ({ ok: command.type === "setTool" }));
   harness.deliver(ada, "setTool", { tool: "eraser" }, "h-1");
   harness.deliver(ada, "undo", {}, "h-2");
   harness.pump();
   assert.deepEqual(ada.acks.map((ack) => [ack.requestId, ack.payload.ok]), [["h-1", true], ["h-2", false]]);
 });
 
-test("close invalidates the session for good", { skip: skipConvergence }, (context) => {
+test("a wheel add delivered twice under one request id adds once and is answered from the document both times", { skip: skipConvergence }, (context) => {
+  const harness = makeRoom(sessionModule, context);
+  const ada = harness.join("ada", {}, true);
+  const payload = { labels: ["Ada", "", "Bo"], tokens: ["t-ada", "t-blank", "t-bo"] };
+  assert.equal(harness.deliver(ada, "addEntries", payload, "h-5"), "none");
+  assert.equal(harness.deliver(ada, "addEntries", payload, "h-5"), "none");
+  harness.pump();
+  assert.deepEqual(namesOn(sessionModule, ada), ["Ada", "Bo"]);
+  assert.deepEqual(acksFor(ada, "h-5"), [{ ok: true, added: [0, 2] }, { ok: true, added: [0, 2] }]);
+  assert.equal(ada.session.rejections.includes("duplicateRequest"), false);
+  assert.equal(harness.deliver(ada, "shuffle", {}, "h-6"), "none");
+  assert.equal(harness.deliver(ada, "shuffle", {}, "h-6"), "duplicateRequest");
+});
+
+test("a refusal is never remembered: the same request id is next answered from the document", { skip: skipConvergence }, (context) => {
+  const harness = makeRoom(sessionModule, context);
+  const ada = harness.join("ada", {}, true);
+  harness.deliver(ada, "resync", {});
+  assert.equal(ada.session.isSynced, false);
+  const payload = { labels: ["Ada"], tokens: ["t-ada"] };
+  harness.deliver(ada, "addEntries", payload, "h-1");
+  harness.deliver(ada, "addOutcome", { tokens: payload.tokens }, "h-2");
+  harness.pump();
+  assert.equal(ada.session.isSynced, true);
+  assert.deepEqual(acksFor(ada, "h-1"), [{ ok: false, error: "notSynced", added: [] }]);
+  assert.deepEqual(acksFor(ada, "h-2"), [{ ok: false, error: "notSynced" }]);
+  harness.deliver(ada, "addEntries", payload, "h-1");
+  harness.deliver(ada, "addOutcome", { tokens: payload.tokens }, "h-3");
+  harness.pump();
+  assert.deepEqual(acksFor(ada, "h-1")[1], { ok: false, error: "notApplied", added: [] });
+  assert.deepEqual(acksFor(ada, "h-3"), [{ ok: false, error: "notApplied", added: [] }]);
+  assert.deepEqual(namesOn(sessionModule, ada), []);
+  harness.deliver(ada, "addEntries", { labels: ["Ada"], tokens: ["t-ada-again"] }, "h-4");
+  harness.pump();
+  assert.deepEqual(acksFor(ada, "h-4"), [{ ok: true, added: [0] }]);
+  assert.deepEqual(namesOn(sessionModule, ada), ["Ada"]);
+});
+
+test("an add is answered from the document after the session forgot its request, and by an embed that reloaded", { skip: skipConvergence }, (context) => {
+  const harness = makeRoom(sessionModule, context);
+  const ada = harness.join("ada", {}, true);
+  const payload = { labels: ["Ada", "Bo"], tokens: ["t-ada", "t-bo"] };
+  harness.deliver(ada, "addEntries", payload, "h-1");
+  for (let index = 0; index < protocol.NATIVE_EMBED_LIMITS.executedCommands + 8; index += 1) {
+    harness.deliver(ada, "setSounds", { value: index % 2 === 0 }, `h-s${index}`);
+  }
+  assert.equal(harness.deliver(ada, "addEntries", payload, "h-1"), "none");
+  harness.pump();
+  assert.deepEqual(acksFor(ada, "h-1"), [{ ok: true, added: [0, 1] }, { ok: true, added: [0, 1] }]);
+  assert.deepEqual(namesOn(sessionModule, ada), ["Ada", "Bo"]);
+  const reloaded = harness.join("ada-reloaded", {}, true);
+  harness.deliver(reloaded, "addOutcome", { tokens: payload.tokens }, "h-9");
+  harness.deliver(reloaded, "addOutcome", { tokens: ["t-never"] }, "h-10");
+  harness.pump();
+  assert.deepEqual(acksFor(reloaded, "h-9"), [{ ok: true, added: [0, 1] }]);
+  assert.deepEqual(acksFor(reloaded, "h-10"), [{ ok: false, error: "notApplied", added: [] }]);
+  assert.deepEqual(namesOn(sessionModule, reloaded), ["Ada", "Bo"]);
+});
+
+test("the embed says ready only once it can run commands, and runs any that came first", { skip: skipConvergence }, (context) => {
+  const mod = sessionModule;
+  const outbox = [];
+  let deliver = () => "none";
+  const transport = { platform: "ios", post: (message) => outbox.push(JSON.parse(message)), onMessage: (next) => { deliver = next; } };
+  const scope = { callSessionId: "call-1-contract", appSessionId: "app-early", appId: "wheel" };
+  const client = { session: new mod.NativeEmbedSession(transport, scope, mod.createWheelDoc()) };
+  context.after(() => {
+    client.session.close();
+    client.session.doc.destroy();
+  });
+  const host = (type, payload, requestId) =>
+    deliver(JSON.stringify({ v: 1, type, callSessionId: scope.callSessionId, appSessionId: scope.appSessionId, requestId, payload }));
+  assert.equal(host("status", { readOnly: false, connection: "live" }, "n-1"), "none");
+  assert.equal(host("snapshot", { syncMessage: "", stateVector: "" }, "n-2"), "none");
+  assert.equal(host("addEntries", { labels: ["Ada"], tokens: ["t-ada"] }, "h-1"), "none");
+  assert.equal(host("addOutcome", { tokens: ["t-ada"] }, "h-2"), "none");
+  assert.deepEqual(outbox.filter((message) => message.type === "ready" || message.type === "ack"), []);
+  client.session.start(wheelRunner(mod, client));
+  client.session.start(wheelRunner(mod, client));
+  const said = outbox.filter((message) => message.type === "ready" || message.type === "ack");
+  assert.deepEqual(said.map((message) => [message.type, message.requestId, message.payload.ok]), [
+    ["ready", said[0].requestId, undefined],
+    ["ack", "h-1", true],
+    ["ack", "h-2", true],
+  ]);
+  assert.deepEqual(namesOn(mod, client), ["Ada"]);
+});
+
+test("close invalidates the session for good",{ skip: skipConvergence }, (context) => {
   const harness = makeRoom(sessionModule, context);
   const ada = harness.join("ada");
   harness.deliver(ada, "close", {});
