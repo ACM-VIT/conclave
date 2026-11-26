@@ -158,6 +158,7 @@ case "$1" in
     fi
     if [[ "$*" == *State.FinishedAt* ]]; then echo "$running $started $FAKE_FINISHED_AT"; exit 0; fi
     if [[ "$*" == *State.Running* ]]; then echo "$running"; exit 0; fi
+    if [[ "$*" == *State.Status* ]]; then if [[ "$running" == true ]]; then echo running; else echo exited; fi; exit 0; fi
     if [[ "$*" == *State.StartedAt* ]]; then echo "$started"; exit 0; fi
     exit 0 ;;
   diff)
@@ -217,9 +218,15 @@ const harnesses = [
         allDefinitions(deployShell, shellFunctions),
         `if [[ -n "\${FIXED_STAMP:-}" ]]; then archive_stamp() { printf '%s' "$FIXED_STAMP"; }; fi`,
         'declare -A RESTART_HOLDS=() EXPECTED_ID=([sfu-a]=sfu-a)',
-        'STATUS_RETRY_SECONDS=0 HEALTH_TIMEOUT_SECONDS="$SFU_HEALTH_TIMEOUT_SECONDS" POLL_SECONDS=0.05 STATE_TOOLS_TAG=state-tools',
+        'STATUS_RETRY_SECONDS=0 CONTAINER_SETTLE_SECONDS=0.05 HEALTH_TIMEOUT_SECONDS="$SFU_HEALTH_TIMEOUT_SECONDS" POLL_SECONDS=0.05 STATE_TOOLS_TAG=state-tools',
         'SERVICE_URL=("$SFU_HEALTH_URL")',
-        `instance_status() { printf '%s' '{"draining":true,"rooms":0}'; }`,
+        `instance_status() {
+          if [[ "$FAKE_FAIL_AT" == exit-before-final-status && ! -f "$FAKE_STOPPED" ]]; then
+            : > "$FAKE_STOPPED"
+            return 1
+          fi
+          printf '%s' '{"draining":true,"rooms":0}'
+        }`,
         'service_url() { printf "%s" "$SFU_HEALTH_URL"; }',
         'if [[ -n "$FIXED_STAMP" ]]; then',
         '  archive_stamp() { printf "%s" "$FIXED_STAMP"; }',
@@ -930,6 +937,20 @@ for (const harness of harnesses) {
       }
     }
     assert.deepEqual(outcomes, Object.fromEntries(Object.keys(scenarios).map((name) => [name, { status: 0, stderr: "", rows: later, started: true }])));
+  });
+
+  test(`${shell}: rechecks a held source that exits between the Docker state read and its final HTTP status`, async () => {
+    const { status, calls, stderr, archives } = await replaceService(harness, {
+      running: true,
+      failAt: "exit-before-final-status",
+      diff: wrote("scheduling.json"),
+    });
+    assert.equal(status, 0, stderr);
+    assert.equal(archives.length, 1);
+    const hold = callIndex(calls, /^update --restart=no old-sfu-a$/);
+    const restore = callIndex(calls, /^update --restart=unless-stopped old-sfu-a$/);
+    const up = callIndex(calls, /^compose .* up -d .*sfu-a$/);
+    assert.ok(hold >= 0 && restore > hold && up > restore, calls.join("\n"));
   });
 
   test(`${shell}: every way a deploy can end after the old SFU's restarts are turned off gives it its restart policy back and says whether it is still running`, async () => {

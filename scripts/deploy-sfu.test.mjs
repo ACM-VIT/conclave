@@ -447,6 +447,25 @@ for (const fault of ["transient list", "persistent list", "persistent inspect"])
   });
 }
 
+test("an in-progress rollback does not drain any instance while a fleet image is unknown", async () => {
+  await withSfus({ "sfu-a": { onTarget: true }, "sfu-b": { onTarget: true } }, async (sfus, events) => {
+    const stateDir = await mkdtemp(path.join(tmpdir(), "conclave-deploy-state-"));
+    try {
+      const stateFile = path.join(stateDir, "vm.env");
+      const prior = "LAST_GOOD_COMMIT=bad\nLAST_GOOD_IMAGE=sha256:target\nPREVIOUS_GOOD_COMMIT=good\nPREVIOUS_GOOD_IMAGE=sha256:previous\nROLLBACK_TARGET_COMMIT=good\nROLLBACK_TARGET_IMAGE=sha256:previous\n";
+      await writeFile(stateFile, prior);
+      const sfu = sfus["sfu-b"];
+      sfu.onStatus = () => { sfu.failImageRead = () => true; };
+      const result = await deploy(sfus, { args: ["--rollback"], env: { SFU_DEPLOY_STATE_DIR: stateDir } });
+      assert.notEqual(result.code, 0, result.output);
+      assert.deepEqual(events, [], result.output);
+      assert.equal(await readFile(stateFile, "utf8"), prior, result.output);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+});
+
 test("a rollback killed after its first instance finishes going back to the same release when rerun", async () => {
   await withSfus({ "sfu-a": { onTarget: true }, "sfu-b": { onTarget: true } }, async (sfus) => {
     const stateDir = await mkdtemp(path.join(tmpdir(), "conclave-deploy-state-"));
