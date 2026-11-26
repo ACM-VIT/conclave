@@ -12,7 +12,7 @@ import type {
 } from "../types.js";
 import { asArray, asRecord } from "../utilities/untrusted.js";
 import { InvalidInput } from "./controlPlane/model.js";
-import { canonicalizeClientId, CONCLAVE_CLIENT_ID } from "./clientIds.js";
+import { canonicalizeClientId, clientReadsFallBackTo, CONCLAVE_CLIENT_ID } from "./clientIds.js";
 import { storedTimestampOrNull } from "./storedValues.js";
 
 const USERNAME_MAX_LENGTH = 48;
@@ -502,7 +502,7 @@ export const meetingMatchesProfile = (
   eventType?: SchedulingEventType | null,
 ): boolean => {
   if (eventType?.profileId === profile.id) return true;
-  if (meeting.clientId !== profile.clientId) return false;
+  if (!clientReadsFallBackTo(meeting.clientId, profile.clientId)) return false;
   if (meeting.hostUserId && profile.userId) {
     return meeting.hostUserId === profile.userId;
   }

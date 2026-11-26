@@ -31,6 +31,9 @@ export const clientIdCandidates = (primary: string): string[] => {
   });
 };
 
+export const clientReadsFallBackTo = (clientId: string, storedUnder: string): boolean =>
+  clientIdCandidates(clientId).includes(canonicalizeClientId(storedUnder));
+
 /**
  * Whether stored data may move from `fromClientId` to `toClientId`.
  *

@@ -541,6 +541,47 @@ describe.each(sharedModes)("two SFUs on one %s store", (current) => {
   });
 });
 
+describe("a host whose profile is stored under a legacy client of the deployment", () => {
+  it("is busy during meetings created in the deployment's own client, in the slot list and at booking", async () => {
+    const legacy = await start("A");
+    const { username } = await setUpHost(legacy);
+    await stop(legacy);
+    vi.stubEnv("SFU_CLIENT_ID", "acme");
+    const sfu = await start("B");
+    const acme = { "x-sfu-client": "acme" };
+    const profile = field<{ clientId: string; username: string }>(await host(sfu, "GET", "/scheduling/profile", undefined, acme), "profile");
+    expect(profile).toMatchObject({ clientId: "conclave", username });
+    const startAt = slotAfter(2 * DAY_MS);
+    const manual = await host(sfu, "POST", "/scheduled-meetings", { title: "Standup", scheduledStartAt: startAt, scheduledEndAt: startAt + HALF_HOUR }, acme);
+    expect(field<{ clientId: string }>(manual, "scheduledMeeting").clientId).toBe("acme");
+
+    const slots = field<Array<{ startAt: number }>>(
+      await sfu.call("GET", `/scheduling/public/${username}/intro/slots?from=${startAt - DAY_MS}&to=${startAt + DAY_MS}`, undefined, acme),
+      "slots",
+    );
+    expect(slots.length).toBeGreaterThan(0);
+    expect(slots.some((slot) => slot.startAt === startAt)).toBe(false);
+    const booked = await sfu.call("POST", `/scheduling/public/${username}/intro/book`, { startAt, attendeeName: "Guest", attendeeEmail: "guest@example.test" }, acme);
+    expect(booked.status).toBe(409);
+    expect(await bookings(sfu)).toEqual([]);
+  });
+
+  it("stays free during another host's meeting in the deployment's client", async () => {
+    const legacy = await start("A");
+    const { username } = await setUpHost(legacy);
+    await stop(legacy);
+    vi.stubEnv("SFU_CLIENT_ID", "acme");
+    const sfu = await start("B");
+    const acme = { "x-sfu-client": "acme" };
+    const startAt = slotAfter(2 * DAY_MS);
+    const other = { "x-user-id": "other-user", "x-user-email": "other@example.test", "x-user-name": "Other", ...acme };
+    expect((await sfu.call("POST", "/scheduled-meetings", { title: "Theirs", scheduledStartAt: startAt, scheduledEndAt: startAt + HALF_HOUR }, other)).status).toBe(201);
+
+    const booked = await sfu.call("POST", `/scheduling/public/${username}/intro/book`, { startAt, attendeeName: "Guest", attendeeEmail: "guest@example.test" }, acme);
+    expect(booked.status).toBe(201);
+  });
+});
+
 describe("one SFU booking an event type with buffers", () => {
   it("refuses a time whose buffer overlaps a Google Calendar event, as the slot list does", async () => {
     const a = await start("A");
