@@ -175,6 +175,7 @@ export const APP_ROUTE_SEGMENTS = [
   "api",
   "book",
   "delete-account",
+  "ingest",
   "privacy",
   "schedule",
   "sfu-admin",
