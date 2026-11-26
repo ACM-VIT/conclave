@@ -390,14 +390,14 @@ test("SIGINT during the first image cleanup never claims or removes a second ima
   const fake = fakeDocker(t, { contexts: { default: "unix:///run/fake-docker.sock" }, FAKE_DOCKER_HEALTHY: "1" });
   const release = path.join(fake.dir, "release-rmi");
   const { child, exited } = runScript(t, { ...fake.env, FAKE_DOCKER_RMI_RELEASE: release });
-  let signalLogged = false;
+  let signalLog = "";
   child.stderr.on("data", (chunk) => {
-    if (chunk.toString().includes("SIGINT: stopping")) signalLogged = true;
+    signalLog += chunk;
   });
   try {
     await waitFor(() => fake.calls().some(({ args }) => args[2] === "rmi"), "the first image cleanup");
     assert.equal(child.kill("SIGINT"), true);
-    await waitFor(() => signalLogged, "the SIGINT handler");
+    await waitFor(() => signalLog.includes("SIGINT: stopping"), "the SIGINT handler");
   } finally {
     writeFileSync(release, "");
   }

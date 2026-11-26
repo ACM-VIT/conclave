@@ -361,6 +361,7 @@ async function main(session) {
   let cleanedUp = false;
   try {
     for (const build of builds) {
+      if (session.signal) throw new Interrupted(session.signal);
       const result = await checkImage(build, { docker, resources, builder, socket, noCache, logDir, run });
       console.log(`${result.ok ? "ok" : "FAIL"} ${result.dockerfile}: ${result.detail}`);
       results.push(result);
