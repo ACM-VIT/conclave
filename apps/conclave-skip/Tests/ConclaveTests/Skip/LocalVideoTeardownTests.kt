@@ -146,6 +146,8 @@ class LocalVideoTeardownTests {
         @Volatile var observer: CapturerObserver? = null
         @Volatile var holdSwitches = false
         @Volatile var heldSwitch: CameraVideoCapturer.CameraSwitchHandler? = null
+        var switchError: String? = null
+        val switchTargets = CopyOnWriteArrayList<String>()
         fun holdHardware() {
             hardware?.open(cameraId, name)
         }
@@ -169,16 +171,25 @@ class LocalVideoTeardownTests {
         override fun dispose() { disposals += 1 }
         override fun isScreencast(): Boolean = false
         override fun switchCamera(handler: CameraVideoCapturer.CameraSwitchHandler?) {
+            finishSwitch(handler, !front)
+        }
+        override fun switchCamera(handler: CameraVideoCapturer.CameraSwitchHandler?, cameraName: String?) {
+            switchTargets.add(requireNotNull(cameraName))
+            finishSwitch(handler, cameraName == "1")
+        }
+        private fun finishSwitch(handler: CameraVideoCapturer.CameraSwitchHandler?, targetFront: Boolean) {
             events?.add("$name switched")
             if (holdSwitches) {
                 heldSwitch = handler
                 return
             }
-            if (reportsTarget) front = !front
-            handler?.onCameraSwitchDone(if (reportsTarget) front else true)
-        }
-        override fun switchCamera(handler: CameraVideoCapturer.CameraSwitchHandler?, cameraName: String?) {
-            switchCamera(handler)
+            val error = switchError
+            if (error == null) {
+                if (reportsTarget) front = targetFront
+                handler?.onCameraSwitchDone(if (reportsTarget) front else true)
+            } else {
+                handler?.onCameraSwitchError(error)
+            }
         }
     }
 
@@ -1062,6 +1073,8 @@ class LocalVideoTeardownTests {
 
             grantShareConsent()
             val consent = ScreenCaptureManager.getCaptureResultIntent()
+            val serviceCommands = CopyOnWriteArrayList<String?>()
+            ScreenCaptureManager.startServiceForTesting = { intent, _ -> serviceCommands.add(intent.action) }
             media.createTextureHelper = {
                 helperEntered.countDown()
                 helperGate.await(10, TimeUnit.SECONDS)
@@ -1074,6 +1087,7 @@ class LocalVideoTeardownTests {
             advanceMainUntil { first.isCompleted }
             assertNotNull(runBlocking { first.await() }.exceptionOrNull())
             assertSame("the ended share revoked the next share's consent", consent, ScreenCaptureManager.getCaptureResultIntent())
+            assertTrue("the ended share stopped the next share's service", serviceCommands.isEmpty())
 
             helperGate.countDown()
             advanceMainUntil { second.isCompleted }
@@ -1089,20 +1103,27 @@ class LocalVideoTeardownTests {
     @Test
     fun aCameraOffDuringAPendingStartDoesNotReportOrWaitForTheRetiredCamera() {
         val failures = mutableListOf<String>()
-        for (wait in listOf("preview release", "teardown")) {
+        for (wait in listOf("preview release", "teardown", "availability")) {
             val (media, _) = joinedCall()
             val events = CopyOnWriteArrayList<String>()
             readyToStart(media, events)
-            media.onTeardownStuck = { failures.add("$wait reported $it stuck") }
+            var diagnosticCount = 0
+            media.onTeardownStuck = { diagnosticCount += 1 }
             val stopping = CountDownLatch(1)
             val previous = FakeCapturer(stopping, "previous camera", events, stopWaitSeconds = 30)
             CaptureTeardown.camera.release(previous, null) {}
             media.awaitCameraAvailable = { _, timeout -> delay(timeout); false }
             try {
                 val start = scope.async(start = CoroutineStart.UNDISPATCHED) { runCatching { media.startProducingVideo() } }
-                if (wait == "teardown") advanceMain(500)
+                when (wait) {
+                    "teardown" -> advanceMain(500)
+                    "availability" -> advanceMain(CaptureTeardown.DEADLINE_MILLIS + 500)
+                }
+                val expectedDiagnostics = if (wait == "availability") 1 else 0
+                assertEquals(expectedDiagnostics, diagnosticCount)
                 media.fenceLocalVideoForHold()
                 advanceMain(CaptureTeardown.DEADLINE_MILLIS + 100)
+                if (diagnosticCount != expectedDiagnostics) failures.add("$wait reported camera stuck after camera off")
                 if (!start.isCompleted) failures.add("$wait held the start gate after camera off")
                 assertFalse(events.contains("next camera started"))
             } finally {
@@ -1122,10 +1143,15 @@ class LocalVideoTeardownTests {
         val creating = CountDownLatch(1)
         val helperGate = CountDownLatch(1)
         val stopping = CountDownLatch(1)
+        val helper = unsafe.allocateInstance(SurfaceTextureHelper::class.java) as SurfaceTextureHelper
+        fun helperField(name: String) = SurfaceTextureHelper::class.java.getDeclaredField(name).apply { isAccessible = true }
+        helperField("handler").set(helper, android.os.Handler(Looper.getMainLooper()))
+        helperField("isTextureInUse").setBoolean(helper, true)
+        val isQuitting = helperField("isQuitting")
         media.createTextureHelper = {
             creating.countDown()
             helperGate.await(10, TimeUnit.SECONDS)
-            unsafe.allocateInstance(SurfaceTextureHelper::class.java) as SurfaceTextureHelper
+            helper
         }
         try {
             val start = scope.async(start = CoroutineStart.UNDISPATCHED) { runCatching { media.startProducingVideo() } }
@@ -1142,9 +1168,74 @@ class LocalVideoTeardownTests {
             assertTrue(runBlocking { start.await() }.isSuccess)
             assertFalse(events.contains("next camera started"))
             assertNull("cancelled start left its texture helper behind", field("surfaceTextureHelper").get(media))
+            pumpMainLooperUntil { isQuitting.getBoolean(helper) }
+            assertTrue("cancelled start did not dispose its texture helper", isQuitting.getBoolean(helper))
         } finally {
             helperGate.countDown()
             stopping.countDown()
+            runBlocking { media.cleanup(notifyLocalState = false, preserveCallAudioRouting = true) }
+            settle()
+        }
+    }
+
+    @Test
+    fun queuedCameraTurnsWaitForTheNativeCallbackAndUseAbsoluteNames() {
+        val (media, lane) = joinedCall()
+        val events = CopyOnWriteArrayList<String>()
+        val capturer = FakeCapturer(null, "camera", events).apply {
+            reportsTarget = true
+            holdSwitches = true
+        }
+        installCamera(media, lane, capturer)
+        try {
+            val first = scope.async(start = CoroutineStart.UNDISPATCHED) { runCatching { media.switchCamera() } }
+            assertNotNull(capturer.heldSwitch)
+            assertTrue(media.isCameraSwitchInFlight)
+            assertEquals(LocalCameraFacing.front, media.currentCameraFacing)
+
+            runBlocking { media.switchCamera() }
+            assertEquals(listOf("0"), capturer.switchTargets.toList())
+            capturer.holdSwitches = false
+            capturer.heldSwitch!!.onCameraSwitchDone(false)
+            advanceMainUntil { first.isCompleted }
+            assertTrue(runBlocking { first.await() }.isSuccess)
+            assertEquals(listOf("0", "1"), capturer.switchTargets.toList())
+            assertEquals(LocalCameraFacing.front, media.currentCameraFacing)
+            assertFalse(media.isCameraSwitchInFlight)
+        } finally {
+            runBlocking { media.cleanup(notifyLocalState = false, preserveCallAudioRouting = true) }
+            settle()
+        }
+    }
+
+    @Test
+    fun aFailedFlipChosenDuringStartPublishesTheCameraThatStayedLive() {
+        val (media, _) = joinedCall()
+        val events = CopyOnWriteArrayList<String>()
+        readyToStart(media, events)
+        media.openCameraCapturer = { _, name, _ ->
+            FakeCapturer(null, "camera", events, cameraId = name).apply { switchError = "refused" }
+        }
+        val publications = mutableListOf<LocalCameraFacing>()
+        media.onLocalVideoEnabledChanged = { if (it) publications.add(media.currentCameraFacing) }
+        media.onCameraFacingsChanged = { publications.add(media.currentCameraFacing) }
+        val ack = CountDownLatch(1)
+        val held = unsafe.allocateInstance(HeldSendTransport::class.java) as HeldSendTransport
+        held.release = ack
+        field("sendTransport").set(media, held)
+        try {
+            val start = scope.async(start = CoroutineStart.UNDISPATCHED) { runCatching { media.startProducingVideo() } }
+            advanceMainUntil { held.waiting }
+            assertTrue(held.waiting)
+            runBlocking { media.switchCamera() }
+            ack.countDown()
+            advanceMainUntil { start.isCompleted }
+            assertTrue(runBlocking { start.await() }.isSuccess)
+            assertTrue(events.contains("camera switched"))
+            assertEquals(LocalCameraFacing.front, publications.last())
+            assertTrue(media.localVideoEnabled)
+        } finally {
+            ack.countDown()
             runBlocking { media.cleanup(notifyLocalState = false, preserveCallAudioRouting = true) }
             settle()
         }

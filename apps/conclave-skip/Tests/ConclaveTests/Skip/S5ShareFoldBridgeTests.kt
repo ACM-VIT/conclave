@@ -196,7 +196,8 @@ class S5ShareFoldBridgeTests {
         ScreenCaptureManager.onProjectionRevoked = { revoked += 1 }
         CallNotificationBridge.startGate.setAppActive(false)
         recorded.clear()
-        ScreenCaptureManager.onProjectionStoppedExternally()
+        val consent = requireNotNull(ScreenCaptureManager.getCaptureResultIntent())
+        ScreenCaptureManager.onProjectionStoppedExternally(consent)
         assertEquals(1, revoked)
         assertFalse(recorded.single().first.getBooleanExtra(CallForegroundService.EXTRA_USER_INITIATED, true))
         deliver(target, recorded.single().first)
@@ -205,7 +206,7 @@ class S5ShareFoldBridgeTests {
         CallNotificationBridge.startGate.setAppActive(true)
         deliver(target, Intent(CallForegroundService.ACTION_UPDATE))
         assertEquals(baseline, target.foregroundServiceType)
-        ScreenCaptureManager.onProjectionStoppedExternally()
+        ScreenCaptureManager.onProjectionStoppedExternally(consent)
         assertEquals(1, revoked)
     }
 

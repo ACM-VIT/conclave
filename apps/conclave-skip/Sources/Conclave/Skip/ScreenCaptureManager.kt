@@ -291,8 +291,11 @@ object ScreenCaptureManager {
         resultIntent
     }
 
-    fun stopCapture() {
+    fun stopCapture() = stopCapture(ownedConsent = null)
+
+    internal fun stopCapture(ownedConsent: Intent?) {
         synchronized(stateLock) {
+            if (ownedConsent != null && resultIntent !== ownedConsent) return
             resultIntent = null
             serviceForegrounded = false
             suppressNextServiceDestroyCallback = true
@@ -321,10 +324,12 @@ object ScreenCaptureManager {
 
     fun stopFromNotification() = endExternally(userInitiated = true)
 
-    fun onProjectionStoppedExternally() = endExternally(userInitiated = false)
+    internal fun onProjectionStoppedExternally(ownedConsent: Intent) =
+        endExternally(userInitiated = false, ownedConsent = ownedConsent)
 
-    private fun endExternally(userInitiated: Boolean) {
+    private fun endExternally(userInitiated: Boolean, ownedConsent: Intent? = null) {
         val callback = synchronized(stateLock) {
+            if (ownedConsent != null && resultIntent !== ownedConsent) return
             resultIntent = null
             serviceForegrounded = false
             suppressNextServiceDestroyCallback = true

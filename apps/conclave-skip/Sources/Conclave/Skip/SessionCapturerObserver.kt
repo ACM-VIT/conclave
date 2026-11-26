@@ -1,10 +1,14 @@
 package conclave.module
 
+import android.content.Intent
+import kotlinx.coroutines.CompletableDeferred
 import org.webrtc.CapturerObserver
 import org.webrtc.VideoCapturer
 import org.webrtc.VideoFrame
 
-internal class CaptureSession {
+internal class CaptureSession(val screenConsent: Intent? = null) {
+    val ended = CompletableDeferred<Unit>()
+    var switchInFlight = false
     @Volatile var capturer: VideoCapturer? = null
 }
 
@@ -12,6 +16,7 @@ internal class CaptureClaim(
     val generation: Long,
     val cameraOffIntentGeneration: Int?,
     val capture: CaptureSession?,
+    val ended: CompletableDeferred<Unit>? = null,
 )
 
 internal enum class CaptureDeviceWait { free, busy, stale }

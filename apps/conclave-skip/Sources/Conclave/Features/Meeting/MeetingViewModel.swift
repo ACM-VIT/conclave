@@ -727,7 +727,13 @@ final class MeetingViewModel {
     private var cameraSwitchToken: UUID? {
         didSet { requestStageRefresh(); requestControlsRefresh() }
     }
-    private var isCameraSwitchInFlight: Bool { cameraSwitchToken != nil }
+    private var isCameraSwitchInFlight: Bool {
+        #if SKIP
+        return cameraSwitchToken != nil || webRTCClient.isCameraSwitchInFlight
+        #else
+        return cameraSwitchToken != nil
+        #endif
+    }
 
     private var lifecycleRefreshTracker = LifecycleRefreshTracker()
 
@@ -2820,6 +2826,7 @@ final class MeetingViewModel {
             CallDiagnostics.shared.record(code: "media.teardownStuck." + kind)
         }
         webRTCClient.onCameraFacingsChanged = { [weak self] in
+            self?.publishLocalCameraFacing()
             self?.requestStageRefresh()
             self?.requestControlsRefresh()
             self?.requestSettingsRefresh()
@@ -11409,13 +11416,15 @@ final class MeetingViewModel {
                     screenShareToggleToken = nil
                 }
             }
-            guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
+            guard screenShareToggleToken == toggleToken,
+                  isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
             if state.isScreenSharing {
                 publishScreenShare(ScreenSharePhasePolicy.stopping(screenShare))
                 ScreenCaptureManager.onProjectionRevoked = nil
                 ScreenCaptureManager.stopCapture()
                 await webRTCClient.closeLocalScreenProducer()
-                guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
+                guard screenShareToggleToken == toggleToken,
+                      isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
                 state.isScreenSharing = false
                 clearLocalActiveScreenShareIfNeeded()
                 publishScreenShare(ScreenSharePhasePolicy.ended(screenShare, failure: ScreenShareFailure.none,
@@ -11433,15 +11442,8 @@ final class MeetingViewModel {
                 let granted = await ScreenCaptureManager.requestCapture()
 
                 let consentFailure = granted ? ScreenShareFailure.none : ScreenCaptureManager.lastStartFailure()
-                guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else {
-                    if canOrphanedScreenShareToggleStopCapture() {
-                        ScreenCaptureManager.onProjectionRevoked = nil
-                        if granted {
-                            ScreenCaptureManager.stopCapture()
-                        }
-                    }
-                    return
-                }
+                guard screenShareToggleToken == toggleToken,
+                      isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
                 guard actionVideoPolicyRevision == videoPublishingPolicyRevision,
                       !state.isAudioOnlyMode else {
                     ScreenCaptureManager.onProjectionRevoked = nil
@@ -11459,19 +11461,13 @@ final class MeetingViewModel {
                         }
                         publishScreenShare(ScreenSharePhasePolicy.starting(screenShare))
                         try await webRTCClient.startScreenSharing()
-                        let isCurrentCallAfterStart = isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId)
-                        guard isCurrentCallAfterStart,
-                              actionVideoPolicyRevision == videoPublishingPolicyRevision,
+                        guard screenShareToggleToken == toggleToken,
+                              isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
+                        guard actionVideoPolicyRevision == videoPublishingPolicyRevision,
                               !state.isAudioOnlyMode,
                               ScreenCaptureManager.isCaptureActive() else {
-                            guard isCurrentCallAfterStart || canOrphanedScreenShareToggleStopCapture() else { return }
                             ScreenCaptureManager.onProjectionRevoked = nil
-                            ScreenCaptureManager.stopCapture()
-                            if isCurrentCallAfterStart {
-                                await webRTCClient.closeLocalScreenProducer()
-                            } else {
-                                await webRTCClient.stopScreenSharing()
-                            }
+                            await webRTCClient.closeLocalScreenProducer()
                             return
                         }
                         state.isScreenSharing = true
@@ -11479,10 +11475,9 @@ final class MeetingViewModel {
                         publishScreenShare(ScreenSharePhasePolicy.live(screenShare, isSharingDeviceAudio: false))
                         debugLog("[Meeting] Screen sharing started")
                     } catch {
-                        if isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) {
+                        if screenShareToggleToken == toggleToken,
+                           isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) {
                             ScreenCaptureManager.onProjectionRevoked = nil
-                            ScreenCaptureManager.stopCapture()
-                            await webRTCClient.closeLocalScreenProducer()
                             state.isScreenSharing = false
                             clearLocalActiveScreenShareIfNeeded()
                             reportScreenShareFailure(ScreenShareFailure.producerFailed)

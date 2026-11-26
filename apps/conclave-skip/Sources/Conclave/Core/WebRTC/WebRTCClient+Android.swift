@@ -115,6 +115,7 @@ final class WebRTCClient {
     func reassertLocalAudioProducerUnmuted() async throws { fatalError() }
     func setVideoEnabled(_ enabled: Bool) async throws { fatalError() }
     func suspendLocalVideoForRecovery() async { fatalError() }
+    var isCameraSwitchInFlight: Bool { fatalError() }
     func canSwitchCamera() -> Bool { fatalError() }
     func setPreferredCameraFacing(_ facing: LocalCameraFacing) { fatalError() }
     func switchCamera() async throws { fatalError() }
