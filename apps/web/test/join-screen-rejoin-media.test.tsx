@@ -220,6 +220,23 @@ it("joins after a successful permission choice while the earlier prompt is still
   expect(getUserMedia).toHaveBeenCalledTimes(2);
 });
 
+it("joins with the already live microphone without waiting for camera restore", async () => {
+  const stale = Promise.withResolvers<MediaStream>();
+  getUserMedia.mockImplementationOnce(async () => capture("audio"));
+  getUserMedia.mockImplementationOnce(() => stale.promise);
+  await openRoom();
+  expect(getUserMedia).toHaveBeenCalledTimes(2);
+  await click("Join");
+  expect(commitMedia).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+    isMicOn: true,
+    isCameraOn: false,
+  }));
+  const late = capture("video");
+  await act(async () => stale.resolve(late));
+  expect(late.getVideoTracks()[0].readyState).toBe("ended");
+  expect(commitMedia.mock.lastCall?.[0].stream?.getAudioTracks()[0].readyState).toBe("live");
+});
+
 it("allows Enter to join audio-only without waiting for mic or camera restore", async () => {
   const stale = holdCapture();
   await openRoom();

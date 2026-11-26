@@ -80,7 +80,7 @@ export function clearRejoinIntent(storage: RejoinStorage | null = sessionStore()
 }
 
 export type RejoinMediaControls = {
-  userChoices: () => number;
+  canRestore: () => boolean;
   isAudioOnly: () => boolean;
   isMicOn: () => boolean;
   isCameraOn: () => boolean;
@@ -93,11 +93,9 @@ export async function applyRejoinMedia(
   media: RejoinMedia,
   controls: RejoinMediaControls,
 ): Promise<void> {
-  const choicesAtStart = controls.userChoices();
-  const untouched = () => controls.userChoices() === choicesAtStart;
-  if (media.isAudioOnly && untouched() && !controls.isAudioOnly()) controls.turnOnAudioOnly();
-  if (media.isMicOn && untouched() && !controls.isMicOn()) await controls.turnOnMic();
-  if (media.isCameraOn && untouched() && !controls.isAudioOnly() && !controls.isCameraOn()) {
+  if (media.isAudioOnly && controls.canRestore() && !controls.isAudioOnly()) controls.turnOnAudioOnly();
+  if (media.isMicOn && controls.canRestore() && !controls.isMicOn()) await controls.turnOnMic();
+  if (media.isCameraOn && controls.canRestore() && !controls.isAudioOnly() && !controls.isCameraOn()) {
     await controls.turnOnCamera();
   }
 }

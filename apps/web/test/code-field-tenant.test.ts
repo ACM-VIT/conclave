@@ -176,11 +176,11 @@ describe("carrying pre-join choices across a tenant switch", () => {
 });
 
 const fakeControls = () => {
-  const state = { audioOnly: false, mic: false, camera: false, choices: 0 };
+  const state = { audioOnly: false, mic: false, camera: false, canRestore: true };
   let releaseMic = () => {};
   const calls: string[] = [];
   const controls = {
-    userChoices: () => state.choices,
+    canRestore: () => state.canRestore,
     isAudioOnly: () => state.audioOnly,
     isMicOn: () => state.mic,
     isCameraOn: () => state.camera,
@@ -202,7 +202,7 @@ const fakeControls = () => {
     },
   };
   const user = (change: () => void) => {
-    state.choices += 1;
+    state.canRestore = false;
     change();
   };
   return { state, calls, controls, user, releaseMic: () => releaseMic() };
