@@ -40,6 +40,7 @@ import { shutdownAnalytics } from "./analytics/posthog.js";
 import { createSfuState } from "./state.js";
 import type { SfuState } from "./state.js";
 import { shutdownBrowserBackend } from "./browserServiceClient.js";
+import { retryWhileSqliteLocked } from "./sqliteWriteCheck.js";
 
 const ROOM_LEASE_RECOVERY_INTERVAL_MS = 2_000;
 
@@ -94,9 +95,9 @@ export const createSfuServer = (
     await state.roomRegistry.start();
     socketAdapterLifecycle = await connectSocketAdapter(io, { config });
     await initMediaSoup(state, () => io, workerShutdown.signal);
-    initScheduledWebinars(state);
-    await initScheduledMeetings(state);
-    await initScheduling(state);
+    await retryWhileSqliteLocked(() => initScheduledWebinars(state));
+    await retryWhileSqliteLocked(() => initScheduledMeetings(state));
+    await retryWhileSqliteLocked(() => initScheduling(state));
     startScheduledWebinarTimer(state, () => io, undefined);
     roomOwnershipRenewTimer = setInterval(() => {
       renewRoomOwnerships(state).catch((error) => {

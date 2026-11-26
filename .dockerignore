@@ -21,3 +21,4 @@
 **/*-wal
 **/*-shm
 **/*-journal
+**/test
