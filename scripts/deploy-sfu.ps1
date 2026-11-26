@@ -691,6 +691,7 @@ function Enable-RestartGuard {
                     PosixSignalRegistration.Create(PosixSignal.SIGTERM, OnSignal),
                     PosixSignalRegistration.Create(PosixSignal.SIGHUP, OnSignal),
                     PosixSignalRegistration.Create(PosixSignal.SIGINT, OnSignal),
+                    PosixSignalRegistration.Create(PosixSignal.SIGQUIT, OnSignal),
                 };
             }
             armed = true;
@@ -761,7 +762,13 @@ function Enable-RestartGuard {
             if (armed)
             {
                 context.Cancel = true;
-                int status = context.Signal == PosixSignal.SIGHUP ? 129 : context.Signal == PosixSignal.SIGINT ? 130 : 143;
+                int status = context.Signal switch
+                {
+                    PosixSignal.SIGHUP => 129,
+                    PosixSignal.SIGINT => 130,
+                    PosixSignal.SIGQUIT => 131,
+                    _ => 143,
+                };
                 Interlocked.CompareExchange(ref interrupted, status, 0);
             }
         }
@@ -777,7 +784,7 @@ function Enable-RestartGuard {
             {
                 start = new ProcessStartInfo("sh");
                 start.ArgumentList.Add("-c");
-                start.ArgumentList.Add("trap '' INT TERM HUP; exec docker \"$@\"");
+                start.ArgumentList.Add("trap '' INT TERM HUP QUIT; exec docker \"$@\"");
                 start.ArgumentList.Add("sh");
             }
             foreach (var argument in arguments)

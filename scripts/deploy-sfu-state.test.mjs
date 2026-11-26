@@ -118,6 +118,7 @@ if [[ "$1" == update ]]; then
     --restart=no:term-after-freeze) kill -TERM "$DEPLOY_PID" ;;
     --restart=no:hup-after-freeze) kill -HUP "$DEPLOY_PID" ;;
     --restart=no:int-after-freeze) kill -INT "$DEPLOY_PID" ;;
+    --restart=no:quit-after-freeze) kill -QUIT "$DEPLOY_PID" ;;
     --restart=unless-stopped:term-during-restore|--restart=unless-stopped:int-during-restore)
       if [[ ! -e "$DOCKER_LOG.signal" ]]; then
         : > "$DOCKER_LOG.signal"
@@ -994,6 +995,7 @@ for (const harness of harnesses) {
       "TERM reaches the deploy PID right after restarts are turned off": { failAt: "term-after-freeze", running: true, state: "still running" },
       "HUP reaches the deploy PID right after restarts are turned off": { failAt: "hup-after-freeze", running: true, state: "still running" },
       "INT reaches the deploy PID right after restarts are turned off": { failAt: "int-after-freeze", running: true, state: "still running" },
+      "QUIT reaches the deploy PID right after restarts are turned off": { failAt: "quit-after-freeze", running: true, state: "still running" },
       "TERM reaches the deploy PID during restore": { failAt: "term-during-restore" },
       "Ctrl+C reaches the deploy group during restore": { failAt: "int-during-restore" },
       "restoring the restart policy fails before replacement": { failAt: "restore-fails" },

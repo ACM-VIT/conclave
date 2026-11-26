@@ -560,12 +560,12 @@ build_and_start() {
   staging="$(mktemp -d)"
   restore_source_policy() {
     [[ -n "$restore_pending" ]] || return 0
-    (trap '' INT TERM HUP; exec docker update --restart="$policy" "$container") > /dev/null || return 1
+    (trap '' INT TERM HUP QUIT; exec docker update --restart="$policy" "$container") > /dev/null || return 1
     restore_pending=""
   }
   release_source() {
     local state="unknown" running restored="true"
-    trap '' INT TERM HUP
+    trap '' INT TERM HUP QUIT
     if [[ -n "$policy" ]]; then
       restore_source_policy || restored="false"
       if running="$(docker inspect --format '{{.State.Running}}' "$container" 2> /dev/null)"; then
@@ -588,13 +588,14 @@ build_and_start() {
   trap 'exit 130' INT
   trap 'exit 143' TERM
   trap 'exit 129' HUP
+  trap 'exit 131' QUIT
   if [[ -n "$container" ]]; then
     if ! identity="$(source_identity "$container")" || ! plan_layer_sqlite "$service" "$container" "$staging/sqlite-check" "$identity" || ! policy="$(restart_policy "$container")" || [[ -z "$policy" ]]; then
       echo "Stopped before replacing ${service}; nothing was stopped." >&2
       exit 1
     fi
     restore_pending="true"
-    if ! (trap '' INT TERM HUP; exec docker update --restart=no "$container") > /dev/null; then
+    if ! (trap '' INT TERM HUP QUIT; exec docker update --restart=no "$container") > /dev/null; then
       echo "Could not keep the old ${service} container from restarting while it is copied. Stopped before replacing ${service}; nothing was stopped." >&2
       exit 1
     fi
@@ -632,7 +633,7 @@ build_and_start() {
   if ! "${COMPOSE[@]}" up -d "$service"; then
     exit 1
   fi
-  trap - EXIT INT TERM HUP
+  trap - EXIT INT TERM HUP QUIT
   rm -rf "$staging"
   umask "$previous_umask"
   echo "Waiting for the new ${service} to answer healthy at ${url} as deploy ${SFU_DEPLOY_ID}..."
