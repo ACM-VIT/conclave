@@ -574,13 +574,6 @@ function Get-RestartPolicy {
   return $policy
 }
 
-function Set-RestartPolicy {
-  param([string]$Container, [string]$Policy)
-
-  & docker update "--restart=$Policy" $Container | Out-Null
-  return $LASTEXITCODE -eq 0
-}
-
 function Get-FrozenIdentity {
   param([string]$Service, [string]$Container)
 
@@ -666,103 +659,110 @@ function Enable-RestartGuard {
     using System.Diagnostics;
     using System.IO;
     using System.Runtime.InteropServices;
+    using System.Threading;
 
     public static class SfuRestartGuard
     {
-        private static readonly object Gate = new object();
         private static PosixSignalRegistration[] registrations;
         private static string service;
         private static string container;
         private static string policy;
         private static string startCommand;
-        private static volatile int interrupted;
+        private static volatile bool armed;
+        private static bool restorePending;
+        private static int interrupted;
 
         public static int Interrupted
         {
-            get { return interrupted; }
+            get { return Volatile.Read(ref interrupted); }
         }
 
         public static void Arm(string serviceName, string containerId, string restartPolicy, string start)
         {
-            lock (Gate)
+            service = serviceName;
+            container = containerId;
+            policy = restartPolicy;
+            startCommand = start;
+            Volatile.Write(ref interrupted, 0);
+            if (registrations == null && !OperatingSystem.IsWindows())
             {
-                service = serviceName;
-                container = containerId;
-                policy = restartPolicy;
-                startCommand = start;
-            interrupted = 0;
-                if (registrations == null && !OperatingSystem.IsWindows())
+                registrations = new[]
                 {
-                    registrations = new[]
-                    {
-                        PosixSignalRegistration.Create(PosixSignal.SIGTERM, OnSignal),
-                        PosixSignalRegistration.Create(PosixSignal.SIGHUP, OnSignal),
-                    };
+                    PosixSignalRegistration.Create(PosixSignal.SIGTERM, OnSignal),
+                    PosixSignalRegistration.Create(PosixSignal.SIGHUP, OnSignal),
+                    PosixSignalRegistration.Create(PosixSignal.SIGINT, OnSignal),
+                };
+            }
+            armed = true;
+        }
+
+        public static bool Freeze()
+        {
+            restorePending = true;
+            return Docker("update", "--restart=no", container);
+        }
+
+        public static bool Restore()
+        {
+            if (restorePending && !Docker("update", "--restart=" + policy, container))
+            {
+                return false;
+            }
+            restorePending = false;
+            return true;
+        }
+
+        public static void Release(bool replaced)
+        {
+            try
+            {
+                if (!armed || replaced)
+                {
+                    return;
                 }
+                var restored = Restore();
+                var running = DockerOutput("inspect", "--format", "{{.State.Running}}", container);
+                if (running != "true" && running != "false")
+                {
+                    Console.Error.WriteLine("Could not determine whether the old " + service + " container is still running or was left stopped.");
+                }
+                if (!restored)
+                {
+                    var state = running == "true" ? "still running" : running == "false" ? "left stopped" : "state unknown";
+                    Console.Error.WriteLine("The old " + service + " container's restart policy could not be restored (" + state + "); set it with: docker update --restart=" + policy + " " + container);
+                }
+                else if (running == "true")
+                {
+                    Console.Error.WriteLine("The old " + service + " container is still running, with its restart policy (" + policy + ") restored.");
+                }
+                else if (running == "false")
+                {
+                    Console.Error.WriteLine("The old " + service + " container is left stopped, not removed, with its restart policy (" + policy + ") restored; start it again with: " + startCommand);
+                }
+            }
+            finally
+            {
+                armed = false;
             }
         }
 
-        public static bool RestoreBeforeReplacing()
+        public static void RemoveStaging(string staging)
         {
-            lock (Gate)
+            try
             {
-                if (container == null)
-                {
-                    return true;
-                }
-                if (!Docker("update", "--restart=" + policy, container))
-                {
-                    return false;
-                }
-                container = null;
-                return true;
+                Directory.Delete(staging, true);
             }
-        }
-
-        public static void Release(string staging, string prefix)
-        {
-            lock (Gate)
-            {
-                if (container != null)
-                {
-                    var running = DockerOutput("inspect", "--format", "{{.State.Running}}", container) == "true";
-                    if (!Docker("update", "--restart=" + policy, container))
-                    {
-                        Console.Error.WriteLine(prefix + "The old " + service + " container is " + (running ? "still running" : "left stopped") + ", and its restart policy could not be restored; set it with: docker update --restart=" + policy + " " + container);
-                    }
-                    else if (running)
-                    {
-                        Console.Error.WriteLine(prefix + "The old " + service + " container is still running, with its restart policy (" + policy + ") restored.");
-                    }
-                    else
-                    {
-                        Console.Error.WriteLine(prefix + "The old " + service + " container is left stopped, not removed, with its restart policy (" + policy + ") restored; start it again with: " + startCommand);
-                    }
-                    container = null;
-                }
-                if (!string.IsNullOrEmpty(staging))
-                {
-                    try
-                    {
-                        Directory.Delete(staging, true);
-                    }
-                    catch (Exception)
-                    {
-                    }
-                }
-            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
         }
 
         private static void OnSignal(PosixSignalContext context)
         {
-            lock (Gate)
+            if (armed)
             {
-                if (container == null)
-                {
-                    return;
-                }
                 context.Cancel = true;
-                interrupted = context.Signal == PosixSignal.SIGHUP ? 129 : 143;
+                int status = context.Signal == PosixSignal.SIGHUP ? 129 : context.Signal == PosixSignal.SIGINT ? 130 : 143;
+                Interlocked.CompareExchange(ref interrupted, status, 0);
             }
         }
 
@@ -841,7 +841,6 @@ function Start-SfuService {
     & chmod 0700 $staging
   }
   $policy = ""
-  $frozenPolicy = ""
   $completed = $false
   $script:deployExiting = $false
   try {
@@ -853,9 +852,8 @@ function Start-SfuService {
       } catch {
         Exit-WithError "$($_.Exception.Message) Stopped before replacing $Service; nothing was stopped."
       }
-      $frozenPolicy = $policy
       Enable-RestartGuard -Service $Service -Container $container -Policy $policy -StartCommand "docker $($composeBaseArgs -join ' ') start $Service"
-      if (-not (Set-RestartPolicy -Container $container -Policy "no")) {
+      if (-not [SfuRestartGuard]::Freeze()) {
         Exit-WithError "Could not keep the old $Service container from restarting while it is copied. Stopped before replacing $Service; nothing was stopped."
       }
       Assert-NotInterrupted -Service $Service
@@ -885,20 +883,30 @@ function Start-SfuService {
         Assert-StillFrozen -Service $Service -Container $container -Frozen $frozen
         Copy-LayerSqlite -Service $Service -Container $container -Directory (Join-Path $staging "sqlite") -Plan $sqlitePlan
         Assert-StillFrozen -Service $Service -Container $container -Frozen $frozen
+      } catch {
+        Exit-WithError "$($_.Exception.Message) Stopped before replacing $Service."
+      }
+      Assert-NotInterrupted -Service $Service
+      if (-not [SfuRestartGuard]::Restore()) {
+        Exit-WithError "Could not restore the old $Service container's restart policy ($policy) before replacing it. Stopped before replacing $Service."
+      }
+      try {
+        Assert-StillFrozen -Service $Service -Container $container -Frozen $frozen
         Publish-FallbackJson -Service $Service -Name $stagedJson
       } catch {
         Exit-WithError "$($_.Exception.Message) Stopped before replacing $Service."
       }
       Assert-NotInterrupted -Service $Service
-      if (-not [SfuRestartGuard]::RestoreBeforeReplacing()) {
-        Exit-WithError "Could not restore the old $Service container's restart policy ($frozenPolicy) before replacing it. Stopped before replacing $Service."
-      }
-      $frozenPolicy = ""
     }
+    Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @("up", "-d", $Service))
     $completed = $true
   } finally {
-    if ("SfuRestartGuard" -as [type]) {
-      [SfuRestartGuard]::Release($staging, "")
+    if ($hasContainer -and ("SfuRestartGuard" -as [type])) {
+      [SfuRestartGuard]::Release($completed)
+      [SfuRestartGuard]::RemoveStaging($staging)
+      if (-not $script:deployExiting) {
+        Assert-NotInterrupted -Service $Service
+      }
     } else {
       Remove-Item -Recurse -Force -LiteralPath $staging -ErrorAction SilentlyContinue
     }
@@ -907,7 +915,6 @@ function Start-SfuService {
       exit 130
     }
   }
-  Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @("up", "-d", $Service))
   $timeoutSeconds = Get-Int -Value $env:SFU_HEALTH_TIMEOUT_SECONDS -DefaultValue 180
   Write-Host "Waiting for the new $Service to answer healthy at $Url as deploy $($env:SFU_DEPLOY_ID)..."
   if (-not (Wait-SfuDeployed -Service $Service -Url $Url -TimeoutSeconds $timeoutSeconds)) {

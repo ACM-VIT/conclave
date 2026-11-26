@@ -551,25 +551,36 @@ wait_for_sfu() {
   done
 }
 
-build_and_start() (
-  local service="$1" url="$2" container="" staging policy="" frozen_policy="" frozen identity
+build_and_start() {
+  local service="$1" url="$2" container="" staging policy="" restore_pending="" frozen identity STAGED_FALLBACK="" previous_umask
+  previous_umask="$(umask)"
   umask 077
   "${COMPOSE[@]}" build "$service"
   container="$("${COMPOSE[@]}" ps -a -q "$service" | head -n 1)"
   staging="$(mktemp -d)"
+  restore_source_policy() {
+    [[ -n "$restore_pending" ]] || return 0
+    (trap '' INT TERM HUP; exec docker update --restart="$policy" "$container") > /dev/null || return 1
+    restore_pending=""
+  }
   release_source() {
-    local state="left stopped"
+    local state="unknown" running restored="true"
     trap '' INT TERM HUP
-    if [[ -n "$frozen_policy" ]]; then
-      container_running "$container" 2> /dev/null && state="still running"
-      if ! docker update --restart="$frozen_policy" "$container" > /dev/null; then
-        echo "The old ${service} container is ${state}, and its restart policy could not be restored; set it with: docker update --restart=${frozen_policy} ${container}" >&2
-      elif [[ "$state" == "still running" ]]; then
-        echo "The old ${service} container is still running, with its restart policy (${frozen_policy}) restored." >&2
-      else
-        echo "The old ${service} container is left stopped, not removed, with its restart policy (${frozen_policy}) restored; start it again with: ${COMPOSE[*]} start ${service}" >&2
+    if [[ -n "$policy" ]]; then
+      restore_source_policy || restored="false"
+      if running="$(docker inspect --format '{{.State.Running}}' "$container" 2> /dev/null)"; then
+        case "$running" in true) state="still running" ;; false) state="left stopped" ;; esac
       fi
-      frozen_policy=""
+      if [[ "$state" == "unknown" ]]; then
+        echo "Could not determine whether the old ${service} container is still running or was left stopped." >&2
+      fi
+      if [[ "$restored" == "false" ]]; then
+        echo "The old ${service} container's restart policy could not be restored (${state}); set it with: docker update --restart=${policy} ${container}" >&2
+      elif [[ "$state" == "still running" ]]; then
+        echo "The old ${service} container is still running, with its restart policy (${policy}) restored." >&2
+      elif [[ "$state" == "left stopped" ]]; then
+        echo "The old ${service} container is left stopped, not removed, with its restart policy (${policy}) restored; start it again with: ${COMPOSE[*]} start ${service}" >&2
+      fi
     fi
     rm -rf "$staging"
   }
@@ -582,8 +593,8 @@ build_and_start() (
       echo "Stopped before replacing ${service}; nothing was stopped." >&2
       exit 1
     fi
-    frozen_policy="$policy"
-    if ! docker update --restart=no "$container" > /dev/null; then
+    restore_pending="true"
+    if ! (trap '' INT TERM HUP; exec docker update --restart=no "$container") > /dev/null; then
       echo "Could not keep the old ${service} container from restarting while it is copied. Stopped before replacing ${service}; nothing was stopped." >&2
       exit 1
     fi
@@ -605,25 +616,32 @@ build_and_start() (
       ! plan_layer_sqlite "$service" "$container" "$staging/sqlite-plan" "$frozen" ||
       ! still_frozen "$service" "$container" "$frozen" ||
       ! carry_layer_sqlite "$service" "$container" "$staging/sqlite" "$staging/sqlite-plan" ||
-      ! still_frozen "$service" "$container" "$frozen" ||
-      ! publish_fallback_json "$service"; then
+      ! still_frozen "$service" "$container" "$frozen"; then
       echo "Stopped before replacing ${service}." >&2
       exit 1
     fi
-    if ! docker update --restart="$frozen_policy" "$container" > /dev/null; then
-      echo "Could not restore the old ${service} container's restart policy (${frozen_policy}) before replacing it. Stopped before replacing ${service}." >&2
+    if ! restore_source_policy; then
+      echo "Could not restore the old ${service} container's restart policy (${policy}) before replacing it. Stopped before replacing ${service}." >&2
       exit 1
     fi
-    frozen_policy=""
+    if ! still_frozen "$service" "$container" "$frozen" || ! publish_fallback_json "$service"; then
+      echo "Stopped before replacing ${service}." >&2
+      exit 1
+    fi
   fi
-  "${COMPOSE[@]}" up -d "$service"
+  if ! "${COMPOSE[@]}" up -d "$service"; then
+    exit 1
+  fi
+  trap - EXIT INT TERM HUP
+  rm -rf "$staging"
+  umask "$previous_umask"
   echo "Waiting for the new ${service} to answer healthy at ${url} as deploy ${SFU_DEPLOY_ID}..."
   if ! wait_for_sfu "$service" "$url"; then
     echo "The new ${service} did not answer healthy at ${url} as deploy ${SFU_DEPLOY_ID} within ${SFU_HEALTH_TIMEOUT_SECONDS:-180} seconds. Stopping it; nothing was drained, and the other SFU keeps serving." >&2
     "${COMPOSE[@]}" stop "$service" || true
     exit 1
   fi
-)
+}
 
 layer_slot_state() {
   local service="$1" container layer
