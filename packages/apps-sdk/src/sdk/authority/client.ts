@@ -495,7 +495,7 @@ export class AuthoritySession<C extends AuthorityContract> {
         input,
       };
       const base = this.revisionBase;
-      const hadUnansweredAttempt = mayHaveRun;
+      const hadUnansweredAttempt: boolean = mayHaveRun;
       mayHaveRun = true;
       const reply = await this.client.request<AuthorityResult<Json>>(
         AUTHORITY_EVENTS.act,
