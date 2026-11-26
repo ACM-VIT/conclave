@@ -1147,11 +1147,13 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         // This room was recreated after the SFU lost the one this person was
         // in. Record the admission they prove, so they rejoin as they would
         // have and everyone who was only knocking still knocks.
+        const waitsToBeLetIn = room.isLocked
+          ? !room.isLockedAllowed(userKey, guestProof, guestLink)
+          : clientPolicy.useWaitingRoom && !room.isAllowed(userKey, guestProof, guestLink);
         if (
           provesMembership &&
           !hasPrivilegedJoinAccess &&
-          room.isLocked &&
-          !room.isLockedAllowed(userKey, guestProof, guestLink) &&
+          waitsToBeLetIn &&
           room.restoreAdmission(userKey, guestProof, { pastLock: true })
         ) {
           Logger.info(
@@ -1222,6 +1224,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           clientPolicy.useWaitingRoom &&
           !hasPrivilegedJoinAccess &&
           !isWebinarPromotedJoin &&
+          !isInvitedJoin &&
           !room.isAllowed(userKey, guestProof, guestLink) &&
           !(
             room.isLocked &&

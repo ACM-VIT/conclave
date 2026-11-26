@@ -433,6 +433,55 @@ describe("a participant the host admits before it joins", () => {
   });
 });
 
+describe("a client whose rooms start unlocked and use the waiting room", () => {
+  const policy = config.clientPolicies.conclave;
+  const useWaitingRoom = () => {
+    config.clientPolicies.conclave = { ...policy, useWaitingRoom: true, knockByDefault: false };
+  };
+  afterEach(() => {
+    config.clientPolicies.conclave = policy;
+  });
+  const rejoining = (user: SfuAuthPayload) => ({ ...user, allowRoomCreation: true });
+
+  it("seats a member who comes back on their pass once a host has restored the lost call", async () => {
+    useWaitingRoom();
+    const before = makeState();
+    const hostJoin = await join(before, host);
+    roomOf(before).restoreAdmission(guest.userId, undefined, { pastLock: true });
+    const member = await join(before, guest);
+    expect(member.status).toBe("joined");
+    const after = await restart(before);
+    const hostBack = await join(after, rejoining(host), {
+      roomRecoveryPass: hostJoin.response.roomRecoveryPass,
+    });
+    expect(hostBack.status).toBe("joined");
+    expect(roomOf(after).isLocked).toBe(false);
+
+    expect(
+      (await join(after, guest, { roomRecoveryPass: member.response.roomRecoveryPass })).status,
+    ).toBe("joined");
+    expect((await join(after, knocker)).status).toBe("waiting");
+    expect(
+      (await join(after, second, { roomRecoveryPass: member.response.roomRecoveryPass })).status,
+    ).toBe("waiting");
+  });
+
+  it("seats the person a booking invites, and keeps one a host removed waiting", async () => {
+    useWaitingRoom();
+    const state = makeState();
+    schedule(state);
+    const hostJoin = await join(state, { ...host, email: "host@example.com", userId: "host@example.com" });
+    expect(hostJoin.status).toBe("joined");
+
+    const invited = await join(state, invitee);
+    expect(invited.status).toBe("joined");
+    expect((await join(state, knocker)).status).toBe("waiting");
+
+    await send(hostJoin.peer, "kickUser", { userId: invited.context.currentClient!.id });
+    expect((await join(state, { ...invitee, sessionId: "i2" })).status).toBe("waiting");
+  });
+});
+
 describe("a call whose server lost the room", () => {
   // Three people in a call and one person still knocking, then the SFU
   // restarts: a fresh state has no rooms and no memory of who was let in.
