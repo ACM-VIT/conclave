@@ -1,3 +1,4 @@
+import { resolveViewerUrl } from "../../lib/novnc-viewer";
 import { EMOJI_REACTIONS, type ReactionEmoji } from "./constants";
 import { isMediaCaptureTimeoutError } from "./media-capture-timeout";
 import { linkOriginIsKnown } from "../../lib/meeting-origin";
@@ -895,20 +896,6 @@ export function isBrowserVideoUserId(userId: string): boolean {
 }
 
 export function resolveNoVncUrl(noVncUrl: string): string {
-  if (!noVncUrl) return noVncUrl;
-  if (typeof window === "undefined") return noVncUrl;
-
-  try {
-    const parsed = new URL(noVncUrl);
-    const isLocalHost =
-      parsed.hostname === "localhost" ||
-      parsed.hostname === "127.0.0.1" ||
-      parsed.hostname === "0.0.0.0";
-    if (isLocalHost) {
-      parsed.hostname = window.location.hostname;
-    }
-    return parsed.toString();
-  } catch {
-    return noVncUrl;
-  }
+  if (!noVncUrl || typeof window === "undefined") return noVncUrl;
+  return resolveViewerUrl(noVncUrl, window.location.hostname);
 }
