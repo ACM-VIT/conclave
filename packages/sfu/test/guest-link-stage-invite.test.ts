@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Router, Worker } from "mediasoup/types";
 import type { Server as SocketIOServer, Socket } from "socket.io";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
+import { seatIdOf } from "../server/identity.js";
 import type { SfuAuthPayload } from "../server/socket/auth.js";
 import { createConnectionContext } from "../server/socket/context.js";
 import { registerJoinRoomHandler } from "../server/socket/handlers/joinRoom.js";
@@ -11,7 +12,8 @@ import type { ScheduledWebinar } from "../types.js";
 
 type Handler = (...args: never[]) => void | Promise<void>;
 
-const io = { to: () => ({ emit: vi.fn() }) } as unknown as SocketIOServer;
+const broadcast = vi.fn();
+const io = { to: () => ({ emit: broadcast }) } as unknown as SocketIOServer;
 
 const makeState = (): SfuState => {
   const state = createSfuState({
@@ -33,7 +35,7 @@ const makeState = (): SfuState => {
 };
 
 let sockets = 0;
-const join = async (state: SfuState, user: SfuAuthPayload, roomId = "room") => {
+const join = async (state: SfuState, user: SfuAuthPayload, roomId = "room", admissionCode?: string) => {
   const handlers = new Map<string, Handler>();
   const socket = {
     id: `socket-${++sockets}`,
@@ -49,8 +51,8 @@ const join = async (state: SfuState, user: SfuAuthPayload, roomId = "room") => {
   const context = createConnectionContext(io, socket, state);
   registerJoinRoomHandler(context);
   const ack = vi.fn();
-  await handlers.get("joinRoom")!(...[{ roomId, sessionId: user.sessionId }, ack] as never[]);
-  return { context, ack };
+  await handlers.get("joinRoom")!(...[{ roomId, sessionId: user.sessionId, admissionCode }, ack] as never[]);
+  return { context, ack, socket };
 };
 
 const joined: unknown = expect.objectContaining({ status: "joined" });
@@ -201,4 +203,77 @@ describe("a stage invite held under another of a guest's passes (Greptile)", () 
     );
     expect(room.getClient(`${onStage.userId}#${onStage.sessionId}`) !== undefined).toBe(onTheStage);
   });
+});
+
+describe("a join whose guest link cannot commit", () => {
+  it.each(["host", "admitted", "stage invite", "webinar promoted", "locked waiting"] as const)(
+    "leaves room state and sockets unchanged on the %s path",
+    async (path) => {
+      const { state, room } = await lockedWebinarWithAnInvite(() => true, false);
+      if (path !== "webinar promoted") room.declineStageInvite(invitedViewer.userId);
+      const guestWas = [...onStage.guestWas];
+      if (path === "host") {
+        room.holdGuestIdentityOf(host.userId);
+        guestWas.push({ userKey: host.userId, guestProof: host.guestProof });
+      }
+      const joining = { ...onStage, guestWas };
+      if (path === "stage invite") room.promoteWebinarUserKey(joining.userId);
+      if (path === "webinar promoted") scheduleWebinarFor(state);
+      const admissionCode = path === "admitted" ? room.createAdmission().admissionCode : undefined;
+      const oldSocket = {
+        id: "old-waiting-socket",
+        emit: vi.fn(),
+        disconnect: vi.fn(),
+        connected: true,
+      } as unknown as Socket;
+      room.addPendingClient(
+        invitedViewer.userId,
+        seatIdOf(invitedViewer.userId, joining.sessionId),
+        oldSocket,
+        "Previous request",
+        invitedViewer.guestProof,
+      );
+      room.startCleanupTimer(vi.fn());
+      const timer = room.cleanupTimer;
+      const hostKey = room.hostUserKey;
+      const pending = [...room.pendingClients.entries()];
+      const clients = [...room.clients.keys()];
+      const decisions = room.decisionRecordCount;
+      const bindings = room.boundGuestIdentityCount;
+      const emitters = [...room.clients.values()].map((client) => vi.mocked(client.socket.emit));
+      for (const emit of emitters) emit.mockClear();
+      broadcast.mockClear();
+
+      try {
+        const attempt = await join(state, joining, "room", admissionCode);
+
+        expect(attempt.ack).toHaveBeenCalledWith({
+          error: "Your other tabs in this meeting changed while this one joined. Join again.",
+        });
+        expect(room.hostUserKey).toBe(hostKey);
+        expect(room.isAdminUserKey(joining.userId)).toBe(false);
+        expect(room.cleanupTimer).toBe(timer);
+        expect([...room.pendingClients.entries()]).toEqual(pending);
+        expect([...room.clients.keys()]).toEqual(clients);
+        expect(room.decisionRecordCount).toBe(decisions);
+        expect(room.boundGuestIdentityCount).toBe(bindings);
+        expect(room.isLockedAllowed(joining.userId, joining.guestProof)).toBe(false);
+        expect(room.guestIdentityOf(invitedViewer.userId)).toBe(invitedViewer.guestProof);
+        expect(attempt.context.currentUserKey).toBeNull();
+        expect(attempt.socket.emit).not.toHaveBeenCalled();
+        expect(attempt.socket.join).not.toHaveBeenCalled();
+        expect(oldSocket.emit).not.toHaveBeenCalled();
+        expect(oldSocket.disconnect).not.toHaveBeenCalled();
+        expect(broadcast).not.toHaveBeenCalled();
+        for (const emit of emitters) expect(emit).not.toHaveBeenCalled();
+
+        if (admissionCode) {
+          room.setGuestIdentityMerger(() => ({ commit: () => true }));
+          expect((await join(state, joining, "room", admissionCode)).ack).toHaveBeenCalledWith(joined);
+        }
+      } finally {
+        room.stopCleanupTimer();
+      }
+    },
+  );
 });

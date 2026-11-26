@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AUTHORITY_EVENTS,
+  AUTHORITY_LIMITS,
   defineContract,
   s,
   type AuthorityResult,
@@ -47,7 +48,13 @@ type Note = { id: string; subject: Subject; moved: boolean };
 
 const notesApp = (
   id: string,
-  faults: { fault?: Fault; mergeBy?: number; rate?: { burst: number; perSecond: number } } = {},
+  faults: {
+    fault?: Fault;
+    mergeBy?: number;
+    rate?: { burst: number; perSecond: number };
+    webinarOnlyMerge?: boolean;
+    faultInProjection?: () => boolean;
+  } = {},
 ) => {
   const calls = new Map<string, number>();
   const nthCall = (kind: string, row: Note) => {
@@ -111,18 +118,21 @@ const notesApp = (
           }
           return row.subject;
         },
-        project: (row) => {
+        project: (row, policy) => {
+          if (faults.faultInProjection?.()) throw new Error("projection temporarily unavailable");
           if (faults.fault === "project" && row.moved) throw new Error(`${id}: a moved note failed to project`);
           if (faults.fault === "projectUndefined" && row.moved) throw nothing;
           if (faults.fault === "projectAtCommit" && row.moved && nthCall("project", row) === 2) {
             throw new Error(`${id}: a moved note failed to project while the merge committed`);
           }
+          if (faults.webinarOnlyMerge && row.moved && policy.mode === "webinar") return null;
           return { key: row.id, value: { id: row.id } };
         },
       },
     },
     mergeSubjects(ctx, tx, { from, into }) {
       if (faults.fault === "merge") throw new Error(`${id}: the merge failed`);
+      if (faults.webinarOnlyMerge && ctx.room.mode !== "webinar") throw new Error("merge requires webinar mode");
       if (faults.mergeBy !== undefined && ctx.now > faults.mergeBy) reject("too-late");
       for (const [, row] of tx.scan("notes", key(from))) {
         tx.delete("notes", key(from, row.id));
@@ -306,6 +316,52 @@ describe("a row whose view callback faults while it is taken in (Sol)", () => {
 });
 
 describe("a guest link plan (Sol)", () => {
+  const withNotes = async (room: Harness, contract: ReturnType<typeof notesApp>["contract"]) => {
+    const onA = await guestTab(room, contract, "pass-a", "tab-1");
+    const onB = await guestTab(room, contract, "pass-b", "tab-2");
+    expect((await onA.act("note", { id: "a" })).ok).toBe(true);
+    expect((await onB.act("note", { id: "b" })).ok).toBe(true);
+    await allViewsIn(room);
+    return { onA, onB };
+  };
+
+  it("plans the merge under the current policy even before the policy sweep", async () => {
+    const app = notesApp("notes", { webinarOnlyMerge: true });
+    const room = new Harness([app.authority]);
+    const { onA, onB } = await withNotes(room, app.contract);
+
+    room.setWebinar(true);
+    const link = room.room.planGuestLink([{ guestProof: "pass-a" }], "pass-b");
+
+    expect(link?.recordable).toBe(true);
+    expect(room.room.commitGuestLink(link!).linked).toBe(true);
+    await allViewsIn(room);
+    expect(sameGuest(room, onA, onB)).toBe(true);
+    expect(notesOf(onA)).toEqual(['{"id":"a"}']);
+    expect(notesOf(onB)).toEqual(notesOf(onA));
+  });
+
+  it.each(["before the sweep", "after the sweep", "after close"] as const)(
+    "refuses a stale merge %s",
+    async (when) => {
+      const app = notesApp("notes");
+      const room = new Harness([app.authority]);
+      const { onA, onB } = await withNotes(room, app.contract);
+      const link = room.room.planGuestLink([{ guestProof: "pass-a" }], "pass-b");
+      expect(link?.recordable).toBe(true);
+
+      if (when === "after close") {
+        room.authority.close();
+      } else {
+        room.setWebinar(true, false);
+        if (when === "after the sweep") await vi.advanceTimersByTimeAsync(10);
+      }
+
+      expect(room.room.commitGuestLink(link!)).toEqual({ linked: false, settled: [] });
+      expect(sameGuest(room, onA, onB)).toBe(false);
+    },
+  );
+
   it("is not recorded when a pass took on app state after the plan", async () => {
     const app = notesApp("notes");
     const room = new Harness([app.authority]);
@@ -343,6 +399,93 @@ describe("a guest link plan (Sol)", () => {
     expect(sameGuest(room, onA, onB)).toBe(true);
     expect(notesOf(onB)).toEqual(['{"id":"a"}', '{"id":"b"}']);
   });
+});
+
+it("repairs a transient snapshot projection fault in a quiet room", async () => {
+  const projectFault = vi.fn<() => boolean>(() => false);
+  const app = notesApp("notes", { faultInProjection: projectFault });
+  const room = new Harness([app.authority], { runtime: { verifyViews: false } });
+  const onA = await guestTab(room, app.contract, "pass-a", "tab-1");
+  expect((await onA.act("note", { id: "a" })).ok).toBe(true);
+  await allViewsIn(room);
+  onA.session.close();
+  await vi.advanceTimersByTimeAsync(1_000);
+
+  projectFault.mockReturnValueOnce(true);
+  const fresh = await room.open(onA.who, app.contract, { quiet: true });
+  expect(fresh.state.kind).toBe("ready");
+  expect(notesOf(fresh)).toEqual([]);
+  await vi.advanceTimersByTimeAsync(1_000);
+
+  expect(notesOf(fresh)).toEqual(['{"id":"a"}']);
+  const later = await room.open(onA.who, app.contract, { quiet: true });
+  expect(notesOf(later)).toEqual(notesOf(fresh));
+});
+
+const startReplacement = (tab: Tab) => {
+  const frame = tab.frames.find((item) => item.kind === "replace")!;
+  tab.session.receive({ ...frame, generation: frame.generation + 1, last: false });
+  expect(tab.state.kind).toBe("connecting");
+  return frame;
+};
+
+it.each([0, 1])("does not send when the view becomes ready %i ms past the action deadline", async (past) => {
+  const app = notesApp("notes");
+  const room = new Harness([app.authority]);
+  const tab = await room.open(person("ana@example.com", "Ana"), app.contract);
+  const frame = startReplacement(tab);
+  const emit = vi.spyOn(tab.socket, "emit");
+  const result = tab.session.act("note", { id: "expired" });
+  vi.setSystemTime(Date.now() + AUTHORITY_LIMITS.operationMaxAgeMs - 1_600 + past);
+  tab.session.receive({ ...frame, generation: frame.generation + 1, part: 1, last: true });
+  await vi.advanceTimersByTimeAsync(0);
+
+  expect(emit.mock.calls.filter(([event]) => event === AUTHORITY_EVENTS.act)).toEqual([]);
+  expect(await result).toEqual({ ok: false, code: "unknown-outcome" });
+});
+
+const waits = ["readiness", "ack", "lost retry", "rate-limit retry", "resubscribe retry"] as const;
+const endings = ["close", "dispose", "revoke"] as const;
+const cancelledWaits = waits.flatMap((wait) => endings.map((ending) => ({ wait, ending })));
+
+it.each(cancelledWaits)("ends the $wait wait immediately on $ending", async ({ wait, ending }) => {
+  const app = notesApp("notes");
+  const room = new Harness([app.authority]);
+  const tab = await room.open(person("ana@example.com", "Ana"), app.contract, { ackTimeoutMs: 100 });
+  const frame = tab.frames.find((item) => item.kind === "replace")!;
+  if (wait === "readiness") startReplacement(tab);
+  const { emit: send } = tab.socket;
+  let sends = 0;
+  vi.spyOn(tab.socket, "emit").mockImplementation((event, payload, ack) => {
+    if (event !== AUTHORITY_EVENTS.act) return send.call(tab.socket, event, payload, ack);
+    sends += 1;
+    if (wait === "rate-limit retry" && sends === 2) ack?.({ ok: false, code: "rate-limited", retryAfterMs: 30_000 });
+    if (wait === "resubscribe retry") ack?.({ ok: false, code: "stale-generation" });
+  });
+  const outcome: { result?: AuthorityResult<Json> } = {};
+  void tab.session.act("note", { id: "pending" }).then((result) => {
+    outcome.result = result;
+  });
+  await vi.advanceTimersByTimeAsync(wait === "rate-limit retry" ? 501 : wait === "lost retry" ? 101 : 0);
+  const sentBeforeCancellation = wait === "readiness" ? 0 : wait === "rate-limit retry" ? 2 : 1;
+  expect(sends).toBe(sentBeforeCancellation);
+  expect(outcome.result).toBeUndefined();
+
+  if (ending === "close") tab.session.close();
+  if (ending === "dispose") tab.client.dispose();
+  if (ending === "revoke") {
+    tab.session.receive({
+      kind: "revoke",
+      reason: "forbidden",
+      subscription: frame.subscription,
+      generation: frame.generation,
+      serverNowMs: Date.now(),
+    });
+  }
+  await vi.advanceTimersByTimeAsync(0);
+
+  expect(outcome.result).toEqual({ ok: false, code: ending === "revoke" ? "forbidden" : "unknown-outcome" });
+  expect(sends).toBe(sentBeforeCancellation);
 });
 
 describe("a resend that meets the socket's act limit (Sol)", () => {
