@@ -4,7 +4,7 @@ import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, mkdtemp
 import { createServer } from "node:http";
 import { availableParallelism, tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, test as nodeTest } from "node:test";
+import { after, before, describe, test as nodeTest } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const registered = [];
@@ -193,6 +193,9 @@ const deployShell = readFileSync(join(scriptsDir, "deploy-sfu.sh"), "utf8");
 const deployPowerShell = readFileSync(join(scriptsDir, "deploy-sfu.ps1"), "utf8");
 const shellFunctions = /^[A-Za-z_][A-Za-z0-9_]*\(\) [{(]\n[\s\S]*?^[})]\n/gm;
 const powerShellFunctions = /^function [A-Za-z-]+ \{\n[\s\S]*?^\}\n/gm;
+const powerShellDefinitions = allDefinitions(deployPowerShell, powerShellFunctions);
+const restartGuardCompilation = /^    Add-Type -TypeDefinition @'\n[\s\S]*?^'@$/m;
+const restartGuardAssemblies = new Map();
 
 const versionOf = (binary) => {
   const probe = spawnSync(binary, ["-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.ToString()"], { encoding: "utf8" });
@@ -240,7 +243,7 @@ const harnesses = [
         '$ErrorActionPreference = "Stop"',
         '$env:DEPLOY_PID = [string]$PID',
         '$composeBaseArgs = @("compose", "-f", "docker-compose.sfu.yml")',
-        allDefinitions(deployPowerShell, powerShellFunctions),
+        powerShellDefinitions.replace(restartGuardCompilation, "    Add-Type -Path $env:RESTART_GUARD_ASSEMBLY"),
         "if ($env:FIXED_STAMP) { function Get-ArchiveStamp { return $env:FIXED_STAMP } }",
         "Start-SfuService -Service sfu-a -Url $env:SFU_HEALTH_URL",
       ].join("\n"),
@@ -471,6 +474,7 @@ const replaceService = async (
       SFU_DEPLOY_ID: deployId,
       SFU_HEALTH_TIMEOUT_SECONDS: health === "deployed" ? "30" : "1",
       SFU_HEALTH_POLL_SECONDS: "1",
+      RESTART_GUARD_ASSEMBLY: restartGuardAssemblies.get(harness.command) ?? "",
       FIXED_STAMP: fixedStamp,
       FAKE_KILL_TRANSFER: killTransfer ? "1" : "",
       FAKE_FAIL_UNPACK: failUnpack ? "1" : "",
@@ -1481,5 +1485,26 @@ for (const shell of deployShells) {
 }
 
 describe(SUITE, { concurrency: Math.min(8, availableParallelism()) }, () => {
+  let fixtureDir;
+  before(async () => {
+    const binaries = [...new Set(powerShells.filter(({ version }) => atLeast(version, MINIMUM_POWERSHELL)).map(({ binary }) => binary))];
+    if (!binaries.length) return;
+
+    const compilation = powerShellDefinitions.match(restartGuardCompilation)?.[0];
+    assert.ok(compilation, "deploy-sfu.ps1 defines the restart guard type");
+    fixtureDir = mkdtempSync(join(tmpdir(), "deploy-sfu-guard-"));
+    const compiler = join(fixtureDir, "compile.ps1");
+    writeFileSync(compiler, `$ErrorActionPreference = "Stop"\n${compilation.replace("-TypeDefinition", "-OutputAssembly $env:RESTART_GUARD_ASSEMBLY -TypeDefinition")}\n`);
+    for (const [index, binary] of binaries.entries()) {
+      const assembly = join(fixtureDir, `SfuRestartGuard-${index}.dll`);
+      const result = await run(binary, ["-NoProfile", "-NonInteractive", "-File", compiler], { ...process.env, RESTART_GUARD_ASSEMBLY: assembly });
+      assert.equal(result.status, 0, result.stderr);
+      assert.ok(existsSync(assembly), `${binary} did not compile the restart guard`);
+      restartGuardAssemblies.set(binary, assembly);
+    }
+  });
+  after(() => {
+    if (fixtureDir) rmSync(fixtureDir, { recursive: true, force: true });
+  });
   for (const { name, body } of registered) nodeTest(name, body);
 });
