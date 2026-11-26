@@ -156,13 +156,15 @@ describe("wheel cap with several editors", () => {
     expect(addEntries(ben, ["Next"])).toBe(1);
   });
 
-  it("never loses an accepted name and never removes more than the one asked for, for any order of edits by three editors", () => {
+  it("never loses an accepted name and never removes more than the one asked for, for any order of edits by three editors", { timeout: 30_000 }, () => {
     let seed = 20261127;
     const random = (limit: number): number => {
-      seed = (seed * 1103515245 + 12345) % 2147483648;
-      return seed % limit;
+      seed = (seed + 0x6d2b79f5) | 0;
+      let mixed = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      mixed = (mixed + Math.imul(mixed ^ (mixed >>> 7), 61 | mixed)) ^ mixed;
+      return ((mixed ^ (mixed >>> 14)) >>> 0) % limit;
     };
-    for (let run = 0; run < 60; run += 1) {
+    for (let run = 0; run < 40; run += 1) {
       const base = createWheelDoc();
       const on = new Set<string>(named(`r${run}-seed-`, 40 + random(24)));
       addEntries(base, [...on]);

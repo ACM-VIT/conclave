@@ -83,9 +83,8 @@ const readEntry = (value: unknown): WheelEntry | null => {
 
 type Accepted<T> = { kept: T[]; indexes: number[] };
 
-const accept = <T>(
+const readable = <T>(
   records: readonly unknown[],
-  limit: number,
   read: (record: unknown) => T | null,
   keyOf: (record: T) => string
 ): Accepted<T> => {
@@ -93,7 +92,6 @@ const accept = <T>(
   const kept: T[] = [];
   const indexes: number[] = [];
   records.forEach((record, index) => {
-    if (kept.length >= limit) return;
     const value = read(record);
     if (value === null || seen.has(keyOf(value))) return;
     seen.add(keyOf(value));
@@ -110,13 +108,13 @@ const pruneTo = (array: Y.Array<unknown>, indexes: number[]): void => {
   }
 };
 
-const acceptEntries = (records: readonly unknown[]): Accepted<WheelEntry> =>
-  accept(records, MAX_WHEEL_ENTRIES, readEntry, (entry) => entry.id);
+const readNames = (records: readonly unknown[]): Accepted<WheelEntry> =>
+  readable(records, readEntry, (entry) => entry.id);
 
-const prunedEntries = (entries: EntriesArray): WheelEntry[] => {
-  const accepted = acceptEntries(entries.toArray());
-  pruneTo(entries as Y.Array<unknown>, accepted.indexes);
-  return accepted.kept;
+const prunedNames = (entries: EntriesArray): WheelEntry[] => {
+  const names = readNames(entries.toArray());
+  pruneTo(entries as Y.Array<unknown>, names.indexes);
+  return names.kept;
 };
 
 export const createEntryId = (): string =>
@@ -124,15 +122,20 @@ export const createEntryId = (): string =>
 
 export const createWheelDoc = (): Y.Doc => createAppDoc(ROOT_KEY);
 
-export const getEntries = (doc: Y.Doc): WheelEntry[] => {
+export type WheelNames = { shown: WheelEntry[]; waiting: WheelEntry[] };
+
+export const getWheelNames = (doc: Y.Doc): WheelNames => {
   const entries = readEntriesArray(doc);
-  return entries ? acceptEntries(entries.toArray()).kept : [];
+  const names = entries ? readNames(entries.toArray()).kept : [];
+  return { shown: names.slice(0, MAX_WHEEL_ENTRIES), waiting: names.slice(MAX_WHEEL_ENTRIES) };
 };
+
+export const getEntries = (doc: Y.Doc): WheelEntry[] => getWheelNames(doc).shown;
 
 const pushLabels = (doc: Y.Doc, labels: readonly string[]): number => {
   if (labels.length === 0) return 0;
   const entries = ensureAppArray(getRoot(doc), ENTRIES_KEY) as EntriesArray;
-  const room = MAX_WHEEL_ENTRIES - prunedEntries(entries).length;
+  const room = MAX_WHEEL_ENTRIES - prunedNames(entries).length;
   if (room <= 0) return 0;
   const batch = labels.slice(0, room).map((label) => ({ id: createEntryId(), label }));
   entries.push(batch);
@@ -204,7 +207,7 @@ export const removeEntryById = (doc: Y.Doc, entryId: string): void => {
   const entries = readEntriesArray(doc);
   if (!entries) return;
   doc.transact(() => {
-    const index = prunedEntries(entries).findIndex((entry) => entry.id === entryId);
+    const index = prunedNames(entries).findIndex((entry) => entry.id === entryId);
     if (index < 0) return;
     entries.delete(index, 1);
   });
@@ -219,9 +222,10 @@ export const clearEntries = (doc: Y.Doc): void => {
 export const replaceEntries = (doc: Y.Doc, next: WheelEntry[]): void => {
   doc.transact(() => {
     const entries = ensureAppArray(getRoot(doc), ENTRIES_KEY) as EntriesArray;
-    const kept = acceptEntries(next).kept;
+    const waiting = readNames(entries.toArray()).kept.slice(MAX_WHEEL_ENTRIES);
+    const shown = readNames(next).kept.slice(0, MAX_WHEEL_ENTRIES);
     entries.delete(0, entries.length);
-    entries.push(kept);
+    entries.push(readNames([...shown, ...waiting]).kept);
   });
 };
 
@@ -310,8 +314,10 @@ const readResult = (value: unknown): WheelResult | null => {
   return label === result.label ? result : { ...result, label };
 };
 
-const acceptResults = (records: readonly unknown[]): Accepted<WheelResult> =>
-  accept(records, MAX_HISTORY_LENGTH, readResult, (result) => result.spinId);
+const acceptResults = (records: readonly unknown[]): Accepted<WheelResult> => {
+  const results = readable(records, readResult, (result) => result.spinId);
+  return { kept: results.kept.slice(0, MAX_HISTORY_LENGTH), indexes: results.indexes.slice(0, MAX_HISTORY_LENGTH) };
+};
 
 export const getHistory = (doc: Y.Doc): WheelResult[] => {
   const value = getRoot(doc).get(HISTORY_KEY);
