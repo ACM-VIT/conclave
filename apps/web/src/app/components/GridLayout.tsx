@@ -2641,7 +2641,7 @@ function GridLayout({
             >
               {renderStageTile(stageLayout.main, "main")}
               {stageLayout.compactPin ? (
-                <div className="absolute left-0 top-0 z-30 h-[min(4.5rem,60%)] w-[min(7rem,48%)]">
+                <div className="absolute bottom-0 left-0 z-30 h-[min(4.5rem,60%)] w-[min(7rem,48%)]">
                   {renderStageTile(stageLayout.compactPin, "rail")}
                 </div>
               ) : null}
