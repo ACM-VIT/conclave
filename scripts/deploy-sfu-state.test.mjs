@@ -39,6 +39,7 @@ if [[ "$1" == "compose" ]]; then
         fi
         [[ "$FAKE_FAIL_AT" == probe && -f "$FAKE_STOPPED" && "$script" == *"layerDatabase.ts probe"* ]] && exit 1
         [[ "$FAKE_FAIL_AT" == carry && "$script" == *"layerDatabase.ts consolidate"* ]] && exit 1
+        [[ "$FAKE_FAIL_AT" == publish && "$script" == *"staged copy"* ]] && exit 1
         if [[ -s "$STAGING_PATH_FILE" && "$script" == *payload.tar* ]]; then
           staging="$(cat "$STAGING_PATH_FILE")"
           ls -ld "$staging" | cut -c1-10 >> "$STAGING_MODES"
@@ -111,7 +112,27 @@ if [[ "$1" == "compose" ]]; then
   done
   exit 0
 fi
-if [[ "$1" == update && "$2" == --restart=no && "$FAKE_FAIL_AT" == term-after-freeze ]]; then kill -TERM "$PPID"; exit 0; fi
+if [[ "$1" == update ]]; then
+  case "$2:$FAKE_FAIL_AT" in
+    --restart=no:freeze-fails) exit 1 ;;
+    --restart=no:term-after-freeze) kill -TERM "$DEPLOY_PID" ;;
+    --restart=no:hup-after-freeze) kill -HUP "$DEPLOY_PID" ;;
+    --restart=no:int-after-freeze) kill -INT "$DEPLOY_PID" ;;
+    --restart=unless-stopped:term-during-restore|--restart=unless-stopped:int-during-restore)
+      if [[ ! -e "$DOCKER_LOG.signal" ]]; then
+        : > "$DOCKER_LOG.signal"
+        if [[ "$FAKE_FAIL_AT" == int-during-restore ]]; then
+          kill -INT -- "-$(ps -o pgid= -p $$ | tr -d ' ')"
+        else
+          kill -TERM "$DEPLOY_PID"
+        fi
+        sleep 0.2
+      fi ;;
+    --restart=unless-stopped:restore-fails)
+      if [[ ! -e "$DOCKER_LOG.signal" ]]; then : > "$DOCKER_LOG.signal"; exit 1; fi ;;
+  esac
+  if [[ "$2" == --restart=unless-stopped && "$FAKE_RESTART_AT" == restore ]]; then : > "$FAKE_RESTARTED"; fi
+fi
 case "$1" in
   inspect)
     if [[ "$*" == *WorkingDir* ]]; then printf '%s\n' "\${FAKE_WORKDIR-/app/packages/sfu}"; exit 0; fi
@@ -199,6 +220,7 @@ const harnesses = [
     source: () =>
       [
         "set -euo pipefail",
+        'export DEPLOY_PID="$$"',
         "COMPOSE=(docker compose -f docker-compose.sfu.yml)",
         allDefinitions(deployShell, shellFunctions),
         `if [[ -n "\${FIXED_STAMP:-}" ]]; then archive_stamp() { printf '%s' "$FIXED_STAMP"; }; fi`,
@@ -215,6 +237,7 @@ const harnesses = [
       [
         "Set-StrictMode -Version Latest",
         '$ErrorActionPreference = "Stop"',
+        '$env:DEPLOY_PID = [string]$PID',
         '$composeBaseArgs = @("compose", "-f", "docker-compose.sfu.yml")',
         allDefinitions(deployPowerShell, powerShellFunctions),
         "if ($env:FIXED_STAMP) { function Get-ArchiveStamp { return $env:FIXED_STAMP } }",
@@ -964,10 +987,18 @@ for (const harness of harnesses) {
       files: { "scheduling.json": "[1]", ...sqliteFiles("conclave.sqlite", ["kept"]) },
     };
     const steps = {
+      "turning off restarts fails after the update was sent": { failAt: "freeze-fails", running: true, state: "still running" },
       "the stop fails": { failAt: "stop", running: true, state: "still running" },
       "the ownership helper fails": { failAt: "ownership" },
       "a TERM signal arrives during the ownership step": { failAt: "signal" },
-      "a TERM signal arrives right after restarts are turned off": { failAt: "term-after-freeze", running: true, state: "still running" },
+      "TERM reaches the deploy PID right after restarts are turned off": { failAt: "term-after-freeze", running: true, state: "still running" },
+      "HUP reaches the deploy PID right after restarts are turned off": { failAt: "hup-after-freeze", running: true, state: "still running" },
+      "INT reaches the deploy PID right after restarts are turned off": { failAt: "int-after-freeze", running: true, state: "still running" },
+      "TERM reaches the deploy PID during restore": { failAt: "term-during-restore" },
+      "Ctrl+C reaches the deploy group during restore": { failAt: "int-during-restore" },
+      "restoring the restart policy fails before replacement": { failAt: "restore-fails" },
+      "the source restarts as its policy is restored": { restartAt: "restore", state: "still running" },
+      "the staged copy cannot be published": { failAt: "publish" },
       "Ctrl+C (INT to the whole process group) during the ownership step": { failAt: "int-ownership" },
       "it is running again after the stop": { runningAfterStop: true, state: "still running" },
       "copying a JSON file fails": { cpFailAfterStop: "scheduling.json" },
@@ -980,17 +1011,18 @@ for (const harness of harnesses) {
     const runs = await Promise.all(Object.values(steps).map(({ state, ...options }) => replaceService(harness, { ...base, ...options })));
     const outcomes = Object.fromEntries(
       Object.keys(steps).map((name, at) => {
-        const { status, calls, stderr } = runs[at];
+        const { status, calls, stderr, archives } = runs[at];
         const froze = calls.indexOf(`update --restart=no ${OLD_CONTAINER}`);
         return [name, {
-          failed: status !== 0,
+          failed: Number.isInteger(status) && status !== 0,
           startedNew: callIndex(calls, / up -d /) >= 0,
           restoredAfterFreeze: froze >= 0 && calls.lastIndexOf(`update --restart=unless-stopped ${OLD_CONTAINER}`) > froze,
+          published: archives.length,
           said: stderr.match(/The old sfu-a container is (still running|left stopped)[^\n]*restart policy \(unless-stopped\) restored/)?.[1] ?? stderr.trim().split("\n").slice(-2).join(" | "),
         }];
       }),
     );
-    assert.deepEqual(outcomes, Object.fromEntries(Object.entries(steps).map(([name, { state = "left stopped" }]) => [name, { failed: true, startedNew: false, restoredAfterFreeze: true, said: state }])));
+    assert.deepEqual(outcomes, Object.fromEntries(Object.entries(steps).map(([name, { state = "left stopped" }]) => [name, { failed: true, startedNew: false, restoredAfterFreeze: true, published: 0, said: state }])));
   });
 
   test(`${shell}: a restart at any copy step never lets a copy stand for a later state of the old container, and the next deploy carries that later state`, async () => {
