@@ -5,6 +5,7 @@ import {
   defineContract,
   s,
   type AuthorityResult,
+  type AuthorityRevokeReason,
   type Json,
   type OperationId,
 } from "@conclave/apps-sdk/authority";
@@ -444,11 +445,21 @@ it.each([0, 1])("does not send when the view becomes ready %i ms past the action
   expect(await result).toEqual({ ok: false, code: "unknown-outcome" });
 });
 
-const waits = ["readiness", "ack", "lost retry", "rate-limit retry", "resubscribe retry"] as const;
-const endings = ["close", "dispose", "revoke"] as const;
-const cancelledWaits = waits.flatMap((wait) => endings.map((ending) => ({ wait, ending })));
+const waits = [
+  { wait: "readiness", elapsed: 0, attempts: 0, forbidden: true },
+  { wait: "ack", elapsed: 0, attempts: 1, forbidden: false },
+  { wait: "lost retry", elapsed: 101, attempts: 1, forbidden: false },
+  { wait: "rate-limit retry", elapsed: 501, attempts: 2, forbidden: false },
+  { wait: "resubscribe retry", elapsed: 0, attempts: 1, forbidden: true },
+  { wait: "resubscribe retry after a lost answer", elapsed: 501, attempts: 2, forbidden: false },
+] as const;
+const revokeReasons = [
+  "forbidden", "unknown-app", "stale-epoch", "too-large", "too-many", "closed",
+] as const satisfies readonly AuthorityRevokeReason[];
+const endings = ["close", "dispose", ...revokeReasons] as const;
+const cancelledWaits = waits.flatMap((phase) => endings.map((ending) => ({ ...phase, ending })));
 
-it.each(cancelledWaits)("ends the $wait wait immediately on $ending", async ({ wait, ending }) => {
+it.each(cancelledWaits)("ends the $wait wait immediately on $ending", async ({ wait, elapsed, attempts, forbidden, ending }) => {
   const app = notesApp("notes");
   const room = new Harness([app.authority]);
   const tab = await room.open(person("ana@example.com", "Ana"), app.contract, { ackTimeoutMs: 100 });
@@ -463,23 +474,24 @@ it.each(cancelledWaits)("ends the $wait wait immediately on $ending", async ({ w
     if (event !== AUTHORITY_EVENTS.act) return send.call(socket, event, payload, ack);
     sends += 1;
     if (wait === "rate-limit retry" && sends === 2) ack?.({ ok: false, code: "rate-limited", retryAfterMs: 30_000 });
-    if (wait === "resubscribe retry") ack?.({ ok: false, code: "stale-generation" });
+    if (wait === "resubscribe retry" || (wait === "resubscribe retry after a lost answer" && sends === 2)) {
+      ack?.({ ok: false, code: "stale-generation" });
+    }
   });
   const outcome: { result?: AuthorityResult<Json> } = {};
   void tab.session.act("note", { id: "pending" }).then((result) => {
     outcome.result = result;
   });
-  await vi.advanceTimersByTimeAsync(wait === "rate-limit retry" ? 501 : wait === "lost retry" ? 101 : 0);
-  const sentBeforeCancellation = wait === "readiness" ? 0 : wait === "rate-limit retry" ? 2 : 1;
-  expect(sends).toBe(sentBeforeCancellation);
+  await vi.advanceTimersByTimeAsync(elapsed);
+  expect(sends).toBe(attempts);
   expect(outcome.result).toBeUndefined();
 
   if (ending === "close") tab.session.close();
-  if (ending === "dispose") tab.client.dispose();
-  if (ending === "revoke") {
+  else if (ending === "dispose") tab.client.dispose();
+  else {
     tab.session.receive({
       kind: "revoke",
-      reason: "forbidden",
+      reason: ending,
       subscription: frame.subscription,
       generation: frame.generation,
       serverNowMs: Date.now(),
@@ -487,8 +499,29 @@ it.each(cancelledWaits)("ends the $wait wait immediately on $ending", async ({ w
   }
   await vi.advanceTimersByTimeAsync(0);
 
-  expect(outcome.result).toEqual({ ok: false, code: ending === "revoke" ? "forbidden" : "unknown-outcome" });
-  expect(sends).toBe(sentBeforeCancellation);
+  expect(outcome.result).toEqual({ ok: false, code: ending === "forbidden" && forbidden ? "forbidden" : "unknown-outcome" });
+  expect(sends).toBe(attempts);
+});
+
+it("reports an unknown outcome when capabilities disappear after a lost answer", async () => {
+  const app = notesApp("notes");
+  const room = new Harness([app.authority]);
+  const tab = await room.open(person("ana@example.com", "Ana"), app.contract, { ackTimeoutMs: 100 });
+  const { answer: pending } = await startWithLostAnswer(room, tab, "note", { id: "committed" });
+  expect(tab.rows("mine")).toEqual([{ id: "committed" }]);
+  const socket = tab.socket as unknown as {
+    emit: (event: string, payload?: unknown, ack?: (reply: unknown) => void) => void;
+  };
+  const { emit: send } = socket;
+  vi.spyOn(socket, "emit").mockImplementation((event, payload, ack) => {
+    if (event === AUTHORITY_EVENTS.capabilities) ack?.({ ok: false, code: "unsupported" });
+    else send.call(socket, event, payload, ack);
+  });
+
+  tab.client.refresh();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(tab.state.kind).toBe("unsupported");
+  expect(await room.settle(pending)).toEqual({ ok: false, code: "unknown-outcome" });
 });
 
 describe("a resend that meets the socket's act limit (Sol)", () => {
