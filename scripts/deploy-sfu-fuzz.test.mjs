@@ -286,7 +286,7 @@ fixed("Sol: a restarting container whose restart policy is turned off is waited 
   }),
 );
 
-for (const queuedRestart of ["unsettled", "takes a call"]) {
+for (const queuedRestart of ["stays unsettled", "takes a call"]) {
   fixed(`an aborted deploy restores the old restart policy when a queued restart ${queuedRestart}`, () =>
     withStack({ "sfu-a": {}, "sfu-b": { statusHealthy: false } }, async (sfus, shared) => {
       const sfu = sfus["sfu-a"];
@@ -305,6 +305,20 @@ for (const queuedRestart of ["unsettled", "takes a call"]) {
     }),
   );
 }
+
+fixed("termination after a settled hold restores the old restart policy before any replacement", () =>
+  withStack({ "sfu-a": { container: "exited" }, "sfu-b": {} }, async (sfus, shared) => {
+    const sfu = sfus["sfu-a"];
+    const result = await deploy(sfus, {
+      env: { ...shared.env, ...ONLY_A, DEPLOY_TEST_TERM_ON_CANDIDATE_TAG: "1" },
+      journals: { "sfu-a": { phase: "idle", lkg: LAST_GOOD } },
+    });
+    assert.notEqual(result.code, 0, result.output);
+    assert.deepEqual(sfu.recreates, [], result.output);
+    assert.equal(sfu.container, "exited", result.output);
+    assert.equal(sfu.restartPolicy, "unless-stopped", result.output);
+  }),
+);
 
 fixed("Sol: a peer whose /status says unhealthy is not serving, so the instance is never drained toward it", () =>
   withStack({ "sfu-a": {}, "sfu-b": { statusHealthy: false } }, async (sfus, shared) => {

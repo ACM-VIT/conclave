@@ -155,7 +155,7 @@ Drain and wait, the only wait for an instance's calls:
 
 | Container | `/status` | Result |
 | --- | --- | --- |
-| stopped, restarting or absent | any | Its restart policy is turned off (`docker update --restart=no`), then it is watched until it settles: exited on two looks `CONTAINER_SETTLE_SECONDS` (3) apart is empty; running goes through the rows below. A restarting container is never empty, because Docker still runs a restart it queued before the policy changed; one that has not settled within `HEALTH_TIMEOUT_SECONDS` is left alone (exit 1). |
+| stopped, restarting or absent | any | Its restart policy is turned off (`docker update --restart=no`), then it is watched until it settles: exited on two looks `CONTAINER_SETTLE_SECONDS` (3) apart is empty; running goes through the rows below. A restarting container is never empty, because Docker still runs a restart it queued before the policy changed; if it does not settle within `HEALTH_TIMEOUT_SECONDS`, the deploy restores its original restart policy and stops (exit 1). The deploy also restores that policy if it exits normally or handles a signal before replacing the old container. |
 | running | unreadable for `HEALTH_TIMEOUT_SECONDS` | Unknown, even for a container that booted drained (a call can still reach a drained candidate): exit 5, left as it is with its journal kept. |
 | running | `draining: false` | The drain is sent again; still not draining after `HEALTH_TIMEOUT_SECONDS` is unknown (exit 5). |
 | running | `draining: true`, 0 rooms from `PLACEMENT_SETTLE_SECONDS` after the last drain | Empty. |

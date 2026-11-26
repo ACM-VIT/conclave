@@ -135,6 +135,7 @@ export const startSfu = async (
         status,
         startedAt,
         restartCount: sfu.restartCount,
+        restartPolicy: sfu.restartPolicy,
         bootDrained: sfu.bootDrained,
         image: sfu.image,
         configHash: sfu.configHash,
@@ -432,6 +433,7 @@ const main = async () => {
         await fetch("http://127.0.0.1:" + sfus[name].port + "/stand-in/tagged?to=" + encodeURIComponent(args[2])).catch(() => undefined);
       }
     }
+    if (process.env.DEPLOY_TEST_TERM_ON_CANDIDATE_TAG && /:candidate-sfu-/.test(args[2])) process.kill(process.ppid, "SIGTERM");
     return;
   }
   if (args[0] === "update") {

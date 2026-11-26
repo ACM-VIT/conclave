@@ -656,12 +656,57 @@ booted_drained() {
   grep -qx 'SFU_DRAINING=true' <<< "$env"
 }
 
+restart_policy() {
+  docker inspect --format '{{.HostConfig.RestartPolicy.Name}}{{if .HostConfig.RestartPolicy.MaximumRetryCount}}:{{.HostConfig.RestartPolicy.MaximumRetryCount}}{{end}}' "$1"
+}
+
+declare -A RESTART_HOLDS=()
+release_restart_hold() {
+  local svc="$1" container policy current
+  [[ -n "${RESTART_HOLDS[$svc]:-}" ]] || return 0
+  read -r container policy <<< "${RESTART_HOLDS[$svc]}"
+  if ! current="$(service_container "$svc")" || [[ "$current" == "$container" ]]; then
+    if ! docker update --restart="$policy" "$container" >/dev/null; then
+      echo "Could not restore ${svc}'s restart policy. Set it with: docker update --restart=${policy} ${container}" >&2
+      return 1
+    fi
+  fi
+  unset 'RESTART_HOLDS[$svc]'
+}
+
+release_restart_holds() {
+  local code="$?" svc
+  for svc in "${!RESTART_HOLDS[@]}"; do
+    if ! release_restart_hold "$svc" && (( code == 0 )); then
+      code=1
+    fi
+  done
+  exit "$code"
+}
+
+trap release_restart_holds EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 hold_down() {
-  local svc="$1" container state exited="" start_ts
+  local svc="$1" container policy state exited="" start_ts
   container="$(service_container "$svc")" || return 1
   [[ -n "$container" ]] || return 0
-  [[ "$(container_state "$svc")" =~ ^(stopped|restarting)$ ]] || return 1
-  docker update --restart=no "$container" >/dev/null 2>&1 || return 1
+  if ! [[ "$(container_state "$svc")" =~ ^(stopped|restarting)$ ]]; then
+    release_restart_hold "$svc" || true
+    return 1
+  fi
+  if [[ "${RESTART_HOLDS[$svc]:-}" != "$container "* ]]; then
+    release_restart_hold "$svc" || return 1
+    policy="$(restart_policy "$container")" || return 1
+    [[ -n "$policy" ]] || return 1
+    RESTART_HOLDS[$svc]="$container $policy"
+    if ! docker update --restart=no "$container" >/dev/null 2>&1; then
+      release_restart_hold "$svc" || true
+      return 1
+    fi
+  fi
   start_ts="$(date +%s)"
   while (( $(date +%s) - start_ts < HEALTH_TIMEOUT_SECONDS )); do
     state="$(container_state "$svc")"
@@ -672,10 +717,11 @@ hold_down() {
         exited="yes"
         ;;
       restarting) exited="" ;;
-      *) return 1 ;;
+      *) break ;;
     esac
     sleep "$CONTAINER_SETTLE_SECONDS"
   done
+  release_restart_hold "$svc" || true
   return 1
 }
 
@@ -888,7 +934,8 @@ up_service() {
   local svc="$1" tag="$2" drained="$3" restart="unless-stopped"
   [[ "$drained" == "true" ]] && restart="no"
   env "$(image_var "$svc")=${tag}" SFU_START_DRAINING="$drained" SFU_RESTART_POLICY="$restart" \
-    "${COMPOSE[@]}" up -d --no-build --no-deps --force-recreate "$svc"
+    "${COMPOSE[@]}" up -d --no-build --no-deps --force-recreate "$svc" || return 1
+  unset 'RESTART_HOLDS[$svc]'
 }
 
 # Each instance's deploy journal: its phase (idle, drained, candidate, passed,
@@ -1351,7 +1398,11 @@ deploy_service() {
     fi
     # Silent is not stopped: a wrong URL or proxy hides a container that may
     # still carry calls, however recently it started.
-    case "$(hold_down "$svc" && echo down || container_state "$svc")" in
+    local observed=down
+    if ! hold_down "$svc"; then
+      observed="$(container_state "$svc")"
+    fi
+    case "$observed" in
       down)
         echo "${svc} is not running; starting it without a drain."
         journal_set "$svc" phase=drained lkg="$lkg" wasDraining=true candidate= prevLkg= commit="$TARGET_COMMIT"
