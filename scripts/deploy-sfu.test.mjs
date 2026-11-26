@@ -466,6 +466,29 @@ test("an in-progress rollback does not drain any instance while a fleet image is
   });
 });
 
+test("an aborted state carry records recovery without restarting the old SFU", async () => {
+  await withSfus({ "sfu-a": {}, "sfu-b": { rooms: 1 } }, async (sfus) => {
+    const stateDir = await mkdtemp(path.join(tmpdir(), "conclave-deploy-state-"));
+    try {
+      const sfu = sfus["sfu-a"];
+      sfu.onUpdate = (instance, restart) => {
+        if (restart === "no") instance.container = "restarting";
+      };
+      const result = await deploy(sfus, { env: { SFU_DEPLOY_STATE_DIR: stateDir } });
+      assert.equal(result.code, 1, result.output);
+      assert.equal(sfu.container, "restarting", result.output);
+      assert.equal(sfu.restartPolicy, "unless-stopped", result.output);
+      assert.deepEqual(sfu.recreates, [], result.output);
+      assert.deepEqual(sfus["sfu-b"].drains, [], result.output);
+      const journal = JSON.parse(await readFile(path.join(stateDir, "vm.sfu-a.journal.json"), "utf8"));
+      assert.equal(journal.phase, "rollback", result.output);
+      assert.equal(journal.lkg, "sha256:running", result.output);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+});
+
 test("a rollback killed after its first instance finishes going back to the same release when rerun", async () => {
   await withSfus({ "sfu-a": { onTarget: true }, "sfu-b": { onTarget: true } }, async (sfus) => {
     const stateDir = await mkdtemp(path.join(tmpdir(), "conclave-deploy-state-"));
