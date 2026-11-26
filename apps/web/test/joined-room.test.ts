@@ -108,3 +108,35 @@ describe("which joins may open a room", () => {
     expect(await page.askedToOpenRoom("abc-mnop-xyz")).toBe(true);
   });
 });
+
+describe("the recovery pass a tab holds for its meeting", () => {
+  it("is kept when a later join to the same meeting brings none, also after a reload", async () => {
+    const page = await loadPage();
+    page.rememberJoinedRoom("abc-mnop-xyz", "pass-1");
+    page.rememberJoinedRoom("abc-mnop-xyz", undefined);
+    expect(page.getJoinedRoom("abc-mnop-xyz")?.recoveryPass).toBe("pass-1");
+
+    const reloaded = await loadPage();
+    reloaded.rememberJoinedRoom("abc-mnop-xyz", null);
+    expect(reloaded.getJoinedRoom("abc-mnop-xyz")?.recoveryPass).toBe("pass-1");
+  });
+
+  it("gives way to the pass a later join brings", async () => {
+    const page = await loadPage();
+    page.rememberJoinedRoom("abc-mnop-xyz", "pass-1");
+    page.rememberJoinedRoom("abc-mnop-xyz", "pass-2");
+    expect(page.getJoinedRoom("abc-mnop-xyz")?.recoveryPass).toBe("pass-2");
+  });
+
+  it("is not carried into another meeting, and is gone once the tab is put out", async () => {
+    const page = await loadPage();
+    page.rememberJoinedRoom("abc-mnop-xyz", "pass-1");
+    page.rememberJoinedRoom("def-ghij-klm", undefined);
+    expect(page.getJoinedRoom("def-ghij-klm")?.recoveryPass).toBeNull();
+
+    page.rememberJoinedRoom("abc-mnop-xyz", "pass-1");
+    page.forgetJoinedRoom();
+    page.rememberJoinedRoom("abc-mnop-xyz", undefined);
+    expect(page.getJoinedRoom("abc-mnop-xyz")?.recoveryPass).toBeNull();
+  });
+});

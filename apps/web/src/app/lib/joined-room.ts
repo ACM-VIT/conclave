@@ -32,7 +32,10 @@ export const rememberJoinedRoom = (
   roomId: string,
   recoveryPass: string | null | undefined,
 ): void => {
-  cached = { roomId, recoveryPass: recoveryPass ?? null };
+  cached = {
+    roomId,
+    recoveryPass: recoveryPass ?? getJoinedRoom(roomId)?.recoveryPass ?? null,
+  };
   try {
     window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(cached));
   } catch {}
