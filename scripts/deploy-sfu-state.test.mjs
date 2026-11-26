@@ -992,10 +992,10 @@ for (const harness of harnesses) {
       "the stop fails": { failAt: "stop", running: true, state: "still running" },
       "the ownership helper fails": { failAt: "ownership" },
       "a TERM signal arrives during the ownership step": { failAt: "signal" },
-      "TERM reaches the deploy PID right after restarts are turned off": { failAt: "term-after-freeze", running: true, state: "still running" },
-      "HUP reaches the deploy PID right after restarts are turned off": { failAt: "hup-after-freeze", running: true, state: "still running" },
-      "INT reaches the deploy PID right after restarts are turned off": { failAt: "int-after-freeze", running: true, state: "still running" },
-      "QUIT reaches the deploy PID right after restarts are turned off": { failAt: "quit-after-freeze", running: true, state: "still running" },
+      "TERM reaches the deploy PID right after restarts are turned off": { failAt: "term-after-freeze", running: true, state: "on signal" },
+      "HUP reaches the deploy PID right after restarts are turned off": { failAt: "hup-after-freeze", running: true, state: "on signal" },
+      "INT reaches the deploy PID right after restarts are turned off": { failAt: "int-after-freeze", running: true, state: "on signal" },
+      "QUIT reaches the deploy PID right after restarts are turned off": { failAt: "quit-after-freeze", running: true, state: "on signal" },
       "TERM reaches the deploy PID during restore": { failAt: "term-during-restore" },
       "Ctrl+C reaches the deploy group during restore": { failAt: "int-during-restore" },
       "restoring the restart policy fails before replacement": { failAt: "restore-fails" },
@@ -1024,7 +1024,11 @@ for (const harness of harnesses) {
         }];
       }),
     );
-    assert.deepEqual(outcomes, Object.fromEntries(Object.entries(steps).map(([name, { state = "left stopped" }]) => [name, { failed: true, startedNew: false, restoredAfterFreeze: true, published: 0, said: state }])));
+    const expected = Object.entries(steps).map(([name, { state = "left stopped" }], at) => {
+      const said = state === "on signal" ? (stopped(runs[at].calls) ? "left stopped" : "still running") : state;
+      return [name, { failed: true, startedNew: false, restoredAfterFreeze: true, published: 0, said }];
+    });
+    assert.deepEqual(outcomes, Object.fromEntries(expected));
   });
 
   test(`${shell}: a restart at any copy step never lets a copy stand for a later state of the old container, and the next deploy carries that later state`, async () => {
