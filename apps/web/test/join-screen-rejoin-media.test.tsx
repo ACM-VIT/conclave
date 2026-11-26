@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { PropertySymbol, Window } from "happy-dom";
-import { act, lazy, StrictMode, Suspense, useState, type ComponentProps } from "react";
-import { createRoot, type Root } from "react-dom/client";
+import { act, lazy, StrictMode, Suspense, useEffect, useState, type ComponentProps } from "react";
+import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import JoinScreen from "../src/app/components/JoinScreen";
 import { readRejoinIntent, saveRejoinIntent } from "../src/app/lib/rejoin-intent";
@@ -43,11 +43,11 @@ const getUserMedia = vi.fn(async ({ audio, video }: MediaStreamConstraints) => {
 });
 const commitMedia = vi.fn<NonNullable<ComponentProps<typeof JoinScreen>["onPrejoinMediaCommit"]>>();
 
-beforeEach(() => {
+beforeEach(async () => {
   browser = new Window({ url: "https://conclave.example/rejoin-room" });
   vi.stubGlobal("window", browser);
   vi.stubGlobal("document", browser.document);
-  vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+  vi.stubGlobal("navigator", { userAgent: browser.navigator.userAgent, mediaDevices: { getUserMedia } });
   vi.stubGlobal("Audio", browser.Audio);
   const { MediaStream: HappyMediaStream } = browser;
   class CaptureStream extends HappyMediaStream {
@@ -59,6 +59,7 @@ beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   container = document.createElement("div");
   document.body.append(container);
+  const { createRoot } = await import("react-dom/client");
   root = createRoot(container);
   getUserMedia.mockReset();
   commitMedia.mockClear();
@@ -71,30 +72,49 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-function RoomPage({ home = false }: { home?: boolean }) {
-  const pageTarget = home ? { roomId: "default-room", clientId: "acme" } : target;
+function RoomPage({
+  home = false,
+  suppliedRoomId,
+  onJoin = noop,
+  onLookup = noop,
+}: {
+  home?: boolean;
+  suppliedRoomId?: string;
+  onJoin?: (id: string) => void;
+  onLookup?: (id?: string) => void;
+}) {
+  const pageTarget = suppliedRoomId
+    ? { roomId: suppliedRoomId, clientId: "acme" }
+    : home ? { roomId: "default-room", clientId: "acme" } : target;
+  const [roomId, setRoomId] = useState(pageTarget.roomId);
   const [pendingMedia, setPendingMedia] = useState(() => readRejoinIntent(pageTarget));
   const [joined, setJoined] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
+  useEffect(() => {
+    if (home && !roomId) setRoomId(window.location.pathname.slice(1));
+  }, [home, roomId]);
   if (joined) return <button onClick={() => setJoined(false)}>Leave call</button>;
   return (
     <Suspense fallback={null}>
       <JoinScreen
-        roomId={pageTarget.roomId}
-        onRoomIdChange={noop}
-        onJoinRoom={() => setJoined(true)}
+        roomId={roomId}
+        onRoomIdChange={setRoomId}
+        onJoinRoom={(id) => {
+          onJoin(id);
+          setJoined(true);
+        }}
         isLoading={false}
         user={{ id: "member", name: "Guest" }}
         userEmail=""
         connectionState="idle"
         isAdmin={isAdmin}
-        enableRoomRouting
-        forceJoinOnly={!home}
+        enableRoomRouting={!suppliedRoomId}
+        forceJoinOnly={!home && !suppliedRoomId}
         clientId={pageTarget.clientId}
         showPermissionHint={false}
         rooms={[]}
         roomsStatus="idle"
-        onRefreshRooms={noop}
+        onRefreshRooms={onLookup}
         displayNameInput=""
         onDisplayNameInputChange={noop}
         onUserChange={noop}
@@ -129,6 +149,43 @@ async function click(label: string, scope: ParentNode = container) {
   if (!el || el.disabled) throw new Error(`No enabled "${label}" button`);
   await act(async () => el.click());
 }
+
+it("joins the exact room ID supplied by a non-routing integration", async () => {
+  const join = vi.fn();
+  await act(async () => root.render(<RoomPage suppliedRoomId="team_room" onJoin={join} />));
+
+  expect(button("Join")?.disabled).toBe(false);
+  await click("Join");
+
+  expect(join).toHaveBeenCalledExactlyOnceWith("team_room");
+});
+
+it("keeps the cross-client destination after leaving a meeting on the home page", async () => {
+  const lookup = vi.fn();
+  await act(async () => root.render(<RoomPage home onLookup={lookup} />));
+  await click("New meeting");
+  const previousRoom = browser.location.pathname.slice(1);
+  expect(previousRoom).not.toBe("rejoin-room");
+  await click("Leave call");
+  const input = container.querySelector<HTMLInputElement>('input[placeholder="Enter a code or link"]')!;
+  expect(input.value).toBe(previousRoom);
+  const previousLookups = lookup.mock.calls.slice();
+  lookup.mockClear();
+  const destination = "https://conclave.example/next-room?clientId=another-client";
+
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(browser.HTMLInputElement.prototype, "value")!.set!;
+    setter.call(input, destination);
+    input.dispatchEvent(new browser.Event("input", { bubbles: true }) as unknown as Event);
+    input.dispatchEvent(new browser.Event("focusout", { bubbles: true }) as unknown as Event);
+  });
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+
+  expect(input.value).toBe(destination);
+  expect(browser.location.pathname).toBe(`/${previousRoom}`);
+  expect(previousLookups).toContainEqual([previousRoom]);
+  expect(lookup).not.toHaveBeenCalled();
+});
 
 it("does not reopen either device on the join card after leaving a call", async () => {
   await openRoom();
