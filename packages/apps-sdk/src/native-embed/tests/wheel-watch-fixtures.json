@@ -283,7 +283,7 @@
     "spin",
     "setRemoveWinner",
     "setSounds",
-    "clearResults",
+    "clearResults", "addOutcome",
     "playNow",
     "enqueue",
     "request",
