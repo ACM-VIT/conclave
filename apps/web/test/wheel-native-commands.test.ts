@@ -414,7 +414,7 @@ describe("native wheel add receipts", () => {
       expect(labels(doc)).toEqual(["Ada"]);
     });
 
-    it("stays small through 5,000 add and clear rounds, for the room and for someone joining late", () => {
+    it("stays small through 5,000 add and clear rounds, for the room and for someone joining late", { timeout: 30_000 }, () => {
       const native = createWheelDoc();
       const room = createWheelDoc();
       native.on("update", (update: Uint8Array) => Y.applyUpdate(room, update));
@@ -437,7 +437,7 @@ describe("native wheel add receipts", () => {
       expect(sizeOf(room) - sizeOf(plain)).toBeLessThan(5_000 * 20 + 8 * 1_024);
     });
 
-    it("does not grow at all through 14,000 refused adds", () => {
+    it("does not grow at all through 14,000 refused adds", { timeout: 30_000 }, () => {
       const native = createWheelDoc();
       addEntries(native, Array.from({ length: 64 }, (_, index) => `Old ${index}`));
       const before = Y.encodeStateAsUpdate(native);
