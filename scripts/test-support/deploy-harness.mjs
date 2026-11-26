@@ -142,6 +142,7 @@ export const startSfu = async (
         stateInspectFails,
         envInspectFails,
         imageReadFails,
+        listFails: url.searchParams.get("read") === "list" && Boolean(sfu.failContainerLookup?.()),
         firstImage: sfu.firstImage,
       });
     }
@@ -320,7 +321,11 @@ const main = async () => {
     // The hash covers the rendered config, so it changes with what the
     // service's env and image name render to, as Compose's does.
     if (rest[0] === "config" && rest[1] === "--hash") return out(rest[2] + " " + configHash(rest[2]));
-    if (rest[0] === "ps") return out("ctr-" + rest.at(-1));
+    if (rest[0] === "ps") {
+      const name = rest.at(-1);
+      if (process.env.DEPLOY_TEST_EXPECT_LOOKUP_FAILURES === name && (await state(name, "list")).listFails) return void (process.exitCode = 1);
+      return out("ctr-" + name);
+    }
     // A build retags the service's own image, as compose does.
     if (rest[0] === "build") {
       tags["vm-" + rest.at(-1)] = "sha256:checkout-build";

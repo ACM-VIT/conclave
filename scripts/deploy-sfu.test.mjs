@@ -412,6 +412,41 @@ test("--rollback after a partial rollout returns every instance to the last rele
   });
 });
 
+for (const fault of ["transient list", "persistent list", "persistent inspect"]) {
+  test(`rollback distinguishes an unknown image from a different release (${fault})`, async () => {
+    await withSfus({ "sfu-a": { onTarget: true }, "sfu-b": { onTarget: true } }, async (sfus, events) => {
+      const stateDir = await mkdtemp(path.join(tmpdir(), "conclave-deploy-state-"));
+      try {
+        const stateFile = path.join(stateDir, "vm.env");
+        const prior = "LAST_GOOD_COMMIT=bad\nLAST_GOOD_IMAGE=sha256:target\nPREVIOUS_GOOD_COMMIT=good\nPREVIOUS_GOOD_IMAGE=sha256:previous\n";
+        await writeFile(stateFile, prior);
+        const sfu = sfus["sfu-b"];
+        let failedReads = 0;
+        const fail = () => ++failedReads === 1 || fault !== "transient list";
+        sfu.onStatus = () => {
+          if (fault === "persistent inspect") sfu.failImageRead = fail;
+          else sfu.failContainerLookup = fail;
+        };
+        const result = await deploy(sfus, {
+          args: ["--rollback"],
+          env: { SFU_DEPLOY_STATE_DIR: stateDir, DEPLOY_TEST_EXPECT_LOOKUP_FAILURES: "sfu-b" },
+        });
+        assert.ok(failedReads > 0, result.output);
+        if (fault === "transient list") {
+          assert.equal(result.code, 0, result.output);
+          assert.deepEqual(Object.values(sfus).map((instance) => instance.image), ["sha256:previous", "sha256:previous"], result.output);
+        } else {
+          assert.notEqual(result.code, 0, result.output);
+          assert.deepEqual(events, [], result.output);
+          assert.equal(await readFile(stateFile, "utf8"), prior, result.output);
+        }
+      } finally {
+        await rm(stateDir, { recursive: true, force: true });
+      }
+    });
+  });
+}
+
 test("a rollback killed after its first instance finishes going back to the same release when rerun", async () => {
   await withSfus({ "sfu-a": { onTarget: true }, "sfu-b": { onTarget: true } }, async (sfus) => {
     const stateDir = await mkdtemp(path.join(tmpdir(), "conclave-deploy-state-"));
