@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { PropertySymbol, Window } from "happy-dom";
-import { act, lazy, StrictMode, Suspense, useState } from "react";
+import { act, lazy, StrictMode, Suspense, useState, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import JoinScreen from "../src/app/components/JoinScreen";
@@ -27,15 +27,21 @@ let browser: Window;
 let container: HTMLDivElement;
 let root: Root;
 
-function capture(kind: "audio" | "video") {
-  const track = new browser.MediaStreamTrack(PropertySymbol.illegalConstructor);
-  track[PropertySymbol.kind] = kind;
-  return new MediaStream([track as unknown as MediaStreamTrack]);
+function capture(...kinds: ("audio" | "video")[]) {
+  return new MediaStream(kinds.map((kind) => {
+    const track = new browser.MediaStreamTrack(PropertySymbol.illegalConstructor);
+    track[PropertySymbol.kind] = kind;
+    return track as unknown as MediaStreamTrack;
+  }));
 }
 
-const getUserMedia = vi.fn(async (constraints: MediaStreamConstraints) =>
-  capture(constraints.video ? "video" : "audio"),
-);
+const getUserMedia = vi.fn(async ({ audio, video }: MediaStreamConstraints) => {
+  const kinds: ("audio" | "video")[] = [];
+  if (audio) kinds.push("audio");
+  if (video) kinds.push("video");
+  return capture(...kinds);
+});
+const commitMedia = vi.fn<NonNullable<ComponentProps<typeof JoinScreen>["onPrejoinMediaCommit"]>>();
 
 beforeEach(() => {
   browser = new Window({ url: "https://conclave.example/rejoin-room" });
@@ -54,7 +60,8 @@ beforeEach(() => {
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
-  getUserMedia.mockClear();
+  getUserMedia.mockReset();
+  commitMedia.mockClear();
   saveRejoinIntent(target, carried);
 });
 
@@ -64,24 +71,26 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-function RoomPage() {
-  const [pendingMedia, setPendingMedia] = useState(() => readRejoinIntent(target));
+function RoomPage({ home = false }: { home?: boolean }) {
+  const pageTarget = home ? { roomId: "default-room", clientId: "acme" } : target;
+  const [pendingMedia, setPendingMedia] = useState(() => readRejoinIntent(pageTarget));
   const [joined, setJoined] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
   if (joined) return <button onClick={() => setJoined(false)}>Leave call</button>;
   return (
     <Suspense fallback={null}>
       <JoinScreen
-        roomId={target.roomId}
+        roomId={pageTarget.roomId}
         onRoomIdChange={noop}
         onJoinRoom={() => setJoined(true)}
         isLoading={false}
         user={{ id: "member", name: "Guest" }}
         userEmail=""
         connectionState="idle"
-        isAdmin={false}
+        isAdmin={isAdmin}
         enableRoomRouting
-        forceJoinOnly
-        clientId={target.clientId}
+        forceJoinOnly={!home}
+        clientId={pageTarget.clientId}
         showPermissionHint={false}
         rooms={[]}
         roomsStatus="idle"
@@ -89,7 +98,8 @@ function RoomPage() {
         displayNameInput=""
         onDisplayNameInputChange={noop}
         onUserChange={noop}
-        onIsAdminChange={noop}
+        onIsAdminChange={setIsAdmin}
+        onPrejoinMediaCommit={commitMedia}
         initialMedia={pendingMedia}
         onInitialMediaUsed={() => setPendingMedia(null)}
         videoEffects={DEFAULT_VIDEO_EFFECTS}
@@ -99,11 +109,11 @@ function RoomPage() {
   );
 }
 
-const openRoom = () =>
+const openRoom = (home = false) =>
   act(async () =>
     root.render(
       <StrictMode>
-        <RoomPage />
+        <RoomPage home={home} />
       </StrictMode>,
     ),
   );
@@ -150,10 +160,113 @@ it.each(["effects panel", "main controls"])(
     }
     await click(turnOn, scope);
     await click("Turn off camera", scope);
-    await act(async () => mic.resolve(capture("audio")));
+    const stale = capture("audio");
+    await act(async () => mic.resolve(stale));
 
     expect(button(turnOn, scope)).toBeDefined();
-    expect(button("Turn off microphone")).toBeDefined();
+    expect(button("Turn on microphone")).toBeDefined();
+    expect(stale.getAudioTracks()[0].readyState).toBe("ended");
     expect(getUserMedia).toHaveBeenCalledTimes(2);
   },
 );
+
+function holdCapture() {
+  const pending = Promise.withResolvers<MediaStream>();
+  getUserMedia.mockImplementationOnce(() => pending.promise);
+  return pending;
+}
+
+function showPermissionsPrompt() {
+  const permission = Object.assign(new browser.EventTarget(), { state: "prompt" });
+  vi.stubGlobal("navigator", {
+    mediaDevices: { getUserMedia },
+    permissions: { query: async () => permission },
+  });
+}
+
+it.each(["audio", "video"] as const)(
+  "hands off live tracks even if the superseded %s restore rejects",
+  async (kind) => {
+    showPermissionsPrompt();
+    saveRejoinIntent(target, { ...carried, isMicOn: kind === "audio", isCameraOn: kind === "video" });
+    const stale = holdCapture();
+    await openRoom();
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+    await click("Allow microphone and camera");
+    await act(async () => stale.reject(new DOMException("Device busy", "NotReadableError")));
+    await click("Join");
+    expect(commitMedia).toHaveBeenCalledExactlyOnceWith({
+      stream: expect.any(MediaStream),
+      isMicOn: true,
+      isCameraOn: true,
+      isAudioOnly: false,
+    });
+    expect(commitMedia.mock.lastCall?.[0].stream?.getTracks().map((track) => track.kind).sort())
+      .toEqual(["audio", "video"]);
+  },
+);
+
+it("joins after a successful permission choice while the earlier prompt is still pending", async () => {
+  showPermissionsPrompt();
+  const stale = holdCapture();
+  await openRoom();
+  await click("Allow microphone and camera");
+  await click("Join");
+  expect(commitMedia).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+    isMicOn: true,
+    isCameraOn: true,
+  }));
+  await act(async () => stale.resolve(capture("audio")));
+  expect(getUserMedia).toHaveBeenCalledTimes(2);
+});
+
+it("allows Enter to join audio-only without waiting for mic or camera restore", async () => {
+  const stale = holdCapture();
+  await openRoom();
+  await click("Audio only: join without video");
+  expect(button("Join")?.disabled).toBe(false);
+  const code = container.querySelector('input[placeholder="Enter a code or link"]');
+  expect(code).not.toBeNull();
+  await act(async () => code!.dispatchEvent(
+    new browser.KeyboardEvent("keydown", { key: "Enter", bubbles: true }) as unknown as Event,
+  ));
+  expect(commitMedia).toHaveBeenCalledExactlyOnceWith({
+    stream: null, isAudioOnly: true, isMicOn: false, isCameraOn: false,
+  });
+  const late = capture("audio");
+  await act(async () => stale.resolve(late));
+  expect(late.getAudioTracks()[0].readyState).toBe("ended");
+  expect(getUserMedia).toHaveBeenCalledTimes(1);
+});
+
+it("starts fresh camera capture after audio-only is switched on and off during restore", async () => {
+  saveRejoinIntent(target, { ...carried, isMicOn: false });
+  const stale = holdCapture();
+  await openRoom();
+  await click("Audio only: join without video");
+  await click("Audio only: join without video");
+  await click("Turn on camera");
+  expect(getUserMedia).toHaveBeenCalledTimes(2);
+  const late = capture("video");
+  await act(async () => stale.resolve(late));
+  expect(late.getVideoTracks()[0].readyState).toBe("ended");
+  expect(button("Turn off camera")).toBeDefined();
+  await click("Join");
+  expect(commitMedia.mock.lastCall?.[0].stream?.getVideoTracks()).toHaveLength(1);
+});
+
+it("starts a new meeting on a non-default tenant while restore is pending", async () => {
+  saveRejoinIntent({ roomId: "default-room", clientId: "acme" }, carried);
+  const stale = holdCapture();
+  await openRoom(true);
+  expect(getUserMedia).toHaveBeenCalledTimes(1);
+  await click("New meeting");
+  expect(button("Leave call")).toBeDefined();
+  expect(commitMedia).toHaveBeenCalledExactlyOnceWith({
+    stream: null, isAudioOnly: false, isMicOn: false, isCameraOn: false,
+  });
+  const late = capture("audio");
+  await act(async () => stale.resolve(late));
+  expect(late.getAudioTracks()[0].readyState).toBe("ended");
+  expect(getUserMedia).toHaveBeenCalledTimes(1);
+});
