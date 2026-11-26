@@ -42,11 +42,14 @@ export const jobs = {
       { dir: "packages/shared-browser", script: "build" },
     ],
   },
+  deploy: {
+    budgetSeconds: 180,
+    tasks: [{ dir: ".", script: "test:deploy-preflight" }],
+  },
   checks: {
     budgetSeconds: 100,
     tasks: [
       { dir: ".", script: "test:quality-harness" },
-      { dir: ".", script: "test:deploy-preflight" },
       { dir: ".", script: "test:cloudflare-manifests" },
       { dir: ".", script: "test:docker-context" },
       { dir: ".", script: "test:native-tokens" },
@@ -64,6 +67,7 @@ export const jobs = {
       { dir: ".", script: "check:native-test-stores" },
       { dir: ".", script: "test:native-test-stores" },
       { dir: ".", script: "check:native-game-fixtures" },
+      { dir: ".", script: "check:json-store-fixtures" },
       { dir: ".", script: "check:docker-context" },
       { dir: ".", script: "check:sfu-source-manifest" },
       { dir: ".", exec: "node --test scripts/ci/*.test.mjs" },

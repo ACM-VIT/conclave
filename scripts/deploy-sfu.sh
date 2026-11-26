@@ -228,6 +228,439 @@ if [[ -f "$SFU_ENV_FILE" ]]; then
   COMPOSE_ENV_FILES+=(--env-file "$SFU_ENV_FILE")
 fi
 COMPOSE=(docker compose "${COMPOSE_ENV_FILES[@]}" -f "$COMPOSE_FILE")
+# The SFU image runs as the unprivileged node user. Containers from earlier
+# images ran as root and left root-owned files (the SQLite database among them)
+# in the recordings volume. Hand anything node does not own over before a new
+# container starts. Safe to repeat; it only touches mismatched files.
+# Compose drops every capability, so root also needs DAC_READ_SEARCH to walk
+# directories it does not own.
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d' ' -f1
+  else
+    shasum -a 256 "$1" | cut -d' ' -f1
+  fi
+}
+
+normalize_container_path() {
+  local part
+  local -a parts=() kept=()
+  IFS='/' read -r -a parts <<<"$1"
+  for part in "${parts[@]}"; do
+    case "$part" in
+      "" | .) ;;
+      ..) (( ${#kept[@]} > 0 )) && kept=("${kept[@]:0:${#kept[@]}-1}") ;;
+      *) kept+=("$part") ;;
+    esac
+  done
+  local IFS=/
+  printf '/%s\n' "${kept[*]}"
+}
+
+container_setting() {
+  local value
+  value="$(sed -n "s/^$2=//p" <<<"$1" | tail -n 1)"
+  value="${value#"${value%%[![:space:]]*}"}"
+  printf '%s' "${value%"${value##*[![:space:]]}"}"
+}
+
+container_file_path() {
+  if [[ "$2" == /* ]]; then
+    normalize_container_path "$2"
+  else
+    normalize_container_path "$1/$2"
+  fi
+}
+
+store_file_paths() {
+  local container="$1" workdir env_lines entry store prefix value shared recordings
+  workdir="$(docker inspect --format '{{.Config.WorkingDir}}' "$container")" || return 1
+  env_lines="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$container")" || return 1
+  shared="$(container_setting "$env_lines" CONCLAVE_SQLITE_PATH)"
+  recordings="$(container_setting "$env_lines" RECORDING_STORAGE_PATH)"
+  for entry in scheduling:SCHEDULING scheduled-meetings:SCHEDULED_MEETINGS scheduled-webinars:SCHEDULED_WEBINARS; do
+    store="${entry%%:*}"
+    prefix="${entry#*:}"
+    value="$(container_setting "$env_lines" "${prefix}_PATH")"
+    printf 'json %s.json %s\n' "$store" "$(container_file_path "$workdir" "${value:-data/${store}.json}")"
+    value="$(container_setting "$env_lines" "${prefix}_SQLITE_PATH")"
+    value="${value:-$shared}"
+    if [[ -z "$value" && -n "$recordings" ]]; then
+      value="${recordings}/conclave.sqlite"
+    fi
+    printf 'sqlite %s %s\n' "$store" "$(container_file_path "$workdir" "${value:-data/conclave.sqlite}")"
+  done
+}
+
+collect_fallback_json() {
+  local service="$1" container="$2" dir="$3" changes paths name path
+  mkdir -p "$dir"
+  if ! changes="$(docker diff "$container")"; then
+    echo "Could not list the files the old ${service} container wrote." >&2
+    return 1
+  fi
+  if ! paths="$(store_file_paths "$container")"; then
+    echo "Could not read where the old ${service} container kept its stores." >&2
+    return 1
+  fi
+  while read -r kind name path; do
+    [[ "$kind" == json ]] || continue
+    grep -qxF -e "A ${path}" -e "C ${path}" <<<"$changes" || continue
+    if ! docker cp "${container}:${path}" "${dir}/${name}"; then
+      echo "Could not copy ${name} out of the old ${service} container." >&2
+      return 1
+    fi
+    chmod 0600 "${dir}/${name}"
+  done <<<"$paths"
+}
+
+
+fallback_receiver() {
+  printf '%s' 'umask 077 && own() { chown node:node "$@" && chmod 0700 "$@"; } && base=${CONCLAVE_FALLBACK_IMPORT_DIR:?} && case "$3" in ""|.*|*[!A-Za-z0-9._-]*) echo "The archive name $3 is not safe to use." >&2; exit 1;; esac && case "$4" in ""|*[!A-Za-z0-9]*) echo "The transfer id $4 is not safe to use." >&2; exit 1;; esac && folder=$base/$1 && dest=$folder/$3 && incoming=$base/.incoming-$1-$3-$4 && mkdir -p "$base" && own "$base" && mkdir -p "$folder" && own "$folder" && find "$base" -mindepth 1 -maxdepth 1 -type d -name ".incoming-*" -mmin +30 -exec rm -rf {} + && if [ -e "$dest" ]; then echo "$dest already exists, and a saved copy is never replaced." >&2; exit 1; fi && find "$folder" -mindepth 1 -maxdepth 1 -name ".staged-*" -exec rm -rf {} + && mkdir "$incoming" && own "$incoming" && trap '"'"'rm -rf "$incoming"'"'"' EXIT && cat > "$incoming/payload.tar" && got=$(sha256sum "$incoming/payload.tar" | cut -d" " -f1) && if [ "$got" != "$2" ]; then echo "The fallback files arrived with checksum $got, not $2." >&2; rm -rf "$incoming"; exit 1; fi && mkdir "$incoming/files" && own "$incoming/files" && tar -xf "$incoming/payload.tar" -C "$incoming/files" && rm "$incoming/payload.tar" && chown node:node "$incoming/files"/*.json && chmod 0600 "$incoming/files"/*.json && printf "%s %s\n" "$5" "$6" > "$incoming/files/.source" && chown node:node "$incoming/files/.source" && chmod 0600 "$incoming/files/.source" && mv "$incoming/files" "$folder/.staged-$3" && rmdir "$incoming" && chown -R node:node "$base"'
+}
+
+fallback_publisher() {
+  printf '%s' 'base=${CONCLAVE_FALLBACK_IMPORT_DIR:?} && case "$2" in ""|.*|*[!A-Za-z0-9._-]*) echo "The archive name $2 is not safe to use." >&2; exit 1;; esac && folder=$base/$1 && if [ -e "$folder/$2" ]; then echo "$folder/$2 already exists, and a saved copy is never replaced." >&2; exit 1; fi && if [ ! -d "$folder/.staged-$2" ]; then echo "The staged copy $folder/.staged-$2 is gone, so nothing was published." >&2; exit 1; fi && mv "$folder/.staged-$2" "$folder/$2"'
+}
+
+archive_stamp() {
+  node -e 'process.stdout.write(new Date().toISOString().replace(/[-:.]/g, ""))'
+}
+
+send_fallback_json() {
+  local service="$1" dir="$2" container="$3" identity="$4" archive checksum file name transfer
+  local -a names=()
+  STAGED_FALLBACK=""
+  for file in "$dir"/*.json; do
+    [[ -e "$file" ]] && names+=("${file##*/}")
+  done
+  (( ${#names[@]} > 0 )) || return 0
+  archive="${dir}.tar"
+  COPYFILE_DISABLE=1 tar -C "$dir" -cf "$archive" "${names[@]}" || return 1
+  checksum="$(sha256_file "$archive")"
+  name="$(archive_stamp)-${SFU_DEPLOY_ID:?}"
+  transfer="$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
+  if ! "${COMPOSE[@]}" run -T --rm --no-deps --user root --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --entrypoint sh "$service" -c \
+    "$(fallback_receiver)" sh "$service" "$checksum" "$name" "$transfer" "$container" "$identity" < "$archive"; then
+    echo "Could not copy the old ${service} container's JSON fallback files onto the volume." >&2
+    return 1
+  fi
+  STAGED_FALLBACK="$name"
+  echo "Staged the old ${service} container's JSON fallback files on the volume as ${name} and verified them: ${names[*]}"
+}
+
+publish_fallback_json() {
+  local service="$1"
+  [[ -n "${STAGED_FALLBACK:-}" ]] || return 0
+  if ! "${COMPOSE[@]}" run -T --rm --no-deps --user root --cap-add DAC_OVERRIDE --cap-add FOWNER --entrypoint sh "$service" -c \
+    "$(fallback_publisher)" sh "$service" "$STAGED_FALLBACK" < /dev/null; then
+    echo "Could not publish the old ${service} container's staged JSON fallback files (${STAGED_FALLBACK})." >&2
+    return 1
+  fi
+  echo "Saved the old ${service} container's JSON fallback files as ${STAGED_FALLBACK}."
+  STAGED_FALLBACK=""
+}
+
+layer_sqlite_databases() {
+  local container="$1" changes paths kind store path
+  changes="$(docker diff "$container")" || return 1
+  paths="$(store_file_paths "$container")" || return 1
+  while read -r kind store path; do
+    [[ "$kind" == sqlite ]] || continue
+    if grep -qxF -e "A ${path}" -e "C ${path}" <<<"$changes"; then
+      printf '%s %s\n' "$store" "$path"
+    fi
+  done <<<"$paths"
+}
+
+sqlite_target_probe() {
+  printf '%s' 'exec node --import tsx server/layerDatabase.ts probe /var/lib/conclave/recordings'
+}
+
+sqlite_receiver() {
+  printf '%s' 'umask 077 && target=$1 && case "$target" in /*) ;; *) echo "The database path $target is not absolute." >&2; exit 1;; esac && case "$3" in ""|*[!A-Za-z0-9]*) echo "The transfer id $3 is not safe to use." >&2; exit 1;; esac && dir=$(dirname "$target") && incoming=$dir/.incoming-sqlite-$3 && node --import tsx server/layerDatabase.ts prepare-folder "$dir" /var/lib/conclave/recordings node:node && node --import tsx server/layerDatabase.ts check-place "$target" /var/lib/conclave/recordings && find "$dir" -mindepth 1 -maxdepth 1 -type d -name ".incoming-sqlite-*" -mmin +30 -exec rm -rf {} + && if [ -n "$6" ]; then node --import tsx server/layerDatabase.ts check-mark "$target" "$4" "$6"; else for existing in "$target" "$target-wal" "$target-journal"; do if [ -e "$existing" ] || [ -L "$existing" ]; then echo "$existing already exists, and a database is never replaced." >&2; exit 1; fi; done; fi && mkdir "$incoming" && chown node:node "$incoming" && trap '"'"'rm -rf "$incoming"'"'"' EXIT && cat > "$incoming/payload.tar" && got=$(sha256sum "$incoming/payload.tar" | cut -d" " -f1) && if [ "$got" != "$2" ]; then echo "The database arrived with checksum $got, not $2." >&2; exit 1; fi && tar -xf "$incoming/payload.tar" -C "$incoming" && rm "$incoming/payload.tar" && node --import tsx server/layerDatabase.ts consolidate "$incoming/db" "$4" "$5" && chown node:node "$incoming/db" && chmod 0600 "$incoming/db" && node --import tsx server/layerDatabase.ts check-place "$target" /var/lib/conclave/recordings && if [ -n "$6" ]; then node --import tsx server/layerDatabase.ts check-mark "$target" "$4" "$6" && mv -f "$incoming/db" "$target"; else ln "$incoming/db" "$target"; fi'
+}
+
+plan_layer_sqlite() {
+  local service="$1" container="$2" plan="$3" started="$4" layer targets store old name state target mark_container mark_started found_state found_target found_container found_started
+  : > "$plan"
+  if ! layer="$(layer_sqlite_databases "$container")"; then
+    echo "Could not list the databases the old ${service} container kept." >&2
+    return 1
+  fi
+  [[ -n "$layer" ]] || return 0
+  if [[ -z "$started" ]]; then
+    echo "Could not read when the old ${service} container last started and stopped." >&2
+    return 1
+  fi
+  if ! targets="$("${COMPOSE[@]}" run -T --rm --no-deps --user root --cap-add DAC_OVERRIDE --entrypoint sh "$service" -c "$(sqlite_target_probe)" < /dev/null)"; then
+    echo "Could not check where the new ${service} keeps its databases." >&2
+    return 1
+  fi
+  while read -r store old; do
+    found_state=""
+    found_target=""
+    found_container=""
+    found_started=""
+    while IFS=$'\t' read -r name state target mark_container mark_started; do
+      if [[ "$name" == "$store" ]]; then
+        found_state="$state"
+        found_target="$target"
+        found_container="$mark_container"
+        found_started="$mark_started"
+      fi
+    done <<<"$targets"
+    if [[ "$found_state" == carried && "$found_container" == "$container" ]]; then
+      if [[ "$found_started" == "$started" ]]; then
+        printf '%s\t%s\t%s\t%s\t%s\n' "$old" "$found_target" done "$started" "" >> "$plan"
+      else
+        printf '%s\t%s\t%s\t%s\t%s\n' "$old" "$found_target" replace "$started" "$found_started" >> "$plan"
+      fi
+      continue
+    fi
+    case "$found_state" in
+      free) printf '%s\t%s\t%s\t%s\t%s\n' "$old" "$found_target" carry "$started" "" >> "$plan" ;;
+      taken | carried)
+        echo "The old ${service} container keeps the ${store} database at ${old} inside the container, not on the volume, and ${found_target} on the volume already holds a database${found_container:+ carried from container ${found_container} as it was at ${found_started}}, so a copy cannot carry it over. Copy it out with: docker cp ${container}:${old} <file>, merge it into ${found_target}, then deploy again." >&2
+        return 1 ;;
+      unwritable)
+        echo "The old ${service} container keeps the ${store} database at ${old} inside the container, not on the volume, and the new image would keep it at ${found_target}, where the nearest folder that exists cannot take new files. Make that folder writable, then deploy again." >&2
+        return 1 ;;
+      outside)
+        echo "The old ${service} container keeps the ${store} database at ${old} inside the container, not on the volume, and the new image would keep it at ${found_target}, which does not resolve onto the recordings volume (/var/lib/conclave/recordings), so it would be lost with the container. Point CONCLAVE_SQLITE_PATH (or the store's own *_SQLITE_PATH) at a real folder on the recordings volume, then deploy again." >&2
+        return 1 ;;
+      *)
+        echo "Could not tell where the new ${service} keeps the ${store} database." >&2
+        return 1 ;;
+    esac
+  done <<<"$layer"
+  sort -u -o "$plan" "$plan"
+  target="$(cut -f2 "$plan" | sort | uniq -d | head -n 1)"
+  if [[ -n "$target" ]]; then
+    echo "The old ${service} container keeps more than one database inside the container that the new image would keep at ${target}, so a copy cannot carry them over. Merge them into ${target}, then deploy again." >&2
+    return 1
+  fi
+}
+
+carry_layer_sqlite() {
+  local service="$1" container="$2" dir="$3" plan="$4" changes old target action started expected part folder archive checksum transfer index=0
+  [[ -s "$plan" ]] || return 0
+  if ! changes="$(docker diff "$container")"; then
+    echo "Could not list the databases the old ${service} container kept." >&2
+    return 1
+  fi
+  while IFS=$'\t' read -r old target action started expected; do
+    if [[ "$action" == done ]]; then
+      echo "The old ${service} container's database ${old} is already at ${target} on the volume, copied from this container as it is now."
+      continue
+    fi
+    index=$((index + 1))
+    folder="${dir}/${index}"
+    mkdir -p "$folder"
+    local -a parts=()
+    for part in "" -wal -journal; do
+      if [[ -n "$part" ]] && ! grep -qxF -e "A ${old}${part}" -e "C ${old}${part}" <<<"$changes"; then
+        continue
+      fi
+      if ! docker cp "${container}:${old}${part}" "${folder}/db${part}"; then
+        echo "Could not copy ${old}${part} out of the old ${service} container." >&2
+        return 1
+      fi
+      chmod 0600 "${folder}/db${part}"
+      parts+=("db${part}")
+    done
+    archive="${folder}.tar"
+    COPYFILE_DISABLE=1 tar -C "$folder" -cf "$archive" "${parts[@]}" || return 1
+    checksum="$(sha256_file "$archive")"
+    transfer="$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
+    if ! "${COMPOSE[@]}" run -T --rm --no-deps --user root --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --entrypoint sh "$service" -c \
+      "$(sqlite_receiver)" sh "$target" "$checksum" "$transfer" "$container" "$started" "$expected" < "$archive"; then
+      echo "Could not copy the old ${service} container's database ${old} to ${target} on the volume." >&2
+      return 1
+    fi
+    if [[ "$action" == replace ]]; then
+      echo "Replaced the copy of ${old} that an earlier attempt left at ${target}, because the old ${service} container ran again after it; folded its ${parts[*]} into one file and verified it."
+    else
+      echo "Copied the old ${service} container's database ${old} to ${target} on the volume, folded its ${parts[*]} into one file and verified it."
+    fi
+  done < "$plan"
+}
+
+
+container_running() {
+  [[ "$(docker inspect --format '{{.State.Running}}' "$1")" == true ]]
+}
+
+container_state() {
+  docker inspect --format '{{.State.Running}} {{.State.StartedAt}} {{.State.FinishedAt}}' "$1"
+}
+
+source_identity() {
+  local state
+  state="$(container_state "$1")" || return 1
+  read -r _ started finished <<<"$state"
+  [[ -n "$started" && -n "$finished" ]] || return 1
+  printf '%s_%s\n' "$started" "$finished"
+}
+
+freeze_source() {
+  local service="$1" container="$2" state running started finished
+  if ! state="$(container_state "$container")"; then
+    echo "Could not read the old ${service} container's state after the stop." >&2
+    return 1
+  fi
+  read -r running started finished <<<"$state"
+  if [[ "$running" != false || -z "$started" || -z "$finished" ]]; then
+    echo "The old ${service} container is running again after the stop." >&2
+    return 1
+  fi
+  printf '%s_%s\n' "$started" "$finished"
+}
+
+still_frozen() {
+  local service="$1" container="$2" frozen="$3" state running started finished
+  if ! state="$(container_state "$container")"; then
+    echo "Could not read the old ${service} container's state." >&2
+    return 1
+  fi
+  read -r running started finished <<<"$state"
+  if [[ "$running" != false || "${started}_${finished}" != "$frozen" ]]; then
+    echo "The old ${service} container started again while its files were being copied (it was stopped as ${frozen}; now running=${running}, ${started}_${finished}), so the copy may be missing its later saves." >&2
+    return 1
+  fi
+}
+
+restart_policy() {
+  docker inspect --format '{{.HostConfig.RestartPolicy.Name}}{{if .HostConfig.RestartPolicy.MaximumRetryCount}}:{{.HostConfig.RestartPolicy.MaximumRetryCount}}{{end}}' "$1"
+}
+
+sfu_answers_as_deployed() {
+  local service="$1" url="$2" health
+  health="$(curl -fsS --connect-timeout 2 --max-time 5 "${url}/health" 2>/dev/null)" || return 1
+  printf '%s' "$health" | SERVICE="$service" DEPLOY_ID="${SFU_DEPLOY_ID:?}" node -e 'let body = ""; process.stdin.on("data", (chunk) => (body += chunk)).on("end", () => { let health = null; try { health = JSON.parse(body); } catch {} process.exit(health?.status === "healthy" && health.instanceId === process.env.SERVICE && health.deployId === process.env.DEPLOY_ID ? 0 : 1); });'
+}
+
+wait_for_sfu() {
+  local service="$1" url="$2" deadline
+  deadline=$(( $(date +%s) + ${SFU_HEALTH_TIMEOUT_SECONDS:-180} ))
+  until sfu_answers_as_deployed "$service" "$url"; do
+    if (( $(date +%s) >= deadline )); then
+      return 1
+    fi
+    sleep "${SFU_HEALTH_POLL_SECONDS:-2}"
+  done
+}
+
+build_and_start() {
+  local service="$1" url="$2" container="" staging policy="" restore_pending="" frozen identity STAGED_FALLBACK="" previous_umask
+  previous_umask="$(umask)"
+  umask 077
+  "${COMPOSE[@]}" build "$service"
+  container="$("${COMPOSE[@]}" ps -a -q "$service" | head -n 1)"
+  staging="$(mktemp -d)"
+  restore_source_policy() {
+    [[ -n "$restore_pending" ]] || return 0
+    (trap '' INT TERM HUP QUIT; exec docker update --restart="$policy" "$container") > /dev/null || return 1
+    restore_pending=""
+  }
+  release_source() {
+    local state="unknown" running restored="true"
+    trap '' INT TERM HUP QUIT
+    if [[ -n "$policy" ]]; then
+      restore_source_policy || restored="false"
+      if running="$(docker inspect --format '{{.State.Running}}' "$container" 2> /dev/null)"; then
+        case "$running" in true) state="still running" ;; false) state="left stopped" ;; esac
+      fi
+      if [[ "$state" == "unknown" ]]; then
+        echo "Could not determine whether the old ${service} container is still running or was left stopped." >&2
+      fi
+      if [[ "$restored" == "false" ]]; then
+        echo "The old ${service} container's restart policy could not be restored (${state}); set it with: docker update --restart=${policy} ${container}" >&2
+      elif [[ "$state" == "still running" ]]; then
+        echo "The old ${service} container is still running, with its restart policy (${policy}) restored." >&2
+      elif [[ "$state" == "left stopped" ]]; then
+        echo "The old ${service} container is left stopped, not removed, with its restart policy (${policy}) restored; start it again with: ${COMPOSE[*]} start ${service}" >&2
+      fi
+    fi
+    rm -rf "$staging"
+  }
+  trap release_source EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  trap 'exit 129' HUP
+  trap 'exit 131' QUIT
+  if [[ -n "$container" ]]; then
+    if ! identity="$(source_identity "$container")" || ! plan_layer_sqlite "$service" "$container" "$staging/sqlite-check" "$identity" || ! policy="$(restart_policy "$container")" || [[ -z "$policy" ]]; then
+      echo "Stopped before replacing ${service}; nothing was stopped." >&2
+      exit 1
+    fi
+    restore_pending="true"
+    if ! (trap '' INT TERM HUP QUIT; exec docker update --restart=no "$container") > /dev/null; then
+      echo "Could not keep the old ${service} container from restarting while it is copied. Stopped before replacing ${service}; nothing was stopped." >&2
+      exit 1
+    fi
+  fi
+  if ! "${COMPOSE[@]}" stop "$service"; then
+    echo "Could not stop the old ${service}. Stopped before replacing it." >&2
+    exit 1
+  fi
+  if ! "${COMPOSE[@]}" run --rm --no-deps --user root --cap-add CHOWN --cap-add DAC_READ_SEARCH --entrypoint find "$service" \
+    /var/lib/conclave/recordings \( ! -user node -o ! -group node \) -exec chown node:node {} +; then
+    echo "Could not hand the recordings volume to the SFU user. Stopped before replacing ${service}." >&2
+    exit 1
+  fi
+  if [[ -n "$container" ]]; then
+    if ! frozen="$(freeze_source "$service" "$container")" ||
+      ! collect_fallback_json "$service" "$container" "$staging/json" ||
+      ! send_fallback_json "$service" "$staging/json" "$container" "$frozen" ||
+      ! still_frozen "$service" "$container" "$frozen" ||
+      ! plan_layer_sqlite "$service" "$container" "$staging/sqlite-plan" "$frozen" ||
+      ! still_frozen "$service" "$container" "$frozen" ||
+      ! carry_layer_sqlite "$service" "$container" "$staging/sqlite" "$staging/sqlite-plan" ||
+      ! still_frozen "$service" "$container" "$frozen"; then
+      echo "Stopped before replacing ${service}." >&2
+      exit 1
+    fi
+    if ! restore_source_policy; then
+      echo "Could not restore the old ${service} container's restart policy (${policy}) before replacing it. Stopped before replacing ${service}." >&2
+      exit 1
+    fi
+    if ! still_frozen "$service" "$container" "$frozen" || ! publish_fallback_json "$service"; then
+      echo "Stopped before replacing ${service}." >&2
+      exit 1
+    fi
+  fi
+  if ! "${COMPOSE[@]}" up -d "$service"; then
+    exit 1
+  fi
+  trap - EXIT INT TERM HUP QUIT
+  rm -rf "$staging"
+  umask "$previous_umask"
+  echo "Waiting for the new ${service} to answer healthy at ${url} as deploy ${SFU_DEPLOY_ID}..."
+  if ! wait_for_sfu "$service" "$url"; then
+    echo "The new ${service} did not answer healthy at ${url} as deploy ${SFU_DEPLOY_ID} within ${SFU_HEALTH_TIMEOUT_SECONDS:-180} seconds. Stopping it; nothing was drained, and the other SFU keeps serving." >&2
+    "${COMPOSE[@]}" stop "$service" || true
+    exit 1
+  fi
+}
+
+layer_slot_state() {
+  local service="$1" container layer
+  container="$("${COMPOSE[@]}" ps -a -q "$service" | head -n 1)"
+  if [[ -z "$container" ]]; then
+    echo none
+    return 0
+  fi
+  layer="$(layer_sqlite_databases "$container")" || return 1
+  if [[ -z "$layer" ]]; then
+    echo clean
+  elif container_running "$container"; then
+    echo layer-running
+  else
+    echo layer-stopped
+  fi
+}
+
 HAS_REDIS_SERVICE="false"
 if "${COMPOSE[@]}" config --services | rg -x "redis" >/dev/null 2>&1; then
   HAS_REDIS_SERVICE="true"
@@ -257,6 +690,11 @@ run_deploy_preflight() {
 
 echo "Running fail-closed SFU deployment preflight..."
 run_deploy_preflight
+if [[ "$DEPLOY_BROWSER_LOCAL" == "true" ]]; then
+  # The browser service deploys last, after both SFUs changed; refuse its
+  # configuration now rather than after the SFU swap.
+  "${ROOT_DIR}/scripts/deploy-browser-service.sh" --check-config
+fi
 if [[ "$PREFLIGHT_ONLY" == "true" ]]; then
   echo "Preflight-only run complete; no code, container, drain, or DNS changes were made."
   exit 0
@@ -264,6 +702,10 @@ fi
 
 echo "Pulling latest code..."
 git -C "$ROOT_DIR" pull
+
+SFU_DEPLOY_ID="sfu-$(date -u +%Y%m%dT%H%M%SZ)-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
+export SFU_DEPLOY_ID
+echo "Deploy id: ${SFU_DEPLOY_ID}"
 
 # SFU dependencies are installed inside the Docker image; the host does not need them.
 # (Previously this step tried `npm -C packages/sfu install` on the host, which fails on
@@ -346,8 +788,37 @@ fi
 echo "Active service: ${ACTIVE_SERVICE}"
 echo "Inactive service: ${INACTIVE_SERVICE}"
 
+if ! ACTIVE_LAYER="$(layer_slot_state "$ACTIVE_SERVICE")" || ! INACTIVE_LAYER="$(layer_slot_state "$INACTIVE_SERVICE")"; then
+  echo "Could not list the databases the old SFU containers kept. Nothing was changed." >&2
+  exit 1
+fi
+ACTIVE_ANSWERS="$HAS_STATUS_A"
+[[ "$ACTIVE_SERVICE" == "sfu-b" ]] && ACTIVE_ANSWERS="$HAS_STATUS_B"
+if [[ "$ACTIVE_LAYER" == layer-* && "$INACTIVE_LAYER" == layer-* ]]; then
+  echo "The old ${ACTIVE_SERVICE} and ${INACTIVE_SERVICE} containers each keep their own database inside the container, not on the volume. A copy can carry over only one of them, so nothing was changed. Merge them into one database on the recordings volume, then deploy again." >&2
+  exit 1
+fi
+if [[ "$ACTIVE_LAYER" == layer-running || ( "$ACTIVE_LAYER" == layer-stopped && "$ACTIVE_ANSWERS" == "true" ) ]]; then
+  echo "The serving ${ACTIVE_SERVICE} container keeps its database inside the container, not on the volume. ${INACTIVE_SERVICE} is replaced first, and its new container would create a new database on the volume before ${ACTIVE_SERVICE}'s could be carried over, so nothing was changed. In a maintenance window, stop ${ACTIVE_SERVICE} (${COMPOSE[*]} stop ${ACTIVE_SERVICE}) and deploy again: a stopped SFU that keeps its database inside its container is replaced first, and its database is carried." >&2
+  exit 1
+fi
+if [[ "$ACTIVE_LAYER" == layer-stopped ]]; then
+  echo "${ACTIVE_SERVICE} is stopped and keeps its database inside its container, so it is replaced first."
+  SWAP_SERVICE="$ACTIVE_SERVICE"
+  SWAP_URL="$ACTIVE_URL"
+  ACTIVE_SERVICE="$INACTIVE_SERVICE"
+  ACTIVE_URL="$INACTIVE_URL"
+  INACTIVE_SERVICE="$SWAP_SERVICE"
+  INACTIVE_URL="$SWAP_URL"
+  if [[ "$ACTIVE_SERVICE" == "sfu-a" ]]; then
+    ACTIVE_ROOMS="$ROOMS_A"
+  else
+    ACTIVE_ROOMS="$ROOMS_B"
+  fi
+fi
+
 echo "Building and starting ${INACTIVE_SERVICE}..."
-"${COMPOSE[@]}" up -d --build "$INACTIVE_SERVICE"
+build_and_start "$INACTIVE_SERVICE" "$INACTIVE_URL"
 if [[ "$INACTIVE_SERVICE" == "sfu-a" ]]; then
   validate_public_route "sfu-a" "$SFU_A_PUBLIC_URL"
 else
@@ -417,7 +888,7 @@ elif [[ -n "$ACTIVE_URL" && "$HAS_STATUS_A" == "true" && "$ACTIVE_SERVICE" == "s
 fi
 
 echo "Rebuilding and starting ${ACTIVE_SERVICE}..."
-"${COMPOSE[@]}" up -d --build "$ACTIVE_SERVICE"
+build_and_start "$ACTIVE_SERVICE" "$ACTIVE_URL"
 if [[ "$ACTIVE_SERVICE" == "sfu-a" ]]; then
   validate_public_route "sfu-a" "$SFU_A_PUBLIC_URL"
 else

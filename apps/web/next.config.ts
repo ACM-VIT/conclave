@@ -3,6 +3,12 @@ import { execSync } from "node:child_process";
 import path from "path";
 import { fileURLToPath } from "url";
 import { sourceMapUploadRequested } from "./scripts/posthog-sourcemaps-policy.mjs";
+import {
+  buildSecurityHeaders,
+  buildViewerPageHostRules,
+  SANDBOXED_ROUTE_HEADERS,
+  SANDBOXED_ROUTE_SOURCES,
+} from "./src/lib/security-headers";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 const workspaceRoot = path.resolve(currentDir, "../..");
@@ -111,6 +117,21 @@ const nextConfig: NextConfig = {
         source: "/:path((?!_next/static(?:/|$)).*)",
         headers: noStoreResponseHeaders,
       },
+      {
+        source: "/:path*",
+        headers: buildSecurityHeaders({
+          env: process.env,
+          isDevelopment: process.env.NODE_ENV === "development",
+        }),
+      },
+      ...buildViewerPageHostRules({
+        env: process.env,
+        isDevelopment: process.env.NODE_ENV === "development",
+      }).map((rule) => ({ source: "/:path*", ...rule })),
+      ...SANDBOXED_ROUTE_SOURCES.map((source) => ({
+        source,
+        headers: SANDBOXED_ROUTE_HEADERS,
+      })),
       {
         source: "/transcript-pcm-processor.js",
         headers: [
