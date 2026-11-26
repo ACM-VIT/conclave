@@ -461,26 +461,6 @@ export const getScheduledMeetingByRoomCode = (
   return owner ? store.byId.get(owner) ?? null : null;
 };
 
-export const moveScheduledMeetingToClient = (
-  store: ScheduledMeetingStore,
-  meetingId: string,
-  clientId: string,
-): ScheduledMeeting | null => {
-  const meeting = store.byId.get(meetingId);
-  const nextClientId = canonicalizeClientId(clientId);
-  if (!meeting || !nextClientId || meeting.clientId === nextClientId) {
-    return meeting ?? null;
-  }
-  if (isCodeTaken(store, nextClientId, meeting.roomCode, meeting.id)) {
-    throw new Error("That meeting code already exists in the target client.");
-  }
-  releaseRoomCode(store, meeting);
-  meeting.clientId = nextClientId;
-  meeting.updatedAt = Date.now();
-  claimRoomCode(store, meeting);
-  return meeting;
-};
-
 export const listScheduledMeetings = (
   store: ScheduledMeetingStore,
   filter: {

@@ -7,11 +7,11 @@ import {
   getScheduledMeetingById,
   getScheduledMeetingByRoomCode,
   listScheduledMeetings,
-  moveScheduledMeetingToClient,
   persistScheduledMeetingChanges,
   persistScheduledMeetingDeletes,
   updateScheduledMeeting,
 } from "../../../../packages/sfu/server/scheduledMeetings.js";
+import { moveScheduledMeetingToClient } from "./scheduledMeetingMoves.js";
 import type { SfuState } from "../../../../packages/sfu/server/state.js";
 import {
   canonicalizeClientId,

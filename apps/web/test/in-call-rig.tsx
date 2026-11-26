@@ -841,6 +841,7 @@ export const createInCallRig = async (world: World, { noiseCancellation = false 
         requestMediaPermissions: media.requestMediaPermissions,
         requestAudioProducerRecovery: media.requestAudioProducerRecovery,
         requestCameraProducerRecovery: media.requestCameraProducerRecovery,
+        runCameraTrackOperation: media.runCameraTrackOperation,
         prepareAudioPublishTrack: media.prepareAudioPublishTrack,
         stopLocalTrack: media.stopLocalTrack,
         handleLocalTrackEnded: media.handleLocalTrackEnded,
@@ -873,7 +874,7 @@ export const createInCallRig = async (world: World, { noiseCancellation = false 
   });
 
   const settle = async (turns = 12) => {
-    for (let turn = 0; turn < turns; turn += 1) {
+    for (let turn = 0; turn < turns || world.roundTripsInFlight > 0; turn += 1) {
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 0));
       });

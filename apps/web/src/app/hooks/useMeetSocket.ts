@@ -989,6 +989,7 @@ interface UseMeetSocketOptions {
   ) => Promise<MediaStream | null>;
   requestAudioProducerRecovery: () => void;
   requestCameraProducerRecovery: () => void;
+  runCameraTrackOperation?: <T>(operation: () => Promise<T>) => Promise<T>;
   prepareAudioPublishTrack?: (
     track: MediaStreamTrack,
     requestedIn: number,
@@ -1028,6 +1029,8 @@ interface UseMeetSocketOptions {
   onCallEnded?: (ending: RemoteCallEnding) => boolean;
   bypassMediaPermissions?: boolean;
 }
+
+const runDirectly = <T,>(operation: () => Promise<T>): Promise<T> => operation();
 
 export function useMeetSocket({
   refs,
@@ -1098,6 +1101,7 @@ export function useMeetSocket({
   requestMediaPermissions,
   requestAudioProducerRecovery,
   requestCameraProducerRecovery,
+  runCameraTrackOperation = runDirectly,
   prepareAudioPublishTrack,
   stopLocalTrack,
   handleLocalTrackEnded,
@@ -4229,195 +4233,197 @@ export function useMeetSocket({
         setIsMuted(true);
       }
 
-      if (!ownsCamera()) {
-        if (publicationWarnings.length > 0) {
-          console.warn(
-            `[Meets] Continuing join without some local media: ${publicationWarnings.join(", ")}`
-          );
+      await runCameraTrackOperation(async () => {
+        if (!ownsCamera()) {
+          if (publicationWarnings.length > 0) {
+            console.warn(
+              `[Meets] Continuing join without some local media: ${publicationWarnings.join(", ")}`
+            );
+          }
+          return;
         }
-        return;
-      }
 
-      if (shouldPauseVideo) {
-        dropVideoTracksForCameraOff(
-          committedStream(),
-          mediaIntent.isCameraOn
-            ? "host-disabled camera publish intent"
-            : "camera-off publish intent",
-        );
-        if (mediaIntent.isCameraOn) {
+        if (shouldPauseVideo) {
+          dropVideoTracksForCameraOff(
+            committedStream(),
+            mediaIntent.isCameraOn
+              ? "host-disabled camera publish intent"
+              : "camera-off publish intent",
+          );
+          if (mediaIntent.isCameraOn) {
+            setIsCameraOff(true);
+          }
+          if (publicationWarnings.length > 0) {
+            console.warn(
+              `[Meets] Continuing join without some local media: ${publicationWarnings.join(", ")}`
+            );
+          }
+          return;
+        }
+
+        const requestedVideoTrack = getVideoPublishTrack?.(committedStream()) ?? null;
+        let videoTrack =
+          requestedVideoTrack?.readyState === "live" ? requestedVideoTrack : null;
+        if (requestedVideoTrack && requestedVideoTrack.readyState !== "live") {
+          console.warn("[Meets] Ignoring ended requested video publish track:", {
+            requestedVideoTrack: summarizeTrackForLog(requestedVideoTrack),
+            stream: summarizeStreamForLog(committedStream()),
+          });
+          if (refs.processedVideoTrackRef.current?.id === requestedVideoTrack.id) {
+            refs.processedVideoTrackRef.current = null;
+          }
+        }
+        if (!videoTrack) {
+          videoTrack = getFirstLiveTrack(committedStream().getVideoTracks());
+        }
+        if (videoTrack) {
+          const quality = videoQualityRef.current;
+          const cameraPublishSettings = resolveEffectiveCameraPublishSettings(
+            mediaQualitySettingsRef.current.camera,
+            activeVideoEffectsCount > 0,
+          );
+          if ("contentHint" in videoTrack) {
+            videoTrack.contentHint = cameraPublishSettings.contentHint;
+          }
+          const preferredWebcamCodec = getPreferredWebcamCodec(
+            deviceRef.current,
+            webcamCodecPolicyRef.current,
+          );
+          try {
+            const videoProducer = await produceWebcamTrack({
+              transport,
+              track: videoTrack,
+              quality,
+              networkProfile: getPublishNetworkProfile(),
+              paused: shouldPauseVideo,
+              preferredCodec: preferredWebcamCodec,
+              codecPolicy: webcamCodecPolicyRef.current,
+              publishSettings: cameraPublishSettings,
+            });
+
+            if (!cameraWantedNow()) {
+              closeJoinVideoProducer(videoProducer, committedStream());
+              return;
+            }
+
+            if (!installProducer(videoProducerRef, null, videoProducer, discardJoinProducer)) return;
+            const videoProducerId = videoProducer.id;
+
+            videoProducer.on("transportclose", () => {
+              if (videoProducerRef.current?.id === videoProducerId) {
+                videoProducerRef.current = null;
+                if (!shouldPauseVideo) {
+                  requestCameraProducerRecovery();
+                }
+              }
+            });
+          } catch (err) {
+            const rawFallbackTrack =
+              requestedVideoTrack && videoTrack.id === requestedVideoTrack.id
+                ? getFirstLiveTrack(
+                    committedStream()
+                      .getVideoTracks()
+                      .filter((track) => track.id !== requestedVideoTrack.id),
+                  )
+                : null;
+
+            if (rawFallbackTrack) {
+              if ("contentHint" in rawFallbackTrack) {
+                rawFallbackTrack.contentHint = cameraPublishSettings.contentHint;
+              }
+              console.warn(
+                "[Meets] Processed camera publish failed; retrying raw camera:",
+                {
+                  error:
+                    err instanceof Error
+                      ? {
+                          name: err.name,
+                          message: err.message,
+                          stack: err.stack,
+                        }
+                      : err,
+                  processedTrack: summarizeTrackForLog(videoTrack),
+                  rawFallbackTrack: summarizeTrackForLog(rawFallbackTrack),
+                },
+              );
+              onPreferredVideoPublishTrackRejected?.(
+                videoTrack,
+                "join-raw-produce-fallback",
+              );
+              try {
+                const fallbackVideoProducer = await produceWebcamTrack({
+                  transport,
+                  track: rawFallbackTrack,
+                  quality,
+                  networkProfile: getPublishNetworkProfile(),
+                  paused: shouldPauseVideo,
+                  preferredCodec: preferredWebcamCodec,
+                  codecPolicy: webcamCodecPolicyRef.current,
+                  publishSettings: cameraPublishSettings,
+                });
+
+                if (!cameraWantedNow()) {
+                  closeJoinVideoProducer(fallbackVideoProducer, committedStream());
+                  return;
+                }
+
+                if (!installProducer(videoProducerRef, null, fallbackVideoProducer, discardJoinProducer)) return;
+                const fallbackVideoProducerId = fallbackVideoProducer.id;
+
+                fallbackVideoProducer.on("transportclose", () => {
+                  if (videoProducerRef.current?.id === fallbackVideoProducerId) {
+                    videoProducerRef.current = null;
+                    if (!shouldPauseVideo) {
+                      requestCameraProducerRecovery();
+                    }
+                  }
+                });
+                return;
+              } catch (fallbackErr) {
+                console.error(
+                  "[Meets] Failed to produce raw fallback video:",
+                  fallbackErr,
+                );
+                reportCurrentWebcamCodecFailure(fallbackErr);
+              }
+            } else {
+              console.error("[Meets] Failed to produce video:", err);
+              reportCurrentWebcamCodecFailure(err);
+            }
+
+            if (mediaIntent.isCameraOn && ownsCamera()) {
+              const liveVideoTrack = getFirstLiveTrack(committedStream().getVideoTracks());
+              if (liveVideoTrack && cameraWantedNow()) {
+                publicationWarnings.push("camera publish retry scheduled");
+                requestCameraProducerRecovery();
+              } else {
+                publicationWarnings.push("camera publish failed");
+                setIsCameraOff(true);
+              }
+            }
+          }
+        } else if (mediaIntent.isCameraOn) {
+          const endedVideoTracks = committedStream()
+            .getVideoTracks()
+            .filter((track) => track.readyState !== "live");
+          if (endedVideoTracks.length > 0) {
+            console.warn("[Meets] Skipping ended camera track(s):", {
+              stream: summarizeStreamForLog(committedStream()),
+              endedVideoTracks: endedVideoTracks.map(summarizeTrackForLog),
+            });
+            publicationWarnings.push("camera track ended");
+          } else {
+            publicationWarnings.push("camera track missing");
+          }
           setIsCameraOff(true);
         }
+
         if (publicationWarnings.length > 0) {
           console.warn(
             `[Meets] Continuing join without some local media: ${publicationWarnings.join(", ")}`
           );
         }
-        return;
-      }
-
-      const requestedVideoTrack = getVideoPublishTrack?.(committedStream()) ?? null;
-      let videoTrack =
-        requestedVideoTrack?.readyState === "live" ? requestedVideoTrack : null;
-      if (requestedVideoTrack && requestedVideoTrack.readyState !== "live") {
-        console.warn("[Meets] Ignoring ended requested video publish track:", {
-          requestedVideoTrack: summarizeTrackForLog(requestedVideoTrack),
-          stream: summarizeStreamForLog(committedStream()),
-        });
-        if (refs.processedVideoTrackRef.current?.id === requestedVideoTrack.id) {
-          refs.processedVideoTrackRef.current = null;
-        }
-      }
-      if (!videoTrack) {
-        videoTrack = getFirstLiveTrack(committedStream().getVideoTracks());
-      }
-      if (videoTrack) {
-        const quality = videoQualityRef.current;
-        const cameraPublishSettings = resolveEffectiveCameraPublishSettings(
-          mediaQualitySettingsRef.current.camera,
-          activeVideoEffectsCount > 0,
-        );
-        if ("contentHint" in videoTrack) {
-          videoTrack.contentHint = cameraPublishSettings.contentHint;
-        }
-        const preferredWebcamCodec = getPreferredWebcamCodec(
-          deviceRef.current,
-          webcamCodecPolicyRef.current,
-        );
-        try {
-          const videoProducer = await produceWebcamTrack({
-            transport,
-            track: videoTrack,
-            quality,
-            networkProfile: getPublishNetworkProfile(),
-            paused: shouldPauseVideo,
-            preferredCodec: preferredWebcamCodec,
-            codecPolicy: webcamCodecPolicyRef.current,
-            publishSettings: cameraPublishSettings,
-          });
-
-          if (!cameraWantedNow()) {
-            closeJoinVideoProducer(videoProducer, committedStream());
-            return;
-          }
-
-          if (!installProducer(videoProducerRef, null, videoProducer, discardJoinProducer)) return;
-          const videoProducerId = videoProducer.id;
-
-          videoProducer.on("transportclose", () => {
-            if (videoProducerRef.current?.id === videoProducerId) {
-              videoProducerRef.current = null;
-              if (!shouldPauseVideo) {
-                requestCameraProducerRecovery();
-              }
-            }
-          });
-        } catch (err) {
-          const rawFallbackTrack =
-            requestedVideoTrack && videoTrack.id === requestedVideoTrack.id
-              ? getFirstLiveTrack(
-                  committedStream()
-                    .getVideoTracks()
-                    .filter((track) => track.id !== requestedVideoTrack.id),
-                )
-              : null;
-
-          if (rawFallbackTrack) {
-            if ("contentHint" in rawFallbackTrack) {
-              rawFallbackTrack.contentHint = cameraPublishSettings.contentHint;
-            }
-            console.warn(
-              "[Meets] Processed camera publish failed; retrying raw camera:",
-              {
-                error:
-                  err instanceof Error
-                    ? {
-                        name: err.name,
-                        message: err.message,
-                        stack: err.stack,
-                      }
-                    : err,
-                processedTrack: summarizeTrackForLog(videoTrack),
-                rawFallbackTrack: summarizeTrackForLog(rawFallbackTrack),
-              },
-            );
-            onPreferredVideoPublishTrackRejected?.(
-              videoTrack,
-              "join-raw-produce-fallback",
-            );
-            try {
-              const fallbackVideoProducer = await produceWebcamTrack({
-                transport,
-                track: rawFallbackTrack,
-                quality,
-                networkProfile: getPublishNetworkProfile(),
-                paused: shouldPauseVideo,
-                preferredCodec: preferredWebcamCodec,
-                codecPolicy: webcamCodecPolicyRef.current,
-                publishSettings: cameraPublishSettings,
-              });
-
-              if (!cameraWantedNow()) {
-                closeJoinVideoProducer(fallbackVideoProducer, committedStream());
-                return;
-              }
-
-              if (!installProducer(videoProducerRef, null, fallbackVideoProducer, discardJoinProducer)) return;
-              const fallbackVideoProducerId = fallbackVideoProducer.id;
-
-              fallbackVideoProducer.on("transportclose", () => {
-                if (videoProducerRef.current?.id === fallbackVideoProducerId) {
-                  videoProducerRef.current = null;
-                  if (!shouldPauseVideo) {
-                    requestCameraProducerRecovery();
-                  }
-                }
-              });
-              return;
-            } catch (fallbackErr) {
-              console.error(
-                "[Meets] Failed to produce raw fallback video:",
-                fallbackErr,
-              );
-              reportCurrentWebcamCodecFailure(fallbackErr);
-            }
-          } else {
-            console.error("[Meets] Failed to produce video:", err);
-            reportCurrentWebcamCodecFailure(err);
-          }
-
-          if (mediaIntent.isCameraOn && ownsCamera()) {
-            const liveVideoTrack = getFirstLiveTrack(committedStream().getVideoTracks());
-            if (liveVideoTrack && cameraWantedNow()) {
-              publicationWarnings.push("camera publish retry scheduled");
-              requestCameraProducerRecovery();
-            } else {
-              publicationWarnings.push("camera publish failed");
-              setIsCameraOff(true);
-            }
-          }
-        }
-      } else if (mediaIntent.isCameraOn) {
-        const endedVideoTracks = committedStream()
-          .getVideoTracks()
-          .filter((track) => track.readyState !== "live");
-        if (endedVideoTracks.length > 0) {
-          console.warn("[Meets] Skipping ended camera track(s):", {
-            stream: summarizeStreamForLog(committedStream()),
-            endedVideoTracks: endedVideoTracks.map(summarizeTrackForLog),
-          });
-          publicationWarnings.push("camera track ended");
-        } else {
-          publicationWarnings.push("camera track missing");
-        }
-        setIsCameraOff(true);
-      }
-
-      if (publicationWarnings.length > 0) {
-        console.warn(
-          `[Meets] Continuing join without some local media: ${publicationWarnings.join(", ")}`
-        );
-      }
+      });
     },
     [
       producerTransportRef,
@@ -4443,6 +4449,7 @@ export function useMeetSocket({
       requestAudioProducerRecovery,
       requestCameraProducerRecovery,
       reportCurrentWebcamCodecFailure,
+      runCameraTrackOperation,
       webcamCodecPolicyRef,
     ],
   );
