@@ -611,6 +611,9 @@ const createSocket = (world: World) => {
     })),
     disconnect: vi.fn(() => {
       socket.connected = false;
+      world.sfu.forEach((producer) => {
+        producer.closed = true;
+      });
       dispatch("disconnect", "io client disconnect");
       return socket;
     }),

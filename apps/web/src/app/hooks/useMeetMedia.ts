@@ -40,7 +40,7 @@ import {
   holdClone,
   isCaptureReleased,
 } from "../lib/media-captures";
-import { createCameraSession, type CameraSession } from "../lib/camera-session";
+import { createCameraSession, type CameraCaptureHolder, type CameraSession } from "../lib/camera-session";
 import { installProducer } from "../lib/producer-slot";
 import type { Device as IntentDevice, DeviceIntentStore } from "../lib/device-intent";
 import {
@@ -890,6 +890,10 @@ export function useMeetMedia({
     cameraSessionRef.current = createCameraSession({
       isChosen: () => deviceIntents.get().video.chosen,
       committed: () => getFirstLiveTrack(localStreamRef.current?.getVideoTracks() ?? []),
+      sent: () => {
+        const producer = videoProducerRef.current;
+        return producer && !producer.closed ? producer.track : null;
+      },
       stop: (track) => stopCameraTrackRef.current(track),
       reconcile: () => reconcileCameraRef.current(),
     });
@@ -1591,13 +1595,17 @@ export function useMeetMedia({
   );
 
   stopCameraTrackRef.current = stopLocalTrack;
-  const getUserMediaWithTimeout = useCallback(
-    async (...args: Parameters<typeof captureMediaWithTimeout>) => {
+  const captureFor = useCallback(
+    async (holder: CameraCaptureHolder, ...args: Parameters<typeof captureMediaWithTimeout>) => {
       const stream = await captureMediaWithTimeout(...args);
-      cameraSession.admit(stream.getVideoTracks());
+      cameraSession.admit(stream.getVideoTracks(), holder);
       return stream;
     },
     [cameraSession],
+  );
+  const getUserMediaWithTimeout = useCallback(
+    (...args: Parameters<typeof captureMediaWithTimeout>) => captureFor("queue", ...args),
+    [captureFor],
   );
   useEffect(() => {
     let cameraChosenNow = deviceIntents.get().video.chosen;
@@ -1674,7 +1682,6 @@ export function useMeetMedia({
     }
     const stream = localStreamRef.current;
     const raw = getFirstLiveTrack(stream?.getVideoTracks() ?? []);
-    if (raw) cameraSession.own(raw);
     if (raw && producer && !producer.closed) {
       const candidate = getVideoPublishTrackRef?.current?.(stream) ?? null;
       const preferred = candidate?.readyState === "live" ? candidate : raw;
@@ -1696,11 +1703,7 @@ export function useMeetMedia({
         }
       }
     }
-    const keep = new Set<MediaStreamTrack>();
-    if (raw) keep.add(raw);
-    const current = videoProducerRef.current;
-    if (current && !current.closed && current.track) keep.add(current.track);
-    cameraSession.keepOnly(keep);
+    cameraSession.release();
   };
 
   useEffect(
@@ -2247,7 +2250,8 @@ export function useMeetMedia({
           video: videoConstraintsForRequest,
         });
 
-        return getUserMediaWithTimeout(
+        return captureFor(
+          "requester",
           {
             audio: audioConstraints,
             video: videoConstraintsForRequest,
@@ -2356,6 +2360,7 @@ export function useMeetMedia({
     attachLocalVideoTrackHandlers,
     buildAudioConstraints,
     buildVideoConstraints,
+    captureFor,
     prepareAudioPublishTrack,
     localStreamRef,
     permissionHintTimeoutRef,

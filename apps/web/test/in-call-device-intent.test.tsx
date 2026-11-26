@@ -93,6 +93,54 @@ const sendingWithin = async (rig: InCallRig, ticks = LIVENESS_TICKS) => {
 const opened = (kind: "audio" | "video") =>
   world.tracks.filter((track) => track.kind === kind && track.source === "device").length;
 
+const loseDevices = () =>
+  world.tracks.filter((track) => track.source === "device" && track.readyState === "live").forEach((track) => track.lose());
+
+const reconnectAfterDrop = (rig: InCallRig, devicesLost = true) => {
+  rig.socket.connected = false;
+  const reconnecting = Promise.resolve(
+    (rig.rig().refs.handleReconnectRef.current as (options?: { immediate?: boolean }) => void | Promise<void>)({
+      immediate: true,
+    }),
+  );
+  if (devicesLost) loseDevices();
+  return reconnecting;
+};
+
+const CAMERA_JOBS: Array<[string, (rig: InCallRig) => Promise<unknown>]> = [
+  ["a video quality change", async (rig) => rig.rig().media.updateVideoQualityRef.current?.("low").catch(() => {})],
+  ["a camera topology replacement", async (rig) =>
+    rig.rig().media.replaceWebcamProducerTopology({
+      target: "single-receiver", expectedProducerId: "gone", quality: "standard", networkProfile: "good",
+      transition: { fromProducerId: "gone", nonce: "handover" },
+    }).catch(() => {})],
+];
+
+type Handover = { rig: InCallRig; requesting: Promise<unknown> };
+
+const CAMERA_REQUESTERS: Array<[string, () => Promise<Handover>]> = [
+  ["the first join", async () => {
+    current = await createInCallRig(world, { noiseCancellation: true });
+    const rig = current;
+    await setIntents(rig, true, true);
+    world.holds.add("noiseSetup");
+    let requesting: Promise<unknown> = Promise.resolve();
+    await act(async () => { requesting = rig.rig().socket.joinRoom(); });
+    return { rig, requesting };
+  }],
+  ["a reconnect", async () => {
+    const rig = await join({ noiseCancellation: true });
+    world.holds.add("noiseSetup");
+    let requesting: Promise<unknown> = Promise.resolve();
+    await act(async () => { requesting = reconnectAfterDrop(rig); });
+    return { rig, requesting };
+  }],
+];
+
+const HANDOVER_ROWS = CAMERA_REQUESTERS.flatMap(([requester, request]) =>
+  CAMERA_JOBS.map(([job, cameraJob]) => [requester, job, request, cameraJob] as const),
+);
+
 describe("in-call rig", () => {
   it("joins with the microphone and camera on, publishes both, and leaves nothing behind", async () => {
     const rig = await join();
@@ -978,6 +1026,27 @@ describe("camera ownership races", () => {
     expect(cameraOffButLive(world, current!.rig())).toEqual([]);
     expect(whileAudioSetupWaits).toEqual([]);
   });
+
+  it.each(HANDOVER_ROWS)(
+    "%s keeps the camera it opened when %s finishes while its noise suppression is still starting",
+    async (_requester, _job, request, cameraJob) => {
+      const { rig, requesting } = await request();
+      await until("the noise suppression setup", () => pendingOf("noiseSetup") >= 1);
+      const opening = world.tracks.filter((track) => track.kind === "video" && track.source === "device").at(-1)!;
+      expect(opening.readyState).toBe("live");
+      await act(async () => { await cameraJob(rig); });
+      await rig.settle();
+      const whileNoiseSuppressionStarts = opening.readyState;
+      await releaseAll(rig, requesting);
+
+      expect(whileNoiseSuppressionStarts).toBe("live");
+      expect(rig.rig().state.connectionState).toBe("joined");
+      expect(rig.rig().state.isCameraOff).toBe(false);
+      expect(rig.rig().state.mediaError).toBeNull();
+      expect(await sendingWithin(rig)).toEqual([]);
+      expect(unwanted(world, rig.rig())).toEqual([]);
+    },
+  );
 });
 
 const mulberry32 = (seed: number) => () => {
@@ -993,6 +1062,7 @@ type Model = {
   running: Set<Promise<unknown>>;
   noiseCancellation: boolean;
   effects: boolean;
+  deviceFaults: boolean;
   log: string[];
 };
 
@@ -1048,7 +1118,8 @@ const STEPS: Array<[string, (model: Model) => void | Promise<void>]> = [
   ],
   [
     "the camera starts or stops refusing new constraints",
-    () => {
+    (model) => {
+      model.deviceFaults = true;
       world.cameraRefusesConstraints = !world.cameraRefusesConstraints;
     },
   ],
@@ -1061,12 +1132,27 @@ const STEPS: Array<[string, (model: Model) => void | Promise<void>]> = [
     (model) => {
       const name = pick(model, ["getUserMedia", "applyConstraints", "replaceTrack", "produce", "setParameters"] as const);
       world.refusals.set(name, (world.refusals.get(name) ?? 0) + 1 + Math.floor(model.random() * 3));
+      model.deviceFaults = true;
       model.log.push(`   the next ${name} calls fail`);
     },
   ],
   ["hold the next step", (model) => void world.holds.add(pick(model, HOLDS))],
   ["release the oldest held step", () => world.releaseOne(0)],
   ["release everything held", () => world.releaseAll()],
+];
+
+const STEPS_WITH_RECONNECTS: typeof STEPS = [
+  ...STEPS,
+  [
+    "the connection drops and the call reconnects",
+    (model) => {
+      const { refs, state } = model.rig.rig();
+      if (state.connectionState !== "joined" || refs.reconnectInFlightRef.current) return;
+      const devicesLost = model.random() < 0.5;
+      model.log.push(`   devices ${devicesLost ? "lost" : "kept"} across the drop`);
+      start(model, reconnectAfterDrop(model.rig, devicesLost));
+    },
+  ],
 ];
 
 const quiesce = async (model: Model) => {
@@ -1094,12 +1180,12 @@ const fail = (seed: number, model: Model, when: string, problems: string[]) => {
   throw new Error(`seed ${seed}: ${when}\n${problems.join("\n")}\nsteps:\n${model.log.join("\n")}`);
 };
 
-const runSeed = async (seed: number, steps: number, produceRoundTripMs = world.produceRoundTripMs) => {
+const runSeed = async (seed: number, steps: number, produceRoundTripMs = world.produceRoundTripMs, stepList = STEPS) => {
   world.produceRoundTripMs = produceRoundTripMs;
   const random = mulberry32(seed);
   const noiseCancellation = random() < 0.5;
   current = await createInCallRig(world, { noiseCancellation });
-  const model: Model = { rig: current, random, running: new Set(), noiseCancellation, effects: false, log: [] };
+  const model: Model = { rig: current, random, running: new Set(), noiseCancellation, effects: false, deviceFaults: false, log: [] };
   const mic = random() < 0.6;
   const camera = random() < 0.6;
   model.log.push(`join with microphone ${mic ? "on" : "off"}, camera ${camera ? "on" : "off"}, noise cancellation ${noiseCancellation ? "on" : "off"}`);
@@ -1115,7 +1201,7 @@ const runSeed = async (seed: number, steps: number, produceRoundTripMs = world.p
   const endAt = Math.floor(random() * steps);
   for (let index = 0; index < steps; index += 1) {
     if (index === endAt) break;
-    const [name, run] = pick(model, STEPS);
+    const [name, run] = pick(model, stepList);
     model.log.push(`${index}: ${name}`);
     await act(async () => {
       await run(model);
@@ -1150,6 +1236,10 @@ const runSeed = async (seed: number, steps: number, produceRoundTripMs = world.p
       const silent = notLive(world, current.rig());
       if (silent.length > 0) {
         fail(seed, model, `after step ${index}, ${LIVENESS_TICKS} watchdog ticks and ${LIVENESS_WAIT_MS} ms later`, silent);
+      }
+      const reported = current.rig().state.mediaError;
+      if (reported?.code === "PERMISSION_DENIED" && !model.deviceFaults) {
+        fail(seed, model, `after step ${index}, with no device call refused`, [`the call reported that a device could not be opened: ${reported.message}`]);
       }
     }
   }
@@ -1187,11 +1277,33 @@ describe("seeded in-call model: nothing live the current choice does not call fo
   );
 });
 
+const RECONNECT_SEED_COUNT = Number(process.env.IN_CALL_RECONNECT_MODEL_SEEDS ?? 30);
+
+describe("seeded in-call model with reconnects: every reopened device is kept and sending", () => {
+  it(
+    `seeds ${SEED_FROM} to ${SEED_FROM + RECONNECT_SEED_COUNT - 1}`,
+    async () => {
+      for (let seed = SEED_FROM; seed < SEED_FROM + RECONNECT_SEED_COUNT; seed += 1) {
+        world = new World();
+        installMediaWorld(world);
+        await runSeed(seed, MODEL_STEPS, world.produceRoundTripMs, STEPS_WITH_RECONNECTS);
+      }
+    },
+    600_000,
+  );
+});
+
 describe("fixed in-call model runs from reviews", () => {
   it("seed 13240, a camera grant arriving after Turn off camera during the join", async () => {
     world = new World();
     installMediaWorld(world);
     await runSeed(13240, MODEL_STEPS);
+  }, 120_000);
+
+  it("seed 404, a video quality change while the join's noise suppression is still starting", async () => {
+    world = new World();
+    installMediaWorld(world);
+    await runSeed(404, MODEL_STEPS);
   }, 120_000);
 
   it("a 13 ms produce round trip with 32 steps, seeds 1 to 30", async () => {
