@@ -210,10 +210,7 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
         },
       });
     };
-    session.setCommandHandler(handler);
-    return () => {
-      session.setCommandHandler(null);
-    };
+    session.start(handler);
   }, [session, status, doc, requestSpin, isLive]);
 
   const dialEntries = spin && (live || resultSpinId === spin.spinId) ? spin.entries : entries;

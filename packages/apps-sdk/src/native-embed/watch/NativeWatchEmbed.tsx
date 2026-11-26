@@ -367,10 +367,7 @@ export function NativeWatchEmbed({ session }: { session: NativeEmbedSession }) {
           return { ok: false, error: "unknownCommand" };
       }
     };
-    session.setCommandHandler(handler);
-    return () => {
-      session.setCommandHandler(null);
-    };
+    session.start(handler);
   }, [session, doc]);
 
   const attachFrame = useCallback((element: HTMLIFrameElement | null) => controller.attach(element), [controller]);

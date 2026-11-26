@@ -281,10 +281,7 @@ export function NativeWhiteboardEmbed({ session }: { session: NativeEmbedSession
           return { ok: false, error: "unknownCommand" };
       }
     };
-    session.setCommandHandler(handler);
-    return () => {
-      session.setCommandHandler(null);
-    };
+    session.start(handler);
   }, [session, status, readOnly, undoManager, pages, setActive, createPage, renamePage, deletePage, zoomToFit]);
 
   useEffect(() => {

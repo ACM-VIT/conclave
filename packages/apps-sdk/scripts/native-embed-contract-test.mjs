@@ -256,7 +256,7 @@ const makeRoom = (mod, context) => {
     };
     client.session = new mod.NativeEmbedSession(transport, client.scope, new Y.Doc(), clock);
     clients.push(client);
-    client.session.start();
+    client.session.start(() => ({ ok: false, error: "unknownCommand" }));
     pump();
     return client;
   };
@@ -323,7 +323,7 @@ test("hostile host messages are dropped and counted by reason", { skip: skipConv
 test("commands answer with an ack carrying their request id", { skip: skipConvergence }, (context) => {
   const harness = makeRoom(sessionModule, context);
   const ada = harness.join("ada");
-  ada.session.setCommandHandler((command) => ({ ok: command.type === "setTool" }));
+  ada.session.start((command) => ({ ok: command.type === "setTool" }));
   harness.deliver(ada, "setTool", { tool: "eraser" }, "h-1");
   harness.deliver(ada, "undo", {}, "h-2");
   harness.pump();
@@ -334,7 +334,7 @@ test("a repeated command id gets its first answer again and runs once", { skip: 
   const harness = makeRoom(sessionModule, context);
   const ada = harness.join("ada");
   let runs = 0;
-  ada.session.setCommandHandler(() => {
+  ada.session.start(() => {
     runs += 1;
     return { ok: true, added: [0, 2] };
   });
@@ -357,7 +357,7 @@ test("a wheel add still answers its retry after 70 other host messages, and runs
   const harness = makeRoom(sessionModule, context);
   const ada = harness.join("ada");
   let adds = 0;
-  ada.session.setCommandHandler((command) => {
+  ada.session.start((command) => {
     if (command.type !== "addEntries") return { ok: true };
     adds += 1;
     return { ok: true, added: [0] };
@@ -376,7 +376,7 @@ test("a wheel add still answers its retry after 70 other host messages, and runs
 test("only wheel adds are remembered, so an export is never kept", { skip: skipConvergence }, (context) => {
   const harness = makeRoom(sessionModule, context);
   const ada = harness.join("ada");
-  ada.session.setCommandHandler((command) =>
+  ada.session.start((command) =>
     command.type === "export" ? { ok: true, pngBase64: "A".repeat(4000) } : { ok: true, added: [0] },
   );
   harness.deliver(ada, "export", {}, "h-e");
@@ -393,7 +393,7 @@ test("an add's answer is kept for two minutes and the byte cap never drops one i
   let now = 1_000_000;
   const ada = harness.join("ada", {}, () => now);
   let runs = 0;
-  ada.session.setCommandHandler((command) => {
+  ada.session.start((command) => {
     if (command.type !== "addEntries") return { ok: true };
     runs += 1;
     return { ok: true, added: Array.from({ length: 64 }, (_, index) => index) };
@@ -423,7 +423,7 @@ test("a lost add ack, 64 sync frames and a retry after the answer expired still 
   let now = 5_000;
   const ada = harness.join("ada", {}, () => now);
   const names = [];
-  ada.session.setCommandHandler((command) => {
+  ada.session.start((command) => {
     if (command.type !== "addEntries") return { ok: true };
     names.push(...command.payload.labels);
     return { ok: true, added: [names.length - 1] };
@@ -447,6 +447,36 @@ test("the native retry deadline ends inside every window the embed keeps an add'
   assert.ok(retry.deadlineMs < overCapWindow && overCapWindow < retry.keepMs);
   assert.ok(retry.deadlineMs > (retry.attempts - 1) * retry.timeoutMs, "every scheduled retry still goes out");
   assert.ok(protocol.NATIVE_EMBED_LIMITS.executedCommands >= 1_024);
+});
+
+test("the embed says ready only once it can run commands, and runs any that came first", { skip: skipConvergence }, (context) => {
+  const mod = sessionModule;
+  const outbox = [];
+  let deliver = () => "none";
+  const transport = { platform: "ios", post: (message) => outbox.push(JSON.parse(message)), onMessage: (next) => { deliver = next; } };
+  const scope = { callSessionId: "call-1-contract", appSessionId: "app-early", appId: "wheel" };
+  const session = new mod.NativeEmbedSession(transport, scope, new mod.Y.Doc());
+  context.after(() => {
+    session.close();
+    session.doc.destroy();
+  });
+  const host = (type, payload, requestId) =>
+    deliver(JSON.stringify({ v: 1, type, callSessionId: scope.callSessionId, appSessionId: scope.appSessionId, requestId, payload }));
+  assert.equal(host("status", { readOnly: false, connection: "live" }, "n-1"), "none");
+  assert.equal(host("addOutcome", { requestId: "h-0" }, "h-1"), "none");
+  assert.equal(host("setSounds", { value: false }, "h-2"), "none");
+  assert.deepEqual(outbox.filter((message) => message.type === "ready" || message.type === "ack"), []);
+  const ran = [];
+  const handler = (command) => {
+    ran.push(command.requestId);
+    return { ok: true };
+  };
+  session.start(handler);
+  session.start(handler);
+  const said = outbox.filter((message) => message.type === "ready" || message.type === "ack");
+  assert.deepEqual(said.map((message) => [message.type, message.payload.ok]), [["ready", undefined], ["ack", true], ["ack", true]]);
+  assert.deepEqual(said.slice(1).map((message) => message.requestId), ["h-1", "h-2"]);
+  assert.deepEqual(ran, ["h-1", "h-2"]);
 });
 
 test("close invalidates the session for good",{ skip: skipConvergence }, (context) => {

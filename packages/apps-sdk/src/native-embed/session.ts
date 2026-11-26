@@ -105,6 +105,8 @@ export class NativeEmbedSession {
   private readonly clock: () => number;
   private readonly listeners = new Set<() => void>();
   private commandHandler: CommandHandler | null = null;
+  private started = false;
+  private readonly held: Envelope<NativeToEmbedType>[] = [];
   private readonly pendingAwareness = new Set<number>();
   private awarenessTimer: ReturnType<typeof setTimeout> | null = null;
   private lastStatus = "";
@@ -120,12 +122,17 @@ export class NativeEmbedSession {
     transport.onMessage((raw) => this.receive(raw));
   }
 
-  start(): void {
-    this.send("ready", {
-      bundleVersion: NATIVE_EMBED_BUNDLE_VERSION,
-      appId: this.scope.appId,
-      stateVector: base64FromBytes(Y.encodeStateVector(this.doc)),
-    });
+  start(handler: CommandHandler): void {
+    this.commandHandler = handler;
+    if (!this.started) {
+      this.started = true;
+      this.send("ready", {
+        bundleVersion: NATIVE_EMBED_BUNDLE_VERSION,
+        appId: this.scope.appId,
+        stateVector: base64FromBytes(Y.encodeStateVector(this.doc)),
+      });
+    }
+    for (const envelope of this.held.splice(0)) this.runCommand(envelope);
   }
 
   get hostStatus(): HostStatus {
@@ -145,10 +152,6 @@ export class NativeEmbedSession {
     return () => {
       this.listeners.delete(listener);
     };
-  }
-
-  setCommandHandler(handler: CommandHandler | null): void {
-    this.commandHandler = handler;
   }
 
   sendStatus(status: EmbedStatusPayload | AppStatusPayload): void {
@@ -315,6 +318,10 @@ export class NativeEmbedSession {
 
   private runCommand(envelope: Envelope<NativeToEmbedType>): void {
     const handler = this.commandHandler;
+    if (handler === null && this.held.length < NATIVE_EMBED_LIMITS.requestMemory) {
+      this.held.push(envelope);
+      return;
+    }
     let result: CommandResult = { ok: false, error: "notReady" };
     if (handler) {
       try {
