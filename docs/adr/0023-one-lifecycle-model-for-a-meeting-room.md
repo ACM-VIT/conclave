@@ -68,7 +68,11 @@ An **abandoned opening** is a room that closes before anyone claims it, or a Rec
 
 ### Removal wins
 
-No path that grants entry clears a removal it did not decide. Admit and allow are a host's decision and clear it. Demotion, locking the room, a recovery pass, an invitation, and a kept host or co-host right do not. Removing someone clears every mark tied to them: admissions, host, co-host and temporary host. The code's owner is the one exception: its own arrival clears its removal.
+No path that grants entry clears a removal it did not decide. Admit and allow are a host's decision and clear it. Demotion, locking the room, a recovery pass, an invitation, and a kept host or co-host right do not. Removing someone clears every mark tied to them: admissions, host, co-host and temporary host. The exception is an account whose host right the room cannot take: the code's owner, and a host by configuration outside the room (a super admin, a scheduled webinar's host or co-host). Its own arrival as host clears its block and its removal, before the host grant, so it is never seated without the host's controls.
+
+The lock and the waiting room are two gates that take the same entry grants. Whoever a host admitted, whoever a booking invites, and whoever a pass from the lost call brings back is seated under either gate, and a removal keeps a person waiting under either. A client whose rooms start unlocked and use the waiting room (`useWaitingRoom` without `knockByDefault`) gets the same recovery after a restart as one whose rooms start locked.
+
+A tab keeps the recovery pass it holds for its meeting until a join brings a newer one, or the tab is put out. A join reply that carries no pass (the room was waiting for its lost call, or its lease was being claimed again) erases nothing: the pass is good for its own lifetime, and the SFU decides what it proves.
 
 ### Host follow-up
 
@@ -127,7 +131,7 @@ A reason belongs to a person and a seat to a tab, so one person can hold several
 
 ### Invariants
 
-1. A removed person never gets back in without a host letting them in (the owner excepted).
+1. A removed person never gets back in without a host letting them in (the owner and a host by configuration excepted).
 2. Inside its recovery window, a lost call keeps its hosts and removals in the ledger, and its passes stay good.
 3. At most one join opens a room as its host, and while a call is lost only its hosts, its members who were not removed, or the owner host it.
 4. No room stays locked with nobody to let anyone in past its deadline: 10 s while Opening, the lost call's window while Recovering, 2 minutes while Waiting for a host.
@@ -158,7 +162,9 @@ A reason belongs to a person and a seat to a tab, so one person can hold several
 29. A room never serves and never writes under a generation its stores are not fenced with: between a lease claimed again and its fences landing it writes nothing shared, signs no pass, runs no host command and seats no join.
 30. A reclaim is a compare-and-set in every store the room writes: a room keeps its code only where no other room fenced the recovery record or the booking since it last did, and hands off otherwise.
 31. Nothing a room decided while it was held is lost when its reclaim lands, the end of its meeting included: a meeting that emptied while its lease was being claimed again is over in the ledger and in the schedule, and nobody comes back to it on an old pass or an old host right.
-32. A pass stays good for its lifetime across any number of losses of its call, and across a reclaim: every room that runs the call records the generations that ran it before.
+32. A pass stays good for its lifetime across any number of losses of its call, and across a reclaim: every room that runs the call records the generations that ran it before, and a tab does not drop the pass it holds because a join reply brought none.
+33. The lock and the waiting room take the same entry grants: an admission, a booking's invitation and a pass from the lost call seat a person under either gate, and a removal keeps them waiting under either.
+34. An account whose host right the room cannot take (the code's owner, a host by configuration) is never seated without host controls: its arrival clears its block and its removal before the grant.
 
 ## Consequences
 
