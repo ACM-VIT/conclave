@@ -16,7 +16,7 @@ export const jobs = {
   },
   deploy: {
     budgetSeconds: 240,
-    tasks: [{ dir: ".", script: "test:deploy-crash" }],
+    tasks: [{ dir: ".", script: "test:deploy-preflight" }, { dir: ".", script: "test:deploy-crash" }, { dir: ".", script: "test:deploy-compose" }],
   },
   "fuzz-a": {
     budgetSeconds: 420,
@@ -56,9 +56,9 @@ export const jobs = {
     tasks: [
       { dir: "apps/web", script: "build" },
       { dir: "packages/shared-browser", script: "build" },
-      { dir: ".", script: "test:deploy-preflight" },
     ],
   },
+
   checks: {
     budgetSeconds: 100,
     tasks: [
@@ -80,6 +80,7 @@ export const jobs = {
       { dir: ".", script: "check:native-test-stores" },
       { dir: ".", script: "test:native-test-stores" },
       { dir: ".", script: "check:native-game-fixtures" },
+      { dir: ".", script: "check:json-store-fixtures" },
       { dir: ".", script: "check:docker-context" },
       { dir: ".", exec: "node --test scripts/ci/*.test.mjs" },
     ],

@@ -69,7 +69,7 @@ test("an idle instance is rebuilt first, and the one carrying calls is not touch
     assert.equal(result.order, "sfu-b sfu-a");
     assert.equal(sfus["sfu-b"].recreates.length, 2, "canary build, then the serving container");
     assert.equal(sfus["sfu-a"].recreates.length, 0);
-    assert.deepEqual(cutRooms(sfus), [0, 0]);
+    assert.deepEqual(cutRooms(sfus), [0, 0, 0, 0]);
   });
 });
 
@@ -91,7 +91,7 @@ test("--force-drain is the one way to rebuild instances that carry calls", async
       assert.equal(sfu.drains[0].force, true);
       assert.equal(sfu.recreates.length, 2);
     }
-    assert.deepEqual(cutRooms(sfus), [0, 0, 0, 0], "each instance is recreated only after its forced drain");
+    assert.deepEqual(cutRooms(sfus), Array(8).fill(0), "each instance is stopped and recreated only after its forced drain");
   });
 });
 
@@ -124,7 +124,7 @@ test("an instance that is down is brought up before a healthy one is drained", a
     assert.equal(result.code, 3, result.output);
     assert.equal(result.order, "sfu-b sfu-a");
     assert.deepEqual(events, ["recreate sfu-b", "recreate sfu-b", "drain sfu-a", "drain sfu-a"]);
-    assert.deepEqual(cutRooms(sfus), [0, 0]);
+    assert.deepEqual(cutRooms(sfus), [0, 0, 0, 0]);
   });
 });
 
@@ -757,7 +757,7 @@ test("a rollback whose checkout was never built builds its canary under its own 
       for (const run of [partial, retry]) {
         assert.ok(!run.docker.some(composeBuilds), "no service image is rebuilt");
       }
-      assert.match(partial.output, /Building [0-9a-f]{12} as vm-sfu-canary:[0-9a-f]{12} for its canary; the instances still go back to good/);
+      assert.match(partial.output, /Building [0-9a-f]{12} as vm-sfu-canary:[0-9a-f]{12} for deploy checks/);
       assert.doesNotMatch(retry.output, /Building/, "the retry reuses the canary image");
       const canaryImages = retry.docker.filter((args) => args[0] === "run").map((args) => args[args.indexOf("--entrypoint") + 2]);
       assert.deepEqual(canaryImages, ["sha256:canary-build"]);

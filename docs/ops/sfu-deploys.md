@@ -345,3 +345,28 @@ It fails if either side goes more than 2 s without audio or is disconnected.
   PATH. On Windows it exits 1 at once: WSL's `bash.exe` cannot open the
   script's Windows path and Git Bash has no `flock`, so open a WSL shell in
   the checkout and run `./scripts/deploy-sfu.sh` there.
+
+## Image identity and state carry
+
+A successful container lookup distinguishes a service with no container from
+one with a concrete container and image ID. A failed lookup is neither absence
+nor a different release. Rollback checks the whole fleet before choosing
+between the last-good and previous-good releases, and does not write a target
+when an image is unknown.
+
+The main Bash deploy owns the exit and signal traps. The stopped-container
+hold and state carry share one restart-policy record for each container.
+The carry registers its staging directory before touching the source. On
+exit, it restores that source's policy, reports whether the source remains
+running or stopped, and removes local staging. The same exit handler then
+releases any other holds. It does not start a stopped source. A candidate
+that has not passed its canary still starts drained with restart disabled.
+
+The deploy copies SQLite and stages the JSON archive from the same stopped
+source generation. It restores the source policy, checks that the source is
+still stopped at that generation, then publishes the JSON archive. The
+checkout's tools image does the carry even when the rollback target predates
+those tools. New images advertise deploy ID support and must answer healthy
+with the new start's ID and the expected instance before canary or promotion
+can proceed. Older rollback images still must match their recorded Docker
+image and pass the canary and serving checks.

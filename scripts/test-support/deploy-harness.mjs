@@ -91,10 +91,12 @@ export const startSfu = async (
     restartPolicy: "unless-stopped",
     statusFailures: 0,
     imageReads: 0,
+    sourceStartedAt: new Date().toISOString(),
   };
   sfu.restart = () => {
     if (sfu.container !== "exited" || sfu.restartPolicy === "no") return;
     sfu.container = "running";
+    sfu.sourceStartedAt = new Date().toISOString();
     sfu.draining = sfu.bootDrained;
     sfu.crashedAt = null;
     sfu.starts.push({ image: sfu.image, bootDrained: sfu.bootDrained, by: "restart-policy" });
@@ -116,6 +118,7 @@ export const startSfu = async (
   sfu.runQueuedRestart = () => {
     if (sfu.container !== "restarting") return;
     sfu.container = "running";
+    sfu.sourceStartedAt = new Date().toISOString();
     sfu.draining = sfu.bootDrained;
     sfu.crashedAt = null;
     sfu.starts.push({ image: sfu.image, bootDrained: sfu.bootDrained, by: "restart-policy" });
@@ -134,6 +137,7 @@ export const startSfu = async (
       return json({
         status,
         startedAt,
+        sourceStartedAt: sfu.sourceStartedAt,
         restartCount: sfu.restartCount,
         restartPolicy: sfu.restartPolicy,
         bootDrained: sfu.bootDrained,
@@ -148,7 +152,7 @@ export const startSfu = async (
     }
     if (url.pathname === "/status") sfu.onStatus?.(sfu);
     if (sfu.container !== "running" && !url.pathname.startsWith("/stand-in/")) return req.socket.destroy();
-    if (url.pathname === "/health") return sfu.healthy ? json({ status: "healthy" }) : json({ status: "starting" }, 503);
+    if (url.pathname === "/health") return sfu.healthy ? json({ status: "healthy", instanceId: sfu.id, deployId: sfu.deployId }) : json({ status: "starting" }, 503);
     if (url.pathname === "/status") {
       if (!sfu.statusAnswers || (sfu.statusFailures > 0 && sfu.statusFailures--)) return json({ error: "unavailable" }, 503);
       return json({ instanceId: id, region: "local", healthy: sfu.statusHealthy, rooms: sfu.rooms, draining: sfu.draining });
@@ -199,7 +203,7 @@ export const startSfu = async (
       return json({ ok: true });
     }
     if (url.pathname === "/stand-in/stop") {
-      context.events.push(`stop ${instanceId}`);
+      if (!url.searchParams.has("carry")) context.events.push(`stop ${instanceId}`);
       sfu.stops.push({ roomsCut: ["exited", "crash-looping", "restarting"].includes(sfu.container) ? 0 : sfu.rooms });
       sfu.rooms = 0;
       sfu.container = "exited";
@@ -217,8 +221,10 @@ export const startSfu = async (
       sfu.statusHealthy = true;
       sfu.bootDrained = url.searchParams.get("draining") === "true";
       sfu.draining = url.searchParams.get("draining") === "true";
+      sfu.deployId = url.searchParams.get("deployId") ?? "";
       sfu.image = url.searchParams.get("image");
       // The image it ran before the deploy still boots healthy.
+      sfu.sourceStartedAt = new Date().toISOString();
       sfu.healthy = replacementHealthy || sfu.image === sfu.firstImage;
       sfu.configHash = url.searchParams.get("hash") ?? "current-hash";
       sfu.restartPolicy = url.searchParams.get("restart") ?? "unless-stopped";
@@ -285,9 +291,13 @@ const service = (name, sfu, index) => ({
   image: process.env[imageVar(name)] || "vm-" + name,
   restart: process.env.SFU_RESTART_POLICY || "unless-stopped",
   pull_policy: process.env.DEPLOY_TEST_COMPOSE_BUILDS ? "missing" : "never",
+  volumes: [{ type: "bind", source: "/tmp/conclave-test-volume", target: "/var/lib/conclave/recordings" }],
   ...(process.env.DEPLOY_TEST_COMPOSE_BUILDS ? { build: { context: ".", dockerfile: "packages/sfu/Dockerfile" } } : {}),
   environment: {
     ANNOUNCED_IP: "127.0.0.1",
+    NODE_ENV: "production",
+    SFU_CORS_ORIGINS: "https://conclave.example",
+    CONCLAVE_SQLITE_PATH: "/var/lib/conclave/recordings/conclave.sqlite",
     // DEPLOY_TEST_OVERLAP gives both services one RTC range, which the full
     // preflight rejects.
     RTC_MIN_PORT: process.env.DEPLOY_TEST_OVERLAP ? "41001" : String(40000 + index * 1000),
@@ -352,7 +362,7 @@ const main = async () => {
         ? (process.env.DEPLOY_TEST_UNTAGGED_SERVICE_BUILDS ? "sha256:checkout-build" : (await state(name)).firstImage)
         : "sha256:target";
       const image = process.env.DEPLOY_TEST_COMPOSE_IGNORES_IMAGE ? "sha256:running" : tags[told] || untagged;
-      const response = await fetch("http://127.0.0.1:" + sfus[name].port + "/stand-in/recreate?draining=" + draining + "&image=" + image + "&hash=" + encodeURIComponent(configHash(name)) + "&restart=" + encodeURIComponent(process.env.SFU_RESTART_POLICY || "unless-stopped"));
+      const response = await fetch("http://127.0.0.1:" + sfus[name].port + "/stand-in/recreate?draining=" + draining + "&image=" + image + "&deployId=" + encodeURIComponent(process.env.SFU_DEPLOY_ID || "") + "&hash=" + encodeURIComponent(configHash(name)) + "&restart=" + encodeURIComponent(process.env.SFU_RESTART_POLICY || "unless-stopped"));
       if (!response.ok) process.exitCode = 1;
       // DEPLOY_TEST_KILL_AFTER_RECREATES: kill the deploy, as a crash or a
       // closed SSH session would, once that many recreates have run.
@@ -373,11 +383,23 @@ const main = async () => {
     const answer = args.join(" ").includes("/tmp/redis.sock") ? own : process.env.DEPLOY_TEST_REDIS_URL_RUN_ID || own;
     return out("# Server\\nredis_version:7.2.0\\nrun_id:" + answer);
   }
+  if (args[0] === "diff") return out("");
+  if (args[0] === "stop") {
+    const name = args.at(-1).replace(/^ctr-/, "");
+    await fetch("http://127.0.0.1:" + sfus[name].port + "/stand-in/stop?carry=1");
+    return;
+  }
   if (args[0] === "inspect" && args.at(-1) === "ctr-redis") return out(process.env.DEPLOY_TEST_REDIS_STATE || "running");
   if (args[0] === "inspect") {
     const format = args[2];
     const name = args.at(-1).replace(/^ctr-/, "");
     if (format.includes(".HostConfig.RestartPolicy")) return out((await state(name)).restartPolicy);
+    if (format.includes(".State.Running")) {
+      const current = await state(name);
+      const running = ["running", "restarting"].includes(current.status);
+      return out(format.includes("FinishedAt") ? running + " " + current.sourceStartedAt + " 2026-11-25T08:45:00Z" : String(running));
+    }
+    if (format.includes(".WorkingDir")) return out("/app/packages/sfu");
     if (format.includes(".Config.Env")) {
       const current = await state(name);
       if (current.envInspectFails) {
@@ -429,7 +451,10 @@ const main = async () => {
     process.exitCode = 1;
     return;
   }
-  if (args[0] === "image" && args[1] === "inspect") return args[2] === "-f" ? out(tags[args.at(-1)] || "sha256:target") : undefined;
+  if (args[0] === "image" && args[1] === "inspect") {
+    if (args[3]?.includes("health-deploy-id")) return out("deploy-id");
+    return args[2] === "-f" ? out(tags[args.at(-1)] || (args.at(-1).startsWith("sha256:") ? args.at(-1) : "sha256:target")) : undefined;
+  }
   if (args[0] === "tag") {
     tags[args[2]] = tags[args[1]] || args[1];
     fs.writeFileSync(tagsFile, JSON.stringify(tags));
