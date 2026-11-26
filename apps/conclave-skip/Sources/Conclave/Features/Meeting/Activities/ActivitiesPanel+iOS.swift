@@ -22,6 +22,7 @@ struct ActivitiesPanel: View {
             ActivitiesRootList(session: session)
                 .navigationDestination(for: ActivitiesPage.self) { page in
                     ActivitiesPageView(page: page, session: session)
+                        .navigationBarTitleDisplayMode(.inline)
                 }
         }
 

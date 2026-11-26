@@ -109,6 +109,7 @@ const startPlacementApp = async (options?: {
   draining?: boolean;
   registry?: RoomRegistry;
   getSocketAdapterHealth?: () => RedisPublisherHealth;
+  identity?: { instanceId: string; deployId: string | null };
 }) => {
   const registry =
     options?.registry ??
@@ -122,7 +123,7 @@ const startPlacementApp = async (options?: {
     isDraining: options?.draining,
     roomRegistry: registry,
   });
-  const app = createSfuApp({ state, config, getSocketAdapterHealth: options?.getSocketAdapterHealth });
+  const app = createSfuApp({ state, config: { ...config, ...options?.identity }, getSocketAdapterHealth: options?.getSocketAdapterHealth });
   const server = createServer(app);
   servers.push(server);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -155,6 +156,20 @@ describe("room placement HTTP API", () => {
     healthy = true;
     expect((await fetch(`${url}/health`)).status).toBe(200);
     expect((await reserve(url)).status).toBe(200);
+  });
+  it("names the SFU instance and the deploy that started it in health, healthy or not", async () => {
+    let healthy = false;
+    const { state, url } = await startPlacementApp({
+      identity: { instanceId: "sfu-b", deployId: "sfu-20261124T101500Z-1a2b3c4d" },
+      getSocketAdapterHealth: () => ({ healthy, pending: 0, pendingBytes: 0, dropped: 0, recovering: false }),
+    });
+    state.workers.push({ closed: false } as (typeof state.workers)[number]);
+    for (const expected of [503, 200]) {
+      const response = await fetch(`${url}/health`);
+      expect(response.status).toBe(expected);
+      expect(await response.json()).toMatchObject({ instanceId: "sfu-b", deployId: "sfu-20261124T101500Z-1a2b3c4d" });
+      healthy = true;
+    }
   });
   it("advertises atomic placement support before web clients call the endpoint", async () => {
     const { url } = await startPlacementApp();

@@ -1,0 +1,33 @@
+[
+  {
+    "id": "c9e3a2f4-7d51-4e33-9a4c-3b8d4f9e1c23",
+    "clientId": "conclave",
+    "roomId": "webinar-launch",
+    "linkSlug": "launch-day",
+    "title": "Launch day",
+    "description": "",
+    "hostEmail": "host@example.test",
+    "hostName": "Host",
+    "hostUserId": null,
+    "coHosts": [{ "email": "cohost@example.test", "name": "Co-host" }],
+    "scheduledStartAt": 1716285600000,
+    "scheduledEndAt": 1716292800000,
+    "status": "scheduled",
+    "publicAccess": true,
+    "maxAttendees": 500,
+    "requiresInviteCode": false,
+    "waitingRoomEnabled": true,
+    "earlyEntryMinutes": 10,
+    "qaEnabled": true,
+    "recordingRequested": false,
+    "notes": "",
+    "createdAt": 1716200000000,
+    "createdBy": "host@example.test",
+    "updatedAt": 1716200000000,
+    "liveStartedAt": null,
+    "endedAt": null,
+    "totalJoinCount": 0,
+    "peakAttendeeCount": 0,
+    "webinarLink": "/w/launch-day"
+  }
+]

@@ -474,6 +474,8 @@ export const createSfuApp = ({
 
     const healthData = {
       status: isHealthy ? "healthy" : "unhealthy",
+      instanceId: config.instanceId,
+      deployId: config.deployId,
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
       port: config.port,

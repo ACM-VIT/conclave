@@ -1,14 +1,8 @@
 import { runDetached } from "./runDetached.js";
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from "node:crypto";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, resolve } from "node:path";
+import { dirname } from "node:path";
 import type {
   AvailabilityOverride,
   AvailabilityWindow,
@@ -32,6 +26,11 @@ import {
   canonicalizeClientId,
   CONCLAVE_CLIENT_ID,
 } from "./clientIds.js";
+import { openSqliteStore } from "./sqliteWriteCheck.js";
+import { storeJsonPath, storeSqlitePath } from "./storePaths.js";
+import { storedTimestampOrNull } from "./storedValues.js";
+import { writePrivateFileAtomic } from "./privateFile.js";
+import { adoptRecoveredJsonStore, jsonStoreCollection, type JsonStoreAdapter, type JsonStoreClaim } from "./jsonStoreUpgrade.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -115,6 +114,15 @@ const userKey = (clientId: string, userId: string): string =>
 
 const profileSlugKey = (profileId: string, slug: string): string =>
   `${profileId}:${slug}`;
+
+export const schedulingProfileClaims: Record<"profileIdByUserKey" | "profileIdByUsername", JsonStoreClaim<SchedulingProfile>> = {
+  profileIdByUserKey: { key: (profile) => userKey(profile.clientId, profile.userId) },
+  profileIdByUsername: { key: (profile) => `${profile.clientId}:${profile.username.toLowerCase()}` },
+};
+
+export const schedulingEventTypeClaims: Record<"eventTypeIdByProfileSlug", JsonStoreClaim<SchedulingEventType>> = {
+  eventTypeIdByProfileSlug: { key: (eventType) => profileSlugKey(eventType.profileId, eventType.slug) },
+};
 
 const sanitizeSlug = (value: string, fallback = ""): string => {
   const normalized = value
@@ -265,11 +273,8 @@ const registerProfile = (
   profile: SchedulingProfile,
 ): void => {
   store.profilesById.set(profile.id, profile);
-  store.profileIdByUserKey.set(userKey(profile.clientId, profile.userId), profile.id);
-  store.profileIdByUsername.set(
-    `${profile.clientId}:${profile.username.toLowerCase()}`,
-    profile.id,
-  );
+  store.profileIdByUserKey.set(schedulingProfileClaims.profileIdByUserKey.key(profile), profile.id);
+  store.profileIdByUsername.set(schedulingProfileClaims.profileIdByUsername.key(profile), profile.id);
 };
 
 const registerEventType = (
@@ -277,10 +282,7 @@ const registerEventType = (
   eventType: SchedulingEventType,
 ): void => {
   store.eventTypesById.set(eventType.id, eventType);
-  store.eventTypeIdByProfileSlug.set(
-    profileSlugKey(eventType.profileId, eventType.slug),
-    eventType.id,
-  );
+  store.eventTypeIdByProfileSlug.set(schedulingEventTypeClaims.eventTypeIdByProfileSlug.key(eventType), eventType.id);
 };
 
 const uniqueUsername = (
@@ -950,29 +952,10 @@ export const generateAvailableSlots = ({
   return slots.sort((a, b) => a.startAt - b.startAt);
 };
 
-const getSchedulingSqlitePath = (): string => {
-  const configured =
-    process.env.SCHEDULING_SQLITE_PATH?.trim() ||
-    process.env.CONCLAVE_SQLITE_PATH?.trim();
-  if (configured) return resolve(configured);
-  const recordingStoragePath = process.env.RECORDING_STORAGE_PATH?.trim();
-  if (recordingStoragePath) return resolve(recordingStoragePath, "conclave.sqlite");
-  return resolve(process.cwd(), "data", "conclave.sqlite");
-};
+const getSchedulingSqlitePath = (): string => storeSqlitePath("scheduling");
 
-const getSchedulingJsonPath = (): string => {
-  const configured = process.env.SCHEDULING_PATH?.trim();
-  if (configured) return resolve(configured);
-  return resolve(process.cwd(), "data", "scheduling.json");
-};
+const getSchedulingJsonPath = (): string => storeJsonPath("scheduling");
 
-const writeJsonAtomic = (path: string, data: string): void => {
-  const dir = dirname(path);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  const tmp = `${path}.${randomBytes(4).toString("hex")}.tmp`;
-  writeFileSync(tmp, data, "utf8");
-  renameSync(tmp, path);
-};
 
 const loadNodeSqlite = (): {
   DatabaseSync: new (path: string) => SqliteDatabase;
@@ -1065,6 +1048,7 @@ const normalizeSnapshot = (
         return {
           ...deserialized,
           clientId: normalizeSnapshotClientId(deserialized.clientId),
+          accessTokenExpiresAt: storedTimestampOrNull(deserialized.accessTokenExpiresAt),
         };
       })
     : [],
@@ -1076,9 +1060,10 @@ const createSqliteSchedulingPersistence = (
   const dir = dirname(path);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const { DatabaseSync } = loadNodeSqlite();
-  const db = new DatabaseSync(path);
-  db.exec("PRAGMA busy_timeout = 5000");
-  db.exec("PRAGMA journal_mode = WAL");
+  return openSqliteStore(new DatabaseSync(path), path, (db) => prepareSqliteSchedulingPersistence(db));
+};
+
+const prepareSqliteSchedulingPersistence = (db: SqliteDatabase): SchedulingPersistence => {
   db.exec(`
     CREATE TABLE IF NOT EXISTS scheduling_records (
       kind TEXT NOT NULL,
@@ -1212,7 +1197,7 @@ const createFileSchedulingPersistence = (
 ): SchedulingPersistence => ({
   save: (snapshot) => {
     try {
-      writeJsonAtomic(
+      writePrivateFileAtomic(
         path,
         JSON.stringify(
           {
@@ -1240,6 +1225,74 @@ const createFileSchedulingPersistence = (
     }
   },
 });
+
+type AvailabilityEntry = SchedulingSnapshot["availability"][number];
+
+const undecodableTokens = (raw: unknown, snapshot: SchedulingSnapshot): string[] => {
+  const stored = Array.isArray((raw as { calendars?: unknown } | null)?.calendars)
+    ? ((raw as { calendars: Array<Partial<SchedulingCalendarConnection>> }).calendars)
+    : [];
+  return snapshot.calendars.flatMap((calendar, index) =>
+    (["accessToken", "refreshToken"] as const)
+      .filter((field) => Boolean(stored[index]?.[field]) && !calendar[field])
+      .map((field) => `the ${field} of profile ${calendar.profileId}'s calendar`),
+  );
+};
+
+export const schedulingJsonStore: JsonStoreAdapter<SchedulingSnapshot> = {
+  decode: (data) => {
+    if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("it is not a scheduling snapshot");
+    const snapshot = normalizeSnapshot(data);
+    const undecoded = undecodableTokens(data, snapshot);
+    if (undecoded.length > 0) {
+      throw new Error(`${undecoded.join(", ")} cannot be decrypted with this SFU's secret. Set SCHEDULING_TOKEN_SECRET to the secret the older SFU used.`);
+    }
+    return snapshot;
+  },
+  write: (path, snapshot) => {
+    void createFileSchedulingPersistence(path).save(snapshot);
+  },
+  collections: {
+    profiles: jsonStoreCollection<SchedulingSnapshot, SchedulingProfile>({
+      index: "profilesById",
+      rows: (snapshot) => snapshot.profiles,
+      key: (profile) => profile.id,
+      stamp: (profile) => Number(profile.updatedAt) || 0,
+      claims: schedulingProfileClaims,
+    }),
+    availability: jsonStoreCollection<SchedulingSnapshot, AvailabilityEntry>({
+      index: "availabilityByProfileId",
+      rows: (snapshot) => snapshot.availability,
+      key: (entry) => entry.profileId,
+      stamp: (entry, snapshot) =>
+        Number((entry.availability as { updatedAt?: unknown } | undefined)?.updatedAt) ||
+        Number(snapshot.profiles.find((profile) => profile.id === entry.profileId)?.updatedAt) ||
+        0,
+      claims: {},
+    }),
+    eventTypes: jsonStoreCollection<SchedulingSnapshot, SchedulingEventType>({
+      index: "eventTypesById",
+      rows: (snapshot) => snapshot.eventTypes,
+      key: (eventType) => eventType.id,
+      stamp: (eventType) => Number(eventType.updatedAt) || 0,
+      claims: schedulingEventTypeClaims,
+    }),
+    calendars: jsonStoreCollection<SchedulingSnapshot, SchedulingCalendarConnection>({
+      index: "calendarByProfileId",
+      rows: (snapshot) => snapshot.calendars,
+      key: (calendar) => calendar.profileId,
+      stamp: (calendar) => Number(calendar.updatedAt) || 0,
+      claims: {},
+    }),
+  },
+  build: (base, rows) => ({
+    ...base,
+    profiles: rows.profiles as SchedulingProfile[],
+    availability: rows.availability as AvailabilityEntry[],
+    eventTypes: rows.eventTypes as SchedulingEventType[],
+    calendars: rows.calendars as SchedulingCalendarConnection[],
+  }),
+};
 
 const UPSERT_SCHEDULING_RECORD_SCRIPT = `
 local recordKey = KEYS[1]
@@ -1587,43 +1640,25 @@ const createRedisSchedulingPersistence = (
 
 export const createSchedulingPersistence = (): SchedulingPersistence => {
   const mode = process.env.SCHEDULING_PERSISTENCE?.trim().toLowerCase();
-  if (mode === "json" || mode === "file") return createFileSchedulingPersistence();
-  const redisUrl = resolveRedisPersistenceUrl();
-  try {
-    const sqlitePersistence = createSqliteSchedulingPersistence();
-    if (shouldUseRedisPersistence(mode, redisUrl)) {
-      if (!redisUrl) {
-        throw new Error(
-          "SCHEDULING_PERSISTENCE=redis requires SFU_PERSISTENCE_REDIS_URL, SFU_REDIS_URL, or REDIS_URL.",
-        );
-      }
-      return createRedisSchedulingPersistence(
-        redisUrl,
-        resolveRedisPersistenceKeyPrefix(),
-        sqlitePersistence,
-      );
-    }
-    return sqlitePersistence;
-  } catch (error) {
-    if (mode === "sqlite") throw error;
-    Logger.warn(
-      `SQLite scheduling persistence unavailable; falling back to JSON: ${(error as Error).message}`,
-    );
-    const filePersistence = createFileSchedulingPersistence();
-    if (shouldUseRedisPersistence(mode, redisUrl)) {
-      if (!redisUrl) {
-        throw new Error(
-          "SCHEDULING_PERSISTENCE=redis requires SFU_PERSISTENCE_REDIS_URL, SFU_REDIS_URL, or REDIS_URL.",
-        );
-      }
-      return createRedisSchedulingPersistence(
-        redisUrl,
-        resolveRedisPersistenceKeyPrefix(),
-        filePersistence,
-      );
-    }
-    return filePersistence;
+  if (mode === "json" || mode === "file") {
+    adoptRecoveredJsonStore(getSchedulingJsonPath(), "scheduling.json", schedulingJsonStore);
+    return createFileSchedulingPersistence();
   }
+  const redisUrl = resolveRedisPersistenceUrl();
+  const sqlitePersistence = createSqliteSchedulingPersistence();
+  if (shouldUseRedisPersistence(mode, redisUrl)) {
+    if (!redisUrl) {
+      throw new Error(
+        "SCHEDULING_PERSISTENCE=redis requires SFU_PERSISTENCE_REDIS_URL, SFU_REDIS_URL, or REDIS_URL.",
+      );
+    }
+    return createRedisSchedulingPersistence(
+      redisUrl,
+      resolveRedisPersistenceKeyPrefix(),
+      sqlitePersistence,
+    );
+  }
+  return sqlitePersistence;
 };
 
 const snapshotSchedulingStore = (

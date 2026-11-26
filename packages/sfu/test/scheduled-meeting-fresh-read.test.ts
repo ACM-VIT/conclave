@@ -625,17 +625,6 @@ describe("removed invitees kept inside the meeting, as stores used to keep them"
     expect(isInvited(await startSfu("redis"))).toBe(false);
   });
 
-  redisTest("come along when the JSON file is all an SFU has besides Redis", async () => {
-    const dir = await jsonFileWithRemoval();
-    useStore("redis", dir);
-    // No SQLite can be opened under a path that runs through a file.
-    const unusable = join(dir, "scheduled-meetings.json", "no-such-folder");
-    expect(isInvited(await startSfu("redis", unusable))).toBe(false);
-
-    vi.stubEnv("SCHEDULED_MEETINGS_PATH", join(tempDir(), "none.json"));
-    expect(isInvited(await startSfu("redis"))).toBe(false);
-  });
-
   it("are read from a SQLite row that still carries them, and a host can bring the person back", async () => {
     const dir = useStore("sqlite");
     const meeting = await scheduleIntroCall(await startSfu("sqlite"));

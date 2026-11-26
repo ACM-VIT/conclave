@@ -29,6 +29,8 @@ enum AppBridgeProtocol {
     static let readyTimeoutMillis = 15000.0
 
     static let commandTimeoutMillis = 10000.0
+    static let addOutcomeAsks = 4
+    static let addOutcomeWindowMillis = 60000.0
 
     static func entryFile(appId: String) -> String {
         if appId == "whiteboard" { return "whiteboard.html" }
@@ -91,7 +93,7 @@ enum AppBridgeInboundType: String, CaseIterable, Equatable {
 enum AppBridgeOutboundType: String, CaseIterable, Equatable {
     case snapshot, update, awareness, status, resync, close
     case setTool, setColor, setStrokeWidth, setFill, undo, redo, setPage, addPage, renamePage, deletePage, zoomToFit, export
-    case addEntries, removeEntry, shuffle, sort, clearEntries, spin, setRemoveWinner, setSounds, clearResults
+    case addEntries, removeEntry, shuffle, sort, clearEntries, spin, setRemoveWinner, setSounds, clearResults, addOutcome
     case playNow, enqueue, request, approve, decline, cancelRequest, move, remove
 }
 
@@ -155,6 +157,7 @@ struct AppBridgeInbound: Equatable {
     let ok: Bool
     let error: String
     let pngBase64: String
+    let added: [Int]?
 
     let status: AppEmbedStatus
 
@@ -163,11 +166,11 @@ struct AppBridgeInbound: Equatable {
 
     static func make(type: String, requestId: String = "", version: Int = AppBridgeProtocol.version, bundleVersion: String = "",
                      appId: String = "", bytes: Data = Data(), clientId: Int = -1, ok: Bool = false, error: String = "",
-                     pngBase64: String = "", status: AppEmbedStatus = AppEmbedStatus.empty, width: Int = 0,
-                     height: Int = 0) -> AppBridgeInbound {
+                     pngBase64: String = "", added: [Int]? = nil, status: AppEmbedStatus = AppEmbedStatus.empty,
+                     width: Int = 0, height: Int = 0) -> AppBridgeInbound {
         return AppBridgeInbound(type: type, requestId: requestId, version: version, bundleVersion: bundleVersion, appId: appId,
-                                bytes: bytes, clientId: clientId, ok: ok, error: error, pngBase64: pngBase64, status: status,
-                                width: width, height: height)
+                                bytes: bytes, clientId: clientId, ok: ok, error: error, pngBase64: pngBase64, added: added,
+                                status: status, width: width, height: height)
     }
 
     static let none = AppBridgeInbound.make(type: "")
@@ -253,7 +256,12 @@ enum AppBridgeCodec {
             if error.count > 64 { error = String(error.prefix(64)) }
             let png = payload["pngBase64"] as? String ?? ""
             if png.count > base64CharacterLimit(AppBridgeProtocol.exportByteLimit) { return AppBridgeDecodeResult.rejected(.payloadTooLarge) }
-            return accepted(AppBridgeInbound.make(type: type, requestId: requestId, ok: ok, error: error, pngBase64: png))
+            var added: [Int]? = nil
+            if let raw = payload["added"] {
+                guard let list = addedList(raw) else { return AppBridgeDecodeResult.rejected(.badPayload) }
+                added = list
+            }
+            return accepted(AppBridgeInbound.make(type: type, requestId: requestId, ok: ok, error: error, pngBase64: png, added: added))
         case .resize:
             let width = number(payload["width"]) ?? 0.0
             let height = number(payload["height"]) ?? 0.0
@@ -354,6 +362,16 @@ enum AppBridgeCodec {
     static func clipped(_ value: String, _ limit: Int) -> String {
         if value.count <= limit { return value }
         return String(value.prefix(limit))
+    }
+
+    static func addedList(_ raw: Any) -> [Int]? {
+        guard let values = raw as? [Any], values.count <= AppWheelLimits.maxEntries else { return nil }
+        var list: [Int] = []
+        for value in values {
+            guard let index = number(value), index >= 0, index == index.rounded(), index < 1_000_000 else { return nil }
+            list.append(Int(index))
+        }
+        return list
     }
 
     static func jsonObject(_ raw: String) -> [String: Any]? {

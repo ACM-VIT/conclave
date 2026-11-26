@@ -7,6 +7,7 @@ import type {
   AudioAnalyserEntry,
   Consumer,
   JoinMode,
+  PrejoinMediaHandoff,
   Producer,
   ProducerInfo,
   ProducerMapEntry,
@@ -146,12 +147,13 @@ export function useMeetRefs() {
   });
   const isChatOpenRef = useRef(false);
   const localStreamRef = useRef<MediaStream | null>(null);
-  const prejoinMediaIntentRef = useRef<{
-    streamId: string | null;
-    trackIds: Set<string>;
-    isCameraOn: boolean;
-    isMicOn: boolean;
-  } | null>(null);
+  const prejoinMediaIntentRef = useRef<
+    | ({
+        streamId: string | null;
+        trackIds: Set<string>;
+      } & Pick<PrejoinMediaHandoff, "isCameraOn" | "isMicOn" | "skipMutedMicWarmup">)
+    | null
+  >(null);
   const processedVideoTrackRef = useRef<MediaStreamTrack | null>(null);
   const sessionIdRef = useRef<string>(getOrCreateSessionId());
   const isHandRaisedRef = useRef(false);
