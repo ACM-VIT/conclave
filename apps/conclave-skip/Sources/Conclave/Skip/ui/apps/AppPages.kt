@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.toggleable
@@ -51,22 +52,15 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
 @Composable
 internal fun AppWheelPage(host: AppHostPresenter, reservation: PaddingValues) {
     val wheel = host.wheel
-    var draft by rememberSaveable { mutableStateOf("") }
     var confirmClear by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { host.refreshRoster() }
-    val addDraft: () -> Unit = {
-        if (draft.isBlank()) {
-            draft = ""
-        } else if (host.addWheelNames(draft) == ActivityTapResult.dispatched) {
-            draft = ""
-        }
-    }
     LazyColumn(Modifier.fillMaxSize().testTag("app.wheel.page"), contentPadding = reservation) {
         if (!wheel.isReady) {
             item(key = "closed") { AppPageClosed("wheel") }
@@ -74,19 +68,17 @@ internal fun AppWheelPage(host: AppHostPresenter, reservation: PaddingValues) {
             if (wheel.canEdit) {
                 item(key = "add") {
                     OutlinedTextField(
-                        value = draft,
-                        onValueChange = { value ->
-                            draft = value
-
-                            if (value.contains('\n')) addDraft()
-                        },
+                        value = host.wheelDraft.text,
+                        onValueChange = { value -> host.editWheelDraft(value) },
                         label = { Text(conclaveString("app_wheel_add_name")) },
                         singleLine = false,
                         maxLines = 4,
                         enabled = !wheel.isFull,
                         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words, imeAction = ImeAction.Done),
-                        keyboardActions = KeyboardActions(onDone = { addDraft() }),
-                        supportingText = if (wheel.isFull) ({ Text(conclaveString("app_wheel_full")) }) else null,
+                        keyboardActions = KeyboardActions(onDone = { host.submitWheelDraft() }),
+                        supportingText = if (wheel.isFull) ({ Text(conclaveString("app_wheel_full")) })
+                        else if (host.wheelDraft.isUnconfirmed) ({ Text(conclaveString("app_wheel_unconfirmed"), Modifier.testTag("app.wheel.unconfirmed")) })
+                        else null,
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).testTag("app.wheel.add"),
                     )
                 }
@@ -115,8 +107,12 @@ internal fun AppWheelPage(host: AppHostPresenter, reservation: PaddingValues) {
             } else {
                 items(wheel.entries.toList(), key = { "e:" + it.id }) { entry ->
                     val removing = wheel.isPending(AppPageCommandKind.removeEntry, target = entry.id)
-                    AppSwipeToRemove(enabled = wheel.canEdit && !removing, onRemove = { host.removeWheelEntry(entry.id) }) {
+                    AppSwipeToRemove(enabled = wheel.canReorder && !removing, onRemove = { host.removeWheelEntry(entry.id) }) {
                         ListItem(
+                            leadingContent = {
+                                Text(entry.number.toString(), style = MaterialTheme.typography.bodyMedium.copy(fontFeatureSettings = "tnum"),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.End, modifier = Modifier.widthIn(min = 20.dp))
+                            },
                             headlineContent = { Text(entry.label) },
                             trailingContent = if (removing) ({ CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp) }) else null,
                             modifier = Modifier.testTag("app.wheel.entry"),
@@ -128,10 +124,10 @@ internal fun AppWheelPage(host: AppHostPresenter, reservation: PaddingValues) {
                 item(key = "actions") {
                     Column {
                         AppActionRow(conclaveString("app_wheel_shuffle"), "app.wheel.shuffle",
-                            enabled = wheel.entries.count >= 2, pending = wheel.isPending(AppPageCommandKind.shuffle)) { host.shuffleWheel() }
+                            enabled = wheel.canReorder && wheel.entries.count >= 2, pending = wheel.isPending(AppPageCommandKind.shuffle)) { host.shuffleWheel() }
                         AppActionRow(conclaveString("app_wheel_sort"), "app.wheel.sort",
-                            enabled = wheel.entries.count >= 2, pending = wheel.isPending(AppPageCommandKind.sort)) { host.sortWheel() }
-                        AppActionRow(conclaveString("app_wheel_clear_names"), "app.wheel.clear", enabled = wheel.entries.count > 0,
+                            enabled = wheel.canReorder && wheel.entries.count >= 2, pending = wheel.isPending(AppPageCommandKind.sort)) { host.sortWheel() }
+                        AppActionRow(conclaveString("app_wheel_clear_names"), "app.wheel.clear", enabled = wheel.canReorder && wheel.entries.count > 0,
                             pending = wheel.isPending(AppPageCommandKind.clearEntries), destructive = true) { confirmClear = true }
                         AppSwitchRow(conclaveString("app_wheel_remove_winner"), conclaveString("app_wheel_remove_winner_detail"),
                             checked = wheel.removeWinner, enabled = !wheel.isPending(AppPageCommandKind.setRemoveWinner),
