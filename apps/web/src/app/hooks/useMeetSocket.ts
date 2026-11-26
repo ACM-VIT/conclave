@@ -10386,7 +10386,6 @@ export function useMeetSocket({
             usingTurnFallback: relayOnlyIceRef.current,
           });
           reconnectAttemptsRef.current = 0;
-          manualReconnectRetryRequestedRef.current = false;
           updateReconnectRecoveryStatus(null);
           setMeetError(null);
           rejoined = true;
