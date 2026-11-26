@@ -374,6 +374,7 @@ export class CallRig {
   videoQuiet = false;
   dropEveryOtherOwnCountAnswer = false;
   ownCountQueries = 0;
+  ownCountAckDelayMs = 0;
   sendStatic = false;
   screenChanging = true;
   answersSenderCounts = true;
@@ -693,7 +694,7 @@ export class CallRig {
             if (ids.has(stream.producer.id) && !stream.producer.closed) counts[stream.producer.id] = stream.sfuPackets;
           }
         }
-        return this.ack(ack, { counts });
+        return this.ack(ack, { counts }, this.ownCountAckDelayMs);
       }
       case "getSenderPacketCounts": {
         this.senderCountQueries += 1;

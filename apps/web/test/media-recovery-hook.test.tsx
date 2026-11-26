@@ -110,7 +110,7 @@ describe("the media path recovery the hook runs", () => {
     expect(rig.log.some((line) => line.includes("Rebuilding the producer transport"))).toBe(true);
   });
 
-  it("still rebuilds when the failed camera goes quiet just before the rebuild", async () => {
+  it.each([0, 6_000])("still rebuilds when the failed camera goes quiet %d ms before credentials arrive", async (waitMs) => {
     rig = await startRig({ publish: true, camera: true });
     await rig.join();
     await rig.advance(5_000);
@@ -120,6 +120,7 @@ describe("the media path recovery the hook runs", () => {
     expect(await waitFor(rig, () => rig!.heldRoutes.length > 0, 60_000)).toBe(true);
     expect(rig.send).toBe(send);
     rig.videoQuiet = true;
+    await rig.advance(waitMs);
     rig.route = "up";
     rig.releaseHeldRoutes("answer");
 
@@ -881,6 +882,23 @@ describe("what proves a path works, with bounded waits", () => {
     return target;
   };
 
+  it("rebuilds a stalled path when the browser's ICE restart does not settle", async () => {
+    rig = await startRig();
+    await rig.join();
+    await rig.advance(5_000);
+    const target = rig;
+    const recv = target.recv!;
+    let restartStarted = false;
+    recv.restartIce = () => {
+      restartStarted = true;
+      return new Promise<void>(() => {});
+    };
+    target.mediaFlows = false;
+
+    expect(await waitFor(target, () => restartStarted, 30_000)).toBe(true);
+    expect(await waitFor(target, () => target.recv !== recv, 16_000)).toBe(true);
+  });
+
   it("reconnects a dropped socket while the rebuild's check is stuck on a stats read", async () => {
     rig = await stalledRecv();
     const socket = rig.socket!;
@@ -961,6 +979,30 @@ describe("what proves a path works, with bounded waits", () => {
     expect(await waitFor(target, () => target.send !== send, 10_000)).toBe(true);
     expect(Date.now() - released).toBeLessThanOrEqual(3_500);
     expect(target.ownCountQueries - asked).toBeLessThanOrEqual(1);
+  });
+
+  it.each([800, 1_990])("keeps a recovered camera when both SFU count replies take %d ms", async (delayMs) => {
+    rig = await startRig({ publish: true, camera: true });
+    await rig.join();
+    await rig.advance(5_000);
+    const target = rig;
+    const send = target.send!;
+    const camera = send.sending.find(({ producer }) => producer.kind === "video")!;
+    target.droppedSendKinds.add("video");
+    target.route = "hold";
+    expect(await waitFor(target, () => target.heldRoutes.length > 0, 40_000)).toBe(true);
+
+    target.ownCountAckDelayMs = delayMs;
+    target.droppedSendKinds.delete("video");
+    const packets = camera.sfuPackets;
+    target.route = "up";
+    target.releaseHeldRoutes("answer");
+    await target.advance(12_000);
+
+    expect(send.closed).toBe(false);
+    expect(target.send).toBe(send);
+    expect(camera.sfuPackets).toBeGreaterThan(packets);
+    expect(target.health.producer).toBe("healthy");
   });
 
   it("escalates when a known-failed camera's stats row is missing from an ICE restart sample", async () => {
