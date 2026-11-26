@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
+import { clearEntries as legacyClearEntries, removeEntryById as legacyRemoveEntry } from "./fixtures/wheel-staging-entries";
 import {
   addEntries,
   normalizeLabel,
@@ -178,6 +179,40 @@ describe("native wheel add records", () => {
     }
     expect(labels(ada).sort()).toEqual(["Ada", "Ben", "Host"]);
     expect(labels(ben).sort()).toEqual(["Ada", "Ben", "Host"]);
+  });
+
+  it.each(["remove", "clear"] as const)("keeps the exact accepted slots when a staging client uses %s before native reloads", (change) => {
+    const origin = createWheelDoc();
+    expect(add(origin, "app-ada1", "h-1", ["Ada", "", "Bo"])).toEqual({ ok: true, added: [0, 2] });
+    const legacy = createWheelDoc();
+    sync(origin, legacy);
+
+    if (change === "remove") legacyRemoveEntry(legacy, getEntries(origin)[0].id);
+    else legacyClearEntries(legacy);
+
+    const reloaded = createWheelDoc();
+    sync(legacy, reloaded);
+    const survivors = change === "remove" ? ["Bo"] : [];
+    expect(labels(reloaded)).toEqual(survivors);
+    expect(outcome(reloaded, "app-ada1", "h-1")).toEqual({ ok: true, added: [0, 2] });
+    expect(add(reloaded, "app-ada1", "h-1", ["Ada", "", "Bo"])).toEqual({ ok: true, added: [0, 2] });
+    expect(labels(reloaded)).toEqual(survivors);
+  });
+
+  it("replays a saved refusal on a fresh replica even after room opens up", () => {
+    const doc = createWheelDoc();
+    addEntries(doc, Array.from({ length: 64 }, (_, index) => `Old ${index}`));
+    const refusal = { ok: false, error: "full", added: [] };
+    expect(add(doc, "app-ada1", "h-1", ["Ada"])).toEqual(refusal);
+    clearEntries(doc);
+
+    const reloaded = createWheelDoc();
+    sync(doc, reloaded);
+    expect(outcome(reloaded, "app-ada1", "h-1")).toEqual(refusal);
+    expect(add(reloaded, "app-ada1", "h-1", ["Ada"])).toEqual(refusal);
+    expect(labels(reloaded)).toEqual([]);
+    expect(add(reloaded, "app-ada1", "h-2", ["Ada"])).toEqual({ ok: true, added: [0] });
+    expect(labels(reloaded)).toEqual(["Ada"]);
   });
 
   it("still knows an add ran after 300 other adds and removals while its client was away", () => {

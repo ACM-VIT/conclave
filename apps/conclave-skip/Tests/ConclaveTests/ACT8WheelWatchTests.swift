@@ -349,6 +349,34 @@ struct ACT8WheelWatchTests {
         #expect(presenter.wheelDraft.text == "Cy\nDe\nEd", "a late reply for a request that timed out changes nothing")
     }
 
+    @Test func aDetachedEmbedLeavesUnansweredNamesAloneUntilItCanReadTheOutcome() throws {
+        let wire = Wire()
+        let (presenter, relay) = wheelReady(wire)
+        presenter.editWheelDraft("Cy\nDe\n")
+        let original = try #require(addRequests(wire).first?.id)
+        presenter.editWheelDraft("Ed")
+        relay.releaseEmbed()
+
+        for _ in 0..<4 { presenter.fireCommandTimeout(requestId: original) }
+        #expect(!presenter.wheel.isPending(.addOutcome, target: original))
+        #expect(outcomeQueries(wire).isEmpty)
+        #expect(addRequests(wire).count == 1)
+        #expect(presenter.wheelDraft.text == "Ed")
+        #expect(presenter.wheelDraft.sent.map { $0.lines } == [["Cy", "De"]])
+
+        relay.acceptPrimedSnapshot(AppsSyncResponse(syncMessage: Data([1]), stateVector: nil, awarenessUpdate: nil),
+                                   appSessionId: relay.appSessionId)
+        _ = relay.attachBridge(appSessionId: relay.appSessionId) { [wire] json in wire.delivered.append(json) }
+        #expect(ready(relay) == .none)
+        #expect(outcomeQueries(wire).count == 1)
+        let query = try #require(outcomeQueries(wire).first)
+        #expect(query.original == original)
+        answerOutcome(relay, query.id, applied: [0])
+        #expect(presenter.wheelDraft.sent.isEmpty)
+        #expect(presenter.wheelDraft.text == "De\nEd")
+        #expect(addRequests(wire).count == 1)
+    }
+
     @Test func anAddIsNeverRetriedPastTheDeadlineEvenWhenTheTimerWakesLate() throws {
         let wire = Wire()
         let (presenter, relay) = wheelReady(wire)
