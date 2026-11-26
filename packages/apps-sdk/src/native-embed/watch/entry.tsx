@@ -14,7 +14,6 @@ const boot = (): void => {
   if (!container) return;
   const session = new NativeEmbedSession(transport, scope, createWatchDoc());
   createRoot(container).render(<NativeWatchEmbed session={session} />);
-  session.start();
 };
 
 boot();

@@ -18,6 +18,7 @@ export const NATIVE_EMBED_LIMITS = {
   pages: 50,
   pageName: 40,
   requestMemory: 64,
+  executedCommands: 4_096,
 } as const;
 
 export const EMBED_TO_NATIVE_TYPES = ["ready", "sync", "update", "awareness", "status", "ack", "resize"] as const;
@@ -49,6 +50,7 @@ export const NATIVE_TO_EMBED_TYPES = [
   "setRemoveWinner",
   "setSounds",
   "clearResults",
+  "addOutcome",
   "playNow",
   "enqueue",
   "request",
@@ -81,6 +83,7 @@ export const HOST_COMMAND_TYPES = [
   "setRemoveWinner",
   "setSounds",
   "clearResults",
+  "addOutcome",
   "playNow",
   "enqueue",
   "request",
@@ -152,11 +155,28 @@ export const INK_COLORS = [
 
 export const STROKE_WIDTHS = [2, 3, 5, 8, 12] as const;
 
+export const COMMAND_TIMEOUT_MS = 10_000;
+
+export const DOC_ANSWERED_COMMANDS: readonly string[] = ["addEntries", "addOutcome"];
+
+export const WHEEL_ADD_RECOVERY = {
+  asks: 4,
+  windowMs: 60_000,
+} as const;
+
+const ROOM_ADDS_PER_SECOND = 2;
+
+export const WHEEL_RECEIPT_LIMITS = {
+  count: (WHEEL_ADD_RECOVERY.windowMs / 1_000) * ROOM_ADDS_PER_SECOND,
+  bytes: 32_768,
+} as const;
+
 export const WHEEL_LIMITS = {
   entries: 64,
   label: 48,
   results: 25,
   name: 64,
+  pasteLines: 256,
 } as const;
 
 export const WATCH_LIMITS = {
@@ -244,20 +264,30 @@ export const parseScope = (fragment: string): SessionScope | null => {
   return { callSessionId, appSessionId, appId };
 };
 
+const LONE_SURROGATES = /[\uD800-\uDFFF]/gu;
+
+export const withoutLoneSurrogates = (text: string): string => text.replace(LONE_SURROGATES, "");
+
+const wellFormedStrings = (_key: string, value: unknown): unknown =>
+  typeof value === "string" ? withoutLoneSurrogates(value) : value;
+
 export const encodeEnvelope = (
   type: EmbedToNativeType | NativeToEmbedType,
   scope: SessionScope,
   requestId: string,
   payload: Record<string, unknown>,
 ): string =>
-  JSON.stringify({
-    v: NATIVE_EMBED_PROTOCOL_VERSION,
-    type,
-    callSessionId: scope.callSessionId,
-    appSessionId: scope.appSessionId,
-    requestId,
-    payload,
-  });
+  JSON.stringify(
+    {
+      v: NATIVE_EMBED_PROTOCOL_VERSION,
+      type,
+      callSessionId: scope.callSessionId,
+      appSessionId: scope.appSessionId,
+      requestId,
+      payload,
+    },
+    wellFormedStrings,
+  );
 
 export const base64FromBytes = (bytes: Uint8Array): string => {
   let binary = "";
@@ -289,16 +319,31 @@ export const bytesFromBase64 = (value: unknown, limit: number): BytesResult => {
 
 type EnvelopeCheck = { ok: true; record: Record<string, unknown>; type: string } | { ok: false; reason: RejectionReason };
 
-const checkEnvelope = (raw: unknown, scope: SessionScope, allowedTypes: readonly string[], allowOtherVersionFor: string): EnvelopeCheck => {
+type LoneSurrogates = "reject" | "strip";
+
+const checkEnvelope = (
+  raw: unknown,
+  scope: SessionScope,
+  allowedTypes: readonly string[],
+  allowOtherVersionFor: string,
+  loneSurrogates: LoneSurrogates,
+): EnvelopeCheck => {
   if (typeof raw !== "string") return { ok: false, reason: "malformed" };
   if (raw.length > NATIVE_EMBED_LIMITS.envelopeCharacters) return { ok: false, reason: "oversized" };
   let parsed: unknown;
+  let torn = false;
   try {
-    parsed = JSON.parse(raw);
+    parsed = JSON.parse(raw, (key: string, value: unknown): unknown => {
+      if (withoutLoneSurrogates(key) !== key) torn = true;
+      if (typeof value !== "string") return value;
+      const kept = withoutLoneSurrogates(value);
+      if (kept !== value) torn = true;
+      return kept;
+    });
   } catch {
     return { ok: false, reason: "malformed" };
   }
-  if (!isRecord(parsed)) return { ok: false, reason: "malformed" };
+  if (!isRecord(parsed) || (torn && loneSurrogates === "reject")) return { ok: false, reason: "malformed" };
   const version = parsed.v;
   const type = parsed.type;
   if (typeof version !== "number" || typeof type !== "string") return { ok: false, reason: "malformed" };
@@ -372,6 +417,11 @@ const isWatchItem = (value: unknown): boolean =>
 const isWatchRequest = (value: unknown): boolean =>
   isWatchItem(value) && isRecord(value) && isBoundedText(value.byId ?? "", WATCH_LIMITS.userId, true);
 
+export const isAddedList = (value: unknown): value is number[] =>
+  Array.isArray(value) &&
+  value.length <= WHEEL_LIMITS.entries &&
+  value.every((index) => typeof index === "number" && Number.isSafeInteger(index) && index >= 0);
+
 export const isValidAppStatus = (value: unknown): boolean => {
   if (value === undefined) return true;
   if (!isRecord(value)) return false;
@@ -413,7 +463,7 @@ export const decodeEmbedMessage = (
   const wanted = expectedOrigin.toLowerCase();
   if (wanted === "" || (actual !== wanted && actual !== `${wanted}/`)) return { ok: false, reason: "wrongOrigin" };
   if (!isMainFrame) return { ok: false, reason: "notMainFrame" };
-  const check = checkEnvelope(raw, scope, EMBED_TO_NATIVE_TYPES, "ready");
+  const check = checkEnvelope(raw, scope, EMBED_TO_NATIVE_TYPES, "ready", "reject");
   if (!check.ok) return check;
   if (!isEmbedToNativeType(check.type)) return { ok: false, reason: "unknownType" };
   const envelope = envelopeFrom(check.record, check.type);
@@ -452,6 +502,7 @@ export const decodeEmbedMessage = (
       if (typeof png === "string" && png.length > base64CharacterLimit(NATIVE_EMBED_LIMITS.exportBytes)) {
         return { ok: false, reason: "payloadTooLarge" };
       }
+      if (payload.added !== undefined && !isAddedList(payload.added)) return { ok: false, reason: "badPayload" };
       return { ok: true, envelope };
     }
     case "resize": {
@@ -465,7 +516,7 @@ export const decodeEmbedMessage = (
 };
 
 export const decodeHostMessage = (raw: unknown, scope: SessionScope): Decoded<NativeToEmbedType> => {
-  const check = checkEnvelope(raw, scope, NATIVE_TO_EMBED_TYPES, "");
+  const check = checkEnvelope(raw, scope, NATIVE_TO_EMBED_TYPES, "", "strip");
   if (!check.ok) return check;
   if (!isNativeToEmbedType(check.type)) return { ok: false, reason: "unknownType" };
   return { ok: true, envelope: envelopeFrom(check.record, check.type) };

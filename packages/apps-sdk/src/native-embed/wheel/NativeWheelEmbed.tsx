@@ -1,32 +1,28 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { WheelStage } from "../../apps/wheel/web/components/WheelStage";
+import { useSpinLive } from "../../apps/wheel/web/hooks/useSpinLive";
 import { useWheelDocState } from "../../apps/wheel/web/hooks/useWheelDocState";
 import { WheelSounds } from "../../apps/wheel/web/sounds";
 import {
-  addEntries,
-  clearEntries,
-  clearHistory,
   createEntryId,
   getEntries,
   getHistory,
   getRemoveWinnerOnDone,
   recordResult,
   removeEntryById,
-  replaceEntries,
-  setRemoveWinnerOnDone,
+  slotLabel,
   startSpin,
   type WheelSpin,
 } from "../../apps/wheel/core/doc/index";
-import { APP_EDIT_COMMANDS, WHEEL_LIMITS, isValidIdentifier, type Envelope, type NativeToEmbedType } from "../protocol";
+import type { Envelope, NativeToEmbedType } from "../protocol";
 import {
-  payloadBoolean,
-  payloadString,
   type AppStatusPayload,
   type CommandResult,
   type HostStatus,
   type NativeEmbedSession,
   type WheelAppStatus,
 } from "../session";
+import { runWheelCommand, wheelStatus } from "./commands";
 
 const SPIN_MIN_DURATION_MS = 7200;
 const SPIN_DURATION_SPREAD_MS = 1600;
@@ -34,8 +30,6 @@ const SPIN_MIN_TURNS = 7;
 const SPIN_TURNS_SPREAD = 3;
 const REVEAL_DELAY_MS = 800;
 const RESULT_FAILOVER_MS = 2600;
-
-const EDIT_COMMANDS: ReadonlySet<string> = new Set<string>(APP_EDIT_COMMANDS);
 
 const useHostStatus = (session: NativeEmbedSession): HostStatus =>
   useSyncExternalStore(
@@ -49,19 +43,6 @@ const useSynced = (session: NativeEmbedSession): boolean =>
     () => session.isSynced,
   );
 
-const labelsFrom = (payload: Record<string, unknown>): string[] => {
-  const raw = payload.labels;
-  if (!Array.isArray(raw)) return [];
-  const labels: string[] = [];
-  for (const value of raw as unknown[]) {
-    if (typeof value !== "string") continue;
-    const label = value.replace(/\s+/g, " ").trim().slice(0, WHEEL_LIMITS.label);
-    if (label.length > 0) labels.push(label);
-    if (labels.length >= WHEEL_LIMITS.entries) break;
-  }
-  return labels;
-};
-
 type Winner = { spinId: string; label: string };
 
 export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
@@ -72,7 +53,9 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
   const reduceMotion = host.reduceMotion;
   const { entries, spin, history, removeWinnerOnDone } = useWheelDocState(doc);
 
-  const [isSpinning, setIsSpinning] = useState(false);
+  const { live, isLive } = useSpinLive(doc, spin);
+  const [animating, setAnimating] = useState(false);
+  const [resultSpinId, setResultSpinId] = useState<string | null>(null);
   const [highlightIndex, setHighlightIndex] = useState<number | null>(null);
   const [winner, setWinner] = useState<Winner | null>(null);
   const [overlay, setOverlay] = useState<Winner | null>(null);
@@ -144,9 +127,8 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
   );
 
   const reveal = useCallback((settled: WheelSpin) => {
-    const winnerEntry = settled.entries[settled.winnerIndex];
-    if (!winnerEntry) return;
-    const shown = { spinId: settled.spinId, label: winnerEntry.label };
+    if (!settled.entries[settled.winnerIndex]) return;
+    const shown = { spinId: settled.spinId, label: slotLabel(settled, settled.winnerIndex) };
     setHighlightIndex(null);
     soundsRef.current?.win();
     setOverlay(shown);
@@ -159,6 +141,7 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
       handledRef.current.add(settled.spinId);
       const winnerEntry = settled.entries[settled.winnerIndex];
       if (!winnerEntry) return;
+      setResultSpinId(settled.spinId);
       const liveEntries = getEntries(doc);
       const flashable = liveEntries.length === settled.entries.length && liveEntries[settled.winnerIndex]?.id === winnerEntry.id;
       if (flashable) setHighlightIndex(settled.winnerIndex);
@@ -172,23 +155,9 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
     [doc, reveal, scheduleFinalize],
   );
 
-  useEffect(() => {
-    if (!reduceMotion || !spin || handledRef.current.has(spin.spinId)) return;
-    const remaining = spin.startedAt + spin.durationMs - Date.now();
-    if (remaining <= 0) return;
-    handledRef.current.add(spin.spinId);
-    reveal(spin);
-    scheduleFinalize(spin, remaining);
-  }, [reduceMotion, spin, reveal, scheduleFinalize]);
-
-  const stageSpin = useMemo<WheelSpin | null>(() => {
-    if (!spin || !reduceMotion) return spin;
-    return { ...spin, startedAt: Math.min(spin.startedAt, Date.now()) - spin.durationMs };
-  }, [spin, reduceMotion]);
-
   const requestSpin = useCallback((): CommandResult => {
     if (!canEditRef.current) return { ok: false, error: "readOnly" };
-    if (isSpinning || revealTimerRef.current) return { ok: false, error: "busy" };
+    if (isLive() || animating || revealTimerRef.current) return { ok: false, error: "busy" };
     const liveEntries = getEntries(doc);
     if (liveEntries.length < 2) return { ok: false, error: "notEnoughNames" };
     const current = hostRef.current;
@@ -205,30 +174,12 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
     };
     startSpin(doc, record);
     return { ok: true };
-  }, [doc, isSpinning]);
+  }, [doc, isLive, animating]);
 
   const status = useMemo<WheelAppStatus>(
-    () => ({
-      kind: "wheel",
-      entries: entries
-        .filter((entry) => isValidIdentifier(entry.id))
-        .slice(0, WHEEL_LIMITS.entries)
-        .map((entry) => ({ id: entry.id, label: entry.label.slice(0, WHEEL_LIMITS.label) })),
-      results: history
-        .filter((result) => isValidIdentifier(result.spinId) && result.label.trim().length > 0)
-        .slice(0, WHEEL_LIMITS.results)
-        .map((result) => ({
-          id: result.spinId,
-          label: result.label.slice(0, WHEEL_LIMITS.label),
-          byName: result.byName.slice(0, WHEEL_LIMITS.name),
-        })),
-      removeWinner: removeWinnerOnDone,
-      sounds: soundOn,
-      spinning: isSpinning,
-      winnerSpinId: winner && isValidIdentifier(winner.spinId) ? winner.spinId : "",
-      winnerLabel: winner ? winner.label.slice(0, WHEEL_LIMITS.label) : "",
-    }),
-    [entries, history, removeWinnerOnDone, soundOn, isSpinning, winner],
+    () =>
+      wheelStatus({ entries, history, removeWinner: removeWinnerOnDone, sounds: soundOn, spinning: live, winner }),
+    [entries, history, removeWinnerOnDone, soundOn, live, winner],
   );
 
   useEffect(() => {
@@ -242,102 +193,28 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
       session.sendStatus({ app: { ...status, ...next } });
       return { ok: true };
     };
-    const handler = (envelope: Envelope<NativeToEmbedType>): CommandResult => {
-      const payload = envelope.payload;
-      if (!session.isSynced && envelope.type !== "setSounds") return { ok: false, error: "notSynced" };
-      if (EDIT_COMMANDS.has(envelope.type) && !canEditRef.current) return { ok: false, error: "readOnly" };
-      switch (envelope.type) {
-        case "addEntries": {
-          const labels = labelsFrom(payload);
-          if (labels.length === 0) return { ok: false, error: "noNames" };
-          if (getEntries(doc).length >= WHEEL_LIMITS.entries) return { ok: false, error: "full" };
-          addEntries(doc, labels);
-          return { ok: true };
-        }
-        case "removeEntry": {
-          const entryId = payloadString(payload, "entryId");
-          if (!isValidIdentifier(entryId)) return { ok: false, error: "badEntry" };
-          removeEntryById(doc, entryId);
-          return { ok: true };
-        }
-        case "shuffle": {
-          const current = getEntries(doc);
-          if (current.length < 2) return { ok: true };
-          const shuffled = [...current];
-          for (let index = shuffled.length - 1; index > 0; index -= 1) {
-            const other = Math.floor(Math.random() * (index + 1));
-            [shuffled[index], shuffled[other]] = [shuffled[other], shuffled[index]];
-          }
-          replaceEntries(doc, shuffled);
-          return { ok: true };
-        }
-        case "sort": {
-          const current = getEntries(doc);
-          if (current.length < 2) return { ok: true };
-          replaceEntries(doc, [...current].sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" })));
-          return { ok: true };
-        }
-        case "clearEntries":
-          clearEntries(doc);
-          return { ok: true };
-        case "spin":
-          return requestSpin();
-        case "setRemoveWinner": {
-          const value = payloadBoolean(payload, "value");
-          if (value === null) return { ok: false, error: "badValue" };
-          setRemoveWinnerOnDone(doc, value);
-          return { ok: true };
-        }
-        case "setSounds": {
-          const value = payloadBoolean(payload, "value");
-          if (value === null) return { ok: false, error: "badValue" };
+    const handler = (envelope: Envelope<NativeToEmbedType>, repeat: boolean): CommandResult =>
+      runWheelCommand(doc, envelope.type, envelope.payload, {
+        synced: session.isSynced,
+        canEdit: !session.hostStatus.readOnly,
+        repeat,
+        spinning: isLive(),
+        requestSpin,
+        setSounds: (value) => {
           setSoundOn(value);
           return respond({ sounds: value });
-        }
-        case "clearResults":
-          clearHistory(doc);
-          return { ok: true };
-        case "snapshot":
-        case "update":
-        case "awareness":
-        case "status":
-        case "resync":
-        case "close":
-        case "setTool":
-        case "setColor":
-        case "setStrokeWidth":
-        case "setFill":
-        case "undo":
-        case "redo":
-        case "setPage":
-        case "addPage":
-        case "renamePage":
-        case "deletePage":
-        case "zoomToFit":
-        case "export":
-        case "playNow":
-        case "enqueue":
-        case "request":
-        case "approve":
-        case "decline":
-        case "cancelRequest":
-        case "move":
-        case "remove":
-        default:
-          return { ok: false, error: "unknownCommand" };
-      }
-    };
-    session.setCommandHandler(handler);
-    return () => {
-      session.setCommandHandler(null);
-    };
-  }, [session, status, doc, requestSpin]);
+        },
+      });
+    session.start(handler);
+  }, [session, status, doc, requestSpin, isLive]);
+
+  const dialEntries = spin && (live || resultSpinId === spin.spinId) ? spin.entries : entries;
 
   return (
     <div className="wheel-page">
       <WheelStage
-        entries={entries}
-        spin={stageSpin}
+        entries={dialEntries}
+        spin={spin}
         canSpin={canEdit && synced}
         sounds={soundsRef.current}
         reducedMotion={reduceMotion}
@@ -346,10 +223,17 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
           requestSpin();
         }}
         onSettled={handleSettled}
-        onSpinningChange={setIsSpinning}
+        onSpinningChange={setAnimating}
       />
       {overlay ? (
-        <div className="wheel-winner" aria-hidden="true" onClick={() => setOverlay(null)}>
+        <div
+          className="wheel-winner"
+          aria-hidden="true"
+          onClick={() => {
+            setOverlay(null);
+            setResultSpinId(null);
+          }}
+        >
           <div className="wheel-winner-card">
             <span className="wheel-winner-label">{overlay.label}</span>
           </div>

@@ -106,6 +106,7 @@ import {
   isMediaDeviceBlocked,
 } from "../lib/utils";
 import { hiddenSetupView, type SetupNotice } from "../lib/setup-notice";
+import type { RejoinMedia } from "../lib/rejoin-intent";
 import { useApps, useGame } from "@conclave/apps-sdk";
 import { GamePanel } from "./games/GamePanel";
 import { GamesPanel } from "./games/GamesPanel";
@@ -162,6 +163,7 @@ interface MeetsMainContentProps {
   isWebinarAttendee?: boolean;
   enableRoomRouting: boolean;
   forceJoinOnly: boolean;
+  clientId?: string;
   user?: {
     id?: string;
     email?: string | null;
@@ -305,6 +307,8 @@ interface MeetsMainContentProps {
   meetError?: MeetError | null;
   mediaError?: MeetError | null;
   setupNotice?: SetupNotice | null;
+  prejoinInitialMedia?: RejoinMedia | null;
+  onPrejoinInitialMediaUsed?: () => void;
   onDismissSetupNotice?: () => void;
   browserAudioNeedsGesture: boolean;
   browserAudioPlaybackAttemptToken?: number;
@@ -454,6 +458,7 @@ export default function MeetsMainContent({
   isWebinarAttendee = false,
   enableRoomRouting,
   forceJoinOnly,
+  clientId,
   user,
   userEmail,
   isAdmin,
@@ -589,6 +594,8 @@ export default function MeetsMainContent({
   meetError,
   mediaError,
   setupNotice,
+  prejoinInitialMedia,
+  onPrejoinInitialMediaUsed,
   onDismissSetupNotice,
   isPopoutActive,
   isPopoutSupported,
@@ -2309,6 +2316,7 @@ export default function MeetsMainContent({
             isAdmin={isAdmin}
             enableRoomRouting={enableRoomRouting}
             forceJoinOnly={forceJoinOnly}
+            clientId={clientId}
             showPermissionHint={showPermissionHint}
             rooms={availableRooms}
             roomsStatus={roomsStatus}
@@ -2320,6 +2328,8 @@ export default function MeetsMainContent({
             onIsAdminChange={onIsAdminChange}
             mediaError={mediaError}
             setupNotice={setupNotice}
+            initialMedia={prejoinInitialMedia}
+            onInitialMediaUsed={onPrejoinInitialMediaUsed}
             onDismissSetupNotice={onDismissSetupNotice}
             videoEffects={videoEffects}
             onVideoEffectsChange={onVideoEffectsChange}

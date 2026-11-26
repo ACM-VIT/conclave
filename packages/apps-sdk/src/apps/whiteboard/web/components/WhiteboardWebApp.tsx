@@ -3,6 +3,7 @@ import * as Y from "yjs";
 import { useAppDoc } from "../../../../sdk/hooks/useAppDoc";
 import { useAppPresence } from "../../../../sdk/hooks/useAppPresence";
 import { useApps } from "../../../../sdk/hooks/useApps";
+import { cutText } from "../../../../sdk/text";
 import { useToolState } from "../../shared/hooks/useToolState";
 import { useViewport } from "../../shared/hooks/useViewport";
 import { useWhiteboardElements } from "../../shared/hooks/useWhiteboardElements";
@@ -319,7 +320,7 @@ export function WhiteboardWebApp() {
     if (!renamingPageId) return;
     const trimmed = renameDraft.trim();
     if (trimmed.length > 0) {
-      renamePage(renamingPageId, trimmed.slice(0, 40));
+      renamePage(renamingPageId, cutText(trimmed, 40));
     }
     setRenamingPageId(null);
     setRenameDraft("");
