@@ -21,11 +21,14 @@ import {
   fitSingleLabel,
   fitWheelLabels,
   isLabelFlipped,
+  labelAngle,
   labelFlipSignature,
+  uprightAngle,
   wheelLabelGeometry,
   type MeasureText,
 } from "../labelFit";
 import type { WheelSounds } from "../sounds";
+import { isSpinRunning, spinElapsed } from "../spinTimeline";
 
 const POINTER_ANGLE = 90;
 const POINTER_BASE = WHEEL_RADIUS + RIM_WIDTH + 3;
@@ -36,7 +39,6 @@ const EMPTY_SEGMENT_COUNT = 8;
 const IDLE_DEG_PER_SEC = 3.6;
 const FLAPPER_STIFFNESS = 640;
 const FLAPPER_DAMPING = 16;
-const MIN_VISIBLE_TAIL_MS = 1500;
 const REDUCED_TAIL_MS = 1100;
 
 const PROFILE_STEPS = 600;
@@ -54,6 +56,7 @@ const COLOR = {
   oddSeam: "#242428",
   emptySlices: ["#1a1a1d", "#151518"],
   ink: "rgba(250, 250, 250, 0.88)",
+  numberInk: "rgba(250, 250, 250, 0.4)",
   winner: "#F95F4A",
   winnerInk: "#0a0a0b",
   rim: "#18181b",
@@ -76,7 +79,6 @@ export type WheelStageProps = {
 
 type ActiveAnimation = {
   spin: WheelSpin;
-  anchor: number;
   startDeg: number;
   restDeg: number;
   delta: number;
@@ -183,6 +185,7 @@ export function WheelStage({
   const settledSpinIdsRef = useRef<Set<string>>(new Set());
   const flapperRef = useRef({ angle: 0, velocity: 0 });
   const segmentCountRef = useRef(0);
+  const hasNumbersRef = useRef(false);
   const restingRef = useRef(false);
   const speedRef = useRef(0);
   const flipKeyRef = useRef("");
@@ -249,6 +252,15 @@ export function WheelStage({
         `rotate(${flapperRef.current.angle} 0 ${-POINTER_BASE})`
       );
     }
+    const labels = hasNumbersRef.current ? labelGroupRef.current : null;
+    if (labels) {
+      for (const number of labels.querySelectorAll("[data-wheel-number]")) {
+        number.setAttribute(
+          "transform",
+          `rotate(${uprightAngle(rotationRef.current)} ${number.getAttribute("x")} ${number.getAttribute("y")})`
+        );
+      }
+    }
   }, []);
 
   useLayoutEffect(() => {
@@ -264,9 +276,7 @@ export function WheelStage({
     }
     if (settledSpinIdsRef.current.has(spin.spinId)) return;
 
-    const now = Date.now();
-    let anchor = Math.min(spin.startedAt, now);
-    if (now - anchor >= spin.durationMs) {
+    if (!isSpinRunning(spin)) {
       settledSpinIdsRef.current.add(spin.spinId);
       rotationRef.current = restingAngle(spin);
       restingRef.current = true;
@@ -277,10 +287,6 @@ export function WheelStage({
       onSettledRef.current(spin, false);
       return;
     }
-    if (now - anchor > spin.durationMs - MIN_VISIBLE_TAIL_MS) {
-      anchor = now - (spin.durationMs - MIN_VISIBLE_TAIL_MS);
-    }
-
     const startDeg = mod360(rotationRef.current);
     rotationRef.current = startDeg;
     restingRef.current = false;
@@ -288,7 +294,6 @@ export function WheelStage({
     const restDeg = restingAngle(spin);
     animationRef.current = {
       spin,
-      anchor,
       startDeg,
       restDeg,
       delta: mod360(restDeg - startDeg) + (reduced ? 1 : spin.turns) * 360,
@@ -308,7 +313,6 @@ export function WheelStage({
     const frame = (frameAt: number) => {
       const dt = Math.min(0.05, Math.max(0.001, (frameAt - lastFrameAt) / 1000));
       lastFrameAt = frameAt;
-      const frameNow = Date.now();
 
       const previousDeg = rotationRef.current;
       const animation = animationRef.current;
@@ -316,7 +320,7 @@ export function WheelStage({
       let unwrappedDeg = previousDeg;
 
       if (animation) {
-        const elapsed = frameNow - animation.anchor;
+        const elapsed = spinElapsed(animation.spin);
         const launchAt = animation.reduced ? animation.flipAt : WINDUP_MS;
         if (!animation.launched && elapsed >= launchAt) {
           animation.launched = true;
@@ -368,14 +372,14 @@ export function WheelStage({
 
       if (onPointerLabelRef.current && segments > 0) {
         const holdingStill = Boolean(
-          animation?.reduced && frameNow - animation.anchor < animation.flipAt
+          animation?.reduced && spinElapsed(animation.spin) < animation.flipAt
         );
         const index =
           !holdingStill && (animationRef.current || restingRef.current)
             ? pointerIndex(rotationRef.current, segments)
             : -1;
-        const label =
-          index >= 0 ? displayedEntriesRef.current[index]?.label ?? null : null;
+        const slot = index >= 0 ? displayedEntriesRef.current[index] : undefined;
+        const label = slot ? slot.label || String(index + 1) : null;
         const key = holdingStill ? HOLDING_STILL : label;
         if (key !== pointerLabelRef.current) {
           pointerLabelRef.current = key;
@@ -428,6 +432,11 @@ export function WheelStage({
       measure
     );
   }, [count, displayedEntries, measure, wheelPx]);
+  const single = useMemo(
+    () => (count === 1 ? fitSingleLabel(displayedEntries[0].label, wheelPx, measure) : null),
+    [count, displayedEntries, measure, wheelPx]
+  );
+  hasNumbersRef.current = Boolean(single?.numbered || fitted?.labels.some((label) => label?.numbered));
 
   const segments = useMemo(() => {
     if (count === 0) {
@@ -452,31 +461,38 @@ export function WheelStage({
 
   const labels = useMemo(() => {
     if (count === 1) {
-      const text = fitSingleLabel(displayedEntries[0].label, wheelPx, measure);
-      return text ? (
+      if (!single) return null;
+      const flipped = isLabelFlipped(0, 1, flipRotation);
+      return (
         <text
           x={0}
           y={SINGLE_LABEL_Y}
+          data-wheel-number={single.numbered ? "" : undefined}
           transform={
-            isLabelFlipped(0, 1, flipRotation) ? `rotate(180 0 ${SINGLE_LABEL_Y})` : undefined
+            single.numbered
+              ? `rotate(${uprightAngle(flipRotation)} 0 ${SINGLE_LABEL_Y})`
+              : flipped
+                ? `rotate(180 0 ${SINGLE_LABEL_Y})`
+                : undefined
           }
           textAnchor="middle"
           dominantBaseline="central"
           fontSize={SINGLE_LABEL_SIZE}
           fontWeight={600}
-          fill={COLOR.ink}
+          fill={single.numbered ? COLOR.numberInk : COLOR.ink}
+          style={single.numbered ? { fontVariantNumeric: "tabular-nums" } : undefined}
         >
-          {text}
+          {single.text}
         </text>
-      ) : null;
+      );
     }
     if (!fitted) return null;
     const sweep = 360 / count;
     return displayedEntries.map((entry, index) => {
-      const text = fitted.labels[index]?.text;
-      if (!text) return null;
+      const label = fitted.labels[index];
+      if (!label) return null;
       const mid = sweep * (index + 0.5);
-      const [x, y] = polar(mid, WHEEL_RADIUS - LABEL_PAD);
+      const [x, y] = polar(mid, label.numbered ? label.radius : WHEEL_RADIUS - LABEL_PAD);
       const flipped = isLabelFlipped(index, count, flipRotation);
       const highlighted = highlightIndex === index;
       return (
@@ -484,19 +500,21 @@ export function WheelStage({
           key={entry.id}
           x={x}
           y={y}
-          transform={`rotate(${flipped ? mid + 90 : mid - 90} ${x} ${y})`}
-          textAnchor={flipped ? "start" : "end"}
+          data-wheel-number={label.numbered ? "" : undefined}
+          transform={`rotate(${labelAngle(index, count, flipRotation, label.numbered)} ${x} ${y})`}
+          textAnchor={label.numbered ? "middle" : flipped ? "start" : "end"}
           dominantBaseline="central"
           fontSize={fitted.fontSize}
           fontWeight={600}
-          fill={highlighted ? COLOR.winnerInk : COLOR.ink}
+          fill={highlighted ? COLOR.winnerInk : label.numbered ? COLOR.numberInk : COLOR.ink}
           opacity={hasHighlight && !highlighted ? 0.4 : 1}
+          style={label.numbered ? { fontVariantNumeric: "tabular-nums" } : undefined}
         >
-          {text}
+          {label.text}
         </text>
       );
     });
-  }, [displayedEntries, count, fitted, flipRotation, highlightIndex, hasHighlight, measure, wheelPx]);
+  }, [displayedEntries, count, fitted, single, flipRotation, highlightIndex, hasHighlight]);
 
   return (
     <div className="flex h-full w-full items-center justify-center p-4">

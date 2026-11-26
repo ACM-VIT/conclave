@@ -1,13 +1,18 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { tmpdir } from "node:os";
+import { availableParallelism, tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { after, before, describe, test as nodeTest } from "node:test";
 import { fileURLToPath } from "node:url";
 
+const registered = [];
+const test = (name, body) => registered.push({ name, body });
+const SUITE = "SFU deploy state";
+
 const scriptsDir = fileURLToPath(new URL(".", import.meta.url));
+const sfuDir = fileURLToPath(new URL("../packages/sfu/", import.meta.url));
 const OLD_CONTAINER = "old-sfu-a";
 const DATA = "/app/packages/sfu/data";
 const MINIMUM_POWERSHELL = [7, 4];
@@ -26,8 +31,16 @@ if [[ "$1" == "compose" ]]; then
             -c) script="\${args[j + 1]}"; rest=("\${args[@]:j + 2}"); break ;;
           esac
         done
-        [[ -n "$script" ]] || exit 0
-        if [[ -s "$STAGING_PATH_FILE" ]]; then
+        if [[ -z "$script" ]]; then
+          [[ "$FAKE_FAIL_AT" == ownership ]] && exit 1
+          [[ "$FAKE_FAIL_AT" == signal ]] && kill -TERM "$PPID"
+          if [[ "$FAKE_FAIL_AT" == int-ownership ]]; then kill -INT -- "-$(ps -o pgid= -p $$ | tr -d ' ')"; sleep 5; exit 0; fi
+          exit 0
+        fi
+        [[ "$FAKE_FAIL_AT" == probe && -f "$FAKE_STOPPED" && "$script" == *"layerDatabase.ts probe"* ]] && exit 1
+        [[ "$FAKE_FAIL_AT" == carry && "$script" == *"layerDatabase.ts consolidate"* ]] && exit 1
+        [[ "$FAKE_FAIL_AT" == publish && "$script" == *"staged copy"* ]] && exit 1
+        if [[ -s "$STAGING_PATH_FILE" && "$script" == *payload.tar* ]]; then
           staging="$(cat "$STAGING_PATH_FILE")"
           ls -ld "$staging" | cut -c1-10 >> "$STAGING_MODES"
           for file in "$staging"/*; do ls -l "$file" | cut -c1-10 >> "$STAGING_MODES"; done
@@ -35,6 +48,32 @@ if [[ "$1" == "compose" ]]; then
         script="\${script//\\/var\\/lib\\/conclave\\/recordings/$FAKE_VOLUME}"
         script="\${script//\\$\\$/1}"
         [[ -n "$FAKE_FAIL_UNPACK" ]] && script="\${script//tar -xf /tar -xf \/dev\/null\/unpack-fails }"
+        if [[ "$FAKE_KILL_AT_PUBLISH" == before ]]; then
+          script="$(printf '%s' "$script" | perl -pe 's/(?:mv|ln) "\\$incoming\\/db" "\\$target"/kill -KILL \\$\\$/')"
+        elif [[ "$FAKE_KILL_AT_PUBLISH" == after ]]; then
+          script='publish_then_die() { "$@"; kill -KILL $$; }; '"$(printf '%s' "$script" | perl -pe 's/((?:mv|ln) "\\$incoming\\/db)/publish_then_die $1/')"
+        fi
+        cd "$FAKE_SFU_DIR" || exit 1
+        export CONCLAVE_SQLITE_PATH="\${FAKE_NEW_SQLITE_PATH:-$FAKE_VOLUME/conclave.sqlite}"
+        if [[ "$script" != *payload.tar* ]]; then
+          CONCLAVE_FALLBACK_IMPORT_DIR="$FAKE_IMAGE_IMPORT_DIR" sh -c "$script" "\${rest[@]}"
+          code=$?
+          [[ $code == 0 && "$FAKE_RESTART_AT" == probe && -f "$FAKE_STOPPED" && "$script" == *"layerDatabase.ts probe"* ]] && : > "$FAKE_RESTARTED"
+          exit $code
+        fi
+        if [[ "$script" == *"layerDatabase.ts consolidate"* && -n "$FAKE_LINK_FROM" ]]; then
+          rm -rf "$FAKE_LINK_FROM" && ln -s "$FAKE_LINK_TO" "$FAKE_LINK_FROM"
+        fi
+        if [[ -z "$FAKE_KILL_TRANSFER$FAKE_CORRUPT" ]]; then
+          payload="$PAYLOAD_DIR/$(ls "$PAYLOAD_DIR" | wc -l | tr -d ' ').tar"
+          cat > "$payload"
+          CONCLAVE_FALLBACK_IMPORT_DIR="$FAKE_IMAGE_IMPORT_DIR" sh -c "$script" "\${rest[@]}" < "$payload"
+          code=$?
+          [[ $code == 0 && "$script" == *"layerDatabase.ts consolidate"* ]] && : > "$FAKE_CARRIED"
+          [[ $code == 0 && "$FAKE_RESTART_AT" == carry && "$script" == *"layerDatabase.ts consolidate"* ]] && : > "$FAKE_RESTARTED"
+          [[ $code == 0 && "$FAKE_RESTART_AT" == json-send && "$script" != *"layerDatabase.ts consolidate"* ]] && : > "$FAKE_RESTARTED"
+          exit $code
+        fi
         if [[ -n "$FAKE_KILL_TRANSFER" ]]; then
           fifo="$(dirname "$DOCKER_LOG")/transfer.fifo"
           mkfifo "$fifo"
@@ -42,7 +81,15 @@ if [[ "$1" == "compose" ]]; then
           receiver=$!
           exec 3> "$fifo"
           printf 'partial' >&3
-          sleep 0.5
+          observed=""
+          for _ in $(seq 1 400); do
+            for received in "$FAKE_IMAGE_IMPORT_DIR"/.incoming-*/payload.tar; do
+              if [[ -f "$received" && $(wc -c < "$received") -ge 7 ]] && grep -qF "/.incoming-" "$OWNERSHIP_LOG" 2>/dev/null; then observed="$received"; fi
+            done
+            [[ -n "$observed" ]] && break
+            sleep 0.05
+          done
+          [[ -n "$observed" ]] || { echo "the receiver never took ownership of its staging folder and part of the payload" >&2; kill -9 "$receiver"; exit 99; }
           kill -9 "$receiver"
           wait "$receiver" 2>/dev/null
           exec 3>&-
@@ -59,18 +106,53 @@ if [[ "$1" == "compose" ]]; then
           exit $?
         fi
         CONCLAVE_FALLBACK_IMPORT_DIR="$FAKE_IMAGE_IMPORT_DIR" exec sh -c "$script" "\${rest[@]}" ;;
-      stop) : > "$FAKE_STOPPED"; exit 0 ;;
+      stop) [[ "$FAKE_FAIL_AT" == stop ]] && exit 1; : > "$FAKE_STOPPED"; exit 0 ;;
       build|up|start) exit 0 ;;
     esac
   done
   exit 0
 fi
+if [[ "$1" == update ]]; then
+  case "$2:$FAKE_FAIL_AT" in
+    --restart=no:freeze-fails) exit 1 ;;
+    --restart=no:term-after-freeze) kill -TERM "$DEPLOY_PID" ;;
+    --restart=no:hup-after-freeze) kill -HUP "$DEPLOY_PID" ;;
+    --restart=no:int-after-freeze) kill -INT "$DEPLOY_PID" ;;
+    --restart=no:quit-after-freeze) kill -QUIT "$DEPLOY_PID" ;;
+    --restart=unless-stopped:term-during-restore|--restart=unless-stopped:int-during-restore)
+      if [[ ! -e "$DOCKER_LOG.signal" ]]; then
+        : > "$DOCKER_LOG.signal"
+        if [[ "$FAKE_FAIL_AT" == int-during-restore ]]; then
+          kill -INT -- "-$(ps -o pgid= -p $$ | tr -d ' ')"
+        else
+          kill -TERM "$DEPLOY_PID"
+        fi
+        sleep 0.2
+      fi ;;
+    --restart=unless-stopped:restore-fails)
+      if [[ ! -e "$DOCKER_LOG.signal" ]]; then : > "$DOCKER_LOG.signal"; exit 1; fi ;;
+  esac
+  if [[ "$2" == --restart=unless-stopped && "$FAKE_RESTART_AT" == restore ]]; then : > "$FAKE_RESTARTED"; fi
+fi
 case "$1" in
   inspect)
     if [[ "$*" == *WorkingDir* ]]; then printf '%s\n' "\${FAKE_WORKDIR-/app/packages/sfu}"; exit 0; fi
     if [[ "$*" == *Config.Env* ]]; then printf '%b' "$FAKE_ENV"; exit 0; fi
+    if [[ "$*" == *RestartPolicy* ]]; then echo "\${FAKE_RESTART_POLICY:-unless-stopped}"; exit 0; fi
+    if [[ -f "$FAKE_RESTARTED" ]]; then running=true; started="2026-11-25T09:30:00.000000000Z"
+    else
+      if [[ -f "$FAKE_STOPPED" ]]; then running="\${FAKE_RUNNING_AFTER_STOP:-false}"; else running="\${FAKE_RUNNING:-false}"; fi
+      if [[ -f "$FAKE_CARRIED" && -n "$FAKE_STARTED_AFTER_CARRY" ]]; then started="$FAKE_STARTED_AFTER_CARRY"
+      elif [[ -f "$FAKE_STOPPED" && -n "$FAKE_STARTED_AFTER_STOP" ]]; then started="$FAKE_STARTED_AFTER_STOP"
+      else started="$FAKE_STARTED_AT"; fi
+    fi
+    if [[ "$*" == *State.FinishedAt* ]]; then echo "$running $started $FAKE_FINISHED_AT"; exit 0; fi
+    if [[ "$*" == *State.Running* ]]; then echo "$running"; exit 0; fi
+    if [[ "$*" == *State.StartedAt* ]]; then echo "$started"; exit 0; fi
     exit 0 ;;
-  diff) printf '%b' "$FAKE_DIFF"; exit "\${FAKE_DIFF_STATUS:-0}" ;;
+  diff)
+    if [[ -f "$FAKE_STOPPED" && -n "$FAKE_DIFF_AFTER_STOP" ]]; then printf '%b' "$FAKE_DIFF_AFTER_STOP"; else printf '%b' "$FAKE_DIFF"; fi
+    exit "\${FAKE_DIFF_STATUS:-0}" ;;
   cp)
     name="\${2##*/}"
     failing="$FAKE_CP_FAIL"
@@ -80,6 +162,11 @@ case "$1" in
     source="$FAKE_FILES/$name"
     [[ -f "$FAKE_STOPPED" && -f "$FAKE_FILES_AFTER_STOP/$name" ]] && source="$FAKE_FILES_AFTER_STOP/$name"
     if [[ -f "$source" ]]; then cat "$source" > "$3"; else echo '[]' > "$3"; fi
+    command -v xattr > /dev/null && xattr -w com.apple.provenance fake-docker-cp "$3" 2> /dev/null
+    if [[ -f "$FAKE_STOPPED" ]]; then
+      [[ "$FAKE_RESTART_AT" == json-copy && "$name" == *.json ]] && : > "$FAKE_RESTARTED"
+      [[ "$FAKE_RESTART_AT" == sqlite-copy && "$name" != *.json ]] && : > "$FAKE_RESTARTED"
+    fi
     exit 0 ;;
 esac
 exit 0
@@ -106,6 +193,9 @@ const deployShell = readFileSync(join(scriptsDir, "deploy-sfu.sh"), "utf8");
 const deployPowerShell = readFileSync(join(scriptsDir, "deploy-sfu.ps1"), "utf8");
 const shellFunctions = /^[A-Za-z_][A-Za-z0-9_]*\(\) [{(]\n[\s\S]*?^[})]\n/gm;
 const powerShellFunctions = /^function [A-Za-z-]+ \{\n[\s\S]*?^\}\n/gm;
+const powerShellDefinitions = allDefinitions(deployPowerShell, powerShellFunctions);
+const restartGuardCompilation = /^    Add-Type -TypeDefinition @'\n[\s\S]*?^'@$/m;
+const restartGuardAssemblies = new Map();
 
 const versionOf = (binary) => {
   const probe = spawnSync(binary, ["-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.ToString()"], { encoding: "utf8" });
@@ -134,6 +224,7 @@ const harnesses = [
     source: () =>
       [
         "set -euo pipefail",
+        'export DEPLOY_PID="$$"',
         "COMPOSE=(docker compose -f docker-compose.sfu.yml)",
         allDefinitions(deployShell, shellFunctions),
         `if [[ -n "\${FIXED_STAMP:-}" ]]; then archive_stamp() { printf '%s' "$FIXED_STAMP"; }; fi`,
@@ -150,8 +241,9 @@ const harnesses = [
       [
         "Set-StrictMode -Version Latest",
         '$ErrorActionPreference = "Stop"',
+        '$env:DEPLOY_PID = [string]$PID',
         '$composeBaseArgs = @("compose", "-f", "docker-compose.sfu.yml")',
-        allDefinitions(deployPowerShell, powerShellFunctions),
+        powerShellDefinitions.replace(restartGuardCompilation, "    Add-Type -Path $env:RESTART_GUARD_ASSEMBLY"),
         "if ($env:FIXED_STAMP) { function Get-ArchiveStamp { return $env:FIXED_STAMP } }",
         "Start-SfuService -Service sfu-a -Url $env:SFU_HEALTH_URL",
       ].join("\n"),
@@ -162,7 +254,7 @@ const hostHasSha256sum = spawnSync("sh", ["-c", "command -v sha256sum"]).status 
 
 const run = (command, args, env) =>
   new Promise((resolve) => {
-    const child = spawn(command, args, { env });
+    const child = spawn(command, args, { env, detached: true });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => { stdout += chunk; });
@@ -206,11 +298,77 @@ const strayDirectories = (root, ownershipLog) => {
 };
 
 const listArchives = (serviceDir) =>
-  (existsSync(serviceDir) ? readdirSync(serviceDir).sort() : []).map((name) => {
+  (existsSync(serviceDir) ? readdirSync(serviceDir).filter((name) => !name.startsWith(".")).sort() : []).map((name) => {
     const path = join(serviceDir, name);
-    const files = readdirSync(path).sort();
-    return { name, files, bytes: Object.fromEntries(files.map((file) => [file, readFileSync(join(path, file))])), modes: [mode(path), ...files.map((file) => mode(join(path, file)))] };
+    const files = readdirSync(path).filter((file) => !file.startsWith(".")).sort();
+    const source = existsSync(join(path, ".source")) ? readFileSync(join(path, ".source"), "utf8").trim() : null;
+    return { name, files, source, bytes: Object.fromEntries(files.map((file) => [file, readFileSync(join(path, file))])), modes: [mode(path), ...files.map((file) => mode(join(path, file)))] };
   });
+
+const stagedArchives = (serviceDir) => (existsSync(serviceDir) ? readdirSync(serviceDir).filter((name) => name.startsWith(".staged-")).sort() : []);
+
+const WRITE_DATABASE = `const { DatabaseSync } = require("node:sqlite");
+const [path, mode, ids] = process.argv.slice(1);
+const db = new DatabaseSync(path);
+db.exec(mode === "wal" ? "PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0" : "PRAGMA journal_mode = DELETE");
+db.exec("CREATE TABLE meetings (id TEXT PRIMARY KEY)");
+for (const id of JSON.parse(ids)) db.prepare("INSERT INTO meetings (id) VALUES (?)").run(id);
+if (mode === "wal") process.kill(process.pid, "SIGKILL");
+db.close();`;
+
+const READ_DATABASE = `const { DatabaseSync } = require("node:sqlite");
+const db = new DatabaseSync(process.argv[1], { readOnly: true });
+process.stdout.write(JSON.stringify(db.prepare("SELECT id FROM meetings ORDER BY id").all().map((row) => row.id)));`;
+
+const sqliteFixtures = new Map();
+const sqliteFiles = (name, ids, { mode = "wal" } = {}) => {
+  const key = JSON.stringify([name, ids, mode]);
+  if (!sqliteFixtures.has(key)) sqliteFixtures.set(key, writeSqliteFixture(name, ids, mode));
+  return sqliteFixtures.get(key);
+};
+
+const writeSqliteFixture = (name, ids, mode) => {
+  const dir = mkdtempSync(join(tmpdir(), "deploy-sfu-db-"));
+  try {
+    const path = join(dir, "source.sqlite");
+    spawnSync(process.execPath, ["--no-warnings", "-e", WRITE_DATABASE, path, mode, JSON.stringify(ids)], { stdio: "ignore" });
+    const files = Object.fromEntries(["", "-wal"].filter((suffix) => existsSync(`${path}${suffix}`)).map((suffix) => [`${name}${suffix}`, readFileSync(`${path}${suffix}`)]));
+    assert.ok(files[name], `the fixture database ${name} was not written`);
+    if (mode === "wal") assert.ok(files[`${name}-wal`]?.length > 0, `the fixture ${name} kept no write-ahead log`);
+    return files;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+};
+
+const databaseRows = async (path) => {
+  const read = await run(process.execPath, ["--no-warnings", "-e", READ_DATABASE, path], process.env);
+  return read.status === 0 ? JSON.parse(read.stdout) : `unreadable: ${read.stderr.trim().split("\n").at(-1)}`;
+};
+
+const READ_CARRY_STAMP = `const { DatabaseSync } = require("node:sqlite");
+const db = new DatabaseSync(process.argv[1], { readOnly: true });
+const row = db.prepare("SELECT started_at FROM conclave_deploy_carry ORDER BY rowid DESC LIMIT 1").get();
+process.stdout.write(row ? row.started_at : "");`;
+
+const carryStamp = async (path) => {
+  const read = await run(process.execPath, ["--no-warnings", "-e", READ_CARRY_STAMP, path], process.env);
+  return read.status === 0 && read.stdout ? read.stdout : null;
+};
+
+const tarMembers = (archive) => {
+  const names = [];
+  for (let offset = 0; offset + 512 <= archive.length; ) {
+    const header = archive.subarray(offset, offset + 512);
+    if (header.every((byte) => byte === 0)) break;
+    const text = (start, length) => header.subarray(start, start + length).toString("utf8").replace(/\0.*$/s, "");
+    const size = Number.parseInt(text(124, 12).trim() || "0", 8);
+    const type = text(156, 1);
+    if (type !== "x" && type !== "g") names.push([text(345, 155), text(0, 100)].filter(Boolean).join("/"));
+    offset += 512 + Math.ceil(size / 512) * 512;
+  }
+  return names;
+};
 
 const replaceService = async (
   harness,
@@ -232,10 +390,27 @@ const replaceService = async (
     corrupt = false,
     containerEnv = "",
     workdir = "/app/packages/sfu",
+    volumeFiles = {},
+    newSqlitePath = "",
+    sharedVolume = "",
+    killAtPublish = "",
+    startedAt = "2026-11-25T08:00:00.000000000Z",
+    startedAfterStop = "",
+    startedAfterCarry = "",
+    runningAfterStop = false,
+    diffAfterStop = "",
+    linkFrom = "",
+    linkTo = "",
+    finishedAt = "2026-11-25T08:45:00.000000000Z",
+    restartAt = "",
+    failAt = "",
+    running = false,
   } = {},
 ) => {
   const dir = mkdtempSync(join(tmpdir(), "deploy-sfu-state-"));
+  let healthRequests = 0;
   const healthServer = createServer((req, res) => {
+    if (req.url === "/health") healthRequests += 1;
     const [code, body] = healthAnswers[health]("sfu-a", deployId);
     res.writeHead(req.url === "/health" ? code : 404, { "content-type": "application/json" });
     res.end(JSON.stringify(body));
@@ -245,6 +420,7 @@ const replaceService = async (
     const bin = join(dir, "bin");
     mkdirSync(bin);
     mkdirSync(join(dir, "tmp"));
+    mkdirSync(join(dir, "payloads"));
     writeFileSync(join(bin, "docker"), FAKE_DOCKER);
     writeFileSync(join(bin, "chown"), FAKE_CHOWN);
     if (!hostHasSha256sum) writeFileSync(join(bin, "sha256sum"), SHA256SUM_SHIM);
@@ -253,9 +429,9 @@ const replaceService = async (
     writeFiles(join(dir, "files-after-stop"), filesAfterStop);
     const log = join(dir, "docker.log");
     writeFileSync(log, "");
-    const volume = join(dir, "volume");
+    const volume = sharedVolume || join(dir, "volume");
     const importDir = sharedImportDir || join(dir, "image-import-dir");
-    mkdirSync(volume);
+    writeFiles(volume, volumeFiles);
     writeFileSync(join(dir, harness.file), harness.source());
     const result = await run(harness.command, [...harness.args, join(dir, harness.file)], {
       PATH: `${bin}:${process.env.PATH}`,
@@ -274,13 +450,31 @@ const replaceService = async (
       FAKE_STOPPED: join(dir, "stopped"),
       FAKE_CORRUPT: corrupt ? "kept" : "",
       FAKE_VOLUME: volume,
+      FAKE_SFU_DIR: sfuDir,
+      PAYLOAD_DIR: join(dir, "payloads"),
+      FAKE_NEW_SQLITE_PATH: newSqlitePath,
+      FAKE_KILL_AT_PUBLISH: killAtPublish,
+      FAKE_STARTED_AT: startedAt,
+      FAKE_STARTED_AFTER_STOP: startedAfterStop,
+      FAKE_STARTED_AFTER_CARRY: startedAfterCarry,
+      FAKE_RUNNING_AFTER_STOP: runningAfterStop ? "true" : "",
+      FAKE_DIFF_AFTER_STOP: diffAfterStop,
+      FAKE_CARRIED: join(dir, "carried"),
+      FAKE_LINK_FROM: linkFrom,
+      FAKE_FINISHED_AT: finishedAt,
+      FAKE_RESTART_AT: restartAt,
+      FAKE_FAIL_AT: failAt,
+      FAKE_RUNNING: running ? "true" : "",
+      FAKE_RESTARTED: join(dir, "restarted"),
+      FAKE_LINK_TO: linkTo,
       FAKE_IMAGE_IMPORT_DIR: imageImportDir ? importDir : "",
       STAGING_PATH_FILE: join(dir, "staging-path"),
       STAGING_MODES: join(dir, "staging-modes"),
       SFU_HEALTH_URL: healthUrl,
       SFU_DEPLOY_ID: deployId,
-      SFU_HEALTH_TIMEOUT_SECONDS: "3",
+      SFU_HEALTH_TIMEOUT_SECONDS: health === "deployed" ? "30" : "1",
       SFU_HEALTH_POLL_SECONDS: "1",
+      RESTART_GUARD_ASSEMBLY: restartGuardAssemblies.get(harness.command) ?? "",
       FIXED_STAMP: fixedStamp,
       FAKE_KILL_TRANSFER: killTransfer ? "1" : "",
       FAKE_FAIL_UNPACK: failUnpack ? "1" : "",
@@ -290,11 +484,14 @@ const replaceService = async (
     const listing = (path) => (existsSync(path) ? readdirSync(path).sort() : []);
     const containerDir = join(importDir, "sfu-a");
     const archives = listArchives(containerDir);
+    const staged = stagedArchives(containerDir);
     const latest = archives.at(-1);
     return {
       ...result,
+      healthRequests,
       calls: readFileSync(log, "utf8").trim().split("\n").filter(Boolean),
       archives,
+      staged,
       imported: latest?.files ?? [],
       importedBytes: (name) => latest?.bytes[name] ?? Buffer.alloc(0),
       importModes: latest ? [mode(importDir), mode(containerDir), ...latest.modes] : [],
@@ -305,6 +502,11 @@ const replaceService = async (
         : [],
       stagingModes: existsSync(join(dir, "staging-modes")) ? readFileSync(join(dir, "staging-modes"), "utf8").trim().split("\n") : [],
       volumeEntries: listing(volume),
+      visibleVolumeEntries: listing(volume).filter((name) => !name.startsWith(".")),
+      ownershipGrants: existsSync(join(dir, "ownership.log")) ? readFileSync(join(dir, "ownership.log"), "utf8").trim().split("\n").filter(Boolean) : [],
+      volumeRows: Object.fromEntries(await Promise.all(listing(volume).filter((name) => /\.(sqlite|db)$/.test(name)).map(async (name) => [name, await databaseRows(join(volume, name))]))),
+      payloadMembers: listing(join(dir, "payloads")).map((name) => tarMembers(readFileSync(join(dir, "payloads", name)))),
+      volumeFiles: Object.fromEntries(listing(volume).filter((name) => statSync(join(volume, name)).isFile()).map((name) => [name, { text: readFileSync(join(volume, name), "utf8"), mode: mode(join(volume, name)) }])),
     };
   } finally {
     await close(healthServer);
@@ -319,9 +521,15 @@ const assertChangedInTransit = (corruptions) =>
   );
 
 const callIndex = (calls, pattern) => calls.findIndex((call) => pattern.test(call));
-const receives = (calls) => calls.filter((call) => /^compose .* run .*--entrypoint sh sfu-a -c /.test(call));
+const receives = (calls) => calls.filter((call) => /^compose .* run .*--entrypoint sh sfu-a -c .*payload\.tar/.test(call));
 const stopped = (calls) => callIndex(calls, /^compose .* stop sfu-a$/) >= 0;
 const wrote = (name) => `A ${DATA}/${name}\\n`;
+const leftStoppedAndRestored = (calls) => {
+  const froze = calls.indexOf(`update --restart=no ${OLD_CONTAINER}`);
+  const stop = callIndex(calls, /^compose .* stop sfu-a$/);
+  const restored = calls.lastIndexOf(`update --restart=unless-stopped ${OLD_CONTAINER}`);
+  assert.ok(froze >= 0 && stop > froze && restored > stop && callIndex(calls, / up -d /) === -1, calls.join("\n"));
+};
 
 const BINARY = Buffer.concat([
   Buffer.from('{"id":"A","note":"'),
@@ -358,7 +566,7 @@ for (const { binary, version } of powerShells) {
 for (const harness of harnesses) {
   const shell = harness.name;
 
-  test(`${shell}: never stops the old SFU unless its fallback files arrived byte for byte`, async () => {
+  test(`${shell}: never starts the new SFU unless the old one's fallback files arrived byte for byte`, async () => {
     const files = { "scheduling.json": BINARY, "scheduled-meetings.json": Buffer.from("[]\n") };
     const { status, calls, stderr, imported, importedBytes } = await replaceService(harness, {
       diff: wrote("scheduling.json") + wrote("scheduled-meetings.json"),
@@ -368,7 +576,7 @@ for (const harness of harnesses) {
       assert.deepEqual(imported, ["scheduled-meetings.json", "scheduling.json"]);
       for (const [name, content] of Object.entries(files)) assert.ok(importedBytes(name).equals(content), `${name} changed in transit`);
     } else {
-      assert.equal(stopped(calls), false, `stopped the old SFU and then failed:\n${stderr}`);
+      assert.equal(callIndex(calls, / up -d /), -1, `started the new SFU after a failed copy:\n${stderr}`);
     }
   });
 
@@ -382,31 +590,41 @@ for (const harness of harnesses) {
     continue;
   }
 
-  test(`${shell}: copies and verifies the old SFU's fallback files before stopping it, and starts the new one only after`, async () => {
-    const { status, calls, stderr } = await replaceService(harness, { diff: `C ${DATA}\\n${wrote("scheduling.json")}` });
-    assert.equal(status, 0, stderr);
-    const copy = callIndex(calls, new RegExp(`^cp ${OLD_CONTAINER}:${DATA}/scheduling\\.json `));
-    const receive = calls.indexOf(receives(calls)[0]);
-    const stop = callIndex(calls, /^compose .* stop sfu-a$/);
-    const start = callIndex(calls, /^compose .* up -d sfu-a$/);
-    assert.ok(copy >= 0 && receive > copy && stop > receive && start > stop, calls.join("\n"));
-  });
-
-  test(`${shell}: after the stop, sends the files again only when one changed`, async () => {
-    const unchanged = await replaceService(harness, { diff: wrote("scheduling.json"), files: { "scheduling.json": "[1]" } });
-    assert.equal(unchanged.status, 0, unchanged.stderr);
-    assert.equal(receives(unchanged.calls).length, 1, unchanged.calls.join("\n"));
-
-    const changed = await replaceService(harness, {
-      diff: wrote("scheduling.json"),
+  test(`${shell}: keeps the old SFU from restarting, stops it, and only then copies its fallback files once, as they were when it stopped`, async () => {
+    const { status, calls, stderr, archives } = await replaceService(harness, {
+      diff: `C ${DATA}\\n${wrote("scheduling.json")}`,
       files: { "scheduling.json": "[1]" },
       filesAfterStop: { "scheduling.json": "[1,2]" },
     });
-    assert.equal(changed.status, 0, changed.stderr);
-    const sends = receives(changed.calls).map((call) => changed.calls.indexOf(call));
-    assert.equal(sends.length, 2, changed.calls.join("\n"));
-    assert.ok(sends[1] > callIndex(changed.calls, /^compose .* stop sfu-a$/), changed.calls.join("\n"));
-    assert.deepEqual(changed.archives.map((archive) => archive.bytes["scheduling.json"].toString()), ["[1]", "[1,2]"]);
+    assert.equal(status, 0, stderr);
+    const froze = calls.indexOf(`update --restart=no ${OLD_CONTAINER}`);
+    const stop = callIndex(calls, /^compose .* stop sfu-a$/);
+    const copies = calls.filter((call) => call.startsWith(`cp ${OLD_CONTAINER}:`)).map((call) => calls.indexOf(call));
+    const sends = receives(calls).map((call) => calls.indexOf(call));
+    const restored = calls.indexOf(`update --restart=unless-stopped ${OLD_CONTAINER}`);
+    const start = callIndex(calls, /^compose .* up -d sfu-a$/);
+    assert.ok(froze >= 0 && stop > froze && copies.length === 1 && copies[0] > stop && sends.length === 1 && sends[0] > copies[0] && restored > sends[0] && start > restored, calls.join("\n"));
+    assert.deepEqual(archives.map((archive) => archive.bytes["scheduling.json"].toString()), ["[1,2]"]);
+  });
+
+  test(`${shell}: publishes the JSON fallback files only once every check after the copy has passed, and a retry discards an earlier unpublished copy`, async () => {
+    const shared = mkdtempSync(join(tmpdir(), "deploy-sfu-import-"));
+    try {
+      const options = { sharedImportDir: shared, diff: wrote("scheduling.json") };
+      const aborted = await replaceService(harness, { ...options, files: { "scheduling.json": '["copied before the restart"]' }, restartAt: "json-send" });
+      assert.notEqual(aborted.status, 0);
+      assert.deepEqual(aborted.archives, [], "a copy from a deploy that refused was published");
+      assert.equal(aborted.staged.length, 1, aborted.calls.join("\n"));
+      const retried = await replaceService(harness, { ...options, files: { "scheduling.json": '["as it stopped"]' }, startedAt: "2026-11-25T09:30:00.000000000Z", finishedAt: "2026-11-25T10:00:00.000000000Z" });
+      assert.equal(retried.status, 0, retried.stderr);
+      assert.deepEqual(retried.archives.map((archive) => archive.bytes["scheduling.json"].toString()), ['["as it stopped"]']);
+      assert.deepEqual(retried.staged, []);
+      assert.equal(retried.archives[0].source, `${OLD_CONTAINER} 2026-11-25T09:30:00.000000000Z_2026-11-25T10:00:00.000000000Z`);
+      const publish = callIndex(retried.calls, /^compose .* run .*--entrypoint sh sfu-a -c .*staged copy/);
+      assert.ok(publish > callIndex(retried.calls, /^compose .* stop sfu-a$/) && callIndex(retried.calls, /^compose .* up -d sfu-a$/) > publish, retried.calls.join("\n"));
+    } finally {
+      rmSync(shared, { recursive: true, force: true });
+    }
   });
 
   test(`${shell}: a later deploy keeps the copy an earlier deploy saved`, async () => {
@@ -434,7 +652,7 @@ for (const harness of harnesses) {
       const options = { sharedImportDir: shared, diff: wrote("scheduling.json"), files: { "scheduling.json": '["kept"]' } };
       const killed = await replaceService(harness, { ...options, killTransfer: true });
       assert.notEqual(killed.status, 0);
-      assert.equal(stopped(killed.calls), false, killed.calls.join("\n"));
+      leftStoppedAndRestored(killed.calls);
       assert.deepEqual(killed.archives, []);
       const retried = await replaceService(harness, options);
       assert.equal(retried.status, 0, retried.stderr);
@@ -446,11 +664,11 @@ for (const harness of harnesses) {
     }
   });
 
-  test(`${shell}: a transfer that fails while unpacking leaves no staging folder and stops before anything is stopped`, async () => {
+  test(`${shell}: a transfer that fails while unpacking leaves no staging folder and never starts the new SFU`, async () => {
     const { status, calls, archives, importLeftovers, stderr } = await replaceService(harness, { diff: wrote("scheduling.json"), failUnpack: true });
     assert.notEqual(status, 0);
     assert.match(stderr, /unpack-fails/);
-    assert.equal(stopped(calls), false, calls.join("\n"));
+    leftStoppedAndRestored(calls);
     assert.deepEqual(archives, []);
     assert.deepEqual(importLeftovers, []);
   });
@@ -481,7 +699,7 @@ for (const harness of harnesses) {
     });
   });
 
-  test(`${shell}: never replaces a saved copy, and stops before anything is stopped`, async () => {
+  test(`${shell}: never replaces a saved copy, and never starts the new SFU`, async () => {
     const shared = mkdtempSync(join(tmpdir(), "deploy-sfu-import-"));
     try {
       const options = { sharedImportDir: shared, fixedStamp: "20261124T000000000Z", diff: wrote("scheduling.json") };
@@ -490,7 +708,7 @@ for (const harness of harnesses) {
       const second = await replaceService(harness, { ...options, files: { "scheduling.json": '["second"]' } });
       assert.notEqual(second.status, 0);
       assert.match(second.stderr, /never replaced/);
-      assert.equal(stopped(second.calls), false, second.calls.join("\n"));
+      leftStoppedAndRestored(second.calls);
       assert.deepEqual(second.archives.map((archive) => archive.bytes["scheduling.json"].toString()), ['["first"]']);
       assert.deepEqual(second.importLeftovers, []);
     } finally {
@@ -499,17 +717,20 @@ for (const harness of harnesses) {
   });
 
   test(`${shell}: stops a replacement that never answers healthy as this deploy`, async () => {
-    for (const health of ["unavailable", "an earlier deploy", "another SFU", "an older image"]) {
-      const { status, calls, stderr } = await replaceService(harness, { health });
+    const answers = ["unavailable", "an earlier deploy", "another SFU", "an older image"];
+    const outcomes = await Promise.all(answers.map((health) => replaceService(harness, { health })));
+    outcomes.forEach(({ status, calls, stderr, healthRequests }, at) => {
+      const health = answers[at];
       assert.notEqual(status, 0, `${health} was accepted`);
       const start = callIndex(calls, /^compose .* up -d sfu-a$/);
       const stop = calls.findLastIndex((call) => /^compose .* stop sfu-a$/.test(call));
       assert.ok(start >= 0 && stop > start, `${health}\n${calls.join("\n")}`);
       assert.match(stderr, /did not answer healthy/, health);
-    }
+      assert.ok(healthRequests >= 1, `${health}: the deploy never asked for health, so the answer was never checked`);
+    });
   });
 
-  test(`${shell}: a payload that arrives changed stops the deploy before anything is stopped`, async () => {
+  test(`${shell}: a payload that arrives changed never starts the new SFU and leaves the old one stopped with its restart policy back`, async () => {
     const { status, calls, imported, corruptions } = await replaceService(harness, {
       diff: wrote("scheduling.json"),
       files: { "scheduling.json": "[\"kept\"]" },
@@ -517,7 +738,7 @@ for (const harness of harnesses) {
     });
     assertChangedInTransit(corruptions);
     assert.notEqual(status, 0);
-    assert.equal(stopped(calls), false, calls.join("\n"));
+    leftStoppedAndRestored(calls);
     assert.equal(callIndex(calls, / up -d /), -1, calls.join("\n"));
     assert.deepEqual(imported, []);
   });
@@ -543,10 +764,10 @@ for (const harness of harnesses) {
     assert.ok(callIndex(calls, /^chown -R node:node /) >= 0, calls.join("\n"));
   });
 
-  test(`${shell}: an image that does not name the import folder stops the deploy before anything is stopped`, async () => {
+  test(`${shell}: an image that does not name the import folder never starts the new SFU and leaves the old one stopped with its restart policy back`, async () => {
     const { status, calls, imported, volumeEntries } = await replaceService(harness, { diff: wrote("scheduling.json"), imageImportDir: false });
     assert.notEqual(status, 0);
-    assert.equal(stopped(calls), false, calls.join("\n"));
+    leftStoppedAndRestored(calls);
     assert.equal(callIndex(calls, / up -d /), -1, calls.join("\n"));
     assert.deepEqual([...imported, ...volumeEntries], []);
   });
@@ -559,13 +780,13 @@ for (const harness of harnesses) {
     ]);
   });
 
-  test(`${shell}: a failed copy stops the deploy before anything is stopped`, async () => {
+  test(`${shell}: a failed copy never starts the new SFU and leaves the old one stopped with its restart policy back`, async () => {
     const { status, calls } = await replaceService(harness, {
       diff: wrote("scheduling.json") + wrote("scheduled-meetings.json"),
       cpFail: "scheduled-meetings.json",
     });
     assert.notEqual(status, 0);
-    assert.equal(stopped(calls), false, calls.join("\n"));
+    leftStoppedAndRestored(calls);
     assert.equal(callIndex(calls, / up -d /), -1, calls.join("\n"));
   });
 
@@ -602,6 +823,341 @@ for (const harness of harnesses) {
     assert.equal(importedBytes("scheduled-meetings.json").toString(), "[\"configured\"]");
   });
 
+  test(`${shell}: carries a database the old SFU kept inside its container onto the volume as one file, as it was when the old SFU stopped`, async () => {
+    const legacy = "/var/lib/conclave/conclave.sqlite";
+    const cases = {
+      "the old image's own setting, with a write-ahead log": { containerEnv: `CONCLAVE_SQLITE_PATH=${legacy}\\n`, layerDir: "/var/lib/conclave", source: "conclave.sqlite", mode: "wal" },
+      "no setting at all": { containerEnv: "", layerDir: DATA, source: "conclave.sqlite", mode: "delete" },
+      "a relative recordings setting, with a leftover journal": { containerEnv: "RECORDING_STORAGE_PATH= ./recordings \\n", layerDir: "/app/packages/sfu/recordings", source: "conclave.sqlite", mode: "delete", journal: true },
+      "one store's own setting": { containerEnv: "SCHEDULED_WEBINARS_SQLITE_PATH=../state/webinars.db\\nCONCLAVE_SQLITE_PATH=/var/lib/conclave/recordings/conclave.sqlite\\n", layerDir: "/app/packages/state", source: "webinars.db", mode: "wal" },
+    };
+    const runs = await Promise.all(
+      Object.values(cases).map(({ containerEnv, layerDir, source, mode, journal = false }) => {
+        const atStop = { ...sqliteFiles(source, ["early", "at stop"], { mode }), ...(journal ? { [`${source}-journal`]: Buffer.alloc(0) } : {}) };
+        const diff = Object.keys(atStop).map((file) => `A ${layerDir}/${file}\\n`).join("");
+        return replaceService(harness, { containerEnv, diff, files: sqliteFiles(source, ["early"], { mode }), filesAfterStop: atStop });
+      }),
+    );
+    const outcomes = Object.fromEntries(
+      Object.keys(cases).map((name, at) => {
+        const run = runs[at];
+        const copied = callIndex(run.calls, /^cp .*:\S*(conclave\.sqlite|webinars\.db) /);
+        return [name, {
+          status: run.status,
+          stderr: run.status === 0 ? "" : run.stderr,
+          volume: run.volumeEntries,
+          mode: run.volumeFiles["conclave.sqlite"]?.mode,
+          rows: run.volumeRows["conclave.sqlite"],
+          copiedAfterStop: copied > callIndex(run.calls, /^compose .* stop sfu-a$/) && callIndex(run.calls, /^compose .* up -d sfu-a$/) > copied,
+        }];
+      }),
+    );
+    assert.deepEqual(outcomes, Object.fromEntries(Object.keys(cases).map((name) => [name, { status: 0, stderr: "", volume: ["conclave.sqlite"], mode: "600", rows: ["at stop", "early"], copiedAfterStop: true }])));
+  });
+
+  test(`${shell}: refuses before anything is stopped when a database inside the old container cannot be carried over`, async () => {
+    const legacy = `CONCLAVE_SQLITE_PATH=/var/lib/conclave/conclave.sqlite\\n`;
+    const inLayer = "A /var/lib/conclave/conclave.sqlite\\n";
+    const cases = {
+      "the volume already holds one": { options: { containerEnv: legacy, diff: inLayer, volumeFiles: { "conclave.sqlite": "kept" } }, reason: /already holds a database/ },
+      "the volume holds a write-ahead log": { options: { containerEnv: legacy, diff: inLayer, volumeFiles: { "conclave.sqlite-wal": "kept" } }, reason: /already holds a database/ },
+      "the new place is off the recordings volume": { options: { containerEnv: legacy, diff: inLayer, newSqlitePath: "/nonexistent-conclave-folder/conclave.sqlite" }, reason: /does not resolve onto the recordings volume/ },
+      "two databases would land in one place": {
+        options: { containerEnv: "SCHEDULING_SQLITE_PATH=/srv/scheduling.sqlite\\n", diff: `A /srv/scheduling.sqlite\\n${wrote("conclave.sqlite")}` },
+        reason: /more than one database/,
+      },
+    };
+    const runs = await Promise.all(Object.values(cases).map(({ options }) => replaceService(harness, options)));
+    Object.entries(cases).forEach(([name, { options, reason }], at) => {
+      const run = runs[at];
+      assert.notEqual(run.status, 0, name);
+      assert.match(run.stderr, reason, name);
+      assert.match(run.stderr, /nothing was stopped/, name);
+      assert.equal(stopped(run.calls), false, `${name}\n${run.calls.join("\n")}`);
+      assert.equal(callIndex(run.calls, /^cp /), -1, `${name}\n${run.calls.join("\n")}`);
+      assert.deepEqual(run.archives, [], name);
+      for (const [file, text] of Object.entries(options.volumeFiles ?? {})) assert.equal(run.volumeFiles[file]?.text, text, name);
+    });
+  });
+
+  test(`${shell}: creates the folders a database path on the volume names, as the stores do, and refuses only a folder that cannot take files`, async () => {
+    const volume = realpathSync(mkdtempSync(join(tmpdir(), "deploy-sfu-volume-")));
+    try {
+      const options = {
+        containerEnv: "CONCLAVE_SQLITE_PATH=/var/lib/conclave/conclave.sqlite\\n",
+        diff: "A /var/lib/conclave/conclave.sqlite\\nA /var/lib/conclave/conclave.sqlite-wal\\n",
+        files: sqliteFiles("conclave.sqlite", ["kept"]),
+        sharedVolume: volume,
+      };
+      const nested = await replaceService(harness, { ...options, newSqlitePath: join(volume, "state", "deeper", "conclave.sqlite") });
+      assert.equal(nested.status, 0, nested.stderr);
+      assert.deepEqual(await databaseRows(join(volume, "state", "deeper", "conclave.sqlite")), ["kept"]);
+      assert.deepEqual([mode(join(volume, "state")), mode(join(volume, "state", "deeper"))], ["700", "700"]);
+      for (const folder of [join(volume, "state"), join(volume, "state", "deeper")]) {
+        assert.ok(nested.ownershipGrants.includes(`node:node one ${folder}`), `${folder} was not handed to node:\n${nested.ownershipGrants.join("\n")}`);
+      }
+      if (process.getuid?.() !== 0) {
+        mkdirSync(join(volume, "locked"), { mode: 0o555 });
+        const locked = await replaceService(harness, { ...options, newSqlitePath: join(volume, "locked", "inner", "conclave.sqlite") });
+        assert.notEqual(locked.status, 0);
+        assert.match(locked.stderr, /nearest folder that exists cannot take new files/);
+        assert.equal(stopped(locked.calls), false, locked.calls.join("\n"));
+        assert.deepEqual(readdirSync(join(volume, "locked")), []);
+      }
+    } finally {
+      chmodSync(volume, 0o700);
+      if (existsSync(join(volume, "locked"))) chmodSync(join(volume, "locked"), 0o700);
+      rmSync(volume, { recursive: true, force: true });
+    }
+  });
+
+  test(`${shell}: a database copy that fails, arrives changed, fails to unpack or is not a sound database leaves the new SFU unstarted and the volume untouched`, async () => {
+    const options = { containerEnv: "CONCLAVE_SQLITE_PATH=/var/lib/conclave/conclave.sqlite\\n", diff: "A /var/lib/conclave/conclave.sqlite\\nA /var/lib/conclave/conclave.sqlite-wal\\n", files: sqliteFiles("conclave.sqlite", ["kept"]) };
+    const kinds = {
+      "copy fails": { cpFailAfterStop: "conclave.sqlite" },
+      "arrives changed": { corrupt: true },
+      "fails to unpack": { failUnpack: true },
+      "not a sound database": { files: { "conclave.sqlite": Buffer.from("SQLite format 3\0 but not really a database"), "conclave.sqlite-wal": Buffer.from("kept") } },
+    };
+    const runs = await Promise.all(Object.values(kinds).map((extra) => replaceService(harness, { ...options, ...extra })));
+    assertChangedInTransit(runs[1].corruptions);
+    Object.keys(kinds).forEach((name, at) => {
+      const run = runs[at];
+      assert.notEqual(run.status, 0, name);
+      assert.ok(stopped(run.calls), name);
+      assert.equal(callIndex(run.calls, / up -d /), -1, `${name}\n${run.calls.join("\n")}`);
+      assert.match(run.stderr, /start sfu-a/, name);
+      assert.deepEqual(run.visibleVolumeEntries, [], name);
+    });
+  });
+
+  test(`${shell}: a copy killed just before or just after it lands on the volume never blocks the retry, which finishes the carry`, async () => {
+    const options = {
+      containerEnv: "CONCLAVE_SQLITE_PATH=/var/lib/conclave/conclave.sqlite\\n",
+      diff: "A /var/lib/conclave/conclave.sqlite\\nA /var/lib/conclave/conclave.sqlite-wal\\n",
+      files: sqliteFiles("conclave.sqlite", ["kept", "only in the log"]),
+    };
+    const outcomes = {};
+    for (const when of ["before", "after"]) {
+      const volume = mkdtempSync(join(tmpdir(), "deploy-sfu-volume-"));
+      try {
+        const killed = await replaceService(harness, { ...options, sharedVolume: volume, killAtPublish: when });
+        const retried = await replaceService(harness, { ...options, sharedVolume: volume });
+        outcomes[when] = {
+          killedFailed: killed.status !== 0,
+          killedStartedNothing: callIndex(killed.calls, / up -d /) === -1,
+          retried: retried.status,
+          retriedError: retried.status === 0 ? "" : retried.stderr,
+          volume: retried.visibleVolumeEntries,
+          rows: retried.volumeRows["conclave.sqlite"],
+          retryCopied: callIndex(retried.calls, /^cp .*conclave\.sqlite /) >= 0,
+        };
+      } finally {
+        rmSync(volume, { recursive: true, force: true });
+      }
+    }
+    const landed = { killedFailed: true, killedStartedNothing: true, retried: 0, retriedError: "", volume: ["conclave.sqlite"], rows: ["kept", "only in the log"] };
+    assert.deepEqual(outcomes, { before: { ...landed, retryCopied: true }, after: { ...landed, retryCopied: false } });
+  });
+
+  test(`${shell}: checks the old container again after it stops, and carries what it holds then, whatever the check before the stop saw`, async () => {
+    const legacy = "CONCLAVE_SQLITE_PATH=/var/lib/conclave/conclave.sqlite\\n";
+    const inLayer = "A /var/lib/conclave/conclave.sqlite\\nA /var/lib/conclave/conclave.sqlite-wal\\n";
+    const first = ["kept"];
+    const later = ["kept", "written after the first copy"];
+    const scenarios = {
+      "ran again before this deploy looked": { first: { killAtPublish: "after" }, retry: { startedAt: "2026-11-25T09:30:00.000000000Z", files: sqliteFiles("conclave.sqlite", later) } },
+      "ran again between the check and the stop": { first: { killAtPublish: "after" }, retry: { startedAfterStop: "2026-11-25T09:30:00.000000000Z", filesAfterStop: sqliteFiles("conclave.sqlite", later) } },
+      "first wrote its database between the check and the stop": { retry: { diff: "", diffAfterStop: inLayer, filesAfterStop: sqliteFiles("conclave.sqlite", later) } },
+    };
+    const outcomes = {};
+    for (const [name, { first: firstRun, retry }] of Object.entries(scenarios)) {
+      const volume = mkdtempSync(join(tmpdir(), "deploy-sfu-volume-"));
+      try {
+        const base = { containerEnv: legacy, diff: inLayer, files: sqliteFiles("conclave.sqlite", first), sharedVolume: volume };
+        if (firstRun) assert.notEqual((await replaceService(harness, { ...base, ...firstRun })).status, 0, name);
+        const run = await replaceService(harness, { ...base, ...retry });
+        outcomes[name] = { status: run.status, stderr: run.status === 0 ? "" : run.stderr, rows: run.volumeRows["conclave.sqlite"], started: callIndex(run.calls, / up -d /) >= 0 };
+      } finally {
+        rmSync(volume, { recursive: true, force: true });
+      }
+    }
+    assert.deepEqual(outcomes, Object.fromEntries(Object.keys(scenarios).map((name) => [name, { status: 0, stderr: "", rows: later, started: true }])));
+  });
+
+  test(`${shell}: every way a deploy can end after the old SFU's restarts are turned off gives it its restart policy back and says whether it is still running`, async () => {
+    const base = {
+      containerEnv: "CONCLAVE_SQLITE_PATH=/var/lib/conclave/conclave.sqlite\\n",
+      diff: `${wrote("scheduling.json")}A /var/lib/conclave/conclave.sqlite\\nA /var/lib/conclave/conclave.sqlite-wal\\n`,
+      files: { "scheduling.json": "[1]", ...sqliteFiles("conclave.sqlite", ["kept"]) },
+    };
+    const steps = {
+      "turning off restarts fails after the update was sent": { failAt: "freeze-fails", running: true, state: "still running" },
+      "the stop fails": { failAt: "stop", running: true, state: "still running" },
+      "the ownership helper fails": { failAt: "ownership" },
+      "a TERM signal arrives during the ownership step": { failAt: "signal" },
+      "TERM reaches the deploy PID right after restarts are turned off": { failAt: "term-after-freeze", running: true, state: "on signal" },
+      "HUP reaches the deploy PID right after restarts are turned off": { failAt: "hup-after-freeze", running: true, state: "on signal" },
+      "INT reaches the deploy PID right after restarts are turned off": { failAt: "int-after-freeze", running: true, state: "on signal" },
+      "QUIT reaches the deploy PID right after restarts are turned off": { failAt: "quit-after-freeze", running: true, state: "on signal" },
+      "TERM reaches the deploy PID during restore": { failAt: "term-during-restore" },
+      "Ctrl+C reaches the deploy group during restore": { failAt: "int-during-restore" },
+      "restoring the restart policy fails before replacement": { failAt: "restore-fails" },
+      "the source restarts as its policy is restored": { restartAt: "restore", state: "still running" },
+      "the staged copy cannot be published": { failAt: "publish" },
+      "Ctrl+C (INT to the whole process group) during the ownership step": { failAt: "int-ownership" },
+      "it is running again after the stop": { runningAfterStop: true, state: "still running" },
+      "copying a JSON file fails": { cpFailAfterStop: "scheduling.json" },
+      "the JSON files fail to unpack": { failUnpack: true },
+      "the probe fails": { failAt: "probe" },
+      "copying the database fails": { cpFailAfterStop: "conclave.sqlite" },
+      "the database receiver fails": { failAt: "carry" },
+      "it started again after the copy": { startedAfterCarry: "2026-11-25T09:30:00.000000000Z" },
+    };
+    const runs = await Promise.all(Object.values(steps).map(({ state, ...options }) => replaceService(harness, { ...base, ...options })));
+    const outcomes = Object.fromEntries(
+      Object.keys(steps).map((name, at) => {
+        const { status, calls, stderr, archives } = runs[at];
+        const froze = calls.indexOf(`update --restart=no ${OLD_CONTAINER}`);
+        return [name, {
+          failed: Number.isInteger(status) && status !== 0,
+          startedNew: callIndex(calls, / up -d /) >= 0,
+          restoredAfterFreeze: froze >= 0 && calls.lastIndexOf(`update --restart=unless-stopped ${OLD_CONTAINER}`) > froze,
+          published: archives.length,
+          said: stderr.match(/The old sfu-a container is (still running|left stopped)[^\n]*restart policy \(unless-stopped\) restored/)?.[1] ?? stderr.trim().split("\n").slice(-2).join(" | "),
+        }];
+      }),
+    );
+    const expected = Object.entries(steps).map(([name, { state = "left stopped" }], at) => {
+      const said = state === "on signal" ? (stopped(runs[at].calls) ? "left stopped" : "still running") : state;
+      return [name, { failed: true, startedNew: false, restoredAfterFreeze: true, published: 0, said }];
+    });
+    assert.deepEqual(outcomes, Object.fromEntries(expected));
+  });
+
+  test(`${shell}: a restart at any copy step never lets a copy stand for a later state of the old container, and the next deploy carries that later state`, async () => {
+    const frozen = "2026-11-25T08:00:00.000000000Z_2026-11-25T08:45:00.000000000Z";
+    const later = ["kept", "saved after the restart"];
+    const steps = ["json-copy", "json-send", "probe", "sqlite-copy", "carry"];
+    const runs = await Promise.all(
+      steps.map(async (step) => {
+        const volume = mkdtempSync(join(tmpdir(), "deploy-sfu-volume-"));
+        const importDir = mkdtempSync(join(tmpdir(), "deploy-sfu-import-"));
+        try {
+          const base = {
+            containerEnv: "CONCLAVE_SQLITE_PATH=/var/lib/conclave/conclave.sqlite\\n",
+            diff: `${wrote("scheduling.json")}A /var/lib/conclave/conclave.sqlite\\nA /var/lib/conclave/conclave.sqlite-wal\\n`,
+            sharedVolume: volume,
+            sharedImportDir: importDir,
+          };
+          const first = await replaceService(harness, { ...base, files: { "scheduling.json": "[1]", ...sqliteFiles("conclave.sqlite", ["kept"]) }, restartAt: step });
+          const stamp = existsSync(join(volume, "conclave.sqlite")) ? await carryStamp(join(volume, "conclave.sqlite")) : null;
+          const restoredAfterStop = first.calls.lastIndexOf(`update --restart=unless-stopped ${OLD_CONTAINER}`) > callIndex(first.calls, /^compose .* stop sfu-a$/);
+          const retry = await replaceService(harness, {
+            ...base,
+            files: { "scheduling.json": "[1,2]", ...sqliteFiles("conclave.sqlite", later) },
+            startedAt: "2026-11-25T09:30:00.000000000Z",
+            finishedAt: "2026-11-25T10:00:00.000000000Z",
+          });
+          return {
+            refused: first.status !== 0,
+            saidWhy: /started again while its files were being copied|running again/.test(first.stderr),
+            startedNew: callIndex(first.calls, / up -d /) >= 0,
+            restoredAfterStop,
+            stampIsFrozen: stamp === null || stamp === frozen,
+            retried: retry.status,
+            retriedError: retry.status === 0 ? "" : retry.stderr,
+            rows: retry.volumeRows["conclave.sqlite"],
+          };
+        } finally {
+          rmSync(volume, { recursive: true, force: true });
+          rmSync(importDir, { recursive: true, force: true });
+        }
+      }),
+    );
+    const outcomes = Object.fromEntries(steps.map((step, at) => [step, runs[at]]));
+    const expected = { refused: true, saidWhy: true, startedNew: false, restoredAfterStop: true, stampIsFrozen: true, retried: 0, retriedError: "", rows: later };
+    assert.deepEqual(outcomes, Object.fromEntries(steps.map((step) => [step, expected])));
+  });
+
+  test(`${shell}: never starts the new SFU while the old one is running again or started again after its database was copied`, async () => {
+    const base = {
+      containerEnv: "CONCLAVE_SQLITE_PATH=/var/lib/conclave/conclave.sqlite\\n",
+      diff: "A /var/lib/conclave/conclave.sqlite\\nA /var/lib/conclave/conclave.sqlite-wal\\n",
+      files: sqliteFiles("conclave.sqlite", ["kept"]),
+    };
+    const runs = await Promise.all([
+      replaceService(harness, { ...base, runningAfterStop: true }),
+      replaceService(harness, { ...base, startedAfterCarry: "2026-11-25T09:30:00.000000000Z" }),
+    ]);
+    for (const [name, run] of [["still running after the stop", runs[0]], ["started again after the copy", runs[1]]]) {
+      assert.notEqual(run.status, 0, name);
+      assert.equal(callIndex(run.calls, / up -d /), -1, `${name}\n${run.calls.join("\n")}`);
+      assert.match(run.stderr, /running again|started again/, name);
+      assert.match(run.stderr, name === "still running after the stop" ? /is still running, with its restart policy \(unless-stopped\) restored/ : /left stopped, not removed, with its restart policy \(unless-stopped\) restored; start it again with: .* start sfu-a/, name);
+    }
+  });
+
+  test(`${shell}: never publishes a database through a symbolic link that leads off the volume, whether it is there before the check or appears just before the copy lands`, async () => {
+    const outcomes = {};
+    for (const when of ["before the check", "just before the copy lands"]) {
+      const volume = realpathSync(mkdtempSync(join(tmpdir(), "deploy-sfu-volume-")));
+      const elsewhere = realpathSync(mkdtempSync(join(tmpdir(), "deploy-sfu-elsewhere-")));
+      try {
+        mkdirSync(join(volume, "state"));
+        if (when === "before the check") {
+          rmSync(join(volume, "state"), { recursive: true });
+          symlinkSync(elsewhere, join(volume, "state"));
+        }
+        const run = await replaceService(harness, {
+          containerEnv: "CONCLAVE_SQLITE_PATH=/var/lib/conclave/conclave.sqlite\\n",
+          diff: "A /var/lib/conclave/conclave.sqlite\\nA /var/lib/conclave/conclave.sqlite-wal\\n",
+          files: sqliteFiles("conclave.sqlite", ["kept"]),
+          sharedVolume: volume,
+          newSqlitePath: join(volume, "state", "conclave.sqlite"),
+          ...(when === "just before the copy lands" ? { linkFrom: join(volume, "state"), linkTo: elsewhere } : {}),
+        });
+        outcomes[when] = {
+          failed: run.status !== 0,
+          stoppedOld: stopped(run.calls),
+          startedNew: callIndex(run.calls, / up -d /) >= 0,
+          elsewhere: readdirSync(elsewhere).filter((name) => !name.startsWith(".")),
+          said: /does not resolve onto the recordings volume|not on the recordings volume|Refusing to publish/.test(run.stderr),
+        };
+      } finally {
+        rmSync(volume, { recursive: true, force: true });
+        rmSync(elsewhere, { recursive: true, force: true });
+      }
+    }
+    assert.deepEqual(outcomes, {
+      "before the check": { failed: true, stoppedOld: false, startedNew: false, elsewhere: [], said: true },
+      "just before the copy lands": { failed: true, stoppedOld: true, startedNew: false, elsewhere: [], said: true },
+    });
+  });
+
+  test(`${shell}: sends only the files it names, even when the host's tar would add metadata members for extended attributes`, async () => {
+    const { status, stderr, payloadMembers, volumeEntries, imported } = await replaceService(harness, {
+      containerEnv: "CONCLAVE_SQLITE_PATH=/var/lib/conclave/conclave.sqlite\\n",
+      diff: `${wrote("scheduling.json")}A /var/lib/conclave/conclave.sqlite\\nA /var/lib/conclave/conclave.sqlite-wal\\n`,
+      files: { "scheduling.json": "[]", ...sqliteFiles("conclave.sqlite", ["kept"]) },
+    });
+    assert.equal(status, 0, stderr);
+    assert.deepEqual(payloadMembers.map((members) => members.sort()), [["scheduling.json"], ["db", "db-wal"]]);
+    assert.deepEqual(imported, ["scheduling.json"]);
+    assert.deepEqual(volumeEntries, ["conclave.sqlite"]);
+  });
+
+  test(`${shell}: leaves a database on the volume where it is`, async () => {
+    const { status, stderr, calls, volumeEntries } = await replaceService(harness, {
+      containerEnv: "CONCLAVE_SQLITE_PATH=/var/lib/conclave/recordings/conclave.sqlite\\n",
+      diff: "C /var/lib/conclave\\n",
+    });
+    assert.equal(status, 0, stderr);
+    assert.equal(callIndex(calls, /^cp /), -1, calls.join("\n"));
+    assert.deepEqual(receives(calls), []);
+    assert.deepEqual(volumeEntries, []);
+  });
+
   test(`${shell}: with no old container, starts the new SFU without copying anything`, async () => {
     const { status, calls, stderr } = await replaceService(harness, { container: "" });
     assert.equal(status, 0, stderr);
@@ -610,21 +1166,160 @@ for (const harness of harnesses) {
   });
 }
 
+const pathHarnesses = [
+  {
+    name: "bash",
+    command: "bash",
+    args: [],
+    file: "paths.sh",
+    source: () =>
+      [
+        "set -euo pipefail",
+        allDefinitions(deployShell, shellFunctions),
+        'docker() { case "$*" in *WorkingDir*) cat "${@: -1}/workdir" ;; *Config.Env*) cat "${@: -1}/env" ;; esac; }',
+        'for case_dir in "$CASES"/*; do while IFS= read -r line; do printf \'%s\\t%s\\n\' "${case_dir##*/}" "$line"; done < <(store_file_paths "$case_dir"); done',
+      ].join("\n"),
+  },
+  ...powerShells
+    .filter(({ version }) => atLeast(version, MINIMUM_POWERSHELL))
+    .map(({ binary, version }) => ({
+      name: `pwsh ${version}`,
+      command: binary,
+      args: ["-NoProfile", "-NonInteractive", "-File"],
+      file: "paths.ps1",
+      source: () =>
+        [
+          "Set-StrictMode -Version Latest",
+          '$ErrorActionPreference = "Stop"',
+          allDefinitions(deployPowerShell, powerShellFunctions),
+          'function docker { $global:LASTEXITCODE = 0; $file = if ("$args" -like "*WorkingDir*") { "workdir" } else { "env" }; Get-Content -LiteralPath (Join-Path $args[-1] $file) }',
+          'foreach ($dir in @(Get-ChildItem -LiteralPath $env:CASES -Directory | Sort-Object Name)) { foreach ($entry in @(Get-StoreFilePaths -Container $dir.FullName)) { [Console]::Out.WriteLine("$($dir.Name)`t$($entry.Kind) $($entry.Name) $($entry.Path)") } }',
+        ].join("\n"),
+    })),
+];
+
+const STORE_VARIABLES = [
+  "SCHEDULING_PATH",
+  "SCHEDULED_MEETINGS_PATH",
+  "SCHEDULED_WEBINARS_PATH",
+  "SCHEDULING_SQLITE_PATH",
+  "SCHEDULED_MEETINGS_SQLITE_PATH",
+  "SCHEDULED_WEBINARS_SQLITE_PATH",
+  "CONCLAVE_SQLITE_PATH",
+  "RECORDING_STORAGE_PATH",
+];
+const SETTING_VALUES = [undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, "", "   ", "\t", "/var/lib/conclave/conclave.sqlite", " /srv//state/../db.sqlite ", "relative/store.db", "./here", "../up/one", "with space/name file.sqlite", "/", ".", "..", "\t/padded/tab\t", "/trailing/"];
+const WORKDIRS = ["/app/packages/sfu", "/app/packages/sfu", "/", "/srv/conclave/", ""];
+
+const seededRandom = (seed) => () => {
+  seed = (seed + 0x6d2b79f5) | 0;
+  let value = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+  value = (value + Math.imul(value ^ (value >>> 7), 61 | value)) ^ value;
+  return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+};
+
+const storePathCases = (count, seed) => {
+  const random = seededRandom(seed);
+  const pick = (values) => values[Math.floor(random() * values.length)];
+  return Array.from({ length: count }, () => ({
+    workdir: pick(WORKDIRS),
+    env: Object.fromEntries(STORE_VARIABLES.map((name) => [name, pick(SETTING_VALUES)]).filter(([, value]) => value !== undefined)),
+  }));
+};
+
+const sqliteBranch = (env, prefix) => {
+  const set = (name) => (env[name] ?? "").trim() !== "";
+  if (set(`${prefix}_SQLITE_PATH`)) return "own";
+  if (set("CONCLAVE_SQLITE_PATH")) return "shared";
+  if (set("RECORDING_STORAGE_PATH")) return "recordings";
+  return "default";
+};
+
+test("every store path both deploy scripts read from an old container is the path the SFU's own store code uses", async () => {
+  const cases = storePathCases(150, 272);
+  const counts = {};
+  for (const { env } of cases) {
+    for (const prefix of ["SCHEDULING", "SCHEDULED_MEETINGS", "SCHEDULED_WEBINARS"]) {
+      const branch = sqliteBranch(env, prefix);
+      counts[branch] = (counts[branch] ?? 0) + 1;
+    }
+  }
+  assert.ok(["own", "shared", "recordings", "default"].every((branch) => counts[branch] >= 20), JSON.stringify(counts));
+  const oracle = spawnSync(
+    process.execPath,
+    ["--import", "tsx", "--input-type=module", "-e", 'const { storeFileLines } = await import("./server/storePaths.ts"); const cases = JSON.parse(process.argv[1]); process.stdout.write(JSON.stringify(cases.map(({ env, workdir }) => storeFileLines(env, workdir || "/"))));', JSON.stringify(cases)],
+    { cwd: sfuDir, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+  );
+  assert.equal(oracle.status, 0, oracle.stderr);
+  const expected = JSON.parse(oracle.stdout).flatMap((lines, index) => lines.map((line) => `${String(index).padStart(4, "0")}\t${line}`));
+  const dir = mkdtempSync(join(tmpdir(), "deploy-sfu-paths-"));
+  try {
+    const casesDir = join(dir, "cases");
+    cases.forEach(({ env, workdir }, index) => {
+      const caseDir = join(casesDir, String(index).padStart(4, "0"));
+      mkdirSync(caseDir, { recursive: true });
+      writeFileSync(join(caseDir, "workdir"), `${workdir}\n`);
+      writeFileSync(join(caseDir, "env"), Object.entries(env).map(([name, value]) => `${name}=${value}\n`).join(""));
+    });
+    for (const harness of pathHarnesses) {
+      writeFileSync(join(dir, harness.file), harness.source());
+      const result = await run(harness.command, [...harness.args, join(dir, harness.file)], { PATH: process.env.PATH, HOME: dir, CASES: casesDir });
+      assert.equal(result.status, 0, `${harness.name}: ${result.stderr}`);
+      const actual = result.stdout.split("\n").filter(Boolean);
+      const differences = expected.filter((line, index) => actual[index] !== line).slice(0, 5).map((line) => `${harness.name}\n  store code: ${line}\n  deploy:     ${actual[expected.indexOf(line)]}`);
+      assert.deepEqual(differences, []);
+      assert.equal(actual.length, expected.length, harness.name);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 const FLOW_DOCKER = `#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$DOCKER_LOG"
+args=("$@")
 service="\${@: -1}"
+holds() { [[ " $FAKE_LAYER_HOLDERS " == *" \${1#old-} "* ]]; }
 if [[ "$1" == "compose" ]]; then
+  for ((i = 1; i < \${#args[@]}; i++)); do
+    if [[ "\${args[i]}" == run ]]; then
+      script="" rest=()
+      for ((j = i + 1; j < \${#args[@]}; j++)); do
+        [[ "\${args[j]}" == -c ]] && { script="\${args[j + 1]}"; rest=("\${args[@]:j + 2}"); break; }
+      done
+      [[ -n "$script" ]] || exit 0
+      script="\${script//\\/var\\/lib\\/conclave\\/recordings/$FAKE_VOLUME}"
+      cd "$FAKE_SFU_DIR" || exit 1
+      CONCLAVE_SQLITE_PATH="$FAKE_VOLUME/conclave.sqlite" CONCLAVE_FALLBACK_IMPORT_DIR="$FAKE_VOLUME/json-fallback-import" exec sh -c "$script" "\${rest[@]}"
+    fi
+  done
   case " $* " in
     *" config --services "*) printf 'sfu-a\\nsfu-b\\n'; exit 0 ;;
     *" config --format json "*) echo '{}'; exit 0 ;;
     *" up -d "*) printf '%s' "$SFU_DEPLOY_ID" > "$FAKE_STATE/$service.up"; exit 0 ;;
-    *" stop "*) rm -f "$FAKE_STATE/$service.up"; exit 0 ;;
+    *" stop "*) rm -f "$FAKE_STATE/$service.up"; : > "$FAKE_STATE/old-$service.stopped"; exit 0 ;;
+    *" ps -a -q "*) [[ " $FAKE_CONTAINERS " == *" $service "* ]] && echo "old-$service"; exit 0 ;;
   esac
+  exit 0
 fi
+case "$1" in
+  inspect)
+    case "$*" in
+      *WorkingDir*) echo /app/packages/sfu ;;
+      *Config.Env*) holds "$service" && echo "CONCLAVE_SQLITE_PATH=/var/lib/conclave/conclave.sqlite" ;;
+      *RestartPolicy*) echo unless-stopped ;;
+      *State.Running*)
+        running=false
+        [[ " $FAKE_RUNNING " == *" \${service#old-} "* && ! -f "$FAKE_STATE/$service.stopped" ]] && running=true
+        if [[ "$*" == *State.FinishedAt* ]]; then echo "$running 2026-11-25T08:00:00.000000000Z 2026-11-25T08:45:00.000000000Z"; else echo "$running"; fi ;;
+    esac ;;
+  diff) holds "$2" && printf 'A /var/lib/conclave/conclave.sqlite\\nA /var/lib/conclave/conclave.sqlite-wal\\n' ;;
+  cp) cat "$FAKE_FILES/\${2##*/}" > "$3" ;;
+esac
 exit 0
 `;
 
-const fakeSfu = (service, { rooms, replacement, state, log }) => {
+const fakeSfu = (service, { rooms, replacement, state, log, down = false }) => {
   let draining = false;
   let active = rooms;
   return createServer((req, res) => {
@@ -632,6 +1327,7 @@ const fakeSfu = (service, { rooms, replacement, state, log }) => {
       res.writeHead(code, { "content-type": "application/json" });
       res.end(JSON.stringify(body));
     };
+    if (req.method === "POST" && req.url === "/drain" && down) return reply(503, {});
     if (req.method === "POST" && req.url === "/drain") {
       draining = true;
       active = 0;
@@ -639,7 +1335,7 @@ const fakeSfu = (service, { rooms, replacement, state, log }) => {
       req.resume();
       return reply(200, { draining: true });
     }
-    if (req.url === "/status") return reply(200, { instanceId: service, rooms: active, draining, healthy: true });
+    if (req.url === "/status") return down ? reply(503, {}) : reply(200, { instanceId: service, rooms: active, draining, healthy: true });
     if (req.url === "/health") {
       const upFile = join(state, `${service}.up`);
       if (!existsSync(upFile)) return reply(200, { status: "healthy", workers: { healthy: 1 } });
@@ -657,15 +1353,17 @@ const deployShells = [
     .map(({ binary, version }) => ({ name: `pwsh ${version}`, script: "deploy-sfu.ps1", command: binary, args: ["-NoProfile", "-NonInteractive", "-File"] })),
 ];
 
-const deploySfus = async (shell, replacements) => {
+const deploySfus = async (shell, replacements, { containers = "", layerHolders = "", running = "", down = [] } = {}) => {
   const root = mkdtempSync(join(tmpdir(), "deploy-sfu-flow-"));
   const state = join(root, "state");
+  const volume = realpathSync(mkdtempSync(join(tmpdir(), "deploy-sfu-flow-volume-")));
   const log = join(root, "deploy.log");
   mkdirSync(state);
   writeFileSync(log, "");
+  writeFiles(join(root, "files"), sqliteFiles("conclave.sqlite", ["kept", "only in the log"]));
   const servers = {
-    "sfu-a": fakeSfu("sfu-a", { rooms: 1, replacement: replacements["sfu-a"], state, log }),
-    "sfu-b": fakeSfu("sfu-b", { rooms: 0, replacement: replacements["sfu-b"], state, log }),
+    "sfu-a": fakeSfu("sfu-a", { rooms: 1, replacement: replacements["sfu-a"], state, log, down: down.includes("sfu-a") }),
+    "sfu-b": fakeSfu("sfu-b", { rooms: 0, replacement: replacements["sfu-b"], state, log, down: down.includes("sfu-b") }),
   };
   const urls = { "sfu-a": await listen(servers["sfu-a"]), "sfu-b": await listen(servers["sfu-b"]) };
   try {
@@ -677,6 +1375,8 @@ const deploySfus = async (shell, replacements) => {
     writeFileSync(join(root, ".env"), "SFU_SECRET=test-secret\nREDIS_URL=redis://127.0.0.1:6399\n");
     writeFileSync(join(root, "docker-compose.sfu.yml"), "services: {}\n");
     writeFileSync(join(bin, "docker"), FLOW_DOCKER);
+    writeFileSync(join(bin, "chown"), "#!/bin/sh\nexit 0\n");
+    if (!hostHasSha256sum) writeFileSync(join(bin, "sha256sum"), SHA256SUM_SHIM);
     writeFileSync(join(bin, "git"), "#!/bin/sh\nexit 0\n");
     writeFileSync(join(bin, "npm"), "#!/bin/sh\nexit 0\n");
     for (const name of readdirSync(bin)) chmodSync(join(bin, name), 0o755);
@@ -686,18 +1386,32 @@ const deploySfus = async (shell, replacements) => {
       TMPDIR: tmpdir(),
       DOCKER_LOG: log,
       FAKE_STATE: state,
+      FAKE_VOLUME: volume,
+      FAKE_FILES: join(root, "files"),
+      FAKE_SFU_DIR: sfuDir,
+      FAKE_CONTAINERS: `${containers} ${layerHolders}`,
+      FAKE_LAYER_HOLDERS: layerHolders,
+      FAKE_RUNNING: running,
       SFU_A_URL: urls["sfu-a"],
       SFU_B_URL: urls["sfu-b"],
-      SFU_HEALTH_TIMEOUT_SECONDS: "3",
+      SFU_DEPLOY_ID: "sfu-flow-deploy",
+      SFU_HEALTH_TIMEOUT_SECONDS: Object.values(replacements).every((answer) => answer === "deployed") ? "30" : "1",
       SFU_HEALTH_POLL_SECONDS: "1",
       DRAIN_POLL_SECONDS: "1",
     });
-    return { ...result, calls: readFileSync(log, "utf8").trim().split("\n").filter(Boolean) };
+    const calls = readFileSync(log, "utf8").trim().split("\n").filter(Boolean);
+    return { ...result, calls, rows: existsSync(join(volume, "conclave.sqlite")) ? await databaseRows(join(volume, "conclave.sqlite")) : null };
   } finally {
     await Promise.all(Object.values(servers).map(close));
     rmSync(root, { recursive: true, force: true });
+    rmSync(volume, { recursive: true, force: true });
   }
 };
+
+const touched = (calls) =>
+  calls
+    .filter((call) => /^compose .* (build|stop|up -d) sfu-[ab]$/.test(call) || call.startsWith("drain "))
+    .map((call) => call.replace(/^compose .* (build|stop|up -d) (sfu-[ab])$/, "$1 $2"));
 
 for (const shell of deployShells) {
   test(`${shell.name}: drains the serving SFU only after its replacement answers healthy as this deploy`, async () => {
@@ -708,6 +1422,42 @@ for (const shell of deployShells) {
     const replaced = callIndex(calls, /^compose .* up -d sfu-a$/);
     assert.ok(started >= 0 && drained > started && replaced > drained, calls.join("\n"));
     assert.match(stdout, /SFU deploy complete/);
+  });
+
+  test(`${shell.name}: a database inside an old SFU container is carried only from the slot replaced first, and a stopped SFU holding one is replaced first`, async () => {
+    const deployed = { "sfu-a": "deployed", "sfu-b": "deployed" };
+    const cases = {
+      "serving sfu-a running with it, sfu-b without a container": { layerHolders: "sfu-a", running: "sfu-a", down: ["sfu-b"] },
+      "both old containers keep one": { layerHolders: "sfu-a sfu-b", running: "sfu-a", down: ["sfu-b"] },
+      "inactive sfu-b stopped with it, sfu-a serving from the volume": { containers: "sfu-a", layerHolders: "sfu-b", running: "sfu-a", down: ["sfu-b"] },
+      "both down, stopped sfu-a keeps it, sfu-b without a container": { layerHolders: "sfu-a", down: ["sfu-a", "sfu-b"] },
+      "both down, stopped sfu-a keeps it, sfu-b stopped on the volume": { containers: "sfu-b", layerHolders: "sfu-a", down: ["sfu-a", "sfu-b"] },
+    };
+    const runs = await Promise.all(Object.values(cases).map((options) => deploySfus(shell, deployed, options)));
+    const outcomes = Object.fromEntries(
+      Object.keys(cases).map((name, at) => {
+        const { status, calls, stdout, stderr, rows } = runs[at];
+        return [name, { status: status === 0 ? "deployed" : stderr.match(/The serving \S+|each keep their own database/)?.[0] ?? stderr.trim().split("\n").at(-1), touched: touched(calls), rows, completed: /SFU deploy complete/.test(stdout) }];
+      }),
+    );
+    const carried = ["kept", "only in the log"];
+    assert.deepEqual(outcomes, {
+      "serving sfu-a running with it, sfu-b without a container": { status: "The serving sfu-a", touched: [], rows: null, completed: false },
+      "both old containers keep one": { status: "each keep their own database", touched: [], rows: null, completed: false },
+      "inactive sfu-b stopped with it, sfu-a serving from the volume": { status: "deployed", touched: ["build sfu-b", "stop sfu-b", "up -d sfu-b", "drain sfu-a", "build sfu-a", "stop sfu-a", "up -d sfu-a"], rows: carried, completed: true },
+      "both down, stopped sfu-a keeps it, sfu-b without a container": { status: "deployed", touched: ["build sfu-a", "stop sfu-a", "up -d sfu-a", "build sfu-b", "stop sfu-b", "up -d sfu-b"], rows: carried, completed: true },
+      "both down, stopped sfu-a keeps it, sfu-b stopped on the volume": { status: "deployed", touched: ["build sfu-a", "stop sfu-a", "up -d sfu-a", "build sfu-b", "stop sfu-b", "up -d sfu-b"], rows: carried, completed: true },
+    });
+  });
+
+  test(`${shell.name}: following the refusal's advice (stop the serving SFU) carries its database on the next deploy`, async () => {
+    const deployed = { "sfu-a": "deployed", "sfu-b": "deployed" };
+    const refused = await deploySfus(shell, deployed, { layerHolders: "sfu-a", running: "sfu-a", down: ["sfu-b"] });
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stderr, /stop sfu-a\) and deploy again/);
+    const followed = await deploySfus(shell, deployed, { layerHolders: "sfu-a", down: ["sfu-a", "sfu-b"] });
+    assert.equal(followed.status, 0, followed.stderr);
+    assert.deepEqual(followed.rows, ["kept", "only in the log"]);
   });
 
   test(`${shell.name}: a replacement that answers 503 is stopped, the serving SFU is never drained, and the deploy fails`, async () => {
@@ -733,3 +1483,28 @@ for (const shell of deployShells) {
     assert.match(stderr, /sfu-a did not answer healthy/);
   });
 }
+
+describe(SUITE, { concurrency: Math.min(8, availableParallelism()) }, () => {
+  let fixtureDir;
+  before(async () => {
+    const binaries = [...new Set(powerShells.filter(({ version }) => atLeast(version, MINIMUM_POWERSHELL)).map(({ binary }) => binary))];
+    if (!binaries.length) return;
+
+    const compilation = powerShellDefinitions.match(restartGuardCompilation)?.[0];
+    assert.ok(compilation, "deploy-sfu.ps1 defines the restart guard type");
+    fixtureDir = mkdtempSync(join(tmpdir(), "deploy-sfu-guard-"));
+    const compiler = join(fixtureDir, "compile.ps1");
+    writeFileSync(compiler, `$ErrorActionPreference = "Stop"\n${compilation.replace("-TypeDefinition", "-OutputAssembly $env:RESTART_GUARD_ASSEMBLY -TypeDefinition")}\n`);
+    for (const [index, binary] of binaries.entries()) {
+      const assembly = join(fixtureDir, `SfuRestartGuard-${index}.dll`);
+      const result = await run(binary, ["-NoProfile", "-NonInteractive", "-File", compiler], { ...process.env, RESTART_GUARD_ASSEMBLY: assembly });
+      assert.equal(result.status, 0, result.stderr);
+      assert.ok(existsSync(assembly), `${binary} did not compile the restart guard`);
+      restartGuardAssemblies.set(binary, assembly);
+    }
+  });
+  after(() => {
+    if (fixtureDir) rmSync(fixtureDir, { recursive: true, force: true });
+  });
+  for (const { name, body } of registered) nodeTest(name, body);
+});

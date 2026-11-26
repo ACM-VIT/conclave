@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { once } from "node:events";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { tmpdir } from "node:os";
+import { createServer as createNetServer } from "node:net";
+import { availableParallelism, tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { describe, test as nodeTest } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const scriptsDir = fileURLToPath(new URL(".", import.meta.url));
@@ -13,6 +16,7 @@ const RUNTIME_IMAGE = "conclave-browser:latest";
 const FAKE_DOCKER = `#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$DOCKER_LOG"
 if [[ "$1" == "compose" && " $* " == *" --check-config "* ]]; then
+  [[ "\${FAKE_CHECK_STATUS:-0}" == "0" ]] && echo "BROWSER_SERVICE_HEALTH_URL=http://127.0.0.1:$BROWSER_SERVICE_PORT/health"
   exit "\${FAKE_CHECK_STATUS:-0}"
 fi
 if [[ "$1" == "compose" && " $* " == *" ps -q browser-service "* ]]; then
@@ -39,6 +43,10 @@ const powerShells = (process.env.CONCLAVE_PWSH_BINARIES ?? "pwsh")
   .map((binary) => binary.trim())
   .filter(Boolean)
   .filter((binary) => spawnSync(binary, ["-NoProfile", "-NonInteractive", "-Command", "exit 0"]).status === 0);
+
+const registered = [];
+const test = (name, body) => registered.push({ name, body });
+const SUITE = "browser service deploy";
 
 const shells = [
   { name: "bash", script: "deploy-browser-service.sh", command: "bash", args: [] },
@@ -69,7 +77,9 @@ const deploy = async (
 ) => {
   const root = mkdtempSync(join(tmpdir(), "deploy-browser-service-"));
   const deployIdFile = join(root, "deploy-id");
+  let healthRequests = 0;
   const health = createServer((req, res) => {
+    if (req.url === "/health") healthRequests += 1;
     const deployId = existsSync(deployIdFile) ? readFileSync(deployIdFile, "utf8") : null;
     res.writeHead(req.url === "/health" ? 200 : 404, { "content-type": "application/json" });
     res.end(JSON.stringify(healthBodies[answers](deployId)));
@@ -90,7 +100,8 @@ const deploy = async (
       HOME: root,
       DOCKER_LOG: log,
       DEPLOY_ID_FILE: deployIdFile,
-      BROWSER_SERVICE_HEALTH_TIMEOUT_SECONDS: "5",
+      BROWSER_SERVICE_HEALTH_TIMEOUT_SECONDS: "2",
+      BROWSER_SERVICE_HEALTH_POLL_SECONDS: "0.2",
       FAKE_CHECK_STATUS: String(checkStatus),
       FAKE_PREVIOUS_CONTAINER: previousContainer,
       FAKE_PREVIOUS_RUNNING: previousRunning,
@@ -100,7 +111,7 @@ const deploy = async (
       BROWSER_SERVICE_HOST: serviceHost,
       BROWSER_SERVICE_PORT: String(health.address().port),
     });
-    return { ...result, calls: readFileSync(log, "utf8").trim().split("\n").filter(Boolean) };
+    return { ...result, healthRequests, calls: readFileSync(log, "utf8").trim().split("\n").filter(Boolean) };
   } finally {
     await new Promise((resolve) => health.close(resolve));
     rmSync(root, { recursive: true, force: true });
@@ -145,12 +156,14 @@ for (const shell of shells) {
   });
 
   test(`${shell.name}: only this deploy's browser service counts as healthy`, async () => {
-    for (const answers of ["empty", "sfu", "previous"]) {
-      const { status, calls, stderr } = await deploy(shell, [], { answers });
-      assert.notEqual(status, 0, `${answers} was accepted as healthy`);
+    const kinds = ["empty", "sfu", "previous"];
+    const outcomes = await Promise.all(kinds.map((answers) => deploy(shell, [], { answers })));
+    outcomes.forEach(({ status, calls, stderr, healthRequests }, at) => {
+      assert.notEqual(status, 0, `${kinds[at]} was accepted as healthy`);
       assert.ok(index(calls, / up -d /) >= 0, calls.join("\n"));
-      assert.match(stderr, /did not answer healthy/, answers);
-    }
+      assert.match(stderr, /did not answer healthy/, kinds[at]);
+      assert.ok(healthRequests >= 1, `${kinds[at]}: the deploy never asked for health, so the answer was never checked`);
+    });
   });
 
   test(`${shell.name}: tells the check which running container it is replacing, and only a running one`, async () => {
@@ -202,3 +215,188 @@ for (const shell of shells) {
     assert.equal(index(calls, /^tag /), -1, calls.join("\n"));
   });
 }
+
+const sharedBrowserDir = fileURLToPath(new URL("../packages/shared-browser/", import.meta.url));
+const fakeLocalhostDns = join(sharedBrowserDir, "test", "support", "fake-localhost-dns.mjs");
+
+const REAL_CHECK_DOCKER = `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$DOCKER_LOG"
+args=("$@")
+if [[ "$1" == "compose" && " $* " == *" --check-config "* ]]; then
+  envs=()
+  for ((i = 0; i < \${#args[@]}; i++)); do [[ "\${args[i]}" == "-e" ]] && envs+=("\${args[i + 1]}"); done
+  cd "$SHARED_BROWSER_DIR" && exec env "\${envs[@]}" DOCKER_HOST="$FAKE_ENGINE" BROWSER_SERVICE_TOKEN="$CHECK_TOKEN" node --import tsx --import "$FAKE_DNS" src/server.ts --check-config
+fi
+if [[ "$1" == "compose" && " $* " == *" ps -q browser-service "* ]]; then
+  [[ -n "$FAKE_PREVIOUS_CONTAINER" ]] && echo "$FAKE_PREVIOUS_CONTAINER"
+  exit 0
+fi
+if [[ "$1" == "inspect" ]]; then
+  case "$*" in
+    *State.Running*) echo true ;;
+    *Config.Env*) printf '%b' "$FAKE_PREVIOUS_ENV" ;;
+    *NetworkMode*) echo host ;;
+  esac
+  exit 0
+fi
+if [[ "$1" == "compose" && " $* " == *" up -d "* ]]; then
+  [[ -s "$OLD_SERVICE_PID" ]] && kill "$(cat "$OLD_SERVICE_PID")" && : > "$OLD_SERVICE_PID"
+  node "$FAKE_SERVICE" "$BROWSER_SERVICE_DEPLOY_ID" "$NEW_SERVICE_HOST" "$BROWSER_SERVICE_PORT" > /dev/null 2>&1 < /dev/null &
+  echo $! > "$NEW_SERVICE_PID"
+fi
+exit 0
+`;
+
+const FAKE_SERVICE = `import { createServer } from "node:http";
+const [deployId, host, port] = process.argv.slice(2);
+const body = JSON.stringify({ service: "conclave-shared-browser", deployId: deployId === "-" ? null : deployId, status: "ok", sessions: 0 });
+createServer((req, res) => {
+  res.writeHead(req.url === "/health" ? 200 : 404, { "content-type": "application/json" });
+  res.end(body);
+}).listen(Number(port), host);
+`;
+
+const handedOutPorts = new Set();
+const freePort = () =>
+  new Promise((resolve) => {
+    const probe = createNetServer().listen(0, "127.0.0.1", () => {
+      const { port } = probe.address();
+      probe.close(() => (handedOutPorts.has(port) ? freePort().then(resolve) : (handedOutPorts.add(port), resolve(port))));
+    });
+  });
+
+const ipv6Loopback = await new Promise((resolve) => {
+  const probe = createNetServer();
+  probe.once("error", () => resolve(false));
+  probe.listen(0, "::1", () => probe.close(() => resolve(true)));
+});
+
+const fakeEngine = async () => {
+  const server = createServer((req, res) => {
+    const path = (req.url ?? "").replace(/^\/v[\d.]+/, "").split("?")[0];
+    if (path === "/_ping") {
+      res.writeHead(200, { "content-type": "text/plain" });
+      return res.end("OK");
+    }
+    if (/^\/images\/.+\/json$/.test(path)) {
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ Id: "sha256:checked", Config: { Labels: { "org.conclave.browser.vnc-auth": "per-session-password" } } }));
+    }
+    res.writeHead(404, { "content-type": "application/json" });
+    res.end(JSON.stringify({ message: "not found" }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return { host: `tcp://127.0.0.1:${server.address().port}`, close: () => new Promise((resolve) => { server.closeAllConnections(); server.close(resolve); }) };
+};
+
+const stopRecorded = (pidFile) => {
+  if (!existsSync(pidFile)) return;
+  const pid = Number(readFileSync(pidFile, "utf8").trim());
+  if (!pid) return;
+  try {
+    process.kill(pid);
+  } catch {}
+};
+
+const deployWithRealCheck = async (shell, { setting, localhost = "", serviceHost, previous }) => {
+  const root = mkdtempSync(join(tmpdir(), "deploy-browser-real-check-"));
+  const engine = await fakeEngine();
+  const port = await freePort();
+  const pids = { old: join(root, "old.pid"), new: join(root, "new.pid") };
+  writeFileSync(pids.old, "");
+  try {
+    mkdirSync(join(root, "scripts"));
+    mkdirSync(join(root, "bin"));
+    mkdirSync(join(root, "packages", "shared-browser", "docker"), { recursive: true });
+    copyFileSync(join(scriptsDir, shell.script), join(root, "scripts", shell.script));
+    writeFileSync(join(root, "docker-compose.browser.yml"), "services: {}\n");
+    writeFileSync(join(root, "bin", "docker"), REAL_CHECK_DOCKER);
+    chmodSync(join(root, "bin", "docker"), 0o755);
+    writeFileSync(join(root, "fake-service.mjs"), FAKE_SERVICE);
+    const log = join(root, "docker.log");
+    writeFileSync(log, "");
+    if (previous) {
+      const old = spawn(process.execPath, [join(root, "fake-service.mjs"), "-", previous.listen, String(port)], { stdio: "ignore" });
+      writeFileSync(pids.old, String(old.pid));
+      const deadline = Date.now() + 5_000;
+      while (Date.now() < deadline) {
+        const answered = await fetch(`http://${previous.listen.includes(":") ? `[${previous.listen}]` : previous.listen}:${port}/health`).then(() => true, () => false);
+        if (answered) break;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+    const result = await run(shell.command, [...shell.args, join(root, "scripts", shell.script)], {
+      PATH: `${join(root, "bin")}:${process.env.PATH}`,
+      HOME: root,
+      DOCKER_LOG: log,
+      SHARED_BROWSER_DIR: sharedBrowserDir,
+      FAKE_ENGINE: engine.host,
+      FAKE_DNS: fakeLocalhostDns,
+      FAKE_LOCALHOST_ADDRESSES: localhost,
+      CHECK_TOKEN: randomBytes(32).toString("hex"),
+      FAKE_SERVICE: join(root, "fake-service.mjs"),
+      NEW_SERVICE_HOST: serviceHost,
+      NEW_SERVICE_PID: pids.new,
+      OLD_SERVICE_PID: pids.old,
+      FAKE_PREVIOUS_CONTAINER: previous ? "4f2c1d" : "",
+      FAKE_PREVIOUS_ENV: previous ? previous.env.replace("<port>", String(port)) : "",
+      BROWSER_SERVICE_HOST: setting,
+      BROWSER_SERVICE_PORT: String(port),
+      BROWSER_SERVICE_HEALTH_TIMEOUT_SECONDS: "10",
+      BROWSER_SERVICE_HEALTH_POLL_SECONDS: "0.2",
+    });
+    return { ...result, port, polled: result.stdout.match(/Waiting for (\S+)\.\.\./)?.[1] ?? null };
+  } finally {
+    stopRecorded(pids.new);
+    stopRecorded(pids.old);
+    await engine.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+};
+
+for (const shell of shells) {
+  test(`${shell.name}: polls the health URL the real check reports, however BROWSER_SERVICE_HOST is written`, async () => {
+    const cases = [
+      { setting: "localhost", localhost: "127.0.0.1", serviceHost: "127.0.0.1", urlHost: "127.0.0.1" },
+      ...(ipv6Loopback
+        ? [
+            { setting: "[::1]", serviceHost: "::1", urlHost: "[::1]" },
+            { setting: "::1", serviceHost: "::1", urlHost: "[::1]" },
+            { setting: "0:0:0:0:0:0:0:1", serviceHost: "::1", urlHost: "[::1]" },
+            { setting: "localhost", localhost: "::1,127.0.0.1", serviceHost: "::1", urlHost: "[::1]" },
+          ]
+        : []),
+    ];
+    const outcomes = [];
+    for (const { urlHost, ...options } of cases) {
+      const { status, polled, port, stderr } = await deployWithRealCheck(shell, options);
+      outcomes.push({ setting: options.setting, localhost: options.localhost ?? "", status, polled, expected: `http://${urlHost}:${port}/health`, stderr: status === 0 ? "" : stderr });
+    }
+    assert.deepEqual(
+      outcomes.map(({ setting, localhost, status, polled, expected, stderr }) => ({ setting, localhost, status, polledExpected: polled === expected, stderr })),
+      outcomes.map(({ setting, localhost }) => ({ setting, localhost, status: 0, polledExpected: true, stderr: "" })),
+    );
+  });
+
+  test(`${shell.name}: upgrades a service set to localhost with no deploy id, end to end`, async () => {
+    const cases = [
+      { localhost: "127.0.0.1", serviceHost: "127.0.0.1", listen: "127.0.0.1" },
+      ...(ipv6Loopback ? [{ localhost: "::1", serviceHost: "::1", listen: "::1" }] : []),
+    ];
+    const outcomes = [];
+    for (const { localhost, serviceHost, listen } of cases) {
+      const { status, stderr } = await deployWithRealCheck(shell, {
+        setting: "localhost",
+        localhost,
+        serviceHost,
+        previous: { listen, env: "BROWSER_SERVICE_HOST=localhost\\nBROWSER_SERVICE_PORT=<port>\\nBROWSER_SERVICE_DEPLOY_ID=\\n" },
+      });
+      outcomes.push({ localhost, status, stderr: status === 0 ? "" : stderr });
+    }
+    assert.deepEqual(outcomes, cases.map(({ localhost }) => ({ localhost, status: 0, stderr: "" })));
+  });
+}
+
+describe(SUITE, { concurrency: Math.min(8, availableParallelism()) }, () => {
+  for (const { name, body } of registered) nodeTest(name, body);
+});

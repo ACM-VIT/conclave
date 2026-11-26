@@ -494,6 +494,13 @@ const release = (files: ReadonlyArray<{ base: string; path: string }>): void => 
 
 const sourceOf = (candidate: CopyFile, hash: string): { source: string; order: string } => {
   if (candidate.archive === null) return { source: `${candidate.service}/flat-${hash.slice(0, 16)}`, order: "" };
+  const metadataPath = join(dirname(candidate.base), ".source");
+  const metadata = readClaimed(metadataPath);
+  if (metadata !== null) {
+    const container = /^([a-f0-9]+)\s+\S+$/.exec(metadata.trim())?.[1];
+    if (!container) throw new Error(`${metadataPath} does not name the container that wrote this archive.`);
+    return { source: `${candidate.service}/container/${container}`, order: candidate.archive };
+  }
   const parsed = ARCHIVE.exec(candidate.archive);
   return parsed
     ? { source: `${candidate.service}/${parsed[2]}`, order: candidate.archive }

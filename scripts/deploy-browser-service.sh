@@ -82,9 +82,19 @@ if [[ -n "$PREVIOUS_CONTAINER" ]]; then
   fi
 fi
 "${COMPOSE[@]}" build browser-service
-"${COMPOSE[@]}" run --rm --no-deps -e "BROWSER_IMAGE_NAME=${CHECK_IMAGE_NAME}" -e "BROWSER_SERVICE_PREVIOUS_CONTAINER=${PREVIOUS_CONTAINER}" -e "BROWSER_SERVICE_PREVIOUS_BINDINGS=${PREVIOUS_BINDINGS}" -e "BROWSER_SERVICE_PREVIOUS_DEPLOY_ID=${PREVIOUS_DEPLOY_ID}" browser-service node packages/shared-browser/dist/server.js --check-config
+CHECK_OUTPUT=""
+if ! CHECK_OUTPUT="$("${COMPOSE[@]}" run -T --rm --no-deps -e "BROWSER_IMAGE_NAME=${CHECK_IMAGE_NAME}" -e "BROWSER_SERVICE_PREVIOUS_CONTAINER=${PREVIOUS_CONTAINER}" -e "BROWSER_SERVICE_PREVIOUS_BINDINGS=${PREVIOUS_BINDINGS}" -e "BROWSER_SERVICE_PREVIOUS_DEPLOY_ID=${PREVIOUS_DEPLOY_ID}" browser-service node packages/shared-browser/dist/server.js --check-config)"; then
+  printf '%s\n' "$CHECK_OUTPUT"
+  exit 1
+fi
+printf '%s\n' "$CHECK_OUTPUT"
 if [[ "$CHECK_CONFIG_ONLY" == "true" ]]; then
   exit 0
+fi
+HEALTH_URL="$(tr -d '\r' <<<"$CHECK_OUTPUT" | sed -n 's/^BROWSER_SERVICE_HEALTH_URL=//p' | tail -n 1)"
+if [[ -z "$HEALTH_URL" ]]; then
+  echo "The configuration check did not report the service's health URL, so nothing was replaced." >&2
+  exit 1
 fi
 
 if [[ -n "$CANDIDATE_IMAGE_NAME" ]]; then
@@ -96,9 +106,6 @@ export BROWSER_SERVICE_DEPLOY_ID
 echo "Deploying shared browser service (deploy ${BROWSER_SERVICE_DEPLOY_ID})..."
 "${COMPOSE[@]}" up -d --build browser-service
 
-SERVICE_HOST="${BROWSER_SERVICE_HOST:-127.0.0.1}"
-[[ "$SERVICE_HOST" == *:* ]] && SERVICE_HOST="[${SERVICE_HOST}]"
-HEALTH_URL="http://${SERVICE_HOST}:${BROWSER_SERVICE_PORT:-3040}/health"
 
 # `up -d` returns once the container starts, before the service has checked
 # its configuration, so wait for the API to answer.
@@ -111,7 +118,7 @@ while (( $(date +%s) < deadline )); do
     healthy="true"
     break
   fi
-  sleep 2
+  sleep "${BROWSER_SERVICE_HEALTH_POLL_SECONDS:-2}"
 done
 if [[ "$healthy" != "true" ]]; then
   echo "The shared browser service from this deploy (${BROWSER_SERVICE_DEPLOY_ID}) did not answer healthy at ${HEALTH_URL}." >&2

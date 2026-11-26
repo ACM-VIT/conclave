@@ -272,6 +272,40 @@ test("--check-config resolves a host name once and compares the address it resol
     }
 });
 
+test("--check-config reports the health URL the service will answer on, however the host was written", async () => {
+    const engine = await fakeDockerEngine({ "conclave-browser:latest": hardenedImage });
+    try {
+        const reported: Record<string, string | null> = {};
+        const spellings = [
+            ["127.0.0.1", "127.0.0.1", ""],
+            ["localhost", "127.0.0.1", "127.0.0.1"],
+            ...(ipv6Loopback
+                ? [
+                      ["[::1]", "[::1]", ""],
+                      ["::1", "[::1]", ""],
+                      ["0:0:0:0:0:0:0:1", "[::1]", ""],
+                      ["localhost", "[::1]", "::1,127.0.0.1"],
+                  ]
+                : []),
+        ];
+        const expected: Record<string, string> = {};
+        for (const [host, urlHost, localhost] of spellings) {
+            const port = await freePort();
+            const label = `${host}${localhost ? ` resolving to ${localhost}` : ""}`;
+            const checked = await runService(
+                { BROWSER_SERVICE_HOST: host, BROWSER_SERVICE_PORT: String(port), DOCKER_HOST: engine.host, FAKE_LOCALHOST_ADDRESSES: localhost },
+                ["--check-config"],
+                [fakeLocalhostDns],
+            );
+            reported[label] = checked.output.match(/^BROWSER_SERVICE_HEALTH_URL=(\S+)$/m)?.[1] ?? null;
+            expected[label] = `http://${urlHost}:${port}/health`;
+        }
+        assert.deepEqual(reported, expected);
+    } finally {
+        await engine.close();
+    }
+});
+
 test("the service exits nonzero when it cannot bind its port", async () => {
     const engine = await fakeDockerEngine({ "conclave-browser:latest": hardenedImage });
     const port = await freePort();

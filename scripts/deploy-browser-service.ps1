@@ -137,9 +137,24 @@ try {
     }
   }
   Invoke-Checked -Command "docker" -Arguments ($composeArgs + @("build", "browser-service"))
-  Invoke-Checked -Command "docker" -Arguments ($composeArgs + @("run", "--rm", "--no-deps", "-e", "BROWSER_IMAGE_NAME=$checkImageName", "-e", "BROWSER_SERVICE_PREVIOUS_CONTAINER=$previousContainer", "-e", "BROWSER_SERVICE_PREVIOUS_BINDINGS=$previousBindings", "-e", "BROWSER_SERVICE_PREVIOUS_DEPLOY_ID=$previousDeployId", "browser-service", "node", "packages/shared-browser/dist/server.js", "--check-config"))
+  $checkOutput = @(& docker @($composeArgs + @("run", "-T", "--rm", "--no-deps", "-e", "BROWSER_IMAGE_NAME=$checkImageName", "-e", "BROWSER_SERVICE_PREVIOUS_CONTAINER=$previousContainer", "-e", "BROWSER_SERVICE_PREVIOUS_BINDINGS=$previousBindings", "-e", "BROWSER_SERVICE_PREVIOUS_DEPLOY_ID=$previousDeployId", "browser-service", "node", "packages/shared-browser/dist/server.js", "--check-config")))
+  $checkStatus = $LASTEXITCODE
+  $checkOutput | ForEach-Object { Write-Host $_ }
+  if ($checkStatus -ne 0) {
+    Exit-WithError "The shared browser service configuration check failed, so nothing was replaced."
+  }
   if ($checkConfigOnly) {
     exit 0
+  }
+  $healthUrl = ""
+  foreach ($line in $checkOutput) {
+    $text = "$line".TrimEnd("`r")
+    if ($text.StartsWith("BROWSER_SERVICE_HEALTH_URL=", [System.StringComparison]::Ordinal)) {
+      $healthUrl = $text.Substring("BROWSER_SERVICE_HEALTH_URL=".Length)
+    }
+  }
+  if (-not $healthUrl) {
+    Exit-WithError "The configuration check did not report the service's health URL, so nothing was replaced."
   }
 
   if ($candidateImageName) {
@@ -156,11 +171,6 @@ $deployId = [guid]::NewGuid().ToString("N")
 Write-Host "Deploying shared browser service (deploy $deployId)..."
 Invoke-Checked -Command "docker" -Arguments ($composeArgs + @("up", "-d", "--build", "browser-service"))
 
-$browserServicePort = if (-not [string]::IsNullOrWhiteSpace($env:BROWSER_SERVICE_PORT)) {
-  $env:BROWSER_SERVICE_PORT
-} else {
-  "3040"
-}
 $novncPortStart = if (-not [string]::IsNullOrWhiteSpace($env:NOVNC_PORT_START)) {
   $env:NOVNC_PORT_START
 } else {
@@ -171,25 +181,18 @@ $novncPortEnd = if (-not [string]::IsNullOrWhiteSpace($env:NOVNC_PORT_END)) {
 } else {
   "6100"
 }
-$browserServiceHost = if (-not [string]::IsNullOrWhiteSpace($env:BROWSER_SERVICE_HOST)) {
-  $env:BROWSER_SERVICE_HOST
-} else {
-  "127.0.0.1"
-}
 $browserHostAddress = if (-not [string]::IsNullOrWhiteSpace($env:BROWSER_HOST_ADDRESS)) {
   $env:BROWSER_HOST_ADDRESS
 } else {
   "localhost"
 }
 
-$healthHost = if ($browserServiceHost.Contains(":")) { "[$browserServiceHost]" } else { $browserServiceHost }
-$healthUrl = "http://${healthHost}:$browserServicePort/health"
-
 # `up -d` returns once the container starts, before the service has checked
 # its configuration, so wait for the API to answer.
 Write-Host "Waiting for $healthUrl..."
 $healthy = $false
 $healthTimeout = if ([string]::IsNullOrWhiteSpace($env:BROWSER_SERVICE_HEALTH_TIMEOUT_SECONDS)) { 120 } else { [int]$env:BROWSER_SERVICE_HEALTH_TIMEOUT_SECONDS }
+$healthPoll = if ([string]::IsNullOrWhiteSpace($env:BROWSER_SERVICE_HEALTH_POLL_SECONDS)) { 2 } else { [double]$env:BROWSER_SERVICE_HEALTH_POLL_SECONDS }
 $deadline = (Get-Date).AddSeconds($healthTimeout)
 while ((Get-Date) -lt $deadline) {
   try {
@@ -205,7 +208,7 @@ while ((Get-Date) -lt $deadline) {
     }
   } catch {
   }
-  Start-Sleep -Seconds 2
+  Start-Sleep -Milliseconds ([int]($healthPoll * 1000))
 }
 if (-not $healthy) {
   Exit-WithError "The shared browser service from this deploy ($deployId) did not answer healthy at $healthUrl.`nSee: docker compose -f $composeFile logs browser-service"

@@ -51,6 +51,8 @@ export const resolveHost = async (raw: string, lookup: Lookup = systemLookup): P
     return { ok: true, host: resolved[0], answers: resolved };
 };
 
+export const urlHost = (host: ResolvedHost): string => (isIP(host.split("%")[0]) === 6 ? `[${host.replace("%", "%25")}]` : host);
+
 export const bindingCovers = (bound: ResolvedBinding, listener: ResolvedBinding): boolean => {
     if (bound.port !== listener.port) return false;
     if (bound.host === IPV6_ANY) return true;

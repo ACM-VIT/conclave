@@ -15,6 +15,7 @@ Assert-PowerShellVersion
 function Exit-WithError {
   param([string]$Message)
   [Console]::Error.WriteLine($Message)
+  $script:deployExiting = $true
   exit 1
 }
 
@@ -215,10 +216,6 @@ function Get-PublicUrl {
 # images ran as root and left root-owned files (the SQLite database among them)
 # in the recordings volume. Hand anything node does not own over before a new
 # container starts. Safe to repeat; it only touches mismatched files.
-# Older images fell back to JSON files in the container layer when SQLite was
-# locked. Before the old container stops, its files are copied out, sent to the
-# folder the new image names (CONCLAVE_FALLBACK_IMPORT_DIR) and checked there
-# by SHA-256; after the stop they are copied again and resent if they changed.
 function Send-FileToCommand {
   param([string]$Path, [string]$Command, [string[]]$Arguments)
 
@@ -266,7 +263,28 @@ function ConvertTo-ContainerPath {
   return "/" + ($kept -join "/")
 }
 
-function Get-FallbackJsonPaths {
+function Get-ContainerSetting {
+  param([string[]]$EnvLines, [string]$Name)
+
+  $value = ""
+  foreach ($line in $EnvLines) {
+    if ($line.StartsWith("$Name=", [System.StringComparison]::Ordinal)) {
+      $value = $line.Substring($Name.Length + 1)
+    }
+  }
+  return $value.Trim()
+}
+
+function ConvertTo-ContainerFilePath {
+  param([string]$Workdir, [string]$Path)
+
+  if ($Path.StartsWith("/")) {
+    return ConvertTo-ContainerPath -Path $Path
+  }
+  return ConvertTo-ContainerPath -Path "$Workdir/$Path"
+}
+
+function Get-StoreFilePaths {
   param([string]$Container)
 
   $workdir = (@(& docker inspect --format "{{.Config.WorkingDir}}" $Container) -join "").Trim()
@@ -277,23 +295,28 @@ function Get-FallbackJsonPaths {
   if ($LASTEXITCODE -ne 0) {
     throw "Could not read where the old container kept its stores."
   }
-  $paths = [ordered]@{}
-  foreach ($pair in @(@("scheduling.json", "SCHEDULING_PATH"), @("scheduled-meetings.json", "SCHEDULED_MEETINGS_PATH"), @("scheduled-webinars.json", "SCHEDULED_WEBINARS_PATH"))) {
-    $name = $pair[0]
-    $variable = $pair[1]
-    $value = ""
-    foreach ($line in $envLines) {
-      if ($line.StartsWith("$variable=", [System.StringComparison]::Ordinal)) {
-        $value = $line.Substring($variable.Length + 1)
-      }
-    }
-    $value = $value.Trim()
+  $shared = Get-ContainerSetting -EnvLines $envLines -Name "CONCLAVE_SQLITE_PATH"
+  $recordings = Get-ContainerSetting -EnvLines $envLines -Name "RECORDING_STORAGE_PATH"
+  $paths = New-Object System.Collections.Generic.List[object]
+  foreach ($pair in @(@("scheduling", "SCHEDULING"), @("scheduled-meetings", "SCHEDULED_MEETINGS"), @("scheduled-webinars", "SCHEDULED_WEBINARS"))) {
+    $store = $pair[0]
+    $prefix = $pair[1]
+    $value = Get-ContainerSetting -EnvLines $envLines -Name "${prefix}_PATH"
     if (-not $value) {
-      $value = "$workdir/data/$name"
-    } elseif (-not $value.StartsWith("/")) {
-      $value = "$workdir/$value"
+      $value = "data/$store.json"
     }
-    $paths[$name] = ConvertTo-ContainerPath -Path $value
+    $paths.Add([pscustomobject]@{ Kind = "json"; Name = "$store.json"; Path = (ConvertTo-ContainerFilePath -Workdir $workdir -Path $value) })
+    $value = Get-ContainerSetting -EnvLines $envLines -Name "${prefix}_SQLITE_PATH"
+    if (-not $value) {
+      $value = $shared
+    }
+    if (-not $value -and $recordings) {
+      $value = "$recordings/conclave.sqlite"
+    }
+    if (-not $value) {
+      $value = "data/conclave.sqlite"
+    }
+    $paths.Add([pscustomobject]@{ Kind = "sqlite"; Name = $store; Path = (ConvertTo-ContainerFilePath -Workdir $workdir -Path $value) })
   }
   return $paths
 }
@@ -309,9 +332,9 @@ function Copy-FallbackJson {
   if ($LASTEXITCODE -ne 0) {
     throw "Could not list the files the old $Service container wrote."
   }
-  $paths = Get-FallbackJsonPaths -Container $Container
-  foreach ($name in $paths.Keys) {
-    $path = $paths[$name]
+  foreach ($entry in @(Get-StoreFilePaths -Container $Container | Where-Object { $_.Kind -eq "json" })) {
+    $name = $entry.Name
+    $path = $entry.Path
     if (-not (($changes -ccontains "A $path") -or ($changes -ccontains "C $path"))) {
       continue
     }
@@ -326,27 +349,20 @@ function Copy-FallbackJson {
   }
 }
 
-function Get-FallbackFingerprint {
-  param([string]$Directory)
-
-  $entries = @(Get-ChildItem -LiteralPath $Directory -Filter "*.json" -File -ErrorAction SilentlyContinue | Sort-Object Name | ForEach-Object {
-    "$($_.Name) $((Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash)"
-  })
-  return ($entries -join "`n")
-}
 
 function Get-ArchiveStamp {
   return [DateTime]::UtcNow.ToString("yyyyMMdd'T'HHmmssfff'Z'")
 }
 
 function Send-FallbackJson {
-  param([string]$Service, [string]$Directory)
+  param([string]$Service, [string]$Directory, [string]$Container, [string]$Identity)
 
   $names = @(Get-ChildItem -LiteralPath $Directory -Filter "*.json" -File | Sort-Object Name | ForEach-Object { $_.Name })
   if ($names.Count -eq 0) {
-    return
+    return ""
   }
   $archive = "$Directory.tar"
+  $env:COPYFILE_DISABLE = "1"
   & tar -C $Directory -cf $archive @names
   if ($LASTEXITCODE -ne 0) {
     throw "Could not pack the old $Service container's JSON fallback files."
@@ -360,15 +376,253 @@ function Send-FallbackJson {
   }
   $name = "$(Get-ArchiveStamp)-$($env:SFU_DEPLOY_ID)"
   $transfer = [guid]::NewGuid().ToString("N").Substring(0, 12)
-  $receive = 'umask 077 && own() { chown node:node "$@" && chmod 0700 "$@"; } && base=${CONCLAVE_FALLBACK_IMPORT_DIR:?} && case "$3" in ""|.*|*[!A-Za-z0-9._-]*) echo "The archive name $3 is not safe to use." >&2; exit 1;; esac && case "$4" in ""|*[!A-Za-z0-9]*) echo "The transfer id $4 is not safe to use." >&2; exit 1;; esac && folder=$base/$1 && dest=$folder/$3 && incoming=$base/.incoming-$1-$3-$4 && mkdir -p "$base" && own "$base" && mkdir -p "$folder" && own "$folder" && find "$base" -mindepth 1 -maxdepth 1 -type d -name ".incoming-*" -mmin +30 -exec rm -rf {} + && if [ -e "$dest" ]; then echo "$dest already exists, and a saved copy is never replaced." >&2; exit 1; fi && mkdir "$incoming" && own "$incoming" && trap ''rm -rf "$incoming"'' EXIT && cat > "$incoming/payload.tar" && got=$(sha256sum "$incoming/payload.tar" | cut -d" " -f1) && if [ "$got" != "$2" ]; then echo "The fallback files arrived with checksum $got, not $2." >&2; rm -rf "$incoming"; exit 1; fi && mkdir "$incoming/files" && own "$incoming/files" && tar -xf "$incoming/payload.tar" -C "$incoming/files" && rm "$incoming/payload.tar" && chown node:node "$incoming/files"/*.json && chmod 0600 "$incoming/files"/*.json && mv "$incoming/files" "$dest" && rmdir "$incoming" && chown -R node:node "$base"'
+  $receive = 'umask 077 && own() { chown node:node "$@" && chmod 0700 "$@"; } && base=${CONCLAVE_FALLBACK_IMPORT_DIR:?} && case "$3" in ""|.*|*[!A-Za-z0-9._-]*) echo "The archive name $3 is not safe to use." >&2; exit 1;; esac && case "$4" in ""|*[!A-Za-z0-9]*) echo "The transfer id $4 is not safe to use." >&2; exit 1;; esac && folder=$base/$1 && dest=$folder/$3 && incoming=$base/.incoming-$1-$3-$4 && mkdir -p "$base" && own "$base" && mkdir -p "$folder" && own "$folder" && find "$base" -mindepth 1 -maxdepth 1 -type d -name ".incoming-*" -mmin +30 -exec rm -rf {} + && if [ -e "$dest" ]; then echo "$dest already exists, and a saved copy is never replaced." >&2; exit 1; fi && find "$folder" -mindepth 1 -maxdepth 1 -name ".staged-*" -exec rm -rf {} + && mkdir "$incoming" && own "$incoming" && trap ''rm -rf "$incoming"'' EXIT && cat > "$incoming/payload.tar" && got=$(sha256sum "$incoming/payload.tar" | cut -d" " -f1) && if [ "$got" != "$2" ]; then echo "The fallback files arrived with checksum $got, not $2." >&2; rm -rf "$incoming"; exit 1; fi && mkdir "$incoming/files" && own "$incoming/files" && tar -xf "$incoming/payload.tar" -C "$incoming/files" && rm "$incoming/payload.tar" && chown node:node "$incoming/files"/*.json && chmod 0600 "$incoming/files"/*.json && printf "%s %s\n" "$5" "$6" > "$incoming/files/.source" && chown node:node "$incoming/files/.source" && chmod 0600 "$incoming/files/.source" && mv "$incoming/files" "$folder/.staged-$3" && rmdir "$incoming" && chown -R node:node "$base"'
   $exitCode = Send-FileToCommand -Path $archive -Command "docker" -Arguments ($composeBaseArgs + @(
     "run", "-T", "--rm", "--no-deps", "--user", "root", "--cap-add", "CHOWN", "--cap-add", "DAC_OVERRIDE", "--cap-add", "FOWNER", "--entrypoint", "sh", $Service, "-c",
-    $receive, "sh", $Service, $checksum, $name, $transfer
+    $receive, "sh", $Service, $checksum, $name, $transfer, $Container, $Identity
   ))
   if ($exitCode -ne 0) {
     throw "Could not copy the old $Service container's JSON fallback files onto the volume."
   }
-  Write-Host "Saved the old $Service container's JSON fallback files on the volume as $name and verified them: $($names -join ' ')"
+  Write-Host "Staged the old $Service container's JSON fallback files on the volume as $name and verified them: $($names -join ' ')"
+  return $name
+}
+
+function Publish-FallbackJson {
+  param([string]$Service, [string]$Name)
+
+  if (-not $Name) {
+    return
+  }
+  $publish = 'base=${CONCLAVE_FALLBACK_IMPORT_DIR:?} && case "$2" in ""|.*|*[!A-Za-z0-9._-]*) echo "The archive name $2 is not safe to use." >&2; exit 1;; esac && folder=$base/$1 && if [ -e "$folder/$2" ]; then echo "$folder/$2 already exists, and a saved copy is never replaced." >&2; exit 1; fi && if [ ! -d "$folder/.staged-$2" ]; then echo "The staged copy $folder/.staged-$2 is gone, so nothing was published." >&2; exit 1; fi && mv "$folder/.staged-$2" "$folder/$2"'
+  $null | & docker @($composeBaseArgs + @(
+    "run", "-T", "--rm", "--no-deps", "--user", "root", "--cap-add", "DAC_OVERRIDE", "--cap-add", "FOWNER", "--entrypoint", "sh", $Service, "-c",
+    $publish, "sh", $Service, $Name
+  ))
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not publish the old $Service container's staged JSON fallback files ($Name)."
+  }
+  Write-Host "Saved the old $Service container's JSON fallback files as $Name."
+}
+
+function Get-LayerSqliteDatabases {
+  param([string]$Container)
+
+  $changes = @(& docker diff $Container)
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not list the files the old container wrote."
+  }
+  $found = @()
+  foreach ($entry in @(Get-StoreFilePaths -Container $Container | Where-Object { $_.Kind -eq "sqlite" })) {
+    if (($changes -ccontains "A $($entry.Path)") -or ($changes -ccontains "C $($entry.Path)")) {
+      $found += [pscustomobject]@{ Store = $entry.Name; Path = $entry.Path }
+    }
+  }
+  return $found
+}
+
+function Get-SqliteTargetProbe {
+  return 'exec node --import tsx server/layerDatabase.ts probe /var/lib/conclave/recordings'
+}
+
+function Get-SqliteReceiver {
+  return 'umask 077 && target=$1 && case "$target" in /*) ;; *) echo "The database path $target is not absolute." >&2; exit 1;; esac && case "$3" in ""|*[!A-Za-z0-9]*) echo "The transfer id $3 is not safe to use." >&2; exit 1;; esac && dir=$(dirname "$target") && incoming=$dir/.incoming-sqlite-$3 && node --import tsx server/layerDatabase.ts prepare-folder "$dir" /var/lib/conclave/recordings node:node && node --import tsx server/layerDatabase.ts check-place "$target" /var/lib/conclave/recordings && find "$dir" -mindepth 1 -maxdepth 1 -type d -name ".incoming-sqlite-*" -mmin +30 -exec rm -rf {} + && if [ -n "$6" ]; then node --import tsx server/layerDatabase.ts check-mark "$target" "$4" "$6"; else for existing in "$target" "$target-wal" "$target-journal"; do if [ -e "$existing" ] || [ -L "$existing" ]; then echo "$existing already exists, and a database is never replaced." >&2; exit 1; fi; done; fi && mkdir "$incoming" && chown node:node "$incoming" && trap ''rm -rf "$incoming"'' EXIT && cat > "$incoming/payload.tar" && got=$(sha256sum "$incoming/payload.tar" | cut -d" " -f1) && if [ "$got" != "$2" ]; then echo "The database arrived with checksum $got, not $2." >&2; exit 1; fi && tar -xf "$incoming/payload.tar" -C "$incoming" && rm "$incoming/payload.tar" && node --import tsx server/layerDatabase.ts consolidate "$incoming/db" "$4" "$5" && chown node:node "$incoming/db" && chmod 0600 "$incoming/db" && node --import tsx server/layerDatabase.ts check-place "$target" /var/lib/conclave/recordings && if [ -n "$6" ]; then node --import tsx server/layerDatabase.ts check-mark "$target" "$4" "$6" && mv -f "$incoming/db" "$target"; else ln "$incoming/db" "$target"; fi'
+}
+
+function Get-LayerSqlitePlan {
+  param([string]$Service, [string]$Container, [string]$Started)
+
+  $layer = @(Get-LayerSqliteDatabases -Container $Container)
+  if ($layer.Count -eq 0) {
+    return @()
+  }
+  $started = $Started
+  if (-not $started) {
+    throw "Could not read when the old $Service container last started and stopped."
+  }
+  $targets = @($null | & docker @($composeBaseArgs + @("run", "-T", "--rm", "--no-deps", "--user", "root", "--cap-add", "DAC_OVERRIDE", "--entrypoint", "sh", $Service, "-c", (Get-SqliteTargetProbe))))
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not check where the new $Service keeps its databases."
+  }
+  $plan = @()
+  foreach ($entry in $layer) {
+    $found = $null
+    foreach ($line in $targets) {
+      $fields = @("$line" -split "`t")
+      if ($fields.Count -eq 5 -and $fields[0] -ceq $entry.Store) {
+        $found = [pscustomobject]@{ State = $fields[1]; Target = $fields[2]; Container = $fields[3]; Started = $fields[4] }
+      }
+    }
+    if (-not $found) {
+      throw "Could not tell where the new $Service keeps the $($entry.Store) database."
+    }
+    $action = $null
+    if ($found.State -ceq "carried" -and $found.Container -ceq $Container -and $found.Started -ceq $started) {
+      $action = "done"
+    } elseif ($found.State -ceq "carried" -and $found.Container -ceq $Container) {
+      $action = "replace"
+    } elseif ($found.State -ceq "free") {
+      $action = "carry"
+    } elseif ($found.State -ceq "taken" -or $found.State -ceq "carried") {
+      $origin = if ($found.Container) { " carried from container $($found.Container) as it was at $($found.Started)" } else { "" }
+      throw "The old $Service container keeps the $($entry.Store) database at $($entry.Path) inside the container, not on the volume, and $($found.Target) on the volume already holds a database$origin, so a copy cannot carry it over. Copy it out with: docker cp ${Container}:$($entry.Path) <file>, merge it into $($found.Target), then deploy again."
+    } elseif ($found.State -ceq "unwritable") {
+      throw "The old $Service container keeps the $($entry.Store) database at $($entry.Path) inside the container, not on the volume, and the new image would keep it at $($found.Target), where the nearest folder that exists cannot take new files. Make that folder writable, then deploy again."
+    } elseif ($found.State -ceq "outside") {
+      throw "The old $Service container keeps the $($entry.Store) database at $($entry.Path) inside the container, not on the volume, and the new image would keep it at $($found.Target), which does not resolve onto the recordings volume (/var/lib/conclave/recordings), so it would be lost with the container. Point CONCLAVE_SQLITE_PATH (or the store's own *_SQLITE_PATH) at a real folder on the recordings volume, then deploy again."
+    } else {
+      throw "Could not tell where the new $Service keeps the $($entry.Store) database."
+    }
+    if (-not ($plan | Where-Object { $_.Old -ceq $entry.Path -and $_.Target -ceq $found.Target })) {
+      $expected = if ($action -ceq "replace") { $found.Started } else { "" }
+      $plan += [pscustomobject]@{ Old = $entry.Path; Target = $found.Target; Action = $action; Started = $started; Expected = $expected }
+    }
+  }
+  $shared = @($plan | Group-Object -Property Target -CaseSensitive | Where-Object { $_.Count -gt 1 } | Select-Object -First 1)
+  if ($shared.Count -gt 0) {
+    throw "The old $Service container keeps more than one database inside the container that the new image would keep at $($shared[0].Name), so a copy cannot carry them over. Merge them into $($shared[0].Name), then deploy again."
+  }
+  return $plan
+}
+
+function Copy-LayerSqlite {
+  param([string]$Service, [string]$Container, [string]$Directory, [object[]]$Plan)
+
+  if ($Plan.Count -eq 0) {
+    return
+  }
+  $changes = @(& docker diff $Container)
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not list the databases the old $Service container kept."
+  }
+  New-Item -ItemType Directory -Path $Directory -Force | Out-Null
+  if (-not $IsWindows) {
+    & chmod 0700 $Directory
+  }
+  $index = 0
+  foreach ($step in $Plan) {
+    if ($step.Action -ceq "done") {
+      Write-Host "The old $Service container's database $($step.Old) is already at $($step.Target) on the volume, copied from this container as it is now."
+      continue
+    }
+    $index++
+    $folder = Join-Path $Directory "$index"
+    New-Item -ItemType Directory -Path $folder -Force | Out-Null
+    $parts = @()
+    foreach ($part in @("", "-wal", "-journal")) {
+      $source = "$($step.Old)$part"
+      if ($part -and -not (($changes -ccontains "A $source") -or ($changes -ccontains "C $source"))) {
+        continue
+      }
+      $copy = Join-Path $folder "db$part"
+      & docker cp "${Container}:$source" $copy
+      if ($LASTEXITCODE -ne 0) {
+        throw "Could not copy $source out of the old $Service container."
+      }
+      if (-not $IsWindows) {
+        & chmod 0600 $copy
+      }
+      $parts += "db$part"
+    }
+    $archive = "$folder.tar"
+    $env:COPYFILE_DISABLE = "1"
+    & tar -C $folder -cf $archive @parts
+    if ($LASTEXITCODE -ne 0) {
+      throw "Could not pack the old $Service container's database $($step.Old)."
+    }
+    if (-not $IsWindows) {
+      & chmod 0600 $archive
+    }
+    $checksum = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+    $transfer = [guid]::NewGuid().ToString("N").Substring(0, 12)
+    $exitCode = Send-FileToCommand -Path $archive -Command "docker" -Arguments ($composeBaseArgs + @(
+      "run", "-T", "--rm", "--no-deps", "--user", "root", "--cap-add", "CHOWN", "--cap-add", "DAC_OVERRIDE", "--cap-add", "FOWNER", "--entrypoint", "sh", $Service, "-c",
+      (Get-SqliteReceiver), "sh", $step.Target, $checksum, $transfer, $Container, $step.Started, $step.Expected
+    ))
+    if ($exitCode -ne 0) {
+      throw "Could not copy the old $Service container's database $($step.Old) to $($step.Target) on the volume."
+    }
+    if ($step.Action -ceq "replace") {
+      Write-Host "Replaced the copy of $($step.Old) that an earlier attempt left at $($step.Target), because the old $Service container ran again after it; folded its $($parts -join ' ') into one file and verified it."
+    } else {
+      Write-Host "Copied the old $Service container's database $($step.Old) to $($step.Target) on the volume, folded its $($parts -join ' ') into one file and verified it."
+    }
+  }
+}
+
+function Get-ContainerState {
+  param([string]$Container)
+
+  $line = (@(& docker inspect --format "{{.State.Running}} {{.State.StartedAt}} {{.State.FinishedAt}}" $Container) -join "").Trim()
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not read the old container's state."
+  }
+  $fields = @($line -split " ")
+  if ($fields.Count -ne 3 -or -not $fields[1] -or -not $fields[2]) {
+    throw "Could not read the old container's state."
+  }
+  return [pscustomobject]@{ Running = ($fields[0] -ceq "true"); Identity = "$($fields[1])_$($fields[2])" }
+}
+
+function Get-RestartPolicy {
+  param([string]$Container)
+
+  $policy = (@(& docker inspect --format "{{.HostConfig.RestartPolicy.Name}}{{if .HostConfig.RestartPolicy.MaximumRetryCount}}:{{.HostConfig.RestartPolicy.MaximumRetryCount}}{{end}}" $Container) -join "").Trim()
+  if ($LASTEXITCODE -ne 0 -or -not $policy) {
+    throw "Could not read the old container's restart policy."
+  }
+  return $policy
+}
+
+function Get-FrozenIdentity {
+  param([string]$Service, [string]$Container)
+
+  $state = Get-ContainerState -Container $Container
+  if ($state.Running) {
+    throw "The old $Service container is running again after the stop."
+  }
+  return $state.Identity
+}
+
+function Assert-StillFrozen {
+  param([string]$Service, [string]$Container, [string]$Frozen)
+
+  Assert-NotInterrupted -Service $Service
+  $state = Get-ContainerState -Container $Container
+  if ($state.Running -or $state.Identity -cne $Frozen) {
+    throw "The old $Service container started again while its files were being copied (it was stopped as $Frozen; now running=$($state.Running.ToString().ToLowerInvariant()), $($state.Identity)), so the copy may be missing its later saves."
+  }
+}
+
+function Test-ContainerRunning {
+  param([string]$Container)
+
+  $running = (@(& docker inspect --format "{{.State.Running}}" $Container) -join "").Trim()
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not read whether the old container is running."
+  }
+  return $running -ceq "true"
+}
+
+
+function Get-LayerSlotState {
+  param([string]$Service)
+
+  $container = @(& docker @($composeBaseArgs + @("ps", "-a", "-q", $Service))) | Select-Object -First 1
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not look up the old $Service container."
+  }
+  if ([string]::IsNullOrWhiteSpace($container)) {
+    return "none"
+  }
+  $layer = @(Get-LayerSqliteDatabases -Container $container)
+  if ($layer.Count -eq 0) {
+    return "clean"
+  }
+  if (Test-ContainerRunning -Container $container) {
+    return "layer-running"
+  }
+  return "layer-stopped"
 }
 
 function Test-SfuDeployed {
@@ -396,6 +650,187 @@ function Wait-SfuDeployed {
   return $true
 }
 
+function Enable-RestartGuard {
+  param([string]$Service, [string]$Container, [string]$Policy, [string]$StartCommand)
+
+  if (-not ("SfuRestartGuard" -as [type])) {
+    Add-Type -TypeDefinition @'
+    using System;
+    using System.Diagnostics;
+    using System.IO;
+    using System.Runtime.InteropServices;
+    using System.Threading;
+
+    public static class SfuRestartGuard
+    {
+        private static PosixSignalRegistration[] registrations;
+        private static string service;
+        private static string container;
+        private static string policy;
+        private static string startCommand;
+        private static volatile bool armed;
+        private static bool restorePending;
+        private static int interrupted;
+
+        public static int Interrupted
+        {
+            get { return Volatile.Read(ref interrupted); }
+        }
+
+        public static void Arm(string serviceName, string containerId, string restartPolicy, string start)
+        {
+            service = serviceName;
+            container = containerId;
+            policy = restartPolicy;
+            startCommand = start;
+            Volatile.Write(ref interrupted, 0);
+            if (registrations == null && !OperatingSystem.IsWindows())
+            {
+                registrations = new[]
+                {
+                    PosixSignalRegistration.Create(PosixSignal.SIGTERM, OnSignal),
+                    PosixSignalRegistration.Create(PosixSignal.SIGHUP, OnSignal),
+                    PosixSignalRegistration.Create(PosixSignal.SIGINT, OnSignal),
+                    PosixSignalRegistration.Create(PosixSignal.SIGQUIT, OnSignal),
+                };
+            }
+            armed = true;
+        }
+
+        public static bool Freeze()
+        {
+            restorePending = true;
+            return Docker("update", "--restart=no", container);
+        }
+
+        public static bool Restore()
+        {
+            if (restorePending && !Docker("update", "--restart=" + policy, container))
+            {
+                return false;
+            }
+            restorePending = false;
+            return true;
+        }
+
+        public static void Release(bool replaced)
+        {
+            try
+            {
+                if (!armed || replaced)
+                {
+                    return;
+                }
+                var restored = Restore();
+                var running = DockerOutput("inspect", "--format", "{{.State.Running}}", container);
+                if (running != "true" && running != "false")
+                {
+                    Console.Error.WriteLine("Could not determine whether the old " + service + " container is still running or was left stopped.");
+                }
+                if (!restored)
+                {
+                    var state = running == "true" ? "still running" : running == "false" ? "left stopped" : "state unknown";
+                    Console.Error.WriteLine("The old " + service + " container's restart policy could not be restored (" + state + "); set it with: docker update --restart=" + policy + " " + container);
+                }
+                else if (running == "true")
+                {
+                    Console.Error.WriteLine("The old " + service + " container is still running, with its restart policy (" + policy + ") restored.");
+                }
+                else if (running == "false")
+                {
+                    Console.Error.WriteLine("The old " + service + " container is left stopped, not removed, with its restart policy (" + policy + ") restored; start it again with: " + startCommand);
+                }
+            }
+            finally
+            {
+                armed = false;
+            }
+        }
+
+        public static void RemoveStaging(string staging)
+        {
+            try
+            {
+                Directory.Delete(staging, true);
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+
+        private static void OnSignal(PosixSignalContext context)
+        {
+            if (armed)
+            {
+                context.Cancel = true;
+                int status = context.Signal switch
+                {
+                    PosixSignal.SIGHUP => 129,
+                    PosixSignal.SIGINT => 130,
+                    PosixSignal.SIGQUIT => 131,
+                    _ => 143,
+                };
+                Interlocked.CompareExchange(ref interrupted, status, 0);
+            }
+        }
+
+        private static ProcessStartInfo Shielded(string[] arguments)
+        {
+            ProcessStartInfo start;
+            if (OperatingSystem.IsWindows())
+            {
+                start = new ProcessStartInfo("docker");
+            }
+            else
+            {
+                start = new ProcessStartInfo("sh");
+                start.ArgumentList.Add("-c");
+                start.ArgumentList.Add("trap '' INT TERM HUP QUIT; exec docker \"$@\"");
+                start.ArgumentList.Add("sh");
+            }
+            foreach (var argument in arguments)
+            {
+                start.ArgumentList.Add(argument);
+            }
+            start.UseShellExecute = false;
+            start.RedirectStandardOutput = true;
+            return start;
+        }
+
+        private static bool Docker(params string[] arguments)
+        {
+            using (var process = Process.Start(Shielded(arguments)))
+            {
+                process.StandardOutput.ReadToEnd();
+                process.WaitForExit();
+                return process.ExitCode == 0;
+            }
+        }
+
+        private static string DockerOutput(params string[] arguments)
+        {
+            using (var process = Process.Start(Shielded(arguments)))
+            {
+                var output = process.StandardOutput.ReadToEnd().Trim();
+                process.WaitForExit();
+                return process.ExitCode == 0 ? output : "";
+            }
+        }
+    }
+'@
+  }
+  [SfuRestartGuard]::Arm($Service, $Container, $Policy, $StartCommand)
+}
+
+function Assert-NotInterrupted {
+  param([string]$Service)
+
+  if (("SfuRestartGuard" -as [type]) -and [SfuRestartGuard]::Interrupted -ne 0) {
+    [Console]::Error.WriteLine("Interrupted by a signal. Stopped before replacing $Service.")
+    $script:deployExiting = $true
+    exit ([SfuRestartGuard]::Interrupted)
+  }
+}
+
 function Start-SfuService {
   param([string]$Service, [string]$Url)
 
@@ -412,37 +847,81 @@ function Start-SfuService {
   if (-not $IsWindows) {
     & chmod 0700 $staging
   }
+  $policy = ""
+  $completed = $false
+  $script:deployExiting = $false
   try {
-    $before = Join-Path $staging "before"
-    $after = Join-Path $staging "after"
     if ($hasContainer) {
       try {
-        Copy-FallbackJson -Service $Service -Container $container -Directory $before
-        Send-FallbackJson -Service $Service -Directory $before
+        $identity = (Get-ContainerState -Container $container).Identity
+        $null = @(Get-LayerSqlitePlan -Service $Service -Container $container -Started $identity)
+        $policy = Get-RestartPolicy -Container $container
       } catch {
         Exit-WithError "$($_.Exception.Message) Stopped before replacing $Service; nothing was stopped."
       }
+      Enable-RestartGuard -Service $Service -Container $container -Policy $policy -StartCommand "docker $($composeBaseArgs -join ' ') start $Service"
+      if (-not [SfuRestartGuard]::Freeze()) {
+        Exit-WithError "Could not keep the old $Service container from restarting while it is copied. Stopped before replacing $Service; nothing was stopped."
+      }
+      Assert-NotInterrupted -Service $Service
     }
-    Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @("stop", $Service))
-    Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @(
+    & docker @($composeBaseArgs + @("stop", $Service))
+    if ($LASTEXITCODE -ne 0) {
+      Exit-WithError "Could not stop the old $Service. Stopped before replacing it."
+    }
+    Assert-NotInterrupted -Service $Service
+    & docker @($composeBaseArgs + @(
       "run", "--rm", "--no-deps", "--user", "root", "--cap-add", "CHOWN", "--cap-add", "DAC_READ_SEARCH", "--entrypoint", "find", $Service,
       "/var/lib/conclave/recordings", "(", "!", "-user", "node", "-o", "!", "-group", "node", ")",
       "-exec", "chown", "node:node", "{}", "+"
     ))
+    if ($LASTEXITCODE -ne 0) {
+      Exit-WithError "Could not hand the recordings volume to the SFU user. Stopped before replacing $Service."
+    }
+    Assert-NotInterrupted -Service $Service
     if ($hasContainer) {
       try {
-        Copy-FallbackJson -Service $Service -Container $container -Directory $after
-        if ((Get-FallbackFingerprint -Directory $before) -ne (Get-FallbackFingerprint -Directory $after)) {
-          Send-FallbackJson -Service $Service -Directory $after
-        }
+        $frozen = Get-FrozenIdentity -Service $Service -Container $container
+        $json = Join-Path $staging "json"
+        Copy-FallbackJson -Service $Service -Container $container -Directory $json
+        $stagedJson = @(Send-FallbackJson -Service $Service -Directory $json -Container $container -Identity $frozen) | Select-Object -Last 1
+        Assert-StillFrozen -Service $Service -Container $container -Frozen $frozen
+        $sqlitePlan = @(Get-LayerSqlitePlan -Service $Service -Container $container -Started $frozen)
+        Assert-StillFrozen -Service $Service -Container $container -Frozen $frozen
+        Copy-LayerSqlite -Service $Service -Container $container -Directory (Join-Path $staging "sqlite") -Plan $sqlitePlan
+        Assert-StillFrozen -Service $Service -Container $container -Frozen $frozen
       } catch {
-        Exit-WithError "$($_.Exception.Message) Stopped before replacing $Service. Its old container is stopped, not removed; start it again with: docker $($composeBaseArgs -join ' ') start $Service"
+        Exit-WithError "$($_.Exception.Message) Stopped before replacing $Service."
       }
+      Assert-NotInterrupted -Service $Service
+      if (-not [SfuRestartGuard]::Restore()) {
+        Exit-WithError "Could not restore the old $Service container's restart policy ($policy) before replacing it. Stopped before replacing $Service."
+      }
+      try {
+        Assert-StillFrozen -Service $Service -Container $container -Frozen $frozen
+        Publish-FallbackJson -Service $Service -Name $stagedJson
+      } catch {
+        Exit-WithError "$($_.Exception.Message) Stopped before replacing $Service."
+      }
+      Assert-NotInterrupted -Service $Service
     }
+    Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @("up", "-d", $Service))
+    $completed = $true
   } finally {
-    Remove-Item -Recurse -Force -LiteralPath $staging -ErrorAction SilentlyContinue
+    if ($hasContainer -and ("SfuRestartGuard" -as [type])) {
+      [SfuRestartGuard]::Release($completed)
+      [SfuRestartGuard]::RemoveStaging($staging)
+      if (-not $script:deployExiting) {
+        Assert-NotInterrupted -Service $Service
+      }
+    } else {
+      Remove-Item -Recurse -Force -LiteralPath $staging -ErrorAction SilentlyContinue
+    }
+    if (-not $completed -and -not $script:deployExiting) {
+      [Console]::Error.WriteLine("Interrupted. Stopped before replacing $Service.")
+      exit 130
+    }
   }
-  Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @("up", "-d", $Service))
   $timeoutSeconds = Get-Int -Value $env:SFU_HEALTH_TIMEOUT_SECONDS -DefaultValue 180
   Write-Host "Waiting for the new $Service to answer healthy at $Url as deploy $($env:SFU_DEPLOY_ID)..."
   if (-not (Wait-SfuDeployed -Service $Service -Url $Url -TimeoutSeconds $timeoutSeconds)) {
@@ -694,6 +1173,30 @@ if ($activeService -eq "sfu-a") {
 
 Write-Host "Active service: $activeService"
 Write-Host "Inactive service: $inactiveService"
+
+try {
+  $activeLayer = Get-LayerSlotState -Service $activeService
+  $inactiveLayer = Get-LayerSlotState -Service $inactiveService
+} catch {
+  Exit-WithError "Could not list the databases the old SFU containers kept. Nothing was changed."
+}
+$activeAnswers = if ($activeService -eq "sfu-a") { $hasStatusA } else { $hasStatusB }
+if ($activeLayer.StartsWith("layer-") -and $inactiveLayer.StartsWith("layer-")) {
+  Exit-WithError "The old $activeService and $inactiveService containers each keep their own database inside the container, not on the volume. A copy can carry over only one of them, so nothing was changed. Merge them into one database on the recordings volume, then deploy again."
+}
+if ($activeLayer -ceq "layer-running" -or ($activeLayer -ceq "layer-stopped" -and $activeAnswers)) {
+  Exit-WithError "The serving $activeService container keeps its database inside the container, not on the volume. $inactiveService is replaced first, and its new container would create a new database on the volume before $activeService's could be carried over, so nothing was changed. In a maintenance window, stop $activeService (docker $($composeBaseArgs -join ' ') stop $activeService) and deploy again: a stopped SFU that keeps its database inside its container is replaced first, and its database is carried."
+}
+if ($activeLayer -ceq "layer-stopped") {
+  Write-Host "$activeService is stopped and keeps its database inside its container, so it is replaced first."
+  $swapService = $activeService
+  $swapUrl = $activeUrl
+  $activeService = $inactiveService
+  $activeUrl = $inactiveUrl
+  $inactiveService = $swapService
+  $inactiveUrl = $swapUrl
+  $activeRooms = if ($activeService -eq "sfu-a") { $roomsA } else { $roomsB }
+}
 
 Write-Host "Building and starting $inactiveService..."
 Start-SfuService -Service $inactiveService -Url $inactiveUrl

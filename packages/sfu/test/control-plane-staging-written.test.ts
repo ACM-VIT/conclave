@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -242,6 +242,39 @@ describe("one deploy's before-stop and after-stop copies, as staging's code wrot
     const revs = await dataRevs(first);
     const second = await restart(first);
     expect(await dataRevs(second)).toEqual(revs);
+  });
+});
+
+describe("the deploy publisher's frozen container copies", () => {
+  beforeEach(() => useMode("sqlite"));
+
+  it("ignores unpublished files and uses the container identity across deployment retries", async () => {
+    const imports = join(dir, "import");
+    const putCopy = (folder: string, phase: StagingLegacyPhase, source: string) => {
+      mkdirSync(folder, { recursive: true });
+      for (const file of JSON_FILES) copyFileSync(stagingLegacyFile("json", phase, file), join(folder, file));
+      writeFileSync(join(folder, ".source"), `${source}\n`);
+    };
+    const service = join(imports, "sfu-a");
+    const incoming = join(imports, ".incoming-sfu-a-deploy-one-transfer");
+    const staged = join(service, ".staged-20261124T000000002Z-sfu-deploy-two");
+    const publish = join(service, "20261124T000000002Z-sfu-deploy-two");
+    const container = "abc123";
+    putCopy(join(service, "20261124T000000001Z-sfu-deploy-one"), "phase-1", `${container} 2026-11-24T01:00:00Z_2026-11-24T02:00:00Z`);
+    putCopy(staged, "phase-2", `${container} 2026-11-24T02:01:00Z_2026-11-24T03:00:00Z`);
+    putCopy(join(incoming, "files"), "phase-2", `${container} 2026-11-24T02:01:00Z_2026-11-24T03:00:00Z`);
+
+    const first = await start();
+    expect(await stored(first)).toEqual(decodedFiles("phase-1"));
+    expect(readdirSync(staged).sort()).toEqual([".source", ...JSON_FILES].sort());
+    expect(readdirSync(join(incoming, "files")).sort()).toEqual([".source", ...JSON_FILES].sort());
+
+    renameSync(staged, publish);
+    const second = await restart(first);
+    expect(await stored(second)).toEqual(decodedFiles("phase-2"));
+    const revs = await dataRevs(second);
+    expect(await dataRevs(await restart(second))).toEqual(revs);
+    expect(importWarnings()).toEqual([]);
   });
 });
 
