@@ -1,7 +1,7 @@
 import { createHash, randomUUID, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, resolve } from "node:path";
+import { dirname } from "node:path";
 import type {
   CreateScheduledWebinarRequest,
   ScheduledWebinar,
@@ -20,6 +20,11 @@ import {
   normalizeHostEmail,
 } from "./webinar.js";
 import { canonicalizeClientId } from "./clientIds.js";
+import { openSqliteStore } from "./sqliteWriteCheck.js";
+import { storeJsonPath, storeSqlitePath } from "./storePaths.js";
+import { storedTimestampOrNull } from "./storedValues.js";
+import { writePrivateFileAtomic } from "./privateFile.js";
+import { adoptRecoveredJsonStore, jsonStoreCollection, type JsonStoreAdapter, type JsonStoreClaim } from "./jsonStoreUpgrade.js";
 
 const DEFAULT_EARLY_ENTRY_MINUTES = 10;
 const MAX_EARLY_ENTRY_MINUTES = 240;
@@ -125,6 +130,11 @@ export const createScheduledWebinarStore = (): ScheduledWebinarStore => ({
 const roomChannelKey = (clientId: string, roomId: string): string =>
   `${clientId}:${roomId}`;
 
+export const scheduledWebinarClaims: Record<"bySlug" | "byRoomChannel", JsonStoreClaim<ScheduledWebinar>> = {
+  bySlug: { key: (webinar) => webinar.linkSlug },
+  byRoomChannel: { key: (webinar) => roomChannelKey(webinar.clientId, webinar.roomId) },
+};
+
 const isSlugTaken = (
   store: ScheduledWebinarStore,
   slug: string,
@@ -165,11 +175,8 @@ const indexScheduledWebinar = (
   webinar: ScheduledWebinar,
 ): void => {
   store.byId.set(webinar.id, webinar);
-  store.bySlug.set(webinar.linkSlug, webinar.id);
-  store.byRoomChannel.set(
-    roomChannelKey(webinar.clientId, webinar.roomId),
-    webinar.id,
-  );
+  store.bySlug.set(scheduledWebinarClaims.bySlug.key(webinar), webinar.id);
+  store.byRoomChannel.set(scheduledWebinarClaims.byRoomChannel.key(webinar), webinar.id);
 };
 
 const removeFromIndexes = (
@@ -177,10 +184,11 @@ const removeFromIndexes = (
   webinar: ScheduledWebinar,
 ): void => {
   store.byId.delete(webinar.id);
-  if (store.bySlug.get(webinar.linkSlug) === webinar.id) {
-    store.bySlug.delete(webinar.linkSlug);
+  const slug = scheduledWebinarClaims.bySlug.key(webinar);
+  if (store.bySlug.get(slug) === webinar.id) {
+    store.bySlug.delete(slug);
   }
-  const channel = roomChannelKey(webinar.clientId, webinar.roomId);
+  const channel = scheduledWebinarClaims.byRoomChannel.key(webinar);
   if (store.byRoomChannel.get(channel) === webinar.id) {
     store.byRoomChannel.delete(channel);
   }
@@ -269,42 +277,17 @@ export type ScheduledWebinarPersistence = {
   close?: () => void;
 };
 
-const scheduledWebinarsPath = (): string => {
-  const configured = process.env.SCHEDULED_WEBINARS_PATH?.trim();
-  if (configured) return resolve(configured);
-  return resolve(process.cwd(), "data", "scheduled-webinars.json");
-};
+const scheduledWebinarsPath = (): string => storeJsonPath("scheduled-webinars");
 
-const scheduledWebinarsSqlitePath = (): string => {
-  const configured =
-    process.env.SCHEDULED_WEBINARS_SQLITE_PATH?.trim() ||
-    process.env.CONCLAVE_SQLITE_PATH?.trim();
-  if (configured) return resolve(configured);
+const scheduledWebinarsSqlitePath = (): string => storeSqlitePath("scheduled-webinars");
 
-  const recordingStoragePath = process.env.RECORDING_STORAGE_PATH?.trim();
-  if (recordingStoragePath) {
-    return resolve(recordingStoragePath, "conclave.sqlite");
-  }
-
-  return resolve(process.cwd(), "data", "conclave.sqlite");
-};
-
-const writeJsonAtomic = (path: string, data: string): void => {
-  const dir = dirname(path);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
-  }
-  const tmp = `${path}.${randomBytes(4).toString("hex")}.tmp`;
-  writeFileSync(tmp, data, "utf8");
-  renameSync(tmp, path);
-};
 
 const createFileScheduledWebinarPersistence = (
   path: string = scheduledWebinarsPath(),
 ): ScheduledWebinarPersistence => ({
   save: (snapshot) => {
     try {
-      writeJsonAtomic(path, JSON.stringify(snapshot, null, 2));
+      writePrivateFileAtomic(path, JSON.stringify(snapshot, null, 2));
     } catch (error) {
       Logger.error("Failed to persist scheduled webinars", error);
     }
@@ -352,9 +335,10 @@ const createSqliteScheduledWebinarPersistence = (
   }
 
   const { DatabaseSync } = loadNodeSqlite();
-  const db = new DatabaseSync(path);
-  db.exec("PRAGMA busy_timeout = 5000");
-  db.exec("PRAGMA journal_mode = WAL");
+  return openSqliteStore(new DatabaseSync(path), path, (db) => prepareSqliteScheduledWebinarPersistence(db));
+};
+
+const prepareSqliteScheduledWebinarPersistence = (db: SqliteDatabase): ScheduledWebinarPersistence => {
   db.exec(`
     CREATE TABLE IF NOT EXISTS scheduled_webinars (
       id TEXT PRIMARY KEY,
@@ -512,35 +496,46 @@ const migrateJsonScheduledWebinarsToSqlite = (
   return sqlite.load().length;
 };
 
+export const scheduledWebinarJsonStore: JsonStoreAdapter<ScheduledWebinar[]> = {
+  decode: (data) => {
+    if (!Array.isArray(data)) throw new Error("it is not a list of scheduled webinars");
+    return data
+      .map((entry) => normalizeStoredWebinar(entry))
+      .filter((entry): entry is ScheduledWebinar => Boolean(entry));
+  },
+  write: (path, webinars) => createFileScheduledWebinarPersistence(path).save(webinars),
+  collections: {
+    webinars: jsonStoreCollection<ScheduledWebinar[], ScheduledWebinar>({
+      index: "byId",
+      rows: (webinars) => webinars,
+      key: (webinar) => webinar.id,
+      stamp: (webinar) => webinar.updatedAt,
+      claims: scheduledWebinarClaims,
+    }),
+  },
+  build: (_base, rows) => rows.webinars as ScheduledWebinar[],
+};
+
 export const createScheduledWebinarPersistence = (): ScheduledWebinarPersistence => {
   const mode = process.env.SCHEDULED_WEBINARS_PERSISTENCE?.trim().toLowerCase();
   if (mode === "json" || mode === "file") {
+    adoptRecoveredJsonStore(scheduledWebinarsPath(), "scheduled-webinars.json", scheduledWebinarJsonStore);
     return createFileScheduledWebinarPersistence();
   }
 
   const jsonPersistence = createFileScheduledWebinarPersistence();
 
-  try {
-    const sqlitePersistence = createSqliteScheduledWebinarPersistence();
-    const migrated = migrateJsonScheduledWebinarsToSqlite(
-      sqlitePersistence,
-      jsonPersistence,
+  const sqlitePersistence = createSqliteScheduledWebinarPersistence();
+  const migrated = migrateJsonScheduledWebinarsToSqlite(
+    sqlitePersistence,
+    jsonPersistence,
+  );
+  if (migrated > 0) {
+    Logger.info(
+      `Migrated ${migrated} scheduled webinar(s) from JSON into SQLite`,
     );
-    if (migrated > 0) {
-      Logger.info(
-        `Migrated ${migrated} scheduled webinar(s) from JSON into SQLite`,
-      );
-    }
-    return sqlitePersistence;
-  } catch (error) {
-    if (mode === "sqlite") {
-      throw error;
-    }
-    Logger.warn(
-      `SQLite scheduled-webinar persistence unavailable; falling back to JSON: ${(error as Error).message}`,
-    );
-    return jsonPersistence;
   }
+  return sqlitePersistence;
 };
 
 const normalizeStoredWebinar = (raw: unknown): ScheduledWebinar | null => {
@@ -585,8 +580,8 @@ const normalizeStoredWebinar = (raw: unknown): ScheduledWebinar | null => {
     createdAt: Number(record.createdAt) || Date.now(),
     createdBy: String(record.createdBy ?? ""),
     updatedAt: Number(record.updatedAt) || Date.now(),
-    liveStartedAt: record.liveStartedAt ? Number(record.liveStartedAt) : null,
-    endedAt: record.endedAt ? Number(record.endedAt) : null,
+    liveStartedAt: storedTimestampOrNull(record.liveStartedAt),
+    endedAt: storedTimestampOrNull(record.endedAt),
     totalJoinCount: Number(record.totalJoinCount) || 0,
     peakAttendeeCount: Number(record.peakAttendeeCount) || 0,
     webinarLink: buildWebinarLink(linkSlug),
@@ -594,9 +589,7 @@ const normalizeStoredWebinar = (raw: unknown): ScheduledWebinar | null => {
       typeof record.coHostInviteTokenHash === "string"
         ? record.coHostInviteTokenHash
         : null,
-    coHostInviteTokenCreatedAt: record.coHostInviteTokenCreatedAt
-      ? Number(record.coHostInviteTokenCreatedAt)
-      : null,
+    coHostInviteTokenCreatedAt: storedTimestampOrNull(record.coHostInviteTokenCreatedAt),
   };
 };
 
