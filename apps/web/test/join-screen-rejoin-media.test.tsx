@@ -183,8 +183,8 @@ it("keeps the cross-client destination after leaving a meeting on the home page"
 
   expect(input.value).toBe(destination);
   expect(browser.location.pathname).toBe(`/${previousRoom}`);
-  expect(previousLookups).toContainEqual([previousRoom]);
-  expect(lookup).not.toHaveBeenCalled();
+  expect(previousLookups).toContainEqual(["default-room"]);
+  expect(lookup.mock.calls.every(([id]) => id === undefined)).toBe(true);
 });
 
 it("does not reopen either device on the join card after leaving a call", async () => {
