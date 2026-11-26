@@ -173,7 +173,7 @@ interface JoinScreenProps {
   showPermissionHint: boolean;
   rooms: RoomInfo[];
   roomsStatus: "idle" | "loading" | "error";
-  onRefreshRooms: () => void;
+  onRefreshRooms: (id?: string) => void;
   displayNameInput: string;
   onDisplayNameInputChange: (value: string) => void;
   onUserChange: (user: { id: string; email: string; name: string } | null) => void;
@@ -331,6 +331,7 @@ function JoinScreen({
   showPermissionHint,
   rooms,
   roomsStatus,
+  onRefreshRooms,
   displayNameInput,
   onDisplayNameInputChange,
   onUserChange,
@@ -346,7 +347,7 @@ function JoinScreen({
   onEnterStart,
 }: JoinScreenProps) {
   const pageClientId = canonicalizeSfuClientId(clientId) ?? resolveBrowserSfuClientId();
-  const codeField = useCodeField(roomId, onRoomIdChange, getMeetingLinkOrigins(), pageClientId);
+  const codeField = useCodeField(roomId, getMeetingLinkOrigins(), pageClientId, enableRoomRouting || forceJoinOnly);
   const isRoutedRoom = forceJoinOnly;
   const nameInputId = useId();
   const codeInputId = useId();
@@ -944,7 +945,16 @@ function JoinScreen({
   const nameReady = hasIdentity || liveDisplayName.length > 0;
   const canSubmit = canJoin && nameReady && !isLoading;
 
-  const presenceTarget = codeField.tenant.onThisPage ? joinCode : "";
+  const { lookup: presenceTarget, settledLookup } = codeField;
+  useEffect(() => {
+    if (!settledLookup && !isAdmin) return;
+    const refresh = () => onRefreshRooms(isAdmin ? undefined : settledLookup);
+    refresh();
+    if (!settledLookup) return;
+    const interval = setInterval(refresh, 10_000);
+    return () => clearInterval(interval);
+  }, [settledLookup, isAdmin, onRefreshRooms]);
+
   useEffect(() => {
     if (roomsStatus === "loading") setPresenceChecked(true);
     else if (roomsStatus === "idle" && presenceChecked) setPresenceSettled(true);

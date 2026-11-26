@@ -2669,24 +2669,6 @@ export default function MeetsClient({
     }
   }, [connectionState, refs.intentionalDisconnectRef]);
 
-  useEffect(() => {
-    if (connectionState === "joined") return;
-    const normalizedRoomId = roomId.trim();
-    const hasRoom = normalizedRoomId.length > 0;
-    if (!hasRoom && !isAdminFlag) return;
-
-    const refresh = () => {
-      void refreshRooms(isAdminFlag ? undefined : normalizedRoomId);
-    };
-
-    refresh();
-    if (!hasRoom) return;
-    const interval = setInterval(() => {
-      refresh();
-    }, 10000);
-    return () => clearInterval(interval);
-  }, [roomId, isAdminFlag, connectionState, refreshRooms]);
-
   const joinRoomById = socket.joinRoomById;
   useEffect(() => {
     if (!roomToJoinAsIssued) return;

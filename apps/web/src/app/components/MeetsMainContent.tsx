@@ -164,7 +164,7 @@ interface MeetsMainContentProps {
   showPermissionHint: boolean;
   availableRooms: RoomInfo[];
   roomsStatus: "idle" | "loading" | "error";
-  refreshRooms: () => void;
+  refreshRooms: (roomId?: string) => void;
   displayNameInput: string;
   setDisplayNameInput: Dispatch<SetStateAction<string>>;
   presentationStream: MediaStream | null;
