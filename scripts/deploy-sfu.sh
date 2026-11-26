@@ -501,6 +501,7 @@ PLACEMENT_SETTLE_SECONDS="${PLACEMENT_SETTLE_SECONDS:-25}"
 EXIT_BLOCKED_BY_ROOMS=3
 EXIT_CANARY_FAILED=4
 EXIT_NOT_RESTORED=5
+EXIT_CARRY_REFUSED=6
 
 PROJECT="$(printf "%s" "$COMPOSE_JSON" | json_field name)"
 IMAGE_REPO="${PROJECT}-sfu"
@@ -574,7 +575,8 @@ image_build() {
 service_container() {
   local ids
   ids="$("${COMPOSE[@]}" ps -aq "$1" 2>/dev/null)" || return 1
-  printf "%s" "${ids%%$'\n'*}"
+  [[ "$ids" != *[[:space:]]* ]] || return 1
+  printf "%s" "$ids"
 }
 
 # An instance's /status, only when it answers as that instance: a management
@@ -658,6 +660,298 @@ booted_drained() {
   grep -qx 'SFU_DRAINING=true' <<< "$env"
 }
 
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d' ' -f1
+  else
+    shasum -a 256 "$1" | cut -d' ' -f1
+  fi
+}
+
+normalize_container_path() {
+  local part
+  local -a parts=() kept=()
+  IFS='/' read -r -a parts <<<"$1"
+  for part in "${parts[@]}"; do
+    case "$part" in
+      "" | .) ;;
+      ..) (( ${#kept[@]} > 0 )) && kept=("${kept[@]:0:${#kept[@]}-1}") ;;
+      *) kept+=("$part") ;;
+    esac
+  done
+  local IFS=/
+  printf '/%s\n' "${kept[*]}"
+}
+
+container_setting() {
+  local value
+  value="$(sed -n "s/^$2=//p" <<<"$1" | tail -n 1)"
+  value="${value#"${value%%[![:space:]]*}"}"
+  printf '%s' "${value%"${value##*[![:space:]]}"}"
+}
+
+container_file_path() {
+  if [[ "$2" == /* ]]; then
+    normalize_container_path "$2"
+  else
+    normalize_container_path "$1/$2"
+  fi
+}
+
+store_file_paths() {
+  local container="$1" workdir env_lines entry store prefix value shared recordings
+  workdir="$(docker inspect --format '{{.Config.WorkingDir}}' "$container")" || return 1
+  env_lines="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$container")" || return 1
+  shared="$(container_setting "$env_lines" CONCLAVE_SQLITE_PATH)"
+  recordings="$(container_setting "$env_lines" RECORDING_STORAGE_PATH)"
+  for entry in scheduling:SCHEDULING scheduled-meetings:SCHEDULED_MEETINGS scheduled-webinars:SCHEDULED_WEBINARS; do
+    store="${entry%%:*}"
+    prefix="${entry#*:}"
+    value="$(container_setting "$env_lines" "${prefix}_PATH")"
+    printf 'json %s.json %s\n' "$store" "$(container_file_path "$workdir" "${value:-data/${store}.json}")"
+    value="$(container_setting "$env_lines" "${prefix}_SQLITE_PATH")"
+    value="${value:-$shared}"
+    if [[ -z "$value" && -n "$recordings" ]]; then
+      value="${recordings}/conclave.sqlite"
+    fi
+    printf 'sqlite %s %s\n' "$store" "$(container_file_path "$workdir" "${value:-data/conclave.sqlite}")"
+  done
+}
+
+collect_fallback_json() {
+  local service="$1" container="$2" dir="$3" changes paths name path
+  mkdir -m 700 "$dir" || return 1
+  if ! changes="$(docker diff "$container")"; then
+    echo "Could not list the files the old ${service} container wrote." >&2
+    return 1
+  fi
+  if ! paths="$(store_file_paths "$container")"; then
+    echo "Could not read where the old ${service} container kept its stores." >&2
+    return 1
+  fi
+  while read -r kind name path; do
+    [[ "$kind" == json ]] || continue
+    grep -qxF -e "A ${path}" -e "C ${path}" <<<"$changes" || continue
+    if ! docker cp "${container}:${path}" "${dir}/${name}"; then
+      echo "Could not copy ${name} out of the old ${service} container." >&2
+      return 1
+    fi
+    chmod 0600 "${dir}/${name}"
+  done <<<"$paths"
+}
+
+
+fallback_receiver() {
+  printf '%s' 'umask 077 && own() { chown node:node "$@" && chmod 0700 "$@"; } && base=${CONCLAVE_FALLBACK_IMPORT_DIR:?} && case "$3" in ""|.*|*[!A-Za-z0-9._-]*) echo "The archive name $3 is not safe to use." >&2; exit 1;; esac && case "$4" in ""|*[!A-Za-z0-9]*) echo "The transfer id $4 is not safe to use." >&2; exit 1;; esac && folder=$base/$1 && dest=$folder/$3 && incoming=$base/.incoming-$1-$3-$4 && mkdir -p "$base" && own "$base" && mkdir -p "$folder" && own "$folder" && find "$base" -mindepth 1 -maxdepth 1 -type d -name ".incoming-*" -mmin +30 -exec rm -rf {} + && if [ -e "$dest" ]; then echo "$dest already exists, and a saved copy is never replaced." >&2; exit 1; fi && find "$folder" -mindepth 1 -maxdepth 1 -name ".staged-*" -exec rm -rf {} + && mkdir "$incoming" && own "$incoming" && trap '"'"'rm -rf "$incoming"'"'"' EXIT && cat > "$incoming/payload.tar" && got=$(sha256sum "$incoming/payload.tar" | cut -d" " -f1) && if [ "$got" != "$2" ]; then echo "The fallback files arrived with checksum $got, not $2." >&2; rm -rf "$incoming"; exit 1; fi && mkdir "$incoming/files" && own "$incoming/files" && tar -xf "$incoming/payload.tar" -C "$incoming/files" && rm "$incoming/payload.tar" && chown node:node "$incoming/files"/*.json && chmod 0600 "$incoming/files"/*.json && printf "%s %s\n" "$5" "$6" > "$incoming/files/.source" && chown node:node "$incoming/files/.source" && chmod 0600 "$incoming/files/.source" && mv "$incoming/files" "$folder/.staged-$3" && rmdir "$incoming" && chown -R node:node "$base"'
+}
+
+fallback_publisher() {
+  printf '%s' 'base=${CONCLAVE_FALLBACK_IMPORT_DIR:?} && case "$2" in ""|.*|*[!A-Za-z0-9._-]*) echo "The archive name $2 is not safe to use." >&2; exit 1;; esac && folder=$base/$1 && if [ -e "$folder/$2" ]; then echo "$folder/$2 already exists, and a saved copy is never replaced." >&2; exit 1; fi && if [ ! -d "$folder/.staged-$2" ]; then echo "The staged copy $folder/.staged-$2 is gone, so nothing was published." >&2; exit 1; fi && mv "$folder/.staged-$2" "$folder/$2"'
+}
+
+archive_stamp() {
+  node -e 'process.stdout.write(new Date().toISOString().replace(/[-:.]/g, ""))'
+}
+
+send_fallback_json() {
+  local service="$1" dir="$2" container="$3" identity="$4" archive checksum file name transfer
+  local -a names=()
+  STAGED_FALLBACK=""
+  for file in "$dir"/*.json; do
+    [[ -e "$file" ]] && names+=("${file##*/}")
+  done
+  (( ${#names[@]} > 0 )) || return 0
+  archive="${dir}.tar"
+  (umask 077; COPYFILE_DISABLE=1 tar -C "$dir" -cf "$archive" "${names[@]}") || return 1
+  checksum="$(sha256_file "$archive")" || return 1
+  name="$(archive_stamp)-${SFU_DEPLOY_ID:?}"
+  transfer="$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
+  if ! state_compose "$service" run -T --rm --no-deps --user root --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --entrypoint sh "$service" -c \
+    "$(fallback_receiver)" sh "$service" "$checksum" "$name" "$transfer" "$container" "$identity" < "$archive"; then
+    echo "Could not copy the old ${service} container's JSON fallback files onto the volume." >&2
+    return 1
+  fi
+  STAGED_FALLBACK="$name"
+  echo "Staged the old ${service} container's JSON fallback files on the volume as ${name} and verified them: ${names[*]}"
+}
+
+publish_fallback_json() {
+  local service="$1"
+  [[ -n "${STAGED_FALLBACK:-}" ]] || return 0
+  if ! state_compose "$service" run -T --rm --no-deps --user root --cap-add DAC_OVERRIDE --cap-add FOWNER --entrypoint sh "$service" -c \
+    "$(fallback_publisher)" sh "$service" "$STAGED_FALLBACK" < /dev/null; then
+    echo "Could not publish the old ${service} container's staged JSON fallback files (${STAGED_FALLBACK})." >&2
+    return 1
+  fi
+  echo "Saved the old ${service} container's JSON fallback files as ${STAGED_FALLBACK}."
+  STAGED_FALLBACK=""
+}
+
+layer_sqlite_databases() {
+  local container="$1" changes paths kind store path
+  changes="$(docker diff "$container")" || return 1
+  grep -qE '^[AC] ' <<< "$changes" || return 0
+  paths="$(store_file_paths "$container")" || return 1
+  while read -r kind store path; do
+    [[ "$kind" == sqlite ]] || continue
+    if grep -qxF -e "A ${path}" -e "C ${path}" <<<"$changes"; then
+      printf '%s %s\n' "$store" "$path"
+    fi
+  done <<<"$paths"
+}
+
+sqlite_target_probe() {
+  printf '%s' 'exec node --import tsx server/layerDatabase.ts probe /var/lib/conclave/recordings'
+}
+
+sqlite_receiver() {
+  printf '%s' 'umask 077 && target=$1 && case "$target" in /*) ;; *) echo "The database path $target is not absolute." >&2; exit 1;; esac && case "$3" in ""|*[!A-Za-z0-9]*) echo "The transfer id $3 is not safe to use." >&2; exit 1;; esac && dir=$(dirname "$target") && incoming=$dir/.incoming-sqlite-$3 && node --import tsx server/layerDatabase.ts prepare-folder "$dir" /var/lib/conclave/recordings node:node && node --import tsx server/layerDatabase.ts check-place "$target" /var/lib/conclave/recordings && find "$dir" -mindepth 1 -maxdepth 1 -type d -name ".incoming-sqlite-*" -mmin +30 -exec rm -rf {} + && if [ -n "$6" ]; then node --import tsx server/layerDatabase.ts check-mark "$target" "$4" "$6"; else for existing in "$target" "$target-wal" "$target-journal"; do if [ -e "$existing" ] || [ -L "$existing" ]; then echo "$existing already exists, and a database is never replaced." >&2; exit 1; fi; done; fi && mkdir "$incoming" && chown node:node "$incoming" && trap '"'"'rm -rf "$incoming"'"'"' EXIT && cat > "$incoming/payload.tar" && got=$(sha256sum "$incoming/payload.tar" | cut -d" " -f1) && if [ "$got" != "$2" ]; then echo "The database arrived with checksum $got, not $2." >&2; exit 1; fi && tar -xf "$incoming/payload.tar" -C "$incoming" && rm "$incoming/payload.tar" && node --import tsx server/layerDatabase.ts consolidate "$incoming/db" "$4" "$5" && chown node:node "$incoming/db" && chmod 0600 "$incoming/db" && node --import tsx server/layerDatabase.ts check-place "$target" /var/lib/conclave/recordings && if [ -n "$6" ]; then node --import tsx server/layerDatabase.ts check-mark "$target" "$4" "$6" && mv -f "$incoming/db" "$target"; else ln "$incoming/db" "$target"; fi'
+}
+
+plan_layer_sqlite() {
+  local service="$1" container="$2" plan="$3" started="$4" layer targets store old name state target mark_container mark_started found_state found_target found_container found_started
+  : > "$plan" || return 1
+  if ! layer="$(layer_sqlite_databases "$container")"; then
+    echo "Could not list the databases the old ${service} container kept." >&2
+    return 1
+  fi
+  [[ -n "$layer" ]] || return 0
+  if [[ -z "$started" ]]; then
+    echo "Could not read when the old ${service} container last started and stopped." >&2
+    return 1
+  fi
+  if ! targets="$(state_compose "$service" run -T --rm --no-deps --user root --cap-add DAC_OVERRIDE --entrypoint sh "$service" -c "$(sqlite_target_probe)" < /dev/null)"; then
+    echo "Could not check where the new ${service} keeps its databases." >&2
+    return 1
+  fi
+  while read -r store old; do
+    found_state=""
+    found_target=""
+    found_container=""
+    found_started=""
+    while IFS=$'\t' read -r name state target mark_container mark_started; do
+      if [[ "$name" == "$store" ]]; then
+        found_state="$state"
+        found_target="$target"
+        found_container="$mark_container"
+        found_started="$mark_started"
+      fi
+    done <<<"$targets"
+    if [[ "$found_state" == carried && "$found_container" == "$container" ]]; then
+      if [[ "$found_started" == "$started" ]]; then
+        printf '%s\t%s\t%s\t%s\t%s\n' "$old" "$found_target" done "$started" "" >> "$plan"
+      else
+        printf '%s\t%s\t%s\t%s\t%s\n' "$old" "$found_target" replace "$started" "$found_started" >> "$plan"
+      fi
+      continue
+    fi
+    case "$found_state" in
+      free) printf '%s\t%s\t%s\t%s\t%s\n' "$old" "$found_target" carry "$started" "" >> "$plan" ;;
+      taken | carried)
+        echo "The old ${service} container keeps the ${store} database at ${old} inside the container, not on the volume, and ${found_target} on the volume already holds a database${found_container:+ carried from container ${found_container} as it was at ${found_started}}, so a copy cannot carry it over. Copy it out with: docker cp ${container}:${old} <file>, merge it into ${found_target}, then deploy again." >&2
+        return 1 ;;
+      unwritable)
+        echo "The old ${service} container keeps the ${store} database at ${old} inside the container, not on the volume, and the new image would keep it at ${found_target}, where the nearest folder that exists cannot take new files. Make that folder writable, then deploy again." >&2
+        return 1 ;;
+      outside)
+        echo "The old ${service} container keeps the ${store} database at ${old} inside the container, not on the volume, and the new image would keep it at ${found_target}, which does not resolve onto the recordings volume (/var/lib/conclave/recordings), so it would be lost with the container. Point CONCLAVE_SQLITE_PATH (or the store's own *_SQLITE_PATH) at a real folder on the recordings volume, then deploy again." >&2
+        return 1 ;;
+      *)
+        echo "Could not tell where the new ${service} keeps the ${store} database." >&2
+        return 1 ;;
+    esac
+  done <<<"$layer"
+  sort -u -o "$plan" "$plan"
+  target="$(cut -f2 "$plan" | sort | uniq -d | head -n 1)"
+  if [[ -n "$target" ]]; then
+    echo "The old ${service} container keeps more than one database inside the container that the new image would keep at ${target}, so a copy cannot carry them over. Merge them into ${target}, then deploy again." >&2
+    return 1
+  fi
+}
+
+carry_layer_sqlite() {
+  local service="$1" container="$2" dir="$3" plan="$4" changes old target action started expected part folder archive checksum transfer index=0
+  [[ -s "$plan" ]] || return 0
+  if ! changes="$(docker diff "$container")"; then
+    echo "Could not list the databases the old ${service} container kept." >&2
+    return 1
+  fi
+  while IFS=$'\t' read -r old target action started expected; do
+    if [[ "$action" == done ]]; then
+      echo "The old ${service} container's database ${old} is already at ${target} on the volume, copied from this container as it is now."
+      continue
+    fi
+    index=$((index + 1))
+    folder="${dir}/${index}"
+    mkdir -p -m 700 "$folder" || return 1
+    local -a parts=()
+    for part in "" -wal -journal; do
+      if [[ -n "$part" ]] && ! grep -qxF -e "A ${old}${part}" -e "C ${old}${part}" <<<"$changes"; then
+        continue
+      fi
+      if ! docker cp "${container}:${old}${part}" "${folder}/db${part}"; then
+        echo "Could not copy ${old}${part} out of the old ${service} container." >&2
+        return 1
+      fi
+      chmod 0600 "${folder}/db${part}"
+      parts+=("db${part}")
+    done
+    archive="${folder}.tar"
+    (umask 077; COPYFILE_DISABLE=1 tar -C "$folder" -cf "$archive" "${parts[@]}") || return 1
+    checksum="$(sha256_file "$archive")" || return 1
+    transfer="$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
+    if ! state_compose "$service" run -T --rm --no-deps --user root --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --entrypoint sh "$service" -c \
+      "$(sqlite_receiver)" sh "$target" "$checksum" "$transfer" "$container" "$started" "$expected" < "$archive"; then
+      echo "Could not copy the old ${service} container's database ${old} to ${target} on the volume." >&2
+      return 1
+    fi
+    if [[ "$action" == replace ]]; then
+      echo "Replaced the copy of ${old} that an earlier attempt left at ${target}, because the old ${service} container ran again after it; folded its ${parts[*]} into one file and verified it."
+    else
+      echo "Copied the old ${service} container's database ${old} to ${target} on the volume, folded its ${parts[*]} into one file and verified it."
+    fi
+  done < "$plan"
+}
+
+source_container_state() {
+  docker inspect --format '{{.State.Running}} {{.State.StartedAt}} {{.State.FinishedAt}}' "$1"
+}
+
+source_identity() {
+  local state
+  state="$(source_container_state "$1")" || return 1
+  read -r _ started finished <<<"$state"
+  [[ -n "$started" && -n "$finished" ]] || return 1
+  printf '%s_%s\n' "$started" "$finished"
+}
+
+freeze_source() {
+  local service="$1" container="$2" state running started finished
+  if ! state="$(source_container_state "$container")"; then
+    echo "Could not read the old ${service} container's state after the stop." >&2
+    return 1
+  fi
+  read -r running started finished <<<"$state"
+  if [[ "$running" != false || -z "$started" || -z "$finished" ]]; then
+    echo "The old ${service} container is running again after the stop." >&2
+    return 1
+  fi
+  printf '%s_%s\n' "$started" "$finished"
+}
+
+still_frozen() {
+  local service="$1" container="$2" frozen="$3" state running started finished
+  if ! state="$(source_container_state "$container")"; then
+    echo "Could not read the old ${service} container's state." >&2
+    return 1
+  fi
+  read -r running started finished <<<"$state"
+  if [[ "$running" != false || "${started}_${finished}" != "$frozen" ]]; then
+    echo "The old ${service} container started again while its files were being copied (it was stopped as ${frozen}; now running=${running}, ${started}_${finished}), so the copy may be missing its later saves." >&2
+    return 1
+  fi
+}
+
 restart_policy() {
   docker inspect --format '{{.HostConfig.RestartPolicy.Name}}{{if .HostConfig.RestartPolicy.MaximumRetryCount}}:{{.HostConfig.RestartPolicy.MaximumRetryCount}}{{end}}' "$1"
 }
@@ -668,7 +962,7 @@ release_restart_hold() {
   [[ -n "${RESTART_HOLDS[$svc]:-}" ]] || return 0
   read -r container policy <<< "${RESTART_HOLDS[$svc]}"
   if ! current="$(service_container "$svc")" || [[ "$current" == "$container" ]]; then
-    if ! docker update --restart="$policy" "$container" >/dev/null; then
+    if ! (trap '' INT TERM HUP QUIT; exec docker update --restart="$policy" "$container") >/dev/null; then
       echo "Could not restore ${svc}'s restart policy. Set it with: docker update --restart=${policy} ${container}" >&2
       return 1
     fi
@@ -676,8 +970,22 @@ release_restart_hold() {
   unset 'RESTART_HOLDS[$svc]'
 }
 
-release_restart_holds() {
+acquire_restart_hold() {
+  local svc="$1" container="$2" policy
+  [[ "${RESTART_HOLDS[$svc]:-}" != "$container "* ]] || return 0
+  release_restart_hold "$svc" || return 1
+  policy="$(restart_policy "$container")" || return 1
+  [[ -n "$policy" ]] || return 1
+  RESTART_HOLDS[$svc]="$container $policy"
+  (trap '' INT TERM HUP QUIT; exec docker update --restart=no "$container") >/dev/null
+}
+
+finish_deploy() {
   local code="$?" svc
+  trap '' INT TERM HUP QUIT
+  if ! finish_source_carry && (( code == 0 )); then
+    code=1
+  fi
   for svc in "${!RESTART_HOLDS[@]}"; do
     if ! release_restart_hold "$svc" && (( code == 0 )); then
       code=1
@@ -686,28 +994,26 @@ release_restart_holds() {
   exit "$code"
 }
 
-trap release_restart_holds EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+install_deploy_traps() {
+  trap finish_deploy EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 131' QUIT
+  trap 'exit 143' TERM
+}
+
 
 hold_down() {
-  local svc="$1" container policy state exited="" start_ts
+  local svc="$1" container state exited="" start_ts
   container="$(service_container "$svc")" || return 1
   [[ -n "$container" ]] || return 0
   if ! [[ "$(container_state "$svc")" =~ ^(stopped|restarting)$ ]]; then
     release_restart_hold "$svc" || true
     return 1
   fi
-  if [[ "${RESTART_HOLDS[$svc]:-}" != "$container "* ]]; then
-    release_restart_hold "$svc" || return 1
-    policy="$(restart_policy "$container")" || return 1
-    [[ -n "$policy" ]] || return 1
-    RESTART_HOLDS[$svc]="$container $policy"
-    if ! docker update --restart=no "$container" >/dev/null 2>&1; then
-      release_restart_hold "$svc" || true
-      return 1
-    fi
+  if ! acquire_restart_hold "$svc" "$container"; then
+    release_restart_hold "$svc" || true
+    return 1
   fi
   start_ts="$(date +%s)"
   while (( $(date +%s) - start_ts < HEALTH_TIMEOUT_SECONDS )); do
@@ -843,7 +1149,7 @@ peers_serving() {
 # not boot drained, as an unverified build does) goes back into service before
 # this run drains anything.
 restore_service_when_none_serves() {
-  local svc status container env lkg
+  local svc status container env lkg identity running
   for svc in "${ALL_SFU_SERVICES[@]}"; do
     status="$(instance_status "$svc" 2>/dev/null)" || continue
     [[ "$(printf "%s" "$status" | json_field draining)" == "false" ]] && is_healthy "$(service_url "$svc")" && return 0
@@ -854,9 +1160,10 @@ restore_service_when_none_serves() {
     is_healthy "$(service_url "$svc")" || continue
     [[ "$(journal_get "$svc" phase)" =~ ^(idle)?$ ]] || continue
     lkg="$(journal_get "$svc" lkg)"
-    [[ -z "$lkg" || "$(container_image "$svc")" == "$lkg" ]] || continue
-    container="$(service_container "$svc")"
-    [[ -n "$container" ]] || continue
+    identity="$(service_identity "$svc")" || continue
+    [[ -n "$identity" ]] || continue
+    read -r container running <<< "$identity"
+    [[ -z "$lkg" || "$running" == "$lkg" ]] || continue
     # Only an env Docker could read shows the container did not boot drained.
     env="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$container" 2>/dev/null)" || continue
     grep -qx 'SFU_DRAINING=true' <<< "$env" && continue
@@ -867,10 +1174,12 @@ restore_service_when_none_serves() {
 
 # True when every SFU instance, deployed in this run or not, runs the image.
 all_on_image() {
-  local svc
+  local svc identity result=0
   for svc in "${ALL_SFU_SERVICES[@]}"; do
-    [[ -n "$1" && "$(container_image "$svc")" == "$1" ]] || return 1
+    identity="$(service_identity "$svc")" || return 2
+    [[ -n "$identity" && "${identity#* }" == "$1" ]] || result=1
   done
+  return "$result"
 }
 
 # Any HTTP answer, even an error, means the process is up.
@@ -887,20 +1196,28 @@ run_canary() {
     dist/canary-call.mjs --url "$2"
 }
 
-# The image ID a service's container runs, or nothing.
-container_image() {
-  local container image i
-  container="$(service_container "$1")" || return 0
-  [[ -n "$container" ]] || return 0
+service_identity() {
+  local svc="$1" container image i
   for i in 1 2 3; do
-    image="$(docker inspect -f '{{.Image}}' "$container" 2>/dev/null)" || image=""
-    if [[ -n "$image" ]]; then
-      printf "%s\n" "$image"
-      return 0
+    if container="$(service_container "$svc")"; then
+      [[ -n "$container" ]] || return 0
+      if image="$(docker inspect -f '{{.Image}}' "$container" 2>/dev/null)" && [[ "$image" =~ ^sha256:[[:alnum:]-]+$ ]]; then
+        printf '%s %s\n' "$container" "$image"
+        return 0
+      fi
     fi
-    (( i < 3 )) && sleep "$STATUS_RETRY_SECONDS"
+    (( i == 3 )) || sleep "$STATUS_RETRY_SECONDS"
   done
-  return 0
+  echo "Docker cannot identify ${svc}'s container image; refusing to change it." >&2
+  return 1
+}
+
+image_id() {
+  local image
+  image="$(docker image inspect -f '{{.Id}}' "$1" 2>/dev/null)" || return 1
+  [[ "$image" =~ ^sha256:[[:alnum:]-]+$ ]] || return 1
+  [[ "$1" != sha256:* || "$1" == "$image" ]] || return 1
+  printf '%s\n' "$image"
 }
 
 # Compose starts whatever its own image name for a service points at, so after
@@ -908,8 +1225,9 @@ container_image() {
 # anything else (another image name, a compatibility-mode name) fails loudly.
 started_on() {
   local svc="$1" image="$2" image_name="$3" running
-  running="$(container_image "$svc")"
-  [[ "$running" == "$image" ]] && return 0
+  running="$(service_identity "$svc")" || return 1
+  running="${running#* }"
+  [[ -n "$running" && "$running" == "$image" ]] && return 0
   echo "compose started ${svc} on ${running:-no image}, not the image tagged for it as ${image_name} (${image}); check that the compose file names ${image_name} for ${svc}" >&2
   return 1
 }
@@ -932,12 +1250,147 @@ candidate_tag() {
 # Starts a service's container on a tag, booting drained ("true") or serving
 # ("false"). Both are set on every start, never inherited from the shell or
 # .env.
+state_compose() {
+  local svc="$1"
+  shift
+  env "$(image_var "$svc")=${STATE_TOOLS_TAG:?}" "${COMPOSE[@]}" "$@"
+}
+
+finish_source_carry() {
+  local svc="${CARRY_SERVICE:-}" container="${CARRY_CONTAINER:-}" policy="${CARRY_POLICY:-}"
+  local running=unknown state="could not be checked" code=0
+  [[ -n "$svc" ]] || return 0
+  if [[ -z "$policy" && "${RESTART_HOLDS[$svc]:-}" == "$container "* ]]; then
+    policy="${RESTART_HOLDS[$svc]#* }"
+  fi
+  if [[ -n "$policy" ]]; then
+    release_restart_hold "$svc" || code=1
+    running="$(docker inspect --format '{{.State.Running}}' "$container" 2>/dev/null)" || running=unknown
+    case "$running" in true) state="still running" ;; false) state="left stopped" ;; esac
+    if (( code != 0 )); then
+      echo "The old ${svc} container's restart policy could not be restored (${state}); set it with: docker update --restart=${policy} ${container}" >&2
+    elif [[ "$running" == true ]]; then
+      echo "The old ${svc} container is still running, with its restart policy (${policy}) restored." >&2
+    elif [[ "$running" == false ]]; then
+      echo "The old ${svc} container is left stopped, not removed, with its restart policy (${policy}) restored; start it again with: ${COMPOSE[*]} start ${svc}" >&2
+    else
+      echo "Could not determine whether the old ${svc} container is still running or was left stopped." >&2
+    fi
+  fi
+  [[ -z "${CARRY_STAGING:-}" ]] || rm -rf -- "$CARRY_STAGING"
+  CARRY_SERVICE="" CARRY_CONTAINER="" CARRY_POLICY="" CARRY_STAGING=""
+  return "$code"
+}
+
+source_ready_to_stop() {
+  local service="$1" container="$2" current generation status i
+  for i in 1 2 3; do
+    current="$(service_container "$service")" || return 1
+    [[ "$current" == "$container" ]] || return 1
+    acquire_restart_hold "$service" "$container" || return 1
+    generation="$(source_container_state "$container")" || return 1
+    case "${generation%% *}" in
+      true)
+        if status="$(instance_status "$service")" &&
+          [[ "$(printf "%s" "$status" | json_field draining)" == true && "$(printf "%s" "$status" | json_field rooms)" == 0 ]] &&
+          [[ "$(source_container_state "$container")" == "$generation" ]]; then
+          return 0
+        fi
+        ;;
+      false)
+        if hold_down "$service" && [[ "$(service_container "$service")" == "$container" ]]; then
+          return 0
+        fi
+        ;;
+      *) return 1 ;;
+    esac
+    (( i == 3 )) || sleep "$STATUS_RETRY_SECONDS"
+  done
+  return 1
+}
+
+prepare_sfu_source() {
+  local service="$1" container="$2" identity frozen STAGED_FALLBACK=""
+  CARRY_SERVICE="$service" CARRY_CONTAINER="$container" CARRY_POLICY=""
+  CARRY_STAGING="$(umask 077; mktemp -d)" || return 1
+  if [[ -n "$container" ]]; then
+    if ! identity="$(source_identity "$container")" || ! plan_layer_sqlite "$service" "$container" "$CARRY_STAGING/sqlite-check" "$identity"; then
+      echo "Stopped before replacing ${service}; nothing was stopped." >&2
+      return 1
+    fi
+    if ! acquire_restart_hold "$service" "$container"; then
+      CARRY_POLICY="${RESTART_HOLDS[$service]:-}"
+      CARRY_POLICY="${CARRY_POLICY#* }"
+      echo "Could not keep the old ${service} from restarting while it is copied. Stopped before replacing ${service}; nothing was stopped." >&2
+      return 1
+    fi
+    CARRY_POLICY="${RESTART_HOLDS[$service]#* }"
+    if ! source_ready_to_stop "$service" "$container"; then
+      echo "${service} is no longer confirmed drained and empty; refusing to stop it." >&2
+      return 1
+    fi
+    if ! docker stop "$container" >/dev/null; then
+      echo "Could not stop the old ${service}. Stopped before replacing it." >&2
+      return 1
+    fi
+  fi
+  if ! state_compose "$service" run --rm --no-deps --user root --cap-add CHOWN --cap-add DAC_READ_SEARCH --entrypoint find "$service" \
+    /var/lib/conclave/recordings \( ! -user node -o ! -group node \) -exec chown node:node {} +; then
+    echo "Could not hand the recordings volume to the SFU user. Stopped before replacing ${service}." >&2
+    return 1
+  fi
+  [[ -n "$container" ]] || return 0
+  if ! frozen="$(freeze_source "$service" "$container")" ||
+    ! collect_fallback_json "$service" "$container" "$CARRY_STAGING/json" ||
+    ! send_fallback_json "$service" "$CARRY_STAGING/json" "$container" "$frozen" ||
+    ! still_frozen "$service" "$container" "$frozen" ||
+    ! plan_layer_sqlite "$service" "$container" "$CARRY_STAGING/sqlite-plan" "$frozen" ||
+    ! still_frozen "$service" "$container" "$frozen" ||
+    ! carry_layer_sqlite "$service" "$container" "$CARRY_STAGING/sqlite" "$CARRY_STAGING/sqlite-plan" ||
+    ! still_frozen "$service" "$container" "$frozen" ||
+    ! release_restart_hold "$service" ||
+    ! still_frozen "$service" "$container" "$frozen" ||
+    ! publish_fallback_json "$service"; then
+    echo "Stopped before replacing ${service}." >&2
+    return 1
+  fi
+}
+
+wait_for_generation() {
+  local svc="$1" expected="$2" url="$3" start_ts health
+  start_ts="$(date +%s)"
+  while true; do
+    if health="$(curl -fsS --connect-timeout 2 --max-time 3 "${url}/health" 2>/dev/null)" &&
+      HEALTH="$health" node -e 'try { const h=JSON.parse(process.env.HEALTH); process.exit(h.status === "healthy" && h.instanceId === process.argv[1] && h.deployId === process.argv[2] ? 0 : 1); } catch { process.exit(1); }' "$svc" "$expected"; then
+      return 0
+    fi
+    (( $(date +%s) - start_ts < HEALTH_TIMEOUT_SECONDS )) || return 1
+    sleep "$POLL_SECONDS"
+  done
+}
+
 up_service() {
-  local svc="$1" tag="$2" drained="$3" restart="unless-stopped"
-  [[ "$drained" == "true" ]] && restart="no"
-  env "$(image_var "$svc")=${tag}" SFU_START_DRAINING="$drained" SFU_RESTART_POLICY="$restart" \
-    "${COMPOSE[@]}" up -d --no-build --no-deps --force-recreate "$svc" || return 1
+  local svc="$1" tag="$2" drained="$3" expected="$4" restart=unless-stopped identity image capability
+  local SFU_DEPLOY_ID="sfu-$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
+  [[ "$drained" != true ]] || restart=no
+  identity="$(service_identity "$svc")" || return "$EXIT_CARRY_REFUSED"
+  image="$(image_id "$tag")" || return "$EXIT_CARRY_REFUSED"
+  [[ "$image" == "$expected" ]] || { echo "${tag} no longer names the expected image ${expected}." >&2; return "$EXIT_CARRY_REFUSED"; }
+  capability="$(docker image inspect -f '{{if index .Config.Labels "org.conclave.health-deploy-id"}}deploy-id{{else}}legacy{{end}}' "$image")" || return "$EXIT_CARRY_REFUSED"
+  case "$capability" in deploy-id|legacy) ;; *) return "$EXIT_CARRY_REFUSED" ;; esac
+  if ! prepare_sfu_source "$svc" "${identity%% *}"; then
+    finish_source_carry || true
+    return "$EXIT_CARRY_REFUSED"
+  fi
+  env "$(image_var "$svc")=$tag" SFU_DEPLOY_ID="$SFU_DEPLOY_ID" SFU_START_DRAINING="$drained" SFU_RESTART_POLICY="$restart" \
+    "${COMPOSE[@]}" up -d --no-build --no-deps --force-recreate "$svc" || { finish_source_carry || true; return 1; }
   unset 'RESTART_HOLDS[$svc]'
+  [[ -z "${CARRY_STAGING:-}" ]] || rm -rf -- "$CARRY_STAGING"
+  CARRY_SERVICE="" CARRY_CONTAINER="" CARRY_POLICY="" CARRY_STAGING=""
+  if [[ "$capability" == deploy-id ]] && ! wait_for_generation "${EXPECTED_ID[$svc]}" "$SFU_DEPLOY_ID" "$(service_url "$svc")"; then
+    echo "${svc} did not report healthy as deploy ${SFU_DEPLOY_ID}." >&2
+    return 1
+  fi
 }
 
 # Each instance's deploy journal: its phase (idle, drained, candidate, passed,
@@ -1004,7 +1457,10 @@ try {
 # The config hash a serving container of this service carries: rendered with
 # the very settings its serving start uses, never the shell's or .env's.
 serving_config_hash() {
-  env "$(image_var "$1")=$2" SFU_START_DRAINING=false SFU_RESTART_POLICY=unless-stopped "${COMPOSE[@]}" config --hash "$1" | awk '{print $2}'
+  local env deploy_id
+  env="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$3" 2>/dev/null)" || return 1
+  deploy_id="$(sed -n 's/^SFU_DEPLOY_ID=//p' <<< "$env")"
+  env "$(image_var "$1")=$2" SFU_DEPLOY_ID="$deploy_id" SFU_START_DRAINING=false SFU_RESTART_POLICY=unless-stopped "${COMPOSE[@]}" config --hash "$1" | awk '{print $2}'
 }
 
 # One rule for "serving", used for the last-known-good image, the deploy's
@@ -1015,12 +1471,11 @@ serving_config_hash() {
 SERVING_WHY=""
 SERVING_IMAGE=""
 serving() {
-  local svc="$1" image="${2:-}" container env url status running
+  local svc="$1" image="${2:-}" container env url status running identity
   SERVING_IMAGE=""
-  container="$(service_container "$svc")" || container=""
-  if [[ -z "$container" ]]; then SERVING_WHY="it has no container"; return 1; fi
-  running="$(container_image "$svc")"
-  if [[ -z "$running" ]]; then SERVING_WHY="Docker cannot read its container's image"; return 1; fi
+  if ! identity="$(service_identity "$svc")"; then SERVING_WHY="Docker cannot read its container's image"; return 1; fi
+  if [[ -z "$identity" ]]; then SERVING_WHY="it has no container"; return 1; fi
+  read -r container running <<< "$identity"
   if [[ -n "$image" && "$running" != "$image" ]]; then SERVING_WHY="its container runs ${running:-no image}, not ${image}"; return 1; fi
   if ! env="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$container" 2>/dev/null)"; then
     SERVING_WHY="Docker cannot read its container's env"; return 1
@@ -1069,6 +1524,7 @@ wait_serving() {
 # build that failed its canary. Returns 1 whenever the instance is not serving.
 restore_lkg() {
   local svc="$1" url="$2" image_name="$3" lkg="$4"
+  service_identity "$svc" >/dev/null || return 1
   if [[ -z "$lkg" ]]; then
     "${COMPOSE[@]}" stop "$svc" || true
     checkpoint "stop ${svc}"
@@ -1077,9 +1533,9 @@ restore_lkg() {
     return 1
   fi
   echo "Rolling ${svc} back to its previous image..." >&2
-  docker tag "$lkg" "$image_name"
+  docker tag "$lkg" "$image_name" || return 1
   checkpoint "tag ${svc} back"
-  if ! up_service "$svc" "$image_name" false; then
+  if ! up_service "$svc" "$image_name" false "$lkg"; then
     checkpoint "start ${svc} back"
     echo "ERROR: compose could not restart ${svc} on its previous image; it is down. Check it now." >&2
     return 1
@@ -1127,8 +1583,8 @@ seed_service_tag() {
   docker image inspect "$image_name" >/dev/null 2>&1 && return 0
   serving "$svc" && lkg="$SERVING_IMAGE"
   [[ -n "$lkg" ]] || lkg="$(journal_get "$svc" lkg)"
-  [[ -n "$lkg" ]] || lkg="$(docker image inspect -f '{{.Id}}' "${IMAGE_REPO}:rollback-${svc}" 2>/dev/null || true)"
-  if [[ -z "$lkg" ]] || ! docker image inspect "$lkg" >/dev/null 2>&1; then
+  [[ -n "$lkg" ]] || lkg="$(image_id "${IMAGE_REPO}:rollback-${svc}" || true)"
+  if [[ -z "$lkg" ]] || ! image_id "$lkg" >/dev/null; then
     return 1
   fi
   docker tag "$lkg" "$image_name" || return 1
@@ -1154,10 +1610,23 @@ seed_service_tags() {
 PROMOTE_WHY=""
 promote() {
   local svc="$1" url="$2" image_name="$3" image="$4" prev="$5"
+  if ! service_identity "$svc" >/dev/null || ! image_id "$image" >/dev/null; then
+    PROMOTE_WHY="Docker cannot identify the image for ${svc}; refusing to promote it"
+    return 1
+  fi
   journal_set "$svc" phase=promoting candidate="$image" prevLkg="$prev"
-  docker tag "$image" "$image_name"
+  if ! docker tag "$image" "$image_name"; then
+    PROMOTE_WHY="Docker could not tag ${image} as ${image_name}"
+    return 1
+  fi
   checkpoint "tag ${svc}"
-  if ! up_service "$svc" "$image_name" false; then
+  local code=0
+  up_service "$svc" "$image_name" false "$image" || code=$?
+  if (( code == EXIT_CARRY_REFUSED )); then
+    journal_set "$svc" phase=rollback lkg="$prev"
+    return "$EXIT_CARRY_REFUSED"
+  fi
+  if (( code != 0 )); then
     checkpoint "start ${svc}"
     PROMOTE_WHY="compose could not start ${svc} serving on ${image}"
     return 1
@@ -1177,6 +1646,11 @@ promote() {
 
 roll_back() {
   local svc="$1" url="$2" image_name="$3" lkg="$4" code=0 status
+  service_identity "$svc" >/dev/null || return "$EXIT_NOT_RESTORED"
+  if [[ -n "$lkg" ]] && ! image_id "$lkg" >/dev/null; then
+    echo "Docker cannot identify the rollback image for ${svc}; refusing to change it." >&2
+    return "$EXIT_NOT_RESTORED"
+  fi
   [[ "$(journal_get "$svc" phase)" == "rollback" ]] || journal_set "$svc" phase=rollback
   if ! hold_down "$svc"; then
     status="$(instance_status "$svc" 2>/dev/null)" || status=""
@@ -1198,7 +1672,7 @@ roll_back() {
 
 declare -A REPAIR_CODE=()
 repair_interrupted() {
-  local svc phase lkg candidate prev url image_name state code first=() rest=()
+  local svc phase lkg candidate prev url image_name state code identity running first=() rest=()
   for svc in "${ALL_SFU_SERVICES[@]}"; do
     case "$(container_state "$svc")" in
       stopped|restarting|absent) first+=("$svc") ;;
@@ -1213,6 +1687,11 @@ repair_interrupted() {
     lkg="$(journal_get "$svc" lkg)"
     candidate="$(journal_get "$svc" candidate)"
     prev="$(journal_get "$svc" prevLkg)"
+    if ! identity="$(service_identity "$svc")"; then
+      REPAIR_CODE[$svc]=$EXIT_NOT_RESTORED
+      continue
+    fi
+    running="${identity#* }"
     code=0
     echo "A deploy stopped while ${svc} was ${phase}; repairing it before anything else."
     case "$phase" in
@@ -1224,8 +1703,8 @@ repair_interrupted() {
           else
             journal_set "$svc" phase=idle
           fi
-        elif [[ -n "$lkg" && "$(container_image "$svc")" != "$lkg" ]]; then
-          echo "ERROR: ${svc} runs $(container_image "$svc"), not its last-known-good image ${lkg}, so it is left as it is. Check it by hand." >&2
+        elif [[ -n "$lkg" && "$running" != "$lkg" ]]; then
+          echo "ERROR: ${svc} runs ${running:-no image}, not its last-known-good image ${lkg}, so it is left as it is. Check it by hand." >&2
           code=$EXIT_NOT_RESTORED
         elif [[ "$(journal_get "$svc" wasDraining)" == "true" ]]; then
           journal_set "$svc" phase=idle
@@ -1249,11 +1728,15 @@ repair_interrupted() {
           journal_set "$svc" phase=idle lkg="$prev" candidate= prevLkg=
         else
           state="$(container_state "$svc")"
-          if [[ -n "$candidate" ]] && { [[ "$state" =~ ^(stopped|restarting|absent)$ ]] || { [[ "$(container_image "$svc")" == "$candidate" ]] && booted_drained "$svc"; }; }; then
+          if [[ -n "$candidate" ]] && { [[ "$state" =~ ^(stopped|restarting|absent)$ ]] || { [[ "$running" == "$candidate" ]] && booted_drained "$svc"; }; }; then
             drain_and_wait "$svc" "$url" || code=$?
-            if (( code == 0 )) && ! promote "$svc" "$url" "$image_name" "$candidate" "$prev"; then
-              echo "${PROMOTE_WHY}; rolling ${svc} back." >&2
-              roll_back "$svc" "$url" "$image_name" "$prev" || code=$?
+            if (( code == 0 )); then
+              promote "$svc" "$url" "$image_name" "$candidate" "$prev" || code=$?
+              if (( code != 0 && code != EXIT_CARRY_REFUSED )); then
+                echo "${PROMOTE_WHY}; rolling ${svc} back." >&2
+                code=0
+                roll_back "$svc" "$url" "$image_name" "$prev" || code=$?
+              fi
             fi
           else
             roll_back "$svc" "$url" "$image_name" "$prev" || code=$?
@@ -1277,11 +1760,10 @@ repair_interrupted() {
 # taken.
 deploy_service() {
   local svc="$1" relooked="${2:-}"
-  local url image_name candidate container status="" lkg="" recorded settle_until=0 was_draining="false"
+  local url image_name candidate container identity running status="" lkg="" recorded settle_until=0 was_draining="false"
   url="$(service_url "$svc")"
   image_name="$(service_image_name "$svc")"
   candidate="$(candidate_tag "$svc")"
-  container="$(service_container "$svc")"
   local phase
   phase="$(journal_get "$svc" phase)"
   if [[ -n "$phase" && "$phase" != "idle" ]]; then
@@ -1305,20 +1787,23 @@ deploy_service() {
   # rule, else the one its journal recorded the last time it served (or the
   # rollback-<service> tag an older release of this script kept). An image
   # that merely runs is never one.
+  identity="$(service_identity "$svc")" || return 1
+  read -r container running <<< "$identity"
   recorded="$(journal_get "$svc" lkg)"
   lkg="$recorded"
-  [[ -n "$lkg" ]] || lkg="$(docker image inspect -f '{{.Id}}' "${IMAGE_REPO}:rollback-${svc}" 2>/dev/null || true)"
+  [[ -n "$lkg" ]] || lkg="$(image_id "${IMAGE_REPO}:rollback-${svc}" || true)"
   if serving "$svc"; then
     lkg="$SERVING_IMAGE"
   fi
-  if [[ -n "$lkg" ]] && ! docker image inspect "$lkg" >/dev/null 2>&1; then
-    lkg=""
+  if [[ -n "$lkg" ]] && ! image_id "$lkg" >/dev/null; then
+    echo "Docker cannot identify the last-known-good image for ${svc}; refusing to change it." >&2
+    return 1
   fi
 
   # Deployed means the target passed its canary here (the journal says it is
   # this instance's last-known-good), with the current config, and serves.
-  if [[ -n "$container" && "$recorded" == "$TARGET_IMAGE" && "$(container_image "$svc")" == "$TARGET_IMAGE" ]] &&
-     [[ "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.config-hash"}}' "$container")" == "$(serving_config_hash "$svc" "$image_name")" ]]; then
+  if [[ -n "$container" && "$recorded" == "$TARGET_IMAGE" && "$running" == "$TARGET_IMAGE" ]] &&
+     [[ "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.config-hash"}}' "$container")" == "$(serving_config_hash "$svc" "$image_name" "$container")" ]]; then
     if serving "$svc" "$TARGET_IMAGE"; then
       echo "${svc} already runs ${TARGET_COMMIT} with the current config; leaving it alone."
       return 0
@@ -1354,6 +1839,7 @@ deploy_service() {
       echo "Deploy stopped: ${svc} is not serving (${SERVING_WHY}) and no image it served on is on record, so a failed canary would leave it nothing to go back to. It was not drained or rebuilt; fix it, then rerun this script." >&2
       return 1
     fi
+    service_identity "$svc" >/dev/null || return 1
     journal_set "$svc" phase=drained lkg="$lkg" wasDraining="$was_draining" candidate= prevLkg= commit="$TARGET_COMMIT"
     [[ -n "$lkg" ]] && docker tag "$lkg" "${IMAGE_REPO}:rollback-${svc}"
     echo "Draining ${svc}..."
@@ -1429,12 +1915,22 @@ deploy_service() {
     esac
   fi
 
+  if ! service_identity "$svc" >/dev/null; then
+    restore_drain_state "$svc" "$url" "$was_draining" || true
+    return 1
+  fi
   echo "Starting ${svc} on ${TARGET_COMMIT} under its candidate tag, out of rotation until its canary passes..."
   local failure="" code=0
   docker tag "$TARGET_IMAGE" "$candidate"
   checkpoint "tag candidate ${svc}"
   journal_set "$svc" phase=candidate candidate="$TARGET_IMAGE"
-  up_service "$svc" "$candidate" true || failure="compose could not start ${svc} on ${TARGET_COMMIT}"
+  up_service "$svc" "$candidate" true "$TARGET_IMAGE" || code=$?
+  if (( code == EXIT_CARRY_REFUSED )); then
+    journal_set "$svc" phase=rollback
+    return 1
+  fi
+  if (( code != 0 )); then failure="compose could not start ${svc} on ${TARGET_COMMIT}"; fi
+  code=0
   checkpoint "start candidate ${svc}"
   [[ -n "$failure" ]] || started_on "$svc" "$TARGET_IMAGE" "$candidate" || failure="${svc} is not running ${TARGET_COMMIT}'s image"
   [[ -n "$failure" ]] || wait_for_healthy "$url" || failure="${svc} did not report healthy within ${HEALTH_TIMEOUT_SECONDS}s"
@@ -1452,8 +1948,10 @@ deploy_service() {
       failure="${svc} passed its canary, but ${DRAIN_WHY}"
     fi
   fi
-  if [[ -z "$failure" ]] && ! promote "$svc" "$url" "$image_name" "$TARGET_IMAGE" "$lkg"; then
-    failure="$PROMOTE_WHY"
+  if [[ -z "$failure" ]]; then
+    promote "$svc" "$url" "$image_name" "$TARGET_IMAGE" "$lkg" || code=$?
+    (( code != EXIT_CARRY_REFUSED )) || return 1
+    if (( code != 0 )); then failure="$PROMOTE_WHY"; fi
   fi
   if [[ -n "$failure" ]]; then
     echo "" >&2
@@ -1511,6 +2009,95 @@ for svc in "${ALL_SFU_SERVICES[@]}"; do
   IMAGE_NAME[$svc]="$(service_image_name "$svc")"
 done
 
+for svc in "${ALL_SFU_SERVICES[@]}"; do
+  service_identity "$svc" >/dev/null || exit 1
+done
+
+install_deploy_traps
+
+if [[ "$ROLLBACK" != true ]]; then
+  TARGET_COMMIT="$(git -C "$ROOT_DIR" rev-parse --short=12 HEAD)"
+  # A rebuild of the same commit gets a new image ID even when every layer is
+  # cached, which would defeat the skip check on a rerun. So the commit's
+  # image is reused, and only a build from a clean build context (no edited
+  # or untracked files) is ever tagged as the commit's image.
+  build_inputs_clean="false"
+  if [[ -z "$(git -C "$ROOT_DIR" status --porcelain -- .dockerignore package.json pnpm-lock.yaml pnpm-workspace.yaml patches packages)" ]]; then
+    build_inputs_clean="true"
+  fi
+  if [[ "$build_inputs_clean" == "true" ]] &&
+     TARGET_IMAGE="$(image_id "${IMAGE_REPO}:${TARGET_COMMIT}")"; then
+    echo "Reusing the image already built for ${TARGET_COMMIT}."
+  else
+    # Built under its own candidate tag, never as a service's compose image: an
+    # instance's image moves to the build only once that instance has
+    # drained, right before its canary, so a deploy paused by a call leaves
+    # nothing untested for a later compose up to start.
+    echo "Building the SFU image for ${TARGET_COMMIT}..."
+    mapfile -t target_build < <(image_build)
+    docker build -t "${IMAGE_REPO}:${TARGET_COMMIT}-candidate" -f "${target_build[1]}" "${target_build[0]}"
+    TARGET_IMAGE="$(image_id "${IMAGE_REPO}:${TARGET_COMMIT}-candidate")"
+    if [[ "$build_inputs_clean" == "true" ]]; then
+      docker tag "$TARGET_IMAGE" "${IMAGE_REPO}:${TARGET_COMMIT}"
+    else
+      echo "The checkout has local changes; this build is not recorded as ${TARGET_COMMIT}'s image."
+    fi
+  fi
+else
+
+# The canary comes from this checkout, never from the image under test: a
+# release built before the bundle existed has none to run, and the check
+# should not change with the build it checks. A deploy has just built the
+# checkout. A rollback uses the checkout's image; when no deploy built it, it
+# is built under its own canary tag, so no service image is ever rebuilt or
+# retagged for it, and a rerun reuses it.
+  checkout_commit="$(git -C "$ROOT_DIR" rev-parse --short=12 HEAD)"
+  canary_tag="${IMAGE_REPO}-canary:${checkout_commit}"
+  if ! CANARY_IMAGE="$(image_id "${IMAGE_REPO}:${checkout_commit}")" &&
+     ! CANARY_IMAGE="$(image_id "$canary_tag")"; then
+    mapfile -t canary_build < <(image_build)
+    echo "Building ${checkout_commit} as ${canary_tag} for deploy checks."
+    docker build -t "$canary_tag" -f "${canary_build[1]}" "${canary_build[0]}"
+    CANARY_IMAGE="$(image_id "$canary_tag")"
+  fi
+fi
+
+CANARY_IMAGE="${CANARY_IMAGE:-$TARGET_IMAGE}"
+STATE_TOOLS_TAG="${IMAGE_REPO}:state-tools"
+docker tag "$CANARY_IMAGE" "$STATE_TOOLS_TAG"
+
+
+layered_service=""
+for svc in "${ALL_SFU_SERVICES[@]}"; do
+  identity="$(service_identity "$svc")" || exit 1
+  [[ -n "$identity" ]] || continue
+  if ! databases="$(layer_sqlite_databases "${identity%% *}")"; then
+    echo "Could not list the databases the old ${svc} container kept; refusing to replace it." >&2
+    exit 1
+  fi
+  [[ -n "$databases" ]] || continue
+  if [[ -n "$layered_service" ]]; then
+    echo "The old ${layered_service} and ${svc} containers each keep their own database inside the container. Merge their databases onto the recordings volume before deploying." >&2
+    exit 1
+  fi
+  layered_service="$svc"
+done
+if [[ -n "$layered_service" ]]; then
+  for svc in "${ALL_SFU_SERVICES[@]}"; do
+    [[ "$svc" == "$layered_service" ]] && continue
+    phase="$(journal_get "$svc" phase)"
+    if [[ -n "$phase" && "$phase" != idle ]]; then
+      echo "The old ${layered_service} container keeps its database inside the container. Carry it to the recording volume before repairing the interrupted deploy of ${svc}." >&2
+      exit 1
+    fi
+  done
+  first_service="$(for svc in "${SERVICES[@]}"; do echo "$(deploy_rank "$svc") $svc"; done | sort -n -k1,1 -k2,2 -k3,3 | awk 'NR == 1 { print $3 }')"
+  if [[ "$first_service" != "$layered_service" ]]; then
+    echo "The old ${layered_service} container keeps its database inside the container and must be replaced first. In a maintenance window, stop it (${COMPOSE[*]} stop ${layered_service}) and deploy again." >&2
+    exit 1
+  fi
+fi
+
 seed_service_tags
 repair_interrupted
 restore_service_when_none_serves
@@ -1527,20 +2114,29 @@ echo "Deploy order: ${ORDERED_SERVICES[*]}"
 # a rollout reached only some of them, or the target of a rollback that is not
 # finished yet.
 if [[ "$ROLLBACK" == "true" ]]; then
+  fleet_image_status=0
+  all_on_image "$LAST_GOOD_IMAGE" || fleet_image_status=$?
+  (( fleet_image_status != 2 )) || exit 1
   if [[ -n "$ROLLBACK_TARGET_IMAGE" ]]; then
     TARGET_IMAGE="$ROLLBACK_TARGET_IMAGE"
     TARGET_COMMIT="$ROLLBACK_TARGET_COMMIT"
     echo "Finishing the rollback to ${TARGET_COMMIT}."
-  elif all_on_image "$LAST_GOOD_IMAGE"; then
-    TARGET_IMAGE="$PREVIOUS_GOOD_IMAGE"
-    TARGET_COMMIT="$PREVIOUS_GOOD_COMMIT"
-    echo "Rolling every instance back to ${TARGET_COMMIT}, the release before ${LAST_GOOD_COMMIT}."
   else
-    TARGET_IMAGE="$LAST_GOOD_IMAGE"
-    TARGET_COMMIT="$LAST_GOOD_COMMIT"
-    echo "Not every instance runs ${LAST_GOOD_COMMIT}; rolling them all back to it, the last release that served on every instance."
+    case "$fleet_image_status" in
+      0)
+        TARGET_IMAGE="$PREVIOUS_GOOD_IMAGE"
+        TARGET_COMMIT="$PREVIOUS_GOOD_COMMIT"
+        echo "Rolling every instance back to ${TARGET_COMMIT}, the release before ${LAST_GOOD_COMMIT}."
+        ;;
+      1)
+        TARGET_IMAGE="$LAST_GOOD_IMAGE"
+        TARGET_COMMIT="$LAST_GOOD_COMMIT"
+        echo "Not every instance runs ${LAST_GOOD_COMMIT}; rolling them all back to it, the last release that served on every instance."
+        ;;
+      *) exit 1 ;;
+    esac
   fi
-  if [[ -z "$TARGET_IMAGE" ]] || ! docker image inspect "$TARGET_IMAGE" >/dev/null 2>&1; then
+  if [[ -z "$TARGET_COMMIT" || -z "$TARGET_IMAGE" ]] || ! image_id "$TARGET_IMAGE" >/dev/null; then
     echo "No canary-verified release to roll back to is recorded in ${DEPLOY_STATE_FILE}; revert the commit and deploy instead." >&2
     exit 1
   fi
@@ -1550,54 +2146,6 @@ if [[ "$ROLLBACK" == "true" ]]; then
   ROLLBACK_TARGET_COMMIT="$TARGET_COMMIT"
   ROLLBACK_TARGET_IMAGE="$TARGET_IMAGE"
   save_deploy_state
-else
-  TARGET_COMMIT="$(git -C "$ROOT_DIR" rev-parse --short=12 HEAD)"
-  # A rebuild of the same commit gets a new image ID even when every layer is
-  # cached, which would defeat the skip check on a rerun. So the commit's
-  # image is reused, and only a build from a clean build context (no edited
-  # or untracked files) is ever tagged as the commit's image.
-  build_inputs_clean="false"
-  if [[ -z "$(git -C "$ROOT_DIR" status --porcelain -- .dockerignore package.json pnpm-lock.yaml pnpm-workspace.yaml patches packages)" ]]; then
-    build_inputs_clean="true"
-  fi
-  if [[ "$build_inputs_clean" == "true" ]] &&
-     TARGET_IMAGE="$(docker image inspect -f '{{.Id}}' "${IMAGE_REPO}:${TARGET_COMMIT}" 2>/dev/null)"; then
-    echo "Reusing the image already built for ${TARGET_COMMIT}."
-  else
-    # Built under its own candidate tag, never as a service's compose image: an
-    # instance's image moves to the build only once that instance has
-    # drained, right before its canary, so a deploy paused by a call leaves
-    # nothing untested for a later compose up to start.
-    echo "Building the SFU image for ${TARGET_COMMIT}..."
-    mapfile -t target_build < <(image_build)
-    docker build -t "${IMAGE_REPO}:${TARGET_COMMIT}-candidate" -f "${target_build[1]}" "${target_build[0]}"
-    TARGET_IMAGE="$(docker image inspect -f '{{.Id}}' "${IMAGE_REPO}:${TARGET_COMMIT}-candidate")"
-    if [[ "$build_inputs_clean" == "true" ]]; then
-      docker tag "$TARGET_IMAGE" "${IMAGE_REPO}:${TARGET_COMMIT}"
-    else
-      echo "The checkout has local changes; this build is not recorded as ${TARGET_COMMIT}'s image."
-    fi
-  fi
-fi
-
-# The canary comes from this checkout, never from the image under test: a
-# release built before the bundle existed has none to run, and the check
-# should not change with the build it checks. A deploy has just built the
-# checkout. A rollback uses the checkout's image; when no deploy built it, it
-# is built under its own canary tag, so no service image is ever rebuilt or
-# retagged for it, and a rerun reuses it.
-if [[ "$ROLLBACK" == "true" ]]; then
-  checkout_commit="$(git -C "$ROOT_DIR" rev-parse --short=12 HEAD)"
-  canary_tag="${IMAGE_REPO}-canary:${checkout_commit}"
-  if ! CANARY_IMAGE="$(docker image inspect -f '{{.Id}}' "${IMAGE_REPO}:${checkout_commit}" 2>/dev/null)" &&
-     ! CANARY_IMAGE="$(docker image inspect -f '{{.Id}}' "$canary_tag" 2>/dev/null)"; then
-    mapfile -t canary_build < <(image_build)
-    echo "Building ${checkout_commit} as ${canary_tag} for its canary; the instances still go back to ${TARGET_COMMIT}."
-    docker build -t "$canary_tag" -f "${canary_build[1]}" "${canary_build[0]}"
-    CANARY_IMAGE="$(docker image inspect -f '{{.Id}}' "$canary_tag")"
-  fi
-else
-  CANARY_IMAGE="$TARGET_IMAGE"
 fi
 
 for svc in "${ORDERED_SERVICES[@]}"; do

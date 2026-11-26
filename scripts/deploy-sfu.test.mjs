@@ -69,7 +69,7 @@ test("an idle instance is rebuilt first, and the one carrying calls is not touch
     assert.equal(result.order, "sfu-b sfu-a");
     assert.equal(sfus["sfu-b"].recreates.length, 2, "canary build, then the serving container");
     assert.equal(sfus["sfu-a"].recreates.length, 0);
-    assert.deepEqual(cutRooms(sfus), [0, 0]);
+    assert.deepEqual(cutRooms(sfus), [0, 0, 0, 0]);
   });
 });
 
@@ -91,7 +91,7 @@ test("--force-drain is the one way to rebuild instances that carry calls", async
       assert.equal(sfu.drains[0].force, true);
       assert.equal(sfu.recreates.length, 2);
     }
-    assert.deepEqual(cutRooms(sfus), [0, 0, 0, 0], "each instance is recreated only after its forced drain");
+    assert.deepEqual(cutRooms(sfus), Array(8).fill(0), "each instance is stopped and recreated only after its forced drain");
   });
 });
 
@@ -124,7 +124,7 @@ test("an instance that is down is brought up before a healthy one is drained", a
     assert.equal(result.code, 3, result.output);
     assert.equal(result.order, "sfu-b sfu-a");
     assert.deepEqual(events, ["recreate sfu-b", "recreate sfu-b", "drain sfu-a", "drain sfu-a"]);
-    assert.deepEqual(cutRooms(sfus), [0, 0]);
+    assert.deepEqual(cutRooms(sfus), [0, 0, 0, 0]);
   });
 });
 
@@ -406,6 +406,83 @@ test("--rollback after a partial rollout returns every instance to the last rele
       const rollback = await deploy(sfus, { args: ["--rollback"], env: { SFU_DEPLOY_STATE_DIR: stateDir } });
       assert.equal(rollback.code, 0, rollback.output);
       assert.deepEqual(Object.values(sfus).map((sfu) => sfu.image), ["sha256:running", "sha256:running"]);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+});
+
+for (const fault of ["transient list", "persistent list", "persistent inspect"]) {
+  test(`rollback distinguishes an unknown image from a different release (${fault})`, async () => {
+    await withSfus({ "sfu-a": { onTarget: true }, "sfu-b": { onTarget: true } }, async (sfus, events) => {
+      const stateDir = await mkdtemp(path.join(tmpdir(), "conclave-deploy-state-"));
+      try {
+        const stateFile = path.join(stateDir, "vm.env");
+        const prior = "LAST_GOOD_COMMIT=bad\nLAST_GOOD_IMAGE=sha256:target\nPREVIOUS_GOOD_COMMIT=good\nPREVIOUS_GOOD_IMAGE=sha256:previous\n";
+        await writeFile(stateFile, prior);
+        const sfu = sfus["sfu-b"];
+        let failedReads = 0;
+        const fail = () => ++failedReads === 1 || fault !== "transient list";
+        sfu.onStatus = () => {
+          if (fault === "persistent inspect") sfu.failImageRead = fail;
+          else sfu.failContainerLookup = fail;
+        };
+        const result = await deploy(sfus, {
+          args: ["--rollback"],
+          env: { SFU_DEPLOY_STATE_DIR: stateDir, DEPLOY_TEST_EXPECT_LOOKUP_FAILURES: "sfu-b" },
+        });
+        assert.ok(failedReads > 0, result.output);
+        if (fault === "transient list") {
+          assert.equal(result.code, 0, result.output);
+          assert.deepEqual(Object.values(sfus).map((instance) => instance.image), ["sha256:previous", "sha256:previous"], result.output);
+        } else {
+          assert.notEqual(result.code, 0, result.output);
+          assert.deepEqual(events, [], result.output);
+          assert.equal(await readFile(stateFile, "utf8"), prior, result.output);
+        }
+      } finally {
+        await rm(stateDir, { recursive: true, force: true });
+      }
+    });
+  });
+}
+
+test("an in-progress rollback does not drain any instance while a fleet image is unknown", async () => {
+  await withSfus({ "sfu-a": { onTarget: true }, "sfu-b": { onTarget: true } }, async (sfus, events) => {
+    const stateDir = await mkdtemp(path.join(tmpdir(), "conclave-deploy-state-"));
+    try {
+      const stateFile = path.join(stateDir, "vm.env");
+      const prior = "LAST_GOOD_COMMIT=bad\nLAST_GOOD_IMAGE=sha256:target\nPREVIOUS_GOOD_COMMIT=good\nPREVIOUS_GOOD_IMAGE=sha256:previous\nROLLBACK_TARGET_COMMIT=good\nROLLBACK_TARGET_IMAGE=sha256:previous\n";
+      await writeFile(stateFile, prior);
+      const sfu = sfus["sfu-b"];
+      sfu.onStatus = () => { sfu.failImageRead = () => true; };
+      const result = await deploy(sfus, { args: ["--rollback"], env: { SFU_DEPLOY_STATE_DIR: stateDir } });
+      assert.notEqual(result.code, 0, result.output);
+      assert.deepEqual(events, [], result.output);
+      assert.equal(await readFile(stateFile, "utf8"), prior, result.output);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+});
+
+test("an aborted state carry records recovery without restarting the old SFU", async () => {
+  await withSfus({ "sfu-a": {}, "sfu-b": { rooms: 1 } }, async (sfus) => {
+    const stateDir = await mkdtemp(path.join(tmpdir(), "conclave-deploy-state-"));
+    try {
+      const sfu = sfus["sfu-a"];
+      sfu.onUpdate = (instance, restart) => {
+        if (restart === "no") instance.container = "restarting";
+      };
+      const result = await deploy(sfus, { env: { SFU_DEPLOY_STATE_DIR: stateDir } });
+      assert.equal(result.code, 1, result.output);
+      assert.equal(sfu.container, "restarting", result.output);
+      assert.equal(sfu.restartPolicy, "unless-stopped", result.output);
+      assert.deepEqual(sfu.recreates, [], result.output);
+      assert.deepEqual(sfus["sfu-b"].drains, [], result.output);
+      const journal = JSON.parse(await readFile(path.join(stateDir, "vm.sfu-a.journal.json"), "utf8"));
+      assert.equal(journal.phase, "rollback", result.output);
+      assert.equal(journal.lkg, "sha256:running", result.output);
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -722,7 +799,7 @@ test("a rollback whose checkout was never built builds its canary under its own 
       for (const run of [partial, retry]) {
         assert.ok(!run.docker.some(composeBuilds), "no service image is rebuilt");
       }
-      assert.match(partial.output, /Building [0-9a-f]{12} as vm-sfu-canary:[0-9a-f]{12} for its canary; the instances still go back to good/);
+      assert.match(partial.output, /Building [0-9a-f]{12} as vm-sfu-canary:[0-9a-f]{12} for deploy checks/);
       assert.doesNotMatch(retry.output, /Building/, "the retry reuses the canary image");
       const canaryImages = retry.docker.filter((args) => args[0] === "run").map((args) => args[args.indexOf("--entrypoint") + 2]);
       assert.deepEqual(canaryImages, ["sha256:canary-build"]);

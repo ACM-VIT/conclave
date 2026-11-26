@@ -11,7 +11,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
-import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -19,22 +18,11 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowActivityManager
-import skip.foundation.AssetURLProtocol
 
 /** Android exit records collected on the next launch, from ApplicationExitInfo to the uploaded event. */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [33])
 class ExitReasonCollectionBridgeTests {
-    /**
-     * Skip's Bundle installs its asset URL handler JVM-wide, which Java allows once. The rest of the suite owns it from
-     * the SDK 28 sandbox; registering again from this SDK 33 sandbox (JSON encoding loads Bundle) throws and fails
-     * whichever class runs second.
-     */
-    @Before
-    fun leaveTheAssetUrlHandlerToTheSharedSandbox() {
-        AssetURLProtocol::class.java.getDeclaredField("registered").apply { isAccessible = true }.setBoolean(null, true)
-    }
-
     private class Proto {
         val out = ByteArrayOutputStream()
         fun varint(value: Long) {

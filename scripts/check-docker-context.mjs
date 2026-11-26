@@ -20,6 +20,7 @@ const ARTIFACT_PROBES = [
   ".env.local",
   "probe.log",
   "data/scheduling.json",
+  "test/probe.ts",
   "probe.sqlite",
   "probe.sqlite3",
   "probe.db",
@@ -28,7 +29,6 @@ const ARTIFACT_PROBES = [
   "probe.db-journal",
 ];
 const ROOT_PROBES = [".git/config"];
-const WILDCARD = /[*?[]/;
 
 export function workspacePackages(root = repoRoot) {
   const byName = new Map();
@@ -104,10 +104,9 @@ export function imageProblems(root, build, { packages, tracked, contextFiles, ma
   const sources = [];
   const text = readFileSync(path.join(root, build.dockerfile), "utf8");
   const context = { contextFiles, matcher, ignoreFile };
-  for (const copy of contextCopies(text, build.args)) {
+  for (const copy of contextCopies(text)) {
     for (const raw of copy.sources) {
       const source = cleanPattern(raw);
-      if (WILDCARD.test(source)) throw new UnsupportedShape(`line ${copy.line}: wildcard COPY source ${raw}`);
       if (source === ".." || source.startsWith("../")) {
         problems.push(`${build.dockerfile}: line ${copy.line}: COPY source ${raw} is outside the build context`);
         continue;

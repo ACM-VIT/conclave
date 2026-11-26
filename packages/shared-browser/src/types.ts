@@ -80,6 +80,8 @@ export interface BrowserServiceConfig {
     dockerImageName: string;
     noVncPortStart: number;
     noVncPortEnd: number;
+    /** Host address the per-session noVNC ports bind to. Use 127.0.0.1 behind a same-host proxy. */
+    noVncBindAddress: string;
     hostAddress: string;
     publicBaseUrl?: string;
     containerIdleTimeoutMs: number;
@@ -99,6 +101,7 @@ export interface BrowserServiceConfig {
 export interface BrowserManager {
     readonly capabilities: BrowserCapabilities;
     checkHealth(): Promise<void>;
+    assertReady?(): Promise<void>;
     launchBrowser(options: LaunchBrowserOptions): Promise<LaunchBrowserResult>;
     navigateTo(options: NavigateOptions): Promise<LaunchBrowserResult>;
     closeBrowser(roomId: string): Promise<{ success: boolean; error?: string }>;
@@ -183,6 +186,7 @@ export const defaultConfig: BrowserServiceConfig = {
     dockerImageName: process.env.BROWSER_IMAGE_NAME || "conclave-browser:latest",
     noVncPortStart,
     noVncPortEnd,
+    noVncBindAddress: process.env.NOVNC_BIND_ADDRESS?.trim() || "0.0.0.0",
     hostAddress: process.env.BROWSER_HOST_ADDRESS || "localhost",
     publicBaseUrl:
         process.env.BROWSER_PUBLIC_BASE_URL ||
