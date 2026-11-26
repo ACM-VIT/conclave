@@ -27,13 +27,18 @@ export const jobs = {
   },
   test: {
     budgetSeconds: 110,
+    budgetFrom: "run",
     tasks: [
       { dir: "apps/web", script: "test:unit" },
-      { dir: "packages/sfu", script: "test" },
       { dir: "packages/meeting-core", script: "test" },
       { dir: "packages/ai", script: "test" },
       { dir: "packages/shared-browser", script: "test" },
     ],
+  },
+  "test-sfu": {
+    budgetSeconds: 110,
+    budgetFrom: "run",
+    tasks: [{ dir: "packages/sfu", script: "test" }],
   },
   build: {
     budgetSeconds: 240,
@@ -138,17 +143,18 @@ export function expandScript(dir, script, args = [], packages = workspacePackage
   }), ...hook(`post${script}`)];
 }
 
-export function runStepProblems(workflow) {
+export function runStepProblems(job) {
   const problems = [];
-  if (/^ {4}(if|continue-on-error):/m.test(workflow)) problems.push("the ci job has a job-level if or continue-on-error");
-  const runSteps = workflow.split(/\n(?= {6}- )/).filter((step) => /^(?: {6}- | {8})run: node scripts\/ci\/run\.mjs\b/m.test(step));
+  if ("if" in job || "continue-on-error" in job) problems.push("the ci job has a job-level if or continue-on-error");
+  const runSteps = (job.steps ?? []).filter((step) => /^node scripts\/ci\/run\.mjs\b/.test(step.run));
   if (runSteps.length !== 1) problems.push(`expected one step running scripts/ci/run.mjs, found ${runSteps.length}`);
   for (const step of runSteps) {
-    if (!/^(?: {6}- | {8})run: node scripts\/ci\/run\.mjs \$\{\{ matrix\.job \}\}$/m.test(step)) {
-      problems.push("the run step must be exactly: node scripts/ci/run.mjs ${{ matrix.job }}");
+    if (step.run !== 'node scripts/ci/run.mjs "$CI_JOB"') {
+      problems.push("the run step must select only the configured CI job");
     }
-    if (/^ {6}- if:|^ {8}if:/m.test(step)) problems.push("the run step has an if");
-    if (/^ {6}- continue-on-error:|^ {8}continue-on-error:/m.test(step)) problems.push("the run step has continue-on-error");
+    if (Object.hasOwn(step.env ?? {}, "CI_JOB")) problems.push("the run step overrides the configured CI job");
+    if ("if" in step) problems.push("the run step has an if");
+    if ("continue-on-error" in step) problems.push("the run step has continue-on-error");
   }
   return problems;
 }
