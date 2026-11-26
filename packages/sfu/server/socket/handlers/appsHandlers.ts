@@ -119,15 +119,11 @@ const MAX_APP_ID_LENGTH = 128;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
 
 const normalizeAppId = (value: unknown): string | null => {
-  if (typeof value !== "string") {
+  if (typeof value !== "string" || value.length > MAX_APP_ID_LENGTH) {
     return null;
   }
   const appId = value.trim();
-  if (
-    !appId ||
-    appId.length > MAX_APP_ID_LENGTH ||
-    CONTROL_CHARACTER_PATTERN.test(appId)
-  ) {
+  if (!appId || CONTROL_CHARACTER_PATTERN.test(appId)) {
     return null;
   }
   return appId;

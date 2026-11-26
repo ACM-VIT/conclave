@@ -755,6 +755,17 @@ describe("restarting an older client's copy", () => {
 });
 
 describe("what a payload costs before it is paid for", () => {
+  it("rejects an oversized app id instead of normalizing it into a stage command", () => {
+    vi.useFakeTimers();
+    const { connect, roomFor } = makeWorkRooms();
+    const host = connect("host#1", { host: true });
+    const oversized = BOARD.padStart(129);
+
+    expect(host.command("open", oversized).reply).toEqual({ success: false, error: "Invalid app id" });
+    expect(roomFor("room").apps.activeAppId).toBeNull();
+    expect(host.command("open", ` ${BOARD} `).reply).toMatchObject({ success: true, activeAppId: BOARD });
+  });
+
   const countingArray = (length: number, last: unknown) => {
     const reads = { count: 0 };
     const target: unknown[] = new Array<unknown>(length).fill(0);
@@ -776,9 +787,10 @@ describe("what a payload costs before it is paid for", () => {
     const seen = (value: unknown) => {
       if (typeof value === "string" && value.length > 0 && frame.includes(value)) count += 1;
     };
-    const { test, exec } = RegExp.prototype;
-    const { trim } = String.prototype;
-    const from = Buffer.from;
+    const test = Object.getOwnPropertyDescriptor(RegExp.prototype, "test")?.value as typeof RegExp.prototype.test;
+    const exec = Object.getOwnPropertyDescriptor(RegExp.prototype, "exec")?.value as typeof RegExp.prototype.exec;
+    const trim = Object.getOwnPropertyDescriptor(String.prototype, "trim")?.value as typeof String.prototype.trim;
+    const from = Object.getOwnPropertyDescriptor(Buffer, "from")?.value as typeof Buffer.from;
     RegExp.prototype.test = function (this: RegExp, value: string) {
       seen(value);
       return test.call(this, value);

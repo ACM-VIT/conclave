@@ -11,6 +11,56 @@ const WHITESPACE = [" ", "\t", "\n", "\r", "\v", "\f", " ", " ", "﻿", "　"
 const NOISE = ["=", "-", "_", "*", "A", "/", "+", "é"];
 
 describe("wire bytes", () => {
+  it("inspects at most two base64 characters before a caller pays to read", () => {
+    const random = seededRandom(270);
+    const frames = Array.from({ length: 128 }, (_, index) => {
+      const length = 4 * (1 + Math.floor(random() * (index < 64 ? 128 : 250_000)));
+      const text = ["A", " ", "\n", "=", "-", "é"][index % 6].repeat(length - 4);
+      const tail = ["AAAA", "AAA=", "AA==", "====", "\r\n  "][index % 5];
+      return JSON.parse(JSON.stringify(index % 2 ? text + tail : tail + text)) as string;
+    });
+    const charCodeAt = Object.getOwnPropertyDescriptor(String.prototype, "charCodeAt")?.value as typeof String.prototype.charCodeAt;
+    const trim = Object.getOwnPropertyDescriptor(String.prototype, "trim")?.value as typeof String.prototype.trim;
+    const exec = Object.getOwnPropertyDescriptor(RegExp.prototype, "exec")?.value as typeof RegExp.prototype.exec;
+    const from = Object.getOwnPropertyDescriptor(Buffer, "from")?.value as typeof Buffer.from;
+    let characters = 0;
+    let bulk = 0;
+    let observed = 0;
+    const counts: { characters: number; bulk: number }[] = [];
+    try {
+      String.prototype.charCodeAt = function (index) {
+        characters += 1;
+        return charCodeAt.call(this, index);
+      };
+      String.prototype.trim = function () {
+        bulk += 1;
+        return trim.call(this);
+      };
+      RegExp.prototype.exec = function (value) {
+        bulk += 1;
+        return exec.call(this, value);
+      };
+      Buffer.from = ((...args: unknown[]) => {
+        bulk += 1;
+        return Reflect.apply(from, Buffer, args) as Buffer;
+      }) as typeof Buffer.from;
+      for (const frame of frames) {
+        characters = 0;
+        bulk = 0;
+        if (wireBytes(frame)) observed += 1;
+        counts.push({ characters, bulk });
+      }
+    } finally {
+      String.prototype.charCodeAt = charCodeAt;
+      String.prototype.trim = trim;
+      RegExp.prototype.exec = exec;
+      Buffer.from = from;
+    }
+    expect(observed).toBeGreaterThan(0);
+    expect(Math.max(...counts.map((count) => count.bulk))).toBe(0);
+    expect(Math.max(...counts.map((count) => count.characters))).toBeLessThanOrEqual(2);
+  });
+
   it("measures exactly what it reads, for every encoding the SFU takes", () => {
     const random = seededRandom(270);
     const pick = <T>(items: T[]): T => items[Math.floor(random() * items.length)];

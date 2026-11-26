@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import type { Socket } from "socket.io";
-import type { DocumentExecutor, SyncAnswer, WriteResult } from "../server/roomApps.js";
+import type { DocumentExecutor } from "../server/roomApps.js";
 import {
   BARRIER_DEADLINE_MS,
   MAX_SLOT_MS,
@@ -187,12 +187,12 @@ const delayed = (inner: DocumentExecutor, ms: number) => {
       seen.most = Math.max(seen.most, seen.running);
       await new Promise((resolve) => setTimeout(resolve, ms));
       seen.running -= 1;
-      return (await inner.write(appId, identity, updates)) as WriteResult;
+      return inner.write(appId, identity, updates);
     },
     sync: async (appId, stateVector) => {
       seen.syncs += 1;
       await new Promise((resolve) => setTimeout(resolve, ms));
-      return (await inner.sync(appId, stateVector)) as SyncAnswer;
+      return inner.sync(appId, stateVector);
     },
     changesNothing: async (appId, update) => {
       seen.checks += 1;
