@@ -20,6 +20,7 @@ import {
   ReplayEntropy,
   emptyWriteSet,
   execute,
+  isEmptyWriteSet,
   query,
   type Command,
   type Query,
@@ -86,13 +87,12 @@ export const COMMIT_MARK_TTL_MS = 3_600_000;
 const COMMIT_SCRIPT = `
 local p = cjson.decode(ARGV[1])
 local kinds = { ${KINDS.map((kind, index) => `${kind} = ${index + FIXED_KEYS + 1}`).join(", ")} }
-for _, f in ipairs(p.f) do
-  if not redis.call("GET", KEYS[f]) then redis.call("SET", KEYS[f], "cancelled", "PX", p.ttl) end
-end
-local mark = redis.call("GET", KEYS[5])
-if mark then
+local writes = #p.w.r > 0
+if writes then
+  local mark = redis.call("GET", KEYS[5])
+  if not mark then return { 2, "expired" } end
   if mark == "cancelled" then return { 2, "cancelled" } end
-  return { 1, tonumber(string.sub(mark, 9)) }
+  if mark ~= "open" then return { 1, tonumber(string.sub(mark, 9)) } end
 end
 local function recordRev(kind, id)
   local raw = redis.call("HGET", KEYS[kinds[kind]], id)
@@ -101,19 +101,27 @@ local function recordRev(kind, id)
   if not ok or type(decoded) ~= "table" then return -2 end
   return tonumber(decoded.rev) or -2
 end
-for _, c in ipairs(p.c.r) do
-  if recordRev(c[1], c[2]) ~= c[3] then return { 0, "record " .. c[1] .. " " .. c[2] } end
+local function conflict()
+  for _, c in ipairs(p.c.r) do
+    if recordRev(c[1], c[2]) ~= c[3] then return "record " .. c[1] .. " " .. c[2] end
+  end
+  for _, c in ipairs(p.c.o) do
+    if (redis.call("HGET", KEYS[3], c[1]) or "") ~= c[2] then return "owner " .. c[1] end
+  end
+  for _, c in ipairs(p.c.v) do
+    if tonumber(redis.call("HGET", KEYS[2], c[1]) or "0") ~= c[2] then return "version " .. c[1] end
+  end
+  for _, c in ipairs(p.c.t) do
+    if tonumber(redis.call("HGET", KEYS[4], c[1]) or "0") ~= c[2] then return "tombstone " .. c[1] end
+  end
+  return nil
 end
-for _, c in ipairs(p.c.o) do
-  if (redis.call("HGET", KEYS[3], c[1]) or "") ~= c[2] then return { 0, "owner " .. c[1] } end
+local changed = conflict()
+if changed then
+  if writes then redis.call("DEL", KEYS[5]) end
+  return { 0, changed }
 end
-for _, c in ipairs(p.c.v) do
-  if tonumber(redis.call("HGET", KEYS[2], c[1]) or "0") ~= c[2] then return { 0, "version " .. c[1] } end
-end
-for _, c in ipairs(p.c.t) do
-  if tonumber(redis.call("HGET", KEYS[4], c[1]) or "0") ~= c[2] then return { 0, "tombstone " .. c[1] } end
-end
-if #p.w.r == 0 then
+if not writes then
   return { 1, tonumber(redis.call("GET", KEYS[1]) or "0") }
 end
 local rev = redis.call("INCR", KEYS[1])
@@ -150,12 +158,18 @@ return { 1, rev }
 
 const RESOLVE_SCRIPT = `
 local mark = redis.call("GET", KEYS[1])
-if mark then return mark end
+if mark and mark ~= "open" then return mark end
 redis.call("SET", KEYS[1], "cancelled", "PX", ARGV[1])
 return "cancelled"
 `;
 
 type ScriptReply = { ok: boolean; rev: number; detail: string };
+
+const PERMIT_OPEN = "open";
+const SCRIPT_APPLIED = 1;
+const SCRIPT_REFUSED = 2;
+
+export const commitPermitMs = (requestDeadlineMs: number): number => Math.max(1, Math.floor(requestDeadlineMs / 2));
 
 const parseEnvelope = (raw: string, where: string): RawStored => {
   const parsed: unknown = JSON.parse(raw);
@@ -220,6 +234,15 @@ class Snapshot {
 
 const toError = (error: unknown): Error => (error instanceof Error ? error : new Error(String(error)));
 
+const scriptReply = (reply: unknown): ScriptReply => {
+  const [status, detail] = Array.isArray(reply) ? (reply as unknown[]) : [];
+  if (Number(status) === SCRIPT_APPLIED) return { ok: true, rev: Number(detail), detail: "" };
+  if (Number(status) === SCRIPT_REFUSED) {
+    throw new StoreUnavailableError(`Redis ran a commit after its permit was ${String(detail)}; nothing was written.`);
+  }
+  return { ok: false, rev: 0, detail: String(detail) };
+};
+
 const isStoreError = (error: unknown): boolean =>
   error instanceof StoreCorruptionError || error instanceof Miss;
 
@@ -242,12 +265,12 @@ export const createRedisBackend = async (options: {
 }): Promise<RedisBackend> => {
   const name = options.name ?? "ControlPlane";
   const deadlineMs = options.requestDeadlineMs ?? REDIS_REQUEST_DEADLINE_MS;
+  const permitMs = commitPermitMs(deadlineMs);
   let client = createRedisPersistenceClient(name, options.redisUrl);
   await client.connect();
   let reconnecting: Promise<RedisPersistenceClient> | null = null;
   const keys = controlPlaneRedisKeys(options.keyPrefix);
   let closed = false;
-  const unresolved = new Set<string>();
 
   const replace = (stalled: RedisPersistenceClient): void => {
     if (client !== stalled || closed) return;
@@ -368,23 +391,27 @@ export const createRedisBackend = async (options: {
     }
   };
 
-  const resolveUnheard = async (commitKey: string, cause: Error): Promise<ScriptReply> => {
+  const unavailable = (cause: Error): StoreUnavailableError =>
+    new StoreUnavailableError("Redis control-plane store is unavailable.", { cause });
+
+  const resolveUnheard = async (commitKey: string, permitGrantedAt: number, cause: Error): Promise<ScriptReply> => {
+    const untilPermitSpent = permitGrantedAt + deadlineMs - performance.now();
+    if (untilPermitSpent > 0) await new Promise((resolve) => setTimeout(resolve, untilPermitSpent));
     let mark: string;
     try {
       mark = String(
         await bounded((redis) => redis.sendCommand(["EVAL", RESOLVE_SCRIPT, "1", commitKey, String(COMMIT_MARK_TTL_MS)])),
       );
     } catch {
-      unresolved.add(commitKey);
-      Logger.warn(`[${name}] a commit's outcome is unknown; it is fenced before the next commit (${cause.message})`);
-      throw new StoreUnavailableError("Redis control-plane store is unavailable.", { cause });
+      Logger.warn(`[${name}] a commit's outcome is unknown; its permit has expired, so it applied before this answer or never will (${cause.message})`);
+      throw unavailable(cause);
     }
     if (mark.startsWith("applied:")) {
       Logger.warn(`[${name}] a commit whose reply was lost had applied at revision ${mark.slice(8)}`);
       return { ok: true, rev: Number(mark.slice(8)), detail: "" };
     }
     Logger.warn(`[${name}] a commit whose reply was lost did not apply, and now never will (${cause.message})`);
-    throw new StoreUnavailableError("Redis control-plane store is unavailable.", { cause });
+    throw unavailable(cause);
   };
 
   const runScript = async (snapshot: Snapshot, writes: WriteSet): Promise<ScriptReply> => {
@@ -418,11 +445,9 @@ export const createRedisBackend = async (options: {
         ]),
         d: writes.tombstones.map((removal) => tombField(removal.kind, removal.id)),
       },
-      f: [] as number[],
       ttl: COMMIT_MARK_TTL_MS,
     };
     const commitKey = keys.commit(randomUUID());
-    const fences = [...unresolved];
     const scriptKeys = [
       keys.rev,
       keys.ver,
@@ -431,24 +456,18 @@ export const createRedisBackend = async (options: {
       commitKey,
       ...KINDS.map((kind) => keys.records[kind]),
       ...tagKeys,
-      ...fences,
     ];
-    payload.f = fences.map((_, index) => scriptKeys.length - fences.length + index + 1);
+    const script = ["EVAL", COMMIT_SCRIPT, String(scriptKeys.length), ...scriptKeys, JSON.stringify(payload)];
+    if (isEmptyWriteSet(writes)) return scriptReply(await bounded((redis) => redis.sendCommand(script)));
+    await bounded((redis) => redis.sendCommand(["SET", commitKey, PERMIT_OPEN, "PX", String(permitMs)]));
+    const permitGrantedAt = performance.now();
     let reply: unknown;
     try {
-      reply = await bounded((redis) =>
-        redis.sendCommand(["EVAL", COMMIT_SCRIPT, String(scriptKeys.length), ...scriptKeys, JSON.stringify(payload)]),
-      );
+      reply = await bounded((redis) => redis.sendCommand(script));
     } catch (error) {
-      if (writes.records.length === 0 && writes.tombstones.length === 0) throw error;
-      const resolved = await resolveUnheard(commitKey, toError(error));
-      for (const fence of fences) unresolved.delete(fence);
-      return resolved;
+      return resolveUnheard(commitKey, permitGrantedAt, toError(error));
     }
-    for (const fence of fences) unresolved.delete(fence);
-    const [status, detail] = Array.isArray(reply) ? (reply as unknown[]) : [];
-    if (Number(status) === 1) return { ok: true, rev: Number(detail), detail: "" };
-    return { ok: false, rev: 0, detail: String(detail) };
+    return scriptReply(reply);
   };
 
   const transact = async <T>(

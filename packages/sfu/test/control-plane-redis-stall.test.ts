@@ -9,7 +9,7 @@ import { startRedisProxy, type ProxyFate } from "./support/redisProxy.js";
 import { hasRedis, startRedis, type RedisServer } from "./support/redisServer.js";
 
 const options = { clientId: "conclave", createdBy: "host@example.test", defaultHostEmail: "host@example.test", defaultHostUserId: null };
-const DEADLINE_MS = 300;
+const DEADLINE_MS = 400;
 const PAUSE_MS = 1_500;
 
 let redis: RedisServer | null = null;
@@ -150,7 +150,7 @@ describe.skipIf(!hasRedis)("a Redis commit whose outcome the SFU did not hear", 
     }
   }, 20_000);
 
-  it("fences a commit it could not resolve before its next commit runs", async () => {
+  it("never applies a commit it could not resolve, even after its own next commit", async () => {
     const world = await throughProxy(["deliver-late", "lose"]);
     try {
       await expect(world.store.commit(meeting("Unresolved"))).rejects.toBeInstanceOf(StoreUnavailableError);

@@ -1,7 +1,7 @@
 import { createServer, connect, type Server, type Socket } from "node:net";
 import type { Gates } from "./fakeServices.js";
 
-export type ProxyFate = "send" | "lose-reply" | "deliver-late" | "lose";
+export type ProxyFate = "send" | "lose-reply" | "deliver-late" | "hang-up-late" | "lose";
 
 export type RedisProxy = { url: string; deliverLate: () => Promise<void>; close: () => Promise<void> };
 
@@ -10,7 +10,7 @@ export const startRedisProxy = async (
   options: {
     label: string;
     gates?: Gates;
-    jitter?: () => number;
+    jitter?: (chunk: Buffer) => number;
     park?: () => boolean;
     fate?: (chunk: Buffer) => ProxyFate;
   },
@@ -25,15 +25,16 @@ export const startRedisProxy = async (
     let mode: ProxyFate = "send";
     client.on("data", (chunk) => {
       if (mode === "send") mode = options.fate?.(chunk) ?? "send";
-      if (mode === "deliver-late") {
+      if (mode === "deliver-late" || mode === "hang-up-late") {
         late.push(chunk);
+        if (mode === "hang-up-late") client.destroy();
         return;
       }
       if (mode === "lose") return;
       client.pause();
       queue = queue
         .then(() => (options.park?.() && options.gates ? options.gates.admit("redis", options.label) : undefined))
-        .then(() => new Promise<void>((resolve) => setTimeout(resolve, options.jitter?.() ?? 0)))
+        .then(() => new Promise<void>((resolve) => setTimeout(resolve, options.jitter?.(chunk) ?? 0)))
         .then(() => {
           if (!upstream.destroyed) upstream.write(chunk);
           client.resume();
