@@ -227,11 +227,21 @@ const isSpin = (value: unknown): value is WheelSpin => {
 
 const readSpins = new WeakMap<WheelSpin, WheelSpin>();
 
-const readSlot = (raw: unknown, index: number): WheelEntry =>
-  readEntry(raw) ?? { id: `slot-${index}`, label: "" };
-
 const readSpinEntries = (spin: WheelSpin): WheelSpin => {
-  const entries = (spin.entries as unknown[]).map(readSlot);
+  const read = (spin.entries as unknown[]).map(readEntry);
+  const taken = new Set<string>();
+  const ownsId = read.map((entry) => {
+    if (entry === null || taken.has(entry.id)) return false;
+    taken.add(entry.id);
+    return true;
+  });
+  const entries = read.map((entry, index): WheelEntry => {
+    if (entry !== null && ownsId[index]) return entry;
+    let id = `slot-${index}`;
+    for (let suffix = 1; taken.has(id); suffix += 1) id = `slot-${index}.${suffix}`;
+    taken.add(id);
+    return { id, label: entry?.label ?? "" };
+  });
   return entries.every((entry, index) => entry === spin.entries[index]) ? spin : { ...spin, entries };
 };
 

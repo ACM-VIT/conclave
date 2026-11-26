@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WheelEntry, WheelSpin } from "../../../packages/apps-sdk/src/apps/wheel/core/doc/index";
+import { createWheelDoc, getSpin, type WheelEntry, type WheelSpin } from "../../../packages/apps-sdk/src/apps/wheel/core/doc/index";
 import { WheelStage } from "../../../packages/apps-sdk/src/apps/wheel/web/components/WheelStage";
 
 const CONJUNCT = String.fromCharCode(0x915) + String.fromCharCode(0x94d, 0x915).repeat(23);
@@ -140,6 +140,23 @@ describe("wheel stage frames", () => {
     expect([...container.querySelectorAll(NUMBER_SELECTOR)].map((node) => node.textContent)).toEqual(["3"]);
     runFrames(600);
     expect(settled).toEqual(["3"]);
+  });
+
+  it("draws a stored spin that repeats ids and names a made-up one without two slices sharing a key", () => {
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const doc = createWheelDoc();
+    const stored = spinOver(
+      [{ id: "a", label: "Ada" }, { id: "a", label: "Bo" }, { id: "slot-3", label: "Cy" }, null as unknown as WheelEntry],
+      1
+    );
+    doc.getMap("wheel").set("spin", stored);
+    const spin = getSpin(doc)!;
+    renderStage(["Ada", "Bo"], { spin });
+    runFrames(2);
+    expect(container.querySelectorAll("svg path").length).toBeGreaterThanOrEqual(4);
+    expect([...container.querySelectorAll("svg text")].map((node) => node.textContent)).toEqual(["Ada", "Bo", "Cy", "4"]);
+    expect(errors.mock.calls.filter(([message]) => String(message).includes("same key"))).toEqual([]);
   });
 
   it("numbers a lone name that cannot keep one cluster", () => {

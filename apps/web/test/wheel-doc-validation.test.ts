@@ -251,6 +251,26 @@ describe("wheel spin replay", () => {
     expect(getSpin(doc)).toBe(spin);
   });
 
+  it("gives every slot its own id when a spin repeats an id or already uses a made-up one", () => {
+    const doc = createWheelDoc();
+    const slots: unknown[] = [
+      { id: "a", label: "Ada" },
+      { id: "a", label: "Bo" },
+      { id: "slot-3", label: "Cy" },
+      null,
+      { id: "slot-1", label: "Dee" },
+      { id: "slot-3.1", label: "Eli" },
+      { id: "a", label: "\u200B" },
+    ];
+    doc.getMap("wheel").set("spin", build63Spin(slots, 1));
+    const spin = getSpin(doc)!;
+    expect(spin.entries.map((entry) => entry.label)).toEqual(["Ada", "Bo", "Cy", "", "Dee", "Eli", ""]);
+    expect(new Set(spin.entries.map((entry) => entry.id)).size).toBe(7);
+    expect(spin.entries.every((entry) => isValidIdentifier(entry.id))).toBe(true);
+    expect([0, 2, 4, 5].map((index) => spin.entries[index].id)).toEqual(["a", "slot-3", "slot-1", "slot-3.1"]);
+    expect(slotLabel(spin, spin.winnerIndex)).toBe("Bo");
+  });
+
   it("never writes a result for a slot it cannot show", () => {
     const doc = createWheelDoc();
     doc.getMap("wheel").set("spin", build63Spin([{ id: "a", label: "Ada" }, { id: "z", label: "\u200B" }], 1));
