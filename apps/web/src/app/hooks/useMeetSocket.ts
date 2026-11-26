@@ -2183,13 +2183,14 @@ export function useMeetSocket({
     (stream: MediaStream | null | undefined) => {
       const mediaIntent = resolveMediaPublishIntent(stream);
       return {
-        needsAudio: true,
+        needsAudio:
+          mediaIntent.isMicOn || !prejoinMediaIntentRef.current?.skipMutedMicWarmup,
         needsVideo: mediaIntent.isCameraOn,
         requiredAudio: mediaIntent.isMicOn,
         requiredVideo: mediaIntent.isCameraOn,
       };
     },
-    [resolveMediaPublishIntent],
+    [prejoinMediaIntentRef, resolveMediaPublishIntent],
   );
 
   const dropVideoTracksForCameraOff = useCallback(

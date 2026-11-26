@@ -15,8 +15,8 @@ function MeetsHeader({ isJoined }: MeetsHeaderProps) {
 
   return (
     <header className="safe-area-pt fixed left-0 right-0 top-0 z-[100] pointer-events-none">
-      <div className="flex items-center justify-between gap-3 px-5 py-4 pointer-events-auto">
-        <a href="/" className="flex items-center" aria-label="Conclave home">
+      <div className="flex items-center justify-between gap-3 px-5 py-4">
+        <a href="/" className="pointer-events-auto flex items-center" aria-label="Conclave home">
           <Image
             src="/assets/acm_topleft.svg"
             alt="ACM-VIT"
@@ -28,7 +28,7 @@ function MeetsHeader({ isJoined }: MeetsHeaderProps) {
         </a>
         <a
           href="/schedule"
-          className="inline-flex h-10 items-center justify-center gap-2 rounded-full border border-white/10 bg-black/35 px-3 text-[12.5px] font-medium text-[#fafafa]/78 backdrop-blur transition-colors hover:bg-white/[0.08] hover:text-[#fafafa]"
+          className="pointer-events-auto inline-flex h-10 items-center justify-center gap-2 rounded-full border border-white/10 bg-black/35 px-3 text-[12.5px] font-medium text-[#fafafa]/78 backdrop-blur transition-colors hover:bg-white/[0.08] hover:text-[#fafafa]"
         >
           <CalendarClock className="h-4 w-4 text-[#F95F4A]" />
           Schedule
