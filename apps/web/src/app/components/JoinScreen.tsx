@@ -605,7 +605,12 @@ function JoinScreen({
     };
   };
 
+  const markUserMediaChoice = () => {
+    userMediaChoicesRef.current += 1;
+  };
+
   const requestMicrophoneAndCamera = async () => {
+    markUserMediaChoice();
     if (isRequestingPermissions) return;
 
     const wantsVideo = !audioOnlyRef.current;
@@ -849,11 +854,10 @@ function JoinScreen({
     });
   };
 
-  const toggleAudioOnly = () => {
-    const next = !isAudioOnly;
-    audioOnlyRef.current = next;
-    setIsAudioOnly(next);
-    if (!next) return;
+  const setPreviewAudioOnly = (enabled: boolean) => {
+    audioOnlyRef.current = enabled;
+    setIsAudioOnly(enabled);
+    if (!enabled) return;
     // Invalidate any camera start still in flight, then drop live video now
     // rather than through toggleCamera, which ignores calls while one runs.
     beginPrejoinMediaRequest(["video"]);
@@ -872,7 +876,7 @@ function JoinScreen({
     setIsCameraOn(false);
   };
 
-  const toggleCamera = async () => {
+  const setPreviewCameraEnabled = async (enabled: boolean) => {
     if (audioOnlyRef.current) return;
     if (toggleCameraInFlightRef.current) {
       logJoinMedia("toggle_camera_ignored_in_flight", {
@@ -891,17 +895,16 @@ function JoinScreen({
         videoEffects,
       });
       const currentStream = localStreamRef.current ?? localStream;
-      if (isCameraOn && currentStream) {
+      if (!enabled) {
         cameraIntentRef.current = false;
-        const track = currentStream.getVideoTracks()[0];
+        const track = currentStream?.getVideoTracks()[0];
         if (track) {
           logJoinMedia("camera_track_stop", {
             track: getJoinTrackDebugSnapshot(track),
           });
           track.stop();
         }
-        const nextTracks = currentStream
-          .getTracks()
+        const nextTracks = (currentStream?.getTracks() ?? [])
           .filter((candidate) => candidate !== track);
         commitLocalPreviewStream(
           nextTracks.length > 0 ? new MediaStream(nextTracks) : null,
@@ -980,7 +983,7 @@ function JoinScreen({
     }
   };
 
-  const toggleMic = async () => {
+  const setPreviewMicEnabled = async (enabled: boolean) => {
     if (toggleMicInFlightRef.current) {
       logJoinMedia("toggle_mic_ignored_in_flight", {
         isMicOn,
@@ -997,17 +1000,16 @@ function JoinScreen({
     });
     try {
       const currentStream = localStreamRef.current ?? localStream;
-      if (isMicOn && currentStream) {
+      if (!enabled) {
         micIntentRef.current = false;
-        const track = currentStream.getAudioTracks()[0];
+        const track = currentStream?.getAudioTracks()[0];
         if (track) {
           logJoinMedia("mic_track_stop", {
             track: getJoinTrackDebugSnapshot(track),
           });
           track.stop();
         }
-        const nextTracks = currentStream
-          .getTracks()
+        const nextTracks = (currentStream?.getTracks() ?? [])
           .filter((candidate) => candidate !== track);
         commitLocalPreviewStream(
           nextTracks.length > 0 ? new MediaStream(nextTracks) : null,
@@ -1080,6 +1082,19 @@ function JoinScreen({
     }
   };
 
+  const toggleAudioOnly = () => {
+    markUserMediaChoice();
+    setPreviewAudioOnly(!isAudioOnly);
+  };
+  const toggleCamera = () => {
+    markUserMediaChoice();
+    return setPreviewCameraEnabled(!isCameraOn);
+  };
+  const toggleMic = () => {
+    markUserMediaChoice();
+    return setPreviewMicEnabled(!isMicOn);
+  };
+
   useEffect(() => {
     if (!pending || !hasIdentity) return;
     const wantAdmin = pending.mode === "new";
@@ -1117,17 +1132,11 @@ function JoinScreen({
       isAudioOnly: () => audioOnlyRef.current,
       isMicOn: () => micIntentRef.current,
       isCameraOn: () => cameraIntentRef.current,
-      turnOnAudioOnly: toggleAudioOnly,
-      turnOnMic: toggleMic,
-      turnOnCamera: toggleCamera,
+      turnOnAudioOnly: () => setPreviewAudioOnly(true),
+      turnOnMic: () => setPreviewMicEnabled(true),
+      turnOnCamera: () => setPreviewCameraEnabled(true),
     });
   });
-  const userMediaChoice =
-    <Args extends unknown[]>(run: (...args: Args) => unknown) =>
-    (...args: Args) => {
-      userMediaChoicesRef.current += 1;
-      void run(...args);
-    };
   const startMeeting = () => {
     if (restoringMedia) return;
     if (!ensureGuest()) return;
@@ -1316,6 +1325,7 @@ function JoinScreen({
   }, [localStream, refreshDevices]);
 
   const handleSelectVideoDevice = async (deviceId: string) => {
+    markUserMediaChoice();
     setSelectedVideoId(deviceId);
     if (!isCameraOn || toggleCameraInFlightRef.current) return;
     const requestGeneration = beginPrejoinMediaRequest(["video"]);
@@ -1363,6 +1373,7 @@ function JoinScreen({
   };
 
   const handleSelectAudioDevice = async (deviceId: string) => {
+    markUserMediaChoice();
     setSelectedAudioId(deviceId);
     if (!isMicOn) return;
     const requestGeneration = beginPrejoinMediaRequest(["audio"]);
@@ -1437,7 +1448,7 @@ function JoinScreen({
                     {shouldShowPermissionCta ? (
                       <button
                         type="button"
-                        onClick={userMediaChoice(requestMicrophoneAndCamera)}
+                        onClick={requestMicrophoneAndCamera}
                         disabled={isRequestingPermissions}
                         className="pointer-events-auto inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-[#F95F4A] px-3 text-[12.5px] font-medium text-white transition-[background-color,opacity] duration-150 hover:bg-[#e8553f] disabled:cursor-wait disabled:opacity-75"
                       >
@@ -1509,7 +1520,7 @@ function JoinScreen({
                   </div>
                   <div className="pointer-events-auto flex shrink-0 items-center justify-center gap-2.5">
                     <button
-                      onClick={userMediaChoice(toggleMic)}
+                      onClick={toggleMic}
                       aria-label={isMicOn ? "Turn off microphone" : "Turn on microphone"}
                       className={`inline-flex h-11 w-11 items-center justify-center rounded-full text-white transition-colors duration-150 ${
                         isMicOn ? "bg-[#232327] hover:bg-[#2e2e33]" : "bg-[#ea4335] hover:brightness-105"
@@ -1518,7 +1529,7 @@ function JoinScreen({
                       {isMicOn ? <Mic size={18} /> : <MicOff size={18} />}
                     </button>
                     <button
-                      onClick={userMediaChoice(toggleCamera)}
+                      onClick={toggleCamera}
                       disabled={isAudioOnly}
                       aria-label={
                         isAudioOnly
@@ -1567,7 +1578,7 @@ function JoinScreen({
                     <button
                       type="button"
                       data-testid="prejoin-audio-only"
-                      onClick={userMediaChoice(toggleAudioOnly)}
+                      onClick={toggleAudioOnly}
                       aria-pressed={isAudioOnly}
                       aria-label="Audio only: join without video"
                       title="Audio only: join without video"
@@ -1643,7 +1654,7 @@ function JoinScreen({
                       ? "Camera"
                       : deviceLabel(videoInputs, selectedVideoId) ?? "Camera off"
                   }
-                  onChange={userMediaChoice(handleSelectVideoDevice)}
+                  onChange={handleSelectVideoDevice}
                 />
                 <DeviceSelect
                   icon={isMicOn ? Mic : MicOff}
@@ -1655,7 +1666,7 @@ function JoinScreen({
                       ? "Microphone"
                       : deviceLabel(audioInputs, selectedAudioId) ?? "Mic off"
                   }
-                  onChange={userMediaChoice(handleSelectAudioDevice)}
+                  onChange={handleSelectAudioDevice}
                 />
               </div>
 
