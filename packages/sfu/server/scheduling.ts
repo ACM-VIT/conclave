@@ -1275,6 +1275,7 @@ export const schedulingJsonStore: JsonStoreAdapter<SchedulingSnapshot> = {
       key: (eventType) => eventType.id,
       stamp: (eventType) => Number(eventType.updatedAt) || 0,
       claims: schedulingEventTypeClaims,
+      canDelete: true,
     }),
     calendars: jsonStoreCollection<SchedulingSnapshot, SchedulingCalendarConnection>({
       index: "calendarByProfileId",
@@ -1282,6 +1283,7 @@ export const schedulingJsonStore: JsonStoreAdapter<SchedulingSnapshot> = {
       key: (calendar) => calendar.profileId,
       stamp: (calendar) => Number(calendar.updatedAt) || 0,
       claims: {},
+      canDelete: true,
     }),
   },
   build: (base, rows) => ({
