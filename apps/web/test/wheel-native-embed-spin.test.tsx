@@ -3,7 +3,7 @@ import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
-import { addEntries, getEntries, removeEntryById, startSpin, type WheelSpin } from "../../../packages/apps-sdk/src/apps/wheel/core/doc/index";
+import { addEntries, getEntries, getSpin, removeEntryById, startSpin, type WheelSpin } from "../../../packages/apps-sdk/src/apps/wheel/core/doc/index";
 import type { WheelStage as RealWheelStage } from "../../../packages/apps-sdk/src/apps/wheel/web/components/WheelStage";
 import { encodeEnvelope } from "../../../packages/apps-sdk/src/native-embed/protocol";
 import { NativeEmbedSession } from "../../../packages/apps-sdk/src/native-embed/session";
@@ -47,7 +47,7 @@ const ackFor = (requestId: string) => posted.find((message) => message.type === 
 
 const lastStatus = () =>
   [...posted].reverse().find((message) => message.type === "status")?.payload.app as
-    | { spinning: boolean; winnerLabel: string }
+    | { spinning: boolean; winnerLabel: string; waiting: number; entries: { id: string; label: string }[] }
     | undefined;
 
 const stage = (): StageProps => {
@@ -147,6 +147,70 @@ describe("native wheel embed while a shared spin runs", () => {
 
     act(() => overlay!.click());
     expect(slices()).toEqual(["Ada", "Bo"]);
+  });
+
+  it("numbers the dial from the names list as it is now while the result still holds the spin's slices", () => {
+    addEntries(doc, ["Cy", "Ada", "Bo"]);
+    mount(false);
+    const stored = spinBy(getEntries(doc), 0);
+    advance(DURATION + 50);
+    act(() => stage().onSpinningChange(false));
+    act(() => stage().onSettled(stage().spin ?? stored, true));
+    advance(5_000);
+    const dial = () => stage().entries.map((entry) => entry.label);
+    const list = () => stage().listEntries.map((entry) => entry.label);
+    expect([dial(), list()]).toEqual([["Cy", "Ada", "Bo"], ["Cy", "Ada", "Bo"]]);
+
+    expect(ackFor(deliver("sort", {}))).toEqual({ ok: true });
+    expect(ackFor(deliver("removeEntry", { entryId: getEntries(doc)[1].id }))).toEqual({ ok: true });
+    expect([dial(), list()]).toEqual([["Cy", "Ada", "Bo"], ["Ada", "Cy"]]);
+    expect(lastStatus()?.entries.map((entry) => entry.label)).toEqual(["Ada", "Cy"]);
+
+    act(() => container.querySelector<HTMLElement>(".wheel-winner")!.click());
+    expect([dial(), list()]).toEqual([["Ada", "Cy"], ["Ada", "Cy"]]);
+  });
+
+  it("spins as the person the newest host status names when that status and the spin arrive in the same task", () => {
+    addEntries(doc, ["Ada", "Bo"]);
+    mount(false);
+    const viewer = { readOnly: true, connection: "live", reduceMotion: false, pencilOnly: false, userId: "viewer-1", userName: "Viewer" };
+    deliver("status", viewer);
+    act(() => {
+      session.receive(encodeEnvelope("status" as never, SCOPE, "h-90", { ...viewer, readOnly: false, userId: "host-2", userName: "Grace" }));
+      session.receive(encodeEnvelope("spin" as never, SCOPE, "h-91", {}));
+    });
+    expect(ackFor("h-91")).toEqual({ ok: true });
+    expect(getSpin(doc)).toMatchObject({ spunById: "host-2", spunByName: "Grace" });
+  });
+
+  it("refuses a spin from someone the newest host status made read-only in the same task", () => {
+    addEntries(doc, ["Ada", "Bo"]);
+    mount(false);
+    act(() => {
+      session.receive(
+        encodeEnvelope("status" as never, SCOPE, "h-90", { readOnly: true, connection: "live", reduceMotion: false, pencilOnly: false, userId: "me", userName: "Me" })
+      );
+      session.receive(encodeEnvelope("spin" as never, SCOPE, "h-91", {}));
+    });
+    expect(ackFor("h-91")).toEqual({ ok: false, error: "readOnly" });
+    expect(getSpin(doc)).toBeNull();
+  });
+
+  it("tells native how many accepted names wait for a place", () => {
+    addEntries(doc, Array.from({ length: 63 }, (_, index) => `N${index + 1}`));
+    const others = ["Late 1", "Late 2", "Late 3"].map((late) => {
+      const other = new Y.Doc();
+      Y.applyUpdate(other, Y.encodeStateAsUpdate(doc));
+      addEntries(other, [late]);
+      return other;
+    });
+    for (const other of others) Y.applyUpdate(doc, Y.encodeStateAsUpdate(other, Y.encodeStateVector(doc)));
+    mount(false);
+    expect(lastStatus()?.entries).toHaveLength(64);
+    expect(lastStatus()?.waiting).toBe(2);
+    expect(ackFor(deliver("removeEntry", { entryId: getEntries(doc)[0].id }))).toEqual({ ok: true });
+    expect(lastStatus()?.entries).toHaveLength(64);
+    expect(lastStatus()?.waiting).toBe(1);
   });
 
   it("shows the current names, never an older spin's, when a finished spin arrives while the app was suspended", () => {

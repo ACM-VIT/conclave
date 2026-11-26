@@ -468,6 +468,33 @@ test("the embed says ready only once it can run commands, and runs any that came
   assert.deepEqual(namesOn(mod, client), ["Ada"]);
 });
 
+test("a session closed before its page started runs none of the commands it held and never says ready", { skip: skipConvergence }, (context) => {
+  const mod = sessionModule;
+  const outbox = [];
+  let deliver = () => "none";
+  const transport = { platform: "ios", post: (message) => outbox.push(JSON.parse(message)), onMessage: (next) => { deliver = next; } };
+  const scope = { callSessionId: "call-1-contract", appSessionId: "app-closed-early", appId: "wheel" };
+  const client = { session: new mod.NativeEmbedSession(transport, scope, mod.createWheelDoc()) };
+  context.after(() => client.session.doc.destroy());
+  const host = (type, payload, requestId) =>
+    deliver(JSON.stringify({ v: 1, type, callSessionId: scope.callSessionId, appSessionId: scope.appSessionId, requestId, payload }));
+  assert.equal(host("status", { readOnly: false, connection: "live" }, "n-1"), "none");
+  assert.equal(host("snapshot", { syncMessage: "", stateVector: "" }, "n-2"), "none");
+  assert.equal(host("addEntries", { labels: ["Ada"], tokens: ["t-ada"], sentAt: SENT_AT }, "h-1"), "none");
+  assert.equal(host("close", {}, "n-3"), "none");
+  let ran = 0;
+  const runner = wheelRunner(mod, client);
+  client.session.start((envelope, repeat) => {
+    ran += 1;
+    return runner(envelope, repeat);
+  });
+  assert.equal(ran, 0, "a held command never runs after close");
+  assert.deepEqual(outbox.filter((message) => message.type === "ready" || message.type === "ack"), []);
+  assert.deepEqual(namesOn(mod, client), []);
+  assert.equal(host("addEntries", { labels: ["Bo"], tokens: ["t-bo"], sentAt: SENT_AT }, "h-2"), "staleAppSession");
+  assert.equal(ran, 0);
+});
+
 test("close invalidates the session for good",{ skip: skipConvergence }, (context) => {
   const harness = makeRoom(sessionModule, context);
   const ada = harness.join("ada");

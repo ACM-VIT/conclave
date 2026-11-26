@@ -122,6 +122,7 @@ export class NativeEmbedSession {
   }
 
   start(handler: CommandHandler): void {
+    if (this.closed) return;
     this.commandHandler = handler;
     if (!this.started) {
       this.started = true;
@@ -251,6 +252,8 @@ export class NativeEmbedSession {
     if (this.awarenessTimer !== null) clearTimeout(this.awarenessTimer);
     this.awarenessTimer = null;
     this.pendingAwareness.clear();
+    this.held.length = 0;
+    this.commandHandler = null;
     this.doc.off("update", this.handleDocUpdate);
     this.awareness.off("update", this.handleAwarenessUpdate);
     this.notify();
