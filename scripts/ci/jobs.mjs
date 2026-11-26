@@ -26,7 +26,7 @@ export const jobs = {
     ],
   },
   test: {
-    budgetSeconds: 200,
+    budgetSeconds: 110,
     tasks: [
       { dir: "apps/web", script: "test:unit" },
       { dir: "packages/sfu", script: "test" },
