@@ -141,9 +141,11 @@ export const makeWorkRooms = () => {
     let needsSync = false;
     let syncInFlight = false;
     let pushAfterSync: Uint8Array | null = null;
+    let caughtUp = false;
     const freshCopy = () => {
       doc = new Y.Doc();
       replica += 1;
+      caughtUp = false;
       needsSync = room.apps.activeAppId === BOARD;
       pushAfterSync = null;
     };
@@ -241,6 +243,9 @@ export const makeWorkRooms = () => {
       get synced() {
         return !needsSync && !syncInFlight && view !== "" && !peer.stale;
       },
+      get caughtUp() {
+        return caughtUp && peer.synced;
+      },
       write: (count: number, options: { blind?: boolean; replicaId?: string } = {}): string[] => {
         const ids: string[] = [];
         for (let index = 0; index < count; index += 1) {
@@ -292,6 +297,7 @@ export const makeWorkRooms = () => {
           const answer = reply as { syncMessage?: Uint8Array; stateVector?: Uint8Array };
           if (copy !== replica || !answer?.syncMessage) return;
           Y.applyUpdate(doc, answer.syncMessage, "remote");
+          caughtUp = true;
           if (!answer.stateVector) return;
           const known = Y.decodeStateVector(answer.stateVector);
           const ahead = [...Y.decodeStateVector(Y.encodeStateVector(doc))].some(

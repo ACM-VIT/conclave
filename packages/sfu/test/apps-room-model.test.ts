@@ -80,6 +80,8 @@ const runModel = (seed: number, steps: number) => {
     viewsChecked: 0,
     slotsChecked: 0,
     budgetPressure: 0,
+    replacedWhileHeld: 0,
+    copiesChecked: 0,
   };
   const heldAcrossClose = new Set<string>();
   const heldAcrossLeave = new Set<string>();
@@ -240,6 +242,18 @@ const runModel = (seed: number, steps: number) => {
       advance(40);
     }
   };
+  const replaceWhileHeld = () => {
+    if (!eligible(bursty)) return;
+    advance(burstyBucket.untilFull(Date.now()));
+    if (!eligible(bursty) || !burstyBucket.full(Date.now())) return;
+    const writes = bursty.write(UPDATE_BURST + 1 + Math.floor(random() * 20));
+    for (let index = 0; index < UPDATE_BURST; index += 1) burstyBucket.take(Date.now());
+    for (const writeId of writes) mustCommit.set(writeId, reference.epoch);
+    bursty.sendPayload([]);
+    bursty.react();
+    if (bursty.synced && room.apps.scheduler.slotSummaries().length > 0) observed.replacedWhileHeld += 1;
+    advance(100);
+  };
   const probeLocked = () => {
     if (reference.presented !== BOARD || !reference.locked || pending.size > 0 || !adversary.synced) return;
     for (const writeId of adversary.write(1 + Math.floor(random() * 3))) {
@@ -335,6 +349,23 @@ const runModel = (seed: number, steps: number) => {
       observed.viewsChecked += 1;
     }
   };
+  const shownBy = (peer: Peer) => {
+    const last = peer.received.filter((entry) => entry.event === "apps:state" && entry.room === "room").at(-1);
+    return last ? (last.payload as AppsState).activeAppId : null;
+  };
+  const checkCopies = () => {
+    const live = room.apps.liveDoc(BOARD);
+    if (!live || reference.presented !== BOARD || pending.size > 0) return;
+    if (room.apps.scheduler.running || room.apps.scheduler.slotSummaries().length > 0) return;
+    const roomHas = Y.decodeStateVector(Y.encodeStateVector(live));
+    for (const peer of rooms.peers.values()) {
+      if (!peer.connected || peer.roomId !== "room" || !peer.caughtUp || restarting(peer) || shownBy(peer) !== BOARD) continue;
+      const copyHas = Y.decodeStateVector(Y.encodeStateVector(peer.doc));
+      const missing = [...roomHas].filter(([client, clock]) => (copyHas.get(client) ?? 0) < clock);
+      expect(missing, `${peer.id}'s copy holds everything on the room's board`).toEqual([]);
+      observed.copiesChecked += 1;
+    }
+  };
   const checkBoard = () => {
     const live = room.apps.liveDoc(BOARD);
     if (!live || reference.presented !== BOARD || pending.size > 0) return;
@@ -416,6 +447,7 @@ const runModel = (seed: number, steps: number) => {
   const check = () => {
     checkViews();
     checkBoard();
+    checkCopies();
     checkBudget();
     checkControl();
     checkSlots();
@@ -437,6 +469,7 @@ const runModel = (seed: number, steps: number) => {
         probeLocked();
       },
     ],
+    ["replacedWhileHeld", replaceWhileHeld],
     ["blankRestarts", raceRestart],
     ["recoveredBySync", raceRestart],
     ["recoveredByEmptyUpdate", raceRestart],
@@ -527,7 +560,8 @@ const runModel = (seed: number, steps: number) => {
         leaving.leave();
         joinHonest().react();
       }
-    } else advance(Math.floor(random() * 300));
+    } else if (roll < 0.79) replaceWhileHeld();
+    else advance(Math.floor(random() * 300));
     settleCommands();
     react();
     check();
