@@ -998,4 +998,155 @@ class LocalVideoTeardownTests {
             never.countDown()
         }
     }
+
+    @Test
+    fun aSecondFlipWhileTheFirstWaitsKeepsTheCameraFacingFront() {
+        val (media, _) = joinedCall()
+        val events = CopyOnWriteArrayList<String>()
+        val devices = readyToStart(media, events)
+        media.openCameraCapturer = { _, name, _ ->
+            FakeCapturer(null, "live camera", events, cameraId = name)
+                .also { it.reportsTarget = true; devices.cameras.add(it) }
+        }
+        val ack = CountDownLatch(1)
+        val stopping = CountDownLatch(1)
+        val held = unsafe.allocateInstance(HeldSendTransport::class.java) as HeldSendTransport
+        held.release = ack
+        field("sendTransport").set(media, held)
+        try {
+            val start = scope.async(start = CoroutineStart.UNDISPATCHED) { runCatching { media.startProducingVideo() } }
+            advanceMainUntil { held.waiting }
+            assertTrue(held.waiting)
+            runBlocking { media.switchCamera() }
+            val previous = FakeCapturer(stopping, "previous camera", events, stopWaitSeconds = 30)
+            CaptureTeardown.camera.release(previous, null) {}
+            waitUntil { previous.stops > 0 }
+            ack.countDown()
+            pumpMainLooperUntil { media.localVideoEnabled }
+            assertTrue(media.localVideoEnabled)
+            assertFalse(start.isCompleted)
+
+            val flip = scope.async(start = CoroutineStart.UNDISPATCHED) { runCatching { media.switchCamera() } }
+            stopping.countDown()
+            advanceMainUntil { start.isCompleted && flip.isCompleted }
+
+            assertTrue(runBlocking { start.await() }.isSuccess)
+            assertTrue(runBlocking { flip.await() }.isSuccess)
+            assertEquals(events.toString(), LocalCameraFacing.front, media.currentCameraFacing)
+            assertEquals(listOf("live camera started", "previous camera stopped"), events.toList())
+        } finally {
+            ack.countDown()
+            stopping.countDown()
+            runBlocking { media.cleanup(notifyLocalState = false, preserveCallAudioRouting = true) }
+            settle()
+        }
+    }
+
+    @Test
+    fun aStoppedSharesAcknowledgementCannotRevokeNewConsentDuringHelperCreation() {
+        val (media, _) = joinedCall()
+        val events = CopyOnWriteArrayList<String>()
+        readyToStart(media, events)
+        val ack = CountDownLatch(1)
+        val helperGate = CountDownLatch(1)
+        val helperEntered = CountDownLatch(1)
+        val held = unsafe.allocateInstance(HeldSendTransport::class.java) as HeldSendTransport
+        held.release = ack
+        field("sendTransport").set(media, held)
+        try {
+            grantShareConsent()
+            val first = scope.async(start = CoroutineStart.UNDISPATCHED) { runCatching { media.startScreenSharing() } }
+            advanceMainUntil { held.waiting }
+            assertTrue(held.waiting)
+            runBlocking { media.stopScreenSharing() }
+
+            grantShareConsent()
+            val consent = ScreenCaptureManager.getCaptureResultIntent()
+            media.createTextureHelper = {
+                helperEntered.countDown()
+                helperGate.await(10, TimeUnit.SECONDS)
+                unsafe.allocateInstance(SurfaceTextureHelper::class.java) as SurfaceTextureHelper
+            }
+            val second = scope.async(start = CoroutineStart.UNDISPATCHED) { runCatching { media.startScreenSharing() } }
+            advanceMainAtMost(1_000) { helperEntered.count == 0L }
+            assertEquals(0L, helperEntered.count)
+            ack.countDown()
+            advanceMainUntil { first.isCompleted }
+            assertNotNull(runBlocking { first.await() }.exceptionOrNull())
+            assertSame("the ended share revoked the next share's consent", consent, ScreenCaptureManager.getCaptureResultIntent())
+
+            helperGate.countDown()
+            advanceMainUntil { second.isCompleted }
+            assertTrue(runBlocking { second.await() }.isSuccess)
+        } finally {
+            ack.countDown()
+            helperGate.countDown()
+            runBlocking { media.cleanup(notifyLocalState = false, preserveCallAudioRouting = true) }
+            settle()
+        }
+    }
+
+    @Test
+    fun aCameraOffDuringAPendingStartDoesNotReportOrWaitForTheRetiredCamera() {
+        val failures = mutableListOf<String>()
+        for (wait in listOf("preview release", "teardown")) {
+            val (media, _) = joinedCall()
+            val events = CopyOnWriteArrayList<String>()
+            readyToStart(media, events)
+            media.onTeardownStuck = { failures.add("$wait reported $it stuck") }
+            val stopping = CountDownLatch(1)
+            val previous = FakeCapturer(stopping, "previous camera", events, stopWaitSeconds = 30)
+            CaptureTeardown.camera.release(previous, null) {}
+            media.awaitCameraAvailable = { _, timeout -> delay(timeout); false }
+            try {
+                val start = scope.async(start = CoroutineStart.UNDISPATCHED) { runCatching { media.startProducingVideo() } }
+                if (wait == "teardown") advanceMain(500)
+                media.fenceLocalVideoForHold()
+                advanceMain(CaptureTeardown.DEADLINE_MILLIS + 100)
+                if (!start.isCompleted) failures.add("$wait held the start gate after camera off")
+                assertFalse(events.contains("next camera started"))
+            } finally {
+                stopping.countDown()
+                runBlocking { media.cleanup(notifyLocalState = false, preserveCallAudioRouting = true) }
+                settle()
+            }
+        }
+        assertEquals(emptyList<String>(), failures)
+    }
+
+    @Test
+    fun aCameraOffWhileWaitingAgainAfterHelperCreationLeavesNoHelperOrCamera() {
+        val (media, _) = joinedCall()
+        val events = CopyOnWriteArrayList<String>()
+        readyToStart(media, events)
+        val creating = CountDownLatch(1)
+        val helperGate = CountDownLatch(1)
+        val stopping = CountDownLatch(1)
+        media.createTextureHelper = {
+            creating.countDown()
+            helperGate.await(10, TimeUnit.SECONDS)
+            unsafe.allocateInstance(SurfaceTextureHelper::class.java) as SurfaceTextureHelper
+        }
+        try {
+            val start = scope.async(start = CoroutineStart.UNDISPATCHED) { runCatching { media.startProducingVideo() } }
+            advanceMainAtMost(1_000) { creating.count == 0L }
+            assertEquals(0L, creating.count)
+            CaptureTeardown.camera.release(FakeCapturer(stopping, "previous camera", events), null) {}
+            runBlocking { media.switchCamera() }
+            helperGate.countDown()
+            settle()
+            assertFalse(start.isCompleted)
+            media.fenceLocalVideoForHold()
+            stopping.countDown()
+            advanceMainUntil { start.isCompleted }
+            assertTrue(runBlocking { start.await() }.isSuccess)
+            assertFalse(events.contains("next camera started"))
+            assertNull("cancelled start left its texture helper behind", field("surfaceTextureHelper").get(media))
+        } finally {
+            helperGate.countDown()
+            stopping.countDown()
+            runBlocking { media.cleanup(notifyLocalState = false, preserveCallAudioRouting = true) }
+            settle()
+        }
+    }
 }
