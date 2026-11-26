@@ -37,14 +37,16 @@ const makeState = (): SfuState => {
 let sockets = 0;
 const join = async (state: SfuState, user: SfuAuthPayload, roomId = "room", admissionCode?: string) => {
   const handlers = new Map<string, Handler>();
+  const emit = vi.fn();
+  const joinChannel = vi.fn();
   const socket = {
     id: `socket-${++sockets}`,
     data: { user: "guestRoom" in user ? user : { ...user, guestRoom: roomId } },
     on: (event: string, handler: Handler) => handlers.set(event, handler),
-    emit: vi.fn(),
+    emit,
     disconnect: vi.fn(),
     connected: true,
-    join: vi.fn(),
+    join: joinChannel,
     leave: vi.fn(),
     to: () => ({ emit: vi.fn() }),
   } as unknown as Socket;
@@ -52,7 +54,7 @@ const join = async (state: SfuState, user: SfuAuthPayload, roomId = "room", admi
   registerJoinRoomHandler(context);
   const ack = vi.fn();
   await handlers.get("joinRoom")!(...[{ roomId, sessionId: user.sessionId, admissionCode }, ack] as never[]);
-  return { context, ack, socket };
+  return { context, ack, emit, joinChannel };
 };
 
 const joined: unknown = expect.objectContaining({ status: "joined" });
@@ -220,10 +222,12 @@ describe("a join whose guest link cannot commit", () => {
       if (path === "stage invite") room.promoteWebinarUserKey(joining.userId);
       if (path === "webinar promoted") scheduleWebinarFor(state);
       const admissionCode = path === "admitted" ? room.createAdmission().admissionCode : undefined;
+      const oldEmit = vi.fn();
+      const oldDisconnect = vi.fn();
       const oldSocket = {
         id: "old-waiting-socket",
-        emit: vi.fn(),
-        disconnect: vi.fn(),
+        emit: oldEmit,
+        disconnect: oldDisconnect,
         connected: true,
       } as unknown as Socket;
       room.addPendingClient(
@@ -240,7 +244,7 @@ describe("a join whose guest link cannot commit", () => {
       const clients = [...room.clients.keys()];
       const decisions = room.decisionRecordCount;
       const bindings = room.boundGuestIdentityCount;
-      const emitters = [...room.clients.values()].map((client) => vi.mocked(client.socket.emit));
+      const emitters = [...room.clients.values()].map((client) => vi.spyOn(client.socket, "emit"));
       for (const emit of emitters) emit.mockClear();
       broadcast.mockClear();
 
@@ -260,10 +264,10 @@ describe("a join whose guest link cannot commit", () => {
         expect(room.isLockedAllowed(joining.userId, joining.guestProof)).toBe(false);
         expect(room.guestIdentityOf(invitedViewer.userId)).toBe(invitedViewer.guestProof);
         expect(attempt.context.currentUserKey).toBeNull();
-        expect(attempt.socket.emit).not.toHaveBeenCalled();
-        expect(attempt.socket.join).not.toHaveBeenCalled();
-        expect(oldSocket.emit).not.toHaveBeenCalled();
-        expect(oldSocket.disconnect).not.toHaveBeenCalled();
+        expect(attempt.emit).not.toHaveBeenCalled();
+        expect(attempt.joinChannel).not.toHaveBeenCalled();
+        expect(oldEmit).not.toHaveBeenCalled();
+        expect(oldDisconnect).not.toHaveBeenCalled();
         expect(broadcast).not.toHaveBeenCalled();
         for (const emit of emitters) expect(emit).not.toHaveBeenCalled();
 
@@ -292,6 +296,6 @@ it("settles other tabs' waiting requests using the admission redeemed by the suc
 
   expect((await join(state, onStage, "room", admissionCode)).ack).toHaveBeenCalledWith(joined);
 
-  expect(waiting.socket.emit).toHaveBeenCalledWith("joinApproved", { roomId: room.id });
+  expect(waiting.emit).toHaveBeenCalledWith("joinApproved", { roomId: room.id });
   expect(room.pendingClients.has(invitedViewer.userId)).toBe(false);
 });
