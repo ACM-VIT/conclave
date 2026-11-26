@@ -4,6 +4,7 @@ import type {
   SchedulingProfile,
 } from "../types.js";
 import { Logger } from "../utilities/loggers.js";
+import { clientNamespaceIncludes } from "./clientIds.js";
 import {
   persistScheduledMeetingChanges,
   updateScheduledMeeting,
@@ -83,12 +84,15 @@ const resolveProfile = (
     ? state.scheduling.profilesById.get(eventType.profileId)
     : null;
   if (byEventType) return byEventType;
-  const byHost = Array.from(state.scheduling.profilesById.values()).find(
-    (profile) =>
-      profile.clientId === meeting.clientId &&
-      profile.email.trim().toLowerCase() ===
-        meeting.hostEmail.trim().toLowerCase(),
+  const hostEmail = meeting.hostEmail.trim().toLowerCase();
+  const hostProfiles = Array.from(state.scheduling.profilesById.values()).filter(
+    (profile) => profile.email.trim().toLowerCase() === hostEmail,
   );
+  const byHost =
+    hostProfiles.find((profile) => profile.clientId === meeting.clientId) ??
+    hostProfiles.find((profile) =>
+      clientNamespaceIncludes(profile.clientId, meeting.clientId),
+    );
   if (byHost) return byHost;
   return {
     id: `meeting-host:${meeting.id}`,
