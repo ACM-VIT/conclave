@@ -751,8 +751,10 @@ final class MeetingViewModel {
 
     private(set) var systemDataSaverOn = false
 
+    #if !SKIP
     private var settingsCameraCapability = CameraCaptureCapability.unknown
     private var settingsCameraCapabilityFacing = ""
+    #endif
     private var networkMonitorReportsOffline = false
     private var networkQualityHint: ConnectionQuality = .unknown
     private var publishConnectionQuality: ConnectionQuality = .unknown
@@ -13218,6 +13220,7 @@ final class MeetingViewModel {
             hasSample: connectionLabelHasSample,
             statsFailed: ConnectionQualityLabelPolicy.statsFailed(hasSample: connectionLabelHasSample,
                                                                   consecutiveUnknownSamples: connectionUnknownSampleStreak))
+        let cameraCapability = settingsCameraCapabilityNow()
         return SettingsInputs.make(
             callSession: callSessionSerial,
             roomId: state.roomId,
@@ -13266,20 +13269,24 @@ final class MeetingViewModel {
             qualityCappedByHost: hostQualityCapped,
             systemDataSaverOn: systemDataSaverOn,
             canShareDeviceAudio: screenShare.canShareDeviceAudio,
-            cameraMaxHeight: settingsCameraCapabilityNow().maxHeight,
-            cameraMaxFrameRate: settingsCameraCapabilityNow().maxFrameRate,
+            cameraMaxHeight: cameraCapability.maxHeight,
+            cameraMaxFrameRate: cameraCapability.maxFrameRate,
 
             canExportDiagnostics: DiagnosticsExportPolicy.isOffered
         )
     }
 
     private func settingsCameraCapabilityNow() -> CameraCaptureCapability {
+        #if SKIP
+        return webRTCClient.cameraCaptureCapability()
+        #else
         let facing = state.localCameraFacing.rawValue
         if settingsCameraCapabilityFacing != facing {
             settingsCameraCapabilityFacing = facing
             settingsCameraCapability = webRTCClient.cameraCaptureCapability()
         }
         return settingsCameraCapability
+        #endif
     }
 
     func diagnosticsSensitiveValues() -> [String] {

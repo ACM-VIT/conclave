@@ -1723,6 +1723,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
     private var preferredCameraFacing: LocalCameraFacing? = null
     private val requestedCameraFacing: LocalCameraFacing
         get() = preferredCameraFacing ?: activeCameraFacing
+    private var cachedCameraCapability: Pair<String, CameraCaptureCapability>? = null
     private var localVideoTrack: VideoTrack? = null
     private var localAudioTrack: AudioTrack? = null
     private var localAudioTrackSequence = 0
@@ -2460,6 +2461,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
                 capture.capturer = opened
                 videoCapturer = opened
                 if (opened != null) {
+                    capture.cameraName = camera.first
                     activeCameraFacing = camera.second
                     preferredCameraFacing = null
                 }
@@ -4454,8 +4456,8 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
     private fun configuredWebcamCaptureProfile(): WebcamCaptureProfile {
         val configured = requestedWebcamCaptureProfile()
         return try {
-            val enumerator = createCameraEnumerator(ProcessInfo.processInfo.androidContext)
-            val name = cameraNameForFacing(enumerator, activeCameraFacing) ?: return configured
+            val name = cameraCapture?.cameraName ?: return configured
+            val enumerator = CameraFacingCatalog.enumerator(ProcessInfo.processInfo.androidContext)
             val sizes = (enumerator.getSupportedFormats(name) ?: emptyList()).map { format ->
                 CameraFormatCandidate(width = format.width, height = format.height)
             }
@@ -7036,9 +7038,13 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         )
 
     internal fun cameraCaptureCapability(): CameraCaptureCapability {
-        return try {
-            val enumerator = createCameraEnumerator(ProcessInfo.processInfo.androidContext)
-            val name = cameraNameForFacing(enumerator, activeCameraFacing) ?: return CameraCaptureCapability.unknown
+        val facing = requestedCameraFacing
+        val name = cameraCapture?.cameraName?.takeIf { facing == activeCameraFacing }
+            ?: (cameraFacings.current ?: cameraFacings.snapshotOrProbe()).name(facing)
+            ?: return CameraCaptureCapability.unknown
+        cachedCameraCapability?.takeIf { it.first == name }?.let { return it.second }
+        val capability = try {
+            val enumerator = CameraFacingCatalog.enumerator(ProcessInfo.processInfo.androidContext)
             var maxHeight = 0
             var maxFrameRate = 0
             for (format in enumerator.getSupportedFormats(name) ?: emptyList()) {
@@ -7052,6 +7058,8 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         } catch (_: Throwable) {
             CameraCaptureCapability.unknown
         }
+        cachedCameraCapability = name to capability
+        return capability
     }
 
     internal fun sampleConnectionStatsCounters(): ConnectionStatsCounters? {
@@ -8201,6 +8209,8 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
                         result.onAwait { outcome ->
                             if (!holdsCapture(hardwareClaim)) false else {
                                 activeCameraFacing = outcome.getOrThrow()
+                                capture.cameraName = name
+                                cachedCameraCapability = null
                                 true
                             }
                         }
@@ -8221,20 +8231,6 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         } finally {
             capture.switchInFlight = false
             if (holdsCapture(hardwareClaim)) onCameraFacingsChanged?.invoke()
-        }
-    }
-
-    private fun createCameraEnumerator(context: Context): org.webrtc.CameraEnumerator =
-        CameraFacingCatalog.enumerator(context)
-
-    private fun cameraNameForFacing(
-        enumerator: org.webrtc.CameraEnumerator,
-        facing: LocalCameraFacing
-    ): String? {
-        val deviceNames = enumerator.deviceNames
-        return when (facing) {
-            LocalCameraFacing.front -> deviceNames.firstOrNull { enumerator.isFrontFacing(it) }
-            LocalCameraFacing.back -> deviceNames.firstOrNull { enumerator.isBackFacing(it) }
         }
     }
 
@@ -8313,6 +8309,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
                 throw ErrorException("Camera capture failed to $action: $detail")
             }
         }
+        cachedCameraCapability = null
         activeWebcamCaptureProfile = profile
         adaptWebcamOutput()
     }
