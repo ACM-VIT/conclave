@@ -150,6 +150,27 @@ const createAudioStream = (id: string) => {
   return { stream, track, stop };
 };
 
+it("does not reacquire a muted microphone after prejoin skips warmup", async () => {
+  const requestMediaPermissions = vi.fn(async () => null);
+  const h = createHarness(async () => joinInfo, { requestMediaPermissions });
+  h.refs.prejoinMediaIntentRef.current = {
+    streamId: null,
+    trackIds: new Set(),
+    isCameraOn: false,
+    isMicOn: false,
+    skipMutedMicWarmup: true,
+  };
+  const join = h.api.joinRoomById("test-room");
+  try {
+    await vi.waitFor(() => expect(h.io).toHaveBeenCalledOnce());
+    expect(requestMediaPermissions).not.toHaveBeenCalled();
+  } finally {
+    h.dispatch("connect_error", new Error("The test connection closed"));
+    await join;
+    h.api.cleanup();
+  }
+});
+
 describe("media acquisition during shutdown", () => {
   it("releases a microphone granted after leaving without restoring meeting state", async () => {
     let resolveMedia!: (stream: MediaStream) => void;
