@@ -43,6 +43,7 @@ const contextWith = (overrides: Partial<WheelCommandContext> = {}): WheelCommand
 const statusOf = (doc: Y.Doc, winner: { spinId: string; label: string } | null = null) =>
   wheelStatus({
     entries: getEntries(doc),
+    waitingCount: 0,
     history: getHistory(doc),
     removeWinner: false,
     sounds: true,

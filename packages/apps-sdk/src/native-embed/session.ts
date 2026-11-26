@@ -46,6 +46,7 @@ export type EmbedStatusPayload = {
 export type WheelAppStatus = {
   kind: "wheel";
   entries: { id: string; label: string }[];
+  waiting: number;
   results: { id: string; label: string; byName: string }[];
   removeWinner: boolean;
   sounds: boolean;

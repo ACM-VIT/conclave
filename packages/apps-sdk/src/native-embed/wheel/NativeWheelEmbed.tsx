@@ -51,7 +51,7 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
   const synced = useSynced(session);
   const canEdit = !host.readOnly;
   const reduceMotion = host.reduceMotion;
-  const { entries, spin, history, removeWinnerOnDone } = useWheelDocState(doc);
+  const { entries, waitingCount, spin, history, removeWinnerOnDone } = useWheelDocState(doc);
 
   const { live, isLive } = useSpinLive(doc, spin);
   const [animating, setAnimating] = useState(false);
@@ -178,8 +178,8 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
 
   const status = useMemo<WheelAppStatus>(
     () =>
-      wheelStatus({ entries, history, removeWinner: removeWinnerOnDone, sounds: soundOn, spinning: live, winner }),
-    [entries, history, removeWinnerOnDone, soundOn, live, winner],
+      wheelStatus({ entries, waitingCount, history, removeWinner: removeWinnerOnDone, sounds: soundOn, spinning: live, winner }),
+    [entries, waitingCount, history, removeWinnerOnDone, soundOn, live, winner],
   );
 
   useEffect(() => {

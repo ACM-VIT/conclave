@@ -801,7 +801,10 @@ struct AppWheelPage: View {
                         .disabled(wheel.missingNames.isEmpty || wheel.isFull)
                         .accessibilityIdentifier("app.wheel.addEveryone")
                     } footer: {
-                        if wheel.isFull {
+                        if wheel.waitingNames > 0 {
+                            Text(ConclaveStrings.format("Wheel Waiting Names %lld", wheel.waitingNames))
+                                .accessibilityIdentifier("app.wheel.waiting")
+                        } else if wheel.isFull {
                             Text(ConclaveStrings.text("The wheel is full."))
                                 .accessibilityIdentifier("app.wheel.full")
                         } else if host.wheelDraft.isUnconfirmed {

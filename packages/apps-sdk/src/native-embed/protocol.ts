@@ -177,6 +177,7 @@ export const WHEEL_LIMITS = {
   results: 25,
   name: 64,
   pasteLines: 256,
+  waiting: 999,
 } as const;
 
 export const WATCH_LIMITS = {
@@ -395,6 +396,9 @@ const isBoundedText = (value: unknown, limit: number, allowEmpty: boolean): bool
 
 const isOptionalBoolean = (value: unknown): boolean => value === undefined || typeof value === "boolean";
 
+const isOptionalCount = (value: unknown, limit: number): boolean =>
+  value === undefined || (typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= limit);
+
 const isBoundedList = (value: unknown, limit: number, item: (entry: unknown) => boolean): boolean =>
   value === undefined || (Array.isArray(value) && value.length <= limit && value.every(item));
 
@@ -428,6 +432,7 @@ export const isValidAppStatus = (value: unknown): boolean => {
   if (value.kind === "wheel") {
     return (
       isBoundedList(value.entries, WHEEL_LIMITS.entries, isWheelEntry) &&
+      isOptionalCount(value.waiting, WHEEL_LIMITS.waiting) &&
       isBoundedList(value.results, WHEEL_LIMITS.results, isWheelResult) &&
       isOptionalBoolean(value.removeWinner) &&
       isOptionalBoolean(value.sounds) &&

@@ -185,6 +185,7 @@ export const runWheelCommand = (
 
 export type WheelStatusInput = {
   entries: WheelEntry[];
+  waitingCount: number;
   history: WheelResult[];
   removeWinner: boolean;
   sounds: boolean;
@@ -195,6 +196,7 @@ export type WheelStatusInput = {
 export const wheelStatus = (input: WheelStatusInput): WheelAppStatus => ({
   kind: "wheel",
   entries: input.entries.map((entry) => ({ id: entry.id, label: entry.label })),
+  waiting: Math.min(input.waitingCount, WHEEL_LIMITS.waiting),
   results: input.history.map((result) => ({
     id: result.spinId,
     label: result.label,

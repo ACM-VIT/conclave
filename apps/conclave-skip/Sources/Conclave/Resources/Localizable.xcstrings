@@ -6399,6 +6399,29 @@
         }
       }
     },
+    "Wheel Waiting Names %lld" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "The wheel is full. %lld more name is waiting for a place."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "The wheel is full. %lld more names are waiting for a place."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "Wheel Sounds" : {
       "extractionState" : "manual"
     },

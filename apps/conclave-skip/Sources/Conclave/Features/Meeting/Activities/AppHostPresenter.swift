@@ -142,6 +142,7 @@ enum AppWheelLimits {
     static let results = 25
     static let name = 64
     static let pasteLines = 256
+    static let waiting = 999
 }
 
 enum AppWatchLimits {
@@ -193,6 +194,7 @@ struct WatchVideoModel: Equatable, Identifiable {
 struct AppEmbedAppStatus: Equatable {
     let kind: String
     let entries: [WheelEntryModel]
+    let waiting: Int
     let results: [WheelResultModel]
     let removeWinner: Bool
     let sounds: Bool
@@ -207,7 +209,7 @@ struct AppEmbedAppStatus: Equatable {
     let myRequestId: String
     let requestDeclined: Bool
 
-    static let empty = AppEmbedAppStatus(kind: "", entries: [], results: [], removeWinner: false, sounds: true, spinning: false,
+    static let empty = AppEmbedAppStatus(kind: "", entries: [], waiting: 0, results: [], removeWinner: false, sounds: true, spinning: false,
                                          winnerSpinId: "", winnerLabel: "", videoId: "", title: "", playback: "none", queue: [],
                                          requests: [], myRequestId: "", requestDeclined: false)
 }
@@ -250,8 +252,9 @@ enum AppEmbedAppCodec {
               let sounds = flag(object["sounds"], fallback: true),
               let spinning = flag(object["spinning"], fallback: false),
               let winnerSpinId = optionalIdentifier(object["winnerSpinId"]),
-              let winnerLabel = text(object["winnerLabel"], limit: AppWheelLimits.label, required: false) else { return nil }
-        return AppEmbedAppStatus(kind: "wheel", entries: entries, results: results, removeWinner: removeWinner, sounds: sounds,
+              let winnerLabel = text(object["winnerLabel"], limit: AppWheelLimits.label, required: false),
+              let waiting = count(object["waiting"], limit: AppWheelLimits.waiting) else { return nil }
+        return AppEmbedAppStatus(kind: "wheel", entries: entries, waiting: waiting, results: results, removeWinner: removeWinner, sounds: sounds,
                                  spinning: spinning, winnerSpinId: winnerSpinId, winnerLabel: winnerLabel, videoId: "", title: "",
                                  playback: "none", queue: [], requests: [], myRequestId: "", requestDeclined: false)
     }
@@ -289,7 +292,7 @@ enum AppEmbedAppCodec {
         }
         guard let myRequestId = optionalIdentifier(object["myRequestId"]),
               let declined = flag(object["requestDeclined"], fallback: false) else { return nil }
-        return AppEmbedAppStatus(kind: "watch", entries: [], results: [], removeWinner: false, sounds: true, spinning: false,
+        return AppEmbedAppStatus(kind: "watch", entries: [], waiting: 0, results: [], removeWinner: false, sounds: true, spinning: false,
                                  winnerSpinId: "", winnerLabel: "", videoId: videoId, title: title, playback: playback, queue: queue,
                                  requests: requests, myRequestId: myRequestId, requestDeclined: declined)
     }
@@ -308,6 +311,12 @@ enum AppEmbedAppCodec {
         guard let string = value as? String, string.count <= limit else { return nil }
         if required && string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return nil }
         return string
+    }
+
+    static func count(_ value: Any?, limit: Int) -> Int? {
+        guard let value = value else { return 0 }
+        guard let number = AppBridgeCodec.number(value), number >= 0.0, number == number.rounded(), number <= Double(limit) else { return nil }
+        return Int(number)
     }
 
     static func flag(_ value: Any?, fallback: Bool) -> Bool? {
@@ -501,6 +510,7 @@ struct WheelPageModel: Equatable {
     let canSpin: Bool
     let canReorder: Bool
     let isFull: Bool
+    let waitingNames: Int
     let isReady: Bool
 
     let missingNames: [String]
@@ -522,13 +532,13 @@ struct WheelPageModel: Equatable {
     func withRevision(_ value: Int) -> WheelPageModel {
         return WheelPageModel(revision: value, entries: entries, results: results, removeWinner: removeWinner, sounds: sounds,
                               spinning: spinning, canEdit: canEdit, canSpin: canSpin, canReorder: canReorder, isFull: isFull,
-                              isReady: isReady,
+                              waitingNames: waitingNames, isReady: isReady,
                               missingNames: missingNames, pendingKinds: pendingKinds, pendingTargets: pendingTargets,
                               winnerSequence: winnerSequence, winnerLabel: winnerLabel)
     }
 
     static let empty = WheelPageModel(revision: 0, entries: [], results: [], removeWinner: false, sounds: true, spinning: false,
-                                      canEdit: false, canSpin: false, canReorder: false, isFull: false, isReady: false,
+                                      canEdit: false, canSpin: false, canReorder: false, isFull: false, waitingNames: 0, isReady: false,
                                       missingNames: [],
                                       pendingKinds: [], pendingTargets: [], winnerSequence: 0, winnerLabel: "")
 }
@@ -1776,6 +1786,7 @@ final class AppHostPresenter {
             canSpin: wheelEdit && wheelEntries.count >= 2 && !spinning && !kinds.contains(AppPageCommandKind.spin.rawValue),
             canReorder: wheelEdit && !spinning,
             isFull: wheelEntries.count >= AppWheelLimits.maxEntries,
+            waitingNames: isWheel ? appStatus.waiting : 0,
             isReady: isWheel && ready,
             missingNames: missing,
             pendingKinds: isWheel ? kinds : [],
