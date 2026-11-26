@@ -72,11 +72,12 @@ export function resolveMeetingStageLayout({
         : size.height;
   const railBudget = Math.max(0, maxTiles - 1 - Number(Boolean(companion)));
   const requiredCount = Number(Boolean(requiredRailTile));
+  const hasMeasuredStage = size.width > 0 && size.height > 0;
   const localInRail = railAvailable &&
     tileSelfView &&
     !placedTiles.some((tile) => tile?.kind === "local") &&
     railBudget > requiredCount &&
-    railLength >= RAIL_TILE_SIZE * (requiredCount + 1) + STAGE_GAP * requiredCount;
+    (!hasMeasuredStage || railLength >= RAIL_TILE_SIZE * (requiredCount + 1) + STAGE_GAP * requiredCount);
   const fixedCount = requiredCount + Number(localInRail);
   const capacity = computeStageRailLayout({
     candidateCount: candidates.length,
