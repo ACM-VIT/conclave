@@ -841,7 +841,7 @@ peers_serving() {
 # not boot drained, as an unverified build does) goes back into service before
 # this run drains anything.
 restore_service_when_none_serves() {
-  local svc status container env lkg
+  local svc status container env lkg identity running
   for svc in "${ALL_SFU_SERVICES[@]}"; do
     status="$(instance_status "$svc" 2>/dev/null)" || continue
     [[ "$(printf "%s" "$status" | json_field draining)" == "false" ]] && is_healthy "$(service_url "$svc")" && return 0
@@ -852,9 +852,10 @@ restore_service_when_none_serves() {
     is_healthy "$(service_url "$svc")" || continue
     [[ "$(journal_get "$svc" phase)" =~ ^(idle)?$ ]] || continue
     lkg="$(journal_get "$svc" lkg)"
-    [[ -z "$lkg" || "$(container_image "$svc")" == "$lkg" ]] || continue
-    container="$(service_container "$svc")"
-    [[ -n "$container" ]] || continue
+    identity="$(service_identity "$svc")" || continue
+    [[ -n "$identity" ]] || continue
+    read -r container running <<< "$identity"
+    [[ -z "$lkg" || "$running" == "$lkg" ]] || continue
     # Only an env Docker could read shows the container did not boot drained.
     env="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$container" 2>/dev/null)" || continue
     grep -qx 'SFU_DRAINING=true' <<< "$env" && continue
@@ -865,10 +866,12 @@ restore_service_when_none_serves() {
 
 # True when every SFU instance, deployed in this run or not, runs the image.
 all_on_image() {
-  local svc
+  local svc identity result=0
   for svc in "${ALL_SFU_SERVICES[@]}"; do
-    [[ -n "$1" && "$(container_image "$svc")" == "$1" ]] || return 1
+    identity="$(service_identity "$svc")" || return 2
+    [[ -n "$identity" && "${identity#* }" == "$1" ]] || result=1
   done
+  return "$result"
 }
 
 # Any HTTP answer, even an error, means the process is up.
@@ -885,20 +888,27 @@ run_canary() {
     dist/canary-call.mjs --url "$2"
 }
 
-# The image ID a service's container runs, or nothing.
-container_image() {
-  local container image i
-  container="$(service_container "$1")" || return 0
-  [[ -n "$container" ]] || return 0
+service_identity() {
+  local svc="$1" container image i
   for i in 1 2 3; do
-    image="$(docker inspect -f '{{.Image}}' "$container" 2>/dev/null)" || image=""
-    if [[ -n "$image" ]]; then
-      printf "%s\n" "$image"
-      return 0
+    if container="$(service_container "$svc")"; then
+      [[ -n "$container" ]] || return 0
+      if image="$(docker inspect -f '{{.Image}}' "$container" 2>/dev/null)" && [[ "$image" =~ ^sha256:[[:alnum:]-]+$ ]]; then
+        printf '%s %s\n' "$container" "$image"
+        return 0
+      fi
     fi
-    (( i < 3 )) && sleep "$STATUS_RETRY_SECONDS"
+    (( i == 3 )) || sleep "$STATUS_RETRY_SECONDS"
   done
-  return 0
+  echo "Docker cannot identify ${svc}'s container image; refusing to change it." >&2
+  return 1
+}
+
+image_id() {
+  local image
+  image="$(docker image inspect -f '{{.Id}}' "$1" 2>/dev/null)" || return 1
+  [[ "$image" =~ ^sha256:[[:alnum:]-]+$ ]] || return 1
+  printf '%s\n' "$image"
 }
 
 # Compose starts whatever its own image name for a service points at, so after
@@ -906,8 +916,9 @@ container_image() {
 # anything else (another image name, a compatibility-mode name) fails loudly.
 started_on() {
   local svc="$1" image="$2" image_name="$3" running
-  running="$(container_image "$svc")"
-  [[ "$running" == "$image" ]] && return 0
+  running="$(service_identity "$svc")" || return 1
+  running="${running#* }"
+  [[ -n "$running" && "$running" == "$image" ]] && return 0
   echo "compose started ${svc} on ${running:-no image}, not the image tagged for it as ${image_name} (${image}); check that the compose file names ${image_name} for ${svc}" >&2
   return 1
 }
@@ -1013,12 +1024,11 @@ serving_config_hash() {
 SERVING_WHY=""
 SERVING_IMAGE=""
 serving() {
-  local svc="$1" image="${2:-}" container env url status running
+  local svc="$1" image="${2:-}" container env url status running identity
   SERVING_IMAGE=""
-  container="$(service_container "$svc")" || container=""
-  if [[ -z "$container" ]]; then SERVING_WHY="it has no container"; return 1; fi
-  running="$(container_image "$svc")"
-  if [[ -z "$running" ]]; then SERVING_WHY="Docker cannot read its container's image"; return 1; fi
+  if ! identity="$(service_identity "$svc")"; then SERVING_WHY="Docker cannot read its container's image"; return 1; fi
+  if [[ -z "$identity" ]]; then SERVING_WHY="it has no container"; return 1; fi
+  read -r container running <<< "$identity"
   if [[ -n "$image" && "$running" != "$image" ]]; then SERVING_WHY="its container runs ${running:-no image}, not ${image}"; return 1; fi
   if ! env="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$container" 2>/dev/null)"; then
     SERVING_WHY="Docker cannot read its container's env"; return 1
@@ -1075,7 +1085,8 @@ restore_lkg() {
     return 1
   fi
   echo "Rolling ${svc} back to its previous image..." >&2
-  docker tag "$lkg" "$image_name"
+  service_identity "$svc" >/dev/null || return 1
+  docker tag "$lkg" "$image_name" || return 1
   checkpoint "tag ${svc} back"
   if ! up_service "$svc" "$image_name" false; then
     checkpoint "start ${svc} back"
@@ -1125,8 +1136,8 @@ seed_service_tag() {
   docker image inspect "$image_name" >/dev/null 2>&1 && return 0
   serving "$svc" && lkg="$SERVING_IMAGE"
   [[ -n "$lkg" ]] || lkg="$(journal_get "$svc" lkg)"
-  [[ -n "$lkg" ]] || lkg="$(docker image inspect -f '{{.Id}}' "${IMAGE_REPO}:rollback-${svc}" 2>/dev/null || true)"
-  if [[ -z "$lkg" ]] || ! docker image inspect "$lkg" >/dev/null 2>&1; then
+  [[ -n "$lkg" ]] || lkg="$(image_id "${IMAGE_REPO}:rollback-${svc}" || true)"
+  if [[ -z "$lkg" ]] || ! image_id "$lkg" >/dev/null; then
     return 1
   fi
   docker tag "$lkg" "$image_name" || return 1
@@ -1152,8 +1163,15 @@ seed_service_tags() {
 PROMOTE_WHY=""
 promote() {
   local svc="$1" url="$2" image_name="$3" image="$4" prev="$5"
+  if ! service_identity "$svc" >/dev/null || ! image_id "$image" >/dev/null; then
+    PROMOTE_WHY="Docker cannot identify the image for ${svc}; refusing to promote it"
+    return 1
+  fi
   journal_set "$svc" phase=promoting candidate="$image" prevLkg="$prev"
-  docker tag "$image" "$image_name"
+  if ! docker tag "$image" "$image_name"; then
+    PROMOTE_WHY="Docker could not tag ${image} as ${image_name}"
+    return 1
+  fi
   checkpoint "tag ${svc}"
   if ! up_service "$svc" "$image_name" false; then
     checkpoint "start ${svc}"
@@ -1175,6 +1193,11 @@ promote() {
 
 roll_back() {
   local svc="$1" url="$2" image_name="$3" lkg="$4" code=0 status
+  service_identity "$svc" >/dev/null || return "$EXIT_NOT_RESTORED"
+  if [[ -n "$lkg" ]] && ! image_id "$lkg" >/dev/null; then
+    echo "Docker cannot identify the rollback image for ${svc}; refusing to change it." >&2
+    return "$EXIT_NOT_RESTORED"
+  fi
   [[ "$(journal_get "$svc" phase)" == "rollback" ]] || journal_set "$svc" phase=rollback
   if ! hold_down "$svc"; then
     status="$(instance_status "$svc" 2>/dev/null)" || status=""
@@ -1196,7 +1219,7 @@ roll_back() {
 
 declare -A REPAIR_CODE=()
 repair_interrupted() {
-  local svc phase lkg candidate prev url image_name state code first=() rest=()
+  local svc phase lkg candidate prev url image_name state code identity running first=() rest=()
   for svc in "${ALL_SFU_SERVICES[@]}"; do
     case "$(container_state "$svc")" in
       stopped|restarting|absent) first+=("$svc") ;;
@@ -1211,6 +1234,11 @@ repair_interrupted() {
     lkg="$(journal_get "$svc" lkg)"
     candidate="$(journal_get "$svc" candidate)"
     prev="$(journal_get "$svc" prevLkg)"
+    if ! identity="$(service_identity "$svc")"; then
+      REPAIR_CODE[$svc]=$EXIT_NOT_RESTORED
+      continue
+    fi
+    running="${identity#* }"
     code=0
     echo "A deploy stopped while ${svc} was ${phase}; repairing it before anything else."
     case "$phase" in
@@ -1222,8 +1250,8 @@ repair_interrupted() {
           else
             journal_set "$svc" phase=idle
           fi
-        elif [[ -n "$lkg" && "$(container_image "$svc")" != "$lkg" ]]; then
-          echo "ERROR: ${svc} runs $(container_image "$svc"), not its last-known-good image ${lkg}, so it is left as it is. Check it by hand." >&2
+        elif [[ -n "$lkg" && "$running" != "$lkg" ]]; then
+          echo "ERROR: ${svc} runs ${running:-no image}, not its last-known-good image ${lkg}, so it is left as it is. Check it by hand." >&2
           code=$EXIT_NOT_RESTORED
         elif [[ "$(journal_get "$svc" wasDraining)" == "true" ]]; then
           journal_set "$svc" phase=idle
@@ -1247,7 +1275,7 @@ repair_interrupted() {
           journal_set "$svc" phase=idle lkg="$prev" candidate= prevLkg=
         else
           state="$(container_state "$svc")"
-          if [[ -n "$candidate" ]] && { [[ "$state" =~ ^(stopped|restarting|absent)$ ]] || { [[ "$(container_image "$svc")" == "$candidate" ]] && booted_drained "$svc"; }; }; then
+          if [[ -n "$candidate" ]] && { [[ "$state" =~ ^(stopped|restarting|absent)$ ]] || { [[ "$running" == "$candidate" ]] && booted_drained "$svc"; }; }; then
             drain_and_wait "$svc" "$url" || code=$?
             if (( code == 0 )) && ! promote "$svc" "$url" "$image_name" "$candidate" "$prev"; then
               echo "${PROMOTE_WHY}; rolling ${svc} back." >&2
@@ -1275,11 +1303,10 @@ repair_interrupted() {
 # taken.
 deploy_service() {
   local svc="$1" relooked="${2:-}"
-  local url image_name candidate container status="" lkg="" recorded settle_until=0 was_draining="false"
+  local url image_name candidate container identity running status="" lkg="" recorded settle_until=0 was_draining="false"
   url="$(service_url "$svc")"
   image_name="$(service_image_name "$svc")"
   candidate="$(candidate_tag "$svc")"
-  container="$(service_container "$svc")"
   local phase
   phase="$(journal_get "$svc" phase)"
   if [[ -n "$phase" && "$phase" != "idle" ]]; then
@@ -1303,19 +1330,22 @@ deploy_service() {
   # rule, else the one its journal recorded the last time it served (or the
   # rollback-<service> tag an older release of this script kept). An image
   # that merely runs is never one.
+  identity="$(service_identity "$svc")" || return 1
+  read -r container running <<< "$identity"
   recorded="$(journal_get "$svc" lkg)"
   lkg="$recorded"
-  [[ -n "$lkg" ]] || lkg="$(docker image inspect -f '{{.Id}}' "${IMAGE_REPO}:rollback-${svc}" 2>/dev/null || true)"
+  [[ -n "$lkg" ]] || lkg="$(image_id "${IMAGE_REPO}:rollback-${svc}" || true)"
   if serving "$svc"; then
     lkg="$SERVING_IMAGE"
   fi
-  if [[ -n "$lkg" ]] && ! docker image inspect "$lkg" >/dev/null 2>&1; then
-    lkg=""
+  if [[ -n "$lkg" ]] && ! image_id "$lkg" >/dev/null; then
+    echo "Docker cannot identify the last-known-good image for ${svc}; refusing to change it." >&2
+    return 1
   fi
 
   # Deployed means the target passed its canary here (the journal says it is
   # this instance's last-known-good), with the current config, and serves.
-  if [[ -n "$container" && "$recorded" == "$TARGET_IMAGE" && "$(container_image "$svc")" == "$TARGET_IMAGE" ]] &&
+  if [[ -n "$container" && "$recorded" == "$TARGET_IMAGE" && "$running" == "$TARGET_IMAGE" ]] &&
      [[ "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.config-hash"}}' "$container")" == "$(serving_config_hash "$svc" "$image_name")" ]]; then
     if serving "$svc" "$TARGET_IMAGE"; then
       echo "${svc} already runs ${TARGET_COMMIT} with the current config; leaving it alone."
@@ -1352,6 +1382,7 @@ deploy_service() {
       echo "Deploy stopped: ${svc} is not serving (${SERVING_WHY}) and no image it served on is on record, so a failed canary would leave it nothing to go back to. It was not drained or rebuilt; fix it, then rerun this script." >&2
       return 1
     fi
+    service_identity "$svc" >/dev/null || return 1
     journal_set "$svc" phase=drained lkg="$lkg" wasDraining="$was_draining" candidate= prevLkg= commit="$TARGET_COMMIT"
     [[ -n "$lkg" ]] && docker tag "$lkg" "${IMAGE_REPO}:rollback-${svc}"
     echo "Draining ${svc}..."
@@ -1427,6 +1458,10 @@ deploy_service() {
     esac
   fi
 
+  if ! service_identity "$svc" >/dev/null; then
+    restore_drain_state "$svc" "$url" "$was_draining" || true
+    return 1
+  fi
   echo "Starting ${svc} on ${TARGET_COMMIT} under its candidate tag, out of rotation until its canary passes..."
   local failure="" code=0
   docker tag "$TARGET_IMAGE" "$candidate"
@@ -1509,6 +1544,12 @@ for svc in "${ALL_SFU_SERVICES[@]}"; do
   IMAGE_NAME[$svc]="$(service_image_name "$svc")"
 done
 
+if [[ "$ROLLBACK" == "true" ]]; then
+  for svc in "${ALL_SFU_SERVICES[@]}"; do
+    service_identity "$svc" >/dev/null || exit 1
+  done
+fi
+
 seed_service_tags
 repair_interrupted
 restore_service_when_none_serves
@@ -1529,16 +1570,24 @@ if [[ "$ROLLBACK" == "true" ]]; then
     TARGET_IMAGE="$ROLLBACK_TARGET_IMAGE"
     TARGET_COMMIT="$ROLLBACK_TARGET_COMMIT"
     echo "Finishing the rollback to ${TARGET_COMMIT}."
-  elif all_on_image "$LAST_GOOD_IMAGE"; then
-    TARGET_IMAGE="$PREVIOUS_GOOD_IMAGE"
-    TARGET_COMMIT="$PREVIOUS_GOOD_COMMIT"
-    echo "Rolling every instance back to ${TARGET_COMMIT}, the release before ${LAST_GOOD_COMMIT}."
   else
-    TARGET_IMAGE="$LAST_GOOD_IMAGE"
-    TARGET_COMMIT="$LAST_GOOD_COMMIT"
-    echo "Not every instance runs ${LAST_GOOD_COMMIT}; rolling them all back to it, the last release that served on every instance."
+    fleet_image_status=0
+    all_on_image "$LAST_GOOD_IMAGE" || fleet_image_status=$?
+    case "$fleet_image_status" in
+      0)
+        TARGET_IMAGE="$PREVIOUS_GOOD_IMAGE"
+        TARGET_COMMIT="$PREVIOUS_GOOD_COMMIT"
+        echo "Rolling every instance back to ${TARGET_COMMIT}, the release before ${LAST_GOOD_COMMIT}."
+        ;;
+      1)
+        TARGET_IMAGE="$LAST_GOOD_IMAGE"
+        TARGET_COMMIT="$LAST_GOOD_COMMIT"
+        echo "Not every instance runs ${LAST_GOOD_COMMIT}; rolling them all back to it, the last release that served on every instance."
+        ;;
+      *) exit 1 ;;
+    esac
   fi
-  if [[ -z "$TARGET_IMAGE" ]] || ! docker image inspect "$TARGET_IMAGE" >/dev/null 2>&1; then
+  if [[ -z "$TARGET_COMMIT" || -z "$TARGET_IMAGE" ]] || ! image_id "$TARGET_IMAGE" >/dev/null; then
     echo "No canary-verified release to roll back to is recorded in ${DEPLOY_STATE_FILE}; revert the commit and deploy instead." >&2
     exit 1
   fi
@@ -1559,7 +1608,7 @@ else
     build_inputs_clean="true"
   fi
   if [[ "$build_inputs_clean" == "true" ]] &&
-     TARGET_IMAGE="$(docker image inspect -f '{{.Id}}' "${IMAGE_REPO}:${TARGET_COMMIT}" 2>/dev/null)"; then
+     TARGET_IMAGE="$(image_id "${IMAGE_REPO}:${TARGET_COMMIT}")"; then
     echo "Reusing the image already built for ${TARGET_COMMIT}."
   else
     # Built under its own candidate tag, never as a service's compose image: an
@@ -1569,7 +1618,7 @@ else
     echo "Building the SFU image for ${TARGET_COMMIT}..."
     mapfile -t target_build < <(image_build)
     docker build -t "${IMAGE_REPO}:${TARGET_COMMIT}-candidate" -f "${target_build[1]}" "${target_build[0]}"
-    TARGET_IMAGE="$(docker image inspect -f '{{.Id}}' "${IMAGE_REPO}:${TARGET_COMMIT}-candidate")"
+    TARGET_IMAGE="$(image_id "${IMAGE_REPO}:${TARGET_COMMIT}-candidate")"
     if [[ "$build_inputs_clean" == "true" ]]; then
       docker tag "$TARGET_IMAGE" "${IMAGE_REPO}:${TARGET_COMMIT}"
     else
@@ -1587,12 +1636,12 @@ fi
 if [[ "$ROLLBACK" == "true" ]]; then
   checkout_commit="$(git -C "$ROOT_DIR" rev-parse --short=12 HEAD)"
   canary_tag="${IMAGE_REPO}-canary:${checkout_commit}"
-  if ! CANARY_IMAGE="$(docker image inspect -f '{{.Id}}' "${IMAGE_REPO}:${checkout_commit}" 2>/dev/null)" &&
-     ! CANARY_IMAGE="$(docker image inspect -f '{{.Id}}' "$canary_tag" 2>/dev/null)"; then
+  if ! CANARY_IMAGE="$(image_id "${IMAGE_REPO}:${checkout_commit}")" &&
+     ! CANARY_IMAGE="$(image_id "$canary_tag")"; then
     mapfile -t canary_build < <(image_build)
     echo "Building ${checkout_commit} as ${canary_tag} for its canary; the instances still go back to ${TARGET_COMMIT}."
     docker build -t "$canary_tag" -f "${canary_build[1]}" "${canary_build[0]}"
-    CANARY_IMAGE="$(docker image inspect -f '{{.Id}}' "$canary_tag")"
+    CANARY_IMAGE="$(image_id "$canary_tag")"
   fi
 else
   CANARY_IMAGE="$TARGET_IMAGE"
