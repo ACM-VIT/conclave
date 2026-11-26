@@ -428,6 +428,19 @@ struct ACT7AppHostTests {
         #expect(presenter.toolbar.exportSequence == 1 && presenter.takeExport() == "iVBORw0KGgo=" && presenter.takeExport().isEmpty)
     }
 
+    @Test func aDetachedEmbedSettlesToolbarCommandsAndTakesNoNewOnes() {
+        let wire = Wire()
+        let (presenter, relay) = host(wire, inputs: AppHostInputs.make(callSession: 1, appId: "whiteboard", isHost: true))
+        #expect(ready(relay) == .none)
+        #expect(presenter.perform(.setTool, value: "eraser") == .dispatched && presenter.perform(.export) == .dispatched)
+        #expect(presenter.toolbar.isPending(.setTool) && presenter.toolbar.isPending(.export))
+        relay.detachBridge(appSessionId: relay.appSessionId)
+        #expect(presenter.model.phase == .opening, "the card stops saying the board is ready")
+        #expect(presenter.toolbar.pendingKinds.isEmpty, "a page that is gone answers nothing, so nothing waits on it")
+        let sent = wire.delivered.count
+        #expect(presenter.perform(.setTool, value: "laser") == .explained && wire.delivered.count == sent)
+    }
+
     @Test func readOnlyPeopleGetNoEditCommandsAndTheViewOnlyTag() {
         let wire = Wire()
         let (presenter, relay) = host(wire, inputs: AppHostInputs.make(callSession: 1, appId: "whiteboard", isHost: false, isLocked: true))

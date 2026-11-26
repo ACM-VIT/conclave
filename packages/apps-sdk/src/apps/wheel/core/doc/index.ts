@@ -5,7 +5,7 @@ import {
   ensureAppMap,
   getAppRoot,
 } from "../../../../sdk/doc/createAppDoc";
-import { WHEEL_LIMITS, isValidIdentifier, withoutLoneSurrogates } from "../../../../native-embed/protocol";
+import { WHEEL_LIMITS, WHEEL_RECEIPT_LIMITS, isValidIdentifier, withoutLoneSurrogates } from "../../../../native-embed/protocol";
 import { cutText } from "../../../../sdk/text";
 import { hasVisibleText } from "../labels";
 
@@ -129,41 +129,70 @@ export const getEntries = (doc: Y.Doc): WheelEntry[] => {
   return entries ? acceptEntries(entries.toArray()).kept : [];
 };
 
+const pushLabels = (doc: Y.Doc, labels: readonly string[]): number => {
+  if (labels.length === 0) return 0;
+  const entries = ensureAppArray(getRoot(doc), ENTRIES_KEY) as EntriesArray;
+  const room = MAX_WHEEL_ENTRIES - prunedEntries(entries).length;
+  if (room <= 0) return 0;
+  const batch = labels.slice(0, room).map((label) => ({ id: createEntryId(), label }));
+  entries.push(batch);
+  return batch.length;
+};
+
 export const addEntries = (doc: Y.Doc, rawLabels: string[]): number => {
   const labels = rawLabels.map(normalizeLabel).filter((label) => label.length > 0);
-  if (labels.length === 0) return 0;
-
-  return doc.transact(() => {
-    const entries = ensureAppArray(getRoot(doc), ENTRIES_KEY) as EntriesArray;
-    const room = MAX_WHEEL_ENTRIES - prunedEntries(entries).length;
-    if (room <= 0) return 0;
-    const batch = labels.slice(0, room).map((label) => ({ id: createEntryId(), label }));
-    entries.push(batch);
-    return batch.length;
-  });
+  return labels.length === 0 ? 0 : doc.transact(() => pushLabels(doc, labels));
 };
 
-export type AddReceipt = readonly number[] | "noNames" | "full" | "tooManyLines";
+type AddReceipt = readonly string[];
 
-export const getAddReceipt = (doc: Y.Doc, key: string): AddReceipt | undefined => {
-  const value = doc.getMap<unknown>(ADD_RECEIPTS_ROOT).get(key);
-  if (value === "noNames" || value === "full" || value === "tooManyLines") return value;
-  if (!Array.isArray(value) || value.length === 0 || value.length > WHEEL_LIMITS.entries) return undefined;
-  const slots: unknown[] = value;
-  return slots.every((slot): slot is number =>
-    typeof slot === "number" && Number.isInteger(slot) && slot >= 0 && slot < WHEEL_LIMITS.pasteLines
-  ) ? slots : undefined;
+const readReceipt = (value: unknown): AddReceipt | null => {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_WHEEL_ENTRIES) return null;
+  const tokens: unknown[] = value;
+  return tokens.every(isValidIdentifier) ? tokens : null;
 };
 
-// A named root type merges concurrent first writes. Keep receipts for the life of the document:
-// an embed can recover a pending add long after a peer removed its entries.
-export const addWithReceipt = (doc: Y.Doc, key: string, apply: () => AddReceipt): AddReceipt =>
+const receiptBytes = (receipt: AddReceipt): number =>
+  receipt.reduce((bytes, token) => bytes + token.length + 2, 2);
+
+const acceptReceipts = (records: readonly unknown[]): Accepted<AddReceipt> => {
+  const kept: AddReceipt[] = [];
+  const indexes: number[] = [];
+  let bytes = 0;
+  for (let index = records.length - 1; index >= 0 && kept.length < WHEEL_RECEIPT_LIMITS.count; index -= 1) {
+    const receipt = readReceipt(records[index]);
+    if (receipt === null) continue;
+    bytes += receiptBytes(receipt);
+    if (bytes > WHEEL_RECEIPT_LIMITS.bytes) break;
+    kept.push(receipt);
+    indexes.push(index);
+  }
+  return { kept, indexes };
+};
+
+const readAddedTokens = (receipts: Y.Array<unknown>): Set<string> =>
+  new Set(acceptReceipts(receipts.toArray()).kept.flat());
+
+export const getAddedTokens = (doc: Y.Doc): ReadonlySet<string> =>
+  readAddedTokens(doc.getArray<unknown>(ADD_RECEIPTS_ROOT));
+
+export type TokenedLabel = { token: string; label: string };
+
+export const addEntriesOnce = (doc: Y.Doc, lines: readonly TokenedLabel[]): void =>
   doc.transact(() => {
-    const previous = getAddReceipt(doc, key);
-    if (previous !== undefined) return previous;
-    const receipt = apply();
-    doc.getMap<AddReceipt>(ADD_RECEIPTS_ROOT).set(key, receipt);
-    return receipt;
+    const receipts = doc.getArray<unknown>(ADD_RECEIPTS_ROOT);
+    const taken = readAddedTokens(receipts);
+    const fresh = lines
+      .map((line) => ({ token: line.token, label: normalizeLabel(line.label) }))
+      .filter((line) => {
+        if (line.label.length === 0 || !isValidIdentifier(line.token) || taken.has(line.token)) return false;
+        taken.add(line.token);
+        return true;
+      });
+    const count = pushLabels(doc, fresh.map((line) => line.label));
+    if (count === 0) return;
+    receipts.push([fresh.slice(0, count).map((line) => line.token)]);
+    pruneTo(receipts, acceptReceipts(receipts.toArray()).indexes);
   });
 
 export const addEntry = (doc: Y.Doc, rawLabel: string): boolean =>

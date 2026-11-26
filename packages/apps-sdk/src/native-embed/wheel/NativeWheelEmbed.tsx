@@ -14,7 +14,7 @@ import {
   startSpin,
   type WheelSpin,
 } from "../../apps/wheel/core/doc/index";
-import { APP_EDIT_COMMANDS, type Envelope, type NativeToEmbedType } from "../protocol";
+import type { Envelope, NativeToEmbedType } from "../protocol";
 import {
   type AppStatusPayload,
   type CommandResult,
@@ -30,8 +30,6 @@ const SPIN_MIN_TURNS = 7;
 const SPIN_TURNS_SPREAD = 3;
 const REVEAL_DELAY_MS = 800;
 const RESULT_FAILOVER_MS = 2600;
-
-const EDIT_COMMANDS: ReadonlySet<string> = new Set<string>(APP_EDIT_COMMANDS);
 
 const useHostStatus = (session: NativeEmbedSession): HostStatus =>
   useSyncExternalStore(
@@ -195,13 +193,11 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
       session.sendStatus({ app: { ...status, ...next } });
       return { ok: true };
     };
-    const handler = (envelope: Envelope<NativeToEmbedType>): CommandResult => {
-      const payload = envelope.payload;
-      if (!session.isSynced && envelope.type !== "setSounds") return { ok: false, error: "notSynced" };
-      if (EDIT_COMMANDS.has(envelope.type) && !canEditRef.current) return { ok: false, error: "readOnly" };
-      return runWheelCommand(doc, envelope.type, payload, {
-        requestId: envelope.requestId,
-        addKey: (requestId) => `${session.scope.appSessionId}/${requestId}`,
+    const handler = (envelope: Envelope<NativeToEmbedType>, repeat: boolean): CommandResult =>
+      runWheelCommand(doc, envelope.type, envelope.payload, {
+        synced: session.isSynced,
+        canEdit: !session.hostStatus.readOnly,
+        repeat,
         spinning: isLive(),
         requestSpin,
         setSounds: (value) => {
@@ -209,7 +205,6 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
           return respond({ sounds: value });
         },
       });
-    };
     session.start(handler);
   }, [session, status, doc, requestSpin, isLive]);
 

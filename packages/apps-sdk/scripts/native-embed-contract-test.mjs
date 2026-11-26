@@ -120,9 +120,9 @@ test("the Swift twin matches protocol.ts", () => {
   assert.equal(Number(constant("pageLimit")), limits.pages);
   assert.equal(Number(constant("pageNameLimit")), limits.pageName);
   assert.equal(Number(constant("requestMemory")), limits.requestMemory);
-  assert.equal(Number(constant("commandAttempts")), protocol.COMMAND_RETRY.attempts);
-  assert.equal(Number(constant("commandTimeoutMillis")), protocol.COMMAND_RETRY.timeoutMs);
-  assert.equal(Number(constant("commandRetryDeadlineMillis")), protocol.COMMAND_RETRY.deadlineMs);
+  assert.equal(Number(constant("commandTimeoutMillis")), protocol.COMMAND_TIMEOUT_MS);
+  assert.equal(Number(constant("addOutcomeAsks")), protocol.WHEEL_ADD_RECOVERY.asks);
+  assert.equal(Number(constant("addOutcomeWindowMillis")), protocol.WHEEL_ADD_RECOVERY.windowMs);
   const cases = (enumName) => {
     const block = swift.match(new RegExp(`enum ${enumName}: String, CaseIterable, Equatable \\{([\\s\\S]*?)\\n\\}`));
     assert.ok(block, `missing Swift enum ${enumName}`);
@@ -148,7 +148,13 @@ const loadSessionModule = async () => {
   }
   const result = await esbuild.build({
     stdin: {
-      contents: 'export * from "./session.ts"; export * from "./protocol.ts"; export * as Y from "yjs";',
+      contents: [
+        'export * from "./session.ts";',
+        'export * from "./protocol.ts";',
+        'export * as Y from "yjs";',
+        'export { runWheelCommand } from "./wheel/commands.ts";',
+        'export { createWheelDoc, getEntries } from "../apps/wheel/core/doc/index.ts";',
+      ].join("\n"),
       resolveDir: embedDir,
       loader: "ts",
     },
@@ -235,11 +241,11 @@ const makeRoom = (mod, context) => {
       }
     }
   };
-  const join = (name, host = {}, clock = undefined) => {
+  const join = (name, host = {}, wheel = false) => {
     const outbox = [];
     const client = {
       name,
-      scope: { callSessionId: "call-1-contract", appSessionId: `app-${name}`, appId: "whiteboard" },
+      scope: { callSessionId: "call-1-contract", appSessionId: `app-${name}`, appId: wheel ? "wheel" : "whiteboard" },
       host: { readOnly: false, connection: "live", reduceMotion: false, pencilOnly: false, userId: name, userName: name, ...host },
       outbox,
       received: [],
@@ -254,14 +260,27 @@ const makeRoom = (mod, context) => {
         client.handler = next;
       },
     };
-    client.session = new mod.NativeEmbedSession(transport, client.scope, new Y.Doc(), clock);
+    client.session = new mod.NativeEmbedSession(transport, client.scope, wheel ? mod.createWheelDoc() : new Y.Doc());
     clients.push(client);
-    client.session.start(() => ({ ok: false, error: "unknownCommand" }));
+    client.session.start(wheel ? wheelRunner(mod, client) : () => ({ ok: true }));
     pump();
     return client;
   };
   return { Y, room, roomUpdates, join, pump, deliver };
 };
+
+const wheelRunner = (mod, client) => (envelope, repeat) =>
+  mod.runWheelCommand(client.session.doc, envelope.type, envelope.payload, {
+    synced: client.session.isSynced,
+    canEdit: !client.session.hostStatus.readOnly,
+    repeat,
+    spinning: false,
+    requestSpin: () => ({ ok: true }),
+    setSounds: () => ({ ok: true }),
+  });
+
+const namesOn = (mod, client) => mod.getEntries(client.session.doc).map((entry) => entry.label);
+const acksFor = (client, requestId) => client.acks.filter((ack) => ack.requestId === requestId).map((ack) => ack.payload);
 
 const text = (Y, doc) => doc.getMap("whiteboard").toJSON();
 
@@ -330,123 +349,63 @@ test("commands answer with an ack carrying their request id", { skip: skipConver
   assert.deepEqual(ada.acks.map((ack) => [ack.requestId, ack.payload.ok]), [["h-1", true], ["h-2", false]]);
 });
 
-test("a repeated command id gets its first answer again and runs once", { skip: skipConvergence }, (context) => {
+test("a wheel add delivered twice under one request id adds once and is answered from the document both times", { skip: skipConvergence }, (context) => {
   const harness = makeRoom(sessionModule, context);
-  const ada = harness.join("ada");
-  let runs = 0;
-  ada.session.start(() => {
-    runs += 1;
-    return { ok: true, added: [0, 2] };
-  });
-  assert.equal(harness.deliver(ada, "addEntries", { labels: ["Ada", "", "Bo"] }, "h-5"), "none");
-  assert.equal(harness.deliver(ada, "addEntries", { labels: ["Ada", "", "Bo"] }, "h-5"), "duplicateRequest");
-  assert.equal(harness.deliver(ada, "zoomToFit", {}, "h-6"), "none");
+  const ada = harness.join("ada", {}, true);
+  const payload = { labels: ["Ada", "", "Bo"], tokens: ["t-ada", "t-blank", "t-bo"] };
+  assert.equal(harness.deliver(ada, "addEntries", payload, "h-5"), "none");
+  assert.equal(harness.deliver(ada, "addEntries", payload, "h-5"), "none");
   harness.pump();
-  assert.equal(runs, 2);
-  assert.deepEqual(
-    ada.acks.map((ack) => [ack.requestId, ack.payload]),
-    [
-      ["h-5", { ok: true, added: [0, 2] }],
-      ["h-5", { ok: true, added: [0, 2] }],
-      ["h-6", { ok: true, added: [0, 2] }],
-    ],
-  );
+  assert.deepEqual(namesOn(sessionModule, ada), ["Ada", "Bo"]);
+  assert.deepEqual(acksFor(ada, "h-5"), [{ ok: true, added: [0, 2] }, { ok: true, added: [0, 2] }]);
+  assert.equal(ada.session.rejections.includes("duplicateRequest"), false);
+  assert.equal(harness.deliver(ada, "shuffle", {}, "h-6"), "none");
+  assert.equal(harness.deliver(ada, "shuffle", {}, "h-6"), "duplicateRequest");
 });
 
-test("a wheel add still answers its retry after 70 other host messages, and runs once", { skip: skipConvergence }, (context) => {
+test("a refusal is never remembered: the same request id is next answered from the document", { skip: skipConvergence }, (context) => {
   const harness = makeRoom(sessionModule, context);
-  const ada = harness.join("ada");
-  let adds = 0;
-  ada.session.start((command) => {
-    if (command.type !== "addEntries") return { ok: true };
-    adds += 1;
-    return { ok: true, added: [0] };
-  });
-  harness.deliver(ada, "addEntries", { labels: ["Ada"] }, "h-1");
-  for (let index = 0; index < 70; index += 1) harness.deliver(ada, "zoomToFit", {}, `h-z${index}`);
-  assert.equal(harness.deliver(ada, "addEntries", { labels: ["Ada"] }, "h-1"), "duplicateRequest");
+  const ada = harness.join("ada", {}, true);
+  harness.deliver(ada, "resync", {});
+  assert.equal(ada.session.isSynced, false);
+  const payload = { labels: ["Ada"], tokens: ["t-ada"] };
+  harness.deliver(ada, "addEntries", payload, "h-1");
+  harness.deliver(ada, "addOutcome", { tokens: payload.tokens }, "h-2");
   harness.pump();
-  assert.equal(adds, 1);
-  assert.deepEqual(
-    ada.acks.filter((ack) => ack.requestId === "h-1").map((ack) => ack.payload),
-    [{ ok: true, added: [0] }, { ok: true, added: [0] }],
-  );
+  assert.equal(ada.session.isSynced, true);
+  assert.deepEqual(acksFor(ada, "h-1"), [{ ok: false, error: "notSynced", added: [] }]);
+  assert.deepEqual(acksFor(ada, "h-2"), [{ ok: false, error: "notSynced" }]);
+  harness.deliver(ada, "addEntries", payload, "h-1");
+  harness.deliver(ada, "addOutcome", { tokens: payload.tokens }, "h-3");
+  harness.pump();
+  assert.deepEqual(acksFor(ada, "h-1")[1], { ok: false, error: "notApplied", added: [] });
+  assert.deepEqual(acksFor(ada, "h-3"), [{ ok: false, error: "notApplied", added: [] }]);
+  assert.deepEqual(namesOn(sessionModule, ada), []);
+  harness.deliver(ada, "addEntries", { labels: ["Ada"], tokens: ["t-ada-again"] }, "h-4");
+  harness.pump();
+  assert.deepEqual(acksFor(ada, "h-4"), [{ ok: true, added: [0] }]);
+  assert.deepEqual(namesOn(sessionModule, ada), ["Ada"]);
 });
 
-test("only wheel adds are remembered, so an export is never kept", { skip: skipConvergence }, (context) => {
+test("an add is answered from the document after the session forgot its request, and by an embed that reloaded", { skip: skipConvergence }, (context) => {
   const harness = makeRoom(sessionModule, context);
-  const ada = harness.join("ada");
-  ada.session.start((command) =>
-    command.type === "export" ? { ok: true, pngBase64: "A".repeat(4000) } : { ok: true, added: [0] },
-  );
-  harness.deliver(ada, "export", {}, "h-e");
-  assert.equal(ada.session.rememberedAnswers, 0);
-  assert.equal(harness.deliver(ada, "export", {}, "h-e"), "duplicateRequest");
-  harness.pump();
-  assert.equal(ada.acks.filter((ack) => ack.requestId === "h-e").length, 1);
-  harness.deliver(ada, "addEntries", { labels: ["Ada"] }, "h-a");
-  assert.equal(ada.session.rememberedAnswers, 1);
-});
-
-test("an add's answer is kept for two minutes and the byte cap never drops one inside its retry window", { skip: skipConvergence }, (context) => {
-  const harness = makeRoom(sessionModule, context);
-  let now = 1_000_000;
-  const ada = harness.join("ada", {}, () => now);
-  let runs = 0;
-  ada.session.start((command) => {
-    if (command.type !== "addEntries") return { ok: true };
-    runs += 1;
-    return { ok: true, added: Array.from({ length: 64 }, (_, index) => index) };
-  });
-  harness.deliver(ada, "addEntries", { labels: ["Ada"] }, "h-first");
-  for (let index = 0; index < 400; index += 1) harness.deliver(ada, "addEntries", { labels: ["N"] }, `h-${index}`);
-  assert.equal(ada.session.rememberedAnswers, 401, "over the byte cap, every answer still inside its retry window is kept");
-  now += 39_000;
-  assert.equal(harness.deliver(ada, "addEntries", { labels: ["Ada"] }, "h-first"), "duplicateRequest");
-  now += 2_000;
-  harness.deliver(ada, "addEntries", { labels: ["Late"] }, "h-late");
-  const kept = ada.session.rememberedAnswers;
-  assert.ok(kept < 402 && kept > 200, `over the cap, answers past their retry window go first (${kept} kept)`);
-  now += 60_000;
-  assert.equal(harness.deliver(ada, "addEntries", { labels: ["Late"] }, "h-late"), "duplicateRequest");
-  now += 61_000;
-  harness.deliver(ada, "zoomToFit", {}, "h-tick");
-  assert.equal(ada.session.rememberedAnswers, 0, "two minutes on, nothing is kept");
-  harness.pump();
-  assert.equal(runs, 402);
-  assert.equal(ada.acks.filter((ack) => ack.requestId === "h-first").length, 2);
-  assert.equal(ada.acks.filter((ack) => ack.requestId === "h-late").length, 2);
-});
-
-test("a lost add ack, 64 sync frames and a retry after the answer expired still add the names once", { skip: skipConvergence }, (context) => {
-  const harness = makeRoom(sessionModule, context);
-  let now = 5_000;
-  const ada = harness.join("ada", {}, () => now);
-  const names = [];
-  ada.session.start((command) => {
-    if (command.type !== "addEntries") return { ok: true };
-    names.push(...command.payload.labels);
-    return { ok: true, added: [names.length - 1] };
-  });
-  assert.equal(harness.deliver(ada, "addEntries", { labels: ["Ada"] }, "h-1"), "none");
-  ada.outbox.length = 0;
-  for (let index = 0; index < 32; index += 1) {
-    harness.deliver(ada, "update", { update: "" }, `u-${index}`);
-    harness.deliver(ada, "awareness", { update: "" }, `a-${index}`);
+  const ada = harness.join("ada", {}, true);
+  const payload = { labels: ["Ada", "Bo"], tokens: ["t-ada", "t-bo"] };
+  harness.deliver(ada, "addEntries", payload, "h-1");
+  for (let index = 0; index < protocol.NATIVE_EMBED_LIMITS.executedCommands + 8; index += 1) {
+    harness.deliver(ada, "setSounds", { value: index % 2 === 0 }, `h-s${index}`);
   }
-  now += protocol.COMMAND_RETRY.keepMs + 1_000;
-  harness.deliver(ada, "zoomToFit", {}, "h-tick");
-  assert.equal(ada.session.rememberedAnswers, 0, "the saved answer has expired");
-  assert.equal(harness.deliver(ada, "addEntries", { labels: ["Ada"] }, "h-1"), "duplicateRequest");
-  assert.deepEqual(names, ["Ada"]);
-});
-
-test("the native retry deadline ends inside every window the embed keeps an add's answer", () => {
-  const retry = protocol.COMMAND_RETRY;
-  const overCapWindow = retry.attempts * retry.timeoutMs + retry.timeoutMs;
-  assert.ok(retry.deadlineMs < overCapWindow && overCapWindow < retry.keepMs);
-  assert.ok(retry.deadlineMs > (retry.attempts - 1) * retry.timeoutMs, "every scheduled retry still goes out");
-  assert.ok(protocol.NATIVE_EMBED_LIMITS.executedCommands >= 1_024);
+  assert.equal(harness.deliver(ada, "addEntries", payload, "h-1"), "none");
+  harness.pump();
+  assert.deepEqual(acksFor(ada, "h-1"), [{ ok: true, added: [0, 1] }, { ok: true, added: [0, 1] }]);
+  assert.deepEqual(namesOn(sessionModule, ada), ["Ada", "Bo"]);
+  const reloaded = harness.join("ada-reloaded", {}, true);
+  harness.deliver(reloaded, "addOutcome", { tokens: payload.tokens }, "h-9");
+  harness.deliver(reloaded, "addOutcome", { tokens: ["t-never"] }, "h-10");
+  harness.pump();
+  assert.deepEqual(acksFor(reloaded, "h-9"), [{ ok: true, added: [0, 1] }]);
+  assert.deepEqual(acksFor(reloaded, "h-10"), [{ ok: false, error: "notApplied", added: [] }]);
+  assert.deepEqual(namesOn(sessionModule, reloaded), ["Ada", "Bo"]);
 });
 
 test("the embed says ready only once it can run commands, and runs any that came first", { skip: skipConvergence }, (context) => {
@@ -455,28 +414,27 @@ test("the embed says ready only once it can run commands, and runs any that came
   let deliver = () => "none";
   const transport = { platform: "ios", post: (message) => outbox.push(JSON.parse(message)), onMessage: (next) => { deliver = next; } };
   const scope = { callSessionId: "call-1-contract", appSessionId: "app-early", appId: "wheel" };
-  const session = new mod.NativeEmbedSession(transport, scope, new mod.Y.Doc());
+  const client = { session: new mod.NativeEmbedSession(transport, scope, mod.createWheelDoc()) };
   context.after(() => {
-    session.close();
-    session.doc.destroy();
+    client.session.close();
+    client.session.doc.destroy();
   });
   const host = (type, payload, requestId) =>
     deliver(JSON.stringify({ v: 1, type, callSessionId: scope.callSessionId, appSessionId: scope.appSessionId, requestId, payload }));
   assert.equal(host("status", { readOnly: false, connection: "live" }, "n-1"), "none");
-  assert.equal(host("addOutcome", { requestId: "h-0" }, "h-1"), "none");
-  assert.equal(host("setSounds", { value: false }, "h-2"), "none");
+  assert.equal(host("snapshot", { syncMessage: "", stateVector: "" }, "n-2"), "none");
+  assert.equal(host("addEntries", { labels: ["Ada"], tokens: ["t-ada"] }, "h-1"), "none");
+  assert.equal(host("addOutcome", { tokens: ["t-ada"] }, "h-2"), "none");
   assert.deepEqual(outbox.filter((message) => message.type === "ready" || message.type === "ack"), []);
-  const ran = [];
-  const handler = (command) => {
-    ran.push(command.requestId);
-    return { ok: true };
-  };
-  session.start(handler);
-  session.start(handler);
+  client.session.start(wheelRunner(mod, client));
+  client.session.start(wheelRunner(mod, client));
   const said = outbox.filter((message) => message.type === "ready" || message.type === "ack");
-  assert.deepEqual(said.map((message) => [message.type, message.payload.ok]), [["ready", undefined], ["ack", true], ["ack", true]]);
-  assert.deepEqual(said.slice(1).map((message) => message.requestId), ["h-1", "h-2"]);
-  assert.deepEqual(ran, ["h-1", "h-2"]);
+  assert.deepEqual(said.map((message) => [message.type, message.requestId, message.payload.ok]), [
+    ["ready", said[0].requestId, undefined],
+    ["ack", "h-1", true],
+    ["ack", "h-2", true],
+  ]);
+  assert.deepEqual(namesOn(mod, client), ["Ada"]);
 });
 
 test("close invalidates the session for good",{ skip: skipConvergence }, (context) => {

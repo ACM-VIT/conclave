@@ -804,6 +804,9 @@ struct AppWheelPage: View {
                         if wheel.isFull {
                             Text(ConclaveStrings.text("The wheel is full."))
                                 .accessibilityIdentifier("app.wheel.full")
+                        } else if host.wheelDraft.isUnconfirmed {
+                            Text(ConclaveStrings.text("Couldn’t confirm these names were added. Check the list before adding them again."))
+                                .accessibilityIdentifier("app.wheel.unconfirmed")
                         }
                     }
                 }

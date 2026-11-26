@@ -416,48 +416,67 @@ enum WatchSearchPhase: String, CaseIterable, Equatable {
 struct WheelNameSubmission: Equatable {
     let requestId: String
     let lines: [String]
+    let tokens: [String]
+    let sentAtMillis: Double
+    let asks: Int
 }
 
 struct WheelNameDraft: Equatable {
     private(set) var scope = ""
     private(set) var text = ""
     private(set) var sent: [WheelNameSubmission] = []
+    private(set) var isUnconfirmed = false
 
     mutating func enter(_ nextScope: String) {
         if nextScope == scope { return }
         scope = nextScope
         text = ""
         sent = []
+        isUnconfirmed = false
     }
 
     mutating func edit(_ value: String) -> Bool {
         let addsLine = WheelNameDraft.lineBreaks(value) > WheelNameDraft.lineBreaks(text)
+        if value != text { isUnconfirmed = false }
         text = value
         return addsLine
     }
 
     mutating func clear() {
         text = ""
+        isUnconfirmed = false
     }
 
-    mutating func didSend(requestId: String, lines: [String], rest: String = "") {
-        sent.append(WheelNameSubmission(requestId: requestId, lines: lines))
+    mutating func didSend(requestId: String, lines: [String], tokens: [String], sentAtMillis: Double, rest: String = "") {
+        sent.append(WheelNameSubmission(requestId: requestId, lines: lines, tokens: tokens, sentAtMillis: sentAtMillis, asks: 0))
         text = rest
+        isUnconfirmed = false
     }
 
-    mutating func reply(requestId: String, accepted: Bool, added: [Int]?) {
+    mutating func asked(requestId: String) {
+        guard let index = sent.firstIndex(where: { $0.requestId == requestId }) else { return }
+        let submission = sent[index]
+        sent[index] = WheelNameSubmission(requestId: requestId, lines: submission.lines, tokens: submission.tokens,
+                                          sentAtMillis: submission.sentAtMillis, asks: submission.asks + 1)
+    }
+
+    mutating func settle(requestId: String, added: [Int]) {
         guard let index = sent.firstIndex(where: { $0.requestId == requestId }) else { return }
         let submission = sent[index]
         sent.remove(at: index)
         var kept: [String] = []
         var offset = 0
         for line in submission.lines {
-            var wasAdded = accepted
-            if let list = added { wasAdded = list.contains(offset) }
-            if !wasAdded { kept.append(line) }
+            if !added.contains(offset) { kept.append(line) }
             offset += 1
         }
         restore(kept.joined(separator: "\n"))
+    }
+
+    mutating func giveUp(requestId: String) {
+        if !sent.contains(where: { $0.requestId == requestId }) { return }
+        settle(requestId: requestId, added: [])
+        isUnconfirmed = true
     }
 
     private mutating func restore(_ value: String) {
@@ -577,9 +596,6 @@ struct AppPagePendingCommand: Equatable {
     let requestId: String
     let kind: AppPageCommandKind
     let target: String
-    let labels: [String]
-    let attempts: Int
-    let sentAtMillis: Double
 }
 
 enum WatchClassics {
@@ -667,8 +683,8 @@ enum AppPagePolicy {
         return missing
     }
 
-    static func settlesAdd(ok: Bool, error: String) -> Bool {
-        return ok || error == "notApplied" || error == "noNames" || error == "full" || error == "tooManyLines"
+    static func nameToken() -> String {
+        return UUID().uuidString.lowercased()
     }
 
     static func isEditCommand(_ kind: AppPageCommandKind) -> Bool {
@@ -782,6 +798,7 @@ final class AppHostPresenter {
 
     @ObservationIgnored private var appStatus = AppEmbedAppStatus.empty
     @ObservationIgnored private var pagePending: [AppPagePendingCommand] = []
+    @ObservationIgnored private var outcomeOrigins: [String: String] = [:]
     @ObservationIgnored private var lastWinnerSpinId = ""
     @ObservationIgnored private var winnerSequence = 0
     private(set) var wheelDraft = WheelNameDraft()
@@ -872,8 +889,10 @@ final class AppHostPresenter {
             if event.appSessionId != appSessionId { return }
             cancelReadyTimer()
             embedReady = false
-            pagePending.removeAll(where: { $0.kind == .addEntries || $0.kind == .addOutcome })
-            rebuildPages()
+            pending = []
+            pagePending = []
+            rebuild()
+            rebuildToolbar()
         case .ready:
             if event.appSessionId != appSessionId { return }
             embedReady = true
@@ -1019,7 +1038,7 @@ final class AppHostPresenter {
         if !wheel.canEdit { return ActivityTapResult.explained }
         let labels = AppPagePolicy.pasteBatch(AppPagePolicy.wheelLabels(raw))
         if labels.isEmpty { return ActivityTapResult.ignored }
-        return sendPage(AppPageCommandKind.addEntries, target: "", payload: ["labels": labels], labels: labels)
+        return sendPage(AppPageCommandKind.addEntries, target: "", payload: ["labels": labels])
     }
 
     func editWheelDraft(_ value: String) {
@@ -1032,17 +1051,27 @@ final class AppHostPresenter {
             wheelDraft.clear()
             return
         }
+        if !wheel.canEdit { return }
         let lines = AppPagePolicy.wheelLabels(text)
         let batch = AppPagePolicy.pasteBatch(lines)
         var rest: [String] = []
+        var tokens: [String] = []
         var index = 0
         for line in lines {
-            if index >= batch.count { rest.append(line) }
+            if index >= batch.count {
+                rest.append(line)
+            } else {
+                tokens.append(AppPagePolicy.nameToken())
+            }
             index += 1
         }
-        if addWheelNames(batch.joined(separator: "\n")) != ActivityTapResult.dispatched { return }
+        if sendPage(AppPageCommandKind.addEntries, target: "", payload: ["labels": batch, "tokens": tokens]) != ActivityTapResult.dispatched {
+            return
+        }
         guard let command = pagePending.last else { return }
-        wheelDraft.didSend(requestId: command.requestId, lines: command.labels, rest: rest.joined(separator: "\n"))
+        wheelDraft.didSend(requestId: command.requestId, lines: batch, tokens: tokens, sentAtMillis: nowMillis(),
+                           rest: rest.joined(separator: "\n"))
+        startAddDeadline(requestId: command.requestId)
     }
 
     @discardableResult
@@ -1050,7 +1079,7 @@ final class AppHostPresenter {
         if !wheel.canEdit { return ActivityTapResult.explained }
         let labels = AppPagePolicy.pasteBatch(AppPagePolicy.missingNames(roster: rosterNames(), entries: wheel.entries))
         if labels.isEmpty { return ActivityTapResult.ignored }
-        return sendPage(AppPageCommandKind.addEntries, target: "everyone", payload: ["labels": labels], labels: labels)
+        return sendPage(AppPageCommandKind.addEntries, target: "everyone", payload: ["labels": labels])
     }
 
     @discardableResult
@@ -1377,23 +1406,18 @@ final class AppHostPresenter {
     private func acknowledge(requestId: String, ok: Bool, error: String, pngBase64: String, added: [Int]?) {
         if let pageIndex = pagePending.firstIndex(where: { $0.requestId == requestId }) {
             let command = pagePending[pageIndex]
-            if command.kind == AppPageCommandKind.addOutcome {
-                if !AppPagePolicy.settlesAdd(ok: ok, error: error) { return }
-                pagePending.remove(at: pageIndex)
-                wheelDraft.reply(requestId: command.target, accepted: ok, added: added)
-                rebuildPages()
-                return
-            }
             pagePending.remove(at: pageIndex)
-            if command.kind == AppPageCommandKind.addEntries && command.target.isEmpty {
-                wheelDraft.reply(requestId: requestId, accepted: ok, added: added)
+            if command.kind == AppPageCommandKind.addOutcome {
+                settleAdd(command.target, added: added)
+            } else if command.kind == AppPageCommandKind.addEntries && command.target.isEmpty {
+                settleAdd(requestId, added: added)
+                askAddOutcome(requestId)
             }
             rebuildPages()
             return
         }
-        if wheelDraft.sent.contains(where: { $0.requestId == requestId }) {
-            pagePending.removeAll(where: { $0.kind == AppPageCommandKind.addOutcome && $0.target == requestId })
-            wheelDraft.reply(requestId: requestId, accepted: ok, added: added)
+        if added != nil && wheelDraft.sent.contains(where: { $0.requestId == requestId }) {
+            settleAdd(requestId, added: added)
             rebuildPages()
             return
         }
@@ -1420,25 +1444,17 @@ final class AppHostPresenter {
     }
 
     func fireCommandTimeout(requestId: String) {
+        let asked = outcomeOrigins.removeValue(forKey: requestId) ?? ""
         if let pageIndex = pagePending.firstIndex(where: { $0.requestId == requestId }) {
             let command = pagePending[pageIndex]
-            let elapsed = nowMillis() - command.sentAtMillis
-            let inDeadline = elapsed >= 0.0 && elapsed < AppBridgeProtocol.commandRetryDeadlineMillis
-            if embedReady && command.kind == AppPageCommandKind.addEntries && command.attempts < AppBridgeProtocol.commandAttempts && inDeadline
-                && session?.sendCommand(AppPagePolicy.outboundType(command.kind), requestId: requestId,
-                                        payload: ["labels": command.labels]) == true {
-                pagePending[pageIndex] = AppPagePendingCommand(requestId: requestId, kind: command.kind, target: command.target,
-                                                               labels: command.labels, attempts: command.attempts + 1,
-                                                               sentAtMillis: command.sentAtMillis)
-                startCommandTimer(requestId: requestId)
-                return
-            }
             pagePending.remove(at: pageIndex)
-            if command.kind == AppPageCommandKind.addOutcome {
-                askAddOutcome(command.target)
-            } else if command.kind == AppPageCommandKind.addEntries && command.target.isEmpty {
-                askAddOutcome(requestId)
-            }
+            askAddOutcome(command.kind == AppPageCommandKind.addOutcome ? command.target : requestId)
+            rebuildPages()
+            return
+        }
+        let original = asked.isEmpty ? requestId : asked
+        if wheelDraft.sent.contains(where: { $0.requestId == original }) {
+            askAddOutcome(original)
             rebuildPages()
             return
         }
@@ -1449,24 +1465,58 @@ final class AppHostPresenter {
         rebuildToolbar()
     }
 
+    private func startAddDeadline(requestId: String) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.sleep(AppBridgeProtocol.addOutcomeWindowMillis)
+            self.fireAddDeadline(requestId: requestId)
+        }
+    }
+
+    func fireAddDeadline(requestId: String) {
+        if !wheelDraft.sent.contains(where: { $0.requestId == requestId }) { return }
+        pagePending.removeAll(where: { $0.requestId == requestId })
+        giveUpAdd(requestId)
+        rebuildPages()
+    }
+
+    private func settleAdd(_ original: String, added: [Int]?) {
+        guard let list = added else { return }
+        pagePending.removeAll(where: { $0.kind == AppPageCommandKind.addOutcome && $0.target == original })
+        wheelDraft.settle(requestId: original, added: list)
+    }
+
+    private func giveUpAdd(_ original: String) {
+        pagePending.removeAll(where: { $0.kind == AppPageCommandKind.addOutcome && $0.target == original })
+        wheelDraft.giveUp(requestId: original)
+    }
+
     private func askAddOutcome(_ original: String) {
-        if !embedReady || !wheelDraft.sent.contains(where: { $0.requestId == original }) { return }
-        nextRequestNumber += 1
-        let requestId = "h-" + String(nextRequestNumber)
-        if session?.sendCommand(AppBridgeOutboundType.addOutcome, requestId: requestId, payload: ["requestId": original]) != true {
+        guard let submission = wheelDraft.sent.first(where: { $0.requestId == original }) else { return }
+        let waiting = pagePending.contains(where: {
+            $0.requestId == original || ($0.kind == AppPageCommandKind.addOutcome && $0.target == original)
+        })
+        if waiting { return }
+        let elapsed = nowMillis() - submission.sentAtMillis
+        if submission.asks >= AppBridgeProtocol.addOutcomeAsks || elapsed < 0.0 || elapsed >= AppBridgeProtocol.addOutcomeWindowMillis {
+            giveUpAdd(original)
             return
         }
-        pagePending.append(AppPagePendingCommand(requestId: requestId, kind: AppPageCommandKind.addOutcome, target: original,
-                                                 labels: [], attempts: 1, sentAtMillis: nowMillis()))
+        if !embedReady { return }
+        nextRequestNumber += 1
+        let requestId = "h-" + String(nextRequestNumber)
+        if session?.sendCommand(AppBridgeOutboundType.addOutcome, requestId: requestId, payload: ["tokens": submission.tokens]) != true {
+            return
+        }
+        wheelDraft.asked(requestId: original)
+        pagePending.append(AppPagePendingCommand(requestId: requestId, kind: AppPageCommandKind.addOutcome, target: original))
+        outcomeOrigins[requestId] = original
         startCommandTimer(requestId: requestId)
     }
 
     private func askUnsettledAddOutcomes() {
         for submission in wheelDraft.sent {
-            let waiting = pagePending.contains(where: {
-                $0.requestId == submission.requestId || ($0.kind == AppPageCommandKind.addOutcome && $0.target == submission.requestId)
-            })
-            if !waiting { askAddOutcome(submission.requestId) }
+            askAddOutcome(submission.requestId)
         }
     }
 
@@ -1629,8 +1679,7 @@ final class AppHostPresenter {
     }
 
     @discardableResult
-    private func sendPage(_ kind: AppPageCommandKind, target: String = "", payload: [String: Any] = [:],
-                          labels: [String] = []) -> ActivityTapResult {
+    private func sendPage(_ kind: AppPageCommandKind, target: String = "", payload: [String: Any] = [:]) -> ActivityTapResult {
         guard let session = session else { return ActivityTapResult.explained }
         if model.phase != AppHostPhase.ready && model.phase != AppHostPhase.readOnly { return ActivityTapResult.explained }
         if AppPagePolicy.appId(kind) != model.appId || appStatus.kind != model.appId { return ActivityTapResult.explained }
@@ -1646,8 +1695,7 @@ final class AppHostPresenter {
         }
         commandLog.append(kind.rawValue + ":" + requestId)
         if commandLog.count > 40 { commandLog.removeFirst() }
-        pagePending.append(AppPagePendingCommand(requestId: requestId, kind: kind, target: target, labels: labels, attempts: 1,
-                                                 sentAtMillis: nowMillis()))
+        pagePending.append(AppPagePendingCommand(requestId: requestId, kind: kind, target: target))
         startCommandTimer(requestId: requestId)
         rebuildPages()
         return ActivityTapResult.dispatched
@@ -1690,6 +1738,7 @@ final class AppHostPresenter {
     private func resetPageState() {
         appStatus = AppEmbedAppStatus.empty
         pagePending = []
+        outcomeOrigins = [:]
         sawAppStatus = false
         lastWinnerSpinId = ""
         winnerLabel = ""

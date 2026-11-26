@@ -24,7 +24,7 @@ afterEach(() => {
 });
 
 describe("native wheel embed boot", () => {
-  it("says ready only once it can answer, so what native asks at once is answered, not refused as not ready", async () => {
+  it("says ready only once it can answer, so what native asks at once is answered from the document", async () => {
     const host = window as EmbedWindow;
     const posted: Posted[] = [];
     const send = (type: string, payload: Record<string, unknown>, requestId: string) =>
@@ -38,8 +38,9 @@ describe("native wheel embed boot", () => {
             if (message.type !== "ready") return;
             send("status", { readOnly: false, connection: "live", userId: "me", userName: "Me" }, "n-1");
             send("snapshot", { syncMessage: "", stateVector: "" }, message.requestId);
-            send("addOutcome", { requestId: "h-0" }, "h-1");
-            send("setSounds", { value: false }, "h-2");
+            send("addOutcome", { tokens: ["t-lost"] }, "h-1");
+            send("addEntries", { labels: ["Ada"], tokens: ["t-ada"] }, "h-2");
+            send("addOutcome", { tokens: ["t-ada"] }, "h-3");
           },
         },
       },
@@ -54,8 +55,13 @@ describe("native wheel embed boot", () => {
     expect(posted[0]?.type).toBe("ready");
     const acks = posted.filter((message) => message.type === "ack").map((message) => [message.requestId, message.payload]);
     expect(acks).toEqual([
-      ["h-1", { ok: false, error: "notApplied" }],
-      ["h-2", { ok: true }],
+      ["h-1", { ok: false, error: "notApplied", added: [] }],
+      ["h-2", { ok: true, added: [0] }],
+      ["h-3", { ok: true, added: [0] }],
     ]);
+    const status = [...posted].reverse().find((message) => message.type === "status")?.payload.app as
+      | { entries: { label: string }[] }
+      | undefined;
+    expect(status?.entries.map((entry) => entry.label)).toEqual(["Ada"]);
   });
 });

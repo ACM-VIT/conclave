@@ -76,7 +76,9 @@ internal fun AppWheelPage(host: AppHostPresenter, reservation: PaddingValues) {
                         enabled = !wheel.isFull,
                         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words, imeAction = ImeAction.Done),
                         keyboardActions = KeyboardActions(onDone = { host.submitWheelDraft() }),
-                        supportingText = if (wheel.isFull) ({ Text(conclaveString("app_wheel_full")) }) else null,
+                        supportingText = if (wheel.isFull) ({ Text(conclaveString("app_wheel_full")) })
+                        else if (host.wheelDraft.isUnconfirmed) ({ Text(conclaveString("app_wheel_unconfirmed"), Modifier.testTag("app.wheel.unconfirmed")) })
+                        else null,
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).testTag("app.wheel.add"),
                     )
                 }

@@ -3,11 +3,10 @@ import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from "y-protoc
 import type { NativeTransport } from "./bridge";
 import { cutText } from "../sdk/text";
 import {
+  DOC_ANSWERED_COMMANDS,
   HOST_COMMAND_TYPES,
   NATIVE_EMBED_BUNDLE_VERSION,
-  COMMAND_RETRY,
   NATIVE_EMBED_LIMITS,
-  RETRYABLE_COMMANDS,
   WHEEL_LIMITS,
   base64FromBytes,
   bytesFromBase64,
@@ -69,7 +68,9 @@ export type WatchAppStatus = {
 export type AppStatusPayload = { app: WheelAppStatus | WatchAppStatus };
 
 export type CommandResult = { ok: boolean; error?: string; pngBase64?: string; added?: number[] };
-export type CommandHandler = (envelope: Envelope<NativeToEmbedType>) => CommandResult;
+export type CommandHandler = (envelope: Envelope<NativeToEmbedType>, repeat: boolean) => CommandResult;
+
+type HeldCommand = { envelope: Envelope<NativeToEmbedType>; repeat: boolean };
 
 type AwarenessChange = { added: number[]; updated: number[]; removed: number[] };
 
@@ -83,6 +84,7 @@ const INITIAL_HOST_STATUS: HostStatus = {
 };
 
 const COMMAND_TYPES: ReadonlySet<string> = new Set<string>(HOST_COMMAND_TYPES);
+const DOC_ANSWERED: ReadonlySet<string> = new Set<string>(DOC_ANSWERED_COMMANDS);
 
 const AWARENESS_INTERVAL_MS = 50;
 const REMOTE = "remote";
@@ -100,19 +102,15 @@ export class NativeEmbedSession {
   private requestNumber = 0;
   private readonly seen: string[] = [];
   private readonly executed = new Set<string>();
-  private readonly answers = new Map<string, { payload: Record<string, unknown>; at: number; bytes: number }>();
-  private answerBytes = 0;
-  private readonly clock: () => number;
   private readonly listeners = new Set<() => void>();
   private commandHandler: CommandHandler | null = null;
   private started = false;
-  private readonly held: Envelope<NativeToEmbedType>[] = [];
+  private readonly held: HeldCommand[] = [];
   private readonly pendingAwareness = new Set<number>();
   private awarenessTimer: ReturnType<typeof setTimeout> | null = null;
   private lastStatus = "";
 
-  constructor(transport: NativeTransport, scope: SessionScope, doc: Y.Doc, clock: () => number = () => performance.now()) {
-    this.clock = clock;
+  constructor(transport: NativeTransport, scope: SessionScope, doc: Y.Doc) {
     this.transport = transport;
     this.scope = scope;
     this.doc = doc;
@@ -132,7 +130,7 @@ export class NativeEmbedSession {
         stateVector: base64FromBytes(Y.encodeStateVector(this.doc)),
       });
     }
-    for (const envelope of this.held.splice(0)) this.runCommand(envelope);
+    for (const command of this.held.splice(0)) this.runCommand(command.envelope, command.repeat);
   }
 
   get hostStatus(): HostStatus {
@@ -172,13 +170,8 @@ export class NativeEmbedSession {
     const decoded = decodeHostMessage(raw, this.scope);
     if (!decoded.ok) return this.reject(decoded.reason);
     const envelope = decoded.envelope;
-    this.forgetOldAnswers();
-    const answer = this.answers.get(envelope.requestId);
-    if (answer) {
-      this.send("ack", answer.payload, envelope.requestId);
-      return this.reject("duplicateRequest");
-    }
-    if (this.executed.has(envelope.requestId) || this.seen.includes(envelope.requestId)) return this.reject("duplicateRequest");
+    const repeat = this.executed.has(envelope.requestId) || this.seen.includes(envelope.requestId);
+    if (repeat && !DOC_ANSWERED.has(envelope.type)) return this.reject("duplicateRequest");
     if (COMMAND_TYPES.has(envelope.type)) this.markExecuted(envelope.requestId);
     else this.noteSeen(envelope.requestId);
     const payload = envelope.payload;
@@ -246,7 +239,7 @@ export class NativeEmbedSession {
       case "remove":
       default:
         if (!COMMAND_TYPES.has(envelope.type)) return this.reject("unknownType");
-        this.runCommand(envelope);
+        this.runCommand(envelope, repeat);
         return "none";
     }
   }
@@ -316,16 +309,16 @@ export class NativeEmbedSession {
     this.notify();
   }
 
-  private runCommand(envelope: Envelope<NativeToEmbedType>): void {
+  private runCommand(envelope: Envelope<NativeToEmbedType>, repeat: boolean): void {
     const handler = this.commandHandler;
     if (handler === null && this.held.length < NATIVE_EMBED_LIMITS.requestMemory) {
-      this.held.push(envelope);
+      this.held.push({ envelope, repeat });
       return;
     }
     let result: CommandResult = { ok: false, error: "notReady" };
     if (handler) {
       try {
-        result = handler(envelope);
+        result = handler(envelope, repeat);
       } catch {
         result = { ok: false, error: "failed" };
       }
@@ -334,7 +327,6 @@ export class NativeEmbedSession {
     if (result.error) payload.error = result.error.slice(0, 64);
     if (result.pngBase64) payload.pngBase64 = result.pngBase64;
     if (result.added) payload.added = result.added.slice(0, WHEEL_LIMITS.entries);
-    if (RETRYABLE_COMMANDS.includes(envelope.type)) this.remember(envelope.requestId, payload);
     this.send("ack", payload, envelope.requestId);
   }
 
@@ -371,10 +363,6 @@ export class NativeEmbedSession {
     this.transport.post(message);
   }
 
-  get rememberedAnswers(): number {
-    return this.answers.size;
-  }
-
   private markExecuted(requestId: string): void {
     this.executed.add(requestId);
     if (this.executed.size <= NATIVE_EMBED_LIMITS.executedCommands) return;
@@ -385,28 +373,6 @@ export class NativeEmbedSession {
   private noteSeen(requestId: string): void {
     this.seen.push(requestId);
     if (this.seen.length > NATIVE_EMBED_LIMITS.requestMemory) this.seen.shift();
-  }
-
-  private remember(requestId: string, payload: Record<string, unknown>): void {
-    const answer: Record<string, unknown> = { ok: payload.ok };
-    if (typeof payload.error === "string") answer.error = payload.error;
-    if (Array.isArray(payload.added)) answer.added = payload.added;
-    const bytes = requestId.length + JSON.stringify(answer).length;
-    this.answers.set(requestId, { payload: answer, at: this.clock(), bytes });
-    this.answerBytes += bytes;
-    this.forgetOldAnswers();
-  }
-
-  private forgetOldAnswers(): void {
-    const now = this.clock();
-    const retryWindow = COMMAND_RETRY.attempts * COMMAND_RETRY.timeoutMs + COMMAND_RETRY.timeoutMs;
-    for (const [requestId, answer] of this.answers) {
-      const age = now - answer.at;
-      const overCap = this.answerBytes > COMMAND_RETRY.answerBytes && age > retryWindow;
-      if (age <= COMMAND_RETRY.keepMs && !overCap) break;
-      this.answers.delete(requestId);
-      this.answerBytes -= answer.bytes;
-    }
   }
 
   private reject(reason: RejectionReason): RejectionReason {

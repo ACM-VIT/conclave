@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { clearEntries as legacyClearEntries, removeEntryById as legacyRemoveEntry } from "./fixtures/wheel-staging-entries";
 import {
   addEntries,
+  getAddedTokens,
   normalizeLabel,
   removeEntryById,
   clearEntries,
@@ -12,6 +13,8 @@ import {
 } from "../../../packages/apps-sdk/src/apps/wheel/core/doc/index";
 import {
   NATIVE_EMBED_ORIGINS,
+  WHEEL_ADD_RECOVERY,
+  WHEEL_RECEIPT_LIMITS,
   decodeEmbedMessage,
   encodeEnvelope,
   isValidAppStatus,
@@ -26,6 +29,16 @@ import {
 
 const LONE_SURROGATE = /[\uD800-\uDFFF]/u;
 const SCOPE = { callSessionId: "call-7-3f2a9c1e", appSessionId: "app-5b1d7a2e", appId: "wheel" };
+
+const OPEN = { synced: true, canEdit: true, repeat: false };
+
+const contextWith = (overrides: Partial<WheelCommandContext> = {}): WheelCommandContext => ({
+  ...OPEN,
+  spinning: false,
+  requestSpin: () => ({ ok: true }),
+  setSounds: () => ({ ok: true }),
+  ...overrides,
+});
 
 const statusOf = (doc: Y.Doc, winner: { spinId: string; label: string } | null = null) =>
   wheelStatus({
@@ -59,18 +72,18 @@ describe("native wheel commands", () => {
 
   it("answers by what the wheel added", () => {
     const doc = createWheelDoc();
-    expect(addNames(doc, { labels: ["\u200B", " "] })).toEqual({ ok: false, error: "noNames", added: [] });
+    expect(addNames(doc, { labels: ["\u200B", " "] }, OPEN)).toEqual({ ok: false, error: "noNames", added: [] });
     expect(getEntries(doc)).toEqual([]);
-    expect(addNames(doc, { labels: ["Ada"] })).toEqual({ ok: true, added: [0] });
+    expect(addNames(doc, { labels: ["Ada"] }, OPEN)).toEqual({ ok: true, added: [0] });
     addEntries(doc, Array.from({ length: 63 }, (_, index) => `N${index}`));
-    expect(addNames(doc, { labels: ["Late"] })).toEqual({ ok: false, error: "full", added: [] });
+    expect(addNames(doc, { labels: ["Late"] }, OPEN)).toEqual({ ok: false, error: "full", added: [] });
     expect(getEntries(doc)).toHaveLength(64);
   });
 
   it("lists exactly which sent names it added, by their place in the request", () => {
     const doc = createWheelDoc();
     addEntries(doc, Array.from({ length: 62 }, (_, index) => `N${index}`));
-    expect(addNames(doc, { labels: [7, "  ", "Ada", "\u200B", "Bo", "Cy"] })).toEqual({ ok: true, added: [2, 4] });
+    expect(addNames(doc, { labels: [7, "  ", "Ada", "\u200B", "Bo", "Cy"] }, OPEN)).toEqual({ ok: true, added: [2, 4] });
     expect(getEntries(doc).slice(-2).map((entry) => entry.label)).toEqual(["Ada", "Bo"]);
   });
 
@@ -78,13 +91,7 @@ describe("native wheel commands", () => {
     const doc = createWheelDoc();
     addEntries(doc, ["Cy", "Ada", "Bo"]);
     const before = getEntries(doc);
-    const context = (spinning: boolean): WheelCommandContext => ({
-      requestId: `h-${spinning}`,
-      addKey: (requestId) => `app-1/${requestId}`,
-      spinning,
-      requestSpin: () => ({ ok: true }),
-      setSounds: () => ({ ok: true }),
-    });
+    const context = (spinning: boolean): WheelCommandContext => contextWith({ spinning });
     for (const [type, payload] of [
       ["sort", {}],
       ["shuffle", {}],
@@ -142,50 +149,54 @@ describe("native wheel commands", () => {
   });
 });
 
-describe("native wheel add records", () => {
-  const contextFor = (appSessionId: string, requestId: string): WheelCommandContext => ({
-    requestId,
-    addKey: (id) => `${appSessionId}/${id}`,
-    spinning: false,
-    requestSpin: () => ({ ok: true }),
-    setSounds: () => ({ ok: true }),
-  });
-  const add = (doc: Y.Doc, appSessionId: string, requestId: string, labels: string[]) =>
-    runWheelCommand(doc, "addEntries", { labels }, contextFor(appSessionId, requestId));
-  const outcome = (doc: Y.Doc, appSessionId: string, requestId: string) =>
-    runWheelCommand(doc, "addOutcome", { requestId }, contextFor(appSessionId, "q-1"));
+const FLOOD = Array.from({ length: 257 }, (_, index) => `N${index}`);
+const FLOOD_TOKENS = FLOOD.map((_, index) => `flood-${index}`);
+
+describe("native wheel add receipts", () => {
+  const RECEIPTS = "wheel.addReceipts";
+  const tokensFor = (lines: readonly unknown[]): string[] => lines.map(() => crypto.randomUUID());
+  const add = (doc: Y.Doc, lines: unknown[], tokens: unknown = tokensFor(lines), overrides: Partial<WheelCommandContext> = {}) =>
+    runWheelCommand(doc, "addEntries", { labels: lines, tokens }, contextWith(overrides));
+  const outcome = (doc: Y.Doc, tokens: unknown, overrides: Partial<WheelCommandContext> = {}) =>
+    runWheelCommand(doc, "addOutcome", { tokens }, contextWith(overrides));
   const labels = (doc: Y.Doc) => getEntries(doc).map((entry) => entry.label);
+  const receipts = (doc: Y.Doc) => doc.getArray<unknown>(RECEIPTS);
   const sync = (from: Y.Doc, to: Y.Doc) => Y.applyUpdate(to, Y.encodeStateAsUpdate(from, Y.encodeStateVector(to)));
+  const replicaOf = (doc: Y.Doc): Y.Doc => {
+    const replica = createWheelDoc();
+    sync(doc, replica);
+    return replica;
+  };
+  const sizeOf = (doc: Y.Doc): number => Y.encodeStateAsUpdate(doc).length;
+  const receiptBytes = (doc: Y.Doc): number =>
+    (receipts(doc).toArray() as string[][]).reduce((bytes, receipt) => bytes + receipt.reduce((sum, token) => sum + token.length + 2, 2), 0);
+  const NOTHING_ADDED = { ok: false, error: "notApplied", added: [] };
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("finds both adds after two peers add before seeing each other", () => {
+  it("finds both adds after two peers add to an empty record before seeing each other", () => {
     const base = createWheelDoc();
     addEntries(base, ["Host"]);
-    const ada = createWheelDoc();
-    const ben = createWheelDoc();
-    sync(base, ada);
-    sync(base, ben);
-    expect(add(ada, "app-ada1", "h-1", ["Ada"])).toEqual({ ok: true, added: [0] });
-    expect(add(ben, "app-ben1", "h-1", ["Ben"])).toEqual({ ok: true, added: [0] });
+    const ada = replicaOf(base);
+    const ben = replicaOf(base);
+    const adaTokens = tokensFor(["Ada"]);
+    const benTokens = tokensFor(["Ben"]);
+    expect(add(ada, ["Ada"], adaTokens)).toEqual({ ok: true, added: [0] });
+    expect(add(ben, ["Ben"], benTokens)).toEqual({ ok: true, added: [0] });
     sync(ada, ben);
     sync(ben, ada);
-    for (const doc of [ada, ben]) {
-      expect(outcome(doc, "app-ada1", "h-1")).toEqual({ ok: true, added: [0] });
-      expect(outcome(doc, "app-ben1", "h-1")).toEqual({ ok: true, added: [0] });
-      expect(add(doc, "app-ada1", "h-1", ["Ada"])).toEqual({ ok: true, added: [0] });
+    for (const doc of [ada, ben, replicaOf(ada)]) {
+      expect(outcome(doc, adaTokens)).toEqual({ ok: true, added: [0] });
+      expect(outcome(doc, benTokens)).toEqual({ ok: true, added: [0] });
+      expect(add(doc, ["Ada"], adaTokens)).toEqual({ ok: true, added: [0] });
+      expect(labels(doc).sort()).toEqual(["Ada", "Ben", "Host"]);
     }
-    expect(labels(ada).sort()).toEqual(["Ada", "Ben", "Host"]);
-    expect(labels(ben).sort()).toEqual(["Ada", "Ben", "Host"]);
   });
 
-  it.each(["remove", "clear"] as const)("keeps the exact accepted slots when a staging client uses %s before native reloads", (change) => {
+  it.each(["remove", "clear"] as const)("still answers added after a staging client uses %s, on a replica that never ran the add", (change) => {
     const origin = createWheelDoc();
     const updates: Uint8Array[] = [];
     origin.on("update", (update: Uint8Array) => updates.push(update));
-    expect(add(origin, "app-ada1", "h-1", ["Ada", "", "Bo"])).toEqual({ ok: true, added: [0, 2] });
+    const tokens = tokensFor(["Ada", "", "Bo"]);
+    expect(add(origin, ["Ada", "", "Bo"], tokens)).toEqual({ ok: true, added: [0, 2] });
     expect(updates).toHaveLength(1);
     const legacy = createWheelDoc();
     Y.applyUpdate(legacy, updates[0]);
@@ -193,79 +204,255 @@ describe("native wheel add records", () => {
     if (change === "remove") legacyRemoveEntry(legacy, getEntries(origin)[0].id);
     else legacyClearEntries(legacy);
 
-    const reloaded = createWheelDoc();
-    sync(legacy, reloaded);
+    const reloaded = replicaOf(legacy);
     const survivors = change === "remove" ? ["Bo"] : [];
     expect(labels(reloaded)).toEqual(survivors);
-    expect(outcome(reloaded, "app-ada1", "h-1")).toEqual({ ok: true, added: [0, 2] });
-    expect(add(reloaded, "app-ada1", "h-1", ["Ada", "", "Bo"])).toEqual({ ok: true, added: [0, 2] });
+    expect(outcome(reloaded, tokens)).toEqual({ ok: true, added: [0, 2] });
+    expect(add(reloaded, ["Ada", "", "Bo"], tokens)).toEqual({ ok: true, added: [0, 2] });
     expect(labels(reloaded)).toEqual(survivors);
-  });
-
-  it("replays a saved refusal on a fresh replica even after room opens up", () => {
-    const doc = createWheelDoc();
-    addEntries(doc, Array.from({ length: 64 }, (_, index) => `Old ${index}`));
-    const refusal = { ok: false, error: "full", added: [] };
-    expect(add(doc, "app-ada1", "h-1", ["Ada"])).toEqual(refusal);
-    clearEntries(doc);
-
-    const reloaded = createWheelDoc();
-    sync(doc, reloaded);
-    expect(outcome(reloaded, "app-ada1", "h-1")).toEqual(refusal);
-    expect(add(reloaded, "app-ada1", "h-1", ["Ada"])).toEqual(refusal);
-    expect(labels(reloaded)).toEqual([]);
-    expect(add(reloaded, "app-ada1", "h-2", ["Ada"])).toEqual({ ok: true, added: [0] });
-    expect(labels(reloaded)).toEqual(["Ada"]);
-  });
-
-  it("still knows an add ran after 300 other adds and removals while its client was away", () => {
-    const doc = createWheelDoc();
-    add(doc, "app-away1", "h-1", ["Ada"]);
-    for (let index = 0; index < 300; index += 1) {
-      add(doc, "app-busy1", `h-${index + 1}`, [`N${index}`]);
-      removeEntryById(doc, getEntries(doc).find((entry) => entry.label === `N${index}`)!.id);
-    }
-    expect(add(doc, "app-away1", "h-1", ["Ada"])).toEqual({ ok: true, added: [0] });
-    expect(labels(doc)).toEqual(["Ada"]);
   });
 
   it("does not add a name again after someone removed it, sorted or cleared the wheel", () => {
     for (const change of ["remove", "sort", "clear"] as const) {
       const doc = createWheelDoc();
-      add(doc, "app-ada1", "h-1", ["Zed", "", "Ada"]);
+      const tokens = tokensFor(["Zed", "", "Ada"]);
+      add(doc, ["Zed", "", "Ada"], tokens);
       if (change === "remove") removeEntryById(doc, getEntries(doc)[0].id);
-      if (change === "sort") runWheelCommand(doc, "sort", {}, contextFor("app-other", "h-9"));
+      if (change === "sort") runWheelCommand(doc, "sort", {}, contextWith());
       if (change === "clear") clearEntries(doc);
-      expect(outcome(doc, "app-ada1", "h-1"), change).toEqual({ ok: true, added: [0, 2] });
-      add(doc, "app-ada1", "h-1", ["Zed", "", "Ada"]);
+      expect(outcome(doc, tokens), change).toEqual({ ok: true, added: [0, 2] });
+      expect(add(doc, ["Zed", "", "Ada"], tokens), change).toEqual({ ok: true, added: [0, 2] });
       expect(labels(doc), change).toEqual({ remove: ["Ada"], sort: ["Ada", "Zed"], clear: [] }[change]);
     }
   });
 
-  it("distinguishes a missing add from one removed before a long outage", () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(1_800_000_000_000);
-    const doc = createWheelDoc();
-    add(doc, "app-ada1", "h-1", ["Ada"]);
-    removeEntryById(doc, getEntries(doc)[0].id);
-    vi.setSystemTime(Date.now() + 25 * 3_600_000);
-    const reloaded = createWheelDoc();
-    sync(doc, reloaded);
-    expect(outcome(reloaded, "app-ada1", "h-7")).toEqual({ ok: false, error: "notApplied" });
-    expect(outcome(reloaded, "app-ada1", "h-1")).toEqual({ ok: true, added: [0] });
-    expect(labels(reloaded)).toEqual([]);
+  it("writes nothing and tells no peer when it refuses an add", () => {
+    const full = createWheelDoc();
+    addEntries(full, Array.from({ length: 64 }, (_, index) => `Old ${index}`));
+    const empty = createWheelDoc();
+    const flood = Array.from({ length: 257 }, (_, index) => `N${index}`);
+    const cases: [string, Y.Doc, unknown[], unknown, Partial<WheelCommandContext>][] = [
+      ["full", full, ["Ada"], tokensFor(["Ada"]), {}],
+      ["noNames", empty, ["​", "  "], tokensFor([0, 1]), {}],
+      ["tooManyLines", empty, flood, tokensFor(flood), {}],
+      ["readOnly", empty, ["Ada"], tokensFor(["Ada"]), { canEdit: false }],
+      ["notSynced", empty, ["Ada"], tokensFor(["Ada"]), { synced: false }],
+      ["badRequest", empty, ["Ada", "Bo"], tokensFor(["Ada"]), {}],
+      ["badRequest", empty, ["Ada", "Bo"], ["same", "same"], {}],
+      ["badRequest", empty, ["Ada"], ["not a token"], {}],
+      ["badRequest", empty, ["Ada"], "token", {}],
+    ];
+    for (const [error, doc, lines, tokens, overrides] of cases) {
+      const before = Y.encodeStateAsUpdate(doc);
+      let updates = 0;
+      const count = () => {
+        updates += 1;
+      };
+      doc.on("update", count);
+      expect(add(doc, lines, tokens, overrides), error).toEqual({ ok: false, error, added: [] });
+      doc.off("update", count);
+      expect(updates, error).toBe(0);
+      expect(Y.encodeStateAsUpdate(doc), error).toEqual(before);
+      expect(receipts(doc).length, error).toBe(0);
+      if (Array.isArray(tokens) && tokens.length <= 256 && !tokens.includes("not a token")) {
+        expect(outcome(replicaOf(doc), [...new Set(tokens)]), error).toEqual(NOTHING_ADDED);
+      }
+    }
   });
 
-  it("refuses a paste longer than the line limit before adding anything, so no slot is ever unrecordable", () => {
+  it("adds the names once the refusal's cause is gone, because no refusal is ever stored", () => {
     const doc = createWheelDoc();
-    const flood = [...Array.from({ length: 4_096 }, () => "\u200B"), "Ada"];
-    expect(add(doc, "app-ada1", "h-1", flood)).toEqual({ ok: false, error: "tooManyLines", added: [] });
-    expect(labels(doc)).toEqual([]);
-    const edge = [...Array.from({ length: 255 }, () => "\u200B"), "Ada"];
-    expect(add(doc, "app-ada1", "h-2", edge)).toEqual({ ok: true, added: [255] });
-    expect(outcome(doc, "app-ada1", "h-2")).toEqual({ ok: true, added: [255] });
-    expect(add(doc, "app-ada1", "h-2", edge)).toEqual({ ok: true, added: [255] });
+    addEntries(doc, Array.from({ length: 64 }, (_, index) => `Old ${index}`));
+    const tokens = tokensFor(["Ada"]);
+    expect(add(doc, ["Ada"], tokens)).toEqual({ ok: false, error: "full", added: [] });
+    clearEntries(doc);
+    expect(outcome(doc, tokens)).toEqual(NOTHING_ADDED);
+    expect(add(doc, ["Ada"], tokensFor(["Ada"]))).toEqual({ ok: true, added: [0] });
     expect(labels(doc)).toEqual(["Ada"]);
+  });
+
+  it("keeps no receipt for an add that carries no tokens, such as Add Everyone Here", () => {
+    const doc = createWheelDoc();
+    expect(runWheelCommand(doc, "addEntries", { labels: ["Ada", "Bo"] }, contextWith())).toEqual({ ok: true, added: [0, 1] });
+    expect(labels(doc)).toEqual(["Ada", "Bo"]);
+    expect(receipts(doc).length).toBe(0);
+    expect(getAddedTokens(doc).size).toBe(0);
+  });
+
+  it("never runs a repeated request a second time", () => {
+    const doc = createWheelDoc();
+    const tokens = tokensFor(["Ada", "Bo"]);
+    expect(add(doc, ["Ada", "Bo"], tokens)).toEqual({ ok: true, added: [0, 1] });
+    expect(add(doc, ["Ada", "Bo"], tokens, { repeat: true })).toEqual({ ok: true, added: [0, 1] });
+    const refused = tokensFor(["Cy"]);
+    expect(add(doc, ["Cy"], refused, { synced: false })).toEqual({ ok: false, error: "notSynced", added: [] });
+    expect(add(doc, ["Cy"], refused, { repeat: true })).toEqual(NOTHING_ADDED);
+    expect(runWheelCommand(doc, "addEntries", { labels: ["Dee"] }, contextWith({ repeat: true }))).toEqual({ ok: false, error: "duplicateRequest" });
+    expect(labels(doc)).toEqual(["Ada", "Bo"]);
+  });
+
+  it("answers from a receipt it holds while not synced, and says it cannot tell when it holds none", () => {
+    const doc = createWheelDoc();
+    const tokens = tokensFor(["Ada", "​"]);
+    expect(add(doc, ["Ada", "​"], tokens)).toEqual({ ok: true, added: [0] });
+    expect(outcome(doc, tokens, { synced: false, canEdit: false })).toEqual({ ok: true, added: [0] });
+    expect(outcome(doc, tokensFor(["Bo"]), { synced: false })).toEqual({ ok: false, error: "notSynced" });
+    expect(outcome(doc, tokensFor(["Bo"]))).toEqual(NOTHING_ADDED);
+    for (const tokens of [undefined, [], ["a b"], ["twin", "twin"], Array.from({ length: 257 }, (_, index) => `t-${index}`)]) {
+      expect(outcome(doc, tokens)).toEqual({ ok: false, error: "badRequest" });
+    }
+  });
+
+  it("refuses a paste longer than the line limit before adding anything", () => {
+    const doc = createWheelDoc();
+    const flood = [...Array.from({ length: 4_096 }, () => "​"), "Ada"];
+    expect(add(doc, flood)).toEqual({ ok: false, error: "tooManyLines", added: [] });
+    expect(labels(doc)).toEqual([]);
+    const edge = [...Array.from({ length: 255 }, () => "​"), "Ada"];
+    const tokens = tokensFor(edge);
+    expect(add(doc, edge, tokens)).toEqual({ ok: true, added: [255] });
+    expect(outcome(doc, tokens)).toEqual({ ok: true, added: [255] });
+    expect(add(doc, edge, tokens)).toEqual({ ok: true, added: [255] });
+    expect(labels(doc)).toEqual(["Ada"]);
+  });
+
+  describe("another editor writing the receipts", () => {
+    const nearlyFull = () => {
+      const victim = createWheelDoc();
+      addEntries(victim, Array.from({ length: 63 }, (_, index) => `Old ${index}`));
+      return victim;
+    };
+
+    it("cannot make an add skip by writing receipts before it, whatever keys it guesses", () => {
+      const victim = createWheelDoc();
+      const attacker = replicaOf(victim);
+      const guesses = Array.from({ length: 64 }, (_, index) => `h-${index + 1}`);
+      receipts(attacker).push([guesses, guesses.map((guess) => `app-5b1d7a2e:${guess}`), ["full"], ["noNames"]]);
+      sync(attacker, victim);
+      const oldFormat = replicaOf(victim);
+      for (const guess of guesses) oldFormat.getMap(RECEIPTS).set(`app-5b1d7a2e/${guess}`, "full");
+      sync(oldFormat, victim);
+      const tokens = tokensFor(["Ada", "Bo"]);
+      expect(add(victim, ["Ada", "Bo"], tokens)).toEqual({ ok: true, added: [0, 1] });
+      expect(labels(victim)).toEqual(["Ada", "Bo"]);
+      expect(outcome(replicaOf(victim), tokens)).toEqual({ ok: true, added: [0, 1] });
+    });
+
+    it("cannot report a name added that the wheel never took, because it never learns that name's token", () => {
+      const victim = nearlyFull();
+      const tokens = tokensFor(["Ada", "Bo", "​"]);
+      expect(add(victim, ["Ada", "Bo", "​"], tokens)).toEqual({ ok: true, added: [0] });
+      const attacker = replicaOf(victim);
+      const seen = (receipts(attacker).toArray() as string[][]).flat();
+      expect(seen).toEqual([tokens[0]]);
+      receipts(attacker).delete(0, receipts(attacker).length);
+      receipts(attacker).push([[...seen, "h-2", "slot-1", `${tokens[0]}1`], seen.map((token) => token.toUpperCase())]);
+      sync(attacker, victim);
+      const reloaded = replicaOf(victim);
+      expect(outcome(reloaded, tokens)).toEqual({ ok: true, added: [0] });
+      expect(labels(reloaded).slice(-1)).toEqual(["Ada"]);
+    });
+
+    it("can only erase a receipt, which hands the names back instead of dropping them", () => {
+      const victim = createWheelDoc();
+      const tokens = tokensFor(["Ada"]);
+      expect(add(victim, ["Ada"], tokens)).toEqual({ ok: true, added: [0] });
+      const attacker = replicaOf(victim);
+      receipts(attacker).delete(0, receipts(attacker).length);
+      receipts(attacker).push([["full"], [7], "full", [], Array.from({ length: 65 }, (_, index) => `t-${index}`)]);
+      sync(attacker, victim);
+      expect(outcome(replicaOf(victim), tokens)).toEqual(NOTHING_ADDED);
+      expect(labels(victim)).toEqual(["Ada"]);
+    });
+  });
+
+  describe("bounds", () => {
+    it("keeps the newest receipts within the count limit on every write and reads no older one", () => {
+      const doc = createWheelDoc();
+      const first = tokensFor(["Ada"]);
+      add(doc, ["Ada"], first);
+      const stale = Array.from({ length: 400 }, (_, index) => [`stale-${index}`]);
+      receipts(doc).push(stale);
+      expect(receipts(doc).length).toBe(401);
+      expect(getAddedTokens(doc).size).toBe(WHEEL_RECEIPT_LIMITS.count);
+      expect(outcome(doc, first)).toEqual(NOTHING_ADDED);
+      expect(outcome(doc, ["stale-399"])).toEqual({ ok: true, added: [0] });
+      clearEntries(doc);
+      const latest = tokensFor(["Bo"]);
+      expect(add(doc, ["Bo"], latest)).toEqual({ ok: true, added: [0] });
+      expect(receipts(doc).length).toBe(WHEEL_RECEIPT_LIMITS.count);
+      expect(receipts(doc).get(receipts(doc).length - 1)).toEqual(latest);
+      expect(outcome(doc, ["stale-280"])).toEqual(NOTHING_ADDED);
+      expect(outcome(doc, ["stale-281"])).toEqual({ ok: true, added: [0] });
+    });
+
+    it("keeps the receipts within the byte limit when every add is a full wheel of the longest tokens", () => {
+      const doc = createWheelDoc();
+      const names = Array.from({ length: 64 }, (_, index) => `N${index}`);
+      let latest: string[] = [];
+      for (let round = 0; round < 12; round += 1) {
+        latest = names.map((_, index) => `${round}-${index}-`.padEnd(64, "x"));
+        expect(add(doc, names, latest)).toEqual({ ok: true, added: names.map((_, index) => index) });
+        clearEntries(doc);
+        expect(receiptBytes(doc)).toBeLessThanOrEqual(WHEEL_RECEIPT_LIMITS.bytes);
+      }
+      expect(receipts(doc).length).toBe(7);
+      expect(outcome(doc, latest).ok).toBe(true);
+    });
+
+    it("still knows an add ran after two adds a second for the whole window in which native may ask", () => {
+      const doc = createWheelDoc();
+      const away = tokensFor(["Ada"]);
+      add(doc, ["Ada"], away);
+      const others = (WHEEL_ADD_RECOVERY.windowMs / 1_000) * 2 - 1;
+      for (let index = 0; index < others; index += 1) {
+        add(doc, [`N${index}`]);
+        removeEntryById(doc, getEntries(doc).find((entry) => entry.label === `N${index}`)!.id);
+      }
+      expect(add(doc, ["Ada"], away)).toEqual({ ok: true, added: [0] });
+      expect(labels(doc)).toEqual(["Ada"]);
+    });
+
+    it("stays small through 5,000 add and clear rounds, for the room and for someone joining late", () => {
+      const native = createWheelDoc();
+      const room = createWheelDoc();
+      native.on("update", (update: Uint8Array) => Y.applyUpdate(room, update));
+      const plain = createWheelDoc();
+      let last: string[] = [];
+      for (let round = 0; round < 5_000; round += 1) {
+        last = tokensFor(["Ada"]);
+        expect(add(native, ["Ada"], last).ok).toBe(true);
+        clearEntries(native);
+        addEntries(plain, ["Ada"]);
+        clearEntries(plain);
+        if (receipts(native).length > WHEEL_RECEIPT_LIMITS.count) throw new Error(`round ${round} kept ${receipts(native).length} receipts`);
+      }
+      expect(receipts(room).length).toBe(WHEEL_RECEIPT_LIMITS.count);
+      expect(receiptBytes(room)).toBeLessThanOrEqual(WHEEL_RECEIPT_LIMITS.bytes);
+      const late = replicaOf(room);
+      expect(outcome(late, last)).toEqual({ ok: true, added: [0] });
+      expect(sizeOf(late)).toBe(sizeOf(room));
+      expect(sizeOf(room)).toBeLessThan(128 * 1_024);
+      expect(sizeOf(room) - sizeOf(plain)).toBeLessThan(5_000 * 20 + 8 * 1_024);
+    });
+
+    it("does not grow at all through 14,000 refused adds", () => {
+      const native = createWheelDoc();
+      addEntries(native, Array.from({ length: 64 }, (_, index) => `Old ${index}`));
+      const before = Y.encodeStateAsUpdate(native);
+      let updates = 0;
+      native.on("update", () => {
+        updates += 1;
+      });
+      for (let round = 0; round < 14_000; round += 1) {
+        const error = (["full", "noNames", "tooManyLines"] as const)[round % 3];
+        const lines = error === "full" ? ["Ada"] : error === "noNames" ? [" "] : FLOOD;
+        const result = add(native, lines, error === "tooManyLines" ? FLOOD_TOKENS : tokensFor(lines));
+        if (result.ok || result.error !== error) throw new Error(`round ${round} answered ${JSON.stringify(result)}`);
+      }
+      expect(updates).toBe(0);
+      expect(Y.encodeStateAsUpdate(native)).toEqual(before);
+    });
   });
 
   it("points every added index at a name that is on the wheel, and never adds a replayed paste twice", () => {
@@ -274,14 +461,15 @@ describe("native wheel add records", () => {
       seed = (seed * 1103515245 + 12345) % 2147483648;
       return seed % limit;
     };
-    const pool = ["Ada", " Bo ", "e\u0301", "\u200B", "\u0301", "   ", "\u200B\u200F", "\u2060", "\u0915\u094D\u0937", "Cy\u200B", "\t", "x".repeat(60)];
+    const pool = ["Ada", " Bo ", "é", "​", "́", "   ", "​‏", "⁠", "क्ष", "Cy​", "\t", "x".repeat(60)];
     let checked = 0;
     for (let run = 0; run < 250; run += 1) {
       const doc = createWheelDoc();
       addEntries(doc, Array.from({ length: random(70) }, (_, index) => `Old ${index}`));
       const lines = Array.from({ length: 1 + random(300) }, () => pool[random(pool.length)]);
+      const tokens = tokensFor(lines);
       const before = getEntries(doc).length;
-      const result = add(doc, "app-r1", `h-${run}`, lines);
+      const result = add(doc, lines, tokens);
       const created = getEntries(doc).slice(before);
       if (lines.length > 256) {
         expect(result, `run ${run}`).toEqual({ ok: false, error: "tooManyLines", added: [] });
@@ -292,11 +480,15 @@ describe("native wheel add records", () => {
       const added = result.ok ? (result.added ?? []) : [];
       expect(created.map((entry) => entry.label), `run ${run}`).toEqual(added.map((slot) => normalizeLabel(lines[slot])));
       expect(created.every((entry) => entry.label.length > 0), `run ${run}`).toBe(true);
-      const replay = add(doc, "app-r1", `h-${run}`, lines);
+      const replay = add(doc, lines, tokens);
       expect(getEntries(doc).length, `run ${run}`).toBe(before + created.length);
-      expect(replay, `run ${run}`).toEqual(result);
+      if (result.ok) {
+        expect(replay, `run ${run}`).toEqual(result);
+        expect(outcome(replicaOf(doc), tokens), `run ${run}`).toEqual(result);
+      } else {
+        expect(outcome(replicaOf(doc), tokens), `run ${run}`).toEqual(NOTHING_ADDED);
+      }
     }
     expect(checked).toBeGreaterThan(100);
   });
 });
-

@@ -1,21 +1,20 @@
 import type * as Y from "yjs";
 import {
   addEntries,
-  addWithReceipt,
+  addEntriesOnce,
   clearEntries,
   clearHistory,
-  getAddReceipt,
+  getAddedTokens,
   getEntries,
   normalizeLabel,
   removeEntryById,
   replaceEntries,
   setRemoveWinnerOnDone,
-  type AddReceipt,
   type WheelEntry,
   type WheelResult,
 } from "../../apps/wheel/core/doc/index";
 import { cutText } from "../../sdk/text";
-import { WHEEL_LIMITS, isValidIdentifier, type NativeToEmbedType } from "../protocol";
+import { APP_EDIT_COMMANDS, DOC_ANSWERED_COMMANDS, WHEEL_LIMITS, isValidIdentifier, type NativeToEmbedType } from "../protocol";
 import { payloadBoolean, payloadString, type CommandResult, type WheelAppStatus } from "../session";
 
 export type SentName = { index: number; label: string };
@@ -33,32 +32,55 @@ export const labelsFrom = (payload: Record<string, unknown>): SentName[] | null 
   return names;
 };
 
-const applyAdd = (doc: Y.Doc, payload: Record<string, unknown>): AddReceipt => {
+const refusal = (error: string): CommandResult => ({ ok: false, error, added: [] });
+
+const readTokens = (value: unknown): string[] | null => {
+  if (!Array.isArray(value) || value.length === 0 || value.length > WHEEL_LIMITS.pasteLines) return null;
+  const tokens: unknown[] = value;
+  return tokens.every(isValidIdentifier) && new Set(tokens).size === tokens.length ? tokens : null;
+};
+
+const slotsOnRecord = (doc: Y.Doc, tokens: readonly string[]): number[] => {
+  const added = getAddedTokens(doc);
+  return tokens.flatMap((token, index) => (added.has(token) ? [index] : []));
+};
+
+export type AddContext = { synced: boolean; canEdit: boolean; repeat: boolean };
+
+export const addNames = (doc: Y.Doc, payload: Record<string, unknown>, context: AddContext): CommandResult => {
   const names = labelsFrom(payload);
-  if (names === null) return "tooManyLines";
-  if (names.length === 0) return "noNames";
-  const count = addEntries(doc, names.map((name) => name.label));
-  return count === 0 ? "full" : names.slice(0, count).map((name) => name.index);
+  if (names === null) return refusal("tooManyLines");
+  const tracked = payload.tokens !== undefined;
+  const tokens = tracked ? readTokens(payload.tokens) : null;
+  if (tracked && (tokens === null || !Array.isArray(payload.labels) || payload.labels.length !== tokens.length)) {
+    return refusal("badRequest");
+  }
+  if (tokens !== null) {
+    const recorded = slotsOnRecord(doc, tokens);
+    if (recorded.length > 0) return { ok: true, added: recorded };
+  }
+  if (context.repeat) return tokens === null ? { ok: false, error: "duplicateRequest" } : refusal("notApplied");
+  if (!context.synced) return refusal("notSynced");
+  if (!context.canEdit) return refusal("readOnly");
+  if (names.length === 0) return refusal("noNames");
+  if (tokens === null) {
+    const count = addEntries(doc, names.map((name) => name.label));
+    return count === 0 ? refusal("full") : { ok: true, added: names.slice(0, count).map((name) => name.index) };
+  }
+  addEntriesOnce(doc, names.map((name) => ({ token: tokens[name.index], label: name.label })));
+  const added = slotsOnRecord(doc, tokens);
+  return added.length === 0 ? refusal("full") : { ok: true, added };
 };
 
-const toAddResult = (receipt: AddReceipt): CommandResult =>
-  typeof receipt === "string" ? { ok: false, error: receipt, added: [] } : { ok: true, added: [...receipt] };
-
-export const addNames = (doc: Y.Doc, payload: Record<string, unknown>, requestKey?: string): CommandResult =>
-  toAddResult(requestKey === undefined
-    ? applyAdd(doc, payload)
-    : addWithReceipt(doc, requestKey, () => applyAdd(doc, payload)));
-
-const addOutcome = (doc: Y.Doc, payload: Record<string, unknown>, keyOf: (requestId: string) => string): CommandResult => {
-  const requestId = payloadString(payload, "requestId");
-  if (!isValidIdentifier(requestId)) return { ok: false, error: "badRequest" };
-  const receipt = getAddReceipt(doc, keyOf(requestId));
-  return receipt === undefined ? { ok: false, error: "notApplied" } : toAddResult(receipt);
+const addOutcome = (doc: Y.Doc, payload: Record<string, unknown>, context: AddContext): CommandResult => {
+  const tokens = readTokens(payload.tokens);
+  if (tokens === null) return { ok: false, error: "badRequest" };
+  const added = slotsOnRecord(doc, tokens);
+  if (added.length > 0) return { ok: true, added };
+  return context.synced ? refusal("notApplied") : { ok: false, error: "notSynced" };
 };
 
-export type WheelCommandContext = {
-  requestId: string;
-  addKey: (requestId: string) => string;
+export type WheelCommandContext = AddContext & {
   spinning: boolean;
   requestSpin: () => CommandResult;
   setSounds: (value: boolean) => CommandResult;
@@ -74,6 +96,8 @@ const shuffled = (entries: WheelEntry[]): WheelEntry[] => {
 };
 
 const REORDERING: ReadonlySet<string> = new Set(["removeEntry", "shuffle", "sort", "clearEntries"]);
+const EDITING: ReadonlySet<string> = new Set<string>(APP_EDIT_COMMANDS);
+const DOC_ANSWERED: ReadonlySet<string> = new Set<string>(DOC_ANSWERED_COMMANDS);
 
 export const runWheelCommand = (
   doc: Y.Doc,
@@ -81,12 +105,16 @@ export const runWheelCommand = (
   payload: Record<string, unknown>,
   context: WheelCommandContext
 ): CommandResult => {
-  if (REORDERING.has(type) && context.spinning) return { ok: false, error: "spinning" };
+  if (!DOC_ANSWERED.has(type)) {
+    if (!context.synced && type !== "setSounds") return { ok: false, error: "notSynced" };
+    if (EDITING.has(type) && !context.canEdit) return { ok: false, error: "readOnly" };
+    if (REORDERING.has(type) && context.spinning) return { ok: false, error: "spinning" };
+  }
   switch (type) {
     case "addEntries":
-      return addNames(doc, payload, context.addKey(context.requestId));
+      return addNames(doc, payload, context);
     case "addOutcome":
-      return addOutcome(doc, payload, context.addKey);
+      return addOutcome(doc, payload, context);
     case "removeEntry": {
       const entryId = payloadString(payload, "entryId");
       if (!isValidIdentifier(entryId)) return { ok: false, error: "badEntry" };

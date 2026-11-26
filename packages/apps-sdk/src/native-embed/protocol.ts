@@ -155,15 +155,21 @@ export const INK_COLORS = [
 
 export const STROKE_WIDTHS = [2, 3, 5, 8, 12] as const;
 
-export const COMMAND_RETRY = {
-  attempts: 3,
-  timeoutMs: 10_000,
-  keepMs: 120_000,
-  deadlineMs: 25_000,
-  answerBytes: 65_536,
+export const COMMAND_TIMEOUT_MS = 10_000;
+
+export const DOC_ANSWERED_COMMANDS: readonly string[] = ["addEntries", "addOutcome"];
+
+export const WHEEL_ADD_RECOVERY = {
+  asks: 4,
+  windowMs: 60_000,
 } as const;
 
-export const RETRYABLE_COMMANDS: readonly string[] = ["addEntries"];
+const ROOM_ADDS_PER_SECOND = 2;
+
+export const WHEEL_RECEIPT_LIMITS = {
+  count: (WHEEL_ADD_RECOVERY.windowMs / 1_000) * ROOM_ADDS_PER_SECOND,
+  bytes: 32_768,
+} as const;
 
 export const WHEEL_LIMITS = {
   entries: 64,
