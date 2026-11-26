@@ -867,7 +867,7 @@ export class AuthoritySession<C extends AuthorityContract> {
     if (unchanged) return;
     this.state = next;
     if (next.kind === "revoked") {
-      this.endActions("forbidden");
+      this.endActions(next.reason === "forbidden" ? "forbidden" : "unknown-outcome");
       this.actionLifetime = actionLifetime();
     }
     for (const listener of [...this.listeners]) listener();
