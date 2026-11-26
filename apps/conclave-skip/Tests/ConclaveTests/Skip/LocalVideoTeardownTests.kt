@@ -31,6 +31,10 @@ import org.mediasoup.droid.SendTransport
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.Implements
+import org.webrtc.Camera2Enumerator
+import org.webrtc.CameraEnumerationAndroid.CaptureFormat
 import org.webrtc.CameraVideoCapturer
 import org.webrtc.CapturerObserver
 import org.webrtc.FakeAudioPeerConnectionFactory
@@ -127,6 +131,28 @@ class LocalVideoTeardownTests {
         fun isAvailable(id: String): Boolean = !holders.containsKey(id)
     }
 
+    @Implements(Camera2Enumerator::class, isInAndroidSdk = false)
+    class CameraFormatsShadow {
+        @Implementation fun getDeviceNames(): Array<String> =
+            if (anotherRearCameraIsListedFirst) arrayOf("1", "2", "0") else arrayOf("1", "0")
+        @Implementation fun isFrontFacing(name: String): Boolean = name == "1"
+        @Implementation fun isBackFacing(name: String): Boolean = name == "0" || name == "2"
+        @Implementation fun getSupportedFormats(name: String): List<CaptureFormat> = when (name) {
+            "1" -> listOf(CaptureFormat(1_280, 720, 15_000, 30_000))
+            "0" -> listOf(backFormat)
+            "2" -> listOf(CaptureFormat(640, 480, 15_000, 24_000))
+            else -> emptyList()
+        }
+
+        companion object {
+            var backFormat = CaptureFormat(1_920, 1_080, 15_000, 60_000)
+            var anotherRearCameraIsListedFirst = false
+
+            @JvmStatic
+            @Implementation fun isSupported(context: Context): Boolean = true
+        }
+    }
+
     class FakeCapturer(
         private val stopRelease: CountDownLatch? = null,
         private val name: String = "",
@@ -139,6 +165,7 @@ class LocalVideoTeardownTests {
         @Volatile private var front = cameraId == "1"
         @Volatile var stops = 0
         @Volatile var starts = 0
+        var startedSize: Pair<Int, Int>? = null
         @Volatile var formatChanges = 0
         @Volatile var disposals = 0
         @Volatile var observer: CapturerObserver? = null
@@ -154,6 +181,7 @@ class LocalVideoTeardownTests {
         }
         override fun startCapture(width: Int, height: Int, framerate: Int) {
             starts += 1
+            startedSize = width to height
             hardware?.open(cameraId, name)
             events?.add("$name started")
         }
@@ -238,6 +266,8 @@ class LocalVideoTeardownTests {
     private class Capture(val capturer: FakeCapturer, val source: CountingVideoSource, val track: CountingVideoTrack)
 
     private fun field(name: String) = WebRTCClient::class.java.getDeclaredField(name).apply { isAccessible = true }
+
+    private fun WebRTCClient.cameraLimits() = cameraCaptureCapability().let { it.maxHeight to it.maxFrameRate }
 
     private fun pumpMainLooperUntil(condition: () -> Boolean) {
         val deadline = System.currentTimeMillis() + 5_000
@@ -1196,6 +1226,93 @@ class LocalVideoTeardownTests {
             assertEquals(LocalCameraFacing.front, media.currentCameraFacing)
             assertFalse(media.isCameraSwitchInFlight)
         } finally {
+            runBlocking { media.cleanup(notifyLocalState = false, preserveCallAudioRouting = true) }
+            settle()
+        }
+    }
+
+    @Test
+    @Config(shadows = [CameraFormatsShadow::class], instrumentedPackages = ["org.webrtc"])
+    fun cameraQualityUsesTheOffVideoChoiceAndRefreshesWhenVideoStarts() {
+        val (media, _) = joinedCall()
+        val devices = readyToStart(media, CopyOnWriteArrayList())
+        val initialBackFormat = CaptureFormat(1_920, 1_080, 15_000, 60_000)
+        CameraFormatsShadow.backFormat = initialBackFormat
+        try {
+            assertFalse(media.localVideoEnabled)
+            assertEquals(720 to 30, media.cameraLimits())
+            runBlocking { media.switchCamera() }
+            val whileOff = media.cameraLimits()
+
+            CameraFormatsShadow.backFormat = CaptureFormat(3_840, 2_160, 15_000, 30_000)
+            val beforeStart = media.cameraLimits()
+            var onEnable: Pair<Int, Int>? = null
+            media.onLocalVideoEnabledChanged = { if (it) onEnable = media.cameraLimits() }
+            runBlocking { media.startProducingVideo() }
+
+            assertEquals(listOf("0"), devices.cameras.map { it.cameraId })
+            assertEquals(LocalCameraFacing.back, media.currentCameraFacing)
+            assertEquals("rear camera quality before turning video on", 1_080 to 60, whileOff)
+            assertEquals("settings reuse the limits from the same inactive camera", whileOff, beforeStart)
+            assertEquals("rear camera quality after turning video on", 2_160 to 30, onEnable)
+        } finally {
+            CameraFormatsShadow.backFormat = initialBackFormat
+            runBlocking { media.cleanup(notifyLocalState = false, preserveCallAudioRouting = true) }
+            settle()
+        }
+    }
+
+    @Test
+    @Config(shadows = [CameraFormatsShadow::class], instrumentedPackages = ["org.webrtc"])
+    fun cameraQualityFollowsTheRequestedFacingWhileALiveFlipWaits() {
+        val (media, lane) = joinedCall()
+        readyToStart(media, CopyOnWriteArrayList())
+        val capturer = FakeCapturer().apply { holdSwitches = true }
+        installCamera(media, lane, capturer)
+        val initialBackFormat = CaptureFormat(1_920, 1_080, 15_000, 60_000)
+        CameraFormatsShadow.backFormat = initialBackFormat
+        try {
+            assertEquals(720 to 30, media.cameraLimits())
+            val flip = scope.async(start = CoroutineStart.UNDISPATCHED) { runCatching { media.switchCamera() } }
+            assertNotNull(capturer.heldSwitch)
+            assertEquals(LocalCameraFacing.front, media.currentCameraFacing)
+            val waiting = media.cameraLimits()
+
+            CameraFormatsShadow.backFormat = CaptureFormat(3_840, 2_160, 15_000, 30_000)
+            capturer.heldSwitch!!.onCameraSwitchDone(false)
+            advanceMainUntil { flip.isCompleted }
+            assertTrue(runBlocking { flip.await() }.isSuccess)
+
+            assertEquals(LocalCameraFacing.back, media.currentCameraFacing)
+            assertEquals("quality follows the selection before the live capturer flips", 1_080 to 60, waiting)
+            assertEquals("quality refreshes after the live capturer flips", 2_160 to 30, media.cameraLimits())
+        } finally {
+            CameraFormatsShadow.backFormat = initialBackFormat
+            runBlocking { media.cleanup(notifyLocalState = false, preserveCallAudioRouting = true) }
+            settle()
+        }
+    }
+
+    @Test
+    @Config(shadows = [CameraFormatsShadow::class], instrumentedPackages = ["org.webrtc"])
+    fun cameraQualityAndCaptureFormatUseTheCameraThatWasOpened() {
+        val (media, _) = joinedCall()
+        val devices = readyToStart(media, CopyOnWriteArrayList())
+        val open = media.openCameraCapturer
+        media.openCameraCapturer = { context, name, events ->
+            CameraFormatsShadow.anotherRearCameraIsListedFirst = true
+            open(context, name, events)
+        }
+        try {
+            media.setPreferredCameraFacing(LocalCameraFacing.back)
+            runBlocking { media.startProducingVideo() }
+
+            val capturer = devices.cameras.single()
+            assertEquals("0", capturer.cameraId)
+            assertEquals("capture dimensions use the opened rear camera", 1_920 to 1_080, capturer.startedSize)
+            assertEquals("quality choices use the opened rear camera", 1_080 to 60, media.cameraLimits())
+        } finally {
+            CameraFormatsShadow.anotherRearCameraIsListedFirst = false
             runBlocking { media.cleanup(notifyLocalState = false, preserveCallAudioRouting = true) }
             settle()
         }
