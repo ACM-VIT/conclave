@@ -79,7 +79,7 @@ const renderPinnedShare = (mode: MeetViewMode, size: { width: number; height: nu
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
-  const grid = (sidePanelReserve: number) => (
+  const grid = (viewMode: MeetViewMode, sidePanelReserve: number, presenting: boolean) => (
     <GridLayout
       localStream={null}
       isCameraOff
@@ -96,64 +96,54 @@ const renderPinnedShare = (mode: MeetViewMode, size: { width: number; height: nu
       isMirrorCamera={false}
       activeSpeakerId={activeSpeakerId}
       getDisplayName={(id) => id}
-      viewSettings={{ ...DEFAULT_MEET_VIEW_SETTINGS, mode }}
+      viewSettings={{ ...DEFAULT_MEET_VIEW_SETTINGS, mode: viewMode }}
       isMobile={false}
-      presentationStream={screen}
+      presentationStream={presenting ? screen : null}
       presenterName="carol"
       presentationPresenterId="carol"
       sidePanelReserve={sidePanelReserve}
     />
   );
-  act(() => root!.render(grid(0)));
+  act(() => root!.render(grid("sidebar", 0, false)));
   const pin = host!.querySelector<HTMLButtonElement>(
     '[data-userid="bob"] button[aria-label="Pin to spotlight"]',
   );
   expect(pin).not.toBeNull();
   act(() => pin!.click());
   gridSize = size;
-  act(() => root!.render(grid(DESKTOP.width - size.width)));
+  act(() => root!.render(grid(mode, DESKTOP.width - size.width, true)));
   const presentation = host!.querySelector<HTMLElement>("[data-meet-presentation-tile]");
   return {
     split: host!.querySelector("[data-meet-stage-split]")?.getAttribute("data-meet-stage-split"),
     main: host!.querySelector("[data-meet-stage-main]")?.getAttribute("data-meet-stage-main"),
+    presentation,
     presentationInRail: Boolean(presentation?.closest("[data-meet-stage-rail]")),
     presentationPin:
-      presentation?.querySelector('button[aria-label="Pin to spotlight"], button[aria-label="Unpin"]') ?? null,
+      presentation?.querySelector<HTMLButtonElement>('button[aria-label="Pin to spotlight"], button[aria-label="Unpin"]') ?? null,
   };
 };
 
 const screen = liveVideo("screen");
 
-const MODES = ["sidebar", "tiled", "auto"] as const;
+const MODES = ["sidebar", "tiled", "auto", "spotlight"] as const;
 
-it.each(MODES)(
-  "in %s view, a pinned camera that leaves no room for a side rail hands the stage to the live presentation",
-  (mode) => {
-    const view = renderPinnedShare(mode, { width: 248, height: 171 });
+it.each(MODES.flatMap((mode) => [
+  { mode, size: { width: 248, height: 171 }, split: "main-only" },
+  { mode, size: { width: 248, height: 196 }, split: "main-only" },
+  { mode, size: { width: 248, height: 600 }, split: "stack" },
+  { mode, size: DESKTOP, split: "side" },
+]))(
+  "keeps the live presentation and its pin in $mode view with a $split split",
+  ({ mode, size, split }) => {
+    const view = renderPinnedShare(mode, size);
 
-    expect(view.split).toBe("main-only");
-    expect(view.main).toBe("__presentation__");
-    expect(view.presentationInRail).toBe(false);
-    expect(view.presentationPin).not.toBeNull();
+    expect(view.presentation).not.toBeNull();
+    expect(view.presentation?.closest(".hidden")).toBeNull();
+    expect(view.split).toBe(split);
+    expect(view.main).toBe(split === "side" ? "bob" : "__presentation__");
+    expect(view.presentationInRail).toBe(split === "side");
+    expect(view.presentationPin?.disabled).toBe(false);
+    act(() => view.presentationPin!.click());
+    expect(host!.querySelector('[data-meet-presentation-tile] button[aria-label="Unpin"]')).not.toBeNull();
   },
 );
-
-it.each(MODES)(
-  "in %s view, a pinned camera takes the stage and the live presentation stays in the side rail",
-  (mode) => {
-    const view = renderPinnedShare(mode, DESKTOP);
-
-    expect(view.split).toBe("side");
-    expect(view.main).toBe("bob");
-    expect(view.presentationInRail).toBe(true);
-    expect(view.presentationPin).not.toBeNull();
-  },
-);
-
-it("in sidebar view, a stacked rail hands the stage to the live presentation", () => {
-  const view = renderPinnedShare("sidebar", { width: 248, height: 600 });
-
-  expect(view.split).toBe("stack");
-  expect(view.main).toBe("__presentation__");
-  expect(view.presentationInRail).toBe(false);
-});
