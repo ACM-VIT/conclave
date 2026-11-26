@@ -460,8 +460,10 @@ export class AuthoritySession<C extends AuthorityContract> {
     const lifetime = this.actionLifetime;
     const timeLeft = () => deadline - this.client.now();
     const waitWithin = (ms: number) => pause(Math.min(ms, timeLeft()), lifetime);
+    const unanswered = (code: AuthorityFailureCode) =>
+      failure(mayHaveRun ? "unknown-outcome" : code);
     const stopped = () => {
-      if (lifetime.ended) return failure(lifetime.ended);
+      if (lifetime.ended) return unanswered(lifetime.ended);
       return timeLeft() <= 0 ? failure("unknown-outcome") : null;
     };
 
@@ -469,8 +471,8 @@ export class AuthoritySession<C extends AuthorityContract> {
       const beforeReady = stopped();
       if (beforeReady) return beforeReady;
       // Only a view that is on its way is worth waiting for.
-      if (this.state.kind === "unsupported") return failure("unsupported");
-      if (this.state.kind === "revoked") return failure("forbidden");
+      if (this.state.kind === "unsupported") return unanswered("unsupported");
+      if (this.state.kind === "revoked") return unanswered("forbidden");
       const ready = await this.whenReady(timeLeft(), lifetime);
       const afterReady = stopped();
       if (afterReady) return afterReady;
@@ -493,26 +495,31 @@ export class AuthoritySession<C extends AuthorityContract> {
         input,
       };
       const base = this.revisionBase;
+      const hadUnansweredAttempt = mayHaveRun;
+      mayHaveRun = true;
       const reply = await this.client.request<AuthorityResult<Json>>(
         AUTHORITY_EVENTS.act,
         request,
         timeLeft(),
         lifetime,
       );
+      const retryAfterResubscribe =
+        reply !== LOST && !reply.ok && RESUBSCRIBE_CODES.has(reply.code);
+      const rateLimited = reply !== LOST && !reply.ok && reply.code === "rate-limited";
+      if (retryAfterResubscribe || rateLimited) mayHaveRun = hadUnansweredAttempt;
       const afterReply = stopped();
       if (afterReply) return afterReply;
       if (reply === LOST) {
-        mayHaveRun = true;
         await waitWithin(RETRY_PAUSE_MS);
         continue;
       }
-      if (!reply.ok && reply.code === "rate-limited" && mayHaveRun) {
+      if (rateLimited && mayHaveRun) {
         const wait = Math.max(RETRY_PAUSE_MS, reply.retryAfterMs ?? 0);
         if (wait >= timeLeft()) return failure("unknown-outcome");
         await waitWithin(wait);
         continue;
       }
-      if (!reply.ok && RESUBSCRIBE_CODES.has(reply.code)) {
+      if (retryAfterResubscribe) {
         if (reply.code === "stale-epoch" || reply.code === "not-in-room") {
           this.client.refresh();
         }

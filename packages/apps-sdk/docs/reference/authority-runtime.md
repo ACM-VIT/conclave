@@ -18,6 +18,8 @@ These hold whatever an app's code or a client does.
 | Transactions | A handler runs to completion alone. A rejection or a throw keeps none of its writes. A handler must be done when it returns: one that returns a promise is a fault and keeps nothing. A gate, `canView` or identity rule admits only on its exact answer, so one that returns a promise admits nobody. |
 | Outputs | A projection or query result with a field its schema does not name is withheld. A projection or a personal view's owner that throws, with any value, `undefined` included, withholds its row; the row is tried again on each of the next three flushes, and after that when it is next written. |
 
+The SDK distinguishes an action's answer from the state of its subscription. If the subscription ends or the app becomes unavailable while a sent attempt still has no definite answer, the SDK returns `unknown-outcome`, even if the revoke reason is `forbidden`. A refusal to retry can rule out that attempt, but it does not settle an earlier unanswered attempt. If no attempt could have run, a `forbidden` revoke ends the action as `forbidden`.
+
 The uniqueness guarantee is one per verified subject. Two guest passes issued separately cannot be shown to be different people.
 
 ## Trust
