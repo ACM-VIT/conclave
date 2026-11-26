@@ -30,13 +30,15 @@ import {
   type MediaPathRecovery,
   type SenderPacketsReading,
   advanceProducerDeliveries,
+  failingStreamsAfter,
+  judgeDeliveryWindow,
   judgeProducerDelivery,
-  verdictProves,
-  producersNotReachingSfu,
-  producersUnprovenInWindow,
+  pathCarriesWhatIsSent,
   readMediaPath,
-  windowProvesDelivery,
+  type PathEvidence,
   type SendingProducer,
+  type SentStream,
+  type StreamDeliveries,
   mediaReachedFarEnd,
   sendPathExpectation,
   type PublishedStream,
@@ -57,6 +59,7 @@ const sample = (overrides: Partial<MediaPathSample>): MediaPathSample => ({
   rtpBytes: 0,
   receiverReportAt: null,
   sent: {},
+  knownFailing: [],
   ...overrides,
 });
 
@@ -375,19 +378,23 @@ describe("a direction's media path recovery", () => {
     direction: "consumer",
     transportId,
     reason: "Consumer transport carried no media",
-    failingProducers: [],
     silentWhileConnected: true,
     relayOnly: false,
     reconnectInFlight: false,
     ...overrides,
   });
+  const sampled = (
+    direction: "producer" | "consumer",
+    streams: StreamDeliveries = {},
+    reached = true,
+  ) => ({ type: "path-sampled", direction, evidence: { reached, streams } }) as const;
   const connected = (transportId: string) =>
     ({ type: "transport-connected", direction: "consumer", transportId }) as const;
   const started = (transportId: string, direction: "producer" | "consumer" = "consumer") =>
     ({ type: "rebuild-started", direction, transportId }) as const;
   const settled = (transportId: string, direction: "producer" | "consumer" = "consumer") =>
     ({ type: "escalation-settled", direction, transportId }) as const;
-  const flowing = { type: "media-flowing", direction: "consumer" } as const;
+  const flowing = sampled("consumer");
 
   const rebuiltAfter = (recovery: MediaPathRecovery, failed: MediaPathFailure) => {
     const asked = planMediaPathFailure(recovery, failed);
@@ -447,24 +454,19 @@ describe("a direction's media path recovery", () => {
     expect(second.recovery).toBe(first.recovery);
   });
 
-  it("adds what a later watcher saw to the failure being handled", () => {
+  it("notes that the failure being handled also went silent while connected", () => {
     const first = planMediaPathFailure(
       INITIAL_MEDIA_PATH_RECOVERY,
       failure("s1", { direction: "producer", silentWhileConnected: false }),
     );
     const second = planMediaPathFailure(
       first.recovery,
-      failure("s1", {
-        direction: "producer",
-        failingProducers: ["camera"],
-        reconnectInFlight: true,
-      }),
+      failure("s1", { direction: "producer", reconnectInFlight: true }),
     );
 
     expect(second.step).toBe("already-escalated");
     expect(second.recovery.producer.escalation).toMatchObject({
       transportId: "s1",
-      failingProducers: ["camera"],
       silentWhileConnected: true,
     });
   });
@@ -526,7 +528,6 @@ describe("a direction's media path recovery", () => {
       failure("s1", {
         direction: "producer",
         reason: "send failed",
-        failingProducers: ["camera"],
         reconnectInFlight: true,
       }),
     ).recovery;
@@ -537,14 +538,12 @@ describe("a direction's media path recovery", () => {
         direction: "producer",
         transportId: "s1",
         reason: "send failed",
-        failingProducers: ["camera"],
         silentWhileConnected: true,
       },
       {
         direction: "consumer",
         transportId: "r1",
         reason: "Consumer transport carried no media",
-        failingProducers: [],
         silentWhileConnected: true,
       },
     ]);
@@ -553,19 +552,16 @@ describe("a direction's media path recovery", () => {
     expect(readMediaPathHealth(taken.recovery)).toEqual(readMediaPathHealth(recovery));
   });
 
-  it("keeps every producer reported for a held rebuild, and starts over for another transport", () => {
-    const held = (recovery: MediaPathRecovery, transportId: string, failingProducers: string[]) =>
+  it("holds the newest transport's rebuild when a second one is asked for during the same rejoin", () => {
+    const held = (recovery: MediaPathRecovery, transportId: string) =>
       planMediaPathFailure(
         recovery,
-        failure(transportId, { direction: "producer", failingProducers, reconnectInFlight: true }),
+        failure(transportId, { direction: "producer", reconnectInFlight: true }),
       ).recovery;
-    const both = held(held(INITIAL_MEDIA_PATH_RECOVERY, "s1", ["camera"]), "s1", ["mic", "camera"]);
-    expect(both.producer.deferredRebuild?.failingProducers).toEqual(["camera", "mic"]);
 
-    expect(held(both, "s2", ["screen"]).producer.deferredRebuild).toMatchObject({
-      transportId: "s2",
-      failingProducers: ["screen"],
-    });
+    expect(
+      held(held(INITIAL_MEDIA_PATH_RECOVERY, "s1"), "s2").producer.deferredRebuild?.transportId,
+    ).toBe("s2");
   });
 
   it("drops a held rebuild for a transport that could not connect once it connects", () => {
@@ -582,7 +578,7 @@ describe("a direction's media path recovery", () => {
   it("keeps a held rebuild for a connected path that carried nothing when it reports connected again", () => {
     const held = planMediaPathFailure(
       INITIAL_MEDIA_PATH_RECOVERY,
-      failure("s1", { direction: "producer", failingProducers: ["camera"], reconnectInFlight: true }),
+      failure("s1", { direction: "producer", reconnectInFlight: true }),
     ).recovery;
     const reconnected = advanceMediaPathRecovery(held, {
       type: "transport-connected",
@@ -632,11 +628,16 @@ describe("a direction's media path recovery", () => {
   });
 
   it("is cleared for a direction only when media flows in that direction", () => {
-    const sendFlowing = advanceMediaPathRecovery(blockedOnT2(), {
-      type: "media-flowing",
-      direction: "producer",
-    });
+    const sendFlowing = advanceMediaPathRecovery(
+      blockedOnT2(),
+      sampled("producer", { mic: "delivered" }),
+    );
     expect(readMediaPathHealth(sendFlowing).consumer).toBe("blocked");
+  });
+
+  it("stays blocked on a sample in which nothing reached the far end", () => {
+    const blocked = blockedOnT2();
+    expect(advanceMediaPathRecovery(blocked, sampled("consumer", {}, false))).toBe(blocked);
   });
 
   it("starts fresh for a new join", () => {
@@ -1122,9 +1123,192 @@ describe("telling a still screen share apart from one whose packets never arrive
   });
 });
 
+const micProducer: SendingProducer = { stream: "mic", producerId: "mic", mid: "0" };
+const cameraProducer: SendingProducer = { stream: "camera", producerId: "camera", mid: "1" };
+const bothProducers = [micProducer, cameraProducer];
+
+const sendSampled = (streams: StreamDeliveries, reached = true) =>
+  ({ type: "path-sampled", direction: "producer", evidence: { reached, streams } }) as const;
+
+const sendFailure = (transportId: string, relayOnly: boolean): MediaPathFailure => ({
+  direction: "producer",
+  transportId,
+  reason: "Producer transport carried no media",
+  silentWhileConnected: true,
+  relayOnly,
+  reconnectInFlight: false,
+});
+
+const rebuiltSendPath = (recovery: MediaPathRecovery, transportId: string) =>
+  (["rebuild-started", "escalation-settled"] as const).reduce(
+    (next, type) => advanceMediaPathRecovery(next, { type, direction: "producer", transportId }),
+    planMediaPathFailure(recovery, sendFailure(transportId, false)).recovery,
+  );
+
+const CAMERA_SEEN_FAILING = advanceMediaPathRecovery(
+  INITIAL_MEDIA_PATH_RECOVERY,
+  sendSampled({ mic: "delivered", camera: "undelivered" }),
+);
+const REBUILT_FOR_CAMERA = rebuiltSendPath(CAMERA_SEEN_FAILING, "s1");
+const BLOCKED_ON_CAMERA = planMediaPathFailure(REBUILT_FOR_CAMERA, sendFailure("s2", true)).recovery;
+
+describe("the streams a send path is known to be failing", () => {
+  it("records a stream as soon as it is seen not arriving, before any stall", () => {
+    expect(CAMERA_SEEN_FAILING.producer).toEqual({
+      ...INITIAL_MEDIA_PATH_RECOVERY.producer,
+      failingStreams: ["camera"],
+    });
+  });
+
+  it("keeps the record through the rebuild made for it and the report that it is blocked", () => {
+    expect(REBUILT_FOR_CAMERA.producer).toMatchObject({
+      health: "recovering",
+      rebuildTried: true,
+      failingStreams: ["camera"],
+    });
+    expect(BLOCKED_ON_CAMERA.producer).toMatchObject({
+      health: "blocked",
+      rebuildTried: true,
+      failingStreams: ["camera"],
+    });
+  });
+
+  it.each<[string, (recovery: MediaPathRecovery) => MediaPathRecovery]>([
+    ["new trouble", (recovery) => advanceMediaPathRecovery(recovery, { type: "trouble", direction: "producer" })],
+    [
+      "its transport connecting",
+      (recovery) =>
+        advanceMediaPathRecovery(recovery, {
+          type: "transport-connected",
+          direction: "producer",
+          transportId: "s2",
+        }),
+    ],
+    [
+      "a rebuild held behind a rejoin and then taken",
+      (recovery) =>
+        takeDeferredRebuilds(
+          planMediaPathFailure(recovery, { ...sendFailure("s2", true), reconnectInFlight: true }).recovery,
+        ).recovery,
+    ],
+    ["the other direction being proven", (recovery) => advanceMediaPathRecovery(recovery, {
+      type: "path-sampled",
+      direction: "consumer",
+      evidence: { reached: true, streams: {} },
+    })],
+  ])("keeps the record through %s", (_name, apply) => {
+    for (const recovery of [CAMERA_SEEN_FAILING, REBUILT_FOR_CAMERA, BLOCKED_ON_CAMERA]) {
+      expect(apply(recovery).producer.failingStreams).toEqual(["camera"]);
+    }
+  });
+
+  it.each<[string, StreamDeliveries, boolean]>([
+    ["the camera sends nothing", { mic: "delivered", camera: "quiet" }, true],
+    ["the camera's count reply is missing", { mic: "delivered", camera: "unconfirmed" }, true],
+    ["the camera is not being sent", { mic: "delivered" }, true],
+    ["nothing is being sent", {}, false],
+    ["the camera still does not arrive", { mic: "delivered", camera: "undelivered" }, true],
+  ])("stays blocked, with its one rebuild spent, while %s", (_name, streams, reached) => {
+    expect(advanceMediaPathRecovery(BLOCKED_ON_CAMERA, sendSampled(streams, reached))).toBe(
+      BLOCKED_ON_CAMERA,
+    );
+    expect(advanceMediaPathRecovery(REBUILT_FOR_CAMERA, sendSampled(streams, reached))).toBe(
+      REBUILT_FOR_CAMERA,
+    );
+  });
+
+  it.each<[string, StreamDeliveries]>([
+    ["with the microphone arriving too", { mic: "delivered", camera: "delivered" }],
+    ["with the microphone sending nothing", { mic: "quiet", camera: "delivered" }],
+    ["on its own", { camera: "delivered" }],
+  ])("starts over once the camera is seen arriving %s", (_name, streams) => {
+    expect(advanceMediaPathRecovery(BLOCKED_ON_CAMERA, sendSampled(streams))).toEqual(
+      INITIAL_MEDIA_PATH_RECOVERY,
+    );
+  });
+
+  it("takes an arrived camera off the record, then waits until everything sent is accounted for", () => {
+    const cameraArrived = advanceMediaPathRecovery(
+      BLOCKED_ON_CAMERA,
+      sendSampled({ mic: "unconfirmed", camera: "delivered" }),
+    );
+    expect(cameraArrived.producer).toMatchObject({ health: "blocked", failingStreams: [] });
+
+    expect(
+      advanceMediaPathRecovery(cameraArrived, sendSampled({ mic: "delivered", camera: "quiet" })),
+    ).toEqual(INITIAL_MEDIA_PATH_RECOVERY);
+  });
+
+  it("adds a second stream that stops arriving and needs both to arrive again", () => {
+    const both = advanceMediaPathRecovery(
+      BLOCKED_ON_CAMERA,
+      sendSampled({ mic: "undelivered", camera: "quiet" }),
+    );
+    expect(both.producer.failingStreams).toEqual(["camera", "mic"]);
+
+    const micBack = advanceMediaPathRecovery(both, sendSampled({ mic: "delivered", camera: "quiet" }));
+    expect(micBack.producer).toMatchObject({ health: "blocked", failingStreams: ["camera"] });
+  });
+
+  it("needs every stream being sent to be accounted for even with nothing on record", () => {
+    const rebuilt = rebuiltSendPath(INITIAL_MEDIA_PATH_RECOVERY, "s1");
+
+    expect(
+      advanceMediaPathRecovery(rebuilt, sendSampled({ mic: "delivered", camera: "unconfirmed" })),
+    ).toBe(rebuilt);
+    expect(
+      advanceMediaPathRecovery(rebuilt, sendSampled({ mic: "delivered", camera: "quiet" })),
+    ).toEqual(INITIAL_MEDIA_PATH_RECOVERY);
+  });
+
+  it("is not proof when no media reached the far end in the sample", () => {
+    const sampledNothing = advanceMediaPathRecovery(
+      BLOCKED_ON_CAMERA,
+      sendSampled({ mic: "delivered", camera: "delivered" }, false),
+    );
+
+    expect(sampledNothing.producer).toMatchObject({ health: "blocked", failingStreams: [] });
+  });
+
+  it("lets Try again clear the record while the warning stays until media is proven", () => {
+    const retried = advanceMediaPathRecovery(BLOCKED_ON_CAMERA, { type: "user-retry" });
+    expect(retried.producer).toMatchObject({
+      health: "blocked",
+      rebuildTried: false,
+      failingStreams: [],
+    });
+
+    expect(advanceMediaPathRecovery(retried, sendSampled({ mic: "delivered" }))).toEqual(
+      INITIAL_MEDIA_PATH_RECOVERY,
+    );
+  });
+
+  it("forgets the record for a new call", () => {
+    expect(advanceMediaPathRecovery(BLOCKED_ON_CAMERA, { type: "reset" })).toEqual(
+      INITIAL_MEDIA_PATH_RECOVERY,
+    );
+  });
+
+  it("returns the same record when a sample changes nothing", () => {
+    const known: SentStream[] = ["camera"];
+
+    expect(failingStreamsAfter(known, { mic: "delivered", camera: "quiet" })).toBe(known);
+    expect(failingStreamsAfter(known, { camera: "delivered" })).toEqual([]);
+    expect(
+      advanceMediaPathRecovery(INITIAL_MEDIA_PATH_RECOVERY, sendSampled({ mic: "delivered" })),
+    ).toBe(INITIAL_MEDIA_PATH_RECOVERY);
+  });
+});
+
 describe("judging each sending producer on its own", () => {
   type Stream = { mid: string; packetsSent: number; reportAt: number | null; layers?: number };
-  type Step = { streams: Stream[]; sfu?: Record<string, number> | null; producers?: SendingProducer[]; sfuReports?: boolean };
+  type Step = {
+    streams: Stream[];
+    sfu?: Record<string, number> | null;
+    producers?: SendingProducer[];
+    sfuReports?: boolean;
+    watchReset?: boolean;
+  };
   const sendStats = (streams: Stream[]) =>
     streams.flatMap(({ mid, packetsSent, reportAt, layers = 1 }) =>
       Array.from({ length: layers }, (_, layer) => {
@@ -1135,26 +1319,37 @@ describe("judging each sending producer on its own", () => {
         ];
       }).flat(),
     );
-  const bothProducers: SendingProducer[] = [
-    { producerId: "mic", mid: "0" },
-    { producerId: "camera", mid: "1" },
-  ];
   const mic = (packetsSent: number, reportAt: number): Stream => ({ mid: "0", packetsSent, reportAt });
   const camera = (packetsSent: number, reportAt: number | null): Stream => ({ mid: "1", packetsSent, reportAt });
-  const watchSend = (steps: Step[]) => {
+  const watchSend = (steps: Step[], from: MediaPathRecovery = INITIAL_MEDIA_PATH_RECOVERY) => {
     let watch: MediaPathWatch = INITIAL_MEDIA_PATH_WATCH;
-    return steps.map(({ streams, sfu = null, producers = bothProducers, sfuReports = sfu !== null }, index) => {
-      const result = advanceMediaPathWatch(watch, {
-        ...readMediaPath(sendStats(streams), "send"),
-        at: index * 2_500,
-        connectionState: "connected",
-        expectsMedia: true,
-        framesOptional: false,
-        sending: { producers, sfuCounts: sfu, sfuReports },
-      });
-      watch = result.watch;
-      return { ...result, failing: producersNotReachingSfu(watch.deliveries) };
-    });
+    let recovery = from;
+    return steps.map(
+      ({ streams, sfu = null, producers = bothProducers, sfuReports = sfu !== null, watchReset = false }, index) => {
+        if (watchReset) watch = INITIAL_MEDIA_PATH_WATCH;
+        const result = advanceMediaPathWatch(watch, {
+          ...readMediaPath(sendStats(streams), "send"),
+          at: index * 2_500,
+          connectionState: "connected",
+          expectsMedia: true,
+          framesOptional: false,
+          sending: { producers, sfuCounts: sfu, sfuReports },
+          knownFailing: recovery.producer.failingStreams,
+        });
+        watch = result.watch;
+        recovery = advanceMediaPathRecovery(recovery, {
+          type: "path-sampled",
+          direction: "producer",
+          evidence: result.evidence,
+        });
+        return {
+          ...result,
+          failing: recovery.producer.failingStreams,
+          health: recovery.producer.health,
+          rebuildTried: recovery.producer.rebuildTried,
+        };
+      },
+    );
   };
 
   it("reads each transceiver's packets and its own receiver report, adding simulcast layers by mid", () => {
@@ -1228,14 +1423,15 @@ describe("judging each sending producer on its own", () => {
     expect(results[5].stalledForMs).toBe(10_000);
   });
 
-  it("clears a camera's failure once it is paused or removed", () => {
+  it("stops timing a failing camera once it is paused or removed, and keeps it on record", () => {
     const results = watchSend([
       { streams: [mic(50, 1_000), camera(300, 1_000)], sfu: { mic: 40, camera: 280 } },
       { streams: [mic(175, 3_400), camera(600, 3_300)], sfu: { mic: 165, camera: 280 } },
-      { streams: [mic(300, 5_900), camera(600, 5_800)], sfu: { mic: 290, camera: 280 }, producers: [{ producerId: "mic", mid: "0" }] },
+      { streams: [mic(300, 5_900), camera(600, 5_800)], sfu: { mic: 290, camera: 280 }, producers: [micProducer] },
     ]);
 
     expect(results.map(({ condition }) => condition)).toEqual(["flowing", "connected-without-media", "flowing"]);
+    expect(results.map(({ failing }) => failing)).toEqual([[], ["camera"], ["camera"]]);
   });
 
   it("clears a failure when packets the SFU had not counted yet show up in a quiet sample", () => {
@@ -1260,22 +1456,121 @@ describe("judging each sending producer on its own", () => {
     expect(next.failing).toEqual([]);
   });
 
-  it("judges nothing per producer when the browser gives no mid", () => {
+  it("judges a producer by the SFU's count alone when the browser gives no mid", () => {
     const strip = (streams: Stream[]) => sendStats(streams).map(({ mid: _mid, ...stat }) => stat);
-    const reading = readMediaPath(strip([camera(600, 1_000)]), "send");
-    const deliveries = advanceProducerDeliveries(
-      advanceProducerDeliveries({}, readMediaPath(strip([camera(300, 1_000)]), "send"), { producers: bothProducers, sfuCounts: null, sfuReports: false }, 0),
-      reading,
-      { producers: bothProducers, sfuCounts: null, sfuReports: false },
-      2_500,
-    );
+    const judge = (sfuReports: boolean, counts: [number, number] | null) => {
+      const sending = (count: number | undefined) => ({
+        producers: [cameraProducer],
+        sfuCounts: count === undefined ? null : { camera: count },
+        sfuReports,
+      });
+      const first = advanceProducerDeliveries(
+        {},
+        readMediaPath(strip([camera(300, 1_000)]), "send"),
+        sending(counts?.[0]),
+      );
+      return advanceProducerDeliveries(
+        first.counters,
+        readMediaPath(strip([camera(600, 1_000)]), "send"),
+        sending(counts?.[1]),
+      ).streams;
+    };
 
-    expect(reading.sent).toEqual({});
-    expect(producersNotReachingSfu(deliveries)).toEqual([]);
+    expect(readMediaPath(strip([camera(600, 1_000)]), "send").sent).toEqual({});
+    expect(judge(true, [280, 570])).toEqual({ camera: "delivered" });
+    expect(judge(true, [280, 280])).toEqual({ camera: "unconfirmed" });
+    expect(judge(false, null)).toEqual({ camera: "unconfirmed" });
+  });
+
+  describe("on a watch that starts again while the camera is dropped", () => {
+    const droppedThenCounted: Step[] = [
+      { streams: [mic(50, 1_000), camera(300, null)], sfu: null, sfuReports: true, watchReset: true },
+      { streams: [mic(175, 3_400), camera(600, null)], sfu: { mic: 165, camera: 0 } },
+    ];
+    const countedThenDropped: Step[] = [
+      { streams: [mic(50, 1_000), camera(300, null)], sfu: { mic: 40, camera: 0 }, watchReset: true },
+      { streams: [mic(175, 3_400), camera(600, null)], sfu: null, sfuReports: true },
+    ];
+    const quietCamera: Step[] = [
+      { streams: [mic(50, 1_000), camera(300, null)], sfu: { mic: 40, camera: 0 }, watchReset: true },
+      { streams: [mic(175, 3_400), camera(300, null)], sfu: { mic: 165, camera: 0 } },
+      { streams: [mic(300, 5_900), camera(300, null)], sfu: { mic: 290, camera: 0 } },
+    ];
+    const micOnly: Step[] = [
+      { streams: [mic(50, 1_000)], sfu: { mic: 40 }, producers: [micProducer], watchReset: true },
+      { streams: [mic(175, 3_400)], sfu: { mic: 165 }, producers: [micProducer] },
+      { streams: [mic(300, 5_900)], sfu: { mic: 290 }, producers: [micProducer] },
+    ];
+
+    it.each<[string, Step[]]>([
+      ["the first count reply is missing", droppedThenCounted],
+      ["the second count reply is missing", countedThenDropped],
+      ["the camera sends nothing", quietCamera],
+      ["only the microphone is published", micOnly],
+    ])("keeps a blocked path blocked and a rebuilt path's rebuild spent when %s", (_name, steps) => {
+      expect(watchSend(steps, BLOCKED_ON_CAMERA).map(({ health }) => health)).toEqual(
+        steps.map(() => "blocked"),
+      );
+      expect(watchSend(steps, REBUILT_FOR_CAMERA).at(-1)).toMatchObject({
+        health: "recovering",
+        rebuildTried: true,
+        failing: ["camera"],
+      });
+    });
+
+    it.each<[string, Step[]]>([
+      ["the first count reply is missing", droppedThenCounted],
+      ["the second count reply is missing", countedThenDropped],
+    ])("does not start a rebuilt path over with nothing on record when %s", (_name, steps) => {
+      const rebuilt = rebuiltSendPath(INITIAL_MEDIA_PATH_RECOVERY, "s1");
+
+      expect(watchSend(steps, rebuilt).at(-1)).toMatchObject({
+        health: "recovering",
+        rebuildTried: true,
+      });
+    });
+
+    it("times the camera again from the first sample that shows it being sent", () => {
+      const results = watchSend(
+        [
+          { streams: [mic(50, 1_000), camera(300, null)], sfu: { mic: 40, camera: 0 }, watchReset: true },
+          { streams: [mic(175, 3_400), camera(600, null)], sfu: { mic: 165, camera: 0 } },
+          { streams: [mic(300, 5_900), camera(900, null)], sfu: { mic: 290, camera: 0 } },
+        ],
+        BLOCKED_ON_CAMERA,
+      );
+
+      expect(results.map(({ condition }) => condition)).toEqual([
+        "flowing",
+        "connected-without-media",
+        "connected-without-media",
+      ]);
+      expect(results.at(-1)?.stalledForMs).toBe(2_500);
+    });
+
+    it("does not time a path whose failing camera is not being sent", () => {
+      expect(watchSend(micOnly, BLOCKED_ON_CAMERA).map(({ condition }) => condition)).toEqual([
+        "flowing",
+        "flowing",
+        "flowing",
+      ]);
+    });
+
+    it("clears the warning once the camera's packets are counted again", () => {
+      const results = watchSend(
+        [
+          { streams: [mic(50, 1_000), camera(300, null)], sfu: { mic: 40, camera: 0 }, watchReset: true },
+          { streams: [mic(175, 3_400), camera(600, null)], sfu: { mic: 165, camera: 290 } },
+        ],
+        BLOCKED_ON_CAMERA,
+      );
+
+      expect(results.map(({ health }) => health)).toEqual(["blocked", "healthy"]);
+    });
   });
 });
 
-describe("proving every producer reached the SFU over a short window", () => {
+describe("judging every producer over a short window", () => {
   const reading = (camera: number, mic: number, reportAt = 2_000) =>
     readMediaPath(
       [
@@ -1286,81 +1581,74 @@ describe("proving every producer reached the SFU over a short window", () => {
       ],
       "send",
     );
-  const producers = [
-    { producerId: "mic", mid: "0" },
-    { producerId: "camera", mid: "1" },
-  ];
-  const prove = (over: {
+  const judge = (over: {
     camera?: [number, number];
     sfuStart?: Record<string, number> | null;
     sfuEnd?: Record<string, number> | null;
     sfuReports?: boolean;
-    mustProve?: string[];
-  }) => {
+    producers?: SendingProducer[];
+  }): PathEvidence => {
     const [cameraStart, cameraEnd] = over.camera ?? [100, 200];
-    return windowProvesDelivery({
-      start: reading(cameraStart, 50, 1_000),
-      end: reading(cameraEnd, 100, 2_000),
-      producers,
-      sfuStart: over.sfuStart === undefined ? { mic: 40, camera: 90 } : over.sfuStart,
-      sfuEnd: over.sfuEnd === undefined ? { mic: 90, camera: 190 } : over.sfuEnd,
-      sfuReports: over.sfuReports ?? true,
-      mustProve: over.mustProve ?? [],
-    });
+    return {
+      reached: true,
+      streams: judgeDeliveryWindow({
+        start: reading(cameraStart, 50, 1_000),
+        end: reading(cameraEnd, 100, 2_000),
+        producers: over.producers ?? bothProducers,
+        sfuStart: over.sfuStart === undefined ? { mic: 40, camera: 90 } : over.sfuStart,
+        sfuEnd: over.sfuEnd === undefined ? { mic: 90, camera: 190 } : over.sfuEnd,
+        sfuReports: over.sfuReports ?? true,
+      }),
+    };
   };
+  const quietCamera = { camera: [100, 100] as [number, number], sfuEnd: { mic: 90, camera: 90 } };
 
-  it.each<[string, Parameters<typeof prove>[0], boolean]>([
-    ["every producer that sent reached the SFU", {}, true],
-    ["the camera sent and its count did not grow", { sfuEnd: { mic: 90, camera: 90 } }, false],
-    ["the reply at the start is missing", { sfuStart: null }, false],
-    ["the reply at the end is missing", { sfuEnd: null }, false],
-    ["the camera's count is left out of a reply", { sfuEnd: { mic: 90 } }, false],
-    ["a camera that sent nothing and was not failing", { camera: [100, 100], sfuEnd: { mic: 90, camera: 90 } }, true],
-    ["a failing camera that sent nothing", { camera: [100, 100], sfuEnd: { mic: 90, camera: 90 }, mustProve: ["camera"] }, false],
-    ["a failing camera that reached the SFU again", { mustProve: ["camera"] }, true],
-    ["an SFU that cannot count, with newer reports", { sfuReports: false, sfuStart: null, sfuEnd: null }, true],
-    ["a failing camera that sent nothing while the microphone reached the SFU", { camera: [100, 100], sfuEnd: { mic: 90, camera: 90 }, mustProve: ["camera"] }, false],
-  ])("%s: %s", (_name, over, proven) => {
-    expect(prove(over)).toBe(proven);
+  it.each<[string, Parameters<typeof judge>[0], SentStream[], boolean]>([
+    ["every producer that sent reached the SFU", {}, [], true],
+    ["the camera sent and its count did not grow", { sfuEnd: { mic: 90, camera: 90 } }, [], false],
+    ["the reply at the start is missing", { sfuStart: null }, [], false],
+    ["the reply at the end is missing", { sfuEnd: null }, [], false],
+    ["the camera's count is left out of a reply", { sfuEnd: { mic: 90 } }, [], false],
+    ["a camera that sent nothing and was not failing", quietCamera, [], true],
+    ["a failing camera that sent nothing", quietCamera, ["camera"], false],
+    ["a failing camera that reached the SFU again", {}, ["camera"], true],
+    ["an SFU that cannot count, with newer reports", { sfuReports: false, sfuStart: null, sfuEnd: null }, [], true],
+    ["a failing camera that is no longer sent, next to a microphone that arrives", { producers: [micProducer] }, ["camera"], true],
+  ])("%s", (_name, over, knownFailing, carried) => {
+    expect(pathCarriesWhatIsSent(judge(over), knownFailing)).toBe(carried);
   });
 
-  it("names the producers it could not prove, so the next step still knows them", () => {
-    const start = reading(100, 50, 1_000);
-    const end = reading(100, 100, 2_000);
-    const window = {
-      start,
-      end,
-      producers,
-      sfuStart: { mic: 40, camera: 90 },
-      sfuEnd: { mic: 90, camera: 90 },
-      sfuReports: true,
-    };
+  it("carries nothing when no media reached the far end, whatever each producer shows", () => {
+    expect(pathCarriesWhatIsSent({ ...judge({}), reached: false }, [])).toBe(false);
+  });
 
-    expect(producersUnprovenInWindow({ ...window, mustProve: ["camera"] })).toEqual(["camera"]);
-    expect(producersUnprovenInWindow({ ...window, mustProve: [] })).toEqual([]);
+  it("gives each stream its own verdict, and none it can confirm without stats rows", () => {
+    expect(judge(quietCamera).streams).toEqual({ mic: "delivered", camera: "quiet" });
     expect(
-      producersUnprovenInWindow({
-        ...window,
+      judgeDeliveryWindow({
+        start: reading(100, 50, 1_000),
         end: readMediaPath([], "send"),
-        mustProve: ["camera"],
+        producers: bothProducers,
+        sfuStart: { mic: 40, camera: 90 },
+        sfuEnd: { mic: 90, camera: 90 },
+        sfuReports: true,
       }),
-    ).toEqual(["camera"]);
+    ).toEqual({ mic: "delivered", camera: "unconfirmed" });
   });
 });
 
 describe("the one rule for whether a producer reached the SFU", () => {
   type Row = "present" | "missing";
   type Reply = "growth" | "no-growth" | "missing";
-  type Sending = "sent" | "quiet" | "paused";
+  type Sending = "sent" | "quiet";
   const rows: Row[] = ["present", "missing"];
   const replies: Reply[] = ["growth", "no-growth", "missing"];
-  const sendings: Sending[] = ["sent", "quiet", "paused"];
+  const sendings: Sending[] = ["sent", "quiet"];
   const expected = (row: Row, reply: Reply, sending: Sending) => {
-    if (sending === "paused") return "cleared";
+    if (reply === "missing") return "unconfirmed";
     if (reply === "growth") return "delivered";
-    if (row === "missing") return "no-row";
-    if (sending === "quiet") return "quiet";
-    return reply === "missing" ? "no-reply" : "undelivered";
+    if (row === "missing") return "unconfirmed";
+    return sending === "quiet" ? "quiet" : "undelivered";
   };
   const cases = rows.flatMap((row) =>
     replies.flatMap((reply) => sendings.map((sending) => [row, reply, sending] as const)),
@@ -1368,7 +1656,6 @@ describe("the one rule for whether a producer reached the SFU", () => {
 
   it.each(cases)("browser row %s, SFU reply %s, producer %s", (row, reply, sending) => {
     const verdict = judgeProducerDelivery({
-      sending: sending !== "paused",
       before: row === "present" ? { packetsSent: 100, receiverReportAt: 1_000 } : undefined,
       after:
         row === "present"
@@ -1378,10 +1665,13 @@ describe("the one rule for whether a producer reached the SFU", () => {
       arrivedAfter: reply === "missing" ? undefined : reply === "growth" ? 190 : 90,
       sfuReports: true,
     });
+    const evidence = { reached: true, streams: { camera: verdict } };
 
     expect(verdict).toBe(expected(row, reply, sending));
-    expect(verdictProves(verdict, { failing: true })).toBe(verdict === "delivered" || verdict === "cleared");
-    expect(verdictProves(verdict, { failing: false })).toBe(verdict !== "undelivered" && verdict !== "no-reply");
+    expect(pathCarriesWhatIsSent(evidence, ["camera"])).toBe(verdict === "delivered");
+    expect(pathCarriesWhatIsSent(evidence, [])).toBe(verdict === "delivered" || verdict === "quiet");
+    expect(failingStreamsAfter([], evidence.streams)).toEqual(verdict === "undelivered" ? ["camera"] : []);
+    expect(failingStreamsAfter(["camera"], evidence.streams)).toEqual(verdict === "delivered" ? [] : ["camera"]);
   });
 
   it.each<[string, number, number | null, string]>([
@@ -1391,7 +1681,6 @@ describe("the one rule for whether a producer reached the SFU", () => {
   ])("on an SFU that cannot count, a producer %s is %s", (_name, packetsSent, reportAt, verdict) => {
     expect(
       judgeProducerDelivery({
-        sending: true,
         before: { packetsSent: 100, receiverReportAt: 1_000 },
         after: { packetsSent, receiverReportAt: reportAt },
         arrivedBefore: undefined,
@@ -1401,7 +1690,7 @@ describe("the one rule for whether a producer reached the SFU", () => {
     ).toBe(verdict);
   });
 
-  it("keeps a failing camera failing through a sample with no stats row", () => {
+  it("compares a camera against its last counted sample through a sample with no stats row", () => {
     const sample = (camera: number | null) =>
       readMediaPath(
         camera === null
@@ -1409,25 +1698,26 @@ describe("the one rule for whether a producer reached the SFU", () => {
           : [{ type: "outbound-rtp", id: "OUT-1", mid: "1", packetsSent: camera, bytesSent: camera * 100 }],
         "send",
       );
-    const producers = [{ producerId: "camera", mid: "1" }];
     const step = (
-      deliveries: ReturnType<typeof advanceProducerDeliveries>,
+      known: ReturnType<typeof advanceProducerDeliveries>,
       camera: number | null,
       sfuCamera: number,
-      at: number,
     ) =>
-      advanceProducerDeliveries(
-        deliveries,
-        sample(camera),
-        { producers, sfuCounts: { camera: sfuCamera }, sfuReports: true },
-        at,
-      );
-    const first = step({}, 100, 90, 0);
-    const failing = step(first, 200, 90, 2_500);
-    const noRow = step(failing, null, 90, 5_000);
+      advanceProducerDeliveries(known.counters, sample(camera), {
+        producers: [cameraProducer],
+        sfuCounts: { camera: sfuCamera },
+        sfuReports: true,
+      });
+    const first = step({ counters: {}, streams: {} }, 100, 90);
+    const failing = step(first, 200, 90);
+    const noRow = step(failing, null, 90);
 
-    expect(failing.camera.failingSince).toBe(2_500);
-    expect(noRow.camera.failingSince).toBe(2_500);
-    expect(step(noRow, 300, 150, 7_500).camera.failingSince).toBeNull();
+    expect([first, failing, noRow].map(({ streams }) => streams.camera)).toEqual([
+      "unconfirmed",
+      "undelivered",
+      "unconfirmed",
+    ]);
+    expect(step(noRow, 300, 150).streams.camera).toBe("delivered");
+    expect(step(noRow, 300, 90).streams.camera).toBe("undelivered");
   });
 });

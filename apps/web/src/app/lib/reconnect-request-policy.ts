@@ -2,6 +2,7 @@ import {
   advanceMediaPathRecovery,
   type MediaDirection,
   type MediaPathRecovery,
+  type PathEvidence,
 } from "./media-path-recovery";
 
 export type ReconnectRequest = {
@@ -92,6 +93,8 @@ export const planReconnectSettlement = ({
 };
 
 export type PathProbe = "carrying" | "not-carrying" | "cancelled";
+
+export type PathProbeResult = { probe: PathProbe; evidence: PathEvidence | null };
 
 export type ScopedRebuildPlan =
   | "rebuild"

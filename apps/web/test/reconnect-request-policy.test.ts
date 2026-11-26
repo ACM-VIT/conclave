@@ -301,7 +301,6 @@ describe("the recovery a Retry starts fresh", () => {
     direction: "consumer",
     transportId,
     reason: "Consumer transport carried no media",
-    failingProducers: [],
     silentWhileConnected: true,
     relayOnly,
     reconnectInFlight: false,

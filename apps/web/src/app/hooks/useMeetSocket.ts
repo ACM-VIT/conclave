@@ -43,7 +43,7 @@ import {
   restartForUserRetry,
   type ReconnectAttemptState,
   type ReconnectFailureKind,
-  type PathProbe,
+  type PathProbeResult,
   type ReconnectRequest,
   type ScopedRebuildOutcome,
 } from "../lib/reconnect-request-policy";
@@ -173,12 +173,12 @@ import {
   advanceScreenShareWatch,
   deliveredRtpBytes,
   ownPacketCountsRequestFor,
-  producersNotReachingSfu,
   readSenderPacketCounts,
   senderPacketCountsRequestFor,
-  producersUnprovenInWindow,
+  judgeDeliveryWindow,
+  pathCarriesWhatIsSent,
+  type PathEvidence,
   type SendingProducer,
-  windowProvesDelivery,
   screenPacketsGoMissing,
   screenVideoAwaitingSenderCheck,
   type ScreenShareWatch,
@@ -367,6 +367,7 @@ const withDeadline = <T,>(promise: Promise<T>, ms: number): Promise<T> =>
   });
 
 const NOT_ASKED: SenderPacketsReading = { asked: false };
+const PATH_NOT_CARRYING: PathProbeResult = { probe: "not-carrying", evidence: null };
 const PARTICIPANT_RECONNECTING_STATUS_FALLBACK_MS = 30000;
 const PARTICIPANT_RECONNECTING_STATUS_BUFFER_MS = 5000;
 const PARTICIPANT_RECONNECTED_STATUS_MS = 4500;
@@ -1223,8 +1224,8 @@ export function useMeetSocket({
   );
   const reconnectGenerationRef = useRef(0);
   const carriesMediaNowRef = useRef<
-    (direction: "producer" | "consumer", mustProve: () => string[]) => Promise<PathProbe>
-  >(async () => "not-carrying");
+    (direction: "producer" | "consumer") => Promise<PathProbeResult>
+  >(async () => PATH_NOT_CARRYING);
   const cancelPathProbeRef = useRef<(() => void) | null>(null);
   const reconnectBackoffCancelRef = useRef<(() => void) | null>(null);
   const manualReconnectRetryRequestedRef = useRef(false);
@@ -4102,7 +4103,6 @@ export function useMeetSocket({
                           if (!restarted) {
                             escalateMediaPathFailure("producer", transport, {
                               reason: "Producer transport interrupted",
-                              failingProducers: [],
                               silentWhileConnected: false,
                             });
                           }
@@ -4126,7 +4126,6 @@ export function useMeetSocket({
                     if (!restarted) {
                       escalateMediaPathFailure("producer", transport, {
                         reason: "Producer transport failed",
-                        failingProducers: [],
                         silentWhileConnected: false,
                       });
                     }
@@ -4352,7 +4351,6 @@ export function useMeetSocket({
                           if (!restarted) {
                             escalateMediaPathFailure("consumer", transport, {
                               reason: "Consumer transport interrupted",
-                              failingProducers: [],
                               silentWhileConnected: false,
                             });
                           }
@@ -4376,7 +4374,6 @@ export function useMeetSocket({
                     if (!restarted) {
                       escalateMediaPathFailure("consumer", transport, {
                         reason: "Consumer transport failed",
-                        failingProducers: [],
                         silentWhileConnected: false,
                       });
                     }
@@ -6512,14 +6509,16 @@ export function useMeetSocket({
         sending: isSending(producer),
       }));
     const sendingProducers = (): SendingProducer[] =>
-      [
-        audioProducerRef.current,
-        videoProducerRef.current,
-        screenProducerRef.current,
-        screenAudioProducerRef.current,
-      ].flatMap((producer) =>
+      (
+        [
+          ["mic", audioProducerRef.current],
+          ["camera", videoProducerRef.current],
+          ["screen", screenProducerRef.current],
+          ["screen-audio", screenAudioProducerRef.current],
+        ] as const
+      ).flatMap(([stream, producer]) =>
         producer && isSending(producer)
-          ? [{ producerId: producer.id, mid: producer.rtpParameters.mid ?? null }]
+          ? [{ stream, producerId: producer.id, mid: producer.rtpParameters.mid ?? null }]
           : [],
       );
     const expectation = (
@@ -6621,14 +6620,12 @@ export function useMeetSocket({
     const restartIceAndCheckMedia = async (
       kind: "producer" | "consumer",
       transport: Transport,
-      failingProducers: string[],
-      unproven: Set<string>,
-    ): Promise<IceRestartVerdict> => {
-      for (const producerId of failingProducers) unproven.add(producerId);
-      if (!carriedMediaOnce.has(transport)) return "not-recovered";
+    ): Promise<{ verdict: IceRestartVerdict; evidence: PathEvidence | null }> => {
+      const notRecovered = { verdict: "not-recovered", evidence: null } as const;
+      if (!carriedMediaOnce.has(transport)) return notRecovered;
       try {
         const before = (await readPath(kind, transport)).reading;
-        if (!(await attemptIceRestart(kind, transport))) return "not-recovered";
+        if (!(await attemptIceRestart(kind, transport))) return notRecovered;
         const halfWindow = () =>
           new Promise<void>((resolve) =>
             window.setTimeout(resolve, MEDIA_PATH_FLOW_CHECK_MS / 2),
@@ -6660,36 +6657,42 @@ export function useMeetSocket({
         const ownAfter =
           now !== null && kind === "producer" ? await ownPackets() : NOT_ASKED;
         const after = now !== null ? (await readPath(kind, transport)).reading : null;
-        const producersDelivered = () => {
-          if (kind !== "producer" || midway === null || after === null) return true;
-          const stillUnproven = producersUnprovenInWindow({
-            start: midway,
-            end: after,
-            producers: sendingProducers(),
-            sfuStart: sentIn(ownBefore),
-            sfuEnd: sentIn(ownAfter),
-            sfuReports: sfuReportsPackets(),
-            mustProve: failingProducers,
-          });
-          unproven.clear();
-          for (const producerId of stillUnproven) unproven.add(producerId);
-          return stillUnproven.length === 0;
-        };
-        return judgeIceRestart({
-          replaced,
-          expectation: expectationAfterIceRestart({
-            expectsMedia: now?.expectsMedia ?? false,
-            senderBefore: sentBefore,
-            senderAfter: sentAfter,
+        const evidence: PathEvidence | null =
+          now !== null && after !== null
+            ? {
+                reached: mediaReachedFarEnd(before, after, now.framesOptional),
+                streams:
+                  midway !== null
+                    ? judgeDeliveryWindow({
+                        start: midway,
+                        end: after,
+                        producers: sendingProducers(),
+                        sfuStart: sentIn(ownBefore),
+                        sfuEnd: sentIn(ownAfter),
+                        sfuReports: sfuReportsPackets(),
+                      })
+                    : {},
+              }
+            : null;
+        return {
+          verdict: judgeIceRestart({
+            replaced,
+            expectation: expectationAfterIceRestart({
+              expectsMedia: now?.expectsMedia ?? false,
+              senderBefore: sentBefore,
+              senderAfter: sentAfter,
+            }),
+            mediaReached:
+              evidence !== null &&
+              pathCarriesWhatIsSent(
+                evidence,
+                mediaPathRecoveryRef.current[kind].failingStreams,
+              ),
           }),
-          mediaReached:
-            now !== null &&
-            after !== null &&
-            mediaReachedFarEnd(before, after, now.framesOptional) &&
-            producersDelivered(),
-        });
+          evidence,
+        };
       } catch {
-        return "not-recovered";
+        return notRecovered;
       }
     };
 
@@ -6767,8 +6770,14 @@ export function useMeetSocket({
                 sfuReports: sfuReportsPackets(),
               }
             : undefined,
+        knownFailing: mediaPathRecoveryRef.current[kind].failingStreams,
       });
       entry.watch = result.watch;
+      updateMediaPathRecovery({
+        type: "path-sampled",
+        direction: kind,
+        evidence: result.evidence,
+      });
       const provenRelayUrl = relayProvenByMedia({
         mediaBytes: result.deliveredBytes,
         relayBytes,
@@ -6793,12 +6802,10 @@ export function useMeetSocket({
             Date.now(),
           );
         }
-        updateMediaPathRecovery({ type: "media-flowing", direction: kind });
       }
       reconcileRelayPathsNow();
       if (result.stalledForMs < MEDIA_PATH_STALL_MS || reconnectInFlightRef.current) return;
 
-      const failingProducers = producersNotReachingSfu(result.watch.deliveries);
       entry.watch = INITIAL_MEDIA_PATH_WATCH;
       entry.screen = INITIAL_SCREEN_SHARE_WATCH;
       const isSilentWhileConnected =
@@ -6835,16 +6842,10 @@ export function useMeetSocket({
       if (isSilentWhileConnected) {
         // ICE says connected but nothing arrives, so treat it as a failed
         // path: restart ICE, and rebuild if media still does not move.
-        const unproven = new Set<string>();
-        const verdict = await restartIceAndCheckMedia(
-          kind,
-          transport,
-          failingProducers,
-          unproven,
-        );
+        const { verdict, evidence } = await restartIceAndCheckMedia(kind, transport);
         if (!sampled()) return;
-        if (verdict === "media-arrived") {
-          updateMediaPathRecovery({ type: "media-flowing", direction: kind });
+        if (evidence) {
+          updateMediaPathRecovery({ type: "path-sampled", direction: kind, evidence });
         }
         if (verdict !== "not-recovered") return;
         escalateMediaPathFailure(kind, transport, {
@@ -6852,7 +6853,6 @@ export function useMeetSocket({
             kind === "producer"
               ? "Producer transport carried no media"
               : "Consumer transport carried no media",
-          failingProducers: [...unproven],
           silentWhileConnected: true,
         });
         return;
@@ -6871,65 +6871,74 @@ export function useMeetSocket({
           kind === "producer"
             ? "Producer transport could not connect"
             : "Consumer transport could not connect",
-        failingProducers,
         silentWhileConnected: false,
       });
     };
 
-    carriesMediaNowRef.current = async (kind, mustProve) => {
+    carriesMediaNowRef.current = async (kind) => {
       const transport =
         kind === "producer" ? producerTransportRef.current : consumerTransportRef.current;
       if (!transport || transport.closed || transport.connectionState !== "connected") {
-        return "not-carrying";
+        return PATH_NOT_CARRYING;
       }
       const stillOn = () =>
         !transport.closed &&
         transport.connectionState === "connected" &&
         transport ===
           (kind === "producer" ? producerTransportRef.current : consumerTransportRef.current);
-      const probe = async (): Promise<PathProbe> => {
+      const probe = async (): Promise<PathProbeResult> => {
         const sfuReports = kind === "producer" && sfuReportsPackets();
         const [ownStart, start] = await Promise.all([
           kind === "producer" ? ownPackets() : Promise.resolve(NOT_ASKED),
           readPath(kind, transport).then(({ reading }) => reading),
         ]);
-        if (sfuReports && sentIn(ownStart) === null) return "not-carrying";
+        if (sfuReports && sentIn(ownStart) === null) return PATH_NOT_CARRYING;
         await new Promise<void>((resolve) =>
           window.setTimeout(resolve, MEDIA_PATH_PROOF_INTERVAL_MS),
         );
-        if (!stillOn()) return "not-carrying";
+        if (!stillOn()) return PATH_NOT_CARRYING;
         const [ownEnd, end] = await Promise.all([
           kind === "producer" ? ownPackets() : Promise.resolve(NOT_ASKED),
           readPath(kind, transport).then(({ reading }) => reading),
         ]);
-        if (!stillOn()) return "not-carrying";
-        if (kind === "consumer") {
-          return deliveredRtpBytes(start, end) > 0 ? "carrying" : "not-carrying";
-        }
-        return mediaReachedFarEnd(start, end, expectation(kind, true).framesOptional) &&
-          windowProvesDelivery({
-            start,
-            end,
-            producers: sendingProducers(),
-            sfuStart: sentIn(ownStart),
-            sfuEnd: sentIn(ownEnd),
-            sfuReports,
-            mustProve: mustProve(),
-          })
-          ? "carrying"
-          : "not-carrying";
+        if (!stillOn()) return PATH_NOT_CARRYING;
+        const evidence: PathEvidence =
+          kind === "consumer"
+            ? { reached: deliveredRtpBytes(start, end) > 0, streams: {} }
+            : {
+                reached: mediaReachedFarEnd(
+                  start,
+                  end,
+                  expectation(kind, true).framesOptional,
+                ),
+                streams: judgeDeliveryWindow({
+                  start,
+                  end,
+                  producers: sendingProducers(),
+                  sfuStart: sentIn(ownStart),
+                  sfuEnd: sentIn(ownEnd),
+                  sfuReports,
+                }),
+              };
+        return {
+          probe: pathCarriesWhatIsSent(
+            evidence,
+            mediaPathRecoveryRef.current[kind].failingStreams,
+          )
+            ? "carrying"
+            : "not-carrying",
+          evidence,
+        };
       };
       let cancel = () => {};
-      const cancelled = new Promise<PathProbe>((resolve) => {
-        cancel = () => resolve("cancelled");
+      const cancelled = new Promise<PathProbeResult>((resolve) => {
+        cancel = () => resolve({ probe: "cancelled", evidence: null });
       });
       cancelPathProbeRef.current = cancel;
       try {
         const deadline = MEDIA_PATH_PROOF_INTERVAL_MS + 2 * MEDIA_PATH_PROOF_SAMPLE_DEADLINE_MS;
         return await Promise.race([
-          withDeadline(probe(), deadline).catch(
-            (): PathProbe => "not-carrying",
-          ),
+          withDeadline(probe(), deadline).catch(() => PATH_NOT_CARRYING),
           cancelled,
         ]);
       } finally {
@@ -10143,17 +10152,18 @@ export function useMeetSocket({
         };
         let outcome: ScopedRebuildOutcome;
         let failure: string | null = null;
-        const failingProducers = (): string[] => {
-          const held = mediaPathRecoveryRef.current[scopedDirection].escalation;
-          return failedPath && held?.transportId === failedPath.transportId
-            ? held.failingProducers
-            : [];
-        };
-        const probe: PathProbe = failedPathChanged()
-          ? "not-carrying"
-          : await carriesMediaNowRef.current(scopedDirection, failingProducers);
+        const { probe, evidence } = failedPathChanged()
+          ? PATH_NOT_CARRYING
+          : await carriesMediaNowRef.current(scopedDirection);
         if (reconnectGeneration !== reconnectGenerationRef.current) return;
         if (intentionalDisconnectRef.current) return;
+        if (evidence) {
+          updateMediaPathRecovery({
+            type: "path-sampled",
+            direction: scopedDirection,
+            evidence,
+          });
+        }
         const plan = planScopedRebuild({
           probe,
           failedPathChanged: failedPathChanged(),
@@ -10161,16 +10171,8 @@ export function useMeetSocket({
         if (plan === "rejoin-after-cancelled-check") {
           outcome = "failed";
           failure = "its check was cancelled";
-        } else if (plan === "keep-replaced-path") {
+        } else if (plan === "keep-replaced-path" || plan === "keep-proven-path") {
           outcome = "stale";
-        } else if (plan === "keep-proven-path") {
-          outcome = "stale";
-          if (failedPath?.direction === scopedDirection) {
-            updateMediaPathRecovery({
-              type: "media-flowing",
-              direction: scopedDirection,
-            });
-          }
         } else {
           applyRequestedRelayPolicy("restart");
           const noteRebuildStarted = () => noteEscalation("rebuild-started");

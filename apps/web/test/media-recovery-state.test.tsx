@@ -269,23 +269,26 @@ const playSeed = async (seed: number): Promise<string | null> => {
     await target.advance(30_000);
     if (!target.socket?.connected) await target.retry();
 
-    const consumer = () => target.health.consumer;
-    const reaches = (state: string) => waitFor(target, () => consumer() === state, 240_000);
     const describeEnd = (wanted: string) =>
       `seed ${seed}: wanted ${wanted}, got ${JSON.stringify(target.health)} | ${trace.join(" ")} | ${target.log.slice(-6).join(" | ")}`;
-    if (!target.mediaFlows) {
-      return (await reaches("blocked")) ? null : describeEnd("consumer blocked");
-    }
-    if (!(await waitFor(target, () => consumer() !== "recovering", 240_000))) {
-      return describeEnd("consumer healthy or blocked");
-    }
-    if (consumer() === "blocked") {
+    const reaches = (direction: "producer" | "consumer", state: string) =>
+      waitFor(target, () => target.health[direction] === state, 240_000);
+    const endsHealthy = async (direction: "producer" | "consumer") => {
+      if (!(await waitFor(target, () => target.health[direction] !== "recovering", 240_000))) {
+        return describeEnd(`${direction} healthy or blocked`);
+      }
+      if (target.health[direction] === "healthy") return null;
       await target.retry();
-      if (!(await reaches("healthy"))) return describeEnd("consumer healthy after Try again");
-    }
-    return (await waitFor(target, () => target.health.producer !== "recovering", 240_000))
-      ? null
-      : describeEnd("producer healthy or blocked");
+      return (await reaches(direction, "healthy"))
+        ? null
+        : describeEnd(`${direction} healthy after Try again`);
+    };
+    const receiveEnd = target.mediaFlows
+      ? await endsHealthy("consumer")
+      : (await reaches("consumer", "blocked"))
+        ? null
+        : describeEnd("consumer blocked");
+    return receiveEnd ?? (await endsHealthy("producer"));
   } finally {
     await stopRig(target);
     rig = null;
@@ -297,7 +300,7 @@ const seedsFrom = (first: number, last: number) =>
   Array.from({ length: last - first + 1 }, (_, index) => first + index);
 
 describe("the hook's recovery under random interleavings", () => {
-  it("ends every receive failure healthy or reported blocked, and recovers a blocked path on Try again", async () => {
+  it("ends every failure healthy or reported blocked, and recovers a blocked path on Try again", async () => {
     const seeds = process.env.RIG_EXTENDED
       ? seedsFrom(61, 1_060)
       : [...SEEDS_STUCK_RECOVERING_BEFORE, ...seedsFrom(1, 60)];
