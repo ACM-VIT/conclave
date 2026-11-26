@@ -15,6 +15,8 @@ import {
   resolveInFlightReconnectRequest,
   resolveReconnectStartAttempts,
   nextStepAfterScopedRebuild,
+  planScopedRebuild,
+  type PathProbe,
 } from "../src/app/lib/reconnect-request-policy";
 import {
   INITIAL_MEDIA_PATH_RECOVERY,
@@ -299,10 +301,20 @@ describe("the recovery a Retry starts fresh", () => {
     direction: "consumer",
     transportId,
     reason: "Consumer transport carried no media",
+    failingProducers: [],
+    silentWhileConnected: true,
     relayOnly,
     reconnectInFlight: false,
   });
-  const rebuiltOnce = planMediaPathFailure(INITIAL_MEDIA_PATH_RECOVERY, receiveFailure("t1", false));
+  const asked = planMediaPathFailure(INITIAL_MEDIA_PATH_RECOVERY, receiveFailure("t1", false));
+  const rebuiltOnce = {
+    step: asked.step,
+    recovery: advanceMediaPathRecovery(asked.recovery, {
+      type: "rebuild-started",
+      direction: "consumer",
+      transportId: "t1",
+    }),
+  };
 
   it("uses a fixture that differs from a fresh Retry in every per-attempt field", () => {
     expect(Object.keys(dirty).sort()).toEqual(Object.keys(userRetry).sort());
@@ -365,6 +377,19 @@ describe("the recovery a Retry starts fresh", () => {
     expect(planMediaPathFailure(rebuiltOnce.recovery, receiveFailure("t3", true)).step).toBe(
       "report-blocked",
     );
+  });
+});
+
+describe("what a reconnect run does once its check of the failed path ends", () => {
+  it.each<[PathProbe, boolean, string]>([
+    ["cancelled", false, "rejoin-after-cancelled-check"],
+    ["cancelled", true, "rejoin-after-cancelled-check"],
+    ["carrying", false, "keep-proven-path"],
+    ["carrying", true, "keep-replaced-path"],
+    ["not-carrying", true, "keep-replaced-path"],
+    ["not-carrying", false, "rebuild"],
+  ])("after a %s check with the failed path replaced %s it will %s", (probe, failedPathChanged, plan) => {
+    expect(planScopedRebuild({ probe, failedPathChanged })).toBe(plan);
   });
 });
 

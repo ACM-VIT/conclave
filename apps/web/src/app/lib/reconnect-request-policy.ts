@@ -26,7 +26,6 @@ export type FailedMediaPath = {
   direction: MediaDirection;
   transportId: string;
   generation: number;
-  failingProducers: string[];
 };
 
 /**
@@ -90,6 +89,26 @@ export const planReconnectSettlement = ({
     runUserRetry,
     replayDeferredRebuilds: rejoined && !leaving && !runUserRetry,
   };
+};
+
+export type PathProbe = "carrying" | "not-carrying" | "cancelled";
+
+export type ScopedRebuildPlan =
+  | "rebuild"
+  | "keep-proven-path"
+  | "keep-replaced-path"
+  | "rejoin-after-cancelled-check";
+
+export const planScopedRebuild = ({
+  probe,
+  failedPathChanged,
+}: {
+  probe: PathProbe;
+  failedPathChanged: boolean;
+}): ScopedRebuildPlan => {
+  if (probe === "cancelled") return "rejoin-after-cancelled-check";
+  if (failedPathChanged) return "keep-replaced-path";
+  return probe === "carrying" ? "keep-proven-path" : "rebuild";
 };
 
 export type ScopedRebuildOutcome = "rebuilt" | "stale" | "failed";

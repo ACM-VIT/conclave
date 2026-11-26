@@ -37,11 +37,13 @@ import {
   nextStepAfterScopedRebuild,
   planMediaRebuildScope,
   planReconnectSettlement,
+  planScopedRebuild,
   resolveInFlightReconnectRequest,
   resolveReconnectStartAttempts,
   restartForUserRetry,
   type ReconnectAttemptState,
   type ReconnectFailureKind,
+  type PathProbe,
   type ReconnectRequest,
   type ScopedRebuildOutcome,
 } from "../lib/reconnect-request-policy";
@@ -179,7 +181,6 @@ import {
   windowProvesDelivery,
   screenPacketsGoMissing,
   screenVideoAwaitingSenderCheck,
-  senderSentMore,
   type ScreenShareWatch,
   type SenderPacketCounts,
   resolveRebuildRelayOnly,
@@ -196,7 +197,11 @@ import {
   mediaReachedFarEnd,
   sendPathExpectation,
   type PublishedStream,
-  iceRestartBroughtMediaBack,
+  expectationAfterIceRestart,
+  judgeIceRestart,
+  type FailedPath,
+  type IceRestartVerdict,
+  type SenderPacketsReading,
   readMediaPath,
   type MediaPathReading,
   type MediaPathWatch,
@@ -346,8 +351,6 @@ const MEDIA_PATH_PROOF_SAMPLE_DEADLINE_MS = Math.max(
   MEDIA_PATH_STATS_DEADLINE_MS,
 );
 
-type PathProbe = "carrying" | "not-carrying" | "cancelled";
-
 const withDeadline = <T,>(promise: Promise<T>, ms: number): Promise<T> =>
   new Promise<T>((resolve, reject) => {
     const timer = window.setTimeout(() => reject(new Error("timed out")), ms);
@@ -362,10 +365,6 @@ const withDeadline = <T,>(promise: Promise<T>, ms: number): Promise<T> =>
       },
     );
   });
-
-type SenderPacketsReading =
-  | { asked: false }
-  | { asked: true; sent: SenderPacketCounts | null };
 
 const NOT_ASKED: SenderPacketsReading = { asked: false };
 const PARTICIPANT_RECONNECTING_STATUS_FALLBACK_MS = 30000;
@@ -1224,7 +1223,7 @@ export function useMeetSocket({
   );
   const reconnectGenerationRef = useRef(0);
   const carriesMediaNowRef = useRef<
-    (direction: "producer" | "consumer", mustProve: string[]) => Promise<PathProbe>
+    (direction: "producer" | "consumer", mustProve: () => string[]) => Promise<PathProbe>
   >(async () => "not-carrying");
   const cancelPathProbeRef = useRef<(() => void) | null>(null);
   const reconnectBackoffCancelRef = useRef<(() => void) | null>(null);
@@ -1598,17 +1597,11 @@ export function useMeetSocket({
     isTtsDisabledRef.current = isTtsDisabled;
   }, [isTtsDisabled]);
 
-  // An ICE restart could not bring this transport back. Rebuild the
-  // transports once, through TURN alone when TURN is configured, and tell the
-  // user if media still cannot get through. Several watchers can see the same
-  // failure, so each transport escalates once until it connects again or
-  // media flows on it.
   const escalateMediaPathFailure = useCallback(
     (
       transportKind: "producer" | "consumer",
       transport: Transport,
-      reason: string,
-      failingProducers: string[] = [],
+      failure: Omit<FailedPath, "transportId">,
     ) => {
       const currentTransport =
         transportKind === "producer"
@@ -1617,11 +1610,12 @@ export function useMeetSocket({
       // A check that ends after its transport was replaced on purpose says
       // nothing about the path in use now.
       if (transport !== currentTransport || transport.closed) return;
+      const { reason } = failure;
       const before = mediaPathRecoveryRef.current;
       const { step, recovery } = planMediaPathFailure(before, {
+        ...failure,
         direction: transportKind,
         transportId: transport.id,
-        reason,
         relayOnly: relayOnlyIceRef.current,
         reconnectInFlight: reconnectInFlightRef.current,
       });
@@ -1644,14 +1638,13 @@ export function useMeetSocket({
       }
 
       console.warn(`[Meets] ${reason}. Rebuilding the ${transportKind} transport.`);
-      void handleReconnectRef.current?.({
+      void handleReconnectRef.current({
         refreshIceServers: true,
         failedDirections: [transportKind],
         failedPath: {
           direction: transportKind,
           transportId: transport.id,
           generation: reconnectGenerationRef.current,
-          failingProducers,
         },
         ...(step === "reconnect-relay-only" ? { relayOnly: { reason } } : {}),
       });
@@ -1668,9 +1661,6 @@ export function useMeetSocket({
 
   const noteMediaPathConnected = useCallback(
     (transportKind: "producer" | "consumer", transport: Transport) => {
-      // A transport that connects again may escalate again. Connecting proves
-      // nothing else: the watchdog marks the direction healthy, and trusts
-      // its relay, only once media is seen flowing on it.
       updateMediaPathRecovery({
         type: "transport-connected",
         direction: transportKind,
@@ -4110,11 +4100,11 @@ export function useMeetSocket({
                       ) {
                         void attemptIceRestart("producer", transport).then((restarted) => {
                           if (!restarted) {
-                            escalateMediaPathFailure(
-                              "producer",
-                              transport,
-                              "Producer transport interrupted",
-                            );
+                            escalateMediaPathFailure("producer", transport, {
+                              reason: "Producer transport interrupted",
+                              failingProducers: [],
+                              silentWhileConnected: false,
+                            });
                           }
                         });
                       }
@@ -4134,11 +4124,11 @@ export function useMeetSocket({
                 if (!intentionalDisconnectRef.current) {
                   void attemptIceRestart("producer", transport).then((restarted) => {
                     if (!restarted) {
-                      escalateMediaPathFailure(
-                        "producer",
-                        transport,
-                        "Producer transport failed",
-                      );
+                      escalateMediaPathFailure("producer", transport, {
+                        reason: "Producer transport failed",
+                        failingProducers: [],
+                        silentWhileConnected: false,
+                      });
                     }
                   });
                 }
@@ -4360,11 +4350,11 @@ export function useMeetSocket({
                       ) {
                         void attemptIceRestart("consumer", transport).then((restarted) => {
                           if (!restarted) {
-                            escalateMediaPathFailure(
-                              "consumer",
-                              transport,
-                              "Consumer transport interrupted",
-                            );
+                            escalateMediaPathFailure("consumer", transport, {
+                              reason: "Consumer transport interrupted",
+                              failingProducers: [],
+                              silentWhileConnected: false,
+                            });
                           }
                         });
                       }
@@ -4384,11 +4374,11 @@ export function useMeetSocket({
                 if (!intentionalDisconnectRef.current) {
                   void attemptIceRestart("consumer", transport).then((restarted) => {
                     if (!restarted) {
-                      escalateMediaPathFailure(
-                        "consumer",
-                        transport,
-                        "Consumer transport failed",
-                      );
+                      escalateMediaPathFailure("consumer", transport, {
+                        reason: "Consumer transport failed",
+                        failingProducers: [],
+                        silentWhileConnected: false,
+                      });
                     }
                   });
                 }
@@ -6464,7 +6454,7 @@ export function useMeetSocket({
     // Transports seen carrying media. Connecting alone does not count: a path
     // can pass ICE checks and drop every media packet.
     const carriedMediaOnce = transportsCarryingMediaRef.current;
-    let sampling = false;
+    const sampling = { producer: false, consumer: false };
 
     const isSending = (producer: Producer | null): boolean =>
       Boolean(
@@ -6633,12 +6623,12 @@ export function useMeetSocket({
       transport: Transport,
       failingProducers: string[],
       unproven: Set<string>,
-    ): Promise<boolean> => {
+    ): Promise<IceRestartVerdict> => {
       for (const producerId of failingProducers) unproven.add(producerId);
-      if (!carriedMediaOnce.has(transport)) return false;
+      if (!carriedMediaOnce.has(transport)) return "not-recovered";
       try {
         const before = (await readPath(kind, transport)).reading;
-        if (!(await attemptIceRestart(kind, transport))) return false;
+        if (!(await attemptIceRestart(kind, transport))) return "not-recovered";
         const halfWindow = () =>
           new Promise<void>((resolve) =>
             window.setTimeout(resolve, MEDIA_PATH_FLOW_CHECK_MS / 2),
@@ -6685,11 +6675,13 @@ export function useMeetSocket({
           for (const producerId of stillUnproven) unproven.add(producerId);
           return stillUnproven.length === 0;
         };
-        return iceRestartBroughtMediaBack({
+        return judgeIceRestart({
           replaced,
-          expectsMedia:
-            (now?.expectsMedia ?? false) ||
-            senderSentMore(sentIn(sentBefore), sentIn(sentAfter)),
+          expectation: expectationAfterIceRestart({
+            expectsMedia: now?.expectsMedia ?? false,
+            senderBefore: sentBefore,
+            senderAfter: sentAfter,
+          }),
           mediaReached:
             now !== null &&
             after !== null &&
@@ -6697,7 +6689,7 @@ export function useMeetSocket({
             producersDelivered(),
         });
       } catch {
-        return false;
+        return "not-recovered";
       }
     };
 
@@ -6711,7 +6703,7 @@ export function useMeetSocket({
         !transport ||
         transport.closed ||
         intentionalDisconnectRef.current ||
-        reconnectInFlightRef.current
+        mediaPathRecoveryRef.current[kind].escalation !== null
       ) {
         entry.transport = transport ?? null;
         entry.watch = INITIAL_MEDIA_PATH_WATCH;
@@ -6844,16 +6836,25 @@ export function useMeetSocket({
         // ICE says connected but nothing arrives, so treat it as a failed
         // path: restart ICE, and rebuild if media still does not move.
         const unproven = new Set<string>();
-        if (await restartIceAndCheckMedia(kind, transport, failingProducers, unproven)) return;
-        if (!sampled()) return;
-        escalateMediaPathFailure(
+        const verdict = await restartIceAndCheckMedia(
           kind,
           transport,
-          kind === "producer"
-            ? "Producer transport carried no media"
-            : "Consumer transport carried no media",
-          [...unproven],
+          failingProducers,
+          unproven,
         );
+        if (!sampled()) return;
+        if (verdict === "media-arrived") {
+          updateMediaPathRecovery({ type: "media-flowing", direction: kind });
+        }
+        if (verdict !== "not-recovered") return;
+        escalateMediaPathFailure(kind, transport, {
+          reason:
+            kind === "producer"
+              ? "Producer transport carried no media"
+              : "Consumer transport carried no media",
+          failingProducers: [...unproven],
+          silentWhileConnected: true,
+        });
         return;
       }
       // An ICE restart can revive a path that carried media before. One that
@@ -6865,14 +6866,14 @@ export function useMeetSocket({
         return;
       }
       if (!sampled()) return;
-      escalateMediaPathFailure(
-        kind,
-        transport,
-        kind === "producer"
-          ? "Producer transport could not connect"
-          : "Consumer transport could not connect",
+      escalateMediaPathFailure(kind, transport, {
+        reason:
+          kind === "producer"
+            ? "Producer transport could not connect"
+            : "Consumer transport could not connect",
         failingProducers,
-      );
+        silentWhileConnected: false,
+      });
     };
 
     carriesMediaNowRef.current = async (kind, mustProve) => {
@@ -6913,7 +6914,7 @@ export function useMeetSocket({
             sfuStart: sentIn(ownStart),
             sfuEnd: sentIn(ownEnd),
             sfuReports,
-            mustProve,
+            mustProve: mustProve(),
           })
           ? "carrying"
           : "not-carrying";
@@ -6937,13 +6938,13 @@ export function useMeetSocket({
     };
 
     const interval = window.setInterval(() => {
-      if (sampling) return;
-      sampling = true;
-      void Promise.all([sample("producer"), sample("consumer")]).finally(
-        () => {
-          sampling = false;
-        },
-      );
+      for (const kind of ["producer", "consumer"] as const) {
+        if (sampling[kind]) continue;
+        sampling[kind] = true;
+        void sample(kind).finally(() => {
+          sampling[kind] = false;
+        });
+      }
     }, MEDIA_PATH_SAMPLE_INTERVAL_MS);
 
     return () => window.clearInterval(interval);
@@ -9924,12 +9925,13 @@ export function useMeetSocket({
 
   // A failed receive path is rebuilt on its own: a new receive transport, then
   // every published stream consumed again. Sending is not touched.
-  const rebuildReceivePath = useCallback(async (): Promise<DirectionRebuildResult> => {
+  const rebuildReceivePath = useCallback(async (onStart: () => void): Promise<DirectionRebuildResult> => {
     const socket = socketRef.current;
     const device = deviceRef.current;
     if (!socket?.connected || !device) {
       return { rebuilt: false, reason: "signaling is not connected" };
     }
+    onStart();
     resetReceiveState();
     const transport = consumerTransportRef.current;
     if (transport && !transport.closed) {
@@ -9967,11 +9969,12 @@ export function useMeetSocket({
 
   // A failed send path is rebuilt on its own: a new send transport, then the
   // microphone, camera and screen share published on it again.
-  const rebuildSendPath = useCallback(async (): Promise<DirectionRebuildResult> => {
+  const rebuildSendPath = useCallback(async (onStart: () => void): Promise<DirectionRebuildResult> => {
     const socket = socketRef.current;
     if (!socket?.connected) {
       return { rebuilt: false, reason: "signaling is not connected" };
     }
+    onStart();
     const transport = producerTransportRef.current;
     if (transport && !transport.closed) {
       intentionallyClosedTransportsRef.current.add(transport);
@@ -10032,7 +10035,17 @@ export function useMeetSocket({
   );
 
   const handleReconnect = useCallback(async (options?: ReconnectRequest) => {
+    const failedPath = options?.failedPath;
+    const noteEscalation = (type: "rebuild-started" | "escalation-settled") => {
+      if (!failedPath) return;
+      updateMediaPathRecovery({
+        type,
+        direction: failedPath.direction,
+        transportId: failedPath.transportId,
+      });
+    };
     if (reconnectInFlightRef.current) {
+      noteEscalation("escalation-settled");
       const cancelBackoff = reconnectBackoffCancelRef.current;
       const decision = resolveInFlightReconnectRequest(options, {
         isWaitingForBackoff: reconnectPhaseRef.current === "waiting",
@@ -10115,7 +10128,6 @@ export function useMeetSocket({
         }
         if (reconnectGeneration !== reconnectGenerationRef.current) return;
         if (intentionalDisconnectRef.current) return;
-        const failedPath = options?.failedPath;
         const failedPathChanged = (): boolean => {
           if (!failedPath || failedPath.direction !== scopedDirection) return false;
           const transport =
@@ -10131,25 +10143,41 @@ export function useMeetSocket({
         };
         let outcome: ScopedRebuildOutcome;
         let failure: string | null = null;
+        const failingProducers = (): string[] => {
+          const held = mediaPathRecoveryRef.current[scopedDirection].escalation;
+          return failedPath && held?.transportId === failedPath.transportId
+            ? held.failingProducers
+            : [];
+        };
         const probe: PathProbe = failedPathChanged()
           ? "not-carrying"
-          : await carriesMediaNowRef.current(
-              scopedDirection,
-              failedPath?.direction === scopedDirection ? failedPath.failingProducers : [],
-            );
+          : await carriesMediaNowRef.current(scopedDirection, failingProducers);
         if (reconnectGeneration !== reconnectGenerationRef.current) return;
         if (intentionalDisconnectRef.current) return;
-        if (probe === "cancelled") {
+        const plan = planScopedRebuild({
+          probe,
+          failedPathChanged: failedPathChanged(),
+        });
+        if (plan === "rejoin-after-cancelled-check") {
           outcome = "failed";
           failure = "its check was cancelled";
-        } else if (failedPathChanged() || probe === "carrying") {
+        } else if (plan === "keep-replaced-path") {
           outcome = "stale";
+        } else if (plan === "keep-proven-path") {
+          outcome = "stale";
+          if (failedPath?.direction === scopedDirection) {
+            updateMediaPathRecovery({
+              type: "media-flowing",
+              direction: scopedDirection,
+            });
+          }
         } else {
           applyRequestedRelayPolicy("restart");
+          const noteRebuildStarted = () => noteEscalation("rebuild-started");
           const result =
             scopedDirection === "consumer"
-              ? await rebuildReceivePath()
-              : await rebuildSendPath();
+              ? await rebuildReceivePath(noteRebuildStarted)
+              : await rebuildSendPath(noteRebuildStarted);
           if (reconnectGeneration !== reconnectGenerationRef.current) return;
           if (intentionalDisconnectRef.current) return;
           outcome = result.rebuilt ? "rebuilt" : "failed";
@@ -10267,6 +10295,7 @@ export function useMeetSocket({
           const canReuseSocket =
             attemptState.mayReuseSocket && socketRef.current?.connected === true;
           attemptState.mayReuseSocket = true;
+          noteEscalation("rebuild-started");
           cleanupRoomResources({
             resetRoomId: false,
             preserveMeetingState: true,
@@ -10510,6 +10539,7 @@ export function useMeetSocket({
       });
       setConnectionState("error");
     } finally {
+      noteEscalation("escalation-settled");
       if (reconnectGeneration === reconnectGenerationRef.current) {
         reconnectInFlightRef.current = false;
         const { deferred, recovery } = takeDeferredRebuilds(
@@ -10527,13 +10557,13 @@ export function useMeetSocket({
         } else if (settlement.replayDeferredRebuilds) {
           // A transport this rejoin built may have failed before it finished.
           // Its rebuild waited for the rejoin, so run it now.
-          for (const { direction, transportId, reason } of deferred) {
+          for (const { direction, transportId, ...failure } of deferred) {
             const transport =
               direction === "producer"
                 ? producerTransportRef.current
                 : consumerTransportRef.current;
             if (transport?.id !== transportId) continue;
-            escalateMediaPathFailure(direction, transport, reason);
+            escalateMediaPathFailure(direction, transport, failure);
           }
         }
         reconcileRelayPathsNow();
@@ -10564,6 +10594,7 @@ export function useMeetSocket({
     setConnectionState,
     setMeetError,
     socketRef,
+    updateMediaPathRecovery,
     updateReconnectRecoveryStatus,
     waitForReconnectBackoff,
     onSocketReady,

@@ -25,7 +25,10 @@ import {
   type ConsumedStream,
   type ScreenShareWatch,
   deliveredRtpBytes,
-  iceRestartBroughtMediaBack,
+  expectationAfterIceRestart,
+  judgeIceRestart,
+  type MediaPathRecovery,
+  type SenderPacketsReading,
   advanceProducerDeliveries,
   judgeProducerDelivery,
   verdictProves,
@@ -372,20 +375,32 @@ describe("a direction's media path recovery", () => {
     direction: "consumer",
     transportId,
     reason: "Consumer transport carried no media",
+    failingProducers: [],
+    silentWhileConnected: true,
     relayOnly: false,
     reconnectInFlight: false,
     ...overrides,
   });
   const connected = (transportId: string) =>
     ({ type: "transport-connected", direction: "consumer", transportId }) as const;
+  const started = (transportId: string, direction: "producer" | "consumer" = "consumer") =>
+    ({ type: "rebuild-started", direction, transportId }) as const;
+  const settled = (transportId: string, direction: "producer" | "consumer" = "consumer") =>
+    ({ type: "escalation-settled", direction, transportId }) as const;
+  const flowing = { type: "media-flowing", direction: "consumer" } as const;
 
-  // t1 fails, its rebuild t2 connects but carries nothing, so the receive
-  // path ends blocked on t2.
+  const rebuiltAfter = (recovery: MediaPathRecovery, failed: MediaPathFailure) => {
+    const asked = planMediaPathFailure(recovery, failed);
+    expect(["reconnect", "reconnect-relay-only"]).toContain(asked.step);
+    return [started, settled].reduce(
+      (next, event) => advanceMediaPathRecovery(next, event(failed.transportId, failed.direction)),
+      asked.recovery,
+    );
+  };
+
   const blockedOnT2 = () => {
-    const rebuild = planMediaPathFailure(INITIAL_MEDIA_PATH_RECOVERY, failure("t1"));
-    expect(rebuild.step).toBe("reconnect-relay-only");
     const blocked = planMediaPathFailure(
-      advanceMediaPathRecovery(rebuild.recovery, connected("t2")),
+      rebuiltAfter(INITIAL_MEDIA_PATH_RECOVERY, failure("t1")),
       failure("t2", { relayOnly: true }),
     );
     expect(blocked.step).toBe("report-blocked");
@@ -394,17 +409,14 @@ describe("a direction's media path recovery", () => {
   };
 
   it("starts the ladder again when media resumes on a blocked transport that never reconnected", () => {
-    const flowing = advanceMediaPathRecovery(blockedOnT2(), {
-      type: "media-flowing",
-      direction: "consumer",
-    });
-    expect(readMediaPathHealth(flowing)).toEqual(HEALTHY_MEDIA_PATHS);
+    const resumed = advanceMediaPathRecovery(blockedOnT2(), flowing);
+    expect(readMediaPathHealth(resumed)).toEqual(HEALTHY_MEDIA_PATHS);
 
-    const rebuildAgain = planMediaPathFailure(flowing, failure("t2", { relayOnly: true }));
+    const rebuildAgain = planMediaPathFailure(resumed, failure("t2", { relayOnly: true }));
     expect(rebuildAgain.step).toBe("reconnect");
 
     const blockedAgain = planMediaPathFailure(
-      advanceMediaPathRecovery(rebuildAgain.recovery, connected("t3")),
+      rebuiltAfter(resumed, failure("t2", { relayOnly: true })),
       failure("t3", { relayOnly: true }),
     );
     expect(blockedAgain.step).toBe("report-blocked");
@@ -418,12 +430,16 @@ describe("a direction's media path recovery", () => {
       blockedOnT2(),
       failure("t9", { direction: "producer", reconnectInFlight: true }),
     ).recovery;
-    expect(
-      advanceMediaPathRecovery(held, { type: "media-flowing", direction: "consumer" }),
-    ).toEqual({ ...held, consumer: INITIAL_MEDIA_PATH_RECOVERY.consumer });
+    expect(advanceMediaPathRecovery(held, flowing)).toEqual({
+      ...held,
+      consumer: INITIAL_MEDIA_PATH_RECOVERY.consumer,
+    });
+
+    const handling = planMediaPathFailure(INITIAL_MEDIA_PATH_RECOVERY, failure("t1")).recovery;
+    expect(advanceMediaPathRecovery(handling, flowing)).toEqual(INITIAL_MEDIA_PATH_RECOVERY);
   });
 
-  it("acts once on a failure that several watchers report", () => {
+  it("acts once on a failure that several watchers report while it is being handled", () => {
     const first = planMediaPathFailure(INITIAL_MEDIA_PATH_RECOVERY, failure("t1"));
     const second = planMediaPathFailure(first.recovery, failure("t1"));
 
@@ -431,12 +447,73 @@ describe("a direction's media path recovery", () => {
     expect(second.recovery).toBe(first.recovery);
   });
 
-  it("acts on a transport again once it reconnects", () => {
-    const reconnected = advanceMediaPathRecovery(blockedOnT2(), connected("t2"));
+  it("adds what a later watcher saw to the failure being handled", () => {
+    const first = planMediaPathFailure(
+      INITIAL_MEDIA_PATH_RECOVERY,
+      failure("s1", { direction: "producer", silentWhileConnected: false }),
+    );
+    const second = planMediaPathFailure(
+      first.recovery,
+      failure("s1", {
+        direction: "producer",
+        failingProducers: ["camera"],
+        reconnectInFlight: true,
+      }),
+    );
 
-    expect(planMediaPathFailure(reconnected, failure("t2", { relayOnly: true })).step).toBe(
+    expect(second.step).toBe("already-escalated");
+    expect(second.recovery.producer.escalation).toMatchObject({
+      transportId: "s1",
+      failingProducers: ["camera"],
+      silentWhileConnected: true,
+    });
+  });
+
+  it("counts a rebuild only once it starts", () => {
+    const asked = planMediaPathFailure(INITIAL_MEDIA_PATH_RECOVERY, failure("t1"));
+    expect(asked.step).toBe("reconnect-relay-only");
+    expect(asked.recovery.consumer.rebuildTried).toBe(false);
+
+    const skipped = advanceMediaPathRecovery(asked.recovery, settled("t1"));
+    expect(planMediaPathFailure(skipped, failure("t1")).step).toBe("reconnect-relay-only");
+
+    const rebuilt = advanceMediaPathRecovery(
+      advanceMediaPathRecovery(asked.recovery, started("t1")),
+      settled("t1"),
+    );
+    expect(planMediaPathFailure(rebuilt, failure("t2", { relayOnly: true })).step).toBe(
       "report-blocked",
     );
+  });
+
+  it("acts on a transport again once the run that handled it ends without replacing it", () => {
+    const asked = planMediaPathFailure(INITIAL_MEDIA_PATH_RECOVERY, failure("t1"));
+    const ended = advanceMediaPathRecovery(asked.recovery, settled("t1"));
+
+    expect(ended.consumer.escalation).toBeNull();
+    expect(readMediaPathHealth(ended).consumer).toBe("recovering");
+    expect(planMediaPathFailure(ended, failure("t1")).step).toBe("reconnect-relay-only");
+  });
+
+  it("ignores a rebuild start or an end that belongs to a failure it no longer handles", () => {
+    const asked = planMediaPathFailure(INITIAL_MEDIA_PATH_RECOVERY, failure("t1"));
+    const retried = advanceMediaPathRecovery(asked.recovery, { type: "user-retry" });
+    expect(advanceMediaPathRecovery(retried, started("t1"))).toBe(retried);
+    expect(advanceMediaPathRecovery(retried, settled("t1"))).toBe(retried);
+
+    const other = planMediaPathFailure(retried, failure("t2")).recovery;
+    expect(advanceMediaPathRecovery(other, started("t1"))).toBe(other);
+    expect(advanceMediaPathRecovery(other, settled("t1"))).toBe(other);
+    expect(advanceMediaPathRecovery(other, started("t2", "producer"))).toBe(other);
+  });
+
+  it("keeps the failure being handled when its transport only connects", () => {
+    const asked = planMediaPathFailure(
+      INITIAL_MEDIA_PATH_RECOVERY,
+      failure("t1", { silentWhileConnected: false }),
+    ).recovery;
+
+    expect(advanceMediaPathRecovery(asked, connected("t1"))).toBe(asked);
   });
 
   it("holds a rebuild asked for during a rejoin, one per direction, until the rejoin settles", () => {
@@ -446,26 +523,74 @@ describe("a direction's media path recovery", () => {
     ).recovery;
     recovery = planMediaPathFailure(
       recovery,
-      failure("s1", { direction: "producer", reason: "send failed", reconnectInFlight: true }),
+      failure("s1", {
+        direction: "producer",
+        reason: "send failed",
+        failingProducers: ["camera"],
+        reconnectInFlight: true,
+      }),
     ).recovery;
 
     const taken = takeDeferredRebuilds(recovery);
     expect(taken.deferred).toEqual([
-      { direction: "producer", transportId: "s1", reason: "send failed" },
-      { direction: "consumer", transportId: "r1", reason: "Consumer transport carried no media" },
+      {
+        direction: "producer",
+        transportId: "s1",
+        reason: "send failed",
+        failingProducers: ["camera"],
+        silentWhileConnected: true,
+      },
+      {
+        direction: "consumer",
+        transportId: "r1",
+        reason: "Consumer transport carried no media",
+        failingProducers: [],
+        silentWhileConnected: true,
+      },
     ]);
-    expect(taken.recovery).toEqual(INITIAL_MEDIA_PATH_RECOVERY);
+    expect(readMediaPathHealth(recovery)).toEqual({ producer: "recovering", consumer: "recovering" });
+    expect(takeDeferredRebuilds(taken.recovery).deferred).toEqual([]);
+    expect(readMediaPathHealth(taken.recovery)).toEqual(readMediaPathHealth(recovery));
   });
 
-  it("drops a held rebuild once its transport connects", () => {
+  it("keeps every producer reported for a held rebuild, and starts over for another transport", () => {
+    const held = (recovery: MediaPathRecovery, transportId: string, failingProducers: string[]) =>
+      planMediaPathFailure(
+        recovery,
+        failure(transportId, { direction: "producer", failingProducers, reconnectInFlight: true }),
+      ).recovery;
+    const both = held(held(INITIAL_MEDIA_PATH_RECOVERY, "s1", ["camera"]), "s1", ["mic", "camera"]);
+    expect(both.producer.deferredRebuild?.failingProducers).toEqual(["camera", "mic"]);
+
+    expect(held(both, "s2", ["screen"]).producer.deferredRebuild).toMatchObject({
+      transportId: "s2",
+      failingProducers: ["screen"],
+    });
+  });
+
+  it("drops a held rebuild for a transport that could not connect once it connects", () => {
     const held = planMediaPathFailure(
       INITIAL_MEDIA_PATH_RECOVERY,
-      failure("r1", { reconnectInFlight: true }),
+      failure("r1", { reconnectInFlight: true, silentWhileConnected: false }),
     ).recovery;
 
     expect(takeDeferredRebuilds(advanceMediaPathRecovery(held, connected("r1"))).deferred).toEqual(
       [],
     );
+  });
+
+  it("keeps a held rebuild for a connected path that carried nothing when it reports connected again", () => {
+    const held = planMediaPathFailure(
+      INITIAL_MEDIA_PATH_RECOVERY,
+      failure("s1", { direction: "producer", failingProducers: ["camera"], reconnectInFlight: true }),
+    ).recovery;
+    const reconnected = advanceMediaPathRecovery(held, {
+      type: "transport-connected",
+      direction: "producer",
+      transportId: "s1",
+    });
+
+    expect(takeDeferredRebuilds(reconnected).deferred).toHaveLength(1);
   });
 
   it("gives Try again a fresh ladder but keeps the warning until media flows", () => {
@@ -477,7 +602,7 @@ describe("a direction's media path recovery", () => {
 
   it("keeps a rebuild's ladder when the new transport only connects", () => {
     const rebuilt = advanceMediaPathRecovery(
-      planMediaPathFailure(INITIAL_MEDIA_PATH_RECOVERY, failure("t1")).recovery,
+      rebuiltAfter(INITIAL_MEDIA_PATH_RECOVERY, failure("t1")),
       connected("t2"),
     );
 
@@ -485,6 +610,15 @@ describe("a direction's media path recovery", () => {
     expect(planMediaPathFailure(rebuilt, failure("t2", { relayOnly: true })).step).toBe(
       "report-blocked",
     );
+  });
+
+  it("reports a blocked direction once and holds nothing for it", () => {
+    const blocked = blockedOnT2();
+    expect(blocked.consumer.escalation).toBeNull();
+
+    const again = planMediaPathFailure(blocked, failure("t2", { relayOnly: true }));
+    expect(again.step).toBe("report-blocked");
+    expect(again.recovery).toBe(blocked);
   });
 
   it("stays blocked through new trouble and other directions' rebuilds", () => {
@@ -548,36 +682,74 @@ describe("verifying an ICE restart on a silent path", () => {
       server: { producerPaused },
     });
 
+  const notAsked: SenderPacketsReading = { asked: false };
+  const counted = (sent: number | null): SenderPacketsReading => ({
+    asked: true,
+    sent: sent === null ? null : { screen: sent },
+  });
+
   it("passes once media reaches the far end again", () => {
-    expect(
-      iceRestartBroughtMediaBack({ replaced: false, expectsMedia: true, mediaReached: true }),
-    ).toBe(true);
+    expect(judgeIceRestart({ replaced: false, expectation: "expected", mediaReached: true })).toBe(
+      "media-arrived",
+    );
   });
 
   it("fails while media is still expected and none arrived", () => {
     expect(
-      iceRestartBroughtMediaBack({
+      judgeIceRestart({
         replaced: false,
-        expectsMedia: receivePathExpectsMedia([lastCamera(false)], true),
+        expectation: expectationAfterIceRestart({
+          expectsMedia: receivePathExpectsMedia([lastCamera(false)], true),
+          senderBefore: notAsked,
+          senderAfter: notAsked,
+        }),
         mediaReached: false,
       }),
-    ).toBe(false);
+    ).toBe("not-recovered");
   });
 
   it("does not fail when the last camera paused during the check", () => {
     expect(
-      iceRestartBroughtMediaBack({
+      judgeIceRestart({
         replaced: false,
-        expectsMedia: receivePathExpectsMedia([lastCamera(true)], true),
+        expectation: expectationAfterIceRestart({
+          expectsMedia: receivePathExpectsMedia([lastCamera(true)], true),
+          senderBefore: notAsked,
+          senderAfter: notAsked,
+        }),
         mediaReached: false,
       }),
-    ).toBe(true);
+    ).toBe("nothing-expected");
   });
 
   it("leaves a transport replaced during the check to the rebuild that replaced it", () => {
-    expect(
-      iceRestartBroughtMediaBack({ replaced: true, expectsMedia: true, mediaReached: false }),
-    ).toBe(true);
+    expect(judgeIceRestart({ replaced: true, expectation: "expected", mediaReached: false })).toBe(
+      "replaced",
+    );
+  });
+
+  it("never takes an expectation it could not establish for a recovery", () => {
+    expect(judgeIceRestart({ replaced: false, expectation: "unknown", mediaReached: false })).toBe(
+      "not-recovered",
+    );
+    expect(judgeIceRestart({ replaced: false, expectation: "unknown", mediaReached: true })).toBe(
+      "media-arrived",
+    );
+  });
+
+  it.each<[string, boolean, SenderPacketsReading, SenderPacketsReading, string]>([
+    ["a stream that should flow", true, notAsked, notAsked, "expected"],
+    ["a stream that should flow, whatever the sharer's counts say", true, counted(null), counted(null), "expected"],
+    ["nothing to ask the sharer about", false, notAsked, notAsked, "not-expected"],
+    ["a share that stopped being checked", false, counted(4), notAsked, "not-expected"],
+    ["a sharer that sent more", false, counted(4), counted(9), "expected"],
+    ["a sharer that sent nothing more", false, counted(4), counted(4), "not-expected"],
+    ["a first count that never arrived", false, counted(null), counted(9), "unknown"],
+    ["a second count that never arrived", false, counted(4), counted(null), "unknown"],
+    ["no counts at all", false, counted(null), counted(null), "unknown"],
+    ["a share first checked after the restart", false, notAsked, counted(9), "unknown"],
+  ])("reads %s", (_name, expectsMedia, senderBefore, senderAfter, expectation) => {
+    expect(expectationAfterIceRestart({ expectsMedia, senderBefore, senderAfter })).toBe(expectation);
   });
 });
 

@@ -414,15 +414,48 @@ export const advanceMediaPathWatch = (
   };
 };
 
-export const iceRestartBroughtMediaBack = ({
-  replaced,
+export type SenderPacketsReading =
+  | { asked: false }
+  | { asked: true; sent: SenderPacketCounts | null };
+
+export type MediaExpectation = "expected" | "not-expected" | "unknown";
+
+export const expectationAfterIceRestart = ({
   expectsMedia,
+  senderBefore,
+  senderAfter,
+}: {
+  expectsMedia: boolean;
+  senderBefore: SenderPacketsReading;
+  senderAfter: SenderPacketsReading;
+}): MediaExpectation => {
+  if (expectsMedia) return "expected";
+  if (!senderAfter.asked) return "not-expected";
+  if (!senderBefore.asked || senderBefore.sent === null || senderAfter.sent === null) {
+    return "unknown";
+  }
+  return senderSentMore(senderBefore.sent, senderAfter.sent) ? "expected" : "not-expected";
+};
+
+export type IceRestartVerdict =
+  | "replaced"
+  | "media-arrived"
+  | "nothing-expected"
+  | "not-recovered";
+
+export const judgeIceRestart = ({
+  replaced,
+  expectation,
   mediaReached,
 }: {
   replaced: boolean;
-  expectsMedia: boolean;
+  expectation: MediaExpectation;
   mediaReached: boolean;
-}): boolean => replaced || !expectsMedia || mediaReached;
+}): IceRestartVerdict => {
+  if (replaced) return "replaced";
+  if (mediaReached) return "media-arrived";
+  return expectation === "not-expected" ? "nothing-expected" : "not-recovered";
+};
 
 export type MediaPathEscalation =
   /**
@@ -536,30 +569,25 @@ export const HEALTHY_MEDIA_PATHS: MediaPathHealth = {
   consumer: "healthy",
 };
 
-/**
- * Everything one direction's recovery knows, kept together so that media
- * seen flowing again resets all of it at once and a later failure always
- * starts the ladder from the first rebuild.
- */
+export type FailedPath = {
+  transportId: string;
+  reason: string;
+  failingProducers: string[];
+  silentWhileConnected: boolean;
+};
+
 export type DirectionRecovery = {
   health: MediaPathHealthState;
-  /**
-   * The transport this direction last escalated. Several watchers see the
-   * same failure, and it is acted on once until that transport connects
-   * again or media flows.
-   */
-  escalatedTransportId: string | null;
-  /** A rebuild was tried since media last flowed, so the next failure is reported. */
+  escalation: FailedPath | null;
   rebuildTried: boolean;
-  /** A rebuild asked for while a rejoin was running, run once it settles. */
-  deferredRebuild: { transportId: string; reason: string } | null;
+  deferredRebuild: FailedPath | null;
 };
 
 export type MediaPathRecovery = Record<MediaDirection, DirectionRecovery>;
 
 const FRESH_DIRECTION: DirectionRecovery = {
   health: "healthy",
-  escalatedTransportId: null,
+  escalation: null,
   rebuildTried: false,
   deferredRebuild: null,
 };
@@ -590,16 +618,25 @@ const restartDirection = (
     ? recovery
     : { ...recovery, [direction]: FRESH_DIRECTION };
 
-/**
- * Trouble starts recovery and keeps a blocked direction blocked. Only media
- * seen flowing makes a direction healthy and clears its recovery: a
- * transport connecting, an unmute or a device change never does. Try again
- * starts the ladder over but keeps the warning until media flows.
- */
+const mergeFailedPath = (held: FailedPath, reported: FailedPath): FailedPath => {
+  const added = reported.failingProducers.filter(
+    (producerId) => !held.failingProducers.includes(producerId),
+  );
+  const silentWhileConnected = held.silentWhileConnected || reported.silentWhileConnected;
+  if (added.length === 0 && silentWhileConnected === held.silentWhileConnected) return held;
+  return {
+    ...held,
+    failingProducers: [...held.failingProducers, ...added],
+    silentWhileConnected,
+  };
+};
+
 export type MediaPathRecoveryEvent =
   | { type: "trouble"; direction: MediaDirection }
   | { type: "transport-connected"; direction: MediaDirection; transportId: string }
   | { type: "media-flowing"; direction: MediaDirection }
+  | { type: "rebuild-started"; direction: MediaDirection; transportId: string }
+  | { type: "escalation-settled"; direction: MediaDirection; transportId: string }
   | { type: "user-retry" }
   | { type: "reset" };
 
@@ -614,7 +651,7 @@ export const advanceMediaPathRecovery = (
       return MEDIA_DIRECTIONS.reduce(
         (next, direction) =>
           patchDirection(next, direction, {
-            escalatedTransportId: null,
+            escalation: null,
             rebuildTried: false,
             deferredRebuild: null,
           }),
@@ -627,66 +664,77 @@ export const advanceMediaPathRecovery = (
         health:
           recovery[event.direction].health === "blocked" ? "blocked" : "recovering",
       });
+    case "rebuild-started":
+      return recovery[event.direction].escalation?.transportId === event.transportId
+        ? patchDirection(recovery, event.direction, { rebuildTried: true })
+        : recovery;
+    case "escalation-settled":
+      return recovery[event.direction].escalation?.transportId === event.transportId
+        ? patchDirection(recovery, event.direction, { escalation: null })
+        : recovery;
     case "transport-connected": {
-      const current = recovery[event.direction];
-      return patchDirection(recovery, event.direction, {
-        escalatedTransportId:
-          current.escalatedTransportId === event.transportId
-            ? null
-            : current.escalatedTransportId,
-        deferredRebuild:
-          current.deferredRebuild?.transportId === event.transportId
-            ? null
-            : current.deferredRebuild,
-      });
+      const held = recovery[event.direction].deferredRebuild;
+      return held?.transportId === event.transportId && !held.silentWhileConnected
+        ? patchDirection(recovery, event.direction, { deferredRebuild: null })
+        : recovery;
     }
   }
 };
 
-export type MediaPathFailure = {
+export type MediaPathFailure = FailedPath & {
   direction: MediaDirection;
-  transportId: string;
-  reason: string;
   relayOnly: boolean;
   reconnectInFlight: boolean;
 };
 
-/**
- * The next step for a transport an ICE restart could not bring back, and
- * the recovery it leaves.
- */
 export const planMediaPathFailure = (
   recovery: MediaPathRecovery,
-  { direction, transportId, reason, ...network }: MediaPathFailure,
+  { direction, relayOnly, reconnectInFlight, ...path }: MediaPathFailure,
 ): {
   step: MediaPathEscalation | "already-escalated";
   recovery: MediaPathRecovery;
 } => {
   const current = recovery[direction];
-  if (current.escalatedTransportId === transportId) {
-    return { step: "already-escalated", recovery };
+  if (current.escalation?.transportId === path.transportId) {
+    return {
+      step: "already-escalated",
+      recovery: patchDirection(recovery, direction, {
+        escalation: mergeFailedPath(current.escalation, path),
+      }),
+    };
   }
   const step = planMediaPathEscalation({
     hasReconnected: current.rebuildTried,
-    ...network,
+    relayOnly,
+    reconnectInFlight,
   });
+  if (step === "report-blocked") {
+    return {
+      step,
+      recovery: patchDirection(recovery, direction, {
+        health: "blocked",
+        deferredRebuild: null,
+      }),
+    };
+  }
+  const health = current.health === "blocked" ? "blocked" : "recovering";
   if (step === "wait-for-reconnect") {
     return {
       step,
       recovery: patchDirection(recovery, direction, {
-        deferredRebuild: { transportId, reason },
+        health,
+        deferredRebuild:
+          current.deferredRebuild?.transportId === path.transportId
+            ? mergeFailedPath(current.deferredRebuild, path)
+            : path,
       }),
     };
   }
   return {
     step,
     recovery: patchDirection(recovery, direction, {
-      health:
-        step === "report-blocked" || current.health === "blocked"
-          ? "blocked"
-          : "recovering",
-      escalatedTransportId: transportId,
-      rebuildTried: true,
+      health,
+      escalation: path,
       deferredRebuild: null,
     }),
   };
@@ -696,7 +744,7 @@ export const planMediaPathFailure = (
 export const takeDeferredRebuilds = (
   recovery: MediaPathRecovery,
 ): {
-  deferred: Array<{ direction: MediaDirection; transportId: string; reason: string }>;
+  deferred: Array<FailedPath & { direction: MediaDirection }>;
   recovery: MediaPathRecovery;
 } => ({
   deferred: MEDIA_DIRECTIONS.flatMap((direction) => {
