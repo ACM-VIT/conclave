@@ -1620,7 +1620,10 @@ promote() {
   checkpoint "tag ${svc}"
   local code=0
   up_service "$svc" "$image_name" false "$image" || code=$?
-  (( code != EXIT_CARRY_REFUSED )) || return "$EXIT_CARRY_REFUSED"
+  if (( code == EXIT_CARRY_REFUSED )); then
+    journal_set "$svc" phase=rollback lkg="$prev"
+    return "$EXIT_CARRY_REFUSED"
+  fi
   if (( code != 0 )); then
     checkpoint "start ${svc}"
     PROMOTE_WHY="compose could not start ${svc} serving on ${image}"
@@ -1920,7 +1923,10 @@ deploy_service() {
   checkpoint "tag candidate ${svc}"
   journal_set "$svc" phase=candidate candidate="$TARGET_IMAGE"
   up_service "$svc" "$candidate" true "$TARGET_IMAGE" || code=$?
-  (( code != EXIT_CARRY_REFUSED )) || return 1
+  if (( code == EXIT_CARRY_REFUSED )); then
+    journal_set "$svc" phase=rollback
+    return 1
+  fi
   if (( code != 0 )); then failure="compose could not start ${svc} on ${TARGET_COMMIT}"; fi
   code=0
   checkpoint "start candidate ${svc}"
