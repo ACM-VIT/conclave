@@ -5,6 +5,7 @@ import type { AppsState } from "../types.js";
 import {
   BARRIER_DEADLINE_MS,
   MAX_SLOT_MS,
+  MAX_SLOT_BYTES,
   MAX_SLOT_UPDATES,
   RoomAppsScheduler,
   type SlotWrite,
@@ -364,6 +365,28 @@ describe("a sender's slot", () => {
 });
 
 describe("the update budget", () => {
+  it("delivers held edits to a named replacement copy that synced before they landed", () => {
+    const { connect, room } = presentedBoard();
+    const writer = connect("writer#1");
+    const viewer = connect("viewer#1");
+    writer.sync();
+    viewer.sync();
+    writer.write(UPDATE_BURST);
+    const [held] = writer.write(1);
+    const oldDoc = writer.doc;
+
+    writer.sendPayload([]);
+    expect(writer.doc).not.toBe(oldDoc);
+    expect(writer.sync().reply).toHaveProperty("syncMessage");
+    expect(writer.doc.getMap("m").has(held)).toBe(false);
+
+    advance(100);
+
+    expect(boardHas(room, held)).toBe(true);
+    expect(viewer.doc.getMap("m").has(held)).toBe(true);
+    expect(writer.doc.getMap("m").toJSON()).toEqual(viewer.doc.getMap("m").toJSON());
+  });
+
   it.each([
     ["an invalid sync", false],
     ["a valid sync", true],
@@ -822,6 +845,35 @@ describe("what a payload costs before it is paid for", () => {
     guest.write(UPDATE_BURST);
     return { guest, room };
   };
+
+  it("retains only bounded byte storage for queued views", () => {
+    vi.useFakeTimers();
+    const scheduler = new RoomAppsScheduler();
+    const sender = {} as Socket;
+    let heldBytes = 0;
+    const write = (update: Uint8Array, held: boolean): SlotWrite => ({
+      sender,
+      appId: BOARD,
+      key: "copy-1",
+      host: false,
+      wire: { length: update.length, read: () => update },
+      run: (updates) => {
+        if (held) heldBytes += updates.reduce((bytes, value) => bytes + value.buffer.byteLength, 0);
+        return updates.map(() => null);
+      },
+      finish: () => {},
+    });
+    for (let index = 0; index < UPDATE_BURST; index += 1) scheduler.submit(write(EMPTY_UPDATE, false));
+
+    for (let index = 0; index < 5; index += 1) {
+      const view = new Uint8Array(new ArrayBuffer(MAX_SLOT_BYTES / 4), index, index + 1);
+      scheduler.submit(write(view, true));
+    }
+    expect(scheduler.slotSummaries()).toEqual([{ updates: 5, bytes: 15, age: 0 }]);
+    advance(100);
+
+    expect(heldBytes).toBe(15);
+  });
 
   it.each([
     ["a 10,000-element array ending in a string", () => countingArray(10_000, "bad")],
