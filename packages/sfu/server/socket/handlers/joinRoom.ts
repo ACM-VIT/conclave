@@ -1291,7 +1291,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         releaseClaim();
         if (
           isAdminJoin &&
-          isCodeOwner &&
+          (isCodeOwner || forcedHostJoin) &&
           (room.isBlocked(userKey) || room.needsReadmission(userKey))
         ) {
           room.allowLockedUser(userKey);

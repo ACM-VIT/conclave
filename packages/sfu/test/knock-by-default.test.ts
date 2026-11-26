@@ -482,6 +482,43 @@ describe("a client whose rooms start unlocked and use the waiting room", () => {
   });
 });
 
+describe("an account that hosts by configuration outside the room", () => {
+  const configured = {
+    userId: "configured@example.com",
+    email: "configured@example.com",
+    clientId: "conclave",
+    sessionId: "c",
+    isForcedHost: true,
+  };
+
+  it("hosts when it joins although a host of the room had blocked it", async () => {
+    const state = makeState();
+    const opener = await join(state, host);
+    expect(
+      await send(opener.peer, "admin:blockUsers", { userKeys: [configured.email] }),
+    ).toEqual(expect.objectContaining({ success: true }));
+    expect(roomOf(state).isBlocked(configured.email)).toBe(true);
+
+    const joined = await join(state, configured);
+    expect(joined.status).toBe("joined");
+    expect(joined.context.currentClient).toBeInstanceOf(Admin);
+    expect(roomOf(state).isBlocked(configured.email)).toBe(false);
+  });
+
+  it("hosts when it joins although a host had taken its admission back", async () => {
+    const state = makeState();
+    const opener = await join(state, host);
+    const first = await join(state, configured);
+    expect(first.context.currentClient).toBeInstanceOf(Admin);
+    await hangUp(first.peer);
+    await send(opener.peer, "admin:revokeAllowedUsers", { userKeys: [configured.email] });
+
+    const back = await join(state, { ...configured, sessionId: "c2" });
+    expect(back.status).toBe("joined");
+    expect(back.context.currentClient).toBeInstanceOf(Admin);
+  });
+});
+
 describe("a call whose server lost the room", () => {
   // Three people in a call and one person still knocking, then the SFU
   // restarts: a fresh state has no rooms and no memory of who was let in.
