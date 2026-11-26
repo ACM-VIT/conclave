@@ -371,6 +371,7 @@ const main = async () => {
   if (args[0] === "inspect") {
     const format = args[2];
     const name = args.at(-1).replace(/^ctr-/, "");
+    if (format.includes(".HostConfig.RestartPolicy")) return out((await state(name)).restartPolicy);
     if (format.includes(".Config.Env")) {
       const current = await state(name);
       if (current.envInspectFails) {
