@@ -485,7 +485,9 @@ export class RoomAuthority {
   }
 
   stageGuestMerges(merges: readonly GuestIdentityMerge[]): StagedGuestMerge | null {
-    if (this.closed) return { commit: () => true };
+    if (this.closed) return null;
+    const policy = this.options.policy();
+    this.syncPolicy(policy);
     const subjects = merges.map(({ from, into }) => ({
       from: this.options.identity.guestSubject(from),
       into: this.options.identity.guestSubject(into),
@@ -499,7 +501,11 @@ export class RoomAuthority {
     }
     return {
       commit: () => {
-        if (!staged.every(([, merge]) => merge.fresh())) return false;
+        if (
+          this.closed ||
+          !samePolicy(policy, this.options.policy()) ||
+          !staged.every(([, merge]) => merge.fresh())
+        ) return false;
         for (const [instance, merge] of staged) {
           if (merge.commit()) this.afterWrite(instance);
         }
@@ -688,8 +694,7 @@ export class RoomAuthority {
    * view, such as one that only decides who may take part, sends no rows:
    * in a room of 5,000 it is 5,000 small frames and not 5,000 whole views.
    */
-  private syncPolicy(): void {
-    const policy = this.options.policy();
+  private syncPolicy(policy = this.options.policy()): void {
     for (const instance of this.instances.values()) {
       if (samePolicy(instance.policy, policy)) continue;
       instance.setPolicy(policy);
@@ -978,6 +983,7 @@ export class RoomAuthority {
     if (!this.hasRoom(subscription)) return;
 
     const { rows, version } = subscription.instance.snapshot(subscription.actor);
+    if (subscription.instance.hasPendingChanges) this.scheduleFlush(false);
     subscription.viewVersion = version;
     // A whole view as committed now holds none of the rows clears took.
     subscription.owed = subscription.instance.owedEnd(subscription.actor);

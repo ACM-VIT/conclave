@@ -253,6 +253,8 @@ export type WaitingRequest = {
   displayName?: string;
 };
 
+export type SettledWaitingRequest = { request: WaitingRequest; admitted: boolean };
+
 /**
  * `membership`: a seat was added, removed, replaced or promoted.
  * `closed`: the room is being torn down.
@@ -866,10 +868,13 @@ export class Room {
   claimGuestIdentity(
     userKey: string,
     guestProof: string | undefined,
-  ): { ok: false } | { ok: true; bindTo: string | undefined } {
+  ): { ok: false } | { ok: true; bindTo: string | undefined; clearUnheldBinding?: () => void } {
     if (!this.holdsUserKey(userKey)) {
-      this.unbindGuestProof(userKey);
-      return { ok: true, bindTo: guestProof };
+      return {
+        ok: true,
+        bindTo: guestProof,
+        clearUnheldBinding: () => this.unbindGuestProof(userKey),
+      };
     }
     const bound = this.guestProofsByUserKey.get(userKey);
     if (bound !== undefined && bound !== guestProof) {
@@ -1065,7 +1070,10 @@ export class Room {
    * chose itself, speaks only for itself.
    */
   private principalOf(userKey: string): string {
-    const guestProof = this.guestProofsByUserKey.get(userKey);
+    return this.admissionPrincipal(userKey, this.guestProofsByUserKey.get(userKey));
+  }
+
+  private admissionPrincipal(userKey: string, guestProof: string | undefined): string {
     return guestProof !== undefined && userKey.startsWith(GUEST_SEAT_KEY_PREFIX)
       ? `pass:${guestProof}`
       : `key:${userKey}`;
@@ -1189,19 +1197,11 @@ export class Room {
    * waits: from then on decisions and blocks under any of them hold under
    * all. A plan of more than `GUEST_PASS_GROUP_LIMIT` passes is not
    * recorded: the room never drops a pass it links to make room.
-   *
-   * The guest's waiting requests are then judged again, now that the room
-   * knows more of the guest (returned). A request is answered only by a
-   * decision made after it arrived: a denial turns it away, and an
-   * admission lets it in while the guest still holds it. Any other request
-   * stays in the lobby. Nothing is recorded: an earlier decision keeps the
-   * time it was made.
    */
-  commitGuestLink(link: GuestLinkPlan): {
-    linked: boolean;
-    settled: Array<{ request: WaitingRequest; admitted: boolean }>;
-  } {
-    if (link.blocked) return { linked: false, settled: [] };
+  commitGuestLink(link: GuestLinkPlan):
+    | { linked: false }
+    | { linked: true; settleWaiting: () => SettledWaitingRequest[] } {
+    if (link.blocked) return { linked: false };
     const { passes, held, kept, merges } = this.guestLinkOf(link.passes);
     if (!link.staged) {
       Logger.warn(
@@ -1209,13 +1209,13 @@ export class Room {
           ? `Room ${this.id}: a guest showed ${link.passes.size} passes; the room links at most ${GUEST_PASS_GROUP_LIMIT}, so this link is not recorded.`
           : `Room ${this.id}: an app could not merge what a guest keeps under ${link.merges.length + 1} of its passes, so this link is not recorded.`,
       );
-      return { linked: false, settled: [] };
+      return { linked: false };
     }
     if (!sameMerges(merges, link.merges) || !link.staged.commit()) {
       Logger.warn(
         `Room ${this.id}: what a guest keeps in the room's apps changed after this link was planned, so it is not recorded.`,
       );
-      return { linked: false, settled: [] };
+      return { linked: false };
     }
     const guestsBefore = [...new Set([...link.passes].map((proof) => this.guestOfPass(proof)))];
     const merged: GuestRecord = {
@@ -1236,11 +1236,14 @@ export class Room {
       this.guestRecords.set(proof, merged);
     }
     if (seatedIdentityChanged) this.notifyLifecycle("membership");
-    this.mergeWaitingGuests(guestsBefore, this.guestOfPass(link.guestProof));
-    const settled: Array<{ request: WaitingRequest; admitted: boolean }> = [];
-    for (const userKey of [
-      ...(this.waitingKeysByGuest.get(this.guestOfPass(link.guestProof)) ?? []),
-    ]) {
+    const guest = this.guestOfPass(link.guestProof);
+    this.mergeWaitingGuests(guestsBefore, guest);
+    return { linked: true, settleWaiting: () => this.settleLinkedWaitingRequests(guest) };
+  }
+
+  private settleLinkedWaitingRequests(guest: string): SettledWaitingRequest[] {
+    const settled: SettledWaitingRequest[] = [];
+    for (const userKey of this.waitingKeysByGuest.get(guest) ?? []) {
       const request = this.pendingClients.get(userKey);
       const arrival = this.waitingGuestByKey.get(userKey)?.arrival;
       if (!request || arrival === undefined) continue;
@@ -1257,7 +1260,7 @@ export class Room {
         settled.push({ request, admitted: true });
       }
     }
-    return { linked: true, settled };
+    return settled;
   }
 
   private guestLinkOf(linkPasses: ReadonlySet<string>): {
@@ -1306,7 +1309,8 @@ export class Room {
     const link = this.planGuestLink(otherSeats, guestProof);
     if (!link) return { blocked: [], settled: [] };
     if (link.blocked) return { blocked: this.refuseBlockedLink(link).userKeys, settled: [] };
-    return { blocked: [], settled: this.commitGuestLink(link).settled };
+    const committed = this.commitGuestLink(link);
+    return { blocked: [], settled: committed.linked ? committed.settleWaiting() : [] };
   }
 
   /** How many passes the room links to another, for its memory bound. */
@@ -1546,18 +1550,22 @@ export class Room {
     return { admissionCode, expiresAt };
   }
 
-  redeemAdmission(
+  planAdmissionRedemption(
     admissionCode: string,
     userKey: string,
     guestProof: string | undefined,
-  ): boolean {
+  ): (() => void) | null {
     const expiresAt = this.openAdmissions.get(admissionCode);
-    if (expiresAt === undefined || expiresAt <= Date.now()) return false;
-    if (!this.restoreAdmission(userKey, guestProof, { pastLock: true })) {
-      return false;
-    }
-    this.openAdmissions.delete(admissionCode);
-    return true;
+    if (expiresAt === undefined || expiresAt <= Date.now()) return null;
+    if (this.isBlocked(userKey, guestProof)) return null;
+    const principal = this.admissionPrincipal(userKey, guestProof);
+    if (!this.admissions.hasRoomFor(new Set([principal]))) return null;
+    return () => {
+      if (this.openAdmissions.get(admissionCode) !== expiresAt) return;
+      if (this.restoreAdmission(userKey, guestProof, { pastLock: true })) {
+        this.openAdmissions.delete(admissionCode);
+      }
+    };
   }
 
   private releaseUnheldGuestIdentities(): void {

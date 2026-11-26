@@ -357,7 +357,7 @@ describe("a guest link plan (Sol)", () => {
         if (when === "after the sweep") await vi.advanceTimersByTimeAsync(10);
       }
 
-      expect(room.room.commitGuestLink(link!)).toEqual({ linked: false, settled: [] });
+      expect(room.room.commitGuestLink(link!)).toEqual({ linked: false });
       expect(sameGuest(room, onA, onB)).toBe(false);
     },
   );
@@ -454,10 +454,13 @@ it.each(cancelledWaits)("ends the $wait wait immediately on $ending", async ({ w
   const tab = await room.open(person("ana@example.com", "Ana"), app.contract, { ackTimeoutMs: 100 });
   const frame = tab.frames.find((item) => item.kind === "replace")!;
   if (wait === "readiness") startReplacement(tab);
-  const { emit: send } = tab.socket;
+  const socket = tab.socket as unknown as {
+    emit: (event: string, payload?: unknown, ack?: (reply: unknown) => void) => void;
+  };
+  const { emit: send } = socket;
   let sends = 0;
-  vi.spyOn(tab.socket, "emit").mockImplementation((event, payload, ack) => {
-    if (event !== AUTHORITY_EVENTS.act) return send.call(tab.socket, event, payload, ack);
+  vi.spyOn(socket, "emit").mockImplementation((event, payload, ack) => {
+    if (event !== AUTHORITY_EVENTS.act) return send.call(socket, event, payload, ack);
     sends += 1;
     if (wait === "rate-limit retry" && sends === 2) ack?.({ ok: false, code: "rate-limited", retryAfterMs: 30_000 });
     if (wait === "resubscribe retry") ack?.({ ok: false, code: "stale-generation" });

@@ -114,6 +114,13 @@ const LOST = Symbol("lost");
 
 type Listener = () => void;
 
+type ActionLifetime = {
+  ended: "forbidden" | "unknown-outcome" | null;
+  waits: Set<Listener>;
+};
+
+const actionLifetime = (): ActionLifetime => ({ ended: null, waits: new Set() });
+
 /** Codes that mean "ask again once the view is back", not "refused". */
 const RESUBSCRIBE_CODES: ReadonlySet<AuthorityFailureCode> = new Set([
   "stale-generation",
@@ -276,24 +283,25 @@ export class AuthorityClient {
     event: string,
     payload: unknown,
     within = Number.POSITIVE_INFINITY,
+    lifetime?: ActionLifetime,
   ): Promise<Reply | typeof LOST> {
     return new Promise((resolve) => {
-      if (!this.socket.connected) {
+      if (!this.socket.connected || within <= 0 || lifetime?.ended) {
         resolve(LOST);
         return;
       }
       let settled = false;
-      const timer = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        resolve(LOST);
-      }, Math.max(0, Math.min(this.ackTimeoutMs, within)));
-      this.socket.emit(event, payload, (reply: unknown) => {
+      const finish = (result: Reply | typeof LOST) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        resolve(reply as Reply);
-      });
+        lifetime?.waits.delete(lost);
+        resolve(result);
+      };
+      const lost = () => finish(LOST);
+      const timer = setTimeout(lost, Math.max(0, Math.min(this.ackTimeoutMs, within)));
+      lifetime?.waits.add(lost);
+      this.socket.emit(event, payload, (reply: unknown) => finish(reply as Reply));
     });
   }
 
@@ -305,11 +313,6 @@ export class AuthorityClient {
   /** @internal */
   now(): number {
     return this.localNow();
-  }
-
-  /** @internal */
-  get isDisposed(): boolean {
-    return this.disposed;
   }
 
   /* ---- Socket events ----------------------------------------------------- */
@@ -369,6 +372,7 @@ export class AuthoritySession<C extends AuthorityContract> {
   private state: AuthoritySessionState<C> = { kind: "connecting" };
   private readonly listeners = new Set<Listener>();
   private readonly readyWaiters = new Set<Listener>();
+  private actionLifetime = actionLifetime();
   private readonly streams = new Map<
     string,
     { generation: number; parts: string[]; settle(result: AuthorityResult<Json>): void }
@@ -428,11 +432,11 @@ export class AuthoritySession<C extends AuthorityContract> {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.endActions("unknown-outcome");
     this.clearRestart();
     this.unsubscribe();
     this.failStreams();
     this.listeners.clear();
-    for (const waiter of [...this.readyWaiters]) waiter();
   }
 
   /**
@@ -453,17 +457,24 @@ export class AuthoritySession<C extends AuthorityContract> {
       this.client.now() + AUTHORITY_LIMITS.operationMaxAgeMs - RETRY_PAUSE_MS * 4;
     let sentToEpoch: string | null = null;
     let mayHaveRun = false;
+    const lifetime = this.actionLifetime;
     const timeLeft = () => deadline - this.client.now();
-    const waitWithin = (ms: number) => pause(Math.max(0, Math.min(ms, timeLeft())));
+    const waitWithin = (ms: number) => pause(Math.min(ms, timeLeft()), lifetime);
+    const stopped = () => {
+      if (lifetime.ended) return failure(lifetime.ended);
+      return timeLeft() <= 0 ? failure("unknown-outcome") : null;
+    };
 
     for (;;) {
-      if (this.closed || this.client.isDisposed) return failure("unknown-outcome");
+      const beforeReady = stopped();
+      if (beforeReady) return beforeReady;
       // Only a view that is on its way is worth waiting for.
       if (this.state.kind === "unsupported") return failure("unsupported");
       if (this.state.kind === "revoked") return failure("forbidden");
-      const remaining = timeLeft();
-      if (remaining <= 0) return failure("unknown-outcome");
-      if (!(await this.whenReady(remaining))) continue;
+      const ready = await this.whenReady(timeLeft(), lifetime);
+      const afterReady = stopped();
+      if (afterReady) return afterReady;
+      if (!ready) continue;
       const epoch = this.subscribedEpoch;
       if (this.state.kind !== "ready" || !this.subscription || !epoch) continue;
       // A new room keeps no record of the operation and would run it afresh.
@@ -486,7 +497,10 @@ export class AuthoritySession<C extends AuthorityContract> {
         AUTHORITY_EVENTS.act,
         request,
         timeLeft(),
+        lifetime,
       );
+      const afterReply = stopped();
+      if (afterReply) return afterReply;
       if (reply === LOST) {
         mayHaveRun = true;
         await waitWithin(RETRY_PAUSE_MS);
@@ -495,7 +509,7 @@ export class AuthoritySession<C extends AuthorityContract> {
       if (!reply.ok && reply.code === "rate-limited" && mayHaveRun) {
         const wait = Math.max(RETRY_PAUSE_MS, reply.retryAfterMs ?? 0);
         if (wait >= timeLeft()) return failure("unknown-outcome");
-        await pause(wait);
+        await waitWithin(wait);
         continue;
       }
       if (!reply.ok && RESUBSCRIBE_CODES.has(reply.code)) {
@@ -852,20 +866,33 @@ export class AuthoritySession<C extends AuthorityContract> {
       (next.kind === "connecting" || next.kind === "unsupported");
     if (unchanged) return;
     this.state = next;
+    if (next.kind === "revoked") {
+      this.endActions("forbidden");
+      this.actionLifetime = actionLifetime();
+    }
     for (const listener of [...this.listeners]) listener();
   }
 
+  private endActions(reason: NonNullable<ActionLifetime["ended"]>): void {
+    const lifetime = this.actionLifetime;
+    lifetime.ended = reason;
+    for (const done of lifetime.waits) done();
+  }
+
   /** Resolves true once the view is ready, false when `timeoutMs` passes. */
-  private whenReady(timeoutMs: number): Promise<boolean> {
+  private whenReady(timeoutMs: number, lifetime: ActionLifetime): Promise<boolean> {
+    if (timeoutMs <= 0 || lifetime.ended) return Promise.resolve(false);
     if (this.state.kind === "ready") return Promise.resolve(true);
     return new Promise((resolve) => {
       const done = (): void => {
         clearTimeout(timer);
+        lifetime.waits.delete(done);
         this.readyWaiters.delete(done);
-        resolve(this.state.kind === "ready" && !this.closed);
+        resolve(this.state.kind === "ready" && !lifetime.ended);
       };
       const timer = setTimeout(done, Math.min(timeoutMs, 1_000));
       this.readyWaiters.add(done);
+      lifetime.waits.add(done);
     });
   }
 
@@ -903,5 +930,15 @@ const isFrame = (value: unknown): value is AuthorityFrame => {
   );
 };
 
-const pause = (ms: number): Promise<void> =>
-  new Promise((resolve) => setTimeout(resolve, ms));
+const pause = (ms: number, lifetime: ActionLifetime): Promise<void> => {
+  if (ms <= 0 || lifetime.ended) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      lifetime.waits.delete(done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    lifetime.waits.add(done);
+  });
+};

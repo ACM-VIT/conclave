@@ -388,8 +388,9 @@ export class AuthorityInstance {
       return null;
     }
     const handler = this.module.runtime.mergeSubjects;
+    const policy = this.policy;
     const ctx: TimerContext = {
-      room: this.policy,
+      room: policy,
       now,
       random: this.options.random,
       nextId: (prefix) => this.nextId(prefix),
@@ -414,7 +415,7 @@ export class AuthorityInstance {
       return null;
     }
     return {
-      fresh: () => staged.fresh() && this.receipts.mergeFits(merges, now),
+      fresh: () => this.policy === policy && staged.fresh() && this.receipts.mergeFits(merges, now),
       commit: () => {
         const changed = staged.commit();
         this.views.takeIn(prepared.value);

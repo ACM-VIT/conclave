@@ -277,3 +277,21 @@ describe("a join whose guest link cannot commit", () => {
     },
   );
 });
+
+it("settles other tabs' waiting requests using the admission redeemed by the successful join", async () => {
+  const { state, room } = await lockedWebinarWithAnInvite(() => true);
+  room.declineStageInvite(invitedViewer.userId);
+  const waiting = await join(state, {
+    ...invitedViewer,
+    joinMode: "meeting",
+    guestRoom: room.id,
+    sessionId: "waiting-tab",
+  });
+  expect(waiting.ack).toHaveBeenCalledWith(expect.objectContaining({ status: "waiting" }));
+  const { admissionCode } = room.createAdmission();
+
+  expect((await join(state, onStage, "room", admissionCode)).ack).toHaveBeenCalledWith(joined);
+
+  expect(waiting.socket.emit).toHaveBeenCalledWith("joinApproved", { roomId: room.id });
+  expect(room.pendingClients.has(invitedViewer.userId)).toBe(false);
+});
