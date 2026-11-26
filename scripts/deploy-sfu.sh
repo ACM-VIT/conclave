@@ -499,6 +499,7 @@ PLACEMENT_SETTLE_SECONDS="${PLACEMENT_SETTLE_SECONDS:-25}"
 EXIT_BLOCKED_BY_ROOMS=3
 EXIT_CANARY_FAILED=4
 EXIT_NOT_RESTORED=5
+EXIT_CARRY_REFUSED=6
 
 PROJECT="$(printf "%s" "$COMPOSE_JSON" | json_field name)"
 IMAGE_REPO="${PROJECT}-sfu"
@@ -1279,8 +1280,35 @@ finish_source_carry() {
   return "$code"
 }
 
+source_ready_to_stop() {
+  local service="$1" container="$2" current generation status i
+  for i in 1 2 3; do
+    current="$(service_container "$service")" || return 1
+    [[ "$current" == "$container" ]] || return 1
+    acquire_restart_hold "$service" "$container" || return 1
+    generation="$(source_container_state "$container")" || return 1
+    case "${generation%% *}" in
+      true)
+        if status="$(instance_status "$service")" &&
+          [[ "$(printf "%s" "$status" | json_field draining)" == true && "$(printf "%s" "$status" | json_field rooms)" == 0 ]] &&
+          [[ "$(source_container_state "$container")" == "$generation" ]]; then
+          return 0
+        fi
+        ;;
+      false)
+        if hold_down "$service" && [[ "$(service_container "$service")" == "$container" ]]; then
+          return 0
+        fi
+        ;;
+      *) return 1 ;;
+    esac
+    (( i == 3 )) || sleep "$STATUS_RETRY_SECONDS"
+  done
+  return 1
+}
+
 prepare_sfu_source() {
-  local service="$1" container="$2" identity frozen status current STAGED_FALLBACK=""
+  local service="$1" container="$2" identity frozen STAGED_FALLBACK=""
   CARRY_SERVICE="$service" CARRY_CONTAINER="$container" CARRY_POLICY=""
   CARRY_STAGING="$(umask 077; mktemp -d)" || return 1
   if [[ -n "$container" ]]; then
@@ -1295,21 +1323,10 @@ prepare_sfu_source() {
       return 1
     fi
     CARRY_POLICY="${RESTART_HOLDS[$service]#* }"
-    if ! current="$(service_container "$service")" || [[ "$current" != "$container" ]]; then
-      echo "Docker cannot confirm the old ${service} container; refusing to stop it." >&2
+    if ! source_ready_to_stop "$service" "$container"; then
+      echo "${service} is no longer confirmed drained and empty; refusing to stop it." >&2
       return 1
     fi
-    current="$(source_container_state "$container")" || return 1
-    case "${current%% *}" in
-      true)
-        if ! status="$(instance_status "$service")" || [[ "$(printf "%s" "$status" | json_field draining)" != true || "$(printf "%s" "$status" | json_field rooms)" != 0 ]]; then
-          echo "${service} is no longer confirmed drained and empty; refusing to stop it." >&2
-          return 1
-        fi
-        ;;
-      false) ;;
-      *) return 1 ;;
-    esac
     if ! docker stop "$container" >/dev/null; then
       echo "Could not stop the old ${service}. Stopped before replacing it." >&2
       return 1
@@ -1354,14 +1371,14 @@ up_service() {
   local svc="$1" tag="$2" drained="$3" expected="$4" restart=unless-stopped identity image capability
   local SFU_DEPLOY_ID="sfu-$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
   [[ "$drained" != true ]] || restart=no
-  identity="$(service_identity "$svc")" || return 1
-  image="$(image_id "$tag")" || return 1
-  [[ "$image" == "$expected" ]] || { echo "${tag} no longer names the expected image ${expected}." >&2; return 1; }
-  capability="$(docker image inspect -f '{{if index .Config.Labels "org.conclave.health-deploy-id"}}deploy-id{{else}}legacy{{end}}' "$image")" || return 1
-  case "$capability" in deploy-id|legacy) ;; *) return 1 ;; esac
+  identity="$(service_identity "$svc")" || return "$EXIT_CARRY_REFUSED"
+  image="$(image_id "$tag")" || return "$EXIT_CARRY_REFUSED"
+  [[ "$image" == "$expected" ]] || { echo "${tag} no longer names the expected image ${expected}." >&2; return "$EXIT_CARRY_REFUSED"; }
+  capability="$(docker image inspect -f '{{if index .Config.Labels "org.conclave.health-deploy-id"}}deploy-id{{else}}legacy{{end}}' "$image")" || return "$EXIT_CARRY_REFUSED"
+  case "$capability" in deploy-id|legacy) ;; *) return "$EXIT_CARRY_REFUSED" ;; esac
   if ! prepare_sfu_source "$svc" "${identity%% *}"; then
     finish_source_carry || true
-    return 6
+    return "$EXIT_CARRY_REFUSED"
   fi
   env "$(image_var "$svc")=$tag" SFU_DEPLOY_ID="$SFU_DEPLOY_ID" SFU_START_DRAINING="$drained" SFU_RESTART_POLICY="$restart" \
     "${COMPOSE[@]}" up -d --no-build --no-deps --force-recreate "$svc" || { finish_source_carry || true; return 1; }
@@ -1603,7 +1620,7 @@ promote() {
   checkpoint "tag ${svc}"
   local code=0
   up_service "$svc" "$image_name" false "$image" || code=$?
-  (( code != 6 )) || return 6
+  (( code != EXIT_CARRY_REFUSED )) || return "$EXIT_CARRY_REFUSED"
   if (( code != 0 )); then
     checkpoint "start ${svc}"
     PROMOTE_WHY="compose could not start ${svc} serving on ${image}"
@@ -1710,7 +1727,7 @@ repair_interrupted() {
             drain_and_wait "$svc" "$url" || code=$?
             if (( code == 0 )); then
               promote "$svc" "$url" "$image_name" "$candidate" "$prev" || code=$?
-              if (( code != 0 && code != 6 )); then
+              if (( code != 0 && code != EXIT_CARRY_REFUSED )); then
                 echo "${PROMOTE_WHY}; rolling ${svc} back." >&2
                 code=0
                 roll_back "$svc" "$url" "$image_name" "$prev" || code=$?
@@ -1903,7 +1920,7 @@ deploy_service() {
   checkpoint "tag candidate ${svc}"
   journal_set "$svc" phase=candidate candidate="$TARGET_IMAGE"
   up_service "$svc" "$candidate" true "$TARGET_IMAGE" || code=$?
-  (( code != 6 )) || return 1
+  (( code != EXIT_CARRY_REFUSED )) || return 1
   if (( code != 0 )); then failure="compose could not start ${svc} on ${TARGET_COMMIT}"; fi
   code=0
   checkpoint "start candidate ${svc}"
@@ -1925,7 +1942,7 @@ deploy_service() {
   fi
   if [[ -z "$failure" ]]; then
     promote "$svc" "$url" "$image_name" "$TARGET_IMAGE" "$lkg" || code=$?
-    (( code != 6 )) || return 1
+    (( code != EXIT_CARRY_REFUSED )) || return 1
     if (( code != 0 )); then failure="$PROMOTE_WHY"; fi
   fi
   if [[ -n "$failure" ]]; then
@@ -2089,13 +2106,14 @@ echo "Deploy order: ${ORDERED_SERVICES[*]}"
 # a rollout reached only some of them, or the target of a rollback that is not
 # finished yet.
 if [[ "$ROLLBACK" == "true" ]]; then
+  fleet_image_status=0
+  all_on_image "$LAST_GOOD_IMAGE" || fleet_image_status=$?
+  (( fleet_image_status != 2 )) || exit 1
   if [[ -n "$ROLLBACK_TARGET_IMAGE" ]]; then
     TARGET_IMAGE="$ROLLBACK_TARGET_IMAGE"
     TARGET_COMMIT="$ROLLBACK_TARGET_COMMIT"
     echo "Finishing the rollback to ${TARGET_COMMIT}."
   else
-    fleet_image_status=0
-    all_on_image "$LAST_GOOD_IMAGE" || fleet_image_status=$?
     case "$fleet_image_status" in
       0)
         TARGET_IMAGE="$PREVIOUS_GOOD_IMAGE"

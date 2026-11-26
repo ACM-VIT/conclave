@@ -218,7 +218,7 @@ const harnesses = [
         allDefinitions(deployShell, shellFunctions),
         `if [[ -n "\${FIXED_STAMP:-}" ]]; then archive_stamp() { printf '%s' "$FIXED_STAMP"; }; fi`,
         'declare -A RESTART_HOLDS=() EXPECTED_ID=([sfu-a]=sfu-a)',
-        'STATUS_RETRY_SECONDS=0 CONTAINER_SETTLE_SECONDS=0.05 HEALTH_TIMEOUT_SECONDS="$SFU_HEALTH_TIMEOUT_SECONDS" POLL_SECONDS=0.05 STATE_TOOLS_TAG=state-tools',
+        'EXIT_CARRY_REFUSED=6 STATUS_RETRY_SECONDS=0 CONTAINER_SETTLE_SECONDS=0.05 HEALTH_TIMEOUT_SECONDS="$SFU_HEALTH_TIMEOUT_SECONDS" POLL_SECONDS=0.05 STATE_TOOLS_TAG=state-tools',
         'SERVICE_URL=("$SFU_HEALTH_URL")',
         `instance_status() {
           if [[ "$FAKE_FAIL_AT" == exit-before-final-status && ! -f "$FAKE_STOPPED" ]]; then
