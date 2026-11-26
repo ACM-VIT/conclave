@@ -7,6 +7,16 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
+# The service generates a password per session and hands it only to that
+# room's participants (in the noVNC URL fragment). Never serve an open display.
+if [[ -z "${VNC_PASSWORD:-}" ]]; then
+    echo "VNC_PASSWORD is required; refusing to start an unauthenticated VNC server." >&2
+    exit 1
+fi
+VNC_PASSWORD_FILE="$(mktemp)"
+printf '%s\n' "$VNC_PASSWORD" > "$VNC_PASSWORD_FILE"
+unset VNC_PASSWORD
+
 Xvfb :99 -screen 0 ${RESOLUTION:-1280x720x24} &
 
 for _ in {1..50}; do
@@ -38,7 +48,7 @@ EXTENSION_DIR="${UBLOCK_ORIGIN_EXTENSION_DIR:-/usr/share/chromium/extensions/ubl
     "${START_URL:-about:blank}" &
 sleep 2
 
-x11vnc -display :99 -forever -shared -rfbport 5900 -nopw -noxdamage -xkb -repeat &
+x11vnc -display :99 -forever -shared -localhost -rfbport 5900 -passwdfile "rm:${VNC_PASSWORD_FILE}" -noxdamage -xkb -repeat &
 websockify --web=/usr/share/novnc 6080 localhost:5900 &
 
 wait -n
