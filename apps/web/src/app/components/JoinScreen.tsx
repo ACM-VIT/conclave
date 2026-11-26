@@ -18,7 +18,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useId, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useEffectEvent, useId, useRef, useState } from "react";
 import { prefetchConclaveAnimation } from "../lib/conclaveAnimation";
 import { prefetchConclaveLock } from "../lib/conclaveSound";
 import type { Dispatch, SetStateAction } from "react";
@@ -69,6 +69,7 @@ import {
   MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
   MEDIA_CAPTURE_RECOVERY_TIMEOUT_MS,
 } from "../lib/media-capture-timeout";
+import { onCapturesReleased } from "../lib/media-captures";
 import { prewarmVideoEffectsAssetsDeferred } from "../lib/video-effects-lazy";
 import type { VideoEffectsBridgeState } from "./VideoEffectsBridge";
 import {
@@ -526,6 +527,12 @@ function JoinScreen({
       prewarmLiveCameraEffects("prejoin-camera-live");
     }
   };
+
+  const dropReleasedPreview = useEffectEvent(() => {
+    cancelCaptures(() => true);
+    replacePreviewTracks(PREJOIN_MEDIA_KINDS, []);
+  });
+  useEffect(() => onCapturesReleased(() => dropReleasedPreview()), []);
 
   const markUserMediaChoice = () => {
     cancelRejoinRestore();
