@@ -1,5 +1,4 @@
 import { vi, type Mock } from "vitest";
-import { SARVAM_WINDOW_SETTLE_MS } from "../transcript-worker/src/constants";
 import { TranscriptRoom } from "../transcript-worker/src/room";
 import type { Env, Viewer } from "../transcript-worker/src/types";
 import { clicksPcm, noisePcm, pcmBase64, silencePcm, voicedPcm } from "./transcript-audio-fixtures";
@@ -90,15 +89,33 @@ export async function transcriptRoomRig(
   const connectPlans: Array<"unreachable" | number | { lateMs: number } | { status: number }> = [];
   const saves: { before?: () => Promise<void> } = {};
   let providerRequests = 0;
+  let opening = 0;
+  let openingSettledAt = 0;
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (url: string) => {
+    vi.fn(async (url: string, init?: { signal?: AbortSignal }) => {
       const isProvider = /\/v1\/realtime|speech-to-text/.test(String(url));
       const requestIndex = isProvider ? providerRequests++ : -1;
       const plan = isProvider ? connectPlans.shift() : undefined;
       if (plan === "unreachable") throw new Error("Provider connection timed out.");
       if (typeof plan === "object" && "status" in plan) return { webSocket: null, status: plan.status };
-      if (typeof plan === "object") await new Promise((resolve) => setTimeout(resolve, plan.lateMs));
+      if (typeof plan === "object") {
+        opening += 1;
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(resolve, plan.lateMs);
+            const cancel = () => {
+              clearTimeout(timer);
+              reject(init?.signal?.reason ?? new Error("The operation was aborted."));
+            };
+            if (init?.signal?.aborted) cancel();
+            else init?.signal?.addEventListener("abort", cancel, { once: true });
+          });
+        } finally {
+          opening -= 1;
+          openingSettledAt = Date.now();
+        }
+      }
       const socket = new FakeProviderSocket(String(url));
       socket.requestIndex = requestIndex;
       socket.onSend = hooks.onProviderSend ?? null;
@@ -281,12 +298,14 @@ export async function transcriptRoomRig(
   const lane = async (speaker?: TestSpeaker) => {
     await settle();
     const session = (room as unknown as {
-      liveConnection: { session: { lanes?: Map<string, { socket: FakeProviderSocket | { socket: FakeProviderSocket | null } }> } } | null;
+      liveConnection: { session: { turns?: Set<{ key: string | null; socket: { socket: FakeProviderSocket | null } }> } } | null;
     }).liveConnection?.session;
     const key = `${speaker?.userId ?? viewer.userId}:${speaker?.source ?? "mixed"}`;
-    const socket = session?.lanes?.get(key)?.socket;
-    if (!socket) throw new Error(`No Sarvam lane is open for ${key}.`);
-    return socket instanceof FakeProviderSocket ? socket : socket.socket!;
+    const socket = Array.from(session?.turns ?? [])
+      .filter((turn) => turn.key === key)
+      .at(-1)?.socket.socket;
+    if (!socket) throw new Error(`No Sarvam connection is open for ${key}.`);
+    return socket;
   };
   const viewerSnapshot = async () => {
     await send({ type: "export.snapshot" });
@@ -303,6 +322,8 @@ export async function transcriptRoomRig(
     sentMessages,
     lane,
     providerRequestCount: () => providerRequests,
+    openingProviderSockets: () => opening,
+    lastOpeningSettledAt: () => openingSettledAt,
     sockets,
     connectPlans,
     providerSockets,
@@ -373,6 +394,6 @@ export const answerSarvamReplays = async (
     const socket = await rig.lane(speaker);
     socket.emit(sarvamSpeechStart());
     socket.emit(sarvamFinal(requestId, text));
-    await vi.advanceTimersByTimeAsync(SARVAM_WINDOW_SETTLE_MS + 50);
+    await vi.advanceTimersByTimeAsync(600);
   }
 };
