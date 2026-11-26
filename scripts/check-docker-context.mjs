@@ -20,6 +20,7 @@ const ARTIFACT_PROBES = [
   ".env.local",
   "probe.log",
   "data/scheduling.json",
+  "test/probe.ts",
   "probe.sqlite",
   "probe.sqlite3",
   "probe.db",
