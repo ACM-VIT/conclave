@@ -171,6 +171,8 @@ it.each(MODES.flatMap((mode) => SELF_VIEWS.flatMap((selfViewMode) =>
   expect(grid.querySelector("[data-meet-stage-main] [data-meet-presentation-tile]")).not.toBeNull();
   expect(button, "pin is not in a rendered camera tile").toBeDefined();
   expect(tile?.closest(".hidden")).toBeNull();
+  expect(grid.getAttribute("data-meet-room-tiling-visible-ids")?.split(",")).toContain(id);
+  expect(grid.getAttribute("data-meet-room-tiling-primary-ids")?.split(",")).toContain(id);
   if (size.height === 600) {
     expect(tile?.closest("[data-meet-stage-rail]")).not.toBeNull();
     expect(grid.querySelector("[data-meet-stage-rail] .acm-video-tile")).toBe(tile);
@@ -194,3 +196,17 @@ it.each(MODES.flatMap((mode) => SELF_VIEWS.map((selfViewMode) => ({ mode, selfVi
     expect(primary.filter((id) => remoteIds.includes(id)).sort()).toEqual(rendered);
   },
 );
+
+it("removes the Auto companion from the layout and subscriptions when its rail cannot fit", () => {
+  const render = stageHarness(["bob", "carol"], "floating");
+  const desktop = render("auto", DESKTOP, true);
+  expect(desktop.querySelector('[data-meet-side-by-side-companion="bob"]')).not.toBeNull();
+  expect(desktop.getAttribute("data-meet-room-tiling-visible-ids")?.split(",")).toContain("bob");
+
+  const narrow = render("auto", STAGE_SIZES[1], true);
+  expect(narrow.querySelector('[data-meet-stage-split="main-only"]')).not.toBeNull();
+  expect(narrow.querySelector("[data-meet-stage-main] [data-meet-presentation-tile]")).not.toBeNull();
+  expect(narrow.querySelector(".acm-video-tile[data-userid]")).toBeNull();
+  expect(narrow.getAttribute("data-meet-room-tiling-visible-ids")).toBe("");
+  expect(narrow.getAttribute("data-meet-room-tiling-primary-ids")).toBe("__presentation__");
+});

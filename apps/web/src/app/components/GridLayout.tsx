@@ -59,7 +59,6 @@ import { Avatar } from "@conclave/ui-tokens/web";
 import {
   chooseStageMode,
   computeGridLayout,
-  computeStageRailLayout,
   type GridTilePosition,
   type GridLayoutResult,
 } from "@conclave/meeting-core";
@@ -82,10 +81,9 @@ import {
 import { useElementSize } from "../hooks/useElementSize";
 import { computeTileChrome } from "../lib/tile-chrome";
 import {
-  COMPANION_RAIL,
-  PARTICIPANT_RAIL,
-  chooseStageSplit,
-} from "../lib/stage-split";
+  resolveMeetingStageLayout,
+  type MeetingStageTile,
+} from "../lib/meeting-stage-layout";
 import { readVideoAspect, resolveTileAspect } from "../lib/tile-video-framing";
 
 interface GridLayoutProps {
@@ -132,8 +130,6 @@ const PRESENTATION_PRIORITY_WARM_BUFFER_TILES = 2;
 const GRID_PADDING = 16;
 const GRID_GAP = 12;
 const GRID_MAX_COLS = 6;
-const STAGE_RAIL_TILE_HEIGHT = 112;
-const SIDE_BY_SIDE_RAIL_HEIGHT_RATIO = 0.35;
 const AUTO_GRID_MIN_TILE_WIDTH = 176;
 const AUTO_GRID_MIN_TILE_HEIGHT = 99;
 const MOBILE_PORTRAIT_COLS = 2;
@@ -1353,35 +1349,69 @@ function GridLayout({
       (participant) => !visibleIds.has(participant.userId)
     );
   }, [orderedRemoteParticipants, visibleParticipants]);
-  const stageSize = {
-    width: Math.max(0, gridSize.width - GRID_PADDING * 2),
-    height: Math.max(0, gridSize.height - GRID_PADDING * 2),
-  };
-  const stageSplit = chooseStageSplit(stageSize, PARTICIPANT_RAIL);
-  const companionSplit = chooseStageSplit(stageSize, COMPANION_RAIL);
-  const stageMainKind: "presentation" | "local" | "remote" | null =
-    hasPresentation && stageSplit.mode !== "side"
-      ? "presentation"
-      : isLocalPinned
-        ? "local"
-        : pinnedParticipant
-          ? "remote"
-          : hasPresentation
-            ? "presentation"
-            : isLocalFeaturedSpeaker && hasFeaturedVideoSpeaker
-              ? "local"
-              : featuredRemoteParticipant || orderedRemoteParticipants[0]
-                ? "remote"
-                : null;
-  const stageMainParticipant =
-    stageMainKind === "remote"
-      ? pinnedParticipant ??
-        featuredRemoteParticipant ??
-        orderedRemoteParticipants[0] ??
-        null
-      : null;
-  const usesStageLayout = Boolean(stageMainKind) && wantsStageLayout;
-  const stageMainParticipantId = stageMainParticipant?.userId ?? null;
+  const preferredRemoteParticipant = featuredRemoteParticipant ?? orderedRemoteParticipants[0] ?? null;
+  const companionParticipant = useMemo(() => {
+    if (renderedViewMode !== "sideBySide" || !hasPresentation) return null;
+    return featuredRemoteParticipant && participantHasLiveVideo(featuredRemoteParticipant)
+      ? featuredRemoteParticipant
+      : orderedRemoteParticipants.find(participantHasLiveVideo) ?? null;
+  }, [featuredRemoteParticipant, hasPresentation, orderedRemoteParticipants, renderedViewMode]);
+  const stageLayout = useMemo(() => {
+    if (!wantsStageLayout) return null;
+    const local = { kind: "local" } as const;
+    const useFeaturedSelf = isLocalFeaturedSpeaker && hasFeaturedVideoSpeaker;
+    const remoteTile = (participant: Participant | null) =>
+      participant ? { kind: "remote" as const, participant } : null;
+
+    return resolveMeetingStageLayout({
+      size: {
+        width: Math.max(0, gridSize.width - GRID_PADDING * 2),
+        height: Math.max(0, gridSize.height - GRID_PADDING * 2),
+      },
+      participants: orderedRemoteParticipants,
+      pinnedCamera: isLocalPinned ? local : remoteTile(pinnedParticipant),
+      preferredCamera: useFeaturedSelf ? local : remoteTile(preferredRemoteParticipant),
+      companionCamera: renderedViewMode === "sideBySide" && hasPresentation
+        ? useFeaturedSelf ? local : remoteTile(companionParticipant)
+        : null,
+      presenting: hasPresentation,
+      spotlight: renderedViewMode === "spotlight",
+      tileSelfView: shouldShowSelfAsTile,
+      maxTiles: maxGridTiles,
+    });
+  }, [
+    companionParticipant,
+    gridSize,
+    hasFeaturedVideoSpeaker,
+    hasPresentation,
+    isLocalFeaturedSpeaker,
+    isLocalPinned,
+    maxGridTiles,
+    orderedRemoteParticipants,
+    pinnedParticipant,
+    preferredRemoteParticipant,
+    renderedViewMode,
+    shouldShowSelfAsTile,
+    wantsStageLayout,
+  ]);
+  const usesStageLayout = stageLayout !== null;
+  const usesSpotlightLayout = usesStageLayout && renderedViewMode === "spotlight";
+  const stageMainKind = stageLayout?.main.kind ?? null;
+  const stageMainParticipantId = stageLayout?.main.kind === "remote"
+    ? stageLayout.main.participant.userId
+    : null;
+  const sideBySideCompanionKind = stageLayout?.companion?.kind ?? null;
+  const sideBySideCompanionParticipantId = stageLayout?.companion?.kind === "remote"
+    ? stageLayout.companion.participant.userId
+    : null;
+  const usesSideBySideLayout = sideBySideCompanionKind !== null;
+  const stageRailFixedTileCount = stageLayout?.fixedRailCount ?? 0;
+  const stageRailTileCount = stageLayout ? stageLayout.rail.length + Number(stageLayout.overflow) : 0;
+  const stageRailCapacity = stageLayout?.railSlots ?? 0;
+  const stageRailRemoteCapacity = stageLayout?.remoteRailCount ?? 0;
+  const presentationRenderedAsPrimary = hasGridPresentationTile || stageMainKind === "presentation";
+  const presentationRenderedInRail = stageLayout?.rail.some((tile) => tile.kind === "presentation") ?? false;
+  const isPresentationRendered = presentationRenderedAsPrimary || presentationRenderedInRail;
 
   useEffect(() => {
     const video = localVideoRef.current;
@@ -1483,181 +1513,18 @@ function GridLayout({
     usesStageLayout,
   ]);
 
-  const sideBySideFeaturedRemoteParticipant =
-    featuredRemoteParticipant && participantHasLiveVideo(featuredRemoteParticipant)
-      ? featuredRemoteParticipant
-      : null;
-  const sideBySideFirstVideoParticipant =
-    orderedRemoteParticipants.find((participant) =>
-      participantHasLiveVideo(participant),
-    ) ?? null;
-  const sideBySideCompanionKind: "local" | "remote" | null =
-    renderedViewMode === "sideBySide" && hasPresentation
-      ? shouldShowSelfAsTile &&
-        isLocalFeaturedSpeaker &&
-        !isCameraOff &&
-        hasLiveVideo(localStream)
-        ? "local"
-        : sideBySideFeaturedRemoteParticipant || sideBySideFirstVideoParticipant
-          ? "remote"
-          : null
-      : null;
-  const sideBySideCompanionParticipant =
-    sideBySideCompanionKind === "remote"
-      ? sideBySideFeaturedRemoteParticipant ?? sideBySideFirstVideoParticipant
-      : null;
-  const sideBySideCompanionParticipantId =
-    sideBySideCompanionParticipant?.userId ?? null;
-  const usesSideBySideLayout =
-    usesStageLayout &&
-    renderedViewMode === "sideBySide" &&
-    hasPresentation &&
-    Boolean(sideBySideCompanionKind);
-  const usesSpotlightLayout = usesStageLayout && renderedViewMode === "spotlight";
-  const stageRailLocalTileCount =
-    usesStageLayout &&
-    !usesSpotlightLayout &&
-    shouldShowSelfAsTile &&
-    (usesSideBySideLayout
-      ? sideBySideCompanionKind !== "local"
-      : stageMainKind !== "local")
-      ? 1
-      : 0;
-  const presentationRenderedAsPrimary =
-    hasGridPresentationTile ||
-    usesSideBySideLayout ||
-    (usesStageLayout && stageMainKind === "presentation");
-  const presentationRenderedInRail =
-    usesStageLayout &&
-    !usesSpotlightLayout &&
-    !usesSideBySideLayout &&
-    hasPresentation &&
-    stageMainKind !== "presentation";
-  const isPresentationRendered =
-    hasPresentation &&
-    (presentationRenderedAsPrimary || presentationRenderedInRail);
-  const stageRailPresentationTileCount = presentationRenderedInRail ? 1 : 0;
-  const stageRailFixedTileCount =
-    stageRailLocalTileCount + stageRailPresentationTileCount;
-  const stageBudgetCompanionTileCount =
-    sideBySideCompanionKind === "remote" ? 1 : 0;
-  const stageRailCandidateParticipants = useMemo(
-    () =>
-      usesStageLayout
-        ? orderedRemoteParticipants.filter(
-            (participant) =>
-              participant.userId !== stageMainParticipantId &&
-              participant.userId !== sideBySideCompanionParticipantId,
-          )
-        : [],
-    [
-      orderedRemoteParticipants,
-      sideBySideCompanionParticipantId,
-      stageMainParticipantId,
-      usesStageLayout,
-    ],
-  );
-  const stageRailViewportHeight = usesStageLayout && !usesSpotlightLayout
-    ? Math.max(0, gridSize.height - GRID_PADDING * 2) *
-      (usesSideBySideLayout ? SIDE_BY_SIDE_RAIL_HEIGHT_RATIO : 1)
-    : 0;
-  const stageRailLayout = useMemo(
-    () =>
-      computeStageRailLayout({
-        candidateCount: stageRailCandidateParticipants.length,
-        fixedTileCount:
-          stageRailFixedTileCount + stageBudgetCompanionTileCount,
-        maxTiles: Math.max(0, maxGridTiles - 1),
-        railHeight: stageRailViewportHeight,
-        tileHeight: STAGE_RAIL_TILE_HEIGHT,
-        gap: GRID_GAP,
-      }),
-    [
-      maxGridTiles,
-      stageBudgetCompanionTileCount,
-      stageRailCandidateParticipants.length,
-      stageRailFixedTileCount,
-      stageRailViewportHeight,
-    ],
-  );
-  const stageSideRemoteCapacity = usesSpotlightLayout
-    ? 0
-    : stageRailLayout.remoteCapacity;
-  const stageSideParticipants = useMemo(
-    () =>
-      usesStageLayout
-        ? stageRailCandidateParticipants.slice(0, stageSideRemoteCapacity)
-        : [],
-    [
-      stageRailCandidateParticipants,
-      stageSideRemoteCapacity,
-      usesStageLayout,
-    ],
-  );
-  const stageSideParticipantIds = useMemo(
-    () =>
-      new Set(
-        stageSideParticipants.map((participant) => participant.userId),
-      ),
-    [stageSideParticipants],
-  );
-  const stageHiddenParticipants = useMemo(
-    () =>
-      usesStageLayout
-        ? orderedRemoteParticipants.filter(
-            (participant) =>
-              participant.userId !== stageMainParticipantId &&
-              participant.userId !== sideBySideCompanionParticipantId &&
-              !stageSideParticipantIds.has(participant.userId),
-          )
-        : hiddenParticipants,
-    [
-      hiddenParticipants,
-      orderedRemoteParticipants,
-      sideBySideCompanionParticipantId,
-      stageMainParticipantId,
-      stageSideParticipantIds,
-      usesStageLayout,
-    ],
-  );
-  const overflowParticipants = useMemo(
-    () =>
-      usesStageLayout ? stageHiddenParticipants : hiddenParticipants,
-    [hiddenParticipants, stageHiddenParticipants, usesStageLayout],
-  );
+  const overflowParticipants = stageLayout?.hiddenParticipants ?? hiddenParticipants;
   const hiddenParticipantsCount = overflowParticipants.length;
-  const showStageOverflowTile =
-    usesStageLayout &&
-    !usesSpotlightLayout &&
-    stageRailLayout.overflowTile &&
-    hiddenParticipantsCount > 0;
+  const showOverflowTile = stageLayout?.overflow ?? hiddenParticipantsCount > 0;
+  const showOverflowGallery = showOverflowTile && isOverflowOpen;
+  const showOverflowTileInGrid = showOverflowTile && !isOverflowOpen && !stageLayout;
   const roomTilingRemoteVisibleIds = useMemo(() => {
-    const ids: string[] = [];
-    if (usesStageLayout) {
-      if (stageMainKind === "remote" && stageMainParticipantId) {
-        ids.push(stageMainParticipantId);
-      }
-      if (sideBySideCompanionParticipantId) {
-        ids.push(sideBySideCompanionParticipantId);
-      }
-      stageSideParticipants.forEach((participant) => ids.push(participant.userId));
-    } else {
-      visibleParticipants.forEach((participant) => ids.push(participant.userId));
-    }
-    if (isOverflowOpen) {
-      overflowParticipants.forEach((participant) => ids.push(participant.userId));
-    }
-    return Array.from(new Set(ids));
-  }, [
-    isOverflowOpen,
-    overflowParticipants,
-    sideBySideCompanionParticipantId,
-    stageMainKind,
-    stageMainParticipantId,
-    stageSideParticipants,
-    usesStageLayout,
-    visibleParticipants,
-  ]);
+    const participants = stageLayout
+      ? stageLayout.tiles.flatMap((tile) => tile.kind === "remote" ? [tile.participant] : [])
+      : visibleParticipants;
+    const rendered = showOverflowGallery ? [...participants, ...overflowParticipants] : participants;
+    return rendered.map((participant) => participant.userId);
+  }, [overflowParticipants, showOverflowGallery, stageLayout, visibleParticipants]);
   const roomTilingRemoteVisibleIdSignature = useMemo(
     () => roomTilingRemoteVisibleIds.join(","),
     [roomTilingRemoteVisibleIds],
@@ -1832,54 +1699,31 @@ function GridLayout({
     recentlyVisibleWarmRevision,
     roomTilingRemoteVisibleIds,
   ]);
-  const showOverflowTile = usesStageLayout
-    ? showStageOverflowTile
-    : hiddenParticipantsCount > 0 && !usesSpotlightLayout;
-  const showOverflowTileInGrid =
-    showOverflowTile && !isOverflowOpen && !usesStageLayout;
-  const stageRailTileCount = usesStageLayout
-    ? stageRailLayout.renderedTileCount
-    : 0;
-  const totalParticipants =
-    visibleParticipants.length +
-    gridReservedTiles +
-    (showOverflowTileInGrid ? 1 : 0);
-  const overflowPreviewParticipants = overflowParticipants.slice(0, 4);
-  const roomTilingPrimaryIds = useMemo(() => {
+  const tiledGridTileIds = useMemo(() => {
+    if (stageLayout) return [];
     const ids: string[] = [];
-    if (usesStageLayout && stageMainKind) {
-      ids.push(
-        stageMainKind === "presentation"
-          ? PRESENTATION_TILE_ID
-          : stageMainKind === "local"
-            ? "local"
-            : stageMainParticipantId ?? "",
-      );
-      roomTilingRemoteVisibleIds.forEach((userId) => ids.push(userId));
-      if (
-        stageMainKind !== "local" &&
-        stageRailLocalTileCount > 0
-      ) {
-        ids.push("local");
-      }
-    } else {
-      if (hasGridPresentationTile) ids.push(PRESENTATION_TILE_ID);
-      if (shouldShowSelfAsTile) ids.push("local");
-      visibleParticipants.forEach((participant) => ids.push(participant.userId));
-      if (showOverflowTileInGrid) ids.push("overflow");
-    }
-    return Array.from(new Set(ids.filter(Boolean)));
+    if (hasGridPresentationTile) ids.push(PRESENTATION_TILE_ID);
+    if (shouldShowSelfAsTile) ids.push("local");
+    visibleParticipants.forEach((participant) => ids.push(participant.userId));
+    if (showOverflowTileInGrid) ids.push("overflow");
+    return ids;
   }, [
-    currentUserId,
     hasGridPresentationTile,
-    roomTilingRemoteVisibleIds,
+    shouldShowSelfAsTile,
     showOverflowTileInGrid,
-    stageMainKind,
-    stageMainParticipantId,
-    stageRailLocalTileCount,
-    usesStageLayout,
+    stageLayout,
     visibleParticipants,
   ]);
+  const totalParticipants = tiledGridTileIds.length;
+  const overflowPreviewParticipants = overflowParticipants.slice(0, 4);
+  const roomTilingPrimaryIds = useMemo(() => {
+    if (!stageLayout) return tiledGridTileIds;
+    return stageLayout.tiles.flatMap((tile) =>
+      tile.kind === "presentation"
+        ? presentationRenderedAsPrimary ? [PRESENTATION_TILE_ID] : []
+        : [tile.kind === "local" ? "local" : tile.participant.userId],
+    );
+  }, [presentationRenderedAsPrimary, stageLayout, tiledGridTileIds]);
   const roomTilingFocusIds = useMemo(() => {
     const ids: string[] = [];
     if (usesStageLayout && stageMainKind === "remote" && stageMainParticipantId) {
@@ -1901,10 +1745,10 @@ function GridLayout({
   ]);
   const roomTilingHiddenIds = useMemo(
     () =>
-      isOverflowOpen
+      showOverflowGallery
         ? []
         : overflowParticipants.map((participant) => participant.userId),
-    [isOverflowOpen, overflowParticipants],
+    [showOverflowGallery, overflowParticipants],
   );
   const roomTilingWarmIds = useMemo(
     () => warmParticipants.map((participant) => participant.userId),
@@ -1995,29 +1839,12 @@ function GridLayout({
 
   const gridUsableWidth = Math.max(0, gridSize.width - GRID_PADDING * 2);
   const gridUsableHeight = Math.max(0, gridSize.height - GRID_PADDING * 2);
-  const stageTileClass = stageRailTileClass(stageSplit.mode);
-  const companionTileClass = stageRailTileClass(companionSplit.mode);
   const isMobilePortraitGrid = isMobilePortrait(
     isMobile,
     gridUsableWidth,
     gridUsableHeight,
   );
   const usesVideoShapedTiles = usesAutoDynamicCrop && !isMobilePortraitGrid;
-  const tiledGridTileIds = useMemo(() => {
-    if (usesStageLayout) return [];
-    const ids: string[] = [];
-    if (hasGridPresentationTile) ids.push(PRESENTATION_TILE_ID);
-    if (shouldShowSelfAsTile) ids.push("local");
-    visibleParticipants.forEach((participant) => ids.push(participant.userId));
-    if (showOverflowTileInGrid) ids.push("overflow");
-    return ids;
-  }, [
-    hasGridPresentationTile,
-    shouldShowSelfAsTile,
-    showOverflowTileInGrid,
-    usesStageLayout,
-    visibleParticipants,
-  ]);
   const tileAspects = useMemo(
     () =>
       usesVideoShapedTiles
@@ -2125,7 +1952,7 @@ function GridLayout({
     effectiveSelfViewMode === "minimized";
   const actualSelfViewPlacement = stageMainKind === "local"
     ? "stage"
-    : shouldShowSelfAsTile && !usesSpotlightLayout
+    : (stageLayout ? stageLayout.tiles.some((tile) => tile.kind === "local") : shouldShowSelfAsTile)
       ? "tile"
       : showFloatingSelfView
         ? "floating"
@@ -2136,8 +1963,8 @@ function GridLayout({
     ? 2
     : usesStageLayout &&
         !usesSpotlightLayout &&
-        stageRailCandidateParticipants.length > 0 &&
-        stageRailLayout.slotCount <= stageRailFixedTileCount
+        hiddenParticipantsCount > 0 &&
+        stageRailCapacity <= stageRailFixedTileCount
       ? 1
       : usesMeasuredAutoTileLimit && autoGridTileLimit < requestedMaxTiles
         ? 1
@@ -2180,9 +2007,7 @@ function GridLayout({
       scores: roomTilingScores,
       counts: {
         orderedRemote: orderedRemoteParticipants.length,
-        visible: usesStageLayout
-          ? stageSideParticipants.length
-          : visibleParticipants.length,
+        visible: roomTilingRemoteVisibleIds.length,
         hidden: hiddenParticipantsCount,
         warm: warmParticipants.length,
         totalGrid: totalParticipants,
@@ -2207,9 +2032,9 @@ function GridLayout({
         featuredSpeakerWarm: Object.values(roomTilingWarmReasons).filter(
           (reasons) => reasons.includes("featured-speaker"),
         ).length,
-        stageRailCapacity: usesStageLayout ? stageRailLayout.slotCount : 0,
+        stageRailCapacity: usesStageLayout ? stageRailCapacity : 0,
         stageRailRemoteCapacity: usesStageLayout
-          ? stageRailLayout.remoteCapacity
+          ? stageRailRemoteCapacity
           : 0,
       },
       stage: {
@@ -2298,19 +2123,17 @@ function GridLayout({
       roomTilingWarmIds,
       sideBySideCompanionKind,
       sideBySideCompanionParticipantId,
-      stageRailLayout.remoteCapacity,
-      stageRailLayout.slotCount,
+      stageRailCapacity,
       stageMainKind,
       stageMainParticipantId,
       stageRailTileCount,
-      stageSideParticipants.length,
+      stageRailRemoteCapacity,
       totalParticipants,
       usesAutoDynamicCrop,
       usesSideBySideLayout,
       usesSpotlightLayout,
       usesStageLayout,
       viewSettings.mode,
-      visibleParticipants.length,
       warmParticipants.length,
     ],
   );
@@ -2555,6 +2378,112 @@ function GridLayout({
     }, 2400);
   };
 
+  const renderStageTile = (tile: MeetingStageTile, slot: "main" | "companion" | "rail") => {
+    switch (tile.kind) {
+      case "presentation":
+        return presentationStream ? (
+          <PresentationVideoTile
+            stream={presentationStream}
+            presenterName={presenterName}
+            presenterId={presentationPresenterId}
+            size={slot === "main" ? "stage" : "rail"}
+            selfView={slot === "main" ? presentationSelfView : undefined}
+            captureControl={presentationCaptureControl}
+            isPinned={pinnedId === PRESENTATION_TILE_ID}
+            onTogglePin={() => togglePin(PRESENTATION_TILE_ID)}
+          />
+        ) : null;
+      case "local":
+        return (
+          <LocalVideoTile
+            stream={localStream}
+            isCameraOff={isCameraOff}
+            isMuted={isMuted}
+            isHandRaised={isHandRaised}
+            isMirrorCamera={isMirrorCamera}
+            displayName={localDisplayName}
+            userEmail={userEmail}
+            isActiveSpeaker={isLocalActiveSpeaker}
+            isPinned={isLocalPinned}
+            onTogglePin={toggleLocalPin}
+            tracking={localVideoTracking}
+            videoObjectFit={slot === "main" ? "contain" : undefined}
+            cropPosition={slot !== "main" ? localTrackingObjectPosition : undefined}
+          />
+        );
+      case "remote": {
+        const { participant } = tile;
+        return (
+          <ParticipantVideo
+            key={participant.userId}
+            participant={participant}
+            displayName={getDisplayName(participant.userId)}
+            isActiveSpeaker={activeSpeakerId === participant.userId}
+            audioOutputDeviceId={audioOutputDeviceId}
+            disableAudio
+            videoObjectFit={slot === "main" ? "contain" : undefined}
+            isAdmin={isAdmin}
+            onAdminClick={onParticipantClick}
+            isPinned={pinnedId === participant.userId}
+            onTogglePin={togglePin}
+            isFullVideoShown={slot !== "rail" && fullVideoTileIds.has(participant.userId)}
+            onToggleFullVideo={slot !== "rail" ? toggleFullVideoTile : undefined}
+          />
+        );
+      }
+    }
+  };
+
+  const stageRail = stageLayout && stageRailTileCount > 0 ? (
+    <div
+      className={stageLayout.companion
+        ? stageLayout.split.mode === "stack"
+          ? "flex h-full min-w-0 flex-1 flex-row gap-3 overflow-x-auto overflow-y-hidden pb-1"
+          : "flex max-h-[35%] flex-none flex-col gap-3 overflow-y-auto overflow-x-hidden pr-1"
+        : stageRailClass(stageLayout.split.mode)}
+      style={stageLayout.companion ? undefined : stageRailStyle(stageLayout.split)}
+      data-meet-stage-rail
+    >
+      {stageLayout.rail.map((tile) => (
+        <div
+          key={tile.kind === "remote" ? tile.participant.userId : tile.kind}
+          className={`${stageRailTileClass(stageLayout.split.mode)} max-h-full`}
+        >
+          {renderStageTile(tile, "rail")}
+        </div>
+      ))}
+      {stageLayout.overflow ? (
+        <button
+          type="button"
+          onClick={() => setIsOverflowOpen((prev) => !prev)}
+          aria-expanded={showOverflowGallery}
+          aria-label={`Show ${hiddenParticipantsCount} more participants`}
+          title={`Show ${hiddenParticipantsCount} more participants`}
+          className={`acm-video-tile group flex flex-col items-center justify-center bg-[#131316] text-[#fafafa] transition-colors hover:border-[#fafafa]/15 ${stageRailTileClass(stageLayout.split.mode)}`}
+        >
+          <div className="absolute inset-2 grid grid-cols-2 grid-rows-2 gap-1 opacity-30 transition-opacity duration-200 group-hover:opacity-50">
+            {overflowPreviewParticipants.map((participant) => (
+              <OverflowPreviewTile
+                key={participant.userId}
+                participant={participant}
+                displayName={getDisplayName(participant.userId)}
+              />
+            ))}
+          </div>
+          <div className="relative z-10 flex flex-col items-center gap-2 px-4 text-center">
+            <span className="text-[24px] font-semibold leading-none text-[#fafafa]">
+              +{hiddenParticipantsCount}
+            </span>
+            <span className="flex items-center gap-1.5 rounded-full border border-[#fafafa]/12 bg-[#0a0a0b]/70 px-2.5 py-1 text-[12.5px] font-medium text-[#fafafa]/85 transition-colors group-hover:text-[#fafafa]">
+              <Users size={16} strokeWidth={1.75} />
+              Show all
+            </span>
+          </div>
+        </button>
+      ) : null}
+    </div>
+  ) : null;
+
   return (
     <div
       ref={stageRootRef}
@@ -2626,28 +2555,24 @@ function GridLayout({
           usesSideBySideLayout
             ? sideBySideCompanionKind === "local"
               ? currentUserId
-              : sideBySideCompanionParticipant?.userId ?? "none"
+              : sideBySideCompanionParticipantId ?? "none"
             : "none"
         }
         data-meet-view-ordered-count={orderedRemoteParticipants.length}
-        data-meet-view-visible-count={
-          usesStageLayout
-            ? stageSideParticipants.length
-            : visibleParticipants.length
-        }
+        data-meet-view-visible-count={roomTilingRemoteVisibleIds.length}
         data-meet-view-hidden-count={hiddenParticipantsCount}
         data-meet-view-warm-count={warmParticipants.length}
         data-meet-view-grid-count={totalParticipants}
         data-meet-view-stage-rail-count={stageRailTileCount}
         data-meet-view-stage-rail-capacity={
-          usesStageLayout ? stageRailLayout.slotCount : 0
+          usesStageLayout ? stageRailCapacity : 0
         }
         data-meet-view-stage-rail-remote-capacity={
-          usesStageLayout ? stageRailLayout.remoteCapacity : 0
+          usesStageLayout ? stageRailRemoteCapacity : 0
         }
         data-meet-view-stage-rail-fixed-count={stageRailFixedTileCount}
         data-meet-view-stage-rail-overflow={
-          showStageOverflowTile ? "true" : "false"
+          stageLayout?.overflow ? "true" : "false"
         }
         data-meet-view-max-tiles={maxGridTiles}
         data-meet-view-requested-max-tiles={requestedMaxTiles}
@@ -2698,324 +2623,43 @@ function GridLayout({
         }`}
         style={{ gap: GRID_GAP }}
       >
-        {usesSideBySideLayout && presentationStream ? (
+        {stageLayout ? (
           <div
-            className={stageSplitClass(companionSplit.mode)}
-            data-meet-stage-split={companionSplit.mode}
-            data-meet-side-by-side
-            data-meet-side-by-side-companion-kind={sideBySideCompanionKind}
-            data-meet-side-by-side-companion={
-              sideBySideCompanionKind === "local"
-                ? currentUserId
-                : sideBySideCompanionParticipant?.userId ?? "none"
-            }
+            className={stageSplitClass(stageLayout.split.mode)}
+            data-meet-stage-split={stageLayout.split.mode}
+            data-meet-side-by-side={usesSideBySideLayout || undefined}
+            data-meet-side-by-side-companion-kind={sideBySideCompanionKind ?? undefined}
+            data-meet-side-by-side-companion={sideBySideCompanionKind === "local"
+              ? currentUserId
+              : sideBySideCompanionParticipantId ?? undefined}
           >
             <div
               className="relative min-h-0 min-w-0 flex-1"
-              data-meet-stage-main={PRESENTATION_TILE_ID}
+              data-meet-stage-main={stageMainKind === "presentation"
+                ? PRESENTATION_TILE_ID
+                : stageMainKind === "local" ? currentUserId : stageMainParticipantId ?? undefined}
             >
-              <PresentationVideoTile
-                stream={presentationStream}
-                presenterName={presenterName}
-                presenterId={presentationPresenterId}
-                size="stage"
-                selfView={presentationSelfView}
-                captureControl={presentationCaptureControl}
-                isPinned={pinnedId === PRESENTATION_TILE_ID}
-                onTogglePin={() => togglePin(PRESENTATION_TILE_ID)}
-              />
-            </div>
-
-            <div
-              className={
-                companionSplit.mode === "main-only"
-                  ? "hidden"
-                  : companionSplit.mode === "stack"
-                    ? "flex w-full shrink-0 flex-row gap-3"
-                    : "flex shrink-0 flex-col gap-3"
-              }
-              style={stageRailStyle(companionSplit)}
-            >
-              <div className="relative min-h-0 min-w-0 flex-[1.15]">
-                {sideBySideCompanionKind === "local" ? (
-                  <LocalVideoTile
-                    stream={localStream}
-                    isCameraOff={isCameraOff}
-                    isMuted={isMuted}
-                    isHandRaised={isHandRaised}
-                    isMirrorCamera={isMirrorCamera}
-                    displayName={localDisplayName}
-                    userEmail={userEmail}
-                    isActiveSpeaker={isLocalActiveSpeaker}
-                    isPinned={isLocalPinned}
-                    onTogglePin={toggleLocalPin}
-                    tracking={localVideoTracking}
-                    cropPosition={localTrackingObjectPosition}
-                  />
-                ) : sideBySideCompanionParticipant ? (
-                  <ParticipantVideo
-                    key={sideBySideCompanionParticipant.userId}
-                    participant={sideBySideCompanionParticipant}
-                    displayName={getDisplayName(
-                      sideBySideCompanionParticipant.userId,
-                    )}
-                    isActiveSpeaker={
-                      activeSpeakerId === sideBySideCompanionParticipant.userId
-                    }
-                    audioOutputDeviceId={audioOutputDeviceId}
-                    disableAudio
-                    isAdmin={isAdmin}
-                    onAdminClick={onParticipantClick}
-                    isPinned={
-                      pinnedId === sideBySideCompanionParticipant.userId
-                    }
-                    onTogglePin={togglePin}
-                    isFullVideoShown={fullVideoTileIds.has(
-                      sideBySideCompanionParticipant.userId,
-                    )}
-                    onToggleFullVideo={toggleFullVideoTile}
-                  />
-                ) : null}
-              </div>
-
-              <div
-                className={
-                  companionSplit.mode === "stack"
-                    ? "flex h-full min-w-0 flex-1 flex-row gap-3 overflow-x-auto overflow-y-hidden pb-1"
-                    : "flex max-h-[35%] min-h-[7rem] flex-none flex-col gap-3 overflow-y-auto overflow-x-hidden pr-1"
-                }
-                data-meet-stage-rail
-              >
-                {shouldShowSelfAsTile && sideBySideCompanionKind !== "local" ? (
-                  <div className={companionTileClass}>
-                    <LocalVideoTile
-                      stream={localStream}
-                      isCameraOff={isCameraOff}
-                      isMuted={isMuted}
-                      isHandRaised={isHandRaised}
-                      isMirrorCamera={isMirrorCamera}
-                      displayName={localDisplayName}
-                      userEmail={userEmail}
-                      isActiveSpeaker={isLocalActiveSpeaker}
-                      isPinned={isLocalPinned}
-                      onTogglePin={toggleLocalPin}
-                      tracking={localVideoTracking}
-                      cropPosition={localTrackingObjectPosition}
-                    />
-                  </div>
-                ) : null}
-
-                {stageSideParticipants.map((participant) => (
-                  <div
-                    key={participant.userId}
-                    className={companionTileClass}
-                    data-userid={participant.userId}
-                  >
-                    <ParticipantVideo
-                      participant={participant}
-                      displayName={getDisplayName(participant.userId)}
-                      isActiveSpeaker={activeSpeakerId === participant.userId}
-                      audioOutputDeviceId={audioOutputDeviceId}
-                      disableAudio
-                      isAdmin={isAdmin}
-                      onAdminClick={onParticipantClick}
-                      isPinned={pinnedId === participant.userId}
-                      onTogglePin={togglePin}
-                    />
-                  </div>
-                ))}
-
-                {showOverflowTile ? (
-                  <button
-                    type="button"
-                    onClick={() => setIsOverflowOpen((prev) => !prev)}
-                    aria-expanded={isOverflowOpen}
-                    aria-label={`Show ${hiddenParticipantsCount} more participants`}
-                    title={`Show ${hiddenParticipantsCount} more participants`}
-                    className={`acm-video-tile group flex flex-col items-center justify-center bg-[#131316] text-[#fafafa] transition-colors hover:border-[#fafafa]/15 ${companionTileClass}`}
-                  >
-                    <div className="absolute inset-2 grid grid-cols-2 grid-rows-2 gap-1 opacity-30 transition-opacity duration-200 group-hover:opacity-50">
-                      {overflowPreviewParticipants.map((participant) => (
-                        <OverflowPreviewTile
-                          key={participant.userId}
-                          participant={participant}
-                          displayName={getDisplayName(participant.userId)}
-                        />
-                      ))}
-                    </div>
-                    <div className="relative z-10 flex flex-col items-center gap-2 px-4 text-center">
-                      <span className="text-[24px] font-semibold leading-none text-[#fafafa]">
-                        +{hiddenParticipantsCount}
-                      </span>
-                      <span className="flex items-center gap-1.5 rounded-full border border-[#fafafa]/12 bg-[#0a0a0b]/70 px-2.5 py-1 text-[12.5px] font-medium text-[#fafafa]/85 transition-colors group-hover:text-[#fafafa]">
-                        <Users size={16} strokeWidth={1.75} />
-                        Show all
-                      </span>
-                    </div>
-                  </button>
-                ) : null}
-              </div>
-            </div>
-          </div>
-        ) : usesStageLayout && stageMainKind ? (
-          <div
-            className={stageSplitClass(stageSplit.mode)}
-            data-meet-stage-split={stageSplit.mode}
-          >
-            <div
-              className="relative min-h-0 min-w-0 flex-1"
-              data-meet-stage-main={
-                stageMainKind === "presentation"
-                  ? PRESENTATION_TILE_ID
-                  : stageMainKind === "local"
-                    ? currentUserId
-                    : stageMainParticipant?.userId
-              }
-            >
-              {stageMainKind === "presentation" && presentationStream ? (
-                <PresentationVideoTile
-                  stream={presentationStream}
-                  presenterName={presenterName}
-                  presenterId={presentationPresenterId}
-                  size="stage"
-                  selfView={presentationSelfView}
-                  captureControl={presentationCaptureControl}
-                  isPinned={pinnedId === PRESENTATION_TILE_ID}
-                  onTogglePin={() => togglePin(PRESENTATION_TILE_ID)}
-                />
-              ) : stageMainKind === "local" ? (
-                <LocalVideoTile
-                  stream={localStream}
-                  isCameraOff={isCameraOff}
-                  isMuted={isMuted}
-                  isHandRaised={isHandRaised}
-                  isMirrorCamera={isMirrorCamera}
-                  displayName={localDisplayName}
-                  userEmail={userEmail}
-                  isActiveSpeaker={isLocalActiveSpeaker}
-                  isPinned={isLocalPinned}
-                  onTogglePin={toggleLocalPin}
-                  tracking={localVideoTracking}
-                  videoObjectFit="contain"
-                />
-              ) : stageMainParticipant ? (
-                <ParticipantVideo
-                  key={stageMainParticipant.userId}
-                  participant={stageMainParticipant}
-                  displayName={getDisplayName(stageMainParticipant.userId)}
-                  isActiveSpeaker={
-                    activeSpeakerId === stageMainParticipant.userId
-                  }
-                  audioOutputDeviceId={audioOutputDeviceId}
-                  disableAudio
-                  videoObjectFit="contain"
-                  isAdmin={isAdmin}
-                  onAdminClick={onParticipantClick}
-                  isPinned={pinnedId === stageMainParticipant.userId}
-                  onTogglePin={togglePin}
-                  isFullVideoShown={fullVideoTileIds.has(
-                    stageMainParticipant.userId,
-                  )}
-                  onToggleFullVideo={toggleFullVideoTile}
-                />
+              {renderStageTile(stageLayout.main, "main")}
+              {stageLayout.compactPin ? (
+                <div className="absolute left-0 top-0 z-30 h-[min(4.5rem,60%)] w-[min(7rem,48%)]">
+                  {renderStageTile(stageLayout.compactPin, "rail")}
+                </div>
               ) : null}
-
             </div>
 
-            {/* Omit an empty rail (for example two people with the self view
-                detached) so the stage fills the space instead. */}
-            {!usesSpotlightLayout && stageRailTileCount > 0 ? (
+            {stageLayout.companion ? (
               <div
-                className={stageRailClass(stageSplit.mode)}
-                style={stageRailStyle(stageSplit)}
-                data-meet-stage-rail
+                className={stageLayout.split.mode === "stack"
+                  ? "flex w-full shrink-0 flex-row gap-3"
+                  : "flex shrink-0 flex-col gap-3"}
+                style={stageRailStyle(stageLayout.split)}
               >
-                {shouldShowSelfAsTile && stageMainKind !== "local" ? (
-                  <div className={stageTileClass}>
-                    <LocalVideoTile
-                      stream={localStream}
-                      isCameraOff={isCameraOff}
-                      isMuted={isMuted}
-                      isHandRaised={isHandRaised}
-                      isMirrorCamera={isMirrorCamera}
-                      displayName={localDisplayName}
-                      userEmail={userEmail}
-                      isActiveSpeaker={isLocalActiveSpeaker}
-                      isPinned={isLocalPinned}
-                      onTogglePin={toggleLocalPin}
-                      tracking={localVideoTracking}
-                      cropPosition={localTrackingObjectPosition}
-                    />
-                  </div>
-                ) : null}
-
-                {hasPresentation &&
-                stageMainKind !== "presentation" &&
-                presentationStream ? (
-                  <div className={stageTileClass}>
-                    <PresentationVideoTile
-                      stream={presentationStream}
-                      presenterName={presenterName}
-                      presenterId={presentationPresenterId}
-                      size="rail"
-                      captureControl={presentationCaptureControl}
-                      isPinned={pinnedId === PRESENTATION_TILE_ID}
-                      onTogglePin={() => togglePin(PRESENTATION_TILE_ID)}
-                    />
-                  </div>
-                ) : null}
-
-                {stageSideParticipants.map((participant) => (
-                  <div
-                    key={participant.userId}
-                    className={stageTileClass}
-                    data-userid={participant.userId}
-                  >
-                    <ParticipantVideo
-                      participant={participant}
-                      displayName={getDisplayName(participant.userId)}
-                      isActiveSpeaker={activeSpeakerId === participant.userId}
-                      audioOutputDeviceId={audioOutputDeviceId}
-                      disableAudio
-                      isAdmin={isAdmin}
-                      onAdminClick={onParticipantClick}
-                      isPinned={pinnedId === participant.userId}
-                      onTogglePin={togglePin}
-                    />
-                  </div>
-                ))}
-
-                {showOverflowTile ? (
-                  <button
-                    type="button"
-                    onClick={() => setIsOverflowOpen((prev) => !prev)}
-                    aria-expanded={isOverflowOpen}
-                    aria-label={`Show ${hiddenParticipantsCount} more participants`}
-                    title={`Show ${hiddenParticipantsCount} more participants`}
-                    className={`acm-video-tile group flex flex-col items-center justify-center bg-[#131316] text-[#fafafa] transition-colors hover:border-[#fafafa]/15 ${stageTileClass}`}
-                  >
-                    <div className="absolute inset-2 grid grid-cols-2 grid-rows-2 gap-1 opacity-30 transition-opacity duration-200 group-hover:opacity-50">
-                      {overflowPreviewParticipants.map((participant) => (
-                        <OverflowPreviewTile
-                          key={participant.userId}
-                          participant={participant}
-                          displayName={getDisplayName(participant.userId)}
-                        />
-                      ))}
-                    </div>
-                    <div className="relative z-10 flex flex-col items-center gap-2 px-4 text-center">
-                      <span className="text-[24px] font-semibold leading-none text-[#fafafa]">
-                        +{hiddenParticipantsCount}
-                      </span>
-                      <span className="flex items-center gap-1.5 rounded-full border border-[#fafafa]/12 bg-[#0a0a0b]/70 px-2.5 py-1 text-[12.5px] font-medium text-[#fafafa]/85 transition-colors group-hover:text-[#fafafa]">
-                        <Users size={16} strokeWidth={1.75} />
-                        Show all
-                      </span>
-                    </div>
-                  </button>
-                ) : null}
+                <div className="relative min-h-0 min-w-0 flex-[1.15]">
+                  {renderStageTile(stageLayout.companion, "companion")}
+                </div>
+                {stageRail}
               </div>
-            ) : null}
+            ) : stageRail}
           </div>
         ) : (
           <>
@@ -3323,7 +2967,7 @@ function GridLayout({
       {showOverflowTile ? (
         <div
           className={`overflow-hidden transition-[max-height,opacity] duration-200 ease-out ${
-            isOverflowOpen
+            showOverflowGallery
               ? "mt-3 max-h-64 opacity-100 pointer-events-auto"
               : "mt-0 max-h-0 opacity-0 pointer-events-none"
           }`}
@@ -3361,7 +3005,7 @@ function GridLayout({
             </div>
             <div className="relative">
               <div className="grid auto-cols-[11rem] grid-flow-col gap-3 overflow-x-scroll scroll-smooth snap-x snap-mandatory px-4 pb-4 pt-4 no-scrollbar">
-                {isOverflowOpen &&
+                {showOverflowGallery &&
                   overflowParticipants.map((participant) => (
                     <OverflowGalleryTile
                       key={participant.userId}
@@ -4009,6 +3653,7 @@ const OverflowGalleryTile = memo(function OverflowGalleryTile({
       className={`acm-video-tile group relative flex h-28 w-44 shrink-0 snap-start flex-col overflow-hidden text-left ${
         isActiveSpeaker ? "speaking" : ""
       } ${isClickable ? "cursor-pointer hover:border-[#F95F4A]/40" : "cursor-default opacity-85"}`}
+      data-userid={participant.userId}
       data-meet-video-adaptively-paused={
         participant.isVideoAdaptivelyPaused ? "true" : "false"
       }
