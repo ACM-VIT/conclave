@@ -1,4 +1,4 @@
-export type GateKind = "commit" | "freebusy" | "google-create" | "google-created" | "google-delete" | "email" | "redis";
+export type GateKind = "commit" | "freebusy" | "google-create" | "google-created" | "google-delete" | "google-deleted" | "email" | "redis";
 
 export class Gates {
   parking = new Set<GateKind>();
@@ -36,7 +36,9 @@ export class FakeGoogle {
   busy: Array<{ startAt: number; endAt: number }> = [];
   private readonly usedIds = new Set<string>();
   createAttempts = 0;
+  deleteAttempts = 0;
   failCreatesWith: number | null = null;
+  loseCreateReplies = false;
   private next = 1;
 
   constructor(private readonly gates: Gates) {}
@@ -70,7 +72,9 @@ export class FakeGoogle {
       this.createAttempts += 1;
       if (this.failCreatesWith) return json(this.failCreatesWith, { error: { code: this.failCreatesWith, status: "UNAVAILABLE" } });
       const id = payload.id ?? `event-${this.next++}`;
-      if (this.usedIds.has(id)) return json(409, { error: { code: 409, status: "ALREADY_EXISTS", message: "The requested identifier already exists." } });
+      if (this.usedIds.has(id)) return this.loseCreateReplies
+        ? json(503, { error: "reply lost" })
+        : json(409, { error: { code: 409, status: "ALREADY_EXISTS", message: "The requested identifier already exists." } });
       this.usedIds.add(id);
       const event = {
         id,
@@ -81,12 +85,14 @@ export class FakeGoogle {
       this.events.set(event.id, event);
       this.created.push(event);
       await this.gates.admit("google-created", event.id);
-      return json(200, { id: event.id });
+      return this.loseCreateReplies ? json(503, { error: "reply lost" }) : json(200, { id: event.id });
     }
     if (method === "DELETE") {
       const id = decodeURIComponent(url.pathname.split("/").pop() ?? "");
       await this.gates.admit("google-delete", id);
+      this.deleteAttempts += 1;
       if (!this.events.delete(id)) return json(this.usedIds.has(id) ? 410 : 404, { error: "not found" });
+      await this.gates.admit("google-deleted", id);
       return new Response(null, { status: 204 });
     }
     return json(404, { error: "not found" });
@@ -133,4 +139,3 @@ export const installFakeFetch = (google: () => FakeGoogle | null, email: () => F
     globalThis.fetch = original;
   };
 };
-

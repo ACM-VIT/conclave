@@ -346,6 +346,26 @@ describe.each(crashModes)("an SFU on a %s store killed between a calendar change
     await recover();
     expect(google.events.size).toBe(0);
   }, 30_000);
+
+  it("finishes a deletion after a restart when Google deleted the event but the reply was lost", async () => {
+    const sfu = await boot();
+    const world = await seed(sfu);
+    expect((await bookOn(sfu, world)).status).toBe(201);
+    const booked = await onlyBooking(sfu);
+    gates.parking.add("google-deleted");
+    expect((await host(sfu, "POST", `/scheduled-meetings/${booked.id}/cancel`)).status).toBe(200);
+    await until(() => gates.parked.length > 0, "Google to delete the event");
+    expect(google.events.size).toBe(0);
+    await kill(sfu, "google-deleted", Promise.resolve());
+
+    const again = await recover();
+    expect(google.events.size).toBe(0);
+    expect(google.deleteAttempts).toBe(2);
+    running.splice(running.indexOf(again), 1);
+    await again.stop();
+    await (await boot(2 * LEASE_PASSED_MS)).drainCalendarTasks();
+    expect(google.deleteAttempts).toBe(2);
+  }, 30_000);
 });
 
 describe("a booking whose calendar settle waits out a storage error", () => {

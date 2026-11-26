@@ -83,7 +83,7 @@ const decodeLegacyImport = (raw: unknown): LegacyImportState | null => {
 };
 
 const CALENDAR_TASK_ACTIONS = ["create", "delete"] as const;
-const CALENDAR_TASK_STATES = ["open", "failed"] as const;
+const CALENDAR_TASK_STATES = ["open", "failed", "linked"] as const;
 
 const decodeCalendarTask = (raw: unknown): CalendarTask | null => {
   const record = asRecord(raw);
@@ -94,6 +94,7 @@ const decodeCalendarTask = (raw: unknown): CalendarTask | null => {
   if (!CALENDAR_TASK_ACTIONS.includes(record.action as CalendarTask["action"])) return null;
   if (!CALENDAR_TASK_STATES.includes(record.state as CalendarTask["state"])) return null;
   if (record.lastError !== null && typeof record.lastError !== "string") return null;
+  if (record.awaitingCreate !== undefined && typeof record.awaitingCreate !== "boolean") return null;
   return record as unknown as CalendarTask;
 };
 
@@ -185,7 +186,10 @@ export const entities: Registry = {
   calendarTask: {
     id: (task) => task.id,
     unique: () => [],
-    tags: (task) => [task.state === "open" ? tags.openCalendarTasks : tags.failedCalendarTasks],
+    tags: (task) => [
+      tags.meetingCalendarTasks(task.meetingId),
+      ...(task.state === "linked" ? [] : [task.state === "open" ? tags.openCalendarTasks : tags.failedCalendarTasks]),
+    ],
     encode: same,
     decode: decodeCalendarTask,
   },

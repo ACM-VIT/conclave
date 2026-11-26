@@ -82,7 +82,7 @@ export const isDataKind = (kind: string): kind is DataKind => DATA_KINDS.include
 
 export type CalendarTaskAction = "create" | "delete";
 
-export type CalendarTaskState = "open" | "failed";
+export type CalendarTaskState = "open" | "failed" | "linked";
 
 export type CalendarTask = {
   id: string;
@@ -92,6 +92,7 @@ export type CalendarTask = {
   profileId: string;
   grantId: string;
   eventId: string;
+  awaitingCreate?: boolean;
   startAt: number;
   endAt: number;
   appOrigin: string;
@@ -213,6 +214,7 @@ export const tags = {
   openWebinars: "open",
   openCalendarTasks: "open",
   failedCalendarTasks: "failed",
+  meetingCalendarTasks: (meetingId: string) => `meeting:${meetingId}`,
 };
 
 export const isActiveMeeting = (meeting: ScheduledMeeting): boolean =>

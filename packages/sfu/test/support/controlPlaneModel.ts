@@ -265,7 +265,7 @@ const runSequence = async (mode: StoreMode, seed: number, steps: number): Promis
   };
   const calendarWork: Partial<Record<Kind, string[]>> = {
     meeting: ["googleCalendarEventId", "calendarSyncStatus", "calendarSyncError"],
-    calendarTask: ["action", "state", "attempts", "nextAttemptAt", "lastError", "updatedAt"],
+    calendarTask: ["action", "state", "attempts", "nextAttemptAt", "lastError", "updatedAt", "awaitingCreate"],
   };
   const runsCalendarWork = new Set(["book", "cancel meeting", "delete meeting", "tick", "background"]);
   const allowedFor = (label: string, kind: Kind): string[] => [
@@ -381,6 +381,7 @@ const runSequence = async (mode: StoreMode, seed: number, steps: number): Promis
       eventTypes: view.all("eventType"),
       meetings: view.all("meeting"),
       webinars: view.all("webinar"),
+      calendarTasks: view.all("calendarTask"),
     }));
     const versions = history();
     const latest = (kind: Kind, id: string) => {
@@ -420,8 +421,11 @@ const runSequence = async (mode: StoreMode, seed: number, steps: number): Promis
         list.map((version) => (version.value as { googleCalendarEventId?: string | null } | null)?.googleCalendarEventId),
       ),
     );
+    const trackedEvents = new Set(snapshot.calendarTasks.map(({ value }) => value.eventId));
     for (const event of google?.events.values() ?? []) {
-      if (!recordedEvents.has(event.id)) flag("a Google event outlived the booking it was made for");
+      if (!recordedEvents.has(event.id) && !trackedEvents.has(event.id)) {
+        flag("a Google event has neither a booking nor a durable calendar task");
+      }
     }
   };
 
@@ -444,6 +448,8 @@ const runSequence = async (mode: StoreMode, seed: number, steps: number): Promis
       snapshot.meetings.filter((meeting) => meeting.status !== "cancelled").map((meeting) => meeting.googleCalendarEventId),
     );
     const givenUp = new Set(snapshot.tasks.filter((task) => task.state === "failed").map((task) => task.eventId));
+    const created = google.created.map((event) => event.id);
+    if (created.length !== new Set(created).size) flag("a Google event was inserted twice");
     for (const event of google.events.values()) {
       if (!linked.has(event.id) && !givenUp.has(event.id)) flag("a Google event is left with no live booking once every calendar task ran");
     }

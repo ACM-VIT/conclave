@@ -69,11 +69,12 @@ export const putCreateTask = (tx: Tx, input: CreateTaskInput): CalendarTask => {
   return task;
 };
 
-const toDelete = (tx: Tx, task: CalendarTask): CalendarTask => {
+const toDelete = (tx: Tx, task: CalendarTask, awaitingCreate: boolean): CalendarTask => {
   const next: CalendarTask = {
     ...task,
     action: "delete",
     state: "open",
+    awaitingCreate,
     attempts: 0,
     nextAttemptAt: tx.now,
     lastError: null,
@@ -96,6 +97,11 @@ const profileOfBooking = (tx: TxRead, meeting: ScheduledMeeting): string | null 
 };
 
 export const retireMeetingEvent = (tx: Tx, meeting: ScheduledMeeting): CalendarTask | null => {
+  const tracked = tx.tagged("calendarTask", tags.meetingCalendarTasks(meeting.id)).map(({ value }) => value)
+    .find((task) => task.action === "create");
+  if (tracked?.state === "failed") return toDelete(tx, tracked, true);
+  if (tracked?.state === "linked") return toDelete(tx, tracked, false);
+  if (tracked) return null;
   const eventId = meeting.googleCalendarEventId;
   if (!eventId) return null;
   const id = `delete-${eventId}`;
@@ -130,6 +136,13 @@ const openTask = (tx: TxRead, id: string): CalendarTask | null => {
   return task && task.state === "open" ? task : null;
 };
 
+type CalendarAttempt = Pick<CalendarTask, "id" | "action" | "attempts">;
+
+const heldAttempt = (tx: TxRead, attempt: CalendarAttempt): CalendarTask | null => {
+  const task = openTask(tx, attempt.id);
+  return task?.action === attempt.action && task.attempts === attempt.attempts ? task : null;
+};
+
 export const claimCalendarTask =
   (id: string, leaseMs: number): Command<CalendarTask> =>
   (tx) => {
@@ -149,30 +162,30 @@ const createStillWanted = (tx: TxRead, task: CalendarTask): ScheduledMeeting | n
 export type CreateCheck = { wanted: true; meeting: ScheduledMeeting } | { wanted: false; task: CalendarTask };
 
 export const checkCalendarCreate =
-  (id: string): Command<CreateCheck> =>
+  (attempt: CalendarAttempt): Command<CreateCheck> =>
   (tx) => {
-    const task = openTask(tx, id);
+    const task = heldAttempt(tx, attempt);
     if (!task || task.action !== "create") return fail("not_found", TASK_GONE);
     const meeting = createStillWanted(tx, task);
     if (meeting && tx.get("calendar", task.profileId)?.value.grantId === task.grantId) {
       return done({ wanted: true, meeting });
     }
     if (meeting) failMeetingSync(tx, meeting, CALENDAR_CHANGED);
-    return done({ wanted: false, task: toDelete(tx, task) });
+    return done({ wanted: false, task: toDelete(tx, task, true) });
   };
 
 export type CreateSettlement = { meeting: ScheduledMeeting | null; removal: CalendarTask | null };
 
 export const settleCalendarCreate =
-  (id: string): Command<CreateSettlement> =>
+  (attempt: CalendarAttempt): Command<CreateSettlement> =>
   (tx) => {
-    const task = openTask(tx, id);
+    const task = heldAttempt(tx, attempt);
     if (!task || task.action !== "create") return fail("not_found", TASK_GONE);
     const meeting = createStillWanted(tx, task);
-    if (!meeting) return done({ meeting: null, removal: toDelete(tx, task) });
+    if (!meeting) return done({ meeting: null, removal: toDelete(tx, task, false) });
     const grantHeld = tx.get("calendar", task.profileId)?.value.grantId === task.grantId;
     if (!grantHeld) {
-      return done({ meeting: failMeetingSync(tx, meeting, CALENDAR_CHANGED), removal: toDelete(tx, task) });
+      return done({ meeting: failMeetingSync(tx, meeting, CALENDAR_CHANGED), removal: toDelete(tx, task, false) });
     }
     const moved = meeting.scheduledStartAt !== task.startAt || meeting.scheduledEndAt !== task.endAt;
     const next: ScheduledMeeting = {
@@ -183,7 +196,7 @@ export const settleCalendarCreate =
       updatedAt: tx.now,
     };
     tx.put("meeting", next);
-    tx.remove("calendarTask", id);
+    tx.put("calendarTask", { ...task, state: "linked", lastError: null, updatedAt: tx.now });
     return done({ meeting: next, removal: null });
   };
 
@@ -201,10 +214,13 @@ const failMeetingSync = (tx: Tx, meeting: ScheduledMeeting, message: string): Sc
 export type Deferral = { task: CalendarTask; meeting: ScheduledMeeting | null; gaveUp: boolean };
 
 export const deferCalendarTask =
-  (id: string, message: string, delays: readonly number[]): Command<Deferral> =>
+  (attempt: CalendarAttempt, message: string, delays: readonly number[]): Command<Deferral> =>
   (tx) => {
-    const task = openTask(tx, id);
+    const task = heldAttempt(tx, attempt);
     if (!task) return fail("not_found", TASK_GONE);
+    if (task.action === "create" && !createStillWanted(tx, task)) {
+      return done({ task: toDelete(tx, task, true), meeting: null, gaveUp: false });
+    }
     const error = message.slice(0, 512);
     const gaveUp = task.attempts > delays.length;
     const next: CalendarTask = gaveUp
@@ -220,11 +236,11 @@ export const deferCalendarTask =
   };
 
 export const finishCalendarDelete =
-  (id: string): Command<CalendarTask> =>
+  (attempt: CalendarAttempt): Command<CalendarTask> =>
   (tx) => {
-    const task = openTask(tx, id);
+    const task = heldAttempt(tx, attempt);
     if (!task || task.action !== "delete") return fail("not_found", TASK_GONE);
-    tx.remove("calendarTask", id);
+    tx.remove("calendarTask", task.id);
     return done(task);
   };
 
