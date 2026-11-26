@@ -383,7 +383,7 @@ export const bookSlot =
     endAt: number;
     request: CreateScheduledMeetingRequest;
     options: CreateScheduledMeetingOptions;
-    calendarEvent: { appOrigin: string; timeZone: string; leaseMs: number };
+    calendarEvent: { appOrigin: string; timeZone: string; claimedForMs: number };
   }): Command<BookedSlot> =>
   (tx) => {
     const profile = tx.get("profile", input.profileId);

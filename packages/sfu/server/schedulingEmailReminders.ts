@@ -10,6 +10,7 @@ import {
   recordReminderResult,
   reminderContext,
 } from "./controlPlane/schedulingCommands.js";
+import { defaultAppOrigin } from "./appOrigin.js";
 import { commitFollowUp } from "./controlPlane/followUp.js";
 import {
   isSchedulingEmailConfigured,
@@ -38,14 +39,6 @@ const resolveSchedulingReminderLeadMs = (): number => {
       : DEFAULT_REMINDER_MINUTES;
   return minutes * MINUTE_MS;
 };
-
-const resolveAppOrigin = (): string =>
-  (
-    process.env.NEXT_PUBLIC_APP_URL ||
-    process.env.NEXT_PUBLIC_SITE_URL ||
-    process.env.BETTER_AUTH_BASE_URL ||
-    "https://conclave.acmvit.in"
-  ).replace(/\/$/, "");
 
 const fallbackTimeZone = (meeting: ScheduledMeeting): string => {
   const zone = meeting.attendeeTimeZone || "UTC";
@@ -110,7 +103,7 @@ const sendReminderForMeeting = async (
       profile,
       eventType: context.eventType ?? fallbackEventType(pending, profile),
       meeting: pending,
-      appOrigin: resolveAppOrigin(),
+      appOrigin: defaultAppOrigin(),
     });
   } catch (error) {
     Logger.warn("Failed to send scheduling reminder", error);

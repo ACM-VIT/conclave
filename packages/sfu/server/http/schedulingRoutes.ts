@@ -40,6 +40,7 @@ import {
 } from "../controlPlane/schedulingCommands.js";
 import { commitFollowUp } from "../controlPlane/followUp.js";
 import { CALENDAR_TASK_LEASE_MS } from "../controlPlane/calendarTaskCommands.js";
+import { resolveAppOrigin } from "../appOrigin.js";
 import { runCalendarTask } from "../calendarTasks.js";
 import { fetchOptionalGoogleBusy } from "../googleCalendar.js";
 import { StoreCorruptionError, StoreUnavailableError } from "../controlPlane/model.js";
@@ -149,17 +150,6 @@ const resolveUserContext = (
   const userId = normalizeIdentifier(req.header("x-user-id"));
   const isAdmin = req.header("x-user-is-admin") === "1";
   return { email, name, userId, isAdmin };
-};
-
-const resolveAppOrigin = (req: Request): string => {
-  const fromHeader = req.header("x-app-origin")?.trim();
-  if (fromHeader) return fromHeader.replace(/\/$/, "");
-  return (
-    process.env.NEXT_PUBLIC_APP_URL ||
-    process.env.NEXT_PUBLIC_SITE_URL ||
-    process.env.BETTER_AUTH_BASE_URL ||
-    "https://conclave.acmvit.in"
-  ).replace(/\/$/, "");
 };
 
 const publicCalendarSummary = (
@@ -623,7 +613,7 @@ export const registerSchedulingRoutes = (
               defaultHostName: profile.name,
               defaultHostUserId: profile.userId,
             },
-            calendarEvent: { appOrigin, timeZone: profile.timeZone, leaseMs: CALENDAR_TASK_LEASE_MS },
+            calendarEvent: { appOrigin, timeZone: profile.timeZone, claimedForMs: CALENDAR_TASK_LEASE_MS },
           }),
         );
         if (result.ok) return { target, meeting: result.value.meeting, calendarTaskId: result.value.calendarTaskId };
@@ -652,7 +642,7 @@ export const registerSchedulingRoutes = (
 
       if (calendarTaskId) {
         const run = await runCalendarTask(state, calendarTaskId, {}, true);
-        if (run.bookingGone) {
+        if (run.booking === "gone") {
           bookingGone();
           return;
         }

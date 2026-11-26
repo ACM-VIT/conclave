@@ -3,12 +3,12 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi, t
 import { config } from "../config/config.js";
 import { drainCalendarTasks } from "../server/calendarTasks.js";
 import { createMemoryBackend, createMemoryData } from "../server/controlPlane/backends/memory.js";
-import { CALENDAR_TASK_RETRY_DELAYS_MS } from "../server/controlPlane/calendarTaskCommands.js";
-import { controlPlaneStore } from "../server/controlPlane/store.js";
+import { CALENDAR_CHANGED, CALENDAR_TASK_RETRY_DELAYS_MS } from "../server/controlPlane/calendarTaskCommands.js";
+import { controlPlaneStore, type ControlPlaneStore } from "../server/controlPlane/store.js";
 import { createSfuApp } from "../server/http/createApp.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
 import { createSfuState, type SfuState } from "../server/state.js";
-import { FakeGoogle, Gates, installFakeFetch } from "./support/fakeServices.js";
+import { EMAIL_WORKER_URL, FakeEmail, FakeGoogle, Gates, installFakeFetch } from "./support/fakeServices.js";
 
 const HOST = { "x-user-id": "host-user", "x-user-email": "host@example.test", "x-user-name": "Host" };
 const DAY_MS = 86_400_000;
@@ -16,12 +16,13 @@ const ALL_DAY = [0, 1, 2, 3, 4, 5, 6].map((day) => ({ day, startMinutes: 0, endM
 
 let gates = new Gates();
 let google = new FakeGoogle(gates);
+let email: FakeEmail | null = null;
 let restoreFetch: () => void = () => {};
 let errors: MockInstance<(...args: unknown[]) => void>;
 const servers: Server[] = [];
 
 beforeAll(() => {
-  restoreFetch = installFakeFetch(() => google, () => null);
+  restoreFetch = installFakeFetch(() => google, () => email);
 });
 
 afterAll(() => {
@@ -31,6 +32,7 @@ afterAll(() => {
 beforeEach(() => {
   gates = new Gates();
   google = new FakeGoogle(gates);
+  email = null;
   vi.stubEnv("GOOGLE_CLIENT_ID", "tasks-client");
   vi.stubEnv("GOOGLE_CLIENT_SECRET", "tasks-secret");
   vi.stubEnv("SCHEDULING_EMAIL_WORKER_URL", "");
@@ -47,9 +49,24 @@ afterEach(async () => {
 
 const sfuWithClock = async () => {
   const clock = { now: Date.now() };
+  const seams = { afterBookingCommit: null as (() => Promise<void>) | null };
+  const store = controlPlaneStore(createMemoryBackend(createMemoryData()), () => clock.now);
+  const controlPlane: ControlPlaneStore = {
+    ...store,
+    commit: async (command) => {
+      const result = await store.commit(command);
+      const booked = result.ok && typeof result.value === "object" && result.value !== null && "calendarTaskId" in result.value;
+      const seam = seams.afterBookingCommit;
+      if (booked && seam) {
+        seams.afterBookingCommit = null;
+        await seam();
+      }
+      return result;
+    },
+  };
   const state: SfuState = createSfuState({
     roomRegistry: new LocalRoomRegistry({ instanceId: "tasks", instanceUrl: "http://localhost", ttlMs: 45000 }),
-    controlPlane: controlPlaneStore(createMemoryBackend(createMemoryData()), () => clock.now),
+    controlPlane,
   });
   const server = createServer(createSfuApp({ state, config, getIo: () => null }));
   servers.push(server);
@@ -70,8 +87,22 @@ const sfuWithClock = async () => {
   await call("POST", "/scheduling/event-types", { title: "Intro", slug: "intro", isActive: true, minimumNoticeMinutes: 0 });
   await call("POST", "/scheduling/calendar/google", { refreshToken: "refresh", accessToken: "stale", accessTokenExpiresAt: 1 });
   const username = (profile.body.profile as { username: string }).username;
-  return { state, clock, call, username };
+  return { state, clock, call, username, seams };
 };
+
+type Sfu = Awaited<ReturnType<typeof sfuWithClock>>;
+
+const bookIntro = (call: Sfu["call"], username: string) =>
+  call("POST", `/scheduling/public/${username}/intro/book`, {
+    startAt: Math.ceil((Date.now() + 2 * DAY_MS) / 1_800_000) * 1_800_000,
+    attendeeName: "Guest",
+    attendeeEmail: "guest@example.test",
+  });
+
+const savedMeeting = async (call: Sfu["call"], id: string) =>
+  (await call("GET", `/scheduled-meetings/${id}`)).body.scheduledMeeting as Record<string, unknown>;
+
+const calendarTasks = (state: SfuState) => state.controlPlane.read((view) => view.all("calendarTask").map((stored) => stored.value));
 
 describe("a calendar task Google keeps refusing", () => {
   it("stops after a bounded number of attempts, logs it, marks the booking failed and reports it in /health", async () => {
@@ -232,5 +263,156 @@ describe("an ambiguous Google insert", () => {
     expect(google.deleteAttempts).toBe(0);
     expect(google.events.size).toBe(1);
     expect((await call("GET", "/health")).body.calendarTasks).toEqual({ failed: 1 });
+  });
+});
+
+describe("a host who changes Google Calendar between a booking's commit and its calendar check", () => {
+  const changes = {
+    disconnects: (call: Sfu["call"]) => call("DELETE", "/scheduling/calendar/google"),
+    reconnects: (call: Sfu["call"]) =>
+      call("POST", "/scheduling/calendar/google", { refreshToken: "second-grant", accessToken: "stale", accessTokenExpiresAt: 1 }),
+  };
+
+  it.each(["disconnects", "reconnects"] as const)(
+    "answers 201 with the saved booking and its calendar error, and emails it, when the host %s",
+    async (change) => {
+      vi.stubEnv("SCHEDULING_EMAIL_WORKER_URL", EMAIL_WORKER_URL);
+      vi.stubEnv("SCHEDULING_EMAIL_WORKER_SECRET", "tasks-email-secret");
+      email = new FakeEmail(gates);
+      const { state, clock, call, username, seams } = await sfuWithClock();
+      seams.afterBookingCommit = async () => {
+        expect((await changes[change](call)).status).toBe(200);
+      };
+
+      const booked = await bookIntro(call, username);
+
+      expect(booked.status).toBe(201);
+      expect(booked.body.calendarError).toBe(CALENDAR_CHANGED);
+      const id = (booked.body.booking as { id: string }).id;
+      expect(await savedMeeting(call, id)).toMatchObject({
+        status: "scheduled",
+        calendarSyncStatus: "failed",
+        calendarSyncError: CALENDAR_CHANGED,
+        googleCalendarEventId: null,
+        emailNotificationStatus: "sent",
+      });
+      expect(email.sent.map((sent) => sent.type).sort()).toEqual(["booking-attendee-confirmation", "booking-host-notification"]);
+      expect(google.createAttempts).toBe(0);
+      expect(await calendarTasks(state)).toEqual([]);
+      for (let round = 0; round <= CALENDAR_TASK_RETRY_DELAYS_MS.length; round += 1) {
+        clock.now += DAY_MS;
+        await drainCalendarTasks(state);
+      }
+      expect((await call("GET", "/health")).body.calendarTasks).toEqual({ failed: 0 });
+    },
+  );
+
+  it("reports the calendar error when the grant changes while Google creates the event", async () => {
+    const { state, call, username } = await sfuWithClock();
+    gates.parking.add("google-created");
+    const booking = bookIntro(call, username);
+    try {
+      await vi.waitFor(() => expect(gates.parked.map((entry) => entry.kind)).toEqual(["google-created"]));
+      expect((await changes.reconnects(call)).status).toBe(200);
+    } finally {
+      gates.drain();
+    }
+    const booked = await booking;
+
+    expect(booked.status).toBe(201);
+    expect(booked.body.calendarError).toBe(CALENDAR_CHANGED);
+    const id = (booked.body.booking as { id: string }).id;
+    expect(await savedMeeting(call, id)).toMatchObject({ calendarSyncStatus: "failed", calendarSyncError: CALENDAR_CHANGED, googleCalendarEventId: null });
+    expect(state.calendarTasks.failed).toBe(0);
+  });
+});
+
+describe("a cancelled booking that is opened again", () => {
+  const cancelled = async (sfu: Sfu) => {
+    const booked = await bookIntro(sfu.call, sfu.username);
+    const id = (booked.body.booking as { id: string }).id;
+    const [first] = google.events.values();
+    expect(await savedMeeting(sfu.call, id)).toMatchObject({ googleCalendarEventId: first.id, calendarSyncStatus: "synced" });
+    expect((await sfu.call("POST", `/scheduled-meetings/${id}/cancel`)).status).toBe(200);
+    return { id, firstEventId: first.id };
+  };
+
+  const reopen = {
+    "started": (call: Sfu["call"], id: string) => call("POST", `/scheduled-meetings/${id}/start`),
+    "set back to scheduled": (call: Sfu["call"], id: string) => call("PATCH", `/scheduled-meetings/${id}`, { status: "scheduled" }),
+  };
+
+  it.each(["started", "set back to scheduled"] as const)("gets a new Google event when it is %s after its event was removed", async (how) => {
+    const sfu = await sfuWithClock();
+    const { id, firstEventId } = await cancelled(sfu);
+    await vi.waitFor(() => expect(google.events.size).toBe(0));
+
+    const reopened = await reopen[how](sfu.call, id);
+    expect(reopened.status).toBe(200);
+    expect(reopened.body.scheduledMeeting).toMatchObject({ googleCalendarEventId: null, calendarSyncStatus: "pending" });
+    await vi.waitFor(async () => expect((await savedMeeting(sfu.call, id)).calendarSyncStatus).toBe("synced"));
+
+    const [event] = google.events.values();
+    expect(google.events.size).toBe(1);
+    expect(event.id).not.toBe(firstEventId);
+    expect(await savedMeeting(sfu.call, id)).toMatchObject({ googleCalendarEventId: event.id, calendarSyncError: null });
+  });
+
+  it("ends with one linked event when it is opened again before the old event was removed", async () => {
+    const sfu = await sfuWithClock();
+    gates.parking.add("google-delete");
+    const { id, firstEventId } = await cancelled(sfu);
+    try {
+      await vi.waitFor(() => expect(gates.parked.map((entry) => entry.kind)).toEqual(["google-delete"]));
+      expect((await reopen.started(sfu.call, id)).status).toBe(200);
+    } finally {
+      gates.drain();
+    }
+    await vi.waitFor(() => expect(sfu.state.calendarTasks.draining).toBe(false));
+    await drainCalendarTasks(sfu.state);
+
+    const [event] = google.events.values();
+    expect(google.events.size).toBe(1);
+    expect(event.id).not.toBe(firstEventId);
+    expect(await savedMeeting(sfu.call, id)).toMatchObject({ googleCalendarEventId: event.id, status: "live" });
+    expect((await calendarTasks(sfu.state)).map((task) => `${task.action} ${task.state}`)).toEqual(["create linked"]);
+  });
+
+  it("is marked failed, not synced, when Google Calendar is no longer connected", async () => {
+    const sfu = await sfuWithClock();
+    const { id } = await cancelled(sfu);
+    await vi.waitFor(() => expect(google.events.size).toBe(0));
+    expect((await sfu.call("DELETE", "/scheduling/calendar/google")).status).toBe(200);
+
+    const reopened = await reopen.started(sfu.call, id);
+    expect(reopened.body.scheduledMeeting).toMatchObject({
+      googleCalendarEventId: null,
+      calendarSyncStatus: "failed",
+      calendarSyncError: "Google Calendar is not connected.",
+    });
+    expect(google.events.size).toBe(0);
+    expect(await calendarTasks(sfu.state)).toEqual([]);
+  });
+
+  it("keeps the event of a booking that was cancelled and opened again while Google still created it", async () => {
+    const sfu = await sfuWithClock();
+    gates.parking.add("google-create");
+    const booking = bookIntro(sfu.call, sfu.username);
+    let id = "";
+    try {
+      await vi.waitFor(() => expect(gates.parked.map((entry) => entry.kind)).toEqual(["google-create"]));
+      id = ((await sfu.call("GET", "/scheduling/bookings")).body.bookings as Array<{ id: string }>)[0].id;
+      expect((await sfu.call("POST", `/scheduled-meetings/${id}/cancel`)).status).toBe(200);
+      expect((await reopen["set back to scheduled"](sfu.call, id)).status).toBe(200);
+    } finally {
+      gates.drain();
+    }
+    expect((await booking).status).toBe(201);
+    await drainCalendarTasks(sfu.state);
+
+    const [event] = google.events.values();
+    expect(google.created).toHaveLength(1);
+    expect(await savedMeeting(sfu.call, id)).toMatchObject({ googleCalendarEventId: event.id, calendarSyncStatus: "synced" });
+    expect((await calendarTasks(sfu.state)).map((task) => `${task.action} ${task.state}`)).toEqual(["create linked"]);
   });
 });

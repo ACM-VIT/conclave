@@ -12,8 +12,8 @@ import {
   type CreateScheduledMeetingOptions,
   type ScheduledMeetingFilter,
 } from "../scheduledMeetings.js";
-import { retireMeetingEvent } from "./calendarTaskCommands.js";
-import { done, fail, tags, uniqueKeys, type Outcome } from "./model.js";
+import { restoreMeetingEvent, retireMeetingEvent } from "./calendarTaskCommands.js";
+import { done, fail, isActiveMeeting, tags, uniqueKeys, type Outcome } from "./model.js";
 import type { Command, Query, Tx, TxRead } from "./tx.js";
 
 export type MeetingAccess = { email: string | null; isAdmin: boolean };
@@ -87,6 +87,14 @@ const withAccess = <T>(
   return run(current.value);
 };
 
+const calendarWorkFor = (tx: Tx, before: ScheduledMeeting, after: ScheduledMeeting): ScheduledMeeting => {
+  if (after.status === "cancelled" && before.status !== "cancelled") {
+    return retireMeetingEvent(tx, after) ? { ...after, googleCalendarEventId: null } : after;
+  }
+  if (before.status === "cancelled" && isActiveMeeting(after)) return restoreMeetingEvent(tx, after);
+  return after;
+};
+
 export const meetingForHost =
   (id: string, access: MeetingAccess): Command<ScheduledMeeting> =>
   (tx) =>
@@ -120,8 +128,7 @@ export const updateMeeting =
         now: tx.now,
         activeOwner: activeOwner(tx),
       });
-      const retired = updated.status === "cancelled" && meeting.status !== "cancelled" && retireMeetingEvent(tx, updated);
-      const next = retired ? { ...updated, googleCalendarEventId: null } : updated;
+      const next = calendarWorkFor(tx, meeting, updated);
       tx.put("meeting", next);
       return done(next);
     });

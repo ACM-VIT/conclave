@@ -1,5 +1,7 @@
 import type { ScheduledMeeting } from "../../types.js";
-import { done, fail, tags, type CalendarTask, type Entropy } from "./model.js";
+import { defaultAppOrigin } from "../appOrigin.js";
+import { isCalendarUsable } from "../scheduling.js";
+import { done, fail, isActiveMeeting, tags, type CalendarTask, type Entropy } from "./model.js";
 import type { Command, Query, Tx, TxRead } from "./tx.js";
 
 export const CALENDAR_TASK_LEASE_MS = 60_000;
@@ -14,6 +16,7 @@ export const CALENDAR_TASK_RETRY_DELAYS_MS: readonly number[] = [
 ];
 
 export const CALENDAR_CHANGED = "Google Calendar was reconnected or disconnected meanwhile.";
+export const CALENDAR_NOT_CONNECTED = "Google Calendar is not connected.";
 export const BOOKING_MOVED = "The booking moved after its calendar event was created.";
 
 const TASK_GONE = "This calendar task is finished or no longer exists.";
@@ -42,7 +45,7 @@ export type CreateTaskInput = {
   grantId: string;
   appOrigin: string;
   timeZone: string;
-  leaseMs: number;
+  claimedForMs: number | null;
 };
 
 export const putCreateTask = (tx: Tx, input: CreateTaskInput): CalendarTask => {
@@ -58,8 +61,8 @@ export const putCreateTask = (tx: Tx, input: CreateTaskInput): CalendarTask => {
     endAt: input.meeting.scheduledEndAt,
     appOrigin: input.appOrigin,
     timeZone: input.timeZone,
-    attempts: 1,
-    nextAttemptAt: tx.now + input.leaseMs,
+    attempts: input.claimedForMs === null ? 0 : 1,
+    nextAttemptAt: tx.now + (input.claimedForMs ?? 0),
     lastError: null,
     createdAt: tx.now,
     updatedAt: tx.now,
@@ -82,6 +85,12 @@ const toDelete = (tx: Tx, task: CalendarTask, awaitingCreate: boolean): Calendar
   };
   tx.put("calendarTask", next);
   return next;
+};
+
+const abandonCreate = (tx: Tx, task: CalendarTask): CalendarTask | null => {
+  if (task.attempts > 1) return toDelete(tx, task, true);
+  tx.remove("calendarTask", task.id);
+  return null;
 };
 
 const profileOfBooking = (tx: TxRead, meeting: ScheduledMeeting): string | null => {
@@ -131,6 +140,29 @@ export const retireMeetingEvent = (tx: Tx, meeting: ScheduledMeeting): CalendarT
   return task;
 };
 
+export const restoreMeetingEvent = (tx: Tx, meeting: ScheduledMeeting): ScheduledMeeting => {
+  if (!isActiveMeeting(meeting) || meeting.calendarSyncStatus === "not_required" || meeting.googleCalendarEventId) {
+    return meeting;
+  }
+  const tracked = tx.tagged("calendarTask", tags.meetingCalendarTasks(meeting.id)).map(({ value }) => value);
+  if (tracked.some((task) => task.action === "create")) return meeting;
+  const profileId = profileOfBooking(tx, meeting);
+  const profile = profileId ? tx.get("profile", profileId)?.value ?? null : null;
+  const calendar = profile ? tx.get("calendar", profile.id)?.value ?? null : null;
+  if (!profile || !isCalendarUsable(calendar)) {
+    return { ...meeting, calendarSyncStatus: "failed", calendarSyncError: CALENDAR_NOT_CONNECTED };
+  }
+  putCreateTask(tx, {
+    meeting,
+    profileId: profile.id,
+    grantId: calendar.grantId,
+    appOrigin: tracked.find((task) => task.appOrigin)?.appOrigin ?? defaultAppOrigin(),
+    timeZone: profile.timeZone,
+    claimedForMs: null,
+  });
+  return { ...meeting, calendarSyncStatus: "pending", calendarSyncError: null };
+};
+
 const openTask = (tx: TxRead, id: string): CalendarTask | null => {
   const task = tx.get("calendarTask", id)?.value ?? null;
   return task && task.state === "open" ? task : null;
@@ -159,7 +191,9 @@ const createStillWanted = (tx: TxRead, task: CalendarTask): ScheduledMeeting | n
   return meeting && meeting.status !== "cancelled" ? meeting : null;
 };
 
-export type CreateCheck = { wanted: true; meeting: ScheduledMeeting } | { wanted: false; task: CalendarTask };
+export type CreateCheck =
+  | { wanted: true; meeting: ScheduledMeeting }
+  | { wanted: false; booking: ScheduledMeeting | null; removal: CalendarTask | null };
 
 export const checkCalendarCreate =
   (attempt: CalendarAttempt): Command<CreateCheck> =>
@@ -170,8 +204,8 @@ export const checkCalendarCreate =
     if (meeting && tx.get("calendar", task.profileId)?.value.grantId === task.grantId) {
       return done({ wanted: true, meeting });
     }
-    if (meeting) failMeetingSync(tx, meeting, CALENDAR_CHANGED);
-    return done({ wanted: false, task: toDelete(tx, task, true) });
+    const booking = meeting ? failMeetingSync(tx, meeting, CALENDAR_CHANGED) : null;
+    return done({ wanted: false, booking, removal: abandonCreate(tx, task) });
   };
 
 export type CreateSettlement = { meeting: ScheduledMeeting | null; removal: CalendarTask | null };

@@ -3,6 +3,7 @@ import {
   CALENDAR_TASK_LEASE_MS,
   CALENDAR_TASK_RETRY_DELAYS_MS,
   CALENDAR_CHANGED,
+  CALENDAR_NOT_CONNECTED,
   calendarTaskById,
   checkCalendarCreate,
   claimCalendarTask,
@@ -22,16 +23,17 @@ import type { ScheduledMeeting } from "../types.js";
 
 export type CalendarTaskOptions = { leaseMs?: number; retryDelaysMs?: readonly number[] };
 
-export type CalendarTaskRun = {
-  meeting: ScheduledMeeting | null;
-  error: string | null;
-  bookingGone: boolean;
-};
+export type CalendarTaskRun =
+  | { booking: "gone" }
+  | { booking: "kept"; meeting: ScheduledMeeting | null; error: string | null };
 
-const NOT_CONNECTED = "Google Calendar is not connected.";
 const CREATE_NOT_CONFIRMED = "Google did not find the event and a previous insert may still complete.";
 
-const idle = (meeting: ScheduledMeeting | null = null): CalendarTaskRun => ({ meeting, error: null, bookingGone: false });
+const idle = (): CalendarTaskRun => ({ booking: "kept", meeting: null, error: null });
+const gone = (): CalendarTaskRun => ({ booking: "gone" });
+const kept = (meeting: ScheduledMeeting | null, error: string | null): CalendarTaskRun => ({ booking: "kept", meeting, error });
+const syncErrorOf = (meeting: ScheduledMeeting): string | null =>
+  meeting.calendarSyncStatus === "failed" ? meeting.calendarSyncError ?? null : null;
 
 const messageOf = (error: unknown): string => (error instanceof Error && error.message) || "Google Calendar request failed.";
 
@@ -47,19 +49,19 @@ const defer = async (
   if (!deferred.ok) return idle();
   if (deferred.value.task.action !== task.action) {
     await runCalendarTask(state, task.id, options);
-    return { ...idle(), bookingGone: true };
+    return gone();
   }
   if (deferred.value.gaveUp) {
     Logger.error(
       `[ControlPlane] gave up on calendar task ${task.id} (${task.action} the event of booking ${task.meetingId}) after ${deferred.value.task.attempts} attempts: ${message}`,
     );
   }
-  return { meeting: deferred.value.meeting, error: message, bookingGone: false };
+  return kept(deferred.value.meeting, message);
 };
 
 const taskConnection = async (state: SfuState, task: CalendarTask) => {
   const connection = await state.controlPlane.read(hostCalendar(task.profileId));
-  if (!isCalendarUsable(connection)) return { connection: null, error: NOT_CONNECTED };
+  if (!isCalendarUsable(connection)) return { connection: null, error: CALENDAR_NOT_CONNECTED };
   if (connection.grantId !== task.grantId) return { connection: null, error: CALENDAR_CHANGED };
   return { connection, error: null };
 };
@@ -82,8 +84,8 @@ const runCreate = async (state: SfuState, task: CalendarTask, options: CalendarT
   const checked = await state.controlPlane.commit(checkCalendarCreate(task));
   if (!checked.ok) return idle();
   if (!checked.value.wanted) {
-    await runCalendarTask(state, task.id, options);
-    return { ...idle(), bookingGone: true };
+    if (checked.value.removal) await runCalendarTask(state, task.id, options);
+    return checked.value.booking ? kept(checked.value.booking, CALENDAR_CHANGED) : gone();
   }
   const meeting = checked.value.meeting;
   const target = await taskConnection(state, task);
@@ -106,7 +108,7 @@ const runCreate = async (state: SfuState, task: CalendarTask, options: CalendarT
   const settled = await state.controlPlane.commit(settleCalendarCreate(task));
   if (!settled.ok) return idle();
   if (settled.value.removal) await runCalendarTask(state, task.id, options);
-  return { meeting: settled.value.meeting, error: null, bookingGone: settled.value.meeting === null };
+  return settled.value.meeting ? kept(settled.value.meeting, syncErrorOf(settled.value.meeting)) : gone();
 };
 
 export const runCalendarTask = async (
