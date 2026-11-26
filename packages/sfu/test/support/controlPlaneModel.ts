@@ -253,6 +253,7 @@ const runSequence = async (mode: StoreMode, seed: number, steps: number): Promis
     "connect calendar": { calendar: ["accessToken", "refreshToken", "accessTokenExpiresAt", "scopes", "grantId", "status", "error", "email"] },
     "edit meeting title": { meeting: ["title"] },
     "start meeting": { meeting: ["status"] },
+    "reopen meeting": { meeting: ["status"] },
     "cancel meeting": { meeting: ["status"] },
     "edit webinar title": { webinar: ["title"] },
     "edit webinar slug": { webinar: ["linkSlug"] },
@@ -267,7 +268,7 @@ const runSequence = async (mode: StoreMode, seed: number, steps: number): Promis
     meeting: ["googleCalendarEventId", "calendarSyncStatus", "calendarSyncError"],
     calendarTask: ["action", "state", "attempts", "nextAttemptAt", "lastError", "updatedAt", "awaitingCreate"],
   };
-  const runsCalendarWork = new Set(["book", "cancel meeting", "delete meeting", "tick", "background"]);
+  const runsCalendarWork = new Set(["book", "start meeting", "reopen meeting", "cancel meeting", "delete meeting", "tick", "background"]);
   const allowedFor = (label: string, kind: Kind): string[] => [
     ...(ownedFields[label]?.[kind] ?? []),
     ...(runsCalendarWork.has(label) ? calendarWork[kind] ?? [] : []),
@@ -309,6 +310,18 @@ const runSequence = async (mode: StoreMode, seed: number, steps: number): Promis
     }
   };
 
+  const bookingStayedActive = (entries: CommitEntry[]): boolean => {
+    const versions = history();
+    return entries
+      .flatMap((entry) => entry.writes)
+      .filter((write) => write.kind === "meeting" && write.value !== null)
+      .some((write) =>
+        (versions.get(key("meeting", write.id)) ?? []).every(
+          (version) => version.value !== null && (version.value as ScheduledMeeting).status !== "cancelled",
+        ),
+      );
+  };
+
   const checkCompleted = () => {
     for (const done of completed.splice(0)) {
       const { op, reply } = done;
@@ -319,20 +332,23 @@ const runSequence = async (mode: StoreMode, seed: number, steps: number): Promis
       if (!ok && entries.length > 0) {
         const gone = reply.body.error === BOOKING_GONE;
         if (!gone) flag(`${op.label} answered ${reply.status} but committed a change`);
+        else if (bookingStayedActive(entries)) flag("a booking was answered as no longer available while it stayed saved and active");
       }
       if (!ok) continue;
-      const lastWrite = (kind: Kind, id: string) => {
-        for (const entry of [...entries].sort((a, b) => b.rev - a.rev)) {
+      const writeOf = (kind: Kind, id: string, which: "first" | "last") => {
+        const ordered = [...entries].sort((a, b) => (which === "last" ? b.rev - a.rev : a.rev - b.rev));
+        for (const entry of ordered) {
           const write = entry.writes.find((w) => w.kind === kind && w.id === id);
           if (write) return write;
         }
         return undefined;
       };
+      const lastWrite = (kind: Kind, id: string) => writeOf(kind, id, "last");
       const body = reply.body;
-      const expectSame = (kind: Kind, returned: unknown, strip: string[] = []) => {
+      const expectSame = (kind: Kind, returned: unknown, strip: string[] = [], which: "first" | "last" = "last") => {
         const id = (returned as { id?: string } | undefined)?.id;
         if (!id) return;
-        const write = lastWrite(kind, id);
+        const write = writeOf(kind, id, which);
         if (!write) return;
         const committed = { ...(write.value as Record<string, unknown>) };
         const answered = { ...(returned as Record<string, unknown>) };
@@ -345,7 +361,7 @@ const runSequence = async (mode: StoreMode, seed: number, steps: number): Promis
         }
       };
       if (body.eventType) expectSame("eventType", body.eventType);
-      if (body.scheduledMeeting) expectSame("meeting", body.scheduledMeeting);
+      if (body.scheduledMeeting) expectSame("meeting", body.scheduledMeeting, [], "first");
       if (body.scheduledWebinar) expectSame("webinar", body.scheduledWebinar, ["coHostInviteTokenHash", "coHostInviteTokenCreatedAt", "inviteCodeHash"]);
       if (op.label === "close day" || op.label === "open day") {
         const write = entries.flatMap((entry) => entry.writes).find((w) => w.kind === "hours");
@@ -432,7 +448,12 @@ const runSequence = async (mode: StoreMode, seed: number, steps: number): Promis
   const checkCalendarSettles = async () => {
     if (!observer || !google) return;
     const sfu = sfus.A!;
+    const backgroundDrainEnds = async () => {
+      for (let waited = 0; waited < 5_000 && sfu.state.calendarTasks.draining; waited += 1) await sleep(1);
+      if (sfu.state.calendarTasks.draining) flag("a calendar drain a route started never finished");
+    };
     for (let round = 0; round < 10; round += 1) {
+      await backgroundDrainEnds();
       const open = await observer.read((view) => view.tagged("calendarTask", "open").length);
       if (open === 0) break;
       advance += 6 * 3_600_000;
@@ -452,6 +473,12 @@ const runSequence = async (mode: StoreMode, seed: number, steps: number): Promis
     if (created.length !== new Set(created).size) flag("a Google event was inserted twice");
     for (const event of google.events.values()) {
       if (!linked.has(event.id) && !givenUp.has(event.id)) flag("a Google event is left with no live booking once every calendar task ran");
+    }
+    for (const meeting of snapshot.meetings) {
+      if (meeting.status === "cancelled") continue;
+      const event = meeting.googleCalendarEventId ? google.events.get(meeting.googleCalendarEventId) : undefined;
+      if (meeting.calendarSyncStatus === "synced" && !event) flag("a booking that is not cancelled says synced but has no Google event");
+      if (meeting.calendarSyncStatus === "pending") flag("a booking still waits for its Google event with no calendar task left to create it");
     }
   };
 
@@ -534,10 +561,11 @@ const runSequence = async (mode: StoreMode, seed: number, steps: number): Promis
       () => {
         if (meetingIds.length === 0) return;
         const id = pick(meetingIds.slice(-5));
-        const action = pick(["edit meeting title", "start meeting", "cancel meeting", "delete meeting"] as const);
+        const action = pick(["edit meeting title", "start meeting", "reopen meeting", "cancel meeting", "cancel meeting", "delete meeting"] as const);
         const path = action === "start meeting" ? `/scheduled-meetings/${id}/start` : action === "cancel meeting" ? `/scheduled-meetings/${id}/cancel` : `/scheduled-meetings/${id}`;
-        const method = action === "edit meeting title" ? "PATCH" : action === "delete meeting" ? "DELETE" : "POST";
-        launch(sfu, action, method, null, (op) => host(sfu, op, path, action === "edit meeting title" ? { title: `Renamed ${Math.floor(rand() * 1e6)}` } : undefined), id);
+        const method = action === "edit meeting title" || action === "reopen meeting" ? "PATCH" : action === "delete meeting" ? "DELETE" : "POST";
+        const body = action === "edit meeting title" ? { title: `Renamed ${Math.floor(rand() * 1e6)}` } : action === "reopen meeting" ? { status: "scheduled" } : undefined;
+        launch(sfu, action, method, null, (op) => host(sfu, op, path, body), id);
       },
       () =>
         launch(sfu, "create webinar", "POST", null, (op) =>
@@ -617,6 +645,9 @@ const runSequence = async (mode: StoreMode, seed: number, steps: number): Promis
       durationMinutes: 30,
     });
     eventTypeId = (created.body.eventType as { id: string }).id;
+    if (rand() < 0.5) {
+      await host(setup, op("setup", "POST"), "/scheduling/calendar/google", { refreshToken: "refresh-setup", accessToken: "stale", accessTokenExpiresAt: 1 });
+    }
     const kinds: GateKind[] = ["commit", "freebusy", "google-create", "email", ...(mode === "redis" ? (["redis"] as const) : [])];
     for (const kind of kinds) if (rand() < 0.6) gates.parking.add(kind);
 
