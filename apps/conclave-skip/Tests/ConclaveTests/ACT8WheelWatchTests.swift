@@ -133,6 +133,12 @@ struct ACT8WheelWatchTests {
         #expect(AppEmbedAppCodec.parse(nil) == AppEmbedAppStatus.empty)
     }
 
+    @Test func wheelEntriesCarryTheirListNumber() throws {
+        let wheel = try #require(AppEmbedAppCodec.parse(Self.wheelApp(["Ada", "Ben", "Cy"])))
+        #expect(wheel.entries.map { $0.label } == ["Ada", "Ben", "Cy"])
+        #expect(wheel.entries.map { $0.number } == [1, 2, 3])
+    }
+
     @Test func statusEnvelopesCarryThePageData() throws {
         let fixtures = try Self.fixtures()
         let scope = try #require(fixtures["scope"] as? [String: Any])
@@ -195,11 +201,10 @@ struct ACT8WheelWatchTests {
 
     @Test func wheelLabelsAndRosterRules() {
         #expect(AppPagePolicy.normalizedLabel("  Ada \t  Lovelace \n") == "Ada Lovelace")
-        #expect(AppPagePolicy.normalizedLabel(String(repeating: "x", count: 60)).count == AppWheelLimits.label)
-        #expect(AppPagePolicy.wheelLabels("Ada\nBen\r\n\n  \nCy", room: 64) == ["Ada", "Ben", "Cy"])
-        #expect(AppPagePolicy.wheelLabels("Ada\nBen\nCy", room: 2) == ["Ada", "Ben"])
-        #expect(AppPagePolicy.wheelLabels("Ada", room: 0).isEmpty)
-        let entries = [WheelEntryModel(id: "e1", label: "ada"), WheelEntryModel(id: "e2", label: "Ben")]
+        #expect(AppPagePolicy.normalizedLabel(String(repeating: "x", count: 60)).count == 60, "the wheel cuts names, not the host")
+        #expect(AppPagePolicy.wheelLabels("Ada\nBen\r\n\n  \nCy") == ["Ada", "Ben", "Cy"])
+        #expect(AppPagePolicy.wheelLabels(" \n\n").isEmpty)
+        let entries = [WheelEntryModel(id: "e1", label: "ada", number: 1), WheelEntryModel(id: "e2", label: "Ben", number: 2)]
         #expect(AppPagePolicy.missingNames(roster: ["Ada", "ADA", "Cy", " ", "ben", "Dee"], entries: entries) == ["Cy", "Dee"])
         #expect(AppPagePolicy.pickAction(canControl: true, canRequest: false, isPlaying: false) == .playNow)
         #expect(AppPagePolicy.pickAction(canControl: true, canRequest: false, isPlaying: true) == .enqueue)
@@ -288,6 +293,519 @@ struct ACT8WheelWatchTests {
         #expect(presenter.openPage() == .dispatched && wire.pages == ["wheel"], "Edit Names opens Activities at the Wheel page")
     }
 
+    private func wheelReady(_ wire: Wire) -> (AppHostPresenter, ActiveAppSession) {
+        let (presenter, relay) = host(wire, inputs: AppHostInputs.make(callSession: 1, appId: "wheel", isHost: true),
+                                      roster: ["You", "Grace"])
+        #expect(ready(relay) == .none)
+        send(relay, "status", ["app": Self.wheelApp(["Ada"])], id: "e-2")
+        return (presenter, relay)
+    }
+
+    private func addRequests(_ wire: Wire) -> [(id: String, labels: [String], tokens: [String])] {
+        var requests: [(id: String, labels: [String], tokens: [String])] = []
+        for raw in wire.delivered {
+            let object = AppBridgeCodec.jsonObject(raw) ?? [:]
+            if object["type"] as? String != "addEntries" { continue }
+            let payload = object["payload"] as? [String: Any] ?? [:]
+            requests.append((id: object["requestId"] as? String ?? "", labels: payload["labels"] as? [String] ?? [],
+                             tokens: payload["tokens"] as? [String] ?? []))
+        }
+        return requests
+    }
+
+    private func reattach(_ wire: Wire, _ relay: ActiveAppSession) {
+        relay.acceptPrimedSnapshot(AppsSyncResponse(syncMessage: Data([1]), stateVector: nil, awarenessUpdate: nil),
+                                   appSessionId: relay.appSessionId)
+        _ = relay.attachBridge(appSessionId: relay.appSessionId) { [wire] json in wire.delivered.append(json) }
+        #expect(ready(relay) == .none)
+    }
+
+    @Test func aSentNameLeavesTheDraftSoTypingCannotSendItAgain() {
+        let wire = Wire()
+        let (presenter, relay) = wheelReady(wire)
+        presenter.editWheelDraft("Ada\n")
+        #expect(addRequests(wire).map { $0.labels } == [["Ada"]])
+        #expect(presenter.wheelDraft.text.isEmpty, "the sent text moved out of the draft")
+        presenter.editWheelDraft("B")
+        presenter.editWheelDraft("Bo")
+        #expect(addRequests(wire).count == 1, "typing after the paste sends nothing")
+        ackAdded(relay, addRequests(wire)[0].id, ok: true, added: [0])
+        #expect(presenter.wheelDraft.text == "Bo")
+        presenter.editWheelDraft("Bo\n")
+        #expect(addRequests(wire).map { $0.labels } == [["Ada"], ["Bo"]])
+    }
+
+    @Test func everySentNameCarriesItsOwnRandomTokenAndAddEveryoneCarriesNone() throws {
+        let wire = Wire()
+        let (presenter, _) = wheelReady(wire)
+        presenter.editWheelDraft("Ada\nBo\n")
+        presenter.editWheelDraft("Ada\nBo\n")
+        let sent = addRequests(wire)
+        #expect(sent.map { $0.labels } == [["Ada", "Bo"], ["Ada", "Bo"]])
+        let tokens = sent.flatMap { $0.tokens }
+        #expect(tokens.count == 4 && Set(tokens).count == 4, "the same names typed twice never share a token")
+        #expect(tokens.allSatisfy { AppBridgeCodec.isValidIdentifier($0) && $0.count >= 32 && UUID(uuidString: $0) != nil })
+        #expect(presenter.wheelDraft.sent.map { $0.tokens } == sent.map { $0.tokens })
+
+        #expect(presenter.addEveryoneToWheel() == .dispatched)
+        let everyone = try #require(addRequests(wire).last)
+        #expect(everyone.labels == ["You", "Grace"] && everyone.tokens.isEmpty)
+        #expect(wire.lastPayload()["tokens"] == nil, "nothing asks about Add Everyone Here, so it carries no tokens")
+        presenter.fireCommandTimeout(requestId: everyone.id)
+        #expect(!presenter.wheel.isPending(.addEntries, target: "everyone"))
+        #expect(outcomeQueries(wire).isEmpty && addRequests(wire).count == 3, "it is neither sent again nor asked about")
+    }
+
+    @Test func aRefusedOrUnansweredNameReturnsAheadOfLaterTyping() throws {
+        let wire = Wire()
+        let (presenter, relay) = wheelReady(wire)
+        presenter.editWheelDraft("Cy\n")
+        presenter.editWheelDraft("De")
+        refuse(relay, addRequests(wire)[0].id, error: "full")
+        #expect(presenter.wheelDraft.text == "Cy\nDe")
+        #expect(!presenter.wheelDraft.isUnconfirmed, "the wheel said it added nothing, so there is nothing to warn about")
+        #expect(outcomeQueries(wire).isEmpty, "a refusal is an answer; nothing more is asked")
+        presenter.submitWheelDraft()
+        #expect(addRequests(wire).last?.labels == ["Cy", "De"])
+        presenter.editWheelDraft("Ed")
+        let second = addRequests(wire)[1]
+        presenter.fireCommandTimeout(requestId: second.id)
+        #expect(addRequests(wire).filter { $0.id == second.id }.count == 1, "an unanswered add is never sent again")
+        #expect(presenter.wheelDraft.text == "Ed", "an unanswered add stays out of the draft until the wheel says whether it ran")
+        let query = try #require(outcomeQueries(wire).last)
+        #expect(query.tokens == second.tokens)
+        answerOutcome(relay, query.id, applied: nil)
+        #expect(presenter.wheelDraft.text == "Cy\nDe\nEd")
+        ackAdded(relay, second.id, ok: true, added: [0, 1])
+        #expect(presenter.wheelDraft.text == "Cy\nDe\nEd", "a late reply for a request that was settled changes nothing")
+    }
+
+    @Test func aLostAckIsNeverSentAgainAndItsLateAnswerStillSettles() throws {
+        let wire = Wire()
+        let (presenter, relay) = wheelReady(wire)
+        presenter.editWheelDraft("Ada\nBo\n")
+        let add = try #require(addRequests(wire).first)
+        presenter.fireCommandTimeout(requestId: add.id)
+        presenter.fireCommandTimeout(requestId: add.id)
+        #expect(addRequests(wire).count == 1)
+        #expect(outcomeQueries(wire).count == 1, "one question at a time")
+        #expect(presenter.wheel.isPending(.addOutcome, target: add.id))
+        ackAdded(relay, add.id, ok: true, added: [0])
+        #expect(presenter.wheelDraft.text == "Bo" && presenter.wheelDraft.sent.isEmpty, "the add's own answer settles it")
+        #expect(!presenter.wheel.isPending(.addOutcome, target: add.id), "and withdraws the question")
+        answerOutcome(relay, outcomeQueries(wire)[0].id, applied: [0, 1])
+        #expect(presenter.wheelDraft.text == "Bo", "the question's late answer changes nothing")
+    }
+
+    @Test func anAddAnsweredWithoutAListIsAskedAboutAtOnce() throws {
+        for error in ["failed", "notReady", "unknownCommand", ""] {
+            let wire = Wire()
+            let (presenter, relay) = wheelReady(wire)
+            presenter.editWheelDraft("Ada\n")
+            let add = try #require(addRequests(wire).first)
+            send(relay, "ack", error.isEmpty ? ["ok": true] : ["ok": false, "error": error], id: add.id)
+            #expect(presenter.wheelDraft.text.isEmpty && presenter.wheelDraft.sent.count == 1, "\(error) says nothing about the names")
+            let query = try #require(outcomeQueries(wire).last, "\(error)")
+            #expect(query.tokens == add.tokens)
+            answerOutcome(relay, query.id, applied: [0])
+            #expect(presenter.wheelDraft.text.isEmpty && presenter.wheelDraft.sent.isEmpty)
+        }
+    }
+
+    @Test func aDetachedEmbedLeavesUnansweredNamesAloneUntilItCanReadTheOutcome() throws {
+        let wire = Wire()
+        let (presenter, relay) = wheelReady(wire)
+        presenter.editWheelDraft("Cy\nDe\n")
+        let original = try #require(addRequests(wire).first)
+        presenter.editWheelDraft("Ed")
+        relay.releaseEmbed()
+
+        for _ in 0..<4 { presenter.fireCommandTimeout(requestId: original.id) }
+        #expect(!presenter.wheel.isPending(.addOutcome, target: original.id))
+        #expect(outcomeQueries(wire).isEmpty)
+        #expect(addRequests(wire).count == 1)
+        #expect(presenter.wheelDraft.text == "Ed" && !presenter.wheelDraft.isUnconfirmed)
+        #expect(presenter.wheelDraft.sent.map { $0.lines } == [["Cy", "De"]])
+
+        reattach(wire, relay)
+        #expect(outcomeQueries(wire).count == 1)
+        let query = try #require(outcomeQueries(wire).first)
+        #expect(query.tokens == original.tokens)
+        answerOutcome(relay, query.id, applied: [0])
+        #expect(presenter.wheelDraft.sent.isEmpty)
+        #expect(presenter.wheelDraft.text == "De\nEd")
+        #expect(addRequests(wire).count == 1)
+    }
+
+    @Test func aDetachedEmbedClosesTheNamesPageAtOnceAndSettlesEveryPendingCommand() throws {
+        let wire = Wire()
+        let (presenter, relay) = wheelReady(wire)
+        send(relay, "status", ["app": Self.wheelApp(["Ada", "Bo", "Cy"])], id: "e-3")
+        #expect(presenter.spinWheel() == .dispatched && presenter.removeWheelEntry("e1") == .dispatched)
+        #expect(presenter.setWheelSounds(false) == .dispatched)
+        presenter.editWheelDraft("Dee\n")
+        #expect(presenter.wheel.isPending(.spin) && presenter.wheel.isPending(.removeEntry, target: "e1") && presenter.wheel.isReady)
+
+        relay.detachBridge(appSessionId: relay.appSessionId)
+
+        #expect(presenter.model.phase == .opening && !presenter.wheel.isReady && !presenter.wheel.canEdit && !presenter.wheel.canSpin)
+        #expect(presenter.wheel.pendingKinds.isEmpty && presenter.wheel.pendingTargets.isEmpty, "nothing a dead page could answer stays pending")
+        let sentBefore = wire.delivered.count
+        #expect(presenter.spinWheel() == .explained && presenter.sortWheel() == .explained && presenter.addEveryoneToWheel() == .explained)
+        presenter.editWheelDraft("Eli\n")
+        #expect(wire.delivered.count == sentBefore, "nothing is sent to a detached page")
+        #expect(presenter.wheelDraft.text == "Eli\n", "a name typed while the page is away stays in the draft")
+        #expect(presenter.wheelDraft.sent.map { $0.lines } == [["Dee"]], "the add in flight waits for the page to say what happened")
+
+        reattach(wire, relay)
+        send(relay, "status", ["app": Self.wheelApp(["Ada", "Bo", "Cy"])], id: "e-4")
+        #expect(presenter.wheel.isReady && presenter.wheel.canSpin && presenter.spinWheel() == .dispatched)
+        let query = try #require(outcomeQueries(wire).last)
+        answerOutcome(relay, query.id, applied: nil)
+        #expect(presenter.wheelDraft.text == "Dee\nEli\n")
+    }
+
+    @Test func anAnswerThatCannotTellReleasesTheQuestionAndTheNextReadyAsksAgain() throws {
+        for error in ["notSynced", "notReady", "badRequest", "unknownCommand", "failed"] {
+            let wire = Wire()
+            let (presenter, relay) = wheelReady(wire)
+            presenter.editWheelDraft("Ada\n")
+            let add = try #require(addRequests(wire).first)
+            presenter.fireCommandTimeout(requestId: add.id)
+            let first = try #require(outcomeQueries(wire).last)
+            send(relay, "ack", ["ok": false, "error": error], id: first.id)
+            #expect(!presenter.wheel.isPending(.addOutcome, target: add.id), "\(error) releases the question")
+            #expect(presenter.wheelDraft.text.isEmpty && presenter.wheelDraft.sent.count == 1, "\(error) settles nothing")
+            #expect(outcomeQueries(wire).count == 1, "\(error) is not answered with an instant second question")
+
+            presenter.apply(event: ActiveAppEvent.make(kind: .ready, appSessionId: relay.appSessionId, lifecycle: .ready, bundleVersion: "1.0.0"))
+            #expect(outcomeQueries(wire).count == 2, "\(error): the next ready asks again")
+            presenter.fireCommandTimeout(requestId: first.id)
+            #expect(outcomeQueries(wire).count == 2, "the first question's timer does not ask over the one in flight")
+            answerOutcome(relay, outcomeQueries(wire)[1].id, applied: [0])
+            #expect(presenter.wheelDraft.text.isEmpty && presenter.wheelDraft.sent.isEmpty)
+        }
+    }
+
+    @Test func anAnswerThatCannotTellIsAskedAgainWhenItsOwnWaitEnds() throws {
+        let wire = Wire()
+        let (presenter, relay) = wheelReady(wire)
+        presenter.editWheelDraft("Ada\n")
+        let add = try #require(addRequests(wire).first)
+        presenter.fireCommandTimeout(requestId: add.id)
+        let first = try #require(outcomeQueries(wire).last)
+        send(relay, "ack", ["ok": false, "error": "notSynced"], id: first.id)
+        #expect(outcomeQueries(wire).count == 1)
+        presenter.fireCommandTimeout(requestId: first.id)
+        #expect(outcomeQueries(wire).count == 2 && presenter.wheel.isPending(.addOutcome, target: add.id))
+        presenter.fireCommandTimeout(requestId: first.id)
+        #expect(outcomeQueries(wire).count == 2, "a timer fires once")
+    }
+
+    @Test func anUnansweredAddIsAskedAboutAFixedNumberOfTimesThenReturnedWithANotice() throws {
+        let wire = Wire()
+        let (presenter, relay) = wheelReady(wire)
+        presenter.editWheelDraft("Ada\nBo\n")
+        presenter.editWheelDraft("Cy")
+        let add = try #require(addRequests(wire).first)
+        presenter.fireCommandTimeout(requestId: add.id)
+        for asked in 1...AppBridgeProtocol.addOutcomeAsks {
+            #expect(outcomeQueries(wire).count == asked)
+            #expect(presenter.wheelDraft.text == "Cy" && !presenter.wheelDraft.isUnconfirmed, "question \(asked) is still open")
+            presenter.fireCommandTimeout(requestId: outcomeQueries(wire)[asked - 1].id)
+        }
+        #expect(outcomeQueries(wire).count == AppBridgeProtocol.addOutcomeAsks, "no question past the limit")
+        #expect(presenter.wheelDraft.text == "Ada\nBo\nCy" && presenter.wheelDraft.sent.isEmpty)
+        #expect(presenter.wheelDraft.isUnconfirmed, "the names come back with the notice that nobody confirmed them")
+        #expect(presenter.wheel.pendingKinds.isEmpty && addRequests(wire).count == 1)
+
+        answerOutcome(relay, outcomeQueries(wire)[0].id, applied: [0, 1])
+        ackAdded(relay, add.id, ok: true, added: [0, 1])
+        #expect(presenter.wheelDraft.text == "Ada\nBo\nCy" && presenter.wheelDraft.isUnconfirmed, "a late answer never edits what the person now sees")
+        presenter.editWheelDraft("Ada\nBo\nCyd")
+        #expect(!presenter.wheelDraft.isUnconfirmed, "the notice goes once the person edits the names")
+    }
+
+    @Test func theWindowEndsTheWaitHoweverTheClockMoves() throws {
+        for ending in ["deadline timer", "deadline timer while detached", "late wake", "clock ran backwards"] {
+            let wire = Wire()
+            let (presenter, relay) = wheelReady(wire)
+            var now = 1_000_000.0
+            presenter.nowMillis = { now }
+            presenter.editWheelDraft("Ada\n")
+            presenter.editWheelDraft("Bo")
+            let add = try #require(addRequests(wire).first)
+            switch ending {
+            case "deadline timer":
+                presenter.fireCommandTimeout(requestId: add.id)
+                #expect(presenter.wheel.isPending(.addOutcome, target: add.id))
+                presenter.fireAddDeadline(requestId: add.id)
+            case "deadline timer while detached":
+                relay.releaseEmbed()
+                presenter.fireCommandTimeout(requestId: add.id)
+                #expect(presenter.wheelDraft.text == "Bo" && !presenter.wheelDraft.isUnconfirmed)
+                presenter.fireAddDeadline(requestId: add.id)
+            case "late wake":
+                now += AppBridgeProtocol.addOutcomeWindowMillis
+                presenter.fireCommandTimeout(requestId: add.id)
+            default:
+                now -= 1.0
+                presenter.fireCommandTimeout(requestId: add.id)
+            }
+            #expect(presenter.wheelDraft.text == "Ada\nBo" && presenter.wheelDraft.isUnconfirmed, "\(ending)")
+            #expect(presenter.wheelDraft.sent.isEmpty && presenter.wheel.pendingKinds.isEmpty, "\(ending)")
+            #expect(addRequests(wire).count == 1, "\(ending)")
+            let asked = outcomeQueries(wire).count
+            presenter.fireAddDeadline(requestId: add.id)
+            presenter.fireCommandTimeout(requestId: add.id)
+            if ending == "deadline timer while detached" { reattach(wire, relay) }
+            #expect(outcomeQueries(wire).count == asked && presenter.wheelDraft.text == "Ada\nBo", "\(ending): nothing more is asked")
+        }
+        #expect(AppBridgeProtocol.commandTimeoutMillis * Double(AppBridgeProtocol.addOutcomeAsks + 1) <= AppBridgeProtocol.addOutcomeWindowMillis,
+                "every question fits inside the window")
+    }
+
+    @Test func typingPastingAndRepliesInAnyOrderNeverRepeatOrLoseANameLetter() {
+        var seed: UInt64 = 20261124
+        func random(_ limit: Int) -> Int {
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            return Int((seed >> 33) % UInt64(limit))
+        }
+        let alphabet = Array("abcdefghijklmnopqrstuvwxyz")
+        func letters(_ text: String) -> [Character] { text.filter { $0.isLetter }.sorted() }
+        for run in 0..<60 {
+            let wire = Wire()
+            let (presenter, relay) = wheelReady(wire)
+            var entered = ""
+            var replied = Set<String>()
+            var accepted: [String] = []
+            var unsettled: [String] = []
+            func requests() -> [(id: String, labels: [String], tokens: [String])] {
+                return addRequests(wire)
+            }
+            for step in 0..<40 {
+                let open = requests().filter { !replied.contains($0.id) }
+                switch random(8) {
+                case 0, 1:
+                    let letter = String(alphabet[random(alphabet.count)])
+                    entered += letter
+                    presenter.editWheelDraft(presenter.wheelDraft.text + letter)
+                case 2:
+                    let name = String(alphabet[random(alphabet.count)]) + String(alphabet[random(alphabet.count)])
+                    entered += name
+                    presenter.editWheelDraft(presenter.wheelDraft.text + name + "\n")
+                case 3:
+                    presenter.submitWheelDraft()
+                case 4:
+                    if let request = open.isEmpty ? nil : open[random(open.count)] {
+                        let ok = random(3) > 0
+                        replied.insert(request.id)
+                        if ok { accepted.append(request.labels.joined()) }
+                        ackAdded(relay, request.id, ok: ok, added: ok ? Array(0..<request.labels.count) : [])
+                    }
+                case 5:
+                    if let request = open.isEmpty ? nil : open[random(open.count)] {
+                        var added: [Int] = []
+                        for index in 0..<request.labels.count where random(2) == 0 { added.append(index) }
+                        replied.insert(request.id)
+                        for index in added { accepted.append(request.labels[index]) }
+                        ackAdded(relay, request.id, ok: !added.isEmpty, added: added)
+                    }
+                case 6:
+                    if let request = open.isEmpty ? nil : open[random(open.count)] {
+                        for _ in 0..<(1 + random(3)) { presenter.fireCommandTimeout(requestId: request.id) }
+                        if !unsettled.contains(request.id) { unsettled.append(request.id) }
+                    }
+                default:
+                    let waiting = unsettled.filter { !replied.contains($0) }
+                    if let original = waiting.isEmpty ? nil : waiting[random(waiting.count)],
+                       let request = requests().first(where: { $0.id == original }),
+                       let query = outcomeQueries(wire).last(where: { $0.tokens == request.tokens }) {
+                        replied.insert(original)
+                        if random(2) == 0 {
+                            accepted.append(request.labels.joined())
+                            answerOutcome(relay, query.id, applied: Array(0..<request.labels.count))
+                        } else {
+                            answerOutcome(relay, query.id, applied: nil)
+                        }
+                    }
+                }
+                let pending = requests().filter { !replied.contains($0.id) }.map { $0.labels.joined() }
+                let held = accepted.joined() + pending.joined() + presenter.wheelDraft.text
+                #expect(letters(held) == letters(entered), "run \(run) step \(step)")
+                #expect(requests().count == Set(requests().map { $0.id }).count, "run \(run) step \(step): no add is sent twice")
+            }
+        }
+    }
+
+    enum DraftScopeExit: CaseIterable {
+        case leaveAndJoinAnotherCall, newCallWithoutALeave, wheelClosedAndReopened, anotherAppThenTheWheel
+    }
+
+    private func openWheel(_ wire: Wire, _ presenter: AppHostPresenter, _ relay: ActiveAppSession, callSession: Int,
+                           call: String, appId: String = "wheel") {
+        relay.begin(appId: appId, callSessionId: call, isReadOnly: false)
+        presenter.apply(AppHostInputs.make(callSession: callSession, appId: appId, isHost: true))
+        if appId != "wheel" { return }
+        relay.acceptPrimedSnapshot(AppsSyncResponse(syncMessage: Data([1]), stateVector: nil, awarenessUpdate: nil),
+                                   appSessionId: relay.appSessionId)
+        relay.attachBridge(appSessionId: relay.appSessionId) { [wire] json in wire.delivered.append(json) }
+        #expect(ready(relay) == .none)
+        send(relay, "status", ["app": Self.wheelApp(["Ada"])], id: "e-open")
+    }
+
+    @Test(arguments: DraftScopeExit.allCases)
+    func aDraftNeverOutlivesItsCallOrItsWheel(_ exit: DraftScopeExit) {
+        let wire = Wire()
+        let (presenter, relay) = wheelReady(wire)
+        presenter.editWheelDraft("Grace\n")
+        presenter.editWheelDraft("Lin")
+        let unanswered = addRequests(wire).map { $0.id }
+        #expect(unanswered.count == 1 && presenter.wheelDraft.text == "Lin")
+        switch exit {
+        case .leaveAndJoinAnotherCall:
+            presenter.reset()
+            relay.reset()
+            openWheel(wire, presenter, relay, callSession: 2, call: "call-9-next")
+        case .newCallWithoutALeave:
+            openWheel(wire, presenter, relay, callSession: 2, call: "call-9-next")
+        case .wheelClosedAndReopened:
+            relay.end()
+            presenter.apply(AppHostInputs.make(callSession: 1, appId: "", isHost: true))
+            openWheel(wire, presenter, relay, callSession: 1, call: Self.call)
+        case .anotherAppThenTheWheel:
+            openWheel(wire, presenter, relay, callSession: 1, call: Self.call, appId: "whiteboard")
+            openWheel(wire, presenter, relay, callSession: 1, call: Self.call)
+        }
+        #expect(presenter.wheel.isReady, "\(exit) opened a ready wheel")
+        #expect(presenter.wheelDraft.text.isEmpty && presenter.wheelDraft.sent.isEmpty, "\(exit) left \(presenter.wheelDraft)")
+        presenter.fireCommandTimeout(requestId: unanswered[0])
+        #expect(presenter.wheelDraft.text.isEmpty, "a reply from the last scope returns nothing")
+        presenter.editWheelDraft("Mo\n")
+        #expect(addRequests(wire).map { $0.labels } == [["Grace"], ["Mo"]])
+    }
+
+    @Test func aRetryAFailureOrAReconnectInTheSameCallKeepsEveryName() {
+        for reset in ["retry", "failure", "hidden", "reconnect"] {
+            let wire = Wire()
+            let (presenter, relay) = wheelReady(wire)
+            presenter.editWheelDraft("Grace\n")
+            presenter.editWheelDraft("Lin")
+            switch reset {
+            case "retry":
+                presenter.retry()
+            case "failure":
+                presenter.apply(event: ActiveAppEvent.make(kind: .failed, appSessionId: relay.appSessionId, issue: .rendererGone))
+            case "hidden":
+                presenter.setHiddenLocally(true)
+                presenter.setHiddenLocally(false)
+            default:
+                presenter.apply(AppHostInputs.make(callSession: 1, appId: "wheel", isHost: true, isReconnecting: true))
+                presenter.apply(AppHostInputs.make(callSession: 1, appId: "wheel", isHost: true))
+            }
+            #expect(presenter.wheelDraft.text == "Lin" && presenter.wheelDraft.sent.count == 1, "\(reset) never guesses the add failed")
+            if reset == "reconnect" {
+                refuse(relay, addRequests(wire)[0].id, error: "notSynced")
+            } else {
+                relay.releaseEmbed()
+                reattach(wire, relay)
+                let query = outcomeQueries(wire).last
+                #expect(query?.tokens == addRequests(wire)[0].tokens, "\(reset) asks the reloaded wheel whether the add ran")
+                answerOutcome(relay, query?.id ?? "", applied: nil)
+            }
+            #expect(presenter.wheelDraft.text == "Grace\nLin", "\(reset) keeps every name")
+            #expect(presenter.wheelDraft.sent.isEmpty, "\(reset)")
+        }
+    }
+
+    private func ackAdded(_ session: ActiveAppSession, _ requestId: String, ok: Bool, added: [Int]) {
+        send(session, "ack", ["ok": ok, "added": added], id: requestId)
+    }
+
+    private func refuse(_ session: ActiveAppSession, _ requestId: String, error: String) {
+        send(session, "ack", ["ok": false, "error": error, "added": [Int]()], id: requestId)
+    }
+
+    private func outcomeQueries(_ wire: Wire) -> [(id: String, tokens: [String])] {
+        var queries: [(id: String, tokens: [String])] = []
+        for raw in wire.delivered {
+            let object = AppBridgeCodec.jsonObject(raw) ?? [:]
+            if object["type"] as? String != "addOutcome" { continue }
+            let payload = object["payload"] as? [String: Any] ?? [:]
+            queries.append((id: object["requestId"] as? String ?? "", tokens: payload["tokens"] as? [String] ?? []))
+        }
+        return queries
+    }
+
+    private func answerOutcome(_ session: ActiveAppSession, _ queryId: String, applied: [Int]?) {
+        if let applied = applied {
+            send(session, "ack", ["ok": true, "added": applied], id: queryId)
+        } else {
+            refuse(session, queryId, error: "notApplied")
+        }
+    }
+
+    private static func names(_ count: Int) -> [String] {
+        var names: [String] = []
+        for index in 0..<count { names.append("N" + String(index + 1)) }
+        return names
+    }
+
+    @Test func aPasteLargerThanTheRoomLeftKeepsTheNamesTheWheelDidNotAdd() throws {
+        let wire = Wire()
+        let (presenter, relay) = wheelReady(wire)
+        send(relay, "status", ["app": Self.wheelApp(Self.names(63))], id: "e-3")
+        presenter.editWheelDraft("Cy\nDe\n")
+        #expect(addRequests(wire).map { $0.labels } == [["Cy", "De"]], "every typed name goes to the wheel, which decides")
+        ackAdded(relay, try #require(addRequests(wire).first).id, ok: true, added: [0])
+        #expect(presenter.wheelDraft.text == "De")
+        #expect(presenter.wheelDraft.sent.isEmpty)
+    }
+
+    @Test func aStaleFullCountStillSendsAndTheWheelAnswers() throws {
+        let wire = Wire()
+        let (presenter, relay) = wheelReady(wire)
+        send(relay, "status", ["app": Self.wheelApp(Self.names(64))], id: "e-3")
+        presenter.editWheelDraft("Cy\n")
+        #expect(addRequests(wire).map { $0.labels } == [["Cy"]])
+        ackAdded(relay, try #require(addRequests(wire).first).id, ok: false, added: [])
+        #expect(presenter.wheelDraft.text == "Cy")
+    }
+
+    @Test func aPasteLongerThanTheLineLimitSendsTheLimitAndKeepsTheRestInTheDraft() throws {
+        let wire = Wire()
+        let (presenter, relay) = wheelReady(wire)
+        let names = (0..<300).map { "P" + String($0) }
+        presenter.editWheelDraft(names.joined(separator: "\n") + "\n")
+        let request = try #require(addRequests(wire).first)
+        #expect(request.labels == Array(names[0..<AppWheelLimits.pasteLines]))
+        #expect(presenter.wheelDraft.text == names[AppWheelLimits.pasteLines...].joined(separator: "\n"))
+        ackAdded(relay, request.id, ok: true, added: [0, 1])
+        #expect(presenter.wheelDraft.text == names[2...].joined(separator: "\n"), "unadded sent lines return ahead of the rest")
+        #expect(addRequests(wire).count == 1)
+    }
+
+    @Test func noNameIsClippedBeforeTheWheelCutsIt() {
+        let wire = Wire()
+        let (presenter, _) = wheelReady(wire)
+        let long = String(repeating: "A", count: 60) + "e\u{301}"
+        presenter.editWheelDraft(long + "\n")
+        #expect(addRequests(wire).map { $0.labels } == [[long]])
+    }
+
+    @Test func reorderingIsRefusedWhileTheWheelSpins() {
+        let wire = Wire()
+        let (presenter, relay) = wheelReady(wire)
+        send(relay, "status", ["app": Self.wheelApp(["Ada", "Bo", "Cy"], spinning: true)], id: "e-3")
+        #expect(presenter.sortWheel() == .explained && presenter.shuffleWheel() == .explained)
+        #expect(presenter.removeWheelEntry("e0") == .explained && presenter.clearWheelNames() == .explained)
+        let reorders = ["sort", "shuffle", "removeEntry", "clearEntries"]
+        let sent = wire.delivered.filter { reorders.contains(AppBridgeCodec.jsonObject($0)?["type"] as? String ?? "") }
+        #expect(sent.isEmpty)
+        send(relay, "status", ["app": Self.wheelApp(["Ada", "Bo", "Cy"])], id: "e-4")
+        #expect(presenter.sortWheel() == .dispatched)
+    }
+
     @Test func theWinnerIsAnnouncedOnlyForALiveSettle() {
         let wire = Wire()
         let (presenter, relay) = host(wire, inputs: AppHostInputs.make(callSession: 1, appId: "wheel", isHost: true))
@@ -317,15 +835,16 @@ struct ACT8WheelWatchTests {
         #expect(presenter.setWatchEveryoneCanControl(true) == .explained, "Watch actions do not reach a wheel")
     }
 
-    @Test func aFullWheelTakesNoMoreNames() {
+    @Test func aFullWheelLetsTheWheelRefuseNewNames() {
         let wire = Wire()
         let (presenter, relay) = host(wire, inputs: AppHostInputs.make(callSession: 1, appId: "wheel", isHost: true), roster: ["New"])
         #expect(ready(relay) == .none)
         var names: [String] = []
         for index in 0..<AppWheelLimits.maxEntries { names.append("N" + String(index)) }
         send(relay, "status", ["app": Self.wheelApp(names)], id: "e-2")
-        #expect(presenter.wheel.isFull && presenter.model.nameCount == 64)
-        #expect(presenter.addWheelNames("One more") == .explained && presenter.addEveryoneToWheel() == .explained)
+        #expect(presenter.wheel.isFull && presenter.model.nameCount == 64, "the page still shows the wheel as full")
+        #expect(presenter.addWheelNames("One more") == .dispatched && presenter.addEveryoneToWheel() == .dispatched,
+                "the wheel, not a cached count, decides whether a name fits")
     }
 
     @Test func watchHostSearchesPlaysQueuesAndAnswersRequests() async {

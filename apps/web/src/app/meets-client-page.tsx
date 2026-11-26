@@ -187,6 +187,7 @@ export default function MeetsClientPage({
     <div className="w-full h-full min-h-[100dvh] bg-[#0a0a0b] overflow-auto relative">
       <MeetsClient
         initialRoomId={resolvedInitialRoomId}
+        clientId={resolvedClientId}
         enableRoomRouting={usesRoomRouting}
         forceJoinOnly={forceJoinOnly}
         bypassMediaPermissions={bypassMediaPermissions}
