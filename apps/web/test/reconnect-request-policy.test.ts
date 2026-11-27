@@ -385,6 +385,8 @@ describe("what a reconnect run does once its check of the failed path ends", () 
     ["cancelled", true, "rejoin-after-cancelled-check"],
     ["carrying", false, "keep-proven-path"],
     ["carrying", true, "keep-replaced-path"],
+    ["sending-nothing", false, "keep-quiet-path"],
+    ["sending-nothing", true, "keep-replaced-path"],
     ["not-carrying", true, "keep-replaced-path"],
     ["not-carrying", false, "rebuild"],
   ])("after a %s check with the failed path replaced %s it will %s", (probe, failedPathChanged, plan) => {

@@ -5,12 +5,15 @@ import {
   MEDIA_PATH_STALL_MS,
   advanceMediaPathRecovery,
   advanceMediaPathWatch,
-  deliveredRtpBytes,
+  checkPath,
+  hasCarriedMedia,
   judgeDeliveryWindow,
-  mediaReachedFarEnd,
   pathCarriesWhatIsSent,
+  pathShowsLife,
   planMediaPathFailure,
   readMediaPathHealth,
+  rtpBytesMoved,
+  sentStreams,
   takeDeferredRebuilds,
   type FailedPath,
   type MediaDirection,
@@ -18,6 +21,7 @@ import {
   type MediaPathRecovery,
   type MediaPathRecoveryEvent,
   type MediaPathWatch,
+  type PathCheck,
   type PathEvidence,
   type SendingProducer,
   type SentStream,
@@ -87,6 +91,8 @@ class Call {
   recovery: MediaPathRecovery = INITIAL_MEDIA_PATH_RECOVERY;
   transport: Record<MediaDirection, string> = { producer: "send-1", consumer: "recv-1" };
   works: Record<MediaDirection, boolean> = { producer: true, consumer: true };
+  dropsSentPackets = false;
+  carried: Record<MediaDirection, boolean> = { producer: false, consumer: false };
   streams: Record<(typeof STREAMS)[number], Stream>;
   socketUp = true;
   relayOnly = false;
@@ -109,8 +115,9 @@ class Call {
   private sentEver = 0;
   private sentInWindow = 0;
   private received = 0;
-  private reachedSinceSample: Record<MediaDirection, number> = { producer: 0, consumer: 0 };
-  private reachedInWindow: Record<MediaDirection, number> = { producer: 0, consumer: 0 };
+  private receivedSinceSample = 0;
+  private receivedInWindow = 0;
+  private arrivedOnTransport: Record<MediaDirection, number> = { producer: 0, consumer: 0 };
   private receiverReportAt: number | null = null;
   private nextTransport = 2;
   private nextProducer = 1;
@@ -164,8 +171,10 @@ class Call {
 
   private startWatch(direction: MediaDirection) {
     this.watches[direction] = INITIAL_MEDIA_PATH_WATCH;
-    this.reachedSinceSample[direction] = 0;
-    if (direction !== "producer") return;
+    if (direction !== "producer") {
+      this.receivedSinceSample = 0;
+      return;
+    }
     for (const name of STREAMS) Object.assign(this.streams[name], UNWATCHED);
   }
 
@@ -186,19 +195,29 @@ class Call {
       stream.sentSinceWatchStart += packets;
       stream.sentSinceSample += packets;
       this.sentEver += packets;
-      if (!this.works.producer || !stream.arrives) continue;
+      if (!this.works.producer || this.dropsSentPackets || !stream.arrives) continue;
       stream.arrived += packets;
       stream.arrivedSinceWatchStart += packets;
+      this.arrivedOnTransport.producer += packets;
     }
-    if (published && this.works.producer) {
-      this.receiverReportAt = this.now;
-      this.reachedSinceSample.producer += packets;
-      this.reachedInWindow.producer += packets;
-    }
+    if (published && this.works.producer) this.receiverReportAt = this.now;
     if (!this.works.consumer) return;
     this.received += packets;
-    this.reachedSinceSample.consumer += packets;
-    this.reachedInWindow.consumer += packets;
+    this.receivedSinceSample += packets;
+    this.receivedInWindow += packets;
+    this.arrivedOnTransport.consumer += packets;
+  }
+
+  private framesOptional(): boolean {
+    const published = this.published();
+    return published.length > 0 && published.every(({ stream }) => stream === "screen");
+  }
+
+  private takeAsCarried(direction: MediaDirection, at: string) {
+    this.carried[direction] = true;
+    if (this.arrivedOnTransport[direction] === 0) {
+      this.problems.push(`${at}: the ${direction} transport was taken as having carried media with nothing arrived on it`);
+    }
   }
 
   private published(): SendingProducer[] {
@@ -274,13 +293,22 @@ class Call {
   }
 
   private observe(direction: MediaDirection, evidence: PathEvidence, at: string, exact: boolean) {
-    const reached = exact ? this.reachedInWindow : this.reachedSinceSample;
-    if (evidence.reached && reached[direction] === 0) {
-      this.problems.push(`${at}: ${direction} was seen reaching the far end with the path down throughout`);
+    if ("received" in evidence) {
+      const received = exact ? this.receivedInWindow : this.receivedSinceSample;
+      if (evidence.received && received === 0) {
+        this.problems.push(`${at}: ${direction} was seen receiving with the path down throughout`);
+      }
+      if (exact) this.receivedInWindow = 0;
+      else this.receivedSinceSample = 0;
     }
-    reached[direction] = 0;
+    if (("sent" in evidence) !== (direction === "producer")) {
+      this.problems.push(`${at}: ${direction} was given the other direction's kind of evidence`);
+    }
+    if (pathCarriesWhatIsSent(evidence, this.recovery[direction].failingStreams)) {
+      this.takeAsCarried(direction, at);
+    }
     const failingBefore = new Set(this.knownFailing);
-    const judged = Object.entries(evidence.streams) as Array<[(typeof STREAMS)[number], StreamDelivery]>;
+    const judged = Object.entries(sentStreams(evidence)) as Array<[(typeof STREAMS)[number], StreamDelivery]>;
     for (const [name, delivery] of judged) {
       const stream = this.streams[name];
       if (!exact) {
@@ -306,8 +334,9 @@ class Call {
       if (delivery === "delivered") this.knownFailing.delete(name);
     }
     const proven =
-      evidence.reached &&
-      (direction === "consumer" || (this.knownFailing.size === 0 && judged.length > 0)) &&
+      ("received" in evidence
+        ? evidence.received
+        : this.knownFailing.size === 0 && judged.some(([, delivery]) => delivery === "delivered")) &&
       judged.every(
         ([name, delivery]) =>
           delivery === "delivered" || (delivery === "quiet" && !failingBefore.has(name)),
@@ -320,8 +349,11 @@ class Call {
     );
   }
 
-  private window(direction: MediaDirection, at: string): { evidence: PathEvidence; carried: boolean } {
-    this.reachedInWindow[direction] = 0;
+  private window(
+    direction: MediaDirection,
+    at: string,
+  ): { evidence: PathEvidence; check: PathCheck } {
+    if (direction === "consumer") this.receivedInWindow = 0;
     const sentBefore = this.sentEver;
     const start = this.read(direction);
     const sfuStart = direction === "producer" ? this.counts() : null;
@@ -332,11 +364,9 @@ class Call {
     const producers = direction === "producer" ? this.published() : [];
     const evidence: PathEvidence =
       direction === "consumer"
-        ? { reached: deliveredRtpBytes(start, end) > 0, streams: {} }
-        : {
-            reached: mediaReachedFarEnd(start, end, false),
-            streams: judgeDeliveryWindow({ start, end, producers, sfuStart, sfuEnd, sfuReports: true }),
-          };
+        ? { received: rtpBytesMoved(start, end) > 0 }
+        : { sent: judgeDeliveryWindow({ start, end, producers, sfuStart, sfuEnd, sfuReports: true }) };
+    const judgedStreams = sentStreams(evidence);
     const worlds = producers.map(({ stream }) => ({
       stream,
       world: this.streams[stream as (typeof STREAMS)[number]],
@@ -347,36 +377,91 @@ class Call {
         ? "unconfirmed"
         : !world.sending
           ? "quiet"
-          : world.arrives && this.works.producer
+          : world.arrives && this.works.producer && !this.dropsSentPackets
             ? "delivered"
             : "undelivered";
-      if (evidence.streams[stream] !== expected) {
+      if (judgedStreams[stream] !== expected) {
         this.problems.push(
-          `${at}: ${stream} judged ${evidence.streams[stream]} over a window that was ${expected}`,
+          `${at}: ${stream} judged ${judgedStreams[stream]} over a window that was ${expected}`,
         );
       }
     }
-    const carried = pathCarriesWhatIsSent(evidence, this.recovery[direction].failingStreams);
+    const framesOptional = direction === "producer" && this.framesOptional();
+    const check = checkPath({
+      evidence,
+      knownFailing: this.recovery[direction].failingStreams,
+      showsLife: pathShowsLife(start, end, framesOptional),
+      carriedMedia: this.carried[direction],
+    });
     const shouldCarry =
       this.works[direction] &&
       answered &&
-      (direction === "consumer" || this.sentInWindow > 0) &&
+      (direction === "consumer" || (this.sentInWindow > 0 && !this.dropsSentPackets)) &&
       worlds.every(({ stream, world }) =>
         world.sending ? world.arrives : !this.knownFailing.has(stream),
       );
-    if (carried !== shouldCarry) {
+    const sendsNothingOverLivePath =
+      direction === "producer" &&
+      framesOptional &&
+      answered &&
+      this.works.producer &&
+      this.carried.producer &&
+      worlds.every(({ stream, world }) => !world.sending && !this.knownFailing.has(stream));
+    const expectedCheck: PathCheck = shouldCarry
+      ? "carries"
+      : sendsNothingOverLivePath
+        ? "sends-nothing"
+        : "fails";
+    if (check !== expectedCheck) {
+      this.problems.push(`${at}: the path was checked as ${check} when it ${expectedCheck}`);
+    }
+    return { evidence, check };
+  }
+
+  judgeRelayMove(direction: MediaDirection) {
+    const at = `${direction} relay move check`;
+    const producers = direction === "producer" ? this.published() : [];
+    const sfuCounts = direction === "producer" ? this.counts() : null;
+    if (producers.length > 0 && sfuCounts === null) return;
+    const carried = hasCarriedMedia(
+      this.read(direction),
+      { producers, sfuCounts, sfuReports: true },
+      this.recovery[direction].failingStreams,
+    );
+    const worlds = producers.map(({ stream }) => ({
+      stream,
+      world: this.streams[stream as (typeof STREAMS)[number]],
+    }));
+    const shouldHaveCarried =
+      direction === "consumer"
+        ? this.arrivedOnTransport.consumer > 0
+        : worlds.some(({ world }) => world.arrived > 0) &&
+          worlds.every(
+            ({ stream, world }) =>
+              world.arrived > 0 || (world.sent === 0 && !this.knownFailing.has(stream)),
+          );
+    if (carried !== shouldHaveCarried) {
       this.problems.push(
-        `${at}: the path was taken as ${carried ? "carrying" : "not carrying"} what is sent when it was ${shouldCarry ? "" : "not "}carrying it`,
+        `${at}: the transport was read as ${carried ? "having" : "not having"} carried what it sent when it ${shouldHaveCarried ? "had" : "had not"}`,
       );
     }
-    return { evidence, carried };
+    if (carried) {
+      this.takeAsCarried(direction, at);
+      return;
+    }
+    if (this.run) return;
+    this.replace(direction);
+    this.publishWanted();
   }
 
   private replace(direction: MediaDirection) {
     this.held[direction] = null;
     this.transport[direction] = `${direction === "producer" ? "send" : "recv"}-${this.nextTransport++}`;
     this.startWatch(direction);
+    this.carried[direction] = false;
+    this.arrivedOnTransport[direction] = 0;
     if (direction === "producer") STREAMS.forEach((name) => (this.streams[name].producerId = null));
+    else this.received = 0;
   }
 
   failingNow(direction: MediaDirection): boolean {
@@ -385,7 +470,11 @@ class Call {
       direction === "producer" &&
       STREAMS.some((name) => {
         const stream = this.streams[name];
-        return stream.producerId !== null && stream.sending && !stream.arrives;
+        return (
+          stream.producerId !== null &&
+          stream.sending &&
+          (this.dropsSentPackets || !stream.arrives)
+        );
       })
     );
   }
@@ -451,7 +540,7 @@ class Call {
       at: this.now,
       connectionState: "connected",
       expectsMedia: direction === "consumer" || this.published().length > 0,
-      framesOptional: false,
+      framesOptional: direction === "producer" && this.framesOptional(),
       sending:
         direction === "producer"
           ? { producers: this.published(), sfuCounts: this.counts(), sfuReports: true }
@@ -469,9 +558,9 @@ class Call {
     this.startWatch(direction);
     this.apply({ type: "trouble", direction });
     const at = `${direction} check after an ICE restart`;
-    const { evidence, carried } = this.window(direction, at);
+    const { evidence, check } = this.window(direction, at);
     this.observe(direction, evidence, at, true);
-    if (!carried) this.report(direction, true);
+    if (check === "fails") this.report(direction, true);
   }
 
   startRejoin({ userRetry }: { userRetry: boolean }) {
@@ -554,7 +643,13 @@ class Call {
       const cancelled = !failedPathChanged && this.weather.cancelsChecks && this.chance(0.2);
       const at = `${direction} check before a rebuild`;
       const checked = failedPathChanged || cancelled ? null : this.window(direction, at);
-      const probe: PathProbe = cancelled ? "cancelled" : checked?.carried ? "carrying" : "not-carrying";
+      const probe: PathProbe = cancelled
+        ? "cancelled"
+        : checked?.check === "carries"
+          ? "carrying"
+          : checked?.check === "sends-nothing"
+            ? "sending-nothing"
+            : "not-carrying";
       if (checked) this.observe(direction, checked.evidence, at, true);
       const plan = planScopedRebuild({ probe, failedPathChanged });
       if (plan === "rejoin-after-cancelled-check") {
@@ -667,6 +762,7 @@ const ACTIONS = [
   "handler-report", "late-report", "connect", "socket-drop", "user-retry", "leave", "abandoned-settle",
   "drop-stream", "drop-stream", "heal-stream", "quiet-stream", "quiet-stream", "wake-stream",
   "toggle-stream", "republish", "republish", "lose-replies", "answer-replies", "watch-reset",
+  "drop-sent-packets", "drop-sent-packets", "carry-sent-packets", "relay-move-check", "relay-move-check",
 ] as const;
 
 const playSeed = (seed: number): string | null => {
@@ -702,6 +798,9 @@ const playSeed = (seed: number): string | null => {
     else if (action === "republish") call.republish(stream);
     else if (action === "lose-replies") call.repliesDown = true;
     else if (action === "answer-replies") call.repliesDown = false;
+    else if (action === "drop-sent-packets") call.dropsSentPackets = true;
+    else if (action === "carry-sent-packets") call.dropsSentPackets = false;
+    else if (action === "relay-move-check") call.judgeRelayMove(direction);
     else call.resetWatch(direction);
     call.check(`step ${index} ${action}`);
   }

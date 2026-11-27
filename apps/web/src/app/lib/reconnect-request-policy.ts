@@ -92,13 +92,14 @@ export const planReconnectSettlement = ({
   };
 };
 
-export type PathProbe = "carrying" | "not-carrying" | "cancelled";
+export type PathProbe = "carrying" | "sending-nothing" | "not-carrying" | "cancelled";
 
 export type PathProbeResult = { probe: PathProbe; evidence: PathEvidence | null };
 
 export type ScopedRebuildPlan =
   | "rebuild"
   | "keep-proven-path"
+  | "keep-quiet-path"
   | "keep-replaced-path"
   | "rejoin-after-cancelled-check";
 
@@ -111,7 +112,8 @@ export const planScopedRebuild = ({
 }): ScopedRebuildPlan => {
   if (probe === "cancelled") return "rejoin-after-cancelled-check";
   if (failedPathChanged) return "keep-replaced-path";
-  return probe === "carrying" ? "keep-proven-path" : "rebuild";
+  if (probe === "carrying") return "keep-proven-path";
+  return probe === "sending-nothing" ? "keep-quiet-path" : "rebuild";
 };
 
 export type ScopedRebuildOutcome = "rebuilt" | "stale" | "failed";

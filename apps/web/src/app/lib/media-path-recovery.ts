@@ -224,10 +224,12 @@ export const judgeDeliveryWindow = ({
   return streams;
 };
 
-export type PathEvidence = {
-  reached: boolean;
-  streams: StreamDeliveries;
-};
+export type PathEvidence = { sent: StreamDeliveries } | { received: boolean };
+
+const NO_STREAMS: StreamDeliveries = {};
+
+export const sentStreams = (evidence: PathEvidence): StreamDeliveries =>
+  "sent" in evidence ? evidence.sent : NO_STREAMS;
 
 const judgedStreams = (streams: StreamDeliveries) =>
   SENT_STREAMS.flatMap((stream) => {
@@ -250,34 +252,81 @@ export const failingStreamsAfter = (
   return next.length === 0 ? NO_FAILING_STREAMS : next;
 };
 
-export const pathCarriesWhatIsSent = (
-  { reached, streams }: PathEvidence,
+const sawDelivery = (evidence: PathEvidence): boolean =>
+  "sent" in evidence
+    ? judgedStreams(evidence.sent).some(({ delivery }) => delivery === "delivered")
+    : evidence.received;
+
+const sendsNothingToJudge = (
+  streams: StreamDeliveries,
   knownFailing: readonly SentStream[],
 ): boolean =>
-  reached &&
   judgedStreams(streams).every(
+    ({ stream, delivery }) => delivery === "quiet" && !knownFailing.includes(stream),
+  );
+
+export const pathCarriesWhatIsSent = (
+  evidence: PathEvidence,
+  knownFailing: readonly SentStream[],
+): boolean =>
+  sawDelivery(evidence) &&
+  judgedStreams(sentStreams(evidence)).every(
     ({ stream, delivery }) =>
       delivery === "delivered" || (delivery === "quiet" && !knownFailing.includes(stream)),
   );
 
-export const hasCarriedMedia = (reading: MediaPathReading): boolean =>
-  reading.rtpBytes > 0 &&
-  (reading.direction === "recv" || reading.receiverReportAt !== null);
+export type PathCheck = "carries" | "sends-nothing" | "fails";
 
-export const deliveredRtpBytes = (
+export const checkPath = ({
+  evidence,
+  knownFailing,
+  showsLife,
+  carriedMedia,
+}: {
+  evidence: PathEvidence;
+  knownFailing: readonly SentStream[];
+  showsLife: boolean;
+  carriedMedia: boolean;
+}): PathCheck => {
+  if (pathCarriesWhatIsSent(evidence, knownFailing)) return "carries";
+  return "sent" in evidence &&
+    sendsNothingToJudge(evidence.sent, knownFailing) &&
+    showsLife &&
+    carriedMedia
+    ? "sends-nothing"
+    : "fails";
+};
+
+const NOTHING_SENT_YET: SentStreamReading = { packetsSent: 0, receiverReportAt: null };
+
+export const hasCarriedMedia = (
+  reading: MediaPathReading,
+  { producers, sfuCounts, sfuReports }: SendingProducersSample,
+  knownFailing: readonly SentStream[],
+): boolean => {
+  if (reading.direction === "recv") {
+    return pathCarriesWhatIsSent({ received: reading.rtpBytes > 0 }, knownFailing);
+  }
+  const sent: StreamDeliveries = {};
+  for (const { stream, producerId, mid } of producers) {
+    sent[stream] = judgeProducerDelivery({
+      before: NOTHING_SENT_YET,
+      after: mid ? reading.sent[mid] : undefined,
+      arrivedBefore: 0,
+      arrivedAfter: sfuCounts?.[producerId],
+      sfuReports,
+    });
+  }
+  return pathCarriesWhatIsSent({ sent }, knownFailing);
+};
+
+export const rtpBytesMoved = (
   previous: MediaPathReading | null,
   current: MediaPathReading,
-): number => {
-  if (!previous || previous.direction !== current.direction) return 0;
-  const moved = current.rtpBytes - previous.rtpBytes;
-  if (moved <= 0) return 0;
-  if (current.direction === "recv") return moved;
-  return current.receiverReportAt !== null &&
-    (previous.receiverReportAt === null ||
-      current.receiverReportAt > previous.receiverReportAt)
-    ? moved
+): number =>
+  previous && previous.direction === current.direction
+    ? Math.max(0, current.rtpBytes - previous.rtpBytes)
     : 0;
-};
 
 export type MediaPathSample = MediaPathReading & {
   at: number;
@@ -312,20 +361,17 @@ export const sendPathExpectation = (
   };
 };
 
-export const mediaReachedFarEnd = (
+export const pathShowsLife = (
   previous: MediaPathReading | null,
   current: MediaPathReading,
   framesOptional: boolean,
 ): boolean => {
-  if (deliveredRtpBytes(previous, current) > 0) return true;
+  if (!previous || previous.direction !== current.direction) return false;
+  const moved = rtpBytesMoved(previous, current) > 0;
+  if (current.direction === "recv") return moved;
   return (
-    framesOptional &&
-    previous !== null &&
-    previous.direction === "send" &&
-    current.direction === "send" &&
-    current.receiverReportAt !== null &&
-    (previous.receiverReportAt === null ||
-      current.receiverReportAt > previous.receiverReportAt)
+    newerReport(current.receiverReportAt, previous.receiverReportAt) &&
+    (moved || framesOptional)
   );
 };
 
@@ -372,34 +418,31 @@ export const advanceMediaPathWatch = (
   watch: MediaPathWatch;
   condition: MediaPathCondition;
   stalledForMs: number;
-  /** RTP bytes that reached the far end since the last connected sample. */
-  deliveredBytes: number;
-  mediaMoved: boolean;
+  rtpBytesMoved: number;
   evidence: PathEvidence;
 } => {
   const connected = sample.connectionState === "connected";
   const reading = toReading(sample);
-  const deliveredBytes = connected
-    ? deliveredRtpBytes(watch.lastReading, reading)
-    : 0;
+  const bytesMoved = connected ? rtpBytesMoved(watch.lastReading, reading) : 0;
   const judged =
     connected && sample.sending
       ? advanceProducerDeliveries(watch.deliveries, reading, sample.sending)
       : NOTHING_JUDGED;
-  const evidence: PathEvidence = {
-    reached:
-      connected && mediaReachedFarEnd(watch.lastReading, reading, sample.framesOptional),
-    streams: judged.streams,
-  };
+  const evidence: PathEvidence =
+    reading.direction === "send" ? { sent: judged.streams } : { received: bytesMoved > 0 };
   const sendsFailingStream = failingStreamsAfter(sample.knownFailing, judged.streams).some(
     (stream) => judged.streams[stream] !== undefined,
   );
-  const reached = evidence.reached && !sendsFailingStream;
+  const flowing =
+    connected &&
+    !sendsFailingStream &&
+    (sawDelivery(evidence) ||
+      pathShowsLife(watch.lastReading, reading, sample.framesOptional));
   const condition: MediaPathCondition = !sample.expectsMedia
     ? "idle"
     : !connected
       ? "not-connected"
-      : watch.lastReading === null || reached
+      : watch.lastReading === null || flowing
         ? "flowing"
         : "connected-without-media";
   const inTrouble =
@@ -413,8 +456,7 @@ export const advanceMediaPathWatch = (
     },
     condition,
     stalledForMs: troubleSince === null ? 0 : sample.at - troubleSince,
-    deliveredBytes,
-    mediaMoved: reached,
+    rtpBytesMoved: bytesMoved,
     evidence,
   };
 };
@@ -658,12 +700,8 @@ export const advanceMediaPathRecovery = (
       );
     case "path-sampled": {
       const known = recovery[event.direction].failingStreams;
-      const failingStreams = failingStreamsAfter(known, event.evidence.streams);
-      const judgedWhatItCarries =
-        event.direction === "consumer" || judgedStreams(event.evidence.streams).length > 0;
-      return failingStreams.length === 0 &&
-        judgedWhatItCarries &&
-        pathCarriesWhatIsSent(event.evidence, known)
+      const failingStreams = failingStreamsAfter(known, sentStreams(event.evidence));
+      return failingStreams.length === 0 && pathCarriesWhatIsSent(event.evidence, known)
         ? restartDirection(recovery, event.direction)
         : patchDirection(recovery, event.direction, { failingStreams });
     }
