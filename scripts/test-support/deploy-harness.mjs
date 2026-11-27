@@ -273,7 +273,8 @@ export const dockerStandIn = `#!/usr/bin/env node
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 const sfus = JSON.parse(process.env.DEPLOY_TEST_SFUS);
-fs.appendFileSync(process.env.DEPLOY_TEST_DOCKER_LOG, JSON.stringify(args) + "\\n");
+const logFile = process.env.DEPLOY_TEST_DOCKER_LOG;
+fs.appendFileSync(logFile, JSON.stringify(args) + "\\n");
 const out = (text) => process.stdout.write(text + "\\n");
 // docker tag, kept per run unless DEPLOY_TEST_DOCKER_TAGS shares them across
 // runs as one host would: a recreated container gets the image tagged for it.
@@ -342,7 +343,10 @@ const main = async () => {
       return fs.writeFileSync(tagsFile, JSON.stringify(tags));
     }
     if (rest[0] === "stop") {
-      await fetch("http://127.0.0.1:" + sfus[rest.at(-1)].port + "/stand-in/stop");
+      if (process.env.DEPLOY_TEST_COMPOSE_STOP === "fail") return void (process.exitCode = 1);
+      if (process.env.DEPLOY_TEST_COMPOSE_STOP !== "noop") {
+        await fetch("http://127.0.0.1:" + sfus[rest.at(-1)].port + "/stand-in/stop");
+      }
       return;
     }
     if (rest[0] === "up" && rest.at(-1) === "redis") return;
@@ -411,6 +415,11 @@ const main = async () => {
     }
     if (format.includes(".WorkingDir")) return out("/app/packages/sfu");
     if (format.includes(".Config.Env")) {
+      if (process.env.DEPLOY_TEST_FAIL_CONFIG_INSPECT) {
+        const calls = fs.readFileSync(logFile, "utf8").trim().split("\\n").map(JSON.parse);
+        const lastHash = calls.findLastIndex((call) => call[2]?.includes("config-hash"));
+        if (lastHash >= 0 && !calls.slice(lastHash + 1, -1).some((call) => call[2]?.includes(".Config.Env"))) return void (process.exitCode = 1);
+      }
       const current = await state(name);
       if (current.envInspectFails) {
         process.exitCode = 1;
@@ -427,7 +436,10 @@ const main = async () => {
       if (format.includes(".RestartCount")) return out(current.status + ":" + current.restartCount);
       return out(format.includes(".State.StartedAt") ? current.status + " " + current.startedAt : current.status);
     }
-    if (format.includes("config-hash")) return out((await state(name)).configHash);
+    if (format.includes("config-hash")) {
+      if (process.env.DEPLOY_TEST_FAIL_CONFIG_INSPECT) return void (process.exitCode = 1);
+      return out((await state(name)).configHash);
+    }
     if (format.includes(".Image")) {
       const current = await state(name, "image");
       if (current.imageReadFails) {
@@ -467,6 +479,7 @@ const main = async () => {
     return args[2] === "-f" ? out(tags[args.at(-1)] || (args.at(-1).startsWith("sha256:") ? args.at(-1) : "sha256:target")) : undefined;
   }
   if (args[0] === "tag") {
+    if (process.env.DEPLOY_TEST_FAIL_IMAGE_TAG === args.slice(1).join(" ")) return void (process.exitCode = 1);
     tags[args[2]] = tags[args[1]] || args[1];
     fs.writeFileSync(tagsFile, JSON.stringify(tags));
     for (const name of Object.keys(sfus)) {
