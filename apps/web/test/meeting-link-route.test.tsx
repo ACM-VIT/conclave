@@ -4,16 +4,19 @@ import { act, lazy, Suspense, useState, type ReactElement } from "react";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const scheduledLookup = vi.hoisted(() => vi.fn(async (_destination: { clientId: string; roomCode: string }) => null as object | null));
+const scheduledLookup = vi.hoisted(() => vi.fn(async (
+  _destination: { clientId: string; roomCode: string },
+  _options: { allowLegacyBooking: boolean },
+) => null as { clientId?: string; title: string } | null));
 
 vi.mock("next/headers", () => ({ headers: async () => new Headers() }));
 vi.mock("@/lib/auth", () => ({ auth: { api: { getSession: async () => null } } }));
 vi.mock("@/lib/auth-client", () => ({ signOut: vi.fn(), useSession: () => ({ data: null }) }));
 vi.mock("@/lib/scheduled-meetings", () => ({
   isMeetingJoinable: () => true,
-  lookupScheduledMeetingForCode: async (destination: { clientId: string; roomCode: string }) => {
-    const meeting = await scheduledLookup(destination);
-    return meeting ? { kind: "scheduled", ...destination, meeting } : { kind: "unscheduled" };
+  lookupScheduledMeetingForCode: async (destination: { clientId: string; roomCode: string }, options: { allowLegacyBooking: boolean }) => {
+    const meeting = await scheduledLookup(destination, options);
+    return meeting ? { kind: "scheduled", clientId: meeting.clientId ?? destination.clientId, meeting } : { kind: "unscheduled" };
   },
   lookupScheduledMeetingHostEmail: async () => null,
 }));
@@ -176,9 +179,23 @@ describe("meeting links", () => {
         roomId: "review-cross-route",
         clientId: TENANT,
       });
-      expect(scheduledLookup.mock.calls).toEqual([[{ clientId: TENANT, roomCode: "review-cross-route" }]]);
+      expect(scheduledLookup.mock.calls).toEqual([[{ clientId: TENANT, roomCode: "review-cross-route" }, { allowLegacyBooking: false }]]);
     } finally {
       scheduledLookup.mockImplementation(async () => null);
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("opens an untagged legacy booking in the tenant returned by the lookup", async () => {
+    vi.stubEnv("SFU_CLIENT_ID", TENANT);
+    vi.stubEnv("NEXT_PUBLIC_SFU_CLIENT_ID", TENANT);
+    scheduledLookup.mockClear();
+    scheduledLookup.mockResolvedValueOnce({ clientId: "conclave", title: "Legacy booking" });
+
+    try {
+      expect(await openLink(`${ORIGIN}/legacy-booking`)).toEqual({ roomId: "legacy-booking", clientId: "conclave" });
+      expect(scheduledLookup.mock.calls).toEqual([[{ clientId: TENANT, roomCode: "legacy-booking" }, { allowLegacyBooking: true }]]);
+    } finally {
       vi.unstubAllEnvs();
     }
   });

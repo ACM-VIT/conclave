@@ -60,10 +60,11 @@ const fixtureValue = <T,>(result: CommitResult<T>): T => {
   return result.value;
 };
 
-const currentSfu = async () => {
+const currentSfu = async (routing: express.RequestHandler = (_req, res) => res.json({ owner: null })) => {
   const store = controlPlaneStore(createMemoryBackend());
   const origin = await startSfu((app) => {
     const state = { controlPlane: store } as SfuState;
+    app.get("/routing/rooms/:clientId/:roomId", routing);
     registerScheduledMeetingRoutes(app, { state, sfuSecret: SECRET });
     registerSchedulingRoutes(app, { state, sfuSecret: SECRET });
   });
@@ -175,6 +176,27 @@ describe("scheduled links against the current SFU", () => {
     });
     expect(await open(`${ORIGIN}/${ROOM}`)).toEqual({ kind: "unknown" });
     expect(tenants).toEqual(["acme"]);
+  });
+
+  it.each(["owned", "unavailable", "malformed"])("keeps a bare link in the default tenant when its room lookup is %s", async (routing) => {
+    vi.stubEnv("SFU_CLIENT_ID", "acme");
+    vi.stubEnv("NEXT_PUBLIC_SFU_CLIENT_ID", "acme");
+    const observed: Array<[string, string, string | undefined]> = [];
+    const { store } = await currentSfu((req, res) => {
+      observed.push([String(req.params.clientId), String(req.params.roomId), req.get("x-sfu-secret")]);
+      if (routing === "owned") res.json({ owner: { instanceId: "current" } });
+      else if (routing === "unavailable") res.sendStatus(503);
+      else res.json({});
+    });
+    const booking = fixtureValue(await store.commit(createMeeting(
+      { title: "Legacy booking", scheduledStartAt: Date.now() + 60_000, roomCode: ROOM, source: "booking_link" },
+      { clientId: "conclave", createdBy: HOST.email, defaultHostEmail: HOST.email, defaultHostUserId: HOST.userId },
+    )));
+
+    expect(await open(buildSchedulingMeetingLink(ORIGIN, booking))).toMatchObject({ kind: "scheduled", clientId: "conclave" });
+    expect(observed).toEqual([]);
+    expect(await open(`${ORIGIN}/${ROOM}`)).toEqual({ kind: "unscheduled" });
+    expect(observed).toEqual([["acme", ROOM, SECRET]]);
   });
 
   it("reports an unsupported service without trying a different endpoint", async () => {
