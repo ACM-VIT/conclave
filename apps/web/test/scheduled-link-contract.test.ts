@@ -25,14 +25,15 @@ const ORIGIN = "https://meet.test";
 const HOST = { userId: "host", email: "host@example.com" };
 const servers: Array<{ close: () => void }> = [];
 
-let sfuUrl: string;
+const sfuUrls: string[] = [];
 vi.mock("@/lib/sfu-user-auth", () => ({ buildScheduledWebinarHeaders: vi.fn() }));
 vi.mock("@/lib/sfu-admin-auth", () => ({ resolveSfuSecret: () => SECRET }));
-vi.mock("@/lib/sfu-url", () => ({ resolveSfuUrls: () => [sfuUrl] }));
+vi.mock("@/lib/sfu-url", () => ({ resolveSfuUrls: () => sfuUrls }));
 vi.mock("@/app/lib/utils", () => ({ readResponseError: vi.fn() }));
 
 afterEach(() => {
   for (const server of servers.splice(0)) server.close();
+  sfuUrls.length = 0;
   vi.unstubAllEnvs();
 });
 
@@ -43,8 +44,9 @@ const startSfu = async (register: (app: express.Express) => void) => {
   const server = app.listen(0, "127.0.0.1");
   servers.push(server);
   await new Promise<void>((resolve) => server.once("listening", () => resolve()));
-  sfuUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  return sfuUrl;
+  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  sfuUrls.push(url);
+  return url;
 };
 
 const open = (link: string) => {
@@ -61,7 +63,7 @@ const fixtureValue = <T,>(result: CommitResult<T>): T => {
 };
 
 const currentSfu = async (
-  routing: express.RequestHandler = (_req, res) => res.json({ owner: null }),
+  routing: express.RequestHandler = (_req, res) => res.json({ owner: null, placement: null }),
   rooms: express.RequestHandler = (_req, res) => res.json({ room: null }),
 ) => {
   const store = controlPlaneStore(createMemoryBackend());
@@ -168,27 +170,29 @@ describe("scheduled links against the current SFU", () => {
     expect(await open(booking.meetingLink)).toEqual(found);
   });
 
-  it("does not try the legacy alias when the default lookup is inconclusive", async () => {
+  it.each([503, 200])("does not try the legacy alias after an inconclusive default lookup (HTTP %i)", async (status) => {
     vi.stubEnv("SFU_CLIENT_ID", "acme");
     vi.stubEnv("NEXT_PUBLIC_SFU_CLIENT_ID", "acme");
     const tenants: unknown[] = [];
     await startSfu((app) => {
       app.get("/scheduled-meetings/public/v2/by-room/:roomCode", (req, res) => {
         tenants.push(req.query.clientId);
-        res.sendStatus(503);
+        if (status === 200) res.json({});
+        else res.sendStatus(status);
       });
     });
     expect(await open(`${ORIGIN}/${ROOM}`)).toEqual({ kind: "unknown" });
     expect(tenants).toEqual(["acme"]);
   });
 
-  it.each(["owned", "unavailable", "malformed"])("keeps a bare link in the default tenant when its room lookup is %s", async (routing) => {
+  it.each(["owned", "reserved", "unavailable", "malformed"])("keeps a bare link in the default tenant when its room lookup is %s", async (routing) => {
     vi.stubEnv("SFU_CLIENT_ID", "acme");
     vi.stubEnv("NEXT_PUBLIC_SFU_CLIENT_ID", "acme");
     const observed: Array<[string, string, string | undefined]> = [];
     const { store } = await currentSfu((req, res) => {
       observed.push([String(req.params.clientId), String(req.params.roomId), req.get("x-sfu-secret")]);
-      if (routing === "owned") res.json({ owner: { instanceId: "current" } });
+      if (routing === "owned") res.json({ owner: { instanceId: "current" }, placement: null });
+      else if (routing === "reserved") res.json({ owner: null, placement: { kind: "placement", instanceId: "current" } });
       else if (routing === "unavailable") res.sendStatus(503);
       else res.json({});
     });
@@ -201,6 +205,31 @@ describe("scheduled links against the current SFU", () => {
     expect(observed).toEqual([]);
     expect(await open(`${ORIGIN}/${ROOM}`)).toEqual({ kind: "unscheduled" });
     expect(observed).toEqual([["acme", ROOM, SECRET]]);
+  });
+
+  it.each([
+    [undefined, true],
+    [undefined, false],
+    [false, true],
+  ] as const)("uses booking-link evidence in either SFU order (%s and %s)", async (first, bookingLink) => {
+    vi.stubEnv("SFU_CLIENT_ID", "acme");
+    vi.stubEnv("NEXT_PUBLIC_SFU_CLIENT_ID", "acme");
+    const meeting = { id: "linked-meeting", roomCode: ROOM, clientId: "conclave" };
+    const addSfu = (scheduledMeeting: typeof meeting & { bookingLink?: boolean }) => startSfu((app) => {
+      app.get("/scheduled-meetings/public/v2/by-room/:roomCode", (req, res) =>
+        res.json({ scheduledMeeting: req.query.clientId === "conclave" ? scheduledMeeting : null }));
+      app.get("/routing/rooms/:clientId/:roomId", (_req, res) => res.json({ owner: null, placement: null }));
+      app.get("/rooms/:roomId", (_req, res) => res.json({ room: null }));
+    });
+    await addSfu({ ...meeting, bookingLink: first });
+    const upgraded = await addSfu({ ...meeting, bookingLink });
+    const expected = bookingLink && first !== false
+      ? { kind: "scheduled", clientId: "conclave", sfuUrl: upgraded, meeting: { ...meeting, bookingLink } }
+      : { kind: "unscheduled" };
+
+    expect(await open(`${ORIGIN}/${ROOM}`)).toEqual(expected);
+    sfuUrls.reverse();
+    expect(await open(`${ORIGIN}/${ROOM}`)).toEqual(expected);
   });
 
   it("keeps a bare link in the default tenant when a local room outlives its registry lease", async () => {
