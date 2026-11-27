@@ -15,6 +15,7 @@ import {
   type CommitResult,
   type Kind,
   type RawStored,
+  tags,
   uniqueField,
 } from "../model.js";
 import {
@@ -85,6 +86,36 @@ const FIXED_KEYS = 5;
 
 export const COMMIT_MARK_TTL_MS = 3_600_000;
 
+const ASSERT_WRITE_PERMISSION = `
+local function assertWritePermission(...)
+  local args = {...}
+  if not redis.acl_check_cmd(unpack(args)) then
+    error("Control-plane Redis write denied: " .. args[1])
+  end
+end
+`;
+
+const CHECK_WRITE_PERMISSIONS = `
+${ASSERT_WRITE_PERMISSION}
+assertWritePermission("INCR", KEYS[1])
+assertWritePermission("SET", KEYS[2], "open", "PX", 1)
+assertWritePermission("DEL", KEYS[2])
+assertWritePermission("HSET", KEYS[3], "probe", "1")
+assertWritePermission("HSET", KEYS[4], "probe", "1")
+for i = 5, ${4 + KINDS.length + 1} do
+  assertWritePermission("HSET", KEYS[i], "probe", "1")
+  assertWritePermission("HDEL", KEYS[i], "probe")
+end
+for i = ${4 + KINDS.length + 2}, #KEYS do
+  assertWritePermission("SADD", KEYS[i], "probe")
+  assertWritePermission("SREM", KEYS[i], "probe")
+end
+for i = 3, #KEYS do
+  assertWritePermission("TYPE", KEYS[i])
+end
+return 1
+`;
+
 const COMMIT_SCRIPT = `
 local p = cjson.decode(ARGV[1])
 local kinds = { ${KINDS.map((kind, index) => `${kind} = ${index + FIXED_KEYS + 1}`).join(", ")} }
@@ -125,35 +156,55 @@ end
 if not writes then
   return { 1, tonumber(redis.call("GET", KEYS[1]) or "0") }
 end
+-- Lua errors do not undo writes. Check exact commands and key types before INCR.
+${ASSERT_WRITE_PERMISSION}
+local checkedTypes = {}
+local function checkType(key, expected)
+  if checkedTypes[key] then return end
+  local kind = redis.call("TYPE", key).ok
+  if kind ~= "none" and kind ~= expected then
+    error("Unexpected control-plane Redis key type: " .. kind .. " (expected " .. expected .. ")")
+  end
+  checkedTypes[key] = true
+end
+local function checkWrite(command, key, ...)
+  assertWritePermission(command, key, ...)
+  if command == "HSET" or command == "HDEL" then
+    checkType(key, "hash")
+  elseif command == "SADD" or command == "SREM" then
+    checkType(key, "set")
+  end
+end
+local function writeRecords(write, rev)
+  for _, w in ipairs(p.w.r) do
+    local key = KEYS[kinds[w[1]]]
+    if w[3] == false then
+      write("HDEL", key, w[2])
+    else
+      write("HSET", key, w[2], '{"rev":' .. rev .. ',"legacy":' .. w[4] .. ',"value":' .. w[3] .. '}')
+    end
+    write("HSET", KEYS[2], "k:" .. w[1], rev)
+  end
+  for _, u in ipairs(p.w.u) do
+    if u[2] == false then
+      write("HDEL", KEYS[3], u[1])
+    else
+      write("HSET", KEYS[3], u[1], u[2])
+    end
+  end
+  for _, g in ipairs(p.w.g) do
+    write(g[5] == 1 and "SADD" or "SREM", KEYS[g[1]], g[4])
+    write("HSET", KEYS[2], "t:" .. g[2] .. ":" .. g[3], rev)
+  end
+  for _, d in ipairs(p.w.d) do
+    write("HSET", KEYS[4], d, rev)
+  end
+  write("SET", KEYS[5], "applied:" .. rev, "PX", p.ttl)
+end
+assertWritePermission("INCR", KEYS[1])
+writeRecords(checkWrite, 0)
 local rev = redis.call("INCR", KEYS[1])
-for _, w in ipairs(p.w.r) do
-  local key = KEYS[kinds[w[1]]]
-  if w[3] == false then
-    redis.call("HDEL", key, w[2])
-  else
-    redis.call("HSET", key, w[2], '{"rev":' .. rev .. ',"legacy":' .. w[4] .. ',"value":' .. w[3] .. '}')
-  end
-  redis.call("HSET", KEYS[2], "k:" .. w[1], rev)
-end
-for _, u in ipairs(p.w.u) do
-  if u[2] == false then
-    redis.call("HDEL", KEYS[3], u[1])
-  else
-    redis.call("HSET", KEYS[3], u[1], u[2])
-  end
-end
-for _, g in ipairs(p.w.g) do
-  if g[5] == 1 then
-    redis.call("SADD", KEYS[g[1]], g[4])
-  else
-    redis.call("SREM", KEYS[g[1]], g[4])
-  end
-  redis.call("HSET", KEYS[2], "t:" .. g[2] .. ":" .. g[3], rev)
-end
-for _, d in ipairs(p.w.d) do
-  redis.call("HSET", KEYS[4], d, rev)
-end
-redis.call("SET", KEYS[5], "applied:" .. rev, "PX", p.ttl)
+writeRecords(redis.call, rev)
 return { 1, rev }
 `;
 
@@ -247,7 +298,11 @@ const scriptReply = (reply: unknown): ScriptReply => {
 const isStoreError = (error: unknown): boolean =>
   error instanceof StoreCorruptionError || error instanceof Miss;
 
-export type RedisBackend = Backend & { readonly client: RedisPersistenceClient; keys: RedisKeys };
+export type RedisBackend = Backend & {
+  readonly client: RedisPersistenceClient;
+  keys: RedisKeys;
+  checkWritePermissions: () => Promise<void>;
+};
 
 export const REDIS_REQUEST_DEADLINE_MS = 2_000;
 
@@ -540,6 +595,24 @@ export const createRedisBackend = async (options: {
       return client;
     },
     keys,
+    checkWritePermissions: async () => {
+      const probeKeys = [
+        keys.rev,
+        keys.commit(randomUUID()),
+        keys.ver,
+        keys.tomb,
+        keys.unique,
+        ...Object.values(keys.records),
+        keys.tag("meeting", tags.activeMeetings),
+        keys.tag("meeting", tags.meetingCode("probe", "probe")),
+        keys.tag("eventType", tags.profileEventTypes("probe")),
+        keys.tag("calendarTask", tags.openCalendarTasks),
+        keys.tag("calendarTask", tags.failedCalendarTasks),
+        keys.tag("calendarTask", tags.meetingCalendarTasks("probe")),
+        keys.tag("webinar", tags.openWebinars),
+      ];
+      await bounded((redis) => redis.sendCommand(["EVAL", CHECK_WRITE_PERMISSIONS, String(probeKeys.length), ...probeKeys]));
+    },
     commit: async <T>(command: Command<T>, now: number): Promise<CommitResult<T>> => {
       const done = await transact((source, entropy) => {
         const { outcome, writes } = execute(source, command, { now, entropy });

@@ -112,6 +112,12 @@ export const openControlPlane = async (
         redisUrl: config.redisUrl,
         keyPrefix: config.keyPrefix,
       });
+      try {
+        await created.checkWritePermissions();
+      } catch (error) {
+        await created.close();
+        throw new Error("Redis control-plane write permissions could not be verified.", { cause: error });
+      }
       backend = created;
       redis = { client: created.client, prefix: config.keyPrefix };
       break;

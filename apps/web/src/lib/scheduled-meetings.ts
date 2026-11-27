@@ -4,19 +4,14 @@ import {
 } from "@/lib/sfu-user-auth";
 import { resolveSfuSecret, resolveSfuUrl } from "@/lib/sfu-admin-auth";
 import { readResponseError } from "@/app/lib/utils";
+import {
+  fetchPublicScheduledMeeting,
+  isSfuTooOldForBookings,
+  type PublicScheduledMeeting,
+} from "@/lib/scheduled-meeting-lookup";
 import type { RoomDestination } from "@/lib/meeting-links";
 
-export interface PublicScheduledMeeting {
-  id: string;
-  roomCode: string;
-  title: string;
-  hostName: string;
-  scheduledStartAt: number;
-  scheduledEndAt: number;
-  status: "scheduled" | "live" | "ended" | "cancelled";
-  startedAt: number | null;
-  endedAt: number | null;
-}
+export type { PublicScheduledMeeting };
 
 export const resolveScheduledMeetingsBase = (): string => {
   const base = resolveSfuUrl().replace(/\/$/, "");
@@ -36,22 +31,15 @@ export const lookupPublicScheduledMeetingByRoomCode = async (
   { clientId, roomCode }: RoomDestination,
 ): Promise<PublicScheduledMeeting | null> => {
   try {
-    const base = resolveScheduledMeetingsBase();
-    const url = `${base}/public/by-room/${encodeURIComponent(roomCode)}?clientId=${encodeURIComponent(clientId)}`;
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        "x-sfu-secret": resolveSfuSecret(),
-        accept: "application/json",
-      },
-      cache: "no-store",
-    });
-    if (!response.ok) return null;
-    const data = (await response.json()) as {
-      scheduledMeeting?: PublicScheduledMeeting;
-    };
-    return data?.scheduledMeeting ?? null;
-  } catch {
+    const meeting = await fetchPublicScheduledMeeting(
+      resolveScheduledMeetingsBase(),
+      resolveSfuSecret(),
+      clientId,
+      roomCode,
+    );
+    return meeting?.clientId === clientId ? meeting : null;
+  } catch (error) {
+    if (isSfuTooOldForBookings(error)) throw error;
     return null;
   }
 };

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { color } from "@conclave/ui-tokens";
-import { buildMeetingPath } from "@/lib/meeting-links";
+import { buildMeetingPath } from "../../lib/meeting-links";
 import { ChatSpectator } from "./ChatSpectator";
 import { ParticipantRow } from "./ParticipantRow";
 import { TranscriptSpectator } from "./TranscriptSpectator";

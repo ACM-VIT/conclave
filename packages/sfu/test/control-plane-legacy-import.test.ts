@@ -269,7 +269,8 @@ const expectEverythingLoaded = async (store: ControlPlaneStore) => {
   expect(dashboard?.eventTypes).toEqual([eventType]);
   expect(dashboard?.calendar.status).toBe("connected");
   const connection = await store.read(hostCalendar("profile-1"));
-  expect(connection).toMatchObject({ accessToken: "legacy-access", refreshToken: "legacy-refresh", grantId: "legacy-calendar-1" });
+  expect(connection).toMatchObject({ accessToken: "legacy-access", refreshToken: "legacy-refresh" });
+  expect(connection?.grantId).toMatch(/^legacy-grant:/);
   const target = await store.read(bookingTarget("conclave", "host", "intro"));
   expect("error" in target).toBe(false);
   expect(await store.read(meetingById("meeting-no-stamp"))).toMatchObject({ createdAt: 1200, updatedAt: 1200 });

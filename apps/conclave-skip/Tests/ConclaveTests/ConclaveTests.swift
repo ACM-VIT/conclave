@@ -2455,7 +2455,7 @@ final class ConclaveTests: XCTestCase {
     func testMeetingLinkPercentEncodesRoomIdPathSegment() throws {
         XCTAssertEqual(
             MeetingState.meetingLink(for: " room/with?reserved#chars "),
-            "https://conclave.acmvit.in/room%2Fwith%3Freserved%23chars"
+            "https://conclave.acmvit.in/room%2Fwith%3Freserved%23chars?clientId=conclave"
         )
     }
 

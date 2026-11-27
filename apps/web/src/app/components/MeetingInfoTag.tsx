@@ -4,30 +4,7 @@ import { Check, Copy } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { color } from "@conclave/ui-tokens";
 import { useOneTimeHint } from "../hooks/useOneTimeHint";
-
-async function copyText(value: string): Promise<boolean> {
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(value);
-      return true;
-    }
-  } catch {
-  }
-  try {
-    const textarea = document.createElement("textarea");
-    textarea.value = value;
-    textarea.setAttribute("readonly", "");
-    textarea.style.position = "absolute";
-    textarea.style.left = "-9999px";
-    document.body.appendChild(textarea);
-    textarea.select();
-    const ok = document.execCommand("copy");
-    document.body.removeChild(textarea);
-    return ok;
-  } catch {
-    return false;
-  }
-}
+import { copyText, meetingLinkFor } from "../lib/meeting-link";
 
 function useClock() {
   const [time, setTime] = useState("");
@@ -41,12 +18,19 @@ function useClock() {
   return time;
 }
 
-export default function MeetingInfoTag({ roomId }: { roomId?: string }) {
+export default function MeetingInfoTag({
+  roomId,
+  clientId,
+}: {
+  roomId?: string;
+  clientId?: string;
+}) {
   const time = useClock();
   const [copied, setCopied] = useState(false);
   const copiedTimer = useRef<number | null>(null);
+  const meetingLink = roomId ? meetingLinkFor(roomId, clientId) : null;
   const hint = useOneTimeHint("copy-room-code", {
-    enabled: Boolean(roomId),
+    enabled: Boolean(meetingLink),
     delay: 1800,
   });
 
@@ -63,16 +47,20 @@ export default function MeetingInfoTag({ roomId }: { roomId?: string }) {
     return () => window.clearTimeout(t);
   }, [hint.visible, hint.dismiss]);
 
+  const canHover =
+    typeof window !== "undefined" &&
+    window.matchMedia?.("(hover: hover)").matches === true;
+
   const handleCopy = useCallback(() => {
-    if (!roomId) return;
-    void copyText(roomId).then((ok) => {
+    if (!meetingLink) return;
+    void copyText(meetingLink).then((ok) => {
       if (!ok) return;
       hint.dismiss();
       setCopied(true);
       if (copiedTimer.current) window.clearTimeout(copiedTimer.current);
       copiedTimer.current = window.setTimeout(() => setCopied(false), 1500);
     });
-  }, [roomId, hint]);
+  }, [meetingLink, hint]);
 
   const content = (
     <div className="flex min-w-0 items-center gap-1.5 text-[12px] font-medium leading-none">
@@ -114,14 +102,14 @@ export default function MeetingInfoTag({ roomId }: { roomId?: string }) {
 
   return (
     <div className="relative inline-flex min-w-0">
-      {roomId ? (
+      {meetingLink ? (
         <button
           type="button"
           onClick={handleCopy}
           aria-label={
-            copied ? "Meeting code copied" : `Copy meeting code ${roomId}`
+            copied ? "Meeting link copied" : `Copy meeting link for ${roomId}`
           }
-          title="Copy meeting code"
+          title="Copy meeting link"
           className="group -mx-1.5 -my-1 min-w-0 rounded-md px-1.5 py-1 transition-colors duration-150 hover:bg-white/[0.06]"
         >
           {content}
@@ -129,13 +117,13 @@ export default function MeetingInfoTag({ roomId }: { roomId?: string }) {
       ) : (
         content
       )}
-      {hint.visible && !copied ? (
+      {meetingLink && hint.visible && !copied ? (
         <span
           className="pointer-events-none absolute bottom-full left-0 mb-2 inline-flex items-center gap-1 whitespace-nowrap text-[11px] font-medium animate-[meet-popover-in_150ms_cubic-bezier(0.22,1,0.36,1)]"
           style={{ color: color.textFaint }}
         >
           <Copy size={11} strokeWidth={1.75} />
-          Tap to copy code
+          {canHover ? "Click" : "Tap"} to copy link
         </span>
       ) : null}
     </div>

@@ -12,6 +12,6 @@ export const buildSchedulingMeetingLink = (
     `${appOrigin.replace(/\/$/, "")}/`,
   );
   const clientId = canonicalizeClientId(meeting.clientId);
-  url.searchParams.set("clientId", clientId);
+  if (clientId) url.searchParams.set("clientId", clientId);
   return url.toString();
 };

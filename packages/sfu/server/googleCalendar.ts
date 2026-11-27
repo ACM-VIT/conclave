@@ -1,6 +1,6 @@
 import { Logger } from "../utilities/loggers.js";
 import { patchCalendarToken } from "./controlPlane/schedulingCommands.js";
-import type { BusyInterval } from "./scheduling.js";
+import { usesImportedCalendarGrant, type BusyInterval } from "./scheduling.js";
 import type { SfuState } from "./state.js";
 import type { SchedulingCalendarConnection, SchedulingEventType } from "../types.js";
 
@@ -103,6 +103,8 @@ export const refreshGoogleAccessToken = async (
   const cached = state.googleAccessTokens.get(connection.grantId);
   if (cached && cached.expiresAt > freshAfter) return cached.token;
   if (
+    // Legacy access tokens have no provenance. Use the refresh token bound to the grant.
+    !usesImportedCalendarGrant(connection) &&
     connection.accessToken &&
     connection.accessTokenExpiresAt &&
     connection.accessTokenExpiresAt > freshAfter

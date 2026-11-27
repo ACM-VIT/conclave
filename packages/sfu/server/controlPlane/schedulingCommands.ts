@@ -8,7 +8,7 @@ import type {
   SchedulingProfile,
   WeeklyAvailability,
 } from "../../types.js";
-import { canonicalizeClientId, clientIdCandidates } from "../clientIds.js";
+import { canonicalizeClientId, clientNamespacesIn, clientNamespaceIncludes } from "../clientIds.js";
 import {
   buildScheduledMeeting,
   shouldSendSchedulingReminder,
@@ -104,7 +104,7 @@ const findProfileForUser = (
   clientId: string,
   userId: string,
 ): Stored<"profile"> | null => {
-  for (const candidate of clientIdCandidates(clientId)) {
+  for (const candidate of clientNamespacesIn(clientId)) {
     const found = view.lookup(
       "profile",
       "profileUser",
@@ -159,7 +159,7 @@ export const hostBookings =
   };
 
 export const hostBusyIntervals =
-  (profileId: string, from: number, to: number): Query<BusyInterval[]> =>
+  (profileId: string, from: number, to: number, clientId: string): Query<BusyInterval[]> =>
   (view) => {
     const profile = view.get("profile", profileId);
     if (!profile) return [];
@@ -169,6 +169,7 @@ export const hostBusyIntervals =
       profile.value,
       from,
       to,
+      clientId,
     );
   };
 
@@ -179,8 +180,7 @@ export const bookingTarget =
     slug: string,
   ): Query<BookingTarget | { error: string; status: number }> =>
   (view) => {
-    let notFound = { error: "Scheduling page not found.", status: 404 };
-    for (const candidate of clientIdCandidates(clientId)) {
+    for (const candidate of clientNamespacesIn(clientId)) {
       const profile = view.lookup(
         "profile",
         "profileUsername",
@@ -193,8 +193,7 @@ export const bookingTarget =
         uniqueKeys.eventSlug(profile.value.id, slug.trim().toLowerCase()),
       );
       if (!eventType || !eventType.value.isActive) {
-        notFound = { error: "Event type is not available.", status: 404 };
-        continue;
+        return { error: "Event type is not available.", status: 404 };
       }
       return {
         profile,
@@ -203,7 +202,7 @@ export const bookingTarget =
         calendar: calendarOf(view, profile.value.id),
       };
     }
-    return notFound;
+    return { error: "Scheduling page not found.", status: 404 };
   };
 
 export const ensureHostProfile =
@@ -383,6 +382,7 @@ export const bookSlot =
     endAt: number;
     request: CreateScheduledMeetingRequest;
     options: CreateScheduledMeetingOptions;
+    clientId?: string;
     calendarEvent: { appOrigin: string; timeZone: string; claimedForMs: number };
   }): Command<BookedSlot> =>
   (tx) => {
@@ -413,6 +413,7 @@ export const bookSlot =
       profile.value,
       blocked.startAt,
       blocked.endAt,
+      input.clientId,
     );
     if (busy.length > 0) return fail("conflict", SLOT_TAKEN);
     const meeting = buildScheduledMeeting(input.request, input.options, {
@@ -496,19 +497,22 @@ export const reminderContext =
     meeting: ScheduledMeeting,
   ): Query<{ profile: SchedulingProfile | null; eventType: SchedulingEventType | null }> =>
   (view) => {
-    const eventType = meeting.eventTypeId
+    const candidate = meeting.eventTypeId
       ? view.get("eventType", meeting.eventTypeId)?.value ?? null
       : null;
+    const eventType = candidate && clientNamespaceIncludes(candidate.clientId, meeting.clientId)
+      ? candidate
+      : null;
     const byEventType = eventType ? view.get("profile", eventType.profileId)?.value ?? null : null;
-    if (byEventType) return { profile: byEventType, eventType };
-    const byHost =
-      view
-        .all("profile")
-        .map((stored) => stored.value)
-        .find(
-          (profile) =>
-            profile.clientId === meeting.clientId &&
-            profile.email.trim().toLowerCase() === meeting.hostEmail.trim().toLowerCase(),
-        ) ?? null;
-    return { profile: byHost, eventType };
+    if (byEventType && clientNamespaceIncludes(byEventType.clientId, meeting.clientId)) {
+      return { profile: byEventType, eventType };
+    }
+    const hostEmail = meeting.hostEmail.trim().toLowerCase();
+    const hostProfiles = view.all("profile")
+      .map(({ value }) => value)
+      .filter((profile) => profile.email.trim().toLowerCase() === hostEmail);
+    const profile = hostProfiles.find((profile) => profile.clientId === meeting.clientId) ??
+      hostProfiles.find((profile) => clientNamespaceIncludes(profile.clientId, meeting.clientId)) ??
+      null;
+    return { profile, eventType };
   };

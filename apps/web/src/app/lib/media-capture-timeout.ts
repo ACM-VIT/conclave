@@ -1,9 +1,12 @@
+import { captureUserMedia } from "./media-captures";
+
 export const MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS = 60000;
 export const MEDIA_CAPTURE_RECOVERY_TIMEOUT_MS = 15000;
 
 type GetUserMediaWithTimeoutOptions = {
   label: string;
   timeoutMs: number;
+  generation?: number;
 };
 
 const createMediaCaptureTimeoutError = (
@@ -40,7 +43,7 @@ export const getUserMediaWithTimeout = async (
 ): Promise<MediaStream> => {
   let timedOut = false;
   let timeoutId: number | null = null;
-  const mediaPromise = navigator.mediaDevices.getUserMedia(constraints);
+  const mediaPromise = captureUserMedia(constraints, options.generation);
 
   mediaPromise.then(
     (stream) => {

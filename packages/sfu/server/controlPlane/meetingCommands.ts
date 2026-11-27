@@ -3,7 +3,7 @@ import type {
   ScheduledMeeting,
   UpdateScheduledMeetingRequest,
 } from "../../types.js";
-import { clientIdCandidates } from "../clientIds.js";
+import { clientNamespaceIncludes, clientNamespacesIn } from "../clientIds.js";
 import {
   advanceScheduledMeeting,
   applyScheduledMeetingUpdate,
@@ -16,7 +16,7 @@ import { restoreMeetingEvent, retireMeetingEvent } from "./calendarTaskCommands.
 import { done, fail, isActiveMeeting, tags, uniqueKeys, type Outcome } from "./model.js";
 import type { Command, Query, Tx, TxRead } from "./tx.js";
 
-export type MeetingAccess = { email: string | null; isAdmin: boolean };
+export type MeetingAccess = { email: string | null; isAdmin: boolean; clientId?: string };
 
 export const MEETING_NOT_FOUND = "Scheduled meeting not found";
 
@@ -40,9 +40,12 @@ const meetingWithCode = (
 };
 
 export const meetingById =
-  (id: string): Query<ScheduledMeeting | null> =>
-  (view) =>
-    view.get("meeting", id)?.value ?? null;
+  (id: string, clientId?: string): Query<ScheduledMeeting | null> =>
+  (view) => {
+    const meeting = view.get("meeting", id)?.value ?? null;
+    if (meeting && clientId !== undefined && !clientNamespaceIncludes(clientId, meeting.clientId)) return null;
+    return meeting;
+  };
 
 export const meetingByRoomCode =
   (clientId: string, roomCode: string): Query<ScheduledMeeting | null> =>
@@ -54,7 +57,7 @@ export const listMeetings =
     const all = view.all("meeting").map((stored) => stored.value);
     const byId = new Map<string, ScheduledMeeting>();
     const seenRoomCodes = new Set<string>();
-    for (const candidate of clientIdCandidates(filter.clientId)) {
+    for (const candidate of clientNamespacesIn(filter.clientId)) {
       for (const meeting of filterScheduledMeetings(all, { ...filter, clientId: candidate })) {
         if (seenRoomCodes.has(meeting.roomCode)) continue;
         seenRoomCodes.add(meeting.roomCode);
@@ -73,12 +76,12 @@ const withAccess = <T>(
   access: MeetingAccess,
   run: (meeting: ScheduledMeeting) => Outcome<T>,
 ): Outcome<T> => {
-  const current = tx.get("meeting", id);
-  if (!current) return fail("not_found", MEETING_NOT_FOUND);
-  if (!access.isAdmin && (!access.email || current.value.hostEmail !== access.email)) {
+  const meeting = meetingById(id, access.clientId)(tx);
+  if (!meeting) return fail("not_found", MEETING_NOT_FOUND);
+  if (!access.isAdmin && (!access.email || meeting.hostEmail !== access.email)) {
     return fail("forbidden", "Not authorized for this meeting");
   }
-  return run(current.value);
+  return run(meeting);
 };
 
 const calendarWorkFor = (tx: Tx, before: ScheduledMeeting, after: ScheduledMeeting): ScheduledMeeting => {

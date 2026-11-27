@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from "node:crypto";
 import type {
   AvailabilityOverride,
   AvailabilityWindow,
@@ -12,7 +12,7 @@ import type {
 } from "../types.js";
 import { asArray, asRecord } from "../utilities/untrusted.js";
 import { InvalidInput } from "./controlPlane/model.js";
-import { canonicalizeClientId, clientReadsFallBackTo, CONCLAVE_CLIENT_ID } from "./clientIds.js";
+import { canonicalizeClientId, clientNamespaceIncludes, CONCLAVE_CLIENT_ID } from "./clientIds.js";
 import { storedTimestampOrNull } from "./storedValues.js";
 
 const USERNAME_MAX_LENGTH = 48;
@@ -452,7 +452,7 @@ export const calendarSummary = (
 export const isCalendarUsable = (
   connection: SchedulingCalendarConnection | null,
 ): connection is SchedulingCalendarConnection =>
-  Boolean(connection && connection.status === "connected" && connection.refreshToken);
+  Boolean(connection?.grantId && connection.status === "connected" && connection.refreshToken);
 
 export const connectGoogleCalendar = (
   profile: SchedulingProfile,
@@ -500,9 +500,10 @@ export const meetingMatchesProfile = (
   meeting: ScheduledMeeting,
   profile: SchedulingProfile,
   eventType?: SchedulingEventType | null,
+  clientId = profile.clientId,
 ): boolean => {
+  if (!clientNamespaceIncludes(clientId, meeting.clientId)) return false;
   if (eventType?.profileId === profile.id) return true;
-  if (!clientReadsFallBackTo(meeting.clientId, profile.clientId)) return false;
   if (meeting.hostUserId && profile.userId) {
     return meeting.hostUserId === profile.userId;
   }
@@ -515,6 +516,7 @@ export const internalBusyIntervals = (
   profile: SchedulingProfile,
   from: number,
   to: number,
+  clientId = profile.clientId,
 ): BusyInterval[] =>
   meetings
     .filter((meeting) => meeting.status !== "cancelled" && meeting.status !== "ended")
@@ -530,7 +532,7 @@ export const internalBusyIntervals = (
     })
     .filter(
       ({ meeting, eventType, startAt, endAt }) =>
-        meetingMatchesProfile(meeting, profile, eventType) &&
+        meetingMatchesProfile(meeting, profile, eventType, clientId) &&
         startAt < to &&
         from < endAt,
     )
@@ -894,6 +896,11 @@ const CALENDAR_STATUSES: ReadonlySet<string> = new Set([
   "error",
 ]);
 
+const LEGACY_GRANT_PREFIX = "legacy-grant:";
+
+export const usesImportedCalendarGrant = (connection: SchedulingCalendarConnection): boolean =>
+  connection.grantId.startsWith(LEGACY_GRANT_PREFIX);
+
 export const normalizeStoredCalendar = (
   raw: unknown,
 ): SchedulingCalendarConnection | null => {
@@ -906,19 +913,27 @@ export const normalizeStoredCalendar = (
     typeof record.status === "string" && CALENDAR_STATUSES.has(record.status)
       ? (record.status as SchedulingCalendarConnection["status"])
       : "needs_reconnect";
+  const clientId = storedClientId(record.clientId);
+  const email = nonEmptyString(record.email)?.trim().toLowerCase() || null;
+  const calendarId = nonEmptyString(record.calendarId) ?? "primary";
+  const refreshToken = decryptToken(record.refreshToken);
+  const grantId = nonEmptyString(record.grantId) ?? (refreshToken
+    ? LEGACY_GRANT_PREFIX + createHmac("sha256", encryptionKey())
+      .update(JSON.stringify([LEGACY_GRANT_PREFIX, clientId, profileId, id, email, calendarId, refreshToken]))
+      .digest("base64url")
+    : "");
   return {
     id,
-    grantId: nonEmptyString(record.grantId) ?? `legacy-${id}`,
-    clientId: storedClientId(record.clientId),
+    grantId,
+    clientId,
     profileId,
     userId: typeof record.userId === "string" ? record.userId : "",
     provider: GOOGLE_PROVIDER,
     status,
-    email: typeof record.email === "string" ? record.email : null,
-    calendarId:
-      typeof record.calendarId === "string" && record.calendarId ? record.calendarId : "primary",
+    email,
+    calendarId,
     accessToken: decryptToken(record.accessToken),
-    refreshToken: decryptToken(record.refreshToken),
+    refreshToken,
     accessTokenExpiresAt: storedTimestampOrNull(record.accessTokenExpiresAt),
     scopes: (asArray(record.scopes) ?? []).filter(
       (scope): scope is string => typeof scope === "string",

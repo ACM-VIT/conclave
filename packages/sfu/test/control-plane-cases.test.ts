@@ -806,3 +806,81 @@ describe("a store that is not safe to start on", () => {
     await expect(start("A")).rejects.toThrow();
   });
 });
+
+describe("a calendar imported from legacy SQLite records", () => {
+  it.each(["access refresh", "new credentials", "new target"] as const)(
+    "uses the original grant for cleanup only after %s if it is still the same grant",
+    async (change) => {
+      const profileId = "legacy-calendar-host";
+      const profile = {
+        id: profileId, clientId: "conclave", userId: HOST["x-user-id"], email: HOST["x-user-email"],
+        name: "Host", username: "host", timeZone: "UTC", createdAt: 1_000, updatedAt: 1_000,
+      };
+      const calendar = {
+        id: "same-connection", profileId, clientId: "conclave", userId: profile.userId,
+        status: "connected", email: "google@example.test", calendarId: "primary",
+        refreshToken: "fixture-original-refresh", accessToken: "fixture-expired-access",
+        accessTokenExpiresAt: 1, createdAt: 1_000, updatedAt: 1_000,
+      };
+      legacySqlite((db) => {
+        db.prepare("INSERT INTO scheduling_records VALUES (?, ?, ?, ?, ?)").run(
+          "profile", profileId, "conclave", profile.updatedAt, JSON.stringify(profile),
+        );
+      });
+      const saveCalendar = (record: typeof calendar) => legacySqlite((db) => {
+        db.prepare("INSERT OR REPLACE INTO scheduling_records VALUES (?, ?, ?, ?, ?)").run(
+          "calendar", profileId, "conclave", record.updatedAt, JSON.stringify(record),
+        );
+      });
+      saveCalendar(calendar);
+      const a = await start("A");
+      const { username } = await setUpHost(a);
+      const booked = await book(a, username, slotAfter(2 * DAY_MS));
+      expect(booked.status).toBe(201);
+      const { id, calendarEventId } = field<{ id: string; calendarEventId: string }>(booked, "booking");
+      const original = google;
+      expect(original.events.has(calendarEventId)).toBe(true);
+      await stop(a);
+
+      saveCalendar({
+        ...calendar,
+        updatedAt: 2_000,
+        accessToken: "fixture-new-access",
+        accessTokenExpiresAt: Date.now() + DAY_MS,
+        refreshToken: change === "new credentials" ? "fixture-replacement-refresh" : calendar.refreshToken,
+        calendarId: change === "new target" ? "replacement" : calendar.calendarId,
+      });
+      if (change !== "access refresh") google = new FakeGoogle(gates);
+      const provider = vi.spyOn(google, "handle");
+
+      const b = await start("B");
+      const current = await openControlPlane(undefined, { importLegacy: false });
+      try {
+        expect(await current.read((view) => view.get("calendar", profileId)?.value.updatedAt)).toBe(2_000);
+        expect((await host(b, "POST", `/scheduled-meetings/${id}/cancel`)).status).toBe(200);
+        await vi.waitFor(async () => {
+          const tasks = await current.read((view) => view.all("calendarTask").map(({ value }) => value));
+          if (change === "access refresh") {
+            expect(tasks).toEqual([]);
+            expect(original.events.has(calendarEventId)).toBe(false);
+          } else {
+            expect(tasks).toEqual([expect.objectContaining({
+              action: "delete", eventId: calendarEventId, attempts: 1,
+              lastError: "Google Calendar was reconnected or disconnected meanwhile.",
+            })]);
+          }
+        });
+        if (change === "access refresh") {
+          const deleted = provider.mock.calls.find(([, init]) => init?.method === "DELETE");
+          expect(new Headers(deleted?.[1]?.headers).get("authorization")).not.toBe("Bearer fixture-new-access");
+          expect(provider.mock.calls.some(([url]) => url.hostname === "oauth2.googleapis.com")).toBe(true);
+        } else {
+          expect(provider).not.toHaveBeenCalled();
+          expect(original.events.has(calendarEventId)).toBe(true);
+        }
+      } finally {
+        await current.close();
+      }
+    },
+  );
+});

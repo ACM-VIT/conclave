@@ -6,6 +6,7 @@
  * Only these labels become exceptions, and only they are sent as a message.
  */
 export const CALL_LOG_LABELS = [
+  "[Meets] A capture owner failed to release",
   "[Meets] Audio play error",
   "[Meets] Audio producer recovery failed",
   "[Meets] Browser video play error",

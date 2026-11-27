@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { captureUserMedia, onCapturesReleased } from "../lib/media-captures";
 import type { ResolvedCameraPublishSettings } from "../lib/media-quality-settings";
 
 export interface LocalCameraPreviewController {
@@ -86,28 +87,27 @@ export function useLocalCameraPreview({
     let cancelled = false;
     setIsStarting(true);
 
-    void navigator.mediaDevices
-      .getUserMedia({
-        video: {
-          ...(publishSettings
-            ? {
-                width: {
-                  ideal: publishSettings.width,
-                  max: publishSettings.width,
-                },
-                height: {
-                  ideal: publishSettings.height,
-                  max: publishSettings.height,
-                },
-                frameRate: {
-                  ideal: publishSettings.frameRate,
-                  max: publishSettings.frameRate,
-                },
-              }
-            : PREVIEW_VIDEO_CONSTRAINTS),
-          ...(deviceId ? { deviceId: { ideal: deviceId } } : {}),
-        },
-      })
+    void captureUserMedia({
+      video: {
+        ...(publishSettings
+          ? {
+              width: {
+                ideal: publishSettings.width,
+                max: publishSettings.width,
+              },
+              height: {
+                ideal: publishSettings.height,
+                max: publishSettings.height,
+              },
+              frameRate: {
+                ideal: publishSettings.frameRate,
+                max: publishSettings.frameRate,
+              },
+            }
+          : PREVIEW_VIDEO_CONSTRAINTS),
+        ...(deviceId ? { deviceId: { ideal: deviceId } } : {}),
+      },
+    })
       .then((nextStream) => {
         if (cancelled || requestId !== requestIdRef.current) {
           nextStream.getTracks().forEach((track) => track.stop());
@@ -155,6 +155,8 @@ export function useLocalCameraPreview({
     publishSettings?.frameRate,
     releaseStream,
   ]);
+
+  useEffect(() => onCapturesReleased(stop), [stop]);
 
   useEffect(
     () => () => {

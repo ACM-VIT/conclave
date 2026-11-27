@@ -3212,6 +3212,53 @@ test("unified Redis restores the SFU namespace and refuses a missing store befor
   }
 });
 
+test("a pre-upgrade Redis archive without a unified revision does not change live files or Redis", needsRedis, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  const live = await startRedis();
+  try {
+    const { state, backup, latestArchive, restore } = await setUp(root, [
+      `SFU_PERSISTENCE_REDIS_URL=redis://127.0.0.1:${live.port}/0`,
+      "SFU_PERSISTENCE_REDIS_KEY_PREFIX=fixture",
+    ]);
+    const revision = "fixture:{control-plane}:rev";
+    const legacy = "fixture:scheduled-meetings";
+    const notes = path.join(state, "notes.json");
+    await writeFile(notes, "archived notes");
+    await live.cli("HSET", legacy, "archived", "{}");
+    const oldDump = path.join(root, "old.rdb");
+    await live.cli("--rdb", oldDump);
+    await live.cli("SET", revision, "1");
+    await backup("--local-only");
+
+    const payload = path.join(root, "payload");
+    const unpacked = path.join(root, "backup.tar.gz");
+    const oldArchive = path.join(root, "conclave-pre-upgrade.tar.gz.age");
+    await mkdir(payload);
+    await run("age", ["--decrypt", "-i", path.join(root, "key.txt"), "-o", unpacked, await latestArchive()]);
+    await run("tar", ["-xzf", unpacked, "-C", payload]);
+    await copyFile(oldDump, path.join(payload, "redis", "dump.rdb"));
+    const manifest = path.join(payload, "MANIFEST");
+    await writeFile(manifest, (await readFile(manifest, "utf8")).replace(/^redis\.control_plane_revision=.*\n/m, ""));
+    await run("bash", ["-o", "pipefail", "-c",
+      'python3 -B "$1/backup_state.py" seal "$2" | age --encrypt -R "$3" -o "$4"',
+      "seal", scripts, payload, path.join(root, "recipients.txt"), oldArchive,
+    ]);
+
+    await live.cli("DEL", legacy);
+    await live.cli("SET", revision, "2");
+    await live.cli("SET", "fixture:kept", "live");
+    await writeFile(notes, "live notes");
+    await assert.rejects(restore("--file", oldArchive, "--yes"), /missing the control-plane store revision/);
+    assert.equal((await live.cli("GET", revision)).stdout.trim(), "2");
+    assert.equal((await live.cli("GET", "fixture:kept")).stdout.trim(), "live");
+    assert.equal((await live.cli("EXISTS", legacy)).stdout.trim(), "0");
+    assert.equal(await readFile(notes, "utf8"), "live notes");
+  } finally {
+    live.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 describe("backup and restore", { concurrency: 6 }, () => {
   for (const args of queued) nodeTest(...args);
 });

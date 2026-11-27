@@ -109,8 +109,9 @@ const parseStatusFilter = (
 
 const serializeMeeting = (meeting: ScheduledMeeting): ScheduledMeeting => meeting;
 
-const publicMeetingView = (meeting: ScheduledMeeting) => ({
+export const publicMeetingView = (meeting: ScheduledMeeting) => ({
   id: meeting.id,
+  clientId: meeting.clientId,
   roomCode: meeting.roomCode,
   title: meeting.title,
   hostName: meeting.hostName,
@@ -135,7 +136,7 @@ export const registerScheduledMeetingRoutes = (
 
   const accessOf = (req: Request): MeetingAccess => {
     const user = resolveUserContext(req);
-    return { email: user.email, isAdmin: user.isAdmin };
+    return { email: user.email, isAdmin: user.isAdmin, clientId: resolveClientId(req) };
   };
 
   const meetingId = (req: Request, res: Response): string | null => {
@@ -254,12 +255,25 @@ export const registerScheduledMeetingRoutes = (
   );
 
   app.get(
+    "/scheduled-meetings/public/v2/by-room/:roomCode",
+    controlPlaneRoute("look up a public scheduled meeting", async (req, res) => {
+      if (!requireSecret(req, res)) return;
+      const roomCode = roomCodeOf(req, res);
+      if (!roomCode) return;
+      const meeting = await state.controlPlane.read(
+        meetingByRoomCode(resolveClientId(req), roomCode),
+      );
+      res.json({ scheduledMeeting: meeting ? publicMeetingView(meeting) : null });
+    }),
+  );
+
+  app.get(
     "/scheduled-meetings/:id",
     controlPlaneRoute("read a scheduled meeting", async (req, res) => {
       if (!requireSecret(req, res)) return;
       const id = meetingId(req, res);
       if (!id) return;
-      const meeting = await state.controlPlane.read(meetingById(id));
+      const meeting = await state.controlPlane.read(meetingById(id, resolveClientId(req)));
       if (!meeting) {
         res.status(404).json({ error: "Scheduled meeting not found" });
         return;
