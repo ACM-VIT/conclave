@@ -266,6 +266,8 @@ export function NativeWhiteboardEmbed({ session }: { session: NativeEmbedSession
         case "status":
         case "resync":
         case "close":
+        case "prepareToLeave":
+        case "savedSnapshot":
         case "addEntries":
         case "removeEntry":
         case "shuffle":
