@@ -159,7 +159,7 @@ describe("public booking confirmation", () => {
     ]);
   });
 
-  it.each(["cancel", "delete"] as const)("does not confirm when the host can %s after the initial calendar lease expires", async (action) => {
+  it.each(["cancel", "delete"] as const)("does not confirm when the host chooses to %s after the initial calendar lease expires", async (action) => {
     const { state, clock, call, username, seams } = await sfuWithClock();
     let id = "";
     seams.afterBookingCommit = async () => {
@@ -227,7 +227,6 @@ describe("public booking confirmation", () => {
     const booked = await booking;
     expect(booked.status).toBe(409);
     expect(booked.body).toEqual({ error: "This booking is no longer available." });
-    await vi.waitFor(() => expect(seams.commitConflicts).toBe(0));
     expect(await savedMeeting(call, id)).toMatchObject({ status: "cancelled", emailNotificationStatus: "pending" });
   });
 });

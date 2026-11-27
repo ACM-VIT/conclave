@@ -15,7 +15,18 @@ const retryDelays = (): number[] => {
   return delays.length > 0 ? delays : DEFAULT_DELAYS_MS;
 };
 
-const retryLater = <T>(store: ControlPlaneStore, label: string, command: Command<T>, delays: number[]): void => {
+type FollowUpOptions = { retryOnConflict?: boolean };
+
+const isRetryableConflict = <T>(result: CommitResult<T>, options: FollowUpOptions): boolean =>
+  options.retryOnConflict === true && !result.ok && result.reason === "conflict";
+
+const retryLater = <T>(
+  store: ControlPlaneStore,
+  label: string,
+  command: Command<T>,
+  options: FollowUpOptions,
+  delays: number[],
+): void => {
   const [delay, ...rest] = delays;
   if (delay === undefined) {
     Logger.error(`[ControlPlane] gave up recording ${label}; it is not saved`);
@@ -24,11 +35,12 @@ const retryLater = <T>(store: ControlPlaneStore, label: string, command: Command
   const timer = setTimeout(() => {
     store.commit(command).then(
       (result) => {
-        if (!result.ok) Logger.warn(`[ControlPlane] ${label} no longer applies: ${result.reason}`);
+        if (isRetryableConflict(result, options)) retryLater(store, label, command, options, rest);
+        else if (!result.ok) Logger.warn(`[ControlPlane] ${label} no longer applies: ${result.reason}`);
       },
       (error: unknown) => {
         Logger.warn(`[ControlPlane] retrying ${label} after a storage error`, error);
-        retryLater(store, label, command, rest);
+        retryLater(store, label, command, options, rest);
       },
     );
   }, delay);
@@ -39,12 +51,15 @@ export const commitFollowUp = async <T>(
   store: ControlPlaneStore,
   label: string,
   command: Command<T>,
+  options: FollowUpOptions = {},
 ): Promise<CommitResult<T> | null> => {
   try {
-    return await store.commit(command);
+    const result = await store.commit(command);
+    if (!isRetryableConflict(result, options)) return result;
+    Logger.warn(`[ControlPlane] could not record ${label} yet after a write conflict`);
   } catch (error) {
     Logger.warn(`[ControlPlane] could not record ${label} yet`, error);
-    retryLater(store, label, command, retryDelays());
-    return null;
   }
+  retryLater(store, label, command, options, retryDelays());
+  return null;
 };

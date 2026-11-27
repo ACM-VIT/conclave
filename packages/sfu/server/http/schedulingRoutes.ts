@@ -22,6 +22,7 @@ import {
   BOOKING_PAGE_CHANGED,
   SLOT_TAKEN,
   bookSlot,
+  bookingForConfirmation,
   bookingTarget,
   connectHostCalendar,
   createHostEventType,
@@ -635,10 +636,10 @@ export const registerSchedulingRoutes = (
       const booked = await commitBooking(1);
       if (!booked) return;
       const { target, calendarTaskId } = booked;
-      let latest = booked.meeting;
-      let calendarError: string | null = null;
       const profile = target.profile.value;
       const eventType = target.eventType.value;
+      const bookingId = booked.meeting.id;
+      const confirmable = bookingForConfirmation(bookingId, clientId);
 
       const bookingGone = (): void => {
         res.status(409).json({ error: BOOKING_GONE });
@@ -650,8 +651,12 @@ export const registerSchedulingRoutes = (
           bookingGone();
           return;
         }
-        calendarError = run.error;
-        if (run.meeting) latest = run.meeting;
+      }
+
+      const latest = await state.controlPlane.read(confirmable);
+      if (!latest) {
+        bookingGone();
+        return;
       }
 
       const emailResult = await sendSchedulingBookingEmails({
@@ -659,20 +664,26 @@ export const registerSchedulingRoutes = (
         eventType,
         meeting: latest,
         appOrigin,
-        calendarError,
+        calendarError: latest.calendarSyncError ?? null,
       });
       const recorded = await commitFollowUp(
         state.controlPlane,
-        `booking email result for ${latest.id}`,
-        recordBookingEmailResult(latest.id, emailResult),
+        `booking email result for ${bookingId}`,
+        recordBookingEmailResult(bookingId, clientId, emailResult),
+        { retryOnConflict: true },
       );
       if (recorded && !recorded.ok) {
         bookingGone();
         return;
       }
-      if (recorded?.ok) latest = recorded.value;
+      const confirmed = recorded?.ok ? recorded.value : await state.controlPlane.read(confirmable);
+      if (!confirmed) {
+        bookingGone();
+        return;
+      }
+      const calendarError = confirmed.calendarSyncError;
       res.status(201).json({
-        booking: buildConfirmation(latest, appOrigin),
+        booking: buildConfirmation({ ...confirmed, emailNotificationStatus: emailResult.status }, appOrigin),
         ...(calendarError ? { calendarError } : {}),
         ...(emailResult.error ? { emailError: emailResult.error } : {}),
       });

@@ -39,6 +39,7 @@ import {
   type ProfileUpdate,
 } from "../scheduling.js";
 import { CALENDAR_CHANGED, putCreateTask } from "./calendarTaskCommands.js";
+import { meetingById } from "./meetingCommands.js";
 import { done, fail, tags, uniqueKeys, type Stored } from "./model.js";
 import type { Command, Query, TxRead } from "./tx.js";
 
@@ -430,13 +431,20 @@ export const bookSlot =
     return done({ meeting, calendarTaskId: task?.id ?? null });
   };
 
+export const bookingForConfirmation =
+  (meetingId: string, clientId: string): Query<ScheduledMeeting | null> =>
+  (view) => {
+    const meeting = meetingById(meetingId, clientId)(view);
+    return meeting?.status === "cancelled" ? null : meeting;
+  };
+
 export const recordBookingEmailResult =
-  (meetingId: string, result: EmailResult): Command<ScheduledMeeting> =>
+  (meetingId: string, clientId: string, result: EmailResult): Command<ScheduledMeeting> =>
   (tx) => {
-    const current = tx.get("meeting", meetingId);
+    const current = bookingForConfirmation(meetingId, clientId)(tx);
     if (!current) return fail("not_found", BOOKING_GONE);
     const next: ScheduledMeeting = {
-      ...current.value,
+      ...current,
       emailNotificationStatus: result.status,
       emailNotificationError: result.error,
       emailNotificationSentAt: result.sentAt,
