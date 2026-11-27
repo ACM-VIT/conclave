@@ -31,7 +31,10 @@ test("a canary that cannot load the joined device disconnects its seat immediate
       timeout: 6_000,
       env: { ...process.env, SFU_SECRET: "local-canary-test-secret" },
     });
-    await expect(result).rejects.toMatchObject({ code: 1, stdout: expect.stringMatching(/PASS Alice joined/) });
+    const error = await result.then(() => null, (cause: unknown) => cause);
+    expect(error).toMatchObject({ code: 1 });
+    if (!error || typeof error !== "object" || !("stdout" in error)) throw new Error("the canary did not report its join");
+    expect(error.stdout).toMatch(/PASS Alice joined/);
     await expect(disconnected).resolves.toBe("client namespace disconnect");
   } finally {
     await io.close();

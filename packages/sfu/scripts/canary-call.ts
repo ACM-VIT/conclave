@@ -53,9 +53,15 @@ const minPackets = Number(args["min-packets"]);
 const holdMs = Number(args["hold-ms"]);
 const timeoutMs = Number(args["timeout-ms"]) + holdMs;
 const roomId = `canary-${randomUUID().slice(0, 12)}`;
+const sockets = new Set<Socket>();
+const closeSockets = () => {
+  for (const socket of sockets) socket.close();
+  sockets.clear();
+};
 
 setTimeout(() => {
   console.error(`FAIL canary did not finish within ${timeoutMs} ms`);
+  closeSockets();
   process.exit(1);
 }, timeoutMs).unref();
 
@@ -138,6 +144,7 @@ const connectClient = async (name: string): Promise<CanaryClient> => {
     { expiresIn: "5m" },
   );
   const socket = io(sfuUrl, { transports: ["websocket"], auth: { token }, reconnection: false });
+  sockets.add(socket);
   const client: CanaryClient = { name, socket, device: new Device({ handlerName: "Chrome111" }), announcedProducers: new Set() };
   socket.on("newProducer", (info: unknown) => {
     const producerId = readString(asRecord(info), "producerId");
@@ -296,10 +303,8 @@ try {
     check("audio never stopped for more than 2 s", held.longestSilence <= 2, `longest silence ${held.longestSilence} s`);
   }
 
-  for (const client of clients) {
-    client.stopAudio?.();
-    client.socket.close();
-  }
+  for (const client of clients) client.stopAudio?.();
+  closeSockets();
   // A lingering canary room would hold the next drain open forever.
   const roomPath = `/rooms/${roomId}?clientId=${encodeURIComponent(clientId)}`;
   let roomOpen = true;
@@ -311,10 +316,8 @@ try {
 } catch (error) {
   check("canary call", false, error instanceof Error ? error.message : String(error));
 } finally {
-  for (const client of clients) {
-    client.stopAudio?.();
-    client.socket.close();
-  }
+  for (const client of clients) client.stopAudio?.();
+  closeSockets();
 }
 
 console.log(failures.length === 0 ? "Canary passed." : `Canary failed: ${failures.join("; ")}`);

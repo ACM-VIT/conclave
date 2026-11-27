@@ -1670,23 +1670,30 @@ roll_back() {
 
 declare -A REPAIR_CODE=()
 repair_interrupted() {
-  local svc phase lkg candidate prev url image_name state code identity running first=() rest=()
+  local scope="${1:-all}" svc phase lkg candidate prev url image_name state code identity running first=() rest=()
+  local -A phases=()
   for svc in "${ALL_SFU_SERVICES[@]}"; do
-    case "$(container_state "$svc")" in
+    phase="$(journal_get "$svc" phase)"
+    [[ -z "$phase" || "$phase" == idle ]] && continue
+    state="$(container_state "$svc")"
+    if [[ "$scope" == in-place && ( "$phase" != drained || "$state" != running ) ]]; then
+      continue
+    fi
+    phases[$svc]="$phase"
+    case "$state" in
       stopped|restarting|absent) first+=("$svc") ;;
       *) rest+=("$svc") ;;
     esac
   done
   for svc in ${first[@]+"${first[@]}"} ${rest[@]+"${rest[@]}"}; do
-    phase="$(journal_get "$svc" phase)"
-    [[ -z "$phase" || "$phase" == "idle" ]] && continue
+    phase="${phases[$svc]}"
     url="$(service_url "$svc")"
     image_name="$(service_image_name "$svc")"
     lkg="$(journal_get "$svc" lkg)"
     candidate="$(journal_get "$svc" candidate)"
     prev="$(journal_get "$svc" prevLkg)"
     if ! identity="$(service_identity "$svc")"; then
-      REPAIR_CODE[$svc]=$EXIT_NOT_RESTORED
+      [[ "$scope" == in-place ]] || REPAIR_CODE[$svc]=$EXIT_NOT_RESTORED
       continue
     fi
     running="${identity#* }"
@@ -1695,6 +1702,9 @@ repair_interrupted() {
     case "$phase" in
       drained)
         state="$(container_state "$svc")"
+        if [[ "$scope" == in-place && ( "$state" != running || -z "$lkg" ) ]]; then
+          continue
+        fi
         if [[ "$state" =~ ^(stopped|restarting|absent)$ ]]; then
           if [[ -n "$lkg" ]]; then
             roll_back "$svc" "$url" "$image_name" "$lkg" || code=$?
@@ -1746,7 +1756,7 @@ repair_interrupted() {
         code=1
         ;;
     esac
-    (( code == 0 )) || REPAIR_CODE[$svc]=$code
+    if [[ "$scope" != in-place ]] && (( code != 0 )); then REPAIR_CODE[$svc]=$code; fi
   done
 }
 
@@ -2012,6 +2022,7 @@ for svc in "${ALL_SFU_SERVICES[@]}"; do
 done
 
 install_deploy_traps
+repair_interrupted in-place
 
 if [[ "$ROLLBACK" != true ]]; then
   TARGET_COMMIT="$(git -C "$ROOT_DIR" rev-parse --short=12 HEAD)"
