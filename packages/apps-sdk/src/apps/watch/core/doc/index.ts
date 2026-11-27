@@ -80,7 +80,9 @@ export const resolveWatchRequest = (
   requestId: string,
   resolution: WatchRequestResolution,
 ): void => {
-  ensureResolutionsMap(doc).set(requestId, resolution);
+  doc.transact(() => {
+    ensureResolutionsMap(doc).set(requestId, resolution);
+  });
 };
 
 export const getWatchRequestResolution = (
@@ -207,17 +209,21 @@ export const enqueue = (
     addedById: ctx?.userId ?? null,
     addedByName: ctx?.userName ?? null,
   };
-  ensureQueueArray(doc).push([item]);
+  doc.transact(() => {
+    ensureQueueArray(doc).push([item]);
+  });
   return item;
 };
 
 export const removeQueueItem = (doc: Y.Doc, itemId: string): void => {
-  const queue = readQueueArray(doc);
-  if (!queue) return;
-  const list = queue.toArray();
-  const index = list.findIndex((item) => item?.id === itemId);
-  if (index === -1) return;
-  queue.delete(index, 1);
+  doc.transact(() => {
+    const queue = readQueueArray(doc);
+    if (!queue) return;
+    const list = queue.toArray();
+    const index = list.findIndex((item) => item?.id === itemId);
+    if (index === -1) return;
+    queue.delete(index, 1);
+  });
 };
 
 export const moveQueueItem = (

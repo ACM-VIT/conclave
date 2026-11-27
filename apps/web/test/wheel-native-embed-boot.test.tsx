@@ -43,6 +43,7 @@ describe("native wheel embed boot", () => {
               if (!update.ok) throw new Error(update.reason);
               Y.applyUpdate(room, update.bytes);
               send("update", message.payload, `room-${message.requestId}`);
+              send("addOutcome", { tokens: ["t-ada"], sentAt: SENT_AT }, "h-4");
             }
             if (message.type !== "ready") return;
             send("status", { readOnly: false, connection: "live", userId: "me", userName: "Me" }, "n-1");
@@ -65,8 +66,9 @@ describe("native wheel embed boot", () => {
     const acks = posted.filter((message) => message.type === "ack").map((message) => [message.requestId, message.payload]);
     expect(acks).toEqual([
       ["h-1", { ok: false, error: "notApplied", added: [] }],
+      ["h-3", { ok: false, error: "notSynced" }],
       ["h-2", { ok: true, added: [0] }],
-      ["h-3", { ok: true, added: [0] }],
+      ["h-4", { ok: true, added: [0] }],
     ]);
     const status = [...posted].reverse().find((message) => message.type === "status")?.payload.app as
       | { entries: { label: string }[] }

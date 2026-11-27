@@ -282,7 +282,7 @@ describe("the presented board", () => {
     serverDocs.set("whiteboard", fresh);
     await serverState({ activeAppId: "whiteboard", revision: 4, savedAppIds: [], docGeneration: 2 });
     emitted.length = 0;
-    mountedBoard!.getMap("shapes").set("arrow", 1);
+    await act(async () => mountedBoard!.getMap("shapes").set("arrow", 1));
 
     expect(mountedBoard!.getMap("shapes").get("square")).toBe(1);
     expect(mountedBoard!.getMap("shapes").get("circle")).toBeUndefined();
@@ -330,7 +330,7 @@ describe("the presented board", () => {
     expect(host.querySelector('aside[aria-label="Apps"]')).not.toBeNull();
     await click("Close apps");
     expect(host.querySelector('aside[aria-label="Apps"]')).toBeNull();
-    board.getMap("shapes").set("arrow", 1);
+    await act(async () => board.getMap("shapes").set("arrow", 1));
 
     expect(ctx.getDoc("whiteboard")).toBe(board);
     expect(emitted.map((entry) => entry.event)).toEqual(["apps:yjs:update"]);

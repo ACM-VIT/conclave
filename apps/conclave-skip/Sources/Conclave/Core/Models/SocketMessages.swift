@@ -270,6 +270,13 @@ struct LaunchBrowserResponse: Codable {
 
 struct AppsOpenRequest: Codable {
     let appId: String
+    let expectedRevision: Int?
+    let expectedRoomId: String?
+}
+
+struct AppsCloseRequest: Codable {
+    let expectedRevision: Int
+    let expectedRoomId: String?
 }
 
 struct AppsLockRequest: Codable {
@@ -279,6 +286,7 @@ struct AppsLockRequest: Codable {
 struct AppsSyncRequest: Codable {
     let appId: String
     let syncMessage: String
+    var wholeChanges: Bool = true
 }
 
 struct AppsUpdateRequest: Codable {

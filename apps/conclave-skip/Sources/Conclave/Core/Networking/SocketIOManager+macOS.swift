@@ -321,10 +321,10 @@ final class SocketIOManager {
     func getAppsState() async throws -> AppsStateNotification {
         AppsStateNotification(activeAppId: nil, locked: false, roomId: nil)
     }
-    func openApp(_ appId: String) async throws -> AppsOpenResponse {
+    func openApp(_ appId: String, expectedRevision: Int?, expectedRoomId: String?) async throws -> AppsOpenResponse {
         AppsOpenResponse(success: true, activeAppId: appId, error: nil)
     }
-    func closeApp() async throws -> AppsCloseResponse {
+    func closeApp(expectedRevision: Int?, expectedRoomId: String?) async throws -> AppsCloseResponse {
         AppsCloseResponse(success: true, error: nil)
     }
     func setAppsLocked(_ locked: Bool) async throws -> AppsLockResponse {

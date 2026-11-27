@@ -1,6 +1,6 @@
 import * as Y from "yjs";
-import { createAppDoc } from "../../../../sdk/doc/createAppDoc";
-import type { WhiteboardElement } from "../model/types";
+import { createAppDoc } from "#sdk/app-doc";
+import type { WhiteboardElement } from "../model/types.js";
 
 const ROOT_KEY = "whiteboard";
 const PAGES_KEY = "pages";
@@ -259,13 +259,15 @@ export const updatePageName = (
   pageId: string,
   name: string,
 ): void => {
-  if (
-    pageId === DEFAULT_WHITEBOARD_PAGE_ID &&
-    !getPagesMap(doc)?.has(pageId)
-  ) {
-    ensureDefaultPage(doc);
-  }
-  getPage(doc, pageId)?.set("name", name);
+  doc.transact(() => {
+    if (
+      pageId === DEFAULT_WHITEBOARD_PAGE_ID &&
+      !getPagesMap(doc)?.has(pageId)
+    ) {
+      ensureDefaultPage(doc);
+    }
+    getPage(doc, pageId)?.set("name", name);
+  });
 };
 
 const getWritablePage = (doc: Y.Doc, pageId: string): PageMap | null => {
@@ -298,7 +300,8 @@ export const updateElement = (
     const page = getWritablePage(doc, pageId);
     if (!page) return;
     const elements = ensurePageElements(page);
-    const index = elements.toArray().findIndex((item) => item.id === element.id);
+    const list = elements.toArray();
+    const index = list.findIndex((item) => item.id === element.id);
     if (index === -1) {
       elements.push([element]);
       return;

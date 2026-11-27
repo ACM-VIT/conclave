@@ -105,6 +105,18 @@ export class ToolEngine {
   }
 
   onPointerDown(point: Point) {
+    this.doc.transact(() => this.pointerDown(point));
+  }
+
+  onPointerMove(point: Point) {
+    this.doc.transact(() => this.pointerMove(point));
+  }
+
+  onPointerUp() {
+    this.doc.transact(() => this.pointerUp());
+  }
+
+  private pointerDown(point: Point) {
     this.dragStart = point;
     this.lastPoint = point;
 
@@ -212,7 +224,7 @@ export class ToolEngine {
     }
   }
 
-  onPointerMove(point: Point) {
+  private pointerMove(point: Point) {
     if (!this.dragStart || !this.lastPoint) return;
 
     if (this.tool === "pan" || this.tool === "laser") return;
@@ -282,7 +294,7 @@ export class ToolEngine {
     }
   }
 
-  onPointerUp() {
+  private pointerUp() {
     if (this.activeElementId && (this.tool === "pen" || this.tool === "highlighter")) {
       const elements = getPageElements(this.doc, this.pageId);
       const element = elements.find((item) => item.id === this.activeElementId);

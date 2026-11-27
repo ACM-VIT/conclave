@@ -70,10 +70,12 @@ export const useWhiteboardPages = (doc: Y.Doc, options?: WhiteboardPagesOptions)
     () => (name?: string) => {
       if (readOnly) return;
       const id = createId();
-      ensureDefaultPage(doc);
-      const index = (getPagesMap(doc)?.size ?? 0) + 1;
-      addPage(doc, { id, name: name ?? `Page ${index}` });
-      setActivePageId(doc, id);
+      doc.transact(() => {
+        ensureDefaultPage(doc);
+        const index = (getPagesMap(doc)?.size ?? 0) + 1;
+        addPage(doc, { id, name: name ?? `Page ${index}` });
+        setActivePageId(doc, id);
+      });
     },
     [doc, readOnly]
   );

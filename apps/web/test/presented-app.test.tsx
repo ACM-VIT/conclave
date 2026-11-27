@@ -68,3 +68,20 @@ it("says the app is full when a change was refused for size", async () => {
   await render({ rejectedChange: { at: Date.now(), reason: "too-large" } });
   expect(host.textContent).toContain("This app is full, so your last change couldn't be saved");
 });
+
+it("keeps a rebuilding copy visible but inert and leaves the retry usable", async () => {
+  await render();
+  const board = host.querySelector("p");
+  expect(board).not.toBeNull();
+
+  await render({ syncStatus: "syncing", frozen: true });
+  expect(host.querySelector("p")).toBe(board);
+  expect(board?.closest("[inert]")).not.toBeNull();
+
+  const onRetrySync = vi.fn();
+  await render({ syncStatus: "failed", frozen: true, onRetrySync });
+  const retry = host.querySelector("button");
+  expect(retry?.closest("[inert]")).toBeNull();
+  await act(async () => retry!.click());
+  expect(onRetrySync).toHaveBeenCalledOnce();
+});

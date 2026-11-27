@@ -319,12 +319,16 @@ export const getSpin = (doc: Y.Doc): WheelSpin | null => {
 };
 
 export const startSpin = (doc: Y.Doc, spin: WheelSpin): void => {
-  getRoot(doc).set(SPIN_KEY, spin);
+  doc.transact(() => {
+    getRoot(doc).set(SPIN_KEY, spin);
+  });
 };
 
 export const clearSpin = (doc: Y.Doc): void => {
-  const root = getRoot(doc);
-  if (root.get(SPIN_KEY) != null) root.set(SPIN_KEY, null);
+  doc.transact(() => {
+    const root = getRoot(doc);
+    if (root.get(SPIN_KEY) != null) root.set(SPIN_KEY, null);
+  });
 };
 
 const readResult = (value: unknown): WheelResult | null => {
@@ -364,9 +368,11 @@ export const recordResult = (doc: Y.Doc, result: WheelResult): void => {
 };
 
 export const clearHistory = (doc: Y.Doc): void => {
-  const value = getRoot(doc).get(HISTORY_KEY);
-  if (!(value instanceof Y.Array) || value.length === 0) return;
-  value.delete(0, value.length);
+  doc.transact(() => {
+    const value = getRoot(doc).get(HISTORY_KEY);
+    if (!(value instanceof Y.Array) || value.length === 0) return;
+    value.delete(0, value.length);
+  });
 };
 
 export const getRemoveWinnerOnDone = (doc: Y.Doc): boolean => {
@@ -376,5 +382,7 @@ export const getRemoveWinnerOnDone = (doc: Y.Doc): boolean => {
 };
 
 export const setRemoveWinnerOnDone = (doc: Y.Doc, value: boolean): void => {
-  ensureAppMap(getRoot(doc), SETTINGS_KEY).set(REMOVE_WINNER_KEY, value);
+  doc.transact(() => {
+    ensureAppMap(getRoot(doc), SETTINGS_KEY).set(REMOVE_WINNER_KEY, value);
+  });
 };

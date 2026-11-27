@@ -301,6 +301,84 @@ struct ACT7AppHostTests {
         #expect(relay.appSessionId.isEmpty && relay.lifecycle == .idle && relay.rejectionCount == 0)
     }
 
+    @Test func leaveWaitsForTheEmbedToCheckTheRoomSnapshot() async throws {
+        let wire = Wire()
+        let relay = session(wire)
+        relay.sleep = { _ in try? await Task.sleep(nanoseconds: 1_000_000_000) }
+        #expect(ready(relay) == .none)
+        await settle { relay.snapshotDelivered }
+
+        let leave = Task { @MainActor in await relay.prepareToLeave() }
+        await settle { wire.types().last == "prepareToLeave" }
+        let requestId = try #require(wire.delivered.last.flatMap(AppBridgeCodec.jsonObject)?["requestId"] as? String)
+        #expect(relay.receiveFromEmbed(raw: envelope(relay, "verifySaved", [:], requestId: requestId),
+                                       origin: AppBridgeProtocol.iosOrigin, isMainFrame: true) == .none)
+        await settle { wire.types().last == "savedSnapshot" }
+        #expect(wire.syncs == [Data([0]), Data([0])])
+        #expect(relay.snapshotDelivered && relay.isReady)
+        #expect(relay.receiveFromEmbed(raw: envelope(relay, "ack", ["ok": true], requestId: requestId),
+                                       origin: AppBridgeProtocol.iosOrigin, isMainFrame: true) == .none)
+        #expect(await leave.value)
+    }
+
+    @Test func leaveTimesOutAndReplacementRejectsTheOldBridgeAck() async throws {
+        let wire = Wire()
+        let relay = session(wire)
+        #expect(ready(relay) == .none)
+        #expect(!(await relay.prepareToLeave()))
+        #expect(relay.appId == "whiteboard")
+
+        relay.sleep = { _ in try? await Task.sleep(nanoseconds: 1_000_000_000) }
+        let leave = Task { @MainActor in await relay.prepareToLeave() }
+        let count = wire.delivered.count
+        await settle { wire.delivered.count > count && wire.types().last == "prepareToLeave" }
+        let requestId = try #require(wire.delivered.last.flatMap(AppBridgeCodec.jsonObject)?["requestId"] as? String)
+        let oldAck = envelope(relay, "ack", ["ok": true], requestId: requestId)
+        relay.begin(appId: "wheel", callSessionId: "different-call", isReadOnly: false)
+        #expect(!(await leave.value))
+        #expect(relay.receiveFromEmbed(raw: oldAck, origin: AppBridgeProtocol.iosOrigin, isMainFrame: true) == .notAttached)
+        #expect(relay.appId == "wheel")
+    }
+
+    @Test func aCleanRendererFailureDoesNotBlockChangingTheRoomStage() async {
+        let wire = Wire()
+        let (presenter, relay) = host(wire, inputs: AppHostInputs.make(callSession: 1, appId: "whiteboard", isHost: true))
+        let mount = relay.bridgeGeneration
+        #expect(ready(relay) == .none)
+        #expect(presenter.model.phase == .ready)
+        relay.embedFailed(appSessionId: relay.appSessionId, issue: .rendererGone, mount: mount)
+        #expect(presenter.model.phase == .failed)
+        #expect(await relay.prepareToLeave())
+        #expect(!wire.types().contains("prepareToLeave"))
+        let id = relay.appSessionId
+        presenter.retry()
+        #expect(relay.attachBridge(appSessionId: id) { _ in })
+        relay.acceptPrimedSnapshot(wire.syncResponse, appSessionId: id)
+        #expect(ready(relay) == .none)
+        #expect(presenter.model.phase == .ready)
+    }
+
+    @Test func aFreshRendererCannotCertifyEditsLostByItsPredecessor() async {
+        let wire = Wire()
+        let relay = session(wire)
+        let id = relay.appSessionId
+        let mount = relay.bridgeGeneration
+        #expect(ready(relay) == .none)
+        let dirty = envelope(relay, "editsPending", [:], requestId: "e-edit")
+        #expect(relay.receiveFromEmbed(raw: dirty, origin: AppBridgeProtocol.iosOrigin, isMainFrame: true, mount: mount) == .none)
+        relay.embedFailed(appSessionId: id, issue: .rendererGone, mount: mount)
+        #expect(!(await relay.prepareToLeave()))
+        #expect(relay.attachBridge(appSessionId: id) { _ in })
+        #expect(ready(relay) == .none)
+        let staleAck = envelope(relay, "ack", ["ok": true], requestId: "n-1")
+        #expect(relay.receiveFromEmbed(raw: staleAck, origin: AppBridgeProtocol.iosOrigin, isMainFrame: true, mount: mount) == .notAttached)
+        #expect(!(await relay.prepareToLeave()))
+
+        relay.end()
+        relay.begin(appId: "whiteboard", callSessionId: "next-call", isReadOnly: false)
+        #expect(await relay.prepareToLeave(), "A new call does not inherit the previous app's lost edits.")
+    }
+
     @Test func movedHelpersKeepTheViewModelGuards() async throws {
         let wire = Wire()
         let relay = session(wire)

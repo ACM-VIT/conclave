@@ -2,13 +2,14 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 import { readFileSync } from "node:fs";
-import { availableParallelism } from "node:os";
+import { availableParallelism, totalmem } from "node:os";
 import { createWorker } from "mediasoup";
 import type { WebRtcServer, Worker } from "mediasoup/types";
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { config } from "../config/config.js";
 import { readWorkerSizing } from "../config/workerSettings.mjs";
 import createWorkers, { getWorkerWebRtcServer } from "../utilities/createWorkers.js";
+import { planWorkers } from "../utilities/workerPlan.js";
 
 // Error reports go through the real reporter, rate limit included, to a
 // client that collects them. Moving the clock on starts a new limit window.
@@ -37,7 +38,8 @@ vi.mock("mediasoup", () => ({ createWorker: vi.fn() }));
 vi.mock("node:fs", () => ({ readFileSync: vi.fn() }));
 vi.mock("node:os", () => {
   const availableParallelism = vi.fn(() => 8);
-  return { availableParallelism, default: { availableParallelism } };
+  const totalmem = vi.fn(() => 8 * 1024 ** 3);
+  return { availableParallelism, totalmem, default: { availableParallelism, totalmem } };
 });
 vi.mock("../config/config.js", () => ({
   config: {
@@ -45,12 +47,22 @@ vi.mock("../config/config.js", () => ({
       workerCount: 1,
       hostInstanceCount: 1,
       webRtcPortBudget: undefined,
+      appDocumentWorkerCount: 1,
       rtcMinPort: 42001,
       rtcMaxPort: 42200,
     },
     webRtcTransport: { enableUdp: true, enableTcp: true, listenIps: [{ ip: "127.0.0.1" }] },
   },
 }));
+
+beforeEach(() => {
+  vi.mocked(readFileSync).mockImplementation(() => { throw new Error("no cgroup limit"); });
+});
+
+const start = async (options: { onWorkerDied?: (worker: Worker, label: string) => void; signal?: AbortSignal } = {}) => {
+  const settings = config.workerSettings;
+  return createWorkers({ plan: planWorkers(settings), settings, transport: config.webRtcTransport, ...options });
+};
 
 const makeWorker = () => Object.assign(new EventEmitter(), {
   createWebRtcServer: vi.fn<Worker["createWebRtcServer"]>(),
@@ -80,7 +92,7 @@ it.each([
     return worker as unknown as Worker;
   });
   try {
-    expect(await createWorkers()).toHaveLength(expected);
+    expect(await start()).toHaveLength(expected);
     expect(createWorker).toHaveBeenCalledWith(expect.objectContaining({
       rtcMinPort: settings.rtcMinPort + Math.min(4, ports - 4),
       rtcMaxPort: settings.rtcMaxPort,
@@ -109,7 +121,7 @@ it.each([
   });
   vi.mocked(createWorker).mockClear();
   try {
-    await expect(createWorkers()).rejects.toThrow("SFU_WORKER_COUNT");
+    await expect(start()).rejects.toThrow("SFU_WORKER_COUNT");
     expect(createWorker).not.toHaveBeenCalled();
   } finally {
     Object.assign(settings, previous);
@@ -117,32 +129,38 @@ it.each([
 });
 
 it.each([
-  { name: "affinity shared by two instances", affinity: 8, files: {}, instances: 2, override: undefined, expected: 4 },
-  { name: "2-vCPU host shared by three instances", affinity: 2, files: {}, instances: 3, override: undefined, expected: 1 },
+  { name: "affinity shared by two instances", affinity: 8, files: {}, instances: 2, override: undefined, appDocuments: 1, expected: 3 },
+  { name: "two app document workers", affinity: 8, files: {}, instances: 1, override: undefined, appDocuments: 2, expected: 6 },
+  { name: "a 4-CPU share with one app document worker", affinity: 4, files: {}, instances: 1, override: undefined, appDocuments: 1, expected: 3 },
+  { name: "a 4-CPU share with two app document workers", affinity: 4, files: {}, instances: 1, override: undefined, appDocuments: 2, expected: 2 },
+  { name: "a 2-CPU share", affinity: 2, files: {}, instances: 1, override: undefined, appDocuments: 1, expected: 1 },
+  { name: "2-vCPU host shared by three instances", affinity: 2, files: {}, instances: 3, override: undefined, appDocuments: 1, expected: 1 },
   {
     name: "nested cgroup quota shared by two instances",
     affinity: 8,
     files: { "/proc/self/cgroup": "0::/sfu/current", "/sys/fs/cgroup/sfu/cpu.max": "350000 100000" },
-    instances: 2, override: undefined, expected: 1,
+    instances: 2, override: undefined, appDocuments: 1, expected: 1,
   },
   {
     name: "legacy CPU quota",
     affinity: 8,
     files: { "/sys/fs/cgroup/cpu/cpu.cfs_quota_us": "250000", "/sys/fs/cgroup/cpu/cpu.cfs_period_us": "100000" },
-    instances: 1, override: undefined, expected: 2,
+    instances: 1, override: undefined, appDocuments: 1, expected: 1,
   },
   {
     name: "explicit worker count",
     affinity: 8,
     files: { "/sys/fs/cgroup/cpu.max": "75000 100000" },
-    instances: 3, override: 3, expected: 3,
+    instances: 3, override: 3, appDocuments: 1, expected: 3,
   },
-])("chooses the worker count for $name", async ({ affinity, files, instances, override, expected }) => {
+])("chooses the worker count for $name", async ({ affinity, files, instances, override, appDocuments, expected }) => {
   const settings = config.workerSettings;
   const oldCount = settings.workerCount;
   const oldInstances = settings.hostInstanceCount;
+  const oldAppDocuments = settings.appDocumentWorkerCount;
   settings.workerCount = override;
   settings.hostInstanceCount = instances;
+  settings.appDocumentWorkerCount = appDocuments;
   vi.mocked(availableParallelism).mockReturnValue(affinity);
   const contents: Readonly<Record<string, string | undefined>> = files;
   vi.mocked(readFileSync).mockImplementation((path) => {
@@ -156,10 +174,63 @@ it.each([
     return worker as unknown as Worker;
   });
   try {
-    expect(await createWorkers()).toHaveLength(expected);
+    expect(await start()).toHaveLength(expected);
   } finally {
     settings.workerCount = oldCount;
     settings.hostInstanceCount = oldInstances;
+    settings.appDocumentWorkerCount = oldAppDocuments;
+    vi.mocked(createWorker).mockReset();
+    vi.mocked(readFileSync).mockReset();
+  }
+});
+
+it.each([
+  { affinity: 2, instances: 1, mediasoup: 2, warns: true },
+  { affinity: 2, instances: 1, mediasoup: 1, warns: false },
+  { affinity: 2, instances: 3, mediasoup: undefined, warns: false },
+])("warns when $mediasoup configured mediasoup workers and the app document worker exceed $affinity CPUs for $instances instances: $warns", async ({ affinity, instances, mediasoup, warns }) => {
+  const settings = config.workerSettings;
+  const previous = { ...settings };
+  Object.assign(settings, { workerCount: mediasoup, hostInstanceCount: instances, appDocumentWorkerCount: 1 });
+  vi.mocked(availableParallelism).mockReturnValue(affinity);
+  vi.mocked(readFileSync).mockImplementation(() => { throw new Error("no cgroup limit"); });
+  vi.mocked(createWorker).mockReset().mockImplementation(async () => {
+    const worker = makeWorker();
+    worker.createWebRtcServer.mockResolvedValue({} as WebRtcServer);
+    return worker as unknown as Worker;
+  });
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    await start();
+    if (warns) expect(warn).toHaveBeenCalledWith(expect.stringContaining("SFU_WORKER_COUNT=2"));
+    else expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("SFU_WORKER_COUNT"));
+  } finally {
+    Object.assign(settings, previous);
+    warn.mockRestore();
+    vi.mocked(createWorker).mockReset();
+    vi.mocked(readFileSync).mockReset();
+  }
+});
+
+it.each([
+  { memoryMiB: 256, warns: true },
+  { memoryMiB: 8192, warns: false },
+])("says when the app document heap floor is above the worker's share of $memoryMiB MiB: $warns", async ({ memoryMiB, warns }) => {
+  vi.mocked(totalmem).mockReturnValue(memoryMiB * 1024 * 1024);
+  vi.mocked(readFileSync).mockImplementation(() => { throw new Error("no cgroup limit"); });
+  vi.mocked(createWorker).mockReset().mockImplementation(async () => {
+    const worker = makeWorker();
+    worker.createWebRtcServer.mockResolvedValue({} as WebRtcServer);
+    return worker as unknown as Worker;
+  });
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    await start();
+    if (warns) expect(warn).toHaveBeenCalledWith(expect.stringContaining("below the minimum heap"));
+    else expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("below the minimum heap"));
+  } finally {
+    warn.mockRestore();
+    vi.mocked(totalmem).mockReturnValue(8 * 1024 ** 3);
     vi.mocked(createWorker).mockReset();
     vi.mocked(readFileSync).mockReset();
   }
@@ -207,7 +278,7 @@ it("uses the inherited Compose budget for staging WebRTC and plain RTP", { timeo
   worker.createWebRtcServer.mockResolvedValue({} as WebRtcServer);
   vi.mocked(createWorker).mockClear().mockResolvedValueOnce(worker as unknown as Worker);
   try {
-    expect(await createWorkers()).toHaveLength(1);
+    expect(await start()).toHaveLength(1);
     expect(worker.createWebRtcServer).toHaveBeenCalledWith({
       listenInfos: [
         expect.objectContaining({ protocol: "udp", port: 42001 }),
@@ -229,7 +300,7 @@ it("rejects a range that leaves no port for plain RTP", async () => {
   vi.mocked(createWorker).mockClear();
   settings.rtcMaxPort = settings.rtcMinPort;
   try {
-    await expect(createWorkers()).rejects.toThrow("plain RTP");
+    await expect(start()).rejects.toThrow("plain RTP");
     expect(createWorker).not.toHaveBeenCalled();
   } finally {
     settings.rtcMaxPort = originalMax;
@@ -242,7 +313,7 @@ it("points occupied WebRTC ports to the Linux ephemeral port reservation", async
   worker.createWebRtcServer.mockRejectedValue(bindError);
   vi.mocked(createWorker).mockReset().mockResolvedValueOnce(worker as unknown as Worker);
   try {
-    await expect(createWorkers()).rejects.toThrow(/42001.*net\.ipv4\.ip_local_reserved_ports/);
+    await expect(start()).rejects.toThrow(/42001.*net\.ipv4\.ip_local_reserved_ports/);
     expect(worker.close).toHaveBeenCalledOnce();
   } finally {
     vi.mocked(createWorker).mockReset();
@@ -263,7 +334,7 @@ it("restores the worker slot on the same WebRTC port after a transient bind fail
     .mockResolvedValueOnce(replacement as unknown as Worker);
 
   const onWorkerDied = vi.fn();
-  const workers = await createWorkers({ onWorkerDied });
+  const workers = await start({ onWorkerDied });
   original.emit("died");
 
   await vi.waitFor(() => expect(workers).toEqual([replacement]));
@@ -297,7 +368,7 @@ it("recovers a slot when the port becomes available after four failed attempts",
       return worker as unknown as Worker;
     });
   try {
-    const workers = await createWorkers({ signal: shutdown.signal, onWorkerDied });
+    const workers = await start({ signal: shutdown.signal, onWorkerDied });
     original.emit("died");
     original.emit("died");
     await vi.waitFor(() => expect(failedBinds).toBeGreaterThanOrEqual(4), { timeout: 2000 });
@@ -334,7 +405,7 @@ it("reports a slot's failed respawns while its port stays taken", async () => {
   collector.reports.length = 0;
   collector.clockOffsetMs += 120_000;
   try {
-    const workers = await createWorkers({ signal: shutdown.signal });
+    const workers = await start({ signal: shutdown.signal });
     original.emit("died");
     await vi.waitFor(() => expect(failedBinds).toBeGreaterThanOrEqual(5), { timeout: 4000 });
     portTaken = false;
@@ -368,7 +439,7 @@ it("cancels a slot's pending retry when the pool shuts down", async () => {
     .mockResolvedValueOnce(original as unknown as Worker)
     .mockResolvedValueOnce(failed as unknown as Worker);
   try {
-    await createWorkers({ signal: shutdown.signal });
+    await start({ signal: shutdown.signal });
     original.emit("died");
     await vi.waitFor(() => expect(failed.close).toHaveBeenCalledOnce());
     const attempts = vi.mocked(createWorker).mock.calls.length;
@@ -392,7 +463,7 @@ it("closes a replacement that finishes starting during shutdown", async () => {
     .mockResolvedValueOnce(original as unknown as Worker)
     .mockReturnValueOnce(startingWorker);
   try {
-    const workers = await createWorkers({ signal: shutdown.signal });
+    const workers = await start({ signal: shutdown.signal });
     original.emit("died");
     await vi.waitFor(() => expect(createWorker).toHaveBeenCalledTimes(2));
     shutdown.abort();

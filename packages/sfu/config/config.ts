@@ -383,6 +383,13 @@ export const config = {
   transcriptRelay: {
     enabled: !transcriptRelayDisabled,
   },
+  appDocuments: {
+    deadlineMs: toNumber(process.env.SFU_APP_DOC_DEADLINE_MS, 500, {
+      integer: true,
+      min: 10,
+      max: 60_000,
+    }),
+  },
   workerSettings: {
     ...readWorkerSizing(process.env),
     rtcMinPort,

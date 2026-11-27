@@ -1,5 +1,6 @@
 import type { Worker } from "mediasoup/types";
 import type { Server as SocketIOServer } from "socket.io";
+import type { config as defaultConfig } from "../config/config.js";
 import createWorkers from "../utilities/createWorkers.js";
 import { Logger } from "../utilities/loggers.js";
 import { forceCloseRoom } from "./rooms.js";
@@ -74,10 +75,14 @@ export const cleanupDeadWorkerRooms = async (
 
 export const initMediaSoup = async (
   state: SfuState,
+  config: Pick<typeof defaultConfig, "workerSettings" | "webRtcTransport">,
   getIo: () => SocketIOServer | null,
   signal: AbortSignal,
 ): Promise<void> => {
   state.workers = (await createWorkers({
+    plan: state.workerPlan,
+    settings: config.workerSettings,
+    transport: config.webRtcTransport,
     signal,
     onWorkerDied: async (worker, label) => {
       await cleanupDeadWorkerRooms(

@@ -2,6 +2,7 @@ type WorkerSizing = {
   workerCount: number | undefined;
   hostInstanceCount: number;
   webRtcPortBudget: number | undefined;
+  appDocumentWorkerCount: number;
 };
 
 type WorkerEnvironment = Readonly<Record<string, string | null | undefined>>;

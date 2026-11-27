@@ -1318,14 +1318,18 @@ internal class SocketIOManager {
         return decodeTranscriptSfuRelayStopResponse(data)
     }
 
-    internal suspend fun openApp(appId: String): AppsOpenResponse {
-        val request = AppsOpenRequest(appId = appId)
+    internal suspend fun openApp(appId: String, expectedRevision: Int?, expectedRoomId: String?): AppsOpenResponse {
+        val request = AppsOpenRequest(appId = appId, expectedRevision = expectedRevision, expectedRoomId = expectedRoomId)
         val data = emit(SocketEvent.appsOpen, request)
         return JSONDecoder().decode(AppsOpenResponse::class, from = data)
     }
 
-    internal suspend fun closeApp(): AppsCloseResponse {
-        val data = emitAckOnly(SocketEvent.appsClose)
+    internal suspend fun closeApp(expectedRevision: Int?, expectedRoomId: String?): AppsCloseResponse {
+        val data = if (expectedRevision != null) {
+            emit(SocketEvent.appsClose, AppsCloseRequest(expectedRevision = expectedRevision, expectedRoomId = expectedRoomId))
+        } else {
+            emitAckOnly(SocketEvent.appsClose)
+        }
         return JSONDecoder().decode(AppsCloseResponse::class, from = data)
     }
 
@@ -1339,6 +1343,7 @@ internal class SocketIOManager {
         val payload = JSONObject()
             .put("appId", appId)
             .put("syncMessage", encodeBase64(stateVector))
+            .put("wholeChanges", true)
         val data = emit(SocketEvent.appsYjsSync, payload)
         val response = decodeAppsSyncResponse(data)
             ?: throw ErrorException("Invalid app sync acknowledgement.")

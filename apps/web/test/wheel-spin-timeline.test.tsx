@@ -27,7 +27,13 @@ vi.mock("../../../packages/apps-sdk/src/sdk/hooks/useAppDoc", () => ({
 }));
 
 vi.mock("../../../packages/apps-sdk/src/sdk/hooks/useApps", () => ({
-  useApps: () => ({ user: { id: "host-1", name: "Host" }, isAdmin: true, isReadOnly: false, participants: [] }),
+  useApps: () => ({
+    user: { id: "host-1", name: "Host" },
+    isAdmin: true,
+    isReadOnly: false,
+    participants: [],
+    documents: { writeOnce: (_appId: string, _key: string, write: (doc: Y.Doc) => void) => write(harness.doc) },
+  }),
 }));
 
 const { WheelWebApp } = await import("../../../packages/apps-sdk/src/apps/wheel/web/components/WheelWebApp");

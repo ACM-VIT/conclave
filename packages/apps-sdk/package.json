@@ -20,6 +20,7 @@
     ".": "./src/index.ts",
     "./authority": "./src/sdk/authority/index.ts",
     "./authority/server": "./src/sdk/authority/server.ts",
+    "./limits": "./src/sdk/limits.ts",
     "./dev-playground/core": "./src/apps/dev-playground/core/index.ts",
     "./dev-playground/web": "./src/apps/dev-playground/web/index.ts",
     "./native-embed": "./src/native-embed/index.ts",
@@ -34,6 +35,7 @@
     "./wheel/core": "./src/apps/wheel/core/index.ts",
     "./wheel/web": "./src/apps/wheel/web/index.ts",
     "./whiteboard/core": "./src/apps/whiteboard/core/index.ts",
+    "./whiteboard/document": "./src/apps/whiteboard/core/doc/index.ts",
     "./whiteboard/web": "./src/apps/whiteboard/web/index.ts"
   },
   "imports": {
@@ -44,6 +46,7 @@
     "#authority/client": "./src/sdk/authority/client.ts",
     "#sdk/text": "./src/sdk/text.ts",
     "#sdk/graphemes": "./src/sdk/graphemes.ts",
+    "#sdk/app-doc": "./src/sdk/doc/createAppDoc.ts",
     "#native-embed/protocol": "./src/native-embed/protocol.ts"
   },
   "dependencies": {

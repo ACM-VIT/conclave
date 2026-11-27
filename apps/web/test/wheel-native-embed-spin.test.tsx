@@ -7,6 +7,7 @@ import { addEntries, getEntries, getSpin, removeEntryById, startSpin, type Wheel
 import type { WheelStage as RealWheelStage } from "../../../packages/apps-sdk/src/apps/wheel/web/components/WheelStage";
 import { base64FromBytes, bytesFromBase64, encodeEnvelope } from "../../../packages/apps-sdk/src/native-embed/protocol";
 import { NativeEmbedSession } from "../../../packages/apps-sdk/src/native-embed/session";
+import { APP_DOCUMENT_UPLOAD_INTERVAL_MS } from "../../../packages/apps-sdk/src/sdk/limits";
 
 type StageProps = ComponentProps<typeof RealWheelStage>;
 
@@ -60,6 +61,8 @@ const advance = (ms: number) => {
     vi.advanceTimersByTime(ms);
   });
 };
+
+const flushUploads = () => act(() => Promise.resolve());
 
 const spinBy = (entries: unknown[], winnerIndex: number, spinId = "spin-remote", startedAt = Date.now()): WheelSpin => {
   const spin = {
@@ -278,7 +281,7 @@ describe("native wheel embed while a shared spin runs", () => {
 
 describe("native wheel adds across embed reloads", () => {
   type Send = (type: string, payload: Record<string, unknown>, requestId: string) => Record<string, unknown> | undefined;
-  type Embed = { send: Send; raw: Send };
+  type Embed = { send: Send; raw: Send; ack: (requestId: string) => Record<string, unknown> | undefined };
 
   let room: Y.Doc;
 
@@ -305,9 +308,10 @@ describe("native wheel adds across embed reloads", () => {
     act(() => root.unmount());
     root = createRoot(container);
     act(() => root.render(<NativeWheelEmbed session={embed} />));
+    const ack = (requestId: string) => sent.find((message) => message.type === "ack" && message.requestId === requestId)?.payload;
     const raw: Send = (type, payload, requestId) => {
       embed.receive(encodeEnvelope(type as never, scope, requestId, payload));
-      return sent.find((message) => message.type === "ack" && message.requestId === requestId)?.payload;
+      return ack(requestId);
     };
     const send: Send = (type, payload, requestId) => {
       let answer: Record<string, unknown> | undefined;
@@ -318,50 +322,57 @@ describe("native wheel adds across embed reloads", () => {
     };
     send("status", { readOnly: false, connection: "live", reduceMotion: false, pencilOnly: false, userId: "me", userName: "Me" }, "boot-status");
     send("snapshot", { syncMessage: base64FromBytes(Y.encodeStateAsUpdate(room)) }, "boot-snapshot");
-    return { send, raw };
+    return { send, raw, ack };
   };
 
   const names = () => getEntries(room).map((entry) => entry.label);
 
-  it("adds a name once when the same add reaches a reloaded embed again", () => {
+  it("adds a name once when the same add reaches a reloaded embed again", async () => {
     const first = openEmbed();
     const add = { labels: ["Ada"], tokens: ["t-ada"], sentAt: SENT_AT };
-    expect(first.send("addEntries", add, "h-1")).toEqual({ ok: true, added: [0] });
+    expect(first.send("addEntries", add, "h-1")).toBeUndefined();
+    await flushUploads();
+    expect(first.ack("h-1")).toEqual({ ok: true, added: [0] });
     const reloaded = openEmbed();
     expect(reloaded.send("addEntries", add, "h-1")).toEqual({ ok: true, added: [0] });
     expect(names()).toEqual(["Ada"]);
   });
 
-  it("tells native whether an add was applied, from the document, in any embed", () => {
+  it("tells native whether an add was applied, from the document, in any embed", async () => {
     const first = openEmbed();
     const tokens = ["t-blank", "t-ada", "t-bo"];
     first.send("addEntries", { labels: ["", "Ada", "Bo"], tokens, sentAt: SENT_AT }, "h-1");
+    await flushUploads();
     const reloaded = openEmbed();
     expect(reloaded.send("addOutcome", { tokens, sentAt: SENT_AT }, "h-2")).toEqual({ ok: true, added: [1, 2] });
     expect(reloaded.send("addOutcome", { tokens: ["t-never"], sentAt: SENT_AT }, "h-3")).toEqual({ ok: false, error: "notApplied", added: [] });
     expect(names()).toEqual(["Ada", "Bo"]);
   });
 
-  it("keeps the same request id from another native app session apart", () => {
+  it("keeps the same request id from another native app session apart", async () => {
     openEmbed("app-1111aaaa").send("addEntries", { labels: ["Ada"], tokens: ["t-ada"], sentAt: SENT_AT }, "h-1");
+    await flushUploads();
     const other = openEmbed("app-2222bbbb");
     expect(other.send("addOutcome", { tokens: ["t-cy"], sentAt: SENT_AT }, "h-2")).toEqual({ ok: false, error: "notApplied", added: [] });
-    expect(other.send("addEntries", { labels: ["Cy"], tokens: ["t-cy"], sentAt: SENT_AT }, "h-1")).toEqual({ ok: true, added: [0] });
+    expect(other.send("addEntries", { labels: ["Cy"], tokens: ["t-cy"], sentAt: SENT_AT }, "h-1")).toBeUndefined();
+    await flushUploads();
+    expect(other.ack("h-1")).toEqual({ ok: true, added: [0] });
     expect(names()).toEqual(["Ada", "Cy"]);
   });
 
-  it("takes an add in the same turn as the host status that unlocked it", () => {
+  it("takes an add in the same turn as the host status that unlocked it", async () => {
     const embed = openEmbed();
     embed.send("status", { readOnly: true, connection: "live", reduceMotion: false, pencilOnly: false, userId: "me", userName: "Me" }, "lock");
     const refused = { labels: ["Ada"], tokens: ["t-ada"], sentAt: SENT_AT };
     expect(embed.send("addEntries", refused, "h-1")).toEqual({ ok: false, error: "readOnly", added: [] });
     expect(embed.send("addOutcome", { tokens: refused.tokens, sentAt: refused.sentAt }, "h-2")).toEqual({ ok: false, error: "notApplied", added: [] });
-    const answers: (Record<string, unknown> | undefined)[] = [];
     act(() => {
       embed.raw("status", { readOnly: false, connection: "live", reduceMotion: false, pencilOnly: false, userId: "me", userName: "Me" }, "unlock");
-      answers.push(embed.raw("addEntries", { labels: ["Bo"], tokens: ["t-bo"], sentAt: SENT_AT }, "h-3"));
+      embed.raw("addEntries", { labels: ["Bo"], tokens: ["t-bo"], sentAt: SENT_AT }, "h-3");
     });
-    expect(answers).toEqual([{ ok: true, added: [0] }]);
+    expect(embed.ack("h-3")).toBeUndefined();
+    await flushUploads();
+    expect(embed.ack("h-3")).toEqual({ ok: true, added: [0] });
     expect(names()).toEqual(["Bo"]);
   });
 });
@@ -379,10 +390,11 @@ describe("native add publication", () => {
     expect(posted.some(({ type }) => type === "update")).toBe(false);
   });
 
-  it.each([false, true])("waits for the room to confirm a live add (tracked %s)", (tracked) => {
+  it.each([false, true])("waits for the room to confirm a live add (tracked %s)", async (tracked) => {
     mount(false);
     const room = new Y.Doc();
     const request = deliver("addEntries", tracked ? submission : { labels: submission.labels });
+    await flushUploads();
     const update = posted.find((message) => message.type === "update")?.payload.update;
     expect(typeof update).toBe("string");
     expect(ackFor(request)).toBeUndefined();
@@ -397,10 +409,12 @@ describe("native add publication", () => {
     if (tracked) expect(ackFor(deliver("addOutcome", submission))).toEqual({ ok: true, added: [0] });
   });
 
-  it("waits for the missing dependency before acknowledging a relayed add", () => {
+  it("waits for the missing dependency before acknowledging a relayed add", async () => {
     mount(false);
     deliver("setRemoveWinner", { value: true });
+    await flushUploads();
     const request = deliver("addEntries", submission);
+    await act(() => vi.advanceTimersByTimeAsync(APP_DOCUMENT_UPLOAD_INTERVAL_MS));
     const updates = posted.filter(({ type }) => type === "update");
     expect(updates.length).toBeGreaterThan(1);
 
@@ -412,10 +426,11 @@ describe("native add publication", () => {
     expect(ackFor(request)).toEqual({ ok: true, added: [0] });
   });
 
-  it("recovers an already published add from the room snapshot when the echo was lost", () => {
+  it("recovers an already published add from the room snapshot when the echo was lost", async () => {
     mount(false);
     const room = new Y.Doc();
     const request = deliver("addEntries", submission);
+    await flushUploads();
     const update = bytesFromBase64(posted.find(({ type }) => type === "update")?.payload.update, 1_000_000);
     if (!update.ok) throw new Error(update.reason);
     Y.applyUpdate(room, update.bytes);

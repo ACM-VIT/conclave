@@ -39,13 +39,13 @@ function KeyHint({ label }: { label: string }) {
 }
 
 export function WhiteboardWebApp() {
-  const { user, isAdmin, isReadOnly: appReadOnly } = useApps();
+  const { user, isAdmin, isReadOnly: appReadOnly, isRebuilding } = useApps();
   const { doc, awareness, locked } = useAppDoc("whiteboard");
   const { states } = useAppPresence("whiteboard");
   const { tool, setTool, settings, setSettings } = useToolState();
   const { viewport, panBy, zoomAt, resetViewport, fitBounds } = useViewport();
   const lastPanPosRef = useRef<{ x: number; y: number } | null>(null);
-  const isReadOnly = Boolean(appReadOnly) || (locked && !isAdmin);
+  const isReadOnly = Boolean(appReadOnly) || (locked && !isAdmin) || isRebuilding;
   const {
     pages,
     activePageId,
@@ -96,12 +96,14 @@ export function WhiteboardWebApp() {
   }, [doc]);
 
   const handleUndo = useCallback(() => {
+    if (isReadOnly) return;
     undoManager?.undo();
-  }, [undoManager]);
+  }, [isReadOnly, undoManager]);
 
   const handleRedo = useCallback(() => {
+    if (isReadOnly) return;
     undoManager?.redo();
-  }, [undoManager]);
+  }, [isReadOnly, undoManager]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;

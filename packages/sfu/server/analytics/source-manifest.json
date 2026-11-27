@@ -31,6 +31,11 @@
   "server/apps/authority/roomAuthority.ts",
   "server/apps/authority/store.ts",
   "server/apps/authority/views.ts",
+  "server/apps/documents/engine.ts",
+  "server/apps/documents/pool.ts",
+  "server/apps/documents/staging.ts",
+  "server/apps/documents/updateFacts.ts",
+  "server/apps/documents/worker.ts",
   "server/audioConsumerHeal.ts",
   "server/browserServiceClient.ts",
   "server/calendarTasks.ts",
@@ -179,5 +184,6 @@
   "utilities/getWorker.ts",
   "utilities/loggers.ts",
   "utilities/untrusted.ts",
-  "utilities/workerCpuQuota.ts"
+  "utilities/workerCpuQuota.ts",
+  "utilities/workerPlan.ts"
 ]

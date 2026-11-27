@@ -5,6 +5,7 @@ import {
   expectedPosition,
   getPlayback,
   getQueue,
+  getVideoId,
   writePlayback,
 } from "../../core/doc/index";
 import type { PlaybackRecord, PlaybackState } from "../../core/model/types";
@@ -216,6 +217,7 @@ type UseSyncedPlaybackArgs = {
   videoId: string | null;
   readOnly: boolean;
   liveHint?: boolean | null;
+  writeOnce: (key: string, write: (doc: Y.Doc) => void) => void;
 };
 
 export function useSyncedPlayback({
@@ -223,6 +225,7 @@ export function useSyncedPlayback({
   videoId,
   readOnly,
   liveHint = null,
+  writeOnce,
 }: UseSyncedPlaybackArgs): SyncedPlaybackHandle {
   const elementRef = useRef<WatchMediaElement | null>(null);
   const readOnlyRef = useRef(readOnly);
@@ -231,7 +234,6 @@ export function useSyncedPlayback({
   videoIdRef.current = videoId;
   const liveHintRef = useRef<boolean | null>(liveHint);
   liveHintRef.current = liveHint;
-  const advancedFromRef = useRef<string | null>(null);
 
   const [record, setRecord] = useState<PlaybackRecord>(() => getPlayback(doc));
   const recordRef = useRef(record);
@@ -619,9 +621,6 @@ export function useSyncedPlayback({
   }, [applyPlaybackRate, correctDrift, syncMediaSnapshot]);
 
   useEffect(() => {
-    if (videoId && advancedFromRef.current !== videoId) {
-      advancedFromRef.current = null;
-    }
     anchorRef.current = null;
     lastCorrectionRef.current = null;
     initializedLiveForRef.current = null;
@@ -695,13 +694,6 @@ export function useSyncedPlayback({
   const onEnded = useCallback(() => {
     const ended = videoIdRef.current;
     if (readOnlyRef.current || !ended) return;
-    if (advancedFromRef.current === ended) return;
-    const queue = getQueue(doc);
-    if (queue.length > 0) {
-      advancedFromRef.current = ended;
-      advanceQueue(doc, ended);
-      return;
-    }
     const element = elementRef.current;
     let position = 0;
     try {
@@ -709,13 +701,21 @@ export function useSyncedPlayback({
     } catch {
       position = 0;
     }
-    writePlayback(doc, {
-      state: "paused",
-      positionSeconds: position,
-      rate: 1,
-      liveEdge: false,
+    const endedPlay = recordRef.current.updatedAt;
+    writeOnce(`ended:${ended}:${endedPlay}`, (live) => {
+      if (getVideoId(live) !== ended || getPlayback(live).updatedAt !== endedPlay) return;
+      if (getQueue(live).length > 0) {
+        advanceQueue(live, ended);
+        return;
+      }
+      writePlayback(live, {
+        state: "paused",
+        positionSeconds: position,
+        rate: 1,
+        liveEdge: false,
+      });
     });
-  }, [doc]);
+  }, [writeOnce]);
 
   const onError = useCallback((event: MediaEvent) => {
     const mediaError = event.currentTarget?.error;
