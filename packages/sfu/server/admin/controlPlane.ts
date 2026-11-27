@@ -197,10 +197,16 @@ export const applyHostGrant = (
 ): Admin[] | null => {
   if (!room.mayGrantHost(grant.userKey, grant.basis, grant.guestProof)) return null;
   const hadHost = room.hasActiveAdmin();
-  const promoted = room.grantHost(grant.userKey, grant.basis, grant.guestProof);
-  if (grant.primary || !room.hostUserKey) room.makePrimaryHost(grant.userKey);
+  const promoted = room.grantHost(grant.userKey, grant.basis, grant.guestProof, {
+    primary: grant.primary || !room.hostUserKey || grant.basis === "owner" || room.ownerEmail === grant.userKey,
+  });
   if (room.hostReasonOf(grant.userKey, grant.guestProof) === "owner") {
-    room.tellOwnerTookOver(room.welcomeOwner(grant.userKey));
+    const demoted = room.welcomeOwner(grant.userKey);
+    room.tellOwnerTookOver(demoted);
+    for (const seat of demoted) {
+      const context = getSocketContext(seat.socket);
+      if (context) grantWebinarQaList(context.state, room, seat);
+    }
   }
   if (promoted.length === 0) return promoted;
   room.stopCleanupTimer();

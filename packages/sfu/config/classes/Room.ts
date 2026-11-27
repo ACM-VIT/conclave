@@ -2990,7 +2990,12 @@ export class Room {
     return this.ownerEmail ? "temporary" : "opener";
   }
 
-  grantHost(userKey: string, basis: HostBasis, guestProof?: string): Admin[] {
+  grantHost(
+    userKey: string,
+    basis: HostBasis,
+    guestProof?: string,
+    { primary = false }: { primary?: boolean } = {},
+  ): Admin[] {
     const reason = this.hostReasonFor(userKey, basis);
     const held = this.hostReasonOf(userKey, guestProof);
     const kept = held && HOST_REASON_RANK[held] >= HOST_REASON_RANK[reason] ? held : reason;
@@ -3001,8 +3006,12 @@ export class Room {
       this.hostReasonsByKey.set(key, kept);
       changed = true;
     }
-    if (changed) this.onRecoverableChange?.();
-    return this.promoteSeatsOf(userKey, guestProof);
+    const primaryChanged = primary && this.primaryHostUserKey !== userKey;
+    if (primaryChanged) this.primaryHostUserKey = userKey;
+    if (changed || primaryChanged) this.onRecoverableChange?.();
+    const promoted = this.promoteSeatsOf(userKey, guestProof);
+    if (primaryChanged && promoted.length === 0) this.publishRoles({});
+    return promoted;
   }
 
   seatsOf(userKey: string, guestProof?: string): Client[] {

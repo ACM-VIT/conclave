@@ -1051,12 +1051,13 @@ describe("webinar Q&A on a server without the runtime", () => {
     },
   );
 
-  it("sends the owner arriving at a webinar everything a host needs, the questions only hosts see included", async () => {
+  it("sends the owner arriving at a webinar the host view and refreshes the old temporary host’s list", async () => {
     const stack = await startWebinarWithoutRuntime();
+    stack.room.ownerEmail = asha.email;
     const panelist = await oldClient(stack, omar);
     const attendee = await oldClient(stack, vik, asAttendee);
     const asked = await attendee.submit("Asked before the owner came");
-    await wait(150);
+    await until(() => panelist.entries.has(asked.id ?? ""), "the temporary host sees the question");
     seedHostState(stack, attendee.seatId);
     const seen: Seen[] = [];
 
@@ -1067,9 +1068,7 @@ describe("webinar Q&A on a server without the runtime", () => {
         ),
     });
     await until(() => owner.entries.has(asked.id ?? ""), "the owner is sent the list");
-    await wait(150);
-
-    expect(panelist.entries.has(asked.id ?? "")).toBe(false);
+    await until(() => !panelist.entries.has(asked.id ?? ""), "the former temporary host receives the filtered list");
     expect(owner.entries.get(asked.id ?? "")?.status).toBe("pending");
     expect(hostPayloadsIn(seen)).toEqual({
       ...hostPayloadsFor(stack, owner.seatId, attendee.seatId, { id: asked.id ?? "", text: "Asked before the owner came" }),
