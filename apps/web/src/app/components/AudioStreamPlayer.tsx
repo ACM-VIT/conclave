@@ -7,29 +7,39 @@ import { clampParticipantVolume } from "../lib/meet-volume";
 import { telemetry } from "../lib/telemetry";
 import { errorName } from "../lib/utils";
 import { applyAudioOutputDevice } from "../lib/audio-output";
+import { logCallError } from "../lib/call-error-capture";
+import type { CallLogLabel } from "../lib/call-log-labels";
 
 const PLAYBACK_WATCHDOG_INTERVAL_MS = 5000;
 
 const playerConfigs = {
   participant: {
-    playbackErrorMessage: "[Meets] Audio play error:",
-    audioOutputErrorMessage: "[Meets] Failed to update audio output:",
+    playbackErrorMessage: "[Meets] Audio play error",
+    audioOutputErrorMessage: "[Meets] Failed to update audio output",
     replayOnForeground: true,
     preload: "auto",
   },
   screenShare: {
-    playbackErrorMessage: "[Meets] Screen share audio play error:",
-    audioOutputErrorMessage: "[Meets] Failed to set screen share audio output:",
+    playbackErrorMessage: "[Meets] Screen share audio play error",
+    audioOutputErrorMessage: "[Meets] Failed to set screen share audio output",
     replayOnForeground: true,
     preload: undefined,
   },
   system: {
-    playbackErrorMessage: "[Meets] System audio play error:",
-    audioOutputErrorMessage: "[Meets] Failed to set system audio output:",
+    playbackErrorMessage: "[Meets] System audio play error",
+    audioOutputErrorMessage: "[Meets] Failed to set system audio output",
     replayOnForeground: true,
     preload: undefined,
   },
-} as const;
+} as const satisfies Record<
+  string,
+  {
+    playbackErrorMessage: CallLogLabel;
+    audioOutputErrorMessage: CallLogLabel;
+    replayOnForeground: boolean;
+    preload: "auto" | undefined;
+  }
+>;
 
 type AudioStreamPlayerProps = {
   kind: keyof typeof playerConfigs;
@@ -107,9 +117,9 @@ function AudioStreamPlayer({
         if (errorName(err) === "AbortError") return;
 
         if (playbackErrorContext === undefined) {
-          console.error(playbackErrorMessage, err);
+          logCallError(playbackErrorMessage, err);
         } else {
-          console.error(playbackErrorMessage, playbackErrorContext, err);
+          logCallError(playbackErrorMessage, playbackErrorContext, err);
         }
       });
   });
@@ -234,7 +244,7 @@ function AudioStreamPlayer({
           if (applied && !cancelled) attemptPlayback();
         })
         .catch((err) => {
-          if (!cancelled) console.error(audioOutputErrorMessage, err);
+          if (!cancelled) logCallError(audioOutputErrorMessage, err);
         });
     };
     updateOutput();

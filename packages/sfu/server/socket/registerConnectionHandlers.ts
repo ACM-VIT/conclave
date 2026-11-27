@@ -22,7 +22,10 @@ import { registerSharedBrowserHandlers } from "./handlers/sharedBrowserHandlers.
 import { registerTransportHandlers } from "./handlers/transportHandlers.js";
 import { registerTranscriptHandlers } from "./handlers/transcriptHandlers.js";
 import { registerAppsHandlers } from "./handlers/appsHandlers.js";
-import { registerAuthorityHandlers } from "./handlers/authorityHandlers.js";
+import {
+  registerAuthorityHandlers,
+  registerAuthorityOffHandlers,
+} from "./handlers/authorityHandlers.js";
 import { registerGameHandlers } from "./handlers/gameHandlers.js";
 import { registerWebinarHandlers } from "./handlers/webinarHandlers.js";
 import { registerWebinarInteractionHandlers } from "./handlers/webinarInteractionHandlers.js";
@@ -49,6 +52,7 @@ export const registerConnectionHandlers = (
     registerHandHandlers(context);
     registerAppsHandlers(context);
     if (state.appsAuthority) registerAuthorityHandlers(context);
+    else registerAuthorityOffHandlers(context);
     registerGameHandlers(context);
     registerMeetingHandlers(context);
     registerWebinarHandlers(context);

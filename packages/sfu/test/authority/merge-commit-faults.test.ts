@@ -344,12 +344,17 @@ describe("a guest link plan (Sol)", () => {
     const app = notesApp("notes", { webinarOnlyMerge: true });
     const room = new Harness([app.authority]);
     const { onA, onB } = await withNotes(room, app.contract);
+    const notified = vi.fn(() => sameGuest(room, onA, onB));
+    room.authority.onSubjectsMerged(notified);
 
     room.setWebinar(true);
     const link = room.room.planGuestLink([{ guestProof: "pass-a" }], "pass-b");
 
     expect(link?.recordable).toBe(true);
+    expect(notified).not.toHaveBeenCalled();
     expect(room.room.commitGuestLink(link!).linked).toBe(true);
+    expect(notified).toHaveBeenCalledTimes(1);
+    expect(notified).toHaveReturnedWith(true);
     await allViewsIn(room);
     expect(sameGuest(room, onA, onB)).toBe(true);
     expect(notesOf(onA)).toEqual(['{"id":"a"}']);
@@ -362,6 +367,8 @@ describe("a guest link plan (Sol)", () => {
       const app = notesApp("notes");
       const room = new Harness([app.authority]);
       const { onA, onB } = await withNotes(room, app.contract);
+      const notified = vi.fn();
+      room.authority.onSubjectsMerged(notified);
       const link = room.room.planGuestLink([{ guestProof: "pass-a" }], "pass-b");
       expect(link?.recordable).toBe(true);
 
@@ -373,6 +380,7 @@ describe("a guest link plan (Sol)", () => {
       }
 
       expect(room.room.commitGuestLink(link!)).toEqual({ linked: false });
+      expect(notified).not.toHaveBeenCalled();
       expect(sameGuest(room, onA, onB)).toBe(false);
     },
   );

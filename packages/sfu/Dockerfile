@@ -48,11 +48,8 @@ LABEL org.conclave.health-deploy-id=true
 # Default state dir; volume-mount this in prod for durability.
 RUN mkdir -p /var/lib/conclave/recordings && chown -R node:node /var/lib/conclave
 
-# The JSON persistence backends (selected by a *_PERSISTENCE variable) write to
-# the recordings volume, the only writable path under compose's read-only root.
-# The deploy copies old containers' JSON fallback files into
-# CONCLAVE_FALLBACK_IMPORT_DIR from a container of this image and keeps them
-# there for a later import.
+# Compose places the SQLite and JSON control-plane files on the recordings
+# volume. The per-store JSON paths and fallback dir are legacy import inputs.
 ENV CONCLAVE_SQLITE_PATH=/var/lib/conclave/conclave.sqlite \
     CONCLAVE_FALLBACK_IMPORT_DIR=/var/lib/conclave/recordings/json-fallback-import \
     SCHEDULING_PATH=/var/lib/conclave/recordings/scheduling.json \

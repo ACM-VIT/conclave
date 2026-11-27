@@ -5,6 +5,7 @@ import type { WebinarLinkTarget, WebinarRoomConfig } from "./webinar.js";
 import { createMemoryBackend } from "./controlPlane/backends/memory.js";
 import { controlPlaneStore, type ControlPlaneStore } from "./controlPlane/store.js";
 import { createRoomRegistry, type RoomRegistry } from "./roomRegistry.js";
+import { createPersistenceFence, fenceControlPlane, type PersistenceFence } from "./persistenceFence.js";
 import {
   createTranscriptRelayRegistry,
   type TranscriptRelayRegistry,
@@ -31,6 +32,7 @@ export type SfuState = {
   webinarConfigs: Map<string, WebinarRoomConfig>;
   webinarLinks: Map<string, WebinarLinkTarget>;
   controlPlane: ControlPlaneStore;
+  persistenceFence: PersistenceFence;
   googleAccessTokens: Map<string, { token: string; expiresAt: number }>;
   scheduledWebinarTimer: NodeJS.Timeout | null;
   reminderScanRunning: boolean;
@@ -48,6 +50,7 @@ export const createSfuState = (options?: {
   appsAuthority?: AppsAuthorityRuntime | null;
   controlPlane?: ControlPlaneStore;
 }): SfuState => {
+  const persistenceFence = createPersistenceFence();
   return {
     workers: [],
     rooms: new Map(),
@@ -56,7 +59,8 @@ export const createSfuState = (options?: {
     endedRooms: new Map(),
     webinarConfigs: new Map(),
     webinarLinks: new Map(),
-    controlPlane: options?.controlPlane ?? controlPlaneStore(createMemoryBackend()),
+    controlPlane: fenceControlPlane(options?.controlPlane ?? controlPlaneStore(createMemoryBackend()), persistenceFence),
+    persistenceFence,
     googleAccessTokens: new Map(),
     scheduledWebinarTimer: null,
     reminderScanRunning: false,

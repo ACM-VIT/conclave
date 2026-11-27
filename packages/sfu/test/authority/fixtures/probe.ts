@@ -74,6 +74,10 @@ export const probeContract = defineContract({
     },
   },
   queries: {
+    page: {
+      input: s.object({ offset: s.int({ min: 0 }), limit: s.int({ min: 1 }) }),
+      output: s.object({ ids: s.array(s.string({ max: 64 }), { max: 100 }) }),
+    },
     countMarks: {
       input: s.object({ id: s.string({ min: 1, max: 64 }) }),
       output: s.object({ count: s.int({ min: 0 }) }),
@@ -317,6 +321,13 @@ export const probeAuthority = defineAuthority({
     },
   },
   queries: {
+    page: {
+      roles: ["moderator"],
+      rate: RATE,
+      read(_ctx, db, input) {
+        return { ids: db.scan("notes", undefined, input).map(([, row]) => row.id) };
+      },
+    },
     countMarks: {
       roles: everyone,
       rate: RATE,

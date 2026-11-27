@@ -327,12 +327,11 @@ if [[ "$PREFLIGHT_ONLY" == "true" ]]; then
 fi
 
 # One deploy at a time on this host: two runs against different instances can
-# each find the other serving and drain both. A host job that must not
-# overlap a deploy, such as the nightly backup, can hold the same lock, so no
-# deploy starts or replaces an SFU under it; a deploy waits for it a while
-# (SFU_DEPLOY_LOCK_WAIT_SECONDS). The lock lives in /run/lock, which a systemd
-# unit with a private /tmp sees too. The kernel holds the flock on fd 9 until
-# this process, and the re-exec
+# each find the other serving and drain both. The nightly backup holds the
+# same lock while it copies, so no deploy starts or replaces an SFU under it;
+# a deploy waits for it a while (SFU_DEPLOY_LOCK_WAIT_SECONDS). The lock lives
+# in /run/lock, which the backup's systemd unit (with its private /tmp) sees
+# too. The kernel holds the flock on fd 9 until this process, and the re-exec
 # below that inherits the fd, exit, however they exit.
 if [[ -d /run/lock ]]; then
   DEPLOY_LOCK="${SFU_DEPLOY_LOCK_FILE:-/run/lock/conclave-sfu-deploy.lock}"
@@ -347,8 +346,14 @@ fi
 file_id() {
   node -e 'const fs=require("fs");const a=process.argv[1];const s=/^[0-9]+$/.test(a)?fs.fstatSync(Number(a)):fs.statSync(a);console.log(s.dev+":"+s.ino)' "$1"
 }
-# Readable by every user that deploys or backs up, whoever made it.
-[[ -e "$DEPLOY_LOCK" ]] || (umask 0111 && : >> "$DEPLOY_LOCK")
+# A regular file no other user can open, made and checked by host_lock.py
+# under the rules backup.sh and restore.sh follow too: a lock any user can
+# open is one any user can hold, stopping every deploy and backup.
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "deploy-sfu.sh needs python3 to validate the host deploy lock. Install Python 3 and rerun." >&2
+  exit 1
+fi
+python3 -I "${ROOT_DIR}/scripts/host_lock.py" prepare "$DEPLOY_LOCK" || exit 1
 lock_id="$(file_id "$DEPLOY_LOCK")"
 # A restarted run inherits fd 9; SFU_DEPLOY_LOCK_HELD only says to look at
 # it, whatever value an older release put there. What decides is the file:
@@ -378,6 +383,7 @@ fi
   echo "${DEPLOY_LOCK} was replaced while this deploy waited for it; rerun it." >&2
   exit 1
 }
+python3 -I "${ROOT_DIR}/scripts/host_lock.py" check 9 "$DEPLOY_LOCK" || exit 1
 export SFU_DEPLOY_LOCK_HELD="$lock_id"
 checkpoint "lock held"
 

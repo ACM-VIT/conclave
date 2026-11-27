@@ -5,6 +5,7 @@ import { Logger } from "../utilities/loggers.js";
 import { forceCloseRoom } from "./rooms.js";
 import type { SfuState } from "./state.js";
 import { openControlPlane } from "./controlPlane/open.js";
+import { fenceControlPlane } from "./persistenceFence.js";
 import type { ControlPlaneStore } from "./controlPlane/store.js";
 
 const WORKER_RESTART_NOTICE =
@@ -96,6 +97,7 @@ export const initControlPlane = async (
 ): Promise<void> => {
   const opened = store ?? (await openControlPlane());
   const previous = state.controlPlane;
-  state.controlPlane = opened;
-  if (previous !== opened) await previous.close();
+  if (previous === opened) return;
+  state.controlPlane = fenceControlPlane(opened, state.persistenceFence);
+  await previous.close();
 };

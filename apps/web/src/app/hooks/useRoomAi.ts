@@ -15,6 +15,7 @@ import {
   type RoomAiProvider,
   type RoomAiState,
 } from "@conclave/ai/room";
+import { ServerError } from "../lib/server-error";
 
 export function parseRoomAiState(value: unknown): RoomAiState | null {
   if (!value || typeof value !== "object") return null;
@@ -230,7 +231,7 @@ export function useRoomAi(
                 !Array.isArray(result?.catalogs)
               ) {
                 reject(
-                  new Error(
+                  new ServerError(
                     result?.error || "Could not refresh models. Try again.",
                   ),
                 );
@@ -250,7 +251,7 @@ export function useRoomAi(
     const cached = accessTokens.current.get(purpose);
     if (cached && cached.epoch === generation && cached.expiresAt > Date.now() + 15_000) return cached.token;
     return new Promise((resolve, reject) => socket.timeout(8000).emit("ai:access", {purpose}, (error: Error | null, result: {token?: string; expiresAt?: number; error?: string} | undefined) => {
-      if (error || !socket.connected || generation !== epoch.current || typeof result?.token !== "string" || typeof result.expiresAt !== "number") {reject(new Error(result?.error || "AI access could not be loaded.")); return;}
+      if (error || !socket.connected || generation !== epoch.current || typeof result?.token !== "string" || typeof result.expiresAt !== "number") {reject(new ServerError(result?.error || "AI access could not be loaded.")); return;}
       accessTokens.current.set(purpose, {token: result.token, expiresAt: result.expiresAt, epoch: generation});
       resolve(result.token);
     }));

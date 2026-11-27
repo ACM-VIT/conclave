@@ -68,7 +68,12 @@ export type AuthorityView<C extends AuthorityContract> = {
 export type AuthoritySessionState<C extends AuthorityContract> =
   /** This server does not offer the app to this connection. */
   | { kind: "unsupported" }
-  | { kind: "connecting" }
+  /**
+   * A view is on its way. `replacing` says this subscription already showed
+   * one, and a replacement in parts dropped it: the view before it may hold
+   * rows this viewer can no longer see.
+   */
+  | { kind: "connecting"; replacing?: true }
   /** The server withdrew the view. Everything held was forgotten. */
   | { kind: "revoked"; reason: AuthorityRevokeReason }
   | {
@@ -396,6 +401,14 @@ export class AuthoritySession<C extends AuthorityContract> {
   private generation = 0;
   private seq = 0;
   private incoming: { generation: number; frames: ReplaceFrame[] } | null = null;
+  /** Whether the current subscription has shown a view yet. */
+  private viewed = false;
+  /**
+   * The subscription whose view a replacement in parts dropped. `replacing`
+   * is said only while that is still the current subscription, so a new
+   * connection or a new subscription never inherits it.
+   */
+  private replacingFor: string | null = null;
   private rows: Rows = new Map();
   private revision = 0;
   /**
@@ -643,7 +656,8 @@ export class AuthoritySession<C extends AuthorityContract> {
           this.seq = 0;
           this.rows = new Map();
           this.failStreams();
-          this.setState({ kind: "connecting" });
+          this.replacingFor = this.viewed ? this.subscription : null;
+          this.setState(this.connecting());
         }
       }
       if (frame.part !== this.incoming.frames.length) {
@@ -696,6 +710,8 @@ export class AuthoritySession<C extends AuthorityContract> {
     this.unsubscribe();
     this.failStreams();
     this.subscription = randomId();
+    this.viewed = false;
+    this.replacingFor = null;
     this.generation = 0;
     this.seq = 0;
     this.incoming = null;
@@ -796,6 +812,8 @@ export class AuthoritySession<C extends AuthorityContract> {
     this.generation = frames[0].generation;
     this.seq = 0;
     this.incoming = null;
+    this.viewed = true;
+    this.replacingFor = null;
     this.rows = rows;
     if (frames[0].subscription !== this.revisionOf) {
       this.revisionBase = this.revision;
@@ -862,6 +880,8 @@ export class AuthoritySession<C extends AuthorityContract> {
     options?: { keepSubscription?: boolean },
   ): void {
     if (!options?.keepSubscription) this.unsubscribe();
+    this.viewed = false;
+    this.replacingFor = null;
     this.generation = 0;
     this.seq = 0;
     this.incoming = null;
@@ -870,10 +890,20 @@ export class AuthoritySession<C extends AuthorityContract> {
     this.setState(state);
   }
 
+  /** Connecting, saying whether it replaces a view this same subscription showed. */
+  private connecting(): AuthoritySessionState<C> {
+    return this.replacingFor !== null && this.replacingFor === this.subscription
+      ? { kind: "connecting", replacing: true }
+      : { kind: "connecting" };
+  }
+
   private setState(next: AuthoritySessionState<C>): void {
+    const replacing = (state: AuthoritySessionState<C>): boolean =>
+      state.kind === "connecting" && state.replacing === true;
     const unchanged =
       this.state.kind === next.kind &&
-      (next.kind === "connecting" || next.kind === "unsupported");
+      (next.kind === "unsupported" ||
+        (next.kind === "connecting" && replacing(this.state) === replacing(next)));
     if (unchanged) return;
     this.state = next;
     if (next.kind === "unsupported") this.endActions("unsupported");

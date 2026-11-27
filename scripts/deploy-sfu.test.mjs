@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile, execFileSync, spawn, spawnSync } from "node:child_process";
-import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -717,6 +717,15 @@ test("an instance on the target whose status says unhealthy is redeployed, not c
   });
 });
 
+test("a host without Python is refused before any SFU changes", async () => {
+  await withSfus({ "sfu-a": {} }, async (sfus, events) => {
+    const result = await deploy(sfus, { withoutPython: true });
+    assert.equal(result.code, 1, result.output);
+    assert.match(result.output, /needs python3 to validate the host deploy lock/);
+    assert.deepEqual(events, []);
+  });
+});
+
 test("a host without flock refuses to deploy rather than lock some other way", async () => {
   await withSfus({ "sfu-a": {}, "sfu-b": {} }, async (sfus, events) => {
     const result = await deploy(sfus, { withoutFlock: true });
@@ -946,6 +955,32 @@ test("a compose file with its own Redis starts it, with Upstash settings inherit
     });
     assert.equal(result.code, 0, result.output);
     assert.ok(result.docker.some((args) => args[0] === "compose" && args.slice(-3).join(" ") === "up -d redis"), result.output);
+  });
+});
+
+test("the deploy lock is made so no other user can open it, and one that is a link is refused", async () => {
+  await withSfus({ "sfu-a": {}, "sfu-b": {} }, async (sfus) => {
+    const dir = await mkdtemp(path.join(tmpdir(), "deploy-lock-"));
+    try {
+      const lock = path.join(dir, "deploy.lock");
+      const made = await deploy(sfus, { env: { SFU_DEPLOY_LOCK_FILE: lock } });
+      assert.equal(made.code, 0, made.output);
+      assert.equal((await stat(lock)).mode & 0o777, 0o640);
+      // One an older script made for every user is narrowed by its owner.
+      await chmod(lock, 0o666);
+      await deploy(sfus, { env: { SFU_DEPLOY_LOCK_FILE: lock } });
+      assert.equal((await stat(lock)).mode & 0o777, 0o640);
+      await rm(lock);
+      await writeFile(path.join(dir, "elsewhere.lock"), "");
+      await symlink(path.join(dir, "elsewhere.lock"), lock);
+      const drains = sfus["sfu-a"].drains.length + sfus["sfu-b"].drains.length;
+      const linked = await deploy(sfus, { env: { SFU_DEPLOY_LOCK_FILE: lock } });
+      assert.equal(linked.code, 1, linked.output);
+      assert.match(linked.output, /deploy\.lock is a link or not a regular file/);
+      assert.equal(sfus["sfu-a"].drains.length + sfus["sfu-b"].drains.length, drains, "the refused run drained nothing");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

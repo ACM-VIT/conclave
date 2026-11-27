@@ -76,9 +76,12 @@ export function useMeetState({ initialRoomId }: UseMeetStateOptions) {
   const [webinarSpeakerUserId, setWebinarSpeakerUserId] = useState<string | null>(
     null,
   );
-  const [webinarQaEntries, setWebinarQaEntries] = useState<WebinarQaEntry[]>(
-    [],
-  );
+  // The old events' Q&A list for this connection, null until it is sent one.
+  const [webinarQaEntries, setWebinarQaEntries] = useState<
+    WebinarQaEntry[] | null
+  >(null);
+  const [webinarQaListFromThisConnection, setWebinarQaListFromThisConnection] =
+    useState(false);
   const [webinarHandQueue, setWebinarHandQueue] = useState<
     WebinarHandQueueEntry[]
   >([]);
@@ -163,6 +166,8 @@ export function useMeetState({ initialRoomId }: UseMeetStateOptions) {
     webinarSpeakerUserId,
     webinarQaEntries,
     setWebinarQaEntries,
+    webinarQaListFromThisConnection,
+    setWebinarQaListFromThisConnection,
     webinarHandQueue,
     setWebinarHandQueue,
     isWebinarHandRaised,

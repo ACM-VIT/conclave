@@ -255,4 +255,3 @@ describe("wheel web app while a shared spin runs, even when the dial reports it 
     expect(labels()).toEqual(["Ada", "Bo", "Cy"]);
   });
 });
-

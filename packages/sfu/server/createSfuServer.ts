@@ -168,7 +168,11 @@ export const createSfuServer = (
       clearInterval(audioConsumerHealTimer);
       audioConsumerHealTimer = null;
     }
-    await state.controlPlane.close();
+    try {
+      await state.controlPlane.close();
+    } finally {
+      state.persistenceFence.open();
+    }
     await releaseAllRoomOwnerships(state);
     await socketAdapterLifecycle?.close();
     socketAdapterLifecycle = null;

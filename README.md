@@ -89,6 +89,9 @@ Notes:
 
 - Web defaults to `https://sfu.acmvit.in` if `SFU_URL`/`NEXT_PUBLIC_SFU_URL` is unset.
 - SFU has development defaults; production must set secrets and announced IPs.
+- Telemetry (PostHog) is off without a project key. Its variables, including
+  where the web server forwards events (`POSTHOG_INGEST_HOST`), are listed in
+  [`apps/web/src/app/lib/telemetry.md`](./apps/web/src/app/lib/telemetry.md).
 
 ---
 

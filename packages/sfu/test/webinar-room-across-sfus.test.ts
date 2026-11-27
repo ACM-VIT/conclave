@@ -219,6 +219,7 @@ describe("hosts connected to the SFU that hosts a webinar's room", () => {
     hosting.rooms.set(channelId, {
       channelId,
       id: webinar.roomId,
+      clients: new Map(),
       getWebinarAttendeeCount: () => 0,
       getWebinarHandQueue: () => [],
       getAdmins: () => [],
@@ -303,6 +304,7 @@ const eventsOnHostingSfu = async (change: RoomChange, where: "local" | "remote")
   hosting.rooms.set(channelId, {
     channelId,
     id: webinar.roomId,
+    clients: new Map(),
     getWebinarAttendeeCount: () => 0,
     getWebinarHandQueue: () => [],
     getAdmins: () => [],

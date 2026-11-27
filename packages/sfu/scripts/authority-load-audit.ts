@@ -141,9 +141,9 @@ export class LoadAudit {
     if (frame.kind === "query") return;
     const ledger = this.ledgerOf(person);
     for (const row of frame.kind === "replace" ? frame.rows : frame.put) {
-      if (row.bucket === "polls") {
-        const visible = person.host || this.sharedPolls.has(row.key);
-        if (field(row.value, "results") !== null && !visible) {
+      if (row.bucket === "results") {
+        // Totals exist only for hosts until a host shares them.
+        if (!person.host && !this.sharedPolls.has(row.key)) {
           this.violations.push(`${person.name}: private tally for poll ${row.key}`);
         }
       } else if (row.bucket === "myVotes") {
@@ -156,6 +156,12 @@ export class LoadAudit {
           this.violations.push(`${person.name}: someone else's upvote ${row.key}`);
         }
       } else if (row.bucket === "myQuestions") {
+        // A question a host hid is nobody's to see but a host's, and a host
+        // sees it in the shared list, never as a row of their own.
+        const own = field(field(row.value, "hidden"), "question");
+        if (field(own, "status") === "dismissed") {
+          this.violations.push(`${person.name}: their own hidden question ${row.key}`);
+        }
         if (!ledger.asked.has(row.key)) {
           this.unsettledQuestions.push({ person, key: row.key });
         }
