@@ -12,7 +12,7 @@ import type {
 } from "../types.js";
 import { asArray, asRecord } from "../utilities/untrusted.js";
 import { InvalidInput } from "./controlPlane/model.js";
-import { canonicalizeClientId, clientNamespaceIncludes, CONCLAVE_CLIENT_ID } from "./clientIds.js";
+import { canonicalizeClientId, clientNamespaceIncludes, CONCLAVE_CLIENT_ID, servedClientId } from "./clientIds.js";
 import { storedTimestampOrNull } from "./storedValues.js";
 
 const USERNAME_MAX_LENGTH = 48;
@@ -496,19 +496,23 @@ export const patchCalendarConnection = (
   updatedAt: now,
 });
 
-export const meetingMatchesProfile = (
+const meetingHasHost = (
   meeting: ScheduledMeeting,
   profile: SchedulingProfile,
-  eventType?: SchedulingEventType | null,
-  clientId = profile.clientId,
 ): boolean => {
-  if (!clientNamespaceIncludes(clientId, meeting.clientId)) return false;
-  if (eventType?.profileId === profile.id) return true;
   if (meeting.hostUserId && profile.userId) {
     return meeting.hostUserId === profile.userId;
   }
   return meeting.hostEmail.trim().toLowerCase() === profile.email.trim().toLowerCase();
 };
+
+export const meetingMatchesProfile = (
+  meeting: ScheduledMeeting,
+  profile: SchedulingProfile,
+  eventType?: SchedulingEventType | null,
+): boolean =>
+  clientNamespaceIncludes(profile.clientId, meeting.clientId) &&
+  (eventType?.profileId === profile.id || meetingHasHost(meeting, profile));
 
 export const internalBusyIntervals = (
   meetings: readonly ScheduledMeeting[],
@@ -516,27 +520,26 @@ export const internalBusyIntervals = (
   profile: SchedulingProfile,
   from: number,
   to: number,
-  clientId = profile.clientId,
-): BusyInterval[] =>
-  meetings
-    .filter((meeting) => meeting.status !== "cancelled" && meeting.status !== "ended")
+): BusyInterval[] => {
+  const hostNamespace = servedClientId(profile.clientId);
+  return meetings
+    .filter((meeting) =>
+      meeting.status !== "cancelled" &&
+      meeting.status !== "ended" &&
+      servedClientId(meeting.clientId) === hostNamespace &&
+      meetingHasHost(meeting, profile),
+    )
     .map((meeting) => {
-      const eventType = meeting.eventTypeId ? eventTypeOf(meeting.eventTypeId) : null;
+      const candidate = meeting.eventTypeId ? eventTypeOf(meeting.eventTypeId) : null;
+      const eventType = candidate && servedClientId(candidate.clientId) === hostNamespace ? candidate : null;
       return {
-        meeting,
-        eventType,
         startAt:
           meeting.scheduledStartAt - (eventType?.bufferBeforeMinutes ?? 0) * MINUTE_MS,
         endAt: meeting.scheduledEndAt + (eventType?.bufferAfterMinutes ?? 0) * MINUTE_MS,
       };
     })
-    .filter(
-      ({ meeting, eventType, startAt, endAt }) =>
-        meetingMatchesProfile(meeting, profile, eventType, clientId) &&
-        startAt < to &&
-        from < endAt,
-    )
-    .map(({ startAt, endAt }) => ({ startAt, endAt }));
+    .filter(({ startAt, endAt }) => startAt < to && from < endAt);
+};
 
 export const bookingBlocksInterval = (
   eventType: SchedulingEventType,

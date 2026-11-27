@@ -739,7 +739,8 @@ def json_coverage_problems(archive, state, container):
             for store in stores if store["rel"] not in files]
 
 
-def fallback_import_dirs(state, container):
+def legacy_import_locations(state, container):
+    """Fallback copy directories and active legacy JSON inputs on this volume."""
     containers = state_mounts(docker_containers(), state)
     problems = state_view_problems(state, containers)
     if problems:
@@ -750,18 +751,35 @@ def fallback_import_dirs(state, container):
     if not sfus:
         sources.append((os.environ, container, None))
     dirs = set()
+    files = set()
     for env, cwd, mounts in sources:
-        default = posixpath.join(container, "json-fallback-import") if mounts is None else ""
-        value = env.get(variable, default).strip(JS_SPACE)
-        if not value or control_plane_mode(env) == "memory":
+        if control_plane_mode(env) == "memory":
             continue
-        resolved = "/" + posixpath.normpath(posixpath.join(cwd, value)).lstrip("/")
-        rel = (state_path(resolved, mounts, state, allow_root=True) if mounts is not None
-               else under_root(resolved, mount_roots(state, container)))
-        if rel is None:
-            raise Refused(f"{variable}={resolved} is outside the state dir, so the restore cannot reconcile its snapshots")
-        dirs.add(rel)
-    return dirs
+
+        def mounted_path(value):
+            resolved = "/" + posixpath.normpath(posixpath.join(cwd, value)).lstrip("/")
+            return (state_path(resolved, mounts, state, allow_root=True) if mounts is not None
+                    else under_root(resolved, mount_roots(state, container)))
+
+        default = posixpath.join(container, "json-fallback-import") if mounts is None else ""
+        fallback = env.get(variable, default).strip(JS_SPACE)
+        if fallback:
+            rel = mounted_path(fallback)
+            if rel is None:
+                raise Refused(f"{variable}={fallback} is outside the state dir, so the restore cannot reconcile its snapshots")
+            dirs.add(rel)
+
+        for key, name in (
+            ("SCHEDULING_PATH", "scheduling.json"),
+            ("SCHEDULED_MEETINGS_PATH", "scheduled-meetings.json"),
+            ("SCHEDULED_WEBINARS_PATH", "scheduled-webinars.json"),
+        ):
+            value = (env.get(key) or "").strip(JS_SPACE)
+            if not value and mounts is not None:
+                value = posixpath.join("data", name)
+            if value and (rel := mounted_path(value)):
+                files.add(rel)
+    return dirs, files
 
 
 def walk_error(error):

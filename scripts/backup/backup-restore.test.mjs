@@ -3125,6 +3125,90 @@ try {
   return JSON.parse(stdout.match(/^BACKUP_FIXTURE (.*)$/m)[1]);
 };
 
+test("restoring the files part retires a legacy JSON input absent from the archive", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-restore-active-json-"));
+  try {
+    const { state, env, backup, latestArchive, restore, setDocker } = await setUp(root);
+    const mount = "/srv/sfu/state";
+    const sqlite = path.join(state, "control.db");
+    const active = path.join(state, "late-meetings.json");
+    const unrelated = path.join(state, "scheduled-meetings.json");
+    const notes = path.join(state, "notes.txt");
+    const configure = (mode) => setDocker([{
+      id: "sfu-a", mounts: [{ source: state, destination: mount }], workingDir: mount, status: "exited",
+      env: ["SFU_PORT=9", "SFU_INSTANCE_ID=sfu-a", `CONTROL_PLANE_PERSISTENCE=${mode}`,
+        "CONCLAVE_SQLITE_PATH=./control.db", `SCHEDULED_MEETINGS_PATH=${mount}/late-meetings.json`,
+        "CONTROL_PLANE_JSON_PATH=./active-unified.json"],
+    }]);
+    const host = {
+      CONTROL_PLANE_PERSISTENCE: "sqlite", CONCLAVE_SQLITE_PATH: sqlite, SCHEDULED_MEETINGS_PATH: active,
+      SCHEDULED_WEBINARS_PATH: path.join(state, "legacy-webinars.json"), SCHEDULING_PATH: path.join(state, "legacy-scheduling.json"),
+    };
+    await configure("sqlite");
+    assert.deepEqual(await actualControlPlane(host, "checkpoint"), ["checkpoint"]);
+    await writeFile(notes, "archived notes");
+    await backup("--local-only");
+    const archive = await latestArchive();
+    const later = JSON.stringify([{
+      id: "later", clientId: "fixture", title: "later booking", roomCode: "later-room", hostEmail: "host@example.test",
+      scheduledStartAt: 4_000_000_000_000, scheduledEndAt: 4_000_003_600_000, status: "scheduled",
+      createdBy: "guest@example.test", source: "booking_link", createdAt: 100, updatedAt: 100,
+    }]);
+    await writeFile(active, later, { mode: 0o600 });
+    await writeFile(unrelated, "not an input for this SFU");
+    await writeFile(notes, "live notes");
+    assert.deepEqual((await actualControlPlane(host)).sort(), ["checkpoint", "later booking"]);
+    const liveDb = await readFile(sqlite);
+
+    await configure("json");
+    const unified = path.join(state, "active-unified.json");
+    await writeFile(unified, "live control plane");
+    await assert.rejects(restore("--file", archive, "--yes"), /backup has no copy of active-unified\.json/);
+    assert.equal(await readFile(unified, "utf8"), "live control plane");
+    assert.equal(await readFile(active, "utf8"), later);
+    assert.deepEqual(await readFile(sqlite), liveDb);
+
+    await configure("sqlite");
+    assert.match((await restore("--file", archive)).stdout, /Dry run: nothing changed/);
+    assert.equal(await readFile(active, "utf8"), later);
+    assert.deepEqual(await readFile(sqlite), liveDb);
+
+    const work = await mkdtemp(path.join(root, "work-"));
+    const decrypted = path.join(work, "backup.tar.gz");
+    await run("age", ["--decrypt", "-i", path.join(root, "key.txt"), "-o", decrypted, archive]);
+    const stopped = spawnSync("python3", [
+      "-I", "-B", "-c", stopAfterFirstPlace, scripts, "--archive", decrypted, "--work", work,
+      "--state", state, "--container", mount, "--apply",
+    ], { env: { ...env, STOP_SIGNAL: "15", REDIS_SOURCE_URL: "", SFU_HEALTH_URLS: "http://127.0.0.1:9/health" }, encoding: "utf8" });
+    assert.notEqual(stopped.status, 0, stopped.stdout + stopped.stderr);
+    assert.match(stopped.stdout + stopped.stderr, /Undid every rename/);
+    assert.equal(await readFile(active, "utf8"), later);
+    assert.deepEqual(await readFile(sqlite), liveDb);
+    assert.equal(await readFile(notes, "utf8"), "live notes");
+    assert.equal((await readdir(root)).some((name) => /^(state\.pre-restore|\.conclave-restore)/.test(name)), false);
+
+    await restore("--file", archive, "--only", "sqlite", "--yes");
+    assert.equal(await readFile(active, "utf8"), later);
+    assert.equal(await readFile(notes, "utf8"), "live notes");
+    assert.deepEqual((await actualControlPlane(host)).sort(), ["checkpoint", "later booking"]);
+
+    const beforeFull = new Set(await readdir(root));
+    await restore("--file", archive, "--yes");
+    assert.deepEqual(await actualControlPlane(host), ["checkpoint"]);
+    assert.deepEqual(await actualControlPlane(host), ["checkpoint"]);
+    await assert.rejects(stat(active), { code: "ENOENT" });
+    assert.equal(await readFile(unrelated, "utf8"), "not an input for this SFU");
+    assert.equal(await readFile(notes, "utf8"), "archived notes");
+    const asides = (await readdir(root)).filter((name) => name.startsWith("state.pre-restore-") && !beforeFull.has(name));
+    assert.equal(asides.length, 1);
+    const preserved = path.join(root, asides[0], path.basename(active));
+    assert.equal(await readFile(preserved, "utf8"), later);
+    assert.equal((await stat(preserved)).mode & 0o777, 0o600);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a full restore replays only the container snapshots in its archive", needs, async () => {
   const root = await mkdtemp(path.join(tmpdir(), "conclave-restore-lineage-"));
   try {

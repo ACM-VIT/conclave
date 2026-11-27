@@ -189,11 +189,10 @@ const hostBusyAround = async (
   eventType: SchedulingEventType,
   slotsFrom: number,
   slotsTo: number,
-  clientId: string,
 ): Promise<BusyInterval[]> => {
   const busyFrom = slotsFrom - eventType.bufferBeforeMinutes * MINUTE_MS;
   const busyTo = slotsTo + eventType.bufferAfterMinutes * MINUTE_MS;
-  const internal = await state.controlPlane.read(hostBusyIntervals(profileId, busyFrom, busyTo, clientId));
+  const internal = await state.controlPlane.read(hostBusyIntervals(profileId, busyFrom, busyTo));
   const google = await fetchOptionalGoogleBusy(state, connection, eventType, busyFrom, busyTo);
   return [...internal, ...google];
 };
@@ -517,7 +516,6 @@ export const registerSchedulingRoutes = (
         eventType,
         slotFrom,
         slotTo,
-        resolveClientId(req),
       );
       res.json({
         slots: generateAvailableSlots({
@@ -569,7 +567,7 @@ export const registerSchedulingRoutes = (
         const endAt = startAt + eventType.durationMinutes * MINUTE_MS;
         const rangeFrom = startAt - 60_000;
         const rangeTo = endAt + 60_000;
-        const busyIntervals = await hostBusyAround(state, profile.id, calendar, eventType, rangeFrom, rangeTo, clientId);
+        const busyIntervals = await hostBusyAround(state, profile.id, calendar, eventType, rangeFrom, rangeTo);
         const offered = generateAvailableSlots({
           eventType,
           availability: availabilityFor(target),
@@ -584,7 +582,6 @@ export const registerSchedulingRoutes = (
         }
         const result = await state.controlPlane.commit(
           bookSlot({
-            clientId,
             profileId: profile.id,
             eventTypeId: eventType.id,
             expect: {
