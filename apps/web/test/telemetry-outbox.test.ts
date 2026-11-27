@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   type BatchFacts,
+  BEACON_CONFIRM_MS,
   countDropped,
   createBatchStore,
   createOutbox,
@@ -10,6 +11,7 @@ import {
   LEASE_MS,
   MAX_BATCH_BYTES,
   MAX_BATCH_EVENTS,
+  MAX_SEND_AGE_MS,
   MARK_TTL_MS,
   MAX_MARKS,
   MAX_STORED_CHARS,
@@ -1330,6 +1332,135 @@ describe("an answer to the send as the page goes away", () => {
 
     expect(h.posted()).toEqual([report.uuid]);
     expect(store.list()).toEqual([]);
+  });
+});
+
+describe("batch settlement across overlapping sends", () => {
+  const handoff = async (oldestAt = START) => {
+    const storage = memoryWebStorage();
+    let batchWritesRefused = false;
+    let marksUnreadable = false;
+    const shared = createBatchStore(() => ({
+      get length() { return storage.length; },
+      key: (index) => storage.key(index),
+      getItem: (key) => {
+        if (marksUnreadable && key.startsWith(STORED_MARK_PREFIX)) throw new DOMException("Storage is unavailable.", "SecurityError");
+        return storage.getItem(key);
+      },
+      setItem: (key, value) => {
+        if (batchWritesRefused && key.startsWith(STORED_BATCH_PREFIX)) throw new DOMException("Quota exceeded.", "QuotaExceededError");
+        storage.setItem(key, value);
+      },
+      removeItem: (key) => storage.removeItem(key),
+      clear: () => storage.clear(),
+    }));
+    const clock = { now: START };
+    const beacon = Promise.withResolvers<Reply>();
+    const first = harness({ store: shared, clock, beaconReplies: [beacon.promise] });
+    const next = harness({ store: shared, clock, answers: [{ status: 503, retryAfter: "5" }] });
+    const reports = [event("meet_join_attempt", 0, oldestAt), event("meet_join_attempt", 0, oldestAt)];
+    for (const report of reports) first.outbox.add(report);
+    first.outbox.flushForUnload();
+    expect(first.uuidsIn(first.beacons)).toEqual(reports.map(({ uuid }) => uuid));
+
+    clock.now += BEACON_CONFIRM_MS;
+    batchWritesRefused = true;
+    next.outbox.replaySaved();
+    await next.advance(0);
+    expect(next.posted()).toEqual(reports.map(({ uuid }) => uuid));
+    expect(shared.list()).toEqual([]);
+    return {
+      beacon, next, reports, clock,
+      blockMarkReads: (blocked: boolean) => { marksUnreadable = blocked; },
+    };
+  };
+
+  it.each([
+    ["delivered", { status: 200, retryAfter: null }, false],
+    ["partially refused", { status: 503, retryAfter: "60", rejected: [0] }, true],
+  ] satisfies Array<[string, Reply, boolean]>)("does not send on unload while cross-tab marks are unreadable after a %s answer", async (_case, reply, retry) => {
+    const { beacon, next, reports, clock, blockMarkReads } = await handoff();
+    await next.advance(4000);
+    beacon.resolve(reply);
+    await settle();
+
+    clock.now += 1000;
+    blockMarkReads(true);
+    next.outbox.flushForUnload();
+    expect(next.beacons).toEqual([]);
+
+    blockMarkReads(false);
+    await next.advance(58_999);
+    expect(next.posts).toHaveLength(1);
+    await next.advance(1);
+    expect(next.posted()).toEqual([...reports.map(({ uuid }) => uuid), ...(retry ? [reports[1].uuid] : [])]);
+    expect(next.dropped).toEqual([]);
+  });
+
+  it.each([
+    ["delivered", { status: 200, retryAfter: null }, []],
+    ["refused", { status: 400, retryAfter: null }, []],
+    ["partially refused", { status: 503, retryAfter: "60", rejected: [0] }, [{ batches: 1, events: 1, unsent: 0 }]],
+  ] satisfies Array<[string, Reply, DroppedBatches[]]>)("expires only unresolved events after learning of a %s batch", async (_case, reply, drops) => {
+    const { beacon, next } = await handoff(START - MAX_SEND_AGE_MS + BEACON_CONFIRM_MS + 3000);
+    await next.advance(2000);
+    beacon.resolve(reply);
+    await settle();
+
+    await next.advance(MINUTE);
+    expect(next.posts).toHaveLength(1);
+    expect(next.dropped).toEqual(drops);
+  });
+
+  it.each([
+    [200, true],
+    [200, false],
+    [400, true],
+    [400, false],
+  ])("keeps a late %i keepalive answer without storage (newer post in flight: %s)", async (status, inFlight) => {
+    const beacon = Promise.withResolvers<Reply>();
+    const h = harness({ store: createBatchStore(fullStorage), beaconReplies: [beacon.promise], answers: [inFlight ? "pending" : 503] });
+    const report = event();
+    h.outbox.add(report);
+    h.outbox.flushForUnload();
+    await h.advance(BEACON_CONFIRM_MS);
+    expect(h.posted()).toEqual([report.uuid]);
+    expect(h.uuidsIn(h.beacons)).toEqual([report.uuid]);
+
+    beacon.resolve({ status, retryAfter: null });
+    await h.advance(5 * MINUTE);
+
+    expect(h.posted()).toEqual([report.uuid]);
+    expect(h.dropped).toEqual([]);
+  });
+
+  it.each([
+    [200, []],
+    [400, []],
+    [503, [0]],
+  ])("does not hand a second tab settled events when a late %i mark write is refused", async (status, rejected) => {
+    const storage = memoryWebStorage();
+    const shared = createBatchStore(() => storage);
+    const refuseMarks = { ...shared, mark: () => false };
+    const beacon = Promise.withResolvers<Reply>();
+    const owner = harness({ store: refuseMarks, beaconReplies: [beacon.promise], answers: ["pending"] });
+    const reports = [event(), event()];
+    for (const report of reports) owner.outbox.add(report);
+    owner.outbox.flushForUnload();
+    await owner.advance(BEACON_CONFIRM_MS);
+    expect(owner.posted()).toEqual(reports.map(({ uuid }) => uuid));
+
+    beacon.resolve({ status, retryAfter: "60", rejected });
+    await owner.advance(SEND_DEADLINE_MS);
+    const next = harness({ store: shared, at: START + BEACON_CONFIRM_MS + SEND_DEADLINE_MS });
+    next.outbox.replaySaved();
+    await next.advance(46_000);
+
+    expect(next.posts).toHaveLength(0);
+    await next.advance(1000);
+    expect(next.posted()).toEqual(status === 503 ? [reports[1].uuid] : []);
+    expect(storedUuids(shared)).toEqual([]);
+    expect(next.dropped).toEqual([]);
   });
 });
 
