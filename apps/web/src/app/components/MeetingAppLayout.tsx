@@ -6,7 +6,7 @@ import { useElementSize } from "../hooks/useElementSize";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useScrollWindow } from "../hooks/useScrollWindow";
 import { useSmartParticipantOrder } from "../hooks/useSmartParticipantOrder";
-import { usePublishStagePlacement } from "../hooks/useStagePlacementPublisher";
+import { usePublishStagePlacement } from "../hooks/usePublishStagePlacement";
 import { resolveContentStagePlacement } from "../lib/meeting-stage-layout";
 import type { Participant } from "../lib/types";
 import { isSystemUserId } from "../lib/utils";

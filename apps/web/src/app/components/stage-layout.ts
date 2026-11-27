@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import type { PublishedStagePlacement } from "../hooks/useStagePlacementPublisher";
+import type { PublishedStagePlacement } from "../hooks/usePublishStagePlacement";
 import type { StagePlacement } from "../lib/meeting-stage-layout";
 import type { StageRect } from "../lib/stage-overlay";
 import type { StageSplit } from "../lib/stage-split";

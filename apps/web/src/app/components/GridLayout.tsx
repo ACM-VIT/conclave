@@ -91,7 +91,7 @@ import {
 import {
   ROOM_TILING_METADATA_INTERVAL_MS,
   usePublishStagePlacement,
-} from "../hooks/useStagePlacementPublisher";
+} from "../hooks/usePublishStagePlacement";
 import { readVideoAspect, resolveTileAspect } from "../lib/tile-video-framing";
 
 interface GridLayoutProps {

@@ -47,7 +47,7 @@ A stage placement is the only source of what is on screen. Every layout that pla
 
 - `apps/web/src/app/lib/stage-overlay.ts`: `placeStageOverlay`, `tileControlsRect`, `overlayClearsSurface`
 - `apps/web/src/app/lib/meeting-stage-layout.ts`: `resolveMeetingStageLayout`, `resolveTiledGridPlacement`, `resolveContentStagePlacement`, `StageHints`
-- `apps/web/src/app/hooks/useStagePlacementPublisher.ts`: `usePublishStagePlacement`, `PublishedStagePlacement`
+- `apps/web/src/app/hooks/usePublishStagePlacement.ts`: `usePublishStagePlacement`, `PublishedStagePlacement`
 - `apps/web/src/app/hooks/useScrollWindow.ts`: `useScrollWindow`, `readScrollWindow`
 - `apps/web/src/app/components/stage-layout.ts`: the scaffolding that takes a `PublishedStage`
 - `apps/web/test/stage-placement.test.ts`: the placement rules across stage sizes, corners and scenarios
