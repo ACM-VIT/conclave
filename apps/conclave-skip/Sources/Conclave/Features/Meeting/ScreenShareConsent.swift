@@ -10,6 +10,11 @@ protocol ScreenShareConsentPort: AnyObject {
     func stopCapture()
 }
 
+@MainActor
+final class ScreenShareConsentHold {
+    var grant: Int?
+}
+
 #if SKIP
 @MainActor
 final class AndroidScreenShareConsent: ScreenShareConsentPort {

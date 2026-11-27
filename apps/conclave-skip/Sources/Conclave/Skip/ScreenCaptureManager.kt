@@ -34,6 +34,7 @@ object ScreenCaptureManager {
     private var captureLauncher: ActivityResultLauncher<Intent>? = null
     private var consent: ScreenShareGrant? = null
     private var nextGrantId = 0
+    private var requestGrantFloor = 0
     private var host: ScreenShareServiceHost = ScreenShareServiceHost.none
     internal var startServiceForTesting: ((Intent, Boolean) -> Unit)? = null
     private val stateLock = Any()
@@ -62,12 +63,12 @@ object ScreenCaptureManager {
         PipManager.restoreAutoEnterAfterExternalActivity()
         if (resultCode == Activity.RESULT_OK && data != null) {
             val selectedHost = synchronized(stateLock) {
-                if (!requestInFlight) {
-                    consent = null
-                    return
-                }
+                if (!requestInFlight) return
                 nextGrantId += 1
                 consent = ScreenShareGrant(nextGrantId, data)
+                serviceForegrounded = false
+                suppressNextServiceDestroyCallback = false
+                projectionRevokedNotified = false
                 host = ScreenShareServiceHostPolicy.host(
                     callServiceRunning = CallForegroundService.isRunning,
                     callServiceFixtureOnly = CallForegroundService.isFixtureOnly,
@@ -77,7 +78,7 @@ object ScreenCaptureManager {
             if (selectedHost == ScreenShareServiceHost.callService) startCallHost() else startCaptureService()
         } else {
             synchronized(stateLock) {
-                consent = null
+                if (!requestInFlight) return
                 lastFailure = ScreenShareFailurePolicy.androidFailure(
                     blockedByPolicy = false, launchFailed = false, consentGranted = false, serviceRefused = false,
                 )
@@ -189,10 +190,7 @@ object ScreenCaptureManager {
                 return@suspendCancellableCoroutine
             }
             requestInFlight = true
-            host = ScreenShareServiceHost.none
-            serviceForegrounded = false
-            suppressNextServiceDestroyCallback = false
-            projectionRevokedNotified = false
+            requestGrantFloor = nextGrantId
             lastFailure = ScreenShareFailure.none
             waiters.add(cont)
         }
@@ -201,11 +199,13 @@ object ScreenCaptureManager {
             synchronized(stateLock) {
                 if (waiters.remove(cont)) {
                     requestInFlight = false
-                    consent = null
-                    serviceForegrounded = false
-                    suppressNextServiceDestroyCallback = true
                     lastFailure = ScreenShareFailure.cancelled
-                    shouldStopService = true
+                    if ((consent?.id ?: 0) > requestGrantFloor) {
+                        consent = null
+                        serviceForegrounded = false
+                        suppressNextServiceDestroyCallback = true
+                        shouldStopService = true
+                    }
                 }
             }
             if (shouldStopService) {
@@ -322,19 +322,26 @@ object ScreenCaptureManager {
         consent?.intent
     }
 
-    fun stopCapture() = stopCapture(ownedGrant = null)
-
-    fun releaseConsent(grant: Int) = stopCapture(ownedGrant = grant)
-
-    private fun stopCapture(ownedGrant: Int?) {
+    fun stopCapture() {
         synchronized(stateLock) {
-            if (ownedGrant != null && consent?.id != ownedGrant) return
-            consent = null
-            serviceForegrounded = false
-            suppressNextServiceDestroyCallback = true
+            dropConsentLocked()
         }
         requestServiceStop()
         resumeAll(null)
+    }
+
+    fun releaseConsent(grant: Int) {
+        synchronized(stateLock) {
+            if (consent?.id != grant) return
+            dropConsentLocked()
+        }
+        requestServiceStop()
+    }
+
+    private fun dropConsentLocked() {
+        consent = null
+        serviceForegrounded = false
+        suppressNextServiceDestroyCallback = true
     }
 
     internal fun onHostStopped(stopped: ScreenShareServiceHost) {

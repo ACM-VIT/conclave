@@ -11434,17 +11434,17 @@ final class MeetingViewModel {
             return
         }
         Task { @MainActor in
+            let hold = ScreenShareConsentHold()
             await runConsentScreenShareToggle(
+                hold,
                 consent: consent,
                 toggleToken: toggleToken,
                 roomId: actionRoomId,
                 joinAttemptId: actionJoinAttemptId,
                 videoPolicyRevision: actionVideoPolicyRevision
             )
-            if screenShareToggleToken == toggleToken {
-                settleScreenSharePhase()
-                screenShareToggleToken = nil
-            }
+            await releaseScreenShareHold(hold, consent: consent, toggleToken: toggleToken)
+            finishScreenShareToggle(toggleToken)
             #if os(macOS) && !SKIP
             testLocalToggleEnded?("toggleScreenShare")
             #endif
@@ -11454,6 +11454,7 @@ final class MeetingViewModel {
 
     #if !canImport(UIKit) || SKIP
     private func runConsentScreenShareToggle(
+        _ hold: ScreenShareConsentHold,
         consent: any ScreenShareConsentPort,
         toggleToken: UUID,
         roomId actionRoomId: String,
@@ -11484,29 +11485,19 @@ final class MeetingViewModel {
                 joinAttemptId: actionJoinAttemptId
             )
         }
-        let grant = await consent.requestConsent()
+        hold.grant = await consent.requestConsent()
 
-        let consentFailure = grant == nil ? consent.lastConsentFailure() : ScreenShareFailure.none
+        let consentFailure = hold.grant == nil ? consent.lastConsentFailure() : ScreenShareFailure.none
         guard screenShareToggleToken == toggleToken,
               isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
         guard actionVideoPolicyRevision == videoPublishingPolicyRevision,
-              !state.isAudioOnlyMode else {
-            consent.onProjectionRevoked = nil
-            if let grant {
-                consent.releaseConsent(grant)
-            }
-            return
-        }
-        guard let grant else {
+              !state.isAudioOnlyMode else { return }
+        guard let grant = hold.grant else {
             consent.onProjectionRevoked = nil
             reportScreenShareFailure(consentFailure)
             return
         }
-        guard consent.isConsentActive(grant) else {
-            consent.onProjectionRevoked = nil
-            consent.releaseConsent(grant)
-            return
-        }
+        guard consent.isConsentActive(grant) else { return }
         publishScreenShare(ScreenSharePhasePolicy.starting(screenShare))
         do {
             try await webRTCClient.startScreenSharing(consentGrant: grant)
@@ -11525,15 +11516,34 @@ final class MeetingViewModel {
               isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
         guard actionVideoPolicyRevision == videoPublishingPolicyRevision,
               !state.isAudioOnlyMode,
-              consent.isConsentActive(grant) else {
-            consent.onProjectionRevoked = nil
-            await webRTCClient.closeLocalScreenProducer(consentGrant: grant)
-            return
-        }
+              consent.isConsentActive(grant) else { return }
+        hold.grant = nil
         state.isScreenSharing = true
         state.activeScreenShareUserId = state.userId
         publishScreenShare(ScreenSharePhasePolicy.live(screenShare, isSharingDeviceAudio: false))
         debugLog("[Meeting] Screen sharing started")
+    }
+
+    private func releaseScreenShareHold(
+        _ hold: ScreenShareConsentHold,
+        consent: any ScreenShareConsentPort,
+        toggleToken: UUID
+    ) async {
+        guard let grant = hold.grant else { return }
+        hold.grant = nil
+        if screenShareToggleToken == toggleToken {
+            consent.onProjectionRevoked = nil
+        }
+        await webRTCClient.closeLocalScreenProducer(consentGrant: grant)
+        consent.releaseConsent(grant)
+    }
+
+    private func finishScreenShareToggle(_ toggleToken: UUID) {
+        guard screenShareToggleToken == toggleToken || screenShareToggleToken == nil else { return }
+        settleScreenSharePhase()
+        if screenShareToggleToken != nil {
+            screenShareToggleToken = nil
+        }
     }
     #endif
 
