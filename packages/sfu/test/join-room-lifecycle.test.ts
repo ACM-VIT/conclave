@@ -16,7 +16,7 @@ import { registerDisconnectHandlers } from "../server/socket/handlers/disconnect
 import { registerJoinRoomHandler } from "../server/socket/handlers/joinRoom.js";
 import { registerTransportHandlers } from "../server/socket/handlers/transportHandlers.js";
 import { registerWebinarHandlers } from "../server/socket/handlers/webinarHandlers.js";
-import { forceCloseRoom, getOrCreateRoomWithOrigin, writeSharedRoomState } from "../server/rooms.js";
+import { ROOM_WRITE_COMMIT_MS, forceCloseRoom, getOrCreateRoomWithOrigin, writeSharedRoomState } from "../server/rooms.js";
 import { createSfuState, type SfuState } from "../server/state.js";
 import { advanceScheduledWebinars } from "../server/scheduledWebinarScheduler.js";
 import { getOrCreateWebinarRoomConfig, setCustomWebinarLinkSlug } from "../server/webinar.js";
@@ -522,6 +522,49 @@ describe("shared room write tracking", () => {
     const opening = getOrCreateRoomWithOrigin(state, "conclave", "room");
     return { state, opening };
   };
+
+  it("waits for prior room writes before publishing a replacement on the same channel", async () => {
+    const { state, opening } = open();
+    const { room } = await opening;
+    let finish!: (landed: boolean) => void;
+    const pending = new Promise<boolean>((resolve) => { finish = resolve; });
+    const previous = writeSharedRoomState(state, room, "final room write", () => pending);
+    expect(forceCloseRoom(state, room)).toBe(true);
+
+    const replacement = getOrCreateRoomWithOrigin(state, "conclave", "room");
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(state.rooms.has(room.channelId)).toBe(false);
+    } finally {
+      finish(true);
+      await previous;
+      await replacement;
+    }
+    expect((await replacement).room).not.toBe(room);
+  });
+
+  it("lets a later opening retry when preceding writes outlast its deadline", async () => {
+    const { state, opening } = open();
+    const { room } = await opening;
+    vi.useFakeTimers();
+    let finish!: (landed: boolean) => void;
+    const pending = new Promise<boolean>((resolve) => { finish = resolve; });
+    const previous = writeSharedRoomState(state, room, "final room write", () => pending);
+    expect(forceCloseRoom(state, room)).toBe(true);
+
+    const blocked = expect(getOrCreateRoomWithOrigin(state, "conclave", "room")).rejects.toThrow(
+      "the previous room's writes did not finish in time",
+    );
+    try {
+      await vi.advanceTimersByTimeAsync(ROOM_WRITE_COMMIT_MS);
+      await blocked;
+      expect(state.rooms.has(room.channelId)).toBe(false);
+    } finally {
+      finish(true);
+      await previous;
+    }
+    expect((await getOrCreateRoomWithOrigin(state, "conclave", "room")).created).toBe(true);
+  });
 
   it("tracks a channel only while it has an unfinished write", async () => {
     const { state, opening } = open();
