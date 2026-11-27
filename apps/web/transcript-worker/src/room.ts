@@ -1775,9 +1775,9 @@ export class TranscriptRoom {
             const connection = this.connectionFor(epoch);
             if (connection) return this.applyLineFailure(connection, itemId);
           },
-          onItemLost: (itemId) => {
+          onItemLost: (itemId, awaitingSpeechResult) => {
             const connection = this.connectionFor(epoch);
-            if (connection) this.loseLine(connection, itemId);
+            if (connection) this.loseLine(connection, itemId, awaitingSpeechResult);
           },
           onReady: () => {
             if (this.liveConnection?.epoch === epoch) this.flushToLive();
@@ -2103,10 +2103,16 @@ export class TranscriptRoom {
     }
   }
 
-  private loseLine(connection: ProviderConnection, providerItemId: string): void {
+  private loseLine(connection: ProviderConnection, providerItemId: string, awaitingSpeechResult: boolean): void {
     const line = this.namedLine(connection, providerItemId);
     if (!line || !isActive(line)) return;
-    if (!line.text.trim() && line.heard && !line.replayed && this.audio.owns(line.id)) {
+    if (
+      connection === this.liveConnection &&
+      !line.text.trim() &&
+      (line.heard || awaitingSpeechResult) &&
+      !line.replayed &&
+      this.audio.owns(line.id)
+    ) {
       for (const id of connection.providerIdsOf(line.id)) connection.providerToLine.delete(id);
       line.replayed = true;
       this.awaitReplacement(line);
@@ -2655,6 +2661,13 @@ export class TranscriptRoom {
     this.armLineTimer();
   }
 
+  private gapForUnplacedRun(run: AudioRun): TranscriptSegment {
+    const [first] = run.chunks;
+    const itemId = `unsent-${speakerKey(run.speaker)}-${first.order}`;
+    const segment = this.createSegment(itemId, run.speaker, { sequence: first.order, startMs: first.createdAt });
+    return { ...segment, text: TRANSCRIPTION_GAP_MARKER, isFinal: true, endMs: segment.updatedAt };
+  }
+
   private segmentsForSnapshot(): TranscriptSegment[] {
     const owed = new Map<string, TranscriptSegment>();
     for (const line of this.ledger.active()) {
@@ -2675,14 +2688,8 @@ export class TranscriptRoom {
     ].filter(runHeard);
     for (const run of unsent) {
       for (const chunk of run.chunks) chunk.savedUnsent = true;
-      const [first] = run.chunks;
-      const itemId = `unsent-${speakerKey(run.speaker)}-${first.order}`;
-      owed.set(itemId, {
-        ...this.createSegment(itemId, run.speaker, { sequence: first.order, startMs: first.createdAt }),
-        text: TRANSCRIPTION_GAP_MARKER,
-        isFinal: true,
-        endMs: Date.now(),
-      });
+      const gap = this.gapForUnplacedRun(run);
+      owed.set(gap.itemId, gap);
     }
     if (owed.size === 0) return this.segments;
     const saved = this.segments.map((segment) => owed.get(segment.itemId) ?? segment);
@@ -2793,6 +2800,10 @@ export class TranscriptRoom {
     this.cancelControllerReconnect();
     this.cancelSfuRelayRecovery();
     this.endEveryOwedLine("Transcription stopped for a takeover");
+    const unplaced = this.audio.all().filter(({ owner }) => owner.kind !== "line");
+    for (const run of runsOf(unplaced, true).filter(runHeard)) {
+      this.recordFinalSegment(this.gapForUnplacedRun(run), TRANSCRIPTION_GAP_MARKER);
+    }
     this.switchingProvider = false;
     this.closeTranscriptionProvider(false);
     this.responseApiKey = null;

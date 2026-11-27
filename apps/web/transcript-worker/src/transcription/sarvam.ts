@@ -486,6 +486,11 @@ class SarvamTurn {
     return this.window?.reported ?? false;
   }
 
+  get awaitingSpeechResult(): boolean {
+    const window = this.window;
+    return window !== null && window.starts > window.finals;
+  }
+
   get owing(): boolean {
     const window = this.window;
     return !this.closed && window !== null && window.reported && window.words.length > 0 && window.finals < window.starts;
@@ -757,7 +762,7 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession, SocketBudg
     else turn.close();
     this.forget(turn);
     if (key !== null && !turn.alive) this.backOff(key);
-    if (itemId && !reported) void this.callbacks.onItemLost?.(itemId);
+    if (itemId && !reported) void this.callbacks.onItemLost?.(itemId, turn.awaitingSpeechResult);
     this.wake();
   }
 

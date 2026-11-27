@@ -40,7 +40,7 @@ export type LiveTranscriptionCallbacks = {
   onDelta: (itemId: string, delta: string) => void;
   onFinal: (itemId: string, transcript: string) => void | Promise<void>;
   onItemFailed?: (itemId: string, message: string) => void | Promise<void>;
-  onItemLost?: (itemId: string) => void | Promise<void>;
+  onItemLost?: (itemId: string, awaitingSpeechResult: boolean) => void | Promise<void>;
   onReady?: () => void;
   onFailure: (message: string) => void | Promise<void>;
 };
