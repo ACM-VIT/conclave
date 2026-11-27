@@ -229,8 +229,8 @@ struct WatchTogetherOptOutTests {
         #expect(viewModel.state.activeAppId == (action == "close" ? nil : "wheel"))
         #expect(viewModel.state.appsRevision == 7)
     }
-    @Test(arguments: ["close", "present"])
-    func lostRendererRequiresAnExplicitDiscardBeforeTheSameStageChange(action: String) async throws {
+    @Test(arguments: ["close", "present"], [true, false])
+    func lostRendererRequiresAnExplicitDiscardBeforeTheSameStageChange(action: String, replacementSaves: Bool) async throws {
         let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "host@example.com#local-session", sessionId: "local-session")
         viewModel.state.roomId = "room-a"
@@ -250,13 +250,17 @@ struct WatchTogetherOptOutTests {
         relay.embedFailed(appSessionId: id, issue: .rendererGone, mount: mount)
         host.retry()
         relay.acceptPrimedSnapshot(AppsSyncResponse(syncMessage: Data(), stateVector: nil, awarenessUpdate: nil), appSessionId: id)
+        var replacementSaveAttempts = 0
         let replacementAttached = relay.attachBridge(appSessionId: id) { [weak relay] raw in
             guard let relay, let packet = AppBridgeCodec.jsonObject(raw),
                   packet["type"] as? String == "prepareToLeave", let requestId = packet["requestId"] as? String else { return }
-            _ = Self.post(relay, "ack", requestId: requestId, payload: ["ok": true], mount: relay.bridgeGeneration)
+            replacementSaveAttempts += 1
+            _ = Self.post(relay, "ack", requestId: requestId, payload: ["ok": replacementSaves], mount: relay.bridgeGeneration)
         }
         #expect(replacementAttached)
         #expect(Self.post(relay, "ready", requestId: "e-ready", payload: ["appId": "watch", "bundleVersion": "1.1.0"],
+                          mount: relay.bridgeGeneration) == .none)
+        #expect(Self.post(relay, "editsPending", requestId: "replacement-edit", payload: [:],
                           mount: relay.bridgeGeneration) == .none)
         let perform = {
             if action == "close" { viewModel.closeActiveApp() }
@@ -279,7 +283,9 @@ struct WatchTogetherOptOutTests {
         #expect(viewModel.state.activeAppId == "watch")
         host.resolveStageDiscardPrompt(id: confirmed, confirmed: true)
         await settle { !viewModel.state.isAppsActionInFlight }
-        #expect(viewModel.state.activeAppId == (action == "close" ? nil : "wheel"))
+        #expect(replacementSaveAttempts == 1)
+        let expectedApp = replacementSaves ? (action == "close" ? nil : "wheel") : "watch"
+        #expect(viewModel.state.activeAppId == expectedApp)
         #expect(viewModel.state.appsRevision == 7)
     }
     #endif

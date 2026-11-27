@@ -5,6 +5,7 @@ import { createAppDocumentEngine, type FromWorker } from "../server/apps/documen
 import {
   createAppDocumentPool,
   RESIDENT_OVERHEAD_BYTES,
+  type AppDocument,
   type AppDocumentPool,
   type AppDocumentPoolOptions,
 } from "../server/apps/documents/pool.js";
@@ -155,6 +156,13 @@ describe("current Wheel document contract", () => {
   it("rehydrates a retained Wheel document after worker eviction but not after room teardown", async () => {
     const fixture = createFixture();
     const pool = createPool({ residentBytes: RESIDENT_OVERHEAD_BYTES, workerUrl: STALLING_WORKER, workerData: fixture.workerData });
+    const workerDocuments: AppDocument[] = [];
+    const openDocument = pool.open;
+    vi.spyOn(pool, "open").mockImplementation(() => {
+      const handle = openDocument();
+      workerDocuments.push(handle);
+      return handle;
+    });
     const room = inRoom(pool, "retained-wheel", { appId: "wheel" });
     const legacy = new Y.Doc();
     cleanups.push(() => legacy.destroy());
@@ -176,8 +184,11 @@ describe("current Wheel document contract", () => {
     expect(cold.getArray("wheel.entries").toArray()).toEqual([]);
 
     room.room.close();
-    await pool.close();
-    const restarted = inRoom(createPool(), "retained-wheel", { appId: "wheel" });
+    const [retained] = workerDocuments;
+    expect(retained).toBeDefined();
+    expect(await retained.sync(Y.encodeStateVector(cold))).toEqual({ ok: false, reason: "closed" });
+    expect(room.room.apps.snapshot()).toMatchObject({ activeAppId: null, savedAppIds: [] });
+    const restarted = inRoom(pool, "retained-wheel", { appId: "wheel" });
     await restarted.open();
     const { doc: fresh } = await restarted.joinDocument();
     cleanups.push(() => fresh.destroy());
