@@ -30,6 +30,8 @@ export type FittedLabels = {
   labels: (FittedLabel | null)[];
 };
 
+export type SliceRow = number | null;
+
 const ELLIPSIS = "…";
 const THICKNESS = 1.05;
 const EDGE_GAP = 0.6;
@@ -121,12 +123,13 @@ const largestUprightSize = (unitWidth: number, geometry: LabelGeometry): number 
 };
 
 const numberedLabel = (
-  index: number,
+  row: SliceRow,
   fontSize: number,
   geometry: LabelGeometry,
   measure: MeasureText
 ): FittedLabel | null => {
-  const text = String(index + 1);
+  if (row === null) return null;
+  const text = String(row);
   const unitWidth = measure(text);
   if (fontSize > largestUprightSize(unitWidth, geometry)) return null;
   return {
@@ -142,6 +145,7 @@ const fullName = (label: string, width: number, limit: number): FittedLabel | nu
 
 const fitAtSize = (
   labels: string[],
+  rows: readonly SliceRow[],
   fontSize: number,
   geometry: LabelGeometry,
   measure: MeasureText
@@ -150,9 +154,14 @@ const fitAtSize = (
   return labels.map(
     (label, index) =>
       fullName(label, measure(label) * fontSize, limit) ??
-      numberedLabel(index, fontSize, geometry, measure)
+      numberedLabel(rows[index], fontSize, geometry, measure)
   );
 };
+
+const everyListedSliceLabelled = (labels: (FittedLabel | null)[], rows: readonly SliceRow[]): boolean =>
+  labels.every((label, index) => label !== null || rows[index] === null);
+
+const listedRows = (rows: readonly SliceRow[]): number[] => rows.flatMap((row) => (row === null ? [] : [row]));
 
 const fallbackAllowance = (count: number): number => Math.max(1, Math.floor(count / 4));
 
@@ -162,26 +171,26 @@ const fallbackCount = (labels: (FittedLabel | null)[]): number =>
 const sizeStep = (size: number): number => Math.floor(size * 20) / 20;
 
 const numberEverySlice = (
-  count: number,
+  rows: readonly SliceRow[],
   geometry: LabelGeometry,
   measure: MeasureText,
   minFontSize: number
 ): FittedLabels | null => {
-  const indexes = Array.from({ length: count }, (_, index) => index);
   const needed = Math.min(
     geometry.maxFontSize,
-    ...indexes.map((index) => largestUprightSize(measure(String(index + 1)), geometry))
+    ...listedRows(rows).map((row) => largestUprightSize(measure(String(row)), geometry))
   );
   if (!(needed >= minFontSize)) return null;
   const fontSize = Math.max(minFontSize, sizeStep(needed));
-  const labels = indexes.map((index) => numberedLabel(index, fontSize, geometry, measure));
-  return labels.every((label) => label !== null) ? { fontSize, labels } : null;
+  const labels = rows.map((row) => numberedLabel(row, fontSize, geometry, measure));
+  return everyListedSliceLabelled(labels, rows) ? { fontSize, labels } : null;
 };
 
 export const fitWheelLabels = (
   labels: string[],
   geometry: LabelGeometry,
-  measure: MeasureText
+  measure: MeasureText,
+  rows: readonly SliceRow[] = labels.map((_, index) => index + 1)
 ): FittedLabels => {
   if (labels.length === 0) return { fontSize: geometry.maxFontSize, labels: [] };
   const hidden = (fontSize: number): FittedLabels => ({
@@ -201,24 +210,24 @@ export const fitWheelLabels = (
   const everyName = (): FittedLabels | null => {
     if (!(sizes[0] >= minFontSize)) return null;
     const smallest = Math.max(minFontSize, sizeStep(Math.min(geometry.maxFontSize, sizes[0])));
-    const names = fitAtSize(labels, smallest, geometry, measure);
+    const names = fitAtSize(labels, rows, smallest, geometry, measure);
     return names.every((label) => label !== null && !label.numbered) ? { fontSize: smallest, labels: names } : null;
   };
   const numbered = (): FittedLabels =>
-    everyName() ?? numberEverySlice(labels.length, geometry, measure, minFontSize) ?? hidden(fontSize);
-  const fitted = fitAtSize(labels, fontSize, geometry, measure);
+    everyName() ?? numberEverySlice(rows, geometry, measure, minFontSize) ?? hidden(fontSize);
+  const fitted = fitAtSize(labels, rows, fontSize, geometry, measure);
   if (fallbackCount(fitted) > fallbackAllowance(labels.length)) return numbered();
-  if (fitted.every((label) => label !== null)) return { fontSize, labels: fitted };
+  if (everyListedSliceLabelled(fitted, rows)) return { fontSize, labels: fitted };
   const needed = Math.min(
     fontSize,
-    ...fitted.flatMap((label, index) =>
-      label ? [] : [largestUprightSize(measure(String(index + 1)), geometry)]
+    ...listedRows(rows.filter((_, index) => fitted[index] === null)).map((row) =>
+      largestUprightSize(measure(String(row)), geometry)
     )
   );
   if (needed < minFontSize) return everyName() ?? hidden(fontSize);
   const smaller = Math.max(minFontSize, sizeStep(needed));
-  const refitted = fitAtSize(labels, smaller, geometry, measure);
-  return refitted.every((label) => label !== null)
+  const refitted = fitAtSize(labels, rows, smaller, geometry, measure);
+  return everyListedSliceLabelled(refitted, rows)
     ? { fontSize: smaller, labels: refitted }
     : numbered();
 };
@@ -261,11 +270,13 @@ export type SingleLabel = { text: string; numbered: boolean };
 export const fitSingleLabel = (
   label: string,
   wheelPx: number,
-  measure: MeasureText
+  measure: MeasureText,
+  row: SliceRow = 1
 ): SingleLabel | null => {
   if (!(wheelPx > 0) || !(SINGLE_LABEL_SIZE * pxPerUnitFor(wheelPx) >= MIN_LABEL_PX)) {
     return null;
   }
   const fitted = truncateToWidth(label, (text) => measure(text) * SINGLE_LABEL_SIZE, SINGLE_LABEL_WIDTH);
-  return fitted ? { text: fitted.text, numbered: false } : { text: "1", numbered: true };
+  if (fitted) return { text: fitted.text, numbered: false };
+  return row === null ? null : { text: String(row), numbered: true };
 };

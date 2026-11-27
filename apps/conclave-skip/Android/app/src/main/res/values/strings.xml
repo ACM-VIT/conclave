@@ -1296,6 +1296,10 @@
         <item quantity="one">%1$d not on the wheel</item>
         <item quantity="other">%1$d not on the wheel</item>
     </plurals>
+    <plurals name="app_wheel_waiting">
+        <item quantity="one">The wheel is full. %1$d more name is waiting for a place.</item>
+        <item quantity="other">The wheel is full. %1$d more names are waiting for a place.</item>
+    </plurals>
     <string name="br_detail">Show a website to everyone</string>
     <string name="br_err_empty">Enter a URL to continue.</string>
     <string name="br_err_invalid">Enter a valid URL.</string>

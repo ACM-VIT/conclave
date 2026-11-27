@@ -104,7 +104,9 @@ describe("host roster on join", () => {
       ...[{ roomId: nextRoom.id, sessionId: "a" }, ack] as never[]
     );
 
-    expect(ack).toHaveBeenCalledWith(expect.objectContaining({ roomId: nextRoom.id, status: "joined" }));
+    expect(ack).toHaveBeenCalledWith(
+      expect.objectContaining({ roomId: nextRoom.id, status: "joined", reportsSenderPacketCounts: true }),
+    );
     expect(oldRoomEvents).toHaveBeenCalledWith("userLeft", { roomId: oldRoom.id, userId: "alice#a" });
     expect(oldRoomEvents).toHaveBeenCalledWith("hostChanged", { roomId: oldRoom.id, hostUserId: "bob#b" });
     expect(oldRoomEvents).toHaveBeenCalledWith("adminUsersChanged", { roomId: oldRoom.id, hostUserIds: ["bob#b"] });

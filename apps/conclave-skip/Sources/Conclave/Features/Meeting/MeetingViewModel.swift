@@ -692,6 +692,11 @@ final class MeetingViewModel {
 
     private var localMuteIntentRevision = 0
     @ObservationIgnored var micTestAudio: any MicTestAudioDriver = MicTestAudio()
+    #if SKIP
+    @ObservationIgnored var screenShareConsent: (any ScreenShareConsentPort)? = AndroidScreenShareConsent()
+    #else
+    @ObservationIgnored var screenShareConsent: (any ScreenShareConsentPort)? = nil
+    #endif
     @ObservationIgnored private var micReplay = MicReplaySession()
     @ObservationIgnored private var micReplayTask: Task<Void, Never>?
     @ObservationIgnored private var micReplayPauseToken: UUID?
@@ -727,7 +732,13 @@ final class MeetingViewModel {
     private var cameraSwitchToken: UUID? {
         didSet { requestStageRefresh(); requestControlsRefresh() }
     }
-    private var isCameraSwitchInFlight: Bool { cameraSwitchToken != nil }
+    private var isCameraSwitchInFlight: Bool {
+        #if SKIP
+        return cameraSwitchToken != nil || webRTCClient.isCameraSwitchInFlight
+        #else
+        return cameraSwitchToken != nil
+        #endif
+    }
 
     private var lifecycleRefreshTracker = LifecycleRefreshTracker()
 
@@ -745,8 +756,10 @@ final class MeetingViewModel {
 
     private(set) var systemDataSaverOn = false
 
+    #if !SKIP
     private var settingsCameraCapability = CameraCaptureCapability.unknown
     private var settingsCameraCapabilityFacing = ""
+    #endif
     private var networkMonitorReportsOffline = false
     private var networkQualityHint: ConnectionQuality = .unknown
     private var publishConnectionQuality: ConnectionQuality = .unknown
@@ -2814,6 +2827,18 @@ final class MeetingViewModel {
                 )
             }
         }
+
+        #if SKIP
+        webRTCClient.onTeardownStuck = { kind in
+            CallDiagnostics.shared.record(code: "media.teardownStuck." + kind)
+        }
+        webRTCClient.onCameraFacingsChanged = { [weak self] in
+            self?.publishLocalCameraFacing()
+            self?.requestStageRefresh()
+            self?.requestControlsRefresh()
+            self?.requestSettingsRefresh()
+        }
+        #endif
 
         webRTCClient.onCallAudioRouteChanged = { [weak self] in
             Task { @MainActor in
@@ -6499,9 +6524,9 @@ final class MeetingViewModel {
         ScreenCaptureManager.shared.onBroadcastStopped = nil
         await ScreenCaptureManager.shared.stopCapture()
         #endif
-        #if SKIP
-        ScreenCaptureManager.onProjectionRevoked = nil
-        ScreenCaptureManager.stopCapture()
+        #if !canImport(UIKit) || SKIP
+        screenShareConsent?.onProjectionRevoked = nil
+        screenShareConsent?.stopCapture()
         #endif
     }
 
@@ -10698,9 +10723,9 @@ final class MeetingViewModel {
         ScreenCaptureManager.shared.onCapturePhaseChanged = nil
         await ScreenCaptureManager.shared.stopCapture()
         #endif
-        #if SKIP
-        ScreenCaptureManager.onProjectionRevoked = nil
-        ScreenCaptureManager.stopCapture()
+        #if !canImport(UIKit) || SKIP
+        screenShareConsent?.onProjectionRevoked = nil
+        screenShareConsent?.stopCapture()
         #endif
         await webRTCClient.cleanup(notifyLocalState: notifyLocalState)
         webRTCJoinAttemptId = nil
@@ -11410,121 +11435,138 @@ final class MeetingViewModel {
                 debugLog(isCaptureCancelled ? "[Meeting] Screen sharing cancelled" : "[Meeting] Screen sharing error: \(error)")
             }
         }
-        #elseif SKIP
-
-        Task { @MainActor in
-            defer {
-                if screenShareToggleToken == toggleToken {
-                    settleScreenSharePhase()
-                    screenShareToggleToken = nil
-                }
-            }
-            guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
-            if state.isScreenSharing {
-                publishScreenShare(ScreenSharePhasePolicy.stopping(screenShare))
-                ScreenCaptureManager.onProjectionRevoked = nil
-                ScreenCaptureManager.stopCapture()
-                await webRTCClient.closeLocalScreenProducer()
-                guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
-                state.isScreenSharing = false
-                clearLocalActiveScreenShareIfNeeded()
-                publishScreenShare(ScreenSharePhasePolicy.ended(screenShare, failure: ScreenShareFailure.none,
-                                                                stopSource: ScreenShareStopSource.person))
-                debugLog("[Meeting] Screen sharing stopped")
-            } else {
-                publishScreenShare(ScreenSharePhasePolicy.began(screenShare))
-
-                ScreenCaptureManager.onProjectionRevoked = { [weak self] in
-                    self?.handleScreenShareEndedExternally(
-                        roomId: actionRoomId,
-                        joinAttemptId: actionJoinAttemptId
-                    )
-                }
-                let granted = await ScreenCaptureManager.requestCapture()
-
-                let consentFailure = granted ? ScreenShareFailure.none : ScreenCaptureManager.lastStartFailure()
-                guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else {
-                    if canOrphanedScreenShareToggleStopCapture() {
-                        ScreenCaptureManager.onProjectionRevoked = nil
-                        if granted {
-                            ScreenCaptureManager.stopCapture()
-                        }
-                    }
-                    return
-                }
-                guard actionVideoPolicyRevision == videoPublishingPolicyRevision,
-                      !state.isAudioOnlyMode else {
-                    ScreenCaptureManager.onProjectionRevoked = nil
-                    if granted {
-                        ScreenCaptureManager.stopCapture()
-                    }
-                    return
-                }
-                if granted {
-                    do {
-                        guard ScreenCaptureManager.isCaptureActive() else {
-                            ScreenCaptureManager.onProjectionRevoked = nil
-                            ScreenCaptureManager.stopCapture()
-                            return
-                        }
-                        publishScreenShare(ScreenSharePhasePolicy.starting(screenShare))
-                        try await webRTCClient.startScreenSharing()
-                        let isCurrentCallAfterStart = isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId)
-                        guard isCurrentCallAfterStart,
-                              actionVideoPolicyRevision == videoPublishingPolicyRevision,
-                              !state.isAudioOnlyMode,
-                              ScreenCaptureManager.isCaptureActive() else {
-                            guard isCurrentCallAfterStart || canOrphanedScreenShareToggleStopCapture() else { return }
-                            ScreenCaptureManager.onProjectionRevoked = nil
-                            ScreenCaptureManager.stopCapture()
-                            if isCurrentCallAfterStart {
-                                await webRTCClient.closeLocalScreenProducer()
-                            } else {
-                                await webRTCClient.stopScreenSharing()
-                            }
-                            return
-                        }
-                        state.isScreenSharing = true
-                        state.activeScreenShareUserId = state.userId
-                        publishScreenShare(ScreenSharePhasePolicy.live(screenShare, isSharingDeviceAudio: false))
-                        debugLog("[Meeting] Screen sharing started")
-                    } catch {
-                        if isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) {
-                            ScreenCaptureManager.onProjectionRevoked = nil
-                            ScreenCaptureManager.stopCapture()
-                            await webRTCClient.closeLocalScreenProducer()
-                            state.isScreenSharing = false
-                            clearLocalActiveScreenShareIfNeeded()
-                            reportScreenShareFailure(ScreenShareFailure.producerFailed)
-                        }
-                        debugLog("[Meeting] Screen sharing error: \(error)")
-                    }
-                }
-
-                if !granted {
-                    ScreenCaptureManager.onProjectionRevoked = nil
-
-                    reportScreenShareFailure(consentFailure)
-                }
-            }
-        }
         #else
-
-        Task { @MainActor in
-            defer {
-                if screenShareToggleToken == toggleToken {
-                    screenShareToggleToken = nil
+        guard let consent = screenShareConsent else {
+            #if os(macOS) && !SKIP
+            Task { @MainActor in
+                defer {
+                    if screenShareToggleToken == toggleToken {
+                        screenShareToggleToken = nil
+                    }
+                    testLocalToggleEnded?("toggleScreenShare")
                 }
-                #if os(macOS) && !SKIP
-                testLocalToggleEnded?("toggleScreenShare")
-                #endif
+                guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
+                await webRTCClient.testUnsupportedScreenShare()
+                debugLog("[Meeting] Screen sharing not supported on this platform")
             }
-            guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
-            await webRTCClient.testUnsupportedScreenShare()
-            debugLog("[Meeting] Screen sharing not supported on this platform")
+            #else
+            screenShareToggleToken = nil
+            #endif
+            return
+        }
+        Task { @MainActor in
+            let hold = ScreenShareConsentHold()
+            await runConsentScreenShareToggle(
+                hold,
+                consent: consent,
+                toggleToken: toggleToken,
+                roomId: actionRoomId,
+                joinAttemptId: actionJoinAttemptId,
+                videoPolicyRevision: actionVideoPolicyRevision
+            )
+            await releaseScreenShareHold(hold, consent: consent, toggleToken: toggleToken)
+            finishScreenShareToggle(toggleToken)
+            #if os(macOS) && !SKIP
+            testLocalToggleEnded?("toggleScreenShare")
+            #endif
         }
         #endif
     }
+
+    #if !canImport(UIKit) || SKIP
+    private func runConsentScreenShareToggle(
+        _ hold: ScreenShareConsentHold,
+        consent: any ScreenShareConsentPort,
+        toggleToken: UUID,
+        roomId actionRoomId: String,
+        joinAttemptId actionJoinAttemptId: UUID?,
+        videoPolicyRevision actionVideoPolicyRevision: Int
+    ) async {
+        guard screenShareToggleToken == toggleToken,
+              isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
+        if state.isScreenSharing {
+            publishScreenShare(ScreenSharePhasePolicy.stopping(screenShare))
+            consent.onProjectionRevoked = nil
+            consent.stopCapture()
+            await webRTCClient.closeLocalScreenProducer()
+            guard screenShareToggleToken == toggleToken,
+                  isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
+            state.isScreenSharing = false
+            clearLocalActiveScreenShareIfNeeded()
+            publishScreenShare(ScreenSharePhasePolicy.ended(screenShare, failure: ScreenShareFailure.none,
+                                                            stopSource: ScreenShareStopSource.person))
+            debugLog("[Meeting] Screen sharing stopped")
+            return
+        }
+        publishScreenShare(ScreenSharePhasePolicy.began(screenShare))
+
+        consent.onProjectionRevoked = { [weak self] in
+            self?.handleScreenShareEndedExternally(
+                roomId: actionRoomId,
+                joinAttemptId: actionJoinAttemptId
+            )
+        }
+        hold.grant = await consent.requestConsent()
+
+        let consentFailure = hold.grant == nil ? consent.lastConsentFailure() : ScreenShareFailure.none
+        guard screenShareToggleToken == toggleToken,
+              isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
+        guard actionVideoPolicyRevision == videoPublishingPolicyRevision,
+              !state.isAudioOnlyMode else { return }
+        guard let grant = hold.grant else {
+            consent.onProjectionRevoked = nil
+            reportScreenShareFailure(consentFailure)
+            return
+        }
+        guard consent.isConsentActive(grant) else { return }
+        publishScreenShare(ScreenSharePhasePolicy.starting(screenShare))
+        do {
+            try await webRTCClient.startScreenSharing(consentGrant: grant)
+        } catch {
+            if screenShareToggleToken == toggleToken,
+               isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) {
+                consent.onProjectionRevoked = nil
+                state.isScreenSharing = false
+                clearLocalActiveScreenShareIfNeeded()
+                reportScreenShareFailure(ScreenShareFailure.producerFailed)
+            }
+            debugLog("[Meeting] Screen sharing error: \(error)")
+            return
+        }
+        guard screenShareToggleToken == toggleToken,
+              isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
+        guard actionVideoPolicyRevision == videoPublishingPolicyRevision,
+              !state.isAudioOnlyMode,
+              consent.isConsentActive(grant) else { return }
+        hold.grant = nil
+        state.isScreenSharing = true
+        state.activeScreenShareUserId = state.userId
+        publishScreenShare(ScreenSharePhasePolicy.live(screenShare, isSharingDeviceAudio: false))
+        debugLog("[Meeting] Screen sharing started")
+    }
+
+    private func releaseScreenShareHold(
+        _ hold: ScreenShareConsentHold,
+        consent: any ScreenShareConsentPort,
+        toggleToken: UUID
+    ) async {
+        guard let grant = hold.grant else { return }
+        hold.grant = nil
+        if screenShareToggleToken == toggleToken {
+            consent.onProjectionRevoked = nil
+        }
+        await webRTCClient.closeLocalScreenProducer(consentGrant: grant)
+        consent.releaseConsent(grant)
+    }
+
+    private func finishScreenShareToggle(_ toggleToken: UUID) {
+        guard screenShareToggleToken == toggleToken || screenShareToggleToken == nil else { return }
+        settleScreenSharePhase()
+        if screenShareToggleToken != nil {
+            screenShareToggleToken = nil
+        }
+    }
+    #endif
 
     private func canOrphanedScreenShareToggleStopCapture() -> Bool {
         screenShareToggleToken == nil && !state.isScreenSharing
@@ -11598,12 +11640,12 @@ final class MeetingViewModel {
         }
     }
     #endif
-    #if SKIP
+    #if !canImport(UIKit) || SKIP
     private func handleScreenShareEndedExternally(roomId: String, joinAttemptId: UUID?) {
         guard isCurrentJoinedCall(roomId: roomId, joinAttemptId: joinAttemptId) else { return }
         Task { @MainActor in
             guard isCurrentJoinedCall(roomId: roomId, joinAttemptId: joinAttemptId) else { return }
-            ScreenCaptureManager.onProjectionRevoked = nil
+            screenShareConsent?.onProjectionRevoked = nil
             await webRTCClient.closeLocalScreenProducer()
             guard isCurrentJoinedCall(roomId: roomId, joinAttemptId: joinAttemptId) else { return }
             state.isScreenSharing = false
@@ -13233,6 +13275,7 @@ final class MeetingViewModel {
             hasSample: connectionLabelHasSample,
             statsFailed: ConnectionQualityLabelPolicy.statsFailed(hasSample: connectionLabelHasSample,
                                                                   consecutiveUnknownSamples: connectionUnknownSampleStreak))
+        let cameraCapability = settingsCameraCapabilityNow()
         return SettingsInputs.make(
             callSession: callSessionSerial,
             roomId: state.roomId,
@@ -13281,20 +13324,24 @@ final class MeetingViewModel {
             qualityCappedByHost: hostQualityCapped,
             systemDataSaverOn: systemDataSaverOn,
             canShareDeviceAudio: screenShare.canShareDeviceAudio,
-            cameraMaxHeight: settingsCameraCapabilityNow().maxHeight,
-            cameraMaxFrameRate: settingsCameraCapabilityNow().maxFrameRate,
+            cameraMaxHeight: cameraCapability.maxHeight,
+            cameraMaxFrameRate: cameraCapability.maxFrameRate,
 
             canExportDiagnostics: DiagnosticsExportPolicy.isOffered
         )
     }
 
     private func settingsCameraCapabilityNow() -> CameraCaptureCapability {
+        #if SKIP
+        return webRTCClient.cameraCaptureCapability()
+        #else
         let facing = state.localCameraFacing.rawValue
         if settingsCameraCapabilityFacing != facing {
             settingsCameraCapabilityFacing = facing
             settingsCameraCapability = webRTCClient.cameraCaptureCapability()
         }
         return settingsCameraCapability
+        #endif
     }
 
     func diagnosticsSensitiveValues() -> [String] {

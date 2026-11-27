@@ -1,10 +1,12 @@
 "use client";
 
-import { Hand, MicOff, Pin, PinOff } from "lucide-react";
+import { Hand, Pin, PinOff } from "lucide-react";
 import { memo, useEffect, useRef, type CSSProperties } from "react";
 import { Avatar } from "@conclave/ui-tokens/web";
-import { truncateDisplayName } from "../lib/utils";
+import { useElementSize } from "../hooks/useElementSize";
+import { computeTileChrome } from "../lib/tile-chrome";
 import GameTileOverlay from "./games/GameTileOverlay";
+import TileNameplate from "./TileNameplate";
 
 type LocalVideoTileTracking = {
   active: boolean;
@@ -25,7 +27,6 @@ function LocalVideoTile({
   tracking,
   cropPosition = null,
   videoObjectFit = "cover",
-  size = "rail",
 }: {
   stream: MediaStream | null;
   isCameraOff: boolean;
@@ -40,9 +41,11 @@ function LocalVideoTile({
   tracking?: LocalVideoTileTracking;
   cropPosition?: string | null;
   videoObjectFit?: "cover" | "contain";
-  size?: "rail" | "stage";
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const tileRef = useRef<HTMLDivElement>(null);
+  const tileSize = useElementSize(tileRef);
+  const { dense, avatarSize, avatarLift } = computeTileChrome(tileSize);
   const videoTrack = stream?.getVideoTracks()[0] ?? null;
 
   useEffect(() => {
@@ -75,7 +78,6 @@ function LocalVideoTile({
     };
   }, [isCameraOff, stream, videoTrack]);
 
-  const compact = size === "rail";
   const speakerHighlight = isActiveSpeaker ? "speaking" : "";
   const handRaisedHighlight = isHandRaised ? "!border-amber-400/60" : "";
   const videoStyle: CSSProperties | undefined = cropPosition
@@ -84,9 +86,8 @@ function LocalVideoTile({
 
   return (
     <div
-      className={`acm-video-tile group relative flex overflow-hidden bg-[#18181b] ${
-        compact ? "h-28 shrink-0" : "h-full w-full"
-      } ${speakerHighlight} ${handRaisedHighlight}`}
+      ref={tileRef}
+      className={`acm-video-tile group relative flex h-full w-full overflow-hidden bg-[#18181b] ${speakerHighlight} ${handRaisedHighlight}`}
     >
       <video
         ref={videoRef}
@@ -108,23 +109,31 @@ function LocalVideoTile({
           data-meet-local-camera-placeholder="true"
           className="absolute inset-0 flex items-center justify-center bg-[#18181b]"
         >
-          <Avatar
-            className={compact ? "text-xl" : "text-3xl"}
-            id={userEmail}
-            name={displayName || userEmail}
-            size={compact ? 48 : 80}
-          />
+          <div
+            style={
+              avatarLift > 0
+                ? { transform: `translateY(-${avatarLift}px)` }
+                : undefined
+            }
+          >
+            <Avatar
+              className={dense ? "text-lg" : "text-3xl"}
+              id={userEmail}
+              name={displayName || userEmail}
+              size={avatarSize}
+            />
+          </div>
         </div>
       ) : null}
       {isHandRaised ? (
         <div
           className={`absolute flex items-center justify-center rounded-full border border-amber-400/40 bg-amber-500/20 text-amber-300 ${
-            compact ? "left-2 top-2 h-7 w-7" : "left-3 top-3 h-8 w-8"
+            dense ? "left-2 top-2 h-7 w-7" : "left-3 top-3 h-8 w-8"
           }`}
           title="Hand raised"
           aria-label="Hand raised"
         >
-          <Hand size={compact ? 16 : 18} strokeWidth={1.75} />
+          <Hand size={dense ? 16 : 18} strokeWidth={1.75} />
         </div>
       ) : null}
       {onTogglePin ? (
@@ -135,48 +144,27 @@ function LocalVideoTile({
             onTogglePin();
           }}
           className={`absolute rounded-full border border-[#fafafa]/10 bg-black/60 text-[#fafafa]/82 transition-[border-color,color,opacity] duration-[120ms] hover:border-[#F95F4A]/40 hover:text-[#fafafa] focus-visible:opacity-100 ${
-            compact ? "right-2 top-2 p-1.5" : "right-3 top-3 p-2"
+            dense ? "right-2 top-2 p-1.5" : "right-3 top-3 p-2"
           } ${isPinned ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
           title={isPinned ? "Unpin" : "Pin to spotlight"}
           aria-label={isPinned ? "Unpin" : "Pin to spotlight"}
           aria-pressed={isPinned}
         >
           {isPinned ? (
-            <PinOff className={compact ? "h-3.5 w-3.5" : "h-4 w-4"} />
+            <PinOff className={dense ? "h-3.5 w-3.5" : "h-4 w-4"} />
           ) : (
-            <Pin className={compact ? "h-3.5 w-3.5" : "h-4 w-4"} />
+            <Pin className={dense ? "h-3.5 w-3.5" : "h-4 w-4"} />
           )}
         </button>
       ) : null}
-      <div
-        className={`absolute flex max-w-[85%] items-center gap-1.5 rounded-full border border-[#fafafa]/10 bg-[#0a0a0b]/70 ${
-          compact ? "bottom-2 left-2 px-2.5 py-1" : "bottom-3 left-3 px-3 py-1.5"
-        }`}
-      >
-        <span
-          className={`truncate font-medium text-[#fafafa] ${
-            compact ? "text-[12.5px]" : "text-[13px]"
-          }`}
-        >
-          {truncateDisplayName(displayName, compact ? 18 : 24)}
-        </span>
-        <span className="text-[10.5px] font-medium text-[#F95F4A]">You</span>
-        {isActiveSpeaker && !isMuted ? (
-          <span className="acm-voice-activity" aria-label="Speaking">
-            <span />
-            <span />
-            <span />
-          </span>
-        ) : null}
-        {isMuted ? (
-          <MicOff
-            size={compact ? 13 : 14}
-            strokeWidth={1.75}
-            className="shrink-0 text-[#F95F4A]"
-          />
-        ) : null}
-      </div>
-      <GameTileOverlay compact={compact} />
+      <TileNameplate
+        name={displayName}
+        dense={dense}
+        isLocal
+        isMuted={isMuted}
+        isSpeaking={isActiveSpeaker && !isMuted}
+      />
+      <GameTileOverlay compact={dense} />
     </div>
   );
 }

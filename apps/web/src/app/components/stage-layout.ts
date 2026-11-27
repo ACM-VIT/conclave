@@ -1,11 +1,27 @@
-export const STAGE_SPLIT_CLASS =
-  "flex h-full w-full min-w-0 flex-col gap-3 sm:flex-row";
+import type { CSSProperties } from "react";
+import type { PublishedStagePlacement } from "../hooks/usePublishStagePlacement";
+import type { StagePlacement } from "../lib/meeting-stage-layout";
+import type { StageRect } from "../lib/stage-overlay";
+import type { StageSplit } from "../lib/stage-split";
 
-export const STAGE_RAIL_CLASS =
-  "flex h-32 w-full shrink-0 flex-row gap-3 overflow-x-auto pb-1 sm:h-auto sm:w-[min(22vw,15rem)] sm:min-w-[10rem] sm:max-w-[15rem] sm:flex-col sm:overflow-x-visible sm:overflow-y-auto sm:pb-0 sm:pr-1";
+export type PublishedStage = PublishedStagePlacement<StagePlacement & { split: StageSplit }>;
 
-export const STAGE_RAIL_TILE_CLASS =
-  "relative h-full w-28 shrink-0 sm:h-28 sm:w-auto";
+export const stageSplitClass = ({ split }: PublishedStage) =>
+  `flex h-full w-full min-h-0 min-w-0 gap-3 ${split.mode === "stack" ? "flex-col" : "flex-row"}`;
 
-export const STAGE_RAIL_SHORT_LANDSCAPE_HIDDEN_CLASS =
-  "[@media(width<40rem)_and_(height<31.25rem)_and_(orientation:landscape)]:hidden";
+export const stageRailClass = ({ split }: PublishedStage) =>
+  split.mode === "stack"
+    ? "flex w-full shrink-0 flex-row gap-3 overflow-x-auto overflow-y-hidden pb-1"
+    : "flex shrink-0 flex-col gap-3 overflow-y-auto overflow-x-hidden";
+
+export const stageRailStyle = ({ split }: PublishedStage): CSSProperties | undefined =>
+  split.mode === "stack"
+    ? { height: split.railSize }
+    : split.mode === "side"
+      ? { width: split.railSize }
+      : undefined;
+
+export const stageRailTileClass = ({ split }: PublishedStage) =>
+  split.mode === "stack" ? "relative h-full w-28 shrink-0" : "relative h-28 w-full shrink-0";
+
+export const stageRectSize = ({ width, height }: StageRect): CSSProperties => ({ width, height });

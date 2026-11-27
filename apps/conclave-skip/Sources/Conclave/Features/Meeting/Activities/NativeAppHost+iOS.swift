@@ -761,6 +761,28 @@ struct AppPageUnavailable: View {
     }
 }
 
+struct AppWheelNotices: View {
+    let host: AppHostPresenter
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(host.wheelNotices, id: \.rawValue) { notice in
+                switch notice {
+                case .unconfirmed:
+                    Text(ConclaveStrings.text("Couldn’t confirm these names were added. Check the list before adding them again."))
+                        .accessibilityIdentifier("app.wheel.unconfirmed")
+                case .waiting:
+                    Text(ConclaveStrings.format("Wheel Waiting Names %lld", host.wheel.waitingNames))
+                        .accessibilityIdentifier("app.wheel.waiting")
+                case .full:
+                    Text(ConclaveStrings.text("The wheel is full."))
+                        .accessibilityIdentifier("app.wheel.full")
+                }
+            }
+        }
+    }
+}
+
 struct AppWheelPage: View {
     let host: AppHostPresenter
     @State private var confirmsClear = false
@@ -800,13 +822,13 @@ struct AppWheelPage: View {
                         .disabled(wheel.missingNames.isEmpty || wheel.isFull)
                         .accessibilityIdentifier("app.wheel.addEveryone")
                     } footer: {
-                        if wheel.isFull {
-                            Text(ConclaveStrings.text("The wheel is full."))
-                                .accessibilityIdentifier("app.wheel.full")
-                        } else if host.wheelDraft.isUnconfirmed {
-                            Text(ConclaveStrings.text("Couldn’t confirm these names were added. Check the list before adding them again."))
-                                .accessibilityIdentifier("app.wheel.unconfirmed")
-                        }
+                        AppWheelNotices(host: host)
+                    }
+                } else if !host.wheelNotices.isEmpty {
+                    Section {
+                        AppWheelNotices(host: host)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
                 }
                 Section {

@@ -9,7 +9,6 @@ import type { Subject } from "@conclave/apps-sdk/authority/server";
 import type { AuthorityLimits } from "./limits.js";
 
 type Receipt = {
-  subject: Subject;
   digest: string;
   outcome: AuthorityResult<Json>;
   expiresAt: number;
@@ -47,8 +46,8 @@ export const requestDigest = (action: string, input: unknown): string =>
  * refused outright, whether or not its receipt is still here.
  */
 export class ReceiptBook {
-  private readonly receipts = new Map<string, Receipt>();
-  private readonly perSubject = new Map<Subject, number>();
+  private readonly bySubject = new Map<Subject, Map<string, Receipt>>();
+  private count = 0;
   private lastSweepAt = 0;
 
   constructor(private readonly limits: AuthorityLimits) {}
@@ -64,6 +63,10 @@ export class ReceiptBook {
     return null;
   }
 
+  holds(subject: Subject, operation: OperationId): boolean {
+    return this.bySubject.get(subject)?.has(keyOf(operation)) === true;
+  }
+
   /**
    * The stored answer for this id, or a conflict when the id was first used
    * for a different request. Null when the id is new.
@@ -73,7 +76,7 @@ export class ReceiptBook {
     operation: OperationId,
     digest: string,
   ): AuthorityResult<Json> | null {
-    const receipt = this.receipts.get(this.keyOf(subject, operation));
+    const receipt = this.bySubject.get(subject)?.get(keyOf(operation));
     if (!receipt) return null;
     return receipt.digest === digest
       ? receipt.outcome
@@ -82,9 +85,10 @@ export class ReceiptBook {
 
   hasRoom(subject: Subject, now: number): boolean {
     if (now - this.lastSweepAt >= SWEEP_INTERVAL_MS) this.sweep(now);
+    else this.sweepSubject(subject, now);
     return (
-      this.receipts.size < this.limits.receiptsPerInstance &&
-      (this.perSubject.get(subject) ?? 0) < this.limits.receiptsPerSubject
+      this.count < this.limits.receiptsPerInstance &&
+      (this.bySubject.get(subject)?.size ?? 0) < this.limits.receiptsPerSubject
     );
   }
 
@@ -94,31 +98,75 @@ export class ReceiptBook {
     digest: string,
     outcome: AuthorityResult<Json>,
   ): void {
-    this.receipts.set(this.keyOf(subject, operation), {
-      subject,
+    let receipts = this.bySubject.get(subject);
+    if (!receipts) {
+      receipts = new Map();
+      this.bySubject.set(subject, receipts);
+    }
+    const key = keyOf(operation);
+    if (!receipts.has(key)) this.count += 1;
+    receipts.set(key, {
       digest,
       outcome,
       expiresAt: operation.issuedAtMs + this.limits.operationMaxAgeMs,
     });
-    this.perSubject.set(subject, (this.perSubject.get(subject) ?? 0) + 1);
   }
 
-  get size(): number {
-    return this.receipts.size;
+  mergeFits(merges: readonly { from: Subject; into: Subject }[], now: number): boolean {
+    const keys = new Map<Subject, Set<string>>();
+    const keysOf = (subject: Subject): Set<string> => {
+      let held = keys.get(subject);
+      if (!held) {
+        this.sweepSubject(subject, now);
+        held = new Set(this.bySubject.get(subject)?.keys() ?? []);
+        keys.set(subject, held);
+      }
+      return held;
+    };
+    for (const { from, into } of merges) {
+      const kept = keysOf(into);
+      for (const key of keysOf(from)) kept.add(key);
+      keys.set(from, new Set());
+      if (kept.size > this.limits.receiptsPerSubject) return false;
+    }
+    return true;
   }
 
-  private sweep(now: number): void {
-    this.lastSweepAt = now;
-    for (const [key, receipt] of this.receipts) {
-      if (receipt.expiresAt >= now) continue;
-      this.receipts.delete(key);
-      const held = (this.perSubject.get(receipt.subject) ?? 1) - 1;
-      if (held <= 0) this.perSubject.delete(receipt.subject);
-      else this.perSubject.set(receipt.subject, held);
+  merge(from: Subject, into: Subject): void {
+    const moving = this.bySubject.get(from);
+    if (!moving) return;
+    this.bySubject.delete(from);
+    const kept = this.bySubject.get(into);
+    if (!kept) {
+      this.bySubject.set(into, moving);
+      return;
+    }
+    for (const [key, receipt] of moving) {
+      if (kept.has(key)) this.count -= 1;
+      else kept.set(key, receipt);
     }
   }
 
-  private keyOf(subject: Subject, operation: OperationId): string {
-    return `${subject}\u0000${operation.issuedAtMs}\u0000${operation.nonce}`;
+  get size(): number {
+    return this.count;
+  }
+
+  sweep(now: number): void {
+    this.lastSweepAt = now;
+    for (const subject of [...this.bySubject.keys()]) this.sweepSubject(subject, now);
+  }
+
+  private sweepSubject(subject: Subject, now: number): void {
+    const receipts = this.bySubject.get(subject);
+    if (!receipts) return;
+    for (const [key, receipt] of receipts) {
+      if (receipt.expiresAt >= now) continue;
+      receipts.delete(key);
+      this.count -= 1;
+    }
+    if (receipts.size === 0) this.bySubject.delete(subject);
   }
 }
+
+const keyOf = (operation: OperationId): string =>
+  `${operation.issuedAtMs}\u0000${operation.nonce}`;

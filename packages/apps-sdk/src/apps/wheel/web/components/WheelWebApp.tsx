@@ -18,7 +18,7 @@ import {
   getRemoveWinnerOnDone,
   recordResult,
   removeEntryById,
-  replaceEntries,
+  reorderEntries,
   setRemoveWinnerOnDone,
   slotLabel,
   startSpin,
@@ -95,7 +95,7 @@ const readSoundPreference = (): boolean => {
 export function WheelWebApp() {
   const { doc, locked } = useAppDoc(APP_ID);
   const { user, isAdmin, isReadOnly, participants } = useApps();
-  const { entries, spin, history, removeWinnerOnDone } = useWheelDocState(doc);
+  const { entries, waitingCount, spin, history, removeWinnerOnDone } = useWheelDocState(doc);
 
   const canEdit = !isReadOnly && (!locked || Boolean(isAdmin));
   const reducedMotion = useReducedMotion();
@@ -267,7 +267,7 @@ export function WheelWebApp() {
       const j = Math.floor(Math.random() * (i + 1));
       [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
     }
-    replaceEntries(doc, shuffled);
+    reorderEntries(doc, shuffled);
   }, [doc, isLive]);
 
   const handleSort = useCallback(() => {
@@ -277,7 +277,7 @@ export function WheelWebApp() {
     const sorted = [...current].sort((a, b) =>
       a.label.localeCompare(b.label, undefined, { sensitivity: "base" })
     );
-    replaceEntries(doc, sorted);
+    reorderEntries(doc, sorted);
   }, [doc, isLive]);
 
   const winnerOnWheel = Boolean(
@@ -385,6 +385,7 @@ export function WheelWebApp() {
     >
       <WheelStage
         entries={frozen ? frozen.entries : entries}
+        listEntries={entries}
         spin={spin}
         canSpin={canEdit && entries.length >= 2 && (!frozen || showReveal)}
         sounds={soundsRef.current}
@@ -455,6 +456,7 @@ export function WheelWebApp() {
     <WheelPanel
       fill={roomy}
       entries={entries}
+      waitingCount={waitingCount}
       history={history}
       canEdit={canEdit}
       locked={locked}

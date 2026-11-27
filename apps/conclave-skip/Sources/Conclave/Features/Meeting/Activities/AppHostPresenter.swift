@@ -145,6 +145,7 @@ enum AppWheelLimits {
     static let results = 25
     static let name = 64
     static let pasteLines = 256
+    static let waiting = 999
 }
 
 enum AppWatchLimits {
@@ -196,6 +197,7 @@ struct WatchVideoModel: Equatable, Identifiable {
 struct AppEmbedAppStatus: Equatable {
     let kind: String
     let entries: [WheelEntryModel]
+    let waiting: Int
     let results: [WheelResultModel]
     let removeWinner: Bool
     let sounds: Bool
@@ -210,7 +212,7 @@ struct AppEmbedAppStatus: Equatable {
     let myRequestId: String
     let requestDeclined: Bool
 
-    static let empty = AppEmbedAppStatus(kind: "", entries: [], results: [], removeWinner: false, sounds: true, spinning: false,
+    static let empty = AppEmbedAppStatus(kind: "", entries: [], waiting: 0, results: [], removeWinner: false, sounds: true, spinning: false,
                                          winnerSpinId: "", winnerLabel: "", videoId: "", title: "", playback: "none", queue: [],
                                          requests: [], myRequestId: "", requestDeclined: false)
 }
@@ -253,8 +255,9 @@ enum AppEmbedAppCodec {
               let sounds = flag(object["sounds"], fallback: true),
               let spinning = flag(object["spinning"], fallback: false),
               let winnerSpinId = optionalIdentifier(object["winnerSpinId"]),
-              let winnerLabel = text(object["winnerLabel"], limit: AppWheelLimits.label, required: false) else { return nil }
-        return AppEmbedAppStatus(kind: "wheel", entries: entries, results: results, removeWinner: removeWinner, sounds: sounds,
+              let winnerLabel = text(object["winnerLabel"], limit: AppWheelLimits.label, required: false),
+              let waiting = count(object["waiting"], limit: AppWheelLimits.waiting) else { return nil }
+        return AppEmbedAppStatus(kind: "wheel", entries: entries, waiting: waiting, results: results, removeWinner: removeWinner, sounds: sounds,
                                  spinning: spinning, winnerSpinId: winnerSpinId, winnerLabel: winnerLabel, videoId: "", title: "",
                                  playback: "none", queue: [], requests: [], myRequestId: "", requestDeclined: false)
     }
@@ -292,7 +295,7 @@ enum AppEmbedAppCodec {
         }
         guard let myRequestId = optionalIdentifier(object["myRequestId"]),
               let declined = flag(object["requestDeclined"], fallback: false) else { return nil }
-        return AppEmbedAppStatus(kind: "watch", entries: [], results: [], removeWinner: false, sounds: true, spinning: false,
+        return AppEmbedAppStatus(kind: "watch", entries: [], waiting: 0, results: [], removeWinner: false, sounds: true, spinning: false,
                                  winnerSpinId: "", winnerLabel: "", videoId: videoId, title: title, playback: playback, queue: queue,
                                  requests: requests, myRequestId: myRequestId, requestDeclined: declined)
     }
@@ -311,6 +314,12 @@ enum AppEmbedAppCodec {
         guard let string = value as? String, string.count <= limit else { return nil }
         if required && string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return nil }
         return string
+    }
+
+    static func count(_ value: Any?, limit: Int) -> Int? {
+        guard let value = value else { return 0 }
+        guard let number = AppBridgeCodec.number(value), number >= 0.0, number == number.rounded(), number <= Double(limit) else { return nil }
+        return Int(number)
     }
 
     static func flag(_ value: Any?, fallback: Bool) -> Bool? {
@@ -493,6 +502,10 @@ struct WheelNameDraft: Equatable {
     }
 }
 
+enum WheelPageNotice: String, CaseIterable, Equatable {
+    case unconfirmed, waiting, full
+}
+
 struct WheelPageModel: Equatable {
     let revision: Int
     let entries: [WheelEntryModel]
@@ -504,6 +517,7 @@ struct WheelPageModel: Equatable {
     let canSpin: Bool
     let canReorder: Bool
     let isFull: Bool
+    let waitingNames: Int
     let isReady: Bool
 
     let missingNames: [String]
@@ -525,13 +539,13 @@ struct WheelPageModel: Equatable {
     func withRevision(_ value: Int) -> WheelPageModel {
         return WheelPageModel(revision: value, entries: entries, results: results, removeWinner: removeWinner, sounds: sounds,
                               spinning: spinning, canEdit: canEdit, canSpin: canSpin, canReorder: canReorder, isFull: isFull,
-                              isReady: isReady,
+                              waitingNames: waitingNames, isReady: isReady,
                               missingNames: missingNames, pendingKinds: pendingKinds, pendingTargets: pendingTargets,
                               winnerSequence: winnerSequence, winnerLabel: winnerLabel)
     }
 
     static let empty = WheelPageModel(revision: 0, entries: [], results: [], removeWinner: false, sounds: true, spinning: false,
-                                      canEdit: false, canSpin: false, canReorder: false, isFull: false, isReady: false,
+                                      canEdit: false, canSpin: false, canReorder: false, isFull: false, waitingNames: 0, isReady: false,
                                       missingNames: [],
                                       pendingKinds: [], pendingTargets: [], winnerSequence: 0, winnerLabel: "")
 }
@@ -665,6 +679,17 @@ enum AppPagePolicy {
             batch.append(line)
         }
         return batch
+    }
+
+    static func wheelNotices(canEdit: Bool, isFull: Bool, waitingNames: Int, isUnconfirmed: Bool) -> [WheelPageNotice] {
+        var notices: [WheelPageNotice] = []
+        if canEdit && isUnconfirmed { notices.append(WheelPageNotice.unconfirmed) }
+        if waitingNames > 0 {
+            notices.append(WheelPageNotice.waiting)
+        } else if canEdit && isFull {
+            notices.append(WheelPageNotice.full)
+        }
+        return notices
     }
 
     static func missingNames(roster: [String], entries: [WheelEntryModel]) -> [String] {
@@ -805,6 +830,11 @@ final class AppHostPresenter {
     @ObservationIgnored private var lastWinnerSpinId = ""
     @ObservationIgnored private var winnerSequence = 0
     private(set) var wheelDraft = WheelNameDraft()
+
+    var wheelNotices: [WheelPageNotice] {
+        return AppPagePolicy.wheelNotices(canEdit: wheel.canEdit, isFull: wheel.isFull, waitingNames: wheel.waitingNames,
+                                          isUnconfirmed: wheelDraft.isUnconfirmed)
+    }
     @ObservationIgnored private var winnerLabel = ""
     @ObservationIgnored private var announcedVideoId = ""
     @ObservationIgnored private var titleSequence = 0
@@ -1068,11 +1098,13 @@ final class AppHostPresenter {
             }
             index += 1
         }
-        if sendPage(AppPageCommandKind.addEntries, target: "", payload: ["labels": batch, "tokens": tokens]) != ActivityTapResult.dispatched {
+        let sentAt = nowMillis().rounded(.down)
+        let payload: [String: Any] = ["labels": batch, "tokens": tokens, "sentAt": sentAt]
+        if sendPage(AppPageCommandKind.addEntries, target: "", payload: payload) != ActivityTapResult.dispatched {
             return
         }
         guard let command = pagePending.last else { return }
-        wheelDraft.didSend(requestId: command.requestId, lines: batch, tokens: tokens, sentAtMillis: nowMillis(),
+        wheelDraft.didSend(requestId: command.requestId, lines: batch, tokens: tokens, sentAtMillis: sentAt,
                            rest: rest.joined(separator: "\n"))
         startAddDeadline(requestId: command.requestId)
     }
@@ -1411,16 +1443,16 @@ final class AppHostPresenter {
             let command = pagePending[pageIndex]
             pagePending.remove(at: pageIndex)
             if command.kind == AppPageCommandKind.addOutcome {
-                settleAdd(command.target, added: added)
+                resolveAdd(command.target, error: error, added: added)
             } else if command.kind == AppPageCommandKind.addEntries && command.target.isEmpty {
-                settleAdd(requestId, added: added)
+                resolveAdd(requestId, error: error, added: added)
                 askAddOutcome(requestId)
             }
             rebuildPages()
             return
         }
-        if added != nil && wheelDraft.sent.contains(where: { $0.requestId == requestId }) {
-            settleAdd(requestId, added: added)
+        if wheelDraft.sent.contains(where: { $0.requestId == requestId }) && (added != nil || error == AppBridgeProtocol.addOutcomeUnknown) {
+            resolveAdd(requestId, error: error, added: added)
             rebuildPages()
             return
         }
@@ -1483,6 +1515,14 @@ final class AppHostPresenter {
         rebuildPages()
     }
 
+    private func resolveAdd(_ original: String, error: String, added: [Int]?) {
+        if added == nil && error == AppBridgeProtocol.addOutcomeUnknown {
+            giveUpAdd(original)
+            return
+        }
+        settleAdd(original, added: added)
+    }
+
     private func settleAdd(_ original: String, added: [Int]?) {
         guard let list = added else { return }
         pagePending.removeAll(where: { $0.kind == AppPageCommandKind.addOutcome && $0.target == original })
@@ -1508,7 +1548,8 @@ final class AppHostPresenter {
         if !embedReady { return }
         nextRequestNumber += 1
         let requestId = "h-" + String(nextRequestNumber)
-        if session?.sendCommand(AppBridgeOutboundType.addOutcome, requestId: requestId, payload: ["tokens": submission.tokens]) != true {
+        let question: [String: Any] = ["tokens": submission.tokens, "sentAt": submission.sentAtMillis]
+        if session?.sendCommand(AppBridgeOutboundType.addOutcome, requestId: requestId, payload: question) != true {
             return
         }
         wheelDraft.asked(requestId: original)
@@ -1781,6 +1822,7 @@ final class AppHostPresenter {
             canSpin: wheelEdit && wheelEntries.count >= 2 && !spinning && !kinds.contains(AppPageCommandKind.spin.rawValue),
             canReorder: wheelEdit && !spinning,
             isFull: wheelEntries.count >= AppWheelLimits.maxEntries,
+            waitingNames: isWheel ? appStatus.waiting : 0,
             isReady: isWheel && ready,
             missingNames: missing,
             pendingKinds: isWheel ? kinds : [],

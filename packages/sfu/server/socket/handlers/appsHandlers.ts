@@ -302,7 +302,8 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
   };
   const relay = (admission: Admission, mark: AppSyncMark, landed: Uint8Array[]): void => {
     if (!admission.apps.isCurrentSync(mark)) return;
-    const includeWriter = admission.replicaId !== undefined && inScope(admission.apps);
+    const includeWriter =
+      (admission.replicaId !== undefined || admission.appId === "wheel") && inScope(admission.apps);
     for (const update of landed) {
       const message: AppsUpdateData = { appId: admission.appId, update };
       socket.to(admission.channelId).emit("apps:yjs:update", message);
@@ -450,11 +451,11 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     }
   );
 
-  socket.on("apps:close", (first: unknown, second: unknown) => {
-    const callback = typeof first === "function" ? first : second;
-    const data = (typeof first === "function" ? undefined : first) as
-      | AppsCloseData
-      | undefined;
+  type CloseAck = (response: AppsCloseResponse) => void;
+  socket.on("apps:close", (first: AppsCloseData | CloseAck | undefined, second?: CloseAck) => {
+    const legacy = typeof first === "function";
+    const callback = legacy ? first : second;
+    const data = legacy ? undefined : first;
     runStageCommand(
       data?.expectedRevision,
       "Only admins can close apps",

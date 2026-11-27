@@ -66,6 +66,7 @@ const COLOR = {
 
 export type WheelStageProps = {
   entries: WheelEntry[];
+  listEntries: readonly WheelEntry[];
   spin: WheelSpin | null;
   canSpin: boolean;
   sounds: WheelSounds | null;
@@ -165,6 +166,7 @@ const canvasMeasure = (fontFamily: string): MeasureText => {
 
 export function WheelStage({
   entries,
+  listEntries,
   spin,
   canSpin,
   sounds,
@@ -424,17 +426,23 @@ export function WheelStage({
   const canSpinNow = canSpin && !isSpinning && entries.length >= 2;
   const hasHighlight = highlightIndex !== null;
 
+  const rows = useMemo(() => {
+    const rowOf = new Map(listEntries.map((entry, index) => [entry.id, index + 1]));
+    return displayedEntries.map((entry, index) => rowOf.get(entry.id) ?? (entry.label === "" ? index + 1 : null));
+  }, [displayedEntries, listEntries]);
+
   const fitted = useMemo(() => {
     if (count < 2) return null;
     return fitWheelLabels(
       displayedEntries.map((entry) => entry.label),
       wheelLabelGeometry(count, wheelPx),
-      measure
+      measure,
+      rows
     );
-  }, [count, displayedEntries, measure, wheelPx]);
+  }, [count, displayedEntries, measure, wheelPx, rows]);
   const single = useMemo(
-    () => (count === 1 ? fitSingleLabel(displayedEntries[0].label, wheelPx, measure) : null),
-    [count, displayedEntries, measure, wheelPx]
+    () => (count === 1 ? fitSingleLabel(displayedEntries[0].label, wheelPx, measure, rows[0]) : null),
+    [count, displayedEntries, measure, wheelPx, rows]
   );
   hasNumbersRef.current = Boolean(single?.numbered || fitted?.labels.some((label) => label?.numbered));
 

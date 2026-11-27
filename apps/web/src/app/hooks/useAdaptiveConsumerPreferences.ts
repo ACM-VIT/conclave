@@ -816,7 +816,7 @@ export const getDesiredPreferences = (
   const isVisible = layout ? layout.visible || isPrimary : fallbackVisible;
   const isWarm = layout?.warm === true || (!layout && !fallbackVisible);
   const isHidden = layout?.hidden === true && !isVisible;
-  const isFocus = isActiveSpeaker || isLayoutFocus;
+  const isFocus = layout ? isLayoutFocus : isActiveSpeaker;
   const isFocusOrPrimary = isFocus || isPrimary;
   const webcamRenderedWidth = layout?.renderedWidth ?? null;
   const webcamRenderedHeight = layout?.renderedHeight ?? null;
