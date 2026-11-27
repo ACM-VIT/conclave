@@ -104,6 +104,29 @@ describe("a send path rebuilt while no TURN credentials were usable", () => {
     expect(target.health.producer).toBe("healthy");
     expect(target.moves).toEqual([]);
   });
+
+  it("stays where it is when credentials return while it delivers and the SFU's count replies go missing", async () => {
+    const { target, second } = await rebuiltWithoutTurn((call) => {
+      call.outgoingDropped = true;
+    });
+    target.outgoingDropped = false;
+    target.answersSenderCounts = false;
+    target.provider = "up";
+    const since = Date.now();
+
+    expect(
+      await waitFor(target, () => target.lastRelayAnswerAt !== null && target.lastRelayAnswerAt >= since, 15_000),
+    ).toBe(true);
+    await target.advance(8_000);
+    expect(target.send).toBe(second);
+    target.answersSenderCounts = true;
+    await target.advance(20_000);
+
+    expect(reachedSfu(second)).toBeGreaterThan(0);
+    expect(target.send).toBe(second);
+    expect(target.moves).toEqual([]);
+    expect(target.health.producer).toBe("healthy");
+  });
 });
 
 describe("a send path that never delivered a packet", () => {
@@ -193,10 +216,49 @@ describe("a still screen share on a send path that has carried media", () => {
     expect(target.send).toBe(send);
   });
 
+  it("is left alone when receiver reports come back while the credentials for its rebuild are fetched", async () => {
+    const { target, send } = await stillShareAfterReportsStopped();
+    target.route = "hold";
+    expect(await waitFor(target, () => target.heldRoutes.length > 0, 10_000)).toBe(true);
+    target.outgoingDropped = false;
+    await target.advance(3_000);
+    target.route = "up";
+    target.releaseHeldRoutes("answer");
+    await target.advance(20_000);
+
+    expect(target.send).toBe(send);
+    expect(send.closed).toBe(false);
+    expect(target.health.producer).toBe("recovering");
+  });
+
   it("is rebuilt when no receiver report comes back after the ICE restart", async () => {
     const { target, send } = await stillShareAfterReportsStopped();
 
     expect(await waitFor(target, () => target.send !== send, 20_000)).toBe(true);
     expect(target.log.some((line) => line.includes("Rebuilding the producer transport"))).toBe(true);
+  });
+});
+
+describe("a still screen share on a send path that never carried media", () => {
+  it("is moved onto the relay once when relay only is wanted and its credentials ran out", async () => {
+    const target = await startRig({ ttlSeconds: 30 });
+    rig = target;
+    target.sendStatic = true;
+    await target.join();
+    await target.shareScreen({ video: true, audio: false });
+    const send = target.send!;
+    target.refuseIceRestart = true;
+    target.failRecv();
+    await target.advance(3_000);
+    expect(target.recv!.policy).toBe("relay");
+    expect(target.send).toBe(send);
+
+    await advanceTo(target, 31);
+
+    expect(send.reportAt).not.toBeNull();
+    expect(reachedSfu(send)).toBe(0);
+    expect(target.send).not.toBe(send);
+    expect(target.send!.policy).toBe("relay");
+    expect(target.log.filter((line) => line.includes("moving the producer transport"))).toHaveLength(1);
   });
 });
