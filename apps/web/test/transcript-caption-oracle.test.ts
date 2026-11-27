@@ -54,6 +54,7 @@ const SAVE_FAILURE = "Snapshot write failed (injected).";
 const LANGUAGES = ["ta", "hi", "bn"];
 const MALFORMED = ["%%%%", "@@@@AAAA", "A", "====", "AB=C", "\u0000\u0001"];
 const realSetImmediate = globalThis.setImmediate.bind(globalThis);
+const realSetTimeout = globalThis.setTimeout.bind(globalThis);
 const TRACE = process.env.TRANSCRIPT_ORACLE_TRACE;
 const traceLines: string[] = [];
 const trace = (line: string) => {
@@ -1086,7 +1087,7 @@ const runOnce = async (seed: number, mode: Mode = {}): Promise<string[]> => {
   for (let round = 0; round < 10 && !switchesSettled; round += 1) {
     await vi.advanceTimersByTimeAsync(DEADLINE + 1_000);
     for (let spin = 0; spin < 50 && !switchesSettled; spin += 1) {
-      await new Promise((resolve) => realSetImmediate(resolve));
+      await new Promise((resolve) => (spin < 20 ? realSetImmediate(resolve) : realSetTimeout(resolve, 2)));
     }
   }
   if (!switchesSettled) report("a language switch never settled");
