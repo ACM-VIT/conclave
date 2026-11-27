@@ -566,6 +566,32 @@ describe("a host whose profile is stored under a legacy client of the deployment
     expect(await bookings(sfu)).toEqual([]);
   });
 
+  it("has its webinars served as the deployment's client, by link code, by room and in the list, with nothing moved", async () => {
+    const legacy = await start("A");
+    const webinar = await createWebinar(legacy, { linkSlug: "legacy-launch" });
+    const stored = field<{ clientId: string; roomId: string; updatedAt: number }>(await host(legacy, "GET", `/scheduled-webinars/${webinar.id}`), "scheduledWebinar");
+    expect(stored.clientId).toBe("conclave");
+    await stop(legacy);
+    vi.stubEnv("SFU_CLIENT_ID", "acme");
+    const sfu = await start("B");
+    const acme = { "x-sfu-client": "acme" };
+
+    const bySlug = await sfu.call("GET", "/scheduled-webinars/by-slug/legacy-launch", undefined, acme);
+    expect(field<{ id: string; clientId: string }>(bySlug, "scheduledWebinar")).toMatchObject({ id: webinar.id, clientId: "acme" });
+    const byRoom = await sfu.call("GET", `/scheduled-webinars/by-room/acme/${stored.roomId}`, undefined, acme);
+    expect(field<{ id: string; clientId: string }>(byRoom, "scheduledWebinar")).toMatchObject({ id: webinar.id, clientId: "acme" });
+    const listed = field<Array<{ id: string; clientId: string }>>(await host(sfu, "GET", "/scheduled-webinars", undefined, acme), "scheduledWebinars");
+    expect(listed).toEqual([expect.objectContaining({ id: webinar.id, clientId: "acme" })]);
+
+    await stop(sfu);
+    vi.stubEnv("SFU_CLIENT_ID", "");
+    const back = await start("C");
+    expect(field<{ clientId: string; updatedAt: number }>(await host(back, "GET", `/scheduled-webinars/${webinar.id}`), "scheduledWebinar")).toMatchObject({
+      clientId: "conclave",
+      updatedAt: stored.updatedAt,
+    });
+  });
+
   it("stays free during another host's meeting in the deployment's client", async () => {
     const legacy = await start("A");
     const { username } = await setUpHost(legacy);

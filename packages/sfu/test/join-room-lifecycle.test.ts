@@ -15,6 +15,7 @@ import { registerTransportHandlers } from "../server/socket/handlers/transportHa
 import { registerWebinarHandlers } from "../server/socket/handlers/webinarHandlers.js";
 import { forceCloseRoom, getOrCreateRoomWithOrigin } from "../server/rooms.js";
 import { createSfuState, type SfuState } from "../server/state.js";
+import { advanceScheduledWebinars } from "../server/scheduledWebinarScheduler.js";
 import { getOrCreateWebinarRoomConfig, setCustomWebinarLinkSlug } from "../server/webinar.js";
 import type { ScheduledWebinar } from "../types.js";
 
@@ -785,5 +786,42 @@ describe("two joins for one tab across the store read", () => {
     expect(room.getClient("bob#b")).toBeUndefined();
     expect(context.currentRoom).toBeNull();
     expect(peer.joinChannel).not.toHaveBeenCalled();
+  });
+});
+
+describe("a scheduled webinar stored under a legacy client of the deployment", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("is hosted, joined and kept by the tick under the deployment's client", async () => {
+    vi.stubEnv("SFU_CLIENT_ID", "acme");
+    const state = makeState();
+    const now = Date.now();
+    await seed(state.controlPlane, "webinar", {
+      id: "w-legacy", clientId: "conclave", roomId: "sched-legacy", linkSlug: "legacy-launch", title: "Launch", description: "",
+      hostEmail: "host@example.com", hostName: "Host", hostUserId: null, coHosts: [],
+      scheduledStartAt: now - 60_000, scheduledEndAt: now + 3_600_000, status: "live",
+      publicAccess: true, maxAttendees: 100, requiresInviteCode: false, waitingRoomEnabled: false,
+      earlyEntryMinutes: 10, qaEnabled: true, notes: "", createdAt: now, createdBy: "host@example.com",
+      updatedAt: now, liveStartedAt: now, endedAt: null, totalJoinCount: 0, peakAttendeeCount: 0,
+      webinarLink: "http://localhost/w/legacy-launch", coHostInviteTokenHash: null, coHostInviteTokenCreatedAt: null,
+    });
+    const room = new Room({ id: "sched-legacy", clientId: "acme", workerPid: null, router: { closed: false, close: vi.fn() } as unknown as Router });
+    state.rooms.set(room.channelId, room);
+
+    const host = await join(state, "host-socket", {
+      userId: "host", clientId: "acme", sessionId: "h", email: "host@example.com",
+    }, "sched-legacy");
+    expect(host.ack).toHaveBeenCalledWith(expect.objectContaining({ status: "joined", webinarRole: "host" }));
+    const attendee = await join(state, "attendee-socket", {
+      userId: "viewer", clientId: "acme", sessionId: "v", joinMode: "webinar_attendee",
+    }, "legacy-launch");
+    expect(attendee.ack).toHaveBeenCalledWith(expect.objectContaining({ roomId: "sched-legacy" }));
+
+    await advanceScheduledWebinars(state, Date.now(), () => {});
+    expect(state.webinarConfigs.get(room.channelId)).toMatchObject({ scheduledWebinarId: "w-legacy", enabled: true });
+    expect([...state.webinarConfigs.keys()]).toEqual([room.channelId]);
+    expect((await state.controlPlane.read((view) => view.get("webinar", "w-legacy")))?.value.clientId).toBe("conclave");
   });
 });

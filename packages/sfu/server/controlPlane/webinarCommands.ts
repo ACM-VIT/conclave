@@ -3,7 +3,7 @@ import type {
   ScheduledWebinar,
   UpdateScheduledWebinarRequest,
 } from "../../types.js";
-import { clientIdCandidates } from "../clientIds.js";
+import { clientIdCandidates, clientsServedAs, servedClientId } from "../clientIds.js";
 import {
   RANDOM_WEBINAR_SLUG_BYTES,
   acceptCoHostInvite,
@@ -33,34 +33,43 @@ const slugContext = (tx: Tx): WebinarSlugContext => ({
   randomSlug: () => randomWebinarSlug(tx.entropy.bytes(RANDOM_WEBINAR_SLUG_BYTES)),
 });
 
+const served = (webinar: ScheduledWebinar): ScheduledWebinar => {
+  const clientId = servedClientId(webinar.clientId);
+  return clientId === webinar.clientId ? webinar : { ...webinar, clientId };
+};
+
+const servedOrNull = (webinar: ScheduledWebinar | null | undefined): ScheduledWebinar | null =>
+  webinar ? served(webinar) : null;
+
 export const webinarById =
   (id: string): Query<ScheduledWebinar | null> =>
   (view) =>
-    view.get("webinar", id)?.value ?? null;
+    servedOrNull(view.get("webinar", id)?.value);
 
 export const webinarBySlug =
   (slug: string): Query<ScheduledWebinar | null> =>
   (view) =>
-    view.lookup("webinar", "webinarSlug", uniqueKeys.webinarSlug(slug.trim().toLowerCase()))
-      ?.value ?? null;
+    servedOrNull(
+      view.lookup("webinar", "webinarSlug", uniqueKeys.webinarSlug(slug.trim().toLowerCase()))?.value,
+    );
 
-const webinarInRoom = (view: TxRead, clientId: string, roomId: string): ScheduledWebinar | null =>
-  view.lookup("webinar", "webinarRoom", uniqueKeys.webinarRoom(clientId, roomId))?.value ?? null;
+const webinarInRoom = (view: TxRead, clients: readonly string[], roomId: string): ScheduledWebinar | null => {
+  for (const clientId of clients) {
+    const webinar = view.lookup("webinar", "webinarRoom", uniqueKeys.webinarRoom(clientId, roomId))?.value;
+    if (webinar) return served(webinar);
+  }
+  return null;
+};
 
 export const webinarForRoom =
   (clientId: string, roomId: string): Query<ScheduledWebinar | null> =>
   (view) =>
-    webinarInRoom(view, clientId, roomId);
+    webinarInRoom(view, clientsServedAs(clientId), roomId);
 
 export const webinarForRoomInClients =
   (clientId: string, roomId: string): Query<ScheduledWebinar | null> =>
-  (view) => {
-    for (const candidate of clientIdCandidates(clientId)) {
-      const webinar = webinarInRoom(view, candidate, roomId);
-      if (webinar) return webinar;
-    }
-    return null;
-  };
+  (view) =>
+    webinarInRoom(view, clientIdCandidates(clientId), roomId);
 
 export const listWebinars =
   (filter: ScheduledWebinarFilter & { clientId: string }): Query<ScheduledWebinar[]> =>
@@ -72,7 +81,7 @@ export const listWebinars =
       for (const webinar of filterScheduledWebinars(all, { ...filter, clientId: candidate })) {
         if (seenRoomIds.has(webinar.roomId)) continue;
         seenRoomIds.add(webinar.roomId);
-        byId.set(webinar.id, webinar);
+        byId.set(webinar.id, served(webinar));
       }
     }
     return [...byId.values()].sort((a, b) => a.scheduledStartAt - b.scheduledStartAt);
@@ -84,16 +93,16 @@ export const webinarsByIds =
     const found = new Map<string, Stored<"webinar">>();
     for (const id of new Set(ids)) {
       const stored = view.get("webinar", id);
-      if (stored) found.set(id, stored);
+      if (stored) found.set(id, { ...stored, value: served(stored.value) });
     }
     return found;
   };
 
 export const allWebinars: Query<ScheduledWebinar[]> = (view) =>
-  view.all("webinar").map((stored) => stored.value);
+  view.all("webinar").map((stored) => served(stored.value));
 
 export const openWebinars: Query<ScheduledWebinar[]> = (view) =>
-  view.tagged("webinar", tags.openWebinars).map((stored) => stored.value);
+  view.tagged("webinar", tags.openWebinars).map((stored) => served(stored.value));
 
 const withAccess = <T>(
   tx: Tx,
@@ -112,7 +121,7 @@ const withAccess = <T>(
 export const webinarForHost =
   (id: string, access: WebinarAccess): Command<ScheduledWebinar> =>
   (tx) =>
-    withAccess(tx, id, access, (webinar) => done(webinar));
+    withAccess(tx, id, access, (webinar) => done(served(webinar)));
 
 export const createWebinar =
   (
@@ -127,7 +136,7 @@ export const createWebinar =
       now: tx.now,
     });
     tx.put("webinar", created.webinar);
-    return done(created);
+    return done({ ...created, webinar: served(created.webinar) });
   };
 
 export const updateWebinar =
@@ -143,7 +152,7 @@ export const updateWebinar =
         now: tx.now,
       });
       tx.put("webinar", updated.webinar);
-      return done(updated);
+      return done({ ...updated, webinar: served(updated.webinar) });
     });
 
 export const deleteWebinar =
@@ -151,7 +160,7 @@ export const deleteWebinar =
   (tx) =>
     withAccess(tx, id, access, (webinar) => {
       tx.remove("webinar", id);
-      return done(webinar);
+      return done(served(webinar));
     });
 
 export const createWebinarCoHostInvite =
@@ -160,7 +169,7 @@ export const createWebinarCoHostInvite =
     withAccess(tx, id, access, (webinar) => {
       const next = withCoHostInvite(webinar, tokenHash, tx.now);
       tx.put("webinar", next);
-      return done(next);
+      return done(served(next));
     });
 
 export const acceptWebinarCoHostInvite =
@@ -173,9 +182,9 @@ export const acceptWebinarCoHostInvite =
     const current = tx.lookup("webinar", "cohostToken", uniqueKeys.cohostToken(tokenHash));
     if (!current) return fail("invalid", "Invalid or expired co-host invite.");
     const next = acceptCoHostInvite(current.value, user, tx.now);
-    if (!next) return done(current.value);
+    if (!next) return done(served(current.value));
     tx.put("webinar", next);
-    return done(next);
+    return done(served(next));
   };
 
 export const recordWebinarJoin =
@@ -185,7 +194,7 @@ export const recordWebinarJoin =
     if (!current) return fail("not_found", WEBINAR_NOT_FOUND);
     const next = withWebinarJoin(current.value, currentAttendeeCount, tx.now);
     tx.put("webinar", next);
-    return done(next);
+    return done(served(next));
   };
 
 export const advanceWebinars: Command<ScheduledWebinar[]> = (tx) => {
@@ -194,7 +203,7 @@ export const advanceWebinars: Command<ScheduledWebinar[]> = (tx) => {
     const next = advanceScheduledWebinar(stored.value, tx.now);
     if (!next) continue;
     tx.put("webinar", next);
-    changed.push(next);
+    changed.push(served(next));
   }
   return done(changed);
 };

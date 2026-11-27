@@ -56,3 +56,13 @@ export const canMigrateClientNamespace = (
   return clientIdCandidates(target).includes(source) ||
     LEGACY_CONCLAVE_CLIENT_IDS.has(source.toLowerCase());
 };
+
+export const servedClientId = (storedUnder: string): string => {
+  const deployment = resolveDefaultClientId();
+  return canMigrateClientNamespace(storedUnder, deployment) ? deployment : storedUnder;
+};
+
+export const clientsServedAs = (clientId: string): string[] => {
+  const served = canonicalizeClientId(clientId);
+  return clientIdCandidates(served).filter((candidate) => servedClientId(candidate) === served);
+};
