@@ -570,14 +570,17 @@ describe("a room still being made", () => {
     const state = await startSfu(leases.forInstance("sfu-a"), { recovery: slowRecovery, persistence });
     const worker = state.workers[0];
     const makeRouter = worker.createRouter.bind(worker);
-    const routers: Router[] = [];
+    const closes: number[] = [];
     worker.createRouter = (async (...args: Parameters<Worker["createRouter"]>) => {
       await held("its router");
       const router = await makeRouter(...args);
-      routers.push(router);
+      const made = closes.push(0) - 1;
+      router.close = () => {
+        closes[made] += 1;
+      };
       return router;
     }) as Worker["createRouter"];
-    return { state, arrive, routers };
+    return { state, arrive, closes };
   };
 
   it.each(WAITS)(
@@ -602,9 +605,10 @@ describe("a room still being made", () => {
       sfuA.arrive();
       await vi.advanceTimersByTimeAsync(1_500);
 
-      const sentOn = expect.objectContaining({ redirectInstanceId: "sfu-b" });
-      expect(await opener).toEqual(sentOn);
-      expect(await retry).toEqual(sentOn);
+      expect([await opener, await retry]).toEqual([
+        expect.objectContaining({ redirectInstanceId: "sfu-b" }),
+        expect.objectContaining({ redirectInstanceId: "sfu-b" }),
+      ]);
       expect(sfuA.state.rooms.has(CHANNEL)).toBe(false);
       expect(sfuA.state.roomCreations.has(CHANNEL)).toBe(false);
       expect(sfuA.state.roomRegistry.holdsLease(CHANNEL)).toBe(false);
@@ -613,7 +617,7 @@ describe("a room still being made", () => {
       expect((await createRoomRecoveryLedger(recovery).recall(CHANNEL)).lastWriter).toBe(
         roomOnB.incarnationId,
       );
-      for (const router of sfuA.routers) expect(router.close).toHaveBeenCalledTimes(1);
+      expect(sfuA.closes).toEqual([1]);
     },
   );
 
@@ -638,9 +642,9 @@ describe("a room still being made", () => {
 
       sfuA.arrive();
       await settle();
-      for (const router of sfuA.routers) expect(router.close).toHaveBeenCalledTimes(1);
+      expect(sfuA.closes).toEqual(wait === "its router" ? [1] : []);
       expect((await join(sfuA.state, host("b"))).status).toBe("joined");
-      expect(sfuA.routers.filter((router) => !(router.close as ReturnType<typeof vi.fn>).mock.calls.length)).toHaveLength(1);
+      expect(sfuA.closes).toEqual(wait === "its router" ? [1, 0] : [0]);
     },
   );
 
