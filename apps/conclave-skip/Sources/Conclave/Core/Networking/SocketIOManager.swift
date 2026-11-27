@@ -232,6 +232,7 @@ private enum SocketEvent {
     static let kicked = SfuServerEvent.kicked.rawValue
     static let roomClosed = SfuServerEvent.roomClosed.rawValue
     static let roomEnded = SfuServerEvent.roomEnded.rawValue
+    static let roomRecoveryPass = SfuServerEvent.roomRecoveryPass.rawValue
     static let serverRestarting = SfuServerEvent.serverRestarting.rawValue
     static let adminNotice = SfuServerEvent.adminNotice.rawValue
     static let adminMediaEnforced = SfuServerEvent.adminMediaEnforced.rawValue
@@ -323,6 +324,7 @@ final class SocketIOManager {
     var onRoomClosed: ((RoomClosedNotification) -> Void)?
     var onRoomEnded: ((RoomEndedNotification) -> Void)?
     var onServerRestarting: ((ServerRestartingNotification) -> Void)?
+    var onRoomRecoveryPass: ((RoomRecoveryPassNotification) -> Void)?
     var onAdminNotice: ((AdminNoticeNotification) -> Void)?
     var onAdminHandsCleared: ((AdminHandsClearedNotification) -> Void)?
     var onAdminRoomStateChanged: ((AdminRoomStateChangedNotification) -> Void)?
@@ -615,14 +617,16 @@ final class SocketIOManager {
         sessionId: String,
         displayName: String?,
         meetingInviteCode: String? = nil,
-        webinarInviteCode: String? = nil
+        webinarInviteCode: String? = nil,
+        roomRecoveryPass: String? = nil
     ) async throws -> JoinRoomResponse {
         let request = JoinRoomRequest(
             roomId: roomId,
             sessionId: sessionId,
             displayName: displayName,
             webinarInviteCode: webinarInviteCode,
-            meetingInviteCode: meetingInviteCode
+            meetingInviteCode: meetingInviteCode,
+            roomRecoveryPass: roomRecoveryPass
         )
 
         var followedRedirects = 0
@@ -2487,6 +2491,14 @@ final class SocketIOManager {
                 ?? RoomEndedNotification(roomId: nil, message: nil, endedBy: nil)
             guard self.terminalRoomEventMatchesActiveOrPending(notification.roomId) else { return }
             self.onRoomEnded?(notification)
+        }
+
+        socket.on(SocketEvent.roomRecoveryPass) { [weak self] data, _ in
+            guard let self, let first = data.first,
+                  self.socket === socket,
+                  let notification = self.decode(RoomRecoveryPassNotification.self, from: first),
+                  NativeRoomIdNormalizer.matches(notification.roomId, self.activeRoomId) else { return }
+            self.onRoomRecoveryPass?(notification)
         }
 
         socket.on(SocketEvent.serverRestarting) { [weak self] data, _ in

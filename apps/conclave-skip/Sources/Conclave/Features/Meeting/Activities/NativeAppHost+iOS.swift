@@ -4,6 +4,29 @@ import SwiftUI
 import UIKit
 import WebKit
 
+extension View {
+    @MainActor
+    func appStageDiscardPrompt(host: AppHostPresenter?) -> some View {
+        let id = host?.stageDiscardPromptId ?? ""
+        return alert(
+            ConclaveStrings.text("Discard Unverified Edits?"),
+            isPresented: Binding(get: { !id.isEmpty }, set: { _ in }),
+            presenting: id
+        ) { shownId in
+            Button(ConclaveStrings.text("Discard and Continue"), role: .destructive) {
+                host?.resolveStageDiscardPrompt(id: shownId, confirmed: true)
+            }
+            .accessibilityIdentifier("app.stageDiscard.confirm")
+            Button(ConclaveStrings.text("Cancel"), role: .cancel) {
+                host?.resolveStageDiscardPrompt(id: shownId, confirmed: false)
+            }
+            .accessibilityIdentifier("app.stageDiscard.cancel")
+        } message: { _ in
+            Text(ConclaveStrings.text("The previous app view stopped before its edits could be verified. Continuing may lose those edits. Changes saved to the room will be kept."))
+        }
+    }
+}
+
 struct NativeAppHostBody: View {
     let host: AppHostPresenter
     let onShowVideo: () -> Void

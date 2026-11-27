@@ -191,6 +191,7 @@ internal object SocketEvent {
     val kicked = SfuServerEvent.kicked.rawValue
     val roomClosed = SfuServerEvent.roomClosed.rawValue
     val roomEnded = SfuServerEvent.roomEnded.rawValue
+    val roomRecoveryPass = SfuServerEvent.roomRecoveryPass.rawValue
     val serverRestarting = SfuServerEvent.serverRestarting.rawValue
     val adminNotice = SfuServerEvent.adminNotice.rawValue
     val adminMediaEnforced = SfuServerEvent.adminMediaEnforced.rawValue
@@ -266,6 +267,7 @@ internal class SocketIOManager {
     internal var onRoomClosed: ((RoomClosedNotification) -> Unit)? = null
     internal var onRoomEnded: ((RoomEndedNotification) -> Unit)? = null
     internal var onServerRestarting: ((ServerRestartingNotification) -> Unit)? = null
+    internal var onRoomRecoveryPass: ((RoomRecoveryPassNotification) -> Unit)? = null
     internal var onAdminNotice: ((AdminNoticeNotification) -> Unit)? = null
     internal var onAdminHandsCleared: ((AdminHandsClearedNotification) -> Unit)? = null
     internal var onAdminRoomStateChanged: ((AdminRoomStateChangedNotification) -> Unit)? = null
@@ -558,14 +560,16 @@ internal class SocketIOManager {
         sessionId: String,
         displayName: String?,
         meetingInviteCode: String? = null,
-        webinarInviteCode: String? = null
+        webinarInviteCode: String? = null,
+        roomRecoveryPass: String? = null
     ): JoinRoomResponse {
         val request = JoinRoomRequest(
             roomId = roomId,
             sessionId = sessionId,
             displayName = displayName,
             webinarInviteCode = webinarInviteCode,
-            meetingInviteCode = meetingInviteCode
+            meetingInviteCode = meetingInviteCode,
+            roomRecoveryPass = roomRecoveryPass
         )
 
         var followedRedirects = 0
@@ -2630,7 +2634,8 @@ internal class SocketIOManager {
             webinarMaxAttendees = intField(obj, "webinarMaxAttendees"),
 
             webinarQaEnabled = boolField(obj, "webinarQaEnabled"),
-            displayNameSnapshot = displayNameSnapshot
+            displayNameSnapshot = displayNameSnapshot,
+            roomRecoveryPass = obj.opt("roomRecoveryPass") as? String
         )
     }
 
@@ -3758,6 +3763,13 @@ internal class SocketIOManager {
                 ?: RoomEndedNotification(roomId = null, message = null, endedBy = null)
             if (!terminalRoomEventMatchesActiveOrPending(notification.roomId)) return@Listener
             onRoomEnded?.invoke(notification)
+        })
+
+        socket.on(SocketEvent.roomRecoveryPass, Emitter.Listener { args ->
+            if (this.socket !== socket) return@Listener
+            val notification = decode<RoomRecoveryPassNotification>(args.firstOrNull()) ?: return@Listener
+            if (!NativeRoomIdNormalizer.matches(notification.roomId, activeRoomId)) return@Listener
+            onRoomRecoveryPass?.invoke(notification)
         })
 
         socket.on(SocketEvent.serverRestarting, Emitter.Listener { args ->

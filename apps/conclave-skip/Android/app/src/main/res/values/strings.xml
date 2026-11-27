@@ -1124,6 +1124,9 @@
     <string name="act_close_browser">Close shared browser</string>
     <string name="act_close_browser_title">Close the shared browser for everyone?</string>
     <string name="act_close_confirm">Close</string>
+    <string name="act_discard_unverified_title">Discard Unverified Edits?</string>
+    <string name="act_discard_unverified_message">The previous app view stopped before its edits could be verified. Continuing may lose those edits. Changes saved to the room will be kept.</string>
+    <string name="act_discard_unverified_confirm">Discard and Continue</string>
     <string name="act_close_message">Everyone returns to the meeting.</string>
     <string name="act_close_title">Close %1$s for everyone?</string>
     <string name="act_editing_locked">Editing locked</string>

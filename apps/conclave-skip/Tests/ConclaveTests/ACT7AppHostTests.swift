@@ -379,6 +379,29 @@ struct ACT7AppHostTests {
         #expect(await relay.prepareToLeave(), "A new call does not inherit the previous app's lost edits.")
     }
 
+    @Test func aDiscardDecisionDoesNotCoverEditsLostByALaterRenderer() async throws {
+        let wire = Wire()
+        let relay = session(wire)
+        let id = relay.appSessionId
+        let firstMount = relay.bridgeGeneration
+        #expect(ready(relay) == .none)
+        let edit = envelope(relay, "editsPending", [:], requestId: "e-edit")
+        #expect(relay.receiveFromEmbed(raw: edit, origin: AppBridgeProtocol.iosOrigin, isMainFrame: true, mount: firstMount) == .none)
+        relay.embedFailed(appSessionId: id, issue: .rendererGone, mount: firstMount)
+        let firstLoss = try #require(relay.lostRendererEdits)
+
+        #expect(relay.attachBridge(appSessionId: id) { _ in })
+        let nextMount = relay.bridgeGeneration
+        #expect(ready(relay) == .none)
+        #expect(relay.receiveFromEmbed(raw: edit, origin: AppBridgeProtocol.iosOrigin, isMainFrame: true, mount: nextMount) == .none)
+        relay.embedFailed(appSessionId: id, issue: .rendererGone, mount: nextMount)
+        let nextLoss = try #require(relay.lostRendererEdits)
+        #expect(!relay.discardLostRendererEdits(firstLoss))
+        #expect(!(await relay.prepareToLeave()))
+        #expect(relay.discardLostRendererEdits(nextLoss))
+        #expect(await relay.prepareToLeave())
+    }
+
     @Test func movedHelpersKeepTheViewModelGuards() async throws {
         let wire = Wire()
         let relay = session(wire)
