@@ -15,21 +15,23 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const script = path.resolve(import.meta.dirname, "../scripts/upload-posthog-sourcemaps.mjs");
-const dirs: string[] = [];
-const servers: Server[] = [];
 
-afterEach(async () => {
-  dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true }));
-  const open = servers.splice(0);
-  open.forEach((server) => server.closeAllConnections());
-  await Promise.all(open.map((server) => new Promise((resolve) => server.close(resolve))));
-});
+type Cleanup = (release: () => void | Promise<void>) => void;
+
+const listen = async (server: Server, cleanup: Cleanup) => {
+  cleanup(async () => {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+};
 
 // A built OpenNext asset folder with one chunk and its map, plus a bin folder
 // holding a fake posthog-cli that exits with `cliExit` (none when null).
-const buildFixture = (cliExit: number | null) => {
+const buildFixture = (cliExit: number | null, cleanup: Cleanup) => {
   const root = mkdtempSync(path.join(tmpdir(), "sourcemaps-"));
-  dirs.push(root);
+  cleanup(() => rmSync(root, { recursive: true, force: true }));
   const chunks = path.join(root, ".open-next/assets/_next/static/chunks");
   mkdirSync(chunks, { recursive: true });
   writeFileSync(path.join(chunks, "app.js"), "console.log(1);\n//# sourceMappingURL=app.js.map\n");
@@ -63,16 +65,13 @@ const runUpload = ({ root, bin }: { root: string; bin: string }, env: Record<str
 const mapsLeft = (chunks: string) => readdirSync(chunks).filter((name) => name.endsWith(".map"));
 
 /** Accepts the upload connection and never answers, like PostHog behind a dead route. */
-const startStalledUploadHost = async () => {
+const startStalledUploadHost = async (cleanup: Cleanup) => {
   let connections = 0;
   const server = createServer(() => {});
   server.on("connection", () => {
     connections += 1;
   });
-  servers.push(server);
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const { port } = server.address() as AddressInfo;
-  return { host: `http://127.0.0.1:${port}`, connections: () => connections };
+  return { host: await listen(server, cleanup), connections: () => connections };
 };
 
 // A posthog-cli stand-in that starts its upload to the host and waits on it.
@@ -92,16 +91,13 @@ setInterval(() => {}, 1000);
 };
 
 /** Records when each upload request arrives, and never answers. */
-const startRecordingUploadHost = async () => {
+const startRecordingUploadHost = async (cleanup: Cleanup) => {
   const requestTimes: number[] = [];
   const server = createServer((request) => {
     requestTimes.push(Date.now());
     request.resume();
   });
-  servers.push(server);
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const { port } = server.address() as AddressInfo;
-  return { host: `http://127.0.0.1:${port}`, requestTimes };
+  return { host: await listen(server, cleanup), requestTimes };
 };
 
 // Shaped like the npm @posthog/cli: a node wrapper that runs the real
@@ -161,8 +157,8 @@ const isRunning = (pid: number) => {
 };
 
 describe("who may upload source maps", () => {
-  it("skips a developer build that has credentials only in .env.local, and still removes the maps", () => {
-    const fixture = buildFixture(0);
+  it("skips a developer build that has credentials only in .env.local, and still removes the maps", ({ onTestFinished }) => {
+    const fixture = buildFixture(0, onTestFinished);
     writeFileSync(path.join(fixture.root, ".env.local"), "POSTHOG_CLI_API_KEY=phx_left_in_env_local\nPOSTHOG_CLI_PROJECT_ID=1\n");
     const result = spawnSync(process.execPath, [script], {
       cwd: fixture.root,
@@ -176,12 +172,12 @@ describe("who may upload source maps", () => {
     expect(mapsLeft(fixture.chunks)).toEqual([]);
   });
 
-  it.each([
+  it.for([
     ["no CI flag", { POSTHOG_SOURCEMAPS_UPLOAD: "1" }],
     ["no opt-in", { CI: "true" }],
     ["neither", {}],
-  ])("skips the upload with credentials set but %s", (_name, env) => {
-    const fixture = buildFixture(0);
+  ] as const)("skips the upload with credentials set but %s", ([_name, env], { onTestFinished }) => {
+    const fixture = buildFixture(0, onTestFinished);
     const result = runUpload(fixture, env as Record<string, string>);
 
     expect(result.status).toBe(0);
@@ -203,8 +199,8 @@ describe("who may upload source maps", () => {
 });
 
 describe("upload-posthog-sourcemaps", () => {
-  it("warns and lets the deploy go on when the upload fails, with the maps removed", () => {
-    const fixture = buildFixture(1);
+  it("warns and lets the deploy go on when the upload fails, with the maps removed", ({ onTestFinished }) => {
+    const fixture = buildFixture(1, onTestFinished);
     const result = runUpload(fixture);
 
     expect(result.status).toBe(0);
@@ -212,8 +208,8 @@ describe("upload-posthog-sourcemaps", () => {
     expect(mapsLeft(fixture.chunks)).toEqual([]);
   });
 
-  it("warns and goes on when posthog-cli is not installed", () => {
-    const fixture = buildFixture(null);
+  it("warns and goes on when posthog-cli is not installed", ({ onTestFinished }) => {
+    const fixture = buildFixture(null, onTestFinished);
     const result = runUpload(fixture);
 
     expect(result.status).toBe(0);
@@ -221,11 +217,24 @@ describe("upload-posthog-sourcemaps", () => {
     expect(mapsLeft(fixture.chunks)).toEqual([]);
   });
 
-  it("gives up on an upload that stalls, kills posthog-cli and still removes the maps", async () => {
-    const fixture = buildFixture(null);
+  it("uploads and removes the maps when posthog-cli succeeds", ({ onTestFinished }) => {
+    const fixture = buildFixture(0, onTestFinished);
+    const result = runUpload(fixture);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/sourcemap inject/);
+    expect(result.stdout).toMatch(/sourcemap upload/);
+    expect(result.stdout).toMatch(/\[sourcemaps\] uploaded to PostHog/);
+    expect(mapsLeft(fixture.chunks)).toEqual([]);
+  });
+});
+
+describe.concurrent("upload-posthog-sourcemaps stopping posthog-cli", () => {
+  it("gives up on an upload that stalls, kills posthog-cli and still removes the maps", async ({ onTestFinished }) => {
+    const fixture = buildFixture(null, onTestFinished);
     const pidFile = path.join(fixture.root, "cli.pid");
     installStallingCli(fixture.bin, pidFile);
-    const uploadHost = await startStalledUploadHost();
+    const uploadHost = await startStalledUploadHost(onTestFinished);
 
     const startedAt = Date.now();
     const result = await new Promise<{ status: number | null; stderr: string }>((resolve) => {
@@ -255,10 +264,10 @@ describe("upload-posthog-sourcemaps", () => {
     expect(mapsLeft(fixture.chunks)).toEqual([]);
   }, 20_000);
 
-  it("stops the uploader the npm wrapper started before removing the maps", async () => {
-    const fixture = buildFixture(null);
+  it("stops the uploader the npm wrapper started before removing the maps", async ({ onTestFinished }) => {
+    const fixture = buildFixture(null, onTestFinished);
     installWrappedUploaderCli(fixture.root, fixture.bin);
-    const uploadHost = await startRecordingUploadHost();
+    const uploadHost = await startRecordingUploadHost(onTestFinished);
 
     const result = await runUploadAsync(fixture, {
       POSTHOG_CLI_HOST: uploadHost.host,
@@ -276,12 +285,12 @@ describe("upload-posthog-sourcemaps", () => {
     expect(mapsLeft(fixture.chunks)).toEqual([]);
   }, 30_000);
 
-  it.each(["SIGINT", "SIGTERM"] as const)(
+  it.for(["SIGINT", "SIGTERM"] as const)(
     "stops the uploader on %s, removes the maps and exits",
-    async (signal) => {
-      const fixture = buildFixture(null);
+    async (signal, { onTestFinished }) => {
+      const fixture = buildFixture(null, onTestFinished);
       installWrappedUploaderCli(fixture.root, fixture.bin);
-      const uploadHost = await startRecordingUploadHost();
+      const uploadHost = await startRecordingUploadHost(onTestFinished);
       const child = spawn(process.execPath, [script], {
         cwd: fixture.root,
         env: {
@@ -316,17 +325,6 @@ describe("upload-posthog-sourcemaps", () => {
     },
     30_000,
   );
-
-  it("uploads and removes the maps when posthog-cli succeeds", () => {
-    const fixture = buildFixture(0);
-    const result = runUpload(fixture);
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toMatch(/sourcemap inject/);
-    expect(result.stdout).toMatch(/sourcemap upload/);
-    expect(result.stdout).toMatch(/\[sourcemaps\] uploaded to PostHog/);
-    expect(mapsLeft(fixture.chunks)).toEqual([]);
-  });
 });
 
 describe("next.config.ts and the upload policy", () => {
