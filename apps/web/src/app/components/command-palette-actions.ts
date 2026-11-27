@@ -7,6 +7,7 @@ import {
   Globe,
   Keyboard,
   Link2,
+  Link2Off,
   Lock,
   LockOpen,
   MessageSquare,
@@ -148,7 +149,7 @@ export function buildPaletteActions(
   devices: PaletteDevices,
   extras: {
     onCopyMeetingCode?: () => void;
-    onCopyMeetingLink?: () => void;
+    onCopyMeetingLink?: (() => void) | null;
     onShowShortcuts?: () => void;
   } = {},
 ): PaletteAction[] {
@@ -379,14 +380,16 @@ export function buildPaletteActions(
       run: extras.onCopyMeetingCode,
     });
   }
-  if (p.roomId && extras.onCopyMeetingLink) {
+  if (p.roomId && extras.onCopyMeetingLink !== undefined) {
+    const copyLink = extras.onCopyMeetingLink;
     actions.push({
       id: "copy-link",
       section: "Meeting",
-      label: "Copy meeting link",
-      keywords: "copy invite link url share",
-      icon: Link2,
-      run: extras.onCopyMeetingLink,
+      label: copyLink ? "Copy meeting link" : "No shareable link for this room",
+      keywords: "copy meeting invite link url share",
+      icon: copyLink ? Link2 : Link2Off,
+      disabled: !copyLink,
+      run: copyLink ?? (() => {}),
     });
   }
   actions.push({

@@ -126,14 +126,14 @@ import {
   generateRoomCode,
   isSystemUserId,
   sanitizeInstitutionDisplayName,
-  sanitizeRoomCode,
 } from "./lib/utils";
 import type { VideoEffectsBridgeState } from "./components/VideoEffectsBridge";
 import { deriveInCallAlerts } from "./lib/in-call-alerts";
 import { NETWORK_BLOCKED_MESSAGE } from "./lib/media-path-recovery";
 import type { SetupNotice } from "./lib/setup-notice";
 import { clearRejoinIntent, readRejoinIntent } from "./lib/rejoin-intent";
-import { canonicalizeSfuClientId, resolveBrowserSfuClientId } from "@/lib/sfu-client-id";
+import { resolveMeetingClientId } from "@/lib/sfu-client-id";
+import { buildMeetingPath, buildWebinarPath, roomIdFromMeetingPath } from "@/lib/meeting-links";
 
 type MeetUser = {
   id?: string;
@@ -445,7 +445,7 @@ export default function MeetsClient({
       ? null
       : readRejoinIntent({
           roomId: initialRoomId ?? "",
-          clientId: canonicalizeSfuClientId(clientId) ?? resolveBrowserSfuClientId(),
+          clientId: resolveMeetingClientId(clientId),
         }),
   );
   useEffect(() => {
@@ -943,11 +943,9 @@ export default function MeetsClient({
     if (typeof window === "undefined") return;
     const path = window.location.pathname.replace(/^\/+/, "");
     if (!path) return;
-    const decoded = decodeURIComponent(path);
-    if (!decoded || decoded === "undefined" || decoded === "null") return;
-    const sanitized = sanitizeRoomCode(decoded);
-    if (!sanitized) return;
-    setRoomId(sanitized);
+    const pathRoomId = roomIdFromMeetingPath(decodeURIComponent(path));
+    if (!pathRoomId) return;
+    setRoomId(pathRoomId);
   }, [enableRoomRouting, forceJoinOnly, roomId, setRoomId]);
 
   useEffect(() => {
@@ -2380,13 +2378,10 @@ export default function MeetsClient({
         notification.webinarLinkSlug?.trim() ||
         webinarConfigRef.current?.linkSlug?.trim() ||
         "";
-      if (slug) {
-        window.location.assign(`/w/${encodeURIComponent(slug)}`);
-      } else {
-        window.location.assign("/");
-      }
+      const path = buildWebinarPath({ slug, clientId: resolveMeetingClientId(clientId) });
+      window.location.assign(path ?? "/");
     },
-    [],
+    [clientId],
   );
 
   const socket = useMeetSocket({
@@ -2479,12 +2474,15 @@ export default function MeetsClient({
     bypassMediaPermissions,
   });
 
+  const webinarStagePath = webinarStageInvite
+    ? buildMeetingPath({
+        roomCode: webinarStageInvite.rejoinRoomId,
+        clientId: resolveMeetingClientId(clientId),
+      })
+    : null;
   const handleAcceptWebinarStageInvite = useCallback(() => {
-    if (!webinarStageInvite || typeof window === "undefined") return;
-    window.location.assign(
-      `/${encodeURIComponent(webinarStageInvite.rejoinRoomId)}`,
-    );
-  }, [webinarStageInvite]);
+    if (webinarStagePath) window.location.assign(webinarStagePath);
+  }, [webinarStagePath]);
 
   const declineWebinarStageInvite = socket.declineWebinarStageInvite;
   const handleDismissWebinarStageInvite = useCallback(() => {
@@ -2678,24 +2676,6 @@ export default function MeetsClient({
       setHasEnteredMeetingSurface(false);
     }
   }, [connectionState, refs.intentionalDisconnectRef]);
-
-  useEffect(() => {
-    if (connectionState === "joined") return;
-    const normalizedRoomId = roomId.trim();
-    const hasRoom = normalizedRoomId.length > 0;
-    if (!hasRoom && !isAdminFlag) return;
-
-    const refresh = () => {
-      void refreshRooms(isAdminFlag ? undefined : normalizedRoomId);
-    };
-
-    refresh();
-    if (!hasRoom) return;
-    const interval = setInterval(() => {
-      refresh();
-    }, 10000);
-    return () => clearInterval(interval);
-  }, [roomId, isAdminFlag, connectionState, refreshRooms]);
 
   const joinRoomById = socket.joinRoomById;
   useEffect(() => {
@@ -3539,7 +3519,7 @@ export default function MeetsClient({
         isWebinarHandRaised={isWebinarHandRaised}
         webinarStageInvite={webinarStageInvite}
         onDismissWebinarStageInvite={handleDismissWebinarStageInvite}
-        onAcceptWebinarStageInvite={handleAcceptWebinarStageInvite}
+        onAcceptWebinarStageInvite={webinarStagePath ? handleAcceptWebinarStageInvite : undefined}
         onSubmitWebinarQuestion={
           isWebinarAttendee ? socket.submitWebinarQuestion : undefined
         }

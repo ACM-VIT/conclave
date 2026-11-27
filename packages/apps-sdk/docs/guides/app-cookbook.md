@@ -280,11 +280,11 @@ const meetingApps = [whiteboardApp, watchApp, checklistApp];
 `meeting controls wiring`:
 
 ```ts
-const { state, openApp, closeApp, setLocked } = useApps();
+const { state, presentApp, closeApp, setLocked } = useApps();
 const isChecklistActive = state.activeAppId === "checklist";
 
 const toggleChecklist = () =>
-  isChecklistActive ? closeApp() : openApp("checklist");
+  isChecklistActive ? closeApp() : presentApp("checklist");
 
 const toggleLock = () => setLocked(!state.locked);
 ```

@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,11 +15,14 @@ import {
   scheduledWebinarJsonStore,
 } from "../server/scheduledWebinars.js";
 import {
+  clearGoogleCalendarConnection,
   createEventType,
   createSchedulingPersistence,
   createSchedulingStore,
+  deleteEventType,
   ensureSchedulingProfile,
   schedulingJsonStore,
+  setGoogleCalendarConnection,
 } from "../server/scheduling.js";
 import type { SchedulingCalendarConnection } from "../types.js";
 
@@ -31,6 +34,7 @@ type Store = {
   modeVariable: string;
   pathVariable: string;
   uniqueKey: string;
+  recordsCanBeDeleted: boolean;
   encode: (records: Record[]) => unknown;
   load: () => Promise<Record[]>;
 };
@@ -50,6 +54,7 @@ const stores: Store[] = [
     modeVariable: "SCHEDULED_MEETINGS_PERSISTENCE",
     pathVariable: "SCHEDULED_MEETINGS_PATH",
     uniqueKey: "room code",
+    recordsCanBeDeleted: true,
     encode: (records) =>
       records.map(({ id, title, updatedAt, unique, status }) => ({
         ...meetingTemplate(),
@@ -68,6 +73,7 @@ const stores: Store[] = [
     modeVariable: "SCHEDULED_WEBINARS_PERSISTENCE",
     pathVariable: "SCHEDULED_WEBINARS_PATH",
     uniqueKey: "link slug",
+    recordsCanBeDeleted: true,
     encode: (records) =>
       records.map(({ id, title, updatedAt, unique, room }) => ({
         ...webinarTemplate(),
@@ -85,6 +91,7 @@ const stores: Store[] = [
     modeVariable: "SCHEDULING_PERSISTENCE",
     pathVariable: "SCHEDULING_PATH",
     uniqueKey: "host",
+    recordsCanBeDeleted: false,
     encode: (records) => ({
       profiles: records.map(({ id, title, updatedAt, unique }) => ({
         ...ensureSchedulingProfile(createSchedulingStore(), { clientId: "conclave", userId: unique ?? `user-${id}`, email: `${id}@example.test` }),
@@ -142,8 +149,15 @@ describe.each(stores)("an SFU in explicit JSON mode with $name from an older ima
   });
 
   it("keeps a record saved during a rollback when its own store already holds records", async () => {
-    write(activePath(store), store.encode([{ id: "before", title: "Before the rollback", updatedAt: 100 }]));
-    write(copyPath(store), store.encode([{ id: "during", title: "Saved during the rollback", updatedAt: 200 }]));
+    const before = { id: "before", title: "Before the rollback", updatedAt: 100 };
+    const during = { id: "during", title: "Saved during the rollback", updatedAt: 200 };
+    if (store.recordsCanBeDeleted) {
+      write(activePath(store), store.encode([before, { ...during, title: "Original", updatedAt: 100 }]));
+      write(copyPath(store), store.encode([{ ...before, updatedAt: 200 }, during]));
+    } else {
+      write(activePath(store), store.encode([before]));
+      write(copyPath(store), store.encode([during]));
+    }
 
     expect(byId(await store.load())).toEqual({ before: "Before the rollback", during: "Saved during the rollback" });
     expect(readdirSync(dirname(activePath(store))).some((name) => name.startsWith(`${store.file}.premerge-`))).toBe(true);
@@ -156,16 +170,25 @@ describe.each(stores)("an SFU in explicit JSON mode with $name from an older ima
     expect(byId(await store.load())).toEqual({ a: "Newer in the copy", b: "Newer here" });
   });
 
-  it("combines two different copies when its own store is missing", async () => {
+  it("only unions disjoint copies of records that cannot be deleted", async () => {
     write(copyPath(store, "sfu-a"), store.encode([{ id: "a", title: "From sfu-a", updatedAt: 100 }]));
     write(copyPath(store, "sfu-b"), store.encode([{ id: "b", title: "From sfu-b", updatedAt: 100 }]));
 
-    expect(byId(await store.load())).toEqual({ a: "From sfu-a", b: "From sfu-b" });
+    if (store.recordsCanBeDeleted) {
+      await expect(store.load()).rejects.toThrow(/possible deletion/);
+      expect(existsSync(activePath(store))).toBe(false);
+      expect(existsSync(copyPath(store, "sfu-a"))).toBe(true);
+      expect(existsSync(copyPath(store, "sfu-b"))).toBe(true);
+    } else {
+      expect(byId(await store.load())).toEqual({ a: "From sfu-a", b: "From sfu-b" });
+    }
   });
 
   it("adopts the copies two deploys saved, oldest first, and keeps the records of both", async () => {
-    write(copyPath(store, "sfu-a", "20261123T090000000Z-sfu-first-deploy"), store.encode([{ id: "a", title: "Saved by the first deploy", updatedAt: 100 }]));
-    write(copyPath(store, "sfu-a", "20261124T090000000Z-sfu-second-deploy"), store.encode([{ id: "b", title: "Saved by the second deploy", updatedAt: 100 }]));
+    const first = { id: "a", title: "Saved by the first deploy", updatedAt: 100 };
+    const second = { id: "b", title: "Saved by the second deploy", updatedAt: 200 };
+    write(copyPath(store, "sfu-a", "20261123T090000000Z-sfu-first-deploy"), store.encode(store.recordsCanBeDeleted ? [first, { ...second, updatedAt: 100 }] : [first]));
+    write(copyPath(store, "sfu-a", "20261124T090000000Z-sfu-second-deploy"), store.encode(store.recordsCanBeDeleted ? [{ ...first, updatedAt: 200 }, second] : [second]));
     write(join(importDir(), ".incoming-sfu-a-77", "files", store.file), store.encode([{ id: "c", title: "Still arriving", updatedAt: 100 }]));
 
     expect(byId(await store.load())).toEqual({ a: "Saved by the first deploy", b: "Saved by the second deploy" });
@@ -210,7 +233,7 @@ describe.each(stores)("an SFU in explicit JSON mode whose saved $name copies it 
     ["an archive folder it can read but not mark adopted", () => dirname(copyPath(store)), 0o500],
   ] as const)("refuses to start, naming %s and the fix, and changes nothing", async (_label, locked, mode) => {
     write(activePath(store), store.encode([{ id: "live", title: "Live", updatedAt: 100 }]));
-    write(copyPath(store), store.encode([{ id: "saved", title: "Saved", updatedAt: 100 }]));
+    write(copyPath(store), store.encode([{ id: "live", title: "Saved", updatedAt: 200 }]));
 
     await lockedWhile(locked(), mode, async () => {
       const refusal = store.load();
@@ -219,7 +242,7 @@ describe.each(stores)("an SFU in explicit JSON mode whose saved $name copies it 
       expect(readdirSync(dirname(activePath(store))).filter((name) => name.includes(".premerge-"))).toEqual([]);
     });
     expect(existsSync(copyPath(store))).toBe(true);
-    expect(byId(await store.load())).toEqual({ live: "Live", saved: "Saved" });
+    expect(byId(await store.load())).toEqual({ live: "Saved" });
   });
 
   it.skipIf(isRoot)("starts as usual when only a staging folder it never reads is locked", async () => {
@@ -246,8 +269,10 @@ describe("an SFU in explicit JSON mode combining scheduled meetings", () => {
   const meetings = stores[0];
 
   it("lets an ended or cancelled meeting share a room code with an active one", async () => {
-    write(activePath(meetings), meetings.encode([{ id: "active", title: "Active", updatedAt: 100, unique: "shared-code" }]));
-    write(copyPath(meetings), meetings.encode([{ id: "done", title: "Cancelled", updatedAt: 100, unique: "shared-code", status: "cancelled" }]));
+    const active = { id: "active", title: "Active", updatedAt: 100, unique: "shared-code" };
+    const done = { id: "done", title: "Cancelled", updatedAt: 200, unique: "shared-code", status: "cancelled" };
+    write(activePath(meetings), meetings.encode([active, { ...done, updatedAt: 100 }]));
+    write(copyPath(meetings), meetings.encode([{ ...active, updatedAt: 200 }, done]));
 
     expect(byId(await meetings.load())).toEqual({ active: "Active", done: "Cancelled" });
   });
@@ -266,6 +291,25 @@ describe("an SFU in explicit JSON mode combining scheduled webinars", () => {
 
 describe("an SFU in explicit JSON mode combining scheduling records", () => {
   const scheduling = stores[2];
+
+  it.each(["volume", "rollback copy"])("leaves both files intact when the %s deleted a bookable event type", async (deletedIn) => {
+    const store = createSchedulingStore();
+    const profile = ensureSchedulingProfile(store, { clientId: "conclave", userId: "host", email: "host@example.test" });
+    const event = createEventType(store, profile, { title: "Office hours", slug: "office-hours" });
+    const snapshot = () => ({ profiles: [profile], eventTypes: [...store.eventTypesById.values()], availability: [], calendars: [] });
+    const active = activePath(scheduling);
+    const copy = copyPath(scheduling);
+    write(deletedIn === "volume" ? copy : active, snapshot());
+    expect(deleteEventType(store, profile, event.id)).toBeTruthy();
+    write(deletedIn === "volume" ? active : copy, snapshot());
+    const originals = [active, copy].map((path) => readFileSync(path, "utf8"));
+
+    const load = async () => createSchedulingPersistence().load();
+    await expect(load()).rejects.toThrow(new RegExp(`eventTypes ${event.id}.*possible deletion`));
+    expect([active, copy].map((path) => readFileSync(path, "utf8"))).toEqual(originals);
+    expect(existsSync(`${copy}.adopted`)).toBe(false);
+  });
+
   const calendar = (profileId: string): SchedulingCalendarConnection => ({
     id: `calendar-${profileId}`,
     clientId: "conclave",
@@ -293,6 +337,36 @@ describe("an SFU in explicit JSON mode combining scheduling records", () => {
     vi.stubEnv("SCHEDULING_TOKEN_SECRET", "current-secret");
   };
   const withCalendar = () => ({ ...(scheduling.encode([{ id: "p1", title: "Host", updatedAt: 100 }]) as object), calendars: [calendar("p1")] });
+
+  it("refuses to recover a calendar connection that could have been disconnected", async () => {
+    const snapshot = withCalendar();
+    saveThroughTheStore(activePath(scheduling), "current-secret", snapshot);
+    saveThroughTheStore(copyPath(scheduling), "current-secret", { ...snapshot, calendars: [] });
+
+    await expect(scheduling.load()).rejects.toThrow(/calendars calendar-p1.*possible deletion/);
+    expect(existsSync(copyPath(scheduling))).toBe(true);
+  });
+
+  it.each([true, false])("keeps both files when a calendar was disconnected and reconnected (newer archive: %s)", async (newerArchive) => {
+    const store = createSchedulingStore();
+    const profile = ensureSchedulingProfile(store, { clientId: "conclave", userId: "host", email: "host@example.test" });
+    const snapshot = () => ({ profiles: [profile], eventTypes: [], availability: [], calendars: [...store.calendarByProfileId.values()] });
+    const active = activePath(scheduling);
+    const copy = copyPath(scheduling);
+    const disconnected = setGoogleCalendarConnection(store, profile, { email: "first@example.test", refreshToken: "first" });
+    disconnected.updatedAt = newerArchive ? 200 : 100;
+    saveThroughTheStore(copy, "current-secret", snapshot());
+    clearGoogleCalendarConnection(store, profile);
+    const reconnected = setGoogleCalendarConnection(store, profile, { email: "second@example.test", refreshToken: "second" });
+    reconnected.updatedAt = newerArchive ? 100 : 200;
+    expect(reconnected.id).not.toBe(disconnected.id);
+    saveThroughTheStore(active, "current-secret", snapshot());
+    const originals = [active, copy].map((path) => readFileSync(path, "utf8"));
+
+    await expect(scheduling.load()).rejects.toThrow(new RegExp(`calendars ${disconnected.id}.*possible deletion`));
+    expect([active, copy].map((path) => readFileSync(path, "utf8"))).toEqual(originals);
+    expect(existsSync(`${copy}.adopted`)).toBe(false);
+  });
 
   it("treats two saves of the same calendar as one record, though their ciphertext differs", async () => {
     const snapshot = withCalendar();
@@ -382,7 +456,7 @@ describe("the JSON store merger, for every claim a store declares", () => {
       profiles,
       availability: [],
       eventTypes: profiles.map((profile, n) => createEventType(scheduling, profile, { title: `Event ${n}`, slug: `event-${n}` })),
-      calendars: [],
+      calendars: profiles.map((profile) => setGoogleCalendarConnection(scheduling, profile, {})),
     };
   };
 
@@ -428,7 +502,7 @@ describe("the JSON store merger, for every claim a store declares", () => {
 });
 
 describe("the JSON store merger", () => {
-  type CheckedIndexes = { collections: { [name: string]: { index: string; claims: object } } };
+  type CheckedIndexes = { collections: { [name: string]: { index?: string; claims: object } } };
   const liveStores: Array<{ name: string; store: object; adapter: CheckedIndexes }> = [
     { name: "scheduled meetings", store: createScheduledMeetingStore(), adapter: scheduledMeetingJsonStore },
     { name: "scheduled webinars", store: createScheduledWebinarStore(), adapter: scheduledWebinarJsonStore },
@@ -441,7 +515,7 @@ describe("the JSON store merger", () => {
       .map(([name]) => name)
       .sort();
     const checked = Object.values(adapter.collections)
-      .flatMap((collection) => [collection.index, ...Object.keys(collection.claims)])
+      .flatMap((collection) => [...(collection.index ? [collection.index] : []), ...Object.keys(collection.claims)])
       .sort();
     expect(checked).toEqual(indexes);
   });

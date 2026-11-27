@@ -94,6 +94,11 @@
       "count": 1
     }
   },
+  "src/app/components/apps/AppsPanel.tsx": {
+    "conclave/no-comments": {
+      "count": 2
+    }
+  },
   "src/app/hooks/useAdaptiveConsumerPreferences.ts": {
     "conclave/no-comments": {
       "count": 2
@@ -245,6 +250,16 @@
     }
   },
   "src/lib/voice-upload.ts": {
+    "conclave/no-comments": {
+      "count": 6
+    }
+  },
+  "test/apps-presented-doc.test.tsx": {
+    "conclave/no-comments": {
+      "count": 13
+    }
+  },
+  "test/apps-stage-panel.test.tsx": {
     "conclave/no-comments": {
       "count": 6
     }
