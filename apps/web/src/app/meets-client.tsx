@@ -12,6 +12,7 @@ import { SFU_EVENTS } from "@conclave/meeting-core/sfu-events";
 import type { RoomInfo } from "@/lib/sfu-types";
 import { useSession } from "@/lib/auth-client";
 import { readJoinTokenUserKey } from "./lib/join-token-identity";
+import type { JoinInfoAnswer } from "./lib/join-info-request";
 import { shouldRetainMeetingSurface } from "./lib/meeting-surface-policy";
 import {
   AppsProvider,
@@ -89,7 +90,12 @@ import {
   clearStoredVoiceAgentKey,
   storeVoiceAgentKey,
 } from "./lib/voice-agent-key";
-import type { ChatMessage, JoinMode, PrejoinMediaHandoff } from "./lib/types";
+import type {
+  ChatMessage,
+  JoinMode,
+  MeetError,
+  PrejoinMediaHandoff,
+} from "./lib/types";
 import { getTtsMessageText } from "./lib/chat-commands";
 import {
   readStoredMeetViewSettings,
@@ -120,12 +126,14 @@ import {
   generateRoomCode,
   isSystemUserId,
   sanitizeInstitutionDisplayName,
-  sanitizeRoomCode,
 } from "./lib/utils";
 import type { VideoEffectsBridgeState } from "./components/VideoEffectsBridge";
+import { deriveInCallAlerts } from "./lib/in-call-alerts";
+import { NETWORK_BLOCKED_MESSAGE } from "./lib/media-path-recovery";
 import type { SetupNotice } from "./lib/setup-notice";
 import { clearRejoinIntent, readRejoinIntent } from "./lib/rejoin-intent";
-import { canonicalizeSfuClientId, resolveBrowserSfuClientId } from "@/lib/sfu-client-id";
+import { resolveMeetingClientId } from "@/lib/sfu-client-id";
+import { buildMeetingPath, buildWebinarPath, roomIdFromMeetingPath } from "@/lib/meeting-links";
 
 type MeetUser = {
   id?: string;
@@ -155,6 +163,11 @@ const VIDEO_EFFECTS_OFF_STATE: VideoEffectsBridgeState = {
   debugStats: null,
 };
 
+const MEDIA_BLOCKED_ALERT: MeetError = {
+  code: "NETWORK_BLOCKED",
+  message: NETWORK_BLOCKED_MESSAGE,
+  recoverable: true,
+};
 const GUEST_USER_STORAGE_KEY = "conclave:guest-user";
 const DEBUG_VIDEO_EFFECTS_STORAGE_KEY = "conclave:debug-video-effects";
 const VIDEO_EFFECTS_STORAGE_KEY = "conclave:video-effects";
@@ -391,12 +404,9 @@ export type MeetsClientProps = {
       user?: { id?: string; email?: string | null; name?: string | null };
       isHost?: boolean;
       joinMode?: JoinMode;
+      signal?: AbortSignal;
     },
-  ) => Promise<{
-    token: string;
-    sfuUrl: string;
-    iceServers?: RTCIceServer[];
-  }>;
+  ) => Promise<JoinInfoAnswer>;
   joinMode?: JoinMode;
   autoJoinOnMount?: boolean;
   hideJoinUI?: boolean;
@@ -435,7 +445,7 @@ export default function MeetsClient({
       ? null
       : readRejoinIntent({
           roomId: initialRoomId ?? "",
-          clientId: canonicalizeSfuClientId(clientId) ?? resolveBrowserSfuClientId(),
+          clientId: resolveMeetingClientId(clientId),
         }),
   );
   useEffect(() => {
@@ -933,11 +943,9 @@ export default function MeetsClient({
     if (typeof window === "undefined") return;
     const path = window.location.pathname.replace(/^\/+/, "");
     if (!path) return;
-    const decoded = decodeURIComponent(path);
-    if (!decoded || decoded === "undefined" || decoded === "null") return;
-    const sanitized = sanitizeRoomCode(decoded);
-    if (!sanitized) return;
-    setRoomId(sanitized);
+    const pathRoomId = roomIdFromMeetingPath(decodeURIComponent(path));
+    if (!pathRoomId) return;
+    setRoomId(pathRoomId);
   }, [enableRoomRouting, forceJoinOnly, roomId, setRoomId]);
 
   useEffect(() => {
@@ -2370,13 +2378,10 @@ export default function MeetsClient({
         notification.webinarLinkSlug?.trim() ||
         webinarConfigRef.current?.linkSlug?.trim() ||
         "";
-      if (slug) {
-        window.location.assign(`/w/${encodeURIComponent(slug)}`);
-      } else {
-        window.location.assign("/");
-      }
+      const path = buildWebinarPath({ slug, clientId: resolveMeetingClientId(clientId) });
+      window.location.assign(path ?? "/");
     },
-    [],
+    [clientId],
   );
 
   const socket = useMeetSocket({
@@ -2469,12 +2474,15 @@ export default function MeetsClient({
     bypassMediaPermissions,
   });
 
+  const webinarStagePath = webinarStageInvite
+    ? buildMeetingPath({
+        roomCode: webinarStageInvite.rejoinRoomId,
+        clientId: resolveMeetingClientId(clientId),
+      })
+    : null;
   const handleAcceptWebinarStageInvite = useCallback(() => {
-    if (!webinarStageInvite || typeof window === "undefined") return;
-    window.location.assign(
-      `/${encodeURIComponent(webinarStageInvite.rejoinRoomId)}`,
-    );
-  }, [webinarStageInvite]);
+    if (webinarStagePath) window.location.assign(webinarStagePath);
+  }, [webinarStagePath]);
 
   const declineWebinarStageInvite = socket.declineWebinarStageInvite;
   const handleDismissWebinarStageInvite = useCallback(() => {
@@ -2669,24 +2677,6 @@ export default function MeetsClient({
     }
   }, [connectionState, refs.intentionalDisconnectRef]);
 
-  useEffect(() => {
-    if (connectionState === "joined") return;
-    const normalizedRoomId = roomId.trim();
-    const hasRoom = normalizedRoomId.length > 0;
-    if (!hasRoom && !isAdminFlag) return;
-
-    const refresh = () => {
-      void refreshRooms(isAdminFlag ? undefined : normalizedRoomId);
-    };
-
-    refresh();
-    if (!hasRoom) return;
-    const interval = setInterval(() => {
-      refresh();
-    }, 10000);
-    return () => clearInterval(interval);
-  }, [roomId, isAdminFlag, connectionState, refreshRooms]);
-
   const joinRoomById = socket.joinRoomById;
   useEffect(() => {
     if (!roomToJoinAsIssued) return;
@@ -2694,6 +2684,10 @@ export default function MeetsClient({
     void joinRoomById(roomToJoinAsIssued);
   }, [joinRoomById, roomToJoinAsIssued]);
   const retryReconnect = socket.retryReconnect;
+  const inCallAlerts = deriveInCallAlerts({
+    meetError,
+    mediaPathHealth: socket.mediaPathHealth,
+  });
   const reconnectRecoveryStatus = socket.reconnectRecoveryStatus;
   const getMeetingConfig = socket.getMeetingConfig;
   const getWebinarConfig = socket.getWebinarConfig;
@@ -3283,9 +3277,23 @@ export default function MeetsClient({
     <div className="flex flex-col h-full w-full bg-[#18181b] text-white">
       <MeetsHeader isJoined={isJoined} />
       <MeetsMainContent
+        mediaBlockedNotice={
+          connectionState === "joined" && inCallAlerts.mediaBlocked ? (
+            <MeetsErrorBanner
+              meetError={MEDIA_BLOCKED_ALERT}
+              onDismiss={() => {}}
+              primaryActionLabel="Try again"
+              onPrimaryAction={() => void retryReconnect()}
+              collapseOnDismiss
+            />
+          ) : null
+        }
         errorNotice={
-          connectionState === "joined" && meetError ? (
-            <MeetsErrorBanner meetError={meetError} onDismiss={() => setMeetError(null)} />
+          connectionState === "joined" && inCallAlerts.error ? (
+            <MeetsErrorBanner
+              meetError={inCallAlerts.error}
+              onDismiss={() => setMeetError(null)}
+            />
           ) : null
         }
         mediaErrorNotice={
@@ -3511,7 +3519,7 @@ export default function MeetsClient({
         isWebinarHandRaised={isWebinarHandRaised}
         webinarStageInvite={webinarStageInvite}
         onDismissWebinarStageInvite={handleDismissWebinarStageInvite}
-        onAcceptWebinarStageInvite={handleAcceptWebinarStageInvite}
+        onAcceptWebinarStageInvite={webinarStagePath ? handleAcceptWebinarStageInvite : undefined}
         onSubmitWebinarQuestion={
           isWebinarAttendee ? socket.submitWebinarQuestion : undefined
         }

@@ -139,6 +139,7 @@ final class WebRTCClient {
     }
     func cleanup(notifyLocalState: Bool = true, preserveCallAudioRouting: Bool = false) async {
         configurationGeneration += 1
+        testReleaseScreenShare()
         hasLocalAudioProducer = false
         hasLocalVideoProducer = false
         testLocalAudioLive = false
@@ -212,7 +213,39 @@ final class WebRTCClient {
         testReportLocalVideo(false)
         try? await testCallGate?("closeLocalVideoProducer")
     }
-    func closeLocalScreenProducer() async { }
+    func closeLocalScreenProducer() async {
+        testReleaseScreenShare()
+    }
+
+    private(set) var testScreenShareGrant: Int?
+
+    var testReleasesScreenConsent: (@MainActor (Int) -> Void)?
+
+    var testRefusesScreenShareStart = false
+
+    func startScreenSharing(consentGrant: Int) async throws {
+        let generation = configurationGeneration
+        try await testCallGate?("startScreenSharing")
+        if testRefusesScreenShareStart {
+            throw CancellationError()
+        }
+        guard generation == configurationGeneration else {
+            testReleasesScreenConsent?(consentGrant)
+            throw CancellationError()
+        }
+        testScreenShareGrant = consentGrant
+    }
+
+    func closeLocalScreenProducer(consentGrant: Int) async {
+        guard testScreenShareGrant == consentGrant else { return }
+        testReleaseScreenShare()
+    }
+
+    private func testReleaseScreenShare() {
+        guard let grant = testScreenShareGrant else { return }
+        testScreenShareGrant = nil
+        testReleasesScreenConsent?(grant)
+    }
 
     func testUnsupportedScreenShare() async { try? await testCallGate?("screenShare") }
     func closeLocalMedia(kind: String, type: String, producerId: String? = nil) async -> Bool {

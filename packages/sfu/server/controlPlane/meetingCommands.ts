@@ -46,13 +46,7 @@ export const meetingById =
 
 export const meetingByRoomCode =
   (clientId: string, roomCode: string): Query<ScheduledMeeting | null> =>
-  (view) => {
-    for (const candidate of clientIdCandidates(clientId)) {
-      const meeting = meetingWithCode(view, candidate, roomCode);
-      if (meeting) return meeting;
-    }
-    return null;
-  };
+  (view) => meetingWithCode(view, clientId, roomCode);
 
 export const listMeetings =
   (filter: ScheduledMeetingFilter & { clientId: string }): Query<ScheduledMeeting[]> =>

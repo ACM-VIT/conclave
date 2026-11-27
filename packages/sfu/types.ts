@@ -11,6 +11,7 @@ import type {
   DtlsParameters,
 } from "mediasoup/types";
 import type { Socket } from "socket.io";
+import type { JoinRoomAnswerFields } from "@conclave/meeting-core/join-room-answer";
 import type {
   ClientMediaCapabilities,
   WebcamCodecPolicy,
@@ -62,32 +63,10 @@ export interface JoinRoomData {
   mediaCapabilities?: ClientMediaCapabilities;
 }
 
-export interface JoinRoomResponse {
-  roomId?: string;
+export interface JoinRoomResponse extends JoinRoomAnswerFields {
   rtpCapabilities: RtpCapabilities;
   existingProducers: ProducerInfo[];
-  activeSpeakerId?: string | null;
   displayNameSnapshot?: DisplayNameSnapshotEntry[];
-  status?: "waiting" | "joined";
-  hostUserId?: string | null;
-  hostUserIds?: string[];
-  isLocked?: boolean;
-  isTtsDisabled?: boolean;
-  isChatLocked?: boolean;
-  isDmEnabled?: boolean;
-  areImageAttachmentsEnabled?: boolean;
-  isReactionsDisabled?: boolean;
-  isParticipantUnmuteAllowed?: boolean;
-  isParticipantVideoAllowed?: boolean;
-  meetingRequiresInviteCode?: boolean;
-  webinarRole?: "attendee" | "participant" | "host";
-  isWebinarEnabled?: boolean;
-  webinarLocked?: boolean;
-  webinarRequiresInviteCode?: boolean;
-  webinarAttendeeCount?: number;
-  webinarMaxAttendees?: number;
-  webinarQaEnabled?: boolean;
-  webinarSpeakerUserId?: string | null;
   webcamCodecPolicy?: WebcamCodecPolicy;
 }
 
@@ -1127,35 +1106,72 @@ export interface BrowserClosedNotification {
 }
 
 export interface AppsState {
+  /** The app presented on the stage. */
   activeAppId: string | null;
   locked: boolean;
+  /** Bumped by every change to this state. Older SFUs send none. */
+  revision: number;
+  /** Apps off the stage whose document the room keeps. */
+  savedAppIds: string[];
+  /**
+   * The presented app's document. A new number means the room started it
+   * over, so a client's copy of the earlier one is stale. Null when nothing
+   * is presented.
+   */
+  docGeneration: number | null;
   roomId?: string;
 }
 
+/** Why a stage command was refused, for clients to explain it. */
+export type AppsStageErrorCode = "stale_revision" | "room_full";
+
 export interface AppsOpenData {
   appId: string;
+  expectedRevision?: number;
   options?: Record<string, unknown>;
 }
 
 export interface AppsOpenResponse {
   success: boolean;
   activeAppId?: string;
+  revision?: number;
   error?: string;
+  code?: AppsStageErrorCode;
+}
+
+export interface AppsCloseData {
+  expectedRevision?: number;
 }
 
 export interface AppsCloseResponse {
   success: boolean;
+  revision?: number;
   error?: string;
+  code?: AppsStageErrorCode;
+}
+
+export interface AppsDiscardData {
+  appId: string;
+  expectedRevision?: number;
+}
+
+export interface AppsDiscardResponse {
+  success: boolean;
+  revision?: number;
+  error?: string;
+  code?: AppsStageErrorCode;
 }
 
 export interface AppsLockData {
   locked: boolean;
+  expectedRevision?: number;
 }
 
 export interface AppsLockResponse {
   success: boolean;
   locked?: boolean;
   error?: string;
+  code?: AppsStageErrorCode;
 }
 
 export interface AppsSyncData {
@@ -1169,9 +1185,22 @@ export interface AppsSyncResponse {
   awarenessUpdate?: Uint8Array;
 }
 
+export interface AppsSyncError {
+  error: string;
+  retryable?: true;
+  retryAfterMs?: number;
+}
+
 export interface AppsUpdateData {
   appId: string;
   update: Uint8Array;
+  replicaId?: string;
+}
+
+export interface AppsRefusedData {
+  appId: string;
+  replicaId: string;
+  reason: string;
 }
 
 export interface AppsAwarenessData {

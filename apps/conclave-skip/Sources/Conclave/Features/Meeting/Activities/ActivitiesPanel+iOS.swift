@@ -139,10 +139,11 @@ private struct ActivitiesRootList: View {
     }
 
     private func replaceMessage(_ s: ActivitiesSnapshot) -> String {
-        if s.nowPlayingItem(kind: .app)?.appId == "whiteboard" {
+        let effect = s.nowPlayingItem(kind: .app)?.closeEffect ?? AppCloseEffect.returnsToMeeting
+        if effect == AppCloseEffect.clearsBoard {
             return ConclaveStrings.format("The %@ board clears for everyone.", openAppName(s))
         }
-        return ConclaveStrings.text("Everyone returns to the meeting.")
+        return ActivitiesCopy.closeMessage(effect)
     }
 }
 

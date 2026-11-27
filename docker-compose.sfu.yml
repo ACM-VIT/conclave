@@ -12,14 +12,24 @@ x-sfu-hardening: &sfu-hardening
     - ALL
 
 services:
-  sfu-a:
-    <<: *sfu-hardening
+  sfu-image:
+    image: conclave-sfu-build
     build:
       context: .
       dockerfile: packages/sfu/Dockerfile
+    profiles: ["build"]
+
+  sfu-a:
+    <<: *sfu-hardening
+    # Named here, so the image deploy-sfu.sh tags is the one compose starts
+    # whatever compose's own naming (COMPOSE_COMPATIBILITY uses underscores).
+    # deploy-sfu.sh sets SFU_IMAGE_SFU_A on every start: a candidate runs under its
+    # own tag, and conclave-sfu-a only ever names a build that passed.
+    image: ${SFU_IMAGE_SFU_A:-conclave-sfu-a}
+    pull_policy: never
     network_mode: "host"
     environment:
-      SFU_PORT: "3031"
+      SFU_PORT: "${SFU_A_PORT:-3031}"
       NODE_ENV: production
       SFU_CORS_ORIGINS: ${SFU_CORS_ORIGINS:-https://conclave.acmvit.in}
       SFU_ALLOW_OPEN_CORS: ${SFU_ALLOW_OPEN_CORS:-}
@@ -31,9 +41,9 @@ services:
       SFU_SECRET: ${SFU_SECRET}
       SCHEDULING_TOKEN_SECRET: ${SCHEDULING_TOKEN_SECRET:-}
       TRANSCRIPT_WORKER_URL: ${TRANSCRIPT_WORKER_URL:-http://localhost:8788}
-      SFU_DRAINING: "false"
-      RTC_MIN_PORT: "40000"
-      RTC_MAX_PORT: "41000"
+      SFU_DRAINING: "${SFU_START_DRAINING:-false}"
+      RTC_MIN_PORT: "${SFU_A_RTC_MIN_PORT:-40000}"
+      RTC_MAX_PORT: "${SFU_A_RTC_MAX_PORT:-41000}"
       ANNOUNCED_IP: ${ANNOUNCED_IP}
       PLAIN_TRANSPORT_ANNOUNCED_IP: ${PLAIN_TRANSPORT_ANNOUNCED_IP:-${ANNOUNCED_IP}}
       SFU_VERSION: "v1"
@@ -82,16 +92,19 @@ services:
       CONTROL_PLANE_JSON_PATH: ${CONTROL_PLANE_JSON_PATH:-/var/lib/conclave/recordings/control-plane.json}
     volumes:
       - ${RECORDING_STORAGE_PATH:-/var/lib/conclave/recordings}:/var/lib/conclave/recordings
-    restart: unless-stopped
+    restart: ${SFU_RESTART_POLICY:-unless-stopped}
 
   sfu-b:
     <<: *sfu-hardening
-    build:
-      context: .
-      dockerfile: packages/sfu/Dockerfile
+    # Named here, so the image deploy-sfu.sh tags is the one compose starts
+    # whatever compose's own naming (COMPOSE_COMPATIBILITY uses underscores).
+    # deploy-sfu.sh sets SFU_IMAGE_SFU_B on every start: a candidate runs under its
+    # own tag, and conclave-sfu-b only ever names a build that passed.
+    image: ${SFU_IMAGE_SFU_B:-conclave-sfu-b}
+    pull_policy: never
     network_mode: "host"
     environment:
-      SFU_PORT: "3032"
+      SFU_PORT: "${SFU_B_PORT:-3032}"
       NODE_ENV: production
       SFU_CORS_ORIGINS: ${SFU_CORS_ORIGINS:-https://conclave.acmvit.in}
       SFU_ALLOW_OPEN_CORS: ${SFU_ALLOW_OPEN_CORS:-}
@@ -103,9 +116,9 @@ services:
       SFU_SECRET: ${SFU_SECRET}
       SCHEDULING_TOKEN_SECRET: ${SCHEDULING_TOKEN_SECRET:-}
       TRANSCRIPT_WORKER_URL: ${TRANSCRIPT_WORKER_URL:-http://localhost:8788}
-      SFU_DRAINING: "false"
-      RTC_MIN_PORT: "41001"
-      RTC_MAX_PORT: "42000"
+      SFU_DRAINING: "${SFU_START_DRAINING:-false}"
+      RTC_MIN_PORT: "${SFU_B_RTC_MIN_PORT:-41001}"
+      RTC_MAX_PORT: "${SFU_B_RTC_MAX_PORT:-42000}"
       ANNOUNCED_IP: ${ANNOUNCED_IP}
       PLAIN_TRANSPORT_ANNOUNCED_IP: ${PLAIN_TRANSPORT_ANNOUNCED_IP:-${ANNOUNCED_IP}}
       SFU_VERSION: "v2"
@@ -154,4 +167,4 @@ services:
       CONTROL_PLANE_JSON_PATH: ${CONTROL_PLANE_JSON_PATH:-/var/lib/conclave/recordings/control-plane.json}
     volumes:
       - ${RECORDING_STORAGE_PATH:-/var/lib/conclave/recordings}:/var/lib/conclave/recordings
-    restart: unless-stopped
+    restart: ${SFU_RESTART_POLICY:-unless-stopped}

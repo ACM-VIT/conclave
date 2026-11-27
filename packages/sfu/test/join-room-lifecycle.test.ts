@@ -109,7 +109,9 @@ describe("host roster on join", () => {
       ...[{ roomId: nextRoom.id, sessionId: "a" }, ack] as never[]
     );
 
-    expect(ack).toHaveBeenCalledWith(expect.objectContaining({ roomId: nextRoom.id, status: "joined" }));
+    expect(ack).toHaveBeenCalledWith(
+      expect.objectContaining({ roomId: nextRoom.id, status: "joined", reportsSenderPacketCounts: true }),
+    );
     expect(oldRoomEvents).toHaveBeenCalledWith("userLeft", { roomId: oldRoom.id, userId: "alice#a" });
     expect(oldRoomEvents).toHaveBeenCalledWith("hostChanged", { roomId: oldRoom.id, hostUserId: "bob#b" });
     expect(oldRoomEvents).toHaveBeenCalledWith("adminUsersChanged", { roomId: oldRoom.id, hostUserIds: ["bob#b"] });
@@ -679,7 +681,7 @@ describe("a webinar link code saved across the store read", () => {
     const ack = vi.fn();
     const saving = update({ enabled: true, linkSlug: "launch-day" }, ack);
     await reads.reached();
-    expect(forceCloseRoom(state, room.channelId)).toBe(true);
+    expect(forceCloseRoom(state, room)).toBe(true);
     reads.release();
     await saving;
 
@@ -704,7 +706,7 @@ describe("a webinar link code saved across the store read", () => {
     const ack = vi.fn();
     const saving = update({ enabled: true, linkSlug: "launch-day" }, ack);
     await reads.reached();
-    forceCloseRoom(state, room.channelId);
+    forceCloseRoom(state, room);
     const reopened = openRoom(state);
     const fresh = getOrCreateWebinarRoomConfig(state.webinarConfigs, reopened.channelId);
     reads.release();

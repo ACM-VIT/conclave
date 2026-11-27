@@ -59,9 +59,7 @@ export const registerDisconnectHandlers = (
         if (wasAdmin) {
           handOffRoom(io, state, activeRoom);
         }
-        if (state.rooms.has(roomChannelId)) {
-          cleanupRoom(state, roomChannelId);
-        }
+        cleanupRoom(state, activeRoom);
         Logger.info(`User ${userId} left room ${roomId}`);
       };
 
@@ -106,9 +104,7 @@ export const registerDisconnectHandlers = (
         const pending = pendingRoom.pendingClients.get(context.pendingUserKey);
         if (pending?.socket?.id === socket.id) {
           withdrawWaitingRequest(pendingRoom, context.pendingUserKey);
-          if (pendingRoom.isEmpty()) {
-            cleanupRoom(state, context.pendingRoomChannelId);
-          }
+          cleanupRoom(state, pendingRoom);
         }
       }
     }

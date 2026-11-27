@@ -157,6 +157,18 @@ const releaseRemovedSchedule = (
 
 export type WebinarConfigNotify = (channelId: string) => void;
 
+const deferredRoomNotices = new WeakSet<WebinarRoomConfig>();
+
+export const deferWebinarRoomNotice = (state: SfuState, channelId: string): void => {
+  const config = state.webinarConfigs.get(channelId);
+  if (config) deferredRoomNotices.add(config);
+};
+
+export const takeDeferredWebinarRoomNotice = (state: SfuState, channelId: string): boolean => {
+  const config = state.webinarConfigs.get(channelId);
+  return config !== undefined && deferredRoomNotices.delete(config);
+};
+
 export const notifyRoomConfig =
   (state: SfuState, getIo: () => SocketIOServer | null): WebinarConfigNotify =>
   (channelId) => {
@@ -184,10 +196,10 @@ export const settleWebinarRoom = (
     if (config?.scheduledWebinarId) releaseRemovedSchedule(state, channelId, config);
   }
   const config = state.webinarConfigs.get(channelId);
-  if (settingsOf(config) !== before) {
-    notifyAuthorityPolicy(state, channelId);
-    notify(channelId);
-  }
+  const changed = settingsOf(config) !== before;
+  if (changed) notifyAuthorityPolicy(state, channelId);
+  const deferred = takeDeferredWebinarRoomNotice(state, channelId);
+  if (changed || deferred) notify(channelId);
   return config;
 };
 

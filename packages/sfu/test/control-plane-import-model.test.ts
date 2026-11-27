@@ -683,6 +683,7 @@ const runSequence = async (mode: OldMode, seed: number) => {
 
   try {
     for (const host of hosts) await old.putProfile(legacyProfile(host, { userId: `user-${host}` }));
+    if (mode === "json") await shut(await open());
     for (let step = 0; step < STEPS; step += 1) {
       const roll = random();
       if (serving.length === 0 || roll < 0.18) {

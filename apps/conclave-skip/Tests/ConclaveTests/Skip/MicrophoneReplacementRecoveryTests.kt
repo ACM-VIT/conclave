@@ -64,6 +64,23 @@ class MicrophoneReplacementRecoveryTests {
     }
 
     /** A connected socket whose acknowledgements never arrive. */
+    class FakeDevice : org.mediasoup.droid.Device() {
+        override fun dispose() {}
+    }
+
+    class RecordingSendTransport : SendTransport(0L) {
+        var events: MutableList<String>? = null
+        var closeGate: CountDownLatch? = null
+        @Volatile var closed = false
+        override fun isClosed(): Boolean = closed
+        override fun getId(): String = "send-old"
+        override fun close() {
+            closeGate?.await(30, TimeUnit.SECONDS)
+            closed = true
+            events?.add("old transport closed")
+        }
+    }
+
     class SilentSocket : io.socket.client.Socket(null, "/", null) {
         var emitted: MutableList<String>? = null
         override fun emit(event: String?, vararg args: Any?): io.socket.emitter.Emitter {
@@ -339,6 +356,7 @@ class MicrophoneReplacementRecoveryTests {
         field("videoStartGate").set(media, SingleFlightGate())
         field("remoteVideoTracks").set(media, skip.lib.dictionaryOf<String, VideoTrackWrapper>())
         field("sendTransportLane").set(media, call.lane)
+        field("retiredTransports").set(media, RetiredTransportReaper<Any>(idleDelayMs = 45_000L, isIdle = { false }, dispose = {}))
     }
 
     /** A socket manager on a [SilentSocket], and the events it was asked to emit. */
@@ -445,6 +463,175 @@ class MicrophoneReplacementRecoveryTests {
     @Test
     fun aProduceQueuedWhenTheCallEndsNeverSignalsThroughTheRejoinedSession() {
         assertAQueuedProduceOfAnEndedSessionEmitsNothing(rejoinBeforeTheLaneFrees = true)
+    }
+
+    @Test
+    fun aRejoinBeforeTheOldLaneFreesDisposesTheOldTransportOnlyAfterItsLaneClosedItAndTheNewCallEnded() {
+        val call = liveCall()
+        val media = call.media
+        prepareForCleanup(call)
+        val events = CopyOnWriteArrayList<String>()
+        val oldTransport = unsafe.allocateInstance(RecordingSendTransport::class.java) as RecordingSendTransport
+        oldTransport.events = events
+        field("sendTransport").set(media, oldTransport)
+        val disposed = CopyOnWriteArrayList<Any?>()
+        val reaper = RetiredTransportReaper<Any>(
+            idleDelayMs = 45_000L,
+            isIdle = {
+                listOf("device", "sendTransport", "receiveTransport", "sendTransportLane").all { field(it).get(media) == null }
+            },
+            dispose = { retired ->
+                disposed.add(if (retired is SendTransport) retired else retired.javaClass.getDeclaredField("transport").apply { isAccessible = true }.get(retired))
+            },
+        )
+        field("retiredTransports").set(media, reaper)
+        val (oldSocket, oldEmitted) = silentSocketManager()
+        val callbacks = startSendSession(media, oldSocket)
+        val laneBusy = CountDownLatch(1)
+        val laneEntered = CountDownLatch(1)
+        call.lane.post {
+            laneEntered.countDown()
+            laneBusy.await(10, TimeUnit.SECONDS)
+        }
+        assertTrue(laneEntered.await(3, TimeUnit.SECONDS))
+        call.lane.post {
+            callbacks.onProduce(oldTransport, "video", "{}", cameraAppData)
+            events.add("old produce returned")
+        }
+
+        runBlocking { media.cleanup(notifyLocalState = false, preserveCallAudioRouting = true) }
+        val (newSocket, newEmitted) = silentSocketManager()
+        startSendSession(media, newSocket)
+        val newLane = SendTransportLane("Rejoined")
+        field("sendTransportLane").set(media, newLane)
+        field("sendTransport").set(media, unsafe.allocateInstance(FakeSendTransport::class.java))
+        reaper.disposeIfIdle()
+        assertFalse(oldTransport.closed)
+        assertEquals(emptyList<Any?>(), disposed.toList())
+
+        laneBusy.countDown()
+        awaitLane(call.lane)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(listOf("old produce returned", "old transport closed"), events.toList())
+        assertEquals(emptyList<String>(), oldEmitted.toList())
+        assertEquals(emptyList<String>(), newEmitted.toList())
+        assertTrue(call.old.closed)
+        assertTrue(call.track.disposed)
+        reaper.disposeIfIdle()
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(60))
+        assertEquals(emptyList<Any?>(), disposed.toList())
+
+        field("sendTransport").set(media, null)
+        field("sendTransportLane").set(media, null)
+        newLane.retire {}
+        reaper.disposeIfIdle()
+        assertEquals(listOf<Any?>(oldTransport), disposed.toList())
+    }
+
+    private class Rejoin(
+        val media: WebRTCClient,
+        val lane: SendTransportLane,
+        val events: CopyOnWriteArrayList<String>,
+        val emitted: CopyOnWriteArrayList<String>,
+        val send: kotlinx.coroutines.Deferred<Result<Unit>>,
+        val receive: kotlinx.coroutines.Deferred<Result<Unit>>,
+    )
+
+    private fun rejoinWhileThePreviousLaneIsClosing(
+        laneBusy: CountDownLatch?,
+        closeGate: CountDownLatch?,
+        stuck: MutableList<String>? = null,
+    ): Rejoin {
+        skip.foundation.ProcessInfo.launch(org.robolectric.RuntimeEnvironment.getApplication())
+        val call = liveCall()
+        val media = call.media
+        prepareForCleanup(call)
+        val events = CopyOnWriteArrayList<String>()
+        val oldTransport = unsafe.allocateInstance(RecordingSendTransport::class.java) as RecordingSendTransport
+        oldTransport.events = events
+        oldTransport.closeGate = closeGate
+        field("sendTransport").set(media, oldTransport)
+        field("retiredTransports").set(media, RetiredTransportReaper<Any>(
+            idleDelayMs = 45_000L,
+            isIdle = {
+                listOf("device", "sendTransport", "receiveTransport", "sendTransportLane").all { field(it).get(media) == null }
+            },
+            dispose = { events.add("old call disposed") },
+        ))
+        if (stuck != null) media.onTeardownStuck = { stuck.add(it) }
+        val (oldSocket, _) = silentSocketManager()
+        startSendSession(media, oldSocket)
+        if (laneBusy != null) {
+            val laneEntered = CountDownLatch(1)
+            call.lane.post {
+                laneEntered.countDown()
+                laneBusy.await(10, TimeUnit.SECONDS)
+            }
+            assertTrue(laneEntered.await(3, TimeUnit.SECONDS))
+        }
+        runBlocking { media.cleanup(notifyLocalState = false, preserveCallAudioRouting = true) }
+
+        field("mediasoupInitialized").setBoolean(media, true)
+        field("mediaStackLock").set(media, Any())
+        field("transportConnectScope").set(media, CoroutineScope(Dispatchers.Main.immediate + SupervisorJob()))
+        field("peerConnectionFactory").set(media, unsafe.allocateInstance(FakeAudioPeerConnectionFactory::class.java))
+        media.deviceLoader = { _ ->
+            events.add("next call device loaded")
+            unsafe.allocateInstance(FakeDevice::class.java) as org.mediasoup.droid.Device
+        }
+        val (nextSocket, nextEmitted) = silentSocketManager()
+        SocketIOManager::class.java.getDeclaredField("routerRtpCapabilitiesJson").apply { isAccessible = true }
+            .set(nextSocket, "{\"codecs\":[],\"headerExtensions\":[]}")
+        media.configure(nextSocket, unsafe.allocateInstance(RtpCapabilities::class.java) as RtpCapabilities, null)
+        val scope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
+        val receive = scope.async(start = CoroutineStart.UNDISPATCHED) { runCatching { media.createReceiveTransport() } }
+        val send = scope.async(start = CoroutineStart.UNDISPATCHED) { runCatching { media.createTransports() } }
+        return Rejoin(media, call.lane, events, nextEmitted, send, receive)
+    }
+
+    private val bothTransportRequests = setOf("createProducerTransport", "createConsumerTransport")
+
+    @Test
+    fun aQuickRejoinLoadsItsDeviceOnlyAfterThePreviousCallsLaneClosedItsTransport() {
+        val laneBusy = CountDownLatch(1)
+        val rejoin = rejoinWhileThePreviousLaneIsClosing(laneBusy = laneBusy, closeGate = null)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals("the next call loaded its device while the previous call's lane still ran", emptyList<String>(), rejoin.events.toList())
+        assertFalse("send transport creation went ahead before the device loaded", rejoin.send.isCompleted)
+        assertFalse("receive transport creation went ahead before the device loaded", rejoin.receive.isCompleted)
+        assertEquals("transport creation signalled before the device loaded", emptyList<String>(), rejoin.emitted.toList())
+
+        laneBusy.countDown()
+        awaitLane(rejoin.lane)
+        pumpMainLooperUntil { rejoin.emitted.toSet() == bothTransportRequests }
+        assertEquals(listOf("old transport closed", "old call disposed", "next call device loaded"), rejoin.events.toList())
+        assertTrue(field("device").get(rejoin.media) is FakeDevice)
+        assertEquals("a transport creation never resumed after the device loaded", bothTransportRequests, rejoin.emitted.toSet())
+    }
+
+    @Test
+    fun aStuckSendTransportCloseNeverBlocksTheNextJoin() {
+        val closeGate = CountDownLatch(1)
+        val stuck = CopyOnWriteArrayList<String>()
+        try {
+            val rejoin = rejoinWhileThePreviousLaneIsClosing(laneBusy = null, closeGate = closeGate, stuck = stuck)
+            shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(RetiredTransportReaper.LANE_DEADLINE_MILLIS - 500))
+            assertEquals(emptyList<String>(), rejoin.events.toList())
+            assertEquals(emptyList<String>(), rejoin.emitted.toList())
+
+            shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(1_000))
+            pumpMainLooperUntil { rejoin.emitted.toSet() == bothTransportRequests }
+            assertEquals("a stuck transport close held up the next call's device", listOf("next call device loaded"), rejoin.events.toList())
+            assertEquals(bothTransportRequests, rejoin.emitted.toSet())
+            assertEquals(listOf("transport"), stuck.toList())
+
+            closeGate.countDown()
+            awaitLane(rejoin.lane)
+            shadowOf(Looper.getMainLooper()).idle()
+            assertEquals(listOf("next call device loaded", "old transport closed"), rejoin.events.toList())
+        } finally {
+            closeGate.countDown()
+        }
     }
 
     @Test

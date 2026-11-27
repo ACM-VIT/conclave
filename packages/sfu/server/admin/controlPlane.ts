@@ -8,10 +8,10 @@ import type {
   ProducerType,
 } from "../../config/classes/Client.js";
 import type { AdmissionScope } from "../../config/classes/AdmissionLedger.js";
-import type { Room, WaitingRequest } from "../../config/classes/Room.js";
+import type { Room, SettledWaitingRequest, WaitingRequest } from "../../config/classes/Room.js";
 import type { AppsAwarenessData } from "../../types.js";
 import { isGuestUserKey } from "../identity.js";
-import { cleanupRoom, getRoomChannelId } from "../rooms.js";
+import { cleanupRoom, getRoomChannelId, isCurrentRoom } from "../rooms.js";
 import type { SfuState } from "../state.js";
 import {
   emitWebinarAttendeeCountChanged,
@@ -175,7 +175,6 @@ export const handOffRoom = (
   peers: { emit: (event: string, payload: unknown) => unknown } = io.to(room.channelId),
 ): void => {
   const roomId = room.id;
-  const roomChannelId = room.channelId;
 
   if (!room.hasActiveAdmin()) {
     const promoted = room.promoteNextAdmin(excludedUserKeys);
@@ -225,20 +224,16 @@ export const handOffRoom = (
         }
       }
       room.startCleanupTimer(() => {
-        if (!state.rooms.has(roomChannelId)) return;
-        const roomInState = state.rooms.get(roomChannelId);
-        if (!roomInState || roomInState.hasActiveAdmin()) return;
-        if (roomInState.pendingClients.size > 0) {
-          for (const pending of roomInState.pendingClients.values()) {
+        if (!isCurrentRoom(state, room) || room.hasActiveAdmin()) return;
+        if (room.pendingClients.size > 0) {
+          for (const pending of room.pendingClients.values()) {
             pending.socket.emit("waitingRoomStatus", {
               message: "No one to let you in.",
               roomId,
             });
           }
         }
-        if (roomInState.isEmpty()) {
-          cleanupRoom(state, roomChannelId);
-        }
+        cleanupRoom(state, room);
       });
     }
   }
@@ -347,8 +342,8 @@ export const toRoomSnapshot = (room: Room): RoomSnapshot => {
     screenShareProducerId: room.screenShareProducerId,
     quality: room.currentQuality,
     appsState: {
-      activeAppId: room.appsState.activeAppId,
-      locked: room.appsState.locked,
+      activeAppId: room.apps.activeAppId,
+      locked: room.apps.locked,
     },
     policies: {
       locked: room.isLocked,
@@ -997,7 +992,7 @@ export const rejectWaitingGuest = (room: Room, userKey: string): string[] => {
  */
 export const answerSettledRequests = (
   room: Room,
-  settled: ReturnType<Room["commitGuestLink"]>,
+  settled: SettledWaitingRequest[],
 ): void => {
   for (const { request, admitted } of settled) {
     request.socket.emit(admitted ? "joinApproved" : "joinRejected", {
@@ -1099,9 +1094,7 @@ export const forceRemoveClientNow = (options: {
   if (removed && wasAdmin && handOff) {
     handOffRoom(io, state, room);
   }
-  if (state.rooms.has(room.channelId)) {
-    cleanupRoom(state, room.channelId);
-  }
+  cleanupRoom(state, room);
   return removed;
 };
 
@@ -1134,7 +1127,7 @@ export const teardownClient = (options: {
   const peers = options.peers ?? io.to(roomChannelId);
 
   // Clear awareness before removing the client so peers stop seeing its cursor.
-  for (const removal of room.clearUserAwareness(userId)) {
+  for (const removal of room.apps.clearUserAwareness(userId)) {
     peers.emit("apps:awareness", {
       appId: removal.appId,
       awarenessUpdate: removal.awarenessUpdate,

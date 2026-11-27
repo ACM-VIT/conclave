@@ -6,10 +6,14 @@ import {
   markAdopted,
   readClaimedCopies,
   readLegacyDomains,
+  releaseClaimedCopies,
   stillClaimed,
+  type CopySnapshot,
   type HashedLegacyRecord,
+  type LegacyDomainRead,
   type LegacyPaths,
 } from "./legacy.js";
+import { specOf } from "./entities.js";
 import { hashLegacyValue } from "./legacyHash.js";
 import {
   LEGACY_IMPORT_ID,
@@ -225,6 +229,72 @@ const itemsFor = (records: readonly HashedLegacyRecord[], shadows: Array<{ kind:
   return [...gone, ...current];
 };
 
+type RecoverySnapshot = Pick<CopySnapshot, "from" | "records">;
+const MAY_BE_DELETED = new Set<DataKind>(["meeting", "webinar", "eventType", "calendar"]);
+
+const recoveryKey = (record: HashedLegacyRecord): string => legacyCopyKey(record.kind, record.identity);
+
+const validateInitialJsonRecovery = (activePath: string, snapshots: RecoverySnapshot[]): void => {
+  const winners = new Map<string, { record: HashedLegacyRecord; from: string }>();
+  const problems: string[] = [];
+  const keysBySnapshot = snapshots.map(({ from, records }) => ({ from, keys: new Set(records.map(recoveryKey)) }));
+  for (const { from, records } of snapshots) {
+    for (const record of records) {
+      const key = recoveryKey(record);
+      const held = winners.get(key);
+      if (!held || record.stamp > held.record.stamp) winners.set(key, { record, from });
+      else if (record.stamp === held.record.stamp && record.hash !== held.record.hash) {
+        problems.push(`${key} differs between ${held.from} and ${from} at the same timestamp.`);
+      }
+    }
+  }
+  const claims = new Map<string, string>();
+  for (const [key, { record, from }] of winners) {
+    if (MAY_BE_DELETED.has(record.kind)) {
+      const missing = keysBySnapshot.find((snapshot) => !snapshot.keys.has(key));
+      if (missing) problems.push(`${key} is present in ${from} but missing from ${missing.from} (possible deletion).`);
+    }
+    const unique = specOf(record.kind).unique(record.value);
+    for (const [index, value] of unique) {
+      const claim = JSON.stringify([index, value]);
+      const other = claims.get(claim);
+      if (other && other !== key) problems.push(`${key} and ${other} both claim ${value} in ${index}.`);
+      claims.set(claim, key);
+    }
+    if (record.kind === "calendar") {
+      const other = claims.get(record.key);
+      if (other && other !== key) problems.push(`${key} and ${other} both claim the calendar connection for profile ${record.id}.`);
+      claims.set(record.key, key);
+    }
+  }
+  if (problems.length) {
+    throw new Error(
+      `Could not combine legacy JSON stores without losing a change:\n- ${problems.join("\n- ")}\nBack up the files and write the reconciled store to ${activePath}, then rename each recovered copy with an .adopted suffix.`,
+    );
+  }
+};
+
+const validateRecoveredJson = (
+  paths: LegacyPaths,
+  state: LegacyImportState,
+  domains: readonly LegacyDomainRead[],
+  recovered: readonly CopySnapshot[],
+): void => {
+  const activePaths = { meetings: paths.meetingsJson, webinars: paths.webinarsJson, scheduling: paths.schedulingJson };
+  for (const { domain, source, records } of domains) {
+    const copies = recovered.filter((snapshot) => snapshot.domain === domain);
+    const tracked = state.completed > 0 &&
+      (state.sources[domain] || Object.keys(state.applied).some((key) => key.endsWith(`|${domain}`)));
+    if (!copies.length || tracked) continue;
+    // Only the latest snapshot of a known container competes with other sources.
+    const latest = new Map(copies.map((snapshot) => [snapshot.source, snapshot]));
+    const activePath = activePaths[domain];
+    const snapshots: RecoverySnapshot[] = [...latest.values()];
+    if (source === "json" && records) snapshots.unshift({ from: activePath, records });
+    validateInitialJsonRecovery(activePath, snapshots);
+  }
+};
+
 export type LegacyImportOptions = {
   mode: StoreMode;
   paths: LegacyPaths;
@@ -301,7 +371,7 @@ const importRound = async (
   ) => {
     const shadows = await store.read(shadowsOf(domain, source));
     const parts = batches(itemsFor(records, shadows));
-    if (parts.length === 0 && mark) parts.push([]);
+    if (parts.length === 0 && (mark || label)) parts.push([]);
     for (const [index, batch] of parts.entries()) {
       const last = index === parts.length - 1;
       const counts = await committed(store, reconcileLegacy(ticket, domain, source, label, batch, last ? mark : null));
@@ -310,7 +380,14 @@ const importRound = async (
     }
     return true;
   };
-  const domains = await read(() => readLegacyDomains({ mode: options.mode, paths: options.paths, redis: options.redis, sticky }));
+  let domains: LegacyDomainRead[];
+  try {
+    domains = await read(() => readLegacyDomains({ mode: options.mode, paths: options.paths, redis: options.redis, sticky }));
+    if (options.mode === "json") validateRecoveredJson(options.paths, begun.value, domains, recovered.snapshots);
+  } catch (error) {
+    releaseClaimedCopies(recovered.files);
+    throw error;
+  }
   for (const domain of domains) {
     if (!domain.source || !domain.records) continue;
     sources.push(`${domain.source} ${domain.domain}`);

@@ -149,9 +149,13 @@ describe("unique keys claimed by rival legacy records", () => {
     expect(warn.mock.calls.some((call) => String(call.join(" ")).includes(`legacy ${rival.kind}:a kept without ${rival.index}:`))).toBe(true);
   });
 
-  it.each(RIVALS)("keep a $index rival from a container copy without the key the stored record holds", async (rival) => {
+  it.each(RIVALS)("keep a $index rival from a later container copy without the key the imported record holds", async (rival) => {
     const [first, second] = rival.pair({ first: 100, second: 200 });
     writeLegacyJsonFiles(join(dir, "old"), rival.files([first]));
+    const original = await start();
+    expect(await holders(original, rival)).toEqual({ ids: ["a"], holder: "a" });
+    stores.splice(stores.indexOf(original), 1);
+    await original.close();
     saveCopy(rival.files([second]));
     const store = await start();
     expect(await holders(store, rival)).toEqual({ ids: ["a", "b"], holder: "a" });

@@ -527,12 +527,13 @@ describe.each(sharedModes)("two SFUs on one %s store", (current) => {
     expect(rows).toBe(0);
   });
 
-  it("never write on a lookup that falls back to a legacy client namespace [13]", async () => {
+  it("does not serve or rewrite a meeting from another tenant on a room lookup [13]", async () => {
     vi.stubEnv("SFU_CLIENT_ID", "acme");
     const a = await start("A");
     const meeting = await createMeeting(a, { roomCode: "legacy-room" });
     const b = await start("B");
-    expect((await b.call("GET", "/scheduled-meetings/by-room/legacy-room", undefined, { "x-sfu-client": "acme" })).status).toBe(200);
+    expect((await b.call("GET", "/scheduled-meetings/by-room/legacy-room", undefined, { "x-sfu-client": "acme" })).status).toBe(404);
+    expect((await b.call("GET", "/scheduled-meetings/by-room/legacy-room", undefined, { "x-sfu-client": "conclave" })).status).toBe(200);
     const saved = await observe((observer) => host(observer, "GET", `/scheduled-meetings/${meeting.id}`));
     expect(field<{ clientId: string; updatedAt: number }>(saved, "scheduledMeeting")).toMatchObject({
       clientId: "conclave",
@@ -724,4 +725,3 @@ describe("a store that is not safe to start on", () => {
     await expect(start("A")).rejects.toThrow();
   });
 });
-

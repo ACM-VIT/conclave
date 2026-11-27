@@ -1,6 +1,6 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { meetingByRoomCode, updateMeeting } from "../server/controlPlane/meetingCommands.js";
 import { openControlPlane, resolveControlPlaneConfig } from "../server/controlPlane/open.js";
@@ -16,6 +16,7 @@ type StoreCase = {
   name: string;
   file: string;
   uniqueKey: string;
+  canDelete?: boolean;
   encode: (rows: Row[]) => unknown;
   load: (store: ControlPlaneStore) => Promise<Record<string, string>>;
   holder: (store: ControlPlaneStore, unique: string) => Promise<string | null>;
@@ -28,6 +29,7 @@ const stores: StoreCase[] = [
     name: "scheduled meetings",
     file: "scheduled-meetings.json",
     uniqueKey: "room code",
+    canDelete: true,
     encode: (rows) =>
       rows.map(({ id, title, updatedAt, unique, status }) =>
         legacyMeeting(id, { title, updatedAt, ...(unique ? { roomCode: unique } : {}), ...(status ? { status } : {}) }),
@@ -40,6 +42,7 @@ const stores: StoreCase[] = [
     name: "scheduled webinars",
     file: "scheduled-webinars.json",
     uniqueKey: "link slug",
+    canDelete: true,
     encode: (rows) =>
       rows.map(({ id, title, updatedAt, unique, room }) =>
         legacyWebinar(id, { title, updatedAt, linkSlug: unique ?? `slug-${id}`, roomId: room ?? `room-${id}` }),
@@ -97,6 +100,15 @@ const restart = async (store: ControlPlaneStore): Promise<ControlPlaneStore> => 
 };
 
 const loaded = async (store: StoreCase) => store.load(await start());
+
+const expectRefusal = async (reason: RegExp, ...paths: string[]) => {
+  const originals = paths.map((path) => readFileSync(path));
+  await expect(start()).rejects.toThrow(reason);
+  expect(paths.map((path) => readFileSync(path))).toEqual(originals);
+  for (const path of paths) {
+    expect(readdirSync(dirname(path)).filter((name) => name.startsWith(`${basename(path)}.`))).toEqual([]);
+  }
+};
 
 const warnings = () => warn.mock.calls.map((call) => String(call.join(" ")));
 
@@ -165,8 +177,10 @@ describe.each(modes)("a %s store after the deploy saved an older SFU's container
 
 describe.each(stores)("an SFU combining the old $name with a container copy", (store) => {
   it("keeps a record saved during a rollback when the old store already holds records", async () => {
-    write(oldStorePath(store), store.encode([{ id: "before", title: "Before the rollback", updatedAt: 100 }]));
-    write(copyPath(store), store.encode([{ id: "during", title: "Saved during the rollback", updatedAt: 200 }]));
+    const before = { id: "before", title: "Before the rollback", updatedAt: 100 };
+    const during = { id: "during", title: "Saved during the rollback", updatedAt: 200 };
+    write(oldStorePath(store), store.encode(store.canDelete ? [before, { ...during, title: "Original", updatedAt: 100 }] : [before]));
+    write(copyPath(store), store.encode(store.canDelete ? [before, during] : [during]));
 
     expect(await loaded(store)).toEqual({ before: "Before the rollback", during: "Saved during the rollback" });
   });
@@ -178,24 +192,27 @@ describe.each(stores)("an SFU combining the old $name with a container copy", (s
     expect(await loaded(store)).toEqual({ a: "Newer in the copy", b: "Newer here" });
   });
 
-  it("combines two different copies", async () => {
+  it("only combines disjoint copies of records that cannot be deleted in JSON mode", async () => {
     write(copyPath(store, "sfu-a"), store.encode([{ id: "a", title: "From sfu-a", updatedAt: 100 }]));
     write(copyPath(store, "sfu-b"), store.encode([{ id: "b", title: "From sfu-b", updatedAt: 100 }]));
 
-    expect(await loaded(store)).toEqual({ a: "From sfu-a", b: "From sfu-b" });
+    if (store.canDelete) {
+      await expectRefusal(/possible deletion/, copyPath(store, "sfu-a"), copyPath(store, "sfu-b"));
+      expect(existsSync(oldStorePath(store))).toBe(false);
+    } else {
+      expect(await loaded(store)).toEqual({ a: "From sfu-a", b: "From sfu-b" });
+    }
   });
 
-  it("keeps the first copy's record and logs it when two copies changed it differently at the same time", async () => {
+  it("leaves the copies untouched when both edited the same record at the same timestamp", async () => {
     write(copyPath(store, "sfu-a"), store.encode([{ id: "a", title: "One edit", updatedAt: 100 }]));
     write(copyPath(store, "sfu-b"), store.encode([{ id: "a", title: "Another edit", updatedAt: 100 }]));
 
-    expect(await loaded(store)).toEqual({ a: "One edit" });
-    expect(warnings().some((line) => /legacy \w+ a was changed in the container copy sfu-b\/.* at the same time/.test(line))).toBe(true);
-    expect(existsSync(`${copyPath(store, "sfu-a")}.adopted`)).toBe(true);
-    expect(existsSync(`${copyPath(store, "sfu-b")}.adopted`)).toBe(true);
+    await expectRefusal(/same timestamp/, copyPath(store, "sfu-a"), copyPath(store, "sfu-b"));
   });
 
   it("keeps the old store's record and logs it when a copy changed it differently at the same time", async () => {
+    useMode("sqlite");
     write(oldStorePath(store), store.encode([{ id: "a", title: "One edit", updatedAt: 100 }]));
     write(copyPath(store), store.encode([{ id: "a", title: "Another edit", updatedAt: 100 }]));
 
@@ -216,7 +233,17 @@ describe.each(stores)("an SFU combining the old $name with a container copy", (s
     expect(existsSync(`${copyPath(store)}.adopted`)).toBe(true);
   });
 
-  it("keeps both records when a copy's record claims the $uniqueKey another holds, and leaves it with the record already in the store", async () => {
+  it("refuses to choose a holder for a unique claim in ambiguous JSON recovery", async () => {
+    const first = { id: "a", title: "First", updatedAt: 100, unique: "shared" };
+    const second = { id: "b", title: "Second", updatedAt: 100, unique: "other" };
+    write(oldStorePath(store), store.encode([first, second]));
+    write(copyPath(store), store.encode([first, { ...second, updatedAt: 200, unique: "shared" }]));
+
+    await expectRefusal(/both claim .*shared/, oldStorePath(store), copyPath(store));
+  });
+
+  it("keeps both records when a copy's record claims the $uniqueKey that another already holds in SQLite", async () => {
+    useMode("sqlite");
     write(oldStorePath(store), store.encode([{ id: "a", title: "First", updatedAt: 100, unique: "shared" }]));
     write(copyPath(store), store.encode([{ id: "b", title: "Second", updatedAt: 200, unique: "shared" }]));
 
@@ -227,9 +254,14 @@ describe.each(stores)("an SFU combining the old $name with a container copy", (s
   });
 
   it("combines every transfer the deploy saved for one SFU, and copies an older deploy left directly in its folder", async () => {
-    write(copyPath(store, "sfu-a", "20261120T000000000Z-first"), store.encode([{ id: "a", title: "First deploy", updatedAt: 100 }]));
-    write(copyPath(store, "sfu-a", "20261124T000000000Z-second"), store.encode([{ id: "a", title: "Second deploy", updatedAt: 200 }]));
-    write(copyPath(store, "sfu-b", null), store.encode([{ id: "b", title: "Flat copy", updatedAt: 100 }]));
+    const newer = { id: "a", title: "Second deploy", updatedAt: 200 };
+    const flat = { id: "b", title: "Flat copy", updatedAt: 100 };
+    write(copyPath(store, "sfu-a", "20261120T000000000Z-first"), store.encode([{ ...newer, title: "First deploy", updatedAt: 100 }]));
+    write(copyPath(store, "sfu-a", "20261124T000000000Z-second"), store.encode(store.canDelete ? [newer, flat] : [newer]));
+    for (const archive of ["20261120T000000000Z-first", "20261124T000000000Z-second"]) {
+      writeFileSync(join(dirname(copyPath(store, "sfu-a", archive)), ".source"), "abcdef old-image\n");
+    }
+    write(copyPath(store, "sfu-b", null), store.encode(store.canDelete ? [newer, flat] : [flat]));
 
     expect(await loaded(store)).toEqual({ a: "Second deploy", b: "Flat copy" });
     expect(existsSync(`${copyPath(store, "sfu-a", "20261120T000000000Z-first")}.adopted`)).toBe(true);
@@ -263,7 +295,7 @@ describe.each(stores)("an SFU whose saved $name copies it cannot open", (store) 
     ["an archive folder it can read but not claim in", () => dirname(copyPath(store)), 0o500],
   ] as const)("refuses to start, naming %s and the fix, and changes nothing", async (_label, locked, mode) => {
     write(oldStorePath(store), store.encode([{ id: "live", title: "Live", updatedAt: 100 }]));
-    write(copyPath(store), store.encode([{ id: "saved", title: "Saved", updatedAt: 100 }]));
+    write(copyPath(store), store.encode([{ id: "live", title: "Saved", updatedAt: 200 }]));
 
     await lockedWhile(locked(), mode, async () => {
       const refusal = start();
@@ -272,7 +304,7 @@ describe.each(stores)("an SFU whose saved $name copies it cannot open", (store) 
     });
     expect(existsSync(copyPath(store))).toBe(true);
     expect(readdirSync(dirname(copyPath(store)))).toEqual([store.file]);
-    expect(await loaded(store)).toEqual({ live: "Live", saved: "Saved" });
+    expect(await loaded(store)).toEqual({ live: "Saved" });
   });
 
   it.skipIf(isRoot)("starts as usual when only a staging folder it never reads is locked", async () => {
@@ -290,8 +322,10 @@ describe("an SFU combining old scheduled meetings with a container copy", () => 
   const meetings = stores[0];
 
   it("lets an ended or cancelled meeting share a room code with an active one", async () => {
-    write(oldStorePath(meetings), meetings.encode([{ id: "active", title: "Active", updatedAt: 100, unique: "shared-code" }]));
-    write(copyPath(meetings), meetings.encode([{ id: "done", title: "Cancelled", updatedAt: 100, unique: "shared-code", status: "cancelled" }]));
+    const active = { id: "active", title: "Active", updatedAt: 100, unique: "shared-code" };
+    const cancelled = { id: "done", title: "Cancelled", updatedAt: 100, unique: "shared-code", status: "cancelled" };
+    write(oldStorePath(meetings), meetings.encode([active, cancelled]));
+    write(copyPath(meetings), meetings.encode([active, { ...cancelled, updatedAt: 200 }]));
 
     const started = await start();
     expect(await meetings.load(started)).toEqual({ active: "Active", done: "Cancelled" });
@@ -316,6 +350,33 @@ describe("an SFU combining old scheduling records with a container copy", () => 
   const withCalendar = (secret: string) => ({
     ...(scheduling.encode([{ id: "p1", title: "Host", updatedAt: 100 }]) as object),
     calendars: [legacyCalendar("p1", secret)],
+  });
+
+  it.each([true, false])("keeps both copies when either one deleted a bookable event type (in the volume: %s)", async (deletedInVolume) => {
+    const snapshot = { ...withCalendar(SECRET), eventTypes: [] };
+    const eventType = { id: "office-hours", profileId: "p1", slug: "office-hours", isActive: true, updatedAt: 100 };
+    write(deletedInVolume ? oldStorePath(scheduling) : copyPath(scheduling), snapshot);
+    write(deletedInVolume ? copyPath(scheduling) : oldStorePath(scheduling), { ...snapshot, eventTypes: [eventType] });
+
+    await expectRefusal(/eventType:office-hours.*possible deletion/, oldStorePath(scheduling), copyPath(scheduling));
+  });
+
+  it("does not restore a calendar connection that one copy disconnected", async () => {
+    const snapshot = withCalendar(SECRET);
+    write(oldStorePath(scheduling), snapshot);
+    write(copyPath(scheduling), { ...snapshot, calendars: [] });
+
+    await expectRefusal(/calendar:.*possible deletion/, oldStorePath(scheduling), copyPath(scheduling));
+  });
+
+  it.each([true, false])("does not choose between disconnected and reconnected calendars (newer copy: %s)", async (newerCopy) => {
+    const snapshot = withCalendar(SECRET);
+    const active = legacyCalendar("p1", SECRET, { id: "old-connection", updatedAt: newerCopy ? 100 : 200 });
+    const recovered = legacyCalendar("p1", SECRET, { id: "new-connection", updatedAt: newerCopy ? 200 : 100 });
+    write(oldStorePath(scheduling), { ...snapshot, calendars: [active] });
+    write(copyPath(scheduling), { ...snapshot, calendars: [recovered] });
+
+    await expectRefusal(/calendar:(old|new)-connection.*possible deletion/, oldStorePath(scheduling), copyPath(scheduling));
   });
 
   it("treats two saves of the same calendar as one record, though their ciphertext differs", async () => {

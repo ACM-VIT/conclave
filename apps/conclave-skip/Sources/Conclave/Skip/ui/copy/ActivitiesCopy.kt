@@ -66,8 +66,15 @@ internal fun activitiesEndDialogTitle(item: NowPlayingModel): String = when (ite
 @Composable
 internal fun activitiesEndDialogMessage(item: NowPlayingModel): String = when (item.kind) {
     ActivityKind.game -> conclaveString("act_end_message")
-    ActivityKind.app -> if (item.appId == "whiteboard") conclaveString("act_close_board_message") else conclaveString("act_close_message")
+    ActivityKind.app -> activitiesCloseMessage(item.closeEffect)
     ActivityKind.browser -> conclaveString("act_close_message")
+}
+
+@Composable
+internal fun activitiesCloseMessage(effect: AppCloseEffect): String = when (effect) {
+    AppCloseEffect.keepsBoard -> conclaveString("act_board_saved_message")
+    AppCloseEffect.clearsBoard -> conclaveString("act_close_board_message")
+    AppCloseEffect.returnsToMeeting -> conclaveString("act_close_message")
 }
 
 @Composable

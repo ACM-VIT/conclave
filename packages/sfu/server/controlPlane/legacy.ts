@@ -342,7 +342,9 @@ const readDomain = async (domain: LegacyDomain, options: LegacyReadOptions): Pro
   }
   for (const candidate of candidates) {
     const records = await candidate.read();
-    if (records && records.length > 0) return { domain, source: candidate.source, records: records.map(hashed) };
+    if (records && (records.length > 0 || options.mode === "json")) {
+      return { domain, source: candidate.source, records: records.map(hashed) };
+    }
   }
   return { domain, source: null, records: [] };
 };
@@ -446,7 +448,7 @@ const claim = (dir: string | null, ticket: number): CopyFile[] => {
       }
     }
   } catch (error) {
-    release(mine);
+    releaseClaimedCopies(mine);
     throw error;
   }
   return mine;
@@ -482,7 +484,7 @@ const readClaimed = (path: string): string | null => {
   }
 };
 
-const release = (files: ReadonlyArray<{ base: string; path: string }>): void => {
+export const releaseClaimedCopies = (files: ReadonlyArray<{ base: string; path: string }>): void => {
   for (const file of files) {
     try {
       if (existsSync(file.path) && !existsSync(file.base)) renameSync(file.path, file.base);
@@ -540,7 +542,7 @@ export const readClaimedCopies = (claimed: ClaimedFiles): RecoveredCopies => {
     );
     return { files, snapshots };
   } catch (error) {
-    release(claimed);
+    releaseClaimedCopies(claimed);
     throw error;
   }
 };

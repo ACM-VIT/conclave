@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import test from "node:test";
@@ -363,6 +366,107 @@ test("a public route resolving to the wrong instance or region is fatal", async 
   );
 });
 
+// The deploy scripts run this file directly; a checkout reached through a
+// symlink must still run the checks rather than exit 0 having done nothing.
+test("run through a symlinked path, the preflight still checks the config", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "conclave-preflight-"));
+  try {
+    const linked = path.join(root, "linked-scripts");
+    symlinkSync(import.meta.dirname, linked);
+    const run = (compose) =>
+      spawnSync(process.execPath, [path.join(linked, "deploy-sfu-preflight.mjs"), "--compose-json", "-", "--config-only"], {
+        input: JSON.stringify(compose),
+        encoding: "utf8",
+      });
+
+    const good = run(makeCompose());
+    assert.equal(good.status, 0, good.stderr);
+    assert.match(good.stdout, /SFU deployment preflight passed/);
+
+    const broken = makeCompose();
+    broken.services["edge-fra"].environment.SFU_SECRET = "development-secret";
+    const bad = run(broken);
+    assert.equal(bad.status, 1, bad.stdout);
+    assert.match(bad.stderr, /SFU_SECRET must be a non-default value/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// A compose file with its own Redis service, as staging's: the redis service
+// listens on 127.0.0.1:6380, and the SFU's Redis variables are as given.
+const withOwnRedis = (redisEnv) => {
+  const compose = makeCompose();
+  delete compose.services["edge-fra"];
+  Object.assign(compose.services["edge-dxb"].environment, redisEnv);
+  compose.services.redis = { image: "redis:7.2", environment: { REDIS_PORT: "6380" } };
+  return compose;
+};
+
+test("an SFU beside its own Redis must reach that Redis with every Redis variable", () => {
+  const own = "redis://:pw@127.0.0.1:6380/0";
+  assert.equal(
+    resolveSfuTargets({ compose: withOwnRedis({ REDIS_URL: own, SFU_REDIS_URL: own, SFU_PERSISTENCE_REDIS_URL: own }) }).length,
+    1,
+  );
+  // Sol's case: the runbook's REDIS_URL on 6380, with an SFU_REDIS_URL on
+  // production's 6379 inherited from the shell.
+  assert.throws(
+    () => resolveSfuTargets({ compose: withOwnRedis({ REDIS_URL: own, SFU_REDIS_URL: "redis://127.0.0.1:6379/0", SFU_PERSISTENCE_REDIS_URL: own }) }),
+    /edge-dxb: SFU_REDIS_URL points at 127\.0\.0\.1:6379, not this compose file's own Redis on 127\.0\.0\.1:6380/,
+  );
+  assert.throws(
+    () => resolveSfuTargets({ compose: withOwnRedis({ REDIS_URL: own, SFU_REDIS_URL: own }) }),
+    /edge-dxb: SFU_PERSISTENCE_REDIS_URL must be set to this compose file's own Redis on 127\.0\.0\.1:6380/,
+  );
+});
+
+const hasCompose = spawnSync("docker", ["compose", "version"], { stdio: "ignore" }).status === 0;
+
+test(
+  "staging's compose file gives its SFU staging's Redis whatever Redis URLs the shell holds",
+  { skip: !hasCompose && "needs docker compose" },
+  () => {
+    const root = path.join(import.meta.dirname, "..");
+    const render = (extra) =>
+      spawnSync("docker", ["compose", "-f", path.join(root, "docker-compose.sfu-staging.yml"), "config", "--format", "json"], {
+        cwd: mkdtempSync(path.join(tmpdir(), "staging-compose-")),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          COMPOSE_PROJECT_NAME: "conclave-staging",
+          STAGING_REDIS_PASSWORD: "staging-pw",
+          SFU_SECRET: "staging-secret",
+          ANNOUNCED_IP: "127.0.0.1",
+          SFU_STAGING_PUBLIC_URL: "http://localhost:3033",
+          SFU_REQUIRE_REDIS_ADAPTER: "1",
+          // Production's Redis, inherited from the shell.
+          REDIS_URL: "redis://127.0.0.1:6379/0",
+          SFU_REDIS_URL: "redis://127.0.0.1:6379/0",
+          SFU_PERSISTENCE_REDIS_URL: "redis://127.0.0.1:6379/0",
+          BROWSER_SERVICE_URL: "http://localhost:3040",
+          TRANSCRIPT_WORKER_URL: "http://localhost:8788",
+          ...extra,
+        },
+      });
+    for (const missing of ["STAGING_BROWSER_SERVICE_URL", "STAGING_TRANSCRIPT_WORKER_URL"]) {
+      const refused = render({ STAGING_BROWSER_SERVICE_URL: "https://browser.staging.example", STAGING_TRANSCRIPT_WORKER_URL: "https://transcripts.staging.example", [missing]: "" });
+      assert.notEqual(refused.status, 0, `staging renders without ${missing}`);
+      assert.match(refused.stderr, new RegExp(missing));
+    }
+    const rendered = render({ STAGING_BROWSER_SERVICE_URL: "https://browser.staging.example", STAGING_TRANSCRIPT_WORKER_URL: "https://transcripts.staging.example" });
+    assert.equal(rendered.status, 0, rendered.stderr);
+    const compose = JSON.parse(rendered.stdout);
+    const env = compose.services["sfu-staging"].environment;
+    for (const name of ["REDIS_URL", "SFU_REDIS_URL", "SFU_PERSISTENCE_REDIS_URL"]) {
+      assert.equal(env[name], "redis://:staging-pw@127.0.0.1:6380/0", name);
+    }
+    assert.equal(resolveSfuTargets({ compose, serviceNames: ["sfu-staging"] }).length, 1);
+    assert.notEqual(compose.services["sfu-staging"].image, "conclave-sfu-a", "staging never retags production's image");
+    assert.equal(env.BROWSER_SERVICE_URL, "https://browser.staging.example");
+    assert.equal(env.TRANSCRIPT_WORKER_URL, "https://transcripts.staging.example");
+  },
+);
 const composeWithRedis = (redisUrl) => {
   const compose = makeCompose();
   for (const service of Object.values(compose.services)) {
