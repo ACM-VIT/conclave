@@ -7,11 +7,18 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Before
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -115,6 +122,33 @@ class S5ShareFoldBridgeTests {
         return target
     }
 
+    private fun request(): Deferred<Int?> =
+        CoroutineScope(Dispatchers.Unconfined).async(start = CoroutineStart.UNDISPATCHED) {
+            ScreenCaptureManager.awaitConsent {}
+        }
+
+    private fun grantedRequest(target: CallForegroundService): Int {
+        val pending = request()
+        recorded.clear()
+        ScreenCaptureManager.onConsentResult(Activity.RESULT_OK, Intent())
+        assertEquals(CallForegroundService.ACTION_SHARE_START, recorded.single().first.action)
+        deliver(target, recorded.single().first)
+        assertTrue(pending.isCompleted)
+        val grant = requireNotNull(runBlocking { pending.await() })
+        assertTrue(ScreenCaptureManager.isConsentActive(grant))
+        assertEquals(hosted, target.foregroundServiceType)
+        assertTrue(stopActions(postedNotification()).isNotEmpty())
+        recorded.clear()
+        return grant
+    }
+
+    private fun assertSharing(target: CallForegroundService, grant: Int, label: String) {
+        assertTrue("$label: the older grant lost its consent", ScreenCaptureManager.isConsentActive(grant))
+        assertTrue("$label: the older grant's service was stopped", recorded.isEmpty())
+        assertEquals("$label: the sharing notification changed", hosted, target.foregroundServiceType)
+        assertTrue("$label: the sharing notification lost its stop action", stopActions(postedNotification()).isNotEmpty())
+    }
+
     private fun stopActions(notification: Notification): List<Notification.Action> =
         (notification.actions ?: emptyArray()).filter {
             shadowOf(it.actionIntent).savedIntent.action == CallNotificationBuilder.ACTION_STOP_SHARING
@@ -188,6 +222,56 @@ class S5ShareFoldBridgeTests {
         assertEquals(baseline, target.foregroundServiceType)
         assertTrue(CallForegroundService.isRunning)
         assertFalse(shadowOf(target).isForegroundStopped)
+        assertTrue(stopActions(postedNotification()).isEmpty())
+    }
+
+    @Test fun releasingAnOlderGrantStopsItsOwnShareAndLeavesANewerRequestAlone() {
+        val target = startCall()
+        val older = grantedRequest(target)
+        val newer = request()
+        assertTrue(ScreenCaptureManager.isRequestingCapture())
+        assertSharing(target, older, "a newer request began")
+
+        ScreenCaptureManager.releaseConsent(older)
+        assertFalse(ScreenCaptureManager.isConsentActive(older))
+        assertEquals("the release stopped another host's share", CallForegroundService.ACTION_SHARE_STOP, recorded.single().first.action)
+        deliver(target, recorded.single().first)
+        assertEquals(baseline, target.foregroundServiceType)
+        assertTrue(stopActions(postedNotification()).isEmpty())
+        assertFalse("releasing the older grant ended the newer request", newer.isCompleted)
+        assertTrue(ScreenCaptureManager.isRequestingCapture())
+
+        recorded.clear()
+        ScreenCaptureManager.onConsentResult(Activity.RESULT_OK, Intent())
+        deliver(target, recorded.single().first)
+        val grant = requireNotNull(runBlocking { newer.await() })
+        assertNotEquals(older, grant)
+        assertTrue(ScreenCaptureManager.isConsentActive(grant))
+        assertEquals(hosted, target.foregroundServiceType)
+        ScreenCaptureManager.releaseConsent(older)
+        assertTrue("releasing a released grant again touched the newer share", ScreenCaptureManager.isConsentActive(grant))
+    }
+
+    @Test fun everyWayANewerRequestEndsLeavesAnOlderGrantSharing() {
+        val target = startCall()
+        val older = grantedRequest(target)
+
+        val refused = request()
+        ScreenCaptureManager.onConsentResult(Activity.RESULT_CANCELED, null)
+        assertNull(runBlocking { refused.await() })
+        assertSharing(target, older, "a refused dialog")
+
+        val cancelled = request()
+        cancelled.cancel()
+        assertFalse(ScreenCaptureManager.isRequestingCapture())
+        assertSharing(target, older, "a cancelled request")
+
+        ScreenCaptureManager.onConsentResult(Activity.RESULT_OK, Intent())
+        assertSharing(target, older, "a late dialog result")
+
+        ScreenCaptureManager.releaseConsent(older)
+        deliver(target, recorded.single().first)
+        assertEquals(baseline, target.foregroundServiceType)
         assertTrue(stopActions(postedNotification()).isEmpty())
     }
 
