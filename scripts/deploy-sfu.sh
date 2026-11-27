@@ -1468,9 +1468,10 @@ serving_config_hash() {
 # reaches it. One look, no waiting; SERVING_WHY says what failed.
 SERVING_WHY=""
 SERVING_IMAGE=""
+SERVING_DRAINING=""
 serving() {
-  local svc="$1" image="${2:-}" container env url status running identity
-  SERVING_IMAGE=""
+  local svc="$1" image="${2:-}" allow_drained="${3:-false}" container env url status running identity
+  SERVING_IMAGE="" SERVING_DRAINING=""
   if ! identity="$(service_identity "$svc")"; then SERVING_WHY="Docker cannot read its container's image"; return 1; fi
   if [[ -z "$identity" ]]; then SERVING_WHY="it has no container"; return 1; fi
   read -r container running <<< "$identity"
@@ -1488,20 +1489,21 @@ serving() {
   verdict="$(HEALTH="$health" STATUS="$status" PUBLIC="$public" node -e '
 const read = (name) => { try { return JSON.parse(process.env[name] || "null") || {}; } catch { return {}; } };
 const [health, status, publicStatus] = [read("HEALTH"), read("STATUS"), read("PUBLIC")];
-const [svc, expected, url, publicUrl] = process.argv.slice(1);
+const [svc, expected, url, publicUrl, allowDrained] = process.argv.slice(1);
 const why =
   health.status !== "healthy" ? `${url}/health does not say healthy` :
   status.instanceId === undefined ? "its /status cannot be read" :
   status.instanceId !== expected ? `its management URL answers as ${status.instanceId}, not ${expected}` :
   status.healthy !== true ? "its /status says unhealthy" :
-  status.draining !== false ? "it is draining" :
+  status.draining !== false && !(allowDrained === "true" && status.draining === true) ? "it is draining" :
   publicStatus.instanceId !== expected ? `its public URL ${publicUrl} reaches ${publicStatus.instanceId ?? "nothing"}` :
   publicStatus.healthy !== true ? `its public URL ${publicUrl} does not report healthy` : "";
 process.stdout.write(why);
-' "$svc" "${EXPECTED_ID[$svc]:-$svc}" "$url" "$(service_public_url "$svc")")"
+' "$svc" "${EXPECTED_ID[$svc]:-$svc}" "$url" "$(service_public_url "$svc")" "$allow_drained")"
   if [[ -n "$verdict" ]]; then SERVING_WHY="$verdict"; return 1; fi
   SERVING_WHY=""
   SERVING_IMAGE="$running"
+  if [[ "$allow_drained" == true ]]; then SERVING_DRAINING="$(printf "%s" "$status" | json_field draining)"; fi
 }
 
 # serving, waited for up to HEALTH_TIMEOUT_SECONDS.
@@ -1669,31 +1671,43 @@ roll_back() {
 }
 
 declare -A REPAIR_CODE=()
-repair_interrupted() {
-  local scope="${1:-all}" svc phase lkg candidate prev url image_name state code identity running first=() rest=()
-  local -A phases=()
+recover_before_build() {
+  local svc phase image
   for svc in "${ALL_SFU_SERVICES[@]}"; do
     phase="$(journal_get "$svc" phase)"
-    [[ -z "$phase" || "$phase" == idle ]] && continue
-    state="$(container_state "$svc")"
-    if [[ "$scope" == in-place && ( "$phase" != drained || "$state" != running ) ]]; then
-      continue
+    case "$phase" in
+      drained|candidate|rollback|passed) image="$(journal_get "$svc" lkg)" ;;
+      promoting) image="$(journal_get "$svc" prevLkg)" ;;
+      *) continue ;;
+    esac
+    [[ -n "$image" && "$(journal_get "$svc" wasDraining)" != true ]] || continue
+    if serving "$svc" "$image" true && [[ "$SERVING_DRAINING" == true ]]; then
+      if [[ "$phase" != drained ]]; then
+        journal_set "$svc" phase=drained lkg="$image" wasDraining=false candidate= prevLkg=
+      fi
+      restore_drain_state "$svc" "$(service_url "$svc")" false || true
     fi
-    phases[$svc]="$phase"
-    case "$state" in
+  done
+}
+
+repair_interrupted() {
+  local svc phase lkg candidate prev url image_name state code identity running first=() rest=()
+  for svc in "${ALL_SFU_SERVICES[@]}"; do
+    case "$(container_state "$svc")" in
       stopped|restarting|absent) first+=("$svc") ;;
       *) rest+=("$svc") ;;
     esac
   done
   for svc in ${first[@]+"${first[@]}"} ${rest[@]+"${rest[@]}"}; do
-    phase="${phases[$svc]}"
+    phase="$(journal_get "$svc" phase)"
+    [[ -z "$phase" || "$phase" == "idle" ]] && continue
     url="$(service_url "$svc")"
     image_name="$(service_image_name "$svc")"
     lkg="$(journal_get "$svc" lkg)"
     candidate="$(journal_get "$svc" candidate)"
     prev="$(journal_get "$svc" prevLkg)"
     if ! identity="$(service_identity "$svc")"; then
-      [[ "$scope" == in-place ]] || REPAIR_CODE[$svc]=$EXIT_NOT_RESTORED
+      REPAIR_CODE[$svc]=$EXIT_NOT_RESTORED
       continue
     fi
     running="${identity#* }"
@@ -1702,9 +1716,6 @@ repair_interrupted() {
     case "$phase" in
       drained)
         state="$(container_state "$svc")"
-        if [[ "$scope" == in-place && ( "$state" != running || -z "$lkg" ) ]]; then
-          continue
-        fi
         if [[ "$state" =~ ^(stopped|restarting|absent)$ ]]; then
           if [[ -n "$lkg" ]]; then
             roll_back "$svc" "$url" "$image_name" "$lkg" || code=$?
@@ -1756,7 +1767,7 @@ repair_interrupted() {
         code=1
         ;;
     esac
-    if [[ "$scope" != in-place ]] && (( code != 0 )); then REPAIR_CODE[$svc]=$code; fi
+    (( code == 0 )) || REPAIR_CODE[$svc]=$code
   done
 }
 
@@ -2022,7 +2033,7 @@ for svc in "${ALL_SFU_SERVICES[@]}"; do
 done
 
 install_deploy_traps
-repair_interrupted in-place
+recover_before_build
 
 if [[ "$ROLLBACK" != true ]]; then
   TARGET_COMMIT="$(git -C "$ROOT_DIR" rev-parse --short=12 HEAD)"
