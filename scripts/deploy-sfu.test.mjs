@@ -1213,6 +1213,163 @@ test("on a host whose images carry other names, each service's tag is seeded fro
 
 // Every test above has its own fake SFUs, state dir, lock file and docker
 // stand-in, and its waits are cut short in deploy(), so they run side by side.
+for (const abandoned of ["sha256:target", "sha256:previous"]) {
+  test(`journal recovery clears abandoned rollback intent (${abandoned}) only after fleet convergence`, async () => {
+    await withSfus({ "sfu-a": { onTarget: true }, "sfu-b": {} }, async (sfus) => {
+      const shared = await sharedRun("deploy-convergence-");
+      try {
+        await mkdir(shared.env.SFU_DEPLOY_STATE_DIR, { recursive: true });
+        const stateFile = path.join(shared.env.SFU_DEPLOY_STATE_DIR, "vm.env");
+        const history = "LAST_GOOD_COMMIT=B\nLAST_GOOD_IMAGE=sha256:target\nPREVIOUS_GOOD_COMMIT=A\nPREVIOUS_GOOD_IMAGE=sha256:previous\n";
+        const pending = history + `ROLLBACK_TARGET_COMMIT=pending\nROLLBACK_TARGET_IMAGE=${abandoned}\n`;
+        await writeFile(stateFile, pending);
+        const partial = await deploy(sfus, {
+          env: { ...shared.env, SFU_DEPLOY_SERVICES: "sfu-a" },
+          journals: { "sfu-a": { phase: "idle", lkg: "sha256:target" } },
+        });
+        assert.equal(partial.code, 0, partial.output);
+        assert.equal(await readFile(stateFile, "utf8"), pending);
+
+        const converged = await deploy(sfus, { env: shared.env });
+        assert.equal(converged.code, 0, converged.output);
+        assert.deepEqual(Object.values(sfus).map((sfu) => sfu.image), ["sha256:target", "sha256:target"]);
+        const state = await readFile(stateFile, "utf8");
+        for (const entry of history.trim().split("\n")) assert.ok(state.includes(entry), state);
+        assert.match(state, /^ROLLBACK_TARGET_COMMIT=''$/m);
+        assert.match(state, /^ROLLBACK_TARGET_IMAGE=''$/m);
+
+        if (abandoned === "sha256:previous") sfus["sfu-b"].image = "sha256:running";
+        const rolledBack = await deploy(sfus, { args: ["--rollback"], env: shared.env });
+        assert.equal(rolledBack.code, 0, rolledBack.output);
+        const expected = abandoned === "sha256:target" ? "sha256:previous" : "sha256:target";
+        assert.deepEqual(Object.values(sfus).map((sfu) => sfu.image), [expected, expected]);
+      } finally {
+        await rm(shared.dir, { recursive: true, force: true });
+      }
+    });
+  });
+}
+
+for (const [failure, stop] of [["canary", "fail"], ["public route", "noop"]]) {
+  test(`journal recovery keeps a failed ${failure} candidate recorded until it is confirmed stopped`, async () => {
+    const onRecreate = (sfu) => {
+      if (failure === "public route" && !sfu.bootDrained && sfu.image === "sha256:target") sfu.publicDown = true;
+    };
+    await withSfus({ "sfu-a": { container: "exited", publicRoute: true, onRecreate } }, async (sfus, events) => {
+      const shared = await sharedRun("deploy-unverified-stop-");
+      const sfu = sfus["sfu-a"];
+      const readJournal = async () => JSON.parse(await readFile(path.join(shared.env.SFU_DEPLOY_STATE_DIR, "vm.sfu-a.journal.json"), "utf8"));
+      try {
+        const first = await deploy(sfus, { env: {
+          ...shared.env,
+          DEPLOY_TEST_COMPOSE_STOP: stop,
+          DEPLOY_TEST_BAD_IMAGES: failure === "canary" ? "sha256:target" : "",
+        } });
+        assert.equal(first.code, 5, first.output);
+        assert.equal(sfu.container, "running");
+        assert.equal(sfu.draining, true);
+        assert.equal((await readJournal()).phase, "rollback", first.output);
+
+        sfu.publicDown = false;
+        const blocked = await deploy(sfus, { env: { ...shared.env, DEPLOY_TEST_COMPOSE_STOP: "fail" } });
+        assert.equal(blocked.code, 5, blocked.output);
+        assert.equal(sfu.undrains.length, 0, blocked.output);
+        assert.equal((await readJournal()).phase, "rollback", blocked.output);
+
+        const fixed = await deploy(sfus, { env: { ...shared.env, DEPLOY_TEST_NO_COMMIT_IMAGES: "1" } });
+        assert.equal(fixed.code, 0, fixed.output);
+        assert.equal(events.filter((event) => event === "stop sfu-a").length, 1, fixed.output);
+        assert.equal(sfu.image, "sha256:candidate-build");
+        assert.equal(sfu.draining, false);
+        assert.equal((await readJournal()).phase, "idle");
+      } finally {
+        await rm(shared.dir, { recursive: true, force: true });
+      }
+    });
+  });
+}
+
+test("journal recovery reapplies config when both comparison inspections fail", async () => {
+  await withSfus({ "sfu-a": { onTarget: true } }, async (sfus) => {
+    const sfu = sfus["sfu-a"];
+    sfu.configHash = "old-config-hash";
+    const result = await deploy(sfus, {
+      env: { DEPLOY_TEST_FAIL_CONFIG_INSPECT: "1" },
+      journals: { "sfu-a": { phase: "idle", lkg: "sha256:target" } },
+    });
+    assert.equal(result.code, 0, result.output);
+    assert.notEqual(sfu.configHash, "old-config-hash", result.output);
+  });
+});
+
+test("journal recovery returns a public failure code when state carry is refused", async () => {
+  await withSfus({ "sfu-a": { onTarget: true, draining: true } }, async (sfus) => {
+    const shared = await sharedRun("deploy-repair-carry-");
+    const sfu = sfus["sfu-a"];
+    sfu.bootDrained = true;
+    sfu.restartPolicy = "no";
+    sfu.onUpdate = (instance, restart) => {
+      if (restart === "no") instance.container = "restarting";
+    };
+    try {
+      const result = await deploy(sfus, {
+        env: shared.env,
+        journals: { "sfu-a": { phase: "passed", lkg: "sha256:running", candidate: "sha256:target" } },
+      });
+      assert.equal(result.code, 1, result.output);
+      assert.deepEqual(sfu.recreates, [], result.output);
+      const journal = JSON.parse(await readFile(path.join(shared.env.SFU_DEPLOY_STATE_DIR, "vm.sfu-a.journal.json"), "utf8"));
+      assert.equal(journal.phase, "rollback");
+      assert.equal(journal.lkg, "sha256:running");
+    } finally {
+      await rm(shared.dir, { recursive: true, force: true });
+    }
+  });
+});
+
+for (const start of ["fresh", "passed while drained", "promoting while serving"]) {
+  test(`journal recovery retries a failed late tag without replacing the serving candidate (${start})`, async () => {
+    const recovering = start !== "fresh";
+    const drained = start === "passed while drained";
+    await withSfus({ "sfu-a": { onTarget: recovering, draining: drained } }, async (sfus) => {
+      const shared = await sharedRun("deploy-repair-tag-");
+      const sfu = sfus["sfu-a"];
+      sfu.bootDrained = drained;
+      const journals = recovering ? { "sfu-a": {
+        phase: drained ? "passed" : "promoting",
+        lkg: "sha256:running",
+        prevLkg: "sha256:running",
+        candidate: "sha256:target",
+      } } : {};
+      const readJournal = async () => JSON.parse(await readFile(path.join(shared.env.SFU_DEPLOY_STATE_DIR, "vm.sfu-a.journal.json"), "utf8"));
+      try {
+        const failed = await deploy(sfus, {
+          env: { ...shared.env, DEPLOY_TEST_FAIL_IMAGE_TAG: "sha256:target vm-sfu:rollback-sfu-a" },
+          journals,
+        });
+        assert.equal(failed.code, 1, failed.output);
+        assert.doesNotMatch(failed.output, /SFU deploy complete/);
+        assert.equal(sfu.image, "sha256:target", failed.output);
+        assert.equal(sfu.draining, false, failed.output);
+        const journal = await readJournal();
+        assert.equal(journal.phase, "promoting", failed.output);
+        assert.equal(journal.lkg, "sha256:running");
+        assert.equal(journal.candidate, "sha256:target");
+
+        const replacements = sfu.recreates.length;
+        const retried = await deploy(sfus, { env: shared.env });
+        assert.equal(retried.code, 0, retried.output);
+        assert.equal(sfu.recreates.length, replacements, retried.output);
+        assert.equal(retried.tags["vm-sfu:rollback-sfu-a"], "sha256:target");
+        assert.equal((await readJournal()).phase, "idle");
+        assert.equal((await readJournal()).lkg, "sha256:target");
+      } finally {
+        await rm(shared.dir, { recursive: true, force: true });
+      }
+    });
+  });
+}
+
 describe("deploy-sfu.sh", { concurrency: 8 }, () => {
   for (const args of queued) nodeTest(...args);
 });

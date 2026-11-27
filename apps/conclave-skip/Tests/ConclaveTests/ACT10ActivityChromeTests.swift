@@ -29,7 +29,7 @@ struct ACT10ActivityChromeTests {
                        playback: String? = nil, hasEmbed: Bool? = nil) -> AppHostModel {
         AppHostModel(revision: base.revision, appId: appId ?? base.appId, appSessionId: base.appSessionId, phase: phase ?? base.phase,
                      issue: base.issue, isLocked: isLocked ?? base.isLocked, canEdit: canEdit ?? base.canEdit, canClose: base.canClose,
-                     canLock: base.canLock, closePending: base.closePending, lockPending: base.lockPending, tag: tag ?? base.tag,
+                     closeEffect: base.closeEffect, canLock: base.canLock, closePending: base.closePending, lockPending: base.lockPending, tag: tag ?? base.tag,
                      bundleVersion: base.bundleVersion, editorCount: editorCount ?? base.editorCount,
                      nameCount: nameCount ?? base.nameCount, playback: playback ?? base.playback, hasEmbed: hasEmbed ?? base.hasEmbed,
                      reloadSerial: base.reloadSerial, wantsWebView: base.wantsWebView)

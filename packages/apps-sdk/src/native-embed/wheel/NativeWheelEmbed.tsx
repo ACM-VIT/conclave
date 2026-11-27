@@ -51,7 +51,7 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
   const synced = useSynced(session);
   const canEdit = !host.readOnly;
   const reduceMotion = host.reduceMotion;
-  const { entries, spin, history, removeWinnerOnDone } = useWheelDocState(doc);
+  const { entries, waitingCount, spin, history, removeWinnerOnDone } = useWheelDocState(doc);
 
   const { live, isLive } = useSpinLive(doc, spin);
   const [animating, setAnimating] = useState(false);
@@ -65,10 +65,6 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
   const finalizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const failoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handledRef = useRef<Set<string>>(new Set());
-  const canEditRef = useRef(canEdit);
-  canEditRef.current = canEdit;
-  const hostRef = useRef(host);
-  hostRef.current = host;
 
   const soundsRef = useRef<WheelSounds | null>(null);
   if (soundsRef.current === null && typeof window !== "undefined") {
@@ -109,21 +105,22 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
         recordResult(doc, { spinId: settled.spinId, label: winnerEntry.label, at: Date.now(), byName: settled.spunByName });
         if (getRemoveWinnerOnDone(doc)) removeEntryById(doc, winnerEntry.id);
       };
-      const isSpinner = hostRef.current.userId !== "" && hostRef.current.userId === settled.spunById;
+      const mayEdit = () => !session.hostStatus.readOnly;
+      const isSpinner = session.hostStatus.userId !== "" && session.hostStatus.userId === settled.spunById;
       if (isSpinner) {
         finalizeTimerRef.current = setTimeout(() => {
           finalizeTimerRef.current = null;
-          if (canEditRef.current) finalize();
+          if (mayEdit()) finalize();
         }, Math.max(0, delayMs));
       } else {
         failoverTimerRef.current = setTimeout(() => {
           failoverTimerRef.current = null;
           const recorded = getHistory(doc).some((result) => result.spinId === settled.spinId);
-          if (!recorded && canEditRef.current) finalize();
+          if (!recorded && mayEdit()) finalize();
         }, Math.max(0, delayMs) + RESULT_FAILOVER_MS + Math.random() * 900);
       }
     },
-    [doc],
+    [doc, session],
   );
 
   const reveal = useCallback((settled: WheelSpin) => {
@@ -156,11 +153,11 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
   );
 
   const requestSpin = useCallback((): CommandResult => {
-    if (!canEditRef.current) return { ok: false, error: "readOnly" };
+    const current = session.hostStatus;
+    if (current.readOnly) return { ok: false, error: "readOnly" };
     if (isLive() || animating || revealTimerRef.current) return { ok: false, error: "busy" };
     const liveEntries = getEntries(doc);
     if (liveEntries.length < 2) return { ok: false, error: "notEnoughNames" };
-    const current = hostRef.current;
     const record: WheelSpin = {
       spinId: createEntryId(),
       entries: liveEntries,
@@ -174,12 +171,12 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
     };
     startSpin(doc, record);
     return { ok: true };
-  }, [doc, isLive, animating]);
+  }, [doc, session, isLive, animating]);
 
   const status = useMemo<WheelAppStatus>(
     () =>
-      wheelStatus({ entries, history, removeWinner: removeWinnerOnDone, sounds: soundOn, spinning: live, winner }),
-    [entries, history, removeWinnerOnDone, soundOn, live, winner],
+      wheelStatus({ entries, waitingCount, history, removeWinner: removeWinnerOnDone, sounds: soundOn, spinning: live, winner }),
+    [entries, waitingCount, history, removeWinnerOnDone, soundOn, live, winner],
   );
 
   useEffect(() => {
@@ -193,8 +190,8 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
       session.sendStatus({ app: { ...status, ...next } });
       return { ok: true };
     };
-    const handler = (envelope: Envelope<NativeToEmbedType>, repeat: boolean): CommandResult =>
-      runWheelCommand(doc, envelope.type, envelope.payload, {
+    const handler = (envelope: Envelope<NativeToEmbedType>, repeat: boolean, commandDoc: typeof doc): CommandResult =>
+      runWheelCommand(commandDoc, envelope.type, envelope.payload, {
         synced: session.isSynced,
         canEdit: !session.hostStatus.readOnly,
         repeat,
@@ -214,6 +211,7 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
     <div className="wheel-page">
       <WheelStage
         entries={dialEntries}
+        listEntries={entries}
         spin={spin}
         canSpin={canEdit && synced}
         sounds={soundsRef.current}

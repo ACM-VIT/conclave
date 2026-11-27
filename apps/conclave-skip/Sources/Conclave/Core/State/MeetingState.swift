@@ -518,6 +518,11 @@ final class MeetingState {
     var isAppsActionInFlight: Bool = false {
         didSet { onActivityInputChanged?() }
     }
+    /// The SFU's stage revision; nil on an older SFU, which erases an app's document on close.
+    var appsRevision: Int? = nil {
+        didSet { onActivityInputChanged?() }
+    }
+    var activeAppDocGeneration: Int? = nil
 
     var activeAppHasRoomData: Bool = false
 

@@ -105,7 +105,7 @@ internal val appHostStringResources: List<String> = buildList {
     for (color in AppInkColor.allCases) add(appHostColorResource(color))
 }
 
-internal val appHostPluralResources: List<String> = listOf("app_editing", "app_names", "app_wheel_missing")
+internal val appHostPluralResources: List<String> = listOf("app_editing", "app_names", "app_wheel_missing", "app_wheel_waiting")
 
 @Composable
 internal fun appHostStatus(model: AppHostModel): String = when (AppHostChromePolicy.statusLine(model)) {

@@ -133,8 +133,8 @@ Repair, for each instance whose journal is not idle:
 | drained | runs its last-known-good, was already draining before the deploy | Journal to idle. |
 | drained | runs its last-known-good, was serving before the deploy | Undrain it; the journal goes to idle only once `/status` confirms `draining: false`, otherwise it stays drained (exit 1) and the next run tries again. |
 | candidate, rollback | serving its last-known-good image | Journal to idle. |
-| candidate, rollback | anything else | Roll back. |
-| passed, promoting | serving the build that passed its canary | Journal to idle; that build is its last-known-good. |
+| candidate, rollback | anything else | Roll back. With no last-known-good image, confirm the failed candidate is stopped before setting the journal to idle. |
+| passed, promoting | serving the build that passed its canary | Pin that image, then record it as last-known-good and set the journal to idle. |
 | passed, promoting | serving the image it had before the promotion | Journal to idle on that image. |
 | passed, promoting | container stopped or absent, or still the passed build booted drained | Drain and wait, then promote; if the build will not serve, roll back. |
 | passed, promoting | anything else (the build ran undrained and is not serving) | Roll back. |
@@ -145,10 +145,16 @@ last-known-good image starts serving, and the journal goes to idle once it
 serves by the serving rule. An instance that takes meetings is drained for a
 rollback only while another instance serves (or when it is the only one); if
 none does, it keeps serving (exit 1) and the next run rolls it back once one
-does. Repair takes instances whose container is not running first. With no last-known-good image the instance is
-stopped instead (exit 5). A promotion also takes one path, in repair and in a
-deploy: journal `promoting`, move the service tag, start it serving, then the
-serving rule; any failure there is a rollback.
+does. Repair takes instances whose container is not running first. With no
+last-known-good image, a failed deploy returns exit 5 even if the candidate
+stops. If Docker cannot stop it or confirm that it stopped, the journal stays
+in `rollback`. A later deploy can start fresh once repair confirms the stop.
+
+A promotion records `promoting`, moves the service tag, starts the candidate,
+and checks that it serves. A candidate that does not serve goes through
+rollback. If Docker cannot pin an already serving candidate with the
+`rollback-<service>` tag, the script exits 1 with the journal still pending.
+The next run can retry the tag without restarting the serving candidate.
 
 Drain and wait, the only wait for an instance's calls:
 
@@ -290,6 +296,8 @@ is back on it, so the rest can follow with another `--rollback`; likewise a
 deploy is recorded as a release only once every instance runs it. The target
 is recorded before the first instance changes, so a `--rollback` rerun after
 an exit 3, an exit 4, an exit 5 or a killed run finishes going to that same release.
+A normal deploy that brings every instance onto its target clears the pending
+rollback, even when it restores the release already recorded as last good.
 
 `--rollback` is available after two releases have gone out with this script.
 Before that, revert and deploy.

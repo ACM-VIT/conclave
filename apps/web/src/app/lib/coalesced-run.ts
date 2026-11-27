@@ -1,16 +1,17 @@
-type Run = () => Promise<void>;
+type Run<T> = () => Promise<T>;
 
 /**
  * Runs one task at a time. Requests made while a run is in flight share a
  * single follow-up run of the latest task, so a burst costs at most two runs
- * and every caller still gets a run that started after it asked.
+ * and every caller still gets the result of a run that started after it
+ * asked.
  */
-export function createCoalescedRunner(): (run: Run) => Promise<void> {
-  let inFlight: Promise<void> | null = null;
-  let queuedRun: Run | null = null;
-  let queuedDone: Promise<void> | null = null;
+export function createCoalescedRunner<T = void>(): (run: Run<T>) => Promise<T> {
+  let inFlight: Promise<T> | null = null;
+  let queuedRun: Run<T> | null = null;
+  let queuedDone: Promise<T> | null = null;
 
-  const start = (run: Run): Promise<void> => {
+  const start = (run: Run<T>): Promise<T> => {
     const done = Promise.resolve()
       .then(run)
       .finally(() => {
@@ -20,13 +21,6 @@ export function createCoalescedRunner(): (run: Run) => Promise<void> {
     return done;
   };
 
-  const startQueued = (): Promise<void> => {
-    const run = queuedRun;
-    queuedRun = null;
-    queuedDone = null;
-    return run ? start(run) : Promise.resolve();
-  };
-
   return (run) => {
     if (queuedDone) {
       queuedRun = run;
@@ -34,6 +28,12 @@ export function createCoalescedRunner(): (run: Run) => Promise<void> {
     }
     if (!inFlight) return start(run);
     queuedRun = run;
+    const startQueued = (): Promise<T> => {
+      const next = queuedRun ?? run;
+      queuedRun = null;
+      queuedDone = null;
+      return start(next);
+    };
     queuedDone = inFlight.then(startQueued, startQueued);
     return queuedDone;
   };

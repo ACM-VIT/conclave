@@ -520,6 +520,7 @@ export const scheduledWebinarJsonStore: JsonStoreAdapter<ScheduledWebinar[]> = {
       key: (webinar) => webinar.id,
       stamp: (webinar) => webinar.updatedAt,
       claims: scheduledWebinarClaims,
+      canDelete: true,
     }),
   },
   build: (_base, rows) => rows.webinars as ScheduledWebinar[],

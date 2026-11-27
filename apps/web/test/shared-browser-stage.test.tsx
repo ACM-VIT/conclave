@@ -223,3 +223,27 @@ it("reloads the noVNC input layer over the browser video", () => {
   expect(pageFrame().getAttribute("title")).toBe("Shared browser input");
   expect(container.querySelector("video")).toBe(video);
 });
+
+it("says Live only once the current browser video plays", () => {
+  vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(
+    () => new Promise<void>(() => {}),
+  );
+  const first = new MediaStream();
+  render({ provider: "chromium", browserVideoStream: first });
+  const video = container.querySelector("video") as HTMLVideoElement;
+  act(() => {
+    video.dispatchEvent(new Event("playing"));
+  });
+  expect(text()).toContain("Live");
+
+  const replacement = new MediaStream();
+  render({ provider: "chromium", browserVideoStream: replacement });
+  expect(container.querySelector("video")).toBe(video);
+  expect(video.srcObject).toBe(replacement);
+  expect(text()).not.toContain("Live");
+
+  act(() => {
+    video.dispatchEvent(new Event("playing"));
+  });
+  expect(text()).toContain("Live");
+});

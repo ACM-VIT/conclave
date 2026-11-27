@@ -1527,16 +1527,23 @@ wait_serving() {
 # Puts an instance back on its last-known-good image, which it counts as
 # restored only once it is serving by the rule above. With none there is
 # nothing known-good to return to, so it is stopped rather than left serving a
-# build that failed its canary. Returns 1 whenever the instance is not serving.
+# build that failed its canary.
 restore_lkg() {
   local svc="$1" url="$2" image_name="$3" lkg="$4"
   service_identity "$svc" >/dev/null || return 1
   if [[ -z "$lkg" ]]; then
-    "${COMPOSE[@]}" stop "$svc" || true
+    if ! "${COMPOSE[@]}" stop "$svc"; then
+      echo "ERROR: Docker could not stop ${svc}; the next deploy retries the rollback." >&2
+      return 1
+    fi
     checkpoint "stop ${svc}"
-    journal_set "$svc" phase=idle candidate= prevLkg=
-    echo "ERROR: ${svc} has no image it last served calls on; it is stopped. Check it now." >&2
-    return 1
+    if ! hold_down "$svc"; then
+      echo "ERROR: ${svc} could not be confirmed stopped; the next deploy retries the rollback." >&2
+      return 1
+    fi
+    journal_set "$svc" phase=idle lkg= candidate= prevLkg=
+    echo "${svc} has no image it last served calls on; it is stopped." >&2
+    return 0
   fi
   echo "Rolling ${svc} back to its previous image..." >&2
   docker tag "$lkg" "$image_name" || return 1
@@ -1589,7 +1596,6 @@ seed_service_tag() {
   docker image inspect "$image_name" >/dev/null 2>&1 && return 0
   serving "$svc" && lkg="$SERVING_IMAGE"
   [[ -n "$lkg" ]] || lkg="$(journal_get "$svc" lkg)"
-  [[ -n "$lkg" ]] || lkg="$(image_id "${IMAGE_REPO}:rollback-${svc}" || true)"
   if [[ -z "$lkg" ]] || ! image_id "$lkg" >/dev/null; then
     return 1
   fi
@@ -1646,8 +1652,15 @@ promote() {
     PROMOTE_WHY="${svc} passed its canary but is not serving on ${image} (${SERVING_WHY})"
     return 1
   fi
+}
+
+finish_promotion() {
+  local svc="$1" image="$2" tag="${IMAGE_REPO}:rollback-${1}"
+  if ! docker tag "$image" "$tag"; then
+    echo "ERROR: ${svc} is serving on ${image}, but Docker could not tag it as ${tag}; the next deploy retries the promotion." >&2
+    return 1
+  fi
   journal_set "$svc" phase=idle lkg="$image" candidate= prevLkg=
-  docker tag "$image" "${IMAGE_REPO}:rollback-${svc}"
 }
 
 roll_back() {
@@ -1657,7 +1670,7 @@ roll_back() {
     echo "Docker cannot identify the rollback image for ${svc}; refusing to change it." >&2
     return "$EXIT_NOT_RESTORED"
   fi
-  [[ "$(journal_get "$svc" phase)" == "rollback" ]] || journal_set "$svc" phase=rollback
+  journal_set "$svc" phase=rollback lkg="$lkg"
   if ! hold_down "$svc"; then
     status="$(instance_status "$svc" 2>/dev/null)" || status=""
     if ! [[ -n "$status" && "$(printf "%s" "$status" | json_field draining)" == "true" ]] && ! peers_serving "$svc"; then
@@ -1747,8 +1760,7 @@ repair_interrupted() {
       passed|promoting)
         [[ "$phase" == "passed" ]] && prev="$lkg"
         if [[ -n "$candidate" ]] && serving_confirmed "$svc" "$candidate"; then
-          journal_set "$svc" phase=idle lkg="$candidate" candidate= prevLkg=
-          docker tag "$candidate" "${IMAGE_REPO}:rollback-${svc}"
+          finish_promotion "$svc" "$candidate" || code=$?
         elif [[ -n "$prev" ]] && serving_confirmed "$svc" "$prev"; then
           journal_set "$svc" phase=idle lkg="$prev" candidate= prevLkg=
         else
@@ -1757,7 +1769,11 @@ repair_interrupted() {
             drain_and_wait "$svc" "$url" || code=$?
             if (( code == 0 )); then
               promote "$svc" "$url" "$image_name" "$candidate" "$prev" || code=$?
-              if (( code != 0 && code != EXIT_CARRY_REFUSED )); then
+              if (( code == EXIT_CARRY_REFUSED )); then
+                code=1
+              elif (( code == 0 )); then
+                finish_promotion "$svc" "$candidate" || code=$?
+              else
                 echo "${PROMOTE_WHY}; rolling ${svc} back." >&2
                 code=0
                 roll_back "$svc" "$url" "$image_name" "$prev" || code=$?
@@ -1809,14 +1825,12 @@ deploy_service() {
   fi
 
   # The last-known-good image: the one it is serving on now, by the serving
-  # rule, else the one its journal recorded the last time it served (or the
-  # rollback-<service> tag an older release of this script kept). An image
+  # rule, else the one its journal recorded the last time it served. An image
   # that merely runs is never one.
   identity="$(service_identity "$svc")" || return 1
   read -r container running <<< "$identity"
   recorded="$(journal_get "$svc" lkg)"
   lkg="$recorded"
-  [[ -n "$lkg" ]] || lkg="$(image_id "${IMAGE_REPO}:rollback-${svc}" || true)"
   if serving "$svc"; then
     lkg="$SERVING_IMAGE"
   fi
@@ -1827,8 +1841,11 @@ deploy_service() {
 
   # Deployed means the target passed its canary here (the journal says it is
   # this instance's last-known-good), with the current config, and serves.
+  local current_hash expected_hash
   if [[ -n "$container" && "$recorded" == "$TARGET_IMAGE" && "$running" == "$TARGET_IMAGE" ]] &&
-     [[ "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.config-hash"}}' "$container")" == "$(serving_config_hash "$svc" "$image_name" "$container")" ]]; then
+     current_hash="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.config-hash"}}' "$container")" &&
+     expected_hash="$(serving_config_hash "$svc" "$image_name" "$container")" &&
+     [[ -n "$current_hash" && "$current_hash" == "$expected_hash" ]]; then
     if serving "$svc" "$TARGET_IMAGE"; then
       echo "${svc} already runs ${TARGET_COMMIT} with the current config; leaving it alone."
       return 0
@@ -1986,6 +2003,7 @@ deploy_service() {
     case "$code" in
       0)
         echo "Instances not yet deployed were left untouched and keep serving." >&2
+        [[ -n "$lkg" ]] || return "$EXIT_NOT_RESTORED"
         return "$EXIT_CANARY_FAILED"
         ;;
       3)
@@ -2000,6 +2018,7 @@ deploy_service() {
         ;;
     esac
   fi
+  finish_promotion "$svc" "$TARGET_IMAGE" || return 1
   echo "${svc} passed its canary on ${TARGET_COMMIT} and is serving."
 }
 
@@ -2231,11 +2250,13 @@ elif [[ "$ROLLBACK" == "true" ]]; then
   ROLLBACK_TARGET_COMMIT=""
   ROLLBACK_TARGET_IMAGE=""
   save_deploy_state
-elif [[ "$TARGET_IMAGE" != "$LAST_GOOD_IMAGE" ]] && all_final_serving; then
-  PREVIOUS_GOOD_COMMIT="$LAST_GOOD_COMMIT"
-  PREVIOUS_GOOD_IMAGE="$LAST_GOOD_IMAGE"
-  LAST_GOOD_COMMIT="$TARGET_COMMIT"
-  LAST_GOOD_IMAGE="$TARGET_IMAGE"
+elif [[ "$TARGET_IMAGE" != "$LAST_GOOD_IMAGE" || -n "$ROLLBACK_TARGET_IMAGE" ]] && all_final_serving; then
+  if [[ "$TARGET_IMAGE" != "$LAST_GOOD_IMAGE" ]]; then
+    PREVIOUS_GOOD_COMMIT="$LAST_GOOD_COMMIT"
+    PREVIOUS_GOOD_IMAGE="$LAST_GOOD_IMAGE"
+    LAST_GOOD_COMMIT="$TARGET_COMMIT"
+    LAST_GOOD_IMAGE="$TARGET_IMAGE"
+  fi
   ROLLBACK_TARGET_COMMIT=""
   ROLLBACK_TARGET_IMAGE=""
   save_deploy_state

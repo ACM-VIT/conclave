@@ -34,6 +34,7 @@ function renderGrid(
 ) {
   return renderToStaticMarkup(
     <GridLayout
+      meetingPath="/team-room?clientId=conclave"
       localStream={null}
       isCameraOff
       isMuted
@@ -98,6 +99,7 @@ describe("GridLayout meeting presence", () => {
     (selfViewMode, expectsRail) => {
       const html = renderToStaticMarkup(
         <GridLayout
+          meetingPath="/team-room?clientId=conclave"
           localStream={null}
           isCameraOff
           isMuted

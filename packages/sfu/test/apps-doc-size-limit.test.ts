@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import * as Y from "yjs";
 import type { Router } from "mediasoup/types";
 import type { Server as SocketIOServer, Socket } from "socket.io";
@@ -13,15 +13,17 @@ type Listener = (...args: unknown[]) => unknown;
 
 const MAX_DOC_BYTES = 1024 * 1024;
 
-const joinBoardApp = (id: string) => {
+const joinApp = (id: string, appId = "board") => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
   const listeners = new Map<string, Listener>();
+  const emit = vi.fn();
   const socket = {
     id: `s-${id}`,
+    connected: true,
     data: { user: {} },
     on: (event: string, listener: Listener) => { listeners.set(event, listener); return socket; },
     to: () => ({ emit: vi.fn() }),
-    emit: vi.fn(),
+    emit,
   } as unknown as Socket;
   const state = createSfuState({
     roomRegistry: new LocalRoomRegistry({ instanceId: id, instanceUrl: "http://localhost", ttlMs: 45000 }),
@@ -30,14 +32,21 @@ const joinBoardApp = (id: string) => {
   state.rooms.set(room.channelId, room);
   const admin = new Admin({ id: `a#${id}`, socket });
   room.addClient(admin);
-  room.appsState.activeAppId = "board";
+  room.apps.present(appId);
   const context = createConnectionContext({ to: () => ({ emit: vi.fn() }) } as unknown as SocketIOServer, socket, state);
   context.currentRoom = room;
   context.currentClient = admin;
   registerAppsHandlers(context);
+  onTestFinished(() => { listeners.get("disconnecting")!(); });
+  listeners.get("apps:yjs:sync")!(
+    { appId, syncMessage: new Uint8Array([0]) },
+    () => {},
+  );
   return {
-    send: (update: Uint8Array) => listeners.get("apps:yjs:update")!({ appId: "board", update }),
-    serverDoc: () => room.getOrCreateAppDoc("board"),
+    send: (update: Uint8Array, replicaId?: string) =>
+      listeners.get("apps:yjs:update")!({ appId, update, replicaId }),
+    serverDoc: () => room.apps.liveDoc(appId)!,
+    emit,
   };
 };
 
@@ -71,7 +80,7 @@ const everyOtherClock = (from: number, to: number) => {
 
 describe("app document size", () => {
   it("stops growing a document at the size a sync can still deliver", () => {
-    const { send, serverDoc } = joinBoardApp("inserts");
+    const { send, serverDoc } = joinApp("inserts");
 
     const attacker = new Y.Doc();
     const text = attacker.getText("t");
@@ -103,7 +112,7 @@ describe("app document size with deletions", () => {
   });
 
   it("refuses deletions whose item splits would push the document past the limit", () => {
-    const { send, serverDoc } = joinBoardApp("deletions");
+    const { send, serverDoc } = joinApp("deletions");
     const serverText = () => serverDoc().getText("t").length;
     const attacker = new Y.Doc();
     attacker.clientID = 0xffffffff;
@@ -129,4 +138,30 @@ describe("app document size with deletions", () => {
     expect(serverText()).toBe(78_552);
     expect(Y.encodeStateAsUpdate(serverDoc()).length).toBe(MAX_DOC_BYTES);
   }, 30_000);
+});
+
+it.each([
+  { appId: "wheel", replicaId: undefined, echoes: true },
+  { appId: "board", replicaId: undefined, echoes: false },
+  { appId: "board", replicaId: "copy-1", echoes: true },
+])("echoes accepted $appId updates to the writer with replica $replicaId only when needed", ({ appId, replicaId, echoes }) => {
+  const { send, serverDoc, emit } = joinApp(`receipt-${appId}`, appId);
+  const writer = new Y.Doc();
+  writer.getArray("wheel.entries").push([{ id: "ada", label: "Ada" }]);
+  const update = Y.encodeStateAsUpdate(writer);
+  const contentsAtEcho: unknown[] = [];
+  emit.mockImplementation((event) => {
+    if (event === "apps:yjs:update") {
+      contentsAtEcho.push(serverDoc().getArray("wheel.entries").toArray());
+    }
+  });
+  const receipts = () => emit.mock.calls.filter(([event]) => event === "apps:yjs:update");
+  send(update, replicaId);
+  expect(receipts()).toEqual(echoes ? [["apps:yjs:update", { appId, update }]] : []);
+  expect(contentsAtEcho).toEqual(echoes ? [[{ id: "ada", label: "Ada" }]] : []);
+  expect(serverDoc().getArray("wheel.entries").toArray()).toEqual([{ id: "ada", label: "Ada" }]);
+
+  send(new Uint8Array(MAX_DOC_BYTES), replicaId);
+  send(Uint8Array.of(255), replicaId);
+  expect(receipts()).toHaveLength(echoes ? 1 : 0);
 });

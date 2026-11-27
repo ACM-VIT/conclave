@@ -128,7 +128,7 @@ function SharedBrowserVideo({
   onReload: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
+  const [playingStream, setPlayingStream] = useState<MediaStream | null>(null);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -166,7 +166,10 @@ function SharedBrowserVideo({
             autoPlay
             playsInline
             muted
-            onPlaying={() => setIsPlaying(true)}
+            onPlaying={(event) => {
+              const source = event.currentTarget.srcObject;
+              setPlayingStream(source instanceof MediaStream ? source : null);
+            }}
             className="absolute inset-0 h-full w-full"
             style={{ objectFit: "fill", pointerEvents: "none" }}
           />
@@ -180,7 +183,7 @@ function SharedBrowserVideo({
           />
         </div>
       </div>
-      <SharedBrowserPill label={label} isLive={isPlaying} onReload={onReload} />
+      <SharedBrowserPill label={label} isLive={playingStream === stream} onReload={onReload} />
     </div>
   );
 }
