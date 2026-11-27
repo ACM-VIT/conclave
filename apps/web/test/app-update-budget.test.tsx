@@ -59,7 +59,9 @@ const budgetedSfu = (appId: string, serverDoc: Y.Doc) => {
   const partsSeen: Array<{ id: string; index: number; count: number }> = [];
   const lists: number[] = [];
   const acks: number[] = [];
+  const stageCommands: string[] = [];
   let staged: { id: string; parts: Uint8Array[] } | null = null;
+  let revision = 1;
   const state = {
     refusals: 0,
     refuseNext: null as null | ((after: Y.Doc) => boolean),
@@ -73,6 +75,9 @@ const budgetedSfu = (appId: string, serverDoc: Y.Doc) => {
     activeAppId: appId as string | null,
     joined: true,
     rejoinDelayMs: 0,
+    retains: false,
+    commitDelayMs: 0,
+    skipCommit: false,
     refusedReplicas: new Set<string>(),
   };
   const syncPayloads: Array<{ wholeChanges?: boolean }> = [];
@@ -91,18 +96,24 @@ const budgetedSfu = (appId: string, serverDoc: Y.Doc) => {
     if (refusedByTest) {
       if (--state.refusalsLeft === 0) state.refuseNext = null;
       refuse(replicaId, state.refusalReason, state.refusalDelayMs);
-      return;
+      return false;
     }
     if (after.store.pendingStructs !== null || after.store.pendingDs !== null) {
       refuse(replicaId, "missing-dependency");
-      return;
+      return false;
     }
     if (Y.encodeStateAsUpdate(after).length > state.docLimit) {
       refuse(replicaId, "too-large");
-      return;
+      return false;
     }
     updates.forEach((update) => Y.applyUpdate(serverDoc, update));
+    return true;
   };
+  const stage = () => ({
+    activeAppId: state.activeAppId,
+    locked: false,
+    ...(state.retains ? { revision, roomId: "room", docGeneration: state.activeAppId === null ? null : 1 } : {}),
+  });
   const fire = (event: string, payload: unknown) => listeners.get(event)?.forEach((listener) => listener(payload));
   const socket = {
     connected: true,
@@ -110,15 +121,15 @@ const budgetedSfu = (appId: string, serverDoc: Y.Doc) => {
     off: (event: string, listener: Listener) => listeners.get(event)?.delete(listener),
     emit: (event: string, payload?: unknown, ack?: Ack) => {
       if (event === "apps:getState" && typeof payload === "function") {
-        (payload as Ack)(state.joined ? { activeAppId: state.activeAppId, locked: false } : { activeAppId: null, locked: false, notInRoom: true });
+        (payload as Ack)(state.joined ? stage() : { activeAppId: null, locked: false, notInRoom: true });
         return;
       }
       if (event === "apps:yjs:sync" && typeof ack === "function") {
         syncPayloads.push(payload as { wholeChanges?: boolean });
         const answer = () =>
           ack({
-            syncMessage: Y.encodeStateAsUpdate(serverDoc),
-            stateVector: Y.encodeStateVector(serverDoc),
+            syncMessage: state.activeAppId === appId ? Y.encodeStateAsUpdate(serverDoc) : Uint8Array.of(0, 0),
+            stateVector: state.activeAppId === appId ? Y.encodeStateVector(serverDoc) : Uint8Array.of(0),
             ...(state.stagesParts ? { stagesParts: true } : {}),
             ...(state.takesLists ? { takesUpdateLists: true } : {}),
           });
@@ -126,11 +137,29 @@ const budgetedSfu = (appId: string, serverDoc: Y.Doc) => {
         else answer();
         return;
       }
+      if (state.retains && (event === "apps:open" || event === "apps:close")) {
+        stageCommands.push(event);
+        if ((payload as { expectedRevision: number }).expectedRevision !== revision) {
+          ack?.({ success: false, code: "stale_revision" });
+          return;
+        }
+        state.activeAppId = event === "apps:close" ? null : (payload as { appId: string }).appId;
+        revision += 1;
+        staged = null;
+        fire("apps:state", stage());
+        ack?.({ success: true });
+        return;
+      }
       if (event !== "apps:yjs:update") return;
-      receive(payload);
-      if (!state.takesLists || typeof ack !== "function") return;
-      acks.push(Date.now());
-      setTimeout(() => ack(undefined), state.refusalDelayMs);
+      const sentRevision = revision;
+      const commit = () => {
+        const accepted = sentRevision === revision && !state.skipCommit && receive(payload);
+        if (!state.takesLists || typeof ack !== "function") return;
+        acks.push(Date.now());
+        setTimeout(() => ack(state.retains && accepted ? { committed: true } : undefined), state.refusalDelayMs);
+      };
+      if (state.commitDelayMs > 0) setTimeout(commit, state.commitDelayMs);
+      else commit();
     },
   } as unknown as Socket;
   function receive(payload: unknown) {
@@ -150,11 +179,7 @@ const budgetedSfu = (appId: string, serverDoc: Y.Doc) => {
         return;
       }
       staged = null;
-      for (const listed of updates) {
-        if (state.refusedReplicas.has(replicaId)) return;
-        accept(replicaId, [listed]);
-      }
-      return;
+      return updates.every((listed) => accept(replicaId, [listed]));
     }
     if (!update) return;
     sentAt.push(Date.now());
@@ -171,8 +196,7 @@ const budgetedSfu = (appId: string, serverDoc: Y.Doc) => {
     }
     if (!part || !state.stagesParts) {
       staged = null;
-      accept(replicaId, [update]);
-      return;
+      return accept(replicaId, [update]);
     }
     if (part.index === 0) staged = { id: part.id, parts: [] };
     if (!staged || staged.id !== part.id || staged.parts.length !== part.index) {
@@ -183,7 +207,7 @@ const budgetedSfu = (appId: string, serverDoc: Y.Doc) => {
     if (staged.parts.length < part.count) return;
     const { parts } = staged;
     staged = null;
-    accept(replicaId, [joinBytes(parts)]);
+    return accept(replicaId, [joinBytes(parts)]);
   }
   const busiestSecond = () =>
     sentAt.reduce((most, start, index) => Math.max(most, sentAt.slice(index).filter((time) => time < start + 1_000).length), 0);
@@ -198,13 +222,13 @@ const budgetedSfu = (appId: string, serverDoc: Y.Doc) => {
     fire("connect", undefined);
     setTimeout(() => {
       state.joined = true;
-      fire("apps:state", { activeAppId: state.activeAppId, locked: false });
+      fire("apps:state", stage());
     }, state.rejoinDelayMs);
   };
   const dropStaging = () => {
     staged = null;
   };
-  return { socket, state, sentAt, sentBytes, reasons, partsSeen, lists, acks, syncPayloads, busiestSecond, fire, interrupt, restore, dropStaging };
+  return { socket, state, sentAt, sentBytes, reasons, partsSeen, lists, acks, syncPayloads, stageCommands, busiestSecond, fire, interrupt, restore, dropStaging };
 };
 
 const mount = async (socket: Socket, Body: ComponentType, apps: never[]) => {
@@ -254,6 +278,126 @@ const strokes = (doc: Y.Doc) =>
   getPageElements(doc, getActivePageId(doc)!)
     .filter((element) => "points" in element)
     .map((element) => JSON.stringify((element as unknown as { points: unknown[] }).points));
+
+describe("leaving a saved whiteboard", () => {
+  const board = async () => {
+    const server = createWhiteboardDoc();
+    ensureDefaultPage(server);
+    const sfu = budgetedSfu("whiteboard", server);
+    Object.assign(sfu.state, { retains: true, takesLists: true, stagesParts: true });
+    await mount(sfu.socket, () => null, [whiteboardApp as never, wheelApp as never]);
+    const pageId = getActivePageId(ctx.getDoc("whiteboard"))!;
+    const add = (id: string) =>
+      addElement(ctx.getDoc("whiteboard"), pageId, { id, type: "rect", x: 0, y: 0, width: 5, height: 5 } as never);
+    const read = (doc: Y.Doc) => getPageElements(doc, pageId).map(({ id }) => id);
+    const reopen = async () => {
+      await act(async () => { expect(await ctx.presentApp("whiteboard")).toEqual({ ok: true }); });
+      return read(ctx.getDoc("whiteboard"));
+    };
+    return { sfu, server, add, read, reopen };
+  };
+
+  const request = async (command: () => ReturnType<AppsContextValue["closeApp"]>) => {
+    const result: { value?: Awaited<ReturnType<typeof command>> } = {};
+    await act(async () => void command().then((answer) => { result.value = answer; }));
+    return result;
+  };
+
+  it("reopens with edits that were still waiting for the upload pacer at Close", async () => {
+    const { sfu, server, add, read, reopen } = await board();
+    await act(async () => add("first"));
+    await advance(1);
+    await act(async () => { add("second"); add("third"); });
+    expect(read(server)).toEqual(["first"]);
+
+    const result = await request(ctx.closeApp);
+    await advance(200);
+    expect(result.value).toEqual({ ok: true });
+    expect(await reopen()).toEqual(["first", "second", "third"]);
+    expect(sfu.lists).toContain(2);
+  });
+
+  it("reopens with the full change after switching during a multipart write", async () => {
+    const { sfu, add, reopen } = await board();
+    const text = "x".repeat(APP_DOCUMENT_UPDATE_MAX_BYTES + 1_000);
+    sfu.state.commitDelayMs = 250;
+    await act(async () => {
+      const doc = ctx.getDoc("whiteboard");
+      doc.transact(() => {
+        add("large");
+        doc.getText("large-edit").insert(0, text);
+      });
+    });
+    await advance(250);
+    expect(sfu.partsSeen.map(({ index }) => index)).toEqual([0]);
+    const result = await request(() => ctx.presentApp("wheel"));
+    await advance(200);
+    expect(result.value).toEqual({ ok: true });
+    expect(ctx.state.activeAppId).toBe("wheel");
+    expect(await reopen()).toEqual(["large"]);
+    expect(ctx.getDoc("whiteboard").getText("large-edit").toString()).toBe(text);
+  });
+
+  it("waits for a temporary refusal to catch up and resend before closing", async () => {
+    const { sfu, add, reopen } = await board();
+    Object.assign(sfu.state, { commitDelayMs: 200, syncDelayMs: 100, refuseNext: () => true });
+    await act(async () => add("resent"));
+    const result = await request(ctx.closeApp);
+    await advance(1_000);
+    expect(sfu.reasons).toEqual(["timed-out"]);
+    expect(result.value).toEqual({ ok: true });
+    sfu.state.syncDelayMs = 0;
+    expect(await reopen()).toEqual(["resent"]);
+  });
+
+  it("reports failure and stays open after a final refusal", async () => {
+    const { sfu, add } = await board();
+    Object.assign(sfu.state, { commitDelayMs: 200, refusalReason: "too-large", refuseNext: () => true });
+    await act(async () => add("rejected"));
+    const result = await request(ctx.closeApp);
+    await advance(500);
+    expect(result.value).toEqual({ ok: false, reason: "failed" });
+    expect(sfu.stageCommands).toEqual([]);
+    expect(ctx.state.activeAppId).toBe("whiteboard");
+    expect(ctx.rejectedChangeReason).toBe("too-large");
+  });
+
+  it("does not treat an empty upload ack as acceptance", async () => {
+    const { sfu, add, read } = await board();
+    Object.assign(sfu.state, { commitDelayMs: 200, skipCommit: true });
+    await act(async () => add("unconfirmed"));
+    const result = await request(ctx.closeApp);
+    await advance(8_500);
+    expect(result.value).toEqual({ ok: false, reason: "failed" });
+    expect(sfu.stageCommands).toEqual([]);
+    expect(read(ctx.getDoc("whiteboard"))).toEqual(["unconfirmed"]);
+  });
+
+  it("cancels on disconnect even if the same stage resyncs and accepts the edit", async () => {
+    const { sfu, server, add, read } = await board();
+    sfu.state.commitDelayMs = 200;
+    await act(async () => add("interrupted"));
+    const result = await request(ctx.closeApp);
+    await act(async () => { sfu.interrupt(); sfu.restore(); });
+    await advance(1_000);
+    expect(result.value).toEqual({ ok: false, reason: "failed" });
+    expect(sfu.stageCommands).toEqual([]);
+    expect(ctx.state.activeAppId).toBe("whiteboard");
+    expect(read(server)).toEqual(["interrupted"]);
+  });
+
+  it("closes immediately when the current edits are already committed", async () => {
+    const { sfu, add, reopen } = await board();
+    await act(async () => add("saved"));
+    await advance(1);
+    await act(async () => {
+      const result = ctx.closeApp();
+      expect(sfu.stageCommands).toEqual(["apps:close"]);
+      expect(await result).toEqual({ ok: true });
+    });
+    expect(await reopen()).toEqual(["saved"]);
+  });
+});
 
 describe("app updates stay inside the server's budget", () => {
   it("paces uploads below the rate the server refills, from the same budget the server enforces", () => {
