@@ -88,11 +88,11 @@ enum AppBridgeProtocol {
 }
 
 enum AppBridgeInboundType: String, CaseIterable, Equatable {
-    case ready, sync, update, awareness, status, ack, resize
+    case ready, sync, verifySaved, update, awareness, status, ack, resize
 }
 
 enum AppBridgeOutboundType: String, CaseIterable, Equatable {
-    case snapshot, update, awareness, status, resync, close
+    case snapshot, update, awareness, status, resync, close, prepareToLeave, savedSnapshot
     case setTool, setColor, setStrokeWidth, setFill, undo, redo, setPage, addPage, renamePage, deletePage, zoomToFit, export
     case addEntries, removeEntry, shuffle, sort, clearEntries, spin, setRemoveWinner, setSounds, clearResults, addOutcome
     case playNow, enqueue, request, approve, decline, cancelRequest, move, remove
@@ -233,6 +233,8 @@ enum AppBridgeCodec {
             let vector = bytes(payload["stateVector"], limit: AppBridgeProtocol.stateVectorByteLimit)
             if vector.rejection != AppBridgeRejection.none { return AppBridgeDecodeResult.rejected(vector.rejection) }
             return accepted(AppBridgeInbound.make(type: type, requestId: requestId, bytes: vector.data))
+        case .verifySaved:
+            return accepted(AppBridgeInbound.make(type: type, requestId: requestId))
         case .update:
             let update = bytes(payload["update"], limit: AppBridgeProtocol.updateByteLimit)
             if update.rejection != AppBridgeRejection.none { return AppBridgeDecodeResult.rejected(update.rejection) }

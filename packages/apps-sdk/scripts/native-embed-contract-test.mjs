@@ -180,7 +180,7 @@ const loadSessionModule = async () => {
 const sessionModule = await loadSessionModule();
 const skipConvergence = sessionModule === null ? "esbuild is not installed in the workspace" : false;
 
-const makeRoom = (mod, context) => {
+const makeRoom = (mod, context, acceptsUpdate = () => true) => {
   const { Y } = mod;
   const room = new Y.Doc();
   const clients = [];
@@ -237,9 +237,15 @@ const makeRoom = (mod, context) => {
             }
           } else if (message.type === "sync") {
             snapshot(client, mod.bytesFromBase64(message.payload.stateVector, 65536).bytes, message.requestId);
+          } else if (message.type === "verifySaved") {
+            deliver(client, "savedSnapshot", {
+              syncMessage: mod.base64FromBytes(Y.encodeStateAsUpdate(room)),
+              stateVector: mod.base64FromBytes(Y.encodeStateVector(room)),
+            }, message.requestId);
           } else if (message.type === "update") {
             if (client.host.readOnly || client.host.connection !== "live") continue;
             const bytes = mod.bytesFromBase64(message.payload.update, 262144).bytes;
+            if (!acceptsUpdate()) continue;
             roomUpdates.push(bytes);
             Y.applyUpdate(room, bytes, "client");
             for (const other of clients) {
@@ -641,4 +647,57 @@ test("close invalidates the session for good", { skip: skipConvergence }, async 
   await harness.pump();
   assert.equal(harness.roomUpdates.length, 0);
   assert.equal(harness.deliver(ada, "update", { update: "AQID" }), "staleAppSession");
+});
+
+test("native Close waits for paced additions and deletions and a cold reopen sees both", { skip: skipConvergence }, async (context) => {
+  const harness = makeRoom(sessionModule, context);
+  const author = await harness.join("native-host");
+  const shapes = author.session.doc.getMap("whiteboard");
+  shapes.set("first", "stroke");
+  await Promise.resolve();
+  assert.equal(author.updatesPostedAt.length, 1);
+  shapes.set("paced", "stroke");
+  shapes.delete("first");
+  await Promise.resolve();
+  assert.equal(author.updatesPostedAt.length, 1);
+  harness.deliver(author, "prepareToLeave", {}, "native-close");
+  assert.deepEqual(acksFor(author, "native-close"), []);
+  await harness.pump();
+  assert.deepEqual(acksFor(author, "native-close"), [{ ok: true }]);
+  harness.deliver(author, "close", {});
+  const cold = await harness.join("cold-copy");
+  assert.deepEqual(cold.session.doc.getMap("whiteboard").toJSON(), { paced: "stroke" });
+});
+
+test("native switch fails if the room does not have the edit, and the embed keeps it", { skip: skipConvergence }, async (context) => {
+  const harness = makeRoom(sessionModule, context, () => false);
+  const author = await harness.join("native-host");
+  const shapes = author.session.doc.getMap("whiteboard");
+  shapes.set("unaccepted", "stroke");
+  harness.deliver(author, "prepareToLeave", {}, "native-switch");
+  await harness.pump();
+  assert.deepEqual(acksFor(author, "native-switch"), [{ ok: false, error: "notSaved" }]);
+  assert.deepEqual(shapes.toJSON(), { unaccepted: "stroke" });
+  assert.equal(author.session.isClosed, false);
+});
+
+test("a native connection interruption invalidates the pending leave snapshot", { skip: skipConvergence }, async (context) => {
+  const harness = makeRoom(sessionModule, context);
+  const author = await harness.join("native-host");
+  author.session.doc.getMap("whiteboard").set("kept", "stroke");
+  await Promise.resolve();
+  harness.deliver(author, "prepareToLeave", {}, "native-interrupted");
+  harness.deliver(author, "status", { ...author.host, connection: "reconnecting" });
+  await harness.pump();
+  assert.deepEqual(acksFor(author, "native-interrupted"), [{ ok: false, error: "notSaved" }]);
+  assert.equal(author.session.isClosed, false);
+});
+
+test("native Close with no edits answers without a room snapshot", { skip: skipConvergence }, async (context) => {
+  const harness = makeRoom(sessionModule, context);
+  const author = await harness.join("native-host");
+  harness.deliver(author, "prepareToLeave", {}, "native-idle");
+  assert.deepEqual(author.outbox.map((raw) => JSON.parse(raw).type), ["ack"]);
+  await harness.pump();
+  assert.deepEqual(acksFor(author, "native-idle"), [{ ok: true }]);
 });

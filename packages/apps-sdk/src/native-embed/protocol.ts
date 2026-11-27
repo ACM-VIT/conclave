@@ -22,7 +22,7 @@ export const NATIVE_EMBED_LIMITS = {
   executedCommands: 4_096,
 } as const;
 
-export const EMBED_TO_NATIVE_TYPES = ["ready", "sync", "update", "awareness", "status", "ack", "resize"] as const;
+export const EMBED_TO_NATIVE_TYPES = ["ready", "sync", "verifySaved", "update", "awareness", "status", "ack", "resize"] as const;
 export const NATIVE_TO_EMBED_TYPES = [
   "snapshot",
   "update",
@@ -30,6 +30,8 @@ export const NATIVE_TO_EMBED_TYPES = [
   "status",
   "resync",
   "close",
+  "prepareToLeave",
+  "savedSnapshot",
   "setTool",
   "setColor",
   "setStrokeWidth",
@@ -490,6 +492,8 @@ export const decodeEmbedMessage = (
       if (!vector.ok) return vector;
       return { ok: true, envelope };
     }
+    case "verifySaved":
+      return { ok: true, envelope };
     case "update":
     case "awareness": {
       const limit = envelope.type === "update" ? NATIVE_EMBED_LIMITS.updateBytes : NATIVE_EMBED_LIMITS.awarenessBytes;

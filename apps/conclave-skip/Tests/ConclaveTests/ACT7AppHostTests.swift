@@ -301,6 +301,45 @@ struct ACT7AppHostTests {
         #expect(relay.appSessionId.isEmpty && relay.lifecycle == .idle && relay.rejectionCount == 0)
     }
 
+    @Test func leaveWaitsForTheEmbedToCheckTheRoomSnapshot() async throws {
+        let wire = Wire()
+        let relay = session(wire)
+        relay.sleep = { _ in try? await Task.sleep(nanoseconds: 1_000_000_000) }
+        #expect(ready(relay) == .none)
+        await settle { relay.snapshotDelivered }
+
+        let leave = Task { @MainActor in await relay.prepareToLeave() }
+        await settle { wire.types().last == "prepareToLeave" }
+        let requestId = try #require(wire.delivered.last.flatMap(AppBridgeCodec.jsonObject)?["requestId"] as? String)
+        #expect(relay.receiveFromEmbed(raw: envelope(relay, "verifySaved", [:], requestId: requestId),
+                                       origin: AppBridgeProtocol.iosOrigin, isMainFrame: true) == .none)
+        await settle { wire.types().last == "savedSnapshot" }
+        #expect(wire.syncs == [Data([0]), Data([0])])
+        #expect(relay.snapshotDelivered && relay.isReady)
+        #expect(relay.receiveFromEmbed(raw: envelope(relay, "ack", ["ok": true], requestId: requestId),
+                                       origin: AppBridgeProtocol.iosOrigin, isMainFrame: true) == .none)
+        #expect(await leave.value)
+    }
+
+    @Test func leaveTimesOutAndReplacementRejectsTheOldBridgeAck() async throws {
+        let wire = Wire()
+        let relay = session(wire)
+        #expect(ready(relay) == .none)
+        #expect(!(await relay.prepareToLeave()))
+        #expect(relay.appId == "whiteboard")
+
+        relay.sleep = { _ in try? await Task.sleep(nanoseconds: 1_000_000_000) }
+        let leave = Task { @MainActor in await relay.prepareToLeave() }
+        let count = wire.delivered.count
+        await settle { wire.delivered.count > count && wire.types().last == "prepareToLeave" }
+        let requestId = try #require(wire.delivered.last.flatMap(AppBridgeCodec.jsonObject)?["requestId"] as? String)
+        let oldAck = envelope(relay, "ack", ["ok": true], requestId: requestId)
+        relay.begin(appId: "wheel", callSessionId: "different-call", isReadOnly: false)
+        #expect(!(await leave.value))
+        #expect(relay.receiveFromEmbed(raw: oldAck, origin: AppBridgeProtocol.iosOrigin, isMainFrame: true) == .notAttached)
+        #expect(relay.appId == "wheel")
+    }
+
     @Test func movedHelpersKeepTheViewModelGuards() async throws {
         let wire = Wire()
         let relay = session(wire)

@@ -1224,14 +1224,20 @@ final class SocketIOManager {
         return try JSONDecoder().decode(AppsStateNotification.self, from: data)
     }
 
-    func openApp(_ appId: String) async throws -> AppsOpenResponse {
-        let request = AppsOpenRequest(appId: appId)
+    func openApp(_ appId: String, expectedRevision: Int?, expectedRoomId: String?) async throws -> AppsOpenResponse {
+        let request = AppsOpenRequest(appId: appId, expectedRevision: expectedRevision, expectedRoomId: expectedRoomId)
         let data = try await emit(event: SocketEvent.appsOpen, payload: request)
         return try JSONDecoder().decode(AppsOpenResponse.self, from: data)
     }
 
-    func closeApp() async throws -> AppsCloseResponse {
-        let data = try await emitAckOnly(event: SocketEvent.appsClose)
+    func closeApp(expectedRevision: Int?, expectedRoomId: String?) async throws -> AppsCloseResponse {
+        let data: Data
+        if let expectedRevision {
+            let request = AppsCloseRequest(expectedRevision: expectedRevision, expectedRoomId: expectedRoomId)
+            data = try await emit(event: SocketEvent.appsClose, payload: request)
+        } else {
+            data = try await emitAckOnly(event: SocketEvent.appsClose)
+        }
         return try JSONDecoder().decode(AppsCloseResponse.self, from: data)
     }
 
