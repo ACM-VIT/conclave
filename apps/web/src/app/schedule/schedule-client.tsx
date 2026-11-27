@@ -33,7 +33,7 @@ type Props = {
 
 type Booking = {
   id: string;
-  clientId?: string;
+  clientId: string;
   roomCode: string;
   title: string;
   attendeeName?: string | null;

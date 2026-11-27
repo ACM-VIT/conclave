@@ -89,13 +89,13 @@ describe("the join code field's room lookup", () => {
     await typeText("https://conclave.acmvit.in/review-room?clientId=review-alt");
     await wait(CODE_FIELD_SETTLE_MS * 2);
     expect(field.resolution.code).toBe("review-room");
-    expect(field.tenant).toEqual({ clientId: "review-alt", onThisPage: false });
+    expect(field.destination).toEqual({ roomCode: "review-room", clientId: "review-alt" });
     expect(parentRoomId).toBe("");
     expect(lookups).toEqual([]);
     await clear();
     await typeText("https://conclave.acmvit.in/review-room?clientId=default");
     await wait(CODE_FIELD_SETTLE_MS);
-    expect(field.tenant).toEqual({ clientId: "conclave", onThisPage: true });
+    expect(field.destination).toEqual({ roomCode: "review-room", clientId: "conclave" });
     expect(lookups).toEqual(["review-room"]);
     expect(parentRoomId).toBe("");
   });

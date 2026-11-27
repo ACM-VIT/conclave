@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { color } from "@conclave/ui-tokens";
-import { buildMeetingPath } from "@/lib/meeting-links";
+import { buildMeetingPath, buildWebinarPath } from "@/lib/meeting-links";
 import type {
   AdminEventType,
   InstanceStatus,
@@ -185,8 +185,8 @@ export function ActivityDrawer({
       : PAST_STATUSES.has(status)
         ? (color.textFaint as string)
         : color.warning;
-    const linkPath = item.kind === "webinar" && item.slug
-      ? `/w/${encodeURIComponent(item.slug)}`
+    const linkPath = item.kind === "webinar"
+      ? buildWebinarPath({ slug: item.slug ?? "", clientId: item.clientId })
       : buildMeetingPath({ roomCode: item.roomId, clientId: item.clientId });
 
     return (

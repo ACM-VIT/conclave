@@ -1,5 +1,7 @@
 "use client";
 
+import { buildMeetingPath } from "@/lib/meeting-links";
+import { resolveMeetingClientId } from "@/lib/sfu-client-id";
 import { lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   Dispatch,
@@ -2487,6 +2489,7 @@ export default function MeetsMainContent({
         </MeetingAppLayout>
       ) : (
         <GridLayout
+          meetingPath={buildMeetingPath({ roomCode: roomId, clientId: resolveMeetingClientId(clientId) })}
           localStream={effectiveLocalStream}
           isCameraOff={effectiveIsCameraOff}
           isMuted={isMuted}

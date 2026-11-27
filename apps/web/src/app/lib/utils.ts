@@ -2,7 +2,7 @@ import { resolveViewerUrl } from "../../lib/novnc-viewer";
 import { EMOJI_REACTIONS, type ReactionEmoji } from "./constants";
 import { isMediaCaptureTimeoutError } from "./media-capture-timeout";
 import { linkOriginIsKnown } from "../../lib/meeting-origin";
-import { canonicalizeSfuClientId } from "../../lib/sfu-client-id";
+import { canonicalizeSfuClientId, resolveMeetingClientId } from "../../lib/sfu-client-id";
 import type {
   MeetError,
   MeetMediaDevice,
@@ -225,7 +225,7 @@ export function resolveCodeField(
   const paste = parseCodeFieldPaste(value, conclaveOrigins);
   const link = paste?.kind === "replace" ? paste : null;
   const candidate = link ? link.code : value.trim();
-  const clientId = link?.clientId ?? null;
+  const clientId = link ? resolveMeetingClientId(link.clientId) : null;
   if (!isRoomCodeShaped(candidate)) return { code: "", clientId: null, tooLong: false };
   return candidate.length > ROOM_CODE_MAX_LENGTH
     ? { code: "", clientId, tooLong: true }

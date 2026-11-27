@@ -1,9 +1,9 @@
-import { APP_ROUTE_SEGMENTS, sanitizeRoomCode } from "@/app/lib/utils";
+import { APP_ROUTE_SEGMENTS, sanitizeRoomCode, sanitizeWebinarLinkCode } from "@/app/lib/utils";
 import { canonicalizeSfuClientId } from "@/lib/sfu-client-id";
 
-type MeetingLinkInput = {
+export type RoomDestination = {
   roomCode: string;
-  clientId?: string | null;
+  clientId: string;
 };
 
 const APP_ROUTES: ReadonlySet<string> = new Set(APP_ROUTE_SEGMENTS);
@@ -11,17 +11,28 @@ const APP_ROUTES: ReadonlySet<string> = new Set(APP_ROUTE_SEGMENTS);
 export const roomIdFromMeetingPath = (segment: string): string =>
   segment === "undefined" || segment === "null" ? "" : sanitizeRoomCode(segment);
 
-export const buildMeetingPath = (meeting: MeetingLinkInput): string | null => {
+const tenantPath = (path: string, clientId: string): string | null => {
+  const tenant = canonicalizeSfuClientId(clientId);
+  return tenant ? `${path}?clientId=${encodeURIComponent(tenant)}` : null;
+};
+
+export const webinarSlugFromPath = (segment: string): string =>
+  segment === "undefined" || segment === "null" ? "" : sanitizeWebinarLinkCode(segment);
+
+export const buildWebinarPath = ({ slug, clientId }: { slug: string; clientId: string }): string | null =>
+  slug && webinarSlugFromPath(slug) === slug
+    ? tenantPath(`/w/${encodeURIComponent(slug)}`, clientId)
+    : null;
+
+export const buildMeetingPath = (meeting: RoomDestination): string | null => {
   const { roomCode } = meeting;
   if (!roomCode || APP_ROUTES.has(roomCode) || roomIdFromMeetingPath(roomCode) !== roomCode) return null;
-  const path = `/${encodeURIComponent(roomCode)}`;
-  const clientId = canonicalizeSfuClientId(meeting.clientId);
-  return clientId ? `${path}?clientId=${encodeURIComponent(clientId)}` : path;
+  return tenantPath(`/${encodeURIComponent(roomCode)}`, meeting.clientId);
 };
 
 export const buildMeetingUrl = (
   origin: string,
-  meeting: MeetingLinkInput,
+  meeting: RoomDestination,
 ): string | null => {
   const path = buildMeetingPath(meeting);
   return path === null ? null : `${origin.replace(/\/$/, "")}${path}`;

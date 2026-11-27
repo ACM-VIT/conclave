@@ -26,8 +26,8 @@ import type { Dispatch, SetStateAction } from "react";
 import { Avatar } from "@conclave/ui-tokens/web";
 import { signOut, useSession } from "@/lib/auth-client";
 import { getMeetingLinkOrigins } from "@/lib/site-url";
-import { buildMeetingPath, buildMeetingUrl } from "@/lib/meeting-links";
-import { canonicalizeSfuClientId, resolveBrowserSfuClientId } from "@/lib/sfu-client-id";
+import { buildMeetingPath, buildMeetingUrl, type RoomDestination } from "@/lib/meeting-links";
+import { resolveMeetingClientId } from "@/lib/sfu-client-id";
 import type { RoomInfo } from "@/lib/sfu-types";
 import type {
   ConnectionState,
@@ -347,7 +347,7 @@ function JoinScreen({
   onPrejoinMediaCommit,
   onEnterStart,
 }: JoinScreenProps) {
-  const pageClientId = canonicalizeSfuClientId(clientId) ?? resolveBrowserSfuClientId();
+  const pageClientId = resolveMeetingClientId(clientId);
   const codeField = useCodeField(roomId, getMeetingLinkOrigins(), pageClientId, enableRoomRouting || forceJoinOnly);
   const isRoutedRoom = forceJoinOnly;
   const nameInputId = useId();
@@ -388,7 +388,7 @@ function JoinScreen({
   const [videoInputs, setVideoInputs] = useState<DeviceOption[]>([]);
   const [selectedAudioId, setSelectedAudioId] = useState("");
   const [selectedVideoId, setSelectedVideoId] = useState("");
-  const [pending, setPending] = useState<{ mode: "new" | "join"; roomId: string } | null>(null);
+  const [pending, setPending] = useState<{ mode: "new" | "join"; destination: RoomDestination } | null>(null);
 
   const { data: session } = useSession();
   const isSignedInUser = Boolean(
@@ -768,19 +768,20 @@ function JoinScreen({
     if (!pending || !hasIdentity) return;
     const wantAdmin = pending.mode === "new";
     if (Boolean(isAdmin) !== wantAdmin) return;
-    const { roomId: targetId } = pending;
+    const { destination } = pending;
     setPending(null);
-    const targetPath = `/${targetId}`;
+    const targetPath = buildMeetingPath(destination);
     if (
       enableRoomRouting &&
       !forceJoinOnly &&
       typeof window !== "undefined" &&
-      window.location.pathname !== targetPath
+      targetPath &&
+      `${window.location.pathname}${window.location.search}` !== targetPath
     ) {
       window.history.pushState(null, "", targetPath);
     }
-    onRoomIdChange(targetId);
-    onJoinRoom(targetId);
+    onRoomIdChange(destination.roomCode);
+    onJoinRoom(destination.roomCode);
   }, [pending, hasIdentity, isAdmin, enableRoomRouting, forceJoinOnly, onJoinRoom, onRoomIdChange]);
 
   const ensureGuest = (): boolean => {
@@ -828,18 +829,17 @@ function JoinScreen({
     onEnterStart?.("new");
     commitPrejoinMedia(skipMutedMicWarmup);
     onIsAdminChange(true);
-    setPending({ mode: "new", roomId: generateRoomCode() });
+    setPending({ mode: "new", destination: { roomCode: generateRoomCode(), clientId: pageClientId } });
   };
   const joinMeeting = () => {
-    const candidate = codeField.resolution.code;
-    if (!candidate || !ensureGuest()) return;
-    if (!codeField.tenant.onThisPage) {
-      const target = { roomCode: candidate, clientId: codeField.tenant.clientId };
-      const path = buildMeetingPath(target);
+    const { destination, onThisPage } = codeField;
+    if (!destination.roomCode || !ensureGuest()) return;
+    if (!onThisPage) {
+      const path = buildMeetingPath(destination);
       if (!path) return;
       settlePreviewForEntry();
       saveRejoinIntent(
-        { roomId: target.roomCode, clientId: target.clientId },
+        { roomId: destination.roomCode, clientId: destination.clientId },
         previewMedia(livePreviewTracks()),
       );
       window.location.assign(path);
@@ -849,7 +849,7 @@ function JoinScreen({
     onEnterStart?.("join");
     commitPrejoinMedia(skipMutedMicWarmup);
     onIsAdminChange(false);
-    setPending({ mode: "join", roomId: candidate });
+    setPending({ mode: "join", destination });
   };
 
   const handleSignOut = async () => {
@@ -904,7 +904,7 @@ function JoinScreen({
     const start = input.selectionStart ?? input.value.length;
     const end = input.selectionEnd ?? start;
     if (paste.kind === "replace") {
-      const keepsTenant = paste.clientId !== null && paste.clientId !== pageClientId;
+      const keepsTenant = resolveMeetingClientId(paste.clientId) !== pageClientId;
       const replacement = keepsTenant ? text.trim() : paste.code;
       shapeCodeEdit(event, input, [0, input.value.length], replacement, false);
     } else {
@@ -1031,10 +1031,7 @@ function JoinScreen({
 
   const inviteLink =
     typeof window !== "undefined" && joinCode
-      ? buildMeetingUrl(window.location.origin, {
-          roomCode: joinCode,
-          clientId: codeField.tenant.clientId,
-        })
+      ? buildMeetingUrl(window.location.origin, codeField.destination)
       : "";
   const linkCopy = useClipboardCopy(inviteLink ?? "");
   const previewHint =
@@ -1296,15 +1293,21 @@ function JoinScreen({
 
 
               <div className="space-y-1.5">
-                <div className="flex min-h-[16px] items-center justify-between gap-3">
+                <div className="flex min-h-[16px] items-center gap-2">
                   <label
                     htmlFor={codeInputId}
-                    className="text-[11.5px] font-semibold text-[#fafafa]/40"
+                    className="shrink-0 whitespace-nowrap text-[11.5px] font-semibold text-[#fafafa]/40"
                   >
                     {isRoutedRoom ? "Room" : "Join with a code"}
                   </label>
+                  {inviteLink === null ? (
+                    <span id={noLinkReasonId} className="ml-auto shrink-0 text-[11.5px] leading-none text-[#fafafa]/55">
+                      No shareable link
+                    </span>
+                  ) : null}
                   {showPresence ? (
                     <RoomPresenceBadge
+                      className={inviteLink === null ? "min-w-0" : "ml-auto"}
                       count={presenceCount}
                       loading={presenceLoading}
                     />
@@ -1325,7 +1328,7 @@ function JoinScreen({
                     onKeyDown={(e) => {
                       if (e.key !== "Enter" || e.nativeEvent.isComposing || !canSubmit) return;
                       const input = e.currentTarget;
-                      if (codeField.tenant.onThisPage && input.value !== joinCode) {
+                      if (codeField.onThisPage && input.value !== joinCode) {
                         applyFieldEdit(input, { start: 0, end: input.value.length, text: joinCode });
                       }
                       joinMeeting();
@@ -1337,7 +1340,7 @@ function JoinScreen({
                     aria-describedby={
                       codeResolution.tooLong ? codeProblemId : inviteLink === null ? noLinkReasonId : undefined
                     }
-                    className={`${FIELD} ${codeResolution.tooLong ? "pr-32" : inviteLink === null ? "pr-44" : "pr-12"}`}
+                    className={`${FIELD} ${codeResolution.tooLong ? "pr-32" : "pr-12"}`}
                   />
                   {codeResolution.tooLong ? (
                     <span
@@ -1370,23 +1373,15 @@ function JoinScreen({
                       )}
                     </button>
                   ) : inviteLink === null ? (
-                    <>
-                      <span
-                        id={noLinkReasonId}
-                        className="pointer-events-none absolute right-12 top-1/2 -translate-y-1/2 rounded-md bg-[#141416] px-1.5 text-[12px] text-[#fafafa]/55"
-                      >
-                        No shareable link
-                      </span>
-                      <button
-                        type="button"
-                        disabled
-                        aria-label="Copy joining link"
-                        aria-describedby={noLinkReasonId}
-                        className="absolute right-1.5 top-1/2 inline-flex h-9 w-9 -translate-y-1/2 cursor-not-allowed items-center justify-center rounded-lg text-[#fafafa]/25"
-                      >
-                        <Link2Off size={16} aria-hidden="true" />
-                      </button>
-                    </>
+                    <button
+                      type="button"
+                      disabled
+                      aria-label="Copy joining link"
+                      aria-describedby={noLinkReasonId}
+                      className="absolute right-1.5 top-1/2 inline-flex h-9 w-9 -translate-y-1/2 cursor-not-allowed items-center justify-center rounded-lg text-[#fafafa]/25"
+                    >
+                      <Link2Off size={16} aria-hidden="true" />
+                    </button>
                   ) : null}
                   <span aria-live="polite" className="sr-only">
                     {linkCopy.status === "copied"

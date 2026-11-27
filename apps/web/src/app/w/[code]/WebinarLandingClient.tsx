@@ -65,6 +65,7 @@ export type PublicScheduledWebinar = {
 
 type Props = {
   webinarLinkCode: string;
+  clientId: string;
   initialWebinar: PublicScheduledWebinar | null;
 };
 
@@ -139,6 +140,7 @@ const StatusCard = ({ children }: { children: React.ReactNode }) => (
 
 export default function WebinarLandingClient({
   webinarLinkCode,
+  clientId,
   initialWebinar,
 }: Props) {
   const [webinar, setWebinar] = useState<PublicScheduledWebinar | null>(
@@ -279,7 +281,7 @@ export default function WebinarLandingClient({
         initialRoomId={webinarLinkCode}
         forceJoinOnly={true}
         bypassMediaPermissions={true}
-        sfuClientId={webinar?.clientId}
+        sfuClientId={clientId}
         joinMode="webinar_attendee"
         autoJoinOnMount={true}
         hideJoinUI={true}

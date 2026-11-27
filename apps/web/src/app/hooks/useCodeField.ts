@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { RoomDestination } from "@/lib/meeting-links";
 import { codeFieldTenant, resolveCodeField } from "../lib/utils";
 
 export const CODE_FIELD_SETTLE_MS = 600;
@@ -24,7 +25,8 @@ export function useCodeField(
     ? { code: text.trim(), clientId: null, tooLong: false }
     : resolveCodeField(text, conclaveOrigins);
   const tenant = codeFieldTenant(resolution, pageClientId);
-  const lookup = tenant.onThisPage ? resolution.code : "";
+  const destination: RoomDestination = { roomCode: resolution.code, clientId: tenant.clientId };
+  const lookup = tenant.onThisPage ? destination.roomCode : "";
   const [settledLookup, setSettledLookup] = useState(lookup);
 
   useEffect(() => {
@@ -42,5 +44,5 @@ export function useCodeField(
   };
   const settle = () => setSettleNow(true);
   const settled = lookup === settledLookup;
-  return { text, resolution, tenant, lookup, settledLookup: settled ? lookup : "", settled, change, settle };
+  return { text, resolution, destination, onThisPage: tenant.onThisPage, lookup, settledLookup: settled ? lookup : "", settled, change, settle };
 }

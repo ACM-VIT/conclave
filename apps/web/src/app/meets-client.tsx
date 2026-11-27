@@ -124,8 +124,8 @@ import {
 import type { VideoEffectsBridgeState } from "./components/VideoEffectsBridge";
 import type { SetupNotice } from "./lib/setup-notice";
 import { clearRejoinIntent, readRejoinIntent } from "./lib/rejoin-intent";
-import { canonicalizeSfuClientId, resolveBrowserSfuClientId } from "@/lib/sfu-client-id";
-import { buildMeetingPath, roomIdFromMeetingPath } from "@/lib/meeting-links";
+import { resolveMeetingClientId } from "@/lib/sfu-client-id";
+import { buildMeetingPath, buildWebinarPath, roomIdFromMeetingPath } from "@/lib/meeting-links";
 
 type MeetUser = {
   id?: string;
@@ -435,7 +435,7 @@ export default function MeetsClient({
       ? null
       : readRejoinIntent({
           roomId: initialRoomId ?? "",
-          clientId: canonicalizeSfuClientId(clientId) ?? resolveBrowserSfuClientId(),
+          clientId: resolveMeetingClientId(clientId),
         }),
   );
   useEffect(() => {
@@ -2368,13 +2368,10 @@ export default function MeetsClient({
         notification.webinarLinkSlug?.trim() ||
         webinarConfigRef.current?.linkSlug?.trim() ||
         "";
-      if (slug) {
-        window.location.assign(`/w/${encodeURIComponent(slug)}`);
-      } else {
-        window.location.assign("/");
-      }
+      const path = buildWebinarPath({ slug, clientId: resolveMeetingClientId(clientId) });
+      window.location.assign(path ?? "/");
     },
-    [],
+    [clientId],
   );
 
   const socket = useMeetSocket({
@@ -2470,7 +2467,7 @@ export default function MeetsClient({
   const webinarStagePath = webinarStageInvite
     ? buildMeetingPath({
         roomCode: webinarStageInvite.rejoinRoomId,
-        clientId: canonicalizeSfuClientId(clientId) ?? resolveBrowserSfuClientId(),
+        clientId: resolveMeetingClientId(clientId),
       })
     : null;
   const handleAcceptWebinarStageInvite = useCallback(() => {

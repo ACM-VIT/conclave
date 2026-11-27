@@ -4,12 +4,14 @@ import { act, lazy, Suspense, useState, type ReactElement } from "react";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const scheduledLookup = vi.hoisted(() => vi.fn(async (_destination: { clientId: string; roomCode: string }) => null as object | null));
+
 vi.mock("next/headers", () => ({ headers: async () => new Headers() }));
 vi.mock("@/lib/auth", () => ({ auth: { api: { getSession: async () => null } } }));
 vi.mock("@/lib/auth-client", () => ({ signOut: vi.fn(), useSession: () => ({ data: null }) }));
 vi.mock("@/lib/scheduled-meetings", () => ({
   isMeetingJoinable: () => true,
-  lookupPublicScheduledMeetingByRoomCode: async () => null,
+  lookupPublicScheduledMeetingByRoomCode: scheduledLookup,
   lookupScheduledMeetingHostEmail: async () => null,
 }));
 vi.mock("@/lib/site-url", () => import("../src/lib/site-url"));
@@ -26,6 +28,7 @@ vi.mock("../src/app/components/RouteLoadingState", () => ({ default: () => null 
 
 import MeetRoomPage from "../src/app/[code]/page";
 import JoinScreen from "../src/app/components/JoinScreen";
+import { ActivityDrawer } from "../src/app/sfu-admin/ActivityDrawer";
 import { APP_ROUTE_SEGMENTS } from "../src/app/lib/utils";
 import { DEFAULT_VIDEO_EFFECTS } from "../src/app/lib/video-effects";
 import { buildMeetingUrl } from "../src/lib/meeting-links";
@@ -97,6 +100,24 @@ function seededIds(count: number): string[] {
 }
 
 describe("meeting links", () => {
+  it.each([false, true])("keeps an explicit tenant through a scheduled lookup (exists: %s)", async (exists) => {
+    vi.stubEnv("SFU_CLIENT_ID", "review-scheduled");
+    scheduledLookup.mockClear();
+    scheduledLookup.mockImplementation(async ({ clientId: tenant }) =>
+      tenant === "review-scheduled" || (tenant === TENANT && exists) ? { title: "Fixture" } : null,
+    );
+    try {
+      expect(await openLink(`${ORIGIN}/review-cross-route?clientId=acme`)).toEqual({
+        roomId: "review-cross-route",
+        clientId: TENANT,
+      });
+      expect(scheduledLookup.mock.calls).toEqual([[{ clientId: TENANT, roomCode: "review-cross-route" }]]);
+    } finally {
+      scheduledLookup.mockImplementation(async () => null);
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("open the room and tenant they name, and are refused only when no link can", async () => {
     const failures: string[] = [];
     const ids = ["", "null", "undefined", ...LINKABLE, ...REWRITTEN_BY_THE_ROUTE, ...seededIds(600)];
@@ -236,4 +257,41 @@ describe("a room ID supplied to a non-routing page", () => {
       expect(await openLink(clipboard[0])).toEqual({ roomId: joins[0], clientId: TENANT });
     },
   );
+});
+
+
+describe("scheduled webinar links in the admin drawer", () => {
+  it.each([
+    ["acme", "review-acme-only", "/w/review-acme-only?clientId=acme"],
+    ["conclave", "review-default", "/w/review-default?clientId=conclave"],
+    ["acme", "NOT-a-routable-slug", null],
+    ["acme", null, null],
+  ])("copies the exact tenant destination for %s / %s when shareable", async (clientId, slug, path) => {
+    const now = Date.now();
+    await act(async () => root.render(
+      <ActivityDrawer
+        open
+        onClose={noop}
+        events={[]}
+        audit={[]}
+        scheduled={[{
+          kind: "webinar", id: "w1", title: "Acme isolated webinar", roomId: "sched-abc",
+          clientId, slug, status: "scheduled", startAt: now + 60_000, endAt: now + 3_600_000,
+          host: "Review Fixture", instanceKey: "local",
+        }]}
+        rooms={[]}
+        selected={null}
+        instances={[]}
+        onPickRoom={noop}
+      />
+    ));
+    await click("Scheduled");
+    if (path === null) {
+      expect(button("No shareable link")?.disabled).toBe(true);
+      expect(clipboard).toEqual([]);
+    } else {
+      await click("Copy link");
+      expect(clipboard).toEqual([`${ORIGIN}${path}`]);
+    }
+  });
 });
