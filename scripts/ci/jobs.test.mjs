@@ -44,18 +44,40 @@ test("every job has a budget", () => {
   }
 });
 
-test("SFU tests have their own runner", async () => {
+test("SFU unit tests and the full app room model have separate runners", async () => {
   const workflow = parse(await readFile(path.join(repoRoot, ".github/workflows/ci.yml"), "utf8"));
-  assert.deepEqual(jobs["test-sfu"]?.tasks, [{ dir: "packages/sfu", script: "test" }]);
+  assert.deepEqual(jobs["test-sfu"]?.tasks, [{ dir: "packages/sfu", script: "test:unit" }]);
+  assert.deepEqual(jobs["test-sfu-app-model"]?.tasks, [{ dir: "packages/sfu", script: "test:apps-room-model" }]);
   assert.equal(workflow.jobs["test-sfu"].env.CI_JOB, "test-sfu");
-  assert.equal(workflow.jobs["test-unit"].env.CI_JOB, "test");
+  assert.equal(workflow.jobs["test-sfu-app-model"].env.CI_JOB, "test-sfu-app-model");
 });
 
-test("the required test check fails unless both test runners succeed", async () => {
+test("the unit runner includes both web shards without ignoring failures", async () => {
+  const workflow = parse(await readFile(path.join(repoRoot, ".github/workflows/ci.yml"), "utf8"));
+  const runner = workflow.jobs["test-unit"];
+  assert.equal(runner.env.CI_JOB, "${{ matrix.job }}");
+  assert.equal(runner.strategy["fail-fast"], false);
+  assert.deepEqual(runner.strategy.matrix.job, ["test", "test-web-unit-b"]);
+  assert.deepEqual(jobs.test.tasks.filter(({ dir }) => dir === "apps/web"), [
+    { dir: "apps/web", script: "test:unit-a" },
+  ]);
+  assert.deepEqual(jobs["test-web-unit-b"].tasks, [{ dir: "apps/web", script: "test:unit-b" }]);
+  assert.deepEqual(runStepProblems(runner), []);
+});
+
+test("the full transcript oracle has its own runner", async () => {
+  const workflow = parse(await readFile(path.join(repoRoot, ".github/workflows/ci.yml"), "utf8"));
+  assert.deepEqual(jobs["test-transcript-oracle"]?.tasks, [
+    { dir: "apps/web", script: "test:transcript-oracle" },
+  ]);
+  assert.equal(workflow.jobs["test-transcript-oracle"].env.CI_JOB, "test-transcript-oracle");
+});
+
+test("the required test check fails unless every test runner succeeds", async () => {
   const workflow = parse(await readFile(path.join(repoRoot, ".github/workflows/ci.yml"), "utf8"));
   const gate = workflow.jobs["test-result"];
   assert.equal(gate?.name, "test");
-  assert.deepEqual(gate.needs, ["test-unit", "test-sfu"]);
+  assert.deepEqual(gate.needs, ["test-unit", "test-sfu", "test-transcript-oracle", "test-backup", "test-sfu-app-model"]);
   assert.equal(gate.if, "${{ always() }}");
   assert.equal("continue-on-error" in gate, false);
   assert.equal(gate.steps.length, 1);
@@ -64,16 +86,20 @@ test("the required test check fails unless both test runners succeed", async () 
   assert.deepEqual(step.env, {
     TEST_UNIT_RESULT: "${{ needs.test-unit.result }}",
     TEST_SFU_RESULT: "${{ needs.test-sfu.result }}",
+    TEST_TRANSCRIPT_ORACLE_RESULT: "${{ needs.test-transcript-oracle.result }}",
+    TEST_BACKUP_RESULT: "${{ needs.test-backup.result }}",
+    TEST_SFU_APP_MODEL_RESULT: "${{ needs.test-sfu-app-model.result }}",
   });
   const results = ["success", "failure", "cancelled", "skipped"];
-  for (const unit of results) {
-    for (const sfu of results) {
-      const check = spawnSync("bash", ["-ec", step.run], {
-        env: { ...process.env, TEST_UNIT_RESULT: unit, TEST_SFU_RESULT: sfu },
-      });
-      assert.ifError(check.error);
-      assert.equal(check.status, unit === "success" && sfu === "success" ? 0 : 1, `${unit}, ${sfu}`);
-    }
+  const combinations = Object.keys(step.env).reduce(
+    (rows, name) => rows.flatMap((row) => results.map((status) => ({ ...row, [name]: status }))),
+    [{}],
+  );
+  for (const resultEnv of combinations) {
+    const check = spawnSync("bash", ["-ec", step.run], { env: { ...process.env, ...resultEnv } });
+    assert.ifError(check.error);
+    const statuses = Object.values(resultEnv);
+    assert.equal(check.status, statuses.every((status) => status === "success") ? 0 : 1, JSON.stringify(resultEnv));
   }
 });
 
@@ -81,7 +107,7 @@ test("test budgets always start with the run step", async () => {
   const bin = await mkdtemp(path.join(tmpdir(), "ci-test-clock-"));
   try {
     await writeFile(path.join(bin, "pnpm"), "#!/bin/sh\nexit 0\n", { mode: 0o700 });
-    for (const job of ["test", "test-sfu"]) {
+    for (const job of ["test", "test-web-unit-b", "test-sfu", "test-sfu-app-model"]) {
       for (const miss of [false, true]) {
         const result = spawnSync(process.execPath, ["scripts/ci/run.mjs", job], {
           cwd: repoRoot,
@@ -106,7 +132,14 @@ test("test budgets always start with the run step", async () => {
 
 test("the workflow runs every job in scripts/ci/jobs.mjs and never skips one", async () => {
   const workflow = parse(await readFile(path.join(repoRoot, ".github/workflows/ci.yml"), "utf8"));
-  const runners = [workflow.jobs.ci, workflow.jobs["test-unit"], workflow.jobs["test-sfu"]];
+  const runners = [
+    workflow.jobs.ci,
+    workflow.jobs["test-unit"],
+    workflow.jobs["test-sfu"],
+    workflow.jobs["test-transcript-oracle"],
+    workflow.jobs["test-backup"],
+    workflow.jobs["test-sfu-app-model"],
+  ];
   const matrix = runners.flatMap((job) => job.strategy?.matrix.job ?? [job.env.CI_JOB]);
   assert.equal(workflow.jobs.ci.env.CI_JOB, "${{ matrix.job }}");
   assert.deepEqual(matrix.toSorted(), Object.keys(jobs).toSorted());
@@ -196,4 +229,20 @@ test("a step added to pnpm check that CI does not run is reported", async () => 
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("the backup suite runs with its dependency install and is required by the test check", async () => {
+  const workflow = parse(await readFile(path.join(repoRoot, ".github/workflows/ci.yml"), "utf8"));
+  const assignment = ciTasks.filter(({ task }) => task.script === "test:backup").map(({ job }) => job);
+  assert.deepEqual(assignment, ["test-backup"]);
+  const runner = workflow.jobs["test-backup"];
+  assert.equal(runner?.env.CI_JOB, "test-backup");
+  const installs = runner.steps.filter(({ run }) => run?.includes("apt-get install"));
+  assert.equal(installs.length, 1);
+  assert.equal(installs[0].if, "env.CI_JOB == 'test-backup'");
+  for (const tool of ["age", "psmisc", "redis-server"]) assert.ok(installs[0].run.includes(tool));
+  const gate = workflow.jobs["test-result"];
+  assert.ok(gate.needs.includes("test-backup"));
+  assert.equal(gate.steps[0].env.TEST_BACKUP_RESULT, "${{ needs.test-backup.result }}");
+  assert.match(gate.steps[0].run, /"\$TEST_BACKUP_RESULT" = success/);
 });

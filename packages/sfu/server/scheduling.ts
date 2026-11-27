@@ -1,37 +1,19 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { createRequire } from "node:module";
-import { dirname } from "node:path";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from "node:crypto";
 import type {
   AvailabilityOverride,
   AvailabilityWindow,
   AvailableSlot,
   CalendarConnectionSummary,
+  ScheduledMeeting,
   SchedulingCalendarConnection,
   SchedulingEventType,
   SchedulingProfile,
   WeeklyAvailability,
 } from "../types.js";
-import { Logger } from "../utilities/loggers.js";
 import { asArray, asRecord } from "../utilities/untrusted.js";
-import {
-  createRedisPersistenceClient,
-  resolveRedisPersistenceKeyPrefix,
-  resolveRedisPersistenceUrl,
-  shouldUseRedisPersistence,
-  type RedisPersistenceClient,
-} from "./redisPersistence.js";
-import {
-  canonicalizeClientId,
-  CONCLAVE_CLIENT_ID,
-} from "./clientIds.js";
-import { openSqliteStore } from "./sqliteWriteCheck.js";
-import { storeJsonPath, storeSqlitePath } from "./storePaths.js";
+import { InvalidInput } from "./controlPlane/model.js";
+import { canonicalizeClientId, clientNamespaceIncludes, CONCLAVE_CLIENT_ID } from "./clientIds.js";
 import { storedTimestampOrNull } from "./storedValues.js";
-import { writePrivateFileAtomic } from "./privateFile.js";
-import { adoptRecoveredJsonStore, jsonStoreCollection, type JsonStoreAdapter, type JsonStoreClaim } from "./jsonStoreUpgrade.js";
-
-type MaybePromise<T> = T | Promise<T>;
 
 const USERNAME_MAX_LENGTH = 48;
 const SLUG_MAX_LENGTH = 80;
@@ -48,30 +30,6 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const MINUTE_MS = 60 * 1000;
 const GOOGLE_PROVIDER = "google" as const;
 
-export type SchedulingStore = {
-  profilesById: Map<string, SchedulingProfile>;
-  profileIdByUserKey: Map<string, string>;
-  profileIdByUsername: Map<string, string>;
-  availabilityByProfileId: Map<string, WeeklyAvailability>;
-  eventTypesById: Map<string, SchedulingEventType>;
-  eventTypeIdByProfileSlug: Map<string, string>;
-  calendarByProfileId: Map<string, SchedulingCalendarConnection>;
-};
-
-type SchedulingSnapshot = {
-  profiles: SchedulingProfile[];
-  availability: Array<{ profileId: string; availability: WeeklyAvailability }>;
-  eventTypes: SchedulingEventType[];
-  calendars: SchedulingCalendarConnection[];
-};
-
-export type SchedulingPersistence = {
-  save: (snapshot: SchedulingSnapshot) => MaybePromise<void>;
-  load: () => MaybePromise<SchedulingSnapshot>;
-  close?: () => MaybePromise<void>;
-  flush?: () => Promise<void>;
-};
-
 export type BusyInterval = {
   startAt: number;
   endAt: number;
@@ -87,40 +45,29 @@ export type GenerateAvailableSlotsOptions = {
   timeZone?: string;
 };
 
-type SqliteStatement = {
-  run: (...params: unknown[]) => unknown;
-  all: (...params: unknown[]) => unknown[];
+export type ProfileIdentity = {
+  clientId: string;
+  userId: string;
+  email: string;
+  name?: string | null;
+  timeZone?: string;
 };
 
-type SqliteDatabase = {
-  close: () => void;
-  exec: (sql: string) => void;
-  prepare: (sql: string) => SqliteStatement;
+export type ProfileUpdate = { name?: string; username?: string; timeZone?: string };
+
+export type CalendarGrantInput = {
+  email?: string | null;
+  accessToken?: string | null;
+  refreshToken?: string | null;
+  accessTokenExpiresAt?: number | null;
+  scopes?: string[];
 };
 
-export const createSchedulingStore = (): SchedulingStore => ({
-  profilesById: new Map(),
-  profileIdByUserKey: new Map(),
-  profileIdByUsername: new Map(),
-  availabilityByProfileId: new Map(),
-  eventTypesById: new Map(),
-  eventTypeIdByProfileSlug: new Map(),
-  calendarByProfileId: new Map(),
-});
-
-const userKey = (clientId: string, userId: string): string =>
-  `${clientId}:${userId}`;
-
-const profileSlugKey = (profileId: string, slug: string): string =>
-  `${profileId}:${slug}`;
-
-export const schedulingProfileClaims: Record<"profileIdByUserKey" | "profileIdByUsername", JsonStoreClaim<SchedulingProfile>> = {
-  profileIdByUserKey: { key: (profile) => userKey(profile.clientId, profile.userId) },
-  profileIdByUsername: { key: (profile) => `${profile.clientId}:${profile.username.toLowerCase()}` },
-};
-
-export const schedulingEventTypeClaims: Record<"eventTypeIdByProfileSlug", JsonStoreClaim<SchedulingEventType>> = {
-  eventTypeIdByProfileSlug: { key: (eventType) => profileSlugKey(eventType.profileId, eventType.slug) },
+export type CalendarTokenPatch = {
+  accessToken?: string | null;
+  accessTokenExpiresAt?: number | null;
+  status?: SchedulingCalendarConnection["status"];
+  error?: string | null;
 };
 
 const sanitizeSlug = (value: string, fallback = ""): string => {
@@ -169,6 +116,8 @@ const clampInteger = (
   return Math.min(max, Math.max(min, Math.round(n)));
 };
 
+const finiteOr = (value: unknown, fallback: number): number => storedTimestampOrNull(value) ?? fallback;
+
 const getDefaultTimeZone = (): string => {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -187,8 +136,9 @@ const normalizeTimeZone = (value: unknown, fallback = getDefaultTimeZone()): str
   }
 };
 
-const defaultWeeklyAvailability = (
-  timeZone = getDefaultTimeZone(),
+export const defaultWeeklyAvailability = (
+  timeZone: string,
+  updatedAt: number,
 ): WeeklyAvailability => ({
   timeZone,
   windows: [1, 2, 3, 4, 5].map((day) => ({
@@ -197,7 +147,7 @@ const defaultWeeklyAvailability = (
     endMinutes: 17 * 60,
   })),
   overrides: [],
-  updatedAt: Date.now(),
+  updatedAt,
 });
 
 const normalizeAvailabilityWindow = (
@@ -224,30 +174,31 @@ const normalizeAvailabilityOverride = (
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
   const unavailable = Boolean(record.unavailable);
   const windows = (asArray(record.windows) ?? [])
-        .map((entry) => {
-          const window = asRecord(entry);
-          const normalized = normalizeAvailabilityWindow({
-            day: 1,
-            startMinutes: window.startMinutes,
-            endMinutes: window.endMinutes,
-          });
-          return normalized
-            ? {
-                startMinutes: normalized.startMinutes,
-                endMinutes: normalized.endMinutes,
-              }
-            : null;
-        })
-        .filter(
-          (window): window is { startMinutes: number; endMinutes: number } =>
-            Boolean(window),
-        );
+    .map((entry) => {
+      const window = asRecord(entry);
+      const normalized = normalizeAvailabilityWindow({
+        day: 1,
+        startMinutes: window.startMinutes,
+        endMinutes: window.endMinutes,
+      });
+      return normalized
+        ? {
+            startMinutes: normalized.startMinutes,
+            endMinutes: normalized.endMinutes,
+          }
+        : null;
+    })
+    .filter(
+      (window): window is { startMinutes: number; endMinutes: number } =>
+        Boolean(window),
+    );
   return { date, windows, unavailable };
 };
 
-const normalizeWeeklyAvailability = (
+export const normalizeWeeklyAvailability = (
   value: unknown,
-  fallbackTimeZone = getDefaultTimeZone(),
+  fallbackTimeZone: string,
+  fallbackUpdatedAt: number,
 ): WeeklyAvailability => {
   const record = asRecord(value);
   const timeZone = normalizeTimeZone(record.timeZone, fallbackTimeZone);
@@ -259,278 +210,116 @@ const normalizeWeeklyAvailability = (
     .filter((override): override is AvailabilityOverride => Boolean(override));
   return {
     timeZone,
-    windows: windows.length ? windows : defaultWeeklyAvailability(timeZone).windows,
+    windows: windows.length
+      ? windows
+      : defaultWeeklyAvailability(timeZone, fallbackUpdatedAt).windows,
     overrides,
-    updatedAt: Number.isFinite(Number(record.updatedAt))
-      ? Number(record.updatedAt)
-      : Date.now(),
+    updatedAt: finiteOr(record.updatedAt, fallbackUpdatedAt),
   };
 };
 
-const registerProfile = (
-  store: SchedulingStore,
+export const firstFreeCandidate = (
+  requested: string,
+  maxLength: number,
+  isTaken: (candidate: string) => boolean,
+): string => {
+  let candidate = requested;
+  let suffix = 2;
+  while (isTaken(candidate)) {
+    const base = requested.slice(0, Math.max(1, maxLength - 4));
+    candidate = `${base}-${suffix}`.slice(0, maxLength);
+    suffix += 1;
+  }
+  return candidate;
+};
+
+export const requestedUsername = (
+  username: string | undefined,
+  email: string,
+  userId: string,
+): string => sanitizeUsername(username, email, userId);
+
+export const uniqueUsername = (
+  requested: string,
+  isTaken: (candidate: string) => boolean,
+): string => firstFreeCandidate(requested, USERNAME_MAX_LENGTH, isTaken);
+
+export const uniqueEventSlug = (
+  requested: string,
+  isTaken: (candidate: string) => boolean,
+): string => firstFreeCandidate(requested, SLUG_MAX_LENGTH, isTaken);
+
+export const newSchedulingProfile = (
+  identity: ProfileIdentity,
+  options: { id: string; username: string; now: number },
+): SchedulingProfile => ({
+  id: options.id,
+  clientId: canonicalizeClientId(identity.clientId),
+  userId: identity.userId,
+  email: identity.email.trim().toLowerCase(),
+  name: sanitizeText(identity.name ?? "", TITLE_MAX_LENGTH) || identity.email,
+  username: options.username,
+  timeZone: normalizeTimeZone(identity.timeZone),
+  createdAt: options.now,
+  updatedAt: options.now,
+});
+
+export const syncProfileIdentity = (
   profile: SchedulingProfile,
-): void => {
-  store.profilesById.set(profile.id, profile);
-  store.profileIdByUserKey.set(schedulingProfileClaims.profileIdByUserKey.key(profile), profile.id);
-  store.profileIdByUsername.set(schedulingProfileClaims.profileIdByUsername.key(profile), profile.id);
+  identity: ProfileIdentity,
+  now: number,
+): SchedulingProfile | null => {
+  const email = identity.email.trim().toLowerCase();
+  if (email === profile.email) return null;
+  return { ...profile, email, updatedAt: now };
 };
 
-const registerEventType = (
-  store: SchedulingStore,
-  eventType: SchedulingEventType,
-): void => {
-  store.eventTypesById.set(eventType.id, eventType);
-  store.eventTypeIdByProfileSlug.set(schedulingEventTypeClaims.eventTypeIdByProfileSlug.key(eventType), eventType.id);
-};
-
-const uniqueUsername = (
-  store: SchedulingStore,
-  clientId: string,
-  requested: string,
-  excludeProfileId?: string,
-): string => {
-  let candidate = requested;
-  let suffix = 2;
-  while (true) {
-    const owner = store.profileIdByUsername.get(`${clientId}:${candidate}`);
-    if (!owner || owner === excludeProfileId) return candidate;
-    const base = requested.slice(0, Math.max(1, USERNAME_MAX_LENGTH - 4));
-    candidate = `${base}-${suffix}`.slice(0, USERNAME_MAX_LENGTH);
-    suffix += 1;
-  }
-};
-
-const uniqueEventSlug = (
-  store: SchedulingStore,
-  profileId: string,
-  requested: string,
-  excludeEventTypeId?: string,
-): string => {
-  let candidate = requested;
-  let suffix = 2;
-  while (true) {
-    const owner = store.eventTypeIdByProfileSlug.get(
-      profileSlugKey(profileId, candidate),
-    );
-    if (!owner || owner === excludeEventTypeId) return candidate;
-    const base = requested.slice(0, Math.max(1, SLUG_MAX_LENGTH - 4));
-    candidate = `${base}-${suffix}`.slice(0, SLUG_MAX_LENGTH);
-    suffix += 1;
-  }
-};
-
-export const ensureSchedulingProfile = (
-  store: SchedulingStore,
-  input: {
-    clientId: string;
-    userId: string;
-    email: string;
-    name?: string | null;
-    username?: string;
-    timeZone?: string;
-  },
+export const applyProfileUpdate = (
+  profile: SchedulingProfile,
+  updates: ProfileUpdate,
+  options: { now: number; isUsernameTaken: (candidate: string) => boolean },
 ): SchedulingProfile => {
-  const clientId = canonicalizeClientId(input.clientId);
-  const key = userKey(clientId, input.userId);
-  const existingId = store.profileIdByUserKey.get(key);
-  const existing = existingId ? store.profilesById.get(existingId) : undefined;
-  const now = Date.now();
-  if (existing) {
-    existing.email = input.email.trim().toLowerCase();
-    existing.name = sanitizeText(input.name ?? "", TITLE_MAX_LENGTH) || existing.name;
-    if (input.username) {
-      const requested = sanitizeUsername(input.username, input.email, input.userId);
-      if (requested !== existing.username) {
-        store.profileIdByUsername.delete(
-          `${existing.clientId}:${existing.username.toLowerCase()}`,
-        );
-        existing.username = uniqueUsername(
-          store,
-          existing.clientId,
-          requested,
-          existing.id,
-        );
-      }
-    }
-    if (input.timeZone) {
-      existing.timeZone = normalizeTimeZone(input.timeZone, existing.timeZone);
-    }
-    existing.updatedAt = now;
-    registerProfile(store, existing);
-    if (!store.availabilityByProfileId.has(existing.id)) {
-      store.availabilityByProfileId.set(
-        existing.id,
-        defaultWeeklyAvailability(existing.timeZone),
-      );
-    }
-    return existing;
-  }
-
-  const baseUsername = sanitizeUsername(
-    input.username,
-    input.email,
-    input.userId,
-  );
-  const profile: SchedulingProfile = {
-    id: randomUUID(),
-    clientId,
-    userId: input.userId,
-    email: input.email.trim().toLowerCase(),
-    name: sanitizeText(input.name ?? "", TITLE_MAX_LENGTH) || input.email,
-    username: uniqueUsername(store, clientId, baseUsername),
-    timeZone: normalizeTimeZone(input.timeZone),
-    createdAt: now,
-    updatedAt: now,
-  };
-  registerProfile(store, profile);
-  store.availabilityByProfileId.set(
-    profile.id,
-    defaultWeeklyAvailability(profile.timeZone),
-  );
-  return profile;
-};
-
-export const updateSchedulingProfile = (
-  store: SchedulingStore,
-  profileId: string,
-  updates: { name?: string; username?: string; timeZone?: string },
-): SchedulingProfile => {
-  const profile = store.profilesById.get(profileId);
-  if (!profile) throw new Error("Scheduling profile not found.");
+  const next = { ...profile };
   if (updates.name !== undefined) {
     const name = sanitizeText(updates.name, TITLE_MAX_LENGTH);
-    if (!name) throw new Error("Name is required.");
-    profile.name = name;
+    if (!name) throw new InvalidInput("Name is required.");
+    next.name = name;
   }
   if (updates.username !== undefined) {
-    const nextUsername = sanitizeUsername(
-      updates.username,
-      profile.email,
-      profile.userId,
-    );
-    if (nextUsername !== profile.username) {
-      store.profileIdByUsername.delete(
-        `${profile.clientId}:${profile.username.toLowerCase()}`,
-      );
-      profile.username = uniqueUsername(
-        store,
-        profile.clientId,
-        nextUsername,
-        profile.id,
-      );
+    const requested = sanitizeUsername(updates.username, profile.email, profile.userId);
+    if (requested !== profile.username) {
+      next.username = uniqueUsername(requested, options.isUsernameTaken);
     }
   }
   if (updates.timeZone !== undefined) {
-    profile.timeZone = normalizeTimeZone(updates.timeZone, profile.timeZone);
+    next.timeZone = normalizeTimeZone(updates.timeZone, profile.timeZone);
   }
-  profile.updatedAt = Date.now();
-  registerProfile(store, profile);
-  return profile;
+  next.updatedAt = options.now;
+  return next;
 };
 
-export const getProfileByUser = (
-  store: SchedulingStore,
-  clientId: string,
-  userId: string,
-): SchedulingProfile | null => {
-  const id = store.profileIdByUserKey.get(
-    userKey(canonicalizeClientId(clientId), userId),
-  );
-  return id ? store.profilesById.get(id) ?? null : null;
-};
-
-export const moveSchedulingProfileToClient = (
-  store: SchedulingStore,
+export const parseWeeklyAvailability = (
+  input: unknown,
   profile: SchedulingProfile,
-  clientId: string,
-): SchedulingProfile => {
-  const nextClientId = canonicalizeClientId(clientId);
-  if (!nextClientId || profile.clientId === nextClientId) return profile;
+  now: number,
+): WeeklyAvailability => ({
+  ...normalizeWeeklyAvailability(input, profile.timeZone, now),
+  updatedAt: now,
+});
 
-  store.profileIdByUserKey.delete(userKey(profile.clientId, profile.userId));
-  store.profileIdByUsername.delete(
-    `${profile.clientId}:${profile.username.toLowerCase()}`,
-  );
-
-  profile.clientId = nextClientId;
-  profile.username = uniqueUsername(store, nextClientId, profile.username, profile.id);
-  profile.updatedAt = Date.now();
-  registerProfile(store, profile);
-
-  for (const eventType of store.eventTypesById.values()) {
-    if (eventType.profileId !== profile.id) continue;
-    eventType.clientId = nextClientId;
-    eventType.updatedAt = profile.updatedAt;
-    registerEventType(store, eventType);
-  }
-
-  const calendar = store.calendarByProfileId.get(profile.id);
-  if (calendar) {
-    calendar.clientId = nextClientId;
-    calendar.updatedAt = profile.updatedAt;
-  }
-
-  return profile;
-};
-
-export const getPublicProfile = (
-  store: SchedulingStore,
-  clientId: string,
-  username: string,
-): SchedulingProfile | null => {
-  const id = store.profileIdByUsername.get(
-    `${canonicalizeClientId(clientId)}:${username.trim().toLowerCase()}`,
-  );
-  return id ? store.profilesById.get(id) ?? null : null;
-};
-
-export const getProfileAvailability = (
-  store: SchedulingStore,
-  profile: SchedulingProfile,
-): WeeklyAvailability =>
-  store.availabilityByProfileId.get(profile.id) ??
-  defaultWeeklyAvailability(profile.timeZone);
-
-export const setProfileAvailability = (
-  store: SchedulingStore,
-  profile: SchedulingProfile,
-  availability: unknown,
-): WeeklyAvailability => {
-  const normalized = normalizeWeeklyAvailability(
-    availability,
-    profile.timeZone,
-  );
-  normalized.updatedAt = Date.now();
-  store.availabilityByProfileId.set(profile.id, normalized);
-  profile.timeZone = normalized.timeZone;
-  profile.updatedAt = Date.now();
-  registerProfile(store, profile);
-  return normalized;
-};
-
-export const listEventTypes = (
-  store: SchedulingStore,
-  profileId: string,
-): SchedulingEventType[] =>
-  Array.from(store.eventTypesById.values())
-    .filter((eventType) => eventType.profileId === profileId)
-    .sort((a, b) => a.createdAt - b.createdAt);
-
-export const createEventType = (
-  store: SchedulingStore,
+export const newEventType = (
   profile: SchedulingProfile,
   input: Partial<SchedulingEventType>,
+  options: { id: string; now: number; isSlugTaken: (candidate: string) => boolean },
 ): SchedulingEventType => {
   const title = sanitizeText(input.title, TITLE_MAX_LENGTH) || "30 min intro";
   const requestedSlug = sanitizeSlug(String(input.slug || title), "30-min-intro");
-  const now = Date.now();
-  const eventType: SchedulingEventType = {
-    id: randomUUID(),
+  return {
+    id: options.id,
     clientId: profile.clientId,
     profileId: profile.id,
     userId: profile.userId,
-    slug: uniqueEventSlug(store, profile.id, requestedSlug),
+    slug: uniqueEventSlug(requestedSlug, options.isSlugTaken),
     title,
     description: sanitizeText(input.description, DESCRIPTION_MAX_LENGTH),
     durationMinutes: clampInteger(
@@ -555,43 +344,34 @@ export const createEventType = (
     bufferAfterMinutes: clampInteger(input.bufferAfterMinutes, 0, 0, MAX_BUFFER_MINUTES),
     isActive: Boolean(input.isActive),
     requiresCalendar: Boolean(input.requiresCalendar),
-    createdAt: now,
-    updatedAt: now,
+    createdAt: options.now,
+    updatedAt: options.now,
   };
-  registerEventType(store, eventType);
-  return eventType;
 };
 
-export const updateEventType = (
-  store: SchedulingStore,
-  profile: SchedulingProfile,
-  id: string,
+export const applyEventTypeInput = (
+  eventType: SchedulingEventType,
   input: Partial<SchedulingEventType>,
+  options: { now: number; isSlugTaken: (candidate: string) => boolean },
 ): SchedulingEventType => {
-  const eventType = store.eventTypesById.get(id);
-  if (!eventType || eventType.profileId !== profile.id) {
-    throw new Error("Event type not found.");
-  }
+  const next = { ...eventType };
   if (input.title !== undefined) {
     const title = sanitizeText(input.title, TITLE_MAX_LENGTH);
-    if (!title) throw new Error("Title is required.");
-    eventType.title = title;
+    if (!title) throw new InvalidInput("Title is required.");
+    next.title = title;
   }
   if (input.slug !== undefined) {
     const slug = sanitizeSlug(String(input.slug), eventType.slug);
-    if (!isValidSchedulingSlug(slug)) throw new Error("Invalid event slug.");
+    if (!isValidSchedulingSlug(slug)) throw new InvalidInput("Invalid event slug.");
     if (slug !== eventType.slug) {
-      store.eventTypeIdByProfileSlug.delete(
-        profileSlugKey(eventType.profileId, eventType.slug),
-      );
-      eventType.slug = uniqueEventSlug(store, eventType.profileId, slug, eventType.id);
+      next.slug = uniqueEventSlug(slug, options.isSlugTaken);
     }
   }
   if (input.description !== undefined) {
-    eventType.description = sanitizeText(input.description, DESCRIPTION_MAX_LENGTH);
+    next.description = sanitizeText(input.description, DESCRIPTION_MAX_LENGTH);
   }
   if (input.durationMinutes !== undefined) {
-    eventType.durationMinutes = clampInteger(
+    next.durationMinutes = clampInteger(
       input.durationMinutes,
       eventType.durationMinutes,
       MIN_EVENT_DURATION_MINUTES,
@@ -599,7 +379,7 @@ export const updateEventType = (
     );
   }
   if (input.minimumNoticeMinutes !== undefined) {
-    eventType.minimumNoticeMinutes = clampInteger(
+    next.minimumNoticeMinutes = clampInteger(
       input.minimumNoticeMinutes,
       eventType.minimumNoticeMinutes,
       0,
@@ -607,7 +387,7 @@ export const updateEventType = (
     );
   }
   if (input.bookingWindowDays !== undefined) {
-    eventType.bookingWindowDays = clampInteger(
+    next.bookingWindowDays = clampInteger(
       input.bookingWindowDays,
       eventType.bookingWindowDays,
       1,
@@ -615,7 +395,7 @@ export const updateEventType = (
     );
   }
   if (input.bufferBeforeMinutes !== undefined) {
-    eventType.bufferBeforeMinutes = clampInteger(
+    next.bufferBeforeMinutes = clampInteger(
       input.bufferBeforeMinutes,
       eventType.bufferBeforeMinutes,
       0,
@@ -623,7 +403,7 @@ export const updateEventType = (
     );
   }
   if (input.bufferAfterMinutes !== undefined) {
-    eventType.bufferAfterMinutes = clampInteger(
+    next.bufferAfterMinutes = clampInteger(
       input.bufferAfterMinutes,
       eventType.bufferAfterMinutes,
       0,
@@ -631,44 +411,18 @@ export const updateEventType = (
     );
   }
   if (input.isActive !== undefined) {
-    eventType.isActive = Boolean(input.isActive);
+    next.isActive = Boolean(input.isActive);
   }
   if (input.requiresCalendar !== undefined) {
-    eventType.requiresCalendar = Boolean(input.requiresCalendar);
+    next.requiresCalendar = Boolean(input.requiresCalendar);
   }
-  eventType.updatedAt = Date.now();
-  registerEventType(store, eventType);
-  return eventType;
+  next.updatedAt = options.now;
+  return next;
 };
 
-export const deleteEventType = (
-  store: SchedulingStore,
-  profile: SchedulingProfile,
-  id: string,
-): SchedulingEventType | null => {
-  const eventType = store.eventTypesById.get(id);
-  if (!eventType || eventType.profileId !== profile.id) return null;
-  store.eventTypesById.delete(id);
-  store.eventTypeIdByProfileSlug.delete(profileSlugKey(profile.id, eventType.slug));
-  return eventType;
-};
-
-export const getPublicEventType = (
-  store: SchedulingStore,
-  profile: SchedulingProfile,
-  slug: string,
-): SchedulingEventType | null => {
-  const id = store.eventTypeIdByProfileSlug.get(
-    profileSlugKey(profile.id, slug.trim().toLowerCase()),
-  );
-  return id ? store.eventTypesById.get(id) ?? null : null;
-};
-
-export const getCalendarSummary = (
-  store: SchedulingStore,
-  profileId: string,
+export const calendarSummary = (
+  connection: SchedulingCalendarConnection | null,
 ): CalendarConnectionSummary => {
-  const connection = store.calendarByProfileId.get(profileId);
   if (!connection) {
     return {
       provider: GOOGLE_PROVIDER,
@@ -695,54 +449,103 @@ export const getCalendarSummary = (
   };
 };
 
-export const setGoogleCalendarConnection = (
-  store: SchedulingStore,
+export const isCalendarUsable = (
+  connection: SchedulingCalendarConnection | null,
+): connection is SchedulingCalendarConnection =>
+  Boolean(connection?.grantId && connection.status === "connected" && connection.refreshToken);
+
+export const connectGoogleCalendar = (
   profile: SchedulingProfile,
-  input: {
-    email?: string | null;
-    accessToken?: string | null;
-    refreshToken?: string | null;
-    accessTokenExpiresAt?: number | null;
-    scopes?: string[];
-    status?: SchedulingCalendarConnection["status"];
-    error?: string | null;
-  },
-): SchedulingCalendarConnection => {
-  const existing = store.calendarByProfileId.get(profile.id);
-  const now = Date.now();
-  const connection: SchedulingCalendarConnection = {
-    id: existing?.id ?? randomUUID(),
-    clientId: profile.clientId,
-    profileId: profile.id,
-    userId: profile.userId,
-    provider: GOOGLE_PROVIDER,
-    status: input.status ?? "connected",
-    email: input.email?.trim().toLowerCase() || existing?.email || profile.email,
-    calendarId: existing?.calendarId ?? "primary",
-    accessToken: input.accessToken ?? existing?.accessToken ?? null,
-    refreshToken: input.refreshToken ?? existing?.refreshToken ?? null,
-    accessTokenExpiresAt:
-      input.accessTokenExpiresAt ?? existing?.accessTokenExpiresAt ?? null,
-    scopes: input.scopes ?? existing?.scopes ?? [],
-    connectedAt: existing?.connectedAt ?? now,
-    updatedAt: now,
-    error:
-      input.error === undefined
-        ? existing?.error ?? null
-        : input.error
-          ? sanitizeText(input.error, 512)
-          : null,
-  };
-  store.calendarByProfileId.set(profile.id, connection);
-  return connection;
+  existing: SchedulingCalendarConnection | null,
+  input: CalendarGrantInput,
+  options: { id: string; grantId: string; now: number },
+): SchedulingCalendarConnection => ({
+  id: existing?.id ?? options.id,
+  grantId: options.grantId,
+  clientId: profile.clientId,
+  profileId: profile.id,
+  userId: profile.userId,
+  provider: GOOGLE_PROVIDER,
+  status: "connected",
+  email: input.email?.trim().toLowerCase() || existing?.email || profile.email,
+  calendarId: existing?.calendarId ?? "primary",
+  accessToken: input.accessToken ?? existing?.accessToken ?? null,
+  refreshToken: input.refreshToken ?? existing?.refreshToken ?? null,
+  accessTokenExpiresAt:
+    input.accessTokenExpiresAt ?? existing?.accessTokenExpiresAt ?? null,
+  scopes: input.scopes ?? existing?.scopes ?? [],
+  connectedAt: existing?.connectedAt ?? options.now,
+  updatedAt: options.now,
+  error: null,
+});
+
+export const patchCalendarConnection = (
+  connection: SchedulingCalendarConnection,
+  patch: CalendarTokenPatch,
+  now: number,
+): SchedulingCalendarConnection => ({
+  ...connection,
+  ...(patch.accessToken !== undefined ? { accessToken: patch.accessToken } : {}),
+  ...(patch.accessTokenExpiresAt !== undefined
+    ? { accessTokenExpiresAt: patch.accessTokenExpiresAt }
+    : {}),
+  ...(patch.status !== undefined ? { status: patch.status } : {}),
+  ...(patch.error !== undefined
+    ? { error: patch.error ? sanitizeText(patch.error, 512) : null }
+    : {}),
+  updatedAt: now,
+});
+
+export const meetingMatchesProfile = (
+  meeting: ScheduledMeeting,
+  profile: SchedulingProfile,
+  eventType?: SchedulingEventType | null,
+  clientId = profile.clientId,
+): boolean => {
+  if (!clientNamespaceIncludes(clientId, meeting.clientId)) return false;
+  if (eventType?.profileId === profile.id) return true;
+  if (meeting.hostUserId && profile.userId) {
+    return meeting.hostUserId === profile.userId;
+  }
+  return meeting.hostEmail.trim().toLowerCase() === profile.email.trim().toLowerCase();
 };
 
-export const clearGoogleCalendarConnection = (
-  store: SchedulingStore,
+export const internalBusyIntervals = (
+  meetings: readonly ScheduledMeeting[],
+  eventTypeOf: (id: string) => SchedulingEventType | null,
   profile: SchedulingProfile,
-): void => {
-  store.calendarByProfileId.delete(profile.id);
-};
+  from: number,
+  to: number,
+  clientId = profile.clientId,
+): BusyInterval[] =>
+  meetings
+    .filter((meeting) => meeting.status !== "cancelled" && meeting.status !== "ended")
+    .map((meeting) => {
+      const eventType = meeting.eventTypeId ? eventTypeOf(meeting.eventTypeId) : null;
+      return {
+        meeting,
+        eventType,
+        startAt:
+          meeting.scheduledStartAt - (eventType?.bufferBeforeMinutes ?? 0) * MINUTE_MS,
+        endAt: meeting.scheduledEndAt + (eventType?.bufferAfterMinutes ?? 0) * MINUTE_MS,
+      };
+    })
+    .filter(
+      ({ meeting, eventType, startAt, endAt }) =>
+        meetingMatchesProfile(meeting, profile, eventType, clientId) &&
+        startAt < to &&
+        from < endAt,
+    )
+    .map(({ startAt, endAt }) => ({ startAt, endAt }));
+
+export const bookingBlocksInterval = (
+  eventType: SchedulingEventType,
+  startAt: number,
+  endAt: number,
+): BusyInterval => ({
+  startAt: startAt - eventType.bufferBeforeMinutes * MINUTE_MS,
+  endAt: endAt + eventType.bufferAfterMinutes * MINUTE_MS,
+});
 
 const dateFormatterCache = new Map<string, Intl.DateTimeFormat>();
 
@@ -951,20 +754,6 @@ export const generateAvailableSlots = ({
   return slots.sort((a, b) => a.startAt - b.startAt);
 };
 
-const getSchedulingSqlitePath = (): string => storeSqlitePath("scheduling");
-
-const getSchedulingJsonPath = (): string => storeJsonPath("scheduling");
-
-
-const loadNodeSqlite = (): {
-  DatabaseSync: new (path: string) => SqliteDatabase;
-} => {
-  const require = createRequire(import.meta.url);
-  return require("node:sqlite") as {
-    DatabaseSync: new (path: string) => SqliteDatabase;
-  };
-};
-
 const encryptionKey = (): Buffer =>
   createHash("sha256")
     .update(
@@ -983,8 +772,8 @@ const encryptToken = (token: string | null): string | null => {
   return `v1:${iv.toString("base64url")}:${tag.toString("base64url")}:${encrypted.toString("base64url")}`;
 };
 
-const decryptToken = (value: string | null): string | null => {
-  if (!value) return null;
+const decryptToken = (value: unknown): string | null => {
+  if (typeof value !== "string" || !value) return null;
   if (!value.startsWith("v1:")) return value;
   const [, ivRaw, tagRaw, encryptedRaw] = value.split(":");
   if (!ivRaw || !tagRaw || !encryptedRaw) return null;
@@ -1004,708 +793,161 @@ const decryptToken = (value: string | null): string | null => {
   }
 };
 
-const serializeCalendar = (
+const storedClientId = (clientId: unknown): string =>
+  typeof clientId === "string" && clientId.trim()
+    ? canonicalizeClientId(clientId)
+    : CONCLAVE_CLIENT_ID;
+
+const nonEmptyString = (value: unknown): string | null =>
+  typeof value === "string" && value ? value : null;
+
+const stamps = (
+  record: Readonly<Record<string, unknown>>,
+  fallback: number,
+): { createdAt: number; updatedAt: number } => {
+  const updatedAt = finiteOr(record.updatedAt, Number.NaN);
+  const createdAt = finiteOr(record.createdAt, Number.isFinite(updatedAt) ? updatedAt : fallback);
+  return { createdAt, updatedAt: Number.isFinite(updatedAt) ? updatedAt : createdAt };
+};
+
+export const normalizeStoredProfile = (raw: unknown): SchedulingProfile | null => {
+  const record = asRecord(raw);
+  const id = nonEmptyString(record.id);
+  const userId = nonEmptyString(record.userId);
+  if (!id || !userId) return null;
+  const email = typeof record.email === "string" ? record.email.trim().toLowerCase() : "";
+  const username =
+    typeof record.username === "string" && record.username
+      ? record.username
+      : sanitizeUsername(undefined, email, userId);
+  return {
+    id,
+    clientId: storedClientId(record.clientId),
+    userId,
+    email,
+    name: typeof record.name === "string" ? record.name : email,
+    username,
+    timeZone: normalizeTimeZone(record.timeZone, "UTC"),
+    ...stamps(record, 0),
+  };
+};
+
+export const normalizeStoredHours = (
+  raw: unknown,
+  fallback: { timeZone: string; updatedAt: number } = { timeZone: "UTC", updatedAt: 0 },
+): { profileId: string; availability: WeeklyAvailability } | null => {
+  const record = asRecord(raw);
+  const profileId = nonEmptyString(record.profileId);
+  if (!profileId) return null;
+  return {
+    profileId,
+    availability: normalizeWeeklyAvailability(
+      record.availability,
+      fallback.timeZone,
+      fallback.updatedAt,
+    ),
+  };
+};
+
+export const normalizeStoredEventType = (raw: unknown): SchedulingEventType | null => {
+  const record = asRecord(raw);
+  const id = nonEmptyString(record.id);
+  const profileId = nonEmptyString(record.profileId);
+  const slug = nonEmptyString(record.slug);
+  if (!id || !profileId || !slug) return null;
+  return {
+    id,
+    clientId: storedClientId(record.clientId),
+    profileId,
+    userId: typeof record.userId === "string" ? record.userId : "",
+    slug,
+    title: typeof record.title === "string" && record.title ? record.title : "30 min intro",
+    description: typeof record.description === "string" ? record.description : "",
+    durationMinutes: clampInteger(
+      record.durationMinutes,
+      DEFAULT_DURATION_MINUTES,
+      MIN_EVENT_DURATION_MINUTES,
+      MAX_EVENT_DURATION_MINUTES,
+    ),
+    minimumNoticeMinutes: clampInteger(
+      record.minimumNoticeMinutes,
+      DEFAULT_MINIMUM_NOTICE_MINUTES,
+      0,
+      60 * 24 * 30,
+    ),
+    bookingWindowDays: clampInteger(
+      record.bookingWindowDays,
+      DEFAULT_BOOKING_WINDOW_DAYS,
+      1,
+      MAX_BOOKING_WINDOW_DAYS,
+    ),
+    bufferBeforeMinutes: clampInteger(record.bufferBeforeMinutes, 0, 0, MAX_BUFFER_MINUTES),
+    bufferAfterMinutes: clampInteger(record.bufferAfterMinutes, 0, 0, MAX_BUFFER_MINUTES),
+    isActive: record.isActive === true,
+    requiresCalendar: record.requiresCalendar === true,
+    ...stamps(record, 0),
+  };
+};
+
+const CALENDAR_STATUSES: ReadonlySet<string> = new Set([
+  "not_connected",
+  "connected",
+  "needs_reconnect",
+  "error",
+]);
+
+const LEGACY_GRANT_PREFIX = "legacy-grant:";
+
+export const usesImportedCalendarGrant = (connection: SchedulingCalendarConnection): boolean =>
+  connection.grantId.startsWith(LEGACY_GRANT_PREFIX);
+
+export const normalizeStoredCalendar = (
+  raw: unknown,
+): SchedulingCalendarConnection | null => {
+  const record = asRecord(raw);
+  const id = nonEmptyString(record.id);
+  const profileId = nonEmptyString(record.profileId);
+  if (!id || !profileId) return null;
+  const connectedAt = finiteOr(record.connectedAt, finiteOr(record.updatedAt, 0));
+  const status =
+    typeof record.status === "string" && CALENDAR_STATUSES.has(record.status)
+      ? (record.status as SchedulingCalendarConnection["status"])
+      : "needs_reconnect";
+  const clientId = storedClientId(record.clientId);
+  const email = nonEmptyString(record.email)?.trim().toLowerCase() || null;
+  const calendarId = nonEmptyString(record.calendarId) ?? "primary";
+  const refreshToken = decryptToken(record.refreshToken);
+  const grantId = nonEmptyString(record.grantId) ?? (refreshToken
+    ? LEGACY_GRANT_PREFIX + createHmac("sha256", encryptionKey())
+      .update(JSON.stringify([LEGACY_GRANT_PREFIX, clientId, profileId, id, email, calendarId, refreshToken]))
+      .digest("base64url")
+    : "");
+  return {
+    id,
+    grantId,
+    clientId,
+    profileId,
+    userId: typeof record.userId === "string" ? record.userId : "",
+    provider: GOOGLE_PROVIDER,
+    status,
+    email,
+    calendarId,
+    accessToken: decryptToken(record.accessToken),
+    refreshToken,
+    accessTokenExpiresAt: storedTimestampOrNull(record.accessTokenExpiresAt),
+    scopes: (asArray(record.scopes) ?? []).filter(
+      (scope): scope is string => typeof scope === "string",
+    ),
+    connectedAt,
+    updatedAt: finiteOr(record.updatedAt, connectedAt),
+    error: typeof record.error === "string" ? record.error : null,
+  };
+};
+
+export const encodeStoredCalendar = (
   calendar: SchedulingCalendarConnection,
 ): SchedulingCalendarConnection => ({
   ...calendar,
   accessToken: encryptToken(calendar.accessToken),
   refreshToken: encryptToken(calendar.refreshToken),
-});
-
-const deserializeCalendar = (
-  calendar: SchedulingCalendarConnection,
-): SchedulingCalendarConnection => ({
-  ...calendar,
-  accessToken: decryptToken(calendar.accessToken),
-  refreshToken: decryptToken(calendar.refreshToken),
-});
-
-const normalizeSnapshotClientId = (clientId: unknown): string =>
-  typeof clientId === "string" && clientId.trim()
-    ? canonicalizeClientId(clientId)
-    : CONCLAVE_CLIENT_ID;
-
-const normalizeSnapshot = (
-  snapshot: Partial<SchedulingSnapshot>,
-): SchedulingSnapshot => ({
-  profiles: Array.isArray(snapshot.profiles)
-    ? snapshot.profiles.map((profile) => ({
-        ...profile,
-        clientId: normalizeSnapshotClientId(profile.clientId),
-      }))
-    : [],
-  availability: Array.isArray(snapshot.availability) ? snapshot.availability : [],
-  eventTypes: Array.isArray(snapshot.eventTypes)
-    ? snapshot.eventTypes.map((eventType) => ({
-        ...eventType,
-        clientId: normalizeSnapshotClientId(eventType.clientId),
-      }))
-    : [],
-  calendars: Array.isArray(snapshot.calendars)
-    ? snapshot.calendars.map((calendar) => {
-        const deserialized = deserializeCalendar(calendar);
-        return {
-          ...deserialized,
-          clientId: normalizeSnapshotClientId(deserialized.clientId),
-          accessTokenExpiresAt: storedTimestampOrNull(deserialized.accessTokenExpiresAt),
-        };
-      })
-    : [],
-});
-
-const createSqliteSchedulingPersistence = (
-  path: string = getSchedulingSqlitePath(),
-): SchedulingPersistence => {
-  const dir = dirname(path);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  const { DatabaseSync } = loadNodeSqlite();
-  return openSqliteStore(new DatabaseSync(path), path, (db) => prepareSqliteSchedulingPersistence(db));
-};
-
-const prepareSqliteSchedulingPersistence = (db: SqliteDatabase): SchedulingPersistence => {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS scheduling_records (
-      kind TEXT NOT NULL,
-      id TEXT NOT NULL,
-      client_id TEXT NOT NULL,
-      updated_at INTEGER NOT NULL,
-      payload_json TEXT NOT NULL,
-      PRIMARY KEY (kind, id)
-    );
-    CREATE INDEX IF NOT EXISTS scheduling_records_kind_client_idx
-      ON scheduling_records(kind, client_id);
-  `);
-
-  const upsert = db.prepare(`
-    INSERT INTO scheduling_records (kind, id, client_id, updated_at, payload_json)
-    VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(kind, id) DO UPDATE SET
-      client_id = excluded.client_id,
-      updated_at = excluded.updated_at,
-      payload_json = excluded.payload_json
-    WHERE excluded.updated_at >= scheduling_records.updated_at
-  `);
-  const deleteAll = db.prepare("DELETE FROM scheduling_records");
-  const loadRows = db.prepare(`
-    SELECT kind, payload_json
-    FROM scheduling_records
-    ORDER BY kind ASC, updated_at ASC
-  `);
-
-  return {
-    save: (snapshot) => {
-      try {
-        db.exec("BEGIN IMMEDIATE");
-        deleteAll.run();
-        for (const profile of snapshot.profiles) {
-          upsert.run(
-            "profile",
-            profile.id,
-            profile.clientId,
-            profile.updatedAt,
-            JSON.stringify(profile),
-          );
-        }
-        for (const entry of snapshot.availability) {
-          const profile = snapshot.profiles.find((p) => p.id === entry.profileId);
-          upsert.run(
-            "availability",
-            entry.profileId,
-            profile?.clientId ?? "conclave",
-            Date.now(),
-            JSON.stringify(entry),
-          );
-        }
-        for (const eventType of snapshot.eventTypes) {
-          upsert.run(
-            "event_type",
-            eventType.id,
-            eventType.clientId,
-            eventType.updatedAt,
-            JSON.stringify(eventType),
-          );
-        }
-        for (const calendar of snapshot.calendars) {
-          const serialized = serializeCalendar(calendar);
-          upsert.run(
-            "calendar",
-            calendar.profileId,
-            calendar.clientId,
-            calendar.updatedAt,
-            JSON.stringify(serialized),
-          );
-        }
-        db.exec("COMMIT");
-      } catch (error) {
-        try {
-          db.exec("ROLLBACK");
-        } catch {}
-        Logger.error("Failed to persist scheduling records", error);
-      }
-    },
-    load: () => {
-      const snapshot: SchedulingSnapshot = {
-        profiles: [],
-        availability: [],
-        eventTypes: [],
-        calendars: [],
-      };
-      try {
-        for (const row of loadRows.all()) {
-          const kind =
-            row && typeof row === "object" && "kind" in row
-              ? String((row).kind)
-              : "";
-          const payload =
-            row && typeof row === "object" && "payload_json" in row
-              ? String((row).payload_json)
-              : "";
-          if (!payload) continue;
-          // Persistence payloads are this module's own serialized writes, so
-          // the element shape is trusted here; JSON.parse stays `unknown` and
-          // the snapshot-level checks in normalizeSnapshot still apply.
-          const parsed: unknown = JSON.parse(payload);
-          if (kind === "profile") {
-            snapshot.profiles.push(parsed as SchedulingProfile);
-          }
-          if (kind === "availability") {
-            snapshot.availability.push(
-              parsed as SchedulingSnapshot["availability"][number],
-            );
-          }
-          if (kind === "event_type") {
-            snapshot.eventTypes.push(parsed as SchedulingEventType);
-          }
-          if (kind === "calendar") {
-            snapshot.calendars.push(
-              deserializeCalendar(parsed as SchedulingCalendarConnection),
-            );
-          }
-        }
-      } catch (error) {
-        Logger.error("Failed to load scheduling records", error);
-      }
-      return normalizeSnapshot(snapshot);
-    },
-    close: () => db.close(),
-  };
-};
-
-const createFileSchedulingPersistence = (
-  path: string = getSchedulingJsonPath(),
-): SchedulingPersistence => ({
-  save: (snapshot) => {
-    try {
-      writePrivateFileAtomic(
-        path,
-        JSON.stringify(
-          {
-            ...snapshot,
-            calendars: snapshot.calendars.map(serializeCalendar),
-          },
-          null,
-          2,
-        ),
-      );
-    } catch (error) {
-      Logger.error("Failed to persist scheduling records to JSON", error);
-    }
-  },
-  load: () => {
-    try {
-      if (!existsSync(path)) return normalizeSnapshot({});
-      // Own serialized writes; normalizeSnapshot re-checks the array shape.
-      return normalizeSnapshot(
-        JSON.parse(readFileSync(path, "utf8")) as Partial<SchedulingSnapshot>,
-      );
-    } catch (error) {
-      Logger.error("Failed to load scheduling records from JSON", error);
-      return normalizeSnapshot({});
-    }
-  },
-});
-
-type AvailabilityEntry = SchedulingSnapshot["availability"][number];
-
-const undecodableTokens = (raw: unknown, snapshot: SchedulingSnapshot): string[] => {
-  const stored = Array.isArray((raw as { calendars?: unknown } | null)?.calendars)
-    ? ((raw as { calendars: Array<Partial<SchedulingCalendarConnection>> }).calendars)
-    : [];
-  return snapshot.calendars.flatMap((calendar, index) =>
-    (["accessToken", "refreshToken"] as const)
-      .filter((field) => Boolean(stored[index]?.[field]) && !calendar[field])
-      .map((field) => `the ${field} of profile ${calendar.profileId}'s calendar`),
-  );
-};
-
-export const schedulingJsonStore: JsonStoreAdapter<SchedulingSnapshot> = {
-  decode: (data) => {
-    if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("it is not a scheduling snapshot");
-    const snapshot = normalizeSnapshot(data);
-    const undecoded = undecodableTokens(data, snapshot);
-    if (undecoded.length > 0) {
-      throw new Error(`${undecoded.join(", ")} cannot be decrypted with this SFU's secret. Set SCHEDULING_TOKEN_SECRET to the secret the older SFU used.`);
-    }
-    return snapshot;
-  },
-  write: (path, snapshot) => {
-    void createFileSchedulingPersistence(path).save(snapshot);
-  },
-  collections: {
-    profiles: jsonStoreCollection<SchedulingSnapshot, SchedulingProfile>({
-      index: "profilesById",
-      rows: (snapshot) => snapshot.profiles,
-      key: (profile) => profile.id,
-      stamp: (profile) => Number(profile.updatedAt) || 0,
-      claims: schedulingProfileClaims,
-    }),
-    availability: jsonStoreCollection<SchedulingSnapshot, AvailabilityEntry>({
-      index: "availabilityByProfileId",
-      rows: (snapshot) => snapshot.availability,
-      key: (entry) => entry.profileId,
-      stamp: (entry, snapshot) =>
-        Number((entry.availability as { updatedAt?: unknown } | undefined)?.updatedAt) ||
-        Number(snapshot.profiles.find((profile) => profile.id === entry.profileId)?.updatedAt) ||
-        0,
-      claims: {},
-    }),
-    eventTypes: jsonStoreCollection<SchedulingSnapshot, SchedulingEventType>({
-      index: "eventTypesById",
-      rows: (snapshot) => snapshot.eventTypes,
-      key: (eventType) => eventType.id,
-      stamp: (eventType) => Number(eventType.updatedAt) || 0,
-      claims: schedulingEventTypeClaims,
-      canDelete: true,
-    }),
-    calendars: jsonStoreCollection<SchedulingSnapshot, SchedulingCalendarConnection>({
-      rows: (snapshot) => snapshot.calendars,
-      key: (calendar) => calendar.id,
-      stamp: (calendar) => Number(calendar.updatedAt) || 0,
-      claims: { calendarByProfileId: { key: (calendar) => calendar.profileId } },
-      canDelete: true,
-    }),
-  },
-  build: (base, rows) => ({
-    ...base,
-    profiles: rows.profiles as SchedulingProfile[],
-    availability: rows.availability as AvailabilityEntry[],
-    eventTypes: rows.eventTypes as SchedulingEventType[],
-    calendars: rows.calendars as SchedulingCalendarConnection[],
-  }),
-};
-
-const UPSERT_SCHEDULING_RECORD_SCRIPT = `
-local recordKey = KEYS[1]
-local tombstonesKey = KEYS[2]
-local id = ARGV[1]
-local tombstoneId = ARGV[2]
-local incomingUpdatedAt = tonumber(ARGV[3]) or 0
-local payload = ARGV[4]
-
-local deletedAt = tonumber(redis.call("HGET", tombstonesKey, tombstoneId) or "0") or 0
-if deletedAt > incomingUpdatedAt then
-  return 0
-end
-
-local current = redis.call("HGET", recordKey, id)
-if current then
-  local ok, decoded = pcall(cjson.decode, current)
-  if ok and decoded then
-    local currentUpdatedAt = tonumber(decoded.updatedAt or 0) or 0
-    if currentUpdatedAt > incomingUpdatedAt then
-      return 0
-    end
-  end
-end
-
-redis.call("HSET", recordKey, id, payload)
-return 1
-`;
-
-const isPresent = <T>(value: T | null): value is T => value !== null;
-
-const parseRedisRecord = <T>(value: string): T | null => {
-  try {
-    const parsed = JSON.parse(value) as { payload?: T };
-    return parsed && typeof parsed === "object" && "payload" in parsed
-      ? parsed.payload ?? null
-      : (parsed as T);
-  } catch {
-    return null;
-  }
-};
-
-const missingIds = <T extends { id: string }>(
-  knownIds: Set<string>,
-  records: T[],
-): string[] => {
-  const currentIds = new Set(records.map((record) => record.id));
-  return Array.from(knownIds).filter((id) => !currentIds.has(id));
-};
-
-class RedisSchedulingPersistence implements SchedulingPersistence {
-  private client: RedisPersistenceClient;
-  private fallback: SchedulingPersistence;
-  private snapshotKey: string;
-  private profilesKey: string;
-  private availabilityKey: string;
-  private eventTypesKey: string;
-  private calendarsKey: string;
-  private tombstonesKey: string;
-  private startPromise: Promise<void> | null = null;
-  private started = false;
-  private pendingWrite: Promise<void> = Promise.resolve();
-  private knownProfileIds = new Set<string>();
-  private knownAvailabilityIds = new Set<string>();
-  private knownEventTypeIds = new Set<string>();
-  private knownCalendarIds = new Set<string>();
-
-  constructor(options: {
-    redisUrl: string;
-    keyPrefix: string;
-    fallback: SchedulingPersistence;
-  }) {
-    this.client = createRedisPersistenceClient("Scheduling", options.redisUrl);
-    this.fallback = options.fallback;
-    this.snapshotKey = `${options.keyPrefix}:scheduling:snapshot`;
-    this.profilesKey = `${options.keyPrefix}:scheduling:profiles`;
-    this.availabilityKey = `${options.keyPrefix}:scheduling:availability`;
-    this.eventTypesKey = `${options.keyPrefix}:scheduling:event-types`;
-    this.calendarsKey = `${options.keyPrefix}:scheduling:calendars`;
-    this.tombstonesKey = `${options.keyPrefix}:scheduling:tombstones`;
-  }
-
-  async start(): Promise<void> {
-    if (this.started) return;
-    if (this.startPromise) {
-      await this.startPromise;
-      return;
-    }
-
-    this.startPromise = (async () => {
-      await this.client.connect();
-      this.started = true;
-      Logger.success("[Scheduling] Redis persistence connected");
-    })();
-
-    try {
-      await this.startPromise;
-    } catch (error) {
-      this.startPromise = null;
-      throw error;
-    }
-  }
-
-  save(snapshot: SchedulingSnapshot): void {
-    void this.fallback.save(snapshot);
-    const profileRecords = snapshot.profiles.map((profile) => ({
-      id: profile.id,
-      updatedAt: profile.updatedAt,
-      payload: profile,
-    }));
-    const profileUpdatedAt = new Map(
-      snapshot.profiles.map((profile) => [profile.id, profile.updatedAt]),
-    );
-    const availabilityRecords = snapshot.availability.map((entry) => ({
-      id: entry.profileId,
-      updatedAt:
-        entry.availability.updatedAt ??
-        profileUpdatedAt.get(entry.profileId) ??
-        Date.now(),
-      payload: entry,
-    }));
-    const eventTypeRecords = snapshot.eventTypes.map((eventType) => ({
-      id: eventType.id,
-      updatedAt: eventType.updatedAt,
-      payload: eventType,
-    }));
-    const calendarRecords = snapshot.calendars.map((calendar) => ({
-      id: calendar.profileId,
-      updatedAt: calendar.updatedAt,
-      payload: serializeCalendar(calendar),
-    }));
-    const deletedProfileIds = missingIds(this.knownProfileIds, profileRecords);
-    const deletedAvailabilityIds = missingIds(
-      this.knownAvailabilityIds,
-      availabilityRecords,
-    );
-    const deletedEventTypeIds = missingIds(
-      this.knownEventTypeIds,
-      eventTypeRecords,
-    );
-    const deletedCalendarIds = missingIds(this.knownCalendarIds, calendarRecords);
-
-    this.knownProfileIds = new Set(profileRecords.map((record) => record.id));
-    this.knownAvailabilityIds = new Set(
-      availabilityRecords.map((record) => record.id),
-    );
-    this.knownEventTypeIds = new Set(
-      eventTypeRecords.map((record) => record.id),
-    );
-    this.knownCalendarIds = new Set(calendarRecords.map((record) => record.id));
-
-    this.queueWrite("save snapshot", async () => {
-      await Promise.all([
-        this.upsertRecords(this.profilesKey, "profile", profileRecords),
-        this.upsertRecords(
-          this.availabilityKey,
-          "availability",
-          availabilityRecords,
-        ),
-        this.upsertRecords(this.eventTypesKey, "event_type", eventTypeRecords),
-        this.upsertRecords(this.calendarsKey, "calendar", calendarRecords),
-        this.deleteRecords(this.profilesKey, "profile", deletedProfileIds),
-        this.deleteRecords(
-          this.availabilityKey,
-          "availability",
-          deletedAvailabilityIds,
-        ),
-        this.deleteRecords(this.eventTypesKey, "event_type", deletedEventTypeIds),
-        this.deleteRecords(this.calendarsKey, "calendar", deletedCalendarIds),
-      ]);
-    });
-  }
-
-  async load(): Promise<SchedulingSnapshot> {
-    try {
-      await this.start();
-      const redisSnapshot = await this.loadHashes();
-      const redisTotal =
-        redisSnapshot.profiles.length +
-        redisSnapshot.availability.length +
-        redisSnapshot.eventTypes.length +
-        redisSnapshot.calendars.length;
-      if (redisTotal > 0) {
-        this.rememberKnownIds(redisSnapshot);
-        return redisSnapshot;
-      }
-
-      const legacySnapshot = await this.loadLegacySnapshot();
-      const legacyTotal =
-        legacySnapshot.profiles.length +
-        legacySnapshot.availability.length +
-        legacySnapshot.eventTypes.length +
-        legacySnapshot.calendars.length;
-      if (legacyTotal > 0) {
-        this.rememberKnownIds(legacySnapshot);
-        this.save(legacySnapshot);
-        await this.flush();
-        Logger.info(
-          `Migrated ${legacyTotal} legacy scheduling record(s) into Redis hashes`,
-        );
-        return legacySnapshot;
-      }
-
-      const fallbackSnapshot = await this.fallback.load();
-      const total =
-        fallbackSnapshot.profiles.length +
-        fallbackSnapshot.availability.length +
-        fallbackSnapshot.eventTypes.length +
-        fallbackSnapshot.calendars.length;
-      if (total > 0) {
-        this.rememberKnownIds(fallbackSnapshot);
-        this.save(fallbackSnapshot);
-        await this.flush();
-        Logger.info(`Migrated ${total} scheduling record(s) into Redis persistence`);
-      }
-      return fallbackSnapshot;
-    } catch (error) {
-      Logger.error(
-        "Failed to load scheduling records from Redis; falling back to local persistence",
-        error,
-      );
-      return this.fallback.load();
-    }
-  }
-
-  async flush(): Promise<void> {
-    await this.pendingWrite;
-  }
-
-  async close(): Promise<void> {
-    await this.flush();
-    await this.fallback.close?.();
-    if (!this.started) return;
-    this.started = false;
-    await this.client.quit();
-  }
-
-  private queueWrite(label: string, write: () => Promise<void>): void {
-    const writePromise = this.pendingWrite
-      .catch(() => undefined)
-      .then(async () => {
-        await this.start();
-        await write();
-      });
-    this.pendingWrite = writePromise.catch((error) => {
-      Logger.error(`Failed to persist scheduling records to Redis (${label})`, error);
-      throw error;
-    });
-  }
-
-  private async upsertRecords<T>(
-    key: string,
-    kind: string,
-    records: Array<{ id: string; updatedAt: number; payload: T }>,
-  ): Promise<void> {
-    for (const record of records) {
-      await this.client.sendCommand([
-        "EVAL",
-        UPSERT_SCHEDULING_RECORD_SCRIPT,
-        "2",
-        key,
-        this.tombstonesKey,
-        record.id,
-        `${kind}:${record.id}`,
-        String(record.updatedAt),
-        JSON.stringify({
-          updatedAt: record.updatedAt,
-          payload: record.payload,
-        }),
-      ]);
-    }
-  }
-
-  private async deleteRecords(
-    key: string,
-    kind: string,
-    ids: string[],
-  ): Promise<void> {
-    if (ids.length === 0) return;
-    const deletedAt = String(Date.now());
-    const transaction = this.client.multi();
-    transaction.hDel(key, ids);
-    transaction.hSet(
-      this.tombstonesKey,
-      Object.fromEntries(ids.map((id) => [`${kind}:${id}`, deletedAt])),
-    );
-    await transaction.exec();
-  }
-
-  private async loadHashes(): Promise<SchedulingSnapshot> {
-    const [profiles, availability, eventTypes, calendars] = await Promise.all([
-      this.client.hVals(this.profilesKey),
-      this.client.hVals(this.availabilityKey),
-      this.client.hVals(this.eventTypesKey),
-      this.client.hVals(this.calendarsKey),
-    ]);
-    return normalizeSnapshot({
-      profiles: profiles
-        .map((value) => parseRedisRecord<SchedulingProfile>(value))
-        .filter(isPresent),
-      availability: availability
-        .map((value) =>
-          parseRedisRecord<{ profileId: string; availability: WeeklyAvailability }>(
-            value,
-          ),
-        )
-        .filter(isPresent),
-      eventTypes: eventTypes
-        .map((value) => parseRedisRecord<SchedulingEventType>(value))
-        .filter(isPresent),
-      calendars: calendars
-        .map((value) => parseRedisRecord<SchedulingCalendarConnection>(value))
-        .filter(isPresent)
-        .map(deserializeCalendar),
-    });
-  }
-
-  private async loadLegacySnapshot(): Promise<SchedulingSnapshot> {
-    const value = await this.client.get(this.snapshotKey);
-    if (!value) return normalizeSnapshot({});
-    // Own serialized writes; normalizeSnapshot re-checks the array shape.
-    return normalizeSnapshot(JSON.parse(value) as Partial<SchedulingSnapshot>);
-  }
-
-  private rememberKnownIds(snapshot: SchedulingSnapshot): void {
-    this.knownProfileIds = new Set(snapshot.profiles.map((profile) => profile.id));
-    this.knownAvailabilityIds = new Set(
-      snapshot.availability.map((entry) => entry.profileId),
-    );
-    this.knownEventTypeIds = new Set(
-      snapshot.eventTypes.map((eventType) => eventType.id),
-    );
-    this.knownCalendarIds = new Set(
-      snapshot.calendars.map((calendar) => calendar.profileId),
-    );
-  }
-}
-
-const createRedisSchedulingPersistence = (
-  redisUrl: string = resolveRedisPersistenceUrl(),
-  keyPrefix: string = resolveRedisPersistenceKeyPrefix(),
-  fallback: SchedulingPersistence = createSqliteSchedulingPersistence(),
-): SchedulingPersistence =>
-  new RedisSchedulingPersistence({ redisUrl, keyPrefix, fallback });
-
-export const createSchedulingPersistence = (): SchedulingPersistence => {
-  const mode = process.env.SCHEDULING_PERSISTENCE?.trim().toLowerCase();
-  if (mode === "json" || mode === "file") {
-    adoptRecoveredJsonStore(getSchedulingJsonPath(), "scheduling.json", schedulingJsonStore);
-    return createFileSchedulingPersistence();
-  }
-  const redisUrl = resolveRedisPersistenceUrl();
-  const sqlitePersistence = createSqliteSchedulingPersistence();
-  if (shouldUseRedisPersistence(mode, redisUrl)) {
-    if (!redisUrl) {
-      throw new Error(
-        "SCHEDULING_PERSISTENCE=redis requires SFU_PERSISTENCE_REDIS_URL, SFU_REDIS_URL, or REDIS_URL.",
-      );
-    }
-    return createRedisSchedulingPersistence(
-      redisUrl,
-      resolveRedisPersistenceKeyPrefix(),
-      sqlitePersistence,
-    );
-  }
-  return sqlitePersistence;
-};
-
-const snapshotSchedulingStore = (
-  store: SchedulingStore,
-): SchedulingSnapshot => ({
-  profiles: Array.from(store.profilesById.values()),
-  availability: Array.from(store.availabilityByProfileId.entries()).map(
-    ([profileId, availability]) => ({ profileId, availability }),
-  ),
-  eventTypes: Array.from(store.eventTypesById.values()),
-  calendars: Array.from(store.calendarByProfileId.values()),
-});
-
-export const persistScheduling = (
-  store: SchedulingStore,
-  persistence: SchedulingPersistence | null,
-): Promise<void> => {
-  if (!persistence) return Promise.resolve();
-  return Promise.resolve(persistence.save(snapshotSchedulingStore(store))).then(() =>
-    persistence.flush?.(),
-  );
-};
-
-export const loadPersistedScheduling = (
-  store: SchedulingStore,
-  persistence: SchedulingPersistence,
-): Promise<number> => Promise.resolve(persistence.load()).then((snapshot) => {
-  for (const profile of snapshot.profiles) {
-    registerProfile(store, profile);
-  }
-  for (const entry of snapshot.availability) {
-    const profile = store.profilesById.get(entry.profileId);
-    if (!profile) continue;
-    store.availabilityByProfileId.set(
-      entry.profileId,
-      normalizeWeeklyAvailability(entry.availability, profile.timeZone),
-    );
-  }
-  for (const eventType of snapshot.eventTypes) {
-    registerEventType(store, eventType);
-  }
-  for (const calendar of snapshot.calendars) {
-    store.calendarByProfileId.set(calendar.profileId, calendar);
-  }
-  return (
-    snapshot.profiles.length +
-    snapshot.eventTypes.length +
-    snapshot.calendars.length
-  );
 });

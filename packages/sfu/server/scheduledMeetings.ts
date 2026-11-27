@@ -1,7 +1,3 @@
-import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { createRequire } from "node:module";
-import { dirname } from "node:path";
 import type {
   CreateScheduledMeetingRequest,
   ScheduledMeeting,
@@ -9,28 +5,21 @@ import type {
   ScheduledMeetingStatus,
   UpdateScheduledMeetingRequest,
 } from "../types.js";
-import { Logger } from "../utilities/loggers.js";
-import {
-  createRedisPersistenceClient,
-  resolveRedisPersistenceKeyPrefix,
-  resolveRedisPersistenceUrl,
-  shouldUseRedisPersistence,
-  type RedisPersistenceClient,
-} from "./redisPersistence.js";
+import { asRecord } from "../utilities/untrusted.js";
+import { InvalidInput } from "./controlPlane/model.js";
 import { canonicalizeClientId } from "./clientIds.js";
-import { openSqliteStore } from "./sqliteWriteCheck.js";
-import { storeJsonPath, storeSqlitePath } from "./storePaths.js";
-import { writePrivateFileAtomic } from "./privateFile.js";
+import { generateMeetingCode } from "./meetingCodes.js";
 import { storedTimestampOrNull } from "./storedValues.js";
-import { adoptRecoveredJsonStore, jsonStoreCollection, type JsonStoreAdapter, type JsonStoreClaim } from "./jsonStoreUpgrade.js";
-
-type MaybePromise<T> = T | Promise<T>;
 
 const MAX_TITLE_LENGTH = 140;
 const MIN_TITLE_LENGTH = 1;
 const ROOM_CODE_MIN_LENGTH = 3;
 const ROOM_CODE_MAX_LENGTH = 64;
 const DEFAULT_DURATION_MS = 60 * 60 * 1000;
+const ROOM_CODE_ATTEMPTS = 64;
+
+export const ROOM_CODE_TAKEN_MESSAGE =
+  "That meeting code is already booked for another scheduled meeting.";
 
 const sanitizeTitle = (value: string | undefined): string => {
   if (typeof value !== "string") return "";
@@ -38,7 +27,7 @@ const sanitizeTitle = (value: string | undefined): string => {
   return trimmed.slice(0, MAX_TITLE_LENGTH);
 };
 
-const sanitizeRoomCode = (value: string | undefined): string => {
+export const sanitizeRoomCode = (value: string | undefined): string => {
   if (typeof value !== "string") return "";
   const normalized = value
     .toLowerCase()
@@ -73,118 +62,13 @@ const normalizeEmailNotificationStatus = (
     ? value
     : "not_configured";
 
-const generateRoomCode = (): string => {
-  const adjectives = [
-    "swift",
-    "lucid",
-    "amber",
-    "calm",
-    "still",
-    "bright",
-    "quiet",
-    "vivid",
-  ];
-  const nouns = [
-    "river",
-    "harbor",
-    "ember",
-    "thicket",
-    "atrium",
-    "summit",
-    "meadow",
-    "comet",
-  ];
-  const a = adjectives[Math.floor(Math.random() * adjectives.length)];
-  const n = nouns[Math.floor(Math.random() * nouns.length)];
-  const suffix = Math.floor(1000 + Math.random() * 9000);
-  return `${a}-${n}-${suffix}`;
-};
+const positiveStampOrNull = (value: unknown): number | null =>
+  Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : null;
 
-export type ScheduledMeetingStore = {
-  byId: Map<string, ScheduledMeeting>;
-  byRoomCode: Map<string, string>;
-};
+export const isActiveMeetingStatus = (status: ScheduledMeetingStatus): boolean =>
+  status === "scheduled" || status === "live";
 
-export const createScheduledMeetingStore = (): ScheduledMeetingStore => ({
-  byId: new Map(),
-  byRoomCode: new Map(),
-});
-
-const roomCodeKey = (clientId: string, roomCode: string): string =>
-  `${clientId}:${roomCode}`;
-
-const isActiveMeeting = (meeting: ScheduledMeeting): boolean =>
-  meeting.status === "scheduled" || meeting.status === "live";
-
-export const scheduledMeetingClaims: Record<"byRoomCode", JsonStoreClaim<ScheduledMeeting>> = {
-  byRoomCode: { key: (meeting) => roomCodeKey(meeting.clientId, meeting.roomCode), holds: isActiveMeeting },
-};
-
-/**
- * Point the room-code index at `meeting`. A code can be reused once its
- * earlier meeting has ended or been cancelled, so several meetings can share
- * a code; the index keeps pointing at the active one.
- */
-const claimRoomCode = (
-  store: ScheduledMeetingStore,
-  meeting: ScheduledMeeting,
-): void => {
-  const key = scheduledMeetingClaims.byRoomCode.key(meeting);
-  const ownerId = store.byRoomCode.get(key);
-  const owner = ownerId ? store.byId.get(ownerId) : undefined;
-  if (
-    owner &&
-    owner.id !== meeting.id &&
-    scheduledMeetingClaims.byRoomCode.holds?.(owner) &&
-    !scheduledMeetingClaims.byRoomCode.holds?.(meeting)
-  ) {
-    return;
-  }
-  store.byRoomCode.set(key, meeting.id);
-};
-
-/** Drop `meeting`'s room-code entry, but never another meeting's. */
-const releaseRoomCode = (
-  store: ScheduledMeetingStore,
-  meeting: ScheduledMeeting,
-): void => {
-  const key = scheduledMeetingClaims.byRoomCode.key(meeting);
-  if (store.byRoomCode.get(key) === meeting.id) {
-    store.byRoomCode.delete(key);
-  }
-};
-
-const registerStore = (
-  store: ScheduledMeetingStore,
-  meeting: ScheduledMeeting,
-): void => {
-  store.byId.set(meeting.id, meeting);
-  claimRoomCode(store, meeting);
-};
-
-const unregisterStore = (
-  store: ScheduledMeetingStore,
-  meeting: ScheduledMeeting,
-): void => {
-  store.byId.delete(meeting.id);
-  releaseRoomCode(store, meeting);
-};
-
-const isCodeTaken = (
-  store: ScheduledMeetingStore,
-  clientId: string,
-  roomCode: string,
-  excludeId?: string,
-): boolean => {
-  const owner = store.byRoomCode.get(roomCodeKey(clientId, roomCode));
-  if (!owner) return false;
-  if (excludeId && owner === excludeId) return false;
-  const existing = store.byId.get(owner);
-  if (!existing) return false;
-  return existing.status === "scheduled" || existing.status === "live";
-};
-
-type CreateScheduledMeetingOptions = {
+export type CreateScheduledMeetingOptions = {
   clientId: string;
   createdBy: string;
   defaultHostEmail: string;
@@ -192,20 +76,43 @@ type CreateScheduledMeetingOptions = {
   defaultHostUserId: string | null;
 };
 
-export const createScheduledMeeting = (
-  store: ScheduledMeetingStore,
+export type RoomCodeOwner = (clientId: string, roomCode: string) => string | null;
+
+const pickRoomCode = (
+  request: CreateScheduledMeetingRequest,
+  clientId: string,
+  activeOwner: RoomCodeOwner,
+  random: (max: number) => number,
+): string => {
+  const requested = sanitizeRoomCode(request.roomCode);
+  if (requested) {
+    if (requested.length < ROOM_CODE_MIN_LENGTH) {
+      throw new InvalidInput("Custom code must be at least 3 characters.");
+    }
+    if (activeOwner(clientId, requested)) throw new InvalidInput(ROOM_CODE_TAKEN_MESSAGE);
+    return requested;
+  }
+  for (let attempt = 0; attempt < ROOM_CODE_ATTEMPTS; attempt += 1) {
+    const candidate = generateMeetingCode(random);
+    if (!activeOwner(clientId, candidate)) return candidate;
+  }
+  throw new InvalidInput("Could not pick a free meeting code. Try again.");
+};
+
+export const buildScheduledMeeting = (
   request: CreateScheduledMeetingRequest,
   options: CreateScheduledMeetingOptions,
+  context: { id: string; now: number; random: (max: number) => number; activeOwner: RoomCodeOwner },
 ): ScheduledMeeting => {
   const clientId = canonicalizeClientId(options.clientId);
   const title = sanitizeTitle(request.title);
   if (!title || title.length < MIN_TITLE_LENGTH) {
-    throw new Error("Title is required.");
+    throw new InvalidInput("Title is required.");
   }
 
   const scheduledStartAt = Number(request.scheduledStartAt);
   if (!Number.isFinite(scheduledStartAt) || scheduledStartAt <= 0) {
-    throw new Error("Invalid scheduled start time.");
+    throw new InvalidInput("Invalid scheduled start time.");
   }
   const scheduledEndAt =
     Number.isFinite(Number(request.scheduledEndAt)) &&
@@ -217,38 +124,17 @@ export const createScheduledMeeting = (
   const requestHostEmailIsValid =
     requestedHostEmail.length > 0 && requestedHostEmail.includes("@");
   const fallbackHostEmail = normalizeHostEmail(options.defaultHostEmail);
-  const hostEmail = requestHostEmailIsValid
-    ? requestedHostEmail
-    : fallbackHostEmail;
+  const hostEmail = requestHostEmailIsValid ? requestedHostEmail : fallbackHostEmail;
   if (!hostEmail || !hostEmail.includes("@")) {
-    throw new Error("Host email is required.");
+    throw new InvalidInput("Host email is required.");
   }
 
   const hostName =
-    sanitizeTitle(request.hostName) ||
-    sanitizeTitle(options.defaultHostName) ||
-    "";
+    sanitizeTitle(request.hostName) || sanitizeTitle(options.defaultHostName) || "";
+  const roomCode = pickRoomCode(request, clientId, context.activeOwner, context.random);
 
-  const requestedRoomCode = sanitizeRoomCode(request.roomCode);
-  let roomCode = requestedRoomCode;
-  if (!roomCode) {
-    do {
-      roomCode = generateRoomCode();
-    } while (isCodeTaken(store, clientId, roomCode));
-  } else {
-    if (roomCode.length < ROOM_CODE_MIN_LENGTH) {
-      throw new Error("Custom code must be at least 3 characters.");
-    }
-    if (isCodeTaken(store, clientId, roomCode)) {
-      throw new Error(
-        "That meeting code is already booked for another scheduled meeting.",
-      );
-    }
-  }
-
-  const now = Date.now();
-  const meeting: ScheduledMeeting = {
-    id: randomUUID(),
+  return {
+    id: context.id,
     clientId,
     roomCode,
     title,
@@ -260,24 +146,18 @@ export const createScheduledMeeting = (
     status: "scheduled",
     startedAt: null,
     endedAt: null,
-    createdAt: now,
+    createdAt: context.now,
     createdBy: options.createdBy,
-    updatedAt: now,
+    updatedAt: context.now,
     source: request.source === "booking_link" ? "booking_link" : "manual",
     eventTypeId: sanitizeOptionalText(request.eventTypeId, 128),
     attendeeName: sanitizeOptionalText(request.attendeeName, 120),
     attendeeEmail: sanitizeOptionalEmail(request.attendeeEmail),
     attendeeNote: sanitizeOptionalText(request.attendeeNote, 2000),
     attendeeTimeZone: sanitizeOptionalText(request.attendeeTimeZone, 80),
-    googleCalendarEventId: sanitizeOptionalText(
-      request.googleCalendarEventId,
-      512,
-    ),
+    googleCalendarEventId: sanitizeOptionalText(request.googleCalendarEventId, 512),
     calendarSyncStatus: request.calendarSyncStatus ?? "not_required",
-    calendarSyncError: sanitizeOptionalText(
-      request.calendarSyncError ?? undefined,
-      512,
-    ),
+    calendarSyncError: sanitizeOptionalText(request.calendarSyncError ?? undefined, 512),
     emailNotificationStatus: normalizeEmailNotificationStatus(
       request.emailNotificationStatus,
     ),
@@ -285,306 +165,171 @@ export const createScheduledMeeting = (
       request.emailNotificationError ?? undefined,
       512,
     ),
-    emailNotificationSentAt:
-      Number.isFinite(Number(request.emailNotificationSentAt)) &&
-      Number(request.emailNotificationSentAt) > 0
-        ? Number(request.emailNotificationSentAt)
-        : null,
-    emailReminderStatus: normalizeEmailNotificationStatus(
-      request.emailReminderStatus,
-    ),
-    emailReminderError: sanitizeOptionalText(
-      request.emailReminderError ?? undefined,
-      512,
-    ),
-    emailReminderSentAt:
-      Number.isFinite(Number(request.emailReminderSentAt)) &&
-      Number(request.emailReminderSentAt) > 0
-        ? Number(request.emailReminderSentAt)
-        : null,
+    emailNotificationSentAt: positiveStampOrNull(request.emailNotificationSentAt),
+    emailReminderStatus: normalizeEmailNotificationStatus(request.emailReminderStatus),
+    emailReminderError: sanitizeOptionalText(request.emailReminderError ?? undefined, 512),
+    emailReminderSentAt: positiveStampOrNull(request.emailReminderSentAt),
   };
-
-  registerStore(store, meeting);
-  return meeting;
 };
 
-export const updateScheduledMeeting = (
-  store: ScheduledMeetingStore,
-  id: string,
-  request: UpdateScheduledMeetingRequest,
-): ScheduledMeeting => {
-  const meeting = store.byId.get(id);
-  if (!meeting) {
-    throw new Error("Scheduled meeting not found.");
-  }
-  const now = Date.now();
+const nullableText = (value: string | null | undefined, maxLength: number): string | null =>
+  value === null ? null : sanitizeOptionalText(value, maxLength);
 
-  // Reactivating a meeting (scheduled or live) must not give a code two
-  // active meetings. Checked before anything changes, against the code the
-  // meeting will have after this update.
+const nullableStamp = (value: number | null | undefined): number | null =>
+  value === null ? null : positiveStampOrNull(value);
+
+export const applyScheduledMeetingUpdate = (
+  meeting: ScheduledMeeting,
+  request: UpdateScheduledMeetingRequest,
+  context: { now: number; activeOwner: RoomCodeOwner },
+): ScheduledMeeting => {
+  const next: ScheduledMeeting = { ...meeting };
+  const takenByOther = (code: string): boolean => {
+    const owner = context.activeOwner(meeting.clientId, code);
+    return Boolean(owner && owner !== meeting.id);
+  };
+
   if (request.status === "scheduled" || request.status === "live") {
     const requestedCode =
-      typeof request.roomCode === "string"
-        ? sanitizeRoomCode(request.roomCode)
-        : "";
-    const targetCode = requestedCode || meeting.roomCode;
-    if (isCodeTaken(store, meeting.clientId, targetCode, meeting.id)) {
-      throw new Error("That meeting code is already booked.");
+      typeof request.roomCode === "string" ? sanitizeRoomCode(request.roomCode) : "";
+    if (takenByOther(requestedCode || meeting.roomCode)) {
+      throw new InvalidInput("That meeting code is already booked.");
     }
   }
 
   if (typeof request.title === "string") {
-    const next = sanitizeTitle(request.title);
-    if (!next) throw new Error("Title is required.");
-    meeting.title = next;
+    const title = sanitizeTitle(request.title);
+    if (!title) throw new InvalidInput("Title is required.");
+    next.title = title;
   }
   if (
     typeof request.scheduledStartAt === "number" &&
     Number.isFinite(request.scheduledStartAt) &&
     request.scheduledStartAt > 0
   ) {
-    meeting.scheduledStartAt = request.scheduledStartAt;
-    if (meeting.scheduledEndAt <= meeting.scheduledStartAt) {
-      meeting.scheduledEndAt = meeting.scheduledStartAt + DEFAULT_DURATION_MS;
+    next.scheduledStartAt = request.scheduledStartAt;
+    if (next.scheduledEndAt <= next.scheduledStartAt) {
+      next.scheduledEndAt = next.scheduledStartAt + DEFAULT_DURATION_MS;
     }
   }
   if (
     typeof request.scheduledEndAt === "number" &&
     Number.isFinite(request.scheduledEndAt) &&
-    request.scheduledEndAt > meeting.scheduledStartAt
+    request.scheduledEndAt > next.scheduledStartAt
   ) {
-    meeting.scheduledEndAt = request.scheduledEndAt;
+    next.scheduledEndAt = request.scheduledEndAt;
   }
   if (typeof request.roomCode === "string") {
     const nextCode = sanitizeRoomCode(request.roomCode);
     if (nextCode && nextCode !== meeting.roomCode) {
       if (nextCode.length < ROOM_CODE_MIN_LENGTH) {
-        throw new Error("Custom code must be at least 3 characters.");
+        throw new InvalidInput("Custom code must be at least 3 characters.");
       }
-      if (isCodeTaken(store, meeting.clientId, nextCode, meeting.id)) {
-        throw new Error("That meeting code is already booked.");
+      if (takenByOther(nextCode)) {
+        throw new InvalidInput("That meeting code is already booked.");
       }
-      releaseRoomCode(store, meeting);
-      meeting.roomCode = nextCode;
-      claimRoomCode(store, meeting);
+      next.roomCode = nextCode;
     }
   }
   if (request.status) {
-    meeting.status = request.status;
-    if (request.status === "live" && !meeting.startedAt) {
-      meeting.startedAt = now;
-    }
-    if (request.status === "ended" && !meeting.endedAt) {
-      meeting.endedAt = now;
-    }
-    // A reactivated meeting takes its code back from an inactive one.
-    claimRoomCode(store, meeting);
+    next.status = request.status;
+    if (request.status === "live" && !next.startedAt) next.startedAt = context.now;
+    if (request.status === "ended" && !next.endedAt) next.endedAt = context.now;
   }
   if (request.googleCalendarEventId !== undefined) {
-    meeting.googleCalendarEventId =
-      request.googleCalendarEventId === null
-        ? null
-        : sanitizeOptionalText(request.googleCalendarEventId, 512);
+    next.googleCalendarEventId = nullableText(request.googleCalendarEventId, 512);
   }
-  if (request.calendarSyncStatus) {
-    meeting.calendarSyncStatus = request.calendarSyncStatus;
-  }
+  if (request.calendarSyncStatus) next.calendarSyncStatus = request.calendarSyncStatus;
   if (request.calendarSyncError !== undefined) {
-    meeting.calendarSyncError =
-      request.calendarSyncError === null
-        ? null
-        : sanitizeOptionalText(request.calendarSyncError, 512);
+    next.calendarSyncError = nullableText(request.calendarSyncError, 512);
   }
   if (request.emailNotificationStatus) {
-    meeting.emailNotificationStatus = normalizeEmailNotificationStatus(
+    next.emailNotificationStatus = normalizeEmailNotificationStatus(
       request.emailNotificationStatus,
     );
   }
   if (request.emailNotificationError !== undefined) {
-    meeting.emailNotificationError =
-      request.emailNotificationError === null
-        ? null
-        : sanitizeOptionalText(request.emailNotificationError, 512);
+    next.emailNotificationError = nullableText(request.emailNotificationError, 512);
   }
   if (request.emailNotificationSentAt !== undefined) {
-    meeting.emailNotificationSentAt =
-      request.emailNotificationSentAt === null
-        ? null
-        : Number.isFinite(Number(request.emailNotificationSentAt)) &&
-            Number(request.emailNotificationSentAt) > 0
-          ? Number(request.emailNotificationSentAt)
-          : null;
+    next.emailNotificationSentAt = nullableStamp(request.emailNotificationSentAt);
   }
   if (request.emailReminderStatus) {
-    meeting.emailReminderStatus = normalizeEmailNotificationStatus(
-      request.emailReminderStatus,
-    );
+    next.emailReminderStatus = normalizeEmailNotificationStatus(request.emailReminderStatus);
   }
   if (request.emailReminderError !== undefined) {
-    meeting.emailReminderError =
-      request.emailReminderError === null
-        ? null
-        : sanitizeOptionalText(request.emailReminderError, 512);
+    next.emailReminderError = nullableText(request.emailReminderError, 512);
   }
   if (request.emailReminderSentAt !== undefined) {
-    meeting.emailReminderSentAt =
-      request.emailReminderSentAt === null
-        ? null
-        : Number.isFinite(Number(request.emailReminderSentAt)) &&
-            Number(request.emailReminderSentAt) > 0
-          ? Number(request.emailReminderSentAt)
-          : null;
+    next.emailReminderSentAt = nullableStamp(request.emailReminderSentAt);
   }
-
-  meeting.updatedAt = now;
-  return meeting;
+  next.updatedAt = context.now;
+  return next;
 };
 
-export const deleteScheduledMeeting = (
-  store: ScheduledMeetingStore,
-  id: string,
+export const advanceScheduledMeeting = (
+  meeting: ScheduledMeeting,
+  now: number,
 ): ScheduledMeeting | null => {
-  const meeting = store.byId.get(id);
-  if (!meeting) return null;
-  unregisterStore(store, meeting);
-  return meeting;
-};
-
-export const getScheduledMeetingById = (
-  store: ScheduledMeetingStore,
-  id: string,
-): ScheduledMeeting | null => store.byId.get(id) ?? null;
-
-export const getScheduledMeetingByRoomCode = (
-  store: ScheduledMeetingStore,
-  clientId: string,
-  roomCode: string,
-): ScheduledMeeting | null => {
-  const owner = store.byRoomCode.get(roomCodeKey(clientId, roomCode));
-  return owner ? store.byId.get(owner) ?? null : null;
-};
-
-export const moveScheduledMeetingToClient = (
-  store: ScheduledMeetingStore,
-  meetingId: string,
-  clientId: string,
-): ScheduledMeeting | null => {
-  const meeting = store.byId.get(meetingId);
-  const nextClientId = canonicalizeClientId(clientId);
-  if (!meeting || !nextClientId || meeting.clientId === nextClientId) {
-    return meeting ?? null;
+  if (meeting.status === "scheduled" && now >= meeting.scheduledStartAt) {
+    return {
+      ...meeting,
+      status: "live",
+      startedAt: meeting.startedAt || now,
+      updatedAt: now,
+    };
   }
-  if (isCodeTaken(store, nextClientId, meeting.roomCode, meeting.id)) {
-    throw new Error("That meeting code already exists in the target client.");
+  if (meeting.status === "live" && now >= meeting.scheduledEndAt) {
+    return {
+      ...meeting,
+      status: "ended",
+      endedAt: meeting.endedAt || now,
+      updatedAt: now,
+    };
   }
-  releaseRoomCode(store, meeting);
-  meeting.clientId = nextClientId;
-  meeting.updatedAt = Date.now();
-  claimRoomCode(store, meeting);
-  return meeting;
+  return null;
 };
 
-export const listScheduledMeetings = (
-  store: ScheduledMeetingStore,
-  filter: {
-    clientId?: string;
-    ownerEmail?: string;
-    includeAll?: boolean;
-    status?: ScheduledMeetingStatus[];
-  },
+export type ScheduledMeetingFilter = {
+  clientId?: string;
+  ownerEmail?: string;
+  includeAll?: boolean;
+  status?: ScheduledMeetingStatus[];
+};
+
+export const filterScheduledMeetings = (
+  meetings: readonly ScheduledMeeting[],
+  filter: ScheduledMeetingFilter,
 ): ScheduledMeeting[] => {
-  const ownerEmail = filter.ownerEmail
-    ? filter.ownerEmail.trim().toLowerCase()
-    : undefined;
-  const result: ScheduledMeeting[] = [];
-  for (const meeting of store.byId.values()) {
-    if (filter.clientId && meeting.clientId !== filter.clientId) continue;
-    if (!filter.includeAll && ownerEmail && meeting.hostEmail !== ownerEmail) {
-      continue;
-    }
-    if (filter.status && !filter.status.includes(meeting.status)) continue;
-    result.push(meeting);
-  }
-  return result.sort((a, b) => a.scheduledStartAt - b.scheduledStartAt);
+  const ownerEmail = filter.ownerEmail ? filter.ownerEmail.trim().toLowerCase() : undefined;
+  return meetings
+    .filter((meeting) => {
+      if (filter.clientId && meeting.clientId !== filter.clientId) return false;
+      if (!filter.includeAll && ownerEmail && meeting.hostEmail !== ownerEmail) return false;
+      if (filter.status && !filter.status.includes(meeting.status)) return false;
+      return true;
+    })
+    .sort((a, b) => a.scheduledStartAt - b.scheduledStartAt);
 };
 
-export type ScheduledMeetingPersistence = {
-  save: (snapshot: ScheduledMeeting[]) => MaybePromise<void>;
-  saveChanged?: (meetings: ScheduledMeeting[]) => MaybePromise<void>;
-  deleteIds?: (ids: string[]) => MaybePromise<void>;
-  reserveBookingSlot?: (
-    reservation: BookingSlotReservation,
-  ) => MaybePromise<BookingSlotLease | null>;
-  claimEmailReminder?: (
-    claim: EmailReminderClaim,
-  ) => MaybePromise<ScheduledMeeting | null>;
-  load: () => MaybePromise<ScheduledMeeting[]>;
-  close?: () => MaybePromise<void>;
-  flush?: () => Promise<void>;
-};
 
-type BookingSlotReservation = {
-  clientId: string;
-  hostEmail: string;
-  startAt: number;
-  endAt: number;
-};
-
-export type BookingSlotLease = {
-  release: () => MaybePromise<void>;
-};
-
-type EmailReminderClaim = {
-  meetingId: string;
-  now: number;
-  leadMs: number;
-};
-
-const scheduledMeetingsSqlitePath = (): string => storeSqlitePath("scheduled-meetings");
-
-const scheduledMeetingsPath = (): string => storeJsonPath("scheduled-meetings");
-
-
-type SqliteStatement = {
-  run: (...params: unknown[]) => unknown;
-  all: (...params: unknown[]) => unknown[];
-};
-
-type SqliteDatabase = {
-  close: () => void;
-  exec: (sql: string) => void;
-  prepare: (sql: string) => SqliteStatement;
-};
-
-const loadNodeSqlite = (): {
-  DatabaseSync: new (path: string) => SqliteDatabase;
-} => {
-  const require = createRequire(import.meta.url);
-  return require("node:sqlite") as {
-    DatabaseSync: new (path: string) => SqliteDatabase;
-  };
-};
-
-const normalizeStoredMeeting = (raw: unknown): ScheduledMeeting | null => {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const record = raw as Record<string, unknown>;
+export const normalizeStoredMeeting = (raw: unknown): ScheduledMeeting | null => {
+  const record = asRecord(raw);
   if (typeof record.id !== "string" || !record.id) return null;
   if (typeof record.clientId !== "string" || !record.clientId) return null;
   if (typeof record.roomCode !== "string" || !record.roomCode) return null;
   if (typeof record.hostEmail !== "string" || !record.hostEmail) return null;
-  const scheduledStartAt = Number(record.scheduledStartAt);
-  if (!Number.isFinite(scheduledStartAt)) return null;
-  const scheduledEndAt = Number.isFinite(Number(record.scheduledEndAt))
-    ? Number(record.scheduledEndAt)
-    : scheduledStartAt + DEFAULT_DURATION_MS;
+  const scheduledStartAt = storedTimestampOrNull(record.scheduledStartAt);
+  if (scheduledStartAt === null) return null;
+  const scheduledEndAt = storedTimestampOrNull(record.scheduledEndAt) ?? scheduledStartAt + DEFAULT_DURATION_MS;
   const rawStatus = record.status;
   const status: ScheduledMeetingStatus =
-    rawStatus === "live" ||
-    rawStatus === "ended" ||
-    rawStatus === "cancelled"
+    rawStatus === "live" || rawStatus === "ended" || rawStatus === "cancelled"
       ? rawStatus
       : "scheduled";
-  const now = Date.now();
+  const updatedAtRaw = storedTimestampOrNull(record.updatedAt);
+  const createdAt = storedTimestampOrNull(record.createdAt) ?? updatedAtRaw ?? 0;
+  const text = (value: unknown): string | null => (typeof value === "string" ? value : null);
   return {
     id: record.id,
     clientId: canonicalizeClientId(record.clientId),
@@ -592,664 +337,55 @@ const normalizeStoredMeeting = (raw: unknown): ScheduledMeeting | null => {
     title: typeof record.title === "string" ? record.title : "Scheduled meeting",
     hostEmail: record.hostEmail,
     hostName: typeof record.hostName === "string" ? record.hostName : "",
-    hostUserId: typeof record.hostUserId === "string" ? record.hostUserId : null,
+    hostUserId: text(record.hostUserId),
     scheduledStartAt,
     scheduledEndAt,
     status,
     startedAt: storedTimestampOrNull(record.startedAt),
     endedAt: storedTimestampOrNull(record.endedAt),
-    createdAt: Number.isFinite(Number(record.createdAt))
-      ? Number(record.createdAt)
-      : now,
+    createdAt,
     createdBy: typeof record.createdBy === "string" ? record.createdBy : record.hostEmail,
-    updatedAt: Number.isFinite(Number(record.updatedAt))
-      ? Number(record.updatedAt)
-      : now,
+    updatedAt: updatedAtRaw ?? createdAt,
     source: record.source === "booking_link" ? "booking_link" : "manual",
-    eventTypeId:
-      typeof record.eventTypeId === "string" ? record.eventTypeId : null,
-    attendeeName:
-      typeof record.attendeeName === "string" ? record.attendeeName : null,
-    attendeeEmail:
-      typeof record.attendeeEmail === "string" ? record.attendeeEmail : null,
-    attendeeNote:
-      typeof record.attendeeNote === "string" ? record.attendeeNote : null,
-    attendeeTimeZone:
-      typeof record.attendeeTimeZone === "string"
-        ? record.attendeeTimeZone
-        : null,
-    googleCalendarEventId:
-      typeof record.googleCalendarEventId === "string"
-        ? record.googleCalendarEventId
-        : null,
+    eventTypeId: text(record.eventTypeId),
+    attendeeName: text(record.attendeeName),
+    attendeeEmail: text(record.attendeeEmail),
+    attendeeNote: text(record.attendeeNote),
+    attendeeTimeZone: text(record.attendeeTimeZone),
+    googleCalendarEventId: text(record.googleCalendarEventId),
     calendarSyncStatus:
       record.calendarSyncStatus === "pending" ||
       record.calendarSyncStatus === "synced" ||
       record.calendarSyncStatus === "failed"
         ? record.calendarSyncStatus
         : "not_required",
-    calendarSyncError:
-      typeof record.calendarSyncError === "string"
-        ? record.calendarSyncError
-        : null,
-    emailNotificationStatus: normalizeEmailNotificationStatus(
-      record.emailNotificationStatus,
-    ),
-    emailNotificationError:
-      typeof record.emailNotificationError === "string"
-        ? record.emailNotificationError
-        : null,
+    calendarSyncError: text(record.calendarSyncError),
+    emailNotificationStatus: normalizeEmailNotificationStatus(record.emailNotificationStatus),
+    emailNotificationError: text(record.emailNotificationError),
     emailNotificationSentAt: storedTimestampOrNull(record.emailNotificationSentAt),
-    emailReminderStatus: normalizeEmailNotificationStatus(
-      record.emailReminderStatus,
-    ),
-    emailReminderError:
-      typeof record.emailReminderError === "string"
-        ? record.emailReminderError
-        : null,
+    emailReminderStatus: normalizeEmailNotificationStatus(record.emailReminderStatus),
+    emailReminderError: text(record.emailReminderError),
     emailReminderSentAt: storedTimestampOrNull(record.emailReminderSentAt),
   };
 };
 
-const createSqliteScheduledMeetingPersistence = (
-  path: string = scheduledMeetingsSqlitePath(),
-): ScheduledMeetingPersistence => {
-  const dir = dirname(path);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
+export const shouldSendSchedulingReminder = (
+  meeting: ScheduledMeeting,
+  now: number,
+  leadMs: number,
+): boolean => {
+  if (leadMs <= 0) return false;
+  if (meeting.source !== "booking_link") return false;
+  if (meeting.status !== "scheduled") return false;
+  if (!meeting.attendeeEmail) return false;
+  if (
+    meeting.emailReminderStatus === "pending" ||
+    meeting.emailReminderStatus === "sent" ||
+    meeting.emailReminderStatus === "failed"
+  ) {
+    return false;
   }
-  const { DatabaseSync } = loadNodeSqlite();
-  return openSqliteStore(new DatabaseSync(path), path, (db) => prepareSqliteScheduledMeetingPersistence(db));
-};
-
-const prepareSqliteScheduledMeetingPersistence = (db: SqliteDatabase): ScheduledMeetingPersistence => {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS scheduled_meetings (
-      id TEXT PRIMARY KEY,
-      client_id TEXT NOT NULL,
-      room_code TEXT NOT NULL,
-      status TEXT NOT NULL,
-      scheduled_start_at INTEGER NOT NULL,
-      scheduled_end_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      payload_json TEXT NOT NULL
-    );
-    -- Not unique: a code is reused once its earlier meeting has ended or
-    -- been cancelled, and the store keeps both. The unique index made every
-    -- save that held both fail, silently, for good.
-    DROP INDEX IF EXISTS scheduled_meetings_code_idx;
-    CREATE INDEX IF NOT EXISTS scheduled_meetings_client_code_idx
-      ON scheduled_meetings(client_id, room_code);
-    CREATE INDEX IF NOT EXISTS scheduled_meetings_status_start_idx
-      ON scheduled_meetings(status, scheduled_start_at);
-  `);
-
-  const insert = db.prepare(`
-    INSERT INTO scheduled_meetings (
-      id, client_id, room_code, status, scheduled_start_at,
-      scheduled_end_at, updated_at, payload_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET
-      client_id = excluded.client_id,
-      room_code = excluded.room_code,
-      status = excluded.status,
-      scheduled_start_at = excluded.scheduled_start_at,
-      scheduled_end_at = excluded.scheduled_end_at,
-      updated_at = excluded.updated_at,
-      payload_json = excluded.payload_json
-    WHERE excluded.updated_at >= scheduled_meetings.updated_at
-  `);
-  const loadRows = db.prepare(`
-    SELECT payload_json
-    FROM scheduled_meetings
-    ORDER BY scheduled_start_at ASC, id ASC
-  `);
-  const deleteById = db.prepare("DELETE FROM scheduled_meetings WHERE id = ?");
-  let knownIds = new Set<string>();
-
-  const upsertMeeting = (meeting: ScheduledMeeting): void => {
-    insert.run(
-      meeting.id,
-      meeting.clientId,
-      meeting.roomCode,
-      meeting.status,
-      meeting.scheduledStartAt,
-      meeting.scheduledEndAt,
-      meeting.updatedAt,
-      JSON.stringify(meeting),
-    );
-  };
-
-  return {
-    save: (snapshot) => {
-      try {
-        const snapshotIds = new Set(snapshot.map((meeting) => meeting.id));
-        db.exec("BEGIN IMMEDIATE");
-        for (const meeting of snapshot) {
-          upsertMeeting(meeting);
-        }
-        for (const id of knownIds) {
-          if (!snapshotIds.has(id)) {
-            deleteById.run(id);
-          }
-        }
-        db.exec("COMMIT");
-        knownIds = snapshotIds;
-      } catch (error) {
-        try {
-          db.exec("ROLLBACK");
-        } catch {}
-        Logger.error("Failed to persist scheduled meetings", error);
-      }
-    },
-    saveChanged: (meetings) => {
-      if (meetings.length === 0) return;
-      try {
-        db.exec("BEGIN IMMEDIATE");
-        for (const meeting of meetings) {
-          upsertMeeting(meeting);
-          knownIds.add(meeting.id);
-        }
-        db.exec("COMMIT");
-      } catch (error) {
-        try {
-          db.exec("ROLLBACK");
-        } catch {}
-        Logger.error("Failed to persist changed scheduled meetings", error);
-      }
-    },
-    deleteIds: (ids) => {
-      if (ids.length === 0) return;
-      try {
-        db.exec("BEGIN IMMEDIATE");
-        for (const id of ids) {
-          deleteById.run(id);
-          knownIds.delete(id);
-        }
-        db.exec("COMMIT");
-      } catch (error) {
-        try {
-          db.exec("ROLLBACK");
-        } catch {}
-        Logger.error("Failed to delete scheduled meetings", error);
-      }
-    },
-    load: () => {
-      try {
-        const meetings = loadRows
-          .all()
-          .map((row) => {
-            const payload =
-              row && typeof row === "object" && "payload_json" in row
-                ? String((row).payload_json)
-                : "";
-            if (!payload) return null;
-            return normalizeStoredMeeting(JSON.parse(payload));
-          })
-          .filter((entry): entry is ScheduledMeeting => Boolean(entry));
-        knownIds = new Set(meetings.map((meeting) => meeting.id));
-        return meetings;
-      } catch (error) {
-        Logger.error("Failed to load scheduled meetings", error);
-        return [];
-      }
-    },
-    close: () => db.close(),
-  };
-};
-
-const createFileScheduledMeetingPersistence = (
-  path: string = scheduledMeetingsPath(),
-): ScheduledMeetingPersistence => ({
-  save: (snapshot) => {
-    try {
-      writePrivateFileAtomic(path, JSON.stringify(snapshot, null, 2));
-    } catch (error) {
-      Logger.error("Failed to persist scheduled meetings to JSON", error);
-    }
-  },
-  load: () => {
-    try {
-      if (!existsSync(path)) return [];
-      const raw = readFileSync(path, "utf8");
-      const data: unknown = JSON.parse(raw);
-      if (!Array.isArray(data)) return [];
-      return data
-        .map((entry) => normalizeStoredMeeting(entry))
-        .filter((entry): entry is ScheduledMeeting => Boolean(entry));
-    } catch (error) {
-      Logger.error("Failed to load scheduled meetings from JSON", error);
-      return [];
-    }
-  },
-});
-
-export const scheduledMeetingJsonStore: JsonStoreAdapter<ScheduledMeeting[]> = {
-  decode: (data) => {
-    if (!Array.isArray(data)) throw new Error("it is not a list of scheduled meetings");
-    return data
-      .map((entry) => normalizeStoredMeeting(entry))
-      .filter((entry): entry is ScheduledMeeting => Boolean(entry));
-  },
-  write: (path, meetings) => {
-    void createFileScheduledMeetingPersistence(path).save(meetings);
-  },
-  collections: {
-    meetings: jsonStoreCollection<ScheduledMeeting[], ScheduledMeeting>({
-      index: "byId",
-      rows: (meetings) => meetings,
-      key: (meeting) => meeting.id,
-      stamp: (meeting) => meeting.updatedAt,
-      claims: scheduledMeetingClaims,
-      canDelete: true,
-    }),
-  },
-  build: (_base, rows) => rows.meetings as ScheduledMeeting[],
-};
-
-const RELEASE_BOOKING_SLOT_LOCK_SCRIPT = `
-local key = KEYS[1]
-local token = ARGV[1]
-if redis.call("GET", key) == token then
-  return redis.call("DEL", key)
-end
-return 0
-`;
-
-const CLAIM_EMAIL_REMINDER_SCRIPT = `
-local key = KEYS[1]
-local meetingId = ARGV[1]
-local now = tonumber(ARGV[2]) or 0
-local leadMs = tonumber(ARGV[3]) or 0
-
-if leadMs <= 0 then
-  return nil
-end
-
-local payload = redis.call("HGET", key, meetingId)
-if not payload then
-  return nil
-end
-
-local ok, meeting = pcall(cjson.decode, payload)
-if not ok or type(meeting) ~= "table" then
-  return nil
-end
-
-if meeting["source"] ~= "booking_link" then
-  return nil
-end
-if meeting["status"] ~= "scheduled" then
-  return nil
-end
-if type(meeting["attendeeEmail"]) ~= "string" or meeting["attendeeEmail"] == "" then
-  return nil
-end
-
-local reminderStatus = meeting["emailReminderStatus"]
-if reminderStatus == "pending" or reminderStatus == "sent" or reminderStatus == "failed" then
-  return nil
-end
-
-local scheduledStartAt = tonumber(meeting["scheduledStartAt"]) or 0
-local createdAt = tonumber(meeting["createdAt"]) or 0
-local reminderDueAt = scheduledStartAt - leadMs
-if createdAt > reminderDueAt then
-  return nil
-end
-if now < reminderDueAt or now >= scheduledStartAt then
-  return nil
-end
-
-meeting["emailReminderStatus"] = "pending"
-meeting["emailReminderError"] = cjson.null
-meeting["emailReminderSentAt"] = cjson.null
-meeting["updatedAt"] = now
-
-local nextPayload = cjson.encode(meeting)
-redis.call("HSET", key, meetingId, nextPayload)
-return nextPayload
-`;
-
-const bookingSlotLockTtlMs = (): number => {
-  const parsed = Number(process.env.SFU_BOOKING_SLOT_LOCK_TTL_MS);
-  return Number.isFinite(parsed) && parsed >= 1000 ? parsed : 30000;
-};
-
-const bookingSlotLockKey = (
-  keyPrefix: string,
-  reservation: BookingSlotReservation,
-): string => {
-  const raw = [reservation.clientId, reservation.hostEmail.toLowerCase()].join("|");
-  return `${keyPrefix}:booking-slot-lock:${Buffer.from(raw).toString("base64url")}`;
-};
-
-class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
-  private client: RedisPersistenceClient;
-  private fallback: ScheduledMeetingPersistence;
-  private key: string;
-  private keyPrefix: string;
-  private startPromise: Promise<void> | null = null;
-  private started = false;
-  private pendingWrite: Promise<void> = Promise.resolve();
-  private knownMeetings = new Map<string, ScheduledMeeting>();
-
-  constructor(options: {
-    redisUrl: string;
-    keyPrefix: string;
-    fallback: ScheduledMeetingPersistence;
-  }) {
-    this.client = createRedisPersistenceClient(
-      "ScheduledMeetings",
-      options.redisUrl,
-    );
-    this.fallback = options.fallback;
-    this.keyPrefix = options.keyPrefix;
-    this.key = `${options.keyPrefix}:scheduled-meetings`;
-  }
-
-  async start(): Promise<void> {
-    if (this.started) return;
-    if (this.startPromise) {
-      await this.startPromise;
-      return;
-    }
-
-    this.startPromise = (async () => {
-      await this.client.connect();
-      this.started = true;
-      Logger.success("[ScheduledMeetings] Redis persistence connected");
-    })();
-
-    try {
-      await this.startPromise;
-    } catch (error) {
-      this.startPromise = null;
-      throw error;
-    }
-  }
-
-  save(snapshot: ScheduledMeeting[]): void {
-    this.knownMeetings = new Map(snapshot.map((meeting) => [meeting.id, meeting]));
-    void this.fallback.save(snapshot);
-    const payload = snapshot.map((meeting) => [
-      meeting.id,
-      JSON.stringify(meeting),
-    ] as const);
-    this.queueWrite("save snapshot", async () => {
-      const transaction = this.client.multi();
-      transaction.del(this.key);
-      if (payload.length > 0) {
-        transaction.hSet(this.key, Object.fromEntries(payload));
-      }
-      await transaction.exec();
-    });
-  }
-
-  saveChanged(meetings: ScheduledMeeting[]): void {
-    if (meetings.length === 0) return;
-    for (const meeting of meetings) {
-      this.knownMeetings.set(meeting.id, meeting);
-    }
-    void this.fallback.save(Array.from(this.knownMeetings.values()));
-    const payload = Object.fromEntries(
-      meetings.map((meeting) => [meeting.id, JSON.stringify(meeting)]),
-    );
-    this.queueWrite("save changed meetings", async () => {
-      await this.client.hSet(this.key, payload);
-    });
-  }
-
-  deleteIds(ids: string[]): void {
-    if (ids.length === 0) return;
-    for (const id of ids) {
-      this.knownMeetings.delete(id);
-    }
-    void this.fallback.save(Array.from(this.knownMeetings.values()));
-    this.queueWrite("delete meetings", async () => {
-      await this.client.hDel(this.key, ids);
-    });
-  }
-
-  async reserveBookingSlot(
-    reservation: BookingSlotReservation,
-  ): Promise<BookingSlotLease | null> {
-    await this.start();
-    const key = bookingSlotLockKey(this.keyPrefix, reservation);
-    const token = randomUUID();
-    const result = await this.client.sendCommand([
-      "SET",
-      key,
-      token,
-      "PX",
-      String(bookingSlotLockTtlMs()),
-      "NX",
-    ]);
-    if (String(result) !== "OK") return null;
-    return {
-      release: async () => {
-        await this.client.sendCommand([
-          "EVAL",
-          RELEASE_BOOKING_SLOT_LOCK_SCRIPT,
-          "1",
-          key,
-          token,
-        ]);
-      },
-    };
-  }
-
-  async claimEmailReminder(
-    claim: EmailReminderClaim,
-  ): Promise<ScheduledMeeting | null> {
-    await this.start();
-    const result = await this.client.sendCommand([
-      "EVAL",
-      CLAIM_EMAIL_REMINDER_SCRIPT,
-      "1",
-      this.key,
-      claim.meetingId,
-      String(claim.now),
-      String(claim.leadMs),
-    ]);
-    if (typeof result !== "string" || !result) return null;
-    const meeting = normalizeStoredMeeting(JSON.parse(result));
-    if (!meeting) return null;
-    this.knownMeetings.set(meeting.id, meeting);
-    if (this.fallback.saveChanged) {
-      await Promise.resolve(this.fallback.saveChanged([meeting]));
-    } else {
-      await Promise.resolve(
-        this.fallback.save(Array.from(this.knownMeetings.values())),
-      );
-    }
-    return meeting;
-  }
-
-  async load(): Promise<ScheduledMeeting[]> {
-    try {
-      await this.start();
-      const values = await this.client.hVals(this.key);
-      if (values.length > 0) {
-        const meetings = values
-          .map((value) => normalizeStoredMeeting(JSON.parse(value)))
-          .filter((entry): entry is ScheduledMeeting => Boolean(entry));
-        this.knownMeetings = new Map(
-          meetings.map((meeting) => [meeting.id, meeting]),
-        );
-        return meetings;
-      }
-
-      const fallbackMeetings = await this.fallback.load();
-      this.knownMeetings = new Map(
-        fallbackMeetings.map((meeting) => [meeting.id, meeting]),
-      );
-      if (fallbackMeetings.length > 0) {
-        this.save(fallbackMeetings);
-        await this.flush();
-        Logger.info(
-          `Migrated ${fallbackMeetings.length} scheduled meeting(s) into Redis persistence`,
-        );
-      }
-      return fallbackMeetings;
-    } catch (error) {
-      Logger.error(
-        "Failed to load scheduled meetings from Redis; falling back to local persistence",
-        error,
-      );
-      const fallbackMeetings = await this.fallback.load();
-      this.knownMeetings = new Map(
-        fallbackMeetings.map((meeting) => [meeting.id, meeting]),
-      );
-      return fallbackMeetings;
-    }
-  }
-
-  async flush(): Promise<void> {
-    await this.pendingWrite;
-  }
-
-  async close(): Promise<void> {
-    await this.flush();
-    await this.fallback.close?.();
-    if (!this.started) return;
-    this.started = false;
-    await this.client.quit();
-  }
-
-  private queueWrite(label: string, write: () => Promise<void>): void {
-    const writePromise = this.pendingWrite
-      .catch(() => undefined)
-      .then(async () => {
-        await this.start();
-        await write();
-      });
-    this.pendingWrite = writePromise.catch((error) => {
-      Logger.error(`Failed to persist scheduled meetings to Redis (${label})`, error);
-      throw error;
-    });
-  }
-}
-
-const createRedisScheduledMeetingPersistence = (
-  redisUrl: string = resolveRedisPersistenceUrl(),
-  keyPrefix: string = resolveRedisPersistenceKeyPrefix(),
-  fallback: ScheduledMeetingPersistence = createSqliteScheduledMeetingPersistence(),
-): ScheduledMeetingPersistence =>
-  new RedisScheduledMeetingPersistence({ redisUrl, keyPrefix, fallback });
-
-const migrateJsonScheduledMeetingsToSqlite = (
-  sqlite: ScheduledMeetingPersistence,
-  json: ScheduledMeetingPersistence,
-): number => {
-  const existing = sqlite.load() as ScheduledMeeting[];
-  if (existing.length > 0) return 0;
-
-  const legacy = json.load() as ScheduledMeeting[];
-  if (legacy.length === 0) return 0;
-
-  void sqlite.save(legacy);
-  return (sqlite.load() as ScheduledMeeting[]).length;
-};
-
-export const createScheduledMeetingPersistence = (): ScheduledMeetingPersistence => {
-  const mode = process.env.SCHEDULED_MEETINGS_PERSISTENCE?.trim().toLowerCase();
-  if (mode === "json" || mode === "file") {
-    adoptRecoveredJsonStore(scheduledMeetingsPath(), "scheduled-meetings.json", scheduledMeetingJsonStore);
-    return createFileScheduledMeetingPersistence();
-  }
-
-  const jsonPersistence = createFileScheduledMeetingPersistence();
-  const redisUrl = resolveRedisPersistenceUrl();
-
-  const sqlitePersistence = createSqliteScheduledMeetingPersistence();
-  const migrated = migrateJsonScheduledMeetingsToSqlite(
-    sqlitePersistence,
-    jsonPersistence,
-  );
-  if (migrated > 0) {
-    Logger.info(
-      `Migrated ${migrated} scheduled meeting(s) from JSON into SQLite`,
-    );
-  }
-  if (shouldUseRedisPersistence(mode, redisUrl)) {
-    if (!redisUrl) {
-      throw new Error(
-        "SCHEDULED_MEETINGS_PERSISTENCE=redis requires SFU_PERSISTENCE_REDIS_URL, SFU_REDIS_URL, or REDIS_URL.",
-      );
-    }
-    return createRedisScheduledMeetingPersistence(
-      redisUrl,
-      resolveRedisPersistenceKeyPrefix(),
-      sqlitePersistence,
-    );
-  }
-  return sqlitePersistence;
-};
-
-export const loadPersistedMeetings = (
-  store: ScheduledMeetingStore,
-  persistence: ScheduledMeetingPersistence,
-): Promise<number> => Promise.resolve(persistence.load()).then((meetings) => {
-  for (const meeting of meetings) {
-    registerStore(store, meeting);
-  }
-  return meetings.length;
-});
-
-const persistScheduledMeetings = (
-  store: ScheduledMeetingStore,
-  persistence: ScheduledMeetingPersistence,
-): Promise<void> =>
-  Promise.resolve(persistence.save(Array.from(store.byId.values()))).then(() =>
-    persistence.flush?.(),
-  );
-
-export const persistScheduledMeetingChanges = (
-  store: ScheduledMeetingStore,
-  persistence: ScheduledMeetingPersistence,
-  meetings: ScheduledMeeting[],
-): Promise<void> => {
-  if (meetings.length === 0) return Promise.resolve();
-  if (persistence.saveChanged) {
-    return Promise.resolve(persistence.saveChanged(meetings)).then(() =>
-      persistence.flush?.(),
-    );
-  }
-  return persistScheduledMeetings(store, persistence);
-};
-
-export const persistScheduledMeetingDeletes = (
-  store: ScheduledMeetingStore,
-  persistence: ScheduledMeetingPersistence,
-  ids: string[],
-): Promise<void> => {
-  if (ids.length === 0) return Promise.resolve();
-  if (persistence.deleteIds) {
-    return Promise.resolve(persistence.deleteIds(ids)).then(() =>
-      persistence.flush?.(),
-    );
-  }
-  return persistScheduledMeetings(store, persistence);
-};
-
-export const advanceScheduledMeetings = (
-  store: ScheduledMeetingStore,
-  now = Date.now(),
-): ScheduledMeeting[] => {
-  const changed: ScheduledMeeting[] = [];
-  for (const meeting of store.byId.values()) {
-    if (meeting.status === "scheduled" && now >= meeting.scheduledStartAt) {
-      meeting.status = "live";
-      if (!meeting.startedAt) meeting.startedAt = now;
-      meeting.updatedAt = now;
-      changed.push(meeting);
-    } else if (meeting.status === "live" && now >= meeting.scheduledEndAt) {
-      meeting.status = "ended";
-      if (!meeting.endedAt) meeting.endedAt = now;
-      meeting.updatedAt = now;
-      changed.push(meeting);
-    }
-  }
-  return changed;
+  const reminderDueAt = meeting.scheduledStartAt - leadMs;
+  if (meeting.createdAt > reminderDueAt) return false;
+  return now >= reminderDueAt && now < meeting.scheduledStartAt;
 };

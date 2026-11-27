@@ -3,12 +3,14 @@ import type { Router, Worker } from "mediasoup/types";
 import type { Server as SocketIOServer, Socket } from "socket.io";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
 import { seatIdOf } from "../server/identity.js";
+import { advanceScheduledWebinars, notifyRoomConfig } from "../server/scheduledWebinarScheduler.js";
 import type { SfuAuthPayload } from "../server/socket/auth.js";
 import { createConnectionContext } from "../server/socket/context.js";
 import { registerJoinRoomHandler } from "../server/socket/handlers/joinRoom.js";
 import { createSfuState, type SfuState } from "../server/state.js";
 import { getOrCreateWebinarRoomConfig, setCustomWebinarLinkSlug } from "../server/webinar.js";
 import type { ScheduledWebinar } from "../types.js";
+import { seed } from "./support/controlPlane.js";
 
 type Handler = (...args: never[]) => void | Promise<void>;
 
@@ -125,9 +127,7 @@ const scheduleWebinarFor = (state: SfuState) => {
     coHostInviteTokenHash: null,
     coHostInviteTokenCreatedAt: null,
   };
-  state.scheduledWebinars.byId.set(webinar.id, webinar);
-  state.scheduledWebinars.bySlug.set(webinar.linkSlug, webinar.id);
-  state.scheduledWebinars.byRoomChannel.set("conclave:room", webinar.id);
+  return seed(state.controlPlane, "webinar", webinar);
 };
 
 const lockedWebinarWithAnInvite = async (mergeFits: (call: number) => boolean, commits = true) => {
@@ -194,7 +194,7 @@ describe("a stage invite held under another of a guest's passes (Greptile)", () 
     ["stop fitting while the join waits for the room", (call: number) => call === 1, false],
   ])("in a scheduled webinar, lets the guest onto the stage only when the room's apps %s", async (_case, mergeFits, onTheStage) => {
     const { state, room } = await lockedWebinarWithAnInvite(mergeFits);
-    scheduleWebinarFor(state);
+    await scheduleWebinarFor(state);
 
     const attempt = await join(state, onStage);
 
@@ -220,7 +220,7 @@ describe("a join whose guest link cannot commit", () => {
       }
       const joining = { ...onStage, guestWas };
       if (path === "stage invite") room.promoteWebinarUserKey(joining.userId);
-      if (path === "webinar promoted") scheduleWebinarFor(state);
+      if (path === "webinar promoted") await scheduleWebinarFor(state);
       const admissionCode = path === "admitted" ? room.createAdmission().admissionCode : undefined;
       const oldEmit = vi.fn();
       const oldDisconnect = vi.fn();
@@ -238,7 +238,7 @@ describe("a join whose guest link cannot commit", () => {
         invitedViewer.guestProof,
       );
       room.startCleanupTimer(vi.fn());
-      const timer = room.cleanupTimer;
+      const timer = room.cleanupDeadline;
       const hostKey = room.hostUserKey;
       const pending = [...room.pendingClients.entries()];
       const clients = [...room.clients.keys()];
@@ -256,7 +256,7 @@ describe("a join whose guest link cannot commit", () => {
         });
         expect(room.hostUserKey).toBe(hostKey);
         expect(room.isAdminUserKey(joining.userId)).toBe(false);
-        expect(room.cleanupTimer).toBe(timer);
+        expect(room.cleanupDeadline).toBe(timer);
         expect([...room.pendingClients.entries()]).toEqual(pending);
         expect([...room.clients.keys()]).toEqual(clients);
         expect(room.decisionRecordCount).toBe(decisions);
@@ -270,6 +270,15 @@ describe("a join whose guest link cannot commit", () => {
         expect(oldDisconnect).not.toHaveBeenCalled();
         expect(broadcast).not.toHaveBeenCalled();
         for (const emit of emitters) expect(emit).not.toHaveBeenCalled();
+
+        if (path === "webinar promoted") {
+          const notify = notifyRoomConfig(state, () => io);
+          await advanceScheduledWebinars(state, Date.now(), notify);
+          await advanceScheduledWebinars(state, Date.now(), notify);
+          expect(broadcast.mock.calls).toEqual([
+            ["webinar:configChanged", expect.objectContaining({ linkSlug: "scheduled-launch" })],
+          ]);
+        }
 
         if (admissionCode) {
           room.setGuestIdentityMerger(() => ({ commit: () => true }));

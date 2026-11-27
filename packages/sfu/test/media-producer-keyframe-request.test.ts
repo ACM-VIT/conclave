@@ -63,6 +63,7 @@ const registerFixture = ({ producerId = "publisher-video" } = {}) => {
     currentUserKey: null,
     activeConclaveAnswers: new Map(),
     adminHandlersRegistered: false,
+    joinAttempts: 0,
   });
 
   return { consumer, getProducer, handlers, requestKeyFrame };

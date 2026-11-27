@@ -27,9 +27,11 @@ import {
   buildMicrophoneOpusCodecOptions,
   type AudioProducerNetworkProfile,
 } from "../lib/constants";
+import { createAdmission, revokeAdmission } from "../lib/admissions";
 import { getBrowserNetworkSnapshot } from "../lib/network-information";
 import { ServerError } from "../lib/server-error";
 import { resolveBrowserSfuClientId } from "@/lib/sfu-client-id";
+import { captureGeneration, createHeldDestination } from "../lib/media-captures";
 
 type VoiceAgentStatus = "idle" | "starting" | "running" | "error";
 
@@ -52,10 +54,13 @@ type RuntimeState = {
   sfuSocket: Socket | null;
   producerTransport: Transport | null;
   producer: Producer | null;
+  revokeAdmission: (() => void) | null;
 };
 
 type UseVoiceAgentParticipantOptions = {
   roomAi?: RoomAiController;
+  // The host's own connection to the meeting, which admits the agent.
+  hostSocketRef: React.MutableRefObject<Socket | null>;
   roomId: string;
   isJoined: boolean;
   isAdmin: boolean;
@@ -339,6 +344,7 @@ const createRuntimeState = (): RuntimeState => ({
   sfuSocket: null,
   producerTransport: null,
   producer: null,
+  revokeAdmission: null,
 });
 
 const disconnectMixSources = (runtime: RuntimeState) => {
@@ -366,6 +372,8 @@ const closeRuntimeState = (runtime: RuntimeState) => {
       runtime.sfuSocket.disconnect();
     } catch {}
   }
+  runtime.revokeAdmission?.();
+  runtime.revokeAdmission = null;
   if (runtime.openAiDataChannel) {
     try {
       runtime.openAiDataChannel.close();
@@ -462,6 +470,7 @@ const joinRoomAsAgent = async (
   socket: Socket,
   roomId: string,
   sessionId: string,
+  admissionCode: string | undefined,
 ): Promise<JoinRoomResponse> => {
   return new Promise<JoinRoomResponse>((resolve, reject) => {
     let settled = false;
@@ -476,6 +485,7 @@ const joinRoomAsAgent = async (
         roomId,
         sessionId,
         displayName: AGENT_DISPLAY_NAME,
+        ...(admissionCode ? { admissionCode } : {}),
       },
       (response: JoinRoomResponse | JoinRoomErrorResponse) => {
         if (settled) return;
@@ -633,6 +643,7 @@ const waitForDataChannelOpen = (channel: RTCDataChannel) => {
 
 export function useVoiceAgentParticipant({
   roomAi,
+  hostSocketRef,
   roomId,
   isJoined,
   isAdmin,
@@ -667,6 +678,24 @@ export function useVoiceAgentParticipant({
   const resolveDisplayNameRef = useRef(resolveDisplayName);
   const lastHeldSpeakerRef = useRef<{ id: string; ts: number } | null>(null);
   const holdExpiryTimeoutRef = useRef<number | null>(null);
+
+  // Agent admissions still to take back. A revoke only lands while the host
+  // is in the meeting, and the agent often stops because the host dropped, so
+  // one that missed is sent again when the host is back.
+  const pendingRevocationsRef = useRef(new Set<string>());
+  const flushRevocations = useCallback(() => {
+    const hostSocket = hostSocketRef.current;
+    if (!hostSocket?.connected) return;
+    for (const userKey of pendingRevocationsRef.current) {
+      revokeAdmission(hostSocket, userKey).then(
+        () => pendingRevocationsRef.current.delete(userKey),
+        () => {},
+      );
+    }
+  }, [hostSocketRef]);
+  useEffect(() => {
+    if (isJoined) flushRevocations();
+  }, [isJoined, flushRevocations]);
 
   const [status, setStatus] = useState<VoiceAgentStatus>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -1073,6 +1102,7 @@ export function useVoiceAgentParticipant({
 
     closeRuntimeState(runtimeRef.current);
     const runtime = createRuntimeState();
+    const generation = captureGeneration();
     runtimeRef.current = runtime;
     pendingRemoteTrackRef.current = null;
 
@@ -1088,7 +1118,7 @@ export function useVoiceAgentParticipant({
         latencyHint: "interactive",
       });
       runtime.openAiMixDestination =
-        runtime.openAiMixContext.createMediaStreamDestination();
+        createHeldDestination(runtime.openAiMixContext, generation);
       runtime.openAiMicStream = runtime.openAiMixDestination.stream;
       await rebuildOpenAiMix(runtime);
 
@@ -1279,6 +1309,28 @@ export function useVoiceAgentParticipant({
       }
       if (runtimeRef.current !== runtime) return;
 
+      // New meetings are locked, and the agent arrives as a guest nobody has
+      // let in. The host starting it is the admission: their connection lets
+      // in the identity /api/sfu/join gave the agent, and takes that back
+      // when the agent stops.
+      const agentUserKey = `guest-${agentSessionId}`;
+      const revokeAgentAdmission = () => {
+        pendingRevocationsRef.current.add(agentUserKey);
+        flushRevocations();
+      };
+      const hostSocket = hostSocketRef.current;
+      const admissionCode = hostSocket?.connected
+        ? await createAdmission(hostSocket).catch((error) => {
+            console.warn("[Voice Agent] Could not admit the agent ahead of its join.", error);
+            return undefined;
+          })
+        : undefined;
+      if (runtimeRef.current !== runtime) {
+        revokeAgentAdmission();
+        return;
+      }
+      runtime.revokeAdmission = revokeAgentAdmission;
+
       const connectAgentSocket = async (url: string) => {
         const socket = await createSocketConnection(url, token);
         runtime.sfuSocket = socket;
@@ -1298,6 +1350,7 @@ export function useVoiceAgentParticipant({
             agentSocket,
             roomId,
             agentSessionId,
+            admissionCode,
           );
           break;
         } catch (error) {
@@ -1375,7 +1428,9 @@ export function useVoiceAgentParticipant({
   }, [
     buildSessionInstructions,
     failRuntime,
+    flushRevocations,
     handleRealtimeToolCall,
+    hostSocketRef,
     isAdmin,
     isJoined,
     model,

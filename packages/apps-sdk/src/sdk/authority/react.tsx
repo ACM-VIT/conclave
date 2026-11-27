@@ -67,14 +67,14 @@ export function AuthorityProvider({ socket, joined, children }: AuthorityProvide
 
 export type AuthorityAppClient<C extends AuthorityContract> = {
   state: AuthoritySessionState<C>;
-  act<K extends ActionName<C>>(
+  act: <K extends ActionName<C>>(
     action: K,
     input: ActionInput<C, K>,
-  ): Promise<AuthorityResult<ActionReceipt<C, K>>>;
-  query<K extends QueryName<C>>(
+  ) => Promise<AuthorityResult<ActionReceipt<C, K>>>;
+  query: <K extends QueryName<C>>(
     query: K,
     input: QueryInput<C, K>,
-  ): Promise<AuthorityResult<QueryOutput<C, K>>>;
+  ) => Promise<AuthorityResult<QueryOutput<C, K>>>;
 };
 
 const UNSUPPORTED = { kind: "unsupported" } as const;
@@ -125,6 +125,21 @@ export function useAuthority<C extends AuthorityContract>(contract: C): Authorit
   );
 
   return useMemo(() => ({ state, act, query }), [state, act, query]);
+}
+
+/**
+ * Whether the server runs authority apps at all. "unknown" until it has
+ * answered or the wait for an answer ran out, and "unsupported" for an older
+ * server or one with the runtime turned off. A host uses it to say why an
+ * app is missing, where `useAuthorityAvailable` only says that it is.
+ */
+export function useAuthorityRuntime(): CapabilityState["kind"] {
+  const client = useContext(AuthorityContext);
+  return useSyncExternalStore(
+    client ? client.subscribe : noSubscription,
+    client ? () => client.capabilities.kind : () => UNKNOWN.kind,
+    () => UNKNOWN.kind,
+  );
 }
 
 /**

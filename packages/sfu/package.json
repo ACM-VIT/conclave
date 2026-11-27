@@ -6,6 +6,10 @@
   "exports": {
     ".": "./index.ts"
   },
+  "imports": {
+    "#app-documents/engine": "./server/apps/documents/engine.ts",
+    "#app-documents/updateFacts": "./server/apps/documents/updateFacts.ts"
+  },
   "scripts": {
     "predev": "node scripts/ensure-mediasoup-worker.mjs",
     "dev": "npx tsx server.ts",
@@ -14,7 +18,9 @@
     "email:dev": "react-email dev --dir server/email --port 3002",
     "new:game": "node ./scripts/new-game.mjs",
     "test:game-ai": "npx tsx scripts/test-game-ai.ts",
-    "test": "vitest run test",
+    "test": "pnpm run test:unit && pnpm run test:apps-room-model",
+    "test:unit": "vitest run test --exclude \"**/apps-room-model.test.ts\"",
+    "test:apps-room-model": "vitest run test/apps-room-model.test.ts",
     "typecheck": "tsc --noEmit",
     "build:canary": "node scripts/build-canary.mjs"
   },
@@ -47,7 +53,7 @@
     "tsx": "^4.23.15",
     "y-protocols": "^1.0.7",
     "yjs": "13.6.33",
-    "zod": "^4.6.7"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",

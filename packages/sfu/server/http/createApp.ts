@@ -2,12 +2,13 @@ import { AI_PROVIDERS, getProviderApiKey, readAiEnvironment, type AiEnvironment 
 import { isRoomAiProvider } from "@conclave/ai/room";
 import { isAiFeature, resolveAiFeatureSettings } from "@conclave/ai/room-settings";
 import { ROOM_AI_ENV_FIELDS } from "@conclave/ai/room-server";
+import { MAX_BROWSER_GUEST_PASSES } from "@conclave/meeting-core/guest-join-claims";
 import type { MediaKind } from "mediasoup/types";
 import { randomBytes } from "node:crypto";
 import cors from "cors";
 import express from "express";
 import type { Express, NextFunction, Request, Response } from "express";
-import type { Server as SocketIOServer, Socket } from "socket.io";
+import type { Server as SocketIOServer } from "socket.io";
 import { Admin } from "../../config/classes/Admin.js";
 import {
   MAX_CHAT_IMAGE_BYTES,
@@ -26,6 +27,7 @@ import {
   allowUserKeys,
   blockUserKey,
   emitPendingUsersSnapshot,
+  ensureHost,
   rejectWaitingGuest,
   kickClient,
   rejectAllPendingUsers,
@@ -43,12 +45,25 @@ import {
 } from "../admin/moderation.js";
 import { recordAdminAudit } from "../admin/adminAudit.js";
 import { createTranscriptSpectatorToken } from "../socket/handlers/transcriptHandlers.js";
-import { forceCloseRoom, getRoomChannelId, isCurrentRoom, markRoomEnded } from "../rooms.js";
+import {
+  confirmRoomLease,
+  forceCloseRoom,
+  getRoomChannelId,
+  readRoomBooking,
+  holdsRoomLease,
+  isCurrentRoom,
+  markRoomEnded,
+  ROOM_LEASE_UNCONFIRMED_ERROR,
+  withSharedWriteScope,
+} from "../rooms.js";
+import { forceDrainRooms } from "../serverShutdown.js";
 import { resolveCorsOrigins } from "../cors.js";
 import { secretsMatch } from "../secret.js";
 import { readBoolean, requestBody } from "../../utilities/untrusted.js";
+import { persistenceFenceHoldRequest, persistenceFenceReleaseRequest } from "../persistenceFence.js";
 import { registerScheduledWebinarRoutes } from "./scheduledWebinarRoutes.js";
 import { registerScheduledMeetingRoutes } from "./scheduledMeetingRoutes.js";
+import { bookingInvites } from "../controlPlane/inviteeCommands.js";
 import { registerSchedulingRoutes } from "./schedulingRoutes.js";
 import type { SfuState } from "../state.js";
 import type { RedisPublisherHealth } from "../socket/redisPublisher.js";
@@ -436,58 +451,21 @@ export const createSfuApp = ({
       return;
     }
 
-    const rooms = Array.from(state.rooms.values());
-    const restartNotice = parseRestartNotice(notice);
-    const restartNoticeMs = parseRestartNoticeMs(noticeMs);
-    const connectedClients = rooms.reduce(
-      (total, room) => total + room.clients.size,
-      0,
-    );
-
-    const pendingSockets = new Set<Socket>();
-
-    for (const room of rooms) {
-      io.to(room.channelId).emit("serverRestarting", {
-        roomId: room.id,
-        message: restartNotice,
-        reconnecting: true,
-      });
-
-      for (const pending of room.pendingClients.values()) {
-        pendingSockets.add(pending.socket);
-      }
-    }
-
-    for (const pendingSocket of pendingSockets) {
-      pendingSocket.emit("serverRestarting", {
-        message: restartNotice,
-        reconnecting: true,
-      });
-    }
-
-    if (restartNoticeMs > 0) {
-      await new Promise((resolve) => {
-        setTimeout(resolve, restartNoticeMs);
-      });
-    }
-
-    for (const room of rooms) {
-      io.in(room.channelId).disconnectSockets(true);
-    }
-    for (const pendingSocket of pendingSockets) {
-      pendingSocket.disconnect(true);
-    }
+    const drained = await forceDrainRooms(state, io, {
+      message: parseRestartNotice(notice),
+      noticeMs: parseRestartNoticeMs(noticeMs),
+    });
 
     Logger.warn(
-      `Forced drain executed for ${rooms.length} room(s), disconnecting ${connectedClients} active client(s).`,
+      `Forced drain executed for ${drained.rooms} room(s), disconnecting ${drained.clients} active client(s).`,
     );
 
     res.json({
       draining: state.isDraining,
       forced: true,
-      rooms: rooms.length,
-      clients: connectedClients,
-      noticeMs: restartNoticeMs,
+      rooms: drained.rooms,
+      clients: drained.clients,
+      noticeMs: parseRestartNoticeMs(noticeMs),
     });
   };
 
@@ -509,6 +487,7 @@ export const createSfuApp = ({
         healthy: healthyWorkers.length,
         closed: state.workers.length - healthyWorkers.length,
       },
+      calendarTasks: { failed: state.calendarTasks.failed },
     };
 
     if (!isHealthy) {
@@ -821,7 +800,7 @@ export const createSfuApp = ({
     return res.status(403).json({ error: "Use /admin/rooms for room lists" });
   });
 
-  app.get("/rooms/:roomId", (req, res) => {
+  app.get("/rooms/:roomId", async (req, res) => {
     if (!hasValidSecret(req, config.sfuSecret)) {
       return res.status(401).json({ error: "Unauthorized" });
     }
@@ -833,10 +812,39 @@ export const createSfuApp = ({
 
     const clientId = resolveClientId(req) || "conclave";
     const channelId = getRoomChannelId(clientId, roomId);
+    // The web asks on behalf of a visitor and shows the headcount only when
+    // that visitor belongs to the room or was invited to it. A host blocking
+    // or removing someone outranks their invitation.
+    const viewerKey = normalizeIdentifier(req.query.viewerKey);
+    const viewerProofs = [req.query.viewerProof]
+      .flat()
+      .flatMap((value) => (typeof value === "string" ? [normalizeIdentifier(value)] : []))
+      .filter((value): value is string => Boolean(value));
+    const booking = viewerKey?.includes("@")
+      ? await readRoomBooking(state, clientId, roomId)
+      : null;
     const room = state.rooms.get(channelId);
+    const vouchesFor = (userKey: string): boolean => {
+      if (viewerProofs.length > MAX_BROWSER_GUEST_PASSES) return false;
+      const proofs = viewerProofs.length > 0 ? viewerProofs : [undefined];
+      if (
+        proofs.some(
+          (proof) => room?.isBlocked(userKey, proof) || room?.needsReadmission(userKey, proof),
+        )
+      ) {
+        return false;
+      }
+      return (
+        Boolean(room?.isMemberUserKey(userKey)) ||
+        viewerProofs.some((proof) => Boolean(room?.isMemberUserKey("", proof))) ||
+        bookingInvites(booking, userKey.toLowerCase())
+      );
+    };
+    const viewerIsMember =
+      viewerKey || viewerProofs.length > 0 ? vouchesFor(viewerKey ?? "") : undefined;
     res.set("Cache-Control", "no-store");
     if (!room) {
-      return res.json({ room: null });
+      return res.json({ room: null, viewerIsMember });
     }
 
     return res.json({
@@ -845,6 +853,7 @@ export const createSfuApp = ({
         userCount:
           room.getMeetingParticipantCount() + room.getWebinarAttendeeCount(),
       },
+      viewerIsMember,
     });
   });
 
@@ -1003,6 +1012,49 @@ export const createSfuApp = ({
     await handleDrain(req, res);
   });
 
+  // The nightly backup holds this so SQLite and Redis are copied at one point
+  // in time: durable writes wait until it is released or its hard timeout.
+  // A backup holds this for the moment it copies SQLite and Redis. POST takes
+  // or renews the hold for its owner; with renew it only renews, so a backup
+  // can prove it held the fence the whole time (a restarted SFU has no hold).
+  // A hold another owner has is refused, and DELETE releases only its own.
+  app.post("/admin/persistence-fence", async (req, res) => {
+    if (!requireSecret(req, res)) {
+      return;
+    }
+    const request = persistenceFenceHoldRequest.safeParse(requestBody(req));
+    if (!request.success) {
+      res.status(400).json({ error: "expected { owner, holdMs } with holdMs from 1000 through 30000" });
+      return;
+    }
+    const { owner, holdMs, renew } = request.data;
+    const fence = state.persistenceFence;
+    const held = renew ? fence.renew(owner, holdMs) : await fence.hold(owner, holdMs);
+    if (!held) {
+      res.status(409).json({ held: false, error: renew ? "this owner does not hold the fence" : "another backup holds the fence", instanceId: config.instanceId });
+      return;
+    }
+    res.json({ held: true, until: held.until, owner, instanceId: config.instanceId });
+  });
+
+  app.delete("/admin/persistence-fence", (req, res) => {
+    if (!requireSecret(req, res)) {
+      return;
+    }
+    const request = persistenceFenceReleaseRequest.safeParse(requestBody(req));
+    if (!request.success) {
+      res.status(400).json({ error: "expected { owner }" });
+      return;
+    }
+    const fence = state.persistenceFence;
+    const holder = fence.holder();
+    if (holder !== null && holder !== request.data.owner) {
+      res.status(409).json({ released: false, error: "another backup holds the fence", instanceId: config.instanceId });
+      return;
+    }
+    res.json({ released: fence.release(request.data.owner), instanceId: config.instanceId });
+  });
+
   // Every successful admin mutation lands in the audit trail with the
   // operator identity the web proxy forwards; the admin gateway streams the
   // trail to dashboards.
@@ -1027,6 +1079,50 @@ export const createSfuApp = ({
       }
     });
     next();
+  });
+
+  app.use("/admin/rooms", (req, res, next) => {
+    if (req.method === "GET" || req.method === "HEAD" || !hasValidSecret(req, config.sfuSecret)) {
+      next();
+      return;
+    }
+    const roomId = normalizeIdentifier(decodeURIComponent(req.path.split("/")[1] ?? ""));
+    const lookup = roomId ? resolveRoom(state, roomId, { clientId: resolveClientId(req) }) : null;
+    const answerOnceWritten = () => {
+      const json = res.json.bind(res);
+      let landed: boolean | null = null;
+      let held: { body: unknown } | null = null;
+      const deliver = (body: unknown) =>
+        landed === false
+          ? res.status(503) && json({ error: ROOM_LEASE_UNCONFIRMED_ERROR })
+          : json(body);
+      res.json = ((body: unknown) => {
+        if (landed !== null) return deliver(body);
+        held = { body };
+        return res;
+      }) as typeof res.json;
+      const { writes, settled } = withSharedWriteScope(() => next());
+      const finish = (ok: boolean) => {
+        landed = ok;
+        const waiting = held;
+        if (waiting) deliver(waiting.body);
+      };
+      if (writes === 0) {
+        finish(true);
+        return;
+      }
+      settled.then(finish).catch(next);
+    };
+    if (!lookup || "error" in lookup || holdsRoomLease(state, lookup.room)) {
+      answerOnceWritten();
+      return;
+    }
+    confirmRoomLease(state, lookup.room)
+      .then((confirmed) => {
+        if (confirmed) answerOnceWritten();
+        else res.status(503).json({ error: ROOM_LEASE_UNCONFIRMED_ERROR });
+      })
+      .catch(next);
   });
 
   app.get("/admin/overview", (req, res) => {
@@ -1223,7 +1319,7 @@ export const createSfuApp = ({
     }
     const kicked = kickClient(lookup.room, userId, reason, { io, state });
 
-    if (!kicked) {
+    if (kicked.length === 0) {
       res.status(404).json({ error: "User not found" });
       return;
     }
@@ -1416,6 +1512,7 @@ export const createSfuApp = ({
         kickedUserIds.add(userId);
       }
     }
+    ensureHost(io, state, lookup.room);
 
     emitPendingUsersSnapshot(lookup.room);
 
@@ -1487,14 +1584,15 @@ export const createSfuApp = ({
 
     // Snapshot clients before iterating: forceRemoveClientNow mutates room.clients.
     for (const client of [...lookup.room.clients.values()]) {
-      if (client instanceof Admin) {
+      const seatKey = lookup.room.userKeysById.get(client.id);
+      if (client instanceof Admin || (seatKey && lookup.room.isAdminUserKey(seatKey))) {
         continue;
       }
       if (!includeAttendees && client.isWebinarAttendee) {
         continue;
       }
-      if (kickClient(lookup.room, client.id, reason, { io, state })) {
-        kickedUserIds.push(client.id);
+      for (const kickedId of kickClient(lookup.room, client.id, reason, { io, state })) {
+        if (!kickedUserIds.includes(kickedId)) kickedUserIds.push(kickedId);
       }
     }
 

@@ -30,6 +30,7 @@ artifacts/video-quality/
 *.sqlite-*
 *.sqlite3
 *.sqlite3-*
+packages/sfu/data/
 
 # debug
 npm-debug.log*
@@ -71,3 +72,4 @@ apps/mobile/config/GoogleOAuth.plist
 apps/conclave-skip/MISSION.md
 apps/conclave-skip/STORE-READINESS.md
 apps/conclave-skip/Android/fastlane/metadata/android/data-safety-form.md
+__pycache__/

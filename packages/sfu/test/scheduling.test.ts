@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { SchedulingEventType, WeeklyAvailability } from "../types.js";
+import { createMemoryBackend } from "../server/controlPlane/backends/memory.js";
 import {
-  createEventType,
-  createSchedulingStore,
-  ensureSchedulingProfile,
+  createHostEventType,
+  ensureHostProfile,
+} from "../server/controlPlane/schedulingCommands.js";
+import { controlPlaneStore } from "../server/controlPlane/store.js";
+import {
   generateAvailableSlots,
   isValidSchedulingSlug,
   zonedTimeToUtc,
@@ -49,22 +52,26 @@ describe("scheduling", () => {
     expect(isValidSchedulingSlug("Intro")).toBe(false);
   });
 
-  it("does not require a calendar for new event types by default", () => {
-    const store = createSchedulingStore();
-    const profile = ensureSchedulingProfile(store, {
-      clientId: "default",
-      userId: "user-1",
-      email: "host@example.com",
-      name: "Host",
-      timeZone: "UTC",
-    });
-    const created = createEventType(store, profile, {
-      title: "Office hours",
-      isActive: true,
-    });
+  it("does not require a calendar for new event types by default", async () => {
+    const store = controlPlaneStore(createMemoryBackend());
+    const profile = await store.commit(
+      ensureHostProfile(
+        {
+          clientId: "default",
+          userId: "user-1",
+          email: "host@example.com",
+          name: "Host",
+          timeZone: "UTC",
+        },
+        { syncIdentity: true },
+      ),
+    );
+    if (!profile.ok) throw new Error(profile.message);
+    const created = await store.commit(
+      createHostEventType(profile.value.id, { title: "Office hours", isActive: true }),
+    );
 
-    expect(created.isActive).toBe(true);
-    expect(created.requiresCalendar).toBe(false);
+    expect(created).toMatchObject({ ok: true, value: { isActive: true, requiresCalendar: false } });
   });
 
   it("generates slots from weekly availability", () => {

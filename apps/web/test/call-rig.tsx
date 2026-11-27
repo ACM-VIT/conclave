@@ -951,6 +951,7 @@ export class CallRig {
       delete this.localTracks.video;
       this.refs.videoProducerRef.current?.close();
       this.refs.videoProducerRef.current = null;
+      this.refs.deviceIntents.dispatch({ type: "choose", device: "video", chosen: false });
       this.setCameraOff(true);
     });
   }
@@ -1083,6 +1084,9 @@ export class CallRig {
       rig.setCameraOff = setCameraOff;
       supplied.isCameraOff = cameraOff;
       const refs = useMeetRefs();
+      useState(() => refs.deviceIntents.dispatch({
+        type: "set", audio: rig.publish, video: rig.publish && rig.camera,
+      }));
       supplied.refs = refs;
       rig.refs = refs;
       rig.api = useMeetSocket(options);

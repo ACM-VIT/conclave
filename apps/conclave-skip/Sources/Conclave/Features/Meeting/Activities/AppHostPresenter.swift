@@ -849,6 +849,7 @@ final class AppHostPresenter {
     @ObservationIgnored private var watchRevision = 0
     @ObservationIgnored private var sawAppStatus = false
     @ObservationIgnored private(set) var isHiddenLocally = false
+    @ObservationIgnored private var hiddenReleaseTask: Task<Void, Never>? = nil
 
     @ObservationIgnored var fixtureSeedNames: [String] = []
 
@@ -883,12 +884,35 @@ final class AppHostPresenter {
     func setHiddenLocally(_ hidden: Bool) {
         if isHiddenLocally == hidden { return }
         isHiddenLocally = hidden
+        cancelHiddenRelease()
+        session?.setWatchHidden(hidden)
         if hidden {
-            session?.releaseEmbed()
+            cancelReadyTimer()
+            if let session, session.appId == "watch" {
+                if session.embedReady {
+                    let mount = session.bridgeGeneration
+                    hiddenReleaseTask = Task { @MainActor [weak session] in
+                        guard let session, !Task.isCancelled, session.bridgeGeneration == mount else { return }
+                        if await session.prepareToLeave(), !Task.isCancelled, session.bridgeGeneration == mount {
+                            session.releaseEmbedIfClean()
+                        }
+                    }
+                } else {
+                    session.releaseEmbedIfClean()
+                }
+            }
             rebuild()
-        } else {
+        } else if session?.embedReady != true {
             retry()
+        } else {
+            if !embedReady { startReadyTimer() }
+            rebuild()
         }
+    }
+
+    private func cancelHiddenRelease() {
+        hiddenReleaseTask?.cancel()
+        hiddenReleaseTask = nil
     }
 
     func closeFailed() {
@@ -1420,6 +1444,8 @@ final class AppHostPresenter {
     private func followSession() {
         let current = session?.appSessionId ?? ""
         if current != appSessionId {
+            cancelHiddenRelease()
+            session?.setWatchHidden(isHiddenLocally)
             appSessionId = current
             issue = AppHostIssue.none
             bundleVersion = ""
@@ -1621,6 +1647,7 @@ final class AppHostPresenter {
 
     private func resetLocal() {
         cancelReadyTimer()
+        cancelHiddenRelease()
         pendingSafetyTask?.cancel()
         pendingSafetyTask = nil
         appSessionId = session?.appSessionId ?? ""
@@ -1836,7 +1863,7 @@ final class AppHostPresenter {
         }
 
         let isWatch = model.appId == "watch" && appStatus.kind == "watch"
-        let watchApp = model.appId == "watch" && ready
+        let watchApp = model.appId == "watch" && ready && !isHiddenLocally
         let nextWatch = WatchPageModel(
             revision: watch.revision,
             videoId: isWatch ? appStatus.videoId : "",

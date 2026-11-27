@@ -1,24 +1,19 @@
 import type { Express, Request, Response } from "express";
 import { Logger } from "../../utilities/loggers.js";
+import { drainCalendarTasks } from "../calendarTasks.js";
 import { secretsMatch } from "../secret.js";
 import {
-  createScheduledMeeting,
-  deleteScheduledMeeting,
-  getScheduledMeetingById,
-  getScheduledMeetingByRoomCode,
-  listScheduledMeetings,
-  moveScheduledMeetingToClient,
-  persistScheduledMeetingChanges,
-  persistScheduledMeetingDeletes,
-  updateScheduledMeeting,
-} from "../scheduledMeetings.js";
+  createMeeting,
+  deleteMeeting,
+  listMeetings,
+  meetingById,
+  meetingByRoomCode,
+  updateMeeting,
+  type MeetingAccess,
+} from "../controlPlane/meetingCommands.js";
 import type { SfuState } from "../state.js";
-import {
-  canonicalizeClientId,
-  canMigrateClientNamespace,
-  clientIdCandidates,
-  resolveDefaultClientId,
-} from "../clientIds.js";
+import { canonicalizeClientId, resolveDefaultClientId } from "../clientIds.js";
+import { controlPlaneRoute, sendFailure } from "./controlPlaneReplies.js";
 import type {
   CreateScheduledMeetingRequest,
   ScheduledMeeting,
@@ -114,8 +109,9 @@ const parseStatusFilter = (
 
 const serializeMeeting = (meeting: ScheduledMeeting): ScheduledMeeting => meeting;
 
-const publicMeetingView = (meeting: ScheduledMeeting) => ({
+export const publicMeetingView = (meeting: ScheduledMeeting) => ({
   id: meeting.id,
+  clientId: meeting.clientId,
   roomCode: meeting.roomCode,
   title: meeting.title,
   hostName: meeting.hostName,
@@ -138,267 +134,196 @@ export const registerScheduledMeetingRoutes = (
     return false;
   };
 
-  const persistChanged = async (meeting: ScheduledMeeting): Promise<void> => {
-    if (state.scheduledMeetingPersistence) {
-      try {
-        await persistScheduledMeetingChanges(
-          state.scheduledMeetings,
-          state.scheduledMeetingPersistence,
-          [meeting],
-        );
-      } catch (error) {
-        Logger.warn("Failed to persist scheduled meetings", error);
-      }
-    }
-  };
-
-  const persistDeleted = async (id: string): Promise<void> => {
-    if (state.scheduledMeetingPersistence) {
-      try {
-        await persistScheduledMeetingDeletes(
-          state.scheduledMeetings,
-          state.scheduledMeetingPersistence,
-          [id],
-        );
-      } catch (error) {
-        Logger.warn("Failed to delete scheduled meeting", error);
-      }
-    }
-  };
-
-  const migrateMeetingNamespace = async (
-    meeting: ScheduledMeeting,
-    clientId: string,
-  ): Promise<ScheduledMeeting | null> => {
-    if (meeting.clientId === clientId) return meeting;
-    if (!canMigrateClientNamespace(meeting.clientId, clientId)) return null;
-    try {
-      const migrated = moveScheduledMeetingToClient(
-        state.scheduledMeetings,
-        meeting.id,
-        clientId,
-      );
-      if (migrated) {
-        await persistChanged(migrated);
-      }
-      return migrated;
-    } catch (error) {
-      Logger.warn(
-        `Failed to migrate scheduled meeting ${meeting.id} from ${meeting.clientId} to ${clientId}`,
-        error,
-      );
-      return null;
-    }
-  };
-
-  const listMeetingsForClient = async (options: {
-    clientId: string;
-    ownerEmail?: string;
-    includeAll: boolean;
-    status?: ScheduledMeetingStatus[];
-  }): Promise<ScheduledMeeting[]> => {
-    const byId = new Map<string, ScheduledMeeting>();
-    const seenRoomCodes = new Set<string>();
-    for (const candidateClientId of clientIdCandidates(options.clientId)) {
-      const meetings = listScheduledMeetings(state.scheduledMeetings, {
-        clientId: candidateClientId,
-        ownerEmail: options.ownerEmail,
-        includeAll: options.includeAll,
-        status: options.status,
-      });
-      for (const meeting of meetings) {
-        if (seenRoomCodes.has(meeting.roomCode)) continue;
-        const normalized =
-          meeting.clientId === options.clientId
-            ? meeting
-            : await migrateMeetingNamespace(meeting, options.clientId);
-        if (!normalized) continue;
-        seenRoomCodes.add(normalized.roomCode);
-        byId.set(normalized.id, normalized);
-      }
-    }
-    return Array.from(byId.values()).sort(
-      (a, b) => a.scheduledStartAt - b.scheduledStartAt,
-    );
-  };
-
-  app.get("/scheduled-meetings", async (req, res) => {
-    if (!requireSecret(req, res)) return;
+  const accessOf = (req: Request): MeetingAccess => {
     const user = resolveUserContext(req);
-    const clientId = resolveClientId(req);
-    const includeAll = req.query.scope === "all" && user.isAdmin;
-    const statusFilter = parseStatusFilter(req.query.status);
+    return { email: user.email, isAdmin: user.isAdmin, clientId: resolveClientId(req) };
+  };
 
-    const list = await listMeetingsForClient({
-      clientId,
-      ownerEmail: user.email || undefined,
-      includeAll,
-      status: statusFilter,
+  const meetingId = (req: Request, res: Response): string | null => {
+    const id = normalizeIdentifier(req.params.id);
+    if (!id) res.status(400).json({ error: "Scheduled meeting ID is required" });
+    return id;
+  };
+
+  const roomCodeOf = (req: Request, res: Response): string | null => {
+    const roomCode = normalizeIdentifier(req.params.roomCode, MAX_ROOM_CODE_LENGTH)?.toLowerCase();
+    if (!roomCode) res.status(400).json({ error: "Room code is required" });
+    return roomCode ?? null;
+  };
+
+  const runCalendarWork = (): void => {
+    drainCalendarTasks(state).catch((error) => {
+      Logger.warn("Failed to run calendar tasks", error);
     });
+  };
 
-    res.json({ scheduledMeetings: list.map(serializeMeeting) });
-  });
-
-  app.post("/scheduled-meetings", async (req, res) => {
-    if (!requireSecret(req, res)) return;
-    const user = resolveUserContext(req);
-    if (!user.email) {
-      res.status(400).json({ error: "User context required" });
-      return;
-    }
-    const clientId = resolveClientId(req);
-
-    try {
-      const body = (req.body ?? {}) as CreateScheduledMeetingRequest;
-      const meeting = createScheduledMeeting(state.scheduledMeetings, body, {
-        clientId,
-        createdBy: user.userId || user.email,
-        defaultHostEmail: user.email,
-        defaultHostName: user.name || undefined,
-        defaultHostUserId: user.userId,
-      });
-
-      await persistChanged(meeting);
-      Logger.info(
-        `Scheduled meeting created ${meeting.id} (${meeting.roomCode}) by ${user.email}`,
-      );
-      res.status(201).json({ scheduledMeeting: serializeMeeting(meeting) });
-    } catch (error) {
-      res.status(400).json({ error: (error as Error).message });
-    }
-  });
-
-  app.get("/scheduled-meetings/by-room/:roomCode", (req, res) => {
-    if (!requireSecret(req, res)) return;
-    const clientId = resolveClientId(req);
-    const roomCode = normalizeIdentifier(
-      req.params.roomCode,
-      MAX_ROOM_CODE_LENGTH,
-    )?.toLowerCase();
-    if (!roomCode) {
-      res.status(400).json({ error: "Room code is required" });
-      return;
-    }
-    const meeting = getScheduledMeetingByRoomCode(state.scheduledMeetings, clientId, roomCode);
-    if (!meeting) {
-      res.status(404).json({ error: "Scheduled meeting not found" });
-      return;
-    }
-    res.json({ scheduledMeeting: serializeMeeting(meeting) });
-  });
-
-  app.get("/scheduled-meetings/public/by-room/:roomCode", (req, res) => {
-    if (!requireSecret(req, res)) return;
-    const clientId = resolveClientId(req);
-    const roomCode = normalizeIdentifier(
-      req.params.roomCode,
-      MAX_ROOM_CODE_LENGTH,
-    )?.toLowerCase();
-    if (!roomCode) {
-      res.status(400).json({ error: "Room code is required" });
-      return;
-    }
-    const meeting = getScheduledMeetingByRoomCode(state.scheduledMeetings, clientId, roomCode);
-    if (!meeting) {
-      res.status(404).json({ error: "Scheduled meeting not found" });
-      return;
-    }
-    res.json({ scheduledMeeting: publicMeetingView(meeting) });
-  });
-
-  const requireMeetingAccess = (
+  const changeMeeting = async (
     req: Request,
     res: Response,
-  ): ScheduledMeeting | null => {
-    const id = normalizeIdentifier(req.params.id);
-    if (!id) {
-      res.status(400).json({ error: "Scheduled meeting ID is required" });
-      return null;
-    }
-    const meeting = getScheduledMeetingById(state.scheduledMeetings, id);
-    if (!meeting) {
-      res.status(404).json({ error: "Scheduled meeting not found" });
-      return null;
-    }
-    const user = resolveUserContext(req);
-    if (!user.isAdmin) {
-      if (!user.email || meeting.hostEmail !== user.email) {
-        res.status(403).json({ error: "Not authorized for this meeting" });
-        return null;
-      }
-    }
-    return meeting;
-  };
-
-  app.get("/scheduled-meetings/:id", (req, res) => {
-    if (!requireSecret(req, res)) return;
-    const meeting = requireMeetingAccess(req, res);
-    if (!meeting) return;
-    res.json({ scheduledMeeting: serializeMeeting(meeting) });
-  });
-
-  app.patch("/scheduled-meetings/:id", async (req, res) => {
-    if (!requireSecret(req, res)) return;
-    const target = requireMeetingAccess(req, res);
-    if (!target) return;
-    try {
-      const body = (req.body ?? {}) as UpdateScheduledMeetingRequest;
-      const meeting = updateScheduledMeeting(
-        state.scheduledMeetings,
-        target.id,
-        body,
-      );
-      await persistChanged(meeting);
-      res.json({ scheduledMeeting: serializeMeeting(meeting) });
-    } catch (error) {
-      res.status(400).json({ error: (error as Error).message });
-    }
-  });
-
-  app.delete("/scheduled-meetings/:id", async (req, res) => {
-    if (!requireSecret(req, res)) return;
-    const target = requireMeetingAccess(req, res);
-    if (!target) return;
-    const meeting = deleteScheduledMeeting(state.scheduledMeetings, target.id);
-    if (!meeting) {
-      res.status(404).json({ error: "Scheduled meeting not found" });
+    request: UpdateScheduledMeetingRequest,
+  ): Promise<void> => {
+    const id = meetingId(req, res);
+    if (!id) return;
+    const result = await state.controlPlane.commit(updateMeeting(id, request, accessOf(req)));
+    if (!result.ok) {
+      sendFailure(res, result);
       return;
     }
-    await persistDeleted(meeting.id);
-    res.json({ success: true, id: meeting.id });
-  });
+    if (request.status) runCalendarWork();
+    res.json({ scheduledMeeting: serializeMeeting(result.value) });
+  };
 
-  app.post("/scheduled-meetings/:id/start", async (req, res) => {
-    if (!requireSecret(req, res)) return;
-    const target = requireMeetingAccess(req, res);
-    if (!target) return;
-    try {
-      const meeting = updateScheduledMeeting(
-        state.scheduledMeetings,
-        target.id,
-        { status: "live" },
+  app.get(
+    "/scheduled-meetings",
+    controlPlaneRoute("list scheduled meetings", async (req, res) => {
+      if (!requireSecret(req, res)) return;
+      const user = resolveUserContext(req);
+      const list = await state.controlPlane.read(
+        listMeetings({
+          clientId: resolveClientId(req),
+          ownerEmail: user.email || undefined,
+          includeAll: req.query.scope === "all" && user.isAdmin,
+          status: parseStatusFilter(req.query.status),
+        }),
       );
-      await persistChanged(meeting);
-      res.json({ scheduledMeeting: serializeMeeting(meeting) });
-    } catch (error) {
-      res.status(400).json({ error: (error as Error).message });
-    }
-  });
+      res.json({ scheduledMeetings: list.map(serializeMeeting) });
+    }),
+  );
 
-  app.post("/scheduled-meetings/:id/cancel", async (req, res) => {
-    if (!requireSecret(req, res)) return;
-    const target = requireMeetingAccess(req, res);
-    if (!target) return;
-    try {
-      const meeting = updateScheduledMeeting(
-        state.scheduledMeetings,
-        target.id,
-        { status: "cancelled" },
+  app.post(
+    "/scheduled-meetings",
+    controlPlaneRoute("create a scheduled meeting", async (req, res) => {
+      if (!requireSecret(req, res)) return;
+      const user = resolveUserContext(req);
+      if (!user.email) {
+        res.status(400).json({ error: "User context required" });
+        return;
+      }
+      const body = (req.body ?? {}) as CreateScheduledMeetingRequest;
+      const result = await state.controlPlane.commit(
+        createMeeting(body, {
+          clientId: resolveClientId(req),
+          createdBy: user.userId || user.email,
+          defaultHostEmail: user.email,
+          defaultHostName: user.name || undefined,
+          defaultHostUserId: user.userId,
+        }),
       );
-      await persistChanged(meeting);
+      if (!result.ok) {
+        sendFailure(res, result);
+        return;
+      }
+      Logger.info(
+        `Scheduled meeting created ${result.value.id} (${result.value.roomCode}) by ${user.email}`,
+      );
+      res.status(201).json({ scheduledMeeting: serializeMeeting(result.value) });
+    }),
+  );
+
+  app.get(
+    "/scheduled-meetings/by-room/:roomCode",
+    controlPlaneRoute("find a scheduled meeting", async (req, res) => {
+      if (!requireSecret(req, res)) return;
+      const roomCode = roomCodeOf(req, res);
+      if (!roomCode) return;
+      const meeting = await state.controlPlane.read(
+        meetingByRoomCode(resolveClientId(req), roomCode),
+      );
+      if (!meeting) {
+        res.status(404).json({ error: "Scheduled meeting not found" });
+        return;
+      }
       res.json({ scheduledMeeting: serializeMeeting(meeting) });
-    } catch (error) {
-      res.status(400).json({ error: (error as Error).message });
-    }
-  });
+    }),
+  );
+
+  app.get(
+    "/scheduled-meetings/public/by-room/:roomCode",
+    controlPlaneRoute("find a public scheduled meeting", async (req, res) => {
+      if (!requireSecret(req, res)) return;
+      const roomCode = roomCodeOf(req, res);
+      if (!roomCode) return;
+      const meeting = await state.controlPlane.read(
+        meetingByRoomCode(resolveClientId(req), roomCode),
+      );
+      if (!meeting) {
+        res.status(404).json({ error: "Scheduled meeting not found" });
+        return;
+      }
+      res.json({ scheduledMeeting: publicMeetingView(meeting) });
+    }),
+  );
+
+  app.get(
+    "/scheduled-meetings/public/v2/by-room/:roomCode",
+    controlPlaneRoute("look up a public scheduled meeting", async (req, res) => {
+      if (!requireSecret(req, res)) return;
+      const roomCode = roomCodeOf(req, res);
+      if (!roomCode) return;
+      const meeting = await state.controlPlane.read(
+        meetingByRoomCode(resolveClientId(req), roomCode),
+      );
+      res.json({ scheduledMeeting: meeting ? publicMeetingView(meeting) : null });
+    }),
+  );
+
+  app.get(
+    "/scheduled-meetings/:id",
+    controlPlaneRoute("read a scheduled meeting", async (req, res) => {
+      if (!requireSecret(req, res)) return;
+      const id = meetingId(req, res);
+      if (!id) return;
+      const meeting = await state.controlPlane.read(meetingById(id, resolveClientId(req)));
+      if (!meeting) {
+        res.status(404).json({ error: "Scheduled meeting not found" });
+        return;
+      }
+      const access = accessOf(req);
+      if (!access.isAdmin && (!access.email || meeting.hostEmail !== access.email)) {
+        res.status(403).json({ error: "Not authorized for this meeting" });
+        return;
+      }
+      res.json({ scheduledMeeting: serializeMeeting(meeting) });
+    }),
+  );
+
+  app.patch(
+    "/scheduled-meetings/:id",
+    controlPlaneRoute("update a scheduled meeting", async (req, res) => {
+      if (!requireSecret(req, res)) return;
+      await changeMeeting(req, res, (req.body ?? {}) as UpdateScheduledMeetingRequest);
+    }),
+  );
+
+  app.delete(
+    "/scheduled-meetings/:id",
+    controlPlaneRoute("delete a scheduled meeting", async (req, res) => {
+      if (!requireSecret(req, res)) return;
+      const id = meetingId(req, res);
+      if (!id) return;
+      const result = await state.controlPlane.commit(deleteMeeting(id, accessOf(req)));
+      if (!result.ok) {
+        sendFailure(res, result);
+        return;
+      }
+      runCalendarWork();
+      res.json({ success: true, id: result.value.id });
+    }),
+  );
+
+  app.post(
+    "/scheduled-meetings/:id/start",
+    controlPlaneRoute("start a scheduled meeting", async (req, res) => {
+      if (!requireSecret(req, res)) return;
+      await changeMeeting(req, res, { status: "live" });
+    }),
+  );
+
+  app.post(
+    "/scheduled-meetings/:id/cancel",
+    controlPlaneRoute("cancel a scheduled meeting", async (req, res) => {
+      if (!requireSecret(req, res)) return;
+      await changeMeeting(req, res, { status: "cancelled" });
+    }),
+  );
 };

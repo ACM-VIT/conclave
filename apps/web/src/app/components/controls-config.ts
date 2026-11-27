@@ -45,6 +45,7 @@ export interface ControlsBarProps {
   slim?: boolean;
   coachAvatars?: { id: string; name: string }[];
   roomId?: string;
+  clientId?: string;
   isMuted: boolean;
   isMicrophoneUnmuteDisabled?: boolean;
   isCameraOff: boolean;
@@ -126,6 +127,10 @@ export interface ControlsBarProps {
   onCloseWatch?: () => void;
   isAppsOpen?: boolean;
   hasActiveApp?: boolean;
+  /** A panel app is waiting on this viewer: a poll to vote in, a new question. */
+  hasAppWaiting?: boolean;
+  /** A toast is up. One-time tips wait, so they do not cover it. */
+  isToastShowing?: boolean;
   onToggleApps?: () => void;
   isDevPlaygroundEnabled?: boolean;
   isDevPlaygroundActive?: boolean;

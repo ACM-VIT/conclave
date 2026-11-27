@@ -20,7 +20,7 @@ Use this page when debugging:
 | `apps:discard` | client -> server | yes | destroy an app's document (admin-only) |
 | `apps:lock` | client -> server | yes | set lock flag (admin-only) |
 | `apps:yjs:sync` | client -> server | yes | request state diff for active app |
-| `apps:yjs:update` | bi-directional | no | relay Yjs content updates |
+| `apps:yjs:update` | bi-directional | optional | relay Yjs content updates |
 | `apps:yjs:refused` | server -> client | no | tell a writer the room refused its update |
 | `apps:awareness` | bi-directional | no | relay awareness/presence updates |
 
@@ -29,9 +29,14 @@ Use this page when debugging:
 ### `apps:getState`
 
 - Emitted by provider via `refreshState()`.
-- Server callback returns `AppsState`:
-  `{ activeAppId, locked, revision, savedAppIds, docGeneration, roomId }`.
-- Used on initial mount and reconnect paths.
+- Server callback returns `AppsState`.
+- A socket that is not in a room yet (for example right after an in-place
+  reconnect, before it rejoins) gets `{ activeAppId: null, locked: false,
+  notInRoom: true }`, never a plain "no app open". The provider ignores it.
+- Used on initial mount. After an in-place reconnect the provider waits for the
+  `apps:state` the SFU pushes on join instead, holding every upload until then.
+- In a room the reply includes `activeAppId`, `locked`, `revision`,
+  `savedAppIds`, `docGeneration`, and `roomId`.
 
 `revision` moves forward with every change to this state. `docGeneration`
 names the presented app's document: a new number means the room started that
@@ -270,10 +275,12 @@ stage on the frame as it arrives, before the room converts or decodes any of
 it, and the size check itself never scans the payload. An update is read only
 once something has paid for it: its sender's update budget when it lands or its
 slot drains, or the no-op check's own budget on a locked board or before a
-sync. A sync refused by the limit acks `{ error, retryable: true, retryAfterMs }`, and the client tries
-again after at least `retryAfterMs`. An older SFU sends that refusal as only
-`{ error: "Too many app sync requests" }`; the client retries it with its own
-backoff. Any other refusal acks `{ error }` and is final.
+sync. A client that sends `canRetry: true` gets a retry hint when the limit is
+spent or the worker is busy, times out, or fails. An older client may hold
+up to four outstanding syncs for up to 25 seconds each. Every held sync
+must spend a token before it can reach the document. When talking to an
+older SFU, the web client also retries a plain
+`{ error: "Too many app sync requests" }` reply.
 
 ## Sync Flow
 
@@ -284,6 +291,10 @@ backoff. Any other refusal acks `{ error }` and is final.
 3. apply returned `syncMessage` as remote update
 4. apply returned awareness snapshot (if present)
 5. compare server `stateVector` and push missing local changes using `apps:yjs:update`
+
+The host waits for the first sync before mounting a new copy. On a rebuild
+it can show the existing copy without allowing edits until its replacement
+is ready.
 
 Server rejects sync requests if:
 
@@ -297,18 +308,60 @@ Server rejects sync requests if:
 Client -> server (`apps:yjs:update`):
 
 - emitted for local doc changes
-- ignored if app is not active
-- ignored for non-admins when room is locked
-- ignored until the socket has synced the presented document, and when it
-  replaces a value it never saw or builds on content the room does not hold
-  (see Document lifetime)
-- held in its socket's slot and applied together, for one token, when a
-  socket sends faster than its budget
+- refused if the app is not active, the writer is not synced, or the stage
+  is locked and the writer is not an admin
+- a legacy sender's updates can wait in a bounded per-socket slot and drain
+  together for one token. A sender that declares `wholeChanges` submits
+  directly to the bounded worker queue and pays one token per upload.
+- the worker checks dependencies and proposes changes. The room commits only
+  if the stage still owns that write, writer IDs are allowed, and the
+  resulting document fits the room's budget. A declined or overdue proposal
+  never changes the bytes used to rebuild the worker.
+- optional `part: { id, index, count }` marks one of the numbered parts of a
+  change over 256 KiB, each a byte range of the encoded update; the SFU stages
+  them (one change per socket, in order, at most the document limit in bytes,
+  dropped after 5 s without the next part or when the client sends anything
+  else), joins them into the original update on the last part and applies it
+  once, so the change is kept whole or refused whole
+- clients send parts only after a sync reply with `stagesParts: true`
+- a part the SFU cannot place is refused as `interrupted`, a passing reason
+- an update that changes nothing in the saved document (a resend of something
+  already saved) is accepted but neither stored again nor relayed, so build 63
+  reloads at most once for a large change
+- optional `updates: Uint8Array[]` in place of `update` carries up to 64 whole
+  changes, 256 KiB in all, for one rate-limit token; the SFU applies each one in
+  order exactly as if it had arrived alone (relayed alone when it lands, refused
+  alone when it does not, and a change from the same copy after a refused one is
+  refused with it because its clock follows the refused change); a malformed
+  list is refused as `invalid` and an oversized one as `too-large`, with nothing
+  applied; a list drops a staged change like any whole update
+- clients send lists only after a sync reply with `takesUpdateLists: true`
+- such an SFU acknowledges an upload that carries an ack callback once it is
+  done with it: after the change or every listed change has been committed or
+  refused (always after the `apps:yjs:refused` event for it), when it drops the
+  upload before the document, and for a part as soon as it is staged; clients
+  keep sent changes until then and resend the ones the server lacks after a
+  passing refusal
+
+Server -> peers, for a change over 256 KiB:
+
+- sent whole, one socket at a time, to every other participant of the same
+  meeting that can take it: any client whose sync request said
+  `wholeChanges: true`, any web client (it syncs with binary payloads), and any
+  client that has not synced yet
+- a native client that synced with base64 payloads and never said
+  `wholeChanges` (build 63) gets `apps:state` with no active app and then the
+  real state instead, so it reloads the app from the server
+- what a client can take is recorded on its membership in that meeting, so a
+  sync answer that lands during a room move never reaches another meeting
 
 Server -> peers (`apps:yjs:update`):
 
 - relayed to everyone else in room
 - receiver applies update with origin `"remote"`
+- accepted, changed writes are also echoed to the originating socket if it
+  is still in the room and the write named its replica or came from Wheel.
+  Wheel's native add receipt is confirmed by this echo, not by an upload ack.
 
 Server -> writer (`apps:yjs:refused`):
 
@@ -316,9 +369,10 @@ Server -> writer (`apps:yjs:refused`):
   `replicaId`: `{ appId, replicaId, reason }`
 - `reason` is one of `rate-limited`, `not-live`, `locked`, `invalid`,
   `too-large`, `not-synced`, `malformed`, `unresolved`, `unseen-value`,
-  `cleared`, `foreign-id` or `id-limit`
-- `AppsProvider` sends a `replicaId` for each local copy; on a refusal for its
-  current copy it drops that copy, syncs a fresh one and sets `rejectedChange`
+  `cleared`, `foreign-id`, `id-limit`, `interrupted`, `queue-full`,
+  `timed-out`, `crashed`, or `unavailable`
+- `AppsProvider` starts a catch-up sync after a passing refusal. On a final
+  refusal or repeated failures it replaces the copy and sets `rejectedChange`.
 
 ## Awareness Flow
 

@@ -189,6 +189,8 @@ export const runWheelCommand = (
     case "status":
     case "resync":
     case "close":
+    case "prepareToLeave":
+    case "savedSnapshot":
     case "setTool":
     case "setColor":
     case "setStrokeWidth":

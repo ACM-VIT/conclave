@@ -15,16 +15,11 @@ export function useMeetRooms({
   getRoom,
 }: UseMeetRoomsOptions) {
   const [availableRooms, setAvailableRooms] = useState<RoomInfo[]>([]);
-  const [roomsStatus, setRoomsStatus] = useState<"idle" | "loading" | "error">(
-    "idle"
-  );
 
   const refreshRooms = useCallback(async (roomId?: string) => {
     const normalizedRoomId = roomId?.trim();
     if (normalizedRoomId && !getRoom) return;
     if (!normalizedRoomId && (!isAdmin || !getRooms)) return;
-
-    setRoomsStatus("loading");
 
     try {
       if (normalizedRoomId) {
@@ -34,16 +29,13 @@ export function useMeetRooms({
         const rooms = await getRooms?.();
         setAvailableRooms(Array.isArray(rooms) ? rooms : []);
       }
-      setRoomsStatus("idle");
     } catch (_error) {
-      setRoomsStatus("error");
       setAvailableRooms([]);
     }
   }, [getRoom, getRooms, isAdmin]);
 
   return {
     availableRooms,
-    roomsStatus,
     refreshRooms,
   };
 }

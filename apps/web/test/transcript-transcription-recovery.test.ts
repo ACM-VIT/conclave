@@ -5,11 +5,10 @@ import type {
 } from "@conclave/meeting-core/transcript-types";
 import { TranscriptRoom } from "../transcript-worker/src/room";
 import {
-  TranscriptAudioReplayJournal,
-  TranscriptRecoveryAudioBuffer,
   isRetryableTranscriptionFailure,
   transcriptionRecoveryDelayMs,
 } from "../transcript-worker/src/transcription-recovery";
+import { AudioStore, type HeldChunk } from "../transcript-worker/src/audio-store";
 import type {
   LiveTranscriptionSession,
 } from "../transcript-worker/src/transcription/types";
@@ -61,23 +60,13 @@ const relayViewer: Viewer = {
 type TestableTranscriptRoom = {
   session: TranscriptSessionState | null;
   transcriptionProviderOpeningGeneration: number | null;
-  transcriptionRecoveryAudio: TranscriptRecoveryAudioBuffer;
-  transcriptionReplayJournal: TranscriptAudioReplayJournal;
+  audio: AudioStore;
   transcriptionSession: LiveTranscriptionSession | null;
   appendAudio: (
     viewer: Viewer,
     audio: string | undefined,
     speaker: Partial<TranscriptSpeaker> | undefined,
   ) => void;
-  appendNormalizedAudio: (
-    audio: string,
-    speaker: TranscriptSpeaker,
-    sampleCount: number,
-  ) => boolean;
-  commitTranscriptionBuffer: (
-    speaker: TranscriptSpeaker,
-    failureMessage: string,
-  ) => boolean;
 };
 
 const createTestRoom = (): TestableTranscriptRoom => {
@@ -117,62 +106,38 @@ describe("transcription provider recovery", () => {
     expect(transcriptionRecoveryDelayMs(999)).toBe(10_000);
   });
 
-  it("replays only committed audio that has not produced a final item", () => {
-    const journal = new TranscriptAudioReplayJournal();
-    journal.append("audio-a", ada, 2_400, 1_000);
-    journal.commit(ada, 1_100);
-    journal.bindCommittedItem("item-a");
-    journal.append("audio-b", ada, 2_400, 1_200);
-    journal.commit(ada, 1_300);
-    journal.bindCommittedItem("item-b");
-    journal.finalizeItem("item-a");
 
-    expect(journal.takeRecoveryEvents(1_400)).toEqual([
-      {
-        type: "chunk",
-        audio: "audio-b",
-        speaker: ada,
-        sampleCount: 2_400,
-        createdAt: 1_200,
-      },
-      { type: "commit", speaker: ada, createdAt: 1_300 },
-    ]);
-    expect(journal.takeRecoveryEvents()).toEqual([]);
-  });
-
-  it("keeps recovery audio ordered and drops stale buffered events", () => {
-    const buffer = new TranscriptRecoveryAudioBuffer();
-    buffer.enqueue(
-      {
-        type: "chunk",
-        audio: "stale",
-        speaker: ada,
-        sampleCount: 1,
-        createdAt: 1,
-      },
-      200_000,
-    );
-    expect(buffer.drain()).toEqual([]);
-    expect(buffer.consumeDroppedEventCount()).toBe(1);
-
-    buffer.enqueue(
-      {
-        type: "chunk",
-        audio: "fresh",
-        speaker: ada,
-        sampleCount: 1,
-        createdAt: 200_000,
-      },
-      200_000,
-    );
-    buffer.enqueue(
-      { type: "commit", speaker: ada, createdAt: 200_001 },
-      200_001,
-    );
-    expect(buffer.drain().map((event) => event.type)).toEqual([
-      "chunk",
+  it("holds audio in arrival order and lets the oldest go first at the byte limit, whoever holds it", () => {
+    const store = new AudioStore();
+    const chunk = (sequence: number, owner: HeldChunk["owner"]): HeldChunk => ({
+      audio: `chunk-${sequence}`,
+      sampleCount: 1,
+      speaker: ada,
+      sequence,
+      order: sequence,
+      createdAt: sequence,
+      voice: "speech",
+      turn: 0,
+      sentAt: owner.kind === "queued" ? null : sequence,
+      owner,
+    });
+    store.add(chunk(2, { kind: "line", lineId: "a" }));
+    store.add(chunk(0, { kind: "queued" }));
+    store.add(chunk(1, { kind: "unowned" }));
+    store.add(chunk(3, { kind: "queued" }));
+    store.queueMarker({ type: "commit", speaker: ada, after: 1 });
+    expect(store.all().map(({ sequence }) => sequence)).toEqual([0, 1, 2, 3]);
+    expect(store.queuedEvents().map((event) => (event.type === "chunk" ? event.chunk.sequence : event.type))).toEqual([
+      0,
       "commit",
+      3,
     ]);
+
+    const evicted = store.enforceBudget("chunk-0".length * 2);
+    expect(evicted.map(({ sequence }) => sequence)).toEqual([0, 1]);
+    expect(store.bytes).toBe("chunk-0".length * 2);
+    store.releaseOwner("a");
+    expect(store.all().map(({ sequence }) => sequence)).toEqual([3]);
   });
 
   it("buffers relay audio while a persisted provider is still opening", () => {
@@ -182,40 +147,14 @@ describe("transcription provider recovery", () => {
 
     room.appendAudio(relayViewer, "AAAA", ada);
 
-    expect(room.transcriptionRecoveryAudio.drain()).toEqual([
+    expect(room.audio.queued()).toEqual([
       expect.objectContaining({
-        type: "chunk",
         audio: "AAAA",
         speaker: ada,
         sampleCount: 1,
+        owner: { kind: "queued" },
       }),
     ]);
   });
 
-  it("journals unfinalized Sarvam audio for provider recovery", () => {
-    const room = createTestRoom();
-    room.session = activeSession();
-    room.transcriptionSession = {
-      provider: "sarvam",
-      appendAudio: () => undefined,
-      commitAudio: () => undefined,
-      clearAudio: () => undefined,
-      close: () => undefined,
-    };
-
-    expect(room.appendNormalizedAudio("audio-sarvam", ada, 2_400)).toBe(true);
-    expect(
-      room.commitTranscriptionBuffer(ada, "Sarvam commit failed."),
-    ).toBe(true);
-
-    expect(room.transcriptionReplayJournal.takeRecoveryEvents(2_000)).toEqual([
-      expect.objectContaining({
-        type: "chunk",
-        audio: "audio-sarvam",
-        speaker: ada,
-        sampleCount: 2_400,
-      }),
-      expect.objectContaining({ type: "commit", speaker: ada }),
-    ]);
-  });
 });

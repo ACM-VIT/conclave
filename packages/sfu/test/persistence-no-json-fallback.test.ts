@@ -2,29 +2,26 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createScheduledMeetingPersistence } from "../server/scheduledMeetings.js";
-import { createScheduledWebinarPersistence } from "../server/scheduledWebinars.js";
-import { createSchedulingPersistence } from "../server/scheduling.js";
+import { ensureHostProfile } from "../server/controlPlane/schedulingCommands.js";
+import { openControlPlane } from "../server/controlPlane/open.js";
 
-const stores = [
+const openAndWrite = async (): Promise<void> => {
+  const store = await openControlPlane();
+  try {
+    const result = await store.commit(
+      ensureHostProfile({ clientId: "conclave", userId: "user-1", email: "host@example.test" }, { syncIdentity: true }),
+    );
+    if (!result.ok) throw new Error(result.message);
+  } finally {
+    await store.close();
+  }
+};
+
+const modes = [
+  { name: "CONTROL_PLANE_PERSISTENCE", variables: ["CONTROL_PLANE_PERSISTENCE"] },
   {
-    name: "scheduling", modeVariable: "SCHEDULING_PERSISTENCE", jsonVariable: "SCHEDULING_PATH",
-    open: async () => {
-      const persistence = createSchedulingPersistence();
-      await persistence.save(await persistence.load());
-    },
-  },
-  {
-    name: "scheduled meetings", modeVariable: "SCHEDULED_MEETINGS_PERSISTENCE", jsonVariable: "SCHEDULED_MEETINGS_PATH",
-    open: async () => {
-      await createScheduledMeetingPersistence().save([]);
-    },
-  },
-  {
-    name: "scheduled webinars", modeVariable: "SCHEDULED_WEBINARS_PERSISTENCE", jsonVariable: "SCHEDULED_WEBINARS_PATH",
-    open: async () => {
-      createScheduledWebinarPersistence().save([]);
-    },
+    name: "the per-store mode variables",
+    variables: ["SCHEDULING_PERSISTENCE", "SCHEDULED_MEETINGS_PERSISTENCE", "SCHEDULED_WEBINARS_PERSISTENCE"],
   },
 ];
 
@@ -37,7 +34,7 @@ beforeEach(() => {
   const blocker = join(dir, "not-a-directory");
   writeFileSync(blocker, "");
   vi.stubEnv("CONCLAVE_SQLITE_PATH", join(blocker, "conclave.sqlite"));
-  for (const variable of ["SCHEDULING_SQLITE_PATH", "SCHEDULED_MEETINGS_SQLITE_PATH", "SCHEDULED_WEBINARS_SQLITE_PATH", "RECORDING_STORAGE_PATH", "REDIS_URL", "SFU_REDIS_URL", "SFU_PERSISTENCE_REDIS_URL"]) {
+  for (const variable of ["SCHEDULING_SQLITE_PATH", "SCHEDULED_MEETINGS_SQLITE_PATH", "SCHEDULED_WEBINARS_SQLITE_PATH", "RECORDING_STORAGE_PATH", "REDIS_URL", "SFU_REDIS_URL", "SFU_PERSISTENCE_REDIS_URL", "CONTROL_PLANE_PERSISTENCE", "SCHEDULING_PERSISTENCE", "SCHEDULED_MEETINGS_PERSISTENCE", "SCHEDULED_WEBINARS_PERSISTENCE"]) {
     vi.stubEnv(variable, "");
   }
 });
@@ -48,21 +45,23 @@ afterEach(() => {
 });
 
 describe("a SQLite store that will not open", () => {
-  for (const store of stores) {
-    for (const nodeEnv of ["production", "development"]) {
-      it(`stops ${store.name} startup in ${nodeEnv} instead of writing JSON anywhere`, async () => {
-        vi.stubEnv("NODE_ENV", nodeEnv);
-        vi.stubEnv(store.modeVariable, "");
-        vi.stubEnv(store.jsonVariable, jsonPath);
-        await expect(store.open()).rejects.toThrow();
-        expect(existsSync(jsonPath)).toBe(false);
-      });
-    }
+  for (const nodeEnv of ["production", "development"]) {
+    it(`stops startup in ${nodeEnv} instead of writing JSON anywhere`, async () => {
+      vi.stubEnv("NODE_ENV", nodeEnv);
+      vi.stubEnv("CONTROL_PLANE_JSON_PATH", jsonPath);
+      vi.stubEnv("SCHEDULING_PATH", jsonPath);
+      vi.stubEnv("SCHEDULED_MEETINGS_PATH", jsonPath);
+      vi.stubEnv("SCHEDULED_WEBINARS_PATH", jsonPath);
+      await expect(openAndWrite()).rejects.toThrow();
+      expect(existsSync(jsonPath)).toBe(false);
+    });
+  }
 
-    it(`still uses JSON for ${store.name} when the operator selects it`, async () => {
-      vi.stubEnv(store.modeVariable, "json");
-      vi.stubEnv(store.jsonVariable, jsonPath);
-      await store.open();
+  for (const mode of modes) {
+    it(`still uses JSON when the operator selects it with ${mode.name}`, async () => {
+      for (const variable of mode.variables) vi.stubEnv(variable, "json");
+      vi.stubEnv("CONTROL_PLANE_JSON_PATH", jsonPath);
+      await openAndWrite();
       expect(existsSync(jsonPath)).toBe(true);
     });
   }

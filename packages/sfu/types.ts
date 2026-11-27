@@ -61,6 +61,8 @@ export interface JoinRoomData {
   /** An admission a host created with `admin:createAdmission`. */
   admissionCode?: string;
   mediaCapabilities?: ClientMediaCapabilities;
+  // The pass from an earlier join to this room, sent on every rejoin.
+  roomRecoveryPass?: string;
 }
 
 export interface JoinRoomResponse extends JoinRoomAnswerFields {
@@ -68,6 +70,9 @@ export interface JoinRoomResponse extends JoinRoomAnswerFields {
   existingProducers: ProducerInfo[];
   displayNameSnapshot?: DisplayNameSnapshotEntry[];
   webcamCodecPolicy?: WebcamCodecPolicy;
+  // Proof of having been let in, to send back on a rejoin. Absent while
+  // waiting, for webinar attendees, and from SFUs that predate it.
+  roomRecoveryPass?: string;
 }
 
 export interface JoinRoomErrorResponse {
@@ -371,6 +376,7 @@ export interface ScheduledWebinar {
   webinarLink: string;
   coHostInviteTokenHash: string | null;
   coHostInviteTokenCreatedAt: number | null;
+  inviteCodeHash?: string | null;
 }
 
 export interface CreateScheduledWebinarRequest {
@@ -444,6 +450,8 @@ export interface ScheduledMeeting {
   attendeeEmail?: string | null;
   attendeeNote?: string | null;
   attendeeTimeZone?: string | null;
+  // Invited people a host removed from the meeting or took admission back
+  // from. They knock like anyone else until a host lets them in again.
   googleCalendarEventId?: string | null;
   calendarSyncStatus?: "not_required" | "pending" | "synced" | "failed";
   calendarSyncError?: string | null;
@@ -556,6 +564,7 @@ export interface SchedulingEventType {
 
 export interface SchedulingCalendarConnection {
   id: string;
+  grantId: string;
   clientId: string;
   profileId: string;
   userId: string;
@@ -1118,6 +1127,7 @@ export interface AppsState {
    */
   docGeneration: number | null;
   roomId?: string;
+  notInRoom?: true;
 }
 
 /** Why a stage command was refused, for clients to explain it. */
@@ -1126,6 +1136,7 @@ export type AppsStageErrorCode = "stale_revision" | "room_full";
 export interface AppsOpenData {
   appId: string;
   expectedRevision?: number;
+  expectedRoomId?: string;
   options?: Record<string, unknown>;
 }
 
@@ -1139,6 +1150,7 @@ export interface AppsOpenResponse {
 
 export interface AppsCloseData {
   expectedRevision?: number;
+  expectedRoomId?: string;
 }
 
 export interface AppsCloseResponse {
@@ -1175,12 +1187,16 @@ export interface AppsLockResponse {
 export interface AppsSyncData {
   appId: string;
   syncMessage: Uint8Array;
+  canRetry?: boolean;
+  wholeChanges?: boolean;
 }
 
 export interface AppsSyncResponse {
   syncMessage: Uint8Array;
   stateVector?: Uint8Array;
   awarenessUpdate?: Uint8Array;
+  stagesParts?: true;
+  takesUpdateLists?: true;
 }
 
 export interface AppsSyncError {
@@ -1189,10 +1205,18 @@ export interface AppsSyncError {
   retryAfterMs?: number;
 }
 
+export interface AppsUpdatePart {
+  id: string;
+  index: number;
+  count: number;
+}
+
 export interface AppsUpdateData {
   appId: string;
-  update: Uint8Array;
+  update?: Uint8Array;
+  updates?: Uint8Array[];
   replicaId?: string;
+  part?: AppsUpdatePart;
 }
 
 export interface AppsRefusedData {

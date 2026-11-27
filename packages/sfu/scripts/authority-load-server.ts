@@ -1,18 +1,15 @@
 /**
  * A real SFU for the authority load measurement. It runs the same server as
- * `server.ts` with the polls and Q&A fixtures registered, and reports its own
- * event-loop delay and CPU over IPC. Started by measure-authority-load.ts.
+ * `server.ts` with authority apps on, and reports its own event-loop delay
+ * and CPU over IPC. Started by measure-authority-load.ts.
  */
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { createAppsAuthorityRuntime } from "../server/apps/authority/index.js";
 import { createSfuServer } from "../server/createSfuServer.js";
-import { pollsAuthority } from "../test/authority/fixtures/polls.js";
-import { qaAuthority } from "../test/authority/fixtures/qa.js";
 
+// The registry's own modules: Polls and Q&A, as a deployed SFU runs them.
 const server = createSfuServer();
-server.state.appsAuthority = createAppsAuthorityRuntime({
-  modules: [pollsAuthority, qaAuthority],
-});
+server.state.appsAuthority = createAppsAuthorityRuntime();
 
 const delay = monitorEventLoopDelay({ resolution: 5 });
 let cpu = process.cpuUsage();

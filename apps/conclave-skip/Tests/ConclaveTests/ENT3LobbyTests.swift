@@ -33,7 +33,7 @@ struct ENT3LobbyTests {
         #expect(presenter.lobbyLink?.routeId == routeId)
         #expect(presenter.lobbyAudio?.routeId == routeId)
         #expect(presenter.lobbyLink?.roomLabel == "rose-sora-luffy")
-        #expect(presenter.lobbyLink?.meetingLink == "https://conclave.acmvit.in/rose-sora-luffy")
+        #expect(presenter.lobbyLink?.meetingLink == "https://conclave.acmvit.in/rose-sora-luffy?clientId=conclave")
         #expect(presenter.lobbyLink?.canShare == true)
         #expect(presenter.lobbyIdentity?.guestName == "Avery")
         #expect(presenter.lobbyIdentity?.nameLimit == 40)

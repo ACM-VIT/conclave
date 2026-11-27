@@ -219,8 +219,8 @@ final class SocketIOManager {
     func closeBrowser() async throws { fatalError() }
     func sendBrowserActivity() { fatalError() }
     func getAppsState() async throws -> AppsStateNotification { fatalError() }
-    func openApp(_ appId: String) async throws -> AppsOpenResponse { fatalError() }
-    func closeApp() async throws -> AppsCloseResponse { fatalError() }
+    func openApp(_ appId: String, expectedRevision: Int?, expectedRoomId: String?) async throws -> AppsOpenResponse { fatalError() }
+    func closeApp(expectedRevision: Int?, expectedRoomId: String?) async throws -> AppsCloseResponse { fatalError() }
     func setAppsLocked(_ locked: Bool) async throws -> AppsLockResponse { fatalError() }
     func syncApp(appId: String, stateVector: Data) async throws -> AppsSyncResponse { fatalError() }
     func sendAppYjsUpdate(appId: String, update: Data) { fatalError() }

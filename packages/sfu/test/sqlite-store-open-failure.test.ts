@@ -4,15 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createScheduledMeetingPersistence } from "../server/scheduledMeetings.js";
-import { createScheduledWebinarPersistence } from "../server/scheduledWebinars.js";
-import { createSchedulingPersistence } from "../server/scheduling.js";
-
-const stores = [
-  { name: "scheduling", open: () => createSchedulingPersistence() },
-  { name: "scheduled meetings", open: () => createScheduledMeetingPersistence() },
-  { name: "scheduled webinars", open: () => createScheduledWebinarPersistence() },
-];
+import { createSqliteBackend } from "../server/controlPlane/backends/sqlite.js";
 
 const openHandles = (path: string): number => {
   const target = realpathSync(path);
@@ -47,8 +39,9 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-describe.each(stores)("the $name store", ({ open }) => {
+describe("the control-plane SQLite store", () => {
   it("closes its database handle when opening fails after the write check", () => {
+    const open = () => createSqliteBackend(sqlitePath());
     const reader = new DatabaseSync(sqlitePath());
     try {
       reader.exec("BEGIN");

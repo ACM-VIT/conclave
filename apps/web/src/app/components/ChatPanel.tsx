@@ -371,6 +371,12 @@ function ChatPanel({
   }, [onCancelAssistantApiKey]);
 
   useEffect(() => {
+    if (window.matchMedia?.("(hover: hover) and (pointer: fine)").matches) {
+      textareaRef.current?.focus({ preventScroll: true });
+    }
+  }, []);
+
+  useEffect(() => {
     if (!assistantApiKeyPrompt.visible) {
       setAssistantApiKeyInput("");
     }
@@ -1180,6 +1186,7 @@ function ChatPanel({
               onChange={handleImageSelected}
               className="sr-only"
               tabIndex={-1}
+              aria-label="Attach an image"
             />
             <button
               type="button"

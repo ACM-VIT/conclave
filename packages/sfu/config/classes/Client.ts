@@ -122,6 +122,7 @@ export class Client {
 
   public isMuted: boolean = false;
   public isCameraOff: boolean = false;
+  public takesLargeAppUpdates: boolean | null = null;
 
   constructor(options: ClientOptions) {
     this.id = options.id;

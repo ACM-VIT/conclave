@@ -19,7 +19,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useId, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useEffectEvent, useId, useRef, useState } from "react";
 import { prefetchConclaveAnimation } from "../lib/conclaveAnimation";
 import { prefetchConclaveLock } from "../lib/conclaveSound";
 import type { Dispatch, SetStateAction } from "react";
@@ -45,13 +45,21 @@ import {
   inputEditRange,
   normalizeCodeField,
   parseCodeFieldPaste,
+  isCameraAccessBlocked,
   planFieldEdit,
   sanitizeInstitutionDisplayName,
   trackFieldHistory,
 } from "../lib/utils";
+import { markMeetingCreatedHere } from "../lib/new-meeting";
 import type { SetupNotice } from "../lib/setup-notice";
 import RoomPresenceBadge from "./RoomPresenceBadge";
-import { useCameraAccessBlocked } from "../hooks/useCameraAccessBlocked";
+import BlockedMediaDialog from "./BlockedMediaDialog";
+import { useMediaPermissionState } from "../hooks/useMediaPermissionState";
+import {
+  blockedDevicesNowGranted,
+  isCaptureBlocked,
+  type BlockedDevice,
+} from "../lib/blocked-media";
 import { useClipboardCopy } from "../hooks/useClipboardCopy";
 import { useCodeField } from "../hooks/useCodeField";
 import { applyRejoinMedia, saveRejoinIntent, type RejoinMedia } from "../lib/rejoin-intent";
@@ -69,6 +77,7 @@ import {
   MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
   MEDIA_CAPTURE_RECOVERY_TIMEOUT_MS,
 } from "../lib/media-capture-timeout";
+import { onCapturesReleased } from "../lib/media-captures";
 import { prewarmVideoEffectsAssetsDeferred } from "../lib/video-effects-lazy";
 import type { VideoEffectsBridgeState } from "./VideoEffectsBridge";
 import {
@@ -172,7 +181,6 @@ interface JoinScreenProps {
   clientId?: string;
   showPermissionHint: boolean;
   rooms: RoomInfo[];
-  roomsStatus: "idle" | "loading" | "error";
   onRefreshRooms: (id?: string) => void;
   displayNameInput: string;
   onDisplayNameInputChange: (value: string) => void;
@@ -196,6 +204,11 @@ const CTA_PRIMARY =
 const CTA_GHOST =
   "inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl short-screen:h-11 border border-white/10 bg-white/[0.04] text-[15px] font-medium text-[#fafafa] transition-colors duration-150 hover:bg-white/[0.08] disabled:opacity-50";
 const DEBUG_VIDEO_EFFECTS_STORAGE_KEY = "conclave:debug-video-effects";
+const BLOCKED_DEVICE_ORDER: readonly BlockedDevice[] = ["camera", "microphone"];
+const BLOCKED_DEVICE_OF: Record<PrejoinMediaKind, BlockedDevice> = {
+  audio: "microphone",
+  video: "camera",
+};
 
 const getSignInHref = (): string => {
   if (typeof window === "undefined") return "/sign-in";
@@ -325,12 +338,12 @@ function JoinScreen({
   isAdmin,
   user,
   userEmail,
+  connectionState,
+  enableRoomRouting,
   forceJoinOnly,
   clientId,
-  enableRoomRouting,
   showPermissionHint,
   rooms,
-  roomsStatus,
   onRefreshRooms,
   displayNameInput,
   onDisplayNameInputChange,
@@ -381,8 +394,6 @@ function JoinScreen({
   const [isEffectsOpen, setIsEffectsOpen] = useState(false);
   const [guestName, setGuestName] = useState("");
   const [isSigningOut, setIsSigningOut] = useState(false);
-  const [presenceChecked, setPresenceChecked] = useState(false);
-  const [presenceSettled, setPresenceSettled] = useState(false);
   const [audioInputs, setAudioInputs] = useState<DeviceOption[]>([]);
   const [videoInputs, setVideoInputs] = useState<DeviceOption[]>([]);
   const [selectedAudioId, setSelectedAudioId] = useState("");
@@ -422,13 +433,44 @@ function JoinScreen({
     ? videoEffectsBridgeState.debugStats
     : null;
   const previewStream = processedPreviewStream ?? localStream;
+  const cameraPermissionState = useMediaPermissionState("camera");
+  const microphonePermissionState = useMediaPermissionState("microphone");
+  const [blockedDevices, setBlockedDevices] = useState<BlockedDevice[]>([]);
+  const [isRetryingBlocked, setIsRetryingBlocked] = useState(false);
+  const markDeviceAvailable = (kind: PrejoinMediaKind) => {
+    const device = BLOCKED_DEVICE_OF[kind];
+    setBlockedDevices((current) =>
+      current.includes(device)
+        ? current.filter((candidate) => candidate !== device)
+        : current,
+    );
+  };
+  const reportCaptureFailure = (kind: PrejoinMediaKind, error: unknown) => {
+    const device = BLOCKED_DEVICE_OF[kind];
+    void isCaptureBlocked(device, error).then((blocked) => {
+      if (!blocked || captureSlotsRef.current[kind]) return;
+      if (kind === "video" && audioOnlyRef.current) return;
+      const isLive = localStreamRef.current
+        ?.getTracks()
+        .some((track) => track.kind === kind && track.readyState === "live");
+      if (isLive) return;
+      setBlockedDevices((current) =>
+        current.includes(device)
+          ? current
+          : BLOCKED_DEVICE_ORDER.filter(
+              (candidate) => candidate === device || current.includes(candidate),
+            ),
+      );
+    });
+  };
   const hasLivePreviewCamera = Boolean(
     localStream
       ?.getVideoTracks()
       .some((track) => track.readyState === "live" && track.enabled),
   );
-  const isCameraPermissionBlocked = useCameraAccessBlocked({
+  const isCameraPermissionBlocked = isCameraAccessBlocked({
     hasLiveCamera: hasLivePreviewCamera,
+    permissionState: cameraPermissionState,
     mediaError,
   });
   const shouldShowPermissionCta = !isCameraOn && isCameraPermissionBlocked;
@@ -521,6 +563,12 @@ function JoinScreen({
     }
   };
 
+  const dropReleasedPreview = useEffectEvent(() => {
+    cancelCaptures(() => true);
+    replacePreviewTracks(PREJOIN_MEDIA_KINDS, []);
+  });
+  useEffect(() => onCapturesReleased(() => dropReleasedPreview()), []);
+
   const markUserMediaChoice = () => {
     cancelRejoinRestore();
     cancelCaptures((owner) => owner.source === "restore");
@@ -545,7 +593,9 @@ function JoinScreen({
         { audio: DEFAULT_AUDIO_CONSTRAINTS, video: videoConstraints },
         "prejoin microphone and camera permission request",
       );
-      replacePreviewTracks(request.currentKinds(), stream.getTracks());
+      const grantedKinds = request.currentKinds();
+      replacePreviewTracks(grantedKinds, stream.getTracks());
+      for (const kind of grantedKinds) markDeviceAvailable(kind);
     } catch (err) {
       const retryKinds = request.currentKinds();
       if (retryKinds.length === 0) return;
@@ -563,6 +613,12 @@ function JoinScreen({
       );
       const currentKinds = request.currentKinds();
       replacePreviewTracks(currentKinds, tracks);
+      results.forEach((result, index) => {
+        const kind = retryKinds[index];
+        if (!currentKinds.includes(kind)) return;
+        if (result.status === "fulfilled") markDeviceAvailable(kind);
+        else reportCaptureFailure(kind, result.reason);
+      });
       if (currentKinds.length === 0) return;
       const missing = currentKinds.filter(
         (kind) => !localStreamRef.current?.getTracks().some((track) => track.kind === kind),
@@ -671,6 +727,15 @@ function JoinScreen({
     };
   }, []);
 
+  useEffect(() => {
+    if (connectionState !== "error") return;
+    const tracks = localStreamRef.current?.getTracks() ?? [];
+    const endedKinds = PREJOIN_MEDIA_KINDS.filter((kind) =>
+      tracks.some((track) => track.kind === kind && track.readyState !== "live"),
+    );
+    if (endedKinds.length > 0) replacePreviewTracks(endedKinds, []);
+  }, [connectionState]);
+
   const livePreviewTracks = () =>
     (localStreamRef.current?.getTracks() ?? []).filter(
       (track) => track.readyState === "live" &&
@@ -729,12 +794,14 @@ function JoinScreen({
         return;
       }
       replacePreviewTracks(currentKinds, tracks);
+      if (currentKinds.includes(kind)) markDeviceAvailable(kind);
     } catch (err) {
       if (request.currentKinds().length !== 0) {
         warnJoinMedia("get_user_media_preview_failed", {
           kind, deviceId,
           error: err instanceof Error ? { name: err.name, message: err.message } : err,
         });
+        if (source === "choice") reportCaptureFailure(kind, err);
       }
     } finally {
       request.release();
@@ -820,7 +887,9 @@ function JoinScreen({
     onEnterStart?.("new");
     commitPrejoinMedia(skipMutedMicWarmup);
     onIsAdminChange(true);
-    setPending({ mode: "new", destination: { roomCode: generateRoomCode(), clientId: pageClientId } });
+    const roomId = generateRoomCode();
+    markMeetingCreatedHere(roomId);
+    setPending({ mode: "new", destination: { roomCode: roomId, clientId: pageClientId } });
   };
   const joinMeeting = () => {
     const { destination, onThisPage } = codeField;
@@ -842,6 +911,39 @@ function JoinScreen({
     onIsAdminChange(false);
     setPending({ mode: "join", destination });
   };
+
+  const retryBlockedDevices = async (
+    devices: readonly BlockedDevice[] = blockedDevices,
+  ) => {
+    if (isRetryingBlocked) return;
+    setIsRetryingBlocked(true);
+    try {
+      if (devices.includes("microphone") && !isMicOn) await toggleMic();
+      if (devices.includes("camera") && !isCameraOn && !isAudioOnly) {
+        await toggleCamera();
+      }
+    } finally {
+      setIsRetryingBlocked(false);
+    }
+  };
+  const grantedBlockedDevices = blockedDevicesNowGranted(blockedDevices, {
+    camera: cameraPermissionState,
+    microphone: microphonePermissionState,
+  });
+  const grantedBlockedKey = grantedBlockedDevices.join(",");
+  const autoRetriedRef = useRef<BlockedDevice[]>([]);
+  useEffect(() => {
+    autoRetriedRef.current = autoRetriedRef.current.filter((device) =>
+      grantedBlockedDevices.includes(device),
+    );
+    if (isRetryingBlocked) return;
+    const due = grantedBlockedDevices.filter(
+      (device) => !autoRetriedRef.current.includes(device),
+    );
+    if (due.length === 0) return;
+    autoRetriedRef.current = [...autoRetriedRef.current, ...due];
+    void retryBlockedDevices(due);
+  }, [grantedBlockedKey, isRetryingBlocked]);
 
   const handleSignOut = async () => {
     if (isSigningOut) return;
@@ -957,19 +1059,11 @@ function JoinScreen({
     return () => clearInterval(interval);
   }, [settledLookup, isAdmin, onRefreshRooms]);
 
-  useEffect(() => {
-    if (roomsStatus === "loading") setPresenceChecked(true);
-    else if (roomsStatus === "idle" && presenceChecked) setPresenceSettled(true);
-  }, [roomsStatus, presenceChecked]);
   const matchedRoom = presenceTarget
     ? rooms.find(
         (room) => room.id.toLowerCase() === presenceTarget.toLowerCase(),
       )
     : undefined;
-  const showPresence = presenceTarget.length > 0 && presenceChecked;
-  const presenceCount =
-    presenceSettled && codeField.settled ? matchedRoom?.userCount ?? 0 : null;
-  const presenceLoading = !presenceSettled || !codeField.settled;
 
   const refreshDevices = useCallback(async () => {
     if (!navigator.mediaDevices?.enumerateDevices) return;
@@ -1296,11 +1390,10 @@ function JoinScreen({
                       No shareable link
                     </span>
                   ) : null}
-                  {showPresence ? (
+                  {matchedRoom ? (
                     <RoomPresenceBadge
                       className={inviteLink === null ? "min-w-0" : "ml-auto"}
-                      count={presenceCount}
-                      loading={presenceLoading}
+                      count={matchedRoom.userCount}
                     />
                   ) : null}
                 </div>
@@ -1412,6 +1505,14 @@ function JoinScreen({
           effects={videoEffects}
           processedVideoTrackRef={processedPreviewTrackRef}
           onStateChange={setVideoEffectsBridgeState}
+        />
+      ) : null}
+      {blockedDevices.length > 0 ? (
+        <BlockedMediaDialog
+          devices={blockedDevices}
+          isRetrying={isRetryingBlocked}
+          onRetry={() => void retryBlockedDevices()}
+          onClose={() => setBlockedDevices([])}
         />
       ) : null}
       {isEffectsOpen && (

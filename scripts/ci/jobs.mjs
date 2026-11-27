@@ -49,16 +49,36 @@ export const jobs = {
     budgetSeconds: 110,
     budgetFrom: "run",
     tasks: [
-      { dir: "apps/web", script: "test:unit" },
+      { dir: "apps/web", script: "test:unit-a" },
       { dir: "packages/meeting-core", script: "test" },
       { dir: "packages/ai", script: "test" },
       { dir: "packages/shared-browser", script: "test" },
     ],
   },
+  "test-web-unit-b": {
+    budgetSeconds: 110,
+    budgetFrom: "run",
+    tasks: [{ dir: "apps/web", script: "test:unit-b" }],
+  },
   "test-sfu": {
     budgetSeconds: 110,
     budgetFrom: "run",
-    tasks: [{ dir: "packages/sfu", script: "test" }],
+    tasks: [{ dir: "packages/sfu", script: "test:unit" }],
+  },
+  "test-transcript-oracle": {
+    budgetSeconds: 300,
+    budgetFrom: "run",
+    tasks: [{ dir: "apps/web", script: "test:transcript-oracle" }],
+  },
+  "test-backup": {
+    budgetSeconds: 300,
+    budgetFrom: "run",
+    tasks: [{ dir: ".", script: "test:backup" }],
+  },
+  "test-sfu-app-model": {
+    budgetSeconds: 110,
+    budgetFrom: "run",
+    tasks: [{ dir: "packages/sfu", script: "test:apps-room-model" }],
   },
   build: {
     budgetSeconds: 240,
@@ -92,6 +112,7 @@ export const jobs = {
       { dir: ".", script: "check:native-test-stores" },
       { dir: ".", script: "test:native-test-stores" },
       { dir: ".", script: "check:native-game-fixtures" },
+      { dir: ".", script: "check:join-deadlines" },
       { dir: ".", script: "check:json-store-fixtures" },
       { dir: ".", script: "check:docker-context" },
       { dir: ".", script: "check:sfu-source-manifest" },

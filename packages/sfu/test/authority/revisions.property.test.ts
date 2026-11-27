@@ -22,7 +22,8 @@ import {
 import type { AuthorityRandom } from "@conclave/apps-sdk/authority/server";
 import type { CommittedView } from "../../server/apps/authority/views.js";
 import { Harness, person, type Tab } from "./harness.js";
-import { pollsAuthority, pollsContract } from "./fixtures/polls.js";
+import { pollsContract } from "@conclave/apps-sdk/polls/core";
+import { pollsAuthority } from "@conclave/apps-sdk/polls/server";
 
 beforeEach(() => {
   vi.useFakeTimers({ now: 1_000_000 });

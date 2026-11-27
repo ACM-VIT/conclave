@@ -590,6 +590,7 @@ function ControlsBar(props: ControlsBarProps) {
   const {
     compact = false,
     roomId,
+    clientId,
     reactionOptions,
     onSendReaction,
     onLeave,
@@ -764,7 +765,7 @@ function ControlsBar(props: ControlsBarProps) {
   const appsEntry: DockEntry | null = appsItem
     ? {
         d: { ...appsItem, variant: props.isAppsOpen ? "active" : "default" },
-        live: Boolean(props.hasActiveApp),
+        live: Boolean(props.hasActiveApp || props.hasAppWaiting),
       }
     : null;
   const transcriptEntry: DockEntry | null = transcriptItem
@@ -790,7 +791,7 @@ function ControlsBar(props: ControlsBarProps) {
 
   const promotedEntry =
     (transcriptState?.attention ? transcriptEntry : null) ??
-    (props.hasActiveApp ? appsEntry : null) ??
+    (props.hasActiveApp || props.hasAppWaiting ? appsEntry : null) ??
     (props.hasActiveGame ? gamesEntry : null) ??
     (transcriptState ? transcriptEntry : null) ??
     (props.isGamesOpen ? gamesEntry : null) ??
@@ -817,7 +818,7 @@ function ControlsBar(props: ControlsBarProps) {
   return (
     <div className="relative flex w-full items-center gap-2 px-4 py-3 sm:grid sm:grid-cols-[1fr_auto_1fr]">
       <div className="flex min-w-0 shrink-0 items-center justify-self-start">
-        {!compact && <MeetingInfoTag roomId={roomId} />}
+        {!compact && <MeetingInfoTag roomId={roomId} clientId={clientId} />}
       </div>
 
       <div className="flex flex-1 items-center justify-center justify-self-center gap-2.5">
@@ -921,6 +922,7 @@ function ControlsBar(props: ControlsBarProps) {
           />
           {filtersTip.visible &&
           !watchTip.visible &&
+          !props.isToastShowing &&
           !moreOpen &&
           !reactionsOpen &&
           !browserOpen ? (

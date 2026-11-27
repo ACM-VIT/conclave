@@ -10,6 +10,7 @@
   "apps/conclave-skip/Sources/Conclave/Core/Session/MeetingSessionPolicies.swift": 6,
   "apps/conclave-skip/Sources/Conclave/Core/State/MeetingState.swift": 1,
   "apps/conclave-skip/Sources/Conclave/Core/WebRTC/WebRTCClient.swift": 3,
+  "apps/conclave-skip/Sources/Conclave/Features/Join/EntryPolicies.swift": 3,
   "apps/conclave-skip/Sources/Conclave/Features/Meeting/Activities/ActiveAppSession.swift": 2,
   "apps/conclave-skip/Sources/Conclave/Features/Meeting/Activities/ActivitiesModels.swift": 2,
   "apps/conclave-skip/Sources/Conclave/Features/Meeting/MeetingViewModel.swift": 14,
@@ -32,7 +33,14 @@
   "apps/conclave-skip/Tests/ConclaveTests/Skip/SingleFlightGateBridgeTests.kt": 1,
   "apps/web/src/app/globals.css": 1,
   "packages/shared-browser/docker/start.sh": 2,
+  "scripts/backup/backup.sh": 53,
+  "scripts/backup/backup_state.py": 5,
+  "scripts/backup/lib.sh": 56,
+  "scripts/backup/restore.sh": 29,
+  "scripts/backup/restore_state.py": 14,
+  "scripts/backup/statelib.py": 5,
   "scripts/deploy-browser-service.sh": 5,
-  "scripts/deploy-sfu.sh": 201,
-  "scripts/deploy-web-staging.sh": 6
+  "scripts/deploy-sfu.sh": 202,
+  "scripts/deploy-web-staging.sh": 6,
+  "scripts/test-support/backup-property.py": 8
 }

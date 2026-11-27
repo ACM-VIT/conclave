@@ -36,11 +36,17 @@ export function GamePanel({
   dockWidth,
   maxDockWidth,
   onDockWidthChange,
+  isCovered = false,
 }: {
   rightOffset?: number;
   dockWidth?: number;
   maxDockWidth?: number;
   onDockWidthChange?: (width: number) => void;
+  /**
+   * Another panel has the dock for now. The game stays mounted, out of
+   * sight, so a half-typed answer is still there when it comes back.
+   */
+  isCovered?: boolean;
 }) {
   const { publicState, view, isAdmin, isReadOnly, userId, move, endGame, startGame, joinGame } =
     useGame();
@@ -86,8 +92,14 @@ export function GamePanel({
   return (
     <aside
       className={GAME_DOCK_PANEL_CLASS}
-      style={{ right: rightOffset, width: dockWidth, fontFamily: HEAD_FONT }}
+      style={{
+        right: rightOffset,
+        width: dockWidth,
+        fontFamily: HEAD_FONT,
+        display: isCovered ? "none" : undefined,
+      }}
       aria-label={`${publicState.name} game`}
+      aria-hidden={isCovered || undefined}
     >
       <GameDockResizeHandle
         width={dockWidth}

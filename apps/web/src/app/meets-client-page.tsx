@@ -9,8 +9,8 @@ import {
 import type { JoinMode } from "./lib/types";
 import type { RoomInfo } from "@/lib/sfu-types";
 import { resolveMeetingClientId } from "@/lib/sfu-client-id";
-import { requestJoinInfo } from "./lib/join-info-request";
-import { readResponseError } from "./lib/utils";
+import { requestJoinInfo } from "./lib/join-info";
+import { getOrCreateSessionId, readResponseError } from "./lib/utils";
 
 const reactionAssets = [
   "aura.gif",
@@ -21,10 +21,12 @@ const reactionAssets = [
   "yawn.gif",
 ];
 
-
 type MeetsClientPageProps = {
   initialRoomId?: string;
   forceJoinOnly?: boolean;
+  // A join may open the room when the code is known to be real (a scheduled
+  // meeting). Otherwise only hosts and tabs that were in the room create it.
+  allowRoomCreation?: boolean;
   bypassMediaPermissions?: boolean;
   sfuClientId?: string;
   joinMode?: JoinMode;
@@ -42,6 +44,7 @@ type MeetsClientPageProps = {
 export default function MeetsClientPage({
   initialRoomId,
   forceJoinOnly = false,
+  allowRoomCreation = false,
   bypassMediaPermissions = false,
   sfuClientId,
   joinMode = "meeting",
@@ -61,7 +64,7 @@ export default function MeetsClientPage({
   const usesRoomRouting = resolvedClientId === "conclave";
 
   const getJoinInfo = useCallback(
-    async (
+    (
       roomId: string,
       sessionId: string,
       options?: {
@@ -70,35 +73,21 @@ export default function MeetsClientPage({
         joinMode?: JoinMode;
         signal?: AbortSignal;
       }
-    ) => {
-      const resolvedUser = options?.user ?? defaultUser;
-      const isHost = Boolean(options?.isHost);
-      const resolvedJoinMode = options?.joinMode ?? joinMode;
-      return guestPass.join((guestFields) =>
-        requestJoinInfo(
-          "/api/sfu/join",
-          {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-sfu-client": resolvedClientId,
-          },
-          body: JSON.stringify({
-            roomId,
-            sessionId,
-            user: resolvedUser,
-            isHost,
-            allowRoomCreation: forceJoinOnly,
-            clientId: resolvedClientId,
-            joinMode: resolvedJoinMode,
-              ...guestFields,
-            }),
-          },
-          { signal: options?.signal },
-        ),
-      );
-    },
-    [forceJoinOnly, joinMode, defaultUser, resolvedClientId, guestPass]
+    ) =>
+      guestPass.join((guestFields) =>
+        requestJoinInfo({
+          roomId,
+          sessionId,
+          user: options?.user ?? defaultUser,
+          isHost: Boolean(options?.isHost),
+          isKnownMeeting: allowRoomCreation,
+          clientId: resolvedClientId,
+          joinMode: options?.joinMode ?? joinMode,
+          guestFields,
+          signal: options?.signal,
+        }),
+      ),
+    [allowRoomCreation, joinMode, defaultUser, resolvedClientId, guestPass]
   );
 
   const getRooms = useCallback(async () => {
@@ -117,13 +106,17 @@ export default function MeetsClientPage({
     const normalizedRoomId = roomId.trim();
     if (!normalizedRoomId) return null;
 
+    // The headcount is only for people in or let into the room; the server
+    // answers 403 to everyone else, which shows nothing.
+    const query = new URLSearchParams({ sessionId: getOrCreateSessionId() });
     const response = await fetch(
-      `/api/sfu/rooms/${encodeURIComponent(normalizedRoomId)}`,
+      `/api/sfu/rooms/${encodeURIComponent(normalizedRoomId)}?${query}`,
       {
         cache: "no-store",
         headers: { "x-sfu-client": resolvedClientId },
       },
     );
+    if (response.status === 403) return null;
     if (!response.ok) {
       throw new Error(await readResponseError(response));
     }

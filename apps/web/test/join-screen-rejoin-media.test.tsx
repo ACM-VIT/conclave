@@ -4,7 +4,8 @@ import { act, lazy, StrictMode, Suspense, useEffect, useState, type ComponentPro
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import JoinScreen from "../src/app/components/JoinScreen";
-import { readRejoinIntent, saveRejoinIntent } from "../src/app/lib/rejoin-intent";
+import { releaseAllCaptures } from "../src/app/lib/media-captures";
+import { clearRejoinIntent, readRejoinIntent, saveRejoinIntent } from "../src/app/lib/rejoin-intent";
 import { DEFAULT_VIDEO_EFFECTS } from "../src/app/lib/video-effects";
 
 vi.mock("@/lib/auth-client", () => ({
@@ -366,4 +367,33 @@ it("starts a new meeting on a non-default tenant while restore is pending", asyn
   await act(async () => stale.resolve(late));
   expect(late.getAudioTracks()[0].readyState).toBe("ended");
   expect(getUserMedia).toHaveBeenCalledTimes(1);
+});
+
+it("shows both devices off, and joins with them off, once the call has released every capture", async () => {
+  await openRoom();
+  expect(button("Turn off camera")).toBeDefined();
+  expect(button("Turn off microphone")).toBeDefined();
+  await act(async () => releaseAllCaptures());
+  expect(button("Turn on camera")).toBeDefined();
+  expect(button("Turn on microphone")).toBeDefined();
+  await click("Join");
+  expect(commitMedia).toHaveBeenCalledExactlyOnceWith({
+    stream: null, isAudioOnly: false, isMicOn: false, isCameraOn: false, skipMutedMicWarmup: true,
+  });
+});
+
+it("does not ask again for a permission request the call released while it was pending", async () => {
+  clearRejoinIntent();
+  showPermissionsPrompt();
+  const pending = holdCapture();
+  await openRoom();
+  await click("Allow microphone and camera");
+  expect(getUserMedia).toHaveBeenCalledTimes(1);
+  await act(async () => releaseAllCaptures());
+  const late = capture("audio", "video");
+  await act(async () => pending.resolve(late));
+  expect(late.getTracks().map((track) => track.readyState)).toEqual(["ended", "ended"]);
+  expect(getUserMedia).toHaveBeenCalledTimes(1);
+  expect(button("Turn on camera")).toBeDefined();
+  expect(button("Turn on microphone")).toBeDefined();
 });

@@ -1,4 +1,7 @@
-import { GUEST_SEAT_KEY_PREFIX } from "@conclave/meeting-core/guest-join-claims";
+import {
+  GUEST_SEAT_KEY_PREFIX,
+  MAX_BROWSER_GUEST_PASSES,
+} from "@conclave/meeting-core/guest-join-claims";
 import { isGuestUserKey } from "../../server/identity.js";
 import { AdmissionLedger, type AdmissionScope } from "./AdmissionLedger.js";
 import { RoomAiCredentials } from "../../server/roomAiCredentials.js";
@@ -14,7 +17,9 @@ import type {
   WebRtcTransport,
 } from "mediasoup/types";
 import type { Socket } from "socket.io";
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import type { LostRoom } from "../../server/roomRecoveryLedger.js";
+import type { PassGeneration } from "../../server/roomRecoveryPass.js";
 import type {
   ActiveSpeakerChangedNotification,
   ChatMessage,
@@ -33,6 +38,7 @@ import { Admin } from "./Admin.js";
 import { Client } from "./Client.js";
 import type { ProducerType } from "./Client.js";
 import type { GameSession } from "../../server/games/engine.js";
+import type { AppDocumentPool } from "../../server/apps/documents/pool.js";
 import {
   buildWebcamCodecPolicy,
   participantsSupportWebcamCodec,
@@ -50,12 +56,14 @@ import {
 } from "../../server/webcamReceiverCapacityProof.js";
 
 export interface RoomOptions {
+  incarnationId?: string;
   id: string;
   router: Router;
   webRtcServer?: WebRtcServer;
   clientId: string;
   workerPid: number | null;
   webcamVp9Enabled?: boolean;
+  appDocuments?: AppDocumentPool;
 }
 
 type ProducerIndexEntry = {
@@ -107,7 +115,7 @@ const WEBINAR_AUDIO_LEVEL_INTERVAL_MS = 350;
 const MAX_WEBINAR_QA_ENTRIES = 300;
 // The most passes a room records as one guest: a join token names the pass
 // a tab joins under and up to 15 others.
-export const GUEST_PASS_GROUP_LIMIT = 16;
+export const GUEST_PASS_GROUP_LIMIT = MAX_BROWSER_GUEST_PASSES;
 
 /** What a host's admission did (see `Room.admitUserKeys`). */
 export type AdmitResult =
@@ -134,7 +142,10 @@ export type GuestLinkPlan = {
 
 export type GuestIdentityMerge = { readonly from: string; readonly into: string };
 
-export type StagedGuestMerge = { commit(): boolean };
+export type StagedGuestMerge = {
+  commit(): boolean;
+  afterCommit?(): void;
+};
 
 export type GuestIdentityMerger = (
   merges: readonly GuestIdentityMerge[],
@@ -151,6 +162,17 @@ const sameMerges = (
 // would record them, else what the room already links.
 const rightsPassesOf = (link: GuestLinkPlan | undefined) =>
   link?.recordable ? link.passes : undefined;
+
+export type Reach = "rights" | "removal";
+
+export type Person = {
+  readonly userKey: string;
+  readonly reach: Reach;
+  readonly passes: ReadonlySet<string>;
+};
+const NO_PASSES: ReadonlySet<string> = new Set();
+const isSelfNamedGuestKey = (userKey: string): boolean =>
+  isGuestUserKey(userKey) && !userKey.startsWith(GUEST_SEAT_KEY_PREFIX);
 const MAX_WEBINAR_OPEN_QUESTIONS_PER_USER = 3;
 export const MAX_WEBINAR_QA_QUESTION_LENGTH = 500;
 export const MAX_WEBINAR_QA_ANSWER_LENGTH = 1000;
@@ -218,6 +240,24 @@ const verifyInviteCodeHash = (
   return timingSafeEqual(expected, candidate);
 };
 
+export type HostReason = "owner" | "cohost" | "temporary" | "opener";
+export type HostBasis = "owner" | "promoted" | "fallback";
+
+const LIFECYCLE_TIMERS = [
+  "cleanupTimer",
+  "restorerLapseTimer",
+  "lostCallTimer",
+  "openingDeadlineTimer",
+] as const;
+type LifecycleTimer = (typeof LIFECYCLE_TIMERS)[number];
+
+const HOST_REASON_RANK: Record<HostReason, number> = {
+  opener: 0,
+  temporary: 0,
+  cohost: 1,
+  owner: 2,
+};
+
 /** One tab's request to be let into a room. */
 export type WaitingRequest = {
   userKey: string;
@@ -248,6 +288,21 @@ export class Room {
   public readonly clientId: string;
   public readonly workerPid: number | null;
   public readonly channelId: string;
+  // Tells this room apart from an earlier or later one at the same code.
+  public readonly incarnationId: string;
+  public ownershipGeneration: number | null = null;
+  public recoveryPassGenerations: readonly PassGeneration[] | null = null;
+  public earlierPassGenerations: PassGeneration[] = [];
+  // The room whose recovery record this one took over when it was created,
+  // the writer of the newest record then. It may write over that room's
+  // records, and over no one else's but its own.
+  public takesOverRecordOf: string | null = null;
+  // The signed-in account this room's code belongs to (who booked it, or who
+  // made it), which hosts whenever it is here. Null for a code a guest made.
+  public ownerEmail: string | null = null;
+  // Set when this code was ended for everyone a moment ago: recovery passes
+  // signed up to then are from the ended meeting, not from this one.
+  public recoveryPassesVoidUntil: number | null = null;
   public clients: Map<string, Client> = new Map();
   public pendingClients: Map<string, WaitingRequest> = new Map();
   public pendingDisconnects: Map<
@@ -263,7 +318,7 @@ export class Room {
   public currentScreenShareProducerId: string | null = null;
   public currentQuality: VideoQuality = "standard";
   public userKeysById: Map<string, string> = new Map();
-  public adminUserKeys: Set<string> = new Set();
+  private readonly hostReasonsByKey = new Map<string, HostReason>();
   public displayNamesByKey: Map<string, string> = new Map();
   public handRaisedByUserId: Set<string> = new Set();
   private recentChatMessages: ChatMessage[] = [];
@@ -272,6 +327,9 @@ export class Room {
   private chatImageExpiryTimers: Map<string, NodeJS.Timeout> = new Map();
   private chatImageBytes = 0;
   public blockedUsers: Set<string> = new Set();
+  private cleanupTimer: NodeJS.Timeout | null = null;
+  private cleanupTimerDeadline = 0;
+  private primaryHostUserKey: string | null = null;
   /**
    * Guest identities bound to the proof of the guest pass they entered this
    * room with. The proof is a keyed hash the web join route signs into the
@@ -313,8 +371,6 @@ export class Room {
   private lobbyOutcomes: Map<string, "admitted" | "rejected"> = new Map();
   /** Admissions a host created and no join has used yet (code → expiry). */
   private openAdmissions: Map<string, number> = new Map();
-  public cleanupTimer: NodeJS.Timeout | null = null;
-  public hostUserKey: string | null = null;
   private _isLocked: boolean = false;
   private _isChatLocked: boolean = false;
   private _noGuests: boolean = false;
@@ -326,9 +382,7 @@ export class Room {
   private _participantVideoAllowed: boolean = true;
   private _meetingInviteCodeHash: string | null = null;
   private _meetingInviteCodeVersion = "";
-  public readonly apps = new RoomApps(
-    (userId) => this.userKeysById.get(userId) ?? userId,
-  );
+  public readonly apps: RoomApps;
   // Server-authoritative game runtime (parallel to the collaborative apps
   // relay above). At most one game runs per room. The tick timer is owned here
   // so it is torn down with the room; the handler layer drives broadcasts.
@@ -368,6 +422,35 @@ export class Room {
    * these may not re-enter as participants — a demoted client that ignores
    * the demote signal cannot simply rejoin the panel.
    */
+  private webinarDemotedUserKeys: Set<string> = new Set();
+  // People a host removed, or whose admission a host took back. Nothing but
+  // a host letting them in again gets them past the lock: not an invite, not
+  // proof they were here before.
+  private readmissionRequiredUserKeys: Set<string> = new Set();
+  // Told when someone starts or stops needing readmission, so what must
+  // outlive the room (a scheduled meeting's invitations) can keep up.
+  public onReadmissionChange: ((userKey: string, required: boolean) => void) | null =
+    null;
+  // Told when what a recreated room would need changes: who hosts, and who
+  // has to be let in again.
+  public onRecoverableChange: (() => void) | null = null;
+  // Told once, when the lost call this room stood in for is over for good.
+  public onLostCallEnded: (() => void) | null = null;
+  public awaitingOpener: { lost: LostRoom | null } | null = null;
+  private lostCallEnded = false;
+  private handingOff = false;
+  // A host ended the meeting for everyone. It may stay open a little longer
+  // to say so, but it is over: it hands out no more recovery passes.
+  private endedForEveryone = false;
+  // Set while this room stands in for a call the SFU lost and nobody from
+  // that call has come back yet. Until one does, or until no pass from the
+  // lost call can still be good, the room has no host and whoever recreated
+  // it waits like anyone else.
+  private restorer: { until: number; rosterKnown: boolean } | null = null;
+  private restorerLapseTimer: NodeJS.Timeout | null = null;
+  private lostCallTimer: NodeJS.Timeout | null = null;
+  private openingDeadlineTimer: NodeJS.Timeout | null = null;
+  private openingDeadlineAt = 0;
   private meetingParticipantCount = 0;
   private currentWebcamCodecPolicy: WebcamCodecPolicy =
     buildWebcamCodecPolicy("vp8", 0);
@@ -382,6 +465,8 @@ export class Room {
   >();
 
   constructor(options: RoomOptions) {
+    this.apps = new RoomApps((userId) => this.userKeysById.get(userId) ?? userId, options.appDocuments);
+    this.incarnationId = options.incarnationId ?? randomUUID();
     this.id = options.id;
     this.router = options.router;
     this.webRtcServer = options.webRtcServer;
@@ -810,6 +895,7 @@ export class Room {
     if (
       this.hostUserKey === userKey ||
       this.adminUserKeys.has(userKey) ||
+      this.readmissionRequiredUserKeys.has(userKey) ||
       this.admissions.names(this.principalOf(userKey), userKey) ||
       this.admissions.holdsRefusalFor(`key:${userKey}`) ||
       this.blockedUsers.has(userKey) ||
@@ -837,18 +923,22 @@ export class Room {
     userKey: string,
     guestProof: string | undefined,
   ): { ok: false } | { ok: true; bindTo: string | undefined; clearUnheldBinding?: () => void } {
+    const bound = this.guestProofsByUserKey.get(userKey);
     if (!this.holdsUserKey(userKey)) {
+      if (bound === undefined) return { ok: true, bindTo: guestProof };
       return {
         ok: true,
         bindTo: guestProof,
         clearUnheldBinding: () => this.unbindGuestProof(userKey),
       };
     }
-    const bound = this.guestProofsByUserKey.get(userKey);
     if (bound !== undefined && bound !== guestProof) {
       return { ok: false };
     }
-    return { ok: true, bindTo: bound };
+    return {
+      ok: true,
+      bindTo: bound ?? (userKey.startsWith(GUEST_SEAT_KEY_PREFIX) ? guestProof : undefined),
+    };
   }
 
   /** How many guest identities this room holds a pass proof for. */
@@ -903,26 +993,27 @@ export class Room {
     return false;
   }
 
-  private isSameGuestPass(guestProof: string, otherProof: string): boolean {
-    return (
-      guestProof === otherProof ||
-      this.guestRecords.get(guestProof)?.passes.has(otherProof) === true
-    );
+  personOf(
+    userKey: string,
+    reach: Reach,
+    guestProof: string | undefined = this.guestProofsByUserKey.get(userKey),
+    passes?: ReadonlySet<string>,
+  ): Person {
+    if (guestProof === undefined || (reach === "rights" && isSelfNamedGuestKey(userKey))) {
+      return { userKey, reach, passes: NO_PASSES };
+    }
+    return {
+      userKey,
+      reach,
+      passes: passes ?? this.passesOfGuest(guestProof),
+    };
   }
 
-  /**
-   * Whether `userKey` is a key of the guest who presents `guestProof`, or
-   * of one of `passes` when a join shows the guest's passes itself.
-   */
-  private isKeyOfGuest(
-    userKey: string,
-    guestProof: string | undefined,
-    passes?: ReadonlySet<string>,
-  ): boolean {
-    if (guestProof === undefined) return false;
+  private isKeyOf(person: Person, userKey: string): boolean {
+    if (userKey === person.userKey) return true;
+    if (person.reach === "rights" && isSelfNamedGuestKey(userKey)) return false;
     const bound = this.guestProofsByUserKey.get(userKey);
-    if (bound === undefined) return false;
-    return passes ? passes.has(bound) : this.isSameGuestPass(bound, guestProof);
+    return bound !== undefined && person.passes.has(bound);
   }
 
   /**
@@ -935,15 +1026,15 @@ export class Room {
    * tells that two keys are one guest.
    */
   private guestHolds(
+    reach: Reach,
     userKeys: Iterable<string>,
     userKey: string,
     guestProof: string | undefined,
     passes?: ReadonlySet<string>,
   ): boolean {
+    const person = this.personOf(userKey, reach, guestProof, passes);
     for (const key of userKeys) {
-      if (key === userKey || this.isKeyOfGuest(key, guestProof, passes)) {
-        return true;
-      }
+      if (this.isKeyOf(person, key)) return true;
     }
     return false;
   }
@@ -964,6 +1055,18 @@ export class Room {
         passes: new Set([guestProof]),
       });
     }
+    this.reportPassesOfRecordedGuests([guestProof]);
+  }
+
+  private reportPassesOfRecordedGuests(passes: Iterable<string>): void {
+    for (const pass of passes) {
+      for (const userKey of this.userKeysByGuestProof.get(pass) ?? []) {
+        if (this.hostReasonsByKey.has(userKey) || this.readmissionRequiredUserKeys.has(userKey)) {
+          this.onRecoverableChange?.();
+          return;
+        }
+      }
+    }
   }
 
   private unbindGuestProof(userKey: string): void {
@@ -977,6 +1080,10 @@ export class Room {
     const userKeys = this.userKeysByGuestProof.get(guestProof);
     userKeys?.delete(userKey);
     if (userKeys?.size === 0) this.userKeysByGuestProof.delete(guestProof);
+  }
+
+  guestProofOf(userKey: string): string | undefined {
+    return this.guestProofsByUserKey.get(userKey);
   }
 
   guestIdentityOf(userKey: string): string | undefined {
@@ -1023,8 +1130,8 @@ export class Room {
     }
   }
 
-  private passesOfGuest(guestProof: string): Iterable<string> {
-    return this.guestRecords.get(guestProof)?.passes ?? [guestProof];
+  private passesOfGuest(guestProof: string): ReadonlySet<string> {
+    return this.guestRecords.get(guestProof)?.passes ?? new Set([guestProof]);
   }
 
   private tick(): number {
@@ -1068,15 +1175,17 @@ export class Room {
    */
   private principalsOfJoin(
     userKey: string,
-    roomGuestProof: string | undefined,
+    reach: Reach,
+    guestProof: string | undefined,
     passes?: ReadonlySet<string>,
   ): string[] {
-    if (roomGuestProof === undefined) return [this.principalOf(userKey)];
+    const person = this.personOf(userKey, reach, guestProof, passes);
+    if (person.passes.size === 0) return [this.principalOf(userKey)];
     const principals = new Set([`key:${userKey}`]);
-    for (const guestProof of passes ?? this.passesOfGuest(roomGuestProof)) {
-      principals.add(`pass:${guestProof}`);
-      for (const boundKey of this.userKeysByGuestProof.get(guestProof) ?? []) {
-        if (!boundKey.startsWith(GUEST_SEAT_KEY_PREFIX)) {
+    for (const pass of person.passes) {
+      principals.add(`pass:${pass}`);
+      for (const boundKey of this.userKeysByGuestProof.get(pass) ?? []) {
+        if (!boundKey.startsWith(GUEST_SEAT_KEY_PREFIX) && this.isKeyOf(person, boundKey)) {
           principals.add(`key:${boundKey}`);
         }
       }
@@ -1084,12 +1193,8 @@ export class Room {
     return [...principals];
   }
 
-  // The principals a waiting request of `userKey` speaks for.
   private principalsOfRequest(userKey: string): string[] {
-    const guestProof = userKey.startsWith(GUEST_SEAT_KEY_PREFIX)
-      ? this.guestProofsByUserKey.get(userKey)
-      : undefined;
-    return this.principalsOfJoin(userKey, guestProof);
+    return this.principalsOfJoin(userKey, "rights", undefined);
   }
 
   private admitsRequest(principals: string[]): boolean {
@@ -1135,7 +1240,7 @@ export class Room {
     }
     if (!grows) return undefined;
     const { merges } = this.guestLinkOf(passes);
-    const blocked = this.guestHolds(this.blockedUsers, "", guestProof, passes);
+    const blocked = this.guestHolds("removal", this.blockedUsers, "", guestProof, passes);
     const staged = !blocked && passes.size <= GUEST_PASS_GROUP_LIMIT ? this.stageGuestMerges(merges) : null;
     return {
       guestProof,
@@ -1153,12 +1258,12 @@ export class Room {
    * included. Only what the room already records is changed. Returns all of
    * the guest's keys, so that the caller removes its seats and requests.
    */
-  refuseBlockedLink(link: GuestLinkPlan): { userKeys: string[]; demoted: string[] } {
+  refuseBlockedLink(link: GuestLinkPlan): { userKeys: string[] } {
     const userKeys = [...link.passes].flatMap((proof) => [
       ...(this.userKeysByGuestProof.get(proof) ?? []),
     ]);
-    const demoted = this.dropRejoinGrantsOf(userKeys, { recordedOnly: true });
-    return { userKeys, demoted };
+    this.dropRejoinGrantsOf(userKeys, { recordedOnly: true });
+    return { userKeys };
   }
 
   /**
@@ -1204,7 +1309,13 @@ export class Room {
       }
       this.guestRecords.set(proof, merged);
     }
+    try {
+      link.staged.afterCommit?.();
+    } catch (error) {
+      Logger.warn(`Room ${this.id}: an identity merge listener failed`, error);
+    }
     if (seatedIdentityChanged) this.notifyLifecycle("membership");
+    this.reportPassesOfRecordedGuests(passes);
     const guest = this.guestOfPass(link.guestProof);
     this.mergeWaitingGuests(guestsBefore, guest);
     return { linked: true, settleWaiting: () => this.settleLinkedWaitingRequests(guest) };
@@ -1212,7 +1323,7 @@ export class Room {
 
   private settleLinkedWaitingRequests(guest: string): SettledWaitingRequest[] {
     const settled: SettledWaitingRequest[] = [];
-    for (const userKey of this.waitingKeysByGuest.get(guest) ?? []) {
+    for (const userKey of [...(this.waitingKeysByGuest.get(guest) ?? [])]) {
       const request = this.pendingClients.get(userKey);
       const arrival = this.waitingGuestByKey.get(userKey)?.arrival;
       if (!request || arrival === undefined) continue;
@@ -1343,7 +1454,11 @@ export class Room {
     if (!kept) return { status: "full", refused: [] };
     const admitted = [...new Set(grants.map((grant) => grant.userKey))];
     for (const userKey of admitted) {
-      this.blockedUsers.delete(userKey);
+      for (const key of this.identitiesOfSameGuest(userKey, "removal")) {
+        this.setReadmissionRequired(key, false);
+        this.blockedUsers.delete(key);
+        this.releaseGuestIdentity(key);
+      }
       if (this.pendingClients.has(userKey)) {
         this.lobbyOutcomes.set(userKey, "admitted");
       }
@@ -1371,7 +1486,7 @@ export class Room {
 
   private guestOfKey(userKey: string): string {
     const guestProof = this.guestProofsByUserKey.get(userKey);
-    return guestProof === undefined
+    return guestProof === undefined || isSelfNamedGuestKey(userKey)
       ? `key:${userKey}`
       : this.guestOfPass(guestProof);
   }
@@ -1526,15 +1641,22 @@ export class Room {
   ): (() => void) | null {
     const expiresAt = this.openAdmissions.get(admissionCode);
     if (expiresAt === undefined || expiresAt <= Date.now()) return null;
+    const restore = this.planAdmissionRestoration(userKey, guestProof);
+    if (!restore) return null;
+    return () => {
+      if (this.openAdmissions.get(admissionCode) !== expiresAt) return;
+      if (restore()) this.openAdmissions.delete(admissionCode);
+    };
+  }
+
+  planAdmissionRestoration(
+    userKey: string,
+    guestProof: string | undefined,
+  ): (() => boolean) | null {
     if (this.isBlocked(userKey, guestProof)) return null;
     const principal = this.admissionPrincipal(userKey, guestProof);
     if (!this.admissions.hasRoomFor(new Set([principal]))) return null;
-    return () => {
-      if (this.openAdmissions.get(admissionCode) !== expiresAt) return;
-      if (this.restoreAdmission(userKey, guestProof, { pastLock: true })) {
-        this.openAdmissions.delete(admissionCode);
-      }
-    };
+    return () => this.restoreAdmission(userKey, guestProof, { pastLock: true });
   }
 
   private releaseUnheldGuestIdentities(): void {
@@ -1909,22 +2031,22 @@ export class Room {
    */
   hasStageInvite(
     userKey: string,
-    roomGuestProof: string | undefined,
+    guestProof: string | undefined,
     link?: GuestLinkPlan,
   ): boolean {
     return this.admissions.admits(
-      this.principalsOfJoin(userKey, roomGuestProof, rightsPassesOf(link)),
+      this.principalsOfJoin(userKey, "rights", guestProof, rightsPassesOf(link)),
       "stage",
     );
   }
 
   stageInviteKeys(
     userKey: string,
-    roomGuestProof: string | undefined,
+    guestProof: string | undefined,
     link?: GuestLinkPlan,
   ): string[] {
     return this.admissions.namedKeys(
-      this.principalsOfJoin(userKey, roomGuestProof, rightsPassesOf(link)),
+      this.principalsOfJoin(userKey, "rights", guestProof, rightsPassesOf(link)),
       "stage",
     );
   }
@@ -1963,7 +2085,7 @@ export class Room {
     link?: GuestLinkPlan,
   ): boolean {
     return this.admissions.refuses(
-      this.principalsOfJoin(userKey, guestProof, link?.passes),
+      this.principalsOfJoin(userKey, "removal", guestProof, link?.passes),
       "stageDemotion",
     );
   }
@@ -2618,8 +2740,10 @@ export class Room {
     return this.router.canConsume({ producerId, rtpCapabilities });
   }
 
+  // No one is in the meeting. Those waiting to be let in are not in it, so
+  // they keep no meeting going; they wait for the next one at the code.
   isEmpty(): boolean {
-    return this.clients.size === 0 && this.pendingClients.size === 0;
+    return this.clients.size === 0;
   }
 
   get isLocked(): boolean {
@@ -2840,8 +2964,167 @@ export class Room {
     return userIds;
   }
 
-  registerAdminUserKey(userKey: string): void {
-    this.adminUserKeys.add(userKey);
+  get adminUserKeys(): ReadonlySet<string> {
+    return new Set(this.hostReasonsByKey.keys());
+  }
+
+  get hostReasons(): ReadonlyMap<string, HostReason> {
+    return new Map(this.hostReasonsByKey);
+  }
+
+  hostReasonOf(userKey: string, guestProof?: string): HostReason | null {
+    let strongest: HostReason | null = null;
+    for (const key of this.identitiesOfSameGuest(userKey, "rights", guestProof)) {
+      const reason = this.hostReasonsByKey.get(key);
+      if (reason && (!strongest || HOST_REASON_RANK[reason] > HOST_REASON_RANK[strongest])) {
+        strongest = reason;
+      }
+    }
+    return strongest;
+  }
+
+  private hostReasonFor(userKey: string, basis: HostBasis): HostReason {
+    if (basis === "owner" || (this.ownerEmail !== null && userKey === this.ownerEmail)) {
+      return "owner";
+    }
+    if (basis === "promoted") return "cohost";
+    return this.ownerEmail ? "temporary" : "opener";
+  }
+
+  grantHost(
+    userKey: string,
+    basis: HostBasis,
+    guestProof?: string,
+    { primary = false }: { primary?: boolean } = {},
+  ): Admin[] {
+    const reason = this.hostReasonFor(userKey, basis);
+    const held = this.hostReasonOf(userKey, guestProof);
+    const kept = held && HOST_REASON_RANK[held] >= HOST_REASON_RANK[reason] ? held : reason;
+    let changed = false;
+    for (const key of this.identitiesOfSameGuest(userKey, "rights", guestProof)) {
+      if (key !== userKey && !this.hostReasonsByKey.has(key)) continue;
+      if (this.hostReasonsByKey.get(key) === kept) continue;
+      this.hostReasonsByKey.set(key, kept);
+      changed = true;
+    }
+    const primaryChanged = primary && this.primaryHostUserKey !== userKey;
+    if (primaryChanged) this.primaryHostUserKey = userKey;
+    if (changed || primaryChanged) this.onRecoverableChange?.();
+    const promoted = this.promoteSeatsOf(userKey, guestProof);
+    if (primaryChanged && promoted.length === 0) this.publishRoles({});
+    return promoted;
+  }
+
+  seatsOf(userKey: string, guestProof?: string): Client[] {
+    return this.seatsOfSameGuest(userKey, "rights", guestProof).flatMap(
+      (seatId) => this.clients.get(seatId) ?? [],
+    );
+  }
+
+  private promoteSeatsOf(userKey: string, guestProof?: string): Admin[] {
+    const promoted: Admin[] = [];
+    for (const client of this.seatsOf(userKey, guestProof)) {
+      if (client instanceof Admin || client.isWebinarAttendee || client.isObserver) continue;
+      const key = this.userKeysById.get(client.id);
+      if (key === undefined || !this.isAdminUserKey(key, this.guestProofsByUserKey.get(key))) {
+        continue;
+      }
+      Object.setPrototypeOf(client, Admin.prototype);
+      promoted.push(client as Admin);
+    }
+    if (promoted.length > 0) this.publishRoles({ promoted });
+    return promoted;
+  }
+
+  makePrimaryHost(userKey: string): void {
+    if (!this.hostReasonsByKey.has(userKey) || this.primaryHostUserKey === userKey) return;
+    this.primaryHostUserKey = userKey;
+    this.onRecoverableChange?.();
+    this.publishRoles({});
+  }
+
+  private publishRoles(change: { promoted?: readonly Client[]; demoted?: readonly Client[] }): void {
+    this.notifyLifecycle("membership");
+    const roomId = this.id;
+    const hostUserId = this.getHostUserId();
+    const hostUserIds = this.getAdminUserIds();
+    for (const seat of change.promoted ?? []) {
+      seat.socket.emit("hostAssigned", { roomId, hostUserId: hostUserId ?? seat.id });
+    }
+    for (const seat of change.demoted ?? []) {
+      seat.socket.emit("hostRemoved", { roomId, hostUserId });
+    }
+    for (const client of this.clients.values()) {
+      client.socket.emit("hostChanged", { roomId, hostUserId });
+      client.socket.emit("adminUsersChanged", { roomId, hostUserIds });
+    }
+  }
+
+  private revokeHostOf(userKeys: readonly string[]): Client[] {
+    let changed = false;
+    for (const userKey of userKeys) {
+      if (this.hostReasonsByKey.delete(userKey)) changed = true;
+      if (this.primaryHostUserKey === userKey) {
+        this.primaryHostUserKey = null;
+        changed = true;
+      }
+    }
+    if (changed) this.onRecoverableChange?.();
+    const demoted = this.demoteSeatsWithoutRights();
+    if (changed && demoted.length === 0) this.publishRoles({});
+    return demoted;
+  }
+
+  private demoteSeatsWithoutRights(): Client[] {
+    const demoted: Client[] = [];
+    for (const [userId, client] of this.clients) {
+      if (!(client instanceof Admin) || client.isObserver) continue;
+      const userKey = this.userKeysById.get(userId);
+      if (userKey === undefined) continue;
+      if (this.isAdminUserKey(userKey, this.guestProofsByUserKey.get(userKey))) continue;
+      Object.setPrototypeOf(client, Client.prototype);
+      demoted.push(client);
+    }
+    if (demoted.length > 0) this.publishRoles({ demoted });
+    return demoted;
+  }
+
+  welcomeOwner(ownerKey: string): Client[] {
+    const demoted: Client[] = [];
+    for (const [userKey, reason] of [...this.hostReasonsByKey]) {
+      if (reason !== "temporary" || this.hostReasonOf(userKey) !== "temporary") continue;
+      demoted.push(...this.demoteToParticipant(userKey));
+    }
+    this.makePrimaryHost(ownerKey);
+    return demoted;
+  }
+
+  tellOwnerTookOver(demoted: Client[]): void {
+    for (const client of demoted) {
+      client.socket.emit("adminNotice", {
+        roomId: this.id,
+        message: "The meeting's owner joined and is hosting now. You're a participant.",
+        level: "info",
+        timestamp: Date.now(),
+      });
+    }
+  }
+
+  // Someone who is in this meeting, hosts it, or was let in. Only they may
+  // see how many people are in it.
+  isMemberUserKey(userKey: string, guestProof?: string): boolean {
+    if (this.isBlocked(userKey, guestProof)) return false;
+    if (
+      this.isAdminUserKey(userKey, guestProof) ||
+      this.isAllowed(userKey, guestProof) ||
+      this.isLockedAllowed(userKey, guestProof)
+    ) {
+      return true;
+    }
+    for (const key of this.userKeysById.values()) {
+      if (this.isSamePerson(userKey, key, "rights", guestProof)) return true;
+    }
+    return false;
   }
 
   /** Whether the guest behind `userKey` is a co-host. A blocked guest never is. */
@@ -2853,12 +3136,27 @@ export class Room {
     return (
       !this.isBlocked(userKey, guestProof, link) &&
       this.guestHolds(
+        "rights",
         this.adminUserKeys,
         userKey,
         guestProof,
         rightsPassesOf(link),
       )
     );
+  }
+
+  hasLiveHostSeat(userKey: string, guestProof?: string, link?: GuestLinkPlan): boolean {
+    for (const [seatId, client] of this.clients) {
+      if (!(client instanceof Admin) || client.isObserver || !client.socket.connected) continue;
+      const key = this.userKeysById.get(seatId);
+      if (
+        key !== undefined &&
+        this.guestHolds("rights", [key], userKey, guestProof, rightsPassesOf(link))
+      ) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** Whether the guest behind `userKey` is the host. A blocked guest never is. */
@@ -2871,6 +3169,7 @@ export class Room {
       this.hostUserKey !== null &&
       !this.isBlocked(userKey, guestProof, link) &&
       this.guestHolds(
+        "rights",
         [this.hostUserKey],
         userKey,
         guestProof,
@@ -2879,19 +3178,10 @@ export class Room {
     );
   }
 
-  /**
-   * A removed user has to be let in again. This drops every grant a rejoin
-   * would honour, for every key of the same guest: waiting-room and lock
-   * admissions, retained host rights, primary host, and a stage invite.
-   */
-  dropRejoinGrants(userKey: string): string[] {
-    return this.dropRejoinGrantsOf(this.identitiesOfSameGuest(userKey));
-  }
-
   private dropRejoinGrantsOf(
     userKeys: Iterable<string>,
     options: { recordedOnly?: boolean } = {},
-  ): string[] {
+  ): Client[] {
     const keys = [...userKeys];
     this.admissions.revoke(
       keys.flatMap((key) => this.refusalPrincipalsOf(key)),
@@ -2899,92 +3189,32 @@ export class Room {
       this.tick(),
       options,
     );
-    for (const key of keys) {
-      this.adminUserKeys.delete(key);
-      if (this.hostUserKey === key) this.hostUserKey = null;
-      this.releaseGuestIdentity(key);
-    }
-    return this.demoteSeatsWithoutRights(keys);
-  }
-
-  private demoteSeatsWithoutRights(userKeys: readonly string[]): string[] {
-    const keys = new Set(userKeys);
-    const demoted: string[] = [];
-    for (const [userId, client] of this.clients) {
-      if (!(client instanceof Admin) || client.isObserver) continue;
-      const userKey = this.userKeysById.get(userId);
-      if (userKey === undefined || !keys.has(userKey)) continue;
-      const guestProof = this.guestProofsByUserKey.get(userKey);
-      if (
-        this.isAdminUserKey(userKey, guestProof) ||
-        this.isHostUserKey(userKey, guestProof)
-      ) {
-        continue;
-      }
-      Object.setPrototypeOf(client, Client.prototype);
-      demoted.push(userId);
-    }
-    if (demoted.length > 0) {
-      this.notifyLifecycle("membership");
-    }
+    const demoted = this.revokeHostOf(keys);
+    for (const key of keys) this.releaseGuestIdentity(key);
     return demoted;
   }
 
-  /**
-   * Makes the seat `userId` a host's. Every way a seat gains host rights
-   * comes through here, and a seat whose guest is blocked never does: a
-   * block ends the guest's rights, and nothing gives them back but a host
-   * who promotes the guest after the block is lifted.
-   */
-  promoteClientToAdmin(userId: string): Admin | null {
-    const client = this.clients.get(userId);
-    if (!client || client.isWebinarAttendee) {
-      return null;
-    }
-    const userKey = this.userKeysById.get(userId);
+  mayGrantHost(userKey: string, basis: HostBasis, guestProof?: string): boolean {
+    if (this.isBlocked(userKey, guestProof)) return false;
     if (
-      userKey !== undefined &&
-      this.isBlocked(userKey, this.guestProofsByUserKey.get(userKey))
+      basis !== "fallback" ||
+      this.hasLiveHostSeat(userKey, guestProof) ||
+      this.isAdminUserKey(userKey, guestProof)
     ) {
-      return null;
+      return true;
     }
-    if (!(client instanceof Admin)) {
-      Object.setPrototypeOf(client, Admin.prototype);
-    }
-    if (userKey) {
-      this.adminUserKeys.add(userKey);
-    }
-    this.notifyLifecycle("membership");
-    return client as Admin;
-  }
-
-  /**
-   * Hands the room on when no host is left in it: to the first seat that is
-   * not a host or an observer, and whose guest is neither blocked nor among
-   * `excludedUserKeys`, the guests that a removal is taking out.
-   */
-  promoteNextAdmin(
-    excludedUserKeys: ReadonlySet<string> = new Set(),
-  ): Admin | null {
-    for (const client of this.clients.values()) {
-      if (client instanceof Admin || client.isObserver) continue;
-      const userKey = this.userKeysById.get(client.id);
-      if (userKey !== undefined && excludedUserKeys.has(userKey)) continue;
-      const promoted = this.promoteClientToAdmin(client.id);
-      if (promoted) return promoted;
-    }
-    return null;
+    return !this.handingOff && !this.needsReadmission(userKey, guestProof);
   }
 
   getHostUserId(): string | null {
     if (this.hostUserKey) {
       // The host's own seat, else another tab of the same guest.
-      const hostProof = this.guestProofsByUserKey.get(this.hostUserKey);
+      const host = this.personOf(this.hostUserKey, "rights");
       let otherTab: string | null = null;
       for (const [userId, userKey] of this.userKeysById.entries()) {
         if (!(this.clients.get(userId) instanceof Admin)) continue;
         if (userKey === this.hostUserKey) return userId;
-        if (otherTab === null && this.isKeyOfGuest(userKey, hostProof)) {
+        if (otherTab === null && this.isKeyOf(host, userKey)) {
           otherTab = userId;
         }
       }
@@ -3252,11 +3482,13 @@ export class Room {
   }
 
   close(): void {
+    this.onRecoverableChange = null;
+    this.onReadmissionChange = null;
+    this.cancelLifecycleTimers();
     this.notifyLifecycle("closed");
     this.lifecycleListeners.clear();
     this.guestIdentityMerger = null;
     this.aiCredentials.clear();
-    this.stopCleanupTimer();
     this.cancelWebcamCodecPolicyUpgrade();
     this.webcamReceiverCapacityProofCoordinator.close();
     for (const pending of this.pendingDisconnects.values()) {
@@ -3296,7 +3528,8 @@ export class Room {
       this.router.close();
     }
     this.userKeysById.clear();
-    this.adminUserKeys.clear();
+    this.hostReasonsByKey.clear();
+    this.primaryHostUserKey = null;
     this.displayNamesByKey.clear();
     this.blockedUsers.clear();
     this.guestProofsByUserKey.clear();
@@ -3383,25 +3616,59 @@ export class Room {
     return this.pendingDisconnects.get(userId)?.notificationEmittedAt != null;
   }
 
+  get cleanupDeadline(): number | null {
+    return this.cleanupTimer ? this.cleanupTimerDeadline : null;
+  }
+
   startCleanupTimer(callback: () => void) {
-    if (this.cleanupTimer) return;
+    if (this.cleanupTimer || this.handingOff) return;
+    this.cleanupTimerDeadline = Date.now() + config.adminCleanupTimeout;
 
     Logger.debug(
       `Room ${this.id}: Cleanup timer started (${config.adminCleanupTimeout}ms)`,
     );
-    this.cleanupTimer = setTimeout(() => {
+    this.armLifecycleTimer("cleanupTimer", config.adminCleanupTimeout, () => {
       Logger.debug(`Room ${this.id}: Cleanup timer expired. Dissolving room.`);
-      this.cleanupTimer = null;
       callback();
-    }, config.adminCleanupTimeout);
+    });
   }
 
   stopCleanupTimer() {
     if (this.cleanupTimer) {
       Logger.debug(`Room ${this.id}: Cleanup timer stopped.`);
-      clearTimeout(this.cleanupTimer);
-      this.cleanupTimer = null;
+      this.clearLifecycleTimer("cleanupTimer");
     }
+  }
+
+  armOpeningDeadline(delayMs: number, onDeadline: () => void): void {
+    this.openingDeadlineAt = Date.now() + delayMs;
+    this.armLifecycleTimer("openingDeadlineTimer", delayMs, onDeadline);
+  }
+
+  get openingDeadline(): number | null {
+    return this.openingDeadlineTimer ? this.openingDeadlineAt : null;
+  }
+
+  private armLifecycleTimer(slot: LifecycleTimer, delayMs: number, fire: () => void): void {
+    this.clearLifecycleTimer(slot);
+    if (this.handingOff) return;
+    const timer = setTimeout(() => {
+      this[slot] = null;
+      if (this.handingOff) return;
+      fire();
+    }, delayMs);
+    timer.unref?.();
+    this[slot] = timer;
+  }
+
+  private clearLifecycleTimer(slot: LifecycleTimer): void {
+    const timer = this[slot];
+    if (timer) clearTimeout(timer);
+    this[slot] = null;
+  }
+
+  private cancelLifecycleTimers(): void {
+    for (const slot of LIFECYCLE_TIMERS) this.clearLifecycleTimer(slot);
   }
 
   addPendingClient(
@@ -3420,6 +3687,176 @@ export class Room {
   removePendingClient(userKey: string) {
     this.stopWaiting(userKey);
     this.releaseGuestIdentity(userKey);
+  }
+
+  needsReadmission(userKey: string, guestProof?: string, link?: GuestLinkPlan): boolean {
+    return (
+      this.guestHolds(
+        "removal",
+        this.readmissionRequiredUserKeys,
+        userKey,
+        guestProof,
+        link?.passes,
+      ) ||
+      this.admissions.refuses(
+        this.principalsOfJoin(userKey, "removal", guestProof, link?.passes),
+        "waitingRoom",
+      )
+    );
+  }
+
+  // For a mark that was made before this room existed, such as a scheduled
+  // meeting's removed invitee. It tells nobody: nothing changed.
+  requireReadmission(userKey: string) {
+    this.readmissionRequiredUserKeys.add(userKey);
+  }
+
+  get usersNeedingReadmission(): string[] {
+    return [...this.readmissionRequiredUserKeys];
+  }
+
+  private setReadmissionRequired(userKey: string, required: boolean) {
+    const marked = this.readmissionRequiredUserKeys.has(userKey);
+    if (marked === required) return;
+    if (required) this.readmissionRequiredUserKeys.add(userKey);
+    else this.readmissionRequiredUserKeys.delete(userKey);
+    this.onReadmissionChange?.(userKey, required);
+    this.onRecoverableChange?.();
+  }
+
+  get hostUserKey(): string | null {
+    return this.primaryHostUserKey;
+  }
+
+  markEnded() {
+    this.endedForEveryone = true;
+  }
+
+  get hasEnded(): boolean {
+    return this.endedForEveryone;
+  }
+
+  // Whether this room is a call of its own that the ledger should describe:
+  // not one standing in for a lost call, and not one a host has ended.
+  get recordsItsCall(): boolean {
+    return this.awaitingOpener === null && this.restorer === null && !this.endedForEveryone;
+  }
+
+  beginHandOff(): void {
+    this.handingOff = true;
+    this.cancelLifecycleTimers();
+  }
+
+  adoptGeneration(generation: number): void {
+    const earlier = this.ownershipGeneration;
+    if (earlier !== null && earlier !== generation) {
+      this.earlierPassGenerations = [
+        ...this.earlierPassGenerations.filter((passed) => passed.generation !== earlier),
+        { generation: earlier, until: Date.now() },
+      ];
+    }
+    this.ownershipGeneration = generation;
+  }
+
+  get isHandingOff(): boolean {
+    return this.handingOff;
+  }
+
+  get endsWhenEmpty(): boolean {
+    return this.recordsItsCall && !this.handingOff;
+  }
+
+  // `rosterKnown` is false when this SFU has no record of the lost call and
+  // only knows of it from a pass. It then cannot tell that call's hosts, or
+  // whether it was ended, so a pass lets its holder in but never hosts.
+  // `onLapse` runs once if the deadline passes with the room still unclaimed.
+  awaitRestorer(options: {
+    until: number;
+    rosterKnown: boolean;
+    onLapse: () => void;
+  }) {
+    this.restorer = { until: options.until, rosterKnown: options.rosterKnown };
+    this.armLifecycleTimer(
+      "restorerLapseTimer",
+      Math.max(0, options.until - Date.now()) + 1,
+      () => {
+        if (this.restorer === null) return;
+        this.endLostCall();
+        options.onLapse();
+      },
+    );
+  }
+
+  // "awaited": only someone from the lost call may take the host's seat.
+  // "lapsed": that call is not coming back, so the room is open to claim.
+  restorerState(now: number): "none" | "awaited" | "lapsed" {
+    if (this.restorer === null) return "none";
+    return now <= this.restorer.until ? "awaited" : "lapsed";
+  }
+
+  get restorerDeadline(): number | null {
+    return this.restorer?.until ?? null;
+  }
+
+  get knowsLostRoster(): boolean {
+    return this.restorer?.rosterKnown !== false;
+  }
+
+  // The lost call's time is up, so a meeting opened here is a new one.
+  // Everything the lost call left goes with it, all at once: its hosts and
+  // co-hosts, a temporary host, and the people its hosts had removed or
+  // blocked. Admissions stay: whoever is here is in the new meeting.
+  endLostCall() {
+    if (this.lostCallEnded) return;
+    this.lostCallEnded = true;
+    this.earlierPassGenerations = [];
+    const report = this.onRecoverableChange;
+    this.onRecoverableChange = null;
+    const released = [
+      ...this.hostReasonsByKey.keys(),
+      ...this.readmissionRequiredUserKeys,
+      ...this.blockedUsers,
+    ];
+    this.primaryHostUserKey = null;
+    this.hostReasonsByKey.clear();
+    this.demoteSeatsWithoutRights();
+    this.readmissionRequiredUserKeys.clear();
+    this.blockedUsers.clear();
+    for (const userKey of released) this.releaseGuestIdentity(userKey);
+    this.onRecoverableChange = report;
+    this.onLostCallEnded?.();
+  }
+
+  markRestored() {
+    this.restorer = null;
+    this.clearLifecycleTimer("restorerLapseTimer");
+  }
+
+  // Puts back what the ledger held of the call this room recreates: who has
+  // to be let in again, then its hosts, less anyone among those. It reports
+  // nothing: none of this is news to the ledger.
+  restoreLostCall(lost: LostRoom) {
+    const report = this.onRecoverableChange;
+    this.onRecoverableChange = null;
+    this.restoreGuestPasses(lost.guestPasses);
+    for (const userKey of lost.readmissionRequiredUserKeys) {
+      this.readmissionRequiredUserKeys.add(userKey);
+    }
+    const coHosts = new Set(lost.coHostUserKeys);
+    for (const userKey of lost.adminUserKeys) {
+      this.grantHost(userKey, coHosts.has(userKey) ? "promoted" : "fallback");
+    }
+    if (lost.hostUserKey) this.makePrimaryHost(lost.hostUserKey);
+    this.onRecoverableChange = report;
+    const endIfUnclaimed = () => {
+      if (this.awaitingOpener) this.endLostCall();
+    };
+    const wait = lost.claimableUntil - Date.now();
+    if (wait < 0) {
+      endIfUnclaimed();
+      return;
+    }
+    this.armLifecycleTimer("lostCallTimer", wait + 1, endIfUnclaimed);
   }
 
   /**
@@ -3448,17 +3885,17 @@ export class Room {
    */
   isAllowed(
     userKey: string,
-    roomGuestProof?: string,
+    guestProof?: string,
     link?: GuestLinkPlan,
   ): boolean {
     return this.admissions.admits(
-      this.principalsOfJoin(userKey, roomGuestProof, rightsPassesOf(link)),
+      this.principalsOfJoin(userKey, "rights", guestProof, rightsPassesOf(link)),
       "waitingRoom",
     );
   }
 
   revokeAllowedUser(userKey: string) {
-    this.recordRevocation(this.identitiesOfSameGuest(userKey), ["waitingRoom"]);
+    this.recordRevocation(this.identitiesOfSameGuest(userKey, "removal"), ["waitingRoom"]);
   }
 
   /**
@@ -3473,17 +3910,19 @@ export class Room {
   /** Whether a join as `userKey` may pass the lock (see `isAllowed`). */
   isLockedAllowed(
     userKey: string,
-    roomGuestProof?: string,
+    guestProof?: string,
     link?: GuestLinkPlan,
   ): boolean {
     return this.admissions.admits(
-      this.principalsOfJoin(userKey, roomGuestProof, rightsPassesOf(link)),
+      this.principalsOfJoin(userKey, "rights", guestProof, rightsPassesOf(link)),
       "lock",
     );
   }
 
   revokeLockedAllowedUser(userKey: string) {
-    this.recordRevocation(this.identitiesOfSameGuest(userKey), ["lock"]);
+    const userKeys = this.identitiesOfSameGuest(userKey, "removal");
+    for (const key of userKeys) this.setReadmissionRequired(key, true);
+    this.recordRevocation(userKeys, ["lock"]);
   }
 
   /**
@@ -3496,7 +3935,7 @@ export class Room {
       .admittedKeys(scope, (principal) =>
         principal.startsWith("pass:")
           ? this.admissions.admits(
-              this.principalsOfJoin("", principal.slice("pass:".length)),
+              this.principalsOfJoin("", "rights", principal.slice("pass:".length)),
               scope,
             )
           : true,
@@ -3504,13 +3943,31 @@ export class Room {
       .sort();
   }
 
+  removeUser(userKey: string): Client[] {
+    const userKeys = this.identitiesOfSameGuest(userKey, "removal");
+    for (const key of userKeys) this.setReadmissionRequired(key, true);
+    return this.dropRejoinGrantsOf(userKeys);
+  }
+
+  keepAdmitted(userKeys: readonly string[]): AdmitResult {
+    return this.admitUserKeys(
+      userKeys
+        .filter((key) => {
+          const proof = this.guestProofsByUserKey.get(key);
+          return !this.needsReadmission(key, proof) && !this.isBlocked(key, proof);
+        })
+        .map((userKey) => ({ userKey, scopes: ["lock"] satisfies AdmissionScope[] })),
+    );
+  }
+
+
   /**
    * A block also ends what a rejoin would honour for the guest: admissions,
    * a stage invite, and host rights. A join that still held host rights
    * would be let past the block.
    */
-  blockUser(userKey: string): string[] {
-    const demoted = this.dropRejoinGrants(userKey);
+  blockUser(userKey: string): Client[] {
+    const demoted = this.removeUser(userKey);
     this.blockedUsers.add(userKey);
     if (this.pendingClients.has(userKey)) {
       this.lobbyOutcomes.set(userKey, "rejected");
@@ -3526,6 +3983,14 @@ export class Room {
   unblockUser(userKey: string) {
     this.blockedUsers.delete(userKey);
     this.releaseGuestIdentity(userKey);
+  }
+
+  // Takes host rights away from everyone in the room with this user key, who
+  // stay in it as admitted participants. Returns those who had them.
+  demoteToParticipant(userKey: string): Client[] {
+    const userKeys = this.identitiesOfSameGuest(userKey, "rights");
+    this.keepAdmitted(userKeys);
+    return this.revokeHostOf(userKeys);
   }
 
   /**
@@ -3569,21 +4034,62 @@ export class Room {
    * tabs, under the same pass or one the room linked to it. A key with no
    * proof has no other tabs to find.
    */
-  identitiesOfSameGuest(userKey: string): string[] {
-    const proof = this.guestProofsByUserKey.get(userKey);
+  identitiesOfSameGuest(
+    userKey: string,
+    reach: Reach,
+    guestProof: string | undefined = this.guestProofsByUserKey.get(userKey),
+    link?: GuestLinkPlan,
+  ): string[] {
+    const person = this.personOf(userKey, reach, guestProof, link?.passes);
     const userKeys = [userKey];
-    if (proof === undefined) return userKeys;
-    for (const guestProof of this.passesOfGuest(proof)) {
-      for (const otherKey of this.userKeysByGuestProof.get(guestProof) ?? []) {
-        if (otherKey !== userKey) userKeys.push(otherKey);
+    for (const pass of person.passes) {
+      for (const otherKey of this.userKeysByGuestProof.get(pass) ?? []) {
+        if (!userKeys.includes(otherKey) && this.isKeyOf(person, otherKey)) {
+          userKeys.push(otherKey);
+        }
       }
     }
     return userKeys;
   }
 
+  isSamePerson(
+    userKey: string,
+    otherKey: string,
+    reach: Reach,
+    guestProof: string | undefined = this.guestProofsByUserKey.get(userKey),
+    link?: GuestLinkPlan,
+  ): boolean {
+    return this.isKeyOf(this.personOf(userKey, reach, guestProof, link?.passes), otherKey);
+  }
+
+  guestPassesFor(userKeys: Iterable<string>): Record<string, string[]> {
+    const passes: Record<string, string[]> = {};
+    for (const userKey of userKeys) {
+      const guestProof = this.guestProofsByUserKey.get(userKey);
+      if (guestProof === undefined) continue;
+      const linked = [...this.passesOfGuest(guestProof)].filter((pass) => pass !== guestProof);
+      passes[userKey] = [guestProof, ...linked];
+    }
+    return passes;
+  }
+
+  private restoreGuestPasses(passesByKey: Readonly<Record<string, readonly string[]>>): void {
+    for (const [userKey, passes] of Object.entries(passesByKey)) {
+      const [first] = passes;
+      if (first === undefined) continue;
+      this.bindGuestProof(userKey, first);
+      const record = this.guestRecords.get(first);
+      if (!record) continue;
+      for (const pass of passes) {
+        record.passes.add(pass);
+        this.guestRecords.set(pass, record);
+      }
+    }
+  }
+
   /** The seats held under `userKey` and every other key of the same guest. */
-  seatsOfSameGuest(userKey: string): string[] {
-    const userKeys = new Set(this.identitiesOfSameGuest(userKey));
+  seatsOfSameGuest(userKey: string, reach: Reach, guestProof?: string): string[] {
+    const userKeys = new Set(this.identitiesOfSameGuest(userKey, reach, guestProof));
     return Array.from(this.userKeysById)
       .filter(([, key]) => userKeys.has(key))
       .map(([userId]) => userId);
@@ -3598,6 +4104,6 @@ export class Room {
     guestProof?: string,
     link?: GuestLinkPlan,
   ): boolean {
-    return this.guestHolds(this.blockedUsers, userKey, guestProof, link?.passes);
+    return this.guestHolds("removal", this.blockedUsers, userKey, guestProof, link?.passes);
   }
 }

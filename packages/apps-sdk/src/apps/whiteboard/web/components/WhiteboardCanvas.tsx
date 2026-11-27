@@ -70,6 +70,7 @@ const isEditableElement = (element: WhiteboardElement): element is EditableEleme
 
 const FONT_STACK = 'Virgil, "Segoe Print", "Comic Sans MS", "Marker Felt", cursive';
 const STICKY_TEXT_INSET = 8;
+const MOVE_WRITE_INTERVAL_MS = 16;
 const RESIZE_HANDLE_HIT_RADIUS = 8;
 const ROTATE_HANDLE_OFFSET = 26;
 const ROTATE_HANDLE_HIT_RADIUS = 10;
@@ -366,7 +367,7 @@ export function WhiteboardCanvas({
   const resolvedCanvasRef = canvasRef ?? internalCanvasRef;
   const engineRef = useRef<ToolEngine | null>(null);
   const cursorRafRef = useRef<number | null>(null);
-  const moveRafRef = useRef<number | null>(null);
+  const lastMoveWriteRef = useRef(0);
   const pendingMoveRef = useRef<{ x: number; y: number; pressure?: number } | null>(null);
   const renderFrameRef = useRef<number | null>(null);
   const renderQueuedRef = useRef(false);
@@ -777,10 +778,6 @@ export function WhiteboardCanvas({
 
   useEffect(() => {
     return () => {
-      if (moveRafRef.current !== null) {
-        cancelAnimationFrame(moveRafRef.current);
-        moveRafRef.current = null;
-      }
       pendingMoveRef.current = null;
       if (renderFrameRef.current !== null) {
         cancelAnimationFrame(renderFrameRef.current);
@@ -839,26 +836,30 @@ export function WhiteboardCanvas({
     setEditingText("");
   }, [doc, editingElementId, editingText, pageId, selectedId]);
 
-  useEffect(() => {
-    if (!editingElementId) return;
-    const element = getPageElements(doc, pageId).find(
-      (item): item is EditableElement =>
-        item.id === editingElementId && isEditableElement(item)
-    );
-    if (!element) return;
-    const text = editingText.replace(/\r\n/g, "\n");
-    if (element.type === "text") {
-      const bounds = measureTextBounds(text.length > 0 ? text : " ", element.fontSize);
-      updateElement(doc, pageId, {
-        ...element,
-        text,
-        width: bounds.width,
-        height: bounds.height,
-      });
-    } else {
-      updateElement(doc, pageId, { ...element, text });
-    }
-  }, [editingText, editingElementId, doc, pageId]);
+  const handleEditingTextChange = useCallback(
+    (value: string) => {
+      setEditingText(value);
+      if (!editingElementId) return;
+      const element = getPageElements(doc, pageId).find(
+        (item): item is EditableElement =>
+          item.id === editingElementId && isEditableElement(item)
+      );
+      if (!element) return;
+      const text = value.replace(/\r\n/g, "\n");
+      if (element.type === "text") {
+        const bounds = measureTextBounds(text.length > 0 ? text : " ", element.fontSize);
+        updateElement(doc, pageId, {
+          ...element,
+          text,
+          width: bounds.width,
+          height: bounds.height,
+        });
+      } else {
+        updateElement(doc, pageId, { ...element, text });
+      }
+    },
+    [doc, editingElementId, pageId]
+  );
 
   useEffect(() => {
     if (!editingElementId) return;
@@ -904,16 +905,16 @@ export function WhiteboardCanvas({
   const flushPendingMove = useCallback(() => {
     const point = pendingMoveRef.current;
     pendingMoveRef.current = null;
-    moveRafRef.current = null;
     if (!point || locked) return;
+    lastMoveWriteRef.current = performance.now();
     engineRef.current?.onPointerMove(point);
   }, [locked]);
 
   const queuePointerMove = useCallback(
     (point: { x: number; y: number; pressure?: number }) => {
       pendingMoveRef.current = point;
-      if (moveRafRef.current !== null) return;
-      moveRafRef.current = requestAnimationFrame(flushPendingMove);
+      if (performance.now() - lastMoveWriteRef.current < MOVE_WRITE_INTERVAL_MS) return;
+      flushPendingMove();
     },
     [flushPendingMove]
   );
@@ -1077,90 +1078,89 @@ export function WhiteboardCanvas({
 
   const handlePointerDown = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {
-      if (editingElementId) {
-        commitEditing();
-      }
-      if (tool === "pan") {
-        clearCursor();
-        onPanStart?.(event.clientX, event.clientY);
-        return;
-      }
-      const rect = event.currentTarget.getBoundingClientRect();
-      const canvasPoint = toCanvasPoint(event.clientX, event.clientY, rect);
-      const point = { x: canvasPoint.x, y: canvasPoint.y, pressure: event.pressure };
-      if (tool === "laser") {
+      doc.transact(() => {
+        if (editingElementId) {
+          commitEditing();
+        }
+        if (tool === "pan") {
+          clearCursor();
+          onPanStart?.(event.clientX, event.clientY);
+          return;
+        }
+        const rect = event.currentTarget.getBoundingClientRect();
+        const canvasPoint = toCanvasPoint(event.clientX, event.clientY, rect);
+        const point = { x: canvasPoint.x, y: canvasPoint.y, pressure: event.pressure };
+        if (tool === "laser") {
+          event.currentTarget.setPointerCapture(event.pointerId);
+          laserTrailsRef.current.delete("self");
+          laserPointerIdRef.current = event.pointerId;
+          appendOwnLaserPoint(point);
+          scheduleCursorSync(point.x, point.y);
+          return;
+        }
         event.currentTarget.setPointerCapture(event.pointerId);
-        laserTrailsRef.current.delete("self");
-        laserPointerIdRef.current = event.pointerId;
-        appendOwnLaserPoint(point);
-        scheduleCursorSync(point.x, point.y);
-        return;
-      }
-      event.currentTarget.setPointerCapture(event.pointerId);
-      pendingMoveRef.current = null;
-      if (moveRafRef.current !== null) {
-        cancelAnimationFrame(moveRafRef.current);
-        moveRafRef.current = null;
-      }
-      if (!locked) {
-        undoManager?.stopCapturing();
-        if (tool === "select" && selectedId) {
-          const selectedElement = elements.find((element) => element.id === selectedId) ?? null;
-          if (selectedElement) {
-            const selectedBounds = getSelectionBoundsForElement(selectedElement);
-            if (isRotatableElement(selectedElement) && isPointOnRotateHandle(selectedBounds, point)) {
-              const center = {
-                x: selectedBounds.x + selectedBounds.width / 2,
-                y: selectedBounds.y + selectedBounds.height / 2,
-              };
-              event.preventDefault();
-              rotateSessionRef.current = {
-                elementId: selectedElement.id,
-                center,
-                startPointerAngle: Math.atan2(point.y - center.y, point.x - center.x),
-                startRotation: getElementRotation(selectedElement),
-                startElement: selectedElement,
-              };
-              scheduleCursorSync(point.x, point.y);
-              return;
-            }
-
-            const canResize = isResizableElement(selectedElement);
-            if (canResize) {
-              const handle = getResizeHandleAtPoint(selectedBounds, point);
-              if (handle) {
+        pendingMoveRef.current = null;
+        if (!locked) {
+          undoManager?.stopCapturing();
+          if (tool === "select" && selectedId) {
+            const selectedElement = elements.find((element) => element.id === selectedId) ?? null;
+            if (selectedElement) {
+              const selectedBounds = getSelectionBoundsForElement(selectedElement);
+              if (isRotatableElement(selectedElement) && isPointOnRotateHandle(selectedBounds, point)) {
+                const center = {
+                  x: selectedBounds.x + selectedBounds.width / 2,
+                  y: selectedBounds.y + selectedBounds.height / 2,
+                };
                 event.preventDefault();
-                const rotation = getElementRotation(selectedElement);
-                const rotated = Math.abs(rotation) >= ROTATION_EPSILON;
-                const localBounds = rotated ? getBoundsForElement(selectedElement) : selectedBounds;
-                resizeSessionRef.current = {
-                  ...startResizeFrame(localBounds, rotation, handle, point),
+                rotateSessionRef.current = {
                   elementId: selectedElement.id,
+                  center,
+                  startPointerAngle: Math.atan2(point.y - center.y, point.x - center.x),
+                  startRotation: getElementRotation(selectedElement),
                   startElement: selectedElement,
                 };
                 scheduleCursorSync(point.x, point.y);
                 return;
               }
+
+              const canResize = isResizableElement(selectedElement);
+              if (canResize) {
+                const handle = getResizeHandleAtPoint(selectedBounds, point);
+                if (handle) {
+                  event.preventDefault();
+                  const rotation = getElementRotation(selectedElement);
+                  const rotated = Math.abs(rotation) >= ROTATION_EPSILON;
+                  const localBounds = rotated ? getBoundsForElement(selectedElement) : selectedBounds;
+                  resizeSessionRef.current = {
+                    ...startResizeFrame(localBounds, rotation, handle, point),
+                    elementId: selectedElement.id,
+                    startElement: selectedElement,
+                  };
+                  scheduleCursorSync(point.x, point.y);
+                  return;
+                }
+              }
+            }
+          }
+
+          engineRef.current?.onPointerDown(point);
+          const nextSelectedId = engineRef.current?.getSelectedId() ?? null;
+          setSelectedId(nextSelectedId);
+          if (tool === "text" || tool === "sticky") {
+            scheduleDeferredTask(() => startEditingById(nextSelectedId), 0);
+            if (onToolChange) {
+              scheduleDeferredTask(() => onToolChange("select"), 10);
             }
           }
         }
-
-        engineRef.current?.onPointerDown(point);
-        const nextSelectedId = engineRef.current?.getSelectedId() ?? null;
-        setSelectedId(nextSelectedId);
-        if (tool === "text" || tool === "sticky") {
-          scheduleDeferredTask(() => startEditingById(nextSelectedId), 0);
-          if (onToolChange) {
-            scheduleDeferredTask(() => onToolChange("select"), 10);
-          }
-        }
-      }
-      scheduleCursorSync(point.x, point.y);
+        scheduleCursorSync(point.x, point.y);
+      });
     },
     [
       appendOwnLaserPoint,
       commitEditing,
       clearCursor,
+      doc,
       editingElementId,
       elements,
       locked,
@@ -1293,12 +1293,14 @@ export function WhiteboardCanvas({
       return;
     }
     if (!locked) {
-      flushPendingMove();
-      engineRef.current?.onPointerUp();
+      doc.transact(() => {
+        flushPendingMove();
+        engineRef.current?.onPointerUp();
+      });
       setSelectedId(engineRef.current?.getSelectedId() ?? null);
     }
     clearCursor();
-  }, [locked, clearCursor, endOwnLaser, flushPendingMove, onPanEnd, tool]);
+  }, [doc, locked, clearCursor, endOwnLaser, flushPendingMove, onPanEnd, tool]);
 
   const handlePointerLeave = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {
@@ -1631,7 +1633,7 @@ export function WhiteboardCanvas({
             <textarea
               ref={textEditorRef}
               value={editingText}
-              onChange={(event) => setEditingText(event.target.value)}
+              onChange={(event) => handleEditingTextChange(event.target.value)}
               onWheel={(event) => event.stopPropagation()}
               onBlur={() => commitEditing()}
               onKeyDown={(event) => {
@@ -1647,8 +1649,7 @@ export function WhiteboardCanvas({
                 ) {
                   event.preventDefault();
                   commitEditing();
-                }
-                if (
+                } else if (
                   editingElement.type === "sticky" &&
                   event.key === "Enter" &&
                   (event.metaKey || event.ctrlKey)

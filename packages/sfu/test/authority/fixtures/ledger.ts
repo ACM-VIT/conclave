@@ -5,12 +5,13 @@
  */
 import { defineContract, s } from "@conclave/apps-sdk/authority";
 import {
+  actionOrderTable,
   defineAuthority,
   key,
+  nextActionOrder,
   table,
   type Subject,
 } from "@conclave/apps-sdk/authority/server";
-import { actionOrderTable, nextActionOrder } from "./action-order.js";
 
 const id = s.string({ min: 1, max: 32 });
 const text = s.string({ max: 20_000 });

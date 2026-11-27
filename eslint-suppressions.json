@@ -19,6 +19,46 @@
       "count": 2
     }
   },
+  "packages/apps-sdk/src/apps/polls/core/index.ts": {
+    "conclave/no-comments": {
+      "count": 12
+    }
+  },
+  "packages/apps-sdk/src/apps/polls/server/index.ts": {
+    "conclave/no-comments": {
+      "count": 18
+    }
+  },
+  "packages/apps-sdk/src/apps/polls/web/index.ts": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "packages/apps-sdk/src/apps/polls/web/usePolls.ts": {
+    "conclave/no-comments": {
+      "count": 8
+    }
+  },
+  "packages/apps-sdk/src/apps/qa/core/index.ts": {
+    "conclave/no-comments": {
+      "count": 11
+    }
+  },
+  "packages/apps-sdk/src/apps/qa/server/index.ts": {
+    "conclave/no-comments": {
+      "count": 19
+    }
+  },
+  "packages/apps-sdk/src/apps/qa/web/index.ts": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "packages/apps-sdk/src/apps/qa/web/useQa.ts": {
+    "conclave/no-comments": {
+      "count": 31
+    }
+  },
   "packages/apps-sdk/src/native-embed/session.ts": {
     "conclave/no-comments": {
       "count": 2
@@ -31,17 +71,17 @@
   },
   "packages/apps-sdk/src/sdk/authority/client.ts": {
     "conclave/no-comments": {
-      "count": 66
+      "count": 70
     }
   },
   "packages/apps-sdk/src/sdk/authority/contract.ts": {
     "conclave/no-comments": {
-      "count": 9
+      "count": 12
     }
   },
   "packages/apps-sdk/src/sdk/authority/definition.ts": {
     "conclave/no-comments": {
-      "count": 30
+      "count": 31
     }
   },
   "packages/apps-sdk/src/sdk/authority/index.ts": {
@@ -51,7 +91,7 @@
   },
   "packages/apps-sdk/src/sdk/authority/react.tsx": {
     "conclave/no-comments": {
-      "count": 5
+      "count": 6
     }
   },
   "packages/apps-sdk/src/sdk/authority/schema.ts": {
@@ -71,7 +111,7 @@
   },
   "packages/apps-sdk/src/sdk/runtime/AppsProvider.tsx": {
     "conclave/no-comments": {
-      "count": 15
+      "count": 4
     }
   },
   "packages/apps-sdk/src/sdk/runtime/syncReply.ts": {
@@ -81,7 +121,7 @@
   },
   "packages/apps-sdk/src/sdk/types/index.ts": {
     "conclave/no-comments": {
-      "count": 12
+      "count": 10
     }
   },
   "packages/meeting-core/src/grid-layout.ts": {
@@ -92,6 +132,16 @@
   "packages/meeting-core/src/guest-join-claims.ts": {
     "conclave/no-comments": {
       "count": 14
+    }
+  },
+  "packages/meeting-core/src/host-commands.ts": {
+    "conclave/no-comments": {
+      "count": 4
+    }
+  },
+  "packages/meeting-core/src/host-grant.ts": {
+    "conclave/no-comments": {
+      "count": 3
     }
   },
   "packages/meeting-core/src/sfu-events.ts": {
@@ -106,7 +156,7 @@
   },
   "packages/meeting-core/src/types.ts": {
     "conclave/no-comments": {
-      "count": 24
+      "count": 26
     }
   },
   "packages/meeting-core/src/video-encodings.ts": {
@@ -131,12 +181,12 @@
   },
   "packages/sfu/config/classes/Room.ts": {
     "conclave/no-comments": {
-      "count": 135
+      "count": 175
     }
   },
   "packages/sfu/config/config.ts": {
     "conclave/no-comments": {
-      "count": 18
+      "count": 19
     }
   },
   "packages/sfu/config/env.ts": {
@@ -151,12 +201,12 @@
   },
   "packages/sfu/scripts/authority-load-audit.ts": {
     "conclave/no-comments": {
-      "count": 14
+      "count": 17
     }
   },
   "packages/sfu/scripts/authority-load-server.ts": {
     "conclave/no-comments": {
-      "count": 2
+      "count": 3
     }
   },
   "packages/sfu/scripts/build-canary.mjs": {
@@ -179,6 +229,11 @@
       "count": 1
     }
   },
+  "packages/sfu/scripts/measure-legacy-qa-flush.ts": {
+    "conclave/no-comments": {
+      "count": 20
+    }
+  },
   "packages/sfu/server.ts": {
     "conclave/no-comments": {
       "count": 6
@@ -191,7 +246,7 @@
   },
   "packages/sfu/server/admin/controlPlane.ts": {
     "conclave/no-comments": {
-      "count": 42
+      "count": 40
     }
   },
   "packages/sfu/server/admin/moderation.ts": {
@@ -241,7 +296,12 @@
   },
   "packages/sfu/server/apps/authority/instance.ts": {
     "conclave/no-comments": {
-      "count": 36
+      "count": 37
+    }
+  },
+  "packages/sfu/server/apps/authority/legacyWebinarQa.ts": {
+    "conclave/no-comments": {
+      "count": 80
     }
   },
   "packages/sfu/server/apps/authority/limits.ts": {
@@ -266,22 +326,37 @@
   },
   "packages/sfu/server/apps/authority/roomAuthority.ts": {
     "conclave/no-comments": {
-      "count": 97
+      "count": 125
     }
   },
   "packages/sfu/server/apps/authority/store.ts": {
     "conclave/no-comments": {
-      "count": 39
+      "count": 41
     }
   },
   "packages/sfu/server/apps/authority/views.ts": {
     "conclave/no-comments": {
-      "count": 103
+      "count": 104
+    }
+  },
+  "packages/sfu/server/apps/documents/pool.ts": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "packages/sfu/server/apps/documents/updateFacts.ts": {
+    "conclave/no-comments": {
+      "count": 8
     }
   },
   "packages/sfu/server/configError.ts": {
     "conclave/no-comments": {
       "count": 1
+    }
+  },
+  "packages/sfu/server/controlPlane/legacyImport.ts": {
+    "conclave/no-comments": {
+      "count": 2
     }
   },
   "packages/sfu/server/cors.ts": {
@@ -294,14 +369,34 @@
       "count": 6
     }
   },
+  "packages/sfu/server/googleCalendar.ts": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
   "packages/sfu/server/http/createApp.ts": {
     "conclave/no-comments": {
-      "count": 24
+      "count": 33
     }
   },
   "packages/sfu/server/identity.ts": {
     "conclave/no-comments": {
       "count": 3
+    }
+  },
+  "packages/sfu/server/meetingCodes.ts": {
+    "conclave/no-comments": {
+      "count": 2
+    }
+  },
+  "packages/sfu/server/nextMeetingLobby.ts": {
+    "conclave/no-comments": {
+      "count": 15
+    }
+  },
+  "packages/sfu/server/persistenceFence.ts": {
+    "conclave/no-comments": {
+      "count": 4
     }
   },
   "packages/sfu/server/redisErrors.ts": {
@@ -311,12 +406,22 @@
   },
   "packages/sfu/server/roomApps.ts": {
     "conclave/no-comments": {
-      "count": 43
+      "count": 35
+    }
+  },
+  "packages/sfu/server/roomRecoveryLedger.ts": {
+    "conclave/no-comments": {
+      "count": 62
+    }
+  },
+  "packages/sfu/server/roomRecoveryPass.ts": {
+    "conclave/no-comments": {
+      "count": 15
     }
   },
   "packages/sfu/server/rooms.ts": {
     "conclave/no-comments": {
-      "count": 17
+      "count": 33
     }
   },
   "packages/sfu/server/scheduledMeetings.ts": {
@@ -326,17 +431,22 @@
   },
   "packages/sfu/server/scheduledWebinarScheduler.ts": {
     "conclave/no-comments": {
-      "count": 6
+      "count": 5
     }
   },
   "packages/sfu/server/scheduling.ts": {
     "conclave/no-comments": {
-      "count": 6
+      "count": 1
     }
   },
   "packages/sfu/server/socket/auth.ts": {
     "conclave/no-comments": {
       "count": 5
+    }
+  },
+  "packages/sfu/server/socket/context.ts": {
+    "conclave/no-comments": {
+      "count": 3
     }
   },
   "packages/sfu/server/socket/createSocketServer.ts": {
@@ -366,7 +476,7 @@
   },
   "packages/sfu/server/socket/handlers/disconnectHandlers.ts": {
     "conclave/no-comments": {
-      "count": 12
+      "count": 9
     }
   },
   "packages/sfu/server/socket/handlers/gameHandlers.ts": {
@@ -376,7 +486,7 @@
   },
   "packages/sfu/server/socket/handlers/joinRoom.ts": {
     "conclave/no-comments": {
-      "count": 48
+      "count": 100
     }
   },
   "packages/sfu/server/socket/handlers/mediaHandlers.ts": {
@@ -391,7 +501,7 @@
   },
   "packages/sfu/server/socket/handlers/webinarInteractionHandlers.ts": {
     "conclave/no-comments": {
-      "count": 16
+      "count": 18
     }
   },
   "packages/sfu/server/socket/rateLimit.ts": {
@@ -411,7 +521,7 @@
   },
   "packages/sfu/server/state.ts": {
     "conclave/no-comments": {
-      "count": 1
+      "count": 3
     }
   },
   "packages/sfu/server/webcamReceiverCapacityProof.ts": {
@@ -421,7 +531,7 @@
   },
   "packages/sfu/server/webinarNotifications.ts": {
     "conclave/no-comments": {
-      "count": 12
+      "count": 20
     }
   },
   "packages/sfu/test/admission-ledger.test.ts": {
@@ -491,22 +601,37 @@
   },
   "packages/sfu/test/authority/guarantees.test.ts": {
     "conclave/no-comments": {
-      "count": 168
+      "count": 169
     }
   },
   "packages/sfu/test/authority/harness.ts": {
     "conclave/no-comments": {
-      "count": 22
+      "count": 27
     }
   },
   "packages/sfu/test/authority/integrity.test.ts": {
     "conclave/no-comments": {
-      "count": 21
+      "count": 25
+    }
+  },
+  "packages/sfu/test/authority/legacy-webinar-qa-fanout.test.ts": {
+    "conclave/no-comments": {
+      "count": 59
+    }
+  },
+  "packages/sfu/test/authority/legacy-webinar-qa.test.ts": {
+    "conclave/no-comments": {
+      "count": 34
     }
   },
   "packages/sfu/test/authority/load-audit.test.ts": {
     "conclave/no-comments": {
-      "count": 8
+      "count": 10
+    }
+  },
+  "packages/sfu/test/authority/polls-qa-apps.test.ts": {
+    "conclave/no-comments": {
+      "count": 48
     }
   },
   "packages/sfu/test/authority/rate.test.ts": {
@@ -536,7 +661,12 @@
   },
   "packages/sfu/test/authority/wire.test.ts": {
     "conclave/no-comments": {
-      "count": 15
+      "count": 12
+    }
+  },
+  "packages/sfu/test/authority/wireKit.ts": {
+    "conclave/no-comments": {
+      "count": 6
     }
   },
   "packages/sfu/test/create-workers.test.ts": {
@@ -556,7 +686,12 @@
   },
   "packages/sfu/test/join-room-lifecycle.test.ts": {
     "conclave/no-comments": {
-      "count": 8
+      "count": 9
+    }
+  },
+  "packages/sfu/test/knock-by-default.test.ts": {
+    "conclave/no-comments": {
+      "count": 76
     }
   },
   "packages/sfu/test/logger-env.test.ts": {
@@ -575,6 +710,16 @@
     }
   },
   "packages/sfu/test/room-placement-http.test.ts": {
+    "conclave/no-comments": {
+      "count": 2
+    }
+  },
+  "packages/sfu/test/room-recovery-ledger-writers.test.ts": {
+    "conclave/no-comments": {
+      "count": 29
+    }
+  },
+  "packages/sfu/test/room-recovery-ledger.test.ts": {
     "conclave/no-comments": {
       "count": 2
     }
@@ -606,7 +751,7 @@
   },
   "packages/sfu/test/transcript-relay-registry.test.ts": {
     "conclave/no-comments": {
-      "count": 2
+      "count": 1
     }
   },
   "packages/sfu/test/webinar-program-feed.test.ts": {
@@ -616,7 +761,7 @@
   },
   "packages/sfu/types.ts": {
     "conclave/no-comments": {
-      "count": 19
+      "count": 24
     }
   },
   "packages/sfu/utilities/createWorkers.ts": {
@@ -664,6 +809,11 @@
       "count": 6
     }
   },
+  "scripts/backup/backup-restore.test.mjs": {
+    "conclave/no-comments": {
+      "count": 134
+    }
+  },
   "scripts/deploy-sfu-crash.test.mjs": {
     "conclave/no-comments": {
       "count": 18
@@ -671,7 +821,7 @@
   },
   "scripts/deploy-sfu-preflight.mjs": {
     "conclave/no-comments": {
-      "count": 19
+      "count": 20
     }
   },
   "scripts/deploy-sfu-preflight.test.mjs": {
@@ -681,7 +831,7 @@
   },
   "scripts/deploy-sfu.test.mjs": {
     "conclave/no-comments": {
-      "count": 59
+      "count": 60
     }
   },
   "scripts/test-support/deploy-harness.mjs": {

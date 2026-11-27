@@ -131,6 +131,8 @@ type ClientPolicy = {
   allowHostJoin: boolean;
   useWaitingRoom: boolean;
   allowDisplayNameUpdate: boolean;
+  // New rooms start locked, so anyone the host has not let in knocks.
+  knockByDefault: boolean;
 };
 
 const defaultClientPolicies: Record<string, ClientPolicy> = {
@@ -141,28 +143,32 @@ const defaultClientPolicies: Record<string, ClientPolicy> = {
     allowHostJoin: false,
     useWaitingRoom: false,
     allowDisplayNameUpdate: true,
+    knockByDefault: true,
   },
   public: {
     allowNonHostRoomCreation: false,
     allowHostJoin: false,
     useWaitingRoom: false,
     allowDisplayNameUpdate: true,
+    knockByDefault: true,
   },
   conclave: {
     allowNonHostRoomCreation: false,
     allowHostJoin: false,
     useWaitingRoom: false,
     allowDisplayNameUpdate: true,
+    knockByDefault: true,
   },
   internal: {
     allowNonHostRoomCreation: false,
     allowHostJoin: true,
     useWaitingRoom: true,
     allowDisplayNameUpdate: false,
+    knockByDefault: false,
   },
 };
 
-const normalizeClientPolicies = (
+export const normalizeClientPolicies = (
   value: string | undefined,
 ): Record<string, ClientPolicy> => {
   if (!value) return defaultClientPolicies;
@@ -194,6 +200,10 @@ const normalizeClientPolicies = (
           typeof policyInput.allowDisplayNameUpdate === "boolean"
             ? policyInput.allowDisplayNameUpdate
             : base.allowDisplayNameUpdate,
+        knockByDefault:
+          typeof policyInput.knockByDefault === "boolean"
+            ? policyInput.knockByDefault
+            : base.knockByDefault,
       };
     }
     return next;
@@ -313,9 +323,9 @@ const routerMediaCodecs: RouterRtpCodecCapability[] = [
 
 export const config = {
   webcamVp9Enabled: process.env.SFU_WEBCAM_VP9_ENABLED === "1",
-  // Server-authoritative in-call apps. Off by default: with it off no
-  // authority event is registered, so the SFU answers like one that predates
-  // the runtime and clients hide the apps that need it. Read once at startup:
+  // Server-authoritative in-call apps. Off by default: with it off the only
+  // authority event answered is the capability request, as unsupported, so
+  // clients hide the apps that need it at once. Read once at startup:
   // changing it needs a restart.
   appsAuthority: {
     enabled: toBoolean(process.env.SFU_APPS_AUTHORITY_ENABLED),
@@ -372,6 +382,13 @@ export const config = {
   analytics: analyticsSettings,
   transcriptRelay: {
     enabled: !transcriptRelayDisabled,
+  },
+  appDocuments: {
+    deadlineMs: toNumber(process.env.SFU_APP_DOC_DEADLINE_MS, 500, {
+      integer: true,
+      min: 10,
+      max: 60_000,
+    }),
   },
   workerSettings: {
     ...readWorkerSizing(process.env),

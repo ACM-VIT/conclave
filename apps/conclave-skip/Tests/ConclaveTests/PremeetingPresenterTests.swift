@@ -250,9 +250,9 @@ struct PremeetingPresenterTests {
         #expect(presenter.path.count == 1)
         let route = try #require(presenter.path.first)
         #expect(route.kind == .lobby)
-        let words = route.roomId.split(separator: "-").map { String($0) }
-        #expect(words.count == EntryPolicies.roomWordsPerCode)
-        #expect(words.allSatisfy { EntryPolicies.roomWords.contains($0) })
+        let groups = route.roomId.split(separator: "-").map { String($0) }
+        #expect(groups.map { $0.count } == EntryPolicies.roomCodeGroupLengths)
+        #expect(groups.joined().allSatisfy { "abcdefghijklmnopqrstuvwxyz".contains($0) })
         let target = presenter.target(forRoute: route.id)
         #expect(target?.intent == .newMeeting)
         #expect(target?.allowRoomCreation == true)

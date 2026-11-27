@@ -4,6 +4,7 @@ import { mediaErrorAdvice } from "./utils";
 export function describeEnterError(
   action: "new" | "join",
   error: MeetError,
+  roomId = "",
 ): { title: string; detail: string; canRetry: boolean } {
   const verb = action === "new" ? "start" : "join";
   if (error.causes) {
@@ -16,6 +17,12 @@ export function describeEnterError(
     };
   }
   switch (error.code) {
+    case "ROOM_NOT_FOUND":
+      return {
+        title: "Check your meeting code",
+        detail: `There's no meeting at ${roomId || "this code"} right now. Make sure the link or code is right.`,
+        canRetry: false,
+      };
     case "PERMISSION_DENIED":
       return {
         title: "Camera & mic are blocked",

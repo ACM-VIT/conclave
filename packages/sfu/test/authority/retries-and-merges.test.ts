@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthorityResult, Json } from "@conclave/apps-sdk/authority";
 import { key, type Subject } from "@conclave/apps-sdk/authority/server";
+import { qaContract } from "@conclave/apps-sdk/qa/core";
+import { qaAuthority } from "@conclave/apps-sdk/qa/server";
 import { DEFAULT_AUTHORITY_LIMITS } from "../../server/apps/authority/limits.js";
 import { ReceiptBook } from "../../server/apps/authority/receipts.js";
 import { AuthorityStore } from "../../server/apps/authority/store.js";
@@ -15,7 +17,6 @@ import {
 import { Harness, person, type Tab } from "./harness.js";
 import { ledgerAuthority, ledgerContract } from "./fixtures/ledger.js";
 import { probeAuthority } from "./fixtures/probe.js";
-import { qaAuthority, qaContract } from "./fixtures/qa.js";
 
 beforeEach(() => {
   vi.useFakeTimers({ now: 1_000_000 });
@@ -77,6 +78,7 @@ describe("an action whose answer was lost, sent again (Greptile)", () => {
     const onA = await guestTab(room, qaContract, "pass-a", "tab-1", "attendee");
     const asked = await onA.act("ask", { text: "Seen only by hosts for now?" });
     const id = field(asked.ok ? asked.value : null, "id");
+    if (typeof id !== "string") throw new Error("Q&A ask did not return a question id");
     const onB = await guestTab(room, qaContract, "pass-b", "tab-2", "attendee");
 
     const { answer } = await startWithLostAnswer(room, onB, "upvote", { id, value: true });
@@ -87,7 +89,7 @@ describe("an action whose answer was lost, sent again (Greptile)", () => {
 
     expect(sameGuest(room, onA, onB)).toBe(true);
     expect(result).toEqual({ ok: false, code: "rejected", reason: "not-found" });
-    expect(field(questionsAsked(hostTab, "Seen only by hosts for now?")[0], "upvotes")).toBe(0);
+    expect(hostTab.row("votes", id)).toEqual({ upvotes: 0 });
   });
 });
 

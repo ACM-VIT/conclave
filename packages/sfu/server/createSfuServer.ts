@@ -1,23 +1,18 @@
+import { runDetached } from "./runDetached.js";
 import { createServer as createHttpServer } from "http";
 import type { Server as HttpServer } from "http";
 import type { Express } from "express";
 import type { Server as SocketIOServer } from "socket.io";
 import { config as defaultConfig } from "../config/config.js";
 import { Logger } from "../utilities/loggers.js";
-import {
-  initMediaSoup,
-  initScheduling,
-  initScheduledMeetings,
-  initScheduledWebinars,
-} from "./init.js";
-import {
-  advanceScheduledMeetings,
-  persistScheduledMeetingChanges,
-} from "./scheduledMeetings.js";
+import { advanceMeetings } from "./controlPlane/meetingCommands.js";
+import { initControlPlane, initMediaSoup } from "./init.js";
 import { sendDueSchedulingEmailReminders } from "./schedulingEmailReminders.js";
+import { drainCalendarTasks } from "./calendarTasks.js";
 import { createSfuApp } from "./http/createApp.js";
 import { registerAdminGateway, type AdminGateway } from "./admin/adminGateway.js";
 import {
+  notifyRoomConfig,
   startScheduledWebinarTimer,
   stopScheduledWebinarTimer,
 } from "./scheduledWebinarScheduler.js";
@@ -27,6 +22,8 @@ import {
   type SocketAdapterLifecycle,
 } from "./socket/createSocketServer.js";
 import { createRoomRegistry } from "./roomRegistry.js";
+import { createFileRoomRecoveryStore } from "./roomRecoveryLedger.js";
+import { startRoomRecoveryPassRefresh } from "./roomRecoveryPass.js";
 import {
   AUDIO_CONSUMER_HEAL_INTERVAL_MS,
   healAllRooms,
@@ -36,11 +33,11 @@ import {
   releaseAllRoomOwnerships,
   renewRoomOwnerships,
 } from "./rooms.js";
+import { handOffRooms } from "./serverShutdown.js";
 import { shutdownAnalytics } from "./analytics/posthog.js";
 import { createSfuState } from "./state.js";
 import type { SfuState } from "./state.js";
 import { shutdownBrowserBackend } from "./browserServiceClient.js";
-import { retryWhileSqliteLocked } from "./sqliteWriteCheck.js";
 
 const ROOM_LEASE_RECOVERY_INTERVAL_MS = 2_000;
 
@@ -65,6 +62,8 @@ export const createSfuServer = (
   const state = createSfuState({
     isDraining: config.draining,
     roomRegistry,
+    config,
+    roomRecoveryStore: createFileRoomRecoveryStore(),
   });
   let io: SocketIOServer | null = null;
   let socketAdapterLifecycle: SocketAdapterLifecycle | null = null;
@@ -89,16 +88,15 @@ export const createSfuServer = (
   let roomOwnershipRenewTimer: NodeJS.Timeout | null = null;
   let roomLeaseRecoveryTimer: NodeJS.Timeout | null = null;
   let audioConsumerHealTimer: NodeJS.Timeout | null = null;
+  let stopRoomRecoveryPassRefresh: (() => void) | null = null;
   const workerShutdown = new AbortController();
 
   const start = async (): Promise<void> => {
     await state.roomRegistry.start();
     socketAdapterLifecycle = await connectSocketAdapter(io, { config });
-    await initMediaSoup(state, () => io, workerShutdown.signal);
-    await retryWhileSqliteLocked(() => initScheduledWebinars(state));
-    await retryWhileSqliteLocked(() => initScheduledMeetings(state));
-    await retryWhileSqliteLocked(() => initScheduling(state));
-    startScheduledWebinarTimer(state, () => io, undefined);
+    await initMediaSoup(state, config, () => io, workerShutdown.signal);
+    await initControlPlane(state);
+    startScheduledWebinarTimer(state, notifyRoomConfig(state, () => io));
     roomOwnershipRenewTimer = setInterval(() => {
       renewRoomOwnerships(state).catch((error) => {
         Logger.error("Failed to renew room ownerships", error);
@@ -125,18 +123,14 @@ export const createSfuServer = (
       roomLeaseRecoveryTimer.unref();
     }
     scheduledMeetingTickTimer = setInterval(() => {
-      const changedMeetings = advanceScheduledMeetings(state.scheduledMeetings);
-      if (changedMeetings.length > 0 && state.scheduledMeetingPersistence) {
-        persistScheduledMeetingChanges(
-          state.scheduledMeetings,
-          state.scheduledMeetingPersistence,
-          changedMeetings,
-        ).catch((error) => {
-          Logger.warn("Failed to persist scheduled-meeting tick", error);
-        });
-      }
+      state.controlPlane.commit(advanceMeetings).catch((error) => {
+        Logger.warn("Failed to advance scheduled meetings", error);
+      });
       sendDueSchedulingEmailReminders(state).catch((error) => {
         Logger.warn("Failed to send scheduling reminders", error);
+      });
+      drainCalendarTasks(state).catch((error) => {
+        Logger.warn("Failed to run calendar tasks", error);
       });
     }, 5000);
 
@@ -152,6 +146,10 @@ export const createSfuServer = (
     if (audioConsumerHealTimer.unref) {
       audioConsumerHealTimer.unref();
     }
+    stopRoomRecoveryPassRefresh = startRoomRecoveryPassRefresh(
+      state,
+      config.sfuSecret,
+    );
 
     await new Promise<void>((resolve) => {
       httpServer.listen(config.port, () => {
@@ -162,6 +160,7 @@ export const createSfuServer = (
   };
 
   const stop = async (): Promise<void> => {
+    handOffRooms(state);
     workerShutdown.abort();
     adminGateway.dispose();
     stopScheduledWebinarTimer(state);
@@ -181,12 +180,10 @@ export const createSfuServer = (
       clearInterval(audioConsumerHealTimer);
       audioConsumerHealTimer = null;
     }
-    state.scheduledWebinarPersistence?.close?.();
-    state.scheduledWebinarPersistence = null;
-    await state.scheduledMeetingPersistence?.close?.();
-    state.scheduledMeetingPersistence = null;
-    await state.schedulingPersistence?.close?.();
-    state.schedulingPersistence = null;
+    stopRoomRecoveryPassRefresh?.();
+    stopRoomRecoveryPassRefresh = null;
+    state.persistenceFence.open();
+    await state.controlPlane.close();
     await releaseAllRoomOwnerships(state);
     await socketAdapterLifecycle?.close();
     socketAdapterLifecycle = null;
@@ -194,7 +191,7 @@ export const createSfuServer = (
     state.transcriptRelays.closeAll();
     // Fire-and-forget: io.close() also initiates closing the attached HTTP
     // server; the explicit httpServer.close below is what we await on.
-    void io.close();
+    runDetached("Closing the socket server", () => io.close());
 
     await new Promise<void>((resolve, reject) => {
       httpServer.close((error) => {
@@ -211,6 +208,7 @@ export const createSfuServer = (
     }
     state.rooms.clear();
     state.roomCreations.clear();
+    await state.appDocuments.close();
 
     for (const worker of state.workers) {
       try {

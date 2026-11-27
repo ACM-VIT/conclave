@@ -5,6 +5,12 @@ import type {
   WebinarQaModerateRequest,
 } from "../../../types.js";
 import { forceRemoveClientNow } from "../../admin/controlPlane.js";
+import {
+  legacyQaModerate,
+  legacyQaSubmit,
+  legacyQaUpvote,
+  qaBookOf,
+} from "../../apps/authority/legacyWebinarQa.js";
 import { decisionRecordFull } from "../../admin/moderation.js";
 import { getOrCreateWebinarRoomConfig } from "../../webinar.js";
 import {
@@ -91,6 +97,20 @@ export const registerWebinarInteractionHandlers = (
       ) => void,
     ) => {
       try {
+        // A room that runs the Q&A app keeps one book. This event is then
+        // another way to ask in it, and the app's rules decide.
+        const book = qaBookOf(context);
+        if (book) {
+          if (!takeToken(socket, "webinar:qaSubmit", RATE_LIMITS.webinarQa)) {
+            respond(callback, {
+              error: "You are sending questions too quickly",
+            });
+            return;
+          }
+          respond(callback, legacyQaSubmit(book, context, data?.question));
+          return;
+        }
+
         const guard = requireAttendee();
         if ("error" in guard) {
           respond(callback, guard);
@@ -161,6 +181,22 @@ export const registerWebinarInteractionHandlers = (
       ) => void,
     ) => {
       try {
+        const book = qaBookOf(context);
+        if (book) {
+          if (!takeToken(socket, "webinar:qaUpvote", RATE_LIMITS.webinarQaVote)) {
+            respond(callback, { error: "You are voting too quickly" });
+            return;
+          }
+          const bookQuestionId = normalizeQaId(data?.id);
+          respond(
+            callback,
+            bookQuestionId
+              ? legacyQaUpvote(book, context, bookQuestionId)
+              : { error: "Invalid question" },
+          );
+          return;
+        }
+
         const guard = requireAttendee();
         if ("error" in guard) {
           respond(callback, guard);
@@ -242,6 +278,21 @@ export const registerWebinarInteractionHandlers = (
         const action = data?.action;
         if (!questionId || !QA_MODERATE_ACTIONS.has(action)) {
           respond(callback, { error: "Invalid moderation request" });
+          return;
+        }
+
+        const book = qaBookOf(context);
+        if (book) {
+          respond(
+            callback,
+            legacyQaModerate(book, context, {
+              id: questionId,
+              action,
+              ...(typeof data?.answerText === "string"
+                ? { answerText: data.answerText }
+                : {}),
+            }),
+          );
           return;
         }
 
@@ -436,7 +487,7 @@ export const registerWebinarInteractionHandlers = (
         // guest leaves the stage, as admitting or denying covers every tab.
         const stageSeats = (
           targetUserKey
-            ? guard.room.seatsOfSameGuest(targetUserKey)
+            ? guard.room.seatsOfSameGuest(targetUserKey, "removal")
             : [targetUserId]
         ).filter((userId) => {
           const seat = guard.room.getClient(userId);

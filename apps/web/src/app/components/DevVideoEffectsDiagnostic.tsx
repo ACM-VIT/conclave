@@ -10,6 +10,7 @@ import {
   type BackgroundEffectId,
   type VideoEffectsState,
 } from "../lib/video-effects";
+import { captureGeneration, captureHeldCanvas } from "../lib/media-captures";
 
 function DiagnosticVideo({
   stream,
@@ -98,7 +99,7 @@ export default function DevVideoEffectsDiagnostic() {
       return;
     }
 
-    const stream = canvas.captureStream(30);
+    const stream = captureHeldCanvas(canvas, 30, captureGeneration());
     const [captureTrack] = stream.getVideoTracks() as Array<
       MediaStreamTrack & { requestFrame?: () => void }
     >;

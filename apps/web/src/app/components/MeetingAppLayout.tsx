@@ -1,7 +1,7 @@
 "use client";
 
-import { memo, useMemo, useRef, useState, type ReactNode } from "react";
-import { LogOut } from "lucide-react";
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { LogOut, RotateCw } from "lucide-react";
 import { useElementSize } from "../hooks/useElementSize";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useScrollWindow } from "../hooks/useScrollWindow";
@@ -10,6 +10,7 @@ import { usePublishStagePlacement } from "../hooks/usePublishStagePlacement";
 import { resolveContentStagePlacement } from "../lib/meeting-stage-layout";
 import type { Participant } from "../lib/types";
 import { isSystemUserId } from "../lib/utils";
+import AdminNoticePill from "./AdminNoticePill";
 import LocalVideoTile from "./LocalVideoTile";
 import ParticipantAudio from "./ParticipantAudio";
 import ParticipantVideo from "./ParticipantVideo";
@@ -44,7 +45,22 @@ interface MeetingAppLayoutProps {
   audioPlaybackAttemptToken?: number;
   getDisplayName: (userId: string) => string;
   leaveAction?: { label: string; hint?: string; onLeave: () => void };
+  syncFailed?: boolean;
+  onRetrySync?: () => void;
+  rejectedChangeAt?: number | null;
+  rejectedChangeReason?: string | null;
+  frozen?: boolean;
+  documentsVersion?: number;
 }
+
+const REJECTED_CHANGE_NOTICE_MS = 4_000;
+const rejectedChangeNotice = (reason: string | null) => ({
+  message:
+    reason === "too-large"
+      ? "This app is full, so your last change couldn't be saved"
+      : "Your last change couldn't be saved",
+  level: "info" as const,
+});
 
 function MeetingAppLayout({
   children,
@@ -66,7 +82,23 @@ function MeetingAppLayout({
   audioPlaybackAttemptToken,
   getDisplayName,
   leaveAction,
+  syncFailed = false,
+  onRetrySync,
+  rejectedChangeAt = null,
+  rejectedChangeReason = null,
+  frozen = false,
+  documentsVersion,
 }: MeetingAppLayoutProps) {
+  const [noticeFor, setNoticeFor] = useState<number | null>(null);
+
+  useEffect(() => {
+    const remaining = rejectedChangeAt === null ? 0 : rejectedChangeAt + REJECTED_CHANGE_NOTICE_MS - Date.now();
+    if (remaining <= 0) return;
+    setNoticeFor(rejectedChangeAt);
+    const timer = window.setTimeout(() => setNoticeFor(null), remaining);
+    return () => window.clearTimeout(timer);
+  }, [rejectedChangeAt]);
+
   const remoteParticipants = useMemo(
     () =>
       Array.from(participants.values()).filter(
@@ -155,6 +187,24 @@ function MeetingAppLayout({
               </button>
             </div>
           ) : null}
+          {syncFailed ? (
+            <div
+              role="status"
+              className="flex shrink-0 items-center justify-between gap-3 rounded-xl border border-white/10 bg-[#141414] px-3 py-2"
+            >
+              <span className="text-[12.5px] text-[#fafafa]/80">
+                {"Couldn't load this app"}
+              </span>
+              <button
+                type="button"
+                onClick={onRetrySync}
+                className="inline-flex h-7 items-center gap-1.5 rounded-full border border-white/10 px-3 text-[12px] font-medium text-[#fafafa]/85 transition-colors hover:border-white/25 hover:bg-white/[0.06] hover:text-[#fafafa] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30"
+              >
+                <RotateCw size={13} strokeWidth={1.75} aria-hidden="true" />
+                Retry
+              </button>
+            </div>
+          ) : null}
           <div
             className={
               frameContent
@@ -162,7 +212,12 @@ function MeetingAppLayout({
                 : "relative min-h-0 min-w-0 flex-1 overflow-hidden"
             }
           >
-            {children}
+            <div key={documentsVersion} inert={frozen} className="contents">
+              {children}
+            </div>
+            {noticeFor !== null && noticeFor === rejectedChangeAt ? (
+              <AdminNoticePill notice={rejectedChangeNotice(rejectedChangeReason)} compact />
+            ) : null}
           </div>
         </div>
         {stage.rail.length > 0 ? (

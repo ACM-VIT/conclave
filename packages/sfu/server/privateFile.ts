@@ -14,7 +14,7 @@ const syncDirectory = (dir: string): void => {
   }
 };
 
-export const writePrivateFileAtomic = (path: string, data: string): void => {
+export const writePrivateFileAtomic = (path: string, data: string, beforeRename?: () => void): void => {
   const dir = dirname(path);
   mkdirSync(dir, { recursive: true });
   const staged = `${path}.${randomBytes(4).toString("hex")}.tmp`;
@@ -30,6 +30,7 @@ export const writePrivateFileAtomic = (path: string, data: string): void => {
   }
   closeSync(fd);
   try {
+    beforeRename?.();
     renameSync(staged, path);
   } catch (error) {
     rmSync(staged, { force: true });

@@ -129,6 +129,7 @@ it("does not restart stopped notes when an older key lookup completes after a st
   expect(room.sendError).toHaveBeenCalledWith(
     viewer,
     expect.stringContaining("Notes changed"),
+    undefined,
   );
 });
 
@@ -188,4 +189,14 @@ it("unlocks and reschedules cancelled minutes when the controller takes over a l
   expect(room.minutesGenerating).toBe(false);
   expect(room.minutesRerunRequested).toBe(false);
   expect(room.scheduleMinutes).toHaveBeenCalledTimes(1);
+});
+
+it("names the request a rate-limited language pick was refused for, so its waiter ends at once", async () => {
+  const { room, viewer } = await fixture();
+  viewer.rateLimits = { session: { count: 8, resetAt: Date.now() + 60_000 } };
+  await (room as unknown as { handleMessage: (viewer: Viewer, raw: string) => Promise<void> }).handleMessage(
+    viewer,
+    JSON.stringify({ ...message, type: "session.takeover", language: "hi", requestId: "pick-2" }),
+  );
+  expect(room.sendError).toHaveBeenCalledWith(viewer, "Transcript message rate limit exceeded.", "pick-2");
 });
