@@ -1207,6 +1207,7 @@ describe("the streams a send path is known to be failing", () => {
     ["the camera's count reply is missing", { mic: "delivered", camera: "unconfirmed" }, true],
     ["the camera is not being sent", { mic: "delivered" }, true],
     ["nothing is being sent", {}, false],
+    ["nothing is being sent and receiver reports still come back", {}, true],
     ["the camera still does not arrive", { mic: "delivered", camera: "undelivered" }, true],
   ])("stays blocked, with its one rebuild spent, while %s", (_name, streams, reached) => {
     expect(advanceMediaPathRecovery(BLOCKED_ON_CAMERA, sendSampled(streams, reached))).toBe(
@@ -1248,6 +1249,17 @@ describe("the streams a send path is known to be failing", () => {
 
     const micBack = advanceMediaPathRecovery(both, sendSampled({ mic: "delivered", camera: "quiet" }));
     expect(micBack.producer).toMatchObject({ health: "blocked", failingStreams: ["camera"] });
+  });
+
+  it("takes no proof from a send sample that judged no stream", () => {
+    const rebuilt = rebuiltSendPath(INITIAL_MEDIA_PATH_RECOVERY, "s1");
+    const blocked = planMediaPathFailure(rebuilt, sendFailure("s2", true)).recovery;
+
+    expect(advanceMediaPathRecovery(rebuilt, sendSampled({}))).toBe(rebuilt);
+    expect(advanceMediaPathRecovery(blocked, sendSampled({}))).toBe(blocked);
+    expect(advanceMediaPathRecovery(blocked, sendSampled({ mic: "delivered" }))).toEqual(
+      INITIAL_MEDIA_PATH_RECOVERY,
+    );
   });
 
   it("needs every stream being sent to be accounted for even with nothing on record", () => {

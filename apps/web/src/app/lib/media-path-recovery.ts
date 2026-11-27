@@ -659,7 +659,11 @@ export const advanceMediaPathRecovery = (
     case "path-sampled": {
       const known = recovery[event.direction].failingStreams;
       const failingStreams = failingStreamsAfter(known, event.evidence.streams);
-      return failingStreams.length === 0 && pathCarriesWhatIsSent(event.evidence, known)
+      const judgedWhatItCarries =
+        event.direction === "consumer" || judgedStreams(event.evidence.streams).length > 0;
+      return failingStreams.length === 0 &&
+        judgedWhatItCarries &&
+        pathCarriesWhatIsSent(event.evidence, known)
         ? restartDirection(recovery, event.direction)
         : patchDirection(recovery, event.direction, { failingStreams });
     }

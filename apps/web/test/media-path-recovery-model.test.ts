@@ -106,6 +106,8 @@ class Call {
     consumer: INITIAL_MEDIA_PATH_WATCH,
   };
   private now = 0;
+  private sentEver = 0;
+  private sentInWindow = 0;
   private received = 0;
   private reachedSinceSample: Record<MediaDirection, number> = { producer: 0, consumer: 0 };
   private reachedInWindow: Record<MediaDirection, number> = { producer: 0, consumer: 0 };
@@ -154,7 +156,6 @@ class Call {
   }
 
   toggleWanted(name: (typeof STREAMS)[number]) {
-    if (name === "mic") return;
     const stream = this.streams[name];
     stream.wanted = !stream.wanted;
     if (stream.wanted) this.publish(name);
@@ -184,6 +185,7 @@ class Call {
       stream.sent += packets;
       stream.sentSinceWatchStart += packets;
       stream.sentSinceSample += packets;
+      this.sentEver += packets;
       if (!this.works.producer || !stream.arrives) continue;
       stream.arrived += packets;
       stream.arrivedSinceWatchStart += packets;
@@ -213,7 +215,7 @@ class Call {
     const published = this.published();
     return {
       direction: "send",
-      rtpBytes: published.reduce((bytes, { stream }) => bytes + this.streams[stream as (typeof STREAMS)[number]].sent * 100, 0),
+      rtpBytes: this.sentEver * 100,
       receiverReportAt: this.receiverReportAt,
       sent: Object.fromEntries(
         published.map(({ stream, mid }) => [
@@ -305,7 +307,7 @@ class Call {
     }
     const proven =
       evidence.reached &&
-      (direction === "consumer" || this.knownFailing.size === 0) &&
+      (direction === "consumer" || (this.knownFailing.size === 0 && judged.length > 0)) &&
       judged.every(
         ([name, delivery]) =>
           delivery === "delivered" || (delivery === "quiet" && !failingBefore.has(name)),
@@ -320,10 +322,12 @@ class Call {
 
   private window(direction: MediaDirection, at: string): { evidence: PathEvidence; carried: boolean } {
     this.reachedInWindow[direction] = 0;
+    const sentBefore = this.sentEver;
     const start = this.read(direction);
     const sfuStart = direction === "producer" ? this.counts() : null;
     this.pass(CHECK_WINDOW_MS);
     const end = this.read(direction);
+    this.sentInWindow = this.sentEver - sentBefore;
     const sfuEnd = direction === "producer" ? this.counts() : null;
     const producers = direction === "producer" ? this.published() : [];
     const evidence: PathEvidence =
@@ -356,7 +360,7 @@ class Call {
     const shouldCarry =
       this.works[direction] &&
       answered &&
-      (direction === "consumer" || worlds.some(({ world }) => world.sending)) &&
+      (direction === "consumer" || this.sentInWindow > 0) &&
       worlds.every(({ stream, world }) =>
         world.sending ? world.arrives : !this.knownFailing.has(stream),
       );
@@ -617,7 +621,7 @@ class Call {
     for (const name of STREAMS) {
       const stream = this.streams[name];
       stream.sending = true;
-      if (this.knownFailing.has(name)) stream.wanted = true;
+      if (name === "mic" || this.knownFailing.has(name)) stream.wanted = true;
     }
   }
 
