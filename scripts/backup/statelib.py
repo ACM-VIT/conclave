@@ -716,6 +716,13 @@ def configured_json_stores(state, container, containers, env=None):
     return stores
 
 
+def json_coverage_problems(archive, state, container):
+    files = {rel for rel, kind in restore_writes(archive, False, True) if kind == "file"}
+    stores = configured_json_stores(state, container, state_mounts(docker_containers(), state))
+    return [f"the backup has no copy of {store['rel']}, the JSON file {store['variable']} ({store['where']}) names"
+            for store in stores if store["rel"] not in files]
+
+
 def configured_stores(state, container, containers, env=None):
     """Every database a store opens, as this host's config sets it and as the
     env of each SFU container that mounts the state dir sets it, each store's

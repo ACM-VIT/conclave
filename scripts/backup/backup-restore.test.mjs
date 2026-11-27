@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile, execFileSync, spawn, spawnSync } from "node:child_process";
-import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, readlink, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, readlink, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -2951,6 +2951,46 @@ test("restore refuses a changed Redis prefix before deleting any live keys", nee
     assert.equal((await live.cli("GET", "after:scheduling:profiles")).stdout.trim(), "live");
   } finally {
     live.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a backup missing a configured JSON store leaves the previous restorable archive intact", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, local, setDocker, backup, latestArchive, restore } = await setUp(root, [
+      "BACKUP_LOCAL_KEEP=1",
+      "SCHEDULING_PERSISTENCE=json",
+      "SCHEDULING_PATH=/var/lib/conclave/recordings/scheduling.json",
+    ]);
+    await setDocker([{
+      id: "sfu-a", mounts: [state], status: "exited", env: [
+        "SFU_PORT=9", "SFU_INSTANCE_ID=sfu-a", "SCHEDULED_WEBINARS_PERSISTENCE=file",
+        "SCHEDULED_WEBINARS_PATH=/var/lib/conclave/recordings/webinars.json",
+      ],
+    }]);
+    withDatabase(state);
+    const stores = [
+      ["scheduling.json", "{}", /no copy of scheduling\.json.*SCHEDULING_PATH \(the backup config\)/],
+      ["webinars.json", "[]", /no copy of webinars\.json.*SCHEDULED_WEBINARS_PATH \(the container sfu-a\)/],
+    ];
+    for (const [name, body] of stores) await writeFile(path.join(state, name), body);
+    await backup("--local-only");
+    const previous = "conclave-older-20000101T000000Z.tar.gz.age";
+    await rename(await latestArchive(), path.join(local, previous));
+    const saved = await readFile(path.join(local, previous));
+
+    for (const [name, body, message] of stores) {
+      const file = path.join(state, name);
+      await rm(file);
+      await assert.rejects(backup("--local-only"), message);
+      assert.deepEqual(await archives(local), [previous]);
+      assert.deepEqual(await workDirs(local), []);
+      assert.deepEqual(await readFile(path.join(local, previous)), saved);
+      await restore("--file", path.join(local, previous), "--yes");
+      assert.equal(await readFile(file, "utf8"), body);
+    }
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });

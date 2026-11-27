@@ -166,8 +166,11 @@ its records in one file, `SCHEDULING_PATH`, `SCHEDULED_MEETINGS_PATH` or
 `SCHEDULED_WEBINARS_PATH`, which must be set and lie inside the state dir: the
 SFU's default (`data/<store>.json` under its working directory) is inside the
 container, not on the volume, so the backup and a restore of files refuse it
-(a restore of SQLite or Redis alone does not read it). The
-file is backed up with the rest of the state dir. An SFU
+(a restore of SQLite or Redis alone does not read it). The backup must
+capture each configured JSON file to keep a new archive. An unused store
+may have no file until its first save. Until the file exists and can be
+archived, the backup fails and keeps the previous archives. It cannot tell
+an unused store from a missing file that held records. An SFU
 container is one whose env sets `SFU_INSTANCE_ID`, the rule the deploy uses to
 pick its SFU services; another container on the state dir (a maintenance one,
 say) neither chooses the stores nor stops a backup, though any running

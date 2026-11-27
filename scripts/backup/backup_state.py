@@ -47,6 +47,7 @@ from statelib import (  # noqa: E402
     is_database_name,
     is_sfu,
     configured_json_stores,
+    json_coverage_problems,
     log,
     mount_roots,
     name_room,
@@ -309,6 +310,8 @@ def validate_command(state, container, payload):
     if not problems:
         roots = mount_roots(state, container)
         problems = chain_problems(overlay(None, archive, restore_writes(archive)), archive, roots)
+    if not problems:
+        problems = json_coverage_problems(archive, state, container)
     for problem in problems:
         print(problem, file=sys.stderr)
     return 1 if problems else 0

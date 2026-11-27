@@ -54,7 +54,7 @@ from statelib import (  # noqa: E402
     database_paths,
     docker_containers,
     folded,
-    configured_json_stores,
+    json_coverage_problems,
     log,
     mount_roots,
     open_dir,
@@ -818,15 +818,6 @@ def require_redis_pattern(archive, pattern):
         raise Refused(f"the backup's Redis key pattern {recorded[0]!r} does not match the requested pattern {pattern!r}; use a backup for the configured prefix or leave Redis out; nothing was changed")
 
 
-def require_json_coverage(archive, state, container):
-    files = {rel for rel, kind in restore_writes(archive, False, True) if kind == "file"}
-    stores = configured_json_stores(state, container, state_mounts(docker_containers(), state))
-    missing = [f"the backup has no copy of {store['rel']}, the JSON file {store['variable']} ({store['where']}) names"
-               for store in stores if store["rel"] not in files]
-    if missing:
-        raise Refused("\n".join(missing + ["use a backup that has the configured JSON files or leave files out; nothing was changed"]))
-
-
 def parse_owner(value):
     if not value:
         return None
@@ -873,7 +864,9 @@ def restore(args):
         if missing:
             raise Refused("\n".join(missing + ["use a backup that has it, or leave SQLite out with --only redis,files (or --only files); nothing was changed"]))
     if "files" in wants:
-        require_json_coverage(archive, args.state, args.container)
+        missing = json_coverage_problems(archive, args.state, args.container)
+        if missing:
+            raise Refused("\n".join(missing + ["use a backup that has the configured JSON files or leave files out; nothing was changed"]))
     redis = None
     redis_pattern = os.environ.get("REDIS_KEY_PATTERN", "conclave:sfu:persistence:*")
     if "redis" in wants:
