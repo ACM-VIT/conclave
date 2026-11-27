@@ -366,6 +366,7 @@ export function createOutbox(deps: OutboxDeps) {
     if (create(stored(batch)) !== "written") return false;
     batch.saved = true;
     batch.everStored = true;
+    if (batch.inFlight !== null) return true;
     if (batch.timer !== null) deps.clearTimer(batch.timer);
     batch.timer = null;
     live.delete(batch.id);
@@ -576,12 +577,12 @@ export function createOutbox(deps: OutboxDeps) {
   const replayPass = (store: LockedStore): void => {
     const stale: StoredBatch[] = [];
     const before = deps.now() - MARK_TTL_MS;
-    deps.store.pruneMarks(before);
     const listed = deps.store.list();
     if (listed === null) {
       readAgainSoon();
       return;
     }
+    deps.store.pruneMarks(before);
     const savedIds = new Set(listed.map(({ id }) => id));
     for (const [id, mark] of localFacts) {
       if (mark.at < before && !live.has(id) && !savedIds.has(id)) localFacts.delete(id);
@@ -689,10 +690,9 @@ export function createOutbox(deps: OutboxDeps) {
         if (!saveOwn(batch)) holdInMemory(batch);
       }
       for (const batch of live.values()) {
-        if (batch.inFlight !== null && !batch.saved && create(stored(batch)) === "written") {
-          batch.saved = true;
-          batch.everStored = true;
-        }
+        if (batch.inFlight === null || batch.saved) continue;
+        const decision = decisionOf(batch);
+        if (decision !== "settled" && decision !== "unreadable") saveOwn(batch);
       }
     },
 
@@ -777,7 +777,8 @@ export function createBatchStore(storage: () => Storage): BatchStore {
   const prune = (area: Storage, before: number): void => {
     for (const key of keysWith(area, STORED_MARK_PREFIX)) {
       const mark = parseMark(area.getItem(key));
-      if (!mark || mark.at < before) area.removeItem(key);
+      const id = key.slice(STORED_MARK_PREFIX.length, key.lastIndexOf(":"));
+      if (!mark || (mark.at < before && area.getItem(keyOf(id)) === null)) area.removeItem(key);
     }
   };
   return {
@@ -825,13 +826,11 @@ export function createBatchStore(storage: () => Storage): BatchStore {
       try {
         const area = storage();
         const key = markKeyOf(id, writer);
-        try {
-          const marks = keysWith(area, STORED_MARK_PREFIX);
-          if (!marks.includes(key) && marks.length >= MAX_MARKS) {
-            prune(area, at - MARK_TTL_MS);
-            if (keysWith(area, STORED_MARK_PREFIX).length >= MAX_MARKS) return false;
-          }
-        } catch {}
+        const marks = keysWith(area, STORED_MARK_PREFIX);
+        if (!marks.includes(key) && marks.length >= MAX_MARKS) {
+          prune(area, at - MARK_TTL_MS);
+          if (keysWith(area, STORED_MARK_PREFIX).length >= MAX_MARKS) return false;
+        }
         area.setItem(key, JSON.stringify({ ...facts, at }));
         return true;
       } catch {

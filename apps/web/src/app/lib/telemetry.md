@@ -108,8 +108,11 @@ one owner at a time:
   beacon (a keepalive `fetch`), within one 56 KB budget for every keepalive
   request still outstanding; then each is saved in local storage
   under its own key, `conclave:telemetry:batch:<uuid>`, at most 512 KB in
-  all. A request in flight is saved too, with its attempt id and a lease. A
-  saved batch keeps its place in the retry schedule (`attempt`, `nextTry`,
+  all. A request in flight can hand off its remaining events with its
+  attempt id and lease. Before saving it, the tab applies any answers it
+  already knows, even if it could not publish a mark. It saves nothing if
+  the batch is settled or its shared marks cannot be read. A saved batch
+  keeps its place in the retry schedule (`attempt`, `nextTry`,
   `notBefore`), and a beaconed one is sent again 30 s later to confirm it,
   since the page may not live to read its answer; when storage refuses a
   beaconed batch, its retry timer moves to that time too. When the page does
@@ -153,10 +156,12 @@ one owner at a time:
   storage that is full still replays and removes what it holds.
   An answer whose lock request is refused, or whose batch cannot be read
   then, changes nothing else: its facts are already published, and the tab
-  wakes for another pass. Marks are pruned once they are older than any batch
-  could be (5 minutes), and there are never more than 512. When storage
-  refuses a mark, that fact cannot reach other tabs, like any other write
-  storage refuses. A read that fails is never taken as an answer: the pass
+  wakes for another pass. Both replay and mark writes at capacity prune a
+  valid mark only when it is more than 5 minutes old and storage confirms
+  that its batch is gone. The store refuses new marks at the 512-mark limit
+  if it cannot reclaim space. If storage refuses a mark, another tab cannot
+  read that fact unless it is written to the saved batch. A read that fails
+  is never taken as an answer: the pass
   that met it wakes again a second later, and a batch it could not finish is
   never sent from memory while a stored copy may remain. A replay whose lock
   request is refused asks again after 1 s, then up to every 30 s. Local storage has no compare-and-set across tabs, so the lock is
@@ -164,9 +169,8 @@ one owner at a time:
   holding the lock (a claim, the answer to a claimed send, the answer to a
   keepalive send, a removal), which checks first that the stored copy still
   carries its send id, and lets the batch go when it does not. Outside the
-  lock, as a page goes away, a tab only creates the entry for a batch it made
-  and never stored, which no other tab can know; it never writes back a batch
-  it claimed. Where the browser has no Web Locks API (Safari before 15.4,
+  lock, as a page goes away, a tab can create a missing entry for a batch it
+  owns in memory. It cannot replace a saved claim. Where the browser has no Web Locks API (Safari before 15.4,
   Firefox before 96, Chrome before 69), nothing is stored: batches stay in
   their tab's memory, are sent as the page goes away or when it comes back,
   and a tab that closes with one it could not send loses it. Reading a saved batch back checks each of
