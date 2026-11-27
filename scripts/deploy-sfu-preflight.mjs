@@ -237,18 +237,30 @@ const storeFile = (env) => {
 };
 
 const checkStorePaths = (definition, env, service, errors) => {
-  const store = storeFile(env);
-  if (!store) return;
   const mounts = (Array.isArray(definition.volumes) ? definition.volumes : [])
-    .filter((volume) => volume && (volume.type === "bind" || volume.type === "volume") && !volume.read_only)
-    .map((volume) => posix.normalize(String(volume.target)));
-  const [variable, file] = store;
-  const path = posix.resolve(SFU_WORKDIR, file);
-  if (!mounts.some((target) => path === target || path.startsWith(`${target}/`))) {
+    .filter((volume) => volume && (volume.type === "bind" || volume.type === "volume"))
+    .map(({ target, read_only }) => ({ target: posix.resolve("/", String(target)), readOnly: read_only }))
+    .sort((a, b) => b.target.length - a.target.length);
+  const requireWritableMount = (variable, path, impact) => {
+    const resolved = posix.resolve(SFU_WORKDIR, path);
+    const mount = mounts.find(({ target }) =>
+      target === "/" || resolved === target || resolved.startsWith(`${target}/`));
+    if (mount && !mount.readOnly) return;
+    const writable = mounts.filter(({ readOnly }) => !readOnly).map(({ target }) => target);
     errors.push(
-      `${service}: ${variable} resolves to ${path}, which is not on a writable volume mount (${mounts.join(", ") || "none"}). The SFU's root filesystem is read-only, so it would refuse to start.`,
+      `${service}: ${variable} resolves to ${resolved}, which is not on a writable volume mount (${writable.join(", ") || "none"}). ${impact}`,
     );
-  }
+  };
+  const store = storeFile(env);
+  if (store) requireWritableMount(...store, "The SFU would refuse to start.");
+  const recordings = String(env.RECORDING_STORAGE_PATH || "").trim();
+  const recovery = String(env.SFU_ROOM_RECOVERY_PATH || "").trim();
+  if (recordings) requireWritableMount("RECORDING_STORAGE_PATH", recordings, "The SFU cannot persist data there.");
+  requireWritableMount(
+    "SFU_ROOM_RECOVERY_PATH",
+    recovery || posix.join(recordings || "data", "room-recovery"),
+    "The SFU cannot open rooms without writing recovery state.",
+  );
 };
 
 const isRequiredRedisMode = (value) =>

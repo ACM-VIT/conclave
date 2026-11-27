@@ -608,12 +608,19 @@ test("compose forwards the control-plane store choice and JSON path to both SFUs
     assert.equal(rendered.status, 0, rendered.stderr);
     return JSON.parse(rendered.stdout).services;
   };
-  const chosen = render({ CONTROL_PLANE_PERSISTENCE: "sqlite", CONTROL_PLANE_JSON_PATH: "/var/lib/conclave/recordings/elsewhere.json" });
+  const chosen = render({
+    CONTROL_PLANE_PERSISTENCE: "sqlite",
+    CONTROL_PLANE_JSON_PATH: "/var/lib/conclave/recordings/elsewhere.json",
+    RECORDING_STORAGE_PATH: "/srv/conclave/recordings",
+  });
   const defaults = render({});
   for (const name of ["sfu-a", "sfu-b"]) {
     assert.equal(chosen[name].environment.CONTROL_PLANE_PERSISTENCE, "sqlite", name);
     assert.equal(chosen[name].environment.CONTROL_PLANE_JSON_PATH, "/var/lib/conclave/recordings/elsewhere.json", name);
     assert.equal(defaults[name].environment.CONTROL_PLANE_JSON_PATH, "/var/lib/conclave/recordings/control-plane.json", name);
+    assert.equal(chosen[name].environment.RECORDING_STORAGE_PATH, "/var/lib/conclave/recordings", name);
+    assert.ok(chosen[name].volumes.some(({ source, target }) =>
+      source === "/srv/conclave/recordings" && target === "/var/lib/conclave/recordings"), name);
   }
 });
 
@@ -671,6 +678,30 @@ test("explicit and inferred Redis do not require the image SQLite default on a w
     SCHEDULED_WEBINARS_PERSISTENCE: "sqlite",
     CONCLAVE_SQLITE_PATH: undefined,
   }).join("\n"), /not on a writable volume mount/);
+});
+
+test("recovery data needs a writable mount even with a Redis control plane", () => {
+  const redis = { CONTROL_PLANE_PERSISTENCE: "redis", CONCLAVE_SQLITE_PATH: undefined };
+  assert.deepEqual(storePathErrors(redis), []);
+  assert.match(
+    storePathErrors({ ...redis, RECORDING_STORAGE_PATH: "/srv/conclave/recordings" }).join("\n"),
+    /RECORDING_STORAGE_PATH resolves to \/srv\/conclave\/recordings/,
+  );
+  assert.match(
+    storePathErrors({ ...redis, SFU_ROOM_RECOVERY_PATH: "/srv/recovery" }).join("\n"),
+    /SFU_ROOM_RECOVERY_PATH resolves to \/srv\/recovery/,
+  );
+  assert.deepEqual(
+    storePathErrors({ ...redis, SFU_ROOM_RECOVERY_PATH: "/var/lib/conclave/recordings/recovery" }),
+    [],
+  );
+  assert.match(
+    storePathErrors(redis, [
+      { type: "bind", source: "/srv/recordings", target: "/var/lib/conclave/recordings" },
+      { type: "bind", source: "/srv/frozen", target: "/var/lib/conclave/recordings/room-recovery", read_only: true },
+    ]).join("\n"),
+    /SFU_ROOM_RECOVERY_PATH resolves to \/var\/lib\/conclave\/recordings\/room-recovery/,
+  );
 });
 
 test("SFU services must run in production mode", () => {
