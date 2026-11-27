@@ -1781,6 +1781,7 @@ export class TranscriptRoom {
           },
           onReady: () => {
             if (this.liveConnection?.epoch === epoch) this.flushToLive();
+            else this.queueDrainCheck(epoch);
           },
           onFailure: (message) => {
             if (this.liveConnection?.epoch === epoch) {
@@ -1886,6 +1887,13 @@ export class TranscriptRoom {
     if (!owesLines) {
       drain.timer = setTimeout(() => this.settleDrain(drain), drain.quietAt - now);
     }
+  }
+
+  private queueDrainCheck(epoch: number): void {
+    const drain = this.providerDrains.get(epoch);
+    if (!drain) return;
+    // Provider callbacks can run before the turn and its socket slot are released.
+    queueMicrotask(() => this.settleDrain(drain));
   }
 
   private closeDrain(drain: ProviderConnection): void {
@@ -2078,7 +2086,7 @@ export class TranscriptRoom {
       this.ledger.end(line, "final", words);
       changed = this.recordFinalSegment(this.lineSegment(line), words);
     }
-    if (connection.role === "draining") this.settleDrain(connection);
+    this.queueDrainCheck(connection.epoch);
     if (!changed) return;
     this.persistInBackground();
     this.scheduleMinutes();
@@ -2088,7 +2096,7 @@ export class TranscriptRoom {
     const line = this.namedLine(connection, providerItemId);
     if (!line || !isActive(line)) return;
     const changed = this.endUnfinishedLines([line], "A provider failed one line", connection);
-    if (connection.role === "draining") this.settleDrain(connection);
+    this.queueDrainCheck(connection.epoch);
     if (changed) {
       this.persistInBackground();
       this.scheduleMinutes();
@@ -2639,6 +2647,7 @@ export class TranscriptRoom {
 
   private endEveryOwedLine(context: string): void {
     for (const connection of [this.liveConnection, ...this.providerDrains.values(), null]) {
+      if (connection?.role === "draining") connection.session.settle?.();
       const owed = this.ledger.active().filter(({ epoch }) => epoch === (connection?.epoch ?? null));
       this.endUnfinishedLines(owed, context, connection);
     }
