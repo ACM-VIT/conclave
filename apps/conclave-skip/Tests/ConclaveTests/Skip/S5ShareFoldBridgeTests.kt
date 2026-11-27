@@ -275,6 +275,69 @@ class S5ShareFoldBridgeTests {
         assertTrue(stopActions(postedNotification()).isEmpty())
     }
 
+    @Test fun anOlderGrantCannotStopTheCaptureServiceAfterANewerApproval() {
+        val target = Robolectric.buildService(ScreenCaptureService::class.java).create().get()
+        val older = grantCaptureService(target)
+        val newer = request()
+        ScreenCaptureManager.releaseConsent(older)
+        val stop = recorded.single().first
+        recorded.clear()
+        ScreenCaptureManager.onConsentResult(Activity.RESULT_OK, Intent())
+        val start = recorded.single().first
+
+        target.onStartCommand(stop, 0, 2)
+        assertFalse("the old stop scheduled destruction of the new grant's service", shadowOf(target).isStoppedBySelf)
+        target.onStartCommand(start, 0, 3)
+        assertTrue(newer.isCompleted)
+        val grant = requireNotNull(runBlocking { newer.await() })
+        assertTrue(ScreenCaptureManager.isConsentActive(grant))
+        assertTrue(shadowOf(target).isLastForegroundNotificationAttached)
+    }
+
+    @Test fun destroyingAnOlderCaptureServiceCannotRevokeANewerApproval() {
+        val controller = Robolectric.buildService(ScreenCaptureService::class.java).create()
+        val target = controller.get()
+        val older = grantCaptureService(target)
+        val newer = request()
+        ScreenCaptureManager.releaseConsent(older)
+        target.onStartCommand(recorded.single().first, 0, 2)
+        assertTrue(shadowOf(target).isStoppedBySelf)
+        assertFalse(shadowOf(target).isLastForegroundNotificationAttached)
+        recorded.clear()
+        ScreenCaptureManager.onConsentResult(Activity.RESULT_OK, Intent())
+        val start = recorded.single().first
+        var revocations = 0
+        ScreenCaptureManager.onProjectionRevoked = { revocations += 1 }
+
+        controller.destroy()
+        assertEquals(0, revocations)
+        val replacementController = Robolectric.buildService(ScreenCaptureService::class.java).create()
+        val replacement = replacementController.get()
+        replacement.onStartCommand(start, 0, 1)
+        assertTrue(newer.isCompleted)
+        val grant = requireNotNull(runBlocking { newer.await() })
+        assertTrue(ScreenCaptureManager.isConsentActive(grant))
+        assertTrue(shadowOf(replacement).isLastForegroundNotificationAttached)
+
+        replacement.onStartCommand(Intent(ScreenCaptureService.ACTION_STOP), 0, 2)
+        replacementController.destroy()
+        assertFalse(ScreenCaptureManager.isConsentActive(grant))
+        assertEquals(1, revocations)
+    }
+
+    private fun grantCaptureService(target: ScreenCaptureService): Int {
+        val pending = request()
+        ScreenCaptureManager.onConsentResult(Activity.RESULT_OK, Intent())
+        assertEquals(ScreenCaptureService.ACTION_START, recorded.single().first.action)
+        target.onStartCommand(recorded.single().first, 0, 1)
+        assertTrue(pending.isCompleted)
+        val grant = requireNotNull(runBlocking { pending.await() })
+        assertTrue(ScreenCaptureManager.isConsentActive(grant))
+        assertTrue(shadowOf(target).isLastForegroundNotificationAttached)
+        recorded.clear()
+        return grant
+    }
+
     @Test fun aBackgroundRevokeDefersTheDropUntilTheAppReturns() {
         val target = fold()
         var revoked = 0

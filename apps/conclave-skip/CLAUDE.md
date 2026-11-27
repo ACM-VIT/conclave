@@ -775,7 +775,10 @@ Fixed 2026-10-22 and guarded by `testNativeCallCorrectnessBlockersStayFixed`:
   never resumes another request's waiters, and a newer request's start,
   refusal, cancellation or late dialog result never clears an older grant's
   consent or resets its host and service state (those reset when a consent is
-  installed, not when a request starts). The share phase ends consistent
+  installed, not when a request starts). A standalone capture service stop
+  from a grant release checks the grant again on delivery. A service instance
+  reports destruction only for the grant it foregrounded, so a delayed stop
+  or destroy cannot revoke a newer approval. The share phase ends consistent
   with what is live on every exit: the Android toggle settles it when it
   still owns the guard or when no newer toggle owns it
   (`finishScreenShareToggle`). The case

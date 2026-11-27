@@ -289,7 +289,7 @@ object ScreenCaptureManager {
     fun canShareDeviceAudio(): Boolean =
         ScreenShareCapabilityPolicy.current(platform = ScreenSharePlatform.android, apiLevel = Build.VERSION.SDK_INT)
 
-    fun onServiceForegrounded(): Boolean {
+    internal fun onServiceForegrounded(): Int? {
         val kept = synchronized(stateLock) {
             val current = consent
             if (current == null) {
@@ -303,7 +303,7 @@ object ScreenCaptureManager {
             current?.id
         }
         resumeAll(kept)
-        return kept != null
+        return kept
     }
 
     fun onServiceForegroundFailed() {
@@ -331,11 +331,16 @@ object ScreenCaptureManager {
     }
 
     fun releaseConsent(grant: Int) {
-        synchronized(stateLock) {
+        val releasingHost = synchronized(stateLock) {
             if (consent?.id != grant) return
             dropConsentLocked()
+            host
         }
-        requestServiceStop()
+        requestServiceStop(grant = grant, currentHost = releasingHost)
+    }
+
+    internal fun captureServiceCanStop(grant: Int): Boolean = synchronized(stateLock) {
+        host != ScreenShareServiceHost.captureService || consent == null || consent?.id == grant
     }
 
     private fun dropConsentLocked() {
@@ -344,9 +349,10 @@ object ScreenCaptureManager {
         suppressNextServiceDestroyCallback = true
     }
 
-    internal fun onHostStopped(stopped: ScreenShareServiceHost) {
+    internal fun onHostStopped(stopped: ScreenShareServiceHost, ownedGrant: Int? = null) {
         val callback = synchronized(stateLock) {
             if (!ScreenShareServiceHostPolicy.acceptsStop(stopped = stopped, current = host)) return
+            if (ownedGrant != null && consent?.id?.let { it != ownedGrant } == true) return
             consent = null
             serviceForegrounded = false
             if (suppressNextServiceDestroyCallback) {
@@ -407,9 +413,12 @@ object ScreenCaptureManager {
         }
     }
 
-    private fun requestServiceStop(userInitiated: Boolean = false) {
+    private fun requestServiceStop(
+        userInitiated: Boolean = false,
+        grant: Int? = null,
+        currentHost: ScreenShareServiceHost = synchronized(stateLock) { host },
+    ) {
         val ctx = ProcessInfo.processInfo.androidContext
-        val currentHost = synchronized(stateLock) { host }
         if (currentHost == ScreenShareServiceHost.callService) {
             if (CallForegroundService.isRunning) {
                 val intent = Intent(ctx, CallForegroundService::class.java).apply {
@@ -426,10 +435,12 @@ object ScreenCaptureManager {
         }
         val intent = Intent(ctx, ScreenCaptureService::class.java).apply {
             action = ScreenCaptureService.ACTION_STOP
+            if (grant != null) putExtra(ScreenCaptureService.EXTRA_GRANT, grant)
         }
         try {
             send(ctx, intent, foreground = false)
         } catch (_: Throwable) {
+            if (grant != null && !captureServiceCanStop(grant)) return
             try {
                 ctx.stopService(Intent(ctx, ScreenCaptureService::class.java))
             } catch (_: Throwable) {
