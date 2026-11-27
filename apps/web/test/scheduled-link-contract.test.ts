@@ -60,11 +60,15 @@ const fixtureValue = <T,>(result: CommitResult<T>): T => {
   return result.value;
 };
 
-const currentSfu = async (routing: express.RequestHandler = (_req, res) => res.json({ owner: null })) => {
+const currentSfu = async (
+  routing: express.RequestHandler = (_req, res) => res.json({ owner: null }),
+  rooms: express.RequestHandler = (_req, res) => res.json({ room: null }),
+) => {
   const store = controlPlaneStore(createMemoryBackend());
   const origin = await startSfu((app) => {
     const state = { controlPlane: store } as SfuState;
     app.get("/routing/rooms/:clientId/:roomId", routing);
+    app.get("/rooms/:roomId", rooms);
     registerScheduledMeetingRoutes(app, { state, sfuSecret: SECRET });
     registerSchedulingRoutes(app, { state, sfuSecret: SECRET });
   });
@@ -197,6 +201,24 @@ describe("scheduled links against the current SFU", () => {
     expect(observed).toEqual([]);
     expect(await open(`${ORIGIN}/${ROOM}`)).toEqual({ kind: "unscheduled" });
     expect(observed).toEqual([["acme", ROOM, SECRET]]);
+  });
+
+  it("keeps a bare link in the default tenant when a local room outlives its registry lease", async () => {
+    vi.stubEnv("SFU_CLIENT_ID", "acme");
+    vi.stubEnv("NEXT_PUBLIC_SFU_CLIENT_ID", "acme");
+    const rooms: Array<[string, string, string | undefined]> = [];
+    const { store } = await currentSfu(undefined, (req, res) => {
+      rooms.push([String(req.query.clientId), String(req.params.roomId), req.get("x-sfu-secret")]);
+      res.json({ room: { id: ROOM, userCount: 2 } });
+    });
+    const booking = fixtureValue(await store.commit(createMeeting(
+      { title: "Legacy booking", scheduledStartAt: Date.now() + 60_000, roomCode: ROOM, source: "booking_link" },
+      { clientId: "conclave", createdBy: HOST.email, defaultHostEmail: HOST.email, defaultHostUserId: HOST.userId },
+    )));
+
+    expect(await open(`${ORIGIN}/${ROOM}`)).toEqual({ kind: "unscheduled" });
+    expect(rooms).toEqual([["acme", ROOM, SECRET]]);
+    expect(await open(buildSchedulingMeetingLink(ORIGIN, booking))).toMatchObject({ kind: "scheduled", clientId: "conclave" });
   });
 
   it("reports an unsupported service without trying a different endpoint", async () => {
