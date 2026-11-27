@@ -213,6 +213,7 @@ export async function simulate(
     state: "pending" | "carried" | "lost";
   };
   const learned: Learned[] = [];
+  const pendingLearned: Learned[] = [];
   const idToKey = new Map<string, string>();
   const eventToKey = new Map<string, string>();
   const batchKey = (uuids: string[]): string => {
@@ -255,8 +256,59 @@ export async function simulate(
   let savedRetries = 0;
   const tabs: Tab[] = [];
 
+  type SavedBatch = { id: string; notBefore?: number; nextTry?: number; leaseUntil?: number };
+  type SavedMark = { delivered: boolean; notBefore: number };
   const items = new Map<string, string>();
   const writtenAt = new Map<string, number>();
+  const savedBatches = new Map<string, SavedBatch | undefined>();
+  const savedMarks = new Map<string, Map<string, SavedMark | undefined>>();
+  const markKeys = new Set<string>();
+  let itemKeys: string[] | null = null;
+  const parsedOrUndefined = (text: string): unknown => {
+    try {
+      return JSON.parse(text);
+    } catch {
+      return undefined;
+    }
+  };
+  const markBatchId = (key: string): string | null => {
+    const rest = key.slice(MARK_PREFIX.length);
+    const colon = rest.indexOf(":");
+    return colon < 0 ? null : rest.slice(0, colon);
+  };
+  const indexItem = (key: string, value: string, parsed: unknown) => {
+    itemKeys = null;
+    if (key.startsWith(BATCH_PREFIX)) savedBatches.set(key, parsed as SavedBatch | undefined);
+    if (key.startsWith(MARK_PREFIX)) {
+      markKeys.add(key);
+      const id = markBatchId(key);
+      if (id !== null) {
+        const marks = savedMarks.get(id) ?? new Map<string, SavedMark | undefined>();
+        marks.set(key, parsed as SavedMark | undefined);
+        savedMarks.set(id, marks);
+      }
+    }
+    items.set(key, value);
+  };
+  const unindexItem = (key: string): boolean => {
+    if (!items.delete(key)) return false;
+    itemKeys = null;
+    savedBatches.delete(key);
+    if (markKeys.delete(key)) {
+      const id = markBatchId(key);
+      const marks = id === null ? undefined : savedMarks.get(id);
+      marks?.delete(key);
+      if (id !== null && marks?.size === 0) savedMarks.delete(id);
+    }
+    return true;
+  };
+  const clearItems = () => {
+    items.clear();
+    itemKeys = null;
+    savedBatches.clear();
+    savedMarks.clear();
+    markKeys.clear();
+  };
   let closingTab: Tab | null = null;
   const notifyOthers = (writer: Tab) => {
     for (const tab of tabs) {
@@ -280,7 +332,7 @@ export async function simulate(
       if (readFails()) throw unreadable();
       return items.size;
     },
-    key: (index: number) => [...items.keys()][index] ?? null,
+    key: (index: number) => (itemKeys ??= [...items.keys()])[index] ?? null,
     getItem: (key: string) => {
       if (readFails()) throw unreadable();
       const value = items.get(key) ?? null;
@@ -303,9 +355,12 @@ export async function simulate(
     },
     setItem: (key: string, value: string) => {
       const markedKey = key.startsWith(MARK_PREFIX) ? (idToKey.get(key.slice(MARK_PREFIX.length).split(":")[0]) ?? null) : null;
-      const marked = learned.filter(
-        (item) => item.tab === tab && item.key === markedKey && item.at === clock && item.state !== "carried" && item.state !== "lost",
-      );
+      const marked =
+        markedKey === null
+          ? []
+          : learned.filter(
+              (item) => item.tab === tab && item.key === markedKey && item.at === clock && item.state !== "carried" && item.state !== "lost",
+            );
       if (refuseNext > 0 || profile.noLocks || clock < refusingUntil || rng() < profile.refuseRate) {
         if (refuseNext > 0) refuseNext -= 1;
         refusedWrites += 1;
@@ -319,29 +374,31 @@ export async function simulate(
         }
         throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
       }
+      const parsed = key.startsWith(BATCH_PREFIX) || key.startsWith(MARK_PREFIX) ? parsedOrUndefined(value) : undefined;
       if (key.startsWith(BATCH_PREFIX)) {
         try {
-          const batch = JSON.parse(value) as { id: string; events: Array<{ uuid: string }> };
-          const key = batchKey(batch.events.map((event) => event.uuid));
-          idToKey.set(batch.id, key);
+          const batch = parsed as { id: string; events: Array<{ uuid: string }> };
+          idToKey.set(batch.id, batchKey(batch.events.map((event) => event.uuid)));
         } catch {}
       }
-      items.set(key, value);
+      indexItem(key, value, parsed);
       writtenAt.set(key, clock);
       if (trace) note(`tab${tab.id} saved ${key.slice(-12)} ${value.replace(/"events":\[.*?\],/, "")}`);
       notifyOthers(tab);
     },
     removeItem: (key: string) => {
-      if (items.delete(key)) {
+      if (unindexItem(key)) {
         note(`tab${tab.id} removed ${key.slice(-12)}`);
         notifyOthers(tab);
       }
     },
-    clear: () => items.clear(),
+    clear: clearItems,
   });
 
-  const storedNow = (key: string) =>
-    [...items.keys()].some((item) => item.startsWith(BATCH_PREFIX) && idToKey.get(item.slice(BATCH_PREFIX.length)) === key);
+  const storedNow = (key: string) => {
+    for (const item of savedBatches.keys()) if (idToKey.get(item.slice(BATCH_PREFIX.length)) === key) return true;
+    return false;
+  };
   const applyFailure = (item: Learned) => {
     const previous = failures.get(item.key);
     failures.set(item.key, { count: (previous?.count ?? 0) + 1, at: Math.max(previous?.at ?? 0, item.at) });
@@ -354,6 +411,7 @@ export async function simulate(
     const item: Learned = { key, tab, at: clock, kind, until, late, uuids, state: "pending" };
     if (!late && !storedNow(key)) carry(item);
     learned.push(item);
+    pendingLearned.push(item);
   };
   const waiting: Array<{ tab: Tab; run: () => Promise<void> }> = [];
   let held = false;
@@ -780,27 +838,16 @@ export async function simulate(
     schedule(clock + between(5000, 60_000), null, "action", act);
   };
 
-  const drain = () => new Promise<void>((resolve) => setImmediate(resolve));
+  const drain = () => new Promise<void>((resolve) => process.nextTick(resolve));
   const settled = (uuid: string) => delivered.has(uuid) || refused.has(uuid) || lostAtClose.has(uuid);
   const unsettled = () => [...allEvents].filter((uuid) => !settled(uuid) && !counted.has(uuid));
   const GRACE_MS = 1000;
   const savedWithoutOwner = (): string | null => {
-    for (const [key, text] of items) {
-      if (!key.startsWith("conclave:telemetry:batch:")) continue;
-      let saved: { id: string; notBefore?: number; nextTry?: number; leaseUntil?: number };
-      try {
-        saved = JSON.parse(text);
-      } catch {
-        continue;
-      }
-      const marks = [...items.entries()].flatMap(([markKey, text]) => {
-        if (!markKey.startsWith(`${MARK_PREFIX}${saved.id}:`)) return [];
-        try {
-          return [{ ...(JSON.parse(text) as { delivered: boolean; notBefore: number }), writtenAt: writtenAt.get(markKey) ?? 0 }];
-        } catch {
-          return [];
-        }
-      });
+    for (const [key, saved] of savedBatches) {
+      if (saved === undefined) continue;
+      const marks = [...(savedMarks.get(saved.id) ?? [])].flatMap(([markKey, mark]) =>
+        mark === undefined ? [] : [{ ...mark, writtenAt: writtenAt.get(markKey) ?? 0 }],
+      );
       const identity = idToKey.get(saved.id);
       const settledAt = marks.filter((mark) => mark.delivered).map((mark) => mark.writtenAt);
       const due =
@@ -874,7 +921,13 @@ export async function simulate(
     clock = job.at;
     if (job.tab && !job.tab.open && job.kind !== "reply") continue;
     racedThisStep = false;
-    for (const item of learned) if (item.state === "pending" && item.at < clock) carry(item);
+    let stillPending = 0;
+    for (const item of pendingLearned) {
+      if (item.state !== "pending") continue;
+      if (item.at < clock) carry(item);
+      else pendingLearned[stillPending++] = item;
+    }
+    pendingLearned.length = stillPending;
     job.run();
     await drain();
     steps += 1;
@@ -883,7 +936,7 @@ export async function simulate(
       if (!tabs.some((tab) => tab.open)) openTab();
       await drain();
     }
-    const markCount = [...items.keys()].filter((key) => key.startsWith(MARK_PREFIX)).length;
+    const markCount = markKeys.size;
     if (markCount > MAX_MARKS) {
       violate("marks grew past their bound", `${markCount}`);
       break;
