@@ -752,6 +752,11 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       done();
     };
     const part = readChangePart(data?.part);
+    const refuseCheckedUpdate = (reason: WriteRefusal, stillRestricted: boolean): void => {
+      if (part) return reject(reason);
+      if (admission.replicaId || (stillRestricted && !staged)) refuse(admission, reason);
+      done();
+    };
     const hasList = data.updates !== undefined;
     const list = hasList ? readList(data.updates) : null;
     if (part === "invalid" || (part && (hasList || (changedScope && part.index !== 0)))) return reject("interrupted");
@@ -802,7 +807,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     }
     if (stage.locked && admission.role() !== "host") {
       checkNoop((changesNothing) => {
-        if (changesNothing !== true) reject("locked");
+        if (changesNothing !== true) refuseCheckedUpdate("locked", admission.role() !== "host");
         else {
           if (!apps.isCurrentSync(current.synced)) sendRoomCopy(current, appId);
           done();
@@ -816,7 +821,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         if (changesNothing === true) {
           sendRoomCopy(current, appId);
           done();
-        } else reject("not-synced");
+        } else refuseCheckedUpdate("not-synced", !apps.isCurrentSync(current.synced));
       });
       return;
     }
