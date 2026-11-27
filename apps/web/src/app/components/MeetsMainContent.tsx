@@ -2563,6 +2563,7 @@ export default function MeetsMainContent({
             <ControlsBar {...controlsBarProps} />
             <CommandPalette
               controls={controlsBarProps}
+              clientId={clientId}
               onSendChatMessage={handleSendChat}
             />
             <ShortcutsHelpDialog />

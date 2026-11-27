@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { color } from "@conclave/ui-tokens";
+import { buildMeetingPath } from "@/lib/meeting-links";
 import type {
   AdminEventType,
   InstanceStatus,
@@ -80,7 +81,7 @@ const findScheduledRoom = (
       room.clientId === item.clientId,
   ) ?? null;
 
-function CopyLinkButton({ path }: { path: string }) {
+function CopyLinkButton({ path }: { path: string | null }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!copied) return;
@@ -91,14 +92,16 @@ function CopyLinkButton({ path }: { path: string }) {
     <button
       type="button"
       className={btnTiny}
+      disabled={!path}
       onClick={() => {
+        if (!path) return;
         void navigator.clipboard
           ?.writeText(`${window.location.origin}${path}`)
           .then(() => setCopied(true))
           .catch(() => {});
       }}
     >
-      {copied ? "Copied" : "Copy link"}
+      {copied ? "Copied" : path ? "Copy link" : "No shareable link"}
     </button>
   );
 }
@@ -184,7 +187,7 @@ export function ActivityDrawer({
         : color.warning;
     const linkPath = item.kind === "webinar" && item.slug
       ? `/w/${encodeURIComponent(item.slug)}`
-      : `/${encodeURIComponent(item.roomId)}`;
+      : buildMeetingPath({ roomCode: item.roomId, clientId: item.clientId });
 
     return (
       <div

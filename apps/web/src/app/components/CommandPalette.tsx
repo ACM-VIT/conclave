@@ -20,6 +20,8 @@ import {
 } from "./meet-overlay-bus";
 import { useEnumeratedDevices } from "./DeviceCaretMenu";
 import type { ControlsBarProps } from "./controls-config";
+import { buildMeetingUrl } from "@/lib/meeting-links";
+import { canonicalizeSfuClientId, resolveBrowserSfuClientId } from "@/lib/sfu-client-id";
 import {
   buildPaletteActions,
   buildQueryFallbackActions,
@@ -48,9 +50,11 @@ function useShallowStable<T extends object>(value: T): T {
 
 export default function CommandPalette({
   controls: controlsProp,
+  clientId,
   onSendChatMessage,
 }: {
   controls: ControlsBarProps;
+  clientId?: string;
   onSendChatMessage?: (content: string) => void;
 }) {
   const controls = useShallowStable(controlsProp);
@@ -97,10 +101,16 @@ export default function CommandPalette({
   const copyMeetingCode = useCallback(() => {
     if (controls.roomId) void copyText(controls.roomId);
   }, [controls.roomId]);
+  const meetingLink =
+    controls.roomId && typeof window !== "undefined"
+      ? buildMeetingUrl(window.location.origin, {
+          roomCode: controls.roomId,
+          clientId: canonicalizeSfuClientId(clientId) ?? resolveBrowserSfuClientId(),
+        })
+      : undefined;
   const copyMeetingLink = useCallback(() => {
-    if (controls.roomId)
-      void copyText(`${window.location.origin}/${controls.roomId}`);
-  }, [controls.roomId]);
+    if (meetingLink) void copyText(meetingLink);
+  }, [meetingLink]);
 
   const actions = useMemo(
     () =>
@@ -110,7 +120,7 @@ export default function CommandPalette({
             { audioInput, audioOutput, videoInput },
             {
               onCopyMeetingCode: copyMeetingCode,
-              onCopyMeetingLink: copyMeetingLink,
+              onCopyMeetingLink: meetingLink === null ? null : copyMeetingLink,
               onShowShortcuts: requestShortcutsHelp,
             },
           )
@@ -123,6 +133,7 @@ export default function CommandPalette({
       videoInput,
       copyMeetingCode,
       copyMeetingLink,
+      meetingLink,
     ],
   );
 
