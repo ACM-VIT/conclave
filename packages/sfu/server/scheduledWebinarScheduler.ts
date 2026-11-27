@@ -3,7 +3,7 @@ import { Logger } from "../utilities/loggers.js";
 import { notifyAuthorityPolicy } from "./apps/authority/index.js";
 import { getRoomChannelId } from "./rooms.js";
 import type { ScheduledWebinar } from "../types.js";
-import { isWithinEarlyEntryWindow } from "./scheduledWebinars.js";
+import { isConcludedWebinar, isWithinEarlyEntryWindow } from "./scheduledWebinars.js";
 import { advanceWebinars, openWebinars, webinarsByIds, type WebinarSchedule } from "./controlPlane/webinarCommands.js";
 import type { Query } from "./controlPlane/tx.js";
 import type { SfuState } from "./state.js";
@@ -207,16 +207,20 @@ const settleWebinarRoom = (
   if (changed || deferred) notify(channelId);
 };
 
+export const invalidateWebinarPublicationReads = (state: SfuState): void => {
+  state.webinarPublicationEpoch += 1;
+};
+
 const readForPublication = async <T, R>(
   state: SfuState,
   query: Query<T>,
   publish: (result: T) => R,
 ): Promise<R> => {
   while (true) {
-    const removalEpoch = state.webinarRemovalEpoch;
+    const publicationEpoch = state.webinarPublicationEpoch;
     const result = await state.controlPlane.read(query);
-    // A tombstone may have no room config to retain its revision across this read.
-    if (removalEpoch === state.webinarRemovalEpoch) return publish(result);
+    // A concluded or deleted webinar may have no room config to retain its revision.
+    if (publicationEpoch === state.webinarPublicationEpoch) return publish(result);
   }
 };
 
@@ -243,7 +247,7 @@ const reconcileWebinarRooms = (
     for (const [id, channelId] of roomsByWebinar) {
       const record = records.get(id);
       if (!record) continue;
-      if (record.value === null) state.webinarRemovalEpoch += 1;
+      if (record.value === null) invalidateWebinarPublicationReads(state);
       settleWebinarRoom(state, channelId, { id, ...record }, notify);
     }
   });
@@ -260,7 +264,7 @@ export const publishDeletedWebinar = (
   rev: number,
   notify: WebinarConfigNotify,
 ): void => {
-  state.webinarRemovalEpoch += 1;
+  invalidateWebinarPublicationReads(state);
   settleWebinarRoom(state, channelOf(webinar), { id: webinar.id, rev, value: null }, notify);
 };
 
@@ -271,6 +275,7 @@ export const advanceScheduledWebinars = async (
 ): Promise<ScheduledWebinar[]> => {
   const advanced = await state.controlPlane.commit(advanceWebinars);
   const changed = advanced.ok ? advanced.value : [];
+  if (changed.some(isConcludedWebinar)) invalidateWebinarPublicationReads(state);
   const roomsByWebinar = new Map<string, string>();
   for (const webinar of changed) {
     const channelId = channelOf(webinar);

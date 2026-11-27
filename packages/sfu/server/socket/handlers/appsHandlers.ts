@@ -781,7 +781,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         return;
       }
       afterSettled("Checking an app update", apps.executor.changesNothing(appId, update), (changesNothing) => {
-        if (scope === current && stillIn(apps) && apps.stageRevision === revision) decide(changesNothing);
+        if (scope === current && admission.role() !== "absent" && apps.stageRevision === revision) decide(changesNothing);
         else done();
       });
     };

@@ -2,12 +2,18 @@ import type { Express, Request, Response } from "express";
 import type { Server as SocketIOServer } from "socket.io";
 import { Logger } from "../../utilities/loggers.js";
 import { secretsMatch } from "../secret.js";
-import { notifyRoomConfig, publishDeletedWebinar, refreshWebinarRoomConfig } from "../scheduledWebinarScheduler.js";
+import {
+  invalidateWebinarPublicationReads,
+  notifyRoomConfig,
+  publishDeletedWebinar,
+  refreshWebinarRoomConfig,
+} from "../scheduledWebinarScheduler.js";
 import { getRoomChannelId } from "../rooms.js";
 import {
   buildCoHostInviteLink,
   generateCoHostInviteToken,
   hashCoHostInviteToken,
+  isConcludedWebinar,
   isWebinarHostOrCoHost,
 } from "../scheduledWebinars.js";
 import {
@@ -162,6 +168,10 @@ export const registerScheduledWebinarRoutes = (
   const notices = notifyRoomConfig(state, () => getIo?.() ?? null);
 
   const publishSavedWebinar = async (webinar: ScheduledWebinar): Promise<void> => {
+    if (isConcludedWebinar(webinar)) {
+      invalidateWebinarPublicationReads(state);
+      if (!state.webinarConfigs.has(getRoomChannelId(webinar.clientId, webinar.roomId))) return;
+    }
     try {
       await refreshWebinarRoomConfig(state, webinar, notices);
     } catch (error) {
@@ -182,9 +192,7 @@ export const registerScheduledWebinarRoutes = (
       return;
     }
     const { webinar } = result.value;
-    if (status === "live" || state.webinarConfigs.has(getRoomChannelId(webinar.clientId, webinar.roomId))) {
-      await publishSavedWebinar(webinar);
-    }
+    await publishSavedWebinar(webinar);
     res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
   };
 

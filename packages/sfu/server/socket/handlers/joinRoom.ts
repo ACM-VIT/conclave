@@ -269,8 +269,9 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
       // Only the newest join this socket asked for acts. One that a newer
       // join overtook while it waited answers so, and changes nothing.
       const attempt = ++context.joinAttempts;
+      const isLatestJoin = (): boolean => context.joinAttempts === attempt;
       const overtaken = (): boolean => {
-        if (context.joinAttempts === attempt) return false;
+        if (isLatestJoin()) return false;
         respond(callback, { error: JOIN_OVERTAKEN });
         return true;
       };
@@ -375,7 +376,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
               const result = resolveScheduledWebinarAttendeeEntry(schedule?.value ?? null, clientId);
               return {
                 result,
-                publish: !overtaken() && socket.connected && result.kind === "open" &&
+                publish: isLatestJoin() && socket.connected && result.kind === "open" &&
                   resolveWebinarLinkTarget(state.webinarLinks, requestedRoomId, clientId)?.roomId !== result.webinar?.roomId,
               };
             },
@@ -417,7 +418,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             state, webinarScheduleForRoom(clientId, roomId), deferWebinarNotice,
             (schedule) => ({
               result: schedule?.value ?? null,
-              publish: !overtaken() && socket.connected && schedule !== null &&
+              publish: isLatestJoin() && socket.connected && schedule !== null &&
                 schedule.value.status !== "ended" && schedule.value.status !== "cancelled",
             }),
           );

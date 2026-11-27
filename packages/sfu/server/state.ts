@@ -54,7 +54,7 @@ export type SfuState = {
   workerRoomReservations: Map<number, number>;
   endedRooms: Map<string, EndedRoom>;
   webinarConfigs: Map<string, WebinarRoomConfig>;
-  webinarRemovalEpoch: number;
+  webinarPublicationEpoch: number;
   webinarLinks: Map<string, WebinarLinkTarget>;
   controlPlane: ControlPlaneStore;
   persistenceFence: PersistenceFence;
@@ -96,7 +96,7 @@ export const createSfuState = (options?: {
     workerRoomReservations: new Map(),
     endedRooms: new Map(),
     webinarConfigs: new Map(),
-    webinarRemovalEpoch: 0,
+    webinarPublicationEpoch: 0,
     webinarLinks: new Map(),
     controlPlane: fenceControlPlane(options?.controlPlane ?? controlPlaneStore(createMemoryBackend()), persistenceFence),
     persistenceFence,
