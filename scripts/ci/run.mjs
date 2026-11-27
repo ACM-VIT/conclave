@@ -10,8 +10,15 @@ if (!job) {
   process.exit(2);
 }
 
-const startedAt = Number(process.env.CI_JOB_STARTED_AT) || Date.now();
+const startedAt = performance.now();
+const jobStartedAt = job.budgetFrom === "run" ? 0 : Number(process.env.CI_JOB_STARTED_AT);
+const setupMs = jobStartedAt ? Date.now() - jobStartedAt : 0;
+const budgetFrom = jobStartedAt
+  ? process.env.CI_BUDGET_FROM ?? "the job's first step"
+  : "the start of the run step";
 const github = process.env.GITHUB_ACTIONS === "true";
+const parallelism = availableParallelism();
+if (github) console.log(`Runner CPUs available to Node: ${parallelism}`);
 
 function run(task) {
   const command = taskCommand(task);
@@ -67,11 +74,11 @@ for (const task of job.before ?? []) {
   results.push(result);
 }
 if (results.every((result) => result.code === 0)) {
-  const limit = Math.max(1, Math.floor(Number(process.env.CI_TASK_CONCURRENCY) || availableParallelism()));
+  const limit = Math.max(1, Math.floor(Number(process.env.CI_TASK_CONCURRENCY) || parallelism));
   results.push(...(await runAll(job.tasks, limit)));
 }
 
-const elapsed = (Date.now() - startedAt) / 1000;
+const elapsed = (setupMs + performance.now() - startedAt) / 1000;
 const failures = results.filter((result) => result.code !== 0);
 const overBudget = elapsed > job.budgetSeconds;
 const skipped = job.tasks.length + (job.before?.length ?? 0) - results.length;
@@ -83,7 +90,7 @@ const problems = [
 ].filter(Boolean);
 const verdict = problems.length ? problems.join(", ") : "all passed";
 const lines = [
-  `### ${jobName}: ${verdict}, ${elapsed.toFixed(1)}s since ${process.env.CI_BUDGET_FROM ?? "the job's first step"}, budget ${job.budgetSeconds}s`,
+  `### ${jobName}: ${verdict}, ${elapsed.toFixed(1)}s since ${budgetFrom}, budget ${job.budgetSeconds}s`,
   "",
   "| task | result | seconds |",
   "| --- | --- | ---: |",

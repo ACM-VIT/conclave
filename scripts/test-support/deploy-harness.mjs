@@ -389,7 +389,17 @@ const main = async () => {
     await fetch("http://127.0.0.1:" + sfus[name].port + "/stand-in/stop?carry=1");
     return;
   }
-  if (args[0] === "inspect" && args.at(-1) === "ctr-redis") return out(process.env.DEPLOY_TEST_REDIS_STATE || "running");
+  if (args[0] === "inspect" && args.at(-1) === "ctr-redis") {
+    const delayed = Number(process.env.DEPLOY_TEST_REDIS_START_DELAY_CHECKS || 0);
+    if (delayed) {
+      const looks = fs.readFileSync(process.env.DEPLOY_TEST_DOCKER_LOG, "utf8").trim().split("\\n").filter((line) => {
+        const call = JSON.parse(line);
+        return call[0] === "inspect" && call.at(-1) === "ctr-redis";
+      }).length;
+      if (looks <= delayed) return out("created");
+    }
+    return out(process.env.DEPLOY_TEST_REDIS_STATE || "running");
+  }
   if (args[0] === "inspect") {
     const format = args[2];
     const name = args.at(-1).replace(/^ctr-/, "");
