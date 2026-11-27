@@ -701,3 +701,14 @@ test("native Close with no edits answers without a room snapshot", { skip: skipC
   await harness.pump();
   assert.deepEqual(acksFor(author, "native-idle"), [{ ok: true }]);
 });
+
+test("native reports unsaved edits before a disconnected renderer can upload them", { skip: skipConvergence }, async (context) => {
+  const harness = makeRoom(sessionModule, context);
+  const author = await harness.join("native-author");
+  harness.deliver(author, "status", { ...author.host, connection: "reconnecting" });
+  const shapes = author.session.doc.getMap("whiteboard");
+  shapes.set("first", "stroke");
+  shapes.set("second", "stroke");
+  assert.deepEqual(author.outbox.map((raw) => JSON.parse(raw).type), ["editsPending"]);
+  assert.equal(author.updatesPostedAt.length, 0);
+});

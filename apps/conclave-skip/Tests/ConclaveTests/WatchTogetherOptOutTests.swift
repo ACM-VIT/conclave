@@ -147,5 +147,58 @@ struct WatchTogetherOptOutTests {
         #expect(activity.appHost.model.wantsWebView)
         #expect(released.count == 1)
     }
+
+    @Test(arguments: ["close", "replace"])
+    func anUneditedWatchCanLeaveLocallyAndThenChangeTheRoomStage(action: String) async {
+        let stage = stage(inputs())
+        let activity = ActivitySession(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()), stage: stage)
+        let relay = ActiveAppSession()
+        relay.bundleOrigin = AppBridgeProtocol.iosOrigin
+        activity.bindStage()
+        activity.appHost.bind(session: relay)
+        relay.begin(appId: "watch", callSessionId: "call-watch", isReadOnly: false)
+        activity.appHost.apply(AppHostInputs.make(callSession: 1, appId: "watch", isHost: true))
+        let id = relay.appSessionId
+        var released: [String] = []
+        relay.onBridgeEnded = { released.append($0) }
+        relay.acceptPrimedSnapshot(AppsSyncResponse(syncMessage: Data(), stateVector: Data(), awarenessUpdate: nil), appSessionId: id)
+        let attached = relay.attachBridge(appSessionId: id) { [weak relay] raw in
+            guard let relay, let envelope = AppBridgeCodec.jsonObject(raw),
+                  envelope["type"] as? String == "prepareToLeave",
+                  let requestId = envelope["requestId"] as? String else { return }
+            _ = Self.post(relay, "ack", requestId: requestId, payload: ["ok": true], mount: relay.bridgeGeneration)
+        }
+        #expect(attached)
+        #expect(Self.post(relay, "ready", requestId: "e-ready", payload: ["appId": "watch", "bundleVersion": "1.0.0"],
+                          mount: relay.bridgeGeneration) == .none)
+        #expect(activity.appHost.model.phase == .ready)
+
+        stage.leaveWatchTogether()
+        #expect(!activity.appHost.model.wantsWebView)
+        if action == "close" {
+            #expect(activity.appHost.confirmClose() == .dispatched)
+        }
+        let canChangeStage = await relay.prepareToLeave()
+        #expect(canChangeStage, "A clean local hide must not block a room stage change.")
+        if canChangeStage {
+            if action == "close" { relay.end() }
+            else { relay.begin(appId: "wheel", callSessionId: "call-watch", isReadOnly: false) }
+        }
+        #expect(relay.appId == (action == "close" ? "" : "wheel"))
+        #expect(released.contains(id))
+    }
+
+    private static func post(_ relay: ActiveAppSession, _ type: String, requestId: String,
+                             payload: [String: Any], mount: Int) -> AppBridgeRejection {
+        guard let raw = try? JSONSerialization.data(withJSONObject: [
+            "v": 1, "type": type, "callSessionId": relay.callSessionId, "appSessionId": relay.appSessionId,
+            "requestId": requestId, "payload": payload,
+        ]) else {
+            Issue.record("Could not encode the \(type) fixture.")
+            return .malformed
+        }
+        return relay.receiveFromEmbed(raw: String(decoding: raw, as: UTF8.self), origin: AppBridgeProtocol.iosOrigin,
+                                      isMainFrame: true, mount: mount)
+    }
 }
 #endif

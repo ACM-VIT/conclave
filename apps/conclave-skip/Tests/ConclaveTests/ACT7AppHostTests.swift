@@ -340,6 +340,18 @@ struct ACT7AppHostTests {
         #expect(relay.appId == "wheel")
     }
 
+    @Test func aCleanRendererFailureDoesNotBlockChangingTheRoomStage() async {
+        let wire = Wire()
+        let (presenter, relay) = host(wire, inputs: AppHostInputs.make(callSession: 1, appId: "whiteboard", isHost: true))
+        let mount = relay.bridgeGeneration
+        #expect(ready(relay) == .none)
+        #expect(presenter.model.phase == .ready)
+        relay.embedFailed(appSessionId: relay.appSessionId, issue: .rendererGone, mount: mount)
+        #expect(presenter.model.phase == .failed)
+        #expect(await relay.prepareToLeave())
+        #expect(!wire.types().contains("prepareToLeave"))
+    }
+
     @Test func movedHelpersKeepTheViewModelGuards() async throws {
         let wire = Wire()
         let relay = session(wire)
