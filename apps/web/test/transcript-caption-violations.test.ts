@@ -982,6 +982,37 @@ describe("every way one Sarvam connection can fail stays with its own turn", () 
 
     expect([openingAfterStop, openSockets(rig).length + rig.openingProviderSockets()]).toEqual([0, 4]);
   });
+
+  it.each(["stop and restart", "takeover"] as const)("%s frees the pending Sarvam open's slot for a fourth speaker", async (action) => {
+    vi.useFakeTimers();
+    const rig = await transcriptRoomRig(lookup, SARVAM);
+    const start = (type: "session.start" | "session.takeover", language: string) =>
+      rig.send({ type, language, transcriptModel: SARVAM, transportMode: "sfu" });
+    rig.connectPlans.push({ lateMs: 20_000 });
+    const abandoned = start("session.start", "hi");
+    await settle();
+    expect(rig.openingProviderSockets()).toBe(1);
+
+    if (action === "stop and restart") {
+      await rig.stop();
+      await start("session.start", "hi");
+    } else {
+      await start("session.takeover", "ta");
+    }
+    const speech = [ada, grace, lin, mo].map((speaker, index) => ({
+      speaker,
+      audio: named(150 + index * 30),
+    }));
+    for (const { speaker, audio } of speech) await sendNamed(rig, audio, speaker);
+    await settle();
+
+    const stillOpening = rig.openingProviderSockets();
+    const reached = speech.map(({ audio }) => openSockets(rig).some((socket) => carriesAudio(socket, audio)));
+    await vi.advanceTimersByTimeAsync(20_000);
+    await abandoned;
+    expect({ stillOpening, reached }).toEqual({ stillOpening: 0, reached: [true, true, true, true] });
+    expect(statusOf(rig)).toBe("live");
+  });
 });
 
 describe("audio the room holds for Sarvam is sent as soon as a connection can take it", () => {
@@ -1060,11 +1091,38 @@ describe("quiet audio is hum only when Sarvam hears nothing in it either", () =>
     expect(backlog.filter((chunk) => !carried(rig, chunk)).length).toBe(0);
   });
 
-  it("hum Sarvam hears nothing in is held back, and offered to Sarvam again a minute later", async () => {
+  it("quiet speech waiting for a new turn after a clear is still sent and captioned", async () => {
+    const rig = await startRig(SARVAM);
+    for (let step = 0; step < 10; step += 1) {
+      await sendNamed(rig, quietChunks[step % 5], ada);
+      await vi.advanceTimersByTimeAsync(200);
+    }
+    expect(carried(rig, quietChunks[0])).toBe(true);
+    await rig.clear(ada);
+    rig.connectPlans.push({ lateMs: 9_000 });
+    const backlog = Array.from({ length: 45 }, (_, index) => pcmBase64(voicedPcm(-58, 200, 200 + index)));
+    for (const chunk of backlog) {
+      await vi.advanceTimersByTimeAsync(200);
+      await sendNamed(rig, chunk, ada);
+    }
+    await vi.advanceTimersByTimeAsync(200);
+
+    const replacement = rig.providerSockets()[1];
+    expect(replacement).toBeDefined();
+    expect(backlog.filter((chunk) => !carriesAudio(replacement, chunk))).toHaveLength(0);
+    replacement.emit(sarvamSpeechStart());
+    await rig.clear(ada);
+    replacement.emit(sarvamFinal("quiet-speech", "Still here."));
+    await settle();
+    expect(shown(rig)).toEqual([["Still here.", "ada"]]);
+  });
+
+  it.each([false, true])("hum Sarvam hears nothing in is held back and offered again a minute later (clears: %s)", async (clears) => {
     const rig = await startRig(SARVAM);
     const during = pcmBase64(voicedPcm(-58, 200, 171));
     const after = pcmBase64(voicedPcm(-58, 200, 173));
     for (let step = 0; step < 375; step += 1) {
+      if (clears && step % 25 === 0) await rig.clear(ada);
       await sendNamed(rig, step === 150 ? during : step === 360 ? after : quietChunks[step % 5], ada);
       await vi.advanceTimersByTimeAsync(200);
     }

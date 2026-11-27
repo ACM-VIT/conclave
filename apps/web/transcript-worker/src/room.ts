@@ -38,7 +38,6 @@ import {
   TRANSCRIPT_SFU_RELAY_RECOVERY_ATTEMPTS,
   TRANSCRIPT_SFU_RELAY_RECOVERY_GRACE_MS,
   TRANSCRIPTION_COMMIT_ACK_TIMEOUT_MS,
-  TRANSCRIPTION_CONNECT_TIMEOUT_MS,
   TRANSCRIPTION_DRAIN_SEQUENCE_BLOCK,
   TRANSCRIPTION_GAP_MARKER,
   TRANSCRIPTION_LINE_DEADLINE_MS,
@@ -222,6 +221,7 @@ export class TranscriptRoom {
   private transcriptionConnectionEpoch = 0;
   private transcriptionRecoveryGeneration = 0;
   private transcriptionProviderOpeningGeneration: number | null = null;
+  private transcriptionOpenController: AbortController | null = null;
   private transcriptionRecoveryPromise: Promise<void> | null = null;
   private pendingTranscriptionRecoveryFailure: string | null = null;
   private transcriptionCommitWatchdogTimer: ReturnType<typeof setTimeout> | null =
@@ -1740,6 +1740,7 @@ export class TranscriptRoom {
     const epoch = this.transcriptionConnectionEpoch + 1;
     this.transcriptionConnectionEpoch = epoch;
     const controller = new AbortController();
+    this.transcriptionOpenController = controller;
     const timeout = setTimeout(() => {
       controller.abort("Transcript provider connection timed out.");
     }, resolveAiFeatureSettings(this.responseEnvironment ?? this.env, "transcription").timeoutMs);
@@ -1793,11 +1794,12 @@ export class TranscriptRoom {
       return new ProviderConnection(epoch, session);
     } catch (error) {
       if (controller.signal.aborted) {
-        throw new Error("Transcript provider connection timed out.");
+        throw new Error(String(controller.signal.reason));
       }
       throw error;
     } finally {
       clearTimeout(timeout);
+      if (this.transcriptionOpenController === controller) this.transcriptionOpenController = null;
     }
   }
 
@@ -1817,13 +1819,13 @@ export class TranscriptRoom {
     this.transcriptionProviderOpeningGeneration = null;
     this.transcriptionRecoveryPromise = null;
     this.pendingTranscriptionRecoveryFailure = null;
+    const controller = this.transcriptionOpenController;
+    this.transcriptionOpenController = null;
+    controller?.abort("Transcript provider connection was superseded.");
   }
 
   private closeTranscriptionProvider(keepOwed: boolean): void {
-    this.transcriptionRecoveryGeneration += 1;
-    this.transcriptionProviderOpeningGeneration = null;
-    this.transcriptionRecoveryPromise = null;
-    this.pendingTranscriptionRecoveryFailure = null;
+    this.supersedeTranscriptionRecovery();
     this.liveConnection?.session.settle?.();
     this.transcriptionConnectionEpoch += 1;
     const live = this.liveConnection;
@@ -2504,12 +2506,10 @@ export class TranscriptRoom {
         this.transcriptionRecoveryPromise = null;
       }
     }
+    if (generation !== this.transcriptionRecoveryGeneration) return;
     const pendingFailure = this.pendingTranscriptionRecoveryFailure;
     this.pendingTranscriptionRecoveryFailure = null;
-    if (
-      pendingFailure &&
-      generation === this.transcriptionRecoveryGeneration
-    ) {
+    if (pendingFailure) {
       await this.handleTranscriptionFailure(pendingFailure);
     }
   }
@@ -2541,6 +2541,7 @@ export class TranscriptRoom {
           throw new Error("Held caption audio replay connection failed.");
         }
       } catch (error) {
+        if (generation !== this.transcriptionRecoveryGeneration) return;
         if (replacement && this.liveConnection === replacement) {
           this.pendingTranscriptionRecoveryFailure = null;
           this.detachConnection(replacement, false);
@@ -2558,7 +2559,6 @@ export class TranscriptRoom {
           },
         );
         if (!isRetryableTranscriptionFailure(lastMessage)) {
-          if (generation !== this.transcriptionRecoveryGeneration) return;
           await this.failTranscriptionPermanently(lastMessage);
           return;
         }

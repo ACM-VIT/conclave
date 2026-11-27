@@ -684,7 +684,13 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession, SocketBudg
   private readonly turns = new Set<SarvamTurn>();
   private readonly accepting = new Map<string, SarvamTurn>();
   private readonly backoff = new Map<string, { attempts: number; until: number }>();
-  private readonly quiet = new Map<string, { sentSince: number | null; lastAt: number; sarvamSpoke: boolean; withheldUntil: number }>();
+  private readonly quiet = new Map<string, {
+    sentMs: number;
+    sendingSince: number | null;
+    lastAt: number;
+    sarvamSpoke: boolean;
+    withheldUntil: number;
+  }>();
   private spare: SarvamTurn | null = null;
   private heardFromSarvam = false;
   private closed = false;
@@ -768,16 +774,18 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession, SocketBudg
     const now = Date.now();
     let run = this.quiet.get(key);
     if (!run || at - run.lastAt > SARVAM_WINDOW_QUIET_MS) {
-      run = { sentSince: null, lastAt: at, sarvamSpoke: false, withheldUntil: 0 };
+      run = { sentMs: 0, sendingSince: null, lastAt: at, sarvamSpoke: false, withheldUntil: 0 };
       this.quiet.set(key, run);
     }
     run.lastAt = at;
     if (now < run.withheldUntil) return true;
     const offeredAgain = run.withheldUntil > 0;
-    if (!offeredAgain && (run.sentSince === null || now - run.sentSince < SARVAM_HUM_MS)) return false;
+    const sentMs = run.sentMs + (run.sendingSince === null ? 0 : now - run.sendingSince);
+    if (!offeredAgain && sentMs < SARVAM_HUM_MS) return false;
     const hum = !offeredAgain && !run.sarvamSpoke;
     if (!offeredAgain) this.accepting.get(key)?.flush();
-    run.sentSince = null;
+    run.sentMs = 0;
+    run.sendingSince = null;
     run.sarvamSpoke = false;
     run.withheldUntil = hum ? now + SARVAM_HUM_RETRY_MS : 0;
     return hum;
@@ -801,7 +809,7 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession, SocketBudg
     if (!turn) throw new AudioNotSent();
     const itemId = turn.appendAudio(audioBase64, context);
     const run = context?.voice === "quiet" ? this.quiet.get(speakerKey(speaker)) : undefined;
-    if (run) run.sentSince ??= Date.now();
+    if (run) run.sendingSince ??= Date.now();
     return itemId;
   }
 
@@ -836,7 +844,14 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession, SocketBudg
   }
 
   private stopAccepting(turn: SarvamTurn): void {
-    if (turn.key !== null && this.accepting.get(turn.key) === turn) this.accepting.delete(turn.key);
+    const key = turn.key;
+    if (key === null || this.accepting.get(key) !== turn) return;
+    this.accepting.delete(key);
+    const run = this.quiet.get(key);
+    if (run && run.sendingSince !== null) {
+      run.sentMs += Date.now() - run.sendingSince;
+      run.sendingSince = null;
+    }
   }
 
   private backOff(key: string): void {
