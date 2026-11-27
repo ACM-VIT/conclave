@@ -31,6 +31,7 @@ export class World {
   deviceListeners = new Set<() => void>();
   socketEvents: Array<{ event: string; payload: unknown }> = [];
   framesSent = new Map<string, number>();
+  sfuJoined = false;
   sfuProducerTransportId: string | null = null;
   sfu = new Map<string, { transportId: string; kind: Kind; type: string; paused: boolean; closed: boolean }>();
   private count = 0;
@@ -518,26 +519,28 @@ export const makeDeviceClass = (world: World) =>
   };
 
 const SFU_ACKS: Record<string, (payload: Record<string, unknown>, world: World) => unknown> = {
-  joinRoom: () => ({
-    rtpCapabilities: RTP_CAPABILITIES,
-    existingProducers: [],
-    hostUserId: "host#session",
-    hostUserIds: ["host#session"],
-    roomId: "test-room",
-  }),
+  joinRoom: (_payload, world) => {
+    world.sfuJoined = true;
+    return {
+      rtpCapabilities: RTP_CAPABILITIES,
+      existingProducers: [],
+      hostUserId: "host#session",
+      hostUserIds: ["host#session"],
+      roomId: "test-room",
+    };
+  },
   updateMediaCapabilities: () => ({ error: "unsupported in this rig" }),
   createProducerTransport: (_payload, world) => {
+    if (!world.sfuJoined) return { error: "Not in a room" };
     world.closeSfuProducerTransport();
     const id = world.nextId("sfu-send");
     world.sfuProducerTransportId = id;
     return { id, iceParameters: {}, iceCandidates: [], dtlsParameters: {} };
   },
-  createConsumerTransport: (_payload, world) => ({
-    id: world.nextId("sfu-recv"),
-    iceParameters: {},
-    iceCandidates: [],
-    dtlsParameters: {},
-  }),
+  createConsumerTransport: (_payload, world) => {
+    if (!world.sfuJoined) return { error: "Not in a room" };
+    return { id: world.nextId("sfu-recv"), iceParameters: {}, iceCandidates: [], dtlsParameters: {} };
+  },
   produce: (payload, world) => {
     if (world.sfuProducerTransportId === null) return { error: "Not ready to produce" };
     const transportId = String(payload.transportId);
@@ -624,6 +627,7 @@ const createSocket = (world: World) => {
     })),
     disconnect: vi.fn(() => {
       socket.connected = false;
+      world.sfuJoined = false;
       world.closeSfuProducerTransport();
       dispatch("disconnect", "io client disconnect");
       return socket;
