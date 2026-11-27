@@ -1,5 +1,5 @@
 import type { Worker } from "mediasoup/types";
-import { config } from "../config/config.js";
+import { config as defaultConfig } from "../config/config.js";
 import { Room } from "../config/classes/Room.js";
 import type { NextMeetingLobby } from "./nextMeetingLobby.js";
 import type { WebinarLinkTarget, WebinarRoomConfig } from "./webinar.js";
@@ -32,9 +32,16 @@ import {
   type TranscriptRelayRegistry,
 } from "./transcript/relayRegistry.js";
 import {
+  createAppDocumentPool,
+  MAX_APP_DOCUMENT_BYTES,
+  type AppDocumentPool,
+} from "./apps/documents/pool.js";
+import { createStagingBudget, type StagingBudget } from "./apps/documents/staging.js";
+import {
   createAppsAuthorityRuntime,
   type AppsAuthorityRuntime,
 } from "./apps/authority/index.js";
+import { planWorkers, type WorkerPlan } from "../utilities/workerPlan.js";
 
 export type EndedRoom = {
   roomId: string;
@@ -74,6 +81,9 @@ export type SfuState = {
   roomCommitsInFlight: Map<string, Set<Promise<boolean>>>;
   roomRecovery: RoomRecoveryLedger;
   transcriptRelays: TranscriptRelayRegistry;
+  workerPlan: WorkerPlan;
+  appDocuments: AppDocumentPool;
+  appChangeStaging: StagingBudget;
   /** Null when this SFU does not run authority apps. */
   appsAuthority: AppsAuthorityRuntime | null;
   isDraining: boolean;
@@ -82,9 +92,14 @@ export type SfuState = {
 export const createSfuState = (options?: {
   isDraining?: boolean;
   roomRegistry?: RoomRegistry;
+  appDocuments?: AppDocumentPool;
+  appChangeStaging?: StagingBudget;
   roomRecoveryStore?: RoomRecoveryStore;
   appsAuthority?: AppsAuthorityRuntime | null;
+  config?: typeof defaultConfig;
 }): SfuState => {
+  const config = options?.config ?? defaultConfig;
+  const workerPlan = planWorkers(config.workerSettings);
   return {
     workers: [],
     rooms: new Map(),
@@ -109,6 +124,16 @@ export const createSfuState = (options?: {
       options?.roomRecoveryStore ?? createMemoryRoomRecoveryStore(),
     ),
     transcriptRelays: createTranscriptRelayRegistry(config.transcriptRelay),
+    workerPlan,
+    appDocuments:
+      options?.appDocuments ??
+      createAppDocumentPool({
+        workers: workerPlan.appDocumentWorkers,
+        heap: workerPlan.appDocumentHeap,
+        deadlineMs: config.appDocuments.deadlineMs,
+        maxDocumentBytes: MAX_APP_DOCUMENT_BYTES,
+      }),
+    appChangeStaging: options?.appChangeStaging ?? createStagingBudget(),
     appsAuthority:
       options?.appsAuthority !== undefined
         ? options.appsAuthority

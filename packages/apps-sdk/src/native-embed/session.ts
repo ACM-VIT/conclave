@@ -1,5 +1,6 @@
 import * as Y from "yjs";
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from "y-protocols/awareness";
+import { createUploadQueue } from "../sdk/runtime/uploadQueue";
 import type { NativeTransport } from "./bridge";
 import { cutText } from "../sdk/text";
 import {
@@ -23,6 +24,7 @@ import {
 export type HostStatus = {
   readOnly: boolean;
   connection: "live" | "reconnecting";
+  locallyHidden: boolean;
   reduceMotion: boolean;
   pencilOnly: boolean;
   userId: string;
@@ -79,6 +81,7 @@ type AwarenessChange = { added: number[]; updated: number[]; removed: number[] }
 const INITIAL_HOST_STATUS: HostStatus = {
   readOnly: true,
   connection: "live",
+  locallyHidden: false,
   reduceMotion: false,
   pencilOnly: false,
   userId: "",
@@ -113,6 +116,13 @@ export class NativeEmbedSession {
   private readonly pendingAwareness = new Set<number>();
   private awarenessTimer: ReturnType<typeof setTimeout> | null = null;
   private lastStatus = "";
+  private saveCheck: "none" | "sync" | "local" = "none";
+  private leaveRequest: { id: string; phase: "draining" | "verifying" } | null = null;
+  private readonly uploads = createUploadQueue((_appId, _replicaId, upload) => {
+    if (this.closed || this.host.readOnly || this.host.connection !== "live") return false;
+    if ("update" in upload && upload.update.length <= NATIVE_EMBED_LIMITS.updateBytes) this.send("update", { update: base64FromBytes(upload.update) });
+    return true;
+  }, { onProgress: () => this.advanceLeave() });
 
   constructor(transport: NativeTransport, scope: SessionScope, doc: Y.Doc) {
     this.transport = transport;
@@ -176,6 +186,7 @@ export class NativeEmbedSession {
     const decoded = decodeHostMessage(raw, this.scope);
     if (!decoded.ok) return this.reject(decoded.reason);
     const envelope = decoded.envelope;
+    if (envelope.type === "savedSnapshot") return this.checkSavedSnapshot(envelope.requestId, envelope.payload);
     const repeat = this.executed.has(envelope.requestId) || this.seen.includes(envelope.requestId);
     if (repeat && !DOC_ANSWERED.has(envelope.type)) return this.reject("duplicateRequest");
     if (COMMAND_TYPES.has(envelope.type)) this.markExecuted(envelope.requestId);
@@ -185,7 +196,7 @@ export class NativeEmbedSession {
       case "snapshot":
         return this.applySnapshot(payload);
       case "update": {
-        const update = bytesFromBase64(payload.update, NATIVE_EMBED_LIMITS.updateBytes);
+        const update = bytesFromBase64(payload.update, NATIVE_EMBED_LIMITS.remoteUpdateBytes);
         if (!update.ok) return this.reject(update.reason);
         if (update.bytes.length > 0) this.applyRemoteUpdate(update.bytes);
         return "none";
@@ -212,6 +223,10 @@ export class NativeEmbedSession {
         return "none";
       case "close":
         this.close();
+        return "none";
+      case "prepareToLeave":
+        this.leaveRequest = { id: envelope.requestId, phase: "draining" };
+        this.advanceLeave();
         return "none";
       case "setTool":
       case "setColor":
@@ -253,9 +268,11 @@ export class NativeEmbedSession {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.leaveRequest = null;
     if (this.awarenessTimer !== null) clearTimeout(this.awarenessTimer);
     this.awarenessTimer = null;
     this.pendingAwareness.clear();
+    this.uploads.clear();
     this.held.length = 0;
     this.pendingAdds.clear();
     this.roomDoc?.destroy();
@@ -293,8 +310,50 @@ export class NativeEmbedSession {
     } catch {
       return;
     }
-    if (diff.length <= 2 || diff.length > NATIVE_EMBED_LIMITS.updateBytes) return;
-    this.send("update", { update: base64FromBytes(diff) });
+    if (diff.length <= 2) return;
+    if (this.saveCheck === "none") this.saveCheck = "sync";
+    this.uploads.add(this.scope.appId, undefined, diff);
+  }
+
+  private advanceLeave(): void {
+    const request = this.leaveRequest;
+    if (!request) return;
+    if (this.host.connection !== "live") {
+      this.finishLeave(false);
+      return;
+    }
+    if (request.phase !== "draining" || this.uploads.hasPending(this.scope.appId)) return;
+    if (this.saveCheck === "none") {
+      this.finishLeave(true);
+      return;
+    }
+    request.phase = "verifying";
+    this.send("verifySaved", {}, request.id);
+  }
+
+  private checkSavedSnapshot(requestId: string, payload: Record<string, unknown>): RejectionReason {
+    if (this.leaveRequest?.id !== requestId || this.leaveRequest.phase !== "verifying") return "none";
+    const sync = bytesFromBase64(payload.syncMessage, NATIVE_EMBED_LIMITS.snapshotBytes);
+    const vector = bytesFromBase64(payload.stateVector, NATIVE_EMBED_LIMITS.snapshotBytes);
+    let saved = false;
+    if (sync.ok && vector.ok && vector.bytes.length > 0 && !this.uploads.hasPending(this.scope.appId)) {
+      try {
+        const snapshot = Y.createSnapshot(Y.decodeUpdate(sync.bytes).ds, Y.decodeStateVector(vector.bytes));
+        saved = Y.snapshotContainsUpdate(snapshot, Y.encodeStateAsUpdate(this.doc, vector.bytes));
+      } catch {
+        saved = false;
+      }
+    }
+    if (saved) this.saveCheck = "none";
+    this.finishLeave(saved);
+    return "none";
+  }
+
+  private finishLeave(saved: boolean): void {
+    const request = this.leaveRequest;
+    if (!request) return;
+    this.leaveRequest = null;
+    this.acknowledge(request.id, saved ? { ok: true } : { ok: false, error: "notSaved" });
   }
 
   private applyRemoteUpdate(bytes: Uint8Array): void {
@@ -316,12 +375,15 @@ export class NativeEmbedSession {
     this.host = {
       readOnly: payload.readOnly === true,
       connection: payload.connection === "reconnecting" ? "reconnecting" : "live",
+      locallyHidden: payload.locallyHidden === true,
       reduceMotion: payload.reduceMotion === true,
       pencilOnly: payload.pencilOnly === true,
       userId: typeof payload.userId === "string" ? cutText(payload.userId, 128) : "",
       userName: typeof payload.userName === "string" ? cutText(payload.userName, 128) : "",
     };
     if (wasReadOnly !== this.host.readOnly) this.lastStatus = "";
+    this.uploads.wake();
+    this.advanceLeave();
     this.notify();
   }
 
@@ -393,10 +455,14 @@ export class NativeEmbedSession {
   }
 
   private readonly handleDocUpdate = (update: Uint8Array, origin: unknown): void => {
-    if (origin === REMOTE || this.closed || !this.synced) return;
+    if (origin === REMOTE || this.closed) return;
+    if (this.saveCheck !== "local") {
+      this.saveCheck = "local";
+      this.send("editsPending", {});
+    }
+    if (!this.synced) return;
     if (this.host.readOnly || this.host.connection !== "live") return;
-    if (update.length > NATIVE_EMBED_LIMITS.updateBytes) return;
-    this.send("update", { update: base64FromBytes(update) });
+    this.uploads.add(this.scope.appId, undefined, update);
   };
 
   // Forwards only this client's own entry: a peer's cursor that times out

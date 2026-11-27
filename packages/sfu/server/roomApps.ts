@@ -1,3 +1,4 @@
+import { APP_DOCUMENT_MAX_BYTES } from "@conclave/apps-sdk/limits";
 import {
   Awareness,
   applyAwarenessUpdate,
@@ -7,12 +8,16 @@ import {
 import * as decoding from "lib0/decoding";
 import * as encoding from "lib0/encoding";
 import * as Y from "yjs";
+import { readUpdate, updateChangesNothing, type UpdateFacts } from "./apps/documents/updateFacts.js";
+import type { AppDocument, AppDocumentPool, Refusal, WorkerProposal } from "./apps/documents/pool.js";
 import { Logger } from "../utilities/loggers.js";
 import { RoomAppsScheduler, type Pending, type WriteOutcome } from "./roomAppsScheduler.js";
 
+export { readUpdate } from "./apps/documents/updateFacts.js";
+
 // A document larger than one sync response can no longer reach new joiners,
 // so it is also the most a document may grow to.
-export const MAX_APP_DOC_BYTES = 1024 * 1024;
+export const MAX_APP_DOC_BYTES = APP_DOCUMENT_MAX_BYTES;
 // A room keeps every app's document when the stage moves to another app, so
 // documents are also bounded per room: by count, and by total encoded bytes.
 export const MAX_ROOM_APP_DOCS = 8;
@@ -46,20 +51,22 @@ export type AppSyncMark = {
   readonly seen: ReadonlyMap<number, number>;
 };
 
-export type WriteRefusal = ContentRefusal | "too-large" | "invalid" | "rate-limited";
+export type WriteRefusal = ContentRefusal | "too-large" | "invalid" | "rate-limited" | "interrupted" | "queue-full" | "timed-out" | "crashed" | "unavailable";
 
 export type WriteIdentity = {
   readonly participant: string;
   readonly host: boolean;
   readonly origin: string;
   readonly mark: AppSyncMark | null;
+  readonly assembled?: true;
+  readonly separate?: boolean;
 };
 
 export type WriteResult = { readonly outcomes: WriteOutcome[]; readonly landed: Uint8Array[] };
 
 export type SyncAnswer =
   | { readonly ok: true; readonly update: Uint8Array; readonly stateVector: Uint8Array; readonly mark: AppSyncMark }
-  | { readonly ok: false; readonly reason: "not-live" | "invalid" | "too-large" };
+  | { readonly ok: false; readonly reason: "not-live" | "invalid" | "too-large" | "queue-full" | "timed-out" | "crashed" | "unavailable" };
 
 export type DocumentExecutor = {
   write(appId: string, identity: WriteIdentity, updates: Uint8Array[]): Pending<WriteResult>;
@@ -101,7 +108,6 @@ export type StageCommandResult =
   | { ok: false; reason: "stale" | "full" };
 
 type AppDoc = {
-  doc: Y.Doc;
   // A new number for every document the room starts, so a client holding a
   // copy of an earlier one can tell it is stale.
   generation: number;
@@ -109,7 +115,7 @@ type AppDoc = {
   // accepted updates added since.
   measuredBytes: number;
   unmeasuredBytes: number;
-};
+} & ({ doc: Y.Doc; worker?: never } | { worker: AppDocument; doc?: never; seen: ReadonlyMap<number, number> });
 
 const encodedSizeAfter = (doc: Y.Doc, update: Uint8Array): number => {
   const trial = new Y.Doc({ gc: doc.gc });
@@ -154,76 +160,6 @@ const clearedWriterBits = (client: number): number[] => {
     { length: CLEARED_WRITER_PROBES },
     (_, probe) => (first + probe * step) % CLEARED_WRITER_FILTER_BITS,
   );
-};
-
-// The live value under `key` of the map `parent` names in `doc`: a root type
-// by name, or a nested type by the id of the item holding it.
-const liveMapValue = (doc: Y.Doc, parent: unknown, key: string): Y.Item | null => {
-  let entries: Map<string, Y.Item> | undefined;
-  if (typeof parent === "string") {
-    entries = doc.share.get(parent)?._map;
-  } else if (parent instanceof Y.ID) {
-    if (parent.clock >= Y.getState(doc.store, parent.client)) return null;
-    const holder = Y.getItem(doc.store, parent);
-    if (holder instanceof Y.Item && holder.content instanceof Y.ContentType) {
-      entries = holder.content.type._map;
-    }
-  }
-  const value = entries?.get(key);
-  return value && !value.deleted ? value : null;
-};
-
-export type UpdateFacts = {
-  // The Yjs clients the update writes as.
-  writers: Set<number>;
-  // Every client it writes as, builds on or deletes from.
-  touched: Set<number>;
-  // Whether the document and the update itself hold everything it refers
-  // to. An update that builds on content the room refused does not.
-  resolvable: boolean;
-  // Live map values it replaces without having seen any value of their key,
-  // as a client writing on a copy that never held the room's state does.
-  blindlyReplaced: Y.ID[];
-};
-
-export const readUpdate = (doc: Y.Doc, update: Uint8Array): UpdateFacts => {
-  const { structs, ds } = Y.decodeUpdate(update);
-  const ends = new Map<number, number>();
-  const end = (client: number): number => ends.get(client) ?? Y.getState(doc.store, client);
-  const writers = new Set<number>();
-  const touched = new Set<number>(ds.clients.keys());
-  let resolvable = true;
-  for (const struct of structs) {
-    const client = struct.id.client;
-    writers.add(client);
-    touched.add(client);
-    if (struct instanceof Y.Skip || struct.id.clock > end(client)) resolvable = false;
-    ends.set(client, Math.max(end(client), struct.id.clock + struct.length));
-  }
-  const blindlyReplaced: Y.ID[] = [];
-  for (const struct of structs) {
-    if (!(struct instanceof Y.Item)) continue;
-    const parent: unknown = struct.parent;
-    for (const ref of [struct.origin, struct.rightOrigin, parent instanceof Y.ID ? parent : null]) {
-      if (!ref) continue;
-      touched.add(ref.client);
-      const integrated =
-        ref.client === struct.id.client
-          ? ref.clock < struct.id.clock
-          : ref.clock < Y.getState(doc.store, ref.client);
-      if (!integrated) resolvable = false;
-    }
-    if (struct.origin === null && struct.rightOrigin === null && struct.parentSub !== null) {
-      const replaced = liveMapValue(doc, parent, struct.parentSub);
-      if (replaced) blindlyReplaced.push(replaced.id);
-    }
-  }
-  for (const [client, deletes] of ds.clients) {
-    for (const { clock, len } of deletes) {
-      if (clock + len > end(client)) resolvable = false;
-    }
-  }
-  return { writers, touched, resolvable, blindlyReplaced };
 };
 
 type AwarenessEntry = { clientID: number; clock: number; state: string; removal: boolean };
@@ -329,6 +265,7 @@ export class RoomApps {
   // The presented document's state when its current stay on the stage
   // began. Every client that writes during the stay has seen at least this.
   private stayStart: ReadonlyMap<number, number> = new Map();
+  private stay = {};
   private generations = 0;
   private docs: Map<string, AppDoc> = new Map();
   private clearedWriters: Uint8Array | null = null;
@@ -337,13 +274,29 @@ export class RoomApps {
   private presenceIds: Map<number, ClientIdClaim> = new Map();
   private presence: Map<string, Presence> = new Map();
   scheduler = new RoomAppsScheduler();
-  executor: DocumentExecutor = new InProcessDocuments(this);
+  executor: DocumentExecutor;
   private followers = new Set<() => void>();
   private clears = 0;
 
   // `participantOf` maps a connection's user id to the participant behind it,
   // which stays the same when that participant rejoins.
-  constructor(private readonly participantOf: (userId: string) => string = (userId) => userId) {}
+  constructor(
+    private readonly participantOf: (userId: string) => string = (userId) => userId,
+    private readonly pool?: AppDocumentPool,
+  ) {
+    this.executor = pool ? {
+      write: (appId, identity, updates) => this.writeInWorker(appId, identity, updates),
+      sync: (appId, vector) => this.syncInWorker(appId, vector),
+      changesNothing: async (appId, update) => {
+        const entry = this.activeEntry(appId);
+        return entry?.worker ? entry.worker.changesNothing(update) : false;
+      },
+    } : new InProcessDocuments(this);
+  }
+
+  get stayToken(): object {
+    return this.stay;
+  }
 
   get epoch(): number {
     return this.clears;
@@ -377,7 +330,7 @@ export class RoomApps {
 
   get documentWriterCount(): number {
     let writers = 0;
-    for (const { doc } of this.docs.values()) writers += doc.store.clients.size;
+    for (const entry of this.docs.values()) writers += entry.doc ? entry.doc.store.clients.size : entry.seen.size;
     return writers;
   }
 
@@ -416,8 +369,11 @@ export class RoomApps {
 
   /** The presented app's document, or null when `appId` is not presented. */
   liveDoc(appId: string): Y.Doc | null {
-    if (this.stage.activeAppId !== appId) return null;
-    return this.docs.get(appId)?.doc ?? null;
+    return this.activeEntry(appId)?.doc ?? null;
+  }
+
+  private activeEntry(appId: string): AppDoc | undefined {
+    return this.activeAppId === appId ? this.docs.get(appId) : undefined;
   }
 
   plan(command: StageCommand, expectedRevision?: number): StagePlan {
@@ -477,20 +433,25 @@ export class RoomApps {
     if (!this.docs.has(appId)) {
       this.generations += 1;
       this.docs.set(appId, {
-        doc: new Y.Doc(),
+        ...(this.pool ? { worker: this.pool.open(), seen: new Map() } : { doc: new Y.Doc() }),
         generation: this.generations,
         measuredBytes: EMPTY_DOC_BYTES,
         unmeasuredBytes: 0,
       });
     }
     this.stage = { activeAppId: appId, locked: false };
-    this.stayStart = stateOf(this.docs.get(appId)!.doc);
+    const entry = this.docs.get(appId)!;
+    entry.worker?.retryLoad();
+    this.stayStart = entry.doc ? stateOf(entry.doc) : entry.seen;
+    this.stay = {};
     return awarenessRemoval;
   }
 
   private closeStage(): AppAwarenessRemoval | null {
     const awarenessRemoval = this.leaveStage();
     this.stage = { activeAppId: null, locked: false };
+    this.stayStart = new Map();
+    this.stay = {};
     return awarenessRemoval;
   }
 
@@ -500,8 +461,10 @@ export class RoomApps {
     if (this.stage.activeAppId === appId) {
       awarenessRemoval = this.removeAwareness(appId);
       this.stage = { activeAppId: null, locked: false };
+      this.stayStart = new Map();
+      this.stay = {};
     }
-    this.markCleared([...writersOf(entry.doc), ...this.releaseWriters(appId)]);
+    this.markCleared([...(entry.doc ? writersOf(entry.doc) : entry.seen.keys()), ...this.releaseWriters(appId)]);
     this.destroyDoc(appId, entry);
     return awarenessRemoval;
   }
@@ -513,9 +476,9 @@ export class RoomApps {
 
   /** The mark a socket keeps when the room answers its sync of `appId`. */
   syncMark(appId: string): AppSyncMark | null {
-    const doc = this.liveDoc(appId);
-    if (!doc) return null;
-    return { appId, generation: this.docs.get(appId)!.generation, seen: stateOf(doc) };
+    const entry = this.activeEntry(appId);
+    if (!entry) return null;
+    return { appId, generation: entry.generation, seen: entry.doc ? stateOf(entry.doc) : entry.seen };
   }
 
   /** Whether `mark` is a sync of the document presented now. */
@@ -534,23 +497,77 @@ export class RoomApps {
   changesNothing(appId: string, update: Uint8Array): boolean {
     const doc = this.liveDoc(appId);
     if (!doc) return false;
-    const decoded = Y.decodeUpdate(update);
-    for (const struct of decoded.structs) {
-      if (struct instanceof Y.Skip) continue;
-      if (struct.id.clock + struct.length > Y.getState(doc.store, struct.id.client)) return false;
+    return updateChangesNothing(doc, update);
+  }
+
+  private refusalOf(reason: Refusal): Exclude<SyncAnswer, { ok: true }>["reason"] {
+    if (reason === "closed") return "not-live";
+    if (reason === "missing-dependency" || reason === "malformed" || reason === "unresolved") return "invalid";
+    return reason;
+  }
+
+  private async writeInWorker(appId: string, identity: WriteIdentity, updates: Uint8Array[]): Promise<WriteResult> {
+    const rejected = (reason: WriteRefusal): WriteResult => ({
+      outcomes: updates.map(() => reason), landed: [],
+    });
+    const entry = this.activeEntry(appId);
+    if (!entry?.worker) return rejected("not-live");
+    const { mark, participant, host } = identity;
+    if (!this.isCurrentSync(mark)) return rejected("not-synced");
+    if (this.locked && !host) return rejected("locked");
+    const stay = this.stay;
+    const preflight = (): WriteRefusal | null => {
+      if (this.activeEntry(appId) !== entry || stay !== this.stay) return "not-live";
+      if (this.locked && !host) return "locked";
+      return null;
+    };
+    const authorize = (candidate: WorkerProposal): WriteRefusal | null => {
+      const stale = preflight();
+      if (stale) return stale;
+      const claims = this.authorizeUpdate(participant, appId, mark, candidate.facts);
+      if (typeof claims === "string") return claims;
+      if (candidate.bytes > this.documentByteLimit(appId)) return "too-large";
+      this.commitClaims(participant, appId, claims);
+      entry.measuredBytes = candidate.bytes;
+      entry.seen = candidate.seen;
+      return null;
+    };
+    const groups = identity.separate ? updates.map((update) => [update]) : [updates];
+    const results = await Promise.all(groups.map((group) =>
+      entry.worker.applyValidated(group, identity.assembled === true, { preflight, authorize }),
+    ));
+    return {
+      outcomes: identity.separate
+        ? results.map((result) => result.ok ? null : result.reason)
+        : updates.map(() => results[0].ok ? null : results[0].reason),
+      landed: results.flatMap((result) => result.ok && !result.unchanged ? [result.update] : []),
+    };
+  }
+
+  private async syncInWorker(appId: string, vector: Uint8Array): Promise<SyncAnswer> {
+    const entry = this.activeEntry(appId);
+    if (!entry?.worker) return { ok: false, reason: "not-live" };
+    const stay = this.stay;
+    const result = await entry.worker.sync(vector);
+    if (this.activeEntry(appId) !== entry || stay !== this.stay) return { ok: false, reason: "not-live" };
+    if (!result.ok) {
+      const reason = this.refusalOf(result.reason);
+      return { ok: false, reason };
     }
-    for (const [client, deletes] of decoded.ds.clients) {
-      const structs = doc.store.clients.get(client);
-      for (const { clock, len } of deletes) {
-        if (len === 0) continue;
-        if (!structs || clock + len > Y.getState(doc.store, client)) return false;
-        for (let index = Y.findIndexSS(structs, clock); index < structs.length; index += 1) {
-          if (structs[index].id.clock >= clock + len) break;
-          if (!structs[index].deleted) return false;
-        }
-      }
+    return { ...result, mark: { appId, generation: entry.generation, seen: Y.decodeStateVector(result.stateVector) } };
+  }
+
+  private authorizeUpdate(
+    participant: string, appId: string, mark: AppSyncMark, facts: UpdateFacts,
+  ): WriteRefusal | number[] {
+    if (!facts.resolvable) return "unresolved";
+    for (const replaced of facts.blindlyReplaced) {
+      if (heldIn(mark.seen, replaced) || heldIn(this.stayStart, replaced)) return "unseen-value";
     }
-    return true;
+    for (const client of facts.touched) {
+      if (!this.clientIdOwners.has(client) && this.wasCleared(client)) return "cleared";
+    }
+    return this.planClaims(participant, appId, facts.writers);
   }
 
   write(
@@ -570,14 +587,7 @@ export class RoomApps {
     } catch {
       return "malformed";
     }
-    if (!facts.resolvable) return "unresolved";
-    for (const replaced of facts.blindlyReplaced) {
-      if (heldIn(mark.seen, replaced) || heldIn(this.stayStart, replaced)) return "unseen-value";
-    }
-    for (const client of facts.touched) {
-      if (!this.clientIdOwners.has(client) && this.wasCleared(client)) return "cleared";
-    }
-    const claims = this.planClaims(participant, appId, facts.writers);
+    const claims = this.authorizeUpdate(participant, appId, mark, facts);
     if (typeof claims === "string") return claims;
     if (!this.reserveUpdate(appId, update)) return "too-large";
     try {
@@ -596,12 +606,8 @@ export class RoomApps {
    */
   reserveUpdate(appId: string, update: Uint8Array): boolean {
     const entry = this.stage.activeAppId === appId ? this.docs.get(appId) : undefined;
-    if (!entry) return false;
-    let otherBytes = 0;
-    for (const [otherAppId, other] of this.docs) {
-      if (otherAppId !== appId) otherBytes += appDocBytes(other);
-    }
-    const limit = Math.min(MAX_APP_DOC_BYTES, MAX_ROOM_APP_DOC_BYTES - otherBytes);
+    if (!entry?.doc) return false;
+    const limit = this.documentByteLimit(appId);
     const growth = update.length * UPDATE_GROWTH_MARGIN;
     if (appDocBytes(entry) + growth <= limit) {
       entry.unmeasuredBytes += growth;
@@ -617,6 +623,14 @@ export class RoomApps {
     entry.measuredBytes = resulting;
     entry.unmeasuredBytes = 0;
     return true;
+  }
+
+  private documentByteLimit(appId: string): number {
+    let otherBytes = 0;
+    for (const [otherAppId, other] of this.docs) {
+      if (otherAppId !== appId) otherBytes += appDocBytes(other);
+    }
+    return Math.min(MAX_APP_DOC_BYTES, MAX_ROOM_APP_DOC_BYTES - otherBytes);
   }
 
   // A new document needs a free slot and room to grow to a full document.
@@ -637,7 +651,7 @@ export class RoomApps {
   }
 
   private measure(entry: AppDoc): void {
-    if (entry.unmeasuredBytes === 0) return;
+    if (!entry.doc || entry.unmeasuredBytes === 0) return;
     entry.measuredBytes = Y.encodeStateAsUpdate(entry.doc).length;
     entry.unmeasuredBytes = 0;
   }
@@ -734,7 +748,8 @@ export class RoomApps {
 
   private destroyDoc(appId: string, entry: AppDoc): void {
     try {
-      entry.doc.destroy();
+      entry.worker?.close();
+      entry.doc?.destroy();
     } catch {}
     this.docs.delete(appId);
   }
@@ -851,7 +866,7 @@ export class RoomApps {
    * id is refused.
    */
   applyAwarenessUpdate(appId: string, awarenessUpdate: Uint8Array, userId: string): Uint8Array | null {
-    if (!this.liveDoc(appId)) return null;
+    if (!this.activeEntry(appId)) return null;
     const entries = decodeAwarenessEntries(awarenessUpdate);
     const participant = this.participantOf(userId);
     const presence = this.presenceFor(appId);
@@ -922,6 +937,8 @@ export class RoomApps {
     this.clientIdCounts.clear();
     this.presenceIds.clear();
     this.stage = { activeAppId: null, locked: false };
+    this.stayStart = new Map();
+    this.stay = {};
     this.revision += 1;
     this.clears += 1;
     this.notifyFollowers();

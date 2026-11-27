@@ -1,3 +1,5 @@
+import { APP_DOCUMENT_MAX_BYTES, APP_DOCUMENT_UPDATE_MAX_BYTES, APP_DOCUMENT_UPLOAD_LIST_MAX } from "@conclave/apps-sdk/limits";
+import { readChangePart, STAGED_CHANGE_IDLE_MS } from "../../apps/documents/staging.js";
 import type {
   AppsAwarenessData,
   AppsCloseData,
@@ -23,17 +25,19 @@ import {
   type AppSyncMark,
   type RoomApps,
   type StageCommand,
+  type SyncAnswer,
   type WriteRefusal,
 } from "../../roomApps.js";
-import { afterSettled, whenSettled, type SlotWrite, type StageTransition } from "../../roomAppsScheduler.js";
+import { afterSettled, whenSettled, type SlotWrite, type StageTransition, type WireBatch } from "../../roomAppsScheduler.js";
 import { Logger } from "../../../utilities/loggers.js";
 import type { ConnectionContext } from "../context.js";
 import { RATE_LIMITS, refundToken, takeToken } from "../rateLimit.js";
 import { respond } from "./ack.js";
-import { wireBytes } from "../wireBytes.js";
+import { wireBytes, type WireBytes } from "../wireBytes.js";
 
 const MAX_APPS_SYNC_BYTES = 64 * 1024;
-const MAX_APPS_UPDATE_BYTES = 256 * 1024;
+const LEGACY_SYNC_HOLD_MS = 25_000;
+const MAX_OPEN_LEGACY_SYNCS = 4;
 const MAX_APPS_AWARENESS_BYTES = 64 * 1024;
 const MAX_REPLICA_ID_LENGTH = 64;
 const REMEMBERED_REFUSED_REPLICAS = 16;
@@ -50,7 +54,7 @@ type Admission = {
   readonly host: boolean;
   readonly appId: string;
   readonly replicaId: string | undefined;
-  readonly arrivedAt: number;
+  readonly room: Room;
 };
 
 type ActiveRestart = {
@@ -71,6 +75,7 @@ type RoomScope = {
   refusedReplicas: string[];
   restart: CopyRestart;
   freeSyncRevision: number | null;
+  canUploadWhole: boolean;
 };
 
 type StageOutcome =
@@ -90,11 +95,15 @@ const heldUpdatesRefusedBy = (command: StageCommand): StageTransition["refuse"] 
 
 const EMPTY_STATE_VECTOR = new Uint8Array([0]);
 
-const SYNC_ERRORS = {
-  "not-live": "App not active",
-  invalid: "Invalid sync payload",
-  "too-large": "App document too large to sync",
-} as const;
+const SYNC_ERRORS: Record<Extract<SyncAnswer, { ok: false }>["reason"], AppsSyncError> = {
+  "not-live": { error: "App not active" },
+  invalid: { error: "Invalid sync payload" },
+  "too-large": { error: "App document too large to sync" },
+  "timed-out": retryLater("App document sync timed out", 250),
+  crashed: retryLater("App document sync failed", 250),
+  "queue-full": retryLater("App document is busy", 250),
+  unavailable: { error: "App document unavailable" },
+};
 
 const later = (ms: number, task: () => void): ReturnType<typeof setTimeout> =>
   setTimeout(() => {
@@ -137,6 +146,7 @@ const getRoomAppsState = (context: ConnectionContext): AppsState => {
       revision: 0,
       savedAppIds: [],
       docGeneration: null,
+      notInRoom: true,
     };
   }
   return { ...context.currentRoom.apps.snapshot(), roomId: context.currentRoom.id };
@@ -147,7 +157,7 @@ type SyncRequest = { ok: true; appId: string; stateVector: Uint8Array } | { ok: 
 const readSyncRequest = (apps: RoomApps, data: AppsSyncData | undefined): SyncRequest => {
   const appId = normalizeAppId(data?.appId);
   if (!appId) return { ok: false, error: "Invalid app id" };
-  if (!apps.liveDoc(appId)) return { ok: false, error: "App not active" };
+  if (apps.activeAppId !== appId) return { ok: false, error: "App not active" };
   const wire = wireBytes(data?.syncMessage);
   if (!wire || wire.length === 0) return { ok: false, error: "Invalid sync payload" };
   if (wire.length > MAX_APPS_SYNC_BYTES) return { ok: false, error: "Sync payload too large" };
@@ -156,11 +166,9 @@ const readSyncRequest = (apps: RoomApps, data: AppsSyncData | undefined): SyncRe
   return { ok: true, appId, stateVector };
 };
 
-const retryLater = (error: string, retryAfterMs: number): AppsSyncError => ({
-  error,
-  retryable: true,
-  retryAfterMs,
-});
+function retryLater(error: string, retryAfterMs: number): AppsSyncError {
+  return { error, retryable: true, retryAfterMs };
+}
 
 const INVALID_REVISION = Symbol("invalid revision");
 
@@ -197,7 +205,8 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
   const scopeFor = (apps: RoomApps): RoomScope => {
     if (scope?.apps === apps) return scope;
     endRestart();
-    scope = { apps, synced: null, refusedReplicas: [], restart: { state: "idle" }, freeSyncRevision: null };
+    dropStaged();
+    scope = { apps, synced: null, refusedReplicas: [], restart: { state: "idle" }, freeSyncRevision: null, canUploadWhole: false };
     return scope;
   };
   const stillIn = (apps: RoomApps): boolean => context.currentRoom?.apps === apps && scope?.apps === apps;
@@ -306,27 +315,52 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       (admission.replicaId !== undefined || admission.appId === "wheel") && inScope(admission.apps);
     for (const update of landed) {
       const message: AppsUpdateData = { appId: admission.appId, update };
-      socket.to(admission.channelId).emit("apps:yjs:update", message);
+      if (update.length <= APP_DOCUMENT_UPDATE_MAX_BYTES) {
+        socket.to(admission.channelId).emit("apps:yjs:update", message);
+      } else {
+        const state = { ...admission.apps.snapshot(), roomId: admission.room.id };
+        for (const receiver of admission.room.clients.values()) {
+          if (receiver.socket.id === socket.id) continue;
+          if (receiver.takesLargeAppUpdates === false) {
+            receiver.socket.emit("apps:state", { ...state, activeAppId: null, docGeneration: null });
+            receiver.socket.emit("apps:state", state);
+          } else {
+            receiver.socket.emit("apps:yjs:update", message);
+          }
+        }
+      }
       if (includeWriter) socket.emit("apps:yjs:update", message);
     }
   };
-  const writeFor = (admission: Admission, mark: AppSyncMark): SlotWrite => {
+
+  const writeFor = (
+    admission: Admission, mark: AppSyncMark, done: (committed?: boolean) => void, mode: "single" | "list" | "assembled",
+    direct: boolean,
+  ): SlotWrite => {
     const { apps, appId, host, participant, replicaId, socketId } = admission;
     return {
       sender: socket,
       appId,
-      key: `${appId}\u0000${mark.generation}\u0000${replicaId ?? ""}\u0000${host}`,
+      key: JSON.stringify([appId, mark.generation, replicaId, host]),
       host,
+      direct,
       run: (updates) => {
         const latest = scope?.apps === apps && apps.isCurrentSync(scope.synced) ? scope.synced : mark;
-        const identity = { participant, host, origin: socketId, mark: latest };
+        const identity = {
+          participant, host, origin: socketId, mark: latest, separate: mode === "list",
+          assembled: mode === "assembled" ? true as const : undefined,
+        };
         return whenSettled(apps.executor.write(appId, identity, updates), (result) => {
           relay(admission, mark, result.landed);
-          return result.outcomes;
+          return mode === "list" ? [result.outcomes.find((outcome) => outcome !== null) ?? null] : result.outcomes;
         });
       },
       finish: (outcome) => {
-        if (outcome !== null) refuse(admission, outcome);
+        try {
+          if (outcome !== null) refuse(admission, outcome);
+        } finally {
+          done(outcome === null);
+        }
       },
     };
   };
@@ -346,6 +380,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     deniedError: string,
     command: StageCommand,
     reply: (outcome: StageOutcome) => void,
+    expectedRoomId?: unknown,
   ): void => {
     if (!context.currentRoom || !context.currentClient) {
       reply({ success: false, error: "Not in a room" });
@@ -365,6 +400,11 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       return;
     }
     const room = context.currentRoom;
+    const client = context.currentClient;
+    if (expectedRoomId !== undefined && expectedRoomId !== room.id) {
+      reply({ success: false, ...STAGE_COMMAND_ERRORS.stale });
+      return;
+    }
     const { apps } = room;
     const plan = apps.plan(command, revision);
     if (!plan.ok) {
@@ -376,6 +416,10 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       return;
     }
     const execute = (): void => {
+      if (!socket.connected || context.currentRoom !== room || context.currentClient !== client) {
+        reply({ success: false, ...STAGE_COMMAND_ERRORS.stale });
+        return;
+      }
       const next = apps.plan(command, revision);
       if (!next.ok) {
         reply({ success: false, ...STAGE_COMMAND_ERRORS[next.reason] });
@@ -418,8 +462,6 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     io.to(room.channelId).emit("apps:state", state);
   };
 
-  socket.on("disconnecting", endRestart);
-
   socket.on("apps:getState", (callback: (state: AppsState) => void) => {
     respond(callback, getRoomAppsState(context));
   });
@@ -447,6 +489,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
                 }
               : outcome,
           ),
+        data?.expectedRoomId,
       );
     }
   );
@@ -465,6 +508,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
           callback,
           outcome.success ? { success: true, revision: outcome.state.revision } : outcome,
         ),
+      data?.expectedRoomId,
     );
   });
 
@@ -510,67 +554,172 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     }
   );
 
+  const legacySyncs = new Set<() => void>();
+  const endUploads = (): void => {
+    endRestart();
+    for (const stop of legacySyncs) stop();
+    dropStaged();
+  };
+  socket.on("disconnecting", endUploads);
+  socket.on("disconnect", endUploads);
+
   socket.on(
     "apps:yjs:sync",
     (data: AppsSyncData, callback: (response: AppsSyncResponse | AppsSyncError) => void) => {
-      if (!context.currentRoom) {
-        respond(callback, { error: "Not in a room" });
+      const room = context.currentRoom;
+      if (!room) {
+        respond(callback, data?.canRetry ? retryLater("Not in a room", 500) : { error: "Not in a room" });
         return;
       }
-      const { apps } = context.currentRoom;
+      const { apps } = room;
       const current = scopeFor(apps);
-      if (!takeToken(socket, "apps:yjs:sync", RATE_LIMITS.appsYjsSync)) {
-        respond(callback, retryLater("Too many app sync requests", 500));
-        return;
-      }
-      const request = readSyncRequest(apps, data);
-      if (!request.ok) {
-        respond(callback, { error: request.error });
-        return;
-      }
-      const { appId, stateVector } = request;
       const revision = apps.stageRevision;
-      afterSettled("App sync", apps.executor.sync(appId, stateVector), (answer) => {
-        if (scope !== current || !stillIn(apps)) {
-          respond(callback, { error: SYNC_ERRORS["not-live"] });
+      const stay = apps.stayToken;
+      const client = context.currentClient;
+      const pay = () => takeToken(socket, "apps:yjs:sync", RATE_LIMITS.appsYjsSync);
+      const limited = () => retryLater("Too many app sync requests", 500);
+      const serve = (reply: (response: AppsSyncResponse | AppsSyncError) => void): void => {
+        if (scope !== current || !stillIn(apps) || apps.stayToken !== stay) {
+          reply(SYNC_ERRORS["not-live"]);
           return;
         }
-        const valid = answer.ok || answer.reason === "too-large";
-        if (valid && current.freeSyncRevision !== revision) {
-          current.freeSyncRevision = revision;
-          refundToken(socket, "apps:yjs:sync", RATE_LIMITS.appsYjsSync);
-        }
-        if (!answer.ok) {
-          respond(callback, { error: SYNC_ERRORS[answer.reason] });
+        const request = readSyncRequest(apps, data);
+        if (!request.ok) {
+          reply({ error: request.error });
           return;
         }
-        if (apps.stageRevision === revision && current.restart.state !== "blank-sent") {
-          current.synced = answer.mark;
-          endRestart();
-        }
-        const awarenessSnapshot = apps.encodeAwarenessSnapshot(appId) ?? undefined;
-        const awarenessUpdate =
-          awarenessSnapshot && awarenessSnapshot.length <= MAX_APPS_AWARENESS_BYTES
-            ? awarenessSnapshot
-            : undefined;
-        respond(callback, {
-          syncMessage: answer.update,
-          stateVector: answer.stateVector,
-          awarenessUpdate,
+        const { appId, stateVector } = request;
+        afterSettled("App sync", apps.executor.sync(appId, stateVector), (answer) => {
+          if (scope !== current || !stillIn(apps) || apps.stayToken !== stay) {
+            reply(SYNC_ERRORS["not-live"]);
+            return;
+          }
+          const valid = answer.ok || answer.reason === "too-large";
+          if (valid && apps.stageRevision === revision && current.freeSyncRevision !== revision) {
+            current.freeSyncRevision = revision;
+            refundToken(socket, "apps:yjs:sync", RATE_LIMITS.appsYjsSync);
+          }
+          if (!answer.ok) {
+            reply(SYNC_ERRORS[answer.reason]);
+            return;
+          }
+          if (current.restart.state !== "blank-sent") {
+            current.synced = answer.mark;
+            endRestart();
+          }
+          if (data.wholeChanges === true) current.canUploadWhole = true;
+          if (client) client.takesLargeAppUpdates = data.wholeChanges === true || typeof data.syncMessage !== "string";
+          const awareness = apps.encodeAwarenessSnapshot(appId);
+          reply({
+            syncMessage: answer.update,
+            stateVector: answer.stateVector,
+            stagesParts: true,
+            takesUpdateLists: true,
+            awarenessUpdate: awareness && awareness.length <= MAX_APPS_AWARENESS_BYTES ? awareness : undefined,
+          });
         });
-      });
+      };
+      if (data?.canRetry === true) {
+        if (pay()) serve((answer) => respond(callback, answer));
+        else respond(callback, limited());
+        return;
+      }
+      if (legacySyncs.size >= MAX_OPEN_LEGACY_SYNCS) {
+        respond(callback, { error: limited().error });
+        return;
+      }
+      let paid = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let lastError = "App document is busy";
+      const stop = (): void => {
+        clearTimeout(timer);
+        clearTimeout(deadline);
+        legacySyncs.delete(stop);
+      };
+      const finish = (response: AppsSyncResponse | AppsSyncError): void => {
+        if (!legacySyncs.has(stop)) return;
+        stop();
+        respond(callback, response);
+      };
+      const deadline = later(LEGACY_SYNC_HOLD_MS, () => finish({ error: lastError }));
+      const attempt = (): void => {
+        const receive = (answer: AppsSyncResponse | AppsSyncError): void => {
+          if (!legacySyncs.has(stop)) return;
+          if (!("error" in answer) || !answer.retryable) finish(answer);
+          else {
+            lastError = answer.error;
+            timer = later(answer.retryAfterMs ?? 250, attempt);
+          }
+        };
+        if (apps.stayToken !== stay || scope !== current || !stillIn(apps)) {
+          finish(SYNC_ERRORS["not-live"]);
+          return;
+        }
+        paid ||= pay();
+        if (paid) serve(receive);
+        else receive(limited());
+      };
+      legacySyncs.add(stop);
+      attempt();
     }
   );
 
-  socket.on("apps:yjs:update", (data: AppsUpdateData) => {
+  type StagedChange = {
+    admission: Admission;
+    revision: number;
+    id: string;
+    count: number;
+    parts: Uint8Array[];
+    bytes: number;
+    idle?: ReturnType<typeof setTimeout>;
+  };
+  let staged: StagedChange | null = null;
+  const staging = context.state.appChangeStaging;
+  const dropStaged = (): void => {
+    if (!staged) return;
+    clearTimeout(staged.idle);
+    staged.admission.apps.unfollow(followStaged);
+    staging.give(staged.bytes);
+    staged = null;
+  };
+  const followStaged = (): void => {
+    if (staged && staged.revision !== staged.admission.apps.stageRevision) dropStaged();
+  };
+
+  const readList = (value: unknown): WireBatch | null => {
+    if (!Array.isArray(value) || value.length === 0 || value.length > APP_DOCUMENT_UPLOAD_LIST_MAX) return null;
+    const wires: WireBytes[] = [];
+    let length = 0;
+    for (const item of value) {
+      const wire = wireBytes(item);
+      if (!wire || wire.length === 0) return null;
+      wires.push(wire);
+      length += wire.length;
+    }
+    return {
+      length,
+      readBatch: () => {
+        const updates: Uint8Array[] = [];
+        for (const wire of wires) {
+          const update = wire.read();
+          if (!update || update.length !== wire.length) return null;
+          updates.push(update);
+        }
+        return updates;
+      },
+    };
+  };
+
+  const receiveUpdate = (data: AppsUpdateData, done: (committed?: boolean) => void): void => {
     const room = context.currentRoom;
     const client = context.currentClient;
-    if (!room || !client || client.isObserver) return;
+    if (!room || !client || client.isObserver) return done();
     const wire = wireBytes(data?.update);
     const size = wire?.length ?? 0;
     const appId = normalizeAppId(data?.appId);
-    if (!appId) return;
+    if (!appId) return done();
     const { apps } = room;
+    const changedScope = scope !== null && scope.apps !== apps;
     const current = scopeFor(apps);
     const admission: Admission = {
       apps,
@@ -581,19 +730,26 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       host: canControlStage(context),
       appId,
       replicaId: normalizeReplicaId(data?.replicaId),
-      arrivedAt: Date.now(),
+      room,
     };
-    if (!wire || size === 0) {
-      refuse(admission, "invalid");
-      return;
-    }
-    if (size > MAX_APPS_UPDATE_BYTES) {
-      refuse(admission, "too-large");
-      return;
-    }
-    if (current.restart.state === "blank-sent") return;
+    const reject = (reason: WriteRefusal): void => {
+      dropStaged();
+      refuse(admission, reason);
+      done();
+    };
+    const part = readChangePart(data?.part);
+    const hasList = data.updates !== undefined;
+    const list = hasList ? readList(data.updates) : null;
+    if (part === "invalid" || (part && (hasList || (changedScope && part.index !== 0)))) return reject("interrupted");
+    if (hasList ? !list || data.update !== undefined : !wire || size === 0) return reject("invalid");
+    if ((list?.length ?? size) > APP_DOCUMENT_UPDATE_MAX_BYTES) return reject("too-large");
+    if (current.restart.state === "blank-sent") return done();
     const revision = apps.stageRevision;
     const checkNoop = (decide: (changesNothing: boolean | null) => void): void => {
+      if (!wire || part) {
+        decide(null);
+        return;
+      }
       if (size === EMPTY_UPDATE_BYTES) {
         const empty = wire.read();
         if (empty && isEmptyUpdate(empty)) {
@@ -612,12 +768,14 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       }
       afterSettled("Checking an app update", apps.executor.changesNothing(appId, update), (changesNothing) => {
         if (scope === current && stillIn(apps) && apps.stageRevision === revision) decide(changesNothing);
+        else done();
       });
     };
     if (current.restart.state === "awaiting-sync") {
       const restart = current.restart;
-      if (restart.apps !== apps || restart.appId !== appId) return;
+      if (restart.apps !== apps || restart.appId !== appId) return done();
       checkNoop((changesNothing) => {
+        done();
         if (changesNothing !== true || current.restart !== restart) return;
         sendRoomCopy(current, appId);
         endRestart();
@@ -626,25 +784,91 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     }
     const stage = apps.snapshot();
     if (stage.activeAppId !== appId || stage.docGeneration === null) {
-      refuse(admission, "not-live");
-      return;
+      return reject("not-live");
     }
     if (stage.locked && !admission.host) {
       checkNoop((changesNothing) => {
-        if (changesNothing !== true) refuse(admission, "locked");
-        else if (!apps.isCurrentSync(current.synced)) sendRoomCopy(current, appId);
+        if (changesNothing !== true) reject("locked");
+        else {
+          if (!apps.isCurrentSync(current.synced)) sendRoomCopy(current, appId);
+          done();
+        }
       });
       return;
     }
     const mark = current.synced;
     if (!apps.isCurrentSync(mark)) {
       checkNoop((changesNothing) => {
-        if (changesNothing === true) sendRoomCopy(current, appId);
-        else refuse(admission, "not-synced");
+        if (changesNothing === true) {
+          sendRoomCopy(current, appId);
+          done();
+        } else reject("not-synced");
       });
       return;
     }
-    apps.scheduler.submit(writeFor(admission, mark), wire);
+    if (list) {
+      dropStaged();
+      apps.scheduler.submit(writeFor(admission, mark, done, "list", true), list);
+      return;
+    }
+    if (!wire) return reject("invalid");
+    if (!part) {
+      dropStaged();
+      apps.scheduler.submit(writeFor(admission, mark, done, "single", current.canUploadWhole), wire);
+      return;
+    }
+    if (!takeToken(socket, "apps:change-part", RATE_LIMITS.appsYjsUpdate)) return reject("rate-limited");
+    if (part.index === 0) {
+      dropStaged();
+      staged = { admission, revision, id: part.id, count: part.count, parts: [], bytes: 0 };
+      apps.follow(followStaged);
+    }
+    const change = staged;
+    if (
+      !change || change.admission.apps !== apps || change.admission.appId !== appId ||
+      change.admission.replicaId !== admission.replicaId || change.revision !== revision ||
+      change.id !== part.id || change.count !== part.count || change.parts.length !== part.index
+    ) return reject("interrupted");
+    if (change.bytes + size > APP_DOCUMENT_MAX_BYTES) return reject("too-large");
+    const update = wire.read();
+    if (!update || update.length !== size) return reject("invalid");
+    if (!staging.take(size)) return reject("queue-full");
+    change.parts.push(new Uint8Array(update));
+    change.bytes += size;
+    clearTimeout(change.idle);
+    if (change.parts.length < change.count) {
+      change.idle = later(STAGED_CHANGE_IDLE_MS, () => {
+        if (staged !== change) return;
+        dropStaged();
+        refuse(change.admission, "timed-out");
+      });
+      done();
+      return;
+    }
+
+    apps.unfollow(followStaged);
+    staged = null;
+    const whole = new Uint8Array(change.bytes);
+    let offset = 0;
+    for (const bytes of change.parts) {
+      whole.set(bytes, offset);
+      offset += bytes.length;
+    }
+    apps.scheduler.submit(writeFor(admission, mark, (committed) => {
+      staging.give(change.bytes);
+      done(committed);
+    }, "assembled", true), wireBytes(whole)!);
+  };
+
+  socket.on("apps:yjs:update", (data: AppsUpdateData, ack?: (receipt?: { committed: true }) => void) => {
+    const done = (committed = false) => respond(ack, committed ? { committed: true } : undefined);
+    try {
+      receiveUpdate(data, done);
+    } catch (error) {
+      Logger.warn("[Apps] Reading an app update failed", error);
+      dropStaged();
+      done();
+    }
   });
 
   socket.on("apps:awareness", (data: AppsAwarenessData) => {
@@ -657,7 +881,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     if (!appId) return;
     const wire = wireBytes(data?.awarenessUpdate);
     if (!wire || wire.length === 0 || wire.length > MAX_APPS_AWARENESS_BYTES) return;
-    if (!context.currentRoom.apps.liveDoc(appId)) return;
+    if (context.currentRoom.apps.activeAppId !== appId) return;
     const awarenessUpdate = wire.read();
     if (!awarenessUpdate || awarenessUpdate.length === 0) return;
     let forwarded: Uint8Array | null;

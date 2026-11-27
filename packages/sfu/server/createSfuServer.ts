@@ -69,6 +69,7 @@ export const createSfuServer = (
   const state = createSfuState({
     isDraining: config.draining,
     roomRegistry,
+    config,
     roomRecoveryStore: createFileRoomRecoveryStore(),
   });
   let io: SocketIOServer | null = null;
@@ -100,7 +101,7 @@ export const createSfuServer = (
   const start = async (): Promise<void> => {
     await state.roomRegistry.start();
     socketAdapterLifecycle = await connectSocketAdapter(io, { config });
-    await initMediaSoup(state, () => io, workerShutdown.signal);
+    await initMediaSoup(state, config, () => io, workerShutdown.signal);
     await retryWhileSqliteLocked(() => initScheduledWebinars(state));
     await retryWhileSqliteLocked(() => initScheduledMeetings(state));
     await retryWhileSqliteLocked(() => initScheduling(state));
@@ -224,6 +225,7 @@ export const createSfuServer = (
     }
     state.rooms.clear();
     state.roomCreations.clear();
+    await state.appDocuments.close();
 
     for (const worker of state.workers) {
       try {

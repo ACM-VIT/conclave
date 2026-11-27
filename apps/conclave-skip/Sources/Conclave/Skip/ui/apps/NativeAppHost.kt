@@ -73,7 +73,7 @@ internal fun NativeAppHostBody(host: AppHostPresenter, onShowVideo: () -> Unit, 
     }
     LaunchedEffect(model.wantsWebView, model.appSessionId) {
 
-        if (!model.wantsWebView && model.appSessionId.isNotEmpty()) ActivityWebViewRegistry.release(model.appSessionId)
+        if (!model.wantsWebView && !host.isHiddenLocally && model.appSessionId.isNotEmpty()) ActivityWebViewRegistry.release(model.appSessionId)
     }
     val block = AppHostChromePolicy.statusBlock(model)
     val chip = AppHostChromePolicy.chip(model)

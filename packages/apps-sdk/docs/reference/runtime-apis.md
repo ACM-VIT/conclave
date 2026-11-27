@@ -65,13 +65,17 @@ Returns the full runtime context:
 - `retrySync() => void`: start the presented app's first sync over
 - `presentedDocKey`: `string | null`, names the presented app's local document
 - `rejectedChange`: `{ at: number, reason: string } | null`, the last change the room refused
+- `documents`: `{ version, doc(appId), awareness(appId), writeOnce(appId, key, write) }`
+- `isRebuilding`: the current copy is waiting for replacement
 - `user`, `isAdmin`, `isReadOnly`
 
 ### Mounting the presented app
 
-Mount the presented app only when `syncStatus` is `synced`, with
-`key={presentedDocKey}`. Show a short loading state while it is `syncing`,
-and a retry that calls `retrySync()` when it is `failed`.
+Wait for `syncStatus` to become `synced` before mounting a new app copy.
+Key the mounted app with `presentedDocKey`. Keep an already mounted copy
+visible during catch-up, and disable interaction with it while
+`isRebuilding` is true. If the sync fails, show a retry that calls
+`retrySync()`.
 
 - `synced` means the room's first sync reply has filled the local copy. Edits
   made before that would build a second document tree and could hide the
@@ -93,9 +97,111 @@ and a retry that calls `retrySync()` when it is `failed`.
   a close and present in one batch, a new socket, or a change the room
   refused. The app then mounts again on the new document instead of keeping
   the one the provider dropped.
-- When the room refuses a change, the provider drops that copy, syncs a fresh
-  one and sets `rejectedChange`; show a short notice that the last change was
-  not saved.
+- After a final refusal, the provider replaces the local copy from the room
+  and sets `rejectedChange`. Show a short notice that the last change
+  was not saved.
+
+### Uploads and refusals
+
+Every change an app makes reaches the server through one paced upload path:
+`AppsProvider` on the web, and the native embed session on iOS and Android.
+
+- Uploads leave at most `APP_DOCUMENT_UPLOADS_PER_SECOND` times a second (20),
+  two thirds of the rate the server refills its per-socket budget at. Both read
+  `APP_DOCUMENT_UPDATE_BUDGET` from `@conclave/apps-sdk/limits`, so a client
+  that only uses this path is never refused for its rate.
+- Nothing local becomes an upload before the app's first sync reply has been
+  merged in. Until then `isRebuilding` is true and the meeting shows the app
+  read-only, so a late joiner cannot draw over a saved board it has not loaded
+  yet. Native embeds refuse edits until their first snapshot the same way.
+- Changes made between uploads wait and leave together in the next one, at
+  most `APP_DOCUMENT_UPLOAD_LIST_MAX` (64) changes and
+  `APP_DOCUMENT_UPDATE_MAX_BYTES` in all. Nothing is dropped. To an SFU whose
+  sync reply says `takesUpdateLists: true` they go as a list of the changes
+  themselves (`updates: [...]`), never merged: the SFU applies them one at a
+  time in order, so each change is kept or refused on its own and a change that
+  fits is never refused together with one that does not, whatever the document
+  size. No size estimate is involved. An older SFU gets them merged into one
+  update, as before, and the native embed merges too, because the native bridge
+  carries one update at a time.
+- While the socket is down, changes wait and leave as one upload when it
+  connects.
+- Every change is all or nothing on the server. An update bigger than that
+  cap, such as one large paste or a resend after many edits piled up during a
+  catch-up, goes out as numbered parts of one change (`part: { id, index,
+  count }`): plain byte ranges of the encoded update, never re-encoded Yjs
+  structs. The SFU stages the parts, joins them back into the original update
+  when the last arrives, and applies that update once, checking the document
+  limit for the whole change, so it keeps all of it or none of it.
+- A staging refusal (`interrupted`: a part the SFU cannot place) is never final.
+  The provider resends the whole change from a fresh sync and keeps its copy.
+  When the same socket reconnects, the provider holds every upload until the
+  `apps:state` the SFU pushes once the socket has rejoined its meeting. If the
+  same app is still open, it runs that fresh sync before it sends anything else,
+  and the live copy with its unsent edits is kept. An `apps:getState` answer
+  that says `notInRoom` is ignored, so an answer from before the rejoin never
+  closes the app or drops local work.
+- Receivers take changes up to the document limit. The provider and native
+  clients say so with `wholeChanges: true` in their sync request, and any web
+  client takes them anyway. A native client that never said so (build 63) gets
+  the app state with no app and then the real state on its own socket instead
+  of a change over 256 KiB, so it reloads the app from the server.
+- The provider sends parts only to an SFU whose sync reply says
+  `stagesParts: true`. An older SFU gets the change whole and refuses it as too
+  large, never half of it. The native embed does not split yet, because the
+  native bridge does not carry parts: a change over the cap there is not sent.
+- Nothing else sends app updates. `apps/web/test/app-upload-path.test.ts` fails
+  when code in the SDK, the web app or meeting core emits `apps:yjs:update`, or
+  the native embed posts an update, outside the queue.
+- An SFU that says `takesUpdateLists: true` acknowledges every upload once it
+  is done with it, after any refusal for it. Until then the queue keeps what it
+  sent: at most `APP_DOCUMENT_UPLOAD_LIST_MAX` changes and
+  `APP_DOCUMENT_UPDATE_MAX_BYTES`, except a single change in parts, which may
+  fill it alone. That log is also its send window, so nothing more goes out
+  while it is full.
+- A refusal for a passing reason (`rate-limited`, `timed-out`, `queue-full`,
+  `missing-dependency` and the like) keeps the live copy. The provider syncs
+  with the server under a fresh copy id and then resends, as a list, each change
+  from the log, the queue and the sync itself that the server lacks, so near the
+  document limit a change that fits still lands on its own. Only when those
+  changes do not cover what the server lacks (state that never went through the
+  queue) does it send one diff of everything the server lacks instead.
+- A refusal because the document is full, locked or invalid, or a fourth passing
+  refusal within 30 seconds, rebuilds the copy from the server. Anything built on
+  the refused change goes with it, because the server can never accept it, and
+  the host shows the reason.
+
+Make each logical change in one transaction (`doc.transact`), so the server keeps
+all of it or none of it: a replace that deletes and inserts, an action that
+updates two maps, a pointer event. The same test file below fails when a
+function in any app can make more than one separate change on one path.
+
+### `documents.writeOnce(appId, key, write)`
+
+The only way for an app to change its document without a user action: from a
+timer, an effect, a promise, a media event, or code that runs on mount.
+
+- `write(doc)` runs against the live copy, after its first sync, and only while
+  the participant may write. While a rebuild is pending it waits and then runs on
+  the replacement.
+- Each `key` runs once per app activation. Use a key that names the change, such
+  as `result:<spinId>`.
+- Everything `write` changes goes out as one update, so the server keeps all of
+  it or none of it.
+- If the copy it ran on is refused, the provider checks the replacement. When
+  the server already has the change, it is done. Otherwise it runs again on the
+  replacement, at most three times in all, unless the refusal was because the
+  document is full, locked or invalid, which is final.
+- `write` must re-check, on the copy it is given, the state it was decided
+  against (the same play, the same spin not yet recorded), because it can run
+  after that state has moved on.
+
+A test in `apps/web/test/app-automatic-writes.test.ts` fails when an app writes
+its document anywhere else outside a user event handler.
+
+`writeOnce` changes ride the same uploads. After a passing refusal they are sent
+again as they were, not run again, since the live copy still holds them; the
+rules above about running again apply after a rebuild.
 
 Ack behavior:
 
@@ -292,6 +398,8 @@ and mutation helpers lazily create the shared types they write.
 - Use `useAppDoc` for content, `useAppPresence` for ephemeral state.
 - Keep app id consistent across app definition, controls, and hooks.
 - Always gate write mutations using lock/admin state.
+- Write only from user event handlers or through `documents.writeOnce`.
+- Make each logical change in one `doc.transact`.
 - Avoid calling control methods before socket connect.
 - Use `useGame` for server-authoritative games where the server must own rules or hidden information.
 

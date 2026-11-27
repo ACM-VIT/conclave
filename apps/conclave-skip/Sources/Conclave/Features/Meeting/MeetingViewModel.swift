@@ -15437,6 +15437,19 @@ final class MeetingViewModel {
     }
     #endif
 
+    private func prepareAppStageChange(to nextAppId: String?, context: CallActionContext) async -> Bool {
+        let activeAppId = state.activeAppId
+        let revision = state.appsRevision
+        let generation = state.activeAppDocGeneration
+        let appSessionId = activeAppSession.appSessionId
+        if let activeAppId, activeAppId != nextAppId {
+            if !(await activeAppSession.prepareToLeave()) { return false }
+        }
+        return isCurrentJoinedCall(context) && state.isAdmin && state.activeAppId == activeAppId
+            && state.appsRevision == revision && state.activeAppDocGeneration == generation
+            && activeAppSession.appSessionId == appSessionId
+    }
+
     func closeActiveApp() {
         guard state.isAdmin, !state.isWebinarAttendee else { return }
         let actionKey = "apps"
@@ -15452,8 +15465,16 @@ final class MeetingViewModel {
                 }
             }
             guard isCurrentJoinedCall(actionContext) else { return }
+            guard await prepareAppStageChange(to: nil, context: actionContext) else {
+                if isCurrentJoinedCall(actionContext) {
+                    activitySession.activities.commandFailed(.closeApp, serverText: "")
+                    activitySession.appHost.closeFailed()
+                }
+                return
+            }
+            let revision = state.appsRevision
             do {
-                let response = try await socketManager.closeApp()
+                let response = try await socketManager.closeApp(expectedRevision: revision, expectedRoomId: state.roomId)
                 guard isCurrentJoinedCall(actionContext) else { return }
                 guard response.success != false else {
                     state.errorMessage = response.error ?? "Could not close the app."
@@ -15461,7 +15482,7 @@ final class MeetingViewModel {
                     activitySession.appHost.closeFailed()
                     return
                 }
-                clearAppsState()
+                if state.appsRevision == revision { clearAppsState() }
             } catch {
                 applyActionError(error, context: actionContext)
                 activitySession.activities.commandFailed(.closeApp, serverText: "")
@@ -15521,14 +15542,22 @@ final class MeetingViewModel {
                 }
             }
             guard isCurrentJoinedCall(actionContext) else { return }
+            guard await prepareAppStageChange(to: trimmedAppId, context: actionContext) else {
+                if isCurrentJoinedCall(actionContext) {
+                    activitySession.activities.commandFailed(.openApp, serverText: "")
+                }
+                return
+            }
+            let revision = state.appsRevision
             do {
-                let response = try await socketManager.openApp(trimmedAppId)
+                let response = try await socketManager.openApp(trimmedAppId, expectedRevision: revision, expectedRoomId: state.roomId)
                 guard isCurrentJoinedCall(actionContext) else { return }
                 guard response.success != false else {
                     state.errorMessage = response.error ?? "Could not open the app."
                     activitySession.activities.commandFailed(.openApp, serverText: response.error ?? "")
                     return
                 }
+                guard state.appsRevision == revision else { return }
                 let activeAppId = response.activeAppId?.trimmingCharacters(in: .whitespacesAndNewlines)
                 applyAppsState(localAppsState(activeAppId: activeAppId?.isEmpty == false ? activeAppId : trimmedAppId,
                                               locked: state.isAppsLocked, roomId: state.roomId))

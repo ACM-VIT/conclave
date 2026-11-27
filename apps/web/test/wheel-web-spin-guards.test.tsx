@@ -3,7 +3,7 @@ import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
-import { addEntries, getEntries, removeEntryById, startSpin, type WheelSpin } from "../../../packages/apps-sdk/src/apps/wheel/core/doc/index";
+import { addEntries, getEntries, getHistory, removeEntryById, setRemoveWinnerOnDone, startSpin, type WheelSpin } from "../../../packages/apps-sdk/src/apps/wheel/core/doc/index";
 import type { WheelPanel as RealWheelPanel } from "../../../packages/apps-sdk/src/apps/wheel/web/components/WheelPanel";
 import type { WheelStage as RealWheelStage } from "../../../packages/apps-sdk/src/apps/wheel/web/components/WheelStage";
 
@@ -14,6 +14,7 @@ const harness = vi.hoisted(() => ({
   doc: null as unknown as import("yjs").Doc,
   panel: null as PanelProps | null,
   stage: null as StageProps | null,
+  writes: [] as Array<(live: import("yjs").Doc) => void>,
 }));
 
 vi.mock("../../../packages/apps-sdk/src/sdk/hooks/useAppDoc", () => ({
@@ -26,6 +27,9 @@ vi.mock("../../../packages/apps-sdk/src/sdk/hooks/useApps", () => ({
     isAdmin: true,
     isReadOnly: false,
     participants: [],
+    documents: {
+      writeOnce: (_appId: string, _key: string, write: (live: Y.Doc) => void) => harness.writes.push(write),
+    },
   }),
 }));
 
@@ -102,6 +106,7 @@ beforeEach(() => {
   harness.doc = new Y.Doc();
   harness.panel = null;
   harness.stage = null;
+  harness.writes.length = 0;
   addEntries(harness.doc, ["Cy", "Ada", "Bo"]);
   container = document.createElement("div");
   document.body.append(container);
@@ -253,5 +258,44 @@ describe("wheel web app while a shared spin runs, even when the dial reports it 
     expect(action("sort")!.disabled).toBe(false);
     act(() => panel().onSort());
     expect(labels()).toEqual(["Ada", "Bo", "Cy"]);
+  });
+});
+
+
+describe("wheel results that wait for a replacement document", () => {
+  it.each([
+    ["no spin", null, false],
+    ["another spin", "another-spin", false],
+    ["the accepted spin", "local-spin", true],
+  ] as const)("keeps the result tied to the accepted spin when the replacement has %s", (_label, liveSpinId, accepted) => {
+    const replacement = new Y.Doc();
+    try {
+      setRemoveWinnerOnDone(harness.doc, true);
+      Y.applyUpdate(replacement, Y.encodeStateAsUpdate(harness.doc));
+      const settled: WheelSpin = {
+        spinId: "local-spin",
+        entries: getEntries(harness.doc),
+        winnerIndex: 0,
+        startedAt: Date.now() - DURATION,
+        durationMs: DURATION,
+        turns: 8,
+        jitter: 0.5,
+        spunById: "host-1",
+        spunByName: "Host",
+      };
+
+      act(() => startSpin(harness.doc, settled));
+      act(() => harness.stage!.onSettled(settled, true));
+      act(() => vi.advanceTimersByTime(800));
+      expect(harness.writes).toHaveLength(1);
+
+      if (liveSpinId) startSpin(replacement, { ...settled, spinId: liveSpinId });
+      replacement.transact(() => harness.writes[0](replacement));
+
+      expect(getHistory(replacement).map((result) => result.spinId)).toEqual(accepted ? ["local-spin"] : []);
+      expect(getEntries(replacement).map((entry) => entry.label)).toEqual(accepted ? ["Ada", "Bo"] : ["Cy", "Ada", "Bo"]);
+    } finally {
+      replacement.destroy();
+    }
   });
 });

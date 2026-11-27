@@ -85,7 +85,7 @@ export const makeRoom = () => {
     const sync = (appId: string) => {
       const response = ask<{ syncMessage?: Uint8Array; stateVector?: Uint8Array; error?: string }>(
         "apps:yjs:sync",
-        { appId, syncMessage: Y.encodeStateVector(doc) },
+        { appId, canRetry: true, syncMessage: Y.encodeStateVector(doc) },
       );
       if (response.syncMessage) {
         Y.applyUpdate(doc, response.syncMessage);
@@ -162,16 +162,18 @@ export const makeRoom = () => {
         return reply;
       },
       syncReply: (appId: string) =>
-        ask<unknown>("apps:yjs:sync", { appId, syncMessage: Y.encodeStateVector(new Y.Doc()) }),
+        ask<unknown>("apps:yjs:sync", { appId, canRetry: true, syncMessage: Y.encodeStateVector(new Y.Doc()) }),
       syncReplyInto: (appId: string) => sync(appId),
       coldUpdate: (appId: string) =>
         ask<{ syncMessage: Uint8Array }>("apps:yjs:sync", {
           appId,
+          canRetry: true,
           syncMessage: Y.encodeStateVector(new Y.Doc()),
         }).syncMessage,
       coldSync: (appId: string) => {
         const response = ask<{ syncMessage?: Uint8Array; error?: string }>("apps:yjs:sync", {
           appId,
+          canRetry: true,
           syncMessage: Y.encodeStateVector(new Y.Doc()),
         });
         if (!response.syncMessage) return { error: response.error };

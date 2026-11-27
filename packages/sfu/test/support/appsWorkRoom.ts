@@ -268,7 +268,7 @@ export const makeWorkRooms = () => {
       syncPayload: (syncMessage: unknown): SyncRecord => {
         const record: SyncRecord = { peer: id, sentAt: Date.now(), answeredAt: null, reply: undefined };
         syncs.push(record);
-        fire("apps:yjs:sync", { appId: BOARD, syncMessage }, (reply: unknown) => {
+        fire("apps:yjs:sync", { appId: BOARD, canRetry: true, syncMessage }, (reply: unknown) => {
           record.answeredAt = Date.now();
           record.reply = reply;
         });
@@ -280,7 +280,7 @@ export const makeWorkRooms = () => {
         const record: SyncRecord = { peer: id, sentAt: Date.now(), answeredAt: null, reply: undefined };
         syncs.push(record);
         if (!valid) {
-          fire("apps:yjs:sync", { appId: BOARD, syncMessage: "%%%" }, (reply: unknown) => {
+          fire("apps:yjs:sync", { appId: BOARD, canRetry: true, syncMessage: "%%%" }, (reply: unknown) => {
             record.answeredAt = Date.now();
             record.reply = reply;
           });
@@ -289,7 +289,7 @@ export const makeWorkRooms = () => {
         const copy = replica;
         syncInFlight = true;
         needsSync = false;
-        fire("apps:yjs:sync", { appId: BOARD, syncMessage: Y.encodeStateVector(doc) }, (reply: unknown) => {
+        fire("apps:yjs:sync", { appId: BOARD, canRetry: true, syncMessage: Y.encodeStateVector(doc) }, (reply: unknown) => {
           record.answeredAt = Date.now();
           record.reply = reply;
           syncInFlight = false;

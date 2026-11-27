@@ -38,6 +38,7 @@ import { Admin } from "./Admin.js";
 import { Client } from "./Client.js";
 import type { ProducerType } from "./Client.js";
 import type { GameSession } from "../../server/games/engine.js";
+import type { AppDocumentPool } from "../../server/apps/documents/pool.js";
 import {
   buildWebcamCodecPolicy,
   participantsSupportWebcamCodec,
@@ -62,6 +63,7 @@ export interface RoomOptions {
   clientId: string;
   workerPid: number | null;
   webcamVp9Enabled?: boolean;
+  appDocuments?: AppDocumentPool;
 }
 
 type ProducerIndexEntry = {
@@ -380,9 +382,7 @@ export class Room {
   private _participantVideoAllowed: boolean = true;
   private _meetingInviteCodeHash: string | null = null;
   private _meetingInviteCodeVersion = "";
-  public readonly apps = new RoomApps(
-    (userId) => this.userKeysById.get(userId) ?? userId,
-  );
+  public readonly apps: RoomApps;
   // Server-authoritative game runtime (parallel to the collaborative apps
   // relay above). At most one game runs per room. The tick timer is owned here
   // so it is torn down with the room; the handler layer drives broadcasts.
@@ -465,6 +465,7 @@ export class Room {
   >();
 
   constructor(options: RoomOptions) {
+    this.apps = new RoomApps((userId) => this.userKeysById.get(userId) ?? userId, options.appDocuments);
     this.incarnationId = options.incarnationId ?? randomUUID();
     this.id = options.id;
     this.router = options.router;

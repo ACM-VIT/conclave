@@ -1,5 +1,5 @@
 export const NATIVE_EMBED_PROTOCOL_VERSION = 1;
-export const NATIVE_EMBED_BUNDLE_VERSION = "1.0.0";
+export const NATIVE_EMBED_BUNDLE_VERSION = "1.1.0";
 export const NATIVE_EMBED_HANDLER_NAME = "conclaveApp";
 
 export const NATIVE_EMBED_ORIGINS = {
@@ -10,6 +10,7 @@ export const NATIVE_EMBED_ORIGINS = {
 export const NATIVE_EMBED_LIMITS = {
   envelopeCharacters: 1_572_864,
   updateBytes: 262_144,
+  remoteUpdateBytes: 1_048_576,
   awarenessBytes: 65_536,
   stateVectorBytes: 65_536,
   snapshotBytes: 1_048_576,
@@ -21,7 +22,7 @@ export const NATIVE_EMBED_LIMITS = {
   executedCommands: 4_096,
 } as const;
 
-export const EMBED_TO_NATIVE_TYPES = ["ready", "sync", "update", "awareness", "status", "ack", "resize"] as const;
+export const EMBED_TO_NATIVE_TYPES = ["ready", "sync", "verifySaved", "editsPending", "update", "awareness", "status", "ack", "resize"] as const;
 export const NATIVE_TO_EMBED_TYPES = [
   "snapshot",
   "update",
@@ -29,6 +30,8 @@ export const NATIVE_TO_EMBED_TYPES = [
   "status",
   "resync",
   "close",
+  "prepareToLeave",
+  "savedSnapshot",
   "setTool",
   "setColor",
   "setStrokeWidth",
@@ -489,6 +492,9 @@ export const decodeEmbedMessage = (
       if (!vector.ok) return vector;
       return { ok: true, envelope };
     }
+    case "verifySaved":
+    case "editsPending":
+      return { ok: true, envelope };
     case "update":
     case "awareness": {
       const limit = envelope.type === "update" ? NATIVE_EMBED_LIMITS.updateBytes : NATIVE_EMBED_LIMITS.awarenessBytes;

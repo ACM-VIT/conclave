@@ -20,6 +20,7 @@ interface PresentedAppProps {
   appName: string;
   appKey: string;
   syncStatus: AppSyncStatus;
+  frozen?: boolean;
   onRetrySync: () => void;
   rejectedChange: { at: number; reason: string } | null;
 }
@@ -56,8 +57,17 @@ function AppState({
   appKey,
   syncStatus,
   onRetrySync,
+  frozen = false,
 }: Omit<PresentedAppProps, "rejectedChange">): ReactNode {
-  if (syncStatus === "synced") return <App key={appKey} />;
+  const [readyKey, setReadyKey] = useState<string | null>(null);
+  useEffect(() => {
+    if (syncStatus === "synced") setReadyKey(appKey);
+    else if (syncStatus === "failed" || appKey !== readyKey) setReadyKey(null);
+  }, [appKey, syncStatus, readyKey]);
+
+  if (syncStatus === "synced" || (syncStatus === "syncing" && appKey === readyKey)) {
+    return <div className="contents" inert={frozen}><App key={appKey} /></div>;
+  }
   if (syncStatus === "failed") {
     return (
       <div

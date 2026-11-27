@@ -17,16 +17,19 @@ export type WriteOutcome = WriteRefusal | null;
 
 export type Pending<T> = T | Promise<T>;
 
+export type WireBatch = { readonly length: number; readonly readBatch: () => Uint8Array[] | null };
+
 export type SlotWrite = {
   readonly sender: Socket;
   readonly appId: string;
   readonly key: string;
   readonly host: boolean;
+  readonly direct?: boolean;
   readonly run: (updates: Uint8Array[]) => Pending<WriteOutcome[]>;
   readonly finish: (outcome: WriteOutcome) => void;
 };
 
-type ReadyWrite = { work: SlotWrite; update: Uint8Array };
+type ReadyWrite = { work: SlotWrite; updates: Uint8Array[] };
 type Slot = { first: SlotWrite; writes: ReadyWrite[]; bytes: number; admittedAt: number };
 
 type Job = { sender: Socket; appId: string; writes: SlotWrite[] };
@@ -69,6 +72,7 @@ export class RoomAppsScheduler {
   private slots = new Map<Socket, Slot>();
   private barriers: Barrier[] = [];
   private job: Job | null = null;
+  private directJobs = new Set<Job>();
   private finished = new WeakSet<SlotWrite>();
   private timer: ReturnType<typeof setTimeout> | null = null;
   private pumping = false;
@@ -81,7 +85,7 @@ export class RoomAppsScheduler {
   }
 
   get running(): boolean {
-    return this.job !== null;
+    return this.job !== null || this.directJobs.size > 0;
   }
 
   slotSummaries(): { updates: number; bytes: number; age: number }[] {
@@ -93,15 +97,24 @@ export class RoomAppsScheduler {
     }));
   }
 
-  submit(write: SlotWrite, wire: WireBytes): void {
+  submit(write: SlotWrite, wire: WireBytes | WireBatch): void {
     if (this.closed) {
       this.finish(write, "not-live");
       return;
     }
+    if (write.direct) {
+      if (!takeToken(write.sender, UPDATE_BUDGET, RATE_LIMITS.appsYjsUpdate)) {
+        this.finish(write, "rate-limited");
+        return;
+      }
+      const updates = this.read(write, wire);
+      if (updates) this.execute(write, [{ work: write, updates }]);
+      return;
+    }
     const slot = this.slots.get(write.sender);
     if (!slot && !this.job && takeToken(write.sender, UPDATE_BUDGET, RATE_LIMITS.appsYjsUpdate)) {
-      const update = this.read(write, wire);
-      if (update) this.execute(write, [{ work: write, update }]);
+      const updates = this.read(write, wire);
+      if (updates) this.execute(write, [{ work: write, updates }]);
       return;
     }
     if (
@@ -113,13 +126,12 @@ export class RoomAppsScheduler {
     }
     const read = this.read(write, wire);
     if (!read) return;
-    const update = new Uint8Array(read);
-    const ready = { work: write, update };
+    const ready = { work: write, updates: read.map((update) => new Uint8Array(update)) };
     if (slot) {
       slot.writes.push(ready);
-      slot.bytes += update.buffer.byteLength;
+      slot.bytes += wire.length;
     } else {
-      this.slots.set(write.sender, { first: write, writes: [ready], bytes: update.buffer.byteLength, admittedAt: Date.now() });
+      this.slots.set(write.sender, { first: write, writes: [ready], bytes: wire.length, admittedAt: Date.now() });
       this.schedule();
     }
   }
@@ -164,6 +176,7 @@ export class RoomAppsScheduler {
     if (appId !== null) {
       for (const [sender, slot] of this.slots) if (slot.first.appId === appId) senders.add(sender);
       if (this.job?.appId === appId) senders.add(this.job.sender);
+      for (const job of this.directJobs) if (job.appId === appId) senders.add(job.sender);
     }
     this.barriers.push({ command, senders, deadline: Date.now() + BARRIER_DEADLINE_MS });
     this.pump();
@@ -181,6 +194,8 @@ export class RoomAppsScheduler {
     this.job = null;
     for (const slot of slots) this.finishSlot(slot, "not-live");
     if (job) this.finishAll(job.writes, "not-live");
+    for (const pending of this.directJobs) this.finishAll(pending.writes, "not-live");
+    this.directJobs.clear();
     for (const barrier of barriers) settle("App stage command", barrier.command.cancel);
   }
 
@@ -198,10 +213,15 @@ export class RoomAppsScheduler {
     for (const { work } of slot.writes) this.finish(work, outcome);
   }
 
-  private read(write: SlotWrite, wire: WireBytes): Uint8Array | null {
+  private read(write: SlotWrite, wire: WireBytes | WireBatch): Uint8Array[] | null {
     try {
-      const update = wire.read();
-      if (update?.length === wire.length) return update;
+      if ("readBatch" in wire) {
+        const batch = wire.readBatch();
+        if (batch?.reduce((size, update) => size + update.length, 0) === wire.length) return batch;
+      } else {
+        const update = wire.read();
+        if (update?.length === wire.length) return [update];
+      }
     } catch (error) {
       Logger.warn("[Apps] Reading an app update failed", error);
     }
@@ -211,7 +231,7 @@ export class RoomAppsScheduler {
 
   private execute(first: SlotWrite, ready: ReadyWrite[]): void {
     const writes = ready.map(({ work }) => work);
-    const updates = ready.map(({ update }) => update);
+    const updates = ready.flatMap((entry) => entry.updates);
     let result: Pending<WriteOutcome[]> | null = null;
     settle("App update", () => {
       result = first.run(updates);
@@ -222,7 +242,8 @@ export class RoomAppsScheduler {
       return;
     }
     const job: Job = { sender: first.sender, appId: first.appId, writes };
-    this.job = job;
+    if (first.direct) this.directJobs.add(job);
+    else this.job = job;
     ran.then(
       (outcomes) => this.completeJob(job, outcomes),
       (error: unknown) => {
@@ -234,8 +255,8 @@ export class RoomAppsScheduler {
 
   private completeJob(job: Job, outcomes: WriteOutcome[] | null): void {
     this.complete(job.writes, outcomes);
-    if (this.job !== job) return;
-    this.job = null;
+    if (this.job === job) this.job = null;
+    else if (!this.directJobs.delete(job)) return;
     this.pump();
   }
 
@@ -255,7 +276,9 @@ export class RoomAppsScheduler {
 
   private waitsOn(barrier: Barrier): boolean {
     for (const sender of [...barrier.senders]) {
-      if (!this.slots.has(sender) && this.job?.sender !== sender) barrier.senders.delete(sender);
+      if (!this.slots.has(sender) && this.job?.sender !== sender && ![...this.directJobs].some((job) => job.sender === sender)) {
+        barrier.senders.delete(sender);
+      }
     }
     return barrier.senders.size > 0 && Date.now() < barrier.deadline;
   }

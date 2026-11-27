@@ -61,7 +61,7 @@ struct NativeAppHostBody: View {
         .onChange(of: reduceMotion) { _, value in host.session?.setReduceMotion(value) }
         .onChange(of: host.model.wantsWebView) { _, wants in
 
-            if !wants && !host.model.appSessionId.isEmpty {
+            if !wants && !host.isHiddenLocally && !host.model.appSessionId.isEmpty {
                 ActivityWebViewRegistry.shared.release(appSessionId: host.model.appSessionId)
             }
         }

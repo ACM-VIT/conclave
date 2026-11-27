@@ -12,6 +12,8 @@ export type AppsState = {
   /** The app presented on the room's stage. Only hosts change it. */
   activeAppId: string | null;
   locked: boolean;
+  roomId?: string;
+  notInRoom?: true;
   /**
    * Bumped by every change to this state. Null on an older SFU, which
    * erases an app's document when it leaves the stage and cannot clear one.
@@ -30,12 +32,16 @@ export type AppsState = {
 export type AppsSyncPayload = {
   appId: string;
   syncMessage: Uint8Array;
+  canRetry?: boolean;
+  wholeChanges?: true;
 };
 
 export type AppsSyncResponse = {
   syncMessage: Uint8Array;
   stateVector?: Uint8Array;
   awarenessUpdate?: Uint8Array;
+  stagesParts?: true;
+  takesUpdateLists?: true;
 };
 
 export type AppsSyncError = {
@@ -46,11 +52,23 @@ export type AppsSyncError = {
 
 export type AppSyncStatus = "idle" | "syncing" | "synced" | "failed";
 
-export type AppsUpdatePayload = {
-  appId: string;
-  update: Uint8Array;
-  replicaId?: string;
+export type AppDocuments = {
+  version: number;
+  doc: (appId: string) => Y.Doc;
+  awareness: (appId: string) => Awareness;
+  writeOnce: (appId: string, key: string, write: (doc: Y.Doc) => void) => void;
 };
+
+export type AppsUpdatePart = {
+  id: string;
+  index: number;
+  count: number;
+};
+
+export type AppsUpdatePayload = { appId: string; replicaId?: string } & (
+  | { update: Uint8Array; part?: AppsUpdatePart }
+  | { updates: Uint8Array[] }
+);
 
 export type AppsRefusedPayload = {
   appId: string;
@@ -70,6 +88,7 @@ export type AppsStageErrorCode = "stale_revision" | "room_full";
 export type AppsOpenPayload = {
   appId: string;
   expectedRevision?: number;
+  expectedRoomId?: string;
 };
 
 export type AppsOpenResponse = {
@@ -81,6 +100,7 @@ export type AppsOpenResponse = {
 
 export type AppsClosePayload = {
   expectedRevision: number;
+  expectedRoomId?: string;
 };
 
 export type AppsCloseResponse = {
@@ -135,13 +155,12 @@ export type AppsContextValue = {
   refreshState: () => void;
   getDoc: (appId: string) => Y.Doc;
   getAwareness: (appId: string) => Awareness;
-  /**
-   * Where the presented app's sync stands: `synced` once the room's reply has
-   * filled its local document, `failed` after the retries ran out.
-   */
   syncStatus: AppSyncStatus;
-  /** Starts the presented app's sync over, as after `failed`. */
   retrySync: () => void;
+  documents: AppDocuments;
+  rejectedChangeAt: number | null;
+  rejectedChangeReason: string | null;
+  isRebuilding: boolean;
   /**
    * Changes with every new local copy of the presented app's document. Hosts
    * mount the app only when `syncStatus` is `synced`, keyed by this, so an app

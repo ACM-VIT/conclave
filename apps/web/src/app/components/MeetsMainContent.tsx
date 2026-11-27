@@ -666,12 +666,13 @@ export default function MeetsMainContent({
     presentedDocKey,
     syncStatus: appSyncStatus,
     retrySync: retryAppSync,
-    rejectedChange: rejectedAppChange,
     apps,
     presentApp,
     closeApp,
     setLocked,
     refreshState,
+    rejectedChange: rejectedAppChange,
+    isRebuilding: isAppRebuilding,
   } = useApps();
   const { isActive: isGameActive, refresh: refreshGameState } = useGame();
   // Q&A comes from the Q&A app once this connection has the app's view, and
@@ -2764,6 +2765,7 @@ export default function MeetsMainContent({
             appKey={presentedDocKey ?? ""}
             syncStatus={appSyncStatus}
             onRetrySync={retryAppSync}
+            frozen={isAppRebuilding}
             rejectedChange={rejectedAppChange}
           />
         </MeetingAppLayout>

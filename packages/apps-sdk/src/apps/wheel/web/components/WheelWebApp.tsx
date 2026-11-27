@@ -6,6 +6,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import type * as Y from "yjs";
 import { useAppDoc } from "../../../../sdk/hooks/useAppDoc";
 import { useApps } from "../../../../sdk/hooks/useApps";
 import {
@@ -16,6 +17,7 @@ import {
   getEntries,
   getHistory,
   getRemoveWinnerOnDone,
+  getSpin,
   recordResult,
   removeEntryById,
   reorderEntries,
@@ -94,7 +96,7 @@ const readSoundPreference = (): boolean => {
 
 export function WheelWebApp() {
   const { doc, locked } = useAppDoc(APP_ID);
-  const { user, isAdmin, isReadOnly, participants } = useApps();
+  const { user, isAdmin, isReadOnly, participants, documents } = useApps();
   const { entries, waitingCount, spin, history, removeWinnerOnDone } = useWheelDocState(doc);
 
   const canEdit = !isReadOnly && (!locked || Boolean(isAdmin));
@@ -194,33 +196,34 @@ export function WheelWebApp() {
       setLandedSpinId(settled.spinId);
       const winner = settled.entries[settled.winnerIndex];
       if (!winner) return;
+      const isSpinner = Boolean(user?.id) && user?.id === settled.spunById;
+      const isRecordedIn = (target: Y.Doc) =>
+        getHistory(target).some((result) => result.spinId === settled.spinId);
+      const recorded = () => isRecordedIn(doc);
+      const finalizeResult = () =>
+        documents.writeOnce(APP_ID, `result:${settled.spinId}`, (live) => {
+          if (getSpin(live)?.spinId !== settled.spinId || isRecordedIn(live)) return;
+          recordResult(live, {
+            spinId: settled.spinId,
+            label: winner.label,
+            at: Date.now(),
+            byName: settled.spunByName,
+          });
+          if (getRemoveWinnerOnDone(live)) removeEntryById(live, winner.id);
+        });
       spinCountRef.current += 1;
       setAnnouncement(`Spin ${spinCountRef.current} winner: ${slotLabel(settled, settled.winnerIndex)}`);
       if (!fresh) {
         setRevealedSpinId(settled.spinId);
+        if (isSpinner && canEditRef.current && !recorded()) finalizeResult();
         return;
       }
 
-      const isSpinner = Boolean(user?.id) && user?.id === settled.spunById;
-      const finalizeResult = () => {
-        recordResult(doc, {
-          spinId: settled.spinId,
-          label: winner.label,
-          at: Date.now(),
-          byName: settled.spunByName,
-        });
-        if (getRemoveWinnerOnDone(doc)) {
-          removeEntryById(doc, winner.id);
-        }
-      };
       if (!isSpinner && canEditRef.current) {
         const jitteredDelay = RESULT_FAILOVER_MS + Math.random() * 900;
         failoverTimerRef.current = setTimeout(() => {
           failoverTimerRef.current = null;
-          const recorded = getHistory(doc).some(
-            (result) => result.spinId === settled.spinId
-          );
-          if (!recorded && canEditRef.current) finalizeResult();
+          if (!recorded() && canEditRef.current) finalizeResult();
         }, jitteredDelay);
       }
 
@@ -231,7 +234,7 @@ export function WheelWebApp() {
         if (isSpinner && canEditRef.current) finalizeResult();
       }, REVEAL_DELAY_MS);
     },
-    [doc, user]
+    [doc, user, documents]
   );
 
   const rosterLabels = useMemo(() => {

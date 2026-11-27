@@ -1126,6 +1126,7 @@ export interface AppsState {
    */
   docGeneration: number | null;
   roomId?: string;
+  notInRoom?: true;
 }
 
 /** Why a stage command was refused, for clients to explain it. */
@@ -1134,6 +1135,7 @@ export type AppsStageErrorCode = "stale_revision" | "room_full";
 export interface AppsOpenData {
   appId: string;
   expectedRevision?: number;
+  expectedRoomId?: string;
   options?: Record<string, unknown>;
 }
 
@@ -1147,6 +1149,7 @@ export interface AppsOpenResponse {
 
 export interface AppsCloseData {
   expectedRevision?: number;
+  expectedRoomId?: string;
 }
 
 export interface AppsCloseResponse {
@@ -1183,12 +1186,16 @@ export interface AppsLockResponse {
 export interface AppsSyncData {
   appId: string;
   syncMessage: Uint8Array;
+  canRetry?: boolean;
+  wholeChanges?: boolean;
 }
 
 export interface AppsSyncResponse {
   syncMessage: Uint8Array;
   stateVector?: Uint8Array;
   awarenessUpdate?: Uint8Array;
+  stagesParts?: true;
+  takesUpdateLists?: true;
 }
 
 export interface AppsSyncError {
@@ -1197,10 +1204,18 @@ export interface AppsSyncError {
   retryAfterMs?: number;
 }
 
+export interface AppsUpdatePart {
+  id: string;
+  index: number;
+  count: number;
+}
+
 export interface AppsUpdateData {
   appId: string;
-  update: Uint8Array;
+  update?: Uint8Array;
+  updates?: Uint8Array[];
   replicaId?: string;
+  part?: AppsUpdatePart;
 }
 
 export interface AppsRefusedData {
