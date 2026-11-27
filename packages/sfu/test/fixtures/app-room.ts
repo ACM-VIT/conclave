@@ -101,10 +101,10 @@ export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChang
   const room = newRoom(state, id);
   const context = enter(state, room, self, `a#${id}`);
   registerAppsHandlers(context);
-  const requestSync = (holder: Y.Doc, canRetry = true, wholeChanges = false) =>
+  const requestSync = (holder: Y.Doc | Uint8Array, canRetry = true, wholeChanges = false) =>
     call<AppsSyncResponse | AppsSyncError>("apps:yjs:sync", {
       appId,
-      syncMessage: Y.encodeStateVector(holder),
+      syncMessage: holder instanceof Y.Doc ? Y.encodeStateVector(holder) : holder,
       canRetry,
       ...(wholeChanges ? { wholeChanges } : {}),
     });

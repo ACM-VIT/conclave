@@ -488,6 +488,9 @@ export const decodeEmbedMessage = (
       return { ok: true, envelope };
     }
     case "sync": {
+      if (payload.purpose !== undefined && payload.purpose !== "wheel-add-confirmation") {
+        return { ok: false, reason: "badPayload" };
+      }
       const vector = bytesFromBase64(payload.stateVector, NATIVE_EMBED_LIMITS.stateVectorBytes);
       if (!vector.ok) return vector;
       return { ok: true, envelope };

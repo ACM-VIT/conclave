@@ -187,6 +187,45 @@ struct ACT7AppHostTests {
         }
     }
 
+    @Test func wheelConfirmationReadsTheRoomWithoutResettingTheReadyRenderer() async throws {
+        let wire = Wire()
+        let relay = session(wire, appId: "wheel")
+        #expect(ready(relay) == .none)
+        await settle { relay.snapshotDelivered }
+        let before = wire.events.count
+        let request = envelope(relay, "sync", ["stateVector": "AQ==", "purpose": "wheel-add-confirmation"],
+                               requestId: "wheel-confirm-1")
+        #expect(relay.receiveFromEmbed(raw: request, origin: AppBridgeProtocol.iosOrigin, isMainFrame: true) == .none)
+        #expect(relay.snapshotDelivered)
+        await settle { wire.syncs.count == 2 && wire.types().last == "snapshot" }
+        let response = try #require(wire.delivered.last)
+        let snapshot = try #require(AppBridgeCodec.jsonObject(response))
+        #expect(snapshot["requestId"] as? String == "wheel-confirm-1")
+        #expect((snapshot["payload"] as? [String: Any])?["syncMessage"] as? String == "AQI=")
+        #expect(wire.syncs == [Data([0]), Data([1])])
+        #expect(wire.events.count == before)
+        #expect(relay.snapshotDelivered && relay.isReady)
+    }
+
+    @Test(arguments: ["disconnect", "switch", "offline"])
+    func aWheelConfirmationCannotSyncAfterItsConnectionOrSessionEnds(_ exit: String) async {
+        let wire = Wire()
+        let relay = session(wire, appId: "wheel")
+        #expect(ready(relay) == .none)
+        await settle { relay.snapshotDelivered }
+        #expect(wire.syncs == [Data([0])])
+        if exit == "offline" { relay.setConnection(live: false) }
+
+        let request = envelope(relay, "sync", ["stateVector": "AQ==", "purpose": "wheel-add-confirmation"],
+                               requestId: "wheel-confirm-1")
+        #expect(relay.receiveFromEmbed(raw: request, origin: AppBridgeProtocol.iosOrigin, isMainFrame: true) == .none)
+        if exit == "disconnect" { relay.setConnection(live: false) }
+        if exit == "switch" { relay.begin(appId: "whiteboard", callSessionId: Self.call, isReadOnly: false) }
+
+        await settle { wire.syncs.count > 1 }
+        #expect(wire.syncs == [Data([0])])
+    }
+
     @Test func readyGetsHostStatusThenTheSnapshotThenBufferedRoomBytes() async throws {
         let wire = Wire()
         let relay = session(wire)
