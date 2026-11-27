@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import type { Socket } from "socket.io-client";
 import { SOCKET_TIMEOUT_MS } from "../lib/constants";
+import { logCallError } from "../lib/call-error-capture";
 
 interface UseMeetHandRaiseOptions {
   isHandRaised: boolean;
@@ -48,12 +49,12 @@ export function useMeetHandRaise({
           response: { success: boolean } | { error: string } | undefined,
         ) => {
           if (error || !response) {
-            console.error("[Meets] Raise hand got no acknowledgement", error);
+            logCallError("[Meets] Raise hand got no acknowledgement", error);
             rollBack();
             return;
           }
           if ("error" in response) {
-            console.error("[Meets] Raise hand error:", response.error);
+            logCallError("[Meets] Raise hand error", response.error);
             rollBack();
           }
         }

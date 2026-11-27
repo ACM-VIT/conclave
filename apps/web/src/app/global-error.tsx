@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import ErrorStateView from "./components/ErrorStateView";
+import { telemetry } from "./lib/telemetry";
 
 export default function GlobalError({
   error,
@@ -12,6 +13,11 @@ export default function GlobalError({
 }) {
   useEffect(() => {
     console.error("[GlobalError]", error);
+    telemetry.captureException(error, {
+      source: "react_error_boundary",
+      boundary: "root",
+      digest: error.digest,
+    });
   }, [error]);
 
   return (

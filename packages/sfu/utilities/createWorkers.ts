@@ -3,6 +3,7 @@ import * as mediasoup from "mediasoup";
 import type { TransportListenInfo, WebRtcServer, Worker } from "mediasoup/types";
 import type { config } from "../config/config.js";
 import { Logger } from "./loggers.js";
+import { captureServerException } from "../server/analytics/posthog.js";
 import type { WorkerPlan } from "./workerPlan.js";
 
 type WorkerMedia = {
@@ -58,18 +59,30 @@ const spawnWorker = async (
   }
 };
 
+// A slot keeps retrying for as long as its port stays taken. Attempts 1, 2,
+// 4, 8 and so on are reported, so every outage reaches PostHog and a long one
+// costs a few reports an hour.
+const isReportedAttempt = (attempt: number): boolean => (attempt & (attempt - 1)) === 0;
+
 const respawnWorker = async (
   media: WorkerMedia,
   port: number,
+  label: string,
   signal?: AbortSignal,
 ): Promise<Worker> => {
   let delayMs = INITIAL_RESPAWN_DELAY_MS;
-  for (;;) {
+  for (let attempt = 1; ; attempt += 1) {
     try {
       return await spawnWorker(media, port, signal);
     } catch (error) {
       signal?.throwIfAborted();
       Logger.warn(`Worker on WebRTC port ${port} failed to respawn; retrying in ${delayMs} ms`, error);
+      if (isReportedAttempt(attempt)) {
+        captureServerException(error, {
+          source: "worker_respawn_failed",
+          properties: { worker_label: label, respawn_attempt: attempt },
+        });
+      }
     }
     await delay(delayMs, undefined, { signal, ref: false });
     delayMs = Math.min(delayMs * 2, MAX_RESPAWN_DELAY_MS);
@@ -105,9 +118,13 @@ const createWorkers = async (
   // same port and worker index while other slots continue serving rooms.
   const attachDiedHandler = (worker: Worker, index: number): void => {
     const label = String(index);
-    worker.once("died", () => {
+    worker.once("died", (error) => {
       if (signal?.aborted) return;
       Logger.error(`Worker ${label} has died; recreating a replacement`);
+      captureServerException(error, {
+        source: "worker_died",
+        properties: { worker_label: label, worker_pid: worker.pid },
+      });
       void Promise.resolve().then(() => options.onWorkerDied?.(worker, label)).catch(
         (error) => {
           Logger.error(
@@ -115,7 +132,7 @@ const createWorkers = async (
           );
         },
       );
-      respawnWorker(options, rtcMinPort + index, signal)
+      respawnWorker(options, rtcMinPort + index, label, signal)
         .then((replacement) => {
           if (signal?.aborted) {
             replacement.close();
@@ -130,6 +147,10 @@ const createWorkers = async (
           Logger.error(
             `Failed to recreate dead worker ${label}: ${String(err)}`,
           );
+          captureServerException(err, {
+            source: "worker_respawn_failed",
+            properties: { worker_label: label },
+          });
         });
     });
   };

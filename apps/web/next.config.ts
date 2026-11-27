@@ -2,6 +2,7 @@ import type { NextConfig } from "next";
 import { execSync } from "node:child_process";
 import path from "path";
 import { fileURLToPath } from "url";
+import { sourceMapUploadRequested } from "./scripts/posthog-sourcemaps-policy.mjs";
 import {
   buildSecurityHeaders,
   buildViewerPageHostRules,
@@ -30,6 +31,11 @@ const conclaveClientVersion =
   process.env.GITHUB_SHA ||
   readGitSha() ||
   "local";
+// Browser source maps are built only by `cf:build`, which uploads them to
+// PostHog error tracking and then deletes them in
+// scripts/upload-posthog-sourcemaps.mjs, so they are never served.
+const uploadPostHogSourceMaps =
+  process.env.POSTHOG_SOURCEMAPS === "upload" && sourceMapUploadRequested(process.env);
 const yjsTurbopackAlias = "./node_modules/yjs/dist/yjs.mjs";
 const yProtocolsTurbopackAlias = "./node_modules/y-protocols";
 const yjsWebpackAlias = path.resolve(
@@ -67,8 +73,12 @@ const noStoreResponseHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  // posthog-js posts to /ingest/e/ (app/ingest), and a redirect to drop the
+  // slash would cost each batch a round trip and can lose a page-close beacon.
+  skipTrailingSlashRedirect: true,
   reactStrictMode: true,
   reactCompiler: true,
+  productionBrowserSourceMaps: uploadPostHogSourceMaps,
   deploymentId:
     conclaveClientVersion === "local" ? undefined : conclaveClientVersion,
   env: {
