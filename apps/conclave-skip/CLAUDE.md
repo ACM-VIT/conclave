@@ -727,10 +727,10 @@ Fixed 2026-10-22 and guarded by `testNativeCallCorrectnessBlockersStayFixed`:
   camera-off intent (`localVideoOffIntentGeneration`, camera operations
   only) and, once it has one, its capture session. `holdsCapture(claim)` is
   the one check, and it runs after every suspension point of a camera start,
-  camera switch and share start, and in every capture callback. Only an
-  operation that still holds its claim may write shared state:
-  `activeCameraFacing`, the capture fields, `LocalPreviewController`'s call
-  camera interruption, or a "device busy" failure. The device wait
+  camera switch and share start. Only an operation that still holds its
+  claim may write shared state: `activeCameraFacing` (except a switch result,
+  below), the capture fields, `LocalPreviewController`'s call camera
+  interruption, or a "device busy" failure. The device wait
   (`awaitCaptureDeviceFree`) returns `free`, `busy` or `stale`. A stale
   operation returns or throws "session replaced" without touching anything,
   and only a holder calls `failCaptureDeviceBusy`. The desired camera is read
@@ -741,18 +741,39 @@ Fixed 2026-10-22 and guarded by `testNativeCallCorrectnessBlockersStayFixed`:
   because the capturer is not live yet; the start applies it through the
   normal switch once it has published (`applyCameraFacingChosenDuringStart`).
   A camera switch whose facing a later flip already reverted does nothing.
+- A release follows the capture session, never the generation. A start owns
+  the `CaptureSession` it created until it publishes it (`published`, set
+  where it commits `videoProducer` or `screenProducer`); after that the call
+  owns it. A start that fails or turns stale releases its session only if
+  `cameraCapture` or `screenCapture` still holds that session, whatever the
+  generation (`clearLocalWebcamCaptureState`, `releaseScreenCapture`), and
+  leaves any other session alone. Every reconfigure leaves each capture with
+  an owner that can release it: `cleanup()` releases all of them, and
+  `configure()` releases every unpublished session at once
+  (`releaseUnpublishedCaptures`), because its start can no longer publish,
+  and hands each published one to the new session, whose stop, server close,
+  projection stop and `cleanup()` still release it. Releasing a share
+  releases its own consent and service too
+  (`ScreenCaptureManager.stopCapture(ownedConsent)`). The case that broke:
+  a share started while the Device load waited on an old lane, then a
+  recovery `configure()` (the view model skips `cleanup()` while
+  `isConfigured` is false) left `screenCapture` set, and every later share
+  failed with "already starting or active".
 - Every capture callback applies its effect through one function on the main
-  thread (`applyCaptureCallback`), which checks the callback's claim
-  (`CaptureSession`, held in `cameraCapture` and `screenCapture` and cleared
-  by the release, and its capturer still the installed one) at the moment of
-  the mutation. That covers the projection stop, the camera
-  events handler (`cameraEvents(capture)`: open, error, disconnect) and the
-  camera switch's done and error. Never check on the callback's thread and
-  then act: an old projection stop passed its check, waited on the share
-  manager's lock, and then cleared the next share's consent. A camera switch
-  that resumes after its session ended changes nothing, and the switch
-  re-checks the session before it restarts capture, so it never calls into a
-  retired capturer. The capturer observer (`SessionCapturerObserver`) checks
+  thread (`applyCaptureCallback`), which checks the callback's session at the
+  moment of the mutation (`isCurrentCapture`: still held in `cameraCapture`
+  or `screenCapture`, which the release clears, its capturer still the
+  installed one, and for a share its consent still the current one), not the
+  generation, so a session `configure()` handed over still hears its own
+  projection stop and camera events. That covers the projection stop, the
+  camera events handler (`cameraEvents(capture)`: open, error, disconnect)
+  and the camera switch's done and error, which records the facing the
+  camera reached even when the switch's own claim went stale. Never check on
+  the callback's thread and then act: an old projection stop passed its
+  check, waited on the share manager's lock, and then cleared the next
+  share's consent. A camera switch that resumes after its session ended
+  changes nothing, and the switch re-checks the session before it restarts
+  capture, so it never calls into a retired capturer. The capturer observer (`SessionCapturerObserver`) checks
   the session on the capture thread itself, because frames are too frequent
   to post and each session forwards only to its own source.
 - Renderers attach sinks through `VideoSinkAttachment`, and an attach skips
