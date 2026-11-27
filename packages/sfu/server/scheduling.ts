@@ -531,7 +531,7 @@ export const internalBusyIntervals = (
     .flatMap((meeting) => {
       const candidate = meeting.eventTypeId ? eventTypeOf(meeting.eventTypeId) : null;
       const eventType = candidate && servedClientId(candidate.clientId) === hostNamespace ? candidate : null;
-      if (!meetingHasHost(meeting, profile) && !meetingMatchesProfile(meeting, profile, eventType)) return [];
+      if (eventType?.profileId !== profile.id && !meetingHasHost(meeting, profile)) return [];
       return [{
         startAt:
           meeting.scheduledStartAt - (eventType?.bufferBeforeMinutes ?? 0) * MINUTE_MS,
