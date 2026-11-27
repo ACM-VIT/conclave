@@ -333,19 +333,21 @@ test("two deploys at once on one host: the second refuses and only one instance 
   });
 });
 
-test("a build failure does not leave the only healthy SFU drained by an earlier deploy", async () => {
-  await withSfus({ "sfu-a": { draining: true } }, async (sfus) => {
-    const result = await deploy(sfus, {
-      env: { DEPLOY_TEST_NO_COMMIT_IMAGES: "1", DEPLOY_TEST_BUILD_FAIL: "1" },
-      journals: { "sfu-a": { phase: "drained", lkg: "sha256:running", wasDraining: "false" } },
+for (const phase of ["drained", "candidate", "rollback", "passed", "promoting"]) {
+  test(`a build failure does not leave the only healthy SFU drained by an earlier deploy (${phase})`, async () => {
+    await withSfus({ "sfu-a": { draining: true } }, async (sfus) => {
+      const result = await deploy(sfus, {
+        env: { DEPLOY_TEST_NO_COMMIT_IMAGES: "1", DEPLOY_TEST_BUILD_FAIL: "1" },
+        journals: { "sfu-a": { phase, lkg: "sha256:running", prevLkg: "sha256:running", candidate: "sha256:target", wasDraining: "false" } },
+      });
+      assert.equal(result.code, 1, result.output);
+      assert.ok(result.docker.some((args) => args[0] === "build"), result.output);
+      assert.equal(sfus["sfu-a"].draining, false, result.output);
+      assert.equal(sfus["sfu-a"].image, "sha256:running", result.output);
+      assert.deepEqual(sfus["sfu-a"].recreates, [], result.output);
     });
-    assert.equal(result.code, 1, result.output);
-    assert.ok(result.docker.some((args) => args[0] === "build"), result.output);
-    assert.equal(sfus["sfu-a"].draining, false, result.output);
-    assert.equal(sfus["sfu-a"].image, "sha256:running", result.output);
-    assert.deepEqual(sfus["sfu-a"].recreates, [], result.output);
   });
-});
+}
 
 test("a rerun after an interrupted pair of deploys puts a healthy instance back into service and continues", async () => {
   await withSfus({ "sfu-a": { draining: true }, "sfu-b": { draining: true } }, async (sfus) => {
