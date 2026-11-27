@@ -959,6 +959,7 @@ describe("app documents", { timeout: 30_000 }, () => {
 
     fixture.release();
     expect(await upload).toEqual({
+      receipt: { committed: true },
       inbox: [{ event: "apps:yjs:update", payload: { appId: "wheel", update } }],
       relayed: 1,
     });

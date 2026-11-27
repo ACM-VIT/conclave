@@ -391,7 +391,7 @@ final class ActiveAppSession {
             leaveReply = { saved in continuation.resume(returning: saved) }
             leaveTimeout = Task { @MainActor [weak self] in
                 guard let self else { return }
-                await self.sleep(8_000)
+                await self.sleep(8_000.0)
                 if Task.isCancelled { return }
                 self.finishLeave(requestId: id, saved: false)
             }
