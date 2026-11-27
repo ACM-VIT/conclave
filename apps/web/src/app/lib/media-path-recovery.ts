@@ -674,6 +674,7 @@ export type MediaPathRecoveryEvent =
   | { type: "trouble"; direction: MediaDirection }
   | { type: "transport-connected"; direction: MediaDirection; transportId: string }
   | { type: "path-sampled"; direction: MediaDirection; evidence: PathEvidence }
+  | { type: "send-stream-disabled"; stream: SentStream }
   | { type: "rebuild-started"; direction: MediaDirection; transportId: string }
   | { type: "escalation-settled"; direction: MediaDirection; transportId: string }
   | { type: "user-retry" }
@@ -697,6 +698,13 @@ export const advanceMediaPathRecovery = (
           }),
         recovery,
       );
+    case "send-stream-disabled": {
+      const knownFailing = recovery.producer.failingStreams;
+      if (!knownFailing.includes(event.stream)) return recovery;
+      return patchDirection(recovery, "producer", {
+        failingStreams: knownFailing.filter((stream) => stream !== event.stream),
+      });
+    }
     case "path-sampled": {
       const knownFailing = recovery[event.direction].failingStreams;
       return pathCarriesWhatIsSent(event.evidence, knownFailing)

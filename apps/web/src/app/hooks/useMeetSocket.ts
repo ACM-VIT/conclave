@@ -1584,7 +1584,10 @@ export function useMeetSocket({
 
   useEffect(() => {
     isCameraOffRef.current = isCameraOff;
-  }, [isCameraOff]);
+    if (isCameraOff) {
+      updateMediaPathRecovery({ type: "send-stream-disabled", stream: "camera" });
+    }
+  }, [isCameraOff, updateMediaPathRecovery]);
 
   const shouldPlayJoinLeaveSound = useCallback(
     (type: "join" | "leave", targetUserId: string) => {
