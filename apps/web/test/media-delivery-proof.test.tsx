@@ -78,6 +78,44 @@ describe("a send path rebuilt while no TURN credentials were usable", () => {
     expect(await waitFor(target, () => target.health.producer === "healthy", 20_000)).toBe(true);
   });
 
+  it.each(["before", "during"] as const)(
+    "keeps microphone audio on the same transport when the failed camera is turned off %s relay confirmation",
+    async (when) => {
+      const { target, second } = await rebuiltWithoutTurn((call) => {
+        call.droppedSendKinds.add("video");
+      });
+      expect(await waitFor(target, () => target.health.producer === "blocked", 40_000)).toBe(true);
+      expect(target.send).toBe(second);
+      const mic = second.sending.find(({ producer }) => producer.kind === "audio")!;
+      const camera = second.sending.find(({ producer }) => producer.kind === "video")!;
+      expect(mic.sfuPackets).toBeGreaterThan(0);
+      expect(camera.sfuPackets).toBe(0);
+
+      if (when === "before") await target.turnCameraOff();
+      else target.ownCountAckDelayMs = 900;
+      const before = mic.sfuPackets;
+      const queriesBefore = target.ownCountQueries;
+      const since = Date.now();
+      target.provider = "up";
+      expect(await waitFor(
+        target,
+        () => target.lastRelayAnswerAt !== null && target.lastRelayAnswerAt >= since,
+        25_000,
+      )).toBe(true);
+      if (when === "during") {
+        expect(target.ownCountQueries).toBeGreaterThan(queriesBefore);
+        await target.turnCameraOff();
+      }
+      expect(liveKinds(second)).toEqual(["audio"]);
+      await target.advance(8_000);
+
+      expect(target.send?.id, "a disabled camera must not move the working microphone").toBe(second.id);
+      expect(second.closed).toBe(false);
+      expect(target.health.producer).toBe("healthy");
+      expect(mic.sfuPackets).toBeGreaterThan(before);
+    },
+  );
+
   it("keeps the replacement send transport when a relay move checks its predecessor", async () => {
     const { target, second } = await rebuiltWithoutTurn((call) => {
       call.directPathDropsSentRtp = true;

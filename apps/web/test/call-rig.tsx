@@ -1,4 +1,4 @@
-import { act, createElement } from "react";
+import { act, createElement, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { vi } from "vitest";
 import { useMeetRefs } from "../src/app/hooks/useMeetRefs";
@@ -428,6 +428,7 @@ export class CallRig {
   republishDelayMs: Record<LocalKind, number> = { audio: 0, video: 0 };
   private localTracks: Partial<Record<LocalKind, ReturnType<typeof fakeTrack>>> = {};
   private republishQueued = new Set<LocalKind>();
+  private setCameraOff: (off: boolean) => void = () => {};
   private inCall = false;
   private nextId = 1;
   private remoteProducers: RemoteProducer[];
@@ -943,6 +944,17 @@ export class CallRig {
     }
   }
 
+  async turnCameraOff() {
+    await act(async () => {
+      this.camera = false;
+      this.localTracks.video?.stop();
+      delete this.localTracks.video;
+      this.refs.videoProducerRef.current?.close();
+      this.refs.videoProducerRef.current = null;
+      this.setCameraOff(true);
+    });
+  }
+
   async shareScreen({ video, audio }: { video: boolean; audio: boolean }) {
     await act(async () => {
       if (!(await this.api.ensureProducerTransport())) throw new Error("no send transport");
@@ -1002,15 +1014,15 @@ export class CallRig {
     const rig = this;
     const microphone = fakeTrack("audio");
     const camera = fakeTrack("video");
-    const videoTracks = this.camera ? [camera] : [];
+    const videoTracks = () => (this.camera ? [camera] : []);
     this.localTracks = this.publish ? { audio: microphone, ...(this.camera ? { video: camera } : {}) } : {};
     const stream = this.publish
       ? {
           id: "local-stream",
           active: true,
-          getTracks: () => [microphone, ...videoTracks],
+          getTracks: () => [microphone, ...videoTracks()],
           getAudioTracks: () => [microphone],
-          getVideoTracks: () => videoTracks,
+          getVideoTracks: videoTracks,
           addEventListener() {},
           removeEventListener() {},
         }
@@ -1067,6 +1079,9 @@ export class CallRig {
       has: (target, key) => key in target,
     }) as unknown as Options;
     function Rig() {
+      const [cameraOff, setCameraOff] = useState(!rig.camera);
+      rig.setCameraOff = setCameraOff;
+      supplied.isCameraOff = cameraOff;
       const refs = useMeetRefs();
       supplied.refs = refs;
       rig.refs = refs;
