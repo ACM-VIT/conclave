@@ -20,13 +20,6 @@ import type { Socket } from "socket.io";
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import type { LostRoom } from "../../server/roomRecoveryLedger.js";
 import type { PassGeneration } from "../../server/roomRecoveryPass.js";
-import {
-  Awareness,
-  applyAwarenessUpdate,
-  encodeAwarenessUpdate,
-  removeAwarenessStates,
-} from "y-protocols/awareness";
-import * as Y from "yjs";
 import type {
   ActiveSpeakerChangedNotification,
   ChatMessage,

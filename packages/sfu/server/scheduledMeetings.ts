@@ -1366,7 +1366,7 @@ export const scheduledMeetingJsonStore: JsonStoreAdapter<ArchivedMeeting[]> = {
     if (!Array.isArray(data)) throw new Error("it is not a list of scheduled meetings");
     return data.flatMap((entry) => {
       const meeting = normalizeStoredMeeting(entry);
-      return meeting ? [withDecisions(meeting, storedDecisionsOf(entry))] : [];
+      return meeting ? [withDecisions(meeting, storedDecisionsOf(entry as Record<string, unknown>))] : [];
     });
   },
   write: (path, meetings) => {

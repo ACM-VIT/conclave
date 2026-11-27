@@ -519,7 +519,7 @@ describe("an invitee a host removed, in a JSON meeting store an older SFU's copy
     write(copyPath(store), [removedIn(meeting("Intro call", 100))]);
 
     expect(await loaded()).toMatchObject({ title: "Intro call", readmissionRequiredEmails: [INVITEE] });
-    const [stored] = JSON.parse(readFileSync(activePath(store), "utf8"));
+    const [stored] = JSON.parse(readFileSync(activePath(store), "utf8")) as Array<{ readmissionDecisions: unknown; readmissionWriteGeneration: unknown }>;
     expect(stored.readmissionDecisions).toEqual({ [INVITEE]: { removed: true, at: 50 } });
     expect(stored.readmissionWriteGeneration).toBe(7);
   });
