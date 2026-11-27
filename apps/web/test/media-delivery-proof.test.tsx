@@ -215,6 +215,37 @@ describe("a send path that never delivered a packet", () => {
 });
 
 describe("the relay kept on offer as the one that carried media", () => {
+  it("keeps the last proven relay while the new relay carries only the microphone and the failing camera awaits publish", async () => {
+    const target = await startRig({ publish: true, camera: true, directWorks: false });
+    rig = target;
+    target.answerUrls = [TURN_B];
+    await target.join();
+    await target.advance(8_000);
+    const previous = target.generations[0];
+    const first = target.send!;
+    expect(first.allocatedUrl).toBe(TURN_B);
+    expect(liveKinds(first)).toEqual(["audio", "video"]);
+    expect(reachedSfu(first)).toBeGreaterThan(0);
+
+    target.answerUrls = [TURN_A];
+    target.droppedSendKinds.add("video");
+    target.republishDelayMs.video = 10_000;
+    expect(await waitFor(target, () => target.send !== first, 40_000)).toBe(true);
+    const candidate = target.send!;
+    expect(candidate.turnUsernames).toContain(previous.username);
+    await target.advance(5_500);
+    expect(candidate.allocatedUrl).toBe(TURN_A);
+    expect(liveKinds(candidate)).toEqual(["audio"]);
+    expect(reachedSfu(candidate)).toBeGreaterThan(0);
+
+    const recv = target.recv!;
+    target.refuseIceRestart = true;
+    target.failRecv();
+    expect(await waitFor(target, () => target.recv !== recv, 4_000)).toBe(true);
+
+    expect(target.recv!.turnUsernames).toContain(previous.username);
+  });
+
   it("stays the one that delivered while a newer relay passes only ICE and receiver reports", async () => {
     const target = await startRig({ publish: true, camera: true, directWorks: false });
     rig = target;
