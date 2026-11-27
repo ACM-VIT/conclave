@@ -216,7 +216,9 @@ const checkProductionMode = (env, service, errors) => {
 // is read-only, so a store off a writable mount stops it at startup.
 const SFU_WORKDIR = "/app/packages/sfu";
 const IMAGE_SQLITE_PATH = "/var/lib/conclave/conclave.sqlite";
-const IMAGE_JSON_PATH = "/var/lib/conclave/recordings/control-plane.json";
+const DEPLOY_RECORDINGS_PATH = "/var/lib/conclave/recordings";
+const IMAGE_JSON_PATH = DEPLOY_RECORDINGS_PATH + "/control-plane.json";
+const IMAGE_FALLBACK_IMPORT_DIR = DEPLOY_RECORDINGS_PATH + "/json-fallback-import";
 const LEGACY_MODES = ["SCHEDULING_PERSISTENCE", "SCHEDULED_MEETINGS_PERSISTENCE", "SCHEDULED_WEBINARS_PERSISTENCE"];
 
 const storeFile = (env) => {
@@ -241,8 +243,9 @@ const checkStorePaths = (definition, env, service, errors) => {
     .filter((volume) => volume && (volume.type === "bind" || volume.type === "volume"))
     .map(({ target, read_only }) => ({ target: posix.resolve("/", String(target)), readOnly: read_only }))
     .sort((a, b) => b.target.length - a.target.length);
+  const cwd = definition.working_dir || SFU_WORKDIR;
   const requireWritableMount = (variable, path, impact) => {
-    const resolved = posix.resolve(SFU_WORKDIR, path);
+    const resolved = posix.resolve(cwd, path);
     const mount = mounts.find(({ target }) =>
       target === "/" || resolved === target || resolved.startsWith(`${target}/`));
     if (mount && !mount.readOnly) return;
@@ -251,6 +254,21 @@ const checkStorePaths = (definition, env, service, errors) => {
       `${service}: ${variable} resolves to ${resolved}, which is not on a writable volume mount (${writable.join(", ") || "none"}). ${impact}`,
     );
   };
+  requireWritableMount("recordings ownership handoff", DEPLOY_RECORDINGS_PATH,
+    "The deploy script must be able to hand this tree over to the SFU user.");
+  for (const { target, readOnly } of mounts) {
+    if (readOnly && target.startsWith(DEPLOY_RECORDINGS_PATH + "/")) {
+      requireWritableMount("recordings ownership handoff", target,
+        "The deploy script walks this subtree during the ownership handoff.");
+    }
+  }
+  const fallbackImport = String(env.CONCLAVE_FALLBACK_IMPORT_DIR ?? IMAGE_FALLBACK_IMPORT_DIR);
+  if (!fallbackImport || fallbackImport !== fallbackImport.trim()) {
+    errors.push(`${service}: CONCLAVE_FALLBACK_IMPORT_DIR must name a directory without leading or trailing whitespace.`);
+  } else {
+    requireWritableMount("CONCLAVE_FALLBACK_IMPORT_DIR", fallbackImport,
+      "Deploy and SFU startup move JSON fallback copies here.");
+  }
   const store = storeFile(env);
   if (store) requireWritableMount(...store, "The SFU would refuse to start.");
   const recordings = String(env.RECORDING_STORAGE_PATH || "").trim();
