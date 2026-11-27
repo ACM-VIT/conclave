@@ -1,4 +1,9 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { Linter } from "eslint";
 import tseslint from "typescript-eslint";
@@ -83,4 +88,22 @@ test("the next-line form cannot switch the rule off", () => {
     lint("// eslint-disable-next-line conclave/no-comments -- sneaky\nconst a = 1; // hidden\n", "a.ts"),
     [{ line: 1, messageId: "selfDisable" }],
   );
+});
+
+
+test("new app scaffolds pass the comment rule without suppressions", (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), "comment-scaffold-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  writeFileSync(path.join(root, "package.json"), "{}");
+  const scaffold = fileURLToPath(new URL("../../../packages/apps-sdk/scripts/create-app-integration.mjs", import.meta.url));
+  for (const runtime of ["authority", "doc"]) {
+    const id = `lint-${runtime}`;
+    execFileSync(process.execPath, [scaffold, id, "--runtime", runtime, "--root", root]);
+    const app = path.join(root, "src/apps", id);
+    const files = readdirSync(app, { recursive: true }).filter((file) => /\.tsx?$/.test(file));
+    assert.ok(files.length > 0);
+    for (const file of files) {
+      assert.deepEqual(lint(readFileSync(path.join(app, file), "utf8"), file), [], `${id}/${file}`);
+    }
+  }
 });

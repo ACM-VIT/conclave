@@ -212,10 +212,6 @@ const scaffoldAuthorityApp = ({ appId, appName, appDescription, dryRun }) => {
       path: path.join(appDir, "core", "index.ts"),
       content: `import { defineContract, s } from "@conclave/apps-sdk/authority";
 
-/**
- * What the renderer and the server agree on. This file is the only part of
- * the app's rules a browser loads, so nothing private belongs here.
- */
 const entry = s.object({
   id: s.string({ max: 64 }),
   name: s.string({ max: 200 }),
@@ -232,9 +228,7 @@ export const ${camel}Contract = defineContract({
   },
   queries: {},
   views: {
-    /** Everyone on the list, for everyone who may open the app. */
     entries: entry,
-    /** Present only for the viewer's own entry. */
     mine: s.object({}),
   },
 });
@@ -253,10 +247,6 @@ import {
   type Subject,
 } from "@conclave/apps-sdk/authority/server";
 
-/**
- * The app's rules. This runs on the SFU and nowhere else: a browser never
- * loads it, and \`check:apps\` fails any web or native file that imports it.
- */
 type Entry = { id: string; subject: Subject; name: string; joinedAt: number; order: number };
 
 const MAX_ENTRIES = 500;
@@ -276,8 +266,6 @@ export const ${camel}Authority = defineAuthority({
       run(ctx, tx) {
         if (tx.count("entries") >= MAX_ENTRIES) reject("full");
         const order = nextActionOrder(tx);
-        // One entry per person: the key is the person. A second tab, a
-        // reconnect or a retry lands on the same key and changes nothing.
         tx.insertIfAbsent("entries", key(ctx.subject), {
           id: ctx.nextId("e"),
           subject: ctx.subject,
@@ -303,7 +291,6 @@ export const ${camel}Authority = defineAuthority({
     entries: {
       kind: "shared",
       source: "entries",
-      // The subject never leaves the server. Each row has its own public id.
       project: (row) => ({
         key: row.id,
         value: { id: row.id, name: row.name, joinedAt: row.joinedAt },

@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { countDisallowed, extractComments, extractFiles, listSourceFiles, prepareFiles } from "./extract.mjs";
-import { ESLINT_LANGUAGE, configuresNoComments, isFirstPartySource, languageOf, switchesOffNoComments } from "./policy.mjs";
+import { ESLINT_LANGUAGE, NO_COMMENTS_RULE, configuresNoComments, isFirstPartySource, languageOf, switchesOffNoComments } from "./policy.mjs";
 
 export const BASELINE_FILE = "scripts/quality/comments/baseline.json";
 export const ESLINT_SUPPRESSION_FILES = ["eslint-suppressions.json", "apps/web/eslint-suppressions.json"];
@@ -118,7 +118,7 @@ const disallowedIn = (text, file) => extractComments(text, file).filter((comment
 
 const readIfPresent = (file) => (existsSync(file) ? readFileSync(file, "utf8") : undefined);
 
-export const countRisesSinceBase = (repo, base) => {
+export const countRisesSinceBase = (repo, base, opening = new Map()) => {
   const present = (tryGit(repo, ["diff", "--name-only", "-z", base, "--"]) ?? "")
     .split("\0")
     .filter((file) => file !== "" && isFirstPartySource(file))
@@ -131,7 +131,11 @@ export const countRisesSinceBase = (repo, base) => {
     .filter(({ text }) => text !== undefined);
   prepareFiles(before);
   const fromCounts = new Map(before.map(({ file, text }) => [file, disallowedIn(text, file)]));
-  return commented.map(({ file, to }) => ({ file, from: fromCounts.get(file) ?? 0, to })).filter(({ from, to }) => to > from);
+  return commented.map(({ file, to }) => ({
+    file,
+    from: Math.max(fromCounts.get(file) ?? 0, opening.get(file) ?? 0),
+    to,
+  })).filter(({ from, to }) => to > from);
 };
 
 const baselineRisesSince = (repo, base) =>
@@ -146,14 +150,42 @@ const baselineRisesSince = (repo, base) =>
     }));
   });
 
-const growthSince = (repo, bases) => ({
-  rises: bases.flatMap((base) => baselineRisesSince(repo, base)),
-  countRises: bases.flatMap((base) => countRisesSinceBase(repo, base).map((rise) => ({ ...rise, base }))),
-});
+const hasBaselineAt = (repo, commit) =>
+  tryGit(repo, ["cat-file", "-e", `${commit}:${BASELINE_FILE}`]) !== undefined;
+
+const openingCounts = (repo) => {
+  const baseline = path.join(repo, BASELINE_FILE);
+  if (!existsSync(baseline)) return new Map();
+  const counts = new Map(Object.entries(readJson(baseline)));
+  for (const file of ESLINT_SUPPRESSION_FILES) {
+    const local = path.join(repo, file);
+    if (!existsSync(local)) continue;
+    const dir = path.posix.dirname(file);
+    for (const [name, rules] of Object.entries(readJson(local))) {
+      const count = rules[NO_COMMENTS_RULE]?.count;
+      if (count !== undefined) counts.set(path.posix.join(dir, name), count);
+    }
+  }
+  return counts;
+};
+
+const growthSince = (repo, bases, baseRef) => {
+  const target = commitOf(repo, baseRef);
+  const head = commitOf(repo, "HEAD");
+  const mayBootstrap = target && (target === head || !hasBaselineAt(repo, target));
+  const prePolicyBases = new Set(mayBootstrap ? bases.filter((base) => !hasBaselineAt(repo, base)) : []);
+  const opening = prePolicyBases.size ? openingCounts(repo) : undefined;
+  return {
+    rises: bases.flatMap((base) => baselineRisesSince(repo, base)),
+    countRises: bases.flatMap((base) =>
+      countRisesSinceBase(repo, base, prePolicyBases.has(base) ? opening : undefined)
+        .map((rise) => ({ ...rise, base }))),
+  };
+};
 
 export const growthSinceBase = (repo, baseRef, mode) => {
   const resolved = resolveBases(repo, baseRef, mode);
-  return resolved.error ? resolved : { note: resolved.note, ...growthSince(repo, resolved.bases) };
+  return resolved.error ? resolved : { note: resolved.note, ...growthSince(repo, resolved.bases, baseRef) };
 };
 
 export const inlineNoCommentsDisables = (repo) => {
@@ -188,7 +220,7 @@ const check = (repo, baseline, baseRef, mode, { full = false } = {}) => {
     ? baseline
     : Object.fromEntries(scope.filter((file) => baseline[file] !== undefined).map((file) => [file, baseline[file]]));
   const { rises, falls } = compareCounts(scopedBaseline, countDisallowed(records));
-  const growth = growthSince(repo, resolved.bases);
+  const growth = growthSince(repo, resolved.bases, baseRef);
   const disables = inlineNoCommentsDisables(repo);
   const failures = [];
   for (const { file, from, to } of rises) {

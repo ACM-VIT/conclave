@@ -220,6 +220,53 @@ test("a native comment removed without --update cannot be added back later", (t)
 const ratchetWith = (repo, env) =>
   spawnSync(process.execPath, [RATCHET, "--repo", repo], { encoding: "utf8", env: { ...cleanEnv(), ...env } });
 
+test("the first promotion accepts only comments covered by the opening inventory", (t) => {
+  const repo = repoWith(t, { "README.md": "# Before adoption" });
+  const before = git(repo, "rev-parse", "base").trim();
+  write(repo, {
+    "packages/new.ts": "// existing package comment\nexport {};\n",
+    "apps/web/src/new.ts": "// existing web comment\nexport {};\n",
+    "scripts/run.sh": "# existing shell comment\nrun\n",
+    "eslint-suppressions.json": { "packages/new.ts": { "conclave/no-comments": { count: 1 } } },
+    "apps/web/eslint-suppressions.json": { "src/new.ts": { "conclave/no-comments": { count: 1 } } },
+    [BASELINE]: { "scripts/run.sh": 1 },
+  });
+  git(repo, "commit", "-q", "-m", "adopt ratchet with inherited files");
+  for (const result of [ratchet(repo), ratchetWith(repo, {
+    COMMENT_RATCHET_BASE: before, COMMENT_RATCHET_MODE: "exact",
+  })]) assert.equal(result.status, 0, result.stderr);
+
+  write(repo, {
+    "packages/new.ts": "// existing package comment\n// above opening inventory\nexport {};\n",
+    "packages/uncovered.ts": "// not part of the opening inventory\nexport {};\n",
+    "eslint-suppressions.json": {
+      "packages/new.ts": { "conclave/no-comments": { count: 1 } },
+      "packages/uncovered.ts": { "no-console": { count: 1 } },
+    },
+  });
+  const result = ratchet(repo);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /packages\/new\.ts: comments rose from 1 to 2 since/);
+  assert.match(result.stderr, /packages\/uncovered\.ts: comments rose from 0 to 1 since/);
+});
+
+test("a branch cut before adoption cannot use an opening inventory after the target adopted the ratchet", (t) => {
+  const repo = repoWith(t, { "README.md": "# Before adoption" });
+  git(repo, "checkout", "-q", "base");
+  write(repo, { [BASELINE]: {} });
+  git(repo, "commit", "-q", "-m", "adopt the ratchet");
+  git(repo, "checkout", "-q", "feature");
+  write(repo, {
+    "packages/new.ts": "// not inherited\nexport {};\n",
+    "eslint-suppressions.json": { "packages/new.ts": { "conclave/no-comments": { count: 1 } } },
+    [BASELINE]: {},
+  });
+  git(repo, "commit", "-q", "-m", "add a comment from a stale branch");
+  const result = ratchet(repo);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /packages\/new\.ts: comments rose from 0 to 1 since/);
+});
+
 test("push mode compares a force push with the tip it replaced, not their merge base", (t) => {
   const repo = repoWith(t, { "app.css": "/* one */\n/* two */\na { z-index: 1 }\n", [BASELINE]: { "app.css": 2 } });
   write(repo, { "app.css": "/* one */\na { z-index: 1 }\n" });
