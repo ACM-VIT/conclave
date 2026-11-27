@@ -3125,6 +3125,95 @@ try {
   return JSON.parse(stdout.match(/^BACKUP_FIXTURE (.*)$/m)[1]);
 };
 
+test("a full restore replays only the container snapshots in its archive", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-restore-lineage-"));
+  try {
+    const { state, env, backup, latestArchive, restore, setDocker } = await setUp(root);
+    const mount = "/srv/sfu/state";
+    const fallback = path.join(state, "imports");
+    const settings = { CONTROL_PLANE_PERSISTENCE: "sqlite", CONCLAVE_SQLITE_PATH: "./control.db", CONCLAVE_FALLBACK_IMPORT_DIR: "./imports" };
+    await setDocker([{
+      id: "sfu-a", mounts: [{ source: state, destination: mount }], workingDir: mount, status: "exited",
+      env: Object.entries({ SFU_PORT: "9", SFU_INSTANCE_ID: "sfu-a", ...settings }).map(([key, value]) => `${key}=${value}`),
+    }]);
+    const host = { ...settings, CONCLAVE_SQLITE_PATH: path.join(state, "control.db"), CONCLAVE_FALLBACK_IMPORT_DIR: fallback,
+      RECORDING_STORAGE_PATH: state, SCHEDULED_MEETINGS_SQLITE_PATH: path.join(state, "legacy.db"),
+      SCHEDULED_MEETINGS_PATH: path.join(state, "meetings.json"), SCHEDULED_WEBINARS_PATH: path.join(state, "webinars.json"),
+      SCHEDULING_PATH: path.join(state, "scheduling.json") };
+    const meeting = (id, title, updatedAt) => ({
+      id, clientId: "fixture", title, roomCode: `room-${id}`, hostEmail: "host@example.test",
+      scheduledStartAt: 4_000_000_000_000, scheduledEndAt: 4_000_003_600_000, status: "scheduled",
+      createdBy: "host@example.test", source: "manual", createdAt: 100, updatedAt,
+    });
+    const copy = async (folder, name, records, source = "abcdef source\n") => {
+      const dir = path.join(fallback, "sfu-a", folder);
+      await mkdir(dir, { recursive: true });
+      if (source) await writeFile(path.join(dir, ".source"), source, { mode: 0o600 });
+      const file = path.join(dir, name);
+      await writeFile(file, JSON.stringify(records), { mode: 0o600 });
+      return file;
+    };
+    const meetings = "scheduled-meetings.json";
+    const kept = meeting("kept", "kept", 100);
+    await copy("20260101T000000Z-first", meetings, [meeting("edited", "initial", 100), kept]);
+    assert.deepEqual((await actualControlPlane(host)).sort(), ["initial", "kept"]);
+    const archived = await copy("20260102T000000Z-archived", meetings, [meeting("edited", "archived", 200), kept]);
+    const noSource = await copy("other-source", meetings, [meeting("separate", "separate", 200)], "");
+    await backup("--local-only");
+    const archive = await latestArchive();
+
+    const plain = await copy("20260103T000000Z-stale", meetings, [meeting("edited", "after backup", 300)]);
+    const claimed = await copy("20260104T000000Z-claimed", meetings + ".claimed-1-0", [meeting("edited", "claimed after backup", 400)]);
+    const flat = await copy("", meetings, [meeting("flat", "flat after backup", 500)], "");
+    const metadata = path.join(path.dirname(noSource), ".source");
+    await writeFile(metadata, "deadbeef unrelated-container\n");
+    await writeFile(archived, JSON.stringify([meeting("edited", "overwrote archived path", 500)]));
+    const unrelated = path.join(path.dirname(plain), "notes.txt");
+    const adopted = plain + ".adopted";
+    const hidden = await copy(".staged-ignored", meetings, [meeting("ignored", "ignored", 600)]);
+    await writeFile(unrelated, "unrelated");
+    await writeFile(adopted, "adopted history");
+    const retired = [plain, claimed, flat, metadata, archived];
+    const before = await Promise.all(retired.map((file) => readFile(file)));
+    assert.deepEqual((await actualControlPlane({ ...host, CONCLAVE_FALLBACK_IMPORT_DIR: "" }, "live only")).sort(), ["initial", "kept", "live only"]);
+    const db = await readFile(path.join(state, "control.db"));
+
+    assert.match((await restore("--file", archive)).stdout, /Dry run: nothing changed/);
+    assert.deepEqual(await Promise.all(retired.map((file) => readFile(file))), before);
+    assert.deepEqual(await readFile(path.join(state, "control.db")), db);
+
+    const work = await mkdtemp(path.join(root, "work-"));
+    await run("age", ["--decrypt", "-i", path.join(root, "key.txt"), "-o", path.join(work, "backup.tar.gz"), archive]);
+    const stopped = spawnSync("python3", [
+      "-I", "-B", "-c", stopAfterFirstPlace, scripts, "--archive", path.join(work, "backup.tar.gz"), "--work", work,
+      "--state", state, "--container", mount, "--apply",
+    ], { env: { ...env, STOP_SIGNAL: "15", REDIS_SOURCE_URL: "", SFU_HEALTH_URLS: "http://127.0.0.1:9/health" }, encoding: "utf8" });
+    assert.notEqual(stopped.status, 0, stopped.stdout + stopped.stderr);
+    assert.match(stopped.stdout + stopped.stderr, /Undid every rename/);
+    assert.deepEqual(await Promise.all(retired.map((file) => readFile(file))), before);
+    assert.deepEqual(await readFile(path.join(state, "control.db")), db);
+    assert.equal((await readdir(root)).filter((name) => name.startsWith(".conclave-restore") || name.startsWith("state.pre-restore")).length, 0);
+
+    await restore("--file", archive, "--yes");
+    assert.deepEqual((await actualControlPlane(host)).sort(), ["archived", "kept", "separate"]);
+    assert.deepEqual((await actualControlPlane(host)).sort(), ["archived", "kept", "separate"]);
+    const [aside] = (await readdir(root)).filter((name) => name.startsWith("state.pre-restore-"));
+    for (const [index, file] of retired.entries()) {
+      await assert.rejects(stat(file), { code: "ENOENT" });
+      assert.deepEqual(await readFile(path.join(root, aside, path.relative(state, file))), before[index]);
+    }
+    assert.equal(await readFile(unrelated, "utf8"), "unrelated");
+    assert.equal(await readFile(adopted, "utf8"), "adopted history");
+    assert.ok(await stat(hidden));
+    const restored = await stat(archived + ".adopted");
+    assert.equal(restored.mode & 0o777, 0o600);
+    assert.equal(restored.uid, process.getuid());
+    assert.equal(restored.gid, process.getgid());
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 for (const [mode, variable, name, part] of [
   ["sqlite", "CONCLAVE_SQLITE_PATH", "control.db", "sqlite"],
   ["json", "CONTROL_PLANE_JSON_PATH", "control.json", "files"],

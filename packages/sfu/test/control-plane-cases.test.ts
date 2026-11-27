@@ -622,6 +622,39 @@ describe("a host whose profile is stored under a legacy client of the deployment
     });
   });
 
+  it("scopes host and admin webinar lists to the requested namespace", async () => {
+    vi.stubEnv("SFU_CLIENT_ID", "acme");
+    const sfu = await start("A");
+    const acme = { "x-sfu-client": "acme" };
+    const other = { "x-sfu-client": "other" };
+    const guest = { "x-user-id": "guest-user", "x-user-email": "guest@example.test" };
+    const admin = { "x-user-is-admin": "1" };
+    const create = async (linkSlug: string, headers: Record<string, string>) => {
+      const response = await host(sfu, "POST", "/scheduled-webinars", {
+        title: linkSlug, linkSlug, scheduledStartAt: Date.now() + DAY_MS,
+      }, headers);
+      expect(response.status).toBe(201);
+      return field<{ id: string; roomId: string; clientId: string }>(response, "scheduledWebinar");
+    };
+    const deployment = await create("deployment-webinar", acme);
+    const own = await create("tenant-webinar", other);
+    const theirs = await create("guest-webinar", { ...other, ...guest });
+    const list = async (scope: string, headers: Record<string, string>) => {
+      const response = await host(sfu, "GET", `/scheduled-webinars${scope}`, undefined, headers);
+      expect(response.status).toBe(200);
+      return field<Array<{ id: string }>>(response, "scheduledWebinars").map(({ id }) => id).sort();
+    };
+
+    expect.soft(await list("", other)).toEqual([own.id]);
+    expect.soft(await list("?scope=all", other)).toEqual([own.id]);
+    expect.soft(await list("?scope=all", { ...other, ...admin })).toEqual([own.id, theirs.id].sort());
+    expect.soft(await list("?scope=all", { ...acme, ...admin })).toEqual([deployment.id]);
+
+    const direct = await sfu.call("GET", `/scheduled-webinars/by-room/other/${deployment.roomId}`);
+    expect(direct.status).toBe(200);
+    expect(direct.body.scheduledWebinar).toMatchObject({ id: deployment.id, clientId: "acme" });
+  });
+
   it("stays free during another host's meeting in the deployment's client", async () => {
     const legacy = await start("A");
     const { username } = await setUpHost(legacy);

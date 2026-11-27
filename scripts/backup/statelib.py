@@ -645,8 +645,8 @@ def sfu_redis_source(env, containers):
     return url
 
 
-def state_path(path, mounts, state):
-    """Where a container path lies below the state dir, read through the
+def state_path(path, mounts, state, allow_root=False):
+    """Where a container path lies in the state dir, read through the
     container's mount whose destination holds it most closely, or None when
     no mount does or it lands outside the state dir."""
     best = None
@@ -664,7 +664,7 @@ def state_path(path, mounts, state):
     for source in (os.path.realpath(best["source"]), os.path.normpath(best["source"])):
         host = os.path.join(source, rest) if rest else source
         for base in (os.path.realpath(state), os.path.normpath(os.path.abspath(state))):
-            if within(host, base) and host != base:
+            if within(host, base) and (allow_root or host != base):
                 return host[len(base):].lstrip("/")
     return None
 
@@ -737,6 +737,31 @@ def json_coverage_problems(archive, state, container):
     stores = configured_stores(state, container, state_mounts(docker_containers(), state), "json")
     return [f"the backup has no copy of {store['rel']}, the JSON file {store['variable']} ({store['where']}) names"
             for store in stores if store["rel"] not in files]
+
+
+def fallback_import_dirs(state, container):
+    containers = state_mounts(docker_containers(), state)
+    problems = state_view_problems(state, containers)
+    if problems:
+        raise Refused("\n".join(problems))
+    sfus = sfu_containers(containers)
+    variable = "CONCLAVE_FALLBACK_IMPORT_DIR"
+    sources = [(found["env"], found["working_dir"], found["mounts"]) for found in sfus]
+    if not sfus:
+        sources.append((os.environ, container, None))
+    dirs = set()
+    for env, cwd, mounts in sources:
+        default = posixpath.join(container, "json-fallback-import") if mounts is None else ""
+        value = env.get(variable, default).strip(JS_SPACE)
+        if not value or control_plane_mode(env) == "memory":
+            continue
+        resolved = "/" + posixpath.normpath(posixpath.join(cwd, value)).lstrip("/")
+        rel = (state_path(resolved, mounts, state, allow_root=True) if mounts is not None
+               else under_root(resolved, mount_roots(state, container)))
+        if rel is None:
+            raise Refused(f"{variable}={resolved} is outside the state dir, so the restore cannot reconcile its snapshots")
+        dirs.add(rel)
+    return dirs
 
 
 def walk_error(error):

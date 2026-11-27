@@ -3,7 +3,7 @@ import type {
   ScheduledWebinar,
   UpdateScheduledWebinarRequest,
 } from "../../types.js";
-import { clientIdCandidates, clientsServedAs, servedClientId } from "../clientIds.js";
+import { clientIdCandidates, clientNamespacesIn, clientsServedAs, servedClientId } from "../clientIds.js";
 import {
   RANDOM_WEBINAR_SLUG_BYTES,
   acceptCoHostInvite,
@@ -77,7 +77,7 @@ export const listWebinars =
     const all = view.all("webinar").map((stored) => stored.value);
     const byId = new Map<string, ScheduledWebinar>();
     const seenRoomIds = new Set<string>();
-    for (const candidate of clientIdCandidates(filter.clientId)) {
+    for (const candidate of clientNamespacesIn(filter.clientId)) {
       for (const webinar of filterScheduledWebinars(all, { ...filter, clientId: candidate })) {
         if (seenRoomIds.has(webinar.roomId)) continue;
         seenRoomIds.add(webinar.roomId);

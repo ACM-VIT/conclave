@@ -57,6 +57,7 @@ from statelib import (  # noqa: E402
     database_files,
     database_paths,
     docker_containers,
+    fallback_import_dirs,
     folded,
     json_coverage_problems,
     log,
@@ -74,6 +75,9 @@ from statelib import (  # noqa: E402
 )
 
 PARTS = ("sqlite", "redis", "files")
+
+# Keep in step with the input names in controlPlane/legacy.ts.
+IMPORT_COPY = re.compile(r"(?:scheduled-meetings|scheduled-webinars|scheduling)\.json(?:\.claimed-[0-9]+-[0-9]+)?")
 
 
 class Builder:
@@ -280,7 +284,7 @@ class StateDir:
             raise Refused(f"the state dir {given} cannot be opened as a directory: {error.strerror}")
         self.dev = os.fstat(self.fd).st_dev
 
-    def live_problems(self, writes, sides):
+    def live_problems(self, writes, retire):
         """The live state dir can take the writes: every directory on their
         way is a real directory on the state dir's file system that this user
         can change, nothing a restore replaces is a directory, and nothing a
@@ -292,7 +296,7 @@ class StateDir:
         for rel, _ in writes:
             parts = rel.split("/")
             dirs.update("/".join(parts[:i]) for i in range(1, len(parts)))
-        paths = {rel for rel, _ in writes} | dirs | set(sides)
+        paths = {rel for rel, _ in writes} | dirs | retire
         seen = {}
 
         def look(rel):
@@ -331,9 +335,47 @@ class StateDir:
                 problems.append(f"{rel} is a directory in the state dir")
             elif info is not None and not (stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)):
                 problems.append(f"{rel} is not a file or link in the state dir")
-            elif (info is not None or rel not in sides) and not can_write(holder):
+            elif (info is not None or rel not in retire) and not can_write(holder):
                 problems.append(f"the directory that holds {rel} is not writable by this user; rerun the restore as root")
         return sorted(set(problems))
+
+
+def live_imports_to_retire(state, dirs, writes):
+    """Live importer inputs to move aside before placing archived copies."""
+    if state.fd is None:
+        return set()
+    def entries(rel):
+        try:
+            fd = open_parts(state.fd, rel.split("/") if rel else [], state.given)
+        except FileNotFoundError:
+            return []
+        try:
+            with os.scandir(fd) as scan:
+                return [(entry.name, entry.is_dir(follow_symlinks=False)) for entry in scan]
+        except OSError as error:
+            raise Refused(f"cannot list {state.given}/{rel}: {error.strerror}")
+        finally:
+            os.close(fd)
+
+    # A live-only .source would change the lineage of a restored snapshot.
+    archived_groups = {os.path.dirname(rel) for rel, kind in writes
+                       if kind != "dir" and IMPORT_COPY.fullmatch(os.path.basename(rel))}
+    retire = set()
+    for root in dirs:
+        for name, is_dir in entries(root):
+            if not is_dir or name.startswith("."):
+                continue
+            service = f"{root}/{name}" if root else name
+            for leaf, is_dir in entries(service):
+                if IMPORT_COPY.fullmatch(leaf):
+                    retire.add(f"{service}/{leaf}")
+                if not is_dir or leaf.startswith("."):
+                    continue
+                group = f"{service}/{leaf}"
+                for file, _ in entries(group):
+                    if IMPORT_COPY.fullmatch(file) or (file == ".source" and group in archived_groups):
+                        retire.add(f"{group}/{file}")
+    return retire - {rel for rel, kind in writes if kind == "dir"}
 
 
 def http_answers(url):
@@ -519,7 +561,7 @@ def is_empty(parent_fd, name):
         os.close(fd)
 
 
-def apply_restore(state, archive, writes, sides, roots, stamp, owner, sqlite):
+def apply_restore(state, archive, writes, retire, roots, stamp, owner, sqlite):
     """Builds the restored tree beside the state dir, checks again, and swaps
     it in; any failure from the first rename on undoes them all."""
     os.makedirs(state.parent_real, mode=0o755, exist_ok=True)
@@ -564,7 +606,7 @@ def apply_restore(state, archive, writes, sides, roots, stamp, owner, sqlite):
                 finally:
                     os.close(state_fd)
                 return None
-            problems = state.live_problems(writes, sides)
+            problems = state.live_problems(writes, retire)
             if problems:
                 raise Refused("; ".join(problems))
             os.mkdir(aside_name, 0o700, dir_fd=parent_fd)
@@ -572,7 +614,9 @@ def apply_restore(state, archive, writes, sides, roots, stamp, owner, sqlite):
             try:
                 with Swap(state.fd, staging_fd, aside_fd) as swap:
                     try:
-                        for rel in sorted(sides):
+                        # Retire old journal files and live importer inputs
+                        # before any restored checkpoint can become visible.
+                        for rel in sorted(retire):
                             parts = rel.split("/")
                             try:
                                 holder = open_parts(state.fd, parts[:-1])
@@ -995,11 +1039,13 @@ def restore(args):
             require_redis_pattern(archive, redis_pattern)
             redis = redis_target()
     writes = restore_writes(archive, sqlite, "files" in wants)
-    sides = side_files(database_files(archive)) if sqlite else set()
+    retire = side_files(database_files(archive)) if sqlite else set()
     state = StateDir(args.state)
     redis_step = None
     try:
-        problems = state.live_problems(writes, sides)
+        if "files" in wants:
+            retire.update(live_imports_to_retire(state, fallback_import_dirs(args.state, args.container), writes))
+        problems = state.live_problems(writes, retire)
         if sqlite and not problems:
             problems = chain_problems(overlay(state.fd, archive, writes), archive, roots)
         if problems:
@@ -1013,8 +1059,8 @@ def restore(args):
         if redis:
             redis_step = RedisRestore(work_real, archive, redis, redis_pattern)
             redis_step.prepare()
-        if writes:
-            aside = apply_restore(state, archive, writes, sides, roots, args.stamp, owner, sqlite)
+        if writes or retire:
+            aside = apply_restore(state, archive, writes, retire, roots, args.stamp, owner, sqlite)
             for rel, kind in writes:
                 if kind == "db":
                     log(f"Restored {args.state}/{rel}")
