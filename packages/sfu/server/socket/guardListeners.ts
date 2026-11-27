@@ -1,5 +1,7 @@
 import type { Socket } from "socket.io";
 import { Logger } from "../../utilities/loggers.js";
+import { captureServerException } from "../analytics/posthog.js";
+import { noteSocketEvent } from "../analytics/socketEvents.js";
 
 type Listener = (...args: unknown[]) => unknown;
 
@@ -33,10 +35,15 @@ export const guardSocketListeners = (
     event: string,
     listener: Listener,
   ) => Socket;
-  const guarded = (event: string, listener: Listener): Socket =>
-    register(event, (...args: unknown[]) => {
+  const guarded = (event: string, listener: Listener): Socket => {
+    noteSocketEvent(event);
+    return register(event, (...args: unknown[]) => {
       const fail = (error: unknown) => {
         Logger.error(`[Socket] Handler for "${event}" failed (${socket.id})`, error);
+        captureServerException(error, {
+          source: "socket_handler",
+          properties: { socket_event: event },
+        });
         answerFailedAck(args);
       };
       try {
@@ -49,5 +56,6 @@ export const guardSocketListeners = (
         fail(error);
       }
     });
+  };
   socket.on = guarded as unknown as Socket["on"];
 };

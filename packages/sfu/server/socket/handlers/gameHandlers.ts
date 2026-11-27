@@ -33,9 +33,13 @@ import { respond } from "./ack.js";
 import { randomUUID } from "crypto";
 import {
   captureGameEvent,
+  registerGameCatalog,
   type AnalyticsProperties,
 } from "../../analytics/posthog.js";
 import { analyticsDistinctId } from "../../analytics/identity.js";
+
+// Game events name only these games and their options (analytics/outbound.ts).
+registerGameCatalog(getGameCatalog());
 
 const MAX_GAME_ID_LENGTH = 64;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;

@@ -2,7 +2,7 @@
  * Server-side product analytics (PostHog) for the SFU.
  *
  * Design contract:
- *   - STRICTLY OPT-IN. With no `SFU_POSTHOG_KEY` set, `config.analytics.enabled`
+ *   - STRICTLY OPT-IN. With no `SFU_POSTHOG_KEY` set, `analyticsSettings.enabled`
  *     is false: NO client is ever constructed, and every exported function is a
  *     no-op. Zero network, zero allocation, zero overhead.
  *   - EXACTLY ONE client per process. The SFU is long-lived, so we construct a
@@ -20,8 +20,28 @@
  */
 
 import { PostHog } from "posthog-node";
-import { config as sfuConfig } from "../../config/config.js";
 import { Logger } from "../../utilities/loggers.js";
+import { createErrorReporter, SFU_RELEASE } from "./errorReporter.js";
+import { analyticsKey, analyticsRoomKey } from "./identity.js";
+import { createFramePath, createOutboundEvent, type GameCatalog, SFU_ROOT } from "./outbound.js";
+import { analyticsSettings } from "./settings.js";
+import { isSocketEvent } from "./socketEvents.js";
+
+// This module never imports the configuration or the games, so the crash
+// guards that report through it can start before either loads. The games
+// register their catalog when their handlers load, before any game event.
+let gameCatalog: GameCatalog = [];
+export const registerGameCatalog = (catalog: GameCatalog): void => {
+  gameCatalog = catalog;
+};
+
+// Every event this client sends is built from the outbound schema.
+const outboundEvent = createOutboundEvent({
+  release: SFU_RELEASE,
+  framePath: createFramePath({ root: SFU_ROOT, cwd: () => process.cwd() }),
+  games: () => gameCatalog,
+  isSocketEvent,
+});
 
 /** The PostHog group type used to roll events up by meeting/room. */
 const ROOM_GROUP_TYPE = "room" as const;
@@ -57,18 +77,23 @@ let constructionAttempted = false;
  * client failed to construct once already.
  */
 const getClient = (): PostHog | null => {
-  if (!sfuConfig.analytics.enabled) return null;
+  if (!analyticsSettings.enabled) return null;
   if (client) return client;
   if (constructionAttempted) return client; // failed before, do not retry
   constructionAttempted = true;
   try {
-    client = new PostHog(sfuConfig.analytics.projectApiKey, {
-      host: sfuConfig.analytics.host,
-      flushAt: sfuConfig.analytics.flushAt,
-      flushInterval: sfuConfig.analytics.flushIntervalMs,
+    client = new PostHog(analyticsSettings.projectApiKey, {
+      host: analyticsSettings.host,
+      flushAt: analyticsSettings.flushAt,
+      flushInterval: analyticsSettings.flushIntervalMs,
+      requestTimeout: analyticsSettings.requestTimeoutMs,
+      // The crash guards decide what is fatal (transient Redis errors are
+      // not), so they report exceptions themselves.
+      enableExceptionAutocapture: false,
+      beforeSend: outboundEvent,
     });
     Logger.info(
-      `[Analytics] PostHog enabled (host: ${sfuConfig.analytics.host})`,
+      `[Analytics] PostHog enabled (host: ${analyticsSettings.host})`,
     );
   } catch (error) {
     client = null;
@@ -76,6 +101,22 @@ const getClient = (): PostHog | null => {
   }
   return client;
 };
+
+const errorReporter = createErrorReporter({
+  getClient,
+  instanceId: analyticsSettings.instanceId,
+  hashKey: analyticsKey,
+  region: analyticsSettings.region,
+  version: SFU_RELEASE,
+  onReportFailure: (error) =>
+    Logger.warn("[Analytics] exception capture failed", error),
+});
+
+/** Reports a server error to PostHog error tracking. No-op when analytics is off. */
+export const captureServerException = errorReporter.report;
+
+/** Reports a crash and waits (bounded) for delivery before the process exits. */
+export const captureFatalServerException = errorReporter.reportFatal;
 
 // Track which (room, distinctId) pairs we've already sent a `$groupidentify`
 // for, so we register the group once instead of on every event. Bounded in
@@ -102,11 +143,12 @@ export const captureGameEvent = ({
     // creates the group + group type if they don't exist. We intentionally do
     // NOT attach group properties here (no room name / no PII); the group key
     // alone is enough to roll events up.
-    const groupCacheKey = `${roomKey}::${distinctId}`;
-    if (!identifiedRoomGroups.has(groupCacheKey)) {
+    const groupKey = analyticsRoomKey(roomKey);
+    const groupCacheKey = `${groupKey}::${distinctId}`;
+    if (groupKey && !identifiedRoomGroups.has(groupCacheKey)) {
       posthog.groupIdentify({
         groupType: ROOM_GROUP_TYPE,
-        groupKey: roomKey,
+        groupKey,
         distinctId,
       });
       identifiedRoomGroups.add(groupCacheKey);
@@ -116,7 +158,7 @@ export const captureGameEvent = ({
       distinctId,
       event,
       properties,
-      groups: { [ROOM_GROUP_TYPE]: roomKey },
+      ...(groupKey ? { groups: { [ROOM_GROUP_TYPE]: groupKey } } : {}),
     });
   } catch (error) {
     // Telemetry must never surface to the user or break the calling flow.
@@ -140,7 +182,7 @@ export const shutdownAnalytics = async (): Promise<void> => {
     // the final flush completes; await it so buffered events reach PostHog
     // before the process exits. Bounded by `shutdownTimeoutMs`.
     await Promise.resolve(
-      active.shutdown(sfuConfig.analytics.shutdownTimeoutMs),
+      active.shutdown(analyticsSettings.shutdownTimeoutMs),
     );
   } catch (error) {
     Logger.warn("[Analytics] shutdown flush failed", error);

@@ -1,5 +1,6 @@
 import { SFU_EVENTS } from "@conclave/meeting-core/sfu-events";
 import type { ProducerTransportNetworkProfileApplication } from "../hooks/useAdaptivePublishQuality";
+import { ServerError } from "./server-error";
 
 export const PRODUCER_TRANSPORT_PROFILE_ACK_TIMEOUT_MS = 2_500;
 
@@ -61,7 +62,7 @@ export function createProducerTransportNetworkProfileSetter(
         settled = true;
         globalThis.clearTimeout(timeoutId);
         if ("error" in response) {
-          reject(new Error(response.error));
+          reject(new ServerError(response.error));
           return;
         }
         const application = {

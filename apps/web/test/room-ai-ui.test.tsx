@@ -15,6 +15,9 @@ import {
   type RoomAiController,
 } from "../src/app/hooks/useRoomAi";
 import type { MeetingTranscriptController } from "../src/app/hooks/useMeetingTranscript";
+import { fakeSecretKey } from "@conclave/meeting-core/test-fixtures";
+
+const REUSED_AUDIO_KEY = fakeSecretKey("sk", "reused-audio-key-fixture");
 
 let root: Root;
 let container: HTMLDivElement;
@@ -440,7 +443,7 @@ describe("AI setup UX", () => {
       Object.getOwnPropertyDescriptor(
         HTMLInputElement.prototype,
         "value",
-      )!.set!.call(input, "sk-reused-audio-key-fixture");
+      )!.set!.call(input, REUSED_AUDIO_KEY);
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
     await act(async () => {
@@ -448,7 +451,7 @@ describe("AI setup UX", () => {
     });
     expect(requestModels).toHaveBeenLastCalledWith({
       provider: "openai",
-      apiKey: "sk-reused-audio-key-fixture",
+      apiKey: REUSED_AUDIO_KEY,
       refresh: false,
     });
     expect(

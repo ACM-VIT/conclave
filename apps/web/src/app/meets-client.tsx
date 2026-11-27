@@ -76,6 +76,7 @@ import {
   useConnectionQuality,
   type ConnectionQualityStats,
 } from "./hooks/useConnectionQuality";
+import { useCallQualityMetrics } from "./hooks/useCallQualityMetrics";
 import { useIsMobile } from "./hooks/useIsMobile";
 import { usePrewarmSocket } from "./hooks/usePrewarmSocket";
 import {
@@ -121,6 +122,7 @@ import {
   getBrowserNetworkSnapshot,
 } from "./lib/network-information";
 import { resolveEffectiveCameraPublishSettings } from "./lib/media-quality-settings";
+import { ServerError } from "./lib/server-error";
 import {
   clearMediaDeviceError,
   generateRoomCode,
@@ -128,6 +130,7 @@ import {
   sanitizeInstitutionDisplayName,
 } from "./lib/utils";
 import type { VideoEffectsBridgeState } from "./components/VideoEffectsBridge";
+import { logCallError } from "./lib/call-error-capture";
 import { deriveInCallAlerts } from "./lib/in-call-alerts";
 import { NETWORK_BLOCKED_MESSAGE } from "./lib/media-path-recovery";
 import type { SetupNotice } from "./lib/setup-notice";
@@ -2164,7 +2167,7 @@ export default function MeetsClient({
           from: getMeetTrackDebugSnapshot(producer.track ?? null),
           to: getMeetTrackDebugSnapshot(nextTrack),
         });
-        console.error("[Meets] Failed to publish processed camera track:", err);
+        logCallError("[Meets] Failed to publish processed camera track", err);
         if (!isProcessedCandidate || producer.closed) return;
         if (refs.processedVideoTrackRef.current?.id === nextTrack.id) {
           refs.processedVideoTrackRef.current = null;
@@ -2919,6 +2922,18 @@ export default function MeetsClient({
     enabled: connectionState === "joined",
   });
   connectionQualityDebugRef.current = selfConnectionStats;
+  useCallQualityMetrics({
+    connectionState,
+    meetError,
+    reconnectRecoveryStatus,
+    admittedAt: socket.admittedAt,
+    reconnectInFlight: socket.reconnectInFlight,
+    participantCount,
+    joinMode: isWebinarAttendee ? "webinar_attendee" : "meeting",
+    consumerTransportRef: refs.consumerTransportRef,
+    cameraProducerRef: refs.videoProducerRef,
+    videoQualityRef: refs.videoQualityRef,
+  });
   const {
     receiveAdaptationQuality: selfReceiveAdaptationQuality,
     receiveEmergencyMode: selfReceiveEmergencyMode,
@@ -2987,7 +3002,7 @@ export default function MeetsClient({
           settled = true;
           window.clearTimeout(timeoutId);
           if (response?.error) {
-            reject(new Error(response.error));
+            reject(new ServerError(response.error));
             return;
           }
           if (response?.success !== true) {

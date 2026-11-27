@@ -2,6 +2,7 @@
 
 import { Globe } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
+import { logCallError } from "../lib/call-error-capture";
 import { errorName, resolveNoVncUrl } from "../lib/utils";
 import StageNotice from "./StageNotice";
 import StageSourcePill from "./StageSourcePill";
@@ -137,7 +138,7 @@ function SharedBrowserVideo({
     video.srcObject = stream;
     video.play().catch((err) => {
       if (errorName(err) !== "AbortError") {
-        console.error("[Meets] Browser video play error:", err);
+        logCallError("[Meets] Browser video play error", err);
       }
     });
 
