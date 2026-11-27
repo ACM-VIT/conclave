@@ -683,10 +683,10 @@ test("explicit and inferred Redis do not require the image SQLite default on a w
 test("recovery data needs a writable mount even with a Redis control plane", () => {
   const redis = { CONTROL_PLANE_PERSISTENCE: "redis", CONCLAVE_SQLITE_PATH: undefined };
   assert.deepEqual(storePathErrors(redis), []);
-  assert.match(
-    storePathErrors({ ...redis, RECORDING_STORAGE_PATH: "/srv/conclave/recordings" }).join("\n"),
-    /RECORDING_STORAGE_PATH resolves to \/srv\/conclave\/recordings/,
-  );
+  const unmapped = storePathErrors({ ...redis, RECORDING_STORAGE_PATH: "/srv/conclave/recordings" });
+  assert.equal(unmapped.filter((message) => message.startsWith("edge-dxb")).length, 1);
+  assert.match(unmapped.join("\n"),
+    /SFU_ROOM_RECOVERY_PATH \(from RECORDING_STORAGE_PATH\) resolves to \/srv\/conclave\/recordings\/room-recovery/);
   assert.match(
     storePathErrors({ ...redis, SFU_ROOM_RECOVERY_PATH: "/srv/recovery" }).join("\n"),
     /SFU_ROOM_RECOVERY_PATH resolves to \/srv\/recovery/,
@@ -700,8 +700,35 @@ test("recovery data needs a writable mount even with a Redis control plane", () 
       { type: "bind", source: "/srv/recordings", target: "/var/lib/conclave/recordings" },
       { type: "bind", source: "/srv/frozen", target: "/var/lib/conclave/recordings/room-recovery", read_only: true },
     ]).join("\n"),
-    /SFU_ROOM_RECOVERY_PATH resolves to \/var\/lib\/conclave\/recordings\/room-recovery/,
+    /SFU_ROOM_RECOVERY_PATH \(from RECORDING_STORAGE_PATH\) resolves to \/var\/lib\/conclave\/recordings\/room-recovery/,
   );
+});
+
+test("validates the effective recovery directory without requiring its parent to be writable", () => {
+  const redis = { CONTROL_PLANE_PERSISTENCE: "redis", CONCLAVE_SQLITE_PATH: undefined };
+  const recordings = "/var/lib/conclave/recordings";
+  const frozen = { type: "bind", target: recordings, read_only: true };
+  const recovery = "/srv/recovery";
+  const writable = { type: "bind", target: recovery };
+
+  for (const mounts of [[writable], [frozen, writable]]) {
+    assert.deepEqual(storePathErrors({ ...redis, SFU_ROOM_RECOVERY_PATH: recovery }, mounts), []);
+  }
+  assert.deepEqual(
+    storePathErrors(redis, [frozen, { type: "bind", target: recordings + "/room-recovery" }]),
+    [],
+  );
+});
+
+test("validates the runtime's default recovery directory when both path variables are unset", () => {
+  const redis = {
+    CONTROL_PLANE_PERSISTENCE: "redis",
+    CONCLAVE_SQLITE_PATH: undefined,
+    RECORDING_STORAGE_PATH: undefined,
+  };
+  assert.match(storePathErrors(redis, []).join("\n"),
+    /SFU_ROOM_RECOVERY_PATH resolves to \/app\/packages\/sfu\/data\/room-recovery/);
+  assert.deepEqual(storePathErrors(redis, [{ type: "bind", target: "/app/packages/sfu/data" }]), []);
 });
 
 test("SFU services must run in production mode", () => {

@@ -255,9 +255,8 @@ const checkStorePaths = (definition, env, service, errors) => {
   if (store) requireWritableMount(...store, "The SFU would refuse to start.");
   const recordings = String(env.RECORDING_STORAGE_PATH || "").trim();
   const recovery = String(env.SFU_ROOM_RECOVERY_PATH || "").trim();
-  if (recordings) requireWritableMount("RECORDING_STORAGE_PATH", recordings, "The SFU cannot persist data there.");
   requireWritableMount(
-    "SFU_ROOM_RECOVERY_PATH",
+    !recovery && recordings ? "SFU_ROOM_RECOVERY_PATH (from RECORDING_STORAGE_PATH)" : "SFU_ROOM_RECOVERY_PATH",
     recovery || posix.join(recordings || "data", "room-recovery"),
     "The SFU cannot open rooms without writing recovery state.",
   );
