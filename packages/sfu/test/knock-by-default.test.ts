@@ -2160,6 +2160,36 @@ describe("a join asked again on the same connection while its room is still open
     };
     return { opened, goOn };
   };
+  const slowOpening = () => {
+    const durable = makeDurable();
+    const recovery = durable.recovery;
+    const waits = [0, 1].map(() => {
+      let goOn = () => {};
+      return { held: new Promise<void>((resolve) => (goOn = resolve)), goOn: () => goOn() };
+    });
+    durable.recovery = {
+      ...recovery,
+      update: async (...args) => {
+        await waits[0].held;
+        return recovery.update(...args);
+      },
+      read: async (channelId) => {
+        await waits[1].held;
+        return recovery.read(channelId);
+      },
+    };
+    const state = makeState(durable);
+    const opening = holdRoomOpening(state);
+    const outlastTheJoin = async () => {
+      for (const wait of waits) {
+        await vi.advanceTimersByTimeAsync(4_000);
+        wait.goOn();
+      }
+      await vi.waitFor(() => expect(opening.opened).toHaveBeenCalled());
+      await vi.advanceTimersByTimeAsync(2_000);
+    };
+    return { state, opening, outlastTheJoin };
+  };
   // One tab's connection, which can ask to join more than once.
   const connect = (state: SfuState, user: SfuAuthPayload) => {
     const peer = makeSocket(`${user.userId}-socket`, user);
@@ -2196,12 +2226,10 @@ describe("a join asked again on the same connection while its room is still open
 
   it("answers a join whose room is slow to open before the tab gives up, and the retry hosts it", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const state = makeState();
-    const opening = holdRoomOpening(state);
+    const { state, opening, outlastTheJoin } = slowOpening();
     const tab = connect(state, opener);
     const firstTry = tab.ask();
-    await vi.waitFor(() => expect(opening.opened).toHaveBeenCalled());
-    await vi.advanceTimersByTimeAsync(10_000);
+    await outlastTheJoin();
     expect((await firstTry).error).toBe("The meeting is still opening. Try again in a moment.");
 
     opening.goOn();
@@ -2211,15 +2239,31 @@ describe("a join asked again on the same connection while its room is still open
     expect(opening.opened).toHaveBeenCalledTimes(1);
   });
 
-  it("closes a room it opened for a tab that left before taking its seat, once nobody takes it", async () => {
+  it("gives up a room whose router is not made in time, answers the join, and opens the room on the next try", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const state = makeState();
     const opening = holdRoomOpening(state);
     const tab = connect(state, opener);
     const firstTry = tab.ask();
     await vi.waitFor(() => expect(opening.opened).toHaveBeenCalled());
-    await vi.advanceTimersByTimeAsync(10_000);
-    await firstTry;
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect((await firstTry).error).toBe(ROOM_LEASE_UNCONFIRMED_ERROR);
+    expect(state.rooms.size).toBe(0);
+    expect(state.roomCreations.size).toBe(0);
+
+    opening.goOn();
+    expect((await tab.ask()).status).toBe("joined");
+    expect(tab.context.currentClient).toBeInstanceOf(Admin);
+    expect(opening.opened).toHaveBeenCalledTimes(2);
+  });
+
+  it("closes a room it opened for a tab that left before taking its seat, once nobody takes it", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { state, opening, outlastTheJoin } = slowOpening();
+    const tab = connect(state, opener);
+    const firstTry = tab.ask();
+    await outlastTheJoin();
+    expect((await firstTry).error).toBe("The meeting is still opening. Try again in a moment.");
     await hangUp(tab.peer);
 
     opening.goOn();

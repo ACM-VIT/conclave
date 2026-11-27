@@ -40,7 +40,7 @@ import {
 import type { EndedRoom } from "../../state.js";
 import { ROOM_OPEN_DEADLINE_MS } from "../../joinDeadlines.js";
 import {
-  RoomFenceError,
+  RoomOpeningError,
   RoomOwnershipError,
   type RoomAssignmentRecord,
 } from "../../roomRegistry.js";
@@ -706,7 +706,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
               respondWithRoomOwner(error.owner);
               return null;
             }
-            if (error instanceof RoomFenceError) {
+            if (error instanceof RoomOpeningError) {
               respond(callback, { error: ROOM_LEASE_UNCONFIRMED_ERROR });
               return null;
             }

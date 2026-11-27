@@ -4,11 +4,11 @@ import { Room } from "../config/classes/Room.js";
 import { config } from "../config/config.js";
 import getWorker, { type WorkerLoad } from "../utilities/getWorker.js";
 import { getWorkerWebRtcServer } from "../utilities/createWorkers.js";
-import type { Worker } from "mediasoup/types";
+import type { Router, Worker } from "mediasoup/types";
 import { Logger } from "../utilities/loggers.js";
 import {
   RoomLeaseExpiredError,
-  RoomFenceError,
+  RoomOpeningError,
   RoomOwnershipError,
   type RoomOwnershipClaim,
 } from "./roomRegistry.js";
@@ -488,6 +488,14 @@ const bindScheduledInvitations = (state: SfuState, room: Room): void => {
   };
 };
 
+const makeRouter = async (worker: Worker, channelId: string): Promise<Router> => {
+  const making = worker.createRouter({ mediaCodecs: config.routerMediaCodecs });
+  const router = await withDeadline<Router | null>(making, null);
+  if (router) return router;
+  runDetached(`Closing the late router of ${channelId}`, async () => (await making).close());
+  throw new RoomOpeningError(channelId, "its router was not made in time");
+};
+
 export const clearEndedRoom = (state: SfuState, channelId: string): boolean =>
   state.endedRooms.delete(channelId);
 
@@ -594,52 +602,70 @@ export const getOrCreateRoomWithOrigin = async (
       throw new RoomOwnershipError(ownership.owner);
     }
     if (reclaiming) await reclaiming;
+    const generation = ownership.generation;
     const incarnationId = randomUUID();
-    const fenced = await Promise.all([
-      state.roomRecovery.fence(
-        { channelId, incarnationId, takesOverRecordOf: null },
-        ownership.generation,
-        options.createdBy ?? null,
-      ),
-      fenceScheduledMeeting(
+    let worker: Worker | undefined;
+    let router: Router | undefined;
+    try {
+      const fenced = await withDeadline(
+        Promise.all([
+          state.roomRecovery.fence(
+            { channelId, incarnationId, takesOverRecordOf: null },
+            generation,
+            options.createdBy ?? null,
+          ),
+          fenceScheduledMeeting(
+            state.scheduledMeetings,
+            state.scheduledMeetingPersistence,
+            clientId,
+            roomId,
+            generation,
+          ).catch((error: unknown) => {
+            Logger.error(`Failed to fence the booking of ${channelId}`, error);
+            return false;
+          }),
+        ]),
+        [false, false],
+      );
+      if (!fenced.every(Boolean)) {
+        throw new RoomOpeningError(channelId, "its fences did not land");
+      }
+      // Read only now that this SFU holds the code, and before the room is in
+      // anyone's hands. A room that came and went while this join waited has
+      // written its last by now, so the record this room takes over is the
+      // newest one.
+      const record = await withDeadline<RecalledRoom | null>(
+        state.roomRecovery.recall(channelId),
+        null,
+      );
+      if (!record) {
+        throw new RoomOpeningError(channelId, "its recovery record was not read in time");
+      }
+      recalled = record;
+      // Another SFU may have changed this meeting's invitations since this one
+      // loaded them.
+      await refreshScheduledMeeting(
         state.scheduledMeetings,
         state.scheduledMeetingPersistence,
         clientId,
         roomId,
-        ownership.generation,
-      ).catch((error: unknown) => {
-        Logger.error(`Failed to fence the booking of ${channelId}`, error);
-        return false;
-      }),
-    ]);
-    if (!fenced.every(Boolean)) {
-      await state.roomRegistry.releaseRoom(channelId);
-      throw new RoomFenceError(channelId);
-    }
-    // Read only now that this SFU holds the code, and before the room is in
-    // anyone's hands. A room that came and went while this join waited has
-    // written its last by now, so the record this room takes over is the
-    // newest one.
-    const record = await state.roomRecovery.recall(channelId);
-    recalled = record;
-    // Another SFU may have changed this meeting's invitations since this one
-    // loaded them.
-    await refreshScheduledMeeting(
-      state.scheduledMeetings,
-      state.scheduledMeetingPersistence,
-      clientId,
-      roomId,
-    );
+      );
 
-    let worker: Worker | undefined;
-    try {
       // Reserve the slot before createRouter yields to other room creations.
       worker = getWorker(state.workers, getRoomWorkerLoads(state));
       const reservations = state.workerRoomReservations;
       reservations.set(worker.pid, (reservations.get(worker.pid) ?? 0) + 1);
-      const router = await worker.createRouter({
-        mediaCodecs: config.routerMediaCodecs,
-      });
+      router = await makeRouter(worker, channelId);
+      const confirmed = await state.roomRegistry.renewRoom({ channelId, clientId, roomId });
+      if (!confirmed.ok) {
+        throw new RoomOwnershipError(confirmed.owner);
+      }
+      if (
+        confirmed.generation !== generation ||
+        !state.roomRegistry.holdsLease(channelId, generation)
+      ) {
+        throw new RoomOpeningError(channelId, "its lease was claimed again while it was being made");
+      }
       const createdRoom = new Room({
         id: roomId,
         incarnationId,
@@ -648,7 +674,7 @@ export const getOrCreateRoomWithOrigin = async (
         webRtcServer: getWorkerWebRtcServer(worker),
         workerPid: typeof worker.pid === "number" ? worker.pid : null,
       });
-      createdRoom.ownershipGeneration = ownership.generation;
+      createdRoom.ownershipGeneration = generation;
       createdRoom.recoveryPassesVoidUntil = record.passesVoidUntil;
       createdRoom.recoveryPassGenerations = record.lost?.passGenerations ?? null;
       createdRoom.earlierPassGenerations = [...(record.lost?.passGenerations ?? [])];
@@ -669,6 +695,8 @@ export const getOrCreateRoomWithOrigin = async (
       Logger.success(`Created room: ${roomId} (${clientId})`);
       return createdRoom;
     } catch (error) {
+      if (error instanceof RoomOpeningError) Logger.warn(error.message);
+      router?.close();
       await state.roomRegistry.releaseRoom(channelId);
       throw error;
     } finally {

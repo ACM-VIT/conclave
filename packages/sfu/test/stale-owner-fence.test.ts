@@ -148,23 +148,24 @@ const startSfu = async (
   registry: RoomRegistry,
   options: { recovery?: RoomRecoveryStore; persistence?: ScheduledMeetingPersistence } = {},
 ): Promise<SfuState> => {
-  const router = {
-    closed: false,
-    rtpCapabilities: { codecs: [], headerExtensions: [] },
-    close: vi.fn(),
-  } as unknown as Router;
+  const makeRouter = async () =>
+    ({
+      closed: false,
+      rtpCapabilities: { codecs: [], headerExtensions: [] },
+      close: vi.fn(),
+    }) as unknown as Router;
   const state = createSfuState({
     roomRegistry: registry,
     roomRecoveryStore: options.recovery ?? createMemoryRoomRecoveryStore(),
   });
-  state.workers = [{ pid: 1, closed: false, createRouter: vi.fn(async () => router) } as unknown as Worker];
+  state.workers = [{ pid: 1, closed: false, createRouter: vi.fn(makeRouter) } as unknown as Worker];
   await initScheduledMeetings(state, options.persistence ?? createScheduledMeetingPersistence());
   return state;
 };
 
 type Answer = { success?: boolean; error?: string; status?: string };
 
-const join = async (state: SfuState, user: SfuAuthPayload, payload: Record<string, unknown> = {}) => {
+const connect = (state: SfuState, user: SfuAuthPayload) => {
   const handlers = new Map<string, (...args: never[]) => unknown>();
   const wire = { connected: true };
   const emit = vi.fn();
@@ -190,7 +191,6 @@ const join = async (state: SfuState, user: SfuAuthPayload, payload: Record<strin
     new Promise((resolve) => {
       void raw(event, payload, resolve);
     });
-  const joined = await send("joinRoom", { roomId: CODE, sessionId: user.sessionId, ...payload });
   const leave = async (reason = "client namespace disconnect") => {
     wire.connected = false;
     await handlers.get("disconnect")?.(...([reason] as never[]));
@@ -198,7 +198,15 @@ const join = async (state: SfuState, user: SfuAuthPayload, payload: Record<strin
   const passes = () => emit.mock.calls.filter(([event]) => event === "roomRecoveryPass").length;
   const told = (event: string): unknown[] =>
     (emit.mock.calls as unknown[][]).filter(([name]) => name === event).map(([, body]) => body);
-  return { context, send, raw, leave, passes, told, status: joined.status, answer: joined };
+  const ask = (payload: Record<string, unknown> = {}): Promise<Answer> =>
+    send("joinRoom", { roomId: CODE, sessionId: user.sessionId, ...payload });
+  return { context, send, raw, leave, passes, told, ask };
+};
+
+const join = async (state: SfuState, user: SfuAuthPayload, payload: Record<string, unknown> = {}) => {
+  const tab = connect(state, user);
+  const joined = await tab.ask(payload);
+  return { ...tab, status: joined.status, answer: joined };
 };
 
 const dirs: string[] = [];
@@ -521,6 +529,140 @@ describe("a room whose fence did not land", () => {
     expect((await join(sfuA, host("a"))).answer).toEqual({ error: ROOM_LEASE_UNCONFIRMED_ERROR });
     expect(sfuA.rooms.has(CHANNEL)).toBe(false);
     expect(leases.ownerOf(CHANNEL)).toBeNull();
+  });
+});
+
+describe("a room still being made", () => {
+  type Wait = "the booking's fence to be flushed" | "its recovery record to be read" | "the booking to be read again" | "its router";
+  const WAITS: Wait[] = [
+    "the booking's fence to be flushed",
+    "its recovery record to be read",
+    "the booking to be read again",
+    "its router",
+  ];
+
+  const slowSfu = async (leases: Leases, recovery: RoomRecoveryStore, wait: Wait) => {
+    let arrive: () => void = () => {};
+    const onItsWay = new Promise<void>((resolve) => (arrive = resolve));
+    let fenced = false;
+    const held = (what: Wait): Promise<void> | null => (fenced && what === wait ? onItsWay : null);
+    const persistence = createScheduledMeetingPersistence();
+    const fence = persistence.fenceMeeting!.bind(persistence);
+    const readOne = persistence.loadOne!.bind(persistence);
+    persistence.fenceMeeting = (...args) => {
+      fenced = true;
+      return fence(...args);
+    };
+    persistence.flush = async () => {
+      await held("the booking's fence to be flushed");
+    };
+    persistence.loadOne = async (id) => {
+      await held("the booking to be read again");
+      return readOne(id);
+    };
+    const slowRecovery: RoomRecoveryStore = {
+      ...recovery,
+      read: async (channelId) => {
+        await held("its recovery record to be read");
+        return recovery.read(channelId);
+      },
+    };
+    const state = await startSfu(leases.forInstance("sfu-a"), { recovery: slowRecovery, persistence });
+    const worker = state.workers[0];
+    const makeRouter = worker.createRouter.bind(worker);
+    const routers: Router[] = [];
+    worker.createRouter = (async (...args: Parameters<Worker["createRouter"]>) => {
+      await held("its router");
+      const router = await makeRouter(...args);
+      routers.push(router);
+      return router;
+    }) as Worker["createRouter"];
+    return { state, arrive, routers };
+  };
+
+  it.each(WAITS)(
+    "is not opened here, and sends its joiners on, when another SFU took the code while it waited for %s",
+    async (wait) => {
+      useSharedSchedule();
+      await book();
+      const leases = sharedLeases();
+      const recovery = createMemoryRoomRecoveryStore();
+      const sfuA = await slowSfu(leases, recovery, wait);
+      const sfuB = await startSfu(leases.forInstance("sfu-b"), { recovery });
+
+      const opener = connect(sfuA.state, host("a")).ask();
+      await settle();
+      const retry = connect(sfuA.state, host("a2")).ask();
+      await settle();
+      expect(sfuA.state.rooms.has(CHANNEL)).toBe(false);
+
+      leases.forget();
+      expect((await join(sfuB, host("b"))).status).toBe("joined");
+      const roomOnB = sfuB.rooms.get(CHANNEL)!;
+      sfuA.arrive();
+      await vi.advanceTimersByTimeAsync(1_500);
+
+      const sentOn = expect.objectContaining({ redirectInstanceId: "sfu-b" });
+      expect(await opener).toEqual(sentOn);
+      expect(await retry).toEqual(sentOn);
+      expect(sfuA.state.rooms.has(CHANNEL)).toBe(false);
+      expect(sfuA.state.roomCreations.has(CHANNEL)).toBe(false);
+      expect(sfuA.state.roomRegistry.holdsLease(CHANNEL)).toBe(false);
+      expect(leases.ownerOf(CHANNEL)).toBe("sfu-b");
+      expect(sfuB.rooms.get(CHANNEL)).toBe(roomOnB);
+      expect((await createRoomRecoveryLedger(recovery).recall(CHANNEL)).lastWriter).toBe(
+        roomOnB.incarnationId,
+      );
+      for (const router of sfuA.routers) expect(router.close).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(WAITS.filter((wait) => wait !== "the booking to be read again"))(
+    "is given up, and its code opens on the next try, when %s takes too long",
+    async (wait) => {
+      useSharedSchedule();
+      await book();
+      const leases = sharedLeases();
+      const sfuA = await slowSfu(leases, createMemoryRoomRecoveryStore(), wait);
+
+      let answer: Answer | undefined;
+      void connect(sfuA.state, host("a"))
+        .ask()
+        .then((given) => (answer = given));
+      await vi.advanceTimersByTimeAsync(ROOM_WRITE_COMMIT_MS + 1_500);
+
+      expect(answer).toEqual({ error: ROOM_LEASE_UNCONFIRMED_ERROR });
+      expect(sfuA.state.rooms.has(CHANNEL)).toBe(false);
+      expect(sfuA.state.roomCreations.has(CHANNEL)).toBe(false);
+      expect(leases.ownerOf(CHANNEL)).toBeNull();
+
+      sfuA.arrive();
+      await settle();
+      for (const router of sfuA.routers) expect(router.close).toHaveBeenCalledTimes(1);
+      expect((await join(sfuA.state, host("b"))).status).toBe("joined");
+      expect(sfuA.routers.filter((router) => !(router.close as ReturnType<typeof vi.fn>).mock.calls.length)).toHaveLength(1);
+    },
+  );
+
+  it("is not opened under a generation its lease no longer has, and opens on the next try", async () => {
+    useSharedSchedule();
+    await book();
+    const leases = sharedLeases();
+    const sfuA = await slowSfu(leases, createMemoryRoomRecoveryStore(), "its router");
+
+    const opener = connect(sfuA.state, host("a")).ask();
+    await settle();
+    leases.forget();
+    await vi.advanceTimersByTimeAsync(1_000);
+    sfuA.arrive();
+    await settle();
+
+    expect(await opener).toEqual({ error: ROOM_LEASE_UNCONFIRMED_ERROR });
+    expect(sfuA.state.rooms.has(CHANNEL)).toBe(false);
+    expect(leases.ownerOf(CHANNEL)).toBeNull();
+    const again = await join(sfuA.state, host("b"));
+    expect(again.status).toBe("joined");
+    expect(sfuA.state.roomRegistry.holdsLease(CHANNEL, sfuA.state.rooms.get(CHANNEL)!.ownershipGeneration!)).toBe(true);
   });
 });
 

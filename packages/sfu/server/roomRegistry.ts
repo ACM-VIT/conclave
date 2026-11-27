@@ -52,10 +52,10 @@ export class RoomLeaseExpiredError extends RoomRegistryUnavailableError {
   }
 }
 
-export class RoomFenceError extends Error {
-  constructor(channelId: string) {
-    super(`The writes of ${channelId} could not be fenced for its new room`);
-    this.name = "RoomFenceError";
+export class RoomOpeningError extends Error {
+  constructor(channelId: string, why: string) {
+    super(`The room for ${channelId} did not open: ${why}`);
+    this.name = "RoomOpeningError";
   }
 }
 
