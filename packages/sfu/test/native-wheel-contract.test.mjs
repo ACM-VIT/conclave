@@ -10,10 +10,11 @@ const cleanups = [];
 
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
-it("acknowledges the current native Wheel add only after the SFU echoes the committed bytes to its writer", async () => {
+it.each(["echo", "snapshot"])("acknowledges a native Wheel add only after the server provides a committed %s", async (confirmation) => {
   const pool = createAppDocumentPool({ workers: 1, deadlineMs: 5_000, maxDocumentBytes: 1024 * 1024 });
   cleanups.push(() => pool.close());
   const room = inAppRoom(pool, "writer-echo-wheel", { appId: "wheel" });
@@ -54,7 +55,28 @@ it("acknowledges the current native Wheel add only after the SFU echoes the comm
   const ownEcho = inbox.find(({ event }) => event === "apps:yjs:update");
   expect(ownEcho).toBeDefined();
   const { update } = ownEcho.payload;
-  host("update", "h-echo", { update: Buffer.from(update).toString("base64") });
+  if (confirmation === "echo") {
+    host("update", "h-echo", { update: Buffer.from(update).toString("base64") });
+  } else {
+    await vi.waitFor(() => {
+      expect(messages().find(({ type, payload }) => type === "sync" && payload.purpose === "wheel-add-confirmation")).toBeDefined();
+    }, { timeout: 2_000 });
+    const first = messages().find(({ type, payload }) => type === "sync" && payload.purpose === "wheel-add-confirmation");
+    expect(addAck()).toBeUndefined();
+    host("snapshot", first.requestId, { syncMessage: Buffer.from([0, 0]).toString("base64") });
+    expect(addAck()).toBeUndefined();
+    const request = await vi.waitFor(() => {
+      const next = messages().find(({ type, requestId, payload }) =>
+        requestId !== first.requestId && type === "sync" && payload.purpose === "wheel-add-confirmation");
+      expect(next).toBeDefined();
+      return next;
+    }, { timeout: 2_000 });
+    const confirmed = await room.requestSync(new Y.Doc());
+    host("snapshot", request.requestId, {
+      syncMessage: Buffer.from(confirmed.syncMessage).toString("base64"),
+      stateVector: Buffer.from(confirmed.stateVector).toString("base64"),
+    });
+  }
   expect(addAck()?.payload).toEqual({ ok: true, added: [0] });
 
   const { doc: cold } = await room.joinDocument();
