@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 
 export type SfuAvailability = "healthy" | "draining" | "unhealthy" | "unknown";
-export type SfuRoomPlacementCapability = "supported" | "legacy" | "unknown";
 
 export type SfuRoutingCandidate = {
   index: number;
@@ -10,7 +9,6 @@ export type SfuRoutingCandidate = {
   instanceId?: string;
   region?: string;
   latencyMs?: number;
-  roomPlacementCapability?: SfuRoomPlacementCapability;
 };
 
 export type PreOwnerSfuSelection =
@@ -43,23 +41,6 @@ export type ReservedSfuResolution =
       ok: false;
       reason: "invalid-assignment" | "unsafe-local-registry";
     };
-
-export const resolveRoomPlacementCapability = (
-  status: unknown,
-): SfuRoomPlacementCapability => {
-  if (!status || typeof status !== "object" || Array.isArray(status)) {
-    return "unknown";
-  }
-
-  const capabilities = (status as { capabilities?: unknown }).capabilities;
-  if (!capabilities || typeof capabilities !== "object" || Array.isArray(capabilities)) {
-    return "legacy";
-  }
-
-  return (capabilities as { roomPlacement?: unknown }).roomPlacement === 1
-    ? "supported"
-    : "legacy";
-};
 
 const pickStableCandidate = (
   candidates: readonly SfuRoutingCandidate[],

@@ -12,16 +12,6 @@ export interface PublicScheduledMeeting {
   endedAt: number | null;
 }
 
-export class SfuTooOldForBookingsError extends Error {
-  constructor() {
-    super("The meeting service is older than this page and cannot look scheduled meetings up yet.");
-    this.name = "SfuTooOldForBookingsError";
-  }
-}
-
-export const isSfuTooOldForBookings = (error: unknown): boolean =>
-  error instanceof SfuTooOldForBookingsError;
-
 export const fetchPublicScheduledMeeting = async (
   scheduledMeetingsBase: string,
   sfuSecret: string,
@@ -36,7 +26,6 @@ export const fetchPublicScheduledMeeting = async (
     cache: "no-store",
     signal,
   });
-  if (response.status === 404) throw new SfuTooOldForBookingsError();
   if (!response.ok) throw new Error(`Scheduled meeting lookup failed (${response.status})`);
   const data: unknown = await response.json();
   if (data === null || typeof data !== "object" || !("scheduledMeeting" in data)) {

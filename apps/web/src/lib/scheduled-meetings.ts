@@ -7,7 +7,6 @@ import { resolveSfuUrls } from "@/lib/sfu-url";
 import { readResponseError } from "@/app/lib/utils";
 import {
   fetchPublicScheduledMeeting,
-  isSfuTooOldForBookings,
   type PublicScheduledMeeting,
 } from "./scheduled-meeting-lookup";
 import type { RoomDestination } from "@/lib/meeting-links";
@@ -66,18 +65,11 @@ const lookupInTenant = async (
       : []);
   if (matches.length > 0) {
     if (mode === "scheduled") return matches[0];
-    const booking = matches.find(({ meeting }) => meeting.bookingLink === true);
-    if (booking && matches.every(({ meeting }) => meeting.id === booking.meeting.id && meeting.bookingLink !== false)) {
+    const [booking] = matches;
+    if (booking && matches.every(({ meeting }) => meeting.id === booking.meeting.id && meeting.bookingLink === true)) {
       return booking;
     }
     return { kind: "unknown" };
-  }
-  const [first] = results;
-  if (
-    first?.status === "rejected" &&
-    results.every((result) => result.status === "rejected" && isSfuTooOldForBookings(result.reason))
-  ) {
-    throw first.reason;
   }
   return results.some((result) => result.status === "rejected")
     ? { kind: "unknown" }
