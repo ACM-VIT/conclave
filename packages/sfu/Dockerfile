@@ -26,6 +26,9 @@ RUN pnpm install --filter @conclave/sfu... --frozen-lockfile --node-linker=isola
 
 COPY packages ./packages
 RUN node packages/sfu/scripts/ensure-mediasoup-worker.mjs
+FROM build AS canary
+RUN pnpm install --filter @conclave/sfu... --frozen-lockfile --node-linker=isolated
+RUN pnpm --filter @conclave/sfu run build:canary
 
 # Runtime stage: Node, the installed production dependencies (including the
 # mediasoup worker binary) and the SFU sources, all owned by root and read-only
@@ -39,6 +42,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends dumb-init ca-ce
       /usr/local/bin/yarn /usr/local/bin/yarnpkg /opt/yarn-*
 
 COPY --from=build --chown=root:root /app /app
+COPY --from=canary --chown=root:root /app/packages/sfu/dist/canary-call.mjs /app/packages/sfu/dist/canary-call.mjs
+LABEL org.conclave.health-deploy-id=true
 
 # Default state dir; volume-mount this in prod for durability.
 RUN mkdir -p /var/lib/conclave/recordings && chown -R node:node /var/lib/conclave

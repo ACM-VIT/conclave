@@ -33,14 +33,39 @@ function buildArgs(args, where) {
   }));
 }
 
-export function composeBuilds(root) {
-  const builds = [];
-  for (const file of readdirSync(root).filter((name) => COMPOSE_FILE.test(name)).sort()) {
+function loadCompose(root, file, cache) {
+  if (!cache.has(file)) {
     const document = parse(readFileSync(path.join(root, file), "utf8"), { merge: true }) ?? {};
     if (document.include !== undefined) throw unsupported(`${file} uses include`);
+    cache.set(file, document);
+  }
+  return cache.get(file);
+}
+
+function extendedBuild(root, file, service, cache, seen) {
+  const where = `${file} services.${service}`;
+  if (seen.includes(where)) throw unsupported(`${where} extends itself`);
+  const definition = loadCompose(root, file, cache).services?.[service];
+  if (definition === undefined || definition === null) throw unsupported(`${where} does not exist`);
+  if (definition.extends === undefined) return definition.build;
+  const spec = typeof definition.extends === "string" ? { service: definition.extends } : definition.extends;
+  if (spec === null || typeof spec !== "object" || Array.isArray(spec)) throw unsupported(`${where}.extends is not a service name or a map`);
+  const unknownKey = Object.keys(spec).find((key) => key !== "file" && key !== "service");
+  if (unknownKey) throw unsupported(`${where}.extends.${unknownKey}`);
+  const baseFile = spec.file === undefined ? file : path.posix.normalize(literal(spec.file, `${where}.extends.file`));
+  if (baseFile.includes("/") || !COMPOSE_FILE.test(baseFile)) throw unsupported(`${where}.extends.file ${baseFile} is not a compose file beside it`);
+  const inherited = extendedBuild(root, baseFile, literal(spec.service, `${where}.extends.service`), cache, [...seen, where]);
+  if (definition.build !== undefined && inherited !== undefined) throw unsupported(`${where} overrides the build it extends`);
+  return definition.build ?? inherited;
+}
+
+export function composeBuilds(root) {
+  const builds = [];
+  const cache = new Map();
+  for (const file of readdirSync(root).filter((name) => COMPOSE_FILE.test(name)).sort()) {
+    const document = loadCompose(root, file, cache);
     for (const [service, definition] of Object.entries(document.services ?? {})) {
-      if (definition?.extends !== undefined) throw unsupported(`${file} services.${service} uses extends`);
-      const build = definition?.build;
+      const build = definition?.extends === undefined ? definition?.build : extendedBuild(root, file, service, cache, []);
       if (build === undefined || build === null) continue;
       const where = `${file} services.${service}.build`;
       const spec = typeof build === "string" ? { context: build } : build;

@@ -933,9 +933,12 @@ export const createSfuApp = ({
 
     try {
       // Draining instances keep routing established owners/placements but must
-      // not become the first assignment for a new room.
+      // not become the first assignment for a new room. The deploy canary asks
+      // with allowDraining: it calls a fresh build that stays out of rotation
+      // until that call passes.
       const existing = await state.roomRegistry.getAssignment(channelId);
-      if (state.isDraining && !existing) {
+      const allowDraining = readBoolean(requestBody(req), "allowDraining") === true;
+      if (state.isDraining && !existing && !allowDraining) {
         res.status(409).json({
           error: "Meeting server is draining",
           draining: true,
