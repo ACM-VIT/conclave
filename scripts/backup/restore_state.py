@@ -25,6 +25,7 @@ import re
 import secrets
 import shutil
 import signal
+import socket
 import sqlite3
 import stat
 import subprocess
@@ -35,6 +36,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zlib
+from contextlib import contextmanager
 
 # Root runs these from the checkout; no bytecode is left beside them.
 sys.dont_write_bytecode = True
@@ -638,11 +640,6 @@ def build(staging_fd, archive, writes, owner):
     return builder
 
 
-def quote_args(args):
-    """redis-cli's own quoting for commands sent on stdin."""
-    return " ".join('"' + arg.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n") + '"' for arg in args)
-
-
 def redis_target():
     url = os.environ.get("REDIS_SOURCE_URL", "")
     if not url:
@@ -659,21 +656,92 @@ def redis_target():
     }
 
 
-def run_cli(args, stdin=None, password=""):
+def run_cli(args, password=""):
     env = dict(os.environ)
     env.pop("REDISCLI_AUTH", None)
     if password:
         env["REDISCLI_AUTH"] = password
-    result = subprocess.run(["redis-cli", *args], input=stdin, capture_output=True, text=True, env=env)
+    result = subprocess.run(["redis-cli", *args], capture_output=True, text=True, env=env)
     if result.returncode != 0:
         raise Refused(f"redis-cli {args[-1] if args else ''} failed: {result.stderr.strip() or result.stdout.strip()}")
     return result.stdout
 
 
+def redis_reply(stream):
+    line = stream.readline()
+    if not line.endswith(b"\r\n"):
+        raise Refused("incomplete Redis reply")
+    kind, value = line[:1], line[1:-2]
+    if kind == b"+":
+        return value
+    if kind == b"-":
+        raise Refused(value.decode("utf-8", errors="replace"))
+    if kind == b":":
+        return int(value)
+    if kind in (b"$", b"*"):
+        count = int(value)
+        if count == -1:
+            return None
+        if count < 0:
+            raise Refused("invalid Redis reply length")
+        if kind == b"*":
+            return [redis_reply(stream) for _ in range(count)]
+        data = stream.read(count)
+        if len(data) != count or stream.read(2) != b"\r\n":
+            raise Refused("incomplete Redis bulk reply")
+        return data
+    raise Refused("unexpected Redis reply type")
+
+
+@contextmanager
+def redis_commands(address, db, user="", password=""):
+    try:
+        if isinstance(address, str):
+            connection = socket.socket(socket.AF_UNIX)
+        else:
+            connection = socket.create_connection(address, timeout=15)
+        with connection:
+            if isinstance(address, str):
+                connection.settimeout(15)
+                connection.connect(address)
+            with connection.makefile("rb") as stream:
+                def command(*args):
+                    fields = [arg if isinstance(arg, bytes) else str(arg).encode("utf-8") for arg in args]
+                    frame = [f"*{len(fields)}\r\n".encode("ascii")]
+                    for field in fields:
+                        frame.extend((f"${len(field)}\r\n".encode("ascii"), field, b"\r\n"))
+                    connection.sendall(b"".join(frame))
+                    return redis_reply(stream)
+                if user or password:
+                    command("AUTH", *((user, password) if user else (password,)))
+                if int(db) != 0:
+                    command("SELECT", db)
+                yield command
+    except (OSError, ValueError) as error:
+        raise Refused(f"Redis connection failed: {error}") from error
+
+
+def scan_redis_keys(command, pattern):
+    keys = set()
+    cursor = b"0"
+    while True:
+        result = command("SCAN", cursor, "MATCH", pattern, "COUNT", 200)
+        if not isinstance(result, list) or len(result) != 2:
+            raise Refused("unexpected Redis SCAN reply")
+        cursor, batch = result
+        if (not isinstance(cursor, bytes) or not cursor.isdigit() or not isinstance(batch, list)
+                or any(not isinstance(key, bytes) for key in batch)):
+            raise Refused("unexpected Redis SCAN reply")
+        keys.update(batch)
+        if cursor == b"0":
+            return keys
+
+
 class RedisRestore:
     """The Redis step in two halves. prepare(), before the first rename:
     the live Redis answers and takes this restore's credentials, and the
-    snapshot loads into a throwaway server. migrate(), after the files: the
+    snapshot loads into a throwaway server and both key sets are read.
+    migrate(), after the files: the
     matching keys are copied into the live Redis with MIGRATE COPY REPLACE,
     and the live keys in that pattern the snapshot does not have are deleted.
     The SFUs prefer a Redis key over the restored SQLite copy, so a key
@@ -694,7 +762,8 @@ class RedisRestore:
         self.source_db = archive.redis_db
         self.scratch = None
         self.socket = None
-        self.snapshot = None
+        self.keys = []
+        self.stale = []
         self.server = None
         self.container = None
         self.server_log = None
@@ -721,18 +790,32 @@ class RedisRestore:
         for loader in loaders:
             try:
                 self.load(loader)
-                return
+                break
             except Refused as refused:
                 failures.append(f"{loader}: {refused}")
                 self.stop()
-        raise Refused(f"the Redis snapshot in the backup does not load ({'; '.join(failures) or 'no redis-server or Docker on this host to load it with'}); nothing was changed")
+        else:
+            raise Refused(f"the Redis snapshot in the backup does not load ({'; '.join(failures) or 'no redis-server or Docker on this host to load it with'}); nothing was changed")
+
+        try:
+            with redis_commands(self.socket, self.source_db) as snapshot:
+                backed_up = scan_redis_keys(snapshot, self.pattern)
+            with self.live_commands() as live:
+                current = scan_redis_keys(live, self.pattern)
+        except Refused as refused:
+            raise Refused(f"cannot scan Redis keys for restore: {refused}; nothing was changed") from refused
+        self.keys = sorted(backed_up)
+        self.stale = sorted(current - backed_up)
+
+    def live_commands(self):
+        target = self.target
+        return redis_commands((target["host"], target["port"]), target["db"], target["user"], target["password"])
 
     def load(self, loader):
         self.scratch = os.path.join(self.work, "docker" if loader == "Docker" else "local")
         os.mkdir(self.scratch, 0o700)
         shutil.copyfile(self.dump, os.path.join(self.scratch, "dump.rdb"))
         self.socket = os.path.join(self.scratch, "redis.sock")
-        self.snapshot = ["-s", self.socket, "-n", self.source_db]
         if not str(self.source_db).isdigit():
             raise Refused(f"the backup names Redis database {self.source_db!r}, which is not a database number")
         databases = str(max(16, int(self.source_db) + 1))
@@ -769,22 +852,23 @@ class RedisRestore:
 
     def migrate(self):
         target = self.target
-        keys = [key for key in run_cli(self.snapshot + ["--scan", "--pattern", self.pattern]).splitlines() if key]
         auth = ["AUTH2", target["user"], target["password"]] if target["user"] else (["AUTH", target["password"]] if target["password"] else [])
         host = "127.0.0.1" if target["host"] == "localhost" else target["host"]
-        for i in range(0, len(keys), 200):
-            command = ["MIGRATE", host, str(target["port"]), "", target["db"], "10000", "COPY", "REPLACE", *auth, "KEYS", *keys[i:i + 200]]
-            reply = run_cli(self.snapshot, stdin=quote_args(command) + "\n").strip()
-            if reply != "OK":
-                raise Refused(f"MIGRATE into {host}:{target['port']} failed: {reply}")
-        log(f"Restored {len(keys)} Redis keys matching {self.pattern}")
-        backed_up = set(keys)
-        stale = sorted(key for key in run_cli(self.live + ["--scan", "--pattern", self.pattern], password=target["password"]).splitlines() if key and key not in backed_up)
-        for i in range(0, len(stale), 200):
-            reply = run_cli(self.live, stdin=quote_args(["DEL", *stale[i:i + 200]]) + "\n", password=target["password"]).strip()
-            if not reply.isdigit():
-                raise Refused(f"deleting keys the backup does not have failed: {reply}")
-        log(f"Deleted {len(stale)} Redis keys matching {self.pattern} that the backup does not have")
+        if self.keys:
+            with redis_commands(self.socket, self.source_db) as snapshot:
+                for i in range(0, len(self.keys), 200):
+                    reply = snapshot("MIGRATE", host, target["port"], b"", target["db"], "10000",
+                                     "COPY", "REPLACE", *auth, "KEYS", *self.keys[i:i + 200])
+                    if reply != b"OK":
+                        raise Refused(f"MIGRATE into {host}:{target['port']} failed: {reply!r}")
+        log(f"Restored {len(self.keys)} Redis keys matching {self.pattern}")
+        if self.stale:
+            with self.live_commands() as live:
+                for i in range(0, len(self.stale), 200):
+                    reply = live("DEL", *self.stale[i:i + 200])
+                    if not isinstance(reply, int):
+                        raise Refused(f"deleting keys the backup does not have failed: {reply!r}")
+        log(f"Deleted {len(self.stale)} Redis keys matching {self.pattern} that the backup does not have")
         subprocess.run(["redis-cli", "-s", self.socket, "SHUTDOWN", "NOSAVE"], capture_output=True)
 
     def stop(self):

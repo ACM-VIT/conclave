@@ -2221,6 +2221,60 @@ test("a store an SFU keeps under a mount of a dir above the state dir is backed 
   }
 });
 
+test("Redis restore preserves binary key names and prunes binary stale keys", needsRedis, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  const live = await startRedis();
+  const evalKey = (operation, hex, ...args) => live.cli("--raw", "EVAL",
+    "local key = ARGV[1]:gsub('..', function(pair) return string.char(tonumber(pair, 16)) end); return redis.call(ARGV[2], key, unpack(ARGV, 3))",
+    "0", hex, operation, ...args);
+  try {
+    const { state, backup, latestArchive, restore } = await setUp(root, [
+      `SFU_PERSISTENCE_REDIS_URL=redis://127.0.0.1:${live.port}/0`,
+      "BACKUP_REDIS_PATTERN='*'",
+    ]);
+    const db = path.join(state, "conclave.sqlite");
+    makeDb(db, "archived");
+    const keys = ["", "6c696e650a627265616b", "ff0062797465"];
+    for (const key of keys) await evalKey("SET", key, "archived");
+    await backup("--local-only");
+    for (const key of keys) await evalKey("SET", key, "live");
+    const stale = ["7374616c650d0a", "006f6c64ff"];
+    for (const key of stale) await evalKey("SET", key, "remove");
+    await rm(db);
+    makeDb(db, "live");
+    await restore("--file", await latestArchive(), "--redis-pattern", "*", "--yes");
+    for (const key of keys) assert.equal((await evalKey("GET", key)).stdout, "archived\n");
+    for (const key of stale) assert.equal((await evalKey("EXISTS", key)).stdout, "0\n");
+    assert.deepEqual(rows(db), ["archived"]);
+  } finally {
+    live.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a Redis key scan refusal leaves the live database untouched", needsRedis, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  const live = await startRedis();
+  try {
+    const { state, config, backup, latestArchive, restore } = await setUp(root, [
+      `SFU_PERSISTENCE_REDIS_URL=redis://127.0.0.1:${live.port}/0`,
+    ]);
+    const db = path.join(state, "conclave.sqlite");
+    makeDb(db, "archived");
+    await live.cli("SET", "conclave:sfu:persistence:fixture", "archived");
+    await backup("--local-only");
+    await rm(db);
+    makeDb(db, "live");
+    await live.cli("ACL", "SETUSER", "drill", "on", ">drill-fixture", "~*", "+ping");
+    await writeFile(config, `${await readFile(config, "utf8")}\nSFU_PERSISTENCE_REDIS_URL=redis://drill:drill-fixture@127.0.0.1:${live.port}/0\n`);
+    await assert.rejects(restore("--file", await latestArchive(), "--yes"), /cannot scan Redis keys.*NOPERM.*nothing was changed/s);
+    assert.deepEqual(rows(db), ["live"]);
+  } finally {
+    live.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a restore reads the Redis database the backup was taken from, whatever database it writes to", needsRedis, async () => {
   const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
   const source = await startRedis();
