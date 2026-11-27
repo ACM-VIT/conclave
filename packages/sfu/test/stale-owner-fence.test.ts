@@ -27,7 +27,7 @@ import type {
 } from "../server/roomRegistry.js";
 import { forceCloseRoom, renewRoomOwnerships, ROOM_WRITE_COMMIT_MS } from "../server/rooms.js";
 import { createMeeting } from "../server/controlPlane/meetingCommands.js";
-import { bookingInvites, roomBooking } from "../server/controlPlane/inviteeCommands.js";
+import { bookingInvites, roomBooking, updateRoomInvitation } from "../server/controlPlane/inviteeCommands.js";
 import { createSqliteBackend } from "../server/controlPlane/backends/sqlite.js";
 import { controlPlaneStore, type ControlPlaneStore } from "../server/controlPlane/store.js";
 import { installInviteeStoreProbes, observeInviteeStore } from "./controlPlaneInviteeProbes.js";
@@ -393,6 +393,75 @@ describe("what an SFU writes for a room, by the state of the room's lease", () =
       });
     }
   }
+});
+
+describe("overlapping changes to a scheduled invitation", () => {
+  it.each([
+    "commit removal first", "commit admission first", "failed removal commit", "failed removal read", "stalled removal read",
+  ] as const)(
+    "keeps later admission after a future timestamp when actions overlap (%s)",
+    async (delivery) => {
+      useSharedSchedule();
+      await book();
+      const store = openSchedule()!;
+      const booking = await store.read(roomBooking("conclave", CODE));
+      if (!booking) throw Error("Missing booking");
+      expect(await store.commit(updateRoomInvitation(booking.meeting, {
+        kind: "decide", email: INVITEE, removed: false, at: Date.now() + 3_600_000,
+      }))).toMatchObject({ ok: true });
+
+      let resume!: () => void;
+      const paused = new Promise<void>((resolve) => { resume = resolve; });
+      let admit!: () => void;
+      const admissionPaused = new Promise<void>((resolve) => { admit = resolve; });
+      let decisions = 0;
+      const persistence = observeInviteeStore(store, {
+        beforeCommit: async (kind) => {
+          if (kind !== "decide") return;
+          decisions += 1;
+          if (decisions === 2 && delivery === "commit removal first") await admissionPaused;
+          if (decisions !== 1 || delivery.endsWith("read")) return;
+          await paused;
+          if (delivery === "failed removal commit") throw new Error("Injected commit failure");
+        },
+      });
+      const state = await startSfu(sharedLeases().forInstance("sfu-a"), { persistence });
+      const organizer = await join(state, host("a"));
+      expect((await join(state, invitee)).status).toBe("joined");
+      if (delivery === "failed removal read") {
+        vi.spyOn(state.controlPlane, "read").mockRejectedValueOnce(new Error("Injected read failure"));
+      } else if (delivery === "stalled removal read") {
+        const read = state.controlPlane.read.bind(state.controlPlane);
+        vi.spyOn(state.controlPlane, "read").mockImplementationOnce(async (query) => {
+          const result = await read(query);
+          await paused;
+          return result;
+        });
+      }
+
+      const removal = organizer.send("kickUser", { userId: INVITEE_SEAT });
+      await settle();
+      expect((await join(state, invitee)).status).toBe("waiting");
+      const admission = organizer.send("admitUser", { userId: INVITEE });
+      await settle();
+      if (delivery === "commit removal first") {
+        resume();
+        expect(await removal).toEqual({ success: true });
+        expect(await inviteeIsInvited()).toBe(false);
+        admit();
+      } else {
+        if (delivery === "stalled removal read") await vi.advanceTimersByTimeAsync(1_001);
+        expect(await admission).toEqual({ success: true });
+        resume();
+      }
+      await settle();
+      expect(await removal).toEqual(delivery.startsWith("failed") || delivery === "stalled removal read"
+        ? { error: ROOM_LEASE_UNCONFIRMED_ERROR }
+        : { success: true });
+      expect(await admission).toEqual({ success: true });
+      expect(await inviteeIsInvited()).toBe(true);
+    },
+  );
 });
 
 describe("an SFU that lost a room's lease while it was paused", () => {

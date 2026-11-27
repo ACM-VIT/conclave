@@ -660,6 +660,76 @@ describe("waiting-room entry on disconnect", () => {
 });
 
 describe("scheduled webinar link codes", () => {
+  it.each(["rejected", "stalled", "lease lost", "room replaced"] as const)(
+    "does not end an audience on a %s cleanup check",
+    async (failure) => {
+      vi.useFakeTimers();
+      broadcast.mockClear();
+      disconnectRoom.mockClear();
+      const state = makeState([{
+        pid: 1, closed: false, createRouter: async () => ({
+          closed: false, close: vi.fn(), rtpCapabilities: { codecs: [], headerExtensions: [] },
+        }),
+      } as unknown as Worker]);
+      const now = Date.now();
+      const booked = await state.controlPlane.commit(createWebinar({
+        title: "Town hall", linkSlug: "town-hall",
+        scheduledStartAt: now + 60_000, scheduledEndAt: now + 3_600_000,
+        earlyEntryMinutes: 10, publicAccess: true,
+      }, {
+        clientId: "conclave", createdBy: "host@example.com", defaultHostEmail: "host@example.com",
+      }));
+      if (!booked.ok) throw Error(booked.message ?? booked.reason);
+      const { webinar } = booked.value;
+      const audience = await join(state, "viewer", {
+        userId: "viewer", clientId: "conclave", sessionId: "v", joinMode: "webinar_attendee",
+      }, webinar.linkSlug);
+      expect(audience.ack).toHaveBeenCalledWith(expect.objectContaining({ status: "joined" }));
+      const channel = `conclave:${webinar.roomId}`;
+      const room = state.rooms.get(channel)!;
+      let finish!: (result: null) => void;
+      const held = new Promise<null>((resolve) => { finish = resolve; });
+      const read = vi.spyOn(state.controlPlane, "read");
+      if (failure === "rejected") read.mockRejectedValueOnce(new Error("Store unavailable"));
+      else read.mockImplementationOnce(() => held);
+
+      await vi.advanceTimersByTimeAsync(config.adminCleanupTimeout);
+      if (failure === "room replaced") {
+        forceCloseRoom(state, room);
+        const { room: replacement } = await getOrCreateRoomWithOrigin(state, "conclave", room.id);
+        finish(null);
+        await vi.advanceTimersByTimeAsync(config.adminCleanupTimeout + 1);
+        expect(state.rooms.get(channel)).toBe(replacement);
+        expect(disconnectRoom).not.toHaveBeenCalled();
+        return;
+      }
+      if (failure === "lease lost") {
+        const lease = vi.spyOn(state.roomRegistry, "holdsLease").mockReturnValue(false);
+        finish(null);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(state.rooms.get(channel)).toBe(room);
+        expect(disconnectRoom).not.toHaveBeenCalled();
+        lease.mockRestore();
+      } else if (failure === "stalled") {
+        await vi.advanceTimersByTimeAsync(5_001);
+        expect(room.cleanupDeadline).not.toBeNull();
+        finish(null);
+      }
+      await vi.advanceTimersByTimeAsync(1);
+      expect(state.rooms.get(channel)?.getWebinarAttendeeCount()).toBe(1);
+      expect(disconnectRoom).not.toHaveBeenCalled();
+      expect(broadcast).not.toHaveBeenCalledWith("roomEnded", expect.anything());
+
+      read.mockResolvedValueOnce(null);
+      await vi.advanceTimersByTimeAsync(config.adminCleanupTimeout + 1);
+      expect(state.rooms.has(channel)).toBe(false);
+      expect(disconnectRoom).toHaveBeenCalledOnce();
+      expect(broadcast).toHaveBeenCalledWith("roomEnded", {
+        roomId: room.id, message: NO_HOST_LEFT_MESSAGE, endedBy: "server",
+      });
+    },
+  );
+
   it.each(["host arrives", "window expires"])("keeps an early audience seated past ordinary cleanup until the %s", async (outcome) => {
     vi.useFakeTimers();
     broadcast.mockClear();

@@ -219,21 +219,30 @@ const IMAGE_SQLITE_PATH = "/var/lib/conclave/conclave.sqlite";
 const IMAGE_JSON_PATH = "/var/lib/conclave/recordings/control-plane.json";
 const LEGACY_MODES = ["SCHEDULING_PERSISTENCE", "SCHEDULED_MEETINGS_PERSISTENCE", "SCHEDULED_WEBINARS_PERSISTENCE"];
 
-const isJsonMode = (value) => value === "json" || value === "file";
-
 const storeFile = (env) => {
-  const explicit = String(env.CONTROL_PLANE_PERSISTENCE || "").trim().toLowerCase();
-  const legacy = LEGACY_MODES.map((name) => String(env[name] || "").trim().toLowerCase());
-  const json = explicit ? isJsonMode(explicit) : legacy.every(isJsonMode);
-  if (json) return ["CONTROL_PLANE_JSON_PATH", String(env.CONTROL_PLANE_JSON_PATH || "").trim() || IMAGE_JSON_PATH];
-  return ["CONCLAVE_SQLITE_PATH", String(env.CONCLAVE_SQLITE_PATH || "").trim() || IMAGE_SQLITE_PATH];
+  const value = (name) => String(env[name] || "").trim();
+  const modeOf = (name) => {
+    const mode = value(name).toLowerCase();
+    return mode === "file" ? "json" : mode;
+  };
+  const legacy = LEGACY_MODES.map(modeOf);
+  const agreed = legacy[0] && legacy.every((mode) => mode === legacy[0]) ? legacy[0] : "";
+  const redisUrl = value("SFU_PERSISTENCE_REDIS_URL") || value("SFU_REDIS_URL") || value("REDIS_URL");
+  const mode = modeOf("CONTROL_PLANE_PERSISTENCE") || agreed || (redisUrl ? "redis" : "sqlite");
+  if (mode === "json") return ["CONTROL_PLANE_JSON_PATH", value("CONTROL_PLANE_JSON_PATH") || IMAGE_JSON_PATH];
+  const sqlite = value("CONCLAVE_SQLITE_PATH");
+  // An explicit shared SQLite file can still be a legacy import source in Redis mode.
+  if (mode === "memory" || (mode === "redis" && !sqlite)) return null;
+  return ["CONCLAVE_SQLITE_PATH", sqlite || IMAGE_SQLITE_PATH];
 };
 
 const checkStorePaths = (definition, env, service, errors) => {
+  const store = storeFile(env);
+  if (!store) return;
   const mounts = (Array.isArray(definition.volumes) ? definition.volumes : [])
     .filter((volume) => volume && (volume.type === "bind" || volume.type === "volume") && !volume.read_only)
     .map((volume) => posix.normalize(String(volume.target)));
-  const [variable, file] = storeFile(env);
+  const [variable, file] = store;
   const path = posix.resolve(SFU_WORKDIR, file);
   if (!mounts.some((target) => path === target || path.startsWith(`${target}/`))) {
     errors.push(

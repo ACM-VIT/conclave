@@ -182,7 +182,7 @@ export const withSharedWriteScope = <T>(
   return { result, writes: scope.size, settled };
 };
 
-const withDeadline = <T>(work: Promise<T>, fallback: T, delay = ROOM_WRITE_COMMIT_MS): Promise<T> => {
+export const withDeadline = <T>(work: Promise<T>, fallback: T, delay = ROOM_WRITE_COMMIT_MS): Promise<T> => {
   let timer: NodeJS.Timeout | undefined;
   const deadline = new Promise<T>((resolve) => {
     timer = setTimeout(() => resolve(fallback), delay);
@@ -495,21 +495,30 @@ const recordRecoverableChanges = (state: SfuState, room: Room): void => {
 
 const bindScheduledInvitations = (state: SfuState, room: Room, booking: RoomBooking | null): void => {
   for (const email of booking?.removed ?? []) room.requireReadmission(email);
-  const lastDecisionAt = new Map<string, number>();
+  const lastDecisionAt = new Map<string, Promise<number>>();
   room.onReadmissionChange = (email, removed) => {
     if (!email.includes("@")) return;
-    const at = Math.max(Date.now(), (lastDecisionAt.get(email) ?? 0) + 1);
-    lastDecisionAt.set(email, at);
-    const observed = state.controlPlane.read(roomInviteeDecision(room.clientId, room.id, email)).then(
-      (decision) => ({ ok: true, decision }) as const,
-      (error: unknown) => ({ ok: false, error }) as const,
+    const now = Date.now();
+    const observed = withDeadline(
+      state.controlPlane.read(roomInviteeDecision(room.clientId, room.id, email)).then(
+        (decision) => ({ ok: true, decision }) as const,
+        (error: unknown) => ({ ok: false, error }) as const,
+      ),
+      { ok: false, error: new Error("Invitee decision read timed out") },
+      1_000,
     );
+    // Allocate stamps in host action order, even when the reads or commits finish out of order.
+    const prepared = Promise.all([lastDecisionAt.get(email) ?? 0, observed]).then(([previous, found]) => ({
+      found,
+      at: Math.max(now, previous + 1, found.ok ? (found.decision?.at ?? -1) + 1 : 0),
+    }));
+    lastDecisionAt.set(email, prepared.then(({ at }) => at));
     void writeSharedRoomState(state, room, "an invitee's readmission decision", async (generation) => {
-      const found = await observed;
+      const { found, at } = await prepared;
       if (!found.ok) throw found.error;
       if (!found.decision) return true;
       return (await state.controlPlane.commit(updateRoomInvitation(found.decision.meeting, {
-        kind: "decide", email, removed, at: Math.max(at, (found.decision.at ?? -1) + 1), generation,
+        kind: "decide", email, removed, at, generation,
       }))).ok;
     });
   };

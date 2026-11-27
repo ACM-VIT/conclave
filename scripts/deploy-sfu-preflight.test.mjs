@@ -634,24 +634,43 @@ const storePathErrors = (environment, volumes) => {
   }
 };
 
-test("every store path must be on a writable volume mount", () => {
-  assert.deepEqual(storePathErrors({}), []);
+test("active SQLite and JSON paths must be on writable volume mounts", () => {
+  const sqlite = { CONTROL_PLANE_PERSISTENCE: "sqlite" };
+  assert.deepEqual(storePathErrors(sqlite), []);
   // The image's read-only root: Sol's run exited 1 with this path.
-  assert.match(storePathErrors({ CONCLAVE_SQLITE_PATH: "/var/lib/conclave/conclave.sqlite" }).join("\n"), /CONCLAVE_SQLITE_PATH resolves to \/var\/lib\/conclave\/conclave\.sqlite/);
+  assert.match(storePathErrors({ ...sqlite, CONCLAVE_SQLITE_PATH: "/var/lib/conclave/conclave.sqlite" }).join("\n"), /CONCLAVE_SQLITE_PATH resolves to \/var\/lib\/conclave\/conclave\.sqlite/);
   // Without CONCLAVE_SQLITE_PATH the image default applies, which is off the volume.
-  assert.match(storePathErrors({ CONCLAVE_SQLITE_PATH: undefined }).join("\n"), /not on a writable volume mount/);
+  assert.match(storePathErrors({ ...sqlite, CONCLAVE_SQLITE_PATH: undefined }).join("\n"), /not on a writable volume mount/);
   assert.match(storePathErrors({ CONTROL_PLANE_PERSISTENCE: "json", CONTROL_PLANE_JSON_PATH: "/app/data/control-plane.json" }).join("\n"), /CONTROL_PLANE_JSON_PATH resolves to \/app\/data\/control-plane\.json/);
   assert.deepEqual(storePathErrors({ CONTROL_PLANE_PERSISTENCE: "json" }), []);
   assert.deepEqual(
     storePathErrors({ SCHEDULING_PERSISTENCE: "json", SCHEDULED_MEETINGS_PERSISTENCE: "json", SCHEDULED_WEBINARS_PERSISTENCE: "json", CONCLAVE_SQLITE_PATH: "/tmp/unused.sqlite" }),
     [],
   );
-  assert.deepEqual(storePathErrors({ SCHEDULED_WEBINARS_SQLITE_PATH: "/tmp/webinars.sqlite" }), []);
+  assert.deepEqual(storePathErrors({ ...sqlite, SCHEDULED_WEBINARS_SQLITE_PATH: "/tmp/webinars.sqlite" }), []);
   assert.match(
-    storePathErrors({}, [{ type: "bind", source: "/srv/recordings", target: "/var/lib/conclave/recordings", read_only: true }]).join("\n"),
+    storePathErrors(sqlite, [{ type: "bind", source: "/srv/recordings", target: "/var/lib/conclave/recordings", read_only: true }]).join("\n"),
     /not on a writable volume mount/,
   );
-  assert.equal(storePathErrors({ CONCLAVE_SQLITE_PATH: "/var/lib/conclave/conclave.sqlite" }).filter((message) => message.startsWith("edge-dxb")).length, 1);
+  assert.equal(storePathErrors({ ...sqlite, CONCLAVE_SQLITE_PATH: "/var/lib/conclave/conclave.sqlite" }).filter((message) => message.startsWith("edge-dxb")).length, 1);
+});
+
+test("explicit and inferred Redis do not require the image SQLite default on a writable mount", () => {
+  for (const persistence of [" Redis ", undefined]) {
+    const redis = { CONTROL_PLANE_PERSISTENCE: persistence };
+    assert.deepEqual(storePathErrors({ ...redis, CONCLAVE_SQLITE_PATH: undefined }), []);
+    assert.deepEqual(storePathErrors(redis), []);
+    assert.match(
+      storePathErrors({ ...redis, CONCLAVE_SQLITE_PATH: "/tmp/import.sqlite" }).join("\n"),
+      /CONCLAVE_SQLITE_PATH resolves to \/tmp\/import\.sqlite/,
+    );
+  }
+  assert.match(storePathErrors({
+    SCHEDULING_PERSISTENCE: "sqlite",
+    SCHEDULED_MEETINGS_PERSISTENCE: "sqlite",
+    SCHEDULED_WEBINARS_PERSISTENCE: "sqlite",
+    CONCLAVE_SQLITE_PATH: undefined,
+  }).join("\n"), /not on a writable volume mount/);
 });
 
 test("SFU services must run in production mode", () => {
