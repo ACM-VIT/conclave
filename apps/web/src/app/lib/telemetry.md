@@ -119,10 +119,10 @@ one owner at a time:
   tab takes the batch back into memory with the new due time and removes the
   stale stored copy. When the page reads a final answer (delivered, or refused
   for good), the batch is settled at once instead of confirmed 30 s later.
-  Either answer applies only while the batch still carries the attempt id the
-  beacon went out with; once it has been sent again, what it teaches is still
-  carried over, as for any late answer: its `Retry-After` and the events it
-  refused, which no later send of that batch carries.
+  The attempt id controls which stored copy the beacon answer may change.
+  Once a newer send has claimed the batch, the answer still settles the
+  batch, extends its wait, or rules out the events it refused. It cannot
+  overwrite the newer claim.
 - **Replayed.** A saved batch is sent only by a replay pass, which runs under
   a Web Locks lock (`conclave:telemetry:replay`) at its due time, when a tab
   loads or comes back into view, and when another tab changes a saved batch
@@ -142,11 +142,12 @@ one owner at a time:
   writer, which keeps its last facts in memory and only ever adds to them,
   and readers merge every tab's key (settled if any says so, the latest time,
   the highest attempt, every refused event), so no write can undo another.
-  Every send, beacon and replay of a batch reads its marks first, merged with
-  what the tab itself has published, whether or not that write went through:
-  a settled batch, or one with no events left, is dropped, never sent; a wait
-  is kept; refused events are left out. A batch that was never stored has no
-  marks to read, so storage that cannot be read never holds it back. The
+  Sends, beacons, replay, and settlement use the same facts. Each tab keeps
+  its answers even if it cannot write a mark. Known settlement wins before
+  retry or expiry, and only unresolved events count as expired. If a batch
+  has been stored and its marks cannot be read, the tab checks again before
+  sending it or counting it as expired. A batch that was never stored has no
+  shared marks to read. The
   lock only orders writes to the batch itself. Whether storage can be read,
   written or neither is found out by each operation, never once at startup:
   storage that is full still replays and removes what it holds.

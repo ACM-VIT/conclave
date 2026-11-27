@@ -9,6 +9,7 @@ import {
   fitEvent,
   FLUSH_INTERVAL_MS,
   LEASE_MS,
+  LOCK_RETRY_MS,
   MAX_BATCH_BYTES,
   MAX_BATCH_EVENTS,
   MAX_SEND_AGE_MS,
@@ -438,12 +439,12 @@ describe("retries /ingest asked to wait for", () => {
     h.outbox.add(event());
     await h.advance(FLUSH_INTERVAL_MS + 500);
     h.outbox.flushForUnload();
-    expect(store.list()).toEqual([expect.objectContaining({ attempt: 1, nextTry: START + 7000 })]);
+    expect(store.list()).toEqual([expect.objectContaining({ attempt: 1, notBefore: START + 7000 })]);
     h.outbox.replaySaved();
     await h.advance(59_000);
 
     expect(h.posts.map((post) => post.at - START)).toEqual([5000, 7000, 11_000, 19_000, 35_000]);
-    expect(store.list()).toEqual([expect.objectContaining({ attempt: 5, nextTry: START + 65_000 })]);
+    expect(store.list()).toEqual([expect.objectContaining({ attempt: 5, notBefore: START + 65_000 })]);
   });
 });
 
@@ -1341,7 +1342,9 @@ describe("batch settlement across overlapping sends", () => {
     let batchWritesRefused = false;
     let marksUnreadable = false;
     const shared = createBatchStore(() => ({
-      get length() { return storage.length; },
+      get length() {
+        return storage.length;
+      },
       key: (index) => storage.key(index),
       getItem: (key) => {
         if (marksUnreadable && key.startsWith(STORED_MARK_PREFIX)) throw new DOMException("Storage is unavailable.", "SecurityError");
@@ -1402,11 +1405,15 @@ describe("batch settlement across overlapping sends", () => {
     ["refused", { status: 400, retryAfter: null }, []],
     ["partially refused", { status: 503, retryAfter: "60", rejected: [0] }, [{ batches: 1, events: 1, unsent: 0 }]],
   ] satisfies Array<[string, Reply, DroppedBatches[]]>)("expires only unresolved events after learning of a %s batch", async (_case, reply, drops) => {
-    const { beacon, next } = await handoff(START - MAX_SEND_AGE_MS + BEACON_CONFIRM_MS + 3000);
+    const { beacon, next, blockMarkReads } = await handoff(START - MAX_SEND_AGE_MS + BEACON_CONFIRM_MS + 3000);
     await next.advance(2000);
     beacon.resolve(reply);
     await settle();
 
+    blockMarkReads(true);
+    await next.advance(4000);
+    expect(next.dropped).toEqual([]);
+    blockMarkReads(false);
     await next.advance(MINUTE);
     expect(next.posts).toHaveLength(1);
     expect(next.dropped).toEqual(drops);
@@ -1434,6 +1441,35 @@ describe("batch settlement across overlapping sends", () => {
     expect(h.dropped).toEqual([]);
   });
 
+  it("keeps a local settlement until an unreadable saved copy can be cleared", async () => {
+    let readable = true;
+    const storage = memoryWebStorage();
+    const stored = createBatchStore(() => storage);
+    const blocked = createBatchStore(() => {
+      if (!readable) throw new DOMException("Storage is unavailable.", "SecurityError");
+      return storage;
+    });
+    const reply = answerLater();
+    const owner = harness({ store: { ...blocked, mark: () => false }, answers: [reply.promise] });
+    owner.refuseBeacons();
+    const report = event();
+    owner.outbox.add(report);
+    owner.outbox.flushForUnload();
+    await owner.advance(0);
+    expect(owner.posted()).toEqual([report.uuid]);
+
+    readable = false;
+    reply.answer(200);
+    await owner.advance(MARK_TTL_MS + 2 * LOCK_RETRY_MS);
+    expect(storedUuids(stored)).toEqual([report.uuid]);
+    readable = true;
+    await owner.advance(LOCK_RETRY_MS);
+
+    expect(owner.posted()).toEqual([report.uuid]);
+    expect(owner.dropped).toEqual([]);
+    expect(storedUuids(stored)).toEqual([]);
+  });
+
   it.each([
     [200, []],
     [400, []],
@@ -1441,7 +1477,8 @@ describe("batch settlement across overlapping sends", () => {
   ])("does not hand a second tab settled events when a late %i mark write is refused", async (status, rejected) => {
     const storage = memoryWebStorage();
     const shared = createBatchStore(() => storage);
-    const refuseMarks = { ...shared, mark: () => false };
+    let readable = true;
+    const refuseMarks = { ...shared, mark: () => false, facts: (id: string) => readable ? shared.facts(id) : null };
     const beacon = Promise.withResolvers<Reply>();
     const owner = harness({ store: refuseMarks, beaconReplies: [beacon.promise], answers: ["pending"] });
     const reports = [event(), event()];
@@ -1450,8 +1487,10 @@ describe("batch settlement across overlapping sends", () => {
     await owner.advance(BEACON_CONFIRM_MS);
     expect(owner.posted()).toEqual(reports.map(({ uuid }) => uuid));
 
+    await owner.advance(2000);
+    readable = false;
     beacon.resolve({ status, retryAfter: "60", rejected });
-    await owner.advance(SEND_DEADLINE_MS);
+    await owner.advance(SEND_DEADLINE_MS - 2000);
     const next = harness({ store: shared, at: START + BEACON_CONFIRM_MS + SEND_DEADLINE_MS });
     next.outbox.replaySaved();
     await next.advance(46_000);
@@ -1823,6 +1862,6 @@ describe("a stored batch another tab has claimed since", () => {
 
     release();
     await h.advance(0);
-    expect(store.list()).toEqual([{ ...claimed, sent: false, attempt: 1, nextTry: START + 1000 + 2000, leaseUntil: 0 }]);
+    expect(store.list()).toEqual([{ ...claimed, sent: false, attempt: 1, notBefore: START + 1000 + 2000, leaseUntil: 0 }]);
   });
 });

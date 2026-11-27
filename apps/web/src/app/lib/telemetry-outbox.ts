@@ -128,11 +128,6 @@ export type Reply = { status: number; retryAfter: string | null; rejected?: read
 
 const byteLength = (text: string): number => new TextEncoder().encode(text).byteLength;
 
-const withoutRefused = (kept: OutboxEvent[], sent: readonly OutboxEvent[], reply: Reply | null): OutboxEvent[] => {
-  const refused = new Set((reply?.rejected ?? []).flatMap((index) => (sent[index] ? [sent[index].uuid] : [])));
-  return refused.size === 0 ? kept : kept.filter((item) => !refused.has(item.uuid));
-};
-
 const dueAt = (batch: { notBefore: number; nextTry: number; leaseUntil: number }): number =>
   Math.max(batch.notBefore, batch.nextTry, batch.leaseUntil);
 
@@ -197,7 +192,7 @@ export function createOutbox(deps: OutboxDeps) {
   let wakeTimer: { handle: unknown; at: number } | null = null;
   let lockRetryMs = LOCK_RETRY_MS;
   const writer = deps.newId();
-  const published = new Map<string, BatchFacts & { at: number }>();
+  const localFacts = new Map<string, BatchFacts & { at: number }>();
 
   const overhead = byteLength(
     JSON.stringify({ api_key: deps.token, batch: [], sent_at: new Date(0).toISOString() }),
@@ -324,6 +319,7 @@ export function createOutbox(deps: OutboxDeps) {
     if (batch.timer !== null) deps.clearTimer(batch.timer);
     batch.timer = null;
     live.delete(batch.id);
+    if (!batch.everStored) localFacts.delete(batch.id);
   };
 
   const finish = (batch: Batch, store: LockedStore | null): void => {
@@ -331,13 +327,13 @@ export function createOutbox(deps: OutboxDeps) {
     if (batch.saved && store && !store.remove(batch.id, batch.sendId)) readAgainSoon();
   };
 
-  const expire = (batch: Batch, store: LockedStore | null): void => {
-    live.delete(batch.id);
+  const expire = (batch: Batch, store: LockedStore | null): StoredBatch | null => {
+    forget(batch);
     if (batch.saved && !store?.remove(batch.id, batch.sendId)) {
       readAgainSoon();
-      return;
+      return null;
     }
-    deps.onStale([stored(batch)]);
+    return stored(batch);
   };
 
   const wakeAt = (at: number): void => {
@@ -391,71 +387,71 @@ export function createOutbox(deps: OutboxDeps) {
     holdInMemory(batch);
   };
 
-  const waitAsked = (reply: Reply | null, at = deps.now()): number => {
-    const answer = reply ? answerOf(reply.status, reply.retryAfter, at) : null;
-    return answer?.outcome === "retry" && answer.afterMs !== null ? at + answer.afterMs : 0;
-  };
-
-  const factsOf = (reply: Reply | null, at: number, attempt: number, backoff: boolean, events: readonly OutboxEvent[]): BatchFacts => {
-    const answer = reply ? answerOf(reply.status, reply.retryAfter, at) : null;
-    const refused = (reply?.rejected ?? []).flatMap((index) => (events[index] ? [events[index].uuid] : []));
-    if (answer && answer.outcome !== "retry") return { delivered: true, notBefore: 0, attempt, refused };
-    return {
-      delivered: false,
-      notBefore: Math.max(waitAsked(reply, at), backoff ? at + retryDelay(attempt) : 0),
-      attempt: backoff ? attempt + 1 : attempt,
-      refused,
-    };
-  };
-
-  const publish = (batch: Batch, facts: BatchFacts): void => {
-    if (!batch.saved) return;
+  const recordAnswer = (batch: Batch, events: readonly OutboxEvent[], reply: Reply | null, backoff: boolean): void => {
     const at = deps.now();
-    for (const [id, mark] of published) if (mark.at < at - MARK_TTL_MS) published.delete(id);
-    const merged = mergeFacts(published.get(batch.id) ?? NO_FACTS, facts);
-    published.set(batch.id, { ...merged, at });
-    deps.store.mark(batch.id, writer, merged, at);
+    const answer = reply ? answerOf(reply.status, reply.retryAfter, at) : null;
+    const delivered = answer !== null && answer.outcome !== "retry";
+    const refused = (reply?.rejected ?? []).flatMap((index) => (events[index] ? [events[index].uuid] : []));
+    const prior = localFacts.get(batch.id) ?? NO_FACTS;
+    const attempt = Math.max(batch.attempt, prior.attempt);
+    const retryAt = !delivered && backoff ? at + retryDelay(attempt) : 0;
+    const askedAt = answer?.outcome === "retry" && answer.afterMs !== null ? at + answer.afterMs : 0;
+    const merged = mergeFacts(prior, {
+      delivered,
+      refused,
+      notBefore: Math.max(retryAt, askedAt),
+      attempt: !delivered && backoff ? attempt + 1 : attempt,
+    });
+    localFacts.set(batch.id, { ...merged, at });
+    if (batch.everStored) deps.store.mark(batch.id, writer, merged, at);
   };
 
-  const learned = (batch: {
-    id: string;
-    events: OutboxEvent[];
-    notBefore: number;
-    attempt: number;
-    everStored?: boolean;
-  }): "delivered" | "unreadable" | "known" => {
-    const own = published.get(batch.id) ?? NO_FACTS;
-    const fromStore = batch.everStored === false ? NO_FACTS : deps.store.facts(batch.id);
-    if (own.delivered) return "delivered";
-    if (fromStore === null) return "unreadable";
-    const facts = mergeFacts(own, fromStore);
-    if (facts.delivered) return "delivered";
+  const decisionOf = (batch: Batch): "settled" | "unreadable" | "expired" | "waiting" | "ready" => {
+    const own = localFacts.get(batch.id) ?? NO_FACTS;
+    if (own.delivered) return "settled";
+    const shared = batch.everStored ? deps.store.facts(batch.id) : NO_FACTS;
+    const facts = shared ? mergeFacts(own, shared) : own;
+    if (facts.delivered) return "settled";
     if (facts.refused.length > 0) {
       const refused = new Set(facts.refused);
       batch.events = batch.events.filter((event) => !refused.has(event.uuid));
-      if (batch.events.length === 0) return "delivered";
+      if (batch.events.length === 0) return "settled";
     }
     batch.notBefore = Math.max(batch.notBefore, facts.notBefore);
     batch.attempt = Math.max(batch.attempt, facts.attempt);
-    return "known";
+    if (shared === null) return "unreadable";
+    if (batch.leaseUntil > deps.now()) return "waiting";
+    if (tooOld(batch.oldestAt)) return "expired";
+    return dueAt(batch) > deps.now() ? "waiting" : "ready";
   };
 
-  const applyAnswer = (batch: Batch, events: OutboxEvent[], reply: Reply | null, store: LockedStore | null, at = deps.now()): void => {
-    const answer = reply ? answerOf(reply.status, reply.retryAfter, at) : null;
-    if (answer && answer.outcome !== "retry") {
-      finish(batch, store);
-      return;
+  const clearSettled = (batch: Batch, store: LockedStore | null): void => {
+    if (batch.saved) store?.drop(batch.id);
+    forget(batch);
+  };
+
+  const deferRead = (batch: Batch): void => {
+    if (batch.saved) {
+      forget(batch);
+      readAgainSoon();
+    } else {
+      batch.nextTry = Math.max(batch.nextTry, deps.now() + LOCK_RETRY_MS);
+      holdInMemory(batch);
     }
-    batch.events = withoutRefused(batch.events, events, reply);
-    if (batch.events.length === 0) {
-      finish(batch, store);
-      return;
+  };
+
+  const settleBatch = (batch: Batch, store: LockedStore | null): void => {
+    const decision = decisionOf(batch);
+    if (decision === "settled") {
+      clearSettled(batch, store);
+    } else if (store) {
+      keepSaved(batch, store);
+      if (decision === "unreadable") readAgainSoon();
+    } else if (decision === "unreadable") {
+      deferRead(batch);
+    } else {
+      holdInMemory(batch);
     }
-    batch.nextTry = at + retryDelay(batch.attempt);
-    batch.attempt += 1;
-    batch.notBefore = Math.max(batch.notBefore, waitAsked(reply, at));
-    if (store) keepSaved(batch, store);
-    else holdInMemory(batch);
   };
 
   const outgoing = (batch: Batch): OutboxEvent[] =>
@@ -464,31 +460,25 @@ export function createOutbox(deps: OutboxDeps) {
       return built ? [fitEvent(built)] : [];
     });
 
-  const send = (batch: Batch, store: LockedStore | null): void => {
-    if (tooOld(batch.oldestAt)) {
-      expire(batch, store);
-      return;
-    }
-    const known = learned(batch);
-    if (known === "delivered") {
-      if (batch.saved) store?.drop(batch.id);
-      forget(batch);
-      return;
-    }
-    if (known === "unreadable") {
-      if (batch.saved) {
-        live.delete(batch.id);
-        readAgainSoon();
-      } else {
-        batch.nextTry = Math.max(batch.nextTry, deps.now() + LOCK_RETRY_MS);
-        holdInMemory(batch);
+  const send = (batch: Batch, store: LockedStore | null, onStale = (dropped: StoredBatch) => deps.onStale([dropped])): void => {
+    switch (decisionOf(batch)) {
+      case "settled":
+        clearSettled(batch, store);
+        return;
+      case "unreadable":
+        deferRead(batch);
+        return;
+      case "expired": {
+        const dropped = expire(batch, store);
+        if (dropped) onStale(dropped);
+        return;
       }
-      return;
-    }
-    if (dueAt(batch) > deps.now()) {
-      if (batch.saved) wakeAt(dueAt(batch));
-      else holdInMemory(batch);
-      return;
+      case "waiting":
+        if (batch.saved) wakeAt(batch.leaseUntil > deps.now() ? batch.leaseUntil : dueAt(batch));
+        else holdInMemory(batch);
+        return;
+      case "ready":
+        break;
     }
     const events = outgoing(batch);
     if (events.length === 0) {
@@ -529,37 +519,30 @@ export function createOutbox(deps: OutboxDeps) {
       settled = true;
       deps.clearTimer(deadline);
       if (keepalive) keepaliveBytes -= bytes;
+      recordAnswer(batch, events, reply, true);
       if (!batch.saved) {
         batch.inFlight = null;
         batch.leaseUntil = 0;
-        applyAnswer(batch, events, reply, null);
+        settleBatch(batch, null);
         return;
       }
-      const facts = factsOf(reply, deps.now(), batch.attempt, true, events);
-      publish(batch, facts);
       locked(
         (held) => {
           batch.inFlight = null;
-          batch.leaseUntil = 0;
           const current = deps.store.get(batch.id);
           if (current?.sendId !== sendId) {
-            live.delete(batch.id);
+            forget(batch);
             readAgainSoon();
             return;
           }
+          batch.leaseUntil = 0;
           batch.notBefore = Math.max(batch.notBefore, current.notBefore);
-          if (deps.store.facts(batch.id)?.delivered) {
-            held.drop(batch.id);
-            forget(batch);
-            return;
-          }
-          applyAnswer(batch, events, reply, held);
+          settleBatch(batch, held);
         },
         () => {
-          const leaseUntil = batch.leaseUntil;
           batch.inFlight = null;
-          live.delete(batch.id);
-          wakeAt(Math.max(leaseUntil, facts.notBefore, deps.now() + LOCK_RETRY_MS));
+          forget(batch);
+          wakeAt(Math.max(batch.leaseUntil, deps.now() + LOCK_RETRY_MS));
         },
       );
     };
@@ -571,77 +554,40 @@ export function createOutbox(deps: OutboxDeps) {
   };
 
   const beaconAnswered = (batch: Batch, events: OutboxEvent[], reply: Reply | null, sentWith: string): void => {
-    if (!reply) return;
-    const at = deps.now();
-    const final = answerOf(reply.status, reply.retryAfter, at).outcome !== "retry";
-    const facts = factsOf(reply, at, batch.attempt, false, events);
-    publish(batch, facts);
-    const settleAnswered = (answered: Batch, store: LockedStore | null): void => {
-      if (final) {
-        finish(answered, store);
-        return;
-      }
-      answered.notBefore = Math.max(answered.notBefore, waitAsked(reply, at));
-      answered.events = withoutRefused(answered.events, events, reply);
-      if (answered.events.length === 0) finish(answered, store);
-      else if (store) keepSaved(answered, store);
-      else holdInMemory(answered);
-    };
-    if (batch.saved) {
-      locked(
-        (store) => {
-          const current = deps.store.get(batch.id);
-          if (!current || current.sendId !== sentWith) {
-            readAgainSoon();
-            return;
-          }
-          settleAnswered(fromStorage(current), store);
-        },
-        () => wakeAt(Math.max(facts.notBefore, deps.now() + LOCK_RETRY_MS)),
-      );
+    if (!reply || (!batch.everStored && live.get(batch.id) !== batch)) return;
+    recordAnswer(batch, events, reply, false);
+    if (!batch.saved) {
+      if (live.get(batch.id) === batch && batch.inFlight === null) settleBatch(batch, null);
       return;
     }
-    if (live.get(batch.id) !== batch) return;
-    if (!final) {
-      batch.notBefore = Math.max(batch.notBefore, waitAsked(reply, at));
-      batch.events = withoutRefused(batch.events, events, reply);
-    }
-    if (batch.sendId !== sentWith || batch.inFlight !== null) return;
-    settleAnswered(batch, null);
+    locked(
+      (store) => {
+        const current = deps.store.get(batch.id);
+        if (!current || current.sendId !== sentWith) {
+          readAgainSoon();
+          return;
+        }
+        settleBatch(fromStorage(current), store);
+      },
+      readAgainSoon,
+    );
   };
 
   const replayPass = (store: LockedStore): void => {
     const stale: StoredBatch[] = [];
-    deps.store.pruneMarks(deps.now() - MARK_TTL_MS);
+    const before = deps.now() - MARK_TTL_MS;
+    deps.store.pruneMarks(before);
     const listed = deps.store.list();
     if (listed === null) {
       readAgainSoon();
       return;
     }
+    const savedIds = new Set(listed.map(({ id }) => id));
+    for (const [id, mark] of localFacts) {
+      if (mark.at < before && !live.has(id) && !savedIds.has(id)) localFacts.delete(id);
+    }
     for (const saved of listed) {
-      if (live.has(saved.id)) continue;
-      const known = learned(saved);
-      if (known === "delivered") {
-        store.drop(saved.id);
-        continue;
-      }
-      if (known === "unreadable") {
-        readAgainSoon();
-        continue;
-      }
-      if (saved.leaseUntil > deps.now()) {
-        wakeAt(saved.leaseUntil);
-        continue;
-      }
-      if (tooOld(saved.oldestAt)) {
-        if (store.remove(saved.id, saved.sendId)) stale.push(saved);
-        continue;
-      }
-      if (dueAt(saved) > deps.now()) {
-        wakeAt(dueAt(saved));
-        continue;
-      }
-      send(fromStorage(saved), store);
+      if (!live.has(saved.id)) send(fromStorage(saved), store, (dropped) => stale.push(dropped));
     }
     if (stale.length > 0) deps.onStale(stale);
   };
@@ -715,8 +661,13 @@ export function createOutbox(deps: OutboxDeps) {
       let budget = UNLOAD_BUDGET_BYTES - keepaliveBytes - beaconBytes();
       const waiting = [...live.values()].filter((batch) => batch.inFlight === null);
       for (const batch of [...waiting, ...batchesOf(items)]) {
-        if (learned(batch) === "delivered") {
-          forget(batch);
+        const decision = decisionOf(batch);
+        if (decision === "settled") {
+          clearSettled(batch, null);
+          continue;
+        }
+        if (decision === "unreadable") {
+          deferRead(batch);
           continue;
         }
         const events = outgoing(batch);
@@ -726,7 +677,7 @@ export function createOutbox(deps: OutboxDeps) {
         }
         const body = bodyOf(events);
         const bytes = byteLength(body);
-        const answer = dueAt(batch) <= deps.now() && !tooOld(batch.oldestAt) && bytes <= budget ? deps.beacon(body) : null;
+        const answer = decision === "ready" && bytes <= budget ? deps.beacon(body) : null;
         if (answer) {
           budget -= bytes;
           beacons.push({ bytes, at: deps.now() });
