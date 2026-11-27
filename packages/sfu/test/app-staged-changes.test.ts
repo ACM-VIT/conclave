@@ -70,6 +70,7 @@ describe("app changes sent in parts", () => {
   it.each(["old", undefined])("preserves a staged upload when an earlier unsynced edit is refused (%s)", async (replicaId) => {
     const room = await boardRoom("late-sync");
     const peer = await room.peer({ syncs: false });
+    const blanks = () => peer.states().filter((app) => app === null);
     let finish = (_unchanged: boolean) => {};
     const pending = new Promise<boolean>((resolve) => { finish = resolve; });
     vi.spyOn(room.room.apps.executor, "changesNothing").mockReturnValueOnce(pending);
@@ -81,10 +82,29 @@ describe("app changes sent in parts", () => {
 
     finish(false);
     await old;
+    expect(blanks()).toHaveLength(0);
     await peer.acknowledged(parts[1], "new", { ...part, index: 1 });
 
     expect(await settled(room)).toBe("y".repeat(1024));
     expect(refusalsIn(peer.inbox)).toEqual(replicaId ? ["not-synced"] : []);
+    expect(blanks()).toHaveLength(replicaId ? 0 : 1);
+  });
+
+  it("refreshes a promoted legacy writer after refusing its earlier locked edit", async () => {
+    const room = await boardRoom("legacy-promotion");
+    expect(await room.lock()).toMatchObject({ success: true });
+    room.demote();
+    let finish = (_unchanged: boolean) => {};
+    const pending = new Promise<boolean>((resolve) => { finish = resolve; });
+    vi.spyOn(room.room.apps.executor, "changesNothing").mockReturnValueOnce(pending);
+    const old = room.acknowledged({ update: bigChange(new Y.Doc(), 64, "x") });
+
+    room.promote();
+    expect(room.inbox.some(({ event, payload }) => event === "apps:state" && (payload as { activeAppId: string | null }).activeAppId === null)).toBe(false);
+    finish(false);
+
+    const { inbox } = await old;
+    expect(inbox.some(({ event, payload }) => event === "apps:state" && (payload as { activeAppId: string | null }).activeAppId === null)).toBe(true);
   });
 
   it("are offered to new clients in the sync reply", async () => {
