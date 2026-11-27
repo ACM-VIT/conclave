@@ -25,7 +25,7 @@ let pendingSyncs: Ack[];
 let serverDoc: Y.Doc;
 let answerSyncsAtOnce: boolean;
 
-const contentOf = (doc: Y.Doc) => ({ syncMessage: Y.encodeStateAsUpdate(doc), stateVector: Y.encodeStateVector(doc) });
+const contentOf = (doc: Y.Doc) => ({ syncMessage: Y.encodeStateAsUpdate(doc), stateVector: Y.encodeStateVector(doc), wheelFormat: 2 });
 
 const socketFor = (activeAppId: string) =>
   ({
@@ -109,6 +109,21 @@ afterEach(async () => {
   await act(async () => root.unmount());
   vi.unstubAllGlobals();
   vi.useRealTimers();
+});
+
+it("does not adopt a Wheel snapshot from an SFU that did not negotiate the format", async () => {
+  answerSyncsAtOnce = false;
+  serverDoc = createWheelDoc();
+  addEntry(serverDoc, "Ada");
+  await mount("wheel", () => null);
+  const { syncMessage, stateVector } = contentOf(serverDoc);
+  await act(async () => pendingSyncs.shift()!({ syncMessage, stateVector }));
+  expect(ctx.syncStatus).toBe("failed");
+  expect(getEntries(ctx.getDoc("wheel"))).toEqual([]);
+  await act(async () => ctx.retrySync());
+  await act(async () => pendingSyncs.shift()!(contentOf(serverDoc)));
+  expect(ctx.syncStatus).toBe("synced");
+  expect(getEntries(ctx.getDoc("wheel")).map(({ label }) => label)).toEqual(["Ada"]);
 });
 
 function Revealer() {

@@ -29,7 +29,7 @@ const fakeSfu = (appId: string, serverDoc: Y.Doc) => {
   const pendingRefusals: Array<{ appId: string; replicaId: string; reason: string }> = [];
   const heldSyncs: Ack[] = [];
   const state = { refusals: [] as Refusal[], holdSyncs: false, refusalsSent: 0 };
-  const reply = () => ({ syncMessage: Y.encodeStateAsUpdate(serverDoc), stateVector: Y.encodeStateVector(serverDoc) });
+  const reply = () => ({ syncMessage: Y.encodeStateAsUpdate(serverDoc), stateVector: Y.encodeStateVector(serverDoc), wheelFormat: 2 });
   const socket = {
     connected: true,
     on: (event: string, listener: Listener) => listeners.set(event, (listeners.get(event) ?? new Set()).add(listener)),

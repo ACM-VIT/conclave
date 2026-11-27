@@ -1252,12 +1252,13 @@ final class SocketIOManager {
     }
 
     func syncApp(appId: String, stateVector: Data) async throws -> AppsSyncResponse {
-        let request = AppsSyncRequest(appId: appId, syncMessage: stateVector.base64EncodedString())
+        let wheelFormat = appId == "wheel" ? 2 : nil
+        let request = AppsSyncRequest(appId: appId, syncMessage: stateVector.base64EncodedString(), wheelFormat: wheelFormat)
         let data = try await emit(
             event: SocketEvent.appsYjsSync,
             payload: request
         )
-        guard let response = decodeAppsSyncResponse(from: data) else {
+        guard let response = decodeAppsSyncResponse(from: data, wheelFormat: wheelFormat) else {
             throw SocketError.serverError("Invalid app sync acknowledgement.")
         }
         return response
@@ -2033,9 +2034,10 @@ final class SocketIOManager {
         return nil
     }
 
-    private func decodeAppsSyncResponse(from data: Data) -> AppsSyncResponse? {
+    private func decodeAppsSyncResponse(from data: Data, wheelFormat: Int?) -> AppsSyncResponse? {
         guard let object = try? JSONSerialization.jsonObject(with: data, options: []),
               let dict = object as? [String: Any],
+              wheelFormat == nil || intField(dict, "wheelFormat") == wheelFormat,
               let syncMessage = byteData(from: dict["syncMessage"], allowEmpty: true) else {
             return nil
         }

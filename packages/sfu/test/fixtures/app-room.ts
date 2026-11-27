@@ -83,7 +83,7 @@ const newRoom = (state: SfuState, id: string): Room => {
   return room;
 };
 
-export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChangeStaging?: StagingBudget; appId?: string } = {}) => {
+export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChangeStaging?: StagingBudget; appId?: string; wheelFormat?: 2 } = {}) => {
   const { appId = "board" } = options;
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -101,43 +101,51 @@ export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChang
   const room = newRoom(state, id);
   const context = enter(state, room, self, `a#${id}`);
   registerAppsHandlers(context);
-  const requestSync = (holder: Y.Doc | Uint8Array, canRetry = true, wholeChanges = false) =>
+  const requestSync = (holder: Y.Doc | Uint8Array, canRetry = true, wholeChanges = false, wheelFormat = options.wheelFormat) =>
     call<AppsSyncResponse | AppsSyncError>("apps:yjs:sync", {
       appId,
       syncMessage: holder instanceof Y.Doc ? Y.encodeStateVector(holder) : holder,
       canRetry,
       ...(wholeChanges ? { wholeChanges } : {}),
+      wheelFormat,
     });
-  const syncFrom = async (holder: Y.Doc) => {
-    const response = await requestSync(holder);
+  const syncFrom = async (holder: Y.Doc, wheelFormat?: 2) => {
+    const response = await requestSync(holder, true, false, wheelFormat);
     if (!("syncMessage" in response)) throw new Error(response.error);
     return response;
   };
-  const joinDocument = async () => {
+  const joinDocument = async (wheelFormat?: 2) => {
     const doc = new Y.Doc();
-    const { syncMessage } = await syncFrom(doc);
+    const { syncMessage } = await syncFrom(doc, wheelFormat);
     Y.applyUpdate(doc, syncMessage);
     return { doc, encodedBytes: syncMessage.length };
   };
   let peers = 0;
-  const peer = async ({ encoding = "binary", declares = false, syncs = true }: { encoding?: "binary" | "base64"; declares?: boolean; syncs?: boolean } = {}) => {
+  const peer = async ({ encoding = "binary", declares = false, syncs = true, wheelFormat = options.wheelFormat }: { encoding?: "binary" | "base64"; declares?: boolean; syncs?: boolean; wheelFormat?: 2 } = {}) => {
     peers += 1;
     const joiner = fakeSocket(`s-${id}-peer-${peers}`, hub);
     registerAppsHandlers(enter(state, context.currentRoom ?? room, joiner, `p${peers}#${id}`));
-    if (syncs) {
-      const vector = Y.encodeStateVector(new Y.Doc());
-      await joiner.call("apps:yjs:sync", {
+    const sync = (doc: Y.Doc) => {
+      const vector = Y.encodeStateVector(doc);
+      return joiner.call<AppsSyncResponse | AppsSyncError>("apps:yjs:sync", {
         appId,
         syncMessage: encoding === "base64" ? Buffer.from(vector).toString("base64") : vector,
         canRetry: true,
         ...(declares ? { wholeChanges: true } : {}),
+        wheelFormat,
       });
+    };
+    if (syncs) {
+      const doc = new Y.Doc();
+      await sync(doc);
+      doc.destroy();
     }
     return {
+      sync,
       inbox: joiner.member.inbox,
       settle: () =>
         joiner.call<AppsSyncResponse | AppsSyncError>("apps:yjs:sync", {
-          appId, syncMessage: Y.encodeStateVector(new Y.Doc()), canRetry: true,
+          appId, syncMessage: Y.encodeStateVector(new Y.Doc()), canRetry: true, wheelFormat,
         }),
       send: (update: Uint8Array, replicaId: string, part?: unknown) =>
         joiner.listeners.get("apps:yjs:update")!({ appId, update, replicaId, ...(part === undefined ? {} : { part }) }),

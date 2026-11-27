@@ -293,6 +293,7 @@ struct AppsSyncRequest: Codable {
     let appId: String
     let syncMessage: String
     var wholeChanges: Bool = true
+    var wheelFormat: Int? = nil
 }
 
 struct AppsUpdateRequest: Codable {

@@ -34,6 +34,7 @@ export type AppsSyncPayload = {
   syncMessage: Uint8Array;
   canRetry?: boolean;
   wholeChanges?: true;
+  wheelFormat?: 2;
 };
 
 export type AppsSyncResponse = {
@@ -42,6 +43,7 @@ export type AppsSyncResponse = {
   awarenessUpdate?: Uint8Array;
   stagesParts?: true;
   takesUpdateLists?: true;
+  wheelFormat?: 2;
 };
 
 export type AppsSyncError = {

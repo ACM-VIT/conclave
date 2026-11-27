@@ -9,7 +9,7 @@ const pools: AppDocumentPool[] = [];
 const joinApp = async (id: string, appId = "board") => {
   const pool = createAppDocumentPool({ workers: 1, deadlineMs: 20_000, maxDocumentBytes: MAX_DOC_BYTES });
   pools.push(pool);
-  const room = inAppRoom(pool, id, { appId });
+  const room = inAppRoom(pool, id, { appId, wheelFormat: appId === "wheel" ? 2 : undefined });
   await room.open();
   return room;
 };

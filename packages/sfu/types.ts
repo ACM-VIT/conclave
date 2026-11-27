@@ -1189,6 +1189,7 @@ export interface AppsSyncData {
   syncMessage: Uint8Array;
   canRetry?: boolean;
   wholeChanges?: boolean;
+  wheelFormat?: 2;
 }
 
 export interface AppsSyncResponse {
@@ -1197,6 +1198,7 @@ export interface AppsSyncResponse {
   awarenessUpdate?: Uint8Array;
   stagesParts?: true;
   takesUpdateLists?: true;
+  wheelFormat?: 2;
 }
 
 export interface AppsSyncError {

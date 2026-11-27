@@ -8,7 +8,7 @@ import {
 import * as decoding from "lib0/decoding";
 import * as encoding from "lib0/encoding";
 import * as Y from "yjs";
-import { readUpdate, updateChangesNothing, type UpdateFacts } from "./apps/documents/updateFacts.js";
+import { readUpdate, updateChangesNothing, watchWheelWrite, type UpdateFacts, type WheelFormat } from "./apps/documents/updateFacts.js";
 import type { AppDocument, AppDocumentPool, Refusal, WorkerProposal } from "./apps/documents/pool.js";
 import { Logger } from "../utilities/loggers.js";
 import { RoomAppsScheduler, type Pending, type WriteOutcome } from "./roomAppsScheduler.js";
@@ -49,9 +49,10 @@ export type AppSyncMark = {
   readonly appId: string;
   readonly generation: number;
   readonly seen: ReadonlyMap<number, number>;
+  readonly wheelFormat?: WheelFormat;
 };
 
-export type WriteRefusal = ContentRefusal | "too-large" | "invalid" | "rate-limited" | "interrupted" | "queue-full" | "timed-out" | "crashed" | "unavailable";
+export type WriteRefusal = ContentRefusal | "too-large" | "invalid" | "rate-limited" | "interrupted" | "queue-full" | "timed-out" | "crashed" | "unavailable" | "wheel-format";
 
 export type AppSeatRole = "host" | "participant" | "absent";
 
@@ -68,11 +69,11 @@ export type WriteResult = { readonly outcomes: WriteOutcome[]; readonly landed: 
 
 export type SyncAnswer =
   | { readonly ok: true; readonly update: Uint8Array; readonly stateVector: Uint8Array; readonly mark: AppSyncMark }
-  | { readonly ok: false; readonly reason: "not-live" | "invalid" | "too-large" | "queue-full" | "timed-out" | "crashed" | "unavailable" };
+  | { readonly ok: false; readonly reason: "not-live" | "invalid" | "too-large" | "queue-full" | "timed-out" | "crashed" | "unavailable" | "wheel-format" };
 
 export type DocumentExecutor = {
   write(appId: string, identity: WriteIdentity, updates: Uint8Array[]): Pending<WriteResult>;
-  sync(appId: string, stateVector: Uint8Array): Pending<SyncAnswer>;
+  sync(appId: string, stateVector: Uint8Array, wheelFormat?: WheelFormat): Pending<SyncAnswer>;
   changesNothing(appId: string, update: Uint8Array): Pending<boolean>;
 };
 
@@ -117,6 +118,7 @@ type AppDoc = {
   // accepted updates added since.
   measuredBytes: number;
   unmeasuredBytes: number;
+  currentWheel?: true;
 } & ({ doc: Y.Doc; worker?: never } | { worker: AppDocument; doc?: never; seen: ReadonlyMap<number, number> });
 
 const encodedSizeAfter = (doc: Y.Doc, update: Uint8Array): number => {
@@ -288,7 +290,7 @@ export class RoomApps {
   ) {
     this.executor = pool ? {
       write: (appId, identity, updates) => this.writeInWorker(appId, identity, updates),
-      sync: (appId, vector) => this.syncInWorker(appId, vector),
+      sync: (appId, vector, wheelFormat) => this.syncInWorker(appId, vector, wheelFormat),
       changesNothing: async (appId, update) => {
         const entry = this.activeEntry(appId);
         return entry?.worker ? entry.worker.changesNothing(update) : false;
@@ -483,6 +485,13 @@ export class RoomApps {
     return { appId, generation: entry.generation, seen: entry.doc ? stateOf(entry.doc) : entry.seen };
   }
 
+  admitSync(mark: AppSyncMark): boolean {
+    const entry = this.activeEntry(mark.appId);
+    if (entry?.generation !== mark.generation) return false;
+    if (mark.wheelFormat === 2) entry.currentWheel = true;
+    return !entry.currentWheel || mark.wheelFormat === 2;
+  }
+
   /** Whether `mark` is a sync of the document presented now. */
   isCurrentSync(mark: AppSyncMark | null): mark is AppSyncMark {
     return (
@@ -519,6 +528,7 @@ export class RoomApps {
     const stay = this.stay;
     const preflight = (): WriteRefusal | null => {
       if (this.activeEntry(appId) !== entry || stay !== this.stay) return "not-live";
+      if (entry.currentWheel && mark.wheelFormat !== 2) return "wheel-format";
       const role = identity.role();
       if (role === "absent") return "not-live";
       if (this.locked && role !== "host") return "locked";
@@ -539,7 +549,7 @@ export class RoomApps {
     };
     const groups = identity.separate ? updates.map((update) => [update]) : [updates];
     const results = await Promise.all(groups.map((group) =>
-      entry.worker.applyValidated(group, identity.assembled === true, { preflight, authorize }),
+      entry.worker.applyValidated(group, identity.assembled === true, { preflight, authorize }, mark.wheelFormat),
     ));
     return {
       outcomes: identity.separate
@@ -549,9 +559,10 @@ export class RoomApps {
     };
   }
 
-  private async syncInWorker(appId: string, vector: Uint8Array): Promise<SyncAnswer> {
+  private async syncInWorker(appId: string, vector: Uint8Array, wheelFormat?: WheelFormat): Promise<SyncAnswer> {
     const entry = this.activeEntry(appId);
     if (!entry?.worker) return { ok: false, reason: "not-live" };
+    if (entry.currentWheel && wheelFormat !== 2) return { ok: false, reason: "wheel-format" };
     const stay = this.stay;
     const result = await entry.worker.sync(vector);
     if (this.activeEntry(appId) !== entry || stay !== this.stay) return { ok: false, reason: "not-live" };
@@ -559,7 +570,7 @@ export class RoomApps {
       const reason = this.refusalOf(result.reason);
       return { ok: false, reason };
     }
-    return { ...result, mark: { appId, generation: entry.generation, seen: Y.decodeStateVector(result.stateVector) } };
+    return { ...result, mark: { appId, generation: entry.generation, seen: Y.decodeStateVector(result.stateVector), wheelFormat } };
   }
 
   private authorizeUpdate(
@@ -585,6 +596,7 @@ export class RoomApps {
     const doc = this.liveDoc(appId);
     if (!doc) return "not-live";
     if (!this.isCurrentSync(mark)) return "not-synced";
+    if (this.activeEntry(appId)?.currentWheel && mark.wheelFormat !== 2) return "wheel-format";
     if (this.stage.locked && !options.host) return "locked";
     let facts: UpdateFacts;
     try {
@@ -594,6 +606,19 @@ export class RoomApps {
     }
     const claims = this.authorizeUpdate(participant, appId, mark, facts);
     if (typeof claims === "string") return claims;
+    if (mark.wheelFormat !== undefined) {
+      const trial = new Y.Doc({ gc: doc.gc });
+      try {
+        Y.applyUpdate(trial, Y.encodeStateAsUpdate(doc));
+        const compatible = watchWheelWrite(trial, mark.wheelFormat);
+        Y.applyUpdate(trial, update);
+        if (!compatible()) return "wheel-format";
+      } catch {
+        return "invalid";
+      } finally {
+        trial.destroy();
+      }
+    }
     if (!this.reserveUpdate(appId, update)) return "too-large";
     try {
       Y.applyUpdate(doc, update, options.origin);
@@ -981,7 +1006,7 @@ class InProcessDocuments implements DocumentExecutor {
     return { outcomes: updates.map(() => outcome), landed: outcome === null && merged ? [merged] : [] };
   }
 
-  sync(appId: string, stateVector: Uint8Array): SyncAnswer {
+  sync(appId: string, stateVector: Uint8Array, wheelFormat?: WheelFormat): SyncAnswer {
     return guarded<SyncAnswer>("Syncing an app", { ok: false, reason: "invalid" }, () => {
       const doc = this.apps.liveDoc(appId);
       const mark = this.apps.syncMark(appId);
@@ -989,7 +1014,7 @@ class InProcessDocuments implements DocumentExecutor {
       Y.decodeStateVector(stateVector);
       const update = Y.encodeStateAsUpdate(doc, stateVector);
       if (update.length > MAX_APP_DOC_BYTES) return { ok: false, reason: "too-large" };
-      return { ok: true, update, stateVector: Y.encodeStateVector(doc), mark };
+      return { ok: true, update, stateVector: Y.encodeStateVector(doc), mark: { ...mark, wheelFormat } };
     });
   }
 

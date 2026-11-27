@@ -51,7 +51,10 @@ export type WheelResult = {
 
 const getRoot = (doc: Y.Doc): Y.Map<unknown> => getAppRoot(doc, ROOT_KEY);
 
-const entriesOf = (doc: Y.Doc): Y.Array<unknown> => doc.getArray(ENTRIES_ROOT);
+const entriesOf = (doc: Y.Doc): Y.Array<unknown> => {
+  const released = getRoot(doc).get("entries");
+  return released instanceof Y.Array ? released : doc.getArray(ENTRIES_ROOT);
+};
 
 const CONTROL_CHARACTERS = /\p{Cc}/gu;
 

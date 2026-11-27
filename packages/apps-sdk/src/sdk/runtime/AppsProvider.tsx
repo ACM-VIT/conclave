@@ -687,6 +687,7 @@ export function AppsProvider({
         syncMessage: Y.encodeStateVector(run.doc),
         canRetry: true,
         wholeChanges: true,
+        ...(run.appId === "wheel" ? { wheelFormat: 2 } : {}),
       };
       let answered = false;
       const answer = (response?: AppsSyncResponse | AppsSyncError) => {
@@ -697,6 +698,10 @@ export function AppsProvider({
 
         const reply = classifySyncReply(response);
         if (reply.kind === "synced") {
+          if (run.appId === "wheel" && reply.response.wheelFormat !== 2) {
+            fail();
+            return;
+          }
           syncRunRef.current = null;
           const synced = applySync(run, reply.response);
           if (!synced) pendingStageRef.current?.cancel();

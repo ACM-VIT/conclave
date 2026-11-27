@@ -1,14 +1,14 @@
 import { performance } from "node:perf_hooks";
 import * as Y from "yjs";
 
-import { readUpdate, updateChangesNothing, type UpdateFacts } from "#app-documents/updateFacts";
+import { readUpdate, updateChangesNothing, watchWheelWrite, type UpdateFacts, type WheelFormat } from "#app-documents/updateFacts";
 
 export type WorkerProposal = { facts: UpdateFacts; bytes: number; seen: Map<number, number> };
 
 export type Snapshot = { base: Uint8Array | null; tail: Uint8Array[] };
 
 export type Operation =
-  | { kind: "apply"; update: Uint8Array; assembled?: true; validate?: true; rest?: Uint8Array[] }
+  | { kind: "apply"; update: Uint8Array; assembled?: true; validate?: true; rest?: Uint8Array[]; wheelFormat?: WheelFormat }
   | { kind: "sync"; stateVector: Uint8Array }
   | { kind: "check"; update: Uint8Array };
 
@@ -21,7 +21,7 @@ type Answer =
   | { type: "proposed"; proposal: WorkerProposal; update: Uint8Array; compacted: Uint8Array | null; unchanged?: true }
   | { type: "checked"; unchanged: boolean }
   | { type: "synced"; update: Uint8Array; stateVector: Uint8Array }
-  | { type: "refused"; reason: "too-large" | "invalid" | "missing-dependency" | "malformed" | "unresolved"; evicted: boolean };
+  | { type: "refused"; reason: "too-large" | "invalid" | "missing-dependency" | "malformed" | "unresolved" | "wheel-format"; evicted: boolean };
 
 export type FromWorker =
   | { type: "ready" }
@@ -136,7 +136,20 @@ export const createAppDocumentEngine = ({ maxDocumentBytes, maxUpdateBytes }: En
       return [{ type: "refused", reason: "malformed", evicted: false }, []];
     }
     if (!facts.resolvable) return [{ type: "refused", reason: "unresolved", evicted: false }, []];
+    let stopWatching: (() => boolean) | undefined;
+    if (operation.wheelFormat !== undefined) {
+      try {
+        stopWatching = watchWheelWrite(loaded.doc, operation.wheelFormat);
+      } catch {
+        return [{ type: "refused", reason: "invalid", evicted: false }, []];
+      }
+    }
     const [answer, transfer] = apply(id, loaded, update, operation.assembled === true, true);
+    const compatible = stopWatching?.();
+    if (answer.type === "applied" && compatible === false) {
+      evict(id);
+      return [{ type: "refused", reason: "wheel-format", evicted: true }, []];
+    }
     if (answer.type !== "applied") return [answer, transfer];
     const seen = new Map<number, number>();
     for (const [client] of loaded.doc.store.clients) seen.set(client, Y.getState(loaded.doc.store, client));

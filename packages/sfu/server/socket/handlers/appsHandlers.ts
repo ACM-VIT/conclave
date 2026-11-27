@@ -30,6 +30,7 @@ import {
   type SyncAnswer,
   type WriteRefusal,
 } from "../../roomApps.js";
+import type { WheelFormat } from "../../apps/documents/updateFacts.js";
 import { afterSettled, whenSettled, type SlotWrite, type StageTransition, type WireBatch } from "../../roomAppsScheduler.js";
 import { Logger } from "../../../utilities/loggers.js";
 import type { ConnectionContext } from "../context.js";
@@ -79,6 +80,7 @@ type RoomScope = {
   restart: CopyRestart;
   freeSyncRevision: number | null;
   canUploadWhole: boolean;
+  wheelFormat?: 2;
 };
 
 type StageOutcome =
@@ -106,6 +108,7 @@ const SYNC_ERRORS: Record<Extract<SyncAnswer, { ok: false }>["reason"], AppsSync
   crashed: retryLater("App document sync failed", 250),
   "queue-full": retryLater("App document is busy", 250),
   unavailable: { error: "App document unavailable" },
+  "wheel-format": { error: "Update your app or refresh this tab to use this Wheel." },
 };
 
 const later = (ms: number, task: () => void): ReturnType<typeof setTimeout> =>
@@ -348,11 +351,12 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       sender: socket,
       seat: admission.seat,
       appId,
-      key: JSON.stringify([appId, mark.generation, replicaId, role()]),
+      key: JSON.stringify([appId, mark.generation, mark.wheelFormat, replicaId, role()]),
       get host() { return role() === "host"; },
       direct,
       run: (updates) => {
-        const latest = scope?.apps === apps && apps.isCurrentSync(scope.synced) ? scope.synced : mark;
+        const latest = scope?.apps === apps && apps.isCurrentSync(scope.synced) && scope.synced.wheelFormat === mark.wheelFormat
+          ? scope.synced : mark;
         const identity = {
           participant, role, origin: socketId, mark: latest, separate: mode === "list",
           assembled: mode === "assembled" ? true as const : undefined,
@@ -375,8 +379,9 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
   const sendRoomCopy = (current: RoomScope, appId: string): void => {
     const { apps } = current;
     const revision = apps.stageRevision;
-    afterSettled("Sending the room's copy", apps.executor.sync(appId, EMPTY_STATE_VECTOR), (answer) => {
+    afterSettled("Sending the room's copy", apps.executor.sync(appId, EMPTY_STATE_VECTOR, appId === "wheel" ? current.wheelFormat ?? 1 : undefined), (answer) => {
       if (!answer.ok || scope !== current || !stillIn(apps) || apps.stageRevision !== revision) return;
+      if (!apps.admitSync(answer.mark)) return;
       current.synced = answer.mark;
       socket.emit("apps:yjs:update", { appId, update: answer.update } satisfies AppsUpdateData);
     });
@@ -602,7 +607,12 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
           return;
         }
         const { appId, stateVector } = request;
-        afterSettled("App sync", apps.executor.sync(appId, stateVector), (answer) => {
+        if (appId === "wheel" && data.wheelFormat !== undefined && data.wheelFormat !== 2) {
+          reply(SYNC_ERRORS["wheel-format"]);
+          return;
+        }
+        const wheelFormat = appId === "wheel" ? data.wheelFormat === 2 ? 2 : 1 : undefined;
+        afterSettled("App sync", apps.executor.sync(appId, stateVector, wheelFormat), (answer) => {
           if (scope !== current || !stillIn(apps) || apps.stayToken !== stay) {
             reply(SYNC_ERRORS["not-live"]);
             return;
@@ -612,10 +622,17 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
             current.freeSyncRevision = revision;
             refundToken(socket, "apps:yjs:sync", RATE_LIMITS.appsYjsSync);
           }
-          if (!answer.ok) {
-            reply(SYNC_ERRORS[answer.reason]);
+          if (!answer.ok || !apps.admitSync(answer.mark)) {
+            const reason = answer.ok ? "wheel-format" : answer.reason;
+            reply(SYNC_ERRORS[reason]);
+            if (reason === "wheel-format") {
+              current.synced = null;
+              endRestart();
+              socket.emit("apps:state", { ...getRoomAppsState(context), activeAppId: null, docGeneration: null });
+            }
             return;
           }
+          if (wheelFormat === 2) current.wheelFormat = wheelFormat;
           if (current.restart.state !== "blank-sent") {
             current.synced = answer.mark;
             endRestart();
@@ -628,6 +645,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
             stateVector: answer.stateVector,
             stagesParts: true,
             takesUpdateLists: true,
+            ...(wheelFormat === 2 ? { wheelFormat } : {}),
             awarenessUpdate: awareness && awareness.length <= MAX_APPS_AWARENESS_BYTES ? awareness : undefined,
           });
         });
@@ -683,6 +701,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     stay: object;
     id: string;
     count: number;
+    wheelFormat?: WheelFormat;
     parts: Uint8Array[];
     bytes: number;
     idle?: ReturnType<typeof setTimeout>;
@@ -861,13 +880,13 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     if (!takeToken(socket, "apps:change-part", RATE_LIMITS.appsYjsUpdate)) return reject("rate-limited");
     if (part.index === 0) {
       dropStaged();
-      staged = { admission, revision, stay, id: part.id, count: part.count, parts: [], bytes: 0 };
+      staged = { admission, revision, stay, id: part.id, count: part.count, wheelFormat: mark.wheelFormat, parts: [], bytes: 0 };
       apps.follow(followStaged);
     }
     const change = staged;
     if (
       !change || change.admission.seat !== client || change.admission.apps !== apps || change.admission.appId !== appId ||
-      change.admission.replicaId !== admission.replicaId || change.revision !== revision ||
+      change.admission.replicaId !== admission.replicaId || change.revision !== revision || change.wheelFormat !== mark.wheelFormat ||
       change.id !== part.id || change.count !== part.count || change.parts.length !== part.index
     ) return reject("interrupted");
     if (change.bytes + size > APP_DOCUMENT_MAX_BYTES) return reject("too-large");

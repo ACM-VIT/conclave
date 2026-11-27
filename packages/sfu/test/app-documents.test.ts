@@ -1032,7 +1032,7 @@ describe("app documents", { timeout: 30_000 }, () => {
 
   it("never echoes the worker's speculative Wheel add before commit", async () => {
     const fixture = createFixture();
-    const room = inRoom(createPool({ workerUrl: STALLING_WORKER, workerData: fixture.workerData }), "wheel-commit", { appId: "wheel" });
+    const room = inRoom(createPool({ workerUrl: STALLING_WORKER, workerData: fixture.workerData }), "wheel-commit", { appId: "wheel", wheelFormat: 2 });
     await room.open();
     const writer = new Y.Doc();
     writer.getArray("wheel.entries").push([{ id: "ada", label: "HOLD Ada" }]);

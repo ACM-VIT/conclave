@@ -132,6 +132,7 @@ const budgetedSfu = (appId: string, serverDoc: Y.Doc) => {
             stateVector: state.activeAppId === appId ? Y.encodeStateVector(serverDoc) : Uint8Array.of(0),
             ...(state.stagesParts ? { stagesParts: true } : {}),
             ...(state.takesLists ? { takesUpdateLists: true } : {}),
+            wheelFormat: 2,
           });
         if (state.syncDelayMs > 0) setTimeout(answer, state.syncDelayMs);
         else answer();

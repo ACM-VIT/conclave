@@ -1,5 +1,49 @@
 import * as Y from "yjs";
 
+export type WheelFormat = 1 | 2;
+
+const RELEASED_WHEEL_LIMIT = 64;
+
+export const watchWheelWrite = (doc: Y.Doc, format: WheelFormat) => {
+  const wheel = doc.getMap("wheel");
+  const nested = wheel.get("entries");
+  const topLevel = doc.getArray("wheel.entries");
+  const receipts = doc.getArray("wheel.addReceipts");
+  let compatible = true;
+  const watchRoot = ({ keysChanged }: Y.YMapEvent<unknown>) => {
+    if (format === 1) {
+      compatible &&= !keysChanged.has("order") &&
+        (!keysChanged.has("entries") || (nested === undefined && wheel.get("entries") instanceof Y.Array));
+    } else {
+      compatible &&= !keysChanged.has("entries");
+    }
+  };
+  const watch = ({ changedParentTypes }: Y.Transaction) => {
+    const changesTopLevel = changedParentTypes.has(topLevel);
+    if (format === 1) {
+      compatible &&= !changesTopLevel && !changedParentTypes.has(receipts);
+    } else {
+      compatible &&= !(nested instanceof Y.Array) || !changesTopLevel;
+    }
+  };
+  const watchOverflow = (event: Y.YArrayEvent<unknown>) => {
+    const delta = event.changes.delta;
+    if (delta.some(({ insert }) => insert !== undefined) && delta.some(({ delete: count }) => count !== undefined)) {
+      compatible = false;
+    }
+  };
+  const overflowing = format === 1 && nested instanceof Y.Array && nested.length > RELEASED_WHEEL_LIMIT ? nested : null;
+  overflowing?.observe(watchOverflow);
+  wheel.observe(watchRoot);
+  doc.on("afterTransaction", watch);
+  return () => {
+    doc.off("afterTransaction", watch);
+    wheel.unobserve(watchRoot);
+    overflowing?.unobserve(watchOverflow);
+    return compatible;
+  };
+};
+
 // The live value under `key` of the map `parent` names in `doc`: a root type
 // by name, or a nested type by the id of the item holding it.
 const liveMapValue = (doc: Y.Doc, parent: unknown, key: string): Y.Item | null => {

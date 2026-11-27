@@ -3,6 +3,7 @@ import { APP_DOCUMENT_MAX_BYTES, APP_DOCUMENT_UPDATE_MAX_BYTES } from "@conclave
 import { Logger } from "../../../utilities/loggers.js";
 import type { WriteRefusal } from "../../roomApps.js";
 import type { FromWorker, Operation, ToWorker, WorkerProposal } from "./engine.js";
+import type { WheelFormat } from "./updateFacts.js";
 
 export type { WorkerProposal } from "./engine.js";
 
@@ -15,6 +16,7 @@ export type Refusal =
   | "missing-dependency"
   | "malformed"
   | "unresolved"
+  | "wheel-format"
   | "timed-out"
   | "crashed"
   | "queue-full"
@@ -35,7 +37,7 @@ export type SyncResult = { ok: true; update: Uint8Array; stateVector: Uint8Array
 export type AppDocument = {
   apply: (update: Uint8Array) => Promise<ApplyResult>;
   applyAssembled: (update: Uint8Array) => Promise<ApplyResult>;
-  applyValidated: (updates: Uint8Array[], assembled: boolean, decision: WriteCommit) => Promise<ValidatedResult>;
+  applyValidated: (updates: Uint8Array[], assembled: boolean, decision: WriteCommit, wheelFormat?: WheelFormat) => Promise<ValidatedResult>;
   changesNothing: (update: Uint8Array) => Promise<boolean>;
   sync: (stateVector: Uint8Array) => Promise<SyncResult>;
   retryLoad: () => void;
@@ -80,7 +82,7 @@ export type AppDocumentPoolOptions = {
 
 type Job = { bytes: number } & (
   | { kind: "apply"; update: Uint8Array; assembled: boolean; settle: (result: ApplyResult) => void }
-  | { kind: "validate"; updates: Uint8Array[]; assembled: boolean; decision: WriteCommit; settle: (result: ValidatedResult) => void }
+  | { kind: "validate"; updates: Uint8Array[]; assembled: boolean; decision: WriteCommit; settle: (result: ValidatedResult) => void; wheelFormat?: WheelFormat }
   | { kind: "check"; update: Uint8Array; settle: (result: CheckResult) => void }
   | { kind: "sync"; stateVector: Uint8Array; settle: (result: SyncResult) => void }
 );
@@ -136,7 +138,7 @@ const operationOf = (job: Job): Operation => {
     case "validate":
       return {
         kind: "apply", update: job.updates[0], rest: job.updates.slice(1),
-        assembled: job.assembled ? true : undefined, validate: true,
+        assembled: job.assembled ? true : undefined, validate: true, wheelFormat: job.wheelFormat,
       };
     case "check":
       return { kind: "check", update: job.update };
@@ -558,11 +560,11 @@ export const createAppDocumentPool = ({
     return {
       apply: (update) => applyOne(update, false),
       applyAssembled: (update) => applyOne(update, true),
-      applyValidated: (updates, assembled, decision) =>
+      applyValidated: (updates, assembled, decision, wheelFormat) =>
         new Promise((settle) => {
           const bytes = updates.reduce((sum, update) => sum + update.length, 0);
           const refusal = admit(entry, bytes);
-          const job: Job = { kind: "validate", updates, assembled, decision, bytes, settle };
+          const job: Job = { kind: "validate", updates, assembled, decision, bytes, settle, wheelFormat };
           if (refusal) refuse(job, refusal);
           else if (bytes === 0) settle({ ok: false, reason: "invalid" });
           else enqueue(entry, { ...job, updates: updates.map((update) => new Uint8Array(update)) });

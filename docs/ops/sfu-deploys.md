@@ -329,6 +329,38 @@ docker run --rm --network host -e SFU_SECRET --entrypoint node <image> \
 
 It fails if either side goes more than 2 s without audio or is disconnected.
 
+## Wheel format cutover
+
+Release the Wheel web client, native clients, and SFU together. Drain the old
+SFU normally. Wheel documents live in the serving room, so a worker reload can
+recover a committed list, but replacing the SFU process does not move a live
+room's list to a new process. Do not force a restart to migrate names.
+
+- An updated Wheel negotiates `wheelFormat: 2` during document sync. The
+  updated web and native clients refuse an SFU reply that does not confirm it.
+- Before the first negotiated sync for a document, released clients can use a
+  released list. A released replacement that combines insertion and deletion
+  while more than 64 names are stored is refused. The same packet can mean
+  either Sort or Remove followed by Sort. A standalone Remove or Clear still
+  works in this mode. Unversioned clients that write the newer list are refused.
+- The first negotiated sync closes that document to released clients. An
+  already connected old client cannot commit stale edits and resets its local
+  Wheel when it tries to write. A later sync tells it to refresh or update, and
+  the SFU hides the Wheel on that connection. Old clients may briefly show an
+  optimistic edit before they receive the reset.
+- Updated clients keep editing the released list if the room already has one.
+  Otherwise they use the top-level list. The SFU admits only one list per
+  document and does not rewrite row IDs or copy names. Close and Present keep
+  the list and its negotiated format when the document is retained. Discard or
+  room teardown starts a new document.
+
+To smoke-test the release, commit a name with a released client before opening
+the Wheel in an updated client. Check that the updated client sees the name,
+adds another, and still sees both after Close and Present. Try an edit in the old
+client and confirm it does not change the room's list. Refresh the web tab or
+update the native app to rejoin the Wheel. Test other apps independently. The
+version check applies only to Wheel.
+
 ## Known limits
 
 - A peer that fails in the moment between the deploy's peer check and its

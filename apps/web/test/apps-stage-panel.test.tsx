@@ -47,6 +47,7 @@ const socket = {
       const doc = serverDocs.get(appId) ?? new Y.Doc();
       ack({
         syncMessage: Y.encodeStateAsUpdate(doc, syncMessage),
+        ...(appId === "wheel" ? { wheelFormat: 2 } : {}),
         stateVector: Y.encodeStateVector(doc),
       });
       return;
