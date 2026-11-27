@@ -134,7 +134,14 @@ type Actor = {
   passKey: string | null;
   lastUser: SfuAuthPayload | null;
 };
-type JoinAck = { status?: string; error?: string; roomRecoveryPass?: string };
+type JoinAck = {
+  status?: string;
+  error?: string;
+  roomRecoveryPass?: string;
+  webinarRole?: string;
+  hostUserId?: string | null;
+  hostUserIds?: string[];
+};
 type Completion = {
   actor: Actor;
   channelId: string;
@@ -142,6 +149,8 @@ type Completion = {
   presented: string | null;
   knockedAt: string | null;
   admin: boolean;
+  hostUserId: string | null;
+  hostUserIds: string[];
   claim: boolean;
   incarnation: string | null;
   ownerEmail: string | null;
@@ -190,7 +199,12 @@ type Step =
       reload?: boolean;
       claim?: boolean;
     }
-  | { kind: "again"; actor: ActorName; pass: boolean }
+  | {
+      kind: "again";
+      actor: ActorName;
+      pass: boolean;
+      meanwhile?: { by: ActorName; action: "promote" | "transfer" };
+    }
   | {
       kind: "second";
       actor: ActorName;
@@ -754,6 +768,8 @@ const startJoin = (
       knockedAt:
         world.sfu.state.rooms.get(tab.context.pendingRoomChannelId ?? "")?.incarnationId ?? null,
       admin: tab.context.currentClient instanceof Admin,
+      hostUserId: tab.context.currentRoom?.getHostUserId() ?? null,
+      hostUserIds: tab.context.currentRoom?.getAdminUserIds() ?? [],
       claim: tab.user.isHost === true,
       incarnation: tab.context.currentRoom?.incarnationId ?? null,
       ownerEmail: tab.context.currentRoom?.ownerEmail ?? null,
@@ -829,7 +845,11 @@ const describeStep = (step: Step): string => {
     case "open":
       return `${step.actor} ${step.reload ? "reloads their tab" : "opens a tab"} and joins${step.claim ? " claiming the host's seat" : ""}${step.pass ? " with a pass" : ""}${step.hold ? ", the room opening is held" : ""}`;
     case "again":
-      return `${step.actor} asks again on the same tab${step.pass ? " with a pass" : ""}`;
+      return `${step.actor} asks again on the same tab${step.pass ? " with a pass" : ""}${
+        step.meanwhile
+          ? `, and ${step.meanwhile.by} ${step.meanwhile.action}s them while the join finishes`
+          : ""
+      }`;
     case "second":
       return step.action === "open"
         ? `${step.actor} opens a second tab and joins${step.claim ? " claiming the host's seat" : ""}${step.dropsWhileJoining ? ", and it drops while the join finishes" : ""}`
@@ -1267,7 +1287,19 @@ const perform = async (world: World, step: Step): Promise<void> => {
       const actor = world.actors[step.actor];
       const tab = liveTab(world, actor);
       if (!tab) throw new Error(`${actor.name} has no open tab to ask again on`);
+      tab.peer.holdJoin = step.meanwhile !== undefined;
       startJoin(world, actor, tab, step.pass);
+      if (step.meanwhile) {
+        await settle();
+        await performHostAction(world, {
+          kind: "host",
+          action: step.meanwhile.action,
+          by: step.meanwhile.by,
+          target: step.actor,
+        });
+        tab.peer.holdJoin = false;
+        for (const resume of world.sfu.heldJoins.splice(0)) resume();
+      }
       break;
     }
     case "leave":
@@ -1553,6 +1585,24 @@ const check = async (
         fail(`${done.actor.name} came back with a pass still good for the call and was made to knock`);
       }
     }
+    if (done.response.status === "joined") {
+      const seat = done.admin ? "host" : "participant";
+      if (done.response.webinarRole !== seat) {
+        fail(
+          `${done.actor.name}'s join was answered as a ${String(done.response.webinarRole)}'s, and its seat is a ${seat}'s`,
+        );
+      }
+      if ((done.response.hostUserId ?? null) !== done.hostUserId) {
+        fail(
+          `${done.actor.name}'s join was told the main host is ${String(done.response.hostUserId)}, not ${String(done.hostUserId)}`,
+        );
+      }
+      const told = [...(done.response.hostUserIds ?? [])].sort().join(", ");
+      const hosts = [...done.hostUserIds].sort().join(", ");
+      if (told !== hosts) {
+        fail(`${done.actor.name}'s join was told the hosts are [${told}], not [${hosts}]`);
+      }
+    }
     if (done.channelId !== CHANNEL || done.response.status !== "joined") continue;
     const { actor } = done;
     const owner = ownsCode(actor, done.ownerEmail);
@@ -1570,8 +1620,14 @@ const check = async (
     const fallback =
       sameRoom && before.beforeLiveHosts.size === 0 && phase.kind === "running";
     const claimed = world.claimed.has(actor.key);
+    const promoted = sameRoom && shadow.cohosts.has(actor.key);
     const justified =
-      owner || (sameRoom && before.beforeHosts.has(actor.key)) || lostHost || fallback || claimed;
+      owner ||
+      (sameRoom && before.beforeHosts.has(actor.key)) ||
+      lostHost ||
+      fallback ||
+      claimed ||
+      promoted;
     if (!justified) {
       const openers = world.openers.get(done.incarnation) ?? new Set<string>();
       openers.add(actor.key);
@@ -1769,6 +1825,20 @@ const nextStep = (world: World): Step => {
       continue;
     }
     options.push([1.5, () => ({ kind: "again", actor: name, pass: random() < 0.7 })]);
+    const hostNow = room
+      ? Object.values(world.actors).find((other) => other !== actor && hostsLiveRoom(world, other))
+      : undefined;
+    if (room && hostNow && seatOf(room, actor.key)) {
+      options.push([
+        0.3,
+        () => ({
+          kind: "again",
+          actor: name,
+          pass: random() < 0.7,
+          meanwhile: { by: hostNow.name, action: random() < 0.7 ? "promote" : "transfer" },
+        }),
+      ]);
+    }
     options.push([
       0.6,
       () =>
@@ -2448,6 +2518,20 @@ describe("the room lifecycle model", () => {
     ]);
     expect(outcome.failures, report(outcome)).toEqual([]);
   });
+
+  it.each(["promote", "transfer"] as const)(
+    "answers a join with the role and the hosts as they stand when a host %ss the joiner while it finishes",
+    async (action) => {
+      const outcome = await runScript(false, [
+        open("alice"),
+        open("bob"),
+        host("alice", "admit", "bob"),
+        { kind: "again", actor: "bob", pass: true, meanwhile: { by: "alice", action } },
+        { kind: "expect", actor: "bob", tab: "main", role: "host" },
+      ]);
+      expect(outcome.failures, report(outcome)).toEqual([]);
+    },
+  );
 
   it("hands the room on once a dropped last host's grace runs out", async () => {
     const outcome = await runScript(

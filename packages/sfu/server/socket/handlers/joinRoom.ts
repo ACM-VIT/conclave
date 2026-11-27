@@ -1410,25 +1410,26 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             { joining: context },
           );
         }
-        const seatedAsHost = context.currentClient instanceof Admin;
         if (!room.hasActiveAdmin()) ensureHost(io, state, room);
 
-        const hostUserId = room.getHostUserId();
-        const hostUserIds = room.getAdminUserIds();
-        const hasPeers = room.clients.size > 1;
-        const hostChanged = mayChangeRoster && hostUserId !== previousHostUserId;
-        const adminsChanged = mayChangeRoster && (
-          hostUserIds.length !== previousAdminUserIds.length ||
-          previousAdminUserIds.some((id) => !hostUserIds.includes(id))
-        );
-        (hasPeers && hostChanged ? io.to(roomChannelId) : socket).emit("hostChanged", {
-          roomId,
-          hostUserId,
-        });
-        (hasPeers && adminsChanged ? io.to(roomChannelId) : socket).emit("adminUsersChanged", {
-          roomId,
-          hostUserIds,
-        });
+        {
+          const hostUserId = room.getHostUserId();
+          const hostUserIds = room.getAdminUserIds();
+          const hasPeers = room.clients.size > 1;
+          const hostChanged = mayChangeRoster && hostUserId !== previousHostUserId;
+          const adminsChanged = mayChangeRoster && (
+            hostUserIds.length !== previousAdminUserIds.length ||
+            previousAdminUserIds.some((id) => !hostUserIds.includes(id))
+          );
+          (hasPeers && hostChanged ? io.to(roomChannelId) : socket).emit("hostChanged", {
+            roomId,
+            hostUserId,
+          });
+          (hasPeers && adminsChanged ? io.to(roomChannelId) : socket).emit("adminUsersChanged", {
+            roomId,
+            hostUserIds,
+          });
+        }
 
         // The previous room's channel is left only now. Nothing awaits between
         // the identity checks above and this seat, so a second join under the
@@ -1635,15 +1636,12 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           context.currentRoom.getWebinarAttendeeCount(),
         );
 
-        Logger.debug(
-          `User ${userId} joined room ${roomId} as ${
-            seatedAsHost
-              ? "Host"
-              : context.currentClient.isWebinarAttendee
-                ? "WebinarAttendee"
-                : "Client"
-          }`,
-        );
+        const seatRole = context.currentClient.isWebinarAttendee
+          ? "attendee"
+          : context.currentClient instanceof Admin
+            ? "host"
+            : "participant";
+        Logger.debug(`User ${userId} joined room ${roomId} as ${seatRole}`);
 
         // Publish settings only after this socket's room membership is restored.
         // A transport reconnect can happen before joinRoom finishes.
@@ -1666,8 +1664,8 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             : {}),
           displayNameSnapshot,
           status: "joined",
-          hostUserId,
-          hostUserIds,
+          hostUserId: context.currentRoom.getHostUserId(),
+          hostUserIds: context.currentRoom.getAdminUserIds(),
           isLocked: context.currentRoom.isLocked,
           isTtsDisabled: context.currentRoom.isTtsDisabled,
           isChatLocked: context.currentRoom.isChatLocked,
@@ -1679,11 +1677,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             context.currentRoom.isParticipantUnmuteAllowed,
           isParticipantVideoAllowed: context.currentRoom.isParticipantVideoAllowed,
           meetingRequiresInviteCode: context.currentRoom.requiresMeetingInviteCode,
-          webinarRole: context.currentClient.isWebinarAttendee
-            ? "attendee"
-            : seatedAsHost
-              ? "host"
-              : "participant",
+          webinarRole: seatRole,
           isWebinarEnabled: webinarSnapshot.enabled,
           webinarLocked: webinarSnapshot.locked,
           webinarRequiresInviteCode: webinarSnapshot.requiresInviteCode,
