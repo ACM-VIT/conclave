@@ -1164,6 +1164,50 @@ describe("a turn Sarvam still owes an answer is never closed as if it were compl
     expect(shown(rig)).toEqual([[`Part one. ${GAP}`, "ada"]]);
   });
 
+  it.each([0, 15_000])("a replacement connection failure at %i ms marks an unanswered second part before discarding its drain", async (wait) => {
+    const rig = await startRig(SARVAM);
+    const turn = await owingTurn(rig);
+    const close = vi.spyOn(turn, "close");
+    const [first] = rig.viewerTranscript().segments;
+    expect(first).toMatchObject({ text: "Part one.", speakerUserId: "ada", isFinal: true });
+    await rig.switchTo("ta");
+    await vi.advanceTimersByTimeAsync(wait);
+    expect(turn.closed).toBe(false);
+
+    rig.connectPlans.push({ status: 401 });
+    await rig.switchTo("te");
+
+    expect(statusOf(rig)).toBe("takeover_needed");
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(rig.viewerTranscript().segments).toEqual([
+      expect.objectContaining({
+        itemId: first.itemId,
+        sequence: first.sequence,
+        startMs: first.startMs,
+        text: `Part one. ${GAP}`,
+        speakerUserId: "ada",
+        speakerDisplayName: "Ada",
+        isFinal: true,
+      }),
+    ]);
+    expect(rig.lastSnapshotSegment(`Part one. ${GAP}`)).toMatchObject({ itemId: first.itemId, speakerUserId: "ada" });
+  });
+
+  it("an empty second answer releases the drain after the turn settles without adding a gap", async () => {
+    const rig = await startRig(SARVAM);
+    const turn = await owingTurn(rig);
+    const close = vi.spyOn(turn, "close");
+    await rig.switchTo("ta");
+    expect(rig.retainedLineState().connections).toBe(2);
+    turn.emit(sarvamFinal("empty-part", ""));
+    await vi.advanceTimersByTimeAsync(DEADLINE + 1);
+
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(rig.broadcastFinals()).toEqual(["Part one."]);
+    expect(shown(rig)).toEqual([["Part one.", "ada"]]);
+    expect(rig.retainedLineState().connections).toBe(1);
+  });
+
   const rejectAKeyDuringASwitch = async (rig: Rig) => {
     rig.connectPlans.push({ lateMs: 5_000 }, { status: 401 });
     void rig.switchTo("ta");
