@@ -262,4 +262,3 @@ describe("telling a client which request the worker answered", () => {
     expect(sent.find(({ type }) => type === "error")?.requestId).toBe("request-2");
   });
 });
-

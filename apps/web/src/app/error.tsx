@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import ErrorStateView from "./components/ErrorStateView";
+import { telemetry } from "./lib/telemetry";
 
 export default function Error({
   error,
@@ -12,6 +13,11 @@ export default function Error({
 }) {
   useEffect(() => {
     console.error("[Error]", error);
+    telemetry.captureException(error, {
+      source: "react_error_boundary",
+      boundary: "route",
+      digest: error.digest,
+    });
   }, [error]);
 
   return <ErrorStateView onRetry={reset} />;

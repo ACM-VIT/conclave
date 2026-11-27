@@ -1,0 +1,47 @@
+{
+  "note": "Sol, round 7: a freeze that began before joined resumes 600 ms after the first sample of the call.",
+  "samples": [
+    {
+      "at": 5347,
+      "stat": {
+        "type": "inbound-rtp",
+        "kind": "video",
+        "mid": "0",
+        "id": "IT01V1516231574",
+        "packetsReceived": 172,
+        "bytesReceived": 19619,
+        "framesDecoded": 150,
+        "freezeCount": 0,
+        "totalFreezesDuration": 0
+      }
+    },
+    {
+      "at": 7349,
+      "stat": {
+        "type": "inbound-rtp",
+        "kind": "video",
+        "mid": "0",
+        "id": "IT01V1516231574",
+        "packetsReceived": 172,
+        "bytesReceived": 19619,
+        "framesDecoded": 151,
+        "freezeCount": 0,
+        "totalFreezesDuration": 0
+      }
+    },
+    {
+      "at": 7951,
+      "stat": {
+        "type": "inbound-rtp",
+        "kind": "video",
+        "mid": "0",
+        "id": "IT01V1516231574",
+        "packetsReceived": 185,
+        "bytesReceived": 21054,
+        "framesDecoded": 163,
+        "freezeCount": 1,
+        "totalFreezesDuration": 2.203
+      }
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "conclave-web",
-  "main": ".open-next/worker.js",
+  "main": "worker.ts",
   "account_id": "4ee36e42cabfd44e8ce61b2a6bd637c5",
   "compatibility_date": "2026-06-30",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
@@ -70,12 +70,34 @@
       }
     },
     {
+      "name": "INGEST_RATE_LIMITER",
+      "namespace_id": "2006",
+      "simple": {
+        "limit": 120,
+        "period": 60
+      }
+    },
+    {
       "name": "CSP_REPORT_RATE_LIMITER",
       "namespace_id": "2010",
       "simple": {
         "limit": 30,
         "period": 60
       }
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "INGEST_QUOTA",
+        "class_name": "IngestQuota"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["IngestQuota"]
     }
   ],
   "r2_buckets": [
@@ -163,6 +185,14 @@
           }
         },
         {
+          "name": "INGEST_RATE_LIMITER",
+          "namespace_id": "3006",
+          "simple": {
+            "limit": 120,
+            "period": 60
+          }
+        },
+        {
           "name": "CSP_REPORT_RATE_LIMITER",
           "namespace_id": "3010",
           "simple": {
@@ -171,6 +201,14 @@
           }
         }
       ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "INGEST_QUOTA",
+            "class_name": "IngestQuota"
+          }
+        ]
+      },
       "r2_buckets": [
         {
           "binding": "NEXT_INC_CACHE_R2_BUCKET",

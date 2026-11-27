@@ -125,6 +125,7 @@ import {
   type WebcamTopologyReplacementTarget,
 } from "../lib/webcam-topology-transition";
 import type { ConnectionQualityStats } from "./useConnectionQuality";
+import { logCallError } from "../lib/call-error-capture";
 
 interface UseMeetMediaOptions {
   isObserverMode?: boolean;
@@ -2348,7 +2349,7 @@ export function useMeetMedia({
 
       return liveTracks.length > 0 ? new MediaStream(liveTracks) : null;
     } catch (err) {
-      console.error("[Meets] Local media setup failed:", err);
+      logCallError("[Meets] Local media setup failed", err);
       setMeetError((current) => current ?? createMeetError(err, "MEDIA_ERROR"));
       if (claimHolds(videoClaim)) setIsCameraOff(true);
       setIsMuted(true);
@@ -2444,7 +2445,7 @@ export function useMeetMedia({
             [committedNewAudioTrack],
           );
           if (isCaptureReleased(err)) return;
-          console.error("[Meets] Failed to switch audio input device:", err);
+          logCallError("[Meets] Failed to switch audio input device", err);
         }
       });
     },
@@ -2560,7 +2561,7 @@ export function useMeetMedia({
           stopTracksExcept(acquiredVideoTracks, [committedNewVideoTrack]);
           if (claimHolds(claim)) settleClaim(claim, true);
           if (isCaptureReleased(err)) return;
-          console.error("[Meets] Failed to switch video input device:", err);
+          logCallError("[Meets] Failed to switch video input device", err);
         }
       });
     },
@@ -2597,7 +2598,7 @@ export function useMeetMedia({
             try {
               await applyAudioOutputDevice(element, deviceId, () => element.isConnected);
             } catch (err) {
-              console.error("[Meets] Failed to set audio output device:", err);
+              logCallError("[Meets] Failed to set audio output device", err);
             }
           }),
       );
@@ -3079,7 +3080,7 @@ export function useMeetMedia({
         if (!claimHolds(claim)) {
           return;
         }
-        console.error("[Meets] Failed to update video quality:", err);
+        logCallError("[Meets] Failed to update video quality", err);
         if (rollbackStream && replacementTrack && !swapCommitted) {
           const restoredStream = new MediaStream([
             ...(localStreamRef.current?.getTracks().filter((track) => track.kind !== "video") ?? []),
@@ -3721,7 +3722,7 @@ export function useMeetMedia({
           discardCreatedTrack();
           return;
         }
-        console.error("[Meets] Failed to restart audio:", err);
+        logCallError("[Meets] Failed to restart audio", err);
         const meetErr = createMeetError(err, "MEDIA_ERROR", "microphone");
         const liveAudioTrackAfterFailure = getFirstLiveTrack(
           localStreamRef.current?.getAudioTracks() ?? [],
@@ -4043,7 +4044,7 @@ export function useMeetMedia({
       } catch (err) {
         removeCreatedTrackFromLocalStream();
         if (isCaptureReleased(err)) return;
-        console.error("[Meets] Audio producer recovery failed:", err);
+        logCallError("[Meets] Audio producer recovery failed", err);
         if (recoveryHolds()) {
           if (microphoneUnmuteDisabledRef.current) {
             setIsMuted(true);
@@ -4255,13 +4256,18 @@ export function useMeetMedia({
     const turningOn = !deviceIntents.get().video.chosen;
     if (turningOn && cameraPublishingDisabledRef.current) return;
 
-    const closeCameraProducer = (target: Producer) => {
+    const closeCameraProducer = (target: Producer, stale = false) => {
       socketRef.current?.emit(
         "closeProducer",
         { producerId: target.id },
         (response: { success: boolean } | { error: string }) => {
           if ("error" in response) {
-            console.error("[Meets] Failed to close video producer:", response);
+            logCallError(
+              stale
+                ? "[Meets] Failed to close stale video producer"
+                : "[Meets] Failed to close video producer",
+              response,
+            );
           }
         }
       );
@@ -4340,7 +4346,7 @@ export function useMeetMedia({
             setMediaError((current) => clearMediaDeviceError(current, "camera"));
             return;
           }
-          closeCameraProducer(producer);
+          closeCameraProducer(producer, true);
         }
 
         if (
@@ -4465,7 +4471,7 @@ export function useMeetMedia({
           discardCreatedTrack();
           return;
         }
-        console.error("[Meets] Failed to restart video:", err);
+        logCallError("[Meets] Failed to restart video", err);
         refuse();
         setMediaError((current) =>
           mergeMediaDeviceError(current, createMeetError(err, "MEDIA_ERROR", "camera")),
@@ -5736,7 +5742,7 @@ export function useMeetMedia({
           removeCreatedTrackFromLocalStream();
           return;
         }
-        console.error("[Meets] Camera producer recovery failed:", err);
+        logCallError("[Meets] Camera producer recovery failed", err);
         if (cameraPublishingDisabledRef.current) {
           disableBlockedCameraIntent();
           return;
@@ -6480,7 +6486,7 @@ export function useMeetMedia({
       if ((err as Error).name === "NotAllowedError") {
         console.info("[Meets] Screen share cancelled by user");
       } else {
-        console.error("[Meets] Error starting screen share:", err);
+        logCallError("[Meets] Error starting screen share", err);
         setMeetError(createMeetError(err, "MEDIA_ERROR"));
       }
     } finally {

@@ -23,7 +23,7 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   const upload = await readVoiceUpload(request);
   if (!upload.ok) {
-    return errorResponse(new Error(upload.error), upload.status);
+    return NextResponse.json({ error: upload.error }, { status: upload.status });
   }
   const { form: formData, audio } = upload;
 

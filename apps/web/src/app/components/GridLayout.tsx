@@ -93,6 +93,7 @@ import {
   usePublishStagePlacement,
 } from "../hooks/usePublishStagePlacement";
 import { readVideoAspect, resolveTileAspect } from "../lib/tile-video-framing";
+import { logCallError } from "../lib/call-error-capture";
 
 interface GridLayoutProps {
   localStream: MediaStream | null;
@@ -1346,7 +1347,7 @@ function GridLayout({
           return;
         }
         if (errorName(err) !== "AbortError") {
-          console.error("[Meets] Grid local video play error:", err);
+          logCallError("[Meets] Grid local video play error", err);
         }
       });
     };
@@ -3021,7 +3022,7 @@ const PresentationVideoTile = memo(function PresentationVideoTile({
           return;
         }
         if (errorName(err) !== "AbortError") {
-          console.error("[Meets] Presentation video play error:", err);
+          logCallError("[Meets] Presentation video play error", err);
         }
       });
     };
