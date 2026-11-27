@@ -1,7 +1,7 @@
 import { config } from "../../../config/config.js";
 import { Logger } from "../../../utilities/loggers.js";
 import { cleanupRoom } from "../../rooms.js";
-import { leaveNextMeetingLobby } from "../../nextMeetingLobby.js";
+import { disconnectNextMeetingLobby } from "../../nextMeetingLobby.js";
 import {
   ensureHost,
   teardownClient,
@@ -19,6 +19,16 @@ export const registerDisconnectHandlers = (
     context.joinAttempts += 1;
     Logger.info(`Client disconnected: ${socket.id} (${reason})`);
     interruptActiveConclaveAnswers(io, context.activeConclaveAnswers);
+
+    const graceMs = config.socket.disconnectGraceMs;
+    const immediateReasons = new Set([
+      "client namespace disconnect",
+      "server namespace disconnect",
+      "server shutting down",
+      "forced close",
+      "forced server close",
+    ]);
+    const shouldDelay = graceMs > 0 && !immediateReasons.has(reason);
 
     if (context.currentRoom && context.currentClient) {
       const room = context.currentRoom;
@@ -63,15 +73,6 @@ export const registerDisconnectHandlers = (
         Logger.info(`User ${userId} left room ${roomId}`);
       };
 
-      const graceMs = config.socket.disconnectGraceMs;
-      const immediateReasons = new Set([
-        "client namespace disconnect",
-        "server namespace disconnect",
-        "server shutting down",
-        "forced close",
-        "forced server close",
-      ]);
-      const shouldDelay = graceMs > 0 && !immediateReasons.has(reason);
 
       if (shouldDelay) {
         room.scheduleDisconnect(
@@ -95,15 +96,13 @@ export const registerDisconnectHandlers = (
       }
     }
 
-    // A socket can wait for one room while still seated in another (an
-    // in-place room switch), so drop its waiting-room entry either way;
-    // otherwise hosts are shown a knock no one is behind.
     if (context.pendingRoomChannelId && context.pendingUserKey) {
-      leaveNextMeetingLobby(
+      disconnectNextMeetingLobby(
         state,
         context.pendingRoomChannelId,
         context.pendingUserKey,
         socket.id,
+        shouldDelay ? graceMs : 0,
       );
       const pendingRoom = state.rooms.get(context.pendingRoomChannelId);
       if (pendingRoom) {

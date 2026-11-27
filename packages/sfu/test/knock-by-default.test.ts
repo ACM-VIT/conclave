@@ -157,9 +157,9 @@ type JoinAck = {
 const join = async (
   state: SfuState,
   user: SfuAuthPayload,
-  options: { roomId?: string; roomRecoveryPass?: string; admissionCode?: string } = {},
+  options: { roomId?: string; roomRecoveryPass?: string; admissionCode?: string; socketId?: string } = {},
 ) => {
-  const peer = makeSocket(`${user.userId}-socket`, user);
+  const peer = makeSocket(options.socketId ?? `${user.userId}-socket`, user);
   const context = createConnectionContext(io, peer.socket, state);
   registerJoinRoomHandler(context);
   registerDisconnectHandlers(context);
@@ -1882,6 +1882,57 @@ describe("a meeting whose last participant leaves while someone is still knockin
       expect((await askAgain(firstTab)).status).toBe("joined");
       expect((await askAgain(lastTab)).status).toBe("joined");
     }
+  });
+
+  const verifiedKnocker = {
+    ...knocker,
+    userId: "guest-gp_AAAAAAAAAAAAAAAAAAAAAA",
+    guestRoom: "abc-mnop-xyz",
+    guestProof: "waiting-tab-proof",
+  };
+
+  const parkVerifiedKnocker = async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const state = makeState();
+    const opened = await join(state, host);
+    const knocking = await join(state, verifiedKnocker);
+    expect(knocking.status).toBe("waiting");
+    await hangUp(opened.peer);
+    expect(state.rooms.size).toBe(0);
+    Object.assign(knocking.peer.socket, { connected: false });
+    await knocking.peer.handlers.get("disconnect")!(...(["transport close"] as never[]));
+    return { state, knocking };
+  };
+
+  it("restores the verified next-meeting knock on a fresh connection without opening a room", async () => {
+    const { state, knocking } = await parkVerifiedKnocker();
+    const claims = { ...verifiedKnocker, allowRoomCreation: false };
+    const wrongTab = await join(state, { ...claims, sessionId: "other-tab" }, { socketId: "other-tab" });
+    const wrongProof = await join(state, { ...claims, guestProof: "another-proof" }, { socketId: "other-proof" });
+    expect(wrongTab.status).not.toBe("waiting");
+    expect(wrongProof.status).not.toBe("waiting");
+    const returned = await join(state, claims, { socketId: "replacement-socket" });
+    expect(returned.response).toMatchObject({ status: "waiting", isLocked: true });
+    expect(statusesShownTo(returned).at(-1)).toMatch(/ended/i);
+    expect(state.rooms.size).toBe(0);
+
+    const reopened = await join(state, host);
+    expect(knocksShownTo(reopened)).toEqual([verifiedKnocker.userId]);
+    expect(await send(reopened.peer, "admitUser", { userId: verifiedKnocker.userId })).toEqual({ success: true });
+    expect(returned.peer.emit).toHaveBeenCalledWith("joinApproved", { roomId: "abc-mnop-xyz" });
+    expect(knocking.peer.emit).not.toHaveBeenCalledWith("joinApproved", expect.anything());
+    expect((await askAgain(returned)).status).toBe("joined");
+  });
+
+  it("does not show a disconnected next-meeting knock and expires it after the recovery window", async () => {
+    const { state } = await parkVerifiedKnocker();
+    const reopened = await join(state, host);
+    expect(knocksShownTo(reopened)).toEqual([]);
+    await hangUp(reopened.peer);
+    await vi.advanceTimersByTimeAsync(config.socket.disconnectGraceMs + 1);
+    const returned = await join(state, verifiedKnocker, { socketId: "too-late" });
+    expect(returned.status).not.toBe("waiting");
+    expect(knocksShownTo(await join(state, host))).toEqual([]);
   });
 
   it("keeps a knocker who asks again before the next meeting opens waiting for it", async () => {

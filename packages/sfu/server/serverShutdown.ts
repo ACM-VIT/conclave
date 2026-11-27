@@ -29,11 +29,10 @@ export const forceDrainRooms = async (
     });
     for (const pending of room.pendingClients.values()) waiting.add(pending.socket);
   }
-  for (const lobby of state.nextMeetingLobbies.values()) {
-    for (const guest of lobby.guests.values()) waiting.add(guest.socket);
-  }
   for (const channelId of [...state.nextMeetingLobbies.keys()]) {
-    takeNextMeetingLobby(state, channelId);
+    for (const guest of takeNextMeetingLobby(state, channelId, { dropDisconnected: true })) {
+      waiting.add(guest.socket);
+    }
   }
   for (const socket of waiting) {
     socket.emit("serverRestarting", { message: options.message, reconnecting: true });

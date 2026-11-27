@@ -1,4 +1,6 @@
+import type { Socket } from "socket.io";
 import type { WaitingRequest } from "../config/classes/Room.js";
+import { isGuestUserKey } from "./identity.js";
 import type { SfuState } from "./state.js";
 
 // What someone still knocking is told when the meeting they knock on ends.
@@ -14,42 +16,48 @@ const MEETING_OPENED_ELSEWHERE =
 // call stops holding the code, from which they may ask again and open it.
 type NextMeetingRequest = WaitingRequest & { guestProof?: string; guestIdentity?: string };
 
-export type LobbyGuest = NextMeetingRequest & { retryAt: number | null };
+export type LobbyGuest = NextMeetingRequest & { retryAt: number | null; reconnectUntil: number | null };
 
 export type NextMeetingLobby = {
   roomId: string;
   guests: Map<string, LobbyGuest>;
-  retryTimer: NodeJS.Timeout | null;
-};
-
-// Asks again for everyone whose moment has come, as a room standing in for a
-// lost call does for its knockers once that call's time is up.
-const armRetry = (lobby: NextMeetingLobby): void => {
-  if (lobby.retryTimer) clearTimeout(lobby.retryTimer);
-  lobby.retryTimer = null;
-  const due = [...lobby.guests.values()].flatMap((guest) =>
-    guest.retryAt === null ? [] : [guest.retryAt],
-  );
-  if (due.length === 0) return;
-  lobby.retryTimer = setTimeout(() => {
-    lobby.retryTimer = null;
-    const now = Date.now();
-    for (const guest of lobby.guests.values()) {
-      if (guest.retryAt === null || guest.retryAt > now) continue;
-      guest.retryAt = null;
-      guest.socket.emit("joinApproved", { roomId: lobby.roomId });
-    }
-    armRetry(lobby);
-  }, Math.max(0, Math.min(...due) - Date.now()) + 1);
-  lobby.retryTimer.unref?.();
+  wakeTimer: NodeJS.Timeout | null;
 };
 
 const close = (state: SfuState, channelId: string, lobby: NextMeetingLobby): void => {
-  if (lobby.retryTimer) clearTimeout(lobby.retryTimer);
-  lobby.retryTimer = null;
+  if (lobby.wakeTimer) clearTimeout(lobby.wakeTimer);
+  lobby.wakeTimer = null;
   if (state.nextMeetingLobbies.get(channelId) === lobby) {
     state.nextMeetingLobbies.delete(channelId);
   }
+};
+
+const armLobby = (state: SfuState, channelId: string, lobby: NextMeetingLobby): void => {
+  if (lobby.guests.size === 0) {
+    close(state, channelId, lobby);
+    return;
+  }
+  if (lobby.wakeTimer) clearTimeout(lobby.wakeTimer);
+  lobby.wakeTimer = null;
+  let due = Infinity;
+  for (const guest of lobby.guests.values()) {
+    due = Math.min(due, guest.reconnectUntil ?? guest.retryAt ?? Infinity);
+  }
+  if (due === Infinity) return;
+  lobby.wakeTimer = setTimeout(() => {
+    lobby.wakeTimer = null;
+    const now = Date.now();
+    for (const [userKey, guest] of lobby.guests) {
+      if (guest.reconnectUntil !== null) {
+        if (guest.reconnectUntil <= now) lobby.guests.delete(userKey);
+      } else if (guest.retryAt !== null && guest.retryAt <= now) {
+        guest.retryAt = null;
+        guest.socket.emit("joinApproved", { roomId: lobby.roomId });
+      }
+    }
+    armLobby(state, channelId, lobby);
+  }, Math.max(0, due - Date.now()) + 1);
+  lobby.wakeTimer.unref?.();
 };
 
 const place = (
@@ -61,11 +69,11 @@ const place = (
   const lobby = state.nextMeetingLobbies.get(channelId) ?? {
     roomId,
     guests: new Map<string, LobbyGuest>(),
-    retryTimer: null,
+    wakeTimer: null,
   };
   for (const guest of guests) lobby.guests.set(guest.userKey, guest);
   state.nextMeetingLobbies.set(channelId, lobby);
-  armRetry(lobby);
+  armLobby(state, channelId, lobby);
   return lobby;
 };
 
@@ -83,7 +91,7 @@ export const waitForNextMeeting = (
     state,
     room.channelId,
     room.id,
-    waiting.map((guest) => ({ ...guest, retryAt })),
+    waiting.map((guest) => ({ ...guest, retryAt, reconnectUntil: null })),
   );
   for (const guest of waiting) {
     guest.socket.emit("waitingRoomStatus", {
@@ -102,10 +110,45 @@ export const lobbyGuestOf = (
   socketId: string,
 ): LobbyGuest | null => {
   const guest = state.nextMeetingLobbies.get(channelId)?.guests.get(userKey);
-  return guest?.socket.id === socketId ? guest : null;
+  return guest?.socket.id === socketId && guest.reconnectUntil === null ? guest : null;
 };
 
-// Someone waiting for the next meeting stops: they left, or went elsewhere.
+export const disconnectNextMeetingLobby = (
+  state: SfuState,
+  channelId: string,
+  userKey: string,
+  socketId: string,
+  graceMs: number,
+): void => {
+  const lobby = state.nextMeetingLobbies.get(channelId);
+  const guest = lobbyGuestOf(state, channelId, userKey, socketId);
+  if (!lobby || !guest) return;
+  if (graceMs > 0 && (!isGuestUserKey(userKey) || guest.guestProof !== undefined)) {
+    guest.reconnectUntil = Date.now() + graceMs;
+    armLobby(state, channelId, lobby);
+  } else {
+    leaveNextMeetingLobby(state, channelId, userKey, socketId);
+  }
+};
+
+export const resumeNextMeetingLobby = (
+  state: SfuState,
+  channelId: string,
+  identity: { userKey: string; userId: string; guestProof: string | undefined },
+  socket: Socket,
+): LobbyGuest | null => {
+  const lobby = state.nextMeetingLobbies.get(channelId);
+  const guest = lobby?.guests.get(identity.userKey);
+  if (
+    !lobby || !guest || guest.reconnectUntil === null || guest.reconnectUntil <= Date.now() ||
+    guest.userId !== identity.userId || guest.guestProof !== identity.guestProof
+  ) return null;
+  guest.socket = socket;
+  guest.reconnectUntil = null;
+  armLobby(state, channelId, lobby);
+  return guest;
+};
+
 export const leaveNextMeetingLobby = (
   state: SfuState,
   channelId: string,
@@ -115,20 +158,27 @@ export const leaveNextMeetingLobby = (
   const lobby = state.nextMeetingLobbies.get(channelId);
   if (!lobby || !lobbyGuestOf(state, channelId, userKey, socketId)) return;
   lobby.guests.delete(userKey);
-  if (lobby.guests.size === 0) close(state, channelId, lobby);
-  else armRetry(lobby);
+  armLobby(state, channelId, lobby);
 };
 
-// The next meeting at the code opened here: those waiting for it are its
-// first knocks.
 export const takeNextMeetingLobby = (
   state: SfuState,
   channelId: string,
+  { dropDisconnected = false }: { dropDisconnected?: boolean } = {},
 ): LobbyGuest[] => {
   const lobby = state.nextMeetingLobbies.get(channelId);
   if (!lobby) return [];
-  close(state, channelId, lobby);
-  return [...lobby.guests.values()];
+  const connected: LobbyGuest[] = [];
+  for (const [key, guest] of lobby.guests) {
+    if (guest.reconnectUntil === null) {
+      connected.push(guest);
+      lobby.guests.delete(key);
+    } else if (dropDisconnected) {
+      lobby.guests.delete(key);
+    }
+  }
+  armLobby(state, channelId, lobby);
+  return connected;
 };
 
 // Everyone waiting here asks again through the usual route, which leads to
@@ -140,8 +190,7 @@ export const sendNextMeetingLobbyOn = (
 ): void => {
   const lobby = state.nextMeetingLobbies.get(channelId);
   if (!lobby) return;
-  close(state, channelId, lobby);
-  for (const guest of lobby.guests.values()) {
+  for (const guest of takeNextMeetingLobby(state, channelId)) {
     guest.socket.emit("serverRestarting", {
       roomId: lobby.roomId,
       message,

@@ -37,6 +37,7 @@ import {
   MEETING_ENDED_WHILE_WAITING,
   leaveNextMeetingLobby,
   lobbyGuestOf,
+  resumeNextMeetingLobby,
 } from "../../nextMeetingLobby.js";
 import type { EndedRoom } from "../../state.js";
 import { ROOM_OPEN_DEADLINE_MS } from "../../joinDeadlines.js";
@@ -243,8 +244,8 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
       try {
         // A socket waiting for the next meeting keeps its place while this
         // join is decided, so a room opening meanwhile takes it in.
-        const parkedChannelId = context.pendingRoomChannelId;
-        const parked =
+        let parkedChannelId = context.pendingRoomChannelId;
+        let parked =
           parkedChannelId && context.pendingUserKey
             ? lobbyGuestOf(state, parkedChannelId, context.pendingUserKey, socket.id)
             : null;
@@ -517,6 +518,16 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         if (room?.router.closed) {
           cleanupStaleRoom(state, room);
           room = undefined;
+        }
+
+        if (!room && !parkedChannelId && !isWebinarAttendeeJoin) {
+          parked = resumeNextMeetingLobby(state, roomChannelId, { userKey, userId, guestProof }, socket);
+          if (parked) {
+            parkedChannelId = roomChannelId;
+            context.pendingRoomId = roomId;
+            context.pendingRoomChannelId = roomChannelId;
+            context.pendingUserKey = userKey;
+          }
         }
 
         // A meeting being ended for everyone takes no one in.
