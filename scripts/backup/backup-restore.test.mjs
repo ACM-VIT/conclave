@@ -2995,6 +2995,31 @@ test("a backup missing a configured JSON store leaves the previous restorable ar
   }
 });
 
+test("requires the unified control-plane JSON file and restores it without a SQLite store", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const config = [
+      "CONTROL_PLANE_PERSISTENCE=file",
+      "CONTROL_PLANE_JSON_PATH=/var/lib/conclave/recordings/control-plane.json",
+    ];
+    const { state, setDocker, backup, latestArchive, restore } = await setUp(root, config);
+    await setDocker([{ id: "sfu-a", mounts: [state], status: "exited", env: [
+      "SFU_PORT=9", "SFU_INSTANCE_ID=sfu-a", ...config,
+    ] }]);
+    const file = path.join(state, "control-plane.json");
+    const contents = '{"revision":3,"records":[]}';
+    await writeFile(file, contents);
+    await backup("--local-only");
+    const archive = await latestArchive();
+    await rm(file);
+    await assert.rejects(backup("--local-only"), /no copy of control-plane.json.*CONTROL_PLANE_JSON_PATH/);
+    await restore("--file", archive, "--yes");
+    assert.equal(await readFile(file, "utf8"), contents);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("restoring files refuses a configured JSON store path missing from the archive", needs, async () => {
   const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
   try {

@@ -613,7 +613,21 @@ def file_backed(env, variable):
     return mode in ("json", "file")
 
 
+def control_plane_mode(env):
+    mode = (env.get("CONTROL_PLANE_PERSISTENCE") or "").strip(JS_SPACE).lower()
+    if mode:
+        if mode not in ("memory", "json", "file", "sqlite", "redis"):
+            raise Refused(f"unknown CONTROL_PLANE_PERSISTENCE mode {mode}")
+        return "json" if mode == "file" else mode
+    if "CONTROL_PLANE_JSON_PATH" in env and all(file_backed(env, name) for name in STORE_VARIABLES):
+        return "json"
+    return ""
+
+
 def json_store_paths(env):
+    mode = control_plane_mode(env)
+    if mode:
+        return [("CONTROL_PLANE_PERSISTENCE=json", "CONTROL_PLANE_JSON_PATH", (env.get("CONTROL_PLANE_JSON_PATH") or "").strip(JS_SPACE))] if mode == "json" else []
     picked = []
     for variable in STORE_VARIABLES:
         if file_backed(env, variable):
@@ -628,7 +642,17 @@ def store_paths(env, fallback=None):
     the store's own variable, else CONCLAVE_SQLITE_PATH, else fallback (the
     compose default), or nothing when there is no fallback. A store whose
     persistence mode is json or file opens no database."""
-    shared = env.get("CONCLAVE_SQLITE_PATH", "").strip()
+    shared = env.get("CONCLAVE_SQLITE_PATH", "").strip(JS_SPACE)
+    mode = control_plane_mode(env)
+    if mode:
+        if mode != "sqlite":
+            return []
+        recordings = (env.get("RECORDING_STORAGE_PATH") or "").strip(JS_SPACE)
+        if shared:
+            return [("CONCLAVE_SQLITE_PATH", shared)]
+        if recordings:
+            return [("RECORDING_STORAGE_PATH", posixpath.join(recordings, "conclave.sqlite"))]
+        return [("the compose default", fallback)] if fallback else []
     picked = []
     for variable in STORE_VARIABLES:
         if file_backed(env, variable):
