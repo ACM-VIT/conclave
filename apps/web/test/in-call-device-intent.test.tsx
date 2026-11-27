@@ -1306,6 +1306,12 @@ describe("fixed in-call model runs from reviews", () => {
     await runSeed(404, MODEL_STEPS);
   }, 120_000);
 
+  it("seed 19, a reconnect drops pending camera publishes on the old send transport", async () => {
+    world = new World();
+    installMediaWorld(world);
+    await runSeed(19, 24, 5, STEPS_WITH_RECONNECTS);
+  }, 120_000);
+
   it("a 13 ms produce round trip with 32 steps, seeds 1 to 30", async () => {
     for (let seed = 1; seed <= 30; seed += 1) {
       world = new World();
