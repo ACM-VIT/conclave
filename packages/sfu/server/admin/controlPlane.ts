@@ -8,7 +8,7 @@ import type {
   ProducerType,
 } from "../../config/classes/Client.js";
 import type { AdmissionScope } from "../../config/classes/AdmissionLedger.js";
-import type { Room, WaitingRequest } from "../../config/classes/Room.js";
+import type { Room, SettledWaitingRequest, WaitingRequest } from "../../config/classes/Room.js";
 import type { AppsAwarenessData } from "../../types.js";
 import { isGuestUserKey } from "../identity.js";
 import { cleanupRoom, getRoomChannelId, isCurrentRoom } from "../rooms.js";
@@ -992,7 +992,7 @@ export const rejectWaitingGuest = (room: Room, userKey: string): string[] => {
  */
 export const answerSettledRequests = (
   room: Room,
-  settled: ReturnType<Room["commitGuestLink"]>,
+  settled: SettledWaitingRequest[],
 ): void => {
   for (const { request, admitted } of settled) {
     request.socket.emit(admitted ? "joinApproved" : "joinRejected", {
