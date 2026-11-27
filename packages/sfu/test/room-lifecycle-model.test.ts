@@ -534,6 +534,12 @@ const boot = async (world: World): Promise<Sfu> => {
     observeRoom(sfu, room);
     return addRoom(channelId, room);
   };
+  const removeRoom = state.rooms.delete.bind(state.rooms);
+  state.rooms.delete = (channelId) => {
+    const removed = removeRoom(channelId);
+    if (removed) vi.setSystemTime(Date.now() + 1);
+    return removed;
+  };
   sfu.stopRefresh = startRoomRecoveryPassRefresh(state, config.sfuSecret);
   if (world.webinar) scheduleWebinar(state, world.webinar);
   return sfu;
@@ -1493,7 +1499,8 @@ const creditClaims = (world: World): void => {
   for (const actor of Object.values(world.actors)) {
     const claimTabs = [actor.tab, actor.second].filter((tab) => tab?.user.isHost === true);
     if (claimTabs.length === 0 || ownsCode(actor, room.ownerEmail)) continue;
-    if (room.hostReasonOf(keyOf(world, actor, room)) !== "cohost") continue;
+    const keys = [keyOf(world, actor, room), ...claimTabs.map((tab) => tab?.user.userId)];
+    if (!keys.some((key) => key !== undefined && room.hostReasonOf(key) === "cohost")) continue;
     world.shadow.cohosts.add(actor.key);
     world.claimed.add(actor.key);
   }
