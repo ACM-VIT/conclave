@@ -263,7 +263,9 @@ export const registerScheduledMeetingRoutes = (
       const meeting = await state.controlPlane.read(
         meetingByRoomCode(resolveClientId(req), roomCode),
       );
-      res.json({ scheduledMeeting: meeting ? publicMeetingView(meeting) : null });
+      res.json({
+        scheduledMeeting: meeting ? { ...publicMeetingView(meeting), bookingLink: meeting.source === "booking_link" } : null,
+      });
     }),
   );
 

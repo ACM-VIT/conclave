@@ -93,8 +93,9 @@ export default function ScheduledMeetingLanding({
     setIsStarting(true);
     setStartError(null);
     try {
+      const query = new URLSearchParams({ clientId });
       const response = await fetch(
-        `/api/meetings/scheduled/${encodeURIComponent(meeting.id)}/start`,
+        `/api/meetings/scheduled/${encodeURIComponent(meeting.id)}/start?${query}`,
         { method: "POST" },
       );
       if (!response.ok) {
@@ -110,7 +111,7 @@ export default function ScheduledMeetingLanding({
       setStartError((error as Error).message || "Could not start the meeting");
       setIsStarting(false);
     }
-  }, [isStarting, meeting.id]);
+  }, [clientId, isStarting, meeting.id]);
 
   if (meeting.status === "cancelled") {
     return (

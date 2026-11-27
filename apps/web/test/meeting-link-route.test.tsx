@@ -4,16 +4,19 @@ import { act, lazy, Suspense, useState, type ReactElement } from "react";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const scheduledLookup = vi.hoisted(() => vi.fn(async (_destination: { clientId: string; roomCode: string }) => null as object | null));
+const scheduledLookup = vi.hoisted(() => vi.fn(async (
+  _destination: { clientId: string; roomCode: string },
+  _options: { allowLegacyBooking: boolean },
+) => null as { clientId?: string; title: string } | null));
 
 vi.mock("next/headers", () => ({ headers: async () => new Headers() }));
 vi.mock("@/lib/auth", () => ({ auth: { api: { getSession: async () => null } } }));
 vi.mock("@/lib/auth-client", () => ({ signOut: vi.fn(), useSession: () => ({ data: null }) }));
 vi.mock("@/lib/scheduled-meetings", () => ({
   isMeetingJoinable: () => true,
-  lookupScheduledMeetingForCode: async (destination: { clientId: string; roomCode: string }) => {
-    const meeting = await scheduledLookup(destination);
-    return meeting ? { kind: "scheduled", ...destination, meeting } : { kind: "unscheduled" };
+  lookupScheduledMeetingForCode: async (destination: { clientId: string; roomCode: string }, options: { allowLegacyBooking: boolean }) => {
+    const meeting = await scheduledLookup(destination, options);
+    return meeting ? { kind: "scheduled", clientId: meeting.clientId ?? destination.clientId, meeting } : { kind: "unscheduled" };
   },
   lookupScheduledMeetingHostEmail: async () => null,
 }));
@@ -27,11 +30,11 @@ vi.mock("../src/app/lib/video-effects-lazy", () => ({
   prewarmVideoEffectsAssetsDeferred: () => Promise.resolve(),
 }));
 vi.mock("../src/app/meets-client-shell", () => ({ default: () => null }));
-vi.mock("../src/app/components/ScheduledMeetingLanding", () => ({ default: () => null }));
 vi.mock("../src/app/components/RouteLoadingState", () => ({ default: () => null }));
 
 import MeetRoomPage from "../src/app/[code]/page";
 import JoinScreen from "../src/app/components/JoinScreen";
+import ScheduledMeetingLanding from "../src/app/components/ScheduledMeetingLanding";
 import { ActivityDrawer } from "../src/app/sfu-admin/ActivityDrawer";
 import WebinarLandingClient, { type PublicScheduledWebinar } from "../src/app/w/[code]/WebinarLandingClient";
 import { APP_ROUTE_SEGMENTS } from "../src/app/lib/utils";
@@ -41,6 +44,52 @@ import { canonicalizeSfuClientId, resolveBrowserSfuClientId } from "../src/lib/s
 
 const ORIGIN = "https://conclave.example";
 const TENANT = "acme";
+
+it("starts a recovered booking in its original tenant", async () => {
+  vi.stubEnv("SFU_CLIENT_ID", TENANT);
+  vi.stubEnv("NEXT_PUBLIC_SFU_CLIENT_ID", TENANT);
+  const fetcher = vi.fn(async (url: string) =>
+    new URL(url, ORIGIN).searchParams.get("clientId") === "conclave"
+      ? Response.json({ scheduledMeeting: { status: "live" } })
+      : Response.json({ error: "Scheduled meeting not found" }, { status: 404 }),
+  );
+  vi.stubGlobal("fetch", fetcher);
+  const reload = vi.spyOn(window.location, "reload").mockImplementation(() => {});
+  try {
+    await act(async () => root.render(
+      <ScheduledMeetingLanding
+        clientId="conclave"
+        viewerIsHost
+        meeting={{
+          id: "legacy-booking-id",
+          clientId: "conclave",
+          bookingLink: true,
+          roomCode: "legacy-booking",
+          title: "Legacy booking",
+          hostName: "Host",
+          scheduledStartAt: Date.now() + 3_600_000,
+          scheduledEndAt: Date.now() + 7_200_000,
+          status: "scheduled",
+          startedAt: null,
+          endedAt: null,
+        }}
+      />,
+    ));
+    const start = Array.from(container.querySelectorAll("button"))
+      .find(button => button.textContent?.includes("Start the meeting now"));
+    if (!start) throw new Error("Scheduled meeting start control is missing");
+    await act(async () => start.click());
+    expect(fetcher).toHaveBeenCalledExactlyOnceWith(
+      "/api/meetings/scheduled/legacy-booking-id/start?clientId=conclave",
+      { method: "POST" },
+    );
+    expect(reload).toHaveBeenCalledOnce();
+  } finally {
+    reload.mockRestore();
+    vi.unstubAllEnvs();
+  }
+});
+
 const webinarFixture = (): PublicScheduledWebinar => ({
   id: "webinar-1",
   linkSlug: "launch",
@@ -176,9 +225,23 @@ describe("meeting links", () => {
         roomId: "review-cross-route",
         clientId: TENANT,
       });
-      expect(scheduledLookup.mock.calls).toEqual([[{ clientId: TENANT, roomCode: "review-cross-route" }]]);
+      expect(scheduledLookup.mock.calls).toEqual([[{ clientId: TENANT, roomCode: "review-cross-route" }, { allowLegacyBooking: false }]]);
     } finally {
       scheduledLookup.mockImplementation(async () => null);
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("opens an untagged legacy booking in the tenant returned by the lookup", async () => {
+    vi.stubEnv("SFU_CLIENT_ID", TENANT);
+    vi.stubEnv("NEXT_PUBLIC_SFU_CLIENT_ID", TENANT);
+    scheduledLookup.mockClear();
+    scheduledLookup.mockResolvedValueOnce({ clientId: "conclave", title: "Legacy booking" });
+
+    try {
+      expect(await openLink(`${ORIGIN}/legacy-booking`)).toEqual({ roomId: "legacy-booking", clientId: "conclave" });
+      expect(scheduledLookup.mock.calls).toEqual([[{ clientId: TENANT, roomCode: "legacy-booking" }, { allowLegacyBooking: true }]]);
+    } finally {
       vi.unstubAllEnvs();
     }
   });

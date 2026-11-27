@@ -11,6 +11,7 @@ import {
   type PublicScheduledMeeting,
 } from "./scheduled-meeting-lookup";
 import type { RoomDestination } from "@/lib/meeting-links";
+import { CONCLAVE_SFU_CLIENT_ID, resolveServerSfuClientId } from "./sfu-client-id";
 
 export type { PublicScheduledMeeting };
 
@@ -48,25 +49,28 @@ export type ScheduledMeetingLookup =
 // short deadline. An SFU that has not answered by then counts as failed.
 const LOOKUP_DEADLINE_MS = 2500;
 
-export const lookupScheduledMeetingForCode = async (
+const lookupInTenant = async (
   { roomCode, clientId }: RoomDestination,
+  deadline: AbortSignal,
+  mode: "scheduled" | "legacy-booking" = "scheduled",
 ): Promise<ScheduledMeetingLookup> => {
-  const deadline = AbortSignal.timeout(LOOKUP_DEADLINE_MS);
   const sfuUrls = resolveSfuUrls();
   const results = await Promise.allSettled(
     sfuUrls.map((sfuUrl) =>
       fetchPublicScheduledMeeting(scheduledMeetingsBase(sfuUrl), resolveSfuSecret(), clientId, roomCode, deadline),
     ),
   );
-  for (const [index, result] of results.entries()) {
-    if (result.status === "fulfilled" && result.value) {
-      return {
-        kind: "scheduled",
-        sfuUrl: sfuUrls[index],
-        clientId,
-        meeting: result.value,
-      };
+  const matches = results.flatMap((result, index): FoundScheduledMeeting[] =>
+    result.status === "fulfilled" && result.value
+      ? [{ kind: "scheduled", sfuUrl: sfuUrls[index], clientId, meeting: result.value }]
+      : []);
+  if (matches.length > 0) {
+    if (mode === "scheduled") return matches[0];
+    const booking = matches.find(({ meeting }) => meeting.bookingLink === true);
+    if (booking && matches.every(({ meeting }) => meeting.id === booking.meeting.id && meeting.bookingLink !== false)) {
+      return booking;
     }
+    return { kind: "unknown" };
   }
   const [first] = results;
   if (
@@ -78,6 +82,46 @@ export const lookupScheduledMeetingForCode = async (
   return results.some((result) => result.status === "rejected")
     ? { kind: "unknown" }
     : { kind: "unscheduled" };
+};
+
+const noActiveRoom = async ({ roomCode, clientId }: RoomDestination, signal: AbortSignal): Promise<boolean> => {
+  const room = encodeURIComponent(roomCode);
+  const tenant = encodeURIComponent(clientId);
+  const init = {
+    headers: { "x-sfu-secret": resolveSfuSecret(), accept: "application/json" },
+    cache: "no-store",
+    signal,
+  } satisfies RequestInit;
+  const absentAt = async (url: string, ...fields: Array<"owner" | "placement" | "room">): Promise<boolean> => {
+    const response = await fetch(url, init);
+    if (!response.ok) return false;
+    const body = (await response.json()) as Partial<Record<(typeof fields)[number], unknown>> | null;
+    return fields.every((field) => body?.[field] === null);
+  };
+  // A live room can outlast its registry lease while Redis is down.
+  const results = await Promise.allSettled(resolveSfuUrls().flatMap((sfuUrl) => {
+    const base = sfuUrl.replace(/\/$/, "");
+    return [
+      absentAt(`${base}/routing/rooms/${tenant}/${room}`, "owner", "placement"),
+      absentAt(`${base}/rooms/${room}?clientId=${tenant}`, "room"),
+    ];
+  }));
+  return results.length > 0 && results.every((result) => result.status === "fulfilled" && result.value);
+};
+
+export const lookupScheduledMeetingForCode = async (
+  destination: RoomDestination,
+  { allowLegacyBooking = false }: { allowLegacyBooking?: boolean } = {},
+): Promise<ScheduledMeetingLookup> => {
+  const deadline = AbortSignal.timeout(LOOKUP_DEADLINE_MS);
+  const primary = await lookupInTenant(destination, deadline);
+  if (!allowLegacyBooking || primary.kind !== "unscheduled" ||
+      destination.clientId !== resolveServerSfuClientId() || destination.clientId === CONCLAVE_SFU_CLIENT_ID) {
+    return primary;
+  }
+  const legacy = await lookupInTenant({ ...destination, clientId: CONCLAVE_SFU_CLIENT_ID }, deadline, "legacy-booking");
+  return legacy.kind === "scheduled" &&
+    await noActiveRoom(destination, deadline) ? legacy : primary;
 };
 
 export const lookupScheduledMeetingHostEmail = async ({
