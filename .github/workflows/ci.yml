@@ -50,7 +50,7 @@ jobs:
 
       # The backup and restore tests run the real scripts, which need these.
       # The tests fail on CI when one is missing rather than skip.
-      - if: matrix.job == 'test'
+      - if: env.CI_JOB == 'test-backup'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends age psmisc redis-server
@@ -101,9 +101,16 @@ jobs:
       CI_JOB: test-sfu
     steps: *ci-steps
 
+  test-backup:
+    runs-on: *ci-runner
+    timeout-minutes: 10
+    env:
+      CI_JOB: test-backup
+    steps: *ci-steps
+
   test-result:
     name: test
-    needs: [test-unit, test-sfu]
+    needs: [test-unit, test-sfu, test-backup]
     if: ${{ always() }}
     runs-on: *ci-runner
     timeout-minutes: 1
@@ -111,4 +118,5 @@ jobs:
       - env:
           TEST_UNIT_RESULT: ${{ needs.test-unit.result }}
           TEST_SFU_RESULT: ${{ needs.test-sfu.result }}
-        run: test "$TEST_UNIT_RESULT" = success && test "$TEST_SFU_RESULT" = success
+          TEST_BACKUP_RESULT: ${{ needs.test-backup.result }}
+        run: test "$TEST_UNIT_RESULT" = success && test "$TEST_SFU_RESULT" = success && test "$TEST_BACKUP_RESULT" = success

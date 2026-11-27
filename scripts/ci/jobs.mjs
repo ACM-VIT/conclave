@@ -53,14 +53,17 @@ export const jobs = {
       { dir: "packages/meeting-core", script: "test" },
       { dir: "packages/ai", script: "test" },
       { dir: "packages/shared-browser", script: "test" },
-      // Needs age, fuser and redis-server, which ci.yml installs for this job.
-      { dir: ".", script: "test:backup" },
     ],
   },
   "test-sfu": {
     budgetSeconds: 110,
     budgetFrom: "run",
     tasks: [{ dir: "packages/sfu", script: "test" }],
+  },
+  "test-backup": {
+    budgetSeconds: 300,
+    budgetFrom: "run",
+    tasks: [{ dir: ".", script: "test:backup" }],
   },
   build: {
     budgetSeconds: 240,
