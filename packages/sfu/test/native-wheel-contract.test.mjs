@@ -71,7 +71,8 @@ it.each(["echo", "snapshot"])("acknowledges a native Wheel add only after the se
       expect(next).toBeDefined();
       return next;
     }, { timeout: 2_000 });
-    const confirmed = await room.requestSync(new Y.Doc());
+    const confirmed = await room.requestSync(Buffer.from(request.payload.stateVector, "base64"));
+    expect(confirmed.syncMessage).toBeDefined();
     host("snapshot", request.requestId, {
       syncMessage: Buffer.from(confirmed.syncMessage).toString("base64"),
       stateVector: Buffer.from(confirmed.stateVector).toString("base64"),

@@ -527,12 +527,7 @@ final class ActiveAppSession {
             deliverSnapshot(held, requestId: message.requestId)
         } else {
             heldSnapshot = nil
-            if message.confirmAdds {
-                if appId != "wheel" { return reject(AppBridgeRejection.badPayload) }
-                confirmWheelAdds(stateVector: message.bytes, requestId: message.requestId)
-            } else {
-                startSync(stateVector: message.bytes, requestId: message.requestId)
-            }
+            startSync(stateVector: message.bytes, requestId: message.requestId)
         }
         return AppBridgeRejection.none
     }
