@@ -329,6 +329,117 @@ describe("every accepted line ends once, as its text or a gap", () => {
   });
 });
 
+describe("permanent provider failure preserves heard audio that never reached a line", () => {
+  const ada = { userId: "ada", displayName: "Ada" };
+  const grace = { userId: "grace", displayName: "Grace" };
+
+  it("finalizes an uncommitted run in its saved place without doubling an owned line", async () => {
+    vi.useFakeTimers();
+    quiet();
+    const { start, providerSockets, speak, commit, viewerTranscript, restartedSegments, viewerSnapshot } =
+      await rig(OPENAI);
+    await start("en");
+    const [socket] = providerSockets();
+    await speak(ada);
+    await commit(ada);
+    socket.emit(openAiCommitted("accepted"));
+    await speak(grace);
+    await speak(grace);
+    await settle();
+    const beforeFailure = await restartedSegments();
+    expect(beforeFailure).toMatchObject([
+      { text: GAP, speakerUserId: "ada" },
+      { text: GAP, speakerUserId: "grace" },
+    ]);
+    expect(viewerTranscript().segments).toEqual([]);
+
+    socket.emit({ type: "error", error: { message: "Invalid API key provided." } });
+    await settle();
+
+    const shown = viewerTranscript().segments;
+    expect(shown).toMatchObject(
+      beforeFailure.map(({ itemId, sequence, startMs, text, speakerUserId }) =>
+        ({ itemId, sequence, startMs, text, speakerUserId, isFinal: true })),
+    );
+    expect((await viewerSnapshot()).segments).toEqual(shown);
+    expect(await restartedSegments()).toEqual(shown);
+  });
+
+  it("keeps separate queued turns after a failed reconnect, skips quiet audio, and clears the gaps only on Stop", async () => {
+    vi.useFakeTimers();
+    quiet();
+    const { start, providerSockets, connectPlans, speak, sendAudio, clear, switchTo, stop, viewerSnapshot, viewerTranscript, restartedTexts, stored } =
+      await rig(OPENAI);
+    await start("en");
+    const [socket] = providerSockets();
+    connectPlans.push("unreachable", { status: 401 });
+    socket.disconnect();
+    await settle();
+    await speak(ada);
+    await speak(ada);
+    await clear(ada);
+    await sendAudio("noise", grace);
+    await speak(ada);
+    await settle();
+    expect(viewerTranscript().segments).toEqual([]);
+    expect(await restartedTexts()).toEqual([GAP, GAP]);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    const failed = await viewerSnapshot();
+    expect(failed.session.status).toBe("takeover_needed");
+    expect(failed.segments).toMatchObject([{ text: GAP, speakerUserId: "ada" }, { text: GAP, speakerUserId: "ada" }]);
+    const shown = viewerTranscript().segments;
+    expect(new Set(shown.map(({ itemId }) => itemId)).size).toBe(2);
+    expect(shown).toEqual(failed.segments);
+    expect(await restartedTexts()).toEqual([GAP, GAP]);
+
+    await switchTo("de");
+    const takeover = await viewerSnapshot();
+    expect(takeover.session.status).toBe("live");
+    expect(takeover.segments).toEqual(failed.segments);
+    expect(providerSockets()[1].sentTypes()).not.toContain("input_audio_buffer.append");
+    expect(await restartedTexts()).toEqual([GAP, GAP]);
+
+    await stop();
+    expect((await viewerSnapshot()).segments).toEqual([]);
+    expect(stored.snapshot).toBe(false);
+  });
+
+  it("does not publish a gap when Stop intentionally discards an uncommitted run", async () => {
+    vi.useFakeTimers();
+    const { start, speak, stop, broadcastFinals, viewerSnapshot, restartedTexts, stored } = await rig(OPENAI);
+    await start("en");
+    await speak(ada);
+    await settle();
+    expect(await restartedTexts()).toEqual([GAP]);
+
+    await stop();
+
+    expect(broadcastFinals()).toEqual([]);
+    expect((await viewerSnapshot()).segments).toEqual([]);
+    expect(stored.snapshot).toBe(false);
+  });
+
+  it("lets the previous provider finish uncommitted audio on a successful switch", async () => {
+    vi.useFakeTimers();
+    const { start, speak, switchTo, providerSockets, viewerTranscript, restartedTexts } = await rig(OPENAI);
+    await start("en");
+    const [previous] = providerSockets();
+    await speak(ada);
+    expect(await restartedTexts()).toEqual([GAP]);
+
+    await switchTo("de");
+    expect(previous.sentTypes()).toContain("input_audio_buffer.commit");
+    expect(viewerTranscript().segments).toEqual([]);
+    previous.emit(openAiCommitted("before-switch"));
+    previous.emit(openAiFinal("before-switch", "Before the switch."));
+    await vi.advanceTimersByTimeAsync(DEADLINE + 100);
+
+    expect(viewerTranscript().segments).toMatchObject([{ text: "Before the switch.", speakerUserId: "ada" }]);
+    expect(await restartedTexts()).toEqual(["Before the switch."]);
+  });
+});
+
 describe("a gap means our side heard speech", () => {
   it.each(["noise", "clicks", "silence"] as const)(
     "Sarvam: a %s turn before any speech signal never takes a place or leaves a gap",
@@ -586,6 +697,64 @@ describe("a line's state lives on its record", () => {
 describe("one owner and one release point per line", () => {
   const ada = { userId: "ada", displayName: "Ada" };
   const grace = { userId: "grace", displayName: "Grace" };
+
+  it("Sarvam: retries locally quiet audio after a speech start and saves the replacement's words once", async () => {
+    vi.useFakeTimers();
+    quiet();
+    const { providerSockets, start, sendAudio, endTurn, viewerTranscript, restartedTexts } = await rig(SARVAM);
+    await start("hi");
+    const [initial] = providerSockets();
+    await sendAudio("whisper", ada);
+    await endTurn(ada);
+    initial.emit(sarvamSpeechStart());
+    initial.emit(sarvamSpeechEnd());
+    expect(await restartedTexts()).toEqual([]);
+
+    initial.disconnect();
+    await settle();
+    expect(providerSockets()).toHaveLength(2);
+    const replacement = providerSockets()[1];
+    const audio = (socket: typeof initial) =>
+      socket.sent.filter((message) => "audio" in message && message.type !== "end_of_stream");
+    expect(audio(initial)).toHaveLength(1);
+    expect(audio(replacement)).toEqual(audio(initial));
+    initial.emit(sarvamFinal("stale", "Old socket."));
+    replacement.emit(sarvamFinal("retry", "Soft speech."));
+    await vi.advanceTimersByTimeAsync(DEADLINE + 100);
+
+    expect(viewerTranscript().segments).toMatchObject([{ text: "Soft speech.", speakerUserId: "ada" }]);
+    expect(await restartedTexts()).toEqual(["Soft speech."]);
+  });
+
+  it.each(["no speech start", "speech start answered with no words", "a second socket loss"] as const)(
+    "Sarvam: does not replay a locally quiet turn after %s",
+    async (scenario) => {
+      vi.useFakeTimers();
+      quiet();
+      const { providerSockets, start, sendAudio, endTurn, viewerTranscript, restartedTexts } = await rig(SARVAM);
+      await start("hi");
+      const [initial] = providerSockets();
+      await sendAudio("noise", ada);
+      if (scenario !== "no speech start") initial.emit(sarvamSpeechStart());
+      if (scenario === "speech start answered with no words") initial.emit(sarvamFinal("empty", ""));
+      else await endTurn(ada);
+      initial.disconnect();
+      await settle();
+
+      const expectedSockets = scenario === "a second socket loss" ? 2 : 1;
+      expect(providerSockets()).toHaveLength(expectedSockets);
+      if (expectedSockets === 2) {
+        const replacement = providerSockets()[1];
+        replacement.emit(sarvamSpeechStart());
+        replacement.disconnect();
+      }
+      await vi.advanceTimersByTimeAsync(DEADLINE + 100);
+
+      expect(providerSockets()).toHaveLength(expectedSockets);
+      expect(viewerTranscript().segments).toEqual([]);
+      expect(await restartedTexts()).toEqual([]);
+    },
+  );
 
   it("Sarvam: words answered before a reconnect are never replayed; a turn still open keeps them and marks the rest as not captioned", async () => {
     vi.useFakeTimers();
