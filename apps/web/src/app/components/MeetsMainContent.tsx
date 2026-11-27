@@ -10,6 +10,7 @@ import type {
   SetStateAction,
 } from "react";
 import {
+  ChartBar,
   CircleAlert,
   Globe,
   Headphones,
@@ -17,6 +18,7 @@ import {
   KeyRound,
   Loader2,
   LogOut,
+  MessageCircleQuestion,
   MonitorPlay,
   Plus,
   RefreshCw,
@@ -54,11 +56,12 @@ import SystemAudioPlayers from "./SystemAudioPlayers";
 import ParticipantVideo from "./ParticipantVideo";
 import ParticipantAudio from "./ParticipantAudio";
 import WebinarViewerChrome, {
-  WebinarQaPanel,
   WebinarStageInviteDialog,
   WebinarWaitingCard,
 } from "./WebinarViewer";
-import ToastQueue from "./ToastQueue";
+import { QaPanel } from "./qa/QaPanel";
+import { PollsPanel } from "./polls/PollsPanel";
+import ToastQueue, { type ToastItem } from "./ToastQueue";
 import RoomAiPanel from "./RoomAiPanel";
 import AndroidUpsellSheet from "./AndroidUpsellSheet";
 import type { BrowserCommand, BrowserState } from "../hooks/useSharedBrowser";
@@ -110,10 +113,16 @@ import {
 } from "../lib/utils";
 import { hiddenSetupView, type SetupNotice } from "../lib/setup-notice";
 import type { RejoinMedia } from "../lib/rejoin-intent";
-import { useApps, useGame } from "@conclave/apps-sdk";
+import { useApps, useAuthorityRuntime, useGame } from "@conclave/apps-sdk";
 import { GamePanel } from "./games/GamePanel";
 import { GamesPanel } from "./games/GamesPanel";
-import { AppsPanel } from "./apps/AppsPanel";
+import { AppsPanel, type PanelAppEntry } from "./apps/AppsPanel";
+import { pollsApp } from "@conclave/apps-sdk/polls/web";
+import { qaApp } from "@conclave/apps-sdk/qa/web";
+import { hasUnseenMeetingQuestion, useMeetingQa } from "../hooks/useMeetingQa";
+import { useMeetingPolls } from "../hooks/useMeetingPolls";
+import { useReconnectHold } from "../hooks/useHeldThroughReconnect";
+import { panelAppNeedsServerUpdate } from "../lib/panel-app-availability";
 import {
   GAME_DOCK_DEFAULT_WIDTH,
   GAME_DOCK_MAX_WIDTH,
@@ -344,7 +353,11 @@ interface MeetsMainContentProps {
   webinarSpeakerUserId?: string | null;
   webinarLink?: string | null;
   webinarTitle?: string;
-  webinarQaEntries?: WebinarQaEntry[];
+  /** The old events' Q&A list for this connection, null until it is sent one. */
+  webinarQaEntries?: WebinarQaEntry[] | null;
+  webinarQaListFromThisConnection?: boolean;
+  /** Drops that list, once the Q&A app's view has taken over from it. */
+  onForgetWebinarQaEntries: () => void;
   webinarHandQueue?: WebinarHandQueueEntry[];
   isWebinarHandRaised?: boolean;
   webinarStageInvite?: {
@@ -423,7 +436,8 @@ const clamp = (value: number, min: number, max: number) =>
 const WEBINAR_SPEAKER_PROMOTE_DELAY_MS = 450;
 const WEBINAR_SPEAKER_MIN_SWITCH_INTERVAL_MS = 1800;
 const DOCKED_PANEL_WIDTH = 360;
-const WEBINAR_QA_PANEL_WIDTH = 380;
+// The shared Q&A panel, `sm:w-[360px]` in QaPanel, which attendees use too.
+const WEBINAR_QA_PANEL_WIDTH = 360;
 // The meeting area's bottom padding (p-4) plus a gap above the controls bar.
 const NOTICE_CONTROLS_CLEARANCE_PX = 24;
 const BROWSER_ERROR_TITLES: Record<BrowserCommand, string> = {
@@ -621,15 +635,17 @@ export default function MeetsMainContent({
   webinarSpeakerUserId,
   webinarLink,
   webinarTitle,
-  webinarQaEntries = [],
+  webinarQaEntries: legacyQaEntries = null,
+  webinarQaListFromThisConnection = false,
+  onForgetWebinarQaEntries,
   webinarHandQueue = [],
   isWebinarHandRaised = false,
   webinarStageInvite = null,
   onAcceptWebinarStageInvite,
   onDismissWebinarStageInvite,
-  onSubmitWebinarQuestion,
-  onUpvoteWebinarQuestion,
-  onModerateWebinarQuestion,
+  onSubmitWebinarQuestion: legacySubmitQuestion,
+  onUpvoteWebinarQuestion: legacyUpvoteQuestion,
+  onModerateWebinarQuestion: legacyModerateQuestion,
   onSetWebinarHandRaised,
   onPromoteWebinarAttendee,
   onDemoteWebinarParticipant,
@@ -659,8 +675,32 @@ export default function MeetsMainContent({
     refreshState,
   } = useApps();
   const { isActive: isGameActive, refresh: refreshGameState } = useGame();
+  // Q&A comes from the Q&A app once this connection has the app's view, and
+  // from the old webinar events until then, or for good on a server that
+  // does not offer the app. Everything below reads this one source.
+  const reconnectHold = useReconnectHold({ isJoined, connectionState });
+  const meetingQa = useMeetingQa({
+    legacy: {
+      entries: legacyQaEntries,
+      fromThisConnection: webinarQaListFromThisConnection,
+      forget: onForgetWebinarQaEntries,
+      submit: legacySubmitQuestion,
+      upvote: legacyUpvoteQuestion,
+      moderate: legacyModerateQuestion,
+    },
+    isWebinar: Boolean(webinarConfig?.enabled) || isWebinarAttendee,
+    hold: reconnectHold,
+    currentUserId,
+  });
+  const webinarQaEntries = meetingQa.entries;
+  const onSubmitWebinarQuestion = meetingQa.onSubmit;
+  const onUpvoteWebinarQuestion = meetingQa.onUpvote;
+  const onModerateWebinarQuestion = meetingQa.onModerate;
   const [isGamesOpen, setIsGamesOpen] = useState(false);
   const [isAppsOpen, setIsAppsOpen] = useState(false);
+  const [activityPanel, setActivityPanel] = useState<"polls" | "qa" | null>(
+    null,
+  );
   const isDevToolsEnabled = process.env.NODE_ENV === "development";
   const isDevPlaygroundEnabled = isDevToolsEnabled;
 
@@ -1244,6 +1284,7 @@ export default function MeetsMainContent({
       setIsDeviceSettingsOpen(false);
       setIsTranscriptOpen(false);
       setIsAiPanelOpen(false);
+      setActivityPanel(null);
     }
     setIsParticipantsOpen(opening);
   }, [isParticipantsOpen, isChatOpen, setIsParticipantsOpen, toggleChat]);
@@ -1263,6 +1304,7 @@ export default function MeetsMainContent({
     setIsDeviceSettingsOpen(false);
     setIsTranscriptOpen(false);
     setIsAiPanelOpen(false);
+    setActivityPanel(null);
     setIsParticipantsOpen(true);
   }, [toggleChat, setIsParticipantsOpen]);
 
@@ -1298,7 +1340,8 @@ export default function MeetsMainContent({
     isViewPanelOpen ||
     isDeviceSettingsOpen ||
     isTranscriptOpen ||
-    isAiPanelOpen;
+    isAiPanelOpen ||
+    activityPanel !== null;
   const isGameDockPresent = isGameActive || isGamesOpen || isAppsOpen;
   const gameDockOffset =
     canReserveDockedPanel && isSecondaryPanelOpen ? DOCKED_PANEL_WIDTH : 0;
@@ -1335,6 +1378,7 @@ export default function MeetsMainContent({
       setIsDeviceSettingsOpen(false);
       setIsTranscriptOpen(false);
       setIsAiPanelOpen(false);
+      setActivityPanel(null);
     }
     setIsHostControlsOpen(opening);
   }, [isHostControlsOpen, toggleChat, setIsParticipantsOpen]);
@@ -1371,6 +1415,7 @@ export default function MeetsMainContent({
       setIsDeviceSettingsOpen(false);
       setIsTranscriptOpen(false);
       setIsAiPanelOpen(false);
+      setActivityPanel(null);
     }
     setIsVideoEffectsOpen(opening);
   }, [
@@ -1397,6 +1442,7 @@ export default function MeetsMainContent({
       setIsDeviceSettingsOpen(false);
       setIsTranscriptOpen(false);
       setIsAiPanelOpen(false);
+      setActivityPanel(null);
     }
     setIsViewPanelOpen(opening);
   }, [isViewPanelOpen, setIsParticipantsOpen, toggleChat]);
@@ -1417,6 +1463,7 @@ export default function MeetsMainContent({
       setIsViewPanelOpen(false);
       setIsTranscriptOpen(false);
       setIsAiPanelOpen(false);
+      setActivityPanel(null);
     }
     setIsDeviceSettingsOpen(opening);
   }, [isDeviceSettingsOpen, setIsParticipantsOpen, toggleChat]);
@@ -1443,6 +1490,7 @@ export default function MeetsMainContent({
       setIsViewPanelOpen(false);
       setIsDeviceSettingsOpen(false);
       setIsAiPanelOpen(false);
+      setActivityPanel(null);
     } else {
       setTranscriptInitialTab("transcript");
     }
@@ -1461,6 +1509,7 @@ export default function MeetsMainContent({
       setIsViewPanelOpen(false);
       setIsDeviceSettingsOpen(false);
       setIsTranscriptOpen(false);
+      setActivityPanel(null);
     }
     setIsAiPanelOpen(opening);
   }, [isAiPanelOpen, setIsParticipantsOpen, toggleChat]);
@@ -1468,6 +1517,163 @@ export default function MeetsMainContent({
   const handleOpenAiPanel = useCallback(() => {
     if (!isAiPanelOpen) handleToggleAiPanel();
   }, [isAiPanelOpen, handleToggleAiPanel]);
+
+  const toggleActivityPanel = useCallback(
+    (panel: "polls" | "qa") => {
+      const opening = activityPanel !== panel;
+      if (opening) {
+        if (isChatOpenRef.current) toggleChat();
+        setIsParticipantsOpen(false);
+        setIsHostControlsOpen(false);
+        setIsVideoEffectsOpen(false);
+        setIsViewPanelOpen(false);
+        setIsDeviceSettingsOpen(false);
+        setIsTranscriptOpen(false);
+        setIsAiPanelOpen(false);
+      }
+      setActivityPanel(opening ? panel : null);
+    },
+    [activityPanel, setIsParticipantsOpen, toggleChat],
+  );
+  const handleTogglePolls = useCallback(
+    () => toggleActivityPanel("polls"),
+    [toggleActivityPanel],
+  );
+  const handleToggleQa = useCallback(
+    () => toggleActivityPanel("qa"),
+    [toggleActivityPanel],
+  );
+
+  const [startedPoll, setStartedPoll] = useState<{
+    id: string;
+    createdByName: string;
+  } | null>(null);
+  const handlePollStarted = useCallback(
+    (poll: { id: string; createdByName: string }) => {
+      setStartedPoll(poll);
+    },
+    [],
+  );
+  const polls = useMeetingPolls({
+    hold: reconnectHold,
+    isWebinarAttendee,
+    onPollStarted: handlePollStarted,
+  });
+  const authorityRuntime = useAuthorityRuntime();
+  const isPollsAvailable = polls.isAvailable;
+  const isPollsOpen = activityPanel === "polls" && isPollsAvailable;
+  const awaitsVote = (poll: (typeof polls.polls)[number]) =>
+    poll.status === "open" && poll.myVote.length === 0;
+  const hasPollAwaitingVote =
+    !isAdmin && polls.canVote && polls.polls.some(awaitsVote);
+  const startedPollStillOpen =
+    startedPoll !== null &&
+    polls.canVote &&
+    polls.polls.some((poll) => poll.id === startedPoll.id && awaitsVote(poll));
+  useEffect(() => {
+    if (isPollsOpen && startedPoll) setStartedPoll(null);
+  }, [isPollsOpen, startedPoll]);
+  useEffect(() => {
+    if (activityPanel === "polls" && !isPollsAvailable) setActivityPanel(null);
+  }, [activityPanel, isPollsAvailable]);
+
+  const isMeetingQaAvailable = meetingQa.isAvailable;
+  const isMeetingQaOpen = activityPanel === "qa" && isMeetingQaAvailable;
+  useEffect(() => {
+    if (activityPanel === "qa" && !isMeetingQaAvailable) setActivityPanel(null);
+  }, [activityPanel, isMeetingQaAvailable]);
+  const [seenMeetingQuestionIds, setSeenMeetingQuestionIds] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  useEffect(() => {
+    if (isMeetingQaOpen) {
+      setSeenMeetingQuestionIds(new Set(webinarQaEntries.map((entry) => entry.id)));
+    }
+  }, [isMeetingQaOpen, webinarQaEntries]);
+  const hasUnseenQuestion = hasUnseenMeetingQuestion({
+    isAvailable: isMeetingQaAvailable,
+    isOpen: isMeetingQaOpen,
+    entries: webinarQaEntries,
+    currentUserId,
+    seenIds: seenMeetingQuestionIds,
+  });
+
+  // Polls and Q&A open beside the call for this viewer alone. They are
+  // opened from the Apps panel when the server offers them. On a server that
+  // does not, whatever the reason, they are listed switched off as needing
+  // a server update, so their absence is explained.
+  const pollsNeedServerUpdate = panelAppNeedsServerUpdate({
+    runtime: authorityRuntime,
+    offered: polls.offered,
+    isJoined,
+    isWebinarAttendee,
+  });
+  // A webinar's questions live in its own Questions section, which an older
+  // server still feeds, so nothing is missing there.
+  const qaNeedsServerUpdate =
+    !webinarConfig?.enabled &&
+    panelAppNeedsServerUpdate({
+      runtime: authorityRuntime,
+      offered: meetingQa.offered,
+      isJoined,
+      isWebinarAttendee,
+    });
+  const panelApps: PanelAppEntry[] = [
+    ...(isPollsAvailable
+      ? [
+          {
+            id: pollsApp.id,
+            name: pollsApp.name,
+            description: pollsApp.description,
+            icon: <ChartBar size={19} strokeWidth={1.75} />,
+            isOpen: isPollsOpen,
+            needsAttention: hasPollAwaitingVote,
+            onToggle: () => {
+              setIsAppsOpen(false);
+              handleTogglePolls();
+            },
+          },
+        ]
+      : pollsNeedServerUpdate
+        ? [
+            {
+              id: pollsApp.id,
+              name: pollsApp.name,
+              icon: <ChartBar size={19} strokeWidth={1.75} />,
+              isOpen: false,
+              needsServerUpdate: true,
+              onToggle: () => {},
+            },
+          ]
+        : []),
+    ...(isMeetingQaAvailable
+      ? [
+          {
+            id: qaApp.id,
+            name: qaApp.name,
+            description: qaApp.description,
+            icon: <MessageCircleQuestion size={19} strokeWidth={1.75} />,
+            isOpen: isMeetingQaOpen,
+            needsAttention: hasUnseenQuestion,
+            onToggle: () => {
+              setIsAppsOpen(false);
+              handleToggleQa();
+            },
+          },
+        ]
+      : qaNeedsServerUpdate
+        ? [
+            {
+              id: qaApp.id,
+              name: qaApp.name,
+              icon: <MessageCircleQuestion size={19} strokeWidth={1.75} />,
+              isOpen: false,
+              needsServerUpdate: true,
+              onToggle: () => {},
+            },
+          ]
+        : []),
+  ];
 
   const handleCloseTranscript = useCallback(() => {
     setIsTranscriptOpen(false);
@@ -1597,6 +1803,7 @@ export default function MeetsMainContent({
       setIsDeviceSettingsOpen(false);
       setIsTranscriptOpen(false);
       setIsAiPanelOpen(false);
+      setActivityPanel(null);
     }
     toggleChat();
   }, [isChatOpen, isParticipantsOpen, setIsParticipantsOpen, toggleChat]);
@@ -1620,6 +1827,7 @@ export default function MeetsMainContent({
     setIsDeviceSettingsOpen(false);
     setIsTranscriptOpen(false);
     setIsAiPanelOpen(false);
+    setActivityPanel(null);
     if (chatOpened && isParticipantsOpen && !participantsOpened) {
       setIsParticipantsOpen(false);
     } else if (participantsOpened && isChatOpen && !chatOpened) {
@@ -1851,6 +2059,38 @@ export default function MeetsMainContent({
     !isAdmin && !isParticipantUnmuteAllowed;
   const isParticipantCameraActivationBlocked =
     !isAdmin && !isParticipantVideoAllowed;
+  const toasts: (ToastItem | null)[] = [
+    browserLaunchError
+      ? {
+          id: "browser",
+          label: browserFailedCommand
+            ? BROWSER_ERROR_TITLES[browserFailedCommand]
+            : "Shared browser",
+          message: browserLaunchError,
+          tone: "danger",
+          onDismiss: onClearBrowserError,
+        }
+      : null,
+    startedPollStillOpen && !isPollsOpen && startedPoll
+      ? {
+          id: `poll-${startedPoll.id}`,
+          label: "Poll",
+          message: `${startedPoll.createdByName} started a poll`,
+          action: { label: "Vote", onPress: handleTogglePolls },
+          onDismiss: () => setStartedPoll(null),
+        }
+      : null,
+    voiceAgentError
+      ? {
+          id: "voice",
+          label: "Voice agent error",
+          message: voiceAgentError,
+          tone: "danger",
+          onDismiss: onClearVoiceAgentError,
+        }
+      : null,
+  ];
+
   const controlsBarProps: ControlsBarProps = {
     compact: useCompactControls,
     slim: useSlimControls,
@@ -1937,6 +2177,8 @@ export default function MeetsMainContent({
     onCloseWatch: isAdmin ? closeWatch : undefined,
     isAppsOpen,
     hasActiveApp: Boolean(appsState.activeAppId),
+    hasAppWaiting: hasPollAwaitingVote || hasUnseenQuestion,
+    isToastShowing: isJoined && toasts.some(Boolean),
     onToggleApps: handleToggleApps,
     isDevPlaygroundEnabled,
     isDevPlaygroundActive,
@@ -2431,15 +2673,19 @@ export default function MeetsMainContent({
           />
 
           {isWebinarQaOpen && isWebinarQaEnabled ? (
-            <WebinarQaPanel
+            <QaPanel
+              audience="webinar"
               entries={webinarQaEntries}
               qaEnabled={isWebinarQaEnabled}
               currentUserId={currentUserId}
+              askNeedsIdentity={meetingQa.askNeedsIdentity}
               onClose={handleToggleWebinarQa}
               onSubmit={onSubmitWebinarQuestion}
               onUpvote={
                 isWebinarQaEnabled ? onUpvoteWebinarQuestion : undefined
               }
+              waiting={meetingQa.waiting}
+              connection={meetingQa.connection}
             />
           ) : null}
 
@@ -2585,30 +2831,7 @@ export default function MeetsMainContent({
       )}
 
       {isJoined && (
-        <ToastQueue
-          toasts={[
-            browserLaunchError
-              ? {
-                  id: "browser",
-                  label: browserFailedCommand
-                    ? BROWSER_ERROR_TITLES[browserFailedCommand]
-                    : "Shared browser",
-                  message: browserLaunchError,
-                  tone: "danger" as const,
-                  onDismiss: onClearBrowserError,
-                }
-              : null,
-            voiceAgentError
-              ? {
-                  id: "voice",
-                  label: "Voice agent error",
-                  message: voiceAgentError,
-                  tone: "danger" as const,
-                  onDismiss: onClearVoiceAgentError,
-                }
-              : null,
-          ]}
-        />
+        <ToastQueue toasts={toasts} />
       )}
 
       {isJoined &&
@@ -2628,12 +2851,16 @@ export default function MeetsMainContent({
           </div>
         ))}
 
+      {/* Apps covers a running game while it is open, so the panel apps
+          stay reachable. The game goes on underneath and is back when Apps
+          closes or one of its apps is picked. */}
       {isJoined && !isWebinarAttendee && isGameActive && (
         <GamePanel
           rightOffset={gameDockOffset}
           dockWidth={gameDockPanelWidth}
           maxDockWidth={gameDockMaxWidth}
           onDockWidthChange={handleGameDockWidthChange}
+          isCovered={isAppsOpen}
         />
       )}
 
@@ -2647,8 +2874,9 @@ export default function MeetsMainContent({
         />
       )}
 
-      {isJoined && !isWebinarAttendee && isAppsOpen && !isGameActive && (
+      {isJoined && !isWebinarAttendee && isAppsOpen && (
         <AppsPanel
+          panelApps={panelApps}
           rightOffset={gameDockOffset}
           dockWidth={gameDockPanelWidth}
           maxDockWidth={gameDockMaxWidth}
@@ -2715,6 +2943,39 @@ export default function MeetsMainContent({
         </MeetingPanelBoundary>
       )}
 
+      {isJoined && isPollsOpen && (
+        <PollsPanel
+          polls={polls.polls}
+          isHost={polls.canManage}
+          canVote={polls.canVote}
+          voteNeedsIdentity={polls.voteNeedsIdentity}
+          onClose={handleTogglePolls}
+          onCreate={polls.createPoll}
+          onVote={polls.vote}
+          onEnd={polls.endPoll}
+          onShare={polls.shareResults}
+          onExport={polls.exportCsv}
+          waiting={polls.waiting}
+          connection={polls.connection}
+        />
+      )}
+
+      {isJoined && isMeetingQaOpen && (
+        <QaPanel
+          audience="meeting"
+          entries={webinarQaEntries}
+          qaEnabled
+          currentUserId={currentUserId}
+          askNeedsIdentity={meetingQa.askNeedsIdentity}
+          onClose={handleToggleQa}
+          onSubmit={onSubmitWebinarQuestion}
+          onUpvote={onUpvoteWebinarQuestion}
+          onModerate={onModerateWebinarQuestion}
+          waiting={meetingQa.waiting}
+          connection={meetingQa.connection}
+        />
+      )}
+
       {isJoined && !isWebinarAttendee && isAiPanelOpen && roomAi && (
         <RoomAiPanel controller={roomAi} onClose={() => setIsAiPanelOpen(false)} />
       )}
@@ -2742,6 +3003,8 @@ export default function MeetsMainContent({
           webinarQaEntries={webinarQaEntries}
           webinarHandQueue={webinarHandQueue}
           onModerateWebinarQuestion={onModerateWebinarQuestion}
+          webinarQaWaiting={meetingQa.waiting}
+          webinarQaConnection={meetingQa.connection}
           onPromoteWebinarAttendee={onPromoteWebinarAttendee}
           onDemoteWebinarParticipant={onDemoteWebinarParticipant}
         />

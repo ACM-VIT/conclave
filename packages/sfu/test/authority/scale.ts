@@ -29,7 +29,7 @@ import {
   type ConnectionContext,
 } from "../../server/socket/context.js";
 import { createSfuState } from "../../server/state.js";
-import { qaAuthority } from "./fixtures/qa.js";
+import { qaAuthority } from "@conclave/apps-sdk/qa/server";
 
 export type ScaleReport = {
   people: number;

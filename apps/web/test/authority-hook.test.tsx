@@ -6,6 +6,7 @@ import {
   AuthorityProvider,
   useAuthority,
   useAuthorityAvailable,
+  useAuthorityRuntime,
   type AuthorityAppClient,
 } from "@conclave/apps-sdk";
 import {
@@ -66,9 +67,10 @@ let app: AuthorityAppClient<typeof notesContract>;
 function Notes() {
   app = useAuthority(notesContract);
   const offered = useAuthorityAvailable(notesContract);
+  const runtime = useAuthorityRuntime();
   const state = app.state;
   return (
-    <div data-kind={state.kind} data-offered={String(offered)}>
+    <div data-kind={state.kind} data-offered={String(offered)} data-runtime={runtime}>
       {state.kind === "ready" &&
         [...state.view.notes.values()].map((note) => <p key={note.text}>{note.text}</p>)}
     </div>
@@ -78,6 +80,7 @@ function Notes() {
 const rendered = () => ({
   kind: container.firstElementChild?.getAttribute("data-kind"),
   offered: container.firstElementChild?.getAttribute("data-offered"),
+  runtime: container.firstElementChild?.getAttribute("data-runtime"),
   notes: [...container.querySelectorAll("p")].map((node) => node.textContent),
 });
 
@@ -138,18 +141,31 @@ afterEach(async () => {
 
 it("hides the app on a server that never answers the capability request", async () => {
   await mount();
-  expect(rendered()).toMatchObject({ kind: "connecting", offered: "false" });
+  // Not known yet: nothing is said about the server while it may still answer.
+  expect(rendered()).toMatchObject({ kind: "connecting", offered: "false", runtime: "unknown" });
 
   await act(async () => vi.advanceTimersByTimeAsync(6_000));
 
-  expect(rendered()).toMatchObject({ kind: "unsupported", offered: "false" });
+  expect(rendered()).toMatchObject({ kind: "unsupported", offered: "false", runtime: "unsupported" });
   expect(server.count(AUTHORITY_EVENTS.subscribe)).toBe(0);
+});
+
+it("says the server runs apps once it has answered, whichever apps it offers", async () => {
+  await mount();
+  await act(async () =>
+    server.last(AUTHORITY_EVENTS.capabilities)!.ack!({
+      ok: true,
+      value: { protocol: 1, roomEpoch: "epoch-1", serverNowMs: Date.now(), apps: [] },
+    }),
+  );
+
+  expect(rendered()).toMatchObject({ offered: "false", runtime: "ready" });
 });
 
 it("renders the view the server sends and follows its patches", async () => {
   await mount();
   const subscription = await offerAndSubscribe([{ key: "a", text: "first" }]);
-  expect(rendered()).toEqual({ kind: "ready", offered: "true", notes: ["first"] });
+  expect(rendered()).toEqual({ kind: "ready", offered: "true", runtime: "ready", notes: ["first"] });
 
   await act(async () =>
     server.push(AUTHORITY_EVENTS.frame, {
@@ -292,7 +308,7 @@ it("forgets the room's apps when the room is left on a socket that stays open", 
 
   await mount(<Notes />, true);
 
-  expect(whileAway).toEqual({ kind: "connecting", offered: "false", notes: [] });
+  expect(whileAway).toEqual({ kind: "connecting", offered: "false", runtime: "unknown", notes: [] });
   expect(server.last(AUTHORITY_EVENTS.unsubscribe)!.payload).toEqual({ subscription });
   expect(askedWhileAway).toBe(0);
   expect(server.count(AUTHORITY_EVENTS.capabilities)).toBe(askedBefore + 1);
