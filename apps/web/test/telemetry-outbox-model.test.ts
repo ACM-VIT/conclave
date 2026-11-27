@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createBatchStore, createOutbox, type OutboxDeps } from "../src/app/lib/telemetry-outbox";
 import { type OutboxModule, type SimResult, simulate } from "./support/outbox-sim";
-import { PARTIAL_HANDOFF, PARTIAL_RETRY, REGRESSION_SEEDS, THREAD_CASES } from "./support/outbox-sim-cases";
+import { KEEPALIVE_REFUSAL, PARTIAL_HANDOFF, PARTIAL_RETRY, REGRESSION_SEEDS, THREAD_CASES } from "./support/outbox-sim-cases";
 
 const SWEEP_RUNS = Number(process.env.OUTBOX_SIM_RUNS ?? 0);
 const FIRST_SEED = Number(process.env.OUTBOX_SIM_FIRST_SEED ?? 1);
@@ -9,7 +9,7 @@ const SWEEP_CHUNK = 1000;
 
 const runSeeds = async (seeds: readonly number[]) => {
   const failures: Array<Pick<SimResult, "seed" | "violations">> = [];
-  const totals = { runs: 0, multiTab: 0, aborted: 0, refusedWrites: 0, retryAfters: 0, closes: 0, counted: 0, races: 0, throttles: 0, lockRejects: 0, readFailures: 0, partials: 0 };
+  const totals = { runs: 0, multiTab: 0, aborted: 0, refusedWrites: 0, retryAfters: 0, closes: 0, counted: 0, races: 0, throttles: 0, lockRejects: 0, readFailures: 0, partials: 0, keepaliveRefusals: 0 };
   for (const seed of seeds) {
     if (failures.length >= 5) break;
     const result = await simulate(seed);
@@ -25,6 +25,7 @@ const runSeeds = async (seeds: readonly number[]) => {
     totals.lockRejects += result.lockRejects;
     totals.readFailures += result.readFailures;
     totals.partials += result.partials;
+    totals.keepaliveRefusals += result.keepaliveRefusals;
     if (result.violations.length > 0) failures.push({ seed, violations: result.violations.slice(0, 3) });
   }
   return { failures, totals };
@@ -73,6 +74,16 @@ describe("the outbox in a simulated browser", () => {
     }));
     const result = await simulate(4661287478, mutant, undefined, PARTIAL_HANDOFF);
     expect(result.violations.map(({ kind }) => kind)).toContain("sent before its Retry-After");
+  });
+
+  it("catches an outbox that uploads again the events a keepalive answer refused", async () => {
+    const mutant = standIn((deps) => ({
+      ...deps,
+      beacon: (body) => deps.beacon(body)?.then((reply) => reply && { status: reply.status, retryAfter: reply.retryAfter }) ?? null,
+    }));
+    const result = await simulate(4714611034, mutant, undefined, KEEPALIVE_REFUSAL);
+    expect(result.keepaliveRefusals).toBe(1);
+    expect(result.violations.map(({ kind }) => kind)).toContain("sent an event refused for good again");
   });
 
   it("catches an outbox that treats refused writes as successful", async () => {

@@ -120,8 +120,9 @@ one owner at a time:
   stale stored copy. When the page reads a final answer (delivered, or refused
   for good), the batch is settled at once instead of confirmed 30 s later.
   Either answer applies only while the batch still carries the attempt id the
-  beacon went out with; once it has been sent again, only a `Retry-After` is
-  carried over, as for any late answer.
+  beacon went out with; once it has been sent again, what it teaches is still
+  carried over, as for any late answer: its `Retry-After` and the events it
+  refused, which no later send of that batch carries.
 - **Replayed.** A saved batch is sent only by a replay pass, which runs under
   a Web Locks lock (`conclave:telemetry:replay`) at its due time, when a tab
   loads or comes back into view, and when another tab changes a saved batch
@@ -185,7 +186,11 @@ batches one replay drops are reported together as
 keepalive request in flight as the page went away). The full lifecycle, every
 state and event with the owner of the next step, is in the PR that added it
 (#265), and `test/telemetry-outbox-model.test.ts` checks it in a seeded
-simulation of up to three tabs. CI runs its fixed cases and a fixed list of
+simulation of up to three tabs. In the simulation, every way a batch goes out
+(a send, or a keepalive request as the page goes away) is answered through
+one reply path: the server keeps what the answer says (delivered, refused for
+good, or the events it refused), and the tab learns from it the same facts the
+outbox must act on, so no way of sending can drop a refused list. CI runs its fixed cases and a fixed list of
 regression seeds: every seed from 1 to 300 that fails on an earlier outbox
 version or a mutant that 20 or fewer of those 300 seeds catch. After changing
 the outbox or the model, run `pnpm -C apps/web test:outbox-model:extended`,

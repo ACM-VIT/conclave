@@ -14,9 +14,9 @@ type ThreadCase = {
 };
 
 export const REGRESSION_SEEDS: readonly number[] = [
-  15, 18, 23, 25, 28, 37, 41, 42, 43, 49, 51, 54, 58, 62, 69, 75, 77, 81, 89, 102, 108, 109, 113, 122, 125, 133,
-  134, 141, 145, 152, 162, 163, 178, 179, 181, 190, 201, 205, 229, 234, 235, 252, 253, 254, 255, 262, 264, 283,
-  284, 293, 298, 299,
+  15, 18, 23, 25, 28, 41, 42, 43, 49, 51, 54, 58, 62, 67, 68, 69, 75, 77, 81, 89, 102, 108, 109, 113, 119, 122, 125,
+  133, 134, 141, 145, 152, 162, 163, 178, 179, 181, 190, 201, 205, 219, 229, 234, 235, 252, 253, 254, 255, 259, 262,
+  264, 283, 284, 293, 297, 298, 299,
 ];
 
 const quiet = {
@@ -56,7 +56,50 @@ export const PARTIAL_HANDOFF: Scenario = {
   ],
 };
 
+export const KEEPALIVE_REFUSAL: Scenario = {
+  profile: { ...quiet, beaconRefuseRate: 0 },
+  actions: [
+    { at: 0, act: "open", tab: 1 },
+    { at: 1000, act: "emit", tab: 1, count: 2 },
+    { at: 1500, act: "hide", tab: 1 },
+    { at: 3000, act: "show", tab: 1 },
+  ],
+  beacons: [{ latency: 200, status: 503, retryAfter: "1", rejected: [0] }],
+  replies: [{ latency: 100, status: 200 }],
+};
+
 export const THREAD_CASES: ThreadCase[] = [
+  {
+    name: "a keepalive answer that refuses an event keeps it out of every later send",
+    covers: { keepaliveRefusals: 1 },
+    thread: "https://github.com/ACM-VIT/conclave/pull/265#discussion_r4714611034",
+    head: "5d046b3e",
+    seed: 4714611034,
+    scenario: KEEPALIVE_REFUSAL,
+    posts: 1,
+  },
+  {
+    name: "a keepalive answer that refuses an event of a batch held in memory lands while the batch is sent again, and the event is not sent after",
+    covers: { keepaliveRefusals: 1, refusedWrites: 1 },
+    thread: "https://github.com/ACM-VIT/conclave/pull/265#discussion_r4714611034",
+    head: "5d046b3e",
+    seed: 4714611034,
+    scenario: {
+      profile: { ...quiet, refuseRate: 1, beaconRefuseRate: 0 },
+      actions: [
+        { at: 0, act: "open", tab: 1 },
+        { at: 1000, act: "emit", tab: 1, count: 2 },
+        { at: 1500, act: "hide", tab: 1 },
+        { at: 2000, act: "show", tab: 1 },
+      ],
+      beacons: [{ latency: 40_000, status: 503, retryAfter: "1", rejected: [0] }],
+      replies: [
+        { latency: 20_000, status: 503 },
+        { latency: 100, status: 200 },
+      ],
+    },
+    posts: 2,
+  },
   {
     name: "ordinary backoff does not restart when a partial reply shrinks the batch",
     thread: "https://github.com/ACM-VIT/conclave/pull/265",

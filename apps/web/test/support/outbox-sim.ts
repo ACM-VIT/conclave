@@ -1,6 +1,7 @@
 import * as currentOutbox from "../../src/app/lib/telemetry-outbox";
 
 type Reply = { status: number; retryAfter: string | null; rejected?: number[] };
+type Outcome = { status: number | null; retryAfter: string | null; rejected?: number[] };
 
 type OutboxLike = {
   add: (event: { uuid: string; event: string; timestamp?: string; properties: Record<string, unknown> }, options?: { urgent?: boolean; deferred?: boolean }) => void;
@@ -42,6 +43,7 @@ export type SimResult = {
   lateWaits: number;
   shorterLateWaits: number;
   lateBeaconWaits: number;
+  keepaliveRefusals: number;
   leaseHandoffs: number;
   lifecycleDuringConfirmation: number;
   savedAborts: number;
@@ -154,6 +156,7 @@ export async function simulate(
   const lockRejectRng = rngOf(seed ^ 0x165667b1);
   const readFailRng = rngOf(seed ^ 0x3c6ef372);
   const partialRng = rngOf(seed ^ 0x6a09e667);
+  const beaconPartialRng = rngOf(seed ^ 0x510e527f);
   const between = (low: number, high: number) => low + rng() * (high - low);
   const scriptedEnd = scenario.actions ? Math.max(...scenario.actions.map((action) => action.at)) + 1 : null;
   const profile: Profile = {
@@ -250,6 +253,7 @@ export async function simulate(
   let lateWaits = 0;
   let shorterLateWaits = 0;
   let lateBeaconWaits = 0;
+  let keepaliveRefusals = 0;
   let leaseHandoffs = 0;
   let lifecycleDuringConfirmation = 0;
   let savedAborts = 0;
@@ -462,6 +466,39 @@ export async function simulate(
     learn(request.tab, request.key, "failure", 0, false);
   };
 
+  const answerKind = (status: number): "delivered" | "retry" | "refused" =>
+    status >= 200 && status < 300 ? "delivered" : status === 408 || status === 425 || status === 429 || status >= 500 ? "retry" : "refused";
+  const withPartial = (outcome: Outcome, uuids: readonly string[], draw: () => number): Outcome => {
+    if (outcome.status === null || answerKind(outcome.status) !== "retry" || uuids.length < 2 || profile.partialRate <= 0 || draw() >= profile.partialRate) return outcome;
+    const rejected = uuids.flatMap((_, index) => (draw() < 0.5 ? [index] : []));
+    return rejected.length > 0 && rejected.length < uuids.length ? { ...outcome, rejected } : outcome;
+  };
+  const serverTakes = (uuids: readonly string[], outcome: Outcome) => {
+    if (uuids.every((uuid) => delivered.has(uuid))) {
+      outcome.status = 200;
+      outcome.retryAfter = null;
+    }
+    if (outcome.status === null) return;
+    const kind = answerKind(outcome.status);
+    if (kind === "delivered") for (const uuid of uuids) delivered.add(uuid);
+    if (kind === "refused") for (const uuid of uuids) if (!delivered.has(uuid)) refused.add(uuid);
+    if (kind !== "delivered") for (const index of outcome.rejected ?? []) if (!delivered.has(uuids[index])) refused.add(uuids[index]);
+  };
+  const tabLearns = (
+    tab: Tab,
+    key: string,
+    uuids: readonly string[],
+    outcome: Outcome & { status: number },
+    late: boolean,
+    onRetry: (retryAfter: string | null) => void,
+  ): Reply => {
+    if (answerKind(outcome.status) === "retry") onRetry(outcome.retryAfter);
+    else learn(tab, key, "settled", 0, late);
+    const rejectedUuids = (outcome.rejected ?? []).map((index) => uuids[index]);
+    if (rejectedUuids.length > 0) learn(tab, key, "refused", 0, late, rejectedUuids);
+    return { status: outcome.status, retryAfter: outcome.retryAfter, ...(outcome.rejected ? { rejected: outcome.rejected } : {}) };
+  };
+
   const network = (tab: Tab) => (body: string, keepalive: boolean, signal?: AbortSignal): Promise<Reply> => {
     const uuids = (JSON.parse(body) as { batch: Array<{ uuid: string }> }).batch.map((event) => event.uuid);
     const key = batchKey(uuids);
@@ -496,7 +533,7 @@ export async function simulate(
           ? between(1000, 9000)
           : between(20, 800);
     const kindRoll = rng();
-    const outcome: { status: number | null; retryAfter: string | null; rejected?: number[] } = scripted
+    const drawn: Outcome = scripted
       ? { status: scripted.status, retryAfter: scripted.retryAfter ?? null, rejected: scripted.rejected }
       : kindRoll < profile.okRate
         ? { status: 200, retryAfter: null }
@@ -507,10 +544,7 @@ export async function simulate(
             : rng() < profile.errorRate
               ? { status: null, retryAfter: null }
               : { status: rng() < 0.5 ? 503 : 500, retryAfter: rng() < profile.waitRate ? String(1 + Math.floor(rng() * 90)) : null };
-    if (!scripted && outcome.status !== null && (outcome.status === 429 || outcome.status >= 500) && uuids.length > 1 && profile.partialRate > 0 && partialRng() < profile.partialRate) {
-      const rejected = uuids.flatMap((_, index) => (partialRng() < 0.5 ? [index] : []));
-      if (rejected.length > 0 && rejected.length < uuids.length) outcome.rejected = rejected;
-    }
+    const outcome = scripted ? drawn : withPartial(drawn, uuids, partialRng);
     const sentAt = clock;
     return new Promise<Reply>((resolve, reject) => {
       const finish = (act: () => void) => {
@@ -533,13 +567,7 @@ export async function simulate(
       schedule(sentAt + latency * between(0.2, 0.8), null, "server", () => {
         if (request.aborted || (!tab.open && !request.keepalive)) return;
         request.arrived = true;
-        if (uuids.every((uuid) => delivered.has(uuid))) {
-          outcome.status = 200;
-          outcome.retryAfter = null;
-        }
-        if (outcome.status === 200) for (const uuid of uuids) delivered.add(uuid);
-        if (outcome.status === 400) for (const uuid of uuids) if (!delivered.has(uuid)) refused.add(uuid);
-        if (outcome.status !== 200) for (const index of outcome.rejected ?? []) if (!delivered.has(uuids[index])) refused.add(uuids[index]);
+        serverTakes(uuids, outcome);
       });
       schedule(sentAt + latency, tab, "reply", () => {
         if (!tab.open) {
@@ -557,16 +585,12 @@ export async function simulate(
           finish(() => reject(new TypeError("Failed to fetch")));
           return;
         }
-        const status = outcome.status;
-        if (status === 200 || status === 400) learn(tab, key, "settled", 0, !request.latest);
-        if (status === 429 || status >= 500) {
-          if (outcome.retryAfter !== null) learnWait(tab, key, outcome.retryAfter, !request.latest);
+        const reply = tabLearns(tab, key, uuids, { ...outcome, status: outcome.status }, !request.latest, (retryAfter) => {
+          if (retryAfter !== null) learnWait(tab, key, retryAfter, !request.latest);
           failed(request);
-        }
-        const rejectedUuids = (outcome.rejected ?? []).map((index) => uuids[index]);
-        if (rejectedUuids.length > 0) learn(tab, key, "refused", 0, !request.latest, rejectedUuids);
-        note(`tab${tab.id} reply ${status} ra=${outcome.retryAfter} rejected=${outcome.rejected?.length ?? 0} for ${key.slice(0, 40)} latest=${request.latest}`);
-        finish(() => resolve({ status, retryAfter: outcome.retryAfter, ...(outcome.rejected ? { rejected: outcome.rejected } : {}) }));
+        });
+        note(`tab${tab.id} reply ${reply.status} ra=${reply.retryAfter} rejected=${reply.rejected?.length ?? 0} for ${key.slice(0, 40)} latest=${request.latest}`);
+        finish(() => resolve(reply));
       });
     });
   };
@@ -596,32 +620,26 @@ export async function simulate(
     const sentAt = clock;
     beaconedAt.set(key, { at: clock, tab });
     beacons += 1;
-    if (scripted) {
-      return new Promise<Reply | null>((resolve) => {
-        schedule(sentAt + scripted.latency, tab, "reply", () => {
-          if (!tab.open || scripted.status === null) return;
-          const status = scripted.status;
-          const retryAfter = scripted.retryAfter ?? null;
-          if (status >= 200 && status < 300) for (const uuid of uuids) delivered.add(uuid);
-          if (status >= 200 && status < 300) learn(tab, key, "settled", 0, (requests.get(key) ?? []).some((request) => request.sentAt > sentAt));
-          if (retryAfter !== null && (status === 429 || status >= 500)) beaconWait(tab, key, sentAt, retryAfter);
-          note(`tab${tab.id} beacon answered ${status} ra=${retryAfter} for ${key.slice(0, 40)}`);
-          resolve({ status, retryAfter });
+    const answered = (answeredAt: number, outcome: Outcome) =>
+      new Promise<Reply | null>((resolve) => {
+        schedule(answeredAt, tab, "reply", () => {
+          if (outcome.status === null) return;
+          serverTakes(uuids, outcome);
+          if (!tab.open || outcome.status === null) return;
+          const late = (requests.get(key) ?? []).some((request) => request.sentAt > sentAt);
+          const reply = tabLearns(tab, key, uuids, { ...outcome, status: outcome.status }, late, (retryAfter) => {
+            if (retryAfter !== null) beaconWait(tab, key, sentAt, retryAfter);
+          });
+          if (answerKind(reply.status) === "retry" && (reply.rejected?.length ?? 0) > 0) keepaliveRefusals += 1;
+          note(`tab${tab.id} beacon answered ${reply.status} ra=${reply.retryAfter} rejected=${reply.rejected?.length ?? 0} for ${key.slice(0, 40)}`);
+          resolve(reply);
         });
       });
-    }
+    if (scripted) return answered(sentAt + scripted.latency, { status: scripted.status, retryAfter: scripted.retryAfter ?? null, rejected: scripted.rejected });
     if (beaconRng() < profile.beaconLimitRate) {
       const status = beaconRng() < 0.7 ? 429 : 503;
       const retryAfter = String(1 + Math.floor(beaconRng() * 120));
-      const answeredAt = clock + 20 + beaconRng() * 780;
-      return new Promise<Reply | null>((resolve) => {
-        schedule(answeredAt, tab, "reply", () => {
-          if (!tab.open) return;
-          beaconWait(tab, key, sentAt, retryAfter);
-          note(`tab${tab.id} beacon answered ${status} ra=${retryAfter} for ${key.slice(0, 40)}`);
-          resolve({ status, retryAfter });
-        });
-      });
+      return answered(clock + 20 + beaconRng() * 780, withPartial({ status, retryAfter }, uuids, beaconPartialRng));
     }
     if (rng() >= profile.beaconLossRate) for (const uuid of uuids) delivered.add(uuid);
     return Promise.resolve(null);
@@ -998,6 +1016,7 @@ export async function simulate(
     lateWaits,
     shorterLateWaits,
     lateBeaconWaits,
+    keepaliveRefusals,
     leaseHandoffs,
     lifecycleDuringConfirmation,
     savedAborts,
