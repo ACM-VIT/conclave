@@ -23,7 +23,7 @@ import {
 } from "../server/roomRegistry.js";
 import { forceCloseRoom, renewRoomOwnerships } from "../server/rooms.js";
 import { createMeeting } from "../server/controlPlane/meetingCommands.js";
-import { bookingInvites, roomBooking } from "../server/controlPlane/inviteeCommands.js";
+import { bookingInvites, roomBooking, roomInviteeDecision } from "../server/controlPlane/inviteeCommands.js";
 import { createSqliteBackend } from "../server/controlPlane/backends/sqlite.js";
 import { createMemoryBackend } from "../server/controlPlane/backends/memory.js";
 import { controlPlaneStore, type ControlPlaneStore } from "../server/controlPlane/store.js";
@@ -2170,6 +2170,49 @@ describe.skipIf(!redisServerPath)("knockers waiting on an SFU when the next meet
       expect(bookingInvites(await store.read(roomBooking("conclave", "abc-mnop-xyz")), "invitee@example.com")).toBe(true);
     } finally {
       await store.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a newer owner's invitee removal even when its clock is behind", async () => {
+    const dir = mkdtempSync(joinPath(tmpdir(), "invitee-owner-clock-"));
+    const path = joinPath(dir, "conclave.sqlite");
+    const firstStore = controlPlaneStore(createSqliteBackend(path));
+    const secondStore = controlPlaneStore(createSqliteBackend(path));
+    const decision = roomInviteeDecision("conclave", "abc-mnop-xyz", invitee.email);
+    const invited = async (store: ControlPlaneStore) =>
+      bookingInvites(await store.read(roomBooking("conclave", "abc-mnop-xyz")), invitee.email);
+    try {
+      const { a, b } = await twoSfus();
+      a.controlPlane = firstStore;
+      b.controlPlane = secondStore;
+      const now = Date.now();
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(now + 60_000);
+      await schedule(a);
+      const scheduledHost = { ...host, userId: "host@example.com", email: "host@example.com" };
+      const first = await join(a, scheduledHost);
+      const generation = roomOf(a).ownershipGeneration;
+      expect((await join(a, invitee)).status).toBe("joined");
+      expect(await send(first.peer, "kickUser", { userId: "invitee@example.com#i" })).toEqual({ success: true });
+      expect(await invited(firstStore)).toBe(false);
+      expect((await join(a, invitee)).status).toBe("waiting");
+      expect(await send(first.peer, "admitUser", { userId: invitee.email })).toEqual({ success: true });
+      expect(await invited(firstStore)).toBe(true);
+      const earlierStamp = (await firstStore.read(decision))?.at;
+      expect(earlierStamp).toBeGreaterThan(now);
+
+      await a.roomRegistry.releaseRoom(CHANNEL);
+      vi.setSystemTime(now);
+      const second = await join(b, { ...scheduledHost, sessionId: "hb" });
+      expect(roomOf(b).ownershipGeneration).toBeGreaterThan(generation!);
+      expect((await join(b, invitee)).status).toBe("joined");
+      expect(await send(second.peer, "kickUser", { userId: "invitee@example.com#i" })).toEqual({ success: true });
+      expect(await invited(firstStore)).toBe(false);
+      expect((await secondStore.read(decision))?.at).toBeGreaterThan(earlierStamp!);
+    } finally {
+      await firstStore.close();
+      await secondStore.close();
       rmSync(dir, { recursive: true, force: true });
     }
   });
