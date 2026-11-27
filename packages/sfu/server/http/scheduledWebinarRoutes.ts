@@ -2,7 +2,7 @@ import type { Express, Request, Response } from "express";
 import type { Server as SocketIOServer } from "socket.io";
 import { Logger } from "../../utilities/loggers.js";
 import { secretsMatch } from "../secret.js";
-import { ensureWebinarRoomConfig, notifyRoomConfig, removeScheduledWebinarFromRoom } from "../scheduledWebinarScheduler.js";
+import { notifyRoomConfig, refreshWebinarRoomConfig } from "../scheduledWebinarScheduler.js";
 import { getRoomChannelId } from "../rooms.js";
 import {
   buildCoHostInviteLink,
@@ -175,7 +175,7 @@ export const registerScheduledWebinarRoutes = (
     }
     const { webinar } = result.value;
     if (status === "live" || state.webinarConfigs.has(getRoomChannelId(webinar.clientId, webinar.roomId))) {
-      ensureWebinarRoomConfig(state, webinar, result.rev, notices);
+      await refreshWebinarRoomConfig(state, webinar, notices);
     }
     res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
   };
@@ -221,7 +221,7 @@ export const registerScheduledWebinarRoutes = (
         return;
       }
       const { webinar } = result.value;
-      ensureWebinarRoomConfig(state, webinar, result.rev, notices);
+      await refreshWebinarRoomConfig(state, webinar, notices);
       Logger.info(`Scheduled webinar created ${webinar.id} (${webinar.linkSlug}) by ${user.email}`);
       res.status(201).json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
     }),
@@ -299,7 +299,7 @@ export const registerScheduledWebinarRoutes = (
         return;
       }
       const { webinar } = result.value;
-      ensureWebinarRoomConfig(state, webinar, result.rev, notices);
+      await refreshWebinarRoomConfig(state, webinar, notices);
       res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
     }),
   );
@@ -316,7 +316,7 @@ export const registerScheduledWebinarRoutes = (
         return;
       }
       const webinar = result.value;
-      removeScheduledWebinarFromRoom(state, webinar, result.rev, notices);
+      await refreshWebinarRoomConfig(state, webinar, notices);
       res.json({ success: true, id: webinar.id });
     }),
   );
@@ -390,8 +390,8 @@ export const registerScheduledWebinarRoutes = (
         sendFailure(res, result);
         return;
       }
-      const { webinar, unchangedRev } = result.value;
-      ensureWebinarRoomConfig(state, webinar, unchangedRev ?? result.rev, notices);
+      const { webinar } = result.value;
+      await refreshWebinarRoomConfig(state, webinar, notices);
       res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
     }),
   );

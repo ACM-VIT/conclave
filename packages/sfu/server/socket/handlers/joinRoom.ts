@@ -71,8 +71,8 @@ import {
 } from "../../controlPlane/webinarCommands.js";
 import {
   deferWebinarRoomNotice,
-  ensureWebinarRoomConfig,
   notifyRoomConfig,
+  readWebinarScheduleForJoin,
   takeDeferredWebinarRoomNotice,
 } from "../../scheduledWebinarScheduler.js";
 import { bookingInvites } from "../../controlPlane/inviteeCommands.js";
@@ -369,10 +369,16 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           typeof resolveScheduledWebinarAttendeeEntry
         >["webinar"] = null;
         if (isWebinarAttendeeJoin) {
-          const schedule = await state.controlPlane.read(webinarScheduleBySlug(requestedRoomId));
-          const scheduledEntry = resolveScheduledWebinarAttendeeEntry(
-            schedule?.value ?? null,
-            clientId,
+          const scheduledEntry = await readWebinarScheduleForJoin(
+            state, webinarScheduleBySlug(requestedRoomId), deferWebinarNotice,
+            (schedule) => {
+              const result = resolveScheduledWebinarAttendeeEntry(schedule?.value ?? null, clientId);
+              return {
+                result,
+                publish: !overtaken() && socket.connected && result.kind === "open" &&
+                  resolveWebinarLinkTarget(state.webinarLinks, requestedRoomId, clientId)?.roomId !== result.webinar?.roomId,
+              };
+            },
           );
           if (overtaken() || !socket.connected) return;
           if (scheduledEntry.kind === "closed") {
@@ -389,9 +395,6 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             // A scheduled webinar's link always leads to its own room. Another
             // room that bound the same code (before the scheduler did, e.g.
             // after a restart) must not receive the webinar's audience.
-            if (schedule && webinarTarget?.roomId !== scheduledWebinarForAttendee.roomId) {
-              ensureWebinarRoomConfig(state, scheduledWebinarForAttendee, schedule.rev, deferWebinarNotice);
-            }
             webinarTarget = {
               roomChannelId: getRoomChannelId(
                 scheduledWebinarForAttendee.clientId,
@@ -410,18 +413,15 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
 
         let scheduledWebinarForRoom: ScheduledWebinar | null = null;
         if (!isWebinarAttendeeJoin) {
-          const schedule = await state.controlPlane.read(
-            webinarScheduleForRoom(clientId, roomId),
+          scheduledWebinarForRoom = await readWebinarScheduleForJoin(
+            state, webinarScheduleForRoom(clientId, roomId), deferWebinarNotice,
+            (schedule) => ({
+              result: schedule?.value ?? null,
+              publish: !overtaken() && socket.connected && schedule !== null &&
+                schedule.value.status !== "ended" && schedule.value.status !== "cancelled",
+            }),
           );
           if (overtaken() || !socket.connected) return;
-          scheduledWebinarForRoom = schedule?.value ?? null;
-          if (
-            schedule &&
-            schedule.value.status !== "ended" &&
-            schedule.value.status !== "cancelled"
-          ) {
-            ensureWebinarRoomConfig(state, schedule.value, schedule.rev, deferWebinarNotice);
-          }
         }
 
         if (!socket.connected) return;

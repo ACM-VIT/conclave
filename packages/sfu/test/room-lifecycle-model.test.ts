@@ -30,7 +30,7 @@ import { registerDisconnectHandlers } from "../server/socket/handlers/disconnect
 import { registerJoinRoomHandler } from "../server/socket/handlers/joinRoom.js";
 import { forceDrainRooms, handOffRooms } from "../server/serverShutdown.js";
 import { advanceWebinars, createWebinar, webinarScheduleBySlug } from "../server/controlPlane/webinarCommands.js";
-import { ensureWebinarRoomConfig } from "../server/scheduledWebinarScheduler.js";
+import { seedRoomConfig } from "./fixtures/webinar-room.js";
 import { createSfuState, type SfuState } from "../server/state.js";
 import { Logger } from "../utilities/loggers.js";
 
@@ -535,7 +535,7 @@ const boot = async (world: World): Promise<Sfu> => {
 const scheduleWebinar = async (state: SfuState, gate: WebinarGate): Promise<void> => {
   const existing = await state.controlPlane.read(webinarScheduleBySlug(WEBINAR_SLUG));
   if (existing) {
-    const roomConfig = ensureWebinarRoomConfig(state, existing.value, existing.rev, () => undefined);
+    const roomConfig = await seedRoomConfig(state, existing.value);
     if (gate === "locked") roomConfig.locked = true;
     if (gate === "full") roomConfig.maxAttendees = 0;
     return;
@@ -555,7 +555,7 @@ const scheduleWebinar = async (state: SfuState, gate: WebinarGate): Promise<void
   await state.controlPlane.commit(advanceWebinars);
   const scheduled = await state.controlPlane.read(webinarScheduleBySlug(WEBINAR_SLUG));
   if (!scheduled) throw Error("Model webinar was not scheduled");
-  const roomConfig = ensureWebinarRoomConfig(state, scheduled.value, scheduled.rev, () => undefined);
+  const roomConfig = await seedRoomConfig(state, scheduled.value);
   if (gate === "locked") roomConfig.locked = true;
   if (gate === "full") roomConfig.maxAttendees = 0;
 };

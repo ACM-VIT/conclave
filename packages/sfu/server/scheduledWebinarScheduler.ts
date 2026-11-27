@@ -4,7 +4,8 @@ import { notifyAuthorityPolicy } from "./apps/authority/index.js";
 import { getRoomChannelId } from "./rooms.js";
 import type { ScheduledWebinar } from "../types.js";
 import { isWithinEarlyEntryWindow } from "./scheduledWebinars.js";
-import { advanceWebinars, openWebinars, webinarsByIds } from "./controlPlane/webinarCommands.js";
+import { advanceWebinars, openWebinars, webinarsByIds, type WebinarSchedule } from "./controlPlane/webinarCommands.js";
+import type { Query } from "./controlPlane/tx.js";
 import type { SfuState } from "./state.js";
 import { emitWebinarAttendeeCountChanged, emitWebinarConfigChanged } from "./webinarNotifications.js";
 import {
@@ -179,53 +180,79 @@ export const notifyRoomConfig =
 const settingsOf = (config: WebinarRoomConfig | undefined): string =>
   config ? JSON.stringify({ ...config, forcedHostEmails: [...config.forcedHostEmails].sort() }) : "";
 
+const channelOf = (webinar: Pick<ScheduledWebinar, "clientId" | "roomId">): string =>
+  getRoomChannelId(webinar.clientId, webinar.roomId);
+
 const settleWebinarRoom = (
   state: SfuState,
   channelId: string,
   update: { id: string; rev: number; value: ScheduledWebinar | null },
   notify: WebinarConfigNotify,
-): WebinarRoomConfig => {
+): void => {
   const current = state.webinarConfigs.get(channelId);
   const { id, rev, value } = update;
-  if (current && (
-    rev < (appliedSchedule.get(current)?.rev ?? -1) ||
-    (!value && current.scheduledWebinarId !== null && current.scheduledWebinarId !== id)
-  )) return current;
+  if (value ? channelOf(value) !== channelId : current?.scheduledWebinarId !== id) return;
+  if (current && rev < (appliedSchedule.get(current)?.rev ?? -1)) return;
   const before = settingsOf(current);
   const config = current ?? getOrCreateWebinarRoomConfig(state.webinarConfigs, channelId);
   if (value) {
     applyScheduledWebinarToConfig(state, channelId, config, value, rev);
   } else {
-    if (config.scheduledWebinarId === id) releaseRemovedSchedule(state, channelId, config);
+    releaseRemovedSchedule(state, channelId, config);
     appliedSchedule.set(config, { rev, controls: null });
   }
   const changed = settingsOf(config) !== before;
   if (changed) notifyAuthorityPolicy(state, channelId);
   const deferred = takeDeferredWebinarRoomNotice(state, channelId);
   if (changed || deferred) notify(channelId);
-  return config;
 };
 
-export const ensureWebinarRoomConfig = (
+const readForPublication = async <T, R>(
   state: SfuState,
-  webinar: ScheduledWebinar,
-  rev: number,
-  notify: WebinarConfigNotify,
-): WebinarRoomConfig =>
-  settleWebinarRoom(
-    state, getRoomChannelId(webinar.clientId, webinar.roomId), { id: webinar.id, rev, value: webinar }, notify,
-  );
-
-export const removeScheduledWebinarFromRoom = (
-  state: SfuState,
-  webinar: ScheduledWebinar,
-  rev: number,
-  notify: WebinarConfigNotify,
-): void => {
-  settleWebinarRoom(
-    state, getRoomChannelId(webinar.clientId, webinar.roomId), { id: webinar.id, rev, value: null }, notify,
-  );
+  query: Query<T>,
+  publish: (result: T) => R,
+): Promise<R> => {
+  while (true) {
+    const removalEpoch = state.webinarRemovalEpoch;
+    const result = await state.controlPlane.read(query);
+    // A tombstone may have no room config to retain its revision across this read.
+    if (removalEpoch === state.webinarRemovalEpoch) return publish(result);
+  }
 };
+
+export const readWebinarScheduleForJoin = <T>(
+  state: SfuState,
+  query: Query<WebinarSchedule | null>,
+  notify: WebinarConfigNotify,
+  use: (schedule: WebinarSchedule | null) => { result: T; publish: boolean },
+): Promise<T> =>
+  readForPublication(state, query, (schedule) => {
+    const { result, publish } = use(schedule);
+    if (schedule && publish) {
+      settleWebinarRoom(state, channelOf(schedule.value), { id: schedule.value.id, ...schedule }, notify);
+    }
+    return result;
+  });
+
+const reconcileWebinarRooms = (
+  state: SfuState,
+  roomsByWebinar: ReadonlyMap<string, string>,
+  notify: WebinarConfigNotify,
+): Promise<void> =>
+  readForPublication(state, webinarsByIds([...roomsByWebinar.keys()]), (records) => {
+    for (const [id, channelId] of roomsByWebinar) {
+      const record = records.get(id);
+      if (!record) continue;
+      if (record.value === null) state.webinarRemovalEpoch += 1;
+      settleWebinarRoom(state, channelId, { id, ...record }, notify);
+    }
+  });
+
+export const refreshWebinarRoomConfig = (
+  state: SfuState,
+  webinar: Pick<ScheduledWebinar, "id" | "clientId" | "roomId">,
+  notify: WebinarConfigNotify,
+): Promise<void> => reconcileWebinarRooms(state, new Map([[webinar.id, channelOf(webinar)]]), notify);
 
 export const advanceScheduledWebinars = async (
   state: SfuState,
@@ -234,26 +261,23 @@ export const advanceScheduledWebinars = async (
 ): Promise<ScheduledWebinar[]> => {
   const advanced = await state.controlPlane.commit(advanceWebinars);
   const changed = advanced.ok ? advanced.value : [];
-  if (advanced.ok) {
-    for (const webinar of changed) {
-      const channelId = getRoomChannelId(webinar.clientId, webinar.roomId);
-      if (webinar.status === "live" || state.webinarConfigs.has(channelId)) {
-        ensureWebinarRoomConfig(state, webinar, advanced.rev, notify);
-      }
+  const roomsByWebinar = new Map<string, string>();
+  for (const webinar of changed) {
+    const channelId = channelOf(webinar);
+    if (webinar.status === "live" || state.webinarConfigs.has(channelId)) {
+      roomsByWebinar.set(webinar.id, channelId);
     }
   }
-  for (const { value: webinar, rev } of await state.controlPlane.read(openWebinars)) {
+  for (const { value: webinar } of await state.controlPlane.read(openWebinars)) {
     if (webinar.status === "scheduled" && isWithinEarlyEntryWindow(webinar, now)) {
-      ensureWebinarRoomConfig(state, webinar, rev, notify);
+      roomsByWebinar.set(webinar.id, channelOf(webinar));
     }
   }
-  const hosted = [...state.webinarConfigs].flatMap(([channelId, { scheduledWebinarId: id }]) =>
-    id ? [{ channelId, id }] : [],
-  );
-  const stored = await state.controlPlane.read(webinarsByIds(hosted.map(({ id }) => id)));
-  for (const { channelId, id } of hosted) {
-    const record = stored.get(id);
-    if (record) settleWebinarRoom(state, channelId, { id, ...record }, notify);
+  for (const [channelId, { scheduledWebinarId: id }] of state.webinarConfigs) {
+    if (id && !roomsByWebinar.has(id)) roomsByWebinar.set(id, channelId);
+  }
+  if (roomsByWebinar.size > 0) {
+    await reconcileWebinarRooms(state, roomsByWebinar, notify);
   }
   return changed;
 };

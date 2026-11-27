@@ -242,6 +242,7 @@ describe("a sender's slot", () => {
     const finished: { outcome: WriteOutcome; at: number }[] = [];
     const write = (update: Uint8Array) => [{
       sender,
+      seat: sender,
       appId: BOARD,
       key,
       host: false,
@@ -366,6 +367,21 @@ describe("a sender's slot", () => {
 });
 
 describe("the update budget", () => {
+  it("keeps a returning legacy seat's edits separate from its departed seat's held edits", () => {
+    const { connect, room } = presentedBoard();
+    const writer = connect("writer#1", { legacy: true });
+    writer.sync();
+    writer.write(UPDATE_BURST);
+    const [departed] = writer.write(1);
+
+    writer.rejoinSeat();
+    const [current] = writer.write(1);
+    advance(1000);
+
+    expect(boardHas(room, departed)).toBe(false);
+    expect(boardHas(room, current)).toBe(true);
+  });
+
   it("delivers held edits to a named replacement copy that synced before they landed", () => {
     const { connect, room } = presentedBoard();
     const writer = connect("writer#1");
@@ -860,6 +876,7 @@ describe("what a payload costs before it is paid for", () => {
     let heldBytes = 0;
     const write = (payload: unknown, held: boolean) => [{
       sender,
+      seat: sender,
       appId: BOARD,
       key: "copy-1",
       host: false,
@@ -913,7 +930,7 @@ describe("what a payload costs before it is paid for", () => {
     const scheduler = new RoomAppsScheduler();
     const sender = {} as Socket;
     const finish = vi.fn();
-    const work = (): SlotWrite => ({ sender, appId: BOARD, key: "copy-1", host: false, run: (updates) => updates.map(() => null), finish });
+    const work = (): SlotWrite => ({ sender, seat: sender, appId: BOARD, key: "copy-1", host: false, run: (updates) => updates.map(() => null), finish });
     for (let index = 0; index < UPDATE_BURST; index += 1) scheduler.submit(work(), wireBytes(EMPTY_UPDATE)!);
     finish.mockClear();
     const read = vi.fn(() => null);

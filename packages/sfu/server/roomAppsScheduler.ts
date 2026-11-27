@@ -21,6 +21,7 @@ export type WireBatch = { readonly length: number; readonly readBatch: () => Uin
 
 export type SlotWrite = {
   readonly sender: Socket;
+  readonly seat: object;
   readonly appId: string;
   readonly key: string;
   readonly host: boolean;
@@ -102,6 +103,12 @@ export class RoomAppsScheduler {
       this.finish(write, "not-live");
       return;
     }
+    let slot = this.slots.get(write.sender);
+    if (slot && slot.first.seat !== write.seat) {
+      this.slots.delete(write.sender);
+      this.finishSlot(slot, "not-live");
+      slot = undefined;
+    }
     if (write.direct) {
       if (!takeToken(write.sender, UPDATE_BUDGET, RATE_LIMITS.appsYjsUpdate)) {
         this.finish(write, "rate-limited");
@@ -111,7 +118,6 @@ export class RoomAppsScheduler {
       if (updates) this.execute(write, [{ work: write, updates }]);
       return;
     }
-    const slot = this.slots.get(write.sender);
     if (!slot && !this.job && takeToken(write.sender, UPDATE_BUDGET, RATE_LIMITS.appsYjsUpdate)) {
       const updates = this.read(write, wire);
       if (updates) this.execute(write, [{ work: write, updates }]);

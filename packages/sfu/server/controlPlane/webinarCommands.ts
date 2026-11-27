@@ -191,7 +191,7 @@ export const acceptWebinarCoHostInvite =
   (
     tokenHash: string,
     user: { email: string; name?: string | null },
-  ): Command<{ webinar: ScheduledWebinar; unchangedRev: number | null }> =>
+  ): Command<{ webinar: ScheduledWebinar }> =>
   (tx) => {
     const email = normalizeHostEmail(user.email);
     if (!email || !email.includes("@")) {
@@ -200,9 +200,9 @@ export const acceptWebinarCoHostInvite =
     const current = tx.lookup("webinar", "cohostToken", uniqueKeys.cohostToken(tokenHash));
     if (!current) return fail("invalid", "Invalid or expired co-host invite.");
     const next = acceptCoHostInvite(current.value, user, tx.now);
-    if (!next) return done({ webinar: served(current.value), unchangedRev: current.rev });
+    if (!next) return done({ webinar: served(current.value) });
     tx.put("webinar", next);
-    return done({ webinar: served(next), unchangedRev: null });
+    return done({ webinar: served(next) });
   };
 
 export const recordWebinarJoin =

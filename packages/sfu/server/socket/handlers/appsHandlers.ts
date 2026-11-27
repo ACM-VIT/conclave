@@ -53,6 +53,7 @@ type Admission = {
   readonly socketId: string;
   readonly userId: string;
   readonly participant: string;
+  readonly seat: Client;
   readonly role: () => AppSeatRole;
   readonly appId: string;
   readonly replicaId: string | undefined;
@@ -309,7 +310,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     Logger.warn(`[Apps] Dropping update for ${admission.appId} from ${admission.userId}: ${reason}${unlogged}`);
   };
   const refuse = (admission: Admission, reason: WriteRefusal): void => {
-    if (!inScope(admission.apps) || !scope) return;
+    if (!inScope(admission.apps) || !scope || admission.role() === "absent") return;
     logRefusal(admission, reason);
     if (admission.replicaId) signalRefused(scope, admission.appId, admission.replicaId, reason);
     else if (reason !== "not-live") restartCopy(admission);
@@ -345,6 +346,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     const { apps, appId, role, participant, replicaId, socketId } = admission;
     return {
       sender: socket,
+      seat: admission.seat,
       appId,
       key: JSON.stringify([appId, mark.generation, replicaId, role()]),
       get host() { return role() === "host"; },
@@ -738,6 +740,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       socketId: socket.id,
       userId: client.id,
       participant: apps.participantFor(client.id),
+      seat: client,
       role: roleFor(room, client),
       appId,
       replicaId: normalizeReplicaId(data?.replicaId),
@@ -836,7 +839,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     }
     const change = staged;
     if (
-      !change || change.admission.apps !== apps || change.admission.appId !== appId ||
+      !change || change.admission.seat !== client || change.admission.apps !== apps || change.admission.appId !== appId ||
       change.admission.replicaId !== admission.replicaId || change.revision !== revision ||
       change.id !== part.id || change.count !== part.count || change.parts.length !== part.index
     ) return reject("interrupted");

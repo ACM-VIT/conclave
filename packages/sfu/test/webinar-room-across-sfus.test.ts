@@ -1,6 +1,7 @@
 import { createServer, type Server } from "node:http";
 import type { Server as SocketIOServer } from "socket.io";
-import type { Room } from "../config/classes/Room.js";
+import type { Router } from "mediasoup/types";
+import { Room } from "../config/classes/Room.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { config } from "../config/config.js";
 import { createMemoryBackend, createMemoryData, type MemoryData } from "../server/controlPlane/backends/memory.js";
@@ -10,12 +11,11 @@ import {
   deleteWebinar,
   recordWebinarJoin,
   updateWebinar,
-  webinarScheduleBySlug,
 } from "../server/controlPlane/webinarCommands.js";
 import { createSfuApp } from "../server/http/createApp.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
-import { getRoomChannelId } from "../server/rooms.js";
-import { advanceScheduledWebinars, ensureWebinarRoomConfig, notifyRoomConfig } from "../server/scheduledWebinarScheduler.js";
+import { cleanupRoom, getRoomChannelId } from "../server/rooms.js";
+import { advanceScheduledWebinars, notifyRoomConfig, refreshWebinarRoomConfig } from "../server/scheduledWebinarScheduler.js";
 import { createSfuState, type SfuState } from "../server/state.js";
 import {
   clearWebinarLinkSlug,
@@ -25,6 +25,7 @@ import {
   setCustomWebinarLinkSlug,
 } from "../server/webinar.js";
 import type { ScheduledWebinar } from "../types.js";
+import { readRoomConfig as roomConfig, seedRoomConfig } from "./fixtures/webinar-room.js";
 
 const policySink = vi.hoisted(() => ({ current: null as Array<{ event: string; payload: string }> | null }));
 
@@ -51,15 +52,6 @@ const created = async (sfu: SfuState, request: Record<string, unknown>): Promise
   if (!result.ok) throw new Error(result.message);
   return result.value.webinar;
 };
-
-const seedRoomConfig = async (sfu: SfuState, webinar: ScheduledWebinar) => {
-  const stored = await sfu.controlPlane.read(webinarScheduleBySlug(webinar.linkSlug));
-  if (!stored) throw new Error("Webinar fixture was not persisted");
-  return ensureWebinarRoomConfig(sfu, stored.value, stored.rev, () => {});
-};
-
-const roomConfig = (sfu: SfuState, webinar: ScheduledWebinar) =>
-  sfu.webinarConfigs.get(getRoomChannelId(webinar.clientId, webinar.roomId));
 
 const servers: Server[] = [];
 afterEach(async () => {
@@ -110,6 +102,23 @@ describe("a scheduled webinar's room on the SFU that hosts it", () => {
     await other.controlPlane.commit(updateWebinar(webinar.id, { maxAttendees: 250, qaEnabled: false }, admin));
     await advanceScheduledWebinars(hosting, Date.now(), () => {});
     expect(roomConfig(hosting, webinar)).toMatchObject({ maxAttendees: 250, qaEnabled: false });
+  });
+
+  it("only publishes the persisted schedule in its own tenant and room", async () => {
+    const state = sfuOn(createMemoryData(), "scoped-publication");
+    const webinar = await created(state, { linkSlug: "scoped-link" });
+    const wrongTenant = { ...webinar, clientId: "other-tenant" };
+    const wrongRoom = { ...webinar, roomId: "other-room" };
+    const notify = vi.fn();
+    await refreshWebinarRoomConfig(state, wrongTenant, notify);
+    await refreshWebinarRoomConfig(state, wrongRoom, notify);
+    expect(notify).not.toHaveBeenCalled();
+    expect(state.webinarConfigs.size).toBe(0);
+    expect(state.webinarLinks.has(webinar.linkSlug)).toBe(false);
+
+    await refreshWebinarRoomConfig(state, webinar, notify);
+    expect(roomConfig(state, webinar)?.scheduledWebinarId).toBe(webinar.id);
+    expect(notify).toHaveBeenCalledExactlyOnceWith(getRoomChannelId(webinar.clientId, webinar.roomId));
   });
 });
 
@@ -275,13 +284,17 @@ const apiOn = async (state: SfuState, io: SocketIOServer | null): Promise<Call> 
   };
 };
 
-it.each(["newer edit", "deletion"] as const)("keeps the effect of a %s when an earlier update replies late", async (change) => {
+it.each([
+  { change: "newer edit", room: "present", delay: "commit" },
+  { change: "deletion", room: "present", delay: "commit" },
+  { change: "deletion", room: "torn down", delay: "commit" },
+  { change: "deletion", room: "torn down", delay: "read" },
+  { change: "deletion", room: "never seeded", delay: "read" },
+] as const)("keeps the effect of $change after a delayed $delay (room $room)", async ({ change, room, delay }) => {
   const state = sfuOn(createMemoryData(), "deferred-webinar");
   const call = await apiOn(state, null);
-  const { scheduledWebinar: webinar } = (await call("POST", "/scheduled-webinars", {
-    title: "Launch",
-    scheduledStartAt: Date.now() - 60_000,
-  })) as { scheduledWebinar: ScheduledWebinar };
+  const webinar = await created(state, {});
+  if (room !== "never seeded") await seedRoomConfig(state, webinar);
   const path = `/scheduled-webinars/${webinar.id}`;
   let didRecord = () => {};
   let resume = () => {};
@@ -289,15 +302,22 @@ it.each(["newer edit", "deletion"] as const)("keeps the effect of a %s when an e
   const deferred = new Promise<void>((resolve) => { resume = resolve; });
   const original = state.controlPlane;
   let hold = true;
+  const holdOnce = async () => {
+    if (!hold) return;
+    hold = false;
+    didRecord();
+    await deferred;
+  };
   state.controlPlane = {
     ...original,
     commit: async (command) => {
       const result = await original.commit(command);
-      if (hold) {
-        hold = false;
-        didRecord();
-        await deferred;
-      }
+      if (delay === "commit") await holdOnce();
+      return result;
+    },
+    read: async (query) => {
+      const result = await original.read(query);
+      if (delay === "read") await holdOnce();
       return result;
     },
   };
@@ -305,15 +325,31 @@ it.each(["newer edit", "deletion"] as const)("keeps the effect of a %s when an e
   const earlier = call("PATCH", path, { publicAccess: true, linkSlug: "earlier-code" });
   await recorded;
   try {
-    if (change === "deletion") await call("DELETE", path);
-    else await call("PATCH", path, { publicAccess: false, linkSlug: "latest-code", inviteCode: "New-pass-42" });
+    if (change === "newer edit") {
+      await call("PATCH", path, { publicAccess: false, linkSlug: "latest-code", inviteCode: "New-pass-42" });
+    } else {
+      await call("DELETE", path);
+      if (room === "torn down") {
+        const liveRoom = new Room({
+          id: webinar.roomId,
+          clientId: webinar.clientId,
+          workerPid: null,
+          router: { close: () => {} } as Router,
+        });
+        state.rooms.set(liveRoom.channelId, liveRoom);
+        expect(cleanupRoom(state, liveRoom)).toBe(true);
+        expect(roomConfig(state, webinar)).toBeUndefined();
+      }
+    }
   } finally {
     resume();
     await earlier;
   }
 
   expect(state.webinarLinks.has("earlier-code")).toBe(false);
-  if (change === "deletion") {
+  if (room !== "present") {
+    expect(roomConfig(state, webinar)).toBeUndefined();
+  } else if (change === "deletion") {
     expect(roomConfig(state, webinar)).toMatchObject({ enabled: false, scheduledWebinarId: null });
   } else {
     expect(roomConfig(state, webinar)).toMatchObject({
