@@ -95,3 +95,46 @@ it("renders Transcript when switching directly from a failed Chat panel", async 
     vi.unstubAllGlobals();
   }
 });
+
+it("tells its owner when the panel fails, once, so a camera preview never outlives it", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const container = document.createElement("div");
+  const root = createRoot(container, { onCaughtError: () => {} });
+  const failed = vi.fn();
+  let crash: (() => void) | null = null;
+
+  function PreviewPanel() {
+    const [broken, setBroken] = useState(false);
+    crash = () => setBroken(true);
+    if (broken) throw new Error("Effects panel crashed");
+    return <p>Camera preview</p>;
+  }
+
+  try {
+    await act(async () =>
+      root.render(
+        <MeetingPanelBoundary name="Backgrounds and effects" onFailed={failed}>
+          <PreviewPanel />
+        </MeetingPanelBoundary>,
+      ),
+    );
+    expect(container.textContent).toContain("Camera preview");
+    expect(failed).not.toHaveBeenCalled();
+
+    await act(async () => crash?.());
+    expect(container.querySelector('[role="alert"]')).not.toBeNull();
+    expect(failed).toHaveBeenCalledTimes(1);
+
+    await act(async () =>
+      root.render(
+        <MeetingPanelBoundary name="Backgrounds and effects" onFailed={failed}>
+          <PreviewPanel />
+        </MeetingPanelBoundary>,
+      ),
+    );
+    expect(failed).toHaveBeenCalledTimes(1);
+  } finally {
+    await act(async () => root.unmount());
+    vi.unstubAllGlobals();
+  }
+});

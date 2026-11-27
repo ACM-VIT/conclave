@@ -304,6 +304,18 @@ describe("computeGridLayout — mixed tile aspects", () => {
 });
 
 describe("computeGridLayout — mixed rows line up", () => {
+  it("shrinks the widest row to the shared width when that is closer", () => {
+    const r = computeGridLayout(2, 400, 212, {
+      maxCols: 1,
+      gap: 12,
+      tileAspects: [1.5, 1],
+    });
+
+    expect(r.rows).toBe(2);
+    expect(r.positions.map((tile) => tile.height)).toEqual([100, 100]);
+    expect(r.positions.map((tile) => tile.width)).toEqual([125, 125]);
+  });
+
   it("lines up 2 portrait and 3 landscape tiles, growing landscape tiles first", () => {
     const aspects = [PORTRAIT, LANDSCAPE, PORTRAIT, LANDSCAPE, LANDSCAPE];
     const r = computeGridLayout(5, 1416, 780, { tileAspects: aspects });
