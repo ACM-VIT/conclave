@@ -1350,4 +1350,210 @@ class LocalVideoTeardownTests {
             settle()
         }
     }
+
+    private val routerCapabilities = "{\"codecs\":[],\"headerExtensions\":[]}"
+
+    private fun reconfigurable(media: WebRTCClient) {
+        field("mediasoupInitialized").setBoolean(media, true)
+        field("mediaStackLock").set(media, Any())
+        field("transportConnectScope").set(media, CoroutineScope(Dispatchers.Main.immediate + SupervisorJob()))
+        media.deviceLoader = { _ -> throw IllegalStateException("these tests load no Device") }
+    }
+
+    private fun configure(media: WebRTCClient, capabilities: String? = null) {
+        val socket = unsafe.allocateInstance(SocketIOManager::class.java) as SocketIOManager
+        SocketIOManager::class.java.getDeclaredField("routerRtpCapabilitiesJson").apply { isAccessible = true }.set(socket, capabilities)
+        media.configure(socket, unsafe.allocateInstance(RtpCapabilities::class.java) as RtpCapabilities, null)
+    }
+
+    private fun joinWhileThePreviousCallsLaneIsBusy(media: WebRTCClient): CountDownLatch {
+        val busy = CountDownLatch(1)
+        val previous = SendTransportLane("PreviousCallLane")
+        previous.post { busy.await(10, TimeUnit.SECONDS) }
+        @Suppress("UNCHECKED_CAST")
+        (field("retiredTransports").get(media) as RetiredTransportReaper<Any>).retireAfter(previous, Any()) {}
+        field("sendTransport").set(media, null)
+        field("sendTransportId").set(media, null)
+        configure(media, routerCapabilities)
+        return busy
+    }
+
+    @Test
+    fun aShareStartedWhileTheDeviceLoadWaitsIsReleasedWhenARecoveryReconfigures() {
+        val (media, _) = joinedCall()
+        readyToStart(media, CopyOnWriteArrayList())
+        reconfigurable(media)
+        val previousLane = joinWhileThePreviousCallsLaneIsBusy(media)
+        val serviceCommands = CopyOnWriteArrayList<String?>()
+        try {
+            assertFalse("the Device loaded while the previous call's lane still ran", media.isConfigured)
+            grantShareConsent()
+            ScreenCaptureManager::class.java.getDeclaredField("host").apply { isAccessible = true }
+                .set(ScreenCaptureManager, ScreenShareServiceHost.none)
+            ScreenCaptureManager.startServiceForTesting = { intent, _ -> serviceCommands.add(intent.action) }
+            val share = scope.async(start = CoroutineStart.UNDISPATCHED) { runCatching { media.startScreenSharing() } }
+            shadowOf(Looper.getMainLooper()).idle()
+            assertFalse("the share went ahead before the Device loaded", share.isCompleted)
+
+            assertFalse("a recovery join cleans up only a configured client", media.isConfigured)
+            configure(media)
+            pumpMainLooperUntil { share.isCompleted }
+            assertNotNull(runBlocking { share.await() }.exceptionOrNull())
+            assertNull("the replaced share kept its consent", ScreenCaptureManager.getCaptureResultIntent())
+            assertEquals("the replaced share kept its capture service", listOf<String?>(ScreenCaptureService.ACTION_STOP), serviceCommands.toList())
+
+            field("sendTransport").set(media, unsafe.allocateInstance(LiveSendTransport::class.java))
+            field("sendTransportId").set(media, "send-1")
+            grantShareConsent()
+            val retry = scope.async(start = CoroutineStart.UNDISPATCHED) { runCatching { media.startScreenSharing() } }
+            advanceMainUntil { retry.isCompleted }
+            assertNull("the next share was refused", runBlocking { retry.await() }.exceptionOrNull())
+        } finally {
+            runBlocking { media.cleanup(notifyLocalState = false, preserveCallAudioRouting = true) }
+            previousLane.countDown()
+            settle()
+        }
+    }
+
+    @Test
+    fun noReconfigureLeavesACaptureThatNothingCanRelease() {
+        val stranded = mutableListOf<String>()
+        for (path in listOf("configure", "cleanup")) {
+            for (state in listOf(
+                "share waiting for its Device",
+                "share waiting for its ack",
+                "camera waiting for its ack",
+                "live share",
+                "live camera",
+            )) {
+                stranded += capturesStrandedBy(path, state)
+            }
+        }
+        assertEquals("a reconfigure left a capture nothing can release", emptyList<String>(), stranded)
+    }
+
+    private fun capturesStrandedBy(path: String, state: String): List<String> {
+        val label = "$path with a $state"
+        val problems = mutableListOf<String>()
+        val (media, _) = joinedCall()
+        val events = CopyOnWriteArrayList<String>()
+        readyToStart(media, events)
+        reconfigurable(media)
+        val projections = CopyOnWriteArrayList<MediaProjection.Callback>()
+        val cameraHandlers = CopyOnWriteArrayList<CameraVideoCapturer.CameraEventsHandler>()
+        media.openScreenCapturer = { _, callback -> FakeCapturer(null, "$label share", events).also { projections.add(callback) } }
+        media.openCameraCapturer = { _, name, handler ->
+            FakeCapturer(null, "$label camera", events, hardware = hardware, cameraId = name).also { cameraHandlers.add(handler) }
+        }
+        val ack = CountDownLatch(1)
+        var previousLane: CountDownLatch? = null
+        fun heldAcks() = (unsafe.allocateInstance(HeldSendTransport::class.java) as HeldSendTransport).also {
+            it.release = ack
+            field("sendTransport").set(media, it)
+        }
+        fun reconfigure() {
+            if (path == "configure") configure(media)
+            else runBlocking { media.cleanup(notifyLocalState = false, preserveCallAudioRouting = true) }
+        }
+        try {
+            when (state) {
+                "share waiting for its Device", "share waiting for its ack" -> {
+                    val held = if (state == "share waiting for its ack") heldAcks() else null
+                    if (held == null) previousLane = joinWhileThePreviousCallsLaneIsBusy(media)
+                    grantShareConsent()
+                    val start = scope.async(start = CoroutineStart.UNDISPATCHED) { runCatching { media.startScreenSharing() } }
+                    if (held != null) advanceMainUntil { held.waiting } else shadowOf(Looper.getMainLooper()).idle()
+                    if (start.isCompleted) problems.add("$label: the share finished before the reconfigure")
+                    reconfigure()
+                    settle()
+                    if (ScreenCaptureManager.getCaptureResultIntent() != null) problems.add("$label: the share kept its consent")
+                    ack.countDown()
+                    advanceMainUntil { start.isCompleted }
+                    if (field("screenCapture").get(media) != null) problems.add("$label: screenCapture stayed set after its start ended")
+                }
+                "camera waiting for its ack" -> {
+                    val held = heldAcks()
+                    val start = scope.async(start = CoroutineStart.UNDISPATCHED) { runCatching { media.startProducingVideo() } }
+                    advanceMainUntil { held.waiting }
+                    reconfigure()
+                    waitUntil { hardware.isAvailable("1") }
+                    if (!hardware.isAvailable("1")) problems.add("$label: the camera stayed open")
+                    ack.countDown()
+                    advanceMainUntil { start.isCompleted }
+                    if (field("cameraCapture").get(media) != null) problems.add("$label: cameraCapture stayed set after its start ended")
+                }
+                "live share" -> {
+                    grantShareConsent()
+                    runBlocking { media.startScreenSharing() }
+                    reconfigure()
+                    settle()
+                    if (path == "configure") {
+                        if (ScreenCaptureManager.getCaptureResultIntent() == null) problems.add("$label: configure stopped a live share")
+                        projections.single().onStop()
+                        settle()
+                        if (ScreenCaptureManager.getCaptureResultIntent() != null) problems.add("$label: the share's own projection stop was ignored")
+                        runBlocking { media.stopScreenSharing() }
+                    }
+                    if (ScreenCaptureManager.getCaptureResultIntent() != null) problems.add("$label: the share's consent was never released")
+                    if (field("screenCapture").get(media) != null) problems.add("$label: screenCapture stayed set")
+                }
+                "live camera" -> {
+                    runBlocking { media.startProducingVideo() }
+                    reconfigure()
+                    if (path == "configure") {
+                        if (hardware.isAvailable("1")) problems.add("$label: configure stopped a live camera")
+                        cameraHandlers.single().onCameraDisconnected()
+                        settle()
+                        if (LocalPreviewController.shared.callCameraInterruption != PreviewInterruption.inUseByAnotherClient) {
+                            problems.add("$label: the camera's own disconnect was ignored")
+                        }
+                        runBlocking { media.closeLocalMedia(kind = "video", type = ProducerType.webcam.rawValue, producerId = null) }
+                    }
+                    waitUntil { hardware.isAvailable("1") }
+                    if (!hardware.isAvailable("1")) problems.add("$label: the camera was never released")
+                    if (field("cameraCapture").get(media) != null) problems.add("$label: cameraCapture stayed set")
+                }
+            }
+        } finally {
+            ack.countDown()
+            runBlocking { media.cleanup(notifyLocalState = false, preserveCallAudioRouting = true) }
+            previousLane?.countDown()
+            waitUntil { hardware.isAvailable("1") }
+            settle()
+            LocalPreviewController.shared.resetCallCamera()
+            shareConsentField().set(ScreenCaptureManager, null)
+        }
+        return problems
+    }
+
+    @Test
+    fun aCameraFlipThatFinishesAcrossAConfigureRecordsTheCameraItReached() {
+        val (media, _) = joinedCall()
+        val events = CopyOnWriteArrayList<String>()
+        val devices = readyToStart(media, events)
+        reconfigurable(media)
+        media.openCameraCapturer = { _, name, _ ->
+            FakeCapturer(null, "camera", events, hardware = hardware, cameraId = name)
+                .apply { reportsTarget = true; holdSwitches = true }
+                .also { devices.cameras.add(it) }
+        }
+        try {
+            runBlocking { media.startProducingVideo() }
+            val camera = devices.cameras.single()
+            val flip = scope.async(start = CoroutineStart.UNDISPATCHED) { runCatching { media.switchCamera() } }
+            assertNotNull("the flip never reached the camera", camera.heldSwitch)
+
+            configure(media)
+            camera.heldSwitch!!.onCameraSwitchDone(false)
+            advanceMainUntil { flip.isCompleted }
+            settle()
+
+            assertEquals(listOf("0"), camera.switchTargets.toList())
+            assertEquals("the live camera reached the rear camera, but the call kept the front", LocalCameraFacing.back, media.currentCameraFacing)
+        } finally {
+            runBlocking { media.cleanup(notifyLocalState = false, preserveCallAudioRouting = true) }
+            waitUntil { hardware.isAvailable("1") && hardware.isAvailable("0") }
+            settle()
+        }
+    }
 }
