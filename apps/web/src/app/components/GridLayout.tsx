@@ -96,6 +96,7 @@ import {
 import { readVideoAspect, resolveTileAspect } from "../lib/tile-video-framing";
 
 interface GridLayoutProps {
+  meetingPath: string | null;
   localStream: MediaStream | null;
   isCameraOff: boolean;
   isMuted: boolean;
@@ -790,6 +791,7 @@ function useFlip(
 }
 
 function GridLayout({
+  meetingPath,
   localStream,
   isCameraOff,
   isMuted,
@@ -2194,15 +2196,16 @@ function GridLayout({
   };
 
   const handleCopyLink = async () => {
-    if (copyTimeoutRef.current) {
-      window.clearTimeout(copyTimeoutRef.current);
-    }
+    if (!meetingPath) return;
     try {
-      await copyToClipboard(window.location.href);
+      if (!(await copyToClipboard(`${window.location.origin}${meetingPath}`))) return;
       setCopyStatus("copied");
     } catch (error) {
       console.error("[Meets] Failed to copy meeting link:", error);
-      setCopyStatus("copied");
+      return;
+    }
+    if (copyTimeoutRef.current) {
+      window.clearTimeout(copyTimeoutRef.current);
     }
     copyTimeoutRef.current = window.setTimeout(() => {
       setCopyStatus("idle");
@@ -2210,10 +2213,8 @@ function GridLayout({
   };
 
   const handleInvite = async () => {
-    if (inviteTimeoutRef.current) {
-      window.clearTimeout(inviteTimeoutRef.current);
-    }
-    const meetingLink = window.location.href;
+    if (!meetingPath) return;
+    const meetingLink = `${window.location.origin}${meetingPath}`;
     try {
       if (navigator.share) {
         await navigator.share({
@@ -2223,11 +2224,14 @@ function GridLayout({
         });
         setInviteStatus("shared");
       } else {
-        await copyToClipboard(meetingLink);
+        if (!(await copyToClipboard(meetingLink))) return;
         setInviteStatus("copied");
       }
     } catch {
       return;
+    }
+    if (inviteTimeoutRef.current) {
+      window.clearTimeout(inviteTimeoutRef.current);
     }
     inviteTimeoutRef.current = window.setTimeout(() => {
       setInviteStatus("idle");
@@ -2677,8 +2681,10 @@ function GridLayout({
               <button
                 type="button"
                 onClick={handleInvite}
+                disabled={!meetingPath}
+                title={meetingPath ? undefined : "No shareable link"}
                 className={
-                  "absolute z-10 flex items-center gap-2 rounded-full border border-[#fafafa]/14 bg-[#18181b]/90 px-3.5 py-2 text-[13px] font-medium text-[#fafafa] backdrop-blur transition-colors hover:bg-[#232327] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F95F4A]/40 " +
+                  "disabled:opacity-50 disabled:cursor-not-allowed absolute z-10 flex items-center gap-2 rounded-full border border-[#fafafa]/14 bg-[#18181b]/90 px-3.5 py-2 text-[13px] font-medium text-[#fafafa] backdrop-blur transition-colors hover:bg-[#232327] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F95F4A]/40 " +
                   (isMobile
                     ? "left-1/2 top-3 -translate-x-1/2"
                     : "bottom-3 left-3")
@@ -2710,7 +2716,9 @@ function GridLayout({
                   <button
                     type="button"
                     onClick={handleInvite}
-                    className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-[#F95F4A] px-3 py-2 text-[13px] font-medium text-white transition-colors hover:bg-[#fa6e5b] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F95F4A]/40"
+                    disabled={!meetingPath}
+                    title={meetingPath ? undefined : "No shareable link"}
+                    className="disabled:opacity-50 disabled:cursor-not-allowed flex flex-1 items-center justify-center gap-2 rounded-lg bg-[#F95F4A] px-3 py-2 text-[13px] font-medium text-white transition-colors hover:bg-[#fa6e5b] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F95F4A]/40"
                   >
                     <UserPlus size={18} strokeWidth={1.75} />
                     {inviteStatus === "shared"
@@ -2722,7 +2730,9 @@ function GridLayout({
                   <button
                     type="button"
                     onClick={handleCopyLink}
-                    className="flex flex-1 items-center justify-center gap-2 rounded-lg border border-[#fafafa]/14 bg-transparent px-3 py-2 text-[13px] font-medium text-[#fafafa]/85 transition-colors hover:bg-white/[0.05] hover:text-[#fafafa] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#fafafa]/20"
+                    disabled={!meetingPath}
+                    title={meetingPath ? undefined : "No shareable link"}
+                    className="disabled:opacity-50 disabled:cursor-not-allowed flex flex-1 items-center justify-center gap-2 rounded-lg border border-[#fafafa]/14 bg-transparent px-3 py-2 text-[13px] font-medium text-[#fafafa]/85 transition-colors hover:bg-white/[0.05] hover:text-[#fafafa] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#fafafa]/20"
                   >
                     <Link2 size={18} strokeWidth={1.75} />
                     {copyStatus === "copied" ? "Copied" : "Copy link"}

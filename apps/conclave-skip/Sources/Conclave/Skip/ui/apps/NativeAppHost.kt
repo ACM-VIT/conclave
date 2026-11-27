@@ -216,7 +216,7 @@ internal fun NativeAppHostMenu(host: AppHostPresenter) {
         AlertDialog(
             onDismissRequest = { confirmClose = false },
             title = { Text(conclaveString("act_close_title", name)) },
-            text = { Text(conclaveString(if (model.appId == "whiteboard") "act_close_board_message" else "act_close_message")) },
+            text = { Text(activitiesCloseMessage(model.closeEffect)) },
             confirmButton = {
                 TextButton(onClick = {
                     confirmClose = false

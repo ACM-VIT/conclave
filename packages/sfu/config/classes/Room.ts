@@ -2,6 +2,7 @@ import { GUEST_SEAT_KEY_PREFIX } from "@conclave/meeting-core/guest-join-claims"
 import { isGuestUserKey } from "../../server/identity.js";
 import { AdmissionLedger, type AdmissionScope } from "./AdmissionLedger.js";
 import { RoomAiCredentials } from "../../server/roomAiCredentials.js";
+import { RoomApps } from "../../server/roomApps.js";
 import { newInviteCodeVersion } from "../../server/inviteCodeVersion.js";
 import type {
   AudioLevelObserver,
@@ -14,13 +15,6 @@ import type {
 } from "mediasoup/types";
 import type { Socket } from "socket.io";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import {
-  Awareness,
-  applyAwarenessUpdate,
-  encodeAwarenessUpdate,
-  removeAwarenessStates,
-} from "y-protocols/awareness";
-import * as Y from "yjs";
 import type {
   ActiveSpeakerChangedNotification,
   ChatMessage,
@@ -63,11 +57,6 @@ export interface RoomOptions {
   workerPid: number | null;
   webcamVp9Enabled?: boolean;
 }
-
-type AppAwarenessRemoval = {
-  appId: string;
-  awarenessUpdate: Uint8Array;
-};
 
 type ProducerIndexEntry = {
   producer: Producer;
@@ -214,22 +203,6 @@ const normalizeInviteCode = (value: unknown): string => {
   return normalized;
 };
 
-const getAwarenessStateUserId = (state: unknown): string | null => {
-  if (!state || typeof state !== "object" || Array.isArray(state)) {
-    return null;
-  }
-  const record = state as { user?: unknown };
-  if (
-    !record.user ||
-    typeof record.user !== "object" ||
-    Array.isArray(record.user)
-  ) {
-    return null;
-  }
-  const user = record.user as { id?: unknown };
-  return typeof user.id === "string" ? user.id : null;
-};
-
 const hashInviteCode = (inviteCode: string): string =>
   createHmac("sha256", config.sfuSecret).update(inviteCode).digest("hex");
 
@@ -356,14 +329,9 @@ export class Room {
   private _participantVideoAllowed: boolean = true;
   private _meetingInviteCodeHash: string | null = null;
   private _meetingInviteCodeVersion = "";
-  public appsState: { activeAppId: string | null; locked: boolean } = {
-    activeAppId: null,
-    locked: false,
-  };
-  private appsDocs: Map<string, Y.Doc> = new Map();
-  private appsAwareness: Map<string, Awareness> = new Map();
-  private appAwarenessClientIdsByUser: Map<string, Map<string, Set<number>>> =
-    new Map();
+  public readonly apps = new RoomApps(
+    (userId) => this.userKeysById.get(userId) ?? userId,
+  );
   // Server-authoritative game runtime (parallel to the collaborative apps
   // relay above). At most one game runs per room. The tick timer is owned here
   // so it is torn down with the room; the handler layer drives broadcasts.
@@ -3280,191 +3248,6 @@ export class Room {
     return null;
   }
 
-  private getOrCreateAwarenessUserMap(appId: string): Map<string, Set<number>> {
-    const existing = this.appAwarenessClientIdsByUser.get(appId);
-    if (existing) return existing;
-    const map = new Map<string, Set<number>>();
-    this.appAwarenessClientIdsByUser.set(appId, map);
-    return map;
-  }
-
-  private trackAwarenessClientForUser(
-    appId: string,
-    userId: string,
-    clientId: number,
-  ): void {
-    const users = this.getOrCreateAwarenessUserMap(appId);
-    const existing = users.get(userId);
-    if (existing) {
-      existing.add(clientId);
-      return;
-    }
-    users.set(userId, new Set([clientId]));
-  }
-
-  private untrackAwarenessClientForUser(
-    appId: string,
-    userId: string,
-    clientId: number,
-  ): void {
-    const users = this.appAwarenessClientIdsByUser.get(appId);
-    if (!users) return;
-    const clientIds = users.get(userId);
-    if (!clientIds) return;
-    clientIds.delete(clientId);
-    if (clientIds.size === 0) {
-      users.delete(userId);
-    }
-    if (users.size === 0) {
-      this.appAwarenessClientIdsByUser.delete(appId);
-    }
-  }
-
-  getOrCreateAppDoc(appId: string): Y.Doc {
-    const existing = this.appsDocs.get(appId);
-    if (existing) return existing;
-    const doc = new Y.Doc();
-    this.appsDocs.set(appId, doc);
-    return doc;
-  }
-
-  getOrCreateAppAwareness(appId: string): Awareness {
-    const existing = this.appsAwareness.get(appId);
-    if (existing) return existing;
-    const awareness = new Awareness(this.getOrCreateAppDoc(appId));
-    this.appsAwareness.set(appId, awareness);
-    return awareness;
-  }
-
-  applyAppAwarenessUpdate(
-    appId: string,
-    awarenessUpdate: Uint8Array,
-    userId?: string,
-    clientId?: number,
-  ): void {
-    const awareness = this.getOrCreateAppAwareness(appId);
-    applyAwarenessUpdate(awareness, awarenessUpdate, userId ?? "socket");
-    if (!userId || typeof clientId !== "number" || !Number.isFinite(clientId)) {
-      return;
-    }
-    if (awareness.getStates().has(clientId)) {
-      this.trackAwarenessClientForUser(appId, userId, clientId);
-      return;
-    }
-    this.untrackAwarenessClientForUser(appId, userId, clientId);
-  }
-
-  encodeAppAwarenessSnapshot(appId: string): Uint8Array | null {
-    const awareness = this.appsAwareness.get(appId);
-    if (!awareness) return null;
-    const clientIds = Array.from(awareness.getStates().keys());
-    if (clientIds.length === 0) return null;
-    return encodeAwarenessUpdate(awareness, clientIds);
-  }
-
-  clearAppAwareness(appId: string): Uint8Array | null {
-    const awareness = this.appsAwareness.get(appId);
-    this.appAwarenessClientIdsByUser.delete(appId);
-    if (!awareness) return null;
-
-    const clientIds = Array.from(awareness.getStates().keys());
-    let removalUpdate: Uint8Array | null = null;
-    if (clientIds.length > 0) {
-      removeAwarenessStates(awareness, clientIds, "app-close");
-      removalUpdate = encodeAwarenessUpdate(awareness, clientIds);
-    }
-
-    try {
-      awareness.destroy();
-    } catch {}
-    this.appsAwareness.delete(appId);
-    return removalUpdate;
-  }
-
-  clearAppState(appId: string): Uint8Array | null {
-    const awarenessUpdate = this.clearAppAwareness(appId);
-    const doc = this.appsDocs.get(appId);
-    if (doc) {
-      try {
-        doc.destroy();
-      } catch {}
-      this.appsDocs.delete(appId);
-    }
-    if (this.appsState.activeAppId === appId) {
-      this.appsState.activeAppId = null;
-      this.appsState.locked = false;
-    }
-    return awarenessUpdate;
-  }
-
-  clearUserAwareness(userId: string): AppAwarenessRemoval[] {
-    const removals: AppAwarenessRemoval[] = [];
-
-    const appIds = new Set<string>([
-      ...this.appsAwareness.keys(),
-      ...this.appAwarenessClientIdsByUser.keys(),
-    ]);
-
-    for (const appId of appIds) {
-      const awareness = this.appsAwareness.get(appId);
-      if (!awareness) {
-        continue;
-      }
-
-      const users = this.appAwarenessClientIdsByUser.get(appId);
-      const trackedClientIds = users?.get(userId);
-      if (users) {
-        users.delete(userId);
-        if (users.size === 0) {
-          this.appAwarenessClientIdsByUser.delete(appId);
-        }
-      }
-
-      const clientIds = new Set<number>(trackedClientIds ?? []);
-      if (clientIds.size === 0) {
-        for (const [clientId, state] of awareness.getStates().entries()) {
-          if (getAwarenessStateUserId(state) === userId) {
-            clientIds.add(clientId);
-          }
-        }
-      }
-
-      const removableClientIds = Array.from(clientIds).filter((id) =>
-        awareness.meta.has(id),
-      );
-      if (removableClientIds.length === 0) {
-        continue;
-      }
-
-      removeAwarenessStates(awareness, removableClientIds, userId);
-      removals.push({
-        appId,
-        awarenessUpdate: encodeAwarenessUpdate(awareness, removableClientIds),
-      });
-    }
-
-    return removals;
-  }
-
-  clearApps(): void {
-    for (const awareness of this.appsAwareness.values()) {
-      try {
-        awareness.destroy();
-      } catch {}
-    }
-    this.appsAwareness.clear();
-    this.appAwarenessClientIdsByUser.clear();
-
-    for (const doc of this.appsDocs.values()) {
-      try {
-        doc.destroy();
-      } catch {}
-    }
-    this.appsDocs.clear();
-    this.appsState.activeAppId = null;
-    this.appsState.locked = false;
-  }
-
   clearGame(): void {
     this.gameGeneration?.controller.abort();
     this.gameGeneration = null;
@@ -3498,7 +3281,7 @@ export class Room {
     this.producerIndex.clear();
     this.webinarAttendeeCount = 0;
     this.meetingParticipantCount = 0;
-    this.clearApps();
+    this.apps.clear();
     this.clearGame();
     for (const expiryTimer of this.chatImageExpiryTimers.values()) {
       clearTimeout(expiryTimer);

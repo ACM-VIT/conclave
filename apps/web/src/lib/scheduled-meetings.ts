@@ -4,10 +4,7 @@ import {
 } from "@/lib/sfu-user-auth";
 import { resolveSfuSecret, resolveSfuUrl } from "@/lib/sfu-admin-auth";
 import { readResponseError } from "@/app/lib/utils";
-import {
-  canonicalizeSfuClientId,
-  CONCLAVE_SFU_CLIENT_ID,
-} from "@/lib/sfu-client-id";
+import type { RoomDestination } from "@/lib/meeting-links";
 
 export interface PublicScheduledMeeting {
   id: string;
@@ -36,14 +33,11 @@ export const readScheduledMeetingError = (
 ): Promise<string> => readResponseError(response);
 
 export const lookupPublicScheduledMeetingByRoomCode = async (
-  clientId: string,
-  roomCode: string,
+  { clientId, roomCode }: RoomDestination,
 ): Promise<PublicScheduledMeeting | null> => {
   try {
-    const resolvedClientId =
-      canonicalizeSfuClientId(clientId) || CONCLAVE_SFU_CLIENT_ID;
     const base = resolveScheduledMeetingsBase();
-    const url = `${base}/public/by-room/${encodeURIComponent(roomCode)}?clientId=${encodeURIComponent(resolvedClientId)}`;
+    const url = `${base}/public/by-room/${encodeURIComponent(roomCode)}?clientId=${encodeURIComponent(clientId)}`;
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -63,14 +57,11 @@ export const lookupPublicScheduledMeetingByRoomCode = async (
 };
 
 export const lookupScheduledMeetingHostEmail = async (
-  clientId: string,
-  roomCode: string,
+  { clientId, roomCode }: RoomDestination,
 ): Promise<string | null> => {
   try {
-    const resolvedClientId =
-      canonicalizeSfuClientId(clientId) || CONCLAVE_SFU_CLIENT_ID;
     const base = resolveScheduledMeetingsBase();
-    const url = `${base}/by-room/${encodeURIComponent(roomCode)}?clientId=${encodeURIComponent(resolvedClientId)}`;
+    const url = `${base}/by-room/${encodeURIComponent(roomCode)}?clientId=${encodeURIComponent(clientId)}`;
     const response = await fetch(url, {
       method: "GET",
       headers: {

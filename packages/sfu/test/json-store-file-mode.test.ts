@@ -16,7 +16,7 @@ const stores = [
     pathVariable: "SCHEDULED_MEETINGS_PATH",
     save: () => createScheduledMeetingPersistence().save([createScheduledMeeting(createScheduledMeetingStore(), { title: "Private", scheduledStartAt: 1_900_000_000_000 }, HOST)]),
     load: () => createScheduledMeetingPersistence().load(),
-    records: (title: string) => [{ ...createScheduledMeeting(createScheduledMeetingStore(), { title, scheduledStartAt: 1_900_000_000_000 }, HOST) }],
+    records: (title: string, updatedAt: number) => [{ ...createScheduledMeeting(createScheduledMeetingStore(), { title, scheduledStartAt: 1_900_000_000_000 }, HOST), id: "meeting", updatedAt }],
   },
   {
     name: "scheduled webinars",
@@ -25,7 +25,7 @@ const stores = [
     pathVariable: "SCHEDULED_WEBINARS_PATH",
     save: () => createScheduledWebinarPersistence().save([createScheduledWebinar(createScheduledWebinarStore(), { title: "Private", scheduledStartAt: 1_900_000_000_000 }, HOST).webinar]),
     load: () => createScheduledWebinarPersistence().load(),
-    records: (title: string) => [createScheduledWebinar(createScheduledWebinarStore(), { title, scheduledStartAt: 1_900_000_000_000, linkSlug: `slug-${title.toLowerCase()}` }, HOST).webinar],
+    records: (title: string, updatedAt: number) => [{ ...createScheduledWebinar(createScheduledWebinarStore(), { title, scheduledStartAt: 1_900_000_000_000, linkSlug: "webinar-slug" }, HOST).webinar, id: "webinar", updatedAt }],
   },
   {
     name: "scheduling records",
@@ -77,9 +77,9 @@ describe.each(stores)("the $name JSON store under umask 022", (store) => {
 
   it("keeps the combined store and the backup of the old one readable only by their owner", async () => {
     mkdirSync(dirname(active()), { recursive: true });
-    writeFileSync(active(), JSON.stringify(store.records("Before")), { mode: 0o644 });
+    writeFileSync(active(), JSON.stringify(store.records("Before", 100)), { mode: 0o644 });
     mkdirSync(dirname(copy()), { recursive: true });
-    writeFileSync(copy(), JSON.stringify(store.records("During")), { mode: 0o600 });
+    writeFileSync(copy(), JSON.stringify(store.records("During", 200)), { mode: 0o600 });
 
     await store.load();
 

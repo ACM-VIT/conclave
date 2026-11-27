@@ -6,6 +6,7 @@ import type { Room, WaitingRequest } from "../../../config/classes/Room.js";
 import { config } from "../../../config/config.js";
 import type {
   AppsAwarenessData,
+  AppsState,
   HandRaisedSnapshot,
   JoinRoomData,
   JoinRoomErrorResponse,
@@ -695,7 +696,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           if (!client) return;
           if (client instanceof Admin && !client.isObserver) replacedHostSeat = true;
 
-          const awarenessRemovals = room.clearUserAwareness(targetUserId);
+          const awarenessRemovals = room.apps.clearUserAwareness(targetUserId);
           for (const removal of awarenessRemovals) {
             io.to(roomChannelId).emit("apps:awareness", {
               appId: removal.appId,
@@ -1207,10 +1208,9 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         });
 
         socket.emit("apps:state", {
-          activeAppId: context.currentRoom.appsState.activeAppId,
-          locked: context.currentRoom.appsState.locked,
+          ...context.currentRoom.apps.snapshot(),
           roomId: context.currentRoom.id,
-        });
+        } satisfies AppsState);
         emitGameSnapshot(socket, context.currentRoom, context.currentClient.id);
 
         const newQuality = context.currentRoom.updateVideoQuality();

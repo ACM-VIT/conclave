@@ -64,11 +64,12 @@ struct AppHostInputs: Equatable {
     let isAttendee: Bool
     let isLocked: Bool
     let isReconnecting: Bool
+    let keepsAppDocuments: Bool
 
     static func make(callSession: Int = 0, appId: String = "", isHost: Bool = false, isAttendee: Bool = false,
-                     isLocked: Bool = false, isReconnecting: Bool = false) -> AppHostInputs {
+                     isLocked: Bool = false, isReconnecting: Bool = false, keepsAppDocuments: Bool = false) -> AppHostInputs {
         return AppHostInputs(callSession: callSession, appId: appId, isHost: isHost, isAttendee: isAttendee,
-                             isLocked: isLocked, isReconnecting: isReconnecting)
+                             isLocked: isLocked, isReconnecting: isReconnecting, keepsAppDocuments: keepsAppDocuments)
     }
 }
 
@@ -81,6 +82,7 @@ struct AppHostModel: Equatable {
     let isLocked: Bool
     let canEdit: Bool
     let canClose: Bool
+    let closeEffect: AppCloseEffect
     let canLock: Bool
     let closePending: Bool
     let lockPending: Bool
@@ -96,7 +98,8 @@ struct AppHostModel: Equatable {
     let wantsWebView: Bool
 
     static let empty = AppHostModel(revision: 0, appId: "", appSessionId: "", phase: AppHostPhase.opening, issue: AppHostIssue.none,
-                                    isLocked: false, canEdit: false, canClose: false, canLock: false, closePending: false,
+                                    isLocked: false, canEdit: false, canClose: false, closeEffect: AppCloseEffect.returnsToMeeting,
+                                    canLock: false, closePending: false,
                                     lockPending: false, tag: AppHostTag.none, bundleVersion: "", editorCount: 0, nameCount: 0,
                                     playback: "none", hasEmbed: false, reloadSerial: 0, wantsWebView: false)
 }
@@ -1652,6 +1655,7 @@ final class AppHostPresenter {
             isLocked: inputs.isLocked,
             canEdit: canEdit,
             canClose: hasApp && inputs.isHost,
+            closeEffect: AppCloseEffect.of(appId: hasApp ? inputs.appId : "", keepsAppDocuments: inputs.keepsAppDocuments),
             canLock: hasApp && inputs.isHost,
             closePending: closePending,
             lockPending: lockPending,
@@ -1671,7 +1675,7 @@ final class AppHostPresenter {
         revision += 1
         model = AppHostModel(revision: revision, appId: next.appId, appSessionId: next.appSessionId, phase: next.phase,
                              issue: next.issue, isLocked: next.isLocked, canEdit: next.canEdit, canClose: next.canClose,
-                             canLock: next.canLock, closePending: next.closePending, lockPending: next.lockPending, tag: next.tag,
+                             closeEffect: next.closeEffect, canLock: next.canLock, closePending: next.closePending, lockPending: next.lockPending, tag: next.tag,
                              bundleVersion: next.bundleVersion, editorCount: next.editorCount, nameCount: next.nameCount,
                              playback: next.playback, hasEmbed: next.hasEmbed, reloadSerial: next.reloadSerial,
                              wantsWebView: next.wantsWebView)
@@ -1700,7 +1704,8 @@ final class AppHostPresenter {
 
     static func sameModel(_ a: AppHostModel, _ b: AppHostModel) -> Bool {
         return a.appId == b.appId && a.appSessionId == b.appSessionId && a.phase == b.phase && a.issue == b.issue
-            && a.isLocked == b.isLocked && a.canEdit == b.canEdit && a.canClose == b.canClose && a.canLock == b.canLock
+            && a.isLocked == b.isLocked && a.canEdit == b.canEdit && a.canClose == b.canClose
+            && a.closeEffect == b.closeEffect && a.canLock == b.canLock
             && a.closePending == b.closePending && a.lockPending == b.lockPending && a.tag == b.tag
             && a.bundleVersion == b.bundleVersion && a.editorCount == b.editorCount && a.nameCount == b.nameCount
             && a.playback == b.playback && a.hasEmbed == b.hasEmbed && a.reloadSerial == b.reloadSerial
