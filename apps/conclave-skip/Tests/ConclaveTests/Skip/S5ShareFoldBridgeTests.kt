@@ -11,6 +11,7 @@ import org.junit.After
 import org.junit.Before
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -196,7 +197,8 @@ class S5ShareFoldBridgeTests {
         ScreenCaptureManager.onProjectionRevoked = { revoked += 1 }
         CallNotificationBridge.startGate.setAppActive(false)
         recorded.clear()
-        val consent = requireNotNull(ScreenCaptureManager.getCaptureResultIntent())
+        val consent = ScreenCaptureManager.currentGrantForTesting()
+        assertNotEquals(0, consent)
         ScreenCaptureManager.onProjectionStoppedExternally(consent)
         assertEquals(1, revoked)
         assertFalse(recorded.single().first.getBooleanExtra(CallForegroundService.EXTRA_USER_INITIATED, true))

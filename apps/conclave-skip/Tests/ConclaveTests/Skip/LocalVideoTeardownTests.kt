@@ -1,7 +1,6 @@
 package conclave.module
 
 import android.content.Context
-import android.content.Intent
 import android.media.projection.MediaProjection
 import android.os.Looper
 import java.time.Duration
@@ -325,16 +324,16 @@ class LocalVideoTeardownTests {
 
     private val scope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
 
-    private fun shareConsentField() = ScreenCaptureManager::class.java.getDeclaredField("resultIntent").apply { isAccessible = true }
-
     private fun grantShareConsent() {
         ScreenCaptureManager.startServiceForTesting = { _, _ -> }
-        shareConsentField().set(ScreenCaptureManager, Intent())
+        ScreenCaptureManager.grantForTesting()
     }
+
+    private suspend fun WebRTCClient.startScreenSharing() = startScreenSharing(ScreenCaptureManager.currentGrantForTesting())
 
     @After
     fun resetShareConsent() {
-        shareConsentField().set(ScreenCaptureManager, null)
+        ScreenCaptureManager.clearConsentForTesting()
         ScreenCaptureManager.startServiceForTesting = null
     }
 
@@ -1521,7 +1520,7 @@ class LocalVideoTeardownTests {
             waitUntil { hardware.isAvailable("1") }
             settle()
             LocalPreviewController.shared.resetCallCamera()
-            shareConsentField().set(ScreenCaptureManager, null)
+            ScreenCaptureManager.clearConsentForTesting()
         }
         return problems
     }

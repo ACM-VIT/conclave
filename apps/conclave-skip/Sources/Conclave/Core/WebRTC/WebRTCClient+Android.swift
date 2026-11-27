@@ -122,8 +122,9 @@ final class WebRTCClient {
     func closeLocalAudioProducer() async { fatalError() }
     func closeLocalVideoProducer() async { fatalError() }
     func closeLocalScreenProducer() async { fatalError() }
+    func closeLocalScreenProducer(consentGrant: Int) async { fatalError() }
     func closeLocalMedia(kind: String, type: String, producerId: String? = nil) async -> Bool { fatalError() }
-    func startScreenSharing() async throws { fatalError() }
+    func startScreenSharing(consentGrant: Int) async throws { fatalError() }
     func stopScreenSharing() async { fatalError() }
 
     func getCaptureSession() -> Any? { nil }

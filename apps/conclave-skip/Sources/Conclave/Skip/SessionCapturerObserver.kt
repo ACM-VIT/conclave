@@ -1,12 +1,11 @@
 package conclave.module
 
-import android.content.Intent
 import kotlinx.coroutines.CompletableDeferred
 import org.webrtc.CapturerObserver
 import org.webrtc.VideoCapturer
 import org.webrtc.VideoFrame
 
-internal class CaptureSession(val screenConsent: Intent? = null) {
+internal class CaptureSession(val screenGrant: ScreenShareGrant? = null) {
     val ended = CompletableDeferred<Unit>()
     var switchInFlight = false
     var published = false

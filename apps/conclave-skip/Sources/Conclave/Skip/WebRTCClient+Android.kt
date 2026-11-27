@@ -2552,11 +2552,12 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         if (holdsCapture(claim)) applyCameraFacingChosenDuringStart()
     }
 
-    internal suspend fun startScreenSharing() {
-        val data = ScreenCaptureManager.getCaptureResultIntent() ?: throw ErrorException("No screen capture permission")
+    internal suspend fun startScreenSharing(consentGrant: Int) {
+        val grant = ScreenCaptureManager.grant(consentGrant) ?: throw ErrorException("No screen capture permission")
         if (screenCapture != null) throw ErrorException("Screen capture is already starting or active")
+        val data = grant.intent
         val generation = configurationGeneration
-        val capture = CaptureSession(screenConsent = data)
+        val capture = CaptureSession(screenGrant = grant)
         screenCapture = capture
         val claim = CaptureClaim(generation, null, capture, capture.ended)
         lastScreenProducerSignalingError = null
@@ -2576,7 +2577,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
 
             val capturer = openScreenCapturer(data, object : MediaProjection.Callback() {
                 override fun onStop() {
-                    applyCaptureCallback(capture, effect = { ScreenCaptureManager.onProjectionStoppedExternally(data) })
+                    applyCaptureCallback(capture, effect = { ScreenCaptureManager.onProjectionStoppedExternally(grant.id) })
                 }
             })
             capture.capturer = capturer
@@ -3483,6 +3484,11 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         }
     }
 
+    internal suspend fun closeLocalScreenProducer(consentGrant: Int) {
+        if (screenCapture?.screenGrant?.id != consentGrant) return
+        closeLocalScreenProducer()
+    }
+
     internal suspend fun closeLocalScreenProducer() {
         val socket = socketManager
         val producerId = screenProducer?.id
@@ -3667,8 +3673,8 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
 
     private fun isCurrentCapture(capture: CaptureSession): Boolean {
         if (screenCapture === capture) {
-            val consent = capture.screenConsent ?: return false
-            return screenCapturer === capture.capturer && ScreenCaptureManager.getCaptureResultIntent() === consent
+            val grant = capture.screenGrant ?: return false
+            return screenCapturer === capture.capturer && ScreenCaptureManager.grant(grant.id) === grant
         }
         return cameraCapture === capture && capture.capturer != null && videoCapturer === capture.capturer
     }
@@ -3800,7 +3806,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         screenVideoTrack = null
         releaseVideoCapture(CaptureTeardown.screen, capturer, helper, source, track)
         capture?.ended?.complete(Unit)
-        capture?.screenConsent?.let { ScreenCaptureManager.stopCapture(it) }
+        capture?.screenGrant?.let { ScreenCaptureManager.releaseConsent(it.id) }
     }
 
     private fun releaseVideoCapture(

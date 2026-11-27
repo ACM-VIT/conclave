@@ -28,13 +28,16 @@ internal object ScreenShareAndroidLog {
     }
 }
 
+internal class ScreenShareGrant(val id: Int, val intent: Intent)
+
 object ScreenCaptureManager {
     private var captureLauncher: ActivityResultLauncher<Intent>? = null
-    private var resultIntent: Intent? = null
+    private var consent: ScreenShareGrant? = null
+    private var nextGrantId = 0
     private var host: ScreenShareServiceHost = ScreenShareServiceHost.none
     internal var startServiceForTesting: ((Intent, Boolean) -> Unit)? = null
     private val stateLock = Any()
-    private val waiters = mutableListOf<CancellableContinuation<Boolean>>()
+    private val waiters = mutableListOf<CancellableContinuation<Int?>>()
     private var requestInFlight = false
     private var serviceForegrounded = false
     private var suppressNextServiceDestroyCallback = false
@@ -60,10 +63,11 @@ object ScreenCaptureManager {
         if (resultCode == Activity.RESULT_OK && data != null) {
             val selectedHost = synchronized(stateLock) {
                 if (!requestInFlight) {
-                    resultIntent = null
+                    consent = null
                     return
                 }
-                resultIntent = data
+                nextGrantId += 1
+                consent = ScreenShareGrant(nextGrantId, data)
                 host = ScreenShareServiceHostPolicy.host(
                     callServiceRunning = CallForegroundService.isRunning,
                     callServiceFixtureOnly = CallForegroundService.isFixtureOnly,
@@ -73,19 +77,19 @@ object ScreenCaptureManager {
             if (selectedHost == ScreenShareServiceHost.callService) startCallHost() else startCaptureService()
         } else {
             synchronized(stateLock) {
-                resultIntent = null
+                consent = null
                 lastFailure = ScreenShareFailurePolicy.androidFailure(
                     blockedByPolicy = false, launchFailed = false, consentGranted = false, serviceRefused = false,
                 )
             }
-            resumeAll(false)
+            resumeAll(null)
         }
     }
 
     internal fun armRequestForTesting() {
         synchronized(stateLock) {
             requestInFlight = true
-            resultIntent = null
+            consent = null
             host = ScreenShareServiceHost.none
             serviceForegrounded = false
             suppressNextServiceDestroyCallback = false
@@ -95,13 +99,29 @@ object ScreenCaptureManager {
         }
     }
 
+    internal fun grantForTesting(intent: Intent = Intent()): Int = synchronized(stateLock) {
+        nextGrantId += 1
+        consent = ScreenShareGrant(nextGrantId, intent)
+        nextGrantId
+    }
+
+    internal fun currentGrantForTesting(): Int = synchronized(stateLock) {
+        consent?.id ?: 0
+    }
+
+    internal fun clearConsentForTesting() {
+        synchronized(stateLock) {
+            consent = null
+        }
+    }
+
     internal fun callServiceHostsProjection(): Boolean = synchronized(stateLock) {
-        host == ScreenShareServiceHost.callService && resultIntent != null
+        host == ScreenShareServiceHost.callService && consent != null
     }
 
     internal fun onCallHostRefused() {
         val fallBack = synchronized(stateLock) {
-            if (resultIntent == null || host != ScreenShareServiceHost.callService) {
+            if (consent == null || host != ScreenShareServiceHost.callService) {
                 false
             } else {
                 host = ScreenShareServiceHostPolicy.fallback(refused = host)
@@ -149,7 +169,7 @@ object ScreenCaptureManager {
         }
     }
 
-    suspend fun requestCapture(): Boolean = suspendCancellableCoroutine { cont ->
+    suspend fun requestConsent(): Int? {
         val activity = UIApplication.shared.androidActivity
         val launcher = captureLauncher
         if (activity == null || launcher == null) {
@@ -157,12 +177,15 @@ object ScreenCaptureManager {
             synchronized(stateLock) {
                 if (!requestInFlight) lastFailure = ScreenShareFailure.notConfigured
             }
-            cont.resume(false)
-            return@suspendCancellableCoroutine
+            return null
         }
+        return awaitConsent { launchConsent(activity, launcher) }
+    }
+
+    internal suspend fun awaitConsent(launch: () -> Unit): Int? = suspendCancellableCoroutine { cont ->
         synchronized(stateLock) {
             if (requestInFlight) {
-                cont.resume(false)
+                cont.resume(null)
                 return@suspendCancellableCoroutine
             }
             requestInFlight = true
@@ -178,7 +201,7 @@ object ScreenCaptureManager {
             synchronized(stateLock) {
                 if (waiters.remove(cont)) {
                     requestInFlight = false
-                    resultIntent = null
+                    consent = null
                     serviceForegrounded = false
                     suppressNextServiceDestroyCallback = true
                     lastFailure = ScreenShareFailure.cancelled
@@ -189,31 +212,32 @@ object ScreenCaptureManager {
                 requestServiceStop()
             }
         }
+        launch()
+    }
 
+    private fun launchConsent(activity: Activity, launcher: ActivityResultLauncher<Intent>) {
         if (isScreenCaptureBlockedByPolicy(activity)) {
             ScreenShareAndroidLog.warn("blockedByPolicy", null)
             debugLog("[ScreenShare] Screen capture is disabled by device policy")
             synchronized(stateLock) {
-                resultIntent = null
                 lastFailure = ScreenShareFailurePolicy.androidFailure(
                     blockedByPolicy = true, launchFailed = false, consentGranted = false, serviceRefused = false,
                 )
             }
-            resumeAll(false)
-            return@suspendCancellableCoroutine
+            resumeAll(null)
+            return
         }
         val pm = activity.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager
         if (pm == null) {
             ScreenShareAndroidLog.warn("noProjectionService", null)
             debugLog("[ScreenShare] MediaProjection service is unavailable")
             synchronized(stateLock) {
-                resultIntent = null
                 lastFailure = ScreenShareFailurePolicy.androidFailure(
                     blockedByPolicy = false, launchFailed = true, consentGranted = false, serviceRefused = false,
                 )
             }
-            resumeAll(false)
-            return@suspendCancellableCoroutine
+            resumeAll(null)
+            return
         }
         try {
             synchronized(stateLock) {
@@ -230,12 +254,11 @@ object ScreenCaptureManager {
             ScreenShareAndroidLog.warn("launchThrew", t)
             debugLog("[ScreenShare] Failed to launch screen capture consent: ${t}")
             synchronized(stateLock) {
-                resultIntent = null
                 lastFailure = ScreenShareFailurePolicy.androidFailure(
                     blockedByPolicy = false, launchFailed = true, consentGranted = false, serviceRefused = false,
                 )
             }
-            resumeAll(false)
+            resumeAll(null)
         }
     }
 
@@ -248,7 +271,15 @@ object ScreenCaptureManager {
     }
 
     fun isCaptureActive(): Boolean = synchronized(stateLock) {
-        resultIntent != null && serviceForegrounded
+        consent != null && serviceForegrounded
+    }
+
+    fun isConsentActive(grant: Int): Boolean = synchronized(stateLock) {
+        consent?.id == grant && serviceForegrounded
+    }
+
+    internal fun grant(id: Int): ScreenShareGrant? = synchronized(stateLock) {
+        consent?.takeIf { it.id == id }
     }
 
     internal fun lastStartFailure(): ScreenShareFailure = synchronized(stateLock) {
@@ -259,55 +290,57 @@ object ScreenCaptureManager {
         ScreenShareCapabilityPolicy.current(platform = ScreenSharePlatform.android, apiLevel = Build.VERSION.SDK_INT)
 
     fun onServiceForegrounded(): Boolean {
-        val shouldKeepService = synchronized(stateLock) {
-            if (resultIntent == null) {
+        val kept = synchronized(stateLock) {
+            val current = consent
+            if (current == null) {
                 serviceForegrounded = false
                 suppressNextServiceDestroyCallback = true
-                false
             } else {
                 serviceForegrounded = true
                 suppressNextServiceDestroyCallback = false
                 projectionRevokedNotified = false
-                true
             }
+            current?.id
         }
-        resumeAll(shouldKeepService)
-        return shouldKeepService
+        resumeAll(kept)
+        return kept != null
     }
 
     fun onServiceForegroundFailed() {
         synchronized(stateLock) {
-            resultIntent = null
+            consent = null
             serviceForegrounded = false
             suppressNextServiceDestroyCallback = true
             lastFailure = ScreenShareFailurePolicy.androidFailure(
                 blockedByPolicy = false, launchFailed = false, consentGranted = true, serviceRefused = true,
             )
         }
-        resumeAll(false)
+        resumeAll(null)
     }
 
     fun getCaptureResultIntent(): Intent? = synchronized(stateLock) {
-        resultIntent
+        consent?.intent
     }
 
-    fun stopCapture() = stopCapture(ownedConsent = null)
+    fun stopCapture() = stopCapture(ownedGrant = null)
 
-    internal fun stopCapture(ownedConsent: Intent?) {
+    fun releaseConsent(grant: Int) = stopCapture(ownedGrant = grant)
+
+    private fun stopCapture(ownedGrant: Int?) {
         synchronized(stateLock) {
-            if (ownedConsent != null && resultIntent !== ownedConsent) return
-            resultIntent = null
+            if (ownedGrant != null && consent?.id != ownedGrant) return
+            consent = null
             serviceForegrounded = false
             suppressNextServiceDestroyCallback = true
         }
         requestServiceStop()
-        resumeAll(false)
+        resumeAll(null)
     }
 
     internal fun onHostStopped(stopped: ScreenShareServiceHost) {
         val callback = synchronized(stateLock) {
             if (!ScreenShareServiceHostPolicy.acceptsStop(stopped = stopped, current = host)) return
-            resultIntent = null
+            consent = null
             serviceForegrounded = false
             if (suppressNextServiceDestroyCallback) {
                 suppressNextServiceDestroyCallback = false
@@ -324,13 +357,13 @@ object ScreenCaptureManager {
 
     fun stopFromNotification() = endExternally(userInitiated = true)
 
-    internal fun onProjectionStoppedExternally(ownedConsent: Intent) =
-        endExternally(userInitiated = false, ownedConsent = ownedConsent)
+    internal fun onProjectionStoppedExternally(ownedGrant: Int) =
+        endExternally(userInitiated = false, ownedGrant = ownedGrant)
 
-    private fun endExternally(userInitiated: Boolean, ownedConsent: Intent? = null) {
+    private fun endExternally(userInitiated: Boolean, ownedGrant: Int? = null) {
         val callback = synchronized(stateLock) {
-            if (ownedConsent != null && resultIntent !== ownedConsent) return
-            resultIntent = null
+            if (ownedGrant != null && consent?.id != ownedGrant) return
+            consent = null
             serviceForegrounded = false
             suppressNextServiceDestroyCallback = true
             if (projectionRevokedNotified) {
@@ -353,8 +386,8 @@ object ScreenCaptureManager {
         }
     }
 
-    private fun resumeAll(granted: Boolean) {
-        val snapshot: List<CancellableContinuation<Boolean>>
+    private fun resumeAll(grant: Int?) {
+        val snapshot: List<CancellableContinuation<Int?>>
         synchronized(stateLock) {
             snapshot = waiters.toList()
             waiters.clear()
@@ -362,7 +395,7 @@ object ScreenCaptureManager {
         }
         snapshot.forEach {
             if (it.isActive) {
-                it.resume(granted)
+                it.resume(grant)
             }
         }
     }
