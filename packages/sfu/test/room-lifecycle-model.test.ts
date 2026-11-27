@@ -29,7 +29,7 @@ import {
 import { registerDisconnectHandlers } from "../server/socket/handlers/disconnectHandlers.js";
 import { registerJoinRoomHandler } from "../server/socket/handlers/joinRoom.js";
 import { forceDrainRooms, handOffRooms } from "../server/serverShutdown.js";
-import { advanceWebinars, createWebinar, webinarBySlug } from "../server/controlPlane/webinarCommands.js";
+import { advanceWebinars, createWebinar, webinarScheduleBySlug } from "../server/controlPlane/webinarCommands.js";
 import { ensureWebinarRoomConfig } from "../server/scheduledWebinarScheduler.js";
 import { createSfuState, type SfuState } from "../server/state.js";
 import { Logger } from "../utilities/loggers.js";
@@ -533,9 +533,9 @@ const boot = async (world: World): Promise<Sfu> => {
 };
 
 const scheduleWebinar = async (state: SfuState, gate: WebinarGate): Promise<void> => {
-  const existing = await state.controlPlane.read(webinarBySlug(WEBINAR_SLUG));
+  const existing = await state.controlPlane.read(webinarScheduleBySlug(WEBINAR_SLUG));
   if (existing) {
-    const roomConfig = ensureWebinarRoomConfig(state, existing, () => undefined);
+    const roomConfig = ensureWebinarRoomConfig(state, existing.value, existing.rev, () => undefined);
     if (gate === "locked") roomConfig.locked = true;
     if (gate === "full") roomConfig.maxAttendees = 0;
     return;
@@ -552,10 +552,10 @@ const scheduleWebinar = async (state: SfuState, gate: WebinarGate): Promise<void
     { clientId: "conclave", createdBy: USERS.owner.email!, defaultHostEmail: USERS.owner.email! },
   ));
   if (!booked.ok) throw Error(booked.message ?? booked.reason);
-  const { webinar } = booked.value;
   await state.controlPlane.commit(advanceWebinars);
-  webinar.status = "live";
-  const roomConfig = ensureWebinarRoomConfig(state, webinar, () => undefined);
+  const scheduled = await state.controlPlane.read(webinarScheduleBySlug(WEBINAR_SLUG));
+  if (!scheduled) throw Error("Model webinar was not scheduled");
+  const roomConfig = ensureWebinarRoomConfig(state, scheduled.value, scheduled.rev, () => undefined);
   if (gate === "locked") roomConfig.locked = true;
   if (gate === "full") roomConfig.maxAttendees = 0;
 };

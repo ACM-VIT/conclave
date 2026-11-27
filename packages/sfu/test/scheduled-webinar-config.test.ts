@@ -53,7 +53,7 @@ const makeState = () => createSfuState({
 describe("scheduled webinar room config", () => {
   it("seeds an open room from the schedule the first time", () => {
     const state = makeState();
-    const config = ensureWebinarRoomConfig(state, scheduledWebinar(), () => {});
+    const config = ensureWebinarRoomConfig(state, scheduledWebinar(), 1, () => {});
     expect(config).toMatchObject({
       enabled: true,
       locked: false,
@@ -68,7 +68,7 @@ describe("scheduled webinar room config", () => {
   it("keeps the host's live changes when the schedule is re-applied unchanged", () => {
     const state = makeState();
     const webinar = scheduledWebinar();
-    const config = ensureWebinarRoomConfig(state, webinar, () => {});
+    const config = ensureWebinarRoomConfig(state, webinar, 1, () => {});
     // The host locks the webinar, turns Q&A off and lowers the cap.
     config.locked = true;
     config.qaEnabled = false;
@@ -76,7 +76,7 @@ describe("scheduled webinar room config", () => {
     config.publicAccess = false;
 
     // A panelist joins (or the scheduler ticks): the schedule is re-applied.
-    ensureWebinarRoomConfig(state, webinar, () => {});
+    ensureWebinarRoomConfig(state, webinar, 2, () => {});
     expect(config).toMatchObject({
       enabled: true,
       locked: true,
@@ -89,12 +89,12 @@ describe("scheduled webinar room config", () => {
   it("copies a value again when the schedule itself changes it", () => {
     const state = makeState();
     const webinar = scheduledWebinar();
-    const config = ensureWebinarRoomConfig(state, webinar, () => {});
+    const config = ensureWebinarRoomConfig(state, webinar, 1, () => {});
     config.locked = true;
     config.maxAttendees = 50;
 
     webinar.maxAttendees = 800;
-    ensureWebinarRoomConfig(state, webinar, () => {});
+    ensureWebinarRoomConfig(state, webinar, 2, () => {});
     expect(config.maxAttendees).toBe(800);
     expect(config.locked).toBe(true);
   });
@@ -102,44 +102,44 @@ describe("scheduled webinar room config", () => {
   it("locks the room when the schedule ends and reopens it if the schedule is reopened", () => {
     const state = makeState();
     const webinar = scheduledWebinar();
-    const config = ensureWebinarRoomConfig(state, webinar, () => {});
+    const config = ensureWebinarRoomConfig(state, webinar, 1, () => {});
 
     webinar.status = "ended";
-    ensureWebinarRoomConfig(state, webinar, () => {});
+    ensureWebinarRoomConfig(state, webinar, 2, () => {});
     expect(config).toMatchObject({ enabled: true, locked: true });
 
     webinar.status = "live";
-    ensureWebinarRoomConfig(state, webinar, () => {});
+    ensureWebinarRoomConfig(state, webinar, 3, () => {});
     expect(config).toMatchObject({ enabled: true, locked: false });
   });
 
   it("disables and locks the room for a cancelled schedule", () => {
     const state = makeState();
     const webinar = scheduledWebinar();
-    const config = ensureWebinarRoomConfig(state, webinar, () => {});
+    const config = ensureWebinarRoomConfig(state, webinar, 1, () => {});
 
     webinar.status = "cancelled";
-    ensureWebinarRoomConfig(state, webinar, () => {});
+    ensureWebinarRoomConfig(state, webinar, 2, () => {});
     expect(config).toMatchObject({ enabled: false, locked: true });
   });
 
   it("keeps a host's unlock of an ended room when the schedule is re-applied unchanged", () => {
     const state = makeState();
     const webinar = scheduledWebinar({ status: "ended" });
-    const config = ensureWebinarRoomConfig(state, webinar, () => {});
+    const config = ensureWebinarRoomConfig(state, webinar, 1, () => {});
     config.locked = false;
 
-    ensureWebinarRoomConfig(state, webinar, () => {});
+    ensureWebinarRoomConfig(state, webinar, 2, () => {});
     expect(config.locked).toBe(false);
 
     webinar.status = "cancelled";
-    ensureWebinarRoomConfig(state, webinar, () => {});
+    ensureWebinarRoomConfig(state, webinar, 3, () => {});
     expect(config).toMatchObject({ enabled: false, locked: true });
   });
 
   it("never opens a room for a schedule that is already ended", () => {
     const state = makeState();
-    const config = ensureWebinarRoomConfig(state, scheduledWebinar({ status: "ended" }), () => {});
+    const config = ensureWebinarRoomConfig(state, scheduledWebinar({ status: "ended" }), 1, () => {});
     expect(config.enabled).toBe(false);
     expect(config.locked).toBe(true);
   });

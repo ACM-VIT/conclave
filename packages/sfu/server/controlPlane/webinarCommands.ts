@@ -25,6 +25,7 @@ import { done, fail, tags, uniqueKeys, type Outcome, type Stored } from "./model
 import type { Command, Query, Tx, TxRead } from "./tx.js";
 
 export type WebinarAccess = { email: string | null; isAdmin: boolean };
+export type WebinarSchedule = Pick<Stored<"webinar">, "rev" | "value">;
 
 export const WEBINAR_NOT_FOUND = "Scheduled webinar not found";
 
@@ -46,30 +47,39 @@ export const webinarById =
   (view) =>
     servedOrNull(view.get("webinar", id)?.value);
 
+const servedSchedule = ({ rev, value }: Stored<"webinar">): WebinarSchedule => ({ rev, value: served(value) });
+
+export const webinarScheduleBySlug =
+  (slug: string): Query<WebinarSchedule | null> =>
+  (view) => {
+    const stored = view.lookup("webinar", "webinarSlug", uniqueKeys.webinarSlug(slug.trim().toLowerCase()));
+    return stored ? servedSchedule(stored) : null;
+  };
+
 export const webinarBySlug =
   (slug: string): Query<ScheduledWebinar | null> =>
-  (view) =>
-    servedOrNull(
-      view.lookup("webinar", "webinarSlug", uniqueKeys.webinarSlug(slug.trim().toLowerCase()))?.value,
-    );
+  (view) => webinarScheduleBySlug(slug)(view)?.value ?? null;
 
-const webinarInRoom = (view: TxRead, clients: readonly string[], roomId: string): ScheduledWebinar | null => {
+const webinarInRoom = (view: TxRead, clients: readonly string[], roomId: string): WebinarSchedule | null => {
   for (const clientId of clients) {
-    const webinar = view.lookup("webinar", "webinarRoom", uniqueKeys.webinarRoom(clientId, roomId))?.value;
-    if (webinar) return served(webinar);
+    const stored = view.lookup("webinar", "webinarRoom", uniqueKeys.webinarRoom(clientId, roomId));
+    if (stored) return servedSchedule(stored);
   }
   return null;
 };
 
+export const webinarScheduleForRoom =
+  (clientId: string, roomId: string): Query<WebinarSchedule | null> =>
+  (view) => webinarInRoom(view, clientsServedAs(clientId), roomId);
+
 export const webinarForRoom =
   (clientId: string, roomId: string): Query<ScheduledWebinar | null> =>
-  (view) =>
-    webinarInRoom(view, clientsServedAs(clientId), roomId);
+  (view) => webinarScheduleForRoom(clientId, roomId)(view)?.value ?? null;
 
 export const webinarForRoomInClients =
   (clientId: string, roomId: string): Query<ScheduledWebinar | null> =>
   (view) =>
-    webinarInRoom(view, clientIdCandidates(clientId), roomId);
+    webinarInRoom(view, clientIdCandidates(clientId), roomId)?.value ?? null;
 
 export const listWebinars =
   (filter: ScheduledWebinarFilter & { clientId: string }): Query<ScheduledWebinar[]> =>
@@ -88,12 +98,17 @@ export const listWebinars =
   };
 
 export const webinarsByIds =
-  (ids: readonly string[]): Query<Map<string, Stored<"webinar">>> =>
+  (ids: readonly string[]): Query<Map<string, WebinarSchedule | { rev: number; value: null }>> =>
   (view) => {
-    const found = new Map<string, Stored<"webinar">>();
+    const found = new Map<string, WebinarSchedule | { rev: number; value: null }>();
     for (const id of new Set(ids)) {
       const stored = view.get("webinar", id);
-      if (stored) found.set(id, { ...stored, value: served(stored.value) });
+      if (stored) {
+        found.set(id, servedSchedule(stored));
+      } else {
+        const rev = view.tombstone("webinar", id);
+        if (rev !== null) found.set(id, { rev, value: null });
+      }
     }
     return found;
   };
@@ -101,8 +116,8 @@ export const webinarsByIds =
 export const allWebinars: Query<ScheduledWebinar[]> = (view) =>
   view.all("webinar").map((stored) => served(stored.value));
 
-export const openWebinars: Query<ScheduledWebinar[]> = (view) =>
-  view.tagged("webinar", tags.openWebinars).map((stored) => served(stored.value));
+export const openWebinars: Query<WebinarSchedule[]> = (view) =>
+  view.tagged("webinar", tags.openWebinars).map(servedSchedule);
 
 const withAccess = <T>(
   tx: Tx,
@@ -173,7 +188,10 @@ export const createWebinarCoHostInvite =
     });
 
 export const acceptWebinarCoHostInvite =
-  (tokenHash: string, user: { email: string; name?: string | null }): Command<ScheduledWebinar> =>
+  (
+    tokenHash: string,
+    user: { email: string; name?: string | null },
+  ): Command<{ webinar: ScheduledWebinar; unchangedRev: number | null }> =>
   (tx) => {
     const email = normalizeHostEmail(user.email);
     if (!email || !email.includes("@")) {
@@ -182,9 +200,9 @@ export const acceptWebinarCoHostInvite =
     const current = tx.lookup("webinar", "cohostToken", uniqueKeys.cohostToken(tokenHash));
     if (!current) return fail("invalid", "Invalid or expired co-host invite.");
     const next = acceptCoHostInvite(current.value, user, tx.now);
-    if (!next) return done(served(current.value));
+    if (!next) return done({ webinar: served(current.value), unchangedRev: current.rev });
     tx.put("webinar", next);
-    return done(served(next));
+    return done({ webinar: served(next), unchangedRev: null });
   };
 
 export const recordWebinarJoin =

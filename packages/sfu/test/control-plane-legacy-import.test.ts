@@ -287,7 +287,7 @@ const expectEverythingLoaded = async (store: ControlPlaneStore) => {
   const accepted = await store.commit(
     acceptWebinarCoHostInvite(hashCoHostInviteToken("cohost-token"), { email: "late@example.test" }),
   );
-  expect(accepted).toMatchObject({ ok: true, value: { id: "webinar-1" } });
+  expect(accepted).toMatchObject({ ok: true, value: { webinar: { id: "webinar-1" } } });
 };
 
 const expectRestartsChangeNothing = async (first: ControlPlaneStore) => {

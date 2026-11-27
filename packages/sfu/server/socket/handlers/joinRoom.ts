@@ -66,8 +66,8 @@ import {
 } from "../../scheduledWebinars.js";
 import {
   recordWebinarJoin,
-  webinarBySlug,
-  webinarForRoom,
+  webinarScheduleBySlug,
+  webinarScheduleForRoom,
 } from "../../controlPlane/webinarCommands.js";
 import {
   deferWebinarRoomNotice,
@@ -369,8 +369,9 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           typeof resolveScheduledWebinarAttendeeEntry
         >["webinar"] = null;
         if (isWebinarAttendeeJoin) {
+          const schedule = await state.controlPlane.read(webinarScheduleBySlug(requestedRoomId));
           const scheduledEntry = resolveScheduledWebinarAttendeeEntry(
-            await state.controlPlane.read(webinarBySlug(requestedRoomId)),
+            schedule?.value ?? null,
             clientId,
           );
           if (overtaken() || !socket.connected) return;
@@ -388,8 +389,8 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             // A scheduled webinar's link always leads to its own room. Another
             // room that bound the same code (before the scheduler did, e.g.
             // after a restart) must not receive the webinar's audience.
-            if (webinarTarget?.roomId !== scheduledWebinarForAttendee.roomId) {
-              ensureWebinarRoomConfig(state, scheduledWebinarForAttendee, deferWebinarNotice);
+            if (schedule && webinarTarget?.roomId !== scheduledWebinarForAttendee.roomId) {
+              ensureWebinarRoomConfig(state, scheduledWebinarForAttendee, schedule.rev, deferWebinarNotice);
             }
             webinarTarget = {
               roomChannelId: getRoomChannelId(
@@ -409,16 +410,17 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
 
         let scheduledWebinarForRoom: ScheduledWebinar | null = null;
         if (!isWebinarAttendeeJoin) {
-          scheduledWebinarForRoom = await state.controlPlane.read(
-            webinarForRoom(clientId, roomId),
+          const schedule = await state.controlPlane.read(
+            webinarScheduleForRoom(clientId, roomId),
           );
           if (overtaken() || !socket.connected) return;
+          scheduledWebinarForRoom = schedule?.value ?? null;
           if (
-            scheduledWebinarForRoom &&
-            scheduledWebinarForRoom.status !== "ended" &&
-            scheduledWebinarForRoom.status !== "cancelled"
+            schedule &&
+            schedule.value.status !== "ended" &&
+            schedule.value.status !== "cancelled"
           ) {
-            ensureWebinarRoomConfig(state, scheduledWebinarForRoom, deferWebinarNotice);
+            ensureWebinarRoomConfig(state, schedule.value, schedule.rev, deferWebinarNotice);
           }
         }
 

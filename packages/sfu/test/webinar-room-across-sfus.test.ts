@@ -10,7 +10,7 @@ import {
   deleteWebinar,
   recordWebinarJoin,
   updateWebinar,
-  webinarById,
+  webinarScheduleBySlug,
 } from "../server/controlPlane/webinarCommands.js";
 import { createSfuApp } from "../server/http/createApp.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
@@ -52,6 +52,12 @@ const created = async (sfu: SfuState, request: Record<string, unknown>): Promise
   return result.value.webinar;
 };
 
+const seedRoomConfig = async (sfu: SfuState, webinar: ScheduledWebinar) => {
+  const stored = await sfu.controlPlane.read(webinarScheduleBySlug(webinar.linkSlug));
+  if (!stored) throw new Error("Webinar fixture was not persisted");
+  return ensureWebinarRoomConfig(sfu, stored.value, stored.rev, () => {});
+};
+
 const roomConfig = (sfu: SfuState, webinar: ScheduledWebinar) =>
   sfu.webinarConfigs.get(getRoomChannelId(webinar.clientId, webinar.roomId));
 
@@ -65,8 +71,7 @@ describe("a scheduled webinar's room on the SFU that hosts it", () => {
     const data = createMemoryData();
     const [handling, hosting] = [sfuOn(data, "handling"), sfuOn(data, "hosting")];
     const webinar = await created(handling, { inviteCode: "Secret-42" });
-    const stored = await hosting.controlPlane.read(webinarById(webinar.id));
-    expect(ensureWebinarRoomConfig(hosting, stored!, () => {}).inviteCodeHash).toBe(hashWebinarInviteCode("Secret-42"));
+    expect((await seedRoomConfig(hosting, webinar)).inviteCodeHash).toBe(hashWebinarInviteCode("Secret-42"));
 
     const changed = await handling.controlPlane.commit(updateWebinar(webinar.id, { inviteCode: "Other-7" }, admin));
     expect(changed.ok).toBe(true);
@@ -84,7 +89,7 @@ describe("a scheduled webinar's room on the SFU that hosts it", () => {
     const ended = await created(other, { linkSlug: "ends-elsewhere" });
     const cancelled = await created(other, { linkSlug: "cancels-elsewhere" });
     const deleted = await created(other, { linkSlug: "goes-elsewhere" });
-    for (const webinar of [ended, cancelled, deleted]) ensureWebinarRoomConfig(hosting, webinar, () => {});
+    for (const webinar of [ended, cancelled, deleted]) await seedRoomConfig(hosting, webinar);
     expect(roomConfig(hosting, ended)).toMatchObject({ enabled: true, locked: false });
 
     await other.controlPlane.commit(updateWebinar(ended.id, { status: "ended" }, admin));
@@ -101,7 +106,7 @@ describe("a scheduled webinar's room on the SFU that hosts it", () => {
     const data = createMemoryData();
     const [hosting, other] = [sfuOn(data, "hosting"), sfuOn(data, "other")];
     const webinar = await created(other, { maxAttendees: 100 });
-    ensureWebinarRoomConfig(hosting, webinar, () => {});
+    await seedRoomConfig(hosting, webinar);
     await other.controlPlane.commit(updateWebinar(webinar.id, { maxAttendees: 250, qaEnabled: false }, admin));
     await advanceScheduledWebinars(hosting, Date.now(), () => {});
     expect(roomConfig(hosting, webinar)).toMatchObject({ maxAttendees: 250, qaEnabled: false });
@@ -113,7 +118,7 @@ describe("a live webinar's rotated link", () => {
     const data = createMemoryData();
     const [hosting, other] = [sfuOn(data, "hosting"), sfuOn(data, "other")];
     const webinar = await created(other, { linkSlug: "stored-code" });
-    const config = ensureWebinarRoomConfig(hosting, webinar, () => {});
+    const config = await seedRoomConfig(hosting, webinar);
     const channelId = getRoomChannelId(webinar.clientId, webinar.roomId);
     const rotated = rotateWebinarLinkSlug({
       webinarConfig: config,
@@ -136,7 +141,7 @@ describe("a new link code saved for a live webinar", () => {
     const data = createMemoryData();
     const [hosting, other] = [sfuOn(data, "hosting"), sfuOn(data, "other")];
     const webinar = await created(other, { linkSlug: "first-code" });
-    const config = ensureWebinarRoomConfig(hosting, webinar, () => {});
+    const config = await seedRoomConfig(hosting, webinar);
     const squatter = getOrCreateWebinarRoomConfig(hosting.webinarConfigs, "conclave:squatter");
     setCustomWebinarLinkSlug({
       webinarConfig: squatter,
@@ -190,7 +195,7 @@ describe("hosts connected to the SFU that hosts a webinar's room", () => {
     const data = createMemoryData();
     const [hosting, other] = [sfuOn(data, "hosting"), sfuOn(data, "other")];
     const webinar = await created(other, { linkSlug: "first-code" });
-    ensureWebinarRoomConfig(hosting, webinar, () => {});
+    await seedRoomConfig(hosting, webinar);
     const channelId = getRoomChannelId(webinar.clientId, webinar.roomId);
     const told: string[] = [];
     const notify = (channel: string) => told.push(channel);
@@ -214,7 +219,7 @@ describe("hosts connected to the SFU that hosts a webinar's room", () => {
     const data = createMemoryData();
     const hosting = sfuOn(data, "hosting");
     const webinar = await created(hosting, { linkSlug: "shared-code" });
-    ensureWebinarRoomConfig(hosting, webinar, () => {});
+    await seedRoomConfig(hosting, webinar);
     const channelId = getRoomChannelId(webinar.clientId, webinar.roomId);
     hosting.rooms.set(channelId, {
       channelId,
@@ -269,6 +274,83 @@ const apiOn = async (state: SfuState, io: SocketIOServer | null): Promise<Call> 
     return reply;
   };
 };
+
+it.each(["newer edit", "deletion"] as const)("keeps the effect of a %s when an earlier update replies late", async (change) => {
+  const state = sfuOn(createMemoryData(), "deferred-webinar");
+  const call = await apiOn(state, null);
+  const { scheduledWebinar: webinar } = (await call("POST", "/scheduled-webinars", {
+    title: "Launch",
+    scheduledStartAt: Date.now() - 60_000,
+  })) as { scheduledWebinar: ScheduledWebinar };
+  const path = `/scheduled-webinars/${webinar.id}`;
+  let didRecord = () => {};
+  let resume = () => {};
+  const recorded = new Promise<void>((resolve) => { didRecord = resolve; });
+  const deferred = new Promise<void>((resolve) => { resume = resolve; });
+  const original = state.controlPlane;
+  let hold = true;
+  state.controlPlane = {
+    ...original,
+    commit: async (command) => {
+      const result = await original.commit(command);
+      if (hold) {
+        hold = false;
+        didRecord();
+        await deferred;
+      }
+      return result;
+    },
+  };
+
+  const earlier = call("PATCH", path, { publicAccess: true, linkSlug: "earlier-code" });
+  await recorded;
+  try {
+    if (change === "deletion") await call("DELETE", path);
+    else await call("PATCH", path, { publicAccess: false, linkSlug: "latest-code", inviteCode: "New-pass-42" });
+  } finally {
+    resume();
+    await earlier;
+  }
+
+  expect(state.webinarLinks.has("earlier-code")).toBe(false);
+  if (change === "deletion") {
+    expect(roomConfig(state, webinar)).toMatchObject({ enabled: false, scheduledWebinarId: null });
+  } else {
+    expect(roomConfig(state, webinar)).toMatchObject({
+      publicAccess: false,
+      linkSlug: "latest-code",
+      inviteCodeHash: hashWebinarInviteCode("New-pass-42"),
+    });
+  }
+});
+
+it("still retries the saved slug after a no-op co-host acceptance", async () => {
+  const state = sfuOn(createMemoryData(), "cohost-noop-revision");
+  const call = await apiOn(state, null);
+  const scheduledStartAt = Date.now() + 40 * 60_000;
+  const { scheduledWebinar: webinar } = (await call("POST", "/scheduled-webinars", {
+    title: "Launch", scheduledStartAt, linkSlug: "first-code",
+  })) as { scheduledWebinar: ScheduledWebinar };
+  const otherChannel = "conclave:other";
+  const other = getOrCreateWebinarRoomConfig(state.webinarConfigs, otherChannel);
+  setCustomWebinarLinkSlug({
+    webinarConfig: other,
+    webinarLinks: state.webinarLinks,
+    room: { channelId: otherChannel, id: "other", clientId: "conclave" },
+    slug: "pending-code",
+  });
+  const path = `/scheduled-webinars/${webinar.id}`;
+  await call("PATCH", path, { linkSlug: "pending-code" });
+  expect(roomConfig(state, webinar)?.linkSlug).toBe("first-code");
+  const invite = (await call("POST", `${path}/cohost-invite`)) as { coHostInviteLink: string };
+  const token = new URL(invite.coHostInviteLink).pathname.split("/").at(-1);
+  await call("POST", "/scheduled-webinars", { title: "Other", scheduledStartAt });
+  await call("POST", `/scheduled-webinars/cohost-invites/${token}/accept`);
+  clearWebinarLinkSlug({ webinarConfig: other, webinarLinks: state.webinarLinks, roomChannelId: otherChannel });
+
+  await advanceScheduledWebinars(state, Date.now(), () => {});
+  expect(roomConfig(state, webinar)?.linkSlug).toBe("pending-code");
+});
 
 type RoomChange = (call: Call, webinar: { id: string }, tag: string) => Promise<unknown>;
 
