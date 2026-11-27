@@ -2202,7 +2202,7 @@ function GridLayout({
       if (!(await copyToClipboard(`${window.location.origin}${meetingPath}`))) return;
       setCopyStatus("copied");
     } catch (error) {
-      console.error("[Meets] Failed to copy meeting link:", error);
+      console.error("Failed to copy meeting link:", error);
       return;
     }
     if (copyTimeoutRef.current) {

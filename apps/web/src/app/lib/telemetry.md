@@ -346,10 +346,9 @@ give each location its own 6000. A client over either limit gets 429 with
 (`navigator.userAgent` is `Cloudflare-Workers`) a missing binding, or one
 that fails, answers 503, and so does an admission that has not finished
 in 2 s: one deadline covers both limiters together, so a stalled per-client
-limiter cannot hold a request open any more than a stalled site quota can. Anywhere else, `next start`
-and `next dev` included, the same two limits are kept in the process: there
-OpenNext's local platform proxy offers wrangler's bindings, but a Durable
-Object does not run in it. It decodes the body
+limiter cannot hold a request open any more than a stalled site quota can. Outside Workers, including `next start` and `next dev`, all requests share 120
+admissions per minute per process. The process has no trusted client identity
+header and does not use OpenNext's simulated bindings. It decodes the body
 (gzip, base64 or JSON), drops events for any project but ours, and builds
 every event again from the outbound schema, so the
 browser's before_send is not the only guard. Each event is judged by its own

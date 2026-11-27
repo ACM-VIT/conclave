@@ -1,8 +1,6 @@
 import { getCloudflareContext } from "@opennextjs/cloudflare";
-import { createFixedWindow, type FixedWindow, INGEST_QUOTA_URL, INGEST_RATE_LIMITS, INGEST_WINDOW_MS } from "./ingest-quota";
-import { rateLimitClientKey } from "./unfurl-rate-limit";
+import { createFixedWindow, INGEST_QUOTA_URL, INGEST_RATE_LIMITS, INGEST_WINDOW_MS } from "./ingest-quota";
 
-const MAX_LOCAL_CLIENTS = 1_000;
 const ADMISSION_DEADLINE_MS = 2_000;
 
 type RateLimitBinding = { limit(options: { key: string }): Promise<{ success: boolean }> };
@@ -18,18 +16,7 @@ const ADMITTED: IngestAdmission = { ok: true };
 const LIMITED: IngestAdmission = { ok: false, status: 429, retryAfterMs: INGEST_WINDOW_MS };
 const UNAVAILABLE: IngestAdmission = { ok: false, status: 503, retryAfterMs: null };
 
-const clients = new Map<string, FixedWindow>();
-const site = createFixedWindow(INGEST_RATE_LIMITS.total);
-
-const takeLocal = (key: string): IngestAdmission => {
-  const now = Date.now();
-  const client = clients.get(key) ?? createFixedWindow(INGEST_RATE_LIMITS.perClient);
-  clients.delete(key);
-  clients.set(key, client);
-  while (clients.size > MAX_LOCAL_CLIENTS) clients.delete(clients.keys().next().value as string);
-  if (!client.take(now)) return LIMITED;
-  return site.take(now) ? ADMITTED : LIMITED;
-};
+const processQuota = createFixedWindow(INGEST_RATE_LIMITS.perClient);
 
 const bindingsOf = (env: Record<string, unknown>): { perClient: RateLimitBinding; site: QuotaNamespace } | null => {
   const perClient = env.INGEST_RATE_LIMITER as RateLimitBinding | undefined;
@@ -64,8 +51,8 @@ const withinAdmissionDeadline = async (admission: Promise<IngestAdmission>): Pro
 const inWorkers = (): boolean => typeof navigator !== "undefined" && navigator.userAgent === "Cloudflare-Workers";
 
 export async function takeIngestRateLimit(request: Request): Promise<IngestAdmission> {
-  const key = `ingest:${rateLimitClientKey(request)}`;
-  if (!inWorkers()) return takeLocal(key);
+  if (!inWorkers()) return processQuota.take(Date.now()) ? ADMITTED : LIMITED;
+  const edgeIp = request.headers.get("cf-connecting-ip")?.trim().slice(0, 128) || "anonymous";
   let env: Record<string, unknown>;
   try {
     env = (await getCloudflareContext({ async: true })).env as Record<string, unknown>;
@@ -74,5 +61,5 @@ export async function takeIngestRateLimit(request: Request): Promise<IngestAdmis
   }
   const limiters = bindingsOf(env);
   if (!limiters) return UNAVAILABLE;
-  return withinAdmissionDeadline(takeBoth(limiters, key));
+  return withinAdmissionDeadline(takeBoth(limiters, `ingest:${edgeIp}`));
 }

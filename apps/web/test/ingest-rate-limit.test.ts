@@ -69,18 +69,15 @@ const objectStorage = (database = new DatabaseSync(":memory:")) => ({
 });
 
 describe("the /ingest rate limit", () => {
-  it("limits each client and the whole site, in this process, off Cloudflare", async () => {
-    for (let index = 0; index < limits.perClient; index++) expect(await takeIngestRateLimit(from("10.0.0.1"))).toEqual({ ok: true });
-    expect(await takeIngestRateLimit(from("10.0.0.1"))).toEqual({ ok: false, status: 429, retryAfterMs: 60_000 });
-    expect(await takeIngestRateLimit(from("10.0.0.2"))).toEqual({ ok: true });
-
-    let allowed = limits.perClient + 1;
-    for (let client = 3; allowed < limits.total; client++) {
-      for (let index = 0; index < limits.perClient && allowed < limits.total; index++, allowed++) {
-        expect(await takeIngestRateLimit(from(`10.0.${Math.floor(client / 250)}.${client % 250}`))).toEqual({ ok: true });
-      }
+  it("shares one process limit without trusting client identity headers off Cloudflare", async () => {
+    for (let index = 0; index < limits.perClient; index++) {
+      expect(await takeIngestRateLimit(from("192.0.2.1"))).toEqual({ ok: true });
     }
-    expect(await takeIngestRateLimit(from("10.9.9.9"))).toEqual({ ok: false, status: 429, retryAfterMs: 60_000 });
+    expect(await takeIngestRateLimit(from("192.0.2.2"))).toEqual({
+      ok: false,
+      status: 429,
+      retryAfterMs: 60_000,
+    });
   });
 
   it("opens again once the window has passed", async () => {
@@ -91,7 +88,7 @@ describe("the /ingest rate limit", () => {
     expect(await takeIngestRateLimit(from("10.0.0.1"))).toEqual({ ok: true });
   });
 
-  it("keeps both limits in this process under next start, where OpenNext offers wrangler's local bindings", async () => {
+  it("keeps the shared process limit under next start, where OpenNext offers wrangler's local bindings", async () => {
     const perClient = vi.fn(async () => ({ success: true }));
     const quota = siteQuota(async () => {
       throw new Error("a Durable Object does not run in the local platform proxy");
