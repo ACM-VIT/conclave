@@ -40,6 +40,13 @@ import {
   VIDEO_EFFECTS_OUTPUT_MAX_HEIGHT as MAX_EFFECTS_OUTPUT_HEIGHT,
   VIDEO_EFFECTS_OUTPUT_MAX_WIDTH as MAX_EFFECTS_OUTPUT_WIDTH,
 } from "../lib/media-quality-settings";
+import {
+  captureGeneration,
+  captureHeldCanvas,
+  createHeldTrackGenerator,
+  holdClone,
+  onCapturesReleased,
+} from "../lib/media-captures";
 
 const SELFIE_SEGMENTATION_CDN =
   "https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1.1675465747";
@@ -3724,6 +3731,8 @@ const disposePrewarmedOutputWriterWorker = (reason: string) => {
   }
 };
 
+onCapturesReleased(() => disposePrewarmedOutputWriterWorker("call-ended"));
+
 const storePrewarmedOutputWriterWorker = (
   worker: Worker,
   track: MediaStreamTrackGeneratorInstance,
@@ -4358,9 +4367,10 @@ const prewarmOutputWriterWorker = (
       finish(new Error("output writer worker prewarm timed out."));
     }, PROCESSOR_PREWARM_TIMEOUT_MS);
 
+    const generation = captureGeneration();
     try {
       logVideoEffects(instanceId, "output_writer_worker_prewarm_start");
-      const track = new GeneratorCtor({ kind: "video" });
+      const track = createHeldTrackGenerator(GeneratorCtor, { kind: "video" }, generation);
       generatorTrack = track;
       worker = new Worker("/effects/video-effects-output-writer.js", {
         type: "module",
@@ -4388,13 +4398,19 @@ const prewarmOutputWriterWorker = (
             finish();
             return;
           }
-          if (!message.hasVideoFrame || !worker || !generatorTrack) {
+          if (
+            !message.hasVideoFrame ||
+            !worker ||
+            !generatorTrack ||
+            generatorTrack.readyState !== "live"
+          ) {
             logVideoEffects(instanceId, "output_writer_worker_prewarm_done", {
               hasVideoFrame: message.hasVideoFrame,
               hasWritableStream: message.hasWritableStream,
               hasOffscreenCanvas: message.hasOffscreenCanvas,
               renderer: message.renderer,
               stored: false,
+              outputTrackEnded: generatorTrack?.readyState === "ended",
               elapsedMs: Math.round(performance.now() - startedAt),
             });
             finish();
@@ -10114,6 +10130,7 @@ export function useVideoEffects({
   ]);
 
   useEffect(() => {
+    const pipelineGeneration = captureGeneration();
     if (
       !localPipelineActive ||
       !sourceVideoTrack ||
@@ -10831,7 +10848,7 @@ export function useVideoEffects({
       }
 
       try {
-        trackProcessorSourceTrack = sourceVideoTrack.clone();
+        trackProcessorSourceTrack = holdClone(sourceVideoTrack, pipelineGeneration);
         if ("contentHint" in trackProcessorSourceTrack) {
           trackProcessorSourceTrack.contentHint = "motion";
         }
@@ -12058,7 +12075,7 @@ export function useVideoEffects({
       }
 
       try {
-        const generatorTrack = new GeneratorCtor({ kind: "video" });
+        const generatorTrack = createHeldTrackGenerator(GeneratorCtor, { kind: "video" }, pipelineGeneration);
         if ("contentHint" in generatorTrack) {
           generatorTrack.contentHint = "motion";
         }
@@ -12152,7 +12169,7 @@ export function useVideoEffects({
       }
 
       try {
-        const generatorTrack = new GeneratorCtor({ kind: "video" });
+        const generatorTrack = createHeldTrackGenerator(GeneratorCtor, { kind: "video" }, pipelineGeneration);
         outputGeneratorWriter = generatorTrack.writable.getWriter();
         outputVideoFrameCtor = VideoFrameCtor;
         outputWriterMode = "main-thread";
@@ -12184,7 +12201,7 @@ export function useVideoEffects({
 
     const createCanvasCaptureOutput = (): ProcessedOutput | null => {
       if (typeof canvas.captureStream === "function") {
-        const capturedStream = canvas.captureStream(TARGET_FPS);
+        const capturedStream = captureHeldCanvas(canvas, TARGET_FPS, pipelineGeneration);
         const [capturedTrack] = capturedStream.getVideoTracks() as [
           CanvasCaptureMediaStreamTrack | undefined,
         ];

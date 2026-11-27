@@ -500,6 +500,7 @@ describe("our own fields", () => {
       outbound_cpu_limited_pct: null,
       outbound_bandwidth_limited_pct: 0.4,
     },
+    meet_call_rated: { rating: 4, outcome: "left", durationSeconds: 61 },
     meet_audio_playback_recovered: { kind: "screenShare" },
     meet_audio_playback_stalled: { kind: "participant", autoplayBlocked: true },
     meet_webcam_consumer_generation_reset_completed: {

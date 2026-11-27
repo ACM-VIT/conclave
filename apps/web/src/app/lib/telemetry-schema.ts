@@ -220,6 +220,11 @@ export const TELEMETRY_EVENTS = {
     outbound_cpu_limited_pct: percent.nullable(),
     outbound_bandwidth_limited_pct: percent.nullable(),
   }),
+  meet_call_rated: z.object({
+    rating: z.number().int().min(1).max(5),
+    outcome: z.enum(["left", "connectionLost", "endedByYou", "endedByHost", "removed"]),
+    durationSeconds: z.number().int().min(0).max(7 * 24 * 3600),
+  }),
   meet_audio_playback_recovered: z.object({ kind: AUDIO_KIND }),
   meet_audio_playback_stalled: z.object({ kind: AUDIO_KIND, autoplayBlocked: flag }),
   meet_webcam_consumer_generation_reset_completed: webcamResetSettled,

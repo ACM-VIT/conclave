@@ -85,4 +85,35 @@ export default tseslint.config(
       "@typescript-eslint/no-unsafe-return": "error",
     },
   },
+  {
+    files: ["src/**/*.{ts,tsx,js,jsx}"],
+    ignores: ["src/app/lib/media-captures.ts"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector:
+            "CallExpression[callee.property.name=/^(getUserMedia|getDisplayMedia)$/]",
+          message:
+            "Capture media with captureUserMedia or captureDisplayMedia from lib/media-captures, so ending the call releases it.",
+        },
+        {
+          selector:
+            "CallExpression[callee.property.name=/^(createMediaStreamDestination|captureStream)$/]",
+          message:
+            "Create derived tracks with createHeldDestination or captureHeldCanvas from lib/media-captures, so ending the call stops them.",
+        },
+        {
+          selector: "NewExpression[callee.name=/^(GeneratorCtor|MediaStreamTrackGenerator)$/]",
+          message:
+            "Create track generators with createHeldTrackGenerator from lib/media-captures, so ending the call stops them.",
+        },
+        {
+          selector: "CallExpression[callee.property.name='clone'][arguments.length=0]",
+          message:
+            "Clone media tracks with holdClone from lib/media-captures, so ending the call stops the clone.",
+        },
+      ],
+    },
+  },
 );

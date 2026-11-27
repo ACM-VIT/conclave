@@ -12,7 +12,7 @@ function AndroidUpsellSheet({ isOpen, onClose }: AndroidUpsellSheetProps) {
     <div
       className="mobile-sheet-root z-50"
       data-state={isOpen ? "open" : "closed"}
-      aria-hidden={!isOpen}
+      inert={!isOpen}
     >
       <div className="mobile-sheet-overlay" onClick={onClose} />
       <div className="mobile-sheet-panel">

@@ -33,7 +33,6 @@ import {
 import {
   createScheduledMeeting,
   deleteScheduledMeeting,
-  moveScheduledMeetingToClient,
   persistScheduledMeetingChanges,
   updateScheduledMeeting,
   type BookingSlotLease,
@@ -49,6 +48,7 @@ import {
   canonicalizeClientId,
   canMigrateClientNamespace,
   clientIdCandidates,
+  clientNamespaceIncludes,
   resolveDefaultClientId,
 } from "../clientIds.js";
 import type {
@@ -188,54 +188,6 @@ const profilePayload = (
   calendar: getCalendarSummary(state.scheduling, profile.id),
 });
 
-const migrateProfileNamespace = async (
-  state: SfuState,
-  profile: SchedulingProfile,
-  clientId: string,
-): Promise<void> => {
-  const previousClientId = profile.clientId;
-  if (previousClientId === clientId) return;
-  const eventTypeIds = new Set(
-    Array.from(state.scheduling.eventTypesById.values())
-      .filter((eventType) => eventType.profileId === profile.id)
-      .map((eventType) => eventType.id),
-  );
-
-  moveSchedulingProfileToClient(state.scheduling, profile, clientId);
-
-  const changedMeetings: ScheduledMeeting[] = [];
-  for (const meeting of state.scheduledMeetings.byId.values()) {
-    if (meeting.clientId !== previousClientId) continue;
-    if (meeting.source !== "booking_link") continue;
-    const belongsToProfile =
-      (meeting.eventTypeId && eventTypeIds.has(meeting.eventTypeId)) ||
-      (meeting.hostUserId && meeting.hostUserId === profile.userId) ||
-      meeting.hostEmail.trim().toLowerCase() === profile.email;
-    if (!belongsToProfile) continue;
-    try {
-      const moved = moveScheduledMeetingToClient(
-        state.scheduledMeetings,
-        meeting.id,
-        clientId,
-      );
-      if (moved) changedMeetings.push(moved);
-    } catch (error) {
-      Logger.warn(
-        `Skipped scheduled meeting namespace migration for ${meeting.id}`,
-        error,
-      );
-    }
-  }
-
-  if (changedMeetings.length > 0 && state.scheduledMeetingPersistence) {
-    await persistScheduledMeetingChanges(
-      state.scheduledMeetings,
-      state.scheduledMeetingPersistence,
-      changedMeetings,
-    );
-  }
-};
-
 const requireHostProfile = async (
   req: Request,
   res: Response,
@@ -260,10 +212,8 @@ const requireHostProfile = async (
         user.userId,
       );
       if (!legacyProfile) continue;
-      // Only into the deployment's default client: the requested id comes
-      // from the request and must not move a profile's booking meetings out.
       if (!canMigrateClientNamespace(legacyProfile.clientId, clientId)) break;
-      await migrateProfileNamespace(state, legacyProfile, clientId);
+      moveSchedulingProfileToClient(state.scheduling, legacyProfile, clientId);
       break;
     }
   }
@@ -598,7 +548,7 @@ const meetingMatchesProfile = (
   eventType?: SchedulingEventType | null,
 ): boolean => {
   if (eventType?.profileId === profile.id) return true;
-  if (meeting.clientId !== profile.clientId) return false;
+  if (!clientNamespaceIncludes(profile.clientId, meeting.clientId)) return false;
   if (meeting.hostUserId && profile.userId) {
     return meeting.hostUserId === profile.userId;
   }
