@@ -188,6 +188,27 @@ it("keeps the cross-client destination after leaving a meeting on the home page"
   expect(lookup.mock.calls.every(([id]) => id === undefined)).toBe(true);
 });
 
+it("moves the address to the room the home page joins after leaving another", async () => {
+  const join = vi.fn();
+  await act(async () => root.render(<RoomPage home onJoin={join} />));
+  await click("New meeting");
+  const previousRoom = browser.location.pathname.slice(1);
+  await click("Leave call");
+  const input = container.querySelector<HTMLInputElement>('input[placeholder="Enter a code or link"]')!;
+
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(browser.HTMLInputElement.prototype, "value")!.set!;
+    setter.call(input, "next-room");
+    input.dispatchEvent(new browser.Event("input", { bubbles: true }) as unknown as Event);
+    input.dispatchEvent(new browser.Event("focusout", { bubbles: true }) as unknown as Event);
+  });
+  await click("Join");
+
+  expect(previousRoom).not.toBe("next-room");
+  expect(join).toHaveBeenLastCalledWith("next-room");
+  expect(browser.location.pathname).toBe("/next-room");
+});
+
 it("does not reopen either device on the join card after leaving a call", async () => {
   await openRoom();
   await click("Turn off camera");
