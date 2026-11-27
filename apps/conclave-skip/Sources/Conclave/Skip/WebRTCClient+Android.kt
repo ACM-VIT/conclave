@@ -1912,6 +1912,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         val startedAt = System.nanoTime()
         configurationGeneration += 1
         endCameraWaits()
+        releaseUnpublishedCaptures()
         plannedConsumerResetCoordinatorJob?.cancel()
         plannedConsumerResetCandidates.clear()
         activeConsumerResetRoomId = null
@@ -2420,7 +2421,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         ensureCurrentConfiguration(generation)
 
         var pendingProducer: Producer? = null
-        var startedCapturer: VideoCapturer? = null
+        var ownedCapture: CaptureSession? = null
         var pendingHelper: SurfaceTextureHelper? = null
         val claim = cameraClaim(generation, offIntentGeneration)
         try {
@@ -2455,27 +2456,29 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             }
 
             if (videoCapturer == null && camera != null) {
-                val capture = CaptureSession()
-                cameraCapture = capture
-                val opened = openCameraCapturer(ProcessInfo.processInfo.androidContext, camera.first, cameraEvents(capture))
-                capture.capturer = opened
+                val opening = CaptureSession()
+                cameraCapture = opening
+                ownedCapture = opening
+                val opened = openCameraCapturer(ProcessInfo.processInfo.androidContext, camera.first, cameraEvents(opening))
+                opening.capturer = opened
                 videoCapturer = opened
                 if (opened != null) {
-                    capture.cameraName = camera.first
+                    opening.cameraName = camera.first
                     activeCameraFacing = camera.second
                     preferredCameraFacing = null
                 }
+            } else {
+                ownedCapture = cameraCapture
             }
+            val capture = ownedCapture
             pendingHelper?.let {
                 surfaceTextureHelper = it
                 pendingHelper = null
             }
             val capturer = videoCapturer ?: throw ErrorException("No camera capturer")
-            startedCapturer = capturer
             val textureHelper = surfaceTextureHelper ?: throw ErrorException("Camera texture helper unavailable")
             videoSource = peerConnectionFactory?.createVideoSource(false)
             val source = videoSource ?: throw ErrorException("Video source unavailable")
-            val capture = cameraCapture
             capturer.initialize(
                 textureHelper,
                 ProcessInfo.processInfo.androidContext,
@@ -2506,7 +2509,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             ) {
                 pendingProducer = null
                 closeSendProducer(producer)
-                if (videoCapturer === capturer) {
+                if (cameraCapture === capture) {
                     clearLocalWebcamCaptureState(notifyLocalState = false)
                 }
                 try {
@@ -2524,6 +2527,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             )
 
             videoProducer = producer
+            capture?.published = true
             webcamProducerTopology = if (lastWebcamProduceUsedSingleLayerFallback) {
                 WebcamProducerTopology.vp8SingleLayer
             } else {
@@ -2538,10 +2542,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             replayVideoSettingsRefreshIfChangedSince(settingsRevision)
         } catch (t: Throwable) {
             closeSendProducer(pendingProducer)
-
-            if (generation == configurationGeneration &&
-                (startedCapturer?.let { videoCapturer === it } ?: holdsCapture(claim))
-            ) {
+            if (ownedCapture != null && cameraCapture === ownedCapture) {
                 clearLocalWebcamCaptureState(notifyLocalState = false)
             }
             throw t
@@ -2575,7 +2576,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
 
             val capturer = openScreenCapturer(data, object : MediaProjection.Callback() {
                 override fun onStop() {
-                    applyCaptureCallback(claim, effect = { ScreenCaptureManager.onProjectionStoppedExternally(data) })
+                    applyCaptureCallback(capture, effect = { ScreenCaptureManager.onProjectionStoppedExternally(data) })
                 }
             })
             capture.capturer = capturer
@@ -2590,16 +2591,16 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
                 SessionCapturerObserver(source.capturerObserver) { screenCapture === capture },
             )
             val metrics = context.resources.displayMetrics
-            val capture = screenShareCaptureProfile(
+            val profile = screenShareCaptureProfile(
                 metrics.widthPixels,
                 metrics.heightPixels,
                 ConnectionQuality.good,
             )
 
             capturer.startCapture(
-                capture.width,
-                capture.height,
-                capture.maxFramerate,
+                profile.width,
+                profile.height,
+                profile.maxFramerate,
             )
             applyScreenOutputFormat(currentLocalBandwidthQuality)
 
@@ -2620,6 +2621,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             }
             resumeSendProducer(producer)
             screenProducer = producer
+            capture.published = true
             screenProducerBandwidthQuality = producedQuality
             screenProducerBandwidthSignature = producedSignature
             evaluateWebcamTopologyTransition()
@@ -2628,7 +2630,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         } catch (t: Throwable) {
             val reported = if (holdsCapture(claim)) lastScreenProducerSignalingError ?: t else t
             closeSendProducer(pendingProducer)
-            if (generation == configurationGeneration && screenCapture === capture) releaseScreenCapture()
+            if (screenCapture === capture) releaseScreenCapture()
             if (pendingProducer != null && generation == configurationGeneration) {
                 try {
                     socketManager?.closeProducer(pendingProducer.id)
@@ -3660,7 +3662,10 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         if (claim.generation != configurationGeneration) return false
         val offIntent = claim.cameraOffIntentGeneration
         if (offIntent != null && offIntent != localVideoOffIntentGeneration) return false
-        val capture = claim.capture ?: return true
+        return claim.capture?.let { isCurrentCapture(it) } ?: true
+    }
+
+    private fun isCurrentCapture(capture: CaptureSession): Boolean {
         if (screenCapture === capture) {
             val consent = capture.screenConsent ?: return false
             return screenCapturer === capture.capturer && ScreenCaptureManager.getCaptureResultIntent() === consent
@@ -3668,8 +3673,13 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         return cameraCapture === capture && capture.capturer != null && videoCapturer === capture.capturer
     }
 
-    private fun applyCaptureCallback(claim: CaptureClaim, effect: () -> Unit) {
-        mainHandler.post { if (holdsCapture(claim)) effect() }
+    private fun applyCaptureCallback(capture: CaptureSession, effect: () -> Unit) {
+        mainHandler.post { if (isCurrentCapture(capture)) effect() }
+    }
+
+    private fun releaseUnpublishedCaptures() {
+        if (screenCapture?.published == false) releaseScreenCapture()
+        if (cameraCapture?.published == false) releaseLocalCameraCapture()
     }
 
     private suspend fun awaitCaptureDeviceFree(
@@ -8178,7 +8188,6 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         val capturer = capture.capturer as? CameraVideoCapturer ?: throw ErrorException("Camera switch unavailable")
         if (capture.switchInFlight) return
         val claim = cameraClaim(configurationGeneration, localVideoOffIntentGeneration, capture)
-        val hardwareClaim = CaptureClaim(claim.generation, null, capture)
         capture.switchInFlight = true
         var target = requestedCameraFacing
         try {
@@ -8207,7 +8216,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
                     select {
                         capture.ended.onAwait { false }
                         result.onAwait { outcome ->
-                            if (!holdsCapture(hardwareClaim)) false else {
+                            if (!isCurrentCapture(capture)) false else {
                                 activeCameraFacing = outcome.getOrThrow()
                                 capture.cameraName = name
                                 cachedCameraCapability = null
@@ -8230,7 +8239,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             throw error
         } finally {
             capture.switchInFlight = false
-            if (holdsCapture(hardwareClaim)) onCameraFacingsChanged?.invoke()
+            if (isCurrentCapture(capture)) onCameraFacingsChanged?.invoke()
         }
     }
 
@@ -8259,20 +8268,18 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         return names.name(fallback)?.let { Pair(it, fallback) }
     }
 
-    private fun cameraEvents(capture: CaptureSession) = cameraEvents(CaptureClaim(configurationGeneration, null, capture))
-
-    private fun cameraEvents(claim: CaptureClaim) = object : org.webrtc.CameraVideoCapturer.CameraEventsHandler {
-        override fun onCameraError(errorDescription: String?) = applyCaptureCallback(claim, effect = {
+    private fun cameraEvents(capture: CaptureSession) = object : org.webrtc.CameraVideoCapturer.CameraEventsHandler {
+        override fun onCameraError(errorDescription: String?) = applyCaptureCallback(capture, effect = {
             activeWebcamCaptureProfile = null
             LocalPreviewController.shared.noteCallCameraInterruption(PreviewInterruption.cameraError)
         })
-        override fun onCameraDisconnected() = applyCaptureCallback(claim, effect = {
+        override fun onCameraDisconnected() = applyCaptureCallback(capture, effect = {
             activeWebcamCaptureProfile = null
             LocalPreviewController.shared.noteCallCameraInterruption(PreviewInterruption.inUseByAnotherClient)
         })
         override fun onCameraFreezed(errorDescription: String?) {}
         override fun onCameraOpening(cameraName: String?) {}
-        override fun onFirstFrameAvailable() = applyCaptureCallback(claim, effect = {
+        override fun onFirstFrameAvailable() = applyCaptureCallback(capture, effect = {
             LocalPreviewController.shared.noteCallCameraResumed()
         })
         override fun onCameraClosed() {}

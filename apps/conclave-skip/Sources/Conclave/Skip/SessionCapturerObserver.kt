@@ -9,6 +9,7 @@ import org.webrtc.VideoFrame
 internal class CaptureSession(val screenConsent: Intent? = null) {
     val ended = CompletableDeferred<Unit>()
     var switchInFlight = false
+    var published = false
     var cameraName: String? = null
     @Volatile var capturer: VideoCapturer? = null
 }

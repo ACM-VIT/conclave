@@ -407,7 +407,7 @@ class LocalVideoTeardownTests {
         val camera = capture(capturer)
         capturer.holdHardware()
         field("videoCapturer").set(media, camera.capturer)
-        field("cameraCapture").set(media, CaptureSession().also { it.capturer = camera.capturer })
+        field("cameraCapture").set(media, CaptureSession().also { it.capturer = camera.capturer; it.published = true })
         field("videoSource").set(media, camera.source)
         field("localVideoTrack").set(media, camera.track)
         field("videoProducer").set(media, producerOn(media, lane, "camera"))
@@ -419,7 +419,7 @@ class LocalVideoTeardownTests {
     private fun installShare(media: WebRTCClient, lane: SendTransportLane, capturer: FakeCapturer = FakeCapturer()): Capture {
         val share = capture(capturer)
         field("screenCapturer").set(media, share.capturer)
-        field("screenCapture").set(media, CaptureSession().also { it.capturer = share.capturer })
+        field("screenCapture").set(media, CaptureSession().also { it.capturer = share.capturer; it.published = true })
         field("screenVideoSource").set(media, share.source)
         field("screenVideoTrack").set(media, share.track)
         field("screenProducer").set(media, producerOn(media, lane, "screen"))
