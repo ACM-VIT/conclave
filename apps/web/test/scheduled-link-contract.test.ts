@@ -52,7 +52,7 @@ const open = (link: string) => {
   return lookupScheduledMeetingForCode({
     roomCode: roomIdFromMeetingPath(decodeURIComponent(url.pathname.slice(1))),
     clientId: resolveMeetingClientId(url.searchParams.get("clientId")),
-  });
+  }, { allowLegacyBooking: !url.searchParams.has("clientId") });
 };
 
 const fixtureValue = <T,>(result: CommitResult<T>): T => {
@@ -103,7 +103,9 @@ describe("scheduled links against the current SFU", () => {
       const expectLinks = async () => {
         expect(await open(linked)).toMatchObject({ kind: "scheduled", ...matching });
         expect(await open(wrong)).toEqual({ kind: "unscheduled" });
-        if (serverDefault === bookedUnder) expect(await open(bare)).toMatchObject(matching);
+        if (serverDefault === bookedUnder || (bookedUnder === "conclave" && source === "booking_link")) {
+          expect(await open(bare)).toMatchObject({ kind: "scheduled", ...matching });
+        }
         else expect(await open(bare)).toEqual({ kind: "unscheduled" });
       };
 
@@ -150,13 +152,29 @@ describe("scheduled links against the current SFU", () => {
     });
     expect(found).not.toHaveProperty("meeting.attendeeEmail");
     const bare = `${ORIGIN}/${booking.roomCode}`;
-    expect(await open(bare)).toEqual({ kind: "unscheduled" });
+    expect(await open(bare)).toEqual(found);
+    expect(await open(bare + "?clientId=acme")).toEqual({ kind: "unscheduled" });
+    expect(await open(bare + "?clientId=")).toEqual({ kind: "unscheduled" });
     const distinct = fixtureValue(await store.commit(createMeeting(
       { title: "Separate meeting", scheduledStartAt: Date.now() + 60_000, roomCode: booking.roomCode },
       { clientId: "acme", createdBy: HOST.email, defaultHostEmail: HOST.email, defaultHostUserId: HOST.userId },
     )));
     expect(await open(bare)).toMatchObject({ kind: "scheduled", clientId: "acme", meeting: { id: distinct.id } });
     expect(await open(booking.meetingLink)).toEqual(found);
+  });
+
+  it("does not try the legacy alias when the default lookup is inconclusive", async () => {
+    vi.stubEnv("SFU_CLIENT_ID", "acme");
+    vi.stubEnv("NEXT_PUBLIC_SFU_CLIENT_ID", "acme");
+    const tenants: unknown[] = [];
+    await startSfu((app) => {
+      app.get("/scheduled-meetings/public/v2/by-room/:roomCode", (req, res) => {
+        tenants.push(req.query.clientId);
+        res.sendStatus(503);
+      });
+    });
+    expect(await open(`${ORIGIN}/${ROOM}`)).toEqual({ kind: "unknown" });
+    expect(tenants).toEqual(["acme"]);
   });
 
   it("reports an unsupported service without trying a different endpoint", async () => {
