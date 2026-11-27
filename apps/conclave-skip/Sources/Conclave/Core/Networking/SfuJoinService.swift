@@ -66,6 +66,12 @@ struct SfuJoinInfo: Decodable {
         return SfuJoinIdentity(userKey: userKey, userId: "\(userKey)#\(sessionId)")
     }
 
+    func roomRecoveryScope(roomId: String, clientId: String, sessionId: String) -> NativeRoomRecoveryPass.Scope? {
+        guard let roomId = NativeRoomIdNormalizer.normalize(roomId),
+              let identity = localIdentity(sessionId: sessionId) else { return nil }
+        return NativeRoomRecoveryPass.Scope(roomId: roomId, clientId: clientId, userId: identity.userId, sessionId: sessionId)
+    }
+
     private func decodedTokenClaims() -> SfuJoinTokenClaims? {
         let parts = token.split(separator: ".")
         guard parts.count >= 2 else { return nil }

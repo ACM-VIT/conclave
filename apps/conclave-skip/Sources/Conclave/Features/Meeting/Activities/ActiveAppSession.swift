@@ -55,8 +55,9 @@ struct ActiveAppSessionError: LocalizedError, Equatable {
     }
 }
 
-private enum LocalAppEdits {
-    case clean, unverified, lostRenderer
+struct LostAppRendererEdits: Equatable {
+    let appSessionId: String
+    let bridgeGeneration: Int
 }
 
 @MainActor
@@ -111,7 +112,8 @@ final class ActiveAppSession {
     private var connectionEpoch = 0
     private var primeTask: Task<Void, Never>? = nil
     private var syncTask: Task<Void, Never>? = nil
-    private var localEdits = LocalAppEdits.clean
+    private var hasUnverifiedEdits = false
+    private(set) var lostRendererEdits: LostAppRendererEdits?
     private var watchHidden = false
     private var leaveRequestId = ""
     private var leaveReplies: [(Bool) -> Void] = []
@@ -168,7 +170,8 @@ final class ActiveAppSession {
         seenRequestIds = []
         hasRoomData = false
         embedReady = false
-        localEdits = LocalAppEdits.clean
+        hasUnverifiedEdits = false
+        lostRendererEdits = nil
         watchHidden = false
         lifecycle = ActiveAppLifecycle.ended
         emit(ActiveAppEvent.make(kind: ActiveAppEventKind.lifecycle, appSessionId: ended, lifecycle: lifecycle))
@@ -181,7 +184,7 @@ final class ActiveAppSession {
     }
 
     func releaseEmbedIfClean() {
-        if localEdits == LocalAppEdits.clean { releaseEmbed() }
+        if !hasUnverifiedEdits && lostRendererEdits == nil { releaseEmbed() }
     }
 
     func setWatchHidden(_ hidden: Bool) {
@@ -355,8 +358,9 @@ final class ActiveAppSession {
 
     private func invalidateBridge() {
         finishLeave(requestId: leaveRequestId, saved: false)
-        if localEdits == LocalAppEdits.unverified {
-            localEdits = LocalAppEdits.lostRenderer
+        if hasUnverifiedEdits {
+            lostRendererEdits = LostAppRendererEdits(appSessionId: appSessionId, bridgeGeneration: bridgeGeneration)
+            hasUnverifiedEdits = false
         }
         bridgeGeneration += 1
         deliver = nil
@@ -397,9 +401,15 @@ final class ActiveAppSession {
         return send(type, requestId: requestId, payload: payload)
     }
 
+    func discardLostRendererEdits(_ loss: LostAppRendererEdits) -> Bool {
+        guard lostRendererEdits == loss else { return false }
+        lostRendererEdits = nil
+        return true
+    }
+
     func prepareToLeave() async -> Bool {
-        if localEdits == LocalAppEdits.lostRenderer { return false }
-        if !embedReady { return localEdits == LocalAppEdits.clean }
+        if lostRendererEdits != nil { return false }
+        if !embedReady { return !hasUnverifiedEdits }
         guard isConnectionLive, isRelayAllowed() else { return false }
         return await withCheckedContinuation { continuation in
             leaveReplies.append { saved in continuation.resume(returning: saved) }
@@ -427,7 +437,7 @@ final class ActiveAppSession {
         leaveTimeout = nil
         leaveVerification?.cancel()
         leaveVerification = nil
-        if saved { localEdits = LocalAppEdits.clean }
+        if saved { hasUnverifiedEdits = false }
         for reply in replies { reply(saved) }
     }
 
@@ -464,7 +474,7 @@ final class ActiveAppSession {
         case .verifySaved:
             return verifySaved(requestId: message.requestId)
         case .editsPending:
-            if localEdits == LocalAppEdits.clean { localEdits = LocalAppEdits.unverified }
+            hasUnverifiedEdits = true
         case .update:
             if !embedReady { return reject(AppBridgeRejection.notAttached) }
             sendActiveAppYjsUpdate(message.bytes)

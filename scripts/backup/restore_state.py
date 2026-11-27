@@ -57,9 +57,9 @@ from statelib import (  # noqa: E402
     database_files,
     database_paths,
     docker_containers,
-    fallback_import_dirs,
     folded,
     json_coverage_problems,
+    legacy_import_locations,
     log,
     mount_roots,
     open_dir,
@@ -293,7 +293,7 @@ class StateDir:
             return []
         problems = []
         dirs = {rel for rel, kind in writes if kind == "dir"}
-        for rel, _ in writes:
+        for rel in {path for path, _ in writes} | retire:
             parts = rel.split("/")
             dirs.update("/".join(parts[:i]) for i in range(1, len(parts)))
         paths = {rel for rel, _ in writes} | dirs | retire
@@ -1044,7 +1044,9 @@ def restore(args):
     redis_step = None
     try:
         if "files" in wants:
-            retire.update(live_imports_to_retire(state, fallback_import_dirs(args.state, args.container), writes))
+            import_dirs, active_imports = legacy_import_locations(args.state, args.container)
+            retire.update(live_imports_to_retire(state, import_dirs, writes))
+            retire.update(active_imports - {rel for rel, _ in writes})
         problems = state.live_problems(writes, retire)
         if sqlite and not problems:
             problems = chain_problems(overlay(state.fd, archive, writes), archive, roots)

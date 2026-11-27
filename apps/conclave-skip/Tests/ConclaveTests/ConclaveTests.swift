@@ -55,6 +55,79 @@ final class ConclaveTests: XCTestCase {
         )
     }
 
+    func testJoinedAckPreservesTheOpaqueRecoveryPassOnTheWire() throws {
+        let raw = Data("""
+        {"status":"joined","roomId":"abc-mnop-xyz","rtpCapabilities":{},"roomRecoveryPass":"signed.fixture.pass"}
+        """.utf8)
+        let ack = try JSONDecoder().decode(JoinRoomResponse.self, from: raw)
+        let encoded = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(ack)) as? NSDictionary)
+        XCTAssertEqual(encoded["roomRecoveryPass"] as? String, "signed.fixture.pass")
+    }
+
+    func testRecoveryPassResendsOnlyForTheAdmittedScopeAndRenewsFromItsSocket() throws {
+        let info = SfuJoinInfo(token: "header.eyJ1c2VySWQiOiJtZW1iZXIiLCJzZXNzaW9uSWQiOiJzZXNzaW9uIn0.sig",
+                               sfuUrl: "https://sfu.example.test", iceServers: nil)
+        let scope = try XCTUnwrap(info.roomRecoveryScope(roomId: " BOOKING ", clientId: "client-a", sessionId: "session"))
+        XCTAssertEqual(scope.userId, "member#session")
+        let previous = UUID()
+        let current = UUID()
+        let ack = JoinRoomResponse(rtpCapabilities: RtpCapabilities(codecs: nil, headerExtensions: nil), existingProducers: [], status: "joined",
+                                   roomId: "abc-mnop-xyz", roomRecoveryPass: "signed.first.pass")
+        var recovery = NativeRoomRecoveryPass()
+        XCTAssertNil(recovery.beginJoin(scope: scope, isRecovery: true))
+        recovery.accept(ack, scope: scope, attempt: current)
+        recovery.renew(RoomRecoveryPassNotification(roomId: "abc-mnop-xyz", roomRecoveryPass: "signed.stale.pass"), attempt: previous)
+        recovery.renew(RoomRecoveryPassNotification(roomId: "booking", roomRecoveryPass: "signed.other.pass"), attempt: current)
+        recovery.renew(RoomRecoveryPassNotification(roomId: "abc-mnop-xyz", roomRecoveryPass: String(repeating: "x", count: 2049)), attempt: current)
+        XCTAssertEqual(recovery.beginJoin(scope: scope, isRecovery: true), "signed.first.pass")
+        recovery.renew(RoomRecoveryPassNotification(roomId: "ABC-MNOP-XYZ", roomRecoveryPass: "signed.renewed.pass"), attempt: current)
+        let request = JoinRoomRequest(roomId: scope.roomId, sessionId: scope.sessionId, displayName: nil,
+                                      webinarInviteCode: nil, meetingInviteCode: nil,
+                                      roomRecoveryPass: recovery.beginJoin(scope: scope, isRecovery: true))
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? NSDictionary)
+        XCTAssertEqual(body["roomRecoveryPass"] as? String, "signed.renewed.pass")
+
+        for other in [
+            NativeRoomRecoveryPass.Scope(roomId: "other", clientId: scope.clientId, userId: scope.userId, sessionId: scope.sessionId),
+            NativeRoomRecoveryPass.Scope(roomId: scope.roomId, clientId: "other", userId: scope.userId, sessionId: scope.sessionId),
+            NativeRoomRecoveryPass.Scope(roomId: scope.roomId, clientId: scope.clientId, userId: "other#session", sessionId: scope.sessionId),
+            NativeRoomRecoveryPass.Scope(roomId: scope.roomId, clientId: scope.clientId, userId: scope.userId, sessionId: "other"),
+        ] {
+            recovery.accept(ack, scope: scope, attempt: current)
+            XCTAssertNil(recovery.beginJoin(scope: other, isRecovery: true))
+            XCTAssertNil(recovery.beginJoin(scope: scope, isRecovery: true))
+        }
+    }
+
+    func testRecoveryPassCannotSurviveWaitingFreshEntryOrTeardown() {
+        let scope = NativeRoomRecoveryPass.Scope(roomId: "abc-mnop-xyz", clientId: "client", userId: "member#session", sessionId: "session")
+        let attempt = UUID()
+        let capabilities = RtpCapabilities(codecs: nil, headerExtensions: nil)
+        let member = JoinRoomResponse(rtpCapabilities: capabilities, existingProducers: [], status: "joined",
+                                      roomId: scope.roomId, roomRecoveryPass: "signed.member.pass")
+        let renewal = RoomRecoveryPassNotification(roomId: scope.roomId, roomRecoveryPass: "signed.renewed.pass")
+        var recovery = NativeRoomRecoveryPass()
+        for response in [
+            JoinRoomResponse(rtpCapabilities: capabilities, existingProducers: [], status: "waiting",
+                             roomId: scope.roomId, roomRecoveryPass: "signed.waiting.pass"),
+            JoinRoomResponse(rtpCapabilities: capabilities, existingProducers: [], status: "joined",
+                             roomId: scope.roomId, webinarRole: "attendee", roomRecoveryPass: "signed.observer.pass"),
+        ] {
+            recovery.accept(member, scope: scope, attempt: attempt)
+            recovery.accept(response, scope: scope, attempt: attempt)
+            recovery.renew(renewal, attempt: attempt)
+            XCTAssertNil(recovery.beginJoin(scope: scope, isRecovery: true))
+        }
+
+        recovery.accept(member, scope: scope, attempt: attempt)
+        XCTAssertNil(recovery.beginJoin(scope: scope, isRecovery: false))
+        XCTAssertNil(recovery.beginJoin(scope: scope, isRecovery: true))
+        recovery.accept(member, scope: scope, attempt: attempt)
+        recovery.clear()
+        recovery.renew(renewal, attempt: attempt)
+        XCTAssertNil(recovery.beginJoin(scope: scope, isRecovery: true))
+    }
+
     func testSocketWireModelsRoundTripNativeShape() throws {
         let request = JoinRoomRequest(
             roomId: "room-a",
@@ -70,6 +143,7 @@ final class ConclaveTests: XCTestCase {
         XCTAssertEqual(encoded["sessionId"] as? String, "session-a")
         XCTAssertEqual(encoded["displayName"] as? String, "Host")
         XCTAssertEqual(encoded["meetingInviteCode"] as? String, "meet-123")
+        XCTAssertNil(encoded["roomRecoveryPass"])
         let mediaCapabilities = try XCTUnwrap(encoded["mediaCapabilities"] as? NSDictionary)
         let webcamCapabilities = try XCTUnwrap(mediaCapabilities["webcam"] as? NSDictionary)
         XCTAssertEqual(webcamCapabilities["negotiationVersion"] as? Int, 3)

@@ -1486,8 +1486,8 @@ export function useMeetSocket({
   // joinRoom reply that did not say waiting. Call metrics end the wait at the
   // first of these, before media is set up.
   const [admittedAt, setAdmittedAt] = useState<number | null>(null);
-  // Mirrors reconnectInFlightRef for call metrics: an error while it is true
-  // is a failed retry, and a redirect between SFUs never sets it.
+  // The ref also serializes path probes. Call metrics start only when a
+  // transport rebuild or room rejoin actually begins.
   const [reconnectInFlight, setReconnectInFlight] = useState(false);
   const updateReconnectRecoveryStatus = useCallback(
     (
@@ -10363,7 +10363,6 @@ export function useMeetSocket({
       });
     };
     reconnectInFlightRef.current = true;
-    setReconnectInFlight(true);
     reconnectAttemptsRef.current = resolveReconnectStartAttempts(
       reconnectAttemptsRef.current,
       MAX_RECONNECT_ATTEMPTS,
@@ -10422,7 +10421,10 @@ export function useMeetSocket({
           outcome = "stale";
         } else {
           applyRequestedRelayPolicy("restart");
-          const noteRebuildStarted = () => noteEscalation("rebuild-started");
+          const noteRebuildStarted = () => {
+            setReconnectInFlight(true);
+            noteEscalation("rebuild-started");
+          };
           const result =
             scopedDirection === "consumer"
               ? await rebuildReceivePath(noteRebuildStarted)
@@ -10453,6 +10455,7 @@ export function useMeetSocket({
             : `[Meets] Could not rebuild the ${scopedDirection} transport on its own (${failure}); rejoining.`,
         );
       }
+      setReconnectInFlight(true);
       setMeetError(null);
       while (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
         if (reconnectGeneration !== reconnectGenerationRef.current) return;

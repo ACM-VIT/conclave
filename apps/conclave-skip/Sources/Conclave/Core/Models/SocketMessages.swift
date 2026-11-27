@@ -17,6 +17,7 @@ struct JoinRoomRequest: Codable {
     let displayName: String?
     let webinarInviteCode: String?
     let meetingInviteCode: String?
+    var roomRecoveryPass: String? = nil
 
     var mediaCapabilities = NativeClientMediaCapabilities(
         webcam: NativeWebcamCodecCapabilities(
@@ -26,6 +27,11 @@ struct JoinRoomRequest: Codable {
             preferredBaseline: "vp8"
         )
     )
+}
+
+struct RoomRecoveryPassNotification: Decodable {
+    let roomId: String
+    let roomRecoveryPass: String
 }
 
 enum JoinMode: String, Codable {
@@ -756,6 +762,7 @@ struct JoinRoomResponse: Codable {
     let status: String?
     let activeSpeakerId: String?
     let hasActiveSpeakerInfo: Bool
+    let roomRecoveryPass: String?
 
     let roomId: String?
     let hostUserId: String?
@@ -782,6 +789,7 @@ struct JoinRoomResponse: Codable {
         case existingProducers
         case status
         case activeSpeakerId
+        case roomRecoveryPass
         case roomId
         case hostUserId
         case hostUserIds
@@ -825,13 +833,15 @@ struct JoinRoomResponse: Codable {
         webinarAttendeeCount: Int? = nil,
         webinarMaxAttendees: Int? = nil,
         webinarQaEnabled: Bool? = nil,
-        displayNameSnapshot: [DisplayNameSnapshotUser]? = nil
+        displayNameSnapshot: [DisplayNameSnapshotUser]? = nil,
+        roomRecoveryPass: String? = nil
     ) {
         self.rtpCapabilities = rtpCapabilities
         self.existingProducers = existingProducers
         self.status = status
         self.activeSpeakerId = activeSpeakerId
         self.hasActiveSpeakerInfo = hasActiveSpeakerInfo || activeSpeakerId != nil
+        self.roomRecoveryPass = roomRecoveryPass
         self.roomId = roomId
         self.hostUserId = hostUserId
         self.hostUserIds = hostUserIds
@@ -866,6 +876,7 @@ struct JoinRoomResponse: Codable {
         self.status = status
         self.activeSpeakerId = try container.decodeIfPresent(String.self, forKey: .activeSpeakerId)
         self.hasActiveSpeakerInfo = container.contains(.activeSpeakerId)
+        self.roomRecoveryPass = try? container.decodeIfPresent(String.self, forKey: .roomRecoveryPass)
         self.roomId = try container.decodeIfPresent(String.self, forKey: .roomId)
         self.hostUserId = try container.decodeIfPresent(String.self, forKey: .hostUserId)
         self.hostUserIds = try container.decodeIfPresent([String].self, forKey: .hostUserIds)

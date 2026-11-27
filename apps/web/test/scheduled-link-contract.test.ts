@@ -14,14 +14,22 @@ import { registerScheduledMeetingRoutes } from "../../../packages/sfu/server/htt
 import { registerSchedulingRoutes } from "../../../packages/sfu/server/http/schedulingRoutes.js";
 import { buildSchedulingMeetingLink } from "../../../packages/sfu/server/schedulingLinks.js";
 import type { SfuState } from "../../../packages/sfu/server/state.js";
-import { fetchPublicScheduledMeeting, isSfuTooOldForBookings } from "../src/lib/scheduled-meeting-lookup";
-import { findScheduledMeetingForLink } from "../src/lib/sfu-client-id";
+import { roomIdFromMeetingPath } from "../src/lib/meeting-links";
+import { isSfuTooOldForBookings } from "../src/lib/scheduled-meeting-lookup";
+import { lookupScheduledMeetingForCode } from "../src/lib/scheduled-meetings";
+import { resolveMeetingClientId } from "../src/lib/sfu-client-id";
 
 const SECRET = "scheduled-link-test-secret";
 const ROOM = "weekly-sync";
 const ORIGIN = "https://meet.test";
 const HOST = { userId: "host", email: "host@example.com" };
 const servers: Array<{ close: () => void }> = [];
+
+let sfuUrl: string;
+vi.mock("@/lib/sfu-user-auth", () => ({ buildScheduledWebinarHeaders: vi.fn() }));
+vi.mock("@/lib/sfu-admin-auth", () => ({ resolveSfuSecret: () => SECRET }));
+vi.mock("@/lib/sfu-url", () => ({ resolveSfuUrls: () => [sfuUrl] }));
+vi.mock("@/app/lib/utils", () => ({ readResponseError: vi.fn() }));
 
 afterEach(() => {
   for (const server of servers.splice(0)) server.close();
@@ -35,7 +43,16 @@ const startSfu = async (register: (app: express.Express) => void) => {
   const server = app.listen(0, "127.0.0.1");
   servers.push(server);
   await new Promise<void>((resolve) => server.once("listening", () => resolve()));
-  return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  sfuUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  return sfuUrl;
+};
+
+const open = (link: string) => {
+  const url = new URL(link);
+  return lookupScheduledMeetingForCode({
+    roomCode: roomIdFromMeetingPath(decodeURIComponent(url.pathname.slice(1))),
+    clientId: resolveMeetingClientId(url.searchParams.get("clientId")),
+  });
 };
 
 const fixtureValue = <T,>(result: CommitResult<T>): T => {
@@ -50,12 +67,6 @@ const currentSfu = async () => {
     registerScheduledMeetingRoutes(app, { state, sfuSecret: SECRET });
     registerSchedulingRoutes(app, { state, sfuSecret: SECRET });
   });
-  const open = (link: string) => {
-    const url = new URL(link);
-    return findScheduledMeetingForLink(url.searchParams.get("clientId"), (clientId) =>
-      fetchPublicScheduledMeeting(`${origin}/scheduled-meetings`, SECRET, clientId, ROOM),
-    );
-  };
   const hostRequest = async <T,>(path: string, method = "GET"): Promise<T> => {
     const response = await fetch(origin + path, {
       method,
@@ -65,7 +76,7 @@ const currentSfu = async () => {
     expect(response.status, `${method} ${path}`).toBe(200);
     return await response.json() as T;
   };
-  return { store, open, hostRequest };
+  return { store, origin, hostRequest };
 };
 
 const ROWS = (["conclave", "acme"] as const).flatMap((serverDefault) =>
@@ -80,7 +91,7 @@ describe("scheduled links against the current SFU", () => {
     async (serverDefault, bookedUnder, source) => {
       vi.stubEnv("SFU_CLIENT_ID", serverDefault);
       vi.stubEnv("NEXT_PUBLIC_SFU_CLIENT_ID", serverDefault);
-      const { store, open, hostRequest } = await currentSfu();
+      const { store, hostRequest } = await currentSfu();
       const booking = fixtureValue(await store.commit(createMeeting(
         { title: "Weekly sync", scheduledStartAt: Date.now() + 60_000, roomCode: ROOM, source },
         { clientId: bookedUnder, createdBy: HOST.email, defaultHostEmail: HOST.email, defaultHostUserId: HOST.userId },
@@ -89,12 +100,11 @@ describe("scheduled links against the current SFU", () => {
       const linked = buildSchedulingMeetingLink(ORIGIN, booking);
       const bare = `${ORIGIN}/${ROOM}`;
       const wrong = `${bare}?clientId=unrelated`;
-      const bareCanFindBooking = [serverDefault, "conclave"].includes(bookedUnder);
       const expectLinks = async () => {
-        expect(await open(linked)).toMatchObject(matching);
-        expect(await open(wrong)).toBeNull();
-        if (bareCanFindBooking) expect(await open(bare)).toMatchObject(matching);
-        else expect(await open(bare)).toBeNull();
+        expect(await open(linked)).toMatchObject({ kind: "scheduled", ...matching });
+        expect(await open(wrong)).toEqual({ kind: "unscheduled" });
+        if (serverDefault === bookedUnder) expect(await open(bare)).toMatchObject(matching);
+        else expect(await open(bare)).toEqual({ kind: "unscheduled" });
       };
 
       await expectLinks();
@@ -111,17 +121,53 @@ describe("scheduled links against the current SFU", () => {
     },
   );
 
+  it("opens the URL emitted by a new booking under its saved tenant", async () => {
+    vi.stubEnv("SFU_CLIENT_ID", "acme");
+    vi.stubEnv("NEXT_PUBLIC_SFU_CLIENT_ID", "acme");
+    vi.stubEnv("SCHEDULING_EMAIL_ENABLED", "0");
+    const { store, origin, hostRequest } = await currentSfu();
+    const profile = fixtureValue(await store.commit(ensureHostProfile(
+      { clientId: "conclave", ...HOST, timeZone: "UTC" }, { syncIdentity: false },
+    )));
+    const eventType = fixtureValue(await store.commit(createHostEventType(
+      profile.id, { title: "Intro", slug: "intro", isActive: true },
+    )));
+    const page = `/scheduling/public/${encodeURIComponent(profile.username)}/${eventType.slug}`;
+    const { slots } = await hostRequest<{ slots: Array<{ startAt: number }> }>(`${page}/slots`);
+    const slot = slots[0];
+    if (!slot) throw new Error("Expected a slot to book");
+    const result = await fetch(origin + page + "/book", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-sfu-secret": SECRET, "x-app-origin": ORIGIN, "x-sfu-client": "acme" },
+      body: JSON.stringify({ startAt: slot.startAt, attendeeName: "Guest", attendeeEmail: "guest@example.test" }),
+    });
+    expect(result.status).toBe(201);
+    const { booking } = await result.json() as { booking: { id: string; roomCode: string; meetingLink: string } };
+    const found = await open(booking.meetingLink);
+    expect(found).toMatchObject({
+      kind: "scheduled", sfuUrl: origin, clientId: "conclave",
+      meeting: { id: booking.id, roomCode: booking.roomCode, clientId: "conclave" },
+    });
+    expect(found).not.toHaveProperty("meeting.attendeeEmail");
+    const bare = `${ORIGIN}/${booking.roomCode}`;
+    expect(await open(bare)).toEqual({ kind: "unscheduled" });
+    const distinct = fixtureValue(await store.commit(createMeeting(
+      { title: "Separate meeting", scheduledStartAt: Date.now() + 60_000, roomCode: booking.roomCode },
+      { clientId: "acme", createdBy: HOST.email, defaultHostEmail: HOST.email, defaultHostUserId: HOST.userId },
+    )));
+    expect(await open(bare)).toMatchObject({ kind: "scheduled", clientId: "acme", meeting: { id: distinct.id } });
+    expect(await open(booking.meetingLink)).toEqual(found);
+  });
+
   it("reports an unsupported service without trying a different endpoint", async () => {
     const requested: string[] = [];
-    const origin = await startSfu((app) => {
+    await startSfu((app) => {
       app.use((req, res) => {
         requested.push(req.path);
         res.sendStatus(404);
       });
     });
-    await expect(findScheduledMeetingForLink("conclave", (clientId) =>
-      fetchPublicScheduledMeeting(`${origin}/scheduled-meetings`, SECRET, clientId, ROOM),
-    )).rejects.toSatisfy(isSfuTooOldForBookings);
+    await expect(open(`${ORIGIN}/${ROOM}?clientId=conclave`)).rejects.toSatisfy(isSfuTooOldForBookings);
     expect(requested).toEqual([`/scheduled-meetings/public/v2/by-room/${ROOM}`]);
   });
 });
