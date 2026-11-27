@@ -701,6 +701,15 @@ test("an instance on the target whose status says unhealthy is redeployed, not c
   });
 });
 
+test("a host without Python is refused before any SFU changes", async () => {
+  await withSfus({ "sfu-a": {} }, async (sfus, events) => {
+    const result = await deploy(sfus, { withoutPython: true });
+    assert.equal(result.code, 1, result.output);
+    assert.match(result.output, /needs python3 to validate the host deploy lock/);
+    assert.deepEqual(events, []);
+  });
+});
+
 test("a host without flock refuses to deploy rather than lock some other way", async () => {
   await withSfus({ "sfu-a": {}, "sfu-b": {} }, async (sfus, events) => {
     const result = await deploy(sfus, { withoutFlock: true });

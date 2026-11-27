@@ -514,7 +514,7 @@ main();
 // deploy-sfu.sh the checkout starts with, in place of the current one.
 export const deploy = async (
   sfus,
-  { args: extraArgs = [], env: extraEnv = {}, envLines = [], upstream, powershell = false, withoutFlock = false, script, noRedisUrl = false, journals = {}, checkoutFiles = {} } = {},
+  { args: extraArgs = [], env: extraEnv = {}, envLines = [], upstream, powershell = false, withoutFlock = false, withoutPython = false, script, noRedisUrl = false, journals = {}, checkoutFiles = {} } = {},
 ) => {
   // On macOS this path sits behind the /var symlink, so the preflight also
   // runs through one.
@@ -574,7 +574,8 @@ export const deploy = async (
     await writeFile(path.join(bin, "docker"), dockerStandIn);
     await chmod(path.join(bin, "docker"), 0o755);
     if (!withoutFlock) await provideFlock(bin);
-    const hostPath = withoutFlock ? await pathWithout(path.join(root, "host-bin"), ["flock"]) : process.env.PATH;
+    const missing = [...(withoutFlock ? ["flock"] : []), ...(withoutPython ? ["python3"] : [])];
+    const hostPath = missing.length ? await pathWithout(path.join(root, "host-bin"), missing) : process.env.PATH;
     const dockerLog = path.join(root, "docker.log");
     await writeFile(dockerLog, "");
     const env = {

@@ -2906,6 +2906,76 @@ test("a SQLite-only restore is not stopped by a JSON store it does not restore",
   }
 });
 
+test("the SQLite backup engine only opens private, descriptor-copied inputs", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, env } = await setUp(root);
+    withDatabase(state);
+    const payload = path.join(root, "private");
+    await mkdir(payload, { mode: 0o700 });
+    const program = `
+import os, pathlib, sqlite3, sys, urllib.parse
+sys.path.insert(0, sys.argv[1])
+import backup_state
+root = pathlib.Path(sys.argv[2]).resolve()
+connect = sqlite3.connect
+def private_connect(name, *args, **kwargs):
+    filename = urllib.parse.unquote(urllib.parse.urlsplit(name).path) if name.startswith("file:") else name
+    if pathlib.Path(filename).is_relative_to(root):
+        raise AssertionError("SQLite reopened a pathname in the live state tree")
+    return connect(name, *args, **kwargs)
+sqlite3.connect = private_connect
+backup_state.copy_command(sys.argv[2], "/var/lib/conclave/recordings", sys.argv[3])
+`;
+    await run("python3", ["-I", "-B", "-c", program, scripts, state, payload], { env });
+    assert.deepEqual(rows(path.join(payload, "sqlite", "conclave.sqlite")), rows(path.join(state, "conclave.sqlite")));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("restore refuses a changed Redis prefix before deleting any live keys", needsRedis, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  const live = await startRedis();
+  try {
+    const { state, config, backup, latestArchive, restore } = await setUp(root, [
+      `SFU_PERSISTENCE_REDIS_URL=redis://127.0.0.1:${live.port}/0`,
+      "SFU_PERSISTENCE_REDIS_KEY_PREFIX=before",
+    ]);
+    withDatabase(state);
+    await live.cli("SET", "before:scheduling:profiles", "archived");
+    await backup("--local-only");
+    await live.cli("SET", "after:scheduling:profiles", "live");
+    await writeFile(config, `${await readFile(config, "utf8")}\nSFU_PERSISTENCE_REDIS_KEY_PREFIX=after\n`);
+    await assert.rejects(restore("--file", await latestArchive(), "--only", "redis", "--yes"), /Redis key pattern.*does not match/);
+    assert.equal((await live.cli("GET", "after:scheduling:profiles")).stdout.trim(), "live");
+  } finally {
+    live.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("restoring files refuses a configured JSON store path missing from the archive", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, config, backup, latestArchive, restore } = await setUp(root, [
+      "SCHEDULING_PERSISTENCE=json",
+      "SCHEDULING_PATH=/var/lib/conclave/recordings/old.json",
+    ]);
+    withDatabase(state);
+    await writeFile(path.join(state, "old.json"), '["archived"]');
+    await backup("--local-only");
+    await writeFile(path.join(state, "current.json"), '["live"]');
+    await writeFile(path.join(state, "old.json"), '["not replaced"]');
+    await writeFile(config, `${await readFile(config, "utf8")}\nSCHEDULING_PATH=/var/lib/conclave/recordings/current.json\n`);
+    await assert.rejects(restore("--file", await latestArchive(), "--only", "files", "--yes"), /backup has no copy of current.json/);
+    assert.equal(await readFile(path.join(state, "current.json"), "utf8"), '["live"]');
+    assert.equal(await readFile(path.join(state, "old.json"), "utf8"), '["not replaced"]');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 describe("backup and restore", { concurrency: 6 }, () => {
   for (const args of queued) nodeTest(...args);
 });
