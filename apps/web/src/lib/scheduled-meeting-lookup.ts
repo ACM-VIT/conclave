@@ -38,6 +38,15 @@ export const fetchPublicScheduledMeeting = async (
   });
   if (response.status === 404) throw new SfuTooOldForBookingsError();
   if (!response.ok) throw new Error(`Scheduled meeting lookup failed (${response.status})`);
-  const data = (await response.json()) as { scheduledMeeting?: PublicScheduledMeeting | null };
-  return data?.scheduledMeeting?.clientId === clientId ? data.scheduledMeeting : null;
+  const data: unknown = await response.json();
+  if (data === null || typeof data !== "object" || !("scheduledMeeting" in data)) {
+    throw new Error("Invalid scheduled meeting lookup response");
+  }
+  const meeting = data.scheduledMeeting;
+  if (meeting === null) return null;
+  if (!meeting || typeof meeting !== "object" || !("clientId" in meeting) || typeof meeting.clientId !== "string" ||
+      !("id" in meeting) || typeof meeting.id !== "string") {
+    throw new Error("Invalid scheduled meeting lookup response");
+  }
+  return meeting.clientId === clientId ? meeting as PublicScheduledMeeting : null;
 };
