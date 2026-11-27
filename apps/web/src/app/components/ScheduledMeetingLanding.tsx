@@ -64,10 +64,12 @@ export default function ScheduledMeetingLanding({
 
   const shareLink = useMemo(() => {
     if (typeof window === "undefined") return "";
-    return buildMeetingUrl(window.location.origin, {
-      roomCode: meeting.roomCode,
-      clientId,
-    });
+    return (
+      buildMeetingUrl(window.location.origin, {
+        roomCode: meeting.roomCode,
+        clientId,
+      }) ?? ""
+    );
   }, [clientId, meeting.roomCode]);
 
   useEffect(() => {
@@ -176,10 +178,12 @@ export default function ScheduledMeetingLanding({
           )}
           {isLive && (
             <a
-              href={buildMeetingPath({
-                roomCode: meeting.roomCode,
-                clientId,
-              })}
+              href={
+                buildMeetingPath({
+                  roomCode: meeting.roomCode,
+                  clientId,
+                }) ?? undefined
+              }
               className={CTA_PRIMARY}
             >
               Open the meeting

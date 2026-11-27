@@ -120,12 +120,12 @@ import {
   generateRoomCode,
   isSystemUserId,
   sanitizeInstitutionDisplayName,
-  sanitizeRoomCode,
 } from "./lib/utils";
 import type { VideoEffectsBridgeState } from "./components/VideoEffectsBridge";
 import type { SetupNotice } from "./lib/setup-notice";
 import { clearRejoinIntent, readRejoinIntent } from "./lib/rejoin-intent";
 import { canonicalizeSfuClientId, resolveBrowserSfuClientId } from "@/lib/sfu-client-id";
+import { roomIdFromMeetingPath } from "@/lib/meeting-links";
 
 type MeetUser = {
   id?: string;
@@ -933,11 +933,9 @@ export default function MeetsClient({
     if (typeof window === "undefined") return;
     const path = window.location.pathname.replace(/^\/+/, "");
     if (!path) return;
-    const decoded = decodeURIComponent(path);
-    if (!decoded || decoded === "undefined" || decoded === "null") return;
-    const sanitized = sanitizeRoomCode(decoded);
-    if (!sanitized) return;
-    setRoomId(sanitized);
+    const pathRoomId = roomIdFromMeetingPath(decodeURIComponent(path));
+    if (!pathRoomId) return;
+    setRoomId(pathRoomId);
   }, [enableRoomRouting, forceJoinOnly, roomId, setRoomId]);
 
   useEffect(() => {

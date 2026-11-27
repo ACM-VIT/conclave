@@ -14,6 +14,7 @@ import {
   ChevronDown,
   Check,
   Link2,
+  Link2Off,
   Info,
   X,
   type LucideIcon,
@@ -352,6 +353,7 @@ function JoinScreen({
   const nameInputId = useId();
   const codeInputId = useId();
   const codeProblemId = useId();
+  const noLinkReasonId = useId();
 
   useEffect(() => {
     prefetchConclaveAnimation();
@@ -825,16 +827,19 @@ function JoinScreen({
   const joinMeeting = () => {
     const candidate = codeField.resolution.code;
     if (!candidate || !ensureGuest()) return;
-    const skipMutedMicWarmup = settlePreviewForEntry();
     if (!codeField.tenant.onThisPage) {
       const target = { roomCode: candidate, clientId: codeField.tenant.clientId };
+      const path = buildMeetingPath(target);
+      if (!path) return;
+      settlePreviewForEntry();
       saveRejoinIntent(
         { roomId: target.roomCode, clientId: target.clientId },
         previewMedia(livePreviewTracks()),
       );
-      window.location.assign(buildMeetingPath(target));
+      window.location.assign(path);
       return;
     }
+    const skipMutedMicWarmup = settlePreviewForEntry();
     onEnterStart?.("join");
     commitPrejoinMedia(skipMutedMicWarmup);
     onIsAdminChange(false);
@@ -1025,7 +1030,7 @@ function JoinScreen({
           clientId: codeField.tenant.clientId,
         })
       : "";
-  const linkCopy = useClipboardCopy(inviteLink);
+  const linkCopy = useClipboardCopy(inviteLink ?? "");
   const previewHint =
     permissionRequestError ?? (showPermissionHint ? "Permission needed" : null);
   const handleNameInputChange = (nextName: string) => {
@@ -1323,8 +1328,10 @@ function JoinScreen({
                     readOnly={isRoutedRoom}
                     autoFocus={isRoutedRoom}
                     aria-invalid={codeResolution.tooLong || undefined}
-                    aria-describedby={codeResolution.tooLong ? codeProblemId : undefined}
-                    className={`${FIELD} ${codeResolution.tooLong ? "pr-32" : "pr-12"}`}
+                    aria-describedby={
+                      codeResolution.tooLong ? codeProblemId : inviteLink === null ? noLinkReasonId : undefined
+                    }
+                    className={`${FIELD} ${codeResolution.tooLong ? "pr-32" : inviteLink === null ? "pr-44" : "pr-12"}`}
                   />
                   {codeResolution.tooLong ? (
                     <span
@@ -1356,6 +1363,24 @@ function JoinScreen({
                         <Link2 size={16} aria-hidden="true" />
                       )}
                     </button>
+                  ) : inviteLink === null ? (
+                    <>
+                      <span
+                        id={noLinkReasonId}
+                        className="pointer-events-none absolute right-12 top-1/2 -translate-y-1/2 rounded-md bg-[#141416] px-1.5 text-[12px] text-[#fafafa]/55"
+                      >
+                        No shareable link
+                      </span>
+                      <button
+                        type="button"
+                        disabled
+                        aria-label="Copy joining link"
+                        aria-describedby={noLinkReasonId}
+                        className="absolute right-1.5 top-1/2 inline-flex h-9 w-9 -translate-y-1/2 cursor-not-allowed items-center justify-center rounded-lg text-[#fafafa]/25"
+                      >
+                        <Link2Off size={16} aria-hidden="true" />
+                      </button>
+                    </>
                   ) : null}
                   <span aria-live="polite" className="sr-only">
                     {linkCopy.status === "copied"

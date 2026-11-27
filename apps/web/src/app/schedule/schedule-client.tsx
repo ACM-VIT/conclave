@@ -633,7 +633,7 @@ export default function ScheduleClient({ user: _user }: Props) {
                   {bookings.slice(0, 8).map((booking) => (
                     <a
                       key={booking.id}
-                      href={buildMeetingPath(booking)}
+                      href={buildMeetingPath(booking) ?? undefined}
                       className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.02] p-3 transition-colors hover:bg-white/[0.05]"
                     >
                       <div className="min-w-0">

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/sfu-client-id", () => import("../src/lib/sfu-client-id"));
+vi.mock("@/app/lib/utils", () => import("../src/app/lib/utils"));
 
 import { buildMeetingPath, buildMeetingUrl } from "../src/lib/meeting-links";
 import { canonicalizeSfuClientId, resolveBrowserSfuClientId } from "../src/lib/sfu-client-id";
@@ -40,8 +41,8 @@ describe("joining a Conclave link from the code field", () => {
           const tenant = codeFieldTenant(resolution, page);
           const wanted = canonicalizeSfuClientId(linkTenant) ?? page;
           const target = { roomCode: resolution.code, clientId: tenant.clientId };
-          const path = buildMeetingPath(target);
-          const url = buildMeetingUrl("https://conclave.acmvit.in", target);
+          const path = buildMeetingPath(target)!;
+          const url = buildMeetingUrl("https://conclave.acmvit.in", target)!;
           vi.stubEnv("NEXT_PUBLIC_SFU_CLIENT_ID", openedOn);
           const redirect = landsOn(path);
           const copied = landsOn(url);

@@ -14,6 +14,7 @@ vi.mock("@/lib/auth-client", () => ({
 vi.mock("@/lib/site-url", () => import("../src/lib/site-url"));
 vi.mock("@/lib/meeting-links", () => import("../src/lib/meeting-links"));
 vi.mock("@/lib/sfu-client-id", () => import("../src/lib/sfu-client-id"));
+vi.mock("@/app/lib/utils", () => import("../src/app/lib/utils"));
 vi.mock("next/dynamic", () => ({ default: lazy }));
 vi.mock("../src/app/lib/video-effects-lazy", () => ({
   prewarmVideoEffectsAssetsDeferred: () => Promise.resolve(),

@@ -2,7 +2,7 @@ import { Suspense } from "react";
 import { headers as nextHeaders } from "next/headers";
 import MeetsClientShell from "../meets-client-shell";
 import RouteLoadingState from "../components/RouteLoadingState";
-import { sanitizeRoomCode, sanitizeWebinarLinkCode } from "../lib/utils";
+import { sanitizeWebinarLinkCode } from "../lib/utils";
 import ScheduledMeetingLanding from "../components/ScheduledMeetingLanding";
 import {
   isMeetingJoinable,
@@ -12,6 +12,7 @@ import {
 } from "@/lib/scheduled-meetings";
 import { auth } from "@/lib/auth";
 import { resolveSfuClientIdCandidates } from "@/lib/sfu-client-id";
+import { roomIdFromMeetingPath } from "@/lib/meeting-links";
 
 type MeetRoomPageProps = {
   params: Promise<{ code: string }>;
@@ -113,7 +114,7 @@ async function MeetRoomContent({ params, searchParams }: MeetRoomPageProps) {
   const sanitizedRoomCode =
     joinMode === "webinar_attendee"
       ? sanitizeWebinarLinkCode(resolvedRoomCode)
-      : sanitizeRoomCode(resolvedRoomCode);
+      : roomIdFromMeetingPath(roomCode);
   const displayName = safeBotOverridesEnabled
     ? getParamValue(resolvedSearchParams.name)
     : undefined;
