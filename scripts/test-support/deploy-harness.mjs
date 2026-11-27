@@ -439,6 +439,7 @@ const main = async () => {
     return out(args.at(-1));
   }
   if (args[0] === "build") {
+    if (process.env.DEPLOY_TEST_BUILD_FAIL) return void (process.exitCode = 1);
     const tag = args[args.indexOf("-t") + 1];
     tags[tag] = tag.includes("-canary:") ? "sha256:canary-build" : "sha256:candidate-build";
     return fs.writeFileSync(tagsFile, JSON.stringify(tags));
