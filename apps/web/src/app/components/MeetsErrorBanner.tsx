@@ -36,7 +36,7 @@ export default function MeetsErrorBanner({
   const devices = DEVICE_ACCESS[meetError.device ?? "both"];
   const isGuestBlockedError =
     meetError.message === "Guests are not allowed in this meeting.";
-  const isRoomNotFoundError = meetError.message === "No room found.";
+  const isRoomNotFoundError = meetError.code === "ROOM_NOT_FOUND";
   const helperText =
     mediaErrorAdvice(meetError) ??
     (isGuestBlockedError

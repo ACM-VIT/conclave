@@ -14,6 +14,7 @@ export type JsonStoreCollection<Snapshot, Row> = {
   key: (row: Row) => string;
   stamp: (row: Row, snapshot: Snapshot) => number;
   claims: Record<string, JsonStoreClaim<Row>>;
+  compare?: (row: Row) => unknown;
   canDelete?: boolean;
 };
 
@@ -106,7 +107,7 @@ const mergeSources = <Snapshot>(adapter: JsonStoreAdapter<Snapshot>, sources: So
       for (const row of source.rows) {
         const key = collection.key(row);
         const stamp = collection.stamp(row, source.snapshot);
-        const json = stableJson(row);
+        const json = stableJson(collection.compare ? collection.compare(row) : row);
         const held = winners.get(key);
         if (!held || stamp > held.stamp) {
           winners.set(key, { row, stamp, json, from: source.path });

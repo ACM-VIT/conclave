@@ -7,7 +7,7 @@ import ErrorStateView from "../components/ErrorStateView";
 import { isSfuTooOldForBookings } from "../../lib/scheduled-meeting-lookup";
 import {
   isMeetingJoinable,
-  lookupPublicScheduledMeetingByRoomCode,
+  lookupScheduledMeetingForCode,
   lookupScheduledMeetingHostEmail,
 } from "@/lib/scheduled-meetings";
 import { auth } from "@/lib/auth";
@@ -92,37 +92,47 @@ async function MeetRoomContent({ params, searchParams }: MeetRoomPageProps) {
   const displayName = safeBotOverridesEnabled
     ? getParamValue(resolvedSearchParams.name)
     : undefined;
+  let mayOpenRoom = false;
   const user = displayName ? { name: displayName } : undefined;
   const isAdmin =
     devOverridesEnabled && isTruthyParam(resolvedSearchParams.admin);
 
-  if (destination.roomCode && !bypassMediaPermissions) {
-    let scheduled: Awaited<ReturnType<typeof lookupPublicScheduledMeetingByRoomCode>>;
+  if (destination.roomCode) {
+    let lookup: Awaited<ReturnType<typeof lookupScheduledMeetingForCode>>;
     try {
-      scheduled = await lookupPublicScheduledMeetingByRoomCode(destination);
+      lookup = await lookupScheduledMeetingForCode(destination);
     } catch (error) {
       if (!isSfuTooOldForBookings(error)) throw error;
-      return (
-        <ErrorStateView
-          eyebrow="Meetings are updating"
-          title="This meeting link can't open yet"
-          message="The meeting service is being updated. Try this link again in a few minutes."
-          homeLabel="Go home"
-        />
-      );
+      if (!bypassMediaPermissions) {
+        return (
+          <ErrorStateView
+            eyebrow="Meetings are updating"
+            title="This meeting link can't open yet"
+            message="The meeting service is being updated. Try this link again in a few minutes."
+            homeLabel="Go home"
+          />
+        );
+      }
+      lookup = { kind: "unknown" };
     }
-    if (scheduled && !isMeetingJoinable(scheduled)) {
+    mayOpenRoom = lookup.kind !== "unscheduled";
+    // Recorders go straight to the join.
+    if (
+      lookup.kind === "scheduled" &&
+      !bypassMediaPermissions &&
+      !isMeetingJoinable(lookup.meeting)
+    ) {
       const [sessionEmail, hostEmail] = await Promise.all([
         resolveSessionEmail(),
-        lookupScheduledMeetingHostEmail(destination),
+        lookupScheduledMeetingHostEmail(lookup),
       ]);
       const viewerIsHost = Boolean(
         sessionEmail && hostEmail && sessionEmail === hostEmail,
       );
       return (
         <ScheduledMeetingLanding
-          meeting={scheduled}
-          clientId={destination.clientId}
+          meeting={lookup.meeting}
+          clientId={lookup.clientId}
           viewerIsHost={viewerIsHost}
         />
       );
@@ -133,6 +143,7 @@ async function MeetRoomContent({ params, searchParams }: MeetRoomPageProps) {
     <MeetsClientShell
       initialRoomId={destination.roomCode}
       forceJoinOnly={true}
+      allowRoomCreation={mayOpenRoom}
       bypassMediaPermissions={bypassMediaPermissions}
       sfuClientId={destination.clientId}
       autoJoinOnMount={autoJoinOnMount}

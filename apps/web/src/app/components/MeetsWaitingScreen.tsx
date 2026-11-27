@@ -5,18 +5,47 @@ import { Check, Copy } from "lucide-react";
 import ConclaveBrandScreen from "./ConclaveBrandScreen";
 
 interface MeetsWaitingScreenProps {
-  waitingTitle: string;
-  waitingIntro: string;
+  waitingMessage: string | null;
   roomId: string;
   isAdmin: boolean;
 }
 
+// The SFU's status line is matched by keyword for older clients (native
+// classifies it the same way), so it is turned into Meet-style copy here.
+export const describeWaitingRoom = (
+  message: string | null,
+): { title: string; detail: string } => {
+  const lowered = message?.toLowerCase() ?? "";
+  if (lowered.includes("meeting ended when everyone left")) {
+    return {
+      title: "This meeting has ended",
+      detail: "Everyone left. Stay on this page and a host can let you in when it starts again.",
+    };
+  }
+  if (lowered.includes("no one to let you in")) {
+    return {
+      title: "No one can let you in yet",
+      detail: "You'll join as soon as a host is back and lets you in.",
+    };
+  }
+  if (lowered.includes("host is available")) {
+    return {
+      title: "Asking to join…",
+      detail: "A host is here now and can let you in.",
+    };
+  }
+  return {
+    title: "Asking to join…",
+    detail: "You'll join the call when someone lets you in.",
+  };
+};
+
 export default function MeetsWaitingScreen({
-  waitingTitle,
-  waitingIntro,
+  waitingMessage,
   roomId,
   isAdmin,
 }: MeetsWaitingScreenProps) {
+  const { title, detail } = describeWaitingRoom(waitingMessage);
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(() => {
@@ -33,8 +62,8 @@ export default function MeetsWaitingScreen({
   return (
     <ConclaveBrandScreen
       eyebrow="Waiting room"
-      title={waitingTitle}
-      detail={waitingIntro}
+      title={title}
+      detail={detail}
       actions={
         isAdmin && roomId ? (
           <div className="flex flex-col items-center gap-2">

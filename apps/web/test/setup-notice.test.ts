@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   JOIN_REJECTED_MESSAGE,
+  REMOVED_MESSAGE,
   endedNotice,
   hiddenSetupView,
   joinRejectedUpdate,
+  removedNotice,
   type SetupNotice,
 } from "../src/app/lib/setup-notice";
 
@@ -50,6 +52,13 @@ describe("a waiting guest the host rejects", () => {
     expect(view.body).toBe(JOIN_REJECTED_MESSAGE);
     expect(view.action).toBe("retry");
     expect(view.busy).toBe(false);
+  });
+
+  it("says a removed person was removed, not that they were turned away or that it ended", () => {
+    expect(removedNotice()).toEqual({ kind: "removed", message: REMOVED_MESSAGE });
+    const view = hiddenSetupView({ notice: removedNotice(), errorMessage: "", isLoading: false });
+    expect(view).toMatchObject({ headline: "You were removed", body: REMOVED_MESSAGE, action: "home" });
+    expect(isSentenceCase(view.headline)).toBe(true);
   });
 
   it("keeps Webinar ended and Back to home for the ended kind only", () => {

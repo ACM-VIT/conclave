@@ -101,6 +101,7 @@ describe("media consumer capacity proof refresh", () => {
       currentUserKey: null,
       activeConclaveAnswers: new Map(),
       adminHandlersRegistered: false,
+      joinAttempts: 0,
     });
 
     const consumeHandler = handlers.get("consume") as unknown as (
@@ -191,6 +192,7 @@ describe("media consumer capacity proof refresh", () => {
       currentUserKey: null,
       activeConclaveAnswers: new Map(),
       adminHandlersRegistered: false,
+      joinAttempts: 0,
     });
 
     const toggleCameraHandler = handlers.get("toggleCamera") as unknown as (

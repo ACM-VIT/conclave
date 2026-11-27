@@ -3,7 +3,7 @@ import type { Router } from "mediasoup/types";
 import type { Server as SocketIOServer } from "socket.io";
 import { config } from "../config/config.js";
 import { Room } from "../config/classes/Room.js";
-import { handOffRoom } from "../server/admin/controlPlane.js";
+import { ensureHost } from "../server/admin/controlPlane.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
 import { createSfuState, type SfuState } from "../server/state.js";
 
@@ -40,7 +40,7 @@ describe("the cleanup a host hand-off leaves when nobody can host", () => {
     const state = makeState();
     const { room, close } = makeRoom(state);
 
-    handOffRoom(io, state, room);
+    ensureHost(io, state, room);
     vi.advanceTimersByTime(config.adminCleanupTimeout + 1);
 
     expect(state.rooms.has(room.channelId)).toBe(false);
@@ -52,7 +52,7 @@ describe("the cleanup a host hand-off leaves when nobody can host", () => {
     const state = makeState();
     const { room } = makeRoom(state);
 
-    handOffRoom(io, state, room);
+    ensureHost(io, state, room);
     state.rooms.delete(room.channelId);
     const { room: reopened, close: closeReopened } = makeRoom(state);
     vi.advanceTimersByTime(config.adminCleanupTimeout + 1);

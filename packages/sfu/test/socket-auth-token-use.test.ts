@@ -34,6 +34,14 @@ describe("SFU socket login token type", () => {
     expect(result.error?.message).toBe("Authentication error: Invalid token payload");
   });
 
+  it("rejects a claim that a join makes its code, signed with another secret", async () => {
+    const result = await handshake(
+      jwt.sign({ userId: "a@example.com", email: "a@example.com", sessionId: "s", createsCode: true }, "not-the-secret"),
+    );
+    expect(result.error?.message).toBe("Authentication error: Invalid token");
+    expect(getSocketAuthUser(result.socket)).toBeUndefined();
+  });
+
   it("rejects a token signed with another algorithm", async () => {
     const result = await handshake(jwt.sign({ userId: "u" }, "secret", { algorithm: "HS512" }));
     expect(result.error?.message).toBe("Authentication error: Invalid token");

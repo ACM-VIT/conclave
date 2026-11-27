@@ -94,6 +94,8 @@ import {
   PRODUCER_TRANSPORT_PROFILE_ACK_TIMEOUT_MS,
 } from "./lib/producer-transport-network-profile";
 import { useScreenWakeLock } from "./hooks/useScreenWakeLock";
+import { useMeetingAddress } from "./hooks/useMeetingAddress";
+import { isKnocking, settledConnectionState } from "./lib/knocking";
 import { useSharedBrowser } from "./hooks/useSharedBrowser";
 import { useVoiceAgentParticipant } from "./hooks/useVoiceAgentParticipant";
 import VoiceAgentDialog from "./components/VoiceAgentDialog";
@@ -139,6 +141,7 @@ import {
   isSystemUserId,
   sanitizeInstitutionDisplayName,
 } from "./lib/utils";
+import { markMeetingCreatedHere } from "./lib/new-meeting";
 import type { VideoEffectsBridgeState } from "./components/VideoEffectsBridge";
 import { logCallError } from "./lib/call-error-capture";
 import { deriveInCallAlerts } from "./lib/in-call-alerts";
@@ -1101,7 +1104,7 @@ export default function MeetsClient({
     [userId, displayNameInput, normalizedCurrentUserName, currentUser],
   );
 
-  const { availableRooms, roomsStatus, refreshRooms } = useMeetRooms({
+  const { availableRooms, refreshRooms } = useMeetRooms({
     isAdmin: isAdminFlag,
     getRooms,
     getRoom,
@@ -2633,6 +2636,7 @@ export default function MeetsClient({
   useEffect(() => { roomAiRef.current = roomAi; }, [roomAi]);
   const voiceAgent = useVoiceAgentParticipant({
     roomAi,
+    hostSocketRef: refs.socketRef,
     roomId,
     isJoined: connectionState === "joined",
     isAdmin: canModerateMeeting,
@@ -2769,8 +2773,17 @@ export default function MeetsClient({
 
   const startNewMeeting = useCallback((keepAudioOnly: boolean) => {
     const targetRoomId = generateRoomCode();
+    markMeetingCreatedHere(targetRoomId);
+    const pendingMediaIntent = publishIntent(refs.deviceIntents.get());
+    const skipMutedMicWarmup = refs.skipMutedMicWarmupRef.current;
     handleStopVoiceAgent();
     socket.cleanup();
+    refs.deviceIntents.dispatch({
+      type: "set",
+      audio: pendingMediaIntent.isMicOn,
+      video: pendingMediaIntent.isCameraOn,
+    });
+    refs.skipMutedMicWarmupRef.current = skipMutedMicWarmup;
     if (!keepAudioOnly) {
       setViewSettings((settings) => ({ ...settings, audioOnlyMode: false }));
     }
@@ -2780,13 +2793,11 @@ export default function MeetsClient({
     setWaitingMessage(null);
     setCurrentIsAdmin(true);
     setRoomId(targetRoomId);
-    if (enableRoomRouting && typeof window !== "undefined") {
-      window.history.pushState(null, "", `/${targetRoomId}`);
-    }
     setPendingNewMeetingRoomId(targetRoomId);
   }, [
-    enableRoomRouting,
     handleStopVoiceAgent,
+    refs.deviceIntents,
+    refs.skipMutedMicWarmupRef,
     setMeetError,
     setRoomId,
     setWaitingMessage,
@@ -3172,6 +3183,15 @@ export default function MeetsClient({
     setMeetError,
   ]);
 
+  // "Check your meeting code": the visitor chose to start a meeting of their
+  // own. It gets a code of its own too, so it is never mistaken for the
+  // meeting the code they followed belongs, or belonged, to.
+  const handleStartMeetingInstead = useCallback(() => {
+    setEnterErrored(false);
+    setEnterAction("new");
+    startNewMeeting(true);
+  }, [startNewMeeting]);
+
   const handleEnterDismiss = useCallback(() => {
     setEnterAction(null);
     setEnterErrored(false);
@@ -3205,9 +3225,22 @@ export default function MeetsClient({
     intentionalDisconnect: refs.intentionalDisconnectRef.current,
   });
   useScreenWakeLock({ enabled: isJoined });
+  useMeetingAddress({
+    enabled: enableRoomRouting,
+    joinMode,
+    connectionState,
+    roomId,
+  });
+
+  // Where the tab last stood, kept across the states it passes through
+  // while reconnecting.
+  const [lastSettledState, setLastSettledState] = useState(connectionState);
+  const settledState = settledConnectionState(lastSettledState, connectionState);
+  if (settledState !== lastSettledState) setLastSettledState(settledState);
 
   if (!mounted) return null;
 
+  const isRoomNotFound = enterErrored && meetError?.code === "ROOM_NOT_FOUND";
   const isLoading =
     connectionState === "connecting" ||
     connectionState === "joining" ||
@@ -3265,8 +3298,17 @@ export default function MeetsClient({
               })
             : null
         }
+        roomId={roomId}
+        dismissLabel={
+          isRoomNotFound && forceJoinOnly
+            ? "Return to home screen"
+            : "Back to setup"
+        }
         onRetry={handleEnterRetry}
-        onDismiss={handleEnterDismiss}
+        onDismiss={
+          isRoomNotFound && forceJoinOnly ? handleGoHome : handleEnterDismiss
+        }
+        onStartNewMeeting={isRoomNotFound ? handleStartMeetingInstead : undefined}
       />
     </>
   );
@@ -3372,18 +3414,10 @@ export default function MeetsClient({
     );
   }
 
-  if (connectionState === "waiting") {
-    const waitingTitle = waitingMessage ?? "Waiting for host to let you in";
-    const isLockedRoom = waitingMessage?.toLowerCase().includes("locked");
-    const waitingIntro = isLockedRoom
-      ? "Please wait while the host reviews your request."
-      : waitingMessage
-        ? "The host left the room, so there is no one available to admit you right now."
-        : "Hang tight.";
+  if (isKnocking(connectionState, settledState)) {
     return renderWithApps(
       <MeetsWaitingScreen
-        waitingTitle={waitingTitle}
-        waitingIntro={waitingIntro}
+        waitingMessage={waitingMessage}
         roomId={roomId}
         isAdmin={canModerateMeeting}
       />,
@@ -3445,7 +3479,6 @@ export default function MeetsClient({
         isAdmin={canModerateMeeting}
         showPermissionHint={showPermissionHint}
         availableRooms={availableRooms}
-        roomsStatus={roomsStatus}
         refreshRooms={refreshRooms}
         displayNameInput={displayNameInput}
         setDisplayNameInput={setDisplayNameInput}

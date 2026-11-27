@@ -11,7 +11,10 @@ vi.mock("@/lib/auth", () => ({ auth: { api: { getSession: async () => null } } }
 vi.mock("@/lib/auth-client", () => ({ signOut: vi.fn(), useSession: () => ({ data: null }) }));
 vi.mock("@/lib/scheduled-meetings", () => ({
   isMeetingJoinable: () => true,
-  lookupPublicScheduledMeetingByRoomCode: scheduledLookup,
+  lookupScheduledMeetingForCode: async (destination: { clientId: string; roomCode: string }) => {
+    const meeting = await scheduledLookup(destination);
+    return meeting ? { kind: "scheduled", ...destination, meeting } : { kind: "unscheduled" };
+  },
   lookupScheduledMeetingHostEmail: async () => null,
 }));
 vi.mock("@/lib/site-url", () => import("../src/lib/site-url"));
