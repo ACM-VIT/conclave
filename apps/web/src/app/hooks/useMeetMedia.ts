@@ -775,10 +775,12 @@ export function useMeetMedia({
     }
   }, [flushQueuedCameraRecovery, isMediaRecoveryBlocked, queueBlockedProducerRecovery]);
   const mediaOperationsDisposedRef = useRef(false);
+  const stopPendingAudioInputSwitchRef = useRef<(() => void) | null>(null);
   useEffect(() => {
     mediaOperationsDisposedRef.current = false;
     return () => {
       mediaOperationsDisposedRef.current = true;
+      stopPendingAudioInputSwitchRef.current?.();
     };
   }, []);
   const requestCameraProducerRecovery = useCallback(() => {
@@ -2387,11 +2389,18 @@ export function useMeetMedia({
     async (deviceId: string) => {
       setSelectedAudioInputDeviceId(deviceId);
 
+      if (connectionState !== "joined") return;
       const generation = captureGeneration();
-      if (connectionState === "joined") await runMicTrackOperation(async () => {
-        let acquiredAudioTracks: MediaStreamTrack[] = [];
-        let preparedAudioTrack: MediaStreamTrack | null = null;
-        let committedNewAudioTrack: MediaStreamTrack | null = null;
+      const switchHolds = () => generation === captureGeneration() && !mediaOperationsDisposedRef.current;
+      await runMicTrackOperation(async () => {
+        if (!switchHolds()) return;
+
+        const stagedTracks = new Set<MediaStreamTrack>();
+        const stopPendingTracks = () => {
+          for (const track of stagedTracks) stopLocalTrack(track);
+          stagedTracks.clear();
+        };
+        stopPendingAudioInputSwitchRef.current = stopPendingTracks;
         try {
           const newStream = await getUserMediaWithTimeout(
             { audio: buildAudioConstraints(deviceId) },
@@ -2402,50 +2411,45 @@ export function useMeetMedia({
             },
           );
 
-          acquiredAudioTracks = newStream.getAudioTracks();
-          const rawAudioTrack = newStream.getAudioTracks()[0];
-          if (rawAudioTrack) {
-            const newAudioTrack = await prepareAudioPublishTrack(rawAudioTrack, generation);
-            preparedAudioTrack = newAudioTrack;
-            if (generation !== captureGeneration()) {
-              stopTracksExcept([...acquiredAudioTracks, newAudioTrack], []);
-              return;
-            }
-            setNoiseCancellationTrackEnabled(newAudioTrack, microphoneChosen());
-            const previousStream = localStreamRef.current;
-            const previousAudioTracks = previousStream?.getAudioTracks() ?? [];
+          const audioTracks = newStream.getAudioTracks();
+          for (const track of audioTracks) stagedTracks.add(track);
+          const rawAudioTrack = audioTracks[0];
+          if (!rawAudioTrack || !switchHolds()) return;
 
-            const currentAudioProducer = audioProducerRef.current;
-            if (currentAudioProducer?.closed) {
-              closeLocalAudioProducerForReplacement(currentAudioProducer);
-            }
-            const audioProducer = audioProducerRef.current;
-            if (audioProducer) {
-              await audioProducer.replaceTrack({
-                track: newAudioTrack,
-              });
-              if (generation !== captureGeneration()) {
-                stopTracksExcept([...acquiredAudioTracks, newAudioTrack], []);
-                return;
-              }
-              setNoiseCancellationTrackEnabled(newAudioTrack, microphoneChosen());
-            } else {
-              requestAudioProducerRecovery();
-            }
+          const newAudioTrack = await prepareAudioPublishTrack(rawAudioTrack, generation);
+          stagedTracks.add(newAudioTrack);
+          if (!switchHolds()) return;
 
-            commitAudioTrackToLocalStream(newAudioTrack, localStreamRef.current ?? previousStream, {
-              stopReplacedTracks: false,
-            });
-            committedNewAudioTrack = newAudioTrack;
-            stopTracksExcept(previousAudioTracks, [newAudioTrack]);
+          setNoiseCancellationTrackEnabled(newAudioTrack, microphoneChosen());
+          const previousStream = localStreamRef.current;
+          const previousAudioTracks = previousStream?.getAudioTracks() ?? [];
+
+          const currentAudioProducer = audioProducerRef.current;
+          if (currentAudioProducer?.closed) {
+            closeLocalAudioProducerForReplacement(currentAudioProducer);
           }
+          const audioProducer = audioProducerRef.current;
+          if (audioProducer) {
+            await audioProducer.replaceTrack({ track: newAudioTrack });
+            if (!switchHolds()) return;
+            setNoiseCancellationTrackEnabled(newAudioTrack, microphoneChosen());
+          } else {
+            requestAudioProducerRecovery();
+          }
+
+          commitAudioTrackToLocalStream(newAudioTrack, localStreamRef.current ?? previousStream, {
+            stopReplacedTracks: false,
+          });
+          stagedTracks.delete(rawAudioTrack);
+          stagedTracks.delete(newAudioTrack);
+          stopTracksExcept(previousAudioTracks, [newAudioTrack]);
         } catch (err) {
-          stopTracksExcept(
-            [...acquiredAudioTracks, ...(preparedAudioTrack ? [preparedAudioTrack] : [])],
-            [committedNewAudioTrack],
-          );
-          if (isCaptureReleased(err)) return;
-          logCallError("[Meets] Failed to switch audio input device", err);
+          if (switchHolds() && !isCaptureReleased(err)) {
+            logCallError("[Meets] Failed to switch audio input device", err);
+          }
+        } finally {
+          stopPendingAudioInputSwitchRef.current = null;
+          stopPendingTracks();
         }
       });
     },
@@ -2460,6 +2464,7 @@ export function useMeetMedia({
       commitAudioTrackToLocalStream,
       buildAudioConstraints,
       closeLocalAudioProducerForReplacement,
+      stopLocalTrack,
       stopTracksExcept,
       requestAudioProducerRecovery,
     ]

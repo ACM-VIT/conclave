@@ -55,8 +55,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function MicTest({ noiseCancellation }: { noiseCancellation: boolean }) {
-  latest = useMicTest({ active: true, noiseCancellation });
+function MicTest({ noiseCancellation, outputDeviceId }: { noiseCancellation: boolean; outputDeviceId?: string }) {
+  latest = useMicTest({ active: true, noiseCancellation, outputDeviceId });
   return null;
 }
 
@@ -68,11 +68,11 @@ const flush = async () => {
   }
 };
 
-const mount = async (noiseCancellation: boolean) => {
+const mount = async (noiseCancellation: boolean, outputDeviceId?: string) => {
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
-  await act(async () => root!.render(createElement(MicTest, { noiseCancellation })));
+  await act(async () => root!.render(createElement(MicTest, { noiseCancellation, outputDeviceId })));
   await flush();
 };
 
@@ -154,6 +154,43 @@ describe("the Settings microphone test owns everything one run opens", () => {
     await flush();
 
     expect(world.contexts.length).toBe(contextsAtEnd);
+    expect(leftOpen()).toEqual([]);
+  });
+
+  it("does not play a recorded test after the call ends while its speaker is being selected", async () => {
+    const sinkReady = Promise.withResolvers<void>();
+    const setSinkId = vi.fn(() => sinkReady.promise);
+    const play = vi.fn(() => Promise.resolve());
+    const pause = vi.fn();
+    vi.stubGlobal("Audio", class { setSinkId = setSinkId; play = play; pause = pause; });
+    vi.stubGlobal("MediaRecorder", class {
+      static isTypeSupported() { return true; }
+      state: RecordingState = "inactive";
+      ondataavailable: ((event: { data: Blob }) => void) | null = null;
+      onstop: (() => void) | null = null;
+      start() { this.state = "recording"; }
+      stop() {
+        this.state = "inactive";
+        this.ondataavailable?.({ data: new Blob(["voice clip"]) });
+        this.onstop?.();
+      }
+    });
+    await mount(false, "selected-speaker");
+    await act(async () => latest?.toggleLoopback());
+    expect(latest?.loopbackPhase).toBe("recording");
+    await act(async () => latest?.toggleLoopback());
+    expect(setSinkId).toHaveBeenCalledWith("selected-speaker");
+    expect(latest?.loopbackPhase).toBe("playing");
+
+    await act(async () => {
+      releaseAllCaptures();
+      sinkReady.resolve();
+      await sinkReady.promise;
+    });
+
+    expect(latest?.loopbackPhase).toBe("idle");
+    expect(pause).toHaveBeenCalledOnce();
+    expect(play).not.toHaveBeenCalled();
     expect(leftOpen()).toEqual([]);
   });
 
