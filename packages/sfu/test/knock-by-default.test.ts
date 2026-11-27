@@ -589,7 +589,10 @@ describe("a call whose server lost the room", () => {
     ).toBe("waiting");
   });
 
-  it("recovers an admitted guest when their verified tab switches to another browser pass", async () => {
+  it.each([
+    { action: "keeps access", expected: "joined" },
+    { action: "requires readmission", expected: "waiting" },
+  ])("honors the former seat when a verified guest switches passes and $action", async ({ expected }) => {
     const before = makeState();
     const opener = await join(before, host);
     const former = {
@@ -606,9 +609,14 @@ describe("a call whose server lost the room", () => {
     expect(admitted.roomRecoveryPass).toBeTypeOf("string");
 
     const after = await restart(before);
-    expect((await join(after, rejoining(host), {
+    const recovered = await join(after, rejoining(host), {
       roomRecoveryPass: opener.response.roomRecoveryPass,
-    })).status).toBe("joined");
+    });
+    expect(recovered.status).toBe("joined");
+    if (expected === "waiting") {
+      const revoked = await send(recovered.peer, "admin:revokeAllowedUsers", { userKeys: [former.userId] });
+      expect(revoked?.success).toBe(true);
+    }
     const canonical = {
       ...former,
       userId: "guest-gp_BBBBBBBBBBBBBBBBBBBBBB",
@@ -623,7 +631,7 @@ describe("a call whose server lost the room", () => {
     };
     const recovery = { roomRecoveryPass: admitted.roomRecoveryPass };
     expect((await join(after, otherTab, recovery)).status).toBe("waiting");
-    expect((await join(after, canonical, recovery)).status).toBe("joined");
+    expect((await join(after, canonical, recovery)).status).toBe(expected);
   });
 
   it("lets a member back in again after a second drop in the recovered meeting", async () => {
