@@ -1127,6 +1127,7 @@ export type AppsStageErrorCode = "stale_revision" | "room_full";
 export interface AppsOpenData {
   appId: string;
   expectedRevision?: number;
+  expectedRoomId?: string;
   options?: Record<string, unknown>;
 }
 
@@ -1140,6 +1141,7 @@ export interface AppsOpenResponse {
 
 export interface AppsCloseData {
   expectedRevision?: number;
+  expectedRoomId?: string;
 }
 
 export interface AppsCloseResponse {

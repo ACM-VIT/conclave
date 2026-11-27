@@ -511,9 +511,15 @@ describe("app uploads", () => {
     const author = new Y.Doc();
     const relayedBefore = room.relayed.length;
 
-    const single = await room.acknowledged({ update: edit(author, (text) => text.insert(0, "one")) }, "copy-a");
+    const one = edit(author, (text) => text.insert(0, "one"));
+    const single = await room.acknowledged({ update: one }, "copy-a");
+    expect(single.receipt).toEqual({ committed: true });
     expect(single.relayed).toBe(relayedBefore + 1);
+    const alreadySaved = await room.acknowledged({ update: one }, "copy-a");
+    expect(alreadySaved.receipt).toEqual({ committed: true });
+    expect(alreadySaved.relayed).toBe(single.relayed);
     const list = await room.acknowledged({ updates: [edit(author, (text) => text.insert(0, "two")), edit(author, (text) => text.insert(0, "three"))] }, "copy-a");
+    expect(list.receipt).toEqual({ committed: true });
     expect(list.relayed).toBe(relayedBefore + 3);
     expect(await settled(room)).toBe("threetwoone");
   });
@@ -524,8 +530,10 @@ describe("app uploads", () => {
     fill(room, author, 4, 230 * KIB);
 
     const refused = await room.acknowledged({ updates: [edit(author, (text) => text.insert(0, "f")), edit(author, (text) => text.insert(0, "b".repeat(200 * KIB)))] }, "copy-r");
+    expect(refused.receipt).toBeUndefined();
     expect(refusalsIn(refused.inbox)).toEqual(["too-large"]);
     const dropped = await room.acknowledged({ update: new Uint8Array(0) }, "copy-e");
+    expect(dropped.receipt).toBeUndefined();
     expect(refusalsIn(dropped.inbox)).toEqual(["too-large", "invalid"]);
   }, 30_000);
 
@@ -534,23 +542,39 @@ describe("app uploads", () => {
     const author = new Y.Doc();
     await room.close();
     const notOpen = await room.acknowledged({ update: edit(author, (text) => text.insert(0, "x")) }, "copy-n");
+    expect(notOpen.receipt).toBeUndefined();
     expect(refusalsIn(notOpen.inbox)).toEqual(["not-live"]);
     await room.open();
 
     const parts = inParts(bigChange(new Y.Doc(), 20 * KIB, "s"), 10 * KIB);
     const relayedBefore = room.relayed.length;
-    await room.acknowledged({ update: parts[0], part: { id: "c", index: 0, count: parts.length } }, "copy-p");
+    const first = await room.acknowledged({ update: parts[0], part: { id: "c", index: 0, count: parts.length } }, "copy-p");
+    expect(first.receipt).toBeUndefined();
     expect(room.state.appChangeStaging.used()).toBe(parts[0].length);
     for (const [index, part] of parts.slice(1, -1).entries()) {
-      await room.acknowledged({ update: part, part: { id: "c", index: index + 1, count: parts.length } }, "copy-p");
+      const intermediate = await room.acknowledged({ update: part, part: { id: "c", index: index + 1, count: parts.length } }, "copy-p");
+      expect(intermediate.receipt).toBeUndefined();
     }
     const last = await room.acknowledged({ update: parts.at(-1)!, part: { id: "c", index: parts.length - 1, count: parts.length } }, "copy-p");
+    expect(last.receipt).toEqual({ committed: true });
     expect(last.relayed).toBe(relayedBefore + 1);
     expect(room.refused.map(({ reason }) => reason)).toEqual(["not-live"]);
   });
 });
 
 describe("app state answers", () => {
+  it("does not close a new room whose revision happens to match the old room", async () => {
+    const room = await boardRoom("new-room");
+    const stage = await room.getState() as { revision: number };
+    expect(await room.close({ expectedRevision: stage.revision, expectedRoomId: "old-room" })).toMatchObject({
+      success: false, code: "stale_revision",
+    });
+    expect(await room.getState()).toMatchObject({ activeAppId: "board" });
+    expect(await room.close({ expectedRevision: stage.revision, expectedRoomId: "new-room" })).toEqual({
+      success: true, revision: stage.revision + 1,
+    });
+  });
+
   it("say a socket is not in a room yet instead of saying no app is open", async () => {
     const room = await boardRoom("state-answer");
     expect(await room.getState()).toMatchObject({ activeAppId: "board", locked: false });

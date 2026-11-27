@@ -111,6 +111,8 @@ type StageCommandResponse =
   | AppsDiscardResponse
   | AppsLockResponse;
 
+type PendingStageCommand = { advance: () => void; cancel: () => void };
+
 const EMPTY_APPS_STATE: AppsState = {
   activeAppId: null,
   locked: false,
@@ -139,6 +141,7 @@ const parseAppsState = (value: unknown): AppsState | null => {
     revision?: unknown;
     savedAppIds?: unknown;
     docGeneration?: unknown;
+    roomId?: unknown;
     notInRoom?: unknown;
   };
   const activeAppIdValid =
@@ -152,6 +155,7 @@ const parseAppsState = (value: unknown): AppsState | null => {
       ? record.savedAppIds.filter((appId): appId is string => typeof appId === "string")
       : [],
     docGeneration: safeIntegerOrNull(record.docGeneration),
+    ...(typeof record.roomId === "string" ? { roomId: record.roomId } : {}),
     ...(record.notInRoom === true ? { notInRoom: true } : {}),
   };
 };
@@ -261,17 +265,38 @@ export function AppsProvider({
   const reconnectedRef = useRef(false);
   const stagesPartsRef = useRef<boolean | null>(null);
   const takesListsRef = useRef(false);
+  const unverifiedUploadsRef = useRef(new Set<string>());
+  const pendingStageRef = useRef<PendingStageCommand | null>(null);
   const [uploads] = useState(() =>
     createUploadQueue(
       (appId, replicaId, upload, settled) => {
         const currentSocket = socketRef.current;
         if (!currentSocket?.connected || reconnectedRef.current) return false;
         const payload: AppsUpdatePayload = { appId, replicaId, ...upload };
-        if (settled) currentSocket.emit("apps:yjs:update", payload, settled);
-        else currentSocket.emit("apps:yjs:update", payload);
+        const noteUnverified = () => {
+          if (socketRef.current === currentSocket && replicaIdsRef.current.get(appId) === replicaId &&
+              serverStateRef.current.revision !== null) {
+            unverifiedUploadsRef.current.add(appId);
+          }
+        };
+        if (settled) {
+          currentSocket.emit("apps:yjs:update", payload, (receipt?: { committed: true }) => {
+            queueMicrotask(() => {
+              if (receipt?.committed !== true) noteUnverified();
+              settled();
+            });
+          });
+        } else {
+          if (!("part" in upload) || !upload.part || upload.part.index === upload.part.count - 1) noteUnverified();
+          currentSocket.emit("apps:yjs:update", payload);
+        }
         return true;
       },
-      { stagesParts: () => stagesPartsRef.current, takesLists: () => takesListsRef.current },
+      {
+        stagesParts: () => stagesPartsRef.current,
+        takesLists: () => takesListsRef.current,
+        onProgress: () => pendingStageRef.current?.advance(),
+      },
     )
   );
   const automaticWritesRef = useRef<Map<string, Map<string, AutomaticWrite>>>(new Map());
@@ -282,6 +307,7 @@ export function AppsProvider({
 
   useEffect(() => {
     isReadOnlyRef.current = isReadOnly;
+    if (isReadOnly) pendingStageRef.current?.cancel();
   }, [isReadOnly]);
 
   useEffect(() => {
@@ -304,6 +330,7 @@ export function AppsProvider({
   }, []);
 
   const resetLocalData = useCallback(() => {
+    pendingStageRef.current?.cancel();
     stopSync();
     setSyncStatus("idle");
     for (const [appId, doc] of docsRef.current.entries()) {
@@ -332,6 +359,7 @@ export function AppsProvider({
     awarenessHandlersRef.current.clear();
     uploads.clear();
     resendRef.current.clear();
+    unverifiedUploadsRef.current.clear();
     stagesPartsRef.current = null;
     takesListsRef.current = false;
     reconnectedRef.current = false;
@@ -361,6 +389,7 @@ export function AppsProvider({
     disposedRef.current = false;
     return () => {
       disposedRef.current = true;
+      pendingStageRef.current?.cancel();
       queueMicrotask(() => {
         if (disposedRef.current) resetLocalData();
       });
@@ -390,6 +419,7 @@ export function AppsProvider({
     awarenessHandlersRef.current.delete(appId);
     uploads.drop(appId);
     resendRef.current.delete(appId);
+    unverifiedUploadsRef.current.delete(appId);
     initialUpdateSentRef.current.delete(appId);
     replicaIdsRef.current.delete(appId);
     staleAppsRef.current.delete(appId);
@@ -611,6 +641,7 @@ export function AppsProvider({
             const replicaId = replicaIdsRef.current.get(run.appId);
             for (const change of changesToResend(serverState, pending, lacking)) uploads.add(run.appId, replicaId, change);
           }
+          unverifiedUploadsRef.current.delete(run.appId);
         } catch (err) {
           console.warn("[Apps] Failed to read the server state vector", err);
         }
@@ -619,6 +650,7 @@ export function AppsProvider({
       setIsRebuilding(false);
       uploads.wake();
       runAutomaticWrites(run.appId);
+      pendingStageRef.current?.advance();
       return true;
     },
     [adoptReplacement, getAwareness, canWrite, runAutomaticWrites, uploads]
@@ -631,6 +663,7 @@ export function AppsProvider({
       const fail = () => {
         stopSync();
         setSyncStatus("failed");
+        pendingStageRef.current?.cancel();
       };
       const retryLater = (afterMs: number) => {
         const backoff = SYNC_RETRY_DELAYS_MS[Math.min(run.attempt, SYNC_RETRY_DELAYS_MS.length - 1)];
@@ -666,6 +699,7 @@ export function AppsProvider({
         if (reply.kind === "synced") {
           syncRunRef.current = null;
           const synced = applySync(run, reply.response);
+          if (!synced) pendingStageRef.current?.cancel();
           if (!synced && run.replaces) run.doc.destroy();
           setSyncStatus(synced ? "synced" : "failed");
         } else if (reply.kind === "retry") {
@@ -700,6 +734,7 @@ export function AppsProvider({
 
   const rebuildApp = useCallback(
     (appId: string, refusal: { reason: string } | null) => {
+      pendingStageRef.current?.cancel();
       settleAutomaticWrites(appId, replicaIdsRef.current.get(appId), refusal);
       detachDoc(appId);
       staleAppsRef.current.add(appId);
@@ -755,13 +790,18 @@ export function AppsProvider({
 
   const applyServerAppsState = useCallback(
     (next: AppsState) => {
-      if (next.notInRoom) return;
+      if (next.notInRoom) {
+        pendingStageRef.current?.cancel();
+        return;
+      }
       const reconnected = reconnectedRef.current;
       reconnectedRef.current = false;
       const previous = serverStateRef.current;
-      if (!reconnected && previous.revision !== null && next.revision !== null && next.revision < previous.revision) return;
+      const roomChanged = previous.roomId !== next.roomId;
+      if (!reconnected && !roomChanged && previous.revision !== null && next.revision !== null && next.revision < previous.revision) return;
       serverStateRef.current = next;
-      const changed = previous.activeAppId !== next.activeAppId || previous.docGeneration !== next.docGeneration;
+      const changed = roomChanged || previous.activeAppId !== next.activeAppId || previous.docGeneration !== next.docGeneration;
+      if (changed || previous.revision !== next.revision) pendingStageRef.current?.cancel();
       lockedRef.current = next.locked;
       if (changed) {
         stopSync();
@@ -789,8 +829,9 @@ export function AppsProvider({
     const currentSocket = socketRef.current;
     if (!currentSocket) return;
 
+    const requestedFrom = serverStateRef.current;
     currentSocket.emit("apps:getState", (response?: unknown) => {
-      if (socketRef.current !== currentSocket) return;
+      if (socketRef.current !== currentSocket || serverStateRef.current !== requestedFrom) return;
       const next = parseAppsState(response);
       if (next) {
         applyServerAppsState(next);
@@ -846,6 +887,7 @@ export function AppsProvider({
 
     let interrupted = false;
     const handleDisconnect = () => {
+      pendingStageRef.current?.cancel();
       interrupted = true;
     };
     const handleConnect = () => {
@@ -908,32 +950,89 @@ export function AppsProvider({
     [],
   );
 
+  const leaveStage = useCallback(
+    (event: "apps:open" | "apps:close", payload: AppsOpenPayload | AppsClosePayload | null) => {
+      const socket = socketRef.current;
+      if (!socket?.connected || isReadOnlyRef.current || reconnectedRef.current || pendingStageRef.current) {
+        return Promise.resolve(COMMAND_FAILED);
+      }
+      const stage = serverStateRef.current;
+      const appId = stage.activeAppId;
+      if (stage.revision === null || !appId || (payload && "appId" in payload && payload.appId === appId)) {
+        return sendStageCommand(event, payload);
+      }
+
+      const waitingForEdits = () =>
+        uploads.hasPending(appId) || Boolean(resendRef.current.get(appId)?.length) || unsentAppsRef.current.has(appId);
+      if (!waitingForEdits() && !unverifiedUploadsRef.current.has(appId)) return sendStageCommand(event, payload);
+
+      return new Promise<AppsCommandResult>((resolve) => {
+        let verificationStarted = false;
+        const finish = (send?: () => Promise<AppsCommandResult>) => {
+          if (pendingStageRef.current !== command) return;
+          clearTimeout(timer);
+          pendingStageRef.current = null;
+          resolve(send ? send() : COMMAND_FAILED);
+        };
+        const command: PendingStageCommand = {
+          cancel: () => finish(),
+          advance: () => {
+            const current = serverStateRef.current;
+            if (disposedRef.current || socketRef.current !== socket || !socket.connected ||
+                current.roomId !== stage.roomId || current.revision !== stage.revision ||
+                current.activeAppId !== appId || current.docGeneration !== stage.docGeneration) {
+              command.cancel();
+              return;
+            }
+            if (waitingForEdits()) return;
+            if (unverifiedUploadsRef.current.has(appId)) {
+              if (syncRunRef.current) return;
+              // An empty upload ack only ends the transport request. Check the room copy.
+              if (verificationStarted) command.cancel();
+              else {
+                verificationStarted = true;
+                startSync(appId, true);
+              }
+              return;
+            }
+            finish(() => sendStageCommand(event, payload));
+          },
+        };
+        const timer = setTimeout(command.cancel, ACK_TIMEOUT_MS);
+        pendingStageRef.current = command;
+        command.advance();
+      });
+    },
+    [sendStageCommand, startSync, uploads],
+  );
+
   const presentApp = useCallback(
     (appId: string) => {
       if (!apps.some((app) => app.id === appId)) {
         console.warn(`[Apps] Attempted to present unregistered app: ${appId}`);
         return Promise.resolve(COMMAND_FAILED);
       }
-      const { revision } = serverStateRef.current;
+      const { revision, roomId } = serverStateRef.current;
       const payload: AppsOpenPayload =
-        revision === null ? { appId } : { appId, expectedRevision: revision };
-      return sendStageCommand("apps:open", payload);
+        revision === null ? { appId } : { appId, expectedRevision: revision, expectedRoomId: roomId };
+      return leaveStage("apps:open", payload);
     },
-    [apps, sendStageCommand],
+    [apps, leaveStage],
   );
 
   // An older SFU's apps:close takes only the ack.
   const closeApp = useCallback(() => {
-    const { revision } = serverStateRef.current;
+    const { revision, roomId } = serverStateRef.current;
     const payload: AppsClosePayload | null =
-      revision === null ? null : { expectedRevision: revision };
-    return sendStageCommand("apps:close", payload);
-  }, [sendStageCommand]);
+      revision === null ? null : { expectedRevision: revision, expectedRoomId: roomId };
+    return leaveStage("apps:close", payload);
+  }, [leaveStage]);
 
   const clearApp = useCallback(
     (appId: string) => {
       const { revision } = serverStateRef.current;
       if (revision === null) return Promise.resolve(COMMAND_FAILED);
+      pendingStageRef.current?.cancel();
       const payload: AppsDiscardPayload = { appId, expectedRevision: revision };
       return sendStageCommand("apps:discard", payload);
     },

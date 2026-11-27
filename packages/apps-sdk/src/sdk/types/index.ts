@@ -12,6 +12,7 @@ export type AppsState = {
   /** The app presented on the room's stage. Only hosts change it. */
   activeAppId: string | null;
   locked: boolean;
+  roomId?: string;
   notInRoom?: true;
   /**
    * Bumped by every change to this state. Null on an older SFU, which
@@ -87,6 +88,7 @@ export type AppsStageErrorCode = "stale_revision" | "room_full";
 export type AppsOpenPayload = {
   appId: string;
   expectedRevision?: number;
+  expectedRoomId?: string;
 };
 
 export type AppsOpenResponse = {
@@ -98,6 +100,7 @@ export type AppsOpenResponse = {
 
 export type AppsClosePayload = {
   expectedRevision: number;
+  expectedRoomId?: string;
 };
 
 export type AppsCloseResponse = {

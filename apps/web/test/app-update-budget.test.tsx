@@ -139,7 +139,8 @@ const budgetedSfu = (appId: string, serverDoc: Y.Doc) => {
       }
       if (state.retains && (event === "apps:open" || event === "apps:close")) {
         stageCommands.push(event);
-        if ((payload as { expectedRevision: number }).expectedRevision !== revision) {
+        const { expectedRevision, expectedRoomId } = payload as { expectedRevision: number; expectedRoomId: string };
+        if (expectedRevision !== revision || expectedRoomId !== "room") {
           ack?.({ success: false, code: "stale_revision" });
           return;
         }
@@ -384,6 +385,24 @@ describe("leaving a saved whiteboard", () => {
     expect(sfu.stageCommands).toEqual([]);
     expect(ctx.state.activeAppId).toBe("whiteboard");
     expect(read(server)).toEqual(["interrupted"]);
+  });
+
+  it.each([
+    { revision: 2 },
+    { docGeneration: 2 },
+    { roomId: "other-room" },
+  ])("cancels a deferred switch when stage ownership changes: %j", async (changed) => {
+    const { sfu, add } = await board();
+    sfu.state.commitDelayMs = 200;
+    await act(async () => add("old-stage"));
+    const result = await request(() => ctx.presentApp("wheel"));
+    await act(async () => sfu.fire("apps:state", {
+      activeAppId: "whiteboard", locked: false, roomId: "room", revision: 1, docGeneration: 1, ...changed,
+    }));
+    await advance(500);
+    expect(result.value).toEqual({ ok: false, reason: "failed" });
+    expect(sfu.stageCommands).toEqual([]);
+    expect(ctx.state.activeAppId).toBe("whiteboard");
   });
 
   it("closes immediately when the current edits are already committed", async () => {

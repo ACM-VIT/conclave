@@ -334,7 +334,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
   };
 
   const writeFor = (
-    admission: Admission, mark: AppSyncMark, done: () => void, mode: "single" | "list" | "assembled",
+    admission: Admission, mark: AppSyncMark, done: (committed?: boolean) => void, mode: "single" | "list" | "assembled",
     direct: boolean,
   ): SlotWrite => {
     const { apps, appId, host, participant, replicaId, socketId } = admission;
@@ -359,7 +359,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         try {
           if (outcome !== null) refuse(admission, outcome);
         } finally {
-          done();
+          done(outcome === null);
         }
       },
     };
@@ -380,6 +380,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     deniedError: string,
     command: StageCommand,
     reply: (outcome: StageOutcome) => void,
+    expectedRoomId?: unknown,
   ): void => {
     if (!context.currentRoom || !context.currentClient) {
       reply({ success: false, error: "Not in a room" });
@@ -399,6 +400,11 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       return;
     }
     const room = context.currentRoom;
+    const client = context.currentClient;
+    if (expectedRoomId !== undefined && expectedRoomId !== room.id) {
+      reply({ success: false, ...STAGE_COMMAND_ERRORS.stale });
+      return;
+    }
     const { apps } = room;
     const plan = apps.plan(command, revision);
     if (!plan.ok) {
@@ -410,6 +416,10 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       return;
     }
     const execute = (): void => {
+      if (!socket.connected || context.currentRoom !== room || context.currentClient !== client) {
+        reply({ success: false, ...STAGE_COMMAND_ERRORS.stale });
+        return;
+      }
       const next = apps.plan(command, revision);
       if (!next.ok) {
         reply({ success: false, ...STAGE_COMMAND_ERRORS[next.reason] });
@@ -479,6 +489,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
                 }
               : outcome,
           ),
+        data?.expectedRoomId,
       );
     }
   );
@@ -497,6 +508,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
           callback,
           outcome.success ? { success: true, revision: outcome.state.revision } : outcome,
         ),
+      data?.expectedRoomId,
     );
   });
 
@@ -698,7 +710,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     };
   };
 
-  const receiveUpdate = (data: AppsUpdateData, done: () => void): void => {
+  const receiveUpdate = (data: AppsUpdateData, done: (committed?: boolean) => void): void => {
     const room = context.currentRoom;
     const client = context.currentClient;
     if (!room || !client || client.isObserver) return done();
@@ -842,14 +854,14 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       whole.set(bytes, offset);
       offset += bytes.length;
     }
-    apps.scheduler.submit(writeFor(admission, mark, () => {
+    apps.scheduler.submit(writeFor(admission, mark, (committed) => {
       staging.give(change.bytes);
-      done();
+      done(committed);
     }, "assembled", true), wireBytes(whole)!);
   };
 
-  socket.on("apps:yjs:update", (data: AppsUpdateData, ack?: () => void) => {
-    const done = () => respond(ack, undefined);
+  socket.on("apps:yjs:update", (data: AppsUpdateData, ack?: (receipt?: { committed: true }) => void) => {
+    const done = (committed = false) => respond(ack, committed ? { committed: true } : undefined);
     try {
       receiveUpdate(data, done);
     } catch (error) {

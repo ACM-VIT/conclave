@@ -10,10 +10,15 @@ export type Upload = { update: Uint8Array; part?: AppsUpdatePart } | { updates: 
 
 export type SendUpload = (appId: string, replicaId: string | undefined, upload: Upload, settled?: () => void) => boolean;
 
-export type UploadQueueOptions = { stagesParts?: () => boolean | null; takesLists?: () => boolean };
+export type UploadQueueOptions = {
+  stagesParts?: () => boolean | null;
+  takesLists?: () => boolean;
+  onProgress?: () => void;
+};
 
 export type UploadQueue = {
   add: (appId: string, replicaId: string | undefined, update: Uint8Array) => void;
+  hasPending: (appId: string) => boolean;
   take: (appId: string) => Uint8Array[];
   drop: (appId: string) => void;
   wake: () => void;
@@ -55,7 +60,7 @@ const uploadOf = (batch: Item[], takesLists: boolean): Upload => {
 
 export const createUploadQueue = (
   send: SendUpload,
-  { stagesParts = () => false, takesLists = () => false }: UploadQueueOptions = {},
+  { stagesParts = () => false, takesLists = () => false, onProgress }: UploadQueueOptions = {},
 ): UploadQueue => {
   const pending = new Map<string, Pending>();
   const unsettled = new Map<string, Sent[]>();
@@ -70,6 +75,7 @@ export const createUploadQueue = (
     records.splice(at, 1);
     if (records.length === 0) unsettled.delete(appId);
     schedule();
+    onProgress?.();
   };
 
   const flush = (): void => {
@@ -113,6 +119,7 @@ export const createUploadQueue = (
     if (entry.items.length === 0) pending.delete(key);
     lastSentAt = Date.now();
     schedule();
+    onProgress?.();
   };
 
   const settleStaged = (appId: string, partId: string): void => {
@@ -145,6 +152,7 @@ export const createUploadQueue = (
   };
 
   return {
+    hasPending: (appId) => unsettled.has(appId) || [...pending.values()].some((entry) => entry.appId === appId),
     add: (appId, replicaId, update) => {
       const key = `${appId}\u0000${replicaId ?? ""}`;
       const entry = pending.get(key);

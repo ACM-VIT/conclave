@@ -182,15 +182,16 @@ export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChang
       return response;
     },
     present: (id: string, expectedRevision?: number) => call<{ success: boolean; code?: string }>("apps:open", { appId: id, expectedRevision }),
-    close: () => call<{ success: boolean }>("apps:close"),
+    close: (expected?: { expectedRevision: number; expectedRoomId: string }) =>
+      expected ? call<{ success: boolean }>("apps:close", expected) : call<{ success: boolean }>("apps:close"),
     clear: () => call("apps:discard", { appId, expectedRevision: context.currentRoom!.apps.stageRevision }),
     send: (update: Uint8Array, replicaId?: string, part?: unknown) =>
       listeners.get("apps:yjs:update")!({ appId, update, replicaId, ...(part === undefined ? {} : { part }) }),
     sendList: (updates: unknown, replicaId?: string) => listeners.get("apps:yjs:update")!({ appId, updates, replicaId }),
     acknowledged: (payload: { update?: Uint8Array; updates?: unknown; part?: unknown }, replicaId?: string) =>
-      new Promise<{ inbox: Received[]; relayed: number }>((resolve) => {
-        listeners.get("apps:yjs:update")!({ appId, replicaId, ...payload }, () =>
-          resolve({ inbox: [...self.member.inbox], relayed: relayed.length }),
+      new Promise<{ receipt: unknown; inbox: Received[]; relayed: number }>((resolve) => {
+        listeners.get("apps:yjs:update")!({ appId, replicaId, ...payload }, (receipt: unknown) =>
+          resolve({ receipt, inbox: [...self.member.inbox], relayed: relayed.length }),
         );
       }),
     disconnect: () => listeners.get("disconnect")!(),
