@@ -11,7 +11,7 @@ import type { AdmissionScope } from "../../config/classes/AdmissionLedger.js";
 import type { Room, WaitingRequest } from "../../config/classes/Room.js";
 import type { AppsAwarenessData } from "../../types.js";
 import { isGuestUserKey } from "../identity.js";
-import { cleanupRoom, getRoomChannelId } from "../rooms.js";
+import { cleanupRoom, getRoomChannelId, isCurrentRoom } from "../rooms.js";
 import type { SfuState } from "../state.js";
 import {
   emitWebinarAttendeeCountChanged,
@@ -175,7 +175,6 @@ export const handOffRoom = (
   peers: { emit: (event: string, payload: unknown) => unknown } = io.to(room.channelId),
 ): void => {
   const roomId = room.id;
-  const roomChannelId = room.channelId;
 
   if (!room.hasActiveAdmin()) {
     const promoted = room.promoteNextAdmin(excludedUserKeys);
@@ -225,20 +224,16 @@ export const handOffRoom = (
         }
       }
       room.startCleanupTimer(() => {
-        if (!state.rooms.has(roomChannelId)) return;
-        const roomInState = state.rooms.get(roomChannelId);
-        if (!roomInState || roomInState.hasActiveAdmin()) return;
-        if (roomInState.pendingClients.size > 0) {
-          for (const pending of roomInState.pendingClients.values()) {
+        if (!isCurrentRoom(state, room) || room.hasActiveAdmin()) return;
+        if (room.pendingClients.size > 0) {
+          for (const pending of room.pendingClients.values()) {
             pending.socket.emit("waitingRoomStatus", {
               message: "No one to let you in.",
               roomId,
             });
           }
         }
-        if (roomInState.isEmpty()) {
-          cleanupRoom(state, roomChannelId);
-        }
+        cleanupRoom(state, room);
       });
     }
   }
@@ -1099,9 +1094,7 @@ export const forceRemoveClientNow = (options: {
   if (removed && wasAdmin && handOff) {
     handOffRoom(io, state, room);
   }
-  if (state.rooms.has(room.channelId)) {
-    cleanupRoom(state, room.channelId);
-  }
+  cleanupRoom(state, room);
   return removed;
 };
 

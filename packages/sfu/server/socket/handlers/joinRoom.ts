@@ -158,7 +158,7 @@ const endJoinAttempt = (
   const room = context.state.rooms.get(channelId);
   if (!room) return;
   if (room.isEmpty()) {
-    cleanupRoom(context.state, channelId);
+    cleanupRoom(context.state, room);
   } else if (!room.hasActiveAdmin()) {
     handOffRoom(context.io, context.state, room);
   }
@@ -441,7 +441,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         };
 
         if (room?.router.closed) {
-          cleanupStaleRoom(state, roomChannelId);
+          cleanupStaleRoom(state, room);
           room = undefined;
         }
 
@@ -1038,7 +1038,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           clearBrowserState(roomChannelId);
         }
 
-        let previousChannelIdToLeave: string | null = null;
+        let previousRoomToLeave: Room | null = null;
         if (
           context.currentRoom &&
           context.currentRoom.channelId !== roomChannelId &&
@@ -1066,7 +1066,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             handOffRoom(io, state, previousRoom, new Set(), previousPeers);
           }
 
-          previousChannelIdToLeave = previousChannelId;
+          previousRoomToLeave = previousRoom;
           context.currentRoom = null;
           context.currentClient = null;
         }
@@ -1110,9 +1110,9 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         // The previous room's channel is left only now. Nothing awaits between
         // the identity checks above and this seat, so a second join under the
         // same user key is always judged against the seat.
-        if (previousChannelIdToLeave) {
-          await socket.leave(previousChannelIdToLeave);
-          cleanupRoom(state, previousChannelIdToLeave);
+        if (previousRoomToLeave) {
+          await socket.leave(previousRoomToLeave.channelId);
+          cleanupRoom(state, previousRoomToLeave);
           if (superseded()) return;
         }
         await socket.join(roomChannelId);
@@ -1389,6 +1389,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             ? { webinarSpeakerUserId: feedSnapshot.speakerUserId }
             : {}),
           webcamCodecPolicy: context.currentRoom.webcamCodecPolicy,
+          reportsSenderPacketCounts: true,
         });
       } catch (error) {
         Logger.error("Error joining room:", error);

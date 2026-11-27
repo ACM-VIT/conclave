@@ -8,15 +8,19 @@ import type {
   SetStateAction,
 } from "react";
 import {
+  CircleAlert,
   Globe,
   Headphones,
   Home,
+  KeyRound,
   Loader2,
   LogOut,
   MonitorPlay,
   Plus,
   RefreshCw,
+  Unplug,
   VolumeX,
+  WifiOff,
 } from "lucide-react";
 import type { Socket } from "socket.io-client";
 import type { RoomInfo } from "@/lib/sfu-types";
@@ -125,6 +129,11 @@ import type {
 } from "../hooks/useMeetTts";
 import { getRenderableParticipantVideoStream } from "../lib/participant-media";
 import { prewarmVideoEffectsAssetsDeferred } from "../lib/video-effects-lazy";
+import ReconnectInviteCodeForm from "./ReconnectInviteCodeForm";
+import {
+  describeRecoveryCard,
+  formatReconnectAttemptLabel,
+} from "../lib/reconnect-recovery-status";
 
 const loadChatPanel = () => import("./ChatPanel");
 const loadTranscriptPanel = () => import("./TranscriptPanel");
@@ -136,6 +145,7 @@ const DevMeetToolsPanel = lazy(() => import("./DevMeetToolsPanel"));
 
 interface MeetsMainContentProps {
   roomAi: RoomAiController;
+  mediaBlockedNotice?: ReactNode;
   errorNotice?: ReactNode;
   mediaErrorNotice?: ReactNode;
   isJoined: boolean;
@@ -147,7 +157,7 @@ interface MeetsMainContentProps {
   roomId: string;
   setRoomId: Dispatch<SetStateAction<string>>;
   joinRoomById: (roomId: string) => void;
-  retryReconnect?: () => Promise<void> | void;
+  retryReconnect?: (options?: { inviteCode?: string }) => Promise<void> | void;
   reconnectRecoveryStatus?: ReconnectRecoveryStatus | null;
   hideJoinUI?: boolean;
   isWebinarAttendee?: boolean;
@@ -631,6 +641,7 @@ export default function MeetsMainContent({
   onRotateWebinarLink,
   transcript,
   roomAi,
+  mediaBlockedNotice,
   errorNotice,
   mediaErrorNotice,
 }: MeetsMainContentProps) {
@@ -1733,6 +1744,10 @@ export default function MeetsMainContent({
   const isReconnectRetryBusy =
     reconnectRecoveryStatus?.phase === "connecting" ||
     reconnectRecoveryStatus?.phase === "joining";
+  const needsInviteCodeToRejoin =
+    reconnectRecoveryStatus?.needsInviteCode === true &&
+    !isTerminalMeetingError &&
+    !isNetworkOffline;
   const reconnectRetryAt = reconnectRecoveryStatus?.retryAt ?? null;
   const [reconnectCountdownSeconds, setReconnectCountdownSeconds] =
     useState<number | null>(null);
@@ -1756,38 +1771,55 @@ export default function MeetsMainContent({
     };
   }, [reconnectRetryAt]);
 
-  const reconnectAttemptLabel =
-    reconnectRecoveryStatus && reconnectRecoveryStatus.attempt > 0
-      ? `Attempt ${Math.min(
-          reconnectRecoveryStatus.attempt,
-          reconnectRecoveryStatus.maxAttempts,
-        )} of ${reconnectRecoveryStatus.maxAttempts}`
-      : null;
-  const reconnectLastError = reconnectRecoveryStatus?.lastError ?? null;
-  const recoveryTitle = isNetworkOffline
-    ? "Waiting for internet"
+  const reconnectAttemptLabel = isTerminalMeetingError
+    ? null
+    : formatReconnectAttemptLabel(reconnectRecoveryStatus ?? null, {
+        waitingForNetwork: isNetworkOffline,
+      });
+  const isRestoringAfterReconnect =
+    connectionState === "connected" || connectionState === "joining";
+  // The ring spins only while a reconnect is running. A card that waits on
+  // the user or on the network shows a still icon instead.
+  const RecoveryWaitingIcon = isNetworkOffline
+    ? WifiOff
     : isTerminalMeetingError
-      ? "Meeting unavailable"
-      : reconnectRecoveryStatus?.phase === "failed"
-        ? "Reconnect failed"
-        : canRetryRecovery
-          ? "Connection interrupted"
-          : "Reconnecting";
-  const recoveryDetail = isNetworkOffline
-    ? "We are keeping the room open and will restore media when your connection returns."
-    : connectionState === "connected" || connectionState === "joining"
-      ? "Connection is back. Restoring media, participants, and room state."
-      : isTerminalMeetingError
-        ? meetError?.message
-      : reconnectRetryAt && reconnectCountdownSeconds !== null
-        ? reconnectCountdownSeconds > 0
-          ? `Retrying automatically in ${reconnectCountdownSeconds}s.`
-          : "Retrying reconnect now."
-      : reconnectRecoveryStatus?.message
-        ? reconnectRecoveryStatus.message
-      : canRetryRecovery
-        ? (meetError?.message ?? "We could not restore the connection yet.")
-        : "Keeping your meeting open while the connection is restored.";
+      ? CircleAlert
+      : needsInviteCodeToRejoin
+        ? KeyRound
+        : isRestoringAfterReconnect
+          ? null
+          : connectionState === "error" ||
+              reconnectRecoveryStatus?.phase === "failed"
+            ? Unplug
+            : null;
+  const {
+    title: recoveryTitle,
+    detail: recoveryDetail,
+    lastError: reconnectLastError,
+  } = describeRecoveryCard({
+    isOffline: isNetworkOffline,
+    isRestoring: isRestoringAfterReconnect,
+    terminalMessage: isTerminalMeetingError ? (meetError?.message ?? "") : null,
+    needsInviteCode: needsInviteCodeToRejoin,
+    status: reconnectRecoveryStatus ?? null,
+    countdownSeconds: reconnectCountdownSeconds,
+    canRetry: canRetryRecovery,
+    errorMessage: meetError?.message ?? null,
+  });
+  const leaveRecoveryButton = (
+      <button
+        type="button"
+        onClick={isTerminalMeetingError ? (onGoHome ?? leaveRoom) : leaveRoom}
+        className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-[#fafafa]/15 px-4 text-[12.5px] font-medium text-[#fafafa]/76 transition-colors hover:border-[#fafafa]/35 hover:bg-[#fafafa]/10 hover:text-[#fafafa]"
+      >
+        {isTerminalMeetingError ? (
+          <Home size={14} strokeWidth={1.8} />
+        ) : (
+          <LogOut size={14} strokeWidth={1.8} />
+        )}
+        {isTerminalMeetingError ? "Go home" : "Leave"}
+      </button>
+  );
   const openWhiteboard = useCallback(() => {
     void handleOpenWhiteboard();
   }, [handleOpenWhiteboard]);
@@ -1949,11 +1981,22 @@ export default function MeetsMainContent({
             role="dialog"
             aria-modal="true"
           >
-            <div className="relative mx-auto h-11 w-11">
-              <div className="absolute inset-0 rounded-full border-2 border-[#fafafa]/10" />
-              <div className="absolute inset-0 animate-spin rounded-full border-2 border-transparent border-t-[#F95F4A]" />
-              <div className="absolute inset-[5px] rounded-full bg-[#F95F4A]/10" />
-            </div>
+            {RecoveryWaitingIcon ? (
+              <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full border-2 border-[#fafafa]/10 bg-[#F95F4A]/10">
+                <RecoveryWaitingIcon
+                  size={18}
+                  strokeWidth={1.8}
+                  className="text-[#F95F4A]"
+                  aria-hidden="true"
+                />
+              </div>
+            ) : (
+              <div className="relative mx-auto h-11 w-11">
+                <div className="absolute inset-0 rounded-full border-2 border-[#fafafa]/10" />
+                <div className="absolute inset-0 animate-spin rounded-full border-2 border-transparent border-t-[#F95F4A]" />
+                <div className="absolute inset-[5px] rounded-full bg-[#F95F4A]/10" />
+              </div>
+            )}
             <h2
               className="mt-5 text-balance text-[17px] leading-tight text-[#fafafa]"
               style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
@@ -1978,55 +2021,55 @@ export default function MeetsMainContent({
                 </p>
               </div>
             ) : null}
-            <div className="mt-5 flex flex-wrap items-center justify-center gap-2.5">
-              {canRetryRecovery ? (
-                <button
-                  type="button"
-                  disabled={isReconnectRetryBusy}
-                  onClick={() => {
-                    if (retryReconnect) {
-                      void retryReconnect();
-                      return;
-                    }
-                    void joinRoomById(roomId);
-                  }}
-                  className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-[#F95F4A]/45 bg-[#F95F4A]/20 px-4 text-[12.5px] font-medium text-[#fafafa] transition-colors hover:border-[#F95F4A]/70 hover:bg-[#F95F4A]/35 disabled:cursor-not-allowed disabled:border-[#fafafa]/12 disabled:bg-[#fafafa]/8 disabled:text-[#fafafa]/42"
-                >
-                  <RefreshCw
-                    size={14}
-                    strokeWidth={1.8}
-                    className={isReconnectRetryBusy ? "animate-spin" : undefined}
-                  />
-                  {isReconnectRetryBusy
-                    ? "Retrying"
-                    : reconnectRecoveryStatus?.phase === "failed"
-                      ? "Try again"
-                      : "Retry now"}
-                </button>
-              ) : null}
-              {isTerminalMeetingError && onStartNewMeeting ? (
-                <button
-                  type="button"
-                  onClick={onStartNewMeeting}
-                  className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-[#F95F4A]/45 bg-[#F95F4A]/20 px-4 text-[12.5px] font-medium text-[#fafafa] transition-colors hover:border-[#F95F4A]/70 hover:bg-[#F95F4A]/35"
-                >
-                  <Plus size={14} strokeWidth={1.8} />
-                  New Meeting
-                </button>
-              ) : null}
-              <button
-                type="button"
-                onClick={isTerminalMeetingError ? (onGoHome ?? leaveRoom) : leaveRoom}
-                className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-[#fafafa]/15 px-4 text-[12.5px] font-medium text-[#fafafa]/76 transition-colors hover:border-[#fafafa]/35 hover:bg-[#fafafa]/10 hover:text-[#fafafa]"
+            {needsInviteCodeToRejoin ? (
+              <ReconnectInviteCodeForm
+                isBusy={isReconnectRetryBusy}
+                onSubmit={(inviteCode) => {
+                  void retryReconnect?.({ inviteCode });
+                }}
               >
-                {isTerminalMeetingError ? (
-                  <Home size={14} strokeWidth={1.8} />
-                ) : (
-                  <LogOut size={14} strokeWidth={1.8} />
-                )}
-                {isTerminalMeetingError ? "Go home" : "Leave"}
-              </button>
-            </div>
+                {leaveRecoveryButton}
+              </ReconnectInviteCodeForm>
+            ) : (
+              <div className="mt-5 flex flex-wrap items-center justify-center gap-2.5">
+                {canRetryRecovery ? (
+                  <button
+                    type="button"
+                    disabled={isReconnectRetryBusy}
+                    onClick={() => {
+                      if (retryReconnect) {
+                        void retryReconnect();
+                        return;
+                      }
+                      void joinRoomById(roomId);
+                    }}
+                    className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-[#F95F4A]/45 bg-[#F95F4A]/20 px-4 text-[12.5px] font-medium text-[#fafafa] transition-colors hover:border-[#F95F4A]/70 hover:bg-[#F95F4A]/35 disabled:cursor-not-allowed disabled:border-[#fafafa]/12 disabled:bg-[#fafafa]/8 disabled:text-[#fafafa]/42"
+                  >
+                    <RefreshCw
+                      size={14}
+                      strokeWidth={1.8}
+                      className={isReconnectRetryBusy ? "animate-spin" : undefined}
+                    />
+                    {isReconnectRetryBusy
+                      ? "Retrying"
+                      : reconnectRecoveryStatus?.phase === "failed"
+                        ? "Try again"
+                        : "Retry now"}
+                  </button>
+                ) : null}
+                {isTerminalMeetingError && onStartNewMeeting ? (
+                  <button
+                    type="button"
+                    onClick={onStartNewMeeting}
+                    className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-[#F95F4A]/45 bg-[#F95F4A]/20 px-4 text-[12.5px] font-medium text-[#fafafa] transition-colors hover:border-[#F95F4A]/70 hover:bg-[#F95F4A]/35"
+                  >
+                    <Plus size={14} strokeWidth={1.8} />
+                    New Meeting
+                  </button>
+                ) : null}
+                {leaveRecoveryButton}
+              </div>
+            )}
           </section>
         </div>
       )}
@@ -2041,6 +2084,7 @@ export default function MeetsMainContent({
           clearWebinarChrome={isWebinarAttendee}
           overPanel={isFullScreenPanelOpen}
         >
+          <InCallNotice show={Boolean(mediaBlockedNotice)}>{mediaBlockedNotice}</InCallNotice>
           <InCallNotice show={Boolean(mediaErrorNotice)}>{mediaErrorNotice}</InCallNotice>
           <InCallNotice show={Boolean(errorNotice)}>{errorNotice}</InCallNotice>
           {!isRecoveringMeeting && (!isWebinarAttendee || serverRestartNotice) ? (
