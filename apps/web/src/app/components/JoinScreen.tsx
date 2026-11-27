@@ -18,22 +18,16 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { memo, useCallback, useEffect, useEffectEvent, useId, useRef, useState } from "react";
 import { prefetchConclaveAnimation } from "../lib/conclaveAnimation";
 import { prefetchConclaveLock } from "../lib/conclaveSound";
 import type { Dispatch, SetStateAction } from "react";
 import { Avatar } from "@conclave/ui-tokens/web";
 import { signOut, useSession } from "@/lib/auth-client";
+import { getMeetingLinkOrigins } from "@/lib/site-url";
+import { buildMeetingPath, buildMeetingUrl } from "@/lib/meeting-links";
+import { canonicalizeSfuClientId, resolveBrowserSfuClientId } from "@/lib/sfu-client-id";
 import type { RoomInfo } from "@/lib/sfu-types";
-import {
-  buildMeetingPath,
-  buildMeetingUrl,
-  meetingTarget,
-  parseMeetingInput,
-  type MeetingInput,
-} from "@/lib/meeting-links";
-import type { RejoinMedia } from "../lib/call-outcome";
-import { useRejoinMediaRestore } from "../hooks/useRejoinMediaRestore";
 import type {
   ConnectionState,
   MeetError,
@@ -45,15 +39,23 @@ import {
 } from "../lib/constants";
 import {
   generateRoomCode,
-  ROOM_CODE_MAX_LENGTH,
-  extractRoomCode,
+  PASTED_INPUT,
+  applyFieldEdit,
+  inputEditRange,
+  normalizeCodeField,
+  parseCodeFieldPaste,
+  planFieldEdit,
   sanitizeInstitutionDisplayName,
-  sanitizeRoomCode,
+  trackFieldHistory,
   isMediaDeviceBlocked,
 } from "../lib/utils";
 import type { SetupNotice } from "../lib/setup-notice";
 import RoomPresenceBadge from "./RoomPresenceBadge";
 import { useCameraPermissionState } from "../hooks/useCameraPermissionState";
+import { useClipboardCopy } from "../hooks/useClipboardCopy";
+import { useCodeField } from "../hooks/useCodeField";
+import { applyRejoinMedia, saveRejoinIntent, type RejoinMedia } from "../lib/rejoin-intent";
+import { useRejoinMediaRestore } from "../hooks/useRejoinMediaRestore";
 import {
   useBandwidthHeavyPreloadDeferred,
 } from "../hooks/useBandwidthHeavyPreloadDeferred";
@@ -67,15 +69,7 @@ import {
   MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
   MEDIA_CAPTURE_RECOVERY_TIMEOUT_MS,
 } from "../lib/media-capture-timeout";
-import { captureGeneration, isCaptureReleased } from "../lib/media-captures";
-import {
-  captureDevices,
-  chooseDevice,
-  createDeviceIntentStore,
-  handOffDevices,
-  type Device,
-  type HeldDevices,
-} from "../lib/device-intent";
+import { onCapturesReleased } from "../lib/media-captures";
 import { prewarmVideoEffectsAssetsDeferred } from "../lib/video-effects-lazy";
 import type { VideoEffectsBridgeState } from "./VideoEffectsBridge";
 import {
@@ -156,6 +150,11 @@ const buildGuestUser = (
   return { id, email, name };
 };
 
+type PrejoinMediaKind = "audio" | "video";
+type PrejoinCapture = { source: "choice" | "restore" | "permissions" };
+type PrejoinCaptureSlots = Partial<Record<PrejoinMediaKind, PrejoinCapture>>;
+const PREJOIN_MEDIA_KINDS: readonly PrejoinMediaKind[] = ["audio", "video"];
+
 interface JoinScreenProps {
   roomId: string;
   onRoomIdChange: (id: string) => void;
@@ -171,6 +170,7 @@ interface JoinScreenProps {
   isAdmin: boolean;
   enableRoomRouting: boolean;
   forceJoinOnly: boolean;
+  clientId?: string;
   showPermissionHint: boolean;
   rooms: RoomInfo[];
   roomsStatus: "idle" | "loading" | "error";
@@ -182,20 +182,20 @@ interface JoinScreenProps {
   mediaError?: MeetError | null;
   setupNotice?: SetupNotice | null;
   onDismissSetupNotice?: () => void;
+  initialMedia?: RejoinMedia | null;
+  onInitialMediaUsed?: () => void;
   videoEffects: VideoEffectsState;
   onVideoEffectsChange: Dispatch<SetStateAction<VideoEffectsState>>;
   onPrejoinMediaCommit?: (handoff: PrejoinMediaHandoff) => void;
   onEnterStart?: (action: "new" | "join") => void;
-  initialMedia?: RejoinMedia | null;
-  clientId?: string;
 }
 
 const FIELD =
-  "w-full rounded-xl border border-white/10 bg-white/[0.03] px-4 h-12 text-[15px] text-[#fafafa] placeholder:text-[#fafafa]/30 transition-[border-color,background-color] duration-150 focus:border-[#F95F4A]/60 focus:bg-white/[0.05] focus:outline-none disabled:opacity-50";
+  "w-full rounded-xl border border-white/10 bg-white/[0.03] px-4 h-12 short-screen:h-11 text-[15px] text-[#fafafa] placeholder:text-[#fafafa]/30 transition-[border-color,background-color] duration-150 focus:border-[#F95F4A]/60 focus:bg-white/[0.05] focus:outline-none disabled:opacity-50";
 const CTA_PRIMARY =
-  "inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#F95F4A] text-[15px] font-medium text-white transition-[filter] duration-150 hover:brightness-[1.05] disabled:bg-[#232327] disabled:text-[#fafafa]/40 disabled:cursor-not-allowed";
+  "inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl short-screen:h-11 bg-[#F95F4A] text-[15px] font-medium text-white transition-[filter] duration-150 hover:brightness-[1.05] disabled:bg-[#232327] disabled:text-[#fafafa]/40 disabled:cursor-not-allowed";
 const CTA_GHOST =
-  "inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] text-[15px] font-medium text-[#fafafa] transition-colors duration-150 hover:bg-white/[0.08] disabled:opacity-50";
+  "inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl short-screen:h-11 border border-white/10 bg-white/[0.04] text-[15px] font-medium text-[#fafafa] transition-colors duration-150 hover:bg-white/[0.08] disabled:opacity-50";
 const DEBUG_VIDEO_EFFECTS_STORAGE_KEY = "conclave:debug-video-effects";
 
 const getSignInHref = (): string => {
@@ -262,44 +262,57 @@ const warnJoinMedia = (event: string, payload?: unknown) => {
 
 type DeviceOption = { deviceId: string; label: string };
 
+const deviceLabel = (options: DeviceOption[], selectedId: string) =>
+  (options.find((option) => option.deviceId === selectedId) ?? options[0])?.label;
+
 function DeviceSelect({
   icon: Icon,
   value,
   options,
   onChange,
   ariaLabel,
+  placeholder,
 }: {
   icon: LucideIcon;
   value: string;
   options: DeviceOption[];
   onChange: (deviceId: string) => void;
   ariaLabel: string;
+  placeholder: string;
 }) {
+  const disabled = options.length === 0;
   return (
-    <div className="relative">
+    <div className="relative min-w-0">
       <Icon
         size={15}
         className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#fafafa]/45"
       />
       <select
         aria-label={ariaLabel}
-        value={value || options[0]?.deviceId || ""}
+        disabled={disabled}
+        value={disabled ? "" : value || options[0]?.deviceId || ""}
         onChange={(event) => onChange(event.target.value)}
-        className="h-10 w-full cursor-pointer appearance-none rounded-xl border border-white/10 bg-white/[0.03] pl-9 pr-9 text-[13px] text-[#fafafa] transition-colors duration-150 hover:bg-white/[0.05] focus:border-[#F95F4A]/60 focus:outline-none"
+        className="h-10 w-full cursor-pointer appearance-none truncate rounded-xl border border-white/10 bg-white/[0.03] pl-9 pr-8 text-[13px] text-[#fafafa] transition-colors duration-150 hover:bg-white/[0.05] focus:border-[#F95F4A]/60 focus:outline-none disabled:cursor-default disabled:text-[#fafafa]/40 disabled:hover:bg-white/[0.03]"
       >
-        {options.map((option) => (
-          <option
-            key={option.deviceId}
-            value={option.deviceId}
-            className="bg-[#18181b] text-[#fafafa]"
-          >
-            {option.label}
+        {disabled ? (
+          <option value="" className="bg-[#18181b] text-[#fafafa]">
+            {placeholder}
           </option>
-        ))}
+        ) : (
+          options.map((option) => (
+            <option
+              key={option.deviceId}
+              value={option.deviceId}
+              className="bg-[#18181b] text-[#fafafa]"
+            >
+              {option.label}
+            </option>
+          ))
+        )}
       </select>
       <ChevronDown
         size={15}
-        className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[#fafafa]/45"
+        className={`pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 ${disabled ? "text-[#fafafa]/20" : "text-[#fafafa]/45"}`}
       />
     </div>
   );
@@ -314,6 +327,7 @@ function JoinScreen({
   user,
   userEmail,
   forceJoinOnly,
+  clientId,
   enableRoomRouting,
   showPermissionHint,
   rooms,
@@ -325,17 +339,19 @@ function JoinScreen({
   mediaError,
   setupNotice,
   onDismissSetupNotice,
+  initialMedia,
+  onInitialMediaUsed,
   videoEffects,
   onVideoEffectsChange,
   onPrejoinMediaCommit,
   onEnterStart,
-  initialMedia,
-  clientId,
 }: JoinScreenProps) {
-  const normalizedRoomId =
-    roomId === "undefined" || roomId === "null" ? "" : roomId;
+  const pageClientId = canonicalizeSfuClientId(clientId) ?? resolveBrowserSfuClientId();
+  const codeField = useCodeField(roomId, onRoomIdChange, getMeetingLinkOrigins(), pageClientId);
   const isRoutedRoom = forceJoinOnly;
-  const enforceShortCode = enableRoomRouting || forceJoinOnly;
+  const nameInputId = useId();
+  const codeInputId = useId();
+  const codeProblemId = useId();
 
   useEffect(() => {
     prefetchConclaveAnimation();
@@ -346,24 +362,18 @@ function JoinScreen({
   const processedPreviewTrackRef = useRef<MediaStreamTrack | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const handedOffTrackIdsRef = useRef<Set<string>>(new Set());
-  const isMountedRef = useRef(true);
-  const [deviceIntents] = useState(createDeviceIntentStore);
-  const intents = useSyncExternalStore(
-    deviceIntents.subscribe,
-    deviceIntents.get,
-    deviceIntents.get,
-  );
-  const micShownOn = intents.audio.chosen;
-  const cameraShownOn = intents.video.chosen;
-  const isRequestingPermissions =
-    intents.audio.capturing || intents.video.capturing;
+  const captureSlotsRef = useRef<PrejoinCaptureSlots>({});
+  const hadCarriedMediaRef = useRef(false);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [isCameraOn, setIsCameraOn] = useState(false);
   // Join without sending or receiving video (for slow connections). Carried
   // into the meeting through the prejoin media handoff.
   const [isAudioOnly, setIsAudioOnly] = useState(false);
   // Read by async camera paths, which must not start video once audio-only
   // mode is on even if they began before it was turned on.
   const audioOnlyRef = useRef(false);
+  const [isMicOn, setIsMicOn] = useState(false);
+  const [isRequestingPermissions, setIsRequestingPermissions] = useState(false);
   const [permissionRequestError, setPermissionRequestError] = useState<
     string | null
   >(null);
@@ -376,8 +386,6 @@ function JoinScreen({
   const [videoInputs, setVideoInputs] = useState<DeviceOption[]>([]);
   const [selectedAudioId, setSelectedAudioId] = useState("");
   const [selectedVideoId, setSelectedVideoId] = useState("");
-  const [linkCopied, setLinkCopied] = useState(false);
-  const copyResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [pending, setPending] = useState<{ mode: "new" | "join"; roomId: string } | null>(null);
 
   const { data: session } = useSession();
@@ -419,12 +427,6 @@ function JoinScreen({
       ?.getVideoTracks()
       .some((track) => track.readyState === "live" && track.enabled),
   );
-  const holdsCamera = Boolean(
-    localStream?.getVideoTracks().some((track) => track.readyState === "live"),
-  );
-  const holdsMic = Boolean(
-    localStream?.getAudioTracks().some((track) => track.readyState === "live"),
-  );
   const isCameraBlocked = isMediaDeviceBlocked(mediaError, "camera");
   const isCameraPermissionBlocked =
     isCameraBlocked ||
@@ -433,10 +435,11 @@ function JoinScreen({
         cameraPermissionState === "denied"));
   const shouldShowPermissionCta =
     !hasLivePreviewCamera &&
-    !holdsCamera &&
+    !isCameraOn &&
     (cameraPermissionState === "prompt" ||
       cameraPermissionState === "denied" ||
       isCameraBlocked);
+  const tightAudioChip = shouldShowPermissionCta && isAudioOnly;
   const prewarmLiveCameraEffects = (reason: string) => {
     if (activeVideoEffectsCount <= 0 && !isEffectsOpen) return;
     if (shouldDeferPreviewVideoEffectsPreload) return;
@@ -451,220 +454,140 @@ function JoinScreen({
     setIsEffectsOpen(true);
   };
 
-  const stopUnownedTracks = (stream: MediaStream | null) => {
-    stream?.getTracks().forEach((track) => {
-      if (handedOffTrackIdsRef.current.has(track.id)) return;
-      track.stop();
-    });
+  const setCaptureSlots = (next: PrejoinCaptureSlots) => {
+    captureSlotsRef.current = next;
+    setIsRequestingPermissions(
+      PREJOIN_MEDIA_KINDS.some((kind) => next[kind]?.source === "permissions"),
+    );
   };
 
-  const commitLocalPreviewStream = (stream: MediaStream | null) => {
-    if (!isMountedRef.current) {
-      stopUnownedTracks(stream);
-      return;
+  const cancelCaptures = (
+    matches: (owner: PrejoinCapture, kind: PrejoinMediaKind) => boolean,
+  ) => {
+    const next = { ...captureSlotsRef.current };
+    let changed = false;
+    for (const kind of PREJOIN_MEDIA_KINDS) {
+      const owner = next[kind];
+      if (!owner || !matches(owner, kind)) continue;
+      delete next[kind];
+      changed = true;
     }
+    if (changed) setCaptureSlots(next);
+  };
+
+  const beginCapture = (
+    source: PrejoinCapture["source"],
+    kinds: readonly PrejoinMediaKind[],
+  ) => {
+    const owner: PrejoinCapture = { source };
+    const next = { ...captureSlotsRef.current };
+    for (const kind of kinds) next[kind] = owner;
+    setCaptureSlots(next);
+    return {
+      currentKinds: () => kinds.filter((kind) => captureSlotsRef.current[kind] === owner),
+      release: () => cancelCaptures((candidate) => candidate === owner),
+    };
+  };
+
+  const replacePreviewTracks = (
+    kinds: readonly PrejoinMediaKind[],
+    tracks: readonly MediaStreamTrack[],
+  ) => {
+    const accepted = tracks.filter((track) => {
+      if (
+        (track.kind === "audio" || track.kind === "video") &&
+        kinds.includes(track.kind) &&
+        track.readyState === "live"
+      ) {
+        if (track.kind === "video") applyPrejoinCameraContentHint(track);
+        return true;
+      }
+      track.stop();
+      return false;
+    });
+    if (kinds.length === 0) return;
+
+    const preserved = (localStreamRef.current?.getTracks() ?? []).filter((track) => {
+      if (
+        (track.kind === "audio" || track.kind === "video") &&
+        kinds.includes(track.kind)
+      ) {
+        if (!accepted.includes(track)) track.stop();
+        return false;
+      }
+      return track.readyState === "live";
+    });
+    const nextTracks = [...preserved, ...accepted];
+    const stream = nextTracks.length ? new MediaStream(nextTracks) : null;
     localStreamRef.current = stream;
     setLocalStream(stream);
-  };
-
-  const replaceHeldTrack = (device: Device, track: MediaStreamTrack | null) => {
-    const current = localStreamRef.current;
-    current?.getTracks().forEach((candidate) => {
-      if (candidate.kind === device && candidate !== track) candidate.stop();
-    });
-    const others =
-      current
-        ?.getTracks()
-        .filter(
-          (candidate) =>
-            candidate.kind !== device && candidate.readyState === "live",
-        ) ?? [];
-    const tracks = track ? [...others, track] : others;
-    const nextStream = tracks.length > 0 ? new MediaStream(tracks) : null;
-    logJoinMedia("prejoin_held_track_replaced", {
-      device,
-      track: getJoinTrackDebugSnapshot(track),
-      stream: getJoinStreamDebugSnapshot(nextStream),
-    });
-    commitLocalPreviewStream(nextStream);
-  };
-
-  const heldDevices: HeldDevices = {
-    holds: (device) =>
-      Boolean(
-        localStreamRef.current
-          ?.getTracks()
-          .some(
-            (track) => track.kind === device && track.readyState === "live",
-          ),
-      ),
-    keep: (device, track) => {
-      if (device === "video") {
-        applyPrejoinCameraContentHint(track);
-        prewarmLiveCameraEffects("prejoin-camera-live");
-      }
-      replaceHeldTrack(device, track);
-    },
-    drop: (device) => replaceHeldTrack(device, null),
-  };
-
-  const describeError = (err: unknown) =>
-    err instanceof Error
-      ? { name: err.name, message: err.message, stack: err.stack }
-      : err;
-
-  const openDevice = (
-    device: Device,
-    constraints: boolean | MediaTrackConstraints,
-    label: string,
-    options: { timeoutMs?: number; generation?: number } = {},
-  ) =>
-    getUserMediaWithTimeout(
-      device === "audio" ? { audio: constraints } : { video: constraints },
-      {
-        label,
-        timeoutMs: options.timeoutMs ?? MEDIA_CAPTURE_RECOVERY_TIMEOUT_MS,
-        generation: options.generation,
-      },
-    ).then((stream) => stream.getTracks());
-
-  const captureFor = (
-    devices: readonly Device[],
-    open: Parameters<typeof captureDevices>[3],
-    event: string,
-  ) =>
-    captureDevices(deviceIntents, heldDevices, devices, open).then(
-      (result) => {
-        if (result.error && !isCaptureReleased(result.error)) {
-          warnJoinMedia(`${event}_failed`, {
-            error: describeError(result.error),
-          });
-        }
-        logJoinMedia(`${event}_done`, { outcomes: result.outcomes });
-        return result;
-      },
-    );
-
-  const startDevice = (device: Device) =>
-    captureFor(
-      [device],
-      () =>
-        device === "video"
-          ? openDevice(
-              "video",
-              getPrejoinVideoConstraints(shouldRunPreviewVideoEffects),
-              "prejoin camera toggle",
-            )
-          : openDevice(
-              "audio",
-              DEFAULT_AUDIO_CONSTRAINTS,
-              "prejoin microphone toggle",
-            ),
-      device === "video" ? "toggle_camera_on" : "toggle_mic_on",
-    );
-
-  const pressDevice = (device: Device) => {
-    if (device === "video" && audioOnlyRef.current) return;
-    if (deviceIntents.get()[device].chosen) {
-      chooseDevice(deviceIntents, heldDevices, device, false);
-      logJoinMedia(device === "video" ? "toggle_camera_off_done" : "toggle_mic_off_done");
-      return;
+    setIsMicOn(nextTracks.some((track) => track.kind === "audio"));
+    setIsCameraOn(nextTracks.some((track) => track.kind === "video"));
+    if (accepted.some((track) => track.kind === "video")) {
+      prewarmLiveCameraEffects("prejoin-camera-live");
     }
-    void startDevice(device);
   };
 
-  const toggleHeldCamera = () => {
-    if (audioOnlyRef.current) return;
-    if (heldDevices.holds("video")) {
-      chooseDevice(deviceIntents, heldDevices, "video", false);
-      return;
-    }
-    void startDevice("video");
+  const dropReleasedPreview = useEffectEvent(() => {
+    cancelCaptures(() => true);
+    replacePreviewTracks(PREJOIN_MEDIA_KINDS, []);
+  });
+  useEffect(() => onCapturesReleased(() => dropReleasedPreview()), []);
+
+  const markUserMediaChoice = () => {
+    cancelRejoinRestore();
+    cancelCaptures((owner) => owner.source === "restore");
   };
 
   const requestMicrophoneAndCamera = async () => {
+    markUserMediaChoice();
     const wantsVideo = !audioOnlyRef.current;
+    const request = beginCapture("permissions", wantsVideo ? PREJOIN_MEDIA_KINDS : ["audio"]);
+    const videoConstraints = wantsVideo
+      ? getPrejoinVideoConstraints(shouldRunPreviewVideoEffects)
+      : false;
+    const permissionCapture = (constraints: MediaStreamConstraints, label: string) =>
+      getUserMediaWithTimeout(constraints, {
+        label,
+        timeoutMs: MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
+      });
+
     setPermissionRequestError(null);
-    const generation = captureGeneration();
-    const videoConstraints = () =>
-      getPrejoinVideoConstraints(shouldRunPreviewVideoEffects);
-    const { outcomes, error } = await captureFor(
-      wantsVideo ? ["audio", "video"] : ["audio"],
-      async (isCurrent) => {
-        logJoinMedia("get_user_media_full_request", {
-          audio: DEFAULT_AUDIO_CONSTRAINTS,
-          video: wantsVideo ? videoConstraints() : false,
-        });
-        try {
-          const stream = await getUserMediaWithTimeout(
-            {
-              audio: DEFAULT_AUDIO_CONSTRAINTS,
-              video: wantsVideo ? videoConstraints() : false,
-            },
-            {
-              label: "prejoin microphone and camera permission request",
-              timeoutMs: MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
-              generation,
-            },
-          );
-          return stream.getTracks();
-        } catch (err) {
-          if (isCaptureReleased(err)) throw err;
-          warnJoinMedia("get_user_media_full_failed", {
-            error: describeError(err),
-          });
-          const options = {
-            timeoutMs: MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
-            generation,
-          };
-          const [audioResult, videoResult] = await Promise.allSettled([
-            isCurrent("audio")
-              ? openDevice(
-                  "audio",
-                  DEFAULT_AUDIO_CONSTRAINTS,
-                  "prejoin microphone fallback permission request",
-                  options,
-                )
-              : Promise.resolve([]),
-            wantsVideo && isCurrent("video")
-              ? openDevice(
-                  "video",
-                  videoConstraints(),
-                  "prejoin camera fallback permission request",
-                  options,
-                )
-              : Promise.resolve([]),
-          ]);
-          if (audioResult.status === "rejected") {
-            warnJoinMedia("get_user_media_audio_fallback_failed", {
-              error: describeError(audioResult.reason),
-            });
-          }
-          if (videoResult.status === "rejected") {
-            warnJoinMedia("get_user_media_video_fallback_failed", {
-              error: describeError(videoResult.reason),
-            });
-          }
-          return [
-            ...(audioResult.status === "fulfilled" ? audioResult.value : []),
-            ...(videoResult.status === "fulfilled" ? videoResult.value : []),
-          ];
-        }
-      },
-      "get_user_media_full",
-    );
-    if (isCaptureReleased(error)) return;
-    const audio = outcomes.audio ?? "stale";
-    const video = wantsVideo ? outcomes.video ?? "stale" : "stale";
-    if (audio === "stale" && video === "stale") return;
-    if (audio === "failed" && video === "failed") {
-      setPermissionRequestError("Permission needed");
-    } else if (audio === "failed") {
-      setPermissionRequestError("Microphone unavailable");
-    } else if (video === "failed") {
-      setPermissionRequestError("Camera unavailable");
-    } else {
-      setPermissionRequestError(null);
+    try {
+      const stream = await permissionCapture(
+        { audio: DEFAULT_AUDIO_CONSTRAINTS, video: videoConstraints },
+        "prejoin microphone and camera permission request",
+      );
+      replacePreviewTracks(request.currentKinds(), stream.getTracks());
+    } catch (err) {
+      const retryKinds = request.currentKinds();
+      if (retryKinds.length === 0) return;
+      warnJoinMedia("get_user_media_full_failed", {
+        error: err instanceof Error ? { name: err.name, message: err.message } : err,
+      });
+      const results = await Promise.allSettled(retryKinds.map((kind) =>
+        permissionCapture(
+          kind === "audio" ? { audio: DEFAULT_AUDIO_CONSTRAINTS } : { video: videoConstraints },
+          `prejoin ${kind} fallback permission request`,
+        ),
+      ));
+      const tracks = results.flatMap((result) =>
+        result.status === "fulfilled" ? result.value.getTracks() : [],
+      );
+      const currentKinds = request.currentKinds();
+      replacePreviewTracks(currentKinds, tracks);
+      if (currentKinds.length === 0) return;
+      const missing = currentKinds.filter(
+        (kind) => !localStreamRef.current?.getTracks().some((track) => track.kind === kind),
+      );
+      setPermissionRequestError(
+        missing.length === 2 ? "Permission needed"
+          : missing[0] === "audio" ? "Microphone unavailable"
+          : missing[0] === "video" ? "Camera unavailable"
+          : null,
+      );
+    } finally {
+      request.release();
     }
   };
 
@@ -717,13 +640,12 @@ function JoinScreen({
   }, [guestName, onDisplayNameInputChange, user]);
 
   useEffect(() => {
-    localStreamRef.current = localStream;
     logJoinMedia("local_stream_changed", {
       localStream: getJoinStreamDebugSnapshot(localStream),
-      holdsCamera,
-      holdsMic,
+      isCameraOn,
+      isMicOn,
     });
-  }, [holdsCamera, holdsMic, localStream]);
+  }, [isCameraOn, isMicOn, localStream]);
   useEffect(() => {
     if (!videoRef.current) return;
     if (previewStream) {
@@ -748,69 +670,103 @@ function JoinScreen({
     }
   }, [localStream, previewStream]);
   useEffect(() => {
-    isMountedRef.current = true;
     return () => {
-      isMountedRef.current = false;
+      captureSlotsRef.current = {};
+      const handedOffTrackIds = handedOffTrackIdsRef.current;
       logJoinMedia("unmount_stop_local_stream", {
         localStream: getJoinStreamDebugSnapshot(localStreamRef.current),
-        handedOffTrackIds: Array.from(handedOffTrackIdsRef.current),
+        handedOffTrackIds: Array.from(handedOffTrackIds),
       });
-      stopUnownedTracks(localStreamRef.current);
+      localStreamRef.current?.getTracks().forEach((track) => {
+        if (handedOffTrackIds.has(track.id)) return;
+        track.stop();
+      });
     };
   }, []);
 
-  const commitPrejoinMedia = () => {
-    if (!onPrejoinMediaCommit) return;
-    const { mic, camera } = handOffDevices(deviceIntents);
-    const stream = localStreamRef.current;
-    const liveTracks =
-      stream
-        ?.getTracks()
-        .filter((track) => {
-          if (track.readyState !== "live") return false;
-          if (track.kind === "video") return camera;
-          if (track.kind === "audio") return mic;
-          return true;
-        }) ?? [];
-    handedOffTrackIdsRef.current = new Set(
-      liveTracks.map((track) => track.id),
+  const livePreviewTracks = () =>
+    (localStreamRef.current?.getTracks() ?? []).filter(
+      (track) => track.readyState === "live" &&
+        (track.kind !== "video" || !audioOnlyRef.current),
     );
-    const handoffStream =
-      liveTracks.length > 0 ? new MediaStream(liveTracks) : null;
+
+  const previewMedia = (tracks: readonly MediaStreamTrack[]): RejoinMedia => ({
+    isMicOn: tracks.some((track) => track.kind === "audio"),
+    isCameraOn: tracks.some((track) => track.kind === "video"),
+    isAudioOnly: audioOnlyRef.current,
+  });
+
+  const commitPrejoinMedia = (skipMutedMicWarmup: boolean) => {
+    if (!onPrejoinMediaCommit) return;
+    const tracks = livePreviewTracks();
+    handedOffTrackIdsRef.current = new Set(tracks.map((track) => track.id));
+    const stream = tracks.length > 0 ? new MediaStream(tracks) : null;
+    const media = previewMedia(tracks);
     logJoinMedia("commit_prejoin_media", {
-      handoffStream: getJoinStreamDebugSnapshot(handoffStream),
-      isCameraOn: camera,
-      isMicOn: mic,
+      handoffStream: getJoinStreamDebugSnapshot(stream),
+      ...media,
     });
-    onPrejoinMediaCommit({
-      stream: handoffStream,
-      isCameraOn: camera,
-      isMicOn: mic,
-      isAudioOnly,
-    });
+    onPrejoinMediaCommit({ stream, ...media, skipMutedMicWarmup });
+  };
+
+  const setPreviewAudioOnly = (enabled: boolean) => {
+    audioOnlyRef.current = enabled;
+    setIsAudioOnly(enabled);
+    if (!enabled) return;
+    cancelCaptures((_, kind) => kind === "video");
+    replacePreviewTracks(["video"], []);
+  };
+
+  const capturePreviewDevice = async (
+    kind: PrejoinMediaKind,
+    source: "choice" | "restore",
+    deviceId?: string,
+  ) => {
+    if (kind === "video" && audioOnlyRef.current) return;
+    const request = beginCapture(source, [kind]);
+    const constraints = kind === "audio"
+      ? DEFAULT_AUDIO_CONSTRAINTS
+      : getPrejoinVideoConstraints(shouldRunPreviewVideoEffects);
+    try {
+      const stream = await getUserMediaWithTimeout(
+        { [kind]: deviceId ? { ...constraints, deviceId: { exact: deviceId } } : constraints },
+        {
+          label: `prejoin ${kind} ${deviceId ? "device switch" : "toggle"}`,
+          timeoutMs: MEDIA_CAPTURE_RECOVERY_TIMEOUT_MS,
+        },
+      );
+      const tracks = stream.getTracks();
+      const currentKinds = request.currentKinds();
+      if (!tracks.some((track) => track.kind === kind && track.readyState === "live")) {
+        replacePreviewTracks([], tracks);
+        return;
+      }
+      replacePreviewTracks(currentKinds, tracks);
+    } catch (err) {
+      if (request.currentKinds().length !== 0) {
+        warnJoinMedia("get_user_media_preview_failed", {
+          kind, deviceId,
+          error: err instanceof Error ? { name: err.name, message: err.message } : err,
+        });
+      }
+    } finally {
+      request.release();
+    }
+  };
+
+  const togglePreviewDevice = (kind: PrejoinMediaKind, enabled: boolean) => {
+    markUserMediaChoice();
+    if (enabled) return capturePreviewDevice(kind, "choice");
+    cancelCaptures((_, candidate) => candidate === kind);
+    replacePreviewTracks([kind], []);
   };
 
   const toggleAudioOnly = () => {
-    const next = !isAudioOnly;
-    audioOnlyRef.current = next;
-    setIsAudioOnly(next);
-    if (next) chooseDevice(deviceIntents, heldDevices, "video", false);
+    markUserMediaChoice();
+    setPreviewAudioOnly(!audioOnlyRef.current);
   };
-
-  const [pastedMeeting, setPastedMeeting] = useState<MeetingInput | null>(null);
-  const target = meetingTarget(
-    enforceShortCode ? sanitizeRoomCode(normalizedRoomId) : normalizedRoomId.trim(),
-    pastedMeeting,
-    clientId,
-  );
-  const restoringMedia = useRejoinMediaRestore(initialMedia, async (media) => {
-    if (media.isAudioOnly) toggleAudioOnly();
-    deviceIntents.dispatch({
-      type: "set",
-      audio: media.isMicOn,
-      video: media.isCameraOn && !media.isAudioOnly,
-    });
-  });
+  const toggleCamera = () => togglePreviewDevice("video", !isCameraOn);
+  const toggleMic = () => togglePreviewDevice("audio", !isMicOn);
 
   useEffect(() => {
     if (!pending || !hasIdentity) return;
@@ -842,25 +798,53 @@ function JoinScreen({
     return true;
   };
 
+  const cancelRejoinRestore = useRejoinMediaRestore(initialMedia, (media, signal) => {
+    hadCarriedMediaRef.current = true;
+    onInitialMediaUsed?.();
+    return applyRejoinMedia(media, {
+      canRestore: () => !signal.aborted,
+      isAudioOnly: () => audioOnlyRef.current,
+      isMicOn: () => previewMedia(livePreviewTracks()).isMicOn,
+      isCameraOn: () => previewMedia(livePreviewTracks()).isCameraOn,
+      turnOnAudioOnly: () => setPreviewAudioOnly(true),
+      turnOnMic: () => capturePreviewDevice("audio", "restore"),
+      turnOnCamera: () => capturePreviewDevice("video", "restore"),
+    });
+  });
+  const settlePreviewForEntry = () => {
+    const skipMutedMicWarmup =
+      Boolean(initialMedia) ||
+      hadCarriedMediaRef.current ||
+      PREJOIN_MEDIA_KINDS.some((kind) => captureSlotsRef.current[kind]);
+    cancelRejoinRestore();
+    cancelCaptures(() => true);
+    return skipMutedMicWarmup;
+  };
   const startMeeting = () => {
-    if (restoringMedia) return;
     if (!ensureGuest()) return;
+    const skipMutedMicWarmup = settlePreviewForEntry();
     onEnterStart?.("new");
-    commitPrejoinMedia();
+    commitPrejoinMedia(skipMutedMicWarmup);
     onIsAdminChange(true);
     setPending({ mode: "new", roomId: generateRoomCode() });
   };
   const joinMeeting = () => {
-    if (!target.roomCode || restoringMedia) return;
-    if (!target.onThisPage) {
+    const candidate = codeField.resolution.code;
+    if (!candidate || !ensureGuest()) return;
+    const skipMutedMicWarmup = settlePreviewForEntry();
+    if (!codeField.tenant.onThisPage) {
+      const target = { roomCode: candidate, clientId: codeField.tenant.clientId };
+      saveRejoinIntent(
+        { roomId: target.roomCode, clientId: target.clientId },
+        previewMedia(livePreviewTracks()),
+      );
       window.location.assign(buildMeetingPath(target));
       return;
     }
-    if (!ensureGuest()) return;
     onEnterStart?.("join");
-    commitPrejoinMedia();
+    commitPrejoinMedia(skipMutedMicWarmup);
     onIsAdminChange(false);
-    setPending({ mode: "join", roomId: target.roomCode });
+    setPending({ mode: "join", roomId: candidate });
   };
 
   const handleSignOut = async () => {
@@ -889,33 +873,98 @@ function JoinScreen({
     setIsSigningOut(false);
   };
 
-  const onCodeChange = (raw: string) => {
-    if (!enforceShortCode) {
-      onRoomIdChange(extractRoomCode(raw));
+  const normalizeCode = normalizeCodeField;
+  const shapeCodeEdit = (
+    event: { preventDefault(): void },
+    input: HTMLInputElement,
+    [start, end]: readonly [number, number],
+    text: string,
+    nativeTyping: boolean,
+  ) => {
+    const edit = planFieldEdit(input.value, start, end, text, normalizeCode);
+    if (nativeTyping && edit.start === start && edit.end === end && edit.text === text) return;
+    event.preventDefault();
+    applyFieldEdit(input, edit);
+  };
+  const pasteIntoCode = (
+    event: { preventDefault(): void },
+    input: HTMLInputElement,
+    text: string,
+  ) => {
+    const paste = parseCodeFieldPaste(text, getMeetingLinkOrigins());
+    if (!paste) {
+      event.preventDefault();
       return;
     }
-    const pasted = parseMeetingInput(raw);
-    const roomCode = pasted.roomCode.slice(0, ROOM_CODE_MAX_LENGTH);
-    setPastedMeeting({ roomCode: sanitizeRoomCode(roomCode), clientId: pasted.clientId });
-    onRoomIdChange(roomCode);
+    const start = input.selectionStart ?? input.value.length;
+    const end = input.selectionEnd ?? start;
+    if (paste.kind === "replace") {
+      const keepsTenant = paste.clientId !== null && paste.clientId !== pageClientId;
+      const replacement = keepsTenant ? text.trim() : paste.code;
+      shapeCodeEdit(event, input, [0, input.value.length], replacement, false);
+    } else {
+      shapeCodeEdit(event, input, [start, end], paste.text, false);
+    }
+    codeField.settle();
+  };
+  const shapeTypedCodeEdits = (input: HTMLInputElement | null) => {
+    if (!input) return;
+    const onBeforeInput = (event: InputEvent) => {
+      if (event.isComposing) return;
+      const text = event.data ?? event.dataTransfer?.getData("text/plain") ?? "";
+      if (PASTED_INPUT.has(event.inputType)) {
+        pasteIntoCode(event, input, text);
+        return;
+      }
+      const start = input.selectionStart ?? input.value.length;
+      const end = input.selectionEnd ?? start;
+      const range = inputEditRange(event.inputType, start, end, input.value);
+      if (!range) return;
+      const inserts = event.inputType.startsWith("insert");
+      shapeCodeEdit(event, input, range, inserts ? text : "", event.inputType === "insertText");
+    };
+    const settleField = () => {
+      if (input.value === normalizeCode(input.value)) return;
+      const caret = input.selectionEnd ?? input.value.length;
+      applyFieldEdit(input, planFieldEdit(input.value, caret, caret, "", normalizeCode));
+    };
+    const onInput = (event: Event) => {
+      if (!(event instanceof InputEvent) || event.isComposing) return;
+      if (event.inputType === "historyUndo" || event.inputType === "historyRedo") return;
+      settleField();
+    };
+    input.addEventListener("beforeinput", onBeforeInput);
+    input.addEventListener("compositionend", settleField);
+    const stopTrackingHistory = trackFieldHistory(input);
+    input.addEventListener("input", onInput);
+    return () => {
+      input.removeEventListener("beforeinput", onBeforeInput);
+      input.removeEventListener("compositionend", settleField);
+      input.removeEventListener("input", onInput);
+      stopTrackingHistory();
+    };
   };
 
-  const canJoin = normalizedRoomId.trim().length > 0;
+  const codeResolution = codeField.resolution;
+  const joinCode = codeResolution.code;
+  const canJoin = joinCode.length > 0;
   const nameReady = hasIdentity || liveDisplayName.length > 0;
+  const canSubmit = canJoin && nameReady && !isLoading;
 
+  const presenceTarget = codeField.tenant.onThisPage ? joinCode : "";
   useEffect(() => {
     if (roomsStatus === "loading") setPresenceChecked(true);
     else if (roomsStatus === "idle" && presenceChecked) setPresenceSettled(true);
   }, [roomsStatus, presenceChecked]);
-  const countsHere = target.onThisPage && target.roomCode.length > 0;
-  const matchedRoom = countsHere
+  const matchedRoom = presenceTarget
     ? rooms.find(
-        (room) => room.id.toLowerCase() === target.roomCode.toLowerCase(),
+        (room) => room.id.toLowerCase() === presenceTarget.toLowerCase(),
       )
     : undefined;
-  const showPresence = countsHere && presenceChecked;
-  const presenceCount = presenceSettled ? matchedRoom?.userCount ?? 0 : null;
-  const presenceLoading = !presenceSettled;
+  const showPresence = presenceTarget.length > 0 && presenceChecked;
+  const presenceCount =
+    presenceSettled && codeField.settled ? matchedRoom?.userCount ?? 0 : null;
+  const presenceLoading = !presenceSettled || !codeField.settled;
 
   const refreshDevices = useCallback(async () => {
     if (!navigator.mediaDevices?.enumerateDevices) return;
@@ -954,197 +1003,197 @@ function JoinScreen({
     if (audioId) setSelectedAudioId(audioId);
   }, [localStream, refreshDevices]);
 
-  useEffect(() => () => {
-    if (copyResetRef.current) clearTimeout(copyResetRef.current);
-  }, []);
-
-  const handleSelectVideoDevice = async (deviceId: string) => {
+  const handleSelectVideoDevice = (deviceId: string) => {
+    markUserMediaChoice();
     setSelectedVideoId(deviceId);
-    if (!heldDevices.holds("video")) return;
-    const base = getPrejoinVideoConstraints(shouldRunPreviewVideoEffects);
-    const videoConstraints =
-      base && typeof base === "object"
-        ? { ...base, deviceId: { exact: deviceId } }
-        : { deviceId: { exact: deviceId } };
-    await captureFor(
-      ["video"],
-      () => openDevice("video", videoConstraints, "prejoin camera device switch"),
-      "select_video_device",
-    );
+    if (isCameraOn) return capturePreviewDevice("video", "choice", deviceId);
   };
 
-  const handleSelectAudioDevice = async (deviceId: string) => {
+  const handleSelectAudioDevice = (deviceId: string) => {
+    markUserMediaChoice();
     setSelectedAudioId(deviceId);
-    if (!heldDevices.holds("audio")) return;
-    await captureFor(
-      ["audio"],
-      () =>
-        openDevice(
-          "audio",
-          { ...DEFAULT_AUDIO_CONSTRAINTS, deviceId: { exact: deviceId } },
-          "prejoin microphone device switch",
-        ),
-      "select_audio_device",
-    );
+    if (isMicOn) return capturePreviewDevice("audio", "choice", deviceId);
   };
 
   const inviteLink =
-    typeof window === "undefined" || !target.roomCode
-      ? ""
-      : buildMeetingUrl(window.location.origin, target);
-  const handleCopyLink = async () => {
-    if (!inviteLink || !navigator.clipboard?.writeText) return;
-    try {
-      await navigator.clipboard.writeText(inviteLink);
-      setLinkCopied(true);
-      if (copyResetRef.current) clearTimeout(copyResetRef.current);
-      copyResetRef.current = setTimeout(() => setLinkCopied(false), 1800);
-    } catch {
-    }
-  };
-
-  const showVideoPicker = holdsCamera && videoInputs.length > 0;
-  const showAudioPicker = holdsMic && audioInputs.length > 0;
-  const showDevicePickers = showVideoPicker || showAudioPicker;
+    typeof window !== "undefined" && joinCode
+      ? buildMeetingUrl(window.location.origin, {
+          roomCode: joinCode,
+          clientId: codeField.tenant.clientId,
+        })
+      : "";
+  const linkCopy = useClipboardCopy(inviteLink);
+  const previewHint =
+    permissionRequestError ?? (showPermissionHint ? "Permission needed" : null);
   const handleNameInputChange = (nextName: string) => {
     setGuestName(nextName);
     onDisplayNameInputChange(nextName);
   };
 
   return (
-    <div className="relative min-h-screen w-full bg-[#0a0a0b] text-[#fafafa]">
-      <main className="flex min-h-dvh w-full flex-col items-stretch px-0 pb-6 pt-[calc(env(safe-area-inset-top,0px)+5rem)] sm:items-center sm:justify-center sm:px-4 sm:py-10 sm:pt-10">
-        <div className="flex w-full flex-1 flex-col overflow-hidden bg-[#0e0e10] sm:block sm:flex-none sm:max-w-4xl sm:rounded-2xl sm:border sm:border-white/10 md:grid md:min-h-[520px] md:grid-cols-2">
-          <div className="relative min-h-[176px] flex-1 bg-[#121214] sm:aspect-video sm:h-auto sm:flex-none md:aspect-auto md:min-h-[520px]">
+    <div className="relative min-h-screen w-full bg-[#0a0a0b] text-[#fafafa] [&_:is(a,button,input,select,textarea)]:scroll-mt-[calc(env(safe-area-inset-top,0px)+5rem)]">
+      <main className="flex min-h-dvh w-full flex-col items-stretch px-0 pt-[calc(env(safe-area-inset-top,0px)+5rem)] sm:items-center sm:justify-center sm:px-4 sm:pb-10 short-screen:pb-4">
+        <div className="flex w-full flex-1 flex-col overflow-hidden bg-[#0e0e10] sm:block sm:flex-none sm:max-w-4xl sm:rounded-2xl sm:border sm:border-white/10 md:grid md:min-h-[520px] md:grid-cols-2 short-screen:grid short-screen:min-h-0 short-screen:grid-cols-2">
+          <div className="relative flex min-h-[calc(76px+9.25rem)] flex-1 flex-col bg-[#121214] sm:aspect-video sm:h-auto sm:flex-none md:aspect-auto md:min-h-[520px] short-screen:aspect-auto short-screen:min-h-[calc(76px+9.25rem)]">
                 <video
                   ref={videoRef}
                   autoPlay
                   muted
                   playsInline
-                  className={`absolute inset-0 h-full w-full -scale-x-100 object-cover ${holdsCamera ? "" : "hidden"}`}
+                  className={`absolute inset-0 h-full w-full -scale-x-100 object-cover ${isCameraOn ? "" : "hidden"}`}
                 />
-                {!holdsCamera && (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-2.5 pb-14">
-                    <Avatar id={user?.id || previewName} name={previewName} size={76} />
-                    <span className="text-[13.5px] text-[#fafafa]/45">
-                      {cameraShownOn
-                        ? intents.video.capturing
-                          ? "Starting camera"
-                          : "Camera turns on when you join"
-                        : "Camera is off"}
-                    </span>
+                <div className="pointer-events-none relative z-10 flex min-h-0 flex-1 flex-col gap-2 p-3 pb-4">
+                  <div className="@container flex h-8 shrink-0 items-start justify-between gap-2">
+                    {shouldShowPermissionCta ? (
+                      <button
+                        type="button"
+                        onClick={requestMicrophoneAndCamera}
+                        disabled={isRequestingPermissions}
+                        className="pointer-events-auto inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-[#F95F4A] px-3 text-[12.5px] font-medium text-white transition-[background-color,opacity] duration-150 hover:bg-[#e8553f] disabled:cursor-wait disabled:opacity-75"
+                      >
+                        {isRequestingPermissions ? (
+                          <Loader2 size={14} className="shrink-0 animate-spin" />
+                        ) : (
+                          <Video size={14} className="shrink-0" />
+                        )}
+                        <span className="whitespace-nowrap">Allow microphone and camera</span>
+                      </button>
+                    ) : null}
+                    <div className="inline-flex h-8 min-w-0 items-center overflow-hidden rounded-full bg-black/55 px-3 text-[12.5px] font-medium backdrop-blur-sm">
+                      <span className={`truncate ${tightAudioChip ? "[@container(width<380px)]:sr-only" : ""}`}>
+                        {previewName}
+                      </span>
+                      {isAudioOnly ? (
+                        <span
+                          className={`ml-1.5 inline-flex shrink-0 items-center gap-1 border-l border-white/20 pl-1.5 text-white/85 ${
+                            tightAudioChip
+                              ? "[@container(width<380px)]:ml-0 [@container(width<380px)]:border-l-0 [@container(width<380px)]:pl-0"
+                              : ""
+                          }`}
+                        >
+                          <Headphones size={13} aria-hidden="true" className="shrink-0" />
+                          <span className={tightAudioChip ? "[@container(width<380px)]:sr-only" : undefined}>
+                            Audio only
+                          </span>
+                        </span>
+                      ) : null}
+                    </div>
                   </div>
-                )}
-                {shouldShowPermissionCta ? (
-                  <button
-                    type="button"
-                    onClick={requestMicrophoneAndCamera}
-                    disabled={isRequestingPermissions}
-                    className="absolute left-3 top-3 z-10 inline-flex h-8 max-w-[calc(100%-1.5rem)] items-center gap-1.5 rounded-full bg-[#F95F4A] px-3 text-[12.5px] font-medium text-white transition-[background-color,opacity] duration-150 hover:bg-[#e8553f] disabled:cursor-wait disabled:opacity-75"
-                  >
-                    {isRequestingPermissions ? (
-                      <Loader2 size={14} className="shrink-0 animate-spin" />
-                    ) : (
-                      <Video size={14} className="shrink-0" />
-                    )}
-                    <span className="truncate">Allow microphone and camera</span>
-                  </button>
-                ) : null}
-                <div
-                  className={`pointer-events-none absolute top-3 inline-flex h-8 items-center rounded-full bg-black/55 px-3 text-[12.5px] font-medium backdrop-blur-sm ${
-                    shouldShowPermissionCta ? "right-3" : "left-3"
-                  }`}
-                >
-                  {previewName}
-                  {isAudioOnly ? (
-                    <span className="ml-2 inline-flex items-center gap-1 border-l border-white/20 pl-2 text-white/85">
-                      <Headphones size={13} aria-hidden="true" />
-                      Audio only
-                    </span>
-                  ) : null}
-                </div>
-                {(showPermissionHint || permissionRequestError) && (
-                  <div className="pointer-events-none absolute bottom-[76px] left-1/2 max-w-[calc(100%-2rem)] -translate-x-1/2 rounded-full bg-black/65 px-3 py-1.5 text-center text-[12.5px] font-medium text-white/80 backdrop-blur-sm">
-                    {permissionRequestError ?? "Permission needed"}
+                  <div className="relative min-h-[calc(76px+1.75rem)] flex-1">
+                    <div className="absolute inset-0 flex flex-col items-center justify-center">
+                      {setupNotice ? (
+                        <div
+                          role="status"
+                          className="pointer-events-auto flex max-h-full min-h-0 w-full items-start gap-2 overflow-y-auto rounded-xl border border-white/10 bg-[#18181b] px-3.5 py-3 text-left text-[13px] leading-snug text-[#fafafa]"
+                        >
+                          <Info
+                            size={16}
+                            className="mt-0.5 shrink-0 text-[#F95F4A]"
+                            aria-hidden="true"
+                          />
+                          <p className="min-w-0 flex-1 [overflow-wrap:anywhere]">{setupNotice.message}</p>
+                          {onDismissSetupNotice ? (
+                            <button
+                              type="button"
+                              onClick={onDismissSetupNotice}
+                              aria-label="Dismiss notice"
+                              className="-mr-1 -mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[#fafafa]/55 transition-colors hover:bg-white/[0.08] hover:text-[#fafafa]"
+                            >
+                              <X size={14} aria-hidden="true" />
+                            </button>
+                          ) : null}
+                        </div>
+                      ) : !isCameraOn ? (
+                        <div className="flex flex-col items-center gap-2">
+                          <Avatar id={user?.id || previewName} name={previewName} size={76} />
+                          <span className="max-w-full truncate text-[13.5px] leading-5 text-[#fafafa]/45">
+                            {previewHint ?? "Camera is off"}
+                          </span>
+                        </div>
+                      ) : previewHint ? (
+                        <div className="max-w-full truncate rounded-full bg-black/65 px-3 py-1.5 text-center text-[12.5px] font-medium text-white/80 backdrop-blur-sm">
+                          {previewHint}
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
-                )}
-                <div className="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-2.5">
-                  <button
-                    onClick={() => pressDevice("audio")}
-                    aria-label={micShownOn ? "Turn off microphone" : "Turn on microphone"}
-                    className={`inline-flex h-11 w-11 items-center justify-center rounded-full text-white transition-colors duration-150 ${
-                      micShownOn ? "bg-[#232327] hover:bg-[#2e2e33]" : "bg-[#ea4335] hover:brightness-105"
-                    }`}
-                  >
-                    {micShownOn ? <Mic size={18} /> : <MicOff size={18} />}
-                  </button>
-                  <button
-                    onClick={() => pressDevice("video")}
-                    disabled={isAudioOnly}
-                    aria-label={
-                      isAudioOnly
-                        ? "Camera is off in audio-only mode"
-                        : cameraShownOn
-                          ? "Turn off camera"
-                          : "Turn on camera"
-                    }
-                    title={isAudioOnly ? "Camera is off in audio-only mode" : undefined}
-                    className={`inline-flex h-11 w-11 items-center justify-center rounded-full text-white transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-45 ${
-                      cameraShownOn ? "bg-[#232327] hover:bg-[#2e2e33]" : "bg-[#ea4335] hover:brightness-105"
-                    }`}
-                  >
-                    {cameraShownOn ? <Video size={18} /> : <VideoOff size={18} />}
-                  </button>
-                  <button
-                    type="button"
-                    data-testid="prejoin-backgrounds-effects"
-                    onClick={openEffectsPanel}
-                    onFocus={() => prewarmLiveCameraEffects("prejoin-effects-button")}
-                    onPointerEnter={() =>
-                      prewarmLiveCameraEffects("prejoin-effects-button")
-                    }
-                    onTouchStart={() =>
-                      prewarmLiveCameraEffects("prejoin-effects-button")
-                    }
-                    disabled={isCameraPermissionBlocked}
-                    aria-label={
-                      isCameraPermissionBlocked
-                        ? "Backgrounds and effects: Permission needed"
-                        : "Backgrounds and effects"
-                    }
-                    title={
-                      isCameraPermissionBlocked
-                        ? "Permission needed"
-                        : "Backgrounds and effects"
-                    }
-                    className={`inline-flex h-11 w-11 items-center justify-center rounded-full text-white transition-colors duration-150 hover:bg-[#2e2e33] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-[#232327] ${
-                      activeVideoEffectsCount > 0
-                        ? "bg-[#F95F4A] hover:bg-[#ff6d5a]"
-                        : "bg-[#232327]"
-                    }`}
-                  >
-                    <WandSparkles size={18} />
-                  </button>
-                  <button
-                    type="button"
-                    data-testid="prejoin-audio-only"
-                    onClick={toggleAudioOnly}
-                    aria-pressed={isAudioOnly}
-                    aria-label="Audio only: join without video"
-                    title="Audio only: join without video"
-                    className={`inline-flex h-11 w-11 items-center justify-center rounded-full text-white transition-colors duration-150 ${
-                      isAudioOnly
-                        ? "bg-[#F95F4A] hover:bg-[#ff6d5a]"
-                        : "bg-[#232327] hover:bg-[#2e2e33]"
-                    }`}
-                  >
-                    <Headphones size={18} />
-                  </button>
+                  <div className="pointer-events-auto flex shrink-0 items-center justify-center gap-2.5">
+                    <button
+                      onClick={toggleMic}
+                      aria-label={isMicOn ? "Turn off microphone" : "Turn on microphone"}
+                      className={`inline-flex h-11 w-11 items-center justify-center rounded-full text-white transition-colors duration-150 ${
+                        isMicOn ? "bg-[#232327] hover:bg-[#2e2e33]" : "bg-[#ea4335] hover:brightness-105"
+                      }`}
+                    >
+                      {isMicOn ? <Mic size={18} /> : <MicOff size={18} />}
+                    </button>
+                    <button
+                      onClick={toggleCamera}
+                      disabled={isAudioOnly}
+                      aria-label={
+                        isAudioOnly
+                          ? "Camera is off in audio-only mode"
+                          : isCameraOn
+                            ? "Turn off camera"
+                            : "Turn on camera"
+                      }
+                      title={isAudioOnly ? "Camera is off in audio-only mode" : undefined}
+                      className={`inline-flex h-11 w-11 items-center justify-center rounded-full text-white transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-45 ${
+                        isCameraOn ? "bg-[#232327] hover:bg-[#2e2e33]" : "bg-[#ea4335] hover:brightness-105"
+                      }`}
+                    >
+                      {isCameraOn ? <Video size={18} /> : <VideoOff size={18} />}
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="prejoin-backgrounds-effects"
+                      onClick={openEffectsPanel}
+                      onFocus={() => prewarmLiveCameraEffects("prejoin-effects-button")}
+                      onPointerEnter={() =>
+                        prewarmLiveCameraEffects("prejoin-effects-button")
+                      }
+                      onTouchStart={() =>
+                        prewarmLiveCameraEffects("prejoin-effects-button")
+                      }
+                      disabled={isCameraPermissionBlocked}
+                      aria-label={
+                        isCameraPermissionBlocked
+                          ? "Backgrounds and effects: Permission needed"
+                          : "Backgrounds and effects"
+                      }
+                      title={
+                        isCameraPermissionBlocked
+                          ? "Permission needed"
+                          : "Backgrounds and effects"
+                      }
+                      className={`inline-flex h-11 w-11 items-center justify-center rounded-full text-white transition-colors duration-150 hover:bg-[#2e2e33] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-[#232327] ${
+                        activeVideoEffectsCount > 0
+                          ? "bg-[#F95F4A] hover:bg-[#ff6d5a]"
+                          : "bg-[#232327]"
+                      }`}
+                    >
+                      <WandSparkles size={18} />
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="prejoin-audio-only"
+                      onClick={toggleAudioOnly}
+                      aria-pressed={isAudioOnly}
+                      aria-label="Audio only: join without video"
+                      title="Audio only: join without video"
+                      className={`inline-flex h-11 w-11 items-center justify-center rounded-full text-white transition-colors duration-150 ${
+                        isAudioOnly
+                          ? "bg-[#F95F4A] hover:bg-[#ff6d5a]"
+                          : "bg-[#232327] hover:bg-[#2e2e33]"
+                      }`}
+                    >
+                      <Headphones size={18} />
+                    </button>
+                  </div>
                 </div>
-
               </div>
 
-          <div className="safe-area-pb flex min-h-0 shrink-0 flex-col justify-start gap-3 p-5 pb-10 sm:gap-4 sm:p-8 sm:pb-14 md:min-h-[520px] md:justify-center">
+          <div className="flex min-h-0 shrink-0 flex-col justify-start gap-3 p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom,0px))] sm:gap-4 sm:p-8 sm:pb-[calc(2rem+env(safe-area-inset-bottom,0px))] md:min-h-[520px] md:justify-center short-screen:min-h-0 short-screen:gap-2.5 short-screen:p-5 short-screen:pb-[calc(1.25rem+env(safe-area-inset-bottom,0px))]">
             <div className="space-y-1.5">
               <h1
                 className="text-[22px] leading-tight text-[#fafafa]"
@@ -1158,29 +1207,6 @@ function JoinScreen({
                   : "Create a room, or join one with a code."}
               </p>
             </div>
-            {setupNotice ? (
-              <div
-                role="status"
-                className="flex items-start gap-2 rounded-xl border border-[#F95F4A]/25 bg-[#F95F4A]/10 px-3.5 py-3 text-left text-[13px] leading-snug text-[#fafafa]"
-              >
-                <Info
-                  size={16}
-                  className="mt-0.5 shrink-0 text-[#F95F4A]"
-                  aria-hidden="true"
-                />
-                <p className="min-w-0 flex-1">{setupNotice.message}</p>
-                {onDismissSetupNotice ? (
-                  <button
-                    type="button"
-                    onClick={onDismissSetupNotice}
-                    aria-label="Dismiss notice"
-                    className="-mr-1 -mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[#fafafa]/55 transition-colors hover:bg-white/[0.08] hover:text-[#fafafa]"
-                  >
-                    <X size={14} aria-hidden="true" />
-                  </button>
-                ) : null}
-              </div>
-            ) : null}
               {isSignedInUser ? (
                 <div className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3">
                   <div className="min-w-0">
@@ -1199,10 +1225,14 @@ function JoinScreen({
                 </div>
               ) : (
                 <div className="space-y-1.5">
-                  <label className="block text-[11.5px] font-semibold text-[#fafafa]/40">
+                  <label
+                    htmlFor={nameInputId}
+                    className="block text-[11.5px] font-semibold text-[#fafafa]/40"
+                  >
                     Your name
                   </label>
                   <input
+                    id={nameInputId}
                     type="text"
                     value={nameInputValue}
                     onChange={(e) => handleNameInputChange(e.target.value)}
@@ -1212,33 +1242,37 @@ function JoinScreen({
                 </div>
               )}
 
-              {showDevicePickers && (
-                <div className="space-y-2">
-                  {showVideoPicker && (
-                    <DeviceSelect
-                      icon={Video}
-                      ariaLabel="Camera"
-                      value={selectedVideoId}
-                      options={videoInputs}
-                      onChange={handleSelectVideoDevice}
-                    />
-                  )}
-                  {showAudioPicker && (
-                    <DeviceSelect
-                      icon={Mic}
-                      ariaLabel="Microphone"
-                      value={selectedAudioId}
-                      options={audioInputs}
-                      onChange={handleSelectAudioDevice}
-                    />
-                  )}
-                </div>
-              )}
+              <div className="grid grid-cols-2 gap-2">
+                <DeviceSelect
+                  icon={isCameraOn ? Video : VideoOff}
+                  ariaLabel="Camera"
+                  value={selectedVideoId}
+                  options={isCameraOn ? videoInputs : []}
+                  placeholder={
+                    isCameraOn
+                      ? "Camera"
+                      : deviceLabel(videoInputs, selectedVideoId) ?? "Camera off"
+                  }
+                  onChange={handleSelectVideoDevice}
+                />
+                <DeviceSelect
+                  icon={isMicOn ? Mic : MicOff}
+                  ariaLabel="Microphone"
+                  value={selectedAudioId}
+                  options={isMicOn ? audioInputs : []}
+                  placeholder={
+                    isMicOn
+                      ? "Microphone"
+                      : deviceLabel(audioInputs, selectedAudioId) ?? "Mic off"
+                  }
+                  onChange={handleSelectAudioDevice}
+                />
+              </div>
 
               {!isRoutedRoom && (
                   <button
                     onClick={startMeeting}
-                    disabled={isLoading || !nameReady || restoringMedia}
+                    disabled={isLoading || !nameReady}
                     className={CTA_PRIMARY}
                   >
                     <Plus size={18} />
@@ -1249,7 +1283,10 @@ function JoinScreen({
 
               <div className="space-y-1.5">
                 <div className="flex min-h-[16px] items-center justify-between gap-3">
-                  <label className="text-[11.5px] font-semibold text-[#fafafa]/40">
+                  <label
+                    htmlFor={codeInputId}
+                    className="text-[11.5px] font-semibold text-[#fafafa]/40"
+                  >
                     {isRoutedRoom ? "Room" : "Join with a code"}
                   </label>
                   {showPresence ? (
@@ -1259,43 +1296,80 @@ function JoinScreen({
                     />
                   ) : null}
                 </div>
-                <input
-                  type="text"
-                  value={normalizedRoomId}
-                  onChange={(e) => onCodeChange(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && canJoin) joinMeeting();
-                  }}
-                  placeholder="Enter a code or link"
-                  readOnly={isRoutedRoom}
-                  autoFocus={isRoutedRoom}
-                  className={FIELD}
-                />
+                <div className="relative">
+                  <input
+                    id={codeInputId}
+                    type="text"
+                    value={codeField.text}
+                    ref={shapeTypedCodeEdits}
+                    onChange={(e) => codeField.change(e.target.value)}
+                    onBlur={codeField.settle}
+                    onPaste={(e) => {
+                      if (isRoutedRoom) return;
+                      pasteIntoCode(e, e.currentTarget, e.clipboardData.getData("text"));
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key !== "Enter" || e.nativeEvent.isComposing || !canSubmit) return;
+                      const input = e.currentTarget;
+                      if (codeField.tenant.onThisPage && input.value !== joinCode) {
+                        applyFieldEdit(input, { start: 0, end: input.value.length, text: joinCode });
+                      }
+                      joinMeeting();
+                    }}
+                    placeholder="Enter a code or link"
+                    readOnly={isRoutedRoom}
+                    autoFocus={isRoutedRoom}
+                    aria-invalid={codeResolution.tooLong || undefined}
+                    aria-describedby={codeResolution.tooLong ? codeProblemId : undefined}
+                    className={`${FIELD} ${codeResolution.tooLong ? "pr-32" : "pr-12"}`}
+                  />
+                  {codeResolution.tooLong ? (
+                    <span
+                      id={codeProblemId}
+                      className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rounded-md bg-[#141416] px-1.5 text-[12px] text-[#fafafa]/55"
+                    >
+                      Code too long
+                    </span>
+                  ) : null}
+                  {inviteLink && linkCopy.status === "failed" ? (
+                    <span
+                      aria-hidden="true"
+                      className="pointer-events-none absolute right-12 top-1/2 -translate-y-1/2 rounded-md bg-[#141416] px-1.5 text-[12px] text-[#fafafa]/55"
+                    >
+                      Couldn&apos;t copy
+                    </span>
+                  ) : null}
+                  {inviteLink ? (
+                    <button
+                      type="button"
+                      onClick={() => void linkCopy.copy()}
+                      aria-label="Copy joining link"
+                      title="Copy joining link"
+                      className="absolute right-1.5 top-1/2 inline-flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-lg text-[#fafafa]/45 transition-colors duration-150 hover:bg-white/[0.06] hover:text-[#fafafa]/80"
+                    >
+                      {linkCopy.status === "copied" ? (
+                        <Check size={16} aria-hidden="true" className="text-[#fafafa]/80" />
+                      ) : (
+                        <Link2 size={16} aria-hidden="true" />
+                      )}
+                    </button>
+                  ) : null}
+                  <span aria-live="polite" className="sr-only">
+                    {linkCopy.status === "copied"
+                      ? "Link copied"
+                      : linkCopy.status === "failed"
+                        ? "Couldn't copy link"
+                        : ""}
+                  </span>
+                </div>
                 <button
                   onClick={joinMeeting}
-                  disabled={isLoading || !canJoin || !nameReady || restoringMedia}
+                  disabled={!canSubmit}
                   className={CTA_GHOST}
                 >
                   Join
                 </button>
               </div>
-
-              {inviteLink && (
-                <button
-                  type="button"
-                  onClick={handleCopyLink}
-                  className="flex h-11 w-full items-center gap-2.5 rounded-xl border border-white/10 bg-white/[0.03] px-4 text-[13.5px] text-[#fafafa]/70 transition-colors duration-150 hover:bg-white/[0.06]"
-                >
-                  {linkCopied ? (
-                    <Check size={16} className="shrink-0 text-[#22c55e]" />
-                  ) : (
-                    <Link2 size={16} className="shrink-0 text-[#fafafa]/45" />
-                  )}
-                  <span className="truncate">
-                    {linkCopied ? "Link copied" : "Copy joining link"}
-                  </span>
-                </button>
-              )}
 
               {!isSignedInUser && (
                 <>
@@ -1326,7 +1400,7 @@ function JoinScreen({
           effects={videoEffects}
           onEffectsChange={onVideoEffectsChange}
           localStream={previewStream}
-          isCameraOff={!holdsCamera}
+          isCameraOff={!isCameraOn}
           status={videoEffectsStatus}
           error={videoEffectsError}
           debugStats={videoEffectsDebugStats}
@@ -1334,7 +1408,7 @@ function JoinScreen({
           deferPreload={shouldDeferPreviewVideoEffectsPreload}
           cameraPermissionBlocked={isCameraPermissionBlocked}
           showFilters={!isCameraPermissionBlocked}
-          onToggleCamera={toggleHeldCamera}
+          onToggleCamera={isAudioOnly ? undefined : toggleCamera}
           onClose={() => setIsEffectsOpen(false)}
         />
       )}

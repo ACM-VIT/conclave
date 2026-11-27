@@ -1,52 +1,61 @@
+export type CameraCaptureHolder = "queue" | "requester";
+
 export type CameraSession = {
   run: <T>(operation: () => Promise<T>) => Promise<T>;
-  admit: (tracks: readonly MediaStreamTrack[]) => void;
-  own: (track: MediaStreamTrack, origin?: MediaStreamTrack | null) => void;
+  admit: (tracks: readonly MediaStreamTrack[], holder: CameraCaptureHolder) => void;
+  own: (track: MediaStreamTrack, origin: MediaStreamTrack) => void;
   originOf: (track: MediaStreamTrack) => MediaStreamTrack | null;
-  keepOnly: (keep: ReadonlySet<MediaStreamTrack>) => void;
+  release: () => void;
   drain: () => void;
 };
 
 type CameraSessionOptions = {
   isChosen: () => boolean;
   committed: () => MediaStreamTrack | null;
+  sent: () => MediaStreamTrack | null;
   stop: (track: MediaStreamTrack) => void;
   reconcile: () => Promise<void>;
+};
+
+type Holding = {
+  origin: MediaStreamTrack | null;
+  heldByRequester: boolean;
 };
 
 export const createCameraSession = ({
   isChosen,
   committed,
+  sent,
   stop,
   reconcile,
 }: CameraSessionOptions): CameraSession => {
-  const owned = new Map<MediaStreamTrack, MediaStreamTrack | null>();
+  const owned = new Map<MediaStreamTrack, Holding>();
   let tail: Promise<unknown> = Promise.resolve();
 
-  const forgetEnded = () => {
-    for (const track of owned.keys()) {
-      if (track.readyState === "ended") owned.delete(track);
-    }
+  const takeOver = (track: MediaStreamTrack) => {
+    owned.set(track, { origin: owned.get(track)?.origin ?? null, heldByRequester: false });
   };
 
-  const keepOnly = (keep: ReadonlySet<MediaStreamTrack>) => {
-    for (const track of [...owned.keys()]) {
-      if (keep.has(track)) continue;
+  const release = () => {
+    const shown = committed();
+    if (shown) takeOver(shown);
+    const sending = sent();
+    for (const [track, holding] of [...owned]) {
+      if (track.readyState === "ended") {
+        owned.delete(track);
+        continue;
+      }
+      if (track === shown || track === sending || holding.heldByRequester) continue;
       owned.delete(track);
       stop(track);
     }
   };
 
-  const own = (track: MediaStreamTrack, origin: MediaStreamTrack | null = null) => {
-    forgetEnded();
-    if (!owned.has(track) || origin) owned.set(track, origin);
-  };
-
   return {
     run: <T,>(operation: () => Promise<T>): Promise<T> => {
       const job = tail.then(async () => {
-        const camera = committed();
-        if (camera) own(camera);
+        const shown = committed();
+        if (shown) takeOver(shown);
         try {
           return await operation();
         } finally {
@@ -56,19 +65,26 @@ export const createCameraSession = ({
       tail = job.catch(() => {});
       return job;
     },
-    admit: (tracks) => {
+    admit: (tracks, holder) => {
       for (const track of tracks) {
         if (track.kind !== "video") continue;
         if (isChosen()) {
-          own(track);
+          owned.set(track, { origin: null, heldByRequester: holder === "requester" });
         } else {
           stop(track);
         }
       }
     },
-    own,
-    originOf: (track) => owned.get(track) ?? null,
-    keepOnly,
-    drain: () => keepOnly(new Set()),
+    own: (track, origin) => {
+      owned.set(track, { origin, heldByRequester: false });
+    },
+    originOf: (track) => owned.get(track)?.origin ?? null,
+    release,
+    drain: () => {
+      for (const track of [...owned.keys()]) {
+        owned.delete(track);
+        stop(track);
+      }
+    },
   };
 };

@@ -1,3 +1,5 @@
+import { webOrigin } from "./meeting-origin";
+
 const DEFAULT_PRODUCTION_SITE_URL = "https://conclave.acmvit.in";
 const DEFAULT_DEVELOPMENT_SITE_URL = "http://localhost:3000";
 
@@ -26,16 +28,30 @@ export const normalizeOrigin = (value: string | undefined): string | null => {
   }
 };
 
-export const getPublicSiteUrl = (): string =>
-  normalizeOrigin(
-    firstNonEmpty(
-      process.env.NEXT_PUBLIC_SITE_URL,
-      process.env.NEXT_PUBLIC_APP_URL,
-      process.env.BETTER_AUTH_URL,
-      process.env.BETTER_AUTH_BASE_URL,
-      process.env.VERCEL_URL,
-    ),
-  ) ?? defaultSiteUrl;
+const WEB_URL = /^https?:/i;
+const SCHEMELESS_AUTHORITY = /^(?:\[[0-9a-f:.]+\]|[^\s@:[\]]+)(?::\d+)?$/i;
+
+const siteSettingOrigin = (value: string | undefined): string | null => {
+  const setting = value?.trim();
+  if (!setting) return null;
+  if (WEB_URL.test(setting)) return webOrigin(setting);
+  if (!SCHEMELESS_AUTHORITY.test(setting.split(/[/?#\\]/)[0])) return null;
+  return webOrigin(`https://${setting}`);
+};
+
+export const getPublicSiteUrl = (): string => {
+  for (const value of [
+    process.env.NEXT_PUBLIC_SITE_URL,
+    process.env.NEXT_PUBLIC_APP_URL,
+    process.env.BETTER_AUTH_URL,
+    process.env.BETTER_AUTH_BASE_URL,
+    process.env.VERCEL_URL,
+  ]) {
+    const origin = siteSettingOrigin(value);
+    if (origin) return origin;
+  }
+  return defaultSiteUrl;
+};
 
 export const getAuthBaseUrl = (): string =>
   normalizeOrigin(
@@ -47,3 +63,20 @@ export const getAuthBaseUrl = (): string =>
       process.env.VERCEL_URL,
     ),
   ) ?? defaultSiteUrl;
+
+export const getMeetingLinkOrigins = (): string[] => {
+  const origins = new Set<string>();
+  for (const value of [
+    DEFAULT_PRODUCTION_SITE_URL,
+    process.env.NEXT_PUBLIC_SITE_URL,
+    process.env.NEXT_PUBLIC_APP_URL,
+  ]) {
+    const origin = siteSettingOrigin(value);
+    if (origin) origins.add(origin);
+  }
+  if (typeof window !== "undefined") {
+    const current = webOrigin(`${window.location.protocol}//${window.location.host}/`);
+    if (current) origins.add(current);
+  }
+  return [...origins];
+};

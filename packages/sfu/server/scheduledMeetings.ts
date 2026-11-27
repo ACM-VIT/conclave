@@ -1,13 +1,7 @@
-import { randomBytes, randomUUID } from "node:crypto";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, resolve } from "node:path";
+import { dirname } from "node:path";
 import type {
   CreateScheduledMeetingRequest,
   ScheduledMeeting,
@@ -24,6 +18,11 @@ import {
   type RedisPersistenceClient,
 } from "./redisPersistence.js";
 import { canonicalizeClientId } from "./clientIds.js";
+import { openSqliteStore } from "./sqliteWriteCheck.js";
+import { storeJsonPath, storeSqlitePath } from "./storePaths.js";
+import { writePrivateFileAtomic } from "./privateFile.js";
+import { storedTimestampOrNull } from "./storedValues.js";
+import { adoptRecoveredJsonStore, jsonStoreCollection, type JsonStoreAdapter, type JsonStoreClaim } from "./jsonStoreUpgrade.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -117,6 +116,10 @@ const roomCodeKey = (clientId: string, roomCode: string): string =>
 const isActiveMeeting = (meeting: ScheduledMeeting): boolean =>
   meeting.status === "scheduled" || meeting.status === "live";
 
+export const scheduledMeetingClaims: Record<"byRoomCode", JsonStoreClaim<ScheduledMeeting>> = {
+  byRoomCode: { key: (meeting) => roomCodeKey(meeting.clientId, meeting.roomCode), holds: isActiveMeeting },
+};
+
 /**
  * Point the room-code index at `meeting`. A code can be reused once its
  * earlier meeting has ended or been cancelled, so several meetings can share
@@ -126,14 +129,14 @@ const claimRoomCode = (
   store: ScheduledMeetingStore,
   meeting: ScheduledMeeting,
 ): void => {
-  const key = roomCodeKey(meeting.clientId, meeting.roomCode);
+  const key = scheduledMeetingClaims.byRoomCode.key(meeting);
   const ownerId = store.byRoomCode.get(key);
   const owner = ownerId ? store.byId.get(ownerId) : undefined;
   if (
     owner &&
     owner.id !== meeting.id &&
-    isActiveMeeting(owner) &&
-    !isActiveMeeting(meeting)
+    scheduledMeetingClaims.byRoomCode.holds?.(owner) &&
+    !scheduledMeetingClaims.byRoomCode.holds?.(meeting)
   ) {
     return;
   }
@@ -145,7 +148,7 @@ const releaseRoomCode = (
   store: ScheduledMeetingStore,
   meeting: ScheduledMeeting,
 ): void => {
-  const key = roomCodeKey(meeting.clientId, meeting.roomCode);
+  const key = scheduledMeetingClaims.byRoomCode.key(meeting);
   if (store.byRoomCode.get(key) === meeting.id) {
     store.byRoomCode.delete(key);
   }
@@ -517,33 +520,10 @@ type EmailReminderClaim = {
   leadMs: number;
 };
 
-const scheduledMeetingsSqlitePath = (): string => {
-  const configured =
-    process.env.SCHEDULED_MEETINGS_SQLITE_PATH?.trim() ||
-    process.env.CONCLAVE_SQLITE_PATH?.trim();
-  if (configured) return resolve(configured);
-  const recordingStoragePath = process.env.RECORDING_STORAGE_PATH?.trim();
-  if (recordingStoragePath) {
-    return resolve(recordingStoragePath, "conclave.sqlite");
-  }
-  return resolve(process.cwd(), "data", "conclave.sqlite");
-};
+const scheduledMeetingsSqlitePath = (): string => storeSqlitePath("scheduled-meetings");
 
-const scheduledMeetingsPath = (): string => {
-  const configured = process.env.SCHEDULED_MEETINGS_PATH?.trim();
-  if (configured) return resolve(configured);
-  return resolve(process.cwd(), "data", "scheduled-meetings.json");
-};
+const scheduledMeetingsPath = (): string => storeJsonPath("scheduled-meetings");
 
-const writeJsonAtomic = (path: string, data: string): void => {
-  const dir = dirname(path);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
-  }
-  const tmp = `${path}.${randomBytes(4).toString("hex")}.tmp`;
-  writeFileSync(tmp, data, "utf8");
-  renameSync(tmp, path);
-};
 
 type SqliteStatement = {
   run: (...params: unknown[]) => unknown;
@@ -596,10 +576,8 @@ const normalizeStoredMeeting = (raw: unknown): ScheduledMeeting | null => {
     scheduledStartAt,
     scheduledEndAt,
     status,
-    startedAt: Number.isFinite(Number(record.startedAt))
-      ? Number(record.startedAt)
-      : null,
-    endedAt: Number.isFinite(Number(record.endedAt)) ? Number(record.endedAt) : null,
+    startedAt: storedTimestampOrNull(record.startedAt),
+    endedAt: storedTimestampOrNull(record.endedAt),
     createdAt: Number.isFinite(Number(record.createdAt))
       ? Number(record.createdAt)
       : now,
@@ -641,11 +619,7 @@ const normalizeStoredMeeting = (raw: unknown): ScheduledMeeting | null => {
       typeof record.emailNotificationError === "string"
         ? record.emailNotificationError
         : null,
-    emailNotificationSentAt: Number.isFinite(
-      Number(record.emailNotificationSentAt),
-    )
-      ? Number(record.emailNotificationSentAt)
-      : null,
+    emailNotificationSentAt: storedTimestampOrNull(record.emailNotificationSentAt),
     emailReminderStatus: normalizeEmailNotificationStatus(
       record.emailReminderStatus,
     ),
@@ -653,9 +627,7 @@ const normalizeStoredMeeting = (raw: unknown): ScheduledMeeting | null => {
       typeof record.emailReminderError === "string"
         ? record.emailReminderError
         : null,
-    emailReminderSentAt: Number.isFinite(Number(record.emailReminderSentAt))
-      ? Number(record.emailReminderSentAt)
-      : null,
+    emailReminderSentAt: storedTimestampOrNull(record.emailReminderSentAt),
   };
 };
 
@@ -667,9 +639,10 @@ const createSqliteScheduledMeetingPersistence = (
     mkdirSync(dir, { recursive: true });
   }
   const { DatabaseSync } = loadNodeSqlite();
-  const db = new DatabaseSync(path);
-  db.exec("PRAGMA busy_timeout = 5000");
-  db.exec("PRAGMA journal_mode = WAL");
+  return openSqliteStore(new DatabaseSync(path), path, (db) => prepareSqliteScheduledMeetingPersistence(db));
+};
+
+const prepareSqliteScheduledMeetingPersistence = (db: SqliteDatabase): ScheduledMeetingPersistence => {
   db.exec(`
     CREATE TABLE IF NOT EXISTS scheduled_meetings (
       id TEXT PRIMARY KEY,
@@ -810,7 +783,7 @@ const createFileScheduledMeetingPersistence = (
 ): ScheduledMeetingPersistence => ({
   save: (snapshot) => {
     try {
-      writeJsonAtomic(path, JSON.stringify(snapshot, null, 2));
+      writePrivateFileAtomic(path, JSON.stringify(snapshot, null, 2));
     } catch (error) {
       Logger.error("Failed to persist scheduled meetings to JSON", error);
     }
@@ -830,6 +803,28 @@ const createFileScheduledMeetingPersistence = (
     }
   },
 });
+
+export const scheduledMeetingJsonStore: JsonStoreAdapter<ScheduledMeeting[]> = {
+  decode: (data) => {
+    if (!Array.isArray(data)) throw new Error("it is not a list of scheduled meetings");
+    return data
+      .map((entry) => normalizeStoredMeeting(entry))
+      .filter((entry): entry is ScheduledMeeting => Boolean(entry));
+  },
+  write: (path, meetings) => {
+    void createFileScheduledMeetingPersistence(path).save(meetings);
+  },
+  collections: {
+    meetings: jsonStoreCollection<ScheduledMeeting[], ScheduledMeeting>({
+      index: "byId",
+      rows: (meetings) => meetings,
+      key: (meeting) => meeting.id,
+      stamp: (meeting) => meeting.updatedAt,
+      claims: scheduledMeetingClaims,
+    }),
+  },
+  build: (_base, rows) => rows.meetings as ScheduledMeeting[],
+};
 
 const RELEASE_BOOKING_SLOT_LOCK_SCRIPT = `
 local key = KEYS[1]
@@ -1139,57 +1134,36 @@ const migrateJsonScheduledMeetingsToSqlite = (
 export const createScheduledMeetingPersistence = (): ScheduledMeetingPersistence => {
   const mode = process.env.SCHEDULED_MEETINGS_PERSISTENCE?.trim().toLowerCase();
   if (mode === "json" || mode === "file") {
+    adoptRecoveredJsonStore(scheduledMeetingsPath(), "scheduled-meetings.json", scheduledMeetingJsonStore);
     return createFileScheduledMeetingPersistence();
   }
 
   const jsonPersistence = createFileScheduledMeetingPersistence();
   const redisUrl = resolveRedisPersistenceUrl();
 
-  try {
-    const sqlitePersistence = createSqliteScheduledMeetingPersistence();
-    const migrated = migrateJsonScheduledMeetingsToSqlite(
-      sqlitePersistence,
-      jsonPersistence,
+  const sqlitePersistence = createSqliteScheduledMeetingPersistence();
+  const migrated = migrateJsonScheduledMeetingsToSqlite(
+    sqlitePersistence,
+    jsonPersistence,
+  );
+  if (migrated > 0) {
+    Logger.info(
+      `Migrated ${migrated} scheduled meeting(s) from JSON into SQLite`,
     );
-    if (migrated > 0) {
-      Logger.info(
-        `Migrated ${migrated} scheduled meeting(s) from JSON into SQLite`,
-      );
-    }
-    if (shouldUseRedisPersistence(mode, redisUrl)) {
-      if (!redisUrl) {
-        throw new Error(
-          "SCHEDULED_MEETINGS_PERSISTENCE=redis requires SFU_PERSISTENCE_REDIS_URL, SFU_REDIS_URL, or REDIS_URL.",
-        );
-      }
-      return createRedisScheduledMeetingPersistence(
-        redisUrl,
-        resolveRedisPersistenceKeyPrefix(),
-        sqlitePersistence,
-      );
-    }
-    return sqlitePersistence;
-  } catch (error) {
-    if (mode === "sqlite") {
-      throw error;
-    }
-    Logger.warn(
-      `SQLite scheduled-meeting persistence unavailable; falling back to JSON: ${(error as Error).message}`,
-    );
-    if (shouldUseRedisPersistence(mode, redisUrl)) {
-      if (!redisUrl) {
-        throw new Error(
-          "SCHEDULED_MEETINGS_PERSISTENCE=redis requires SFU_PERSISTENCE_REDIS_URL, SFU_REDIS_URL, or REDIS_URL.",
-        );
-      }
-      return createRedisScheduledMeetingPersistence(
-        redisUrl,
-        resolveRedisPersistenceKeyPrefix(),
-        jsonPersistence,
-      );
-    }
-    return jsonPersistence;
   }
+  if (shouldUseRedisPersistence(mode, redisUrl)) {
+    if (!redisUrl) {
+      throw new Error(
+        "SCHEDULED_MEETINGS_PERSISTENCE=redis requires SFU_PERSISTENCE_REDIS_URL, SFU_REDIS_URL, or REDIS_URL.",
+      );
+    }
+    return createRedisScheduledMeetingPersistence(
+      redisUrl,
+      resolveRedisPersistenceKeyPrefix(),
+      sqlitePersistence,
+    );
+  }
+  return sqlitePersistence;
 };
 
 export const loadPersistedMeetings = (

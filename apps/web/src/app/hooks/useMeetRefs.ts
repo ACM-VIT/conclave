@@ -145,6 +145,7 @@ export function useMeetRefs() {
   const isChatOpenRef = useRef(false);
   const localStreamRef = useRef<MediaStream | null>(null);
   const [deviceIntents] = useState(createDeviceIntentStore);
+  const skipMutedMicWarmupRef = useRef(false);
   const processedVideoTrackRef = useRef<MediaStreamTrack | null>(null);
   const sessionIdRef = useRef<string>(getOrCreateSessionId());
   const isHandRaisedRef = useRef(false);
@@ -197,6 +198,7 @@ export function useMeetRefs() {
     isChatOpenRef,
     localStreamRef,
     deviceIntents,
+    skipMutedMicWarmupRef,
     processedVideoTrackRef,
     sessionIdRef,
     isHandRaisedRef,

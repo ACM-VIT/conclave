@@ -1,3 +1,4 @@
+import type { RejoinMedia } from "./rejoin-intent";
 import type { ReconnectRecoveryStatus } from "./types";
 
 export type CallOutcomeKind =
@@ -19,12 +20,6 @@ export const reconnectEndedCall = (reconnect: {
   reconnect.connectionState === "error" &&
   reconnect.phase === "failed" &&
   reconnect.recoverable === true;
-
-export interface RejoinMedia {
-  isMicOn: boolean;
-  isCameraOn: boolean;
-  isAudioOnly: boolean;
-}
 
 export interface CallOutcome {
   kind: CallOutcomeKind;
@@ -81,53 +76,3 @@ export const CALL_RATING_LABELS = [
   "Good",
   "Excellent",
 ] as const;
-
-const REJOIN_STORAGE_KEY = "conclave:rejoin";
-const REJOIN_MAX_AGE_MS = 10 * 60 * 1000;
-
-const sameRoom = (a: string, b: string) =>
-  a.trim().toLowerCase() === b.trim().toLowerCase() && a.trim().length > 0;
-
-export function saveRejoinIntent(roomId: string, media: RejoinMedia): void {
-  try {
-    window.sessionStorage.setItem(
-      REJOIN_STORAGE_KEY,
-      JSON.stringify({ roomId, savedAt: Date.now(), ...media }),
-    );
-  } catch {}
-}
-
-export function readRejoinIntent(
-  roomId: string | undefined,
-  now = Date.now(),
-): RejoinMedia | null {
-  if (!roomId) return null;
-  try {
-    const raw = window.sessionStorage.getItem(REJOIN_STORAGE_KEY);
-    if (!raw) return null;
-    const value: unknown = JSON.parse(raw);
-    if (!value || typeof value !== "object") return null;
-    const intent = value as Record<string, unknown>;
-    if (
-      typeof intent.roomId !== "string" ||
-      !sameRoom(intent.roomId, roomId) ||
-      typeof intent.savedAt !== "number" ||
-      now - intent.savedAt > REJOIN_MAX_AGE_MS
-    ) {
-      return null;
-    }
-    return {
-      isMicOn: intent.isMicOn === true,
-      isCameraOn: intent.isCameraOn === true,
-      isAudioOnly: intent.isAudioOnly === true,
-    };
-  } catch {
-    return null;
-  }
-}
-
-export function clearRejoinIntent(): void {
-  try {
-    window.sessionStorage.removeItem(REJOIN_STORAGE_KEY);
-  } catch {}
-}

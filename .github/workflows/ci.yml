@@ -19,13 +19,15 @@ permissions:
 jobs:
   ci:
     name: ${{ matrix.job }}
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
+    runs-on: &ci-runner ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 10
+    env:
+      CI_JOB: ${{ matrix.job }}
     strategy:
       fail-fast: false
       matrix:
-        job: [lint, typecheck, test, build, checks]
-    steps:
+        job: [lint, typecheck, build, checks, deploy]
+    steps: &ci-steps
       - run: echo "CI_JOB_STARTED_AT=$(date +%s%3N)" >> "$GITHUB_ENV"
 
       - uses: actions/checkout@v7.0.1
@@ -43,11 +45,11 @@ jobs:
           echo "CI_JOB_STARTED_AT=$(date +%s%3N)" >> "$GITHUB_ENV"
           echo "CI_BUDGET_FROM=setup ended, as node_modules missed the cache" >> "$GITHUB_ENV"
           if [ "$EVENT" != "push" ]; then
-            echo "::warning title=node_modules cache miss::This $EVENT run installed node_modules without a cache, so its budget clock started after setup. A miss on every run means staging or main has not saved a cache for this lockfile and toolchain."
+            echo "::warning title=node_modules cache miss::This $EVENT run installed node_modules without a cache. A miss on every run means staging or main has not saved a cache for this lockfile and toolchain."
           fi
 
       - id: next-cache
-        if: matrix.job == 'build'
+        if: env.CI_JOB == 'build'
         uses: actions/cache/restore@v6.1.0
         with:
           path: apps/web/.next/cache
@@ -55,9 +57,9 @@ jobs:
           restore-keys: next-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}-
 
       - id: run
-        run: node scripts/ci/run.mjs ${{ matrix.job }}
+        run: node scripts/ci/run.mjs "$CI_JOB"
 
-      - if: always() && github.event_name == 'push' && matrix.job == 'typecheck' && steps.setup.outcome == 'success' && steps.setup.outputs.modules-hit != 'true'
+      - if: always() && github.event_name == 'push' && env.CI_JOB == 'typecheck' && steps.setup.outcome == 'success' && steps.setup.outputs.modules-hit != 'true'
         uses: actions/cache/save@v6.1.0
         with:
           path: |
@@ -66,14 +68,40 @@ jobs:
             packages/*/node_modules
           key: ${{ steps.setup.outputs.modules-key }}
 
-      - if: always() && github.event_name == 'push' && matrix.job == 'typecheck' && steps.setup.outcome == 'success' && steps.setup.outputs.modules-hit != 'true'
+      - if: always() && github.event_name == 'push' && env.CI_JOB == 'typecheck' && steps.setup.outcome == 'success' && steps.setup.outputs.modules-hit != 'true'
         uses: actions/cache/save@v6.1.0
         with:
           path: ${{ steps.setup.outputs.store-path }}
           key: ${{ steps.setup.outputs.store-key }}
 
-      - if: github.event_name == 'push' && matrix.job == 'build' && steps.run.outcome == 'success' && steps.next-cache.outputs.cache-hit != 'true'
+      - if: github.event_name == 'push' && env.CI_JOB == 'build' && steps.run.outcome == 'success' && steps.next-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6.1.0
         with:
           path: apps/web/.next/cache
           key: ${{ steps.next-cache.outputs.cache-primary-key }}
+
+  test-unit:
+    runs-on: *ci-runner
+    timeout-minutes: 10
+    env:
+      CI_JOB: test
+    steps: *ci-steps
+
+  test-sfu:
+    runs-on: *ci-runner
+    timeout-minutes: 10
+    env:
+      CI_JOB: test-sfu
+    steps: *ci-steps
+
+  test-result:
+    name: test
+    needs: [test-unit, test-sfu]
+    if: ${{ always() }}
+    runs-on: *ci-runner
+    timeout-minutes: 1
+    steps:
+      - env:
+          TEST_UNIT_RESULT: ${{ needs.test-unit.result }}
+          TEST_SFU_RESULT: ${{ needs.test-sfu.result }}
+        run: test "$TEST_UNIT_RESULT" = success && test "$TEST_SFU_RESULT" = success
