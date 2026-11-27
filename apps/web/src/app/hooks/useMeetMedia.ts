@@ -2210,8 +2210,9 @@ export function useMeetMedia({
       setShowPermissionHint(true);
     }, 450);
 
+    const videoClaim = claimDevice("video");
     try {
-      const generation = captureGeneration();
+      const generation = videoClaim.generation;
       const wantsAudio = options.audio ?? true;
       const wantsVideo = options.video ?? cameraChosen();
       const audioRequired = options.audioRequired ?? microphoneChosen();
@@ -2286,8 +2287,15 @@ export function useMeetMedia({
         return null;
       }
       const nextAudioTrack = settled.audio;
-      const cameraWanted = cameraChosen();
-      if (!cameraWanted && settled.video && settled.video !== reusableVideoTrack) {
+      const currentVideoIntent = deviceIntents.get().video;
+      const cameraRequestIsCurrent = currentVideoIntent.request === videoClaim.request;
+      const cameraWanted = cameraRequestIsCurrent && currentVideoIntent.chosen;
+      if (
+        !cameraWanted &&
+        settled.video &&
+        settled.video !== reusableVideoTrack &&
+        !localStreamRef.current?.getVideoTracks().includes(settled.video)
+      ) {
         stopLocalTrack(settled.video);
       }
       const nextVideoTrack = cameraWanted ? settled.video : null;
@@ -2298,10 +2306,10 @@ export function useMeetMedia({
         (track): track is MediaStreamTrack => Boolean(track),
       );
 
-      setMediaState({
+      setMediaState((current) => ({
         hasAudioPermission: hasAudio,
-        hasVideoPermission: hasVideo,
-      });
+        hasVideoPermission: cameraRequestIsCurrent ? hasVideo : current.hasVideoPermission,
+      }));
 
       const requiredFailures: MediaDeviceFailures = {};
       if (audioRequired && !hasAudio) {
@@ -2342,7 +2350,7 @@ export function useMeetMedia({
     } catch (err) {
       console.error("[Meets] Local media setup failed:", err);
       setMeetError((current) => current ?? createMeetError(err, "MEDIA_ERROR"));
-      setIsCameraOff(true);
+      if (claimHolds(videoClaim)) setIsCameraOff(true);
       setIsMuted(true);
       return null;
     } finally {
@@ -2356,6 +2364,9 @@ export function useMeetMedia({
     selectedAudioInputDeviceId,
     microphoneChosen,
     cameraChosen,
+    claimDevice,
+    claimHolds,
+    deviceIntents,
     attachLocalAudioTrackHandlers,
     attachLocalVideoTrackHandlers,
     buildAudioConstraints,
