@@ -7,7 +7,7 @@ import type { SchedulingCalendarConnection, SchedulingEventType } from "../types
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_FREEBUSY_URL = "https://www.googleapis.com/calendar/v3/freeBusy";
 const GOOGLE_CALENDAR_API = "https://www.googleapis.com/calendar/v3";
-const GOOGLE_EVENT_DEADLINE_MS = 15_000;
+export const GOOGLE_EVENT_DEADLINE_MS = 15_000;
 
 export const requireGoogleConfig = (): { clientId: string; clientSecret: string } => {
   const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
@@ -214,10 +214,9 @@ export const createGoogleCalendarEvent = async (
     attendeeName: string;
     attendeeEmail: string;
   },
+  { accessToken, signal }: { accessToken: string; signal: AbortSignal },
 ): Promise<string> => {
-  const signal = AbortSignal.timeout(GOOGLE_EVENT_DEADLINE_MS);
   try {
-    const accessToken = await refreshGoogleAccessToken(state, connection, signal);
     const url = `${GOOGLE_CALENDAR_API}/calendars/${encodeURIComponent(
       connection.calendarId || "primary",
     )}/events?sendUpdates=none`;

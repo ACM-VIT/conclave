@@ -17,7 +17,6 @@ export const CALENDAR_TASK_RETRY_DELAYS_MS: readonly number[] = [
 
 export const CALENDAR_CHANGED = "Google Calendar was reconnected or disconnected meanwhile.";
 export const CALENDAR_NOT_CONNECTED = "Google Calendar is not connected.";
-export const BOOKING_MOVED = "The booking moved after its calendar event was created.";
 
 const TASK_GONE = "This calendar task is finished or no longer exists.";
 const NOT_DUE = "This calendar task is not due or another SFU is running it.";
@@ -189,9 +188,29 @@ const createStillWanted = (tx: TxRead, task: CalendarTask): ScheduledMeeting | n
   return meeting && meeting.status !== "cancelled" ? meeting : null;
 };
 
+const hasMoved = (meeting: ScheduledMeeting, task: CalendarTask): boolean =>
+  meeting.scheduledStartAt !== task.startAt || meeting.scheduledEndAt !== task.endAt;
+
+const holdsGrant = (tx: TxRead, task: CalendarTask): boolean =>
+  tx.get("calendar", task.profileId)?.value.grantId === task.grantId;
+
+const replaceMovedCreate = (tx: Tx, task: CalendarTask, meeting: ScheduledMeeting) => {
+  const replacement = putCreateTask(tx, {
+    meeting,
+    profileId: task.profileId,
+    grantId: task.grantId,
+    appOrigin: task.appOrigin,
+    timeZone: task.timeZone,
+    claimedForMs: null,
+  });
+  const pending: ScheduledMeeting = { ...meeting, calendarSyncStatus: "pending", calendarSyncError: null, updatedAt: tx.now };
+  tx.put("meeting", pending);
+  return { replacement, meeting: pending };
+};
+
 export type CreateCheck =
   | { wanted: true; meeting: ScheduledMeeting }
-  | { wanted: false; booking: ScheduledMeeting | null; removal: CalendarTask | null };
+  | ({ wanted: false } & CreateSettlement);
 
 export const checkCalendarCreate =
   (attempt: CalendarAttempt): Command<CreateCheck> =>
@@ -199,14 +218,19 @@ export const checkCalendarCreate =
     const task = heldAttempt(tx, attempt);
     if (!task || task.action !== "create") return fail("not_found", TASK_GONE);
     const meeting = createStillWanted(tx, task);
-    if (meeting && tx.get("calendar", task.profileId)?.value.grantId === task.grantId) {
-      return done({ wanted: true, meeting });
+    if (!meeting || !holdsGrant(tx, task)) {
+      const booking = meeting ? failMeetingSync(tx, meeting, CALENDAR_CHANGED) : null;
+      return done({ wanted: false, meeting: booking, removal: abandonCreate(tx, task) });
     }
-    const booking = meeting ? failMeetingSync(tx, meeting, CALENDAR_CHANGED) : null;
-    return done({ wanted: false, booking, removal: abandonCreate(tx, task) });
+    if (!hasMoved(meeting, task)) return done({ wanted: true, meeting });
+    return done({ wanted: false, ...replaceMovedCreate(tx, task, meeting), removal: abandonCreate(tx, task) });
   };
 
-export type CreateSettlement = { meeting: ScheduledMeeting | null; removal: CalendarTask | null };
+export type CreateSettlement = {
+  meeting: ScheduledMeeting | null;
+  removal: CalendarTask | null;
+  replacement?: CalendarTask;
+};
 
 export const settleCalendarCreate =
   (attempt: CalendarAttempt): Command<CreateSettlement> =>
@@ -215,16 +239,17 @@ export const settleCalendarCreate =
     if (!task || task.action !== "create") return fail("not_found", TASK_GONE);
     const meeting = createStillWanted(tx, task);
     if (!meeting) return done({ meeting: null, removal: toDelete(tx, task, false) });
-    const grantHeld = tx.get("calendar", task.profileId)?.value.grantId === task.grantId;
-    if (!grantHeld) {
+    if (!holdsGrant(tx, task)) {
       return done({ meeting: failMeetingSync(tx, meeting, CALENDAR_CHANGED), removal: toDelete(tx, task, false) });
     }
-    const moved = meeting.scheduledStartAt !== task.startAt || meeting.scheduledEndAt !== task.endAt;
+    if (hasMoved(meeting, task)) {
+      return done({ ...replaceMovedCreate(tx, task, meeting), removal: toDelete(tx, task, false) });
+    }
     const next: ScheduledMeeting = {
       ...meeting,
       googleCalendarEventId: task.eventId,
-      calendarSyncStatus: moved ? "failed" : "synced",
-      calendarSyncError: moved ? BOOKING_MOVED : null,
+      calendarSyncStatus: "synced",
+      calendarSyncError: null,
       updatedAt: tx.now,
     };
     tx.put("meeting", next);
@@ -243,15 +268,22 @@ const failMeetingSync = (tx: Tx, meeting: ScheduledMeeting, message: string): Sc
   return next;
 };
 
-export type Deferral = { task: CalendarTask; meeting: ScheduledMeeting | null; gaveUp: boolean };
+export type Deferral = { task: CalendarTask; meeting: ScheduledMeeting | null; gaveUp: boolean; replacement?: CalendarTask };
 
 export const deferCalendarTask =
   (attempt: CalendarAttempt, message: string, delays: readonly number[]): Command<Deferral> =>
   (tx) => {
     const task = heldAttempt(tx, attempt);
     if (!task) return fail("not_found", TASK_GONE);
-    if (task.action === "create" && !createStillWanted(tx, task)) {
-      return done({ task: toDelete(tx, task, true), meeting: null, gaveUp: false });
+    const meeting = task.action === "create" ? createStillWanted(tx, task) : null;
+    if (task.action === "create") {
+      if (!meeting) return done({ task: toDelete(tx, task, true), meeting: null, gaveUp: false });
+      if (hasMoved(meeting, task)) {
+        const next = holdsGrant(tx, task)
+          ? replaceMovedCreate(tx, task, meeting)
+          : { meeting: failMeetingSync(tx, meeting, CALENDAR_CHANGED) };
+        return done({ ...next, task: toDelete(tx, task, true), gaveUp: false });
+      }
     }
     const error = message.slice(0, 512);
     const gaveUp = task.attempts > delays.length;
@@ -259,7 +291,6 @@ export const deferCalendarTask =
       ? { ...task, state: "failed", lastError: error, updatedAt: tx.now }
       : { ...task, lastError: error, nextAttemptAt: tx.now + delays[task.attempts - 1], updatedAt: tx.now };
     tx.put("calendarTask", next);
-    const meeting = task.action === "create" ? createStillWanted(tx, task) : null;
     if (!meeting) return done({ task: next, meeting: null, gaveUp });
     if (gaveUp) return done({ task: next, meeting: failMeetingSync(tx, meeting, error), gaveUp });
     const pending: ScheduledMeeting = { ...meeting, calendarSyncStatus: "pending", calendarSyncError: error, updatedAt: tx.now };

@@ -12,10 +12,16 @@ import {
   failedCalendarTasks,
   finishCalendarDelete,
   settleCalendarCreate,
+  type CreateSettlement,
 } from "./controlPlane/calendarTaskCommands.js";
 import type { CalendarTask } from "./controlPlane/model.js";
 import { hostCalendar } from "./controlPlane/schedulingCommands.js";
-import { createGoogleCalendarEvent, deleteGoogleCalendarEvent } from "./googleCalendar.js";
+import {
+  createGoogleCalendarEvent,
+  deleteGoogleCalendarEvent,
+  GOOGLE_EVENT_DEADLINE_MS,
+  refreshGoogleAccessToken,
+} from "./googleCalendar.js";
 import { isCalendarUsable } from "./scheduling.js";
 import { buildSchedulingMeetingLink } from "./schedulingLinks.js";
 import type { SfuState } from "./state.js";
@@ -37,6 +43,16 @@ const syncErrorOf = (meeting: ScheduledMeeting): string | null =>
 
 const messageOf = (error: unknown): string => (error instanceof Error && error.message) || "Google Calendar request failed.";
 
+const finishCreateWork = async (
+  state: SfuState,
+  { meeting, removal, replacement }: CreateSettlement,
+  options: CalendarTaskOptions,
+): Promise<CalendarTaskRun> => {
+  if (removal) await runCalendarTask(state, removal.id, options);
+  if (replacement) return runCalendarTask(state, replacement.id, options);
+  return meeting ? kept(meeting, syncErrorOf(meeting)) : gone();
+};
+
 const defer = async (
   state: SfuState,
   task: CalendarTask,
@@ -48,8 +64,7 @@ const defer = async (
   );
   if (!deferred.ok) return idle();
   if (deferred.value.task.action !== task.action) {
-    await runCalendarTask(state, task.id, options);
-    return gone();
+    return finishCreateWork(state, { ...deferred.value, removal: deferred.value.task }, options);
   }
   if (deferred.value.gaveUp) {
     Logger.error(
@@ -64,6 +79,17 @@ const taskConnection = async (state: SfuState, task: CalendarTask) => {
   if (!isCalendarUsable(connection)) return { connection: null, error: CALENDAR_NOT_CONNECTED };
   if (connection.grantId !== task.grantId) return { connection: null, error: CALENDAR_CHANGED };
   return { connection, error: null };
+};
+
+const authorizeCreate = async (state: SfuState, task: CalendarTask, signal: AbortSignal) => {
+  const target = await taskConnection(state, task);
+  if (!target.connection) return target;
+  try {
+    const accessToken = await refreshGoogleAccessToken(state, target.connection, signal);
+    return { ...target, accessToken };
+  } catch (error) {
+    return { connection: null, error: messageOf(error) };
+  }
 };
 
 const runDelete = async (state: SfuState, task: CalendarTask, options: CalendarTaskOptions): Promise<CalendarTaskRun> => {
@@ -81,15 +107,13 @@ const runDelete = async (state: SfuState, task: CalendarTask, options: CalendarT
 };
 
 const runCreate = async (state: SfuState, task: CalendarTask, options: CalendarTaskOptions): Promise<CalendarTaskRun> => {
+  const signal = AbortSignal.timeout(GOOGLE_EVENT_DEADLINE_MS);
+  const target = await authorizeCreate(state, task, signal);
   const checked = await state.controlPlane.commit(checkCalendarCreate(task));
   if (!checked.ok) return idle();
-  if (!checked.value.wanted) {
-    if (checked.value.removal) await runCalendarTask(state, task.id, options);
-    return checked.value.booking ? kept(checked.value.booking, CALENDAR_CHANGED) : gone();
-  }
-  const meeting = checked.value.meeting;
-  const target = await taskConnection(state, task);
+  if (!checked.value.wanted) return finishCreateWork(state, checked.value, options);
   if (!target.connection) return defer(state, task, target.error, options);
+  const meeting = checked.value.meeting;
   try {
     await createGoogleCalendarEvent(state, target.connection, {
       eventId: task.eventId,
@@ -101,14 +125,12 @@ const runCreate = async (state: SfuState, task: CalendarTask, options: CalendarT
       timeZone: task.timeZone,
       attendeeName: meeting.attendeeName ?? "",
       attendeeEmail: meeting.attendeeEmail ?? "",
-    });
+    }, { accessToken: target.accessToken, signal });
   } catch (error) {
     return defer(state, task, messageOf(error), options);
   }
   const settled = await state.controlPlane.commit(settleCalendarCreate(task));
-  if (!settled.ok) return idle();
-  if (settled.value.removal) await runCalendarTask(state, task.id, options);
-  return settled.value.meeting ? kept(settled.value.meeting, syncErrorOf(settled.value.meeting)) : gone();
+  return settled.ok ? finishCreateWork(state, settled.value, options) : idle();
 };
 
 export const runCalendarTask = async (

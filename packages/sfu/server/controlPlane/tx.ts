@@ -41,7 +41,7 @@ export interface TxRead {
 export interface Tx extends TxRead {
   put<K extends Kind>(kind: K, value: EntityMap[K]): void;
   remove(kind: Kind, id: string): void;
-  importLegacy<K extends Kind>(kind: K, value: EntityMap[K], stamp: number): string[];
+  importLegacy<K extends Kind>(kind: K, value: EntityMap[K], stamp: number, mode?: "restoreClaims"): string[];
 }
 
 export type Command<T> = (tx: Tx) => Outcome<T>;
@@ -175,11 +175,11 @@ class TxImpl implements Tx {
   }
 
   put<K extends Kind>(kind: K, value: EntityMap[K]): void {
-    this.write(kind, value, null, false);
+    this.write(kind, value, null, "put");
   }
 
-  importLegacy<K extends Kind>(kind: K, value: EntityMap[K], stamp: number): string[] {
-    return this.write(kind, value, stamp, true);
+  importLegacy<K extends Kind>(kind: K, value: EntityMap[K], stamp: number, mode: "reconcile" | "restoreClaims" = "reconcile"): string[] {
+    return this.write(kind, value, stamp, mode);
   }
 
   remove(kind: Kind, id: string): void {
@@ -203,7 +203,7 @@ class TxImpl implements Tx {
         "removal",
         { key: removalKey, kind, id, deleted: deleted.slice(-REMEMBERED_DELETES) },
         null,
-        false,
+        "put",
       );
     }
   }
@@ -263,7 +263,7 @@ class TxImpl implements Tx {
     kind: K,
     value: EntityMap[K],
     legacy: number | null,
-    tolerateTaken: boolean,
+    mode: "put" | "reconcile" | "restoreClaims",
   ): string[] {
     const spec = specOf(kind);
     const id = spec.id(value);
@@ -282,10 +282,11 @@ class TxImpl implements Tx {
       }
     }
     for (const field of after) {
-      if (before.has(field)) continue;
+      if (before.has(field) && mode !== "restoreClaims") continue;
       const holder = this.ownerOf(field);
-      if (holder && holder !== id) {
-        if (!tolerateTaken) throw new UniqueViolation(field);
+      if (holder === id) continue;
+      if (holder) {
+        if (mode === "put") throw new UniqueViolation(field);
         skipped.push(field);
         continue;
       }

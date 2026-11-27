@@ -25,6 +25,7 @@ import {
   fail,
   legacyCopyKey,
   shadowKey,
+  uniqueKeys,
   type DataKind,
   type LegacyDomain,
   type LegacyImportState,
@@ -113,7 +114,11 @@ const conflict = (kind: DataKind, id: string, what: string, counts: ImportCounts
 
 const write = (tx: Tx, record: HashedLegacyRecord, counts: ImportCounts): void => {
   const skipped = tx.importLegacy(record.kind, record.value, record.stamp);
-  if (skipped.length === 0) return;
+  if (skipped.length === 0 || record.kind === "eventType") return;
+  unindexed(record, skipped, counts);
+};
+
+const unindexed = (record: HashedLegacyRecord, skipped: readonly string[], counts: ImportCounts): void => {
   counts.unindexed += 1;
   counts.notes.push(`[ControlPlane] legacy ${record.key} kept without ${skipped.join(", ")}: another record already holds it`);
 };
@@ -177,6 +182,11 @@ const reconcileOne = (tx: Tx, source: string, item: LegacyItem, counts: ImportCo
 
 export type SnapshotMark = { key: string; order: string };
 
+const trackSnapshot = (state: LegacyImportState, mark: SnapshotMark | null): LegacyImportState["applied"] =>
+  mark && (!(mark.key in state.applied) || state.applied[mark.key] < mark.order)
+    ? { ...state.applied, [mark.key]: mark.order }
+    : state.applied;
+
 export const reconcileLegacy =
   (
     ticket: number,
@@ -190,10 +200,7 @@ export const reconcileLegacy =
     const state = currentState(tx);
     if (!state || state.ticket !== ticket) return fail("conflict", STALE);
     const sources = sticky !== null && state.sources[domain] !== sticky ? { ...state.sources, [domain]: sticky } : state.sources;
-    const applied =
-      mark && (!(mark.key in state.applied) || state.applied[mark.key] < mark.order)
-        ? { ...state.applied, [mark.key]: mark.order }
-        : state.applied;
+    const applied = trackSnapshot(state, mark);
     if (sources !== state.sources || applied !== state.applied) tx.put("legacyImport", { ...state, sources, applied });
     const counts = emptyCounts();
     for (const item of items) {
@@ -207,6 +214,28 @@ export const reconcileLegacy =
       const next = mergeInviteeState(current, copy.inviteeState);
       if (JSON.stringify(next) !== JSON.stringify(current)) tx.put("inviteeState", next);
     }
+    return done(counts);
+  };
+
+type LegacyEventType = Extract<HashedLegacyRecord, { kind: "eventType" }>;
+
+const reconcileEventSlugClaims =
+  (ticket: number, source: string, eventTypes: readonly LegacyEventType[], mark: SnapshotMark | null): Command<ImportCounts> =>
+  (tx) => {
+    const state = currentState(tx);
+    if (!state || state.ticket !== ticket) return fail("conflict", STALE);
+    const counts = emptyCounts();
+    for (const copy of eventTypes) {
+      const holder = tx.owner("eventSlug", uniqueKeys.eventSlug(copy.value.profileId, copy.value.slug));
+      if (holder === copy.id) continue;
+      const shadow = tx.get("legacyCopy", shadowKey(source, copy.kind, copy.id))?.value;
+      const live = tx.get("eventType", copy.id);
+      if (!live || live.legacy === null || shadow?.hash !== copy.hash || hashLegacyValue(live.value) !== copy.hash) continue;
+      if (holder === null) tx.importLegacy("eventType", live.value, live.legacy, "restoreClaims");
+      else unindexed(copy, ["eventSlug"], counts);
+    }
+    const applied = trackSnapshot(state, mark);
+    if (applied !== state.applied) tx.put("legacyImport", { ...state, applied });
     return done(counts);
   };
 
@@ -382,10 +411,17 @@ const importRound = async (
   ) => {
     const shadows = await store.read(shadowsOf(domain, source));
     const parts = batches(itemsFor(records, shadows));
+    // A later batch can release a slug held when an earlier batch wrote its new owner.
+    const slugParts = batches(records.filter((record): record is LegacyEventType => record.kind === "eventType").sort(newestFirst));
     if (parts.length === 0 && (mark || label)) parts.push([]);
     for (const [index, batch] of parts.entries()) {
-      const last = index === parts.length - 1;
+      const last = index === parts.length - 1 && slugParts.length === 0;
       const counts = await committed(store, reconcileLegacy(ticket, domain, source, label, batch, last ? mark : null));
+      if (!counts) return false;
+      add(counted, counts);
+    }
+    for (const [index, batch] of slugParts.entries()) {
+      const counts = await committed(store, reconcileEventSlugClaims(ticket, source, batch, index === slugParts.length - 1 ? mark : null));
       if (!counts) return false;
       add(counted, counts);
     }
