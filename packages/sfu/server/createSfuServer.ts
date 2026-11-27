@@ -194,7 +194,7 @@ export const createSfuServer = (
     }
     stopRoomRecoveryPassRefresh?.();
     stopRoomRecoveryPassRefresh = null;
-    state.scheduledWebinarPersistence?.close?.();
+    await state.scheduledWebinarPersistence?.close?.();
     state.scheduledWebinarPersistence = null;
     await state.scheduledMeetingPersistence?.close?.();
     state.scheduledMeetingPersistence = null;

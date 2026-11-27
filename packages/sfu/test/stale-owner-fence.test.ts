@@ -19,6 +19,7 @@ import {
   type RoomRecoveryStore,
 } from "../server/roomRecoveryLedger.js";
 import { startRoomRecoveryPassRefresh } from "../server/roomRecoveryPass.js";
+import { RoomLeaseExpiredError } from "../server/roomRegistry.js";
 import type {
   RoomAssignmentRecord,
   RoomOwnerRecord,
@@ -396,6 +397,96 @@ describe("what an SFU writes for a room, by the state of the room's lease", () =
 });
 
 describe("an SFU that lost a room's lease while it was paused", () => {
+  it.each(["same owner", "reclaimed lease", "replacement owner"])("settles an empty room after a registry outage with %s", async (outcome) => {
+    useSharedSchedule();
+    await book();
+    const leases = sharedLeases();
+    const registry = leases.forInstance("sfu-a");
+    const recovery = createMemoryRoomRecoveryStore();
+    const sfuA = await startSfu(registry, { recovery });
+    const hostOnA = await join(sfuA, host("a"));
+    expect(hostOnA.status).toBe("joined");
+    expect((await join(sfuA, invitee)).status).toBe("joined");
+    expect(await hostOnA.send("kickUser", { userId: INVITEE_SEAT })).toEqual({ success: true });
+    expect(await inviteeIsInvited()).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(LEASE_MS - LEASE_MARGIN_MS + 1);
+    const unavailable = vi.spyOn(registry, "renewRoom").mockRejectedValue(new RoomLeaseExpiredError(CHANNEL));
+    const leftAt = Date.now();
+    await hostOnA.leave();
+    await settle();
+    expect(sfuA.rooms.has(CHANNEL)).toBe(false);
+    expect(await recovery.read(CHANNEL)).toMatchObject({ overAt: null });
+    expect(await inviteeIsInvited()).toBe(false);
+
+    if (outcome === "replacement owner") {
+      await vi.advanceTimersByTimeAsync(LEASE_MARGIN_MS);
+      const sfuB = await startSfu(leases.forInstance("sfu-b"), { recovery });
+      const hostOnB = await join(sfuB, host("b"));
+      expect(hostOnB.status).toBe("joined");
+      const replacement = sfuB.rooms.get(CHANNEL);
+      expect(replacement?.getHostUserId()).toBe("host@example.com#b");
+
+      unavailable.mockRestore();
+      await renewRoomOwnerships(sfuA);
+      await settle();
+      expect(leases.ownerOf(CHANNEL)).toBe("sfu-b");
+      expect(await recovery.read(CHANNEL)).toMatchObject({ overAt: null, writer: replacement?.incarnationId });
+      expect(await inviteeIsInvited()).toBe(false);
+    } else {
+      if (outcome === "reclaimed lease") await vi.advanceTimersByTimeAsync(LEASE_MARGIN_MS);
+      unavailable.mockRestore();
+      await renewRoomOwnerships(sfuA);
+      await settle();
+      expect(await recovery.read(CHANNEL)).toMatchObject({ liveAt: null, overAt: leftAt });
+      expect(await inviteeIsInvited()).toBe(true);
+      expect(leases.ownerOf(CHANNEL)).toBeNull();
+    }
+  });
+
+  it("keeps a replacement's invitee removal when an older room's end waited behind a backup", async () => {
+    useSharedSchedule();
+    await book();
+    const leases = sharedLeases();
+    const recovery = createMemoryRoomRecoveryStore();
+    const sfuA = await startSfu(leases.forInstance("sfu-a"), { recovery });
+    const hostOnA = await join(sfuA, host("a"));
+    expect(hostOnA.status).toBe("joined");
+    expect((await join(sfuA, invitee)).status).toBe("joined");
+    expect(await hostOnA.send("kickUser", { userId: INVITEE_SEAT })).toEqual({ success: true });
+    expect(await inviteeIsInvited()).toBe(false);
+
+    expect(await sfuA.persistenceFence.hold("backup-a", 25_000)).not.toBeNull();
+    let replacementRecord: unknown;
+    try {
+      await hostOnA.leave();
+      await settle();
+      expect(await inviteeIsInvited()).toBe(false);
+      await vi.advanceTimersByTimeAsync(ROOM_WRITE_COMMIT_MS);
+      expect(leases.ownerOf(CHANNEL)).toBeNull();
+
+      const sfuB = await startSfu(leases.forInstance("sfu-b"), { recovery });
+      const hostOnB = await join(sfuB, host("b"));
+      expect(hostOnB.status).toBe("joined");
+      const returningInvitee = await join(sfuB, invitee);
+      expect(returningInvitee.status).toBe("waiting");
+      expect(await hostOnB.send("admitUser", { userId: INVITEE })).toEqual({ success: true });
+      expect((await returningInvitee.ask()).status).toBe("joined");
+      expect(await hostOnB.send("kickUser", { userId: INVITEE_SEAT })).toEqual({ success: true });
+      expect(await inviteeIsInvited()).toBe(false);
+      replacementRecord = await recovery.read(CHANNEL);
+      expect(replacementRecord).toMatchObject({ writer: sfuB.rooms.get(CHANNEL)?.incarnationId });
+      expect(replacementRecord).toHaveProperty("liveAt", expect.any(Number));
+    } finally {
+      sfuA.persistenceFence.release("backup-a");
+    }
+
+    await settle();
+    expect(leases.ownerOf(CHANNEL)).toBe("sfu-b");
+    expect(await inviteeIsInvited()).toBe(false);
+    expect(await recovery.read(CHANNEL)).toEqual(replacementRecord);
+  });
+
   it("signs no recovery pass until the lease is confirmed again", async () => {
     useSharedSchedule();
     await book();

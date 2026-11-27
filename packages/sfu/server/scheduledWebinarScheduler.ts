@@ -205,7 +205,9 @@ const advanceScheduledWebinars = (
       state.scheduledWebinars,
       state.scheduledWebinarPersistence,
       changedWebinars,
-    );
+    ).catch((error) => {
+      Logger.warn("Failed to persist scheduled webinar changes", error);
+    });
   }
 
   return changed;

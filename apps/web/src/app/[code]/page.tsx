@@ -3,6 +3,8 @@ import { headers as nextHeaders } from "next/headers";
 import MeetsClientShell from "../meets-client-shell";
 import RouteLoadingState from "../components/RouteLoadingState";
 import ScheduledMeetingLanding from "../components/ScheduledMeetingLanding";
+import ErrorStateView from "../components/ErrorStateView";
+import { isSfuTooOldForBookings } from "../../lib/scheduled-meeting-lookup";
 import {
   isMeetingJoinable,
   lookupScheduledMeetingForCode,
@@ -96,7 +98,23 @@ async function MeetRoomContent({ params, searchParams }: MeetRoomPageProps) {
     devOverridesEnabled && isTruthyParam(resolvedSearchParams.admin);
 
   if (destination.roomCode) {
-    const lookup = await lookupScheduledMeetingForCode(destination);
+    let lookup: Awaited<ReturnType<typeof lookupScheduledMeetingForCode>>;
+    try {
+      lookup = await lookupScheduledMeetingForCode(destination);
+    } catch (error) {
+      if (!isSfuTooOldForBookings(error)) throw error;
+      if (!bypassMediaPermissions) {
+        return (
+          <ErrorStateView
+            eyebrow="Meetings are updating"
+            title="This meeting link can't open yet"
+            message="The meeting service is being updated. Try this link again in a few minutes."
+            homeLabel="Go home"
+          />
+        );
+      }
+      lookup = { kind: "unknown" };
+    }
     mayOpenRoom = lookup.kind !== "unscheduled";
     // Recorders go straight to the join.
     if (

@@ -531,26 +531,6 @@ export const setScheduledInviteeReadmission = (
   return meeting;
 };
 
-export const moveScheduledMeetingToClient = (
-  store: ScheduledMeetingStore,
-  meetingId: string,
-  clientId: string,
-): ScheduledMeeting | null => {
-  const meeting = store.byId.get(meetingId);
-  const nextClientId = canonicalizeClientId(clientId);
-  if (!meeting || !nextClientId || meeting.clientId === nextClientId) {
-    return meeting ?? null;
-  }
-  if (isCodeTaken(store, nextClientId, meeting.roomCode, meeting.id)) {
-    throw new Error("That meeting code already exists in the target client.");
-  }
-  releaseRoomCode(store, meeting);
-  meeting.clientId = nextClientId;
-  meeting.updatedAt = Date.now();
-  claimRoomCode(store, meeting);
-  return meeting;
-};
-
 export const listScheduledMeetings = (
   store: ScheduledMeetingStore,
   filter: {
@@ -787,13 +767,13 @@ const meetingRecord = (meeting: object): string =>
 const handOver = (
   store: ScheduledMeetingPersistence,
   meetings: ScheduledMeeting[],
-): void => {
+): MaybePromise<void> => {
   for (const meeting of meetings) {
     for (const email of meeting.readmissionRequiredEmails ?? []) {
       runDetached("Saving an invitee's removal", () => store.setInviteeReadmission?.(meeting.id, email, true, carriedRemovalAt(meeting)));
     }
   }
-  runDetached("Saving scheduled meetings", () => store.save(meetings));
+  return store.save(meetings);
 };
 
 // Removed invitees as a store lists them, one (meeting, email) pair at a
@@ -1705,14 +1685,14 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     return meeting;
   }
 
-  save(snapshot: ScheduledMeeting[]): void {
+  save(snapshot: ScheduledMeeting[]): Promise<void> {
     this.knownMeetings = new Map(snapshot.map((meeting) => [meeting.id, meeting]));
     runDetached("Saving scheduled meetings", () => this.fallback.save(snapshot));
     const payload = snapshot.map((meeting) => [
       meeting.id,
       meetingRecord(meeting),
     ] as const);
-    this.queueWrite("save snapshot", async () => {
+    return this.queueWrite("save snapshot", async () => {
       const transaction = this.client.multi();
       transaction.del(this.key);
       if (payload.length > 0) {
@@ -1722,8 +1702,8 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     });
   }
 
-  saveChanged(meetings: ScheduledMeeting[]): void {
-    if (meetings.length === 0) return;
+  saveChanged(meetings: ScheduledMeeting[]): Promise<void> {
+    if (meetings.length === 0) return Promise.resolve();
     for (const meeting of meetings) {
       this.knownMeetings.set(meeting.id, meeting);
     }
@@ -1731,7 +1711,7 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     const payload = Object.fromEntries(
       meetings.map((meeting) => [meeting.id, meetingRecord(meeting)]),
     );
-    this.queueWrite("save changed meetings", async () => {
+    return this.queueWrite("save changed meetings", async () => {
       await this.client.hSet(this.key, payload);
     });
   }
@@ -1802,23 +1782,22 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
 
   private queueCheckedWrite(label: string, write: () => Promise<unknown>): Promise<boolean> {
     let landed = false;
-    this.queueWrite(label, async () => {
+    return this.queueWrite(label, async () => {
       const answer = await write();
       landed = Number(answer) !== -1;
-    });
-    return this.pendingWrite.then(
+    }).then(
       () => landed,
       () => false,
     );
   }
 
-  deleteIds(ids: string[]): void {
-    if (ids.length === 0) return;
+  deleteIds(ids: string[]): Promise<void> {
+    if (ids.length === 0) return Promise.resolve();
     for (const id of ids) {
       this.knownMeetings.delete(id);
     }
     runDetached("Saving scheduled meetings", () => this.fallback.save(Array.from(this.knownMeetings.values())));
-    this.queueWrite("delete meetings", async () => {
+    return this.queueWrite("delete meetings", async () => {
       await this.client.hDel(this.key, ids);
       const gone = [...(await this.decisions()).keys()].filter((member) =>
         ids.includes(member.slice(0, member.indexOf(" "))),
@@ -1919,8 +1898,7 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
         fallbackMeetings.map((meeting) => [meeting.id, meeting]),
       );
       if (fallbackMeetings.length > 0) {
-        handOver(this, fallbackMeetings);
-        await this.flush();
+        await handOver(this, fallbackMeetings);
         Logger.info(
           `Migrated ${fallbackMeetings.length} scheduled meeting(s) into Redis persistence`,
         );
@@ -1951,17 +1929,18 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     await this.client.quit();
   }
 
-  private queueWrite(label: string, write: () => Promise<void>): void {
-    const writePromise = this.pendingWrite
-      .catch(() => undefined)
-      .then(async () => {
-        await this.start();
-        await write();
-      });
+  // Writes go to Redis one after another. Each caller gets its own write's
+  // result or error; the queue moves on past a failed write, so flush() only
+  // waits and never hands one write's error to another caller.
+  private queueWrite(label: string, write: () => Promise<void>): Promise<void> {
+    const writePromise = this.pendingWrite.then(async () => {
+      await this.start();
+      await write();
+    });
     this.pendingWrite = writePromise.catch((error) => {
       Logger.error(`Failed to persist scheduled meetings to Redis (${label})`, error);
-      throw error;
     });
+    return writePromise;
   }
 }
 
@@ -1982,7 +1961,7 @@ const migrateJsonScheduledMeetingsToSqlite = (
   const legacy = json.load() as ScheduledMeeting[];
   if (legacy.length === 0) return 0;
 
-  handOver(sqlite, legacy);
+  void handOver(sqlite, legacy);
   return (sqlite.load() as ScheduledMeeting[]).length;
 };
 

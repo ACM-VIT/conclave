@@ -74,10 +74,12 @@ export type PersistedSnapshot = {
   sequence: number;
   serviceVersion?: TranscriptServiceVersion;
   transcriptionConfig?: PersistedTranscriptionConfig;
+  providerLanguage?: string;
 };
 
 export type PersistedTranscriptionConfig = {
   language: string;
+  languageChosen?: boolean;
   delay: string;
   locale: string;
 };
@@ -90,8 +92,10 @@ export type ClientEnvelope =
       transcriptModel?: string;
       qaModel?: string;
       transportMode?: TranscriptTransportMode;
-      language?: string;
+      language?: string | null;
+      providerLanguage?: string;
       delay?: string;
+      requestId?: string;
     }
   | { type: "session.stop" }
   | { type: "session.relayFailed"; message?: string }

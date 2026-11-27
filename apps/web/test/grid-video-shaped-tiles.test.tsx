@@ -65,7 +65,6 @@ const renderGrid = (viewSettings: Partial<MeetViewSettings> = {}) => {
   act(() =>
     root!.render(
       <GridLayout
-        meetingPath="/team-room?clientId=conclave"
         localStream={null}
         isCameraOff
         isMuted

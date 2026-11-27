@@ -31,6 +31,7 @@ import { createAdmission, revokeAdmission } from "../lib/admissions";
 import { getBrowserNetworkSnapshot } from "../lib/network-information";
 import { ServerError } from "../lib/server-error";
 import { resolveBrowserSfuClientId } from "@/lib/sfu-client-id";
+import { captureGeneration, createHeldDestination } from "../lib/media-captures";
 
 type VoiceAgentStatus = "idle" | "starting" | "running" | "error";
 
@@ -1101,6 +1102,7 @@ export function useVoiceAgentParticipant({
 
     closeRuntimeState(runtimeRef.current);
     const runtime = createRuntimeState();
+    const generation = captureGeneration();
     runtimeRef.current = runtime;
     pendingRemoteTrackRef.current = null;
 
@@ -1116,7 +1118,7 @@ export function useVoiceAgentParticipant({
         latencyHint: "interactive",
       });
       runtime.openAiMixDestination =
-        runtime.openAiMixContext.createMediaStreamDestination();
+        createHeldDestination(runtime.openAiMixContext, generation);
       runtime.openAiMicStream = runtime.openAiMixDestination.stream;
       await rebuildOpenAiMix(runtime);
 

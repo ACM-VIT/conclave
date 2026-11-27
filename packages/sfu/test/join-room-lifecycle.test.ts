@@ -4,7 +4,10 @@ import type { Server as SocketIOServer, Socket } from "socket.io";
 import { Admin } from "../config/classes/Admin.js";
 import { Client } from "../config/classes/Client.js";
 import { Room } from "../config/classes/Room.js";
+import { config } from "../config/config.js";
+import { NO_HOST_LEFT_MESSAGE } from "../server/admin/controlPlane.js";
 import { LocalRoomRegistry, RoomOpeningError } from "../server/roomRegistry.js";
+import { createScheduledWebinar } from "../server/scheduledWebinars.js";
 import type { SfuAuthPayload } from "../server/socket/auth.js";
 import { createConnectionContext } from "../server/socket/context.js";
 import { registerAdminHandlers } from "../server/socket/handlers/adminHandlers.js";
@@ -61,7 +64,11 @@ const makeState = (workers: Worker[] = []): SfuState => {
 };
 
 const broadcast = vi.fn();
-const io = { to: () => ({ emit: broadcast }) } as unknown as SocketIOServer;
+const disconnectRoom = vi.fn();
+const io = {
+  to: () => ({ emit: broadcast }),
+  in: () => ({ disconnectSockets: disconnectRoom }),
+} as unknown as SocketIOServer;
 
 const join = async (
   state: SfuState,
@@ -648,6 +655,98 @@ describe("waiting-room entry on disconnect", () => {
 });
 
 describe("scheduled webinar link codes", () => {
+  it.each(["host arrives", "window expires"])("keeps an early audience seated past ordinary cleanup until the %s", async (outcome) => {
+    vi.useFakeTimers();
+    broadcast.mockClear();
+    disconnectRoom.mockClear();
+    const router = {
+      closed: false, close: vi.fn(), rtpCapabilities: { codecs: [], headerExtensions: [] },
+    } as unknown as Router;
+    const state = makeState([{ pid: 1, closed: false, createRouter: async () => router } as unknown as Worker]);
+    const earlyEntryMinutes = 10;
+    const scheduledStartAt = Date.now() + earlyEntryMinutes * 60_000 + 1;
+    const { webinar } = createScheduledWebinar(state.scheduledWebinars, {
+      title: "Town hall",
+      linkSlug: "town-hall",
+      scheduledStartAt,
+      scheduledEndAt: scheduledStartAt + 3_600_000,
+      earlyEntryMinutes,
+      publicAccess: true,
+    }, {
+      clientId: "conclave", createdBy: "host@example.com", defaultHostEmail: "host@example.com",
+    });
+    const viewer: SfuAuthPayload = {
+      userId: "viewer", clientId: "conclave", sessionId: "v", joinMode: "webinar_attendee",
+    };
+    const tooEarly = await join(state, "too-early", viewer, webinar.linkSlug);
+    expect(tooEarly.ack).toHaveBeenCalledWith({ error: "Webinar is not live." });
+    await vi.advanceTimersByTimeAsync(1);
+    const audience = await join(state, "attendee-socket", viewer, webinar.linkSlug);
+    expect(audience.ack).toHaveBeenCalledWith(expect.objectContaining({
+      status: "joined", roomId: webinar.roomId, webinarRole: "attendee", hostUserIds: [],
+    }));
+    const channelId = `conclave:${webinar.roomId}`;
+    await vi.advanceTimersByTimeAsync(config.adminCleanupTimeout + 1);
+    expect(broadcast).not.toHaveBeenCalledWith("roomEnded", expect.objectContaining({ roomId: webinar.roomId }));
+    expect(disconnectRoom).not.toHaveBeenCalled();
+    expect(state.rooms.get(channelId)?.getWebinarAttendeeCount()).toBe(1);
+
+    if (outcome === "window expires") {
+      const expiry = webinar.scheduledEndAt + 30 * 60_000;
+      await vi.advanceTimersByTimeAsync(expiry - Date.now());
+      expect(state.rooms.get(channelId)?.getWebinarAttendeeCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(config.adminCleanupTimeout + 1);
+      expect(state.rooms.has(channelId)).toBe(false);
+      expect(broadcast).toHaveBeenCalledWith("roomEnded", {
+        roomId: webinar.roomId, message: NO_HOST_LEFT_MESSAGE, endedBy: "server",
+      });
+      expect(disconnectRoom).toHaveBeenCalledOnce();
+      return;
+    }
+
+    const scheduledHost = await join(state, "host-socket", {
+      userId: "organizer", email: "host@example.com", clientId: "conclave", sessionId: "h",
+    }, webinar.roomId);
+    expect(scheduledHost.ack).toHaveBeenCalledWith(expect.objectContaining({
+      status: "joined", webinarRole: "host", hostUserIds: ["host@example.com#h"], webinarAttendeeCount: 1,
+    }));
+    expect(broadcast).toHaveBeenCalledWith("hostChanged", {
+      roomId: webinar.roomId, hostUserId: "host@example.com#h",
+    });
+  });
+
+  it("still closes an unscheduled room with no eligible host", async () => {
+    vi.useFakeTimers();
+    broadcast.mockClear();
+    disconnectRoom.mockClear();
+    const state = makeState();
+    const room = new Room({
+      id: "ordinary", clientId: "conclave", workerPid: null,
+      router: { closed: false, close: vi.fn() } as unknown as Router,
+    });
+    state.rooms.set(room.channelId, room);
+    const host = await join(state, "host", {
+      userId: "host", clientId: "conclave", sessionId: "h", isForcedHost: true,
+    }, room.id);
+    expect(host.ack).toHaveBeenCalledWith(expect.objectContaining({ webinarRole: "host" }));
+    const webinarConfig = getOrCreateWebinarRoomConfig(state.webinarConfigs, room.channelId);
+    webinarConfig.enabled = true;
+    webinarConfig.publicAccess = true;
+    setCustomWebinarLinkSlug({ webinarConfig, webinarLinks: state.webinarLinks, room, slug: "ordinary" });
+    const audience = await join(state, "attendee", {
+      userId: "viewer", clientId: "conclave", sessionId: "v", joinMode: "webinar_attendee",
+    }, "ordinary");
+    expect(audience.ack).toHaveBeenCalledWith(expect.objectContaining({ webinarRole: "attendee" }));
+    registerDisconnectHandlers(host.context);
+    await host.peer.handlers.get("disconnect")!(...["client namespace disconnect"] as never[]);
+    await vi.advanceTimersByTimeAsync(config.adminCleanupTimeout + 1);
+    expect(broadcast).toHaveBeenCalledWith("roomEnded", {
+      roomId: room.id, message: NO_HOST_LEFT_MESSAGE, endedBy: "server",
+    });
+    expect(disconnectRoom).toHaveBeenCalled();
+    expect(state.rooms.has(room.channelId)).toBe(false);
+  });
+
   it("sends attendees to the scheduled webinar even if another room bound its code", async () => {
     const state = makeState();
     const now = Date.now();

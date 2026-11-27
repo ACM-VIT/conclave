@@ -5,19 +5,14 @@ import {
 import { resolveSfuSecret, resolveSfuUrl } from "@/lib/sfu-admin-auth";
 import { resolveSfuUrls } from "@/lib/sfu-url";
 import { readResponseError } from "@/app/lib/utils";
+import {
+  fetchPublicScheduledMeeting,
+  isSfuTooOldForBookings,
+  type PublicScheduledMeeting,
+} from "./scheduled-meeting-lookup";
 import type { RoomDestination } from "@/lib/meeting-links";
 
-export interface PublicScheduledMeeting {
-  id: string;
-  roomCode: string;
-  title: string;
-  hostName: string;
-  scheduledStartAt: number;
-  scheduledEndAt: number;
-  status: "scheduled" | "live" | "ended" | "cancelled";
-  startedAt: number | null;
-  endedAt: number | null;
-}
+export type { PublicScheduledMeeting };
 
 const scheduledMeetingsBase = (sfuUrl: string): string =>
   `${sfuUrl.replace(/\/$/, "")}/scheduled-meetings`;
@@ -53,41 +48,15 @@ export type ScheduledMeetingLookup =
 // short deadline. An SFU that has not answered by then counts as failed.
 const LOOKUP_DEADLINE_MS = 2500;
 
-// `null` is the SFU saying no meeting is scheduled at this code. A failed
-// lookup throws, so it is never read as that answer.
-const fetchPublicScheduledMeeting = async (
-  sfuUrl: string,
-  clientId: string,
-  roomCode: string,
-  signal: AbortSignal,
-): Promise<PublicScheduledMeeting | null> => {
-  const url = `${scheduledMeetingsBase(sfuUrl)}/public/by-room/${encodeURIComponent(roomCode)}?clientId=${encodeURIComponent(clientId)}`;
-  const response = await fetch(url, {
-    method: "GET",
-    headers: {
-      "x-sfu-secret": resolveSfuSecret(),
-      accept: "application/json",
-    },
-    cache: "no-store",
-    signal,
-  });
-  if (response.status === 404) return null;
-  if (!response.ok) {
-    throw new Error(`Scheduled meeting lookup failed (${response.status})`);
-  }
-  const data = (await response.json()) as {
-    scheduledMeeting?: PublicScheduledMeeting;
-  };
-  return data?.scheduledMeeting ?? null;
-};
-
 export const lookupScheduledMeetingForCode = async (
   { roomCode, clientId }: RoomDestination,
 ): Promise<ScheduledMeetingLookup> => {
   const deadline = AbortSignal.timeout(LOOKUP_DEADLINE_MS);
   const sfuUrls = resolveSfuUrls();
   const results = await Promise.allSettled(
-    sfuUrls.map((sfuUrl) => fetchPublicScheduledMeeting(sfuUrl, clientId, roomCode, deadline)),
+    sfuUrls.map((sfuUrl) =>
+      fetchPublicScheduledMeeting(scheduledMeetingsBase(sfuUrl), resolveSfuSecret(), clientId, roomCode, deadline),
+    ),
   );
   for (const [index, result] of results.entries()) {
     if (result.status === "fulfilled" && result.value) {
@@ -98,6 +67,13 @@ export const lookupScheduledMeetingForCode = async (
         meeting: result.value,
       };
     }
+  }
+  const [first] = results;
+  if (
+    first?.status === "rejected" &&
+    results.every((result) => result.status === "rejected" && isSfuTooOldForBookings(result.reason))
+  ) {
+    throw first.reason;
   }
   return results.some((result) => result.status === "rejected")
     ? { kind: "unknown" }

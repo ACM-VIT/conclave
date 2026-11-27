@@ -51,8 +51,13 @@ const getUnconfirmedRoomLeases = (state: SfuState): Set<string> => {
   return channelIds;
 };
 
-export const hasUnconfirmedRoomLeases = (state: SfuState): boolean =>
-  getUnconfirmedRoomLeases(state).size > 0;
+export const hasUnconfirmedRoomLeases = (state: SfuState): boolean => {
+  if (getUnconfirmedRoomLeases(state).size > 0) return true;
+  for (const held of state.deferredRoomWrites.values()) {
+    if (held.releaseAfter) return true;
+  }
+  return false;
+};
 
 const keepRoomWithoutConfirmedLease = (state: SfuState, room: Room): void => {
   if (!isCurrentRoom(state, room)) return;
@@ -365,8 +370,6 @@ const renewForConfirmation = (state: SfuState, room: LeasedRoom): Promise<boolea
         const current = state.rooms.get(room.channelId);
         if (error instanceof RoomLeaseExpiredError && current === room) {
           keepRoomWithoutConfirmedLease(state, current);
-        } else if (!current && state.deferredRoomWrites.get(room.channelId)?.room === room) {
-          dropHeld(state, room.channelId, "lost");
         }
         return false;
       },
@@ -874,6 +877,11 @@ export const cleanupRoom = (state: SfuState, room: Room): boolean => {
 };
 
 export const renewRoomOwnerships = async (state: SfuState): Promise<void> => {
+  for (const held of state.deferredRoomWrites.values()) {
+    if (held.releaseAfter) {
+      runDetached("Confirming a closed room's lease", () => renewForConfirmation(state, held.room));
+    }
+  }
   const rooms = Array.from(state.rooms.values());
   for (const room of rooms) {
     // An earlier room's renewal can take a while. A room that closed in the

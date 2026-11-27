@@ -17,8 +17,8 @@ vi.mock("@/app/lib/utils", () => ({ readResponseError: async () => "Unavailable"
 vi.mock("@/lib/sfu-client-id", () => import("../src/lib/sfu-client-id"));
 
 const destination = { clientId: "conclave", roomCode: "abc-mnop-xyz" };
-const meeting = { id: "m1", roomCode: "abc-mnop-xyz", status: "scheduled" };
-const notFound = () => Response.json({ error: "Scheduled meeting not found" }, { status: 404 });
+const meeting = { id: "m1", clientId: "conclave", roomCode: "abc-mnop-xyz", status: "scheduled" };
+const notFound = () => Response.json({ scheduledMeeting: null });
 
 // An SFU that accepts the request and then goes quiet, either before it
 // answers at all or part way through the reply.
@@ -121,6 +121,23 @@ describe("looking up whether a link is a scheduled meeting", () => {
     expect(await lookupScheduledMeetingForCode(destination)).toEqual({
       kind: "unscheduled",
     });
+  });
+
+  it("does not accept a scheduled meeting for a mismatched tenant", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      Response.json({ scheduledMeeting: { ...meeting, clientId: "acme" } })));
+    expect(await lookupScheduledMeetingForCode(destination)).toEqual({ kind: "unscheduled" });
+  });
+
+  it("uses the current route on all SFUs and distinguishes missing routes from empty results", async () => {
+    sfuUrls = ["http://sfu-a.test", "http://sfu-b.test"];
+    const request = vi.fn(async (_url: string) => new Response(null, { status: 404 }));
+    vi.stubGlobal("fetch", request);
+    await expect(lookupScheduledMeetingForCode(destination)).rejects.toMatchObject({ name: "SfuTooOldForBookingsError" });
+    expect(request.mock.calls.map(([url]) => new URL(url).pathname)).toEqual([
+      "/scheduled-meetings/public/v2/by-room/abc-mnop-xyz",
+      "/scheduled-meetings/public/v2/by-room/abc-mnop-xyz",
+    ]);
   });
 
   it("does not look for a booking in other tenants", async () => {

@@ -44,6 +44,8 @@ class OpenAiRealtimeTranscriptionSession implements LiveTranscriptionSession {
     this.socket.send(JSON.stringify({ type: "input_audio_buffer.clear" }));
   }
 
+  finishAudio(): void {}
+
   close(): void {
     this.closed = true;
     try {
@@ -80,9 +82,12 @@ class OpenAiRealtimeTranscriptionSession implements LiveTranscriptionSession {
       return;
     }
     if (event.type === "conversation.item.input_audio_transcription.failed") {
-      await this.callbacks.onFailure(
-        event.error?.message || "Realtime input audio transcription failed.",
-      );
+      const message = event.error?.message || "Realtime input audio transcription failed.";
+      if (event.item_id && this.callbacks.onItemFailed) {
+        await this.callbacks.onItemFailed(event.item_id, message);
+      } else {
+        await this.callbacks.onFailure(message);
+      }
       return;
     }
     if (event.type === "input_audio_buffer.committed" && event.item_id) {
@@ -135,7 +140,7 @@ export const connectOpenAiRealtimeTranscription = async (
 
   const transcription = buildRealtimeTranscriptionConfig({
     model: options.transcriptModel,
-    language: options.language,
+    language: options.providerLanguage ?? options.language,
     delay: options.delay,
     locale: options.locale,
     localizationPrompt: options.localizationPrompt,

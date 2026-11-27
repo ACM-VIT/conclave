@@ -13,6 +13,7 @@ import type { HostBasis, Room, SettledWaitingRequest, WaitingRequest } from "../
 import type { AppsAwarenessData } from "../../types.js";
 import { isGuestUserKey } from "../identity.js";
 import { cleanupRoom, forceCloseRoom, getRoomChannelId, markRoomEnded } from "../rooms.js";
+import { getScheduledWebinarForRoom, hasWebinarEnded, isWithinEarlyEntryWindow } from "../scheduledWebinars.js";
 import type { SfuState } from "../state.js";
 import {
   emitWebinarAttendeeCountChanged,
@@ -278,7 +279,7 @@ export const ensureHost = (
     const promoted = promoteNextAdmin(room);
     if (!promoted) {
       tellWaitingNoHost(room);
-      room.startCleanupTimer(() => {
+      const checkForHost = () => {
         if (state.rooms.get(room.channelId) !== room || room.hasActiveAdmin()) return;
         if (room.isEmpty()) {
           cleanupRoom(state, room);
@@ -296,8 +297,20 @@ export const ensureHost = (
           });
           return;
         }
+        const webinar = getScheduledWebinarForRoom(state.scheduledWebinars, room.clientId, room.id);
+        const now = Date.now();
+        if (
+          room.getWebinarAttendeeCount() > 0 &&
+          webinar &&
+          !hasWebinarEnded(webinar, now) &&
+          (webinar.status === "live" || isWithinEarlyEntryWindow(webinar, now))
+        ) {
+          room.startCleanupTimer(checkForHost);
+          return;
+        }
         endForNoHost(io, state, room);
-      });
+      };
+      room.startCleanupTimer(checkForHost);
     }
   }
   peers.emit("hostChanged", {

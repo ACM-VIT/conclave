@@ -112,6 +112,22 @@ describe("retrying failed media devices", () => {
     expect(calls).toEqual(["turn on microphone", "recovered camera"]);
   });
 
+  it("asks for no further device once the call has ended", async () => {
+    const { calls, on } = setup({ microphone: false, camera: false });
+    let ended = false;
+    await retryFailedMediaDevices({
+      device: "both",
+      isOn: (d) => on[d],
+      turnOn: async (d) => {
+        calls.push(`turn on ${d}`);
+        ended = true;
+      },
+      markRecovered: (d) => void calls.push(`recovered ${d}`),
+      callEnded: () => ended,
+    });
+    expect(calls).toEqual(["turn on microphone"]);
+  });
+
   it("only marks a device recovered when it is already live, without requesting it", async () => {
     const { calls, run } = setup({ microphone: true, camera: true });
     await run("both");

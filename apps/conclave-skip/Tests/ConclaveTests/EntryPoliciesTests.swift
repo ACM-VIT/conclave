@@ -76,7 +76,7 @@ struct EntryPoliciesTests {
         #expect(target.allowRoomCreation)
         #expect(EntryPolicies.routeKind(for: EntryPolicies.parseJoinInput("conclave://w/yuki-haz")) == .webinarLanding)
         #expect(EntryPolicies.routeKind(for: target) == .lobby)
-        #expect(EntryPolicies.recentLink(roomId: "rose-sora-luffy", isWebinar: false) == "https://conclave.acmvit.in/rose-sora-luffy")
+        #expect(EntryPolicies.recentLink(roomId: "rose-sora-luffy", isWebinar: false) == "https://conclave.acmvit.in/rose-sora-luffy?clientId=conclave")
         #expect(EntryPolicies.recentLink(roomId: "yuki-haz", isWebinar: true) == "https://conclave.acmvit.in/w/yuki-haz")
     }
 

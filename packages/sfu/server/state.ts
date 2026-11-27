@@ -20,6 +20,7 @@ import {
 } from "./scheduling.js";
 import type { LeasedRoom } from "./roomLease.js";
 import { createRoomRegistry, type RoomRegistry } from "./roomRegistry.js";
+import { createPersistenceFence, type PersistenceFence } from "./persistenceFence.js";
 import {
   createMemoryRoomRecoveryStore,
   createRoomRecoveryLedger,
@@ -67,6 +68,7 @@ export type SfuState = {
   scheduledMeetingPersistence: ScheduledMeetingPersistence | null;
   scheduling: SchedulingStore;
   schedulingPersistence: SchedulingPersistence | null;
+  persistenceFence: PersistenceFence;
   roomRegistry: RoomRegistry;
   deferredRoomWrites: Map<string, DeferredRoomWrites>;
   roomCommitsInFlight: Map<string, Set<Promise<boolean>>>;
@@ -99,6 +101,7 @@ export const createSfuState = (options?: {
     scheduledMeetingPersistence: null,
     scheduling: createSchedulingStore(),
     schedulingPersistence: null,
+    persistenceFence: createPersistenceFence(),
     roomRegistry: options?.roomRegistry ?? createRoomRegistry(config),
     deferredRoomWrites: new Map(),
     roomCommitsInFlight: new Map(),

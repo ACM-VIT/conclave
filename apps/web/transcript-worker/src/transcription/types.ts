@@ -5,6 +5,7 @@ export type LiveTranscriptionCallbacks = {
   onCommitted: (itemId: string) => void;
   onDelta: (itemId: string, delta: string) => void;
   onFinal: (itemId: string, transcript: string) => void | Promise<void>;
+  onItemFailed?: (itemId: string, message: string) => void | Promise<void>;
   onFailure: (message: string) => void | Promise<void>;
 };
 
@@ -13,6 +14,8 @@ export type LiveTranscriptionConnectOptions = {
   apiKey: string;
   transcriptModel: string;
   language: string;
+  languageChosen?: boolean;
+  providerLanguage?: string;
   delay: string;
   locale: string;
   localizationPrompt?: string;
@@ -25,5 +28,6 @@ export interface LiveTranscriptionSession {
   appendAudio(audioBase64: string): void;
   commitAudio(): void;
   clearAudio(): void;
+  finishAudio(): void;
   close(): void;
 }
