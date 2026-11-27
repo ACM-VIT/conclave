@@ -3,8 +3,10 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { openControlPlane } from "../server/controlPlane/open.js";
 import { startCaseSfu, warmCaseModules, type CaseReply, type CaseSfu } from "./support/caseHarness.js";
 import { EMAIL_WORKER_URL, FakeEmail, FakeGoogle, Gates, installFakeFetch } from "./support/fakeServices.js";
+import { legacyMeeting } from "./support/oldSfu.js";
 import { hasRedis, startRedis, type RedisServer } from "./support/redisServer.js";
 
 type Mode = "sqlite" | "json" | "redis";
@@ -543,6 +545,33 @@ describe.each(sharedModes)("two SFUs on one %s store", (current) => {
 });
 
 describe("a host whose profile is stored under a legacy client of the deployment", () => {
+  it("puts the saved client in the public booking link and Google Calendar event under a different default", async () => {
+    const legacy = await start("A");
+    const { username } = await setUpHost(legacy);
+    expect((await connectCalendar(legacy)).status).toBe(200);
+    await stop(legacy);
+    vi.stubEnv("SFU_CLIENT_ID", "acme");
+    const sfu = await start("B");
+    const booked = await sfu.call("POST", `/scheduling/public/${username}/intro/book`, {
+      startAt: slotAfter(2 * DAY_MS), attendeeName: "Guest", attendeeEmail: "guest@example.test",
+    }, { "x-sfu-client": "acme" });
+
+    expect(booked.status).toBe(201);
+    const booking = field<{ id: string; roomCode: string; meetingLink: string }>(booked, "booking");
+    const saved = await host(sfu, "GET", `/scheduled-meetings/${booking.id}`);
+    expect(saved.body.scheduledMeeting).toMatchObject({ clientId: "conclave" });
+    const link = new URL(booking.meetingLink);
+    const lookupPath = `/scheduled-meetings/public/by-room/${booking.roomCode}`;
+    const defaultHeaders = { "x-sfu-client": "" };
+    expect((await sfu.call("GET", lookupPath, undefined, defaultHeaders)).status).toBe(404);
+    const joined = await sfu.call("GET", `${lookupPath}${link.search}`, undefined, defaultHeaders);
+    const found = field<{ id: string } | undefined>(joined, "scheduledMeeting");
+    expect({ clientId: link.searchParams.get("clientId"), id: found?.id, status: joined.status }).toEqual({
+      clientId: "conclave", id: booking.id, status: 200,
+    });
+    expect(google.created).toEqual([expect.objectContaining({ description: `Join Conclave: ${link.href}` })]);
+  });
+
   it("is busy during meetings created in the deployment's own client, in the slot list and at booking", async () => {
     const legacy = await start("A");
     const { username } = await setUpHost(legacy);
@@ -690,6 +719,58 @@ describe("data saved before stamps existed", () => {
     expect(await stamps(a)).toEqual(await stamps(b));
     expect((await stamps(a)).webinar).toBe(2_000);
   });
+});
+
+it("keeps cleanup for a cancelled imported booking when the original Google grant is unknown", async () => {
+  configure("json");
+  const eventId = "legacy-google-event";
+  const meeting = legacyMeeting("imported-booking", {
+    source: "booking_link", googleCalendarEventId: eventId, calendarSyncStatus: "synced",
+  });
+  const orphan = legacyMeeting("imported-without-profile", {
+    source: "booking_link", googleCalendarEventId: eventId, calendarSyncStatus: "synced", hostEmail: "former-host@example.test",
+  });
+  writeFileSync(join(dir, "scheduled-meetings.json"), JSON.stringify([meeting, orphan]));
+  const originalCalendar = google;
+  originalCalendar.events.set(eventId, { id: eventId, startAt: 4_000_000_000_000, endAt: 4_000_003_600_000, description: "Old event" });
+  const sfu = await start("A");
+  await setUpHost(sfu);
+  expect((await host(sfu, "GET", `/scheduled-meetings/${meeting.id}`)).body.scheduledMeeting).toMatchObject({
+    googleCalendarEventId: eventId, calendarSyncStatus: "synced",
+  });
+  google = new FakeGoogle(gates);
+  expect((await connectCalendar(sfu, "replacement-refresh-token")).status).toBe(200);
+
+  const cancelled = await host(sfu, "POST", `/scheduled-meetings/${meeting.id}/cancel`);
+  expect(cancelled.status).toBe(200);
+  await sfu.drainCalendarTasks();
+  const restarted = await restart(sfu, "B");
+  await restarted.drainCalendarTasks();
+  const health = await restarted.call("GET", "/health");
+  expect({ replacementDeleteAttempts: google.deleteAttempts, cleanup: health.body.calendarTasks }).toEqual({
+    replacementDeleteAttempts: 0, cleanup: { failed: 1 },
+  });
+  expect(originalCalendar.events.has(eventId)).toBe(true);
+  expect(cancelled.body.scheduledMeeting).toMatchObject({
+    status: "cancelled", googleCalendarEventId: null, calendarSyncStatus: "failed",
+  });
+  expect(field<{ calendarSyncError: string }>(cancelled, "scheduledMeeting").calendarSyncError).toBeTruthy();
+  expect((await host(restarted, "DELETE", `/scheduled-meetings/${orphan.id}`, undefined, { "x-user-email": "former-host@example.test" })).status).toBe(200);
+  await restarted.drainCalendarTasks();
+  expect((await restarted.call("GET", "/health")).body.calendarTasks).toEqual({ failed: 2 });
+  await stop(restarted);
+  const store = await openControlPlane(undefined, { importLegacy: false });
+  try {
+    const tasks = await store.read((view) => view.all("calendarTask").map(({ value }) => value));
+    expect(tasks).toHaveLength(2);
+    for (const booking of [meeting, orphan]) {
+      expect(tasks).toContainEqual(expect.objectContaining({
+        meetingId: booking.id, eventId, action: "delete", state: "failed", grantId: "", attempts: 0,
+      }));
+    }
+  } finally {
+    await store.close();
+  }
 });
 
 describe("a store that is not safe to start on", () => {

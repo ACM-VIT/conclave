@@ -21,6 +21,7 @@ export const BOOKING_MOVED = "The booking moved after its calendar event was cre
 
 const TASK_GONE = "This calendar task is finished or no longer exists.";
 const NOT_DUE = "This calendar task is not due or another SFU is running it.";
+const ORIGINAL_GRANT_UNKNOWN = "The original Google Calendar connection is unknown. Remove the event manually.";
 const BASE32HEX = "0123456789abcdefghijklmnopqrstuv";
 
 export const googleEventIdFrom = (entropy: Entropy): string => {
@@ -106,25 +107,22 @@ const profileOfBooking = (tx: TxRead, meeting: ScheduledMeeting): string | null 
 };
 
 export const retireMeetingEvent = (tx: Tx, meeting: ScheduledMeeting): CalendarTask | null => {
-  const tracked = tx.tagged("calendarTask", tags.meetingCalendarTasks(meeting.id)).map(({ value }) => value)
-    .find((task) => task.action === "create");
+  const tasks = tx.tagged("calendarTask", tags.meetingCalendarTasks(meeting.id)).map(({ value }) => value);
+  const tracked = tasks.find((task) => task.action === "create");
   if (tracked?.state === "failed") return toDelete(tx, tracked, true);
   if (tracked?.state === "linked") return toDelete(tx, tracked, false);
   if (tracked) return null;
   const eventId = meeting.googleCalendarEventId;
   if (!eventId) return null;
-  const id = `delete-${eventId}`;
-  const existing = tx.get("calendarTask", id)?.value ?? null;
+  const existing = tasks.find((task) => task.action === "delete" && task.eventId === eventId);
   if (existing) return existing;
-  const profileId = profileOfBooking(tx, meeting);
-  if (!profileId) return null;
   const task: CalendarTask = {
-    id,
+    id: tx.entropy.uuid(),
     action: "delete",
-    state: "open",
+    state: "failed",
     meetingId: meeting.id,
-    profileId,
-    grantId: tx.get("calendar", profileId)?.value.grantId ?? "",
+    profileId: profileOfBooking(tx, meeting) ?? "",
+    grantId: "",
     eventId,
     startAt: meeting.scheduledStartAt,
     endAt: meeting.scheduledEndAt,
@@ -132,7 +130,7 @@ export const retireMeetingEvent = (tx: Tx, meeting: ScheduledMeeting): CalendarT
     timeZone: "UTC",
     attempts: 0,
     nextAttemptAt: tx.now,
-    lastError: null,
+    lastError: ORIGINAL_GRANT_UNKNOWN,
     createdAt: tx.now,
     updatedAt: tx.now,
   };

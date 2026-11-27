@@ -83,7 +83,12 @@ const withAccess = <T>(
 
 const calendarWorkFor = (tx: Tx, before: ScheduledMeeting, after: ScheduledMeeting): ScheduledMeeting => {
   if (after.status === "cancelled" && before.status !== "cancelled") {
-    return retireMeetingEvent(tx, after) ? { ...after, googleCalendarEventId: null } : after;
+    const cleanup = retireMeetingEvent(tx, after);
+    if (!cleanup) return after;
+    const unlinked = { ...after, googleCalendarEventId: null };
+    return cleanup.state === "failed"
+      ? { ...unlinked, calendarSyncStatus: "failed", calendarSyncError: cleanup.lastError }
+      : unlinked;
   }
   if (before.status === "cancelled" && isActiveMeeting(after)) return restoreMeetingEvent(tx, after);
   return after;
