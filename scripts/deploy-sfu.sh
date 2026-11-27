@@ -416,6 +416,7 @@ if [[ "$HAS_REDIS_SERVICE" != "true" && "$HAS_UPSTASH" != "true" && -z "${REDIS_
   echo "REDIS_PASSWORD, REDIS_URL, or SFU_REDIS_URL is required in .env when not using Upstash" >&2
   exit 1
 fi
+HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-120}"
 own_redis_check() {
   local container own svc variable url endpoint password answer start_ts checked=0
   local -a auth
@@ -488,7 +489,6 @@ fi
 
 DRAIN_TIMEOUT_SECONDS="${DRAIN_TIMEOUT_SECONDS:-3600}"
 DRAIN_POLL_SECONDS="${DRAIN_POLL_SECONDS:-10}"
-HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-120}"
 CONTAINER_SETTLE_SECONDS="${CONTAINER_SETTLE_SECONDS:-3}"
 # A placement reserved just before a drain can still turn into a room on that
 # instance until it expires (the SFU's placement TTL is 20 s), so an instance
