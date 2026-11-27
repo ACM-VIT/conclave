@@ -92,6 +92,38 @@ const join = async (
   return { context, peer, ack };
 };
 
+it("acknowledges an overtaken join only once after a schedule read", async () => {
+  const state = makeState();
+  const peer = makeSocket("joining", { userId: "reader", email: "reader@example.test" });
+  registerJoinRoomHandler(createConnectionContext(io, peer.socket, state));
+  const original = state.controlPlane;
+  let captured = () => {};
+  let resume = () => {};
+  const readCaptured = new Promise<void>((resolve) => { captured = resolve; });
+  const hold = new Promise<void>((resolve) => { resume = resolve; });
+  state.controlPlane = {
+    ...original,
+    read: async (query) => {
+      const result = await original.read(query);
+      captured();
+      await hold;
+      return result;
+    },
+  };
+
+  const joinRoom = peer.handlers.get("joinRoom")!;
+  const ack = vi.fn();
+  const first = joinRoom(...[{ roomId: "first-room" }, ack] as never[]);
+  await readCaptured;
+  try {
+    await joinRoom(...[{ roomId: "" }, vi.fn()] as never[]);
+  } finally {
+    resume();
+    await first;
+  }
+  expect(ack.mock.calls).toEqual([[{ error: "A newer join from this connection took over." }]]);
+});
+
 describe("host roster on join", () => {
   it("updates the old room's roster when its host switches rooms on the same socket", async () => {
     const state = makeState();

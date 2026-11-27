@@ -177,6 +177,13 @@ export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChang
       room.setUserIdentity(client.id, client.id, client.id);
       room.demoteToParticipant(client.id);
     },
+    reseat: () => {
+      const id = context.currentClient!.id;
+      room.removeClient(id);
+      const replacement = new Admin({ id, socket: self.socket });
+      room.addClient(replacement);
+      context.currentClient = replacement;
+    },
     lock: () => call<{ success: boolean }>("apps:lock", { locked: true }),
     get refused() {
       return refused();

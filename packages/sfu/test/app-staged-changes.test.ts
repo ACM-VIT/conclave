@@ -41,6 +41,29 @@ const sendChange = (room: Awaited<ReturnType<typeof boardRoom>>, parts: Uint8Arr
   parts.forEach((update, index) => room.send(update, replicaId, { id, index, count: parts.length }));
 
 describe("app changes sent in parts", () => {
+  it("preserves a replacement seat's staged upload when an old check finishes", async () => {
+    const room = await boardRoom("reseated");
+    expect(await room.lock()).toMatchObject({ success: true });
+    room.demote();
+
+    let finish = (_unchanged: boolean) => {};
+    const pending = new Promise<boolean>((resolve) => { finish = resolve; });
+    vi.spyOn(room.room.apps.executor, "changesNothing").mockReturnValueOnce(pending);
+    const old = room.acknowledged({ update: bigChange(new Y.Doc(), 64, "x") });
+    room.reseat();
+    await room.syncFrom(new Y.Doc());
+    const parts = inParts(bigChange(new Y.Doc(), 1024, "y"), 768);
+    const part = { id: "replacement", count: parts.length };
+    await room.acknowledged({ update: parts[0], part: { ...part, index: 0 } }, "replacement");
+
+    finish(false);
+    await old;
+    await room.acknowledged({ update: parts[1], part: { ...part, index: 1 } }, "replacement");
+
+    expect(await settled(room)).toBe("y".repeat(1024));
+    expect(room.refused).toEqual([]);
+  });
+
   it("are offered to new clients in the sync reply", async () => {
     const room = await boardRoom("offer");
 

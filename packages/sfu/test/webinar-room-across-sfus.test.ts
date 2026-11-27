@@ -361,6 +361,52 @@ it.each([
   }
 });
 
+it.each(["cancel", "end", "auto-end"] as const)("does not publish a stale room after %s before its first refresh", async (action) => {
+  const state = sfuOn(createMemoryData(), "concluded-before-first-refresh");
+  const call = await apiOn(state, null);
+  const now = Date.now();
+  const webinar = await created(state, {
+    scheduledStartAt: now - 120 * 60_000,
+    scheduledEndAt: now - 60 * 60_000,
+    linkSlug: "concluded-before-refresh",
+  });
+  const original = state.controlPlane;
+  const started = await original.commit(updateWebinar(webinar.id, { status: "live" }, admin));
+  expect(started.ok).toBe(true);
+
+  let captured = () => {};
+  let resume = () => {};
+  const readCaptured = new Promise<void>((resolve) => { captured = resolve; });
+  const hold = new Promise<void>((resolve) => { resume = resolve; });
+  let first = true;
+  state.controlPlane = {
+    ...original,
+    read: async (query) => {
+      const result = await original.read(query);
+      if (first) {
+        first = false;
+        captured();
+        await hold;
+      }
+      return result;
+    },
+  };
+  const refresh = refreshWebinarRoomConfig(state, webinar, () => {});
+  await readCaptured;
+  try {
+    if (action === "auto-end") {
+      await advanceScheduledWebinars(state, now, () => {});
+    } else {
+      await call("POST", `/scheduled-webinars/${webinar.id}/${action}`);
+    }
+    expect((await original.read(webinarById(webinar.id)))?.status).toBe(action === "cancel" ? "cancelled" : "ended");
+  } finally {
+    resume();
+    await refresh;
+  }
+  expect(roomConfig(state, webinar)).toMatchObject({ enabled: false, locked: true });
+});
+
 it.each(["PATCH", "DELETE"])("reports a committed %s when the publication read is unavailable", async (method) => {
   const state = sfuOn(createMemoryData(), "publication-read-failure");
   const call = await apiOn(state, null);
