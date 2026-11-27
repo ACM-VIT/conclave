@@ -1014,6 +1014,8 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             room,
             userKey,
             config.sfuSecret,
+            // The verified join token names these seats for this room and tab.
+            otherGuestSeats,
           );
         // Recreating a room the SFU lost is restoring a call, not starting
         // one. Its host's seat goes to someone from that call: a host of it,

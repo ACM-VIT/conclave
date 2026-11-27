@@ -1,4 +1,5 @@
 import jwt from "jsonwebtoken";
+import type { OtherGuestSeat } from "@conclave/meeting-core/guest-join-claims";
 import {
   parseRoomRecoveryPassClaims,
   ROOM_RECOVERY_PASS_USE,
@@ -152,12 +153,13 @@ export const provesEarlierRoomMembership = (
   room: RecoveryRoom,
   userKey: string,
   secret: string,
+  formerSeats: readonly OtherGuestSeat[] = [],
 ): boolean => {
   const claims = verifiedClaims(pass, secret);
   return (
     claims !== null &&
     claims.channelId === room.channelId &&
-    claims.userKey === userKey &&
+    (claims.userKey === userKey || formerSeats.some((seat) => seat.userKey === claims.userKey)) &&
     claims.incarnationId !== room.incarnationId &&
     (room.recoveryPassesVoidUntil === null || claims.issuedAtMs > room.recoveryPassesVoidUntil) &&
     (room.recoveryPassGenerations === null || signedUnder(room.recoveryPassGenerations, claims))

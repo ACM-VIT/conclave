@@ -114,16 +114,16 @@ const startSfu = async (kind: StoreKind, localDir = tempDir()): Promise<Sfu> => 
   }
   const persistence = createScheduledMeetingPersistence();
   const meetings = createScheduledMeetingStore();
-  await loadPersistedMeetings(meetings, persistence);
   const sfu = { persistence, meetings };
   running.push(sfu);
+  await loadPersistedMeetings(meetings, persistence);
   return sfu;
 };
 const CODE = "abc-mnop-xyz";
 const INVITEE = "invitee@example.com";
 const isInvited = (sfu: Sfu) =>
   isScheduledMeetingInvitee(sfu.meetings, "conclave", CODE, INVITEE);
-const scheduleIntroCall = async (sfu: Sfu) => {
+const scheduleIntroCall = async (sfu: Sfu, clientId = "conclave") => {
   const meeting = createScheduledMeeting(
     sfu.meetings,
     {
@@ -134,7 +134,7 @@ const scheduleIntroCall = async (sfu: Sfu) => {
       attendeeEmail: INVITEE,
     },
     {
-      clientId: "conclave",
+      clientId,
       createdBy: "host@example.com",
       defaultHostEmail: "host@example.com",
       defaultHostUserId: null,
@@ -511,6 +511,7 @@ describe("an SFU whose Redis holds no meetings yet", () => {
 const openSqlite = (path: string) => {
   const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as {
     DatabaseSync: new (file: string) => {
+      exec: (sql: string) => void;
       prepare: (sql: string) => { get: (...p: unknown[]) => unknown; run: (...p: unknown[]) => unknown };
       close: () => void;
     };
@@ -533,6 +534,79 @@ describe("removed invitees kept inside the meeting, as stores used to keep them"
   };
   const withRemovalInside = (record: string): string =>
     JSON.stringify({ ...(JSON.parse(record) as object), readmissionRequiredEmails: [INVITEE] });
+
+  const extraInvitee = "second@example.com";
+  const handoverSource = async () => {
+    const dir = useStore("json");
+    const source = await startSfu("json");
+    const meeting = await scheduleIntroCall(source);
+    await scheduleIntroCall(source, "other-tenant");
+    await setRemoved(source, true);
+    await source.persistence.setInviteeReadmission?.(meeting.id, extraInvitee, true, Date.now());
+    return { dir, meeting };
+  };
+
+  const expectTenantRemovals = (sfu: Sfu) => {
+    expect(isInvited(sfu)).toBe(false);
+    expect(isScheduledMeetingInvitee(sfu.meetings, "other-tenant", CODE, INVITEE)).toBe(true);
+  };
+
+  it("refuses SQLite handover when a carried removal cannot be written, then retries", async () => {
+    const { dir } = await handoverSource();
+    useStore("sqlite", tempDir());
+    const target = await startSfu("sqlite", dir);
+    const db = openSqlite(join(process.env.SCHEDULED_MEETINGS_SQLITE_PATH!));
+    try {
+      db.exec(`
+        CREATE TRIGGER reject_removal BEFORE INSERT ON scheduled_meeting_removed_invitees
+        WHEN NEW.email = 'second@example.com'
+        BEGIN SELECT RAISE(ABORT, 'removal write refused'); END;
+      `);
+      vi.stubEnv("SCHEDULED_MEETINGS_PATH", join(dir, "scheduled-meetings.json"));
+      await expect(startSfu("sqlite")).rejects.toThrow(/removal write refused/);
+      expect(await target.persistence.load()).toEqual([]);
+      expect(db.prepare("SELECT count(*) AS count FROM scheduled_meeting_removed_invitees").get())
+        .toEqual({ count: 0 });
+      db.exec("DROP TRIGGER reject_removal");
+      expectTenantRemovals(await startSfu("sqlite"));
+      expectTenantRemovals(await startSfu("sqlite"));
+    } finally {
+      db.close();
+    }
+  });
+
+  redisTest("refuses Redis handover when a carried removal cannot be confirmed, then retries", async () => {
+    const { dir, meeting } = await handoverSource();
+    useStore("redis", dir);
+    const client = createClient({ url: process.env.SFU_PERSISTENCE_REDIS_URL });
+    await client.connect();
+    try {
+      const meetingsKey = `${process.env.SFU_PERSISTENCE_REDIS_KEY_PREFIX}:scheduled-meetings`;
+      const movedKey = `${meetingsKey}:removed-invitees-moved`;
+      await client.set(movedKey, "wrong type for a removal write");
+      await expect(startSfu("redis", dir)).rejects.toThrow(/import.*removal/i);
+      expect(await client.hLen(meetingsKey)).toBe(0);
+      await client.del(movedKey);
+
+      // A newer decision in Redis must win when the source is retried.
+      vi.stubEnv("SCHEDULED_MEETINGS_SQLITE_PATH", join(tempDir(), "conclave.sqlite"));
+      const retrying = createScheduledMeetingPersistence();
+      try {
+        expect(await retrying.setInviteeReadmission?.(meeting.id, extraInvitee, false, Date.now() + 1))
+          .toBe(true);
+      } finally {
+        await retrying.close?.();
+      }
+      const reader = await startSfu("redis", dir);
+      expectTenantRemovals(reader);
+      expect(reader.meetings.byId.get(meeting.id)?.readmissionRequiredEmails).toEqual([INVITEE]);
+      const fromAnotherSfu = await startSfu("redis");
+      expectTenantRemovals(fromAnotherSfu);
+      expect(fromAnotherSfu.meetings.byId.get(meeting.id)?.readmissionRequiredEmails).toEqual([INVITEE]);
+    } finally {
+      await client.quit();
+    }
+  });
 
   // An SFU process that moves the JSON file's meetings into its store and is
   // killed the moment it turns from one kind of write to the other: from

@@ -589,6 +589,43 @@ describe("a call whose server lost the room", () => {
     ).toBe("waiting");
   });
 
+  it("recovers an admitted guest when their verified tab switches to another browser pass", async () => {
+    const before = makeState();
+    const opener = await join(before, host);
+    const former = {
+      ...guest,
+      userId: "guest-gp_AAAAAAAAAAAAAAAAAAAAAA",
+      guestProof: "former-browser-pass",
+      guestRoom: "abc-mnop-xyz",
+    };
+    const member = await join(before, former);
+    expect(member.status).toBe("waiting");
+    expect(await send(opener.peer, "admitUser", { userId: former.userId })).toEqual({ success: true });
+    const admitted = await askAgain(member);
+    expect(admitted.status).toBe("joined");
+    expect(admitted.roomRecoveryPass).toBeTypeOf("string");
+
+    const after = await restart(before);
+    expect((await join(after, rejoining(host), {
+      roomRecoveryPass: opener.response.roomRecoveryPass,
+    })).status).toBe("joined");
+    const canonical = {
+      ...former,
+      userId: "guest-gp_BBBBBBBBBBBBBBBBBBBBBB",
+      guestProof: "canonical-browser-pass",
+      guestWas: [{ userKey: former.userId, guestProof: former.guestProof }],
+    };
+    const otherTab = {
+      ...canonical,
+      userId: "guest-gp_CCCCCCCCCCCCCCCCCCCCCC",
+      sessionId: "another-tab",
+      guestWas: [{ userKey: "guest-gp_DDDDDDDDDDDDDDDDDDDDDD", guestProof: former.guestProof }],
+    };
+    const recovery = { roomRecoveryPass: admitted.roomRecoveryPass };
+    expect((await join(after, otherTab, recovery)).status).toBe("waiting");
+    expect((await join(after, canonical, recovery)).status).toBe("joined");
+  });
+
   it("lets a member back in again after a second drop in the recovered meeting", async () => {
     const { before, passes } = await callBeforeRestart();
     const after = await restart(before);

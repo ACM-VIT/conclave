@@ -759,23 +759,6 @@ const replacesDecision = (
 const meetingRecord = (meeting: object): string =>
   JSON.stringify({ ...meeting, readmissionRequiredEmails: undefined });
 
-// Hands a store the meetings read from another one. Their removed invitees
-// go with them: a save alone leaves those behind. They are written first and
-// the meetings last, because a store that holds meetings is taken as moved
-// already: one cut off half way holds no meetings yet, and is moved again
-// the next time the SFU starts.
-const handOver = (
-  store: ScheduledMeetingPersistence,
-  meetings: ScheduledMeeting[],
-): MaybePromise<void> => {
-  for (const meeting of meetings) {
-    for (const email of meeting.readmissionRequiredEmails ?? []) {
-      runDetached("Saving an invitee's removal", () => store.setInviteeReadmission?.(meeting.id, email, true, carriedRemovalAt(meeting)));
-    }
-  }
-  return store.save(meetings);
-};
-
 // Removed invitees as a store lists them, one (meeting, email) pair at a
 // time, gathered by meeting.
 const removedInviteesByMeeting = (
@@ -795,16 +778,22 @@ const textColumn = (row: unknown, column: string): string =>
 
 const createSqliteScheduledMeetingPersistence = (
   path: string = scheduledMeetingsSqlitePath(),
+  readImportSource?: () => ScheduledMeeting[],
 ): ScheduledMeetingPersistence => {
   const dir = dirname(path);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
   const { DatabaseSync } = loadNodeSqlite();
-  return openSqliteStore(new DatabaseSync(path), path, (db) => prepareSqliteScheduledMeetingPersistence(db));
+  return openSqliteStore(new DatabaseSync(path), path, (db) =>
+    prepareSqliteScheduledMeetingPersistence(db, readImportSource),
+  );
 };
 
-const prepareSqliteScheduledMeetingPersistence = (db: SqliteDatabase): ScheduledMeetingPersistence => {
+const prepareSqliteScheduledMeetingPersistence = (
+  db: SqliteDatabase,
+  readImportSource?: () => ScheduledMeeting[],
+): ScheduledMeetingPersistence => {
   db.exec(`
     CREATE TABLE IF NOT EXISTS scheduled_meetings (
       id TEXT PRIMARY KEY,
@@ -971,6 +960,43 @@ const prepareSqliteScheduledMeetingPersistence = (db: SqliteDatabase): Scheduled
       meetingRecord(meeting),
     );
   };
+  const writeInviteeDecision = (id: string, email: string, required: boolean, at: number): void => {
+    decide.run(id, email, at, required ? 0 : 1);
+    markRemovalsMoved.run(id);
+  };
+
+  if (readImportSource) {
+    const selectIds = db.prepare("SELECT id FROM scheduled_meetings");
+    const readIds = () => new Set(selectIds.all().map((row) => textColumn(row, "id")));
+    knownIds = readIds();
+    const imported = knownIds.size === 0 ? readImportSource() : [];
+    if (imported.length > 0) {
+      let migrated = false;
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        // Another SFU may have imported while this one read the source file.
+        knownIds = readIds();
+        if (knownIds.size === 0) {
+          for (const meeting of imported) {
+            for (const email of meeting.readmissionRequiredEmails ?? []) {
+              writeInviteeDecision(meeting.id, email, true, carriedRemovalAt(meeting));
+            }
+          }
+          for (const meeting of imported) upsertMeeting(meeting);
+          knownIds = new Set(imported.map((meeting) => meeting.id));
+          migrated = true;
+        }
+        db.exec("COMMIT");
+      } catch (error) {
+        try {
+          db.exec("ROLLBACK");
+        } catch {}
+        throw error;
+      }
+      if (migrated) Logger.info(`Migrated ${imported.length} scheduled meeting(s) from JSON into SQLite`);
+    }
+  }
+
   const deleteMeeting = (id: string): void => {
     deleteById.run(id);
     forgetRemovedInvitees.run(id);
@@ -1103,8 +1129,7 @@ const prepareSqliteScheduledMeetingPersistence = (db: SqliteDatabase): Scheduled
     setInviteeReadmission: (meetingId, email, required, at, generation) =>
       inTransaction("persist a removed invitee", () => {
         if (isStaleWrite(meetingId, generation)) return false;
-        decide.run(meetingId, email, at, required ? 0 : 1);
-        markRemovalsMoved.run(meetingId);
+        writeInviteeDecision(meetingId, email, required, at);
         return true;
       }),
     endRemovals: (meetingId, endedAt, generation) =>
@@ -1873,48 +1898,59 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     return meeting ? this.withRemovedInvitees(meeting) : null;
   }
 
-  async load(): Promise<ScheduledMeeting[]> {
-    try {
-      await this.start();
-      const values = await this.client.hVals(this.key);
-      if (values.length > 0) {
-        const meetings: ScheduledMeeting[] = [];
-        for (const value of values) {
-          const meeting = await this.readRecord(value);
-          if (meeting) meetings.push(meeting);
-        }
-        const removed = await this.removedInvitees();
-        for (const meeting of meetings) {
-          meeting.readmissionRequiredEmails = removed.get(meeting.id) ?? [];
-        }
-        this.knownMeetings = new Map(
-          meetings.map((meeting) => [meeting.id, meeting]),
-        );
-        return meetings;
-      }
+  private async loadRedisMeetings(): Promise<ScheduledMeeting[] | null> {
+    await this.start();
+    const values = await this.client.hVals(this.key);
+    if (values.length === 0) return null;
+    const meetings: ScheduledMeeting[] = [];
+    for (const value of values) {
+      const meeting = await this.readRecord(value);
+      if (meeting) meetings.push(meeting);
+    }
+    const removed = await this.removedInvitees();
+    for (const meeting of meetings) {
+      meeting.readmissionRequiredEmails = removed.get(meeting.id) ?? [];
+    }
+    return meetings;
+  }
 
-      const fallbackMeetings = await this.fallback.load();
-      this.knownMeetings = new Map(
-        fallbackMeetings.map((meeting) => [meeting.id, meeting]),
-      );
-      if (fallbackMeetings.length > 0) {
-        await handOver(this, fallbackMeetings);
-        Logger.info(
-          `Migrated ${fallbackMeetings.length} scheduled meeting(s) into Redis persistence`,
-        );
+  private async importMeetings(meetings: ScheduledMeeting[]): Promise<void> {
+    // Meeting rows mark the import complete. The next startup can retry any
+    // partial set of decisions because the same timestamp is safe to replay.
+    for (const meeting of meetings) {
+      for (const email of meeting.readmissionRequiredEmails ?? []) {
+        if (!await this.setInviteeReadmission(meeting.id, email, true, carriedRemovalAt(meeting))) {
+          throw new Error(`Failed to import invitee removals for scheduled meeting ${meeting.id}`);
+        }
       }
-      return fallbackMeetings;
+    }
+    await this.save(meetings);
+  }
+
+  async load(): Promise<ScheduledMeeting[]> {
+    let meetings: ScheduledMeeting[] | null;
+    try {
+      meetings = await this.loadRedisMeetings();
     } catch (error) {
       Logger.error(
         "Failed to load scheduled meetings from Redis; falling back to local persistence",
         error,
       );
-      const fallbackMeetings = await this.fallback.load();
-      this.knownMeetings = new Map(
-        fallbackMeetings.map((meeting) => [meeting.id, meeting]),
-      );
-      return fallbackMeetings;
+      meetings = await this.fallback.load();
     }
+    if (meetings === null) {
+      const source = await this.fallback.load();
+      if (source.length === 0) {
+        meetings = [];
+      } else {
+        await this.importMeetings(source);
+        meetings = await this.loadRedisMeetings();
+        if (meetings === null) throw new Error("Scheduled meeting import did not publish any rows");
+        Logger.info(`Migrated ${meetings.length} scheduled meeting(s) into Redis persistence`);
+      }
+    }
+    this.knownMeetings = new Map(meetings.map((meeting) => [meeting.id, meeting]));
+    return meetings;
   }
 
   async flush(): Promise<void> {
@@ -1951,20 +1987,6 @@ const createRedisScheduledMeetingPersistence = (
 ): ScheduledMeetingPersistence =>
   new RedisScheduledMeetingPersistence({ redisUrl, keyPrefix, fallback });
 
-const migrateJsonScheduledMeetingsToSqlite = (
-  sqlite: ScheduledMeetingPersistence,
-  json: ScheduledMeetingPersistence,
-): number => {
-  const existing = sqlite.load() as ScheduledMeeting[];
-  if (existing.length > 0) return 0;
-
-  const legacy = json.load() as ScheduledMeeting[];
-  if (legacy.length === 0) return 0;
-
-  void handOver(sqlite, legacy);
-  return (sqlite.load() as ScheduledMeeting[]).length;
-};
-
 export const createScheduledMeetingPersistence = (): ScheduledMeetingPersistence => {
   const mode = process.env.SCHEDULED_MEETINGS_PERSISTENCE?.trim().toLowerCase();
   if (mode === "json" || mode === "file") {
@@ -1972,19 +1994,12 @@ export const createScheduledMeetingPersistence = (): ScheduledMeetingPersistence
     return createFileScheduledMeetingPersistence();
   }
 
-  const jsonPersistence = createFileScheduledMeetingPersistence();
   const redisUrl = resolveRedisPersistenceUrl();
 
-  const sqlitePersistence = createSqliteScheduledMeetingPersistence();
-  const migrated = migrateJsonScheduledMeetingsToSqlite(
-    sqlitePersistence,
-    jsonPersistence,
+  const sqlitePersistence = createSqliteScheduledMeetingPersistence(
+    scheduledMeetingsSqlitePath(),
+    () => readStoredMeetings(scheduledMeetingsPath()),
   );
-  if (migrated > 0) {
-    Logger.info(
-      `Migrated ${migrated} scheduled meeting(s) from JSON into SQLite`,
-    );
-  }
   if (shouldUseRedisPersistence(mode, redisUrl)) {
     if (!redisUrl) {
       throw new Error(
