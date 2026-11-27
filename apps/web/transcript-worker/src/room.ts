@@ -39,6 +39,8 @@ import {
   TRANSCRIPT_SFU_RELAY_RECOVERY_GRACE_MS,
   TRANSCRIPTION_COMMIT_ACK_TIMEOUT_MS,
   TRANSCRIPTION_CONNECT_TIMEOUT_MS,
+  TRANSCRIPTION_DRAIN_SEQUENCE_BLOCK,
+  TRANSCRIPTION_PROVIDER_DRAIN_MS,
 } from "./constants";
 import {
   signTranscriptSfuRelayStartToken,
@@ -90,6 +92,10 @@ import type {
   Viewer,
 } from "./types";
 import {
+  canTranscribeLanguage,
+  isTranscriptionProviderLanguage,
+  shownTranscriptionLanguage,
+  transcriptionProviderLanguage,
   connectLiveTranscriptionProvider,
   type LiveTranscriptionSession,
 } from "./transcription";
@@ -104,6 +110,7 @@ import {
   json,
   normalizeDelay,
   normalizeLanguage,
+  normalizeRequestId,
   normalizeLocale,
   normalizeModel,
   normalizeRoomIdFromPath,
@@ -130,14 +137,34 @@ const createIdleSession = (roomId: string): TranscriptSessionState => ({
   error: null,
 });
   
+type ProviderDrain = {
+  session: LiveTranscriptionSession;
+  epoch: number;
+  partials: Map<string, TranscriptSegment>;
+  reserved: Map<string, TranscriptSegment>;
+  unfinalizedItems: Set<string>;
+  pendingCommits: number;
+  settlesOnAcks: boolean;
+  speakers: TranscriptSpeakerAttribution;
+  latestSpeaker: TranscriptSpeaker | null;
+  startedAt: number;
+  nextSequence: number;
+  endSequence: number;
+  deadline: ReturnType<typeof setTimeout>;
+};
+
 export class TranscriptRoom {
   private readonly state: DurableObjectState;
   private readonly env: Env;
   private readonly loaded: Promise<void>;
   private readonly viewers = new Map<WebSocket, Viewer>();
   private readonly partialSegments = new Map<string, TranscriptSegment>();
-  private readonly speakerAttribution = new TranscriptSpeakerAttribution();
+  private readonly committedPlaces = new Map<string, { sequence: number; startMs: number }>();
+  private speakerAttribution = new TranscriptSpeakerAttribution();
   private latestSpeaker: TranscriptSpeaker | null = null;
+  private readonly unfinalizedItems = new Set<string>();
+  private audioSinceLastFinal = false;
+  private lastAudioAt = 0;
   private hasPendingAudio = false;
   private pendingAudioSamples = 0;
   private session: TranscriptSessionState | null = null;
@@ -145,12 +172,14 @@ export class TranscriptRoom {
   private segments: TranscriptSegment[] = [];
   private minutes: TranscriptMinutesSnapshot = createEmptyMinutes();
   private sequence = 0;
+  private sessionProviderLanguage: string | undefined;
   private responseApiKey: string | null = null;
   private responseEnvironment: Env | null = null;
   private responseAbort = new AbortController();
   private responseRoute: {sfuUrl: string; identity: {userId: string; roomId: string; clientId: string; channelId: string}} | null = null;
   private personalResponseKeys: Partial<Record<"openai" | "anthropic", string>> = {};
   private transcriptionSession: LiveTranscriptionSession | null = null;
+  private readonly providerDrains = new Map<number, ProviderDrain>();
   private transcriptionConnectionOptions:
     | (PersistedTranscriptionConfig & {
         apiKey: string;
@@ -248,8 +277,10 @@ export class TranscriptRoom {
       globalOpenAiKeyAvailable: this.hasGlobalOpenAiKey(),
       globalProviderKeysAvailable: this.globalProviderKeysAvailable(),
       serviceVersion: this.serviceVersion(),
+      supportsCaptionLanguage: true,
+      captionLanguageDefaults: this.captionLanguageDefaults(),
       segments: this.segments,
-      partials: Array.from(this.partialSegments.values()),
+      partials: this.visiblePartials(),
       minutes: this.minutes,
       minutesStatus: this.minutesStatus,
     });
@@ -336,9 +367,43 @@ export class TranscriptRoom {
       this.minutes.updatedAt ??
       Date.now();
     this.sequence = snapshot.sequence ?? this.segments.length;
+    const { providerLanguage } = this.savedTranscription(snapshot);
+    this.sessionProviderLanguage = providerLanguage;
+    this.session = {
+      ...this.session,
+      language: shownTranscriptionLanguage(providerLanguage),
+      providerLanguage,
+    };
     if (shouldRecoverAutomatically) {
       this.state.waitUntil(this.restorePersistedGlobalSession(snapshot));
     }
+  }
+
+  private savedTranscription(snapshot: PersistedSnapshot) {
+    const provider = getTranscriptTranscriptionProvider(
+      normalizeRealtimeTranscriptModel(snapshot.session.transcriptModel, DEFAULT_TRANSCRIPT_MODEL),
+    );
+    const savedConfig = snapshot.transcriptionConfig;
+    const languageChosen = snapshot.session.language
+      ? snapshot.session.languageChosen === true
+      : savedConfig?.languageChosen === true;
+    const config = {
+      language: normalizeLanguage(
+        (languageChosen
+          ? snapshot.session.language ?? savedConfig?.language
+          : savedConfig?.language) ?? this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE,
+      ),
+      languageChosen,
+      delay: savedConfig?.delay ?? normalizeDelay(undefined),
+      locale:
+        savedConfig?.locale ??
+        normalizeLocale(this.env.TRANSCRIPT_TRANSCRIPTION_LOCALE),
+    };
+    const providerLanguage =
+      snapshot.session.providerLanguage ??
+      snapshot.providerLanguage ??
+      transcriptionProviderLanguage(provider, { ...config, env: this.env });
+    return { config, providerLanguage };
   }
 
   private ensureSession(roomId: string): TranscriptSessionState {
@@ -367,15 +432,15 @@ export class TranscriptRoom {
     if (!transcriptionKey.ok || !responseKey.ok) return;
 
     const wasPaused = snapshot.session.status === "paused";
-    const config = snapshot.transcriptionConfig ?? {
-      language: normalizeLanguage(this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE),
-      delay: normalizeDelay(undefined),
-      locale: normalizeLocale(this.env.TRANSCRIPT_TRANSCRIPTION_LOCALE),
-    };
+    const { config, providerLanguage } = this.savedTranscription(snapshot);
+    this.sessionProviderLanguage = providerLanguage;
     this.responseApiKey = responseKey.apiKey;
     this.session = {
       ...snapshot.session,
       status: "starting",
+      language: shownTranscriptionLanguage(providerLanguage),
+      providerLanguage,
+      languageChosen: config.languageChosen,
       updatedAt: Date.now(),
       error: null,
     };
@@ -384,6 +449,7 @@ export class TranscriptRoom {
         apiKey: transcriptionKey.apiKey,
         transcriptModel,
         ...config,
+        providerLanguage,
         localizationPrompt: this.env.TRANSCRIPT_TRANSCRIPTION_PROMPT,
       });
       this.audioPaused = wasPaused;
@@ -521,10 +587,24 @@ export class TranscriptRoom {
     return getTranscriptServiceVersion(this.env);
   }
 
-  private sendError(viewer: Viewer, message: string): void {
+  private captionLanguageDefaults(): Record<"openai" | "sarvam", string> {
+    const unpicked = {
+      language: normalizeLanguage(this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE),
+      languageChosen: false,
+      locale: normalizeLocale(this.env.TRANSCRIPT_TRANSCRIPTION_LOCALE),
+      env: this.env,
+    };
+    return {
+      openai: transcriptionProviderLanguage("openai", unpicked),
+      sarvam: transcriptionProviderLanguage("sarvam", unpicked),
+    };
+  }
+
+  private sendError(viewer: Viewer, message: string, requestId?: string): void {
     this.send(viewer.socket, {
       type: "error",
       message: redactSensitiveText(message),
+      ...(requestId ? { requestId } : {}),
     });
   }
 
@@ -556,7 +636,11 @@ export class TranscriptRoom {
       rateBucket &&
       !takeTranscriptRateLimit(viewer.rateLimits, rateBucket)
     ) {
-      this.sendError(viewer, "Transcript message rate limit exceeded.");
+      this.sendError(
+        viewer,
+        "Transcript message rate limit exceeded.",
+        normalizeRequestId((message as { requestId?: unknown }).requestId),
+      );
       return;
     }
 
@@ -612,8 +696,10 @@ export class TranscriptRoom {
           globalOpenAiKeyAvailable: this.hasGlobalOpenAiKey(),
           globalProviderKeysAvailable: this.globalProviderKeysAvailable(),
           serviceVersion: this.serviceVersion(),
+          supportsCaptionLanguage: true,
+          captionLanguageDefaults: this.captionLanguageDefaults(),
           segments: this.segments,
-          partials: Array.from(this.partialSegments.values()),
+          partials: this.visiblePartials(),
           minutes: this.minutes,
           minutesStatus: this.minutesStatus,
         });
@@ -785,6 +871,8 @@ export class TranscriptRoom {
   ): Promise<void> {
     const existingStatus = this.session?.status ?? "idle";
     const takeover = message.type === "session.takeover";
+    const requestId = normalizeRequestId(message.requestId);
+    const refuse = (text: string) => this.sendError(viewer, text, requestId);
     const permission = resolveTranscriptStartPermission({
       canStart: viewer.capabilities.start,
       canTakeover: viewer.capabilities.takeover,
@@ -794,7 +882,7 @@ export class TranscriptRoom {
       viewerUserId: viewer.userId,
     });
     if (!permission.ok) {
-      this.sendError(viewer, permission.message);
+      refuse(permission.message);
       return;
     }
 
@@ -836,7 +924,7 @@ export class TranscriptRoom {
         usesRoomKey = providers.some((provider) => Boolean(getProviderApiKey(roomEnv, provider)));
       } catch (error) {
         console.warn("[Transcript] room AI lookup failed:", JSON.stringify(describeRoomAiLookupFailure(error)));
-        this.sendError(viewer, "Room AI settings could not be loaded. Please reconnect and try again.");
+        refuse("Room AI settings could not be loaded. Please reconnect and try again.");
         return;
       }
       if (
@@ -844,10 +932,7 @@ export class TranscriptRoom {
         !this.viewers.has(viewer.socket) ||
         (this.session?.status ?? "idle") !== existingStatus
       ) {
-        this.sendError(
-          viewer,
-          "Notes changed while connecting. Please try again.",
-        );
+        refuse("Notes changed while connecting. Please try again.");
         return;
       }
     }
@@ -856,7 +941,7 @@ export class TranscriptRoom {
     transcriptionProvider = getTranscriptTranscriptionProvider(transcriptModel);
     qaModel = featureSettings.questions?.model ?? qaModel;
     if (!resolveAiFeatureSettings(effectiveEnv, "transcription").enabled) {
-      this.sendError(viewer, "Transcription is disabled in Room AI settings.");
+      refuse("Transcription is disabled in Room AI settings.");
       return;
     }
     const transcriptionKey = this.resolveTranscriptionKey(
@@ -865,7 +950,7 @@ export class TranscriptRoom {
       effectiveEnv,
     );
     if (!transcriptionKey.ok) {
-      this.sendError(viewer, transcriptionKey.message);
+      refuse(transcriptionKey.message);
       return;
     }
     const personalResponseKeys: typeof this.personalResponseKeys = {};
@@ -887,13 +972,59 @@ export class TranscriptRoom {
       const settings = resolveAiFeatureSettings(feature === "minutes" && separateTextProfiles ? effectiveEnv : {...effectiveEnv, CONCLAVE_ASSISTANT_MODEL: qaModel}, feature);
       if (!settings.enabled) continue;
       const key = this.resolveResponseKey(settings.model, transcriptionProvider, message.apiKey, personalResponseKeys[getResponseProvider(settings.model)], effectiveEnv);
-      if (!key.ok) { this.sendError(viewer, key.message); return; }
+      if (!key.ok) { refuse(key.message); return; }
     }
+
+    const providerEnv = { ...this.env, ...effectiveEnv };
+    const deploymentLanguage = normalizeLanguage(
+      this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE,
+    );
+    const keepsPick =
+      message.language === undefined && takeover && this.session?.languageChosen === true;
+    const pickedLanguage = message.language || (keepsPick ? this.session?.language : undefined);
+    const requestedLanguage = normalizeLanguage(pickedLanguage || deploymentLanguage);
+    const requestedLanguageChosen = Boolean(pickedLanguage);
+    const canCaption = canTranscribeLanguage(
+      transcriptionProvider,
+      requestedLanguage,
+      requestedLanguageChosen,
+      providerEnv,
+    );
+    if (!canCaption && message.language) {
+      refuse("This room's transcription model can't caption in that language.");
+      return;
+    }
+    const locale = normalizeLocale(this.env.TRANSCRIPT_TRANSCRIPTION_LOCALE);
+    const sentProviderLanguage = message.providerLanguage?.trim();
+    if (
+      sentProviderLanguage &&
+      !isTranscriptionProviderLanguage(transcriptionProvider, sentProviderLanguage)
+    ) {
+      refuse("This room's transcription model can't caption in that language.");
+      return;
+    }
+    const keepsSessionCode =
+      takeover && Boolean(sentProviderLanguage) && sentProviderLanguage === this.session?.providerLanguage;
+    const language = sentProviderLanguage
+      ? normalizeLanguage(sentProviderLanguage)
+      : canCaption ? requestedLanguage : deploymentLanguage;
+    const languageChosen = sentProviderLanguage
+      ? message.language !== null &&
+        (Boolean(message.language) || (keepsSessionCode && this.session?.languageChosen === true))
+      : canCaption && requestedLanguageChosen;
+    const providerLanguage =
+      sentProviderLanguage ??
+      transcriptionProviderLanguage(transcriptionProvider, {
+        language,
+        languageChosen,
+        locale,
+        env: providerEnv,
+      });
 
     this.responseAbort.abort();
     this.responseAbort = new AbortController();
     const acceptedRevision = ++this.sessionRevision;
-    this.responseEnvironment = { ...this.env, ...effectiveEnv };
+    this.responseEnvironment = providerEnv;
     const transportMode = normalizeTransportMode(message.transportMode);
     const wasIdle = existingStatus === "idle" || existingStatus === "error";
     this.responseApiKey = responseKey.ok ? responseKey.apiKey : null;
@@ -912,6 +1043,10 @@ export class TranscriptRoom {
       transcriptModel,
       qaModel,
       transportMode,
+      language: shownTranscriptionLanguage(providerLanguage),
+      providerLanguage,
+      languageChosen,
+      requestId,
       keySource:
         !usesRoomKey && transcriptionKey.source === "global" && (!responseKey.ok || responseKey.source === "global")
           ? "global"
@@ -920,6 +1055,8 @@ export class TranscriptRoom {
       updatedAt: now,
       error: null,
     };
+    this.sessionProviderLanguage = providerLanguage;
+    if (!wasIdle) this.drainTranscriptionProvider();
     this.resetTranscriptionAudioState();
     this.audioPaused = false;
     this.resetMinutesScheduler(!wasIdle);
@@ -935,15 +1072,13 @@ export class TranscriptRoom {
 
     if (acceptedRevision !== this.sessionRevision) return;
     try {
-      const language = normalizeLanguage(
-        message.language ?? this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE,
-      );
       const delay = normalizeDelay(message.delay);
-      const locale = normalizeLocale(this.env.TRANSCRIPT_TRANSCRIPTION_LOCALE);
       await this.connectTranscriptionProvider({
         apiKey: transcriptionKey.apiKey,
         transcriptModel,
         language,
+        languageChosen,
+        providerLanguage,
         delay,
         locale,
         localizationPrompt: this.env.TRANSCRIPT_TRANSCRIPTION_PROMPT,
@@ -1023,6 +1158,7 @@ export class TranscriptRoom {
     this.cancelControllerReconnect();
     this.cancelSfuRelayRecovery();
     this.closeTranscriptionProvider();
+    this.discardProviderDrains();
     const roomId = this.session?.roomId || "unknown";
     this.responseApiKey = null;
     this.responseAbort.abort();
@@ -1050,6 +1186,8 @@ export class TranscriptRoom {
       globalOpenAiKeyAvailable: this.hasGlobalOpenAiKey(),
       globalProviderKeysAvailable: this.globalProviderKeysAvailable(),
       serviceVersion: this.serviceVersion(),
+      supportsCaptionLanguage: true,
+      captionLanguageDefaults: this.captionLanguageDefaults(),
       segments: [],
       partials: [],
       minutes: this.minutes,
@@ -1170,6 +1308,8 @@ export class TranscriptRoom {
       this.transcriptionSession.appendAudio(audio);
       this.transcriptionReplayJournal.append(audio, speaker, sampleCount);
       this.latestSpeaker = speaker;
+      this.audioSinceLastFinal = true;
+      this.lastAudioAt = Date.now();
       this.hasPendingAudio = true;
       this.pendingAudioSamples += sampleCount;
       return true;
@@ -1379,6 +1519,8 @@ export class TranscriptRoom {
     apiKey: string;
     transcriptModel: string;
     language: string;
+    languageChosen?: boolean;
+    providerLanguage?: string;
     delay: string;
     locale: string;
     localizationPrompt?: string;
@@ -1436,6 +1578,8 @@ export class TranscriptRoom {
     apiKey: string;
     transcriptModel: string;
     language: string;
+    languageChosen?: boolean;
+    providerLanguage?: string;
     delay: string;
     locale: string;
     localizationPrompt?: string;
@@ -1455,20 +1599,39 @@ export class TranscriptRoom {
           onCommitted: (itemId) => {
             if (epoch === this.transcriptionConnectionEpoch) {
               this.handleTranscriptItemCommitted(itemId);
+              return;
             }
+            const drain = this.providerDrains.get(epoch);
+            if (drain) this.applyDrainedCommit(drain, itemId);
           },
           onDelta: (itemId, delta) => {
             if (epoch === this.transcriptionConnectionEpoch) {
               this.applyTranscriptDelta(itemId, delta);
+              return;
             }
+            const drain = this.providerDrains.get(epoch);
+            if (drain) this.applyDrainedDelta(drain, itemId, delta);
           },
           onFinal: (itemId, transcript) => {
-            if (epoch !== this.transcriptionConnectionEpoch) return;
-            return this.applyTranscriptFinal(itemId, transcript);
+            if (epoch === this.transcriptionConnectionEpoch) {
+              return this.applyTranscriptFinal(itemId, transcript);
+            }
+            const drain = this.providerDrains.get(epoch);
+            if (drain) return this.applyDrainedFinal(drain, itemId, transcript);
+          },
+          onItemFailed: (itemId) => {
+            if (epoch === this.transcriptionConnectionEpoch) {
+              return this.applyTranscriptFinal(itemId, "");
+            }
+            const drain = this.providerDrains.get(epoch);
+            if (drain) return this.applyDrainedFinal(drain, itemId, "");
           },
           onFailure: (message) => {
-            if (epoch !== this.transcriptionConnectionEpoch) return;
-            return this.handleTranscriptionFailure(message);
+            if (epoch === this.transcriptionConnectionEpoch) {
+              return this.handleTranscriptionFailure(message);
+            }
+            const drain = this.providerDrains.get(epoch);
+            if (drain) return this.finishProviderDrain(drain);
           },
         },
       });
@@ -1498,9 +1661,207 @@ export class TranscriptRoom {
     } catch {}
   }
 
+  private drainTranscriptionProvider(): void {
+    const session = this.transcriptionSession;
+    if (!session) return;
+    if (this.hasPendingAudio && this.latestSpeaker) {
+      this.commitTranscriptionBuffer(
+        this.latestSpeaker,
+        "Transcript audio commit failed.",
+        false,
+      );
+    }
+    const now = Date.now();
+    const settlesOnAcks = session.provider === "openai";
+    const owesWork = settlesOnAcks
+      ? this.partialSegments.size > 0 ||
+        this.unfinalizedItems.size > 0 ||
+        this.pendingTranscriptionCommitAcks.length > 0 ||
+        this.audioSinceLastFinal
+      : this.partialSegments.size > 0 ||
+        now - this.lastAudioAt < TRANSCRIPTION_PROVIDER_DRAIN_MS;
+    if (!owesWork) return;
+    try {
+      session.finishAudio();
+    } catch {}
+    const epoch = this.transcriptionConnectionEpoch;
+    const firstSequence = this.sequence;
+    this.sequence += TRANSCRIPTION_DRAIN_SEQUENCE_BLOCK;
+    const drainMs = settlesOnAcks
+      ? TRANSCRIPTION_PROVIDER_DRAIN_MS
+      : Math.max(0, this.lastAudioAt + TRANSCRIPTION_PROVIDER_DRAIN_MS - now);
+    const drain: ProviderDrain = {
+      session,
+      epoch,
+      partials: new Map(this.partialSegments),
+      reserved: new Map(),
+      unfinalizedItems: new Set(this.unfinalizedItems),
+      pendingCommits: this.pendingTranscriptionCommitAcks.length,
+      settlesOnAcks,
+      speakers: this.speakerAttribution,
+      latestSpeaker: this.latestSpeaker,
+      startedAt: now,
+      nextSequence: firstSequence,
+      endSequence: this.sequence,
+      deadline: setTimeout(() => void this.finishProviderDrain(drain), drainMs),
+    };
+    for (const itemId of drain.unfinalizedItems) {
+      if (!drain.partials.has(itemId)) {
+        this.reserveDrainedSegment(drain, itemId, this.committedPlaces.get(itemId));
+      }
+    }
+    this.providerDrains.set(epoch, drain);
+    this.transcriptionSession = null;
+    this.speakerAttribution = new TranscriptSpeakerAttribution();
+    this.partialSegments.clear();
+  }
+
+  private discardProviderDrain(drain: ProviderDrain): TranscriptSegment[] {
+    if (this.providerDrains.get(drain.epoch) !== drain) return [];
+    this.providerDrains.delete(drain.epoch);
+    clearTimeout(drain.deadline);
+    try {
+      drain.session.close();
+    } catch {}
+    return Array.from(drain.partials.values());
+  }
+
+  private discardProviderDrains(): void {
+    for (const drain of Array.from(this.providerDrains.values())) {
+      this.discardProviderDrain(drain);
+    }
+  }
+
+  private async finishProviderDrain(drain: ProviderDrain): Promise<void> {
+    if (this.providerDrains.get(drain.epoch) !== drain) return;
+    let saved = false;
+    for (const segment of drain.partials.values()) {
+      if (this.hasFinalSegment(segment.itemId)) continue;
+      saved = this.recordFinalSegment(segment, "") || saved;
+    }
+    this.discardProviderDrain(drain);
+    if (saved) {
+      await this.persist();
+      this.scheduleMinutes();
+    }
+  }
+
+  private segmentsForSnapshot(): TranscriptSegment[] {
+    const draining = this.drainedPartials()
+      .filter(({ itemId, text }) => text.trim() && !this.hasFinalSegment(itemId))
+      .map((segment) => ({ ...segment, isFinal: true, endMs: segment.updatedAt }));
+    if (draining.length === 0) return this.segments;
+    return [...this.segments, ...draining].sort(
+      (left, right) => left.sequence - right.sequence,
+    );
+  }
+
+  private hasFinalSegment(itemId: string): boolean {
+    return this.segments.some((segment) => segment.itemId === itemId);
+  }
+
+  private drainedPartials(): TranscriptSegment[] {
+    return Array.from(this.providerDrains.values()).flatMap((drain) =>
+      Array.from(drain.partials.values()),
+    );
+  }
+
+  private visiblePartials(): TranscriptSegment[] {
+    return [...this.partialSegments.values(), ...this.drainedPartials()];
+  }
+
+  private reserveDrainedSegment(
+    drain: ProviderDrain,
+    itemId: string,
+    committedPlace?: { sequence: number; startMs: number },
+  ): TranscriptSegment {
+    const place = committedPlace ?? {
+      sequence:
+        drain.nextSequence < drain.endSequence
+          ? drain.nextSequence++
+          : this.sequence++,
+      startMs: drain.startedAt,
+    };
+    const segment = this.createSegment(
+      itemId,
+      drain.speakers.getItemSpeaker(itemId) ??
+        drain.speakers.peekPendingSpeaker() ??
+        drain.latestSpeaker ??
+        this.controllerSpeaker(),
+      place,
+    );
+    drain.reserved.set(itemId, segment);
+    return segment;
+  }
+
+  private drainedSegment(drain: ProviderDrain, itemId: string): TranscriptSegment {
+    return (
+      drain.partials.get(itemId) ??
+      this.segments.find((segment) => segment.itemId === itemId) ??
+      drain.reserved.get(itemId) ??
+      this.reserveDrainedSegment(drain, itemId)
+    );
+  }
+
+  private applyDrainedCommit(drain: ProviderDrain, itemId: string): void {
+    drain.pendingCommits = Math.max(0, drain.pendingCommits - 1);
+    drain.speakers.bindCommittedItem(itemId);
+    drain.unfinalizedItems.add(itemId);
+    if (!drain.partials.has(itemId) && !drain.reserved.has(itemId)) {
+      this.reserveDrainedSegment(drain, itemId);
+    }
+  }
+
+  private applyDrainedDelta(
+    drain: ProviderDrain,
+    itemId: string,
+    delta: string,
+  ): void {
+    if (this.hasFinalSegment(itemId)) return;
+    const segment = this.drainedSegment(drain, itemId);
+    const now = Date.now();
+    const next: TranscriptSegment = {
+      ...segment,
+      text: `${segment.text}${delta}`,
+      updatedAt: now,
+    };
+    drain.partials.set(itemId, next);
+    void this.persist();
+    this.broadcast({
+      type: "segment.delta",
+      delta: this.toSegmentDelta(next, delta, now),
+    });
+  }
+
+  private async applyDrainedFinal(
+    drain: ProviderDrain,
+    itemId: string,
+    transcript: string,
+  ): Promise<void> {
+    const segment = this.drainedSegment(drain, itemId);
+    drain.partials.delete(itemId);
+    drain.reserved.delete(itemId);
+    drain.unfinalizedItems.delete(itemId);
+    this.settleProviderDrain(drain);
+    await this.saveFinalSegment(segment, transcript);
+  }
+
+  private settleProviderDrain(drain: ProviderDrain): void {
+    if (!drain.settlesOnAcks) return;
+    const owesNothing =
+      drain.partials.size === 0 &&
+      drain.unfinalizedItems.size === 0 &&
+      drain.pendingCommits === 0;
+    if (owesNothing) this.discardProviderDrain(drain);
+  }
+
   private resetTranscriptionAudioState(): void {
     const hadPartials = this.partialSegments.size > 0;
     this.partialSegments.clear();
+    this.committedPlaces.clear();
+    this.unfinalizedItems.clear();
+    this.audioSinceLastFinal = false;
+    this.lastAudioAt = 0;
     this.speakerAttribution.reset();
     this.transcriptionReplayJournal.reset();
     this.latestSpeaker = null;
@@ -1518,6 +1879,14 @@ export class TranscriptRoom {
 
   private handleTranscriptItemCommitted(itemId: string): void {
     this.acknowledgeTranscriptionCommit();
+    this.unfinalizedItems.add(itemId);
+    if (
+      !this.committedPlaces.has(itemId) &&
+      !this.partialSegments.has(itemId) &&
+      !this.hasFinalSegment(itemId)
+    ) {
+      this.committedPlaces.set(itemId, { sequence: this.sequence++, startMs: Date.now() });
+    }
     this.transcriptionReplayJournal.bindCommittedItem(itemId);
     const speaker = this.speakerAttribution.bindCommittedItem(itemId);
     if (speaker) {
@@ -1796,32 +2165,47 @@ export class TranscriptRoom {
     await this.persist();
   }
 
-  private allocateSegment(itemId: string): TranscriptSegment {
-    const existing = this.partialSegments.get(itemId);
-    if (existing) return existing;
-    const speaker =
-      this.speakerAttribution.getItemSpeaker(itemId) ??
-      this.speakerAttribution.peekPendingSpeaker() ??
-      this.latestSpeaker ??
-      normalizeSpeaker(undefined, {
-        userId: this.session?.controller?.userId || "unknown",
-        displayName: this.session?.controller?.displayName || "Unknown",
-      });
+  private controllerSpeaker(): TranscriptSpeaker {
+    return normalizeSpeaker(undefined, {
+      userId: this.session?.controller?.userId || "unknown",
+      displayName: this.session?.controller?.displayName || "Unknown",
+    });
+  }
+
+  private createSegment(
+    itemId: string,
+    speaker: TranscriptSpeaker,
+    placement?: { sequence: number; startMs: number },
+  ): TranscriptSegment {
     const now = Date.now();
     const segment: TranscriptSegment = {
       id: itemId,
       itemId,
-      sequence: this.sequence,
+      sequence: placement?.sequence ?? this.sequence++,
       speakerUserId: speaker.userId,
       speakerDisplayName: speaker.displayName,
       source: speaker.source,
       text: "",
-      startMs: now,
+      startMs: placement?.startMs ?? now,
       endMs: null,
       isFinal: false,
       updatedAt: now,
     };
-    this.sequence += 1;
+    return segment;
+  }
+
+  private allocateSegment(itemId: string): TranscriptSegment {
+    const existing = this.partialSegments.get(itemId);
+    if (existing) return existing;
+    const segment = this.createSegment(
+      itemId,
+      this.speakerAttribution.getItemSpeaker(itemId) ??
+        this.speakerAttribution.peekPendingSpeaker() ??
+        this.latestSpeaker ??
+        this.controllerSpeaker(),
+      this.committedPlaces.get(itemId),
+    );
+    this.committedPlaces.delete(itemId);
     this.partialSegments.set(itemId, segment);
     return segment;
   }
@@ -1922,21 +2306,41 @@ export class TranscriptRoom {
       this.transcriptionReplayJournal.finalizeItem(itemId);
     }
     const segment = this.allocateSegment(itemId);
-    const text = transcript.trim() || segment.text.trim();
     this.partialSegments.delete(itemId);
-    if (!text) return;
+    this.unfinalizedItems.delete(itemId);
+    this.audioSinceLastFinal = false;
+    await this.saveFinalSegment(segment, transcript);
+  }
+
+  private async saveFinalSegment(
+    segment: TranscriptSegment,
+    transcript: string,
+  ): Promise<void> {
+    if (!this.recordFinalSegment(segment, transcript)) return;
+    await this.persist();
+    this.scheduleMinutes();
+  }
+
+  private recordFinalSegment(
+    segment: TranscriptSegment,
+    transcript: string,
+  ): boolean {
+    const text = transcript.trim() || segment.text.trim();
+    if (!text) return false;
+    const existingIndex = this.segments.findIndex(
+      (candidate) => candidate.itemId === segment.itemId,
+    );
+    const existing = existingIndex >= 0 ? this.segments[existingIndex] : null;
+    if (existing?.text === text) return false;
 
     const now = Date.now();
     const finalSegment: TranscriptSegment = {
-      ...segment,
+      ...(existing ?? segment),
       text,
       endMs: now,
       isFinal: true,
       updatedAt: now,
     };
-    const existingIndex = this.segments.findIndex(
-      (candidate) => candidate.itemId === itemId,
-    );
     if (existingIndex >= 0) {
       this.segments[existingIndex] = finalSegment;
     } else {
@@ -1945,8 +2349,7 @@ export class TranscriptRoom {
     this.segments.sort((left, right) => left.sequence - right.sequence);
     this.trimSegments();
     this.broadcast({ type: "segment.final", segment: finalSegment });
-    await this.persist();
-    this.scheduleMinutes();
+    return true;
   }
 
   private trimSegments(): void {
@@ -2217,10 +2620,7 @@ export class TranscriptRoom {
         apiKey: profile.apiKey,
         model: profile.model,
         question,
-        segments: [
-          ...this.segments,
-          ...Array.from(this.partialSegments.values()),
-        ],
+        segments: [...this.segments, ...this.visiblePartials()],
       })) {
         if (signal.aborted || revision !== this.sessionRevision) return;
         answer += delta;
@@ -2291,18 +2691,20 @@ export class TranscriptRoom {
     const transcriptionConfig = this.transcriptionConnectionOptions
       ? {
           language: this.transcriptionConnectionOptions.language,
+          languageChosen: this.transcriptionConnectionOptions.languageChosen,
           delay: this.transcriptionConnectionOptions.delay,
           locale: this.transcriptionConnectionOptions.locale,
         }
       : undefined;
     await this.state.storage.put("snapshot", {
       session: this.session,
-      segments: this.segments,
+      segments: this.segmentsForSnapshot(),
       minutes: this.minutes,
       minutesCompactedAt: this.lastMinutesCompactionAt,
       sequence: this.sequence,
       serviceVersion: this.serviceVersion(),
       transcriptionConfig,
+      providerLanguage: this.sessionProviderLanguage,
     } satisfies PersistedSnapshot);
     await this.armCleanupAlarm();
   }
@@ -2330,6 +2732,7 @@ export class TranscriptRoom {
     this.cancelControllerReconnect();
     this.cancelSfuRelayRecovery();
     this.closeTranscriptionProvider();
+    this.discardProviderDrains();
     this.responseApiKey = null;
     this.responseAbort.abort();
     this.responseAbort = new AbortController();

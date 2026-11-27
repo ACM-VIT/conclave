@@ -1,5 +1,5 @@
-import { APP_ROUTE_SEGMENTS, sanitizeRoomCode, sanitizeWebinarLinkCode } from "@/app/lib/utils";
-import { canonicalizeSfuClientId } from "@/lib/sfu-client-id";
+import { APP_ROUTE_SEGMENTS, sanitizeRoomCode, sanitizeWebinarLinkCode } from "../app/lib/utils";
+import { canonicalizeSfuClientId } from "./sfu-client-id";
 
 export type RoomDestination = {
   roomCode: string;

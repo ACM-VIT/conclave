@@ -1,6 +1,6 @@
 import { AI_ENDPOINTS } from "@conclave/ai/models";
 import { DEFAULT_TRANSCRIPTION_LOCALE } from "../constants";
-import { safeJsonParse, trimText } from "../utils";
+import { normalizeLocale, safeJsonParse, trimText } from "../utils";
 import type {
   LiveTranscriptionCallbacks,
   LiveTranscriptionConnectOptions,
@@ -14,7 +14,7 @@ const SARVAM_AUDIO_ENCODING = "audio/wav";
 const SARVAM_INPUT_AUDIO_CODEC = "pcm_s16le";
 const SARVAM_DEFAULT_LANGUAGE_CODE = "unknown";
 const SARVAM_DEFAULT_MODE = "codemix";
-const SARVAM_SUPPORTED_LANGUAGE_CODES = new Set([
+export const SARVAM_SUPPORTED_LANGUAGE_CODES = new Set([
   "unknown",
   "en-IN",
   "hi-IN",
@@ -73,6 +73,49 @@ const normalizeSarvamLanguageCode = (
   if (SARVAM_SUPPORTED_LANGUAGE_CODES.has(locale)) return locale;
   return SARVAM_DEFAULT_LANGUAGE_CODE;
 };
+
+const baseLanguage = (language: string): string =>
+  language.trim().toLowerCase().split("-")[0] ?? "";
+
+const supportedSarvamLanguageCode = (
+  language: string,
+  languageChosen: boolean,
+  env: LiveTranscriptionConnectOptions["env"],
+  locale = normalizeLocale(env.TRANSCRIPT_TRANSCRIPTION_LOCALE),
+): string | null => {
+  if (!languageChosen) {
+    return normalizeSarvamLanguageCode(
+      env.TRANSCRIPT_SARVAM_LANGUAGE_CODE ?? language,
+      locale || DEFAULT_TRANSCRIPTION_LOCALE,
+    );
+  }
+  const regional = `${baseLanguage(language)}-IN`;
+  return SARVAM_SUPPORTED_LANGUAGE_CODES.has(regional) ? regional : null;
+};
+
+export const sarvamCanTranscribe = (
+  language: string,
+  languageChosen: boolean,
+  env: LiveTranscriptionConnectOptions["env"],
+): boolean => supportedSarvamLanguageCode(language, languageChosen, env) !== null;
+
+export const sarvamProviderLanguage = (options: {
+  language: string;
+  languageChosen?: boolean;
+  locale: string;
+  env: LiveTranscriptionConnectOptions["env"];
+}): string =>
+  normalizeSarvamLanguageCode(
+    supportedSarvamLanguageCode(
+      options.language,
+      options.languageChosen === true,
+      options.env,
+      options.locale,
+    ) ??
+      options.env.TRANSCRIPT_SARVAM_LANGUAGE_CODE ??
+      options.language,
+    options.locale || DEFAULT_TRANSCRIPTION_LOCALE,
+  );
 
 const normalizeSarvamMode = (value: string | undefined): string => {
   const candidate = value?.trim() || SARVAM_DEFAULT_MODE;
@@ -292,6 +335,10 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
     this.downsampler.reset();
   }
 
+  finishAudio(): void {
+    this.socket.send(buildSarvamFlushMessage());
+  }
+
   close(): void {
     this.closed = true;
     try {
@@ -343,8 +390,7 @@ export const connectSarvamTranscription = async (
     sarvamEndpoint({
       baseUrl: options.env.SARVAM_STT_WS_URL,
       model: options.transcriptModel,
-      language:
-        options.env.TRANSCRIPT_SARVAM_LANGUAGE_CODE ?? options.language,
+      language: options.providerLanguage ?? sarvamProviderLanguage(options),
       locale: options.locale,
       mode: options.env.TRANSCRIPT_SARVAM_MODE,
     }),

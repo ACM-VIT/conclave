@@ -1,6 +1,7 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, useState } from "react";
+import { createDeviceIntentStore } from "../lib/device-intent";
 import type { Socket } from "socket.io-client";
 import type { Device } from "mediasoup-client";
 import type { ReconnectRequest } from "../lib/reconnect-request-policy";
@@ -8,7 +9,6 @@ import type {
   AudioAnalyserEntry,
   Consumer,
   JoinMode,
-  PrejoinMediaHandoff,
   Producer,
   ProducerInfo,
   ProducerMapEntry,
@@ -145,13 +145,8 @@ export function useMeetRefs() {
   });
   const isChatOpenRef = useRef(false);
   const localStreamRef = useRef<MediaStream | null>(null);
-  const prejoinMediaIntentRef = useRef<
-    | ({
-        streamId: string | null;
-        trackIds: Set<string>;
-      } & Pick<PrejoinMediaHandoff, "isCameraOn" | "isMicOn" | "skipMutedMicWarmup">)
-    | null
-  >(null);
+  const [deviceIntents] = useState(createDeviceIntentStore);
+  const skipMutedMicWarmupRef = useRef(false);
   const processedVideoTrackRef = useRef<MediaStreamTrack | null>(null);
   const sessionIdRef = useRef<string>(getOrCreateSessionId());
   const isHandRaisedRef = useRef(false);
@@ -199,7 +194,8 @@ export function useMeetRefs() {
     joinOptionsRef,
     isChatOpenRef,
     localStreamRef,
-    prejoinMediaIntentRef,
+    deviceIntents,
+    skipMutedMicWarmupRef,
     processedVideoTrackRef,
     sessionIdRef,
     isHandRaisedRef,

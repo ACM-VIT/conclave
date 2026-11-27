@@ -199,6 +199,46 @@ describe("what each event carries", () => {
     return events.find((sent) => sent.uuid === uuid) as SentEvent;
   };
 
+  it("sends a call rating through the outbox without room or invite data", async () => {
+    const inviteUrl = "https://conclave.test/alice-smith?invitee=alice%40example.test";
+    const sent: SentEvent[] = [];
+    posthog.capture.mockImplementation((event: string, props?: Record<string, unknown>) => {
+      sent.push(sendThroughSdk(event, {
+        ...props,
+        $current_url: inviteUrl,
+        $pathname: "/alice-smith",
+        $title: "alice-smith · Conclave",
+        $referrer: inviteUrl,
+        $session_entry_url: inviteUrl,
+        roomId: "alice-smith",
+      }));
+    });
+    try {
+      const { default: TelemetryProvider } = await import("../src/app/components/TelemetryProvider");
+      const { telemetry } = await import("../src/app/lib/telemetry");
+      root = createRoot(document.createElement("div"));
+      await act(async () => root?.render(<TelemetryProvider>{null}</TelemetryProvider>));
+      await vi.waitFor(() => expect(posthog.init).toHaveBeenCalledTimes(1));
+      telemetry.capture("meet_call_rated", { rating: 4, outcome: "left", durationSeconds: 61 });
+
+      await vi.waitFor(() => expect(sent).toHaveLength(1));
+      expect(sent[0]).toMatchObject({
+        event: "meet_call_rated",
+        properties: {
+          $current_url: "/[code]",
+          $pathname: "/[code]",
+          rating: 4,
+          outcome: "left",
+          durationSeconds: 61,
+        },
+      });
+      expect(sent[0].properties).not.toHaveProperty("roomId");
+      expect(JSON.stringify(sent[0])).not.toMatch(/alice-smith|invitee|alice%40/);
+    } finally {
+      posthog.capture.mockReset();
+    }
+  });
+
   it("reports a meeting panel that fails to render, through before_send", async () => {
     const sent: SentEvent[] = [];
     posthog.captureException.mockImplementation((error: unknown, props?: Record<string, unknown>) => {

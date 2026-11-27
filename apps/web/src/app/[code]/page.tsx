@@ -3,6 +3,8 @@ import { headers as nextHeaders } from "next/headers";
 import MeetsClientShell from "../meets-client-shell";
 import RouteLoadingState from "../components/RouteLoadingState";
 import ScheduledMeetingLanding from "../components/ScheduledMeetingLanding";
+import ErrorStateView from "../components/ErrorStateView";
+import { isSfuTooOldForBookings } from "../../lib/scheduled-meeting-lookup";
 import {
   isMeetingJoinable,
   lookupPublicScheduledMeetingByRoomCode,
@@ -95,7 +97,20 @@ async function MeetRoomContent({ params, searchParams }: MeetRoomPageProps) {
     devOverridesEnabled && isTruthyParam(resolvedSearchParams.admin);
 
   if (destination.roomCode && !bypassMediaPermissions) {
-    const scheduled = await lookupPublicScheduledMeetingByRoomCode(destination);
+    let scheduled: Awaited<ReturnType<typeof lookupPublicScheduledMeetingByRoomCode>>;
+    try {
+      scheduled = await lookupPublicScheduledMeetingByRoomCode(destination);
+    } catch (error) {
+      if (!isSfuTooOldForBookings(error)) throw error;
+      return (
+        <ErrorStateView
+          eyebrow="Meetings are updating"
+          title="This meeting link can't open yet"
+          message="The meeting service is being updated. Try this link again in a few minutes."
+          homeLabel="Go home"
+        />
+      );
+    }
     if (scheduled && !isMeetingJoinable(scheduled)) {
       const [sessionEmail, hostEmail] = await Promise.all([
         resolveSessionEmail(),

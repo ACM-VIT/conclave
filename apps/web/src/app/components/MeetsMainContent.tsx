@@ -1,7 +1,5 @@
 "use client";
 
-import { buildMeetingPath } from "@/lib/meeting-links";
-import { resolveMeetingClientId } from "@/lib/sfu-client-id";
 import { lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   Dispatch,
@@ -62,6 +60,8 @@ import WebinarViewerChrome, {
 import { QaPanel } from "./qa/QaPanel";
 import { PollsPanel } from "./polls/PollsPanel";
 import ToastQueue, { type ToastItem } from "./ToastQueue";
+import MeetingAnnouncer from "./MeetingAnnouncer";
+import MeetingReadyCard, { useMeetingReadyCard } from "./MeetingReadyCard";
 import RoomAiPanel from "./RoomAiPanel";
 import AndroidUpsellSheet from "./AndroidUpsellSheet";
 import type { BrowserCommand, BrowserState } from "../hooks/useSharedBrowser";
@@ -782,6 +782,10 @@ export default function MeetsMainContent({
           !isSystemUserId(participant.userId),
       ),
     [currentUserId, participantsArray],
+  );
+  const meetingReadyCard = useMeetingReadyCard(
+    roomId,
+    isJoined && nonSystemParticipants.length > 0,
   );
 
   const coachAvatars = useMemo(() => {
@@ -2097,6 +2101,7 @@ export default function MeetsMainContent({
     slim: useSlimControls,
     coachAvatars,
     roomId,
+    clientId,
     isMuted,
     isMicrophoneUnmuteDisabled: isParticipantMicrophoneActivationBlocked,
     isCameraOff,
@@ -2322,6 +2327,15 @@ export default function MeetsMainContent({
           </section>
         </div>
       )}
+      {isJoined && !isWebinarAttendee ? (
+        <MeetingAnnouncer
+          isLive={connectionState === "joined"}
+          participants={participants}
+          chatMessages={chatMessages}
+          currentUserId={currentUserId}
+          resolveDisplayName={resolveDisplayName}
+        />
+      ) : null}
       {isJoined ? (
         <InCallNoticeSlot
           rightInset={isWebinarAttendee ? webinarQaReserve : dockedPanelReserve}
@@ -2792,7 +2806,7 @@ export default function MeetsMainContent({
         </MeetingAppLayout>
       ) : (
         <GridLayout
-          meetingPath={buildMeetingPath({ roomCode: roomId, clientId: resolveMeetingClientId(clientId) })}
+
           localStream={effectiveLocalStream}
           isCameraOff={effectiveIsCameraOff}
           isMuted={isMuted}
@@ -2822,6 +2836,17 @@ export default function MeetsMainContent({
           getDisplayName={resolveDisplayName}
           sidePanelReserve={dockedPanelReserve}
           isMobile={isMobile}
+          meetingReadyCard={
+            meetingReadyCard.isOpen ? (
+              <MeetingReadyCard
+                roomId={roomId}
+                clientId={clientId}
+                isHost={isAdmin}
+                isMobile={isMobile}
+                onDismiss={meetingReadyCard.dismiss}
+              />
+            ) : null
+          }
         />
       )}
 

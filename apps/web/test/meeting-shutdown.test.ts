@@ -135,6 +135,20 @@ describe("a host rejecting a waiting guest", () => {
     });
     expect(h.setMeetError).not.toHaveBeenCalledWith(expect.objectContaining({ code: "JOIN_REJECTED" }));
   });
+
+  it("keeps a host ending in one place: the end screen when it takes it, else the setup notice", async () => {
+    const shown = createHarness(async () => joinInfo, { onCallEnded: () => true });
+    await shown.connect();
+    shown.dispatch("roomEnded", { endedBy: "host#session", message: "Thanks, everyone" });
+    expect(shown.setSetupNotice).not.toHaveBeenCalledWith(expect.objectContaining({ kind: "ended" }));
+
+    const onCallEnded = vi.fn(() => false);
+    const notShown = createHarness(async () => joinInfo, { onCallEnded });
+    await notShown.connect();
+    notShown.dispatch("roomEnded", { endedBy: "host#session", message: "Thanks, everyone" });
+    expect(onCallEnded).toHaveBeenCalledWith({ kind: "endedByHost", detail: "Thanks, everyone" });
+    expect(notShown.setSetupNotice).toHaveBeenLastCalledWith({ kind: "ended", message: "Thanks, everyone" });
+  });
 });
 
 const createAudioStream = (id: string) => {
@@ -153,13 +167,7 @@ const createAudioStream = (id: string) => {
 it("does not reacquire a muted microphone after prejoin skips warmup", async () => {
   const requestMediaPermissions = vi.fn(async () => null);
   const h = createHarness(async () => joinInfo, { requestMediaPermissions });
-  h.refs.prejoinMediaIntentRef.current = {
-    streamId: null,
-    trackIds: new Set(),
-    isCameraOn: false,
-    isMicOn: false,
-    skipMutedMicWarmup: true,
-  };
+  h.refs.skipMutedMicWarmupRef.current = true;
   const join = h.api.joinRoomById("test-room");
   try {
     await vi.waitFor(() => expect(h.io).toHaveBeenCalledOnce());

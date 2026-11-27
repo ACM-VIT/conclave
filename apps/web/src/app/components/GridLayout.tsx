@@ -4,7 +4,6 @@ import { errorName } from "../lib/utils";
 import {
   Crop,
   Hand,
-  Link2,
   Maximize2,
   Minimize2,
   MicOff,
@@ -15,7 +14,6 @@ import {
   PinOff,
   Plus,
   RotateCcw,
-  UserPlus,
   Users,
 } from "lucide-react";
 import {
@@ -23,6 +21,7 @@ import {
   type CSSProperties,
   type Dispatch,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
   type SetStateAction,
   type SyntheticEvent,
   useCallback,
@@ -97,7 +96,6 @@ import { readVideoAspect, resolveTileAspect } from "../lib/tile-video-framing";
 import { logCallError } from "../lib/call-error-capture";
 
 interface GridLayoutProps {
-  meetingPath: string | null;
   localStream: MediaStream | null;
   isCameraOff: boolean;
   isMuted: boolean;
@@ -129,6 +127,7 @@ interface GridLayoutProps {
   getDisplayName: (userId: string) => string;
   sidePanelReserve?: number;
   isMobile?: boolean;
+  meetingReadyCard?: ReactNode;
 }
 
 const WARM_BUFFER_TILES = 4;
@@ -792,7 +791,6 @@ function useFlip(
 }
 
 function GridLayout({
-  meetingPath,
   localStream,
   isCameraOff,
   isMuted,
@@ -822,6 +820,7 @@ function GridLayout({
   getDisplayName,
   sidePanelReserve = 0,
   isMobile = false,
+  meetingReadyCard = null,
 }: GridLayoutProps) {
   const stageBoxRef = useRef<HTMLDivElement>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
@@ -834,12 +833,6 @@ function GridLayout({
     x: number;
     y: number;
   } | null>(null);
-  const [copyStatus, setCopyStatus] = useState<"idle" | "copied">("idle");
-  const [inviteStatus, setInviteStatus] = useState<"idle" | "shared" | "copied">(
-    "idle"
-  );
-  const copyTimeoutRef = useRef<number | null>(null);
-  const inviteTimeoutRef = useRef<number | null>(null);
   const [pinnedId, setPinnedId] = useState<string | null>(null);
   const [fullVideoTileIds, setFullVideoTileIds] = useState<Set<string>>(
     () => new Set(),
@@ -934,17 +927,6 @@ function GridLayout({
   const lastLocalVideoTrackingFlushAtRef = useRef(0);
   const [localVideoTracking, setLocalVideoTracking] =
     useState<MeetLocalVideoTracking>(() => emptyLocalVideoTracking());
-
-  useEffect(() => {
-    return () => {
-      if (copyTimeoutRef.current) {
-        window.clearTimeout(copyTimeoutRef.current);
-      }
-      if (inviteTimeoutRef.current) {
-        window.clearTimeout(inviteTimeoutRef.current);
-      }
-    };
-  }, []);
 
   useEffect(() => {
     const flushLocalVideoTracking = () => {
@@ -2179,66 +2161,6 @@ function GridLayout({
     [registerTile],
   );
 
-  const copyToClipboard = async (value: string) => {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(value);
-      return true;
-    }
-    const textarea = document.createElement("textarea");
-    textarea.value = value;
-    textarea.setAttribute("readonly", "");
-    textarea.style.position = "fixed";
-    textarea.style.opacity = "0";
-    document.body.appendChild(textarea);
-    textarea.select();
-    const copied = document.execCommand("copy");
-    document.body.removeChild(textarea);
-    return copied;
-  };
-
-  const handleCopyLink = async () => {
-    if (!meetingPath) return;
-    try {
-      if (!(await copyToClipboard(`${window.location.origin}${meetingPath}`))) return;
-      setCopyStatus("copied");
-    } catch (error) {
-      console.error("Failed to copy meeting link:", error);
-      return;
-    }
-    if (copyTimeoutRef.current) {
-      window.clearTimeout(copyTimeoutRef.current);
-    }
-    copyTimeoutRef.current = window.setTimeout(() => {
-      setCopyStatus("idle");
-    }, 2000);
-  };
-
-  const handleInvite = async () => {
-    if (!meetingPath) return;
-    const meetingLink = `${window.location.origin}${meetingPath}`;
-    try {
-      if (navigator.share) {
-        await navigator.share({
-          title: "Conclave meeting",
-          text: "Join me in this Conclave room.",
-          url: meetingLink,
-        });
-        setInviteStatus("shared");
-      } else {
-        if (!(await copyToClipboard(meetingLink))) return;
-        setInviteStatus("copied");
-      }
-    } catch {
-      return;
-    }
-    if (inviteTimeoutRef.current) {
-      window.clearTimeout(inviteTimeoutRef.current);
-    }
-    inviteTimeoutRef.current = window.setTimeout(() => {
-      setInviteStatus("idle");
-    }, 2400);
-  };
-
   const renderStageTile = (tile: MeetingStageTile, slot: "main" | "companion" | "rail") => {
     switch (tile.kind) {
       case "presentation":
@@ -2355,6 +2277,7 @@ function GridLayout({
       className="relative flex flex-1 min-h-0 flex-col"
       style={{ fontFamily: FONT_SANS }}
     >
+      {isSolo ? meetingReadyCard : null}
       <div
         className="pointer-events-none h-0 w-0 overflow-hidden"
         aria-hidden={true}
@@ -2678,69 +2601,6 @@ function GridLayout({
                 isMuted={isMuted}
                 isSpeaking={isLocalActiveSpeaker && !isMuted}
               />
-              {isSolo && (isMobile || !isCameraOff) ? (
-              <button
-                type="button"
-                onClick={handleInvite}
-                disabled={!meetingPath}
-                title={meetingPath ? undefined : "No shareable link"}
-                className={
-                  "disabled:opacity-50 disabled:cursor-not-allowed absolute z-10 flex items-center gap-2 rounded-full border border-[#fafafa]/14 bg-[#18181b]/90 px-3.5 py-2 text-[13px] font-medium text-[#fafafa] backdrop-blur transition-colors hover:bg-[#232327] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F95F4A]/40 " +
-                  (isMobile
-                    ? "left-1/2 top-3 -translate-x-1/2"
-                    : "bottom-3 left-3")
-                }
-              >
-                <UserPlus size={16} strokeWidth={1.75} className="text-[#F95F4A]" />
-                {inviteStatus === "shared"
-                  ? "Invite sent"
-                  : inviteStatus === "copied"
-                  ? "Link copied"
-                  : "Invite people"}
-              </button>
-              ) : isSolo ? (
-              <div className="absolute left-3 top-3 w-[19rem] max-w-[calc(100%-1.5rem)] rounded-xl border border-[#fafafa]/12 bg-[#18181b] p-4 text-[#fafafa]">
-                <div className="flex items-center gap-2.5">
-                  <span className="flex h-9 w-9 items-center justify-center rounded-full bg-white/[0.06] text-[#fafafa]">
-                    <Users size={18} strokeWidth={1.75} />
-                  </span>
-                  <div className="min-w-0">
-                    <p className="text-[15px] font-semibold leading-tight">
-                      You are the only one here
-                    </p>
-                    <p className="mt-0.5 text-[12.5px] leading-snug text-[#fafafa]/66">
-                      Invite people to join this room.
-                    </p>
-                  </div>
-                </div>
-                <div className="mt-3.5 flex gap-2">
-                  <button
-                    type="button"
-                    onClick={handleInvite}
-                    disabled={!meetingPath}
-                    title={meetingPath ? undefined : "No shareable link"}
-                    className="disabled:opacity-50 disabled:cursor-not-allowed flex flex-1 items-center justify-center gap-2 rounded-lg bg-[#F95F4A] px-3 py-2 text-[13px] font-medium text-white transition-colors hover:bg-[#fa6e5b] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F95F4A]/40"
-                  >
-                    <UserPlus size={18} strokeWidth={1.75} />
-                    {inviteStatus === "shared"
-                      ? "Invite sent"
-                      : inviteStatus === "copied"
-                      ? "Link copied"
-                      : "Invite people"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleCopyLink}
-                    disabled={!meetingPath}
-                    title={meetingPath ? undefined : "No shareable link"}
-                    className="disabled:opacity-50 disabled:cursor-not-allowed flex flex-1 items-center justify-center gap-2 rounded-lg border border-[#fafafa]/14 bg-transparent px-3 py-2 text-[13px] font-medium text-[#fafafa]/85 transition-colors hover:bg-white/[0.05] hover:text-[#fafafa] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#fafafa]/20"
-                  >
-                    <Link2 size={18} strokeWidth={1.75} />
-                    {copyStatus === "copied" ? "Copied" : "Copy link"}
-                  </button>
-                </div>
-              </div>
-              ) : null}
             </div>
           </div>
         ) : null}

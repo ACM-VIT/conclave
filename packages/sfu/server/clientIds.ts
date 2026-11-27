@@ -16,6 +16,13 @@ export const resolveDefaultClientId = (): string =>
       CONCLAVE_CLIENT_ID,
   );
 
+export const clientIdFamily = (clientId: string): string[] => {
+  const canonical = canonicalizeClientId(clientId);
+  return canonical === CONCLAVE_CLIENT_ID
+    ? [CONCLAVE_CLIENT_ID, ...LEGACY_CONCLAVE_CLIENT_IDS]
+    : [canonical];
+};
+
 export const clientIdCandidates = (primary: string): string[] => {
   const seen = new Set<string>();
   return [
@@ -53,3 +60,10 @@ export const canMigrateClientNamespace = (
   return clientIdCandidates(target).includes(source) ||
     LEGACY_CONCLAVE_CLIENT_IDS.has(source.toLowerCase());
 };
+
+export const clientNamespaceIncludes = (
+  viewClientId: string,
+  storedClientId: string,
+): boolean =>
+  storedClientId === viewClientId ||
+  canMigrateClientNamespace(storedClientId, viewClientId);
