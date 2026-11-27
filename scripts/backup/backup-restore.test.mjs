@@ -3024,26 +3024,33 @@ exec "${curl}" "$@"
   }
 });
 
-test("requires the unified control-plane JSON file and restores it without a SQLite store", needs, async () => {
+test("SQLite-only restore recovers the scheduled meeting database selected by the SFU", needs, async () => {
   const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
   try {
-    const config = [
-      "CONTROL_PLANE_PERSISTENCE=file",
-      "CONTROL_PLANE_JSON_PATH=/var/lib/conclave/recordings/control-plane.json",
-    ];
+    const env = {
+      CONTROL_PLANE_PERSISTENCE: "sqlite",
+      SCHEDULED_MEETINGS_SQLITE_PATH: "/var/lib/conclave/recordings/meetings.db",
+    };
+    const sfu = spawnSync(process.execPath, [
+      "--import", "tsx", "--input-type=module", "-e",
+      'import { storeSqlitePath } from "./server/storePaths.ts"; process.stdout.write(storeSqlitePath("scheduled-meetings", JSON.parse(process.argv[1])));',
+      JSON.stringify(env),
+    ], { cwd: path.join(scripts, "..", "..", "packages", "sfu"), encoding: "utf8" });
+    assert.equal(sfu.status, 0, sfu.stderr);
+    assert.equal(sfu.stdout, env.SCHEDULED_MEETINGS_SQLITE_PATH);
+    const config = Object.entries(env).map(([name, value]) => `${name}=${value}`);
     const { state, setDocker, backup, latestArchive, restore } = await setUp(root, config);
     await setDocker([{ id: "sfu-a", mounts: [state], status: "exited", env: [
       "SFU_PORT=9", "SFU_INSTANCE_ID=sfu-a", ...config,
     ] }]);
-    const file = path.join(state, "control-plane.json");
-    const contents = '{"revision":3,"records":[]}';
-    await writeFile(file, contents);
+    withDatabase(state);
+    const file = path.join(state, path.basename(sfu.stdout));
+    makeDb(file, "archived");
     await backup("--local-only");
-    const archive = await latestArchive();
     await rm(file);
-    await assert.rejects(backup("--local-only"), /no copy of control-plane.json.*CONTROL_PLANE_JSON_PATH/);
-    await restore("--file", archive, "--yes");
-    assert.equal(await readFile(file, "utf8"), contents);
+    makeDb(file, "live");
+    await restore("--file", await latestArchive(), "--only", "sqlite", "--yes");
+    assert.deepEqual(rows(file), ["archived"]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
