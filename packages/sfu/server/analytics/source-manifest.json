@@ -74,6 +74,7 @@
   "server/mediaPolicy.ts",
   "server/openaiClient.ts",
   "server/privateFile.ts",
+  "server/producerPacketCounts.ts",
   "server/producerTransportNetworkProfile.ts",
   "server/reactions.ts",
   "server/redisErrors.ts",

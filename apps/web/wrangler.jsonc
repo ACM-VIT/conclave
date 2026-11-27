@@ -185,6 +185,14 @@
           }
         },
         {
+          "name": "INGEST_RATE_LIMITER",
+          "namespace_id": "3006",
+          "simple": {
+            "limit": 120,
+            "period": 60
+          }
+        },
+        {
           "name": "CSP_REPORT_RATE_LIMITER",
           "namespace_id": "3010",
           "simple": {
@@ -193,6 +201,14 @@
           }
         }
       ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "INGEST_QUOTA",
+            "class_name": "IngestQuota"
+          }
+        ]
+      },
       "r2_buckets": [
         {
           "binding": "NEXT_INC_CACHE_R2_BUCKET",
