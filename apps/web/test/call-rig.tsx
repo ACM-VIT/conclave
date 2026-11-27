@@ -1093,7 +1093,7 @@ export class CallRig {
         participantCount: 2,
         joinMode: "meeting",
         consumerTransportRef: refs.consumerTransportRef,
-        cameraProducerRef: refs.cameraProducerRef,
+        cameraProducerRef: refs.videoProducerRef,
         videoQualityRef: refs.videoQualityRef,
       });
       return null;
