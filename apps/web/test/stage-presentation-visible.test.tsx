@@ -3,7 +3,13 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import GridLayout from "../src/app/components/GridLayout";
-import { DEFAULT_MEET_VIEW_SETTINGS, type MeetSelfViewMode, type MeetViewMode } from "../src/app/lib/meet-view";
+import {
+  DEFAULT_MEET_VIEW_SETTINGS,
+  type MeetSelfViewCorner,
+  type MeetSelfViewMode,
+  type MeetViewMode,
+} from "../src/app/lib/meet-view";
+import { overlapArea, tileControlsRect, type StageRect } from "../src/app/lib/stage-overlay";
 import type { Participant } from "../src/app/lib/types";
 
 vi.mock("../src/app/components/games/GameTileOverlay", () => ({
@@ -73,7 +79,11 @@ afterEach(() => {
 
 const DESKTOP = { width: 1312, height: 752 };
 
-function stageHarness(remoteIds: string[], selfViewMode: MeetSelfViewMode) {
+function stageHarness(
+  remoteIds: string[],
+  selfViewMode: MeetSelfViewMode,
+  selfViewCorner: MeetSelfViewCorner = DEFAULT_MEET_VIEW_SETTINGS.selfViewCorner,
+) {
   gridSize = DESKTOP;
   host = document.createElement("div");
   document.body.append(host);
@@ -93,7 +103,7 @@ function stageHarness(remoteIds: string[], selfViewMode: MeetSelfViewMode) {
         isMirrorCamera={false}
         activeSpeakerId={mode === "auto" ? remoteIds[0] ?? null : null}
         getDisplayName={(id) => id}
-        viewSettings={{ ...DEFAULT_MEET_VIEW_SETTINGS, mode, selfViewMode }}
+        viewSettings={{ ...DEFAULT_MEET_VIEW_SETTINGS, mode, selfViewMode, selfViewCorner }}
         isMobile={false}
         presentationStream={presenting ? screen : null}
         presenterName="carol"
@@ -209,4 +219,56 @@ it("removes the Auto companion from the layout and subscriptions when its rail c
   expect(narrow.querySelector(".acm-video-tile[data-userid]")).toBeNull();
   expect(narrow.getAttribute("data-meet-room-tiling-visible-ids")).toBe("");
   expect(narrow.getAttribute("data-meet-room-tiling-primary-ids")).toBe("__presentation__");
+});
+
+type PublishedStage = {
+  focusIds: string[];
+  selfView: { placement: string; placedCorner: MeetSelfViewCorner; rect: StageRect | null };
+  stage: { rects: { main: StageRect; rail: StageRect[] } | null };
+  visibleRemoteIds: string[];
+  presentation: { visible: boolean };
+};
+const published = () =>
+  (window as unknown as { __conclaveGetMeetRoomTilingDebug: () => { current: PublishedStage } })
+    .__conclaveGetMeetRoomTilingDebug().current;
+
+const CHAT_OPEN_DESKTOP = { width: 888, height: 796 };
+
+it.each(["top-right", "bottom-right", "top-left", "bottom-left"] as const)(
+  "keeps the floating self-view off the share and the Unpin control from %s",
+  (corner) => {
+    const render = stageHarness(["bob", "carol"], "floating", corner);
+    pinRemote(render("sidebar"), "bob");
+    const grid = render("sidebar", CHAT_OPEN_DESKTOP, true);
+    const { selfView, stage, presentation } = published();
+    const floating = host!.querySelector<HTMLElement>("[data-meet-floating-self-view]");
+
+    expect(grid.querySelector("[data-meet-stage-rail] [data-meet-presentation-tile]")).not.toBeNull();
+    expect(presentation.visible).toBe(true);
+    expect(selfView.placement).toBe("floating");
+    expect(floating?.getAttribute("data-meet-self-view-corner")).toBe(selfView.placedCorner);
+    expect(floating?.style.width).toBe(`${selfView.rect!.width}px`);
+    expect(overlapArea(selfView.rect!, stage.rects!.rail[0])).toBe(0);
+    expect(overlapArea(selfView.rect!, tileControlsRect(stage.rects!.main))).toBe(0);
+  },
+);
+
+it("drops the floating self-view when a share fills a stage with no rail", () => {
+  const render = stageHarness(["bob", "carol"], "floating", "top-right");
+  const grid = render("spotlight", DESKTOP, true);
+
+  expect(grid.querySelector("[data-meet-stage-main] [data-meet-presentation-tile]")).not.toBeNull();
+  expect(host!.querySelector("[data-meet-floating-self-view]")).toBeNull();
+  expect(grid.getAttribute("data-meet-view-self-view-placement")).toBe("none");
+});
+
+it("names no hidden camera as a focus", () => {
+  const render = stageHarness(["bob", "carol"], "floating");
+  const desktop = render("auto", DESKTOP, true);
+  expect(desktop.getAttribute("data-meet-room-tiling-visible-ids")?.split(",")).toContain("bob");
+  expect(published().focusIds).toContain("bob");
+
+  const narrow = render("auto", STAGE_SIZES[1], true);
+  expect(narrow.getAttribute("data-meet-room-tiling-visible-ids")).toBe("");
+  expect(published().focusIds).toEqual([]);
 });

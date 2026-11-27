@@ -38,3 +38,42 @@ describe("background meeting media", () => {
     );
   });
 });
+
+describe("Data Saver focus", () => {
+  const producer = { userId: "speaker", kind: "video" as const, type: "webcam" as const };
+  const offStage = {
+    primary: false,
+    focus: false,
+    visible: false,
+    hidden: true,
+    warm: false,
+    rank: 0,
+    renderedWidth: null,
+    renderedHeight: null,
+    renderedDevicePixelRatio: null,
+    presentationSize: null,
+  };
+
+  it("parks a speaking camera that the published layout keeps off the stage", () => {
+    const desired = getDesiredPreferences(producer, bounds, {
+      ...options,
+      dataSaverMode: true,
+      layout: offStage,
+    });
+    expect(desired?.paused).toBe(true);
+  });
+
+  it("keeps a speaking camera that the published layout names as its focus", () => {
+    const desired = getDesiredPreferences(producer, bounds, {
+      ...options,
+      dataSaverMode: true,
+      layout: { ...offStage, focus: true },
+    });
+    expect(desired?.paused).toBe(false);
+  });
+
+  it("keeps a speaking camera when no layout has published", () => {
+    const desired = getDesiredPreferences(producer, bounds, { ...options, dataSaverMode: true });
+    expect(desired?.paused).toBe(false);
+  });
+});
