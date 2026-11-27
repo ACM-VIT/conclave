@@ -10246,7 +10246,7 @@ export function useMeetSocket({
         }
         if (next === "settle-unchanged") {
           console.info(
-            `[Meets] The ${scopedDirection} path is carrying media again or was replaced; not rebuilding it.`,
+            `[Meets] The ${scopedDirection} path is carrying media again, is sending nothing or was replaced; not rebuilding it.`,
           );
           signalingIntact = true;
           return;
