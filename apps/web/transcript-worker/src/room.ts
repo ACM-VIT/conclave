@@ -1692,14 +1692,19 @@ export class TranscriptRoom {
     this.transcriptionProviderOpeningGeneration = generation;
     try {
       try {
-        const connection = await this.openTranscriptionProvider(options);
+        // If Sarvam has to wait for a slot, flush the old turns before opening
+        // so their finals can free one.
+        const onSocketBudgetWait =
+          mode === "switch" && this.liveConnection?.session.provider === "sarvam"
+            ? () => this.drainTranscriptionProvider()
+            : undefined;
+        const connection = await this.openTranscriptionProvider(options, onSocketBudgetWait);
         if (generation !== this.transcriptionRecoveryGeneration) {
           connection.session.close();
           throw new Error("Transcript provider connection was superseded.");
         }
         if (mode === "switch") {
           this.drainTranscriptionProvider();
-          this.resetTranscriptionAudioState();
           this.transcriptionConnectionOptions = options;
         }
         if (!this.installConnection(connection)) {
@@ -1727,16 +1732,19 @@ export class TranscriptRoom {
     }
   }
 
-  private async openTranscriptionProvider(options: {
-    apiKey: string;
-    transcriptModel: string;
-    language: string;
-    languageChosen?: boolean;
-    providerLanguage?: string;
-    delay: string;
-    locale: string;
-    localizationPrompt?: string;
-  }): Promise<ProviderConnection> {
+  private async openTranscriptionProvider(
+    options: {
+      apiKey: string;
+      transcriptModel: string;
+      language: string;
+      languageChosen?: boolean;
+      providerLanguage?: string;
+      delay: string;
+      locale: string;
+      localizationPrompt?: string;
+    },
+    onSocketBudgetWait?: () => void,
+  ): Promise<ProviderConnection> {
     const epoch = this.transcriptionConnectionEpoch + 1;
     this.transcriptionConnectionEpoch = epoch;
     const controller = new AbortController();
@@ -1750,6 +1758,7 @@ export class TranscriptRoom {
         ...options,
         signal: controller.signal,
         socketBudget: this.sarvamSockets,
+        onSocketBudgetWait,
         callbacks: {
           onAccepted: (itemId, utterance) => {
             const connection = this.connectionFor(epoch);
@@ -1869,6 +1878,7 @@ export class TranscriptRoom {
     this.providerDrains.set(live.epoch, live);
     this.liveConnection = null;
     this.transcriptionSession = null;
+    this.resetTranscriptionAudioState();
     this.settleDrain(live);
     this.armLineTimer();
   }

@@ -931,7 +931,7 @@ export const connectSarvamTranscription = async (
   options: LiveTranscriptionConnectOptions,
 ): Promise<LiveTranscriptionSession> => {
   const budget = options.socketBudget ?? new SocketBudget(SARVAM_MAX_LANES);
-  await budget.acquire(options.signal);
+  await budget.acquire(options.signal, options.onSocketBudgetWait);
   let socket: WebSocket;
   try {
     socket = await openSarvamSocket(options, options.signal);

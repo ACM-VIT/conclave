@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RIG_START, TURN_A, TURN_B, startRig, stopRig, type CallRig, type FakeTransport } from "./call-rig";
 import { readJoinTokenUserKey } from "../src/app/lib/join-token-identity";
+import { telemetry } from "../src/app/lib/telemetry";
 
 let rig: CallRig | null = null;
 afterEach(async (context) => {
@@ -790,7 +791,8 @@ describe("acting only on the path that was sampled", () => {
   });
 
   it("does not rebuild a receive path whose media came back while its credentials were fetched", async () => {
-    rig = await startRig();
+    const capture = vi.spyOn(telemetry, "capture").mockImplementation(() => {});
+    rig = await startRig({ trackCallQuality: true });
     await rig.join();
     await rig.advance(5_000);
     const recv = rig.recv!;
@@ -808,10 +810,17 @@ describe("acting only on the path that was sampled", () => {
     expect(rig.recvTransports).toEqual([recv]);
     expect(recv.carriedBytes).toBeGreaterThan(flowedBefore);
     expect(rig.health.consumer).toBe("healthy");
+    await rig.leave();
+    expect(capture.mock.calls.find(([name]) => name === "call_summary")?.[1]).toMatchObject({
+      end_reason: "left",
+      reconnect_count: 0,
+      reconnect_total_ms: 0,
+    });
   });
 
   it("still reconnects a socket that drops after the stale rebuild's media came back", async () => {
-    rig = await startRig();
+    const capture = vi.spyOn(telemetry, "capture").mockImplementation(() => {});
+    rig = await startRig({ trackCallQuality: true });
     await rig.join();
     await rig.advance(5_000);
     const socket = rig.socket!;
@@ -830,6 +839,12 @@ describe("acting only on the path that was sampled", () => {
     const flowedBefore = recv.carriedBytes;
     await rig.advance(6_000);
     expect(recv.carriedBytes).toBeGreaterThan(flowedBefore);
+    await rig.leave();
+    expect(capture.mock.calls.find(([name]) => name === "call_summary")?.[1]).toMatchObject({
+      end_reason: "left",
+      reconnect_count: 1,
+      reconnect_total_ms: expect.toSatisfy((ms: number) => ms > 0),
+    });
   });
 
   it("keeps a receive path that carries media again just before its credentials arrive", async () => {
@@ -854,7 +869,8 @@ describe("acting only on the path that was sampled", () => {
   });
 
   it("still rebuilds a receive path that stays dead while its credentials are fetched", async () => {
-    rig = await startRig();
+    const capture = vi.spyOn(telemetry, "capture").mockImplementation(() => {});
+    rig = await startRig({ trackCallQuality: true });
     await rig.join();
     await rig.advance(5_000);
     const recv = rig.recv!;
@@ -863,10 +879,18 @@ describe("acting only on the path that was sampled", () => {
     rig.mediaFlows = false;
     expect(await waitFor(rig, () => rig!.heldRoutes.length > 0, 40_000)).toBe(true);
     await rig.advance(5_000);
+    rig.holdProducersMs = 1_000;
     rig.route = "up";
     rig.releaseHeldRoutes("answer");
 
     expect(await waitFor(rig, () => rig!.recv !== recv, 10_000)).toBe(true);
+    await rig.advance(2_000);
+    await rig.leave();
+    expect(capture.mock.calls.find(([name]) => name === "call_summary")?.[1]).toMatchObject({
+      end_reason: "left",
+      reconnect_count: 1,
+      reconnect_total_ms: expect.toSatisfy((ms: number) => ms > 0 && ms < 5_000),
+    });
   });
 });
 
