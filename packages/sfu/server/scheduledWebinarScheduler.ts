@@ -254,6 +254,16 @@ export const refreshWebinarRoomConfig = (
   notify: WebinarConfigNotify,
 ): Promise<void> => reconcileWebinarRooms(state, new Map([[webinar.id, channelOf(webinar)]]), notify);
 
+export const publishDeletedWebinar = (
+  state: SfuState,
+  webinar: Pick<ScheduledWebinar, "id" | "clientId" | "roomId">,
+  rev: number,
+  notify: WebinarConfigNotify,
+): void => {
+  state.webinarRemovalEpoch += 1;
+  settleWebinarRoom(state, channelOf(webinar), { id: webinar.id, rev, value: null }, notify);
+};
+
 export const advanceScheduledWebinars = async (
   state: SfuState,
   now: number,

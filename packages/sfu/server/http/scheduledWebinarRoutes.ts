@@ -2,7 +2,7 @@ import type { Express, Request, Response } from "express";
 import type { Server as SocketIOServer } from "socket.io";
 import { Logger } from "../../utilities/loggers.js";
 import { secretsMatch } from "../secret.js";
-import { notifyRoomConfig, refreshWebinarRoomConfig } from "../scheduledWebinarScheduler.js";
+import { notifyRoomConfig, publishDeletedWebinar, refreshWebinarRoomConfig } from "../scheduledWebinarScheduler.js";
 import { getRoomChannelId } from "../rooms.js";
 import {
   buildCoHostInviteLink,
@@ -161,6 +161,14 @@ export const registerScheduledWebinarRoutes = (
 
   const notices = notifyRoomConfig(state, () => getIo?.() ?? null);
 
+  const publishSavedWebinar = async (webinar: ScheduledWebinar): Promise<void> => {
+    try {
+      await refreshWebinarRoomConfig(state, webinar, notices);
+    } catch (error) {
+      Logger.error("[Webinar] Saved settings, but could not refresh the room", error);
+    }
+  };
+
   const changeStatus = async (
     req: Request,
     res: Response,
@@ -175,7 +183,7 @@ export const registerScheduledWebinarRoutes = (
     }
     const { webinar } = result.value;
     if (status === "live" || state.webinarConfigs.has(getRoomChannelId(webinar.clientId, webinar.roomId))) {
-      await refreshWebinarRoomConfig(state, webinar, notices);
+      await publishSavedWebinar(webinar);
     }
     res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
   };
@@ -221,7 +229,7 @@ export const registerScheduledWebinarRoutes = (
         return;
       }
       const { webinar } = result.value;
-      await refreshWebinarRoomConfig(state, webinar, notices);
+      await publishSavedWebinar(webinar);
       Logger.info(`Scheduled webinar created ${webinar.id} (${webinar.linkSlug}) by ${user.email}`);
       res.status(201).json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
     }),
@@ -299,7 +307,7 @@ export const registerScheduledWebinarRoutes = (
         return;
       }
       const { webinar } = result.value;
-      await refreshWebinarRoomConfig(state, webinar, notices);
+      await publishSavedWebinar(webinar);
       res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
     }),
   );
@@ -316,7 +324,7 @@ export const registerScheduledWebinarRoutes = (
         return;
       }
       const webinar = result.value;
-      await refreshWebinarRoomConfig(state, webinar, notices);
+      publishDeletedWebinar(state, webinar, result.rev, notices);
       res.json({ success: true, id: webinar.id });
     }),
   );
@@ -391,7 +399,7 @@ export const registerScheduledWebinarRoutes = (
         return;
       }
       const { webinar } = result.value;
-      await refreshWebinarRoomConfig(state, webinar, notices);
+      await publishSavedWebinar(webinar);
       res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
     }),
   );

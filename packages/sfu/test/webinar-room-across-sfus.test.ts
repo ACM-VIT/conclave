@@ -360,6 +360,32 @@ it.each([
   }
 });
 
+it.each(["PATCH", "DELETE"])("reports a committed %s when the publication read is unavailable", async (method) => {
+  const state = sfuOn(createMemoryData(), "publication-read-failure");
+  const call = await apiOn(state, null);
+  const webinar = await created(state, { linkSlug: "before-outage" });
+  await seedRoomConfig(state, webinar);
+  const original = state.controlPlane;
+  state.controlPlane = {
+    ...original,
+    read: async () => { throw new Error("storage read unavailable"); },
+  };
+  const path = `/scheduled-webinars/${webinar.id}`;
+
+  if (method === "PATCH") {
+    const reply = await call(method, path, { linkSlug: "saved-during-outage" });
+    expect(reply.scheduledWebinar).toMatchObject({ linkSlug: "saved-during-outage" });
+    expect(roomConfig(state, webinar)?.linkSlug).toBe("before-outage");
+    state.controlPlane = original;
+    await advanceScheduledWebinars(state, Date.now(), notifyRoomConfig(state, () => null));
+    expect(roomConfig(state, webinar)?.linkSlug).toBe("saved-during-outage");
+  } else {
+    expect(await call(method, path)).toMatchObject({ success: true, id: webinar.id });
+    expect(roomConfig(state, webinar)).toMatchObject({ enabled: false, scheduledWebinarId: null });
+    expect(state.webinarLinks.has("before-outage")).toBe(false);
+  }
+});
+
 it("still retries the saved slug after a no-op co-host acceptance", async () => {
   const state = sfuOn(createMemoryData(), "cohost-noop-revision");
   const call = await apiOn(state, null);
