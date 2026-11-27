@@ -1,6 +1,7 @@
 export interface PublicScheduledMeeting {
   id: string;
   clientId?: string;
+  bookingLink?: boolean;
   roomCode: string;
   title: string;
   hostName: string;

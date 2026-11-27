@@ -11,6 +11,7 @@ import {
   type PublicScheduledMeeting,
 } from "./scheduled-meeting-lookup";
 import type { RoomDestination } from "@/lib/meeting-links";
+import { CONCLAVE_SFU_CLIENT_ID, resolveServerSfuClientId } from "./sfu-client-id";
 
 export type { PublicScheduledMeeting };
 
@@ -48,10 +49,10 @@ export type ScheduledMeetingLookup =
 // short deadline. An SFU that has not answered by then counts as failed.
 const LOOKUP_DEADLINE_MS = 2500;
 
-export const lookupScheduledMeetingForCode = async (
+const lookupInTenant = async (
   { roomCode, clientId }: RoomDestination,
+  deadline: AbortSignal,
 ): Promise<ScheduledMeetingLookup> => {
-  const deadline = AbortSignal.timeout(LOOKUP_DEADLINE_MS);
   const sfuUrls = resolveSfuUrls();
   const results = await Promise.allSettled(
     sfuUrls.map((sfuUrl) =>
@@ -78,6 +79,20 @@ export const lookupScheduledMeetingForCode = async (
   return results.some((result) => result.status === "rejected")
     ? { kind: "unknown" }
     : { kind: "unscheduled" };
+};
+
+export const lookupScheduledMeetingForCode = async (
+  destination: RoomDestination,
+  { allowLegacyBooking = false }: { allowLegacyBooking?: boolean } = {},
+): Promise<ScheduledMeetingLookup> => {
+  const deadline = AbortSignal.timeout(LOOKUP_DEADLINE_MS);
+  const primary = await lookupInTenant(destination, deadline);
+  if (!allowLegacyBooking || primary.kind !== "unscheduled" ||
+      destination.clientId !== resolveServerSfuClientId() || destination.clientId === CONCLAVE_SFU_CLIENT_ID) {
+    return primary;
+  }
+  const legacy = await lookupInTenant({ ...destination, clientId: CONCLAVE_SFU_CLIENT_ID }, deadline);
+  return legacy.kind === "scheduled" && legacy.meeting.bookingLink === true ? legacy : primary;
 };
 
 export const lookupScheduledMeetingHostEmail = async ({

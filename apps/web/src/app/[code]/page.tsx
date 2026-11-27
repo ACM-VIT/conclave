@@ -93,6 +93,7 @@ async function MeetRoomContent({ params, searchParams }: MeetRoomPageProps) {
     ? getParamValue(resolvedSearchParams.name)
     : undefined;
   let mayOpenRoom = false;
+  let joinClientId = destination.clientId;
   const user = displayName ? { name: displayName } : undefined;
   const isAdmin =
     devOverridesEnabled && isTruthyParam(resolvedSearchParams.admin);
@@ -100,7 +101,9 @@ async function MeetRoomContent({ params, searchParams }: MeetRoomPageProps) {
   if (destination.roomCode) {
     let lookup: Awaited<ReturnType<typeof lookupScheduledMeetingForCode>>;
     try {
-      lookup = await lookupScheduledMeetingForCode(destination);
+      lookup = await lookupScheduledMeetingForCode(destination, {
+        allowLegacyBooking: resolvedSearchParams.clientId === undefined && joinMode !== "webinar_attendee",
+      });
     } catch (error) {
       if (!isSfuTooOldForBookings(error)) throw error;
       if (!bypassMediaPermissions) {
@@ -116,6 +119,7 @@ async function MeetRoomContent({ params, searchParams }: MeetRoomPageProps) {
       lookup = { kind: "unknown" };
     }
     mayOpenRoom = lookup.kind !== "unscheduled";
+    if (lookup.kind === "scheduled") joinClientId = lookup.clientId;
     // Recorders go straight to the join.
     if (
       lookup.kind === "scheduled" &&
@@ -145,7 +149,7 @@ async function MeetRoomContent({ params, searchParams }: MeetRoomPageProps) {
       forceJoinOnly={true}
       allowRoomCreation={mayOpenRoom}
       bypassMediaPermissions={bypassMediaPermissions}
-      sfuClientId={destination.clientId}
+      sfuClientId={joinClientId}
       autoJoinOnMount={autoJoinOnMount}
       hideJoinUI={hideJoinUI}
       joinMode={joinMode}
