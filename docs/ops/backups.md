@@ -292,9 +292,10 @@ directories they pass, belong to the SQLite part: `--only sqlite` brings back
 the whole chain, and `--only files` installs none of it. A restore that
 includes files moves volume-backed legacy JSON inputs absent from the archive
 into the pre-restore directory, so the SFU does not import later records
-at startup. Without a container to inspect, list any legacy input overrides
-in the backup config using `SCHEDULED_MEETINGS_PATH`, `SCHEDULED_WEBINARS_PATH`,
-or `SCHEDULING_PATH`. A restore that leaves files out leaves those inputs in
+at startup. Without a container to inspect, restore uses the image's default
+legacy file names on the recordings volume. List any overrides in the backup
+config using `SCHEDULED_MEETINGS_PATH`, `SCHEDULED_WEBINARS_PATH`, or
+`SCHEDULING_PATH`. A restore that leaves files out leaves those inputs in
 place, so the SFU can still import them.
 
 `--latest` and the local retention order archives by the

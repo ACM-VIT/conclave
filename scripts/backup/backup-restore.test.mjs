@@ -3209,6 +3209,53 @@ test("restoring the files part retires a legacy JSON input absent from the archi
   }
 });
 
+for (const schedulingName of ["scheduling.json", "custom-scheduling.json"]) {
+  test(`a full restore without containers retires image inputs with ${schedulingName}`, needs, async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-restore-default-inputs-"));
+    try {
+      const mount = "/var/lib/conclave/recordings";
+      const { state, backup, latestArchive, restore, setDocker } = await setUp(root, [
+        "CONTROL_PLANE_PERSISTENCE=sqlite",
+        `CONCLAVE_SQLITE_PATH=${mount}/control.db`,
+        ...(schedulingName === "scheduling.json" ? [] : [`SCHEDULING_PATH=${mount}/${schedulingName}`]),
+      ]);
+      const meetings = path.join(state, "scheduled-meetings.json");
+      const webinars = path.join(state, "scheduled-webinars.json");
+      const scheduling = path.join(state, schedulingName);
+      const host = {
+        CONTROL_PLANE_PERSISTENCE: "sqlite",
+        CONCLAVE_SQLITE_PATH: path.join(state, "control.db"),
+        SCHEDULED_MEETINGS_PATH: meetings,
+        SCHEDULED_WEBINARS_PATH: webinars,
+        SCHEDULING_PATH: scheduling,
+      };
+      assert.deepEqual(await actualControlPlane(host, "checkpoint"), ["checkpoint"]);
+      await backup("--local-only");
+      await setDocker([]);
+      const later = JSON.stringify([{
+        id: "later", clientId: "fixture", title: "later booking", roomCode: "later-room", hostEmail: "host@example.test",
+        scheduledStartAt: 4_000_000_000_000, scheduledEndAt: 4_000_003_600_000, status: "scheduled",
+        createdBy: "guest@example.test", source: "booking_link", createdAt: 100, updatedAt: 100,
+      }]);
+      await writeFile(meetings, later);
+      await writeFile(webinars, "[]");
+      await writeFile(scheduling, "{}");
+      const other = path.join(state, schedulingName === "scheduling.json" ? "other.json" : "scheduling.json");
+      await writeFile(other, "not an importer input");
+      assert.deepEqual((await actualControlPlane(host)).sort(), ["checkpoint", "later booking"]);
+      const archive = await latestArchive();
+      await restore("--file", archive, "--yes");
+      assert.deepEqual(await actualControlPlane(host), ["checkpoint"]);
+      for (const input of [meetings, webinars, scheduling]) {
+        await assert.rejects(stat(input), { code: "ENOENT" });
+      }
+      assert.equal(await readFile(other, "utf8"), "not an importer input");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+}
+
 test("a full restore replays only the container snapshots in its archive", needs, async () => {
   const root = await mkdtemp(path.join(tmpdir(), "conclave-restore-lineage-"));
   try {

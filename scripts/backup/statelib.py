@@ -775,9 +775,9 @@ def legacy_import_locations(state, container):
             ("SCHEDULED_WEBINARS_PATH", "scheduled-webinars.json"),
         ):
             value = (env.get(key) or "").strip(JS_SPACE)
-            if not value and mounts is not None:
-                value = posixpath.join("data", name)
-            if value and (rel := mounted_path(value)):
+            if not value:
+                value = posixpath.join(container if mounts is None else "data", name)
+            if rel := mounted_path(value):
                 files.add(rel)
     return dirs, files
 
