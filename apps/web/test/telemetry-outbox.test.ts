@@ -1277,6 +1277,34 @@ describe("an answer to the send as the page goes away", () => {
     expect(h.posts).toEqual([]);
   });
 
+  it.each([
+    ["while that send is in flight", true],
+    ["after that send was answered", false],
+  ])("never sends again the events it refused for a batch held in memory, though it lands after the batch was sent again, %s", async (_case, beaconFirst) => {
+    const beaconAnswer = answerLater();
+    const resend = answerLater();
+    const h = harness({
+      store: createBatchStore(fullStorage),
+      beaconReplies: [beaconAnswer.promise.then((value) => value as Reply)],
+      answers: [resend.promise],
+    });
+    const [refused, kept] = [event(), event()];
+    h.outbox.add(refused);
+    h.outbox.add(kept);
+    h.outbox.flushForUnload();
+    await h.advance(30_000);
+    expect(h.posted()).toEqual([refused.uuid, kept.uuid]);
+
+    const answers = [() => beaconAnswer.answer({ status: 503, retryAfter: null, rejected: [0] }), () => resend.answer(503)];
+    for (const answer of beaconFirst ? answers : answers.reverse()) {
+      answer();
+      await settle();
+    }
+    await h.advance(5 * MINUTE);
+
+    expect(h.posted()).toEqual([refused.uuid, kept.uuid, kept.uuid]);
+  });
+
   it("applies an answer only to the send it answered, after the batch was sent again under a new claim", async () => {
     const store = memoryStore();
     let saves = 0;

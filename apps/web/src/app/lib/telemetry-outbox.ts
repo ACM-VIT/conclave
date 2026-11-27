@@ -602,7 +602,10 @@ export function createOutbox(deps: OutboxDeps) {
       return;
     }
     if (live.get(batch.id) !== batch) return;
-    if (!final) batch.notBefore = Math.max(batch.notBefore, waitAsked(reply, at));
+    if (!final) {
+      batch.notBefore = Math.max(batch.notBefore, waitAsked(reply, at));
+      batch.events = withoutRefused(batch.events, events, reply);
+    }
     if (batch.sendId !== sentWith || batch.inFlight !== null) return;
     settleAnswered(batch, null);
   };
