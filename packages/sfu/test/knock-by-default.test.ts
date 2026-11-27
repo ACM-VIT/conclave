@@ -993,7 +993,7 @@ describe("who hosts a call the server lost", () => {
 
   it("treats a room lost with its media worker the same way", async () => {
     const { before, guestPass } = await lostCall();
-    forceCloseRoom(before, CHANNEL);
+    forceCloseRoom(before, before.rooms.get(CHANNEL)!);
 
     expect((await join(before, knockerAsking)).status).toBe("waiting");
     const member = await join(before, guest, { roomRecoveryPass: guestPass });
@@ -2671,4 +2671,3 @@ describe("someone a host blocked without removing them", () => {
     expect(passesHeldBy(member).length).toBeGreaterThan(heldWhenBlocked);
   });
 });
-

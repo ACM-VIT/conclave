@@ -24,8 +24,6 @@ const reactionAssets = [
   "yawn.gif",
 ];
 
-const readError = readResponseError;
-
 const defaultClientId = resolveBrowserSfuClientId();
 type MeetsClientPageProps = {
   initialRoomId?: string;
@@ -78,6 +76,7 @@ export default function MeetsClientPage({
         user?: { id?: string; email?: string | null; name?: string | null };
         isHost?: boolean;
         joinMode?: JoinMode;
+        signal?: AbortSignal;
       }
     ) =>
       guestPass.join((guestFields) =>
@@ -90,6 +89,7 @@ export default function MeetsClientPage({
           clientId: resolvedClientId,
           joinMode: options?.joinMode ?? joinMode,
           guestFields,
+          signal: options?.signal,
         }),
       ),
     [allowRoomCreation, joinMode, defaultUser, resolvedClientId, guestPass]
@@ -101,7 +101,7 @@ export default function MeetsClientPage({
       headers: { "x-sfu-client": resolvedClientId },
     });
     if (!response.ok) {
-      throw new Error(await readError(response));
+      throw new Error(await readResponseError(response));
     }
     const data = (await response.json()) as { rooms?: unknown };
     return (Array.isArray(data.rooms) ? data.rooms : []) as RoomInfo[];
@@ -123,7 +123,7 @@ export default function MeetsClientPage({
     );
     if (response.status === 403) return null;
     if (!response.ok) {
-      throw new Error(await readError(response));
+      throw new Error(await readResponseError(response));
     }
 
     const data = (await response.json()) as { room?: unknown };

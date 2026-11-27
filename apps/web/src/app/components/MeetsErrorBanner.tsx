@@ -49,6 +49,8 @@ export default function MeetsErrorBanner({
     ? meetError.device === "both" || !meetError.device
       ? "Check that your camera and microphone aren’t in use by another app."
       : `Check that your ${devices} isn’t in use by another app.`
+    : meetError.code === "NETWORK_BLOCKED"
+    ? "Try another network, or turn off your VPN or firewall."
     : null);
 
   if (variant === "strip") {

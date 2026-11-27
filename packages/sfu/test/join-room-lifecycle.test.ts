@@ -104,7 +104,9 @@ describe("host roster on join", () => {
       ...[{ roomId: nextRoom.id, sessionId: "a" }, ack] as never[]
     );
 
-    expect(ack).toHaveBeenCalledWith(expect.objectContaining({ roomId: nextRoom.id, status: "joined" }));
+    expect(ack).toHaveBeenCalledWith(
+      expect.objectContaining({ roomId: nextRoom.id, status: "joined", reportsSenderPacketCounts: true }),
+    );
     expect(oldRoomEvents).toHaveBeenCalledWith("userLeft", { roomId: oldRoom.id, userId: "alice#a" });
     expect(oldRoomEvents).toHaveBeenCalledWith("hostChanged", { roomId: oldRoom.id, hostUserId: "bob#b" });
     expect(oldRoomEvents).toHaveBeenCalledWith("adminUsersChanged", { roomId: oldRoom.id, hostUserIds: ["bob#b"] });
@@ -499,7 +501,7 @@ describe("shared room write tracking", () => {
     expect(await lastCommit).toBe(false);
     expect(state.roomCommitsInFlight.has(room.channelId)).toBe(false);
 
-    expect(forceCloseRoom(state, room.channelId)).toBe(true);
+    expect(forceCloseRoom(state, room)).toBe(true);
     expect(await state.roomRegistry.getAssignment(room.channelId)).toBeNull();
     expect(state.roomCommitsInFlight.has(room.channelId)).toBe(false);
   });

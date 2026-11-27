@@ -2,9 +2,7 @@ import type { GuestPassFields } from "./guest-pass-session";
 import { getJoinedRoom } from "./joined-room";
 import { isMeetingCreatedHere } from "./new-meeting";
 import type { JoinMode } from "./types";
-import { readResponseError } from "./utils";
-
-const JOIN_INFO_REQUEST_TIMEOUT_MS = 15000;
+import { requestJoinInfo as fetchJoinInfo, type JoinInfoAnswer } from "./join-info-request";
 
 export type JoinInfoRequest = {
   roomId: string;
@@ -16,41 +14,13 @@ export type JoinInfoRequest = {
   clientId: string;
   joinMode: JoinMode;
   guestFields?: GuestPassFields;
-};
-
-export type JoinInfo = {
-  token: string;
-  sfuUrl: string;
-  iceServers?: RTCIceServer[];
-  guestId?: string;
-  guestGrant?: string;
-};
-
-const fetchWithTimeout = async (init: RequestInit): Promise<Response> => {
-  const controller = new AbortController();
-  const timeoutId = window.setTimeout(
-    () => controller.abort(),
-    JOIN_INFO_REQUEST_TIMEOUT_MS,
-  );
-  try {
-    return await fetch("/api/sfu/join", {
-      ...init,
-      signal: controller.signal,
-    });
-  } catch (error) {
-    if (controller.signal.aborted) {
-      throw new Error("Join info request timeout");
-    }
-    throw error;
-  } finally {
-    window.clearTimeout(timeoutId);
-  }
+  signal?: AbortSignal;
 };
 
 // Asks for an SFU token. Besides a host, a join may open the room when the
 // code is a known meeting or this tab was in the meeting before. Any other
 // visitor to a code with no room is told to check it.
-export const requestJoinInfo = async ({
+export const requestJoinInfo = ({
   roomId,
   sessionId,
   user,
@@ -59,33 +29,27 @@ export const requestJoinInfo = async ({
   clientId,
   joinMode,
   guestFields,
-}: JoinInfoRequest): Promise<JoinInfo> => {
-  const response = await fetchWithTimeout({
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-sfu-client": clientId,
+  signal,
+}: JoinInfoRequest): Promise<JoinInfoAnswer> =>
+  fetchJoinInfo(
+    "/api/sfu/join",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-sfu-client": clientId,
+      },
+      body: JSON.stringify({
+        roomId,
+        sessionId,
+        user,
+        isHost,
+        allowRoomCreation: isKnownMeeting || getJoinedRoom(roomId) !== null,
+        createsMeeting: isMeetingCreatedHere(roomId),
+        clientId,
+        joinMode,
+        ...guestFields,
+      }),
     },
-    body: JSON.stringify({
-      roomId,
-      sessionId,
-      user,
-      isHost,
-      allowRoomCreation: isKnownMeeting || getJoinedRoom(roomId) !== null,
-      createsMeeting: isMeetingCreatedHere(roomId),
-      clientId,
-      joinMode,
-      ...guestFields,
-    }),
-  });
-
-  if (!response.ok) {
-    const error = new Error(await readResponseError(response)) as Error & {
-      responseStatus?: number;
-    };
-    error.responseStatus = response.status;
-    throw error;
-  }
-
-  return (await response.json()) as JoinInfo;
-};
+    { signal },
+  );

@@ -20,13 +20,13 @@ jobs:
   ci:
     name: ${{ matrix.job }}
     runs-on: &ci-runner ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
-    timeout-minutes: 10
+    timeout-minutes: ${{ startsWith(matrix.job, 'fuzz-') && 20 || 10 }}
     env:
       CI_JOB: ${{ matrix.job }}
     strategy:
       fail-fast: false
       matrix:
-        job: [lint, typecheck, build, checks, deploy]
+        job: [lint, typecheck, build, checks, deploy, fuzz-a, fuzz-b, fuzz-c]
     steps: &ci-steps
       - run: echo "CI_JOB_STARTED_AT=$(date +%s%3N)" >> "$GITHUB_ENV"
 

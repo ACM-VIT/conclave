@@ -8,15 +8,19 @@ import type {
   SetStateAction,
 } from "react";
 import {
+  CircleAlert,
   Globe,
   Headphones,
   Home,
+  KeyRound,
   Loader2,
   LogOut,
   MonitorPlay,
   Plus,
   RefreshCw,
+  Unplug,
   VolumeX,
+  WifiOff,
 } from "lucide-react";
 import type { Socket } from "socket.io-client";
 import type { RoomInfo } from "@/lib/sfu-types";
@@ -40,6 +44,7 @@ import MeetSettingsPanel from "./MeetSettingsPanel";
 import MeetViewPanel from "./MeetViewPanel";
 import ReactionOverlay from "./ReactionOverlay";
 import MeetingAppLayout from "./MeetingAppLayout";
+import CameraPreviewPanels from "./CameraPreviewPanels";
 import SharedBrowserStage from "./SharedBrowserStage";
 import ScreenShareAudioPlayers from "./ScreenShareAudioPlayers";
 import SystemAudioPlayers from "./SystemAudioPlayers";
@@ -100,7 +105,6 @@ import {
   formatDisplayName,
   isBrowserVideoUserId,
   isSystemUserId,
-  isMediaDeviceBlocked,
 } from "../lib/utils";
 import { hiddenSetupView, type SetupNotice } from "../lib/setup-notice";
 import type { RejoinMedia } from "../lib/rejoin-intent";
@@ -113,7 +117,7 @@ import {
   GAME_DOCK_MAX_WIDTH,
   GAME_DOCK_MIN_WIDTH,
 } from "./games/gameUi";
-import { useMediaPermissionState } from "../hooks/useMediaPermissionState";
+import { useCameraAccessBlocked } from "../hooks/useCameraAccessBlocked";
 import { useStableSpeakerId } from "../hooks/useStableSpeakerId";
 import {
   type VideoEffectsState,
@@ -126,17 +130,21 @@ import type {
 } from "../hooks/useMeetTts";
 import { getRenderableParticipantVideoStream } from "../lib/participant-media";
 import { prewarmVideoEffectsAssetsDeferred } from "../lib/video-effects-lazy";
+import ReconnectInviteCodeForm from "./ReconnectInviteCodeForm";
+import {
+  describeRecoveryCard,
+  formatReconnectAttemptLabel,
+} from "../lib/reconnect-recovery-status";
 
 const loadChatPanel = () => import("./ChatPanel");
 const loadTranscriptPanel = () => import("./TranscriptPanel");
 const ChatPanel = lazy(loadChatPanel);
 const TranscriptPanel = lazy(loadTranscriptPanel);
-const VideoEffectsPanel = lazy(() => import("./VideoEffectsPanel"));
-const DeviceSettingsPanel = lazy(() => import("./DeviceSettingsPanel"));
 const DevMeetToolsPanel = lazy(() => import("./DevMeetToolsPanel"));
 
 interface MeetsMainContentProps {
   roomAi: RoomAiController;
+  mediaBlockedNotice?: ReactNode;
   errorNotice?: ReactNode;
   mediaErrorNotice?: ReactNode;
   isJoined: boolean;
@@ -148,7 +156,7 @@ interface MeetsMainContentProps {
   roomId: string;
   setRoomId: Dispatch<SetStateAction<string>>;
   joinRoomById: (roomId: string) => void;
-  retryReconnect?: () => Promise<void> | void;
+  retryReconnect?: (options?: { inviteCode?: string }) => Promise<void> | void;
   reconnectRecoveryStatus?: ReconnectRecoveryStatus | null;
   hideJoinUI?: boolean;
   isWebinarAttendee?: boolean;
@@ -630,6 +638,7 @@ export default function MeetsMainContent({
   onRotateWebinarLink,
   transcript,
   roomAi,
+  mediaBlockedNotice,
   errorNotice,
   mediaErrorNotice,
 }: MeetsMainContentProps) {
@@ -851,15 +860,15 @@ export default function MeetsMainContent({
     useState<MediaStream | null>(null);
   const [devCameraStream, setDevCameraStream] =
     useState<MediaStream | null>(null);
-  const cameraPermissionState = useMediaPermissionState("camera");
   const hasLiveLocalCamera = Boolean(getLiveVideoStream(localStream));
   const hasLiveDevCamera = Boolean(getLiveVideoStream(devCameraStream));
-  const isCameraPermissionBlocked =
-    isMediaDeviceBlocked(mediaError, "camera") ||
-    (!hasLiveLocalCamera &&
-      !hasLiveDevCamera &&
-      (cameraPermissionState === "prompt" ||
-        cameraPermissionState === "denied"));
+  const isCameraPermissionBlocked = useCameraAccessBlocked({
+    hasLiveCamera:
+      hasLiveLocalCamera ||
+      hasLiveDevCamera ||
+      Boolean(getLiveVideoStream(cameraPreviewStream)),
+    mediaError,
+  });
   const isLocalPresenter = isScreenSharing && Boolean(presentationStream);
   const effectivePresentationStream =
     presentationStream ?? devPresentationStream;
@@ -1732,6 +1741,10 @@ export default function MeetsMainContent({
   const isReconnectRetryBusy =
     reconnectRecoveryStatus?.phase === "connecting" ||
     reconnectRecoveryStatus?.phase === "joining";
+  const needsInviteCodeToRejoin =
+    reconnectRecoveryStatus?.needsInviteCode === true &&
+    !isTerminalMeetingError &&
+    !isNetworkOffline;
   const reconnectRetryAt = reconnectRecoveryStatus?.retryAt ?? null;
   const [reconnectCountdownSeconds, setReconnectCountdownSeconds] =
     useState<number | null>(null);
@@ -1755,38 +1768,55 @@ export default function MeetsMainContent({
     };
   }, [reconnectRetryAt]);
 
-  const reconnectAttemptLabel =
-    reconnectRecoveryStatus && reconnectRecoveryStatus.attempt > 0
-      ? `Attempt ${Math.min(
-          reconnectRecoveryStatus.attempt,
-          reconnectRecoveryStatus.maxAttempts,
-        )} of ${reconnectRecoveryStatus.maxAttempts}`
-      : null;
-  const reconnectLastError = reconnectRecoveryStatus?.lastError ?? null;
-  const recoveryTitle = isNetworkOffline
-    ? "Waiting for internet"
+  const reconnectAttemptLabel = isTerminalMeetingError
+    ? null
+    : formatReconnectAttemptLabel(reconnectRecoveryStatus ?? null, {
+        waitingForNetwork: isNetworkOffline,
+      });
+  const isRestoringAfterReconnect =
+    connectionState === "connected" || connectionState === "joining";
+  // The ring spins only while a reconnect is running. A card that waits on
+  // the user or on the network shows a still icon instead.
+  const RecoveryWaitingIcon = isNetworkOffline
+    ? WifiOff
     : isTerminalMeetingError
-      ? "Meeting unavailable"
-      : reconnectRecoveryStatus?.phase === "failed"
-        ? "Reconnect failed"
-        : canRetryRecovery
-          ? "Connection interrupted"
-          : "Reconnecting";
-  const recoveryDetail = isNetworkOffline
-    ? "We are keeping the room open and will restore media when your connection returns."
-    : connectionState === "connected" || connectionState === "joining"
-      ? "Connection is back. Restoring media, participants, and room state."
-      : isTerminalMeetingError
-        ? meetError?.message
-      : reconnectRetryAt && reconnectCountdownSeconds !== null
-        ? reconnectCountdownSeconds > 0
-          ? `Retrying automatically in ${reconnectCountdownSeconds}s.`
-          : "Retrying reconnect now."
-      : reconnectRecoveryStatus?.message
-        ? reconnectRecoveryStatus.message
-      : canRetryRecovery
-        ? (meetError?.message ?? "We could not restore the connection yet.")
-        : "Keeping your meeting open while the connection is restored.";
+      ? CircleAlert
+      : needsInviteCodeToRejoin
+        ? KeyRound
+        : isRestoringAfterReconnect
+          ? null
+          : connectionState === "error" ||
+              reconnectRecoveryStatus?.phase === "failed"
+            ? Unplug
+            : null;
+  const {
+    title: recoveryTitle,
+    detail: recoveryDetail,
+    lastError: reconnectLastError,
+  } = describeRecoveryCard({
+    isOffline: isNetworkOffline,
+    isRestoring: isRestoringAfterReconnect,
+    terminalMessage: isTerminalMeetingError ? (meetError?.message ?? "") : null,
+    needsInviteCode: needsInviteCodeToRejoin,
+    status: reconnectRecoveryStatus ?? null,
+    countdownSeconds: reconnectCountdownSeconds,
+    canRetry: canRetryRecovery,
+    errorMessage: meetError?.message ?? null,
+  });
+  const leaveRecoveryButton = (
+      <button
+        type="button"
+        onClick={isTerminalMeetingError ? (onGoHome ?? leaveRoom) : leaveRoom}
+        className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-[#fafafa]/15 px-4 text-[12.5px] font-medium text-[#fafafa]/76 transition-colors hover:border-[#fafafa]/35 hover:bg-[#fafafa]/10 hover:text-[#fafafa]"
+      >
+        {isTerminalMeetingError ? (
+          <Home size={14} strokeWidth={1.8} />
+        ) : (
+          <LogOut size={14} strokeWidth={1.8} />
+        )}
+        {isTerminalMeetingError ? "Go home" : "Leave"}
+      </button>
+  );
   const openWhiteboard = useCallback(() => {
     void handleOpenWhiteboard();
   }, [handleOpenWhiteboard]);
@@ -1948,11 +1978,22 @@ export default function MeetsMainContent({
             role="dialog"
             aria-modal="true"
           >
-            <div className="relative mx-auto h-11 w-11">
-              <div className="absolute inset-0 rounded-full border-2 border-[#fafafa]/10" />
-              <div className="absolute inset-0 animate-spin rounded-full border-2 border-transparent border-t-[#F95F4A]" />
-              <div className="absolute inset-[5px] rounded-full bg-[#F95F4A]/10" />
-            </div>
+            {RecoveryWaitingIcon ? (
+              <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full border-2 border-[#fafafa]/10 bg-[#F95F4A]/10">
+                <RecoveryWaitingIcon
+                  size={18}
+                  strokeWidth={1.8}
+                  className="text-[#F95F4A]"
+                  aria-hidden="true"
+                />
+              </div>
+            ) : (
+              <div className="relative mx-auto h-11 w-11">
+                <div className="absolute inset-0 rounded-full border-2 border-[#fafafa]/10" />
+                <div className="absolute inset-0 animate-spin rounded-full border-2 border-transparent border-t-[#F95F4A]" />
+                <div className="absolute inset-[5px] rounded-full bg-[#F95F4A]/10" />
+              </div>
+            )}
             <h2
               className="mt-5 text-balance text-[17px] leading-tight text-[#fafafa]"
               style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
@@ -1977,55 +2018,55 @@ export default function MeetsMainContent({
                 </p>
               </div>
             ) : null}
-            <div className="mt-5 flex flex-wrap items-center justify-center gap-2.5">
-              {canRetryRecovery ? (
-                <button
-                  type="button"
-                  disabled={isReconnectRetryBusy}
-                  onClick={() => {
-                    if (retryReconnect) {
-                      void retryReconnect();
-                      return;
-                    }
-                    void joinRoomById(roomId);
-                  }}
-                  className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-[#F95F4A]/45 bg-[#F95F4A]/20 px-4 text-[12.5px] font-medium text-[#fafafa] transition-colors hover:border-[#F95F4A]/70 hover:bg-[#F95F4A]/35 disabled:cursor-not-allowed disabled:border-[#fafafa]/12 disabled:bg-[#fafafa]/8 disabled:text-[#fafafa]/42"
-                >
-                  <RefreshCw
-                    size={14}
-                    strokeWidth={1.8}
-                    className={isReconnectRetryBusy ? "animate-spin" : undefined}
-                  />
-                  {isReconnectRetryBusy
-                    ? "Retrying"
-                    : reconnectRecoveryStatus?.phase === "failed"
-                      ? "Try again"
-                      : "Retry now"}
-                </button>
-              ) : null}
-              {isTerminalMeetingError && onStartNewMeeting ? (
-                <button
-                  type="button"
-                  onClick={onStartNewMeeting}
-                  className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-[#F95F4A]/45 bg-[#F95F4A]/20 px-4 text-[12.5px] font-medium text-[#fafafa] transition-colors hover:border-[#F95F4A]/70 hover:bg-[#F95F4A]/35"
-                >
-                  <Plus size={14} strokeWidth={1.8} />
-                  New Meeting
-                </button>
-              ) : null}
-              <button
-                type="button"
-                onClick={isTerminalMeetingError ? (onGoHome ?? leaveRoom) : leaveRoom}
-                className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-[#fafafa]/15 px-4 text-[12.5px] font-medium text-[#fafafa]/76 transition-colors hover:border-[#fafafa]/35 hover:bg-[#fafafa]/10 hover:text-[#fafafa]"
+            {needsInviteCodeToRejoin ? (
+              <ReconnectInviteCodeForm
+                isBusy={isReconnectRetryBusy}
+                onSubmit={(inviteCode) => {
+                  void retryReconnect?.({ inviteCode });
+                }}
               >
-                {isTerminalMeetingError ? (
-                  <Home size={14} strokeWidth={1.8} />
-                ) : (
-                  <LogOut size={14} strokeWidth={1.8} />
-                )}
-                {isTerminalMeetingError ? "Go home" : "Leave"}
-              </button>
-            </div>
+                {leaveRecoveryButton}
+              </ReconnectInviteCodeForm>
+            ) : (
+              <div className="mt-5 flex flex-wrap items-center justify-center gap-2.5">
+                {canRetryRecovery ? (
+                  <button
+                    type="button"
+                    disabled={isReconnectRetryBusy}
+                    onClick={() => {
+                      if (retryReconnect) {
+                        void retryReconnect();
+                        return;
+                      }
+                      void joinRoomById(roomId);
+                    }}
+                    className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-[#F95F4A]/45 bg-[#F95F4A]/20 px-4 text-[12.5px] font-medium text-[#fafafa] transition-colors hover:border-[#F95F4A]/70 hover:bg-[#F95F4A]/35 disabled:cursor-not-allowed disabled:border-[#fafafa]/12 disabled:bg-[#fafafa]/8 disabled:text-[#fafafa]/42"
+                  >
+                    <RefreshCw
+                      size={14}
+                      strokeWidth={1.8}
+                      className={isReconnectRetryBusy ? "animate-spin" : undefined}
+                    />
+                    {isReconnectRetryBusy
+                      ? "Retrying"
+                      : reconnectRecoveryStatus?.phase === "failed"
+                        ? "Try again"
+                        : "Retry now"}
+                  </button>
+                ) : null}
+                {isTerminalMeetingError && onStartNewMeeting ? (
+                  <button
+                    type="button"
+                    onClick={onStartNewMeeting}
+                    className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-[#F95F4A]/45 bg-[#F95F4A]/20 px-4 text-[12.5px] font-medium text-[#fafafa] transition-colors hover:border-[#F95F4A]/70 hover:bg-[#F95F4A]/35"
+                  >
+                    <Plus size={14} strokeWidth={1.8} />
+                    New Meeting
+                  </button>
+                ) : null}
+                {leaveRecoveryButton}
+              </div>
+            )}
           </section>
         </div>
       )}
@@ -2040,6 +2081,7 @@ export default function MeetsMainContent({
           clearWebinarChrome={isWebinarAttendee}
           overPanel={isFullScreenPanelOpen}
         >
+          <InCallNotice show={Boolean(mediaBlockedNotice)}>{mediaBlockedNotice}</InCallNotice>
           <InCallNotice show={Boolean(mediaErrorNotice)}>{mediaErrorNotice}</InCallNotice>
           <InCallNotice show={Boolean(errorNotice)}>{errorNotice}</InCallNotice>
           {!isRecoveringMeeting && (!isWebinarAttendee || serverRestartNotice) ? (
@@ -2736,82 +2778,73 @@ export default function MeetsMainContent({
           />
         )}
 
-      {isJoined && !isWebinarAttendee && isVideoEffectsOpen && (
-        <MeetingPanelBoundary
-          key="video-effects"
-          name="Backgrounds and effects"
-          onClose={handleCloseVideoEffects}
-        >
-          <VideoEffectsPanel
-            effects={videoEffects}
-            onEffectsChange={onVideoEffectsChange}
-            onRecenterFraming={onVideoEffectsRecenter}
-            localStream={panelPreviewStream}
-            isCameraOff={effectiveIsCameraOff && !panelPreviewIsLocalOnly}
-            status={videoEffectsStatus}
-            error={videoEffectsError}
-            debugStats={videoEffectsDebugStats}
-            activeCount={activeVideoEffectsCount}
-            deferPreload={deferVideoEffectsPreload}
-            cameraPermissionBlocked={isCameraPermissionBlocked}
-            cameraActivationBlocked={isParticipantCameraActivationBlocked}
-            onToggleCamera={toggleCamera}
-            isCameraPreviewActive={panelPreviewIsLocalOnly}
-            isCameraPreviewStarting={isCameraPreviewStarting}
-            cameraPreviewError={cameraPreviewError}
-            onStartCameraPreview={onStartCameraPreview}
-            onStopCameraPreview={onStopCameraPreview}
-            onClose={handleCloseVideoEffects}
-          />
-        </MeetingPanelBoundary>
-      )}
-
-      {isJoined && !isWebinarAttendee && isDeviceSettingsOpen && (
-        <MeetingPanelBoundary
-          key="device-settings"
-          name="Settings"
-          onClose={handleCloseDeviceSettings}
-        >
-          <DeviceSettingsPanel
-            roomAi={roomAi}
-            localStream={panelPreviewStream}
-            isLocalVideoLive={Boolean(getLiveVideoStream(effectiveLocalStream))}
-            isPreviewOnly={panelPreviewIsLocalOnly}
-            mirrorLocalPreview={mirrorLocalPreview}
-            isMirrorCamera={isMirrorCamera}
-            onToggleMirror={onToggleMirror}
-            activeVideoEffectsCount={activeVideoEffectsCount}
-            mediaQualitySettings={mediaQualitySettings}
-            onMediaQualitySettingsChange={onMediaQualitySettingsChange}
-            selectedAudioInputDeviceId={selectedAudioInputDeviceId}
-            selectedAudioOutputDeviceId={selectedAudioOutputDeviceId}
-            ttsSystemVoices={ttsSystemVoices}
-            selectedTtsSystemVoiceUri={selectedTtsSystemVoiceUri}
-            onTtsSystemVoiceChange={onTtsSystemVoiceChange}
-            clonedTtsVoice={clonedTtsVoice}
-            onClonedTtsVoiceChange={onClonedTtsVoiceChange}
-            onClonedTtsVoiceClear={onClonedTtsVoiceClear}
-            canCloneTtsVoice={canCloneTtsVoice}
-            ttsVoiceOwnerName={ttsVoiceOwnerName}
-            selectedVideoInputDeviceId={selectedVideoInputDeviceId}
-            onAudioInputDeviceChange={onAudioInputDeviceChange}
-            onAudioOutputDeviceChange={onAudioOutputDeviceChange}
-            onVideoInputDeviceChange={onVideoInputDeviceChange}
-            isNoiseCancellationEnabled={isNoiseCancellationEnabled}
-            onToggleNoiseCancellation={onToggleNoiseCancellation}
-            isCameraPreviewStarting={isCameraPreviewStarting}
-            cameraPreviewError={cameraPreviewError}
-            onStartCameraPreview={onStartCameraPreview}
-            onStopCameraPreview={onStopCameraPreview}
-            connectionStats={connectionStats}
-            isCameraPermissionBlocked={isCameraPermissionBlocked}
-            onOpenEffects={
-              isCameraPermissionBlocked ? undefined : handleToggleVideoEffects
-            }
-            onClose={handleCloseDeviceSettings}
-          />
-        </MeetingPanelBoundary>
-      )}
+      <CameraPreviewPanels
+        effects={
+          isJoined && !isWebinarAttendee && isVideoEffectsOpen
+            ? {
+                effects: videoEffects,
+                onEffectsChange: onVideoEffectsChange,
+                onRecenterFraming: onVideoEffectsRecenter,
+                localStream: panelPreviewStream,
+                isCameraOff: effectiveIsCameraOff && !panelPreviewIsLocalOnly,
+                status: videoEffectsStatus,
+                error: videoEffectsError,
+                debugStats: videoEffectsDebugStats,
+                activeCount: activeVideoEffectsCount,
+                deferPreload: deferVideoEffectsPreload,
+                cameraPermissionBlocked: isCameraPermissionBlocked,
+                cameraActivationBlocked: isParticipantCameraActivationBlocked,
+                onToggleCamera: toggleCamera,
+                isCameraPreviewActive: panelPreviewIsLocalOnly,
+                isCameraPreviewStarting,
+                cameraPreviewError,
+                onStartCameraPreview,
+                onStopCameraPreview,
+                onClose: handleCloseVideoEffects,
+              }
+            : null
+        }
+        settings={
+          isJoined && !isWebinarAttendee && isDeviceSettingsOpen
+            ? {
+                roomAi,
+                localStream: panelPreviewStream,
+                isLocalVideoLive: Boolean(getLiveVideoStream(effectiveLocalStream)),
+                isPreviewOnly: panelPreviewIsLocalOnly,
+                mirrorLocalPreview,
+                isMirrorCamera,
+                onToggleMirror,
+                activeVideoEffectsCount,
+                mediaQualitySettings,
+                onMediaQualitySettingsChange,
+                selectedAudioInputDeviceId,
+                selectedAudioOutputDeviceId,
+                ttsSystemVoices,
+                selectedTtsSystemVoiceUri,
+                onTtsSystemVoiceChange,
+                clonedTtsVoice,
+                onClonedTtsVoiceChange,
+                onClonedTtsVoiceClear,
+                canCloneTtsVoice,
+                ttsVoiceOwnerName,
+                selectedVideoInputDeviceId,
+                onAudioInputDeviceChange,
+                onAudioOutputDeviceChange,
+                onVideoInputDeviceChange,
+                isNoiseCancellationEnabled,
+                onToggleNoiseCancellation,
+                isCameraPreviewStarting,
+                cameraPreviewError,
+                onStartCameraPreview,
+                onStopCameraPreview,
+                connectionStats,
+                isCameraPermissionBlocked,
+                onOpenEffects: isCameraPermissionBlocked ? undefined : handleToggleVideoEffects,
+                onClose: handleCloseDeviceSettings,
+              }
+            : null
+        }
+      />
 
       {isJoined && !isWebinarAttendee && isViewPanelOpen && (
         <MeetViewPanel

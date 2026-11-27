@@ -191,7 +191,7 @@ class CallForegroundService : Service() {
             ScreenCaptureManager.onCallHostRefused()
             return
         }
-        if (!ScreenCaptureManager.onServiceForegrounded()) {
+        if (ScreenCaptureManager.onServiceForegrounded() == null) {
             releaseProjection(userInitiated = true)
         }
     }

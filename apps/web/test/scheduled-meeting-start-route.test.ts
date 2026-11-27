@@ -132,4 +132,3 @@ describe("an SFU that does not answer a request about a scheduled meeting", () =
     await expect(startWithin(40)).rejects.toThrow();
   });
 });
-

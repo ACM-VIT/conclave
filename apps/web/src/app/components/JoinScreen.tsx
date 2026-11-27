@@ -44,10 +44,10 @@ import {
   inputEditRange,
   normalizeCodeField,
   parseCodeFieldPaste,
+  isCameraAccessBlocked,
   planFieldEdit,
   sanitizeInstitutionDisplayName,
   trackFieldHistory,
-  isMediaDeviceBlocked,
 } from "../lib/utils";
 import { markMeetingCreatedHere } from "../lib/new-meeting";
 import type { SetupNotice } from "../lib/setup-notice";
@@ -463,18 +463,12 @@ function JoinScreen({
       ?.getVideoTracks()
       .some((track) => track.readyState === "live" && track.enabled),
   );
-  const isCameraBlocked = isMediaDeviceBlocked(mediaError, "camera");
-  const isCameraPermissionBlocked =
-    isCameraBlocked ||
-    (!hasLivePreviewCamera &&
-      (cameraPermissionState === "prompt" ||
-        cameraPermissionState === "denied"));
-  const shouldShowPermissionCta =
-    !hasLivePreviewCamera &&
-    !isCameraOn &&
-    (cameraPermissionState === "prompt" ||
-      cameraPermissionState === "denied" ||
-      isCameraBlocked);
+  const isCameraPermissionBlocked = isCameraAccessBlocked({
+    hasLiveCamera: hasLivePreviewCamera,
+    permissionState: cameraPermissionState,
+    mediaError,
+  });
+  const shouldShowPermissionCta = !isCameraOn && isCameraPermissionBlocked;
   const tightAudioChip = shouldShowPermissionCta && isAudioOnly;
   const prewarmLiveCameraEffects = (reason: string) => {
     if (activeVideoEffectsCount <= 0 && !isEffectsOpen) return;

@@ -127,7 +127,7 @@ export class AdmissionLedger {
   // inviting a demoted guest again, always fits, even when refusals have
   // taken the ledger past its limit. A new record takes a free slot or one
   // that can be dropped for it: never a refusal, and never one of theirs.
-  private hasRoomFor(principals: ReadonlySet<string>): boolean {
+  hasRoomFor(principals: ReadonlySet<string>): boolean {
     let missing = 0;
     for (const principal of principals) {
       if (!this.records.has(principal)) missing += 1;

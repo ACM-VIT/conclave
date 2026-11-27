@@ -37,6 +37,42 @@ import { canonicalizeClientId } from "./clientIds.js";
 export const getRoomChannelId = (clientId: string, roomId: string): string =>
   `${canonicalizeClientId(clientId)}:${roomId}`;
 
+// Rooms this instance keeps serving although the shared registry could not
+// confirm their lease. A registry outage must not end a call that is already
+// running here; the lease is claimed again once the registry answers.
+const unconfirmedRoomLeases = new WeakMap<SfuState, Set<string>>();
+
+const getUnconfirmedRoomLeases = (state: SfuState): Set<string> => {
+  let channelIds = unconfirmedRoomLeases.get(state);
+  if (!channelIds) {
+    channelIds = new Set();
+    unconfirmedRoomLeases.set(state, channelIds);
+  }
+  return channelIds;
+};
+
+export const hasUnconfirmedRoomLeases = (state: SfuState): boolean =>
+  getUnconfirmedRoomLeases(state).size > 0;
+
+const keepRoomWithoutConfirmedLease = (state: SfuState, room: Room): void => {
+  if (!isCurrentRoom(state, room)) return;
+  const channelIds = getUnconfirmedRoomLeases(state);
+  if (channelIds.has(room.channelId)) return;
+  channelIds.add(room.channelId);
+  Logger.warn(
+    `Shared room registry is unavailable; keeping room ${room.id} (${room.clientId}) open and retrying its lease`,
+  );
+};
+
+const noteRoomLeaseConfirmed = (state: SfuState, room: Room): void => {
+  if (!isCurrentRoom(state, room)) return;
+  if (getUnconfirmedRoomLeases(state).delete(room.channelId)) {
+    Logger.success(
+      `Shared room registry is back; room ${room.id} (${room.clientId}) is registered again`,
+    );
+  }
+};
+
 export const getEndedRoom = (
   state: SfuState,
   channelId: string,
@@ -284,7 +320,7 @@ const fenceAgain = async (state: SfuState, room: LeasedRoom, generation: number)
       `Handing room ${room.id} (${room.clientId}) off: its fences did not land once its lease was claimed again.`,
     );
     dropHeld(state, room.channelId, "fenced");
-    if (isCurrentRoom(state, room)) handOffRoomState(state, room.channelId);
+    if (room instanceof Room) handOffRoomState(state, room);
     return;
   }
   if (room instanceof Room) room.adoptGeneration(generation);
@@ -297,33 +333,40 @@ const fenceAgain = async (state: SfuState, room: LeasedRoom, generation: number)
 
 const ROOM_HANDED_OFF_MESSAGE = "The meeting is moving to another server. Reconnecting you.";
 
-const leaseConfirmations = new WeakMap<SfuState, Map<string, Promise<boolean>>>();
+const leaseConfirmations = new WeakMap<LeasedRoom, Promise<boolean>>();
 
 const renewForConfirmation = (state: SfuState, room: LeasedRoom): Promise<boolean> => {
-  const pending = leaseConfirmations.get(state) ?? new Map<string, Promise<boolean>>();
-  leaseConfirmations.set(state, pending);
-  const inFlight = pending.get(room.channelId);
+  const inFlight = leaseConfirmations.get(room);
   if (inFlight) return inFlight;
   const renewal = state.roomRegistry
     .renewRoom({ channelId: room.channelId, clientId: room.clientId, roomId: room.id })
     .then(
       (ownership) => {
+        const current = state.rooms.get(room.channelId);
+        if (current ? current !== room : state.deferredRoomWrites.get(room.channelId)?.room !== room) {
+          return false;
+        }
         const reclaiming = settleOwnership(state, room.channelId, ownership);
         if (ownership.ok) {
-          return (reclaiming ?? Promise.resolve()).then(() => holdsRoomLease(state, room));
+          return (reclaiming ?? Promise.resolve()).then(() => {
+            if (current) noteRoomLeaseConfirmed(state, current);
+            return holdsRoomLease(state, room);
+          });
         }
-        if (state.rooms.has(room.channelId)) {
+        if (current) {
           Logger.warn(
             `Closing room ${room.id} (${room.clientId}) because ownership moved to ${ownership.owner.instanceId}`,
           );
-          handOffRoomState(state, room.channelId);
+          handOffRoomState(state, current);
         }
         return false;
       },
       (error: unknown) => {
-        dropHeld(state, room.channelId, "lost");
-        if (error instanceof RoomLeaseExpiredError && state.rooms.has(room.channelId)) {
-          handOffRoomState(state, room.channelId);
+        const current = state.rooms.get(room.channelId);
+        if (error instanceof RoomLeaseExpiredError && current === room) {
+          keepRoomWithoutConfirmedLease(state, current);
+        } else if (!current && state.deferredRoomWrites.get(room.channelId)?.room === room) {
+          dropHeld(state, room.channelId, "lost");
         }
         return false;
       },
@@ -332,8 +375,8 @@ const renewForConfirmation = (state: SfuState, room: LeasedRoom): Promise<boolea
       Logger.error(`Confirming the lease of ${room.channelId} failed`, error);
       return false;
     })
-    .finally(() => pending.delete(room.channelId));
-  pending.set(room.channelId, renewal);
+    .finally(() => leaseConfirmations.delete(room));
+  leaseConfirmations.set(room, renewal);
   return renewal;
 };
 
@@ -522,7 +565,7 @@ export const renewLocalRoom = async (
     Logger.warn(
       `Discarding stale room with closed router: ${roomId} (${clientId})`,
     );
-    handOffRoomState(state, channelId);
+    handOffRoomState(state, room);
     return null;
   }
   let ownership;
@@ -533,24 +576,25 @@ export const renewLocalRoom = async (
       roomId,
     });
   } catch (error) {
-    if (error instanceof RoomLeaseExpiredError) {
-      Logger.warn(
-        `Closing room ${roomId} (${clientId}) before its unconfirmed shared lease can expire`,
-      );
-      dropHeld(state, channelId, "lost");
-      handOffRoomState(state, channelId);
-    }
-    throw error;
+    if (!(error instanceof RoomLeaseExpiredError)) throw error;
+    keepRoomWithoutConfirmedLease(state, room);
   }
-  const reclaiming = settleOwnership(state, channelId, ownership);
-  if (!ownership.ok) {
+  if (state.rooms.get(channelId) !== room) {
+    const successor = state.rooms.get(channelId);
+    return successor && !successor.router.closed ? successor : null;
+  }
+  const reclaiming = ownership
+    ? settleOwnership(state, channelId, ownership)
+    : reclaims.get(room)?.settled;
+  if (ownership && !ownership.ok) {
     Logger.warn(
       `Closing local room ${roomId} (${clientId}) because ownership belongs to ${ownership.owner.instanceId}`,
     );
-    handOffRoomState(state, channelId);
+    handOffRoomState(state, room);
     throw new RoomOwnershipError(ownership.owner);
   }
   if (reclaiming) await reclaiming;
+  if (ownership?.ok) noteRoomLeaseConfirmed(state, room);
   // The last client can leave during the renew await, which closes the room
   // and removes it from the map; never hand back a closed room. If another
   // joiner already created its successor, that is the live room.
@@ -732,11 +776,21 @@ export const getOrCreateRoomWithOrigin = async (
   }
 };
 
-const cleanupRoomState = (state: SfuState, channelId: string): Room | null => {
-  const room = state.rooms.get(channelId);
-  if (!room) {
-    return null;
-  }
+/**
+ * Whether `room` is still the room registered for its channel. A delayed
+ * close armed for one room must not touch a newer room that was reopened on
+ * the same channel (or a second close of the same room).
+ */
+export const isCurrentRoom = (
+  state: SfuState,
+  room: Pick<Room, "channelId">,
+): boolean => state.rooms.get(room.channelId) === room;
+
+// Closes exactly this room. Anything that saw a room and then awaited may
+// find its channel reopened by a newer room, which this never touches.
+const cleanupRoomState = (state: SfuState, room: Room): boolean => {
+  if (!isCurrentRoom(state, room)) return false;
+  const { channelId } = room;
 
   const webinarConfig = state.webinarConfigs.get(channelId);
   if (webinarConfig) {
@@ -753,70 +807,49 @@ const cleanupRoomState = (state: SfuState, channelId: string): Room | null => {
   room.close();
   state.transcriptRelays.stopRoom(room.channelId);
   state.rooms.delete(channelId);
+  getUnconfirmedRoomLeases(state).delete(channelId);
   releaseRoomLease(state, channelId);
   runDetached("Closing the room's shared browser", () => cleanupRoomBrowser(channelId));
-  return room;
+  return true;
 };
 
-const handOffRoomState = (state: SfuState, channelId: string): Room | null => {
-  const room = state.rooms.get(channelId);
-  room?.beginHandOff();
+const handOffRoomState = (state: SfuState, room: Room): boolean => {
+  if (!isCurrentRoom(state, room)) return false;
+  room.beginHandOff();
   const seated = new Set(
     [...state.rooms.values()].flatMap((live) => [...live.clients.values()].map((client) => client.socket)),
   );
-  const waiting = room
-    ? [...room.pendingClients.values()].map((pending) => pending.socket).filter((socket) => !seated.has(socket))
-    : [];
-  const closed = cleanupRoomState(state, channelId);
+  const waiting = [...room.pendingClients.values()]
+    .map((pending) => pending.socket)
+    .filter((socket) => !seated.has(socket));
+  if (!cleanupRoomState(state, room)) return false;
   for (const socket of waiting) {
     socket.emit("serverRestarting", {
-      roomId: room?.id,
+      roomId: room.id,
       message: ROOM_HANDED_OFF_MESSAGE,
       reconnecting: true,
     });
     socket.disconnect(true);
   }
-  return closed;
+  return true;
 };
 
-/**
- * Whether `room` is still the room registered for its channel. A delayed
- * close armed for one room must not touch a newer room that was reopened on
- * the same channel (or a second close of the same room).
- */
-export const isCurrentRoom = (
-  state: SfuState,
-  room: Pick<Room, "channelId">,
-): boolean => state.rooms.get(room.channelId) === room;
-
-export const forceCloseRoom = (state: SfuState, channelId: string): boolean => {
-  const room = handOffRoomState(state, channelId);
-  if (!room) {
-    return false;
-  }
+export const forceCloseRoom = (state: SfuState, room: Room): boolean => {
+  if (!handOffRoomState(state, room)) return false;
   Logger.info(`Force closed room: ${room.id} (${room.clientId})`);
   return true;
 };
 
-export const cleanupStaleRoom = (
-  state: SfuState,
-  channelId: string,
-): boolean => {
-  const room = state.rooms.get(channelId);
-  if (!room || !room.router.closed) {
-    return false;
-  }
-
-  handOffRoomState(state, channelId);
+export const cleanupStaleRoom = (state: SfuState, room: Room): boolean => {
+  if (!room.router.closed || !handOffRoomState(state, room)) return false;
   Logger.warn(
     `Discarded stale room with closed router: ${room.id} (${room.clientId})`,
   );
   return true;
 };
 
-export const cleanupRoom = (state: SfuState, channelId: string): boolean => {
-  const room = state.rooms.get(channelId);
-  if (!room || !room.isEmpty()) {
+export const cleanupRoom = (state: SfuState, room: Room): boolean => {
+  if (!isCurrentRoom(state, room) || !room.isEmpty()) {
     return false;
   }
 
@@ -830,27 +863,28 @@ export const cleanupRoom = (state: SfuState, channelId: string): boolean => {
   if (room.endsWhenEmpty) {
     noteMeetingOver(state, room);
   }
-  const closedRoom = cleanupRoomState(state, channelId);
-  if (!closedRoom) {
-    return false;
-  }
+  if (!cleanupRoomState(state, room)) return false;
   // Those knocking on a meeting a host ended were told so, and are let go.
-  if (!closedRoom.hasEnded) {
-    waitForNextMeeting(state, closedRoom, waiting, retryAt);
+  if (!room.hasEnded) {
+    waitForNextMeeting(state, room, waiting, retryAt);
   }
 
-  Logger.info(`Closed empty room: ${closedRoom.id} (${closedRoom.clientId})`);
+  Logger.info(`Closed empty room: ${room.id} (${room.clientId})`);
   return true;
 };
 
 export const renewRoomOwnerships = async (state: SfuState): Promise<void> => {
   const rooms = Array.from(state.rooms.values());
   for (const room of rooms) {
+    // An earlier room's renewal can take a while. A room that closed in the
+    // meantime is no longer this loop's business, even if its channel was
+    // reopened by a newer room.
+    if (!isCurrentRoom(state, room)) continue;
     if (room.router.closed) {
       Logger.warn(
         `Cleaning up room ${room.id} (${room.clientId}) with closed router during ownership renewal`,
       );
-      handOffRoomState(state, room.channelId);
+      handOffRoomState(state, room);
       continue;
     }
 
@@ -863,27 +897,32 @@ export const renewRoomOwnerships = async (state: SfuState): Promise<void> => {
       });
     } catch (error) {
       if (error instanceof RoomLeaseExpiredError) {
-        Logger.warn(
-          `Closing room ${room.id} (${room.clientId}) before its unconfirmed shared lease can expire`,
-        );
-        dropHeld(state, room.channelId, "lost");
-        handOffRoomState(state, room.channelId);
+        keepRoomWithoutConfirmedLease(state, room);
         continue;
       }
       throw error;
     }
+    if (!isCurrentRoom(state, room) && state.deferredRoomWrites.get(room.channelId)?.room !== room) continue;
     const reclaiming = settleOwnership(state, room.channelId, ownership);
     if (ownership.ok) {
       if (reclaiming) {
-        runDetached(`Keeping room ${room.id} once its lease was claimed again`, () => reclaiming);
+        runDetached(`Keeping room ${room.id} once its lease was claimed again`, async () => {
+          await reclaiming;
+          noteRoomLeaseConfirmed(state, room);
+        });
+      } else {
+        noteRoomLeaseConfirmed(state, room);
       }
       continue;
     }
+    // The room can close during the renewal. Whatever holds its channel
+    // now is renewed on its own turn.
+    if (!isCurrentRoom(state, room)) continue;
 
     Logger.warn(
       `Closing room ${room.id} (${room.clientId}) because ownership moved to ${ownership.owner.instanceId}`,
     );
-    handOffRoomState(state, room.channelId);
+    handOffRoomState(state, room);
   }
   await followMeetingsOpenedElsewhere(state);
 };

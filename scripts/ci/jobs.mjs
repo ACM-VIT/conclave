@@ -14,6 +14,26 @@ export const jobs = {
       { dir: ".", script: "konsistent" },
     ],
   },
+  deploy: {
+    budgetSeconds: 540,
+    budgetFrom: "run",
+    tasks: [{ dir: ".", script: "test:deploy-preflight" }, { dir: ".", script: "test:deploy-crash" }, { dir: ".", script: "test:deploy-compose" }],
+  },
+  "fuzz-a": {
+    budgetSeconds: 1080,
+    budgetFrom: "run",
+    tasks: [{ dir: ".", script: "test:deploy-fuzz" }],
+  },
+  "fuzz-b": {
+    budgetSeconds: 1080,
+    budgetFrom: "run",
+    tasks: [{ dir: ".", script: "test:deploy-fuzz-b" }],
+  },
+  "fuzz-c": {
+    budgetSeconds: 1080,
+    budgetFrom: "run",
+    tasks: [{ dir: ".", script: "test:deploy-fuzz-c" }],
+  },
   typecheck: {
     budgetSeconds: 75,
     tasks: [
@@ -47,10 +67,7 @@ export const jobs = {
       { dir: "packages/shared-browser", script: "build" },
     ],
   },
-  deploy: {
-    budgetSeconds: 180,
-    tasks: [{ dir: ".", script: "test:deploy-preflight" }],
-  },
+
   checks: {
     budgetSeconds: 100,
     tasks: [

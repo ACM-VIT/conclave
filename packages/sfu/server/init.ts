@@ -70,7 +70,7 @@ export const cleanupDeadWorkerRooms = async (
     Logger.warn(
       `Closing room ${room.id} (${room.clientId}) after worker ${label} died`,
     );
-    forceCloseRoom(state, room.channelId);
+    forceCloseRoom(state, room);
   }
 
   if (io) {

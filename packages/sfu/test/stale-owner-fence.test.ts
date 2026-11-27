@@ -330,6 +330,7 @@ const runCase = async (action: (typeof ACTIONS)[number], lease: LeaseState) => {
     expect((await leases.forInstance("sfu-b").claimRoom({ channelId: CHANNEL, clientId: "conclave", roomId: CODE })).ok).toBe(true);
   }
   const invitedBefore = await inviteeIsInvited();
+  const room = sfuA.rooms.get(CHANNEL)!;
 
   let answer: Promise<Answer> | null = null;
   switch (action.action) {
@@ -351,7 +352,7 @@ const runCase = async (action: (typeof ACTIONS)[number], lease: LeaseState) => {
   }
   await settle();
   if (lease === "renewing, then drained") await forceDrainRooms(sfuA, io, { message: "Restarting", noticeMs: 0 });
-  if (lease === "renewing, then closed") forceCloseRoom(sfuA, CHANNEL);
+  if (lease === "renewing, then closed") forceCloseRoom(sfuA, room);
   if (renewing) {
     expect(await inviteeIsInvited()).toBe(invitedBefore);
     if (!action.command || lease === "renewing") expect(leases.ownerOf(CHANNEL)).toBe("sfu-a");

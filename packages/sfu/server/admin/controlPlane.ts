@@ -9,7 +9,7 @@ import type {
   ProducerType,
 } from "../../config/classes/Client.js";
 import type { AdmissionScope } from "../../config/classes/AdmissionLedger.js";
-import type { HostBasis, Room, WaitingRequest } from "../../config/classes/Room.js";
+import type { HostBasis, Room, SettledWaitingRequest, WaitingRequest } from "../../config/classes/Room.js";
 import type { AppsAwarenessData } from "../../types.js";
 import { isGuestUserKey } from "../identity.js";
 import { cleanupRoom, forceCloseRoom, getRoomChannelId, markRoomEnded } from "../rooms.js";
@@ -243,7 +243,7 @@ const endForNoHost = (io: SocketIOServer, state: SfuState, room: Room): void => 
   }
   io.in(room.channelId).disconnectSockets(true);
   for (const socket of pendingSockets) socket.disconnect(true);
-  forceCloseRoom(state, room.channelId);
+  forceCloseRoom(state, room);
 };
 
 const tellWaitingNoHost = (room: Room): void => {
@@ -267,7 +267,7 @@ export const ensureHost = (
       room.startCleanupTimer(() => {
         if (state.rooms.get(room.channelId) !== room || room.hasActiveAdmin()) return;
         if (room.isEmpty()) {
-          cleanupRoom(state, room.channelId);
+          cleanupRoom(state, room);
           return;
         }
         const late = promoteNextAdmin(room);
@@ -1035,7 +1035,7 @@ export const rejectWaitingGuest = (room: Room, userKey: string): string[] => {
  */
 export const answerSettledRequests = (
   room: Room,
-  settled: ReturnType<Room["commitGuestLink"]>,
+  settled: SettledWaitingRequest[],
 ): void => {
   for (const { request, admitted } of settled) {
     request.socket.emit(admitted ? "joinApproved" : "joinRejected", {
@@ -1139,9 +1139,7 @@ export const forceRemoveClientNow = (options: {
 }): boolean => {
   const { io, state, room, userId, handOff = true } = options;
   const { removed } = teardownClient({ io, state, room, userId });
-  if (state.rooms.has(room.channelId)) {
-    cleanupRoom(state, room.channelId);
-  }
+  cleanupRoom(state, room);
   if (removed && handOff) ensureHost(io, state, room);
   return removed;
 };
@@ -1283,7 +1281,7 @@ export const offerLapsedRoom = (
   for (const pending of room.pendingClients.values()) {
     pending.socket.emit("joinApproved", { roomId: room.id });
   }
-  cleanupRoom(state, room.channelId);
+  cleanupRoom(state, room);
 };
 
 export const settleUnclaimedRoom = (
@@ -1294,7 +1292,7 @@ export const settleUnclaimedRoom = (
   const unclaimed = room.awaitingOpener;
   if (state.rooms.get(room.channelId) !== room || !unclaimed) return;
   if (room.isEmpty()) {
-    cleanupRoom(state, room.channelId);
+    cleanupRoom(state, room);
     return;
   }
   room.awaitingOpener = null;

@@ -44,7 +44,7 @@ export const forceDrainRooms = async (
     });
   }
   for (const room of rooms) {
-    if (isCurrentRoom(state, room)) forceCloseRoom(state, room.channelId);
+    if (isCurrentRoom(state, room)) forceCloseRoom(state, room);
   }
   for (const room of rooms) io.in(room.channelId).disconnectSockets(true);
   for (const socket of waiting) socket.disconnect(true);

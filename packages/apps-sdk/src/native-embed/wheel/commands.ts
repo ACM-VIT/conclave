@@ -4,17 +4,24 @@ import {
   addEntriesOnce,
   clearEntries,
   clearHistory,
-  getAddedTokens,
   getEntries,
   normalizeLabel,
+  readAddRecord,
   removeEntryById,
-  replaceEntries,
+  reorderEntries,
   setRemoveWinnerOnDone,
   type WheelEntry,
   type WheelResult,
 } from "../../apps/wheel/core/doc/index";
 import { cutText } from "../../sdk/text";
-import { APP_EDIT_COMMANDS, DOC_ANSWERED_COMMANDS, WHEEL_LIMITS, isValidIdentifier, type NativeToEmbedType } from "../protocol";
+import {
+  APP_EDIT_COMMANDS,
+  DOC_ANSWERED_COMMANDS,
+  WHEEL_ADD_RECOVERY,
+  WHEEL_LIMITS,
+  isValidIdentifier,
+  type NativeToEmbedType,
+} from "../protocol";
 import { payloadBoolean, payloadString, type CommandResult, type WheelAppStatus } from "../session";
 
 export type SentName = { index: number; label: string };
@@ -40,44 +47,68 @@ const readTokens = (value: unknown): string[] | null => {
   return tokens.every(isValidIdentifier) && new Set(tokens).size === tokens.length ? tokens : null;
 };
 
+const readSentAt = (value: unknown): number | null =>
+  typeof value === "number" && Number.isSafeInteger(Math.trunc(value)) && value > 0 ? value : null;
+
 const slotsOf = (tokens: readonly string[], added: ReadonlySet<string>): number[] =>
   tokens.flatMap((token, index) => (added.has(token) ? [index] : []));
 
-const slotsOnRecord = (doc: Y.Doc, tokens: readonly string[]): number[] => slotsOf(tokens, getAddedTokens(doc));
+type Recorded = { added: number[]; reachesBack: boolean };
+
+const onRecord = (doc: Y.Doc, tokens: readonly string[], sentAt: number): Recorded => {
+  const record = readAddRecord(doc, sentAt);
+  return { added: slotsOf(tokens, record.added), reachesBack: record.reachesBack };
+};
+
+const unrecorded = (recorded: Recorded): CommandResult =>
+  recorded.reachesBack ? refusal("notApplied") : { ok: false, error: WHEEL_ADD_RECOVERY.unknown };
 
 export type AddContext = { synced: boolean; canEdit: boolean; repeat: boolean };
+
+type TrackedAdd = { tokens: string[]; sentAt: number };
+
+const readTrackedAdd = (payload: Record<string, unknown>): TrackedAdd | null => {
+  const tokens = readTokens(payload.tokens);
+  const sentAt = readSentAt(payload.sentAt);
+  return tokens === null || sentAt === null ? null : { tokens, sentAt };
+};
 
 export const addNames = (doc: Y.Doc, payload: Record<string, unknown>, context: AddContext): CommandResult => {
   const names = labelsFrom(payload);
   if (names === null) return refusal("tooManyLines");
-  const tracked = payload.tokens !== undefined;
-  const tokens = tracked ? readTokens(payload.tokens) : null;
-  if (tracked && (tokens === null || !Array.isArray(payload.labels) || payload.labels.length !== tokens.length)) {
-    return refusal("badRequest");
+  const tracked = payload.tokens !== undefined ? readTrackedAdd(payload) : null;
+  if (payload.tokens !== undefined) {
+    if (tracked === null || !Array.isArray(payload.labels) || payload.labels.length !== tracked.tokens.length) {
+      return refusal("badRequest");
+    }
+    const recorded = onRecord(doc, tracked.tokens, tracked.sentAt);
+    if (recorded.added.length > 0) return { ok: true, added: recorded.added };
+    if (context.repeat) return unrecorded(recorded);
+  } else if (context.repeat) {
+    return { ok: false, error: "duplicateRequest" };
   }
-  if (tokens !== null) {
-    const recorded = slotsOnRecord(doc, tokens);
-    if (recorded.length > 0) return { ok: true, added: recorded };
-  }
-  if (context.repeat) return tokens === null ? { ok: false, error: "duplicateRequest" } : refusal("notApplied");
   if (!context.synced) return refusal("notSynced");
   if (!context.canEdit) return refusal("readOnly");
   if (names.length === 0) return refusal("noNames");
-  if (tokens === null) {
+  if (tracked === null) {
     const count = addEntries(doc, names.map((name) => name.label));
     return count === 0 ? refusal("full") : { ok: true, added: names.slice(0, count).map((name) => name.index) };
   }
-  const recorded = addEntriesOnce(doc, names.map((name) => ({ token: tokens[name.index], label: name.label })));
-  const added = slotsOf(tokens, new Set(recorded));
+  const written = addEntriesOnce(
+    doc,
+    names.map((name) => ({ token: tracked.tokens[name.index], label: name.label })),
+    tracked.sentAt
+  );
+  const added = slotsOf(tracked.tokens, new Set(written));
   return added.length === 0 ? refusal("full") : { ok: true, added };
 };
 
 const addOutcome = (doc: Y.Doc, payload: Record<string, unknown>, context: AddContext): CommandResult => {
-  const tokens = readTokens(payload.tokens);
-  if (tokens === null) return { ok: false, error: "badRequest" };
-  const added = slotsOnRecord(doc, tokens);
-  if (added.length > 0) return { ok: true, added };
-  return context.synced ? refusal("notApplied") : { ok: false, error: "notSynced" };
+  const asked = readTrackedAdd(payload);
+  if (asked === null) return { ok: false, error: "badRequest" };
+  const recorded = onRecord(doc, asked.tokens, asked.sentAt);
+  if (recorded.added.length > 0) return { ok: true, added: recorded.added };
+  return context.synced ? unrecorded(recorded) : { ok: false, error: "notSynced" };
 };
 
 export type WheelCommandContext = AddContext & {
@@ -123,13 +154,13 @@ export const runWheelCommand = (
     }
     case "shuffle": {
       const current = getEntries(doc);
-      if (current.length >= 2) replaceEntries(doc, shuffled(current));
+      if (current.length >= 2) reorderEntries(doc, shuffled(current));
       return { ok: true };
     }
     case "sort": {
       const current = getEntries(doc);
       if (current.length >= 2) {
-        replaceEntries(doc, [...current].sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" })));
+        reorderEntries(doc, [...current].sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" })));
       }
       return { ok: true };
     }
@@ -185,6 +216,7 @@ export const runWheelCommand = (
 
 export type WheelStatusInput = {
   entries: WheelEntry[];
+  waitingCount: number;
   history: WheelResult[];
   removeWinner: boolean;
   sounds: boolean;
@@ -195,6 +227,7 @@ export type WheelStatusInput = {
 export const wheelStatus = (input: WheelStatusInput): WheelAppStatus => ({
   kind: "wheel",
   entries: input.entries.map((entry) => ({ id: entry.id, label: entry.label })),
+  waiting: Math.min(input.waitingCount, WHEEL_LIMITS.waiting),
   results: input.history.map((result) => ({
     id: result.spinId,
     label: result.label,

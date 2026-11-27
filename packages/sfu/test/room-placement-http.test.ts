@@ -253,6 +253,24 @@ describe("room placement HTTP API", () => {
     await expect(registry.getAssignment("conclave:room-1")).resolves.toBeNull();
   });
 
+  it("places the deploy canary's room on a draining instance only when asked", async () => {
+    const { url, registry, state } = await startPlacementApp({ draining: true });
+    const response = await fetch(`${url}/routing/placements/conclave/canary-room`, {
+      method: "POST",
+      headers: { "x-sfu-secret": config.sfuSecret, "content-type": "application/json" },
+      body: JSON.stringify({ allowDraining: true }),
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ local: true });
+    await expect(registry.getAssignment("conclave:canary-room")).resolves.toMatchObject({
+      kind: "placement",
+      instanceId: "sfu-a",
+    });
+    expect(state.isDraining).toBe(true);
+    expect((await reserve(url, "someone-else")).status).toBe(409);
+  });
+
   it("fails closed when the shared reservation operation is degraded", async () => {
     const registry = new LocalRoomRegistry({
       instanceId: "sfu-a",

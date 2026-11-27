@@ -1,8 +1,8 @@
 import { readAiEnvironment } from "@conclave/ai/models";
 import { parseGuestJoinClaims } from "@conclave/meeting-core/guest-join-claims";
 import { Admin } from "../../../config/classes/Admin.js";
-import type { Room } from "../../../config/classes/Room.js";
 import { Client } from "../../../config/classes/Client.js";
+import type { Room, WaitingRequest } from "../../../config/classes/Room.js";
 import { config } from "../../../config/config.js";
 import type {
   AppsAwarenessData,
@@ -49,7 +49,7 @@ import {
   emitWebinarFeedChanged,
 } from "../../webinarNotifications.js";
 import {
-  getOrCreateWebinarRoomConfig,
+  createDefaultWebinarRoomConfig,
   normalizeHostEmail,
   resolveWebinarLinkTarget,
   toWebinarConfigSnapshot,
@@ -105,12 +105,9 @@ const GUEST_NOT_VERIFIED_ERROR =
 const WAITING_ROOM_FULL_ERROR =
   "The waiting room is full. Try again in a moment.";
 const MEETING_FULL_ERROR = "This meeting is full.";
+const GUEST_LINK_CHANGED_ERROR =
+  "Your other tabs in this meeting changed while this one joined. Join again.";
 
-// A new request to be let in past the room's limit is refused. A tab that
-// already waits keeps its place.
-const isWaitingRoomFull = (room: Room, userKey: string): boolean =>
-  !room.pendingClients.has(userKey) &&
-  room.pendingClients.size >= config.waitingRequestLimit;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
 
 const normalizeIdentifier = (
@@ -419,10 +416,6 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           guestClaims?.scope === "room" ? guestClaims : null;
         const roomGuestProof = roomScopedClaims?.guestProof;
         const otherGuestSeats = roomScopedClaims?.guestWas ?? [];
-        // What the token shows of the guest's other passes is decided on,
-        // not recorded: only a join that is let in or waits records it
-        // (`commitLink` below). A refused join leaves the room as it was,
-        // except that a guest a block turns out to cover leaves at once.
         const planLink = (forRoom: Room | undefined) =>
           forRoom && roomGuestProof !== undefined && otherGuestSeats.length > 0
             ? forRoom.planGuestLink(otherGuestSeats, roomGuestProof)
@@ -439,7 +432,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         // a full participant; the promotion registry lives on the live room.
         // Honored only while webinar mode is on, so a stale invite can never
         // bypass an ordinary meeting's lock or invite code later.
-        const isWebinarPromotedJoin =
+        let isWebinarPromotedJoin =
           !isWebinarAttendeeJoin &&
           Boolean(preexistingWebinarConfig?.enabled) &&
           Boolean(
@@ -521,7 +514,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         };
 
         if (room?.router.closed) {
-          cleanupStaleRoom(state, roomChannelId);
+          cleanupStaleRoom(state, room);
           room = undefined;
         }
 
@@ -748,10 +741,8 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           room.endLostCall();
         }
 
-        const webinarConfig = getOrCreateWebinarRoomConfig(
-          state.webinarConfigs,
-          roomChannelId,
-        );
+        const existingWebinarConfig = state.webinarConfigs.get(roomChannelId);
+        const webinarConfig = existingWebinarConfig ?? createDefaultWebinarRoomConfig();
 
         if (isWebinarAttendeeJoin) {
           if (!webinarConfig.enabled) {
@@ -801,12 +792,15 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             state,
           });
         }
-        const joinedRoom = room;
-        const commitLink = () => {
-          if (!guestLink) return;
-          answerSettledRequests(joinedRoom, joinedRoom.commitGuestLink(guestLink));
-        };
-
+        if (isWebinarPromotedJoin && !room.hasStageInvite(userKey, roomGuestProof, guestLink)) {
+          if (isActiveScheduledWebinarRoom && !forcedHostJoin && !hostRequested) {
+            respond(callback, {
+              error: "Use the public webinar link to join as an attendee.",
+            });
+            return;
+          }
+          isWebinarPromotedJoin = false;
+        }
         const guestClaim = room.claimGuestIdentity(userKey, guestProof);
         if (!guestClaim.ok) {
           Logger.warn(
@@ -827,6 +821,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         // A request to be let in that this tab made under another pass is
         // withdrawn now. Left in the lobby, the host would see two requests
         // for one tab, and admitting the old one would answer a dead socket.
+        const formerWaits = new Map<string, WaitingRequest>();
         for (const seat of otherGuestSeats) {
           const waiting = room.pendingClients.get(seat.userKey);
           if (
@@ -837,8 +832,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           ) {
             continue;
           }
-          withdrawWaitingRequest(room, seat.userKey);
-          waiting.socket.disconnect(true);
+          formerWaits.set(seat.userKey, waiting);
         }
         const existingClient = room.getClient(userId);
         const staleSameIdentitySeats = Array.from(
@@ -1121,9 +1115,10 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           data?.admissionCode,
           MAX_ADMISSION_CODE_LENGTH,
         );
-        if (admissionCode && !isWebinarAttendeeJoin && !hasPrivilegedJoinAccess) {
-          room.redeemAdmission(admissionCode, userKey, guestProof);
-        }
+        const redeemAdmission =
+          admissionCode && !isWebinarAttendeeJoin && !hasPrivilegedJoinAccess
+            ? room.planAdmissionRedemption(admissionCode, userKey, guestProof)
+            : null;
 
         const canSetDisplayName = Boolean(
           !isWebinarAttendeeJoin &&
@@ -1133,8 +1128,6 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           canSetDisplayName && displayNameCandidate ? displayNameCandidate : "";
         const displayName = requestedDisplayName || identity.displayName;
         const hasDisplayNameOverride = Boolean(requestedDisplayName);
-        context.currentUserKey = userKey;
-
         const isInvitedJoin =
           !isWebinarAttendeeJoin &&
           !needsReadmission &&
@@ -1144,140 +1137,34 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             roomId,
             normalizedJoinEmail,
           );
-        // This room was recreated after the SFU lost the one this person was
-        // in. Record the admission they prove, so they rejoin as they would
-        // have and everyone who was only knocking still knocks.
-        const waitsToBeLetIn = room.isLocked
-          ? !room.isLockedAllowed(userKey, guestProof, guestLink)
-          : clientPolicy.useWaitingRoom && !room.isAllowed(userKey, guestProof, guestLink);
-        if (
-          provesMembership &&
-          !hasPrivilegedJoinAccess &&
-          waitsToBeLetIn &&
-          room.restoreAdmission(userKey, guestProof, { pastLock: true })
-        ) {
-          Logger.info(
-            `Recovered ${userKey}'s admission to recreated room ${roomId} (${clientId})`,
-          );
-        }
+
+        let waitingReason: "locked" | "waiting" | null = null;
         if (
           !isWebinarAttendeeJoin &&
-          (room.isLocked || needsReadmission) &&
           !hasPrivilegedJoinAccess &&
           !isWebinarPromotedJoin &&
           !isInvitedJoin &&
-          !room.isLockedAllowed(userKey, guestProof, guestLink)
+          !redeemAdmission
         ) {
-          if (isWaitingRoomFull(room, userKey)) {
-            respond(callback, { error: WAITING_ROOM_FULL_ERROR });
-            return;
+          if (room.isLocked || needsReadmission) {
+            if (!room.isLockedAllowed(userKey, guestProof, guestLink)) waitingReason = "locked";
+          } else if (clientPolicy.useWaitingRoom && !room.isAllowed(userKey, guestProof, guestLink)) {
+            waitingReason = "waiting";
           }
-          commitLink();
-          releaseClaim();
-          Logger.info(
-            `User ${userKey} trying to join locked room ${roomId}, adding to waiting room`,
-          );
-          room.addPendingClient(
-            userKey,
-            userId,
-            socket,
-            displayName,
-            guestClaim.bindTo,
-          );
-          context.pendingRoomId = roomId;
-          context.pendingRoomChannelId = roomChannelId;
-          context.pendingUserKey = userKey;
-
-          socket.emit("waitingRoomStatus", {
-            message:
-              "This meeting is locked. Waiting for the host to let you in.",
-            roomId,
-          });
-
-          // Hosts are shown one request per guest. A second tab of a guest
-          // who already waits joins that request without a new knock.
-          publishLobby(room, { reason: "locked" });
-
-          // Nothing here names anyone in the meeting: a user id holds its
-          // owner's guest session, and that is all a guest needs to be them.
-          respond(callback, {
-            roomId,
-            rtpCapabilities: room.rtpCapabilities,
-            existingProducers: [],
-            status: "waiting",
-            isLocked: room.isLocked,
-            isTtsDisabled: room.isTtsDisabled,
-            isChatLocked: room.isChatLocked,
-            isDmEnabled: room.isDmEnabled,
-            areImageAttachmentsEnabled: room.areImageAttachmentsEnabled,
-            isReactionsDisabled: room.isReactionsDisabled,
-            isParticipantUnmuteAllowed: room.isParticipantUnmuteAllowed,
-            isParticipantVideoAllowed: room.isParticipantVideoAllowed,
-            meetingRequiresInviteCode: room.requiresMeetingInviteCode,
-            webcamCodecPolicy: room.webcamCodecPolicy,
-          });
+        }
+        const restoreAdmission = waitingReason && provesMembership
+          ? room.planAdmissionRestoration(userKey, guestProof)
+          : null;
+        if (restoreAdmission) waitingReason = null;
+        if (
+          waitingReason && !room.pendingClients.has(userKey) &&
+          room.pendingClients.size - formerWaits.size >= config.waitingRequestLimit
+        ) {
+          respond(callback, { error: WAITING_ROOM_FULL_ERROR });
           return;
         }
-
         if (
-          !isWebinarAttendeeJoin &&
-          clientPolicy.useWaitingRoom &&
-          !hasPrivilegedJoinAccess &&
-          !isWebinarPromotedJoin &&
-          !isInvitedJoin &&
-          !room.isAllowed(userKey, guestProof, guestLink) &&
-          !(
-            room.isLocked &&
-            room.isLockedAllowed(userKey, guestProof, guestLink)
-          )
-        ) {
-          if (isWaitingRoomFull(room, userKey)) {
-            respond(callback, { error: WAITING_ROOM_FULL_ERROR });
-            return;
-          }
-          commitLink();
-          releaseClaim();
-          Logger.info(`User ${userKey} added to waiting room ${roomId}`);
-          room.addPendingClient(
-            userKey,
-            userId,
-            socket,
-            displayName,
-            guestClaim.bindTo,
-          );
-          context.pendingRoomId = roomId;
-          context.pendingRoomChannelId = roomChannelId;
-          context.pendingUserKey = userKey;
-
-          if (!room.hasActiveAdmin()) {
-            socket.emit("waitingRoomStatus", {
-              message: "No one to let you in.",
-              roomId,
-            });
-          }
-
-          publishLobby(room);
-
-          respond(callback, {
-            roomId,
-            rtpCapabilities: room.rtpCapabilities,
-            existingProducers: [],
-            status: "waiting",
-            isLocked: room.isLocked,
-            isTtsDisabled: room.isTtsDisabled,
-            isChatLocked: room.isChatLocked,
-            isDmEnabled: room.isDmEnabled,
-            areImageAttachmentsEnabled: room.areImageAttachmentsEnabled,
-            isReactionsDisabled: room.isReactionsDisabled,
-            isParticipantUnmuteAllowed: room.isParticipantUnmuteAllowed,
-            isParticipantVideoAllowed: room.isParticipantVideoAllowed,
-            meetingRequiresInviteCode: room.requiresMeetingInviteCode,
-            webcamCodecPolicy: room.webcamCodecPolicy,
-          });
-          return;
-        }
-
-        if (
+          !waitingReason &&
           !isWebinarAttendeeJoin &&
           !hasPrivilegedJoinAccess &&
           !isReplacingMeetingSeat &&
@@ -1287,8 +1174,65 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           respond(callback, { error: MEETING_FULL_ERROR });
           return;
         }
-        commitLink();
+
+        const committedLink = guestLink && room.commitGuestLink(guestLink);
+        if (guestLink?.recordable && !committedLink?.linked) {
+          respond(callback, { error: GUEST_LINK_CHANGED_ERROR });
+          return;
+        }
+
+        if (!existingWebinarConfig) state.webinarConfigs.set(roomChannelId, webinarConfig);
+        context.currentUserKey = userKey;
+        guestClaim.clearUnheldBinding?.();
+        for (const key of formerWaits.keys()) room.removePendingClient(key);
         releaseClaim();
+        redeemAdmission?.();
+        if (restoreAdmission?.()) {
+          Logger.info(
+            `Recovered ${userKey}'s admission to recreated room ${roomId} (${clientId})`,
+          );
+        }
+        if (committedLink?.linked) answerSettledRequests(room, committedLink.settleWaiting());
+        else if (formerWaits.size > 0) publishLobby(room);
+        for (const request of formerWaits.values()) request.socket.disconnect(true);
+
+        if (waitingReason) {
+          Logger.info(`User ${userKey} added to waiting room ${roomId} (${waitingReason})`);
+          room.addPendingClient(userKey, userId, socket, displayName, guestClaim.bindTo);
+          context.pendingRoomId = roomId;
+          context.pendingRoomChannelId = roomChannelId;
+          context.pendingUserKey = userKey;
+
+          if (waitingReason === "locked") {
+            socket.emit("waitingRoomStatus", {
+              message: "This meeting is locked. Waiting for the host to let you in.",
+              roomId,
+            });
+          } else if (!room.hasActiveAdmin()) {
+            socket.emit("waitingRoomStatus", { message: "No one to let you in.", roomId });
+          }
+
+          publishLobby(room, waitingReason === "locked" ? { reason: "locked" } : undefined);
+
+          respond(callback, {
+            roomId,
+            rtpCapabilities: room.rtpCapabilities,
+            existingProducers: [],
+            status: "waiting",
+            isLocked: room.isLocked,
+            isTtsDisabled: room.isTtsDisabled,
+            isChatLocked: room.isChatLocked,
+            isDmEnabled: room.isDmEnabled,
+            areImageAttachmentsEnabled: room.areImageAttachmentsEnabled,
+            isReactionsDisabled: room.isReactionsDisabled,
+            isParticipantUnmuteAllowed: room.isParticipantUnmuteAllowed,
+            isParticipantVideoAllowed: room.isParticipantVideoAllowed,
+            meetingRequiresInviteCode: room.requiresMeetingInviteCode,
+            webcamCodecPolicy: room.webcamCodecPolicy,
+          });
+          return;
+        }
+
         if (
           isAdminJoin &&
           (isCodeOwner || forcedHostJoin) &&
@@ -1335,7 +1279,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           clearBrowserState(roomChannelId);
         }
 
-        let previousChannelIdToLeave: string | null = null;
+        let previousRoomToLeave: Room | null = null;
         if (
           context.currentRoom &&
           context.currentRoom.channelId !== roomChannelId &&
@@ -1361,7 +1305,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           });
           ensureHost(io, state, previousRoom, previousPeers);
 
-          previousChannelIdToLeave = previousChannelId;
+          previousRoomToLeave = previousRoom;
           context.currentRoom = null;
           context.currentClient = null;
         }
@@ -1434,9 +1378,9 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         // The previous room's channel is left only now. Nothing awaits between
         // the identity checks above and this seat, so a second join under the
         // same user key is always judged against the seat.
-        if (previousChannelIdToLeave) {
-          await socket.leave(previousChannelIdToLeave);
-          cleanupRoom(state, previousChannelIdToLeave);
+        if (previousRoomToLeave) {
+          await socket.leave(previousRoomToLeave.channelId);
+          cleanupRoom(state, previousRoomToLeave);
           if (stopped()) return;
         }
         await joiningChannel;
@@ -1689,6 +1633,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             : {}),
           webcamCodecPolicy: context.currentRoom.webcamCodecPolicy,
           ...(roomRecoveryPass ? { roomRecoveryPass } : {}),
+          reportsSenderPacketCounts: true,
         });
       } catch (error) {
         Logger.error("Error joining room:", error);
