@@ -614,6 +614,18 @@ export class ViewTracker {
   }
 
   /**
+   * Starts keeping a viewer's view without reading it out, and returns the
+   * version it is at. For a viewer that reads rows itself, when it needs
+   * them, and only has to be told what changes from here on.
+   */
+  hold(role: Role, subject: Subject): number {
+    this.absorb();
+    this.roleAudience(role);
+    this.subjectAudience(subject);
+    return this.version;
+  }
+
+  /**
    * What a viewer who holds `held` must be told to hold their view as
    * committed now, and the version that is. It is read at the moment of
    * asking, so nothing in it is older than what the viewer has, and nothing

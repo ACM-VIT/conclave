@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { shouldRetainMeetingSurface } from "../src/app/lib/meeting-surface-policy";
+import { reconnectHold, shouldRetainMeetingSurface } from "../src/app/lib/meeting-surface-policy";
 import type { ConnectionState } from "../src/app/lib/types";
 
 const recoveryStates: ConnectionState[] = [
@@ -19,5 +19,35 @@ describe("meeting surface continuity", () => {
     expect(shouldRetainMeetingSurface({ connectionState: "connecting", hasEnteredMeetingSurface: false, intentionalDisconnect: false })).toBe(false);
     expect(shouldRetainMeetingSurface({ connectionState: "waiting", hasEnteredMeetingSurface: true, intentionalDisconnect: false })).toBe(false);
     expect(shouldRetainMeetingSurface({ connectionState: "joined", hasEnteredMeetingSurface: false, intentionalDisconnect: false })).toBe(true);
+  });
+});
+
+describe("holding what panels show through a reconnect", () => {
+  const coming: ConnectionState[] = ["connecting", "connected", "joining", "joined", "reconnecting"];
+  const ended: ConnectionState[] = ["error", "disconnected", "waiting"];
+
+  it.each(coming)("holds through %s until the server answers", (connectionState) => {
+    expect(reconnectHold({ isJoined: true, connectionState, authorityRuntime: "unknown" })).toEqual({
+      connectionLive: true,
+      holdingThroughReconnect: true,
+    });
+    expect(reconnectHold({ isJoined: true, connectionState, authorityRuntime: "ready" })).toEqual({
+      connectionLive: true,
+      holdingThroughReconnect: false,
+    });
+  });
+
+  it.each(ended)("holds nothing in %s, which no reconnect follows", (connectionState) => {
+    expect(reconnectHold({ isJoined: true, connectionState, authorityRuntime: "unknown" })).toEqual({
+      connectionLive: false,
+      holdingThroughReconnect: false,
+    });
+  });
+
+  it("holds nothing for someone out of the meeting, whatever the connection says", () => {
+    expect(reconnectHold({ isJoined: false, connectionState: "joined", authorityRuntime: "unknown" })).toEqual({
+      connectionLive: false,
+      holdingThroughReconnect: false,
+    });
   });
 });

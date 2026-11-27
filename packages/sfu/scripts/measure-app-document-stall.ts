@@ -1,178 +1,161 @@
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { setTimeout as sleep } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import {
+  addElement,
+  DEFAULT_WHITEBOARD_PAGE_ID,
+  getPageElements,
+} from "@conclave/apps-sdk/whiteboard/document";
 import jwt from "jsonwebtoken";
 import { io, type Socket } from "socket.io-client";
 import * as Y from "yjs";
 
+type WhiteboardElement = Parameters<typeof addElement>[2];
+
 const { values } = parseArgs({
   options: {
     url: { type: "string" },
-    secret: { type: "string" },
     label: { type: "string", default: "sfu" },
-    updates: { type: "string", default: "100" },
+    updates: { type: "string", default: "25" },
   },
 });
-const url = values.url;
-const secret = values.secret;
-if (!url || !secret) throw new Error("Usage: --url <sfu url> --secret <SFU_SECRET> [--label name] [--updates n]");
-const run = `${values.label}-${Date.now().toString(36)}`;
+const secret = process.env.SFU_SECRET;
+if (!values.url || !secret) {
+  throw new Error("Set SFU_SECRET for the local SFU and pass --url http://127.0.0.1:<port> [--label name] [--updates n]");
+}
+const url = new URL(values.url);
+assert.ok(
+  url.protocol === "http:" && url.hostname === "127.0.0.1" && url.href === url.origin + "/",
+  "Expected a loopback SFU origin",
+);
+const count = Number(values.updates);
+assert.ok(Number.isInteger(count) && count >= 1 && count <= 100, "--updates must be an integer from 1 to 100");
 
-const quantile = (samples: number[], q: number): number => {
+const run = "board-bench-" + randomUUID();
+const appId = "whiteboard";
+const timeoutMs = 5_000;
+const sockets: Socket[] = [];
+const documents: Y.Doc[] = [];
+
+const summarize = (samples: number[]) => {
   const sorted = [...samples].sort((a, b) => a - b);
-  return sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] ?? NaN;
+  const round = (value: number) => Math.round(value * 100) / 100;
+  const quantile = (q: number) => round(sorted[Math.ceil(q * sorted.length) - 1]);
+  return { n: samples.length, median: quantile(0.5), p95: quantile(0.95), max: round(sorted[sorted.length - 1]) };
 };
-const round = (value: number): number => Math.round(value * 100) / 100;
-const summary = (samples: number[]) => ({
-  n: samples.length,
-  median: round(quantile(samples, 0.5)),
-  p95: round(quantile(samples, 0.95)),
-  p99: round(quantile(samples, 0.99)),
-  max: round(Math.max(...samples)),
-});
 
-const join = async (roomId: string, name: string): Promise<Socket> => {
-  const sessionId = `${run}-${name}`;
+const ask = (socket: Socket, event: string, ...args: unknown[]): Promise<unknown> =>
+  socket.timeout(timeoutMs).emitWithAck(event, ...args);
+
+const join = async (roomId: string, name: string, isHost: boolean): Promise<Socket> => {
   const token = jwt.sign(
     {
-      userId: `bot-${sessionId}`,
+      userId: run + "-" + name,
       name,
-      isHost: true,
-      isAdmin: true,
-      allowRoomCreation: true,
+      isHost,
+      isForcedHost: isHost,
+      allowRoomCreation: isHost,
       clientId: "conclave",
-      sessionId,
-      joinMode: "meeting",
     },
     secret,
-    { expiresIn: "1h" },
+    { expiresIn: "5m" },
   );
-  const socket = io(url, { auth: { token }, transports: ["websocket"], forceNew: true });
+  const socket = io(url.origin, { auth: { token }, transports: ["websocket"], reconnection: false, timeout: timeoutMs });
+  sockets.push(socket);
   await new Promise<void>((resolve, reject) => {
     socket.once("connect", resolve);
     socket.once("connect_error", reject);
   });
-  const joined = (await socket.timeout(30_000).emitWithAck("joinRoom", {
-    roomId,
-    sessionId,
-    displayName: name,
-  })) as { status?: string; error?: string };
-  if (joined.error || joined.status !== "joined") throw new Error(`${name} could not join: ${JSON.stringify(joined)}`);
+  const joined = (await ask(socket, "joinRoom", { roomId, displayName: name })) as { status?: string; error?: string };
+  assert.equal(joined.status, "joined", name + " could not join: " + JSON.stringify(joined));
   return socket;
 };
 
-const openBoard = async (socket: Socket): Promise<void> => {
-  const opened = (await socket.timeout(10_000).emitWithAck("apps:open", { appId: "board" })) as { success: boolean };
-  if (!opened.success) throw new Error("apps:open failed");
+const sync = async (socket: Socket): Promise<Y.Doc> => {
+  const doc = new Y.Doc();
+  documents.push(doc);
+  const response = (await ask(socket, "apps:yjs:sync", {
+    appId,
+    syncMessage: Y.encodeStateVector(doc),
+    canRetry: true,
+    wholeChanges: true,
+  })) as { syncMessage?: Uint8Array; error?: string };
+  assert.ok(response.syncMessage && !response.error, "Whiteboard sync failed: " + response.error);
+  Y.applyUpdate(doc, response.syncMessage);
+  return doc;
 };
 
-const syncedBytes = async (socket: Socket): Promise<number> => {
-  const response = (await socket.timeout(60_000).emitWithAck("apps:yjs:sync", {
-    appId: "board",
-    syncMessage: Y.encodeStateVector(new Y.Doc()),
-  })) as { syncMessage?: ArrayBuffer | Uint8Array; error?: string };
-  if (!response.syncMessage) throw new Error(`sync failed: ${response.error}`);
-  return response.syncMessage.byteLength;
-};
-
-const measureSmallUpdates = async (count: number) => {
-  const roomId = `${run}-small`;
-  const sender = await join(roomId, "sender");
-  const receiver = await join(roomId, "receiver");
-  await openBoard(sender);
-  const author = new Y.Doc();
-  const text = author.getText("t");
-  const sent: { update: Uint8Array; at: number }[] = [];
-  const latencies: number[] = [];
-  let mismatched = 0;
-  receiver.on("apps:yjs:update", ({ update }: { update: ArrayBuffer }) => {
-    const expected = sent[latencies.length + mismatched];
-    if (!expected || Buffer.compare(Buffer.from(update), Buffer.from(expected.update)) !== 0) {
-      mismatched += 1;
-      return;
+const waitForRelay = (socket: Socket, doc: Y.Doc, expected: WhiteboardElement[]) =>
+  new Promise<number>((resolve, reject) => {
+    const timer = setTimeout(() => finish(new Error("Peer did not receive whiteboard edit " + expected.length)), timeoutMs);
+    function finish(error?: Error) {
+      clearTimeout(timer);
+      socket.off("apps:yjs:update", onUpdate);
+      if (error) reject(error);
+      else resolve(performance.now());
     }
-    latencies.push(performance.now() - expected.at);
+    function onUpdate(message: { appId: string; update: Uint8Array }) {
+      if (message.appId !== appId) return;
+      try {
+        Y.applyUpdate(doc, message.update);
+        assert.deepEqual(getPageElements(doc, DEFAULT_WHITEBOARD_PAGE_ID), expected);
+        finish();
+      } catch (error) {
+        finish(error instanceof Error ? error : new Error(String(error)));
+      }
+    }
+    socket.on("apps:yjs:update", onUpdate);
   });
+
+try {
+  const sender = await join(run, "sender", true);
+  const receiver = await join(run, "receiver", false);
+  const observer = await join(run + "-other", "observer", true);
+  const opened = (await ask(sender, "apps:open", { appId })) as { success?: boolean };
+  assert.equal(opened.success, true, "Could not open the whiteboard");
+  const [author, replica] = await Promise.all([sync(sender), sync(receiver)]);
+  const edits: WhiteboardElement[] = [];
+  const relayTimes: number[] = [];
+  const otherRoomTimes: number[] = [];
   for (let index = 0; index < count; index += 1) {
     const before = Y.encodeStateVector(author);
-    text.insert(text.length, "k");
+    const edit = {
+      id: "stroke-" + index,
+      type: "stroke",
+      tool: "pen",
+      points: [{ x: index, y: index }, { x: index + 8, y: index + 4 }],
+      color: "#ffffff",
+      width: 2,
+    } satisfies WhiteboardElement;
+    edits.push(edit);
+    addElement(author, DEFAULT_WHITEBOARD_PAGE_ID, edit);
     const update = Y.encodeStateAsUpdate(author, before);
-    sent.push({ update, at: performance.now() });
-    sender.emit("apps:yjs:update", { appId: "board", update });
+    const relay = waitForRelay(receiver, replica, edits);
+    const start = performance.now();
+    const write = ask(sender, "apps:yjs:update", { appId, update });
+    const otherRoom = ask(observer, "apps:getState").then((response) => {
+      const at = performance.now();
+      assert.equal(typeof (response as { revision?: number }).revision, "number", "Other room did not return app state");
+      return at;
+    });
+    const [relayedAt, readAt] = await Promise.all([relay, otherRoom, write]);
+    relayTimes.push(relayedAt - start);
+    otherRoomTimes.push(readAt - start);
     await sleep(40);
   }
-  await sleep(1_000);
-  sender.disconnect();
-  receiver.disconnect();
-  return { ...summary(latencies), received: latencies.length, mismatched, sent: count };
-};
-
-const attackUpdates = (): Uint8Array[] => {
-  const attacker = new Y.Doc();
-  const text = attacker.getText("t");
-  const insertBefore = Y.encodeStateVector(attacker);
-  text.insert(0, "x".repeat(120_000));
-  const updates = [Y.encodeStateAsUpdate(attacker, insertBefore)];
-  for (let end = 120_000; end > 0; end -= 40_000) {
-    const before = Y.encodeStateVector(attacker);
-    attacker.transact(() => {
-      for (let index = end - 2; index >= end - 40_000; index -= 2) text.delete(index, 1);
-    });
-    updates.push(Y.encodeStateAsUpdate(attacker, before));
-  }
-  return updates;
-};
-
-const measureAttack = async (updates: Uint8Array[]) => {
-  const attackedRoom = `${run}-attacked`;
-  const attacker = await join(attackedRoom, "attacker");
-  const peer = await join(attackedRoom, "peer");
-  const observer = await join(`${run}-elsewhere`, "observer");
-  await openBoard(attacker);
-  let relayed = 0;
-  peer.on("apps:yjs:update", () => {
-    relayed += 1;
-  });
-  const pings: number[] = [];
-  let pinging = true;
-  const pingLoop = (async () => {
-    while (pinging) {
-      const started = performance.now();
-      await observer.timeout(60_000).emitWithAck("apps:getState");
-      pings.push(performance.now() - started);
-      await sleep(10);
-    }
-  })();
-  await sleep(500);
-  const baseline = pings.length;
-  const started = performance.now();
-  for (const update of updates) {
-    attacker.emit("apps:yjs:update", { appId: "board", update });
-    await sleep(50);
-  }
-  const docBytes = await syncedBytes(attacker);
-  const settledMs = performance.now() - started;
-  await sleep(300);
-  pinging = false;
-  await pingLoop;
-  attacker.disconnect();
-  peer.disconnect();
-  observer.disconnect();
-  const during = pings.slice(baseline);
-  return {
-    pings: summary(during),
-    pingsOver50ms: during.filter((ms) => ms > 50).length,
-    baselinePingMedian: round(quantile(pings.slice(0, baseline), 0.5)),
-    updatesSent: updates.length,
-    updateBytes: updates.map((update) => update.length),
-    relayedToPeer: relayed,
-    docBytes,
-    settledMs: round(settledMs),
-  };
-};
-
-const updates = attackUpdates();
-const smallUpdates = await measureSmallUpdates(Number(values.updates));
-const attack = await measureAttack(updates);
-console.log(JSON.stringify({ label: values.label, run, smallUpdates, attack }));
-process.exit(0);
+  const cold = await join(run, "cold", false);
+  const saved = await sync(cold);
+  assert.deepEqual(getPageElements(saved, DEFAULT_WHITEBOARD_PAGE_ID), edits, "Server snapshot lost whiteboard edits");
+  console.log(JSON.stringify({
+    label: values.label,
+    run,
+    committedEdits: edits.length,
+    peerRelayMs: summarize(relayTimes),
+    otherRoomReadMs: summarize(otherRoomTimes),
+  }));
+} finally {
+  sockets.forEach((socket) => socket.disconnect());
+  documents.forEach((doc) => doc.destroy());
+}

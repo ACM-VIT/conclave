@@ -528,7 +528,7 @@ main();
 // deploy-sfu.sh the checkout starts with, in place of the current one.
 export const deploy = async (
   sfus,
-  { args: extraArgs = [], env: extraEnv = {}, envLines = [], upstream, powershell = false, withoutFlock = false, script, noRedisUrl = false, journals = {}, checkoutFiles = {} } = {},
+  { args: extraArgs = [], env: extraEnv = {}, envLines = [], upstream, powershell = false, withoutFlock = false, withoutPython = false, script, noRedisUrl = false, journals = {}, checkoutFiles = {} } = {},
 ) => {
   // On macOS this path sits behind the /var symlink, so the preflight also
   // runs through one.
@@ -542,6 +542,7 @@ export const deploy = async (
     if (script) await writeFile(path.join(src, "scripts", "deploy-sfu.sh"), script);
     await copyFile(path.join(scripts, "deploy-sfu.ps1"), path.join(src, "scripts", "deploy-sfu.ps1"));
     await copyFile(path.join(scripts, "deploy-sfu-preflight.mjs"), path.join(src, "scripts", "deploy-sfu-preflight.mjs"));
+    await copyFile(path.join(scripts, "host_lock.py"), path.join(src, "scripts", "host_lock.py"));
     // The preflight shares the SFU's own worker and port rules.
     await mkdir(path.join(src, "packages", "sfu", "config"), { recursive: true });
     await copyFile(
@@ -587,7 +588,8 @@ export const deploy = async (
     await writeFile(path.join(bin, "docker"), dockerStandIn);
     await chmod(path.join(bin, "docker"), 0o755);
     if (!withoutFlock) await provideFlock(bin);
-    const hostPath = withoutFlock ? await pathWithout(path.join(root, "host-bin"), ["flock"]) : process.env.PATH;
+    const missing = [...(withoutFlock ? ["flock"] : []), ...(withoutPython ? ["python3"] : [])];
+    const hostPath = missing.length ? await pathWithout(path.join(root, "host-bin"), missing) : process.env.PATH;
     const dockerLog = path.join(root, "docker.log");
     await writeFile(dockerLog, "");
     const env = {

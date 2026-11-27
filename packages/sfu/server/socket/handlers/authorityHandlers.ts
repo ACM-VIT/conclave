@@ -98,10 +98,18 @@ const parseQuery = (data: unknown): QueryRequest | null => {
     : null;
 };
 
+export const registerAuthorityOffHandlers = ({ socket }: ConnectionContext): void => {
+  socket.on(AUTHORITY_EVENTS.capabilities, (_data: unknown, callback?: (response: unknown) => void) => {
+    if (!takeToken(socket, "apps:authority:capabilities", RATE_LIMITS.appsAuthorityControl)) {
+      respond(callback, fail("rate-limited"));
+      return;
+    }
+    respond(callback, fail("unsupported"));
+  });
+};
+
 /**
- * The authority transport. Registered only when this SFU runs authority
- * apps, so with the flag off these events have no listener and a client's
- * capability request simply goes unanswered, exactly as on an older SFU.
+ * The authority transport, registered only when this SFU runs authority apps.
  *
  * Handlers only parse the envelope and apply the per-socket rate limit. Who
  * the caller is and what they may do is decided by the room's authority,
@@ -124,7 +132,10 @@ export const registerAuthorityHandlers = (context: ConnectionContext): void => {
       return;
     }
     const room = authority();
-    respond(callback, room ? room.capabilities(context, request) : fail("not-in-room"));
+    respond(
+      callback,
+      room ? room.capabilities(context, request) : fail("not-in-room"),
+    );
   });
 
   socket.on(AUTHORITY_EVENTS.subscribe, (data: unknown, callback?: (response: unknown) => void) => {

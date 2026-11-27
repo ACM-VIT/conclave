@@ -37,6 +37,7 @@ import {
 import {
   emitWebinarAttendeeCountChanged,
   emitWebinarFeedChanged,
+  grantWebinarQaList,
 } from "../../webinarNotifications.js";
 import {
   createDefaultWebinarRoomConfig,
@@ -63,6 +64,8 @@ import {
 import { emitToHost } from "../../admin/hostOnlyEvents.js";
 import { getSocketAuthUser } from "../auth.js";
 import type { ConnectionContext } from "../context.js";
+import { toPendingUserSnapshots } from "../../admin/controlPlane.js";
+import { attachLegacyQaFeed } from "../../apps/authority/legacyWebinarQa.js";
 import { registerAdminHandlers } from "./adminHandlers.js";
 import { respond } from "./ack.js";
 import { emitChatHistorySnapshot } from "./chatHistory.js";
@@ -1082,12 +1085,8 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         });
 
         if (context.currentClient instanceof Admin) {
-          const pendingUsers = context.currentRoom.waitingGuests().map((pending) => ({
-            userId: pending.userKey,
-            displayName: pending.displayName || pending.userKey,
-          }));
           emitToHost(context.currentClient, "pendingUsersSnapshot", {
-            users: pendingUsers,
+            users: toPendingUserSnapshots(context.currentRoom),
             roomId: context.currentRoom.id,
           });
         }
@@ -1160,20 +1159,11 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           emitChatHistorySnapshot(socket, context.currentRoom);
         }
 
-        const isModeratorClient =
-          context.currentClient instanceof Admin &&
-          !context.currentClient.isObserver;
-        if (
-          webinarConfig.enabled &&
-          (isModeratorClient || context.currentClient.isWebinarAttendee)
-        ) {
-          socket.emit("webinar:qaSnapshot", {
-            roomId: context.currentRoom.id,
-            entries: context.currentRoom.getWebinarQaSnapshotFor(
-              userId,
-              isModeratorClient,
-            ),
-          });
+        // A room that runs the Q&A app has one book. There the old Q&A
+        // events are fed from that book for the life of this seat. Elsewhere
+        // a seat joining a webinar is sent the list as its role reads it.
+        if (!attachLegacyQaFeed(context)) {
+          grantWebinarQaList(state, context.currentRoom, context.currentClient);
         }
         if (webinarConfig.enabled && context.currentClient instanceof Admin) {
           emitToHost(context.currentClient, "webinar:handQueueChanged", {
@@ -1257,15 +1247,14 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             attendeeCount,
           );
           if (state.scheduledWebinarPersistence && webinarWithJoinMetric) {
-            try {
-              persistScheduledWebinarChanges(
-                state.scheduledWebinars,
-                state.scheduledWebinarPersistence,
-                [webinarWithJoinMetric],
-              );
-            } catch (error) {
+            // Not awaited: a join never waits on persistence.
+            persistScheduledWebinarChanges(
+              state.scheduledWebinars,
+              state.scheduledWebinarPersistence,
+              [webinarWithJoinMetric],
+            ).catch((error) => {
               Logger.warn("Failed to persist join metric", error);
-            }
+            });
           }
         }
 

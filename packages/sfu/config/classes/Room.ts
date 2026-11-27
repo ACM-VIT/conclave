@@ -136,7 +136,10 @@ export type GuestLinkPlan = {
 
 export type GuestIdentityMerge = { readonly from: string; readonly into: string };
 
-export type StagedGuestMerge = { commit(): boolean };
+export type StagedGuestMerge = {
+  commit(): boolean;
+  afterCommit?(): void;
+};
 
 export type GuestIdentityMerger = (
   merges: readonly GuestIdentityMerge[],
@@ -1204,6 +1207,11 @@ export class Room {
         seatedIdentityChanged = true;
       }
       this.guestRecords.set(proof, merged);
+    }
+    try {
+      link.staged.afterCommit?.();
+    } catch (error) {
+      Logger.warn(`Room ${this.id}: an identity merge listener failed`, error);
     }
     if (seatedIdentityChanged) this.notifyLifecycle("membership");
     const guest = this.guestOfPass(link.guestProof);

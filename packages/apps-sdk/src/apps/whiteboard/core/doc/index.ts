@@ -1,6 +1,6 @@
 import * as Y from "yjs";
-import { createAppDoc } from "../../../../sdk/doc/createAppDoc";
-import type { WhiteboardElement } from "../model/types";
+import { createAppDoc } from "../../../../sdk/doc/createAppDoc.js";
+import type { WhiteboardElement } from "../model/types.js";
 
 const ROOT_KEY = "whiteboard";
 const PAGES_KEY = "pages";
