@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { ErrorReply } from "redis";
 import { Logger } from "../../../utilities/loggers.js";
 import { asRecord } from "../../../utilities/untrusted.js";
 import {
@@ -414,7 +415,22 @@ export const createRedisBackend = async (options: {
     throw unavailable(cause);
   };
 
-  const runScript = async (snapshot: Snapshot, writes: WriteSet): Promise<ScriptReply> => {
+  const grantPermit = async (commitKey: string): Promise<number> => {
+    await bounded((redis) => redis.sendCommand(["SET", commitKey, PERMIT_OPEN, "PX", String(permitMs)]));
+    return performance.now();
+  };
+
+  const freshPermit = async (commitKey: string, granted: Promise<number>): Promise<number> => {
+    const grantedAt = await granted;
+    return performance.now() - grantedAt < permitMs / 2 ? grantedAt : grantPermit(commitKey);
+  };
+
+  const runScript = async (
+    snapshot: Snapshot,
+    writes: WriteSet,
+    commitKey: string,
+    permit: Promise<number> | null,
+  ): Promise<ScriptReply> => {
     const tagKeys: string[] = [];
     const tagIndex = new Map<string, number>();
     const keyFor = (kind: Kind, tag: string): number => {
@@ -447,7 +463,6 @@ export const createRedisBackend = async (options: {
       },
       ttl: COMMIT_MARK_TTL_MS,
     };
-    const commitKey = keys.commit(randomUUID());
     const scriptKeys = [
       keys.rev,
       keys.ver,
@@ -459,12 +474,13 @@ export const createRedisBackend = async (options: {
     ];
     const script = ["EVAL", COMMIT_SCRIPT, String(scriptKeys.length), ...scriptKeys, JSON.stringify(payload)];
     if (isEmptyWriteSet(writes)) return scriptReply(await bounded((redis) => redis.sendCommand(script)));
-    await bounded((redis) => redis.sendCommand(["SET", commitKey, PERMIT_OPEN, "PX", String(permitMs)]));
-    const permitGrantedAt = performance.now();
+    if (!permit) throw new Error("A control-plane read staged a write.");
+    const permitGrantedAt = await freshPermit(commitKey, permit);
     let reply: unknown;
     try {
       reply = await bounded((redis) => redis.sendCommand(script));
     } catch (error) {
+      if (error instanceof ErrorReply) throw error;
       return resolveUnheard(commitKey, permitGrantedAt, toError(error));
     }
     return scriptReply(reply);
@@ -472,11 +488,15 @@ export const createRedisBackend = async (options: {
 
   const transact = async <T>(
     run: (source: Source, entropy: ReplayEntropy) => { result: T; writes: WriteSet },
+    mayWrite: boolean,
   ): Promise<{ result: T; rev: number } | null> => {
     if (closed) throw new Error("The control-plane store is closed.");
     const entropy = new ReplayEntropy();
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
       const snapshot = new Snapshot();
+      const commitKey = keys.commit(randomUUID());
+      const permit = mayWrite ? grantPermit(commitKey) : null;
+      permit?.catch(() => undefined);
       let misses = 0;
       for (;;) {
         let ran: { result: T; writes: WriteSet };
@@ -498,7 +518,7 @@ export const createRedisBackend = async (options: {
         }
         let reply: ScriptReply;
         try {
-          reply = await runScript(snapshot, ran.writes);
+          reply = await runScript(snapshot, ran.writes, commitKey, permit);
         } catch (error) {
           if (error instanceof StoreUnavailableError) throw error;
           throw new StoreUnavailableError("Redis control-plane store is unavailable.", {
@@ -524,7 +544,7 @@ export const createRedisBackend = async (options: {
       const done = await transact((source, entropy) => {
         const { outcome, writes } = execute(source, command, { now, entropy });
         return { result: outcome, writes };
-      });
+      }, true);
       if (!done) return fail("conflict", "This changed elsewhere at the same moment. Try again.");
       if (!done.result.ok) return done.result;
       return { ok: true, value: done.result.value, rev: done.rev };
@@ -533,7 +553,7 @@ export const createRedisBackend = async (options: {
       const done = await transact((source, entropy) => ({
         result: query(source, read, { now, entropy }),
         writes: emptyWriteSet(),
-      }));
+      }), false);
       if (!done) throw new StoreUnavailableError("Could not read a consistent snapshot.");
       return done.result;
     },

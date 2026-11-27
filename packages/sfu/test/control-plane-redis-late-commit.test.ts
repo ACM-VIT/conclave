@@ -153,3 +153,26 @@ describe.skipIf(!hasRedis)("a Redis commit that reaches Redis after its permit e
     }
   }, 30_000);
 });
+
+describe.skipIf(!hasRedis)("a Redis commit that Redis itself refuses with an error", () => {
+  it("answers 503 at once, writes nothing, and the next commit works", async () => {
+    const shared = await world("refused", {});
+    const admin = createClient({ url: redis!.url });
+    await admin.connect();
+    try {
+      const store = await shared.direct();
+      expect((await store.commit(meeting("Before"))).ok).toBe(true);
+      await admin.sendCommand(["ACL", "SETUSER", "default", "-eval"]);
+      const asked = performance.now();
+      await expect(store.commit(meeting("Refused"))).rejects.toBeInstanceOf(StoreUnavailableError);
+      expect(performance.now() - asked).toBeLessThan(DEADLINE_MS / 2);
+      await admin.sendCommand(["ACL", "SETUSER", "default", "+eval"]);
+      expect(await shared.titles()).toEqual(["Before"]);
+      expect((await store.commit(meeting("After"))).ok).toBe(true);
+    } finally {
+      await admin.sendCommand(["ACL", "SETUSER", "default", "+eval"]);
+      await admin.quit();
+      await shared.stop();
+    }
+  }, 30_000);
+});
