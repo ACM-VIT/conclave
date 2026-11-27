@@ -43,7 +43,7 @@ class NativeNetworkStabilityBridgeTests {
     }
 
     @Test fun generatedStagePolicyPromotesAQuietOneOnOneMain() {
-        val stage = StagePresenter(shell = MeetingShellPresenter())
+        val stage = StagePresenter(shell = MeetingShellPresenter(defaults = IsolatedDefaults.make()))
         val inputs = StageFixtureScript.base(count = 2)
         stage.apply(inputs)
         val focused = StageReceiveFocusPolicy.focusedUserIds(slots = stage.layout.slots, localUserId = inputs.localUserId)

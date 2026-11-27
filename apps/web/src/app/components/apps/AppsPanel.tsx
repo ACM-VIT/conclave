@@ -12,6 +12,7 @@ import {
   GameDockResizeHandle,
   HEAD_FONT,
 } from "../games/gameUi";
+import PanelNoticeSlot from "../PanelNoticeSlot";
 
 const APPS_SDK_DOCS_URL =
   "https://github.com/ACM-VIT/conclave/blob/main/packages/apps-sdk/docs/guides/add-a-new-app-integration.md";
@@ -67,6 +68,7 @@ export function AppsPanel({
         <GameDockCloseButton onClose={onClose} label="Close apps" />
       </div>
 
+      <PanelNoticeSlot />
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
         <div className="flex flex-col gap-2">
           <p className="mb-1 text-[13px] leading-relaxed text-[#a1a1aa]">

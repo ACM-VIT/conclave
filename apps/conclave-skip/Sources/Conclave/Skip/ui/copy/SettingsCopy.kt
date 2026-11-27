@@ -41,6 +41,7 @@ internal object SettingsCopy {
         SettingsRowID.identity -> "set_account"
         SettingsRowID.signOut -> "set_sign_out"
         SettingsRowID.privacy -> "set_privacy_policy"
+        SettingsRowID.crashReports -> "set_crash_reports"
         SettingsRowID.exportDiagnostics -> "sys_diag_export"
         SettingsRowID.version -> "set_version"
     }

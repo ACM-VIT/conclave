@@ -1,35 +1,39 @@
 # Cloudflare Workers Static Assets headers.
 # These apply only to files served by the assets binding, not SSR/API responses.
+# Pages and API routes get their security headers from next.config.ts
+# (src/lib/security-headers.ts).
+
+/*
+  Strict-Transport-Security: max-age=63072000; includeSubDomains
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+
+/_next/static/*
+  Cache-Control: public, max-age=31536000, immutable
 
 /noise-suppressor/*
   Cache-Control: public, max-age=31536000, immutable
   Cross-Origin-Resource-Policy: same-origin
-  X-Content-Type-Options: nosniff
 
 /effects/*
   Cache-Control: public, max-age=31536000, immutable
   Cross-Origin-Resource-Policy: same-origin
-  X-Content-Type-Options: nosniff
 
 /mediapipe/*
   Cache-Control: public, max-age=31536000, immutable
   Cross-Origin-Resource-Policy: same-origin
-  X-Content-Type-Options: nosniff
 
 /assets/*
   Cache-Control: public, max-age=31536000, immutable
   Cross-Origin-Resource-Policy: same-origin
-  X-Content-Type-Options: nosniff
 
 /reactions/*
   Cache-Control: public, max-age=31536000, immutable
   Cross-Origin-Resource-Policy: same-origin
-  X-Content-Type-Options: nosniff
 
 /_/rtcvidproc/release/*
   Cache-Control: public, max-age=31536000, immutable
   Cross-Origin-Resource-Policy: same-origin
-  X-Content-Type-Options: nosniff
 
 /transcript-pcm-processor.js
   Cache-Control: public, max-age=31536000, immutable

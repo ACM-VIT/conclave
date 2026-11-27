@@ -15,7 +15,9 @@ final class MeetingShellPresenter {
 
     let chat = ChatPresenter()
 
-    let settings = SettingsPresenter(scope: SettingsScope.call)
+    let settings: SettingsPresenter
+
+    let defaults: UserDefaults
 
     let transcript = TranscriptPresenter()
 
@@ -76,9 +78,51 @@ final class MeetingShellPresenter {
         )
     }
 
+    init(defaults: UserDefaults) {
+        self.defaults = defaults
+        settings = SettingsPresenter(scope: SettingsScope.call, defaults: defaults)
+        panels.afterSnapshotChanged = { [weak self] in
+            self?.syncChatWithPanels()
+        }
+    }
+
     var currentInputs: MeetingShellInputs { inputs }
 
     var snapshotPublishCount: Int { publishCount }
+
+    var chatPanelIsCurrent: Bool {
+        panels.snapshot.current?.panel == MeetingPanel.chat && !panels.snapshot.isDismissing
+    }
+
+    @ObservationIgnored private(set) var callSurfaceIsVisible = true
+    @ObservationIgnored var onChatShownChanged: ((Bool) -> Void)? = nil
+    @ObservationIgnored private var reportedChatShown = false
+
+    func setCallSurfaceVisible(_ visible: Bool) {
+        guard visible != callSurfaceIsVisible else { return }
+        callSurfaceIsVisible = visible
+        syncChatWithPanels()
+    }
+
+    private func syncChatWithPanels() {
+        if chatPanelIsCurrent && callSurfaceIsVisible {
+            if !chat.isOpen {
+                let opened = Date().timeIntervalSince1970 * 1000.0
+                chat.openPanel()
+                ChatDiagnostics.counters?.recordOpenLatency(Date().timeIntervalSince1970 * 1000.0 - opened)
+            }
+            if panels.currentIsOnScreen {
+                chat.panelDidAppear()
+            } else {
+                chat.panelDidDisappear()
+            }
+        } else {
+            chat.closePanel()
+        }
+        guard chat.isShown != reportedChatShown else { return }
+        reportedChatShown = chat.isShown
+        onChatShownChanged?(chat.isShown)
+    }
 
     func apply(_ next: MeetingShellInputs) {
         guard next != inputs else { return }
@@ -449,5 +493,11 @@ final class MeetingShellPresenter {
             showsEntryOverlayIntent: inputs.isEnteringMeeting,
             entryAction: inputs.meetingEntryAction
         )
+    }
+}
+
+enum CallSurfaceVisibilityPolicy {
+    static func isVisible(isForeground: Bool, isInPictureInPicture: Bool, pictureInPictureReplacesCallUI: Bool) -> Bool {
+        isForeground && !(pictureInPictureReplacesCallUI && isInPictureInPicture)
     }
 }

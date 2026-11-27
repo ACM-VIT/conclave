@@ -9,6 +9,8 @@ import type {
   WebinarQaChangedNotification,
   WebinarQaEntry,
 } from "../types.js";
+import { emitToHosts } from "./admin/hostOnlyEvents.js";
+import { peekRoomAuthority } from "./apps/authority/index.js";
 import type { SfuState } from "./state.js";
 import {
   ensureWebinarLinkSlug,
@@ -52,6 +54,8 @@ export const emitWebinarConfigChanged = (
     "webinar:configChanged",
     getWebinarConfigSnapshot(state, room),
   );
+  // Webinar mode and the Q&A switch decide what authority apps show to whom.
+  peekRoomAuthority(room)?.policyChanged();
 };
 
 const emitWebinarAttendeeCountNow = (
@@ -168,9 +172,7 @@ export const emitWebinarHandQueueChanged = (room: Room): void => {
     roomId: room.id,
     queue: room.getWebinarHandQueue(),
   };
-  for (const admin of room.getAdmins()) {
-    admin.socket.emit("webinar:handQueueChanged", notification);
-  }
+  emitToHosts(room, "webinar:handQueueChanged", notification);
 };
 
 export const emitWebinarFeedChanged = (

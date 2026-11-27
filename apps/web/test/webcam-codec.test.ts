@@ -572,32 +572,35 @@ describe("webcam encoding topology", () => {
     });
   });
 
-  it("recreates simulcast producers for both 3-to-2 and 2-to-3 switches", () => {
-    expect(getWebcamEncodingCountForQuality("standard", true)).toBe(3);
-    expect(getWebcamEncodingCountForQuality("low", true)).toBe(2);
+  it("keeps the simulcast producer when quality moves between low and standard", () => {
+    const lowLayers = getWebcamEncodingCountForQuality("low", true);
+    const standardLayers = getWebcamEncodingCountForQuality("standard", true);
+    expect(lowLayers).toBe(3);
+    expect(standardLayers).toBe(3);
     expect(getWebcamEncodingCountForQuality("standard", false)).toBe(1);
 
     expect(
-      shouldRecreateWebcamProducerForQuality("low", true, 3),
-    ).toBe(true);
-    expect(
-      shouldRecreateWebcamProducerForQuality("standard", true, 2),
-    ).toBe(true);
-    expect(
-      shouldRecreateWebcamProducerForQuality("low", true, 2),
+      shouldRecreateWebcamProducerForQuality("standard", true, lowLayers),
     ).toBe(false);
     expect(
-      shouldRecreateWebcamProducerForQuality("standard", true, 3),
+      shouldRecreateWebcamProducerForQuality("low", true, standardLayers),
     ).toBe(false);
   });
 
-  it("publishes a poor-profile low ladder without changing encoder topology", async () => {
+  it("still recreates a producer whose layer count cannot carry the ladder", () => {
+    expect(shouldRecreateWebcamProducerForQuality("standard", true, 1)).toBe(
+      true,
+    );
+    expect(shouldRecreateWebcamProducerForQuality("low", true, 2)).toBe(true);
+  });
+
+  it("publishes a poor-profile low ladder on the standard three-layer structure", async () => {
     const preferredCodec = videoCodec("video/VP8", 102);
     const setMaxSpatialLayer = vi.fn().mockResolvedValue(undefined);
     const producer = {
       kind: "video",
       closed: false,
-      rtpParameters: { encodings: [{ rid: "q" }, { rid: "f" }] },
+      rtpParameters: { encodings: [{ rid: "q" }, { rid: "h" }, { rid: "f" }] },
       setMaxSpatialLayer,
     } as unknown as Producer;
     const produce = vi.fn().mockResolvedValue(producer);
@@ -620,7 +623,7 @@ describe("webcam encoding topology", () => {
     expect(produce.mock.calls[0]?.[0]?.codecOptions).toEqual({
       videoGoogleStartBitrate: 90,
     });
-    expect(encodings).toHaveLength(2);
+    expect(encodings).toHaveLength(3);
     expect(encodings?.[0]).toMatchObject({
       rid: "q",
       active: true,
@@ -629,13 +632,53 @@ describe("webcam encoding topology", () => {
       maxFramerate: 12,
     });
     expect(encodings?.[1]).toMatchObject({
-      rid: "f",
+      rid: "h",
       active: true,
       scaleResolutionDownBy: 1,
       maxBitrate: 25_000,
       maxFramerate: 5,
     });
+    expect(encodings?.[2]).toMatchObject({ rid: "f", active: false });
     expect(setMaxSpatialLayer).not.toHaveBeenCalled();
+  });
+
+  it("starts the good-profile low ladder with the same two live layers as before", async () => {
+    const producer = {
+      kind: "video",
+      closed: false,
+      rtpParameters: { encodings: [{ rid: "q" }, { rid: "h" }, { rid: "f" }] },
+    } as unknown as Producer;
+    const produce = vi.fn().mockResolvedValue(producer);
+
+    await produceWebcamTrack({
+      transport: { produce } as unknown as Transport,
+      track: {
+        id: "low-start-track",
+        getSettings: () => ({ width: 640, height: 360 }),
+      } as MediaStreamTrack,
+      quality: "low",
+      networkProfile: "good",
+      paused: false,
+      preferredCodec: videoCodec("video/VP8", 102),
+    });
+
+    expect(produce.mock.calls[0]?.[0]?.encodings).toEqual([
+      expect.objectContaining({
+        rid: "q",
+        active: true,
+        scaleResolutionDownBy: 2,
+        maxBitrate: 91_000,
+        maxFramerate: 12,
+      }),
+      expect.objectContaining({
+        rid: "h",
+        active: true,
+        scaleResolutionDownBy: 1,
+        maxBitrate: 260_000,
+        maxFramerate: 20,
+      }),
+      expect.objectContaining({ rid: "f", active: false }),
+    ]);
   });
 
   it("keeps canonical RID geometry and tiny top-layer standby on fair", async () => {
@@ -694,7 +737,8 @@ describe("webcam encoding topology", () => {
     const getParameters = vi.fn(() => ({
       encodings: [
         { rid: "q", active: true, scaleResolutionDownBy: 2 },
-        { rid: "f", active: true, scaleResolutionDownBy: 1 },
+        { rid: "h", active: true, scaleResolutionDownBy: 1 },
+        { rid: "f", active: false, scaleResolutionDownBy: 1 },
       ],
     }));
     const setMaxSpatialLayer = vi.fn().mockResolvedValue(undefined);
@@ -705,7 +749,7 @@ describe("webcam encoding topology", () => {
         getSettings: () => ({ width: 426, height: 240 }),
       },
       rtpSender: { getParameters, setParameters },
-      rtpParameters: { encodings: [{ rid: "q" }, { rid: "f" }] },
+      rtpParameters: { encodings: [{ rid: "q" }, { rid: "h" }, { rid: "f" }] },
       setMaxSpatialLayer,
     } as unknown as Producer;
 
@@ -722,12 +766,83 @@ describe("webcam encoding topology", () => {
       maxFramerate: 12,
     });
     expect(parameters?.encodings?.[1]).toMatchObject({
-      rid: "f",
+      rid: "h",
       active: true,
       scaleResolutionDownBy: 1,
       maxBitrate: 25_000,
       maxFramerate: 5,
     });
+    expect(parameters?.encodings?.[2]).toMatchObject({
+      rid: "f",
+      active: false,
+      scaleResolutionDownBy: 1,
+    });
+  });
+
+  it("moves a live producer from low to standard and back without replacing it", async () => {
+    let currentParameters: { encodings: Record<string, unknown>[] } = {
+      encodings: [
+        { rid: "q", active: true, scaleResolutionDownBy: 2 },
+        { rid: "h", active: true, scaleResolutionDownBy: 1 },
+        { rid: "f", active: false, scaleResolutionDownBy: 1 },
+      ],
+    };
+    const setParameters = vi.fn().mockImplementation(async (next) => {
+      currentParameters = next;
+    });
+    const producer = {
+      kind: "video",
+      closed: false,
+      track: { getSettings: () => ({ width: 1280, height: 720 }) },
+      rtpSender: { getParameters: () => currentParameters, setParameters },
+      rtpParameters: { encodings: [{ rid: "q" }, { rid: "h" }, { rid: "f" }] },
+    } as unknown as Producer;
+
+    await applyWebcamProducerNetworkProfile(producer, "standard", "good");
+
+    expect(currentParameters.encodings).toEqual([
+      expect.objectContaining({
+        rid: "q",
+        active: true,
+        scaleResolutionDownBy: 4,
+        maxBitrate: 80_000,
+        maxFramerate: 15,
+      }),
+      expect.objectContaining({
+        rid: "h",
+        active: true,
+        scaleResolutionDownBy: 2,
+        maxBitrate: 250_000,
+        maxFramerate: 30,
+      }),
+      expect.objectContaining({
+        rid: "f",
+        active: true,
+        scaleResolutionDownBy: 1,
+        maxBitrate: 1_650_000,
+        maxFramerate: 30,
+      }),
+    ]);
+
+    await applyWebcamProducerNetworkProfile(producer, "low", "good");
+
+    expect(currentParameters.encodings).toEqual([
+      expect.objectContaining({
+        rid: "q",
+        active: true,
+        scaleResolutionDownBy: 2,
+        maxBitrate: 91_000,
+        maxFramerate: 12,
+      }),
+      expect.objectContaining({
+        rid: "h",
+        active: true,
+        scaleResolutionDownBy: 1,
+        maxBitrate: 260_000,
+        maxFramerate: 20,
+      }),
+      expect.objectContaining({ rid: "f", active: false }),
+    ]);
   });
 
   it.each([
@@ -1165,13 +1280,12 @@ describe("webcam encoding topology", () => {
     });
   });
 
-  it("does not apply a two-layer low cap table to a live three-layer producer", async () => {
+  it("does not apply a three-layer cap table to a live two-layer producer", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const setParameters = vi.fn().mockResolvedValue(undefined);
     const getParameters = vi.fn(() => ({
       encodings: [
-        { rid: "q", scaleResolutionDownBy: 4 },
-        { rid: "h", scaleResolutionDownBy: 2 },
+        { rid: "q", scaleResolutionDownBy: 2 },
         { rid: "f", scaleResolutionDownBy: 1 },
       ],
     }));
@@ -1183,7 +1297,7 @@ describe("webcam encoding topology", () => {
       },
       rtpSender: { getParameters, setParameters },
       rtpParameters: {
-        encodings: [{ rid: "q" }, { rid: "h" }, { rid: "f" }],
+        encodings: [{ rid: "q" }, { rid: "f" }],
       },
       setMaxSpatialLayer: vi.fn().mockResolvedValue(undefined),
     } as unknown as Producer;
@@ -1197,8 +1311,8 @@ describe("webcam encoding topology", () => {
       expect.stringContaining("incompatible encoding topology"),
       expect.objectContaining({
         quality: "low",
-        currentEncodingCount: 3,
-        expectedEncodingCount: 2,
+        currentEncodingCount: 2,
+        expectedEncodingCount: 3,
       }),
     );
   });

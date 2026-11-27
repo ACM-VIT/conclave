@@ -146,7 +146,7 @@ private fun LobbyCardSlot(premeeting: PremeetingPresenter, routeId: Int, cache: 
     val card = cache.card(media)
     val anchors = LocalEntryTransitionAnchors.current
     var showsEffectsSheet by remember { mutableStateOf(false) }
-    val lobbyEffects = remember { EffectsPresenter(scope = EffectsScope.lobby) }
+    val lobbyEffects = remember { EffectsPresenter(scope = EffectsScope.lobby, defaults = skip.foundation.UserDefaults.standard) }
     HostingTheme(inCall = true) {
         LobbyPreviewCard(
             card = card,

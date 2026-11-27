@@ -154,7 +154,7 @@ private val settingsStackSaver = listSaver<SnapshotStateList<String>, String>(
 internal fun AppSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
 
     val settings = remember {
-        SettingsPresenter(scope = SettingsScope.app).also {
+        SettingsPresenter(scope = SettingsScope.app, defaults = skip.foundation.UserDefaults.standard).also {
 
             val notifications = SystemNotifications.shared.snapshot
             it.apply(SettingsInputs.make(

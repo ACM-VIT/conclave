@@ -240,7 +240,7 @@ struct S1bLobbyStatusTests {
     }
 
     private func drive(_ state: PremeetingFixtureState) -> PremeetingPresenter {
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         let premeeting = PremeetingPresenter()
         premeeting.nowMillis = { 1793102400000.0 }
         premeeting.bootstrap(user: nil, recents: [])

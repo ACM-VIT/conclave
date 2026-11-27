@@ -7,10 +7,18 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Before
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -114,6 +122,33 @@ class S5ShareFoldBridgeTests {
         return target
     }
 
+    private fun request(): Deferred<Int?> =
+        CoroutineScope(Dispatchers.Unconfined).async(start = CoroutineStart.UNDISPATCHED) {
+            ScreenCaptureManager.awaitConsent {}
+        }
+
+    private fun grantedRequest(target: CallForegroundService): Int {
+        val pending = request()
+        recorded.clear()
+        ScreenCaptureManager.onConsentResult(Activity.RESULT_OK, Intent())
+        assertEquals(CallForegroundService.ACTION_SHARE_START, recorded.single().first.action)
+        deliver(target, recorded.single().first)
+        assertTrue(pending.isCompleted)
+        val grant = requireNotNull(runBlocking { pending.await() })
+        assertTrue(ScreenCaptureManager.isConsentActive(grant))
+        assertEquals(hosted, target.foregroundServiceType)
+        assertTrue(stopActions(postedNotification()).isNotEmpty())
+        recorded.clear()
+        return grant
+    }
+
+    private fun assertSharing(target: CallForegroundService, grant: Int, label: String) {
+        assertTrue("$label: the older grant lost its consent", ScreenCaptureManager.isConsentActive(grant))
+        assertTrue("$label: the older grant's service was stopped", recorded.isEmpty())
+        assertEquals("$label: the sharing notification changed", hosted, target.foregroundServiceType)
+        assertTrue("$label: the sharing notification lost its stop action", stopActions(postedNotification()).isNotEmpty())
+    }
+
     private fun stopActions(notification: Notification): List<Notification.Action> =
         (notification.actions ?: emptyArray()).filter {
             shadowOf(it.actionIntent).savedIntent.action == CallNotificationBuilder.ACTION_STOP_SHARING
@@ -190,13 +225,128 @@ class S5ShareFoldBridgeTests {
         assertTrue(stopActions(postedNotification()).isEmpty())
     }
 
+    @Test fun releasingAnOlderGrantStopsItsOwnShareAndLeavesANewerRequestAlone() {
+        val target = startCall()
+        val older = grantedRequest(target)
+        val newer = request()
+        assertTrue(ScreenCaptureManager.isRequestingCapture())
+        assertSharing(target, older, "a newer request began")
+
+        ScreenCaptureManager.releaseConsent(older)
+        assertFalse(ScreenCaptureManager.isConsentActive(older))
+        assertEquals("the release stopped another host's share", CallForegroundService.ACTION_SHARE_STOP, recorded.single().first.action)
+        deliver(target, recorded.single().first)
+        assertEquals(baseline, target.foregroundServiceType)
+        assertTrue(stopActions(postedNotification()).isEmpty())
+        assertFalse("releasing the older grant ended the newer request", newer.isCompleted)
+        assertTrue(ScreenCaptureManager.isRequestingCapture())
+
+        recorded.clear()
+        ScreenCaptureManager.onConsentResult(Activity.RESULT_OK, Intent())
+        deliver(target, recorded.single().first)
+        val grant = requireNotNull(runBlocking { newer.await() })
+        assertNotEquals(older, grant)
+        assertTrue(ScreenCaptureManager.isConsentActive(grant))
+        assertEquals(hosted, target.foregroundServiceType)
+        ScreenCaptureManager.releaseConsent(older)
+        assertTrue("releasing a released grant again touched the newer share", ScreenCaptureManager.isConsentActive(grant))
+    }
+
+    @Test fun everyWayANewerRequestEndsLeavesAnOlderGrantSharing() {
+        val target = startCall()
+        val older = grantedRequest(target)
+
+        val refused = request()
+        ScreenCaptureManager.onConsentResult(Activity.RESULT_CANCELED, null)
+        assertNull(runBlocking { refused.await() })
+        assertSharing(target, older, "a refused dialog")
+
+        val cancelled = request()
+        cancelled.cancel()
+        assertFalse(ScreenCaptureManager.isRequestingCapture())
+        assertSharing(target, older, "a cancelled request")
+
+        ScreenCaptureManager.onConsentResult(Activity.RESULT_OK, Intent())
+        assertSharing(target, older, "a late dialog result")
+
+        ScreenCaptureManager.releaseConsent(older)
+        deliver(target, recorded.single().first)
+        assertEquals(baseline, target.foregroundServiceType)
+        assertTrue(stopActions(postedNotification()).isEmpty())
+    }
+
+    @Test fun anOlderGrantCannotStopTheCaptureServiceAfterANewerApproval() {
+        val target = Robolectric.buildService(ScreenCaptureService::class.java).create().get()
+        val older = grantCaptureService(target)
+        val newer = request()
+        ScreenCaptureManager.releaseConsent(older)
+        val stop = recorded.single().first
+        recorded.clear()
+        ScreenCaptureManager.onConsentResult(Activity.RESULT_OK, Intent())
+        val start = recorded.single().first
+
+        target.onStartCommand(stop, 0, 2)
+        assertFalse("the old stop scheduled destruction of the new grant's service", shadowOf(target).isStoppedBySelf)
+        target.onStartCommand(start, 0, 3)
+        assertTrue(newer.isCompleted)
+        val grant = requireNotNull(runBlocking { newer.await() })
+        assertTrue(ScreenCaptureManager.isConsentActive(grant))
+        assertTrue(shadowOf(target).isLastForegroundNotificationAttached)
+    }
+
+    @Test fun destroyingAnOlderCaptureServiceCannotRevokeANewerApproval() {
+        val controller = Robolectric.buildService(ScreenCaptureService::class.java).create()
+        val target = controller.get()
+        val older = grantCaptureService(target)
+        val newer = request()
+        ScreenCaptureManager.releaseConsent(older)
+        target.onStartCommand(recorded.single().first, 0, 2)
+        assertTrue(shadowOf(target).isStoppedBySelf)
+        assertFalse(shadowOf(target).isLastForegroundNotificationAttached)
+        recorded.clear()
+        ScreenCaptureManager.onConsentResult(Activity.RESULT_OK, Intent())
+        val start = recorded.single().first
+        var revocations = 0
+        ScreenCaptureManager.onProjectionRevoked = { revocations += 1 }
+
+        controller.destroy()
+        assertEquals(0, revocations)
+        val replacementController = Robolectric.buildService(ScreenCaptureService::class.java).create()
+        val replacement = replacementController.get()
+        replacement.onStartCommand(start, 0, 1)
+        assertTrue(newer.isCompleted)
+        val grant = requireNotNull(runBlocking { newer.await() })
+        assertTrue(ScreenCaptureManager.isConsentActive(grant))
+        assertTrue(shadowOf(replacement).isLastForegroundNotificationAttached)
+
+        replacement.onStartCommand(Intent(ScreenCaptureService.ACTION_STOP), 0, 2)
+        replacementController.destroy()
+        assertFalse(ScreenCaptureManager.isConsentActive(grant))
+        assertEquals(1, revocations)
+    }
+
+    private fun grantCaptureService(target: ScreenCaptureService): Int {
+        val pending = request()
+        ScreenCaptureManager.onConsentResult(Activity.RESULT_OK, Intent())
+        assertEquals(ScreenCaptureService.ACTION_START, recorded.single().first.action)
+        target.onStartCommand(recorded.single().first, 0, 1)
+        assertTrue(pending.isCompleted)
+        val grant = requireNotNull(runBlocking { pending.await() })
+        assertTrue(ScreenCaptureManager.isConsentActive(grant))
+        assertTrue(shadowOf(target).isLastForegroundNotificationAttached)
+        recorded.clear()
+        return grant
+    }
+
     @Test fun aBackgroundRevokeDefersTheDropUntilTheAppReturns() {
         val target = fold()
         var revoked = 0
         ScreenCaptureManager.onProjectionRevoked = { revoked += 1 }
         CallNotificationBridge.startGate.setAppActive(false)
         recorded.clear()
-        ScreenCaptureManager.onProjectionStoppedExternally()
+        val consent = ScreenCaptureManager.currentGrantForTesting()
+        assertNotEquals(0, consent)
+        ScreenCaptureManager.onProjectionStoppedExternally(consent)
         assertEquals(1, revoked)
         assertFalse(recorded.single().first.getBooleanExtra(CallForegroundService.EXTRA_USER_INITIATED, true))
         deliver(target, recorded.single().first)
@@ -205,7 +355,7 @@ class S5ShareFoldBridgeTests {
         CallNotificationBridge.startGate.setAppActive(true)
         deliver(target, Intent(CallForegroundService.ACTION_UPDATE))
         assertEquals(baseline, target.foregroundServiceType)
-        ScreenCaptureManager.onProjectionStoppedExternally()
+        ScreenCaptureManager.onProjectionStoppedExternally(consent)
         assertEquals(1, revoked)
     }
 

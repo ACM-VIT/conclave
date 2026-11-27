@@ -88,7 +88,7 @@ class S1bPostReducedReactionsBridgeTests {
     private val shapes = listOf(StageReactionSlotShape.row, StageReactionSlotShape.column, StageReactionSlotShape.block)
 
     private fun burstStage(at: StageViewport, count: Int = 6): StagePresenter {
-        val stage = StagePresenter(shell = MeetingShellPresenter())
+        val stage = StagePresenter(shell = MeetingShellPresenter(defaults = IsolatedDefaults.make()))
         stage.setViewport(at)
         stage.apply(if (count == 6) StageFixtureScript.inputs(StageFixtureState.reactionsBurst25) else StageFixtureScript.base(count = count))
         return stage

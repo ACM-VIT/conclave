@@ -1,0 +1,64 @@
+{
+  "profiles": [
+    {
+      "id": "d0f4b3a5-8e62-4f44-8b5d-4c9e5a0f2d34",
+      "clientId": "conclave",
+      "userId": "host-user",
+      "email": "host@example.test",
+      "name": "Host",
+      "username": "host",
+      "timeZone": "UTC",
+      "createdAt": 1719400000000,
+      "updatedAt": 1719400000000
+    }
+  ],
+  "availability": [
+    {
+      "profileId": "d0f4b3a5-8e62-4f44-8b5d-4c9e5a0f2d34",
+      "availability": {
+        "timeZone": "UTC",
+        "windows": [{ "day": 1, "startMinutes": 540, "endMinutes": 1020 }],
+        "overrides": []
+      }
+    }
+  ],
+  "eventTypes": [
+    {
+      "id": "e1a5c4b6-9f73-4a55-9c6e-5d0f6b1a3e45",
+      "clientId": "conclave",
+      "profileId": "d0f4b3a5-8e62-4f44-8b5d-4c9e5a0f2d34",
+      "userId": "host-user",
+      "slug": "intro-call",
+      "title": "Intro call",
+      "description": "",
+      "durationMinutes": 30,
+      "minimumNoticeMinutes": 60,
+      "bookingWindowDays": 14,
+      "bufferBeforeMinutes": 0,
+      "bufferAfterMinutes": 0,
+      "isActive": true,
+      "requiresCalendar": false,
+      "createdAt": 1719400000000,
+      "updatedAt": 1719400000000
+    }
+  ],
+  "calendars": [
+    {
+      "id": "f2b6d5c7-0a84-4b66-8d7f-6e1a7c2b4f56",
+      "clientId": "conclave",
+      "profileId": "d0f4b3a5-8e62-4f44-8b5d-4c9e5a0f2d34",
+      "userId": "host-user",
+      "provider": "google",
+      "status": "connected",
+      "email": "host@example.test",
+      "calendarId": "primary",
+      "accessToken": "plaintext-access",
+      "refreshToken": "plaintext-refresh",
+      "accessTokenExpiresAt": null,
+      "scopes": ["https://www.googleapis.com/auth/calendar.events"],
+      "connectedAt": 1719400000000,
+      "updatedAt": 1719400000000,
+      "error": null
+    }
+  ]
+}

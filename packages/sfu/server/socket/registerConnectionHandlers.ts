@@ -2,7 +2,11 @@ import { registerRoomAiHandlers } from "./handlers/roomAiHandlers.js";
 import type { Server as SocketIOServer } from "socket.io";
 import { Logger } from "../../utilities/loggers.js";
 import type { SfuState } from "../state.js";
-import { createConnectionContext, setSocketContext } from "./context.js";
+import {
+  createConnectionContext,
+  forgetLostSeat,
+  setSocketContext,
+} from "./context.js";
 import { guardSocketListeners } from "./guardListeners.js";
 import { registerChatHandlers } from "./handlers/chatHandlers.js";
 import { registerChatReactionHandlers } from "./handlers/chatReactionHandlers.js";
@@ -18,6 +22,7 @@ import { registerSharedBrowserHandlers } from "./handlers/sharedBrowserHandlers.
 import { registerTransportHandlers } from "./handlers/transportHandlers.js";
 import { registerTranscriptHandlers } from "./handlers/transcriptHandlers.js";
 import { registerAppsHandlers } from "./handlers/appsHandlers.js";
+import { registerAuthorityHandlers } from "./handlers/authorityHandlers.js";
 import { registerGameHandlers } from "./handlers/gameHandlers.js";
 import { registerWebinarHandlers } from "./handlers/webinarHandlers.js";
 import { registerWebinarInteractionHandlers } from "./handlers/webinarInteractionHandlers.js";
@@ -28,11 +33,9 @@ export const registerConnectionHandlers = (
 ): void => {
   io.on("connection", (socket) => {
     Logger.info(`Client connected: ${socket.id}`);
-    // Before any handler registers: one bad packet must not crash the SFU.
-    guardSocketListeners(socket);
-
     const context = createConnectionContext(io, socket, state);
     setSocketContext(socket, context);
+    guardSocketListeners(socket, () => forgetLostSeat(context));
 
     registerJoinRoomHandler(context);
     registerRouterHandlers(context);
@@ -45,6 +48,7 @@ export const registerConnectionHandlers = (
     registerReactionHandlers(context);
     registerHandHandlers(context);
     registerAppsHandlers(context);
+    if (state.appsAuthority) registerAuthorityHandlers(context);
     registerGameHandlers(context);
     registerMeetingHandlers(context);
     registerWebinarHandlers(context);

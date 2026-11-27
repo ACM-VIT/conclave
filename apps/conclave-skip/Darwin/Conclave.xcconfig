@@ -14,6 +14,7 @@ SFU_JOIN_URL = https:/$()/conclave.acmvit.in/api/sfu/join
 SFU_JOIN_URL[config=Debug][sdk=iphonesimulator*] = $(CONCLAVE_DEBUG_SFU_JOIN_URL_$(CONCLAVE_DEBUG_VIEWER_PROFILE))
 CONCLAVE_AUTH_BASE_URL = https:/$()/conclave.acmvit.in
 CONCLAVE_AUTH_BASE_URL[config=Debug] =
+POSTHOG_HOST = https:/$()/eu.i.posthog.com
 
 IPHONEOS_DEPLOYMENT_TARGET = 17.0
 MACOSX_DEPLOYMENT_TARGET = 14.0

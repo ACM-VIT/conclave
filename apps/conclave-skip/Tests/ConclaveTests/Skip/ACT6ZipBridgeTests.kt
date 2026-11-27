@@ -112,7 +112,7 @@ class ACT6ZipBridgeTests {
         assertFalse(reconnecting.scene.zip!!.canMove)
         assertEquals(ActivityTapResult.explained, reconnecting.send(ZipIntent.hint()))
         assertTrue(sent.isEmpty())
-        val shell = MeetingShellPresenter()
+        val shell = MeetingShellPresenter(defaults = IsolatedDefaults.make())
         val session = ActivitySession(shell = shell, stage = StagePresenter(shell = shell))
         assertEquals(ZipFixtureState.rejected, ZipFixtures.apply(ZipFixtureState.rejected.rawValue, session, ActivityFixtureOwner()))
         assertEquals(ZipFixtures.rejectionText, session.games.interaction.failureServerText)

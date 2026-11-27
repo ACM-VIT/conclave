@@ -11,12 +11,15 @@
     "check:native-embed": "node ./src/native-embed/build/build-native-embed.mjs --check",
     "test:native-embed": "node --test ./scripts/native-embed-contract-test.mjs",
     "test:native-embed-apps": "node --test ./src/native-embed/tests/wheel-watch-contract-test.mjs",
+    "test:scripts": "node --test ./scripts/check-app-integrations.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "main": "src/index.ts",
   "types": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./authority": "./src/sdk/authority/index.ts",
+    "./authority/server": "./src/sdk/authority/server.ts",
     "./native-embed": "./src/native-embed/index.ts",
     "./dev-playground/core": "./src/apps/dev-playground/core/index.ts",
     "./dev-playground/web": "./src/apps/dev-playground/web/index.ts",
@@ -26,6 +29,16 @@
     "./wheel/web": "./src/apps/wheel/web/index.ts",
     "./whiteboard/core": "./src/apps/whiteboard/core/index.ts",
     "./whiteboard/web": "./src/apps/whiteboard/web/index.ts"
+  },
+  "imports": {
+    "#authority/schema": "./src/sdk/authority/schema.ts",
+    "#authority/contract": "./src/sdk/authority/contract.ts",
+    "#authority/wire": "./src/sdk/authority/wire.ts",
+    "#authority/definition": "./src/sdk/authority/definition.ts",
+    "#authority/client": "./src/sdk/authority/client.ts",
+    "#sdk/text": "./src/sdk/text.ts",
+    "#sdk/graphemes": "./src/sdk/graphemes.ts",
+    "#native-embed/protocol": "./src/native-embed/protocol.ts"
   },
   "dependencies": {
     "@conclave/ai": "workspace:*",

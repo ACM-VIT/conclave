@@ -24,6 +24,7 @@ import {
   type Dispatch,
   type PointerEvent as ReactPointerEvent,
   type SetStateAction,
+  type SyntheticEvent,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -43,13 +44,22 @@ import { isSystemUserId, truncateDisplayName } from "../lib/utils";
 import { observeRemoteVideoPresentation } from "../lib/remote-video-presentation";
 import ParticipantAudio from "./ParticipantAudio";
 import ParticipantConnectionOverlay from "./ParticipantConnectionOverlay";
+import LocalVideoTile from "./LocalVideoTile";
+import StageNotice from "./StageNotice";
+import StageSourcePill from "./StageSourcePill";
+import TileNameplate from "./TileNameplate";
+import {
+  stageRailClass,
+  stageRailStyle,
+  stageRailTileClass,
+  stageRectSize,
+  stageSplitClass,
+} from "./stage-layout";
 import ParticipantVideo from "./ParticipantVideo";
-import GameTileOverlay from "./games/GameTileOverlay";
 import { Avatar } from "@conclave/ui-tokens/web";
 import {
   chooseStageMode,
   computeGridLayout,
-  computeStageRailLayout,
   type GridTilePosition,
   type GridLayoutResult,
 } from "@conclave/meeting-core";
@@ -71,6 +81,18 @@ import {
 } from "../lib/captured-surface-control";
 import { useElementSize } from "../hooks/useElementSize";
 import { computeTileChrome } from "../lib/tile-chrome";
+import {
+  LOCAL_TILE_ID,
+  OVERFLOW_TILE_ID,
+  PRESENTATION_TILE_ID,
+  resolveMeetingStageLayout,
+  resolveTiledGridPlacement,
+  type MeetingStageTile,
+} from "../lib/meeting-stage-layout";
+import {
+  ROOM_TILING_METADATA_INTERVAL_MS,
+  usePublishStagePlacement,
+} from "../hooks/usePublishStagePlacement";
 import { readVideoAspect, resolveTileAspect } from "../lib/tile-video-framing";
 
 interface GridLayoutProps {
@@ -117,8 +139,6 @@ const PRESENTATION_PRIORITY_WARM_BUFFER_TILES = 2;
 const GRID_PADDING = 16;
 const GRID_GAP = 12;
 const GRID_MAX_COLS = 6;
-const STAGE_RAIL_TILE_HEIGHT = 112;
-const SIDE_BY_SIDE_RAIL_HEIGHT_RATIO = 0.35;
 const AUTO_GRID_MIN_TILE_WIDTH = 176;
 const AUTO_GRID_MIN_TILE_HEIGHT = 99;
 const MOBILE_PORTRAIT_COLS = 2;
@@ -227,7 +247,6 @@ const computeMobilePortraitGridLayout = (
     positions,
   };
 };
-const ROOM_TILING_METADATA_INTERVAL_MS = 200;
 const ROOM_TILING_PROMOTE_DELAY_MS = 1200;
 const ROOM_TILING_MIN_SWITCH_INTERVAL_MS = 8000;
 const FLIP_DURATION_MS = 220;
@@ -235,7 +254,6 @@ const REFLOW_DURATION_MS = 280;
 const FLIP_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
 const FONT_SANS = "'PolySans Trial', system-ui, sans-serif";
 const LOCAL_STAGE_ID = "__local__";
-const PRESENTATION_TILE_ID = "__presentation__";
 
 type EffectiveMeetViewMode = MeetViewMode | "sideBySide";
 type ResolvedSelfViewMode = Exclude<MeetSelfViewMode, "auto">;
@@ -333,108 +351,6 @@ type MeetLocalVideoTracking = {
   } | null;
   receivedAt: number;
 };
-
-type MeetRoomTilingMetadataBase = {
-  source: "client";
-  intervalMs: number;
-  promoteDelayMs: number;
-  minSwitchIntervalMs: number;
-  activeSpeakerId: string | null;
-  featuredSpeakerId: string | null;
-  requestedMode: MeetViewMode;
-  renderedMode: EffectiveMeetViewMode;
-  effectiveMode: EffectiveMeetViewMode;
-  autoStageMode: string;
-  dynamicCrop: boolean;
-  presenting: boolean;
-  presentation: {
-    tileId: string;
-    presenterId: string | null;
-    producerId: string | null;
-    visible: boolean;
-    primary: boolean;
-    focus: boolean;
-  };
-  pinnedId: string | null;
-  primaryIds: string[];
-  focusIds: string[];
-  visibleRemoteIds: string[];
-  hiddenIds: string[];
-  warmIds: string[];
-  warmReasons: Record<string, MeetRoomTilingWarmReason[]>;
-  fallbackLevel: number;
-  orderedRemoteIds: string[];
-  scores: MeetRoomTilingScore[];
-  counts: {
-    orderedRemote: number;
-    visible: number;
-    hidden: number;
-    warm: number;
-    totalGrid: number;
-    stageRail: number;
-    maxTiles: number;
-    requestedMaxTiles: number;
-    autoTileLimit: number;
-    recentlyVisibleWarm: number;
-    priorityWarm: number;
-    handRaisedWarm: number;
-    featuredSpeakerWarm: number;
-    stageRailCapacity: number;
-    stageRailRemoteCapacity: number;
-  };
-  stage: {
-    mainKind: "presentation" | "local" | "remote" | "none";
-    candidateMainKind: "presentation" | "local" | "remote" | "none";
-    mainParticipantId: string | null;
-    sideCompanionKind: "local" | "remote" | "none";
-    sideCompanionId: string | null;
-    sideBySide: boolean;
-    spotlight: boolean;
-  };
-  selfView: {
-    requested: MeetSelfViewMode;
-    effective: ResolvedSelfViewMode;
-    placement: "stage" | "tile" | "floating" | "minimized" | "none";
-    corner: MeetSelfViewCorner;
-  };
-  layout: {
-    width: number;
-    height: number;
-    cols: number;
-    rows: number;
-    tileWidth: number;
-    tileHeight: number;
-    contentWidth: number;
-    contentHeight: number;
-    offsetX: number;
-    offsetY: number;
-    positions: Array<GridTilePosition & { id: string }>;
-    gridVideoFit: "cover" | "contain";
-    fullVideoTileIds: string[];
-  };
-  localVideo: MeetLocalVideoTracking;
-};
-
-type MeetRoomTilingMetadata = MeetRoomTilingMetadataBase & {
-  sequence: number;
-  timestamp: number;
-  performanceTime: number;
-  signature: string;
-};
-
-type MeetRoomTilingDebugSnapshot = {
-  current: MeetRoomTilingMetadata | null;
-  history: MeetRoomTilingMetadata[];
-  sequence: number;
-  intervalMs: number;
-};
-
-declare global {
-  interface Window {
-    __conclaveGetMeetRoomTilingDebug?: () => MeetRoomTilingDebugSnapshot;
-    __conclaveMeetRoomTilingDebug?: MeetRoomTilingDebugSnapshot;
-  }
-}
 
 const hasLiveTrack = (
   stream: MediaStream | null | undefined,
@@ -904,12 +820,13 @@ function GridLayout({
   sidePanelReserve = 0,
   isMobile = false,
 }: GridLayoutProps) {
-  const stageRootRef = useRef<HTMLDivElement>(null);
+  const stageBoxRef = useRef<HTMLDivElement>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const localGridTileRef = useRef<HTMLDivElement>(null);
   const localGridTileSize = useElementSize(localGridTileRef);
   const localTileChrome = computeTileChrome(localGridTileSize);
   const [isOverflowOpen, setIsOverflowOpen] = useState(false);
+  const [gridScrollTop, setGridScrollTop] = useState(0);
   const [selfViewDragPoint, setSelfViewDragPoint] = useState<{
     x: number;
     y: number;
@@ -971,6 +888,15 @@ function GridLayout({
   const isLocalActiveSpeaker = activeSpeakerId === currentUserId;
   const isLocalPinned = pinnedId === LOCAL_STAGE_ID;
   const hasPresentation = hasLiveVideo(presentationStream);
+  const [presentationFrame, setPresentationFrame] = useState<{
+    stream: MediaStream;
+    aspect: number;
+  } | null>(null);
+  const reportPresentationFrame = useCallback((stream: MediaStream, aspect: number) => {
+    setPresentationFrame((current) =>
+      current?.stream === stream && current.aspect === aspect ? current : { stream, aspect },
+    );
+  }, []);
   const [selfPresentationView, setSelfPresentationView] =
     useState<SelfPresentationView>("placeholder");
   useLayoutEffect(() => {
@@ -988,6 +914,15 @@ function GridLayout({
           state: screenShareControlState,
         }
       : undefined;
+  const presentationAspect =
+    presentationFrame && presentationFrame.stream === presentationStream ? presentationFrame.aspect : null;
+  const hasPresentationZoom = Boolean(
+    presentationCaptureControl?.controller && selfPresentationView === "preview",
+  );
+  const stageShare = useMemo(
+    () => hasPresentation ? { aspect: presentationAspect, captureControls: hasPresentationZoom } : null,
+    [hasPresentation, hasPresentationZoom, presentationAspect],
+  );
   const localVideoTrack = localStream?.getVideoTracks()[0] ?? null;
   const localVideoTrackingRef = useRef<MeetLocalVideoTracking>(
     emptyLocalVideoTracking(),
@@ -1158,8 +1093,15 @@ function GridLayout({
         ? autoStageMode
         : "tiled"
       : viewSettings.mode;
+  const pinsCameraOverPresentation =
+    Boolean(pinnedId) && pinnedId !== PRESENTATION_TILE_ID && hasPresentation;
   const renderedViewMode: EffectiveMeetViewMode =
-    pinnedId && effectiveViewMode === "tiled" ? "spotlight" : effectiveViewMode;
+    pinsCameraOverPresentation &&
+    (effectiveViewMode === "tiled" || effectiveViewMode === "spotlight")
+      ? "sidebar"
+      : pinnedId && effectiveViewMode === "tiled"
+        ? "spotlight"
+        : effectiveViewMode;
   const usesAutoDynamicCrop =
     viewSettings.mode === "auto" && renderedViewMode === "tiled";
   const gridVideoObjectFit: "cover" | "contain" = usesAutoDynamicCrop
@@ -1331,27 +1273,69 @@ function GridLayout({
       (participant) => !visibleIds.has(participant.userId)
     );
   }, [orderedRemoteParticipants, visibleParticipants]);
-  const stageMainKind: "presentation" | "local" | "remote" | null =
-    isLocalPinned
-      ? "local"
-      : pinnedParticipant
-        ? "remote"
-        : hasPresentation
-          ? "presentation"
-          : isLocalFeaturedSpeaker && hasFeaturedVideoSpeaker
-            ? "local"
-            : featuredRemoteParticipant || orderedRemoteParticipants[0]
-              ? "remote"
-              : null;
-  const stageMainParticipant =
-    stageMainKind === "remote"
-      ? pinnedParticipant ??
-        featuredRemoteParticipant ??
-        orderedRemoteParticipants[0] ??
-        null
-      : null;
-  const usesStageLayout = Boolean(stageMainKind) && wantsStageLayout;
-  const stageMainParticipantId = stageMainParticipant?.userId ?? null;
+  const preferredRemoteParticipant = featuredRemoteParticipant ?? orderedRemoteParticipants[0] ?? null;
+  const companionParticipant = useMemo(() => {
+    if (renderedViewMode !== "sideBySide" || !hasPresentation) return null;
+    return featuredRemoteParticipant && participantHasLiveVideo(featuredRemoteParticipant)
+      ? featuredRemoteParticipant
+      : orderedRemoteParticipants.find(participantHasLiveVideo) ?? null;
+  }, [featuredRemoteParticipant, hasPresentation, orderedRemoteParticipants, renderedViewMode]);
+  const stageLayout = useMemo(() => {
+    if (!wantsStageLayout) return null;
+    const local = { kind: "local" } as const;
+    const useFeaturedSelf = isLocalFeaturedSpeaker && hasFeaturedVideoSpeaker;
+    const remoteTile = (participant: Participant | null) =>
+      participant ? { kind: "remote" as const, participant } : null;
+
+    return resolveMeetingStageLayout({
+      size: {
+        width: Math.max(0, gridSize.width - GRID_PADDING * 2),
+        height: Math.max(0, gridSize.height - GRID_PADDING * 2),
+      },
+      participants: orderedRemoteParticipants,
+      pinnedCamera: isLocalPinned ? local : remoteTile(pinnedParticipant),
+      preferredCamera: useFeaturedSelf ? local : remoteTile(preferredRemoteParticipant),
+      companionCamera: renderedViewMode === "sideBySide" && stageShare
+        ? useFeaturedSelf ? local : remoteTile(companionParticipant)
+        : null,
+      share: stageShare,
+      spotlight: renderedViewMode === "spotlight",
+      selfView: { mode: effectiveSelfViewMode, corner: requestedSelfViewCorner },
+      galleryOpen: isOverflowOpen,
+      maxTiles: maxGridTiles,
+    });
+  }, [
+    companionParticipant,
+    effectiveSelfViewMode,
+    gridSize,
+    hasFeaturedVideoSpeaker,
+    isLocalFeaturedSpeaker,
+    isLocalPinned,
+    isOverflowOpen,
+    maxGridTiles,
+    orderedRemoteParticipants,
+    pinnedParticipant,
+    preferredRemoteParticipant,
+    renderedViewMode,
+    requestedSelfViewCorner,
+    stageShare,
+    wantsStageLayout,
+  ]);
+  const usesStageLayout = stageLayout !== null;
+  const usesSpotlightLayout = usesStageLayout && renderedViewMode === "spotlight";
+  const stageMainKind = stageLayout?.main.kind ?? null;
+  const stageMainParticipantId = stageLayout?.main.kind === "remote"
+    ? stageLayout.main.participant.userId
+    : null;
+  const sideBySideCompanionKind = stageLayout?.companion?.kind ?? null;
+  const sideBySideCompanionParticipantId = stageLayout?.companion?.kind === "remote"
+    ? stageLayout.companion.participant.userId
+    : null;
+  const usesSideBySideLayout = sideBySideCompanionKind !== null;
+  const stageRailFixedTileCount = stageLayout?.fixedRailCount ?? 0;
+  const stageRailTileCount = stageLayout ? stageLayout.rail.length + Number(stageLayout.overflow) : 0;
+  const stageRailCapacity = stageLayout?.railSlots ?? 0;
+  const stageRailRemoteCapacity = stageLayout?.remoteRailCount ?? 0;
 
   useEffect(() => {
     const video = localVideoRef.current;
@@ -1453,181 +1437,122 @@ function GridLayout({
     usesStageLayout,
   ]);
 
-  const sideBySideFeaturedRemoteParticipant =
-    featuredRemoteParticipant && participantHasLiveVideo(featuredRemoteParticipant)
-      ? featuredRemoteParticipant
-      : null;
-  const sideBySideFirstVideoParticipant =
-    orderedRemoteParticipants.find((participant) =>
-      participantHasLiveVideo(participant),
-    ) ?? null;
-  const sideBySideCompanionKind: "local" | "remote" | null =
-    renderedViewMode === "sideBySide" && hasPresentation
-      ? shouldShowSelfAsTile &&
-        isLocalFeaturedSpeaker &&
-        !isCameraOff &&
-        hasLiveVideo(localStream)
-        ? "local"
-        : sideBySideFeaturedRemoteParticipant || sideBySideFirstVideoParticipant
-          ? "remote"
-          : null
-      : null;
-  const sideBySideCompanionParticipant =
-    sideBySideCompanionKind === "remote"
-      ? sideBySideFeaturedRemoteParticipant ?? sideBySideFirstVideoParticipant
-      : null;
-  const sideBySideCompanionParticipantId =
-    sideBySideCompanionParticipant?.userId ?? null;
-  const usesSideBySideLayout =
-    usesStageLayout &&
-    renderedViewMode === "sideBySide" &&
-    hasPresentation &&
-    Boolean(sideBySideCompanionKind);
-  const usesSpotlightLayout = usesStageLayout && renderedViewMode === "spotlight";
-  const stageRailLocalTileCount =
-    usesStageLayout &&
-    !usesSpotlightLayout &&
-    shouldShowSelfAsTile &&
-    (usesSideBySideLayout
-      ? sideBySideCompanionKind !== "local"
-      : stageMainKind !== "local")
-      ? 1
-      : 0;
-  const presentationRenderedAsPrimary =
-    hasGridPresentationTile ||
-    usesSideBySideLayout ||
-    (usesStageLayout && stageMainKind === "presentation");
-  const presentationRenderedInRail =
-    usesStageLayout &&
-    !usesSpotlightLayout &&
-    !usesSideBySideLayout &&
-    hasPresentation &&
-    stageMainKind !== "presentation";
-  const isPresentationRendered =
-    hasPresentation &&
-    (presentationRenderedAsPrimary || presentationRenderedInRail);
-  const stageRailPresentationTileCount = presentationRenderedInRail ? 1 : 0;
-  const stageRailFixedTileCount =
-    stageRailLocalTileCount + stageRailPresentationTileCount;
-  const stageBudgetCompanionTileCount =
-    sideBySideCompanionKind === "remote" ? 1 : 0;
-  const stageRailCandidateParticipants = useMemo(
-    () =>
-      usesStageLayout
-        ? orderedRemoteParticipants.filter(
-            (participant) =>
-              participant.userId !== stageMainParticipantId &&
-              participant.userId !== sideBySideCompanionParticipantId,
-          )
-        : [],
-    [
-      orderedRemoteParticipants,
-      sideBySideCompanionParticipantId,
-      stageMainParticipantId,
-      usesStageLayout,
-    ],
-  );
-  const stageRailViewportHeight = usesStageLayout && !usesSpotlightLayout
-    ? Math.max(0, gridSize.height - GRID_PADDING * 2) *
-      (usesSideBySideLayout ? SIDE_BY_SIDE_RAIL_HEIGHT_RATIO : 1)
-    : 0;
-  const stageRailLayout = useMemo(
-    () =>
-      computeStageRailLayout({
-        candidateCount: stageRailCandidateParticipants.length,
-        fixedTileCount:
-          stageRailFixedTileCount + stageBudgetCompanionTileCount,
-        maxTiles: Math.max(0, maxGridTiles - 1),
-        railHeight: stageRailViewportHeight,
-        tileHeight: STAGE_RAIL_TILE_HEIGHT,
-        gap: GRID_GAP,
-      }),
-    [
-      maxGridTiles,
-      stageBudgetCompanionTileCount,
-      stageRailCandidateParticipants.length,
-      stageRailFixedTileCount,
-      stageRailViewportHeight,
-    ],
-  );
-  const stageSideRemoteCapacity = usesSpotlightLayout
-    ? 0
-    : stageRailLayout.remoteCapacity;
-  const stageSideParticipants = useMemo(
-    () =>
-      usesStageLayout
-        ? stageRailCandidateParticipants.slice(0, stageSideRemoteCapacity)
-        : [],
-    [
-      stageRailCandidateParticipants,
-      stageSideRemoteCapacity,
-      usesStageLayout,
-    ],
-  );
-  const stageSideParticipantIds = useMemo(
-    () =>
-      new Set(
-        stageSideParticipants.map((participant) => participant.userId),
-      ),
-    [stageSideParticipants],
-  );
-  const stageHiddenParticipants = useMemo(
-    () =>
-      usesStageLayout
-        ? orderedRemoteParticipants.filter(
-            (participant) =>
-              participant.userId !== stageMainParticipantId &&
-              participant.userId !== sideBySideCompanionParticipantId &&
-              !stageSideParticipantIds.has(participant.userId),
-          )
-        : hiddenParticipants,
-    [
-      hiddenParticipants,
-      orderedRemoteParticipants,
-      sideBySideCompanionParticipantId,
-      stageMainParticipantId,
-      stageSideParticipantIds,
-      usesStageLayout,
-    ],
-  );
-  const overflowParticipants = useMemo(
-    () =>
-      usesStageLayout ? stageHiddenParticipants : hiddenParticipants,
-    [hiddenParticipants, stageHiddenParticipants, usesStageLayout],
-  );
+  const overflowParticipants = stageLayout?.hiddenParticipants ?? hiddenParticipants;
   const hiddenParticipantsCount = overflowParticipants.length;
-  const showStageOverflowTile =
-    usesStageLayout &&
-    !usesSpotlightLayout &&
-    stageRailLayout.overflowTile &&
-    hiddenParticipantsCount > 0;
-  const roomTilingRemoteVisibleIds = useMemo(() => {
+  const showOverflowTile = stageLayout?.overflow ?? hiddenParticipantsCount > 0;
+  const showOverflowGallery = showOverflowTile && isOverflowOpen;
+  const showOverflowTileInGrid = showOverflowTile && !isOverflowOpen && !stageLayout;
+  const tiledGridTileIds = useMemo(() => {
+    if (stageLayout) return [];
     const ids: string[] = [];
-    if (usesStageLayout) {
-      if (stageMainKind === "remote" && stageMainParticipantId) {
-        ids.push(stageMainParticipantId);
-      }
-      if (sideBySideCompanionParticipantId) {
-        ids.push(sideBySideCompanionParticipantId);
-      }
-      stageSideParticipants.forEach((participant) => ids.push(participant.userId));
-    } else {
-      visibleParticipants.forEach((participant) => ids.push(participant.userId));
-    }
-    if (isOverflowOpen) {
-      overflowParticipants.forEach((participant) => ids.push(participant.userId));
-    }
-    return Array.from(new Set(ids));
+    if (hasGridPresentationTile) ids.push(PRESENTATION_TILE_ID);
+    if (shouldShowSelfAsTile) ids.push(LOCAL_TILE_ID);
+    visibleParticipants.forEach((participant) => ids.push(participant.userId));
+    if (showOverflowTileInGrid) ids.push(OVERFLOW_TILE_ID);
+    return ids;
   }, [
-    isOverflowOpen,
-    overflowParticipants,
-    sideBySideCompanionParticipantId,
-    stageMainKind,
-    stageMainParticipantId,
-    stageSideParticipants,
-    usesStageLayout,
+    hasGridPresentationTile,
+    shouldShowSelfAsTile,
+    showOverflowTileInGrid,
+    stageLayout,
     visibleParticipants,
   ]);
+  const totalParticipants = tiledGridTileIds.length;
+  const gridUsableWidth = Math.max(0, gridSize.width - GRID_PADDING * 2);
+  const gridUsableHeight = Math.max(0, gridSize.height - GRID_PADDING * 2);
+  const isMobilePortraitGrid = isMobilePortrait(
+    isMobile,
+    gridUsableWidth,
+    gridUsableHeight,
+  );
+  const usesVideoShapedTiles = usesAutoDynamicCrop && !isMobilePortraitGrid;
+  const tileAspects = useMemo(
+    () =>
+      usesVideoShapedTiles
+        ? tiledGridTileIds.map((id) =>
+            resolveTileAspect(
+              videoAspectById.get(id) ?? null,
+              fullVideoTileIds.has(id),
+            ),
+          )
+        : undefined,
+    [fullVideoTileIds, tiledGridTileIds, usesVideoShapedTiles, videoAspectById],
+  );
+  const layout = useMemo(() => {
+    if (isMobilePortraitGrid) {
+      return computeMobilePortraitGridLayout(
+        totalParticipants,
+        gridUsableWidth,
+        gridUsableHeight,
+        GRID_GAP,
+        maxGridTiles,
+      );
+    }
+    const { maxCols, targetAspect } = getGridPackingParams(
+      isMobile,
+      gridUsableWidth,
+    );
+    return computeGridLayout(totalParticipants, gridUsableWidth, gridUsableHeight, {
+      gap: GRID_GAP,
+      maxCols,
+      maxTilesPerPage: maxGridTiles,
+      targetAspect,
+      tileAspects,
+    });
+  }, [
+    totalParticipants,
+    gridUsableWidth,
+    gridUsableHeight,
+    isMobilePortraitGrid,
+    maxGridTiles,
+    isMobile,
+    tileAspects,
+  ]);
+  const tileStyle =
+    layout.tileWidth > 0
+      ? { width: layout.tileWidth, height: layout.tileHeight }
+      : undefined;
+  const tiledGridPositionById = useMemo(() => {
+    const positions = new Map<string, GridTilePosition>();
+    tiledGridTileIds.forEach((id, index) => {
+      const position = layout.positions[index];
+      if (position) positions.set(id, position);
+    });
+    return positions;
+  }, [layout.positions, tiledGridTileIds]);
+  const tiledGridPlacement = useMemo(
+    () =>
+      resolveTiledGridPlacement({
+        size: { width: gridUsableWidth, height: gridUsableHeight },
+        tiles: tiledGridTileIds.map((id) => ({
+          id,
+          rect: tiledGridPositionById.get(id) ?? null,
+        })),
+        hiddenIds: hiddenParticipants.map((participant) => participant.userId),
+        galleryOpen: isOverflowOpen,
+        share: stageShare,
+        scrollTop: isMobilePortraitGrid ? gridScrollTop : 0,
+        selfView: { mode: effectiveSelfViewMode, corner: requestedSelfViewCorner },
+      }),
+    [
+      effectiveSelfViewMode,
+      gridScrollTop,
+      gridUsableHeight,
+      gridUsableWidth,
+      hiddenParticipants,
+      isMobilePortraitGrid,
+      isOverflowOpen,
+      requestedSelfViewCorner,
+      stageShare,
+      tiledGridPositionById,
+      tiledGridTileIds,
+    ],
+  );
+  const stagePlacement = stageLayout ?? tiledGridPlacement;
+  const selfViewPlacement = stagePlacement.selfView;
+  const roomTilingRemoteVisibleIds = stagePlacement.hints.visibleRemoteIds;
+  const roomTilingPrimaryIds = stagePlacement.hints.primaryIds;
+  const roomTilingHiddenIds = stagePlacement.hints.hiddenIds;
   const roomTilingRemoteVisibleIdSignature = useMemo(
     () => roomTilingRemoteVisibleIds.join(","),
     [roomTilingRemoteVisibleIds],
@@ -1802,54 +1727,7 @@ function GridLayout({
     recentlyVisibleWarmRevision,
     roomTilingRemoteVisibleIds,
   ]);
-  const showOverflowTile = usesStageLayout
-    ? showStageOverflowTile
-    : hiddenParticipantsCount > 0 && !usesSpotlightLayout;
-  const showOverflowTileInGrid =
-    showOverflowTile && !isOverflowOpen && !usesStageLayout;
-  const stageRailTileCount = usesStageLayout
-    ? stageRailLayout.renderedTileCount
-    : 0;
-  const totalParticipants =
-    visibleParticipants.length +
-    gridReservedTiles +
-    (showOverflowTileInGrid ? 1 : 0);
   const overflowPreviewParticipants = overflowParticipants.slice(0, 4);
-  const roomTilingPrimaryIds = useMemo(() => {
-    const ids: string[] = [];
-    if (usesStageLayout && stageMainKind) {
-      ids.push(
-        stageMainKind === "presentation"
-          ? PRESENTATION_TILE_ID
-          : stageMainKind === "local"
-            ? "local"
-            : stageMainParticipantId ?? "",
-      );
-      roomTilingRemoteVisibleIds.forEach((userId) => ids.push(userId));
-      if (
-        stageMainKind !== "local" &&
-        stageRailLocalTileCount > 0
-      ) {
-        ids.push("local");
-      }
-    } else {
-      if (hasGridPresentationTile) ids.push(PRESENTATION_TILE_ID);
-      if (shouldShowSelfAsTile) ids.push("local");
-      visibleParticipants.forEach((participant) => ids.push(participant.userId));
-      if (showOverflowTileInGrid) ids.push("overflow");
-    }
-    return Array.from(new Set(ids.filter(Boolean)));
-  }, [
-    currentUserId,
-    hasGridPresentationTile,
-    roomTilingRemoteVisibleIds,
-    showOverflowTileInGrid,
-    stageMainKind,
-    stageMainParticipantId,
-    stageRailLocalTileCount,
-    usesStageLayout,
-    visibleParticipants,
-  ]);
   const roomTilingFocusIds = useMemo(() => {
     const ids: string[] = [];
     if (usesStageLayout && stageMainKind === "remote" && stageMainParticipantId) {
@@ -1869,13 +1747,6 @@ function GridLayout({
     stageMainParticipantId,
     usesStageLayout,
   ]);
-  const roomTilingHiddenIds = useMemo(
-    () =>
-      isOverflowOpen
-        ? []
-        : overflowParticipants.map((participant) => participant.userId),
-    [isOverflowOpen, overflowParticipants],
-  );
   const roomTilingWarmIds = useMemo(
     () => warmParticipants.map((participant) => participant.userId),
     [warmParticipants],
@@ -1963,83 +1834,6 @@ function GridLayout({
 
   const localDisplayName = getDisplayName(currentUserId);
 
-  const gridUsableWidth = Math.max(0, gridSize.width - GRID_PADDING * 2);
-  const gridUsableHeight = Math.max(0, gridSize.height - GRID_PADDING * 2);
-  const isMobilePortraitGrid = isMobilePortrait(
-    isMobile,
-    gridUsableWidth,
-    gridUsableHeight,
-  );
-  const usesVideoShapedTiles = usesAutoDynamicCrop && !isMobilePortraitGrid;
-  const tiledGridTileIds = useMemo(() => {
-    if (usesStageLayout) return [];
-    const ids: string[] = [];
-    if (hasGridPresentationTile) ids.push(PRESENTATION_TILE_ID);
-    if (shouldShowSelfAsTile) ids.push("local");
-    visibleParticipants.forEach((participant) => ids.push(participant.userId));
-    if (showOverflowTileInGrid) ids.push("overflow");
-    return ids;
-  }, [
-    hasGridPresentationTile,
-    shouldShowSelfAsTile,
-    showOverflowTileInGrid,
-    usesStageLayout,
-    visibleParticipants,
-  ]);
-  const tileAspects = useMemo(
-    () =>
-      usesVideoShapedTiles
-        ? tiledGridTileIds.map((id) =>
-            resolveTileAspect(
-              videoAspectById.get(id) ?? null,
-              fullVideoTileIds.has(id),
-            ),
-          )
-        : undefined,
-    [fullVideoTileIds, tiledGridTileIds, usesVideoShapedTiles, videoAspectById],
-  );
-  const layout = useMemo(() => {
-    if (isMobilePortraitGrid) {
-      return computeMobilePortraitGridLayout(
-        totalParticipants,
-        gridUsableWidth,
-        gridUsableHeight,
-        GRID_GAP,
-        maxGridTiles,
-      );
-    }
-    const { maxCols, targetAspect } = getGridPackingParams(
-      isMobile,
-      gridUsableWidth,
-    );
-    return computeGridLayout(totalParticipants, gridUsableWidth, gridUsableHeight, {
-      gap: GRID_GAP,
-      maxCols,
-      maxTilesPerPage: maxGridTiles,
-      targetAspect,
-      tileAspects,
-    });
-  }, [
-    totalParticipants,
-    gridUsableWidth,
-    gridUsableHeight,
-    isMobilePortraitGrid,
-    maxGridTiles,
-    isMobile,
-    tileAspects,
-  ]);
-  const tileStyle =
-    layout.tileWidth > 0
-      ? { width: layout.tileWidth, height: layout.tileHeight }
-      : undefined;
-  const tiledGridPositionById = useMemo(() => {
-    const positions = new Map<string, GridTilePosition>();
-    tiledGridTileIds.forEach((id, index) => {
-      const position = layout.positions[index];
-      if (position) positions.set(id, position);
-    });
-    return positions;
-  }, [layout.positions, tiledGridTileIds]);
   const tiledGridTileStyleById = useMemo(() => {
     const styles = new Map<string, CSSProperties>();
     tiledGridPositionById.forEach((position, id) => {
@@ -2083,44 +1877,23 @@ function GridLayout({
     ? { objectPosition: localTrackingObjectPosition }
     : undefined;
   const showFloatingSelfView =
-    !isLocalPinned &&
-    stageMainKind !== "local" &&
-    (effectiveSelfViewMode === "floating" ||
-      (usesSpotlightLayout && shouldShowSelfAsTile));
+    selfViewPlacement.placement === "floating" && selfViewPlacement.rect !== null;
   const showMinimizedSelfView =
-    !isLocalPinned &&
-    stageMainKind !== "local" &&
-    effectiveSelfViewMode === "minimized";
-  const actualSelfViewPlacement = stageMainKind === "local"
-    ? "stage"
-    : shouldShowSelfAsTile && !usesSpotlightLayout
-      ? "tile"
-      : showFloatingSelfView
-        ? "floating"
-        : showMinimizedSelfView
-          ? "minimized"
-          : "none";
+    selfViewPlacement.placement === "minimized" && selfViewPlacement.rect !== null;
+  const showCompactSelfView = selfViewPlacement.placement === "pill";
+  const actualSelfViewPlacement = selfViewPlacement.placement;
   const roomTilingFallbackLevel = !hasMeasuredGrid
     ? 2
     : usesStageLayout &&
         !usesSpotlightLayout &&
-        stageRailCandidateParticipants.length > 0 &&
-        stageRailLayout.slotCount <= stageRailFixedTileCount
+        hiddenParticipantsCount > 0 &&
+        stageRailCapacity <= stageRailFixedTileCount
       ? 1
       : usesMeasuredAutoTileLimit && autoGridTileLimit < requestedMaxTiles
         ? 1
         : 0;
-  const roomTilingSequenceRef = useRef(0);
-  const roomTilingMetadataRef = useRef<MeetRoomTilingMetadata | null>(null);
-  const roomTilingHistoryRef = useRef<MeetRoomTilingMetadata[]>([]);
-  const lastPublishedRoomTilingSignatureRef = useRef<string | null>(null);
-  const latestRoomTilingMetadataBaseRef =
-    useRef<MeetRoomTilingMetadataBase | null>(null);
-  const latestRoomTilingMetadataSignatureRef = useRef("");
-  const roomTilingMetadataBase = useMemo<MeetRoomTilingMetadataBase>(
+  const roomTilingDetails = useMemo(
     () => ({
-      source: "client",
-      intervalMs: ROOM_TILING_METADATA_INTERVAL_MS,
       promoteDelayMs: ROOM_TILING_PROMOTE_DELAY_MS,
       minSwitchIntervalMs: ROOM_TILING_MIN_SWITCH_INTERVAL_MS,
       activeSpeakerId,
@@ -2135,15 +1908,10 @@ function GridLayout({
         tileId: PRESENTATION_TILE_ID,
         presenterId: presentationPresenterId,
         producerId: presentationProducerId,
-        visible: isPresentationRendered,
-        primary: presentationRenderedAsPrimary,
-        focus: presentationRenderedAsPrimary,
+        focus: stagePlacement.hints.presentation.primary,
       },
       pinnedId,
-      primaryIds: roomTilingPrimaryIds,
       focusIds: roomTilingFocusIds,
-      visibleRemoteIds: roomTilingRemoteVisibleIds,
-      hiddenIds: roomTilingHiddenIds,
       warmIds: roomTilingWarmIds,
       warmReasons: roomTilingWarmReasons,
       fallbackLevel: roomTilingFallbackLevel,
@@ -2153,9 +1921,7 @@ function GridLayout({
       scores: roomTilingScores,
       counts: {
         orderedRemote: orderedRemoteParticipants.length,
-        visible: usesStageLayout
-          ? stageSideParticipants.length
-          : visibleParticipants.length,
+        visible: roomTilingRemoteVisibleIds.length,
         hidden: hiddenParticipantsCount,
         warm: warmParticipants.length,
         totalGrid: totalParticipants,
@@ -2180,14 +1946,15 @@ function GridLayout({
         featuredSpeakerWarm: Object.values(roomTilingWarmReasons).filter(
           (reasons) => reasons.includes("featured-speaker"),
         ).length,
-        stageRailCapacity: usesStageLayout ? stageRailLayout.slotCount : 0,
+        stageRailCapacity: usesStageLayout ? stageRailCapacity : 0,
         stageRailRemoteCapacity: usesStageLayout
-          ? stageRailLayout.remoteCapacity
+          ? stageRailRemoteCapacity
           : 0,
       },
       stage: {
         mainKind: usesStageLayout ? stageMainKind ?? "none" : "none",
         candidateMainKind: stageMainKind ?? "none",
+        rects: stageLayout?.rects ?? null,
         mainParticipantId: usesStageLayout ? stageMainParticipantId : null,
         sideCompanionKind: usesSideBySideLayout
           ? sideBySideCompanionKind ?? "none"
@@ -2206,6 +1973,8 @@ function GridLayout({
         effective: effectiveSelfViewMode,
         placement: actualSelfViewPlacement,
         corner: requestedSelfViewCorner,
+        placedCorner: selfViewPlacement.corner,
+        rect: selfViewPlacement.rect,
       },
       layout: {
         width: gridSize.width,
@@ -2237,10 +2006,8 @@ function GridLayout({
       gridSize.height,
       gridSize.width,
       gridVideoObjectFit,
-      hasGridPresentationTile,
       hasPresentation,
       hiddenParticipantsCount,
-      isPresentationRendered,
       gridTilePlacements,
       layout.cols,
       layout.contentHeight,
@@ -2255,108 +2022,38 @@ function GridLayout({
       orderedRemoteParticipants,
       presentationPresenterId,
       presentationProducerId,
-      presentationRenderedAsPrimary,
       pinnedId,
       renderedViewMode,
       requestedMaxTiles,
       requestedSelfViewCorner,
       requestedSelfViewMode,
-      roomTilingHiddenIds,
       roomTilingFallbackLevel,
-      roomTilingPrimaryIds,
       roomTilingFocusIds,
       roomTilingRemoteVisibleIds,
       roomTilingWarmReasons,
       roomTilingScores,
       roomTilingWarmIds,
+      selfViewPlacement,
       sideBySideCompanionKind,
       sideBySideCompanionParticipantId,
-      stageRailLayout.remoteCapacity,
-      stageRailLayout.slotCount,
+      stageLayout,
+      stagePlacement,
+      stageRailCapacity,
       stageMainKind,
       stageMainParticipantId,
       stageRailTileCount,
-      stageSideParticipants.length,
+      stageRailRemoteCapacity,
       totalParticipants,
       usesAutoDynamicCrop,
       usesSideBySideLayout,
       usesSpotlightLayout,
       usesStageLayout,
       viewSettings.mode,
-      visibleParticipants.length,
       warmParticipants.length,
     ],
   );
-  const roomTilingMetadataSignature = useMemo(
-    () => JSON.stringify(roomTilingMetadataBase),
-    [roomTilingMetadataBase],
-  );
-
-  useEffect(() => {
-    latestRoomTilingMetadataBaseRef.current = roomTilingMetadataBase;
-    latestRoomTilingMetadataSignatureRef.current = roomTilingMetadataSignature;
-  }, [roomTilingMetadataBase, roomTilingMetadataSignature]);
-
-  useEffect(() => {
-    const getSnapshot = (): MeetRoomTilingDebugSnapshot => ({
-      current: roomTilingMetadataRef.current,
-      history: roomTilingHistoryRef.current,
-      sequence: roomTilingSequenceRef.current,
-      intervalMs: ROOM_TILING_METADATA_INTERVAL_MS,
-    });
-    const publish = ({
-      force = false,
-      heartbeat = false,
-    }: {
-      force?: boolean;
-      heartbeat?: boolean;
-    } = {}) => {
-      const base = latestRoomTilingMetadataBaseRef.current;
-      const signature = latestRoomTilingMetadataSignatureRef.current;
-      if (!base || !signature) return;
-      if (
-        lastPublishedRoomTilingSignatureRef.current === signature &&
-        !heartbeat &&
-        (!force || roomTilingMetadataRef.current)
-      ) {
-        return;
-      }
-
-      const metadata: MeetRoomTilingMetadata = {
-        ...base,
-        sequence: roomTilingSequenceRef.current + 1,
-        timestamp: Date.now(),
-        performanceTime: Math.round(performance.now()),
-        signature,
-      };
-      roomTilingSequenceRef.current = metadata.sequence;
-      roomTilingMetadataRef.current = metadata;
-      roomTilingHistoryRef.current = [
-        ...roomTilingHistoryRef.current,
-        metadata,
-      ].slice(-24);
-      lastPublishedRoomTilingSignatureRef.current = signature;
-      window.__conclaveMeetRoomTilingDebug = getSnapshot();
-      window.dispatchEvent(
-        new CustomEvent("conclave:meet-room-tiling", { detail: metadata }),
-      );
-    };
-
-    window.__conclaveGetMeetRoomTilingDebug = getSnapshot;
-    publish({ force: true });
-    const interval = window.setInterval(
-      () => publish({ heartbeat: true }),
-      ROOM_TILING_METADATA_INTERVAL_MS,
-    );
-
-    return () => {
-      window.clearInterval(interval);
-      if (window.__conclaveGetMeetRoomTilingDebug === getSnapshot) {
-        delete window.__conclaveGetMeetRoomTilingDebug;
-      }
-      delete window.__conclaveMeetRoomTilingDebug;
-    };
-  }, []);
+  const publishedPlacement = usePublishStagePlacement(stagePlacement, roomTilingDetails);
+  const stage = publishedPlacement.arrangement === "stage" ? publishedPlacement : null;
   const setSelfViewMode = useCallback(
     (selfViewMode: MeetSelfViewMode) => {
       onViewSettingsChange?.((current) => ({ ...current, selfViewMode }));
@@ -2371,7 +2068,7 @@ function GridLayout({
   );
   const resolveSelfViewCornerFromPoint = useCallback(
     (clientX: number, clientY: number): MeetSelfViewCorner => {
-      const rect = stageRootRef.current?.getBoundingClientRect();
+      const rect = stageBoxRef.current?.getBoundingClientRect();
       const midpointX = (rect?.left ?? 0) + (rect?.width ?? window.innerWidth) / 2;
       const midpointY = (rect?.top ?? 0) + (rect?.height ?? window.innerHeight) / 2;
       const vertical = clientY < midpointY ? "top" : "bottom";
@@ -2381,7 +2078,7 @@ function GridLayout({
     [],
   );
   const getSelfViewDragPoint = useCallback((clientX: number, clientY: number) => {
-    const rect = stageRootRef.current?.getBoundingClientRect();
+    const rect = stageBoxRef.current?.getBoundingClientRect();
     if (!rect) return { x: clientX, y: clientY };
     return {
       x: Math.min(Math.max(clientX - rect.left, 24), Math.max(24, rect.width - 24)),
@@ -2427,11 +2124,11 @@ function GridLayout({
     ],
   );
   const selfViewCornerClass =
-    requestedSelfViewCorner === "top-left"
+    selfViewPlacement.corner === "top-left"
       ? "left-4 top-4"
-      : requestedSelfViewCorner === "top-right"
+      : selfViewPlacement.corner === "top-right"
         ? "right-4 top-4"
-        : requestedSelfViewCorner === "bottom-left"
+        : selfViewPlacement.corner === "bottom-left"
           ? "bottom-4 left-4"
           : "bottom-4 right-4";
   const selfViewDragStyle = selfViewDragPoint
@@ -2441,6 +2138,14 @@ function GridLayout({
         right: "auto",
         bottom: "auto",
         transform: "translate(-50%, -50%)",
+      }
+    : undefined;
+  const selfViewOverlayStyle = selfViewPlacement.rect
+    ? {
+        ...stageRectSize(selfViewPlacement.rect),
+        left: GRID_PADDING + selfViewPlacement.rect.x,
+        top: GRID_PADDING + selfViewPlacement.rect.y,
+        ...selfViewDragStyle,
       }
     : undefined;
 
@@ -2529,9 +2234,119 @@ function GridLayout({
     }, 2400);
   };
 
+  const renderStageTile = (tile: MeetingStageTile, slot: "main" | "companion" | "rail") => {
+    switch (tile.kind) {
+      case "presentation":
+        return presentationStream ? (
+          <PresentationVideoTile
+            stream={presentationStream}
+            presenterName={presenterName}
+            presenterId={presentationPresenterId}
+            size={slot === "main" ? "stage" : "rail"}
+            selfView={slot === "main" ? presentationSelfView : undefined}
+            captureControl={presentationCaptureControl}
+            onFrameAspect={slot === "main" ? reportPresentationFrame : undefined}
+            isPinned={pinnedId === PRESENTATION_TILE_ID}
+            onTogglePin={() => togglePin(PRESENTATION_TILE_ID)}
+          />
+        ) : null;
+      case "local":
+        return (
+          <LocalVideoTile
+            stream={localStream}
+            isCameraOff={isCameraOff}
+            isMuted={isMuted}
+            isHandRaised={isHandRaised}
+            isMirrorCamera={isMirrorCamera}
+            displayName={localDisplayName}
+            userEmail={userEmail}
+            isActiveSpeaker={isLocalActiveSpeaker}
+            isPinned={isLocalPinned}
+            onTogglePin={toggleLocalPin}
+            tracking={localVideoTracking}
+            videoObjectFit={slot === "main" ? "contain" : undefined}
+            cropPosition={slot !== "main" ? localTrackingObjectPosition : undefined}
+          />
+        );
+      case "remote": {
+        const { participant } = tile;
+        return (
+          <ParticipantVideo
+            key={participant.userId}
+            participant={participant}
+            displayName={getDisplayName(participant.userId)}
+            isActiveSpeaker={activeSpeakerId === participant.userId}
+            audioOutputDeviceId={audioOutputDeviceId}
+            disableAudio
+            videoObjectFit={slot === "main" ? "contain" : undefined}
+            isAdmin={isAdmin}
+            onAdminClick={onParticipantClick}
+            isPinned={pinnedId === participant.userId}
+            onTogglePin={togglePin}
+            isFullVideoShown={slot !== "rail" && fullVideoTileIds.has(participant.userId)}
+            onToggleFullVideo={slot !== "rail" ? toggleFullVideoTile : undefined}
+          />
+        );
+      }
+    }
+  };
+
+  const stageRail = stage && stageRailTileCount > 0 ? (
+    <div
+      className={stage.companion
+        ? stage.split.mode === "stack"
+          ? "flex h-full min-w-0 flex-1 flex-row gap-3 overflow-x-auto overflow-y-hidden pb-1"
+          : "flex flex-none flex-col gap-3 overflow-y-auto overflow-x-hidden pr-1"
+        : stageRailClass(stage)}
+      style={!stage.companion
+        ? stageRailStyle(stage)
+        : stage.split.mode === "side" && stage.rects.railBox
+          ? { height: stage.rects.railBox.height }
+          : undefined}
+      data-meet-stage-rail
+    >
+      {stage.rail.map((tile) => (
+        <div
+          key={tile.kind === "remote" ? tile.participant.userId : tile.kind}
+          className={`${stageRailTileClass(stage)} max-h-full`}
+        >
+          {renderStageTile(tile, "rail")}
+        </div>
+      ))}
+      {stage.overflow ? (
+        <button
+          type="button"
+          onClick={() => setIsOverflowOpen((prev) => !prev)}
+          aria-expanded={showOverflowGallery}
+          aria-label={`Show ${hiddenParticipantsCount} more participants`}
+          title={`Show ${hiddenParticipantsCount} more participants`}
+          className={`acm-video-tile group flex flex-col items-center justify-center bg-[#131316] text-[#fafafa] transition-colors hover:border-[#fafafa]/15 ${stageRailTileClass(stage)}`}
+        >
+          <div className="absolute inset-2 grid grid-cols-2 grid-rows-2 gap-1 opacity-30 transition-opacity duration-200 group-hover:opacity-50">
+            {overflowPreviewParticipants.map((participant) => (
+              <OverflowPreviewTile
+                key={participant.userId}
+                participant={participant}
+                displayName={getDisplayName(participant.userId)}
+              />
+            ))}
+          </div>
+          <div className="relative z-10 flex flex-col items-center gap-2 px-4 text-center">
+            <span className="text-[24px] font-semibold leading-none text-[#fafafa]">
+              +{hiddenParticipantsCount}
+            </span>
+            <span className="flex items-center gap-1.5 rounded-full border border-[#fafafa]/12 bg-[#0a0a0b]/70 px-2.5 py-1 text-[12.5px] font-medium text-[#fafafa]/85 transition-colors group-hover:text-[#fafafa]">
+              <Users size={16} strokeWidth={1.75} />
+              Show all
+            </span>
+          </div>
+        </button>
+      ) : null}
+    </div>
+  ) : null;
+
   return (
     <div
-      ref={stageRootRef}
       className="relative flex flex-1 min-h-0 flex-col"
       style={{ fontFamily: FONT_SANS }}
     >
@@ -2551,8 +2366,10 @@ function GridLayout({
         ))}
       </div>
 
+      <div ref={stageBoxRef} className="relative flex min-h-0 flex-1">
       <div
         ref={gridRef}
+        onScroll={(event) => setGridScrollTop(Math.max(0, event.currentTarget.scrollTop))}
         data-meet-view-layout={usesStageLayout ? renderedViewMode : "tiled"}
         data-meet-view-requested={viewSettings.mode}
         data-meet-view-effective={renderedViewMode}
@@ -2600,28 +2417,24 @@ function GridLayout({
           usesSideBySideLayout
             ? sideBySideCompanionKind === "local"
               ? currentUserId
-              : sideBySideCompanionParticipant?.userId ?? "none"
+              : sideBySideCompanionParticipantId ?? "none"
             : "none"
         }
         data-meet-view-ordered-count={orderedRemoteParticipants.length}
-        data-meet-view-visible-count={
-          usesStageLayout
-            ? stageSideParticipants.length
-            : visibleParticipants.length
-        }
+        data-meet-view-visible-count={roomTilingRemoteVisibleIds.length}
         data-meet-view-hidden-count={hiddenParticipantsCount}
         data-meet-view-warm-count={warmParticipants.length}
         data-meet-view-grid-count={totalParticipants}
         data-meet-view-stage-rail-count={stageRailTileCount}
         data-meet-view-stage-rail-capacity={
-          usesStageLayout ? stageRailLayout.slotCount : 0
+          usesStageLayout ? stageRailCapacity : 0
         }
         data-meet-view-stage-rail-remote-capacity={
-          usesStageLayout ? stageRailLayout.remoteCapacity : 0
+          usesStageLayout ? stageRailRemoteCapacity : 0
         }
         data-meet-view-stage-rail-fixed-count={stageRailFixedTileCount}
         data-meet-view-stage-rail-overflow={
-          showStageOverflowTile ? "true" : "false"
+          stageLayout?.overflow ? "true" : "false"
         }
         data-meet-view-max-tiles={maxGridTiles}
         data-meet-view-requested-max-tiles={requestedMaxTiles}
@@ -2661,7 +2474,7 @@ function GridLayout({
         data-meet-room-tiling-warm-hold={RECENTLY_VISIBLE_WARM_HOLD_MS}
         data-meet-room-tiling-warm-reasons={roomTilingWarmReasonsJson}
         data-meet-room-tiling-scores={roomTilingScoresJson}
-        className={`relative flex flex-1 min-h-0 p-4 ${
+        className={`relative flex min-h-0 min-w-0 flex-1 p-4 ${
           usesMobileScrollGrid
             ? "overflow-y-auto overflow-x-hidden"
             : "overflow-hidden"
@@ -2672,310 +2485,47 @@ function GridLayout({
         }`}
         style={{ gap: GRID_GAP }}
       >
-        {usesSideBySideLayout && presentationStream ? (
+        {stage ? (
           <div
-            className="flex h-full w-full min-w-0 flex-col gap-3 sm:flex-row"
-            data-meet-side-by-side
-            data-meet-side-by-side-companion-kind={sideBySideCompanionKind}
-            data-meet-side-by-side-companion={
-              sideBySideCompanionKind === "local"
-                ? currentUserId
-                : sideBySideCompanionParticipant?.userId ?? "none"
-            }
+            key="meeting-stage"
+            className={stageSplitClass(stage)}
+            data-meet-stage-split={stage.split.mode}
+            data-meet-side-by-side={usesSideBySideLayout || undefined}
+            data-meet-side-by-side-companion-kind={sideBySideCompanionKind ?? undefined}
+            data-meet-side-by-side-companion={sideBySideCompanionKind === "local"
+              ? currentUserId
+              : sideBySideCompanionParticipantId ?? undefined}
           >
             <div
-              className="relative min-w-0 flex-1 sm:flex-[1.7]"
-              data-meet-stage-main={PRESENTATION_TILE_ID}
+              className="relative min-h-0 min-w-0 flex-1"
+              data-meet-stage-main={stageMainKind === "presentation"
+                ? PRESENTATION_TILE_ID
+                : stageMainKind === "local" ? currentUserId : stageMainParticipantId ?? undefined}
             >
-              <PresentationVideoTile
-                stream={presentationStream}
-                presenterName={presenterName}
-                presenterId={presentationPresenterId}
-                size="stage"
-                selfView={presentationSelfView}
-                captureControl={presentationCaptureControl}
-                isPinned={pinnedId === PRESENTATION_TILE_ID}
-                onTogglePin={() => togglePin(PRESENTATION_TILE_ID)}
-              />
-            </div>
-
-            <div className="flex h-40 w-full shrink-0 flex-row gap-3 sm:h-auto sm:w-[min(32vw,28rem)] sm:min-w-[17rem] sm:max-w-[28rem] sm:flex-col">
-              <div className="relative min-h-0 min-w-0 flex-[1.15]">
-                {sideBySideCompanionKind === "local" ? (
-                  <LocalVideoTile
-                    stream={localStream}
-                    isCameraOff={isCameraOff}
-                    isMuted={isMuted}
-                    isHandRaised={isHandRaised}
-                    isMirrorCamera={isMirrorCamera}
-                    displayName={localDisplayName}
-                    userEmail={userEmail}
-                    isActiveSpeaker={isLocalActiveSpeaker}
-                    isPinned={isLocalPinned}
-                    onTogglePin={toggleLocalPin}
-                    tracking={localVideoTracking}
-                    cropPosition={localTrackingObjectPosition}
-                    size="stage"
-                  />
-                ) : sideBySideCompanionParticipant ? (
-                  <ParticipantVideo
-                    key={sideBySideCompanionParticipant.userId}
-                    participant={sideBySideCompanionParticipant}
-                    displayName={getDisplayName(
-                      sideBySideCompanionParticipant.userId,
-                    )}
-                    isActiveSpeaker={
-                      activeSpeakerId === sideBySideCompanionParticipant.userId
-                    }
-                    audioOutputDeviceId={audioOutputDeviceId}
-                    disableAudio
-                    isAdmin={isAdmin}
-                    onAdminClick={onParticipantClick}
-                    isPinned={
-                      pinnedId === sideBySideCompanionParticipant.userId
-                    }
-                    onTogglePin={togglePin}
-                    isFullVideoShown={fullVideoTileIds.has(
-                      sideBySideCompanionParticipant.userId,
-                    )}
-                    onToggleFullVideo={toggleFullVideoTile}
-                  />
-                ) : null}
-              </div>
-
-              <div
-                className="flex h-full min-w-0 flex-1 flex-row gap-3 overflow-x-auto pb-1 sm:h-auto sm:max-h-[35%] sm:min-h-[7rem] sm:flex-none sm:flex-col sm:overflow-x-visible sm:overflow-y-auto sm:pb-0 sm:pr-1"
-                data-meet-stage-rail
-              >
-                {shouldShowSelfAsTile && sideBySideCompanionKind !== "local" ? (
-                  <div className="relative h-full w-28 shrink-0 sm:h-28 sm:w-auto">
-                    <LocalVideoTile
-                      stream={localStream}
-                      isCameraOff={isCameraOff}
-                      isMuted={isMuted}
-                      isHandRaised={isHandRaised}
-                      isMirrorCamera={isMirrorCamera}
-                      displayName={localDisplayName}
-                      userEmail={userEmail}
-                      isActiveSpeaker={isLocalActiveSpeaker}
-                      isPinned={isLocalPinned}
-                      onTogglePin={toggleLocalPin}
-                      tracking={localVideoTracking}
-                      cropPosition={localTrackingObjectPosition}
-                      size="rail"
-                    />
-                  </div>
-                ) : null}
-
-                {stageSideParticipants.map((participant) => (
-                  <div
-                    key={participant.userId}
-                    className="relative h-full w-28 shrink-0 sm:h-28 sm:w-auto"
-                    data-userid={participant.userId}
-                  >
-                    <ParticipantVideo
-                      participant={participant}
-                      displayName={getDisplayName(participant.userId)}
-                      isActiveSpeaker={activeSpeakerId === participant.userId}
-                      audioOutputDeviceId={audioOutputDeviceId}
-                      disableAudio
-                      isAdmin={isAdmin}
-                      onAdminClick={onParticipantClick}
-                      isPinned={pinnedId === participant.userId}
-                      onTogglePin={togglePin}
-                    />
-                  </div>
-                ))}
-
-                {showOverflowTile ? (
-                  <button
-                    type="button"
-                    onClick={() => setIsOverflowOpen((prev) => !prev)}
-                    aria-expanded={isOverflowOpen}
-                    aria-label={`Show ${hiddenParticipantsCount} more participants`}
-                    title={`Show ${hiddenParticipantsCount} more participants`}
-                    className="acm-video-tile group relative flex h-full w-28 shrink-0 flex-col items-center justify-center bg-[#131316] text-[#fafafa] transition-colors hover:border-[#fafafa]/15 sm:h-28 sm:w-auto"
-                  >
-                    <div className="absolute inset-2 grid grid-cols-2 grid-rows-2 gap-1 opacity-30 transition-opacity duration-200 group-hover:opacity-50">
-                      {overflowPreviewParticipants.map((participant) => (
-                        <OverflowPreviewTile
-                          key={participant.userId}
-                          participant={participant}
-                          displayName={getDisplayName(participant.userId)}
-                        />
-                      ))}
-                    </div>
-                    <div className="relative z-10 flex flex-col items-center gap-2 px-4 text-center">
-                      <span className="text-[24px] font-semibold leading-none text-[#fafafa]">
-                        +{hiddenParticipantsCount}
-                      </span>
-                      <span className="flex items-center gap-1.5 rounded-full border border-[#fafafa]/12 bg-[#0a0a0b]/70 px-2.5 py-1 text-[12.5px] font-medium text-[#fafafa]/85 transition-colors group-hover:text-[#fafafa]">
-                        <Users size={16} strokeWidth={1.75} />
-                        Show all
-                      </span>
-                    </div>
-                  </button>
-                ) : null}
-              </div>
-            </div>
-          </div>
-        ) : usesStageLayout && stageMainKind ? (
-          <div className="flex h-full w-full min-w-0 flex-col gap-3 sm:flex-row">
-            <div
-              className="relative min-w-0 flex-1"
-              data-meet-stage-main={
-                stageMainKind === "presentation"
-                  ? PRESENTATION_TILE_ID
-                  : stageMainKind === "local"
-                    ? currentUserId
-                    : stageMainParticipant?.userId
-              }
-            >
-              {stageMainKind === "presentation" && presentationStream ? (
-                <PresentationVideoTile
-                  stream={presentationStream}
-                  presenterName={presenterName}
-                  presenterId={presentationPresenterId}
-                  size="stage"
-                  selfView={presentationSelfView}
-                  captureControl={presentationCaptureControl}
-                  isPinned={pinnedId === PRESENTATION_TILE_ID}
-                  onTogglePin={() => togglePin(PRESENTATION_TILE_ID)}
-                />
-              ) : stageMainKind === "local" ? (
-                <LocalVideoTile
-                  stream={localStream}
-                  isCameraOff={isCameraOff}
-                  isMuted={isMuted}
-                  isHandRaised={isHandRaised}
-                  isMirrorCamera={isMirrorCamera}
-                  displayName={localDisplayName}
-                  userEmail={userEmail}
-                  isActiveSpeaker={isLocalActiveSpeaker}
-                  isPinned={isLocalPinned}
-                  onTogglePin={toggleLocalPin}
-                  tracking={localVideoTracking}
-                  videoObjectFit="contain"
-                  size="stage"
-                />
-              ) : stageMainParticipant ? (
-                <ParticipantVideo
-                  key={stageMainParticipant.userId}
-                  participant={stageMainParticipant}
-                  displayName={getDisplayName(stageMainParticipant.userId)}
-                  isActiveSpeaker={
-                    activeSpeakerId === stageMainParticipant.userId
-                  }
-                  audioOutputDeviceId={audioOutputDeviceId}
-                  disableAudio
-                  videoObjectFit="contain"
-                  isAdmin={isAdmin}
-                  onAdminClick={onParticipantClick}
-                  isPinned={pinnedId === stageMainParticipant.userId}
-                  onTogglePin={togglePin}
-                  isFullVideoShown={fullVideoTileIds.has(
-                    stageMainParticipant.userId,
-                  )}
-                  onToggleFullVideo={toggleFullVideoTile}
-                />
+              {renderStageTile(stage.main, "main")}
+              {stage.compactPin && stage.rects.compactPin ? (
+                <div
+                  className="absolute bottom-0 left-0 z-30"
+                  style={stageRectSize(stage.rects.compactPin)}
+                >
+                  {renderStageTile(stage.compactPin, "rail")}
+                </div>
               ) : null}
-
             </div>
 
-            {/* Omit an empty rail (for example two people with the self view
-                detached) so the stage fills the space instead. */}
-            {!usesSpotlightLayout && stageRailTileCount > 0 ? (
+            {stage.companion ? (
               <div
-                className="flex h-32 w-full shrink-0 flex-row gap-3 overflow-x-auto pb-1 sm:h-auto sm:w-[min(22vw,15rem)] sm:min-w-[10rem] sm:max-w-[15rem] sm:flex-col sm:overflow-x-visible sm:overflow-y-auto sm:pb-0 sm:pr-1"
-                data-meet-stage-rail
+                className={stage.split.mode === "stack"
+                  ? "flex w-full shrink-0 flex-row gap-3"
+                  : "flex shrink-0 flex-col gap-3"}
+                style={stageRailStyle(stage)}
               >
-                {shouldShowSelfAsTile && stageMainKind !== "local" ? (
-                  <div className="relative h-full w-28 shrink-0 sm:h-28 sm:w-auto">
-                    <LocalVideoTile
-                      stream={localStream}
-                      isCameraOff={isCameraOff}
-                      isMuted={isMuted}
-                      isHandRaised={isHandRaised}
-                      isMirrorCamera={isMirrorCamera}
-                      displayName={localDisplayName}
-                      userEmail={userEmail}
-                      isActiveSpeaker={isLocalActiveSpeaker}
-                      isPinned={isLocalPinned}
-                      onTogglePin={toggleLocalPin}
-                      tracking={localVideoTracking}
-                      cropPosition={localTrackingObjectPosition}
-                      size="rail"
-                    />
-                  </div>
-                ) : null}
-
-                {hasPresentation &&
-                stageMainKind !== "presentation" &&
-                presentationStream ? (
-                  <div className="relative h-full w-28 shrink-0 sm:h-28 sm:w-auto">
-                    <PresentationVideoTile
-                      stream={presentationStream}
-                      presenterName={presenterName}
-                      presenterId={presentationPresenterId}
-                      size="rail"
-                      captureControl={presentationCaptureControl}
-                      isPinned={pinnedId === PRESENTATION_TILE_ID}
-                      onTogglePin={() => togglePin(PRESENTATION_TILE_ID)}
-                    />
-                  </div>
-                ) : null}
-
-                {stageSideParticipants.map((participant) => (
-                  <div
-                    key={participant.userId}
-                    className="relative h-full w-28 shrink-0 sm:h-28 sm:w-auto"
-                    data-userid={participant.userId}
-                  >
-                    <ParticipantVideo
-                      participant={participant}
-                      displayName={getDisplayName(participant.userId)}
-                      isActiveSpeaker={activeSpeakerId === participant.userId}
-                      audioOutputDeviceId={audioOutputDeviceId}
-                      disableAudio
-                      isAdmin={isAdmin}
-                      onAdminClick={onParticipantClick}
-                      isPinned={pinnedId === participant.userId}
-                      onTogglePin={togglePin}
-                    />
-                  </div>
-                ))}
-
-                {showOverflowTile ? (
-                  <button
-                    type="button"
-                    onClick={() => setIsOverflowOpen((prev) => !prev)}
-                    aria-expanded={isOverflowOpen}
-                    aria-label={`Show ${hiddenParticipantsCount} more participants`}
-                    title={`Show ${hiddenParticipantsCount} more participants`}
-                    className="acm-video-tile group relative flex h-full w-28 shrink-0 flex-col items-center justify-center bg-[#131316] text-[#fafafa] transition-colors hover:border-[#fafafa]/15 sm:h-28 sm:w-auto"
-                  >
-                    <div className="absolute inset-2 grid grid-cols-2 grid-rows-2 gap-1 opacity-30 transition-opacity duration-200 group-hover:opacity-50">
-                      {overflowPreviewParticipants.map((participant) => (
-                        <OverflowPreviewTile
-                          key={participant.userId}
-                          participant={participant}
-                          displayName={getDisplayName(participant.userId)}
-                        />
-                      ))}
-                    </div>
-                    <div className="relative z-10 flex flex-col items-center gap-2 px-4 text-center">
-                      <span className="text-[24px] font-semibold leading-none text-[#fafafa]">
-                        +{hiddenParticipantsCount}
-                      </span>
-                      <span className="flex items-center gap-1.5 rounded-full border border-[#fafafa]/12 bg-[#0a0a0b]/70 px-2.5 py-1 text-[12.5px] font-medium text-[#fafafa]/85 transition-colors group-hover:text-[#fafafa]">
-                        <Users size={16} strokeWidth={1.75} />
-                        Show all
-                      </span>
-                    </div>
-                  </button>
-                ) : null}
+                <div className="relative min-h-0 min-w-0 flex-[1.15]">
+                  {renderStageTile(stage.companion, "companion")}
+                </div>
+                {stageRail}
               </div>
-            ) : null}
+            ) : stageRail}
           </div>
         ) : (
           <>
@@ -2992,6 +2542,7 @@ function GridLayout({
               size="grid"
               selfView={presentationSelfView}
               captureControl={presentationCaptureControl}
+              onFrameAspect={reportPresentationFrame}
               isPinned={pinnedId === PRESENTATION_TILE_ID}
               onTogglePin={() => togglePin(PRESENTATION_TILE_ID)}
             />
@@ -3115,42 +2666,13 @@ function GridLayout({
                   <Hand size={localTileChrome.dense ? 14 : 18} strokeWidth={1.75} />
                 </div>
               )}
-              <div
-                className={`absolute flex max-w-[80%] items-center rounded-full border border-[#fafafa]/10 bg-[#0a0a0b]/70 ${
-                  localTileChrome.dense
-                    ? "bottom-1.5 left-1.5 gap-1 px-2 py-0.5"
-                    : "bottom-3 left-3 gap-1.5 px-3 py-1.5"
-                }`}
-              >
-                <span
-                  className={`truncate font-medium text-[#fafafa] ${
-                    localTileChrome.dense ? "text-[10px]" : "text-[13px]"
-                  }`}
-                >
-                  {localDisplayName}
-                </span>
-                <span
-                  className={`font-medium text-[#F95F4A] ${
-                    localTileChrome.dense ? "text-[9px]" : "text-[11px]"
-                  }`}
-                >
-                  You
-                </span>
-                {isLocalActiveSpeaker && !isMuted ? (
-                  <span className="acm-voice-activity" aria-label="Speaking">
-                    <span />
-                    <span />
-                    <span />
-                  </span>
-                ) : null}
-                {isMuted && (
-                  <MicOff
-                    size={localTileChrome.dense ? 11 : 14}
-                    strokeWidth={1.75}
-                    className="shrink-0 text-[#F95F4A]"
-                  />
-                )}
-              </div>
+              <TileNameplate
+                name={localDisplayName}
+                dense={localTileChrome.dense}
+                isLocal
+                isMuted={isMuted}
+                isSpeaking={isLocalActiveSpeaker && !isMuted}
+              />
               {isSolo && (isMobile || !isCameraOff) ? (
               <button
                 type="button"
@@ -3308,11 +2830,76 @@ function GridLayout({
           </>
         )}
       </div>
+      {showFloatingSelfView && selfViewPlacement.rect ? (
+        <div
+          className="group absolute z-20 overflow-hidden rounded-2xl shadow-[0_16px_42px_rgba(0,0,0,0.38)]"
+          style={selfViewOverlayStyle}
+          data-meet-floating-self-view="true"
+          data-meet-detached-self-view="floating"
+          data-meet-self-view-corner={selfViewPlacement.corner}
+          data-meet-self-view-dragging={selfViewDragPoint ? "true" : "false"}
+        >
+          <LocalVideoTile
+            stream={localStream}
+            isCameraOff={isCameraOff}
+            isMuted={isMuted}
+            isHandRaised={isHandRaised}
+            isMirrorCamera={isMirrorCamera}
+            displayName={localDisplayName}
+            userEmail={userEmail}
+            isActiveSpeaker={isLocalActiveSpeaker}
+            isPinned={isLocalPinned}
+            onTogglePin={toggleLocalPin}
+            tracking={localVideoTracking}
+            cropPosition={localTrackingObjectPosition}
+          />
+          <div className="absolute left-2 top-2 z-10 flex gap-1.5 opacity-0 transition-opacity duration-[120ms] group-hover:opacity-100 focus-within:opacity-100">
+            <button
+              type="button"
+              onPointerDown={beginSelfViewDrag}
+              aria-label="Move self-view"
+              title="Move self-view"
+              className="inline-flex h-7 w-7 cursor-grab items-center justify-center rounded-full border border-[#fafafa]/12 bg-black/65 text-[#fafafa]/82 shadow-[0_8px_20px_rgba(0,0,0,0.3)] transition-colors hover:bg-black/80 hover:text-[#fafafa] active:cursor-grabbing"
+            >
+              <Move size={14} strokeWidth={1.8} />
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelfViewMode("minimized")}
+              aria-label="Minimize self-view"
+              title="Minimize self-view"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-[#fafafa]/12 bg-black/65 text-[#fafafa]/82 shadow-[0_8px_20px_rgba(0,0,0,0.3)] transition-colors hover:bg-black/80 hover:text-[#fafafa]"
+            >
+              <Minimize2 size={14} strokeWidth={1.8} />
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {(showMinimizedSelfView || showCompactSelfView) && selfViewPlacement.rect ? (
+        <SelfViewPill
+          displayName={localDisplayName}
+          userEmail={userEmail}
+          isMuted={isMuted}
+          isHandRaised={isHandRaised}
+          corner={selfViewPlacement.corner}
+          compact={showCompactSelfView}
+          cornerClass={showCompactSelfView ? "" : selfViewCornerClass}
+          style={showCompactSelfView ? selfViewOverlayStyle : {
+            maxWidth: selfViewPlacement.rect.width,
+            ...selfViewDragStyle,
+          }}
+          isDragging={Boolean(selfViewDragPoint)}
+          onDragStart={beginSelfViewDrag}
+          onRestore={effectiveSelfViewMode === "minimized" ? () => setSelfViewMode("floating") : undefined}
+        />
+      ) : null}
+      </div>
 
       {showOverflowTile ? (
         <div
           className={`overflow-hidden transition-[max-height,opacity] duration-200 ease-out ${
-            isOverflowOpen
+            showOverflowGallery
               ? "mt-3 max-h-64 opacity-100 pointer-events-auto"
               : "mt-0 max-h-0 opacity-0 pointer-events-none"
           }`}
@@ -3350,7 +2937,7 @@ function GridLayout({
             </div>
             <div className="relative">
               <div className="grid auto-cols-[11rem] grid-flow-col gap-3 overflow-x-scroll scroll-smooth snap-x snap-mandatory px-4 pb-4 pt-4 no-scrollbar">
-                {isOverflowOpen &&
+                {showOverflowGallery &&
                   overflowParticipants.map((participant) => (
                     <OverflowGalleryTile
                       key={participant.userId}
@@ -3367,69 +2954,6 @@ function GridLayout({
         </div>
       ) : null}
 
-      {showFloatingSelfView ? (
-        <div
-          className={`group absolute z-20 w-[min(15rem,32vw)] min-w-[10rem] overflow-hidden rounded-2xl shadow-[0_16px_42px_rgba(0,0,0,0.38)] ${
-            selfViewDragPoint ? "" : selfViewCornerClass
-          }`}
-          style={selfViewDragStyle}
-          data-meet-floating-self-view="true"
-          data-meet-detached-self-view="floating"
-          data-meet-self-view-corner={requestedSelfViewCorner}
-          data-meet-self-view-dragging={selfViewDragPoint ? "true" : "false"}
-        >
-          <LocalVideoTile
-            stream={localStream}
-            isCameraOff={isCameraOff}
-            isMuted={isMuted}
-            isHandRaised={isHandRaised}
-            isMirrorCamera={isMirrorCamera}
-            displayName={localDisplayName}
-            userEmail={userEmail}
-            isActiveSpeaker={isLocalActiveSpeaker}
-            isPinned={isLocalPinned}
-            onTogglePin={toggleLocalPin}
-            tracking={localVideoTracking}
-            cropPosition={localTrackingObjectPosition}
-            size="rail"
-          />
-          <div className="absolute left-2 top-2 z-10 flex gap-1.5 opacity-0 transition-opacity duration-[120ms] group-hover:opacity-100 focus-within:opacity-100">
-            <button
-              type="button"
-              onPointerDown={beginSelfViewDrag}
-              aria-label="Move self-view"
-              title="Move self-view"
-              className="inline-flex h-7 w-7 cursor-grab items-center justify-center rounded-full border border-[#fafafa]/12 bg-black/65 text-[#fafafa]/82 shadow-[0_8px_20px_rgba(0,0,0,0.3)] transition-colors hover:bg-black/80 hover:text-[#fafafa] active:cursor-grabbing"
-            >
-              <Move size={14} strokeWidth={1.8} />
-            </button>
-            <button
-              type="button"
-              onClick={() => setSelfViewMode("minimized")}
-              aria-label="Minimize self-view"
-              title="Minimize self-view"
-              className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-[#fafafa]/12 bg-black/65 text-[#fafafa]/82 shadow-[0_8px_20px_rgba(0,0,0,0.3)] transition-colors hover:bg-black/80 hover:text-[#fafafa]"
-            >
-              <Minimize2 size={14} strokeWidth={1.8} />
-            </button>
-          </div>
-        </div>
-      ) : null}
-
-      {showMinimizedSelfView ? (
-        <MinimizedSelfViewPill
-          displayName={localDisplayName}
-          userEmail={userEmail}
-          isMuted={isMuted}
-          isHandRaised={isHandRaised}
-          corner={requestedSelfViewCorner}
-          cornerClass={selfViewCornerClass}
-          dragStyle={selfViewDragStyle}
-          isDragging={Boolean(selfViewDragPoint)}
-          onDragStart={beginSelfViewDrag}
-          onRestore={() => setSelfViewMode("floating")}
-        />
-      ) : null}
     </div>
   );
 }
@@ -3464,6 +2988,7 @@ const PresentationVideoTile = memo(function PresentationVideoTile({
   size,
   selfView,
   captureControl,
+  onFrameAspect,
   isPinned = false,
   onTogglePin,
 }: {
@@ -3479,6 +3004,7 @@ const PresentationVideoTile = memo(function PresentationVideoTile({
     controller: CaptureControllerLike | null;
     state: CapturedSurfaceControlState;
   };
+  onFrameAspect?: (stream: MediaStream, aspect: number) => void;
   isPinned?: boolean;
   onTogglePin?: () => void;
 }) {
@@ -3493,6 +3019,12 @@ const PresentationVideoTile = memo(function PresentationVideoTile({
   const showCaptureControls = Boolean(
     captureController && captureControl?.state.available && !compact && !showChooser,
   );
+  const reportFrame = (event: SyntheticEvent<HTMLVideoElement>) => {
+    const { srcObject, videoWidth, videoHeight } = event.currentTarget;
+    if (srcObject === stream && videoWidth > 0 && videoHeight > 0) {
+      onFrameAspect?.(stream, videoWidth / videoHeight);
+    }
+  };
   const [captureZoomLevel, setCaptureZoomLevel] = useState<number | null>(null);
   const [captureZoomLevels, setCaptureZoomLevels] = useState<number[]>([]);
 
@@ -3683,9 +3215,7 @@ const PresentationVideoTile = memo(function PresentationVideoTile({
       onPointerDownCapture={
         showCaptureControls ? () => void startForwardingWheel() : undefined
       }
-      className={`acm-video-tile group relative flex overflow-hidden bg-[#131316] ${
-        compact ? "h-28 shrink-0" : "h-full w-full"
-      }`}
+      className="acm-video-tile group relative flex h-full w-full overflow-hidden bg-[#131316]"
       data-meet-presentation-tile
       data-meet-presentation-presenter-id={presenterId ?? undefined}
       data-meet-presentation-size={size}
@@ -3695,6 +3225,8 @@ const PresentationVideoTile = memo(function PresentationVideoTile({
     >
       <video
         ref={videoRef}
+        onLoadedMetadata={reportFrame}
+        onResize={reportFrame}
         autoPlay
         muted
         playsInline
@@ -3705,58 +3237,23 @@ const PresentationVideoTile = memo(function PresentationVideoTile({
         }`}
       />
       {showChooser && selfView && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#131316] p-4 text-center">
-          <MonitorUp
-            size={size === "stage" ? 32 : 22}
-            strokeWidth={1.75}
-            className="text-[#F95F4A]"
-          />
-          <p
-            className={`font-medium text-[#fafafa] ${
-              size === "stage" ? "text-[14px]" : "text-[11.5px]"
-            }`}
-          >
-            You&rsquo;re sharing your screen
-          </p>
-          {size === "stage" && (
-            <p className="max-w-[20rem] text-[12px] leading-snug text-[#fafafa]/56">
-              Everyone in the call can already see it — this is just what you
-              see on your end.
-            </p>
-          )}
-          <button
-            type="button"
-            onClick={() => selfView.onModeChange("preview")}
-            className={`mt-1 rounded-full border border-[#fafafa]/14 bg-[#18181b] font-medium text-[#fafafa]/82 transition-colors duration-100 hover:bg-[#232327] hover:text-[#fafafa] ${
-              size === "stage"
-                ? "px-4 py-2 text-[13px]"
-                : "px-3 py-1.5 text-[11.5px]"
-            }`}
-          >
-            Preview my screen
-          </button>
-        </div>
+        <StageNotice
+          icon={MonitorUp}
+          title="You’re sharing your screen"
+          detail="Everyone in the call can already see it — this is just what you see on your end."
+          compact={size !== "stage"}
+          action={{
+            label: "Preview my screen",
+            onClick: () => selfView.onModeChange("preview"),
+          }}
+        />
       )}
       {!showChooser && (
-        <div
-          className={`absolute flex max-w-[calc(100%-1.5rem)] items-center gap-2 rounded-full border border-[#fafafa]/10 bg-[#0a0a0b]/70 ${
-            compact
-              ? "bottom-2 left-2 px-2.5 py-1"
-              : "left-3 top-3 px-3 py-1.5"
-          }`}
+        <StageSourcePill
+          icon={MonitorUp}
+          label={compact ? "Presenting" : formatPresentingLabel(presenterName)}
+          compact={compact}
         >
-          <MonitorUp
-            size={compact ? 15 : 18}
-            strokeWidth={1.75}
-            className="shrink-0 text-[#F95F4A]"
-          />
-          <span
-            className={`truncate font-medium text-[#fafafa] ${
-              compact ? "text-[12.5px]" : "text-[13px]"
-            }`}
-          >
-            {compact ? "Presenting" : formatPresentingLabel(presenterName)}
-          </span>
           {selfView && !compact && (
             <>
               <span className="h-3 w-px shrink-0 bg-[#fafafa]/14" />
@@ -3769,7 +3266,7 @@ const PresentationVideoTile = memo(function PresentationVideoTile({
               </button>
             </>
           )}
-        </div>
+        </StageSourcePill>
       )}
       {showCaptureControls && (
         <div
@@ -3851,184 +3348,15 @@ const PresentationVideoTile = memo(function PresentationVideoTile({
   );
 });
 
-const LocalVideoTile = memo(function LocalVideoTile({
-  stream,
-  isCameraOff,
-  isMuted,
-  isHandRaised,
-  isMirrorCamera,
-  displayName,
-  userEmail,
-  isActiveSpeaker = false,
-  isPinned = false,
-  onTogglePin,
-  tracking,
-  cropPosition = null,
-  videoObjectFit = "cover",
-  size = "rail",
-}: {
-  stream: MediaStream | null;
-  isCameraOff: boolean;
-  isMuted: boolean;
-  isHandRaised: boolean;
-  isMirrorCamera: boolean;
-  displayName: string;
-  userEmail: string;
-  isActiveSpeaker?: boolean;
-  isPinned?: boolean;
-  onTogglePin?: () => void;
-  tracking?: MeetLocalVideoTracking;
-  cropPosition?: string | null;
-  videoObjectFit?: "cover" | "contain";
-  size?: "rail" | "stage";
-}) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const videoTrack = stream?.getVideoTracks()[0] ?? null;
-
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-
-    if (!stream || isCameraOff) {
-      if (video.srcObject) {
-        video.srcObject = null;
-      }
-      return;
-    }
-
-    if (video.srcObject !== stream) {
-      video.srcObject = stream;
-    }
-
-    const playVideo = () => {
-      video.play().catch(() => {});
-    };
-
-    playVideo();
-    videoTrack?.addEventListener("unmute", playVideo);
-
-    return () => {
-      videoTrack?.removeEventListener("unmute", playVideo);
-      if (video.srcObject === stream) {
-        video.srcObject = null;
-      }
-    };
-  }, [isCameraOff, stream, videoTrack]);
-
-  const compact = size === "rail";
-  const speakerHighlight = isActiveSpeaker ? "speaking" : "";
-  const handRaisedHighlight = isHandRaised ? "!border-amber-400/60" : "";
-  const videoStyle: CSSProperties | undefined = cropPosition
-    ? { objectPosition: cropPosition }
-    : undefined;
-
-  return (
-    <div
-      className={`acm-video-tile group relative flex overflow-hidden bg-[#18181b] ${
-        compact ? "h-28 shrink-0" : "h-full w-full"
-      } ${speakerHighlight} ${handRaisedHighlight}`}
-    >
-      <video
-        ref={videoRef}
-        autoPlay
-        muted
-        playsInline
-        data-meet-local-tracking={tracking?.active ? "true" : "false"}
-        data-meet-local-tracking-source={tracking?.source ?? "none"}
-        data-meet-local-crop-position={cropPosition ?? ""}
-        style={videoStyle}
-        className={`h-full w-full ${
-          videoObjectFit === "contain" ? "object-contain bg-black" : "object-cover"
-        } ${
-          isCameraOff ? "hidden" : ""
-        } ${isMirrorCamera ? "scale-x-[-1]" : ""}`}
-      />
-      {isCameraOff ? (
-        <div
-          data-meet-local-camera-placeholder="true"
-          className="absolute inset-0 flex items-center justify-center bg-[#18181b]"
-        >
-          <Avatar
-            className={compact ? "text-xl" : "text-3xl"}
-            id={userEmail}
-            name={displayName || userEmail}
-            size={compact ? 48 : 80}
-          />
-        </div>
-      ) : null}
-      {isHandRaised ? (
-        <div
-          className={`absolute flex items-center justify-center rounded-full border border-amber-400/40 bg-amber-500/20 text-amber-300 ${
-            compact ? "left-2 top-2 h-7 w-7" : "left-3 top-3 h-8 w-8"
-          }`}
-          title="Hand raised"
-          aria-label="Hand raised"
-        >
-          <Hand size={compact ? 16 : 18} strokeWidth={1.75} />
-        </div>
-      ) : null}
-      {onTogglePin ? (
-        <button
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            onTogglePin();
-          }}
-          className={`absolute rounded-full border border-[#fafafa]/10 bg-black/60 text-[#fafafa]/82 transition-[border-color,color,opacity] duration-[120ms] hover:border-[#F95F4A]/40 hover:text-[#fafafa] focus-visible:opacity-100 ${
-            compact ? "right-2 top-2 p-1.5" : "right-3 top-3 p-2"
-          } ${isPinned ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
-          title={isPinned ? "Unpin" : "Pin to spotlight"}
-          aria-label={isPinned ? "Unpin" : "Pin to spotlight"}
-          aria-pressed={isPinned}
-        >
-          {isPinned ? (
-            <PinOff className={compact ? "h-3.5 w-3.5" : "h-4 w-4"} />
-          ) : (
-            <Pin className={compact ? "h-3.5 w-3.5" : "h-4 w-4"} />
-          )}
-        </button>
-      ) : null}
-      <div
-        className={`absolute flex max-w-[85%] items-center gap-1.5 rounded-full border border-[#fafafa]/10 bg-[#0a0a0b]/70 ${
-          compact ? "bottom-2 left-2 px-2.5 py-1" : "bottom-3 left-3 px-3 py-1.5"
-        }`}
-      >
-        <span
-          className={`truncate font-medium text-[#fafafa] ${
-            compact ? "text-[12.5px]" : "text-[13px]"
-          }`}
-        >
-          {truncateDisplayName(displayName, compact ? 18 : 24)}
-        </span>
-        <span className="text-[10.5px] font-medium text-[#F95F4A]">You</span>
-        {isActiveSpeaker && !isMuted ? (
-          <span className="acm-voice-activity" aria-label="Speaking">
-            <span />
-            <span />
-            <span />
-          </span>
-        ) : null}
-        {isMuted ? (
-          <MicOff
-            size={compact ? 13 : 14}
-            strokeWidth={1.75}
-            className="shrink-0 text-[#F95F4A]"
-          />
-        ) : null}
-      </div>
-      <GameTileOverlay compact={compact} />
-    </div>
-  );
-});
-
-const MinimizedSelfViewPill = memo(function MinimizedSelfViewPill({
+const SelfViewPill = memo(function SelfViewPill({
   displayName,
   userEmail,
   isMuted,
   isHandRaised,
   corner,
+  compact,
   cornerClass,
-  dragStyle,
+  style,
   isDragging,
   onDragStart,
   onRestore,
@@ -4038,53 +3366,66 @@ const MinimizedSelfViewPill = memo(function MinimizedSelfViewPill({
   isMuted: boolean;
   isHandRaised: boolean;
   corner: MeetSelfViewCorner;
+  compact: boolean;
   cornerClass: string;
-  dragStyle?: CSSProperties;
+  style?: CSSProperties;
   isDragging: boolean;
   onDragStart: (event: ReactPointerEvent<HTMLElement>) => void;
-  onRestore: () => void;
+  onRestore?: () => void;
 }) {
+  const buttonSize = compact ? "h-6 w-6" : "h-7 w-7";
   return (
     <div
-      className={`absolute z-20 flex max-w-[min(19rem,44vw)] items-center gap-2 rounded-full border border-[#fafafa]/12 bg-[#111114]/92 px-2.5 py-2 text-[#fafafa] shadow-[0_14px_36px_rgba(0,0,0,0.36)] ${
+      className={`absolute z-20 flex items-center overflow-hidden rounded-full border border-[#fafafa]/12 bg-[#111114]/92 text-[#fafafa] shadow-[0_14px_36px_rgba(0,0,0,0.36)] ${
+        compact ? "gap-1 px-1" : "gap-2 px-2.5 py-2"
+      } ${
         isDragging ? "" : cornerClass
       }`}
-      style={dragStyle}
-      data-meet-minimized-self-view="true"
-      data-meet-detached-self-view="minimized"
+      style={style}
+      data-meet-minimized-self-view={compact ? undefined : "true"}
+      data-meet-detached-self-view={compact ? "pill" : "minimized"}
       data-meet-self-view-corner={corner}
       data-meet-self-view-dragging={isDragging ? "true" : "false"}
-      aria-label="Minimized self-view"
+      role="group"
+      aria-label={compact ? "Compact self-view" : "Minimized self-view"}
     >
       <button
         type="button"
         onPointerDown={onDragStart}
-        aria-label="Move minimized self-view"
+        aria-label={compact ? "Move compact self-view" : "Move minimized self-view"}
         title="Move self-view"
-        className="inline-flex h-7 w-7 shrink-0 cursor-grab items-center justify-center rounded-full bg-white/[0.08] text-[#fafafa]/76 transition-colors hover:bg-white/[0.14] hover:text-[#fafafa] active:cursor-grabbing"
+        className={`inline-flex ${buttonSize} shrink-0 cursor-grab items-center justify-center rounded-full bg-white/[0.08] text-[#fafafa]/76 transition-colors hover:bg-white/[0.14] hover:text-[#fafafa] active:cursor-grabbing`}
       >
         <Move size={14} strokeWidth={1.8} />
       </button>
-      <Avatar id={userEmail} name={displayName || userEmail} size={32} />
-      <span className="min-w-0 truncate text-[13px] font-medium">
-        {truncateDisplayName(displayName, 20)}
-      </span>
-      <span className="text-[11px] font-medium text-[#F95F4A]">You</span>
-      {isMuted ? (
-        <MicOff size={14} strokeWidth={1.75} className="shrink-0 text-[#F95F4A]" />
-      ) : null}
-      {isHandRaised ? (
-        <Hand size={14} strokeWidth={1.75} className="shrink-0 text-amber-300" />
-      ) : null}
-      <button
+      <div className={`flex min-w-0 items-center overflow-hidden ${
+        compact ? "h-5 flex-1 flex-wrap content-start gap-1" : "gap-2"
+      }`}>
+        {!compact && (
+          <>
+            <Avatar id={userEmail} name={displayName || userEmail} size={32} />
+            <span className="min-w-0 truncate text-[13px] font-medium">
+              {truncateDisplayName(displayName, 20)}
+            </span>
+          </>
+        )}
+        <span className="shrink-0 text-[11px] font-medium leading-5 text-[#F95F4A]">You</span>
+        {isMuted ? (
+          <MicOff size={14} strokeWidth={1.75} className="h-5 shrink-0 text-[#F95F4A]" />
+        ) : null}
+        {isHandRaised ? (
+          <Hand size={14} strokeWidth={1.75} className="h-5 shrink-0 text-amber-300" />
+        ) : null}
+      </div>
+      {onRestore ? <button
         type="button"
         onClick={onRestore}
         aria-label="Restore self-view"
         title="Restore self-view"
-        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/[0.08] text-[#fafafa]/76 transition-colors hover:bg-white/[0.14] hover:text-[#fafafa]"
+        className={`inline-flex ${buttonSize} shrink-0 items-center justify-center rounded-full bg-white/[0.08] text-[#fafafa]/76 transition-colors hover:bg-white/[0.14] hover:text-[#fafafa]`}
       >
         <Maximize2 size={14} strokeWidth={1.8} />
-      </button>
+      </button> : null}
     </div>
   );
 });
@@ -4206,6 +3547,7 @@ const OverflowGalleryTile = memo(function OverflowGalleryTile({
       className={`acm-video-tile group relative flex h-28 w-44 shrink-0 snap-start flex-col overflow-hidden text-left ${
         isActiveSpeaker ? "speaking" : ""
       } ${isClickable ? "cursor-pointer hover:border-[#F95F4A]/40" : "cursor-default opacity-85"}`}
+      data-userid={participant.userId}
       data-meet-video-adaptively-paused={
         participant.isVideoAdaptivelyPaused ? "true" : "false"
       }

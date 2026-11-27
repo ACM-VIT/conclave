@@ -1,4 +1,11 @@
 import type { Consumer, ConsumerLayers, Producer } from "mediasoup/types";
+import {
+  ownPacketCountsRequestSchema,
+  senderPacketCountsAnswerSchema,
+  senderPacketCountsRequestSchema,
+  type SenderPacketCountsAnswer,
+} from "@conclave/meeting-core/sender-packet-counts";
+import { readProducerPacketCounts } from "../../producerPacketCounts.js";
 import type {
   AbortConsumerHandoffData,
   AbortConsumerHandoffResponse,
@@ -277,6 +284,11 @@ const assertCurrentConsumerGeneration = (
   }
 };
 
+const lastConsumerScore = new WeakMap<
+  Consumer,
+  { socket: Client["socket"]; signature: string }
+>();
+
 const emitConsumerTelemetry = (
   target: ConsumerTelemetryTarget,
   event: ConsumerTelemetryNotification["event"],
@@ -293,8 +305,7 @@ const emitConsumerTelemetry = (
     return;
   }
 
-  client.socket.emit("consumerTelemetry", {
-    event,
+  const fields = {
     roomId: room.id,
     userId: client.id,
     consumerId: snapshot.consumerId,
@@ -306,6 +317,18 @@ const emitConsumerTelemetry = (
     priority: snapshot.priority,
     preferredLayers: snapshot.preferredLayers,
     currentLayers: snapshot.currentLayers,
+  };
+  const socket = client.socket;
+  if (event === "score") {
+    const signature = JSON.stringify(fields);
+    const last = lastConsumerScore.get(consumer);
+    if (last && last.socket === socket && last.signature === signature) return;
+    lastConsumerScore.set(consumer, { socket, signature });
+  }
+
+  socket.emit("consumerTelemetry", {
+    ...fields,
+    event,
     timestamp: snapshot.updatedAt,
   } satisfies ConsumerTelemetryNotification);
 };
@@ -1003,11 +1026,11 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
 
         const activeRoom = state.rooms.get(roomChannelId);
         const activeClient = activeRoom?.getClient(clientId);
-        const producerStillActive = Boolean(
-          activeClient && activeRoom?.getProducerInfoById(producer.id),
-        );
+        const activeProducerInfo = activeClient
+          ? activeRoom?.getProducerInfoById(producer.id)
+          : null;
 
-        if (producer.closed || producerClosed || !activeRoom || !producerStillActive) {
+        if (producer.closed || producerClosed || !activeRoom || !activeProducerInfo) {
           notifyProducerClosed();
           respond(callback, { error: "Producer closed during setup" });
           return;
@@ -1024,6 +1047,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
             kind,
             type,
             paused: producer.paused,
+            producerSeq: activeProducerInfo.producerSeq,
             roomId: activeRoom.id,
           });
         }
@@ -1086,7 +1110,10 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
         }
         const producerInfo = room.getProducerInfoById(producerId);
         if (!producerInfo) {
-          respond(callback, { error: "Producer not found" });
+          respond(callback, {
+            error: "Producer not found",
+            code: "producer_not_found",
+          });
           return;
         }
         // Attendees may only consume the curated program feed. Without this,
@@ -1394,6 +1421,87 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           ? context.currentRoom.getWebinarFeedSnapshot().producers
           : context.currentRoom.getAllProducers(context.currentClient.id);
         respond(callback, { producers });
+      } catch (error) {
+        respond(callback, { error: (error as Error).message });
+      }
+    },
+  );
+
+  socket.on(
+    "getSenderPacketCounts",
+    async (
+      data: unknown,
+      callback: (response: SenderPacketCountsAnswer | { error: string }) => void,
+    ) => {
+      try {
+        const room = context.currentRoom;
+        const client = context.currentClient;
+        if (!room || !client) {
+          respond(callback, { error: "Not in a room" });
+          return;
+        }
+        if (!takeToken(socket, "senderPacketCounts", RATE_LIMITS.senderPacketCounts)) {
+          respond(callback, { error: "Too many requests" });
+          return;
+        }
+        const request = senderPacketCountsRequestSchema.safeParse(data);
+        if (!request.success) {
+          respond(callback, { error: "Invalid request" });
+          return;
+        }
+        const sharers = request.data.consumerIds.flatMap((consumerId) => {
+          const consumer = client.getConsumerById(consumerId);
+          if (!consumer || consumer.closed) return [];
+          const producer = room.getActiveProducerById(consumer.producerId);
+          return producer ? [{ consumerId, producer }] : [];
+        });
+        const packets = await readProducerPacketCounts(
+          sharers.map(({ producer }) => producer),
+        );
+        const counts: SenderPacketCountsAnswer["counts"] = {};
+        for (const { consumerId, producer } of sharers) {
+          const count = packets.get(producer);
+          if (count !== undefined) counts[consumerId] = count;
+        }
+        respond(callback, senderPacketCountsAnswerSchema.parse({ counts }));
+      } catch (error) {
+        respond(callback, { error: (error as Error).message });
+      }
+    },
+  );
+
+  socket.on(
+    "getOwnPacketCounts",
+    async (
+      data: unknown,
+      callback: (response: SenderPacketCountsAnswer | { error: string }) => void,
+    ) => {
+      try {
+        const client = context.currentClient;
+        if (!context.currentRoom || !client) {
+          respond(callback, { error: "Not in a room" });
+          return;
+        }
+        if (!takeToken(socket, "ownPacketCounts", RATE_LIMITS.ownPacketCounts)) {
+          respond(callback, { error: "Too many requests" });
+          return;
+        }
+        const request = ownPacketCountsRequestSchema.safeParse(data);
+        if (!request.success) {
+          respond(callback, { error: "Invalid request" });
+          return;
+        }
+        const wanted = new Set(request.data.producerIds);
+        const owned = [...client.producers.values()].filter(
+          (producer) => wanted.has(producer.id) && !producer.closed,
+        );
+        const packets = await readProducerPacketCounts(owned);
+        const counts: SenderPacketCountsAnswer["counts"] = {};
+        for (const producer of owned) {
+          const count = packets.get(producer);
+          if (count !== undefined) counts[producer.id] = count;
+        }
+        respond(callback, senderPacketCountsAnswerSchema.parse({ counts }));
       } catch (error) {
         respond(callback, { error: (error as Error).message });
       }

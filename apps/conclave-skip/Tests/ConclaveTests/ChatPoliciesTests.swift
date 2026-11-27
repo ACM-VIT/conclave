@@ -165,23 +165,26 @@ struct ChatPoliciesTests {
         messages.append(Self.peer("s-5", "history", at: 4000, history: true))
         chat.apply(Self.inputs(messages), change: .messages)
         #expect(chat.pendingUnreadCount == 2)
-        chat.panelDidOpen(destination: .none, targetId: "")
+        chat.openPanel()
+        chat.panelDidAppear()
         let ids = chat.timeline.rowIds
         let divider = ids.firstIndex(of: "unread")
         #expect(divider != nil)
 
         if let divider { #expect(ids.dropFirst(divider + 1).first == "s-3") }
         #expect(chat.timeline.firstUnreadId == "s-3")
-        chat.panelDidClose()
+        chat.closePanel()
         #expect(!chat.timeline.rowIds.contains("unread"))
-        chat.panelDidOpen(destination: .none, targetId: "")
+        chat.openPanel()
+        chat.panelDidAppear()
         #expect(!chat.timeline.rowIds.contains("unread"))
     }
 
     @Test func anOpenPanelAnnouncesNewRemoteMessagesAndCoalescesBursts() {
         var messages = [Self.peer("s-1", "old", at: 0)]
         let chat = Self.presenter(Self.inputs(messages))
-        chat.panelDidOpen(destination: .none, targetId: "")
+        chat.openPanel()
+        chat.panelDidAppear()
         messages.append(Self.peer("s-2", "Can you share the deck?", at: 1000, history: false))
         chat.apply(Self.inputs(messages), change: .messages)
         #expect(chat.announcement?.kind == "newMessage" && chat.announcement?.name == "Avery Lee")
@@ -316,7 +319,7 @@ struct ChatPoliciesTests {
 @MainActor
 struct ChatViewModelWiringTests {
     private func joinedViewModel() -> MeetingViewModel {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.displayName = "Local"
@@ -408,16 +411,20 @@ struct ChatViewModelWiringTests {
         #expect(viewModel.chat.timeline.rowIds.contains("s-9"))
     }
 
-    @Test func isChatOpenFollowsTheNativeChatPanel() {
+    @Test func isChatOpenFollowsTheNativeChatPanelOnScreen() {
         let viewModel = joinedViewModel()
         viewModel.state.unreadChatCount = 4
         viewModel.shell.panels.present(.chat, from: .call)
-        #expect(viewModel.state.isChatOpen)
-        #expect(viewModel.state.unreadChatCount == 0)
+        #expect(!viewModel.state.isChatOpen)
+        #expect(viewModel.state.unreadChatCount == 4)
         guard let current = viewModel.shell.panels.snapshot.current else {
             Issue.record("no current panel")
             return
         }
+        viewModel.shell.panels.panelDidAppear(session: viewModel.shell.panels.snapshot.session,
+                                              presentationID: current.presentationID)
+        #expect(viewModel.state.isChatOpen)
+        #expect(viewModel.state.unreadChatCount == 0)
         viewModel.shell.panels.dismiss(cancelPending: true)
         #expect(!viewModel.state.isChatOpen)
         viewModel.shell.panels.didDismiss(session: viewModel.shell.panels.snapshot.session, presentationID: current.presentationID)

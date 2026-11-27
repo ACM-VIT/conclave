@@ -66,7 +66,7 @@ enum SettingsRowID: String, CaseIterable, Equatable {
     case hostControls, knockSound, handSound
     case connection, messageNotifications, callNotification, openLinks, alwaysShowControls, haptics
     case name, identity, signOut
-    case privacy, exportDiagnostics, version
+    case privacy, crashReports, exportDiagnostics, version
 }
 
 struct SettingsRowSection: Equatable, Identifiable {
@@ -78,7 +78,7 @@ struct SettingsRowSection: Equatable, Identifiable {
 enum SettingsPreferenceID: String, CaseIterable, Equatable {
     case noiseSuppression, captions, chatPreviews, playVoiceMessages, voiceKind, standardVoice, alwaysShowControls
     case haptics, knockSound, handSound
-    case mirror, cameraQuality, screenShareQuality, dataSaver, shareDeviceAudio
+    case mirror, cameraQuality, screenShareQuality, dataSaver, shareDeviceAudio, shareCrashReports
 }
 
 enum SettingsPreferences {
@@ -92,44 +92,54 @@ enum SettingsPreferences {
     static let knockSoundKey = "conclave.pref.knockSound"
     static let handSoundKey = "conclave.pref.handSound"
 
-    static func noiseSuppression(defaults: UserDefaults = UserDefaults.standard) -> Bool {
+    static let shareCrashReportsKey = "conclave.pref.shareCrashReports"
+
+    static func noiseSuppression(defaults: UserDefaults) -> Bool {
         boolValue(noiseSuppressionKey, fallback: true, defaults: defaults)
     }
 
-    static func setNoiseSuppression(_ on: Bool, defaults: UserDefaults = UserDefaults.standard) {
+    static func setNoiseSuppression(_ on: Bool, defaults: UserDefaults) {
         defaults.set(on, forKey: noiseSuppressionKey)
     }
 
-    static func alwaysShowControls(defaults: UserDefaults = UserDefaults.standard) -> Bool {
+    static func alwaysShowControls(defaults: UserDefaults) -> Bool {
         boolValue(alwaysShowControlsKey, fallback: false, defaults: defaults)
     }
 
-    static func setAlwaysShowControls(_ on: Bool, defaults: UserDefaults = UserDefaults.standard) {
+    static func setAlwaysShowControls(_ on: Bool, defaults: UserDefaults) {
         defaults.set(on, forKey: alwaysShowControlsKey)
     }
 
-    static func haptics(defaults: UserDefaults = UserDefaults.standard) -> Bool {
+    static func haptics(defaults: UserDefaults) -> Bool {
         boolValue(hapticsKey, fallback: true, defaults: defaults)
     }
 
-    static func setHaptics(_ on: Bool, defaults: UserDefaults = UserDefaults.standard) {
+    static func setHaptics(_ on: Bool, defaults: UserDefaults) {
         defaults.set(on, forKey: hapticsKey)
     }
 
-    static func knockSound(defaults: UserDefaults = UserDefaults.standard) -> Bool {
+    static func knockSound(defaults: UserDefaults) -> Bool {
         boolValue(knockSoundKey, fallback: false, defaults: defaults)
     }
 
-    static func setKnockSound(_ on: Bool, defaults: UserDefaults = UserDefaults.standard) {
+    static func setKnockSound(_ on: Bool, defaults: UserDefaults) {
         defaults.set(on, forKey: knockSoundKey)
     }
 
-    static func handSound(defaults: UserDefaults = UserDefaults.standard) -> Bool {
+    static func handSound(defaults: UserDefaults) -> Bool {
         boolValue(handSoundKey, fallback: false, defaults: defaults)
     }
 
-    static func setHandSound(_ on: Bool, defaults: UserDefaults = UserDefaults.standard) {
+    static func setHandSound(_ on: Bool, defaults: UserDefaults) {
         defaults.set(on, forKey: handSoundKey)
+    }
+
+    static func shareCrashReports(defaults: UserDefaults) -> Bool {
+        boolValue(shareCrashReportsKey, fallback: true, defaults: defaults)
+    }
+
+    static func setShareCrashReports(_ on: Bool, defaults: UserDefaults) {
+        defaults.set(on, forKey: shareCrashReportsKey)
     }
 
     private static func boolValue(_ key: String, fallback: Bool, defaults: UserDefaults) -> Bool {
@@ -149,6 +159,7 @@ struct SettingsPreferenceValues: Equatable {
     let hapticsOn: Bool
     let knockSoundOn: Bool
     let handSoundOn: Bool
+    let shareCrashReportsOn: Bool
 
     let mirrorsSelfView: Bool
     let dataSaverOn: Bool
@@ -169,6 +180,7 @@ struct SettingsPreferenceValues: Equatable {
             hapticsOn: SettingsPreferences.haptics(defaults: defaults),
             knockSoundOn: SettingsPreferences.knockSound(defaults: defaults),
             handSoundOn: SettingsPreferences.handSound(defaults: defaults),
+            shareCrashReportsOn: SettingsPreferences.shareCrashReports(defaults: defaults),
             mirrorsSelfView: NativeVideoPreferences.mirrorsSelfView(defaults: defaults),
             dataSaverOn: NativeVideoPreferences.dataSaver(defaults: defaults),
             shareDeviceAudioOn: NativeVideoPreferences.shareDeviceAudio(defaults: defaults),
@@ -319,6 +331,7 @@ struct SettingsGeneral: Equatable {
     let linkVerification: LinkVerification
 
     let canExportDiagnostics: Bool
+    var shareCrashReports: Bool = true
 
     static let empty = SettingsGeneral(revision: 0, scope: SettingsScope.call, isAttendee: false, showsHostSection: false,
                                        hostReason: SettingsReason.none, hostAlertSoundsAvailable: false, knockSoundOn: false,
@@ -584,7 +597,7 @@ enum SettingsRowPolicy {
         }
         result = appended(result, SettingsSection.account, account)
 
-        var about: [SettingsRowID] = [SettingsRowID.privacy]
+        var about: [SettingsRowID] = [SettingsRowID.privacy, SettingsRowID.crashReports]
         if capabilities.exportDiagnostics { about.append(SettingsRowID.exportDiagnostics) }
         about.append(SettingsRowID.version)
         result = appended(result, SettingsSection.about, about)
@@ -802,6 +815,7 @@ final class SettingsPreviewHooks {
         }
         hooks.setMirror = { on in
             LocalPreviewController.shared.setMirrorPreference(on)
+            LocalVideoMirrorPreference.shared.update(on)
         }
         hooks.cameraPermission = {
             MediaPermissionStatusProvider.status(LobbyMediaKind.camera)
@@ -995,7 +1009,7 @@ final class SettingsPresenter {
     @ObservationIgnored private(set) var hasEditedName = false
 
     init(scope: SettingsScope = SettingsScope.call, platform: SettingsPlatform = SettingsPlatform.current,
-         defaults: UserDefaults = UserDefaults.standard) {
+         defaults: UserDefaults) {
         self.scope = scope
         self.platform = platform
         self.defaults = defaults
@@ -1199,7 +1213,6 @@ final class SettingsPresenter {
     func setMirrorsSelfView(_ on: Bool) {
         guard prefs.mirrorsSelfView != on else { return }
         NativeVideoPreferences.setMirrorsSelfView(on, defaults: defaults)
-        LocalVideoMirrorPreference.shared.update(on)
         previewHooks.setMirror(on)
         preferenceWritten(SettingsPreferenceID.mirror)
     }
@@ -1567,6 +1580,12 @@ final class SettingsPresenter {
         preferenceWritten(SettingsPreferenceID.haptics)
     }
 
+    func setShareCrashReports(_ on: Bool) {
+        guard prefs.shareCrashReportsOn != on else { return }
+        SettingsPreferences.setShareCrashReports(on, defaults: defaults)
+        preferenceWritten(SettingsPreferenceID.shareCrashReports)
+    }
+
     func editDisplayName(_ value: String) {
         guard account.canEditName else { return }
         hasEditedName = true
@@ -1837,7 +1856,8 @@ final class SettingsPresenter {
             notificationPermission: inputs.notificationPermission,
             callNotificationEnabled: inputs.callNotificationEnabled,
             linkVerification: inputs.linkVerification,
-            canExportDiagnostics: inputs.canExportDiagnostics
+            canExportDiagnostics: inputs.canExportDiagnostics,
+            shareCrashReports: prefs.shareCrashReportsOn
         )
     }
 

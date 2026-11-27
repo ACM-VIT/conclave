@@ -7,6 +7,7 @@ import { createHash } from "crypto";
 import { fileURLToPath } from "url";
 import type { RouterRtpCodecCapability } from "mediasoup/types";
 import { resolveConfiguredSfuRegion } from "../server/regions.js";
+import { readRtcPortRange, readWorkerSizing } from "./workerSettings.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const sfuPackageRoot = path.resolve(__dirname, "..");
@@ -119,8 +120,16 @@ export const resolveWebRtcTransportProtocolPolicy = (
   });
 };
 
+function paddedSfuSecretMessage(schedulingTokenSecret: string | undefined): string {
+  return schedulingTokenSecret
+    ? "SFU_SECRET has leading or trailing whitespace. Remove it; SCHEDULING_TOKEN_SECRET keeps saved calendar tokens readable."
+    : "SFU_SECRET has leading or trailing whitespace. Saved calendar tokens are encrypted with the padded value, so first set SCHEDULING_TOKEN_SECRET to the exact current SFU_SECRET, padding included, before you trim SFU_SECRET.";
+}
+
 function resolveSfuSecret(): string {
-  const configured = process.env.SFU_SECRET?.trim();
+  const raw = process.env.SFU_SECRET;
+  const configured = raw?.trim();
+  if (raw && raw !== configured) throw new Error(paddedSfuSecretMessage(process.env.SCHEDULING_TOKEN_SECRET));
   if (configured && configured !== "development-secret") {
     return configured;
   }
@@ -290,20 +299,10 @@ const instancePublicUrl =
   process.env.SFU_INSTANCE_URL?.trim() ||
   process.env.SFU_URL?.trim() ||
   "";
-const rtcMinPort = toNumber(process.env.RTC_MIN_PORT, 40000, {
-  integer: true,
-  min: 1,
-  max: 65535,
+const { rtcMinPort, rtcMaxPort } = readRtcPortRange(process.env, {
+  RTC_MIN_PORT: "40000",
+  RTC_MAX_PORT: "49999",
 });
-const parsedRtcMaxPort = toNumber(process.env.RTC_MAX_PORT, 49999, {
-  integer: true,
-  min: 1,
-  max: 65535,
-});
-const rtcMaxPort = parsedRtcMaxPort >= rtcMinPort ? parsedRtcMaxPort : rtcMinPort;
-if (parsedRtcMaxPort < rtcMinPort) {
-  console.warn("[SFU] RTC_MAX_PORT is lower than RTC_MIN_PORT; using a single-port range.");
-}
 const webRtcTransportProtocolPolicy =
   resolveWebRtcTransportProtocolPolicy();
 
@@ -362,12 +361,20 @@ const routerMediaCodecs: RouterRtpCodecCapability[] = [
 
 export const config = {
   webcamVp9Enabled: process.env.SFU_WEBCAM_VP9_ENABLED === "1",
+  // Server-authoritative in-call apps. Off by default: with it off no
+  // authority event is registered, so the SFU answers like one that predates
+  // the runtime and clients hide the apps that need it. Read once at startup:
+  // changing it needs a restart.
+  appsAuthority: {
+    enabled: toBoolean(process.env.SFU_APPS_AUTHORITY_ENABLED),
+  },
   port: toNumber(process.env.SFU_PORT || process.env.PORT, 3031, {
     integer: true,
     min: 1,
     max: 65535,
   }),
   instanceId: process.env.SFU_INSTANCE_ID || `sfu-${process.pid}`,
+  deployId: process.env.SFU_DEPLOY_ID?.trim() || null,
   instancePublicUrl,
   region: resolveConfiguredSfuRegion(process.env.SFU_REGION),
   version: process.env.SFU_VERSION || "dev",
@@ -438,10 +445,7 @@ export const config = {
     enabled: !transcriptRelayDisabled,
   },
   workerSettings: {
-    workerCount: toNumber(process.env.SFU_WORKER_COUNT, 0, {
-      integer: true,
-      min: 0,
-    }),
+    ...readWorkerSizing(process.env),
     rtcMinPort,
     rtcMaxPort,
     logLevel: "warn" as WorkerLogLevel,
@@ -460,6 +464,28 @@ export const config = {
   adminCleanupTimeout: toNumber(process.env.ADMIN_CLEANUP_TIMEOUT, 120000, {
     min: 1000,
   }),
+  // How many passes and keys one room keeps lobby decisions for (see
+  // `AdmissionLedger`). A refusal is kept past it.
+  lobbyDecisionRecordLimit: toNumber(
+    process.env.SFU_LOBBY_DECISION_RECORD_LIMIT,
+    5000,
+    { integer: true, min: 1 },
+  ),
+  // The most requests to be let in that one room keeps waiting at once,
+  // and the most seats in a meeting (webinar attendees have their own
+  // limit). A join past either is refused and the room records nothing.
+  guestAppIdentityLimit: toNumber(process.env.SFU_GUEST_APP_IDENTITY_LIMIT, 5000, {
+    integer: true,
+    min: 1,
+  }),
+  waitingRequestLimit: toNumber(process.env.SFU_WAITING_REQUEST_LIMIT, 1000, {
+    integer: true,
+    min: 1,
+  }),
+  meetingSeatLimit: toNumber(process.env.SFU_MEETING_SEAT_LIMIT, 1000, {
+    integer: true,
+    min: 1,
+  }),
   socket: {
     pingIntervalMs: toNumber(
       process.env.SFU_SOCKET_PING_INTERVAL_MS,
@@ -471,11 +497,6 @@ export const config = {
     }),
     disconnectGraceMs: toNumber(
       process.env.SFU_SOCKET_DISCONNECT_GRACE_MS,
-      BACKGROUND_SOCKET_RECOVERY_WINDOW_MS,
-      { min: 0 },
-    ),
-    recoveryMaxDisconnectionMs: toNumber(
-      process.env.SFU_SOCKET_RECOVERY_MAX_MS,
       BACKGROUND_SOCKET_RECOVERY_WINDOW_MS,
       { min: 0 },
     ),

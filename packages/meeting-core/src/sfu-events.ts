@@ -41,6 +41,8 @@ export const SFU_EVENTS = {
     requestProducerKeyFrame: "requestProducerKeyFrame",
     getProducers: "getProducers",
     restartIce: "restartIce",
+    getSenderPacketCounts: "getSenderPacketCounts",
+    getOwnPacketCounts: "getOwnPacketCounts",
     toggleMute: "toggleMute",
     toggleCamera: "toggleCamera",
     closeRemoteProducer: "closeRemoteProducer",
@@ -251,6 +253,7 @@ export const SFU_EVENTS = {
     webinarHandQueueChanged: "webinar:handQueueChanged",
     webinarPromoted: "webinar:promoted",
     webinarDemoted: "webinar:demoted",
+    webinarStageInviteUsed: "webinar:stageInviteUsed",
 
     // Meeting / webinar config broadcasts
     meetingConfigChanged: "meeting:configChanged",

@@ -1,17 +1,37 @@
 {
+  "src/app/api/csp-report/rate-limit.ts": {
+    "conclave/no-comments": {
+      "count": 3
+    }
+  },
+  "src/app/api/guest-pass/route.ts": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "src/app/api/sfu/join/route.ts": {
+    "conclave/no-comments": {
+      "count": 2
+    }
+  },
+  "src/app/components/ChatMessageRow.tsx": {
+    "conclave/no-comments": {
+      "count": 2
+    }
+  },
   "src/app/components/ChatPanel.tsx": {
     "conclave/no-comments": {
-      "count": 6
+      "count": 3
     }
   },
   "src/app/components/GridLayout.tsx": {
     "conclave/no-comments": {
-      "count": 6
+      "count": 5
     }
   },
   "src/app/components/JoinScreen.tsx": {
     "conclave/no-comments": {
-      "count": 7
+      "count": 4
     }
   },
   "src/app/components/MeetingAppLayout.tsx": {
@@ -21,7 +41,12 @@
   },
   "src/app/components/MeetsMainContent.tsx": {
     "conclave/no-comments": {
-      "count": 3
+      "count": 6
+    }
+  },
+  "src/app/components/ParticipantsPanel.tsx": {
+    "conclave/no-comments": {
+      "count": 2
     }
   },
   "src/app/components/ai-elements/chain-of-thought.tsx": {
@@ -74,9 +99,224 @@
       "count": 1
     }
   },
+  "src/app/hooks/useAdaptiveConsumerPreferences.ts": {
+    "conclave/no-comments": {
+      "count": 2
+    }
+  },
   "src/app/hooks/useMeetChat.ts": {
     "conclave/no-comments": {
       "count": 2
+    }
+  },
+  "src/app/hooks/useMeetSocket.ts": {
+    "conclave/no-comments": {
+      "count": 80
+    }
+  },
+  "src/app/hooks/useRejoinMediaRestore.ts": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "src/app/hooks/useSmartParticipantOrder.ts": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "src/app/lib/adaptive-consumer-score.ts": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "src/app/lib/coalesced-run.ts": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "src/app/lib/guest-pass-session.ts": {
+    "conclave/no-comments": {
+      "count": 10
+    }
+  },
+  "src/app/lib/held-join-info.ts": {
+    "conclave/no-comments": {
+      "count": 12
+    }
+  },
+  "src/app/lib/host-decision-limit.ts": {
+    "conclave/no-comments": {
+      "count": 4
+    }
+  },
+  "src/app/lib/in-call-alerts.ts": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "src/app/lib/join-info-request.ts": {
+    "conclave/no-comments": {
+      "count": 2
+    }
+  },
+  "src/app/lib/join-token-identity.ts": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "src/app/lib/media-path-recovery.ts": {
+    "conclave/no-comments": {
+      "count": 17
+    }
+  },
+  "src/app/lib/media-recovery-policy.ts": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "src/app/lib/producer-slot-order.ts": {
+    "conclave/no-comments": {
+      "count": 12
+    }
+  },
+  "src/app/lib/producer-transport-network-profile.ts": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "src/app/lib/reconnect-recovery-status.ts": {
+    "conclave/no-comments": {
+      "count": 8
+    }
+  },
+  "src/app/lib/reconnect-request-policy.ts": {
+    "conclave/no-comments": {
+      "count": 11
+    }
+  },
+  "src/app/lib/relay-credentials.ts": {
+    "conclave/no-comments": {
+      "count": 7
+    }
+  },
+  "src/app/lib/types.ts": {
+    "conclave/no-comments": {
+      "count": 2
+    }
+  },
+  "src/app/lib/video-encodings.ts": {
+    "conclave/no-comments": {
+      "count": 3
+    }
+  },
+  "src/app/lib/webcam-codec.ts": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "src/app/lib/webcam-consumer-generation-reset.ts": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "src/app/meets-client.tsx": {
+    "conclave/no-comments": {
+      "count": 2
+    }
+  },
+  "src/lib/bounded-request-body.ts": {
+    "conclave/no-comments": {
+      "count": 2
+    }
+  },
+  "src/lib/csp-report.ts": {
+    "conclave/no-comments": {
+      "count": 2
+    }
+  },
+  "src/lib/guest-pass.ts": {
+    "conclave/no-comments": {
+      "count": 33
+    }
+  },
+  "src/lib/novnc-viewer.ts": {
+    "conclave/no-comments": {
+      "count": 2
+    }
+  },
+  "src/lib/security-headers.ts": {
+    "conclave/no-comments": {
+      "count": 21
+    }
+  },
+  "src/lib/voice-upload.ts": {
+    "conclave/no-comments": {
+      "count": 6
+    }
+  },
+  "test/authority-hook.test.tsx": {
+    "conclave/no-comments": {
+      "count": 15
+    }
+  },
+  "test/browser-layout-session-frame.test.tsx": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "test/coalesced-run.test.ts": {
+    "conclave/no-comments": {
+      "count": 3
+    }
+  },
+  "test/csp-report-route.test.ts": {
+    "conclave/no-comments": {
+      "count": 4
+    }
+  },
+  "test/guest-pass-session.test.ts": {
+    "conclave/no-comments": {
+      "count": 5
+    }
+  },
+  "test/in-call-notices.test.tsx": {
+    "conclave/no-comments": {
+      "count": 2
+    }
+  },
+  "test/join-identity-source.test.ts": {
+    "conclave/no-comments": {
+      "count": 6
+    }
+  },
+  "test/next-config-viewer-host.test.ts": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "test/producer-slot-order.test.ts": {
+    "conclave/no-comments": {
+      "count": 3
+    }
+  },
+  "test/security-headers.test.ts": {
+    "conclave/no-comments": {
+      "count": 2
+    }
+  },
+  "test/sfu-join-guest-pass.test.ts": {
+    "conclave/no-comments": {
+      "count": 9
+    }
+  },
+  "test/tts-voice-upload.test.ts": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "test/webcam-consumer-generation-reset.test.ts": {
+    "conclave/no-comments": {
+      "count": 1
     }
   }
 }

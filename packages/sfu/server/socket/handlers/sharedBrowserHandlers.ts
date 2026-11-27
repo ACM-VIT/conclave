@@ -263,6 +263,8 @@ const createBrowserAudioProducer = async (
         kind: "audio",
         type: "webcam",
         paused: producer.paused,
+        producerSeq: context.currentRoom.getProducerInfoById(producer.id)
+            ?.producerSeq,
         roomId: context.currentRoom.id,
     });
 
@@ -375,6 +377,8 @@ const createBrowserVideoProducer = async (
         kind: "video",
         type: "screen",
         paused: producer.paused,
+        producerSeq: context.currentRoom.getProducerInfoById(producer.id)
+            ?.producerSeq,
         roomId: context.currentRoom.id,
     });
 
@@ -750,25 +754,34 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
         const roomId = room.id;
         const state = getBrowserState(channelId);
         if (state.active) {
+            // A navigate, close or relaunch that lands while this refresh is
+            // in flight replaces the session the answer describes.
+            const refreshedNoVncUrl = state.noVncUrl;
+            const isOvertaken = () => {
+                const current = getBrowserState(channelId);
+                return current !== state || current.noVncUrl !== refreshedNoVncUrl;
+            };
             try {
                 const response = await callBrowserService<{
                     session?: { noVncUrl?: string; currentUrl?: string };
                 }>(`/sessions/${encodeURIComponent(channelId)}`);
-                if (!response.session) {
-                    clearBrowserState(channelId);
-                    await cleanupBrowserAudio(channelId, context);
-                    await cleanupBrowserVideo(channelId, context);
-                    context.io.to(channelId).emit("browser:closed", {
-                        roomId,
-                    });
-                    respond(callback, { active: false, roomId });
-                    return;
+                if (!isOvertaken()) {
+                    if (!response.session) {
+                        clearBrowserState(channelId);
+                        await cleanupBrowserAudio(channelId, context);
+                        await cleanupBrowserVideo(channelId, context);
+                        context.io.to(channelId).emit("browser:closed", {
+                            roomId,
+                        });
+                        respond(callback, { active: false, roomId });
+                        return;
+                    }
+                    state.noVncUrl = response.session.noVncUrl ?? state.noVncUrl;
+                    state.url = response.session.currentUrl ?? state.url;
+                    setBrowserState(channelId, state);
                 }
-                state.noVncUrl = response.session?.noVncUrl ?? state.noVncUrl;
-                state.url = response.session?.currentUrl ?? state.url;
-                setBrowserState(channelId, state);
             } catch (error) {
-                if (isMissingBrowserSessionError(error)) {
+                if (!isOvertaken() && isMissingBrowserSessionError(error)) {
                     clearBrowserState(channelId);
                     await cleanupBrowserAudio(channelId, context);
                     await cleanupBrowserVideo(channelId, context);
@@ -782,12 +795,13 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
                 // transient refresh fails.
             }
         }
+        const current = getBrowserState(channelId);
         respond(callback, {
-            active: state.active,
-            url: state.url,
-            noVncUrl: state.noVncUrl,
-            controllerUserId: state.controllerUserId,
-            provider: state.provider,
+            active: current.active,
+            url: current.url,
+            noVncUrl: current.noVncUrl,
+            controllerUserId: current.controllerUserId,
+            provider: current.provider,
             roomId,
         });
     });

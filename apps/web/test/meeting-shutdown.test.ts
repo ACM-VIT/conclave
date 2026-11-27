@@ -3,6 +3,7 @@ import { renderToString } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useMeetRefs } from "../src/app/hooks/useMeetRefs";
 import { useMeetSocket } from "../src/app/hooks/useMeetSocket";
+import { JOIN_REJECTED_MESSAGE } from "../src/app/lib/setup-notice";
 
 const joinInfo = { token: "test-token", sfuUrl: "http://localhost:3031" };
 
@@ -27,7 +28,7 @@ const createHarness = (
   const io = vi.fn(() => socket);
   const setConnectionState = vi.fn();
   const setMeetError = vi.fn();
-  const setMeetingEndedNotice = vi.fn();
+  const setSetupNotice = vi.fn();
   const onLocalRoomEnded = vi.fn();
   let api!: SocketApi;
   let refs!: Refs;
@@ -37,7 +38,7 @@ const createHarness = (
     const supplied = {
       refs, roomId: "test-room", userId: "viewer#session", localStream: null,
       getJoinInfo, prewarm: { io, Device: null, isReady: true },
-      setConnectionState, setMeetError, setMeetingEndedNotice, onLocalRoomEnded,
+      setConnectionState, setMeetError, setSetupNotice, onLocalRoomEnded,
       isMuted: true, isCameraOff: true, displayNameInput: "Viewer",
       primeAudioOutput: () => {},
       chat: { setChatMessages: noop, setChatOverlayMessages: noop, setUnreadCount: noop, isChatOpenRef: { current: false } },
@@ -58,7 +59,7 @@ const createHarness = (
     await pending;
     refs.currentRoomIdRef.current = "test-room";
   };
-  return { api, refs, socket, io, connect, dispatch, setConnectionState, setMeetError, setMeetingEndedNotice, onLocalRoomEnded };
+  return { api, refs, socket, io, connect, dispatch, setConnectionState, setMeetError, setSetupNotice, onLocalRoomEnded };
 };
 
 beforeEach(() => {
@@ -75,7 +76,10 @@ describe("intentional meeting shutdown", () => {
     expect(h.refs.intentionalDisconnectRef.current).toBe(true);
     expect(h.setConnectionState).toHaveBeenLastCalledWith("disconnected");
     expect(h.setMeetError).toHaveBeenLastCalledWith(null);
-    expect(h.setMeetingEndedNotice).toHaveBeenLastCalledWith("The host ended this meeting. You are no longer connected.");
+    expect(h.setSetupNotice).toHaveBeenLastCalledWith({
+      kind: "ended",
+      message: "The host ended this meeting. You are no longer connected.",
+    });
     expect(h.refs.currentRoomIdRef.current).toBeNull();
   });
 
@@ -102,6 +106,37 @@ describe("intentional meeting shutdown", () => {
   });
 });
 
+describe("a host rejecting a waiting guest", () => {
+  it("shows the rejection on setup and leaves the meeting until the guest joins again", async () => {
+    const setWaitingMessage = vi.fn();
+    const h = createHarness(async () => joinInfo, { setWaitingMessage });
+    await h.connect();
+    h.dispatch("joinRejected");
+    expect(h.setSetupNotice).toHaveBeenLastCalledWith({ kind: "rejected", message: JOIN_REJECTED_MESSAGE });
+    expect(h.setMeetError).toHaveBeenLastCalledWith(expect.objectContaining({ code: "JOIN_REJECTED" }));
+    expect(h.setConnectionState).toHaveBeenCalledWith("error");
+    expect(setWaitingMessage).toHaveBeenLastCalledWith(null);
+    expect(h.socket.disconnect).toHaveBeenCalled();
+    expect(h.refs.intentionalDisconnectRef.current).toBe(true);
+
+    void h.api.joinRoomById("test-room");
+    await vi.waitFor(() => expect(h.setSetupNotice).toHaveBeenLastCalledWith(null));
+    h.api.cleanup();
+  });
+
+  it("keeps the ended notice when a rejection arrives in the same batch after the meeting ended", async () => {
+    const h = createHarness();
+    await h.connect();
+    h.dispatch("roomEnded", { endedBy: "host#session" });
+    h.dispatch("joinRejected");
+    expect(h.setSetupNotice).toHaveBeenLastCalledWith({
+      kind: "ended",
+      message: "The host ended this meeting. You are no longer connected.",
+    });
+    expect(h.setMeetError).not.toHaveBeenCalledWith(expect.objectContaining({ code: "JOIN_REJECTED" }));
+  });
+});
+
 const createAudioStream = (id: string) => {
   const stop = vi.fn();
   const track = {
@@ -114,6 +149,27 @@ const createAudioStream = (id: string) => {
   } as unknown as MediaStream;
   return { stream, track, stop };
 };
+
+it("does not reacquire a muted microphone after prejoin skips warmup", async () => {
+  const requestMediaPermissions = vi.fn(async () => null);
+  const h = createHarness(async () => joinInfo, { requestMediaPermissions });
+  h.refs.prejoinMediaIntentRef.current = {
+    streamId: null,
+    trackIds: new Set(),
+    isCameraOn: false,
+    isMicOn: false,
+    skipMutedMicWarmup: true,
+  };
+  const join = h.api.joinRoomById("test-room");
+  try {
+    await vi.waitFor(() => expect(h.io).toHaveBeenCalledOnce());
+    expect(requestMediaPermissions).not.toHaveBeenCalled();
+  } finally {
+    h.dispatch("connect_error", new Error("The test connection closed"));
+    await join;
+    h.api.cleanup();
+  }
+});
 
 describe("media acquisition during shutdown", () => {
   it("releases a microphone granted after leaving without restoring meeting state", async () => {

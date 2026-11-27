@@ -1,5 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
+import UIKit
 
 struct ConclaveTileAction: Identifiable {
     let id: String
@@ -319,12 +320,105 @@ private struct PillWaveform: View {
 
     var body: some View {
         if state.isSpeaking {
-            Image(systemName: ConclaveSymbols.waveform)
-                .foregroundStyle(HostingTheme.coralFill)
-                .symbolEffect(.variableColor.iterative, options: .repeating, isActive: !reduceMotion)
+            SpeakingBars(animates: !reduceMotion)
+                .frame(width: SpeakingBarsView.width, height: SpeakingBarsView.height)
                 .transition(.opacity)
                 .accessibilityHidden(true)
         }
+    }
+}
+
+private struct SpeakingBars: UIViewRepresentable {
+    let animates: Bool
+
+    func makeUIView(context: Context) -> SpeakingBarsView { SpeakingBarsView() }
+
+    func updateUIView(_ view: SpeakingBarsView, context: Context) {
+        view.animates = animates
+        view.syncAnimation()
+    }
+
+    static func dismantleUIView(_ view: SpeakingBarsView, coordinator: ()) { view.stopAnimating() }
+}
+
+final class SpeakingBarsView: UIView {
+    static let barWidth: CGFloat = 2
+    static let gap: CGFloat = 2
+    static let height: CGFloat = 12
+    static let width: CGFloat = barWidth * 3 + gap * 2
+    private static let animationKey = "speaking"
+
+    private let bars: [CALayer] = [CALayer(), CALayer(), CALayer()]
+
+    var animates = true {
+        didSet { if animates != oldValue { syncAnimation() } }
+    }
+
+    init() {
+        super.init(frame: CGRect(x: 0, y: 0, width: Self.width, height: Self.height))
+        isUserInteractionEnabled = false
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(sceneBecameActive), name: UIApplication.didBecomeActiveNotification, object: nil
+        )
+        for bar in bars {
+            bar.backgroundColor = HostingTheme.coralUIColor.cgColor
+            bar.cornerRadius = Self.barWidth / 2
+            bar.anchorPoint = CGPoint(x: 0.5, y: 1)
+            layer.addSublayer(bar)
+        }
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override var intrinsicContentSize: CGSize { CGSize(width: Self.width, height: Self.height) }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for (index, bar) in bars.enumerated() {
+            bar.bounds = CGRect(x: 0, y: 0, width: Self.barWidth, height: bounds.height)
+            bar.position = CGPoint(x: CGFloat(index) * (Self.barWidth + Self.gap) + Self.barWidth / 2, y: bounds.height)
+        }
+        CATransaction.commit()
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        syncAnimation()
+    }
+
+    @objc private func sceneBecameActive() { syncAnimation() }
+
+    func stopAnimating() {
+        for bar in bars { bar.removeAnimation(forKey: Self.animationKey) }
+    }
+
+    func syncAnimation() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for (index, bar) in bars.enumerated() {
+            guard animates, window != nil else {
+                bar.removeAnimation(forKey: Self.animationKey)
+                bar.transform = CATransform3DMakeScale(1, animates ? 1 : 0.7, 1)
+                continue
+            }
+            bar.transform = CATransform3DIdentity
+            guard bar.animation(forKey: Self.animationKey) == nil else { continue }
+            let pulse = CABasicAnimation(keyPath: "transform.scale.y")
+            pulse.fromValue = 0.45
+            pulse.toValue = 1
+            pulse.duration = 0.39
+            pulse.autoreverses = true
+            pulse.repeatCount = .infinity
+            pulse.timingFunction = CAMediaTimingFunction(controlPoints: 0.4, 0, 0.2, 1)
+            pulse.beginTime = bar.convertTime(CACurrentMediaTime(), from: nil) + 0.12 * Double(index)
+            pulse.fillMode = .backwards
+            pulse.isRemovedOnCompletion = false
+            bar.add(pulse, forKey: Self.animationKey)
+        }
+        CATransaction.commit()
     }
 }
 

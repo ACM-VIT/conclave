@@ -2036,6 +2036,9 @@
     "Couldn’t change your name." : {
       "extractionState" : "manual"
     },
+    "Couldn’t confirm these names were added. Check the list before adding them again." : {
+      "extractionState" : "manual"
+    },
     "Couldn’t create the diagnostics file." : {
       "extractionState" : "manual"
     },
@@ -2530,6 +2533,9 @@
       "extractionState" : "manual"
     },
     "Force Opaque Controls" : {
+      "extractionState" : "manual"
+    },
+    "Force Test Crash" : {
       "extractionState" : "manual"
     },
     "Frame Rate" : {
@@ -5074,6 +5080,9 @@
     "Share Again" : {
       "extractionState" : "manual"
     },
+    "Share Crash Reports" : {
+      "extractionState" : "manual"
+    },
     "Share Device Audio" : {
       "extractionState" : "manual"
     },
@@ -6383,6 +6392,29 @@
                 "stringUnit" : {
                   "state" : "translated",
                   "value" : "%lld not on the wheel"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Wheel Waiting Names %lld" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "The wheel is full. %lld more name is waiting for a place."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "The wheel is full. %lld more names are waiting for a place."
                 }
               }
             }

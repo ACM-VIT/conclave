@@ -901,7 +901,7 @@ final class StageFixtureSession {
         self.state = state
         self.pattern = pattern
         self.forceScreenReader = forceScreenReader
-        let owner = MeetingShellPresenter()
+        let owner = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         shell = owner
         let stagePresenter = StagePresenter(shell: owner)
         stage = stagePresenter

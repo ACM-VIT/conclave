@@ -70,7 +70,7 @@ const cleanupDeadWorkerRooms = async (
     Logger.warn(
       `Closing room ${room.id} (${room.clientId}) after worker ${label} died`,
     );
-    forceCloseRoom(state, room.channelId);
+    forceCloseRoom(state, room);
   }
 
   if (io) {
@@ -86,13 +86,15 @@ const cleanupDeadWorkerRooms = async (
 
 export const initMediaSoup = async (
   state: SfuState,
-  getIo?: () => SocketIOServer | null,
+  getIo: () => SocketIOServer | null,
+  signal: AbortSignal,
 ): Promise<void> => {
   state.workers = (await createWorkers({
+    signal,
     onWorkerDied: async (worker, label) => {
       await cleanupDeadWorkerRooms(
         state,
-        getIo?.() ?? null,
+        getIo(),
         worker,
         label,
       );

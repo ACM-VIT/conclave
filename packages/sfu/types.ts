@@ -11,6 +11,7 @@ import type {
   DtlsParameters,
 } from "mediasoup/types";
 import type { Socket } from "socket.io";
+import type { JoinRoomAnswerFields } from "@conclave/meeting-core/join-room-answer";
 import type {
   ClientMediaCapabilities,
   WebcamCodecPolicy,
@@ -57,35 +58,15 @@ export interface JoinRoomData {
   displayName?: string;
   webinarInviteCode?: string;
   meetingInviteCode?: string;
+  /** An admission a host created with `admin:createAdmission`. */
+  admissionCode?: string;
   mediaCapabilities?: ClientMediaCapabilities;
 }
 
-export interface JoinRoomResponse {
-  roomId?: string;
+export interface JoinRoomResponse extends JoinRoomAnswerFields {
   rtpCapabilities: RtpCapabilities;
   existingProducers: ProducerInfo[];
-  activeSpeakerId?: string | null;
   displayNameSnapshot?: DisplayNameSnapshotEntry[];
-  status?: "waiting" | "joined";
-  hostUserId?: string | null;
-  hostUserIds?: string[];
-  isLocked?: boolean;
-  isTtsDisabled?: boolean;
-  isChatLocked?: boolean;
-  isDmEnabled?: boolean;
-  areImageAttachmentsEnabled?: boolean;
-  isReactionsDisabled?: boolean;
-  isParticipantUnmuteAllowed?: boolean;
-  isParticipantVideoAllowed?: boolean;
-  meetingRequiresInviteCode?: boolean;
-  webinarRole?: "attendee" | "participant" | "host";
-  isWebinarEnabled?: boolean;
-  webinarLocked?: boolean;
-  webinarRequiresInviteCode?: boolean;
-  webinarAttendeeCount?: number;
-  webinarMaxAttendees?: number;
-  webinarQaEnabled?: boolean;
-  webinarSpeakerUserId?: string | null;
   webcamCodecPolicy?: WebcamCodecPolicy;
 }
 
@@ -250,6 +231,8 @@ export interface ProducerInfo {
   type: "webcam" | "screen";
   paused?: boolean;
   roomId?: string;
+  /** Creation order: a later producer has a higher value. */
+  producerSeq?: number;
 }
 
 export interface DisplayNameSnapshotEntry {

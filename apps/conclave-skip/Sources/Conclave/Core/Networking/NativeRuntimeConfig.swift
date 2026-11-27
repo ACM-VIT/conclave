@@ -68,7 +68,8 @@ enum NativeRuntimeConfig {
             "CONCLAVE_NATIVE_ROUTES", "CONCLAVE_PREMEETING_FIXTURE", "SFU_JOIN_URL", "CONCLAVE_AUTH_BASE_URL",
             "CONCLAVE_HOSTING_PREVIEW", "CONCLAVE_SYSTEM_FIXTURE", "CONCLAVE_SYSTEM_FIXTURE_PROVIDER",
             "CONCLAVE_STAGE_FIXTURE", "CONCLAVE_STAGE_FIXTURE_PATTERN", "CONCLAVE_STAGE_FORCE_SCREEN_READER",
-            "CONCLAVE_PEOPLE_FIXTURE", "CONCLAVE_CHAT_FIXTURE", "CONCLAVE_TRANSCRIPT_FIXTURE", "CONCLAVE_SILENT_AUDIO"
+            "CONCLAVE_PEOPLE_FIXTURE", "CONCLAVE_CHAT_FIXTURE", "CONCLAVE_TRANSCRIPT_FIXTURE", "CONCLAVE_SILENT_AUDIO",
+            CrashReportingPolicy.projectKeyKey, CrashReportingPolicy.hostKey, CrashReportingPolicy.debugOptInKey,
         ]
         #if DEBUG && os(iOS) && targetEnvironment(simulator) && !SKIP
         return keys + [fakeCameraKey, fakeCameraClipKey, ignoreSystemDataSaverKey]

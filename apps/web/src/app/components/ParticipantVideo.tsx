@@ -1,7 +1,7 @@
 "use client";
 
 import { errorName } from "../lib/utils";
-import { Crop, Hand, Info, Maximize2, MicOff, Pin, PinOff } from "lucide-react";
+import { Crop, Hand, Info, Maximize2, Pin, PinOff } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPlaybackRecoveryScheduler } from "../lib/playback-recovery";
 import {
@@ -9,11 +9,11 @@ import {
   isRenderingParticipantScreenShare,
 } from "../lib/participant-media";
 import type { Participant } from "../lib/types";
-import { truncateDisplayName } from "../lib/utils";
 import { isVoiceAgentUserId } from "../lib/voice-agent";
 import ParticipantAudio from "./ParticipantAudio";
 import ParticipantConnectionOverlay from "./ParticipantConnectionOverlay";
 import GameTileOverlay from "./games/GameTileOverlay";
+import TileNameplate from "./TileNameplate";
 import VoiceAgentOrb from "./VoiceAgentOrb";
 import { Avatar } from "@conclave/ui-tokens/web";
 import { color } from "@conclave/ui-tokens";
@@ -94,18 +94,6 @@ function ParticipantVideo({
   const { dense, avatarSize, avatarLift } = computeTileChrome(tileSize, {
     maxAvatar: compact ? 48 : 80,
   });
-  const labelWidthClass = dense
-    ? "max-w-[82%]"
-    : compact
-      ? "max-w-[65%]"
-      : "max-w-[75%]";
-  const labelPillClass = dense
-    ? "bottom-1.5 left-1.5 gap-1 px-2 py-0.5 text-[10px]"
-    : `bottom-3 left-3 gap-2 px-3 py-1.5 ${compact ? "text-[10px]" : "text-xs"}`;
-  const displayLabel = truncateDisplayName(
-    displayName,
-    dense ? 16 : compact ? 12 : 18,
-  );
   const isAgent = isVoiceAgentUserId(participant.userId);
   const videoStream = getRenderableParticipantVideoStream(participant);
   const isRenderingScreenShare = isRenderingParticipantScreenShare(
@@ -290,26 +278,20 @@ function ParticipantVideo({
             audioStream={participant.audioStream ?? null}
           />
         </div>
-        <div
-          className={`absolute bg-black/70 border border-[#fafafa]/10 rounded-full flex items-center ${labelPillClass}`}
-        >
-          <span className="font-medium text-[#fafafa] truncate" title={displayName}>
-            {displayLabel}
-          </span>
-          <span
-            className="rounded-md px-1.5 py-px text-[9px] font-semibold tracking-wide"
-            style={{ backgroundColor: color.accent, color: "#fff" }}
-          >
-            AI
-          </span>
-          {isActiveSpeaker && (
-            <span className="acm-voice-activity" aria-label="Speaking">
-              <span />
-              <span />
-              <span />
+        <TileNameplate
+          name={displayName}
+          dense={dense}
+          isMuted={false}
+          isSpeaking={isActiveSpeaker}
+          badge={
+            <span
+              className="shrink-0 rounded-md px-1.5 py-px text-[9px] font-semibold tracking-wide"
+              style={{ backgroundColor: color.accent, color: "#fff" }}
+            >
+              AI
             </span>
-          )}
-        </div>
+          }
+        />
         <GameTileOverlay userId={participant.userId} compact={compact} />
       </div>
     );
@@ -435,28 +417,12 @@ function ParticipantVideo({
         </div>
       )}
       {!hideLabel && (
-        <div
-          className={`absolute bg-black/70 border border-[#fafafa]/10 rounded-full flex items-center ${labelWidthClass} ${labelPillClass}`}
-        >
-          <span
-            className="font-medium text-[#fafafa] truncate"
-            title={displayName}
-          >
-            {displayLabel}
-          </span>
-          {isActiveSpeaker && !participant.isMuted && (
-            <span className="acm-voice-activity" aria-label="Speaking">
-              <span />
-              <span />
-              <span />
-            </span>
-          )}
-          {participant.isMuted && (
-            <MicOff
-              className={`text-[#F95F4A] shrink-0 ${dense ? "w-2.5 h-2.5" : "w-3 h-3"}`}
-            />
-          )}
-        </div>
+        <TileNameplate
+          name={displayName}
+          dense={dense}
+          isMuted={participant.isMuted}
+          isSpeaking={isActiveSpeaker && !participant.isMuted}
+        />
       )}
       {onTogglePin && (
         <button
