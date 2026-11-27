@@ -410,6 +410,7 @@ export class CallRig {
   dropEveryOtherSenderCountAnswer = false;
   senderPackets = new Map<string, number>();
   senderCountQueries = 0;
+  omitSenderCountsFromAnswers = 0;
   identity: string | undefined;
   seatedAs: string | null = null;
   identityChanges: string[] = [];
@@ -750,6 +751,10 @@ export class CallRig {
         if (!request.success) return this.ack(ack, { error: "Invalid request" });
         const slow = this.slowSenderCountAnswers > 0;
         if (slow) this.slowSenderCountAnswers -= 1;
+        if (this.omitSenderCountsFromAnswers > 0) {
+          this.omitSenderCountsFromAnswers -= 1;
+          return this.ack(ack, { counts: {} }, slow ? 3_000 : 0);
+        }
         return this.ack(
           ack,
           {

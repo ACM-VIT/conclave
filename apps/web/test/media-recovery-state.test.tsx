@@ -100,6 +100,31 @@ describe("a rebuild that turns out not to be needed", () => {
     expect(blockedReports(rig)).toBe(0);
     expect(rig.health.producer).not.toBe("blocked");
   });
+
+  it("keeps the replacement send transport when online recovery was waiting for credentials", async () => {
+    const target = await startRig({ publish: true });
+    rig = target;
+    await target.join();
+    const first = target.send!;
+    target.refuseIceRestart = true;
+    target.route = "hold";
+    first.setState("disconnected");
+    window.dispatchEvent(new Event("online"));
+    expect(await waitFor(target, () => target.heldRoutes.length > 0, 5_000)).toBe(true);
+
+    await act(async () => {
+      first.setState("failed");
+      expect(await target.api.ensureProducerTransport()).toBe(true);
+    });
+    const replacement = target.send!;
+    expect(replacement).not.toBe(first);
+    target.route = "up";
+    target.releaseHeldRoutes("answer");
+    await target.advance(4_000);
+
+    expect(target.send!.id).toBe(replacement.id);
+    expect(replacement.closed).toBe(false);
+  });
 });
 
 describe("a rebuild held behind another direction's rebuild", () => {
@@ -151,6 +176,21 @@ describe("each direction's own watch", () => {
 });
 
 describe("a check after an ICE restart", () => {
+  it("does not take an omitted consumer count for a recovered screen share", async () => {
+    const target = await startRig({ remoteMedia: "screen" });
+    rig = target;
+    await target.join();
+    await target.advance(5_000);
+    const transport = target.recv!;
+    target.mediaFlows = false;
+    expect(await waitFor(target, () => transport.restartIceCalls > 0, 30_000)).toBe(true);
+    target.omitSenderCountsFromAnswers = 1;
+
+    expect(await waitFor(target, () => target.recv !== transport, 10_000)).toBe(true);
+    expect(target.omitSenderCountsFromAnswers).toBe(0);
+    expect(target.recv!.policy).toBe("relay");
+  });
+
   it.each([
     ["first", 0],
     ["second", 1],

@@ -49,6 +49,58 @@ const rebuiltWithoutTurn = async (fault: (target: CallRig) => void) => {
 };
 
 describe("a send path rebuilt while no TURN credentials were usable", () => {
+  it.each([
+    ["while the camera is awaiting republish", 1_000, ["audio"]],
+    ["after the camera republishes and still cannot deliver", 6_500, ["audio", "video"]],
+  ] as const)("moves onto the relay when credentials return %s", async (_when, delay, published) => {
+    const target = await startRig({ publish: true, camera: true, ttlSeconds: 30 });
+    rig = target;
+    await target.join();
+    await advanceTo(target, 12);
+    const first = target.send!;
+    target.provider = "down";
+    target.droppedSendKinds.add("video");
+    target.republishDelayMs.video = 6_000;
+
+    expect(await waitFor(target, () => target.send !== first, 45_000)).toBe(true);
+    const second = target.send!;
+    expect(second.policy).toBe("all");
+    expect(second.turnUsernames).toEqual([]);
+    await target.advance(delay);
+    expect(liveKinds(second)).toEqual(published);
+    expect(reachedSfu(second)).toBeGreaterThan(0);
+
+    target.provider = "up";
+
+    expect(await waitFor(target, () => target.send !== second, 30_000)).toBe(true);
+    expect(target.send!.policy).toBe("relay");
+    target.droppedSendKinds.clear();
+    expect(await waitFor(target, () => target.health.producer === "healthy", 20_000)).toBe(true);
+  });
+
+  it("keeps the replacement send transport when a relay move checks its predecessor", async () => {
+    const { target, second } = await rebuiltWithoutTurn((call) => {
+      call.directPathDropsSentRtp = true;
+    });
+    await target.advance(5_000);
+    target.provider = "up";
+    expect(
+      await waitFor(target, () => target.log.some((line) => line.includes("moving the producer transport")), 20_000),
+    ).toBe(true);
+
+    second.setState("failed");
+    expect(await target.api.ensureProducerTransport()).toBe(true);
+    await target.flush();
+    const replacement = target.send!;
+    expect(replacement).not.toBe(second);
+    expect(replacement.policy).toBe("relay");
+    await target.advance(3_000);
+
+    expect(target.send!.id).toBe(replacement.id);
+    expect(replacement.closed).toBe(false);
+    expect(sendTransports(target)).toHaveLength(3);
+  });
+
   it("moves onto the relay when credentials return, with every packet dropped while ICE and receiver reports pass", async () => {
     const { target, second } = await rebuiltWithoutTurn((call) => {
       call.directPathDropsSentRtp = true;

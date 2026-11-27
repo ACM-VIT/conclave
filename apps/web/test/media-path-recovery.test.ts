@@ -685,10 +685,9 @@ describe("verifying an ICE restart on a silent path", () => {
     });
 
   const notAsked: SenderPacketsReading = { asked: false };
-  const counted = (sent: number | null): SenderPacketsReading => ({
-    asked: true,
-    sent: sent === null ? null : { screen: sent },
-  });
+  const reply = (sent: Record<string, number> | null, ids = ["screen"]) =>
+    ({ asked: true, ids, sent }) as const;
+  const counted = (sent: number | null) => reply(sent === null ? null : { screen: sent });
 
   it("passes once media reaches the far end again", () => {
     expect(judgeIceRestart({ replaced: false, expectation: "expected", mediaReached: true })).toBe(
@@ -750,6 +749,12 @@ describe("verifying an ICE restart on a silent path", () => {
     ["a second count that never arrived", false, counted(4), counted(null), "unknown"],
     ["no counts at all", false, counted(null), counted(null), "unknown"],
     ["a share first checked after the restart", false, notAsked, counted(9), "unknown"],
+    ["a requested count omitted before the restart", false, reply({}), counted(0), "unknown"],
+    ["a requested count omitted after the restart", false, counted(0), reply({}), "unknown"],
+    ["two readable zero counts", false, counted(0), counted(0), "not-expected"],
+    ["one unchanged count and one omitted count", false, reply({ screen: 0, slides: 2 }, ["screen", "slides"]), reply({ screen: 0 }, ["screen", "slides"]), "unknown"],
+    ["one growing count and one omitted count", false, reply({ screen: 0, slides: 2 }, ["screen", "slides"]), reply({ screen: 1 }, ["screen", "slides"]), "expected"],
+    ["a newly watched consumer", false, counted(9), reply({ slides: 9 }, ["slides"]), "unknown"],
   ])("reads %s", (_name, expectsMedia, senderBefore, senderAfter, expectation) => {
     expect(expectationAfterIceRestart({ expectsMedia, senderBefore, senderAfter })).toBe(expectation);
   });
@@ -1123,6 +1128,17 @@ describe("telling a still screen share apart from one whose packets never arrive
         { sent: { s: 75 }, received: false },
       ],
       [false, false, false, false],
+    ],
+    [
+      "a partial answer preserves each omitted consumer's last readable count",
+      [
+        { sent: { s: 0, t: 7 }, received: false },
+        { sent: { t: 7 }, received: false },
+        { sent: { s: 1 }, received: false },
+        { sent: {}, received: false },
+        { sent: { t: 8 }, received: false },
+      ],
+      [false, false, false, false, true],
     ],
     [
       "a replaced consumer starts from its own first count",
@@ -1643,7 +1659,7 @@ describe("judging every producer over a short window", () => {
     ["a failing camera that sent nothing", quietCamera, ["camera"], false],
     ["a failing camera that reached the SFU again", {}, ["camera"], true],
     ["an SFU that cannot count, with newer reports", { sfuReports: false, sfuStart: null, sfuEnd: null }, [], true],
-    ["a failing camera that is no longer sent, next to a microphone that arrives", { producers: [micProducer] }, ["camera"], true],
+    ["a failing camera awaiting publish, next to a microphone that arrives", { producers: [micProducer] }, ["camera"], false],
   ])("%s", (_name, over, knownFailing, carried) => {
     expect(pathCarriesWhatIsSent(judge(over), knownFailing)).toBe(carried);
   });
@@ -1875,6 +1891,7 @@ describe("the one proof that a path carries what is sent", () => {
       ["nothing is published on it", { producers: [], sfu: {} }, false],
       ["a camera that never sent sits next to a counted microphone", { camera: [0, null], sfu: { mic: 480, camera: 0 } }, true],
       ["that camera is known to be failing", { camera: [0, null], sfu: { mic: 480, camera: 0 }, knownFailing: ["camera"] }, false],
+      ["a failing camera awaiting publish does not count as carried", { producers: [micProducer], sfu: { mic: 480 }, knownFailing: ["camera"] }, false],
       ["a camera known to be failing was counted on this transport", { knownFailing: ["camera"] }, true],
       ["an SFU that cannot count sent reports about every producer", { sfu: null, sfuReports: false }, true],
       ["an SFU that cannot count never reported on the camera", { camera: [3_000, null], sfu: null, sfuReports: false }, false],
@@ -1912,6 +1929,7 @@ describe("the one proof that a path carries what is sent", () => {
       ["a still screen share sent nothing and no report came", { sent: { screen: "quiet" } }, { showsLife: false }, "fails"],
       ["a still screen share sent nothing on a transport that never carried media", { sent: { screen: "quiet" } }, { carriedMedia: false }, "fails"],
       ["the quiet stream is known to be failing", { sent: { screen: "quiet" } }, { knownFailing: ["screen"] }, "fails"],
+      ["the failing camera has not published yet", { sent: { mic: "delivered" } }, { knownFailing: ["camera"] }, "fails"],
       ["a stream was sent and not counted", { sent: { mic: "delivered", camera: "undelivered" } }, {}, "fails"],
       ["a count reply is missing", { sent: { mic: "unconfirmed" } }, {}, "fails"],
       ["bytes arrived on a receive path", { received: true }, { showsLife: false, carriedMedia: false }, "carries"],
