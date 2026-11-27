@@ -218,31 +218,50 @@ const fencedSfu = async ({ instanceId = "sfu-a", forgetHold = false, reportUntil
 };
 
 test(
-  "a backup taken while the SFU writes restores every committed row",
+  "a backup of a live SFU restores exactly the rows committed at its write fence",
   { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
     let db;
+    let insert;
     let writer;
+    let written = 0;
+    let atFence;
+    let fenced = false;
+    const writeMeeting = () => {
+      insert.run(`m${written}`, `Meeting ${written}`);
+      written += 1;
+    };
+    const sfu = await fencedSfu({
+      onHold: () => {
+        writeMeeting();
+        atFence = written;
+        fenced = true;
+      },
+      onRelease: () => {
+        fenced = false;
+        writeMeeting();
+      },
+    });
     try {
-      const { state, local, backup, latestArchive, restore } = await setUp(root);
-
-      // The SFU's own settings: WAL mode, and a writer that keeps going while
-      // the backup runs.
+      const { state, local, setDocker, backup, latestArchive, restore } = await setUp(root, [
+        `CONCLAVE_SFU_HEALTH_URLS="${sfu.health}"`,
+      ]);
+      await setDocker([sfu.container(state)]);
       db = new DatabaseSync(path.join(state, "conclave.sqlite"));
       db.exec("PRAGMA journal_mode = WAL");
       db.exec("CREATE TABLE scheduled_meetings (id TEXT PRIMARY KEY, title TEXT)");
-      const insert = db.prepare("INSERT INTO scheduled_meetings VALUES (?, ?)");
-      for (let i = 0; i < 500; i += 1) insert.run(`m${i}`, `Meeting ${i}`);
-      let written = 500;
-      writer = setInterval(() => {
-        insert.run(`m${written}`, `Meeting ${written}`);
-        written += 1;
-      }, 2);
+      insert = db.prepare("INSERT INTO scheduled_meetings VALUES (?, ?)");
+      for (let i = 0; i < 500; i += 1) writeMeeting();
+      writer = setInterval(() => { if (!fenced) writeMeeting(); }, 2);
       await writeFile(path.join(state, "booking-links.json"), '{"links":["intro-call"]}');
 
       await backup("--local-only");
       clearInterval(writer);
+      assert.ok(atFence > 500 && written > atFence);
+      assert.equal(fenced, false);
+      await sfu.close();
+      await setDocker([{ ...sfu.container(state), status: "exited" }]);
 
       const archive = await latestArchive();
       // This test process holds the database open, as a running SFU does,
@@ -265,7 +284,7 @@ test(
       restored.close();
       const backedUp = Number(dryRun.stdout.match(/scheduled_meetings=(\d+)/)[1]);
       assert.equal(rows, backedUp, "restore must return exactly the rows the backup captured");
-      assert.ok(rows >= 500 && rows <= written, `restored ${rows} rows, wrote ${written}`);
+      assert.equal(rows, atFence, "restore must include writes drained before the fence, but none after release");
       t.diagnostic(`backed up ${rows} rows while the writer reached ${written}`);
       assert.equal(await readFile(path.join(state, "booking-links.json"), "utf8"), '{"links":["intro-call"]}');
 
@@ -276,6 +295,7 @@ test(
     } finally {
       clearInterval(writer);
       if (db?.isOpen) db.close();
+      await sfu.close();
       await rm(root, { recursive: true, force: true });
     }
   },
