@@ -327,6 +327,7 @@ export class Harness {
        * the snapshot is read in the middle of whatever is pending.
        */
       quiet?: boolean;
+      ackTimeoutMs?: number;
     } = {},
   ): Promise<Tab<C>> {
     this.sequence += 1;
@@ -367,7 +368,7 @@ export class Harness {
     // As the SFU does: no runtime, no authority handler on the socket.
     if (this.state.appsAuthority) registerAuthorityHandlers(context);
 
-    const client = new AuthorityClient({ socket: pair.client });
+    const client = new AuthorityClient({ socket: pair.client, ackTimeoutMs: options.ackTimeoutMs });
     const session = client.open(contract);
     tab = new Tab(who, seat, context, pair.client, client, session, this);
     this.tabs.push(tab);

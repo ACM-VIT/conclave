@@ -263,32 +263,39 @@ describe("authority transport on real sockets", () => {
     expect(answer(result)).toEqual({ ok: true, value: null });
   });
 
-  it("does not carry an unanswered action into another room", async () => {
+  it.each([
+    { occupantStays: false, revoke: "closed" },
+    { occupantStays: true, revoke: "forbidden" },
+  ])("does not carry an unanswered action into another room after a $revoke revoke", async ({ occupantStays, revoke }) => {
     const stack = await start([probeAuthority]);
     addRoom(stack.state, "elsewhere").allowUser(asha.email);
-    const host = await open(stack, asha, probeContract, { ackTimeoutMs: 150 });
+    const host = await open(stack, asha, probeContract);
+    const witness = occupantStays ? await open(stack, priya, probeContract) : host;
 
-    // The first room runs the action. Its answer never arrives.
     const emit = host.socket.emit.bind(host.socket);
-    let lost = 0;
+    let sends = 0;
     host.socket.emit = ((event: string, ...args: unknown[]) => {
-      if (event === AUTHORITY_EVENTS.act && lost === 0) {
-        lost += 1;
-        return emit(event, args[0], () => {});
-      }
+      if (event === AUTHORITY_EVENTS.act && ++sends === 1) return emit(event, args[0], () => {});
       return emit(event, ...args);
     }) as ClientSocket["emit"];
     const pending = host.session.act("put", { id: "note", text: "for the first room" });
-    await until(() => lost === 1, "the action left");
+    await until(
+      () => field(row(witness, "notes", "note"), "text") === "for the first room",
+      "the first room committed the action",
+    );
 
-    // The same socket moves to another room before the retry goes out.
-    await ask(host.socket, "joinRoom", { roomId: "elsewhere", sessionId: asha.session });
+    const joined = await ask<{ error?: string; status?: string }>(host.socket, "joinRoom", {
+      roomId: "elsewhere", sessionId: asha.session,
+    });
+    expect(joined.error).toBeUndefined();
+    expect(joined.status).not.toBe("waiting");
     host.client.joined();
     const result = await pending;
     await until(() => host.session.getState().kind === "ready", "the other room's view");
-    await wait(150);
 
+    expect(host.frames).toContainEqual(expect.objectContaining({ kind: "revoke", reason: revoke }));
     expect(result).toEqual({ ok: false, code: "unknown-outcome" });
+    expect(sends).toBe(1);
     expect(rows(host, "notes")).toEqual([]);
   });
 
@@ -372,7 +379,7 @@ describe("authority transport on real sockets", () => {
     const authority = getRoomAuthority(stack.state, stack.room)!;
     const framesAtClose = host.frames.length;
 
-    forceCloseRoom(stack.state, stack.room.channelId);
+    forceCloseRoom(stack.state, stack.room);
     await wait(400);
     const afterClose = await ask<AuthorityResult<Json>>(host.socket, AUTHORITY_EVENTS.act, {
       roomEpoch: authority.roomEpoch,

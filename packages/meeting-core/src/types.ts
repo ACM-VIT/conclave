@@ -8,6 +8,7 @@ import type {
   RtpParameters,
   Transport,
 } from "mediasoup-client/types";
+import type { JoinRoomAnswerFields } from "./join-room-answer";
 
 export type ConnectionState =
   | "disconnected"
@@ -381,32 +382,10 @@ export interface WebcamCodecPolicy {
   epoch: number;
 }
 
-export interface JoinRoomResponse {
-  roomId?: string;
+export interface JoinRoomResponse extends JoinRoomAnswerFields {
   rtpCapabilities: RtpCapabilities;
   existingProducers: ProducerInfo[];
-  activeSpeakerId?: string | null;
   displayNameSnapshot?: DisplayNameSnapshotEntry[];
-  status?: "waiting" | "joined";
-  hostUserId?: string | null;
-  hostUserIds?: string[];
-  isLocked?: boolean;
-  isTtsDisabled?: boolean;
-  isChatLocked?: boolean;
-  isDmEnabled?: boolean;
-  areImageAttachmentsEnabled?: boolean;
-  isReactionsDisabled?: boolean;
-  isParticipantUnmuteAllowed?: boolean;
-  isParticipantVideoAllowed?: boolean;
-  meetingRequiresInviteCode?: boolean;
-  webinarRole?: "attendee" | "participant" | "host";
-  isWebinarEnabled?: boolean;
-  webinarLocked?: boolean;
-  webinarRequiresInviteCode?: boolean;
-  webinarAttendeeCount?: number;
-  webinarMaxAttendees?: number;
-  webinarQaEnabled?: boolean;
-  webinarSpeakerUserId?: string | null;
   webcamCodecPolicy?: WebcamCodecPolicy;
 }
 
@@ -625,6 +604,8 @@ export interface MeetError {
     | "CONNECTION_FAILED"
     | "MEDIA_ERROR"
     | "TRANSPORT_ERROR"
+    /** Signaling works but this network lets no audio or video through. */
+    | "NETWORK_BLOCKED"
     | "JOIN_REJECTED"
     | "UNKNOWN";
   message: string;

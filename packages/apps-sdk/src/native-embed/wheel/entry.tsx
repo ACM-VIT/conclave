@@ -14,7 +14,6 @@ const boot = (): void => {
   if (!container) return;
   const session = new NativeEmbedSession(transport, scope, createWheelDoc());
   createRoot(container).render(<NativeWheelEmbed session={session} />);
-  session.start();
 };
 
 boot();

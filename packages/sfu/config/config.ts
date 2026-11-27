@@ -120,8 +120,16 @@ export const resolveWebRtcTransportProtocolPolicy = (
   });
 };
 
+function paddedSfuSecretMessage(schedulingTokenSecret: string | undefined): string {
+  return schedulingTokenSecret
+    ? "SFU_SECRET has leading or trailing whitespace. Remove it; SCHEDULING_TOKEN_SECRET keeps saved calendar tokens readable."
+    : "SFU_SECRET has leading or trailing whitespace. Saved calendar tokens are encrypted with the padded value, so first set SCHEDULING_TOKEN_SECRET to the exact current SFU_SECRET, padding included, before you trim SFU_SECRET.";
+}
+
 function resolveSfuSecret(): string {
-  const configured = process.env.SFU_SECRET?.trim();
+  const raw = process.env.SFU_SECRET;
+  const configured = raw?.trim();
+  if (raw && raw !== configured) throw new Error(paddedSfuSecretMessage(process.env.SCHEDULING_TOKEN_SECRET));
   if (configured && configured !== "development-secret") {
     return configured;
   }
@@ -366,6 +374,7 @@ export const config = {
     max: 65535,
   }),
   instanceId: process.env.SFU_INSTANCE_ID || `sfu-${process.pid}`,
+  deployId: process.env.SFU_DEPLOY_ID?.trim() || null,
   instancePublicUrl,
   region: resolveConfiguredSfuRegion(process.env.SFU_REGION),
   version: process.env.SFU_VERSION || "dev",

@@ -20,13 +20,6 @@ export interface GridLayoutOptions {
   maxTilesPerPage?: number;
   /** Target tile aspect ratio = width / height (16:9 = 1.7778 landscape). */
   targetAspect?: number;
-  /**
-   * Width / height of each tile on the page, in order. When any tile differs
-   * from `targetAspect`, the page packs into justified rows: every tile shares
-   * one height, and rows widen their tiles up to 1.25x so they line up with the
-   * widest row. Missing or invalid entries count as
-   * `targetAspect`.
-   */
   tileAspects?: readonly number[];
 }
 
@@ -274,28 +267,6 @@ const ROW_MISS_TOLERANCE = 8;
 // width.
 const ROW_EASE_RATE = 3;
 
-/**
- * Resize each row's tiles so the rows share one width and the grid's edges
- * line up, moving smoothly as the container resizes.
- *
- * Every width here is unrounded, `height * aspect` and its 1.25x caps, so it
- * moves in proportion to the tile height and the ease never multiplies a
- * pixel that rounding added or took away. Only the final widths go to whole
- * pixels, and rows that met share one width inside all their whole-pixel caps.
- *
- * The shared width minimises a convex cost: 1 per px from the full rows'
- * preferred width (nearest the widest row, portrait tiles held at 4:5), 4 per
- * px outside each shorter row's legal range, and, outweighing all of those,
- * the largest miss among the full rows, so full rows that can't quite meet
- * share the miss. Every slope is odd, so the minimum is one point that moves
- * continuously with the rows. It never falls below the full rows' own width,
- * so a shorter row can widen them, and take phones past 4:5, but never narrow
- * them.
- *
- * A row that can't reach the shared width takes its nearest legal width.
- * Past the tolerance, it eases back to its own width, so a lone last tile
- * centres at its own width.
- */
 const alignRows = (rowAspects: number[][], height: number, gap: number, cols: number) => {
   // A lone row has nothing to line up with, so its tiles keep their own
   // whole-pixel widths, exactly as base lays them out.

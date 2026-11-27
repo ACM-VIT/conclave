@@ -44,6 +44,7 @@ export function describeEnterError(
         canRetry: true,
       };
     case "TRANSPORT_ERROR":
+    case "NETWORK_BLOCKED":
       return {
         title: `Couldn't ${verb} the meeting`,
         detail:

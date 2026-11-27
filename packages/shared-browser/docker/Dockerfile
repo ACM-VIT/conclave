@@ -1,5 +1,7 @@
 FROM debian:bookworm-slim
 
+LABEL org.conclave.browser.vnc-auth="per-session-password"
+
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \

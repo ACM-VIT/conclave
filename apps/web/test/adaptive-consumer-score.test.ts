@@ -3,6 +3,7 @@ import {
   advanceConsumerScoreAdaptation,
   getConsumerScoreSample,
   getEffectiveConsumerReceiveQuality,
+  readProducerScore,
 } from "../src/app/lib/adaptive-consumer-score";
 
 describe("getConsumerScoreSample", () => {
@@ -270,5 +271,21 @@ describe("getEffectiveConsumerReceiveQuality", () => {
     expect(getEffectiveConsumerReceiveQuality("unknown", "unknown")).toBe(
       "good",
     );
+  });
+});
+
+describe("reading a sender's score", () => {
+  it("takes the best encoding, so one live layer means the sender is sending", () => {
+    expect(readProducerScore({ score: 10, producerScore: 0, producerScores: [0, 7, 0] })).toBe(7);
+  });
+
+  it("reads zero when every encoding is dead", () => {
+    expect(readProducerScore({ score: 10, producerScore: 0, producerScores: [0, 0, 0] })).toBe(0);
+  });
+
+  it("falls back to the aggregate, and to nothing for a malformed score", () => {
+    expect(readProducerScore({ producerScore: 6 })).toBe(6);
+    expect(readProducerScore("10")).toBeNull();
+    expect(readProducerScore({ producerScores: ["x"] })).toBeNull();
   });
 });

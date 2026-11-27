@@ -14,7 +14,6 @@ const boot = (): void => {
   if (!container) return;
   const session = new NativeEmbedSession(transport, scope, createWhiteboardDoc());
   createRoot(container).render(<NativeWhiteboardEmbed session={session} />);
-  session.start();
 };
 
 boot();

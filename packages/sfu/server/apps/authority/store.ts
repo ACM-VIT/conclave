@@ -34,6 +34,16 @@ export type TransactionOutcome<R> =
   | { ok: false; kind: "capacity"; message: string }
   | { ok: false; kind: "fault"; error: unknown };
 
+export type StagedTransaction<R> =
+  | {
+      ok: true;
+      value: R;
+      written(): Array<readonly [string, TableKey, Row | undefined]>;
+      fresh(): boolean;
+      commit(): boolean;
+    }
+  | Exclude<TransactionOutcome<R>, { ok: true }>;
+
 /**
  * How many rows the store handles in bulk for the cost of one row a handler
  * touches itself. A bulk row is cheap, but not free.
@@ -140,6 +150,7 @@ export class AuthorityStore {
    * from them again, and its viewers are told later.
    */
   private readonly cleared = new Map<string, TableKey[]>();
+  private commits = 0;
 
   constructor(
     private readonly definition: RuntimeDefinition,
@@ -222,18 +233,17 @@ export class AuthorityStore {
   }
 
   transact<R>(run: (tx: RuntimeTransaction) => R): TransactionOutcome<R> {
-    return this.execute(run, true);
+    const staged = this.stage(run);
+    return staged.ok ? { ok: true, value: staged.value, changed: staged.commit() } : staged;
   }
 
   /** Runs a read against the committed rows. Nothing it stages is kept. */
   read<R>(run: (db: RuntimeRead) => R): TransactionOutcome<R> {
-    return this.execute(run, false);
+    const staged = this.stage(run);
+    return staged.ok ? { ok: true, value: staged.value, changed: false } : staged;
   }
 
-  private execute<R>(
-    run: (tx: RuntimeTransaction) => R,
-    commit: boolean,
-  ): TransactionOutcome<R> {
+  stage<R>(run: (tx: RuntimeTransaction) => R): StagedTransaction<R> {
     const draft = new Draft(this, this.definition, this.limits);
     let value: R;
     try {
@@ -252,10 +262,26 @@ export class AuthorityStore {
     // A handler that caught the budget error and returned all the same did
     // not get the work it asked for. Nothing it staged is kept.
     if (draft.overBudget) return { ok: false, kind: "fault", error: draft.overBudget };
-    return { ok: true, value, changed: commit ? this.commit(draft) : false };
+    const stagedAt = this.commits;
+    return {
+      ok: true,
+      value,
+      written: () =>
+        [...draft.writes].flatMap(([table, writes]) =>
+          [...writes].map(([key, staged]) => [table, key, staged === DELETED ? undefined : staged] as const),
+        ),
+      fresh: () => this.commits === stagedAt,
+      commit: () => {
+        if (this.commits !== stagedAt) {
+          throw new Error("A staged transaction must commit before any other transaction does");
+        }
+        return this.commit(draft);
+      },
+    };
   }
 
   private commit(draft: Draft): boolean {
+    this.commits += 1;
     let changed = false;
     // Clears first: what a handler wrote under a prefix after clearing it stays.
     for (const [tableName, prefixes] of draft.clears) {
