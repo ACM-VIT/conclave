@@ -585,15 +585,47 @@ describe("a host whose profile is stored under a legacy client of the deployment
     const manual = await host(sfu, "POST", "/scheduled-meetings", { title: "Standup", scheduledStartAt: startAt, scheduledEndAt: startAt + HALF_HOUR }, acme);
     expect(field<{ clientId: string }>(manual, "scheduledMeeting").clientId).toBe("acme");
 
-    const slots = field<Array<{ startAt: number }>>(
-      await sfu.call("GET", `/scheduling/public/${username}/intro/slots?from=${startAt - DAY_MS}&to=${startAt + DAY_MS}`, undefined, acme),
-      "slots",
-    );
-    expect(slots.length).toBeGreaterThan(0);
-    expect(slots.some((slot) => slot.startAt === startAt)).toBe(false);
-    const booked = await sfu.call("POST", `/scheduling/public/${username}/intro/book`, { startAt, attendeeName: "Guest", attendeeEmail: "guest@example.test" }, acme);
-    expect(booked.status).toBe(409);
+    for (const client of ["acme", "conclave"]) {
+      const headers = { "x-sfu-client": client };
+      const slots = field<Array<{ startAt: number; endAt: number }>>(
+        await sfu.call("GET", `/scheduling/public/${username}/intro/slots?from=${startAt - DAY_MS}&to=${startAt + DAY_MS}`, undefined, headers),
+        "slots",
+      );
+      expect(slots.length).toBeGreaterThan(0);
+      expect(Object.keys(slots[0]).sort()).toEqual(["endAt", "label", "startAt"]);
+      expect(slots.some((slot) => slot.startAt === startAt)).toBe(false);
+      const booked = await sfu.call("POST", `/scheduling/public/${username}/intro/book`, { startAt, attendeeName: "Guest", attendeeEmail: "guest@example.test" }, headers);
+      expect(booked.status).toBe(409);
+      expect(booked.body).toEqual({ error: "That time is no longer available." });
+    }
     expect(await bookings(sfu)).toEqual([]);
+  });
+
+  it("rechecks the host's conflict in the commit after another SFU adds a meeting", async () => {
+    const legacy = await start("A");
+    const { username } = await setUpHost(legacy);
+    expect((await connectCalendar(legacy)).status).toBe(200);
+    await stop(legacy);
+    vi.stubEnv("SFU_CLIENT_ID", "acme");
+    const bookingSfu = await start("B");
+    const meetingSfu = await start("C");
+    const startAt = slotAfter(2 * DAY_MS);
+
+    gates.parking.add("freebusy");
+    const pending = book(bookingSfu, username, startAt);
+    try {
+      await waitFor(() => gates.parked.length === 1, "the booking to finish reading internal availability");
+      const meeting = await host(meetingSfu, "POST", "/scheduled-meetings", {
+        title: "Standup", scheduledStartAt: startAt, scheduledEndAt: startAt + HALF_HOUR,
+      }, { "x-sfu-client": "acme" });
+      expect(meeting.status).toBe(201);
+    } finally {
+      gates.drain();
+    }
+    expect(await pending).toEqual({ status: 409, body: { error: "That time is no longer available." } });
+    expect(await bookings(bookingSfu)).toEqual([]);
+    expect(google.createAttempts).toBe(0);
+    expect(email.sent).toEqual([]);
   });
 
   it("has its webinars served as the deployment's client, by link code, by room and in the list, with nothing moved", async () => {
@@ -655,7 +687,7 @@ describe("a host whose profile is stored under a legacy client of the deployment
     expect(direct.body.scheduledWebinar).toMatchObject({ id: deployment.id, clientId: "acme" });
   });
 
-  it("stays free during another host's meeting in the deployment's client", async () => {
+  it("stays free for a different host or an unrelated namespace", async () => {
     const legacy = await start("A");
     const { username } = await setUpHost(legacy);
     await stop(legacy);
@@ -665,8 +697,16 @@ describe("a host whose profile is stored under a legacy client of the deployment
     const startAt = slotAfter(2 * DAY_MS);
     const other = { "x-user-id": "other-user", "x-user-email": "other@example.test", "x-user-name": "Other", ...acme };
     expect((await sfu.call("POST", "/scheduled-meetings", { title: "Theirs", scheduledStartAt: startAt, scheduledEndAt: startAt + HALF_HOUR }, other)).status).toBe(201);
+    expect((await host(sfu, "POST", "/scheduled-meetings", {
+      title: "Separate tenant", scheduledStartAt: startAt, scheduledEndAt: startAt + HALF_HOUR,
+    }, { "x-sfu-client": "isolated-fixture" })).status).toBe(201);
 
-    const booked = await sfu.call("POST", `/scheduling/public/${username}/intro/book`, { startAt, attendeeName: "Guest", attendeeEmail: "guest@example.test" }, acme);
+    const slots = field<Array<{ startAt: number }>>(
+      await sfu.call("GET", `/scheduling/public/${username}/intro/slots?from=${startAt}&to=${startAt + HALF_HOUR}`),
+      "slots",
+    );
+    expect(slots.map((slot) => slot.startAt)).toEqual([startAt]);
+    const booked = await book(sfu, username, startAt);
     expect(booked.status).toBe(201);
   });
 });

@@ -1,8 +1,10 @@
 import { act, createElement, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { vi } from "vitest";
+import { useCallQualityMetrics } from "../src/app/hooks/useCallQualityMetrics";
 import { useMeetRefs } from "../src/app/hooks/useMeetRefs";
 import { useMeetSocket } from "../src/app/hooks/useMeetSocket";
+import type { ConnectionState } from "../src/app/lib/types";
 import { requestJoinInfo } from "../src/app/lib/join-info-request";
 import { readJoinTokenUserKey } from "../src/app/lib/join-token-identity";
 import { ASSUMED_RELAY_LIFETIME_MS } from "../src/app/lib/relay-credentials";
@@ -356,6 +358,7 @@ export type RigOptions = {
   relayConnectMs?: number;
   remoteProducers?: number;
   remoteMedia?: "mic" | "screen";
+  trackCallQuality?: boolean;
 };
 
 type RemoteProducer = {
@@ -433,7 +436,7 @@ export class CallRig {
   private nextId = 1;
   private remoteProducers: RemoteProducer[];
 
-  constructor(options: RigOptions = {}) {
+  constructor(private options: RigOptions = {}) {
     this.publish = options.publish ?? false;
     this.camera = options.camera ?? false;
     this.identity = options.identity;
@@ -1079,10 +1082,28 @@ export class CallRig {
             : undefined,
       has: (target, key) => key in target,
     }) as unknown as Options;
+    function TrackCallQuality({ connectionState }: { connectionState: ConnectionState }) {
+      const { refs, api } = rig;
+      useCallQualityMetrics({
+        connectionState,
+        meetError: null,
+        reconnectRecoveryStatus: api.reconnectRecoveryStatus,
+        reconnectInFlight: api.reconnectInFlight,
+        admittedAt: api.admittedAt,
+        participantCount: 2,
+        joinMode: "meeting",
+        consumerTransportRef: refs.consumerTransportRef,
+        cameraProducerRef: refs.videoProducerRef,
+        videoQualityRef: refs.videoQualityRef,
+      });
+      return null;
+    }
     function Rig() {
       const [cameraOff, setCameraOff] = useState(!rig.camera);
+      const [connectionState, setConnectionState] = useState<ConnectionState>("idle");
       rig.setCameraOff = setCameraOff;
       supplied.isCameraOff = cameraOff;
+      if (rig.options.trackCallQuality) supplied.setConnectionState = setConnectionState;
       const refs = useMeetRefs();
       useState(() => refs.deviceIntents.dispatch({
         type: "set", audio: rig.publish, video: rig.publish && rig.camera,
@@ -1090,7 +1111,7 @@ export class CallRig {
       supplied.refs = refs;
       rig.refs = refs;
       rig.api = useMeetSocket(options);
-      return null;
+      return rig.options.trackCallQuality ? createElement(TrackCallQuality, { connectionState }) : null;
     }
     const container = document.createElement("div");
     this.root = createRoot(container);
@@ -1106,8 +1127,8 @@ export class CallRig {
       void this.api.joinRoomById(ROOM).then(() => {
         joined = true;
       });
-      await vi.advanceTimersByTimeAsync(1_000);
     });
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
     if (!joined) throw new Error(`join did not finish: ${this.log.join(" | ")}`);
     await this.advance(3_000);
   }

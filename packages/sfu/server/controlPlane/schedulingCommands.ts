@@ -160,7 +160,7 @@ export const hostBookings =
   };
 
 export const hostBusyIntervals =
-  (profileId: string, from: number, to: number, clientId: string): Query<BusyInterval[]> =>
+  (profileId: string, from: number, to: number): Query<BusyInterval[]> =>
   (view) => {
     const profile = view.get("profile", profileId);
     if (!profile) return [];
@@ -170,7 +170,6 @@ export const hostBusyIntervals =
       profile.value,
       from,
       to,
-      clientId,
     );
   };
 
@@ -383,7 +382,6 @@ export const bookSlot =
     endAt: number;
     request: CreateScheduledMeetingRequest;
     options: CreateScheduledMeetingOptions;
-    clientId?: string;
     calendarEvent: { appOrigin: string; timeZone: string; claimedForMs: number };
   }): Command<BookedSlot> =>
   (tx) => {
@@ -414,7 +412,6 @@ export const bookSlot =
       profile.value,
       blocked.startAt,
       blocked.endAt,
-      input.clientId,
     );
     if (busy.length > 0) return fail("conflict", SLOT_TAKEN);
     const meeting = buildScheduledMeeting(input.request, input.options, {
