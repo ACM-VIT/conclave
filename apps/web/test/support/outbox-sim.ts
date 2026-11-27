@@ -1,4 +1,5 @@
 import * as currentOutbox from "../../src/app/lib/telemetry-outbox";
+import type { BatchStore } from "../../src/app/lib/telemetry-outbox";
 
 type Reply = { status: number; retryAfter: string | null; rejected?: number[] };
 type Outcome = { status: number | null; retryAfter: string | null; rejected?: number[] };
@@ -11,7 +12,7 @@ type OutboxLike = {
 
 export type OutboxModule = {
   createOutbox: (deps: never) => OutboxLike;
-  createBatchStore: (storage: () => Storage) => unknown;
+  createBatchStore: (storage: () => Storage) => BatchStore;
 };
 
 export type Violation = { at: number; kind: string; detail: string };
@@ -358,18 +359,9 @@ export async function simulate(
       return value;
     },
     setItem: (key: string, value: string) => {
-      const markedKey = key.startsWith(MARK_PREFIX) ? (idToKey.get(key.slice(MARK_PREFIX.length).split(":")[0]) ?? null) : null;
-      const marked =
-        markedKey === null
-          ? []
-          : learned.filter(
-              (item) => item.tab === tab && item.key === markedKey && item.at === clock && item.state !== "carried" && item.state !== "lost",
-            );
       if (refuseNext > 0 || profile.noLocks || clock < refusingUntil || rng() < profile.refuseRate) {
         if (refuseNext > 0) refuseNext -= 1;
         refusedWrites += 1;
-        if (markedKey !== null) refusedMarks += 1;
-        for (const item of marked) item.state = "lost";
         if (closingTab === tab) {
           closeFailed = true;
           try {
@@ -661,6 +653,7 @@ export async function simulate(
 
   const openTab = () => {
     const tab: Tab = { id: tabs.length + 1, open: true, hidden: false, outbox: undefined as unknown as OutboxLike, throttledFrom: null };
+    const store = outboxModule.createBatchStore(() => storageFor(tab));
     const deps = {
       token: PROJECT,
       now: () => clock,
@@ -671,7 +664,20 @@ export async function simulate(
       post: network(tab),
       beacon: beaconFor(tab),
       newId: () => `sim-${seed}-${++ids}`,
-      store: outboxModule.createBatchStore(() => storageFor(tab)),
+      store: {
+        ...store,
+        mark: (...args: Parameters<BatchStore["mark"]>) => {
+          if (store.mark(...args)) return true;
+          const key = idToKey.get(args[0]);
+          if (key !== undefined) {
+            refusedMarks += 1;
+            for (const item of pendingLearned) {
+              if (item.tab === tab && item.key === key && item.at === clock && item.state === "pending") item.state = "lost";
+            }
+          }
+          return false;
+        },
+      },
       lock: (granted: () => Promise<void>) => {
         if (!profile.noLocks && (rejectLocks > 0 || (profile.lockRejectRate > 0 && lockRejectRng() < profile.lockRejectRate))) {
           if (rejectLocks > 0) rejectLocks -= 1;

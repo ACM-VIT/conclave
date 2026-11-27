@@ -58,7 +58,9 @@ const memoryStore = () => {
     facts: (id: string) =>
       [...marks.entries()].filter(([key]) => key.startsWith(`${id}:`)).reduce<BatchFacts>((facts, [, mark]) => mergeFacts(facts, mark), NO_FACTS),
     pruneMarks: (before: number) => {
-      for (const [key, mark] of marks) if (mark.at < before) marks.delete(key);
+      for (const [key, mark] of marks) {
+        if (mark.at < before && !saved.has(key.slice(0, key.lastIndexOf(":")))) marks.delete(key);
+      }
     },
     marks,
   };
@@ -1501,6 +1503,45 @@ describe("batch settlement across overlapping sends", () => {
     expect(storedUuids(shared)).toEqual([]);
     expect(next.dropped).toEqual([]);
   });
+
+  it.each([false, true])("hands off local retry facts after a claim write failed (marks unreadable on first unload: %s)", async (unreadable) => {
+    const storage = memoryWebStorage();
+    const shared = createBatchStore(() => storage);
+    let writesRefused = false;
+    let marksReadable = true;
+    const ownerStore = {
+      ...shared,
+      save: (batch: StoredBatch) => !writesRefused && shared.save(batch),
+      mark: () => false,
+      facts: (id: string) => marksReadable ? shared.facts(id) : null,
+    };
+    const beacon = Promise.withResolvers<Reply>();
+    const owner = harness({ store: ownerStore, beaconReplies: [beacon.promise], answers: ["pending"] });
+    const reports = [event(), event()];
+    for (const report of reports) owner.outbox.add(report);
+    owner.outbox.flushForUnload();
+    writesRefused = true;
+    await owner.advance(BEACON_CONFIRM_MS);
+    expect(owner.posted()).toEqual(reports.map(({ uuid }) => uuid));
+    expect(storedUuids(shared)).toEqual([]);
+
+    beacon.resolve({ status: 503, retryAfter: "60", rejected: [0] });
+    await owner.advance(0);
+    writesRefused = false;
+    if (unreadable) {
+      marksReadable = false;
+      owner.outbox.flushForUnload();
+      expect(storedUuids(shared)).toEqual([]);
+      marksReadable = true;
+    }
+    owner.outbox.flushForUnload();
+    const next = harness({ store: shared, at: START + BEACON_CONFIRM_MS });
+    next.outbox.replaySaved();
+    await next.advance(MINUTE - 1);
+    expect(next.posts).toEqual([]);
+    await next.advance(1);
+    expect(next.posted()).toEqual([reports[1].uuid]);
+  });
 });
 
 describe("the replay lock", () => {
@@ -1640,6 +1681,45 @@ describe("what an answer teaches every tab, with no lock", () => {
     expect([...Array(tabs.shared.length).keys()].map((index) => tabs.shared.key(index)).filter((key) => key?.startsWith(STORED_BATCH_PREFIX))).toEqual([]);
   });
 
+  it.each([
+    ["delivered", { status: 200, retryAfter: null }, 0],
+    ["refused", { status: 400, retryAfter: null }, 0],
+    ["partially refused", { status: 503, retryAfter: "60", rejected: [0] }, 1],
+    ["unresolved", { status: 503, retryAfter: "60" }, 2],
+  ] satisfies Array<[string, Reply, number]>)("counts only unresolved events from an old %s batch after a storage read outage", async (_case, reply, unresolved) => {
+    const tabs = twoTabs(reply);
+    tabs.a.refuseBeacons();
+    tabs.a.outbox.add(event());
+    tabs.a.outbox.add(event());
+    tabs.a.outbox.flushForUnload();
+    await tabs.a.advance(0);
+    expect(tabs.a.posts).toHaveLength(1);
+    tabs.answer();
+    await settle();
+
+    const shared = tabs.shared;
+    const store = createBatchStore(() => shared);
+    expect(storedUuids(store)).toHaveLength(2);
+    let readable = false;
+    const reader = createBatchStore(() => ({
+      ...shared,
+      get length() { return shared.length; },
+      getItem: (key: string) => {
+        if (!readable && key.startsWith(STORED_BATCH_PREFIX)) throw new DOMException("Storage is unavailable.", "SecurityError");
+        return shared.getItem(key);
+      },
+    }));
+    const next = harness({ store: reader, at: START + MARK_TTL_MS + MINUTE });
+    next.outbox.replaySaved();
+    expect(next.dropped).toEqual([]);
+    expect(storedUuids(store)).toHaveLength(2);
+    readable = true;
+    await next.advance(LOCK_RETRY_MS);
+    expect(next.dropped).toEqual(unresolved === 0 ? [] : [{ batches: 1, events: unresolved, unsent: 0 }]);
+    expect(next.posts).toEqual([]);
+    expect(storedUuids(store)).toEqual([]);
+  });
+
   it("strands nothing when storage cannot be read for a while", async () => {
     const shared = memoryWebStorage();
     let unreadable = false;
@@ -1679,6 +1759,38 @@ describe("what an answer teaches every tab, with no lock", () => {
     expect(store.mark("new", "tab", { delivered: true, notBefore: 0, attempt: 0, refused: [] }, START + 1000)).toBe(false);
     expect(store.mark("new", "tab", { delivered: true, notBefore: 0, attempt: 0, refused: [] }, START + MARK_TTL_MS + 1)).toBe(true);
     expect(marks()).toHaveLength(1);
+  });
+
+  it("keeps marks at capacity until their batch is known to be gone", () => {
+    const shared = memoryWebStorage();
+    let readable = true;
+    const store = createBatchStore(() => ({
+      ...shared,
+      get length() { return shared.length; },
+      getItem: (key: string) => {
+        if (!readable && key.startsWith(STORED_BATCH_PREFIX)) throw new DOMException("Storage is unavailable.", "SecurityError");
+        return shared.getItem(key);
+      },
+    }));
+    const saved = harness({ store });
+    saved.refuseBeacons();
+    saved.outbox.add(event());
+    saved.outbox.flushForUnload();
+    const [batch] = store.list() ?? [];
+    const delivered = { ...NO_FACTS, delivered: true };
+    for (let index = 0; index < MAX_MARKS; index++) {
+      expect(store.mark(batch.id, `writer-${index}`, delivered, START)).toBe(true);
+    }
+    const at = START + MARK_TTL_MS + 1;
+    expect(store.mark("new", "writer", delivered, at)).toBe(false);
+    expect(store.facts(batch.id)).toEqual(delivered);
+    store.remove(batch.id);
+    readable = false;
+    expect(store.mark("new", "writer", delivered, at)).toBe(false);
+    expect(shared.length).toBe(MAX_MARKS);
+    readable = true;
+    expect(store.mark("new", "writer", delivered, at)).toBe(true);
+    expect(shared.length).toBe(1);
   });
 });
 

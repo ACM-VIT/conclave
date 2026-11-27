@@ -1,4 +1,4 @@
-import type { Scenario, SimResult } from "./outbox-sim";
+import type { Scenario, ScriptedReply, SimResult } from "./outbox-sim";
 
 type Conditions = Partial<Omit<SimResult, "seed" | "violations">>;
 type Coverage = { [Key in keyof Conditions]-?: Required<Pick<Conditions, Key>> }[keyof Conditions];
@@ -68,7 +68,38 @@ export const KEEPALIVE_REFUSAL: Scenario = {
   replies: [{ latency: 100, status: 200 }],
 };
 
+const unloadAfterAnswer = (answer: Omit<ScriptedReply, "latency">, close: boolean): Scenario => ({
+  profile: quiet,
+  actions: [
+    { at: 0, act: "open", tab: 1 },
+    { at: 1000, act: "emit", tab: 1, count: 2 },
+    { at: 1400, act: "refuseWritesFor", ms: 20_000 },
+    { at: 1500, act: "hide", tab: 1 },
+    close
+      ? { at: 33_000, act: "close", tab: 1 }
+      : { at: 33_000, act: "hide", tab: 1, throttled: true },
+    { at: 34_000, act: "open", tab: 2 },
+  ],
+  beacons: [{ latency: 30_500, ...answer }],
+  replies: [{ latency: 20_000, status: 503 }, { latency: 100, status: 200 }],
+});
+
+const IN_FLIGHT_HANDOFFS = [
+  ["a closing tab does not hand off a batch that its late beacon delivered", { status: 200 }, true, 1],
+  ["a throttled tab does not hand off a batch that its late beacon refused", { status: 400 }, false, 1],
+  ["a closing tab hands off only the unresolved events and their retry floor", { status: 503, retryAfter: "60", rejected: [0] }, true, 2],
+] satisfies Array<[string, Omit<ScriptedReply, "latency">, boolean, number]>;
+
 export const THREAD_CASES: ThreadCase[] = [
+  ...IN_FLIGHT_HANDOFFS.map(([name, answer, close, posts]) => ({
+    name,
+    thread: "Independent final review of #265 at 4ce61efc, finding 1",
+    head: "4ce61efc",
+    seed: 4714611034,
+    scenario: unloadAfterAnswer(answer, close),
+    covers: { refusedWrites: 1, ...(close ? { closes: 1 } : { throttles: 1 }) },
+    posts,
+  })),
   {
     name: "a keepalive answer that refuses an event keeps it out of every later send",
     covers: { keepaliveRefusals: 1 },
