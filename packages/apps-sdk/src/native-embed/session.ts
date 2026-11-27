@@ -103,6 +103,9 @@ export class NativeEmbedSession {
   private readonly transport: NativeTransport;
   private readonly roomDoc: Y.Doc | null;
   private readonly pendingAdds = new Map<string, PendingAdd>();
+  private addProbeTimer: ReturnType<typeof setTimeout> | undefined;
+  private addProbeId: string | null = null;
+  private addProbeAttempts = 0;
   private host: HostStatus = INITIAL_HOST_STATUS;
   private synced = false;
   private closed = false;
@@ -122,7 +125,10 @@ export class NativeEmbedSession {
     if (this.closed || this.host.readOnly || this.host.connection !== "live") return false;
     if ("update" in upload && upload.update.length <= NATIVE_EMBED_LIMITS.updateBytes) this.send("update", { update: base64FromBytes(upload.update) });
     return true;
-  }, { onProgress: () => this.advanceLeave() });
+  }, { onProgress: () => {
+    this.advanceLeave();
+    this.scheduleAddProbe();
+  } });
 
   constructor(transport: NativeTransport, scope: SessionScope, doc: Y.Doc) {
     this.transport = transport;
@@ -187,6 +193,15 @@ export class NativeEmbedSession {
     if (!decoded.ok) return this.reject(decoded.reason);
     const envelope = decoded.envelope;
     if (envelope.type === "savedSnapshot") return this.checkSavedSnapshot(envelope.requestId, envelope.payload);
+    if (envelope.type === "snapshot" && envelope.requestId.startsWith("wheel-confirm-")) {
+      if (envelope.requestId !== this.addProbeId) return "none";
+      this.addProbeId = null;
+      const sync = bytesFromBase64(envelope.payload.syncMessage, NATIVE_EMBED_LIMITS.snapshotBytes);
+      if (!sync.ok) return this.reject(sync.reason);
+      if (sync.bytes.length > 0) this.applyRemoteUpdate(sync.bytes);
+      this.scheduleAddProbe();
+      return "none";
+    }
     const repeat = this.executed.has(envelope.requestId) || this.seen.includes(envelope.requestId);
     if (repeat && !DOC_ANSWERED.has(envelope.type)) return this.reject("duplicateRequest");
     if (COMMAND_TYPES.has(envelope.type)) this.markExecuted(envelope.requestId);
@@ -275,6 +290,7 @@ export class NativeEmbedSession {
     this.uploads.clear();
     this.held.length = 0;
     this.pendingAdds.clear();
+    clearTimeout(this.addProbeTimer);
     this.roomDoc?.destroy();
     this.commandHandler = null;
     this.doc.off("update", this.handleDocUpdate);
@@ -298,6 +314,7 @@ export class NativeEmbedSession {
     }
     this.synced = true;
     if (vector.bytes.length > 0) this.sendMissing(vector.bytes);
+    this.scheduleAddProbe();
     this.notify();
     return "none";
   }
@@ -382,8 +399,15 @@ export class NativeEmbedSession {
       userName: typeof payload.userName === "string" ? cutText(payload.userName, 128) : "",
     };
     if (wasReadOnly !== this.host.readOnly) this.lastStatus = "";
+    if (this.host.connection !== "live") {
+      this.addProbeId = null;
+      this.addProbeAttempts = 0;
+      clearTimeout(this.addProbeTimer);
+      this.addProbeTimer = undefined;
+    }
     this.uploads.wake();
     this.advanceLeave();
+    this.scheduleAddProbe();
     this.notify();
   }
 
@@ -434,7 +458,26 @@ export class NativeEmbedSession {
       return confirmed.ok ? confirmed : { ok: false, error: "notSynced" };
     }
     this.pendingAdds.set(envelope.requestId, { client, clock, result });
+    this.addProbeAttempts = 0;
     this.acknowledgePublishedAdds();
+    this.scheduleAddProbe();
+  }
+
+  private scheduleAddProbe(): void {
+    if (this.addProbeTimer !== undefined || this.addProbeId !== null || !this.canProbeAdds()) return;
+    this.addProbeTimer = setTimeout(() => {
+      this.addProbeTimer = undefined;
+      if (!this.canProbeAdds()) return;
+      this.addProbeAttempts += 1;
+      const id = `wheel-confirm-${this.requestNumber + 1}`;
+      this.addProbeId = id;
+      this.send("sync", { stateVector: this.roomVector(), purpose: "wheel-add-confirmation" }, id);
+    }, 750);
+  }
+
+  private canProbeAdds(): boolean {
+    return !this.closed && this.synced && this.pendingAdds.size > 0 &&
+      this.addProbeAttempts < 3 && this.host.connection === "live" && !this.uploads.hasPending(this.scope.appId);
   }
 
   private acknowledgePublishedAdds(): void {
