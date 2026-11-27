@@ -168,6 +168,7 @@ enum SfuServerEvent: String {
     case roomClosed = "roomClosed"
     case roomEnded = "roomEnded"
     case redirect = "redirect"
+    case roomRecoveryPass = "roomRecoveryPass"
     case serverRestarting = "serverRestarting"
     case adminNotice = "adminNotice"
     case adminUsersChanged = "adminUsersChanged"

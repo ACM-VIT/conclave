@@ -783,6 +783,9 @@ final class AppHostPresenter {
 
     private(set) var feedbackState = MeetingShellFeedbackState(session: 0, token: FeedbackToken.baseline)
 
+    private(set) var stageDiscardPromptId = ""
+    @ObservationIgnored private var resolveStageDiscard: ((Bool) -> Void)?
+
     @ObservationIgnored var onCommand: ((AppHostCoreCommand) -> Void)? = nil
 
     @ObservationIgnored var onOpenPage: ((String) -> Void)? = nil
@@ -913,6 +916,27 @@ final class AppHostPresenter {
     private func cancelHiddenRelease() {
         hiddenReleaseTask?.cancel()
         hiddenReleaseTask = nil
+    }
+
+    func requestStageDiscard(resolve: @escaping (Bool) -> Void) {
+        guard stageDiscardPromptId.isEmpty else { return }
+        resolveStageDiscard = resolve
+        stageDiscardPromptId = UUID().uuidString
+    }
+
+    func resolveStageDiscardPrompt(id: String, confirmed: Bool) {
+        guard !id.isEmpty, id == stageDiscardPromptId else { return }
+        let resolve = resolveStageDiscard
+        resolveStageDiscard = nil
+        stageDiscardPromptId = ""
+        resolve?(confirmed)
+    }
+
+    func closeCancelled() {
+        if !closePending { return }
+        closePending = false
+        cancelSafety()
+        rebuild()
     }
 
     func closeFailed() {
@@ -1646,6 +1670,8 @@ final class AppHostPresenter {
     }
 
     private func resetLocal() {
+        stageDiscardPromptId = ""
+        resolveStageDiscard = nil
         cancelReadyTimer()
         cancelHiddenRelease()
         pendingSafetyTask?.cancel()

@@ -2314,8 +2314,16 @@
     "Discard" : {
       "extractionState" : "manual"
     },
+    "Discard and Continue" : {
+      "extractionState" : "manual",
+      "generatesSymbol" : false
+    },
     "Discard Recording?" : {
       "extractionState" : "manual"
+    },
+    "Discard Unverified Edits?" : {
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Dismiss" : {
       "extractionState" : "manual"
@@ -5605,6 +5613,10 @@
     },
     "The Imposter Escapes" : {
       "extractionState" : "manual"
+    },
+    "The previous app view stopped before its edits could be verified. Continuing may lose those edits. Changes saved to the room will be kept." : {
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "The Webinar Will Begin Soon" : {
       "extractionState" : "manual"

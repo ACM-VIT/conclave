@@ -177,6 +177,18 @@ class ACT7AppHostBridgeTests {
                 relay.embedFailed(appSessionId = id, issue = AppHostIssue.rendererGone, mount = mount)
                 assertEquals(!edited, relay.prepareToLeave())
                 assertEquals(AppBridgeRejection.notAttached, relay.receiveFromEmbed(raw = pending, origin = AppBridgeProtocol.androidOrigin, isMainFrame = true, mount = mount))
+                if (edited) {
+                    val host = AppHostPresenter()
+                    val loss = requireNotNull(relay.lostRendererEdits)
+                    host.requestStageDiscard { confirmed ->
+                        if (confirmed) assertTrue(relay.discardLostRendererEdits(loss))
+                    }
+                    val prompt = host.stageDiscardPromptId
+                    host.resolveStageDiscardPrompt(id = "stale", confirmed = true)
+                    assertFalse(relay.prepareToLeave())
+                    host.resolveStageDiscardPrompt(id = prompt, confirmed = true)
+                    assertTrue(relay.prepareToLeave())
+                }
             }
         }
     }
