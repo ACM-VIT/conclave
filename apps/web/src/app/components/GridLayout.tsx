@@ -3398,17 +3398,25 @@ const SelfViewPill = memo(function SelfViewPill({
       >
         <Move size={14} strokeWidth={1.8} />
       </button>
-      <Avatar id={userEmail} name={displayName || userEmail} size={compact ? 20 : 32} />
-      <span className={`min-w-0 truncate font-medium ${compact ? "text-[11px]" : "text-[13px]"}`}>
-        {truncateDisplayName(displayName, 20)}
-      </span>
-      <span className="text-[11px] font-medium text-[#F95F4A]">You</span>
-      {isMuted ? (
-        <MicOff size={14} strokeWidth={1.75} className="shrink-0 text-[#F95F4A]" />
-      ) : null}
-      {isHandRaised ? (
-        <Hand size={14} strokeWidth={1.75} className="shrink-0 text-amber-300" />
-      ) : null}
+      <div className={`flex min-w-0 items-center overflow-hidden ${
+        compact ? "h-5 flex-1 flex-wrap content-start gap-1" : "gap-2"
+      }`}>
+        {!compact && (
+          <>
+            <Avatar id={userEmail} name={displayName || userEmail} size={32} />
+            <span className="min-w-0 truncate text-[13px] font-medium">
+              {truncateDisplayName(displayName, 20)}
+            </span>
+          </>
+        )}
+        <span className="shrink-0 text-[11px] font-medium leading-5 text-[#F95F4A]">You</span>
+        {isMuted ? (
+          <MicOff size={14} strokeWidth={1.75} className="h-5 shrink-0 text-[#F95F4A]" />
+        ) : null}
+        {isHandRaised ? (
+          <Hand size={14} strokeWidth={1.75} className="h-5 shrink-0 text-amber-300" />
+        ) : null}
+      </div>
       {onRestore ? <button
         type="button"
         onClick={onRestore}
