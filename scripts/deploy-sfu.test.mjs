@@ -933,6 +933,22 @@ test("a compose file with its own Redis starts it, with Upstash settings inherit
   });
 });
 
+test("staging waits for its own Redis with the default health timeout", async () => {
+  await withSfus({ "sfu-a": {} }, async (sfus) => {
+    const result = await deploy(sfus, {
+      noRedisUrl: true,
+      env: {
+        DEPLOY_TEST_REDIS_SERVICE: "1",
+        DEPLOY_TEST_REDIS_START_DELAY_CHECKS: "2",
+        HEALTH_TIMEOUT_SECONDS: undefined,
+      },
+    });
+    assert.equal(result.code, 0, result.output);
+    assert.match(result.output, /Every SFU's Redis URL reaches/);
+    assert.equal(result.docker.filter((args) => args[0] === "inspect" && args.at(-1) === "ctr-redis").length, 3);
+  });
+});
+
 test("a compose file's own Redis must be the one its SFUs reach, checked by run id before any SFU starts", async () => {
   for (const [env, why] of [
     [{ DEPLOY_TEST_REDIS_URL_RUN_ID: "another-redis" }, /sfu-a's SFU_REDIS_URL reaches a Redis whose run id is another-redis, not .*own Redis \(own-redis\)/],
