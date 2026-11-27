@@ -16,8 +16,11 @@ type MeetingEnterOverlayProps = {
   show: boolean;
   action: MeetingEnterAction | null;
   error?: MeetError | null;
+  roomId?: string;
+  dismissLabel?: string;
   onRetry?: () => void;
   onDismiss?: () => void;
+  onStartNewMeeting?: () => void;
 };
 
 const EASE = [0.22, 1, 0.36, 1] as const;
@@ -26,8 +29,11 @@ export default function MeetingEnterOverlay({
   show,
   action,
   error,
+  roomId = "",
+  dismissLabel = "Back to setup",
   onRetry,
   onDismiss,
+  onStartNewMeeting,
 }: MeetingEnterOverlayProps) {
   const [shownAction, setShownAction] = useState<MeetingEnterAction>("new");
   useEffect(() => {
@@ -45,7 +51,7 @@ export default function MeetingEnterOverlay({
   const caption =
     shownAction === "new" ? "Starting your meeting" : "Joining the meeting";
   const errored = Boolean(error);
-  const described = error ? describeEnterError(shownAction, error) : null;
+  const described = error ? describeEnterError(shownAction, error, roomId) : null;
 
   return (
     <AnimatePresence>
@@ -82,7 +88,11 @@ export default function MeetingEnterOverlay({
                   transition={{ duration: 0.38, ease: EASE }}
                 >
                   <BrandMessage
-                    eyebrow="Something went wrong"
+                    eyebrow={
+                      error?.code === "ROOM_NOT_FOUND"
+                        ? undefined
+                        : "Something went wrong"
+                    }
                     title={described.title}
                     detail={described.detail}
                     actions={
@@ -105,8 +115,17 @@ export default function MeetingEnterOverlay({
                               : BRAND_BTN_PRIMARY
                           }
                         >
-                          Back to setup
+                          {dismissLabel}
                         </button>
+                        {onStartNewMeeting ? (
+                          <button
+                            type="button"
+                            onClick={onStartNewMeeting}
+                            className={BRAND_BTN_GHOST}
+                          >
+                            Start a new meeting instead
+                          </button>
+                        ) : null}
                       </>
                     }
                   />

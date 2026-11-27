@@ -58,7 +58,7 @@ export const jobs = {
   "test-sfu": {
     budgetSeconds: 110,
     budgetFrom: "run",
-    tasks: [{ dir: "packages/sfu", script: "test" }],
+    tasks: [{ dir: "packages/sfu", script: "test:unit" }],
   },
   "test-transcript-oracle": {
     budgetSeconds: 300,
@@ -69,6 +69,11 @@ export const jobs = {
     budgetSeconds: 300,
     budgetFrom: "run",
     tasks: [{ dir: ".", script: "test:backup" }],
+  },
+  "test-sfu-app-model": {
+    budgetSeconds: 110,
+    budgetFrom: "run",
+    tasks: [{ dir: "packages/sfu", script: "test:apps-room-model" }],
   },
   build: {
     budgetSeconds: 240,
@@ -99,6 +104,7 @@ export const jobs = {
       { dir: ".", script: "check:native-test-stores" },
       { dir: ".", script: "test:native-test-stores" },
       { dir: ".", script: "check:native-game-fixtures" },
+      { dir: ".", script: "check:join-deadlines" },
       { dir: ".", script: "check:json-store-fixtures" },
       { dir: ".", script: "check:docker-context" },
       { dir: ".", script: "check:sfu-source-manifest" },

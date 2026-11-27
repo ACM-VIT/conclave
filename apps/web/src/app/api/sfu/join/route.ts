@@ -64,6 +64,7 @@ type JoinRequestBody = {
   isGhost?: boolean;
   ghost?: boolean;
   allowRoomCreation?: boolean;
+  createsMeeting?: boolean;
   clientId?: string;
 };
 
@@ -696,13 +697,15 @@ export async function POST(request: Request) {
     }
   }
 
-  const { isHost, allowRoomCreation } = resolveHostGrant({
+  const { isHost, allowRoomCreation, createsCode } = resolveHostGrant({
     isWebinarAttendeeJoin,
     isForcedHost,
     scheduledRoomHostMatch,
     isScheduledHostRoom,
     requestedHost,
     bodyAllowRoomCreation: Boolean(body?.allowRoomCreation),
+    bodyCreatesMeeting: body?.createsMeeting === true,
+    signedIn: Boolean(normalizedSessionEmail),
   });
 
   const routedSfu = await resolveRoutedSfuUrl({
@@ -741,6 +744,7 @@ export async function POST(request: Request) {
       isHost,
       isAdmin: isHost,
       allowRoomCreation,
+      ...(createsCode ? { createsCode: true } : {}),
       clientId,
       sessionId,
       joinMode,

@@ -1,0 +1,1 @@
+export const ROOM_OPEN_DEADLINE_MS = 10_000;

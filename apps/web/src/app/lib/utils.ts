@@ -28,79 +28,33 @@ export const readResponseError = async (
   return response.statusText || fallback;
 };
 
-const ROOM_WORDS = [
-  "aloe",
-  "aster",
-  "bloom",
-  "canna",
-  "cedar",
-  "clove",
-  "dahl",
-  "daisy",
-  "erica",
-  "flora",
-  "hazel",
-  "iris",
-  "lilac",
-  "lily",
-  "lotus",
-  "maple",
-  "myrrh",
-  "olive",
-  "pansy",
-  "peony",
-  "poppy",
-  "rose",
-  "sorel",
-  "tansy",
-  "thyme",
-  "tulip",
-  "yucca",
-  "zinn",
-  "akane",
-  "akira",
-  "asuna",
-  "eren",
-  "gohan",
-  "goku",
-  "gojo",
-  "kanao",
-  "kira",
-  "levi",
-  "luffy",
-  "maki",
-  "misa",
-  "nami",
-  "riku",
-  "sokka",
-  "saber",
-  "senku",
-  "shoto",
-  "soma",
-  "sora",
-  "tanji",
-  "taki",
-  "toji",
-  "todo",
-  "toph",
-  "yami",
-  "yuki",
-  "yato",
-  "zoro",
-];
-
-const ROOM_WORDS_PER_CODE = 3;
+// Meet-style codes like "abc-mnop-xyz": 26^10 (about 1.4e14) possible codes,
+// so live meetings cannot be found by guessing. Older three-word codes still
+// work everywhere because any lowercase letters, digits and hyphens do.
+const ROOM_CODE_LETTERS = "abcdefghijklmnopqrstuvwxyz";
+const ROOM_CODE_GROUP_LENGTHS = [3, 4, 3];
 const ROOM_WORD_SEPARATOR = "-";
+// 234 is the largest multiple of 26 under 256; bytes at or above it would
+// favour the first letters.
+const UNBIASED_BYTE_LIMIT = 234;
 export const ROOM_CODE_MAX_LENGTH = 64;
 const WEBINAR_LINK_CODE_MAX_LENGTH = 32;
 
 export function generateRoomCode(): string {
-  const words: string[] = [];
-  for (let i = 0; i < ROOM_WORDS_PER_CODE; i += 1) {
-    const pick = ROOM_WORDS[Math.floor(Math.random() * ROOM_WORDS.length)];
-    words.push(pick);
+  const letterCount = ROOM_CODE_GROUP_LENGTHS.reduce((sum, n) => sum + n, 0);
+  const letters: string[] = [];
+  while (letters.length < letterCount) {
+    for (const byte of crypto.getRandomValues(new Uint8Array(letterCount * 2))) {
+      if (byte >= UNBIASED_BYTE_LIMIT || letters.length === letterCount) continue;
+      letters.push(ROOM_CODE_LETTERS[byte % ROOM_CODE_LETTERS.length]);
+    }
   }
-  return words.join(ROOM_WORD_SEPARATOR);
+  let offset = 0;
+  return ROOM_CODE_GROUP_LENGTHS.map((length) => {
+    const group = letters.slice(offset, offset + length).join("");
+    offset += length;
+    return group;
+  }).join(ROOM_WORD_SEPARATOR);
 }
 
 export function sanitizeRoomCode(value: string): string {
@@ -515,6 +469,7 @@ export function trackFieldHistory(input: HTMLInputElement) {
     input.removeEventListener("input", onInput);
   };
 }
+const ROOM_NOT_FOUND_MESSAGE = "No room found.";
 
 type MediaDevice = "camera" | "microphone";
 type MediaCauses = NonNullable<MeetError["causes"]>;
@@ -692,6 +647,9 @@ function describeMeetError(
   defaultCode: MeetError["code"],
   device?: MeetMediaDevice,
 ): MeetError {
+  if (error instanceof Error && error.message === ROOM_NOT_FOUND_MESSAGE) {
+    return { code: "ROOM_NOT_FOUND", message: ROOM_NOT_FOUND_MESSAGE, recoverable: true };
+  }
   if (device) {
     const devices: MediaDevice[] = device === "both" ? ["microphone", "camera"] : [device];
     const deviceError = createMediaDeviceError(

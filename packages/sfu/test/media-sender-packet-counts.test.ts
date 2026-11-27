@@ -75,6 +75,7 @@ const register = ({
     currentUserKey: null,
     activeConclaveAnswers: new Map(),
     adminHandlersRegistered: false,
+    joinAttempts: 0,
   });
   const ask = async (data: unknown, event = "getSenderPacketCounts") => {
     const handler = handlers.get(event) as unknown as (

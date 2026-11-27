@@ -13,6 +13,7 @@ export type RoomOwnerRecord = {
   region?: string;
   updatedAt: number;
   expiresAt: number;
+  generation?: number;
 };
 
 export type RoomPlacementRecord = {
@@ -29,8 +30,8 @@ export type RoomPlacementRecord = {
 
 export type RoomAssignmentRecord = RoomOwnerRecord | RoomPlacementRecord;
 
-type RoomOwnershipClaim =
-  | { ok: true; owner: RoomOwnerRecord }
+export type RoomOwnershipClaim =
+  | { ok: true; owner: RoomOwnerRecord; continuous: boolean; generation: number }
   | { ok: false; owner: RoomAssignmentRecord };
 
 export type RoomPlacementClaim =
@@ -48,6 +49,13 @@ export class RoomLeaseExpiredError extends RoomRegistryUnavailableError {
   constructor(channelId: string, options?: { cause?: unknown }) {
     super(`confirmed lease expiry for ${channelId}`, options);
     this.name = "RoomLeaseExpiredError";
+  }
+}
+
+export class RoomOpeningError extends Error {
+  constructor(channelId: string, why: string) {
+    super(`The room for ${channelId} did not open: ${why}`);
+    this.name = "RoomOpeningError";
   }
 }
 
@@ -89,6 +97,7 @@ export type RoomRegistry = {
   }) => Promise<RoomOwnershipClaim>;
   releaseRoom: (channelId: string) => Promise<void>;
   isLocalOwner: (owner: RoomAssignmentRecord | null | undefined) => boolean;
+  holdsLease: (channelId: string, generation?: number) => boolean;
 };
 
 export const DEFAULT_ROOM_PLACEMENT_TTL_MS = 20_000;
@@ -119,10 +128,20 @@ export const roomLeaseSafetyMarginMs = (
 
 const CLAIM_OR_RENEW_SCRIPT = `
 local key = KEYS[1]
+local generationKey = KEYS[2]
 local value = ARGV[1]
 local instanceId = ARGV[2]
 local instanceUrl = ARGV[3]
 local ttlMs = tonumber(ARGV[4])
+local record = cjson.decode(value)
+local fresh = function()
+  local time = redis.call("TIME")
+  local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
+  local last = tonumber(redis.call("GET", generationKey) or "0") or 0
+  local generation = math.max(now, last + 1)
+  redis.call("SET", generationKey, string.format("%.0f", generation))
+  return generation
+end
 local current = redis.call("GET", key)
 if current then
   local ok, decoded = pcall(cjson.decode, current)
@@ -133,9 +152,17 @@ if current then
   if decoded.instanceId ~= instanceId or decodedUrl ~= instanceUrl then
     return {0, current}
   end
+  if decoded.kind ~= "placement" and tonumber(decoded.generation) then
+    record.generation = tonumber(decoded.generation)
+    local renewed = cjson.encode(record)
+    redis.call("PSETEX", key, ttlMs, renewed)
+    return {1, renewed}
+  end
 end
-redis.call("PSETEX", key, ttlMs, value)
-return {1, value}
+record.generation = fresh()
+local claimed = cjson.encode(record)
+redis.call("PSETEX", key, ttlMs, claimed)
+return {3, claimed}
 `;
 
 const RESERVE_PLACEMENT_SCRIPT = `
@@ -216,6 +243,9 @@ const parseAssignmentRecord = (value: unknown): RoomAssignmentRecord | null => {
         : {}),
       updatedAt: parsed.updatedAt,
       expiresAt: parsed.expiresAt,
+      ...(isFiniteTimestamp((parsed as { generation?: unknown }).generation)
+        ? { generation: (parsed as { generation: number }).generation }
+        : {}),
     };
   } catch {
     return null;
@@ -237,11 +267,12 @@ const parseClaimResult = (value: unknown): RoomOwnershipClaim => {
     throw new Error("Invalid room owner record");
   }
 
-  if (okValue === 1 || okValue === "1") {
-    if (owner.kind === "placement") {
+  const renewed = okValue === 1 || okValue === "1";
+  if (renewed || okValue === 3 || okValue === "3") {
+    if (owner.kind === "placement" || owner.generation === undefined) {
       throw new Error("Invalid room owner claim response");
     }
-    return { ok: true, owner };
+    return { ok: true, owner, continuous: renewed, generation: owner.generation };
   }
   return { ok: false, owner };
 };
@@ -270,6 +301,8 @@ export class LocalRoomRegistry implements RoomRegistry {
   instanceUrl?: string;
   private region?: string;
   private owners = new Map<string, RoomOwnerRecord>();
+  private lastGeneration = 0;
+  private heldGenerations = new Map<string, number>();
   private placements = new Map<string, RoomPlacementRecord>();
   private ttlMs: number;
   private placementTtlMs: number;
@@ -382,10 +415,18 @@ export class LocalRoomRegistry implements RoomRegistry {
       return { ok: false, owner: placement };
     }
 
-    const owner = this.createOwner(input);
+    const generation =
+      this.heldGenerations.get(input.channelId) ?? this.nextGeneration();
+    this.heldGenerations.set(input.channelId, generation);
+    const owner = { ...this.createOwner(input), generation };
     this.owners.set(input.channelId, owner);
     this.placements.delete(input.channelId);
-    return { ok: true, owner };
+    return { ok: true, owner, continuous: true, generation };
+  }
+
+  private nextGeneration(): number {
+    this.lastGeneration = Math.max(this.now(), this.lastGeneration + 1);
+    return this.lastGeneration;
   }
 
   async renewRoom(input: {
@@ -398,6 +439,7 @@ export class LocalRoomRegistry implements RoomRegistry {
 
   async releaseRoom(channelId: string): Promise<void> {
     this.owners.delete(channelId);
+    this.heldGenerations.delete(channelId);
   }
 
   isLocalOwner(owner: RoomAssignmentRecord | null | undefined): boolean {
@@ -406,6 +448,11 @@ export class LocalRoomRegistry implements RoomRegistry {
         owner.instanceId === this.instanceId &&
         (owner.instanceUrl ?? "") === (this.instanceUrl ?? ""),
     );
+  }
+
+  holdsLease(channelId: string, generation?: number): boolean {
+    const held = this.heldGenerations.get(channelId);
+    return generation === undefined || held === undefined || held === generation;
   }
 
   private createOwner(input: {
@@ -459,7 +506,7 @@ class RedisRoomRegistry implements RoomRegistry {
   private placementTtlMs: number;
   private leaseSafetyMarginMs: number;
   private commandTimeoutMs: number;
-  private confirmedLeaseServeUntil = new Map<string, number>();
+  private confirmedLeases = new Map<string, { serveUntil: number; generation: number }>();
   private startPromise: Promise<void> | null = null;
   private started = false;
 
@@ -545,7 +592,7 @@ class RedisRoomRegistry implements RoomRegistry {
 
   async close(): Promise<void> {
     this.startPromise = null;
-    this.confirmedLeaseServeUntil.clear();
+    this.confirmedLeases.clear();
     if (!this.started) {
       await this.localFallback.close();
       return;
@@ -684,19 +731,22 @@ class RedisRoomRegistry implements RoomRegistry {
       const confirmedOwner = await this.localFallback.getOwner(input.channelId);
       if (
         confirmedOwner &&
-        hasUsableLeaseDeadline(
-          this.confirmedLeaseServeUntil.get(input.channelId),
-          performance.now(),
-        )
+        confirmedOwner.generation !== undefined &&
+        this.holdsLease(input.channelId, confirmedOwner.generation)
       ) {
-        return { ok: true, owner: confirmedOwner };
+        return {
+          ok: true,
+          owner: confirmedOwner,
+          continuous: true,
+          generation: confirmedOwner.generation,
+        };
       }
       throw new RoomLeaseExpiredError(input.channelId, { cause: error });
     }
   }
 
   async releaseRoom(channelId: string): Promise<void> {
-    this.confirmedLeaseServeUntil.delete(channelId);
+    this.confirmedLeases.delete(channelId);
     await this.localFallback.releaseRoom(channelId);
     try {
       await this.start();
@@ -717,6 +767,14 @@ class RedisRoomRegistry implements RoomRegistry {
     );
   }
 
+  holdsLease(channelId: string, generation?: number): boolean {
+    const lease = this.confirmedLeases.get(channelId);
+    return (
+      hasUsableLeaseDeadline(lease?.serveUntil, performance.now()) &&
+      (generation === undefined || lease?.generation === generation)
+    );
+  }
+
   private async claimOrRenew(input: {
     channelId: string;
     clientId: string;
@@ -727,7 +785,7 @@ class RedisRoomRegistry implements RoomRegistry {
     const owner = this.createOwner(input, now);
     const attemptStartedAt = performance.now();
     const result = await this.evalWithTimeout(CLAIM_OR_RENEW_SCRIPT, {
-      keys: [this.keyFor(input.channelId)],
+      keys: [this.keyFor(input.channelId), `${this.keyFor(input.channelId)}:generation`],
       arguments: [
         serializeAssignmentRecord(owner),
         this.instanceId,
@@ -738,10 +796,10 @@ class RedisRoomRegistry implements RoomRegistry {
     const ownership = parseClaimResult(result);
     if (ownership.ok) {
       this.localFallback.rememberOwner(ownership.owner);
-      this.confirmedLeaseServeUntil.set(
-        input.channelId,
-        attemptStartedAt + this.ttlMs - this.leaseSafetyMarginMs,
-      );
+      this.confirmedLeases.set(input.channelId, {
+        serveUntil: attemptStartedAt + this.ttlMs - this.leaseSafetyMarginMs,
+        generation: ownership.generation,
+      });
     }
     return ownership;
   }

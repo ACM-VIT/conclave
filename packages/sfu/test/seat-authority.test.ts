@@ -1,8 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Router, Worker } from "mediasoup/types";
 import type { Server as SocketIOServer, Socket } from "socket.io";
 import { Admin } from "../config/classes/Admin.js";
 import type { Room } from "../config/classes/Room.js";
+import { config } from "../config/config.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
 import type { SfuAuthPayload } from "../server/socket/auth.js";
 import { getSocketContext } from "../server/socket/context.js";
@@ -144,6 +145,14 @@ const stableView = (room: Room) => ({
   blocked: [...room.blockedUsers].sort(),
   admins: room.getAdminUserIds().sort(),
   pending: [...room.pendingClients.keys()].sort(),
+});
+
+const conclavePolicy = config.clientPolicies.conclave;
+beforeAll(() => {
+  config.clientPolicies.conclave = { ...conclavePolicy, knockByDefault: false };
+});
+afterAll(() => {
+  config.clientPolicies.conclave = conclavePolicy;
 });
 
 describe("a seat that another socket took over (Neon)", () => {

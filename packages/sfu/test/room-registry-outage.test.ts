@@ -10,6 +10,7 @@ import {
 } from "../server/roomRegistry.js";
 import {
   cleanupStaleRoom,
+  confirmRoomLease,
   getOrCreateRoomWithOrigin,
   hasUnconfirmedRoomLeases,
   renewRoomOwnerships,
@@ -77,8 +78,55 @@ describe("rooms during a shared registry outage", () => {
 
     await expect(
       getOrCreateRoomWithOrigin(state, "conclave", "room"),
-    ).resolves.toEqual({ room, created: false });
+    ).resolves.toEqual({ room, created: false, recalled: null });
     expect(closeRouter).not.toHaveBeenCalled();
+  });
+
+  it("keeps the existing call without confirming host writes while its lease is lost", async () => {
+    const state = makeState();
+    const { room, closeRouter } = hostRoom(state);
+    const holdsLease = state.roomRegistry.holdsLease.bind(state.roomRegistry);
+    const bringRegistryBack = takeRegistryDown(state);
+    state.roomRegistry.holdsLease = () => false;
+
+    await expect(confirmRoomLease(state, room)).resolves.toBe(false);
+    expect(state.rooms.get(room.channelId)).toBe(room);
+    expect(closeRouter).not.toHaveBeenCalled();
+    expect(hasUnconfirmedRoomLeases(state)).toBe(true);
+
+    bringRegistryBack();
+    state.roomRegistry.holdsLease = holdsLease;
+    await renewRoomOwnerships(state);
+    await expect(confirmRoomLease(state, room)).resolves.toBe(true);
+    expect(hasUnconfirmedRoomLeases(state)).toBe(false);
+  });
+
+  it("waits for a new generation's fences even if the registry goes down during the reclaim", async () => {
+    const state = makeState();
+    const { room } = hostRoom(state);
+    room.ownershipGeneration = 0;
+    let finishFence!: (ok: boolean) => void;
+    const fence = new Promise<boolean>((resolve) => { finishFence = resolve; });
+    let startFence!: () => void;
+    const started = new Promise<void>((resolve) => { startFence = resolve; });
+    vi.spyOn(state.roomRecovery, "reclaim").mockImplementation(() => {
+      startFence();
+      return fence;
+    });
+
+    const renewal = renewRoomOwnerships(state);
+    await started;
+    takeRegistryDown(state);
+    const join = getOrCreateRoomWithOrigin(state, "conclave", "room");
+    const answered = vi.fn();
+    void join.then(answered, answered);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(answered).not.toHaveBeenCalled();
+
+    finishFence(true);
+    await renewal;
+    await expect(join).resolves.toMatchObject({ room, created: false });
+    expect(room.ownershipGeneration).not.toBe(0);
   });
 
   it("refuses to start a new room", async () => {

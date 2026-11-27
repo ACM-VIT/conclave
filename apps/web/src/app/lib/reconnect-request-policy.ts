@@ -1,3 +1,4 @@
+import { ROOM_LEASE_UNCONFIRMED_ERROR } from "@conclave/meeting-core/host-commands";
 import {
   advanceMediaPathRecovery,
   type MediaDirection,
@@ -170,7 +171,10 @@ export const classifyReconnectFailure = ({
   ) {
     return "invite-code-required";
   }
-  if (/no room found|shared room registry unavailable/i.test(text)) {
+  if (
+    /no room found|shared room registry unavailable|still opening/i.test(text) ||
+    text === ROOM_LEASE_UNCONFIRMED_ERROR
+  ) {
     return "room-unavailable";
   }
   // A join cut short because its socket dropped is worth another attempt.

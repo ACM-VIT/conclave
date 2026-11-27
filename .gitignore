@@ -30,6 +30,7 @@ artifacts/video-quality/
 *.sqlite-*
 *.sqlite3
 *.sqlite3-*
+packages/sfu/data/
 
 # debug
 npm-debug.log*

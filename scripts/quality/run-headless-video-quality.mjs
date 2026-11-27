@@ -35,6 +35,7 @@ import {
   publisherSenderEncodingSignature,
 } from "./codec-performance.mjs";
 import { startPublisherCodecObserver } from "./publisher-codec-observer.mjs";
+import { ADMIT_ONE_KNOCK_EXPRESSION, buildOpensRoomScript } from "./room-access.mjs";
 import {
   assessBrowserProcessPerformance,
   buildHardwareIdentity,
@@ -404,6 +405,7 @@ const launchBrowser = async ({
   enableSyntheticCamera,
   enableSyntheticAudio = true,
   codecCapabilityScenario = null,
+  opensRoomId = null,
 }) => {
   const devicePixelRatio =
     Number.isFinite(requestedDevicePixelRatio) && requestedDevicePixelRatio > 0
@@ -484,6 +486,7 @@ const launchBrowser = async ({
       codecCapabilityOverride,
       buildDebugBootstrapScript(),
       buildNetworkHintScript(profile),
+      opensRoomId ? buildOpensRoomScript(opensRoomId) : "",
     ].filter(Boolean)) {
       await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source });
     }
@@ -600,6 +603,14 @@ const clickButton = async (cdp, label) =>
       button.click();
       return { ok: true };
     })()`,
+    20_000,
+  );
+
+const admitViewer = async (publisher, name) =>
+  waitForEvaluation(
+    publisher.cdp,
+    `admit ${name}`,
+    ADMIT_ONE_KNOCK_EXPRESSION,
     20_000,
   );
 
@@ -1202,6 +1213,7 @@ const runProfile = async (profile, repetition) => {
       url: buildRoomUrl(roomId, `Quality Source ${profile.name}`, {
         admin: true,
       }),
+      opensRoomId: roomId,
       profile: publisherNetworkProfile,
       enableSyntheticCamera: true,
       enableSyntheticAudio: true,
@@ -1259,18 +1271,19 @@ const runProfile = async (profile, repetition) => {
       finalPublisherPcWideRtc: null,
       observed: codecScenario === "all-modern",
     };
-    if (codecScenario === "native-compat") codecTransition.startedAt = Date.now();
-
-    const viewerLaunchStartedAt = Date.now();
+    const viewerName = `Quality Viewer ${profile.name}`;
     viewer = await launchBrowser({
       label: "viewer",
-      url: buildRoomUrl(roomId, `Quality Viewer ${profile.name}`),
+      url: buildRoomUrl(roomId, viewerName),
       profile: receiverProfiles[0],
       enableSyntheticCamera: false,
       enableSyntheticAudio: true,
       codecCapabilityScenario:
         codecScenario === "native-compat" ? codecScenario : null,
     });
+    await admitViewer(publisher, viewerName);
+    if (codecScenario === "native-compat") codecTransition.startedAt = Date.now();
+    const viewerLaunchStartedAt = Date.now();
     const startupTracker = await evaluate(
       viewer.cdp,
       buildStartStartupTrackerExpression({
@@ -1294,12 +1307,10 @@ const runProfile = async (profile, repetition) => {
       receiverIndex <= receiverCount;
       receiverIndex += 1
     ) {
+      const passiveName = `Quality Viewer ${receiverIndex} ${profile.name}`;
       const passiveReceiver = await launchBrowser({
         label: `viewer-${receiverIndex}`,
-        url: buildRoomUrl(
-          roomId,
-          `Quality Viewer ${receiverIndex} ${profile.name}`,
-        ),
+        url: buildRoomUrl(roomId, passiveName),
         profile: receiverProfiles[receiverIndex - 1],
         enableSyntheticCamera: false,
         enableSyntheticAudio: true,
@@ -1307,6 +1318,7 @@ const runProfile = async (profile, repetition) => {
           codecScenario === "native-compat" ? codecScenario : null,
       });
       extraViewers.push(passiveReceiver);
+      await admitViewer(publisher, passiveName);
     }
 
     if (codecScenario === "native-compat") {
