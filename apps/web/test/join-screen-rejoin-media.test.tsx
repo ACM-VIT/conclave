@@ -264,6 +264,43 @@ function showPermissionsPrompt() {
   });
 }
 
+it.each(["join", "unmount", "release", "stay"] as const)(
+  "only opens the camera after a blocked microphone retry if setup stays active (%s)",
+  async (exit) => {
+    clearRejoinIntent();
+    const permission = Object.assign(new browser.EventTarget(), { state: "denied" });
+    vi.stubGlobal("navigator", {
+      mediaDevices: { getUserMedia },
+      permissions: { query: async () => permission },
+    });
+    getUserMedia.mockRejectedValue(new DOMException("Blocked", "NotAllowedError"));
+    await openRoom();
+    await click("Allow microphone and camera");
+    expect(getUserMedia).toHaveBeenCalledTimes(3);
+    getUserMedia.mockReset();
+    getUserMedia.mockImplementation(async ({ audio }) => capture(audio ? "audio" : "video"));
+
+    const mic = holdCapture();
+    await click("Try again");
+    expect(getUserMedia).toHaveBeenCalledExactlyOnceWith({ audio: expect.anything() });
+    if (exit === "join") await click("Join");
+    if (exit === "unmount") await act(async () => root.render(null));
+    if (exit === "release") await act(async () => releaseAllCaptures());
+    const lateMic = capture("audio");
+    await act(async () => mic.resolve(lateMic));
+
+    if (exit === "stay") {
+      expect(getUserMedia).toHaveBeenCalledTimes(2);
+      expect(getUserMedia).toHaveBeenLastCalledWith({ video: expect.anything() });
+      expect(button("Turn off camera")).toBeDefined();
+      expect(lateMic.getAudioTracks()[0].readyState).toBe("live");
+    } else {
+      expect(lateMic.getAudioTracks()[0].readyState).toBe("ended");
+      expect(getUserMedia).toHaveBeenCalledTimes(1);
+    }
+  },
+);
+
 it.each(["audio", "video"] as const)(
   "hands off live tracks even if the superseded %s restore rejects",
   async (kind) => {
