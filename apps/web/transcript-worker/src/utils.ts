@@ -121,6 +121,27 @@ export const estimatePcm16Base64SampleCount = (value: string): number => {
   return Math.floor(byteLength / 2);
 };
 
+export const parsePcm16Base64 = (base64: string): Int16Array | null => {
+  try {
+    return decodePcm16Base64(base64);
+  } catch {
+    return null;
+  }
+};
+
+export const decodePcm16Base64 = (base64: string): Int16Array => {
+  const binary = atob(base64.replace(/\s+/g, ""));
+  const samples = new Int16Array(Math.floor(binary.length / 2));
+  for (let index = 0; index < samples.length; index += 1) {
+    const value = (binary.charCodeAt(index * 2) & 0xff) | ((binary.charCodeAt(index * 2 + 1) & 0xff) << 8);
+    samples[index] = value >= 0x8000 ? value - 0x10000 : value;
+  }
+  return samples;
+};
+
+export const speakerKey = (speaker: { userId: string; source?: string }): string =>
+  `${speaker.userId}:${speaker.source ?? "mixed"}`;
+
 export const createSilentPcm16Base64 = (samples: number): string => {
   const sampleCount = Math.max(0, Math.floor(samples));
   if (sampleCount === 0) return "";

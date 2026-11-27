@@ -1,3 +1,4 @@
+import { TRANSCRIPTION_LINE_DEADLINE_MS } from "../transcript-worker/src/constants";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TranscriptRoom } from "../transcript-worker/src/room";
 import { connectSarvamTranscription } from "../transcript-worker/src/transcription/sarvam";
@@ -7,6 +8,7 @@ import type {
 } from "../transcript-worker/src/transcription/types";
 import type { Env, Viewer } from "../transcript-worker/src/types";
 import type { TranscriptSessionState } from "@conclave/meeting-core/transcript-types";
+import { pcmBase64, voicedPcm } from "./transcript-audio-fixtures";
 
 const { connectProvider, lookup } = vi.hoisted(() => ({
   connectProvider: vi.fn(),
@@ -97,6 +99,12 @@ async function fixture(env: Partial<Env> = {}) {
 
 const savedTexts = (room: TestRoom) => room.segments.map(({ text }) => text);
 
+const SPEECH = pcmBase64(voicedPcm(-26));
+const commitSpeech = async (room: TestRoom, viewer: Viewer) => {
+  await room.handleMessage(viewer, JSON.stringify({ type: "audio.chunk", audio: SPEECH }));
+  await room.handleMessage(viewer, JSON.stringify({ type: "audio.commit" }));
+};
+
 const moveRoomToSarvam = () =>
   lookup.mockResolvedValue({
     OPENAI_API_KEY: "sk-room",
@@ -109,7 +117,11 @@ describe("switching the caption language mid-sentence", () => {
     const { room, viewer, providers } = await fixture();
     await room.startSession(viewer, { ...roomSession, type: "session.start", language: "en" });
     const before = providers[0];
+    await commitSpeech(room, viewer);
+    before.callbacks.onCommitted("earlier");
     await before.callbacks.onFinal("earlier", "This line finished before switching.");
+    await commitSpeech(room, viewer);
+    before.callbacks.onCommitted("utterance");
     before.callbacks.onDelta("utterance", "The release date is");
 
     await room.startSession(viewer, { ...roomSession, type: "session.takeover", language: "hi" });
@@ -128,11 +140,13 @@ describe("switching the caption language mid-sentence", () => {
     const { room, viewer, providers } = await fixture();
     await room.startSession(viewer, { ...roomSession, type: "session.start", language: "en" });
     const before = providers[0];
+    await commitSpeech(room, viewer);
+    before.callbacks.onCommitted("utterance");
     before.callbacks.onDelta("utterance", "The release date is");
 
     await room.startSession(viewer, { ...roomSession, type: "session.takeover", language: "hi" });
     expect(savedTexts(room)).toEqual([]);
-    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.advanceTimersByTimeAsync(TRANSCRIPTION_LINE_DEADLINE_MS + 100);
 
     expect(savedTexts(room)).toEqual(["The release date is"]);
     expect(before.close).toHaveBeenCalled();
@@ -142,10 +156,13 @@ describe("switching the caption language mid-sentence", () => {
     const { room, viewer, providers } = await fixture();
     await room.startSession(viewer, { ...roomSession, type: "session.start", language: "en" });
     const before = providers[0];
+    await commitSpeech(room, viewer);
+    before.callbacks.onCommitted("utterance");
     before.callbacks.onDelta("utterance", "Hello");
 
     await room.startSession(viewer, { ...roomSession, type: "session.takeover", language: "hi" });
     await before.callbacks.onFinal("utterance", "Hello there.");
+    before.callbacks.onCommitted("later");
     await before.callbacks.onFinal("later", "Words after the switch.");
 
     expect(savedTexts(room)).toEqual(["Hello there."]);
