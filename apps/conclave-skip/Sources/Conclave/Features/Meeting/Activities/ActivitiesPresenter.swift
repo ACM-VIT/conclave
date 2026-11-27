@@ -122,6 +122,16 @@ final class ActivitiesPresenter {
         if let current = setup { publishSetup(current.gameId) }
     }
 
+    func appStageChangeCancelled(isClosing: Bool) {
+        if isClosing {
+            if endPendingKind == ActivityKind.app.rawValue { endPendingKind = "" }
+        } else {
+            openPendingAppId = ""
+            if awaitingLiveKind == ActivityKind.app.rawValue { awaitingLiveKind = "" }
+        }
+        rebuild()
+    }
+
     func refresh() {
         send(ActivitiesCommand.make(ActivitiesCommandKind.refresh))
     }

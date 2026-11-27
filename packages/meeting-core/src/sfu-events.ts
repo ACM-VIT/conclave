@@ -218,6 +218,7 @@ export const SFU_EVENTS = {
     roomClosed: "roomClosed",
     roomEnded: "roomEnded",
     redirect: "redirect",
+    roomRecoveryPass: "roomRecoveryPass",
     serverRestarting: "serverRestarting",
 
     // Admin notices

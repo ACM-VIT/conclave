@@ -63,7 +63,12 @@ export const jobs = {
   "test-sfu": {
     budgetSeconds: 110,
     budgetFrom: "run",
-    tasks: [{ dir: "packages/sfu", script: "test:unit" }],
+    tasks: [{ dir: "packages/sfu", script: "test:unit", args: ["--shard=1/2"] }],
+  },
+  "test-sfu-b": {
+    budgetSeconds: 110,
+    budgetFrom: "run",
+    tasks: [{ dir: "packages/sfu", script: "test:unit", args: ["--shard=2/2"] }],
   },
   "test-transcript-oracle": {
     budgetSeconds: 300,

@@ -55,8 +55,9 @@ struct ActiveAppSessionError: LocalizedError, Equatable {
     }
 }
 
-private enum LocalAppEdits {
-    case clean, unverified, lostRenderer
+struct LostAppRendererEdits: Equatable {
+    let appSessionId: String
+    let bridgeGeneration: Int
 }
 
 @MainActor
@@ -111,7 +112,9 @@ final class ActiveAppSession {
     private var connectionEpoch = 0
     private var primeTask: Task<Void, Never>? = nil
     private var syncTask: Task<Void, Never>? = nil
-    private var localEdits = LocalAppEdits.clean
+    private var addProbeTask: Task<Void, Never>? = nil
+    private var hasUnverifiedEdits = false
+    private(set) var lostRendererEdits: LostAppRendererEdits?
     private var watchHidden = false
     private var leaveRequestId = ""
     private var leaveReplies: [(Bool) -> Void] = []
@@ -152,6 +155,7 @@ final class ActiveAppSession {
 
     func end() {
         if appSessionId.isEmpty { return }
+        cancelAddProbe()
         finishLeave(requestId: leaveRequestId, saved: false)
         send(AppBridgeOutboundType.close, requestId: nextRequestId(), payload: [:])
         let ended = appSessionId
@@ -168,7 +172,8 @@ final class ActiveAppSession {
         seenRequestIds = []
         hasRoomData = false
         embedReady = false
-        localEdits = LocalAppEdits.clean
+        hasUnverifiedEdits = false
+        lostRendererEdits = nil
         watchHidden = false
         lifecycle = ActiveAppLifecycle.ended
         emit(ActiveAppEvent.make(kind: ActiveAppEventKind.lifecycle, appSessionId: ended, lifecycle: lifecycle))
@@ -181,7 +186,7 @@ final class ActiveAppSession {
     }
 
     func releaseEmbedIfClean() {
-        if localEdits == LocalAppEdits.clean { releaseEmbed() }
+        if !hasUnverifiedEdits && lostRendererEdits == nil { releaseEmbed() }
     }
 
     func setWatchHidden(_ hidden: Bool) {
@@ -234,6 +239,7 @@ final class ActiveAppSession {
         if isConnectionLive == live { return }
         isConnectionLive = live
         if !live {
+            cancelAddProbe()
             finishLeave(requestId: leaveRequestId, saved: false)
             connectionEpoch += 1
             primeTask?.cancel()
@@ -355,8 +361,9 @@ final class ActiveAppSession {
 
     private func invalidateBridge() {
         finishLeave(requestId: leaveRequestId, saved: false)
-        if localEdits == LocalAppEdits.unverified {
-            localEdits = LocalAppEdits.lostRenderer
+        if hasUnverifiedEdits {
+            lostRendererEdits = LostAppRendererEdits(appSessionId: appSessionId, bridgeGeneration: bridgeGeneration)
+            hasUnverifiedEdits = false
         }
         bridgeGeneration += 1
         deliver = nil
@@ -365,6 +372,7 @@ final class ActiveAppSession {
         snapshotDelivered = false
         syncTask?.cancel()
         syncTask = nil
+        cancelAddProbe()
     }
 
     func embedFailed(appSessionId id: String, issue: AppHostIssue, mount: Int = 0) {
@@ -397,9 +405,15 @@ final class ActiveAppSession {
         return send(type, requestId: requestId, payload: payload)
     }
 
+    func discardLostRendererEdits(_ loss: LostAppRendererEdits) -> Bool {
+        guard lostRendererEdits == loss else { return false }
+        lostRendererEdits = nil
+        return true
+    }
+
     func prepareToLeave() async -> Bool {
-        if localEdits == LocalAppEdits.lostRenderer { return false }
-        if !embedReady { return localEdits == LocalAppEdits.clean }
+        if lostRendererEdits != nil { return false }
+        if !embedReady { return !hasUnverifiedEdits }
         guard isConnectionLive, isRelayAllowed() else { return false }
         return await withCheckedContinuation { continuation in
             leaveReplies.append { saved in continuation.resume(returning: saved) }
@@ -427,7 +441,7 @@ final class ActiveAppSession {
         leaveTimeout = nil
         leaveVerification?.cancel()
         leaveVerification = nil
-        if saved { localEdits = LocalAppEdits.clean }
+        if saved { hasUnverifiedEdits = false }
         for reply in replies { reply(saved) }
     }
 
@@ -460,11 +474,16 @@ final class ActiveAppSession {
             return handleReady(message)
         case .sync:
             if !embedReady { return reject(AppBridgeRejection.notAttached) }
-            startSync(stateVector: message.bytes, requestId: message.requestId)
+            if message.confirmAdds {
+                if appId != "wheel" { return reject(AppBridgeRejection.badPayload) }
+                confirmWheelAdds(stateVector: message.bytes, requestId: message.requestId)
+            } else {
+                startSync(stateVector: message.bytes, requestId: message.requestId)
+            }
         case .verifySaved:
             return verifySaved(requestId: message.requestId)
         case .editsPending:
-            if localEdits == LocalAppEdits.clean { localEdits = LocalAppEdits.unverified }
+            hasUnverifiedEdits = true
         case .update:
             if !embedReady { return reject(AppBridgeRejection.notAttached) }
             sendActiveAppYjsUpdate(message.bytes)
@@ -512,6 +531,30 @@ final class ActiveAppSession {
             startSync(stateVector: message.bytes, requestId: message.requestId)
         }
         return AppBridgeRejection.none
+    }
+
+    private func cancelAddProbe() {
+        addProbeTask?.cancel()
+        addProbeTask = nil
+    }
+
+    private func confirmWheelAdds(stateVector: Data, requestId: String) {
+        guard isConnectionLive else { return }
+        cancelAddProbe()
+        let expectedSession = appSessionId
+        let expectedMount = bridgeGeneration
+        let expectedEpoch = connectionEpoch
+        addProbeTask = Task { @MainActor [weak self] in
+            guard let self, !Task.isCancelled, self.isConnectionLive, self.appSessionId == expectedSession,
+                  self.bridgeGeneration == expectedMount, self.connectionEpoch == expectedEpoch else { return }
+            let response = try? await self.syncActiveApp(stateVector: stateVector)
+            guard !Task.isCancelled, self.isConnectionLive, self.appSessionId == expectedSession,
+                  self.bridgeGeneration == expectedMount, self.connectionEpoch == expectedEpoch else { return }
+            self.addProbeTask = nil
+            _ = self.send(.snapshot, requestId: requestId, payload: [
+                "syncMessage": response?.syncMessage.base64EncodedString() ?? "",
+            ])
+        }
     }
 
     private func startSync(stateVector: Data, requestId: String) {

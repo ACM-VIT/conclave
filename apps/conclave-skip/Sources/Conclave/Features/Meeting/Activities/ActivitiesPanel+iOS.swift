@@ -34,6 +34,7 @@ struct ActivitiesPanel: View {
         .background {
             ActivitiesPanelLeaves(session: session, presentationID: presentation.request.presentationID, path: $path)
         }
+        .appStageDiscardPrompt(host: session.appHost)
         .accessibilityIdentifier("activities.panel")
     }
 

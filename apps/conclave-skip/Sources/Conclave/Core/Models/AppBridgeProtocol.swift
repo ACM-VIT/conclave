@@ -152,6 +152,7 @@ struct AppBridgeInbound: Equatable {
     let appId: String
 
     let bytes: Data
+    let confirmAdds: Bool
 
     let clientId: Int
 
@@ -166,11 +167,11 @@ struct AppBridgeInbound: Equatable {
     let height: Int
 
     static func make(type: String, requestId: String = "", version: Int = AppBridgeProtocol.version, bundleVersion: String = "",
-                     appId: String = "", bytes: Data = Data(), clientId: Int = -1, ok: Bool = false, error: String = "",
+                     appId: String = "", bytes: Data = Data(), confirmAdds: Bool = false, clientId: Int = -1, ok: Bool = false, error: String = "",
                      pngBase64: String = "", added: [Int]? = nil, status: AppEmbedStatus = AppEmbedStatus.empty,
                      width: Int = 0, height: Int = 0) -> AppBridgeInbound {
         return AppBridgeInbound(type: type, requestId: requestId, version: version, bundleVersion: bundleVersion, appId: appId,
-                                bytes: bytes, clientId: clientId, ok: ok, error: error, pngBase64: pngBase64, added: added,
+                                bytes: bytes, confirmAdds: confirmAdds, clientId: clientId, ok: ok, error: error, pngBase64: pngBase64, added: added,
                                 status: status, width: width, height: height)
     }
 
@@ -232,7 +233,11 @@ enum AppBridgeCodec {
         case .sync:
             let vector = bytes(payload["stateVector"], limit: AppBridgeProtocol.stateVectorByteLimit)
             if vector.rejection != AppBridgeRejection.none { return AppBridgeDecodeResult.rejected(vector.rejection) }
-            return accepted(AppBridgeInbound.make(type: type, requestId: requestId, bytes: vector.data))
+            if payload["purpose"] != nil && (payload["purpose"] as? String) != "wheel-add-confirmation" {
+                return AppBridgeDecodeResult.rejected(.badPayload)
+            }
+            return accepted(AppBridgeInbound.make(type: type, requestId: requestId, bytes: vector.data,
+                                                  confirmAdds: (payload["purpose"] as? String) == "wheel-add-confirmation"))
         case .verifySaved, .editsPending:
             return accepted(AppBridgeInbound.make(type: type, requestId: requestId))
         case .update:

@@ -461,7 +461,7 @@
   },
   "src/lib/scheduled-meetings.ts": {
     "conclave/no-comments": {
-      "count": 12
+      "count": 13
     }
   },
   "src/lib/security-headers.ts": {
@@ -701,7 +701,7 @@
   },
   "transcript-worker/src/room.ts": {
     "conclave/no-comments": {
-      "count": 1
+      "count": 3
     }
   }
 }

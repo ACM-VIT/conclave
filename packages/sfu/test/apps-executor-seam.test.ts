@@ -45,6 +45,7 @@ const writer = (
     const id = (next += 1);
     return [{
       sender,
+      seat: sender,
       appId: options.appId ?? BOARD,
       key: options.key ?? "copy-1",
       host: options.host ?? false,

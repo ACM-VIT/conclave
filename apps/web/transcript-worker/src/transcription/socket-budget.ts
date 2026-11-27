@@ -51,8 +51,12 @@ export class SocketBudget {
     if (this.waiters.length > 0 || this.hungry.size > 0) this.releaseOne();
   }
 
-  acquire(signal?: AbortSignal): Promise<void> {
+  acquire(signal?: AbortSignal, onWait?: () => void): Promise<void> {
     if (this.take()) return Promise.resolve();
+    if (!signal?.aborted && onWait) {
+      onWait();
+      if (this.take()) return Promise.resolve();
+    }
     return new Promise((resolve, reject) => {
       const grant = () => {
         signal?.removeEventListener("abort", abort);

@@ -78,7 +78,7 @@ const enter = (state: SfuState, room: Room, joiner: ReturnType<typeof fakeSocket
 };
 
 const newRoom = (state: SfuState, id: string): Room => {
-  const room = new Room({ id, clientId: "conclave", workerPid: null, router: {} as Router, appDocuments: state.appDocuments });
+  const room = new Room({ id, clientId: "conclave", workerPid: null, router: { closed: true } as Router, appDocuments: state.appDocuments });
   state.rooms.set(room.channelId, room);
   return room;
 };
@@ -101,10 +101,10 @@ export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChang
   const room = newRoom(state, id);
   const context = enter(state, room, self, `a#${id}`);
   registerAppsHandlers(context);
-  const requestSync = (holder: Y.Doc, canRetry = true, wholeChanges = false) =>
+  const requestSync = (holder: Y.Doc | Uint8Array, canRetry = true, wholeChanges = false) =>
     call<AppsSyncResponse | AppsSyncError>("apps:yjs:sync", {
       appId,
-      syncMessage: Y.encodeStateVector(holder),
+      syncMessage: holder instanceof Y.Doc ? Y.encodeStateVector(holder) : holder,
       canRetry,
       ...(wholeChanges ? { wholeChanges } : {}),
     });
@@ -136,9 +136,13 @@ export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChang
     return {
       inbox: joiner.member.inbox,
       settle: () =>
-        joiner.call("apps:yjs:sync", { appId, syncMessage: Y.encodeStateVector(new Y.Doc()), canRetry: true }),
+        joiner.call<AppsSyncResponse | AppsSyncError>("apps:yjs:sync", {
+          appId, syncMessage: Y.encodeStateVector(new Y.Doc()), canRetry: true,
+        }),
       send: (update: Uint8Array, replicaId: string, part?: unknown) =>
         joiner.listeners.get("apps:yjs:update")!({ appId, update, replicaId, ...(part === undefined ? {} : { part }) }),
+      acknowledged: (update: Uint8Array, replicaId?: string, part?: unknown) =>
+        joiner.call("apps:yjs:update", { appId, update, replicaId, ...(part === undefined ? {} : { part }) }),
       updates: () => joiner.member.inbox.filter(({ event }) => event === "apps:yjs:update").map(({ payload }) => (payload as { update: Uint8Array }).update),
       states: () => joiner.member.inbox.filter(({ event }) => event === "apps:state").map(({ payload }) => (payload as { activeAppId: string | null }).activeAppId),
     };
@@ -170,6 +174,20 @@ export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChang
     room,
     inbox: self.member.inbox,
     relayed,
+    demote: () => {
+      const client = context.currentClient!;
+      room.setUserIdentity(client.id, client.id, client.id);
+      room.demoteToParticipant(client.id);
+    },
+    promote: () => room.grantHost(context.currentClient!.id, "promoted"),
+    reseat: () => {
+      const id = context.currentClient!.id;
+      room.removeClient(id);
+      const replacement = new Admin({ id, socket: self.socket });
+      room.addClient(replacement);
+      context.currentClient = replacement;
+    },
+    lock: (locked = true) => call<{ success: boolean }>("apps:lock", { locked }),
     get refused() {
       return refused();
     },
@@ -188,7 +206,7 @@ export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChang
     send: (update: Uint8Array, replicaId?: string, part?: unknown) =>
       listeners.get("apps:yjs:update")!({ appId, update, replicaId, ...(part === undefined ? {} : { part }) }),
     sendList: (updates: unknown, replicaId?: string) => listeners.get("apps:yjs:update")!({ appId, updates, replicaId }),
-    acknowledged: (payload: { update?: Uint8Array; updates?: unknown; part?: unknown }, replicaId?: string) =>
+    acknowledged: (payload: { update?: Uint8Array | string; updates?: unknown; part?: unknown }, replicaId?: string) =>
       new Promise<{ receipt: unknown; inbox: Received[]; relayed: number }>((resolve) => {
         listeners.get("apps:yjs:update")!({ appId, replicaId, ...payload }, (receipt: unknown) =>
           resolve({ receipt, inbox: [...self.member.inbox], relayed: relayed.length }),

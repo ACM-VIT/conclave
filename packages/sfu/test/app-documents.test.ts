@@ -5,6 +5,7 @@ import { createAppDocumentEngine, type FromWorker } from "../server/apps/documen
 import {
   createAppDocumentPool,
   RESIDENT_OVERHEAD_BYTES,
+  type AppDocument,
   type AppDocumentPool,
   type AppDocumentPoolOptions,
 } from "../server/apps/documents/pool.js";
@@ -150,6 +151,51 @@ const merged = (...updates: Uint8Array[]) => {
   for (const update of updates) Y.applyUpdate(doc, update);
   return textOf(doc);
 };
+
+describe("current Wheel document contract", () => {
+  it("rehydrates a retained Wheel document after worker eviction but not after room teardown", async () => {
+    const fixture = createFixture();
+    const pool = createPool({ residentBytes: RESIDENT_OVERHEAD_BYTES, workerUrl: STALLING_WORKER, workerData: fixture.workerData });
+    const workerDocuments: AppDocument[] = [];
+    const openDocument = pool.open;
+    vi.spyOn(pool, "open").mockImplementation(() => {
+      const handle = openDocument();
+      workerDocuments.push(handle);
+      return handle;
+    });
+    const room = inRoom(pool, "retained-wheel", { appId: "wheel" });
+    const legacy = new Y.Doc();
+    cleanups.push(() => legacy.destroy());
+    const entries = new Y.Array<{ id: string; label: string }>();
+    const stored = [{ id: "ada", label: "Ada" }, { id: "grace", label: "Grace" }];
+    legacy.getMap("wheel").set("entries", entries);
+    entries.push(stored);
+
+    await room.open();
+    const { document } = await fixture.next("loaded");
+    expect((await room.acknowledged({ update: Y.encodeStateAsUpdate(legacy) })).receipt).toEqual({ committed: true });
+    await fixture.next("dropped");
+    expect(await room.close()).toMatchObject({ success: true });
+    expect(await room.present("wheel")).toMatchObject({ success: true });
+    const { doc: cold } = await room.joinDocument();
+    cleanups.push(() => cold.destroy());
+    expect(await fixture.next("loaded")).toMatchObject({ document });
+    expect((cold.getMap("wheel").get("entries") as Y.Array<unknown>).toArray()).toEqual(stored);
+    expect(cold.getArray("wheel.entries").toArray()).toEqual([]);
+
+    room.room.close();
+    const [retained] = workerDocuments;
+    expect(retained).toBeDefined();
+    expect(await retained.sync(Y.encodeStateVector(cold))).toEqual({ ok: false, reason: "closed" });
+    expect(room.room.apps.snapshot()).toMatchObject({ activeAppId: null, savedAppIds: [] });
+    const restarted = inRoom(pool, "retained-wheel", { appId: "wheel" });
+    await restarted.open();
+    const { doc: fresh } = await restarted.joinDocument();
+    cleanups.push(() => fresh.destroy());
+    expect(fresh.getMap("wheel").has("entries")).toBe(false);
+    expect(fresh.getArray("wheel.entries").toArray()).toEqual([]);
+  });
+});
 
 describe("app document engine", () => {
   const steppingClock = () => {
@@ -942,6 +988,46 @@ describe("app documents", { timeout: 30_000 }, () => {
     expect(await room.present("wheel")).toMatchObject({ success: true });
     expect(await room.present("whiteboard")).toMatchObject({ success: true });
     expect(await room.join()).toBe("HOLD this stroke");
+  });
+
+  it("uses the current role for a pending write and queued stage change", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const fixture = createFixture();
+    const room = inRoom(createPool({ workerUrl: STALLING_WORKER, workerData: fixture.workerData }), "demoted-writer");
+    await room.open();
+    expect(await room.lock()).toMatchObject({ success: true });
+    const update = edit(new Y.Doc(), (text) => text.insert(0, "HOLD pending stroke"));
+    const upload = room.acknowledged({ update }, "stroke");
+    await fixture.next("held");
+    const close = room.close();
+    expect(await settledNow(close)).toBeUndefined();
+
+    room.demote();
+    fixture.release();
+    expect(await close).toMatchObject({ success: false, error: "Only admins can close apps" });
+    expect(await upload).toMatchObject({ receipt: undefined, relayed: 0 });
+    expect(room.refused).toContainEqual(expect.objectContaining({ replicaId: "stroke", reason: "locked" }));
+    expect(await room.join()).toBe("");
+  });
+
+  it("does not commit a pending change for a writer who left the room", async () => {
+    const fixture = createFixture();
+    const room = inRoom(createPool({ workerUrl: STALLING_WORKER, workerData: fixture.workerData }), "departed-writer");
+    await room.open();
+    const peer = await room.peer();
+    const update = edit(new Y.Doc(), (text) => text.insert(0, "HOLD pending stroke"));
+    const upload = room.acknowledged({ update }, "stroke");
+    await fixture.next("held");
+
+    room.leave();
+    fixture.release();
+    expect(await upload).toMatchObject({ receipt: undefined, relayed: 0 });
+    const response = await peer.settle();
+    if (!("syncMessage" in response)) throw new Error(response.error);
+    const doc = new Y.Doc();
+    Y.applyUpdate(doc, response.syncMessage);
+    expect(textOf(doc)).toBe("");
+    expect(peer.updates()).toEqual([]);
   });
 
   it("never echoes the worker's speculative Wheel add before commit", async () => {

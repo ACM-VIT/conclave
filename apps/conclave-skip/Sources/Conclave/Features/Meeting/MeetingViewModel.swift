@@ -571,6 +571,7 @@ final class MeetingViewModel {
         didSet { if oldValue != isRejoinInFlight { requestStageRefresh() } }
     }
     private var currentJoinInfo: SfuJoinInfo?
+    private var roomRecoveryPass = NativeRoomRecoveryPass()
     private var currentRoomAliases: Set<String> = []
     private var activeJoinAttemptId: UUID? = nil {
         didSet { requestShellRefresh() }
@@ -1986,6 +1987,17 @@ final class MeetingViewModel {
                     message.isEmpty ? "This meeting has been ended by the host." : message,
                     endedBy: notification.endedBy
                 )
+            }
+        }
+
+        socketManager.onRoomRecoveryPass = { [weak self] notification in
+            guard let self else { return }
+            let context = self.currentSocketEventContext()
+            Task { @MainActor in
+                guard !self.isIntentionalLeave,
+                      self.isCurrentSocketEvent(context, roomId: notification.roomId),
+                      let attempt = context.joinAttemptId else { return }
+                self.roomRecoveryPass.renew(notification, attempt: attempt)
             }
         }
 
@@ -5648,6 +5660,9 @@ final class MeetingViewModel {
         let previousAppId = state.activeAppId
         let previousGeneration = state.activeAppDocGeneration
         let activeAppId = notification.activeAppId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if previousAppId != activeAppId || previousGeneration != notification.docGeneration || state.appsRevision != notification.revision {
+            cancelAppStageDiscardPrompt()
+        }
         state.activeAppId = activeAppId?.isEmpty == false ? activeAppId : nil
         state.activeAppDocGeneration = state.activeAppId == nil ? nil : notification.docGeneration
         state.appsRevision = notification.revision
@@ -6764,6 +6779,7 @@ final class MeetingViewModel {
             return
         }
         cancelMicReplay(restore: false)
+        cancelAppStageDiscardPrompt()
         let joinStartedAt = Date()
         PerformanceDiagnostics.event(
             "join_room_start",
@@ -6771,6 +6787,7 @@ final class MeetingViewModel {
         )
         PerformanceDiagnostics.memory("join_room_start")
         let isRecoveryJoin = isRejoinInFlight
+        if !isRecoveryJoin { roomRecoveryPass.clear() }
         let previousConnectionState = state.connectionState
 
         beginShellRefreshBatch()
@@ -6809,8 +6826,9 @@ final class MeetingViewModel {
             resetReconnectRetryState()
             clearRoomConversationStateForFreshJoin()
         }
+        let joinClientId = clientId ?? SfuJoinService.resolveClientId()
         self.state.roomId = roomId
-        self.state.meetingClientId = clientId ?? SfuJoinService.resolveClientId()
+        self.state.meetingClientId = joinClientId
         self.currentRoomAliases = roomAliasSet(requestedRoomId: roomId, resolvedRoomId: nil)
         self.state.displayName = displayName
         self.state.isAdmin = isHost
@@ -6886,7 +6904,6 @@ final class MeetingViewModel {
                     && self.currentJoinInfo != nil
 
                 if !canReuseConnectedSocket {
-                    let clientId = clientId ?? SfuJoinService.resolveClientId()
                     let fetchStartedAt = Date()
 
                     let fetchedJoinInfo = try await EntryJoinRetry.fetchJoinInfo(
@@ -6907,7 +6924,7 @@ final class MeetingViewModel {
                                 sessionId: self.state.sessionId,
                                 user: userPayload,
                                 isHost: isHost,
-                                clientId: clientId,
+                                clientId: joinClientId,
                                 allowRoomCreation: isHost || allowRoomCreation,
                                 joinMode: joinMode,
                                 meetingInviteCode: meetingInviteCode,
@@ -6942,12 +6959,17 @@ final class MeetingViewModel {
 
                 state.connectionState = .joining
                 let socketJoinStartedAt = Date()
+                let recoveryScope = joinMode == .meeting
+                    ? currentJoinInfo?.roomRecoveryScope(roomId: roomId, clientId: joinClientId, sessionId: state.sessionId)
+                    : nil
+                let pass = roomRecoveryPass.beginJoin(scope: recoveryScope, isRecovery: isRecoveryJoin)
                 let response = try await socketManager.joinRoom(
                     roomId: roomId,
                     sessionId: state.sessionId,
                     displayName: effectiveSocketDisplayName,
                     meetingInviteCode: meetingInviteCode,
-                    webinarInviteCode: webinarInviteCode
+                    webinarInviteCode: webinarInviteCode,
+                    roomRecoveryPass: pass
                 )
                 PerformanceDiagnostics.timing("join_socket_join_room", startedAt: socketJoinStartedAt, details: "status=\(response.status ?? "nil")")
                 guard self.activeJoinAttemptId == joinAttemptId else {
@@ -6955,6 +6977,7 @@ final class MeetingViewModel {
                     return
                 }
 
+                roomRecoveryPass.accept(response, scope: recoveryScope, attempt: joinAttemptId)
                 if response.status == "waiting" {
                     resetLiveRoomSnapshotStateForJoin()
                     applyJoinSnapshot(response)
@@ -7876,6 +7899,8 @@ final class MeetingViewModel {
     }
 
     private func beginTerminalTransition() -> Int {
+        cancelAppStageDiscardPrompt()
+        roomRecoveryPass.clear()
         activeJoinAttemptId = nil
         meetingLifecycleGeneration += 1
         return meetingLifecycleGeneration
@@ -10706,6 +10731,7 @@ final class MeetingViewModel {
     ) async {
         let cleanupGeneration = expectedLifecycleGeneration ?? meetingLifecycleGeneration
         guard meetingLifecycleGeneration == cleanupGeneration else { return }
+        roomRecoveryPass.clear()
         cancelMicReplay(restore: false)
         resetReconnectRetryState()
         cancelPendingMediaLifecycleWork()
@@ -15437,21 +15463,54 @@ final class MeetingViewModel {
     }
     #endif
 
-    private func prepareAppStageChange(to nextAppId: String?, context: CallActionContext) async -> Bool {
+    private func cancelAppStageDiscardPrompt() {
+        let host = activitySession.appHost
+        host.resolveStageDiscardPrompt(id: host.stageDiscardPromptId, confirmed: false)
+    }
+
+    private enum AppStagePreparation: Equatable {
+        case ready, blocked, awaitingDiscard
+    }
+
+    private func canChangeAppStage(context: CallActionContext, activeAppId: String?, revision: Int?,
+                                   generation: Int?, appSessionId: String) -> Bool {
+        return isCurrentJoinedCall(context) && state.isAdmin && !state.isWebinarAttendee
+            && state.activeAppId == activeAppId && state.appsRevision == revision
+            && state.activeAppDocGeneration == generation && activeAppSession.appSessionId == appSessionId
+    }
+
+    private func prepareAppStageChange(to nextAppId: String?, context: CallActionContext) async -> AppStagePreparation {
         let activeAppId = state.activeAppId
         let revision = state.appsRevision
         let generation = state.activeAppDocGeneration
         let appSessionId = activeAppSession.appSessionId
-        if let activeAppId, activeAppId != nextAppId {
-            if !(await activeAppSession.prepareToLeave()) { return false }
+        var saved = true
+        if activeAppId != nil && activeAppId != nextAppId {
+            saved = await activeAppSession.prepareToLeave()
         }
-        return isCurrentJoinedCall(context) && state.isAdmin && state.activeAppId == activeAppId
-            && state.appsRevision == revision && state.activeAppDocGeneration == generation
-            && activeAppSession.appSessionId == appSessionId
+        guard canChangeAppStage(context: context, activeAppId: activeAppId, revision: revision,
+                                generation: generation, appSessionId: appSessionId) else { return .blocked }
+        if saved { return .ready }
+        guard let loss = activeAppSession.lostRendererEdits else { return .blocked }
+        activitySession.appHost.requestStageDiscard { [weak self] confirmed in
+            guard let self else { return }
+            guard confirmed, self.canChangeAppStage(context: context, activeAppId: activeAppId, revision: revision,
+                                                    generation: generation, appSessionId: appSessionId),
+                  self.activeAppSession.discardLostRendererEdits(loss) else {
+                if self.isSameCallContext(context) {
+                    self.activitySession.activities.appStageChangeCancelled(isClosing: nextAppId == nil)
+                    if nextAppId == nil { self.activitySession.appHost.closeCancelled() }
+                }
+                return
+            }
+            if let nextAppId { self.openMeetingApp(nextAppId) }
+            else { self.closeActiveApp() }
+        }
+        return .awaitingDiscard
     }
 
     func closeActiveApp() {
-        guard state.isAdmin, !state.isWebinarAttendee else { return }
+        guard state.isAdmin, !state.isWebinarAttendee, activitySession.appHost.stageDiscardPromptId.isEmpty else { return }
         let actionKey = "apps"
         guard let actionToken = beginAdminAction(actionKey) else { return }
         let actionContext = currentCallActionContext()
@@ -15465,8 +15524,9 @@ final class MeetingViewModel {
                 }
             }
             guard isCurrentJoinedCall(actionContext) else { return }
-            guard await prepareAppStageChange(to: nil, context: actionContext) else {
-                if isCurrentJoinedCall(actionContext) {
+            let preparation = await prepareAppStageChange(to: nil, context: actionContext)
+            guard preparation == .ready else {
+                if preparation == .blocked && isCurrentJoinedCall(actionContext) {
                     activitySession.activities.commandFailed(.closeApp, serverText: "")
                     activitySession.appHost.closeFailed()
                 }
@@ -15492,7 +15552,7 @@ final class MeetingViewModel {
     }
 
     func toggleAppsLock() {
-        guard state.isAdmin, !state.isWebinarAttendee else { return }
+        guard state.isAdmin, !state.isWebinarAttendee, activitySession.appHost.stageDiscardPromptId.isEmpty else { return }
         let locked = !state.isAppsLocked
         let actionKey = "apps"
         guard let actionToken = beginAdminAction(actionKey) else { return }
@@ -15526,7 +15586,7 @@ final class MeetingViewModel {
     }
 
     func openMeetingApp(_ appId: String) {
-        guard state.isAdmin, !state.isWebinarAttendee else { return }
+        guard state.isAdmin, !state.isWebinarAttendee, activitySession.appHost.stageDiscardPromptId.isEmpty else { return }
         let trimmedAppId = appId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedAppId.isEmpty else { return }
         let actionKey = "apps"
@@ -15542,8 +15602,9 @@ final class MeetingViewModel {
                 }
             }
             guard isCurrentJoinedCall(actionContext) else { return }
-            guard await prepareAppStageChange(to: trimmedAppId, context: actionContext) else {
-                if isCurrentJoinedCall(actionContext) {
+            let preparation = await prepareAppStageChange(to: trimmedAppId, context: actionContext)
+            guard preparation == .ready else {
+                if preparation == .blocked && isCurrentJoinedCall(actionContext) {
                     activitySession.activities.commandFailed(.openApp, serverText: "")
                 }
                 return

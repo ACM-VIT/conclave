@@ -25,6 +25,7 @@ final class SocketIOManager {
     var onRoomClosed: ((RoomClosedNotification) -> Void)?
     var onRoomEnded: ((RoomEndedNotification) -> Void)?
     var onServerRestarting: ((ServerRestartingNotification) -> Void)?
+    var onRoomRecoveryPass: ((RoomRecoveryPassNotification) -> Void)?
     var onAdminNotice: ((AdminNoticeNotification) -> Void)?
     var onAdminHandsCleared: ((AdminHandsClearedNotification) -> Void)?
     var onAdminRoomStateChanged: ((AdminRoomStateChangedNotification) -> Void)?
@@ -100,7 +101,8 @@ final class SocketIOManager {
         sessionId: String,
         displayName: String?,
         meetingInviteCode: String? = nil,
-        webinarInviteCode: String? = nil
+        webinarInviteCode: String? = nil,
+        roomRecoveryPass: String? = nil
     ) async throws -> JoinRoomResponse {
         fatalError()
     }

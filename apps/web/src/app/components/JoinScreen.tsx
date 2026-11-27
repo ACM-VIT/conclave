@@ -437,6 +437,7 @@ function JoinScreen({
   const microphonePermissionState = useMediaPermissionState("microphone");
   const [blockedDevices, setBlockedDevices] = useState<BlockedDevice[]>([]);
   const [isRetryingBlocked, setIsRetryingBlocked] = useState(false);
+  const blockedRetryRef = useRef<AbortController | null>(null);
   const markDeviceAvailable = (kind: PrejoinMediaKind) => {
     const device = BLOCKED_DEVICE_OF[kind];
     setBlockedDevices((current) =>
@@ -564,6 +565,7 @@ function JoinScreen({
   };
 
   const dropReleasedPreview = useEffectEvent(() => {
+    blockedRetryRef.current?.abort();
     cancelCaptures(() => true);
     replacePreviewTracks(PREJOIN_MEDIA_KINDS, []);
   });
@@ -714,6 +716,8 @@ function JoinScreen({
   }, [localStream, previewStream]);
   useEffect(() => {
     return () => {
+      blockedRetryRef.current?.abort();
+      blockedRetryRef.current = null;
       captureSlotsRef.current = {};
       const handedOffTrackIds = handedOffTrackIdsRef.current;
       logJoinMedia("unmount_stop_local_stream", {
@@ -878,6 +882,7 @@ function JoinScreen({
       hadCarriedMediaRef.current ||
       PREJOIN_MEDIA_KINDS.some((kind) => captureSlotsRef.current[kind]);
     cancelRejoinRestore();
+    blockedRetryRef.current?.abort();
     cancelCaptures(() => true);
     return skipMutedMicWarmup;
   };
@@ -912,18 +917,29 @@ function JoinScreen({
     setPending({ mode: "join", destination });
   };
 
+  const canRetryBlockedDevices = !pending && !isLoading;
   const retryBlockedDevices = async (
     devices: readonly BlockedDevice[] = blockedDevices,
   ) => {
-    if (isRetryingBlocked) return;
+    if (!canRetryBlockedDevices || blockedRetryRef.current) return;
+    const retry = new AbortController();
+    blockedRetryRef.current = retry;
     setIsRetryingBlocked(true);
     try {
       if (devices.includes("microphone") && !isMicOn) await toggleMic();
-      if (devices.includes("camera") && !isCameraOn && !isAudioOnly) {
-        await toggleCamera();
+      if (retry.signal.aborted) return;
+      if (
+        devices.includes("camera") &&
+        !audioOnlyRef.current &&
+        !livePreviewTracks().some((track) => track.kind === "video")
+      ) {
+        await togglePreviewDevice("video", true);
       }
     } finally {
-      setIsRetryingBlocked(false);
+      if (blockedRetryRef.current === retry) {
+        blockedRetryRef.current = null;
+        setIsRetryingBlocked(false);
+      }
     }
   };
   const grantedBlockedDevices = blockedDevicesNowGranted(blockedDevices, {
@@ -936,14 +952,14 @@ function JoinScreen({
     autoRetriedRef.current = autoRetriedRef.current.filter((device) =>
       grantedBlockedDevices.includes(device),
     );
-    if (isRetryingBlocked) return;
+    if (!canRetryBlockedDevices || isRetryingBlocked) return;
     const due = grantedBlockedDevices.filter(
       (device) => !autoRetriedRef.current.includes(device),
     );
     if (due.length === 0) return;
     autoRetriedRef.current = [...autoRetriedRef.current, ...due];
     void retryBlockedDevices(due);
-  }, [grantedBlockedKey, isRetryingBlocked]);
+  }, [canRetryBlockedDevices, grantedBlockedKey, isRetryingBlocked]);
 
   const handleSignOut = async () => {
     if (isSigningOut) return;

@@ -299,6 +299,7 @@ const service = (name, sfu, index) => ({
     NODE_ENV: "production",
     SFU_CORS_ORIGINS: "https://conclave.example",
     CONCLAVE_SQLITE_PATH: "/var/lib/conclave/recordings/conclave.sqlite",
+    RECORDING_STORAGE_PATH: "/var/lib/conclave/recordings",
     // DEPLOY_TEST_OVERLAP gives both services one RTC range, which the full
     // preflight rejects.
     RTC_MIN_PORT: process.env.DEPLOY_TEST_OVERLAP ? "41001" : String(40000 + index * 1000),

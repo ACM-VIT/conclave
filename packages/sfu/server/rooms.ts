@@ -197,13 +197,16 @@ const releaseLease = (state: SfuState, channelId: string): void => {
   runDetached(`Releasing the lease of ${channelId}`, () => state.roomRegistry.releaseRoom(channelId));
 };
 
+const pendingRoomCommits = (state: SfuState, channelId: string): Promise<boolean>[] =>
+  [...(state.roomCommitsInFlight.get(channelId) ?? [])];
+
 const releaseRoomLease = (state: SfuState, channelId: string): void => {
   const held = state.deferredRoomWrites.get(channelId);
   if (held) {
     held.releaseAfter = true;
     return;
   }
-  const commits = [...(state.roomCommitsInFlight.get(channelId) ?? [])];
+  const commits = pendingRoomCommits(state, channelId);
   if (commits.length === 0) {
     releaseLease(state, channelId);
     return;
@@ -464,10 +467,11 @@ const noteMeetingOver = (
   const over = state.roomRecovery.overRecord(room);
   const at = over.overAt ?? Date.now();
   const booking = findBookingForWrite(state, room);
+  const earlierCommits = pendingRoomCommits(state, room.channelId);
   void writeSharedRoomState(state, room, "the end of its meeting", (generation) =>
     Promise.all([
       state.roomRecovery.saveRecord(room, over, generation),
-      booking.then(async (found) => {
+      Promise.all([booking, Promise.allSettled(earlierCommits)]).then(async ([found]) => {
         if (!found.ok) throw found.error;
         return !found.meeting ||
           (await state.controlPlane.commit(updateRoomInvitation(found.meeting, { kind: "end", at, generation }))).ok;
@@ -645,6 +649,15 @@ export const getOrCreateRoomWithOrigin = async (
     let worker: Worker | undefined;
     let router: Router | undefined;
     try {
+      // Reopening on the same SFU can reuse the lease generation, so its
+      // fence alone cannot distinguish writes from the preceding meeting.
+      const preceding = pendingRoomCommits(state, channelId);
+      if (preceding.length > 0 && !await withDeadline(
+        Promise.allSettled(preceding).then(() => true), false,
+      )) {
+        throw new RoomOpeningError(channelId, "the previous room's writes did not finish in time");
+      }
+
       const fenced = await withDeadline(
         Promise.all([
           state.roomRecovery.fence(

@@ -127,6 +127,13 @@ jobs:
       CI_JOB: test-sfu
     steps: *ci-steps
 
+  test-sfu-b:
+    runs-on: *ci-runner
+    timeout-minutes: 10
+    env:
+      CI_JOB: test-sfu-b
+    steps: *ci-steps
+
   test-transcript-oracle:
     runs-on: *ci-runner
     timeout-minutes: 10
@@ -150,7 +157,7 @@ jobs:
 
   test-result:
     name: test
-    needs: [test-unit, test-sfu, test-transcript-oracle, test-backup, test-sfu-app-model]
+    needs: [test-unit, test-sfu, test-sfu-b, test-transcript-oracle, test-backup, test-sfu-app-model]
     if: ${{ always() }}
     runs-on: *ci-runner
     timeout-minutes: 1
@@ -158,12 +165,14 @@ jobs:
       - env:
           TEST_UNIT_RESULT: ${{ needs.test-unit.result }}
           TEST_SFU_RESULT: ${{ needs.test-sfu.result }}
+          TEST_SFU_B_RESULT: ${{ needs.test-sfu-b.result }}
           TEST_TRANSCRIPT_ORACLE_RESULT: ${{ needs.test-transcript-oracle.result }}
           TEST_BACKUP_RESULT: ${{ needs.test-backup.result }}
           TEST_SFU_APP_MODEL_RESULT: ${{ needs.test-sfu-app-model.result }}
         run: |
           test "$TEST_UNIT_RESULT" = success &&
           test "$TEST_SFU_RESULT" = success &&
+          test "$TEST_SFU_B_RESULT" = success &&
           test "$TEST_TRANSCRIPT_ORACLE_RESULT" = success &&
           test "$TEST_BACKUP_RESULT" = success &&
           test "$TEST_SFU_APP_MODEL_RESULT" = success

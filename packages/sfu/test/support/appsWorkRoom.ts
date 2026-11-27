@@ -317,6 +317,11 @@ export const makeWorkRooms = () => {
         if (needsSync && !syncInFlight) peer.sync();
       },
       command,
+      rejoinSeat: () => {
+        context.currentClient = seat(room);
+        freshCopy();
+        peer.sync();
+      },
       leave: () => {
         handlers.get("disconnecting")?.();
         connected = false;

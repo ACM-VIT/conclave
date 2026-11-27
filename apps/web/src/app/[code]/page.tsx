@@ -3,8 +3,6 @@ import { headers as nextHeaders } from "next/headers";
 import MeetsClientShell from "../meets-client-shell";
 import RouteLoadingState from "../components/RouteLoadingState";
 import ScheduledMeetingLanding from "../components/ScheduledMeetingLanding";
-import ErrorStateView from "../components/ErrorStateView";
-import { isSfuTooOldForBookings } from "../../lib/scheduled-meeting-lookup";
 import {
   isMeetingJoinable,
   lookupScheduledMeetingForCode,
@@ -93,29 +91,17 @@ async function MeetRoomContent({ params, searchParams }: MeetRoomPageProps) {
     ? getParamValue(resolvedSearchParams.name)
     : undefined;
   let mayOpenRoom = false;
+  let joinClientId = destination.clientId;
   const user = displayName ? { name: displayName } : undefined;
   const isAdmin =
     devOverridesEnabled && isTruthyParam(resolvedSearchParams.admin);
 
   if (destination.roomCode) {
-    let lookup: Awaited<ReturnType<typeof lookupScheduledMeetingForCode>>;
-    try {
-      lookup = await lookupScheduledMeetingForCode(destination);
-    } catch (error) {
-      if (!isSfuTooOldForBookings(error)) throw error;
-      if (!bypassMediaPermissions) {
-        return (
-          <ErrorStateView
-            eyebrow="Meetings are updating"
-            title="This meeting link can't open yet"
-            message="The meeting service is being updated. Try this link again in a few minutes."
-            homeLabel="Go home"
-          />
-        );
-      }
-      lookup = { kind: "unknown" };
-    }
+    const lookup = await lookupScheduledMeetingForCode(destination, {
+      allowLegacyBooking: resolvedSearchParams.clientId === undefined && joinMode !== "webinar_attendee",
+    });
     mayOpenRoom = lookup.kind !== "unscheduled";
+    if (lookup.kind === "scheduled") joinClientId = lookup.clientId;
     // Recorders go straight to the join.
     if (
       lookup.kind === "scheduled" &&
@@ -145,7 +131,7 @@ async function MeetRoomContent({ params, searchParams }: MeetRoomPageProps) {
       forceJoinOnly={true}
       allowRoomCreation={mayOpenRoom}
       bypassMediaPermissions={bypassMediaPermissions}
-      sfuClientId={destination.clientId}
+      sfuClientId={joinClientId}
       autoJoinOnMount={autoJoinOnMount}
       hideJoinUI={hideJoinUI}
       joinMode={joinMode}

@@ -229,6 +229,68 @@ struct WatchTogetherOptOutTests {
         #expect(viewModel.state.activeAppId == (action == "close" ? nil : "wheel"))
         #expect(viewModel.state.appsRevision == 7)
     }
+    @Test(arguments: ["close", "present"], [true, false])
+    func lostRendererRequiresAnExplicitDiscardBeforeTheSameStageChange(action: String, replacementSaves: Bool) async throws {
+        let viewModel = isolatedViewModel()
+        viewModel.state = MeetingState(userId: "host@example.com#local-session", sessionId: "local-session")
+        viewModel.state.roomId = "room-a"
+        viewModel.state.connectionState = .joined
+        viewModel.state.isAdmin = true
+        viewModel.socketManager.onAppsState?(AppsStateNotification(activeAppId: "watch", locked: false, roomId: "room-a",
+                                                                  revision: 7, docGeneration: 2))
+        let relay = viewModel.activeAppSession
+        let host = viewModel.activitySession.appHost
+        await settle { relay.appId == "watch" }
+        let id = relay.appSessionId
+        relay.bundleOrigin = AppBridgeProtocol.iosOrigin
+        let firstAttached = relay.attachBridge(appSessionId: id) { _ in }
+        #expect(firstAttached)
+        let mount = relay.bridgeGeneration
+        #expect(Self.post(relay, "editsPending", requestId: "e-edit", payload: [:], mount: mount) == .none)
+        relay.embedFailed(appSessionId: id, issue: .rendererGone, mount: mount)
+        host.retry()
+        relay.acceptPrimedSnapshot(AppsSyncResponse(syncMessage: Data(), stateVector: nil, awarenessUpdate: nil), appSessionId: id)
+        var replacementSaveAttempts = 0
+        let replacementAttached = relay.attachBridge(appSessionId: id) { [weak relay] raw in
+            guard let relay, let packet = AppBridgeCodec.jsonObject(raw),
+                  packet["type"] as? String == "prepareToLeave", let requestId = packet["requestId"] as? String else { return }
+            replacementSaveAttempts += 1
+            _ = Self.post(relay, "ack", requestId: requestId, payload: ["ok": replacementSaves], mount: relay.bridgeGeneration)
+        }
+        #expect(replacementAttached)
+        #expect(Self.post(relay, "ready", requestId: "e-ready", payload: ["appId": "watch", "bundleVersion": "1.1.0"],
+                          mount: relay.bridgeGeneration) == .none)
+        #expect(Self.post(relay, "editsPending", requestId: "replacement-edit", payload: [:],
+                          mount: relay.bridgeGeneration) == .none)
+        let perform = {
+            if action == "close" { viewModel.closeActiveApp() }
+            else { viewModel.openMeetingApp("wheel") }
+        }
+
+        perform()
+        await settle { !host.stageDiscardPromptId.isEmpty && !viewModel.state.isAppsActionInFlight }
+        let cancelled = host.stageDiscardPromptId
+        #expect(!cancelled.isEmpty)
+        #expect(viewModel.state.activeAppId == "watch")
+        host.resolveStageDiscardPrompt(id: cancelled, confirmed: false)
+
+        perform()
+        await settle { !host.stageDiscardPromptId.isEmpty && !viewModel.state.isAppsActionInFlight }
+        let confirmed = host.stageDiscardPromptId
+        #expect(!confirmed.isEmpty && confirmed != cancelled)
+        host.resolveStageDiscardPrompt(id: cancelled, confirmed: true)
+        #expect(host.stageDiscardPromptId == confirmed)
+        #expect(viewModel.state.activeAppId == "watch")
+        viewModel.toggleAppsLock()
+        #expect(!viewModel.state.isAppsActionInFlight)
+        host.resolveStageDiscardPrompt(id: confirmed, confirmed: true)
+        await settle { !viewModel.state.isAppsActionInFlight }
+        #expect(replacementSaveAttempts == 1)
+        let expectedApp = replacementSaves ? (action == "close" ? nil : "wheel") : "watch"
+        #expect(viewModel.state.activeAppId == expectedApp)
+        #expect(!viewModel.state.isAppsLocked)
+        #expect(viewModel.state.appsRevision == 7)
+    }
     #endif
 
     @Test func aRefusedWatchEditSurvivesHideAndCanBeCheckedAgainAfterRejoin() async throws {

@@ -421,7 +421,7 @@
   },
   "packages/sfu/server/rooms.ts": {
     "conclave/no-comments": {
-      "count": 33
+      "count": 35
     }
   },
   "packages/sfu/server/scheduledMeetings.ts": {
@@ -431,7 +431,7 @@
   },
   "packages/sfu/server/scheduledWebinarScheduler.ts": {
     "conclave/no-comments": {
-      "count": 5
+      "count": 6
     }
   },
   "packages/sfu/server/scheduling.ts": {

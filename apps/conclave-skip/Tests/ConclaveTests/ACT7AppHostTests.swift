@@ -187,6 +187,45 @@ struct ACT7AppHostTests {
         }
     }
 
+    @Test func wheelConfirmationReadsTheRoomWithoutResettingTheReadyRenderer() async throws {
+        let wire = Wire()
+        let relay = session(wire, appId: "wheel")
+        #expect(ready(relay) == .none)
+        await settle { relay.snapshotDelivered }
+        let before = wire.events.count
+        let request = envelope(relay, "sync", ["stateVector": "AQ==", "purpose": "wheel-add-confirmation"],
+                               requestId: "wheel-confirm-1")
+        #expect(relay.receiveFromEmbed(raw: request, origin: AppBridgeProtocol.iosOrigin, isMainFrame: true) == .none)
+        #expect(relay.snapshotDelivered)
+        await settle { wire.syncs.count == 2 && wire.types().last == "snapshot" }
+        let response = try #require(wire.delivered.last)
+        let snapshot = try #require(AppBridgeCodec.jsonObject(response))
+        #expect(snapshot["requestId"] as? String == "wheel-confirm-1")
+        #expect((snapshot["payload"] as? [String: Any])?["syncMessage"] as? String == "AQI=")
+        #expect(wire.syncs == [Data([0]), Data([1])])
+        #expect(wire.events.count == before)
+        #expect(relay.snapshotDelivered && relay.isReady)
+    }
+
+    @Test(arguments: ["disconnect", "switch", "offline"])
+    func aWheelConfirmationCannotSyncAfterItsConnectionOrSessionEnds(_ exit: String) async {
+        let wire = Wire()
+        let relay = session(wire, appId: "wheel")
+        #expect(ready(relay) == .none)
+        await settle { relay.snapshotDelivered }
+        #expect(wire.syncs == [Data([0])])
+        if exit == "offline" { relay.setConnection(live: false) }
+
+        let request = envelope(relay, "sync", ["stateVector": "AQ==", "purpose": "wheel-add-confirmation"],
+                               requestId: "wheel-confirm-1")
+        #expect(relay.receiveFromEmbed(raw: request, origin: AppBridgeProtocol.iosOrigin, isMainFrame: true) == .none)
+        if exit == "disconnect" { relay.setConnection(live: false) }
+        if exit == "switch" { relay.begin(appId: "whiteboard", callSessionId: Self.call, isReadOnly: false) }
+
+        await settle { wire.syncs.count > 1 }
+        #expect(wire.syncs == [Data([0])])
+    }
+
     @Test func readyGetsHostStatusThenTheSnapshotThenBufferedRoomBytes() async throws {
         let wire = Wire()
         let relay = session(wire)
@@ -377,6 +416,29 @@ struct ACT7AppHostTests {
         relay.end()
         relay.begin(appId: "whiteboard", callSessionId: "next-call", isReadOnly: false)
         #expect(await relay.prepareToLeave(), "A new call does not inherit the previous app's lost edits.")
+    }
+
+    @Test func aDiscardDecisionDoesNotCoverEditsLostByALaterRenderer() async throws {
+        let wire = Wire()
+        let relay = session(wire)
+        let id = relay.appSessionId
+        let firstMount = relay.bridgeGeneration
+        #expect(ready(relay) == .none)
+        let edit = envelope(relay, "editsPending", [:], requestId: "e-edit")
+        #expect(relay.receiveFromEmbed(raw: edit, origin: AppBridgeProtocol.iosOrigin, isMainFrame: true, mount: firstMount) == .none)
+        relay.embedFailed(appSessionId: id, issue: .rendererGone, mount: firstMount)
+        let firstLoss = try #require(relay.lostRendererEdits)
+
+        #expect(relay.attachBridge(appSessionId: id) { _ in })
+        let nextMount = relay.bridgeGeneration
+        #expect(ready(relay) == .none)
+        #expect(relay.receiveFromEmbed(raw: edit, origin: AppBridgeProtocol.iosOrigin, isMainFrame: true, mount: nextMount) == .none)
+        relay.embedFailed(appSessionId: id, issue: .rendererGone, mount: nextMount)
+        let nextLoss = try #require(relay.lostRendererEdits)
+        #expect(!relay.discardLostRendererEdits(firstLoss))
+        #expect(!(await relay.prepareToLeave()))
+        #expect(relay.discardLostRendererEdits(nextLoss))
+        #expect(await relay.prepareToLeave())
     }
 
     @Test func movedHelpersKeepTheViewModelGuards() async throws {

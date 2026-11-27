@@ -2,12 +2,18 @@ import type { Express, Request, Response } from "express";
 import type { Server as SocketIOServer } from "socket.io";
 import { Logger } from "../../utilities/loggers.js";
 import { secretsMatch } from "../secret.js";
-import { ensureWebinarRoomConfig, notifyRoomConfig, settleWebinarRoom } from "../scheduledWebinarScheduler.js";
+import {
+  invalidateWebinarPublicationReads,
+  notifyRoomConfig,
+  publishDeletedWebinar,
+  refreshWebinarRoomConfig,
+} from "../scheduledWebinarScheduler.js";
 import { getRoomChannelId } from "../rooms.js";
 import {
   buildCoHostInviteLink,
   generateCoHostInviteToken,
   hashCoHostInviteToken,
+  isConcludedWebinar,
   isWebinarHostOrCoHost,
 } from "../scheduledWebinars.js";
 import {
@@ -161,6 +167,18 @@ export const registerScheduledWebinarRoutes = (
 
   const notices = notifyRoomConfig(state, () => getIo?.() ?? null);
 
+  const publishSavedWebinar = async (webinar: ScheduledWebinar): Promise<void> => {
+    if (isConcludedWebinar(webinar)) {
+      invalidateWebinarPublicationReads(state);
+      if (!state.webinarConfigs.has(getRoomChannelId(webinar.clientId, webinar.roomId))) return;
+    }
+    try {
+      await refreshWebinarRoomConfig(state, webinar, notices);
+    } catch (error) {
+      Logger.error("[Webinar] Saved settings, but could not refresh the room", error);
+    }
+  };
+
   const changeStatus = async (
     req: Request,
     res: Response,
@@ -174,9 +192,7 @@ export const registerScheduledWebinarRoutes = (
       return;
     }
     const { webinar } = result.value;
-    if (status === "live" || state.webinarConfigs.has(getRoomChannelId(webinar.clientId, webinar.roomId))) {
-      ensureWebinarRoomConfig(state, webinar, notices);
-    }
+    await publishSavedWebinar(webinar);
     res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
   };
 
@@ -221,7 +237,7 @@ export const registerScheduledWebinarRoutes = (
         return;
       }
       const { webinar } = result.value;
-      ensureWebinarRoomConfig(state, webinar, notices);
+      await publishSavedWebinar(webinar);
       Logger.info(`Scheduled webinar created ${webinar.id} (${webinar.linkSlug}) by ${user.email}`);
       res.status(201).json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
     }),
@@ -299,7 +315,7 @@ export const registerScheduledWebinarRoutes = (
         return;
       }
       const { webinar } = result.value;
-      ensureWebinarRoomConfig(state, webinar, notices);
+      await publishSavedWebinar(webinar);
       res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
     }),
   );
@@ -316,7 +332,7 @@ export const registerScheduledWebinarRoutes = (
         return;
       }
       const webinar = result.value;
-      settleWebinarRoom(state, getRoomChannelId(webinar.clientId, webinar.roomId), null, notices);
+      publishDeletedWebinar(state, webinar, result.rev, notices);
       res.json({ success: true, id: webinar.id });
     }),
   );
@@ -390,8 +406,9 @@ export const registerScheduledWebinarRoutes = (
         sendFailure(res, result);
         return;
       }
-      ensureWebinarRoomConfig(state, result.value, notices);
-      res.json({ scheduledWebinar: serializeScheduledWebinar(result.value) });
+      const { webinar } = result.value;
+      await publishSavedWebinar(webinar);
+      res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
     }),
   );
 };

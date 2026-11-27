@@ -18,7 +18,7 @@
     "email:dev": "react-email dev --dir server/email --port 3002",
     "new:game": "node ./scripts/new-game.mjs",
     "test:game-ai": "npx tsx scripts/test-game-ai.ts",
-    "test": "pnpm run test:unit && pnpm run test:apps-room-model",
+    "test": "pnpm run test:unit --shard=1/2 && pnpm run test:unit --shard=2/2 && pnpm run test:apps-room-model",
     "test:unit": "vitest run test --exclude \"**/apps-room-model.test.ts\"",
     "test:apps-room-model": "vitest run test/apps-room-model.test.ts",
     "typecheck": "tsc --noEmit",

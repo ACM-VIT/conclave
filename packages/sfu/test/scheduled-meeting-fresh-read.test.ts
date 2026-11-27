@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createClient } from "redis";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { bookingInvites, roomBooking, updateRoomInvitation } from "../server/controlPlane/inviteeCommands.js";
+import { bookingInvites, roomBooking, roomInviteeDecision, updateRoomInvitation } from "../server/controlPlane/inviteeCommands.js";
 import { createMeeting, deleteMeeting, meetingByRoomCode, updateMeeting } from "../server/controlPlane/meetingCommands.js";
 import { openControlPlane, resolveControlPlaneConfig } from "../server/controlPlane/open.js";
 import { openSqliteDatabase } from "../server/controlPlane/backends/sqlite.js";
@@ -86,7 +86,6 @@ describe.each(hasRedis ? ["memory", "json", "sqlite", "redis"] as const : ["memo
     await commit(store, meeting, { kind: "decide", email: INVITEE, removed: false, at: 30 });
     await commit(store, meeting, { kind: "decide", email: INVITEE, removed: true, at: 30 });
     await commit(store, meeting, { kind: "decide", email: INVITEE, removed: false, at: 30 });
-    await commit(store, meeting, { kind: "end", at: 20 });
     expect(await invited(store)).toBe(false);
     await commit(store, meeting, { kind: "end", at: 30 });
     await commit(store, meeting, { kind: "decide", email: INVITEE, removed: true, at: 29 });
@@ -109,6 +108,31 @@ describe.each(hasRedis ? ["memory", "json", "sqlite", "redis"] as const : ["memo
       expect(await store.commit(updateRoomInvitation(meeting, change))).toMatchObject({ ok: false });
     }
     expect(await invited(store)).toBe(true);
+  });
+
+  it.each([10, 60])("allows the next meeting to record removal at clock %i after an end at 60", async (clock) => {
+    const first = await open(mode);
+    const next = mode === "memory" || mode === "json" ? first : await open(mode);
+    const meeting = await book(first);
+    await commit(first, meeting, { kind: "end", at: 60, generation: 1 });
+    await commit(next, meeting, { kind: "fence", generation: 2 });
+    const decision = await next.read(roomInviteeDecision(CLIENT, ROOM, INVITEE));
+    await commit(next, meeting, {
+      kind: "decide", email: INVITEE, removed: true,
+      at: Math.max(clock, (decision?.at ?? -1) + 1), generation: 2,
+    });
+    expect(await invited(first)).toBe(false);
+  });
+
+  it("ends a meeting even if the previous owner recorded a removal ahead of its clock", async () => {
+    const first = await open(mode);
+    const next = mode === "memory" || mode === "json" ? first : await open(mode);
+    const meeting = await book(first);
+    await commit(first, meeting, { kind: "decide", email: INVITEE, removed: true, at: 60, generation: 1 });
+    expect(await invited(next)).toBe(false);
+    await commit(next, meeting, { kind: "fence", generation: 2 });
+    await commit(next, meeting, { kind: "end", at: 10, generation: 2 });
+    expect(await invited(first)).toBe(true);
   });
 
   it("pins writes to the booking and grants only in the exact tenant", async () => {
