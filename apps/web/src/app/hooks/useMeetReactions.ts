@@ -11,6 +11,7 @@ import { createReactionStore } from "../lib/reaction-store";
 import type { ReactionStore } from "../lib/reaction-store";
 import type { ReactionEvent, ReactionOption, ReactionPayload } from "../lib/types";
 import { buildAssetReaction, isReactionEmoji, isValidAssetPath } from "../lib/utils";
+import { logCallError } from "../lib/call-error-capture";
 
 interface UseMeetReactionsOptions {
   userId: string;
@@ -126,7 +127,7 @@ export function useMeetReactions({
         payload,
         (response: { success: boolean } | { error: string }) => {
           if ("error" in response) {
-            console.error("[Meets] Reaction error:", response.error);
+            logCallError("[Meets] Reaction error", response.error);
           }
         }
       );

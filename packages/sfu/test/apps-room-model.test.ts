@@ -591,4 +591,3 @@ describe("the room apps model", () => {
     }
   }, 120_000);
 });
-

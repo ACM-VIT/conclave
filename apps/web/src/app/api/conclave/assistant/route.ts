@@ -38,6 +38,7 @@ import {
   type GithubIssueDraft,
 } from "./github-issues";
 import { normalizeRoutedSfuUrl, resolveSfuUrl } from "../../../../lib/sfu-url";
+import { ServerError } from "../../../lib/server-error";
 
 const CONCLAVE_ASSISTANT_WEB_SEARCH_TOOL: AiWebSearchTool = {
   type: "web_search",
@@ -510,7 +511,7 @@ const callRoomBrowser = async <T>(
       error?: string;
     };
     if (!response.ok) {
-      throw new Error(
+      throw new ServerError(
         result.error || `Shared browser returned HTTP ${response.status}`,
       );
     }

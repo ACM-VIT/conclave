@@ -1,34 +1,12 @@
 "use client";
 
 import { useEffect, type ReactNode } from "react";
-import { setTelemetrySink } from "../lib/telemetry";
+import { startTelemetry } from "../lib/telemetry";
 
+/** Loads PostHog on every page so unhandled errors are captured. */
 function TelemetryProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
-    const key = process.env.NEXT_PUBLIC_POSTHOG_KEY;
-    if (!key) return;
-
-    let active = true;
-    const host =
-      process.env.NEXT_PUBLIC_POSTHOG_HOST ?? "https://eu.posthog.com";
-
-    void import("posthog-js").then(({ default: posthog }) => {
-      if (!active) return;
-      posthog.init(key, {
-        api_host: host,
-        capture_pageview: false,
-        autocapture: false,
-        person_profiles: "identified_only",
-      });
-      setTelemetrySink((event, props) => {
-        posthog.capture(event, props);
-      });
-    });
-
-    return () => {
-      active = false;
-      setTelemetrySink(null);
-    };
+    startTelemetry();
   }, []);
 
   return <>{children}</>;
