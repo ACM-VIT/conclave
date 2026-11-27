@@ -11,6 +11,7 @@ import {
   deleteWebinar,
   recordWebinarJoin,
   updateWebinar,
+  webinarById,
 } from "../server/controlPlane/webinarCommands.js";
 import { createSfuApp } from "../server/http/createApp.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
@@ -384,6 +385,30 @@ it.each(["PATCH", "DELETE"])("reports a committed %s when the publication read i
     expect(roomConfig(state, webinar)).toMatchObject({ enabled: false, scheduledWebinarId: null });
     expect(state.webinarLinks.has("before-outage")).toBe(false);
   }
+});
+
+it.each([1, 2])("seeds a live webinar after read %i on its first live tick failed", async (failedRead) => {
+  const state = sfuOn(createMemoryData(), "first-live-tick");
+  const webinar = await created(state, { linkSlug: "recovered-live" });
+  const now = Date.now();
+  const original = state.controlPlane;
+  let reads = 0;
+  state.controlPlane = {
+    ...original,
+    read: async (query) => {
+      if (++reads === failedRead) throw new Error("storage read unavailable");
+      return original.read(query);
+    },
+  };
+
+  await expect(advanceScheduledWebinars(state, now, () => {})).rejects.toThrow("storage read unavailable");
+  expect((await original.read(webinarById(webinar.id)))?.status).toBe("live");
+  expect(roomConfig(state, webinar)).toBeUndefined();
+  expect(state.webinarLinks.has("recovered-live")).toBe(false);
+
+  await expect(advanceScheduledWebinars(state, now, () => {})).resolves.toEqual([]);
+  expect(roomConfig(state, webinar)?.linkSlug).toBe("recovered-live");
+  expect(state.webinarLinks.get("recovered-live")?.roomId).toBe(webinar.roomId);
 });
 
 it("still retries the saved slug after a no-op co-host acceptance", async () => {

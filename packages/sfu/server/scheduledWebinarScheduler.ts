@@ -279,7 +279,7 @@ export const advanceScheduledWebinars = async (
     }
   }
   for (const { value: webinar } of await state.controlPlane.read(openWebinars)) {
-    if (webinar.status === "scheduled" && isWithinEarlyEntryWindow(webinar, now)) {
+    if (webinar.status === "live" || (webinar.status === "scheduled" && isWithinEarlyEntryWindow(webinar, now))) {
       roomsByWebinar.set(webinar.id, channelOf(webinar));
     }
   }
