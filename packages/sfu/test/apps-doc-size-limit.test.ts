@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import * as Y from "yjs";
 import type { Router } from "mediasoup/types";
 import type { Server as SocketIOServer, Socket } from "socket.io";
@@ -19,6 +19,7 @@ const joinApp = (id: string, appId = "board") => {
   const emit = vi.fn();
   const socket = {
     id: `s-${id}`,
+    connected: true,
     data: { user: {} },
     on: (event: string, listener: Listener) => { listeners.set(event, listener); return socket; },
     to: () => ({ emit: vi.fn() }),
@@ -31,14 +32,20 @@ const joinApp = (id: string, appId = "board") => {
   state.rooms.set(room.channelId, room);
   const admin = new Admin({ id: `a#${id}`, socket });
   room.addClient(admin);
-  room.appsState.activeAppId = appId;
+  room.apps.present(appId);
   const context = createConnectionContext({ to: () => ({ emit: vi.fn() }) } as unknown as SocketIOServer, socket, state);
   context.currentRoom = room;
   context.currentClient = admin;
   registerAppsHandlers(context);
+  onTestFinished(() => { listeners.get("disconnecting")!(); });
+  listeners.get("apps:yjs:sync")!(
+    { appId, syncMessage: new Uint8Array([0]) },
+    () => {},
+  );
   return {
-    send: (update: Uint8Array) => listeners.get("apps:yjs:update")!({ appId, update }),
-    serverDoc: () => room.getOrCreateAppDoc(appId),
+    send: (update: Uint8Array, replicaId?: string) =>
+      listeners.get("apps:yjs:update")!({ appId, update, replicaId }),
+    serverDoc: () => room.apps.liveDoc(appId)!,
     emit,
   };
 };
@@ -133,19 +140,28 @@ describe("app document size with deletions", () => {
   }, 30_000);
 });
 
-it.each(["wheel", "board"])("echoes accepted updates to the writer only for %s when it needs publication proof", (appId) => {
+it.each([
+  { appId: "wheel", replicaId: undefined, echoes: true },
+  { appId: "board", replicaId: undefined, echoes: false },
+  { appId: "board", replicaId: "copy-1", echoes: true },
+])("echoes accepted $appId updates to the writer with replica $replicaId only when needed", ({ appId, replicaId, echoes }) => {
   const { send, serverDoc, emit } = joinApp(`receipt-${appId}`, appId);
   const writer = new Y.Doc();
   writer.getArray("wheel.entries").push([{ id: "ada", label: "Ada" }]);
   const update = Y.encodeStateAsUpdate(writer);
-  emit.mockImplementation(() => {
-    expect(serverDoc().getArray("wheel.entries").toArray()).toEqual([{ id: "ada", label: "Ada" }]);
+  const contentsAtEcho: unknown[] = [];
+  emit.mockImplementation((event) => {
+    if (event === "apps:yjs:update") {
+      contentsAtEcho.push(serverDoc().getArray("wheel.entries").toArray());
+    }
   });
-  send(update);
-  if (appId === "wheel") expect(emit).toHaveBeenCalledExactlyOnceWith("apps:yjs:update", { appId, update });
-  else expect(emit).not.toHaveBeenCalled();
+  const receipts = () => emit.mock.calls.filter(([event]) => event === "apps:yjs:update");
+  send(update, replicaId);
+  expect(receipts()).toEqual(echoes ? [["apps:yjs:update", { appId, update }]] : []);
+  expect(contentsAtEcho).toEqual(echoes ? [[{ id: "ada", label: "Ada" }]] : []);
+  expect(serverDoc().getArray("wheel.entries").toArray()).toEqual([{ id: "ada", label: "Ada" }]);
 
-  send(Uint8Array.of(255));
-  send(new Uint8Array(MAX_DOC_BYTES));
-  expect(emit).toHaveBeenCalledTimes(appId === "wheel" ? 1 : 0);
+  send(new Uint8Array(MAX_DOC_BYTES), replicaId);
+  send(Uint8Array.of(255), replicaId);
+  expect(receipts()).toHaveLength(echoes ? 1 : 0);
 });

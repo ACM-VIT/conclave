@@ -355,6 +355,9 @@ final class ActivitiesPresenter {
                 round: kind == ActivityKind.game ? game.round : 0, roundTotal: kind == ActivityKind.game ? game.roundTotal : 0,
                 playerCount: kind == ActivityKind.game ? game.playerCount : 0,
                 isEditingLocked: kind == ActivityKind.app && inputs.isAppsLocked,
+                closeEffect: kind == ActivityKind.app
+                    ? AppCloseEffect.of(appId: inputs.activeAppId, keepsAppDocuments: inputs.keepsAppDocuments)
+                    : AppCloseEffect.returnsToMeeting,
                 isOnStage: onStageKind == raw, canEnd: isHost && !recovering,
                 endPending: endPendingKind == raw, endFailed: endFailedKind == raw))
         }
