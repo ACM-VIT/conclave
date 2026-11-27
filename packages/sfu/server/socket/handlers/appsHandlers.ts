@@ -680,6 +680,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
   type StagedChange = {
     admission: Admission;
     revision: number;
+    stay: object;
     id: string;
     count: number;
     parts: Uint8Array[];
@@ -693,8 +694,8 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     const admission = change.refreshLegacyCopy;
     if (!admission) return;
     queueMicrotask(() => {
-      if (admission.role() === "absent" || admission.apps.stageRevision !== change.revision) return;
-      if (staged?.admission.seat === admission.seat && staged.revision === change.revision) {
+      if (admission.role() === "absent" || admission.apps.stayToken !== change.stay) return;
+      if (staged?.admission.seat === admission.seat && staged.stay === change.stay) {
         staged.refreshLegacyCopy ??= admission;
       } else {
         restartCopy(admission);
@@ -784,6 +785,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     if ((list?.length ?? size) > APP_DOCUMENT_UPDATE_MAX_BYTES) return reject("too-large");
     if (current.restart.state === "blank-sent") return done();
     const revision = apps.stageRevision;
+    const stay = apps.stayToken;
     const checkNoop = (decide: (changesNothing: boolean | null) => void): void => {
       if (!wire || part) {
         decide(null);
@@ -806,7 +808,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         return;
       }
       afterSettled("Checking an app update", apps.executor.changesNothing(appId, update), (changesNothing) => {
-        if (scope === current && admission.role() !== "absent" && apps.stageRevision === revision) decide(changesNothing);
+        if (scope === current && admission.role() !== "absent" && apps.stayToken === stay) decide(changesNothing);
         else done();
       });
     };
@@ -859,7 +861,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     if (!takeToken(socket, "apps:change-part", RATE_LIMITS.appsYjsUpdate)) return reject("rate-limited");
     if (part.index === 0) {
       dropStaged();
-      staged = { admission, revision, id: part.id, count: part.count, parts: [], bytes: 0 };
+      staged = { admission, revision, stay, id: part.id, count: part.count, parts: [], bytes: 0 };
       apps.follow(followStaged);
     }
     const change = staged;
