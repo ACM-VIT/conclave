@@ -1469,6 +1469,32 @@ describe("the account a code belongs to", () => {
     ).toBe(true);
   });
 
+  it.each([false, true])("keeps the demoted host admitted only if readmission is not required (%s)", async (readmissionRequired) => {
+    useClock();
+    const policy = config.clientPolicies.conclave;
+    config.clientPolicies.conclave = { ...policy, useWaitingRoom: true, knockByDefault: false };
+    try {
+      const state = makeState();
+      await emptyOut(state, (await join(state, creator)).peer);
+      const opener = await join(state, guestOpener);
+      expect(opener.context.currentClient).toBeInstanceOf(Admin);
+      if (readmissionRequired) roomOf(state).requireReadmission(guestOpener.userId);
+
+      const returningOwner = await join(state, owner);
+      expect(returningOwner.context.currentClient).toBeInstanceOf(Admin);
+      expect(opener.context.currentClient).not.toBeInstanceOf(Admin);
+      expect(roomOf(state).isLocked).toBe(false);
+      await hangUp(opener.peer);
+
+      const returningOpener = await join(state, guestOpener);
+      expect(returningOpener.status).toBe(readmissionRequired ? "waiting" : "joined");
+      expect(returningOpener.context.currentClient).not.toBeInstanceOf(Admin);
+      expect((await join(state, knocker)).status).toBe("waiting");
+    } finally {
+      config.clientPolicies.conclave = policy;
+    }
+  });
+
   it("is let in without knocking even though the guest locked the meeting", async () => {
     useClock();
     const state = makeState();

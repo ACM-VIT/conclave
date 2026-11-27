@@ -3949,14 +3949,17 @@ export class Room {
     return this.dropRejoinGrantsOf(userKeys);
   }
 
-  keepAdmitted(userKeys: readonly string[]): AdmitResult {
+  keepAdmitted(
+    userKeys: readonly string[],
+    scopes: readonly AdmissionScope[] = ["lock"],
+  ): AdmitResult {
     return this.admitUserKeys(
       userKeys
         .filter((key) => {
           const proof = this.guestProofsByUserKey.get(key);
           return !this.needsReadmission(key, proof) && !this.isBlocked(key, proof);
         })
-        .map((userKey) => ({ userKey, scopes: ["lock"] satisfies AdmissionScope[] })),
+        .map((userKey) => ({ userKey, scopes })),
     );
   }
 
@@ -3989,7 +3992,7 @@ export class Room {
   // stay in it as admitted participants. Returns those who had them.
   demoteToParticipant(userKey: string): Client[] {
     const userKeys = this.identitiesOfSameGuest(userKey, "rights");
-    this.keepAdmitted(userKeys);
+    this.keepAdmitted(userKeys, ["lock", "waitingRoom"]);
     return this.revokeHostOf(userKeys);
   }
 
