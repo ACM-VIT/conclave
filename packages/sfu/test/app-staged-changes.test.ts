@@ -40,18 +40,21 @@ const inParts = (update: Uint8Array, size = PART_BYTES) =>
 const sendChange = (room: Awaited<ReturnType<typeof boardRoom>>, parts: Uint8Array[], id = "change-1", replicaId = "copy-1") =>
   parts.forEach((update, index) => room.send(update, replicaId, { id, index, count: parts.length }));
 
+const refusalsIn = (inbox: Array<{ event: string; payload: unknown }>) =>
+  inbox.filter(({ event }) => event === "apps:yjs:refused").map(({ payload }) => (payload as { reason: string }).reason);
+
 describe("app changes sent in parts", () => {
-  it("preserves a replacement seat's staged upload when an old check finishes", async () => {
-    const room = await boardRoom("reseated");
+  it.each(["reseat", "promote"] as const)("preserves a staged upload when an old locked edit is refused after %s", async (changeSeat) => {
+    const room = await boardRoom(changeSeat);
     expect(await room.lock()).toMatchObject({ success: true });
     room.demote();
 
     let finish = (_unchanged: boolean) => {};
     const pending = new Promise<boolean>((resolve) => { finish = resolve; });
     vi.spyOn(room.room.apps.executor, "changesNothing").mockReturnValueOnce(pending);
-    const old = room.acknowledged({ update: bigChange(new Y.Doc(), 64, "x") });
-    room.reseat();
-    await room.syncFrom(new Y.Doc());
+    const old = room.acknowledged({ update: bigChange(new Y.Doc(), 64, "x") }, "old");
+    room[changeSeat]();
+    if (changeSeat === "reseat") await room.syncFrom(new Y.Doc());
     const parts = inParts(bigChange(new Y.Doc(), 1024, "y"), 768);
     const part = { id: "replacement", count: parts.length };
     await room.acknowledged({ update: parts[0], part: { ...part, index: 0 } }, "replacement");
@@ -61,7 +64,27 @@ describe("app changes sent in parts", () => {
     await room.acknowledged({ update: parts[1], part: { ...part, index: 1 } }, "replacement");
 
     expect(await settled(room)).toBe("y".repeat(1024));
-    expect(room.refused).toEqual([]);
+    expect(room.refused).toEqual(changeSeat === "reseat" ? [] : [{ appId: "board", replicaId: "old", reason: "locked" }]);
+  });
+
+  it.each(["old", undefined])("preserves a staged upload when an earlier unsynced edit is refused (%s)", async (replicaId) => {
+    const room = await boardRoom("late-sync");
+    const peer = await room.peer({ syncs: false });
+    let finish = (_unchanged: boolean) => {};
+    const pending = new Promise<boolean>((resolve) => { finish = resolve; });
+    vi.spyOn(room.room.apps.executor, "changesNothing").mockReturnValueOnce(pending);
+    const old = peer.acknowledged(bigChange(new Y.Doc(), 64, "x"), replicaId);
+    await peer.settle();
+    const parts = inParts(bigChange(new Y.Doc(), 1024, "y"), 768);
+    const part = { id: "new", count: parts.length };
+    await peer.acknowledged(parts[0], "new", { ...part, index: 0 });
+
+    finish(false);
+    await old;
+    await peer.acknowledged(parts[1], "new", { ...part, index: 1 });
+
+    expect(await settled(room)).toBe("y".repeat(1024));
+    expect(refusalsIn(peer.inbox)).toEqual(replicaId ? ["not-synced"] : []);
   });
 
   it("are offered to new clients in the sync reply", async () => {
@@ -526,9 +549,6 @@ describe("app changes sent as a list", () => {
 });
 
 describe("app uploads", () => {
-  const refusalsIn = (inbox: Array<{ event: string; payload: unknown }>) =>
-    inbox.filter(({ event }) => event === "apps:yjs:refused").map(({ payload }) => (payload as { reason: string }).reason);
-
   it("are acknowledged once committed, and a list once every change in it is", async () => {
     const room = await boardRoom("ack-commit");
     const author = new Y.Doc();

@@ -141,6 +141,8 @@ export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChang
         }),
       send: (update: Uint8Array, replicaId: string, part?: unknown) =>
         joiner.listeners.get("apps:yjs:update")!({ appId, update, replicaId, ...(part === undefined ? {} : { part }) }),
+      acknowledged: (update: Uint8Array, replicaId?: string, part?: unknown) =>
+        joiner.call("apps:yjs:update", { appId, update, replicaId, ...(part === undefined ? {} : { part }) }),
       updates: () => joiner.member.inbox.filter(({ event }) => event === "apps:yjs:update").map(({ payload }) => (payload as { update: Uint8Array }).update),
       states: () => joiner.member.inbox.filter(({ event }) => event === "apps:state").map(({ payload }) => (payload as { activeAppId: string | null }).activeAppId),
     };
@@ -177,6 +179,7 @@ export const inAppRoom = (pool: AppDocumentPool, id: string, options: { appChang
       room.setUserIdentity(client.id, client.id, client.id);
       room.demoteToParticipant(client.id);
     },
+    promote: () => room.grantHost(context.currentClient!.id, "promoted"),
     reseat: () => {
       const id = context.currentClient!.id;
       room.removeClient(id);
