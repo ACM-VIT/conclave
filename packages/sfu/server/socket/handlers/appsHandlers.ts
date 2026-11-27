@@ -685,15 +685,30 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     parts: Uint8Array[];
     bytes: number;
     idle?: ReturnType<typeof setTimeout>;
+    refreshLegacyCopy?: Admission;
   };
   let staged: StagedChange | null = null;
   const staging = context.state.appChangeStaging;
+  const refreshAfterStagedChange = (change: StagedChange): void => {
+    const admission = change.refreshLegacyCopy;
+    if (!admission) return;
+    queueMicrotask(() => {
+      if (admission.role() === "absent" || admission.apps.stageRevision !== change.revision) return;
+      if (staged?.admission.seat === admission.seat && staged.revision === change.revision) {
+        staged.refreshLegacyCopy ??= admission;
+      } else {
+        restartCopy(admission);
+      }
+    });
+  };
   const dropStaged = (): void => {
     if (!staged) return;
-    clearTimeout(staged.idle);
-    staged.admission.apps.unfollow(followStaged);
-    staging.give(staged.bytes);
+    const change = staged;
+    clearTimeout(change.idle);
+    change.admission.apps.unfollow(followStaged);
+    staging.give(change.bytes);
     staged = null;
+    refreshAfterStagedChange(change);
   };
   const followStaged = (): void => {
     if (staged && staged.revision !== staged.admission.apps.stageRevision) dropStaged();
@@ -752,9 +767,14 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       done();
     };
     const part = readChangePart(data?.part);
-    const refuseCheckedUpdate = (reason: WriteRefusal, stillRestricted: boolean): void => {
+    const refuseCheckedUpdate = (reason: WriteRefusal): void => {
       if (part) return reject(reason);
-      if (admission.replicaId || (stillRestricted && !staged)) refuse(admission, reason);
+      if (admission.replicaId || staged?.admission.seat !== admission.seat) {
+        refuse(admission, reason);
+      } else {
+        logRefusal(admission, reason);
+        staged.refreshLegacyCopy ??= admission;
+      }
       done();
     };
     const hasList = data.updates !== undefined;
@@ -807,7 +827,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     }
     if (stage.locked && admission.role() !== "host") {
       checkNoop((changesNothing) => {
-        if (changesNothing !== true) refuseCheckedUpdate("locked", admission.role() !== "host");
+        if (changesNothing !== true) refuseCheckedUpdate("locked");
         else {
           if (!apps.isCurrentSync(current.synced)) sendRoomCopy(current, appId);
           done();
@@ -821,7 +841,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         if (changesNothing === true) {
           sendRoomCopy(current, appId);
           done();
-        } else refuseCheckedUpdate("not-synced", !apps.isCurrentSync(current.synced));
+        } else refuseCheckedUpdate("not-synced");
       });
       return;
     }
@@ -875,6 +895,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     }
     apps.scheduler.submit(writeFor(admission, mark, (committed) => {
       staging.give(change.bytes);
+      refreshAfterStagedChange(change);
       done(committed);
     }, "assembled", true), wireBytes(whole)!);
   };
