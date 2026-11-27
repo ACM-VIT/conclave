@@ -4,9 +4,8 @@
 a call or leaving fewer instances serving than it found; anything it cannot
 read counts as busy. One deploy runs at a time per host: it takes a lock
 (`flock` on `/run/lock/conclave-sfu-deploy.lock`, or `SFU_DEPLOY_LOCK_FILE`)
-for the whole run. A host job that must not overlap a deploy, such as the
-nightly backup, can hold the same lock, so no deploy starts or replaces an SFU
-under it. A deploy that finds the lock
+for the whole run. The nightly backup holds the same lock while it copies, so
+no deploy starts or replaces an SFU under it. A deploy that finds the lock
 taken waits up to `SFU_DEPLOY_LOCK_WAIT_SECONDS` (120) and then exits 1
 without changing anything. The kernel drops the lock
 when the run exits, however it exits. A host without `flock` (util-linux, on
@@ -312,7 +311,8 @@ without changing anything.
 Run it as before: as `azureuser` in the repo, under `nohup` with a log file.
 The log ends with `SFU deploy complete`, `Deploy paused` (exit 3) or
 `Deploy stopped` (exit 4, or 5 when the instance is not serving). The script
-needs bash 4 or newer and says so on an older one (macOS ships 3.2).
+needs Bash 4 or newer (macOS ships 3.2), Docker Compose, `flock`, Node.js,
+and Python 3 for validating the host deploy lock.
 
 ## Test it locally
 

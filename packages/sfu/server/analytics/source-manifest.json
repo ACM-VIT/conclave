@@ -74,6 +74,7 @@
   "server/layerDatabase.ts",
   "server/mediaPolicy.ts",
   "server/openaiClient.ts",
+  "server/persistenceFence.ts",
   "server/privateFile.ts",
   "server/producerPacketCounts.ts",
   "server/producerTransportNetworkProfile.ts",
