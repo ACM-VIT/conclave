@@ -4,6 +4,7 @@ import type { ScheduledWebinar } from "../types.js";
 import { config } from "../config/config.js";
 import { canMigrateClientNamespace } from "../server/clientIds.js";
 import { createSfuApp } from "../server/http/createApp.js";
+import { createScheduledMeeting } from "../server/scheduledMeetings.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
 import { createSfuState } from "../server/state.js";
 
@@ -19,6 +20,28 @@ describe("client namespace migration", () => {
     expect(canMigrateClientNamespace("conclave", "evil")).toBe(false);
     expect(canMigrateClientNamespace("conclave", "conclave")).toBe(false);
     expect(canMigrateClientNamespace("internal", "conclave")).toBe(false);
+  });
+
+  it("looks up a current scheduled meeting by room code only in the requested tenant", async () => {
+    const state = createSfuState({
+      roomRegistry: new LocalRoomRegistry({ instanceId: "ns", instanceUrl: "http://localhost", ttlMs: 45000 }),
+    });
+    createScheduledMeeting(state.scheduledMeetings, {
+      title: "Scheduled fixture", roomCode: "review-cross-route", scheduledStartAt: Date.now() + 3_600_000,
+    }, { clientId: "conclave", createdBy: "review@example.test", defaultHostEmail: "review@example.test", defaultHostUserId: null });
+    const server = createServer(createSfuApp({ state, config, getIo: () => null }));
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("no port");
+    const fetchRoom = (path: string, clientId: string) =>
+      fetch(`http://127.0.0.1:${address.port}/scheduled-meetings${path}/by-room/review-cross-route?clientId=${clientId}`, {
+        headers: { "x-sfu-secret": config.sfuSecret },
+      });
+    for (const path of ["", "/public"]) {
+      expect((await fetchRoom(path, "conclave")).status).toBe(200);
+      expect((await fetchRoom(path, "acme")).status).toBe(404);
+    }
   });
 
   it("does not move a scheduled webinar into a client id named by the request", async () => {

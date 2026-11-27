@@ -1,5 +1,7 @@
 "use client";
 
+import { buildMeetingPath } from "@/lib/meeting-links";
+import { resolveMeetingClientId } from "@/lib/sfu-client-id";
 import { lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   Dispatch,
@@ -172,7 +174,7 @@ interface MeetsMainContentProps {
   showPermissionHint: boolean;
   availableRooms: RoomInfo[];
   roomsStatus: "idle" | "loading" | "error";
-  refreshRooms: () => void;
+  refreshRooms: (roomId?: string) => void;
   displayNameInput: string;
   setDisplayNameInput: Dispatch<SetStateAction<string>>;
   presentationStream: MediaStream | null;
@@ -2529,6 +2531,7 @@ export default function MeetsMainContent({
         </MeetingAppLayout>
       ) : (
         <GridLayout
+          meetingPath={buildMeetingPath({ roomCode: roomId, clientId: resolveMeetingClientId(clientId) })}
           localStream={effectiveLocalStream}
           isCameraOff={effectiveIsCameraOff}
           isMuted={isMuted}
@@ -2605,6 +2608,7 @@ export default function MeetsMainContent({
             <ControlsBar {...controlsBarProps} />
             <CommandPalette
               controls={controlsBarProps}
+              clientId={clientId}
               onSendChatMessage={handleSendChat}
             />
             <ShortcutsHelpDialog />
