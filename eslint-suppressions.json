@@ -106,7 +106,7 @@
   },
   "packages/meeting-core/src/types.ts": {
     "conclave/no-comments": {
-      "count": 22
+      "count": 24
     }
   },
   "packages/meeting-core/src/video-encodings.ts": {
@@ -136,7 +136,12 @@
   },
   "packages/sfu/config/config.ts": {
     "conclave/no-comments": {
-      "count": 30
+      "count": 18
+    }
+  },
+  "packages/sfu/config/env.ts": {
+    "conclave/no-comments": {
+      "count": 6
     }
   },
   "packages/sfu/config/workerSettings.mjs": {
@@ -176,7 +181,7 @@
   },
   "packages/sfu/server.ts": {
     "conclave/no-comments": {
-      "count": 4
+      "count": 6
     }
   },
   "packages/sfu/server/admin/adminGateway.ts": {
@@ -194,9 +199,34 @@
       "count": 4
     }
   },
+  "packages/sfu/server/analytics/errorReporter.ts": {
+    "conclave/no-comments": {
+      "count": 32
+    }
+  },
+  "packages/sfu/server/analytics/identity.ts": {
+    "conclave/no-comments": {
+      "count": 4
+    }
+  },
+  "packages/sfu/server/analytics/outbound.ts": {
+    "conclave/no-comments": {
+      "count": 18
+    }
+  },
   "packages/sfu/server/analytics/posthog.ts": {
     "conclave/no-comments": {
-      "count": 27
+      "count": 35
+    }
+  },
+  "packages/sfu/server/analytics/settings.ts": {
+    "conclave/no-comments": {
+      "count": 12
+    }
+  },
+  "packages/sfu/server/analytics/socketEvents.ts": {
+    "conclave/no-comments": {
+      "count": 1
     }
   },
   "packages/sfu/server/apps/authority/identity.ts": {
@@ -249,9 +279,14 @@
       "count": 103
     }
   },
+  "packages/sfu/server/configError.ts": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
   "packages/sfu/server/cors.ts": {
     "conclave/no-comments": {
-      "count": 3
+      "count": 5
     }
   },
   "packages/sfu/server/createSfuServer.ts": {
@@ -271,7 +306,7 @@
   },
   "packages/sfu/server/redisErrors.ts": {
     "conclave/no-comments": {
-      "count": 5
+      "count": 8
     }
   },
   "packages/sfu/server/roomApps.ts": {
@@ -334,6 +369,11 @@
       "count": 12
     }
   },
+  "packages/sfu/server/socket/handlers/gameHandlers.ts": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
   "packages/sfu/server/socket/handlers/joinRoom.ts": {
     "conclave/no-comments": {
       "count": 48
@@ -387,6 +427,16 @@
   "packages/sfu/test/admission-ledger.test.ts": {
     "conclave/no-comments": {
       "count": 3
+    }
+  },
+  "packages/sfu/test/analytics-identity.test.ts": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "packages/sfu/test/analytics-release.test.ts": {
+    "conclave/no-comments": {
+      "count": 2
     }
   },
   "packages/sfu/test/apps-stage-retention.test.ts": {
@@ -489,6 +539,16 @@
       "count": 15
     }
   },
+  "packages/sfu/test/create-workers.test.ts": {
+    "conclave/no-comments": {
+      "count": 2
+    }
+  },
+  "packages/sfu/test/error-reporter.test.ts": {
+    "conclave/no-comments": {
+      "count": 5
+    }
+  },
   "packages/sfu/test/guest-identity-binding.test.ts": {
     "conclave/no-comments": {
       "count": 106
@@ -499,6 +559,11 @@
       "count": 8
     }
   },
+  "packages/sfu/test/logger-env.test.ts": {
+    "conclave/no-comments": {
+      "count": 4
+    }
+  },
   "packages/sfu/test/media-consumer-generation-controls.test.ts": {
     "conclave/no-comments": {
       "count": 4
@@ -506,7 +571,7 @@
   },
   "packages/sfu/test/redis-errors.test.ts": {
     "conclave/no-comments": {
-      "count": 2
+      "count": 8
     }
   },
   "packages/sfu/test/room-placement-http.test.ts": {
@@ -534,6 +599,11 @@
       "count": 3
     }
   },
+  "packages/sfu/test/startup-config-crash.test.ts": {
+    "conclave/no-comments": {
+      "count": 2
+    }
+  },
   "packages/sfu/test/transcript-relay-registry.test.ts": {
     "conclave/no-comments": {
       "count": 2
@@ -550,6 +620,11 @@
     }
   },
   "packages/sfu/utilities/createWorkers.ts": {
+    "conclave/no-comments": {
+      "count": 5
+    }
+  },
+  "packages/sfu/utilities/loggers.ts": {
     "conclave/no-comments": {
       "count": 2
     }

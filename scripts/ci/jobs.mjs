@@ -94,6 +94,7 @@ export const jobs = {
       { dir: ".", script: "check:native-game-fixtures" },
       { dir: ".", script: "check:json-store-fixtures" },
       { dir: ".", script: "check:docker-context" },
+      { dir: ".", script: "check:sfu-source-manifest" },
       { dir: ".", exec: "node --test scripts/ci/*.test.mjs" },
     ],
   },

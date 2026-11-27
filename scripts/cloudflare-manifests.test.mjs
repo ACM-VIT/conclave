@@ -83,3 +83,12 @@ test("staging has its own namespaces for every production Worker rate limiter", 
   const namespaces = [...production, ...staging].map(({ namespace_id }) => namespace_id);
   assert.equal(new Set(namespaces).size, namespaces.length);
 });
+
+test("staging declares and migrates the telemetry quota on its own Worker", () => {
+  const { unstable_readConfig: readConfig } = require("wrangler");
+  const config = path.join(import.meta.dirname, "../apps/web/wrangler.jsonc");
+  const staging = readConfig({ config, env: "staging" });
+  const quota = staging.durable_objects.bindings.find(({ name }) => name === "INGEST_QUOTA");
+  assert.deepEqual(quota, { name: "INGEST_QUOTA", class_name: "IngestQuota" });
+  assert.ok(staging.migrations.some(({ new_sqlite_classes }) => new_sqlite_classes?.includes("IngestQuota")));
+});

@@ -1,4 +1,29 @@
 {
+  "eslint.config.mjs": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "next.config.ts": {
+    "conclave/no-comments": {
+      "count": 5
+    }
+  },
+  "scripts/posthog-chunk-manifest.mjs": {
+    "conclave/no-comments": {
+      "count": 4
+    }
+  },
+  "scripts/process-group.mjs": {
+    "conclave/no-comments": {
+      "count": 4
+    }
+  },
+  "scripts/upload-posthog-sourcemaps.mjs": {
+    "conclave/no-comments": {
+      "count": 20
+    }
+  },
   "src/app/api/csp-report/rate-limit.ts": {
     "conclave/no-comments": {
       "count": 3
@@ -34,6 +59,11 @@
       "count": 4
     }
   },
+  "src/app/components/MeetingPanelBoundary.tsx": {
+    "conclave/no-comments": {
+      "count": 2
+    }
+  },
   "src/app/components/MeetsMainContent.tsx": {
     "conclave/no-comments": {
       "count": 6
@@ -42,6 +72,11 @@
   "src/app/components/ParticipantsPanel.tsx": {
     "conclave/no-comments": {
       "count": 2
+    }
+  },
+  "src/app/components/TelemetryProvider.tsx": {
+    "conclave/no-comments": {
+      "count": 1
     }
   },
   "src/app/components/ai-elements/chain-of-thought.tsx": {
@@ -104,6 +139,11 @@
       "count": 2
     }
   },
+  "src/app/hooks/useCallQualityMetrics.ts": {
+    "conclave/no-comments": {
+      "count": 5
+    }
+  },
   "src/app/hooks/useMeetChat.ts": {
     "conclave/no-comments": {
       "count": 2
@@ -111,7 +151,7 @@
   },
   "src/app/hooks/useMeetSocket.ts": {
     "conclave/no-comments": {
-      "count": 80
+      "count": 85
     }
   },
   "src/app/hooks/useRejoinMediaRestore.ts": {
@@ -124,9 +164,29 @@
       "count": 1
     }
   },
+  "src/app/ingest/[...path]/route.ts": {
+    "conclave/no-comments": {
+      "count": 2
+    }
+  },
   "src/app/lib/adaptive-consumer-score.ts": {
     "conclave/no-comments": {
       "count": 1
+    }
+  },
+  "src/app/lib/call-error-capture.ts": {
+    "conclave/no-comments": {
+      "count": 4
+    }
+  },
+  "src/app/lib/call-log-labels.ts": {
+    "conclave/no-comments": {
+      "count": 2
+    }
+  },
+  "src/app/lib/call-quality-metrics.ts": {
+    "conclave/no-comments": {
+      "count": 49
     }
   },
   "src/app/lib/coalesced-run.ts": {
@@ -184,6 +244,16 @@
       "count": 1
     }
   },
+  "src/app/lib/random-uuid.ts": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "src/app/lib/reconnect-failure.ts": {
+    "conclave/no-comments": {
+      "count": 2
+    }
+  },
   "src/app/lib/reconnect-recovery-status.ts": {
     "conclave/no-comments": {
       "count": 8
@@ -199,9 +269,44 @@
       "count": 7
     }
   },
+  "src/app/lib/server-error.ts": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "src/app/lib/telemetry-answers.ts": {
+    "conclave/no-comments": {
+      "count": 4
+    }
+  },
+  "src/app/lib/telemetry-ingest.ts": {
+    "conclave/no-comments": {
+      "count": 36
+    }
+  },
+  "src/app/lib/telemetry-privacy.ts": {
+    "conclave/no-comments": {
+      "count": 24
+    }
+  },
+  "src/app/lib/telemetry-schema.ts": {
+    "conclave/no-comments": {
+      "count": 25
+    }
+  },
+  "src/app/lib/telemetry.ts": {
+    "conclave/no-comments": {
+      "count": 50
+    }
+  },
   "src/app/lib/types.ts": {
     "conclave/no-comments": {
       "count": 2
+    }
+  },
+  "src/app/lib/utils.ts": {
+    "conclave/no-comments": {
+      "count": 1
     }
   },
   "src/app/lib/video-encodings.ts": {
@@ -274,6 +379,21 @@
       "count": 1
     }
   },
+  "test/call-error-capture.test.ts": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "test/call-quality-metrics-hook.test.tsx": {
+    "conclave/no-comments": {
+      "count": 2
+    }
+  },
+  "test/call-quality-metrics.test.ts": {
+    "conclave/no-comments": {
+      "count": 13
+    }
+  },
   "test/coalesced-run.test.ts": {
     "conclave/no-comments": {
       "count": 3
@@ -282,6 +402,21 @@
   "test/csp-report-route.test.ts": {
     "conclave/no-comments": {
       "count": 4
+    }
+  },
+  "test/fixtures/posthog-chunks/chunks/app1.js": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "test/fixtures/posthog-chunks/chunks/app2.js": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "test/fixtures/posthog-chunks/chunks/app3.js": {
+    "conclave/no-comments": {
+      "count": 1
     }
   },
   "test/guest-pass-session.test.ts": {
@@ -304,6 +439,11 @@
       "count": 1
     }
   },
+  "test/posthog-chunk-manifest.test.ts": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
   "test/producer-slot-order.test.ts": {
     "conclave/no-comments": {
       "count": 3
@@ -319,9 +459,44 @@
       "count": 9
     }
   },
+  "test/telemetry-ingest.test.ts": {
+    "conclave/no-comments": {
+      "count": 2
+    }
+  },
+  "test/telemetry-outbox.test.ts": {
+    "conclave/no-comments": {
+      "count": 14
+    }
+  },
+  "test/telemetry-privacy.test.ts": {
+    "conclave/no-comments": {
+      "count": 6
+    }
+  },
+  "test/telemetry-sdk-delay.test.ts": {
+    "conclave/no-comments": {
+      "count": 15
+    }
+  },
+  "test/telemetry-startup.test.tsx": {
+    "conclave/no-comments": {
+      "count": 9
+    }
+  },
+  "test/telemetry-unload.test.ts": {
+    "conclave/no-comments": {
+      "count": 21
+    }
+  },
   "test/tts-voice-upload.test.ts": {
     "conclave/no-comments": {
       "count": 1
+    }
+  },
+  "test/upload-posthog-sourcemaps.test.ts": {
+    "conclave/no-comments": {
+      "count": 9
     }
   },
   "test/webcam-consumer-generation-reset.test.ts": {

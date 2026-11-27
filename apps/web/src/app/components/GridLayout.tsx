@@ -94,6 +94,7 @@ import {
   usePublishStagePlacement,
 } from "../hooks/usePublishStagePlacement";
 import { readVideoAspect, resolveTileAspect } from "../lib/tile-video-framing";
+import { logCallError } from "../lib/call-error-capture";
 
 interface GridLayoutProps {
   meetingPath: string | null;
@@ -1364,7 +1365,7 @@ function GridLayout({
           return;
         }
         if (errorName(err) !== "AbortError") {
-          console.error("[Meets] Grid local video play error:", err);
+          logCallError("[Meets] Grid local video play error", err);
         }
       });
     };
@@ -2201,7 +2202,7 @@ function GridLayout({
       if (!(await copyToClipboard(`${window.location.origin}${meetingPath}`))) return;
       setCopyStatus("copied");
     } catch (error) {
-      console.error("[Meets] Failed to copy meeting link:", error);
+      console.error("Failed to copy meeting link:", error);
       return;
     }
     if (copyTimeoutRef.current) {
@@ -3161,7 +3162,7 @@ const PresentationVideoTile = memo(function PresentationVideoTile({
           return;
         }
         if (errorName(err) !== "AbortError") {
-          console.error("[Meets] Presentation video play error:", err);
+          logCallError("[Meets] Presentation video play error", err);
         }
       });
     };

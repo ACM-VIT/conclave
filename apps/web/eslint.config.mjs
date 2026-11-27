@@ -63,6 +63,22 @@ export default tseslint.config(
       "@typescript-eslint/no-for-in-array": "error",
 
       "no-console": ["error", { allow: ["warn", "error", "info", "debug"] }],
+      // Server text can carry words people typed; ServerError keeps it out of telemetry.
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector:
+            "NewExpression[callee.name='Error']:matches([arguments.0.property.name='error'], [arguments.0.expression.property.name='error'], [arguments.0.left.property.name='error'], [arguments.0.left.expression.property.name='error'])",
+          message:
+            "Wrap server error text in ServerError (lib/server-error.ts) so telemetry drops it.",
+        },
+        {
+          selector:
+            "CallExpression[callee.object.name='console'][callee.property.name='error']:matches([arguments.0.value=/^\\[Meets\\]/], [arguments.0.quasis.0.value.raw=/^\\[Meets\\]/])",
+          message:
+            "Log call failures with logCallError (lib/call-error-capture.ts) and a label from lib/call-log-labels.ts, so they reach telemetry.",
+        },
+      ],
       "prefer-const": ["error", { destructuring: "all" }],
       "@typescript-eslint/no-unused-vars": [
         "error",
