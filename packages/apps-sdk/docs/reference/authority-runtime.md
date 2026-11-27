@@ -59,6 +59,7 @@ The room epoch changes when the room is recreated. A request under an old epoch 
 | Accepted mutations per app per room | 120 a second, burst 240. Moderators have this to themselves and everyone else has it between them, so a crowd cannot use up a host's |
 | Work in one transaction | 50,000 operations. A read or write is one. A `scan` costs one for each row it returns. Rows that are only walked, as `count` and `clear` do under a prefix, cost about one per 64. An action that goes over fails and keeps nothing, even if its handler catches the error |
 | Rows of a `clear` one viewer is told of per flush | 1,000, counting only rows that viewer held |
+| Actions and queries one contract may name | 256 of each, and at most 16 KiB of names as grants, with every one granted. Grants go in the first part of every view, so its whole frame always fits in a part with room for rows |
 | Subscriptions per socket | 16 |
 | Socket behind (resnapshot later) | more than 256 queued packets or 1 MiB. The queue is counted in bytes on every transport, long polling included, and asked before every frame, the catch-up after a snapshot in parts among them |
 | Query on a socket that is behind | refused with `busy` |
@@ -69,7 +70,7 @@ Each table declares its own row cap. Per-action rates are declared by the module
 
 ## Turning it on
 
-Set `SFU_APPS_AUTHORITY_ENABLED=1` on the SFU. With it off no authority event has a listener, so the SFU behaves like one that predates the runtime: a client's capability request goes unanswered and it hides every authority app.
+Set `SFU_APPS_AUTHORITY_ENABLED=1` on the SFU. With it off the SFU answers only the capability request, at once and as `unsupported`, and has no listener for any other authority event, so a client opens no authority app and does not wait for the answer to time out. An SFU that predates the runtime does not answer at all; the client gives up after the ack timeout, 5 s. The web client then lists Polls and meeting Q&A in the Apps panel switched off, each with "Needs a server update", so their absence is explained. It does the same on any server that answers and does not offer them, such as one that runs the runtime without these two apps.
 
 The switch is read once, when the SFU process starts. Changing it needs a restart of the SFU, and there is no live toggle. A process that is already running keeps the mode it started with for every room it holds, so during a rolling deploy the rooms on the old process stay as they were until they move or end.
 
@@ -88,6 +89,35 @@ The first prints the runtime's own CPU and frame counts in process. The second s
 
 State lives in the SFU process for the lifetime of the room. It is lost if the process dies, as game state is. A recreated room has a new epoch and starts empty.
 
+## Apps that run on it
+
+| App | Folder | What the server holds |
+| --- | --- | --- |
+| Polls | `src/apps/polls` | polls, one ballot per person per poll, results private to hosts until shared. A host's export is read in pages of at most 512 KiB and joined in the browser |
+| Q&A | `src/apps/qa` | questions, one upvote per person per question, a question a host hides is seen by hosts only, and is gone for everyone else, its asker included, until a host brings it back. A question keeps the mode it was asked in: one asked in a webinar is seen only by hosts and its asker until a host answers it, even after webinar mode goes off, and one asked in a meeting waits unseen by the room while the room is a webinar. The book holds at most 300 questions and 400 KiB, so every viewer's view fits in one snapshot |
+
+Both are panel apps. They open from the Apps panel, beside whatever is on the stage, and never take the stage or the whiteboard. Each has its hook in `web` (`usePolls`, `useQa`) and the web client draws the panel.
+
+A signed-in person votes, asks and upvotes once per account across tabs and rejoins. A guest in a meeting can read both apps and is told to sign in to take part, until the verified guest pass gives guests an identity that survives a rejoin. In a webinar an attendee may ask and upvote as before.
+
+### The old Q&A events
+
+Released web and native clients send `webinar:qa:submit`, `webinar:qa:upvote` and `webinar:qa:moderate`, and are sent `webinar:qaSnapshot` and `webinar:qaChanged`. In a room that runs the Q&A app those events are an adapter over the app's book (`server/apps/authority/legacyWebinarQa.ts` in the SFU), so an old client and a new one see the same questions:
+
+- A joining connection is followed as the app would follow it and is sent the old snapshot and change events. The adapter holds no questions, no copy of anyone's view and no visibility rule of its own. A frame only tells it which questions changed for a connection. What it says is read from that connection's view as committed at the moment of saying, after the seat has been checked against the room again, so a question hidden a moment before is said to be gone and never as it was.
+- A connection is fed the old events for as long as it does not read Q&A itself. Once it holds its own subscription to the app the feed rests, and it starts again with a whole list when that subscription ends. Asking for capabilities changes nothing: the answer may reach a client after it has given up waiting and fallen back to the old events.
+- A changed question is one `webinar:qaChanged` for each connection, as the old wire has it. The event is built and encoded once for everyone it reads the same for, which is everyone of a role who neither asked nor upvoted the question, and sockets are written 2,000 events a turn. A connection is sent a question again only when it reads differently from what it was last sent.
+- A whole list is shared the same way. It holds the questions as anyone of a role reads them, is built and encoded once for all of them, and is written to 100 sockets a turn. A connection's own questions, which name it as the asker, follow as changes.
+- Before anything is said to a connection its socket's queue is checked, as the runtime checks it before a frame. A socket that is behind is sent nothing more, whatever asked for it, and once it has caught up it is sent one whole list with the state as it is then.
+- A change of room policy sends a list only to a connection whose view was withdrawn or given back, as an attendee's is when webinar mode goes off and on. Turning Q&A off or on changes who may ask and sends nothing on these events.
+- The old upvote is a toggle. It runs the app's `toggleUpvote` action, and the reply carries the count that one transaction made.
+- The native app up to build 63 saves the questions it upvoted and shows that over what a change event says. Whenever a person's upvote changes, on any of their connections, each of their old clients has what it saved checked against the book a flush interval later. One that still lists a question whose upvote is gone is sent a whole `webinar:qaSnapshot`, the one form that build applies to what it saved. This holds when two taps land in one flush and leave no change to send.
+- A question that is gone, dropped from a full book or hidden by a host, is said to be gone once to each connection that lists it. The upvotes that go with a dropped question bring no list and no second word.
+- The old events carry webinar Q&A only. Nothing is sent on them in a regular meeting.
+- A seat id for the asker is given to hosts and to the asker. Everyone else gets an empty `userId`.
+
+With the flag off the old events are served by the SFU's own webinar Q&A code, unchanged.
+
 ## What native needs
 
 The native app does not speak this transport yet. To host an authority app it needs:
@@ -99,3 +129,10 @@ The native app does not speak this transport yet. To host an authority app it ne
 5. A local panel selection in the Activities sheet, separate from the stage.
 
 Until then native keeps its existing activities and ignores the new events. Legacy `webinar:qa:*` keeps working against a new SFU.
+
+For polls and Q&A in particular:
+
+1. Two panels in the Activities sheet, built on the session above: a poll list with create, vote, end, share and CSV export for hosts, and a question list with ask, upvote and the host's answer, dismiss and reopen.
+2. The same gating as web: show an app only when the SFU lists it in capabilities, and show the sign-in prompt when `needsIdentity` names the action.
+3. Webinar Q&A on native keeps working through the old events with no change. Moving it to the app's session is what brings Q&A to native meetings.
+4. A poll started while the panel is closed should raise the same "Vote" prompt the web toast does.

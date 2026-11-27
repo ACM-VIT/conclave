@@ -101,6 +101,11 @@ import type {
 } from "../lib/types";
 import type { ParticipantAction } from "../lib/participant-reducer";
 import {
+  qaListForConfig,
+  qaListFromSnapshot,
+  withQaChange,
+} from "../lib/webinarQaList";
+import {
   createMeetError,
   isSystemUserId,
   MeetFailure,
@@ -1005,7 +1010,8 @@ interface UseMeetSocketOptions {
   >;
   setWebinarRole: (role: "attendee" | "participant" | "host" | null) => void;
   setWebinarSpeakerUserId: (userId: string | null) => void;
-  setWebinarQaEntries: React.Dispatch<React.SetStateAction<WebinarQaEntry[]>>;
+  setWebinarQaEntries: React.Dispatch<React.SetStateAction<WebinarQaEntry[] | null>>;
+  setWebinarQaListFromThisConnection: (fromThisConnection: boolean) => void;
   setWebinarHandQueue: React.Dispatch<
     React.SetStateAction<WebinarHandQueueEntry[]>
   >;
@@ -1130,6 +1136,7 @@ export function useMeetSocket({
   setWebinarRole,
   setWebinarSpeakerUserId,
   setWebinarQaEntries,
+  setWebinarQaListFromThisConnection,
   setWebinarHandQueue,
   setIsWebinarHandRaised,
   setWebinarStageInvite,
@@ -2265,6 +2272,7 @@ export function useMeetSocket({
         window.clearTimeout(timeoutId);
       });
       leaveTimeoutsRef.current.clear();
+      setWebinarQaListFromThisConnection(false);
       if (!preserveMeetingState) {
         clearReactions();
         setPendingUsers(new Map());
@@ -2282,6 +2290,10 @@ export function useMeetSocket({
         webinarJoinedParticipantIdsRef.current.clear();
         webinarVisibleParticipantIdsRef.current.clear();
         serverRoomIdRef.current = null;
+      } else {
+        // The old events' Q&A list was this connection's. The next one is
+        // sent its own.
+        setWebinarQaEntries(null);
       }
       webinarJoinedParticipantIdsRef.current.clear();
       webinarVisibleParticipantIdsRef.current.clear();
@@ -2412,6 +2424,7 @@ export function useMeetSocket({
       setWebinarRole,
       setWebinarSpeakerUserId,
       setWebinarQaEntries,
+      setWebinarQaListFromThisConnection,
       setWebinarHandQueue,
       setIsWebinarHandRaised,
       setWebinarStageInvite,
@@ -8325,6 +8338,12 @@ export function useMeetSocket({
                 if (socketRef.current !== socket || intentionalDisconnectRef.current) return;
                 handler.apply(socket, args);
               })) as typeof socket.on;
+            const takeWebinarQaList = (
+              update: React.SetStateAction<WebinarQaEntry[] | null>,
+            ) => {
+              setWebinarQaEntries(update);
+              setWebinarQaListFromThisConnection(true);
+            };
 
             socket.on("connect", () => {
               clearTimeout(connectionTimeout);
@@ -8351,6 +8370,8 @@ export function useMeetSocket({
               console.info("[Meets] Disconnected:", reason);
               if (socketRef.current !== socket) return;
               cancelPathProbeRef.current?.();
+              setWebinarQaEntries(null);
+              setWebinarQaListFromThisConnection(false);
               if (intentionalDisconnectRef.current) {
                 setConnectionState("disconnected");
                 return;
@@ -9794,6 +9815,9 @@ export function useMeetSocket({
               "webinar:configChanged",
               (nextConfig: WebinarConfigSnapshot) => {
                 setWebinarConfig(nextConfig);
+                takeWebinarQaList((previous) =>
+                  qaListForConfig(previous, nextConfig),
+                );
               },
             );
 
@@ -9856,11 +9880,7 @@ export function useMeetSocket({
               "webinar:qaSnapshot",
               (snapshot: WebinarQaSnapshot) => {
                 if (!isRoomEvent(snapshot.roomId)) return;
-                setWebinarQaEntries(
-                  [...(snapshot.entries ?? [])].sort(
-                    (a, b) => a.askedAt - b.askedAt,
-                  ),
-                );
+                takeWebinarQaList(qaListFromSnapshot(snapshot));
               },
             );
 
@@ -9868,30 +9888,9 @@ export function useMeetSocket({
               "webinar:qaChanged",
               (notification: WebinarQaChangedNotification) => {
                 if (!isRoomEvent(notification.roomId)) return;
-                setWebinarQaEntries((previous) => {
-                  if (notification.removedId) {
-                    return previous.filter(
-                      (entry) => entry.id !== notification.removedId,
-                    );
-                  }
-                  const entry = notification.entry;
-                  if (!entry) return previous;
-                  const existingIndex = previous.findIndex(
-                    (candidate) => candidate.id === entry.id,
-                  );
-                  if (existingIndex === -1) {
-                    return [...previous, entry].sort(
-                      (a, b) => a.askedAt - b.askedAt,
-                    );
-                  }
-                  const next = previous.slice();
-                  next[existingIndex] = {
-                    ...entry,
-                    hasUpvoted:
-                      entry.hasUpvoted ?? previous[existingIndex].hasUpvoted,
-                  };
-                  return next;
-                });
+                takeWebinarQaList((previous) =>
+                  withQaChange(previous, notification),
+                );
               },
             );
 
@@ -10058,6 +10057,7 @@ export function useMeetSocket({
       setWebinarSpeakerUserId,
       setWebinarConfig,
       setWebinarQaEntries,
+      setWebinarQaListFromThisConnection,
       setWebinarHandQueue,
       setWebinarStageInvite,
       onWebinarDemoted,
@@ -11652,15 +11652,17 @@ export function useMeetSocket({
       const socket = socketRef.current;
       if (!socket) return;
       setWebinarQaEntries((previous) =>
-        previous.map((entry) =>
-          entry.id === id
-            ? {
-                ...entry,
-                hasUpvoted: !entry.hasUpvoted,
-                upvotes: Math.max(0, entry.upvotes + (entry.hasUpvoted ? -1 : 1)),
-              }
-            : entry,
-        ),
+        previous === null
+          ? null
+          : previous.map((entry) =>
+              entry.id === id
+                ? {
+                    ...entry,
+                    hasUpvoted: !entry.hasUpvoted,
+                    upvotes: Math.max(0, entry.upvotes + (entry.hasUpvoted ? -1 : 1)),
+                  }
+                : entry,
+            ),
       );
       socket.emit(
         "webinar:qa:upvote",
@@ -11672,31 +11674,35 @@ export function useMeetSocket({
         ) => {
           if ("error" in response) {
             setWebinarQaEntries((previous) =>
-              previous.map((entry) =>
-                entry.id === id
-                  ? {
-                      ...entry,
-                      hasUpvoted: !entry.hasUpvoted,
-                      upvotes: Math.max(
-                        0,
-                        entry.upvotes + (entry.hasUpvoted ? -1 : 1),
-                      ),
-                    }
-                  : entry,
-              ),
+              previous === null
+                ? null
+                : previous.map((entry) =>
+                    entry.id === id
+                      ? {
+                          ...entry,
+                          hasUpvoted: !entry.hasUpvoted,
+                          upvotes: Math.max(
+                            0,
+                            entry.upvotes + (entry.hasUpvoted ? -1 : 1),
+                          ),
+                        }
+                      : entry,
+                  ),
             );
             return;
           }
           setWebinarQaEntries((previous) =>
-            previous.map((entry) =>
-              entry.id === id
-                ? {
-                    ...entry,
-                    upvotes: response.upvotes,
-                    hasUpvoted: response.hasUpvoted,
-                  }
-                : entry,
-            ),
+            previous === null
+              ? null
+              : previous.map((entry) =>
+                  entry.id === id
+                    ? {
+                        ...entry,
+                        upvotes: response.upvotes,
+                        hasUpvoted: response.hasUpvoted,
+                      }
+                    : entry,
+                ),
           );
         },
       );

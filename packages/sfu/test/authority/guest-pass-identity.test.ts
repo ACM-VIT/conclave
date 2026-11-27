@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Json } from "@conclave/apps-sdk/authority";
 import { defineAuthority } from "@conclave/apps-sdk/authority/server";
 import { Harness, person, type Tab } from "./harness.js";
-import { pollsAuthority, pollsContract } from "./fixtures/polls.js";
+import { attachLegacyQaFeed, legacyQaFeedSubjects } from "../../server/apps/authority/legacyWebinarQa.js";
+import { pollsContract } from "@conclave/apps-sdk/polls/core";
+import { pollsAuthority } from "@conclave/apps-sdk/polls/server";
+import { qaContract } from "@conclave/apps-sdk/qa/core";
+import { qaAuthority } from "@conclave/apps-sdk/qa/server";
 
 beforeEach(() => {
   vi.useFakeTimers({ now: 1_000_000 });
@@ -37,6 +41,11 @@ const guestTab = (room: Harness, userKey: string, session: string, guestProof?: 
   return room.open(person(userKey, "Gita"), pollsContract, { session });
 };
 
+const guestQaTab = (room: Harness, userKey: string, session: string, guestProof: string) => {
+  room.room.setUserIdentity(`${userKey}#${session}`, userKey, "Gita", { guestProof });
+  return room.open(person(userKey, "Gita"), qaContract, { session });
+};
+
 const linkPasses = (room: Harness, joining: string, shown: string) => {
   const link = room.room.planGuestLink([{ guestProof: shown }], joining);
   if (link) room.room.commitGuestLink(link);
@@ -54,7 +63,7 @@ describe("a guest's pass, as the room's apps see it (Daybreak)", () => {
     expect((await tab.act("vote", { pollId, optionIds: ["o1"] })).ok).toBe(true);
     await room.deliver();
 
-    expect(field(hostTab.row("polls", pollId), "results", "voterCount")).toBe(1);
+    expect(field(hostTab.row("results", pollId), "voterCount")).toBe(1);
   });
 
   it("still asks a guest with no pass for an identity", async () => {
@@ -81,7 +90,7 @@ describe("a guest's pass, as the room's apps see it (Daybreak)", () => {
 
     expect(await back.act("vote", { pollId, optionIds: ["o2"] })).toEqual(alreadyVoted);
     expect(field(back.row("myVotes", pollId), "optionIds")).toEqual(["o1"]);
-    expect(field(hostTab.row("polls", pollId), "results", "voterCount")).toBe(1);
+    expect(field(hostTab.row("results", pollId), "voterCount")).toBe(1);
   });
 
   it("keeps the guest's identity and its one vote when it leaves after a pass change and comes back under the new pass (Greptile)", async () => {
@@ -103,7 +112,71 @@ describe("a guest's pass, as the room's apps see it (Daybreak)", () => {
 
     expect(field(back.row("myVotes", pollId), "optionIds")).toEqual(["o1"]);
     expect(await back.act("vote", { pollId, optionIds: ["o2"] })).toEqual(alreadyVoted);
-    expect(field(hostTab.row("polls", pollId), "results", "voterCount")).toBe(1);
+    expect(field(hostTab.row("results", pollId), "voterCount")).toBe(1);
+  });
+
+  it.each([
+    ["through the app", (tab: Tab, _room: Harness, text: string) => tab.act("ask", { text })],
+    ["over the old webinar events", (tab: Tab, room: Harness, text: string) => Promise.resolve(room.authority.actAs(tab.context, "qa", "ask", { text }))],
+  ])("keeps the identity of a guest who asked %s, left after a pass change and came back under the new pass (Neon)", async (_way, ask) => {
+    const room = new Harness([qaAuthority]);
+    await room.open(host, qaContract);
+    const onA = await guestQaTab(room, "guest-gp_gita-on-pass-a", "tab-1", "proof-of-pass-a");
+    const asked = await ask(onA, room, "Asked before the pass changed");
+    const id = asked.ok ? (field(asked.value, "id") as string) : "";
+    await room.deliver();
+    linkPasses(room, "proof-of-pass-b", "proof-of-pass-a");
+    const onB = await guestQaTab(room, "guest-gp_gita-on-pass-b", "tab-1", "proof-of-pass-b");
+    room.room.removeClient(onA.seat.id);
+    await room.deliver();
+
+    room.room.removeClient(onB.seat.id);
+    await room.deliver();
+    const back = await guestQaTab(room, "guest-gp_gita-on-pass-b", "tab-1-back", "proof-of-pass-b");
+    await room.deliver();
+
+    expect(asked.ok).toBe(true);
+    expect(back.row("myQuestions", id)).not.toBeNull();
+  });
+
+  it("files an old-events feed under the merged person the moment the room links their passes, as the sweep later would (Neon)", async () => {
+    const room = new Harness([pollsAuthority, qaAuthority]);
+    const hostTab = await room.open(host, pollsContract);
+    const pollId = await pollIn(room, hostTab);
+    const onA = await guestQaTab(room, "guest-gp_gita-on-pass-a", "tab-1", "proof-of-pass-a");
+    expect((await onA.act("ask", { text: "Asked under the first pass" })).ok).toBe(true);
+    const onB = await guestTab(room, "guest-gp_gita-on-pass-b", "tab-2", "proof-of-pass-b");
+    expect((await onB.act("vote", { pollId, optionIds: ["o1"] })).ok).toBe(true);
+    expect(attachLegacyQaFeed(onB.context)).toBe(true);
+    await room.deliver();
+    const beforeTheLink = legacyQaFeedSubjects(room.authority);
+
+    linkPasses(room, "proof-of-pass-b", "proof-of-pass-a");
+    const rightAfterTheLink = legacyQaFeedSubjects(room.authority);
+    await room.deliver();
+    const onceTheRoomCaughtUp = legacyQaFeedSubjects(room.authority);
+
+    expect([...beforeTheLink.values()]).toEqual([1]);
+    expect(onceTheRoomCaughtUp).not.toEqual(beforeTheLink);
+    expect(rightAfterTheLink).toEqual(onceTheRoomCaughtUp);
+  });
+
+  it("lets go of an old-events feed whose person merged and then left before the room caught up (Neon)", async () => {
+    const room = new Harness([pollsAuthority, qaAuthority]);
+    const hostTab = await room.open(host, pollsContract);
+    const pollId = await pollIn(room, hostTab);
+    const onA = await guestQaTab(room, "guest-gp_gita-on-pass-a", "tab-1", "proof-of-pass-a");
+    expect((await onA.act("ask", { text: "Asked under the first pass" })).ok).toBe(true);
+    const onB = await guestTab(room, "guest-gp_gita-on-pass-b", "tab-2", "proof-of-pass-b");
+    expect((await onB.act("vote", { pollId, optionIds: ["o1"] })).ok).toBe(true);
+    expect(attachLegacyQaFeed(onB.context)).toBe(true);
+    await room.deliver();
+
+    linkPasses(room, "proof-of-pass-b", "proof-of-pass-a");
+    room.room.removeClient(onB.seat.id);
+    await room.deliver();
+
+    expect(legacyQaFeedSubjects(room.authority)).toEqual(new Map());
   });
 
   it("counts one vote for two tabs of a guest once the room links their passes", async () => {
@@ -120,7 +193,7 @@ describe("a guest's pass, as the room's apps see it (Daybreak)", () => {
 
     expect(field(second.row("myVotes", pollId), "optionIds")).toEqual(["o1"]);
     expect(await second.act("vote", { pollId, optionIds: ["o2"] })).toEqual(alreadyVoted);
-    expect(field(hostTab.row("polls", pollId), "results", "voterCount")).toBe(1);
+    expect(field(hostTab.row("results", pollId), "voterCount")).toBe(1);
   });
 
   it("keeps the identity of a guest who voted under one pass, left, and came back under another that shows the first (Greptile)", async () => {
@@ -139,7 +212,7 @@ describe("a guest's pass, as the room's apps see it (Daybreak)", () => {
 
     expect(field(onB.row("myVotes", pollId), "optionIds")).toEqual(["o1"]);
     expect(await onB.act("vote", { pollId, optionIds: ["o2"] })).toEqual(alreadyVoted);
-    expect(field(hostTab.row("polls", pollId), "results", "voterCount")).toBe(1);
+    expect(field(hostTab.row("results", pollId), "voterCount")).toBe(1);
   });
 
   describe.each([
@@ -172,7 +245,7 @@ describe("a guest's pass, as the room's apps see it (Daybreak)", () => {
 
       expect(field(back.row("myVotes", pollId), "optionIds")).toEqual(["o1"]);
       expect(await back.act("vote", { pollId, optionIds: ["o2"] })).toEqual(alreadyVoted);
-      expect(field(hostTab.row("polls", pollId), "results", "voterCount")).toBe(1);
+      expect(field(hostTab.row("results", pollId), "voterCount")).toBe(1);
     });
   });
 });
@@ -210,7 +283,7 @@ describe.each([
 
     expect(await other.act("vote", { pollId, optionIds: ["o2"] })).toEqual(alreadyVoted);
     expect(await voting.act("vote", { pollId, optionIds: ["o2"] })).toEqual(alreadyVoted);
-    expect(field(hostTab.row("polls", pollId), "results", "voterCount")).toBe(1);
+    expect(field(hostTab.row("results", pollId), "voterCount")).toBe(1);
     expect(field(other.row("myVotes", pollId), "optionIds")).toEqual(field(voting.row("myVotes", pollId), "optionIds"));
   });
 
@@ -235,8 +308,8 @@ describe.each([
     }
     expect(await onA.act("vote", { pollId: secondPoll, optionIds: ["o1"] })).toEqual(alreadyVoted);
     expect(await onB.act("vote", { pollId: firstPoll, optionIds: ["o2"] })).toEqual(alreadyVoted);
-    expect(field(hostTab.row("polls", firstPoll), "results", "voterCount")).toBe(1);
-    expect(field(hostTab.row("polls", secondPoll), "results", "voterCount")).toBe(1);
+    expect(field(hostTab.row("results", firstPoll), "voterCount")).toBe(1);
+    expect(field(hostTab.row("results", secondPoll), "voterCount")).toBe(1);
   });
 });
 

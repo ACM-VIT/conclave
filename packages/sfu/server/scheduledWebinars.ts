@@ -270,6 +270,15 @@ export const listScheduledWebinars = (
 };
 
 export type ScheduledWebinarPersistence = {
+  save: (snapshot: ScheduledWebinar[]) => void | Promise<void>;
+  saveChanged?: (webinars: ScheduledWebinar[]) => void | Promise<void>;
+  deleteIds?: (ids: string[]) => void | Promise<void>;
+  load: () => ScheduledWebinar[];
+  close?: () => void | Promise<void>;
+};
+
+// The file and SQLite stores write synchronously.
+type LocalScheduledWebinarPersistence = {
   save: (snapshot: ScheduledWebinar[]) => void;
   saveChanged?: (webinars: ScheduledWebinar[]) => void;
   deleteIds?: (ids: string[]) => void;
@@ -284,7 +293,7 @@ const scheduledWebinarsSqlitePath = (): string => storeSqlitePath("scheduled-web
 
 const createFileScheduledWebinarPersistence = (
   path: string = scheduledWebinarsPath(),
-): ScheduledWebinarPersistence => ({
+): LocalScheduledWebinarPersistence => ({
   save: (snapshot) => {
     try {
       writePrivateFileAtomic(path, JSON.stringify(snapshot, null, 2));
@@ -328,7 +337,7 @@ const loadNodeSqlite = (): { DatabaseSync: new (path: string) => SqliteDatabase 
 
 const createSqliteScheduledWebinarPersistence = (
   path: string = scheduledWebinarsSqlitePath(),
-): ScheduledWebinarPersistence => {
+): LocalScheduledWebinarPersistence => {
   const dir = dirname(path);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
@@ -483,8 +492,8 @@ const prepareSqliteScheduledWebinarPersistence = (db: SqliteDatabase): Scheduled
 };
 
 const migrateJsonScheduledWebinarsToSqlite = (
-  sqlite: ScheduledWebinarPersistence,
-  json: ScheduledWebinarPersistence,
+  sqlite: LocalScheduledWebinarPersistence,
+  json: LocalScheduledWebinarPersistence,
 ): number => {
   const existing = sqlite.load();
   if (existing.length > 0) return 0;
@@ -605,37 +614,37 @@ export const loadPersistedSchedules = (
   return snapshot.length;
 };
 
-const persistScheduledWebinars = (
+const persistScheduledWebinars = async (
   store: ScheduledWebinarStore,
   persistence: ScheduledWebinarPersistence,
-): void => {
-  persistence.save(Array.from(store.byId.values()));
+): Promise<void> => {
+  await persistence.save(Array.from(store.byId.values()));
 };
 
-export const persistScheduledWebinarChanges = (
+export const persistScheduledWebinarChanges = async (
   store: ScheduledWebinarStore,
   persistence: ScheduledWebinarPersistence,
   webinars: ScheduledWebinar[],
-): void => {
+): Promise<void> => {
   if (webinars.length === 0) return;
   if (persistence.saveChanged) {
-    persistence.saveChanged(webinars);
+    await persistence.saveChanged(webinars);
     return;
   }
-  persistScheduledWebinars(store, persistence);
+  await persistScheduledWebinars(store, persistence);
 };
 
-export const persistScheduledWebinarDeletes = (
+export const persistScheduledWebinarDeletes = async (
   store: ScheduledWebinarStore,
   persistence: ScheduledWebinarPersistence,
   ids: string[],
-): void => {
+): Promise<void> => {
   if (ids.length === 0) return;
   if (persistence.deleteIds) {
-    persistence.deleteIds(ids);
+    await persistence.deleteIds(ids);
     return;
   }
-  persistScheduledWebinars(store, persistence);
+  await persistScheduledWebinars(store, persistence);
 };
 
 export type CreateScheduledWebinarOptions = {

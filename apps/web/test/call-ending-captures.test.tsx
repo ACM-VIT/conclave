@@ -174,9 +174,10 @@ const createRig = async ({ connect = true, noiseCancellation = false } = {}) => 
   const io = vi.fn(() => socket);
   let rig!: Rig;
   let inCall = true;
+  let micTest: ReturnType<typeof useMicTest> | undefined;
 
   function CallSettingsPanel() {
-    useMicTest({ active: true, noiseCancellation: false });
+    micTest = useMicTest({ active: true, noiseCancellation: false });
     return null;
   }
 
@@ -279,7 +280,7 @@ const createRig = async ({ connect = true, noiseCancellation = false } = {}) => 
     handlers.get("disconnect")?.(...(["transport close"] as never[]));
     await vi.waitFor(() => expect(states).toContain("error"), { timeout: 15_000 });
   };
-  return { rig: () => rig, dispatch, drop, showEndScreen, unmount };
+  return { rig: () => rig, micTest: () => micTest, dispatch, drop, showEndScreen, unmount };
 };
 
 type Ending = [
@@ -326,6 +327,37 @@ afterEach(() => {
 });
 
 describe("every way a call ends with the client still mounted", () => {
+  it("a permanently refused reconnect stops the microphone test without closing Settings", async () => {
+    const close = vi.spyOn(FakeAudioContext.prototype, "close");
+    const cancelFrame = vi.spyOn(window, "cancelAnimationFrame");
+    try {
+      current = await createRig();
+      await vi.waitFor(() => expect(current?.micTest()?.isRunning).toBe(true));
+
+      joinRefusal = "Guests are not allowed in this meeting.";
+      await act(async () => current!.drop());
+
+      expect({
+        running: current.micTest()?.isRunning,
+        starting: current.micTest()?.isStarting,
+        recordingStream: current.micTest()?.getRecordingStream(),
+        contextCloses: close.mock.calls.length,
+        cancelledFrames: cancelFrame.mock.calls.length,
+        liveTracks: liveTracks(),
+      }).toEqual({
+        running: false,
+        starting: false,
+        recordingStream: null,
+        contextCloses: 1,
+        cancelledFrames: 1,
+        liveTracks: [],
+      });
+    } finally {
+      close.mockRestore();
+      cancelFrame.mockRestore();
+    }
+  });
+
   it.each(ENDINGS)("%s stops every live capture, the settings camera preview included", async (_name, end) => {
     current = await createRig();
     const rig = current.rig();

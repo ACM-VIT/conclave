@@ -31,6 +31,8 @@ import {
   SUPER_ADMIN_REMOVAL_ERROR,
 } from "../../admin/moderation.js";
 import { forceCloseRoom, isCurrentRoom, markRoomEnded } from "../../rooms.js";
+import type { SfuState } from "../../state.js";
+import { grantWebinarQaList } from "../../webinarNotifications.js";
 import { getSocketAuthUser } from "../auth.js";
 import { getSocketContext, type ConnectionContext } from "../context.js";
 import { RATE_LIMITS, takeToken } from "../rateLimit.js";
@@ -341,31 +343,43 @@ const performBulkMediaClosure = (options: {
   return { affectedUsers, affectedProducers, users };
 };
 
-const activatePromotedAdmin = (
-  context: ConnectionContext,
-  promoted: Admin,
-  roomId: string,
+export const activateHost = (
+  state: SfuState,
+  room: Room,
+  host: Admin,
+  hostUserId: string | null,
 ): void => {
-  const promotedContext = getSocketContext(promoted.socket);
-
-  if (!promotedContext || !context.currentRoom) {
-    return;
+  const roomId = room.id;
+  const hostContext = getSocketContext(host.socket);
+  if (hostContext) {
+    hostContext.currentClient = host;
+    hostContext.currentRoom = room;
+    registerAdminHandlers(hostContext, { roomId });
   }
-
-  promotedContext.currentClient = promoted;
-  promotedContext.currentRoom = context.currentRoom;
-  registerAdminHandlers(promotedContext, { roomId });
-
-  emitToHost(promoted, "pendingUsersSnapshot", {
-    users: toPendingUserSnapshots(context.currentRoom),
+  host.socket.emit("hostAssigned", { roomId, hostUserId });
+  if (room.cleanupTimer) {
+    room.stopCleanupTimer();
+  }
+  emitToHost(host, "pendingUsersSnapshot", {
+    users: toPendingUserSnapshots(room),
     roomId,
   });
-  emitChatHistorySnapshot(promoted.socket, context.currentRoom);
-
-  emitToHost(promoted, "admin:roomStateChanged", {
+  emitChatHistorySnapshot(host.socket, room);
+  host.socket.emit("roomLockChanged", {
+    locked: room.isLocked,
     roomId,
-    snapshot: toRoomSnapshot(context.currentRoom),
   });
+  emitToHost(host, "admin:roomStateChanged", {
+    roomId,
+    snapshot: toRoomSnapshot(room),
+  });
+  if (state.webinarConfigs.get(room.channelId)?.enabled) {
+    emitToHost(host, "webinar:handQueueChanged", {
+      roomId,
+      queue: room.getWebinarHandQueue(),
+    });
+  }
+  grantWebinarQaList(state, room, host);
 };
 
 export const registerAdminHandlers = (
@@ -728,21 +742,13 @@ export const registerAdminHandlers = (
       return;
     }
 
-    const alreadyAdmin = targetClient instanceof Admin;
     const promoted = currentRoom.promoteClientToAdmin(normalizedTargetId);
     if (!promoted) {
       respond(cb, { error: "Failed to promote user" });
       return;
     }
 
-    if (!alreadyAdmin) {
-      activatePromotedAdmin(context, promoted, currentRoom.id);
-    }
-
-    promoted.socket.emit("hostAssigned", {
-      roomId: currentRoom.id,
-      hostUserId: currentRoom.getHostUserId() ?? promoted.id,
-    });
+    activateHost(state, currentRoom, promoted, currentRoom.getHostUserId() ?? promoted.id);
 
     context.io.to(currentRoom.channelId).emit("adminUsersChanged", {
       roomId: currentRoom.id,
@@ -790,7 +796,6 @@ export const registerAdminHandlers = (
       return;
     }
 
-    const alreadyAdmin = targetClient instanceof Admin;
     const promoted = currentRoom.promoteClientToAdmin(normalizedTargetId);
     if (!promoted) {
       respond(cb, { error: "Failed to promote user" });
@@ -798,10 +803,6 @@ export const registerAdminHandlers = (
     }
 
     currentRoom.hostUserKey = targetUserKey;
-
-    if (!alreadyAdmin) {
-      activatePromotedAdmin(context, promoted, currentRoom.id);
-    }
 
     io.to(currentRoom.channelId).emit("hostChanged", {
       roomId: currentRoom.id,
@@ -812,10 +813,7 @@ export const registerAdminHandlers = (
       hostUserIds: currentRoom.getAdminUserIds(),
     });
 
-    promoted.socket.emit("hostAssigned", {
-      roomId: currentRoom.id,
-      hostUserId: promoted.id,
-    });
+    activateHost(state, currentRoom, promoted, promoted.id);
 
     respond(cb, {
       success: true,
