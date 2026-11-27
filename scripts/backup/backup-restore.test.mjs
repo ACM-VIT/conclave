@@ -176,7 +176,7 @@ const setUp = async (root, extraConfig = []) => {
 // token, a renewal succeeds only while that owner holds it, and only that
 // owner releases it. forgetHold drops the hold right after granting it, as a
 // restart would. reportUntil overrides the deadline the SFU reports.
-const fencedSfu = async ({ instanceId = "sfu-a", forgetHold = false, reportUntil, onHold, onRelease } = {}) => {
+const fencedSfu = async ({ instanceId = "sfu-a", forgetHold = false, reportUntil, onHold, onRelease, fenceSecret } = {}) => {
   const requests = [];
   let holder = null;
   const server = createHttpServer(async (req, res) => {
@@ -184,6 +184,7 @@ const fencedSfu = async ({ instanceId = "sfu-a", forgetHold = false, reportUntil
     for await (const chunk of req) raw += chunk;
     if (req.url === "/health") return res.end('{"status":"healthy"}');
     if (req.url !== "/admin/persistence-fence") return res.writeHead(404).end();
+    if (fenceSecret && req.headers["x-sfu-secret"] !== fenceSecret) return res.writeHead(401).end();
     const body = raw ? JSON.parse(raw) : {};
     requests.push({ method: req.method, ...body });
     const reply = (code, value) =>
@@ -2991,6 +2992,34 @@ test("a backup missing a configured JSON store leaves the previous restorable ar
       assert.equal(await readFile(file, "utf8"), body);
     }
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("sends the fence secret without exposing it to the curl process arguments or environment", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  const fenceSecret = "fixture-fence-credential";
+  const sfu = await fencedSfu({ fenceSecret });
+  try {
+    const { state, bin, backup, setDocker } = await setUp(root, [
+      `CONCLAVE_SFU_HEALTH_URLS="${sfu.health}"`, `SFU_SECRET=${fenceSecret}`,
+    ]);
+    const curl = spawnSync("sh", ["-c", "command -v curl"], { encoding: "utf8" }).stdout.trim();
+    await writeFile(path.join(bin, "curl"), `#!/usr/bin/env bash
+for argument; do
+  case "$argument" in
+    *${fenceSecret}*) printf 'credential in arguments\\n' >&2; exit 98;;
+  esac
+done
+if [[ "\${!#}" == */admin/persistence-fence ]]; then test -z "$SFU_SECRET" || exit 99; fi
+exec "${curl}" "$@"
+`, { mode: 0o755 });
+    withDatabase(state);
+    await setDocker([sfu.container(state)]);
+    await backup("--local-only");
+    assert.deepEqual(sfu.requests.map((request) => request.method), ["POST", "POST", "POST", "DELETE"]);
+  } finally {
+    await sfu.close();
     await rm(root, { recursive: true, force: true });
   }
 });

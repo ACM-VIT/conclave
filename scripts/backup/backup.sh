@@ -30,10 +30,13 @@ work=""
 fenced=()
 owner=""
 prune_archives="false"
-fence_request() {
-  curl -s --max-time 30 -w $'\n%{http_code}' -X "$1" -H "x-sfu-secret: ${SFU_SECRET:-}" \
-    -H "content-type: application/json" -d "$3" "${2}/admin/persistence-fence" || true
-}
+fence_request() (
+  local secret="${SFU_SECRET:-}"
+  [[ "$secret" != *$'\r'* && "$secret" != *$'\n'* ]] || die "SFU_SECRET must be one line"
+  unset SFU_SECRET
+  curl -s --max-time 30 -w $'\n%{http_code}' -X "$1" -H @- \
+    -H "content-type: application/json" -d "$3" "${2}/admin/persistence-fence" <<< "x-sfu-secret: ${secret}" || true
+)
 release_fences() {
   local base
   for base in "${fenced[@]}"; do
